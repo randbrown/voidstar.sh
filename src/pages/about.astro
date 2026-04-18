@@ -1,10 +1,12 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import { Image } from 'astro:assets';
+import emblemText from '../assets/art/logos_alpha/voidstar_emblem_text_0.png';
 
 const socials = [
-  { href: 'https://youtube.com/@voidstar',  label: 'YouTube',   handle: '@voidstar',   desc: 'art videos & live sets'  },
-  { href: 'https://instagram.com/voidstar', label: 'Instagram', handle: '@voidstar',   desc: 'behind the scenes'       },
-  { href: 'https://github.com/voidstar',    label: 'GitHub',    handle: 'voidstar',    desc: 'open source projects'    },
+  { href: 'https://youtube.com/@voidstar0_0',  label: 'YouTube',   handle: '@voidstar0_0', desc: 'art videos & live sets'  },
+  { href: 'https://instagram.com/voidstar0',   label: 'Instagram', handle: '@voidstar0',   desc: 'behind the scenes'       },
+  { href: 'https://github.com/randbrown',      label: 'GitHub',    handle: '@randbrown',   desc: 'open source projects'    },
 ];
 
 const skills = [
@@ -22,6 +24,12 @@ const skills = [
         <h1 class="about-title">
           Making things that shouldn't exist.
         </h1>
+        <Image
+          src={emblemText}
+          alt="voidstar emblem"
+          width={160}
+          class="about-emblem"
+        />
       </header>
 
       <div class="about-grid">
@@ -38,12 +46,12 @@ const skills = [
           </p>
           <p>
             Most of the tools I build are open source. If something in the
-            <a href="/lab">lab</a> catches your eye, the source is usually one click away.
+            <a href="/lab">lab</a> catches your eye, the source is usually one click away on
+            <a href="https://github.com/randbrown" target="_blank" rel="noopener">GitHub</a>.
           </p>
           <p>
-            I post art videos on <a href="https://youtube.com/@voidstar" target="_blank" rel="noopener">YouTube</a>,
-            process shots on <a href="https://instagram.com/voidstar" target="_blank" rel="noopener">Instagram</a>,
-            and ship code on <a href="https://github.com/voidstar" target="_blank" rel="noopener">GitHub</a>.
+            I post art videos on <a href="https://youtube.com/@voidstar0_0" target="_blank" rel="noopener">YouTube</a>
+            and process shots on <a href="https://instagram.com/voidstar0" target="_blank" rel="noopener">Instagram</a>.
           </p>
         </section>
 
@@ -79,6 +87,7 @@ const skills = [
 
 <style>
 .about-wrap { padding: 4rem 0 6rem; }
+.about-header { margin-bottom: 3rem; position: relative; }
 .about-label {
   font-family: var(--font-mono);
   font-size: 0.8rem;
@@ -90,11 +99,15 @@ const skills = [
   font-size: clamp(1.75rem, 4vw, 3rem);
   line-height: 1.2;
   max-width: 18ch;
-  margin-bottom: 3rem;
+  margin-bottom: 1.5rem;
   background: linear-gradient(135deg, var(--text) 50%, var(--accent));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+.about-emblem {
+  opacity: 0.55;
+  filter: drop-shadow(0 0 20px var(--accent-glow));
 }
 
 .about-grid {

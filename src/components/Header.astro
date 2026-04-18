@@ -1,4 +1,7 @@
 ---
+import { Image } from 'astro:assets';
+import logo from '../assets/art/logos_alpha/voidstar_logo_0.png';
+
 const nav = [
   { href: '/posts',   label: 'posts'   },
   { href: '/videos',  label: 'videos'  },
@@ -11,8 +14,7 @@ const current = Astro.url.pathname;
 <header class="site-header">
   <div class="container header-inner">
     <a href="/" class="logo" aria-label="voidstar home">
-      <span class="logo-star">✦</span>
-      <span class="logo-text">voidstar</span>
+      <Image src={logo} alt="voidstar" height={28} class="logo-img" />
     </a>
 
     <nav class="nav" aria-label="Main navigation">
@@ -71,20 +73,18 @@ const current = Astro.url.pathname;
 .logo {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: 1.1rem;
-  font-weight: 500;
-  color: var(--text);
-  text-decoration: none;
   flex-shrink: 0;
+  opacity: 0.9;
+  transition: opacity 0.2s, filter 0.2s;
 }
-.logo-star {
-  color: var(--accent);
-  font-size: 1.2rem;
-  animation: pulse-glow 3s ease-in-out infinite;
+.logo:hover {
+  opacity: 1;
+  filter: drop-shadow(0 0 8px var(--accent-glow));
 }
-.logo:hover .logo-text { color: var(--cyan); }
+.logo-img {
+  height: 28px;
+  width: auto;
+}
 
 .nav {
   display: flex;

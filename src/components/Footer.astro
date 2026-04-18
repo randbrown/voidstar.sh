@@ -2,9 +2,9 @@
 const year = new Date().getFullYear();
 
 const socials = [
-  { href: 'https://instagram.com/voidstar',  label: 'Instagram', icon: 'ig'  },
-  { href: 'https://youtube.com/@voidstar',   label: 'YouTube',   icon: 'yt'  },
-  { href: 'https://github.com/voidstar',     label: 'GitHub',    icon: 'gh'  },
+  { href: 'https://instagram.com/voidstar0',   label: 'Instagram', handle: '@voidstar0'   },
+  { href: 'https://youtube.com/@voidstar0_0',  label: 'YouTube',   handle: '@voidstar0_0' },
+  { href: 'https://github.com/randbrown',      label: 'GitHub',    handle: '@randbrown'   },
 ];
 ---
 <footer class="site-footer">
@@ -22,9 +22,9 @@ const socials = [
     </nav>
 
     <div class="footer-socials">
-      {socials.map(({ href, label }) => (
+      {socials.map(({ href, label, handle }) => (
         <a href={href} target="_blank" rel="noopener noreferrer" aria-label={label} class="social-link">
-          {label}
+          {handle}
         </a>
       ))}
     </div>
