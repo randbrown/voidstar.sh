@@ -1,0 +1,41 @@
+---
+// Renders an animated CSS star field as a background layer.
+// Stars are positioned randomly at build time — no JS required.
+interface Props {
+  count?: number;
+  class?: string;
+}
+const { count = 120, class: className } = Astro.props;
+
+const stars = Array.from({ length: count }, (_, i) => ({
+  x: Math.random() * 100,
+  y: Math.random() * 100,
+  size: Math.random() < 0.8 ? 1 : Math.random() < 0.9 ? 1.5 : 2,
+  delay: (Math.random() * 6).toFixed(2),
+  duration: (4 + Math.random() * 6).toFixed(2),
+}));
+---
+<div class:list={['starfield', className]} aria-hidden="true">
+  {stars.map(s => (
+    <span
+      class="star"
+      style={`left:${s.x}%;top:${s.y}%;width:${s.size}px;height:${s.size}px;animation-delay:${s.delay}s;animation-duration:${s.duration}s`}
+    />
+  ))}
+</div>
+
+<style>
+.starfield {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.star {
+  position: absolute;
+  background: white;
+  border-radius: 50%;
+  animation: twinkle var(--dur, 6s) ease-in-out infinite;
+  opacity: 0.3;
+}
+</style>

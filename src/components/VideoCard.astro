@@ -1,0 +1,161 @@
+---
+interface Props {
+  id: string;         // YouTube video ID
+  title: string;
+  description?: string;
+  date?: string;
+  tags?: string[];
+}
+
+const { id, title, description, date, tags = [] } = Astro.props;
+const thumb = `https://img.youtube.com/vi/${id}/maxresdefault.jpg`;
+const thumbFallback = `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+---
+
+<div class="video-card" data-video-id={id}>
+  <div class="thumb-wrap">
+    <img
+      src={thumb}
+      alt={title}
+      loading="lazy"
+      onerror={`this.src='${thumbFallback}'`}
+      class="thumb"
+    />
+    <button class="play-btn" aria-label={`Play ${title}`}>
+      <svg viewBox="0 0 24 24" fill="currentColor" width="32" height="32">
+        <path d="M8 5v14l11-7z"/>
+      </svg>
+    </button>
+    <div class="yt-embed" data-src={`https://www.youtube.com/embed/${id}?autoplay=1&rel=0`} hidden></div>
+  </div>
+
+  <div class="video-info">
+    {date && <time class="video-date" datetime={date}>{date}</time>}
+    <h3 class="video-title">{title}</h3>
+    {description && <p class="video-desc">{description}</p>}
+    {tags.length > 0 && (
+      <div class="video-tags">
+        {tags.map(t => <span class="tag">{t}</span>)}
+      </div>
+    )}
+    <a
+      href={`https://www.youtube.com/watch?v=${id}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      class="yt-link"
+    >
+      watch on YouTube ↗
+    </a>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLElement>('.video-card').forEach(card => {
+    const btn = card.querySelector<HTMLButtonElement>('.play-btn')!;
+    const embedDiv = card.querySelector<HTMLElement>('.yt-embed')!;
+    const thumbWrap = card.querySelector<HTMLElement>('.thumb-wrap')!;
+
+    btn.addEventListener('click', () => {
+      const src = embedDiv.dataset.src!;
+      const iframe = document.createElement('iframe');
+      iframe.src = src;
+      iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+      iframe.allowFullscreen = true;
+      iframe.title = card.querySelector('.video-title')!.textContent ?? '';
+      iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:inherit';
+
+      // Replace thumbnail with iframe
+      thumbWrap.querySelector('.thumb')?.remove();
+      btn.remove();
+      thumbWrap.appendChild(iframe);
+    });
+  });
+</script>
+
+<style>
+.video-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+  display: flex;
+  flex-direction: column;
+}
+.video-card:hover {
+  border-color: var(--border-2);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+}
+.thumb-wrap {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: var(--void);
+  overflow: hidden;
+}
+.thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s;
+  border-radius: 0;
+}
+.video-card:hover .thumb { transform: scale(1.03); }
+
+.play-btn {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.35);
+  border: none;
+  cursor: pointer;
+  color: white;
+  transition: background 0.2s;
+}
+.play-btn:hover { background: rgba(139, 92, 246, 0.5); }
+.play-btn svg {
+  filter: drop-shadow(0 0 12px rgba(255,255,255,0.6));
+  transform: scale(1.5);
+}
+
+.video-info {
+  padding: 1.1rem 1.25rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex: 1;
+}
+.video-date {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.video-title {
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+}
+.video-desc {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 0.2rem;
+}
+.video-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+.yt-link {
+  margin-top: auto;
+  padding-top: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.yt-link:hover { color: var(--cyan); }
+</style>

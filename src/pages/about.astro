@@ -1,0 +1,205 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const socials = [
+  { href: 'https://youtube.com/@voidstar',  label: 'YouTube',   handle: '@voidstar',   desc: 'art videos & live sets'  },
+  { href: 'https://instagram.com/voidstar', label: 'Instagram', handle: '@voidstar',   desc: 'behind the scenes'       },
+  { href: 'https://github.com/voidstar',    label: 'GitHub',    handle: 'voidstar',    desc: 'open source projects'    },
+];
+
+const skills = [
+  { cat: 'creative',    items: ['generative visuals', 'particle systems', 'music composition', 'live performance'] },
+  { cat: 'web',         items: ['JavaScript/TypeScript', 'Canvas 2D', 'WebGL / GLSL', 'Web Audio API', 'Astro', 'Svelte'] },
+  { cat: 'cv / ml',     items: ['MediaPipe', 'TensorFlow.js', 'pose estimation', 'real-time inference'] },
+  { cat: 'tools',       items: ['git', 'Cloudflare', 'Linux', 'Blender', 'Ableton Live'] },
+];
+---
+<BaseLayout title="About" description="About voidstar — generative artist and programmer.">
+  <div class="about-wrap">
+    <div class="container">
+      <header class="about-header">
+        <div class="about-label">// about</div>
+        <h1 class="about-title">
+          Making things that shouldn't exist.
+        </h1>
+      </header>
+
+      <div class="about-grid">
+        <section class="bio-section">
+          <p>
+            I make generative art, ambient music, and interactive experiments — then write about
+            how they work. The work lives at the intersection of creative coding, computer vision,
+            and live performance.
+          </p>
+          <p>
+            The name comes from C's <code>void*</code> — a pointer to untyped memory. Potential
+            without form. That's where most of my work starts: raw data (a camera feed, a
+            microphone signal, a mathematical field) shaped into something worth watching.
+          </p>
+          <p>
+            Most of the tools I build are open source. If something in the
+            <a href="/lab">lab</a> catches your eye, the source is usually one click away.
+          </p>
+          <p>
+            I post art videos on <a href="https://youtube.com/@voidstar" target="_blank" rel="noopener">YouTube</a>,
+            process shots on <a href="https://instagram.com/voidstar" target="_blank" rel="noopener">Instagram</a>,
+            and ship code on <a href="https://github.com/voidstar" target="_blank" rel="noopener">GitHub</a>.
+          </p>
+        </section>
+
+        <aside class="skills-section">
+          {skills.map(({ cat, items }) => (
+            <div class="skill-group">
+              <h3 class="skill-cat">{cat}</h3>
+              <ul class="skill-list">
+                {items.map(item => <li>{item}</li>)}
+              </ul>
+            </div>
+          ))}
+        </aside>
+      </div>
+
+      <div class="divider"></div>
+
+      <section class="socials-section">
+        <h2 class="socials-heading">// find me</h2>
+        <div class="socials-grid">
+          {socials.map(({ href, label, handle, desc }) => (
+            <a href={href} target="_blank" rel="noopener noreferrer" class="social-card">
+              <span class="social-label">{label}</span>
+              <span class="social-handle">{handle}</span>
+              <span class="social-desc">{desc}</span>
+            </a>
+          ))}
+        </div>
+      </section>
+    </div>
+  </div>
+</BaseLayout>
+
+<style>
+.about-wrap { padding: 4rem 0 6rem; }
+.about-label {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  letter-spacing: 0.12em;
+  margin-bottom: 1rem;
+}
+.about-title {
+  font-size: clamp(1.75rem, 4vw, 3rem);
+  line-height: 1.2;
+  max-width: 18ch;
+  margin-bottom: 3rem;
+  background: linear-gradient(135deg, var(--text) 50%, var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.about-grid {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 3rem;
+  align-items: start;
+}
+@media (max-width: 768px) {
+  .about-grid { grid-template-columns: 1fr; }
+}
+
+.bio-section p {
+  color: var(--text-muted);
+  line-height: 1.8;
+  margin-bottom: 1.2rem;
+  font-size: 1.05rem;
+  max-width: 65ch;
+}
+.bio-section a { color: var(--accent); }
+.bio-section a:hover { color: var(--cyan); }
+.bio-section code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+  color: var(--cyan);
+}
+
+.skills-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.skill-group { display: flex; flex-direction: column; gap: 0.5rem; }
+.skill-cat {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.skill-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.skill-list li {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  padding-left: 1rem;
+  position: relative;
+}
+.skill-list li::before {
+  content: '·';
+  position: absolute;
+  left: 0;
+  color: var(--border-2);
+}
+
+.socials-heading {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  text-transform: lowercase;
+  margin-bottom: 1.5rem;
+}
+.socials-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+}
+.social-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.social-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.social-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.social-handle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.social-desc {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+</style>

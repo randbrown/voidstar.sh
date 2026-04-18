@@ -1,0 +1,88 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import type { CollectionEntry } from 'astro:content';
+
+interface Props {
+  post: CollectionEntry<'posts'>;
+}
+
+const { post } = Astro.props;
+const { title, description, pubDate, updatedDate, tags } = post.data;
+
+const formattedDate = pubDate.toLocaleDateString('en-US', {
+  year: 'numeric', month: 'long', day: 'numeric',
+});
+const updatedFormatted = updatedDate?.toLocaleDateString('en-US', {
+  year: 'numeric', month: 'long', day: 'numeric',
+});
+---
+<BaseLayout title={title} description={description}>
+  <article class="post-wrap">
+    <div class="container">
+      <header class="post-header">
+        <div class="post-meta">
+          <time datetime={pubDate.toISOString()}>{formattedDate}</time>
+          {updatedDate && (
+            <span class="updated">updated {updatedFormatted}</span>
+          )}
+        </div>
+        <h1 class="post-title">{title}</h1>
+        <p class="post-desc">{description}</p>
+        {tags.length > 0 && (
+          <div class="post-tags">
+            {tags.map(tag => <span class="tag">{tag}</span>)}
+          </div>
+        )}
+      </header>
+
+      <div class="divider"></div>
+
+      <div class="prose post-body">
+        <slot />
+      </div>
+
+      <div class="divider"></div>
+
+      <footer class="post-footer">
+        <a href="/posts" class="btn btn-outline">← all posts</a>
+      </footer>
+    </div>
+  </article>
+</BaseLayout>
+
+<style>
+.post-wrap {
+  padding: 4rem 0 6rem;
+}
+.post-header {
+  max-width: 72ch;
+}
+.post-meta {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 1rem;
+}
+.updated { color: var(--text-dim); }
+.post-title {
+  font-size: clamp(1.75rem, 4vw, 2.75rem);
+  line-height: 1.15;
+  margin-bottom: 1rem;
+  background: linear-gradient(135deg, var(--text) 40%, var(--cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.post-desc {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  margin-bottom: 1.25rem;
+  line-height: 1.7;
+}
+.post-tags { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.post-body { margin: 0 auto; }
+.post-footer { margin-top: 1rem; }
+</style>

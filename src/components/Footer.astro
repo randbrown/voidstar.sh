@@ -1,0 +1,110 @@
+---
+const year = new Date().getFullYear();
+
+const socials = [
+  { href: 'https://instagram.com/voidstar',  label: 'Instagram', icon: 'ig'  },
+  { href: 'https://youtube.com/@voidstar',   label: 'YouTube',   icon: 'yt'  },
+  { href: 'https://github.com/voidstar',     label: 'GitHub',    icon: 'gh'  },
+];
+---
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-left">
+      <span class="footer-logo"><span class="star">✦</span> voidstar</span>
+      <p class="footer-tagline">art · code · void</p>
+    </div>
+
+    <nav class="footer-nav" aria-label="Footer navigation">
+      <a href="/posts">posts</a>
+      <a href="/videos">videos</a>
+      <a href="/lab">lab</a>
+      <a href="/about">about</a>
+    </nav>
+
+    <div class="footer-socials">
+      {socials.map(({ href, label }) => (
+        <a href={href} target="_blank" rel="noopener noreferrer" aria-label={label} class="social-link">
+          {label}
+        </a>
+      ))}
+    </div>
+  </div>
+
+  <div class="footer-bottom">
+    <div class="container">
+      <span class="copy">© {year} voidstar</span>
+      <span class="built-with">
+        built with <a href="https://astro.build" target="_blank" rel="noopener">Astro</a>
+        · hosted on <a href="https://pages.cloudflare.com" target="_blank" rel="noopener">Cloudflare Pages</a>
+      </span>
+    </div>
+  </div>
+</footer>
+
+<style>
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: var(--void-2);
+  margin-top: auto;
+}
+.footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 2rem;
+  padding: 3rem 1.5rem 2rem;
+  justify-content: space-between;
+}
+.footer-left { flex: 1 1 160px; }
+.footer-logo {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.footer-logo .star { color: var(--accent); }
+.footer-tagline {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.35rem;
+  letter-spacing: 0.15em;
+}
+.footer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.footer-nav a {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.footer-nav a:hover { color: var(--accent); }
+.footer-socials {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.social-link {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.social-link:hover { color: var(--cyan); }
+.footer-bottom {
+  border-top: 1px solid var(--border);
+  padding: 1rem 0;
+}
+.footer-bottom .container {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.built-with a { color: var(--text-dim); }
+.built-with a:hover { color: var(--accent); }
+</style>

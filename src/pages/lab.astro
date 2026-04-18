@@ -1,0 +1,196 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const experiments = [
+  {
+    id: 'particles',
+    title: 'Particle Field',
+    desc: 'N-body particle simulation with curl noise, attractor fields, and additive blending. 10k particles at 60fps.',
+    tags: ['canvas2d', 'particles', 'noise'],
+    status: 'coming-soon',
+  },
+  {
+    id: 'pose',
+    title: 'Pose Particles',
+    desc: 'MediaPipe body pose estimation drives a particle attractor field in real time. Requires camera access.',
+    tags: ['mediapipe', 'camera', 'particles'],
+    status: 'coming-soon',
+  },
+  {
+    id: 'fluid',
+    title: 'WebGL Fluid',
+    desc: 'GPU-accelerated fluid dynamics on a grid. Mouse adds dye and velocity. Vorticity confinement, pressure solve.',
+    tags: ['webgl', 'glsl', 'simulation'],
+    status: 'coming-soon',
+  },
+  {
+    id: 'audio',
+    title: 'Audio Reactive',
+    desc: 'Web Audio API FFT feeds amplitude and frequency data into a live visual system.',
+    tags: ['web-audio', 'fft', 'generative'],
+    status: 'coming-soon',
+  },
+];
+---
+<BaseLayout
+  title="Lab"
+  description="Interactive browser experiments — particle systems, WebGL shaders, pose tracking, and audio-reactive visuals."
+>
+  <div class="lab-wrap">
+    <div class="container">
+      <header class="page-header">
+        <div class="page-label">// lab</div>
+        <h1 class="page-title">Interactive Experiments</h1>
+        <p class="page-desc">
+          These run entirely in your browser — no server, no install.
+          Built with Canvas2D, WebGL, MediaPipe, and Web Audio.
+          Source code linked from each experiment.
+        </p>
+      </header>
+
+      <div class="experiments-grid">
+        {experiments.map(exp => (
+          <div class="exp-card" data-status={exp.status}>
+            <div class="exp-header">
+              <h2 class="exp-title">{exp.title}</h2>
+              {exp.status === 'coming-soon' && (
+                <span class="status-badge">coming soon</span>
+              )}
+              {exp.status === 'live' && (
+                <span class="status-badge live">live</span>
+              )}
+            </div>
+            <p class="exp-desc">{exp.desc}</p>
+            <div class="exp-tags">
+              {exp.tags.map(t => <span class="tag">{t}</span>)}
+            </div>
+            {exp.status === 'live' ? (
+              <a href={`/lab/${exp.id}`} class="btn btn-primary">open →</a>
+            ) : (
+              <span class="btn btn-outline disabled" aria-disabled="true">coming soon</span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div class="divider"></div>
+
+      <section class="lab-note">
+        <h2>// about the lab</h2>
+        <p>
+          The lab is where I put things that are too interactive to be a video.
+          Each experiment is a standalone page — full-screen canvas, keyboard/mouse/touch controls,
+          and a link to the source code on GitHub.
+        </p>
+        <p>
+          The tech varies by experiment but stays close to the metal: vanilla JS, typed arrays,
+          GLSL shaders. No React, no heavy frameworks — particle systems don't need a VDOM.
+        </p>
+        <a href="https://github.com/voidstar" target="_blank" rel="noopener" class="btn btn-outline">
+          view GitHub →
+        </a>
+      </section>
+    </div>
+  </div>
+</BaseLayout>
+
+<style>
+.lab-wrap { padding: 4rem 0 6rem; }
+.page-header { margin-bottom: 3rem; }
+.page-label {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  letter-spacing: 0.12em;
+  margin-bottom: 0.75rem;
+}
+.page-title {
+  font-size: clamp(1.75rem, 4vw, 3rem);
+  margin-bottom: 0.75rem;
+  background: linear-gradient(135deg, var(--text) 40%, var(--green));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.page-desc {
+  font-size: 1.05rem;
+  color: var(--text-muted);
+  max-width: 65ch;
+  line-height: 1.7;
+}
+
+.experiments-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.25rem;
+}
+
+.exp-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.exp-card:hover { border-color: var(--border-2); transform: translateY(-2px); }
+.exp-card[data-status="live"] { border-color: rgba(74, 222, 128, 0.3); }
+
+.exp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.exp-title { font-size: 1.05rem; font-weight: 600; color: var(--text); }
+.status-badge {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.status-badge.live {
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.4);
+  color: var(--green);
+}
+.exp-desc {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  flex: 1;
+}
+.exp-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.lab-note { max-width: 65ch; }
+.lab-note h2 {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  margin-bottom: 1rem;
+}
+.lab-note p {
+  font-size: 1rem;
+  color: var(--text-muted);
+  line-height: 1.75;
+  margin-bottom: 1rem;
+}
+</style>

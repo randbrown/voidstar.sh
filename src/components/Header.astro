@@ -1,0 +1,146 @@
+---
+const nav = [
+  { href: '/posts',   label: 'posts'   },
+  { href: '/videos',  label: 'videos'  },
+  { href: '/lab',     label: 'lab'     },
+  { href: '/about',   label: 'about'   },
+];
+
+const current = Astro.url.pathname;
+---
+<header class="site-header">
+  <div class="container header-inner">
+    <a href="/" class="logo" aria-label="voidstar home">
+      <span class="logo-star">✦</span>
+      <span class="logo-text">voidstar</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      {nav.map(({ href, label }) => (
+        <a
+          href={href}
+          class:list={['nav-link', { active: current.startsWith(href) }]}
+        >
+          {label}
+        </a>
+      ))}
+    </nav>
+
+    <button class="menu-toggle" id="menu-toggle" aria-label="Toggle menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+
+  <nav class="mobile-nav" id="mobile-nav" aria-hidden="true">
+    {nav.map(({ href, label }) => (
+      <a href={href} class:list={['mobile-nav-link', { active: current.startsWith(href) }]}>
+        {label}
+      </a>
+    ))}
+  </nav>
+</header>
+
+<script>
+  const toggle = document.getElementById('menu-toggle')!;
+  const mobileNav = document.getElementById('mobile-nav')!;
+  toggle.addEventListener('click', () => {
+    const open = toggle.getAttribute('aria-expanded') === 'true';
+    toggle.setAttribute('aria-expanded', String(!open));
+    mobileNav.setAttribute('aria-hidden', String(open));
+    mobileNav.classList.toggle('open', !open);
+  });
+</script>
+
+<style>
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(5, 5, 13, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 3.5rem;
+  gap: 2rem;
+}
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: var(--text);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.logo-star {
+  color: var(--accent);
+  font-size: 1.2rem;
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+.logo:hover .logo-text { color: var(--cyan); }
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.nav-link {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius);
+  transition: color 0.2s, background 0.2s;
+}
+.nav-link:hover { color: var(--text); background: var(--surface); }
+.nav-link.active { color: var(--accent); }
+
+.menu-toggle {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+}
+.menu-toggle span {
+  display: block;
+  width: 22px;
+  height: 2px;
+  background: var(--text-muted);
+  border-radius: 2px;
+  transition: all 0.2s;
+}
+
+.mobile-nav {
+  display: none;
+  flex-direction: column;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border);
+  gap: 0.25rem;
+}
+.mobile-nav.open { display: flex; }
+.mobile-nav-link {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  padding: 0.5rem 0;
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+}
+.mobile-nav-link.active { color: var(--accent); }
+
+@media (max-width: 640px) {
+  .nav { display: none; }
+  .menu-toggle { display: flex; }
+}
+</style>

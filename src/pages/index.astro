@@ -1,0 +1,244 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import StarField from '../components/StarField.astro';
+import PostCard from '../components/PostCard.astro';
+import VideoCard from '../components/VideoCard.astro';
+import { getCollection } from 'astro:content';
+import { videos } from '../data/videos';
+
+const allPosts = await getCollection('posts', ({ data }) => !data.draft);
+const recentPosts = allPosts
+  .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
+  .slice(0, 3);
+
+const featuredVideo = videos.find(v => v.featured) ?? videos[0];
+---
+<BaseLayout title="voidstar" description="voidstar — art, code, and the space between. Generative visuals, pose tracking, music, and interactive experiments.">
+
+  <!-- Hero -->
+  <section class="hero">
+    <StarField count={150} />
+    <div class="hero-content container">
+      <div class="hero-eyebrow">
+        <span class="eyebrow-dot"></span>
+        <span>art · code · void</span>
+      </div>
+      <h1 class="hero-title">
+        <span class="title-main glow-accent">voidstar</span>
+        <span class="title-op">*</span>
+      </h1>
+      <p class="hero-desc">
+        Generative visuals, pose-driven particle systems, ambient music,
+        and experiments that live where code meets art.
+      </p>
+      <div class="hero-actions">
+        <a href="/lab" class="btn btn-primary">explore the lab →</a>
+        <a href="/videos" class="btn btn-outline">watch videos</a>
+      </div>
+
+      <div class="hero-socials">
+        <a href="https://youtube.com/@voidstar" target="_blank" rel="noopener" class="social-pill">YouTube</a>
+        <a href="https://instagram.com/voidstar" target="_blank" rel="noopener" class="social-pill">Instagram</a>
+        <a href="https://github.com/voidstar" target="_blank" rel="noopener" class="social-pill">GitHub</a>
+      </div>
+    </div>
+
+    <div class="hero-scroll-hint" aria-hidden="true">
+      <span>scroll</span>
+      <span class="scroll-arrow">↓</span>
+    </div>
+  </section>
+
+  <!-- Featured Video -->
+  {featuredVideo && (
+    <section class="section-sm">
+      <div class="container">
+        <h2 class="section-heading">
+          <span class="heading-accent">▶</span> featured
+        </h2>
+        <div class="featured-video-wrap">
+          <VideoCard
+            id={featuredVideo.id}
+            title={featuredVideo.title}
+            description={featuredVideo.description}
+            date={featuredVideo.date}
+            tags={featuredVideo.tags}
+          />
+        </div>
+        <a href="/videos" class="section-link">all videos →</a>
+      </div>
+    </section>
+  )}
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- Recent Posts -->
+  <section class="section-sm">
+    <div class="container">
+      <h2 class="section-heading">
+        <span class="heading-accent">//</span> recent posts
+      </h2>
+      <div class="grid-3">
+        {recentPosts.map(post => <PostCard post={post} />)}
+      </div>
+      <a href="/posts" class="section-link">all posts →</a>
+    </div>
+  </section>
+
+  <div class="container"><div class="divider"></div></div>
+
+  <!-- Lab teaser -->
+  <section class="section-sm lab-teaser">
+    <div class="container">
+      <h2 class="section-heading">
+        <span class="heading-accent">⬡</span> lab
+      </h2>
+      <p class="lab-desc">
+        Interactive experiments that run directly in your browser —
+        particle systems, WebGL shaders, pose tracking, generative audio.
+        No install required.
+      </p>
+      <a href="/lab" class="btn btn-outline">open lab →</a>
+    </div>
+  </section>
+
+</BaseLayout>
+
+<style>
+/* Hero */
+.hero {
+  position: relative;
+  min-height: 92dvh;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(139,92,246,0.12) 0%, transparent 70%);
+}
+.hero-content {
+  position: relative;
+  z-index: 2;
+  padding-top: 4rem;
+  padding-bottom: 6rem;
+  max-width: 700px;
+}
+.hero-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  letter-spacing: 0.12em;
+  margin-bottom: 1.5rem;
+}
+.eyebrow-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+.hero-title {
+  font-size: clamp(3.5rem, 10vw, 6.5rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.1em;
+}
+.title-main {
+  background: linear-gradient(135deg, #fff 0%, var(--accent) 60%, var(--cyan) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.title-op {
+  color: var(--accent);
+  font-size: 0.6em;
+  -webkit-text-fill-color: var(--accent);
+  text-shadow: 0 0 30px var(--accent-glow);
+}
+.hero-desc {
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  color: var(--text-muted);
+  line-height: 1.7;
+  max-width: 55ch;
+  margin-bottom: 2rem;
+}
+.hero-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 2.5rem;
+}
+.hero-socials {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.social-pill {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  transition: all 0.2s;
+}
+.social-pill:hover { color: var(--accent); border-color: var(--accent); }
+
+.hero-scroll-hint {
+  position: absolute;
+  bottom: 2.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  letter-spacing: 0.1em;
+}
+.scroll-arrow {
+  animation: fade-up 1.5s ease-in-out infinite alternate;
+}
+
+/* Sections */
+.section-heading {
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.heading-accent { color: var(--accent); }
+.section-link {
+  display: inline-block;
+  margin-top: 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.section-link:hover { color: var(--accent); }
+
+.featured-video-wrap {
+  max-width: 700px;
+}
+
+.lab-teaser { padding-bottom: 6rem; }
+.lab-desc {
+  font-size: 1.05rem;
+  color: var(--text-muted);
+  max-width: 60ch;
+  line-height: 1.7;
+  margin-bottom: 1.5rem;
+}
+</style>

@@ -1,0 +1,89 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import VideoCard from '../components/VideoCard.astro';
+import { videos } from '../data/videos';
+---
+<BaseLayout
+  title="Videos"
+  description="Art and music videos from voidstar — generative visuals, pose tracking, ambient music."
+>
+  <div class="videos-wrap">
+    <div class="container">
+      <header class="page-header">
+        <div class="page-label">// videos</div>
+        <h1 class="page-title">Art &amp; Music</h1>
+        <p class="page-desc">
+          Generative visuals, pose-driven particle systems, and original music.
+          Click any thumbnail to play inline, or open on YouTube for the full experience.
+        </p>
+      </header>
+
+      <div class="grid-2">
+        {videos.map(v => (
+          <VideoCard
+            id={v.id}
+            title={v.title}
+            description={v.description}
+            date={v.date}
+            tags={v.tags}
+          />
+        ))}
+      </div>
+
+      <div class="yt-cta">
+        <p>See everything on YouTube →</p>
+        <a
+          href="https://youtube.com/@voidstar"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="btn btn-outline"
+        >
+          Open YouTube Channel ↗
+        </a>
+      </div>
+    </div>
+  </div>
+</BaseLayout>
+
+<style>
+.videos-wrap { padding: 4rem 0 6rem; }
+.page-header { margin-bottom: 3rem; }
+.page-label {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  letter-spacing: 0.12em;
+  margin-bottom: 0.75rem;
+}
+.page-title {
+  font-size: clamp(1.75rem, 4vw, 3rem);
+  margin-bottom: 0.75rem;
+  background: linear-gradient(135deg, var(--text) 40%, var(--pink));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.page-desc {
+  font-size: 1.05rem;
+  color: var(--text-muted);
+  max-width: 60ch;
+  line-height: 1.7;
+}
+.yt-cta {
+  margin-top: 3rem;
+  padding: 2rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.yt-cta p {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+</style>

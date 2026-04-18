@@ -1,0 +1,81 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PostCard from '../../components/PostCard.astro';
+import { getCollection } from 'astro:content';
+
+const allPosts = await getCollection('posts', ({ data }) => !data.draft);
+const posts = allPosts.sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+// Collect all unique tags
+const allTags = [...new Set(posts.flatMap(p => p.data.tags))].sort();
+---
+<BaseLayout title="Posts" description="Writing about generative art, creative coding, particle systems, and music.">
+  <div class="posts-wrap">
+    <div class="container">
+      <header class="page-header">
+        <div class="page-label">// posts</div>
+        <h1 class="page-title">Writing</h1>
+        <p class="page-desc">
+          On creative coding, generative art, music production, and the tools that power them.
+        </p>
+      </header>
+
+      {allTags.length > 0 && (
+        <div class="tags-filter" role="navigation" aria-label="Filter by tag">
+          <span class="filter-label">topics:</span>
+          {allTags.map(tag => (
+            <a href={`#tag-${tag}`} class="tag">{tag}</a>
+          ))}
+        </div>
+      )}
+
+      <div class="posts-list">
+        {posts.map(post => <PostCard post={post} />)}
+      </div>
+    </div>
+  </div>
+</BaseLayout>
+
+<style>
+.posts-wrap { padding: 4rem 0 6rem; }
+.page-header { margin-bottom: 2.5rem; }
+.page-label {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  letter-spacing: 0.12em;
+  margin-bottom: 0.75rem;
+}
+.page-title {
+  font-size: clamp(1.75rem, 4vw, 3rem);
+  margin-bottom: 0.75rem;
+  background: linear-gradient(135deg, var(--text) 40%, var(--cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.page-desc {
+  font-size: 1.05rem;
+  color: var(--text-muted);
+  max-width: 60ch;
+  line-height: 1.7;
+}
+.tags-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+}
+.filter-label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  letter-spacing: 0.1em;
+}
+.posts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+</style>
