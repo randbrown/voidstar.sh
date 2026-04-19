@@ -251,6 +251,21 @@ function applyRotation(lx, ly, W, H) {
     default:  return [lx, ly];
   }
 }
+
+// Rescale a normalized landmark (0..1 in raw video space) to the cropped
+// active region, then map to canvas pixels. When cropInset is zero this is
+// identical to the original mapping.
+function lmToCanvas(lmx, lmy, W, H) {
+  if (!cropVw || !cropVh || (cropInset.top|cropInset.bot|cropInset.lft|cropInset.rgt) === 0) {
+    return applyRotation((1 - lmx) * W, lmy * H, W, H);
+  }
+  const activeW = cropVw - cropInset.lft - cropInset.rgt;
+  const activeH = cropVh - cropInset.top - cropInset.bot;
+  // Normalized position inside the active (non-grey) region
+  const nx = (lmx * cropVw - cropInset.lft) / activeW;
+  const ny = (lmy * cropVh - cropInset.top) / activeH;
+  return applyRotation((1 - nx) * W, ny * H, W, H);
+}
 function updateVideoTransform() {
   videoEl.style.transform = `scaleX(-1) rotate(${cameraRotation}deg)`;
 }
@@ -339,7 +354,7 @@ function spawnShockwaves() {
     for (const idx of [15, 16, 11, 12]) {
       const lm = allLandmarks[p]?.[idx];
       if (!lm || lm.visibility < 0.4) continue;
-      const [x, y] = applyRotation((1 - lm.x) * W, lm.y * H, W, H);
+      const [x, y] = lmToCanvas(lm.x, lm.y, W, H);
       shockwaves.push({ x, y, r: 4, alpha: 0.9 * aBass, palette: pal });
     }
   }
@@ -374,7 +389,7 @@ function update(dt) {
     for (const [k, weight] of Object.entries(LM_WEIGHT)) {
       const lm = personLms[Number(k)];
       if (!lm || lm.visibility < 0.4) continue;
-      const [lx, ly] = applyRotation((1 - lm.x) * W, lm.y * H, W, H);
+      const [lx, ly] = lmToCanvas(lm.x, lm.y, W, H);
       attractors.push({ lx, ly, weight, repel: REPEL_JOINTS.has(Number(k)) });
     }
   }
@@ -504,7 +519,7 @@ function drawPoseOverlay() {
   if (!allLandmarks.length) return;
   const W = canvas.width, H = canvas.height;
 
-  function lmPos(lm) { return applyRotation((1-lm.x)*W, lm.y*H, W, H); }
+  function lmPos(lm) { return lmToCanvas(lm.x, lm.y, W, H); }
 
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
@@ -589,14 +604,81 @@ function stopCurrentStream() {
   }
 }
 
+// Detect uniform-colour "dead bars" (driver letterboxing) at the edges of the
+// video frame. Returns pixel insets from each side in video coordinate space.
+// Conservative: only reports a bar if at least 5 consecutive rows/cols are
+// near-zero variance. Caller should ignore tiny values (<4% of dimension).
+async function detectDeadBars(vw, vh) {
+  const scratch = document.createElement('canvas');
+  scratch.width = vw; scratch.height = vh;
+  const c2d = scratch.getContext('2d', { willReadFrequently: true });
+  c2d.drawImage(videoEl, 0, 0, vw, vh);
+  const data = c2d.getImageData(0, 0, vw, vh).data;
+
+  const THRESH = 12; // max luminance variance within a "dead" row/column
+  const rowVar = y => {
+    let mn = 255, mx = 0;
+    for (let x = 0; x < vw; x += 4) {
+      const i = (y * vw + x) * 4;
+      const l = (data[i] + data[i+1] + data[i+2]) / 3;
+      if (l < mn) mn = l; if (l > mx) mx = l;
+    }
+    return mx - mn;
+  };
+  const colVar = x => {
+    let mn = 255, mx = 0;
+    for (let y = 0; y < vh; y += 4) {
+      const i = (y * vw + x) * 4;
+      const l = (data[i] + data[i+1] + data[i+2]) / 3;
+      if (l < mn) mn = l; if (l > mx) mx = l;
+    }
+    return mx - mn;
+  };
+
+  let top = 0;                    while (top < vh * 0.45 && rowVar(top) < THRESH)       top++;
+  let bot = 0;                    while (bot < vh * 0.45 && rowVar(vh-1-bot) < THRESH)  bot++;
+  let lft = 0;                    while (lft < vw * 0.45 && colVar(lft) < THRESH)       lft++;
+  let rgt = 0;                    while (rgt < vw * 0.45 && colVar(vw-1-rgt) < THRESH)  rgt++;
+  return { top, bot, lft, rgt };
+}
+
+// Stored active region for landmark-coordinate adjustment in the main loop
+let cropInset = { top: 0, bot: 0, lft: 0, rgt: 0 };
+let cropVw = 0, cropVh = 0;
+
+async function applyDeadBarCrop(vw, vh) {
+  // Let the camera stabilize (exposure, first few frames can be black)
+  await new Promise(r => setTimeout(r, 450));
+  try {
+    const b = await detectDeadBars(vw, vh);
+    const minFracH = vh * 0.04, minFracW = vw * 0.04;
+    const has = b.top > minFracH || b.bot > minFracH || b.lft > minFracW || b.rgt > minFracW;
+    if (!has) {
+      videoEl.style.objectViewBox = '';
+      cropInset = { top: 0, bot: 0, lft: 0, rgt: 0 };
+      cropVw = vw; cropVh = vh;
+      return;
+    }
+    // Visual crop via object-view-box (Chrome 104+). Fallback to clip-path.
+    const topPct = (b.top / vh * 100).toFixed(2);
+    const botPct = (b.bot / vh * 100).toFixed(2);
+    const lftPct = (b.lft / vw * 100).toFixed(2);
+    const rgtPct = (b.rgt / vw * 100).toFixed(2);
+    videoEl.style.objectViewBox = `inset(${topPct}% ${rgtPct}% ${botPct}% ${lftPct}%)`;
+    // Adjust aspect-ratio of the preview box to match the cropped region
+    const cw = vw - b.lft - b.rgt;
+    const ch = vh - b.top - b.bot;
+    if (cw > 0 && ch > 0) videoEl.style.aspectRatio = `${cw} / ${ch}`;
+    cropInset = b; cropVw = vw; cropVh = vh;
+    console.log('[pose-particles] cropped dead bars', b, `→ ${cw}×${ch}`);
+  } catch (e) {
+    console.warn('[pose-particles] dead-bar detection failed', e);
+  }
+}
+
 async function openCamera(deviceId) {
   stopCurrentStream();
 
-  // Many webcams letterbox a 16:9 sensor into a 4:3 default mode (640×480)
-  // when you don't request a size — the unused sensor rows come through as
-  // a grey/black bar. Explicitly asking for a high 16:9 mode gets the
-  // native un-padded output from most cameras; cameras that can't hit
-  // 1280×720 will downgrade to their best native mode.
   const base = {
     width:       { ideal: 1280 },
     height:      { ideal: 720  },
@@ -617,15 +699,22 @@ async function openCamera(deviceId) {
 
   const track    = stream.getVideoTracks()[0];
   const settings = track.getSettings();
-  // eslint-disable-next-line no-console
   console.log('[pose-particles] camera settings', settings,
               'capabilities', track.getCapabilities?.());
 
   if (camResEl) camResEl.textContent = `${vw}×${vh}`;
 
+  // Reset any old crop before detecting new bars on the new stream
+  videoEl.style.objectViewBox = '';
+  cropInset = { top: 0, bot: 0, lft: 0, rgt: 0 };
+  cropVw = vw; cropVh = vh;
+
   await videoEl.play().catch(() => {});
 
   if (settings.deviceId) localStorage.setItem(CAM_KEY, settings.deviceId);
+
+  // Run dead-bar detection asynchronously so camera open isn't blocked
+  applyDeadBarCrop(vw, vh);
 
   return settings.deviceId ?? deviceId ?? null;
 }
