@@ -29,12 +29,12 @@
 
     #video {
       position: fixed; bottom: 1.25rem; right: 1.25rem;
-      width: 200px;
-      /* no aspect-ratio lock — let the browser use the camera's native ratio */
-      object-fit: contain;
-      background: transparent;
+      width: 220px; height: auto;
+      /* aspect-ratio is set from JS once the camera stream metadata loads,
+         so the thumbnail always matches the camera's native ratio — no crop */
+      display: block;
       border-radius: 8px; border: 1px solid var(--border);
-      opacity: 0.75; transform: scaleX(-1); z-index: 10;
+      opacity: 0.78; transform: scaleX(-1); z-index: 10;
       transition: opacity 0.2s;
     }
     #video.hidden { opacity: 0; pointer-events: none; }
@@ -589,31 +589,40 @@ async function boot() {
     statusMsg.textContent = 'requesting camera…';
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      // Ask for a reasonable resolution; no fixed aspect-ratio so the
-      // browser/camera can use its native FOV (often 16:9 or 4:3)
+      // No fixed aspect-ratio — let the browser use the camera's native FOV
       video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
     });
     videoEl.srcObject = stream;
-    await new Promise(r => { videoEl.onloadedmetadata = r; });
-    videoEl.play();
 
-    // Show actual camera resolution in the HUD
+    // Wait for metadata so we know the real video dimensions
+    await new Promise(r => { videoEl.onloadedmetadata = r; });
+
+    const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
+
+    // Lock the thumbnail aspect-ratio to the camera's actual ratio so the
+    // preview shows the full frame with no empty space / no crop
+    if (vw && vh) videoEl.style.aspectRatio = `${vw} / ${vh}`;
+
     const camResEl = document.getElementById('cam-res');
-    if (camResEl) {
-      const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
-      camResEl.textContent = `${vw}×${vh}`;
-    }
+    if (camResEl) camResEl.textContent = `${vw}×${vh}`;
+
+    // Await playback so we're producing frames before starting detection
+    await videoEl.play().catch(() => {/* user gesture already happened */});
 
     overlay.classList.add('hidden');
 
-    // Detection loop — runs independently from the render loop
-    let lastVideoTime = -1;
+    // Detection loop — runs on its own rAF, independent of render loop.
+    // Use a monotonically-increasing timestamp rather than videoEl.currentTime,
+    // because live MediaStream videos may not advance currentTime reliably.
     (function detectLoop() {
       requestAnimationFrame(detectLoop);
-      if (videoEl.currentTime === lastVideoTime) return;
-      lastVideoTime = videoEl.currentTime;
-      const result = poseLandmarker.detectForVideo(videoEl, performance.now());
-      allLandmarks = result.landmarks ?? [];
+      if (videoEl.readyState < 2 || videoEl.paused || videoEl.ended) return;
+      try {
+        const result = poseLandmarker.detectForVideo(videoEl, performance.now());
+        allLandmarks = result.landmarks ?? [];
+      } catch (e) {
+        // detectForVideo throws if timestamps regress; swallow and keep going
+      }
     })();
 
   } catch (err) {
