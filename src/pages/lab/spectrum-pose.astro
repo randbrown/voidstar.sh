@@ -291,7 +291,10 @@ const LM_WEIGHT = {
   25: 0.7, 26: 0.7,
   27: 0.6, 28: 0.6,
 };
-const SPARK_EMITTERS = [0, 15, 16, 13, 14, 11, 12]; // head, wrists, elbows, shoulders
+// Head, wrists, elbows, shoulders for bass-beat bursts (body core)
+const SPARK_EMITTERS = [0, 15, 16, 13, 14, 11, 12];
+// Head + wrists for highs-transient bursts (extremities, airy)
+const SPARK_EMITTERS_HIGHS = [0, 15, 16];
 
 const SKELETON_CONNECTIONS = [
   [11,12], [11,13],[13,15], [12,14],[14,16],
@@ -426,6 +429,11 @@ let bassAvg    = 0;
 let lastBeatMs = 0;
 let beatActive = false;
 let beatPulse  = 0;      // 1.0 on beat, decays
+// Highs transient (cymbals, hats, shakers) — independent of bass beat
+let highsAvg       = 0;
+let lastHighsHitMs = 0;
+let highsHitActive = false;
+let highsPulse     = 0;
 
 function avgBins(buf, lo, hi) {
   let s = 0;
@@ -434,8 +442,10 @@ function avgBins(buf, lo, hi) {
 }
 
 function tickAudio(dt) {
-  beatPulse *= Math.pow(0.001, dt); // smooth decay (~ 0.001 per second = fast)
-  if (!audioEnabled || !analyserNode) { beatActive = false; return; }
+  const decay = Math.pow(0.001, dt); // per-second decay factor
+  beatPulse  *= decay;
+  highsPulse *= decay;
+  if (!audioEnabled || !analyserNode) { beatActive = false; highsHitActive = false; return; }
   analyserNode.getByteFrequencyData(freqBuf);
   analyserNode.getByteTimeDomainData(timeBuf);
   const g = audioGain;
@@ -447,10 +457,18 @@ function tickAudio(dt) {
   aHighs += audioEMA * (rawHighs - aHighs);
   aTotal += audioEMA * ((rawBass + rawMids + rawHighs) / 3 - aTotal);
 
-  bassAvg = 0.97 * bassAvg + 0.03 * rawBass;
+  bassAvg  = 0.97 * bassAvg  + 0.03 * rawBass;
+  highsAvg = 0.95 * highsAvg + 0.05 * rawHighs; // faster envelope for crisp hats
   const now = performance.now();
   beatActive = rawBass > bassAvg * beatThresh && now - lastBeatMs > beatCooldown;
   if (beatActive) { lastBeatMs = now; beatPulse = 1; }
+  // Highs transient — slightly lower threshold & much faster retrigger than bass
+  const hiThresh   = beatThresh   * 0.88;
+  const hiCooldown = beatCooldown * 0.45;
+  highsHitActive = rawHighs > highsAvg * hiThresh
+                && rawHighs > 0.05
+                && now - lastHighsHitMs > hiCooldown;
+  if (highsHitActive) { lastHighsHitMs = now; highsPulse = 1; }
 }
 
 // ── Visualizer: Bars (log-spaced) ────────────────────────────────────────────
@@ -545,30 +563,34 @@ function drawRadial(W, H) {
 // ── Visualizer: Waterfall (scrolling spectrogram) ────────────────────────────
 function drawWaterfall(W, H) {
   if (!audioEnabled || !logBinIdx) return;
-  // Shift existing waterfall buffer up by 1 pixel
-  waterfallCtx.drawImage(waterfallCanvas, 0, -1);
-  // Clear the newly exposed bottom row
-  waterfallCtx.clearRect(0, H - 1, W, 1);
+  // New spectrum enters at the TOP and flows downward.
+  // Shift existing waterfall buffer down by 1 pixel, then clear the top row.
+  waterfallCtx.globalCompositeOperation = 'copy';
+  waterfallCtx.drawImage(waterfallCanvas, 0, 1);
+  waterfallCtx.globalCompositeOperation = 'source-over';
+  waterfallCtx.clearRect(0, 0, W, 1);
 
-  // Draw current spectrum as a single row at bottom
+  // Draw current spectrum as a single row at top. Muted lightness + alpha so
+  // the buffer reads as a dim backdrop even on a bright projector.
   for (let i = 0; i < BAR_COUNT; i++) {
     const v = sampleBar(i) * audioGain;
-    if (v < 0.02) continue;
+    if (v < 0.03) continue;
     const x0 = Math.floor((i / BAR_COUNT) * W);
     const x1 = Math.floor(((i + 1) / BAR_COUNT) * W);
     const hue = 260 + (i / BAR_COUNT) * 160;
-    const l   = 30 + Math.min(1, v) * 40;
-    const a   = Math.min(1, v * 1.4);
-    waterfallCtx.fillStyle = `hsla(${hue},85%,${l}%,${a})`;
-    waterfallCtx.fillRect(x0, H - 2, x1 - x0, 2);
+    const l   = 18 + Math.min(1, v) * 22;   // 18–40% (was 30–70%)
+    const a   = Math.min(0.55, v * 0.8);    // softer than before
+    waterfallCtx.fillStyle = `hsla(${hue},75%,${l}%,${a})`;
+    waterfallCtx.fillRect(x0, 0, x1 - x0, 2);
   }
 
-  // Blit to main with additive blending
-  ctx.globalCompositeOperation = 'lighter';
-  ctx.globalAlpha = 0.85;
+  // Blit to main. Use source-over + low alpha instead of 'lighter' so bright
+  // regions can't stack on top of each other (additive made the hot spots
+  // glare on a projector). Global alpha knocks it further into the back.
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 0.55;
   ctx.drawImage(waterfallCanvas, 0, 0);
   ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = 'source-over';
 }
 
 // ── Visualizer: Oscilloscope ─────────────────────────────────────────────────
@@ -659,7 +681,7 @@ function emitFromJoints(dt) {
   if (!sparksOn || !audioEnabled) return;
   const W = canvas.width, H = canvas.height;
 
-  // Beat burst — flush a volley of sparks from each visible emitter
+  // Bass beat burst — from body core. Kept close to the original values.
   if (beatActive) {
     for (let p = 0; p < allLandmarks.length; p++) {
       const pal = PERSON_PALETTE[p % PERSON_PALETTE.length];
@@ -678,26 +700,56 @@ function emitFromJoints(dt) {
     }
   }
 
-  // Continuous highs-driven sparks from wrists + head
-  const rate = aHighs * 120; // sparks per second across all emitters (scaled below)
-  if (rate > 0.5) {
-    const perSec = rate * dt;
+  // Highs transient burst — small accent on cymbal/hat/shaker hits. Light
+  // weight vs. bass so shakers don't flood the screen.
+  if (highsHitActive) {
     for (let p = 0; p < allLandmarks.length; p++) {
       const pal = PERSON_PALETTE[p % PERSON_PALETTE.length];
       const [hueA, hueB] = pal.spark;
       const lms = allLandmarks[p];
-      for (const idx of [15, 16, 0]) {
+      for (const idx of SPARK_EMITTERS_HIGHS) {
+        const lm = lms[idx];
+        if (!lm || lm.visibility < 0.35) continue;
+        const [x, y] = lmToCanvas(lm.x, lm.y, W, H);
+        const burst = 3 + Math.floor(aHighs * 10) + Math.floor(highsPulse * 2);
+        for (let k = 0; k < burst; k++) {
+          const hue = (Math.random() < 0.5 ? hueA : hueB) + 30 + (Math.random() - 0.5) * 50;
+          emitSpark(
+            x, y, hue,
+            2.5 + aHighs * 4 + highsPulse * 1.2,
+            1.1 + Math.random() * 1.2,
+            0.55 + Math.random() * 0.7
+          );
+        }
+      }
+    }
+  }
+
+  // Continuous highs-driven sparks from wrists and head.
+  // Rate set slightly above the original 120 to give a gentle highs bias.
+  const rate = aHighs * 170;
+  if (rate > 0.5) {
+    const perSec = rate * dt;
+    const CONT_EMIT = [
+      [15, 1.0], [16, 1.0],   // wrists (main)
+      [ 0, 0.35],             // head (lighter)
+    ];
+    for (let p = 0; p < allLandmarks.length; p++) {
+      const pal = PERSON_PALETTE[p % PERSON_PALETTE.length];
+      const [hueA, hueB] = pal.spark;
+      const lms = allLandmarks[p];
+      for (const [idx, w] of CONT_EMIT) {
         const lm = lms[idx];
         if (!lm || lm.visibility < 0.4) continue;
-        const key = `${p}-${idx}`;
-        const acc = (emitAccum.get(key) || 0) + perSec * (idx === 0 ? 0.35 : 1);
+        const key = `${p}-h-${idx}`;
+        const acc = (emitAccum.get(key) || 0) + perSec * w;
         const n = Math.floor(acc);
         emitAccum.set(key, acc - n);
         if (n <= 0) continue;
         const [x, y] = lmToCanvas(lm.x, lm.y, W, H);
         for (let k = 0; k < n; k++) {
           const hue = (Math.random() < 0.5 ? hueA : hueB) + (Math.random() - 0.5) * 40;
-          emitSpark(x, y, hue, 1.6 + aHighs * 3.0, 0.9 + Math.random() * 1.2, 0.5 + Math.random() * 0.7);
+          emitSpark(x, y, hue, 2.0 + aHighs * 3.5, 1.1 + Math.random() * 1.3, 0.7 + Math.random() * 0.9);
         }
       }
     }
@@ -771,9 +823,69 @@ function drawPoseOverlay() {
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fillStyle = pal.joint; ctx.fill();
     }
+
+    // Face glyphs: dash on each eye, v at the nose ( -v- )
+    drawFaceGlyphs(personLms, pal, lmPos);
   });
 
   ctx.restore();
+}
+
+// Dashes over the eyes + downward-pointing "v" apex at the nose.
+// Rotates with head tilt (via eye-line direction). 3 strokes per person per
+// frame — performance cost is trivial vs. the rest of the overlay.
+function drawFaceGlyphs(personLms, pal, lmPos) {
+  const nose = personLms[0];
+  const eyeL = personLms[2]; // left eye (centre)
+  const eyeR = personLms[5]; // right eye (centre)
+  if (!nose || !eyeL || !eyeR) return;
+  if (nose.visibility < 0.45 || eyeL.visibility < 0.45 || eyeR.visibility < 0.45) return;
+
+  const [nx, ny] = lmPos(nose);
+  const [lx, ly] = lmPos(eyeL);
+  const [rx, ry] = lmPos(eyeR);
+
+  const edx = rx - lx, edy = ry - ly;
+  const eyeSep = Math.sqrt(edx*edx + edy*edy);
+  if (eyeSep < 8) return; // face too small to render legibly
+
+  // Unit vector along eye-line (left → right)
+  const ux = edx / eyeSep, uy = edy / eyeSep;
+  // "Up" direction on the face — from nose toward eye midpoint
+  let upx = (lx + rx) * 0.5 - nx;
+  let upy = (ly + ry) * 0.5 - ny;
+  const upMag = Math.sqrt(upx*upx + upy*upy) || 1;
+  upx /= upMag; upy /= upMag;
+
+  const dashHalf = eyeSep * 0.16;   // slightly shorter eye marks
+  const vDepth   = eyeSep * 0.28;   // how tall the "v" is (apex at nose, opening up)
+  const vSpread  = eyeSep * 0.22;   // how wide the v's opening is
+
+  // Colour: reuse the joint tone at 85% opacity; brighter with highs pulse
+  const boost = audioEnabled ? 0.6 + highsPulse * 0.4 : 0.85;
+  ctx.strokeStyle = pal.joint.replace(/[\d.]+\)$/, `${Math.min(1, boost)})`);
+  ctx.lineWidth = Math.max(1.1, eyeSep * 0.05);
+  ctx.lineCap = 'round';
+
+  // Eye dashes (along eye-line, centred on each eye landmark)
+  ctx.beginPath();
+  ctx.moveTo(lx - ux * dashHalf, ly - uy * dashHalf);
+  ctx.lineTo(lx + ux * dashHalf, ly + uy * dashHalf);
+  ctx.moveTo(rx - ux * dashHalf, ry - uy * dashHalf);
+  ctx.lineTo(rx + ux * dashHalf, ry + uy * dashHalf);
+  ctx.stroke();
+
+  // "v" at the nose — apex at (nx, ny), opening upward toward the eyes.
+  // Two arms meet at the apex and spread up-left / up-right.
+  const armLX = nx + upx * vDepth - ux * vSpread;
+  const armLY = ny + upy * vDepth - uy * vSpread;
+  const armRX = nx + upx * vDepth + ux * vSpread;
+  const armRY = ny + upy * vDepth + uy * vSpread;
+  ctx.beginPath();
+  ctx.moveTo(armLX, armLY);
+  ctx.lineTo(nx, ny);
+  ctx.lineTo(armRX, armRY);
+  ctx.stroke();
 }
 
 // Cheap hue-shift on an rgba() string by converting back & forth via hsl.
