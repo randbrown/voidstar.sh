@@ -199,6 +199,13 @@
     <span id="lvl">b-- m-- h--</span>
     <span id="cam-res"></span>
     <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
+    <select id="poses-select" class="ctrl-btn" title="Max poses to detect">
+      <option value="1">1 pose</option>
+      <option value="2">2 poses</option>
+      <option value="3" selected>3 poses</option>
+      <option value="4">4 poses</option>
+      <option value="6">6 poses</option>
+    </select>
     <button class="ctrl-btn active" id="btn-mode" title="Visualizer mode (V)">mode: bars</button>
     <button class="ctrl-btn" id="btn-auto" title="Auto-cycle visualizer modes (L)">auto</button>
     <button class="ctrl-btn active" id="btn-sparks" title="Beat sparks (F)">sparks</button>
@@ -285,7 +292,10 @@ const PERSON_PALETTE = [
 
 // Landmarks of interest (index → draw weight)
 const LM_WEIGHT = {
-  0:  0.6,
+  // Face — just nose + eye centres
+  0:  0.6,                 // nose
+  2:  0.4, 5:  0.4,        // left / right eye (centre)
+  // Body
   11: 1.0, 12: 1.0,
   13: 0.9, 14: 0.9,
   15: 1.5, 16: 1.5,
@@ -293,6 +303,10 @@ const LM_WEIGHT = {
   25: 0.7, 26: 0.7,
   27: 0.6, 28: 0.6,
 };
+// Pre-converted to [idx:number, weight:number] tuples so the per-frame overlay
+// loop doesn't call Object.entries() or Number() on every iteration.
+const LM_WEIGHT_ENTRIES = Object.entries(LM_WEIGHT).map(([k, w]) => [Number(k), w]);
+const LM_WEIGHT_INDICES = LM_WEIGHT_ENTRIES.map(([i]) => i);
 // Head, wrists, elbows, shoulders for bass-beat bursts (body core)
 const SPARK_EMITTERS = [0, 15, 16, 13, 14, 11, 12];
 // Head + wrists for highs-transient bursts (extremities, airy)
@@ -327,10 +341,12 @@ const AUDIO_PRESETS = {
 const VIZ_MODES = ['bars', 'radial', 'waterfall', 'oscilloscope', 'nebula', 'off'];
 let vizMode = 'bars';
 
-// Auto-cycle — rotates through VIZ_MODES slowly, skipping 'off'
+// Auto-cycle — rotates through VIZ_MODES slowly, skipping 'off'.
+// Tracks wall-clock time (not dt) so the countdown stays accurate even
+// if render fps drops below the dt clamp threshold.
 const AUTO_CYCLE_SECONDS = 18;
 let autoCycle = false;
-let autoCycleTimer = 0;
+let autoCycleStartMs = 0;
 let lastAutoRemaining = -1;
 
 // ── Camera rotation ───────────────────────────────────────────────────────────
@@ -777,8 +793,8 @@ function drawPoseOverlay() {
     // Aura: soft radial halo around person's centroid, scaled by bass
     if (auraOn && audioEnabled) {
       let cx = 0, cy = 0, n = 0;
-      for (const [k] of Object.entries(LM_WEIGHT)) {
-        const lm = personLms[Number(k)];
+      for (let k = 0; k < LM_WEIGHT_INDICES.length; k++) {
+        const lm = personLms[LM_WEIGHT_INDICES[k]];
         if (!lm || lm.visibility < 0.35) continue;
         const [x, y] = lmPos(lm);
         cx += x; cy += y; n++;
@@ -816,9 +832,10 @@ function drawPoseOverlay() {
 
     // Joints — radius pulses with bass & beat
     const pulse = 1 + aBass * 1.6 + beatPulse * 0.8;
-    for (const [k, weight] of Object.entries(LM_WEIGHT)) {
-      const idx = Number(k);
-      const lm  = personLms[idx];
+    for (let k = 0; k < LM_WEIGHT_ENTRIES.length; k++) {
+      const idx    = LM_WEIGHT_ENTRIES[k][0];
+      const weight = LM_WEIGHT_ENTRIES[k][1];
+      const lm     = personLms[idx];
       if (!lm || lm.visibility < 0.35) continue;
       const [x, y] = lmPos(lm);
       const r = (2 + weight * 2) * pulse;
@@ -831,69 +848,9 @@ function drawPoseOverlay() {
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fillStyle = pal.joint; ctx.fill();
     }
-
-    // Face glyphs: dash on each eye, v at the nose ( -v- )
-    drawFaceGlyphs(personLms, pal, lmPos);
   });
 
   ctx.restore();
-}
-
-// Dashes over the eyes + downward-pointing "v" apex at the nose.
-// Rotates with head tilt (via eye-line direction). 3 strokes per person per
-// frame — performance cost is trivial vs. the rest of the overlay.
-function drawFaceGlyphs(personLms, pal, lmPos) {
-  const nose = personLms[0];
-  const eyeL = personLms[2]; // left eye (centre)
-  const eyeR = personLms[5]; // right eye (centre)
-  if (!nose || !eyeL || !eyeR) return;
-  if (nose.visibility < 0.45 || eyeL.visibility < 0.45 || eyeR.visibility < 0.45) return;
-
-  const [nx, ny] = lmPos(nose);
-  const [lx, ly] = lmPos(eyeL);
-  const [rx, ry] = lmPos(eyeR);
-
-  const edx = rx - lx, edy = ry - ly;
-  const eyeSep = Math.sqrt(edx*edx + edy*edy);
-  if (eyeSep < 8) return; // face too small to render legibly
-
-  // Unit vector along eye-line (left → right)
-  const ux = edx / eyeSep, uy = edy / eyeSep;
-  // "Up" direction on the face — from nose toward eye midpoint
-  let upx = (lx + rx) * 0.5 - nx;
-  let upy = (ly + ry) * 0.5 - ny;
-  const upMag = Math.sqrt(upx*upx + upy*upy) || 1;
-  upx /= upMag; upy /= upMag;
-
-  const dashHalf = eyeSep * 0.16;   // slightly shorter eye marks
-  const vDepth   = eyeSep * 0.28;   // how tall the "v" is (apex at nose, opening up)
-  const vSpread  = eyeSep * 0.22;   // how wide the v's opening is
-
-  // Colour: reuse the joint tone at 85% opacity; brighter with highs pulse
-  const boost = audioEnabled ? 0.6 + highsPulse * 0.4 : 0.85;
-  ctx.strokeStyle = pal.joint.replace(/[\d.]+\)$/, `${Math.min(1, boost)})`);
-  ctx.lineWidth = Math.max(1.1, eyeSep * 0.05);
-  ctx.lineCap = 'round';
-
-  // Eye dashes (along eye-line, centred on each eye landmark)
-  ctx.beginPath();
-  ctx.moveTo(lx - ux * dashHalf, ly - uy * dashHalf);
-  ctx.lineTo(lx + ux * dashHalf, ly + uy * dashHalf);
-  ctx.moveTo(rx - ux * dashHalf, ry - uy * dashHalf);
-  ctx.lineTo(rx + ux * dashHalf, ry + uy * dashHalf);
-  ctx.stroke();
-
-  // "v" at the nose — apex at (nx, ny), opening upward toward the eyes.
-  // Two arms meet at the apex and spread up-left / up-right.
-  const armLX = nx + upx * vDepth - ux * vSpread;
-  const armLY = ny + upy * vDepth - uy * vSpread;
-  const armRX = nx + upx * vDepth + ux * vSpread;
-  const armRY = ny + upy * vDepth + uy * vSpread;
-  ctx.beginPath();
-  ctx.moveTo(armLX, armLY);
-  ctx.lineTo(nx, ny);
-  ctx.lineTo(armRX, armRY);
-  ctx.stroke();
 }
 
 // Cheap hue-shift on an rgba() string by converting back & forth via hsl.
@@ -1002,7 +959,7 @@ function loop(now) {
   }
   if (!paused) {
     tickAudio(dt);
-    tickAutoCycle(dt);
+    tickAutoCycle();
     emitFromJoints(dt);
     updateSparks(dt);
     draw();
@@ -1016,12 +973,17 @@ const statusMsg = document.getElementById('status-msg');
 const startBtn  = document.getElementById('start-btn');
 const videoEl   = document.getElementById('video');
 const camSelect = document.getElementById('cam-select');
+const posesSelect = document.getElementById('poses-select');
 const camResEl  = document.getElementById('cam-res');
 
 const CAM_KEY = 'voidstar.spectrum.cameraId';
+const POSES_KEY = 'voidstar.spectrum.numPoses';
 let currentStream = null;
 let detectLoopStarted = false;
 let poseLandmarker = null;
+let poseVision    = null;      // MediaPipe FilesetResolver result, retained for landmarker rebuilds
+let PoseLandmarkerCls = null;  // class reference captured after dynamic import
+let numPoses      = 3;
 
 function stopCurrentStream() {
   if (currentStream) {
@@ -1069,6 +1031,31 @@ async function populateCameraList(activeDeviceId) {
   } catch { camSelect.style.display = 'none'; }
 }
 
+function createPoseLandmarker(n) {
+  return PoseLandmarkerCls.createFromOptions(poseVision, {
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+      delegate: 'GPU',
+    },
+    runningMode: 'VIDEO',
+    numPoses: n,
+    minPoseDetectionConfidence: 0.5,
+    minPosePresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+}
+
+async function setNumPoses(n) {
+  if (n < 1 || n > 6) return;
+  numPoses = n;
+  localStorage.setItem(POSES_KEY, String(n));
+  if (!poseVision || !PoseLandmarkerCls) return; // boot hasn't run yet; picked up on boot
+  const old = poseLandmarker;
+  poseLandmarker = null; // detect loop guards on null so it pauses during swap
+  try { old?.close?.(); } catch {}
+  poseLandmarker = await createPoseLandmarker(n);
+}
+
 async function boot() {
   statusMsg.textContent  = 'loading pose model…';
   startBtn.style.display = 'none';
@@ -1077,23 +1064,21 @@ async function boot() {
     const { PoseLandmarker, FilesetResolver } = await import(
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs'
     );
+    PoseLandmarkerCls = PoseLandmarker;
 
     statusMsg.textContent = 'initialising model…';
-    const vision = await FilesetResolver.forVisionTasks(
+    poseVision = await FilesetResolver.forVisionTasks(
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
     );
 
-    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-        delegate: 'GPU',
-      },
-      runningMode: 'VIDEO',
-      numPoses: 3,
-      minPoseDetectionConfidence: 0.5,
-      minPosePresenceConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-    });
+    // Restore stored pose count if present
+    const storedPoses = parseInt(localStorage.getItem(POSES_KEY) || '', 10);
+    if (Number.isFinite(storedPoses) && storedPoses >= 1 && storedPoses <= 6) {
+      numPoses = storedPoses;
+      posesSelect.value = String(numPoses);
+    }
+
+    poseLandmarker = await createPoseLandmarker(numPoses);
 
     statusMsg.textContent = 'requesting camera…';
     const remembered = localStorage.getItem(CAM_KEY);
@@ -1134,6 +1119,11 @@ camSelect.addEventListener('change', async () => {
     const id = await openCamera(camSelect.value);
     await populateCameraList(id);
   } catch (err) { alert(`Could not open camera: ${err.message}`); }
+});
+posesSelect.addEventListener('change', async () => {
+  const n = parseInt(posesSelect.value, 10);
+  try { await setNumPoses(n); }
+  catch (err) { alert(`Could not change pose count: ${err.message}`); }
 });
 startBtn.addEventListener('click', boot);
 
@@ -1267,32 +1257,32 @@ function setVizMode(mode) {
 function cycleVizMode() {
   const i = VIZ_MODES.indexOf(vizMode);
   setVizMode(VIZ_MODES[(i + 1) % VIZ_MODES.length]);
-  autoCycleTimer = 0; // manual change resets the auto timer
+  autoCycleStartMs = performance.now(); // manual change resets the auto timer
 }
 
-// Auto-cycle tick — advances to the next non-'off' mode every
-// AUTO_CYCLE_SECONDS. Skips 'off' so the screen never goes blank mid-set.
-// Also updates the button with a live countdown so you can see it's running.
-function tickAutoCycle(dt) {
+// Pre-computed list of modes eligible for auto-cycle (all except 'off').
+const CYCLING_MODES = VIZ_MODES.filter(m => m !== 'off');
+
+// Auto-cycle tick — wall-clock based, so the countdown stays accurate even if
+// render fps drops. Updates the button text at most once per second.
+function tickAutoCycle() {
   if (!autoCycle) return;
-  autoCycleTimer += dt;
-  const remaining = Math.max(0, Math.ceil(AUTO_CYCLE_SECONDS - autoCycleTimer));
+  const elapsed = (performance.now() - autoCycleStartMs) / 1000;
+  const remaining = Math.max(0, Math.ceil(AUTO_CYCLE_SECONDS - elapsed));
   if (remaining !== lastAutoRemaining) {
     lastAutoRemaining = remaining;
     btnAuto.textContent = `auto ${remaining}s`;
   }
-  if (autoCycleTimer < AUTO_CYCLE_SECONDS) return;
-  autoCycleTimer = 0;
-  const cycling = VIZ_MODES.filter(m => m !== 'off');
-  const i = cycling.indexOf(vizMode);
-  const next = cycling[(i < 0 ? 0 : i + 1) % cycling.length];
-  setVizMode(next);
+  if (elapsed < AUTO_CYCLE_SECONDS) return;
+  autoCycleStartMs = performance.now();
+  const i = CYCLING_MODES.indexOf(vizMode);
+  setVizMode(CYCLING_MODES[(i < 0 ? 0 : i + 1) % CYCLING_MODES.length]);
 }
 
 btnMode.addEventListener('click', cycleVizMode);
 btnAuto.addEventListener('click', () => {
   autoCycle = !autoCycle;
-  autoCycleTimer = 0;
+  autoCycleStartMs = performance.now();
   lastAutoRemaining = -1;
   btnAuto.classList.toggle('active', autoCycle);
   btnAuto.textContent = autoCycle ? `auto ${AUTO_CYCLE_SECONDS}s` : 'auto';
