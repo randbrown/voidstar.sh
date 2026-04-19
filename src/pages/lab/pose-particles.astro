@@ -35,9 +35,16 @@
       display: block;
       border-radius: 8px; border: 1px solid var(--border);
       opacity: 0.78; transform: scaleX(-1); z-index: 10;
-      transition: opacity 0.2s;
+      transition: opacity 0.2s, width 0.3s, top 0.3s, left 0.3s, bottom 0.3s, right 0.3s;
     }
     #video.hidden { opacity: 0; pointer-events: none; }
+    #video.size-large  { width: 420px; }
+    #video.size-full {
+      top: 0; left: 0; right: 0; bottom: 0;
+      width: 100vw; height: 100vh;
+      opacity: 0.35; border-radius: 0; border: none;
+      object-fit: contain; background: black;
+    }
 
     #topbar {
       position: fixed; top: 0; left: 0; right: 0; z-index: 20;
@@ -178,7 +185,7 @@
 <div id="hints">
   <span><kbd>Space</kbd> pause</span>
   <span><kbd>T</kbd> trails</span>
-  <span><kbd>C</kbd> camera</span>
+  <span><kbd>C</kbd> cam size</span>
   <span><kbd>P</kbd> skeleton</span>
   <span><kbd>M</kbd> audio</span>
   <span><kbd>O</kbd> / <kbd>0</kbd> rotate</span>
@@ -585,28 +592,39 @@ function stopCurrentStream() {
 async function openCamera(deviceId) {
   stopCurrentStream();
 
-  // Build constraints — if we have a deviceId, pin to it; otherwise let the
-  // browser pick. No width/height constraint so the camera uses its native
-  // resolution and aspect ratio (avoids driver-side letterboxing).
+  // Many webcams letterbox a 16:9 sensor into a 4:3 default mode (640×480)
+  // when you don't request a size — the unused sensor rows come through as
+  // a grey/black bar. Explicitly asking for a high 16:9 mode gets the
+  // native un-padded output from most cameras; cameras that can't hit
+  // 1280×720 will downgrade to their best native mode.
+  const base = {
+    width:       { ideal: 1280 },
+    height:      { ideal: 720  },
+    aspectRatio: { ideal: 16 / 9 },
+    facingMode:  'user',
+  };
   const videoConstraints = deviceId
-    ? { deviceId: { exact: deviceId } }
-    : { facingMode: 'user' };
+    ? { ...base, deviceId: { exact: deviceId } }
+    : base;
 
   const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
-  currentStream   = stream;
+  currentStream     = stream;
   videoEl.srcObject = stream;
 
   await new Promise(r => { videoEl.onloadedmetadata = r; });
   const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
   if (vw && vh) videoEl.style.aspectRatio = `${vw} / ${vh}`;
 
-  const track = stream.getVideoTracks()[0];
+  const track    = stream.getVideoTracks()[0];
   const settings = track.getSettings();
+  // eslint-disable-next-line no-console
+  console.log('[pose-particles] camera settings', settings,
+              'capabilities', track.getCapabilities?.());
+
   if (camResEl) camResEl.textContent = `${vw}×${vh}`;
 
   await videoEl.play().catch(() => {});
 
-  // Persist which camera worked
   if (settings.deviceId) localStorage.setItem(CAM_KEY, settings.deviceId);
 
   return settings.deviceId ?? deviceId ?? null;
@@ -751,10 +769,23 @@ btnTrails.addEventListener('click', () => {
   trailMode = !trailMode;
   btnTrails.classList.toggle('active', trailMode);
 });
-btnCamera.addEventListener('click', () => {
-  const hidden = videoEl.classList.toggle('hidden');
-  btnCamera.classList.toggle('active', !hidden);
-});
+// Camera preview has 4 states: hidden → small → large → fullscreen → hidden...
+const CAM_SIZES = ['small', 'large', 'full', 'hidden'];
+let camSizeIdx  = 0;
+function setCamSize(idx) {
+  camSizeIdx = ((idx % CAM_SIZES.length) + CAM_SIZES.length) % CAM_SIZES.length;
+  const s = CAM_SIZES[camSizeIdx];
+  videoEl.classList.remove('hidden','size-large','size-full');
+  if (s === 'hidden')  videoEl.classList.add('hidden');
+  if (s === 'large')   videoEl.classList.add('size-large');
+  if (s === 'full')    videoEl.classList.add('size-full');
+  btnCamera.classList.toggle('active', s !== 'hidden');
+  btnCamera.textContent = s === 'full' ? 'cam full'
+                       : s === 'large' ? 'cam large'
+                       : s === 'small' ? 'camera'
+                       : 'cam off';
+}
+btnCamera.addEventListener('click', () => setCamSize(camSizeIdx + 1));
 btnOverlay.addEventListener('click', () => {
   showOverlay = !showOverlay;
   btnOverlay.classList.toggle('active', showOverlay);
