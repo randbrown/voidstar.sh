@@ -149,14 +149,14 @@
       background: var(--surface); backdrop-filter: blur(12px);
       border: 1px solid var(--border); border-radius: 10px;
       padding: 0.75rem 1rem; font-family: var(--font-mono);
-      font-size: 0.72rem; color: var(--text-muted);
+      font-size: 0.72rem; color: var(--text);
       display: flex; flex-direction: column; gap: 0.5rem;
       min-width: 280px;
     }
     .ap-presets {
       display: flex; align-items: center; gap: 0.4rem;
     }
-    .ap-label { color: var(--text-dim); margin-right: 0.2rem; }
+    .ap-label { color: var(--muted); margin-right: 0.2rem; }
     .ap-preset {
       background: none; border: 1px solid var(--border);
       border-radius: 4px; color: var(--muted);
@@ -172,7 +172,7 @@
     }
     .ap-row label {
       display: flex; align-items: center; gap: 0.35rem;
-      color: var(--text-dim); white-space: nowrap;
+      color: var(--text); white-space: nowrap;
     }
     .ap-val { color: var(--cyan); min-width: 5ch; text-align: right; }
     .ap-row input[type=range] {
@@ -234,25 +234,26 @@
 <div id="audio-panel" style="display:none">
   <div class="ap-presets">
     <span class="ap-label">preset</span>
+    <button class="ap-preset active" data-preset="default">default</button>
     <button class="ap-preset" data-preset="acoustic">acoustic</button>
     <button class="ap-preset" data-preset="edm">EDM</button>
     <button class="ap-preset" data-preset="metal">metal</button>
   </div>
   <div class="ap-row">
-    <label>gain<span class="ap-val" id="ap-gain-val">1.0×</span></label>
-    <input type="range" id="ap-gain" min="0.25" max="4" step="0.05" value="1">
+    <label>gain<span class="ap-val" id="ap-gain-val"></span></label>
+    <input type="range" id="ap-gain" min="0.25" max="4" step="0.05" value="1.2">
   </div>
   <div class="ap-row">
-    <label>beat thresh<span class="ap-val" id="ap-thresh-val">1.45</span></label>
-    <input type="range" id="ap-thresh" min="1.1" max="2.5" step="0.05" value="1.45">
+    <label>beat thresh<span class="ap-val" id="ap-thresh-val"></span></label>
+    <input type="range" id="ap-thresh" min="1.1" max="2.5" step="0.05" value="1.40">
   </div>
   <div class="ap-row">
-    <label>beat gap<span class="ap-val" id="ap-cooldown-val">350ms</span></label>
-    <input type="range" id="ap-cooldown" min="80" max="600" step="10" value="350">
+    <label>beat gap<span class="ap-val" id="ap-cooldown-val"></span></label>
+    <input type="range" id="ap-cooldown" min="80" max="600" step="10" value="320">
   </div>
   <div class="ap-row">
-    <label>response<span class="ap-val" id="ap-ema-val">slow←→fast</span></label>
-    <input type="range" id="ap-ema" min="0.04" max="0.40" step="0.01" value="0.12">
+    <label>response<span class="ap-val" id="ap-ema-val"></span></label>
+    <input type="range" id="ap-ema" min="0.04" max="0.40" step="0.01" value="0.14">
   </div>
 </div>
 
@@ -289,11 +290,11 @@ const PERSON_PALETTE = [
     halo: 'rgba(244,114,182,0.18)' },
 ];
 
-// Audio beat detection — mutable, controlled by UI sliders
-let audioGain     = 1.0;   // pre-gain multiplier applied to all bands
-let audioEMA      = 0.12;  // per-frame smoothing alpha (higher = faster/jitterier)
-let beatThresh    = 1.45;  // bass/rolling-avg ratio to call a beat
-let beatCooldown  = 350;   // ms minimum between beats
+// Audio beat detection — mutable, controlled by UI sliders (defaults = "default" preset)
+let audioGain     = 1.2;
+let audioEMA      = 0.14;
+let beatThresh    = 1.40;
+let beatCooldown  = 320;
 
 // Frequency-band bin indices — computed from actual sample rate in startAudio()
 let binBassLo = 0,  binBassHi = 8;   // fallback defaults
@@ -301,6 +302,8 @@ let binMidsLo = 8,  binMidsHi = 80;
 let binHighsLo= 80, binHighsHi= 200;
 
 const AUDIO_PRESETS = {
+  default:  { gain: 1.2, ema: 0.14, thresh: 1.40, cooldown: 320,
+    label: 'rock / pop / general' },
   acoustic: { gain: 2.5, ema: 0.09, thresh: 1.25, cooldown: 550,
     label: 'acoustic / quiet mic' },
   edm:      { gain: 1.0, ema: 0.15, thresh: 1.38, cooldown: 360,
@@ -803,18 +806,21 @@ camSelect.addEventListener('change', async () => {
 startBtn.addEventListener('click', boot);
 
 // ── Audio boot ────────────────────────────────────────────────────────────────
+let audioStream = null;
+let audioCtxRef = null;
+
 async function startAudio() {
   try {
-    const stream   = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    analyserNode   = audioCtx.createAnalyser();
+    audioStream  = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    audioCtxRef  = new (window.AudioContext || window.webkitAudioContext)();
+    analyserNode = audioCtxRef.createAnalyser();
     analyserNode.fftSize               = 2048;
     analyserNode.smoothingTimeConstant = 0.75;
-    audioCtx.createMediaStreamSource(stream).connect(analyserNode);
+    audioCtxRef.createMediaStreamSource(audioStream).connect(analyserNode);
     freqBuf = new Uint8Array(analyserNode.frequencyBinCount);
 
     // Derive bin indices from actual sample rate so 44.1kHz vs 48kHz is correct
-    const hz = audioCtx.sampleRate / analyserNode.fftSize; // Hz per bin
+    const hz = audioCtxRef.sampleRate / analyserNode.fftSize;
     const freq2bin = f => Math.max(0, Math.min(Math.round(f / hz), analyserNode.frequencyBinCount - 1));
     binBassLo  = freq2bin(20);   binBassHi  = freq2bin(250);
     binMidsLo  = freq2bin(250);  binMidsHi  = freq2bin(4000);
@@ -828,6 +834,19 @@ async function startAudio() {
   } catch (err) {
     alert(`Microphone error: ${err.message}`);
   }
+}
+
+function stopAudio() {
+  audioEnabled = false;
+  beatActive   = false;
+  aBass = aMids = aHighs = bassAvg = 0;
+  if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
+  if (audioCtxRef) { audioCtxRef.close(); audioCtxRef = null; }
+  analyserNode = null; freqBuf = null;
+  btnAudio.classList.remove('active-audio');
+  btnAudio.classList.add('active');
+  btnAudio.textContent = 'audio';
+  audioPanelEl.style.display = 'none';
 }
 
 // ── Audio panel wiring ────────────────────────────────────────────────────────
@@ -933,7 +952,7 @@ btnOverlay.addEventListener('click', () => {
   btnOverlay.classList.toggle('active', showOverlay);
 });
 btnAudio.addEventListener('click', () => {
-  if (!audioEnabled) startAudio();
+  if (audioEnabled) stopAudio(); else startAudio();
 });
 btnRotate.addEventListener('click', () => {
   cameraRotation = (cameraRotation + 90) % 360;
