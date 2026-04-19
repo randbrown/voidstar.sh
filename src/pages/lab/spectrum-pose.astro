@@ -292,9 +292,11 @@ const PERSON_PALETTE = [
 
 // Landmarks of interest (index → draw weight)
 const LM_WEIGHT = {
-  // Face — just nose + eye centres
-  0:  0.6,                 // nose
-  2:  0.4, 5:  0.4,        // left / right eye (centre)
+  // Face — nose + inner/outer corner of each eye. Inner-to-nose bones form the
+  // "v"; outer-to-inner bones form the eye dashes → natural "-v-" shape.
+  0:  0.6,                          // nose
+  1:  0.35, 3:  0.35,               // left eye (inner, outer)
+  4:  0.35, 6:  0.35,               // right eye (inner, outer)
   // Body
   11: 1.0, 12: 1.0,
   13: 0.9, 14: 0.9,
@@ -313,8 +315,8 @@ const SPARK_EMITTERS = [0, 15, 16, 13, 14, 11, 12];
 const SPARK_EMITTERS_HIGHS = [0, 15, 16];
 
 const SKELETON_CONNECTIONS = [
-  // Face — nose ↔ each eye forms a natural "V"
-  [0,2], [0,5],
+  // Face — outer ── inner ── nose ── inner ── outer  ("-v-" pattern)
+  [3,1], [1,0], [0,4], [4,6],
   // Body
   [11,12], [11,13],[13,15], [12,14],[14,16],
   [11,23], [12,24], [23,24],
@@ -339,6 +341,31 @@ const AUDIO_PRESETS = {
   edm:      { gain: 1.0, ema: 0.15, thresh: 1.38, cooldown: 360 },
   metal:    { gain: 1.0, ema: 0.30, thresh: 1.80, cooldown: 110 },
 };
+// Which preset is "active" — cleared to null when sliders are moved manually.
+let activePreset = 'default';
+
+// ── Persistent settings ──────────────────────────────────────────────────────
+// Every toggle / slider / mode change writes to localStorage so the lab boots
+// into the same state next time. Debounced so slider drags don't spam writes.
+const SETTINGS_KEY = 'voidstar.spectrum.settings';
+let _saveTimer = null;
+function saveSettings() {
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(_writeSettings, 200);
+}
+function _writeSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      vizMode, autoCycle, sparksOn, auraOn, trailMode, showOverlay,
+      camSizeIdx, cameraRotation,
+      audioGain, audioEMA, beatThresh, beatCooldown, activePreset,
+    }));
+  } catch {}
+}
+function loadSettings() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; }
+  catch { return {}; }
+}
 
 // Visualizer modes
 const VIZ_MODES = ['bars', 'radial', 'waterfall', 'oscilloscope', 'nebula', 'off'];
@@ -1182,6 +1209,7 @@ function applyPreset(name) {
   audioEMA     = p.ema;
   beatThresh   = p.thresh;
   beatCooldown = p.cooldown;
+  activePreset = name;
   document.getElementById('ap-gain').value     = p.gain;
   document.getElementById('ap-thresh').value   = p.thresh;
   document.getElementById('ap-cooldown').value = p.cooldown;
@@ -1189,6 +1217,7 @@ function applyPreset(name) {
   updateAudioPanelLabels();
   document.querySelectorAll('.ap-preset').forEach(b =>
     b.classList.toggle('active', b.dataset.preset === name));
+  saveSettings();
 }
 
 function updateAudioPanelLabels() {
@@ -1199,21 +1228,26 @@ function updateAudioPanelLabels() {
   document.getElementById('ap-ema-val').textContent = `${pct}%`;
 }
 
+function _sliderChanged() {
+  activePreset = null;
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+  saveSettings();
+}
 document.getElementById('ap-gain').addEventListener('input', e => {
   audioGain = parseFloat(e.target.value); updateAudioPanelLabels();
-  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+  _sliderChanged();
 });
 document.getElementById('ap-thresh').addEventListener('input', e => {
   beatThresh = parseFloat(e.target.value); updateAudioPanelLabels();
-  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+  _sliderChanged();
 });
 document.getElementById('ap-cooldown').addEventListener('input', e => {
   beatCooldown = parseInt(e.target.value, 10); updateAudioPanelLabels();
-  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+  _sliderChanged();
 });
 document.getElementById('ap-ema').addEventListener('input', e => {
   audioEMA = parseFloat(e.target.value); updateAudioPanelLabels();
-  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+  _sliderChanged();
 });
 document.querySelectorAll('.ap-preset').forEach(b =>
   b.addEventListener('click', () => applyPreset(b.dataset.preset)));
@@ -1282,7 +1316,7 @@ function tickAutoCycle() {
   setVizMode(CYCLING_MODES[(i < 0 ? 0 : i + 1) % CYCLING_MODES.length]);
 }
 
-btnMode.addEventListener('click', cycleVizMode);
+btnMode.addEventListener('click', () => { cycleVizMode(); saveSettings(); });
 btnAuto.addEventListener('click', () => {
   autoCycle = !autoCycle;
   autoCycleStartMs = performance.now();
@@ -1291,22 +1325,27 @@ btnAuto.addEventListener('click', () => {
   btnAuto.textContent = autoCycle ? `auto ${AUTO_CYCLE_SECONDS}s` : 'auto';
   // If turning on while parked on 'off', step to the first real mode immediately
   if (autoCycle && vizMode === 'off') setVizMode(VIZ_MODES[0]);
+  saveSettings();
 });
 btnSparks.addEventListener('click', () => {
   sparksOn = !sparksOn;
   btnSparks.classList.toggle('active', sparksOn);
+  saveSettings();
 });
 btnAura.addEventListener('click', () => {
   auraOn = !auraOn;
   btnAura.classList.toggle('active', auraOn);
+  saveSettings();
 });
 btnTrails.addEventListener('click', () => {
   trailMode = !trailMode;
   btnTrails.classList.toggle('active', trailMode);
+  saveSettings();
 });
 btnOverlay.addEventListener('click', () => {
   showOverlay = !showOverlay;
   btnOverlay.classList.toggle('active', showOverlay);
+  saveSettings();
 });
 
 const CAM_SIZES = ['small', 'large', 'full', 'hidden'];
@@ -1324,7 +1363,7 @@ function setCamSize(idx) {
                        : s === 'small' ? 'camera'
                        : 'cam off';
 }
-btnCamera.addEventListener('click', () => setCamSize(camSizeIdx + 1));
+btnCamera.addEventListener('click', () => { setCamSize(camSizeIdx + 1); saveSettings(); });
 
 btnAudio.addEventListener('click', () => {
   if (audioEnabled) stopAudio();
@@ -1335,6 +1374,7 @@ btnRotate.addEventListener('click', () => {
   btnRotate.textContent = `rot ${cameraRotation}°`;
   btnRotate.classList.toggle('active', cameraRotation !== 0);
   updateVideoTransform();
+  saveSettings();
 });
 btnPause.addEventListener('click', () => {
   paused = !paused;
@@ -1367,6 +1407,73 @@ document.addEventListener('keydown', e => {
       break;
   }
 });
+
+// ── Apply persisted settings (runs once after all wiring is in place) ───────
+function applyStoredSettings() {
+  const s = loadSettings();
+  if (!s || typeof s !== 'object') return;
+
+  // Visualizer mode
+  if (typeof s.vizMode === 'string' && VIZ_MODES.includes(s.vizMode)) {
+    setVizMode(s.vizMode);
+  }
+
+  // Auto-cycle
+  if (s.autoCycle === true) {
+    autoCycle = true;
+    autoCycleStartMs = performance.now();
+    lastAutoRemaining = -1;
+    btnAuto.classList.add('active');
+    btnAuto.textContent = `auto ${AUTO_CYCLE_SECONDS}s`;
+    if (vizMode === 'off') setVizMode(VIZ_MODES[0]);
+  }
+
+  // Boolean toggles — only flip when the stored value differs from the default
+  if (typeof s.sparksOn === 'boolean' && s.sparksOn !== sparksOn) {
+    sparksOn = s.sparksOn;
+    btnSparks.classList.toggle('active', sparksOn);
+  }
+  if (typeof s.auraOn === 'boolean' && s.auraOn !== auraOn) {
+    auraOn = s.auraOn;
+    btnAura.classList.toggle('active', auraOn);
+  }
+  if (typeof s.trailMode === 'boolean' && s.trailMode !== trailMode) {
+    trailMode = s.trailMode;
+    btnTrails.classList.toggle('active', trailMode);
+  }
+  if (typeof s.showOverlay === 'boolean' && s.showOverlay !== showOverlay) {
+    showOverlay = s.showOverlay;
+    btnOverlay.classList.toggle('active', showOverlay);
+  }
+
+  // Camera size & rotation
+  if (Number.isFinite(s.camSizeIdx)) setCamSize(s.camSizeIdx);
+  if ([0, 90, 180, 270].includes(s.cameraRotation)) {
+    cameraRotation = s.cameraRotation;
+    btnRotate.textContent = `rot ${cameraRotation}°`;
+    btnRotate.classList.toggle('active', cameraRotation !== 0);
+    updateVideoTransform();
+  }
+
+  // Audio preset / raw slider values — preset wins if named; otherwise apply
+  // individual slider values so custom-tuned sets persist.
+  if (typeof s.activePreset === 'string' && AUDIO_PRESETS[s.activePreset]) {
+    applyPreset(s.activePreset);
+  } else {
+    if (Number.isFinite(s.audioGain))    audioGain    = s.audioGain;
+    if (Number.isFinite(s.audioEMA))     audioEMA     = s.audioEMA;
+    if (Number.isFinite(s.beatThresh))   beatThresh   = s.beatThresh;
+    if (Number.isFinite(s.beatCooldown)) beatCooldown = s.beatCooldown;
+    activePreset = null;
+    document.getElementById('ap-gain').value     = audioGain;
+    document.getElementById('ap-thresh').value   = beatThresh;
+    document.getElementById('ap-cooldown').value = beatCooldown;
+    document.getElementById('ap-ema').value      = audioEMA;
+    updateAudioPanelLabels();
+    document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+  }
+}
+applyStoredSettings();
 </script>
 </body>
 </html>
