@@ -1,0 +1,1223 @@
+---
+// Full-screen audio spectrum visualizer with pose tracking overlay.
+// Audio via Web Audio API AnalyserNode (frequency + waveform).
+// Multi-person via @mediapipe/tasks-vision PoseLandmarker.
+// Audio-reactive skeleton fx: colour modulation, beat sparks, resonance aura.
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spectrum Pose | voidstar lab</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent:    #8b5cf6;
+      --cyan:      #22d3ee;
+      --pink:      #f472b6;
+      --green:     #4ade80;
+      --amber:     #fbbf24;
+      --void:      #05050d;
+      --surface:   rgba(10,10,26,0.82);
+      --border:    rgba(45,45,80,0.7);
+      --text:      #dde1f0;
+      --muted:     #7878a8;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--void); }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+    #video {
+      position: fixed; bottom: 1.25rem; right: 1.25rem;
+      width: 220px; height: auto;
+      display: block;
+      border-radius: 8px; border: 1px solid var(--border);
+      opacity: 0.78; transform: scaleX(-1); z-index: 10;
+      transition: opacity 0.2s, width 0.3s, top 0.3s, left 0.3s, bottom 0.3s, right 0.3s;
+    }
+    #video.hidden { opacity: 0; pointer-events: none; }
+    #video.size-large { width: 420px; }
+    #video.size-full {
+      top: 0; left: 0; right: 0; bottom: 0;
+      width: 100vw; height: 100vh;
+      opacity: 0.22; border-radius: 0; border: none;
+      object-fit: contain; background: black;
+    }
+
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.6rem 1.25rem;
+      background: var(--surface); backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 0.8rem;
+      transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
+    }
+    #topbar.zen { transform: translateY(-110%); opacity: 0; pointer-events: none; }
+    #topbar-left  { display: flex; align-items: center; gap: 1rem; }
+    #topbar-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+
+    .back-link { color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 0.35rem; }
+    .back-link:hover { color: var(--accent); }
+    .experiment-title { color: var(--text); font-weight: 500; }
+    .experiment-tag   { color: var(--accent); }
+    #fps        { color: var(--muted); min-width: 5ch; }
+    #pose-count { color: var(--muted); min-width: 6ch; }
+    #mode-name  { color: var(--cyan);  min-width: 8ch; }
+    #cam-res    { color: var(--muted); font-size: 0.72rem; opacity: 0.7; }
+    #lvl        { color: var(--muted); min-width: 11ch; font-size: 0.72rem; }
+
+    .ctrl-btn {
+      background: none; border: 1px solid var(--border); border-radius: 5px;
+      color: var(--muted); font-family: var(--font-mono); font-size: 0.75rem;
+      padding: 0.25rem 0.6rem; cursor: pointer;
+      transition: all 0.15s; white-space: nowrap;
+      text-decoration: none; display: inline-block;
+    }
+    .ctrl-btn:hover  { border-color: var(--accent); color: var(--accent); }
+    .ctrl-btn.active { border-color: var(--cyan);   color: var(--cyan);   }
+    .ctrl-btn.active-audio { border-color: var(--pink); color: var(--pink); }
+    select.ctrl-btn {
+      max-width: 160px; appearance: none;
+      padding-right: 1.2rem;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 10px) 50%, calc(100% - 5px) 50%;
+      background-size: 5px 5px; background-repeat: no-repeat;
+    }
+    select.ctrl-btn option { background: var(--surface); color: var(--text); }
+
+    /* Zen handle */
+    #zen-handle {
+      position: fixed; top: 0; right: 1rem; z-index: 25;
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; opacity: 0; pointer-events: none;
+      transition: opacity 0.5s ease;
+    }
+    #zen-handle.visible { opacity: 1; pointer-events: auto; }
+    .zen-icon {
+      font-size: 1.4rem; color: var(--accent); opacity: 0.8;
+      animation: zen-spin 14s linear infinite;
+      filter: drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 16px var(--accent));
+      transition: opacity 0.2s; user-select: none; line-height: 1;
+    }
+    #zen-handle:hover .zen-icon { opacity: 1; filter: drop-shadow(0 0 12px var(--accent)) drop-shadow(0 0 24px var(--cyan)); }
+    @keyframes zen-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+    /* Status overlay */
+    #status-overlay {
+      position: fixed; inset: 0; z-index: 30;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 1.25rem;
+      background: rgba(5,5,13,0.93); font-family: var(--font-mono);
+      transition: opacity 0.5s;
+    }
+    #status-overlay.hidden { opacity: 0; pointer-events: none; }
+    .status-title { font-size: 1.1rem; color: var(--text); letter-spacing: 0.08em; }
+    .status-msg   { font-size: 0.8rem; color: var(--muted); letter-spacing: 0.05em; }
+    .status-sub   { font-size: 0.72rem; color: var(--muted); opacity: 0.7; max-width: 32rem; text-align: center; line-height: 1.6; }
+    .status-dot   {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 12px var(--accent);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity:0.4; transform:scale(0.9); } 50% { opacity:1; transform:scale(1.2); } }
+    .start-btn {
+      margin-top: 0.5rem; padding: 0.65rem 1.5rem;
+      background: var(--accent); border: none; border-radius: 6px;
+      color: white; font-family: var(--font-mono); font-size: 0.875rem;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .start-btn:hover { background: #7c3aed; box-shadow: 0 0 20px rgba(139,92,246,0.5); }
+
+    #hints {
+      position: fixed; bottom: 1.25rem; left: 1.25rem; z-index: 10;
+      font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted);
+      display: flex; flex-direction: column; gap: 0.25rem; opacity: 0.6;
+      transition: opacity 0.3s;
+    }
+    kbd {
+      display: inline-block; background: rgba(45,45,80,0.8);
+      border-radius: 3px; padding: 0 4px; color: var(--text);
+    }
+
+    #audio-panel {
+      position: fixed; bottom: 1.25rem; left: 50%;
+      transform: translateX(-50%);
+      z-index: 15;
+      background: var(--surface); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.75rem 1rem; font-family: var(--font-mono);
+      font-size: 0.72rem; color: var(--text);
+      display: flex; flex-direction: column; gap: 0.5rem;
+      min-width: 280px;
+    }
+    .ap-presets { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+    .ap-label { color: var(--muted); margin-right: 0.2rem; }
+    .ap-preset {
+      background: none; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--muted);
+      font-family: var(--font-mono); font-size: 0.68rem;
+      padding: 0.15rem 0.5rem; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .ap-preset:hover  { border-color: var(--accent); color: var(--accent); }
+    .ap-preset.active { border-color: var(--pink);   color: var(--pink); }
+    .ap-row {
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: center; gap: 0.5rem;
+    }
+    .ap-row label {
+      display: flex; align-items: center; gap: 0.35rem;
+      color: var(--text); white-space: nowrap;
+    }
+    .ap-val { color: var(--cyan); min-width: 5ch; text-align: right; }
+    .ap-row input[type=range] {
+      width: 130px; accent-color: var(--accent);
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+<video id="video" autoplay playsinline muted></video>
+
+<div id="topbar">
+  <div id="topbar-left">
+    <a href="/lab" class="back-link">← lab</a>
+    <span class="experiment-title">spectrum pose</span>
+    <span class="experiment-tag">// mediapipe · web-audio · canvas2d</span>
+  </div>
+  <div id="topbar-right">
+    <span id="fps">-- fps</span>
+    <span id="pose-count">0 pose</span>
+    <span id="mode-name">bars</span>
+    <span id="lvl">b-- m-- h--</span>
+    <span id="cam-res"></span>
+    <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
+    <button class="ctrl-btn active" id="btn-mode" title="Visualizer mode (V)">mode: bars</button>
+    <button class="ctrl-btn active" id="btn-sparks" title="Beat sparks (F)">sparks</button>
+    <button class="ctrl-btn active" id="btn-aura" title="Resonance aura (A)">aura</button>
+    <button class="ctrl-btn" id="btn-trails" title="Trails (T)">trails</button>
+    <button class="ctrl-btn active" id="btn-overlay" title="Skeleton overlay (P)">skeleton</button>
+    <button class="ctrl-btn active" id="btn-camera">camera</button>
+    <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
+    <button class="ctrl-btn" id="btn-rotate" title="Rotate camera (O / 0)">rot 0°</button>
+    <button class="ctrl-btn" id="btn-pause">pause</button>
+    <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
+    <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
+  </div>
+</div>
+
+<div id="zen-handle" title="Exit zen mode (Z)">
+  <span class="zen-icon">✦</span>
+</div>
+
+<div id="status-overlay">
+  <div class="status-dot"></div>
+  <div class="status-title">spectrum pose</div>
+  <div class="status-msg" id="status-msg">click start to enable camera &amp; microphone</div>
+  <div class="status-sub">audio spectrum visualizer with body pose tracking. built for live ambient / improvised performance.</div>
+  <button class="start-btn" id="start-btn">enable camera + mic →</button>
+</div>
+
+<div id="hints">
+  <span><kbd>V</kbd> viz mode</span>
+  <span><kbd>F</kbd> sparks</span>
+  <span><kbd>A</kbd> aura</span>
+  <span><kbd>T</kbd> trails</span>
+  <span><kbd>P</kbd> skeleton</span>
+  <span><kbd>C</kbd> cam size</span>
+  <span><kbd>M</kbd> audio</span>
+  <span><kbd>O</kbd> / <kbd>0</kbd> rotate</span>
+  <span><kbd>Space</kbd> pause</span>
+  <span><kbd>Z</kbd> zen</span>
+  <span><kbd>R</kbd> reset</span>
+</div>
+
+<div id="audio-panel" style="display:none">
+  <div class="ap-presets">
+    <span class="ap-label">preset</span>
+    <button class="ap-preset active" data-preset="ambient">ambient</button>
+    <button class="ap-preset" data-preset="acoustic">acoustic</button>
+    <button class="ap-preset" data-preset="default">default</button>
+    <button class="ap-preset" data-preset="edm">EDM</button>
+    <button class="ap-preset" data-preset="metal">metal</button>
+  </div>
+  <div class="ap-row">
+    <label>gain<span class="ap-val" id="ap-gain-val"></span></label>
+    <input type="range" id="ap-gain" min="0.25" max="4" step="0.05" value="1.6">
+  </div>
+  <div class="ap-row">
+    <label>beat thresh<span class="ap-val" id="ap-thresh-val"></span></label>
+    <input type="range" id="ap-thresh" min="1.1" max="2.5" step="0.05" value="1.30">
+  </div>
+  <div class="ap-row">
+    <label>beat gap<span class="ap-val" id="ap-cooldown-val"></span></label>
+    <input type="range" id="ap-cooldown" min="80" max="600" step="10" value="380">
+  </div>
+  <div class="ap-row">
+    <label>response<span class="ap-val" id="ap-ema-val"></span></label>
+    <input type="range" id="ap-ema" min="0.04" max="0.40" step="0.01" value="0.12">
+  </div>
+</div>
+
+<script>
+// ── Audio-reactive palette ────────────────────────────────────────────────────
+// Each person gets a base palette; hue shifts with audio intensity at draw time.
+const PERSON_PALETTE = [
+  { boneA: 'rgba(139,92,246,0.75)',  boneB: 'rgba(34,211,238,0.75)',
+    spark: [270, 190], halo: 'rgba(139,92,246,0.20)',
+    joint: 'rgba(139,92,246,0.95)' },
+  { boneA: 'rgba(244,114,182,0.75)', boneB: 'rgba(74,222,128,0.75)',
+    spark: [330, 130], halo: 'rgba(244,114,182,0.20)',
+    joint: 'rgba(244,114,182,0.95)' },
+  { boneA: 'rgba(251,191,36,0.75)',  boneB: 'rgba(139,92,246,0.75)',
+    spark: [45, 270],  halo: 'rgba(251,191,36,0.20)',
+    joint: 'rgba(251,191,36,0.95)' },
+];
+
+// Landmarks of interest (index → draw weight)
+const LM_WEIGHT = {
+  0:  0.6,
+  11: 1.0, 12: 1.0,
+  13: 0.9, 14: 0.9,
+  15: 1.5, 16: 1.5,
+  23: 0.8, 24: 0.8,
+  25: 0.7, 26: 0.7,
+  27: 0.6, 28: 0.6,
+};
+const SPARK_EMITTERS = [0, 15, 16, 13, 14, 11, 12]; // head, wrists, elbows, shoulders
+
+const SKELETON_CONNECTIONS = [
+  [11,12], [11,13],[13,15], [12,14],[14,16],
+  [11,23], [12,24], [23,24],
+  [23,25],[25,27], [24,26],[26,28],
+  [27,29],[27,31],[29,31], [28,30],[28,32],[30,32],
+];
+
+// Audio bands & presets
+let audioGain    = 1.6;
+let audioEMA     = 0.12;
+let beatThresh   = 1.30;
+let beatCooldown = 380;
+
+let binBassLo = 0,  binBassHi = 8;
+let binMidsLo = 8,  binMidsHi = 80;
+let binHighsLo= 80, binHighsHi= 200;
+
+const AUDIO_PRESETS = {
+  ambient:  { gain: 1.6, ema: 0.12, thresh: 1.30, cooldown: 380 },
+  acoustic: { gain: 2.5, ema: 0.09, thresh: 1.25, cooldown: 550 },
+  default:  { gain: 1.2, ema: 0.14, thresh: 1.40, cooldown: 320 },
+  edm:      { gain: 1.0, ema: 0.15, thresh: 1.38, cooldown: 360 },
+  metal:    { gain: 0.7, ema: 0.30, thresh: 1.80, cooldown: 110 },
+};
+
+// Visualizer modes
+const VIZ_MODES = ['bars', 'radial', 'waterfall', 'oscilloscope', 'nebula', 'off'];
+let vizMode = 'bars';
+
+// ── Camera rotation ───────────────────────────────────────────────────────────
+let cameraRotation = 0;
+function applyRotation(lx, ly, W, H) {
+  const cx = W/2, cy = H/2, dx = lx-cx, dy = ly-cy;
+  switch (cameraRotation) {
+    case  90: return [cx+dy, cy-dx];
+    case 180: return [cx-dx, cy-dy];
+    case 270: return [cx-dy, cy+dx];
+    default:  return [lx, ly];
+  }
+}
+function lmToCanvas(lmx, lmy, W, H) {
+  return applyRotation((1 - lmx) * W, lmy * H, W, H);
+}
+function updateVideoTransform() {
+  videoEl.style.transform = `scaleX(-1) rotate(${cameraRotation}deg)`;
+}
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  // Waterfall history resets on resize (simpler than stretching)
+  if (waterfallCanvas) {
+    waterfallCanvas.width  = canvas.width;
+    waterfallCanvas.height = canvas.height;
+  }
+}
+
+// Offscreen canvas for waterfall / spectrogram mode
+let waterfallCanvas = document.createElement('canvas');
+let waterfallCtx    = waterfallCanvas.getContext('2d');
+waterfallCanvas.width = window.innerWidth;
+waterfallCanvas.height = window.innerHeight;
+
+resize();
+window.addEventListener('resize', resize);
+
+// ── Spark particle system ────────────────────────────────────────────────────
+const MAX_SPARKS = 2400;
+const spx   = new Float32Array(MAX_SPARKS);
+const spy   = new Float32Array(MAX_SPARKS);
+const svx   = new Float32Array(MAX_SPARKS);
+const svy   = new Float32Array(MAX_SPARKS);
+const sage  = new Float32Array(MAX_SPARKS);
+const slife = new Float32Array(MAX_SPARKS);
+const shue  = new Float32Array(MAX_SPARKS);
+const ssize = new Float32Array(MAX_SPARKS);
+let sparkCursor = 0; // ring buffer write index
+
+function emitSpark(x, y, hue, speed, size, life) {
+  const i = sparkCursor;
+  sparkCursor = (sparkCursor + 1) % MAX_SPARKS;
+  const a = Math.random() * Math.PI * 2;
+  const s = speed * (0.4 + Math.random() * 0.9);
+  spx[i]   = x;
+  spy[i]   = y;
+  svx[i]   = Math.cos(a) * s;
+  svy[i]   = Math.sin(a) * s - speed * 0.25; // slight upward bias
+  sage[i]  = 0;
+  slife[i] = life;
+  shue[i]  = hue;
+  ssize[i] = size;
+}
+
+function updateSparks(dt) {
+  for (let i = 0; i < MAX_SPARKS; i++) {
+    if (sage[i] >= slife[i]) continue;
+    sage[i] += dt;
+    // Gentle gravity + drag
+    svx[i] *= 0.965;
+    svy[i] = svy[i] * 0.965 + 0.04;
+    spx[i] += svx[i];
+    spy[i] += svy[i];
+  }
+}
+
+function drawSparks() {
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < MAX_SPARKS; i++) {
+    const life = slife[i];
+    if (sage[i] >= life) continue;
+    const t = sage[i] / life;
+    const alpha = (1 - t) * 0.9;
+    const r = ssize[i] * (1 - t * 0.6);
+    ctx.fillStyle = `hsla(${shue[i]},90%,${60 + t * 20}%,${alpha})`;
+    ctx.beginPath(); ctx.arc(spx[i], spy[i], r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ── Audio state ──────────────────────────────────────────────────────────────
+let audioEnabled = false;
+let analyserNode = null;
+let freqBuf      = null; // Uint8Array, frequencyBinCount long
+let timeBuf      = null; // Uint8Array, fftSize long (waveform, 0..255 around 128)
+let aBass = 0, aMids = 0, aHighs = 0;
+let aTotal = 0;          // overall loudness, smoothed
+let bassAvg    = 0;
+let lastBeatMs = 0;
+let beatActive = false;
+let beatPulse  = 0;      // 1.0 on beat, decays
+
+function avgBins(buf, lo, hi) {
+  let s = 0;
+  for (let i = lo; i < hi; i++) s += buf[i];
+  return s / Math.max(1, hi - lo);
+}
+
+function tickAudio(dt) {
+  beatPulse *= Math.pow(0.001, dt); // smooth decay (~ 0.001 per second = fast)
+  if (!audioEnabled || !analyserNode) { beatActive = false; return; }
+  analyserNode.getByteFrequencyData(freqBuf);
+  analyserNode.getByteTimeDomainData(timeBuf);
+  const g = audioGain;
+  const rawBass  = Math.min(avgBins(freqBuf, binBassLo,  binBassHi)  / 255 * g, 1);
+  const rawMids  = Math.min(avgBins(freqBuf, binMidsLo,  binMidsHi)  / 255 * g, 1);
+  const rawHighs = Math.min(avgBins(freqBuf, binHighsLo, binHighsHi) / 255 * g, 1);
+  aBass  += audioEMA * (rawBass  - aBass);
+  aMids  += audioEMA * (rawMids  - aMids);
+  aHighs += audioEMA * (rawHighs - aHighs);
+  aTotal += audioEMA * ((rawBass + rawMids + rawHighs) / 3 - aTotal);
+
+  bassAvg = 0.97 * bassAvg + 0.03 * rawBass;
+  const now = performance.now();
+  beatActive = rawBass > bassAvg * beatThresh && now - lastBeatMs > beatCooldown;
+  if (beatActive) { lastBeatMs = now; beatPulse = 1; }
+}
+
+// ── Visualizer: Bars (log-spaced) ────────────────────────────────────────────
+const BAR_COUNT = 96;
+let logBinIdx   = null; // populated on audio boot
+
+function buildLogBins() {
+  if (!analyserNode) return;
+  const hz   = audioCtxRef.sampleRate / analyserNode.fftSize;
+  const minF = 30, maxF = 14000;
+  const last = analyserNode.frequencyBinCount - 1;
+  logBinIdx = new Int32Array(BAR_COUNT + 1);
+  for (let i = 0; i <= BAR_COUNT; i++) {
+    const f = minF * Math.pow(maxF / minF, i / BAR_COUNT);
+    logBinIdx[i] = Math.max(1, Math.min(last, Math.round(f / hz)));
+  }
+}
+
+function sampleBar(i) {
+  if (!logBinIdx) return 0;
+  const lo = logBinIdx[i], hi = Math.max(lo + 1, logBinIdx[i + 1]);
+  let m = 0;
+  for (let k = lo; k < hi; k++) if (freqBuf[k] > m) m = freqBuf[k];
+  return m / 255;
+}
+
+function drawBars(W, H) {
+  if (!audioEnabled || !logBinIdx) return;
+  const slot = W / BAR_COUNT;
+  const bw   = Math.max(1, slot * 0.72);
+  const baseY = H;
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const v = sampleBar(i) * audioGain;
+    if (v < 0.015) continue;
+    const x = i * slot + (slot - bw) / 2;
+    const h = Math.min(1, v) * H * 0.55;
+    const frac = i / BAR_COUNT;
+    const hue  = 260 + frac * 160 + aHighs * 20; // purple → cyan → pink → amber
+    const grad = ctx.createLinearGradient(0, baseY, 0, baseY - h);
+    grad.addColorStop(0, `hsla(${hue},80%,55%,0.05)`);
+    grad.addColorStop(1, `hsla(${hue},85%,65%,0.65)`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, baseY - h, bw, h);
+  }
+  // Mirror faintly on top for symmetry
+  ctx.globalAlpha = 0.25;
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const v = sampleBar(i) * audioGain;
+    if (v < 0.015) continue;
+    const x = i * slot + (slot - bw) / 2;
+    const h = Math.min(1, v) * H * 0.35;
+    const frac = i / BAR_COUNT;
+    const hue  = 260 + frac * 160 + aHighs * 20;
+    ctx.fillStyle = `hsla(${hue},80%,65%,0.45)`;
+    ctx.fillRect(x, 0, bw, h);
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ── Visualizer: Radial ───────────────────────────────────────────────────────
+function drawRadial(W, H) {
+  if (!audioEnabled || !logBinIdx) return;
+  const cx = W / 2, cy = H / 2;
+  const r0 = Math.min(W, H) * 0.18;
+  const rMax = Math.min(W, H) * 0.42;
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const v = sampleBar(i) * audioGain;
+    if (v < 0.015) continue;
+    const ang = (i / BAR_COUNT) * Math.PI * 2 - Math.PI / 2;
+    const len = Math.min(1, v) * (rMax - r0);
+    const x1 = cx + Math.cos(ang) * r0;
+    const y1 = cy + Math.sin(ang) * r0;
+    const x2 = cx + Math.cos(ang) * (r0 + len);
+    const y2 = cy + Math.sin(ang) * (r0 + len);
+    const hue = 260 + (i / BAR_COUNT) * 160 + aHighs * 20;
+    ctx.strokeStyle = `hsla(${hue},85%,62%,0.7)`;
+    ctx.lineWidth = Math.max(1.2, (Math.PI * 2 * r0 / BAR_COUNT) * 0.55);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  // Inner breathing ring
+  const breath = 1 + aTotal * 0.6 + beatPulse * 0.2;
+  ctx.strokeStyle = `rgba(139,92,246,${0.08 + aBass * 0.25})`;
+  ctx.lineWidth = 2 + aBass * 6;
+  ctx.beginPath(); ctx.arc(cx, cy, r0 * breath, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ── Visualizer: Waterfall (scrolling spectrogram) ────────────────────────────
+function drawWaterfall(W, H) {
+  if (!audioEnabled || !logBinIdx) return;
+  // Shift existing waterfall buffer up by 1 pixel
+  waterfallCtx.drawImage(waterfallCanvas, 0, -1);
+  // Clear the newly exposed bottom row
+  waterfallCtx.clearRect(0, H - 1, W, 1);
+
+  // Draw current spectrum as a single row at bottom
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const v = sampleBar(i) * audioGain;
+    if (v < 0.02) continue;
+    const x0 = Math.floor((i / BAR_COUNT) * W);
+    const x1 = Math.floor(((i + 1) / BAR_COUNT) * W);
+    const hue = 260 + (i / BAR_COUNT) * 160;
+    const l   = 30 + Math.min(1, v) * 40;
+    const a   = Math.min(1, v * 1.4);
+    waterfallCtx.fillStyle = `hsla(${hue},85%,${l}%,${a})`;
+    waterfallCtx.fillRect(x0, H - 2, x1 - x0, 2);
+  }
+
+  // Blit to main with additive blending
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = 0.85;
+  ctx.drawImage(waterfallCanvas, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ── Visualizer: Oscilloscope ─────────────────────────────────────────────────
+function drawOscilloscope(W, H) {
+  if (!audioEnabled || !timeBuf) return;
+  const midY = H / 2;
+  const N = timeBuf.length;
+  const amp = (H * 0.35) * (0.4 + aTotal * 1.2 + beatPulse * 0.5);
+
+  ctx.globalCompositeOperation = 'lighter';
+  // Three stacked offset traces for a lush feel
+  const traces = [
+    { hue: 270, off: -0.012, width: 2.4, alpha: 0.55 },
+    { hue: 195, off:  0.000, width: 1.6, alpha: 0.75 },
+    { hue: 330, off:  0.012, width: 2.4, alpha: 0.55 },
+  ];
+  for (const tr of traces) {
+    ctx.strokeStyle = `hsla(${tr.hue + aHighs * 20},85%,65%,${tr.alpha})`;
+    ctx.lineWidth = tr.width;
+    ctx.beginPath();
+    for (let i = 0; i < N; i += 2) {
+      const x = (i / (N - 1)) * W;
+      const v = (timeBuf[i] - 128) / 128; // -1..1
+      const y = midY + v * amp + tr.off * H;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ── Visualizer: Nebula (soft blobs at dominant frequencies) ──────────────────
+function drawNebula(W, H) {
+  if (!audioEnabled || !logBinIdx) return;
+  ctx.globalCompositeOperation = 'lighter';
+  // Bass blob, bottom-centre-ish
+  if (aBass > 0.02) {
+    const r = Math.min(W, H) * (0.18 + aBass * 0.35);
+    const g = ctx.createRadialGradient(W * 0.5, H * 0.72, 0, W * 0.5, H * 0.72, r);
+    g.addColorStop(0, `rgba(139,92,246,${0.35 * aBass})`);
+    g.addColorStop(1, 'rgba(139,92,246,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  // Mids blob, left-centre
+  if (aMids > 0.02) {
+    const r = Math.min(W, H) * (0.16 + aMids * 0.30);
+    const g = ctx.createRadialGradient(W * 0.28, H * 0.42, 0, W * 0.28, H * 0.42, r);
+    g.addColorStop(0, `rgba(34,211,238,${0.32 * aMids})`);
+    g.addColorStop(1, 'rgba(34,211,238,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  // Highs blob, top-right
+  if (aHighs > 0.02) {
+    const r = Math.min(W, H) * (0.12 + aHighs * 0.28);
+    const g = ctx.createRadialGradient(W * 0.75, H * 0.28, 0, W * 0.75, H * 0.28, r);
+    g.addColorStop(0, `rgba(244,114,182,${0.35 * aHighs})`);
+    g.addColorStop(1, 'rgba(244,114,182,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  // Small roving bright specks at peak bins
+  let peak = 0, peakBin = 0;
+  for (let i = 0; i < BAR_COUNT; i++) { const v = sampleBar(i); if (v > peak) { peak = v; peakBin = i; } }
+  if (peak > 0.25) {
+    const x = ((peakBin + 0.5) / BAR_COUNT) * W;
+    const y = H * (0.25 + Math.sin(performance.now() * 0.0003) * 0.15);
+    const r = 6 + peak * 14;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r * 3);
+    g.addColorStop(0, `rgba(251,191,36,${peak * 0.55})`);
+    g.addColorStop(1, 'rgba(251,191,36,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ── Pose state & render ──────────────────────────────────────────────────────
+let allLandmarks = [];
+let showOverlay  = true;
+let trailMode    = false;
+let sparksOn     = true;
+let auraOn       = true;
+let paused       = false;
+let lastTime     = performance.now();
+
+// Per-joint emission smoothing (keeps continuous highs-driven sparks chill)
+const emitAccum = new Map(); // key = `${personIdx}-${lmIdx}` → accumulator
+
+function emitFromJoints(dt) {
+  if (!sparksOn || !audioEnabled) return;
+  const W = canvas.width, H = canvas.height;
+
+  // Beat burst — flush a volley of sparks from each visible emitter
+  if (beatActive) {
+    for (let p = 0; p < allLandmarks.length; p++) {
+      const pal = PERSON_PALETTE[p % PERSON_PALETTE.length];
+      const [hueA, hueB] = pal.spark;
+      const lms = allLandmarks[p];
+      for (const idx of SPARK_EMITTERS) {
+        const lm = lms[idx];
+        if (!lm || lm.visibility < 0.4) continue;
+        const [x, y] = lmToCanvas(lm.x, lm.y, W, H);
+        const burst = 4 + Math.floor(aBass * 10);
+        for (let k = 0; k < burst; k++) {
+          const hue = (Math.random() < 0.5 ? hueA : hueB) + (Math.random() - 0.5) * 30;
+          emitSpark(x, y, hue, 4 + aBass * 5, 1.4 + Math.random() * 1.5, 0.7 + Math.random() * 0.9);
+        }
+      }
+    }
+  }
+
+  // Continuous highs-driven sparks from wrists + head
+  const rate = aHighs * 120; // sparks per second across all emitters (scaled below)
+  if (rate > 0.5) {
+    const perSec = rate * dt;
+    for (let p = 0; p < allLandmarks.length; p++) {
+      const pal = PERSON_PALETTE[p % PERSON_PALETTE.length];
+      const [hueA, hueB] = pal.spark;
+      const lms = allLandmarks[p];
+      for (const idx of [15, 16, 0]) {
+        const lm = lms[idx];
+        if (!lm || lm.visibility < 0.4) continue;
+        const key = `${p}-${idx}`;
+        const acc = (emitAccum.get(key) || 0) + perSec * (idx === 0 ? 0.35 : 1);
+        const n = Math.floor(acc);
+        emitAccum.set(key, acc - n);
+        if (n <= 0) continue;
+        const [x, y] = lmToCanvas(lm.x, lm.y, W, H);
+        for (let k = 0; k < n; k++) {
+          const hue = (Math.random() < 0.5 ? hueA : hueB) + (Math.random() - 0.5) * 40;
+          emitSpark(x, y, hue, 1.6 + aHighs * 3.0, 0.9 + Math.random() * 1.2, 0.5 + Math.random() * 0.7);
+        }
+      }
+    }
+  }
+}
+
+function drawPoseOverlay() {
+  if (!allLandmarks.length) return;
+  const W = canvas.width, H = canvas.height;
+  const lmPos = lm => lmToCanvas(lm.x, lm.y, W, H);
+
+  ctx.save();
+
+  allLandmarks.forEach((personLms, pIdx) => {
+    const pal = PERSON_PALETTE[pIdx % PERSON_PALETTE.length];
+
+    // Aura: soft radial halo around person's centroid, scaled by bass
+    if (auraOn && audioEnabled) {
+      let cx = 0, cy = 0, n = 0;
+      for (const [k] of Object.entries(LM_WEIGHT)) {
+        const lm = personLms[Number(k)];
+        if (!lm || lm.visibility < 0.35) continue;
+        const [x, y] = lmPos(lm);
+        cx += x; cy += y; n++;
+      }
+      if (n > 0) {
+        cx /= n; cy /= n;
+        const r = 80 + aTotal * 220 + beatPulse * 80;
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        const baseAlpha = 0.12 + aBass * 0.35 + beatPulse * 0.18;
+        g.addColorStop(0, pal.halo.replace(/[\d.]+\)$/, `${baseAlpha})`));
+        g.addColorStop(1, pal.halo.replace(/[\d.]+\)$/, '0)'));
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      }
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Bones — thickness and colour modulated by audio
+    const thick = 1.6 + aMids * 4 + beatPulse * 2;
+    ctx.lineWidth = thick; ctx.lineCap = 'round';
+    for (const [a, b] of SKELETON_CONNECTIONS) {
+      const lmA = personLms[a], lmB = personLms[b];
+      if (!lmA || !lmB || lmA.visibility < 0.35 || lmB.visibility < 0.35) continue;
+      const [ax, ay] = lmPos(lmA);
+      const [bx, by] = lmPos(lmB);
+      const grad = ctx.createLinearGradient(ax, ay, bx, by);
+      // Hue shift with mids; brightness pumps with bass & beat
+      const shift = audioEnabled ? Math.floor(aMids * 40 + beatPulse * 30) : 0;
+      grad.addColorStop(0, shiftHue(pal.boneA, shift));
+      grad.addColorStop(1, shiftHue(pal.boneB, shift));
+      ctx.strokeStyle = grad;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    }
+
+    // Joints — radius pulses with bass & beat
+    const pulse = 1 + aBass * 1.6 + beatPulse * 0.8;
+    for (const [k, weight] of Object.entries(LM_WEIGHT)) {
+      const idx = Number(k);
+      const lm  = personLms[idx];
+      if (!lm || lm.visibility < 0.35) continue;
+      const [x, y] = lmPos(lm);
+      const r = (2 + weight * 2) * pulse;
+
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.beginPath(); ctx.arc(x, y, r + 5 * pulse, 0, Math.PI * 2);
+      ctx.fillStyle = pal.halo; ctx.fill();
+
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = pal.joint; ctx.fill();
+    }
+  });
+
+  ctx.restore();
+}
+
+// Cheap hue-shift on an rgba() string by converting back & forth via hsl.
+// For known palette strings we hardcode the mapping for speed.
+const _hueCache = new Map();
+function shiftHue(rgbaStr, shift) {
+  if (shift === 0) return rgbaStr;
+  const key = `${rgbaStr}|${shift}`;
+  if (_hueCache.has(key)) return _hueCache.get(key);
+  // Parse rgba(r,g,b,a)
+  const m = rgbaStr.match(/rgba?\(([^)]+)\)/);
+  if (!m) return rgbaStr;
+  const [r, g, b, a = '1'] = m[1].split(',').map(s => parseFloat(s.trim()));
+  const [h, s, l] = rgbToHsl(r, g, b);
+  const out = `hsla(${Math.round((h * 360 + shift) % 360)},${Math.round(s * 100)}%,${Math.round(l * 100)}%,${a})`;
+  if (_hueCache.size < 512) _hueCache.set(key, out);
+  return out;
+}
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s; const l = (max + min) / 2;
+  if (max === min) { h = s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4;
+    }
+    h /= 6;
+  }
+  return [h, s, l];
+}
+
+// ── Main draw ────────────────────────────────────────────────────────────────
+function draw() {
+  const W = canvas.width, H = canvas.height;
+
+  // Background decay — trails mode keeps longer history
+  const baseFade = trailMode ? 0.08 : 0.22;
+  const fade     = audioEnabled ? baseFade * (0.9 + aBass * 0.4) : baseFade;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = `rgba(5,5,13,${fade})`;
+  ctx.fillRect(0, 0, W, H);
+
+  // Gentle beat flash
+  if (beatPulse > 0.1) {
+    ctx.fillStyle = `rgba(139,92,246,${beatPulse * 0.06})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Visualizer (background layer)
+  switch (vizMode) {
+    case 'bars':         drawBars(W, H); break;
+    case 'radial':       drawRadial(W, H); break;
+    case 'waterfall':    drawWaterfall(W, H); break;
+    case 'oscilloscope': drawOscilloscope(W, H); break;
+    case 'nebula':       drawNebula(W, H); break;
+    case 'off':          break;
+  }
+
+  // Sparks above viz, below skeleton
+  drawSparks();
+
+  // Skeleton overlay
+  if (showOverlay) drawPoseOverlay();
+
+  // Audio HUD bars (bottom-left, always on when audio is live)
+  if (audioEnabled) {
+    const barW = 3, gap = 3, maxH = 50;
+    const bx = 12, by = H - 12;
+    const levels = [aBass, aMids, aHighs];
+    const cols   = ['rgba(139,92,246,0.85)', 'rgba(34,211,238,0.85)', 'rgba(244,114,182,0.85)'];
+    levels.forEach((lvl, j) => {
+      const h = Math.max(2, lvl * maxH);
+      ctx.fillStyle = cols[j];
+      ctx.fillRect(bx + j * (barW + gap), by - h, barW, h);
+    });
+  }
+}
+
+// ── Render loop ──────────────────────────────────────────────────────────────
+const fpsEl       = document.getElementById('fps');
+const poseCountEl = document.getElementById('pose-count');
+const modeNameEl  = document.getElementById('mode-name');
+const lvlEl       = document.getElementById('lvl');
+let frameCount = 0, fpsTimer = 0;
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  frameCount++; fpsTimer += dt;
+  if (fpsTimer >= 0.5) {
+    fpsEl.textContent       = `${Math.round(frameCount / fpsTimer)} fps`;
+    poseCountEl.textContent = `${allLandmarks.length} pose${allLandmarks.length !== 1 ? 's' : ''}`;
+    if (audioEnabled) {
+      const fmt = v => Math.round(v * 99).toString().padStart(2, '0');
+      lvlEl.textContent = `b${fmt(aBass)} m${fmt(aMids)} h${fmt(aHighs)}`;
+    } else {
+      lvlEl.textContent = 'audio off';
+    }
+    frameCount = 0; fpsTimer = 0;
+  }
+  if (!paused) {
+    tickAudio(dt);
+    emitFromJoints(dt);
+    updateSparks(dt);
+    draw();
+  }
+}
+requestAnimationFrame(loop);
+
+// ── MediaPipe boot ───────────────────────────────────────────────────────────
+const overlay   = document.getElementById('status-overlay');
+const statusMsg = document.getElementById('status-msg');
+const startBtn  = document.getElementById('start-btn');
+const videoEl   = document.getElementById('video');
+const camSelect = document.getElementById('cam-select');
+const camResEl  = document.getElementById('cam-res');
+
+const CAM_KEY = 'voidstar.spectrum.cameraId';
+let currentStream = null;
+let detectLoopStarted = false;
+let poseLandmarker = null;
+
+function stopCurrentStream() {
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop());
+    currentStream = null;
+  }
+}
+
+async function openCamera(deviceId) {
+  stopCurrentStream();
+  const base = { width: { ideal: 1920 }, facingMode: 'user' };
+  const videoConstraints = deviceId ? { deviceId: { exact: deviceId } } : base;
+
+  const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+  currentStream     = stream;
+  videoEl.srcObject = stream;
+
+  await new Promise(r => { videoEl.onloadedmetadata = r; });
+  const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
+  if (vw && vh) videoEl.style.aspectRatio = `${vw} / ${vh}`;
+
+  const track    = stream.getVideoTracks()[0];
+  const settings = track.getSettings();
+
+  if (camResEl) camResEl.textContent = `${vw}×${vh}`;
+  await videoEl.play().catch(() => {});
+  if (settings.deviceId) localStorage.setItem(CAM_KEY, settings.deviceId);
+  return settings.deviceId ?? deviceId ?? null;
+}
+
+async function populateCameraList(activeDeviceId) {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(d => d.kind === 'videoinput');
+    if (cams.length <= 1) { camSelect.style.display = 'none'; return; }
+    camSelect.innerHTML = '';
+    cams.forEach((cam, i) => {
+      const opt = document.createElement('option');
+      opt.value = cam.deviceId;
+      opt.textContent = cam.label || `Camera ${i + 1}`;
+      if (cam.deviceId === activeDeviceId) opt.selected = true;
+      camSelect.appendChild(opt);
+    });
+    camSelect.style.display = '';
+  } catch { camSelect.style.display = 'none'; }
+}
+
+async function boot() {
+  statusMsg.textContent  = 'loading pose model…';
+  startBtn.style.display = 'none';
+
+  try {
+    const { PoseLandmarker, FilesetResolver } = await import(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs'
+    );
+
+    statusMsg.textContent = 'initialising model…';
+    const vision = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
+    );
+
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+        delegate: 'GPU',
+      },
+      runningMode: 'VIDEO',
+      numPoses: 3,
+      minPoseDetectionConfidence: 0.5,
+      minPosePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    statusMsg.textContent = 'requesting camera…';
+    const remembered = localStorage.getItem(CAM_KEY);
+    let activeId;
+    try { activeId = await openCamera(remembered ?? null); }
+    catch { activeId = await openCamera(null); }
+    await populateCameraList(activeId);
+
+    // Auto-start audio since this lab is audio-centric.
+    statusMsg.textContent = 'requesting microphone…';
+    try { await startAudio(); }
+    catch (e) { console.warn('[spectrum-pose] mic denied:', e); }
+
+    overlay.classList.add('hidden');
+
+    if (!detectLoopStarted) {
+      detectLoopStarted = true;
+      (function detectLoop() {
+        requestAnimationFrame(detectLoop);
+        if (!poseLandmarker)                  return;
+        if (videoEl.readyState < 2)           return;
+        if (videoEl.paused || videoEl.ended)  return;
+        try {
+          const result = poseLandmarker.detectForVideo(videoEl, performance.now());
+          allLandmarks = result.landmarks ?? [];
+        } catch { /* swallow timestamp regressions */ }
+      })();
+    }
+  } catch (err) {
+    statusMsg.textContent  = `error: ${err.message}`;
+    startBtn.textContent   = 'retry';
+    startBtn.style.display = '';
+  }
+}
+
+camSelect.addEventListener('change', async () => {
+  try {
+    const id = await openCamera(camSelect.value);
+    await populateCameraList(id);
+  } catch (err) { alert(`Could not open camera: ${err.message}`); }
+});
+startBtn.addEventListener('click', boot);
+
+// ── Audio boot ───────────────────────────────────────────────────────────────
+let audioStream = null;
+let audioCtxRef = null;
+
+async function startAudio() {
+  audioStream  = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  audioCtxRef  = new (window.AudioContext || window.webkitAudioContext)();
+  analyserNode = audioCtxRef.createAnalyser();
+  analyserNode.fftSize               = 2048;
+  analyserNode.smoothingTimeConstant = 0.72;
+  audioCtxRef.createMediaStreamSource(audioStream).connect(analyserNode);
+  freqBuf = new Uint8Array(analyserNode.frequencyBinCount);
+  timeBuf = new Uint8Array(analyserNode.fftSize);
+
+  const hz = audioCtxRef.sampleRate / analyserNode.fftSize;
+  const freq2bin = f => Math.max(0, Math.min(Math.round(f / hz), analyserNode.frequencyBinCount - 1));
+  binBassLo  = freq2bin(20);   binBassHi  = freq2bin(250);
+  binMidsLo  = freq2bin(250);  binMidsHi  = freq2bin(4000);
+  binHighsLo = freq2bin(4000); binHighsHi = freq2bin(12000);
+
+  buildLogBins();
+
+  audioEnabled = true;
+  btnAudio.classList.remove('active');
+  btnAudio.classList.add('active-audio');
+  btnAudio.textContent = 'audio on';
+  audioPanelEl.style.display = '';
+}
+
+function stopAudio() {
+  audioEnabled = false;
+  beatActive   = false;
+  aBass = aMids = aHighs = aTotal = bassAvg = 0;
+  if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
+  if (audioCtxRef) { audioCtxRef.close(); audioCtxRef = null; }
+  analyserNode = null; freqBuf = null; timeBuf = null; logBinIdx = null;
+  btnAudio.classList.remove('active-audio');
+  btnAudio.classList.add('active');
+  btnAudio.textContent = 'audio';
+  audioPanelEl.style.display = 'none';
+}
+
+// ── Audio panel wiring ───────────────────────────────────────────────────────
+const audioPanelEl = document.getElementById('audio-panel');
+
+function applyPreset(name) {
+  const p = AUDIO_PRESETS[name];
+  if (!p) return;
+  audioGain    = p.gain;
+  audioEMA     = p.ema;
+  beatThresh   = p.thresh;
+  beatCooldown = p.cooldown;
+  document.getElementById('ap-gain').value     = p.gain;
+  document.getElementById('ap-thresh').value   = p.thresh;
+  document.getElementById('ap-cooldown').value = p.cooldown;
+  document.getElementById('ap-ema').value      = p.ema;
+  updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b =>
+    b.classList.toggle('active', b.dataset.preset === name));
+}
+
+function updateAudioPanelLabels() {
+  document.getElementById('ap-gain-val').textContent     = `${audioGain.toFixed(2)}×`;
+  document.getElementById('ap-thresh-val').textContent   = beatThresh.toFixed(2);
+  document.getElementById('ap-cooldown-val').textContent = `${beatCooldown}ms`;
+  const pct = Math.round((audioEMA - 0.04) / (0.40 - 0.04) * 100);
+  document.getElementById('ap-ema-val').textContent = `${pct}%`;
+}
+
+document.getElementById('ap-gain').addEventListener('input', e => {
+  audioGain = parseFloat(e.target.value); updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+});
+document.getElementById('ap-thresh').addEventListener('input', e => {
+  beatThresh = parseFloat(e.target.value); updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+});
+document.getElementById('ap-cooldown').addEventListener('input', e => {
+  beatCooldown = parseInt(e.target.value, 10); updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+});
+document.getElementById('ap-ema').addEventListener('input', e => {
+  audioEMA = parseFloat(e.target.value); updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+});
+document.querySelectorAll('.ap-preset').forEach(b =>
+  b.addEventListener('click', () => applyPreset(b.dataset.preset)));
+
+updateAudioPanelLabels();
+
+// ── UI controls ──────────────────────────────────────────────────────────────
+const btnMode    = document.getElementById('btn-mode');
+const btnSparks  = document.getElementById('btn-sparks');
+const btnAura    = document.getElementById('btn-aura');
+const btnTrails  = document.getElementById('btn-trails');
+const btnOverlay = document.getElementById('btn-overlay');
+const btnCamera  = document.getElementById('btn-camera');
+const btnAudio   = document.getElementById('btn-audio');
+const btnRotate  = document.getElementById('btn-rotate');
+const btnPause   = document.getElementById('btn-pause');
+const btnZen     = document.getElementById('btn-zen');
+const zenHandle  = document.getElementById('zen-handle');
+const topbarEl   = document.getElementById('topbar');
+const hintsEl    = document.getElementById('hints');
+
+let zenMode = false;
+function setZen(on) {
+  zenMode = on;
+  topbarEl.classList.toggle('zen', on);
+  zenHandle.classList.toggle('visible', on);
+  hintsEl.style.opacity       = on ? '0' : '';
+  hintsEl.style.pointerEvents = on ? 'none' : '';
+  if (audioEnabled) audioPanelEl.style.display = on ? 'none' : '';
+}
+
+function cycleVizMode() {
+  const i = VIZ_MODES.indexOf(vizMode);
+  vizMode = VIZ_MODES[(i + 1) % VIZ_MODES.length];
+  btnMode.textContent = `mode: ${vizMode}`;
+  btnMode.classList.toggle('active', vizMode !== 'off');
+  modeNameEl.textContent = vizMode;
+  // Clear waterfall history when leaving waterfall mode
+  if (vizMode !== 'waterfall' && waterfallCtx) {
+    waterfallCtx.clearRect(0, 0, waterfallCanvas.width, waterfallCanvas.height);
+  }
+}
+
+btnMode.addEventListener('click', cycleVizMode);
+btnSparks.addEventListener('click', () => {
+  sparksOn = !sparksOn;
+  btnSparks.classList.toggle('active', sparksOn);
+});
+btnAura.addEventListener('click', () => {
+  auraOn = !auraOn;
+  btnAura.classList.toggle('active', auraOn);
+});
+btnTrails.addEventListener('click', () => {
+  trailMode = !trailMode;
+  btnTrails.classList.toggle('active', trailMode);
+});
+btnOverlay.addEventListener('click', () => {
+  showOverlay = !showOverlay;
+  btnOverlay.classList.toggle('active', showOverlay);
+});
+
+const CAM_SIZES = ['small', 'large', 'full', 'hidden'];
+let camSizeIdx  = 0;
+function setCamSize(idx) {
+  camSizeIdx = ((idx % CAM_SIZES.length) + CAM_SIZES.length) % CAM_SIZES.length;
+  const s = CAM_SIZES[camSizeIdx];
+  videoEl.classList.remove('hidden','size-large','size-full');
+  if (s === 'hidden')  videoEl.classList.add('hidden');
+  if (s === 'large')   videoEl.classList.add('size-large');
+  if (s === 'full')    videoEl.classList.add('size-full');
+  btnCamera.classList.toggle('active', s !== 'hidden');
+  btnCamera.textContent = s === 'full' ? 'cam full'
+                       : s === 'large' ? 'cam large'
+                       : s === 'small' ? 'camera'
+                       : 'cam off';
+}
+btnCamera.addEventListener('click', () => setCamSize(camSizeIdx + 1));
+
+btnAudio.addEventListener('click', () => {
+  if (audioEnabled) stopAudio();
+  else startAudio().catch(err => alert(`Microphone error: ${err.message}`));
+});
+btnRotate.addEventListener('click', () => {
+  cameraRotation = (cameraRotation + 90) % 360;
+  btnRotate.textContent = `rot ${cameraRotation}°`;
+  btnRotate.classList.toggle('active', cameraRotation !== 0);
+  updateVideoTransform();
+});
+btnPause.addEventListener('click', () => {
+  paused = !paused;
+  btnPause.classList.toggle('active', paused);
+  btnPause.textContent = paused ? 'resume' : 'pause';
+});
+btnZen.addEventListener('click',    () => setZen(true));
+zenHandle.addEventListener('click', () => setZen(false));
+
+document.addEventListener('keydown', e => {
+  if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+  switch (e.code) {
+    case 'Space':   e.preventDefault(); btnPause.click(); break;
+    case 'KeyV':    btnMode.click();    break;
+    case 'KeyF':    btnSparks.click();  break;
+    case 'KeyA':    btnAura.click();    break;
+    case 'KeyT':    btnTrails.click();  break;
+    case 'KeyP':    btnOverlay.click(); break;
+    case 'KeyC':    btnCamera.click();  break;
+    case 'KeyM':    btnAudio.click();   break;
+    case 'KeyO':
+    case 'Digit0':
+    case 'Numpad0': btnRotate.click();  break;
+    case 'KeyZ':    setZen(!zenMode);   break;
+    case 'KeyR':
+      for (let i = 0; i < MAX_SPARKS; i++) { sage[i] = slife[i] = 0; }
+      if (waterfallCtx) waterfallCtx.clearRect(0, 0, waterfallCanvas.width, waterfallCanvas.height);
+      ctx.fillStyle = '#05050d'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      break;
+  }
+});
+</script>
+</body>
+</html>
