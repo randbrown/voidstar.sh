@@ -200,6 +200,7 @@
     <span id="cam-res"></span>
     <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
     <button class="ctrl-btn active" id="btn-mode" title="Visualizer mode (V)">mode: bars</button>
+    <button class="ctrl-btn" id="btn-auto" title="Auto-cycle visualizer modes (L)">auto</button>
     <button class="ctrl-btn active" id="btn-sparks" title="Beat sparks (F)">sparks</button>
     <button class="ctrl-btn active" id="btn-aura" title="Resonance aura (A)">aura</button>
     <button class="ctrl-btn" id="btn-trails" title="Trails (T)">trails</button>
@@ -227,6 +228,7 @@
 
 <div id="hints">
   <span><kbd>V</kbd> viz mode</span>
+  <span><kbd>L</kbd> auto-cycle</span>
   <span><kbd>F</kbd> sparks</span>
   <span><kbd>A</kbd> aura</span>
   <span><kbd>T</kbd> trails</span>
@@ -242,27 +244,27 @@
 <div id="audio-panel" style="display:none">
   <div class="ap-presets">
     <span class="ap-label">preset</span>
-    <button class="ap-preset active" data-preset="ambient">ambient</button>
+    <button class="ap-preset active" data-preset="default">default</button>
+    <button class="ap-preset" data-preset="ambient">ambient</button>
     <button class="ap-preset" data-preset="acoustic">acoustic</button>
-    <button class="ap-preset" data-preset="default">default</button>
     <button class="ap-preset" data-preset="edm">EDM</button>
     <button class="ap-preset" data-preset="metal">metal</button>
   </div>
   <div class="ap-row">
     <label>gain<span class="ap-val" id="ap-gain-val"></span></label>
-    <input type="range" id="ap-gain" min="0.25" max="4" step="0.05" value="1.6">
+    <input type="range" id="ap-gain" min="0.25" max="4" step="0.05" value="1.0">
   </div>
   <div class="ap-row">
     <label>beat thresh<span class="ap-val" id="ap-thresh-val"></span></label>
-    <input type="range" id="ap-thresh" min="1.1" max="2.5" step="0.05" value="1.30">
+    <input type="range" id="ap-thresh" min="1.1" max="2.5" step="0.05" value="1.40">
   </div>
   <div class="ap-row">
     <label>beat gap<span class="ap-val" id="ap-cooldown-val"></span></label>
-    <input type="range" id="ap-cooldown" min="80" max="600" step="10" value="380">
+    <input type="range" id="ap-cooldown" min="80" max="600" step="10" value="320">
   </div>
   <div class="ap-row">
     <label>response<span class="ap-val" id="ap-ema-val"></span></label>
-    <input type="range" id="ap-ema" min="0.04" max="0.40" step="0.01" value="0.12">
+    <input type="range" id="ap-ema" min="0.04" max="0.40" step="0.01" value="0.14">
   </div>
 </div>
 
@@ -304,26 +306,32 @@ const SKELETON_CONNECTIONS = [
 ];
 
 // Audio bands & presets
-let audioGain    = 1.6;
-let audioEMA     = 0.12;
-let beatThresh   = 1.30;
-let beatCooldown = 380;
+let audioGain    = 1.0;
+let audioEMA     = 0.14;
+let beatThresh   = 1.40;
+let beatCooldown = 320;
 
 let binBassLo = 0,  binBassHi = 8;
 let binMidsLo = 8,  binMidsHi = 80;
 let binHighsLo= 80, binHighsHi= 200;
 
 const AUDIO_PRESETS = {
-  ambient:  { gain: 1.6, ema: 0.12, thresh: 1.30, cooldown: 380 },
-  acoustic: { gain: 2.5, ema: 0.09, thresh: 1.25, cooldown: 550 },
-  default:  { gain: 1.2, ema: 0.14, thresh: 1.40, cooldown: 320 },
+  default:  { gain: 1.0, ema: 0.14, thresh: 1.40, cooldown: 320 },
+  ambient:  { gain: 1.0, ema: 0.12, thresh: 1.30, cooldown: 380 },
+  acoustic: { gain: 1.0, ema: 0.09, thresh: 1.25, cooldown: 550 },
   edm:      { gain: 1.0, ema: 0.15, thresh: 1.38, cooldown: 360 },
-  metal:    { gain: 0.7, ema: 0.30, thresh: 1.80, cooldown: 110 },
+  metal:    { gain: 1.0, ema: 0.30, thresh: 1.80, cooldown: 110 },
 };
 
 // Visualizer modes
 const VIZ_MODES = ['bars', 'radial', 'waterfall', 'oscilloscope', 'nebula', 'off'];
 let vizMode = 'bars';
+
+// Auto-cycle — rotates through VIZ_MODES slowly, skipping 'off'
+const AUTO_CYCLE_SECONDS = 18;
+let autoCycle = false;
+let autoCycleTimer = 0;
+let lastAutoRemaining = -1;
 
 // ── Camera rotation ───────────────────────────────────────────────────────────
 let cameraRotation = 0;
@@ -994,6 +1002,7 @@ function loop(now) {
   }
   if (!paused) {
     tickAudio(dt);
+    tickAutoCycle(dt);
     emitFromJoints(dt);
     updateSparks(dt);
     draw();
@@ -1220,6 +1229,7 @@ updateAudioPanelLabels();
 
 // ── UI controls ──────────────────────────────────────────────────────────────
 const btnMode    = document.getElementById('btn-mode');
+const btnAuto    = document.getElementById('btn-auto');
 const btnSparks  = document.getElementById('btn-sparks');
 const btnAura    = document.getElementById('btn-aura');
 const btnTrails  = document.getElementById('btn-trails');
@@ -1243,9 +1253,8 @@ function setZen(on) {
   if (audioEnabled) audioPanelEl.style.display = on ? 'none' : '';
 }
 
-function cycleVizMode() {
-  const i = VIZ_MODES.indexOf(vizMode);
-  vizMode = VIZ_MODES[(i + 1) % VIZ_MODES.length];
+function setVizMode(mode) {
+  vizMode = mode;
   btnMode.textContent = `mode: ${vizMode}`;
   btnMode.classList.toggle('active', vizMode !== 'off');
   modeNameEl.textContent = vizMode;
@@ -1255,7 +1264,41 @@ function cycleVizMode() {
   }
 }
 
+function cycleVizMode() {
+  const i = VIZ_MODES.indexOf(vizMode);
+  setVizMode(VIZ_MODES[(i + 1) % VIZ_MODES.length]);
+  autoCycleTimer = 0; // manual change resets the auto timer
+}
+
+// Auto-cycle tick — advances to the next non-'off' mode every
+// AUTO_CYCLE_SECONDS. Skips 'off' so the screen never goes blank mid-set.
+// Also updates the button with a live countdown so you can see it's running.
+function tickAutoCycle(dt) {
+  if (!autoCycle) return;
+  autoCycleTimer += dt;
+  const remaining = Math.max(0, Math.ceil(AUTO_CYCLE_SECONDS - autoCycleTimer));
+  if (remaining !== lastAutoRemaining) {
+    lastAutoRemaining = remaining;
+    btnAuto.textContent = `auto ${remaining}s`;
+  }
+  if (autoCycleTimer < AUTO_CYCLE_SECONDS) return;
+  autoCycleTimer = 0;
+  const cycling = VIZ_MODES.filter(m => m !== 'off');
+  const i = cycling.indexOf(vizMode);
+  const next = cycling[(i < 0 ? 0 : i + 1) % cycling.length];
+  setVizMode(next);
+}
+
 btnMode.addEventListener('click', cycleVizMode);
+btnAuto.addEventListener('click', () => {
+  autoCycle = !autoCycle;
+  autoCycleTimer = 0;
+  lastAutoRemaining = -1;
+  btnAuto.classList.toggle('active', autoCycle);
+  btnAuto.textContent = autoCycle ? `auto ${AUTO_CYCLE_SECONDS}s` : 'auto';
+  // If turning on while parked on 'off', step to the first real mode immediately
+  if (autoCycle && vizMode === 'off') setVizMode(VIZ_MODES[0]);
+});
 btnSparks.addEventListener('click', () => {
   sparksOn = !sparksOn;
   btnSparks.classList.toggle('active', sparksOn);
@@ -1313,6 +1356,7 @@ document.addEventListener('keydown', e => {
   switch (e.code) {
     case 'Space':   e.preventDefault(); btnPause.click(); break;
     case 'KeyV':    btnMode.click();    break;
+    case 'KeyL':    btnAuto.click();    break;
     case 'KeyF':    btnSparks.click();  break;
     case 'KeyA':    btnAura.click();    break;
     case 'KeyT':    btnTrails.click();  break;
