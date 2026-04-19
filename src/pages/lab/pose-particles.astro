@@ -141,6 +141,44 @@
       display: inline-block; background: rgba(45,45,80,0.8);
       border-radius: 3px; padding: 0 4px; color: var(--text);
     }
+
+    #audio-panel {
+      position: fixed; bottom: 1.25rem; left: 50%;
+      transform: translateX(-50%);
+      z-index: 15;
+      background: var(--surface); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.75rem 1rem; font-family: var(--font-mono);
+      font-size: 0.72rem; color: var(--text-muted);
+      display: flex; flex-direction: column; gap: 0.5rem;
+      min-width: 280px;
+    }
+    .ap-presets {
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+    .ap-label { color: var(--text-dim); margin-right: 0.2rem; }
+    .ap-preset {
+      background: none; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--muted);
+      font-family: var(--font-mono); font-size: 0.68rem;
+      padding: 0.15rem 0.5rem; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .ap-preset:hover  { border-color: var(--accent); color: var(--accent); }
+    .ap-preset.active { border-color: var(--pink);   color: var(--pink); }
+    .ap-row {
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: center; gap: 0.5rem;
+    }
+    .ap-row label {
+      display: flex; align-items: center; gap: 0.35rem;
+      color: var(--text-dim); white-space: nowrap;
+    }
+    .ap-val { color: var(--cyan); min-width: 5ch; text-align: right; }
+    .ap-row input[type=range] {
+      width: 130px; accent-color: var(--accent);
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -193,6 +231,31 @@
   <span><kbd>R</kbd> reset</span>
 </div>
 
+<div id="audio-panel" style="display:none">
+  <div class="ap-presets">
+    <span class="ap-label">preset</span>
+    <button class="ap-preset" data-preset="acoustic">acoustic</button>
+    <button class="ap-preset" data-preset="edm">EDM</button>
+    <button class="ap-preset" data-preset="metal">metal</button>
+  </div>
+  <div class="ap-row">
+    <label>gain<span class="ap-val" id="ap-gain-val">1.0×</span></label>
+    <input type="range" id="ap-gain" min="0.25" max="4" step="0.05" value="1">
+  </div>
+  <div class="ap-row">
+    <label>beat thresh<span class="ap-val" id="ap-thresh-val">1.45</span></label>
+    <input type="range" id="ap-thresh" min="1.1" max="2.5" step="0.05" value="1.45">
+  </div>
+  <div class="ap-row">
+    <label>beat gap<span class="ap-val" id="ap-cooldown-val">350ms</span></label>
+    <input type="range" id="ap-cooldown" min="80" max="600" step="10" value="350">
+  </div>
+  <div class="ap-row">
+    <label>response<span class="ap-val" id="ap-ema-val">slow←→fast</span></label>
+    <input type="range" id="ap-ema" min="0.04" max="0.40" step="0.01" value="0.12">
+  </div>
+</div>
+
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
 const N               = 9000;
@@ -226,10 +289,25 @@ const PERSON_PALETTE = [
     halo: 'rgba(244,114,182,0.18)' },
 ];
 
-// Audio beat detection
-const AUDIO_EMA       = 0.12;  // per-frame smoothing alpha
-const BEAT_THRESH     = 1.45;  // bass/avg ratio to call a beat
-const BEAT_COOLDOWN   = 350;   // ms between beats
+// Audio beat detection — mutable, controlled by UI sliders
+let audioGain     = 1.0;   // pre-gain multiplier applied to all bands
+let audioEMA      = 0.12;  // per-frame smoothing alpha (higher = faster/jitterier)
+let beatThresh    = 1.45;  // bass/rolling-avg ratio to call a beat
+let beatCooldown  = 350;   // ms minimum between beats
+
+// Frequency-band bin indices — computed from actual sample rate in startAudio()
+let binBassLo = 0,  binBassHi = 8;   // fallback defaults
+let binMidsLo = 8,  binMidsHi = 80;
+let binHighsLo= 80, binHighsHi= 200;
+
+const AUDIO_PRESETS = {
+  acoustic: { gain: 2.5, ema: 0.09, thresh: 1.25, cooldown: 550,
+    label: 'acoustic / quiet mic' },
+  edm:      { gain: 1.0, ema: 0.15, thresh: 1.38, cooldown: 360,
+    label: 'EDM / club' },
+  metal:    { gain: 0.7, ema: 0.30, thresh: 1.80, cooldown: 110,
+    label: 'metal / blast beats' },
+};
 
 // Skeleton connections (MediaPipe Pose landmark index pairs)
 const SKELETON_CONNECTIONS = [
@@ -319,16 +397,18 @@ function avgBins(buf, lo, hi) {
 function tickAudio() {
   if (!audioEnabled || !analyserNode) { beatActive = false; return; }
   analyserNode.getByteFrequencyData(freqBuf);
-  const rawBass  = avgBins(freqBuf, 0,   8)   / 255;
-  const rawMids  = avgBins(freqBuf, 8,   80)  / 255;
-  const rawHighs = avgBins(freqBuf, 80,  200) / 255;
-  aBass  += AUDIO_EMA * (rawBass  - aBass);
-  aMids  += AUDIO_EMA * (rawMids  - aMids);
-  aHighs += AUDIO_EMA * (rawHighs - aHighs);
+  // Apply gain then clamp to 0-1
+  const g = audioGain;
+  const rawBass  = Math.min(avgBins(freqBuf, binBassLo,  binBassHi)  / 255 * g, 1);
+  const rawMids  = Math.min(avgBins(freqBuf, binMidsLo,  binMidsHi)  / 255 * g, 1);
+  const rawHighs = Math.min(avgBins(freqBuf, binHighsLo, binHighsHi) / 255 * g, 1);
+  aBass  += audioEMA * (rawBass  - aBass);
+  aMids  += audioEMA * (rawMids  - aMids);
+  aHighs += audioEMA * (rawHighs - aHighs);
 
-  bassAvg = 0.95 * bassAvg + 0.05 * rawBass;
+  bassAvg = 0.97 * bassAvg + 0.03 * rawBass;
   const now = performance.now();
-  beatActive = rawBass > bassAvg * BEAT_THRESH && now - lastBeatMs > BEAT_COOLDOWN;
+  beatActive = rawBass > bassAvg * beatThresh && now - lastBeatMs > beatCooldown;
   if (beatActive) lastBeatMs = now;
 }
 
@@ -731,15 +811,78 @@ async function startAudio() {
     analyserNode.fftSize               = 2048;
     analyserNode.smoothingTimeConstant = 0.75;
     audioCtx.createMediaStreamSource(stream).connect(analyserNode);
-    freqBuf      = new Uint8Array(analyserNode.frequencyBinCount);
+    freqBuf = new Uint8Array(analyserNode.frequencyBinCount);
+
+    // Derive bin indices from actual sample rate so 44.1kHz vs 48kHz is correct
+    const hz = audioCtx.sampleRate / analyserNode.fftSize; // Hz per bin
+    const freq2bin = f => Math.max(0, Math.min(Math.round(f / hz), analyserNode.frequencyBinCount - 1));
+    binBassLo  = freq2bin(20);   binBassHi  = freq2bin(250);
+    binMidsLo  = freq2bin(250);  binMidsHi  = freq2bin(4000);
+    binHighsLo = freq2bin(4000); binHighsHi = freq2bin(12000);
+
     audioEnabled = true;
     btnAudio.classList.remove('active');
     btnAudio.classList.add('active-audio');
     btnAudio.textContent = 'audio on';
+    audioPanelEl.style.display = '';
   } catch (err) {
     alert(`Microphone error: ${err.message}`);
   }
 }
+
+// ── Audio panel wiring ────────────────────────────────────────────────────────
+const audioPanelEl = document.getElementById('audio-panel');
+
+function applyPreset(name) {
+  const p = AUDIO_PRESETS[name];
+  if (!p) return;
+  audioGain    = p.gain;
+  audioEMA     = p.ema;
+  beatThresh   = p.thresh;
+  beatCooldown = p.cooldown;
+  // Sync sliders
+  document.getElementById('ap-gain').value     = p.gain;
+  document.getElementById('ap-thresh').value   = p.thresh;
+  document.getElementById('ap-cooldown').value = p.cooldown;
+  document.getElementById('ap-ema').value      = p.ema;
+  updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b =>
+    b.classList.toggle('active', b.dataset.preset === name));
+}
+
+function updateAudioPanelLabels() {
+  document.getElementById('ap-gain-val').textContent     = `${audioGain.toFixed(2)}×`;
+  document.getElementById('ap-thresh-val').textContent   = beatThresh.toFixed(2);
+  document.getElementById('ap-cooldown-val').textContent = `${beatCooldown}ms`;
+  // EMA: show as a qualitative bar
+  const pct = Math.round((audioEMA - 0.04) / (0.40 - 0.04) * 100);
+  document.getElementById('ap-ema-val').textContent = `${pct}%`;
+}
+
+document.getElementById('ap-gain').addEventListener('input', e => {
+  audioGain = parseFloat(e.target.value);
+  updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+});
+document.getElementById('ap-thresh').addEventListener('input', e => {
+  beatThresh = parseFloat(e.target.value);
+  updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+});
+document.getElementById('ap-cooldown').addEventListener('input', e => {
+  beatCooldown = parseInt(e.target.value, 10);
+  updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+});
+document.getElementById('ap-ema').addEventListener('input', e => {
+  audioEMA = parseFloat(e.target.value);
+  updateAudioPanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+});
+document.querySelectorAll('.ap-preset').forEach(b =>
+  b.addEventListener('click', () => applyPreset(b.dataset.preset)));
+
+updateAudioPanelLabels();
 
 // ── UI controls ───────────────────────────────────────────────────────────────
 const btnTrails  = document.getElementById('btn-trails');
@@ -758,8 +901,10 @@ function setZen(on) {
   zenMode = on;
   topbarEl.classList.toggle('zen', on);
   zenHandle.classList.toggle('visible', on);
-  hintsEl.style.opacity      = on ? '0' : '';
+  const hide = on ? 'none' : '';
+  hintsEl.style.opacity       = on ? '0' : '';
   hintsEl.style.pointerEvents = on ? 'none' : '';
+  if (audioEnabled) audioPanelEl.style.display = on ? 'none' : '';
 }
 
 btnTrails.addEventListener('click', () => {
