@@ -29,7 +29,10 @@
 
     #video {
       position: fixed; bottom: 1.25rem; right: 1.25rem;
-      width: 180px; aspect-ratio: 4/3; object-fit: cover;
+      width: 200px;
+      /* no aspect-ratio lock — let the browser use the camera's native ratio */
+      object-fit: contain;
+      background: transparent;
       border-radius: 8px; border: 1px solid var(--border);
       opacity: 0.75; transform: scaleX(-1); z-index: 10;
       transition: opacity 0.2s;
@@ -56,6 +59,7 @@
     #fps    { color: var(--muted); min-width: 5ch; }
     #pcount { color: var(--muted); min-width: 7ch; }
     #pose-count { color: var(--muted); min-width: 6ch; }
+    #cam-res    { color: var(--muted); font-size: 0.72rem; opacity: 0.7; }
 
     .ctrl-btn {
       background: none; border: 1px solid var(--border); border-radius: 5px;
@@ -138,6 +142,7 @@
     <span id="fps">-- fps</span>
     <span id="pcount">---- pts</span>
     <span id="pose-count">0 pose</span>
+    <span id="cam-res"></span>
     <button class="ctrl-btn" id="btn-trails">trails</button>
     <button class="ctrl-btn active" id="btn-camera">camera</button>
     <button class="ctrl-btn" id="btn-overlay" title="Skeleton overlay (P)">skeleton</button>
@@ -584,11 +589,20 @@ async function boot() {
     statusMsg.textContent = 'requesting camera…';
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: 'user' },
+      // Ask for a reasonable resolution; no fixed aspect-ratio so the
+      // browser/camera can use its native FOV (often 16:9 or 4:3)
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
     });
     videoEl.srcObject = stream;
     await new Promise(r => { videoEl.onloadedmetadata = r; });
     videoEl.play();
+
+    // Show actual camera resolution in the HUD
+    const camResEl = document.getElementById('cam-res');
+    if (camResEl) {
+      const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
+      camResEl.textContent = `${vw}×${vh}`;
+    }
 
     overlay.classList.add('hidden');
 
