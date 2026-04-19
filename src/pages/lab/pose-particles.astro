@@ -71,6 +71,15 @@
     .ctrl-btn:hover  { border-color: var(--accent); color: var(--accent); }
     .ctrl-btn.active { border-color: var(--cyan);   color: var(--cyan);   }
     .ctrl-btn.active-audio { border-color: var(--pink); color: var(--pink); }
+    select.ctrl-btn {
+      max-width: 160px; appearance: none;
+      padding-right: 1.2rem;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 10px) 50%, calc(100% - 5px) 50%;
+      background-size: 5px 5px; background-repeat: no-repeat;
+    }
+    select.ctrl-btn option { background: var(--surface); color: var(--text); }
 
     /* Zen handle */
     #zen-handle {
@@ -143,6 +152,7 @@
     <span id="pcount">---- pts</span>
     <span id="pose-count">0 pose</span>
     <span id="cam-res"></span>
+    <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
     <button class="ctrl-btn" id="btn-trails">trails</button>
     <button class="ctrl-btn active" id="btn-camera">camera</button>
     <button class="ctrl-btn" id="btn-overlay" title="Skeleton overlay (P)">skeleton</button>
@@ -557,13 +567,76 @@ const overlay   = document.getElementById('status-overlay');
 const statusMsg = document.getElementById('status-msg');
 const startBtn  = document.getElementById('start-btn');
 const videoEl   = document.getElementById('video');
+const camSelect = document.getElementById('cam-select');
+const camResEl  = document.getElementById('cam-res');
+
+const CAM_KEY = 'voidstar.pose.cameraId';
+let currentStream = null;
+let detectLoopStarted = false;
+let poseLandmarker = null;
+
+function stopCurrentStream() {
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop());
+    currentStream = null;
+  }
+}
+
+async function openCamera(deviceId) {
+  stopCurrentStream();
+
+  // Build constraints — if we have a deviceId, pin to it; otherwise let the
+  // browser pick. No width/height constraint so the camera uses its native
+  // resolution and aspect ratio (avoids driver-side letterboxing).
+  const videoConstraints = deviceId
+    ? { deviceId: { exact: deviceId } }
+    : { facingMode: 'user' };
+
+  const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+  currentStream   = stream;
+  videoEl.srcObject = stream;
+
+  await new Promise(r => { videoEl.onloadedmetadata = r; });
+  const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
+  if (vw && vh) videoEl.style.aspectRatio = `${vw} / ${vh}`;
+
+  const track = stream.getVideoTracks()[0];
+  const settings = track.getSettings();
+  if (camResEl) camResEl.textContent = `${vw}×${vh}`;
+
+  await videoEl.play().catch(() => {});
+
+  // Persist which camera worked
+  if (settings.deviceId) localStorage.setItem(CAM_KEY, settings.deviceId);
+
+  return settings.deviceId ?? deviceId ?? null;
+}
+
+async function populateCameraList(activeDeviceId) {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(d => d.kind === 'videoinput');
+    if (cams.length <= 1) { camSelect.style.display = 'none'; return; }
+
+    camSelect.innerHTML = '';
+    cams.forEach((cam, i) => {
+      const opt = document.createElement('option');
+      opt.value = cam.deviceId;
+      opt.textContent = cam.label || `Camera ${i + 1}`;
+      if (cam.deviceId === activeDeviceId) opt.selected = true;
+      camSelect.appendChild(opt);
+    });
+    camSelect.style.display = '';
+  } catch (e) {
+    camSelect.style.display = 'none';
+  }
+}
 
 async function boot() {
   statusMsg.textContent  = 'loading pose model…';
   startBtn.style.display = 'none';
 
   try {
-    // ES-module import from CDN — no script tag needed
     const { PoseLandmarker, FilesetResolver } = await import(
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs'
     );
@@ -574,7 +647,7 @@ async function boot() {
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
     );
 
-    const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
       baseOptions: {
         modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
         delegate: 'GPU',
@@ -588,42 +661,33 @@ async function boot() {
 
     statusMsg.textContent = 'requesting camera…';
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      // No fixed aspect-ratio — let the browser use the camera's native FOV
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-    });
-    videoEl.srcObject = stream;
+    const remembered = localStorage.getItem(CAM_KEY);
+    let activeId;
+    try {
+      activeId = await openCamera(remembered ?? null);
+    } catch {
+      // Remembered camera no longer available — fall back to default
+      activeId = await openCamera(null);
+    }
 
-    // Wait for metadata so we know the real video dimensions
-    await new Promise(r => { videoEl.onloadedmetadata = r; });
-
-    const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
-
-    // Lock the thumbnail aspect-ratio to the camera's actual ratio so the
-    // preview shows the full frame with no empty space / no crop
-    if (vw && vh) videoEl.style.aspectRatio = `${vw} / ${vh}`;
-
-    const camResEl = document.getElementById('cam-res');
-    if (camResEl) camResEl.textContent = `${vw}×${vh}`;
-
-    // Await playback so we're producing frames before starting detection
-    await videoEl.play().catch(() => {/* user gesture already happened */});
+    // Now that we have a permissioned stream, labels become available
+    await populateCameraList(activeId);
 
     overlay.classList.add('hidden');
 
-    // Detection loop — runs on its own rAF, independent of render loop.
-    // Use a monotonically-increasing timestamp rather than videoEl.currentTime,
-    // because live MediaStream videos may not advance currentTime reliably.
-    (function detectLoop() {
-      requestAnimationFrame(detectLoop);
-      if (videoEl.readyState < 2 || videoEl.paused || videoEl.ended) return;
-      try {
-        const result = poseLandmarker.detectForVideo(videoEl, performance.now());
-        allLandmarks = result.landmarks ?? [];
-      } catch (e) {
-        // detectForVideo throws if timestamps regress; swallow and keep going
-      }
-    })();
+    if (!detectLoopStarted) {
+      detectLoopStarted = true;
+      (function detectLoop() {
+        requestAnimationFrame(detectLoop);
+        if (!poseLandmarker)               return;
+        if (videoEl.readyState < 2)        return;
+        if (videoEl.paused || videoEl.ended) return;
+        try {
+          const result = poseLandmarker.detectForVideo(videoEl, performance.now());
+          allLandmarks = result.landmarks ?? [];
+        } catch (e) { /* swallow timestamp regressions */ }
+      })();
+    }
 
   } catch (err) {
     statusMsg.textContent  = `error: ${err.message}`;
@@ -631,6 +695,15 @@ async function boot() {
     startBtn.style.display = '';
   }
 }
+
+camSelect.addEventListener('change', async () => {
+  try {
+    const id = await openCamera(camSelect.value);
+    await populateCameraList(id);
+  } catch (err) {
+    alert(`Could not open camera: ${err.message}`);
+  }
+});
 
 startBtn.addEventListener('click', boot);
 
