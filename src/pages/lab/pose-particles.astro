@@ -596,14 +596,13 @@ function stopCurrentStream() {
 async function openCamera(deviceId) {
   stopCurrentStream();
 
-  const base = {
-    width:       { ideal: 1280 },
-    height:      { ideal: 720  },
-    aspectRatio: { ideal: 16 / 9 },
-    facingMode:  'user',
-  };
+  // Important: do NOT pin aspectRatio or a fixed width+height. Doing so lets
+  // the browser deliver the camera's native sensor mode with no letterboxing.
+  // We hint at a large width so high-res cameras give us their best mode;
+  // the camera picks its own height based on its native aspect ratio.
+  const base = { width: { ideal: 1920 }, facingMode: 'user' };
   const videoConstraints = deviceId
-    ? { ...base, deviceId: { exact: deviceId } }
+    ? { deviceId: { exact: deviceId } }
     : base;
 
   const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
