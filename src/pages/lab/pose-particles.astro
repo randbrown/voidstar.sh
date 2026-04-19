@@ -63,16 +63,16 @@
     }
     #zen-handle.visible { opacity: 1; pointer-events: auto; }
     .zen-icon {
-      font-size: 1.05rem;
+      font-size: 1.4rem;
       color: var(--accent);
-      opacity: 0.3;
+      opacity: 0.65;
       animation: zen-spin 14s linear infinite;
-      filter: drop-shadow(0 0 5px var(--accent));
-      transition: opacity 0.2s, transform 0.2s;
+      filter: drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 16px var(--accent));
+      transition: opacity 0.2s;
       user-select: none;
       line-height: 1;
     }
-    #zen-handle:hover .zen-icon { opacity: 0.9; transform: scale(1.3); }
+    #zen-handle:hover .zen-icon { opacity: 1; filter: drop-shadow(0 0 12px var(--accent)) drop-shadow(0 0 24px var(--cyan)); }
     @keyframes zen-spin {
       from { transform: rotate(0deg); }
       to   { transform: rotate(360deg); }
@@ -181,7 +181,7 @@
   <span><kbd>Space</kbd> pause</span>
   <span><kbd>T</kbd> trails</span>
   <span><kbd>C</kbd> camera</span>
-  <span><kbd>O</kbd> rotate</span>
+  <span><kbd>O</kbd> rotate · <kbd>0</kbd> reset</span>
   <span><kbd>Z</kbd> zen</span>
   <span><kbd>R</kbd> reset</span>
 </div>
@@ -492,7 +492,8 @@ btnZen.addEventListener('click', () => setZen(true));
 zenHandle.addEventListener('click', () => setZen(false));
 
 document.addEventListener('keydown', (e) => {
-  if (e.target !== document.body) return;
+  // Only block shortcuts when typing in an actual text field
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
   switch (e.code) {
     case 'Space':
       e.preventDefault(); btnPause.click(); break;
@@ -502,6 +503,13 @@ document.addEventListener('keydown', (e) => {
       btnCamera.click(); break;
     case 'KeyO':
       btnRotate.click(); break;
+    case 'Digit0':
+      // Reset rotation to 0°
+      cameraRotation = 0;
+      btnRotate.textContent = 'rot 0°';
+      btnRotate.classList.remove('active');
+      updateVideoTransform();
+      break;
     case 'KeyZ':
       setZen(!zenMode); break;
     case 'KeyR':
