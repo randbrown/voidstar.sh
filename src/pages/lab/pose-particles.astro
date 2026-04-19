@@ -158,6 +158,7 @@
     <span id="pcount">---- pts</span>
     <button class="ctrl-btn" id="btn-trails">trails</button>
     <button class="ctrl-btn active" id="btn-camera">camera</button>
+    <button class="ctrl-btn" id="btn-overlay" title="Show pose skeleton overlay (P)">skeleton</button>
     <button class="ctrl-btn" id="btn-rotate" title="Rotate camera source (O)">rot 0°</button>
     <button class="ctrl-btn" id="btn-pause">pause</button>
     <button class="ctrl-btn" id="btn-zen" title="Zen mode — hide navbar (Z)">zen</button>
@@ -181,6 +182,7 @@
   <span><kbd>Space</kbd> pause</span>
   <span><kbd>T</kbd> trails</span>
   <span><kbd>C</kbd> camera</span>
+  <span><kbd>P</kbd> skeleton</span>
   <span><kbd>O</kbd> rotate · <kbd>0</kbd> reset</span>
   <span><kbd>Z</kbd> zen</span>
   <span><kbd>R</kbd> reset</span>
@@ -261,6 +263,19 @@ function curlForce(x, y, t) {
   return [dpdy * CURL_STR, -dpdx * CURL_STR];
 }
 
+// Standard MediaPipe Pose skeleton connections (index pairs into landmarks[])
+const SKELETON_CONNECTIONS = [
+  [11, 12],           // shoulders
+  [11, 13], [13, 15], // left arm
+  [12, 14], [14, 16], // right arm
+  [11, 23], [12, 24], // torso sides
+  [23, 24],           // hips
+  [23, 25], [25, 27], // left thigh / shin
+  [24, 26], [26, 28], // right thigh / shin
+  [27, 29], [27, 31], [29, 31], // left foot
+  [28, 30], [28, 32], [30, 32], // right foot
+];
+
 // ── Camera rotation ───────────────────────────────────────────────────────────
 let cameraRotation = 0; // degrees: 0 | 90 | 180 | 270
 
@@ -285,10 +300,11 @@ function updateVideoTransform() {
 let landmarks = null;
 
 // ── Simulation ────────────────────────────────────────────────────────────────
-let simTime   = 0;
-let paused    = false;
-let trailMode = false;
-let lastTime  = performance.now();
+let simTime     = 0;
+let paused      = false;
+let trailMode   = false;
+let showOverlay = false;
+let lastTime    = performance.now();
 
 function update(dt) {
   simTime += dt * CURL_SPEED;
@@ -368,6 +384,68 @@ function draw() {
   }
 
   ctx.globalCompositeOperation = 'source-over';
+
+  if (showOverlay) drawPoseOverlay();
+}
+
+function drawPoseOverlay() {
+  if (!landmarks) return;
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Helper: map a landmark to canvas coords using the same mirror+rotation as the physics
+  function lmPos(lm) {
+    return applyRotation((1 - lm.x) * W, lm.y * H, W, H);
+  }
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+
+  // ── Connections (bones) ─────────────────────────────
+  ctx.lineWidth = 1.8;
+  ctx.lineCap   = 'round';
+
+  for (const [a, b] of SKELETON_CONNECTIONS) {
+    const lmA = landmarks[a], lmB = landmarks[b];
+    if (!lmA || !lmB || lmA.visibility < 0.35 || lmB.visibility < 0.35) continue;
+    const [ax, ay] = lmPos(lmA);
+    const [bx, by] = lmPos(lmB);
+
+    // Gradient along each bone: accent → cyan
+    const grad = ctx.createLinearGradient(ax, ay, bx, by);
+    grad.addColorStop(0, 'rgba(139,92,246,0.7)');
+    grad.addColorStop(1, 'rgba(34,211,238,0.7)');
+    ctx.strokeStyle = grad;
+
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+  }
+
+  // ── Joints ──────────────────────────────────────────
+  for (const [idxStr, weight] of Object.entries(LM_WEIGHT)) {
+    const lm = landmarks[Number(idxStr)];
+    if (!lm || lm.visibility < 0.35) continue;
+    const [x, y] = lmPos(lm);
+    const r = 2 + weight * 2; // wrists slightly bigger
+
+    // Glow halo
+    ctx.beginPath();
+    ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(139,92,246,0.18)';
+    ctx.fill();
+
+    // Solid core
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = REPEL_JOINTS.has(Number(idxStr))
+      ? 'rgba(34,211,238,0.95)'   // cyan for repellers (wrists)
+      : 'rgba(139,92,246,0.95)';  // accent for attractors
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
 
 // ── Render loop ───────────────────────────────────────────────────────────────
@@ -450,10 +528,11 @@ async function boot() {
 startBtn.addEventListener('click', boot);
 
 // ── UI controls ───────────────────────────────────────────────────────────────
-const btnTrails = document.getElementById('btn-trails');
-const btnCamera = document.getElementById('btn-camera');
-const btnPause  = document.getElementById('btn-pause');
-const btnRotate = document.getElementById('btn-rotate');
+const btnTrails  = document.getElementById('btn-trails');
+const btnCamera  = document.getElementById('btn-camera');
+const btnOverlay = document.getElementById('btn-overlay');
+const btnPause   = document.getElementById('btn-pause');
+const btnRotate  = document.getElementById('btn-rotate');
 const btnZen    = document.getElementById('btn-zen');
 const zenHandle = document.getElementById('zen-handle');
 const topbarEl  = document.getElementById('topbar');
@@ -469,6 +548,10 @@ function setZen(on) {
   hintsEl.style.pointerEvents = on ? 'none' : '';
 }
 
+btnOverlay.addEventListener('click', () => {
+  showOverlay = !showOverlay;
+  btnOverlay.classList.toggle('active', showOverlay);
+});
 btnTrails.addEventListener('click', () => {
   trailMode = !trailMode;
   btnTrails.classList.toggle('active', trailMode);
@@ -501,6 +584,8 @@ document.addEventListener('keydown', (e) => {
       btnTrails.click(); break;
     case 'KeyC':
       btnCamera.click(); break;
+    case 'KeyP':
+      btnOverlay.click(); break;
     case 'KeyO':
       btnRotate.click(); break;
     case 'Digit0':
