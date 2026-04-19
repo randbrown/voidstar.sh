@@ -47,6 +47,35 @@
       backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--border);
       font-family: var(--font-mono); font-size: 0.8rem;
+      transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
+    }
+    #topbar.zen { transform: translateY(-110%); opacity: 0; pointer-events: none; }
+
+    /* Zen handle — subtle spinning icon that restores the navbar */
+    #zen-handle {
+      position: fixed; top: 0; left: 50%; transform: translateX(-50%);
+      z-index: 25;
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.5s ease;
+    }
+    #zen-handle.visible { opacity: 1; pointer-events: auto; }
+    .zen-icon {
+      font-size: 1.05rem;
+      color: var(--accent);
+      opacity: 0.3;
+      animation: zen-spin 14s linear infinite;
+      filter: drop-shadow(0 0 5px var(--accent));
+      transition: opacity 0.2s, transform 0.2s;
+      user-select: none;
+      line-height: 1;
+    }
+    #zen-handle:hover .zen-icon { opacity: 0.9; transform: scale(1.3); }
+    @keyframes zen-spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
     }
     #topbar-left  { display: flex; align-items: center; gap: 1rem; }
     #topbar-right { display: flex; align-items: center; gap: 1rem; }
@@ -129,9 +158,16 @@
     <span id="pcount">---- pts</span>
     <button class="ctrl-btn" id="btn-trails">trails</button>
     <button class="ctrl-btn active" id="btn-camera">camera</button>
+    <button class="ctrl-btn" id="btn-rotate" title="Rotate camera source (O)">rot 0°</button>
     <button class="ctrl-btn" id="btn-pause">pause</button>
+    <button class="ctrl-btn" id="btn-zen" title="Zen mode — hide navbar (Z)">zen</button>
     <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
   </div>
+</div>
+
+<!-- Spinning voidstar — click to exit zen mode -->
+<div id="zen-handle" title="Exit zen mode (Z)">
+  <span class="zen-icon">✦</span>
 </div>
 
 <div id="status-overlay">
@@ -145,6 +181,8 @@
   <span><kbd>Space</kbd> pause</span>
   <span><kbd>T</kbd> trails</span>
   <span><kbd>C</kbd> camera</span>
+  <span><kbd>O</kbd> rotate</span>
+  <span><kbd>Z</kbd> zen</span>
   <span><kbd>R</kbd> reset</span>
 </div>
 
@@ -223,6 +261,26 @@ function curlForce(x, y, t) {
   return [dpdy * CURL_STR, -dpdx * CURL_STR];
 }
 
+// ── Camera rotation ───────────────────────────────────────────────────────────
+let cameraRotation = 0; // degrees: 0 | 90 | 180 | 270
+
+// Rotate a normalised-then-scaled landmark point around the canvas centre.
+// The x mirror (scaleX -1) is already baked in before this is called.
+function applyRotation(lx, ly, W, H) {
+  const cx = W / 2, cy = H / 2;
+  const dx = lx - cx,  dy = ly - cy;
+  switch (cameraRotation) {
+    case  90: return [cx + dy, cy - dx]; // 90° CW
+    case 180: return [cx - dx, cy - dy]; // 180°
+    case 270: return [cx - dy, cy + dx]; // 270° CW
+    default:  return [lx, ly];
+  }
+}
+
+function updateVideoTransform() {
+  videoEl.style.transform = `scaleX(-1) rotate(${cameraRotation}deg)`;
+}
+
 // ── Pose state ────────────────────────────────────────────────────────────────
 let landmarks = null;
 
@@ -256,8 +314,8 @@ function update(dt) {
     // Landmark forces
     for (const [idx, weight, lm] of lmEntries) {
       if (!lm || lm.visibility < 0.4) continue;
-      const lx  = (1 - lm.x) * W;   // mirror x to match flipped camera
-      const ly  = lm.y * H;
+      // Mirror x first, then apply any camera rotation around canvas centre
+      const [lx, ly] = applyRotation((1 - lm.x) * W, lm.y * H, W, H);
       const dx  = lx - px[i];
       const dy  = ly - py[i];
       const d2  = dx * dx + dy * dy;
@@ -395,6 +453,21 @@ startBtn.addEventListener('click', boot);
 const btnTrails = document.getElementById('btn-trails');
 const btnCamera = document.getElementById('btn-camera');
 const btnPause  = document.getElementById('btn-pause');
+const btnRotate = document.getElementById('btn-rotate');
+const btnZen    = document.getElementById('btn-zen');
+const zenHandle = document.getElementById('zen-handle');
+const topbarEl  = document.getElementById('topbar');
+const hintsEl   = document.getElementById('hints');
+
+let zenMode = false;
+
+function setZen(on) {
+  zenMode = on;
+  topbarEl.classList.toggle('zen', on);
+  zenHandle.classList.toggle('visible', on);
+  hintsEl.style.opacity = on ? '0' : '';
+  hintsEl.style.pointerEvents = on ? 'none' : '';
+}
 
 btnTrails.addEventListener('click', () => {
   trailMode = !trailMode;
@@ -409,6 +482,14 @@ btnPause.addEventListener('click', () => {
   btnPause.classList.toggle('active', paused);
   btnPause.textContent = paused ? 'resume' : 'pause';
 });
+btnRotate.addEventListener('click', () => {
+  cameraRotation = (cameraRotation + 90) % 360;
+  btnRotate.textContent = `rot ${cameraRotation}°`;
+  btnRotate.classList.toggle('active', cameraRotation !== 0);
+  updateVideoTransform();
+});
+btnZen.addEventListener('click', () => setZen(true));
+zenHandle.addEventListener('click', () => setZen(false));
 
 document.addEventListener('keydown', (e) => {
   if (e.target !== document.body) return;
@@ -419,6 +500,10 @@ document.addEventListener('keydown', (e) => {
       btnTrails.click(); break;
     case 'KeyC':
       btnCamera.click(); break;
+    case 'KeyO':
+      btnRotate.click(); break;
+    case 'KeyZ':
+      setZen(!zenMode); break;
     case 'KeyR':
       for (let i = 0; i < N; i++) spawnParticle(i);
       simTime = 0;
