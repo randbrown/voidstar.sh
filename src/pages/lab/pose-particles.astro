@@ -1,6 +1,7 @@
 ---
 // Full-screen pose-driven particle field.
-// No framework deps — MediaPipe from CDN, vanilla JS particle engine.
+// Multi-person via @mediapipe/tasks-vision PoseLandmarker (numPoses:2).
+// Audio reactivity via Web Audio API AnalyserNode.
 ---
 <!doctype html>
 <html lang="en">
@@ -14,6 +15,8 @@
     :root {
       --accent:    #8b5cf6;
       --cyan:      #22d3ee;
+      --pink:      #f472b6;
+      --green:     #4ade80;
       --void:      #05050d;
       --surface:   rgba(10,10,26,0.82);
       --border:    rgba(45,45,80,0.7);
@@ -22,19 +25,13 @@
       --font-mono: 'JetBrains Mono', ui-monospace, monospace;
     }
     html, body { width: 100%; height: 100%; overflow: hidden; background: var(--void); }
-
     canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 
     #video {
-      position: fixed;
-      bottom: 1.25rem; right: 1.25rem;
-      width: 180px; aspect-ratio: 4/3;
-      object-fit: cover;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      opacity: 0.75;
-      transform: scaleX(-1);
-      z-index: 10;
+      position: fixed; bottom: 1.25rem; right: 1.25rem;
+      width: 180px; aspect-ratio: 4/3; object-fit: cover;
+      border-radius: 8px; border: 1px solid var(--border);
+      opacity: 0.75; transform: scaleX(-1); z-index: 10;
       transition: opacity 0.2s;
     }
     #video.hidden { opacity: 0; pointer-events: none; }
@@ -43,75 +40,61 @@
       position: fixed; top: 0; left: 0; right: 0; z-index: 20;
       display: flex; align-items: center; justify-content: space-between;
       padding: 0.6rem 1.25rem;
-      background: var(--surface);
-      backdrop-filter: blur(10px);
+      background: var(--surface); backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--border);
       font-family: var(--font-mono); font-size: 0.8rem;
       transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
     }
     #topbar.zen { transform: translateY(-110%); opacity: 0; pointer-events: none; }
-
-    /* Zen handle — subtle spinning icon that restores the navbar */
-    #zen-handle {
-      position: fixed; top: 0; right: 1rem;
-      z-index: 25;
-      width: 44px; height: 44px;
-      display: flex; align-items: center; justify-content: center;
-      cursor: pointer;
-      opacity: 0; pointer-events: none;
-      transition: opacity 0.5s ease;
-    }
-    #zen-handle.visible { opacity: 1; pointer-events: auto; }
-    .zen-icon {
-      font-size: 1.4rem;
-      color: var(--accent);
-      opacity: 0.8;
-      animation: zen-spin 14s linear infinite;
-      filter: drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 16px var(--accent));
-      transition: opacity 0.2s;
-      user-select: none;
-      line-height: 1;
-    }
-    #zen-handle:hover .zen-icon { opacity: 1; filter: drop-shadow(0 0 12px var(--accent)) drop-shadow(0 0 24px var(--cyan)); }
-    @keyframes zen-spin {
-      from { transform: rotate(0deg); }
-      to   { transform: rotate(360deg); }
-    }
     #topbar-left  { display: flex; align-items: center; gap: 1rem; }
-    #topbar-right { display: flex; align-items: center; gap: 1rem; }
+    #topbar-right { display: flex; align-items: center; gap: 0.6rem; }
 
-    .back-link {
-      color: var(--muted); text-decoration: none;
-      display: flex; align-items: center; gap: 0.35rem;
-    }
+    .back-link { color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 0.35rem; }
     .back-link:hover { color: var(--accent); }
     .experiment-title { color: var(--text); font-weight: 500; }
     .experiment-tag   { color: var(--accent); }
     #fps    { color: var(--muted); min-width: 5ch; }
     #pcount { color: var(--muted); min-width: 7ch; }
+    #pose-count { color: var(--muted); min-width: 6ch; }
 
     .ctrl-btn {
-      background: none;
-      border: 1px solid var(--border); border-radius: 5px;
-      color: var(--muted);
-      font-family: var(--font-mono); font-size: 0.75rem;
+      background: none; border: 1px solid var(--border); border-radius: 5px;
+      color: var(--muted); font-family: var(--font-mono); font-size: 0.75rem;
       padding: 0.25rem 0.6rem; cursor: pointer;
       transition: all 0.15s; white-space: nowrap;
       text-decoration: none; display: inline-block;
     }
     .ctrl-btn:hover  { border-color: var(--accent); color: var(--accent); }
     .ctrl-btn.active { border-color: var(--cyan);   color: var(--cyan);   }
+    .ctrl-btn.active-audio { border-color: var(--pink); color: var(--pink); }
 
+    /* Zen handle */
+    #zen-handle {
+      position: fixed; top: 0; right: 1rem; z-index: 25;
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; opacity: 0; pointer-events: none;
+      transition: opacity 0.5s ease;
+    }
+    #zen-handle.visible { opacity: 1; pointer-events: auto; }
+    .zen-icon {
+      font-size: 1.4rem; color: var(--accent); opacity: 0.8;
+      animation: zen-spin 14s linear infinite;
+      filter: drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 16px var(--accent));
+      transition: opacity 0.2s; user-select: none; line-height: 1;
+    }
+    #zen-handle:hover .zen-icon { opacity: 1; filter: drop-shadow(0 0 12px var(--accent)) drop-shadow(0 0 24px var(--cyan)); }
+    @keyframes zen-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+    /* Status overlay */
     #status-overlay {
       position: fixed; inset: 0; z-index: 30;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 1.25rem;
-      background: rgba(5,5,13,0.93);
-      font-family: var(--font-mono);
+      background: rgba(5,5,13,0.93); font-family: var(--font-mono);
       transition: opacity 0.5s;
     }
     #status-overlay.hidden { opacity: 0; pointer-events: none; }
-
     .status-title { font-size: 1.1rem; color: var(--text); letter-spacing: 0.08em; }
     .status-msg   { font-size: 0.8rem; color: var(--muted); letter-spacing: 0.05em; }
     .status-dot   {
@@ -119,10 +102,7 @@
       background: var(--accent); box-shadow: 0 0 12px var(--accent);
       animation: pulse 1.4s ease-in-out infinite;
     }
-    @keyframes pulse {
-      0%,100% { opacity: 0.4; transform: scale(0.9); }
-      50%      { opacity: 1;   transform: scale(1.2); }
-    }
+    @keyframes pulse { 0%,100% { opacity:0.4; transform:scale(0.9); } 50% { opacity:1; transform:scale(1.2); } }
     .start-btn {
       margin-top: 0.5rem; padding: 0.65rem 1.5rem;
       background: var(--accent); border: none; border-radius: 6px;
@@ -135,6 +115,7 @@
       position: fixed; bottom: 1.25rem; left: 1.25rem; z-index: 10;
       font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted);
       display: flex; flex-direction: column; gap: 0.25rem; opacity: 0.6;
+      transition: opacity 0.3s;
     }
     kbd {
       display: inline-block; background: rgba(45,45,80,0.8);
@@ -156,17 +137,18 @@
   <div id="topbar-right">
     <span id="fps">-- fps</span>
     <span id="pcount">---- pts</span>
+    <span id="pose-count">0 pose</span>
     <button class="ctrl-btn" id="btn-trails">trails</button>
     <button class="ctrl-btn active" id="btn-camera">camera</button>
-    <button class="ctrl-btn" id="btn-overlay" title="Show pose skeleton overlay (P)">skeleton</button>
-    <button class="ctrl-btn" id="btn-rotate" title="Rotate camera source (O)">rot 0°</button>
+    <button class="ctrl-btn" id="btn-overlay" title="Skeleton overlay (P)">skeleton</button>
+    <button class="ctrl-btn" id="btn-audio" title="Mic audio reactivity (M)">audio</button>
+    <button class="ctrl-btn" id="btn-rotate" title="Rotate camera (O / 0)">rot 0°</button>
     <button class="ctrl-btn" id="btn-pause">pause</button>
-    <button class="ctrl-btn" id="btn-zen" title="Zen mode — hide navbar (Z)">zen</button>
+    <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
     <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
   </div>
 </div>
 
-<!-- Spinning voidstar — click to exit zen mode -->
 <div id="zen-handle" title="Exit zen mode (Z)">
   <span class="zen-icon">✦</span>
 </div>
@@ -183,47 +165,82 @@
   <span><kbd>T</kbd> trails</span>
   <span><kbd>C</kbd> camera</span>
   <span><kbd>P</kbd> skeleton</span>
-  <span><kbd>O</kbd> rotate · <kbd>0</kbd> reset</span>
+  <span><kbd>M</kbd> audio</span>
+  <span><kbd>O</kbd> / <kbd>0</kbd> rotate</span>
   <span><kbd>Z</kbd> zen</span>
   <span><kbd>R</kbd> reset</span>
 </div>
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const N            = 9000;
-const DAMPING      = 0.972;
-const CURL_SCALE   = 0.0018;
-const CURL_SPEED   = 0.22;
-const CURL_STR     = 0.28;
-const ATTRACT_STR  = 420;
-const ATTRACT_RAD  = 0.38;
-const SPAWN_VEL    = 1.4;
+const N               = 9000;
+const DAMPING         = 0.972;
+const CURL_SCALE      = 0.0018;
+const CURL_SPEED      = 0.22;
+const CURL_STR_BASE   = 0.28;
+const ATTRACT_STR_BASE = 420;
+const ATTRACT_RAD     = 0.38;
+const SPAWN_VEL       = 1.4;
 
-// Wrists repel — everything else attracts
-const REPEL_JOINTS = new Set([15, 16]);
+const REPEL_JOINTS = new Set([15, 16]); // wrists
 
 const LM_WEIGHT = {
-  0:  0.6,               // nose
-  11: 1.0, 12: 1.0,      // shoulders
-  13: 0.9, 14: 0.9,      // elbows
-  15: 1.5, 16: 1.5,      // wrists (strongest)
-  23: 0.8, 24: 0.8,      // hips
-  25: 0.7, 26: 0.7,      // knees
-  27: 0.6, 28: 0.6,      // ankles
+  0:  0.6,
+  11: 1.0, 12: 1.0,
+  13: 0.9, 14: 0.9,
+  15: 1.5, 16: 1.5,
+  23: 0.8, 24: 0.8,
+  25: 0.7, 26: 0.7,
+  27: 0.6, 28: 0.6,
 };
+
+// Per-person overlay colour palettes
+const PERSON_PALETTE = [
+  { boneA: 'rgba(139,92,246,0.75)',  boneB: 'rgba(34,211,238,0.75)',
+    attractor: 'rgba(139,92,246,0.95)', repeller: 'rgba(34,211,238,0.95)',
+    halo: 'rgba(139,92,246,0.18)' },
+  { boneA: 'rgba(244,114,182,0.75)', boneB: 'rgba(74,222,128,0.75)',
+    attractor: 'rgba(244,114,182,0.95)', repeller: 'rgba(74,222,128,0.95)',
+    halo: 'rgba(244,114,182,0.18)' },
+];
+
+// Audio beat detection
+const AUDIO_EMA       = 0.12;  // per-frame smoothing alpha
+const BEAT_THRESH     = 1.45;  // bass/avg ratio to call a beat
+const BEAT_COOLDOWN   = 350;   // ms between beats
+
+// Skeleton connections (MediaPipe Pose landmark index pairs)
+const SKELETON_CONNECTIONS = [
+  [11,12], [11,13],[13,15], [12,14],[14,16],
+  [11,23], [12,24], [23,24],
+  [23,25],[25,27], [24,26],[26,28],
+  [27,29],[27,31],[29,31], [28,30],[28,32],[30,32],
+];
+
+// ── Camera rotation ───────────────────────────────────────────────────────────
+let cameraRotation = 0;
+
+function applyRotation(lx, ly, W, H) {
+  const cx = W/2, cy = H/2, dx = lx-cx, dy = ly-cy;
+  switch (cameraRotation) {
+    case  90: return [cx+dy, cy-dx];
+    case 180: return [cx-dx, cy-dy];
+    case 270: return [cx-dy, cy+dx];
+    default:  return [lx, ly];
+  }
+}
+function updateVideoTransform() {
+  videoEl.style.transform = `scaleX(-1) rotate(${cameraRotation}deg)`;
+}
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('canvas');
 const ctx    = canvas.getContext('2d');
-
-function resize() {
-  canvas.width  = window.innerWidth;
-  canvas.height = window.innerHeight;
-}
+function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
 resize();
 window.addEventListener('resize', resize);
 
-// ── Particle state (typed arrays) ─────────────────────────────────────────────
+// ── Particle state ────────────────────────────────────────────────────────────
 const px   = new Float32Array(N);
 const py   = new Float32Array(N);
 const vx   = new Float32Array(N);
@@ -233,71 +250,81 @@ const life = new Float32Array(N);
 const hue  = new Float32Array(N);
 
 function spawnParticle(i) {
-  px[i]  = Math.random() * canvas.width;
-  py[i]  = Math.random() * canvas.height;
-  const angle = Math.random() * Math.PI * 2;
-  const speed = (0.3 + Math.random() * 0.7) * SPAWN_VEL;
-  vx[i]  = Math.cos(angle) * speed;
-  vy[i]  = Math.sin(angle) * speed;
+  px[i] = Math.random() * canvas.width;
+  py[i] = Math.random() * canvas.height;
+  const a = Math.random() * Math.PI * 2;
+  const s = (0.3 + Math.random() * 0.7) * SPAWN_VEL;
+  vx[i] = Math.cos(a) * s; vy[i] = Math.sin(a) * s;
   life[i] = 4 + Math.random() * 6;
   age[i]  = Math.random() * life[i];
   hue[i]  = (Math.random() - 0.5) * 60;
 }
-
 for (let i = 0; i < N; i++) spawnParticle(i);
 
 // ── Curl noise ────────────────────────────────────────────────────────────────
 function potential(x, y, t) {
   const s = CURL_SCALE;
-  return (
-    Math.sin(x * s * 1.0 + t * 0.31) * Math.cos(y * s * 0.9 - t * 0.19) +
-    Math.sin(x * s * 0.6 - y * s * 1.3 + t * 0.11) * 0.6 +
-    Math.cos(x * s * 1.5 + y * s * 0.7 - t * 0.27) * 0.35
-  );
+  return Math.sin(x*s*1.0 + t*0.31) * Math.cos(y*s*0.9 - t*0.19)
+       + Math.sin(x*s*0.6 - y*s*1.3 + t*0.11) * 0.6
+       + Math.cos(x*s*1.5 + y*s*0.7 - t*0.27) * 0.35;
+}
+function curlForce(x, y, t, str) {
+  const e = 2.5;
+  const dpdx = (potential(x+e,y,t) - potential(x-e,y,t)) / (2*e);
+  const dpdy = (potential(x,y+e,t) - potential(x,y-e,t)) / (2*e);
+  return [dpdy * str, -dpdx * str];
 }
 
-function curlForce(x, y, t) {
-  const e    = 2.5;
-  const dpdx = (potential(x + e, y, t) - potential(x - e, y, t)) / (2 * e);
-  const dpdy = (potential(x, y + e, t) - potential(x, y - e, t)) / (2 * e);
-  return [dpdy * CURL_STR, -dpdx * CURL_STR];
+// ── Audio state ───────────────────────────────────────────────────────────────
+let audioEnabled = false;
+let analyserNode = null;
+let freqBuf      = null;
+let aBass = 0, aMids = 0, aHighs = 0; // smoothed 0..1
+let bassAvg    = 0;
+let lastBeatMs = 0;
+let beatActive = false;
+
+function avgBins(buf, lo, hi) {
+  let s = 0;
+  for (let i = lo; i < hi; i++) s += buf[i];
+  return s / (hi - lo);
 }
 
-// Standard MediaPipe Pose skeleton connections (index pairs into landmarks[])
-const SKELETON_CONNECTIONS = [
-  [11, 12],           // shoulders
-  [11, 13], [13, 15], // left arm
-  [12, 14], [14, 16], // right arm
-  [11, 23], [12, 24], // torso sides
-  [23, 24],           // hips
-  [23, 25], [25, 27], // left thigh / shin
-  [24, 26], [26, 28], // right thigh / shin
-  [27, 29], [27, 31], [29, 31], // left foot
-  [28, 30], [28, 32], [30, 32], // right foot
-];
+function tickAudio() {
+  if (!audioEnabled || !analyserNode) { beatActive = false; return; }
+  analyserNode.getByteFrequencyData(freqBuf);
+  const rawBass  = avgBins(freqBuf, 0,   8)   / 255;
+  const rawMids  = avgBins(freqBuf, 8,   80)  / 255;
+  const rawHighs = avgBins(freqBuf, 80,  200) / 255;
+  aBass  += AUDIO_EMA * (rawBass  - aBass);
+  aMids  += AUDIO_EMA * (rawMids  - aMids);
+  aHighs += AUDIO_EMA * (rawHighs - aHighs);
 
-// ── Camera rotation ───────────────────────────────────────────────────────────
-let cameraRotation = 0; // degrees: 0 | 90 | 180 | 270
+  bassAvg = 0.95 * bassAvg + 0.05 * rawBass;
+  const now = performance.now();
+  beatActive = rawBass > bassAvg * BEAT_THRESH && now - lastBeatMs > BEAT_COOLDOWN;
+  if (beatActive) lastBeatMs = now;
+}
 
-// Rotate a normalised-then-scaled landmark point around the canvas centre.
-// The x mirror (scaleX -1) is already baked in before this is called.
-function applyRotation(lx, ly, W, H) {
-  const cx = W / 2, cy = H / 2;
-  const dx = lx - cx,  dy = ly - cy;
-  switch (cameraRotation) {
-    case  90: return [cx + dy, cy - dx]; // 90° CW
-    case 180: return [cx - dx, cy - dy]; // 180°
-    case 270: return [cx - dy, cy + dx]; // 270° CW
-    default:  return [lx, ly];
+// ── Shockwaves (spawned on beat) ──────────────────────────────────────────────
+const shockwaves = []; // { x, y, r, palette }
+
+function spawnShockwaves() {
+  for (let p = 0; p < allLandmarks.length; p++) {
+    const pal = PERSON_PALETTE[p % PERSON_PALETTE.length];
+    const W = canvas.width, H = canvas.height;
+    // Spawn from wrists (most expressive joints)
+    for (const idx of [15, 16, 11, 12]) {
+      const lm = allLandmarks[p]?.[idx];
+      if (!lm || lm.visibility < 0.4) continue;
+      const [x, y] = applyRotation((1 - lm.x) * W, lm.y * H, W, H);
+      shockwaves.push({ x, y, r: 4, alpha: 0.9 * aBass, palette: pal });
+    }
   }
 }
 
-function updateVideoTransform() {
-  videoEl.style.transform = `scaleX(-1) rotate(${cameraRotation}deg)`;
-}
-
 // ── Pose state ────────────────────────────────────────────────────────────────
-let landmarks = null;
+let allLandmarks = []; // Array<Array<{x,y,z,visibility}>>
 
 // ── Simulation ────────────────────────────────────────────────────────────────
 let simTime     = 0;
@@ -309,214 +336,271 @@ let lastTime    = performance.now();
 function update(dt) {
   simTime += dt * CURL_SPEED;
 
-  const W    = canvas.width;
-  const H    = canvas.height;
-  const maxR = W * ATTRACT_RAD;
+  tickAudio();
+
+  // Audio-modulated physics params
+  const curlStr    = audioEnabled ? CURL_STR_BASE * (0.5 + aMids * 3.0)   : CURL_STR_BASE;
+  const attractStr = audioEnabled ? ATTRACT_STR_BASE * (1 + aBass * 2.5)  : ATTRACT_STR_BASE;
+
+  const W = canvas.width, H = canvas.height;
+  const maxR  = W * ATTRACT_RAD;
   const maxR2 = maxR * maxR;
 
-  const lmEntries = landmarks
-    ? Object.entries(LM_WEIGHT).map(([k, w]) => [Number(k), w, landmarks[Number(k)]])
-    : [];
+  // Flatten all active attractor positions across all persons
+  const attractors = [];
+  for (const personLms of allLandmarks) {
+    for (const [k, weight] of Object.entries(LM_WEIGHT)) {
+      const lm = personLms[Number(k)];
+      if (!lm || lm.visibility < 0.4) continue;
+      const [lx, ly] = applyRotation((1 - lm.x) * W, lm.y * H, W, H);
+      attractors.push({ lx, ly, weight, repel: REPEL_JOINTS.has(Number(k)) });
+    }
+  }
+
+  // Beat → shockwaves
+  if (beatActive && attractors.length) spawnShockwaves();
 
   for (let i = 0; i < N; i++) {
     age[i] += dt;
     if (age[i] >= life[i]) { spawnParticle(i); continue; }
 
     // Curl noise
-    const [cfx, cfy] = curlForce(px[i], py[i], simTime);
-    vx[i] += cfx;
-    vy[i] += cfy;
+    const [cfx, cfy] = curlForce(px[i], py[i], simTime, curlStr);
+    vx[i] += cfx; vy[i] += cfy;
 
-    // Landmark forces
-    for (const [idx, weight, lm] of lmEntries) {
-      if (!lm || lm.visibility < 0.4) continue;
-      // Mirror x first, then apply any camera rotation around canvas centre
-      const [lx, ly] = applyRotation((1 - lm.x) * W, lm.y * H, W, H);
-      const dx  = lx - px[i];
-      const dy  = ly - py[i];
-      const d2  = dx * dx + dy * dy;
-      if (d2 > maxR2 || d2 < 1) continue;
-      const d    = Math.sqrt(d2);
-      const mag  = (ATTRACT_STR * weight) / (d2 + 200);
-      const sign = REPEL_JOINTS.has(idx) ? -1 : 1;
-      vx[i] += (dx / d) * mag * sign;
-      vy[i] += (dy / d) * mag * sign;
+    // Highs → random scatter
+    if (audioEnabled && aHighs > 0.08) {
+      vx[i] += (Math.random() - 0.5) * aHighs * 3;
+      vy[i] += (Math.random() - 0.5) * aHighs * 3;
     }
 
-    // Damping + integrate
-    vx[i] *= DAMPING;
-    vy[i] *= DAMPING;
-    px[i] += vx[i];
-    py[i] += vy[i];
+    // Landmark forces (all persons)
+    for (const { lx, ly, weight, repel } of attractors) {
+      const dx = lx - px[i], dy = ly - py[i];
+      const d2 = dx*dx + dy*dy;
+      if (d2 > maxR2 || d2 < 1) continue;
+      const d   = Math.sqrt(d2);
+      const mag = (attractStr * weight) / (d2 + 200);
+      const sgn = repel ? -1 : 1;
+      vx[i] += (dx/d) * mag * sgn;
+      vy[i] += (dy/d) * mag * sgn;
+    }
+
+    // Beat burst: push particles outward from nearest joint
+    if (beatActive && attractors.length) {
+      let minD2 = Infinity, bx = 0, by = 0;
+      for (const { lx, ly } of attractors) {
+        const d2 = (lx-px[i])**2 + (ly-py[i])**2;
+        if (d2 < minD2) { minD2 = d2; bx = lx; by = ly; }
+      }
+      if (minD2 < maxR2) {
+        const d = Math.sqrt(minD2);
+        const bm = 7 * aBass;
+        vx[i] += ((px[i]-bx)/d) * bm;
+        vy[i] += ((py[i]-by)/d) * bm;
+      }
+    }
+
+    vx[i] *= DAMPING; vy[i] *= DAMPING;
+    px[i] += vx[i];   py[i] += vy[i];
 
     // Wrap edges
-    if (px[i] <  0) px[i] += W;
-    if (px[i] >  W) px[i] -= W;
-    if (py[i] <  0) py[i] += H;
-    if (py[i] >  H) py[i] -= H;
+    if (px[i] <  0) px[i] += W; if (px[i] > W) px[i] -= W;
+    if (py[i] <  0) py[i] += H; if (py[i] > H) py[i] -= H;
   }
 }
 
+// ── Draw ──────────────────────────────────────────────────────────────────────
 function draw() {
-  const W = canvas.width;
-  const H = canvas.height;
+  const W = canvas.width, H = canvas.height;
 
-  // Fade / trail
+  // Trail fade — bass pumps it slightly faster (more energy = shorter trails)
+  const baseFade = trailMode ? 0.07 : 0.16;
+  const fade     = audioEnabled ? baseFade * (1 + aBass * 0.6) : baseFade;
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = `rgba(5,5,13,${trailMode ? 0.07 : 0.16})`;
+  ctx.fillStyle = `rgba(5,5,13,${fade})`;
   ctx.fillRect(0, 0, W, H);
 
-  // Particles with additive blending (dense clusters glow)
-  ctx.globalCompositeOperation = 'lighter';
+  // Beat flash — subtle purple bloom
+  if (beatActive) {
+    ctx.fillStyle = `rgba(139,92,246,${aBass * 0.07})`;
+    ctx.fillRect(0, 0, W, H);
+  }
 
+  // Particles (additive blending)
+  ctx.globalCompositeOperation = 'lighter';
   for (let i = 0; i < N; i++) {
-    const speed    = Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+    const speed    = Math.sqrt(vx[i]*vx[i] + vy[i]*vy[i]);
+    // Audio highs → hue shift toward warmer colours
+    const hueShift = audioEnabled ? aHighs * 40 : 0;
     const t01      = Math.min(speed / 4.5, 1);
-    const h        = 270 + hue[i] + t01 * 70; // violet → pink → cyan
+    const h        = 270 + hue[i] + hueShift + t01 * 70;
     const l        = 45 + t01 * 30;
     const alpha    = 0.5 + t01 * 0.4;
     const radius   = 0.85 + t01 * 0.65;
     const lifeFrac = age[i] / life[i];
-    const fade     = lifeFrac > 0.85 ? 1 - (lifeFrac - 0.85) / 0.15 : 1;
+    const fadePt   = lifeFrac > 0.85 ? 1 - (lifeFrac - 0.85) / 0.15 : 1;
+    ctx.fillStyle = `hsla(${h},80%,${l}%,${alpha * fadePt})`;
+    ctx.fillRect(px[i]-radius, py[i]-radius, radius*2, radius*2);
+  }
 
-    ctx.fillStyle = `hsla(${h},80%,${l}%,${alpha * fade})`;
-    ctx.fillRect(px[i] - radius, py[i] - radius, radius * 2, radius * 2);
+  // Shockwave rings
+  for (let i = shockwaves.length - 1; i >= 0; i--) {
+    const sw = shockwaves[i];
+    sw.r    += 9;
+    sw.alpha *= 0.82;
+    if (sw.alpha < 0.02) { shockwaves.splice(i, 1); continue; }
+    const pal = sw.palette;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath();
+    ctx.arc(sw.x, sw.y, sw.r, 0, Math.PI * 2);
+    ctx.strokeStyle = pal.boneA.replace(/[\d.]+\)$/, `${sw.alpha})`);
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
 
   ctx.globalCompositeOperation = 'source-over';
+
+  // Audio level bars — bottom-left strip (bass | mids | highs)
+  if (audioEnabled) {
+    const barW = 3, gap = 3, maxH = 50;
+    const bx   = 12, by = H - 12;
+    const levels = [aBass, aMids, aHighs];
+    const cols   = ['rgba(139,92,246,0.85)', 'rgba(34,211,238,0.85)', 'rgba(244,114,182,0.85)'];
+    levels.forEach((lvl, j) => {
+      const h = Math.max(2, lvl * maxH);
+      ctx.fillStyle = cols[j];
+      ctx.fillRect(bx + j*(barW+gap), by - h, barW, h);
+    });
+  }
 
   if (showOverlay) drawPoseOverlay();
 }
 
+// ── Pose skeleton overlay ─────────────────────────────────────────────────────
 function drawPoseOverlay() {
-  if (!landmarks) return;
-  const W = canvas.width;
-  const H = canvas.height;
+  if (!allLandmarks.length) return;
+  const W = canvas.width, H = canvas.height;
 
-  // Helper: map a landmark to canvas coords using the same mirror+rotation as the physics
-  function lmPos(lm) {
-    return applyRotation((1 - lm.x) * W, lm.y * H, W, H);
-  }
+  function lmPos(lm) { return applyRotation((1-lm.x)*W, lm.y*H, W, H); }
 
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
 
-  // ── Connections (bones) ─────────────────────────────
-  ctx.lineWidth = 1.8;
-  ctx.lineCap   = 'round';
+  allLandmarks.forEach((personLms, pIdx) => {
+    const pal = PERSON_PALETTE[pIdx % PERSON_PALETTE.length];
 
-  for (const [a, b] of SKELETON_CONNECTIONS) {
-    const lmA = landmarks[a], lmB = landmarks[b];
-    if (!lmA || !lmB || lmA.visibility < 0.35 || lmB.visibility < 0.35) continue;
-    const [ax, ay] = lmPos(lmA);
-    const [bx, by] = lmPos(lmB);
+    // Bones (gradient per connection)
+    ctx.lineWidth = 1.8; ctx.lineCap = 'round';
+    for (const [a, b] of SKELETON_CONNECTIONS) {
+      const lmA = personLms[a], lmB = personLms[b];
+      if (!lmA || !lmB || lmA.visibility < 0.35 || lmB.visibility < 0.35) continue;
+      const [ax, ay] = lmPos(lmA);
+      const [bx, by] = lmPos(lmB);
+      const grad = ctx.createLinearGradient(ax, ay, bx, by);
+      grad.addColorStop(0, pal.boneA); grad.addColorStop(1, pal.boneB);
+      ctx.strokeStyle = grad;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    }
 
-    // Gradient along each bone: accent → cyan
-    const grad = ctx.createLinearGradient(ax, ay, bx, by);
-    grad.addColorStop(0, 'rgba(139,92,246,0.7)');
-    grad.addColorStop(1, 'rgba(34,211,238,0.7)');
-    ctx.strokeStyle = grad;
+    // Joints
+    for (const [k, weight] of Object.entries(LM_WEIGHT)) {
+      const idx = Number(k);
+      const lm  = personLms[idx];
+      if (!lm || lm.visibility < 0.35) continue;
+      const [x, y] = lmPos(lm);
+      const r = 2 + weight * 2;
 
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.stroke();
-  }
+      // Audio bass → pulse joint radius
+      const pulse = audioEnabled ? 1 + aBass * 1.8 : 1;
 
-  // ── Joints ──────────────────────────────────────────
-  for (const [idxStr, weight] of Object.entries(LM_WEIGHT)) {
-    const lm = landmarks[Number(idxStr)];
-    if (!lm || lm.visibility < 0.35) continue;
-    const [x, y] = lmPos(lm);
-    const r = 2 + weight * 2; // wrists slightly bigger
+      ctx.beginPath(); ctx.arc(x, y, (r+4)*pulse, 0, Math.PI*2);
+      ctx.fillStyle = pal.halo; ctx.fill();
 
-    // Glow halo
-    ctx.beginPath();
-    ctx.arc(x, y, r + 4, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(139,92,246,0.18)';
-    ctx.fill();
-
-    // Solid core
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = REPEL_JOINTS.has(Number(idxStr))
-      ? 'rgba(34,211,238,0.95)'   // cyan for repellers (wrists)
-      : 'rgba(139,92,246,0.95)';  // accent for attractors
-    ctx.fill();
-  }
+      ctx.beginPath(); ctx.arc(x, y, r * pulse, 0, Math.PI*2);
+      ctx.fillStyle = REPEL_JOINTS.has(idx) ? pal.repeller : pal.attractor;
+      ctx.fill();
+    }
+  });
 
   ctx.restore();
 }
 
 // ── Render loop ───────────────────────────────────────────────────────────────
-const fpsEl    = document.getElementById('fps');
-const pcountEl = document.getElementById('pcount');
-let frameCount = 0;
-let fpsTimer   = 0;
+const fpsEl      = document.getElementById('fps');
+const pcountEl   = document.getElementById('pcount');
+const poseCountEl = document.getElementById('pose-count');
+let frameCount = 0, fpsTimer = 0;
 
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
-
-  frameCount++;
-  fpsTimer += dt;
+  frameCount++; fpsTimer += dt;
   if (fpsTimer >= 0.5) {
-    fpsEl.textContent    = `${Math.round(frameCount / fpsTimer)} fps`;
-    pcountEl.textContent = `${N.toLocaleString()} pts`;
-    frameCount = 0;
-    fpsTimer   = 0;
+    fpsEl.textContent      = `${Math.round(frameCount/fpsTimer)} fps`;
+    pcountEl.textContent   = `${N.toLocaleString()} pts`;
+    poseCountEl.textContent = `${allLandmarks.length} pose${allLandmarks.length !== 1 ? 's' : ''}`;
+    frameCount = 0; fpsTimer = 0;
   }
-
   if (!paused) { update(dt); draw(); }
 }
 requestAnimationFrame(loop);
 
-// ── MediaPipe boot ────────────────────────────────────────────────────────────
+// ── MediaPipe boot — tasks-vision PoseLandmarker (multi-person) ───────────────
 const overlay   = document.getElementById('status-overlay');
 const statusMsg = document.getElementById('status-msg');
 const startBtn  = document.getElementById('start-btn');
 const videoEl   = document.getElementById('video');
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = src; s.onload = resolve; s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
 
 async function boot() {
   statusMsg.textContent  = 'loading pose model…';
   startBtn.style.display = 'none';
 
   try {
-    await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js');
-    await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js');
+    // ES-module import from CDN — no script tag needed
+    const { PoseLandmarker, FilesetResolver } = await import(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs'
+    );
 
     statusMsg.textContent = 'initialising model…';
 
-    const pose = new Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-    });
-    pose.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      minDetectionConfidence: 0.5,
+    const vision = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
+    );
+
+    const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+        delegate: 'GPU',
+      },
+      runningMode: 'VIDEO',
+      numPoses: 2,
+      minPoseDetectionConfidence: 0.5,
+      minPosePresenceConfidence: 0.5,
       minTrackingConfidence: 0.5,
     });
-    pose.onResults((results) => { landmarks = results.poseLandmarks ?? null; });
 
     statusMsg.textContent = 'requesting camera…';
 
-    const camera = new Camera(videoEl, {
-      onFrame: async () => { await pose.send({ image: videoEl }); },
-      width: 640, height: 480,
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
     });
-    await camera.start();
+    videoEl.srcObject = stream;
+    await new Promise(r => { videoEl.onloadedmetadata = r; });
+    videoEl.play();
 
     overlay.classList.add('hidden');
+
+    // Detection loop — runs independently from the render loop
+    let lastVideoTime = -1;
+    (function detectLoop() {
+      requestAnimationFrame(detectLoop);
+      if (videoEl.currentTime === lastVideoTime) return;
+      lastVideoTime = videoEl.currentTime;
+      const result = poseLandmarker.detectForVideo(videoEl, performance.now());
+      allLandmarks = result.landmarks ?? [];
+    })();
 
   } catch (err) {
     statusMsg.textContent  = `error: ${err.message}`;
@@ -527,31 +611,46 @@ async function boot() {
 
 startBtn.addEventListener('click', boot);
 
+// ── Audio boot ────────────────────────────────────────────────────────────────
+async function startAudio() {
+  try {
+    const stream   = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyserNode   = audioCtx.createAnalyser();
+    analyserNode.fftSize               = 2048;
+    analyserNode.smoothingTimeConstant = 0.75;
+    audioCtx.createMediaStreamSource(stream).connect(analyserNode);
+    freqBuf      = new Uint8Array(analyserNode.frequencyBinCount);
+    audioEnabled = true;
+    btnAudio.classList.remove('active');
+    btnAudio.classList.add('active-audio');
+    btnAudio.textContent = 'audio on';
+  } catch (err) {
+    alert(`Microphone error: ${err.message}`);
+  }
+}
+
 // ── UI controls ───────────────────────────────────────────────────────────────
 const btnTrails  = document.getElementById('btn-trails');
 const btnCamera  = document.getElementById('btn-camera');
 const btnOverlay = document.getElementById('btn-overlay');
-const btnPause   = document.getElementById('btn-pause');
+const btnAudio   = document.getElementById('btn-audio');
 const btnRotate  = document.getElementById('btn-rotate');
-const btnZen    = document.getElementById('btn-zen');
-const zenHandle = document.getElementById('zen-handle');
-const topbarEl  = document.getElementById('topbar');
-const hintsEl   = document.getElementById('hints');
+const btnPause   = document.getElementById('btn-pause');
+const btnZen     = document.getElementById('btn-zen');
+const zenHandle  = document.getElementById('zen-handle');
+const topbarEl   = document.getElementById('topbar');
+const hintsEl    = document.getElementById('hints');
 
 let zenMode = false;
-
 function setZen(on) {
   zenMode = on;
   topbarEl.classList.toggle('zen', on);
   zenHandle.classList.toggle('visible', on);
-  hintsEl.style.opacity = on ? '0' : '';
+  hintsEl.style.opacity      = on ? '0' : '';
   hintsEl.style.pointerEvents = on ? 'none' : '';
 }
 
-btnOverlay.addEventListener('click', () => {
-  showOverlay = !showOverlay;
-  btnOverlay.classList.toggle('active', showOverlay);
-});
 btnTrails.addEventListener('click', () => {
   trailMode = !trailMode;
   btnTrails.classList.toggle('active', trailMode);
@@ -560,10 +659,12 @@ btnCamera.addEventListener('click', () => {
   const hidden = videoEl.classList.toggle('hidden');
   btnCamera.classList.toggle('active', !hidden);
 });
-btnPause.addEventListener('click', () => {
-  paused = !paused;
-  btnPause.classList.toggle('active', paused);
-  btnPause.textContent = paused ? 'resume' : 'pause';
+btnOverlay.addEventListener('click', () => {
+  showOverlay = !showOverlay;
+  btnOverlay.classList.toggle('active', showOverlay);
+});
+btnAudio.addEventListener('click', () => {
+  if (!audioEnabled) startAudio();
 });
 btnRotate.addEventListener('click', () => {
   cameraRotation = (cameraRotation + 90) % 360;
@@ -571,28 +672,26 @@ btnRotate.addEventListener('click', () => {
   btnRotate.classList.toggle('active', cameraRotation !== 0);
   updateVideoTransform();
 });
-btnZen.addEventListener('click', () => setZen(true));
+btnPause.addEventListener('click', () => {
+  paused = !paused;
+  btnPause.classList.toggle('active', paused);
+  btnPause.textContent = paused ? 'resume' : 'pause';
+});
+btnZen.addEventListener('click',    () => setZen(true));
 zenHandle.addEventListener('click', () => setZen(false));
 
-document.addEventListener('keydown', (e) => {
-  // Only block shortcuts when typing in an actual text field
-  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+document.addEventListener('keydown', e => {
+  if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
   switch (e.code) {
-    case 'Space':
-      e.preventDefault(); btnPause.click(); break;
-    case 'KeyT':
-      btnTrails.click(); break;
-    case 'KeyC':
-      btnCamera.click(); break;
-    case 'KeyP':
-      btnOverlay.click(); break;
+    case 'Space':   e.preventDefault(); btnPause.click(); break;
+    case 'KeyT':    btnTrails.click();  break;
+    case 'KeyC':    btnCamera.click();  break;
+    case 'KeyP':    btnOverlay.click(); break;
+    case 'KeyM':    btnAudio.click();   break;
     case 'KeyO':
-      btnRotate.click(); break;
     case 'Digit0':
-    case 'Numpad0':
-      btnRotate.click(); break;
-    case 'KeyZ':
-      setZen(!zenMode); break;
+    case 'Numpad0': btnRotate.click();  break;
+    case 'KeyZ':    setZen(!zenMode);   break;
     case 'KeyR':
       for (let i = 0; i < N; i++) spawnParticle(i);
       simTime = 0;
