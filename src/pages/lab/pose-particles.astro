@@ -1,0 +1,432 @@
+---
+// Full-screen pose-driven particle field.
+// No framework deps — MediaPipe from CDN, vanilla JS particle engine.
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pose Particles | voidstar lab</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent:    #8b5cf6;
+      --cyan:      #22d3ee;
+      --void:      #05050d;
+      --surface:   rgba(10,10,26,0.82);
+      --border:    rgba(45,45,80,0.7);
+      --text:      #dde1f0;
+      --muted:     #7878a8;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--void); }
+
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+    #video {
+      position: fixed;
+      bottom: 1.25rem; right: 1.25rem;
+      width: 180px; aspect-ratio: 4/3;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      opacity: 0.75;
+      transform: scaleX(-1);
+      z-index: 10;
+      transition: opacity 0.2s;
+    }
+    #video.hidden { opacity: 0; pointer-events: none; }
+
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.6rem 1.25rem;
+      background: var(--surface);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 0.8rem;
+    }
+    #topbar-left  { display: flex; align-items: center; gap: 1rem; }
+    #topbar-right { display: flex; align-items: center; gap: 1rem; }
+
+    .back-link {
+      color: var(--muted); text-decoration: none;
+      display: flex; align-items: center; gap: 0.35rem;
+    }
+    .back-link:hover { color: var(--accent); }
+    .experiment-title { color: var(--text); font-weight: 500; }
+    .experiment-tag   { color: var(--accent); }
+    #fps    { color: var(--muted); min-width: 5ch; }
+    #pcount { color: var(--muted); min-width: 7ch; }
+
+    .ctrl-btn {
+      background: none;
+      border: 1px solid var(--border); border-radius: 5px;
+      color: var(--muted);
+      font-family: var(--font-mono); font-size: 0.75rem;
+      padding: 0.25rem 0.6rem; cursor: pointer;
+      transition: all 0.15s; white-space: nowrap;
+      text-decoration: none; display: inline-block;
+    }
+    .ctrl-btn:hover  { border-color: var(--accent); color: var(--accent); }
+    .ctrl-btn.active { border-color: var(--cyan);   color: var(--cyan);   }
+
+    #status-overlay {
+      position: fixed; inset: 0; z-index: 30;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 1.25rem;
+      background: rgba(5,5,13,0.93);
+      font-family: var(--font-mono);
+      transition: opacity 0.5s;
+    }
+    #status-overlay.hidden { opacity: 0; pointer-events: none; }
+
+    .status-title { font-size: 1.1rem; color: var(--text); letter-spacing: 0.08em; }
+    .status-msg   { font-size: 0.8rem; color: var(--muted); letter-spacing: 0.05em; }
+    .status-dot   {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 12px var(--accent);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity: 0.4; transform: scale(0.9); }
+      50%      { opacity: 1;   transform: scale(1.2); }
+    }
+    .start-btn {
+      margin-top: 0.5rem; padding: 0.65rem 1.5rem;
+      background: var(--accent); border: none; border-radius: 6px;
+      color: white; font-family: var(--font-mono); font-size: 0.875rem;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .start-btn:hover { background: #7c3aed; box-shadow: 0 0 20px rgba(139,92,246,0.5); }
+
+    #hints {
+      position: fixed; bottom: 1.25rem; left: 1.25rem; z-index: 10;
+      font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted);
+      display: flex; flex-direction: column; gap: 0.25rem; opacity: 0.6;
+    }
+    kbd {
+      display: inline-block; background: rgba(45,45,80,0.8);
+      border-radius: 3px; padding: 0 4px; color: var(--text);
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+<video id="video" autoplay playsinline muted></video>
+
+<div id="topbar">
+  <div id="topbar-left">
+    <a href="/lab" class="back-link">← lab</a>
+    <span class="experiment-title">pose particles</span>
+    <span class="experiment-tag">// mediapipe · canvas2d</span>
+  </div>
+  <div id="topbar-right">
+    <span id="fps">-- fps</span>
+    <span id="pcount">---- pts</span>
+    <button class="ctrl-btn" id="btn-trails">trails</button>
+    <button class="ctrl-btn active" id="btn-camera">camera</button>
+    <button class="ctrl-btn" id="btn-pause">pause</button>
+    <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
+  </div>
+</div>
+
+<div id="status-overlay">
+  <div class="status-dot"></div>
+  <div class="status-title">pose particles</div>
+  <div class="status-msg" id="status-msg">click start to enable camera</div>
+  <button class="start-btn" id="start-btn">enable camera →</button>
+</div>
+
+<div id="hints">
+  <span><kbd>Space</kbd> pause</span>
+  <span><kbd>T</kbd> trails</span>
+  <span><kbd>C</kbd> camera</span>
+  <span><kbd>R</kbd> reset</span>
+</div>
+
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+const N            = 9000;
+const DAMPING      = 0.972;
+const CURL_SCALE   = 0.0018;
+const CURL_SPEED   = 0.22;
+const CURL_STR     = 0.28;
+const ATTRACT_STR  = 420;
+const ATTRACT_RAD  = 0.38;
+const SPAWN_VEL    = 1.4;
+
+// Wrists repel — everything else attracts
+const REPEL_JOINTS = new Set([15, 16]);
+
+const LM_WEIGHT = {
+  0:  0.6,               // nose
+  11: 1.0, 12: 1.0,      // shoulders
+  13: 0.9, 14: 0.9,      // elbows
+  15: 1.5, 16: 1.5,      // wrists (strongest)
+  23: 0.8, 24: 0.8,      // hips
+  25: 0.7, 26: 0.7,      // knees
+  27: 0.6, 28: 0.6,      // ankles
+};
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── Particle state (typed arrays) ─────────────────────────────────────────────
+const px   = new Float32Array(N);
+const py   = new Float32Array(N);
+const vx   = new Float32Array(N);
+const vy   = new Float32Array(N);
+const age  = new Float32Array(N);
+const life = new Float32Array(N);
+const hue  = new Float32Array(N);
+
+function spawnParticle(i) {
+  px[i]  = Math.random() * canvas.width;
+  py[i]  = Math.random() * canvas.height;
+  const angle = Math.random() * Math.PI * 2;
+  const speed = (0.3 + Math.random() * 0.7) * SPAWN_VEL;
+  vx[i]  = Math.cos(angle) * speed;
+  vy[i]  = Math.sin(angle) * speed;
+  life[i] = 4 + Math.random() * 6;
+  age[i]  = Math.random() * life[i];
+  hue[i]  = (Math.random() - 0.5) * 60;
+}
+
+for (let i = 0; i < N; i++) spawnParticle(i);
+
+// ── Curl noise ────────────────────────────────────────────────────────────────
+function potential(x, y, t) {
+  const s = CURL_SCALE;
+  return (
+    Math.sin(x * s * 1.0 + t * 0.31) * Math.cos(y * s * 0.9 - t * 0.19) +
+    Math.sin(x * s * 0.6 - y * s * 1.3 + t * 0.11) * 0.6 +
+    Math.cos(x * s * 1.5 + y * s * 0.7 - t * 0.27) * 0.35
+  );
+}
+
+function curlForce(x, y, t) {
+  const e    = 2.5;
+  const dpdx = (potential(x + e, y, t) - potential(x - e, y, t)) / (2 * e);
+  const dpdy = (potential(x, y + e, t) - potential(x, y - e, t)) / (2 * e);
+  return [dpdy * CURL_STR, -dpdx * CURL_STR];
+}
+
+// ── Pose state ────────────────────────────────────────────────────────────────
+let landmarks = null;
+
+// ── Simulation ────────────────────────────────────────────────────────────────
+let simTime   = 0;
+let paused    = false;
+let trailMode = false;
+let lastTime  = performance.now();
+
+function update(dt) {
+  simTime += dt * CURL_SPEED;
+
+  const W    = canvas.width;
+  const H    = canvas.height;
+  const maxR = W * ATTRACT_RAD;
+  const maxR2 = maxR * maxR;
+
+  const lmEntries = landmarks
+    ? Object.entries(LM_WEIGHT).map(([k, w]) => [Number(k), w, landmarks[Number(k)]])
+    : [];
+
+  for (let i = 0; i < N; i++) {
+    age[i] += dt;
+    if (age[i] >= life[i]) { spawnParticle(i); continue; }
+
+    // Curl noise
+    const [cfx, cfy] = curlForce(px[i], py[i], simTime);
+    vx[i] += cfx;
+    vy[i] += cfy;
+
+    // Landmark forces
+    for (const [idx, weight, lm] of lmEntries) {
+      if (!lm || lm.visibility < 0.4) continue;
+      const lx  = (1 - lm.x) * W;   // mirror x to match flipped camera
+      const ly  = lm.y * H;
+      const dx  = lx - px[i];
+      const dy  = ly - py[i];
+      const d2  = dx * dx + dy * dy;
+      if (d2 > maxR2 || d2 < 1) continue;
+      const d    = Math.sqrt(d2);
+      const mag  = (ATTRACT_STR * weight) / (d2 + 200);
+      const sign = REPEL_JOINTS.has(idx) ? -1 : 1;
+      vx[i] += (dx / d) * mag * sign;
+      vy[i] += (dy / d) * mag * sign;
+    }
+
+    // Damping + integrate
+    vx[i] *= DAMPING;
+    vy[i] *= DAMPING;
+    px[i] += vx[i];
+    py[i] += vy[i];
+
+    // Wrap edges
+    if (px[i] <  0) px[i] += W;
+    if (px[i] >  W) px[i] -= W;
+    if (py[i] <  0) py[i] += H;
+    if (py[i] >  H) py[i] -= H;
+  }
+}
+
+function draw() {
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Fade / trail
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = `rgba(5,5,13,${trailMode ? 0.07 : 0.16})`;
+  ctx.fillRect(0, 0, W, H);
+
+  // Particles with additive blending (dense clusters glow)
+  ctx.globalCompositeOperation = 'lighter';
+
+  for (let i = 0; i < N; i++) {
+    const speed    = Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+    const t01      = Math.min(speed / 4.5, 1);
+    const h        = 270 + hue[i] + t01 * 70; // violet → pink → cyan
+    const l        = 45 + t01 * 30;
+    const alpha    = 0.5 + t01 * 0.4;
+    const radius   = 0.85 + t01 * 0.65;
+    const lifeFrac = age[i] / life[i];
+    const fade     = lifeFrac > 0.85 ? 1 - (lifeFrac - 0.85) / 0.15 : 1;
+
+    ctx.fillStyle = `hsla(${h},80%,${l}%,${alpha * fade})`;
+    ctx.fillRect(px[i] - radius, py[i] - radius, radius * 2, radius * 2);
+  }
+
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ── Render loop ───────────────────────────────────────────────────────────────
+const fpsEl    = document.getElementById('fps');
+const pcountEl = document.getElementById('pcount');
+let frameCount = 0;
+let fpsTimer   = 0;
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+
+  frameCount++;
+  fpsTimer += dt;
+  if (fpsTimer >= 0.5) {
+    fpsEl.textContent    = `${Math.round(frameCount / fpsTimer)} fps`;
+    pcountEl.textContent = `${N.toLocaleString()} pts`;
+    frameCount = 0;
+    fpsTimer   = 0;
+  }
+
+  if (!paused) { update(dt); draw(); }
+}
+requestAnimationFrame(loop);
+
+// ── MediaPipe boot ────────────────────────────────────────────────────────────
+const overlay   = document.getElementById('status-overlay');
+const statusMsg = document.getElementById('status-msg');
+const startBtn  = document.getElementById('start-btn');
+const videoEl   = document.getElementById('video');
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function boot() {
+  statusMsg.textContent  = 'loading pose model…';
+  startBtn.style.display = 'none';
+
+  try {
+    await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js');
+    await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js');
+
+    statusMsg.textContent = 'initialising model…';
+
+    const pose = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+    pose.onResults((results) => { landmarks = results.poseLandmarks ?? null; });
+
+    statusMsg.textContent = 'requesting camera…';
+
+    const camera = new Camera(videoEl, {
+      onFrame: async () => { await pose.send({ image: videoEl }); },
+      width: 640, height: 480,
+    });
+    await camera.start();
+
+    overlay.classList.add('hidden');
+
+  } catch (err) {
+    statusMsg.textContent  = `error: ${err.message}`;
+    startBtn.textContent   = 'retry';
+    startBtn.style.display = '';
+  }
+}
+
+startBtn.addEventListener('click', boot);
+
+// ── UI controls ───────────────────────────────────────────────────────────────
+const btnTrails = document.getElementById('btn-trails');
+const btnCamera = document.getElementById('btn-camera');
+const btnPause  = document.getElementById('btn-pause');
+
+btnTrails.addEventListener('click', () => {
+  trailMode = !trailMode;
+  btnTrails.classList.toggle('active', trailMode);
+});
+btnCamera.addEventListener('click', () => {
+  const hidden = videoEl.classList.toggle('hidden');
+  btnCamera.classList.toggle('active', !hidden);
+});
+btnPause.addEventListener('click', () => {
+  paused = !paused;
+  btnPause.classList.toggle('active', paused);
+  btnPause.textContent = paused ? 'resume' : 'pause';
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.target !== document.body) return;
+  switch (e.code) {
+    case 'Space':
+      e.preventDefault(); btnPause.click(); break;
+    case 'KeyT':
+      btnTrails.click(); break;
+    case 'KeyC':
+      btnCamera.click(); break;
+    case 'KeyR':
+      for (let i = 0; i < N; i++) spawnParticle(i);
+      simTime = 0;
+      ctx.fillStyle = '#05050d';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      break;
+  }
+});
+</script>
+</body>
+</html>
