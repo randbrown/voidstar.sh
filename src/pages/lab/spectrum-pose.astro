@@ -209,6 +209,12 @@
     <button class="ctrl-btn active" id="btn-mode" title="Visualizer mode (V)">mode: bars</button>
     <button class="ctrl-btn" id="btn-ascii" title="ASCII art post-process (X)">ascii</button>
     <button class="ctrl-btn" id="btn-auto" title="Auto-cycle visualizer modes (L)">auto</button>
+    <select id="auto-style" class="ctrl-btn" title="Auto-cycle style">
+      <option value="chapters">chapters</option>
+      <option value="alternate">alternate</option>
+      <option value="random">random</option>
+      <option value="hold">hold ascii</option>
+    </select>
     <button class="ctrl-btn active" id="btn-sparks" title="Beat sparks (F)">sparks</button>
     <button class="ctrl-btn active" id="btn-aura" title="Resonance aura (A)">aura</button>
     <button class="ctrl-btn" id="btn-trails" title="Trails (T)">trails</button>
@@ -365,7 +371,7 @@ function _writeSettings() {
       vizMode, autoCycle, sparksOn, auraOn, trailMode, showOverlay,
       camSizeIdx, cameraRotation,
       audioGain, audioEMA, beatThresh, beatCooldown, activePreset,
-      poseSmoothing, asciiMode,
+      poseSmoothing, asciiMode, autoStyle,
     }));
   } catch {}
 }
@@ -385,6 +391,14 @@ const AUTO_CYCLE_SECONDS = 18;
 let autoCycle = false;
 let autoCycleStartMs = 0;
 let lastAutoRemaining = -1;
+// How auto-cycle treats the ASCII post-process:
+//   'chapters'  — one full pass of viz modes normal, next pass ASCII, repeat
+//   'alternate' — flip ASCII every tick
+//   'random'    — roll the dice per tick
+//   'hold'      — don't touch ASCII (original behaviour)
+const AUTO_STYLES = ['chapters', 'alternate', 'random', 'hold'];
+let autoStyle = 'chapters';
+let autoStepCount = 0;
 
 // ── Camera rotation ───────────────────────────────────────────────────────────
 let cameraRotation = 0;
@@ -1416,6 +1430,12 @@ function cycleVizMode() {
 // Pre-computed list of modes eligible for auto-cycle (all except 'off').
 const CYCLING_MODES = VIZ_MODES.filter(m => m !== 'off');
 
+function setAsciiMode(on) {
+  if (asciiMode === on) return;
+  asciiMode = on;
+  btnAscii.classList.toggle('active', asciiMode);
+}
+
 // Auto-cycle tick — wall-clock based, so the countdown stays accurate even if
 // render fps drops. Updates the button text at most once per second.
 function tickAutoCycle() {
@@ -1428,8 +1448,32 @@ function tickAutoCycle() {
   }
   if (elapsed < AUTO_CYCLE_SECONDS) return;
   autoCycleStartMs = performance.now();
+  autoStepCount++;
+
+  const N = CYCLING_MODES.length;
   const i = CYCLING_MODES.indexOf(vizMode);
-  setVizMode(CYCLING_MODES[(i < 0 ? 0 : i + 1) % CYCLING_MODES.length]);
+  const nextMode = CYCLING_MODES[(i < 0 ? 0 : i + 1) % N];
+
+  // Post-process scheduling — decide ASCII state for the upcoming dwell.
+  switch (autoStyle) {
+    case 'chapters': {
+      // Two-pass chapter structure: pass 0 normal, pass 1 ASCII.
+      const pass = Math.floor(autoStepCount / N) % 2;
+      setAsciiMode(pass === 1);
+      break;
+    }
+    case 'alternate':
+      setAsciiMode(!asciiMode);
+      break;
+    case 'random':
+      setAsciiMode(Math.random() < 0.3);
+      break;
+    case 'hold':
+    default:
+      break;
+  }
+
+  setVizMode(nextMode);
 }
 
 btnMode.addEventListener('click', () => { cycleVizMode(); saveSettings(); });
@@ -1442,10 +1486,20 @@ btnAuto.addEventListener('click', () => {
   autoCycle = !autoCycle;
   autoCycleStartMs = performance.now();
   lastAutoRemaining = -1;
+  autoStepCount = 0;
   btnAuto.classList.toggle('active', autoCycle);
   btnAuto.textContent = autoCycle ? `auto ${AUTO_CYCLE_SECONDS}s` : 'auto';
   // If turning on while parked on 'off', step to the first real mode immediately
   if (autoCycle && vizMode === 'off') setVizMode(VIZ_MODES[0]);
+  // Snap ASCII to the start of the schedule so the first chapter is coherent.
+  if (autoCycle && autoStyle === 'chapters') setAsciiMode(false);
+  saveSettings();
+});
+const autoStyleSelect = document.getElementById('auto-style');
+autoStyleSelect.addEventListener('change', () => {
+  autoStyle = autoStyleSelect.value;
+  autoStepCount = 0;
+  if (autoCycle && autoStyle === 'chapters') setAsciiMode(false);
   saveSettings();
 });
 btnSparks.addEventListener('click', () => {
@@ -1541,10 +1595,15 @@ function applyStoredSettings() {
   }
 
   // Auto-cycle
+  if (typeof s.autoStyle === 'string' && AUTO_STYLES.includes(s.autoStyle)) {
+    autoStyle = s.autoStyle;
+    autoStyleSelect.value = autoStyle;
+  }
   if (s.autoCycle === true) {
     autoCycle = true;
     autoCycleStartMs = performance.now();
     lastAutoRemaining = -1;
+    autoStepCount = 0;
     btnAuto.classList.add('active');
     btnAuto.textContent = `auto ${AUTO_CYCLE_SECONDS}s`;
     if (vizMode === 'off') setVizMode(VIZ_MODES[0]);
