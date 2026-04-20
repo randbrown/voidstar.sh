@@ -273,6 +273,10 @@
     <label>response<span class="ap-val" id="ap-ema-val"></span></label>
     <input type="range" id="ap-ema" min="0.04" max="0.40" step="0.01" value="0.14">
   </div>
+  <div class="ap-row">
+    <label>pose smooth<span class="ap-val" id="ap-smooth-val"></span></label>
+    <input type="range" id="ap-smooth" min="0" max="1" step="0.01" value="0.5">
+  </div>
 </div>
 
 <script>
@@ -359,6 +363,7 @@ function _writeSettings() {
       vizMode, autoCycle, sparksOn, auraOn, trailMode, showOverlay,
       camSizeIdx, cameraRotation,
       audioGain, audioEMA, beatThresh, beatCooldown, activePreset,
+      poseSmoothing,
     }));
   } catch {}
 }
@@ -723,9 +728,10 @@ function drawNebula(W, H) {
 let allLandmarks = [];
 // Adaptive low-pass on landmark positions. Heavy smoothing at rest kills
 // per-frame detection jitter; light smoothing while moving keeps the
-// skeleton responsive. Speed is in normalised (0..1) coords.
-const SMOOTH_MIN   = 0.28;
-const SMOOTH_MAX   = 0.90;
+// skeleton responsive. The `poseSmoothing` knob (0..1) scales both limits:
+// 0 = raw passthrough; 0.5 ≈ the default (min 0.28, max 0.90); 1 = very slow.
+// Tuned so k=0.5 matches the hand-picked constants we shipped first.
+let poseSmoothing = 0.5;
 const SMOOTH_SLOPE = 22;
 function smoothLandmarks(fresh) {
   if (fresh.length !== allLandmarks.length) {
@@ -733,6 +739,9 @@ function smoothLandmarks(fresh) {
     allLandmarks = fresh.map(lms => lms.map(lm => ({ ...lm })));
     return;
   }
+  const k    = poseSmoothing;
+  const minA = Math.pow(1 - k, 1.8) * 0.97 + 0.03;
+  const maxA = Math.pow(1 - k, 0.3) * 0.75 + 0.25;
   for (let p = 0; p < fresh.length; p++) {
     const src = fresh[p], dst = allLandmarks[p];
     if (dst.length !== src.length) { allLandmarks[p] = src.map(lm => ({ ...lm })); continue; }
@@ -740,8 +749,8 @@ function smoothLandmarks(fresh) {
       const a = src[i], b = dst[i];
       const dx = a.x - b.x, dy = a.y - b.y;
       const speed = Math.sqrt(dx * dx + dy * dy);
-      let alpha = SMOOTH_MIN + speed * SMOOTH_SLOPE;
-      if (alpha > SMOOTH_MAX) alpha = SMOOTH_MAX;
+      let alpha = minA + speed * SMOOTH_SLOPE;
+      if (alpha > maxA) alpha = maxA;
       b.x += (a.x - b.x) * alpha;
       b.y += (a.y - b.y) * alpha;
       b.z = a.z;
@@ -1254,6 +1263,7 @@ function updateAudioPanelLabels() {
   document.getElementById('ap-cooldown-val').textContent = `${beatCooldown}ms`;
   const pct = Math.round((audioEMA - 0.04) / (0.40 - 0.04) * 100);
   document.getElementById('ap-ema-val').textContent = `${pct}%`;
+  document.getElementById('ap-smooth-val').textContent = `${Math.round(poseSmoothing * 100)}%`;
 }
 
 function _sliderChanged() {
@@ -1276,6 +1286,11 @@ document.getElementById('ap-cooldown').addEventListener('input', e => {
 document.getElementById('ap-ema').addEventListener('input', e => {
   audioEMA = parseFloat(e.target.value); updateAudioPanelLabels();
   _sliderChanged();
+});
+// Pose smoothing is independent of audio presets — just persist, don't clear the preset.
+document.getElementById('ap-smooth').addEventListener('input', e => {
+  poseSmoothing = parseFloat(e.target.value); updateAudioPanelLabels();
+  saveSettings();
 });
 document.querySelectorAll('.ap-preset').forEach(b =>
   b.addEventListener('click', () => applyPreset(b.dataset.preset)));
@@ -1499,6 +1514,13 @@ function applyStoredSettings() {
     document.getElementById('ap-ema').value      = audioEMA;
     updateAudioPanelLabels();
     document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+  }
+
+  // Pose smoothing — independent of audio preset, so apply regardless of branch.
+  if (Number.isFinite(s.poseSmoothing)) {
+    poseSmoothing = Math.max(0, Math.min(1, s.poseSmoothing));
+    document.getElementById('ap-smooth').value = poseSmoothing;
+    updateAudioPanelLabels();
   }
 }
 applyStoredSettings();
