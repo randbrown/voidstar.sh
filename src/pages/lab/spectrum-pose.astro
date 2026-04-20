@@ -721,6 +721,34 @@ function drawNebula(W, H) {
 
 // ── Pose state & render ──────────────────────────────────────────────────────
 let allLandmarks = [];
+// Adaptive low-pass on landmark positions. Heavy smoothing at rest kills
+// per-frame detection jitter; light smoothing while moving keeps the
+// skeleton responsive. Speed is in normalised (0..1) coords.
+const SMOOTH_MIN   = 0.28;
+const SMOOTH_MAX   = 0.90;
+const SMOOTH_SLOPE = 22;
+function smoothLandmarks(fresh) {
+  if (fresh.length !== allLandmarks.length) {
+    // Person count changed (or reset) — snap to new positions.
+    allLandmarks = fresh.map(lms => lms.map(lm => ({ ...lm })));
+    return;
+  }
+  for (let p = 0; p < fresh.length; p++) {
+    const src = fresh[p], dst = allLandmarks[p];
+    if (dst.length !== src.length) { allLandmarks[p] = src.map(lm => ({ ...lm })); continue; }
+    for (let i = 0; i < src.length; i++) {
+      const a = src[i], b = dst[i];
+      const dx = a.x - b.x, dy = a.y - b.y;
+      const speed = Math.sqrt(dx * dx + dy * dy);
+      let alpha = SMOOTH_MIN + speed * SMOOTH_SLOPE;
+      if (alpha > SMOOTH_MAX) alpha = SMOOTH_MAX;
+      b.x += (a.x - b.x) * alpha;
+      b.y += (a.y - b.y) * alpha;
+      b.z = a.z;
+      b.visibility = a.visibility;
+    }
+  }
+}
 let showOverlay  = true;
 let trailMode    = false;
 let sparksOn     = true;
@@ -1133,7 +1161,7 @@ async function boot() {
         if (videoEl.paused || videoEl.ended)  return;
         try {
           const result = poseLandmarker.detectForVideo(videoEl, performance.now());
-          allLandmarks = result.landmarks ?? [];
+          smoothLandmarks(result.landmarks ?? []);
         } catch { /* swallow timestamp regressions */ }
       })();
     }
