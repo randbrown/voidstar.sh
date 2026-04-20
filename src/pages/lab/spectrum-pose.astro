@@ -207,6 +207,7 @@
       <option value="6">6 poses</option>
     </select>
     <button class="ctrl-btn active" id="btn-mode" title="Visualizer mode (V)">mode: bars</button>
+    <button class="ctrl-btn" id="btn-ascii" title="ASCII art post-process (X)">ascii</button>
     <button class="ctrl-btn" id="btn-auto" title="Auto-cycle visualizer modes (L)">auto</button>
     <button class="ctrl-btn active" id="btn-sparks" title="Beat sparks (F)">sparks</button>
     <button class="ctrl-btn active" id="btn-aura" title="Resonance aura (A)">aura</button>
@@ -235,6 +236,7 @@
 
 <div id="hints">
   <span><kbd>V</kbd> viz mode</span>
+  <span><kbd>X</kbd> ascii</span>
   <span><kbd>L</kbd> auto-cycle</span>
   <span><kbd>F</kbd> sparks</span>
   <span><kbd>A</kbd> aura</span>
@@ -363,7 +365,7 @@ function _writeSettings() {
       vizMode, autoCycle, sparksOn, auraOn, trailMode, showOverlay,
       camSizeIdx, cameraRotation,
       audioGain, audioEMA, beatThresh, beatCooldown, activePreset,
-      poseSmoothing,
+      poseSmoothing, asciiMode,
     }));
   } catch {}
 }
@@ -413,6 +415,33 @@ function resize() {
     waterfallCanvas.width  = canvas.width;
     waterfallCanvas.height = canvas.height;
   }
+  updateAsciiGrid();
+}
+
+// ── ASCII post-process ───────────────────────────────────────────────────────
+// Toggle that re-renders whatever viz was drawn as ASCII art. The main canvas
+// is downsampled into a small offscreen buffer, luminance is mapped to a
+// density ramp, then rows are blitted back as monospace text in matrix green.
+// Cell size is in device pixels; ~14px cells give a nice chunky terminal feel.
+const ASCII_RAMP     = ' .,:-=+*#%@';
+const ASCII_CELL_PX  = 14;
+let asciiMode   = false;
+let asciiCols   = 0;
+let asciiRows   = 0;
+let asciiSrc    = null;
+let asciiSrcCtx = null;
+function updateAsciiGrid() {
+  const W = canvas.width, H = canvas.height;
+  // Monospace glyphs are roughly 0.6× as wide as they are tall — factor that
+  // in so each character covers one grid cell cleanly.
+  asciiCols = Math.max(20, Math.floor(W / (ASCII_CELL_PX * 0.6)));
+  asciiRows = Math.max(10, Math.floor(H / ASCII_CELL_PX));
+  if (!asciiSrc) {
+    asciiSrc = document.createElement('canvas');
+    asciiSrcCtx = asciiSrc.getContext('2d', { willReadFrequently: true });
+  }
+  asciiSrc.width  = asciiCols;
+  asciiSrc.height = asciiRows;
 }
 
 // Offscreen canvas for waterfall / spectrogram mode
@@ -724,6 +753,45 @@ function drawNebula(W, H) {
   ctx.globalCompositeOperation = 'source-over';
 }
 
+// Post-process: rewrite the main canvas as ASCII. Called after the viz has
+// been drawn but before sparks / skeleton, so overlays stay crisp on top.
+function renderAsciiPost(W, H) {
+  if (!asciiSrc || asciiSrc.width !== asciiCols || asciiSrc.height !== asciiRows) {
+    updateAsciiGrid();
+  }
+  // Downsample the current frame into the tiny source buffer.
+  asciiSrcCtx.globalCompositeOperation = 'copy';
+  asciiSrcCtx.drawImage(canvas, 0, 0, asciiCols, asciiRows);
+  const data = asciiSrcCtx.getImageData(0, 0, asciiCols, asciiRows).data;
+
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#05050d';
+  ctx.fillRect(0, 0, W, H);
+
+  const cellW    = W / asciiCols;
+  const cellH    = H / asciiRows;
+  const fontSize = Math.min(cellH * 1.02, cellW / 0.55);
+  ctx.font         = `${fontSize}px 'JetBrains Mono', ui-monospace, monospace`;
+  ctx.textBaseline = 'top';
+  ctx.fillStyle    = 'rgba(122,230,170,0.92)';
+
+  const N = ASCII_RAMP.length - 1;
+  // Boost highlights a touch so peaks punch through.
+  const gamma = 0.85;
+  for (let r = 0; r < asciiRows; r++) {
+    let row = '';
+    for (let c = 0; c < asciiCols; c++) {
+      const i   = (r * asciiCols + c) * 4;
+      const lum = (0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]) / 255;
+      const ramp = Math.pow(lum, gamma);
+      let idx = (ramp * (N + 1)) | 0;
+      if (idx > N) idx = N;
+      row += ASCII_RAMP[idx];
+    }
+    ctx.fillText(row, 0, r * cellH);
+  }
+}
+
 // ── Pose state & render ──────────────────────────────────────────────────────
 let allLandmarks = [];
 // Adaptive low-pass on landmark positions. Heavy smoothing at rest kills
@@ -980,6 +1048,10 @@ function draw() {
     case 'nebula':       drawNebula(W, H); break;
     case 'off':          break;
   }
+
+  // Post-process: replace the viz pixels with an ASCII-art rendering.
+  // Sparks / skeleton / HUD still draw normally on top.
+  if (asciiMode) renderAsciiPost(W, H);
 
   // Sparks above viz, below skeleton
   drawSparks();
@@ -1299,6 +1371,7 @@ updateAudioPanelLabels();
 
 // ── UI controls ──────────────────────────────────────────────────────────────
 const btnMode    = document.getElementById('btn-mode');
+const btnAscii   = document.getElementById('btn-ascii');
 const btnAuto    = document.getElementById('btn-auto');
 const btnSparks  = document.getElementById('btn-sparks');
 const btnAura    = document.getElementById('btn-aura');
@@ -1360,6 +1433,11 @@ function tickAutoCycle() {
 }
 
 btnMode.addEventListener('click', () => { cycleVizMode(); saveSettings(); });
+btnAscii.addEventListener('click', () => {
+  asciiMode = !asciiMode;
+  btnAscii.classList.toggle('active', asciiMode);
+  saveSettings();
+});
 btnAuto.addEventListener('click', () => {
   autoCycle = !autoCycle;
   autoCycleStartMs = performance.now();
@@ -1432,6 +1510,7 @@ document.addEventListener('keydown', e => {
   switch (e.code) {
     case 'Space':   e.preventDefault(); btnPause.click(); break;
     case 'KeyV':    btnMode.click();    break;
+    case 'KeyX':    btnAscii.click();   break;
     case 'KeyL':    btnAuto.click();    break;
     case 'KeyF':    btnSparks.click();  break;
     case 'KeyA':    btnAura.click();    break;
@@ -1487,6 +1566,10 @@ function applyStoredSettings() {
   if (typeof s.showOverlay === 'boolean' && s.showOverlay !== showOverlay) {
     showOverlay = s.showOverlay;
     btnOverlay.classList.toggle('active', showOverlay);
+  }
+  if (typeof s.asciiMode === 'boolean' && s.asciiMode !== asciiMode) {
+    asciiMode = s.asciiMode;
+    btnAscii.classList.toggle('active', asciiMode);
   }
 
   // Camera size & rotation
