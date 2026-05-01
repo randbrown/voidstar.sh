@@ -179,6 +179,20 @@
       width: 130px; accent-color: var(--accent);
       cursor: pointer;
     }
+
+    /* Mobile / narrow viewport — title row on top, controls flow below. */
+    @media (max-width: 768px) {
+      #topbar         { padding: 0.4rem 0.6rem; flex-direction: column;
+                        align-items: stretch; gap: 0.4rem; }
+      #topbar-left    { gap: 0.6rem; font-size: 0.72rem; white-space: nowrap;
+                        overflow: hidden; }
+      .experiment-tag { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+      #topbar-right   { gap: 0.35rem; justify-content: flex-start; }
+      #lvl, #cam-res, #pose-count, #mode-name { display: none; }
+      .ctrl-btn       { padding: 0.22rem 0.5rem; font-size: 0.7rem; }
+      select.ctrl-btn { padding-right: 1rem; }
+      #hints          { display: none; }
+    }
   </style>
 </head>
 <body>
