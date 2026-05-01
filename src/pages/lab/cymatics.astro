@@ -25,6 +25,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cymatics | voidstar lab</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <!-- Astro auto-scopes <style> blocks via a per-component data attribute,
+       which means rules only match elements rendered through Astro. The
+       <canvas id="hydra-canvas"> is appended at runtime by hydra-synth so it
+       lacks the scope attribute — its rules must live in a global block. -->
+  <style is:global>
+    #hydra-canvas {
+      position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+      z-index: 4; pointer-events: none;
+    }
+  </style>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -41,7 +51,16 @@
       --font-mono: 'JetBrains Mono', ui-monospace, monospace;
     }
     html, body { width: 100%; height: 100%; overflow: hidden; background: var(--void); }
-    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    /* Only OUR canvases get fullscreen-fixed treatment. A blanket `canvas {}`
+       rule would also catch Strudel widget canvases (.scope, ._punchcard,
+       _widget__*) that need to live inline inside their host divs. */
+    #canvas, #test-canvas {
+      position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+    }
+    /* Strudel's getDrawContext() looks for #test-canvas — used by .scope(),
+       .pianoroll(), and other draw outputs. Sits above the viz, below the
+       topbar (z:20) and strudel panel (z:18). */
+    #test-canvas  { z-index: 5; pointer-events: none; background: transparent; }
 
     #video {
       position: fixed; bottom: 1.25rem; right: 1.25rem;
@@ -220,7 +239,11 @@
       background: var(--surface); backdrop-filter: blur(8px);
       border-bottom: 1px solid var(--border);
       font-size: 0.75rem;
+      cursor: grab; user-select: none;
     }
+    #strudel-header.dragging { cursor: grabbing; }
+    /* Buttons inside the header should still feel clickable, not draggable. */
+    #strudel-header .ctrl-btn { cursor: pointer; }
     .sp-title { color: var(--text); }
     .sp-tag   { color: var(--accent); margin-left: 0.25rem; }
     .sp-status { color: var(--muted); margin-left: auto; font-size: 0.7rem; }
@@ -281,6 +304,7 @@
 <body>
 
 <canvas id="canvas"></canvas>
+<canvas id="test-canvas"></canvas>
 <video id="video" autoplay playsinline muted></video>
 
 <div id="topbar">
@@ -551,9 +575,17 @@ let mNow = 3.0, nNow = 5.0;
 // deferred until after both blocks have evaluated (avoids a TDZ error).
 const canvas = document.getElementById('canvas');
 const ctx    = canvas.getContext('2d');
+// Strudel scope/pianoroll surface — sized to match the viewport so drawings
+// land where the user expects. We do not draw to it; Strudel's getDrawContext()
+// owns it.
+const testCanvas = document.getElementById('test-canvas');
 function resize() {
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
+  if (testCanvas) {
+    testCanvas.width  = window.innerWidth;
+    testCanvas.height = window.innerHeight;
+  }
   updateAsciiGrid();
 }
 window.addEventListener('resize', resize);
@@ -639,6 +671,17 @@ let freqBuf      = null;
 let timeBuf      = null;
 let aBass = 0, aMids = 0, aHighs = 0;
 let aTotal = 0;
+// Hydra-compatible audio analyser global. The Hydra/`@strudel/hydra` idiom is
+// `a.fft[0..3]` for low/low-mid/high-mid/high. We expose the same shape backed
+// by our smoothed cymatics bands so user patterns like `osc().scale(()=>a.fft[0])`
+// work without needing Hydra's own mic detector. The array is reused across
+// frames so any captured reference stays live.
+const _aFft = [0, 0, 0, 0];
+const cymaticsAudio = {
+  fft: _aFft,
+  setBins() {}, setSmooth() {}, setCutoff() {}, show() {}, hide() {},
+};
+if (typeof globalThis !== 'undefined') globalThis.a = cymaticsAudio;
 let bassAvg    = 0;
 let lastBeatMs = 0;
 let beatActive = false;
@@ -669,6 +712,7 @@ function tickAudio(dt) {
   aMids  += audioEMA * (rawMids  - aMids);
   aHighs += audioEMA * (rawHighs - aHighs);
   aTotal += audioEMA * ((rawBass + rawMids + rawHighs) / 3 - aTotal);
+  _aFft[0] = aBass; _aFft[1] = aMids; _aFft[2] = aHighs; _aFft[3] = aTotal;
 
   bassAvg  = 0.97 * bassAvg  + 0.03 * rawBass;
   highsAvg = 0.95 * highsAvg + 0.05 * rawHighs;
@@ -1987,15 +2031,63 @@ function pollForStrudelAudio() {
 
 // Topbar wraps at narrow widths and can grow taller than the static `top`
 // offset, hiding the panel header behind it. Measure and position dynamically.
+let _strudelMoved = false;  // user has dragged the panel — stop auto-centering
 function repositionStrudelPanel() {
   if (!strudelPanel || strudelPanel.style.display === 'none') return;
   const tb = document.getElementById('topbar');
   if (!tb) return;
   const h = tb.getBoundingClientRect().height;
-  strudelPanel.style.top = (h + 8) + 'px';
   strudelPanel.style.maxHeight = `calc(100vh - ${h + 24}px)`;
+  if (!_strudelMoved) strudelPanel.style.top = (h + 8) + 'px';
 }
 window.addEventListener('resize', repositionStrudelPanel);
+
+// Drag-to-move via the header. We switch off the centering transform on first
+// drag and pin the panel by left/top pixel coords. Pointer events handle mouse
+// + touch uniformly. Buttons inside the header bail out (they get clicks).
+(() => {
+  const header = document.getElementById('strudel-header');
+  if (!header) return;
+  let dragging = false, dx = 0, dy = 0, pointerId = null;
+  const VP_PAD = 4;
+  header.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, input, select, textarea')) return;
+    if (e.button !== undefined && e.button !== 0) return;
+    const r = strudelPanel.getBoundingClientRect();
+    if (!_strudelMoved) {
+      strudelPanel.style.transform = 'none';
+      strudelPanel.style.left = r.left + 'px';
+      strudelPanel.style.top  = r.top  + 'px';
+      _strudelMoved = true;
+    }
+    dx = e.clientX - r.left;
+    dy = e.clientY - r.top;
+    pointerId = e.pointerId;
+    dragging = true;
+    header.classList.add('dragging');
+    try { header.setPointerCapture(pointerId); } catch {}
+    e.preventDefault();
+  });
+  header.addEventListener('pointermove', (e) => {
+    if (!dragging || e.pointerId !== pointerId) return;
+    const r = strudelPanel.getBoundingClientRect();
+    const maxX = window.innerWidth  - r.width  - VP_PAD;
+    const maxY = window.innerHeight - 32; // keep header reachable
+    const x = Math.min(Math.max(VP_PAD, e.clientX - dx), Math.max(VP_PAD, maxX));
+    const y = Math.min(Math.max(VP_PAD, e.clientY - dy), Math.max(VP_PAD, maxY));
+    strudelPanel.style.left = x + 'px';
+    strudelPanel.style.top  = y + 'px';
+  });
+  const end = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    header.classList.remove('dragging');
+    try { header.releasePointerCapture(pointerId); } catch {}
+    pointerId = null;
+  };
+  header.addEventListener('pointerup', end);
+  header.addEventListener('pointercancel', end);
+})();
 
 async function openStrudel() {
   // Mic and Strudel are mutually exclusive — they'd collide on analyserNode.
