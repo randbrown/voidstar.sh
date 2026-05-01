@@ -222,6 +222,7 @@
     <button class="ctrl-btn active" id="btn-camera">camera</button>
     <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
     <button class="ctrl-btn" id="btn-rotate" title="Rotate camera (O / 0)">rot 0°</button>
+    <button class="ctrl-btn active" id="btn-mirror" title="Mirror camera (I)">mirror</button>
     <button class="ctrl-btn" id="btn-pause">pause</button>
     <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
     <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
@@ -251,6 +252,7 @@
   <span><kbd>C</kbd> cam size</span>
   <span><kbd>M</kbd> audio</span>
   <span><kbd>O</kbd> / <kbd>0</kbd> rotate</span>
+  <span><kbd>I</kbd> mirror</span>
   <span><kbd>Space</kbd> pause</span>
   <span><kbd>Z</kbd> zen</span>
   <span><kbd>R</kbd> reset</span>
@@ -369,7 +371,7 @@ function _writeSettings() {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       vizMode, autoCycle, sparksOn, auraOn, trailMode, showOverlay,
-      camSizeIdx, cameraRotation,
+      camSizeIdx, cameraRotation, mirrorMode,
       audioGain, audioEMA, beatThresh, beatCooldown, activePreset,
       poseSmoothing, asciiMode, autoStyle,
     }));
@@ -400,8 +402,9 @@ const AUTO_STYLES = ['chapters', 'alternate', 'random', 'hold'];
 let autoStyle = 'chapters';
 let autoStepCount = 0;
 
-// ── Camera rotation ───────────────────────────────────────────────────────────
+// ── Camera rotation & mirror ─────────────────────────────────────────────────
 let cameraRotation = 0;
+let mirrorMode = true;
 function applyRotation(lx, ly, W, H) {
   const cx = W/2, cy = H/2, dx = lx-cx, dy = ly-cy;
   switch (cameraRotation) {
@@ -412,10 +415,10 @@ function applyRotation(lx, ly, W, H) {
   }
 }
 function lmToCanvas(lmx, lmy, W, H) {
-  return applyRotation((1 - lmx) * W, lmy * H, W, H);
+  return applyRotation((mirrorMode ? 1 - lmx : lmx) * W, lmy * H, W, H);
 }
 function updateVideoTransform() {
-  videoEl.style.transform = `scaleX(-1) rotate(${cameraRotation}deg)`;
+  videoEl.style.transform = `${mirrorMode ? 'scaleX(-1) ' : ''}rotate(${cameraRotation}deg)`;
 }
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
@@ -1394,6 +1397,7 @@ const btnOverlay = document.getElementById('btn-overlay');
 const btnCamera  = document.getElementById('btn-camera');
 const btnAudio   = document.getElementById('btn-audio');
 const btnRotate  = document.getElementById('btn-rotate');
+const btnMirror  = document.getElementById('btn-mirror');
 const btnPause   = document.getElementById('btn-pause');
 const btnZen     = document.getElementById('btn-zen');
 const zenHandle  = document.getElementById('zen-handle');
@@ -1551,6 +1555,12 @@ btnRotate.addEventListener('click', () => {
   updateVideoTransform();
   saveSettings();
 });
+btnMirror.addEventListener('click', () => {
+  mirrorMode = !mirrorMode;
+  btnMirror.classList.toggle('active', mirrorMode);
+  updateVideoTransform();
+  saveSettings();
+});
 btnPause.addEventListener('click', () => {
   paused = !paused;
   btnPause.classList.toggle('active', paused);
@@ -1575,6 +1585,7 @@ document.addEventListener('keydown', e => {
     case 'KeyO':
     case 'Digit0':
     case 'Numpad0': btnRotate.click();  break;
+    case 'KeyI':    btnMirror.click();  break;
     case 'KeyZ':    setZen(!zenMode);   break;
     case 'KeyR':
       for (let i = 0; i < MAX_SPARKS; i++) { sage[i] = slife[i] = 0; }
@@ -1637,6 +1648,11 @@ function applyStoredSettings() {
     cameraRotation = s.cameraRotation;
     btnRotate.textContent = `rot ${cameraRotation}°`;
     btnRotate.classList.toggle('active', cameraRotation !== 0);
+    updateVideoTransform();
+  }
+  if (typeof s.mirrorMode === 'boolean' && s.mirrorMode !== mirrorMode) {
+    mirrorMode = s.mirrorMode;
+    btnMirror.classList.toggle('active', mirrorMode);
     updateVideoTransform();
   }
 
