@@ -1302,7 +1302,17 @@ let audioStream = null;
 let audioCtxRef = null;
 
 async function startAudio() {
-  audioStream  = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  // Disable browser DSP so we get a raw signal (loud-room AGC pumping is the
+  // enemy here) and so Android doesn't grab the mic in VOICE_COMMUNICATION
+  // mode, which fights with simultaneous screen-recorder audio capture.
+  audioStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl:  false,
+    },
+    video: false,
+  });
   audioCtxRef  = new (window.AudioContext || window.webkitAudioContext)();
   analyserNode = audioCtxRef.createAnalyser();
   analyserNode.fftSize               = 2048;
