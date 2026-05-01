@@ -1,0 +1,1435 @@
+---
+// Audio-reactive Chladni-pattern visualizer.
+// Particles drift toward the nodal lines of an audio-modulated wave field
+// (square plate, circular plate, multi-source interference). Several alt
+// modes (lissajous, ripples, field heatmap) for variety on a live set.
+//
+// Mic capture mirrors spectrum-pose: AGC / NS / EC disabled to preserve a
+// raw signal AND to avoid Android grabbing the mic in VOICE_COMMUNICATION
+// mode, which would fight with a screen recorder's system-audio capture.
+//
+// Pose tracking is intentionally absent for now — the visualizer modes are
+// structured so multi-source positions could later come from hand/head
+// landmarks (see `getSources()` in `interference`).
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cymatics | voidstar lab</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent:    #8b5cf6;
+      --cyan:      #22d3ee;
+      --pink:      #f472b6;
+      --green:     #4ade80;
+      --amber:     #fbbf24;
+      --void:      #05050d;
+      --surface:   rgba(10,10,26,0.82);
+      --border:    rgba(45,45,80,0.7);
+      --text:      #dde1f0;
+      --muted:     #7878a8;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--void); }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.6rem 1.25rem;
+      background: var(--surface); backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 0.8rem;
+      transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
+    }
+    #topbar.zen { transform: translateY(-110%); opacity: 0; pointer-events: none; }
+    #topbar-left  { display: flex; align-items: center; gap: 1rem; }
+    #topbar-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+
+    .back-link { color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 0.35rem; }
+    .back-link:hover { color: var(--accent); }
+    .experiment-title { color: var(--text); font-weight: 500; }
+    .experiment-tag   { color: var(--accent); }
+    #fps        { color: var(--muted); min-width: 5ch; }
+    #mode-name  { color: var(--cyan);  min-width: 8ch; }
+    #lvl        { color: var(--muted); min-width: 11ch; font-size: 0.72rem; }
+    #mn         { color: var(--muted); min-width: 9ch; font-size: 0.72rem; }
+
+    .ctrl-btn {
+      background: none; border: 1px solid var(--border); border-radius: 5px;
+      color: var(--muted); font-family: var(--font-mono); font-size: 0.75rem;
+      padding: 0.25rem 0.6rem; cursor: pointer;
+      transition: all 0.15s; white-space: nowrap;
+      text-decoration: none; display: inline-block;
+    }
+    .ctrl-btn:hover  { border-color: var(--accent); color: var(--accent); }
+    .ctrl-btn.active { border-color: var(--cyan);   color: var(--cyan);   }
+    .ctrl-btn.active-audio { border-color: var(--pink); color: var(--pink); }
+    select.ctrl-btn {
+      max-width: 160px; appearance: none;
+      padding-right: 1.2rem;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 10px) 50%, calc(100% - 5px) 50%;
+      background-size: 5px 5px; background-repeat: no-repeat;
+    }
+    select.ctrl-btn option { background: var(--surface); color: var(--text); }
+
+    /* Zen handle */
+    #zen-handle {
+      position: fixed; top: 0; right: 1rem; z-index: 25;
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; opacity: 0; pointer-events: none;
+      transition: opacity 0.5s ease;
+    }
+    #zen-handle.visible { opacity: 1; pointer-events: auto; }
+    .zen-icon {
+      font-size: 1.4rem; color: var(--accent); opacity: 0.8;
+      animation: zen-spin 14s linear infinite;
+      filter: drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 16px var(--accent));
+      transition: opacity 0.2s; user-select: none; line-height: 1;
+    }
+    #zen-handle:hover .zen-icon { opacity: 1; filter: drop-shadow(0 0 12px var(--accent)) drop-shadow(0 0 24px var(--cyan)); }
+    @keyframes zen-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+    /* Status overlay */
+    #status-overlay {
+      position: fixed; inset: 0; z-index: 30;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 1.25rem;
+      background: rgba(5,5,13,0.93); font-family: var(--font-mono);
+      transition: opacity 0.5s;
+    }
+    #status-overlay.hidden { opacity: 0; pointer-events: none; }
+    .status-title { font-size: 1.1rem; color: var(--text); letter-spacing: 0.08em; }
+    .status-msg   { font-size: 0.8rem; color: var(--muted); letter-spacing: 0.05em; }
+    .status-sub   { font-size: 0.72rem; color: var(--muted); opacity: 0.7; max-width: 32rem; text-align: center; line-height: 1.6; }
+    .status-dot   {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 12px var(--accent);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity:0.4; transform:scale(0.9); } 50% { opacity:1; transform:scale(1.2); } }
+    .start-btn {
+      margin-top: 0.5rem; padding: 0.65rem 1.5rem;
+      background: var(--accent); border: none; border-radius: 6px;
+      color: white; font-family: var(--font-mono); font-size: 0.875rem;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .start-btn:hover { background: #7c3aed; box-shadow: 0 0 20px rgba(139,92,246,0.5); }
+    .start-btn.alt {
+      background: transparent; border: 1px solid var(--border);
+      color: var(--muted); margin-top: 0;
+    }
+    .start-btn.alt:hover { border-color: var(--cyan); color: var(--cyan); box-shadow: none; }
+
+    #hints {
+      position: fixed; bottom: 1.25rem; left: 1.25rem; z-index: 10;
+      font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted);
+      display: flex; flex-direction: column; gap: 0.25rem; opacity: 0.6;
+      transition: opacity 0.3s;
+    }
+    kbd {
+      display: inline-block; background: rgba(45,45,80,0.8);
+      border-radius: 3px; padding: 0 4px; color: var(--text);
+    }
+
+    #audio-panel {
+      position: fixed; bottom: 1.25rem; left: 50%;
+      transform: translateX(-50%);
+      z-index: 15;
+      background: var(--surface); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.75rem 1rem; font-family: var(--font-mono);
+      font-size: 0.72rem; color: var(--text);
+      display: flex; flex-direction: column; gap: 0.5rem;
+      min-width: 280px; max-width: min(92vw, 460px);
+    }
+    .ap-presets { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+    .ap-label { color: var(--muted); margin-right: 0.2rem; }
+    .ap-preset {
+      background: none; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--muted);
+      font-family: var(--font-mono); font-size: 0.68rem;
+      padding: 0.15rem 0.5rem; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .ap-preset:hover  { border-color: var(--accent); color: var(--accent); }
+    .ap-preset.active { border-color: var(--pink);   color: var(--pink); }
+    .ap-row {
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: center; gap: 0.5rem;
+    }
+    .ap-row label {
+      display: flex; align-items: center; gap: 0.35rem;
+      color: var(--text); white-space: nowrap;
+    }
+    .ap-val { color: var(--cyan); min-width: 5ch; text-align: right; }
+    .ap-row input[type=range] {
+      width: 130px; accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .ap-section {
+      border-top: 1px dashed var(--border);
+      padding-top: 0.4rem; margin-top: 0.1rem;
+      display: flex; flex-direction: column; gap: 0.4rem;
+    }
+
+    /* Mobile / narrow viewport — stack title row, controls flow below. */
+    @media (max-width: 768px) {
+      #topbar         { padding: 0.4rem 0.6rem; flex-direction: column;
+                        align-items: stretch; gap: 0.4rem; }
+      #topbar-left    { gap: 0.6rem; font-size: 0.72rem; white-space: nowrap;
+                        overflow: hidden; }
+      .experiment-tag { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+      #topbar-right   { gap: 0.35rem; justify-content: flex-start; }
+      #lvl, #mn, #mode-name { display: none; }
+      .ctrl-btn       { padding: 0.22rem 0.5rem; font-size: 0.7rem; }
+      select.ctrl-btn { padding-right: 1rem; }
+      #hints          { display: none; }
+      #audio-panel    { padding: 0.6rem 0.75rem; gap: 0.4rem; }
+      .ap-row input[type=range] { width: 110px; }
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="topbar">
+  <div id="topbar-left">
+    <a href="/lab" class="back-link">← lab</a>
+    <span class="experiment-title">cymatics</span>
+    <span class="experiment-tag">// chladni · web-audio · canvas2d</span>
+  </div>
+  <div id="topbar-right">
+    <span id="fps">-- fps</span>
+    <span id="mode-name">chladni</span>
+    <span id="lvl">b-- m-- h--</span>
+    <span id="mn">m-- n--</span>
+    <select id="mic-select" class="ctrl-btn" title="Choose microphone" style="display:none;"></select>
+    <button class="ctrl-btn active" id="btn-mode" title="Visualizer mode (V)">mode: chladni</button>
+    <button class="ctrl-btn" id="btn-ascii" title="ASCII art post-process (X)">ascii</button>
+    <button class="ctrl-btn" id="btn-auto" title="Auto-cycle visualizer modes (L)">auto</button>
+    <select id="auto-style" class="ctrl-btn" title="Auto-cycle style">
+      <option value="chapters">chapters</option>
+      <option value="alternate">alternate</option>
+      <option value="random">random</option>
+      <option value="hold">hold ascii</option>
+    </select>
+    <button class="ctrl-btn active" id="btn-mirror" title="4-way symmetry (S)">symm</button>
+    <button class="ctrl-btn" id="btn-trails" title="Long trails (T)">trails</button>
+    <button class="ctrl-btn active" id="btn-ripples" title="Beat ripples (B)">ripples</button>
+    <button class="ctrl-btn active" id="btn-lock" title="Lock m,n to manual sliders (K)">lock m/n</button>
+    <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
+    <button class="ctrl-btn" id="btn-pause" title="Pause (Space)">pause</button>
+    <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
+    <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
+  </div>
+</div>
+
+<div id="zen-handle" title="Exit zen mode (Z)">
+  <span class="zen-icon">✦</span>
+</div>
+
+<div id="status-overlay">
+  <div class="status-dot"></div>
+  <div class="status-title">cymatics</div>
+  <div class="status-msg" id="status-msg">click start to enable microphone</div>
+  <div class="status-sub">audio-reactive chladni patterns. particles drift to nodal lines of a wave field driven by your mic. built for live ambient / drone / improvised sets.</div>
+  <button class="start-btn" id="start-btn">enable mic →</button>
+  <button class="start-btn alt" id="start-silent-btn">start without mic</button>
+</div>
+
+<div id="hints">
+  <span><kbd>V</kbd> viz mode</span>
+  <span><kbd>X</kbd> ascii</span>
+  <span><kbd>L</kbd> auto-cycle</span>
+  <span><kbd>S</kbd> symmetry</span>
+  <span><kbd>T</kbd> trails</span>
+  <span><kbd>B</kbd> ripples</span>
+  <span><kbd>K</kbd> lock m/n</span>
+  <span><kbd>M</kbd> audio</span>
+  <span><kbd>Space</kbd> pause</span>
+  <span><kbd>Z</kbd> zen</span>
+  <span><kbd>R</kbd> reset</span>
+</div>
+
+<div id="audio-panel" style="display:none">
+  <div class="ap-presets">
+    <span class="ap-label">preset</span>
+    <button class="ap-preset active" data-preset="default">default</button>
+    <button class="ap-preset" data-preset="ambient">ambient</button>
+    <button class="ap-preset" data-preset="acoustic">acoustic</button>
+    <button class="ap-preset" data-preset="edm">EDM</button>
+    <button class="ap-preset" data-preset="metal">metal</button>
+  </div>
+  <div class="ap-row">
+    <label>gain<span class="ap-val" id="ap-gain-val"></span></label>
+    <input type="range" id="ap-gain" min="0.25" max="4" step="0.05" value="1.0">
+  </div>
+  <div class="ap-row">
+    <label>beat thresh<span class="ap-val" id="ap-thresh-val"></span></label>
+    <input type="range" id="ap-thresh" min="1.1" max="2.5" step="0.05" value="1.40">
+  </div>
+  <div class="ap-row">
+    <label>beat gap<span class="ap-val" id="ap-cooldown-val"></span></label>
+    <input type="range" id="ap-cooldown" min="80" max="600" step="10" value="320">
+  </div>
+  <div class="ap-row">
+    <label>response<span class="ap-val" id="ap-ema-val"></span></label>
+    <input type="range" id="ap-ema" min="0.04" max="0.40" step="0.01" value="0.14">
+  </div>
+  <div class="ap-section">
+    <div class="ap-row">
+      <label>particles<span class="ap-val" id="ap-count-val"></span></label>
+      <input type="range" id="ap-count" min="500" max="6000" step="100" value="3000">
+    </div>
+    <div class="ap-row">
+      <label>pull<span class="ap-val" id="ap-pull-val"></span></label>
+      <input type="range" id="ap-pull" min="0" max="2" step="0.02" value="0.85">
+    </div>
+    <div class="ap-row">
+      <label>jitter<span class="ap-val" id="ap-jitter-val"></span></label>
+      <input type="range" id="ap-jitter" min="0" max="2" step="0.02" value="0.6">
+    </div>
+    <div class="ap-row">
+      <label>m<span class="ap-val" id="ap-m-val"></span></label>
+      <input type="range" id="ap-m" min="1" max="14" step="0.1" value="3.0">
+    </div>
+    <div class="ap-row">
+      <label>n<span class="ap-val" id="ap-n-val"></span></label>
+      <input type="range" id="ap-n" min="1" max="14" step="0.1" value="5.0">
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Persistent settings ──────────────────────────────────────────────────────
+// Same shape as spectrum-pose: every toggle / slider writes to localStorage,
+// debounced. Loaded after all UI wiring is in place so toggles fire correctly.
+const SETTINGS_KEY = 'voidstar.cymatics.settings';
+let _saveTimer = null;
+function saveSettings() {
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(_writeSettings, 200);
+}
+function _writeSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      vizMode, autoCycle, autoStyle, asciiMode,
+      symmetry, trails, ripplesOn, lockMN,
+      audioGain, audioEMA, beatThresh, beatCooldown, activePreset,
+      particleCount, pullStrength, jitterStrength, mManual, nManual,
+    }));
+  } catch {}
+}
+function loadSettings() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; }
+  catch { return {}; }
+}
+
+// ── Audio configuration & presets ────────────────────────────────────────────
+let audioGain    = 1.0;
+let audioEMA     = 0.14;
+let beatThresh   = 1.40;
+let beatCooldown = 320;
+
+let binBassLo = 0,  binBassHi = 8;
+let binMidsLo = 8,  binMidsHi = 80;
+let binHighsLo= 80, binHighsHi= 200;
+
+const AUDIO_PRESETS = {
+  default:  { gain: 1.0, ema: 0.14, thresh: 1.40, cooldown: 320 },
+  ambient:  { gain: 1.0, ema: 0.10, thresh: 1.28, cooldown: 420 },
+  acoustic: { gain: 1.0, ema: 0.09, thresh: 1.25, cooldown: 550 },
+  edm:      { gain: 1.0, ema: 0.15, thresh: 1.38, cooldown: 360 },
+  metal:    { gain: 1.0, ema: 0.30, thresh: 1.80, cooldown: 110 },
+};
+let activePreset = 'default';
+
+// ── Visualizer modes ─────────────────────────────────────────────────────────
+const VIZ_MODES = ['chladni', 'radial', 'interference', 'lissajous', 'ripples', 'field', 'off'];
+let vizMode = 'chladni';
+
+// Modes that drive the particle simulation; others render directly.
+const PARTICLE_MODES = new Set(['chladni', 'radial', 'interference']);
+
+// Auto-cycle (mirrors spectrum-pose)
+const AUTO_CYCLE_SECONDS = 22;
+let autoCycle = false;
+let autoCycleStartMs = 0;
+let lastAutoRemaining = -1;
+const AUTO_STYLES = ['chapters', 'alternate', 'random', 'hold'];
+let autoStyle = 'chapters';
+let autoStepCount = 0;
+const CYCLING_MODES = VIZ_MODES.filter(m => m !== 'off');
+
+// ── Toggles ──────────────────────────────────────────────────────────────────
+let symmetry  = true;     // mirror particles into 4 quadrants for kaleidoscope feel
+let trails    = false;
+let ripplesOn = true;     // beat-driven concentric ripples drawn over particles
+let asciiMode = false;
+let paused    = false;
+let lockMN    = true;     // lock m,n to manual sliders (audio still drives jitter & color)
+
+// ── Cymatics parameters (tweakables, persisted) ──────────────────────────────
+let particleCount   = 3000;
+let pullStrength    = 0.85;   // gradient-descent factor toward nodal lines
+let jitterStrength  = 0.6;    // amplitude-driven random walk
+let mManual         = 3.0;
+let nManual         = 5.0;
+
+// Live (audio-modulated) m,n values used by the field functions
+let mNow = 3.0, nNow = 5.0;
+
+// ── Canvas ───────────────────────────────────────────────────────────────────
+// `resize()` calls `updateAsciiGrid()` which reads `ASCII_CELL_PX` — that
+// const lives in the ASCII section below, so the initial `resize()` call is
+// deferred until after both blocks have evaluated (avoids a TDZ error).
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  updateAsciiGrid();
+}
+window.addEventListener('resize', resize);
+
+// ── ASCII post-process (same approach as spectrum-pose) ──────────────────────
+const ASCII_RAMP    = ' .,:-=+*#%@';
+const ASCII_CELL_PX = 14;
+let asciiCols   = 0;
+let asciiRows   = 0;
+let asciiSrc    = null;
+let asciiSrcCtx = null;
+function updateAsciiGrid() {
+  const W = canvas.width, H = canvas.height;
+  asciiCols = Math.max(20, Math.floor(W / (ASCII_CELL_PX * 0.6)));
+  asciiRows = Math.max(10, Math.floor(H / ASCII_CELL_PX));
+  if (!asciiSrc) {
+    asciiSrc = document.createElement('canvas');
+    asciiSrcCtx = asciiSrc.getContext('2d', { willReadFrequently: true });
+  }
+  asciiSrc.width  = asciiCols;
+  asciiSrc.height = asciiRows;
+}
+// Initial sizing (deferred from the canvas block — see comment there).
+resize();
+
+function renderAsciiPost(W, H) {
+  if (!asciiSrc || asciiSrc.width !== asciiCols || asciiSrc.height !== asciiRows) {
+    updateAsciiGrid();
+  }
+  asciiSrcCtx.globalCompositeOperation = 'copy';
+  asciiSrcCtx.drawImage(canvas, 0, 0, asciiCols, asciiRows);
+  const data = asciiSrcCtx.getImageData(0, 0, asciiCols, asciiRows).data;
+
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#05050d';
+  ctx.fillRect(0, 0, W, H);
+
+  const cellW    = W / asciiCols;
+  const cellH    = H / asciiRows;
+  const fontSize = Math.min(cellH * 1.02, cellW / 0.55);
+  ctx.font         = `${fontSize}px 'JetBrains Mono', ui-monospace, monospace`;
+  ctx.textBaseline = 'top';
+  ctx.fillStyle    = 'rgba(122,230,170,0.92)';
+
+  const N = ASCII_RAMP.length - 1;
+  const gamma = 0.85;
+  for (let r = 0; r < asciiRows; r++) {
+    let row = '';
+    for (let c = 0; c < asciiCols; c++) {
+      const i   = (r * asciiCols + c) * 4;
+      const lum = (0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]) / 255;
+      const ramp = Math.pow(lum, gamma);
+      let idx = (ramp * (N + 1)) | 0;
+      if (idx > N) idx = N;
+      row += ASCII_RAMP[idx];
+    }
+    ctx.fillText(row, 0, r * cellH);
+  }
+}
+
+// ── Particle system ──────────────────────────────────────────────────────────
+// Positions are in normalized [0,1] field coordinates so the same buffers work
+// across modes regardless of canvas size or aspect ratio.
+const MAX_PARTICLES = 6000;
+const px  = new Float32Array(MAX_PARTICLES);
+const py  = new Float32Array(MAX_PARTICLES);
+const pvx = new Float32Array(MAX_PARTICLES);
+const pvy = new Float32Array(MAX_PARTICLES);
+
+function initParticles() {
+  for (let i = 0; i < MAX_PARTICLES; i++) {
+    px[i]  = Math.random();
+    py[i]  = Math.random();
+    pvx[i] = 0; pvy[i] = 0;
+  }
+}
+initParticles();
+
+// ── Audio state ──────────────────────────────────────────────────────────────
+let audioEnabled = false;
+let analyserNode = null;
+let freqBuf      = null;
+let timeBuf      = null;
+let aBass = 0, aMids = 0, aHighs = 0;
+let aTotal = 0;
+let bassAvg    = 0;
+let lastBeatMs = 0;
+let beatActive = false;
+let beatPulse  = 0;
+let highsAvg       = 0;
+let lastHighsHitMs = 0;
+let highsHitActive = false;
+let highsPulse     = 0;
+
+function avgBins(buf, lo, hi) {
+  let s = 0;
+  for (let i = lo; i < hi; i++) s += buf[i];
+  return s / Math.max(1, hi - lo);
+}
+
+function tickAudio(dt) {
+  const decay = Math.pow(0.001, dt);
+  beatPulse  *= decay;
+  highsPulse *= decay;
+  if (!audioEnabled || !analyserNode) { beatActive = false; highsHitActive = false; return; }
+  analyserNode.getByteFrequencyData(freqBuf);
+  analyserNode.getByteTimeDomainData(timeBuf);
+  const g = audioGain;
+  const rawBass  = Math.min(avgBins(freqBuf, binBassLo,  binBassHi)  / 255 * g, 1);
+  const rawMids  = Math.min(avgBins(freqBuf, binMidsLo,  binMidsHi)  / 255 * g, 1);
+  const rawHighs = Math.min(avgBins(freqBuf, binHighsLo, binHighsHi) / 255 * g, 1);
+  aBass  += audioEMA * (rawBass  - aBass);
+  aMids  += audioEMA * (rawMids  - aMids);
+  aHighs += audioEMA * (rawHighs - aHighs);
+  aTotal += audioEMA * ((rawBass + rawMids + rawHighs) / 3 - aTotal);
+
+  bassAvg  = 0.97 * bassAvg  + 0.03 * rawBass;
+  highsAvg = 0.95 * highsAvg + 0.05 * rawHighs;
+  const now = performance.now();
+  beatActive = rawBass > bassAvg * beatThresh && now - lastBeatMs > beatCooldown;
+  if (beatActive) { lastBeatMs = now; beatPulse = 1; }
+
+  const hiThresh   = beatThresh   * 0.88;
+  const hiCooldown = beatCooldown * 0.45;
+  highsHitActive = rawHighs > highsAvg * hiThresh
+                && rawHighs > 0.05
+                && now - lastHighsHitMs > hiCooldown;
+  if (highsHitActive) { lastHighsHitMs = now; highsPulse = 1; }
+}
+
+// ── m,n morphing ─────────────────────────────────────────────────────────────
+// Without lock: bass widens m, mids widens n. With lock: held to manual sliders
+// (audio still drives jitter and color, just not the geometry).
+function tickMorph(dt) {
+  let mTarget, nTarget;
+  if (lockMN || !audioEnabled) {
+    mTarget = mManual;
+    nTarget = nManual;
+  } else {
+    mTarget = mManual + aBass * 6 + beatPulse * 1.5;
+    nTarget = nManual + aMids * 6;
+  }
+  // Soft chase — slow enough that beats nudge rather than snap.
+  const k = Math.min(1, dt * 1.6);
+  mNow += (mTarget - mNow) * k;
+  nNow += (nTarget - nNow) * k;
+}
+
+// ── Wave field functions ─────────────────────────────────────────────────────
+// Each returns { psi, gx, gy } where gx,gy are exact partial derivatives.
+// Coordinates are in [0,1].
+
+const PI = Math.PI;
+
+function fieldChladni(x, y) {
+  const m = mNow, n = nNow;
+  const mPI = m * PI, nPI = n * PI;
+  const sxm = Math.sin(mPI * x), sym = Math.sin(mPI * y);
+  const sxn = Math.sin(nPI * x), syn = Math.sin(nPI * y);
+  const psi = sxm * syn + sxn * sym;
+  const gx  = mPI * Math.cos(mPI * x) * syn + nPI * Math.cos(nPI * x) * sym;
+  const gy  = nPI * sxm * Math.cos(nPI * y) + mPI * sxn * Math.cos(mPI * y);
+  return [psi, gx, gy];
+}
+
+// Approximate circular-plate Chladni: cos(mπr)·cos(nθ) where r ∈ [0,1].
+// Cheaper than Bessel and still gives the right family of nodal rings + spokes.
+function fieldRadial(x, y) {
+  const dx = x - 0.5, dy = y - 0.5;
+  const r2 = dx * dx + dy * dy;
+  const r  = Math.sqrt(r2);
+  if (r < 1e-4) return [0, 0, 0];
+  const theta = Math.atan2(dy, dx);
+  const m = mNow * 0.6, n = Math.max(1, Math.floor(nNow));
+  const a = m * PI * r * 2;       // scale so r=1 covers a few rings
+  const cosa = Math.cos(a), sina = Math.sin(a);
+  const cosnt = Math.cos(n * theta), sinnt = Math.sin(n * theta);
+  const psi = cosa * cosnt;
+  // ∂/∂r [cos(a)·cos(nθ)] = -2mπ sin(a)·cos(nθ); chain to x,y via r.
+  const dpsi_dr = -2 * m * PI * sina * cosnt;
+  const dpsi_dtheta = -n * cosa * sinnt;
+  const gx = dpsi_dr * (dx / r) + dpsi_dtheta * (-dy / r2);
+  const gy = dpsi_dr * (dy / r) + dpsi_dtheta * ( dx / r2);
+  return [psi, gx, gy];
+}
+
+// Multi-source interference. Positions slowly orbit; frequencies driven by
+// audio bands so bass / mids / highs each have a distinct "voice".
+// (Pose-driven sources can later replace `getSources`.)
+function getSources(now) {
+  const t = now * 0.00012;
+  const f1 = 4 + (audioEnabled ? aBass  * 18 : 4 * Math.sin(t * 0.7));
+  const f2 = 4 + (audioEnabled ? aMids  * 18 : 4 * Math.sin(t * 1.1));
+  const f3 = 4 + (audioEnabled ? aHighs * 18 : 4 * Math.sin(t * 1.5));
+  const r = 0.32;
+  return [
+    { x: 0.5 + r * Math.cos(t),         y: 0.5 + r * Math.sin(t),         f: f1 },
+    { x: 0.5 + r * Math.cos(t + 2.094), y: 0.5 + r * Math.sin(t + 2.094), f: f2 },
+    { x: 0.5 + r * Math.cos(t + 4.188), y: 0.5 + r * Math.sin(t + 4.188), f: f3 },
+  ];
+}
+let _sourcesCache = null;
+function refreshSources(now) { _sourcesCache = getSources(now); }
+
+function fieldInterference(x, y) {
+  const sources = _sourcesCache;
+  if (!sources) return [0, 0, 0];
+  let psi = 0, gx = 0, gy = 0;
+  for (let i = 0; i < sources.length; i++) {
+    const s = sources[i];
+    const ddx = x - s.x, ddy = y - s.y;
+    const d   = Math.sqrt(ddx * ddx + ddy * ddy) + 1e-4;
+    const k   = s.f * 2 * PI;
+    const c   = Math.cos(k * d);
+    const sn  = Math.sin(k * d);
+    psi += c;
+    // ∂/∂x cos(k d) = -k sin(k d) · ∂d/∂x = -k sin(k d) · (ddx/d)
+    gx  += -k * sn * (ddx / d);
+    gy  += -k * sn * (ddy / d);
+  }
+  return [psi, gx, gy];
+}
+
+function evalField(x, y) {
+  switch (vizMode) {
+    case 'chladni':      return fieldChladni(x, y);
+    case 'radial':       return fieldRadial(x, y);
+    case 'interference': return fieldInterference(x, y);
+    default:             return fieldChladni(x, y);
+  }
+}
+
+// ── Particle update ──────────────────────────────────────────────────────────
+function updateParticles(dt) {
+  // Frame-normalized step factor — keeps motion stable when fps drops.
+  const frac = Math.min(dt * 60, 1.5);
+  const damping = Math.pow(0.86, frac);
+  const pull    = pullStrength * 0.0009 * frac;
+  const jitterAmt = (jitterStrength * 0.0024
+                    + (audioEnabled ? aTotal * 0.004 + beatPulse * 0.012 : 0)) * frac;
+  const audioBoost = audioEnabled ? (1 + aTotal * 1.4 + beatPulse * 0.8) : 1;
+
+  for (let i = 0; i < particleCount; i++) {
+    const x = px[i], y = py[i];
+    const [psi, gx, gy] = evalField(x, y);
+
+    // Gradient descent on ψ² ⇒ step ∝ -ψ ∇ψ. Pulls particles to nodal lines.
+    pvx[i] -= pull * psi * gx * audioBoost;
+    pvy[i] -= pull * psi * gy * audioBoost;
+
+    // Energy-driven random walk: more shake where ψ is large (antinodes).
+    const j = jitterAmt * (0.4 + Math.abs(psi));
+    pvx[i] += (Math.random() - 0.5) * j;
+    pvy[i] += (Math.random() - 0.5) * j;
+
+    pvx[i] *= damping;
+    pvy[i] *= damping;
+
+    let nx = x + pvx[i];
+    let ny = y + pvy[i];
+    // Reflect at boundaries with a touch of energy loss.
+    if (nx < 0) { nx = -nx; pvx[i] = -pvx[i] * 0.5; }
+    else if (nx > 1) { nx = 2 - nx; pvx[i] = -pvx[i] * 0.5; }
+    if (ny < 0) { ny = -ny; pvy[i] = -pvy[i] * 0.5; }
+    else if (ny > 1) { ny = 2 - ny; pvy[i] = -pvy[i] * 0.5; }
+
+    px[i] = nx;
+    py[i] = ny;
+  }
+}
+
+// ── Particle render ──────────────────────────────────────────────────────────
+// Symmetry mirrors each particle into the 4 quadrants for a kaleidoscopic feel.
+function drawParticles(W, H) {
+  ctx.globalCompositeOperation = 'lighter';
+  // Hue base shifts slowly with audio for live evolution.
+  const hueBase = 250 + (audioEnabled ? aMids * 60 + beatPulse * 30 : 0);
+  const hueSpread = 90;
+  const baseAlpha = 0.45 + (audioEnabled ? aTotal * 0.35 : 0);
+  const r = 0.9 + (audioEnabled ? beatPulse * 0.8 : 0);
+
+  for (let i = 0; i < particleCount; i++) {
+    const speed = Math.min(0.06, Math.hypot(pvx[i], pvy[i]));
+    const t = speed / 0.06;
+    const hue = hueBase + t * hueSpread + (i & 31) * 1.5;
+    const a   = baseAlpha * (0.45 + t * 0.7);
+    ctx.fillStyle = `hsla(${hue},85%,${55 + t * 25}%,${a})`;
+
+    if (symmetry) {
+      const x = px[i], y = py[i];
+      const cx = W * 0.5, cy = H * 0.5;
+      const ox = (x - 0.5) * W * 0.5;
+      const oy = (y - 0.5) * H * 0.5;
+      ctx.fillRect(cx + ox - r, cy + oy - r, r * 2, r * 2);
+      ctx.fillRect(cx - ox - r, cy + oy - r, r * 2, r * 2);
+      ctx.fillRect(cx + ox - r, cy - oy - r, r * 2, r * 2);
+      ctx.fillRect(cx - ox - r, cy - oy - r, r * 2, r * 2);
+    } else {
+      ctx.fillRect(px[i] * W - r, py[i] * H - r, r * 2, r * 2);
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ── Field heatmap ────────────────────────────────────────────────────────────
+// Low-res grid → upscaled draw. ~96×54 keeps it cheap; aspect-aware so it
+// matches the viewport.
+let fieldBuf    = null;
+let fieldBufCtx = null;
+let fieldBufW   = 0;
+let fieldBufH   = 0;
+function ensureFieldBuf(W, H) {
+  const targetW = 128;
+  const targetH = Math.max(36, Math.round(targetW * (H / W)));
+  if (!fieldBuf) {
+    fieldBuf = document.createElement('canvas');
+    fieldBufCtx = fieldBuf.getContext('2d');
+  }
+  if (fieldBuf.width !== targetW || fieldBuf.height !== targetH) {
+    fieldBuf.width = targetW;
+    fieldBuf.height = targetH;
+    fieldBufW = targetW; fieldBufH = targetH;
+  }
+}
+
+function drawField(W, H) {
+  ensureFieldBuf(W, H);
+  const img = fieldBufCtx.createImageData(fieldBufW, fieldBufH);
+  const data = img.data;
+  // Audio-driven hue base & saturation
+  const hueBase = audioEnabled ? 250 + aMids * 80 : 250;
+  const energy  = audioEnabled ? aTotal : 0.4;
+  for (let j = 0; j < fieldBufH; j++) {
+    const y = (j + 0.5) / fieldBufH;
+    for (let i = 0; i < fieldBufW; i++) {
+      const x = (i + 0.5) / fieldBufW;
+      const [psi] = evalField(x, y);
+      // ψ is in roughly [-2,2] for square; clamp & map to color.
+      const v = Math.max(-1, Math.min(1, psi * 0.5));
+      const sign = v < 0 ? 1 : 0; // negative → cyan side, positive → pink side
+      const mag  = Math.abs(v);
+      const hue  = (hueBase + (sign ? 60 : -50) + mag * 30) % 360;
+      const lum  = 4 + mag * (35 + energy * 25);
+      const [rr, gg, bb] = hslToRgb(hue / 360, 0.85, lum / 100);
+      const idx = (j * fieldBufW + i) * 4;
+      data[idx]     = rr;
+      data[idx + 1] = gg;
+      data[idx + 2] = bb;
+      data[idx + 3] = 255;
+    }
+  }
+  fieldBufCtx.putImageData(img, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.imageSmoothingEnabled = true;
+  ctx.globalAlpha = 0.85;
+  ctx.drawImage(fieldBuf, 0, 0, W, H);
+  ctx.globalAlpha = 1;
+}
+
+function hslToRgb(h, s, l) {
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+// ── Lissajous (waveform) ─────────────────────────────────────────────────────
+// Use the time-domain buffer directly: x[t] vs x[t+delay]. Multiple stacked
+// traces with hue offsets, additive blend, very cheap CPU.
+function drawLissajous(W, H) {
+  if (!audioEnabled || !timeBuf) {
+    // Pre-audio idle: draw a slowly-rotating Lissajous so the screen isn't dead.
+    const t = performance.now() * 0.0005;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = `hsla(270,80%,65%,0.6)`;
+    ctx.beginPath();
+    const N = 720;
+    const cx = W / 2, cy = H / 2;
+    const rx = Math.min(W, H) * 0.38;
+    const ry = Math.min(W, H) * 0.38;
+    for (let i = 0; i <= N; i++) {
+      const u = (i / N) * Math.PI * 2;
+      const x = cx + rx * Math.sin(3 * u + t);
+      const y = cy + ry * Math.sin(2 * u);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+    return;
+  }
+
+  const N    = timeBuf.length;
+  const cx   = W / 2, cy = H / 2;
+  const amp  = Math.min(W, H) * 0.42 * (0.5 + aTotal * 1.6 + beatPulse * 0.5);
+  const delay= Math.max(8, Math.floor(N / 8));
+
+  ctx.globalCompositeOperation = 'lighter';
+  const traces = [
+    { hue: 270, off: -0.012, width: 2.2, alpha: 0.55 },
+    { hue: 195, off:  0.000, width: 1.4, alpha: 0.80 },
+    { hue: 330, off:  0.012, width: 2.2, alpha: 0.55 },
+  ];
+  for (const tr of traces) {
+    ctx.strokeStyle = `hsla(${tr.hue + aHighs * 20},85%,65%,${tr.alpha})`;
+    ctx.lineWidth = tr.width;
+    ctx.beginPath();
+    for (let i = 0; i < N; i += 2) {
+      const xv = (timeBuf[i] - 128) / 128;
+      const yv = (timeBuf[(i + delay) % N] - 128) / 128;
+      const x = cx + xv * amp + tr.off * W;
+      const y = cy + yv * amp;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+// ── Ripples (beat-driven concentric circles) ─────────────────────────────────
+const MAX_RIPPLES = 32;
+const rpx   = new Float32Array(MAX_RIPPLES);
+const rpy   = new Float32Array(MAX_RIPPLES);
+const rage  = new Float32Array(MAX_RIPPLES);
+const rlife = new Float32Array(MAX_RIPPLES);
+const rhue  = new Float32Array(MAX_RIPPLES);
+const rstr  = new Float32Array(MAX_RIPPLES);
+let rippleCursor = 0;
+
+function spawnRipple(x, y, hue, strength) {
+  const i = rippleCursor;
+  rippleCursor = (rippleCursor + 1) % MAX_RIPPLES;
+  rpx[i]  = x;
+  rpy[i]  = y;
+  rage[i] = 0;
+  rlife[i]= 1.6 + Math.random() * 1.0;
+  rhue[i] = hue;
+  rstr[i] = strength;
+}
+
+function tickRipples(dt) {
+  for (let i = 0; i < MAX_RIPPLES; i++) {
+    if (rage[i] >= rlife[i]) continue;
+    rage[i] += dt;
+  }
+}
+
+function drawRipples(W, H) {
+  if (!ripplesOn) return;
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < MAX_RIPPLES; i++) {
+    if (rage[i] >= rlife[i]) continue;
+    const t = rage[i] / rlife[i];
+    const x = rpx[i] * W;
+    const y = rpy[i] * H;
+    const maxR = Math.min(W, H) * (0.28 + 0.30 * rstr[i]);
+    const radius = maxR * t;
+    const alpha = (1 - t) * 0.55 * rstr[i];
+    ctx.strokeStyle = `hsla(${rhue[i]},85%,65%,${alpha})`;
+    ctx.lineWidth = 1 + (1 - t) * 3 * rstr[i];
+    ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.stroke();
+    // Inner echo
+    if (t < 0.6) {
+      const r2 = radius * 0.55;
+      ctx.strokeStyle = `hsla(${rhue[i]},85%,75%,${alpha * 0.5})`;
+      ctx.lineWidth = 1 + (0.6 - t) * 2;
+      ctx.beginPath(); ctx.arc(x, y, r2, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function fireRippleOnBeat() {
+  if (!ripplesOn || !audioEnabled) return;
+  if (beatActive) {
+    // Bass beat — strong, near center
+    const ang = Math.random() * Math.PI * 2;
+    const r   = Math.random() * 0.18;
+    const x   = 0.5 + r * Math.cos(ang);
+    const y   = 0.5 + r * Math.sin(ang);
+    spawnRipple(x, y, 270 + aBass * 40, 0.7 + aBass * 0.6);
+  }
+  if (highsHitActive) {
+    // Highs accent — small, anywhere
+    spawnRipple(Math.random(), Math.random(),
+                330 + aHighs * 40, 0.35 + aHighs * 0.4);
+  }
+}
+
+// ── Mode dispatch & main draw ────────────────────────────────────────────────
+function draw(now) {
+  const W = canvas.width, H = canvas.height;
+
+  // Background fade — trails mode keeps long history
+  const baseFade = trails ? 0.05 : 0.18;
+  const fade = audioEnabled ? baseFade * (0.85 + aBass * 0.5) : baseFade;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = `rgba(5,5,13,${fade})`;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle beat flash
+  if (beatPulse > 0.08) {
+    ctx.fillStyle = `rgba(139,92,246,${beatPulse * 0.05})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  if (vizMode === 'interference') refreshSources(now);
+
+  switch (vizMode) {
+    case 'chladni':
+    case 'radial':
+    case 'interference':
+      drawParticles(W, H);
+      break;
+    case 'lissajous':
+      drawLissajous(W, H);
+      break;
+    case 'ripples':
+      // Ripples-only mode: deeper background fade so ripples ring out alone.
+      ctx.fillStyle = `rgba(5,5,13,${0.06})`;
+      ctx.fillRect(0, 0, W, H);
+      break;
+    case 'field':
+      drawField(W, H);
+      break;
+    case 'off':
+      break;
+  }
+
+  if (asciiMode) renderAsciiPost(W, H);
+
+  // Ripples always on top of viz when enabled
+  drawRipples(W, H);
+
+  // Audio HUD bars (bottom-left, only when audio is live)
+  if (audioEnabled) {
+    const barW = 3, gap = 3, maxH = 50;
+    const bx = 12, by = H - 12;
+    const levels = [aBass, aMids, aHighs];
+    const cols   = ['rgba(139,92,246,0.85)', 'rgba(34,211,238,0.85)', 'rgba(244,114,182,0.85)'];
+    levels.forEach((lvl, j) => {
+      const h = Math.max(2, lvl * maxH);
+      ctx.fillStyle = cols[j];
+      ctx.fillRect(bx + j * (barW + gap), by - h, barW, h);
+    });
+  }
+}
+
+// ── Render loop ──────────────────────────────────────────────────────────────
+const fpsEl      = document.getElementById('fps');
+const modeNameEl = document.getElementById('mode-name');
+const lvlEl      = document.getElementById('lvl');
+const mnEl       = document.getElementById('mn');
+let frameCount = 0, fpsTimer = 0, lastTime = performance.now();
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  frameCount++; fpsTimer += dt;
+  if (fpsTimer >= 0.5) {
+    fpsEl.textContent = `${Math.round(frameCount / fpsTimer)} fps`;
+    if (audioEnabled) {
+      const fmt = v => Math.round(v * 99).toString().padStart(2, '0');
+      lvlEl.textContent = `b${fmt(aBass)} m${fmt(aMids)} h${fmt(aHighs)}`;
+    } else {
+      lvlEl.textContent = 'audio off';
+    }
+    mnEl.textContent = `m${mNow.toFixed(1)} n${nNow.toFixed(1)}`;
+    frameCount = 0; fpsTimer = 0;
+  }
+  if (!paused) {
+    tickAudio(dt);
+    tickAutoCycle();
+    tickMorph(dt);
+    fireRippleOnBeat();
+    tickRipples(dt);
+    if (PARTICLE_MODES.has(vizMode)) updateParticles(dt);
+    draw(now);
+  }
+}
+requestAnimationFrame(loop);
+
+// ── Audio boot ───────────────────────────────────────────────────────────────
+let audioStream = null;
+let audioCtxRef = null;
+const MIC_KEY = 'voidstar.cymatics.micId';
+let currentMicId = null;
+
+async function startAudio(deviceId) {
+  // Disable browser DSP so we get a raw signal (loud-room AGC pumping is the
+  // enemy here) AND so Android doesn't grab the mic in VOICE_COMMUNICATION
+  // mode, which fights with simultaneous screen-recorder audio capture.
+  const audioConstraints = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl:  false,
+  };
+  if (deviceId) audioConstraints.deviceId = { exact: deviceId };
+  audioStream = await navigator.mediaDevices.getUserMedia({
+    audio: audioConstraints,
+    video: false,
+  });
+  // Capture the actual device id the browser chose (e.g. when called with no
+  // constraint) so we can remember it across reloads.
+  const track = audioStream.getAudioTracks()[0];
+  const settings = track ? track.getSettings() : {};
+  if (settings.deviceId) {
+    currentMicId = settings.deviceId;
+    try { localStorage.setItem(MIC_KEY, currentMicId); } catch {}
+  }
+
+  audioCtxRef  = new (window.AudioContext || window.webkitAudioContext)();
+  analyserNode = audioCtxRef.createAnalyser();
+  analyserNode.fftSize               = 2048;
+  analyserNode.smoothingTimeConstant = 0.72;
+  // Note: source ➝ analyser only. NEVER connect to destination — that would
+  // route mic to speakers and cause feedback.
+  audioCtxRef.createMediaStreamSource(audioStream).connect(analyserNode);
+  freqBuf = new Uint8Array(analyserNode.frequencyBinCount);
+  timeBuf = new Uint8Array(analyserNode.fftSize);
+
+  const hz = audioCtxRef.sampleRate / analyserNode.fftSize;
+  const freq2bin = f => Math.max(0, Math.min(Math.round(f / hz), analyserNode.frequencyBinCount - 1));
+  binBassLo  = freq2bin(20);   binBassHi  = freq2bin(250);
+  binMidsLo  = freq2bin(250);  binMidsHi  = freq2bin(4000);
+  binHighsLo = freq2bin(4000); binHighsHi = freq2bin(12000);
+
+  audioEnabled = true;
+  btnAudio.classList.remove('active');
+  btnAudio.classList.add('active-audio');
+  btnAudio.textContent = 'audio on';
+  audioPanelEl.style.display = '';
+}
+
+// Mic enumeration. Labels only populate after a successful getUserMedia() —
+// that's why we never call this until at least one startAudio() has resolved.
+const micSelect = document.getElementById('mic-select');
+async function populateMicList() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const mics = devices.filter(d => d.kind === 'audioinput');
+    if (mics.length <= 1) { micSelect.style.display = 'none'; return; }
+    micSelect.innerHTML = '';
+    mics.forEach((mic, i) => {
+      const opt = document.createElement('option');
+      opt.value = mic.deviceId;
+      opt.textContent = mic.label || `Mic ${i + 1}`;
+      if (mic.deviceId === currentMicId) opt.selected = true;
+      micSelect.appendChild(opt);
+    });
+    micSelect.style.display = '';
+  } catch { micSelect.style.display = 'none'; }
+}
+
+micSelect.addEventListener('change', async () => {
+  const id = micSelect.value;
+  if (audioEnabled) stopAudio();
+  try { await startAudio(id); }
+  catch (err) { alert(`Could not open microphone: ${err.message}`); }
+  populateMicList();
+});
+
+// Refresh the list when devices are plugged in / out mid-session.
+if (navigator.mediaDevices?.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    if (audioEnabled || micSelect.options.length) populateMicList();
+  });
+}
+
+function stopAudio() {
+  audioEnabled = false;
+  beatActive   = false;
+  aBass = aMids = aHighs = aTotal = bassAvg = 0;
+  if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
+  if (audioCtxRef) { audioCtxRef.close(); audioCtxRef = null; }
+  analyserNode = null; freqBuf = null; timeBuf = null;
+  btnAudio.classList.remove('active-audio');
+  btnAudio.classList.add('active');
+  btnAudio.textContent = 'audio';
+  audioPanelEl.style.display = 'none';
+}
+
+// ── Audio panel wiring ───────────────────────────────────────────────────────
+const audioPanelEl = document.getElementById('audio-panel');
+
+function applyPreset(name) {
+  const p = AUDIO_PRESETS[name];
+  if (!p) return;
+  audioGain    = p.gain;
+  audioEMA     = p.ema;
+  beatThresh   = p.thresh;
+  beatCooldown = p.cooldown;
+  activePreset = name;
+  document.getElementById('ap-gain').value     = p.gain;
+  document.getElementById('ap-thresh').value   = p.thresh;
+  document.getElementById('ap-cooldown').value = p.cooldown;
+  document.getElementById('ap-ema').value      = p.ema;
+  updatePanelLabels();
+  document.querySelectorAll('.ap-preset').forEach(b =>
+    b.classList.toggle('active', b.dataset.preset === name));
+  saveSettings();
+}
+
+function updatePanelLabels() {
+  document.getElementById('ap-gain-val').textContent     = `${audioGain.toFixed(2)}×`;
+  document.getElementById('ap-thresh-val').textContent   = beatThresh.toFixed(2);
+  document.getElementById('ap-cooldown-val').textContent = `${beatCooldown}ms`;
+  const pct = Math.round((audioEMA - 0.04) / (0.40 - 0.04) * 100);
+  document.getElementById('ap-ema-val').textContent      = `${pct}%`;
+  document.getElementById('ap-count-val').textContent    = `${particleCount}`;
+  document.getElementById('ap-pull-val').textContent     = pullStrength.toFixed(2);
+  document.getElementById('ap-jitter-val').textContent   = jitterStrength.toFixed(2);
+  document.getElementById('ap-m-val').textContent        = mManual.toFixed(1);
+  document.getElementById('ap-n-val').textContent        = nManual.toFixed(1);
+}
+
+function _audioSliderChanged() {
+  activePreset = null;
+  document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+  saveSettings();
+}
+document.getElementById('ap-gain').addEventListener('input', e => {
+  audioGain = parseFloat(e.target.value); updatePanelLabels(); _audioSliderChanged();
+});
+document.getElementById('ap-thresh').addEventListener('input', e => {
+  beatThresh = parseFloat(e.target.value); updatePanelLabels(); _audioSliderChanged();
+});
+document.getElementById('ap-cooldown').addEventListener('input', e => {
+  beatCooldown = parseInt(e.target.value, 10); updatePanelLabels(); _audioSliderChanged();
+});
+document.getElementById('ap-ema').addEventListener('input', e => {
+  audioEMA = parseFloat(e.target.value); updatePanelLabels(); _audioSliderChanged();
+});
+// Cymatics-only sliders — do not clear the audio preset.
+document.getElementById('ap-count').addEventListener('input', e => {
+  particleCount = parseInt(e.target.value, 10);
+  updatePanelLabels(); saveSettings();
+});
+document.getElementById('ap-pull').addEventListener('input', e => {
+  pullStrength = parseFloat(e.target.value);
+  updatePanelLabels(); saveSettings();
+});
+document.getElementById('ap-jitter').addEventListener('input', e => {
+  jitterStrength = parseFloat(e.target.value);
+  updatePanelLabels(); saveSettings();
+});
+document.getElementById('ap-m').addEventListener('input', e => {
+  mManual = parseFloat(e.target.value);
+  updatePanelLabels(); saveSettings();
+});
+document.getElementById('ap-n').addEventListener('input', e => {
+  nManual = parseFloat(e.target.value);
+  updatePanelLabels(); saveSettings();
+});
+document.querySelectorAll('.ap-preset').forEach(b =>
+  b.addEventListener('click', () => applyPreset(b.dataset.preset)));
+
+updatePanelLabels();
+
+// ── UI controls ──────────────────────────────────────────────────────────────
+const btnMode    = document.getElementById('btn-mode');
+const btnAscii   = document.getElementById('btn-ascii');
+const btnAuto    = document.getElementById('btn-auto');
+const btnMirror  = document.getElementById('btn-mirror');
+const btnTrails  = document.getElementById('btn-trails');
+const btnRipples = document.getElementById('btn-ripples');
+const btnLock    = document.getElementById('btn-lock');
+const btnAudio   = document.getElementById('btn-audio');
+const btnPause   = document.getElementById('btn-pause');
+const btnZen     = document.getElementById('btn-zen');
+const zenHandle  = document.getElementById('zen-handle');
+const topbarEl   = document.getElementById('topbar');
+const hintsEl    = document.getElementById('hints');
+
+let zenMode = false;
+function setZen(on) {
+  zenMode = on;
+  topbarEl.classList.toggle('zen', on);
+  zenHandle.classList.toggle('visible', on);
+  hintsEl.style.opacity       = on ? '0' : '';
+  hintsEl.style.pointerEvents = on ? 'none' : '';
+  if (audioEnabled) audioPanelEl.style.display = on ? 'none' : '';
+}
+
+function setVizMode(mode) {
+  vizMode = mode;
+  btnMode.textContent = `mode: ${vizMode}`;
+  btnMode.classList.toggle('active', vizMode !== 'off');
+  modeNameEl.textContent = vizMode;
+}
+
+function cycleVizMode() {
+  const i = VIZ_MODES.indexOf(vizMode);
+  setVizMode(VIZ_MODES[(i + 1) % VIZ_MODES.length]);
+  autoCycleStartMs = performance.now();
+}
+
+function setAsciiMode(on) {
+  if (asciiMode === on) return;
+  asciiMode = on;
+  btnAscii.classList.toggle('active', asciiMode);
+}
+
+function tickAutoCycle() {
+  if (!autoCycle) return;
+  const elapsed = (performance.now() - autoCycleStartMs) / 1000;
+  const remaining = Math.max(0, Math.ceil(AUTO_CYCLE_SECONDS - elapsed));
+  if (remaining !== lastAutoRemaining) {
+    lastAutoRemaining = remaining;
+    btnAuto.textContent = `auto ${remaining}s`;
+  }
+  if (elapsed < AUTO_CYCLE_SECONDS) return;
+  autoCycleStartMs = performance.now();
+  autoStepCount++;
+
+  const N = CYCLING_MODES.length;
+  const i = CYCLING_MODES.indexOf(vizMode);
+  const nextMode = CYCLING_MODES[(i < 0 ? 0 : i + 1) % N];
+
+  switch (autoStyle) {
+    case 'chapters': {
+      const pass = Math.floor(autoStepCount / N) % 2;
+      setAsciiMode(pass === 1);
+      break;
+    }
+    case 'alternate': setAsciiMode(!asciiMode); break;
+    case 'random':    setAsciiMode(Math.random() < 0.3); break;
+    default: break;
+  }
+
+  setVizMode(nextMode);
+}
+
+btnMode.addEventListener('click', () => { cycleVizMode(); saveSettings(); });
+btnAscii.addEventListener('click', () => {
+  asciiMode = !asciiMode;
+  btnAscii.classList.toggle('active', asciiMode);
+  saveSettings();
+});
+btnAuto.addEventListener('click', () => {
+  autoCycle = !autoCycle;
+  autoCycleStartMs = performance.now();
+  lastAutoRemaining = -1;
+  autoStepCount = 0;
+  btnAuto.classList.toggle('active', autoCycle);
+  btnAuto.textContent = autoCycle ? `auto ${AUTO_CYCLE_SECONDS}s` : 'auto';
+  if (autoCycle && vizMode === 'off') setVizMode(VIZ_MODES[0]);
+  if (autoCycle && autoStyle === 'chapters') setAsciiMode(false);
+  saveSettings();
+});
+const autoStyleSelect = document.getElementById('auto-style');
+autoStyleSelect.addEventListener('change', () => {
+  autoStyle = autoStyleSelect.value;
+  autoStepCount = 0;
+  if (autoCycle && autoStyle === 'chapters') setAsciiMode(false);
+  saveSettings();
+});
+btnMirror.addEventListener('click', () => {
+  symmetry = !symmetry;
+  btnMirror.classList.toggle('active', symmetry);
+  saveSettings();
+});
+btnTrails.addEventListener('click', () => {
+  trails = !trails;
+  btnTrails.classList.toggle('active', trails);
+  saveSettings();
+});
+btnRipples.addEventListener('click', () => {
+  ripplesOn = !ripplesOn;
+  btnRipples.classList.toggle('active', ripplesOn);
+  saveSettings();
+});
+btnLock.addEventListener('click', () => {
+  lockMN = !lockMN;
+  btnLock.classList.toggle('active', lockMN);
+  btnLock.textContent = lockMN ? 'lock m/n' : 'free m/n';
+  saveSettings();
+});
+btnAudio.addEventListener('click', async () => {
+  if (audioEnabled) { stopAudio(); return; }
+  const remembered = currentMicId
+    || (() => { try { return localStorage.getItem(MIC_KEY); } catch { return null; } })();
+  try {
+    try { await startAudio(remembered || undefined); }
+    catch { await startAudio(); }
+    populateMicList();
+  } catch (err) { alert(`Microphone error: ${err.message}`); }
+});
+btnPause.addEventListener('click', () => {
+  paused = !paused;
+  btnPause.classList.toggle('active', paused);
+  btnPause.textContent = paused ? 'resume' : 'pause';
+});
+btnZen.addEventListener('click',    () => setZen(true));
+zenHandle.addEventListener('click', () => setZen(false));
+
+document.addEventListener('keydown', e => {
+  if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+  switch (e.code) {
+    case 'Space':   e.preventDefault(); btnPause.click(); break;
+    case 'KeyV':    btnMode.click();    break;
+    case 'KeyX':    btnAscii.click();   break;
+    case 'KeyL':    btnAuto.click();    break;
+    case 'KeyS':    btnMirror.click();  break;
+    case 'KeyT':    btnTrails.click();  break;
+    case 'KeyB':    btnRipples.click(); break;
+    case 'KeyK':    btnLock.click();    break;
+    case 'KeyM':    btnAudio.click();   break;
+    case 'KeyZ':    setZen(!zenMode);   break;
+    case 'KeyR':
+      initParticles();
+      for (let i = 0; i < MAX_RIPPLES; i++) { rage[i] = rlife[i] = 0; }
+      ctx.fillStyle = '#05050d'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      break;
+  }
+});
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+const overlay         = document.getElementById('status-overlay');
+const statusMsg       = document.getElementById('status-msg');
+const startBtn        = document.getElementById('start-btn');
+const startSilentBtn  = document.getElementById('start-silent-btn');
+
+async function bootWithMic() {
+  statusMsg.textContent  = 'requesting microphone…';
+  startBtn.style.display = 'none';
+  startSilentBtn.style.display = 'none';
+  const remembered = (() => { try { return localStorage.getItem(MIC_KEY); } catch { return null; } })();
+  try {
+    // Try the remembered device first; fall back to default if it's gone.
+    try { await startAudio(remembered || undefined); }
+    catch { await startAudio(); }
+    await populateMicList();
+    overlay.classList.add('hidden');
+  } catch (err) {
+    statusMsg.textContent = `mic error: ${err.message}. you can still run silently.`;
+    startBtn.textContent = 'retry mic';
+    startBtn.style.display = '';
+    startSilentBtn.style.display = '';
+  }
+}
+function bootSilent() {
+  overlay.classList.add('hidden');
+}
+startBtn.addEventListener('click', bootWithMic);
+startSilentBtn.addEventListener('click', bootSilent);
+
+// ── Apply persisted settings (runs once after all wiring is in place) ────────
+function applyStoredSettings() {
+  const s = loadSettings();
+  if (!s || typeof s !== 'object') return;
+
+  if (typeof s.vizMode === 'string' && VIZ_MODES.includes(s.vizMode)) {
+    setVizMode(s.vizMode);
+  }
+  if (typeof s.autoStyle === 'string' && AUTO_STYLES.includes(s.autoStyle)) {
+    autoStyle = s.autoStyle;
+    autoStyleSelect.value = autoStyle;
+  }
+  if (s.autoCycle === true) {
+    autoCycle = true;
+    autoCycleStartMs = performance.now();
+    lastAutoRemaining = -1;
+    autoStepCount = 0;
+    btnAuto.classList.add('active');
+    btnAuto.textContent = `auto ${AUTO_CYCLE_SECONDS}s`;
+    if (vizMode === 'off') setVizMode(VIZ_MODES[0]);
+  }
+
+  if (typeof s.symmetry === 'boolean' && s.symmetry !== symmetry) {
+    symmetry = s.symmetry; btnMirror.classList.toggle('active', symmetry);
+  }
+  if (typeof s.trails === 'boolean' && s.trails !== trails) {
+    trails = s.trails; btnTrails.classList.toggle('active', trails);
+  }
+  if (typeof s.ripplesOn === 'boolean' && s.ripplesOn !== ripplesOn) {
+    ripplesOn = s.ripplesOn; btnRipples.classList.toggle('active', ripplesOn);
+  }
+  if (typeof s.asciiMode === 'boolean' && s.asciiMode !== asciiMode) {
+    asciiMode = s.asciiMode; btnAscii.classList.toggle('active', asciiMode);
+  }
+  if (typeof s.lockMN === 'boolean' && s.lockMN !== lockMN) {
+    lockMN = s.lockMN;
+    btnLock.classList.toggle('active', lockMN);
+    btnLock.textContent = lockMN ? 'lock m/n' : 'free m/n';
+  }
+
+  // Audio preset / raw slider values
+  if (typeof s.activePreset === 'string' && AUDIO_PRESETS[s.activePreset]) {
+    applyPreset(s.activePreset);
+  } else {
+    if (Number.isFinite(s.audioGain))    audioGain    = s.audioGain;
+    if (Number.isFinite(s.audioEMA))     audioEMA     = s.audioEMA;
+    if (Number.isFinite(s.beatThresh))   beatThresh   = s.beatThresh;
+    if (Number.isFinite(s.beatCooldown)) beatCooldown = s.beatCooldown;
+    activePreset = null;
+    document.getElementById('ap-gain').value     = audioGain;
+    document.getElementById('ap-thresh').value   = beatThresh;
+    document.getElementById('ap-cooldown').value = beatCooldown;
+    document.getElementById('ap-ema').value      = audioEMA;
+    document.querySelectorAll('.ap-preset').forEach(b => b.classList.remove('active'));
+  }
+
+  // Cymatics-specific knobs
+  if (Number.isFinite(s.particleCount))  particleCount  = Math.max(500, Math.min(MAX_PARTICLES, s.particleCount | 0));
+  if (Number.isFinite(s.pullStrength))   pullStrength   = s.pullStrength;
+  if (Number.isFinite(s.jitterStrength)) jitterStrength = s.jitterStrength;
+  if (Number.isFinite(s.mManual))        mManual        = s.mManual;
+  if (Number.isFinite(s.nManual))        nManual        = s.nManual;
+  document.getElementById('ap-count').value  = particleCount;
+  document.getElementById('ap-pull').value   = pullStrength;
+  document.getElementById('ap-jitter').value = jitterStrength;
+  document.getElementById('ap-m').value      = mManual;
+  document.getElementById('ap-n').value      = nManual;
+  // Snap live m,n to manual on load so the first frames look right.
+  mNow = mManual; nNow = nManual;
+  updatePanelLabels();
+}
+applyStoredSettings();
+</script>
+</body>
+</html>
