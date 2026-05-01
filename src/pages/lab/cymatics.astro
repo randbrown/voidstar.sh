@@ -30,9 +30,13 @@
        <canvas id="hydra-canvas"> is appended at runtime by hydra-synth so it
        lacks the scope attribute — its rules must live in a global block. -->
   <style is:global>
+    /* Hydra runs UNDER the viz so the cymatics patterns + pose skeleton
+       overlay appear on top. The viz canvas uses mix-blend-mode: screen so
+       its near-black fill (#05050d) becomes effectively transparent against
+       Hydra, while bright particles / aura / sparks still show. */
     #hydra-canvas {
       position: fixed; inset: 0; width: 100%; height: 100%; display: block;
-      z-index: 4; pointer-events: none;
+      z-index: 1; pointer-events: none;
     }
   </style>
   <style>
@@ -57,6 +61,11 @@
     #canvas, #test-canvas {
       position: fixed; inset: 0; width: 100%; height: 100%; display: block;
     }
+    /* Viz sits above Hydra (z:1) and uses screen blend so the dark fill
+       reveals Hydra underneath while bright pixels still show. Without
+       Hydra, the canvas blends against the body's near-black bg — which
+       is also #05050d — so the look is unchanged. */
+    #canvas { z-index: 2; mix-blend-mode: screen; }
     /* Strudel's getDrawContext() looks for #test-canvas — used by .scope(),
        .pianoroll(), and other draw outputs. Sits above the viz, below the
        topbar (z:20) and strudel panel (z:18). */
@@ -279,6 +288,18 @@
     }
     #strudel-mount :is(.cm-content, .cm-line) {
       text-shadow: 0 0 4px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.85);
+    }
+    /* Subtle per-span backdrop on code lines, mirroring default Strudel REPL
+       (.code-container .cm-line>* { background: var(--lineBackground) }).
+       Only text-occupied portions tint, so the viz shows through gaps.
+       Multiple ancestor chains chosen to outrank Strudel's own rules whose
+       specificity goes up to (0,2,1) via `.code-container .cm-line>*`.
+       Hardcoded color — Strudel sets --lineBackground for active-line
+       highlighting, so var() with a fallback resolves to transparent
+       whenever Strudel's value is set (fallback only applies when unset). */
+    #strudel-mount strudel-editor .cm-content .cm-line > *,
+    #strudel-mount strudel-editor .cm-line > * {
+      background: rgba(0,0,0,0.35) !important;
     }
 
     /* Mobile / narrow viewport — stack title row, controls flow below. */
@@ -1849,6 +1870,18 @@ function injectLateStrudelOverride() {
       background-color: transparent !important;
       background-image: none        !important;
     }
+    /* Subtle per-span backdrop on code lines (mirrors default Strudel REPL,
+       which does .code-container .cm-line>* with var(--lineBackground)).
+       Anchored on #strudel-mount because <strudel-editor>'s connectedCallback
+       inserts the CodeMirror root as a SIBLING (not a child) of itself —
+       parentElement.insertBefore(div, this.nextSibling) — so the cm-* nodes
+       have <strudel-editor> as a sibling, not an ancestor. Lives in this
+       JS-injected global block; the page-level style tag is Astro-scoped
+       via [data-astro-cid-*] and would NOT match runtime-created spans. */
+    #strudel-mount .cm-line > * {
+      background-color: rgba(0,0,0,0.35) !important;
+      background-image: none !important;
+    }
   `;
   document.head.appendChild(s);
 }
@@ -1862,6 +1895,12 @@ function mountStrudelEditor() {
   strudelMount.appendChild(ed);
   strudelEditorEl = ed;
   strudelMounted = true;
+  // Hook evaluate/stop on the StrudelMirror as soon as it appears, so
+  // keyboard-driven evals (Ctrl+Enter / Ctrl+.) clear stale Hydra outputs.
+  let tries = 0;
+  const t = setInterval(() => {
+    if (ensureStrudelEvalPatch() || ++tries > 40) clearInterval(t);
+  }, 150);
   injectStrudelTransparency(ed);
 }
 
@@ -1871,9 +1910,61 @@ function mountStrudelEditor() {
 function getStrudelEditor() {
   return strudelEditorEl?.editor ?? null;
 }
+
+// Hydra's render loop keeps drawing whatever was last fed into o0..o3, even
+// after Strudel stops or the eval'd code no longer references Hydra. We clear
+// each output to transparent black so the canvas goes blank. New eval'd code
+// that calls .out(oN) replaces the cleared chain immediately.
+function clearHydraOutputs() {
+  const g = globalThis;
+  if (typeof g.solid !== 'function') return;
+  for (const k of ['o0', 'o1', 'o2', 'o3']) {
+    const o = g[k];
+    if (!o) continue;
+    try { g.solid(0, 0, 0, 0).out(o); } catch {}
+  }
+}
+// Strudel scope/pianoroll widgets only redraw when called — leftover frames
+// would otherwise persist after stop. Clearing the canvas lets it go blank.
+function clearScopeCanvas() {
+  if (!testCanvas) return;
+  const c = testCanvas.getContext('2d');
+  if (c) c.clearRect(0, 0, testCanvas.width, testCanvas.height);
+}
+
+// Patch the StrudelMirror's evaluate/stop so both keyboard shortcuts
+// (Ctrl+Enter, Ctrl+.) and our buttons clear Hydra. Done once after the
+// editor finishes initializing.
+let _strudelEvalPatched = false;
+function ensureStrudelEvalPatch() {
+  if (_strudelEvalPatched) return false;
+  const ed = getStrudelEditor();
+  if (!ed) return false;
+  if (typeof ed.evaluate === 'function') {
+    const orig = ed.evaluate.bind(ed);
+    ed.evaluate = function(...args) {
+      // Clear before user code runs — a fresh eval that re-establishes Hydra
+      // chains will repaint immediately; one without Hydra calls stays clear.
+      try { clearHydraOutputs(); } catch {}
+      return orig(...args);
+    };
+  }
+  if (typeof ed.stop === 'function') {
+    const orig = ed.stop.bind(ed);
+    ed.stop = function(...args) {
+      try { clearHydraOutputs(); clearScopeCanvas(); } catch {}
+      btnStrudelPlay.classList.remove('playing');
+      return orig(...args);
+    };
+  }
+  _strudelEvalPatched = true;
+  return true;
+}
+
 function strudelPlay() {
   const ed = getStrudelEditor();
   if (!ed) return false;
+  ensureStrudelEvalPatch();
   try {
     if      (typeof ed.evaluate === 'function') ed.evaluate();
     else if (typeof ed.toggle   === 'function') ed.toggle();
@@ -1885,9 +1976,12 @@ function strudelPlay() {
 function strudelStop() {
   const ed = getStrudelEditor();
   if (!ed) return false;
+  ensureStrudelEvalPatch();
   try {
     if (typeof ed.stop === 'function') ed.stop();
     else return false;
+    // ed.stop is patched to clear Hydra; the patched version handles
+    // .playing class removal too, but call here for the non-patched path.
     btnStrudelPlay.classList.remove('playing');
     return true;
   } catch (e) { console.warn('[cymatics] strudel stop failed:', e); return false; }
@@ -1913,6 +2007,17 @@ const STRUDEL_TRANSPARENT_CSS = `
   .cm-content, .cm-line {
     text-shadow: 0 0 4px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.85);
   }
+  /* Multiple ancestor chains so we outrank Strudel's own rules — its
+     prod selector is .code-container .cm-line>* (specificity 0,2,1).
+     We match that and also chain via .cm-content for shadow scopes
+     where .code-container isn't an ancestor. */
+  :host .code-container .cm-line > *,
+  :host .cm-content .cm-line > *,
+  .code-container .cm-line > *,
+  .cm-content .cm-line > *,
+  .cm-line > * {
+    background: rgba(0,0,0,0.35) !important;
+  }
 `;
 function injectStrudelTransparency(ed) {
   const inject = (root) => {
@@ -1924,6 +2029,9 @@ function injectStrudelTransparency(ed) {
   };
   const stripInline = (el) => {
     if (!el || !el.style) return;
+    // Preserve the per-line backdrop on code spans — those want `var(--lineBackground)`,
+    // and inline !important here would override the stylesheet rule that paints them.
+    if (el.parentElement && el.parentElement.classList && el.parentElement.classList.contains('cm-line')) return;
     // The Strudel wrapper div ships inline `background-color: var(--background)`.
     // Clearing the property only works until Strudel re-applies it; using
     // setProperty(..., 'important') leaves an !important inline declaration
