@@ -194,6 +194,68 @@
       display: flex; flex-direction: column; gap: 0.4rem;
     }
 
+    /* Strudel REPL panel — fixed mid-screen, collapsible. The body is
+       transparent so the viz behind shows through; only the header strip
+       has a translucent backdrop for label legibility. */
+    #strudel-panel {
+      position: fixed; left: 50%; top: 4.5rem;
+      transform: translateX(-50%);
+      z-index: 18;
+      /* `resize: both` requires explicit dimensions + non-visible overflow.
+         User drags the bottom-right corner to resize; min/max keep it sane. */
+      width: min(96vw, 920px);
+      height: 480px;
+      min-width: 360px;  min-height: 220px;
+      max-width: 100vw;  max-height: calc(100vh - 6rem);
+      background: transparent;
+      border: 1px solid var(--border); border-radius: 10px;
+      font-family: var(--font-mono); color: var(--text);
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+      resize: both;
+    }
+    #strudel-header {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.45rem 0.75rem;
+      background: var(--surface); backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+    }
+    .sp-title { color: var(--text); }
+    .sp-tag   { color: var(--accent); margin-left: 0.25rem; }
+    .sp-status { color: var(--muted); margin-left: auto; font-size: 0.7rem; }
+    .sp-status.live { color: var(--pink); }
+    #btn-strudel-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    #strudel-mount {
+      flex: 1; min-height: 0; overflow: auto;
+      background: transparent;
+    }
+    /* Light-DOM CSS overrides — work if the editor renders into the regular
+       DOM tree. Shadow-root injection (see injectStrudelTransparency) covers
+       the encapsulated case. Text shadows keep code legible against busy viz.
+       The custom-property overrides cross the shadow boundary by inheritance —
+       Strudel's editor reads `var(--background)` internally, so setting it on
+       the host transparentizes the editor pane regardless of encapsulation. */
+    #strudel-mount strudel-editor {
+      display: block; width: 100%; background: transparent !important;
+      --background:        transparent !important;
+      --bg:                transparent !important;
+      --editor-background: transparent !important;
+      --background-color:  transparent !important;
+    }
+    /* Nuke every descendant background — Strudel layers a few wrappers around
+       CodeMirror that aren't covered by .cm-* selectors. background-image
+       gets cleared too in case any rule is using a gradient. */
+    #strudel-mount strudel-editor,
+    #strudel-mount strudel-editor * {
+      background:       transparent !important;
+      background-color: transparent !important;
+      background-image: none        !important;
+    }
+    #strudel-mount :is(.cm-content, .cm-line) {
+      text-shadow: 0 0 4px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.85);
+    }
+
     /* Mobile / narrow viewport — stack title row, controls flow below. */
     @media (max-width: 768px) {
       #topbar         { padding: 0.4rem 0.6rem; flex-direction: column;
@@ -209,6 +271,8 @@
       #audio-panel    { padding: 0.6rem 0.75rem; gap: 0.4rem; }
       .ap-row input[type=range] { width: 110px; }
       #video.visible  { width: 120px; bottom: 0.5rem; right: 0.5rem; }
+      #strudel-panel  { top: 5.5rem; width: 96vw; height: 60vh; }
+      .sp-tag, .sp-status { display: none; }
     }
   </style>
 </head>
@@ -257,6 +321,7 @@
     <button class="ctrl-btn active" id="btn-ripples" title="Beat ripples (B)">ripples</button>
     <button class="ctrl-btn active" id="btn-lock" title="Lock m,n to manual sliders (K)">lock m/n</button>
     <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
+    <button class="ctrl-btn" id="btn-strudel" title="Strudel live-coding REPL (D)">strudel</button>
     <button class="ctrl-btn" id="btn-pause" title="Pause (Space)">pause</button>
     <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
     <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
@@ -289,6 +354,7 @@
   <span><kbd>F</kbd> sparks</span>
   <span><kbd>A</kbd> aura</span>
   <span><kbd>M</kbd> audio</span>
+  <span><kbd>D</kbd> strudel</span>
   <span><kbd>Space</kbd> pause</span>
   <span><kbd>Z</kbd> zen</span>
   <span><kbd>R</kbd> reset</span>
@@ -363,6 +429,15 @@
       <input type="range" id="ap-linger" min="0" max="3000" step="50" value="800">
     </div>
   </div>
+</div>
+
+<div id="strudel-panel" style="display:none">
+  <div id="strudel-header">
+    <span class="sp-title">strudel <span class="sp-tag">// live-code patterns → cymatics</span></span>
+    <span class="sp-status" id="strudel-status">click strudel ▶ to start audio</span>
+    <button class="ctrl-btn" id="btn-strudel-close" title="Close (D)">×</button>
+  </div>
+  <div id="strudel-mount"></div>
 </div>
 
 <script>
@@ -1555,6 +1630,8 @@ const MIC_KEY = 'voidstar.cymatics.micId';
 let currentMicId = null;
 
 async function startAudio(deviceId) {
+  // Mic and Strudel both want analyserNode — close Strudel first if active.
+  if (strudelTapped) closeStrudel();
   // Disable browser DSP so we get a raw signal (loud-room AGC pumping is the
   // enemy here) AND so Android doesn't grab the mic in VOICE_COMMUNICATION
   // mode, which fights with simultaneous screen-recorder audio capture.
@@ -1584,20 +1661,25 @@ async function startAudio(deviceId) {
   // Note: source ➝ analyser only. NEVER connect to destination — that would
   // route mic to speakers and cause feedback.
   audioCtxRef.createMediaStreamSource(audioStream).connect(analyserNode);
-  freqBuf = new Uint8Array(analyserNode.frequencyBinCount);
-  timeBuf = new Uint8Array(analyserNode.fftSize);
-
-  const hz = audioCtxRef.sampleRate / analyserNode.fftSize;
-  const freq2bin = f => Math.max(0, Math.min(Math.round(f / hz), analyserNode.frequencyBinCount - 1));
-  binBassLo  = freq2bin(20);   binBassHi  = freq2bin(250);
-  binMidsLo  = freq2bin(250);  binMidsHi  = freq2bin(4000);
-  binHighsLo = freq2bin(4000); binHighsHi = freq2bin(12000);
+  configureAnalyserBins(audioCtxRef, analyserNode);
 
   audioEnabled = true;
   btnAudio.classList.remove('active');
   btnAudio.classList.add('active-audio');
   btnAudio.textContent = 'audio on';
   audioPanelEl.style.display = '';
+}
+
+// Shared with the Strudel audio path — populates freqBuf/timeBuf and the
+// bass/mids/highs bin ranges based on the analyser's sample rate.
+function configureAnalyserBins(ctx, an) {
+  freqBuf = new Uint8Array(an.frequencyBinCount);
+  timeBuf = new Uint8Array(an.fftSize);
+  const hz = ctx.sampleRate / an.fftSize;
+  const freq2bin = f => Math.max(0, Math.min(Math.round(f / hz), an.frequencyBinCount - 1));
+  binBassLo  = freq2bin(20);   binBassHi  = freq2bin(250);
+  binMidsLo  = freq2bin(250);  binMidsHi  = freq2bin(4000);
+  binHighsLo = freq2bin(4000); binHighsHi = freq2bin(12000);
 }
 
 // Mic enumeration. Labels only populate after a successful getUserMedia() —
@@ -1647,6 +1729,266 @@ function stopAudio() {
   btnAudio.textContent = 'audio';
   audioPanelEl.style.display = 'none';
 }
+
+// ── Strudel REPL integration ─────────────────────────────────────────────────
+// The @strudel/repl bundle ships a <strudel-editor> custom element + the
+// audio engine (superdough) and exposes `getAudioContext()` / `getDestination()`
+// as globals from @strudel/webaudio. We lazy-load the script on first toggle
+// (it's heavy: CodeMirror + synth engine), mount the editor, then poll for
+// the AudioContext to come alive when the user hits ▶ inside the editor.
+// Once it's running we tap the master gain into our own analyser so the
+// cymatics viz reacts to whatever pattern the user is live-coding.
+const STRUDEL_SCRIPT = 'https://unpkg.com/@strudel/repl@latest';
+const STRUDEL_DEFAULT_PATTERN = `setcps(1)
+n("<0 1 2 3 4>*8").scale('G4 minor')
+.s("gm_lead_6_voice")
+.clip(sine.range(.2,.8).slow(8))
+.jux(rev)
+.room(2)
+.sometimes(add(note("12")))
+.lpf(perlin.range(200,20000).slow(4))`;
+
+const strudelPanel  = document.getElementById('strudel-panel');
+const strudelMount  = document.getElementById('strudel-mount');
+const strudelStatus = document.getElementById('strudel-status');
+const btnStrudel    = document.getElementById('btn-strudel');
+const btnStrudelClose = document.getElementById('btn-strudel-close');
+
+let strudelLoadingP = null;       // Promise of the script load
+let strudelMounted  = false;
+let strudelAudioCtx = null;       // Strudel's own AudioContext (once running)
+let strudelAnalyser = null;
+let strudelPollT    = null;       // setInterval handle for AC polling
+let strudelTapped   = false;      // master gain has been tee'd to analyser
+
+function loadStrudelScript() {
+  if (strudelLoadingP) return strudelLoadingP;
+  strudelLoadingP = new Promise((resolve, reject) => {
+    if (customElements.get('strudel-editor')) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src   = STRUDEL_SCRIPT;
+    s.async = true;
+    s.onload  = () => resolve();
+    s.onerror = () => reject(new Error('failed to load @strudel/repl'));
+    document.head.appendChild(s);
+  });
+  // Strudel injects its own theme stylesheet into document.head when the
+  // bundle loads. To beat it in source order (so our !important rules win),
+  // we append OUR override AFTER the script resolves. Targets `--background`
+  // at :root since the offending wrapper consumes `var(--background)` via
+  // an inline style and the variable inherits down through shadow boundaries.
+  strudelLoadingP.then(injectLateStrudelOverride).catch(() => {});
+  return strudelLoadingP;
+}
+
+function injectLateStrudelOverride() {
+  const id = 'cymatics-strudel-late-override';
+  document.getElementById(id)?.remove();
+  const s = document.createElement('style');
+  s.id = id;
+  s.textContent = `
+    :root, html, body {
+      --background:        transparent !important;
+      --bg:                transparent !important;
+      --editor-background: transparent !important;
+      --background-color:  transparent !important;
+    }
+    strudel-editor, strudel-editor * {
+      background:       transparent !important;
+      background-color: transparent !important;
+      background-image: none        !important;
+    }
+  `;
+  document.head.appendChild(s);
+}
+
+function mountStrudelEditor() {
+  if (strudelMounted) return;
+  strudelMount.innerHTML = '';
+  const ed = document.createElement('strudel-editor');
+  // The web component reads its initial code from a comment child (per docs)
+  ed.appendChild(document.createComment(`\n${STRUDEL_DEFAULT_PATTERN}\n`));
+  strudelMount.appendChild(ed);
+  strudelMounted = true;
+  injectStrudelTransparency(ed);
+}
+
+// If <strudel-editor> uses Shadow DOM, our page-level CSS can't reach the
+// CodeMirror styles inside. Walk into any open shadow root and inject the
+// transparency overrides directly. Light-DOM case is already covered by
+// page CSS so this is a no-op there. Uses MutationObserver because the
+// component's contents are populated async after construction.
+const STRUDEL_TRANSPARENT_CSS = `
+  :host, :host * , * {
+    background:       transparent !important;
+    background-color: transparent !important;
+    background-image: none        !important;
+  }
+  :host {
+    --background:        transparent !important;
+    --bg:                transparent !important;
+    --editor-background: transparent !important;
+    --background-color:  transparent !important;
+  }
+  .cm-content, .cm-line {
+    text-shadow: 0 0 4px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.85);
+  }
+`;
+function injectStrudelTransparency(ed) {
+  const inject = (root) => {
+    if (!root || root._strudelTransparentInjected) return;
+    const style = document.createElement('style');
+    style.textContent = STRUDEL_TRANSPARENT_CSS;
+    root.appendChild(style);
+    root._strudelTransparentInjected = true;
+  };
+  const stripInline = (el) => {
+    if (!el || !el.style) return;
+    // The Strudel wrapper div ships inline `background-color: var(--background)`.
+    // Clearing the property only works until Strudel re-applies it; using
+    // setProperty(..., 'important') leaves an !important inline declaration
+    // that survives a non-!important re-set. Belt-and-suspenders: rewrite
+    // the raw style attribute too, in case the property was set via attr.
+    const attr = el.getAttribute && el.getAttribute('style');
+    if (attr && attr.includes('var(--background)')) {
+      const fixed = attr.replace(
+        /background(-color)?\s*:\s*var\(--background\)\s*(!important)?\s*;?/g,
+        'background-color: transparent !important;'
+      );
+      if (fixed !== attr) el.setAttribute('style', fixed);
+    }
+    el.style.setProperty('background',       'transparent', 'important');
+    el.style.setProperty('background-color', 'transparent', 'important');
+    el.style.setProperty('background-image', 'none',        'important');
+  };
+  const sweep = () => {
+    inject(ed.shadowRoot);
+    stripInline(ed);
+    const walk = (root) => {
+      if (!root) return;
+      const all = root.querySelectorAll('*');
+      for (const el of all) {
+        stripInline(el);
+        if (el.shadowRoot) { inject(el.shadowRoot); walk(el.shadowRoot); }
+      }
+    };
+    walk(ed);
+    if (ed.shadowRoot) walk(ed.shadowRoot);
+  };
+  // Initial pass + repeat on DOM changes (Strudel mounts CodeMirror async).
+  sweep();
+  const obs = new MutationObserver(sweep);
+  obs.observe(ed, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+  setTimeout(() => obs.disconnect(), 10000);
+}
+
+// `strudelAnalyser` is created exactly once per page load and reused across
+// open/close cycles — we never disconnect it. That means the prototype-level
+// connect() patch (fallback path) only ever wraps once, and reusing the
+// analyser is cheap (FFT cost is negligible when nothing reads it).
+let _strudelConnectPatched = false;
+function tapStrudelMaster(ctx) {
+  if (!strudelAnalyser) {
+    const an = ctx.createAnalyser();
+    an.fftSize = 2048;
+    an.smoothingTimeConstant = 0.72;
+    let tapped = false;
+    // @strudel/superdough's getDestination returns the master gain (a real
+    // node we can tap with .connect()).
+    try {
+      if (typeof globalThis.getDestination === 'function') {
+        const dest = globalThis.getDestination();
+        if (dest && typeof dest.connect === 'function') {
+          dest.connect(an);
+          tapped = true;
+        }
+      }
+    } catch {}
+    // Fallback: monkey-patch AudioNode.connect so any node connecting to
+    // this context's destination also feeds the analyser. Strudel rebuilds
+    // its graph each pattern eval, so fresh connections will be tapped.
+    if (!tapped && !_strudelConnectPatched) {
+      const orig = AudioNode.prototype.connect;
+      AudioNode.prototype.connect = function(target, ...rest) {
+        if (target === ctx.destination) { try { orig.call(this, an); } catch {} }
+        return orig.call(this, target, ...rest);
+      };
+      _strudelConnectPatched = true;
+    }
+    strudelAnalyser = an;
+  }
+  strudelTapped = true;
+  // Adopt as the cymatics analyser
+  analyserNode = strudelAnalyser;
+  configureAnalyserBins(ctx, strudelAnalyser);
+  audioEnabled = true;
+  strudelStatus.textContent = 'audio: live';
+  strudelStatus.classList.add('live');
+  btnStrudel.classList.remove('active');
+  btnStrudel.classList.add('active-audio');
+  btnStrudel.textContent = 'strudel ●';
+  return true;
+}
+
+function pollForStrudelAudio() {
+  if (strudelPollT) return;
+  // Poll until either Strudel's AudioContext is running or the user closes
+  // the panel. 12s timeout covers slow first-load network.
+  const deadline = performance.now() + 12000;
+  strudelPollT = setInterval(() => {
+    if (performance.now() > deadline) {
+      clearInterval(strudelPollT); strudelPollT = null; return;
+    }
+    let ctx = null;
+    try { ctx = globalThis.getAudioContext?.(); } catch {}
+    if (!ctx || ctx.state !== 'running') return;
+    strudelAudioCtx = ctx;
+    if (tapStrudelMaster(ctx)) {
+      clearInterval(strudelPollT); strudelPollT = null;
+    }
+  }, 200);
+}
+
+async function openStrudel() {
+  // Mic and Strudel are mutually exclusive — they'd collide on analyserNode.
+  if (audioEnabled && audioStream) stopAudio();
+  strudelPanel.style.display = '';
+  btnStrudel.classList.add('active');
+  btnStrudel.textContent = 'strudel on';
+  strudelStatus.textContent = 'loading…';
+  strudelStatus.classList.remove('live');
+  try { await loadStrudelScript(); }
+  catch (err) {
+    strudelStatus.textContent = `error: ${err.message || err}`;
+    return;
+  }
+  mountStrudelEditor();
+  strudelStatus.textContent = 'click ▶ in editor to start';
+  pollForStrudelAudio();
+}
+
+function closeStrudel() {
+  strudelPanel.style.display = 'none';
+  if (strudelPollT) { clearInterval(strudelPollT); strudelPollT = null; }
+  // We don't disconnect strudelAnalyser — it keeps churning quietly so a
+  // reopen is instant (no model-rebuild, no re-tap). Just unhook cymatics.
+  if (strudelTapped) {
+    audioEnabled = false;
+    aBass = aMids = aHighs = aTotal = bassAvg = beatPulse = highsPulse = 0;
+    analyserNode = null; freqBuf = null; timeBuf = null;
+  }
+  strudelTapped = false;
+  btnStrudel.classList.remove('active-audio');
+  btnStrudel.classList.remove('active');
+  btnStrudel.textContent = 'strudel';
+  strudelStatus.classList.remove('live');
+}
+
+btnStrudel.addEventListener('click', () => {
+  if (strudelPanel.style.display === 'none') openStrudel();
+  else                                       closeStrudel();
+});
+btnStrudelClose.addEventListener('click', closeStrudel);
 
 // ── Audio panel wiring ───────────────────────────────────────────────────────
 const audioPanelEl = document.getElementById('audio-panel');
@@ -1986,6 +2328,9 @@ zenHandle.addEventListener('click', () => setZen(false));
 
 document.addEventListener('keydown', e => {
   if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+  // CodeMirror (Strudel editor) uses contenteditable — don't steal keys from it.
+  if (e.target.isContentEditable) return;
+  if (strudelPanel.style.display !== 'none' && strudelPanel.contains(e.target)) return;
   switch (e.code) {
     case 'Space':   e.preventDefault(); btnPause.click(); break;
     case 'KeyV':    btnMode.click();    break;
@@ -2007,6 +2352,7 @@ document.addEventListener('keydown', e => {
     case 'KeyF':    btnSparks.click();  break;
     case 'KeyA':    btnAura.click();    break;
     case 'KeyM':    btnAudio.click();   break;
+    case 'KeyD':    btnStrudel.click(); break;
     case 'KeyZ':    setZen(!zenMode);   break;
     case 'KeyR':
       initParticles();
