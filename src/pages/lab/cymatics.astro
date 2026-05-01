@@ -225,6 +225,8 @@
     .sp-tag   { color: var(--accent); margin-left: 0.25rem; }
     .sp-status { color: var(--muted); margin-left: auto; font-size: 0.7rem; }
     .sp-status.live { color: var(--pink); }
+    #btn-strudel-play, #btn-strudel-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
+    #btn-strudel-play.playing { color: var(--pink); border-color: var(--pink); }
     #btn-strudel-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
     #strudel-mount {
       flex: 1; min-height: 0; overflow: auto;
@@ -435,6 +437,8 @@
   <div id="strudel-header">
     <span class="sp-title">strudel <span class="sp-tag">// live-code patterns → cymatics</span></span>
     <span class="sp-status" id="strudel-status">click strudel ▶ to start audio</span>
+    <button class="ctrl-btn" id="btn-strudel-play" title="Evaluate / play (Ctrl+Enter)">▶</button>
+    <button class="ctrl-btn" id="btn-strudel-stop" title="Stop (Ctrl+.)">■</button>
     <button class="ctrl-btn" id="btn-strudel-close" title="Close (D)">×</button>
   </div>
   <div id="strudel-mount"></div>
@@ -1753,6 +1757,9 @@ const strudelMount  = document.getElementById('strudel-mount');
 const strudelStatus = document.getElementById('strudel-status');
 const btnStrudel    = document.getElementById('btn-strudel');
 const btnStrudelClose = document.getElementById('btn-strudel-close');
+const btnStrudelPlay  = document.getElementById('btn-strudel-play');
+const btnStrudelStop  = document.getElementById('btn-strudel-stop');
+let strudelEditorEl = null;       // the <strudel-editor> element instance
 
 let strudelLoadingP = null;       // Promise of the script load
 let strudelMounted  = false;
@@ -1809,8 +1816,37 @@ function mountStrudelEditor() {
   // The web component reads its initial code from a comment child (per docs)
   ed.appendChild(document.createComment(`\n${STRUDEL_DEFAULT_PATTERN}\n`));
   strudelMount.appendChild(ed);
+  strudelEditorEl = ed;
   strudelMounted = true;
   injectStrudelTransparency(ed);
+}
+
+// Strudel's <strudel-editor> exposes an `editor` property (a StrudelMirror
+// instance) once initialized — that's where evaluate/stop live. Initialization
+// is async, so we probe across a short window before giving up.
+function getStrudelEditor() {
+  return strudelEditorEl?.editor ?? null;
+}
+function strudelPlay() {
+  const ed = getStrudelEditor();
+  if (!ed) return false;
+  try {
+    if      (typeof ed.evaluate === 'function') ed.evaluate();
+    else if (typeof ed.toggle   === 'function') ed.toggle();
+    else return false;
+    btnStrudelPlay.classList.add('playing');
+    return true;
+  } catch (e) { console.warn('[cymatics] strudel play failed:', e); return false; }
+}
+function strudelStop() {
+  const ed = getStrudelEditor();
+  if (!ed) return false;
+  try {
+    if (typeof ed.stop === 'function') ed.stop();
+    else return false;
+    btnStrudelPlay.classList.remove('playing');
+    return true;
+  } catch (e) { console.warn('[cymatics] strudel stop failed:', e); return false; }
 }
 
 // If <strudel-editor> uses Shadow DOM, our page-level CSS can't reach the
@@ -1949,10 +1985,23 @@ function pollForStrudelAudio() {
   }, 200);
 }
 
+// Topbar wraps at narrow widths and can grow taller than the static `top`
+// offset, hiding the panel header behind it. Measure and position dynamically.
+function repositionStrudelPanel() {
+  if (!strudelPanel || strudelPanel.style.display === 'none') return;
+  const tb = document.getElementById('topbar');
+  if (!tb) return;
+  const h = tb.getBoundingClientRect().height;
+  strudelPanel.style.top = (h + 8) + 'px';
+  strudelPanel.style.maxHeight = `calc(100vh - ${h + 24}px)`;
+}
+window.addEventListener('resize', repositionStrudelPanel);
+
 async function openStrudel() {
   // Mic and Strudel are mutually exclusive — they'd collide on analyserNode.
   if (audioEnabled && audioStream) stopAudio();
   strudelPanel.style.display = '';
+  repositionStrudelPanel();
   btnStrudel.classList.add('active');
   btnStrudel.textContent = 'strudel on';
   strudelStatus.textContent = 'loading…';
@@ -1989,6 +2038,16 @@ btnStrudel.addEventListener('click', () => {
   else                                       closeStrudel();
 });
 btnStrudelClose.addEventListener('click', closeStrudel);
+btnStrudelPlay.addEventListener('click', () => {
+  if (!strudelPlay()) {
+    // Editor isn't ready yet (race with @strudel/repl init). Retry briefly.
+    let tries = 0;
+    const t = setInterval(() => {
+      if (strudelPlay() || ++tries > 20) clearInterval(t);
+    }, 150);
+  }
+});
+btnStrudelStop.addEventListener('click', () => { strudelStop(); });
 
 // ── Audio panel wiring ───────────────────────────────────────────────────────
 const audioPanelEl = document.getElementById('audio-panel');
