@@ -16,6 +16,7 @@ import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
 import neuralField     from './fx/neural-field.js';
 import gargantuaVoid   from './fx/gargantua-void.js';
+import voidstarLogo    from './fx/voidstar-logo.js';
 
 const AUTO_CYCLE_SECONDS = 22;
 const AUTO_STYLES = ['chapters', 'alternate', 'random', 'hold'];
@@ -26,6 +27,7 @@ export function initQualiaPage() {
   mesh.register(chladni);
   mesh.register(singularityLens);
   mesh.register(gargantuaVoid);
+  mesh.register(voidstarLogo);
   mesh.register(neuralField);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
