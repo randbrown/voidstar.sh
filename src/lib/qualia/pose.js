@@ -150,10 +150,24 @@ export function createPose() {
     if (!landmarker) await buildLandmarker();
 
     videoEl = video;
-    const constraint = deviceId
-      ? { deviceId: { exact: deviceId } }
-      : { width: { ideal: 1920 }, facingMode: 'user' };
-    stream = await navigator.mediaDevices.getUserMedia({ video: constraint });
+    // Try the requested constraint first, then fall back to looser ones if the
+    // browser reports NotReadableError (camera busy / driver hiccup) or
+    // OverconstrainedError (front cam can't satisfy the ideal resolution).
+    const attempts = deviceId
+      ? [{ deviceId: { exact: deviceId } }, { facingMode: 'user' }, true]
+      : [{ width: { ideal: 1920 }, facingMode: 'user' }, { facingMode: 'user' }, true];
+    let lastErr = null;
+    stream = null;
+    for (const c of attempts) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: c });
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (err?.name !== 'NotReadableError' && err?.name !== 'OverconstrainedError') break;
+      }
+    }
+    if (!stream) throw lastErr;
     videoEl.srcObject = stream;
     await new Promise(r => { videoEl.onloadedmetadata = r; });
     await videoEl.play().catch(() => {});
