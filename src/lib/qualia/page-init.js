@@ -117,6 +117,8 @@ export function initQualiaPage() {
     poseSmoothing:  poseSmoothingValue,
     poseThresh:     pose.getThresholds(),
     poseLingerMs:   pose.getLingerMs(),
+    audioCollapsed: audioCard.classList.contains('collapsed'),
+    paramsCollapsed: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
   }));
   const stored = settings.load();
   camSizeIdx = stored.camSizeIdx ?? 0;
@@ -227,11 +229,22 @@ export function initQualiaPage() {
   }
 
   // ── Card collapse toggles ─────────────────────────────────────────────────
+  // Restore prior collapse state. The audio card's HTML default is
+  // `collapsed`; the params card defaults to expanded. Only override when
+  // a stored value exists so first-time visitors get the curated default.
+  if (typeof stored.audioCollapsed === 'boolean') {
+    audioCard.classList.toggle('collapsed', stored.audioCollapsed);
+  }
+  const fxCardEl = document.getElementById('fx-card');
+  if (fxCardEl && typeof stored.paramsCollapsed === 'boolean') {
+    fxCardEl.classList.toggle('collapsed', stored.paramsCollapsed);
+  }
   document.querySelectorAll('[data-toggle]').forEach(h => {
     h.addEventListener('click', (e) => {
       if (e.target.closest('button, input, select')) return;
       const card = document.getElementById(h.dataset.toggle);
       card?.classList.toggle('collapsed');
+      settings.save();
     });
   });
 
@@ -264,8 +277,11 @@ export function initQualiaPage() {
       if (strudel.isOpen()) strudel.close();
       const id = await audio.start(deviceId);
       if (id) storeDeviceId('mic', id);
-      audioCard.classList.remove('collapsed');
       micPicker.populate(id);
+      // NOTE: we used to auto-uncollapse the audio card here so the user
+      // could see the sliders right away. That trampled the persisted
+      // collapse state — the user's explicit choice now wins. They can
+      // click the panel header to expand if needed.
     } catch (err) {
       alert(`Could not open microphone: ${err.message || err}`);
     }
