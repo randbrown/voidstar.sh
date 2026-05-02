@@ -1,0 +1,419 @@
+---
+// Qualia — pluggable visualizer harness. The shell here is intentionally
+// thin; everything reactive lives in src/lib/qualia/. Adding a new fx is
+// one new file in src/lib/qualia/fx/<name>.js plus a register() call below.
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Qualia | voidstar lab</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style is:global>
+    /* Hydra runs UNDER the viz so qualia patterns + pose skeleton overlay
+       appear on top. Same z-index map as cymatics so Strudel patterns that
+       call .out(o0) keep working. */
+    #hydra-canvas {
+      position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+      z-index: 1; pointer-events: none;
+    }
+    /* Canvases that QualiaCore creates inside #qualia-host inherit fullscreen
+       fixed positioning. mix-blend-mode:screen lets near-black fill reveal
+       Hydra underneath. */
+    #qualia-host > canvas {
+      position: fixed; inset: 0; width: 100vw; height: 100vh; display: block;
+      z-index: 2; mix-blend-mode: screen;
+    }
+  </style>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent:    #8b5cf6;
+      --cyan:      #22d3ee;
+      --pink:      #f472b6;
+      --green:     #4ade80;
+      --amber:     #fbbf24;
+      --void:      #05050d;
+      --surface:   rgba(10,10,26,0.82);
+      --surface-2: rgba(15,15,36,0.65);
+      --border:    rgba(45,45,80,0.7);
+      --text:      #dde1f0;
+      --muted:     #7878a8;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--void); }
+    #test-canvas {
+      position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+      z-index: 5; pointer-events: none; background: transparent;
+    }
+
+    #video {
+      position: fixed; bottom: 1.25rem; right: 1.25rem;
+      width: 200px; height: auto; display: none;
+      border-radius: 8px; border: 1px solid var(--border);
+      opacity: 0.78; z-index: 10;
+      transform: scaleX(-1);
+      transition: opacity 0.2s, width 0.3s;
+    }
+    #video.visible { display: block; }
+    #video.visible.hidden     { opacity: 0; pointer-events: none; }
+    #video.visible.size-large { width: 420px; }
+    #video.visible.size-full {
+      top: 0; left: 0; right: 0; bottom: 0;
+      width: 100vw; height: 100vh;
+      opacity: 0.22; border-radius: 0; border: none;
+      object-fit: contain; background: black;
+    }
+
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.6rem 1.25rem;
+      background: var(--surface); backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 0.8rem;
+      transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
+    }
+    #topbar.zen { transform: translateY(-110%); opacity: 0; pointer-events: none; }
+    #topbar-left  { display: flex; align-items: center; gap: 1rem; }
+    #topbar-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+
+    .back-link { color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 0.35rem; }
+    .back-link:hover { color: var(--accent); }
+    .experiment-title { color: var(--text); font-weight: 500; }
+    .experiment-tag   { color: var(--accent); }
+    #fps     { color: var(--muted); min-width: 5ch; }
+    #fxname  { color: var(--cyan);  min-width: 8ch; }
+    #lvl     { color: var(--muted); min-width: 11ch; font-size: 0.72rem; }
+
+    .ctrl-btn {
+      background: none; border: 1px solid var(--border); border-radius: 5px;
+      color: var(--muted); font-family: var(--font-mono); font-size: 0.75rem;
+      padding: 0.25rem 0.6rem; cursor: pointer;
+      transition: all 0.15s; white-space: nowrap;
+      text-decoration: none; display: inline-block;
+    }
+    .ctrl-btn:hover  { border-color: var(--accent); color: var(--accent); }
+    .ctrl-btn.active { border-color: var(--cyan);   color: var(--cyan);   }
+    .ctrl-btn.active-audio { border-color: var(--pink); color: var(--pink); }
+    select.ctrl-btn {
+      max-width: 200px; appearance: none;
+      padding-right: 1.2rem;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 10px) 50%, calc(100% - 5px) 50%;
+      background-size: 5px 5px; background-repeat: no-repeat;
+    }
+    select.ctrl-btn option { background: var(--surface); color: var(--text); }
+
+    #zen-handle {
+      position: fixed; top: 0; right: 1rem; z-index: 25;
+      width: 44px; height: 44px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; opacity: 0; pointer-events: none;
+      transition: opacity 0.5s ease;
+    }
+    #zen-handle.visible { opacity: 1; pointer-events: auto; }
+    .zen-icon {
+      font-size: 1.4rem; color: var(--accent); opacity: 0.8;
+      animation: zen-spin 14s linear infinite;
+      filter: drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 16px var(--accent));
+      user-select: none; line-height: 1;
+    }
+    @keyframes zen-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+    #status-overlay {
+      position: fixed; inset: 0; z-index: 30;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 1.25rem;
+      background: rgba(5,5,13,0.93); font-family: var(--font-mono);
+      transition: opacity 0.5s;
+    }
+    #status-overlay.hidden { opacity: 0; pointer-events: none; }
+    .status-title { font-size: 1.1rem; color: var(--text); letter-spacing: 0.08em; }
+    .status-msg   { font-size: 0.8rem; color: var(--muted); letter-spacing: 0.05em; }
+    .status-sub   { font-size: 0.72rem; color: var(--muted); opacity: 0.7; max-width: 32rem; text-align: center; line-height: 1.6; }
+    .status-dot   {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 12px var(--accent);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity:0.4; transform:scale(0.9); } 50% { opacity:1; transform:scale(1.2); } }
+    .start-btn {
+      margin-top: 0.5rem; padding: 0.65rem 1.5rem;
+      background: var(--accent); border: none; border-radius: 6px;
+      color: white; font-family: var(--font-mono); font-size: 0.875rem;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .start-btn:hover { background: #7c3aed; box-shadow: 0 0 20px rgba(139,92,246,0.5); }
+    .start-btn.alt {
+      background: transparent; border: 1px solid var(--border);
+      color: var(--muted); margin-top: 0;
+    }
+    .start-btn.alt:hover { border-color: var(--cyan); color: var(--cyan); box-shadow: none; }
+
+    /* Param panel — bottom-left HUD that builds itself from the active fx's
+       schema. Audio panel is a sibling row above it. */
+    #panel-stack {
+      position: fixed; bottom: 1.25rem; left: 1.25rem; z-index: 15;
+      display: flex; flex-direction: column-reverse; gap: 0.5rem;
+      max-width: min(94vw, 340px);
+    }
+    .qp-card {
+      background: var(--surface); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.65rem 0.8rem; font-family: var(--font-mono);
+      font-size: 0.72rem; color: var(--text);
+      display: flex; flex-direction: column; gap: 0.45rem;
+    }
+    .qp-card.collapsed > .qp-body { display: none; }
+    .qp-head {
+      display: flex; align-items: center; gap: 0.5rem;
+      color: var(--muted); cursor: pointer; user-select: none;
+    }
+    .qp-head .qp-title { color: var(--cyan); }
+    .qp-head .qp-spacer { flex: 1; }
+    .qp-body { display: flex; flex-direction: column; gap: 0.4rem; }
+
+    .qp-presets {
+      display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;
+    }
+    .qp-preset-label { color: var(--muted); margin-right: 0.2rem; }
+    .qp-preset {
+      background: none; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--muted);
+      font-family: var(--font-mono); font-size: 0.68rem;
+      padding: 0.15rem 0.5rem; cursor: pointer; transition: all 0.15s;
+    }
+    .qp-preset:hover  { border-color: var(--accent); color: var(--accent); }
+    .qp-preset.active { border-color: var(--pink);   color: var(--pink); }
+
+    .qp-row {
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: center; gap: 0.5rem;
+    }
+    .qp-row label {
+      display: flex; align-items: center; gap: 0.35rem;
+      color: var(--text); white-space: nowrap;
+    }
+    .qp-val { color: var(--cyan); min-width: 5ch; text-align: right; }
+    .qp-row input[type=range] {
+      width: 130px; accent-color: var(--accent); cursor: pointer;
+    }
+    .qp-toggle {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--muted); font-family: var(--font-mono); font-size: 0.68rem;
+      padding: 0.1rem 0.55rem; cursor: pointer; transition: all 0.15s;
+    }
+    .qp-toggle.active { border-color: var(--pink); color: var(--pink); }
+    .qp-select {
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text);
+      font-family: var(--font-mono); font-size: 0.7rem;
+      padding: 0.1rem 0.4rem;
+    }
+
+    #hints {
+      position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 10;
+      font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted);
+      display: flex; flex-direction: column; gap: 0.25rem; opacity: 0.5;
+    }
+    kbd {
+      display: inline-block; background: rgba(45,45,80,0.8);
+      border-radius: 3px; padding: 0 4px; color: var(--text);
+    }
+
+    /* Strudel panel — same layout as cymatics so the embed feels familiar. */
+    #strudel-panel {
+      position: fixed; left: 50%; top: 4.5rem;
+      transform: translateX(-50%);
+      z-index: 18;
+      width: min(96vw, 920px);
+      height: 480px;
+      min-width: 360px;  min-height: 220px;
+      max-width: 100vw;  max-height: calc(100vh - 6rem);
+      background: transparent;
+      border: 1px solid var(--border); border-radius: 10px;
+      font-family: var(--font-mono); color: var(--text);
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+      resize: both;
+    }
+    #strudel-header {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.45rem 0.75rem;
+      background: var(--surface); backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+      cursor: grab; user-select: none;
+    }
+    #strudel-header.dragging { cursor: grabbing; }
+    #strudel-header .ctrl-btn { cursor: pointer; }
+    .sp-title { color: var(--text); }
+    .sp-tag   { color: var(--accent); margin-left: 0.25rem; }
+    .sp-status { color: var(--muted); margin-left: auto; font-size: 0.7rem; }
+    .sp-status.live { color: var(--pink); }
+    #btn-strudel-play, #btn-strudel-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
+    #btn-strudel-play.playing { color: var(--pink); border-color: var(--pink); }
+    #btn-strudel-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    #strudel-mount {
+      flex: 1; min-height: 0; overflow: auto;
+      background: transparent;
+    }
+    #strudel-mount strudel-editor {
+      display: block; width: 100%; background: transparent !important;
+      --background:        transparent !important;
+      --bg:                transparent !important;
+      --editor-background: transparent !important;
+      --background-color:  transparent !important;
+    }
+    #strudel-mount strudel-editor,
+    #strudel-mount strudel-editor * {
+      background:       transparent !important;
+      background-color: transparent !important;
+      background-image: none        !important;
+    }
+    #strudel-mount :is(.cm-content, .cm-line) {
+      text-shadow: 0 0 4px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.85);
+    }
+    #strudel-mount strudel-editor .cm-content .cm-line > *,
+    #strudel-mount strudel-editor .cm-line > * {
+      background: rgba(0,0,0,0.35) !important;
+    }
+
+    @media (max-width: 768px) {
+      #topbar       { padding: 0.4rem 0.6rem; flex-direction: column;
+                      align-items: stretch; gap: 0.4rem; }
+      #topbar-left  { gap: 0.6rem; font-size: 0.72rem; white-space: nowrap; overflow: hidden; }
+      .experiment-tag { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+      #topbar-right { gap: 0.35rem; justify-content: flex-start; }
+      #lvl, #fxname { display: none; }
+      .ctrl-btn     { padding: 0.22rem 0.5rem; font-size: 0.7rem; }
+      #panel-stack  { left: 0.5rem; right: 0.5rem; bottom: 0.5rem; max-width: none; }
+      #hints        { display: none; }
+      #video.visible { width: 120px; bottom: 0.5rem; right: 0.5rem; }
+      #strudel-panel { top: 5.5rem; width: 96vw; height: 60vh; }
+      .sp-tag, .sp-status { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- QualiaCore creates a <canvas> inside #qualia-host on each fx switch
+     (a single canvas can only bind one context type). The host carries the
+     CSS slot so the inner canvas inherits position/blend/z-index. -->
+<div id="qualia-host"></div>
+<canvas id="test-canvas"></canvas>
+<video id="video" autoplay playsinline muted></video>
+
+<div id="topbar">
+  <div id="topbar-left">
+    <a href="/lab" class="back-link">← lab</a>
+    <span class="experiment-title">qualia</span>
+    <span class="experiment-tag">// pluggable harness</span>
+  </div>
+  <div id="topbar-right">
+    <span id="fps">-- fps</span>
+    <span id="fxname">—</span>
+    <span id="lvl">b-- m-- h--</span>
+    <select id="fx-select" class="ctrl-btn" title="Active fx (V)"></select>
+    <select id="mic-select" class="ctrl-btn" title="Choose microphone" style="display:none;"></select>
+    <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
+    <button class="ctrl-btn active" id="btn-camera" title="Camera size (C)" style="display:none;">camera</button>
+    <select id="pose-source" class="ctrl-btn" title="Pose source (P)">
+      <option value="off">pose off</option>
+      <option value="camera">pose cam</option>
+    </select>
+    <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
+    <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (D)">strudel</button>
+    <button class="ctrl-btn" id="btn-pause" title="Pause (Space)">pause</button>
+    <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
+    <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
+  </div>
+</div>
+
+<div id="zen-handle" title="Exit zen mode (Z)">
+  <span class="zen-icon">✦</span>
+</div>
+
+<div id="status-overlay">
+  <div class="status-dot"></div>
+  <div class="status-title">qualia</div>
+  <div class="status-msg" id="status-msg">click start to enable microphone</div>
+  <div class="status-sub">pluggable visualizer harness — chladni · singularity lens · neural field. audio + pose drive a shared QualiaField; new fx are one file.</div>
+  <button class="start-btn" id="start-btn">enable mic →</button>
+  <button class="start-btn alt" id="start-silent-btn">start without mic</button>
+</div>
+
+<div id="hints">
+  <span><kbd>V</kbd> next fx</span>
+  <span><kbd>P</kbd> pose src</span>
+  <span><kbd>C</kbd> cam size</span>
+  <span><kbd>M</kbd> audio</span>
+  <span><kbd>D</kbd> strudel</span>
+  <span><kbd>Space</kbd> pause</span>
+  <span><kbd>Z</kbd> zen</span>
+</div>
+
+<!-- Bottom-left HUD: audio panel + dynamically-built fx params card. -->
+<div id="panel-stack">
+  <div id="audio-card" class="qp-card collapsed" style="display:none">
+    <div class="qp-head" data-toggle="audio-card">
+      <span class="qp-title">audio</span>
+      <span class="qp-spacer"></span>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-presets" data-qp="audio-presets"></div>
+      <div class="qp-row" data-qp="audio-gain">
+        <label>gain<span class="qp-val"></span></label>
+        <input type="range" min="0.25" max="4" step="0.05" value="1.0">
+      </div>
+      <div class="qp-row" data-qp="audio-thresh">
+        <label>beat thresh<span class="qp-val"></span></label>
+        <input type="range" min="1.1" max="2.5" step="0.05" value="1.40">
+      </div>
+      <div class="qp-row" data-qp="audio-cooldown">
+        <label>beat gap<span class="qp-val"></span></label>
+        <input type="range" min="80" max="600" step="10" value="320">
+      </div>
+      <div class="qp-row" data-qp="audio-ema">
+        <label>response<span class="qp-val"></span></label>
+        <input type="range" min="0.04" max="0.40" step="0.01" value="0.14">
+      </div>
+    </div>
+  </div>
+
+  <div id="fx-card" class="qp-card">
+    <div class="qp-head" data-toggle="fx-card">
+      <span class="qp-title">params</span>
+      <span class="qp-spacer"></span>
+      <button class="qp-toggle" id="btn-fx-reset" title="Reset to defaults">reset</button>
+      <span>▾</span>
+    </div>
+    <div class="qp-body" id="fx-params"></div>
+  </div>
+</div>
+
+<div id="strudel-panel" style="display:none">
+  <div id="strudel-header">
+    <span class="sp-title">strudel <span class="sp-tag">// patterns → qualia</span></span>
+    <span class="sp-status" id="strudel-status">click ▶ in editor to start</span>
+    <button class="ctrl-btn" id="btn-strudel-play" title="Evaluate / play (Ctrl+Enter)">▶</button>
+    <button class="ctrl-btn" id="btn-strudel-stop" title="Stop (Ctrl+.)">■</button>
+    <button class="ctrl-btn" id="btn-strudel-close" title="Close (D)">×</button>
+  </div>
+  <div id="strudel-mount"></div>
+</div>
+
+<script>
+// All bootstrap logic lives in src/lib/qualia/page-init.js so Astro/Vite
+// can resolve the ESM import graph correctly. (Inline scripts in .astro
+// files are emitted verbatim and would 404 on the relative paths.)
+import { initQualiaPage } from '../../lib/qualia/page-init.js';
+initQualiaPage();
+</script>
+
+</body>
+</html>
