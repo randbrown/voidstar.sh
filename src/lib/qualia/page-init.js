@@ -15,6 +15,7 @@ import { bindVideoElement, getRotation, cycleRotation, getMirror, toggleMirror }
 import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
 import neuralField     from './fx/neural-field.js';
+import gargantuaVoid   from './fx/gargantua-void.js';
 
 const AUTO_CYCLE_SECONDS = 22;
 const AUTO_STYLES = ['chapters', 'alternate', 'random', 'hold'];
@@ -24,6 +25,7 @@ export function initQualiaPage() {
   const mesh = createMesh();
   mesh.register(chladni);
   mesh.register(singularityLens);
+  mesh.register(gargantuaVoid);
   mesh.register(neuralField);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
