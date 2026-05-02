@@ -63,6 +63,9 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   const fpsListeners = new Set();
   /** Listeners notified after each canvas (re)creation. */
   const canvasListeners = new Set();
+  /** Listeners notified every frame AFTER fx render — used by the overlay
+   *  layer (skeleton, sparks, ASCII post) so it composites on top. */
+  const frameListeners = new Set();
 
   function ensureCanvas(forType) {
     if (canvas && canvasType === forType) return canvas;
@@ -114,7 +117,12 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     const c = ensureCanvas(mod.contextType);
     let opts;
     if (mod.contextType === 'webgl2') {
-      const gl = c.getContext('webgl2', { alpha: true, premultipliedAlpha: false, antialias: false });
+      // preserveDrawingBuffer:true so the overlay's ASCII post-process can
+      // drawImage() from this canvas later in the same frame.
+      const gl = c.getContext('webgl2', {
+        alpha: true, premultipliedAlpha: false, antialias: false,
+        preserveDrawingBuffer: true,
+      });
       if (!gl) throw new Error('webgl2 not available');
       opts = { gl };
     } else {
@@ -197,6 +205,10 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
         console.error('[qualia] fx error:', e);
       }
     }
+
+    // Per-frame listeners (overlay etc.) fire AFTER fx render so they
+    // composite on top.
+    frameListeners.forEach(fn => { try { fn(field); } catch (e) { console.error('[qualia] frame listener error:', e); } });
   }
 
   function start() {
@@ -209,6 +221,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   function isZen()      { return zen; }
   function setDprCap(v) { dprCap = Math.max(0.5, v); applyDpr(); }
   function onFps(fn)    { fpsListeners.add(fn); return () => fpsListeners.delete(fn); }
+  function onFrame(fn)  { frameListeners.add(fn); return () => frameListeners.delete(fn); }
   function onCanvas(fn) {
     canvasListeners.add(fn);
     if (canvas) { try { fn(canvas, canvasType); } catch {} }
@@ -228,6 +241,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     isZen,
     setDprCap,
     onFps,
+    onFrame,
     onCanvas,
     getCanvas: () => canvas,
     getActiveContextType: () => canvasType,

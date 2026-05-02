@@ -30,6 +30,17 @@ export function createAudio() {
   let timeBuf   = null;
   let enabled   = false;
   let micId     = null;
+  let source    = 'off'; // 'off' | 'mic' | 'strudel'
+
+  // State-change listeners — fired whenever the audio source changes (mic
+  // start/stop, Strudel adopt/release). Page UI subscribes so the topbar
+  // button stays consistent regardless of which subsystem flipped state.
+  const listeners = new Set();
+  function notify() {
+    const snap = { enabled, source, micId };
+    listeners.forEach(fn => { try { fn(snap); } catch {} });
+  }
+  function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
   // Tunables (preset-driven by presets.js)
   let gain         = 1.0;
@@ -83,33 +94,41 @@ export function createAudio() {
     micId = settings.deviceId || deviceId || null;
 
     enabled = true;
+    source = 'mic';
+    notify();
     return micId;
   }
 
   async function stop() {
     enabled = false;
+    source = 'off';
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     if (ctx)    { try { await ctx.close(); } catch {} ctx = null; }
     analyser = null;
     freqBuf = timeBuf = null;
     frame.spectrum = frame.waveform = null;
     resetState();
+    notify();
   }
 
   /** Adopt an externally-owned analyser+ctx (used by Strudel tap). */
   function adoptAnalyser(externalCtx, externalAnalyser) {
     enabled = true;
+    source = 'strudel';
     ctx = externalCtx;
     analyser = externalAnalyser;
     configureBins();
+    notify();
   }
 
   function releaseAdopted() {
     enabled = false;
+    source = 'off';
     ctx = null; analyser = null;
     freqBuf = timeBuf = null;
     frame.spectrum = frame.waveform = null;
     resetState();
+    notify();
   }
 
   function resetState() {
@@ -188,7 +207,9 @@ export function createAudio() {
     tick,
     setTunables,
     getTunables,
+    onChange,
     isEnabled: () => enabled,
+    getSource:       () => source,
     getCurrentMicId: () => micId,
     getAnalyser: () => analyser,
     getCtx:      () => ctx,

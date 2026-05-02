@@ -213,6 +213,11 @@
       font-family: var(--font-mono); font-size: 0.7rem;
       padding: 0.1rem 0.4rem;
     }
+    .qp-section-tag {
+      color: var(--muted); font-size: 0.65rem; letter-spacing: 0.06em;
+      border-top: 1px dashed var(--border);
+      padding-top: 0.4rem; margin-top: 0.1rem;
+    }
 
     #hints {
       position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 10;
@@ -321,9 +326,31 @@
     <select id="mic-select" class="ctrl-btn" title="Choose microphone" style="display:none;"></select>
     <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
     <button class="ctrl-btn active" id="btn-camera" title="Camera size (C)" style="display:none;">camera</button>
+    <button class="ctrl-btn" id="btn-cam-rotate" title="Rotate camera (O / 0)" style="display:none;">rot 0°</button>
+    <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (I)" style="display:none;">mirror</button>
     <select id="pose-source" class="ctrl-btn" title="Pose source (P)">
       <option value="off">pose off</option>
       <option value="camera">pose cam</option>
+    </select>
+    <select id="pose-max" class="ctrl-btn" title="Max poses (1-6)" style="display:none;">
+      <option value="1">1 pose</option>
+      <option value="2">2 poses</option>
+      <option value="3" selected>3 poses</option>
+      <option value="4">4 poses</option>
+      <option value="5">5 poses</option>
+      <option value="6">6 poses</option>
+    </select>
+    <button class="ctrl-btn active" id="btn-skeleton" title="Skeleton overlay (J)">skeleton</button>
+    <button class="ctrl-btn active" id="btn-sparks"   title="Beat sparks (F)">sparks</button>
+    <button class="ctrl-btn active" id="btn-aura"     title="Resonance aura (A)">aura</button>
+    <button class="ctrl-btn active" id="btn-ripples"  title="Beat ripples (B)">ripples</button>
+    <button class="ctrl-btn"        id="btn-ascii"    title="ASCII post (X)">ascii</button>
+    <button class="ctrl-btn"        id="btn-auto"     title="Auto-cycle fx (L)">auto</button>
+    <select id="auto-style" class="ctrl-btn" title="Auto-cycle style">
+      <option value="chapters">chapters</option>
+      <option value="alternate">alternate</option>
+      <option value="random">random</option>
+      <option value="hold">hold ascii</option>
     </select>
     <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
     <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (D)">strudel</button>
@@ -348,8 +375,16 @@
 
 <div id="hints">
   <span><kbd>V</kbd> next fx</span>
+  <span><kbd>L</kbd> auto</span>
+  <span><kbd>X</kbd> ascii</span>
+  <span><kbd>B</kbd> ripples</span>
+  <span><kbd>J</kbd> skeleton</span>
+  <span><kbd>F</kbd> sparks</span>
+  <span><kbd>A</kbd> aura</span>
   <span><kbd>P</kbd> pose src</span>
   <span><kbd>C</kbd> cam size</span>
+  <span><kbd>O</kbd>/<kbd>0</kbd> rotate</span>
+  <span><kbd>I</kbd> mirror</span>
   <span><kbd>M</kbd> audio</span>
   <span><kbd>D</kbd> strudel</span>
   <span><kbd>Space</kbd> pause</span>
@@ -381,6 +416,27 @@
       <div class="qp-row" data-qp="audio-ema">
         <label>response<span class="qp-val"></span></label>
         <input type="range" min="0.04" max="0.40" step="0.01" value="0.14">
+      </div>
+      <div class="qp-section-tag">// pose</div>
+      <div class="qp-row" data-qp="pose-smooth">
+        <label>smooth<span class="qp-val">50%</span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0.5">
+      </div>
+      <div class="qp-row" data-qp="pose-detect">
+        <label>detect<span class="qp-val"></span></label>
+        <input type="range" min="0.005" max="1" step="0.005" value="0.05">
+      </div>
+      <div class="qp-row" data-qp="pose-presence">
+        <label>presence<span class="qp-val"></span></label>
+        <input type="range" min="0.005" max="1" step="0.005" value="0.05">
+      </div>
+      <div class="qp-row" data-qp="pose-track">
+        <label>tracking<span class="qp-val"></span></label>
+        <input type="range" min="0.005" max="1" step="0.005" value="0.05">
+      </div>
+      <div class="qp-row" data-qp="pose-linger">
+        <label>linger<span class="qp-val">800ms</span></label>
+        <input type="range" min="0" max="3000" step="50" value="800">
       </div>
     </div>
   </div>
