@@ -44,15 +44,21 @@ export function createAudio() {
 
   // Tunables (preset-driven by presets.js)
   let gain         = 1.0;
-  let alpha        = 0.14;   // EMA factor on band values
-  let beatThresh   = 1.40;
-  let beatCooldown = 320;
+  let alpha        = 0.30;   // EMA factor on band values — higher = snappier
+  let beatThresh   = 1.30;
+  let beatCooldown = 280;
 
   let binBassLo = 0,  binBassHi = 8;
   let binMidsLo = 8,  binMidsHi = 80;
   let binHighsLo= 80, binHighsHi= 200;
 
-  // Beat / transient state
+  // Beat / transient state. The running means (bassAvg/highsAvg) are used
+  // as a noise-floor reference for beat detection; the BAND_CEILING cap
+  // prevents them from climbing into a region where multiplicative beats
+  // become mathematically impossible on sustained-loud material.
+  const BAND_CEILING = 0.65;       // running mean is clamped here
+  const BEAT_DELTA_BASS  = 0.06;   // additive headroom on top of running mean
+  const BEAT_DELTA_HIGHS = 0.04;
   let bassAvg = 0, highsAvg = 0;
   let lastBeatMs = 0, lastHighsMs = 0;
 
@@ -83,8 +89,11 @@ export function createAudio() {
     stream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     analyser = ctx.createAnalyser();
-    analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.72;
+    // Smaller FFT → less internal latency; lower smoothingTimeConstant
+    // makes the analyser itself respond more quickly so beat transients
+    // aren't washed out by its built-in temporal smoothing.
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.40;
     // source ➝ analyser only. Connecting to destination would loop mic to speakers.
     ctx.createMediaStreamSource(stream).connect(analyser);
     configureBins();
@@ -156,9 +165,16 @@ export function createAudio() {
     analyser.getByteFrequencyData(freqBuf);
     analyser.getByteTimeDomainData(timeBuf);
 
-    const rawBass  = Math.min(avgBins(freqBuf, binBassLo,  binBassHi)  / 255 * gain, 1);
-    const rawMids  = Math.min(avgBins(freqBuf, binMidsLo,  binMidsHi)  / 255 * gain, 1);
-    const rawHighs = Math.min(avgBins(freqBuf, binHighsLo, binHighsHi) / 255 * gain, 1);
+    // Raw band level (pre-gain) — used for beat detection so a high gain
+    // setting can't saturate the comparator and stop firing beats. Visual
+    // bands are still gain-scaled and clamped to [0,1] for shaders.
+    const rawBassPre  = avgBins(freqBuf, binBassLo,  binBassHi)  / 255;
+    const rawMidsPre  = avgBins(freqBuf, binMidsLo,  binMidsHi)  / 255;
+    const rawHighsPre = avgBins(freqBuf, binHighsLo, binHighsHi) / 255;
+
+    const rawBass  = Math.min(rawBassPre  * gain, 1);
+    const rawMids  = Math.min(rawMidsPre  * gain, 1);
+    const rawHighs = Math.min(rawHighsPre * gain, 1);
     frame.bands.bass  = ema(frame.bands.bass,  rawBass,  alpha);
     frame.bands.mids  = ema(frame.bands.mids,  rawMids,  alpha);
     frame.bands.highs = ema(frame.bands.highs, rawHighs, alpha);
@@ -172,27 +188,40 @@ export function createAudio() {
     }
     frame.rms = Math.sqrt(rmsAcc / timeBuf.length);
 
-    // Bass beat — same envelope-vs-running-mean heuristic as cymatics.
-    bassAvg  = 0.97 * bassAvg  + 0.03 * rawBass;
-    highsAvg = 0.95 * highsAvg + 0.05 * rawHighs;
+    // Beat detection. Running means use the PRE-gain raw values + a fast
+    // adaptation rate (0.10 instead of 0.03) so the floor tracks recent
+    // loudness within ~1 sec. The mean is then clamped to BAND_CEILING so
+    // a sustained-loud passage can't push the comparator past where beats
+    // can ever exceed it. Gating uses BOTH a multiplicative ratio AND an
+    // additive delta — the additive term is what guarantees beats keep
+    // firing on bass-heavy material where the mean approaches the signal.
+    bassAvg  = 0.90 * bassAvg  + 0.10 * rawBassPre;
+    highsAvg = 0.88 * highsAvg + 0.12 * rawHighsPre;
+    const bassFloor  = Math.min(bassAvg,  BAND_CEILING);
+    const highsFloor = Math.min(highsAvg, BAND_CEILING);
     const now = performance.now();
-    frame.beat.active = rawBass > bassAvg * beatThresh && now - lastBeatMs > beatCooldown;
+    frame.beat.active = rawBassPre > bassFloor * beatThresh
+                     && rawBassPre > bassFloor + BEAT_DELTA_BASS
+                     && rawBassPre > 0.04
+                     && now - lastBeatMs > beatCooldown;
     if (frame.beat.active) { lastBeatMs = now; frame.beat.pulse = 1; }
 
     // Highs transient — looser threshold + shorter cooldown for hat / cymbal hits.
     const hiThresh   = beatThresh   * 0.88;
     const hiCooldown = beatCooldown * 0.45;
-    frame.highs.active = rawHighs > highsAvg * hiThresh
-                      && rawHighs > 0.05
+    frame.highs.active = rawHighsPre > highsFloor * hiThresh
+                      && rawHighsPre > highsFloor + BEAT_DELTA_HIGHS
+                      && rawHighsPre > 0.04
                       && now - lastHighsMs > hiCooldown;
     if (frame.highs.active) { lastHighsMs = now; frame.highs.pulse = 1; }
   }
 
   function setTunables(t) {
-    if (t.gain         != null) gain         = t.gain;
-    if (t.ema          != null) alpha        = t.ema;
-    if (t.thresh       != null) beatThresh   = t.thresh;
-    if (t.cooldown     != null) beatCooldown = t.cooldown;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    if (t.gain         != null) gain         = clamp(t.gain, 0.25, 4.0);
+    if (t.ema          != null) alpha        = clamp(t.ema, 0.05, 0.60);
+    if (t.thresh       != null) beatThresh   = clamp(t.thresh, 1.10, 2.50);
+    if (t.cooldown     != null) beatCooldown = clamp(t.cooldown, 80, 600);
   }
   function getTunables() {
     return { gain, ema: alpha, thresh: beatThresh, cooldown: beatCooldown };

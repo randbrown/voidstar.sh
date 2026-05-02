@@ -175,13 +175,19 @@ export function buildAudioPanel({ root, presets, onTunablesChange, onPreset }) {
   wire('gain',     'gain',     parseFloat, v => `${v.toFixed(2)}×`);
   wire('thresh',   'thresh',   parseFloat, v => v.toFixed(2));
   wire('cooldown', 'cooldown', v => parseInt(v, 10), v => `${v|0}ms`);
-  wire('ema',      'ema',      parseFloat, v => `${Math.round((v - 0.04) / (0.40 - 0.04) * 100)}%`);
+  wire('ema',      'ema',      parseFloat, v => `${Math.round((v - 0.05) / (0.60 - 0.05) * 100)}%`);
 
+  function clampToInput(input, v) {
+    const min = parseFloat(input.min), max = parseFloat(input.max);
+    if (Number.isFinite(min) && v < min) v = min;
+    if (Number.isFinite(max) && v > max) v = max;
+    return v;
+  }
   function setTunables(t) {
-    if (refs.gain     && t.gain     != null) { refs.gain.input.value     = t.gain;     refs.gain.valSpan.textContent     = refs.gain.fmt(t.gain); }
-    if (refs.thresh   && t.thresh   != null) { refs.thresh.input.value   = t.thresh;   refs.thresh.valSpan.textContent   = refs.thresh.fmt(t.thresh); }
-    if (refs.cooldown && t.cooldown != null) { refs.cooldown.input.value = t.cooldown; refs.cooldown.valSpan.textContent = refs.cooldown.fmt(t.cooldown); }
-    if (refs.ema      && t.ema      != null) { refs.ema.input.value      = t.ema;      refs.ema.valSpan.textContent      = refs.ema.fmt(t.ema); }
+    if (refs.gain     && t.gain     != null) { const v = clampToInput(refs.gain.input,     t.gain);     refs.gain.input.value     = v; refs.gain.valSpan.textContent     = refs.gain.fmt(v); }
+    if (refs.thresh   && t.thresh   != null) { const v = clampToInput(refs.thresh.input,   t.thresh);   refs.thresh.input.value   = v; refs.thresh.valSpan.textContent   = refs.thresh.fmt(v); }
+    if (refs.cooldown && t.cooldown != null) { const v = clampToInput(refs.cooldown.input, t.cooldown); refs.cooldown.input.value = v; refs.cooldown.valSpan.textContent = refs.cooldown.fmt(v); }
+    if (refs.ema      && t.ema      != null) { const v = clampToInput(refs.ema.input,      t.ema);      refs.ema.input.value      = v; refs.ema.valSpan.textContent      = refs.ema.fmt(v); }
   }
 
   function setActivePreset(name) {

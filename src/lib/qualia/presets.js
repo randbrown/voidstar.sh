@@ -2,12 +2,14 @@
 // state. AUDIO_PRESETS is shared across fx (it tunes the audio pipeline,
 // not any specific visual).
 
+// Tunables: gain (linear scale 0.25–4×), ema (band response 0.05–0.60),
+// thresh (multiplicative beat ratio 1.10–2.50), cooldown (ms 80–600).
 export const AUDIO_PRESETS = {
-  default:  { gain: 1.0, ema: 0.14, thresh: 1.40, cooldown: 320 },
-  ambient:  { gain: 1.0, ema: 0.10, thresh: 1.28, cooldown: 420 },
-  acoustic: { gain: 1.0, ema: 0.09, thresh: 1.25, cooldown: 550 },
-  edm:      { gain: 1.0, ema: 0.15, thresh: 1.38, cooldown: 360 },
-  metal:    { gain: 1.0, ema: 0.30, thresh: 1.80, cooldown: 110 },
+  default:  { gain: 1.0, ema: 0.30, thresh: 1.30, cooldown: 280 },
+  ambient:  { gain: 1.0, ema: 0.18, thresh: 1.22, cooldown: 420 },
+  acoustic: { gain: 1.0, ema: 0.20, thresh: 1.20, cooldown: 460 },
+  edm:      { gain: 1.0, ema: 0.34, thresh: 1.32, cooldown: 240 },
+  metal:    { gain: 1.0, ema: 0.45, thresh: 1.55, cooldown: 110 },
 };
 export const AUDIO_PRESET_NAMES = Object.keys(AUDIO_PRESETS);
 

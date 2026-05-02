@@ -248,7 +248,12 @@ void main() {
   float shock = exp(-pow((r - swR) / swW, 2.0)) * uBeat.y;
   col += pal.voidEdge * shock * 1.4;
 
-  // ── Bohr-style 3D rings: faint outline + bright electrons with trails ──
+  // ── Bohr-style 3D rings: faint outline + bright electrons with trails.
+  // Each ring's contribution is split per-pixel into a "behind" portion
+  // (still subject to the void's occlusion) and a "front" portion held
+  // in colFront and composited AFTER the void cut + logo, so any orbit
+  // segment that's in front of the aperture in 3D appears over it.
+  vec3  colFront  = vec3(0.0);
   float orbitGain = uOrbitAmount;
   for (int i = 0; i < 3; i++) {
     vec3  u  = uRingU[i];
@@ -256,38 +261,45 @@ void main() {
     float Rm = uRingRMult[i] * vR;
     float tE = uRingT[i];
 
+    // Per-pixel ring depth: parameter on the ring closest to this pixel's
+    // projection, then evaluate the ring's 3D z at that parameter. Used
+    // both for outline AND for the trail so each segment of the orbit is
+    // depth-tested independently — front sweeps cleanly over the void.
+    vec2  q        = p / max(Rm, 1e-3);
+    float tNearest = atan(dot(q, v.xy), dot(q, u.xy));
+    float ctP = cos(tNearest), stP = sin(tNearest);
+    float zPix = (u.z * ctP + v.z * stP) * Rm;
+    float frontW = smoothstep(-0.04 * Rm, 0.04 * Rm, zPix);
+
     // Faint ring outline.
     float d = ringDist(p, u.xy, v.xy, Rm);
     float thick = vR * 0.014 + 0.001;
     float outlineSoft = exp(-pow(d / (thick * 2.4), 2.0)) * 0.18;
     float outlineHard = exp(-pow(d / thick, 2.0)) * 0.32;
-    col += pal.orbit * (outlineSoft + outlineHard) * orbitGain;
+    vec3  outlineCol  = pal.orbit * (outlineSoft + outlineHard);
 
     // Electron 3D position and velocity.
     float ct = cos(tE), st = sin(tE);
-    vec3  e3 = (u * ct + v * st) * Rm;
+    vec3  e3  = (u * ct + v * st) * Rm;
     vec3  ev3 = (-u * st + v * ct);
-
     vec2  eP   = e3.xy;
-    float eZ   = e3.z;                 // -Rm..+Rm; positive = nearer
+    float eZ   = e3.z;
     vec2  eVel = ev3.xy;
     float velLen = max(length(eVel), 1e-3);
     vec2  velN = eVel / velLen;
     vec2  velPerp = vec2(-velN.y, velN.x);
 
-    // Depth-driven brightness — electrons in front read brighter.
-    float depthN = 0.5 + 0.5 * (eZ / max(Rm, 1e-3));
+    // Brightness modulated by the electron's own 3D depth (closer = brighter).
+    float depthN   = 0.5 + 0.5 * (eZ / max(Rm, 1e-3));
     float depthBri = mix(0.45, 1.7, smoothstep(0.0, 1.0, depthN));
 
-    // Electron core + halo.
-    float dE  = length(p - eP);
+    float dE     = length(p - eP);
     float coreR  = vR * (0.045 + uBeat.y * 0.04);
     float core   = exp(-pow(dE / coreR, 2.0));
     float haloR  = vR * 0.18;
     float haloEl = exp(-pow(dE / haloR, 2.0)) * 0.45;
     float scintil = uHighs.y * exp(-pow(dE / (coreR * 1.4), 2.0));
 
-    // Plasma trail behind the electron — projected line segment.
     vec2  toE   = p - eP;
     float along = -dot(toE, velN);
     float perp  = dot(toE, velPerp);
@@ -297,8 +309,20 @@ void main() {
     float trailSide  = exp(-pow(perp / trailWidth, 2.0));
     float trail      = trailLong * trailSide * 0.85;
 
-    col += pal.electron * (core * 2.4 + haloEl + scintil * 1.3) * depthBri * orbitGain;
-    col += pal.plasma   * trail * (0.7 + 0.6 * depthBri) * orbitGain;
+    vec3 electronCol = pal.electron * (core * 2.4 + haloEl + scintil * 1.3) * depthBri;
+    vec3 trailCol    = pal.plasma   * trail * (0.7 + 0.6 * depthBri);
+
+    // Outline + trail use per-pixel zPix so they depth-test along the ring.
+    vec3 outlineAndTrail = (outlineCol + trailCol) * orbitGain;
+    col      += outlineAndTrail * (1.0 - frontW);
+    colFront += outlineAndTrail * frontW;
+
+    // Electron core uses the electron's own eZ — it's a point, so per-pixel
+    // ring depth would smear it across the silhouette. Split it directly.
+    float frontE = smoothstep(-0.04 * Rm, 0.04 * Rm, eZ);
+    vec3  electronContrib = electronCol * orbitGain;
+    col      += electronContrib * (1.0 - frontE);
+    colFront += electronContrib * frontE;
   }
 
   // ── Sparks scattered radially around the void (highs-driven scintilla).
@@ -406,6 +430,11 @@ void main() {
   col += sideCol * side * 0.65;
   col += pal.voidEdge * edge * (0.40 + uBands.y * 0.55 + uBeat.y * 0.45) * logoVisible;
 
+  // In-front orbit content composited on top of the aperture + logo so
+  // electrons/trails crossing the front of the voidstar appear in the
+  // foreground in 3D-correct order.
+  col += colFront;
+
   // ── Vignette + tone ───────────────────────────────────────────────────
   float v = smoothstep(1.7, 0.4, length(p));
   col *= v;
@@ -444,17 +473,17 @@ export default {
 
   params: [
     { id: 'voidRadius',      label: 'void radius',      type: 'range', min: 0.10, max: 0.55, step: 0.01, default: 0.26 },
-    { id: 'energyThickness', label: 'energy thickness', type: 'range', min: 0.02, max: 0.40, step: 0.01, default: 0.16 },
-    { id: 'swirlIntensity',  label: 'swirl intensity',  type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 0.95 },
-    { id: 'flowSpeed',       label: 'flow speed',       type: 'range', min: 0.00, max: 3.00, step: 0.01, default: 0.80 },
-    { id: 'orbitAmount',     label: 'orbit amount',     type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 1.10 },
-    { id: 'logoDepth',       label: 'logo depth',       type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 0.75 },
-    { id: 'parallax',        label: 'parallax',         type: 'range', min: 0.00, max: 1.50, step: 0.01, default: 0.45 },
-    { id: 'palette',         label: 'palette',          type: 'select', options: ['silver', 'voidblue', 'platinum', 'inferno'], default: 'silver' },
+    { id: 'energyThickness', label: 'energy thickness', type: 'range', min: 0.02, max: 0.40, step: 0.01, default: 0.34 },
+    { id: 'swirlIntensity',  label: 'swirl intensity',  type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 0.16 },
+    { id: 'flowSpeed',       label: 'flow speed',       type: 'range', min: 0.00, max: 3.00, step: 0.01, default: 0.23 },
+    { id: 'orbitAmount',     label: 'orbit amount',     type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 1.01 },
+    { id: 'logoDepth',       label: 'logo depth',       type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 0.00 },
+    { id: 'parallax',        label: 'parallax',         type: 'range', min: 0.00, max: 1.50, step: 0.01, default: 0.76 },
+    { id: 'palette',         label: 'palette',          type: 'select', options: ['silver', 'voidblue', 'platinum', 'inferno'], default: 'platinum' },
   ],
 
   presets: {
-    default:         { voidRadius: 0.26, energyThickness: 0.16, swirlIntensity: 0.95, flowSpeed: 0.80, orbitAmount: 1.10, logoDepth: 0.75, parallax: 0.45, palette: 'silver' },
+    default:         { voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16, flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76, palette: 'platinum' },
     atomic_mystic:   { voidRadius: 0.24, energyThickness: 0.14, swirlIntensity: 1.10, flowSpeed: 1.00, orbitAmount: 1.50, logoDepth: 0.80, parallax: 0.50, palette: 'platinum' },
     platonic:        { voidRadius: 0.28, energyThickness: 0.10, swirlIntensity: 0.55, flowSpeed: 0.45, orbitAmount: 0.65, logoDepth: 0.65, parallax: 0.35, palette: 'silver' },
     ruliad:          { voidRadius: 0.22, energyThickness: 0.18, swirlIntensity: 1.35, flowSpeed: 1.20, orbitAmount: 1.35, logoDepth: 0.90, parallax: 0.60, palette: 'voidblue' },
@@ -526,9 +555,9 @@ export default {
     let audioRef = null;
     const scratch = {
       time: 0,
-      voidRadius: 0.26, energyThickness: 0.16, swirlIntensity: 0.95,
-      flowSpeed: 0.80, orbitAmount: 1.10, logoDepth: 0.75, parallax: 0.45,
-      palette: 0,
+      voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16,
+      flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76,
+      palette: PALETTES.indexOf('platinum'),
     };
 
     function update(field) {

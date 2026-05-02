@@ -62,6 +62,7 @@ export function initQualiaPage() {
   const fxResetBtn = document.getElementById('btn-fx-reset');
   const host       = document.getElementById('qualia-host');
   const fxParamsEl = document.getElementById('fx-params');
+  const poseCard   = document.getElementById('pose-card');
 
   // ── Core wiring ───────────────────────────────────────────────────────────
   const audio = createAudio();
@@ -120,6 +121,7 @@ export function initQualiaPage() {
     poseThresh:     pose.getThresholds(),
     poseLingerMs:   pose.getLingerMs(),
     audioCollapsed: audioCard.classList.contains('collapsed'),
+    poseCollapsed:  poseCard?.classList.contains('collapsed') ?? true,
     paramsCollapsed: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
   }));
   const stored = settings.load();
@@ -231,16 +233,26 @@ export function initQualiaPage() {
   }
 
   // ── Card collapse toggles ─────────────────────────────────────────────────
-  // Restore prior collapse state. The audio card's HTML default is
+  // Restore prior collapse state. The audio + pose cards default to
   // `collapsed`; the params card defaults to expanded. Only override when
   // a stored value exists so first-time visitors get the curated default.
   if (typeof stored.audioCollapsed === 'boolean') {
     audioCard.classList.toggle('collapsed', stored.audioCollapsed);
   }
+  if (poseCard && typeof stored.poseCollapsed === 'boolean') {
+    poseCard.classList.toggle('collapsed', stored.poseCollapsed);
+  }
   const fxCardEl = document.getElementById('fx-card');
   if (fxCardEl && typeof stored.paramsCollapsed === 'boolean') {
     fxCardEl.classList.toggle('collapsed', stored.paramsCollapsed);
   }
+  // Pose card visibility tracks the pose source — only shown when pose is on.
+  function syncPoseCardVisibility() {
+    if (!poseCard) return;
+    const on = poseSelect.value !== 'off';
+    poseCard.style.display = on ? '' : 'none';
+  }
+  syncPoseCardVisibility();
   document.querySelectorAll('[data-toggle]').forEach(h => {
     h.addEventListener('click', (e) => {
       if (e.target.closest('button, input, select')) return;
@@ -341,6 +353,7 @@ export function initQualiaPage() {
         poseSelect.value = 'off';
       }
     }
+    syncPoseCardVisibility();
     settings.save();
   });
 
