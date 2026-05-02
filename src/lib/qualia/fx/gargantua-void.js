@@ -322,15 +322,16 @@ export default {
     { id: 'flowSpeed',      label: 'flow speed',      type: 'range', min: 0,   max: 3,   step: 0.05, default: 1.0 },
     { id: 'horizonSize',    label: 'horizon r_s',     type: 'range', min: 0.1, max: 0.6, step: 0.005, default: 0.28 },
     { id: 'bloomFake',      label: 'bloom',           type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
+    { id: 'poseBind',       label: 'pose binding',    type: 'toggle', default: true },
     { id: 'palette',        label: 'palette',         type: 'select', options: ['gold', 'voidblue', 'inferno'], default: 'gold' },
   ],
 
   presets: {
-    default:         { diskTilt: 0.55, lensStrength: 1.4, diskBrightness: 2.2, turbulence: 0.8, flowSpeed: 1.0, horizonSize: 0.28, bloomFake: 1.0, palette: 'gold' },
-    interstellarish: { diskTilt: 0.42, lensStrength: 1.7, diskBrightness: 2.6, turbulence: 0.6, flowSpeed: 0.7, horizonSize: 0.22, bloomFake: 1.2, palette: 'gold' },
-    voidstar:        { diskTilt: 0.48, lensStrength: 1.8, diskBrightness: 2.4, turbulence: 0.7, flowSpeed: 0.85, horizonSize: 0.26, bloomFake: 1.3, palette: 'voidblue' },
-    violent:         { diskTilt: 0.70, lensStrength: 1.2, diskBrightness: 3.2, turbulence: 1.5, flowSpeed: 2.0, horizonSize: 0.32, bloomFake: 1.6, palette: 'inferno' },
-    ambient:         { diskTilt: 0.30, lensStrength: 1.0, diskBrightness: 1.5, turbulence: 0.4, flowSpeed: 0.4, horizonSize: 0.20, bloomFake: 0.7, palette: 'gold' },
+    default:         { diskTilt: 0.55, lensStrength: 1.4, diskBrightness: 2.2, turbulence: 0.8, flowSpeed: 1.0, horizonSize: 0.28, bloomFake: 1.0, poseBind: true,  palette: 'gold' },
+    interstellarish: { diskTilt: 0.42, lensStrength: 1.7, diskBrightness: 2.6, turbulence: 0.6, flowSpeed: 0.7, horizonSize: 0.22, bloomFake: 1.2, poseBind: true,  palette: 'gold' },
+    voidstar:        { diskTilt: 0.48, lensStrength: 1.8, diskBrightness: 2.4, turbulence: 0.7, flowSpeed: 0.85, horizonSize: 0.26, bloomFake: 1.3, poseBind: true,  palette: 'voidblue' },
+    violent:         { diskTilt: 0.70, lensStrength: 1.2, diskBrightness: 3.2, turbulence: 1.5, flowSpeed: 2.0, horizonSize: 0.32, bloomFake: 1.6, poseBind: true,  palette: 'inferno' },
+    ambient:         { diskTilt: 0.30, lensStrength: 1.0, diskBrightness: 1.5, turbulence: 0.4, flowSpeed: 0.4, horizonSize: 0.20, bloomFake: 0.7, poseBind: false, palette: 'gold' },
   },
 
   create(canvas, { gl }) {
@@ -379,8 +380,11 @@ export default {
       //   shoulderSpan  → proximity (closer body = bigger horizon)
       //   shoulderRoll  → camera roll (lateral lean)
       //   head/shoulder → camera pitch (lean back = look up = disk face-on)
+      // When `poseBind` is OFF, all three smoothly decay back to 0 so the
+      // fx becomes audio-only (a fixed centred BH). The smoothing path
+      // below picks up the zero targets without snapping.
       let proxTarget = 0, rollTarget = 0, pitchTarget = 0;
-      if (pose.people.length > 0) {
+      if (params.poseBind && pose.people.length > 0) {
         const p0 = pose.people[0];
         const sL = p0.shoulders?.l, sR = p0.shoulders?.r, head = p0.head;
         if (sL && sR && sL.visibility > 0.4 && sR.visibility > 0.4) {

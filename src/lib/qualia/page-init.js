@@ -93,10 +93,16 @@ export function initQualiaPage() {
   });
 
   // ── Settings (top-level) ──────────────────────────────────────────────────
+  // Whatever the page-state surface is, it gets serialized here so that a
+  // page reload restores the user's exact session. Per-fx params are
+  // persisted separately by core.js (per-fx localStorage keys).
   const settings = makeSettingsStore(() => ({
-    fxId:          core.activeId(),
-    audioTunables: audio.getTunables(),
-    poseSource:    poseSelect.value,
+    fxId:           core.activeId(),
+    audioTunables:  audio.getTunables(),
+    audioOn:        audio.getSource() === 'mic',
+    paused:         core.isPaused(),
+    zen:            core.isZen(),
+    poseSource:     poseSelect.value,
     camSizeIdx,
     cameraRotation: getRotation(),
     mirrorMode:     getMirror(),
@@ -110,6 +116,7 @@ export function initQualiaPage() {
     numPoses:       pose.getNumPoses(),
     poseSmoothing:  poseSmoothingValue,
     poseThresh:     pose.getThresholds(),
+    poseLingerMs:   pose.getLingerMs(),
   }));
   const stored = settings.load();
   camSizeIdx = stored.camSizeIdx ?? 0;
@@ -206,13 +213,17 @@ export function initQualiaPage() {
   if (lingerRow) {
     const input = lingerRow.querySelector('input[type=range]');
     const val   = lingerRow.querySelector('.qp-val');
+    if (typeof stored.poseLingerMs === 'number') {
+      input.value = String(stored.poseLingerMs);
+      pose.setLingerMs(stored.poseLingerMs);
+    }
+    val.textContent = `${parseInt(input.value, 10)}ms`;
     input.addEventListener('input', () => {
       const v = parseInt(input.value, 10);
       val.textContent = `${v}ms`;
       pose.setLingerMs(v);
       settings.save();
     });
-    val.textContent = `${parseInt(input.value, 10)}ms`;
   }
 
   // ── Card collapse toggles ─────────────────────────────────────────────────
@@ -242,6 +253,7 @@ export function initQualiaPage() {
       btnAudio.textContent = 'audio';
       audioCard.style.display = 'none';
     }
+    settings.save();
   });
 
   // ── Audio toggle (mic) ────────────────────────────────────────────────────
@@ -385,12 +397,13 @@ export function initQualiaPage() {
   wireOverlayToggle(btnAscii,   'ascii');
 
   // ── Pause / Zen ───────────────────────────────────────────────────────────
-  btnPause.addEventListener('click', () => {
-    const next = !core.isPaused();
-    core.setPaused(next);
-    btnPause.classList.toggle('active', next);
-    btnPause.textContent = next ? 'paused' : 'pause';
-  });
+  function setPaused(on) {
+    core.setPaused(on);
+    btnPause.classList.toggle('active', on);
+    btnPause.textContent = on ? 'paused' : 'pause';
+    settings.save();
+  }
+  btnPause.addEventListener('click', () => setPaused(!core.isPaused()));
 
   function setZen(on) {
     core.setZen(on);
@@ -398,6 +411,7 @@ export function initQualiaPage() {
     zenHandle.classList.toggle('visible', on);
     document.getElementById('hints').style.opacity = on ? '0' : '';
     document.getElementById('panel-stack').style.opacity = on ? '0' : '';
+    settings.save();
   }
   btnZen.addEventListener('click', () => setZen(!core.isZen()));
   zenHandle.addEventListener('click', () => setZen(false));
@@ -573,14 +587,20 @@ export function initQualiaPage() {
       if (fallback) await core.setActive(fallback.id);
     }
     core.start();
-    if (opts.withMic) {
+
+    // Restore audio source. `withMic` (from the explicit "enable mic" button)
+    // or stored.audioOn (last session had mic on) both trigger startMic. The
+    // browser's previously-granted mic permission means this resumes silently.
+    if (opts.withMic || stored.audioOn) {
       await startMic(getStoredDeviceId('mic'));
     }
     if (stored.poseSource && stored.poseSource !== 'off') {
       poseSelect.value = stored.poseSource;
       poseSelect.dispatchEvent(new Event('change'));
     }
-    if (autoCycle) startAuto();
+    if (stored.paused) setPaused(true);
+    if (stored.zen)    setZen(true);
+    if (autoCycle)     startAuto();
   }
   startBtn.addEventListener('click', () => boot({ withMic: true }));
   startSilentBtn.addEventListener('click', () => boot({ withMic: false }));

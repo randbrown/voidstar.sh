@@ -254,5 +254,7 @@ export function createPose() {
     setLingerMs,
     getNumPoses: () => numPoses,
     getThresholds: () => ({ detect: detectConf, presence: presenceConf, track: trackConf }),
+    getSmoothing:  () => smoothing,
+    getLingerMs:   () => lingerMs,
   };
 }
