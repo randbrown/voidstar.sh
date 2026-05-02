@@ -71,13 +71,27 @@
        topbar (z:20) and strudel panel (z:18). */
     #test-canvas  { z-index: 5; pointer-events: none; background: transparent; }
 
+    /* `transform` is set imperatively by updateVideoTransform() so mirror
+       (scaleX(-1)) and rotation can compose. Don't hardcode it here. */
     #video {
       position: fixed; bottom: 1.25rem; right: 1.25rem;
       width: 200px; height: auto; display: none;
       border-radius: 8px; border: 1px solid var(--border);
-      opacity: 0.78; transform: scaleX(-1); z-index: 10;
+      opacity: 0.78; z-index: 10;
+      transition: opacity 0.2s, width 0.3s, top 0.3s, left 0.3s, bottom 0.3s, right 0.3s;
     }
     #video.visible { display: block; }
+    /* Size variants layered on top of .visible — pose=camera adds .visible
+       and the user toggles size separately via btn-camera. .hidden lets the
+       user keep camera+pose running but suppress the preview. */
+    #video.visible.hidden     { opacity: 0; pointer-events: none; }
+    #video.visible.size-large { width: 420px; }
+    #video.visible.size-full {
+      top: 0; left: 0; right: 0; bottom: 0;
+      width: 100vw; height: 100vh;
+      opacity: 0.22; border-radius: 0; border: none;
+      object-fit: contain; background: black;
+    }
 
     #topbar {
       position: fixed; top: 0; left: 0; right: 0; z-index: 20;
@@ -341,6 +355,9 @@
     <span id="mn">m-- n--</span>
     <select id="mic-select" class="ctrl-btn" title="Choose microphone" style="display:none;"></select>
     <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
+    <button class="ctrl-btn active" id="btn-camera" title="Camera size (C)" style="display:none;">camera</button>
+    <button class="ctrl-btn" id="btn-cam-rotate" title="Rotate camera (O / 0)" style="display:none;">rot 0°</button>
+    <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (I)" style="display:none;">mirror</button>
     <select id="pose-source" class="ctrl-btn" title="Pose source (P)">
       <option value="off">pose off</option>
       <option value="viz">pose viz</option>
@@ -397,6 +414,9 @@
   <span><kbd>B</kbd> ripples</span>
   <span><kbd>K</kbd> lock m/n</span>
   <span><kbd>P</kbd> pose src</span>
+  <span><kbd>C</kbd> cam size</span>
+  <span><kbd>O</kbd> / <kbd>0</kbd> rotate</span>
+  <span><kbd>I</kbd> mirror</span>
   <span><kbd>J</kbd> skeleton</span>
   <span><kbd>F</kbd> sparks</span>
   <span><kbd>A</kbd> aura</span>
@@ -508,6 +528,7 @@ function _writeSettings() {
       particleCount, pullStrength, jitterStrength, mManual, nManual,
       poseSource, maxPoses, showOverlay, sparksOn, auraOn, poseSmoothing,
       detectConf, presenceConf, trackConf, poseLingerMs,
+      camSizeIdx, cameraRotation, mirrorMode,
     }));
   } catch {}
 }
@@ -1204,13 +1225,24 @@ function drawSparks() {
   ctx.globalCompositeOperation = 'source-over';
 }
 
-// Camera mirror is hardcoded to selfie-style (matches the CSS scaleX(-1)
-// preview). For audio dancers this is a no-op — coords are already in
-// canvas-friendly [0,1] space.
-const POSE_MIRROR_CAMERA = true;
+// Camera mirror + rotation. mirrorMode defaults to true for selfie-style
+// preview. Both apply only to camera-sourced landmarks; viz-source poses
+// run against the canvas directly so they need no flip/rotate.
+let mirrorMode     = true;
+let cameraRotation = 0;
+function applyRotation(lx, ly, W, H) {
+  const cx = W/2, cy = H/2, dx = lx-cx, dy = ly-cy;
+  switch (cameraRotation) {
+    case  90: return [cx+dy, cy-dx];
+    case 180: return [cx-dx, cy-dy];
+    case 270: return [cx-dy, cy+dx];
+    default:  return [lx, ly];
+  }
+}
 function lmToCanvas(lmx, lmy, W, H) {
-  const mx = (poseSource === 'camera' && POSE_MIRROR_CAMERA) ? 1 - lmx : lmx;
-  return [mx * W, lmy * H];
+  if (poseSource !== 'camera') return [lmx * W, lmy * H];
+  const mx = mirrorMode ? 1 - lmx : lmx;
+  return applyRotation(mx * W, lmy * H, W, H);
 }
 
 // Adaptive low-pass on camera landmarks — heavy at rest, light while moving.
@@ -2332,13 +2364,16 @@ document.querySelectorAll('.ap-preset').forEach(b =>
 updatePanelLabels();
 
 // ── UI controls ──────────────────────────────────────────────────────────────
-const btnMode    = document.getElementById('btn-mode');
-const btnAscii   = document.getElementById('btn-ascii');
-const btnAuto    = document.getElementById('btn-auto');
-const btnMirror  = document.getElementById('btn-mirror');
-const btnTrails  = document.getElementById('btn-trails');
-const btnRipples = document.getElementById('btn-ripples');
-const btnLock    = document.getElementById('btn-lock');
+const btnMode      = document.getElementById('btn-mode');
+const btnAscii     = document.getElementById('btn-ascii');
+const btnAuto      = document.getElementById('btn-auto');
+const btnMirror    = document.getElementById('btn-mirror');
+const btnCamera    = document.getElementById('btn-camera');
+const btnCamRotate = document.getElementById('btn-cam-rotate');
+const btnCamMirror = document.getElementById('btn-cam-mirror');
+const btnTrails    = document.getElementById('btn-trails');
+const btnRipples   = document.getElementById('btn-ripples');
+const btnLock      = document.getElementById('btn-lock');
 const btnAudio   = document.getElementById('btn-audio');
 const btnPause   = document.getElementById('btn-pause');
 const btnZen     = document.getElementById('btn-zen');
@@ -2451,6 +2486,44 @@ btnLock.addEventListener('click', () => {
   saveSettings();
 });
 
+// ── Camera size, rotate, mirror (mirrors spectrum-pose) ──────────────────────
+// Size cycles small→large→full→hidden. mirrorMode/cameraRotation also feed
+// into lmToCanvas() so detected landmarks track the visual orientation.
+const CAM_SIZES = ['small', 'large', 'full', 'hidden'];
+let camSizeIdx  = 0;
+function setCamSize(idx) {
+  camSizeIdx = ((idx % CAM_SIZES.length) + CAM_SIZES.length) % CAM_SIZES.length;
+  const s = CAM_SIZES[camSizeIdx];
+  videoEl.classList.remove('hidden','size-large','size-full');
+  if (s === 'hidden') videoEl.classList.add('hidden');
+  if (s === 'large')  videoEl.classList.add('size-large');
+  if (s === 'full')   videoEl.classList.add('size-full');
+  btnCamera.textContent = s === 'full'  ? 'cam full'
+                        : s === 'large' ? 'cam large'
+                        : s === 'small' ? 'camera'
+                                        : 'cam off';
+}
+function updateVideoTransform() {
+  videoEl.style.transform = `${mirrorMode ? 'scaleX(-1) ' : ''}rotate(${cameraRotation}deg)`;
+}
+btnCamera.addEventListener('click', () => { setCamSize(camSizeIdx + 1); saveSettings(); });
+btnCamRotate.addEventListener('click', () => {
+  cameraRotation = (cameraRotation + 90) % 360;
+  btnCamRotate.textContent = `rot ${cameraRotation}°`;
+  btnCamRotate.classList.toggle('active', cameraRotation !== 0);
+  updateVideoTransform();
+  saveSettings();
+});
+btnCamMirror.addEventListener('click', () => {
+  mirrorMode = !mirrorMode;
+  btnCamMirror.classList.toggle('active', mirrorMode);
+  updateVideoTransform();
+  saveSettings();
+});
+// Initial transform — without this the preview ignores mirrorMode until the
+// user clicks something, since the CSS no longer hardcodes scaleX(-1).
+updateVideoTransform();
+
 // ── Pose UI wiring ───────────────────────────────────────────────────────────
 const poseSourceSelect = document.getElementById('pose-source');
 const poseMaxSelect    = document.getElementById('pose-max');
@@ -2464,6 +2537,11 @@ function syncPoseUiVisibility() {
   // could later be useful for 'camera' too; show it whenever pose is on.
   poseMaxSelect.style.display = poseSource === 'off' ? 'none' : '';
   if (poseSource !== 'camera') camSelect.style.display = 'none';
+  // Camera size / rotate / mirror only meaningful when the webcam is live.
+  const camCtrl = poseSource === 'camera' ? '' : 'none';
+  btnCamera.style.display    = camCtrl;
+  btnCamRotate.style.display = camCtrl;
+  btnCamMirror.style.display = camCtrl;
   // Pose-smooth slider applies to both detection sources (viz is noisy too).
   if (apPoseSection) apPoseSection.style.display = poseSource === 'off' ? 'none' : '';
 }
@@ -2613,6 +2691,10 @@ document.addEventListener('keydown', e => {
     case 'KeyM':    btnAudio.click();   break;
     case 'KeyD':    btnStrudel.click(); break;
     case 'KeyZ':    setZen(!zenMode);   break;
+    case 'KeyC':    btnCamera.click();    break;
+    case 'KeyO':
+    case 'Numpad0': btnCamRotate.click(); break;
+    case 'KeyI':    btnCamMirror.click(); break;
     case 'KeyR':
       initParticles();
       for (let i = 0; i < MAX_RIPPLES; i++) { rage[i] = rlife[i] = 0; }
@@ -2721,6 +2803,20 @@ function applyStoredSettings() {
   document.getElementById('ap-n').value      = nManual;
   // Snap live m,n to manual on load so the first frames look right.
   mNow = mManual; nNow = nManual;
+
+  // Camera size / rotation / mirror — apply before pose-source restore so
+  // the right transforms are in place when the camera stream actually opens.
+  if (Number.isFinite(s.camSizeIdx)) setCamSize(s.camSizeIdx);
+  if ([0, 90, 180, 270].includes(s.cameraRotation)) {
+    cameraRotation = s.cameraRotation;
+    btnCamRotate.textContent = `rot ${cameraRotation}°`;
+    btnCamRotate.classList.toggle('active', cameraRotation !== 0);
+  }
+  if (typeof s.mirrorMode === 'boolean' && s.mirrorMode !== mirrorMode) {
+    mirrorMode = s.mirrorMode;
+    btnCamMirror.classList.toggle('active', mirrorMode);
+  }
+  updateVideoTransform();
 
   // Pose toggles
   if (typeof s.showOverlay === 'boolean' && s.showOverlay !== showOverlay) {
