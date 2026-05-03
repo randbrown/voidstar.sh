@@ -12,6 +12,7 @@
 //   wrists inject perturbation into disk orientation
 
 import { compileProgram, makeFullscreenTri, FULLSCREEN_VERT, makeUniformGetter, uploadAudioUniforms } from '../webgl.js';
+import { scaleAudio } from '../field.js';
 
 const FRAG = /* glsl */`#version 300 es
 precision highp float;
@@ -167,10 +168,11 @@ export default {
     { id: 'palette',      label: 'Palette',       type: 'select', options: ['accretionGold','voidblue','neuralMagenta','plasmaOrange'], default: 'accretionGold' },
     { id: 'audioBindBass',label: 'bass→pulse',    type: 'toggle', default: true },
     { id: 'poseTrack',    label: 'pose tracks',   type: 'toggle', default: true },
+    { id: 'reactivity',   label: 'reactivity',    type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
 
   presets: {
-    default:      { horizon: 0.16, spin: 0.40, ringBoost: 1.0,  palette: 'accretionGold' },
+    default:      { horizon: 0.16, spin: 0.40, ringBoost: 1.0,  palette: 'accretionGold', reactivity: 1.0 },
     interstellar: { horizon: 0.20, spin: 0.55, ringBoost: 1.3,  palette: 'accretionGold' },
     glassblue:    { horizon: 0.12, spin: 0.25, ringBoost: 0.8,  palette: 'voidblue' },
     neural:       { horizon: 0.18, spin: 0.30, ringBoost: 1.2,  palette: 'neuralMagenta' },
@@ -195,7 +197,8 @@ export default {
 
     let audioRef = null;
     function update(field) {
-      const { dt, time, audio, pose, params } = field;
+      const { dt, time, pose, params } = field;
+      const audio = scaleAudio(field.audio, params.reactivity);
       audioRef = audio;
       scratch.time      = time;
       scratch.horizon   = params.horizon;

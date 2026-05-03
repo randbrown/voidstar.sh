@@ -10,6 +10,8 @@
 // from the params schema by core/ui.js, so adding/renaming params doesn't
 // touch the page.
 
+import { scaleAudio } from '../field.js';
+
 const PI = Math.PI;
 const MAX_PARTICLES = 6000;
 const PARTICLE_MODES = new Set(['chladni', 'radial', 'interference']);
@@ -31,10 +33,11 @@ export default {
     { id: 'lockMN',    label: 'lock m/n',   type: 'toggle', default: true },
     { id: 'symmetry',  label: '4-way symm', type: 'toggle', default: true },
     { id: 'trails',    label: 'trails',     type: 'toggle', default: false },
+    { id: 'reactivity',label: 'reactivity', type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
 
   presets: {
-    default:      { mode: 'chladni', m: 3.0, n: 5.0, lockMN: true, symmetry: true, trails: false },
+    default:      { mode: 'chladni', m: 3.0, n: 5.0, lockMN: true, symmetry: true, trails: false, reactivity: 1.0 },
     chladni:      { mode: 'chladni', m: 3.0, n: 5.0 },
     high:         { mode: 'chladni', m: 8.0, n: 11.0 },
     radial:       { mode: 'radial', m: 4.0, n: 5.0 },
@@ -300,7 +303,8 @@ export default {
     let _mode = 'chladni', _params = null, _audio = null, _time = 0;
 
     function update(field) {
-      const { dt, time, audio, params } = field;
+      const { dt, time, params } = field;
+      const audio = scaleAudio(field.audio, params.reactivity);
       const audioOn = !!audio.spectrum;
       _mode = params.mode || 'chladni';
       _params = params; _audio = audio; _time = time;

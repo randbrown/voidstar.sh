@@ -17,6 +17,8 @@
 // camera matrix — orthographic-with-depth-scale reads as 3D enough for the
 // "neural net pulsing in space" feel.
 
+import { scaleAudio } from '../field.js';
+
 const NUM_SOMA   = 80;
 const NUM_EDGES  = 160;
 const MAX_PULSES = 200;
@@ -36,10 +38,11 @@ export default {
     { id: 'depth',     label: 'depth',       type: 'range', min: 0,   max: 1,   step: 0.02, default: 0.6 },
     { id: 'palette',   label: 'palette',     type: 'select', options: ['violet','cyan','magenta','amber'], default: 'violet' },
     { id: 'poseStim',  label: 'pose stim',   type: 'toggle', default: true },
+    { id: 'reactivity',label: 'reactivity',  type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
   ],
 
   presets: {
-    default: { density: 1.0, glow: 1.0, pulseRate: 1.5, curve: 0.18, motion: 1.0, depth: 0.6, palette: 'violet' },
+    default: { density: 1.0, glow: 1.0, pulseRate: 1.5, curve: 0.18, motion: 1.0, depth: 0.6, palette: 'violet', reactivity: 1.0 },
     sparse:  { density: 0.45, pulseRate: 0.8, motion: 0.6 },
     dense:   { density: 1.4, pulseRate: 2.5, motion: 1.4, depth: 0.8 },
     cosmic:  { density: 1.1, pulseRate: 2.0, motion: 1.6, depth: 0.95, palette: 'cyan' },
@@ -149,7 +152,8 @@ export default {
     };
 
     function update(field) {
-      const { dt, time, audio, pose, params } = field;
+      const { dt, time, pose, params } = field;
+      const audio = scaleAudio(field.audio, params.reactivity);
       scratch.audioOn   = !!audio.spectrum;
       scratch.bass      = audio.bands.bass;
       scratch.mids      = audio.bands.mids;

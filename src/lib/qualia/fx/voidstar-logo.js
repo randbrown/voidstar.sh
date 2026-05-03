@@ -23,6 +23,7 @@ import {
   compileProgram, makeFullscreenTri, FULLSCREEN_VERT,
   makeUniformGetter, uploadAudioUniforms,
 } from '../webgl.js';
+import { scaleAudio } from '../field.js';
 
 const NUM_RINGS = 3;
 
@@ -521,10 +522,11 @@ export default {
     { id: 'logoDepth',       label: 'logo depth',       type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 0.00 },
     { id: 'parallax',        label: 'parallax',         type: 'range', min: 0.00, max: 1.50, step: 0.01, default: 0.76 },
     { id: 'palette',         label: 'palette',          type: 'select', options: ['silver', 'voidblue', 'platinum', 'inferno'], default: 'platinum' },
+    { id: 'reactivity',      label: 'reactivity',       type: 'range', min: 0.00, max: 2.00, step: 0.05, default: 1.0 },
   ],
 
   presets: {
-    default:         { voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16, flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76, palette: 'platinum' },
+    default:         { voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16, flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76, palette: 'platinum', reactivity: 1.0 },
     atomic_mystic:   { voidRadius: 0.24, energyThickness: 0.14, swirlIntensity: 1.10, flowSpeed: 1.00, orbitAmount: 1.50, logoDepth: 0.80, parallax: 0.50, palette: 'platinum' },
     platonic:        { voidRadius: 0.28, energyThickness: 0.10, swirlIntensity: 0.55, flowSpeed: 0.45, orbitAmount: 0.65, logoDepth: 0.65, parallax: 0.35, palette: 'silver' },
     ruliad:          { voidRadius: 0.22, energyThickness: 0.18, swirlIntensity: 1.35, flowSpeed: 1.20, orbitAmount: 1.35, logoDepth: 0.90, parallax: 0.60, palette: 'voidblue' },
@@ -589,7 +591,8 @@ export default {
     };
 
     function update(field) {
-      const { dt, time, audio, pose, params } = field;
+      const { dt, time, pose, params } = field;
+      const audio = scaleAudio(field.audio, params.reactivity);
       audioRef = audio;
       scratch.time            = time;
       scratch.voidRadius      = params.voidRadius;

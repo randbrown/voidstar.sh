@@ -35,6 +35,7 @@ import {
   makeUniformGetter,
   uploadAudioUniforms,
 } from '../webgl.js';
+import { scaleAudio } from '../field.js';
 
 const FRAG = /* glsl */`#version 300 es
 precision highp float;
@@ -367,10 +368,11 @@ export default {
     { id: 'bloomFake',      label: 'bloom',           type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
     { id: 'poseBind',       label: 'pose binding',    type: 'toggle', default: true },
     { id: 'palette',        label: 'palette',         type: 'select', options: ['gold', 'voidblue', 'inferno'], default: 'gold' },
+    { id: 'reactivity',     label: 'reactivity',      type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
   ],
 
   presets: {
-    default:         { diskTilt: 0.55, lensStrength: 1.4, diskBrightness: 2.2, turbulence: 0.8, flowSpeed: 1.0, horizonSize: 0.28, bloomFake: 1.0, poseBind: true,  palette: 'gold' },
+    default:         { diskTilt: 0.55, lensStrength: 1.4, diskBrightness: 2.2, turbulence: 0.8, flowSpeed: 1.0, horizonSize: 0.28, bloomFake: 1.0, poseBind: true,  palette: 'gold', reactivity: 1.0 },
     interstellarish: { diskTilt: 0.42, lensStrength: 1.7, diskBrightness: 2.6, turbulence: 0.6, flowSpeed: 0.7, horizonSize: 0.22, bloomFake: 1.2, poseBind: true,  palette: 'gold' },
     voidstar:        { diskTilt: 0.48, lensStrength: 1.8, diskBrightness: 2.4, turbulence: 0.7, flowSpeed: 0.85, horizonSize: 0.26, bloomFake: 1.3, poseBind: true,  palette: 'voidblue' },
     violent:         { diskTilt: 0.70, lensStrength: 1.2, diskBrightness: 3.2, turbulence: 1.5, flowSpeed: 2.0, horizonSize: 0.32, bloomFake: 1.6, poseBind: true,  palette: 'inferno' },
@@ -405,7 +407,8 @@ export default {
     };
 
     function update(field) {
-      const { dt, time, audio, pose, params } = field;
+      const { dt, time, pose, params } = field;
+      const audio = scaleAudio(field.audio, params.reactivity);
       audioRef = audio;
 
       scratch.time           = time;
