@@ -117,10 +117,36 @@ const SCALES   = ['minor', 'major', 'dorian', 'mixolydian', 'lydian',
 // in some Strudel builds — better to play safe with the same source the
 // hardcoded default has always used.
 const SAMPLES  = ['gm_lead_6_voice'];
+// 8-step alternation with *4 density. The mini-notation itself loops in
+// 2 cycles — N_TRANSFORMS below stretches/rotates it over ~8 cycles so
+// the overall melody evolves instead of looping tightly.
 const PATTERNS = [
-  '<0 1 2 3 4>*8', '<0 2 4 5 7>*4', '<0 3 5 7>*8',
-  '<0 1 4 7 5>*8', '<0 -1 2 -3 4>*8', '<0 4 7 4>*4',
-  '<0 5 7 5>*8', '<0 2 4 7 9>*8', '<7 4 0 4>*4',
+  '<0 2 4 5 7 5 4 2>*4',
+  '<0 3 5 7 9 7 5 3>*4',
+  '<0 4 7 9 7 4 0 -3>*4',
+  '<0 1 4 7 5 4 2 -1>*4',
+  '<0 -1 2 -3 4 -3 2 -1>*4',
+  '<0 4 7 4 5 2 0 -3>*4',
+  '<0 5 7 5 4 2 0 -2>*4',
+  '<0 2 4 7 9 7 4 2>*4',
+  '<7 4 0 -3 0 4 7 9>*4',
+  '<0 2 5 7 5 2 0 -2>*4',
+  '<-3 0 4 7 4 0 -3 -5>*4',
+  '<0 1 2 3 4 3 2 1>*4',
+];
+
+// Strudel transforms applied to the n() pattern to spread variation
+// across multiple cycles. Mostly stretchers and slow rotations so the
+// underlying 2-cycle alternation becomes an ~8-cycle journey.
+const N_TRANSFORMS = [
+  '.slow(4)',
+  '.iter(8)',
+  '.every(4, rev)',
+  '.every(8, fast(2))',
+  '.chunk(4, rev)',
+  '.slow(2).every(4, rev)',
+  '.iter(4).slow(2)',
+  '.every(8, scramble(8))',
 ];
 const FX_OPTS  = [
   'jux(rev)',
@@ -141,6 +167,7 @@ export function randomPattern() {
   const scale  = pick(SCALES);
   const sample = pick(SAMPLES);
   const pat    = pick(PATTERNS);
+  const nMod   = pick(N_TRANSFORMS);
   const cps    = (0.65 + Math.random() * 0.55).toFixed(2);
   const room   = (0.8 + Math.random() * 1.6).toFixed(1);
   // Pick 2–3 distinct fx so each random pattern has its own colour.
@@ -156,7 +183,7 @@ export function randomPattern() {
 // @by voidstar
 // @license CC0
 setcps(${cps})
-n("${pat}").scale('${root} ${scale}')
+n("${pat}")${nMod}.scale('${root} ${scale}')
 .s("${sample}")
 .clip(sine.range(.2,.8).slow(8))
 ${fxLines.join('\n')}
