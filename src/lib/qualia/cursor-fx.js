@@ -1,26 +1,38 @@
-// Mouse cursor trail — a pooled-particle Canvas2D effect that mirrors the
-// vibe of the live-coder bookmarklet trick but renders to ONE canvas with
-// pooled state instead of spawning a DOM node per pointer event. This keeps
-// the trail smooth even during heavy fragment-shader work elsewhere on the
-// page; the bookmarklet approach pegs layout/style on the main thread.
+// Mouse cursor trail. Two compositable layers:
+//   • dots — pooled particle bursts at the cursor (smaller than the bookmarklet
+//     to avoid the over-fed look the user pointed out)
+//   • line — a smooth fading trail through recent cursor positions, drawn as
+//     overlapping quadratic-curve segments with diminishing width and alpha
 //
-// Modes share the voidstar palette family:
-//   silver / platinum / voidblue / inferno
-// Plus an explicit `off`. Settings are persisted in localStorage so the
-// trail mode survives reloads.
+// Five user-facing modes:
+//   off       — no overlay, rAF stopped
+//   dots      — white dots only
+//   cyan      — cyan dots only
+//   line      — white smooth line only
+//   combined  — white line + cyan dots overlaid
 //
-// The animation loop only runs while a non-`off` mode is active, so when
-// disabled there's no per-frame overhead.
+// Both layers render to one shared transparent canvas with mix-blend-mode:
+// screen so highlights stack cleanly over the voidstar fx.
 
-const PALETTES = {
-  silver:   { core: [232, 236, 248], glow: [200, 220, 255], glowAlpha: 0.45 },
-  platinum: { core: [240, 240, 250], glow: [180, 180, 220], glowAlpha: 0.40 },
-  voidblue: { core: [220, 245, 255], glow: [60, 160, 255],  glowAlpha: 0.55 },
-  inferno:  { core: [255, 220, 180], glow: [255, 110, 30],  glowAlpha: 0.55 },
+const COLORS = {
+  white: { core: [232, 236, 248], glow: [220, 230, 255] },
+  cyan:  { core: [120, 240, 255], glow: [40, 180, 240]  },
 };
-export const MODES = ['off', 'silver', 'platinum', 'voidblue', 'inferno'];
+export const MODES = ['off', 'dots', 'cyan', 'line', 'combined'];
 
-const MAX_PARTICLES = 256;
+function configFor(mode) {
+  switch (mode) {
+    case 'dots':     return { dots: 'white', line: null    };
+    case 'cyan':     return { dots: 'cyan',  line: null    };
+    case 'line':     return { dots: null,    line: 'white' };
+    case 'combined': return { dots: 'cyan',  line: 'white' };
+    default:         return { dots: null,    line: null    };
+  }
+}
+
+const MAX_PARTICLES = 192;
+const LINE_MAX      = 28;            // ring buffer length for the smooth line
+const LINE_LIFE_MS  = 420;           // points older than this are pruned
 const STORAGE_KEY   = 'voidstar.qualia.cursorFx';
 
 export function createCursorFx() {
@@ -29,32 +41,35 @@ export function createCursorFx() {
   let raf    = null;
   let lastT  = 0;
 
-  // Pool: pre-allocated parallel arrays (no per-particle object allocations).
-  const px   = new Float32Array(MAX_PARTICLES);
-  const py   = new Float32Array(MAX_PARTICLES);
-  const pvx  = new Float32Array(MAX_PARTICLES);
-  const pvy  = new Float32Array(MAX_PARTICLES);
-  const pt   = new Float32Array(MAX_PARTICLES);   // life remaining 0..1
-  const psz  = new Float32Array(MAX_PARTICLES);
-  let head = 0;                                    // ring index of next slot
-  let alive = 0;
+  // Dot particle pool — parallel Float32Arrays so spawn is allocation-free.
+  const px  = new Float32Array(MAX_PARTICLES);
+  const py  = new Float32Array(MAX_PARTICLES);
+  const pvx = new Float32Array(MAX_PARTICLES);
+  const pvy = new Float32Array(MAX_PARTICLES);
+  const pt  = new Float32Array(MAX_PARTICLES);
+  const psz = new Float32Array(MAX_PARTICLES);
+  let head = 0;
+
+  // Line buffer — chronological list of recent cursor positions.
+  const lx  = new Float32Array(LINE_MAX);
+  const ly  = new Float32Array(LINE_MAX);
+  const lt  = new Float32Array(LINE_MAX);
+  let lineCount = 0;
+  let lineHead  = 0;
 
   function ensureCanvas() {
     if (canvas) return;
     canvas = document.createElement('canvas');
     canvas.id = 'cursor-fx-canvas';
     canvas.style.cssText = [
-      'position:fixed', 'inset:0',
-      'pointer-events:none',
-      'z-index:999',                  // below status overlay (z 30) and topbar (20)
-      'mix-blend-mode:screen',
+      'position:fixed', 'inset:0', 'pointer-events:none',
+      'z-index:999', 'mix-blend-mode:screen',
     ].join(';');
     document.body.appendChild(canvas);
     ctx = canvas.getContext('2d');
     sizeCanvas();
     window.addEventListener('resize', sizeCanvas);
   }
-
   function sizeCanvas() {
     if (!canvas) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -65,52 +80,53 @@ export function createCursorFx() {
     ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function spawn(x, y) {
+  function spawnDot(x, y) {
     const i = head;
     px[i] = x; py[i] = y;
-    // Tiny outward velocity so trailing particles spread slightly.
     const ang = Math.random() * Math.PI * 2;
-    const sp  = 8 + Math.random() * 24;
+    const sp  = 6 + Math.random() * 18;
     pvx[i] = Math.cos(ang) * sp;
     pvy[i] = Math.sin(ang) * sp;
     pt[i]  = 1.0;
-    psz[i] = 5 + Math.random() * 4;
+    // ~1.6× smaller than before — the user wants something closer to the
+    // bookmarklet's 8 px dots that shrink fast.
+    psz[i] = 2.5 + Math.random() * 1.8;
     head = (head + 1) % MAX_PARTICLES;
-    if (alive < MAX_PARTICLES) alive++;
+  }
+  function pushLinePoint(x, y, now) {
+    lx[lineHead] = x;
+    ly[lineHead] = y;
+    lt[lineHead] = now;
+    lineHead = (lineHead + 1) % LINE_MAX;
+    if (lineCount < LINE_MAX) lineCount++;
+  }
+  function pruneLine(now) {
+    while (lineCount > 0) {
+      const oldestIdx = (lineHead - lineCount + LINE_MAX) % LINE_MAX;
+      if (now - lt[oldestIdx] <= LINE_LIFE_MS) break;
+      lineCount--;
+    }
   }
 
   function onMove(e) {
-    if (mode === 'off') return;
-    spawn(e.clientX, e.clientY);
+    const cfg = configFor(mode);
+    if (cfg.dots) spawnDot(e.clientX, e.clientY);
+    if (cfg.line) pushLinePoint(e.clientX, e.clientY, performance.now());
   }
 
-  function tick(now) {
-    if (mode === 'off' || !ctx) { raf = null; return; }
-    const dt  = Math.min((now - lastT) / 1000, 0.05);
-    lastT = now;
-    const pal = PALETTES[mode] || PALETTES.silver;
-    const W   = window.innerWidth, H = window.innerHeight;
-    ctx.clearRect(0, 0, W, H);
-
-    // Two-pass render: glow halos first (additive feel via screen-blend on
-    // the canvas), then bright cores on top.
-    ctx.globalCompositeOperation = 'lighter';
+  function drawDots(palName) {
+    const pal = COLORS[palName];
     const gR = pal.glow[0], gG = pal.glow[1], gB = pal.glow[2];
+    ctx.globalCompositeOperation = 'lighter';
+    // Glow halo pass first, then sharp core pass — gives a soft bloom that
+    // reads well over the dark background of the lab.
     for (let i = 0; i < MAX_PARTICLES; i++) {
       const t = pt[i];
       if (t <= 0) continue;
-      const tNext = t - dt * 1.6;             // ~0.6 sec lifespan
-      pt[i] = tNext;
-      if (tNext <= 0) { alive = Math.max(0, alive - 1); continue; }
-      px[i]  += pvx[i] * dt;
-      py[i]  += pvy[i] * dt;
-      pvx[i] *= 0.92;                         // friction
-      pvy[i] *= 0.92;
-      const r = psz[i] * (0.4 + 0.6 * tNext);
-      const a = pal.glowAlpha * tNext;
-      ctx.fillStyle = `rgba(${gR},${gG},${gB},${a.toFixed(3)})`;
+      const r = psz[i] * (0.4 + 0.6 * t);
+      ctx.fillStyle = `rgba(${gR},${gG},${gB},${(0.30 * t).toFixed(3)})`;
       ctx.beginPath();
-      ctx.arc(px[i], py[i], r * 2.8, 0, Math.PI * 2);
+      ctx.arc(px[i], py[i], r * 2.6, 0, Math.PI * 2);
       ctx.fill();
     }
     const cR = pal.core[0], cG = pal.core[1], cB = pal.core[2];
@@ -124,6 +140,77 @@ export function createCursorFx() {
       ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function drawLine(palName, now) {
+    if (lineCount < 2) return;
+    const pal = COLORS[palName];
+    const cR = pal.core[0], cG = pal.core[1], cB = pal.core[2];
+    const startIdx = (lineHead - lineCount + LINE_MAX) % LINE_MAX;
+    ctx.lineCap  = 'round';
+    ctx.lineJoin = 'round';
+    ctx.globalCompositeOperation = 'lighter';
+
+    // Two-pass stroke: a soft wide pass for glow, then a sharper narrow
+    // pass for the core line. Each segment carries its own width and alpha
+    // so the trail naturally tapers from the cursor (head, age 0) to the
+    // tail (oldest, age ≈ LINE_LIFE_MS).
+    for (let pass = 0; pass < 2; pass++) {
+      const widthMul = pass === 0 ? 3.2 : 1.0;     // glow vs core
+      const alphaMul = pass === 0 ? 0.22 : 0.95;
+      for (let i = 0; i < lineCount - 1; i++) {
+        const k0 = (startIdx + i)     % LINE_MAX;
+        const k1 = (startIdx + i + 1) % LINE_MAX;
+        const ageHead = (now - lt[k1]) / LINE_LIFE_MS;     // 0=fresh, 1=stale
+        const t = Math.max(0, 1 - ageHead);
+        if (t <= 0) continue;
+        const tt = t * t;
+        const w  = Math.max(0.4, 5.0 * tt * widthMul);
+        const a  = tt * alphaMul;
+        ctx.lineWidth = w;
+        ctx.strokeStyle = `rgba(${cR},${cG},${cB},${a.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.moveTo(lx[k0], ly[k0]);
+        if (i + 2 < lineCount) {
+          // Smooth via quadratic curve through midpoints — classic trick
+          // for taking a polyline and giving it C1 continuity at vertices.
+          const k2 = (startIdx + i + 2) % LINE_MAX;
+          ctx.quadraticCurveTo(lx[k1], ly[k1],
+                               (lx[k1] + lx[k2]) * 0.5,
+                               (ly[k1] + ly[k2]) * 0.5);
+        } else {
+          ctx.lineTo(lx[k1], ly[k1]);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function tick(now) {
+    if (mode === 'off' || !ctx) { raf = null; return; }
+    const dt = Math.min((now - lastT) / 1000, 0.05);
+    lastT = now;
+    const W = window.innerWidth, H = window.innerHeight;
+    ctx.clearRect(0, 0, W, H);
+
+    const cfg = configFor(mode);
+
+    // Advance dot particles even when mode doesn't include dots, so a mode
+    // switch from 'dots'→'line' fades the lingering dots out instead of
+    // hard-cutting them.
+    for (let i = 0; i < MAX_PARTICLES; i++) {
+      if (pt[i] <= 0) continue;
+      pt[i]  -= dt * 1.7;
+      px[i]  += pvx[i] * dt;
+      py[i]  += pvy[i] * dt;
+      pvx[i] *= 0.92;
+      pvy[i] *= 0.92;
+    }
+    pruneLine(now);
+
+    if (cfg.line) drawLine(cfg.line, now);
+    if (cfg.dots) drawDots(cfg.dots);
 
     raf = requestAnimationFrame(tick);
   }
@@ -140,9 +227,8 @@ export function createCursorFx() {
     document.removeEventListener('mousemove', onMove);
     if (raf) { cancelAnimationFrame(raf); raf = null; }
     if (ctx) ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-    // Fast-decay any in-flight particles so re-enabling doesn't show stragglers.
     for (let i = 0; i < MAX_PARTICLES; i++) pt[i] = 0;
-    alive = 0;
+    lineCount = 0;
   }
 
   function setMode(next) {
@@ -150,15 +236,21 @@ export function createCursorFx() {
     if (next === mode) return mode;
     mode = next;
     try { localStorage.setItem(STORAGE_KEY, mode); } catch {}
-    if (mode === 'off') stop();
-    else                start();
+    if (mode === 'off') stop(); else start();
     return mode;
   }
 
   function loadStored() {
     try {
       const v = localStorage.getItem(STORAGE_KEY);
-      if (v && MODES.includes(v)) setMode(v);
+      // Old palette names (silver/platinum/voidblue/inferno) → fold into
+      // the new mode set so a returning user doesn't land on `off`.
+      const migrate = {
+        silver: 'dots', platinum: 'dots',
+        voidblue: 'cyan', inferno: 'cyan',
+      };
+      const v2 = migrate[v] || v;
+      if (v2 && MODES.includes(v2)) setMode(v2);
     } catch {}
   }
 

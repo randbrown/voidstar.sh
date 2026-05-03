@@ -276,7 +276,17 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   }
   function loadCode(code) {
     if (typeof code !== 'string' || !code) return;
+    // If the user was mid-playback when they swapped patterns, immediately
+    // re-evaluate the new code on the freshly-mounted editor — keeps the
+    // jam continuous instead of forcing a manual ▶ after every change.
+    const wasPlaying = !!btnPlay?.classList.contains('playing');
     instantiateEditor(code);
+    if (wasPlaying) {
+      let tries = 0;
+      const t = setInterval(() => {
+        if (play() || ++tries > 30) clearInterval(t);
+      }, 150);
+    }
   }
 
   function play() {
