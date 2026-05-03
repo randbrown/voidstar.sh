@@ -122,6 +122,7 @@ export function initQualiaPage() {
     poseLingerMs:   pose.getLingerMs(),
     audioCollapsed: audioCard.classList.contains('collapsed'),
     poseCollapsed:  poseCard?.classList.contains('collapsed') ?? true,
+    diagCollapsed:  document.getElementById('diag-card')?.classList.contains('collapsed') ?? true,
     paramsCollapsed: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
   }));
   const stored = settings.load();
@@ -241,6 +242,10 @@ export function initQualiaPage() {
   }
   if (poseCard && typeof stored.poseCollapsed === 'boolean') {
     poseCard.classList.toggle('collapsed', stored.poseCollapsed);
+  }
+  const diagCardEl = document.getElementById('diag-card');
+  if (diagCardEl && typeof stored.diagCollapsed === 'boolean') {
+    diagCardEl.classList.toggle('collapsed', stored.diagCollapsed);
   }
   const fxCardEl = document.getElementById('fx-card');
   if (fxCardEl && typeof stored.paramsCollapsed === 'boolean') {
@@ -594,7 +599,36 @@ export function initQualiaPage() {
     }
   });
 
-  // ── FPS / level HUD ───────────────────────────────────────────────────────
+  // ── FPS / level HUD + diagnostics panel ───────────────────────────────────
+  // Per-frame rising-edge detection on transient pulses powers the rolling
+  // 5-second counters in the diagnostics panel. The DOM updates are
+  // throttled to the fps callback (~5×/sec) and skipped entirely when the
+  // diagnostics card is collapsed.
+  const diagFpsEl    = document.getElementById('diag-fps');
+  const diagMsEl     = document.getElementById('diag-ms');
+  const diagBassEl   = document.getElementById('diag-bass');
+  const diagMidsEl   = document.getElementById('diag-mids');
+  const diagHighsEl  = document.getElementById('diag-highs');
+  const diagRmsEl    = document.getElementById('diag-rms');
+  const diagBeatEl   = document.getElementById('diag-beat');
+  const diagSnareEl  = document.getElementById('diag-snare');
+  const diagHatEl    = document.getElementById('diag-hat');
+  const diagPosesEl  = document.getElementById('diag-poses');
+  const diagCard     = document.getElementById('diag-card');
+  const beatTimes = [], snareTimes = [], hatTimes = [];
+  function pruneOlderThan(arr, cutoff) {
+    while (arr.length && arr[0] < cutoff) arr.shift();
+  }
+  let prevBeat = 0, prevSnare = 0, prevHat = 0;
+  core.onFrame((field) => {
+    const a = field.audio;
+    const now = performance.now();
+    if (a.beat.pulse  > 0.95 && prevBeat  < 0.95) beatTimes.push(now);
+    if (a.mids.pulse  > 0.95 && prevSnare < 0.95) snareTimes.push(now);
+    if (a.highs.pulse > 0.95 && prevHat   < 0.95) hatTimes.push(now);
+    prevBeat = a.beat.pulse; prevSnare = a.mids.pulse; prevHat = a.highs.pulse;
+  });
+
   core.onFps((fps, field) => {
     fpsEl.textContent = `${fps} fps`;
     if (audio.isEnabled()) {
@@ -604,6 +638,24 @@ export function initQualiaPage() {
       lvlEl.textContent = 'audio off';
     }
     strudel.perFrame();
+
+    if (diagCard && !diagCard.classList.contains('collapsed')) {
+      const a = field.audio;
+      const cutoff = performance.now() - 5000;
+      pruneOlderThan(beatTimes,  cutoff);
+      pruneOlderThan(snareTimes, cutoff);
+      pruneOlderThan(hatTimes,   cutoff);
+      diagFpsEl.textContent   = `${fps}`;
+      diagMsEl.textContent    = `${(1000 / Math.max(fps, 1)).toFixed(1)}ms`;
+      diagBassEl.textContent  = audio.isEnabled() ? a.bands.bass.toFixed(2)  : '—';
+      diagMidsEl.textContent  = audio.isEnabled() ? a.bands.mids.toFixed(2)  : '—';
+      diagHighsEl.textContent = audio.isEnabled() ? a.bands.highs.toFixed(2) : '—';
+      diagRmsEl.textContent   = audio.isEnabled() ? a.rms.toFixed(2)         : '—';
+      diagBeatEl.textContent  = `${beatTimes.length}`;
+      diagSnareEl.textContent = `${snareTimes.length}`;
+      diagHatEl.textContent   = `${hatTimes.length}`;
+      diagPosesEl.textContent = `${field.pose.people.length}`;
+    }
   });
 
   // ── Boot ──────────────────────────────────────────────────────────────────

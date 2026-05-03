@@ -19,8 +19,9 @@
 /**
  * @typedef {Object} AudioFrame
  * @property {AudioBands}      bands
- * @property {AudioTransient}  beat       Bass-driven beat detection.
- * @property {AudioTransient}  highs      Highs-driven transient.
+ * @property {AudioTransient}  beat       Bass-driven beat detection (kick).
+ * @property {AudioTransient}  mids       Mids-driven transient (snare / clap).
+ * @property {AudioTransient}  highs      Highs-driven transient (hat / cymbal).
  * @property {number}          rms        Time-domain RMS [0,1].
  * @property {Uint8Array|null} spectrum   Frequency bins (analyser.getByteFrequencyData).
  * @property {Uint8Array|null} waveform   Time-domain bins (analyser.getByteTimeDomainData).

@@ -218,6 +218,9 @@
       border-top: 1px dashed var(--border);
       padding-top: 0.4rem; margin-top: 0.1rem;
     }
+    .diag-row { gap: 0.6rem; }
+    .diag-row .diag-label { color: var(--text); }
+    .diag-row .qp-val     { font-variant-numeric: tabular-nums; }
 
     #hints {
       position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 10;
@@ -393,6 +396,26 @@
 
 <!-- Bottom-left HUD: audio panel + dynamically-built fx params card. -->
 <div id="panel-stack">
+  <div id="diag-card" class="qp-card collapsed">
+    <div class="qp-head" data-toggle="diag-card">
+      <span class="qp-title">diagnostics</span>
+      <span class="qp-spacer"></span>
+      <span>▾</span>
+    </div>
+    <div class="qp-body" id="diag-body">
+      <div class="qp-row diag-row"><span class="diag-label">fps</span><span class="qp-val" id="diag-fps">—</span></div>
+      <div class="qp-row diag-row"><span class="diag-label">frame</span><span class="qp-val" id="diag-ms">—</span></div>
+      <div class="qp-row diag-row"><span class="diag-label">bass</span><span class="qp-val" id="diag-bass">—</span></div>
+      <div class="qp-row diag-row"><span class="diag-label">mids</span><span class="qp-val" id="diag-mids">—</span></div>
+      <div class="qp-row diag-row"><span class="diag-label">highs</span><span class="qp-val" id="diag-highs">—</span></div>
+      <div class="qp-row diag-row"><span class="diag-label">rms</span><span class="qp-val" id="diag-rms">—</span></div>
+      <div class="qp-row diag-row"><span class="diag-label">kick / 5s</span><span class="qp-val" id="diag-beat">0</span></div>
+      <div class="qp-row diag-row"><span class="diag-label">snare / 5s</span><span class="qp-val" id="diag-snare">0</span></div>
+      <div class="qp-row diag-row"><span class="diag-label">hat / 5s</span><span class="qp-val" id="diag-hat">0</span></div>
+      <div class="qp-row diag-row"><span class="diag-label">poses</span><span class="qp-val" id="diag-poses">0</span></div>
+    </div>
+  </div>
+
   <div id="audio-card" class="qp-card collapsed" style="display:none">
     <div class="qp-head" data-toggle="audio-card">
       <span class="qp-title">audio</span>

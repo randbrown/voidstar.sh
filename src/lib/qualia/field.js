@@ -7,6 +7,7 @@ export function emptyAudioFrame() {
   return {
     bands: { bass: 0, mids: 0, highs: 0, total: 0 },
     beat:  { active: false, pulse: 0 },
+    mids:  { active: false, pulse: 0 },
     highs: { active: false, pulse: 0 },
     rms:   0,
     spectrum: null,

@@ -1,22 +1,23 @@
 // Voidstar Logo — the signature brand fx. A dimensional cosmic void-object
 // with the lowercase text `void*` embossed onto its curved surface, ringed
 // by three Bohr-style 3D orbits whose electrons trail luminous plasma. The
-// void itself stays compositionally stable — audio reactivity comes through
-// emitted phenomena (plasma plumes, cosmic radiation streaks, sparks, beat
-// shockwaves, electron trails), not by pumping its scale.
+// `*` is rendered as a separate sprite so it can spin slowly while "void"
+// stays anchored to the curved face.
 //
-// Audio map:
-//   bass         → plasma plume emission strength + electron trail length
-//   mids         → swirl brightness + logo body lighting + edge glow
-//   highs        → orbit electron glints + dust scintillation + sparks
-//   beat.pulse   → outward shockwave annulus + radial streak burst
-//   highs.pulse  → spark scintillation + electron tip flash
-//   rms          → global agitation / halo glow
+// Audio is decoupled per element so the whole scene doesn't pump uniformly
+// to the kick:
+//   • void aperture       — only a subtle response to *strong* bass.
+//   • light rays/streaks  — snare-driven (mids transient).
+//   • energy sheath/swirl — mids + highs (band levels).
+//   • plasma plumes       — slow bass envelope.
+//   • beat shockwave      — kick (uBeat).
+//   • void* logo body     — subtle mids + snare; never the kick.
+//   • electron orbit radii are *not* coupled to the breathing void radius
+//     — instead a slow gravity-style perturbation drifts each ring's radius
+//     independently. Sizes (electron core, halo, trail) use the static
+//     param uVoidRadius so they don't visibly scale with the breath.
 //
-// Pose map (subtle perspective only — never moves the object in scene-space):
-//   head deviation   → camera parallax shift
-//   shoulder span    → modulates parallax strength
-//   no pose          → autonomous slow drift fallback
+// Pose drives camera parallax only; the object never moves in scene-space.
 
 import {
   compileProgram, makeFullscreenTri, FULLSCREEN_VERT,
@@ -41,18 +42,25 @@ uniform float uLogoDepth;
 uniform vec2  uPoseShift;
 uniform float uParallax;
 uniform int   uPalette;
-uniform sampler2D uLogoTex;
 
-// Bohr-style ring uniforms (3 rings, each with a 3D orientation basis (u,v),
-// a radius multiplier, and a current electron parameter).
+// "void" baked left of centre + an empty cell where * was.
+uniform sampler2D uLogoTex;
+// "*" baked centred — sampled with a rotated screen-p UV around its centre.
+uniform sampler2D uStarTex;
+uniform float     uStarRotC;        // cos(starRot)
+uniform float     uStarRotS;        // sin(starRot)
+uniform float     uStarCenterX;     // screen-p x of * centre
+uniform vec2      uStarHalfP;       // screen-p half-extents of * sprite
+
 uniform vec3  uRingU[3];
 uniform vec3  uRingV[3];
 uniform float uRingRMult[3];
 uniform float uRingT[3];
 
 uniform vec4  uBands;
-uniform vec2  uBeat;
-uniform vec2  uHighs;
+uniform vec2  uBeat;       // kick (bass) transient
+uniform vec2  uMids;       // snare / clap transient
+uniform vec2  uHighs;      // hat / cymbal transient
 uniform float uRms;
 
 const float PI = 3.14159265359;
@@ -71,9 +79,11 @@ float vnoise(vec2 p) {
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
+// 3-octave fbm. The 4th octave adds little visual texture but ~33% more
+// hash work per call, and this runs three times per pixel.
 float fbm(vec2 p) {
   float v = 0.0, a = 0.5;
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 3; i++) {
     v += a * vnoise(p);
     p  *= 2.0;
     a  *= 0.5;
@@ -126,35 +136,27 @@ Pal getPalette(int idx) {
   return p;
 }
 
+// Single-layer cosmic background. Using one layer (not two) plus a
+// 2-octave cheap noise dust keeps the visual feel while halving the
+// per-pixel cost — this function runs for every screen pixel.
 vec3 cosmic(vec2 q, vec3 dustCol, float twinkleAmp) {
   vec3 col = vec3(0.0);
-  for (float i = 0.0; i < 2.0; i++) {
-    float scale = 14.0 + i * 22.0;
-    vec2  g     = q * scale;
-    vec2  cell  = floor(g);
-    vec2  local = fract(g) - 0.5;
-    float h     = hash(cell + i * 17.31);
-    float starP = step(0.992 - i * 0.003, h);
-    float r     = length(local);
-    float core  = exp(-r * r * 110.0);
-    float twink = 0.55 + 0.45 * sin(uTime * (1.0 + i * 0.7) + h * 30.0) * twinkleAmp;
-    col += vec3(core * starP * twink) * 0.7;
-  }
-  float n = fbm(q * 1.5 + vec2(uTime * 0.012, 0.0));
+  vec2  g     = q * 22.0;
+  vec2  cell  = floor(g);
+  vec2  local = fract(g) - 0.5;
+  float h     = hash(cell);
+  float starP = step(0.991, h);
+  float r     = length(local);
+  float core  = exp(-r * r * 110.0);
+  float twink = 0.55 + 0.45 * sin(uTime * 1.4 + h * 30.0) * twinkleAmp;
+  col += vec3(core * starP * twink) * 0.7;
+  // Cheap 2-octave dust.
+  float n = vnoise(q * 1.5 + vec2(uTime * 0.012, 0.0)) * 0.5
+          + vnoise(q * 3.0)                              * 0.5;
   col += dustCol * smoothstep(0.55, 1.0, n) * 0.9;
   return col;
 }
 
-float logoSample(vec2 uv) {
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 0.0;
-  return texture(uLogoTex, uv).r;
-}
-
-// Approximate distance from p to the projected ring whose 3D basis vectors
-// project to ux, vx in screen-p. The ring traces (R*ux*cos t + R*vx*sin t).
-// Implicit form: |M^{-1} q| = R, where M = [ux | vx]. We return absolute
-// deviation from R, in screen-p units (scaled by sqrt|det| as a rough
-// metric correction). Returns large value when the ring is near edge-on.
 float ringDist(vec2 q, vec2 ux, vec2 vx, float R) {
   float det = ux.x * vx.y - ux.y * vx.x;
   if (abs(det) < 0.04) return 1e6;
@@ -162,36 +164,64 @@ float ringDist(vec2 q, vec2 ux, vec2 vx, float R) {
   return abs(length(mInv) - R) * sqrt(abs(det));
 }
 
+// ── Logo samplers — split so the * can rotate while "void" stays anchored.
+// voidSample reads the static "void" texture in (already-warped) sphere UV.
+// starSampleAtP reads the rotating "*" sprite via a screen-p coord centred
+// on the * position; it is independent of the spherical UV so the rotation
+// looks natural.
+float voidSample(vec2 uv) {
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 0.0;
+  return texture(uLogoTex, uv).r;
+}
+float starSampleAtP(vec2 pp) {
+  vec2 rel = pp - vec2(uStarCenterX, 0.0);
+  // Cheap bounding-circle early out — the rotated sprite never extends
+  // past sqrt(2) * max(half-extents) from its centre. Skips the texture
+  // sample for the ~95% of pixels far from the *.
+  float maxR = max(uStarHalfP.x, uStarHalfP.y) * 1.45;
+  if (dot(rel, rel) > maxR * maxR) return 0.0;
+  vec2 rot = vec2(uStarRotC * rel.x - uStarRotS * rel.y,
+                  uStarRotS * rel.x + uStarRotC * rel.y);
+  vec2 uv  = rot / uStarHalfP * 0.5 + 0.5;
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 0.0;
+  return texture(uStarTex, uv).r;
+}
+float comboSample(vec2 uv, vec2 pp) {
+  return max(voidSample(uv), starSampleAtP(pp));
+}
+
 void main() {
   vec2  res    = uResolution;
   float aspect = res.x / max(res.y, 1.0);
 
-  // Aspect-corrected centred coords. p.x in [-aspect, aspect], p.y in [-1, 1].
   vec2 p = (vUv - 0.5) * 2.0;
   p.x *= aspect;
-
-  // Parallax (camera shift; the object never moves in scene-space).
   p -= uPoseShift * uParallax * 0.10;
 
   Pal pal = getPalette(uPalette);
 
-  // ── Background ─────────────────────────────────────────────────────────
   float twinkleAmp = 0.6 + uHighs.y * 1.4 + uBands.z * 0.3;
   vec3  col = cosmic(p, pal.dust, twinkleAmp);
 
   float r     = length(p);
   float angle = atan(p.y, p.x);
 
-  // Void radius — only a gentle breath. Real audio energy goes into
-  // emitted phenomena (plumes/streaks/sparks/electrons), not scaling.
-  float vR = uVoidRadius * (1.0 + uBands.x * 0.05 + uBeat.y * 0.06);
+  // ── Void aperture: only a subtle response to *strong* bass.
+  // strongBass is 0 below 0.55 and ramps to 1 by 1.0, then breathing tops
+  // out at +5% — so a kick alone won't visibly resize the void; only a
+  // very loud bass-heavy passage budges it.
+  float strongBass = clamp((uBands.x - 0.55) * 2.5, 0.0, 1.0);
+  float vR = uVoidRadius * (1.0 + strongBass * 0.05);
   vR = clamp(vR, 0.05, 0.65);
 
-  // ── Energy sheath: swirling annulus just outside the aperture ──────────
+  // ── Energy sheath — mids + highs drive thickness and brightness.
+  // Both inner and outer transitions are softly feathered so the sheath
+  // bleeds smoothly into the void rim and the surrounding cosmos rather
+  // than sitting against hard edges.
   float sheathInner = vR;
-  float sheathOuter = vR + uEnergyThickness * (1.0 + uBands.x * 0.20);
-  float sheathBand  = smoothstep(sheathInner - 0.005, sheathInner + 0.020, r) *
-                      (1.0 - smoothstep(sheathOuter * 0.95, sheathOuter + 0.05, r));
+  float sheathOuter = vR + uEnergyThickness * (1.0 + uBands.y * 0.18 + uBands.z * 0.12);
+  float sheathBand  = smoothstep(sheathInner - 0.025, sheathInner + 0.060, r) *
+                      (1.0 - smoothstep(sheathOuter * 0.82, sheathOuter + 0.14, r));
   vec2  swirlSeed = vec2(angle * 2.2 + uTime * uFlowSpeed * 0.32,
                          (r - vR) * 11.0 - uTime * uFlowSpeed * 0.55);
   float swirl    = fbm(swirlSeed);
@@ -199,21 +229,20 @@ void main() {
   float energy   = sheathBand * (0.35 + 0.85 * swirl + 0.40 * fineSw) * uSwirlIntensity;
   float doppler  = 0.55 + 0.5 * sin(angle * 2.0 + uTime * uFlowSpeed * 0.55);
   energy *= 0.55 + 0.65 * doppler;
-  energy *= (1.0 + uBands.y * 0.65);
+  energy *= (1.0 + uBands.y * 0.50 + uBands.z * 0.30);
   float sheathMix = smoothstep(sheathOuter, sheathInner, r);
   vec3  energyCol = mix(pal.sheath, pal.voidEdge, sheathMix);
   col += energyCol * energy * 1.35;
 
-  // Inner-rim lit lip of the aperture.
+  // Inner-rim lit lip — mids + highs only (no kick).
   float rimG = exp(-pow((r - vR) / max(vR * 0.20, 0.01), 2.0))
-             * (0.55 + uBeat.y * 1.2 + uBands.y * 0.4);
+             * (0.55 + uBands.y * 0.35 + uBands.z * 0.25);
   col += pal.voidEdge * rimG * 0.32;
 
-  // ── Plasma plumes — solar-flare-like radial emissions from the aperture.
-  // Each plume has a fixed angle (slowly drifting); intensity is per-plume
-  // pulsing modulated by bass + beat → feels like the void emits energy.
+  // ── Plasma plumes — slow bass envelope. Reduced amplitude so they read
+  // as ambient emission, not as a synced pulse.
   float plasma = 0.0;
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 5; i++) {
     float fi      = float(i);
     float baseAng = fi * 1.0472 + uTime * 0.07 + hash(vec2(fi, 3.1)) * 6.28;
     float dAng    = mod(angle - baseAng + PI, 2.0 * PI) - PI;
@@ -222,63 +251,57 @@ void main() {
     float radial   = max(0.0, r - vR);
     float falloff  = exp(-radial * 2.6) * smoothstep(vR, vR + 0.04, r);
     float pulse    = 0.4 + 0.6 * sin(uTime * 1.4 + fi * 1.7);
-    float power    = uBands.x * (0.5 + 0.5 * pulse) + uBeat.y * 0.7;
+    float power    = uBands.x * 0.45 * pulse + uBeat.y * 0.35;
     plasma += angleMask * falloff * power;
   }
-  col += pal.plasma * plasma * 1.4;
+  col += pal.plasma * plasma * 1.25;
 
-  // ── Cosmic radiation streaks — very thin, very long, beat-driven. They
-  // emerge on transients and decay over ~1s as the bass tail fades.
+  // ── Cosmic radiation streaks — SNARE-driven (mids transient). Light
+  // rays emit on snare/clap hits, with a smaller cymbal-driven accent.
   float streaks = 0.0;
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < 6; i++) {
     float fi      = float(i);
     float baseAng = fi * 0.7854 + uTime * 0.04 + hash(vec2(fi, 7.7)) * 6.28;
     float dAng    = mod(angle - baseAng + PI, 2.0 * PI) - PI;
     float angleMask = exp(-dAng * dAng * 800.0);
     float radial   = r - vR;
     float radialMask = smoothstep(vR, vR + 0.02, r) * exp(-max(0.0, radial) * 1.4);
-    float intensity = uBeat.y * 1.5 + uHighs.y * 0.3 + uBands.x * 0.25;
+    float intensity = uMids.y * 1.65 + uHighs.y * 0.40;
     streaks += angleMask * radialMask * intensity;
   }
-  col += pal.voidEdge * streaks * 2.0;
+  col += pal.voidEdge * streaks * 1.85;
 
-  // ── Beat shockwave — outward annulus that propagates and fades. ────────
-  float swR   = vR * (1.5 + 5.0 * pow(uBeat.y, 0.55));
+  // ── Beat shockwave — kick. Reduced so it's a flicker, not a slam.
+  float swR   = vR * (1.5 + 4.5 * pow(uBeat.y, 0.55));
   float swW   = vR * 0.28;
   float shock = exp(-pow((r - swR) / swW, 2.0)) * uBeat.y;
-  col += pal.voidEdge * shock * 1.4;
+  col += pal.voidEdge * shock * 1.05;
 
-  // ── Bohr-style 3D rings: faint outline + bright electrons with trails.
-  // Each ring's contribution is split per-pixel into a "behind" portion
-  // (still subject to the void's occlusion) and a "front" portion held
-  // in colFront and composited AFTER the void cut + logo, so any orbit
-  // segment that's in front of the aperture in 3D appears over it.
+  // ── Bohr-style 3D rings.
+  // Ring radii use uVoidRadius (the *param*, not the breathing vR) so they
+  // don't track the void's audio breathing. Per-ring "gravity" perturbation
+  // is baked into uRingRMult on the JS side. Electron sizes use uVoidRadius
+  // for the same reason.
   vec3  colFront  = vec3(0.0);
   float orbitGain = uOrbitAmount;
   for (int i = 0; i < 3; i++) {
     vec3  u  = uRingU[i];
     vec3  v  = uRingV[i];
-    float Rm = uRingRMult[i] * vR;
+    float Rm = uRingRMult[i] * uVoidRadius;
     float tE = uRingT[i];
 
-    // Per-pixel ring depth: parameter on the ring closest to this pixel's
-    // projection, then evaluate the ring's 3D z at that parameter. Used
-    // both for outline AND for the trail so each segment of the orbit is
-    // depth-tested independently — front sweeps cleanly over the void.
     vec2  q        = p / max(Rm, 1e-3);
     float tNearest = atan(dot(q, v.xy), dot(q, u.xy));
     float ctP = cos(tNearest), stP = sin(tNearest);
     float zPix = (u.z * ctP + v.z * stP) * Rm;
     float frontW = smoothstep(-0.04 * Rm, 0.04 * Rm, zPix);
 
-    // Faint ring outline.
     float d = ringDist(p, u.xy, v.xy, Rm);
-    float thick = vR * 0.014 + 0.001;
+    float thick = uVoidRadius * 0.014 + 0.001;
     float outlineSoft = exp(-pow(d / (thick * 2.4), 2.0)) * 0.18;
     float outlineHard = exp(-pow(d / thick, 2.0)) * 0.32;
     vec3  outlineCol  = pal.orbit * (outlineSoft + outlineHard);
 
-    // Electron 3D position and velocity.
     float ct = cos(tE), st = sin(tE);
     vec3  e3  = (u * ct + v * st) * Rm;
     vec3  ev3 = (-u * st + v * ct);
@@ -289,22 +312,21 @@ void main() {
     vec2  velN = eVel / velLen;
     vec2  velPerp = vec2(-velN.y, velN.x);
 
-    // Brightness modulated by the electron's own 3D depth (closer = brighter).
     float depthN   = 0.5 + 0.5 * (eZ / max(Rm, 1e-3));
     float depthBri = mix(0.45, 1.7, smoothstep(0.0, 1.0, depthN));
 
     float dE     = length(p - eP);
-    float coreR  = vR * (0.045 + uBeat.y * 0.04);
+    float coreR  = uVoidRadius * (0.045 + uHighs.y * 0.030);
     float core   = exp(-pow(dE / coreR, 2.0));
-    float haloR  = vR * 0.18;
+    float haloR  = uVoidRadius * 0.18;
     float haloEl = exp(-pow(dE / haloR, 2.0)) * 0.45;
     float scintil = uHighs.y * exp(-pow(dE / (coreR * 1.4), 2.0));
 
     vec2  toE   = p - eP;
     float along = -dot(toE, velN);
     float perp  = dot(toE, velPerp);
-    float trailLen   = vR * (0.55 + uBands.x * 0.55 + uBeat.y * 0.30);
-    float trailWidth = vR * (0.020 + uBands.y * 0.020);
+    float trailLen   = uVoidRadius * (0.55 + uBands.x * 0.40 + uBeat.y * 0.25);
+    float trailWidth = uVoidRadius * (0.020 + uBands.y * 0.020);
     float trailLong  = smoothstep(trailLen, 0.0, along) * step(0.0, along);
     float trailSide  = exp(-pow(perp / trailWidth, 2.0));
     float trail      = trailLong * trailSide * 0.85;
@@ -312,22 +334,19 @@ void main() {
     vec3 electronCol = pal.electron * (core * 2.4 + haloEl + scintil * 1.3) * depthBri;
     vec3 trailCol    = pal.plasma   * trail * (0.7 + 0.6 * depthBri);
 
-    // Outline + trail use per-pixel zPix so they depth-test along the ring.
     vec3 outlineAndTrail = (outlineCol + trailCol) * orbitGain;
     col      += outlineAndTrail * (1.0 - frontW);
     colFront += outlineAndTrail * frontW;
 
-    // Electron core uses the electron's own eZ — it's a point, so per-pixel
-    // ring depth would smear it across the silhouette. Split it directly.
     float frontE = smoothstep(-0.04 * Rm, 0.04 * Rm, eZ);
     vec3  electronContrib = electronCol * orbitGain;
     col      += electronContrib * (1.0 - frontE);
     colFront += electronContrib * frontE;
   }
 
-  // ── Sparks scattered radially around the void (highs-driven scintilla).
+  // ── Sparks — highs-driven scintilla, with mild snare accent.
   float sparks = 0.0;
-  for (float i = 0.0; i < 3.0; i++) {
+  for (float i = 0.0; i < 2.0; i++) {
     float scale = 28.0 + i * 18.0;
     vec2  g     = p * scale;
     vec2  cell  = floor(g);
@@ -339,100 +358,80 @@ void main() {
     float core  = exp(-lr * lr * 220.0);
     sparks += core * live * zone;
   }
-  col += pal.electron * sparks * (uHighs.y * 1.6 + uBands.z * 0.6 + 0.20);
+  col += pal.electron * sparks * (uHighs.y * 1.6 + uMids.y * 0.40 + uBands.z * 0.40 + 0.20);
 
-  // ── Cut to black inside the aperture ──────────────────────────────────
-  float voidMask = 1.0 - smoothstep(vR * 0.86, vR * 0.99, r);
+  // ── Cut to black inside the aperture, feathered so the rim of the void
+  // fades softly into the surrounding energy instead of clipping hard.
+  float voidMask = 1.0 - smoothstep(vR * 0.65, vR * 1.04, r);
   col *= mix(1.0, 0.0, voidMask);
 
   // ── In-scene void* logo on a curved (spherical) front face ────────────
-  // Spherical UV: we treat the void's front as a sphere and project the
-  // current screen point through the sphere to angular coords (lon, lat).
-  // Letters thus appear gently wrapped around the curved face.
-  float sphereR = max(vR * 2.10, 0.30);   // sphere bigger than the aperture
-  float zSph    = sqrt(max(sphereR * sphereR - dot(p, p), 1e-4));
-  vec2  ang     = vec2(atan(p.x, zSph), atan(p.y, zSph));
+  // The whole logo block (combo sampling, extrusion, gradient, halo) is
+  // the most expensive part of the shader. Skipping it for off-sphere
+  // pixels (the majority of the screen) is a big perf win.
+  float sphereR  = max(uVoidRadius * 2.10, 0.30);
+  float onSphere = step(dot(p, p), sphereR * sphereR);
+  if (onSphere > 0.5) {
+    float zSph    = sqrt(max(sphereR * sphereR - dot(p, p), 1e-4));
+    vec2  ang     = vec2(atan(p.x, zSph), atan(p.y, zSph));
+    vec2  logoHalfP   = vec2(min(0.55, sphereR * 0.94), min(0.16, sphereR * 0.30));
+    vec2  logoHalfAng = vec2(asin(logoHalfP.x / sphereR), asin(logoHalfP.y / sphereR));
+    vec2  logoUV      = ang / logoHalfAng * 0.5 + 0.5;
 
-  // Logo box in p-space half-extents, converted to angular extents on the
-  // same sphere so the wrap matches a strip of the sphere.
-  vec2  logoHalfP   = vec2(min(0.55, sphereR * 0.94), min(0.16, sphereR * 0.30));
-  vec2  logoHalfAng = vec2(asin(logoHalfP.x / sphereR), asin(logoHalfP.y / sphereR));
-  vec2  logoUV      = ang / logoHalfAng * 0.5 + 0.5;
+    float maskC = comboSample(logoUV, p);
 
-  // Visibility: only render where p actually projects to the front face
-  // and within the logo's angular box.
-  float onSphere    = step(dot(p, p), sphereR * sphereR);
-  float inLogoBox   = step(0.0, logoUV.x) * step(logoUV.x, 1.0)
-                    * step(0.0, logoUV.y) * step(logoUV.y, 1.0);
-  float logoVisible = onSphere * inLogoBox;
+    vec2  outwardP   = (r > 1e-3) ? p / r : vec2(0.0, 1.0);
+    vec2  uvPerP     = vec2(1.0 / max(zSph, 1e-3) / max(logoHalfAng.x, 1e-3),
+                            1.0 / max(zSph, 1e-3) / max(logoHalfAng.y, 1e-3)) * 0.5;
+    float dStepP     = 0.005 + uLogoDepth * 0.018;
+    float maskBack   = 0.0;
+    for (int i = 1; i <= 5; i++) {
+      vec2 offP  = outwardP * dStepP * float(i);
+      vec2 offUV = offP * uvPerP;
+      maskBack = max(maskBack, comboSample(logoUV + offUV, p + offP));
+    }
+    float side = clamp(maskBack - maskC, 0.0, 1.0);
 
-  float maskC = logoSample(logoUV) * logoVisible;
+    float eps   = 0.0024;
+    vec2  epsP  = vec2(eps / max(uvPerP.x, 1e-3), eps / max(uvPerP.y, 1e-3));
+    epsP = min(epsP, vec2(0.012));
+    float mL = comboSample(logoUV + vec2(-eps, 0.0), p + vec2(-epsP.x, 0.0));
+    float mR = comboSample(logoUV + vec2( eps, 0.0), p + vec2( epsP.x, 0.0));
+    float mU = comboSample(logoUV + vec2(0.0, -eps), p + vec2(0.0, -epsP.y));
+    float mD = comboSample(logoUV + vec2(0.0,  eps), p + vec2(0.0,  epsP.y));
+    vec2  grad    = vec2(mR - mL, mD - mU);
+    float gradLen = length(grad);
+    vec2  norm    = gradLen > 1e-4 ? grad / gradLen : vec2(0.0);
 
-  // Extrusion direction: depth tied to the void center. We sample the mask
-  // at offsets going OUTWARD from the screen centre so the side wall
-  // appears on the inner (toward-void) side of each letter — letters look
-  // like they recede into the aperture.
-  vec2  outwardP   = (r > 1e-3) ? p / r : vec2(0.0, 1.0);
-  // Convert a step in p-space to a step in UV-space using the local
-  // jacobian of the spherical map. d(ang)/dp_x ≈ 1/zSph, d(ang)/dp_y ≈ 1/zSph
-  // for an axial sample. Use this to keep extrusion isotropic in p-space.
-  vec2  uvPerP     = vec2(1.0 / max(zSph, 1e-3) / max(logoHalfAng.x, 1e-3),
-                          1.0 / max(zSph, 1e-3) / max(logoHalfAng.y, 1e-3)) * 0.5;
-  float dStepP     = 0.005 + uLogoDepth * 0.018;
-  float maskBack   = 0.0;
-  for (int i = 1; i <= 6; i++) {
-    vec2 offP  = outwardP * dStepP * float(i);
-    vec2 offUV = offP * uvPerP;
-    maskBack = max(maskBack, logoSample(logoUV + offUV) * logoVisible);
+    vec2  toCenter = -outwardP;
+    float diffuse = clamp(dot(norm, toCenter), 0.0, 1.0);
+    float ambient = 0.50 + uBands.y * 0.18 + uMids.y * 0.22;
+    float voidGlow = clamp(1.0 - r / max(vR * 3.5, 1e-3), 0.0, 1.0);
+    vec3  bodyCol = mix(pal.logo, pal.voidEdge, voidGlow * 0.55);
+    vec3  bodyLit = bodyCol * (ambient + 0.40 * diffuse + voidGlow * 0.30);
+
+    vec3 sideCol = mix(pal.logo * 0.30, pal.voidEdge, voidGlow * 0.6) * (0.55 + voidGlow * 0.7);
+    float edge = clamp(gradLen * 8.0, 0.0, 1.0);
+
+    // Cross-pattern halo — 2 distances × 4 directions = 8 samples (was 16).
+    float halo = 0.0;
+    for (int i = 1; i <= 2; i++) {
+      float t = float(i) * 3.2;
+      vec2 oh  = vec2( eps, 0.0) * t * 3.0;
+      vec2 ov  = vec2(0.0,  eps) * t * 3.0;
+      vec2 ohP = vec2( epsP.x, 0.0) * t * 3.0;
+      vec2 ovP = vec2(0.0,  epsP.y) * t * 3.0;
+      halo += comboSample(logoUV + oh, p + ohP) + comboSample(logoUV - oh, p - ohP)
+            + comboSample(logoUV + ov, p + ovP) + comboSample(logoUV - ov, p - ovP);
+    }
+    halo = clamp(halo / 8.0 - maskC, 0.0, 1.0);
+    col += pal.halo * halo * (0.55 + uRms * 0.7 + uMids.y * 0.30);
+
+    col = mix(col, bodyLit, maskC);
+    col += sideCol * side * 0.65;
+    col += pal.voidEdge * edge * (0.40 + uBands.y * 0.20 + uMids.y * 0.30);
   }
-  float side = clamp(maskBack - maskC, 0.0, 1.0);
 
-  // Edge gradient (Sobel-ish) for diffuse + rim. Step in UV.
-  float eps = 0.0024;
-  float mL = logoSample(logoUV + vec2(-eps, 0.0));
-  float mR = logoSample(logoUV + vec2( eps, 0.0));
-  float mU = logoSample(logoUV + vec2(0.0, -eps));
-  float mD = logoSample(logoUV + vec2(0.0,  eps));
-  vec2  grad    = vec2(mR - mL, mD - mU);
-  float gradLen = length(grad);
-  vec2  norm    = gradLen > 1e-4 ? grad / gradLen : vec2(0.0);
-
-  // Light source = void centre. Ambient + diffuse + edge rim. Emission
-  // scales with surrounding energy so letters pulse gently with the music.
-  vec2  toCenter = -outwardP;
-  float diffuse = clamp(dot(norm, toCenter), 0.0, 1.0);
-  float ambient = 0.50 + uBands.y * 0.35 + uBeat.y * 0.45;
-  float voidGlow = clamp(1.0 - r / max(vR * 3.5, 1e-3), 0.0, 1.0);
-  vec3  bodyCol = mix(pal.logo, pal.voidEdge, voidGlow * 0.55);
-  vec3  bodyLit = bodyCol * (ambient + 0.45 * diffuse + voidGlow * 0.35);
-
-  // Side-wall colour: lit by void glow, dimmer than body.
-  vec3 sideCol = mix(pal.logo * 0.30, pal.voidEdge, voidGlow * 0.6) * (0.55 + voidGlow * 0.7);
-
-  // Silhouette edge highlight.
-  float edge = clamp(gradLen * 8.0, 0.0, 1.0);
-
-  // Soft halo behind the logo.
-  float halo = 0.0;
-  for (int i = 1; i <= 4; i++) {
-    float t = float(i) * 1.6;
-    vec2 oh = vec2( eps, 0.0) * t * 3.0;
-    vec2 ov = vec2(0.0,  eps) * t * 3.0;
-    halo += logoSample(logoUV + oh) + logoSample(logoUV - oh)
-          + logoSample(logoUV + ov) + logoSample(logoUV - ov);
-  }
-  halo = clamp(halo / 16.0 - maskC, 0.0, 1.0) * logoVisible;
-  col += pal.halo * halo * (0.55 + uRms * 0.9 + uBeat.y * 0.7);
-
-  // Composite logo body (alpha-over so it occludes void/orbits behind).
-  col = mix(col, bodyLit, maskC);
-  // Side wall + edge rim (additive in their respective regions).
-  col += sideCol * side * 0.65;
-  col += pal.voidEdge * edge * (0.40 + uBands.y * 0.55 + uBeat.y * 0.45) * logoVisible;
-
-  // In-front orbit content composited on top of the aperture + logo so
-  // electrons/trails crossing the front of the voidstar appear in the
-  // foreground in 3D-correct order.
   col += colFront;
 
   // ── Vignette + tone ───────────────────────────────────────────────────
@@ -446,23 +445,46 @@ void main() {
 
 const PALETTES = ['silver', 'voidblue', 'platinum', 'inferno'];
 
-// Rotate a 3-vector through Euler XYZ angles (radians). Reuses scratch.
+// Rotate a 3-vector through Euler XYZ angles. Reuses scratch.
 function rotateXYZ(out, vx, vy, vz, ax, ay, az) {
   const cx = Math.cos(ax), sx = Math.sin(ax);
   const cy = Math.cos(ay), sy = Math.sin(ay);
   const cz = Math.cos(az), sz = Math.sin(az);
-  // X
   let x = vx;
   let y = vy * cx - vz * sx;
   let z = vy * sx + vz * cx;
-  // Y
   let x2 = x * cy + z * sy;
   let y2 = y;
   let z2 = -x * sy + z * cy;
-  // Z
   out[0] = x2 * cz - y2 * sz;
   out[1] = x2 * sz + y2 * cz;
   out[2] = z2;
+}
+
+// Bake a single text into a black-background canvas → GL texture (red channel
+// holds the white text mask in the shader).
+function bakeTextTex(gl, text, w, h, fontSize) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#fff';
+  ctx.font = `700 ${fontSize}px "JetBrains Mono", "Cascadia Code", "Fira Code", "Source Code Pro", "Ubuntu Mono", "Menlo", "Consolas", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, w / 2, h / 2 + 4);
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  return t;
 }
 
 /** @type {import('../types.js').QualiaFXModule} */
@@ -474,7 +496,7 @@ export default {
   params: [
     { id: 'voidRadius',      label: 'void radius',      type: 'range', min: 0.10, max: 0.55, step: 0.01, default: 0.26 },
     { id: 'energyThickness', label: 'energy thickness', type: 'range', min: 0.02, max: 0.40, step: 0.01, default: 0.34 },
-    { id: 'swirlIntensity',  label: 'swirl intensity',  type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 0.16 },
+    { id: 'swirlIntensity',  label: 'swirl intensity',  type: 'range', min: 0.00, max: 1.00, step: 0.01, default: 0.16 },
     { id: 'flowSpeed',       label: 'flow speed',       type: 'range', min: 0.00, max: 3.00, step: 0.01, default: 0.23 },
     { id: 'orbitAmount',     label: 'orbit amount',     type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 1.01 },
     { id: 'logoDepth',       label: 'logo depth',       type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 0.00 },
@@ -496,39 +518,14 @@ export default {
     const vao  = makeFullscreenTri(gl);
     const U    = makeUniformGetter(gl, prog);
 
-    // ── void* logo texture (offscreen Canvas2D, monospace/terminal feel) ──
-    const TEX_W = 1024, TEX_H = 256;
-    const tex = (() => {
-      const c = document.createElement('canvas');
-      c.width = TEX_W; c.height = TEX_H;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, TEX_W, TEX_H);
-      ctx.fillStyle = '#fff';
-      // Terminal/leetcoder vibe: prefer programmer fonts, fall back through
-      // common monospace stacks.
-      ctx.font = '700 168px "JetBrains Mono", "Cascadia Code", "Fira Code", "Source Code Pro", "Ubuntu Mono", "Menlo", "Consolas", monospace';
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('void*', TEX_W / 2, TEX_H / 2 + 4);
-      const t = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.bindTexture(gl.TEXTURE_2D, null);
-      return t;
-    })();
+    // "void " (trailing space) keeps the four letters in the same cells they
+    // used to occupy in "void*" — the * cell is left blank for the rotating
+    // sprite to fill. Star is its own 256² square sprite.
+    const logoTex = bakeTextTex(gl, 'void ', 1024, 256, 168);
+    const starTex = bakeTextTex(gl, '*',     256, 256, 240);
 
     let W = canvas.width, H = canvas.height;
 
-    // ── Bohr-style ring state. Each ring starts orthogonal to the others
-    // (planes XY, YZ, XZ), then precesses with its own per-axis Euler
-    // rates so over time the trio drifts through 3D space naturally.
     const ringBases = [
       { u0: [1, 0, 0], v0: [0, 1, 0], radiusMult: 1.85, electronSpeed: 1.00 },
       { u0: [0, 1, 0], v0: [0, 0, 1], radiusMult: 2.40, electronSpeed: 1.40 },
@@ -541,16 +538,18 @@ export default {
     ];
     const ringPhaseOff = [0.0, 1.7, 4.1];
     const ringElectronT = [0.0, 1.5, 3.2];
+    // Smoothed dynamic radius multiplier per ring — drifts around its base
+    // via a slow gravity-like spring, nudged by bass + slow time.
+    const ringRMultDyn = ringBases.map(b => b.radiusMult);
 
-    // Pre-allocated scratch for uniform uploads.
     const ringU      = new Float32Array(NUM_RINGS * 3);
     const ringV      = new Float32Array(NUM_RINGS * 3);
     const ringRMult  = new Float32Array(NUM_RINGS);
     const ringT      = new Float32Array(NUM_RINGS);
     const tmpVec     = new Float32Array(3);
 
-    // Smoothed parallax target.
     let poseShiftX = 0, poseShiftY = 0;
+    let starRot = 0;
 
     let audioRef = null;
     const scratch = {
@@ -558,6 +557,7 @@ export default {
       voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16,
       flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76,
       palette: PALETTES.indexOf('platinum'),
+      starCenterX: 0.0, starHalfPX: 0.0, starHalfPY: 0.0,
     };
 
     function update(field) {
@@ -573,9 +573,25 @@ export default {
       scratch.parallax        = params.parallax;
       scratch.palette         = Math.max(0, PALETTES.indexOf(params.palette));
 
-      // Advance ring rotations + electron parameters. Beat boosts electron
-      // speed transiently — gives the impression of radiation events.
+      // Compute static * sprite geometry from the param uVoidRadius — it
+      // does NOT track the audio breathing so the * stays anchored. The *
+      // sits just to the right of the "d" (logoUV.x ≈ 0.78) so it reads
+      // as part of the logotype, not a detached element.
+      const sphereR = Math.max(params.voidRadius * 2.10, 0.30);
+      const logoHalfPX = Math.min(0.55, sphereR * 0.94);
+      const logoHalfPY = Math.min(0.16, sphereR * 0.30);
+      const logoHalfAngX = Math.asin(logoHalfPX / sphereR);
+      const starAngX = 0.56 * logoHalfAngX;     // → logoUV.x ≈ 0.78
+      scratch.starCenterX = sphereR * Math.sin(starAngX);
+      scratch.starHalfPX  = 0.20 * logoHalfPX;
+      scratch.starHalfPY  = 0.55 * logoHalfPY;
+
+      // Ring rotations + per-ring electron parameter advance. Beat boosts
+      // electron speed transiently — gives a sense of radiation events.
       const beatBoost = 1.0 + audio.beat.pulse * 4.0 + audio.bands.bass * 0.6;
+      // Slow gravity perturbation on each ring's radius. Spring-damper
+      // toward a target = base * (1 + small audio + slow time wobble).
+      const audioPull = (audio.bands.bass - 0.40) * 0.05 + audio.beat.pulse * 0.025;
       for (let i = 0; i < NUM_RINGS; i++) {
         const base = ringBases[i];
         const pre  = ringPrecess[i];
@@ -592,10 +608,19 @@ export default {
         ringV[i * 3 + 1] = tmpVec[1];
         ringV[i * 3 + 2] = tmpVec[2];
 
-        ringRMult[i] = base.radiusMult;
+        const slow = 0.025 * Math.sin(time * 0.10 + i * 1.7);
+        const targetMult = base.radiusMult * (1.0 + audioPull + slow);
+        const k = Math.min(1, dt * 1.6);
+        ringRMultDyn[i] += (targetMult - ringRMultDyn[i]) * k;
+        ringRMult[i] = ringRMultDyn[i];
+
         ringElectronT[i] += dt * base.electronSpeed * beatBoost * (0.6 + params.flowSpeed * 0.4);
         ringT[i] = ringElectronT[i];
       }
+
+      // Slow * rotation. Base rate ~10°/sec, with a tiny audio-energy boost.
+      starRot += dt * (0.18 + audio.rms * 0.5);
+      if (starRot > Math.PI * 200) starRot -= Math.PI * 200;
 
       // Pose-driven parallax (subtle camera shift, capped small).
       let tx = 0, ty = 0;
@@ -652,9 +677,18 @@ export default {
       gl.uniform1fv(U('uRingRMult[0]'), ringRMult);
       gl.uniform1fv(U('uRingT[0]'),     ringT);
 
+      // Star sprite uniforms.
+      gl.uniform1f(U('uStarRotC'),    Math.cos(starRot));
+      gl.uniform1f(U('uStarRotS'),    Math.sin(starRot));
+      gl.uniform1f(U('uStarCenterX'), scratch.starCenterX);
+      gl.uniform2f(U('uStarHalfP'),   scratch.starHalfPX, scratch.starHalfPY);
+
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.bindTexture(gl.TEXTURE_2D, logoTex);
       gl.uniform1i(U('uLogoTex'), 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, starTex);
+      gl.uniform1i(U('uStarTex'), 1);
 
       if (audioRef) uploadAudioUniforms(gl, U, audioRef);
 
@@ -669,7 +703,8 @@ export default {
       dispose() {
         gl.deleteProgram(prog);
         gl.deleteVertexArray(vao);
-        gl.deleteTexture(tex);
+        gl.deleteTexture(logoTex);
+        gl.deleteTexture(starTex);
       },
     };
   },

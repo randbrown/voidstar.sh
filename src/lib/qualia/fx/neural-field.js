@@ -195,7 +195,7 @@ export default {
       const decay = Math.pow(0.001, dt);
       for (let i = 0; i < NUM_SOMA; i++) sSpike[i] *= decay;
       if (audio.beat.active) {
-        const visible = Math.max(20, Math.floor(NUM_SOMA * params.density));
+        const visible = Math.min(NUM_SOMA, Math.max(20, Math.floor(NUM_SOMA * params.density)));
         for (let i = 0; i < visible; i++) {
           // Each soma spikes by a slightly random amount so the beat reads
           // as a wave of activations, not a single uniform pulse.
@@ -347,7 +347,7 @@ export default {
       // Draw back-to-front so closer nodes overlap farther ones cleanly.
       // We fake the sort by iterating in z order — simple bucket pass since
       // NUM_SOMA is small.
-      const visible = Math.max(20, Math.floor(NUM_SOMA * scratch.density));
+      const visible = Math.min(NUM_SOMA, Math.max(20, Math.floor(NUM_SOMA * scratch.density)));
       const order = _somaOrder;
       for (let i = 0; i < visible; i++) order[i] = i;
       // Insertion sort by lz[i] descending (far first → near last).

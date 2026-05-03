@@ -184,7 +184,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     const dt = Math.min(dtRaw, 0.05);
     lastMs = now;
     frames++; fpsTimer += dt;
-    if (fpsTimer >= 0.5) {
+    if (fpsTimer >= 0.2) {
       lastFps = Math.round(frames / fpsTimer);
       fpsListeners.forEach(fn => { try { fn(lastFps, field); } catch {} });
       frames = 0; fpsTimer = 0;

@@ -80,6 +80,7 @@ export function makeUniformGetter(gl, prog) {
 export function uploadAudioUniforms(gl, U, audio) {
   gl.uniform4f(U('uBands'), audio.bands.bass, audio.bands.mids, audio.bands.highs, audio.bands.total);
   gl.uniform2f(U('uBeat'),  audio.beat.active  ? 1 : 0, audio.beat.pulse);
+  gl.uniform2f(U('uMids'),  audio.mids.active  ? 1 : 0, audio.mids.pulse);
   gl.uniform2f(U('uHighs'), audio.highs.active ? 1 : 0, audio.highs.pulse);
   gl.uniform1f(U('uRms'),   audio.rms);
 }
