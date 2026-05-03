@@ -222,8 +222,19 @@ void main() {
   float sheathOuter = vR + uEnergyThickness * (1.0 + uBands.y * 0.18 + uBands.z * 0.12);
   float sheathBand  = smoothstep(sheathInner - 0.025, sheathInner + 0.060, r) *
                       (1.0 - smoothstep(sheathOuter * 0.82, sheathOuter + 0.14, r));
-  vec2  swirlSeed = vec2(angle * 2.2 + uTime * uFlowSpeed * 0.32,
-                         (r - vR) * 11.0 - uTime * uFlowSpeed * 0.55);
+  // Seam-free swirl seed: feed fbm a unit-direction vector instead of the
+  // raw atan(y,x). atan wraps from -PI to +PI at the negative x-axis and
+  // that jump appears as a vertical seam in fbm; the unit-direction
+  // p/length(p) is continuous the whole way round and produces a noise
+  // pattern with no discontinuity. Time slowly rotates the seed.
+  vec2 dir = (r > 1e-4) ? p / r : vec2(1.0, 0.0);
+  float spinT = uTime * uFlowSpeed * 0.32;
+  float cT = cos(spinT), sT = sin(spinT);
+  vec2 dirRot = vec2(dir.x * cT - dir.y * sT, dir.x * sT + dir.y * cT);
+  vec2 swirlSeed = vec2(
+    dirRot.x * 2.2,
+    dirRot.y * 2.2 + (r - vR) * 11.0 - uTime * uFlowSpeed * 0.55
+  );
   float swirl    = fbm(swirlSeed);
   float fineSw   = fbm(swirlSeed * 3.0 + 11.0);
   float energy   = sheathBand * (0.35 + 0.85 * swirl + 0.40 * fineSw) * uSwirlIntensity;
@@ -581,7 +592,7 @@ export default {
       const logoHalfPX = Math.min(0.55, sphereR * 0.94);
       const logoHalfPY = Math.min(0.16, sphereR * 0.30);
       const logoHalfAngX = Math.asin(logoHalfPX / sphereR);
-      const starAngX = 0.56 * logoHalfAngX;     // → logoUV.x ≈ 0.78
+      const starAngX = 0.50 * logoHalfAngX;     // → logoUV.x ≈ 0.75 (just past "d")
       scratch.starCenterX = sphereR * Math.sin(starAngX);
       scratch.starHalfPX  = 0.20 * logoHalfPX;
       scratch.starHalfPY  = 0.55 * logoHalfPY;

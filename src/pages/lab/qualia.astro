@@ -265,6 +265,47 @@
     #btn-strudel-play, #btn-strudel-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
     #btn-strudel-play.playing { color: var(--pink); border-color: var(--pink); }
     #btn-strudel-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    #strudel-tabs {
+      display: flex; gap: 0.25rem;
+      padding: 0.3rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,0.25);
+    }
+    .sp-tab {
+      background: none; border: 1px solid transparent;
+      border-radius: 4px; color: var(--muted);
+      font-family: var(--font-mono); font-size: 0.72rem;
+      padding: 0.18rem 0.6rem; cursor: pointer; transition: all 0.15s;
+    }
+    .sp-tab:hover  { color: var(--accent); }
+    .sp-tab.active { color: var(--cyan); border-color: var(--border); background: rgba(34,211,238,0.06); }
+
+    #strudel-patterns {
+      flex: 1; min-height: 0; overflow: auto;
+      padding: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem;
+      color: var(--text); font-family: var(--font-mono); font-size: 0.74rem;
+    }
+    .sp-pat-toolbar { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .sp-pat-list   { display: flex; flex-direction: column; gap: 0.3rem; }
+    .sp-pat-row {
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: center; gap: 0.4rem;
+      padding: 0.4rem 0.5rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border); border-radius: 6px;
+    }
+    .sp-pat-meta { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+    .sp-pat-name {
+      background: transparent; border: none; outline: none;
+      color: var(--cyan); font-family: var(--font-mono); font-size: 0.78rem;
+      padding: 0; width: 100%;
+    }
+    .sp-pat-name:focus { color: var(--accent); }
+    .sp-pat-by { color: var(--muted); font-size: 0.66rem; }
+    .sp-pat-actions { display: flex; gap: 0.25rem; }
+    .sp-pat-actions .ctrl-btn { padding: 0.15rem 0.45rem; font-size: 0.68rem; }
+    .sp-pat-empty { color: var(--muted); padding: 0.6rem; text-align: center; }
+
     #strudel-mount {
       flex: 1; min-height: 0; overflow: auto;
       background: transparent;
@@ -357,6 +398,7 @@
     </select>
     <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
     <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (D)">strudel</button>
+    <button class="ctrl-btn" id="btn-cursor" title="Cursor trail (cycle modes)">cursor off</button>
     <button class="ctrl-btn" id="btn-pause" title="Pause (Space)">pause</button>
     <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
     <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
@@ -492,7 +534,19 @@
     <button class="ctrl-btn" id="btn-strudel-stop" title="Stop (Ctrl+.)">■</button>
     <button class="ctrl-btn" id="btn-strudel-close" title="Close (D)">×</button>
   </div>
+  <div id="strudel-tabs">
+    <button class="sp-tab active" data-tab="editor">editor</button>
+    <button class="sp-tab"        data-tab="patterns">patterns</button>
+  </div>
   <div id="strudel-mount"></div>
+  <div id="strudel-patterns" style="display:none">
+    <div class="sp-pat-toolbar">
+      <button class="ctrl-btn" id="btn-pat-save"   title="Save current editor as a new pattern">save current</button>
+      <button class="ctrl-btn" id="btn-pat-new"    title="Replace editor with a blank template">new</button>
+      <button class="ctrl-btn" id="btn-pat-random" title="Replace editor with a random pattern">random</button>
+    </div>
+    <div id="pat-list" class="sp-pat-list"></div>
+  </div>
 </div>
 
 <script>

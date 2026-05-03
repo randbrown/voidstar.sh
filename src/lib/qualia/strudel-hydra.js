@@ -9,16 +9,13 @@
 //   - `globalThis.a` is wired to the QualiaField audio frame so existing
 //     `osc().scale(()=>a.fft[0])` patterns from cymatics still work.
 
-const STRUDEL_SCRIPT = 'https://unpkg.com/@strudel/repl@latest';
+import {
+  loadCurrent, saveCurrent, loadList, addToList, updateInList,
+  removeFromList, clonePattern, randomPattern, parseMetadata,
+  patternDisplayName, downloadPattern,
+} from './patterns.js';
 
-const DEFAULT_PATTERN = `setcps(1)
-n("<0 1 2 3 4>*8").scale('G4 minor')
-.s("gm_lead_6_voice")
-.clip(sine.range(.2,.8).slow(8))
-.jux(rev)
-.room(2)
-.sometimes(add(note("12")))
-.lpf(perlin.range(200,20000).slow(4))`;
+const STRUDEL_SCRIPT = 'https://unpkg.com/@strudel/repl@latest';
 
 let _strudelLoadingP = null;
 let _strudelConnectPatched = false;
@@ -195,6 +192,34 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
 
   function getEditor() { return editorEl?.editor ?? null; }
 
+  // Strudel-editor's internal CodeMirror state is not exposed by a single
+  // canonical API across versions. Try several access paths in order, ending
+  // with a DOM scrape of the rendered .cm-line nodes.
+  function readEditorCode() {
+    const ed = editorEl;
+    if (!ed) return null;
+    try {
+      if (typeof ed.code === 'string') return ed.code;
+      if (typeof ed.editor?.code === 'string') return ed.editor.code;
+      if (typeof ed.editor?.getValue === 'function') return ed.editor.getValue();
+      const root = ed.shadowRoot || ed;
+      const cm = root.querySelector?.('.cm-editor') || root.querySelector?.('.cm-content');
+      if (cm) {
+        const lines = cm.querySelectorAll?.('.cm-line');
+        if (lines && lines.length) {
+          return Array.from(lines).map(l => l.textContent).join('\n');
+        }
+        return cm.textContent;
+      }
+    } catch {}
+    return null;
+  }
+  function persistCurrent() {
+    const code = readEditorCode();
+    if (code != null) saveCurrent(code);
+    return code;
+  }
+
   function ensureEvalPatch() {
     if (_strudelEvalPatched) return false;
     const ed = getEditor();
@@ -203,6 +228,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       const orig = ed.evaluate.bind(ed);
       ed.evaluate = function(...args) {
         try { clearHydraOutputs(); } catch {}
+        // Persist on play so the in-progress edit survives a refresh.
+        try { persistCurrent(); } catch {}
         return orig(...args);
       };
     }
@@ -210,6 +237,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       const orig = ed.stop.bind(ed);
       ed.stop = function(...args) {
         try { clearHydraOutputs(); clearScopeCanvas(scopeCanvas); } catch {}
+        try { persistCurrent(); } catch {}
         btnPlay?.classList.remove('playing');
         return orig(...args);
       };
@@ -218,19 +246,37 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     return true;
   }
 
+  // Initial code: stored buffer if present, else a freshly-rolled random
+  // pattern so the lab boots with something playable but novel each visit.
+  function pickInitialCode() {
+    const stored = loadCurrent();
+    if (stored && stored.trim()) return stored;
+    return randomPattern();
+  }
+
   function mountEditor() {
     if (mounted || !mount) return;
+    instantiateEditor(pickInitialCode());
+    mounted = true;
+  }
+  function instantiateEditor(code) {
+    if (!mount) return;
     mount.innerHTML = '';
     const ed = document.createElement('strudel-editor');
-    ed.appendChild(document.createComment(`\n${DEFAULT_PATTERN}\n`));
+    ed.appendChild(document.createComment(`\n${code}\n`));
     mount.appendChild(ed);
     editorEl = ed;
-    mounted = true;
+    _strudelEvalPatched = false;
     let tries = 0;
     const t = setInterval(() => {
       if (ensureEvalPatch() || ++tries > 40) clearInterval(t);
     }, 150);
     injectStrudelTransparency(ed);
+    saveCurrent(code);
+  }
+  function loadCode(code) {
+    if (typeof code !== 'string' || !code) return;
+    instantiateEditor(code);
   }
 
   function play() {
@@ -420,11 +466,71 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   });
   if (btnStop) btnStop.addEventListener('click', stop);
 
+  // Periodic auto-save while editing. Cheap (one DOM scrape every 8 sec)
+  // and only persists if the code changed since the last save, so we don't
+  // hammer localStorage during quiet periods.
+  let lastPersistedCode = null;
+  setInterval(() => {
+    if (!mounted) return;
+    const code = readEditorCode();
+    if (code != null && code !== lastPersistedCode) {
+      saveCurrent(code);
+      lastPersistedCode = code;
+    }
+  }, 8000);
+
+  // Pattern management API. Returned alongside the existing strudel-hydra
+  // surface so page-init can wire UI actions without poking internals.
+  function listPatterns()        { return loadList(); }
+  function saveCurrentToList(name) {
+    const code = readEditorCode();
+    if (!code) return null;
+    return addToList(code, name);
+  }
+  function updatePattern(id, partial) { return updateInList(id, partial); }
+  function removePattern(id)          { removeFromList(id); }
+  function clonePatternEntry(id)      { return clonePattern(id); }
+  function downloadPatternEntry(id) {
+    const p = loadList().find(x => x.id === id);
+    if (p) downloadPattern(p.code, p.name);
+  }
+  function loadPatternEntry(id) {
+    const p = loadList().find(x => x.id === id);
+    if (p) loadCode(p.code);
+  }
+  function newBlankPattern() {
+    loadCode([
+      '// @title untitled',
+      '// @by you',
+      '// @license CC0',
+      '',
+      'setcps(1)',
+      'silence',
+    ].join('\n'));
+  }
+  function newRandomPattern() {
+    loadCode(randomPattern());
+  }
+
   return {
     open,
     close,
     isOpen: () => panel?.style.display !== 'none',
     /** Call from the render loop so globalThis.a.fft stays current. */
     perFrame: refreshAFft,
+    patterns: {
+      list:     listPatterns,
+      add:      saveCurrentToList,
+      update:   updatePattern,
+      remove:   removePattern,
+      clone:    clonePatternEntry,
+      download: downloadPatternEntry,
+      load:     loadPatternEntry,
+      newBlank: newBlankPattern,
+      random:   newRandomPattern,
+      getCurrentCode: readEditorCode,
+      meta:     parseMetadata,
+      displayName: patternDisplayName,
+    },
   };
 }

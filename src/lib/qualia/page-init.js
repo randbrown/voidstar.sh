@@ -11,6 +11,7 @@ import { wirePicker, getStoredDeviceId, storeDeviceId } from './devices.js';
 import { AUDIO_PRESETS, makeSettingsStore } from './presets.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
+import { createCursorFx } from './cursor-fx.js';
 import { bindVideoElement, getRotation, cycleRotation, getMirror, toggleMirror } from './video.js';
 import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
@@ -562,6 +563,119 @@ export function initQualiaPage() {
     getField: () => core.field,
     setParam: (fxId, paramId, value) => core.setParam(fxId, paramId, value),
     scopeCanvas: document.getElementById('test-canvas'),
+  });
+
+  // ── Cursor fx (pointer-trail overlay) ─────────────────────────────────────
+  const cursorFx = createCursorFx();
+  cursorFx.loadStored();
+  const btnCursor = document.getElementById('btn-cursor');
+  function refreshCursorBtn() {
+    const m = cursorFx.getMode();
+    btnCursor.textContent = m === 'off' ? 'cursor off' : `cursor ${m}`;
+    btnCursor.classList.toggle('active', m !== 'off');
+  }
+  refreshCursorBtn();
+  btnCursor?.addEventListener('click', () => {
+    cursorFx.cycle();
+    refreshCursorBtn();
+  });
+
+  // ── Strudel tabs + pattern manager UI ─────────────────────────────────────
+  const tabBar       = document.getElementById('strudel-tabs');
+  const editorPane   = document.getElementById('strudel-mount');
+  const patternsPane = document.getElementById('strudel-patterns');
+  const patListEl    = document.getElementById('pat-list');
+  function setStrudelTab(name) {
+    tabBar?.querySelectorAll('.sp-tab').forEach(t =>
+      t.classList.toggle('active', t.dataset.tab === name));
+    if (editorPane)   editorPane.style.display   = name === 'editor'   ? '' : 'none';
+    if (patternsPane) patternsPane.style.display = name === 'patterns' ? 'flex' : 'none';
+    if (name === 'patterns') renderPatternList();
+  }
+  tabBar?.querySelectorAll('.sp-tab').forEach(t => {
+    t.addEventListener('click', () => setStrudelTab(t.dataset.tab));
+  });
+
+  function renderPatternList() {
+    if (!patListEl) return;
+    const list = strudel.patterns.list();
+    patListEl.innerHTML = '';
+    if (!list.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sp-pat-empty';
+      empty.textContent = 'no saved patterns yet — hit "save current" to add one';
+      patListEl.appendChild(empty);
+      return;
+    }
+    for (const p of list) {
+      const meta = strudel.patterns.meta(p.code);
+      const row = document.createElement('div');
+      row.className = 'sp-pat-row';
+
+      const metaCol = document.createElement('div');
+      metaCol.className = 'sp-pat-meta';
+      const nameInput = document.createElement('input');
+      nameInput.className = 'sp-pat-name';
+      nameInput.value = p.name;
+      nameInput.title = 'rename';
+      nameInput.addEventListener('change', () => {
+        const next = nameInput.value.trim();
+        if (next && next !== p.name) {
+          strudel.patterns.update(p.id, { name: next });
+          renderPatternList();
+        }
+      });
+      const byLine = document.createElement('div');
+      byLine.className = 'sp-pat-by';
+      const byParts = [];
+      if (meta.by)      byParts.push(`by ${meta.by}`);
+      if (meta.license) byParts.push(meta.license);
+      byParts.push(new Date(p.updatedAt).toLocaleDateString());
+      byLine.textContent = byParts.join(' · ');
+      metaCol.append(nameInput, byLine);
+
+      const actions = document.createElement('div');
+      actions.className = 'sp-pat-actions';
+      const mkBtn = (label, title, fn) => {
+        const b = document.createElement('button');
+        b.className = 'ctrl-btn';
+        b.textContent = label;
+        b.title = title;
+        b.addEventListener('click', fn);
+        return b;
+      };
+      actions.append(
+        mkBtn('load',     'Load into editor',      () => { strudel.patterns.load(p.id); setStrudelTab('editor'); }),
+        mkBtn('clone',    'Duplicate this entry',  () => { strudel.patterns.clone(p.id); renderPatternList(); }),
+        mkBtn('download', 'Download as .strudel',  () => strudel.patterns.download(p.id)),
+        mkBtn('delete',   'Remove from list',      () => {
+          if (confirm(`Delete "${p.name}"?`)) {
+            strudel.patterns.remove(p.id);
+            renderPatternList();
+          }
+        }),
+      );
+      row.append(metaCol, actions);
+      patListEl.appendChild(row);
+    }
+  }
+  document.getElementById('btn-pat-save')?.addEventListener('click', () => {
+    const code = strudel.patterns.getCurrentCode();
+    if (!code) { alert('Editor not ready yet — give Strudel a sec to load.'); return; }
+    const meta = strudel.patterns.meta(code);
+    const suggested = meta.title || `Pattern ${strudel.patterns.list().length + 1}`;
+    const name = prompt('Pattern name:', suggested);
+    if (name === null) return;
+    strudel.patterns.add(name.trim() || suggested);
+    renderPatternList();
+  });
+  document.getElementById('btn-pat-new')?.addEventListener('click', () => {
+    strudel.patterns.newBlank();
+    setStrudelTab('editor');
+  });
+  document.getElementById('btn-pat-random')?.addEventListener('click', () => {
+    strudel.patterns.random();
+    setStrudelTab('editor');
   });
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
