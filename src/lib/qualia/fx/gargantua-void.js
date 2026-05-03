@@ -187,13 +187,20 @@ void main() {
   float diskRadial = smoothstep(diskInner, r_s * 1.30, pdr)
                    * (1.0 - smoothstep(r_s * 3.5, diskOuter, pdr));
 
-  // ── Disk striations: many fine bands + fbm turbulence + spectrum scrub ──
-  // Audio.bands.mids amps band brightness. Spectrum-like scrub via flow time.
+  // ── Disk striations: flowing wisps via two octaves of fbm + a softer
+  // radial banding. Earlier version used a hard 60-cycle sin which read
+  // as concentric stripes; replacing the high-freq term with a low-freq
+  // sin + warped fbm gives a more organic "rivers of plasma" look.
   float diskAng  = uTime * uFlowSpeed * 0.30 + uPerturb.x * 0.7;
-  float radialBands = sin(pdr * 60.0 - uTime * uFlowSpeed * 3.5 + pdTheta * 8.0) * 0.5 + 0.5;
-  float angularFlow = fbm(vec2(pdr * 4.0, pdTheta * 3.0 + uTime * uFlowSpeed * 0.4)) * uTurbulence;
-  float fine        = fbm(vec2(pdr * 18.0 + uTime * uFlowSpeed * 0.6, pdTheta * 8.0)) * 0.4;
-  float streaks     = clamp(radialBands * 0.6 + angularFlow * 0.6 + fine * 0.5, 0.0, 1.8);
+  float radialBands = sin(pdr * 22.0 - uTime * uFlowSpeed * 1.6 + pdTheta * 5.0) * 0.5 + 0.5;
+  float angularFlow = fbm(vec2(pdr * 3.5, pdTheta * 2.6 + uTime * uFlowSpeed * 0.40)) * uTurbulence;
+  // Warped detail: domain-distort the second fbm by the first so strands
+  // bend around each other instead of running in straight rings.
+  float warpDetail  = fbm(vec2(pdr * 9.0 + angularFlow * 1.4
+                               + uTime * uFlowSpeed * 0.45,
+                               pdTheta * 6.0 + angularFlow * 0.9)) * 0.55;
+  float streaks     = clamp(radialBands * 0.45 + angularFlow * 0.7 + warpDetail * 0.7,
+                            0.0, 1.8);
 
   // Doppler-ish asymmetry: one side runs brighter/whiter, opposite cooler.
   // Driven by sin of plane angle so it rotates with the perturb/flow.
@@ -219,37 +226,66 @@ void main() {
   // Beat: white-hot flash mixed into disk.
   diskCol += vec3(1.0) * uBeat.y * diskRadial * 0.45;
 
-  // ── Top arc: rear disk light lensed UP over the horizon ──────────────────
-  // Strongest at theta = PI/2 (straight up), fades to sides. Centred at
-  // r ~ 1.65 r_s with a narrow gaussian envelope.
-  float thetaScreen   = atan(p.y, p.x);
-  float topArcMask    = smoothstep(0.0, 0.55, sin(thetaScreen));
-  float topArcCenterR = r_s * 1.65;
-  float topArcWidth   = r_s * (0.14 + uBands.x * 0.05);
-  float topArcRadial  = exp(-pow((r - topArcCenterR) / topArcWidth, 2.0));
-  float topArcStreak  = sin((thetaScreen - uTime * uFlowSpeed * 0.40) * 22.0) * 0.5 + 0.5;
-  float topArcInt     = topArcMask * topArcRadial
-                      * (0.55 + 0.45 * topArcStreak)
-                      * uDiskBrightness * 0.85;
-  vec3  topArcCol     = mix(mid, hot, smoothstep(0.0, 0.5, topArcStreak))
-                      + hot * uBeat.y * 0.30;
+  // ── Lensed-back arcs: multi-band wispy strands wrapping the horizon ─────
+  // Real Schwarzschild BH images (and Interstellar's Gargantua) show many
+  // overlapping photon paths bending the rear of the disk over and under
+  // the horizon — not a single uniform arch. We render 4 top + 3 bottom
+  // bands, each at its own base radius and warped by an independent noise
+  // sample so the strands look like wisps of light rather than concentric
+  // circles. Per-band brightness falls off outward.
+  float thetaScreen = atan(p.y, p.x);
+  float sT = sin(thetaScreen);
+  float topArcInt = 0.0;
+  float topMask   = smoothstep(-0.10, 0.65, sT);
+  for (int b = 0; b < 4; b++) {
+    float fb       = float(b);
+    float baseR    = r_s * (1.42 + 0.20 * fb);
+    // Each band wiggles independently: per-band offset + slow time scrub
+    // through the noise field so the warp evolves over seconds.
+    float warpX    = thetaScreen * (1.4 + fb * 0.35) + fb * 4.7;
+    float warpY    = uTime * uFlowSpeed * (0.08 + fb * 0.04) + fb * 1.3;
+    float warp     = vnoise(vec2(warpX, warpY)) - 0.5;
+    float bandR    = baseR + warp * r_s * (0.20 + fb * 0.07);
+    float bandW    = r_s * (0.024 + fb * 0.026);
+    float bandRad  = exp(-pow((r - bandR) / bandW, 2.0));
+    // Slow, broad angular modulation — no high-frequency sin so no
+    // "comb teeth" segmenting the band.
+    float modAng   = 0.55 + 0.45 * sin(thetaScreen * (2.5 + fb * 1.3)
+                                       - uTime * uFlowSpeed * 0.25 + fb * 2.1);
+    float bandBri  = (0.55 - fb * 0.09) * uDiskBrightness;
+    topArcInt += topMask * bandRad * modAng * bandBri;
+  }
+  topArcInt *= (1.0 + uBands.x * 0.20);
+  vec3 topArcCol = mix(mid, hot, 0.55) + hot * uBeat.y * 0.35;
 
-  // ── Lower arc: red/orange echo below ────────────────────────────────────
-  float botArcMask    = smoothstep(0.0, 0.50, -sin(thetaScreen));
-  float botArcCenterR = r_s * 1.55;
-  float botArcWidth   = r_s * 0.10;
-  float botArcRadial  = exp(-pow((r - botArcCenterR) / botArcWidth, 2.0));
-  float botArcStreak  = sin((thetaScreen + uTime * uFlowSpeed * 0.30) * 16.0) * 0.5 + 0.5;
-  float botArcInt     = botArcMask * botArcRadial
-                      * (0.45 + 0.45 * botArcStreak)
-                      * uDiskBrightness * 0.55;
-  vec3  botArcCol     = lowerArcCol * (0.7 + 0.3 * botArcStreak);
+  float botArcInt = 0.0;
+  float botMask   = smoothstep(-0.10, 0.55, -sT);
+  for (int b = 0; b < 3; b++) {
+    float fb       = float(b);
+    float baseR    = r_s * (1.40 + 0.22 * fb);
+    float warpX    = thetaScreen * (1.2 + fb * 0.35) - fb * 3.3;
+    float warpY    = uTime * uFlowSpeed * (0.07 + fb * 0.03) + fb * 0.9;
+    float warp     = vnoise(vec2(warpX, warpY)) - 0.5;
+    float bandR    = baseR + warp * r_s * (0.22 + fb * 0.08);
+    float bandW    = r_s * (0.022 + fb * 0.028);
+    float bandRad  = exp(-pow((r - bandR) / bandW, 2.0));
+    float modAng   = 0.45 + 0.45 * sin(thetaScreen * (2.2 + fb * 1.1)
+                                       + uTime * uFlowSpeed * 0.20 + fb * 1.5);
+    float bandBri  = (0.42 - fb * 0.10) * uDiskBrightness;
+    botArcInt += botMask * bandRad * modAng * bandBri;
+  }
+  vec3 botArcCol = mix(lowerArcCol, mid, 0.40) * 0.95;
 
-  // ── Photon ring ─────────────────────────────────────────────────────────
-  float photonR    = r_s * 1.55;
-  float photonW    = r_s * 0.06 + 0.002;
-  float photonRing = exp(-pow((r - photonR) / photonW, 2.0))
-                   * (1.0 + uBands.z * 1.6 + uBeat.y * 1.0);
+  // ── Photon ring + secondary ring ────────────────────────────────────────
+  // Primary at ~1.55 r_s, narrower secondary at ~1.85 r_s for the
+  // double-lensed n=2 photon path. The secondary is dimmer and thinner.
+  float photonR1 = r_s * 1.55;
+  float photonW1 = r_s * 0.05 + 0.002;
+  float photonR2 = r_s * 1.84;
+  float photonW2 = r_s * 0.025 + 0.0015;
+  float photonRing = exp(-pow((r - photonR1) / photonW1, 2.0))
+                   + exp(-pow((r - photonR2) / photonW2, 2.0)) * 0.50;
+  photonRing *= (1.0 + uBands.z * 1.5 + uBeat.y * 0.9);
 
   // ── Beat shockwave: expanding annulus that fades over ~1s ───────────────
   float swR   = r_s * (1.6 + 4.5 * pow(uBeat.y, 0.6));
@@ -289,6 +325,13 @@ void main() {
   float aura = exp(-pow((r - r_s * 1.10) / (r_s * 0.55), 2.0))
              * 0.25 * (1.0 + uRms * 1.5);
   col += auraCol * aura;
+
+  // Wide gravitational lensing haze — a very soft dust-coloured glow that
+  // extends ~6× r_s outward, hinting at the gravity well distorting the
+  // entire region. Uses warmer tone so it ties into the disk colour family.
+  float haze = exp(-pow(r / (r_s * 5.5), 1.6))
+             * uBloomFake * (0.10 + uRms * 0.20);
+  col += mix(cold, mid, 0.45) * haze * 0.85;
 
   // Fake bloom — radial halo + RMS-driven global glow.
   float bloom = exp(-pow(r / (r_s * 4.0), 2.0))
