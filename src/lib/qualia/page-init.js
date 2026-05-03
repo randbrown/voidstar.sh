@@ -103,7 +103,7 @@ export function initQualiaPage() {
   const settings = makeSettingsStore(() => ({
     fxId:           core.activeId(),
     audioTunables:  audio.getTunables(),
-    audioOn:        audio.getSource() === 'mic',
+    audioOn:        audio.hasSource('mic'),
     paused:         core.isPaused(),
     zen:            core.isZen(),
     poseSource:     poseSelect.value,
@@ -269,17 +269,19 @@ export function initQualiaPage() {
   });
 
   // ── Audio state UI sync ───────────────────────────────────────────────────
-  // Single source of truth: audio.onChange fires whenever mic / Strudel / off
-  // toggles. Both directions (user clicking btn-audio AND Strudel opening or
-  // closing) flow through here, so the topbar button can't drift out of sync.
-  audio.onChange(({ source }) => {
+  // Single source of truth: audio.onChange fires whenever the active source
+  // set changes (mic start/stop, Strudel adopt/release). Both flow through
+  // here so the topbar can't drift out of sync. Mic and Strudel can run at
+  // the same time — analyser merges their inputs.
+  audio.onChange(({ sources }) => {
     btnAudio.classList.remove('active', 'active-audio');
-    if (source === 'mic') {
+    const hasMic = sources.includes('mic');
+    const hasStr = sources.includes('strudel');
+    if (hasMic) {
       btnAudio.classList.add('active-audio');
-      btnAudio.textContent = 'audio on';
+      btnAudio.textContent = hasStr ? 'audio + strudel' : 'audio on';
       audioCard.style.display = '';
-    } else if (source === 'strudel') {
-      // Strudel button gets the active-audio styling; mic button shows idle.
+    } else if (hasStr) {
       btnAudio.textContent = 'audio';
       audioCard.style.display = '';   // keep audio panel visible (Strudel-driven)
     } else {
@@ -292,12 +294,9 @@ export function initQualiaPage() {
   // ── Audio toggle (mic) ────────────────────────────────────────────────────
   async function startMic(deviceId) {
     try {
-      // Mic + Strudel are mutually exclusive on the analyser. Strudel can
-      // keep playing audio even after its panel is closed, so we have to
-      // halt it explicitly before mic takes over — close() alone only
-      // hides the UI.
-      strudel.stopPlayback();
-      if (strudel.isOpen()) strudel.close();
+      // Mic and Strudel can run simultaneously now — the analyser merges
+      // both. Don't touch Strudel state here; the user pressing the mic
+      // button means "add the mic", not "switch source".
       const id = await audio.start(deviceId);
       if (id) storeDeviceId('mic', id);
       micPicker.populate(id);
@@ -313,8 +312,8 @@ export function initQualiaPage() {
     await audio.stop();
   }
   btnAudio.addEventListener('click', () => {
-    if (audio.getSource() === 'mic') stopMic();
-    else                              startMic(getStoredDeviceId('mic'));
+    if (audio.hasSource('mic')) stopMic();
+    else                         startMic(getStoredDeviceId('mic'));
   });
 
   // ── Mic / cam pickers ─────────────────────────────────────────────────────
@@ -323,14 +322,10 @@ export function initQualiaPage() {
     kind: 'audioinput',
     getCurrentId: () => audio.getCurrentMicId(),
     onChoose: async (id) => {
-      // If Strudel currently owns the analyser, calling audio.stop() would
-      // close *its* AudioContext and leave the editor playing into a dead
-      // ctx with the play button still lit. Halt Strudel cleanly first
-      // (panel may be hidden but still playing audibly), then release the
-      // adopted analyser so the mic can take over.
-      strudel.stopPlayback();
-      if (audio.getSource() === 'strudel') strudel.close();
-      else if (audio.isEnabled())          await audio.stop();
+      // Mic and Strudel coexist on separate analysers — switching mics
+      // only restarts the mic source, leaving any active Strudel tap
+      // (and its AudioContext) intact.
+      if (audio.hasSource('mic')) await audio.stop();
       return await audio.start(id);
     },
   });

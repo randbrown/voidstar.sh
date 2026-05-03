@@ -485,10 +485,10 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   })();
 
   async function open() {
-    // Mic and Strudel are mutually exclusive on the analyser — only stop
-    // the MIC source. If we already adopted Strudel's analyser (source ===
-    // 'strudel'), keep it; reopen is a no-op for audio.
-    if (audio.getSource?.() === 'mic') await audio.stop();
+    // Mic and Strudel run side-by-side now — each owns its own analyser
+    // and the audio module merges per-band readings every tick. Opening
+    // Strudel must NOT stop the mic; if reopening with our analyser
+    // already adopted, this is a no-op for audio.
     if (panel) panel.style.display = '';
     reposition();
     if (btnToggle) {
