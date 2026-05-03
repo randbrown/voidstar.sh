@@ -16,7 +16,7 @@
 
 import { scaleAudio } from '../field.js';
 
-/** @type {import('../types.js').QualiaFXModule} */
+/** @type {import('../types.js').QFXModule} */
 export default {
   id: 'template',
   name: 'Template',

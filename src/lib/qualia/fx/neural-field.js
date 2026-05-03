@@ -23,7 +23,7 @@ const NUM_SOMA   = 80;
 const NUM_EDGES  = 160;
 const MAX_PULSES = 200;
 
-/** @type {import('../types.js').QualiaFXModule} */
+/** @type {import('../types.js').QFXModule} */
 export default {
   id: 'neural_field',
   name: 'Neural Field',

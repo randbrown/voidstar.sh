@@ -93,7 +93,7 @@
 /** @typedef {ParamRange | ParamToggle | ParamSelect} ParamSpec */
 
 /**
- * @typedef {Object} QualiaFXInstance
+ * @typedef {Object} QFXInstance
  * @property {(w:number, h:number, dpr:number) => void} resize
  * @property {(field:QualiaField) => void}              update
  * @property {() => void}                               render
@@ -101,13 +101,13 @@
  */
 
 /**
- * @typedef {Object} QualiaFXModule
+ * @typedef {Object} QFXModule
  * @property {string} id
  * @property {string} name
  * @property {'canvas2d'|'webgl2'} contextType
  * @property {ParamSpec[]} params
  * @property {Object<string, Object<string, number|string|boolean>>} [presets]
- * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D }) => Promise<QualiaFXInstance>|QualiaFXInstance} create
+ * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D }) => Promise<QFXInstance>|QFXInstance} create
  */
 
 export {};

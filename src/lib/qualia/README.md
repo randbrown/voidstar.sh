@@ -6,7 +6,7 @@ This guide is for writing a new visualizer ("fx") for the qualia harness in this
 
 | Term | Meaning |
 |---|---|
-| **fx** (or **fx module**) | A single visualizer plugin. One file at `src/lib/qualia/fx/<kebab-name>.js`, `default export` conforming to `QualiaFXModule`. |
+| **fx** (or **fx module**) | A single visualizer plugin. One file at `src/lib/qualia/fx/<kebab-name>.js`, `default export` conforming to `QFXModule`. |
 | **QualiaCore** | The host. Owns the canvas, render loop, fx instance, and DPR. Source: [`core.js`](./core.js). |
 | **QualiaField** | The per-frame data object passed to `update(field)`. Audio + pose + params + dt + time. The *only* state an fx may read. |
 | **QualiaMesh** | The fx registry. Source: [`registry.js`](./registry.js). |
@@ -23,7 +23,7 @@ Plugin ids stay descriptive snake_case (`singularity_lens`, `neural_field`). Plu
 ```js
 // src/lib/qualia/fx/_template.js — copy this to start.
 
-/** @type {import('../types.js').QualiaFXModule} */
+/** @type {import('../types.js').QFXModule} */
 export default {
   id: 'my_fx',                 // snake_case, used as localStorage key + Strudel hook
   name: 'My Fx',               // Title Case, shown in topbar

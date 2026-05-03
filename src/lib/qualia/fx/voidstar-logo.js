@@ -507,7 +507,7 @@ function bakeTextTex(gl, text, w, h, fontSize) {
   return t;
 }
 
-/** @type {import('../types.js').QualiaFXModule} */
+/** @type {import('../types.js').QFXModule} */
 export default {
   id: 'voidstar_logo',
   name: 'Voidstar Logo',

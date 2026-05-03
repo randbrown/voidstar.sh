@@ -155,7 +155,7 @@ void main() {
 }
 `;
 
-/** @type {import('../types.js').QualiaFXModule} */
+/** @type {import('../types.js').QFXModule} */
 export default {
   id: 'singularity_lens',
   name: 'Singularity Lens',

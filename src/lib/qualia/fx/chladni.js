@@ -16,7 +16,7 @@ const PI = Math.PI;
 const MAX_PARTICLES = 6000;
 const PARTICLE_MODES = new Set(['chladni', 'radial', 'interference']);
 
-/** @type {import('../types.js').QualiaFXModule} */
+/** @type {import('../types.js').QFXModule} */
 export default {
   id: 'chladni',
   name: 'Chladni',

@@ -52,9 +52,9 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   /** @type {'canvas2d'|'webgl2'|null} */
   let canvasType = null;
 
-  /** @type {import('./types.js').QualiaFXModule|null} */
+  /** @type {import('./types.js').QFXModule|null} */
   let activeMod  = null;
-  /** @type {import('./types.js').QualiaFXInstance|null} */
+  /** @type {import('./types.js').QFXInstance|null} */
   let activeInst = null;
   /** @type {ReturnType<typeof buildParamPanel>|null} */
   let activePanel = null;

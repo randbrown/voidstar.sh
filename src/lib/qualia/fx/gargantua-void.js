@@ -352,7 +352,7 @@ void main() {
 
 const PALETTES = ['gold', 'voidblue', 'inferno'];
 
-/** @type {import('../types.js').QualiaFXModule} */
+/** @type {import('../types.js').QFXModule} */
 export default {
   id: 'gargantua_void',
   name: 'Gargantua Void',

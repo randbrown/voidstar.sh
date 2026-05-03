@@ -1,10 +1,10 @@
 // QualiaMesh — the registry that wires fx plugins to the host. The page
 // imports this, registers fx modules, then hands the registry to QualiaCore.
 
-/** @typedef {import('./types.js').QualiaFXModule} QualiaFXModule */
+/** @typedef {import('./types.js').QFXModule} QFXModule */
 
 export function createMesh() {
-  /** @type {Map<string, QualiaFXModule>} */
+  /** @type {Map<string, QFXModule>} */
   const byId = new Map();
   /** @type {string[]} */
   const order = [];
