@@ -57,6 +57,11 @@ uniform vec3  uRingV[3];
 uniform float uRingRMult[3];
 uniform float uRingT[3];
 
+// Per-ray base angle for the snare-driven light rays. JS shuffles each
+// entry on every snare onset and applies a slow per-ray drift in between,
+// so the rays read as independently random instead of a fixed pattern.
+uniform float uRayAngles[6];
+
 uniform vec4  uBands;
 uniform vec2  uBeat;       // kick (bass) transient
 uniform vec2  uMids;       // snare / clap transient
@@ -268,15 +273,18 @@ void main() {
   col += pal.plasma * plasma * 1.25;
 
   // ── Cosmic radiation streaks — SNARE-driven (mids transient). Light
-  // rays emit on snare/clap hits, with a smaller cymbal-driven accent.
+  // rays emit on snare/clap hits. Each ray's angle is uRayAngles[i]
+  // (set on the JS side, reshuffled on every snare onset and slowly
+  // drifting in between) so the pattern looks independently random
+  // instead of a fixed rotating constellation. Inner end is feathered
+  // into the void rim so rays appear to emerge from the aperture itself.
   float streaks = 0.0;
   for (int i = 0; i < 6; i++) {
-    float fi      = float(i);
-    float baseAng = fi * 0.7854 + uTime * 0.04 + hash(vec2(fi, 7.7)) * 6.28;
+    float baseAng = uRayAngles[i];
     float dAng    = mod(angle - baseAng + PI, 2.0 * PI) - PI;
     float angleMask = exp(-dAng * dAng * 800.0);
     float radial   = r - vR;
-    float radialMask = smoothstep(vR, vR + 0.02, r) * exp(-max(0.0, radial) * 1.4);
+    float radialMask = smoothstep(vR - 0.010, vR + 0.050, r) * exp(-max(0.0, radial) * 1.4);
     float intensity = uMids.y * 1.65 + uHighs.y * 0.40;
     streaks += angleMask * radialMask * intensity;
   }
@@ -559,6 +567,15 @@ export default {
     const ringT      = new Float32Array(NUM_RINGS);
     const tmpVec     = new Float32Array(3);
 
+    // Light-ray angles. Six independent rays whose base angle is reshuffled
+    // randomly on every snare onset; between hits each ray drifts at its
+    // own slow rate so they continue to spread apart even when audio is off.
+    const NUM_RAYS  = 6;
+    const rayAngles = new Float32Array(NUM_RAYS);
+    const rayDrift  = [0.05, 0.04, 0.07, 0.03, 0.06, 0.045];
+    for (let i = 0; i < NUM_RAYS; i++) rayAngles[i] = (Math.random() * 2 - 1) * Math.PI;
+    let prevMidsActive = false;
+
     let poseShiftX = 0, poseShiftY = 0;
     let starRot = 0;
 
@@ -633,6 +650,19 @@ export default {
       starRot += dt * (0.18 + audio.rms * 0.5);
       if (starRot > Math.PI * 200) starRot -= Math.PI * 200;
 
+      // Light-ray angles: reshuffle on every snare rising edge so each
+      // pulse paints a fresh constellation. Continuous slow per-ray drift
+      // keeps them moving when audio is off or between hits.
+      if (audio.mids.active && !prevMidsActive) {
+        for (let i = 0; i < NUM_RAYS; i++) {
+          rayAngles[i] = (Math.random() * 2 - 1) * Math.PI;
+        }
+      }
+      prevMidsActive = audio.mids.active;
+      for (let i = 0; i < NUM_RAYS; i++) {
+        rayAngles[i] += dt * rayDrift[i];
+      }
+
       // Pose-driven parallax (subtle camera shift, capped small).
       let tx = 0, ty = 0;
       let havePose = false;
@@ -687,6 +717,7 @@ export default {
       gl.uniform3fv(U('uRingV[0]'),     ringV);
       gl.uniform1fv(U('uRingRMult[0]'), ringRMult);
       gl.uniform1fv(U('uRingT[0]'),     ringT);
+      gl.uniform1fv(U('uRayAngles[0]'), rayAngles);
 
       // Star sprite uniforms.
       gl.uniform1f(U('uStarRotC'),    Math.cos(starRot));
