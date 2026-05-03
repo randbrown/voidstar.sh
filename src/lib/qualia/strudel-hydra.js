@@ -163,6 +163,14 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   let strudelAnalyser = null;
   let pollT = null;
   let tapped = false;
+  // Source of truth for "is the user expecting Strudel to be playing".
+  // We *cannot* use btnPlay's `playing` class for this: Strudel's evaluate()
+  // internally calls ed.stop() before scheduling new code, which fires our
+  // patched stop and yanks the class off — so by the time the user clicks
+  // a pattern button a moment later, the class has already cleared and
+  // `wasPlaying` reads false. The flag is set/cleared only from our own
+  // play()/stop()/stopPlayback() entrypoints.
+  let isPlayingFlag = false;
 
   // Wire `globalThis.a` so Strudel/Hydra patterns referencing `a.fft[0..3]`
   // get the QualiaField bands. We back the array with the live AudioFrame.
@@ -238,7 +246,12 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       ed.stop = function(...args) {
         try { clearHydraOutputs(); clearScopeCanvas(scopeCanvas); } catch {}
         try { persistCurrent(); } catch {}
-        btnPlay?.classList.remove('playing');
+        // Deliberately do NOT touch isPlayingFlag / btnPlay here.
+        // Strudel's runtime calls this.stop() as part of evaluate() to
+        // halt the previous pattern before scheduling the new one — if
+        // we cleared the playing flag from this hook, every restart
+        // would race with the user's intent. Our explicit play()/stop()
+        // entrypoints are the source of truth.
         return orig(...args);
       };
     }
@@ -279,13 +292,37 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     // If the user was mid-playback when they swapped patterns, immediately
     // re-evaluate the new code on the freshly-mounted editor — keeps the
     // jam continuous instead of forcing a manual ▶ after every change.
-    const wasPlaying = !!btnPlay?.classList.contains('playing');
+    const wasPlaying = isPlayingFlag;
+    // Stop the old editor's scheduler before we destroy its DOM. Without
+    // this, Strudel's runtime keeps firing events on the orphaned editor
+    // and you get double-playback layered with the new pattern.
+    stopPlayback();
     instantiateEditor(code);
     if (wasPlaying) {
+      // Three-stage readiness so we don't fire evaluate() on a half-loaded
+      // editor (which silently runs on an empty buffer):
+      //   1. inner editor handle exists with an .evaluate method (REPL up)
+      //   2. CodeMirror has non-empty content (initial-code comment loaded)
+      //   3. content is stable for ≥2 ticks (CM has finished any layout/parse
+      //      passes — we sometimes saw evaluate fire mid-load and silently
+      //      no-op on the previous editor's transient cm-line residue).
       let tries = 0;
+      let lastCur = '';
+      let stableCount = 0;
       const t = setInterval(() => {
-        if (play() || ++tries > 30) clearInterval(t);
-      }, 150);
+        if (++tries > 80) { clearInterval(t); return; }
+        const ed = getEditor();
+        if (!ed || typeof ed.evaluate !== 'function') {
+          stableCount = 0; lastCur = ''; return;
+        }
+        const cur = (readEditorCode() || '').trim();
+        if (cur.length < 5) { stableCount = 0; lastCur = cur; return; }
+        if (cur === lastCur) {
+          if (++stableCount >= 2 && play()) clearInterval(t);
+        } else {
+          stableCount = 0; lastCur = cur;
+        }
+      }, 100);
     }
   }
 
@@ -297,6 +334,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       if      (typeof ed.evaluate === 'function') ed.evaluate();
       else if (typeof ed.toggle   === 'function') ed.toggle();
       else return false;
+      isPlayingFlag = true;
       btnPlay?.classList.add('playing');
       return true;
     } catch (e) { console.warn('[qualia] strudel play failed:', e); return false; }
@@ -308,9 +346,26 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     try {
       if (typeof ed.stop === 'function') ed.stop();
       else return false;
+      isPlayingFlag = false;
       btnPlay?.classList.remove('playing');
       return true;
     } catch (e) { console.warn('[qualia] strudel stop failed:', e); return false; }
+  }
+
+  // Defensive stop used by panel-close and pattern-swap paths. Unlike
+  // stop(), it doesn't care whether eval has been patched yet — the goal
+  // is to silence whatever the current editor is scheduling so a new
+  // editor (or a closed panel) doesn't leave audio events in flight.
+  // Note: the Strudel REPL lives on `editorEl.editor` (inner handle), not
+  // on the `<strudel-editor>` web component itself — that's where stop()
+  // actually halts the scheduler.
+  function stopPlayback() {
+    const ed = getEditor();
+    if (ed) {
+      try { if (typeof ed.stop === 'function') ed.stop(); } catch {}
+    }
+    isPlayingFlag = false;
+    btnPlay?.classList.remove('playing');
   }
 
   function tapMaster(ctx) {
@@ -376,6 +431,13 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     if (!movedByUser) panel.style.top = (h + 8) + 'px';
   }
   window.addEventListener('resize', reposition);
+  // The topbar uses flex-wrap, so its rendered height changes when buttons
+  // wrap to a second row — that doesn't fire `resize`. Watch the topbar
+  // itself so the panel stays clear of it whenever the wrap point shifts.
+  const topbarEl = document.getElementById('topbar');
+  if (topbarEl && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(reposition).observe(topbarEl);
+  }
 
   // Drag-to-move via the header (pointer events handle mouse + touch).
   (() => {
@@ -448,6 +510,11 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   }
 
   function close() {
+    // Deliberately *do not* stop Strudel playback here — closing the
+    // panel is a "hide UI" action, and keeping the jam audible while the
+    // editor is collapsed is intentional. Callers that need to actually
+    // halt Strudel (e.g. switching the mic input) should call
+    // stopPlayback() themselves before close().
     if (panel) panel.style.display = 'none';
     if (pollT) { clearInterval(pollT); pollT = null; }
     if (tapped) audio.releaseAdopted();
@@ -525,6 +592,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   return {
     open,
     close,
+    stopPlayback,
+    isPlaying: () => isPlayingFlag,
     isOpen: () => panel?.style.display !== 'none',
     /** Call from the render loop so globalThis.a.fft stays current. */
     perFrame: refreshAFft,

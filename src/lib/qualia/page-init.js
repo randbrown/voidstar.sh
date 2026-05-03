@@ -292,8 +292,11 @@ export function initQualiaPage() {
   // ── Audio toggle (mic) ────────────────────────────────────────────────────
   async function startMic(deviceId) {
     try {
-      // Mic + Strudel are mutually exclusive on the analyser. If Strudel is
-      // open, close it first so its UI also resets cleanly.
+      // Mic + Strudel are mutually exclusive on the analyser. Strudel can
+      // keep playing audio even after its panel is closed, so we have to
+      // halt it explicitly before mic takes over — close() alone only
+      // hides the UI.
+      strudel.stopPlayback();
       if (strudel.isOpen()) strudel.close();
       const id = await audio.start(deviceId);
       if (id) storeDeviceId('mic', id);
@@ -320,7 +323,14 @@ export function initQualiaPage() {
     kind: 'audioinput',
     getCurrentId: () => audio.getCurrentMicId(),
     onChoose: async (id) => {
-      if (audio.isEnabled()) await audio.stop();
+      // If Strudel currently owns the analyser, calling audio.stop() would
+      // close *its* AudioContext and leave the editor playing into a dead
+      // ctx with the play button still lit. Halt Strudel cleanly first
+      // (panel may be hidden but still playing audibly), then release the
+      // adopted analyser so the mic can take over.
+      strudel.stopPlayback();
+      if (audio.getSource() === 'strudel') strudel.close();
+      else if (audio.isEnabled())          await audio.stop();
       return await audio.start(id);
     },
   });
@@ -645,7 +655,7 @@ export function initQualiaPage() {
         return b;
       };
       actions.append(
-        mkBtn('load',     'Load into editor',      () => { strudel.patterns.load(p.id); setStrudelTab('editor'); }),
+        mkBtn('load',     'Load into editor',      () => { setStrudelTab('editor'); strudel.patterns.load(p.id); }),
         mkBtn('clone',    'Duplicate this entry',  () => { strudel.patterns.clone(p.id); renderPatternList(); }),
         mkBtn('download', 'Download as .strudel',  () => strudel.patterns.download(p.id)),
         mkBtn('delete',   'Remove from list',      () => {
@@ -672,13 +682,17 @@ export function initQualiaPage() {
     strudel.patterns.add(name);
     renderPatternList();
   });
+  // Reveal the editor pane BEFORE asking strudel to instantiate the new
+  // pattern — CodeMirror won't lay out inside a `display:none` container,
+  // which leaves readEditorCode() empty and the auto-resume retry can
+  // never reach the "stable content" stage to fire play().
   document.getElementById('btn-pat-new')?.addEventListener('click', () => {
-    strudel.patterns.newBlank();
     setStrudelTab('editor');
+    strudel.patterns.newBlank();
   });
   document.getElementById('btn-pat-random')?.addEventListener('click', () => {
-    strudel.patterns.random();
     setStrudelTab('editor');
+    strudel.patterns.random();
   });
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────

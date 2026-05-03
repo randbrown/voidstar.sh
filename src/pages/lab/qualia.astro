@@ -255,6 +255,10 @@
       border-bottom: 1px solid var(--border);
       font-size: 0.75rem;
       cursor: grab; user-select: none;
+      /* Without this Android (and iOS Safari) hijack the touch for native
+         scroll/zoom and our pointer-drag handler only sees a few pixels of
+         movement before the browser cancels the pointer. */
+      touch-action: none;
     }
     #strudel-header.dragging { cursor: grabbing; }
     #strudel-header .ctrl-btn { cursor: pointer; }
