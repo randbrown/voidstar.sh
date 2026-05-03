@@ -112,11 +112,11 @@ const ROOTS    = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 const OCTAVES  = ['3', '4', '4', '5'];          // bias toward 4
 const SCALES   = ['minor', 'major', 'dorian', 'mixolydian', 'lydian',
                   'phrygian', 'harmonic minor', 'pentatonic'];
-const SAMPLES  = [
-  'gm_lead_6_voice', 'gm_pad_2_warm', 'gm_pad_8_sweep',
-  'gm_synth_brass_1', 'gm_synth_strings_1', 'gm_choir_aahs',
-  'gm_lead_5_charang', 'gm_lead_2_sawtooth', 'gm_pad_3_polysynth',
-];
+// Sticking to the one confirmed-loading sample for now. The wider GM pool
+// (pad_2_warm, choir_aahs, etc.) was triggering "sample not found" errors
+// in some Strudel builds — better to play safe with the same source the
+// hardcoded default has always used.
+const SAMPLES  = ['gm_lead_6_voice'];
 const PATTERNS = [
   '<0 1 2 3 4>*8', '<0 2 4 5 7>*4', '<0 3 5 7>*8',
   '<0 1 4 7 5>*8', '<0 -1 2 -3 4>*8', '<0 4 7 4>*4',

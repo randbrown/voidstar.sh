@@ -661,12 +661,15 @@ export function initQualiaPage() {
   }
   document.getElementById('btn-pat-save')?.addEventListener('click', () => {
     const code = strudel.patterns.getCurrentCode();
-    if (!code) { alert('Editor not ready yet — give Strudel a sec to load.'); return; }
+    if (!code) return;
+    // Pick a name without prompting — the row exposes inline rename, so a
+    // blocking dialog just gets in the way of save-fast workflows.
+    // Prefer the @title metadata when present; otherwise stamp with the
+    // local time so the entry is at least uniquely identifiable.
     const meta = strudel.patterns.meta(code);
-    const suggested = meta.title || `Pattern ${strudel.patterns.list().length + 1}`;
-    const name = prompt('Pattern name:', suggested);
-    if (name === null) return;
-    strudel.patterns.add(name.trim() || suggested);
+    const name = meta.title
+              || `pattern ${new Date().toLocaleString('sv-SE').replace(' ', ' ')}`;
+    strudel.patterns.add(name);
     renderPatternList();
   });
   document.getElementById('btn-pat-new')?.addEventListener('click', () => {
