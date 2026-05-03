@@ -3,24 +3,10 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 
 const experiments = [
   {
-    id: 'particles',
-    title: 'Particle Field',
-    desc: 'N-body particle simulation with curl noise, attractor fields, and additive blending. 10k particles at 60fps.',
-    tags: ['canvas2d', 'particles', 'noise'],
-    status: 'coming-soon',
-  },
-  {
-    id: 'pose-particles',
-    title: 'Pose Particles',
-    desc: 'MediaPipe body pose estimation drives a particle attractor field in real time. Requires camera access.',
-    tags: ['mediapipe', 'camera', 'particles'],
-    status: 'live',
-  },
-  {
-    id: 'spectrum-pose',
-    title: 'Spectrum Pose',
-    desc: 'Live audio spectrum visualizer layered with pose tracking. Skeletons modulate with bass, mids, highs; beats spawn sparks. Built for improvised ambient performance.',
-    tags: ['mediapipe', 'web-audio', 'camera', 'live'],
+    id: 'qualia',
+    title: 'Qualia',
+    desc: 'Pluggable harness for voidstar art. Three reference fx — Chladni (canvas2d), Singularity Lens (webgl2 black-hole shader), Neural Field (firing filaments). Audio + pose drive a shared QualiaField; new fx are one file.',
+    tags: ['web-audio', 'webgl2', 'mediapipe', 'live'],
     status: 'live',
   },
   {
@@ -31,25 +17,18 @@ const experiments = [
     status: 'live',
   },
   {
-    id: 'qualia',
-    title: 'Qualia',
-    desc: 'Pluggable harness for voidstar art. Three reference fx — Chladni (canvas2d), Singularity Lens (webgl2 black-hole shader), Neural Field (firing filaments). Audio + pose drive a shared QualiaField; new fx are one file.',
-    tags: ['web-audio', 'webgl2', 'mediapipe', 'live'],
+    id: 'spectrum-pose',
+    title: 'Spectrum Pose',
+    desc: 'Live audio spectrum visualizer layered with pose tracking. Skeletons modulate with bass, mids, highs; beats spawn sparks. Built for improvised ambient performance.',
+    tags: ['mediapipe', 'web-audio', 'camera', 'live'],
     status: 'live',
   },
   {
-    id: 'fluid',
-    title: 'WebGL Fluid',
-    desc: 'GPU-accelerated fluid dynamics on a grid. Mouse adds dye and velocity. Vorticity confinement, pressure solve.',
-    tags: ['webgl', 'glsl', 'simulation'],
-    status: 'coming-soon',
-  },
-  {
-    id: 'audio',
-    title: 'Audio Reactive',
-    desc: 'Web Audio API FFT feeds amplitude and frequency data into a live visual system.',
-    tags: ['web-audio', 'fft', 'generative'],
-    status: 'coming-soon',
+    id: 'pose-particles',
+    title: 'Pose Particles',
+    desc: 'MediaPipe body pose estimation drives a particle attractor field in real time. Requires camera access.',
+    tags: ['mediapipe', 'camera', 'particles'],
+    status: 'live',
   },
 ];
 ---

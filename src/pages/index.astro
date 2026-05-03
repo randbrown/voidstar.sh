@@ -7,13 +7,14 @@ import { Image } from 'astro:assets';
 import logoMain from '../assets/art/logos_alpha/voidstar_logo_0.png';
 import emblomCosmos from '../assets/art/logos_alpha/voidstar_emblem_cosmos_0.png';
 import { getCollection } from 'astro:content';
-import { videos } from '../data/videos';
+import { videos as rawVideos, enrichWithOEmbed } from '../data/videos';
 
 const allPosts = await getCollection('posts', ({ data }) => !data.draft);
 const recentPosts = allPosts
   .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
   .slice(0, 3);
 
+const videos = await enrichWithOEmbed(rawVideos);
 const featuredVideo = videos.find(v => v.featured) ?? videos[0];
 ---
 <BaseLayout title="voidstar" description="voidstar — art, code, and the space between. Generative visuals, pose tracking, music, and interactive experiments.">
@@ -36,7 +37,7 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
       <Image
         src={logoMain}
         alt="voidstar"
-        height={72}
+        height={160}
         class="hero-logo"
       />
 
@@ -72,7 +73,7 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
         <div class="featured-video-wrap">
           <VideoCard
             id={featuredVideo.id}
-            title={featuredVideo.title}
+            title={featuredVideo.title ?? ''}
             description={featuredVideo.description}
             date={featuredVideo.date}
             tags={featuredVideo.tags}
@@ -163,7 +164,7 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
   animation: pulse-glow 2s ease-in-out infinite;
 }
 .hero-logo {
-  height: 72px;
+  height: clamp(110px, 18vw, 180px);
   width: auto;
   margin-bottom: 1.75rem;
   filter: drop-shadow(0 0 30px var(--accent-glow));

@@ -1,7 +1,8 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import VideoCard from '../components/VideoCard.astro';
-import { videos } from '../data/videos';
+import { videos as rawVideos, enrichWithOEmbed } from '../data/videos';
+const videos = await enrichWithOEmbed(rawVideos);
 ---
 <BaseLayout
   title="Videos"
@@ -22,7 +23,7 @@ import { videos } from '../data/videos';
         {videos.map(v => (
           <VideoCard
             id={v.id}
-            title={v.title}
+            title={v.title ?? ''}
             description={v.description}
             date={v.date}
             tags={v.tags}
