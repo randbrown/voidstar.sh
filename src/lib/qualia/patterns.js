@@ -160,6 +160,17 @@ const FX_OPTS  = [
   'crush(sine.range(4,16).slow(8))',
 ];
 
+// Drum voice pool — slow mellow ambient kick/snare only. All variants are
+// `/4` cycle (one bd or sd every four cycles, very spacious) with LPF
+// under 120 so the kicks read as warm sub-thump and never poke through
+// the lead. Variation across pool entries is intentionally small —
+// melody is where the random character should live.
+const DRUMS = [
+  's("<bd sd>/4").lpf(90).gain(.3).delay(.2)',
+  's("<bd sd>/4").lpf(110).gain(.3).delay(.2).room(.5)',
+  's("<bd ~ sd ~>/4").lpf(100).gain(.3).delay(.25)',
+];
+
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 export function randomPattern() {
@@ -168,6 +179,7 @@ export function randomPattern() {
   const sample = pick(SAMPLES);
   const pat    = pick(PATTERNS);
   const nMod   = pick(N_TRANSFORMS);
+  const drums  = pick(DRUMS);
   const cps    = (0.65 + Math.random() * 0.55).toFixed(2);
   const room   = (0.8 + Math.random() * 1.6).toFixed(1);
   // Pick 2–3 distinct fx so each random pattern has its own colour.
@@ -178,16 +190,23 @@ export function randomPattern() {
     const idx = Math.floor(Math.random() * fxPool.length);
     fxLines.push('.' + fxPool.splice(idx, 1)[0]);
   }
+  // Stack body lives at 2-space indent (Strudel convention). Both the
+  // melody chain's continuation lines AND the random-fx lines sit at the
+  // same indent so the whole second-voice block reads as one chained
+  // expression nested inside stack(...).
+  const fxBlock = fxLines.map(line => '  ' + line).join('\n');
   const tag = Math.floor(Math.random() * 0xffff).toString(36);
   return `// @title random ${tag}
 // @by voidstar
 // @license CC0
 setcps(${cps})
-n("${pat}")${nMod}.scale('${root} ${scale}')
-.s("${sample}")
-.clip(sine.range(.2,.8).slow(8))
-${fxLines.join('\n')}
-.room(${room})`;
+stack(
+  ${drums},
+  n("${pat}")${nMod}
+  .scale('${root} ${scale}').s("${sample}")
+  .clip(sine.range(.2,.8).slow(8))
+${fxBlock}
+).room(${room})`;
 }
 
 // ── Download helper ──────────────────────────────────────────────────────

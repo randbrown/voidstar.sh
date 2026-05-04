@@ -54,6 +54,7 @@ uniform float uTurbulence;
 uniform float uFlowSpeed;
 uniform float uDiskTilt;         // radians, 0.05..PI/2 (small=edge-on)
 uniform float uBloomFake;
+uniform float uHaloIntensity;    // event-horizon halo brightness multiplier
 // ── Observer-perspective uniforms (pose-driven) ─────────────────────────────
 // These reshape the *view*, not the singularity position.
 uniform float uPoseProximity;    // -1 (far) .. +1 (close)   → horizon size
@@ -236,18 +237,22 @@ void main() {
   // circles. Per-band brightness falls off outward.
   float thetaScreen = atan(p.y, p.x);
   float sT = sin(thetaScreen);
+  // Tighter band spacing reads more like the Interstellar reference where
+  // the wrapping arcs cluster against the silhouette instead of fanning
+  // outward. Warp magnitudes scaled down proportionally so bands don't
+  // smear into each other when they wiggle.
   float topArcInt = 0.0;
   float topMask   = smoothstep(-0.10, 0.65, sT);
   for (int b = 0; b < 4; b++) {
     float fb       = float(b);
-    float baseR    = r_s * (1.42 + 0.20 * fb);
+    float baseR    = r_s * (1.40 + 0.13 * fb);
     // Each band wiggles independently: per-band offset + slow time scrub
     // through the noise field so the warp evolves over seconds.
     float warpX    = thetaScreen * (1.4 + fb * 0.35) + fb * 4.7;
     float warpY    = uTime * uFlowSpeed * (0.08 + fb * 0.04) + fb * 1.3;
     float warp     = vnoise(vec2(warpX, warpY)) - 0.5;
-    float bandR    = baseR + warp * r_s * (0.20 + fb * 0.07);
-    float bandW    = r_s * (0.024 + fb * 0.026);
+    float bandR    = baseR + warp * r_s * (0.10 + fb * 0.04);
+    float bandW    = r_s * (0.020 + fb * 0.020);
     float bandRad  = exp(-pow((r - bandR) / bandW, 2.0));
     // Slow, broad angular modulation — no high-frequency sin so no
     // "comb teeth" segmenting the band.
@@ -263,12 +268,12 @@ void main() {
   float botMask   = smoothstep(-0.10, 0.55, -sT);
   for (int b = 0; b < 3; b++) {
     float fb       = float(b);
-    float baseR    = r_s * (1.40 + 0.22 * fb);
+    float baseR    = r_s * (1.38 + 0.14 * fb);
     float warpX    = thetaScreen * (1.2 + fb * 0.35) - fb * 3.3;
     float warpY    = uTime * uFlowSpeed * (0.07 + fb * 0.03) + fb * 0.9;
     float warp     = vnoise(vec2(warpX, warpY)) - 0.5;
-    float bandR    = baseR + warp * r_s * (0.22 + fb * 0.08);
-    float bandW    = r_s * (0.022 + fb * 0.028);
+    float bandR    = baseR + warp * r_s * (0.11 + fb * 0.04);
+    float bandW    = r_s * (0.018 + fb * 0.020);
     float bandRad  = exp(-pow((r - bandR) / bandW, 2.0));
     float modAng   = 0.45 + 0.45 * sin(thetaScreen * (2.2 + fb * 1.1)
                                        + uTime * uFlowSpeed * 0.20 + fb * 1.5);
@@ -278,32 +283,87 @@ void main() {
   vec3 botArcCol = mix(lowerArcCol, mid, 0.40) * 0.95;
 
   // ── Photon ring + secondary ring ────────────────────────────────────────
-  // Primary at ~1.55 r_s, narrower secondary at ~1.85 r_s for the
-  // double-lensed n=2 photon path. The secondary is dimmer and thinner.
+  // Both rings sit close to the silhouette in a tight cluster (1.28 + 1.45
+  // r_s). They share a softer tilt with the disk — strict screen-circle
+  // rings felt disconnected from the tilted disk plane, but using the
+  // disk's full tilt collapses them into the silhouette at small tilts,
+  // so we mix halfway. ringSin is the effective vertical compression
+  // applied to the rings only; ringR is the disk-tilted radial coord.
+  float ringSin = mix(1.0, tiltSin, 0.50);
+  float ringPdz = p.y / max(ringSin, 0.05);
+  float ringR   = sqrt(p.x * p.x + ringPdz * ringPdz);
+
   float photonR1 = r_s * 1.55;
   float photonW1 = r_s * 0.05 + 0.002;
   float photonR2 = r_s * 1.84;
   float photonW2 = r_s * 0.025 + 0.0015;
-  float photonRing = exp(-pow((r - photonR1) / photonW1, 2.0))
-                   + exp(-pow((r - photonR2) / photonW2, 2.0)) * 0.50;
+  float photonRing = exp(-pow((ringR - photonR1) / photonW1, 2.0))
+                   + exp(-pow((ringR - photonR2) / photonW2, 2.0)) * 0.50;
   photonRing *= (1.0 + uBands.z * 1.5 + uBeat.y * 0.9);
+
+  // ── Event-horizon halo (the "Interstellar" hot ring) ────────────────────
+  // Bright band hugging the event-horizon edge — the lensed light grazing
+  // the photon sphere collapses into a near-horizon glow that wraps the
+  // dark disk completely. Two layers compose the look:
+  //   - haloCore: a tight Gaussian centred just outside r_s, sharp and
+  //     hot, fed by the disk's HOT colour stop. This is the bright
+  //     line you see flush with the dark void.
+  //   - haloBleed: a wider warm wash falling off outward to r_s * 1.45,
+  //     gated by an inner smoothstep so it can't seep into the black
+  //     region. This is the soft "energy" filling the gap between the
+  //     hot ring and the disk arcs.
+  // Both pulse with bass + beat, so the halo "breathes" musically.
+  float haloCore   = exp(-pow((r - r_s * 1.04) / (r_s * 0.045), 2.0));
+  float haloBleed  = (1.0 - smoothstep(r_s * 1.05, r_s * 1.45, r))
+                   *  smoothstep(r_s * 0.985, r_s * 1.04, r);
+  float haloPulse  = 1.0 + uBands.x * 0.55 + uBeat.y * 0.85;
+  vec3  horizonHalo = (hot * haloCore * 1.85
+                     + mix(hot, mid, 0.25) * haloBleed * 0.55) * haloPulse;
 
   // ── Beat shockwave: expanding annulus that fades over ~1s ───────────────
   float swR   = r_s * (1.6 + 4.5 * pow(uBeat.y, 0.6));
   float swW   = r_s * 0.18;
   float shock = exp(-pow((r - swR) / swW, 2.0)) * uBeat.y;
 
-  // ── Inside event horizon: black, but front disk crosses in front ────────
+  // ── Inside event horizon: mostly black, with two subtle leaks ───────────
+  // The dark disk is no longer pure black — Interstellar's reference
+  // composites two effects that bleed inward:
+  //   1. Inner halo band — a narrow ring just inside r_s, mirroring the
+  //      outer horizon halo. Reads as the lensed light's "reflection"
+  //      hugging the inside edge of the silhouette.
+  //   2. Void bloom — soft warm wash that fades exponentially from the
+  //      rim toward the centre, so the silhouette gets some atmospheric
+  //      lift instead of clipping to pure #000. Uses the same bloomFake
+  //      slider as the outer bloom so they scale together.
+  // Front-of-disk pieces continue to occlude the horizon as before.
   if (r < r_s) {
+    vec3 col = vec3(0.0);
+
+    // 1. Inner halo band — narrow Gaussian sitting just inside the rim,
+    // so the falloff begins almost immediately as you scan inward from
+    // the dark edge. Centre at 0.98*r_s puts the bright pinch right
+    // against the silhouette boundary; width 0.04 keeps it tight.
+    float innerHalo = exp(-pow((r - r_s * 0.98) / (r_s * 0.040), 2.0));
+    col += hot * innerHalo * 0.45 * uHaloIntensity
+         * (1.0 + uBands.x * 0.40 + uBeat.y * 0.55);
+
+    // 2. Void bloom — exp falloff from r_s inward. The e-folding factor
+    // controls how deep the bloom penetrates (peak at the rim, dropping
+    // through the silhouette toward r=0). Matched to the outside bloom's
+    // RMS curve and weight so the bloom slider drives both sides at
+    // comparable strength — the dark disk isn't isolated from the rest
+    // of the gravitational glow.
+    float voidBloom = exp(-(r_s - r) / max(r_s * 0.55, 1e-3))
+                    * uBloomFake * (0.18 + uRms * 0.45);
+    col += mix(hot, mid, 0.30) * voidBloom * 0.85;
+
+    // Front-of-disk pixel — render disk piece occluding the horizon.
     if (pdz > 0.02 && diskRadial > 0.0) {
-      // Front-of-disk pixel — render disk piece occluding the horizon.
-      vec3 col = diskCol * diskInt;
-      // Faint photon-ring leak just outside the horizon edge.
+      col += diskCol * diskInt;
       col += hot * photonRing * 0.4;
-      outColor = vec4(col, 1.0);
-      return;
     }
-    outColor = vec4(0.0, 0.0, 0.0, 1.0);
+
+    outColor = vec4(col, 1.0);
     return;
   }
 
@@ -315,10 +375,14 @@ void main() {
 
   vec3 col = starfield(lensed * 1.6);
 
-  // Lower arc → top arc → disk → ring → shock — back to front.
+  // Lower arc → top arc → disk → halo → ring → shock — back to front.
+  // The horizon halo lands UNDER the photon ring so the photon ring's
+  // hot pinch sits on top of the broader halo glow, not the other way
+  // around — keeps the silhouette of the dark disk razor-sharp.
   col += botArcCol * botArcInt;
   col += topArcCol * topArcInt;
   col += diskCol * diskInt;
+  col += horizonHalo * uHaloIntensity;
   col += hot * photonRing * 0.85;
   col += hot * shock * 1.5;
 
@@ -366,17 +430,18 @@ export default {
     { id: 'flowSpeed',      label: 'flow speed',      type: 'range', min: 0,   max: 3,   step: 0.05, default: 1.0 },
     { id: 'horizonSize',    label: 'horizon r_s',     type: 'range', min: 0.1, max: 0.6, step: 0.005, default: 0.28 },
     { id: 'bloomFake',      label: 'bloom',           type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
+    { id: 'haloIntensity',  label: 'horizon halo',    type: 'range', min: 0,   max: 3,   step: 0.05, default: 1.0 },
     { id: 'poseBind',       label: 'pose binding',    type: 'toggle', default: true },
     { id: 'palette',        label: 'palette',         type: 'select', options: ['gold', 'voidblue', 'inferno'], default: 'gold' },
     { id: 'reactivity',     label: 'reactivity',      type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
   ],
 
   presets: {
-    default:         { diskTilt: 0.55, lensStrength: 1.4, diskBrightness: 2.2, turbulence: 0.8, flowSpeed: 1.0, horizonSize: 0.28, bloomFake: 1.0, poseBind: true,  palette: 'gold', reactivity: 1.0 },
-    interstellarish: { diskTilt: 0.42, lensStrength: 1.7, diskBrightness: 2.6, turbulence: 0.6, flowSpeed: 0.7, horizonSize: 0.22, bloomFake: 1.2, poseBind: true,  palette: 'gold' },
-    voidstar:        { diskTilt: 0.48, lensStrength: 1.8, diskBrightness: 2.4, turbulence: 0.7, flowSpeed: 0.85, horizonSize: 0.26, bloomFake: 1.3, poseBind: true,  palette: 'voidblue' },
-    violent:         { diskTilt: 0.70, lensStrength: 1.2, diskBrightness: 3.2, turbulence: 1.5, flowSpeed: 2.0, horizonSize: 0.32, bloomFake: 1.6, poseBind: true,  palette: 'inferno' },
-    ambient:         { diskTilt: 0.30, lensStrength: 1.0, diskBrightness: 1.5, turbulence: 0.4, flowSpeed: 0.4, horizonSize: 0.20, bloomFake: 0.7, poseBind: false, palette: 'gold' },
+    default:         { diskTilt: 0.55, lensStrength: 1.4, diskBrightness: 2.2, turbulence: 0.8, flowSpeed: 1.0, horizonSize: 0.28, bloomFake: 1.0, haloIntensity: 1.0, poseBind: true,  palette: 'gold', reactivity: 1.0 },
+    interstellarish: { diskTilt: 0.42, lensStrength: 1.7, diskBrightness: 2.6, turbulence: 0.6, flowSpeed: 0.7, horizonSize: 0.22, bloomFake: 1.2, haloIntensity: 1.6, poseBind: true,  palette: 'gold' },
+    voidstar:        { diskTilt: 0.48, lensStrength: 1.8, diskBrightness: 2.4, turbulence: 0.7, flowSpeed: 0.85, horizonSize: 0.26, bloomFake: 1.3, haloIntensity: 1.3, poseBind: true,  palette: 'voidblue' },
+    violent:         { diskTilt: 0.70, lensStrength: 1.2, diskBrightness: 3.2, turbulence: 1.5, flowSpeed: 2.0, horizonSize: 0.32, bloomFake: 1.6, haloIntensity: 1.4, poseBind: true,  palette: 'inferno' },
+    ambient:         { diskTilt: 0.30, lensStrength: 1.0, diskBrightness: 1.5, turbulence: 0.4, flowSpeed: 0.4, horizonSize: 0.20, bloomFake: 0.7, haloIntensity: 0.7, poseBind: false, palette: 'gold' },
   },
 
   create(canvas, { gl }) {
@@ -403,7 +468,7 @@ export default {
       horizon: 0.28, lensStrength: 1.4,
       diskBrightness: 2.2, turbulence: 0.8,
       flowSpeed: 1.0, diskTilt: 0.55,
-      bloomFake: 1.0, palette: 0,
+      bloomFake: 1.0, haloIntensity: 1.0, palette: 0,
     };
 
     function update(field) {
@@ -418,6 +483,7 @@ export default {
       scratch.flowSpeed      = params.flowSpeed;
       scratch.diskTilt       = params.diskTilt;
       scratch.bloomFake      = params.bloomFake;
+      scratch.haloIntensity  = params.haloIntensity ?? 1.0;
       scratch.palette        = Math.max(0, PALETTES.indexOf(params.palette));
       scratch.horizon        = params.horizonSize * (1.0 + audio.bands.bass * 0.10);
 
@@ -500,6 +566,7 @@ export default {
       gl.uniform1f(U('uFlowSpeed'),     scratch.flowSpeed);
       gl.uniform1f(U('uDiskTilt'),      scratch.diskTilt);
       gl.uniform1f(U('uBloomFake'),     scratch.bloomFake);
+      gl.uniform1f(U('uHaloIntensity'), scratch.haloIntensity);
       gl.uniform1f(U('uPoseProximity'), poseProximity);
       gl.uniform1f(U('uPoseRoll'),      poseRoll);
       gl.uniform1f(U('uPosePitch'),     posePitch);
