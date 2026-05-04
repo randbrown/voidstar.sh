@@ -18,6 +18,9 @@ import singularityLens from './fx/singularity-lens.js';
 import neuralField     from './fx/neural-field.js';
 import gargantuaVoid   from './fx/gargantua-void.js';
 import voidstarLogo    from './fx/voidstar-logo.js';
+import fractal         from './fx/fractal.js';
+import spectrum        from './fx/spectrum.js';
+import camera          from './fx/camera.js';
 
 const AUTO_CYCLE_SECONDS = 22;
 const AUTO_STYLES = ['chapters', 'alternate', 'random', 'hold'];
@@ -30,6 +33,9 @@ export function initQualiaPage() {
   mesh.register(gargantuaVoid);
   mesh.register(voidstarLogo);
   mesh.register(neuralField);
+  mesh.register(fractal);
+  mesh.register(spectrum);
+  mesh.register(camera);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
@@ -52,6 +58,7 @@ export function initQualiaPage() {
   const btnAura    = document.getElementById('btn-aura');
   const btnRipples = document.getElementById('btn-ripples');
   const btnAscii   = document.getElementById('btn-ascii');
+  const btnMosh    = document.getElementById('btn-mosh');
   const btnAuto    = document.getElementById('btn-auto');
   const autoStyleSelect = document.getElementById('auto-style');
   const zenHandle  = document.getElementById('zen-handle');
@@ -82,6 +89,13 @@ export function initQualiaPage() {
       const mod = mesh.get(id);
       fxnameEl.textContent = mod ? mod.name : '—';
       fxSelect.value = id;
+      // Reset auto cycle state — step indices are per-quale, and the new
+      // quale may not even support auto. refreshAutoBtn handles the n/a
+      // disabled state and stops the timer if needed.
+      autoStepCount = 0;
+      autoStartMs = performance.now();
+      if (autoCycle && !getActiveAutoSteps()) stopAuto();
+      else                                     refreshAutoBtn();
       settings.save();
     },
   });
@@ -115,6 +129,8 @@ export function initQualiaPage() {
     auraOn:         overlay.getOption('aura'),
     ripplesOn:      overlay.getOption('ripples'),
     asciiMode:      overlay.getOption('ascii'),
+    moshOn:         overlay.getOption('mosh'),
+    moshConfig:     overlay.getMoshConfig(),
     autoCycle,
     autoStyle,
     numPoses:       pose.getNumPoses(),
@@ -125,6 +141,7 @@ export function initQualiaPage() {
     poseCollapsed:  poseCard?.classList.contains('collapsed') ?? true,
     diagCollapsed:  document.getElementById('diag-card')?.classList.contains('collapsed') ?? true,
     paramsCollapsed: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
+    moshCollapsed:  document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
   }));
   const stored = settings.load();
   camSizeIdx = stored.camSizeIdx ?? 0;
@@ -135,6 +152,8 @@ export function initQualiaPage() {
   if (typeof stored.auraOn      === 'boolean') overlay.setOption('aura',     stored.auraOn);
   if (typeof stored.ripplesOn   === 'boolean') overlay.setOption('ripples',  stored.ripplesOn);
   if (typeof stored.asciiMode   === 'boolean') overlay.setOption('ascii',    stored.asciiMode);
+  if (typeof stored.moshOn      === 'boolean') overlay.setOption('mosh',     stored.moshOn);
+  if (stored.moshConfig)                       overlay.setMoshConfig(stored.moshConfig);
 
   // ── Pose smoothing + thresholds restore ──────────────────────────────────
   let poseSmoothingValue = 0.5;
@@ -432,11 +451,54 @@ export function initQualiaPage() {
       settings.save();
     });
   }
+  // Mosh-card lookup must happen before the overlay-toggle wiring below,
+  // because the syncPostBtns helper toggles the card's visibility.
+  const moshCard = document.getElementById('mosh-card');
+
   wireOverlayToggle(btnSkel,    'skeleton');
   wireOverlayToggle(btnSparks,  'sparks');
   wireOverlayToggle(btnAura,    'aura');
   wireOverlayToggle(btnRipples, 'ripples');
   wireOverlayToggle(btnAscii,   'ascii');
+  wireOverlayToggle(btnMosh,    'mosh');
+  // ASCII and mosh are mutually exclusive in the overlay — sync the buttons.
+  function syncPostBtns() {
+    btnAscii.classList.toggle('active', overlay.getOption('ascii'));
+    btnMosh.classList.toggle('active',  overlay.getOption('mosh'));
+    moshCard.style.display = overlay.getOption('mosh') ? '' : 'none';
+  }
+  // Wrap the auto-toggle for ascii/mosh so their mutex stays visible.
+  btnAscii.addEventListener('click', syncPostBtns);
+  btnMosh .addEventListener('click', syncPostBtns);
+
+  // Mosh slider wiring — every input writes back into the overlay's
+  // moshConfig. The overlay reads its own state each frame so changes
+  // take effect on the next paint without further plumbing.
+  function wireMoshSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
+    const row = document.querySelector(`[data-qp="${qpId}"]`);
+    if (!row) return;
+    const input = row.querySelector('input[type=range]');
+    const val   = row.querySelector('.qp-val');
+    const initial = overlay.getMoshConfig()[key];
+    input.value = String(initial);
+    val.textContent = fmt(initial);
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      overlay.setMoshConfig({ [key]: v });
+      val.textContent = fmt(v);
+      settings.save();
+    });
+  }
+  wireMoshSlider('mosh-intensity', 'intensity');
+  wireMoshSlider('mosh-smear',     'smear');
+  wireMoshSlider('mosh-glitch',    'glitchRate');
+  wireMoshSlider('mosh-block',     'blockSize',  (v) => `${Math.round(v)}px`);
+  wireMoshSlider('mosh-split',     'colorSplit', (v) => `${Math.round(v)}px`);
+  // Restore the mosh-card collapse + show state from settings.
+  if (typeof stored.moshCollapsed === 'boolean') {
+    moshCard.classList.toggle('collapsed', stored.moshCollapsed);
+  }
+  syncPostBtns();
 
   // ── Pause / Zen ───────────────────────────────────────────────────────────
   function setPaused(on) {
@@ -474,31 +536,46 @@ export function initQualiaPage() {
   btnAuto.classList.toggle('active', autoCycle);
   btnAuto.textContent = autoCycle ? `auto ${AUTO_CYCLE_SECONDS}s` : 'auto';
 
-  // Cycle order: each fx in registry order, AND each chladni mode as its own
-  // step (so the auto-cycle visits all the wave-field families).
-  function buildAutoSteps() {
-    const steps = [];
-    for (const mod of mesh.list()) {
-      if (mod.id === 'chladni') {
-        const modeParam = mod.params.find(p => p.id === 'mode');
-        const modes = modeParam?.options ?? ['chladni'];
-        for (const m of modes) steps.push({ fxId: 'chladni', chladniMode: m });
-      } else {
-        steps.push({ fxId: mod.id });
-      }
-    }
-    return steps;
+  // Auto-cycle is per-quale now: each QFXModule may declare an `autoCycle:
+  // { steps: [{partialParams}, ...] }` and the top-level button cycles
+  // through the active quale's steps at AUTO_CYCLE_SECONDS intervals.
+  // Switching quales is no longer the auto cycle's job — pick a quale,
+  // then let it drift through its own modes/palettes/whatever it exposes.
+  function getActiveAutoSteps() {
+    const mod = mesh.get(core.activeId());
+    return mod?.autoCycle?.steps ?? null;
   }
-  const autoSteps = buildAutoSteps();
+
+  function refreshAutoBtn() {
+    const steps = getActiveAutoSteps();
+    if (!steps) {
+      btnAuto.textContent = 'auto n/a';
+      btnAuto.classList.remove('active');
+      btnAuto.disabled = true;
+      btnAuto.title = 'active quale has no auto cycle';
+      return;
+    }
+    btnAuto.disabled = false;
+    btnAuto.title = '';
+    if (autoCycle) {
+      const elapsed = (performance.now() - autoStartMs) / 1000;
+      const remaining = Math.max(0, Math.ceil(AUTO_CYCLE_SECONDS - elapsed));
+      btnAuto.textContent = `auto ${remaining}s`;
+    } else {
+      btnAuto.textContent = 'auto';
+    }
+  }
 
   function autoNext() {
+    const steps = getActiveAutoSteps();
+    if (!steps || !steps.length) return;
     autoStepCount++;
-    const step = autoSteps[autoStepCount % autoSteps.length];
-    // ASCII scheduling.
+    const step = steps[autoStepCount % steps.length];
+    // ASCII scheduling. Step granularity == one quale-step now (rather than
+    // one fx-switch), so chapters resets ASCII pass after a full cycle.
     switch (autoStyle) {
       case 'chapters': {
-        // Two-pass chapter structure: pass 0 normal, pass 1 ASCII, repeat.
-        const pass = Math.floor(autoStepCount / autoSteps.length) % 2;
+        const pass = Math.floor(autoStepCount / steps.length) % 2;
         overlay.setOption('ascii', pass === 1);
         btnAscii.classList.toggle('active', pass === 1);
         break;
@@ -514,28 +591,27 @@ export function initQualiaPage() {
       case 'hold':
       default: break;
     }
-    // Move to next fx (or change chladni mode in-place if same fx).
-    (async () => {
-      if (core.activeId() !== step.fxId) {
-        await core.setActive(step.fxId).catch(() => {});
+    // Apply the step's partial params via core.setParam so the panel UI
+    // and persistence stay in sync.
+    const fxId = core.activeId();
+    if (fxId) {
+      for (const [k, v] of Object.entries(step)) {
+        core.setParam(fxId, k, v);
       }
-      if (step.fxId === 'chladni' && step.chladniMode) {
-        core.setParam('chladni', 'mode', step.chladniMode);
-      }
-    })();
+    }
   }
 
   function tickAuto() {
-    if (!autoCycle) { btnAuto.textContent = 'auto'; return; }
+    if (!autoCycle) { refreshAutoBtn(); return; }
     const elapsed = (performance.now() - autoStartMs) / 1000;
-    const remaining = Math.max(0, Math.ceil(AUTO_CYCLE_SECONDS - elapsed));
-    btnAuto.textContent = `auto ${remaining}s`;
+    refreshAutoBtn();
     if (elapsed >= AUTO_CYCLE_SECONDS) {
       autoStartMs = performance.now();
       autoNext();
     }
   }
   function startAuto() {
+    if (!getActiveAutoSteps()) return;
     autoCycle = true;
     autoStartMs = performance.now();
     autoStepCount = 0;
@@ -543,13 +619,14 @@ export function initQualiaPage() {
     if (autoStyle === 'chapters') { overlay.setOption('ascii', false); btnAscii.classList.remove('active'); }
     if (autoTickT) clearInterval(autoTickT);
     autoTickT = setInterval(tickAuto, 250);
+    refreshAutoBtn();
     settings.save();
   }
   function stopAuto() {
     autoCycle = false;
     btnAuto.classList.remove('active');
-    btnAuto.textContent = 'auto';
     if (autoTickT) { clearInterval(autoTickT); autoTickT = null; }
+    refreshAutoBtn();
     settings.save();
   }
   btnAuto.addEventListener('click', () => autoCycle ? stopAuto() : startAuto());
@@ -719,6 +796,7 @@ export function initQualiaPage() {
       case 'a': btnAura.click(); break;
       case 'b': btnRipples.click(); break;
       case 'x': btnAscii.click(); break;
+      case 'k': btnMosh.click(); break;
       case 'l': btnAuto.click(); break;
       case 'z': setZen(!core.isZen()); break;
       case ' ': btnPause.click(); e.preventDefault(); break;

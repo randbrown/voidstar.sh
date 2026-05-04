@@ -36,6 +36,19 @@ export default {
     { id: 'reactivity',label: 'reactivity', type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
 
+  // Auto-cycle drives the `mode` param through every wave-field family so
+  // the topbar auto button surfaces all five looks without the user having
+  // to touch the dropdown.
+  autoCycle: {
+    steps: [
+      { mode: 'chladni' },
+      { mode: 'radial' },
+      { mode: 'interference' },
+      { mode: 'lissajous' },
+      { mode: 'field' },
+    ],
+  },
+
   presets: {
     default:      { mode: 'chladni', m: 3.0, n: 5.0, lockMN: true, symmetry: true, trails: false, reactivity: 1.0 },
     chladni:      { mode: 'chladni', m: 3.0, n: 5.0 },

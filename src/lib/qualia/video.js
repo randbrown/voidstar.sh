@@ -18,6 +18,12 @@ export function bindVideoElement(videoEl) {
   applyTransform();
 }
 
+/** Returns the bound HTMLVideoElement (or null if bindVideoElement was
+ *  never called). Used by the camera passthrough quale to draw the live
+ *  feed onto its own canvas, instead of relying only on the CSS overlay
+ *  preview that other quales sit beneath. */
+export function getVideoEl() { return _videoEl; }
+
 export function getRotation() { return cameraRotation; }
 export function setRotation(deg) {
   const d = ((deg % 360) + 360) % 360;

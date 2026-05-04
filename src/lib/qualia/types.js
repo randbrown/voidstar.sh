@@ -101,12 +101,25 @@
  */
 
 /**
+ * @typedef {Object} AutoCycleSpec
+ * @property {Array<Object<string, number|string|boolean>>} steps
+ *           Ordered list of partial param dicts. The topbar auto button
+ *           applies one step per AUTO_CYCLE_SECONDS interval via
+ *           core.setParam, so only the keys present in each step are
+ *           overwritten — everything else the user dialed in stays.
+ */
+
+/**
  * @typedef {Object} QFXModule
  * @property {string} id
  * @property {string} name
  * @property {'canvas2d'|'webgl2'} contextType
  * @property {ParamSpec[]} params
  * @property {Object<string, Object<string, number|string|boolean>>} [presets]
+ * @property {AutoCycleSpec} [autoCycle]
+ *           Declares the topbar auto button's behaviour while this quale is
+ *           active. Omit if the quale has nothing to cycle — the button
+ *           reads "auto n/a" and is disabled.
  * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D }) => Promise<QFXInstance>|QFXInstance} create
  */
 

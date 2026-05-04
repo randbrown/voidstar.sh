@@ -43,6 +43,7 @@ uniform float uLogoDepth;
 uniform vec2  uPoseShift;
 uniform float uParallax;
 uniform int   uPalette;
+uniform float uShowLogo;          // 0 = hide void* glyph, 1 = show
 
 // "void" baked left of centre + an empty cell where * was.
 uniform sampler2D uLogoTex;
@@ -291,10 +292,16 @@ void main() {
   }
   col += pal.voidEdge * streaks * 1.85;
 
-  // ── Beat shockwave — kick. Reduced so it's a flicker, not a slam.
-  float swR   = vR * (1.5 + 4.5 * pow(uBeat.y, 0.55));
-  float swW   = vR * 0.28;
-  float shock = exp(-pow((r - swR) / swW, 2.0)) * uBeat.y;
+  // ── Beat shockwave — kick. Originates AT the void edge and expands
+  // outward as the pulse decays, so the visual reads as energy emitted by
+  // the singularity rather than collapsing into it. swDecay maps the pulse
+  // envelope to time-since-hit (0 at hit → 1 fully faded), so the radius
+  // grows over the same interval that alpha fades. Reduced amplitude so
+  // it's a flicker, not a slam.
+  float swDecay = 1.0 - uBeat.y;
+  float swR     = vR * (1.10 + 4.9 * pow(swDecay, 0.55));
+  float swW     = vR * 0.28;
+  float shock   = exp(-pow((r - swR) / swW, 2.0)) * uBeat.y;
   col += pal.voidEdge * shock * 1.05;
 
   // ── Bohr-style 3D rings.
@@ -391,7 +398,7 @@ void main() {
   // pixels (the majority of the screen) is a big perf win.
   float sphereR  = max(uVoidRadius * 2.10, 0.30);
   float onSphere = step(dot(p, p), sphereR * sphereR);
-  if (onSphere > 0.5) {
+  if (uShowLogo > 0.5 && onSphere > 0.5) {
     float zSph    = sqrt(max(sphereR * sphereR - dot(p, p), 1e-4));
     vec2  ang     = vec2(atan(p.x, zSph), atan(p.y, zSph));
     vec2  logoHalfP   = vec2(min(0.55, sphereR * 0.94), min(0.16, sphereR * 0.30));
@@ -522,11 +529,12 @@ export default {
     { id: 'logoDepth',       label: 'logo depth',       type: 'range', min: 0.00, max: 2.00, step: 0.01, default: 0.00 },
     { id: 'parallax',        label: 'parallax',         type: 'range', min: 0.00, max: 1.50, step: 0.01, default: 0.76 },
     { id: 'palette',         label: 'palette',          type: 'select', options: ['silver', 'voidblue', 'platinum', 'inferno'], default: 'platinum' },
+    { id: 'showLogo',        label: 'show void*',       type: 'toggle', default: true },
     { id: 'reactivity',      label: 'reactivity',       type: 'range', min: 0.00, max: 2.00, step: 0.05, default: 1.0 },
   ],
 
   presets: {
-    default:         { voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16, flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76, palette: 'platinum', reactivity: 1.0 },
+    default:         { voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16, flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76, palette: 'platinum', showLogo: true, reactivity: 1.0 },
     atomic_mystic:   { voidRadius: 0.24, energyThickness: 0.14, swirlIntensity: 1.10, flowSpeed: 1.00, orbitAmount: 1.50, logoDepth: 0.80, parallax: 0.50, palette: 'platinum' },
     platonic:        { voidRadius: 0.28, energyThickness: 0.10, swirlIntensity: 0.55, flowSpeed: 0.45, orbitAmount: 0.65, logoDepth: 0.65, parallax: 0.35, palette: 'silver' },
     ruliad:          { voidRadius: 0.22, energyThickness: 0.18, swirlIntensity: 1.35, flowSpeed: 1.20, orbitAmount: 1.35, logoDepth: 0.90, parallax: 0.60, palette: 'voidblue' },
@@ -587,6 +595,7 @@ export default {
       voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16,
       flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76,
       palette: PALETTES.indexOf('platinum'),
+      showLogo: 1.0,
       starCenterX: 0.0, starHalfPX: 0.0, starHalfPY: 0.0,
     };
 
@@ -603,6 +612,7 @@ export default {
       scratch.logoDepth       = params.logoDepth;
       scratch.parallax        = params.parallax;
       scratch.palette         = Math.max(0, PALETTES.indexOf(params.palette));
+      scratch.showLogo        = params.showLogo === false ? 0.0 : 1.0;
 
       // Compute static * sprite geometry from the param uVoidRadius — it
       // does NOT track the audio breathing so the * stays anchored. The *
@@ -715,6 +725,7 @@ export default {
       gl.uniform1f(U('uParallax'),         scratch.parallax);
       gl.uniform2f(U('uPoseShift'),        poseShiftX, poseShiftY);
       gl.uniform1i(U('uPalette'),          scratch.palette);
+      gl.uniform1f(U('uShowLogo'),         scratch.showLogo);
 
       gl.uniform3fv(U('uRingU[0]'),     ringU);
       gl.uniform3fv(U('uRingV[0]'),     ringV);

@@ -393,7 +393,8 @@
     <button class="ctrl-btn active" id="btn-aura"     title="Resonance aura (A)">aura</button>
     <button class="ctrl-btn active" id="btn-ripples"  title="Beat ripples (B)">ripples</button>
     <button class="ctrl-btn"        id="btn-ascii"    title="ASCII post (X)">ascii</button>
-    <button class="ctrl-btn"        id="btn-auto"     title="Auto-cycle fx (L)">auto</button>
+    <button class="ctrl-btn"        id="btn-mosh"     title="Data-mosh post (K)">mosh</button>
+    <button class="ctrl-btn"        id="btn-auto"     title="Auto-cycle quale modes (L)">auto</button>
     <select id="auto-style" class="ctrl-btn" title="Auto-cycle style">
       <option value="chapters">chapters</option>
       <option value="alternate">alternate</option>
@@ -515,6 +516,36 @@
       <div class="qp-row" data-qp="pose-linger">
         <label>linger<span class="qp-val">800ms</span></label>
         <input type="range" min="0" max="3000" step="50" value="800">
+      </div>
+    </div>
+  </div>
+
+  <div id="mosh-card" class="qp-card collapsed" style="display:none">
+    <div class="qp-head" data-toggle="mosh-card">
+      <span class="qp-title">data-mosh</span>
+      <span class="qp-spacer"></span>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-row" data-qp="mosh-intensity">
+        <label>intensity<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1.5" step="0.05" value="0.85">
+      </div>
+      <div class="qp-row" data-qp="mosh-smear">
+        <label>smear<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.02" value="0.55">
+      </div>
+      <div class="qp-row" data-qp="mosh-glitch">
+        <label>glitch rate<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.02" value="0.30">
+      </div>
+      <div class="qp-row" data-qp="mosh-block">
+        <label>block size<span class="qp-val"></span></label>
+        <input type="range" min="8" max="128" step="2" value="32">
+      </div>
+      <div class="qp-row" data-qp="mosh-split">
+        <label>color split<span class="qp-val"></span></label>
+        <input type="range" min="0" max="20" step="1" value="4">
       </div>
     </div>
   </div>

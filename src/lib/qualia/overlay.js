@@ -114,9 +114,34 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
     aura:     true,
     ripples:  true,
     ascii:    false,
+    mosh:     false,
   };
-  function setOption(key, val) { if (key in opts) opts[key] = !!val; }
-  function getOption(key)      { return opts[key]; }
+  // ASCII and data-mosh both fully repaint the overlay before sparks /
+  // skeleton land on top, so they're mutually exclusive — enabling one
+  // disables the other automatically.
+  function setOption(key, val) {
+    if (!(key in opts)) return;
+    opts[key] = !!val;
+    if (key === 'ascii' && opts.ascii) opts.mosh  = false;
+    if (key === 'mosh'  && opts.mosh)  opts.ascii = false;
+  }
+  function getOption(key) { return opts[key]; }
+
+  // Data-mosh tunables. Defaults aim for a pleasant smear with periodic
+  // block glitches; the page exposes these as sliders in a mosh-card.
+  const moshConfig = {
+    intensity:  0.85,   // global scaler — multiplies smear, glitch, split
+    blockSize:  32,     // px on a side; controls glitch granularity
+    smear:      0.55,   // 0..1 — how much of last frame leaks into this one
+    glitchRate: 0.30,   // base rate of block-displacement events per frame
+    colorSplit: 4,      // px offset for the cheap RGB split ghosts
+  };
+  function setMoshConfig(partial) {
+    for (const [k, v] of Object.entries(partial || {})) {
+      if (k in moshConfig && typeof v === 'number') moshConfig[k] = v;
+    }
+  }
+  function getMoshConfig() { return { ...moshConfig }; }
 
   // ── Sparks ring buffer ────────────────────────────────────────────────────
   const MAX_SPARKS = 2400;
@@ -449,6 +474,100 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
     }
   }
 
+  // ── Data-mosh post-process ───────────────────────────────────────────────
+  // Persistent offscreen buffer that the active fx canvas is "smeared" into
+  // each frame. The look comes from three layered tricks:
+  //   1. Self-feedback at a sub-pixel drift — pixels leak forward into the
+  //      next frame in a slowly-rotating direction (motion-vector residue).
+  //   2. Block-displacement glitches — every frame we may shuffle a few
+  //      blockSize×blockSize tiles around inside the buffer; on beats the
+  //      count spikes for a full P-frame-style breakup.
+  //   3. Cheap RGB split — additive blits of the same buffer at ±X px to
+  //      fake chromatic-aberration ghosting cheaply (no per-channel passes).
+  let moshBuf = null, moshCtx = null;
+  function ensureMoshBuf() {
+    const W = canvas.width, H = canvas.height;
+    if (!moshBuf) {
+      moshBuf = document.createElement('canvas');
+      moshCtx = moshBuf.getContext('2d');
+    }
+    if (moshBuf.width !== W || moshBuf.height !== H) {
+      moshBuf.width  = W;
+      moshBuf.height = H;
+    }
+  }
+  function renderMosh(field) {
+    const main = getMainCanvas?.();
+    if (!main) return;
+    const W = canvas.width, H = canvas.height;
+    ensureMoshBuf();
+    const audio = field.audio;
+    const audioOn = !!audio.spectrum;
+    const k = moshConfig.intensity;
+
+    // 1. Smear-feedback: copy moshBuf onto itself with a tiny drift, faded.
+    //    The drift direction rotates slowly (sin/cos of time) so the smear
+    //    has a sense of motion rather than just pumping symmetrically.
+    const t   = performance.now() * 0.0008;
+    const driftMag = 1 + Math.floor(k * 2.5);
+    const dx  = Math.round(Math.sin(t) * driftMag);
+    const dy  = Math.round(Math.cos(t * 0.9) * driftMag);
+    const smearAmt = Math.min(0.95, moshConfig.smear * k * (0.7 + (audioOn ? audio.bands.bass * 0.3 : 0.15)));
+    moshCtx.globalAlpha = smearAmt;
+    moshCtx.globalCompositeOperation = 'source-over';
+    moshCtx.drawImage(moshBuf, dx, dy);
+
+    // 2. Stamp the new fx frame on top with reduced opacity so the smear
+    //    survives. Source dimensions fall back to canvas dims because the
+    //    main backing-buffer may be a different size from the overlay's.
+    const stampAlpha = 1 - smearAmt * 0.55;
+    moshCtx.globalAlpha = stampAlpha;
+    try {
+      moshCtx.drawImage(main, 0, 0, W, H);
+    } catch {
+      // Some WebGL contexts may need preserveDrawingBuffer; if we can't
+      // sample, just show the smeared buffer alone.
+    }
+
+    // 3. Block-displacement glitches. Beat-driven burst on top of the
+    //    base rate so kicks make the canvas pop apart for a frame.
+    let burst = moshConfig.glitchRate * k * 6;
+    if (audioOn && audio.beat.active) burst += moshConfig.glitchRate * k * 24;
+    if (audioOn && audio.mids.active) burst += moshConfig.glitchRate * k * 8;
+    const numBlocks = Math.floor(burst);
+    if (numBlocks > 0) {
+      const bs = Math.max(4, Math.round(moshConfig.blockSize));
+      const maxOff = bs * (2 + k * 3);
+      moshCtx.globalAlpha = 1;
+      for (let i = 0; i < numBlocks; i++) {
+        const sx = Math.floor(Math.random() * Math.max(1, W - bs));
+        const sy = Math.floor(Math.random() * Math.max(1, H - bs));
+        const dxBlk = Math.max(0, Math.min(W - bs, sx + ((Math.random() - 0.5) * maxOff) | 0));
+        const dyBlk = Math.max(0, Math.min(H - bs, sy + ((Math.random() - 0.5) * maxOff) | 0));
+        moshCtx.drawImage(moshBuf, sx, sy, bs, bs, dxBlk, dyBlk, bs, bs);
+      }
+    }
+
+    // 4. Blit the moshed buffer to the overlay (background pass).
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.drawImage(moshBuf, 0, 0);
+
+    // 5. RGB-split ghosts via additive offset blits. Audio modulates the
+    //    split distance so beats widen the chromatic aberration.
+    if (moshConfig.colorSplit > 0.5) {
+      const cs = moshConfig.colorSplit * k;
+      const splitWiden = audioOn ? audio.beat.pulse * cs * 1.2 : 0;
+      const off = Math.round(cs + splitWiden);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.30;
+      ctx.drawImage(moshBuf,  off, 0);
+      ctx.drawImage(moshBuf, -off, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   function tick(dt, field) {
     fireRippleOnBeat(field);
@@ -459,7 +578,11 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
 
   function render(field) {
     const W = canvas.width, H = canvas.height;
-    if (opts.ascii) {
+    if (opts.mosh) {
+      // Data-mosh and ASCII both fully repaint the overlay; the setOption
+      // mutex guarantees only one is on at a time.
+      renderMosh(field);
+    } else if (opts.ascii) {
       // ASCII fully covers the viz — render it first, then overlays land
       // ON TOP of the ASCII text (skeleton + sparks should still be visible).
       renderAscii();
@@ -486,6 +609,8 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
     render,
     setOption,
     getOption,
+    setMoshConfig,
+    getMoshConfig,
     setDprCap(v) { dprCap = Math.max(0.5, v); applyDpr(); },
     dispose,
   };
