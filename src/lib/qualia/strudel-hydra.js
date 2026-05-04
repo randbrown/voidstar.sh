@@ -155,8 +155,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   const status = document.getElementById('strudel-status');
   const btnToggle = document.getElementById('btn-strudel');
   const btnClose  = document.getElementById('btn-strudel-close');
-  const btnPlay   = document.getElementById('btn-strudel-play');
-  const btnStop   = document.getElementById('btn-strudel-stop');
+  const btnPlay    = document.getElementById('btn-strudel-play');
+  const btnStop    = document.getElementById('btn-strudel-stop');
+  const btnNewline = document.getElementById('btn-strudel-newline');
 
   let editorEl = null;
   let mounted  = false;
@@ -542,6 +543,50 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     }
   });
   if (btnStop) btnStop.addEventListener('click', stop);
+
+  // Insert a newline at the cursor — Android touch keyboards (GBoard
+  // especially) drop the keydown event for Enter inside a contenteditable
+  // nested in a Shadow DOM, which is exactly what strudel-editor is. We
+  // try a chain of insertion paths so this works across CodeMirror
+  // versions exposed by different @strudel/repl builds, then fall back to
+  // a synthetic keydown which the editor's keymap treats like a real
+  // Enter press. Intentionally idempotent: clicking when the editor isn't
+  // mounted is a no-op.
+  function insertNewlineAtCursor() {
+    const ed = editorEl;
+    if (!ed) return false;
+
+    // Path 1: CodeMirror 6 EditorView exposed as ed.editor.editor (the
+    // Strudel REPL wraps the underlying CM view one level deep).
+    try {
+      const view = ed.editor?.editor || ed.editor;
+      if (view && view.state && typeof view.dispatch === 'function') {
+        view.focus?.();
+        view.dispatch(view.state.replaceSelection('\n'));
+        return true;
+      }
+    } catch {}
+
+    // Path 2: synthetic keydown on the .cm-content node inside the
+    // shadow root. CodeMirror's keymap responds to this even when the
+    // OS-level keyboard never fires the original event.
+    try {
+      const root = ed.shadowRoot || ed;
+      const cm = root.querySelector?.('.cm-content');
+      if (cm) {
+        cm.focus();
+        const ev = new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+          bubbles: true, cancelable: true,
+        });
+        cm.dispatchEvent(ev);
+        return true;
+      }
+    } catch {}
+
+    return false;
+  }
+  if (btnNewline) btnNewline.addEventListener('click', insertNewlineAtCursor);
 
   // Periodic auto-save while editing. Cheap (one DOM scrape every 8 sec)
   // and only persists if the code changed since the last save, so we don't

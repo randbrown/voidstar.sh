@@ -79,6 +79,19 @@
     #topbar-left  { display: flex; align-items: center; gap: 1rem; }
     #topbar-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 
+    /* Zen button is pinned to the upper-right corner so its tap target
+       lives in roughly the same physical spot as #zen-handle, which fades
+       in at top:0 right:1rem when zen mode is active. Toggling becomes
+       muscle-memory: same corner, same gesture. Position absolute keeps
+       the btn anchored to the topbar so the .zen translateY hides it
+       in lockstep with the rest of the toolbar. */
+    #btn-zen {
+      position: absolute;
+      top: 0.5rem;
+      right: 1rem;
+      z-index: 22;
+    }
+
     .back-link { color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 0.35rem; }
     .back-link:hover { color: var(--accent); }
     .experiment-title { color: var(--text); font-weight: 500; }
@@ -343,6 +356,7 @@
       #topbar-right { gap: 0.35rem; justify-content: flex-start; }
       #lvl, #fxname { display: none; }
       .ctrl-btn     { padding: 0.22rem 0.5rem; font-size: 0.7rem; }
+      #btn-zen      { top: 0.4rem; right: 0.6rem; }
       #panel-stack  { left: 0.5rem; right: 0.5rem; bottom: 0.5rem; max-width: none; }
       #hints        { display: none; }
       #video.visible { width: 120px; bottom: 0.5rem; right: 0.5rem; }
@@ -565,9 +579,10 @@
   <div id="strudel-header">
     <span class="sp-title">strudel <span class="sp-tag">// patterns → qualia</span></span>
     <span class="sp-status" id="strudel-status">click ▶ in editor to start</span>
-    <button class="ctrl-btn" id="btn-strudel-play" title="Evaluate / play (Ctrl+Enter)">▶</button>
-    <button class="ctrl-btn" id="btn-strudel-stop" title="Stop (Ctrl+.)">■</button>
-    <button class="ctrl-btn" id="btn-strudel-close" title="Close (D)">×</button>
+    <button class="ctrl-btn" id="btn-strudel-play"    title="Evaluate / play (Ctrl+Enter)">▶</button>
+    <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
+    <button class="ctrl-btn" id="btn-strudel-newline" title="Insert newline at cursor (Android touch keyboards drop the Enter event)">↵</button>
+    <button class="ctrl-btn" id="btn-strudel-close"   title="Close (D)">×</button>
   </div>
   <div id="strudel-tabs">
     <button class="sp-tab active" data-tab="editor">editor</button>
