@@ -160,11 +160,15 @@ void main() {
 
   float r = length(p);
 
-  // ── Audio + pose-proximity pulsed horizon ────────────────────────────────
-  // Closer pose → bigger horizon (you've walked toward the BH). Range is
-  // ±45% so coming close-up doesn't completely fill the screen.
-  float r_s = uHorizon
-            * (1.0 + uBands.x * 0.30 + uBeat.y * 0.40 + uPoseProximity * 0.45);
+  // ── Pose-proximity pulsed horizon ────────────────────────────────────────
+  // Closer pose -> bigger horizon (you've walked toward the BH). Range is
+  // +/-45% so close-up doesn't completely fill the screen.
+  // Audio-driven swelling lives on the horizonSize param's declarative
+  // audio.bass modulator (visible/tunable in the params panel) -- the
+  // earlier inline bass*0.30 + beat*0.40 here was double-counting bass
+  // and adding a hard-to-disable beat-pulse jitter, both of which read
+  // as "the horizon is being driven by something invisible".
+  float r_s = uHorizon * (1.0 + uPoseProximity * 0.45);
   r_s = clamp(r_s, 0.04, 0.55);
 
   // ── Palette ──────────────────────────────────────────────────────────────
