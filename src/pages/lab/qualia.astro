@@ -11,7 +11,10 @@
   <title>Qualia | voidstar lab</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="apple-touch-icon" href="/icon-192.png" />
-  <link rel="manifest" href="/manifest.webmanifest" />
+  <!-- Qualia uses its own manifest so installing from this page anchors
+       start_url to /lab/qualia (the default manifest's start_url is /
+       so installs from that page would always boot to home). -->
+  <link rel="manifest" href="/manifest-qualia.webmanifest" />
   <meta name="theme-color" content="#05050d" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

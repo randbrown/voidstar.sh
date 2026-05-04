@@ -1,0 +1,31 @@
+{
+  "name": "qualia · voidstar",
+  "short_name": "qualia",
+  "description": "Pluggable audio-reactive visualizer harness — chladni · singularity lens · neural field · fractal · spectrum · gargantua void · camera · voidstar logo. Audio + pose drive a shared field; new fx are one file.",
+  "start_url": "/lab/qualia",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05050d",
+  "theme_color": "#05050d",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

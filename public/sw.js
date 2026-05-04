@@ -18,7 +18,7 @@
 // purge-old-caches on the next page load. clients.claim() makes the new
 // SW take over immediately so users don't need a hard reload.
 
-const SW_VERSION = 'v1';
+const SW_VERSION = 'v2';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
@@ -27,6 +27,7 @@ const CACHE      = `voidstar-${SW_VERSION}`;
 const PRECACHE = [
   '/',
   '/manifest.webmanifest',
+  '/manifest-qualia.webmanifest',
   '/favicon.svg',
   '/favicon.ico',
   '/icon-192.png',
