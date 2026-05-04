@@ -199,9 +199,10 @@ export default {
     { id: 'reactivity', label: 'reactivity', type: 'range', min: 0,    max: 2,   step: 0.05, default: 1.0 },
   ],
 
-  // Auto cycles palettes — the zoom motion already provides visual drift,
-  // so a slow palette march is enough to keep the auto button useful.
-  autoCycle: {
+  // Auto-phase walks the palettes — the zoom motion already provides visual
+  // drift, so a slow palette march is enough to keep the `phase` button
+  // useful.
+  autoPhase: {
     steps: [
       { palette: 'voidstar' },
       { palette: 'ambient_cyan' },

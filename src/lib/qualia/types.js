@@ -124,12 +124,14 @@
  */
 
 /**
- * @typedef {Object} AutoCycleSpec
+ * @typedef {Object} AutoPhaseSpec
  * @property {Array<Object<string, number|string|boolean>>} steps
- *           Ordered list of partial param dicts. The topbar auto button
- *           applies one step per AUTO_CYCLE_SECONDS interval via
+ *           Ordered list of partial param dicts. The topbar `phase` button
+ *           applies one step per AUTO_PHASE_SECONDS interval via
  *           core.setParam, so only the keys present in each step are
- *           overwritten — everything else the user dialed in stays.
+ *           overwritten — everything else the user dialed in stays. (The
+ *           topbar `cycle` button, by contrast, swaps between qfx and is
+ *           handled at the page level — it doesn't read this field.)
  */
 
 /**
@@ -139,10 +141,10 @@
  * @property {'canvas2d'|'webgl2'} contextType
  * @property {ParamSpec[]} params
  * @property {Object<string, Object<string, number|string|boolean>>} [presets]
- * @property {AutoCycleSpec} [autoCycle]
- *           Declares the topbar auto button's behaviour while this quale is
- *           active. Omit if the quale has nothing to cycle — the button
- *           reads "auto n/a" and is disabled.
+ * @property {AutoPhaseSpec} [autoPhase]
+ *           Declares the topbar `phase` button's behaviour while this quale
+ *           is active. Omit if the quale has nothing to phase through — the
+ *           button reads "phase n/a" and is disabled.
  * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D }) => Promise<QFXInstance>|QFXInstance} create
  */
 

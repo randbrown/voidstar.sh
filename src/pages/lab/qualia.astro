@@ -503,12 +503,17 @@
     <button class="ctrl-btn active" id="btn-ripples"  title="Beat ripples (B)">ripples</button>
     <button class="ctrl-btn"        id="btn-ascii"    title="ASCII post (X)">ascii</button>
     <button class="ctrl-btn"        id="btn-mosh"     title="Data-mosh post (K)">mosh</button>
-    <button class="ctrl-btn"        id="btn-auto"     title="Auto-cycle quale modes (L)">auto</button>
-    <select id="auto-style" class="ctrl-btn" title="Auto-cycle style">
+    <button class="ctrl-btn"        id="btn-phase"    title="Auto-phase modes within active quale (L)">phase</button>
+    <select id="phase-style" class="ctrl-btn" title="Auto-phase style">
       <option value="chapters">chapters</option>
       <option value="alternate">alternate</option>
       <option value="random">random</option>
       <option value="hold">hold ascii</option>
+    </select>
+    <button class="ctrl-btn"        id="btn-cycle"    title="Auto-cycle between qualia (N)">cycle</button>
+    <select id="cycle-style" class="ctrl-btn" title="Auto-cycle style">
+      <option value="sequential">sequential</option>
+      <option value="random">random</option>
     </select>
     <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
     <button class="ctrl-btn" id="btn-cursor" title="Cursor trail (cycle modes)">cursor off</button>
@@ -532,7 +537,8 @@
 
 <div id="hints">
   <span><kbd>V</kbd> next fx</span>
-  <span><kbd>L</kbd> auto</span>
+  <span><kbd>L</kbd> phase</span>
+  <span><kbd>N</kbd> cycle</span>
   <span><kbd>X</kbd> ascii</span>
   <span><kbd>B</kbd> ripples</span>
   <span><kbd>J</kbd> skeleton</span>

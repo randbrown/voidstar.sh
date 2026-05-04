@@ -152,7 +152,7 @@ presets: {
 }
 ```
 
-`default` is required. The Reset button calls `applyFxPreset('default')`. Auto-cycle's chapter style returns to `default` when starting a fresh chapter. `default` doubles as the canonical "this is what the fx looks like out of the box."
+`default` is required. The Reset button calls `applyFxPreset('default')`. Auto-phase's chapter style returns to `default` when starting a fresh chapter. `default` doubles as the canonical "this is what the fx looks like out of the box."
 
 User-saved presets (the live-set workflow) are a separate localStorage namespace — your fx doesn't need to handle them.
 

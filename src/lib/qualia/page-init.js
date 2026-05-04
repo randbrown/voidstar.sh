@@ -22,8 +22,17 @@ import fractal         from './fx/fractal.js';
 import spectrum        from './fx/spectrum.js';
 import camera          from './fx/camera.js';
 
-const AUTO_CYCLE_SECONDS = 22;
-const AUTO_STYLES = ['chapters', 'alternate', 'random', 'hold'];
+// Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
+// internal phases — palettes, modes, etc.). The qfx declares the steps via
+// QFXModule.autoPhase.steps; the topbar `phase` button drives them. Each
+// click advances through PHASE_PERIODS (0 = off).
+const PHASE_PERIODS = [0, 5, 10, 15];          // seconds
+const AUTO_PHASE_STYLES = ['chapters', 'alternate', 'random', 'hold'];
+// Auto-cycle: swaps the active qfx ITSELF on a longer timer. Independent of
+// auto-phase — the two can run together (a single qfx phases through its
+// modes, then cycle picks the next quale and the new one starts phasing).
+const CYCLE_PERIODS = [0, 15, 30, 45];          // seconds
+const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 
 export function initQualiaPage() {
   // ── Registry ──────────────────────────────────────────────────────────────
@@ -59,8 +68,10 @@ export function initQualiaPage() {
   const btnRipples = document.getElementById('btn-ripples');
   const btnAscii   = document.getElementById('btn-ascii');
   const btnMosh    = document.getElementById('btn-mosh');
-  const btnAuto    = document.getElementById('btn-auto');
-  const autoStyleSelect = document.getElementById('auto-style');
+  const btnPhase   = document.getElementById('btn-phase');
+  const phaseStyleSelect = document.getElementById('phase-style');
+  const btnCycle   = document.getElementById('btn-cycle');
+  const cycleStyleSelect = document.getElementById('cycle-style');
   const zenHandle  = document.getElementById('zen-handle');
   const overlayUI  = document.getElementById('status-overlay');
   const startBtn   = document.getElementById('start-btn');
@@ -89,13 +100,17 @@ export function initQualiaPage() {
       const mod = mesh.get(id);
       fxnameEl.textContent = mod ? mod.name : '—';
       fxSelect.value = id;
-      // Reset auto cycle state — step indices are per-quale, and the new
-      // quale may not even support auto. refreshAutoBtn handles the n/a
-      // disabled state and stops the timer if needed.
-      autoStepCount = 0;
-      autoStartMs = performance.now();
-      if (autoCycle && !getActiveAutoSteps()) stopAuto();
-      else                                     refreshAutoBtn();
+      // Re-sync the phase timer for the new quale. autoPhaseSeconds (the
+      // user's intended period) is preserved across switches — if the new
+      // quale lacks phase support the timer just pauses; the next quale
+      // that supports phase resumes at the same period without the user
+      // having to re-enable.
+      syncPhaseTimer();
+      refreshPhaseBtn();
+      // Auto-cycle: any switch (manual or via cycleNext) restarts the
+      // dwell clock so the new fx gets the full autoCycleSeconds window.
+      autoCycleStartMs = performance.now();
+      refreshCycleBtn();
       settings.save();
     },
   });
@@ -131,8 +146,10 @@ export function initQualiaPage() {
     asciiMode:      overlay.getOption('ascii'),
     moshOn:         overlay.getOption('mosh'),
     moshConfig:     overlay.getMoshConfig(),
-    autoCycle,
-    autoStyle,
+    autoPhaseSeconds,
+    autoPhaseStyle,
+    autoCycleSeconds,
+    autoCycleStyle,
     numPoses:       pose.getNumPoses(),
     poseSmoothing:  poseSmoothingValue,
     poseThresh:     pose.getThresholds(),
@@ -523,59 +540,102 @@ export function initQualiaPage() {
   // ── Reset fx params ───────────────────────────────────────────────────────
   fxResetBtn.addEventListener('click', () => core.applyFxPreset('default'));
 
-  // ── Auto-cycle ────────────────────────────────────────────────────────────
-  // Cycles through registered fx every AUTO_CYCLE_SECONDS. Within the chladni
-  // fx, also cycles its `mode` param so all five wave-field families surface.
-  // Other fx don't have multi-mode so they just dwell.
-  let autoCycle = !!stored.autoCycle;
-  let autoStyle = AUTO_STYLES.includes(stored.autoStyle) ? stored.autoStyle : 'chapters';
-  let autoStartMs = 0;
-  let autoStepCount = 0;
-  let autoTickT = null;
-  autoStyleSelect.value = autoStyle;
-  btnAuto.classList.toggle('active', autoCycle);
-  btnAuto.textContent = autoCycle ? `auto ${AUTO_CYCLE_SECONDS}s` : 'auto';
+  // ── Auto-phase + Auto-cycle ───────────────────────────────────────────────
+  // Two independent automation tracks, each a multi-state button (like the
+  // camera mode button). Click advances through the period array; the last
+  // step wraps back to off. Tooltip lists the cycle so the muscle-memory is
+  // discoverable.
+  //   - phase: walks modes/presets WITHIN the active qfx (palettes, modes).
+  //     Each QFXModule may declare `autoPhase: { steps: [...] }`. If the
+  //     active quale has no autoPhase, the button reads "phase n/a" and
+  //     clicks are no-ops.
+  //   - cycle: swaps the active qfx itself. Sequential walks mesh order;
+  //     random picks any other id. Manual switches reset the dwell via
+  //     onFxChange so the new fx gets the full window.
+  // Both tracks can run together — a quale phases through its modes for ~30s
+  // (within-fx), then cycle picks the next quale and the new one phases.
+  //
+  // Settings migration. Two prior shapes coexist:
+  //   v1 (older prod):   autoCycle/autoStyle (within-fx bool) +
+  //                      fxAutoCycle/fxAutoStyle (cross-fx bool)
+  //   v2 (recent rename): autoPhase/autoPhaseStyle (within) +
+  //                      autoCycle/autoCycleStyle (cross, still bool)
+  // v3 (this change) persists numeric periods. Detect v1 via the unique
+  // `fxAutoCycle` key; otherwise read v2/v3 keys with bool→default-period
+  // fallback so any truthy historical state lights up at a sensible default.
+  const _isV1Shape = 'fxAutoCycle' in stored;
+  const _phaseStyleRaw = _isV1Shape ? stored.autoStyle    : stored.autoPhaseStyle;
+  const _cycleStyleRaw = _isV1Shape ? stored.fxAutoStyle  : stored.autoCycleStyle;
+  // Phase period: prefer numeric v3 key; else map historical bool → 10s.
+  const _phaseSecRaw = (typeof stored.autoPhaseSeconds === 'number')
+    ? stored.autoPhaseSeconds
+    : ((_isV1Shape ? stored.autoCycle : stored.autoPhase) ? 10 : 0);
+  // Cycle period: prefer numeric v3 key; else map historical bool → 30s.
+  // Note that `stored.autoCycle` means within-fx in v1 but cross-fx in v2,
+  // so the v1 gate matters here.
+  const _cycleSecRaw = (typeof stored.autoCycleSeconds === 'number')
+    ? stored.autoCycleSeconds
+    : ((_isV1Shape ? stored.fxAutoCycle : stored.autoCycle) ? 30 : 0);
 
-  // Auto-cycle is per-quale now: each QFXModule may declare an `autoCycle:
-  // { steps: [{partialParams}, ...] }` and the top-level button cycles
-  // through the active quale's steps at AUTO_CYCLE_SECONDS intervals.
-  // Switching quales is no longer the auto cycle's job — pick a quale,
-  // then let it drift through its own modes/palettes/whatever it exposes.
-  function getActiveAutoSteps() {
+  // — Auto-phase (within-fx) —
+  // Period 0 means "off"; any positive value runs a setInterval that calls
+  // phaseNext() every `autoPhaseSeconds`. The press-cycles-through-states
+  // design means we never need a separate startPhase/stopPhase split — the
+  // setPhasePeriod helper handles every transition.
+  let autoPhaseSeconds = PHASE_PERIODS.includes(_phaseSecRaw) ? _phaseSecRaw : 0;
+  let autoPhaseStyle = AUTO_PHASE_STYLES.includes(_phaseStyleRaw) ? _phaseStyleRaw : 'chapters';
+  let autoPhaseStartMs = 0;
+  let autoPhaseStepCount = 0;
+  let autoPhaseTickT = null;
+  phaseStyleSelect.value = autoPhaseStyle;
+  // Tooltip lists the cycle so muscle-memory builds; users see "off → 5 →
+  // 10 → 15" without poking the button to find the upper bound.
+  btnPhase.title = 'Phase modes within active quale (L) — off / 5s / 10s / 15s';
+
+  function getActivePhaseSteps() {
     const mod = mesh.get(core.activeId());
-    return mod?.autoCycle?.steps ?? null;
+    return mod?.autoPhase?.steps ?? null;
   }
 
-  function refreshAutoBtn() {
-    const steps = getActiveAutoSteps();
-    if (!steps) {
-      btnAuto.textContent = 'auto n/a';
-      btnAuto.classList.remove('active');
-      btnAuto.disabled = true;
-      btnAuto.title = 'active quale has no auto cycle';
+  function refreshPhaseBtn() {
+    const supported = !!getActivePhaseSteps();
+    // Always enabled — clicks change the user's intent regardless of
+    // whether the active quale can act on it. Period change "stickiness"
+    // means a click while on a non-supporting quale still adjusts the
+    // period and resumes when cycle hits a supporting one.
+    btnPhase.disabled = false;
+    btnPhase.classList.toggle('active', autoPhaseSeconds > 0);
+    if (!supported) {
+      // Show the preserved period in parens so the user can see their
+      // intent isn't lost — it'll resume on the next supporting quale.
+      btnPhase.textContent = autoPhaseSeconds > 0
+        ? `phase n/a (${autoPhaseSeconds}s)`
+        : 'phase n/a';
+      btnPhase.title = autoPhaseSeconds > 0
+        ? `phase set to ${autoPhaseSeconds}s — active quale has no phases; resumes on next supporting qfx (L cycles)`
+        : 'active quale has no phases (L cycles: off / 5s / 10s / 15s)';
       return;
     }
-    btnAuto.disabled = false;
-    btnAuto.title = '';
-    if (autoCycle) {
-      const elapsed = (performance.now() - autoStartMs) / 1000;
-      const remaining = Math.max(0, Math.ceil(AUTO_CYCLE_SECONDS - elapsed));
-      btnAuto.textContent = `auto ${remaining}s`;
+    btnPhase.title = 'Phase modes within active quale (L) — off / 5s / 10s / 15s';
+    if (autoPhaseSeconds > 0) {
+      const elapsed = (performance.now() - autoPhaseStartMs) / 1000;
+      const remaining = Math.max(0, Math.ceil(autoPhaseSeconds - elapsed));
+      btnPhase.textContent = `phase ${remaining}s`;
     } else {
-      btnAuto.textContent = 'auto';
+      btnPhase.textContent = 'phase off';
     }
   }
 
-  function autoNext() {
-    const steps = getActiveAutoSteps();
+  function phaseNext() {
+    const steps = getActivePhaseSteps();
     if (!steps || !steps.length) return;
-    autoStepCount++;
-    const step = steps[autoStepCount % steps.length];
-    // ASCII scheduling. Step granularity == one quale-step now (rather than
-    // one fx-switch), so chapters resets ASCII pass after a full cycle.
-    switch (autoStyle) {
+    autoPhaseStepCount++;
+    const step = steps[autoPhaseStepCount % steps.length];
+    // ASCII scheduling. Step granularity == one phase-step, so chapters
+    // resets the ASCII pass after a full pass through the steps.
+    switch (autoPhaseStyle) {
       case 'chapters': {
-        const pass = Math.floor(autoStepCount / steps.length) % 2;
+        const pass = Math.floor(autoPhaseStepCount / steps.length) % 2;
         overlay.setOption('ascii', pass === 1);
         btnAscii.classList.toggle('active', pass === 1);
         break;
@@ -601,43 +661,129 @@ export function initQualiaPage() {
     }
   }
 
-  function tickAuto() {
-    if (!autoCycle) { refreshAutoBtn(); return; }
-    const elapsed = (performance.now() - autoStartMs) / 1000;
-    refreshAutoBtn();
-    if (elapsed >= AUTO_CYCLE_SECONDS) {
-      autoStartMs = performance.now();
-      autoNext();
+  function tickPhase() {
+    if (autoPhaseSeconds <= 0) { refreshPhaseBtn(); return; }
+    const elapsed = (performance.now() - autoPhaseStartMs) / 1000;
+    refreshPhaseBtn();
+    if (elapsed >= autoPhaseSeconds) {
+      autoPhaseStartMs = performance.now();
+      phaseNext();
     }
   }
-  function startAuto() {
-    if (!getActiveAutoSteps()) return;
-    autoCycle = true;
-    autoStartMs = performance.now();
-    autoStepCount = 0;
-    btnAuto.classList.add('active');
-    if (autoStyle === 'chapters') { overlay.setOption('ascii', false); btnAscii.classList.remove('active'); }
-    if (autoTickT) clearInterval(autoTickT);
-    autoTickT = setInterval(tickAuto, 250);
-    refreshAutoBtn();
+
+  // Sync the running interval with current intent + quale support. Stops
+  // the timer when off or unsupported; (re)starts it otherwise. Does NOT
+  // mutate autoPhaseSeconds — that's the user's preserved intent and
+  // needs to survive cycling through a quale that lacks phase support so
+  // the next supporting quale resumes at the chosen period.
+  function syncPhaseTimer() {
+    if (autoPhaseTickT) { clearInterval(autoPhaseTickT); autoPhaseTickT = null; }
+    if (autoPhaseSeconds > 0 && getActivePhaseSteps()) {
+      autoPhaseStartMs = performance.now();
+      autoPhaseStepCount = 0;
+      if (autoPhaseStyle === 'chapters') {
+        overlay.setOption('ascii', false); btnAscii.classList.remove('active');
+      }
+      autoPhaseTickT = setInterval(tickPhase, 250);
+    }
+  }
+
+  // Single source of truth for user-driven period changes. Updates intent,
+  // re-syncs the timer, refreshes the button, persists.
+  function setPhasePeriod(seconds) {
+    autoPhaseSeconds = seconds;
+    syncPhaseTimer();
+    btnPhase.classList.toggle('active', autoPhaseSeconds > 0);
+    refreshPhaseBtn();
     settings.save();
   }
-  function stopAuto() {
-    autoCycle = false;
-    btnAuto.classList.remove('active');
-    if (autoTickT) { clearInterval(autoTickT); autoTickT = null; }
-    refreshAutoBtn();
-    settings.save();
-  }
-  btnAuto.addEventListener('click', () => autoCycle ? stopAuto() : startAuto());
-  autoStyleSelect.addEventListener('change', () => {
-    autoStyle = autoStyleSelect.value;
-    autoStepCount = 0;
-    if (autoCycle && autoStyle === 'chapters') {
+
+  btnPhase.addEventListener('click', () => {
+    const i = PHASE_PERIODS.indexOf(autoPhaseSeconds);
+    const next = PHASE_PERIODS[(i + 1) % PHASE_PERIODS.length];
+    setPhasePeriod(next);
+  });
+  phaseStyleSelect.addEventListener('change', () => {
+    autoPhaseStyle = phaseStyleSelect.value;
+    autoPhaseStepCount = 0;
+    if (autoPhaseSeconds > 0 && autoPhaseStyle === 'chapters') {
       overlay.setOption('ascii', false); btnAscii.classList.remove('active');
     }
     settings.save();
   });
+
+  // — Auto-cycle (cross-fx) —
+  let autoCycleSeconds = CYCLE_PERIODS.includes(_cycleSecRaw) ? _cycleSecRaw : 0;
+  let autoCycleStyle = AUTO_CYCLE_STYLES.includes(_cycleStyleRaw) ? _cycleStyleRaw : 'sequential';
+  let autoCycleStartMs = 0;
+  let autoCycleTickT = null;
+  cycleStyleSelect.value = autoCycleStyle;
+  btnCycle.title = 'Cycle between qualia (N) — off / 15s / 30s / 45s';
+
+  function refreshCycleBtn() {
+    if (!btnCycle) return;
+    if (autoCycleSeconds > 0) {
+      const elapsed = (performance.now() - autoCycleStartMs) / 1000;
+      const remaining = Math.max(0, Math.ceil(autoCycleSeconds - elapsed));
+      btnCycle.textContent = `cycle ${remaining}s`;
+    } else {
+      btnCycle.textContent = 'cycle off';
+    }
+  }
+
+  function cycleNext() {
+    const ids = mesh.ids();
+    if (ids.length < 2) return;
+    const cur = core.activeId();
+    let nextId;
+    if (autoCycleStyle === 'random') {
+      const others = ids.filter(id => id !== cur);
+      nextId = others[Math.floor(Math.random() * others.length)];
+    } else {
+      const i = ids.indexOf(cur || ids[0]);
+      nextId = ids[(i + 1) % ids.length];
+    }
+    core.setActive(nextId).catch(err => console.error('[qualia] cycle setActive failed:', err));
+  }
+
+  function tickCycle() {
+    if (autoCycleSeconds <= 0) { refreshCycleBtn(); return; }
+    const elapsed = (performance.now() - autoCycleStartMs) / 1000;
+    refreshCycleBtn();
+    if (elapsed >= autoCycleSeconds) {
+      // Don't reset autoCycleStartMs here — onFxChange does it after the
+      // switch lands, so the dwell clock starts when the new fx is live.
+      cycleNext();
+    }
+  }
+
+  function setCyclePeriod(seconds) {
+    if (autoCycleTickT) { clearInterval(autoCycleTickT); autoCycleTickT = null; }
+    autoCycleSeconds = seconds;
+    if (seconds > 0) {
+      autoCycleStartMs = performance.now();
+      autoCycleTickT = setInterval(tickCycle, 250);
+    }
+    btnCycle.classList.toggle('active', autoCycleSeconds > 0);
+    refreshCycleBtn();
+    settings.save();
+  }
+
+  btnCycle.addEventListener('click', () => {
+    const i = CYCLE_PERIODS.indexOf(autoCycleSeconds);
+    const next = CYCLE_PERIODS[(i + 1) % CYCLE_PERIODS.length];
+    setCyclePeriod(next);
+  });
+  cycleStyleSelect.addEventListener('change', () => {
+    autoCycleStyle = cycleStyleSelect.value;
+    settings.save();
+  });
+
+  // Render initial labels (active class will catch up below if periods > 0).
+  refreshPhaseBtn();
+  refreshCycleBtn();
+  btnPhase.classList.toggle('active', autoPhaseSeconds > 0);
+  btnCycle.classList.toggle('active', autoCycleSeconds > 0);
 
   // ── Strudel + Hydra ───────────────────────────────────────────────────────
   const strudel = createStrudelHydra({
@@ -797,7 +943,8 @@ export function initQualiaPage() {
       case 'b': btnRipples.click(); break;
       case 'x': btnAscii.click(); break;
       case 'k': btnMosh.click(); break;
-      case 'l': btnAuto.click(); break;
+      case 'l': btnPhase.click(); break;
+      case 'n': btnCycle.click(); break;
       case 'z': setZen(!core.isZen()); break;
       case ' ': btnPause.click(); e.preventDefault(); break;
     }
@@ -887,7 +1034,11 @@ export function initQualiaPage() {
     }
     if (stored.paused) setPaused(true);
     if (stored.zen)    setZen(true);
-    if (autoCycle)     startAuto();
+    // Re-arm phase + cycle timers from the persisted period. setPhasePeriod
+    // is idempotent (just kicks the interval off) and handles the n/a
+    // guard for quales that lack autoPhase.steps.
+    if (autoPhaseSeconds > 0) setPhasePeriod(autoPhaseSeconds);
+    if (autoCycleSeconds > 0) setCyclePeriod(autoCycleSeconds);
   }
   startBtn.addEventListener('click', () => boot({ withMic: true }));
   startSilentBtn.addEventListener('click', () => boot({ withMic: false }));

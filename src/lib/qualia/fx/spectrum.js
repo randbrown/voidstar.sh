@@ -38,9 +38,9 @@ export default {
     { id: 'reactivity', label: 'reactivity',      type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
 
-  // Auto cycles the modes — the topbar auto button surfaces all five
-  // looks (mirrors chladni's pattern).
-  autoCycle: {
+  // Auto-phase walks the modes — the topbar `phase` button surfaces all
+  // five looks (mirrors chladni's pattern).
+  autoPhase: {
     steps: [
       { mode: 'bars' },
       { mode: 'radial' },

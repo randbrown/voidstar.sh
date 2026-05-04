@@ -42,10 +42,10 @@ export default {
     { id: 'reactivity',label: 'reactivity', type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
 
-  // Auto-cycle drives the `mode` param through every wave-field family so
-  // the topbar auto button surfaces all five looks without the user having
-  // to touch the dropdown.
-  autoCycle: {
+  // Auto-phase drives the `mode` param through every wave-field family so
+  // the topbar `phase` button surfaces all five looks without the user
+  // having to touch the dropdown.
+  autoPhase: {
     steps: [
       { mode: 'chladni' },
       { mode: 'radial' },
