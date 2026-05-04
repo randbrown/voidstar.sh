@@ -20,6 +20,7 @@ import gargantuaVoid   from './fx/gargantua-void.js';
 import voidstarLogo    from './fx/voidstar-logo.js';
 import fractal         from './fx/fractal.js';
 import spectrum        from './fx/spectrum.js';
+import vintageAnalog   from './fx/vintage-analog.js';
 import camera          from './fx/camera.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
@@ -75,6 +76,7 @@ export function initQualiaPage() {
   mesh.register(neuralField);
   mesh.register(fractal);
   mesh.register(spectrum);
+  mesh.register(vintageAnalog);
   mesh.register(camera);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
