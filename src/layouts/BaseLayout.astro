@@ -57,6 +57,17 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
   <!-- Preload fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <!-- Register the PWA service worker (skipped on local dev hosts so
+       Astro's HMR isn't fighting cached assets). -->
+  <script is:inline>
+    if ('serviceWorker' in navigator
+        && !/^(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.)/.test(location.hostname)) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
 </head>
 <body>
   <Header />

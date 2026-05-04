@@ -16,6 +16,17 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="qualia" />
+
+  <!-- Register the PWA service worker (skipped on local dev hosts so
+       Astro's HMR isn't fighting cached assets). -->
+  <script is:inline>
+    if ('serviceWorker' in navigator
+        && !/^(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.)/.test(location.hostname)) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
   <style is:global>
     /* Hydra runs UNDER the viz so qualia patterns + pose skeleton overlay
        appear on top. Same z-index map as cymatics so Strudel patterns that
