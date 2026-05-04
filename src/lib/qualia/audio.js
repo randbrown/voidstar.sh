@@ -70,6 +70,13 @@ export function createAudio() {
   let beatThresh   = 1.30;
   let beatCooldown = 280;
 
+  // Source filter — null = all active sources contribute, Set = allow-list.
+  // Caller-set via setSourceFilter; the page binds this to the audio-mode
+  // selector so the user picks which streams (mic / strudel / both) feed
+  // analysis. An ignored source's analyser is also not read each tick.
+  /** @type {Set<string>|null} */
+  let sourceFilter = null;
+
   // Beat / transient state. The running means (bassAvg/highsAvg) are used as
   // a noise-floor reference for transient detection; BAND_CEILING caps them
   // so a sustained-loud passage can't push the comparator into a region
@@ -279,7 +286,14 @@ export function createAudio() {
     let firstWave = true;
     if (combinedFreqBuf) combinedFreqBuf.fill(0);
 
-    for (const src of sources.values()) {
+    // Source filter — explicit allow-list of source ids that contribute to
+    // band aggregation. `null` (the default) means "all active sources".
+    // Caller-set: the page wires this to the audio-mode button so the user
+    // controls whether mic, strudel, both, or neither feed the analysis.
+    // Skipping a filtered source here also skips the analyser read below.
+    const filter = sourceFilter;
+    for (const [id, src] of sources) {
+      if (filter && !filter.has(id)) continue;
       src.analyser.getByteFrequencyData(src.freqBuf);
       src.analyser.getByteTimeDomainData(src.timeBuf);
       const b = src.bins;
@@ -382,6 +396,13 @@ export function createAudio() {
     return sources.values().next().value || null;
   }
 
+  /** Restrict which sources contribute to band aggregation. Pass an array
+   *  of source ids (e.g. ['mic'], ['strudel'], ['mic','strudel']) or [] to
+   *  silence the analysis entirely. Pass null to allow every active source. */
+  function setSourceFilter(allowed) {
+    sourceFilter = (allowed === null || allowed === undefined) ? null : new Set(allowed);
+  }
+
   return {
     frame,
     start,
@@ -392,6 +413,7 @@ export function createAudio() {
     setTunables,
     getTunables,
     onChange,
+    setSourceFilter,
     isEnabled: () => sources.size > 0,
     hasSource: (id) => sources.has(id),
     getSources: () => Array.from(sources.keys()),

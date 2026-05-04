@@ -33,6 +33,37 @@ const AUTO_PHASE_STYLES = ['chapters', 'alternate', 'random', 'hold'];
 // modes, then cycle picks the next quale and the new one starts phasing).
 const CYCLE_PERIODS = [0, 15, 30, 45];          // seconds
 const AUTO_CYCLE_STYLES = ['sequential', 'random'];
+// ASCII post-process modes. The button cycles through these:
+//   off:  ascii disabled (always)
+//   on:   ascii enabled (always)
+//   blip: brief flash on hard kicks, auto-clears after BLIP_DURATION_MS
+//   flip: toggles ascii state on each hard kick (persists between hits)
+// Audio source modes. The button cycles through these:
+//   off:     no streams feed analysis (mic stopped, strudel ignored)
+//   mic:     mic only — strudel ignored even while playing
+//   strudel: strudel only — mic stopped (avoids speaker→mic echo doubling)
+//   mix:     mic + strudel both feed (user opts in; pick this when the
+//            mic is on a clean line — guitar interface, etc — so there's
+//            no acoustic feedback path back from speakers)
+const AUDIO_MODES = ['off', 'mic', 'strudel', 'mix'];
+const ASCII_MODES = ['off', 'on', 'blip', 'flip'];
+const BLIP_DURATION_MS = 280;
+// Hard-kick detector — tuned for "occasional flare on sub hits", not every
+// kick or snare. Multiple gates must all pass for a fire:
+//   - rising-edge beat pulse above a strict threshold
+//   - bass band above an absolute floor (rejects normal-volume kicks)
+//   - bass band ≥ a fraction of recent rolling peak (only the loudest
+//     kicks of the recent stretch — peak decays so quiet sections
+//     re-calibrate)
+//   - bass dominates mids/highs (rejects snares + full-spectrum metal hits)
+//   - cooldown since last fire (turns it into "occasional flare", not a
+//     stutter on every sub-loaded beat)
+const HARD_KICK_PULSE_THRESH = 0.95;     // rising-edge pulse minimum
+const HARD_KICK_FLOOR        = 0.70;     // absolute bass minimum
+const HARD_KICK_RATIO        = 0.92;     // ≥ 92% of recent rolling peak
+const HARD_KICK_DOMINANCE    = 1.15;     // bass ≥ 1.15× max(mids, highs)
+const HARD_KICK_PEAK_DECAY   = 0.998;    // ~6s half-life @ 60fps
+const HARD_KICK_COOLDOWN_MS  = 10000;    // ~10s between fires
 
 export function initQualiaPage() {
   // ── Registry ──────────────────────────────────────────────────────────────
@@ -132,7 +163,7 @@ export function initQualiaPage() {
   const settings = makeSettingsStore(() => ({
     fxId:           core.activeId(),
     audioTunables:  audio.getTunables(),
-    audioOn:        audio.hasSource('mic'),
+    audioMode,
     paused:         core.isPaused(),
     zen:            core.isZen(),
     poseSource:     poseSelect.value,
@@ -143,7 +174,7 @@ export function initQualiaPage() {
     sparksOn:       overlay.getOption('sparks'),
     auraOn:         overlay.getOption('aura'),
     ripplesOn:      overlay.getOption('ripples'),
-    asciiMode:      overlay.getOption('ascii'),
+    asciiMode,
     moshOn:         overlay.getOption('mosh'),
     moshConfig:     overlay.getMoshConfig(),
     autoPhaseSeconds,
@@ -168,7 +199,30 @@ export function initQualiaPage() {
   if (typeof stored.sparksOn    === 'boolean') overlay.setOption('sparks',   stored.sparksOn);
   if (typeof stored.auraOn      === 'boolean') overlay.setOption('aura',     stored.auraOn);
   if (typeof stored.ripplesOn   === 'boolean') overlay.setOption('ripples',  stored.ripplesOn);
-  if (typeof stored.asciiMode   === 'boolean') overlay.setOption('ascii',    stored.asciiMode);
+  // ASCII mode (multi-state). Migration: prior shape was a boolean.
+  let asciiMode;
+  if (typeof stored.asciiMode === 'string' && ASCII_MODES.includes(stored.asciiMode)) {
+    asciiMode = stored.asciiMode;
+  } else if (typeof stored.asciiMode === 'boolean') {
+    asciiMode = stored.asciiMode ? 'on' : 'off';
+  } else {
+    asciiMode = 'off';
+  }
+  // Sync the underlying overlay flag for static modes; reactive modes
+  // (blip / flip) start with ascii off and let the kick trigger flip it on.
+  overlay.setOption('ascii', asciiMode === 'on');
+  let blipExpiresAt = 0;
+
+  // Audio mode (multi-state). Migration: prior shape was `audioOn` boolean
+  // (true = mic, false = off).
+  let audioMode;
+  if (typeof stored.audioMode === 'string' && AUDIO_MODES.includes(stored.audioMode)) {
+    audioMode = stored.audioMode;
+  } else if (typeof stored.audioOn === 'boolean') {
+    audioMode = stored.audioOn ? 'mic' : 'off';
+  } else {
+    audioMode = 'off';
+  }
   if (typeof stored.moshOn      === 'boolean') overlay.setOption('mosh',     stored.moshOn);
   if (stored.moshConfig)                       overlay.setMoshConfig(stored.moshConfig);
 
@@ -304,42 +358,21 @@ export function initQualiaPage() {
     });
   });
 
-  // ── Audio state UI sync ───────────────────────────────────────────────────
-  // Single source of truth: audio.onChange fires whenever the active source
-  // set changes (mic start/stop, Strudel adopt/release). Both flow through
-  // here so the topbar can't drift out of sync. Mic and Strudel can run at
-  // the same time — analyser merges their inputs.
-  audio.onChange(({ sources }) => {
-    btnAudio.classList.remove('active', 'active-audio');
-    const hasMic = sources.includes('mic');
-    const hasStr = sources.includes('strudel');
-    if (hasMic) {
-      btnAudio.classList.add('active-audio');
-      btnAudio.textContent = hasStr ? 'audio + strudel' : 'audio on';
-      audioCard.style.display = '';
-    } else if (hasStr) {
-      btnAudio.textContent = 'audio';
-      audioCard.style.display = '';   // keep audio panel visible (Strudel-driven)
-    } else {
-      btnAudio.textContent = 'audio';
-      audioCard.style.display = 'none';
-    }
-    settings.save();
-  });
-
-  // ── Audio toggle (mic) ────────────────────────────────────────────────────
+  // ── Audio source mode (off / mic / strudel / mix) ───────────────────────
+  // The button is a 4-state selector. The mode is the user's intent; the
+  // underlying mic stream + audio source filter are kept in sync with it.
+  //   off     → mic stopped, audio.setSourceFilter([])
+  //   mic     → mic running, filter ['mic'] (strudel ignored)
+  //   strudel → mic stopped, filter ['strudel']
+  //   mix     → mic running, filter ['mic','strudel']
+  // The `onChange` callback only handles visual side-effects from external
+  // source changes (e.g. strudel adopt/release while panel is open) so the
+  // panel visibility and label stay in sync with whatever's actually live.
   async function startMic(deviceId) {
     try {
-      // Mic and Strudel can run simultaneously now — the analyser merges
-      // both. Don't touch Strudel state here; the user pressing the mic
-      // button means "add the mic", not "switch source".
       const id = await audio.start(deviceId);
       if (id) storeDeviceId('mic', id);
       micPicker.populate(id);
-      // NOTE: we used to auto-uncollapse the audio card here so the user
-      // could see the sliders right away. That trampled the persisted
-      // collapse state — the user's explicit choice now wins. They can
-      // click the panel header to expand if needed.
     } catch (err) {
       alert(`Could not open microphone: ${err.message || err}`);
     }
@@ -347,10 +380,60 @@ export function initQualiaPage() {
   async function stopMic() {
     await audio.stop();
   }
-  btnAudio.addEventListener('click', () => {
-    if (audio.hasSource('mic')) stopMic();
-    else                         startMic(getStoredDeviceId('mic'));
+
+  function applyAudioFilter() {
+    switch (audioMode) {
+      case 'off':     audio.setSourceFilter([]);                  break;
+      case 'mic':     audio.setSourceFilter(['mic']);             break;
+      case 'strudel': audio.setSourceFilter(['strudel']);         break;
+      case 'mix':     audio.setSourceFilter(['mic', 'strudel']);  break;
+    }
+  }
+
+  function refreshAudioBtn() {
+    btnAudio.classList.remove('active', 'active-audio');
+    btnAudio.textContent = `audio ${audioMode}`;
+    if (audioMode !== 'off') {
+      // Pink (active-audio) when the mic itself is engaged — visual hint
+      // that we're listening to the room. Cyan (active) for strudel-only.
+      btnAudio.classList.add(audioMode === 'mic' || audioMode === 'mix' ? 'active-audio' : 'active');
+    }
+    btnAudio.title = 'Audio source (M) — off / mic / strudel / mix';
+    // Audio panel visibility tracks "is anything driving reactivity" — open
+    // when mode != off.
+    audioCard.style.display = audioMode === 'off' ? 'none' : '';
+  }
+
+  async function setAudioMode(mode) {
+    if (!AUDIO_MODES.includes(mode)) return;
+    audioMode = mode;
+    const wantMic = mode === 'mic' || mode === 'mix';
+    if (wantMic && !audio.hasSource('mic')) {
+      await startMic(getStoredDeviceId('mic'));
+    } else if (!wantMic && audio.hasSource('mic')) {
+      await stopMic();
+    }
+    applyAudioFilter();
+    refreshAudioBtn();
+    settings.save();
+  }
+
+  // External source changes (e.g., strudel adopt/release) only need to
+  // refresh the panel visibility; the mode itself is user-driven.
+  audio.onChange(() => {
+    refreshAudioBtn();
+    settings.save();
   });
+
+  btnAudio.addEventListener('click', () => { setAudioMode(nextAudioMode()); });
+  function nextAudioMode() {
+    const i = AUDIO_MODES.indexOf(audioMode);
+    return AUDIO_MODES[(i + 1) % AUDIO_MODES.length];
+  }
+  // Initial filter + paint. Mic source is opened separately during boot
+  // (so the start/silent overlay buttons can sequence permissions).
+  applyAudioFilter();
+  refreshAudioBtn();
 
   // ── Mic / cam pickers ─────────────────────────────────────────────────────
   const micPicker = wirePicker({
@@ -476,17 +559,39 @@ export function initQualiaPage() {
   wireOverlayToggle(btnSparks,  'sparks');
   wireOverlayToggle(btnAura,    'aura');
   wireOverlayToggle(btnRipples, 'ripples');
-  wireOverlayToggle(btnAscii,   'ascii');
   wireOverlayToggle(btnMosh,    'mosh');
+
+  // ASCII is multi-state (off / on / blip / flip). blip and flip react to
+  // hard kicks (see core.onFrame block below). Mode advance via click/key.
+  function refreshAsciiBtn() {
+    btnAscii.textContent = `ascii ${asciiMode}`;
+    btnAscii.classList.toggle('active', asciiMode !== 'off');
+    btnAscii.title = 'ASCII post-process (X) — off / on / blip / flip — blip + flip react to hard kicks';
+  }
+  function setAsciiMode(mode) {
+    if (!ASCII_MODES.includes(mode)) return;
+    asciiMode = mode;
+    blipExpiresAt = 0;
+    // Sync underlying flag: static modes set directly; reactive modes
+    // start with ascii off (the kick trigger flips it on).
+    overlay.setOption('ascii', mode === 'on');
+    refreshAsciiBtn();
+    syncPostBtns();
+    settings.save();
+  }
+  btnAscii.addEventListener('click', () => {
+    const i = ASCII_MODES.indexOf(asciiMode);
+    setAsciiMode(ASCII_MODES[(i + 1) % ASCII_MODES.length]);
+  });
+
   // ASCII and mosh are mutually exclusive in the overlay — sync the buttons.
   function syncPostBtns() {
-    btnAscii.classList.toggle('active', overlay.getOption('ascii'));
+    btnAscii.classList.toggle('active', asciiMode !== 'off');
     btnMosh.classList.toggle('active',  overlay.getOption('mosh'));
     moshCard.style.display = overlay.getOption('mosh') ? '' : 'none';
   }
-  // Wrap the auto-toggle for ascii/mosh so their mutex stays visible.
-  btnAscii.addEventListener('click', syncPostBtns);
-  btnMosh .addEventListener('click', syncPostBtns);
+  btnMosh.addEventListener('click', syncPostBtns);
+  refreshAsciiBtn();
 
   // Mosh slider wiring — every input writes back into the overlay's
   // moshConfig. The overlay reads its own state each frame so changes
@@ -632,24 +737,25 @@ export function initQualiaPage() {
     autoPhaseStepCount++;
     const step = steps[autoPhaseStepCount % steps.length];
     // ASCII scheduling. Step granularity == one phase-step, so chapters
-    // resets the ASCII pass after a full pass through the steps.
-    switch (autoPhaseStyle) {
-      case 'chapters': {
-        const pass = Math.floor(autoPhaseStepCount / steps.length) % 2;
-        overlay.setOption('ascii', pass === 1);
-        btnAscii.classList.toggle('active', pass === 1);
-        break;
+    // resets the ASCII pass after a full pass through the steps. Reactive
+    // ASCII modes (blip/flip) are user-driven kick reactivity — phase
+    // styles only modulate ascii when the user has it in a static mode.
+    if (asciiMode === 'on' || asciiMode === 'off') {
+      switch (autoPhaseStyle) {
+        case 'chapters': {
+          const pass = Math.floor(autoPhaseStepCount / steps.length) % 2;
+          setAsciiMode(pass === 1 ? 'on' : 'off');
+          break;
+        }
+        case 'alternate':
+          setAsciiMode(asciiMode === 'on' ? 'off' : 'on');
+          break;
+        case 'random':
+          setAsciiMode(Math.random() < 0.3 ? 'on' : 'off');
+          break;
+        case 'hold':
+        default: break;
       }
-      case 'alternate':
-        overlay.setOption('ascii', !overlay.getOption('ascii'));
-        btnAscii.classList.toggle('active', overlay.getOption('ascii'));
-        break;
-      case 'random':
-        overlay.setOption('ascii', Math.random() < 0.3);
-        btnAscii.classList.toggle('active', overlay.getOption('ascii'));
-        break;
-      case 'hold':
-      default: break;
     }
     // Apply the step's partial params via core.setParam so the panel UI
     // and persistence stay in sync.
@@ -681,8 +787,10 @@ export function initQualiaPage() {
     if (autoPhaseSeconds > 0 && getActivePhaseSteps()) {
       autoPhaseStartMs = performance.now();
       autoPhaseStepCount = 0;
-      if (autoPhaseStyle === 'chapters') {
-        overlay.setOption('ascii', false); btnAscii.classList.remove('active');
+      // Reset ascii to the start of a chapters pass — but only if the
+      // user is in a static ascii mode. blip/flip remain untouched.
+      if (autoPhaseStyle === 'chapters' && (asciiMode === 'on' || asciiMode === 'off')) {
+        setAsciiMode('off');
       }
       autoPhaseTickT = setInterval(tickPhase, 250);
     }
@@ -706,8 +814,9 @@ export function initQualiaPage() {
   phaseStyleSelect.addEventListener('change', () => {
     autoPhaseStyle = phaseStyleSelect.value;
     autoPhaseStepCount = 0;
-    if (autoPhaseSeconds > 0 && autoPhaseStyle === 'chapters') {
-      overlay.setOption('ascii', false); btnAscii.classList.remove('active');
+    if (autoPhaseSeconds > 0 && autoPhaseStyle === 'chapters'
+        && (asciiMode === 'on' || asciiMode === 'off')) {
+      setAsciiMode('off');
     }
     settings.save();
   });
@@ -980,6 +1089,57 @@ export function initQualiaPage() {
     prevBeat = a.beat.pulse; prevSnare = a.mids.pulse; prevHat = a.highs.pulse;
   });
 
+  // ── ASCII reactive trigger ────────────────────────────────────────────────
+  // Hard-kick detector for blip + flip ascii modes. Fires on a rising-edge
+  // beat pulse whose bass band is ≥85% of a slowly-decaying rolling peak,
+  // with an absolute floor so quiet sections don't fire on weak hits. The
+  // peak decays per-frame (~6s half-life @ 60fps) so a quiet stretch will
+  // re-calibrate "powerful" to recent context.
+  let bassPeakEma = 0;
+  let prevReactiveBeat = 0;
+  let lastHardKickAt = 0;
+  core.onFrame((field) => {
+    if (asciiMode !== 'blip' && asciiMode !== 'flip') {
+      // Decay even when inactive so the EMA isn't stale on next activation.
+      bassPeakEma *= HARD_KICK_PEAK_DECAY;
+      blipExpiresAt = 0;
+      return;
+    }
+    const a = field.audio;
+    const now = performance.now();
+    const beat = a.beat.pulse;
+    const bass = a.bands.bass;
+    const mids = a.bands.mids;
+    const highs = a.bands.highs;
+    const rising = beat > HARD_KICK_PULSE_THRESH && prevReactiveBeat <= HARD_KICK_PULSE_THRESH;
+    prevReactiveBeat = beat;
+    bassPeakEma *= HARD_KICK_PEAK_DECAY;
+    if (rising) {
+      // Cooldown is the cheapest gate, so check it first to short-circuit
+      // and avoid raising bassPeakEma during the suppression window.
+      const cooledDown = (now - lastHardKickAt) >= HARD_KICK_COOLDOWN_MS;
+      const isLoud      = bass >= HARD_KICK_FLOOR;
+      const isPeakLevel = bass >= bassPeakEma * HARD_KICK_RATIO;
+      const isSubBass   = bass >= Math.max(mids, highs) * HARD_KICK_DOMINANCE;
+      if (bass > bassPeakEma) bassPeakEma = bass;
+      if (cooledDown && isLoud && isPeakLevel && isSubBass) {
+        lastHardKickAt = now;
+        if (asciiMode === 'blip') {
+          overlay.setOption('ascii', true);
+          blipExpiresAt = now + BLIP_DURATION_MS;
+        } else { // flip
+          overlay.setOption('ascii', !overlay.getOption('ascii'));
+        }
+      }
+    }
+    // Auto-clear blip after its window. Re-arming during the window
+    // (handled above) extends the on-state to the new expiry.
+    if (asciiMode === 'blip' && blipExpiresAt && now >= blipExpiresAt) {
+      overlay.setOption('ascii', false);
+      blipExpiresAt = 0;
+    }
+  });
+
   core.onFps((fps, field) => {
     fpsEl.textContent = `${fps} fps`;
     if (audio.isEnabled()) {
@@ -1022,12 +1182,12 @@ export function initQualiaPage() {
     }
     core.start();
 
-    // Restore audio source. `withMic` (from the explicit "enable mic" button)
-    // or stored.audioOn (last session had mic on) both trigger startMic. The
-    // browser's previously-granted mic permission means this resumes silently.
-    if (opts.withMic || stored.audioOn) {
-      await startMic(getStoredDeviceId('mic'));
-    }
+    // Restore audio source. `withMic` (from the "enable mic" overlay button)
+    // forces audio mode to 'mic' even if the persisted mode is 'off' — the
+    // user explicitly requested mic via the boot overlay. Otherwise replay
+    // the persisted mode (which itself decides whether to open the mic).
+    if (opts.withMic && audioMode === 'off') audioMode = 'mic';
+    await setAudioMode(audioMode);
     if (stored.poseSource && stored.poseSource !== 'off') {
       poseSelect.value = stored.poseSource;
       poseSelect.dispatchEvent(new Event('change'));
