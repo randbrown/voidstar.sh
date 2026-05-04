@@ -140,6 +140,41 @@ Param `id`s become localStorage keys *and* the public Strudel hook surface (`qua
 
 Read params via `field.params.thickness` inside `update`. Don't cache them across frames; the harness mutates them in place when sliders move or Strudel sets values.
 
+### Modulators (declarative audio + pose binding)
+
+Numeric `range` params can declare a `modulators` array. The engine resolves each frame's `params.<id>` as `base ⊕ source*amount` per modulator, in declaration order. The param panel renders a pill per modulator with a live activity meter and an `amount` slider, so the user can see what audio (or pose) is driving a knob and dial it down/up.
+
+```js
+{ id: 'gridSpeed', label: 'grid speed', type: 'range',
+  min: 0, max: 4, step: 0.05, default: 1.0,
+  modulators: [
+    { source: 'audio.total',     mode: 'mul', amount: 0.30 },
+    { source: 'audio.beatPulse', mode: 'add', amount: 0.20 },
+  ] }
+```
+
+| Field    | Meaning |
+|----------|---------|
+| `source` | Channel id. Audio: `audio.bass` / `audio.mids` / `audio.highs` / `audio.total` / `audio.rms` / `audio.beatPulse` / `audio.midsPulse` / `audio.highsPulse`. Pose: `pose.head.x` / `pose.head.y` / `pose.shoulderSpan` / etc. (see `modulation.js` for the full registry). |
+| `mode`   | `'add'` → `v += source*amount`. `'mul'` (default) → `v *= (1 + source*amount)` so `amount=0` is identity. `'replace'` → `v = source*amount` (param value ignored). |
+| `amount` | Strength multiplier. The user-facing modulator pill multiplies this further (so the declared value is the "default amount"). For `'mul'`, `amount=0` is identity — useful for declaring a relationship that's visible in the UI but defaults to off. |
+
+Audio modulators are additionally scaled by the fx's `reactivity` param when present, so adding an `audio.*` modulator automatically respects the global reactivity slider.
+
+**Why use modulators instead of inline audio reads?**
+- The relationship is **discoverable**: it shows up as a pill in the param panel, not buried in the renderer.
+- The user can **tune the amount** live without editing code.
+- Strudel can **target the resolved value** via `qualia.setParam`, getting the audio-modulated curve for free.
+- Per-frame **reactivity scaling** is handled by the engine.
+
+**Rules of thumb for what to model as a modulator vs inline:**
+- *Modulator*: anything that maps cleanly to a tunable knob (speed, size, density, intensity, threshold).
+- *Inline*: visual seasoning that isn't user-tunable on its own (e.g. a stroke's bloom alpha pulsing on a beat). These don't earn a param of their own and don't need to be modulators.
+
+If a knob *should* be discoverable but the default audio response is too jumpy, declare the modulator with `amount: 0.0` so the pill appears in the UI but is inactive by default — the user opts in by dragging the slider.
+
+Reference fx with declarative modulators: [`fx/chladni.js`](./fx/chladni.js), [`fx/fractal.js`](./fx/fractal.js), [`fx/synthwave.js`](./fx/synthwave.js).
+
 ---
 
 ## Presets

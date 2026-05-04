@@ -21,6 +21,7 @@ import voidstarLogo    from './fx/voidstar-logo.js';
 import fractal         from './fx/fractal.js';
 import spectrum        from './fx/spectrum.js';
 import vintageAnalog   from './fx/vintage-analog.js';
+import synthwave       from './fx/synthwave.js';
 import camera          from './fx/camera.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
@@ -77,6 +78,7 @@ export function initQualiaPage() {
   mesh.register(fractal);
   mesh.register(spectrum);
   mesh.register(vintageAnalog);
+  mesh.register(synthwave);
   mesh.register(camera);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
@@ -1189,7 +1191,16 @@ export function initQualiaPage() {
     // user explicitly requested mic via the boot overlay. Otherwise replay
     // the persisted mode (which itself decides whether to open the mic).
     if (opts.withMic && audioMode === 'off') audioMode = 'mic';
-    await setAudioMode(audioMode);
+    try {
+      await setAudioMode(audioMode);
+    } catch (err) {
+      // Mic permission denied / no gesture / device gone — fall back to
+      // off so the rest of the page stays functional. User can re-enable
+      // via the audio button (which runs setAudioMode under a gesture).
+      console.warn('[qualia] audio mode init failed; falling back to off:', err);
+      audioMode = 'off';
+      try { await setAudioMode('off'); } catch {}
+    }
     if (stored.poseSource && stored.poseSource !== 'off') {
       poseSelect.value = stored.poseSource;
       poseSelect.dispatchEvent(new Event('change'));
@@ -1204,4 +1215,25 @@ export function initQualiaPage() {
   }
   startBtn.addEventListener('click', () => boot({ withMic: true }));
   startSilentBtn.addEventListener('click', () => boot({ withMic: false }));
+
+  // Auto-boot for returning users — they've already chosen an audio
+  // source, the "enable mic" overlay is just a friction click on every
+  // reload. If the browser still requires a user gesture for mic
+  // (rare — permission is usually persistent for the origin), the
+  // setAudioMode call inside boot will throw and we fall back to
+  // 'off'; the user can re-enable via the audio button.
+  //
+  // First-time visitors (no stored audio prefs) still see the overlay
+  // so the very first mic-permission prompt happens after a deliberate
+  // user gesture.
+  const hasBootedBefore = stored.audioMode != null
+                       || typeof stored.audioOn === 'boolean';
+  if (hasBootedBefore) {
+    boot().catch(err => {
+      console.error('[qualia] auto-boot failed:', err);
+      // Fall back to revealing the overlay if anything went wrong so
+      // the user has a manual entry point.
+      overlayUI.classList.remove('hidden');
+    });
+  }
 }
