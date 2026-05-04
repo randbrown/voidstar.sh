@@ -62,7 +62,29 @@
  * @property {number} time      Seconds since core start.
  * @property {AudioFrame} audio
  * @property {PoseFrame}  pose
- * @property {Object<string,number|string|boolean>} params  Resolved values from the active fx's schema.
+ * @property {Object<string,number|string|boolean>} params
+ *           Per-frame *resolved* param values — base UI values with the
+ *           active fx's modulators (audio + pose channels) applied. Read
+ *           these directly; declarative modulation is already baked in.
+ * @property {Object<string,number>} [channels]
+ *           Snapshot of all named modulation channels for this frame
+ *           (e.g. `audio.bass`, `pose.shoulderSpan`). Useful for fx /
+ *           overlays that want to read a channel without going through
+ *           a param. Populated by core.js, not user-mutable.
+ */
+
+/**
+ * Declarative modulation entry on a numeric param. The engine resolves
+ * `params.<id>` each frame as `base ⊕ source*amount` per modulator (in
+ * declaration order). See modulation.js for the channel registry.
+ *
+ * @typedef {Object} ModulatorSpec
+ * @property {string} source    Channel id, e.g. 'audio.bass', 'pose.head.x'.
+ * @property {'add'|'mul'|'replace'} [mode]  Default 'mul'.
+ * @property {number} [amount]  Strength multiplier on the channel value (default 1).
+ *                              For 'mul', amount=0 is identity; for 'add', amount=0 is identity.
+ *                              Audio modulators are additionally scaled by the fx's
+ *                              `reactivity` param when present.
  */
 
 /**
@@ -74,6 +96,7 @@
  * @property {number} max
  * @property {number} step
  * @property {number} default
+ * @property {ModulatorSpec[]} [modulators]
  */
 /**
  * @typedef {Object} ParamToggle

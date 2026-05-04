@@ -425,10 +425,16 @@ export default {
   params: [
     { id: 'diskTilt',       label: 'disk tilt',       type: 'range', min: 0.1, max: 1.2, step: 0.01, default: 0.55 },
     { id: 'lensStrength',   label: 'lens strength',   type: 'range', min: 0,   max: 3,   step: 0.05, default: 1.4 },
-    { id: 'diskBrightness', label: 'disk brightness', type: 'range', min: 0,   max: 4,   step: 0.05, default: 2.2 },
+    { id: 'diskBrightness', label: 'disk brightness', type: 'range', min: 0,   max: 4,   step: 0.05, default: 2.2,
+      modulators: [
+        { source: 'audio.beatPulse', mode: 'mul', amount: 0.30 },
+      ] },
     { id: 'turbulence',     label: 'turbulence',      type: 'range', min: 0,   max: 2,   step: 0.05, default: 0.8 },
     { id: 'flowSpeed',      label: 'flow speed',      type: 'range', min: 0,   max: 3,   step: 0.05, default: 1.0 },
-    { id: 'horizonSize',    label: 'horizon r_s',     type: 'range', min: 0.1, max: 0.6, step: 0.005, default: 0.28 },
+    { id: 'horizonSize',    label: 'horizon r_s',     type: 'range', min: 0.1, max: 0.6, step: 0.005, default: 0.28,
+      modulators: [
+        { source: 'audio.bass', mode: 'mul', amount: 0.10 },
+      ] },
     { id: 'bloomFake',      label: 'bloom',           type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
     { id: 'haloIntensity',  label: 'horizon halo',    type: 'range', min: 0,   max: 3,   step: 0.05, default: 1.0 },
     { id: 'poseBind',       label: 'pose binding',    type: 'toggle', default: true },
@@ -485,7 +491,8 @@ export default {
       scratch.bloomFake      = params.bloomFake;
       scratch.haloIntensity  = params.haloIntensity ?? 1.0;
       scratch.palette        = Math.max(0, PALETTES.indexOf(params.palette));
-      scratch.horizon        = params.horizonSize * (1.0 + audio.bands.bass * 0.10);
+      // params.horizonSize already includes the audio.bass modulator (see spec).
+      scratch.horizon        = params.horizonSize;
 
       // ── Observer perspective from pose ─────────────────────────────────────
       // Pose does NOT move the singularity. It reshapes the *view*:

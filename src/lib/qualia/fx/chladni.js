@@ -25,12 +25,18 @@ export default {
   params: [
     { id: 'mode', label: 'mode', type: 'select',
       options: ['chladni', 'radial', 'interference', 'lissajous', 'field'], default: 'chladni' },
-    { id: 'm',         label: 'm',          type: 'range', min: 1,    max: 14,   step: 0.1,   default: 3.0 },
-    { id: 'n',         label: 'n',          type: 'range', min: 1,    max: 14,   step: 0.1,   default: 5.0 },
+    { id: 'm',         label: 'm',          type: 'range', min: 1,    max: 14,   step: 0.1,   default: 3.0,
+      modulators: [
+        { source: 'audio.bass',      mode: 'add', amount: 6.0 },
+        { source: 'audio.beatPulse', mode: 'add', amount: 1.5 },
+      ] },
+    { id: 'n',         label: 'n',          type: 'range', min: 1,    max: 14,   step: 0.1,   default: 5.0,
+      modulators: [
+        { source: 'audio.mids', mode: 'add', amount: 6.0 },
+      ] },
     { id: 'count',     label: 'particles',  type: 'range', min: 500,  max: 6000, step: 100,   default: 3000 },
     { id: 'pull',      label: 'pull',       type: 'range', min: 0,    max: 2,    step: 0.02,  default: 0.85 },
     { id: 'jitter',    label: 'jitter',     type: 'range', min: 0,    max: 2,    step: 0.02,  default: 0.6 },
-    { id: 'lockMN',    label: 'lock m/n',   type: 'toggle', default: true },
     { id: 'symmetry',  label: '4-way symm', type: 'toggle', default: true },
     { id: 'trails',    label: 'trails',     type: 'toggle', default: false },
     { id: 'reactivity',label: 'reactivity', type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
@@ -50,7 +56,7 @@ export default {
   },
 
   presets: {
-    default:      { mode: 'chladni', m: 3.0, n: 5.0, lockMN: true, symmetry: true, trails: false, reactivity: 1.0 },
+    default:      { mode: 'chladni', m: 3.0, n: 5.0, symmetry: true, trails: false, reactivity: 1.0 },
     chladni:      { mode: 'chladni', m: 3.0, n: 5.0 },
     high:         { mode: 'chladni', m: 8.0, n: 11.0 },
     radial:       { mode: 'radial', m: 4.0, n: 5.0 },
@@ -322,17 +328,13 @@ export default {
       _mode = params.mode || 'chladni';
       _params = params; _audio = audio; _time = time;
 
-      // Soft chase on m,n (only meaningful for chladni/radial).
-      let mTarget, nTarget;
-      if (params.lockMN || !audioOn) {
-        mTarget = params.m; nTarget = params.n;
-      } else {
-        mTarget = params.m + audio.bands.bass * 6 + audio.beat.pulse * 1.5;
-        nTarget = params.n + audio.bands.mids * 6;
-      }
+      // Soft chase on m,n. params.m / params.n are already the modulated
+      // values (audio.bass + beatPulse → m, audio.mids → n via spec
+      // modulators); the chase smooths them so beats don't make m/n jitter
+      // visibly. Drag a mod weight to 0 in the UI to "lock" that knob.
       const k = Math.min(1, dt * 1.6);
-      mNow += (mTarget - mNow) * k;
-      nNow += (nTarget - nNow) * k;
+      mNow += (params.m - mNow) * k;
+      nNow += (params.n - nNow) * k;
 
       if (_mode === 'interference') _sourcesCache = getSources(time, audio);
       if (PARTICLE_MODES.has(_mode)) updateParticles(dt, _mode, audio, params);

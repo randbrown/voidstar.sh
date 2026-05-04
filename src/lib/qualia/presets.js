@@ -48,6 +48,19 @@ export function saveFxParams(fxId, params) {
   try { localStorage.setItem(fxParamsKey(fxId), JSON.stringify(params)); } catch {}
 }
 
+// Per-fx modulator weights. Flat dict keyed by `${paramId}.${modIdx}` so
+// merging persisted overrides with current spec is trivial — extra/missing
+// keys (e.g. fx schema changed since last save) are tolerated.
+function fxModWeightsKey(fxId) { return `${NS}.fx.${fxId}.modweights`; }
+
+export function loadFxModWeights(fxId) {
+  try { return JSON.parse(localStorage.getItem(fxModWeightsKey(fxId))) || null; }
+  catch { return null; }
+}
+export function saveFxModWeights(fxId, weights) {
+  try { localStorage.setItem(fxModWeightsKey(fxId), JSON.stringify(weights)); } catch {}
+}
+
 // Per-fx user-saved presets (named param snapshots). Distinct from
 // fx.presets baked into the module — those are factory; these are the
 // user's "save my current sliders as 'live-set-1'" workflow.

@@ -230,6 +230,9 @@
       display: flex; align-items: center; gap: 0.35rem;
       color: var(--text); white-space: nowrap;
     }
+    /* The "reactive" indicator dot is rendered inline in ui.js (see
+       buildParamPanel) — Astro's per-component CSS scoping doesn't reach
+       JS-created elements without the `data-astro-cid-…` attribute. */
     .qp-val { color: var(--cyan); min-width: 5ch; text-align: right; }
     .qp-row input[type=range] {
       width: 130px; accent-color: var(--accent); cursor: pointer;
@@ -251,6 +254,54 @@
       border-top: 1px dashed var(--border);
       padding-top: 0.4rem; margin-top: 0.1rem;
     }
+
+    /* Modulation pill — small 2-row block, one per modulator.
+       Row 1: [name][activity meter]   Row 2: [── weight slider ──]
+       Two rows avoids a width fight between name, meter, and the
+       native range input on narrow panels. */
+    .qp-mods {
+      grid-column: 1 / -1;
+      display: flex; flex-direction: column; gap: 0.2rem;
+      margin: 0.05rem 0 0.1rem 0.5rem;
+    }
+    .qp-mod-pill {
+      display: flex; flex-direction: column; gap: 0.18rem;
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 0.18rem 0.45rem 0.22rem;
+      line-height: 1.2;
+      font-size: 0.62rem; color: var(--muted);
+      background: var(--surface-2);
+    }
+    .qp-mod-pill.audio { border-color: rgba(34,211,238,0.30); color: rgba(34,211,238,0.85); }
+    .qp-mod-pill.pose  { border-color: rgba(236,72,153,0.30); color: rgba(236,72,153,0.85); }
+    .qp-mod-head {
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+    .qp-mod-name {
+      flex: 0 0 auto;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .qp-mod-meter {
+      flex: 1; min-width: 24px; height: 3px;
+      background: rgba(255,255,255,0.08); border-radius: 2px;
+      overflow: hidden; position: relative;
+    }
+    .qp-mod-meter > span {
+      display: block; height: 100%; width: 0%;
+      transition: width 70ms linear;
+    }
+    .qp-mod-pill.audio .qp-mod-meter > span { background: var(--cyan); }
+    .qp-mod-pill.pose  .qp-mod-meter > span { background: var(--pink); }
+    /* Slider on its own row — full pill width, no width fight. */
+    .qp-mods input.qp-mod-weight {
+      width: 100%; height: 11px;
+      accent-color: var(--accent);
+      cursor: pointer; margin: 0; padding: 0;
+      display: block;
+    }
+    .qp-mod-pill.audio input.qp-mod-weight { accent-color: var(--cyan); }
+    .qp-mod-pill.pose  input.qp-mod-weight { accent-color: var(--pink); }
     .diag-row { gap: 0.6rem; }
     .diag-row .diag-label { color: var(--text); }
     .diag-row .qp-val     { font-variant-numeric: tabular-nums; }

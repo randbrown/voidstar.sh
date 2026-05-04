@@ -17,7 +17,8 @@
 
 import { makeField } from './field.js';
 import { buildParamPanel } from './ui.js';
-import { loadFxParams, saveFxParams } from './presets.js';
+import { loadFxParams, saveFxParams, loadFxModWeights, saveFxModWeights } from './presets.js';
+import { computeChannels, resolveParams, makeChannelSnapshot, modWeightKey } from './modulation.js';
 
 const DEFAULT_DPR_CAP = 1.5;
 
@@ -37,6 +38,14 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   // references stay valid even as their internals are mutated each tick.
   field.audio = audio.frame;
   field.pose  = pose.frame;
+  // Channel snapshot — refreshed each frame; UI + frame listeners can read.
+  field.channels = makeChannelSnapshot();
+  // Base (UI-set) params, distinct from `field.params` which the engine
+  // re-resolves each frame as base + active modulators.
+  let baseParams = {};
+  // Per-modulator user weights, keyed by `${paramId}.${modIdx}`. Multiplies
+  // the spec's declared amount. Default 1 (= use spec amount as-is).
+  let modWeights = {};
 
   let dprCap   = DEFAULT_DPR_CAP;
   let zen      = false;
@@ -131,22 +140,48 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
       opts = { ctx };
     }
 
+    // Init mod weights from the schema (default 1 each), overlay any
+    // persisted user overrides. Built BEFORE the panel so initial slider
+    // positions are correct.
+    modWeights = {};
+    for (const spec of mod.params) {
+      if (!Array.isArray(spec.modulators)) continue;
+      for (let i = 0; i < spec.modulators.length; i++) {
+        modWeights[modWeightKey(spec.id, i)] = 1;
+      }
+    }
+    const persistedMods = loadFxModWeights(mod.id);
+    if (persistedMods) {
+      for (const k in persistedMods) {
+        if (k in modWeights) modWeights[k] = persistedMods[k];
+      }
+    }
+
     // Build UI from schema BEFORE create() so initial params land in field.params.
     activePanel = buildParamPanel({
       container: paramsContainer,
       params: mod.params,
+      getChannels: () => field.channels,
+      getModWeight: (paramId, modIdx) => modWeights[modWeightKey(paramId, modIdx)] ?? 1,
+      onModWeightChange: (paramId, modIdx, value) => {
+        modWeights[modWeightKey(paramId, modIdx)] = value;
+        saveFxModWeights(mod.id, modWeights);
+      },
       onChange: (id, value) => {
+        baseParams[id] = value;
         field.params[id] = value;
         saveFxParams(mod.id, activePanel.values());
       },
     });
-    field.params = activePanel.values();
+    baseParams = activePanel.values();
+    field.params = { ...baseParams };
 
     // Apply persisted params (overrides defaults).
     const persisted = loadFxParams(mod.id);
     if (persisted) {
       activePanel.applyValues(persisted);
-      field.params = activePanel.values();
+      baseParams = activePanel.values();
+      field.params = { ...baseParams };
     }
 
     // Create the fx instance. May be async (e.g. shader compile).
@@ -161,6 +196,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   function setParam(fxId, paramId, value) {
     if (!activeMod || activeMod.id !== fxId || !activePanel) return false;
     activePanel.setValue(paramId, value);
+    baseParams[paramId] = value;
     field.params[paramId] = value;
     saveFxParams(fxId, activePanel.values());
     return true;
@@ -171,8 +207,15 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     const p = activeMod.presets?.[presetName];
     if (!p) return false;
     activePanel.applyValues(p);
-    field.params = activePanel.values();
+    baseParams = activePanel.values();
+    field.params = { ...baseParams };
     saveFxParams(activeMod.id, activePanel.values());
+    // Reset modulator weights to 1.0 (spec defaults) — keeps "reset"
+    // semantics symmetric: param values + reactivity weights both go back
+    // to the fx author's intended baseline.
+    for (const k in modWeights) modWeights[k] = 1;
+    activePanel.resetModWeights(1);
+    saveFxModWeights(activeMod.id, modWeights);
     return true;
   }
 
@@ -197,8 +240,11 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     audio.tick(dt);
     // pose runs its own detect rAF; nothing to tick here.
 
-    if (activeInst) {
+    if (activeInst && activeMod) {
       try {
+        // Refresh channels + resolve modulated params for this frame.
+        computeChannels(field, field.channels);
+        resolveParams(field.params, baseParams, activeMod.params, field.channels, modWeights);
         activeInst.update(field);
         activeInst.render();
       } catch (e) {
@@ -245,5 +291,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     onCanvas,
     getCanvas: () => canvas,
     getActiveContextType: () => canvasType,
+    getBaseParams: () => ({ ...baseParams }),
+    getChannels: () => field.channels,
   };
 }

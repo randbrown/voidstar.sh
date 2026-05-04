@@ -3,11 +3,19 @@
 // per pixel with smooth-iteration colouring. When zoom hits the precision
 // floor we snap to the next target so the loop is endless.
 //
-// Audio map:
-//   bass  → brightness pump + radial vignette pull-out
-//   mids  → palette hue rotation + iteration-count ramp
-//   highs → fine sparkle (per-pixel noise modulation)
-//   beat  → flare flash over the whole frame
+// Audio map (declarative — see `modulators` on params below):
+//   audio.bass        → iterations (sustained structural detail pump)
+//   audio.total       → iterations (overall energy widens detail band)
+//   audio.beatPulse   → iterations (kick gives a quick detail punch)
+//   audio.beatPulse   → hueDrift   (kick momentarily speeds palette rotation)
+// (Kicks intentionally don't touch zoomSpeed — that read as jittery
+//  camera shake. Drive colour + structure instead, leave the dive alone.)
+//
+// Audio map (inline — non-param shader inputs):
+//   audio.beat.pulse  → uFlare       (full-screen wash)
+//   audio.bands.highs → uSparkle     (per-pixel noise)
+//   audio.bands.bass  → uBands.x     (in-shader brightness pump)
+//   audio.bands.mids  → hueAccum integrator (slow palette rotation)
 //
 // Single-precision floats die around zoom ≈ 1e-7; deep zoom needs
 // double-double tricks that aren't worth the cost on a fullscreen-tri
@@ -177,9 +185,17 @@ export default {
   params: [
     { id: 'target',     label: 'target',     type: 'select', options: ['cycle', ...TARGET_IDS], default: 'cycle' },
     { id: 'zoomSpeed',  label: 'zoom speed', type: 'range', min: 0,    max: 2,   step: 0.02, default: 0.55 },
-    { id: 'iterations', label: 'iterations', type: 'range', min: 60,   max: 400, step: 10,   default: 220 },
+    { id: 'iterations', label: 'iterations', type: 'range', min: 60,   max: 400, step: 10,   default: 220,
+      modulators: [
+        { source: 'audio.bass',      mode: 'mul', amount: 0.45 },
+        { source: 'audio.total',     mode: 'mul', amount: 0.25 },
+        { source: 'audio.beatPulse', mode: 'mul', amount: 0.20 },
+      ] },
     { id: 'palette',    label: 'palette',    type: 'select', options: PALETTES, default: 'voidstar' },
-    { id: 'hueDrift',   label: 'hue drift',  type: 'range', min: 0,    max: 1,   step: 0.01, default: 0.35 },
+    { id: 'hueDrift',   label: 'hue drift',  type: 'range', min: 0,    max: 1,   step: 0.01, default: 0.35,
+      modulators: [
+        { source: 'audio.beatPulse', mode: 'mul', amount: 0.80 },
+      ] },
     { id: 'reactivity', label: 'reactivity', type: 'range', min: 0,    max: 2,   step: 0.05, default: 1.0 },
   ],
 
@@ -256,10 +272,9 @@ export default {
       }
 
       // Exponential zoom — multiplying by (1 - k*dt) compounds smoothly
-      // across frames regardless of rate. Beat slightly accelerates the
-      // dive for a kick-driven pump.
-      const speed = scratch.zoomSpeed * (1.0 + audio.beat.pulse * 0.6);
-      zoom *= Math.max(0.001, 1.0 - speed * dt);
+      // across frames regardless of rate. zoomSpeed already reflects the
+      // beatPulse modulator (see params), so no extra audio math here.
+      zoom *= Math.max(0.001, 1.0 - scratch.zoomSpeed * dt);
       if (zoom < ZOOM_FLOOR) {
         // Snap to the next target (or the same one if pinned).
         zoom = ZOOM_INITIAL;

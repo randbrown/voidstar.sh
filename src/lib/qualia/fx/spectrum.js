@@ -31,7 +31,10 @@ export default {
   params: [
     { id: 'mode', label: 'mode', type: 'select',
       options: ['bars', 'radial', 'waterfall', 'oscilloscope', 'nebula'], default: 'bars' },
-    { id: 'fade',       label: 'background fade', type: 'range', min: 0.02, max: 0.50, step: 0.01, default: 0.18 },
+    { id: 'fade',       label: 'background fade', type: 'range', min: 0.02, max: 0.50, step: 0.01, default: 0.18,
+      modulators: [
+        { source: 'audio.bass', mode: 'mul', amount: 0.50 },
+      ] },
     { id: 'reactivity', label: 'reactivity',      type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
 
@@ -287,12 +290,12 @@ export default {
       const audio = _audio;
       const params = _params;
       if (!audio || !params) return;
-      // Background fade. Bass slightly opens trails up. Waterfall mode uses
-      // its own internal buffer, so the main canvas can clear faster.
-      const baseFade = _mode === 'waterfall'
+      // Background fade. params.fade already includes the audio.bass
+      // modulator (see spec). Waterfall mode keeps a higher floor since
+      // its own buffer accumulates separately.
+      const fade = _mode === 'waterfall'
         ? Math.max(params.fade, 0.30)
         : params.fade;
-      const fade = audio.spectrum ? baseFade * (0.85 + audio.bands.bass * 0.5) : baseFade;
       ctx.globalCompositeOperation = 'source-over';
       ctx.fillStyle = `rgba(5,5,13,${fade})`;
       ctx.fillRect(0, 0, W, H);

@@ -89,6 +89,13 @@ export function createPose() {
   // How long a vanished pose lingers (ms)
   let lingerMs = 800;
   let lastDetectMs = 0;
+  // Detection throttle. detectForVideo() is a sync call that blocks the
+  // main thread waiting for inference; running it every rAF (60fps) is
+  // overkill for whole-body landmarks. Default 33ms ≈ 30fps detection,
+  // which roughly halves the duty cycle. Smoothing in pose.js adapts to
+  // the slower update rate without visible jitter.
+  let detectIntervalMs = 33;
+  let lastDetectTickMs = 0;
 
   let detectLoopStarted = false;
   let detectSource = null; // 'camera' | 'canvas' | null
@@ -213,6 +220,11 @@ export function createPose() {
     (function detectLoop() {
       requestAnimationFrame(detectLoop);
       if (!landmarker) return;
+      // Throttle gate — cheap to spin the rAF, expensive to call
+      // detectForVideo. Skip ticks that come faster than the interval.
+      const tickT = performance.now();
+      if (tickT - lastDetectTickMs < detectIntervalMs) return;
+      lastDetectTickMs = tickT;
       try {
         if (detectSource === 'camera' && videoEl
             && videoEl.readyState >= 2 && !videoEl.paused && !videoEl.ended) {
@@ -255,6 +267,12 @@ export function createPose() {
 
   function setSmoothing(v) { smoothing = Math.max(0, Math.min(1, v)); }
   function setLingerMs(v)  { lingerMs = Math.max(0, v | 0); }
+  /** Cap the inference rate. fps in [5..60]. Lower = less CPU/GPU duty. */
+  function setDetectFps(fps) {
+    const f = Math.max(5, Math.min(60, fps | 0));
+    detectIntervalMs = Math.round(1000 / f);
+  }
+  function getDetectFps() { return Math.round(1000 / detectIntervalMs); }
 
   return {
     frame,
@@ -266,9 +284,11 @@ export function createPose() {
     setThresholds,
     setSmoothing,
     setLingerMs,
+    setDetectFps,
     getNumPoses: () => numPoses,
     getThresholds: () => ({ detect: detectConf, presence: presenceConf, track: trackConf }),
     getSmoothing:  () => smoothing,
     getLingerMs:   () => lingerMs,
+    getDetectFps,
   };
 }

@@ -2,14 +2,16 @@
 // procedural starfield + thin accretion disk. Validates the WebGL2 path of
 // the qualia harness.
 //
-// Audio map:
-//   bass  → horizon pulse (event-horizon radius modulates with bass)
-//   mids  → disk spin rate
-//   highs → ring brightness
-//   beat  → expanding ring shockwave
-// Pose map (when present):
-//   head landmark of person 0 biases the singularity centre
-//   wrists inject perturbation into disk orientation
+// Modulation map (declarative — see `modulators` on params below):
+//   audio.bass         → horizon   (event-horizon swells with bass)
+//   audio.beatPulse    → horizon   (kick gives a shorter sharper expansion)
+//   audio.beatPulse    → ringBoost (photon ring brightens on the kick)
+//   audio.highs        → ringBoost (cymbals add steady ring shimmer)
+//   pose.shoulderSpan  → horizon   (lean in → bigger horizon)
+// Inline (non-param):
+//   shader-side mids/highs/beat reads → disk spin, ring shockwave
+//   pose head xy → smoothed singularity centre (custom 2-axis filter)
+//   pose wrists  → disk orientation perturbation
 
 import { compileProgram, makeFullscreenTri, FULLSCREEN_VERT, makeUniformGetter, uploadAudioUniforms } from '../webgl.js';
 import { scaleAudio } from '../field.js';
@@ -162,11 +164,19 @@ export default {
   contextType: 'webgl2',
 
   params: [
-    { id: 'horizon',      label: 'Horizon r_s',   type: 'range', min: 0.05, max: 0.40, step: 0.005, default: 0.16 },
+    { id: 'horizon',      label: 'Horizon r_s',   type: 'range', min: 0.05, max: 0.40, step: 0.005, default: 0.16,
+      modulators: [
+        { source: 'audio.bass',         mode: 'mul', amount: 0.20 },
+        { source: 'audio.beatPulse',    mode: 'mul', amount: 0.30 },
+        { source: 'pose.shoulderSpan',  mode: 'mul', amount: 0.25 },
+      ] },
     { id: 'spin',         label: 'Disk spin',     type: 'range', min: 0,    max: 1,    step: 0.01,  default: 0.4 },
-    { id: 'ringBoost',    label: 'Ring boost',    type: 'range', min: 0,    max: 3,    step: 0.05,  default: 1.0 },
+    { id: 'ringBoost',    label: 'Ring boost',    type: 'range', min: 0,    max: 3,    step: 0.05,  default: 1.0,
+      modulators: [
+        { source: 'audio.beatPulse', mode: 'mul', amount: 0.50 },
+        { source: 'audio.highs',     mode: 'mul', amount: 0.40 },
+      ] },
     { id: 'palette',      label: 'Palette',       type: 'select', options: ['accretionGold','voidblue','neuralMagenta','plasmaOrange'], default: 'accretionGold' },
-    { id: 'audioBindBass',label: 'bass→pulse',    type: 'toggle', default: true },
     { id: 'poseTrack',    label: 'pose tracks',   type: 'toggle', default: true },
     { id: 'reactivity',   label: 'reactivity',    type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
@@ -229,13 +239,6 @@ export default {
       centerY += (ty - centerY) * k;
       perturbX += (pertX - perturbX) * k;
       perturbY += (pertY - perturbY) * k;
-
-      // Audio-bound bass pulse expands horizon. Only when toggle is on.
-      if (!params.audioBindBass) {
-        scratch.horizon = params.horizon;
-      } else {
-        scratch.horizon = params.horizon * (1.0 + audio.bands.bass * 0.10);
-      }
     }
 
     function render() {

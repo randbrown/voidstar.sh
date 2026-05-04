@@ -35,22 +35,98 @@ function fmt(spec, raw) {
   return String(raw);
 }
 
+// Compact aliases so the pill column stays narrow even on params with many
+// modulators. The full source path lives in the pill's title attribute for
+// users who want to see the unabbreviated channel id.
+const SOURCE_ALIASES = {
+  'audio.bass':       'bass',
+  'audio.mids':       'mids',
+  'audio.highs':      'highs',
+  'audio.total':      'total',
+  'audio.rms':        'rms',
+  'audio.beatPulse':  'beat',
+  'audio.midsPulse':  'snare',
+  'audio.highsPulse': 'hat',
+  'pose.head.x':      'head.x',
+  'pose.head.y':      'head.y',
+  'pose.shoulderSpan':'span',
+  'pose.shoulderRoll':'roll',
+  'pose.headPitch':   'pitch',
+  'pose.wristSpread': 'wrists',
+  'pose.wristMidY':   'wristY',
+  'pose.confidence':  'conf',
+};
+function shortSource(src) {
+  return SOURCE_ALIASES[src] || src.replace(/^audio\./, '').replace(/^pose\./, '');
+}
+
+function sourceKind(src) {
+  if (src.startsWith('audio.')) return 'audio';
+  if (src.startsWith('pose.'))  return 'pose';
+  return '';
+}
+
 /**
  * Build a control panel for one fx's params. Listens for `input` and
  * fires `onChange(id, value)` so callers can persist + propagate.
+ *
+ * Optional modulation hooks:
+ *   - `getChannels()` — returns the live channel snapshot. Enables a
+ *     small meter on each modulator pill (refreshed on rAF).
+ *   - `getModWeight(paramId, modIdx)` — initial weight for the slider.
+ *   - `onModWeightChange(paramId, modIdx, value)` — fired on slider input.
  */
-export function buildParamPanel({ container, params, onChange }) {
+export function buildParamPanel({
+  container, params, onChange, getChannels, getModWeight, onModWeightChange,
+}) {
   container.innerHTML = '';
   const state = {};
   const refs  = {};
+  /** Per-frame meter targets: { source, fillEl } pairs. */
+  const meterTargets = [];
+  /** Mod weight slider inputs keyed by `${paramId}.${modIdx}` for setters. */
+  const weightInputs = {};
+  let rafId = 0;
 
   for (const spec of params) {
     state[spec.id] = spec.default;
 
     const row = el('div', { class: 'qp-row' });
+    // Build a small "reactive" indicator dot for any param that declares
+    // modulators. Inlined in JS rather than via CSS::before because the
+    // Astro CSS scoping in this page doesn't reach JS-created elements
+    // (every scoped selector requires `[data-astro-cid-…]` which our
+    // dynamically-created label never has).
+    let modDot = null;
+    if (spec.type === 'range' && Array.isArray(spec.modulators) && spec.modulators.length > 0) {
+      const kinds = new Set(spec.modulators.map(m => sourceKind(m.source)));
+      const kind = kinds.size > 1 ? 'both' : (kinds.has('pose') ? 'pose' : 'audio');
+      row.setAttribute('data-mod-kind', kind);
+      modDot = el('span', { class: 'qp-mod-dot', 'aria-hidden': 'true' });
+      Object.assign(modDot.style, {
+        display: 'inline-block',
+        width: '6px', height: '6px', borderRadius: '50%',
+        marginRight: '0.4rem',
+        verticalAlign: 'middle',
+        flex: '0 0 auto',
+      });
+      if (kind === 'audio') {
+        modDot.style.background = 'var(--cyan)';
+        modDot.style.boxShadow = '0 0 4px rgba(34,211,238,0.55)';
+      } else if (kind === 'pose') {
+        modDot.style.background = 'var(--pink)';
+        modDot.style.boxShadow = '0 0 4px rgba(244,114,182,0.55)';
+      } else {
+        modDot.style.background = 'linear-gradient(135deg,var(--cyan),var(--pink))';
+        modDot.style.boxShadow = '0 0 4px rgba(160,162,220,0.55)';
+      }
+    }
     const valSpan = el('span', { class: 'qp-val' });
     valSpan.textContent = fmt(spec, spec.default);
-    const label = el('label', {}, [document.createTextNode(spec.label), valSpan]);
+    const labelKids = modDot
+      ? [modDot, document.createTextNode(spec.label), valSpan]
+      : [document.createTextNode(spec.label), valSpan];
+    const label = el('label', {}, labelKids);
 
     let control;
     if (spec.type === 'range') {
@@ -98,6 +174,66 @@ export function buildParamPanel({ container, params, onChange }) {
     refs[spec.id] = { spec, control, valSpan };
     row.append(label, control);
     container.append(row);
+
+    // Modulation badges — one pill per modulator, with a live meter that
+    // tracks the channel value plus a weight slider so the user can dial
+    // each modulator's contribution from 0 (mute) up through the spec
+    // default (1) and beyond (boost up to 2).
+    if (spec.type === 'range' && Array.isArray(spec.modulators) && spec.modulators.length > 0) {
+      const modRow = el('div', { class: 'qp-mods' });
+      for (let mi = 0; mi < spec.modulators.length; mi++) {
+        const mod = spec.modulators[mi];
+        const kind = sourceKind(mod.source);
+        const pill = el('div', { class: `qp-mod-pill ${kind}`, title: mod.source });
+        // Row 1: name + activity meter.
+        const head = el('div', { class: 'qp-mod-head' });
+        const lbl = el('span', { class: 'qp-mod-name' });
+        lbl.textContent = shortSource(mod.source);
+        const meter = el('span', { class: 'qp-mod-meter' });
+        const fill = el('span');
+        meter.append(fill);
+        head.append(lbl, meter);
+        pill.append(head);
+        // Row 2: full-width weight slider.
+        const initial = getModWeight ? getModWeight(spec.id, mi) : 1;
+        const weight = el('input', {
+          type: 'range', class: 'qp-mod-weight',
+          min: '0', max: '2', step: '0.05', value: String(initial),
+          title: `weight: spec ${mod.amount ?? 1}× — drag to attenuate (0) or boost (2)`,
+        });
+        const paramId = spec.id;
+        const modIdx = mi;
+        weight.addEventListener('input', () => {
+          const v = parseFloat(weight.value);
+          onModWeightChange?.(paramId, modIdx, v);
+        });
+        weightInputs[`${paramId}.${modIdx}`] = weight;
+        pill.append(weight);
+        modRow.append(pill);
+        meterTargets.push({ source: mod.source, fill });
+      }
+      container.append(modRow);
+    }
+  }
+
+  // Drive meters from the live channel snapshot. One rAF per panel; cancelled
+  // on destroy(). Cheap — just sets `width` on N small spans where N is
+  // typically 0–8 across all params.
+  if (getChannels && meterTargets.length > 0) {
+    const tick = () => {
+      rafId = requestAnimationFrame(tick);
+      const ch = getChannels();
+      if (!ch) return;
+      for (const t of meterTargets) {
+        const v = ch[t.source];
+        if (v == null) continue;
+        const mag = v < 0 ? -v : v;
+        // Light gamma so small signals are visible without saturating fast.
+        const w = Math.min(1, Math.pow(mag, 0.6)) * 100;
+        t.fill.style.width = `${w}%`;
+      }
+    };
+    rafId = requestAnimationFrame(tick);
   }
 
   function setValue(id, v) {
@@ -124,7 +260,19 @@ export function buildParamPanel({ container, params, onChange }) {
     for (const spec of params) setValue(spec.id, spec.default);
   }
 
+  /** Snap each mod weight slider to a value (default 1.0 = spec amount). */
+  function resetModWeights(value = 1.0) {
+    for (const key in weightInputs) weightInputs[key].value = String(value);
+  }
+
+  /** Programmatic update of a single mod weight slider. */
+  function setModWeight(paramId, modIdx, value) {
+    const w = weightInputs[`${paramId}.${modIdx}`];
+    if (w) w.value = String(value);
+  }
+
   function destroy() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     container.innerHTML = '';
   }
 
@@ -133,6 +281,8 @@ export function buildParamPanel({ container, params, onChange }) {
     setValue,
     applyValues,
     reset,
+    resetModWeights,
+    setModWeight,
     destroy,
   };
 }
