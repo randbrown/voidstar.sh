@@ -86,36 +86,49 @@
       object-fit: contain; background: black;
     }
 
+    /* Topbar always uses the column layout — title row on top, control
+       buttons below — across every viewport. Keeps the upper-right corner
+       (strudel + zen) and the title row free of any wrapping-button
+       contention regardless of window width. */
     #topbar {
       position: fixed; top: 0; left: 0; right: 0; z-index: 20;
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0.6rem 1.25rem;
+      display: flex; flex-direction: column; align-items: stretch; gap: 0.4rem;
+      padding: 0.5rem 0.9rem;
       background: var(--surface); backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--border);
-      font-family: var(--font-mono); font-size: 0.8rem;
+      font-family: var(--font-mono); font-size: 0.75rem;
       transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
     }
     #topbar.zen { transform: translateY(-110%); opacity: 0; pointer-events: none; }
-    #topbar-left  { display: flex; align-items: center; gap: 1rem; }
-    #topbar-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+    /* Title row: experiment label on the left, strudel + zen on the right.
+       Shared horizontal flex row (siblings, not absolute overlay) so the
+       boxes can't overlap — each takes its natural space. */
+    #topbar-titlerow {
+      display: flex; align-items: center; gap: 1rem;
+      justify-content: space-between;
+    }
+    #topbar-left  {
+      display: flex; align-items: center; gap: 0.7rem;
+      min-width: 0;       /* allow flex-shrink so long titles ellipsis */
+      white-space: nowrap; overflow: hidden;
+      flex: 1 1 auto;
+    }
+    /* Controls row — wrapping flex of all the toggle buttons. Sits on its
+       own row below the title; never collides with the corner. */
+    #topbar-right { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 
-    /* Zen button is pinned to the upper-right corner so its tap target
-       lives in roughly the same physical spot as #zen-handle, which fades
-       in at top:0 right:1rem when zen mode is active. Toggling becomes
-       muscle-memory: same corner, same gesture. Position absolute keeps
-       the btn anchored to the topbar so the .zen translateY hides it
-       in lockstep with the rest of the toolbar. */
-    #btn-zen {
-      position: absolute;
-      top: 0.5rem;
-      right: 1rem;
-      z-index: 22;
+    /* Strudel + zen pinned to the right end of the title row. Same vertical
+       slot as #zen-handle (which fades in at top-right when zen mode hides
+       the toolbar) so the tap zone is muscle-memory stable across modes. */
+    #topbar-corner {
+      display: flex; align-items: center; gap: 0.5rem;
+      flex: 0 0 auto;     /* don't shrink — keep both buttons readable */
     }
 
     .back-link { color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 0.35rem; }
     .back-link:hover { color: var(--accent); }
     .experiment-title { color: var(--text); font-weight: 500; }
-    .experiment-tag   { color: var(--accent); }
+    .experiment-tag   { color: var(--accent); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     #fps     { color: var(--muted); min-width: 5ch; }
     #fxname  { color: var(--cyan);  min-width: 8ch; }
     #lvl     { color: var(--muted); min-width: 11ch; font-size: 0.72rem; }
@@ -419,15 +432,17 @@
       background: rgba(0,0,0,0.35) !important;
     }
 
+    /* Mobile-only tweaks — the topbar layout itself is column-flex at every
+       width (defined above) so we just dial in tighter spacing and hide
+       non-essential pieces here. */
     @media (max-width: 768px) {
-      #topbar       { padding: 0.4rem 0.6rem; flex-direction: column;
-                      align-items: stretch; gap: 0.4rem; }
-      #topbar-left  { gap: 0.6rem; font-size: 0.72rem; white-space: nowrap; overflow: hidden; }
-      .experiment-tag { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-      #topbar-right { gap: 0.35rem; justify-content: flex-start; }
+      #topbar       { padding: 0.4rem 0.6rem; gap: 0.3rem; font-size: 0.72rem; }
+      #topbar-titlerow { gap: 0.6rem; }
+      #topbar-left  { gap: 0.6rem; }
+      #topbar-right { gap: 0.35rem; }
+      #topbar-corner { gap: 0.35rem; }
       #lvl, #fxname { display: none; }
       .ctrl-btn     { padding: 0.22rem 0.5rem; font-size: 0.7rem; }
-      #btn-zen      { top: 0.4rem; right: 0.6rem; }
       #panel-stack  { left: 0.5rem; right: 0.5rem; bottom: 0.5rem; max-width: none; }
       #hints        { display: none; }
       #video.visible { width: 120px; bottom: 0.5rem; right: 0.5rem; }
@@ -446,10 +461,19 @@
 <video id="video" autoplay playsinline muted></video>
 
 <div id="topbar">
-  <div id="topbar-left">
-    <a href="/lab" class="back-link">← lab</a>
-    <span class="experiment-title">qualia</span>
-    <span class="experiment-tag">// pluggable harness</span>
+  <!-- Title row: experiment label + the pinned strudel/zen corner. Sharing
+       a flex row instead of stacking with absolute positioning means the
+       boxes can't overlap — they each take their natural space. -->
+  <div id="topbar-titlerow">
+    <div id="topbar-left">
+      <a href="/lab" class="back-link">← lab</a>
+      <span class="experiment-title">qualia</span>
+      <span class="experiment-tag">// pluggable harness</span>
+    </div>
+    <div id="topbar-corner">
+      <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (D)">strudel</button>
+      <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
+    </div>
   </div>
   <div id="topbar-right">
     <span id="fps">-- fps</span>
@@ -487,10 +511,8 @@
       <option value="hold">hold ascii</option>
     </select>
     <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
-    <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (D)">strudel</button>
     <button class="ctrl-btn" id="btn-cursor" title="Cursor trail (cycle modes)">cursor off</button>
     <button class="ctrl-btn" id="btn-pause" title="Pause (Space)">pause</button>
-    <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
     <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
   </div>
 </div>
