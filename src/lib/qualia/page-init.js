@@ -103,6 +103,7 @@ export function initQualiaPage() {
   const btnRipples = document.getElementById('btn-ripples');
   const btnAscii   = document.getElementById('btn-ascii');
   const btnMosh    = document.getElementById('btn-mosh');
+  const btnEdge    = document.getElementById('btn-edge');
   const btnPhase   = document.getElementById('btn-phase');
   const phaseStyleSelect = document.getElementById('phase-style');
   const btnCycle   = document.getElementById('btn-cycle');
@@ -181,6 +182,8 @@ export function initQualiaPage() {
     asciiMode,
     moshOn:         overlay.getOption('mosh'),
     moshConfig:     overlay.getMoshConfig(),
+    edgeOn:         overlay.getOption('edge'),
+    edgeConfig:     overlay.getEdgeConfig(),
     autoPhaseSeconds,
     autoPhaseStyle,
     autoCycleSeconds,
@@ -194,6 +197,7 @@ export function initQualiaPage() {
     diagCollapsed:  document.getElementById('diag-card')?.classList.contains('collapsed') ?? true,
     paramsCollapsed: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
     moshCollapsed:  document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
+    edgeCollapsed:  document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
   }));
   const stored = settings.load();
   camSizeIdx = stored.camSizeIdx ?? 0;
@@ -229,6 +233,8 @@ export function initQualiaPage() {
   }
   if (typeof stored.moshOn      === 'boolean') overlay.setOption('mosh',     stored.moshOn);
   if (stored.moshConfig)                       overlay.setMoshConfig(stored.moshConfig);
+  if (typeof stored.edgeOn      === 'boolean') overlay.setOption('edge',     stored.edgeOn);
+  if (stored.edgeConfig)                       overlay.setEdgeConfig(stored.edgeConfig);
 
   // ── Pose smoothing + thresholds restore ──────────────────────────────────
   let poseSmoothingValue = 0.5;
@@ -576,15 +582,17 @@ export function initQualiaPage() {
       settings.save();
     });
   }
-  // Mosh-card lookup must happen before the overlay-toggle wiring below,
-  // because the syncPostBtns helper toggles the card's visibility.
+  // Mosh / edge card lookups must happen before the overlay-toggle wiring
+  // below, because syncPostBtns toggles their visibility.
   const moshCard = document.getElementById('mosh-card');
+  const edgeCard = document.getElementById('edge-card');
 
   wireOverlayToggle(btnSkel,    'skeleton');
   wireOverlayToggle(btnSparks,  'sparks');
   wireOverlayToggle(btnAura,    'aura');
   wireOverlayToggle(btnRipples, 'ripples');
   wireOverlayToggle(btnMosh,    'mosh');
+  wireOverlayToggle(btnEdge,    'edge');
 
   // ASCII is multi-state (off / on / blip / flip). blip and flip react to
   // hard kicks (see core.onFrame block below). Mode advance via click/key.
@@ -609,13 +617,17 @@ export function initQualiaPage() {
     setAsciiMode(ASCII_MODES[(i + 1) % ASCII_MODES.length]);
   });
 
-  // ASCII and mosh are mutually exclusive in the overlay — sync the buttons.
+  // ASCII / mosh / edge are mutually exclusive in the overlay — sync the
+  // buttons + their associated tunable cards so the UI matches state.
   function syncPostBtns() {
     btnAscii.classList.toggle('active', asciiMode !== 'off');
     btnMosh.classList.toggle('active',  overlay.getOption('mosh'));
+    btnEdge.classList.toggle('active',  overlay.getOption('edge'));
     moshCard.style.display = overlay.getOption('mosh') ? '' : 'none';
+    if (edgeCard) edgeCard.style.display = overlay.getOption('edge') ? '' : 'none';
   }
   btnMosh.addEventListener('click', syncPostBtns);
+  btnEdge.addEventListener('click', syncPostBtns);
   refreshAsciiBtn();
 
   // Mosh slider wiring — every input writes back into the overlay's
@@ -644,6 +656,31 @@ export function initQualiaPage() {
   // Restore the mosh-card collapse + show state from settings.
   if (typeof stored.moshCollapsed === 'boolean') {
     moshCard.classList.toggle('collapsed', stored.moshCollapsed);
+  }
+
+  // Edge-detect slider wiring — same pattern as mosh, just talks to
+  // overlay.setEdgeConfig instead.
+  function wireEdgeSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
+    const row = document.querySelector(`[data-qp="${qpId}"]`);
+    if (!row) return;
+    const input = row.querySelector('input[type=range]');
+    const val   = row.querySelector('.qp-val');
+    const initial = overlay.getEdgeConfig()[key];
+    input.value = String(initial);
+    val.textContent = fmt(initial);
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      overlay.setEdgeConfig({ [key]: v });
+      val.textContent = fmt(v);
+      settings.save();
+    });
+  }
+  wireEdgeSlider('edge-intensity', 'intensity');
+  wireEdgeSlider('edge-threshold', 'threshold');
+  wireEdgeSlider('edge-thickness', 'thickness');
+  wireEdgeSlider('edge-glow',      'glow');
+  if (edgeCard && typeof stored.edgeCollapsed === 'boolean') {
+    edgeCard.classList.toggle('collapsed', stored.edgeCollapsed);
   }
   syncPostBtns();
 
@@ -1077,6 +1114,7 @@ export function initQualiaPage() {
       case 'b': btnRipples.click(); break;
       case 'x': btnAscii.click(); break;
       case 'k': btnMosh.click(); break;
+      case 'e': btnEdge.click(); break;
       case 'l': btnPhase.click(); break;
       case 'n': btnCycle.click(); break;
       case 'z': setZen(!core.isZen()); break;

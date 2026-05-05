@@ -115,15 +115,18 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
     ripples:  true,
     ascii:    false,
     mosh:     false,
+    edge:     false,
   };
-  // ASCII and data-mosh both fully repaint the overlay before sparks /
-  // skeleton land on top, so they're mutually exclusive — enabling one
-  // disables the other automatically.
+  // ASCII / data-mosh / edge-detect each fully repaint the overlay before
+  // sparks + skeleton land on top, so they're mutually exclusive — enabling
+  // one disables the others automatically.
+  const POST_KEYS = ['ascii', 'mosh', 'edge'];
   function setOption(key, val) {
     if (!(key in opts)) return;
     opts[key] = !!val;
-    if (key === 'ascii' && opts.ascii) opts.mosh  = false;
-    if (key === 'mosh'  && opts.mosh)  opts.ascii = false;
+    if (POST_KEYS.includes(key) && opts[key]) {
+      for (const k of POST_KEYS) if (k !== key) opts[k] = false;
+    }
   }
   function getOption(key) { return opts[key]; }
 
@@ -142,6 +145,24 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
     }
   }
   function getMoshConfig() { return { ...moshConfig }; }
+
+  // Edge-detect post-process tunables. The look is white edges on black —
+  // a Sobel filter on the active fx canvas's luminance. `intensity` scales
+  // the gradient → output brightness ramp, `threshold` clips dark edges
+  // below it, `glow` adds an additive blurred copy, `thickness` widens
+  // edges by stamping the buffer at small offsets.
+  const edgeConfig = {
+    intensity: 1.20,
+    threshold: 0.05,
+    thickness: 0.40,
+    glow:      0.45,
+  };
+  function setEdgeConfig(partial) {
+    for (const [k, v] of Object.entries(partial || {})) {
+      if (k in edgeConfig && typeof v === 'number') edgeConfig[k] = v;
+    }
+  }
+  function getEdgeConfig() { return { ...edgeConfig }; }
 
   // ── Sparks ring buffer ────────────────────────────────────────────────────
   const MAX_SPARKS = 2400;
@@ -568,6 +589,135 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
     }
   }
 
+  // ── Edge-detect post-process ─────────────────────────────────────────────
+  // Sobel on the active fx canvas's luminance. Sampled into a downsampled
+  // working buffer (cap at ~1280 wide) so the per-pixel JS loop stays cheap
+  // on hi-DPI displays — the small buffer is then upscaled back onto the
+  // overlay, which gives the edges a slightly soft TouchDesigner-ish look.
+  let edgeBuf = null, edgeCtx = null;
+  let edgeOutData = null;
+  let edgeWW = 0, edgeWH = 0;
+  function ensureEdgeBufs() {
+    const W = canvas.width, H = canvas.height;
+    const maxW = 1280;
+    const scale = Math.min(1, maxW / Math.max(1, W));
+    const wW = Math.max(2, Math.round(W * scale));
+    const wH = Math.max(2, Math.round(H * scale));
+    if (!edgeBuf) {
+      edgeBuf = document.createElement('canvas');
+      edgeCtx = edgeBuf.getContext('2d', { willReadFrequently: true });
+    }
+    if (edgeBuf.width !== wW || edgeBuf.height !== wH) {
+      edgeBuf.width  = wW;
+      edgeBuf.height = wH;
+      edgeOutData = edgeCtx.createImageData(wW, wH);
+      edgeWW = wW; edgeWH = wH;
+      // Alpha is fixed at 255 for every pixel — initialize once, then only
+      // RGB channels need to be rewritten per frame.
+      const data = edgeOutData.data;
+      for (let i = 3; i < data.length; i += 4) data[i] = 255;
+    }
+  }
+  function renderEdge(field) {
+    const main = getMainCanvas?.();
+    if (!main) return;
+    const W = canvas.width, H = canvas.height;
+    ensureEdgeBufs();
+    const wW = edgeWW, wH = edgeWH;
+
+    edgeCtx.globalCompositeOperation = 'copy';
+    try {
+      edgeCtx.drawImage(main, 0, 0, wW, wH);
+    } catch {
+      return;
+    }
+    const src = edgeCtx.getImageData(0, 0, wW, wH).data;
+    const dst = edgeOutData.data;
+
+    const audio = field?.audio;
+    const audioOn = !!audio?.spectrum;
+    const beatPulse = audioOn ? audio.beat.pulse : 0;
+    // Beats lift overall intensity slightly — feels alive without overpowering
+    // the user's threshold/intensity settings.
+    const k   = edgeConfig.intensity * (1 + beatPulse * 0.45);
+    // Sobel L1 magnitude lives in [0, 4*255] = [0, 1020]; threshold is
+    // expressed as a fraction of that range so 0..1 reads naturally.
+    const thr  = edgeConfig.threshold * 1020;
+    const span = Math.max(1, 1020 - thr);
+    const gain = (255 / span) * k;
+
+    // Sobel pass — green channel is a cheap luminance proxy and avoids
+    // three multiplies per neighbour read.
+    for (let y = 1; y < wH - 1; y++) {
+      const row0 = (y - 1) * wW;
+      const row1 = (y    ) * wW;
+      const row2 = (y + 1) * wW;
+      for (let x = 1; x < wW - 1; x++) {
+        const i00 = (row0 + x - 1) << 2;
+        const i01 = (row0 + x    ) << 2;
+        const i02 = (row0 + x + 1) << 2;
+        const i10 = (row1 + x - 1) << 2;
+        const i12 = (row1 + x + 1) << 2;
+        const i20 = (row2 + x - 1) << 2;
+        const i21 = (row2 + x    ) << 2;
+        const i22 = (row2 + x + 1) << 2;
+        const l00 = src[i00 + 1];
+        const l01 = src[i01 + 1];
+        const l02 = src[i02 + 1];
+        const l10 = src[i10 + 1];
+        const l12 = src[i12 + 1];
+        const l20 = src[i20 + 1];
+        const l21 = src[i21 + 1];
+        const l22 = src[i22 + 1];
+        const gx = (l02 + 2 * l12 + l22) - (l00 + 2 * l10 + l20);
+        const gy = (l20 + 2 * l21 + l22) - (l00 + 2 * l01 + l02);
+        const aGx = gx < 0 ? -gx : gx;
+        const aGy = gy < 0 ? -gy : gy;
+        let mag = (aGx + aGy - thr) * gain;
+        if (mag < 0)        mag = 0;
+        else if (mag > 255) mag = 255;
+        const v = mag | 0;
+        const di = (row1 + x) << 2;
+        dst[di] = v; dst[di + 1] = v; dst[di + 2] = v;
+      }
+    }
+    edgeCtx.putImageData(edgeOutData, 0, 0);
+
+    // Black backdrop, then the edge buffer scaled back up to viewport size.
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(edgeBuf, 0, 0, W, H);
+
+    // Thickness — additive offset blits widen each edge by the equivalent
+    // of `thickness * 2px` in the working buffer (so it scales with screen).
+    if (edgeConfig.thickness > 0.01) {
+      const t = edgeConfig.thickness;
+      const off = Math.max(1, Math.round(t * 2));
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, 0.7 * t);
+      ctx.drawImage(edgeBuf,  off, 0, W, H);
+      ctx.drawImage(edgeBuf, -off, 0, W, H);
+      ctx.drawImage(edgeBuf, 0,  off, W, H);
+      ctx.drawImage(edgeBuf, 0, -off, W, H);
+    }
+
+    // Glow — additive blurred copy. Beats widen the blur radius so kicks
+    // bloom the whole frame.
+    if (edgeConfig.glow > 0.01) {
+      const g = edgeConfig.glow * (1 + beatPulse * 0.7);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, g * 0.65);
+      ctx.filter = `blur(${Math.round(2 + g * 8)}px)`;
+      ctx.drawImage(edgeBuf, 0, 0, W, H);
+      ctx.filter = 'none';
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   function tick(dt, field) {
     fireRippleOnBeat(field);
@@ -579,13 +729,15 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
   function render(field) {
     const W = canvas.width, H = canvas.height;
     if (opts.mosh) {
-      // Data-mosh and ASCII both fully repaint the overlay; the setOption
+      // Mosh / ASCII / edge each fully repaint the overlay; the setOption
       // mutex guarantees only one is on at a time.
       renderMosh(field);
     } else if (opts.ascii) {
       // ASCII fully covers the viz — render it first, then overlays land
       // ON TOP of the ASCII text (skeleton + sparks should still be visible).
       renderAscii();
+    } else if (opts.edge) {
+      renderEdge(field);
     } else {
       ctx.clearRect(0, 0, W, H);
     }
@@ -611,6 +763,8 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
     getOption,
     setMoshConfig,
     getMoshConfig,
+    setEdgeConfig,
+    getEdgeConfig,
     setDprCap(v) { dprCap = Math.max(0.5, v); applyDpr(); },
     dispose,
   };
