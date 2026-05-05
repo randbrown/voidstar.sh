@@ -159,9 +159,25 @@ export function createAudio() {
   /** Start mic capture. Returns the chosen deviceId so callers can persist it. */
   async function start(deviceId) {
     await removeSource('mic');
-    const constraints = { ...MIC_CONSTRAINTS };
-    if (deviceId) constraints.deviceId = { exact: deviceId };
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
+    // Try the requested deviceId first; if it's stale (OverconstrainedError
+    // or NotFoundError — e.g. the mic was unplugged since last session),
+    // fall back to whatever default the browser hands us so a returning
+    // user isn't blocked by a missing previous device.
+    const attempts = deviceId
+      ? [{ ...MIC_CONSTRAINTS, deviceId: { exact: deviceId } }, { ...MIC_CONSTRAINTS }]
+      : [{ ...MIC_CONSTRAINTS }];
+    let stream = null;
+    let lastErr = null;
+    for (const constraints of attempts) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') break;
+      }
+    }
+    if (!stream) throw lastErr || new Error('getUserMedia failed');
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const analyser = ctx.createAnalyser();
     // Smaller FFT → less internal latency; lower smoothingTimeConstant

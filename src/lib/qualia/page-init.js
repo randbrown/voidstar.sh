@@ -373,13 +373,14 @@ export function initQualiaPage() {
   // source changes (e.g. strudel adopt/release while panel is open) so the
   // panel visibility and label stay in sync with whatever's actually live.
   async function startMic(deviceId) {
-    try {
-      const id = await audio.start(deviceId);
-      if (id) storeDeviceId('mic', id);
-      micPicker.populate(id);
-    } catch (err) {
-      alert(`Could not open microphone: ${err.message || err}`);
-    }
+    // Caller decides how to surface failure. audio.start() already retries
+    // without the deviceId constraint when the stored mic is gone, so a
+    // throw here means a real problem (denied permission, no input device,
+    // etc.) — not just a stale stored deviceId.
+    const id = await audio.start(deviceId);
+    if (id) storeDeviceId('mic', id);
+    micPicker.populate(id);
+    return id;
   }
   async function stopMic() {
     await audio.stop();
@@ -410,12 +411,25 @@ export function initQualiaPage() {
 
   async function setAudioMode(mode) {
     if (!AUDIO_MODES.includes(mode)) return;
+    const prevMode = audioMode;
     audioMode = mode;
     const wantMic = mode === 'mic' || mode === 'mix';
-    if (wantMic && !audio.hasSource('mic')) {
-      await startMic(getStoredDeviceId('mic'));
-    } else if (!wantMic && audio.hasSource('mic')) {
-      await stopMic();
+    try {
+      if (wantMic && !audio.hasSource('mic')) {
+        await startMic(getStoredDeviceId('mic'));
+      } else if (!wantMic && audio.hasSource('mic')) {
+        await stopMic();
+      }
+    } catch (err) {
+      // Mic open failed — roll the displayed mode back so the UI matches
+      // reality. The caller (boot, button click handler) decides whether
+      // to surface this to the user; we just log and re-throw.
+      audioMode = prevMode;
+      applyAudioFilter();
+      refreshAudioBtn();
+      settings.save();
+      console.warn('[qualia] setAudioMode failed:', err);
+      throw err;
     }
     applyAudioFilter();
     refreshAudioBtn();
@@ -429,7 +443,14 @@ export function initQualiaPage() {
     settings.save();
   });
 
-  btnAudio.addEventListener('click', () => { setAudioMode(nextAudioMode()); });
+  btnAudio.addEventListener('click', () => {
+    setAudioMode(nextAudioMode()).catch(err => {
+      // User explicitly clicked the audio button — surface failures
+      // (mic permission denied, no input device) so they know why
+      // nothing happened. Auto-boot path silences this via its own catch.
+      alert(`Could not open microphone: ${err?.message || err}`);
+    });
+  });
   function nextAudioMode() {
     const i = AUDIO_MODES.indexOf(audioMode);
     return AUDIO_MODES[(i + 1) % AUDIO_MODES.length];
