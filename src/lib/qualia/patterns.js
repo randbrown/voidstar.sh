@@ -166,9 +166,9 @@ const FX_OPTS  = [
 // the lead. Variation across pool entries is intentionally small —
 // melody is where the random character should live.
 const DRUMS = [
-  's("<bd sd>/4").lpf(90).gain(.3).delay(.2)',
-  's("<bd sd>/4").lpf(110).gain(.3).delay(.2).room(.5)',
-  's("<bd ~ sd ~>/4").lpf(100).gain(.3).delay(.25)',
+  's("<bd sd>/4").lpf(500).gain(.8).delay(.2)',
+  's("<bd sd>/4").lpf(500).gain(.8).delay(.2)',
+  's("<bd ~ sd ~>/4").lpf(500).gain(.8).delay(.25)',
 ];
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
@@ -181,7 +181,7 @@ export function randomPattern() {
   const nMod   = pick(N_TRANSFORMS);
   const drums  = pick(DRUMS);
   const cps    = (0.65 + Math.random() * 0.55).toFixed(2);
-  const room   = (0.8 + Math.random() * 1.6).toFixed(1);
+  const room   = (0.4 + Math.random() * 0.6).toFixed(1);
   // Pick 2–3 distinct fx so each random pattern has its own colour.
   const fxPool = [...FX_OPTS];
   const fxN    = 2 + Math.floor(Math.random() * 2);
