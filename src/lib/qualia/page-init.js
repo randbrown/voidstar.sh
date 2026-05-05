@@ -35,11 +35,14 @@ const AUTO_PHASE_STYLES = ['chapters', 'alternate', 'random', 'hold'];
 // modes, then cycle picks the next quale and the new one starts phasing).
 const CYCLE_PERIODS = [0, 15, 30, 45];          // seconds
 const AUTO_CYCLE_STYLES = ['sequential', 'random'];
-// ASCII post-process modes. The button cycles through these:
-//   off:  ascii disabled (always)
-//   on:   ascii enabled (always)
+// "Glitch" post-process modes (shared by ascii / mosh / edge). The button
+// cycles through these:
+//   off:  glitch disabled (always)
+//   on:   glitch enabled (always); also: included in auto-phase roster
 //   blip: brief flash on hard kicks, auto-clears after BLIP_DURATION_MS
-//   flip: toggles ascii state on each hard kick (persists between hits)
+//   flip: toggles glitch state on each hard kick (persists between hits)
+// blip + flip stay reactive regardless of auto-phase rotation; only the
+// 'on' modes form the rotation roster.
 // Audio source modes. The button cycles through these:
 //   off:     no streams feed analysis (mic stopped, strudel ignored)
 //   mic:     mic only — strudel ignored even while playing
@@ -47,8 +50,9 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 //   mix:     mic + strudel both feed (user opts in; pick this when the
 //            mic is on a clean line — guitar interface, etc — so there's
 //            no acoustic feedback path back from speakers)
-const AUDIO_MODES = ['off', 'mic', 'strudel', 'mix'];
-const ASCII_MODES = ['off', 'on', 'blip', 'flip'];
+const AUDIO_MODES   = ['off', 'mic', 'strudel', 'mix'];
+const GLITCH_MODES  = ['off', 'on', 'blip', 'flip'];
+const GLITCH_KEYS   = ['ascii', 'mosh', 'edge'];
 const BLIP_DURATION_MS = 280;
 // Hard-kick detector — tuned for "occasional flare on sub hits", not every
 // kick or snare. Multiple gates must all pass for a fire:
@@ -179,10 +183,8 @@ export function initQualiaPage() {
     sparksOn:       overlay.getOption('sparks'),
     auraOn:         overlay.getOption('aura'),
     ripplesOn:      overlay.getOption('ripples'),
-    asciiMode,
-    moshOn:         overlay.getOption('mosh'),
+    glitchModes:    { ...glitchModes },
     moshConfig:     overlay.getMoshConfig(),
-    edgeOn:         overlay.getOption('edge'),
     edgeConfig:     overlay.getEdgeConfig(),
     autoPhaseSeconds,
     autoPhaseStyle,
@@ -207,19 +209,32 @@ export function initQualiaPage() {
   if (typeof stored.sparksOn    === 'boolean') overlay.setOption('sparks',   stored.sparksOn);
   if (typeof stored.auraOn      === 'boolean') overlay.setOption('aura',     stored.auraOn);
   if (typeof stored.ripplesOn   === 'boolean') overlay.setOption('ripples',  stored.ripplesOn);
-  // ASCII mode (multi-state). Migration: prior shape was a boolean.
-  let asciiMode;
-  if (typeof stored.asciiMode === 'string' && ASCII_MODES.includes(stored.asciiMode)) {
-    asciiMode = stored.asciiMode;
-  } else if (typeof stored.asciiMode === 'boolean') {
-    asciiMode = stored.asciiMode ? 'on' : 'off';
+  // Glitch modes (per-button mode for ascii / mosh / edge). Migrate any
+  // legacy stored.asciiMode / stored.moshOn / stored.edgeOn shape into the
+  // unified glitchModes object so users coming from an earlier build keep
+  // their toggles.
+  const glitchModes = { ascii: 'off', mosh: 'off', edge: 'off' };
+  if (stored.glitchModes && typeof stored.glitchModes === 'object') {
+    for (const g of GLITCH_KEYS) {
+      const m = stored.glitchModes[g];
+      if (typeof m === 'string' && GLITCH_MODES.includes(m)) glitchModes[g] = m;
+    }
   } else {
-    asciiMode = 'off';
+    if (typeof stored.asciiMode === 'string' && GLITCH_MODES.includes(stored.asciiMode)) {
+      glitchModes.ascii = stored.asciiMode;
+    } else if (typeof stored.asciiMode === 'boolean') {
+      glitchModes.ascii = stored.asciiMode ? 'on' : 'off';
+    }
+    if (typeof stored.moshOn === 'boolean') glitchModes.mosh = stored.moshOn ? 'on' : 'off';
+    if (typeof stored.edgeOn === 'boolean') glitchModes.edge = stored.edgeOn ? 'on' : 'off';
   }
-  // Sync the underlying overlay flag for static modes; reactive modes
-  // (blip / flip) start with ascii off and let the kick trigger flip it on.
-  overlay.setOption('ascii', asciiMode === 'on');
-  let blipExpiresAt = 0;
+  // Match overlay options to modes at boot time. Reactive modes (blip /
+  // flip) start with the glitch off and let the kick trigger flip it on.
+  // The mutex inside overlay.setOption means only the last 'on' glitch in
+  // iteration order ends up rendering — fine, since only one renders anyway.
+  for (const g of GLITCH_KEYS) overlay.setOption(g, glitchModes[g] === 'on');
+  // Per-glitch blip auto-clear timestamps (epoch ms; 0 = inactive).
+  const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0 };
 
   // Audio mode (multi-state). Migration: prior shape was `audioOn` boolean
   // (true = mic, false = off).
@@ -231,10 +246,10 @@ export function initQualiaPage() {
   } else {
     audioMode = 'off';
   }
-  if (typeof stored.moshOn      === 'boolean') overlay.setOption('mosh',     stored.moshOn);
-  if (stored.moshConfig)                       overlay.setMoshConfig(stored.moshConfig);
-  if (typeof stored.edgeOn      === 'boolean') overlay.setOption('edge',     stored.edgeOn);
-  if (stored.edgeConfig)                       overlay.setEdgeConfig(stored.edgeConfig);
+  // Mosh / edge config restore (overlay options themselves are derived
+  // from glitchModes above).
+  if (stored.moshConfig) overlay.setMoshConfig(stored.moshConfig);
+  if (stored.edgeConfig) overlay.setEdgeConfig(stored.edgeConfig);
 
   // ── Pose smoothing + thresholds restore ──────────────────────────────────
   let poseSmoothingValue = 0.5;
@@ -591,44 +606,74 @@ export function initQualiaPage() {
   wireOverlayToggle(btnSparks,  'sparks');
   wireOverlayToggle(btnAura,    'aura');
   wireOverlayToggle(btnRipples, 'ripples');
-  wireOverlayToggle(btnMosh,    'mosh');
-  wireOverlayToggle(btnEdge,    'edge');
 
-  // ASCII is multi-state (off / on / blip / flip). blip and flip react to
-  // hard kicks (see core.onFrame block below). Mode advance via click/key.
-  function refreshAsciiBtn() {
-    btnAscii.textContent = `ascii ${asciiMode}`;
-    btnAscii.classList.toggle('active', asciiMode !== 'off');
-    btnAscii.title = 'ASCII post-process (X) — off / on / blip / flip — blip + flip react to hard kicks';
+  // ── Glitches: ascii / mosh / edge share the same multi-state semantics ──
+  // (off / on / blip / flip). blip + flip react to hard kicks (see the
+  // core.onFrame handler below). 'on' is the only mode that participates
+  // in auto-phase rotation. Buttons cycle modes on click; the active
+  // class is bound to the MODE (not the overlay option) so a glitch in
+  // 'on' still reads as active even when auto-phase has temporarily
+  // switched the overlay onto a different roster member.
+  const btnByGlitch = { ascii: btnAscii, mosh: btnMosh, edge: btnEdge };
+  function refreshGlitchBtn(glitch) {
+    const btn = btnByGlitch[glitch];
+    if (!btn) return;
+    const mode = glitchModes[glitch];
+    btn.textContent = `${glitch} ${mode}`;
+    btn.classList.toggle('active', mode !== 'off');
+    btn.title = `${glitch} post-process — off / on / blip / flip — blip + flip react to hard kicks`;
   }
-  function setAsciiMode(mode) {
-    if (!ASCII_MODES.includes(mode)) return;
-    asciiMode = mode;
-    blipExpiresAt = 0;
-    // Sync underlying flag: static modes set directly; reactive modes
-    // start with ascii off (the kick trigger flips it on).
-    overlay.setOption('ascii', mode === 'on');
-    refreshAsciiBtn();
+  function setGlitchMode(glitch, mode) {
+    if (!GLITCH_MODES.includes(mode)) return;
+    if (!GLITCH_KEYS.includes(glitch)) return;
+    glitchModes[glitch] = mode;
+    blipExpiresAt[glitch] = 0;
+    // Sync overlay option: 'on' shows, reactive modes start hidden and
+    // are toggled by the kick handler. 'off' hides. The overlay's
+    // internal ascii/mosh/edge mutex still keeps only one rendering at
+    // a time when the user has multiple set to 'on' — auto-phase rotation
+    // is what moves between them in that case.
+    overlay.setOption(glitch, mode === 'on');
+    refreshGlitchBtn(glitch);
     syncPostBtns();
+    // Re-sync the phase timer if a glitch's mode change affects the chapters
+    // boundary (active roster shifted). Reuses the existing chapter-reset
+    // path below by deferring to the next tick.
     settings.save();
   }
-  btnAscii.addEventListener('click', () => {
-    const i = ASCII_MODES.indexOf(asciiMode);
-    setAsciiMode(ASCII_MODES[(i + 1) % ASCII_MODES.length]);
-  });
-
-  // ASCII / mosh / edge are mutually exclusive in the overlay — sync the
-  // buttons + their associated tunable cards so the UI matches state.
-  function syncPostBtns() {
-    btnAscii.classList.toggle('active', asciiMode !== 'off');
-    btnMosh.classList.toggle('active',  overlay.getOption('mosh'));
-    btnEdge.classList.toggle('active',  overlay.getOption('edge'));
-    moshCard.style.display = overlay.getOption('mosh') ? '' : 'none';
-    if (edgeCard) edgeCard.style.display = overlay.getOption('edge') ? '' : 'none';
+  function cycleGlitchMode(glitch) {
+    const i = GLITCH_MODES.indexOf(glitchModes[glitch]);
+    setGlitchMode(glitch, GLITCH_MODES[(i + 1) % GLITCH_MODES.length]);
   }
-  btnMosh.addEventListener('click', syncPostBtns);
-  btnEdge.addEventListener('click', syncPostBtns);
-  refreshAsciiBtn();
+  btnAscii.addEventListener('click', () => cycleGlitchMode('ascii'));
+  btnMosh.addEventListener('click',  () => cycleGlitchMode('mosh'));
+  btnEdge.addEventListener('click',  () => cycleGlitchMode('edge'));
+
+  // Sync each glitch button + its associated tunable card with current
+  // state. Tunable cards are shown when the glitch is in any non-'off'
+  // mode so the user can dial the look while it's (or it'll be) live.
+  function syncPostBtns() {
+    for (const g of GLITCH_KEYS) refreshGlitchBtn(g);
+    if (moshCard) moshCard.style.display = glitchModes.mosh !== 'off' ? '' : 'none';
+    if (edgeCard) edgeCard.style.display = glitchModes.edge !== 'off' ? '' : 'none';
+  }
+
+  // Roster of glitches included in auto-phase rotation. Computed live from
+  // current modes — only 'on' glitches participate; off / blip / flip are
+  // skipped (per spec: blip + flip stay reactive on their own; off stays off).
+  function getGlitchRoster() {
+    return GLITCH_KEYS.filter(g => glitchModes[g] === 'on');
+  }
+  // Apply a rotation choice. `target` is either a glitch key or null (for
+  // a no-glitch chapter). Only roster members get their overlay toggled —
+  // we never touch glitches outside the roster, so blip / flip stay free
+  // to do their kick-driven thing.
+  function applyGlitchRotation(target) {
+    const roster = getGlitchRoster();
+    for (const g of roster) {
+      overlay.setOption(g, g === target);
+    }
+  }
 
   // Mosh slider wiring — every input writes back into the overlay's
   // moshConfig. The overlay reads its own state each frame so changes
@@ -798,23 +843,41 @@ export function initQualiaPage() {
     if (!steps || !steps.length) return;
     autoPhaseStepCount++;
     const step = steps[autoPhaseStepCount % steps.length];
-    // ASCII scheduling. Step granularity == one phase-step, so chapters
-    // resets the ASCII pass after a full pass through the steps. Reactive
-    // ASCII modes (blip/flip) are user-driven kick reactivity — phase
-    // styles only modulate ascii when the user has it in a static mode.
-    if (asciiMode === 'on' || asciiMode === 'off') {
+    // Glitch scheduling. Roster = glitches whose mode is 'on'; off / blip /
+    // flip are skipped so they keep doing their own thing. Step granularity
+    // == one phase-step. With one roster member this falls back to the old
+    // single-glitch on/off chapters behavior; with multiple, each chapter
+    // (and alternate / random tick) round-robins between them.
+    const roster = getGlitchRoster();
+    if (roster.length > 0) {
+      const pool = ['off', ...roster];   // 'off' = no glitch chapter
       switch (autoPhaseStyle) {
         case 'chapters': {
-          const pass = Math.floor(autoPhaseStepCount / steps.length) % 2;
-          setAsciiMode(pass === 1 ? 'on' : 'off');
+          // One full pass through the phase steps = one chapter. Alternate
+          // between off-chapters and roster-chapters; the roster-chapter
+          // index advances each time we land on one (so chapters cycle
+          // through all roster members over time).
+          const pass = Math.floor(autoPhaseStepCount / steps.length);
+          if (pass % 2 === 0) {
+            applyGlitchRotation(null);
+          } else {
+            const rIdx = ((pass - 1) >> 1) % roster.length;
+            applyGlitchRotation(roster[rIdx]);
+          }
           break;
         }
-        case 'alternate':
-          setAsciiMode(asciiMode === 'on' ? 'off' : 'on');
+        case 'alternate': {
+          // Each step bumps to the next entry in [off, ...roster].
+          const idx = autoPhaseStepCount % pool.length;
+          applyGlitchRotation(pool[idx] === 'off' ? null : pool[idx]);
           break;
-        case 'random':
-          setAsciiMode(Math.random() < 0.3 ? 'on' : 'off');
+        }
+        case 'random': {
+          // 30% off, otherwise pick a random roster member.
+          if (Math.random() < 0.3) applyGlitchRotation(null);
+          else applyGlitchRotation(roster[(Math.random() * roster.length) | 0]);
           break;
+        }
         case 'hold':
         default: break;
       }
@@ -849,11 +912,10 @@ export function initQualiaPage() {
     if (autoPhaseSeconds > 0 && getActivePhaseSteps()) {
       autoPhaseStartMs = performance.now();
       autoPhaseStepCount = 0;
-      // Reset ascii to the start of a chapters pass — but only if the
-      // user is in a static ascii mode. blip/flip remain untouched.
-      if (autoPhaseStyle === 'chapters' && (asciiMode === 'on' || asciiMode === 'off')) {
-        setAsciiMode('off');
-      }
+      // Reset roster glitches to off at the start of a chapters pass so
+      // the first chapter is the off-chapter. Only roster ('on') glitches
+      // are touched — blip / flip stay reactive on their own.
+      if (autoPhaseStyle === 'chapters') applyGlitchRotation(null);
       autoPhaseTickT = setInterval(tickPhase, 250);
     }
   }
@@ -876,9 +938,8 @@ export function initQualiaPage() {
   phaseStyleSelect.addEventListener('change', () => {
     autoPhaseStyle = phaseStyleSelect.value;
     autoPhaseStepCount = 0;
-    if (autoPhaseSeconds > 0 && autoPhaseStyle === 'chapters'
-        && (asciiMode === 'on' || asciiMode === 'off')) {
-      setAsciiMode('off');
+    if (autoPhaseSeconds > 0 && autoPhaseStyle === 'chapters') {
+      applyGlitchRotation(null);
     }
     settings.save();
   });
@@ -1152,20 +1213,27 @@ export function initQualiaPage() {
     prevBeat = a.beat.pulse; prevSnare = a.mids.pulse; prevHat = a.highs.pulse;
   });
 
-  // ── ASCII reactive trigger ────────────────────────────────────────────────
-  // Hard-kick detector for blip + flip ascii modes. Fires on a rising-edge
-  // beat pulse whose bass band is ≥85% of a slowly-decaying rolling peak,
-  // with an absolute floor so quiet sections don't fire on weak hits. The
-  // peak decays per-frame (~6s half-life @ 60fps) so a quiet stretch will
-  // re-calibrate "powerful" to recent context.
+  // ── Glitch reactive trigger ──────────────────────────────────────────────
+  // Hard-kick detector for blip + flip glitch modes (across ascii / mosh /
+  // edge). Fires on a rising-edge beat pulse whose bass band is ≥85% of a
+  // slowly-decaying rolling peak, with an absolute floor so quiet sections
+  // don't fire on weak hits. The peak decays per-frame (~6s half-life @ 60
+  // fps) so a quiet stretch re-calibrates "powerful" to recent context.
+  //
+  // When multiple glitches are reactive, each kick picks one of them at
+  // random — the overlay's own ascii/mosh/edge mutex enforces only one
+  // visible at a time anyway, so picking one cleanly avoids last-iteration-
+  // wins flicker.
   let bassPeakEma = 0;
   let prevReactiveBeat = 0;
   let lastHardKickAt = 0;
   core.onFrame((field) => {
-    if (asciiMode !== 'blip' && asciiMode !== 'flip') {
+    const reactive = GLITCH_KEYS.filter(g =>
+      glitchModes[g] === 'blip' || glitchModes[g] === 'flip');
+    if (reactive.length === 0) {
       // Decay even when inactive so the EMA isn't stale on next activation.
       bassPeakEma *= HARD_KICK_PEAK_DECAY;
-      blipExpiresAt = 0;
+      for (const g of GLITCH_KEYS) blipExpiresAt[g] = 0;
       return;
     }
     const a = field.audio;
@@ -1178,8 +1246,6 @@ export function initQualiaPage() {
     prevReactiveBeat = beat;
     bassPeakEma *= HARD_KICK_PEAK_DECAY;
     if (rising) {
-      // Cooldown is the cheapest gate, so check it first to short-circuit
-      // and avoid raising bassPeakEma during the suppression window.
       const cooledDown = (now - lastHardKickAt) >= HARD_KICK_COOLDOWN_MS;
       const isLoud      = bass >= HARD_KICK_FLOOR;
       const isPeakLevel = bass >= bassPeakEma * HARD_KICK_RATIO;
@@ -1187,19 +1253,21 @@ export function initQualiaPage() {
       if (bass > bassPeakEma) bassPeakEma = bass;
       if (cooledDown && isLoud && isPeakLevel && isSubBass) {
         lastHardKickAt = now;
-        if (asciiMode === 'blip') {
-          overlay.setOption('ascii', true);
-          blipExpiresAt = now + BLIP_DURATION_MS;
+        const winner = reactive[(Math.random() * reactive.length) | 0];
+        if (glitchModes[winner] === 'blip') {
+          overlay.setOption(winner, true);
+          blipExpiresAt[winner] = now + BLIP_DURATION_MS;
         } else { // flip
-          overlay.setOption('ascii', !overlay.getOption('ascii'));
+          overlay.setOption(winner, !overlay.getOption(winner));
         }
       }
     }
-    // Auto-clear blip after its window. Re-arming during the window
-    // (handled above) extends the on-state to the new expiry.
-    if (asciiMode === 'blip' && blipExpiresAt && now >= blipExpiresAt) {
-      overlay.setOption('ascii', false);
-      blipExpiresAt = 0;
+    // Auto-clear any active blips whose windows have elapsed.
+    for (const g of reactive) {
+      if (glitchModes[g] === 'blip' && blipExpiresAt[g] && now >= blipExpiresAt[g]) {
+        overlay.setOption(g, false);
+        blipExpiresAt[g] = 0;
+      }
     }
   });
 
