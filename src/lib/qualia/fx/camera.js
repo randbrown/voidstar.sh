@@ -11,7 +11,7 @@
 // Pose isn't read here — the overlay layer paints the skeleton on top
 // like it does for every other quale.
 
-import { getVideoEl, getRotation, getMirror } from '../video.js';
+import { getVideoEl, getRotation, applyPreviewTransform } from '../video.js';
 import { scaleAudio } from '../field.js';
 
 /** @type {import('../types.js').QFXModule} */
@@ -87,16 +87,7 @@ export default {
       const drawH = eh * scale;
 
       ctx.save();
-      ctx.translate(W / 2, H / 2);
-      // Match the CSS preview transform `scaleX(-1) rotate(N)`. In matrix-
-      // multiplied form that's S·R, applied to a point as: rotate first,
-      // then scale. Canvas API multiplies each call on the RIGHT, so to
-      // build the matrix T·S·R (where the point gets R then S then T)
-      // we have to call scale BEFORE rotate. The opposite order builds
-      // T·R·S — point gets S then R — which is exactly 180° rotated from
-      // the preview when both rotation and mirror are active.
-      if (getMirror()) ctx.scale(-1, 1);
-      if (rot !== 0)   ctx.rotate((rot * Math.PI) / 180);
+      applyPreviewTransform(ctx, W, H);
       ctx.drawImage(video, -vw * scale / 2, -vh * scale / 2, vw * scale, vh * scale);
       ctx.restore();
 

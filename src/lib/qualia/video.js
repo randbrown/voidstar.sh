@@ -47,6 +47,20 @@ function applyTransform() {
 }
 
 /**
+ * Apply the same transform as the CSS preview (`scaleX(-1) rotate(N)`) to a
+ * 2D canvas context, centered on (W/2, H/2). Caller must `ctx.save()` /
+ * `ctx.restore()` around their draw. Canvas multiplies right-side, so to
+ * build the matrix T·S·R (apply R first, then S, then T to a point) we call
+ * scale BEFORE rotate; the opposite order builds T·R·S which is rotated 180°
+ * from the preview when both transforms are active.
+ */
+export function applyPreviewTransform(ctx, W, H) {
+  ctx.translate(W / 2, H / 2);
+  if (mirrorMode) ctx.scale(-1, 1);
+  if (cameraRotation !== 0) ctx.rotate((cameraRotation * Math.PI) / 180);
+}
+
+/**
  * Map a [0,1]² landmark to canvas pixel coords with rotation + mirror
  * applied — in that order. Matches CSS `scaleX(-1) rotate(N)`.
  *
