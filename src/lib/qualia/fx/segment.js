@@ -13,9 +13,8 @@
 
 import { getVideoEl, getRotation, applyPreviewTransform } from '../video.js';
 import { scaleAudio } from '../field.js';
+import { loadVision } from '../vision-loader.js';
 
-const SEG_BUNDLE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs';
-const SEG_WASM   = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
 const SEG_MODEL  = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite';
 
 // selfie_multiclass class indices.
@@ -27,20 +26,6 @@ const PALETTES = {
   aurora:    [[5,5,13,0],   [74,222,128,235], [34,211,238,235], [139,92,246,235],  [244,114,182,235], [251,191,36,235]],
   mono:      [[5,5,13,0],   [220,225,240,235],[220,225,240,235],[220,225,240,235], [220,225,240,235], [220,225,240,235]],
 };
-
-// Module-level singleton — both pose.js and segment.js can share one
-// FilesetResolver if loaded together. Kept private to this module for
-// now; promoting to a shared `vision-loader.js` helper is a future tidy.
-let _visionPromise = null;
-async function loadVision() {
-  if (_visionPromise) return _visionPromise;
-  _visionPromise = (async () => {
-    const mod = await import(/* @vite-ignore */ SEG_BUNDLE);
-    const fileset = await mod.FilesetResolver.forVisionTasks(SEG_WASM);
-    return { mod, fileset };
-  })();
-  return _visionPromise;
-}
 
 const rgba = (c) => `rgba(${c[0]},${c[1]},${c[2]},${(c[3] / 255).toFixed(3)})`;
 

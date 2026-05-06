@@ -10,9 +10,8 @@
 //      `start({ source: 'camera', deviceId })` / `stop()`.
 
 import { emptyPoseFrame } from './field.js';
+import { loadVision } from './vision-loader.js';
 
-const POSE_BUNDLE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs';
-const POSE_WASM   = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
 const POSE_MODEL  = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
 
 // MediaPipe landmark indices we care about. The full list is in MP docs;
@@ -101,16 +100,16 @@ export function createPose() {
   let detectSource = null; // 'camera' | 'canvas' | null
   let detectCanvas = null; // for source === 'canvas' (viz mode)
 
-  async function loadVision() {
+  async function ensureVision() {
     if (vision) return vision;
-    const mod = await import(/* @vite-ignore */ POSE_BUNDLE);
+    const { mod, fileset } = await loadVision();
     PoseLandmarkerCls = mod.PoseLandmarker;
-    vision = await mod.FilesetResolver.forVisionTasks(POSE_WASM);
+    vision = fileset;
     return vision;
   }
 
   async function buildLandmarker() {
-    if (!vision) await loadVision();
+    if (!vision) await ensureVision();
     if (landmarker) { try { landmarker.close(); } catch {} landmarker = null; }
     landmarker = await PoseLandmarkerCls.createFromOptions(vision, {
       baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'GPU' },
@@ -153,7 +152,7 @@ export function createPose() {
   }
 
   async function startCamera({ deviceId, video }) {
-    await loadVision();
+    await ensureVision();
     if (!landmarker) await buildLandmarker();
 
     videoEl = video;
@@ -199,7 +198,7 @@ export function createPose() {
 
   /** Start running PoseLandmarker against an arbitrary canvas (for "viz" mode). */
   async function startCanvasDetection(canvas) {
-    await loadVision();
+    await ensureVision();
     if (!landmarker) await buildLandmarker();
     detectCanvas = canvas;
     detectSource = 'canvas';
