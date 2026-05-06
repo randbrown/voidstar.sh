@@ -471,8 +471,9 @@
       <span class="experiment-tag">// pluggable harness</span>
     </div>
     <div id="topbar-corner">
-      <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (D)">strudel</button>
+      <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
       <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
+      <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen (X)">fullscreen</button>
     </div>
   </div>
   <div id="topbar-right">
@@ -483,8 +484,8 @@
     <select id="mic-select" class="ctrl-btn" title="Choose microphone" style="display:none;"></select>
     <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
     <button class="ctrl-btn active" id="btn-camera" title="Camera size (C)" style="display:none;">camera</button>
-    <button class="ctrl-btn" id="btn-cam-rotate" title="Rotate camera (O / 0)" style="display:none;">rot 0°</button>
-    <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (I)" style="display:none;">mirror</button>
+    <button class="ctrl-btn" id="btn-cam-rotate" title="Rotate camera (R)" style="display:none;">rot 0°</button>
+    <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (M)" style="display:none;">mirror</button>
     <select id="pose-source" class="ctrl-btn" title="Pose source (P)">
       <option value="off">pose off</option>
       <option value="camera">pose cam</option>
@@ -499,9 +500,9 @@
     </select>
     <button class="ctrl-btn active" id="btn-skeleton" title="Skeleton overlay (J)">skeleton</button>
     <button class="ctrl-btn active" id="btn-sparks"   title="Beat sparks (F)">sparks</button>
-    <button class="ctrl-btn active" id="btn-aura"     title="Resonance aura (A)">aura</button>
+    <button class="ctrl-btn active" id="btn-aura"     title="Resonance aura (G)">aura</button>
     <button class="ctrl-btn active" id="btn-ripples"  title="Beat ripples (B)">ripples</button>
-    <button class="ctrl-btn"        id="btn-ascii"    title="ASCII post (X) — off / on / blip / flip">ascii</button>
+    <button class="ctrl-btn"        id="btn-ascii"    title="ASCII post (T) — off / on / blip / flip">ascii</button>
     <button class="ctrl-btn"        id="btn-mosh"     title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
     <button class="ctrl-btn"        id="btn-edge"     title="Edge-detect post (E) — off / on / blip / flip">edge</button>
     <button class="ctrl-btn"        id="btn-phase"    title="Auto-phase modes within active quale (L)">phase</button>
@@ -516,7 +517,7 @@
       <option value="sequential">sequential</option>
       <option value="random">random</option>
     </select>
-    <button class="ctrl-btn" id="btn-audio" title="Mic audio (M)">audio</button>
+    <button class="ctrl-btn" id="btn-audio" title="Mic audio (A)">audio</button>
     <button class="ctrl-btn" id="btn-cursor" title="Cursor trail (cycle modes)">cursor off</button>
     <button class="ctrl-btn" id="btn-pause" title="Pause (Space)">pause</button>
     <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
@@ -540,21 +541,22 @@
   <span><kbd>V</kbd> next fx</span>
   <span><kbd>L</kbd> phase</span>
   <span><kbd>N</kbd> cycle</span>
-  <span><kbd>X</kbd> ascii</span>
+  <span><kbd>T</kbd> ascii</span>
   <span><kbd>K</kbd> mosh</span>
   <span><kbd>E</kbd> edge</span>
   <span><kbd>B</kbd> ripples</span>
   <span><kbd>J</kbd> skeleton</span>
   <span><kbd>F</kbd> sparks</span>
-  <span><kbd>A</kbd> aura</span>
+  <span><kbd>G</kbd> aura</span>
   <span><kbd>P</kbd> pose src</span>
   <span><kbd>C</kbd> cam size</span>
-  <span><kbd>O</kbd>/<kbd>0</kbd> rotate</span>
-  <span><kbd>I</kbd> mirror</span>
-  <span><kbd>M</kbd> audio</span>
-  <span><kbd>D</kbd> strudel</span>
+  <span><kbd>R</kbd> rotate</span>
+  <span><kbd>M</kbd> mirror</span>
+  <span><kbd>A</kbd> audio</span>
+  <span><kbd>S</kbd> strudel</span>
   <span><kbd>Space</kbd> pause</span>
   <span><kbd>Z</kbd> zen</span>
+  <span><kbd>X</kbd> fullscreen</span>
 </div>
 
 <!-- Bottom-left HUD: audio panel + dynamically-built fx params card. -->
@@ -710,7 +712,7 @@
     <button class="ctrl-btn" id="btn-strudel-play"    title="Evaluate / play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
     <button class="ctrl-btn" id="btn-strudel-newline" title="Insert newline at cursor (Android touch keyboards drop the Enter event)">↵</button>
-    <button class="ctrl-btn" id="btn-strudel-close"   title="Close (D)">×</button>
+    <button class="ctrl-btn" id="btn-strudel-close"   title="Close (S)">×</button>
   </div>
   <div id="strudel-tabs">
     <button class="sp-tab active" data-tab="editor">editor</button>

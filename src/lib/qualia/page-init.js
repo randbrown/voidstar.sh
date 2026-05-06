@@ -96,6 +96,7 @@ export function initQualiaPage() {
   const btnAudio   = document.getElementById('btn-audio');
   const btnPause   = document.getElementById('btn-pause');
   const btnZen     = document.getElementById('btn-zen');
+  const btnFullscreen = document.getElementById('btn-fullscreen');
   const btnCamera  = document.getElementById('btn-camera');
   const btnCamRotate = document.getElementById('btn-cam-rotate');
   const btnCamMirror = document.getElementById('btn-cam-mirror');
@@ -424,7 +425,7 @@ export function initQualiaPage() {
       // that we're listening to the room. Cyan (active) for strudel-only.
       btnAudio.classList.add(audioMode === 'mic' || audioMode === 'mix' ? 'active-audio' : 'active');
     }
-    btnAudio.title = 'Audio source (M) — off / mic / strudel / mix';
+    btnAudio.title = 'Audio source (A) — off / mic / strudel / mix';
     // Audio panel visibility tracks "is anything driving reactivity" — open
     // when mode != off.
     audioCard.style.display = audioMode === 'off' ? 'none' : '';
@@ -748,6 +749,27 @@ export function initQualiaPage() {
   }
   btnZen.addEventListener('click', () => setZen(!core.isZen()));
   zenHandle.addEventListener('click', () => setZen(false));
+
+  // Browser fullscreen — hides chrome (URL bar, tabs) via the Fullscreen API.
+  // Independent of zen mode (which only hides our in-page topbar/HUD), so the
+  // two can compose: zen + fullscreen = no chrome anywhere.
+  function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+  function setFullscreen(on) {
+    if (on && !isFullscreen()) {
+      const el = document.documentElement;
+      (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el)?.catch?.(() => {});
+    } else if (!on && isFullscreen()) {
+      (document.exitFullscreen || document.webkitExitFullscreen)?.call(document)?.catch?.(() => {});
+    }
+  }
+  function refreshFullscreenBtn() {
+    btnFullscreen.classList.toggle('active', isFullscreen());
+  }
+  btnFullscreen.addEventListener('click', () => setFullscreen(!isFullscreen()));
+  document.addEventListener('fullscreenchange', refreshFullscreenBtn);
+  document.addEventListener('webkitfullscreenchange', refreshFullscreenBtn);
 
   // ── Reset fx params ───────────────────────────────────────────────────────
   fxResetBtn.addEventListener('click', () => core.applyFxPreset('default'));
@@ -1157,8 +1179,8 @@ export function initQualiaPage() {
         core.setActive(ids[(i + 1) % ids.length]);
         break;
       }
-      case 'm': btnAudio.click(); break;
-      case 'd': document.getElementById('btn-strudel').click(); break;
+      case 'a': btnAudio.click(); break;
+      case 's': document.getElementById('btn-strudel').click(); break;
       case 'p': {
         const opts = ['off','camera'];
         const i = opts.indexOf(poseSelect.value);
@@ -1167,18 +1189,19 @@ export function initQualiaPage() {
         break;
       }
       case 'c': if (btnCamera.style.display !== 'none') btnCamera.click(); break;
-      case 'o': case '0': if (btnCamRotate.style.display !== 'none') btnCamRotate.click(); break;
-      case 'i': if (btnCamMirror.style.display !== 'none') btnCamMirror.click(); break;
+      case 'r': if (btnCamRotate.style.display !== 'none') btnCamRotate.click(); break;
+      case 'm': if (btnCamMirror.style.display !== 'none') btnCamMirror.click(); break;
       case 'j': btnSkel.click(); break;
       case 'f': btnSparks.click(); break;
-      case 'a': btnAura.click(); break;
+      case 'g': btnAura.click(); break;
       case 'b': btnRipples.click(); break;
-      case 'x': btnAscii.click(); break;
+      case 't': btnAscii.click(); break;
       case 'k': btnMosh.click(); break;
       case 'e': btnEdge.click(); break;
       case 'l': btnPhase.click(); break;
       case 'n': btnCycle.click(); break;
       case 'z': setZen(!core.isZen()); break;
+      case 'x': btnFullscreen.click(); break;
       case ' ': btnPause.click(); e.preventDefault(); break;
     }
   });
