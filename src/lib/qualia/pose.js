@@ -198,32 +198,49 @@ export function createPose() {
     }
     videoEl.srcObject = stream;
     // Reveal the preview BEFORE awaiting metadata. Android Chrome won't
-    // fire `loadedmetadata` (or even start the underlying decode) while
-    // the element is display:none — that's the path that used to deadlock
-    // until the 3s safety net tripped.
+    // fire `loadedmetadata` (or start the underlying decode) while the
+    // element is display:none. We add the class first so layout has a
+    // visible box for the decoder to attach to.
     videoEl.classList.add('visible');
-    // Kick off play() concurrently. iOS Safari needs the play call to
-    // progress past HAVE_NOTHING; we don't await here because some
-    // browsers resolve play() only after metadata.
-    const playPromise = videoEl.play().catch(() => {});
+    // Kick off play() but don't await it — on some Android builds play()
+    // only resolves after metadata, while metadata in turn waits for
+    // play() to be called, deadlocking unless we let both run loose.
+    videoEl.play().catch(() => {});
+    // Best-effort wait for metadata. We DON'T throw on timeout anymore:
+    // getUserMedia already confirmed the stream is alive, so a slow
+    // metadata event just means frames haven't been decoded yet. The
+    // detect loop gates on readyState, so it'll pick up automatically
+    // once the element catches up. Throwing here used to surface an
+    // error dialog on devices where the lens just needed a couple
+    // extra seconds to warm up — much worse UX than just rendering an
+    // empty preview that fills in a beat later.
     if (videoEl.readyState < 1) {
-      // 5-second safety net — generous because cold-start on a back lens
-      // (autofocus + sensor warm-up) routinely takes 2-3s on mid-range
-      // Android. Surfaces a clear error instead of hanging if the stream
-      // truly never arrives.
-      await Promise.race([
-        new Promise(r => videoEl.addEventListener('loadedmetadata', r, { once: true })),
-        new Promise((_, reject) => setTimeout(
-          () => reject(new Error('Camera metadata timeout (5s) — try toggling camera off and on')),
-          5000
-        )),
-      ]).catch(err => {
-        console.error('[qualia] camera metadata never loaded:', err);
-        videoEl.classList.remove('visible');
-        throw err;
+      await new Promise(resolve => {
+        let done = false;
+        const finish = () => { if (done) return; done = true; cleanup(); resolve(); };
+        const onReady = () => finish();
+        // Listen for several events — different browsers reach
+        // HAVE_METADATA via different signals, especially on mobile
+        // where loadeddata sometimes arrives before loadedmetadata.
+        const events = ['loadedmetadata', 'loadeddata', 'canplay', 'playing'];
+        events.forEach(e => videoEl.addEventListener(e, onReady, { once: true }));
+        // Poll readyState as a fallback: some Android builds drop the
+        // events when the element transitions display:none → block
+        // while data is arriving, but readyState updates correctly.
+        const poll = setInterval(() => { if (videoEl.readyState >= 1) finish(); }, 120);
+        const timer = setTimeout(() => {
+          if (videoEl.readyState < 1) {
+            console.warn('[qualia] camera metadata still pending after 8s — preview will fill in once frames arrive');
+          }
+          finish();
+        }, 8000);
+        function cleanup() {
+          events.forEach(e => videoEl.removeEventListener(e, onReady));
+          clearInterval(poll);
+          clearTimeout(timer);
+        }
       });
     }
-    await playPromise;
     detectSource = 'camera';
     if (!detectLoopStarted) startDetectLoop();
     activeTrack = stream.getVideoTracks()[0] || null;

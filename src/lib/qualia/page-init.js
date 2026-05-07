@@ -430,6 +430,38 @@ export function initQualiaPage() {
     });
   });
 
+  // ── Reset-all (escape hatch for stuck state) ─────────────────────────────
+  // Tucked into the diagnostics card so it's not in the casual-user flow,
+  // but reachable when something's wedged. Wipes every voidstar.qualia.*
+  // localStorage key, every CacheStorage cache (the SW + any Strudel
+  // off-main-thread caches), and unregisters the service worker — then
+  // hard-reloads. Effectively a factory reset for the qualia tab.
+  document.getElementById('btn-reset-all')?.addEventListener('click', async (ev) => {
+    // Stop the click bubbling to the qp-head data-toggle handler so the
+    // card doesn't snap shut underneath the confirm dialog.
+    ev.stopPropagation();
+    const ok = confirm('Reset qualia: clear all settings + cached assets and reload?');
+    if (!ok) return;
+    try {
+      for (const k of Object.keys(localStorage)) {
+        if (k.startsWith('voidstar.qualia')) localStorage.removeItem(k);
+      }
+    } catch {}
+    try {
+      if ('caches' in window) {
+        const names = await caches.keys();
+        await Promise.all(names.map(n => caches.delete(n)));
+      }
+    } catch {}
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+    } catch {}
+    location.reload();
+  });
+
   // ── Topbar group popovers ────────────────────────────────────────────────
   // Each `.qg-group` is a trigger button + a popover holding the original
   // controls (camera / pose / layers / post / auto). The popover shows on
