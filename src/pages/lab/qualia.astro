@@ -40,9 +40,10 @@
     }
     /* Canvases that QualiaCore creates inside #qualia-host inherit fullscreen
        fixed positioning. mix-blend-mode:screen lets near-black fill reveal
-       Hydra underneath. */
+       Hydra underneath. 100dvh tracks the dynamic viewport (handles the
+       Chrome URL bar collapse on Android without leaving a black band). */
     #qualia-host > canvas {
-      position: fixed; inset: 0; width: 100vw; height: 100vh; display: block;
+      position: fixed; inset: 0; width: 100vw; height: 100dvh; display: block;
       z-index: 2; mix-blend-mode: screen;
     }
   </style>
@@ -75,13 +76,26 @@
       opacity: 0.78; z-index: 10;
       transform: scaleX(-1);
       transition: opacity 0.2s, width 0.3s;
+      /* Touch handlers (tap / double-tap / long-press / drag) live in
+         page-init.js. Disabling default browser touch actions on the
+         element lets the JS handler see horizontal/vertical movement
+         without the browser hijacking it for native scroll/zoom. */
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
     }
+    /* When the user drags the preview around, we suspend the size CSS
+       transition — without this the smooth size transition fights with
+       the per-frame top/left updates and the element lags behind the
+       finger. */
+    #video.dragging { transition: opacity 0.2s; cursor: grabbing; }
     #video.visible { display: block; }
     #video.visible.hidden     { opacity: 0; pointer-events: none; }
     #video.visible.size-large { width: 420px; }
     #video.visible.size-full {
       top: 0; left: 0; right: 0; bottom: 0;
-      width: 100vw; height: 100vh;
+      width: 100vw; height: 100dvh;
       opacity: 0.22; border-radius: 0; border: none;
       object-fit: contain; background: black;
     }
@@ -153,6 +167,49 @@
     }
     select.ctrl-btn option { background: var(--surface); color: var(--text); }
 
+    /* Topbar group popovers — each `.qg-group` owns a trigger button + a
+       hidden popover containing the original buttons unchanged. Click the
+       trigger to open; click outside to close; click another trigger to
+       swap. The trigger gets a dot on its caret when any descendant
+       button is active so users can scan group state at a glance. */
+    .qg-group { position: relative; display: inline-flex; }
+    .qg-trigger { display: inline-flex; align-items: center; gap: 0.25rem; }
+    .qg-trigger .qg-caret {
+      font-size: 0.7rem; opacity: 0.65; line-height: 1;
+      transition: transform 0.15s ease;
+    }
+    .qg-trigger[aria-expanded="true"] {
+      border-color: var(--accent); color: var(--accent);
+    }
+    .qg-trigger[aria-expanded="true"] .qg-caret { transform: rotate(180deg); }
+    /* Active dot — a tiny pink pip on the trigger when any child button
+       has .active or .active-audio. Same width on/off so toggles inside
+       the popover don't reflow the topbar. */
+    .qg-trigger.qg-has-active::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--pink); margin-right: 0.35rem;
+      box-shadow: 0 0 6px var(--pink);
+    }
+    .qg-popover {
+      position: absolute; top: calc(100% + 0.35rem); left: 0;
+      z-index: 30;
+      display: none; flex-direction: row; flex-wrap: wrap;
+      gap: 0.4rem;
+      padding: 0.5rem;
+      background: var(--surface); backdrop-filter: blur(10px);
+      border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 12px 28px rgba(0,0,0,0.45);
+      min-width: max-content;
+      max-width: min(92vw, 520px);
+      max-height: calc(100dvh - var(--topbar-h, 4.5rem) - 1rem);
+      overflow: auto;
+    }
+    .qg-group.open > .qg-popover { display: flex; }
+    /* On narrow viewports the popover may overflow the right edge of the
+       screen. page-init.js flips this class to pin it to the trigger's
+       right edge instead of its left edge. */
+    .qg-popover.right-aligned { left: auto; right: 0; }
+
     #zen-handle {
       position: fixed; top: 0; right: 1rem; z-index: 25;
       width: 44px; height: 44px;
@@ -200,11 +257,28 @@
     .start-btn.alt:hover { border-color: var(--cyan); color: var(--cyan); box-shadow: none; }
 
     /* Param panel — bottom-left HUD that builds itself from the active fx's
-       schema. Audio panel is a sibling row above it. */
+       schema. Audio panel is a sibling row above it. The stack is height-
+       capped to (viewport − topbar − margin) and scrolls internally so that
+       expanding several cards never lets them slide under the fixed topbar.
+       --topbar-h is exposed by page-init.js so this stays in sync with
+       however tall the dynamic column-flex topbar happens to be. */
     #panel-stack {
-      position: fixed; bottom: 1.25rem; left: 1.25rem; z-index: 15;
+      position: fixed;
+      bottom: max(1.25rem, env(safe-area-inset-bottom));
+      left:   max(1.25rem, env(safe-area-inset-left));
+      z-index: 15;
       display: flex; flex-direction: column-reverse; gap: 0.5rem;
       max-width: min(94vw, 340px);
+      max-height: calc(100dvh - var(--topbar-h, 4.5rem) - 1.5rem);
+      overflow-y: auto; overflow-x: hidden;
+      scrollbar-width: thin;
+      /* Touch scrolling inside the stack should not bubble up and trigger
+         our canvas swipe-to-cycle gesture. */
+      overscroll-behavior: contain;
+    }
+    #panel-stack::-webkit-scrollbar { width: 6px; }
+    #panel-stack::-webkit-scrollbar-thumb {
+      background: var(--border); border-radius: 3px;
     }
     .qp-card {
       background: var(--surface); backdrop-filter: blur(12px);
@@ -249,6 +323,14 @@
     .qp-val { color: var(--cyan); min-width: 5ch; text-align: right; }
     .qp-row input[type=range] {
       width: 130px; accent-color: var(--accent); cursor: pointer;
+      /* Bigger hit target for touch — the native track stays slim but the
+         slider responds to taps anywhere in the row gutter. Coarse pointers
+         (touch-only devices) get an even taller transparent area. */
+      height: 22px;
+      touch-action: none;
+    }
+    @media (pointer: coarse) {
+      .qp-row input[type=range] { height: 28px; width: 160px; }
     }
     .qp-toggle {
       background: none; border: 1px solid var(--border); border-radius: 4px;
@@ -337,7 +419,7 @@
       width: min(96vw, 920px);
       height: 480px;
       min-width: 360px;  min-height: 220px;
-      max-width: 100vw;  max-height: calc(100vh - 6rem);
+      max-width: 100vw;  max-height: calc(100dvh - 6rem);
       background: transparent;
       border: 1px solid var(--border); border-radius: 10px;
       font-family: var(--font-mono); color: var(--text);
@@ -442,11 +524,19 @@
       #topbar-right { gap: 0.35rem; }
       #topbar-corner { gap: 0.35rem; }
       #lvl, #fxname { display: none; }
-      .ctrl-btn     { padding: 0.22rem 0.5rem; font-size: 0.7rem; }
-      #panel-stack  { left: 0.5rem; right: 0.5rem; bottom: 0.5rem; max-width: none; }
+      .ctrl-btn     { padding: 0.32rem 0.6rem; font-size: 0.7rem; }
+      #panel-stack  {
+        left: max(0.5rem, env(safe-area-inset-left));
+        right: max(0.5rem, env(safe-area-inset-right));
+        bottom: max(0.5rem, env(safe-area-inset-bottom));
+        max-width: none;
+        /* On mobile we accept a tighter cap so there's room for the param
+           card to grow without needing to scroll the page itself. */
+        max-height: calc(100dvh - var(--topbar-h, 4.5rem) - 1rem);
+      }
       #hints        { display: none; }
-      #video.visible { width: 120px; bottom: 0.5rem; right: 0.5rem; }
-      #strudel-panel { top: 5.5rem; width: 96vw; height: 60vh; }
+      #video.visible { width: 120px; bottom: max(0.5rem, env(safe-area-inset-bottom)); right: max(0.5rem, env(safe-area-inset-right)); }
+      #strudel-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       .sp-tag, .sp-status { display: none; }
     }
   </style>
@@ -476,49 +566,91 @@
       <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen (X)">full</button>
     </div>
   </div>
+  <!-- Controls row: status indicators + the primary fx picker + audio +
+       pause kept inline (highest-frequency actions); everything else
+       grouped into category popovers (`camera`, `pose`, `layers`, `post`,
+       `auto`) so a phone screen sees ~8 chips instead of ~22. Original
+       button IDs are preserved verbatim so every keyboard shortcut and
+       page-init.js handler keeps working without changes. -->
   <div id="topbar-right">
     <span id="fps">-- fps</span>
     <span id="fxname">—</span>
     <span id="lvl">b-- m-- h--</span>
     <select id="fx-select" class="ctrl-btn" title="Active fx (V)"></select>
     <select id="mic-select" class="ctrl-btn" title="Choose microphone" style="display:none;"></select>
-    <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
-    <button class="ctrl-btn active" id="btn-camera" title="Camera size (C)" style="display:none;">camera</button>
-    <button class="ctrl-btn" id="btn-cam-rotate" title="Rotate camera (R)" style="display:none;">rot 0°</button>
-    <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (M)" style="display:none;">mirror</button>
-    <select id="pose-source" class="ctrl-btn" title="Pose source (P)">
-      <option value="off">pose off</option>
-      <option value="camera">pose cam</option>
-    </select>
-    <select id="pose-max" class="ctrl-btn" title="Max poses (1-6)" style="display:none;">
-      <option value="1">1 pose</option>
-      <option value="2">2 poses</option>
-      <option value="3" selected>3 poses</option>
-      <option value="4">4 poses</option>
-      <option value="5">5 poses</option>
-      <option value="6">6 poses</option>
-    </select>
-    <button class="ctrl-btn active" id="btn-skeleton" title="Skeleton overlay (J)">skeleton</button>
-    <button class="ctrl-btn active" id="btn-sparks"   title="Beat sparks (F)">sparks</button>
-    <button class="ctrl-btn active" id="btn-aura"     title="Resonance aura (G)">aura</button>
-    <button class="ctrl-btn active" id="btn-ripples"  title="Beat ripples (B)">ripples</button>
-    <button class="ctrl-btn"        id="btn-ascii"    title="ASCII post (T) — off / on / blip / flip">ascii</button>
-    <button class="ctrl-btn"        id="btn-mosh"     title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
-    <button class="ctrl-btn"        id="btn-edge"     title="Edge-detect post (E) — off / on / blip / flip">edge</button>
-    <button class="ctrl-btn"        id="btn-phase"    title="Auto-phase modes within active quale (L)">phase</button>
-    <select id="phase-style" class="ctrl-btn" title="Auto-phase style">
-      <option value="chapters">chapters</option>
-      <option value="alternate">alternate</option>
-      <option value="random">random</option>
-      <option value="hold">hold glitch</option>
-    </select>
-    <button class="ctrl-btn"        id="btn-cycle"    title="Auto-cycle between qualia (N)">cycle</button>
-    <select id="cycle-style" class="ctrl-btn" title="Auto-cycle style">
-      <option value="sequential">sequential</option>
-      <option value="random">random</option>
-    </select>
     <button class="ctrl-btn" id="btn-audio" title="Mic audio (A)">audio</button>
-    <button class="ctrl-btn" id="btn-cursor" title="Cursor trail (cycle modes)">cursor off</button>
+
+    <div class="qg-group" data-group="camera">
+      <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="camera"
+              title="Camera controls (C/R/M)" aria-haspopup="true" aria-expanded="false">camera<span class="qg-caret">▾</span></button>
+      <div class="qg-popover" role="menu">
+        <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
+        <button class="ctrl-btn active" id="btn-camera" title="Camera size (C)" style="display:none;">camera</button>
+        <button class="ctrl-btn" id="btn-cam-rotate" title="Rotate camera (R)" style="display:none;">rot 0°</button>
+        <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (M)" style="display:none;">mirror</button>
+      </div>
+    </div>
+
+    <div class="qg-group" data-group="pose">
+      <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="pose"
+              title="Pose detection (P/J)" aria-haspopup="true" aria-expanded="false">pose<span class="qg-caret">▾</span></button>
+      <div class="qg-popover" role="menu">
+        <select id="pose-source" class="ctrl-btn" title="Pose source (P)">
+          <option value="off">pose off</option>
+          <option value="camera">pose cam</option>
+        </select>
+        <select id="pose-max" class="ctrl-btn" title="Max poses (1-6)" style="display:none;">
+          <option value="1">1 pose</option>
+          <option value="2">2 poses</option>
+          <option value="3" selected>3 poses</option>
+          <option value="4">4 poses</option>
+          <option value="5">5 poses</option>
+          <option value="6">6 poses</option>
+        </select>
+        <button class="ctrl-btn active" id="btn-skeleton" title="Skeleton overlay (J)">skeleton</button>
+      </div>
+    </div>
+
+    <div class="qg-group" data-group="layers">
+      <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="layers"
+              title="Reactive overlays (F/G/B)" aria-haspopup="true" aria-expanded="false">layers<span class="qg-caret">▾</span></button>
+      <div class="qg-popover" role="menu">
+        <button class="ctrl-btn active" id="btn-sparks"  title="Beat sparks (F)">sparks</button>
+        <button class="ctrl-btn active" id="btn-aura"    title="Resonance aura (G)">aura</button>
+        <button class="ctrl-btn active" id="btn-ripples" title="Beat ripples (B)">ripples</button>
+        <button class="ctrl-btn"        id="btn-cursor"  title="Cursor trail (cycle modes)">cursor off</button>
+      </div>
+    </div>
+
+    <div class="qg-group" data-group="post">
+      <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="post"
+              title="Post-process glitches (T/K/E/L)" aria-haspopup="true" aria-expanded="false">post<span class="qg-caret">▾</span></button>
+      <div class="qg-popover" role="menu">
+        <button class="ctrl-btn" id="btn-ascii" title="ASCII post (T) — off / on / blip / flip">ascii</button>
+        <button class="ctrl-btn" id="btn-mosh"  title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
+        <button class="ctrl-btn" id="btn-edge"  title="Edge-detect post (E) — off / on / blip / flip">edge</button>
+        <button class="ctrl-btn" id="btn-phase" title="Auto-phase modes within active quale (L)">phase</button>
+        <select id="phase-style" class="ctrl-btn" title="Auto-phase style">
+          <option value="chapters">chapters</option>
+          <option value="alternate">alternate</option>
+          <option value="random">random</option>
+          <option value="hold">hold glitch</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="qg-group" data-group="auto">
+      <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="auto"
+              title="Auto-cycle (N)" aria-haspopup="true" aria-expanded="false">auto<span class="qg-caret">▾</span></button>
+      <div class="qg-popover" role="menu">
+        <button class="ctrl-btn" id="btn-cycle" title="Auto-cycle between qualia (N)">cycle</button>
+        <select id="cycle-style" class="ctrl-btn" title="Auto-cycle style">
+          <option value="sequential">sequential</option>
+          <option value="random">random</option>
+        </select>
+      </div>
+    </div>
+
     <button class="ctrl-btn" id="btn-pause" title="Pause (Space)">pause</button>
     <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
   </div>
@@ -634,6 +766,31 @@
       <div class="qp-row" data-qp="pose-linger">
         <label>linger<span class="qp-val">800ms</span></label>
         <input type="range" min="0" max="3000" step="50" value="800">
+      </div>
+    </div>
+  </div>
+
+  <!-- Camera card — only shown while pose camera is on. Houses zoom slider
+       (when the active track exposes the zoom capability) plus an explicit
+       flip-front/back button as a UI fallback for the double-tap gesture. -->
+  <div id="camera-card" class="qp-card collapsed" style="display:none">
+    <div class="qp-head" data-toggle="camera-card">
+      <span class="qp-title">camera</span>
+      <span class="qp-spacer"></span>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-row" data-qp="cam-flip">
+        <label>facing<span class="qp-val" id="cam-facing-val">user</span></label>
+        <button class="qp-toggle" id="btn-cam-flip" title="Flip front/back camera">flip</button>
+      </div>
+      <div class="qp-row" data-qp="cam-zoom" style="display:none">
+        <label>zoom<span class="qp-val">1.0×</span></label>
+        <input type="range" min="1" max="4" step="0.1" value="1">
+      </div>
+      <div class="qp-row" data-qp="cam-zoom-unsupported" id="cam-zoom-unsupported" style="display:none">
+        <label style="color:var(--muted); font-size:0.65rem;">zoom unavailable on this camera</label>
+        <span></span>
       </div>
     </div>
   </div>

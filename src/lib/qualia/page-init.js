@@ -125,6 +125,13 @@ export function initQualiaPage() {
   const host       = document.getElementById('qualia-host');
   const fxParamsEl = document.getElementById('fx-params');
   const poseCard   = document.getElementById('pose-card');
+  const cameraCard = document.getElementById('camera-card');
+  const camFlipBtn = document.getElementById('btn-cam-flip');
+  const camFacingVal = document.getElementById('cam-facing-val');
+  const camZoomRow = document.querySelector('[data-qp="cam-zoom"]');
+  const camZoomInput = camZoomRow?.querySelector('input[type=range]');
+  const camZoomVal   = camZoomRow?.querySelector('.qp-val');
+  const camZoomNoneRow = document.getElementById('cam-zoom-unsupported');
 
   // ── Core wiring ───────────────────────────────────────────────────────────
   const audio = createAudio();
@@ -132,6 +139,23 @@ export function initQualiaPage() {
   bindVideoElement(videoEl);
 
   let camSizeIdx = 0;
+  // Camera zoom (hardware track-level zoom, gated by capability detection).
+  // Persisted across reloads; reapplied after each camera open/flip.
+  let lastZoomValue = 1.0;
+  // Custom drag offset for the video preview (px from default bottom-right
+  // anchor — positive values move it up/left). Persisted so a placement
+  // chosen on the user's main rig sticks across sessions.
+  let videoOffset = { dx: 0, dy: 0 };
+
+  // Haptic feedback for touch interactions. The Vibration API is best-effort:
+  // Android Chrome honors it, iOS Safari ignores it, desktop browsers usually
+  // ignore it. Wrapped so we don't sprinkle navigator?.vibrate?.() everywhere.
+  // Respect prefers-reduced-motion as a coarse "don't tickle me" signal.
+  const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function hapticPulse(ms = 10) {
+    if (REDUCED_MOTION) return;
+    try { navigator.vibrate?.(ms); } catch {}
+  }
 
   const core = createCore({
     host,
@@ -203,6 +227,9 @@ export function initQualiaPage() {
     paramsCollapsed: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
     moshCollapsed:  document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
     edgeCollapsed:  document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
+    cameraCollapsed: cameraCard?.classList.contains('collapsed') ?? true,
+    cameraZoom:     lastZoomValue,
+    videoPos:       videoOffset,
   }));
   const stored = settings.load();
   camSizeIdx = stored.camSizeIdx ?? 0;
@@ -377,14 +404,112 @@ export function initQualiaPage() {
     poseCard.style.display = on ? '' : 'none';
   }
   syncPoseCardVisibility();
+  // On touch / narrow viewports we want accordion semantics — opening one
+  // card collapses its siblings — because vertical space is at a premium.
+  // Desktop with a wide viewport keeps the existing free-stack behavior so
+  // power users can have audio + pose + params all open at once. Detection
+  // uses pointer: coarse OR width <= 768px, matching the mobile media query
+  // above. Re-evaluated on each click so flipping the device into landscape
+  // doesn't get stuck in the wrong mode.
+  const ACCORDION_MQ = window.matchMedia('(max-width: 768px), (pointer: coarse)');
   document.querySelectorAll('[data-toggle]').forEach(h => {
     h.addEventListener('click', (e) => {
       if (e.target.closest('button, input, select')) return;
       const card = document.getElementById(h.dataset.toggle);
-      card?.classList.toggle('collapsed');
+      if (!card) return;
+      const wasCollapsed = card.classList.contains('collapsed');
+      card.classList.toggle('collapsed');
+      // Just expanded a card on mobile? Collapse its siblings inside the
+      // panel stack so the resulting tower still fits the viewport.
+      if (wasCollapsed && ACCORDION_MQ.matches) {
+        document.querySelectorAll('#panel-stack > .qp-card').forEach(other => {
+          if (other !== card) other.classList.add('collapsed');
+        });
+      }
       settings.save();
     });
   });
+
+  // ── Topbar group popovers ────────────────────────────────────────────────
+  // Each `.qg-group` is a trigger button + a popover holding the original
+  // controls (camera / pose / layers / post / auto). The popover shows on
+  // trigger click, hides on outside click, swaps when another trigger is
+  // pressed. A MutationObserver mirrors descendant .active state onto the
+  // trigger so the user can see at a glance which groups have something on.
+  const groupEls = document.querySelectorAll('.qg-group');
+  function closeAllGroupsExcept(except) {
+    groupEls.forEach(g => {
+      if (g === except) return;
+      if (g.classList.contains('open')) {
+        g.classList.remove('open');
+        const trig = g.querySelector('.qg-trigger');
+        trig?.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+  function repositionPopover(group) {
+    const pop = group.querySelector('.qg-popover');
+    if (!pop) return;
+    pop.classList.remove('right-aligned');
+    // After a frame so getBoundingClientRect reflects the displayed size.
+    requestAnimationFrame(() => {
+      const r = pop.getBoundingClientRect();
+      if (r.right > window.innerWidth - 4) pop.classList.add('right-aligned');
+    });
+  }
+  groupEls.forEach(group => {
+    const trigger = group.querySelector('.qg-trigger');
+    if (!trigger) return;
+    trigger.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const wasOpen = group.classList.contains('open');
+      closeAllGroupsExcept(wasOpen ? null : group);
+      group.classList.toggle('open', !wasOpen);
+      trigger.setAttribute('aria-expanded', String(!wasOpen));
+      if (!wasOpen) repositionPopover(group);
+    });
+
+    // Mirror descendant .active onto the trigger for the dot indicator.
+    // We only watch the popover subtree; the trigger itself is excluded
+    // by checking the mutation target. Also fire once at boot so the dot
+    // reflects the restored settings before the user touches anything.
+    const popover = group.querySelector('.qg-popover');
+    function refreshTriggerActive() {
+      const anyActive = !!popover?.querySelector('.active, .active-audio');
+      trigger.classList.toggle('qg-has-active', anyActive);
+    }
+    if (popover && typeof MutationObserver !== 'undefined') {
+      const obs = new MutationObserver(refreshTriggerActive);
+      obs.observe(popover, { subtree: true, attributes: true, attributeFilter: ['class'] });
+    }
+    refreshTriggerActive();
+  });
+  // Outside click closes any open popover. Pointerdown (capture) so a
+  // gesture handler that stops propagation later doesn't shield us.
+  document.addEventListener('pointerdown', (ev) => {
+    if (ev.target.closest?.('.qg-group')) return;
+    closeAllGroupsExcept(null);
+  }, true);
+  // Escape closes too.
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') closeAllGroupsExcept(null);
+  });
+
+  // Expose the live topbar height as a CSS var so #panel-stack and
+  // #strudel-panel can size themselves relative to it instead of guessing.
+  // The topbar is column-flex with a wrapping control row so its height
+  // depends on viewport width (number of wrap rows). ResizeObserver is the
+  // cheap way to keep --topbar-h current.
+  const setTopbarVar = () => {
+    const h = topbarEl.getBoundingClientRect().height;
+    if (h > 0) document.documentElement.style.setProperty('--topbar-h', `${h}px`);
+  };
+  setTopbarVar();
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(setTopbarVar).observe(topbarEl);
+  } else {
+    window.addEventListener('resize', setTopbarVar);
+  }
 
   // ── Audio source mode (off / mic / strudel / mix) ───────────────────────
   // The button is a 4-state selector. The mode is the user's intent; the
@@ -507,6 +632,73 @@ export function initQualiaPage() {
     },
   });
 
+  // ── Camera card (zoom + flip) ────────────────────────────────────────────
+  // Visibility tracks "is the pose camera open" — same as the pose card,
+  // but split out so zoom controls live with their visual subject.
+  function syncCameraCardVisibility() {
+    if (!cameraCard) return;
+    const on = poseSelect.value !== 'off';
+    cameraCard.style.display = on ? '' : 'none';
+    if (on) refreshCameraCard();
+  }
+  function refreshCameraCard() {
+    if (!cameraCard) return;
+    const facing = pose.getFacingMode();
+    if (camFacingVal) camFacingVal.textContent = facing === 'environment' ? 'rear' : 'front';
+    // Zoom row visibility hinges on the active track's capabilities. Most
+    // Android phones expose hardware zoom; iOS Safari + many USB webcams
+    // do not. We hide the slider entirely (rather than showing it disabled)
+    // so the panel stays calm on devices that can't deliver.
+    const caps = pose.getZoomCaps();
+    if (camZoomRow && camZoomInput) {
+      if (caps && caps.max > caps.min) {
+        camZoomRow.style.display = '';
+        if (camZoomNoneRow) camZoomNoneRow.style.display = 'none';
+        camZoomInput.min  = String(caps.min);
+        camZoomInput.max  = String(caps.max);
+        camZoomInput.step = String(caps.step);
+        // Clamp the persisted value to the new caps; reapply on the track.
+        const clamped = Math.max(caps.min, Math.min(caps.max, lastZoomValue));
+        camZoomInput.value = String(clamped);
+        if (camZoomVal) camZoomVal.textContent = `${clamped.toFixed(1)}×`;
+        if (clamped !== caps.value) pose.setZoom(clamped);
+      } else {
+        camZoomRow.style.display = 'none';
+        if (camZoomNoneRow) camZoomNoneRow.style.display = '';
+      }
+    }
+  }
+  // Slider → track zoom. We update the value label optimistically; the
+  // track's own clamping is enforced by setZoom.
+  camZoomInput?.addEventListener('input', async () => {
+    const v = parseFloat(camZoomInput.value);
+    lastZoomValue = v;
+    if (camZoomVal) camZoomVal.textContent = `${v.toFixed(1)}×`;
+    await pose.setZoom(v);
+    settings.save();
+  });
+  // Flip front/back. Drops the persisted deviceId on purpose — the OS
+  // picks whichever lens matches the requested side.
+  async function flipCameraFacing() {
+    if (poseSelect.value !== 'camera') return;
+    try {
+      const id = await pose.flipFacing();
+      if (id) storeDeviceId('cam', id);
+      camPicker.populate(id);
+      refreshCameraCard();
+      // Reapply persisted zoom to the new track (it has its own capabilities).
+      // refreshCameraCard already clamps + re-applies; nothing else needed.
+      settings.save();
+    } catch (err) {
+      alert(`Could not flip camera: ${err.message || err}`);
+    }
+  }
+  camFlipBtn?.addEventListener('click', flipCameraFacing);
+  if (typeof stored.cameraZoom === 'number') lastZoomValue = stored.cameraZoom;
+  if (cameraCard && typeof stored.cameraCollapsed === 'boolean') {
+    cameraCard.classList.toggle('collapsed', stored.cameraCollapsed);
+  }
+
   // ── Pose source ───────────────────────────────────────────────────────────
   poseSelect.addEventListener('change', async () => {
     const v = poseSelect.value;
@@ -533,6 +725,7 @@ export function initQualiaPage() {
       }
     }
     syncPoseCardVisibility();
+    syncCameraCardVisibility();
     settings.save();
   });
 
@@ -550,6 +743,16 @@ export function initQualiaPage() {
                          : s === 'large' ? 'cam large'
                          : s === 'small' ? 'camera'
                          : 'cam off';
+    // Drag offset is meaningless in size-full (the element fills the
+    // viewport and the bottom/right CSS is overridden). For all other
+    // sizes, reapply so a previously-dragged placement survives.
+    // applyVideoOffset is a hoisted function declaration further down.
+    if (s === 'full') {
+      videoEl.style.bottom = '';
+      videoEl.style.right  = '';
+    } else {
+      applyVideoOffset();
+    }
     settings.save();
   }
   btnCamera.addEventListener('click', () => setCamSize(camSizeIdx + 1));
@@ -580,6 +783,319 @@ export function initQualiaPage() {
     btnCamMirror.classList.toggle('active', m);
     settings.save();
   });
+
+  // ── Video-preview touch gestures ─────────────────────────────────────────
+  // The preview rectangle is a busy little control surface. To keep the
+  // chrome out of the way, we layer gestures onto the same element:
+  //   - tap          → cycle cam size
+  //   - double-tap   → flip front/back camera
+  //   - long-press   → open the camera picker (cam-select)
+  //   - drag         → reposition (persisted)
+  // Ordering matters: we don't fire the single-tap action until the
+  // double-tap window closes, so a quick second tap upgrades cleanly.
+  // PointerEvents handle mouse + touch + pen uniformly, but only on
+  // browsers ≥ 2018. On any environment without them the user still has
+  // every action via the topbar buttons and the cam-card's flip button.
+  const TAP_TIMEOUT_MS  = 280;   // window for second tap to upgrade to dbl-tap
+  const TAP_MAX_MOVE_PX = 10;    // jitter floor before we call it a drag
+  const LONG_PRESS_MS   = 550;   // press-and-hold opens cam picker
+  const LONG_PRESS_MOVE = 8;     // movement before the long-press is cancelled
+  let lastTapTime = 0;
+  let pendingTapT = null;
+  let pressStartT = 0;
+  let pressStartX = 0, pressStartY = 0;
+  let didDrag = false;
+  let didLongPress = false;
+  let dragStartOffset = null;
+  let longPressT = null;
+
+  function applyVideoOffset() {
+    if (!videoEl.classList.contains('visible')) return;
+    if (videoEl.classList.contains('size-full')) return; // no offset in full
+    // The base anchor is bottom/right. Positive dx pushes left, dy pushes up.
+    // We update both bottom & right to keep the existing CSS as the base.
+    const baseBottom = window.matchMedia('(max-width: 768px)').matches ? 0.5 : 1.25; // rem
+    const baseRight  = baseBottom;
+    videoEl.style.bottom = `calc(${baseBottom}rem + ${videoOffset.dy}px)`;
+    videoEl.style.right  = `calc(${baseRight}rem + ${videoOffset.dx}px)`;
+  }
+
+  function clampVideoOffset() {
+    // Keep at least 32px of the preview on-screen so a stray drag can't lose
+    // it past the viewport edge.
+    if (!videoEl) return;
+    const rect = videoEl.getBoundingClientRect();
+    const maxDx = Math.max(0, window.innerWidth  - 32);
+    const maxDy = Math.max(0, window.innerHeight - 32);
+    videoOffset.dx = Math.max(0, Math.min(maxDx, videoOffset.dx));
+    videoOffset.dy = Math.max(0, Math.min(maxDy, videoOffset.dy));
+    void rect; // referenced for future viewport-aware clamping logic
+  }
+
+  if (stored.videoPos && typeof stored.videoPos.dx === 'number' && typeof stored.videoPos.dy === 'number') {
+    videoOffset = { dx: stored.videoPos.dx, dy: stored.videoPos.dy };
+  }
+  // Reapply offset on resize / orientation change so the pip stays visible.
+  window.addEventListener('resize', () => { clampVideoOffset(); applyVideoOffset(); });
+  applyVideoOffset();
+
+  function onPointerDown(ev) {
+    if (!videoEl.classList.contains('visible')) return;
+    pressStartT = performance.now();
+    pressStartX = ev.clientX; pressStartY = ev.clientY;
+    didDrag = false;
+    didLongPress = false;
+    dragStartOffset = { dx: videoOffset.dx, dy: videoOffset.dy };
+    videoEl.setPointerCapture?.(ev.pointerId);
+    // In size-full the pip covers the whole viewport. Tapping should still
+    // cycle out of full (the user wants to escape) but drag + long-press
+    // are disabled — repositioning a fullscreen element is meaningless and
+    // a long-press would block the natural tap-to-escape gesture.
+    if (videoEl.classList.contains('size-full')) return;
+    longPressT = setTimeout(() => {
+      // Long-press: open cam picker if multiple cameras are available;
+      // otherwise fall through to a haptic "nothing here" cue.
+      if (didDrag) return;
+      didLongPress = true;
+      hapticPulse(20);
+      if (camSelect && camSelect.style.display !== 'none') {
+        try { camSelect.focus(); camSelect.click?.(); } catch {}
+        // showPicker() is the only programmatic way to drop a native <select>
+        // popup on most browsers. Optional chain — Safari/iOS lacks it.
+        camSelect.showPicker?.();
+      }
+    }, LONG_PRESS_MS);
+  }
+
+  function onPointerMove(ev) {
+    if (!pressStartT) return;
+    const dx = ev.clientX - pressStartX;
+    const dy = ev.clientY - pressStartY;
+    if (!didDrag && Math.hypot(dx, dy) > TAP_MAX_MOVE_PX) {
+      didDrag = true;
+      videoEl.classList.add('dragging');
+      if (longPressT) { clearTimeout(longPressT); longPressT = null; }
+    }
+    if (didDrag) {
+      // Bottom-right anchor → moving right/down decreases dx/dy.
+      videoOffset.dx = (dragStartOffset?.dx ?? 0) - dx;
+      videoOffset.dy = (dragStartOffset?.dy ?? 0) - dy;
+      clampVideoOffset();
+      applyVideoOffset();
+    }
+  }
+
+  function onPointerUp() {
+    if (!pressStartT) return;
+    if (longPressT) { clearTimeout(longPressT); longPressT = null; }
+    const elapsed = performance.now() - pressStartT;
+    pressStartT = 0;
+    if (didDrag) {
+      videoEl.classList.remove('dragging');
+      settings.save();
+      return;
+    }
+    if (didLongPress) return;
+    if (elapsed > LONG_PRESS_MS) return;
+    // Tap path. Defer the size-cycle in case the user is mid-double-tap.
+    const now = performance.now();
+    const isDoubleTap = (now - lastTapTime) < TAP_TIMEOUT_MS;
+    lastTapTime = now;
+    if (isDoubleTap) {
+      if (pendingTapT) { clearTimeout(pendingTapT); pendingTapT = null; }
+      hapticPulse(15);
+      flipCameraFacing();
+    } else {
+      pendingTapT = setTimeout(() => {
+        pendingTapT = null;
+        hapticPulse(8);
+        btnCamera.click();
+      }, TAP_TIMEOUT_MS);
+    }
+  }
+
+  function onPointerCancel() {
+    if (longPressT) { clearTimeout(longPressT); longPressT = null; }
+    pressStartT = 0;
+    if (didDrag) {
+      videoEl.classList.remove('dragging');
+      settings.save();
+    }
+  }
+
+  if (videoEl) {
+    videoEl.addEventListener('pointerdown',   onPointerDown);
+    videoEl.addEventListener('pointermove',   onPointerMove);
+    videoEl.addEventListener('pointerup',     onPointerUp);
+    videoEl.addEventListener('pointercancel', onPointerCancel);
+    // Suppress the synthesized "click" the browser fires alongside touch /
+    // mouse pointer events — we already dispatched our own action via
+    // onPointerUp, and the click would re-trigger btnCamera through its
+    // own listener, double-cycling the size.
+    videoEl.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+  }
+
+  // ── Canvas-level touch gestures ──────────────────────────────────────────
+  // Three gestures, all on the empty canvas area (we ignore touches inside
+  // any UI surface):
+  //   - vertical swipe       → cycle to next / prev quale
+  //   - two-finger tap       → toggle pause
+  //   - pinch                → drive camera zoom (when hardware caps allow)
+  //
+  // Single-finger horizontal motion is reserved for the future. Pointer
+  // capture is on the body so a swipe that crosses onto the topbar still
+  // completes — swipes on phones often overshoot.
+  const SWIPE_MIN_PX     = 60;     // total distance to count as a swipe
+  const SWIPE_AXIS_RATIO = 1.6;    // |dy| > |dx| * ratio for vertical
+  const TWO_FINGER_TAP_MS = 220;
+  const TWO_FINGER_TAP_MOVE = 18;  // total finger-1 movement during the tap
+  const PINCH_MIN_MOVE_PX = 8;     // distance change before we treat as pinch
+
+  // Active touches by pointerId. Excludes mouse + pen — those have their own
+  // interaction model and we don't want a stray right-click to count.
+  const canvasPointers = new Map();
+  let pinchInitialDist = 0;
+  let pinchInitialZoom = 1;
+  let pinchInitialMin  = 1;
+  let pinchInitialMax  = 1;
+  let canvasGestureStartT = 0;
+  let canvasGestureMaxFingers = 0;
+  let canvasGestureDidPinch = false;
+
+  function pointInUiZone(x, y) {
+    // Pull the element under the touch and check if it lives inside any of
+    // our HUD surfaces. Using elementFromPoint instead of event.target lets
+    // a swipe that ENDS over the topbar still register as "started on the
+    // canvas" — only the start position decides.
+    const el = document.elementFromPoint(x, y);
+    if (!el) return false;
+    return !!el.closest('#topbar, #panel-stack, #strudel-panel, #video, #zen-handle, #status-overlay, .qg-popover');
+  }
+
+  function onCanvasPointerDown(ev) {
+    if (ev.pointerType !== 'touch') return;
+    if (pointInUiZone(ev.clientX, ev.clientY)) return;
+    canvasPointers.set(ev.pointerId, {
+      x0: ev.clientX, y0: ev.clientY,
+      x:  ev.clientX, y:  ev.clientY,
+      t0: performance.now(),
+    });
+    canvasGestureMaxFingers = Math.max(canvasGestureMaxFingers, canvasPointers.size);
+    if (canvasPointers.size === 1) {
+      canvasGestureStartT = performance.now();
+      canvasGestureDidPinch = false;
+    }
+    if (canvasPointers.size === 2) {
+      // Initialize pinch baseline. We only run pinch-zoom when the camera
+      // track exposes hardware zoom — capability check is cheap and means
+      // the gesture silently no-ops on iOS Safari / non-zoomable USB cams.
+      const [a, b] = [...canvasPointers.values()];
+      pinchInitialDist = Math.hypot(a.x - b.x, a.y - b.y);
+      const caps = pose.getZoomCaps?.();
+      if (caps && caps.max > caps.min) {
+        pinchInitialZoom = lastZoomValue;
+        pinchInitialMin = caps.min;
+        pinchInitialMax = caps.max;
+      } else {
+        pinchInitialZoom = 0; // sentinel: no zoom support
+      }
+    }
+  }
+
+  function onCanvasPointerMove(ev) {
+    const p = canvasPointers.get(ev.pointerId);
+    if (!p) return;
+    p.x = ev.clientX; p.y = ev.clientY;
+    if (canvasPointers.size === 2 && pinchInitialZoom > 0) {
+      const [a, b] = [...canvasPointers.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const delta = dist - pinchInitialDist;
+      if (Math.abs(delta) > PINCH_MIN_MOVE_PX) {
+        canvasGestureDidPinch = true;
+        // Map pixel-space pinch to a zoom range. Each 200px ≈ full sweep
+        // through the available zoom range; tuned so a comfortable pinch
+        // covers most lenses' min→max in one motion.
+        const ratio = dist / Math.max(pinchInitialDist, 1);
+        const zoomRange = pinchInitialMax - pinchInitialMin;
+        const target = Math.max(
+          pinchInitialMin,
+          Math.min(pinchInitialMax, pinchInitialZoom * ratio)
+        );
+        // Throttle the actual track update to ~30Hz; the slider updates
+        // every move so the visual stays responsive.
+        applyPinchZoom(target);
+        void zoomRange;
+      }
+    }
+  }
+
+  let _lastPinchApplyT = 0;
+  function applyPinchZoom(value) {
+    lastZoomValue = value;
+    if (camZoomInput) {
+      camZoomInput.value = String(value);
+      if (camZoomVal) camZoomVal.textContent = `${value.toFixed(1)}×`;
+    }
+    const now = performance.now();
+    if (now - _lastPinchApplyT < 33) return;
+    _lastPinchApplyT = now;
+    pose.setZoom(value);
+  }
+
+  function onCanvasPointerUp(ev) {
+    const p = canvasPointers.get(ev.pointerId);
+    if (!p) return;
+    canvasPointers.delete(ev.pointerId);
+    // All fingers up: final classification.
+    if (canvasPointers.size === 0) {
+      const elapsed = performance.now() - canvasGestureStartT;
+      if (canvasGestureDidPinch) {
+        // Persist the pinched zoom on lift; per-frame applyPinchZoom already
+        // sent intermediate values to the track.
+        pose.setZoom(lastZoomValue);
+        settings.save();
+      } else if (canvasGestureMaxFingers === 2 && elapsed < TWO_FINGER_TAP_MS) {
+        const dx = Math.abs(p.x - p.x0), dy = Math.abs(p.y - p.y0);
+        if (dx + dy < TWO_FINGER_TAP_MOVE) {
+          hapticPulse(12);
+          btnPause.click();
+        }
+      } else if (canvasGestureMaxFingers === 1) {
+        const dx = p.x - p.x0, dy = p.y - p.y0;
+        if (Math.abs(dy) >= SWIPE_MIN_PX && Math.abs(dy) > Math.abs(dx) * SWIPE_AXIS_RATIO) {
+          hapticPulse(15);
+          // Up = next quale (forward), Down = previous. Same direction
+          // semantics as a music app's "next track" gesture.
+          const ids = mesh.ids();
+          if (ids.length > 1) {
+            const cur = core.activeId();
+            const i = ids.indexOf(cur || ids[0]);
+            const step = dy < 0 ? 1 : -1;
+            const nextId = ids[(i + step + ids.length) % ids.length];
+            core.setActive(nextId).catch(err => console.error('[qualia] swipe setActive failed:', err));
+          }
+        }
+      }
+      canvasGestureMaxFingers = 0;
+      canvasGestureDidPinch = false;
+    }
+  }
+
+  document.body.addEventListener('pointerdown',   onCanvasPointerDown);
+  document.body.addEventListener('pointermove',   onCanvasPointerMove);
+  document.body.addEventListener('pointerup',     onCanvasPointerUp);
+  document.body.addEventListener('pointercancel', onCanvasPointerUp);
+
+  // Light haptic on every toggle button tap. Delegated, capture phase so we
+  // fire even when the click handler stops propagation. Filtered to .ctrl-btn
+  // / .qp-toggle so plain text and selects don't buzz.
+  document.body.addEventListener('click', (e) => {
+    const btn = e.target.closest('.ctrl-btn, .qp-toggle');
+    if (!btn) return;
+    // Skip the (large) source link — it's an external nav, not a state toggle.
+    if (btn.tagName === 'A') return;
+    hapticPulse(6);
+  }, true);
 
   // ── Pose count ────────────────────────────────────────────────────────────
   posesSelect.value = String(pose.getNumPoses());

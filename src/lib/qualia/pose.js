@@ -98,6 +98,12 @@ export function createPose() {
 
   let detectLoopStarted = false;
   let detectSource = null; // 'camera' | 'canvas' | null
+  // Tracked so flipFacing() can re-issue getUserMedia with the opposite
+  // direction; also exposed so the topbar / camera card can label which
+  // way the lens is currently pointing.
+  let facingMode = 'user';   // 'user' | 'environment'
+  let activeDeviceId = null;
+  let activeTrack = null;    // primary MediaStreamTrack (for zoom etc.)
   let detectCanvas = null; // for source === 'canvas' (viz mode)
 
   async function ensureVision() {
@@ -151,17 +157,30 @@ export function createPose() {
     frame.timestamp = timestamp;
   }
 
-  async function startCamera({ deviceId, video }) {
+  async function startCamera({ deviceId, video, facing } = {}) {
     await ensureVision();
     if (!landmarker) await buildLandmarker();
 
     videoEl = video;
+    // facing wins over deviceId when both are provided (used by flipFacing
+    // — we want the opposite-direction lens regardless of any persisted
+    // deviceId). Most callers pass one or the other.
+    const wantFacing = facing || facingMode;
     // Try the requested constraint first, then fall back to looser ones if the
     // browser reports NotReadableError (camera busy / driver hiccup) or
     // OverconstrainedError (front cam can't satisfy the ideal resolution).
-    const attempts = deviceId
-      ? [{ deviceId: { exact: deviceId } }, { facingMode: 'user' }, true]
-      : [{ width: { ideal: 1920 }, facingMode: 'user' }, { facingMode: 'user' }, true];
+    let attempts;
+    if (facing) {
+      attempts = [
+        { width: { ideal: 1920 }, facingMode: { ideal: facing } },
+        { facingMode: { ideal: facing } },
+        true,
+      ];
+    } else if (deviceId) {
+      attempts = [{ deviceId: { exact: deviceId } }, { facingMode: wantFacing }, true];
+    } else {
+      attempts = [{ width: { ideal: 1920 }, facingMode: wantFacing }, { facingMode: wantFacing }, true];
+    }
     let lastErr = null;
     stream = null;
     for (const c of attempts) {
@@ -180,7 +199,54 @@ export function createPose() {
     videoEl.classList.add('visible');
     detectSource = 'camera';
     if (!detectLoopStarted) startDetectLoop();
-    return stream.getVideoTracks()[0]?.getSettings()?.deviceId || null;
+    activeTrack = stream.getVideoTracks()[0] || null;
+    const settings = activeTrack?.getSettings?.() || {};
+    activeDeviceId = settings.deviceId || null;
+    if (settings.facingMode === 'user' || settings.facingMode === 'environment') {
+      facingMode = settings.facingMode;
+    } else if (facing) {
+      facingMode = facing;
+    }
+    return activeDeviceId;
+  }
+
+  /** Toggle between user/environment facing. Drops the persisted deviceId
+   *  on purpose — the OS picks whatever lens matches the requested side. */
+  async function flipFacing() {
+    const next = facingMode === 'user' ? 'environment' : 'user';
+    stopCamera();
+    return await startCamera({ video: videoEl, facing: next });
+  }
+
+  /** Read zoom capability + current value off the active track. Returns
+   *  null when no track is open or the track exposes no zoom capability
+   *  (iOS Safari, USB webcams without zoom support, etc.). */
+  function getZoomCaps() {
+    if (!activeTrack) return null;
+    const caps = activeTrack.getCapabilities?.();
+    if (!caps || typeof caps.zoom !== 'object') return null;
+    const settings = activeTrack.getSettings?.() || {};
+    return {
+      min:  caps.zoom.min  ?? 1,
+      max:  caps.zoom.max  ?? 1,
+      step: caps.zoom.step ?? 0.1,
+      value: typeof settings.zoom === 'number' ? settings.zoom : (caps.zoom.min ?? 1),
+    };
+  }
+
+  /** Apply a zoom value via track constraints. Caller is expected to clamp
+   *  to caps; we re-clamp anyway in case caps changed mid-session. */
+  async function setZoom(value) {
+    if (!activeTrack) return false;
+    const caps = activeTrack.getCapabilities?.();
+    if (!caps || typeof caps.zoom !== 'object') return false;
+    const v = Math.max(caps.zoom.min ?? 1, Math.min(caps.zoom.max ?? 1, value));
+    try {
+      await activeTrack.applyConstraints({ advanced: [{ zoom: v }] });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function stopCamera() {
@@ -189,6 +255,8 @@ export function createPose() {
       videoEl.srcObject = null;
       videoEl.classList.remove('visible');
     }
+    activeTrack = null;
+    activeDeviceId = null;
     if (detectSource === 'camera') {
       detectSource = null;
       smoothed = [];
@@ -277,6 +345,10 @@ export function createPose() {
     frame,
     startCamera,
     stopCamera,
+    flipFacing,
+    getFacingMode: () => facingMode,
+    getZoomCaps,
+    setZoom,
     startCanvasDetection,
     stopCanvasDetection,
     setNumPoses,
