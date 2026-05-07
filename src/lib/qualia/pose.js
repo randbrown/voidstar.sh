@@ -210,12 +210,48 @@ export function createPose() {
     return activeDeviceId;
   }
 
-  /** Toggle between user/environment facing. Drops the persisted deviceId
-   *  on purpose — the OS picks whatever lens matches the requested side. */
+  /** Toggle between user/environment facing. Phones with front+back lenses
+   *  switch via the facingMode constraint; desktops with multiple USB
+   *  webcams (or any setup where facingMode doesn't differentiate) fall
+   *  through to a deviceId cycle so the gesture still feels like "next
+   *  camera". Order:
+   *    1. try opposite facingMode (works on Android/iPad)
+   *    2. if that returned the same deviceId, cycle to next videoinput
+   *    3. if that fails too, surface the original error.
+   */
   async function flipFacing() {
+    const prevDeviceId = activeDeviceId;
     const next = facingMode === 'user' ? 'environment' : 'user';
     stopCamera();
-    return await startCamera({ video: videoEl, facing: next });
+    let resolved = null;
+    try {
+      resolved = await startCamera({ video: videoEl, facing: next });
+    } catch {
+      // Fall through to deviceId cycle below.
+    }
+    // facingMode flip succeeded AND actually switched cameras — done.
+    if (resolved && resolved !== prevDeviceId) return resolved;
+    // facingMode flip yielded the same lens (or failed): cycle deviceIds.
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const cams = all.filter(d => d.kind === 'videoinput');
+      if (cams.length >= 2 && prevDeviceId) {
+        const i = cams.findIndex(c => c.deviceId === prevDeviceId);
+        const nextCam = cams[(i + 1) % cams.length];
+        if (nextCam && nextCam.deviceId !== prevDeviceId) {
+          stopCamera();
+          return await startCamera({ video: videoEl, deviceId: nextCam.deviceId });
+        }
+      }
+    } catch {}
+    // Fallback to whatever we managed to open (may be the original camera).
+    if (resolved) return resolved;
+    // Last resort: re-open the previous camera so the user isn't left
+    // staring at a black preview.
+    if (prevDeviceId) {
+      try { return await startCamera({ video: videoEl, deviceId: prevDeviceId }); } catch {}
+    }
+    return null;
   }
 
   /** Read zoom capability + current value off the active track. Returns

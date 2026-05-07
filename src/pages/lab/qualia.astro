@@ -287,6 +287,37 @@
       font-size: 0.72rem; color: var(--text);
       display: flex; flex-direction: column; gap: 0.45rem;
     }
+
+    /* Tab bar for the bottom-left card stack. Hidden on desktop — the
+       free-stack with collapsible cards is fine when there's vertical
+       space. On mobile / coarse pointer the bar shows; tapping a tab
+       opens that card and collapses the others (one-at-a-time). The
+       row is horizontally scrollable with snap so a phone screen can
+       fit ~5 tabs visible at once with the rest reachable by scroll. */
+    .qp-tabs {
+      display: none;
+      flex-direction: row; gap: 0.3rem;
+      padding: 0.3rem 0.4rem;
+      background: var(--surface); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 8px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      scroll-snap-type: x proximity;
+      -webkit-overflow-scrolling: touch;
+      flex-shrink: 0;
+    }
+    .qp-tab {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--muted); font-family: var(--font-mono); font-size: 0.7rem;
+      padding: 0.28rem 0.6rem; cursor: pointer; transition: all 0.15s;
+      white-space: nowrap; flex: 0 0 auto;
+      scroll-snap-align: start;
+    }
+    .qp-tab:hover  { color: var(--accent); border-color: var(--accent); }
+    .qp-tab.active { color: var(--cyan);   border-color: var(--cyan); background: rgba(34,211,238,0.06); }
+    @media (max-width: 768px), (pointer: coarse) {
+      .qp-tabs { display: flex; }
+    }
     .qp-card.collapsed > .qp-body { display: none; }
     .qp-head {
       display: flex; align-items: center; gap: 0.5rem;
@@ -530,9 +561,10 @@
         right: max(0.5rem, env(safe-area-inset-right));
         bottom: max(0.5rem, env(safe-area-inset-bottom));
         max-width: none;
-        /* On mobile we accept a tighter cap so there's room for the param
-           card to grow without needing to scroll the page itself. */
-        max-height: calc(100dvh - var(--topbar-h, 4.5rem) - 1rem);
+        /* Tighter cap on mobile — at most 55% of viewport so the active fx
+           is always visible behind the panel. The min() ensures we don't
+           overlap the topbar even with a 4-row wrap on a narrow screen. */
+        max-height: min(55dvh, calc(100dvh - var(--topbar-h, 4.5rem) - 1rem));
       }
       #hints        { display: none; }
       #video.visible { width: 120px; bottom: max(0.5rem, env(safe-area-inset-bottom)); right: max(0.5rem, env(safe-area-inset-right)); }
@@ -584,6 +616,15 @@
       <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="camera"
               title="Camera controls (C/R/M)" aria-haspopup="true" aria-expanded="false">camera<span class="qg-caret">▾</span></button>
       <div class="qg-popover" role="menu">
+        <!-- The camera on/off toggle lives here (rather than in the pose
+             popover) because users intuitively look for "start camera"
+             under "camera". The select drives the same poseSelect element
+             the rest of the code targets — only the visible labels and
+             group placement changed. Keyboard shortcut P still cycles. -->
+        <select id="pose-source" class="ctrl-btn" title="Camera on/off (P)">
+          <option value="off">camera off</option>
+          <option value="camera">camera on</option>
+        </select>
         <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
         <button class="ctrl-btn active" id="btn-camera" title="Camera size (C)" style="display:none;">camera</button>
         <button class="ctrl-btn" id="btn-cam-rotate" title="Rotate camera (R)" style="display:none;">rot 0°</button>
@@ -595,10 +636,6 @@
       <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="pose"
               title="Pose detection (P/J)" aria-haspopup="true" aria-expanded="false">pose<span class="qg-caret">▾</span></button>
       <div class="qg-popover" role="menu">
-        <select id="pose-source" class="ctrl-btn" title="Pose source (P)">
-          <option value="off">pose off</option>
-          <option value="camera">pose cam</option>
-        </select>
         <select id="pose-max" class="ctrl-btn" title="Max poses (1-6)" style="display:none;">
           <option value="1">1 pose</option>
           <option value="2">2 poses</option>
@@ -859,6 +896,21 @@
       <span>▾</span>
     </div>
     <div class="qp-body" id="fx-params"></div>
+  </div>
+
+  <!-- Tab bar — visible only on touch / narrow viewports. Tapping a tab
+       opens that card and collapses the others (enforces accordion). On
+       desktop the existing free-stack behavior persists; tabs hide. The
+       bar lives at the END of #panel-stack because the parent uses
+       flex-direction: column-reverse, so DOM-last renders at visual top. -->
+  <div id="panel-tabs" class="qp-tabs" role="tablist" aria-label="Settings panels">
+    <button class="qp-tab" data-card="fx-card"     role="tab">params</button>
+    <button class="qp-tab" data-card="audio-card"  role="tab">audio</button>
+    <button class="qp-tab" data-card="pose-card"   role="tab">pose</button>
+    <button class="qp-tab" data-card="camera-card" role="tab">camera</button>
+    <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
+    <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
+    <button class="qp-tab" data-card="diag-card"   role="tab">diag</button>
   </div>
 </div>
 

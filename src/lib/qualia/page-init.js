@@ -493,6 +493,52 @@ export function initQualiaPage() {
     if (ev.key === 'Escape') closeAllGroupsExcept(null);
   });
 
+  // ── Bottom-left panel tab bar (mobile only) ──────────────────────────────
+  // The tab bar enforces accordion semantics on touch/narrow viewports:
+  // exactly one card open at a time, with tabs as the discovery mechanism.
+  // Cards keep their existing per-header collapse buttons too — tapping a
+  // tab is shorthand for "expand this and collapse the others". The bar
+  // hides on desktop (CSS media query); the JS just keeps tab state in
+  // sync with whichever cards are visible + currently expanded.
+  const panelTabs = document.getElementById('panel-tabs');
+  if (panelTabs) {
+    function refreshPanelTabs() {
+      panelTabs.querySelectorAll('.qp-tab').forEach(btn => {
+        const card = document.getElementById(btn.dataset.card);
+        if (!card) { btn.style.display = 'none'; return; }
+        // Hide tabs whose underlying card is currently display:none (e.g.
+        // mosh / edge / camera cards that only surface when their feature
+        // is on). Empty container is meaningless to switch to.
+        const cardHidden = card.style.display === 'none';
+        btn.style.display = cardHidden ? 'none' : '';
+        btn.classList.toggle('active', !cardHidden && !card.classList.contains('collapsed'));
+      });
+    }
+    panelTabs.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('.qp-tab');
+      if (!btn) return;
+      const cardId = btn.dataset.card;
+      // Expand the target card; collapse all siblings. Same accordion
+      // policy as the data-toggle handler uses on mobile, but always
+      // applied — tabs are an explicit "show one" affordance.
+      document.querySelectorAll('#panel-stack > .qp-card').forEach(c => {
+        c.classList.toggle('collapsed', c.id !== cardId);
+      });
+      refreshPanelTabs();
+      settings.save();
+    });
+    // Watch each card for class/style changes so the tab bar mirrors live
+    // visibility + expand state. Cheap — observers fire only on attribute
+    // changes, not every frame.
+    if (typeof MutationObserver !== 'undefined') {
+      const obs = new MutationObserver(refreshPanelTabs);
+      document.querySelectorAll('#panel-stack > .qp-card').forEach(c => {
+        obs.observe(c, { attributes: true, attributeFilter: ['class', 'style'] });
+      });
+    }
+    refreshPanelTabs();
+  }
+
   // Expose the live topbar height as a CSS var so #panel-stack and
   // #strudel-panel can size themselves relative to it instead of guessing.
   // The topbar is column-flex with a wrapping control row so its height
