@@ -76,8 +76,9 @@
       /* z-index 17 keeps the live preview above #panel-tabs (16) and
          #panel-stack (15) — without this the preview renders behind the
          mobile tab bar and the user sees a "camera not working" black
-         strip in the bottom-right. */
-      opacity: 0.78; z-index: 17;
+         strip in the bottom-right. Preview modes (small/large) are
+         fully opaque; only size-full fades down (it's a backdrop). */
+      opacity: 1; z-index: 17;
       transform: scaleX(-1);
       transition: opacity 0.2s, width 0.3s;
       /* Touch handlers (tap / double-tap / long-press / drag) live in
