@@ -23,6 +23,7 @@ import spectrum        from './fx/spectrum.js';
 import vintageAnalog   from './fx/vintage-analog.js';
 import synthwave       from './fx/synthwave.js';
 import camera          from './fx/camera.js';
+import darkSpace       from './fx/dark-space.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -84,6 +85,7 @@ export function initQualiaPage() {
   mesh.register(vintageAnalog);
   mesh.register(synthwave);
   mesh.register(camera);
+  mesh.register(darkSpace);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
