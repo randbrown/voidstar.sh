@@ -192,9 +192,24 @@ export function createPose() {
         if (err?.name !== 'NotReadableError' && err?.name !== 'OverconstrainedError') break;
       }
     }
-    if (!stream) throw lastErr;
+    if (!stream) {
+      console.error('[qualia] getUserMedia failed for all attempts:', lastErr);
+      throw lastErr;
+    }
     videoEl.srcObject = stream;
-    await new Promise(r => { videoEl.onloadedmetadata = r; });
+    // 3-second timeout on metadata to avoid hangs we've seen on Android
+    // Chrome when the video element is display:none. If metadata never
+    // fires we surface a clear error rather than awaiting indefinitely.
+    await Promise.race([
+      new Promise(r => videoEl.addEventListener('loadedmetadata', r, { once: true })),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('Camera metadata timeout (3s) — try toggling camera off and on')),
+        3000
+      )),
+    ]).catch(err => {
+      console.error('[qualia] camera metadata never loaded:', err);
+      throw err;
+    });
     await videoEl.play().catch(() => {});
     videoEl.classList.add('visible');
     detectSource = 'camera';

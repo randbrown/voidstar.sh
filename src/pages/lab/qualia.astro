@@ -317,6 +317,29 @@
     .qp-tab.active { color: var(--cyan);   border-color: var(--cyan); background: rgba(34,211,238,0.06); }
     @media (max-width: 768px), (pointer: coarse) {
       .qp-tabs { display: flex; }
+
+      /* On mobile the tab bar is the discovery + navigation surface, so
+         the per-card collapsed headers ("audio ▾", "params ▾", …) are
+         redundant. Hide collapsed cards entirely; for the active card,
+         strip the title + caret from its header and leave only any
+         action buttons (e.g. fx-card's `reset`). */
+      #panel-stack > .qp-card.collapsed { display: none !important; }
+      #panel-stack > .qp-card > .qp-head > .qp-title,
+      #panel-stack > .qp-card > .qp-head > .qp-spacer,
+      #panel-stack > .qp-card > .qp-head > span:last-child { display: none; }
+      /* Compact the header: no padding, sized only to whatever buttons
+         remain. Right-align the action buttons with margin-left:auto on
+         the first remaining item. */
+      #panel-stack > .qp-card > .qp-head {
+        padding: 0; min-height: 0; gap: 0.3rem; justify-content: flex-end;
+      }
+      /* Headers with no remaining visible children (most cards) collapse
+         to zero. :has is supported on Chrome / Safari / Firefox 121+
+         which covers the user's primary platforms; older browsers just
+         see a slightly taller card. */
+      #panel-stack > .qp-card > .qp-head:not(:has(button, input, select, a)) {
+        display: none;
+      }
     }
     .qp-card.collapsed > .qp-body { display: none; }
     .qp-head {
@@ -625,10 +648,17 @@
           <option value="off">camera off</option>
           <option value="camera">camera on</option>
         </select>
+        <!-- cam-select is the only control still gated by the dynamic
+             "are there ≥2 cameras" check (handled by wirePicker). The
+             others (size / rotate / mirror) are always visible — they're
+             pure toggles that persist either way and surface cleanly when
+             the camera comes on. Previously they were inline-hidden until
+             pose-source flipped to 'camera', which left the popover
+             looking empty when camera startup hiccupped on mobile. -->
         <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
-        <button class="ctrl-btn active" id="btn-camera" title="Camera size (C)" style="display:none;">camera</button>
-        <button class="ctrl-btn" id="btn-cam-rotate" title="Rotate camera (R)" style="display:none;">rot 0°</button>
-        <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (M)" style="display:none;">mirror</button>
+        <button class="ctrl-btn active" id="btn-camera"     title="Camera size (C)">camera</button>
+        <button class="ctrl-btn"        id="btn-cam-rotate" title="Rotate camera (R)">rot 0°</button>
+        <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (M)">mirror</button>
       </div>
     </div>
 

@@ -466,22 +466,40 @@ export function initQualiaPage() {
       trigger.setAttribute('aria-expanded', String(!wasOpen));
       if (!wasOpen) repositionPopover(group);
     });
-
-    // Mirror descendant .active onto the trigger for the dot indicator.
-    // We only watch the popover subtree; the trigger itself is excluded
-    // by checking the mutation target. Also fire once at boot so the dot
-    // reflects the restored settings before the user touches anything.
-    const popover = group.querySelector('.qg-popover');
-    function refreshTriggerActive() {
-      const anyActive = !!popover?.querySelector('.active, .active-audio');
-      trigger.classList.toggle('qg-has-active', anyActive);
-    }
-    if (popover && typeof MutationObserver !== 'undefined') {
-      const obs = new MutationObserver(refreshTriggerActive);
-      obs.observe(popover, { subtree: true, attributes: true, attributeFilter: ['class'] });
-    }
-    refreshTriggerActive();
   });
+
+  // Per-group "is anything actually on?" predicates power the trigger dot.
+  // Earlier the dot mirrored any descendant with .active, but several
+  // buttons start with class="active" by default (mirror, skeleton,
+  // sparks, aura, ripples) — so the dot was lit even when the underlying
+  // feature was off. Hardcoding the meaningful check per group is a few
+  // lines and fixes the misleading display.
+  function refreshGroupActiveDots() {
+    const checks = {
+      camera: () => poseSelect.value === 'camera',
+      pose:   () => poseSelect.value === 'camera',
+      layers: () => overlay.getOption('sparks')
+                 || overlay.getOption('aura')
+                 || overlay.getOption('ripples'),
+      post:   () => glitchModes.ascii !== 'off'
+                 || glitchModes.mosh  !== 'off'
+                 || glitchModes.edge  !== 'off'
+                 || autoPhaseSeconds  >  0,
+      auto:   () => autoCycleSeconds > 0,
+    };
+    document.querySelectorAll('.qg-group').forEach(g => {
+      const key = g.dataset.group;
+      const trigger = g.querySelector('.qg-trigger');
+      if (!trigger) return;
+      const fn = checks[key];
+      const on = fn ? !!fn() : false;
+      trigger.classList.toggle('qg-has-active', on);
+    });
+  }
+  // Initial paint runs after the rest of init finishes wiring; call it
+  // once boot completes via the same path that sets up the auto-boot.
+  // For now, expose as a trailing window.requestAnimationFrame.
+  requestAnimationFrame(() => { try { refreshGroupActiveDots(); } catch {} });
   // Outside click closes any open popover. Pointerdown (capture) so a
   // gesture handler that stops propagation later doesn't shield us.
   document.addEventListener('pointerdown', (ev) => {
@@ -744,32 +762,36 @@ export function initQualiaPage() {
   }
 
   // ── Pose source ───────────────────────────────────────────────────────────
+  // The cam-action buttons (size / rotate / mirror) are now always visible
+  // in the camera popover — they're pure toggles that work whether the
+  // camera is on or off, and keeping them visible avoids the "empty
+  // popover" bug seen on Android when startCamera hiccups silently. Only
+  // pose-max + cam-select remain gated on camera state.
   poseSelect.addEventListener('change', async () => {
     const v = poseSelect.value;
     if (v === 'off') {
       pose.stopCamera();
       videoEl.classList.remove('visible');
-      btnCamera.style.display = 'none';
-      btnCamRotate.style.display = 'none';
-      btnCamMirror.style.display = 'none';
       camSelect.style.display = 'none';
       posesSelect.style.display = 'none';
     } else if (v === 'camera') {
       try {
         const id = await pose.startCamera({ deviceId: getStoredDeviceId('cam'), video: videoEl });
         if (id) storeDeviceId('cam', id);
-        btnCamera.style.display = '';
-        btnCamRotate.style.display = '';
-        btnCamMirror.style.display = '';
         posesSelect.style.display = '';
         camPicker.populate(id);
       } catch (err) {
+        // Surface to console too — alerts on Android sometimes get
+        // dismissed by the OS before the user reads them; the console
+        // copy survives so a remote debugger can confirm.
+        console.error('[qualia] camera startup failed:', err);
         alert(`Could not open camera: ${err.message || err}`);
         poseSelect.value = 'off';
       }
     }
     syncPoseCardVisibility();
     syncCameraCardVisibility();
+    refreshGroupActiveDots();
     settings.save();
   });
 
@@ -1623,6 +1645,22 @@ export function initQualiaPage() {
     cursorFx.cycle();
     refreshCursorBtn();
   });
+
+  // Now that every reactive state variable (overlay, glitchModes,
+  // autoPhaseSeconds, autoCycleSeconds, ...) is bound, hook
+  // settings.save so each persistence write also re-evaluates the
+  // group trigger dots. Earlier wraps would hit TDZ on the let
+  // bindings; wrapping here keeps the dot in sync with whichever
+  // toggle the user just flipped without each handler having to
+  // remember to call refreshGroupActiveDots itself.
+  const _origSettingsSave = settings.save.bind(settings);
+  settings.save = function patchedSave() {
+    _origSettingsSave();
+    try { refreshGroupActiveDots(); } catch {}
+  };
+  // Initial paint — kicks the dots after every let has bound, since
+  // the earlier rAF-based init runs before this wrap is installed.
+  refreshGroupActiveDots();
 
   // ── Strudel tabs + pattern manager UI ─────────────────────────────────────
   const tabBar       = document.getElementById('strudel-tabs');
