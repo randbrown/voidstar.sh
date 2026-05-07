@@ -621,6 +621,11 @@
            overlap the topbar even with a 4-row wrap on a narrow screen. */
         max-height: min(55dvh, calc(100dvh - var(--topbar-h, 4.5rem) - var(--tabs-h, 2.4rem) - 1.5rem));
       }
+      /* Phone screens are short — the params card eats a lot of canvas.
+         Lower the card alpha so the viz remains readable underneath; the
+         backdrop-filter blur keeps the text legible. Tabs and topbar
+         keep their original alpha — they're thin chrome, not big slabs. */
+      .qp-card { background: rgba(10,10,26,0.55); }
       #hints        { display: none; }
       /* Mobile preview: anchor ABOVE the fixed tab bar so it doesn't
          disappear behind it. --tabs-h is published live from page-init.
