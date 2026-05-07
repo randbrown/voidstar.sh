@@ -131,7 +131,7 @@ export default {
 
   params: [
     { id: 'mode', label: 'mode', type: 'select',
-      options: ['greenscreen', 'mono', 'syntax', 'binary', 'drift'], default: 'greenscreen' },
+      options: ['greenscreen', 'mono', 'syntax', 'binary', 'drift', 'spectrum', 'heatmap'], default: 'greenscreen' },
     { id: 'palette', label: 'palette', type: 'select',
       options: PALETTE_NAMES, default: 'dracula' },
     { id: 'scrollSpeed', label: 'scroll speed', type: 'range',
@@ -172,6 +172,8 @@ export default {
     matrix:      { mode: 'binary', palette: 'classic', scrollSpeed: 1.2, glow: 1.1, fontScale: 0.9 },
     binary_pink: { mode: 'binary', palette: 'monokai', scrollSpeed: 0.9, glow: 0.9 },
     drift:       { mode: 'drift', glow: 0.5, scrollSpeed: 0.4, fontScale: 1.1 },
+    spectrum:    { mode: 'spectrum', glow: 0.4, glitch: 0.0, scrollSpeed: 0.18 },
+    heatmap:     { mode: 'heatmap',  glow: 0.6, glitch: 0.0, scrollSpeed: 0.15 },
   },
 
   // Phase steps walk every mode plus a couple palette variants. Stays inside
@@ -188,6 +190,8 @@ export default {
       { mode: 'binary', palette: 'classic' },
       { mode: 'binary', palette: 'strudel' },
       { mode: 'drift' },
+      { mode: 'spectrum' },
+      { mode: 'heatmap' },
     ],
   },
 
@@ -227,6 +231,20 @@ export default {
     // Pose-driven smoothed inputs.
     let smoothHeadX = 0;
     let smoothPresence = 0;
+
+    // Heatmap mode — per-line frozen audio band snapshot, keyed by ABSOLUTE
+    // scrolled-line number (Math.floor(scrollY/lineH) + row). Each line
+    // captures the bands the moment it first scrolls into view, then carries
+    // that color upward as it scrolls past — a true spectrogram-on-text
+    // waterfall. Bounded to keep memory stable.
+    const bandHistory = new Map();
+    function pruneBandHistory() {
+      if (bandHistory.size <= 600) return;
+      // Drop the oldest 200 entries (smallest absolute line numbers).
+      const keys = Array.from(bandHistory.keys());
+      keys.sort((a, b) => a - b);
+      for (let i = 0; i < 200; i++) bandHistory.delete(keys[i]);
+    }
 
     // Tokenize cache for syntax mode — only the visible window of lines
     // gets tokenized. Keyed by line index.
@@ -528,13 +546,133 @@ export default {
       ctx.shadowBlur = 0;
     }
 
+    // Spectrum-mode color: position → hue (red bass, violet treble),
+    // amplitude → brightness. Single allocation-free hsl string per call.
+    function spectrumColor(xFrac, amp) {
+      const hue = Math.round(xFrac * 280);
+      const lum = Math.round(28 + amp * 60);
+      return `hsl(${hue},92%,${lum}%)`;
+    }
+
+    function renderSpectrum(audio, params) {
+      paintBackground({ r: 4, g: 6, b: 14 }, 0.34 + audio.bands.bass * 0.18);
+
+      const fontPx = fontSizeFor(params);
+      const lineH = Math.round(fontPx * 1.25);
+      ctx.font = `${fontPx}px ${FONT_FAMILY}`;
+      ctx.textBaseline = 'top';
+      const xPad = 16;
+      // Monospaced font: every char advances by the same width — measure once.
+      const charW = ctx.measureText('M').width;
+      const rows = Math.ceil(H / lineH) + 2;
+      const sub = mainScroll.y % lineH;
+
+      const spec = audio.spectrum;
+      const specLen = spec ? spec.length : 0;
+      const t = scratch.time;
+
+      // No per-char shadow (cost would balloon at ~4k chars/frame). Glow comes
+      // from amplitude-driven brightness in the chars themselves.
+      ctx.shadowBlur = 0;
+
+      for (let r = 0; r < rows; r++) {
+        const lineIdx = lineAt(mainScroll.y, r, lineH);
+        const yPx = r * lineH - sub;
+        const text = SOURCE_LINES[lineIdx].text;
+        if (!text) continue;
+
+        let xOff = 0;
+        if (params.glitch > 0 && Math.random() < params.glitch * 0.08) {
+          xOff = (Math.random() - 0.5) * fontPx * 6;
+        }
+        if (params.glitch > 0 && Math.random() < params.glitch * 0.04) continue;
+
+        let x = xPad + xOff;
+        for (let ci = 0; ci < text.length; ci++) {
+          if (x > W + 10) break;
+          const ch = text.charCodeAt(ci);
+          // Skip pure spaces — fillText still pays per call.
+          if (ch === 32) { x += charW; continue; }
+          const xFrac = x / W;
+          let amp;
+          if (spec) {
+            const bin = Math.min(specLen - 1, Math.max(0, Math.floor(xFrac * specLen)));
+            amp = spec[bin] / 255;
+          } else {
+            // Idle: gentle traveling rainbow wave so the screen still feels alive.
+            amp = 0.45 + 0.35 * Math.sin(t * 0.8 - xFrac * 4.5);
+          }
+          ctx.fillStyle = spectrumColor(xFrac, amp);
+          ctx.fillText(text[ci], x, yPx);
+          x += charW;
+        }
+      }
+    }
+
+    function renderHeatmap(audio, params) {
+      paintBackground({ r: 6, g: 6, b: 12 }, 0.32 + audio.bands.bass * 0.16);
+
+      const fontPx = fontSizeFor(params);
+      const lineH = Math.round(fontPx * 1.25);
+      ctx.font = `${fontPx}px ${FONT_FAMILY}`;
+      ctx.textBaseline = 'top';
+      const xPad = 16;
+      const rows = Math.ceil(H / lineH) + 2;
+      const sub = mainScroll.y % lineH;
+      const baseLine = Math.floor(mainScroll.y / lineH);
+
+      const glow = Math.max(0, params.glow);
+      const audioOn = !!audio.spectrum;
+      const t = scratch.time;
+
+      for (let r = 0; r < rows; r++) {
+        const abs = baseLine + r;
+        const lineIdx = lineAt(mainScroll.y, r, lineH);
+        let snap = bandHistory.get(abs);
+        if (!snap) {
+          if (audioOn) {
+            snap = { b: audio.bands.bass, m: audio.bands.mids, h: audio.bands.highs };
+          } else {
+            // Idle: paint each new line with a slow rainbow drift so the
+            // waterfall isn't dead when audio is off.
+            snap = {
+              b: 0.35 + 0.30 * Math.sin(t * 0.7 + abs * 0.18),
+              m: 0.35 + 0.30 * Math.sin(t * 0.9 + abs * 0.18 + 2.094),
+              h: 0.35 + 0.30 * Math.sin(t * 1.1 + abs * 0.18 + 4.188),
+            };
+          }
+          bandHistory.set(abs, snap);
+        }
+        const yPx = r * lineH - sub;
+        // RGB direct from bands. Floor keeps text legible at silence;
+        // ceiling caps blowout. Slight gain so soft audio still tints visibly.
+        const rcol = Math.min(255, Math.max(45, Math.round(snap.b * 380)));
+        const gcol = Math.min(255, Math.max(35, Math.round(snap.m * 380)));
+        const bcol = Math.min(255, Math.max(70, Math.round(snap.h * 420)));
+        ctx.shadowColor = `rgba(${rcol},${gcol},${bcol},0.55)`;
+        ctx.shadowBlur = 2 + 10 * glow;
+        ctx.fillStyle = `rgb(${rcol},${gcol},${bcol})`;
+
+        let xOff = 0;
+        if (params.glitch > 0 && Math.random() < params.glitch * 0.08) {
+          xOff = (Math.random() - 0.5) * fontPx * 6;
+        }
+        if (params.glitch > 0 && Math.random() < params.glitch * 0.04) continue;
+
+        ctx.fillText(SOURCE_LINES[lineIdx].text, xPad + xOff, yPx);
+      }
+      ctx.shadowBlur = 0;
+      pruneBandHistory();
+    }
+
     // ── Main update/render ───────────────────────────────────────────────
-    const scratch = { audio: null, params: null };
+    const scratch = { audio: null, params: null, time: 0 };
 
     function update(field) {
       const audio = scaleAudio(field.audio, field.params.reactivity);
       scratch.audio = audio;
       scratch.params = field.params;
+      scratch.time = field.time;
 
       const dt = field.dt;
       const speed = Math.max(0, field.params.scrollSpeed);
@@ -614,6 +752,8 @@ export default {
         case 'syntax':      renderSyntax(audio, params);      break;
         case 'binary':      renderBinary(audio, params);      break;
         case 'drift':       renderDrift(audio, params);       break;
+        case 'spectrum':    renderSpectrum(audio, params);    break;
+        case 'heatmap':     renderHeatmap(audio, params);     break;
         default:            renderGreenscreen(audio, params); break;
       }
     }
@@ -633,6 +773,7 @@ export default {
       render,
       dispose() {
         tokenCache.clear();
+        bandHistory.clear();
         dropPool.length = 0;
       },
     };
