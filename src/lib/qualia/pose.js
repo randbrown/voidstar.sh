@@ -197,21 +197,33 @@ export function createPose() {
       throw lastErr;
     }
     videoEl.srcObject = stream;
-    // 3-second timeout on metadata to avoid hangs we've seen on Android
-    // Chrome when the video element is display:none. If metadata never
-    // fires we surface a clear error rather than awaiting indefinitely.
-    await Promise.race([
-      new Promise(r => videoEl.addEventListener('loadedmetadata', r, { once: true })),
-      new Promise((_, reject) => setTimeout(
-        () => reject(new Error('Camera metadata timeout (3s) — try toggling camera off and on')),
-        3000
-      )),
-    ]).catch(err => {
-      console.error('[qualia] camera metadata never loaded:', err);
-      throw err;
-    });
-    await videoEl.play().catch(() => {});
+    // Reveal the preview BEFORE awaiting metadata. Android Chrome won't
+    // fire `loadedmetadata` (or even start the underlying decode) while
+    // the element is display:none — that's the path that used to deadlock
+    // until the 3s safety net tripped.
     videoEl.classList.add('visible');
+    // Kick off play() concurrently. iOS Safari needs the play call to
+    // progress past HAVE_NOTHING; we don't await here because some
+    // browsers resolve play() only after metadata.
+    const playPromise = videoEl.play().catch(() => {});
+    if (videoEl.readyState < 1) {
+      // 5-second safety net — generous because cold-start on a back lens
+      // (autofocus + sensor warm-up) routinely takes 2-3s on mid-range
+      // Android. Surfaces a clear error instead of hanging if the stream
+      // truly never arrives.
+      await Promise.race([
+        new Promise(r => videoEl.addEventListener('loadedmetadata', r, { once: true })),
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error('Camera metadata timeout (5s) — try toggling camera off and on')),
+          5000
+        )),
+      ]).catch(err => {
+        console.error('[qualia] camera metadata never loaded:', err);
+        videoEl.classList.remove('visible');
+        throw err;
+      });
+    }
+    await playPromise;
     detectSource = 'camera';
     if (!detectLoopStarted) startDetectLoop();
     activeTrack = stream.getVideoTracks()[0] || null;

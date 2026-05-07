@@ -561,17 +561,35 @@ export function initQualiaPage() {
   // #strudel-panel can size themselves relative to it instead of guessing.
   // The topbar is column-flex with a wrapping control row so its height
   // depends on viewport width (number of wrap rows). ResizeObserver is the
-  // cheap way to keep --topbar-h current.
+  // cheap way to keep --topbar-h current. --tabs-h does the same for the
+  // mobile-only panel tab bar so #panel-stack lifts to clear it without
+  // hard-coding the height.
   const setTopbarVar = () => {
     const h = topbarEl.getBoundingClientRect().height;
     if (h > 0) document.documentElement.style.setProperty('--topbar-h', `${h}px`);
   };
+  const setTabsVar = () => {
+    if (!panelTabs) return;
+    // getBoundingClientRect returns 0 while the bar is display:none on
+    // desktop; in that case we want the var to be 0 so #panel-stack reclaims
+    // the bottom margin instead of leaving a phantom gap.
+    const cs = window.getComputedStyle(panelTabs);
+    const h = cs.display === 'none' ? 0 : panelTabs.getBoundingClientRect().height;
+    document.documentElement.style.setProperty('--tabs-h', `${h}px`);
+  };
   setTopbarVar();
+  setTabsVar();
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(setTopbarVar).observe(topbarEl);
+    if (panelTabs) new ResizeObserver(setTabsVar).observe(panelTabs);
   } else {
-    window.addEventListener('resize', setTopbarVar);
+    window.addEventListener('resize', () => { setTopbarVar(); setTabsVar(); });
   }
+  // Media-query change (rotating the phone, resizing a touch laptop) flips
+  // the display:none toggle on the tab bar — ResizeObserver doesn't fire
+  // for display changes, so listen here too.
+  window.matchMedia('(max-width: 768px), (pointer: coarse)')
+    .addEventListener?.('change', setTabsVar);
 
   // ── Audio source mode (off / mic / strudel / mix) ───────────────────────
   // The button is a 4-state selector. The mode is the user's intent; the
@@ -1035,7 +1053,7 @@ export function initQualiaPage() {
     // canvas" — only the start position decides.
     const el = document.elementFromPoint(x, y);
     if (!el) return false;
-    return !!el.closest('#topbar, #panel-stack, #strudel-panel, #video, #zen-handle, #status-overlay, .qg-popover');
+    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #video, #zen-handle, #status-overlay, .qg-popover');
   }
 
   function onCanvasPointerDown(ev) {

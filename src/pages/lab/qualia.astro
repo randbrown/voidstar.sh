@@ -290,12 +290,18 @@
 
     /* Tab bar for the bottom-left card stack. Hidden on desktop — the
        free-stack with collapsible cards is fine when there's vertical
-       space. On mobile / coarse pointer the bar shows; tapping a tab
-       opens that card and collapses the others (one-at-a-time). The
+       space. On mobile / coarse pointer the bar shows pinned to the
+       bottom of the viewport (NOT inside #panel-stack), so the cards
+       above it scroll independently while the tabs stay reachable. The
        row is horizontally scrollable with snap so a phone screen can
        fit ~5 tabs visible at once with the rest reachable by scroll. */
     .qp-tabs {
       display: none;
+      position: fixed;
+      left:   max(0.5rem, env(safe-area-inset-left));
+      right:  max(0.5rem, env(safe-area-inset-right));
+      bottom: max(0.5rem, env(safe-area-inset-bottom));
+      z-index: 16;
       flex-direction: row; gap: 0.3rem;
       padding: 0.3rem 0.4rem;
       background: var(--surface); backdrop-filter: blur(12px);
@@ -582,12 +588,15 @@
       #panel-stack  {
         left: max(0.5rem, env(safe-area-inset-left));
         right: max(0.5rem, env(safe-area-inset-right));
-        bottom: max(0.5rem, env(safe-area-inset-bottom));
+        /* Lift above the fixed tab bar (~2.4rem tall incl. padding +
+           border) plus the inset/gap. --tabs-h is set live by page-init
+           via ResizeObserver so a wrapped tab row doesn't underlap. */
+        bottom: calc(max(0.5rem, env(safe-area-inset-bottom)) + var(--tabs-h, 2.4rem) + 0.4rem);
         max-width: none;
         /* Tighter cap on mobile — at most 55% of viewport so the active fx
            is always visible behind the panel. The min() ensures we don't
            overlap the topbar even with a 4-row wrap on a narrow screen. */
-        max-height: min(55dvh, calc(100dvh - var(--topbar-h, 4.5rem) - 1rem));
+        max-height: min(55dvh, calc(100dvh - var(--topbar-h, 4.5rem) - var(--tabs-h, 2.4rem) - 1.5rem));
       }
       #hints        { display: none; }
       #video.visible { width: 120px; bottom: max(0.5rem, env(safe-area-inset-bottom)); right: max(0.5rem, env(safe-area-inset-right)); }
@@ -927,21 +936,20 @@
     </div>
     <div class="qp-body" id="fx-params"></div>
   </div>
+</div>
 
-  <!-- Tab bar — visible only on touch / narrow viewports. Tapping a tab
-       opens that card and collapses the others (enforces accordion). On
-       desktop the existing free-stack behavior persists; tabs hide. The
-       bar lives at the END of #panel-stack because the parent uses
-       flex-direction: column-reverse, so DOM-last renders at visual top. -->
-  <div id="panel-tabs" class="qp-tabs" role="tablist" aria-label="Settings panels">
-    <button class="qp-tab" data-card="fx-card"     role="tab">params</button>
-    <button class="qp-tab" data-card="audio-card"  role="tab">audio</button>
-    <button class="qp-tab" data-card="pose-card"   role="tab">pose</button>
-    <button class="qp-tab" data-card="camera-card" role="tab">camera</button>
-    <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
-    <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
-    <button class="qp-tab" data-card="diag-card"   role="tab">diag</button>
-  </div>
+<!-- Tab bar — visible only on touch / narrow viewports. Tapping a tab
+     opens that card and collapses the others (enforces accordion). Lives
+     OUTSIDE #panel-stack so it stays anchored at the bottom of the
+     viewport while card content scrolls independently above it. -->
+<div id="panel-tabs" class="qp-tabs" role="tablist" aria-label="Settings panels">
+  <button class="qp-tab" data-card="fx-card"     role="tab">params</button>
+  <button class="qp-tab" data-card="audio-card"  role="tab">audio</button>
+  <button class="qp-tab" data-card="pose-card"   role="tab">pose</button>
+  <button class="qp-tab" data-card="camera-card" role="tab">camera</button>
+  <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
+  <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
+  <button class="qp-tab" data-card="diag-card"   role="tab">diag</button>
 </div>
 
 <div id="strudel-panel" style="display:none">
