@@ -536,12 +536,21 @@ export function initQualiaPage() {
       const btn = ev.target.closest('.qp-tab');
       if (!btn) return;
       const cardId = btn.dataset.card;
-      // Expand the target card; collapse all siblings. Same accordion
-      // policy as the data-toggle handler uses on mobile, but always
-      // applied — tabs are an explicit "show one" affordance.
-      document.querySelectorAll('#panel-stack > .qp-card').forEach(c => {
-        c.classList.toggle('collapsed', c.id !== cardId);
-      });
+      const target = document.getElementById(cardId);
+      if (!target) return;
+      // Tapping the already-active tab dismisses the panel (collapse all);
+      // tapping any other tab expands that card and collapses siblings.
+      // The "all collapsed" state is fine on mobile — the CSS rule
+      // hides collapsed cards entirely, so the panel-stack vanishes and
+      // the fx canvas is fully unobstructed until the next tap.
+      const isActive = !target.classList.contains('collapsed');
+      if (isActive) {
+        target.classList.add('collapsed');
+      } else {
+        document.querySelectorAll('#panel-stack > .qp-card').forEach(c => {
+          c.classList.toggle('collapsed', c.id !== cardId);
+        });
+      }
       refreshPanelTabs();
       settings.save();
     });
