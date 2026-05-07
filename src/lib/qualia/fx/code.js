@@ -135,10 +135,10 @@ export default {
     { id: 'palette', label: 'palette', type: 'select',
       options: PALETTE_NAMES, default: 'dracula' },
     { id: 'scrollSpeed', label: 'scroll speed', type: 'range',
-      min: 0, max: 6, step: 0.05, default: 1.6,
+      min: 0, max: 2, step: 0.02, default: 0.2,
       modulators: [
         { source: 'audio.bass',      mode: 'mul', amount: 0.6 },
-        { source: 'audio.beatPulse', mode: 'add', amount: 1.4 },
+        { source: 'audio.beatPulse', mode: 'add', amount: 0.4 },
       ] },
     { id: 'fontScale', label: 'font scale', type: 'range',
       min: 0.4, max: 2.5, step: 0.05, default: 1.0,
@@ -163,15 +163,15 @@ export default {
   ],
 
   presets: {
-    default:     { mode: 'greenscreen', palette: 'dracula', scrollSpeed: 1.6, fontScale: 1.0, glow: 0.7, glitch: 0.25, layers: 1, reactivity: 1.0 },
+    default:     { mode: 'greenscreen', palette: 'dracula', scrollSpeed: 0.2, fontScale: 1.0, glow: 0.7, glitch: 0.25, layers: 1, reactivity: 1.0 },
     greenscreen: { mode: 'greenscreen', layers: 0, glow: 0.9, glitch: 0.15 },
     layered:     { mode: 'greenscreen', layers: 3, glow: 1.0, glitch: 0.30, fontScale: 0.9 },
-    mono:        { mode: 'mono', layers: 0, glow: 0.0, glitch: 0.05, scrollSpeed: 1.0 },
+    mono:        { mode: 'mono', layers: 0, glow: 0.0, glitch: 0.05, scrollSpeed: 0.12 },
     syntax:      { mode: 'syntax', palette: 'dracula', glow: 0.4, glitch: 0.05 },
     monokai:     { mode: 'syntax', palette: 'monokai', glow: 0.5 },
-    matrix:      { mode: 'binary', palette: 'classic', scrollSpeed: 2.4, glow: 1.1, fontScale: 0.9 },
-    binary_pink: { mode: 'binary', palette: 'monokai', scrollSpeed: 2.0, glow: 0.9 },
-    drift:       { mode: 'drift', glow: 0.5, scrollSpeed: 1.2, fontScale: 1.1 },
+    matrix:      { mode: 'binary', palette: 'classic', scrollSpeed: 1.2, glow: 1.1, fontScale: 0.9 },
+    binary_pink: { mode: 'binary', palette: 'monokai', scrollSpeed: 0.9, glow: 0.9 },
+    drift:       { mode: 'drift', glow: 0.5, scrollSpeed: 0.4, fontScale: 1.1 },
   },
 
   // Phase steps walk every mode plus a couple palette variants. Stays inside
