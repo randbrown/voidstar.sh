@@ -941,9 +941,14 @@ export function initQualiaPage() {
     if (videoEl.classList.contains('size-full')) return; // no offset in full
     // The base anchor is bottom/right. Positive dx pushes left, dy pushes up.
     // We update both bottom & right to keep the existing CSS as the base.
-    const baseBottom = window.matchMedia('(max-width: 768px)').matches ? 0.5 : 1.25; // rem
+    const isMobile   = window.matchMedia('(max-width: 768px)').matches;
+    const baseBottom = isMobile ? 0.5 : 1.25; // rem
     const baseRight  = baseBottom;
-    videoEl.style.bottom = `calc(${baseBottom}rem + ${videoOffset.dy}px)`;
+    // On mobile, lift the default anchor above the fixed panel-tabs bar
+    // (matches the CSS rule for #video.visible). Without this, dragging
+    // the preview snaps it back down behind the tab bar.
+    const tabsLift = isMobile ? ' + var(--tabs-h, 2.4rem) + 0.4rem' : '';
+    videoEl.style.bottom = `calc(${baseBottom}rem${tabsLift} + ${videoOffset.dy}px)`;
     videoEl.style.right  = `calc(${baseRight}rem + ${videoOffset.dx}px)`;
   }
 

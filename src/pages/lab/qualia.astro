@@ -73,7 +73,11 @@
       position: fixed; bottom: 1.25rem; right: 1.25rem;
       width: 200px; height: auto; display: none;
       border-radius: 8px; border: 1px solid var(--border);
-      opacity: 0.78; z-index: 10;
+      /* z-index 17 keeps the live preview above #panel-tabs (16) and
+         #panel-stack (15) — without this the preview renders behind the
+         mobile tab bar and the user sees a "camera not working" black
+         strip in the bottom-right. */
+      opacity: 0.78; z-index: 17;
       transform: scaleX(-1);
       transition: opacity 0.2s, width 0.3s;
       /* Touch handlers (tap / double-tap / long-press / drag) live in
@@ -209,6 +213,24 @@
        screen. page-init.js flips this class to pin it to the trigger's
        right edge instead of its left edge. */
     .qg-popover.right-aligned { left: auto; right: 0; }
+    /* On mobile, drop the trigger-anchored positioning entirely and turn
+       the popover into a full-width drawer below the topbar. The
+       previous trigger-relative layout pushed wider popovers off-screen
+       (left edge clipped) when the right-aligned flip kicked in on a
+       trigger sitting near the left half of the toolbar. */
+    @media (max-width: 768px), (pointer: coarse) {
+      .qg-popover,
+      .qg-popover.right-aligned {
+        position: fixed;
+        top:    calc(var(--topbar-h, 4.5rem) + 0.35rem);
+        left:   max(0.5rem, env(safe-area-inset-left));
+        right:  max(0.5rem, env(safe-area-inset-right));
+        bottom: auto;
+        min-width: 0;
+        max-width: none;
+        max-height: calc(100dvh - var(--topbar-h, 4.5rem) - var(--tabs-h, 2.4rem) - 1.5rem);
+      }
+    }
 
     #zen-handle {
       position: fixed; top: 0; right: 1rem; z-index: 25;
@@ -599,7 +621,14 @@
         max-height: min(55dvh, calc(100dvh - var(--topbar-h, 4.5rem) - var(--tabs-h, 2.4rem) - 1.5rem));
       }
       #hints        { display: none; }
-      #video.visible { width: 120px; bottom: max(0.5rem, env(safe-area-inset-bottom)); right: max(0.5rem, env(safe-area-inset-right)); }
+      /* Mobile preview: anchor ABOVE the fixed tab bar so it doesn't
+         disappear behind it. --tabs-h is published live from page-init.
+         applyVideoOffset (drag) reads the same var. */
+      #video.visible {
+        width: 120px;
+        bottom: calc(max(0.5rem, env(safe-area-inset-bottom)) + var(--tabs-h, 2.4rem) + 0.4rem);
+        right: max(0.5rem, env(safe-area-inset-right));
+      }
       #strudel-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       .sp-tag, .sp-status { display: none; }
     }
