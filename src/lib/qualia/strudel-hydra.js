@@ -163,7 +163,10 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   let mounted  = false;
   let strudelAnalyser = null;
   let pollT = null;
-  let tapped = false;
+  // Source of truth for "is Strudel adopted into audio analysis" is
+  // `audio.hasSource('strudel')` — this module no longer carries its own
+  // `tapped` flag, so the panel/playback/audio state can't drift from one
+  // another. Local helpers below read hasSource() directly.
   // Source of truth for "is the user expecting Strudel to be playing".
   // We *cannot* use btnPlay's `playing` class for this: Strudel's evaluate()
   // internally calls ed.stop() before scheduling new code, which fires our
@@ -327,6 +330,35 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     }
   }
 
+  // Paint the topbar `strudel` button from current state — panel open
+  // and audio adoption are independent now (panel can be hidden while
+  // Strudel keeps playing into the analyser), so the label has to
+  // consult both. Earlier the text was mutated from open()/close()/
+  // tapMaster() in three places and could disagree with itself.
+  function refreshStrudelBtn() {
+    if (!btnToggle) return;
+    btnToggle.classList.remove('active', 'active-audio');
+    const live    = audio.hasSource('strudel');
+    const open    = panel?.style.display !== 'none';
+    if (live) {
+      btnToggle.classList.add('active-audio');
+      btnToggle.textContent = 'strudel ●';
+    } else if (open) {
+      btnToggle.classList.add('active');
+      btnToggle.textContent = 'strudel on';
+    } else {
+      btnToggle.textContent = 'strudel';
+    }
+    if (status) {
+      if (live) {
+        status.textContent = 'audio: live';
+        status.classList.add('live');
+      } else {
+        status.classList.remove('live');
+      }
+    }
+  }
+
   function play() {
     const ed = getEditor();
     if (!ed) return false;
@@ -337,6 +369,10 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       else return false;
       isPlayingFlag = true;
       btnPlay?.classList.add('playing');
+      // Strudel's AudioContext only spins up after the first play(); poll
+      // until it's running and we can attach our analyser. Cheap to call
+      // when we're already tapped — ensureTapPolling early-returns.
+      ensureTapPolling();
       return true;
     } catch (e) { console.warn('[qualia] strudel play failed:', e); return false; }
   }
@@ -349,6 +385,11 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       else return false;
       isPlayingFlag = false;
       btnPlay?.classList.remove('playing');
+      // Real stop — drop the analyser so the audio mode's `strudel`
+      // filter doesn't keep showing the user a ghost source. Re-tap on
+      // next play().
+      audio.releaseAdopted();
+      refreshStrudelBtn();
       return true;
     } catch (e) { console.warn('[qualia] strudel stop failed:', e); return false; }
   }
@@ -367,6 +408,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     }
     isPlayingFlag = false;
     btnPlay?.classList.remove('playing');
+    audio.releaseAdopted();
+    refreshStrudelBtn();
   }
 
   function tapMaster(ctx) {
@@ -395,29 +438,31 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       }
       strudelAnalyser = an;
     }
-    tapped = true;
     audio.adoptAnalyser(ctx, strudelAnalyser);
-    if (status) {
-      status.textContent = 'audio: live';
-      status.classList.add('live');
-    }
-    if (btnToggle) {
-      btnToggle.classList.remove('active');
-      btnToggle.classList.add('active-audio');
-      btnToggle.textContent = 'strudel ●';
-    }
+    refreshStrudelBtn();
     return true;
   }
 
-  function pollForAudio() {
+  // Keep polling until `audio.hasSource('strudel')` is true. We previously
+  // had a 12-second deadline tied to panel-open; that meant any later play()
+  // (after the deadline elapsed) silently never tapped, leaving the UI
+  // showing "audio strudel" with no live source. The new policy is "poll
+  // while we have a reason to" — Strudel is playing, OR the panel is open
+  // and the user might play imminently — and stop the moment we tap.
+  function ensureTapPolling() {
     if (pollT) return;
-    const deadline = performance.now() + 12000;
+    if (audio.hasSource('strudel')) return;
     pollT = setInterval(() => {
-      if (performance.now() > deadline) { clearInterval(pollT); pollT = null; return; }
+      if (audio.hasSource('strudel')) { clearInterval(pollT); pollT = null; return; }
+      // Drop the poll once the user has both stopped Strudel and closed
+      // the panel — there's nothing live to attach to and we don't want
+      // to spin forever in the background.
+      const panelOpen = panel?.style.display !== 'none';
+      if (!panelOpen && !isPlayingFlag) { clearInterval(pollT); pollT = null; return; }
       let ctx = null;
       try { ctx = globalThis.getAudioContext?.(); } catch {}
       if (!ctx || ctx.state !== 'running') return;
-      if (tapMaster(ctx)) { clearInterval(pollT); pollT = null; }
+      tapMaster(ctx);
     }, 200);
   }
 
@@ -492,13 +537,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     // already adopted, this is a no-op for audio.
     if (panel) panel.style.display = '';
     reposition();
-    if (btnToggle) {
-      btnToggle.classList.add('active');
-      btnToggle.textContent = 'strudel on';
-    }
-    if (status) {
+    refreshStrudelBtn();
+    if (status && !audio.hasSource('strudel')) {
       status.textContent = 'loading…';
-      status.classList.remove('live');
     }
     try { await loadStrudelScript(); }
     catch (err) {
@@ -506,27 +547,31 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       return;
     }
     mountEditor();
-    if (status) status.textContent = 'click ▶ in editor to start';
-    pollForAudio();
+    if (status && !audio.hasSource('strudel')) {
+      status.textContent = 'click ▶ in editor to start';
+    }
+    ensureTapPolling();
   }
 
   function close() {
-    // Deliberately *do not* stop Strudel playback here — closing the
-    // panel is a "hide UI" action, and keeping the jam audible while the
-    // editor is collapsed is intentional. Callers that need to actually
-    // halt Strudel (e.g. switching the mic input) should call
-    // stopPlayback() themselves before close().
+    // Hiding the panel is purely a "hide UI" action — Strudel keeps
+    // playing, and crucially the adopted analyser stays attached so the
+    // visualizers continue to react. We previously released the tap
+    // here, which left users with `audio strudel` mode set, audio
+    // audibly playing, but no viz. Release happens in stop()/
+    // stopPlayback() instead — the actual end of playback.
     if (panel) panel.style.display = 'none';
-    if (pollT) { clearInterval(pollT); pollT = null; }
-    if (tapped) audio.releaseAdopted();
-    tapped = false;
-    if (btnToggle) {
-      btnToggle.classList.remove('active-audio');
-      btnToggle.classList.remove('active');
-      btnToggle.textContent = 'strudel';
-    }
-    status?.classList.remove('live');
+    // Likewise the poll only needs to keep running if we still have
+    // something to tap onto (i.e. Strudel is still playing). When the
+    // user closes the panel without playing anything, kill it.
+    if (!isPlayingFlag && pollT) { clearInterval(pollT); pollT = null; }
+    refreshStrudelBtn();
   }
+
+  // Repaint whenever audio.js itself flips strudel on/off so the topbar
+  // button label can never disagree with reality. Page-init also
+  // subscribes for its own button — both listeners coexist fine.
+  audio.onChange?.(() => refreshStrudelBtn());
 
   if (btnToggle) btnToggle.addEventListener('click', () => {
     if (!panel) return;
