@@ -25,6 +25,9 @@ import synthwave       from './fx/synthwave.js';
 import camera          from './fx/camera.js';
 import darkSpace       from './fx/dark-space.js';
 import code            from './fx/code.js';
+import anomaly         from './fx/anomaly.js';
+import atomicOrbital   from './fx/atomic-orbital.js';
+import galaxy          from './fx/galaxy.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -88,6 +91,9 @@ export function initQualiaPage() {
   mesh.register(camera);
   mesh.register(darkSpace);
   mesh.register(code);
+  mesh.register(anomaly);
+  mesh.register(atomicOrbital);
+  mesh.register(galaxy);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');

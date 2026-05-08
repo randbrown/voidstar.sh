@@ -19,6 +19,12 @@ import { makeField } from './field.js';
 import { buildParamPanel } from './ui.js';
 import { loadFxParams, saveFxParams, loadFxModWeights, saveFxModWeights } from './presets.js';
 import { computeChannels, resolveParams, makeChannelSnapshot, modWeightKey } from './modulation.js';
+// Three.js — used by 'three' contextType quales. Static + named imports:
+// the Three quale modules also static-import Three, so a dynamic import
+// here would be no-op (Vite warns and merges chunks). All lab visualizers
+// ship together in one page bundle either way. Named imports keep
+// tree-shaking honest.
+import { WebGLRenderer, LinearSRGBColorSpace } from 'three';
 
 const DEFAULT_DPR_CAP = 1.5;
 
@@ -58,8 +64,14 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
 
   /** @type {HTMLCanvasElement|null} */
   let canvas = null;
-  /** @type {'canvas2d'|'webgl2'|null} */
+  /** @type {'canvas2d'|'webgl2'|'three'|null} */
   let canvasType = null;
+  /** Single Three.js renderer reused across all 'three' quales — Three's
+   *  WebGLRenderer owns the canvas's GL context exclusively, and disposing
+   *  one then constructing another on the same canvas leaves the second in
+   *  a lost-context state. So core owns the renderer; quales borrow it.
+   *  @type {import('three').WebGLRenderer|null} */
+  let threeRenderer = null;
 
   /** @type {import('./types.js').QFXModule|null} */
   let activeMod  = null;
@@ -78,7 +90,17 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
 
   function ensureCanvas(forType) {
     if (canvas && canvasType === forType) return canvas;
-    if (canvas) canvas.remove();
+    if (canvas) {
+      // Tear down the Three renderer BEFORE removing the canvas so the GL
+      // context dies cleanly. forceContextLoss + dispose silences Three's
+      // "context lost during teardown" warnings.
+      if (threeRenderer) {
+        try { threeRenderer.forceContextLoss(); } catch {}
+        try { threeRenderer.dispose(); } catch {}
+        threeRenderer = null;
+      }
+      canvas.remove();
+    }
     const c = document.createElement('canvas');
     c.id = 'qualia-canvas';
     host.appendChild(c);
@@ -97,7 +119,11 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   function applyDpr() {
     if (!canvas) return;
     const [w, h] = getCssSize();
-    const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
+    // Quale-declared maxDpr (heavy raymarchers etc) clamps further on top of
+    // the global cap. Lower wins.
+    const fxCap = activeMod?.maxDpr;
+    const effectiveCap = (typeof fxCap === 'number') ? Math.min(dprCap, fxCap) : dprCap;
+    const dpr = Math.min(window.devicePixelRatio || 1, effectiveCap);
     canvas.width  = Math.max(1, Math.floor(w * dpr));
     canvas.height = Math.max(1, Math.floor(h * dpr));
     if (activeInst) {
@@ -134,6 +160,37 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
       });
       if (!gl) throw new Error('webgl2 not available');
       opts = { gl };
+    } else if (mod.contextType === 'three') {
+      // Three.js owns the canvas GL context exclusively. We build the
+      // renderer once per canvas and hand the same instance to every
+      // 'three' quale that activates while this canvas is alive — switching
+      // between two 'three' quales keeps the renderer + GL context, only
+      // the scene graph turns over. Quales' dispose() must NOT touch the
+      // renderer; ensureCanvas owns its lifecycle.
+      if (!threeRenderer) {
+        threeRenderer = new WebGLRenderer({
+          canvas: c,
+          alpha: true,
+          antialias: false,
+          // Overlay (ASCII post / drawImage feedback) reads from the canvas
+          // mid-frame — must keep the framebuffer around.
+          preserveDrawingBuffer: true,
+          // Match the existing webgl2 quales so mix-blend-mode: screen behaves
+          // consistently across all WebGL backends.
+          premultipliedAlpha: false,
+        });
+        // Core has already DPR-scaled canvas.width/height; tell Three to leave
+        // pixel ratio at 1 so it doesn't multiply on top of that.
+        threeRenderer.setPixelRatio(1);
+        // Opaque black clear so screen-blend with Hydra below behaves like the
+        // shader quales (fullscreen-tri ones fill the frame; transparent
+        // backgrounds would let Hydra dominate the gaps for point clouds).
+        threeRenderer.setClearColor(0x000000, 1);
+        // Avoid double gamma vs Hydra under mix-blend-mode: screen. The
+        // existing webgl2 quales write linear-sRGB without tonemap.
+        threeRenderer.outputColorSpace = LinearSRGBColorSpace;
+      }
+      opts = { renderer: threeRenderer };
     } else {
       const ctx = c.getContext('2d');
       if (!ctx) throw new Error('canvas2d not available');

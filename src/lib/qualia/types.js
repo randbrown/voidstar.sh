@@ -138,14 +138,19 @@
  * @typedef {Object} QFXModule
  * @property {string} id
  * @property {string} name
- * @property {'canvas2d'|'webgl2'} contextType
+ * @property {'canvas2d'|'webgl2'|'three'} contextType
  * @property {ParamSpec[]} params
  * @property {Object<string, Object<string, number|string|boolean>>} [presets]
  * @property {AutoPhaseSpec} [autoPhase]
  *           Declares the topbar `phase` button's behaviour while this quale
  *           is active. Omit if the quale has nothing to phase through — the
  *           button reads "phase n/a" and is disabled.
- * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D }) => Promise<QFXInstance>|QFXInstance} create
+ * @property {number} [maxDpr]
+ *           Optional cap on devicePixelRatio for this quale, applied on top
+ *           of the global DPR cap (default 1.5). Heavy fragment shaders
+ *           (e.g. raymarchers) can declare 1.0 to halve fragment work on
+ *           high-DPI screens. Lower wins.
+ * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any }) => Promise<QFXInstance>|QFXInstance} create
  */
 
 export {};
