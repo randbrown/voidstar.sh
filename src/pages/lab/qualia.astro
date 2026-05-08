@@ -334,6 +334,7 @@
       scroll-snap-type: x proximity;
       -webkit-overflow-scrolling: touch;
       flex-shrink: 0;
+      transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
     }
     .qp-tab {
       background: none; border: 1px solid var(--border); border-radius: 4px;
@@ -344,6 +345,11 @@
     }
     .qp-tab:hover  { color: var(--accent); border-color: var(--accent); }
     .qp-tab.active { color: var(--cyan);   border-color: var(--cyan); background: rgba(34,211,238,0.06); }
+    /* Zen mode hides the bottom-left card stack AND the mobile tab bar so
+       the viewport is just the active fx. setZen() in page-init also drops
+       --tabs-h to 0 so any anchored elements (#video preview) reclaim the
+       freed bottom margin. */
+    #panel-tabs.zen { transform: translateY(150%); opacity: 0; pointer-events: none; }
     @media (max-width: 768px), (pointer: coarse) {
       .qp-tabs { display: flex; }
 
@@ -616,16 +622,17 @@
            via ResizeObserver so a wrapped tab row doesn't underlap. */
         bottom: calc(max(0.5rem, env(safe-area-inset-bottom)) + var(--tabs-h, 2.4rem) + 0.4rem);
         max-width: none;
-        /* Tighter cap on mobile — at most 55% of viewport so the active fx
-           is always visible behind the panel. The min() ensures we don't
-           overlap the topbar even with a 4-row wrap on a narrow screen. */
-        max-height: min(55dvh, calc(100dvh - var(--topbar-h, 4.5rem) - var(--tabs-h, 2.4rem) - 1.5rem));
+        /* Tighter cap on mobile — at most 50% of viewport so the active fx
+           stays clearly visible behind the panel. The min() ensures we
+           don't overlap the topbar even with a 4-row wrap on a narrow
+           screen. */
+        max-height: min(50dvh, calc(100dvh - var(--topbar-h, 4.5rem) - var(--tabs-h, 2.4rem) - 1.5rem));
       }
       /* Phone screens are short — the params card eats a lot of canvas.
          Lower the card alpha so the viz remains readable underneath; the
          backdrop-filter blur keeps the text legible. Tabs and topbar
          keep their original alpha — they're thin chrome, not big slabs. */
-      .qp-card { background: rgba(10,10,26,0.55); }
+      .qp-card { background: rgba(10,10,26,0.40); }
       #hints        { display: none; }
       /* Mobile preview: anchor ABOVE the fixed tab bar so it doesn't
          disappear behind it. --tabs-h is published live from page-init.
@@ -708,7 +715,7 @@
 
     <div class="qg-group" data-group="pose">
       <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="pose"
-              title="Pose detection (P/J)" aria-haspopup="true" aria-expanded="false">pose<span class="qg-caret">▾</span></button>
+              title="Pose detection (P/J/F/G)" aria-haspopup="true" aria-expanded="false">pose<span class="qg-caret">▾</span></button>
       <div class="qg-popover" role="menu">
         <select id="pose-max" class="ctrl-btn" title="Max poses (1-6)" style="display:none;">
           <option value="1">1 pose</option>
@@ -719,15 +726,15 @@
           <option value="6">6 poses</option>
         </select>
         <button class="ctrl-btn active" id="btn-skeleton" title="Skeleton overlay (J)">skeleton</button>
+        <button class="ctrl-btn active" id="btn-sparks"   title="Beat sparks (F)">sparks</button>
+        <button class="ctrl-btn active" id="btn-aura"     title="Resonance aura (G)">aura</button>
       </div>
     </div>
 
     <div class="qg-group" data-group="layers">
       <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="layers"
-              title="Reactive overlays (F/G/B)" aria-haspopup="true" aria-expanded="false">layers<span class="qg-caret">▾</span></button>
+              title="Reactive overlays (B)" aria-haspopup="true" aria-expanded="false">layers<span class="qg-caret">▾</span></button>
       <div class="qg-popover" role="menu">
-        <button class="ctrl-btn active" id="btn-sparks"  title="Beat sparks (F)">sparks</button>
-        <button class="ctrl-btn active" id="btn-aura"    title="Resonance aura (G)">aura</button>
         <button class="ctrl-btn active" id="btn-ripples" title="Beat ripples (B)">ripples</button>
         <button class="ctrl-btn"        id="btn-cursor"  title="Cursor trail (cycle modes)">cursor off</button>
       </div>
@@ -735,29 +742,29 @@
 
     <div class="qg-group" data-group="post">
       <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="post"
-              title="Post-process glitches (T/K/E/L)" aria-haspopup="true" aria-expanded="false">post<span class="qg-caret">▾</span></button>
+              title="Post-process glitches (T/K/E)" aria-haspopup="true" aria-expanded="false">post<span class="qg-caret">▾</span></button>
       <div class="qg-popover" role="menu">
         <button class="ctrl-btn" id="btn-ascii" title="ASCII post (T) — off / on / blip / flip">ascii</button>
         <button class="ctrl-btn" id="btn-mosh"  title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
         <button class="ctrl-btn" id="btn-edge"  title="Edge-detect post (E) — off / on / blip / flip">edge</button>
+      </div>
+    </div>
+
+    <div class="qg-group" data-group="auto">
+      <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="auto"
+              title="Auto-cycle + auto-phase (N/L)" aria-haspopup="true" aria-expanded="false">auto<span class="qg-caret">▾</span></button>
+      <div class="qg-popover" role="menu">
+        <button class="ctrl-btn" id="btn-cycle" title="Auto-cycle between qualia (N)">cycle</button>
+        <select id="cycle-style" class="ctrl-btn" title="Auto-cycle style">
+          <option value="sequential">sequential</option>
+          <option value="random">random</option>
+        </select>
         <button class="ctrl-btn" id="btn-phase" title="Auto-phase modes within active quale (L)">phase</button>
         <select id="phase-style" class="ctrl-btn" title="Auto-phase style">
           <option value="chapters">chapters</option>
           <option value="alternate">alternate</option>
           <option value="random">random</option>
           <option value="hold">hold glitch</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="qg-group" data-group="auto">
-      <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="auto"
-              title="Auto-cycle (N)" aria-haspopup="true" aria-expanded="false">auto<span class="qg-caret">▾</span></button>
-      <div class="qg-popover" role="menu">
-        <button class="ctrl-btn" id="btn-cycle" title="Auto-cycle between qualia (N)">cycle</button>
-        <select id="cycle-style" class="ctrl-btn" title="Auto-cycle style">
-          <option value="sequential">sequential</option>
-          <option value="random">random</option>
         </select>
       </div>
     </div>
