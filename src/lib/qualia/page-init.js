@@ -491,6 +491,37 @@ export function initQualiaPage() {
       if (r.right > window.innerWidth - 4) pop.classList.add('right-aligned');
     });
   }
+  // Topbar groups whose drawer mirrors a bottom-stack card. Opening the
+  // popover also expands the matching card (and accordion-collapses the
+  // others on mobile); opening a tab from #panel-tabs reciprocally opens
+  // the popover. Keeps the user from hunting in two places when "camera"
+  // / "pose" settings are split between the topbar and the params HUD.
+  const LINKED_CARDS = { camera: 'camera-card', pose: 'pose-card' };
+  function expandLinkedCard(groupKey) {
+    const cardId = LINKED_CARDS[groupKey];
+    if (!cardId) return;
+    const card = document.getElementById(cardId);
+    if (!card || card.style.display === 'none') return;
+    card.classList.remove('collapsed');
+    if (ACCORDION_MQ.matches) {
+      document.querySelectorAll('#panel-stack > .qp-card').forEach(c => {
+        if (c.id !== cardId) c.classList.add('collapsed');
+      });
+    }
+    settings.save();
+  }
+  function openLinkedGroup(cardId) {
+    const groupKey = Object.keys(LINKED_CARDS).find(k => LINKED_CARDS[k] === cardId);
+    if (!groupKey) return;
+    const group = document.querySelector(`.qg-group[data-group="${groupKey}"]`);
+    if (!group || group.classList.contains('open')) return;
+    closeAllGroupsExcept(group);
+    group.classList.add('open');
+    const trig = group.querySelector('.qg-trigger');
+    trig?.setAttribute('aria-expanded', 'true');
+    repositionPopover(group);
+  }
+
   groupEls.forEach(group => {
     const trigger = group.querySelector('.qg-trigger');
     if (!trigger) return;
@@ -500,7 +531,10 @@ export function initQualiaPage() {
       closeAllGroupsExcept(wasOpen ? null : group);
       group.classList.toggle('open', !wasOpen);
       trigger.setAttribute('aria-expanded', String(!wasOpen));
-      if (!wasOpen) repositionPopover(group);
+      if (!wasOpen) {
+        repositionPopover(group);
+        expandLinkedCard(group.dataset.group);
+      }
     });
   });
 
@@ -513,15 +547,19 @@ export function initQualiaPage() {
   function refreshGroupActiveDots() {
     const checks = {
       camera: () => poseSelect.value === 'camera',
-      pose:   () => poseSelect.value === 'camera',
-      layers: () => overlay.getOption('sparks')
-                 || overlay.getOption('aura')
-                 || overlay.getOption('ripples'),
+      // Pose group now also houses the audio-driven overlays (sparks /
+      // aura) — light the dot whenever any of its controls is engaged,
+      // not just when the camera-pose source is on.
+      pose:   () => poseSelect.value === 'camera'
+                 || overlay.getOption('sparks')
+                 || overlay.getOption('aura'),
+      layers: () => overlay.getOption('ripples'),
       post:   () => glitchModes.ascii !== 'off'
                  || glitchModes.mosh  !== 'off'
-                 || glitchModes.edge  !== 'off'
-                 || autoPhaseSeconds  >  0,
-      auto:   () => autoCycleSeconds > 0,
+                 || glitchModes.edge  !== 'off',
+      // Auto group now owns auto-phase too; either an auto-cycle or an
+      // auto-phase being scheduled lights the dot.
+      auto:   () => autoCycleSeconds > 0 || autoPhaseSeconds > 0,
     };
     document.querySelectorAll('.qg-group').forEach(g => {
       const key = g.dataset.group;
@@ -586,6 +624,9 @@ export function initQualiaPage() {
         document.querySelectorAll('#panel-stack > .qp-card').forEach(c => {
           c.classList.toggle('collapsed', c.id !== cardId);
         });
+        // Mirror the open into the topbar popover for linked groups so
+        // the camera / pose controls in both places surface together.
+        openLinkedGroup(cardId);
       }
       refreshPanelTabs();
       settings.save();
@@ -1397,6 +1438,11 @@ export function initQualiaPage() {
     zenHandle.classList.toggle('visible', on);
     document.getElementById('hints').style.opacity = on ? '0' : '';
     document.getElementById('panel-stack').style.opacity = on ? '0' : '';
+    // Slide the mobile bottom tab bar off-screen too — without this, zen
+    // mode left the tab strip pinned over the viz on phones. CSS `.zen`
+    // on #panel-tabs handles the transition.
+    const tabs = document.getElementById('panel-tabs');
+    if (tabs) tabs.classList.toggle('zen', on);
     settings.save();
   }
   btnZen.addEventListener('click', () => setZen(!core.isZen()));
