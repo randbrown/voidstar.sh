@@ -500,6 +500,61 @@
       border-radius: 3px; padding: 0 4px; color: var(--text);
     }
 
+    /* Cycle pool manager — modal listing every registered quale with a
+       checkbox, deciding whether each one participates in the auto-cycle.
+       Rendered dynamically by page-init.js into #cycle-mgr-list. */
+    #cycle-mgr-backdrop {
+      position: fixed; inset: 0; z-index: 30;
+      display: none;
+      background: rgba(5, 5, 13, 0.55);
+      backdrop-filter: blur(2px);
+    }
+    #cycle-mgr-backdrop.visible { display: block; }
+    #cycle-mgr {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 31;
+      display: none;
+      flex-direction: column; gap: 0.55rem;
+      width: min(92vw, 360px);
+      max-height: min(80dvh, 540px);
+      padding: 0.75rem 0.85rem 0.85rem;
+      background: var(--surface); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+      font-family: var(--font-mono); font-size: 0.74rem; color: var(--text);
+    }
+    #cycle-mgr.visible { display: flex; }
+    #cycle-mgr-head {
+      display: flex; align-items: center; gap: 0.6rem;
+      color: var(--muted);
+    }
+    #cycle-mgr-head .cycle-mgr-title { color: var(--cyan); }
+    #cycle-mgr-head .cycle-mgr-spacer { flex: 1; }
+    #cycle-mgr-bulk {
+      display: flex; gap: 0.35rem; flex-wrap: wrap;
+    }
+    #cycle-mgr-list {
+      display: flex; flex-direction: column; gap: 0.2rem;
+      overflow-y: auto;
+      max-height: calc(80dvh - 7rem);
+      padding: 0.1rem 0.1rem 0.1rem 0;
+    }
+    .cycle-mgr-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.32rem 0.45rem;
+      border: 1px solid var(--border); border-radius: 5px;
+      background: var(--surface-2);
+      cursor: pointer; user-select: none;
+    }
+    .cycle-mgr-row:hover { border-color: var(--accent); }
+    .cycle-mgr-row input[type=checkbox] {
+      accent-color: var(--cyan);
+      cursor: pointer;
+      width: 14px; height: 14px;
+    }
+    .cycle-mgr-row .cycle-mgr-name { color: var(--text); }
+    .cycle-mgr-row.active .cycle-mgr-name { color: var(--cyan); font-weight: 500; }
+
     /* Strudel panel — same layout as cymatics so the embed feels familiar. */
     #strudel-panel {
       position: fixed; left: 50%; top: 4.5rem;
@@ -766,6 +821,7 @@
           <option value="random">random</option>
           <option value="hold">hold glitch</option>
         </select>
+        <button class="ctrl-btn" id="btn-cycle-manage" title="Pick which quales the auto-cycle rotates through">manage</button>
       </div>
     </div>
 
@@ -997,6 +1053,22 @@
   <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
   <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
   <button class="qp-tab" data-card="diag-card"   role="tab">diag</button>
+</div>
+
+<!-- Cycle-pool manager — populated by page-init.js. Backdrop swallows
+     outside clicks to close the modal. -->
+<div id="cycle-mgr-backdrop"></div>
+<div id="cycle-mgr" role="dialog" aria-modal="true" aria-labelledby="cycle-mgr-title">
+  <div id="cycle-mgr-head">
+    <span class="cycle-mgr-title" id="cycle-mgr-title">cycle pool</span>
+    <span class="cycle-mgr-spacer"></span>
+    <button class="ctrl-btn" id="cycle-mgr-close" title="Close">×</button>
+  </div>
+  <div id="cycle-mgr-bulk">
+    <button class="ctrl-btn" id="cycle-mgr-all">select all</button>
+    <button class="ctrl-btn" id="cycle-mgr-none">deselect all</button>
+  </div>
+  <div id="cycle-mgr-list"></div>
 </div>
 
 <div id="strudel-panel" style="display:none">

@@ -12,6 +12,7 @@ import { AUDIO_PRESETS, makeSettingsStore } from './presets.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
 import { createCursorFx } from './cursor-fx.js';
+import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import { bindVideoElement, getRotation, cycleRotation, getMirror, toggleMirror } from './video.js';
 import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
@@ -1692,15 +1693,31 @@ export function initQualiaPage() {
   function cycleNext() {
     const ids = mesh.ids();
     if (ids.length < 2) return;
+    const excluded = loadCycleExcluded();
+    const totalN   = ids.length;
+    const inPool   = (id) => isInCycle(excluded, id, totalN);
     const cur = core.activeId();
     let nextId;
     if (autoCycleStyle === 'random') {
-      const others = ids.filter(id => id !== cur);
-      nextId = others[Math.floor(Math.random() * others.length)];
+      const candidates = ids.filter(id => id !== cur && inPool(id));
+      // If the user has excluded everything but the current one, just stay
+      // put — no good alternative to switch to.
+      nextId = candidates.length > 0
+        ? candidates[Math.floor(Math.random() * candidates.length)]
+        : cur;
     } else {
-      const i = ids.indexOf(cur || ids[0]);
-      nextId = ids[(i + 1) % ids.length];
+      // Sequential — walk from cur+1 in declaration order, skipping any
+      // ids that aren't in the cycle pool. Bounded loop in case every id
+      // is excluded somehow (shouldn't happen — isInCycle falls back to
+      // "all in" when excluded covers everything).
+      let i = (ids.indexOf(cur || ids[0]) + 1) % ids.length;
+      let safety = ids.length;
+      while (safety-- > 0 && !inPool(ids[i])) {
+        i = (i + 1) % ids.length;
+      }
+      nextId = ids[i];
     }
+    if (!nextId || nextId === cur) return;
     core.setActive(nextId).catch(err => console.error('[qualia] cycle setActive failed:', err));
   }
 
@@ -1736,6 +1753,75 @@ export function initQualiaPage() {
     autoCycleStyle = cycleStyleSelect.value;
     settings.save();
   });
+
+  // ── Cycle pool manager ───────────────────────────────────────────────────
+  // Lets the user pick which quales the auto-cycle rotates through. Stored
+  // as an EXCLUDED set in localStorage; cycleNext above filters by it.
+  const cycleMgr         = document.getElementById('cycle-mgr');
+  const cycleMgrBackdrop = document.getElementById('cycle-mgr-backdrop');
+  const cycleMgrList     = document.getElementById('cycle-mgr-list');
+  const cycleMgrAll      = document.getElementById('cycle-mgr-all');
+  const cycleMgrNone     = document.getElementById('cycle-mgr-none');
+  const cycleMgrClose    = document.getElementById('cycle-mgr-close');
+  const btnCycleManage   = document.getElementById('btn-cycle-manage');
+
+  function renderCycleMgrList() {
+    if (!cycleMgrList) return;
+    const excluded = loadCycleExcluded();
+    const curId = core.activeId();
+    cycleMgrList.innerHTML = '';
+    for (const mod of mesh.list()) {
+      const row = document.createElement('label');
+      row.className = 'cycle-mgr-row' + (mod.id === curId ? ' active' : '');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !excluded.has(mod.id);
+      cb.addEventListener('change', () => {
+        const cur = loadCycleExcluded();
+        if (cb.checked) cur.delete(mod.id);
+        else            cur.add(mod.id);
+        saveCycleExcluded(cur);
+      });
+      const name = document.createElement('span');
+      name.className = 'cycle-mgr-name';
+      name.textContent = mod.name || mod.id;
+      row.appendChild(cb);
+      row.appendChild(name);
+      cycleMgrList.appendChild(row);
+    }
+  }
+  function openCycleMgr() {
+    renderCycleMgrList();
+    cycleMgr?.classList.add('visible');
+    cycleMgrBackdrop?.classList.add('visible');
+    closeAllGroupsExcept(null); // collapse the auto popover behind it
+  }
+  function closeCycleMgr() {
+    cycleMgr?.classList.remove('visible');
+    cycleMgrBackdrop?.classList.remove('visible');
+  }
+
+  btnCycleManage?.addEventListener('click', openCycleMgr);
+  cycleMgrClose?.addEventListener('click', closeCycleMgr);
+  cycleMgrBackdrop?.addEventListener('click', closeCycleMgr);
+  cycleMgrAll?.addEventListener('click', () => {
+    saveCycleExcluded(new Set());
+    renderCycleMgrList();
+  });
+  cycleMgrNone?.addEventListener('click', () => {
+    saveCycleExcluded(new Set(mesh.ids()));
+    renderCycleMgrList();
+  });
+  // Repaint when the active quale changes so the highlighted "active" row
+  // stays in sync if the manager happens to be open. (When the modal is
+  // closed, renderCycleMgrList() reruns on next open anyway, so this is
+  // only for the "manager open while user cycles via V/N keys" case.)
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && cycleMgr?.classList.contains('visible')) {
+      closeCycleMgr();
+    }
+  });
+
 
   // Render initial labels (active class will catch up below if periods > 0).
   refreshPhaseBtn();
