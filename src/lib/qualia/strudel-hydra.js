@@ -149,7 +149,25 @@ function injectStrudelTransparency(ed) {
  * so its near-black fill becomes effectively transparent over Hydra. The
  * Strudel scope/pianoroll uses #test-canvas which sits above the viz.
  */
+// Strudel panel open/close state — persisted across page loads so the
+// editor reopens to its last-visible state. Doubles as the sentinel for
+// the initial-pattern decision: panel was open last time → user was
+// mid-edit, restore the stored buffer; panel was closed → fresh random.
+const PANEL_OPEN_KEY = 'voidstar.qualia.strudel.panelOpen';
+function loadPanelOpen() {
+  try { return localStorage.getItem(PANEL_OPEN_KEY) === '1'; } catch { return false; }
+}
+function savePanelOpen(open) {
+  try { localStorage.setItem(PANEL_OPEN_KEY, open ? '1' : '0'); } catch {}
+}
+
 export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
+  // Snapshot the previous-session panel state ONCE at init. open()/close()
+  // mutate the flag for next time, but the answer to "should we restore the
+  // last pattern?" is based on what the user did before this page load —
+  // re-reading after a within-session open() would always see '1'.
+  const wasOpenLastSession = loadPanelOpen();
+
   const panel  = document.getElementById('strudel-panel');
   const mount  = document.getElementById('strudel-mount');
   const status = document.getElementById('strudel-status');
@@ -263,11 +281,18 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     return true;
   }
 
-  // Initial code: stored buffer if present, else a freshly-rolled random
-  // pattern so the lab boots with something playable but novel each visit.
+  // Initial code: a freshly-rolled random pattern by default. If the panel
+  // was open on the previous visit, the user was probably mid-edit — in
+  // that case restore the stored buffer instead so their work survives a
+  // refresh. Closing the panel is the implicit "I'm done with this take"
+  // signal that resets to fresh randomness. Uses the init-time snapshot,
+  // not the live flag — open()/close() within this session will have
+  // already changed it.
   function pickInitialCode() {
-    const stored = loadCurrent();
-    if (stored && stored.trim()) return stored;
+    if (wasOpenLastSession) {
+      const stored = loadCurrent();
+      if (stored && stored.trim()) return stored;
+    }
     return randomPattern();
   }
 
@@ -536,6 +561,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     // Strudel must NOT stop the mic; if reopening with our analyser
     // already adopted, this is a no-op for audio.
     if (panel) panel.style.display = '';
+    savePanelOpen(true);
     reposition();
     refreshStrudelBtn();
     if (status && !audio.hasSource('strudel')) {
@@ -561,6 +587,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     // audibly playing, but no viz. Release happens in stop()/
     // stopPlayback() instead — the actual end of playback.
     if (panel) panel.style.display = 'none';
+    savePanelOpen(false);
     // Likewise the poll only needs to keep running if we still have
     // something to tap onto (i.e. Strudel is still playing). When the
     // user closes the panel without playing anything, kill it.
@@ -677,6 +704,14 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   }
   function newRandomPattern() {
     loadCode(randomPattern());
+  }
+
+  // Restore last-session panel state. If the panel was open on the previous
+  // visit, reopen it now (which mounts the editor and loads the last code
+  // via pickInitialCode's restore branch). open() is async — fire and
+  // forget, the rest of init doesn't depend on Strudel being ready.
+  if (wasOpenLastSession) {
+    open();
   }
 
   return {

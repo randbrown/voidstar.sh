@@ -160,28 +160,38 @@ const FX_OPTS  = [
   'crush(sine.range(4,16).slow(8))',
 ];
 
-// Drum voice pool — slow mellow ambient kick/snare only. All variants are
-// `/4` cycle (one bd or sd every four cycles, very spacious) with LPF
-// under 120 so the kicks read as warm sub-thump and never poke through
-// the lead. Variation across pool entries is intentionally small —
+// Drum voice pool. Steady backbeat (bd/sd alternating cycle-to-cycle, or
+// the more spacious bd-rest-sd-rest variant) with a slow LPF sine sweep
+// (500–2000 Hz over 8 cycles) so the drums breathe with the rest of the
+// texture. Variation across pool entries is intentionally small —
 // melody is where the random character should live.
 const DRUMS = [
-  's("<bd sd>/4").lpf(500).gain(.8).delay(.2)',
-  's("<bd sd>/4").lpf(500).gain(.8).delay(.2)',
-  's("<bd ~ sd ~>/4").lpf(500).gain(.8).delay(.25)',
+  's("<bd sd>").lpf(sine.range(500, 2000).slow(8)).gain(.8).delay(.2)',
+  's("<bd sd>").lpf(sine.range(500, 2000).slow(8)).gain(.8).delay(.2)',
+  's("<bd ~ sd ~>").lpf(sine.range(500, 2000).slow(8)).gain(.8).delay(.25)',
 ];
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 export function randomPattern() {
-  const root   = pick(ROOTS) + pick(OCTAVES);
-  const scale  = pick(SCALES);
-  const sample = pick(SAMPLES);
-  const pat    = pick(PATTERNS);
-  const nMod   = pick(N_TRANSFORMS);
-  const drums  = pick(DRUMS);
-  const cps    = (0.65 + Math.random() * 0.55).toFixed(2);
-  const room   = (0.4 + Math.random() * 0.6).toFixed(1);
+  const rootNote = pick(ROOTS);                              // e.g. 'C'
+  const leadOct  = pick(OCTAVES);                            // e.g. '4'
+  const root     = rootNote + leadOct;                       // 'C4'
+  // Bass sits two octaves below the lead so it reads as foundation, with a
+  // floor at octave 2 so we don't sub-rumble into inaudibility.
+  const bassOct  = String(Math.max(2, parseInt(leadOct, 10) - 2));
+  const scale    = pick(SCALES);
+  const sample   = pick(SAMPLES);
+  const pat      = pick(PATTERNS);
+  const nMod     = pick(N_TRANSFORMS);
+  const drums    = pick(DRUMS);
+  // Simple root/fifth bass: degree 0 (root) for 2 cycles, then degree 4
+  // (fifth) for 2 cycles, alternating. Heavy LPF + low gain so it sits
+  // under the lead. Synth-strings GM voice gives the bass a sustained pad
+  // character distinct from the lead's GM voice.
+  const bass     = `n("<0 4>/2").scale('${rootNote}${bassOct} ${scale}').s("gm_synth_strings_2").gain(.5).lpf(800)`;
+  const cps      = (0.65 + Math.random() * 0.55).toFixed(2);
+  const room     = (0.4 + Math.random() * 0.6).toFixed(1);
   // Pick 2–3 distinct fx so each random pattern has its own colour.
   const fxPool = [...FX_OPTS];
   const fxN    = 2 + Math.floor(Math.random() * 2);
@@ -202,6 +212,7 @@ export function randomPattern() {
 setcps(${cps})
 stack(
   ${drums},
+  ${bass},
   n("${pat}")${nMod}
   .scale('${root} ${scale}').s("${sample}")
   .clip(sine.range(.2,.8).slow(8))
