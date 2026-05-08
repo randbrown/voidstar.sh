@@ -44,6 +44,18 @@ export default {
     { id: 'reactivity',label: 'reactivity',  type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
   ],
 
+  // Auto-phase walks the four palettes alongside paired density/pulseRate
+  // tweaks so each step has its own character — sparse violet, dense cyan
+  // pulsar, slow magenta drift, bright amber storm.
+  autoPhase: {
+    steps: [
+      { palette: 'violet',  density: 1.0, pulseRate: 1.5 },
+      { palette: 'cyan',    density: 1.4, pulseRate: 2.5 },
+      { palette: 'magenta', density: 0.6, pulseRate: 0.9 },
+      { palette: 'amber',   density: 1.2, pulseRate: 3.0 },
+    ],
+  },
+
   presets: {
     default: { density: 1.0, glow: 1.0, pulseRate: 1.5, curve: 0.18, motion: 1.0, depth: 0.6, palette: 'violet', reactivity: 1.0 },
     sparse:  { density: 0.45, pulseRate: 0.8, motion: 0.6 },

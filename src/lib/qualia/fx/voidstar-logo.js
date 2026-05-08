@@ -533,6 +533,19 @@ export default {
     { id: 'reactivity',      label: 'reactivity',       type: 'range', min: 0.00, max: 2.00, step: 0.05, default: 1.0 },
   ],
 
+  // Auto-phase walks the four palettes alongside the matching named
+  // presets — platinum default, silver platonic, voidblue ruliad, inferno
+  // portal — so each step looks like a different "mood" of the same logo
+  // mark. Picks the swirl/flow/orbit values straight from the presets.
+  autoPhase: {
+    steps: [
+      { palette: 'platinum', swirlIntensity: 0.16, flowSpeed: 0.23, orbitAmount: 1.01 },
+      { palette: 'silver',   swirlIntensity: 0.55, flowSpeed: 0.45, orbitAmount: 0.65 },
+      { palette: 'voidblue', swirlIntensity: 1.35, flowSpeed: 1.20, orbitAmount: 1.35 },
+      { palette: 'inferno',  swirlIntensity: 1.50, flowSpeed: 1.60, orbitAmount: 0.90 },
+    ],
+  },
+
   presets: {
     default:         { voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16, flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76, palette: 'platinum', showLogo: true, reactivity: 1.0 },
     atomic_mystic:   { voidRadius: 0.24, energyThickness: 0.14, swirlIntensity: 1.10, flowSpeed: 1.00, orbitAmount: 1.50, logoDepth: 0.80, parallax: 0.50, palette: 'platinum' },

@@ -173,6 +173,24 @@ export default {
     { id: 'reactivity',    label: 'reactivity',    type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
+  // Auto-phase rotates through the orbital types (rebuilds the point
+  // cloud each step — visible jump in geometry) and re-tints with each
+  // step. Walks roughly outward in shell complexity: 1s sphere → 2p
+  // dumbbell → 3d clover/donut → 4f cross. Each new orbital costs the
+  // rejection-sampling step, but with the smaller default point count
+  // the rebuild is fast enough not to hitch.
+  autoPhase: {
+    steps: [
+      { orbital: '1s',    palette: 'cyan' },
+      { orbital: '2s',    palette: 'magenta' },
+      { orbital: '2p_z',  palette: 'gold' },
+      { orbital: '2p_x',  palette: 'plasma' },
+      { orbital: '3d_z2', palette: 'cyan' },
+      { orbital: '3d_xy', palette: 'magenta' },
+      { orbital: '4f_z3', palette: 'gold' },
+    ],
+  },
+
   presets: {
     s_states:     { orbital: '1s',    pointCount: '20000', rotationSpeed: 0.30, glow: 1.0, pointSize: 1.6, palette: 'cyan',    reactivity: 1.0 },
     p_orbital:    { orbital: '2p_z',  pointCount: '40000', rotationSpeed: 0.40, glow: 1.2, pointSize: 1.4, palette: 'magenta' },

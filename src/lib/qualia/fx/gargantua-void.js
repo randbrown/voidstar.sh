@@ -446,6 +446,18 @@ export default {
     { id: 'reactivity',     label: 'reactivity',      type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
   ],
 
+  // Auto-phase walks each palette with paired tilt/turbulence settings so
+  // each step renders as a distinct black-hole portrait: gold interstellar
+  // (calm tilt, low turbulence), voidblue ambient (steeper tilt, slow
+  // flow), inferno violent (loose tilt, high turbulence + flow).
+  autoPhase: {
+    steps: [
+      { palette: 'gold',     diskTilt: 0.42, turbulence: 0.6, flowSpeed: 0.7 },
+      { palette: 'voidblue', diskTilt: 0.55, turbulence: 0.7, flowSpeed: 0.85 },
+      { palette: 'inferno',  diskTilt: 0.70, turbulence: 1.5, flowSpeed: 2.0 },
+    ],
+  },
+
   presets: {
     default:         { diskTilt: 0.55, lensStrength: 1.4, diskBrightness: 2.2, turbulence: 0.8, flowSpeed: 1.0, horizonSize: 0.28, bloomFake: 1.0, haloIntensity: 1.0, poseBind: true,  palette: 'gold', reactivity: 1.0 },
     interstellarish: { diskTilt: 0.42, lensStrength: 1.7, diskBrightness: 2.6, turbulence: 0.6, flowSpeed: 0.7, horizonSize: 0.22, bloomFake: 1.2, haloIntensity: 1.6, poseBind: true,  palette: 'gold' },

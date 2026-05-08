@@ -181,6 +181,18 @@ export default {
     { id: 'reactivity',   label: 'reactivity',    type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
 
+  // Auto-phase rotates palette + paired horizon/spin/ringBoost tuning so
+  // each step has its own dramatic character — interstellar gold, glassblue
+  // calm, neural magenta, plasma orange burn.
+  autoPhase: {
+    steps: [
+      { palette: 'accretionGold', horizon: 0.20, spin: 0.55, ringBoost: 1.3 },
+      { palette: 'voidblue',      horizon: 0.12, spin: 0.25, ringBoost: 0.8 },
+      { palette: 'neuralMagenta', horizon: 0.18, spin: 0.30, ringBoost: 1.2 },
+      { palette: 'plasmaOrange',  horizon: 0.22, spin: 0.65, ringBoost: 1.5 },
+    ],
+  },
+
   presets: {
     default:      { horizon: 0.16, spin: 0.40, ringBoost: 1.0,  palette: 'accretionGold', reactivity: 1.0 },
     interstellar: { horizon: 0.20, spin: 0.55, ringBoost: 1.3,  palette: 'accretionGold' },

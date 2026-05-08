@@ -186,6 +186,19 @@ export default {
     { id: 'reactivity',    label: 'reactivity',    type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
+  // Auto-phase rotates palette + arm count per step — arm count rebuilds
+  // the particle buffer (visible re-roll of the spiral structure) and
+  // palette swaps the disk/bulge colors. Spiral wind nudges along to
+  // give each step its own arm tightness.
+  autoPhase: {
+    steps: [
+      { palette: 'andromeda',  armCount: '4', spiralWind: 1.6 },
+      { palette: 'nebula',     armCount: '3', spiralWind: 2.2 },
+      { palette: 'dense_core', armCount: '5', spiralWind: 1.0 },
+      { palette: 'wisp',       armCount: '2', spiralWind: 2.6 },
+    ],
+  },
+
   presets: {
     andromeda:  { particleCount: '100000', armCount: '4', spiralWind: 1.6, orbitSpeed: 0.6, bulgeGlow: 1.0, pointSize: 1.1, palette: 'andromeda',  reactivity: 1.0 },
     nebula:     { particleCount: '100000', armCount: '3', spiralWind: 2.2, orbitSpeed: 0.5, bulgeGlow: 1.2, pointSize: 1.2, palette: 'nebula' },

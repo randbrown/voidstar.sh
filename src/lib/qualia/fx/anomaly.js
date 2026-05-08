@@ -245,6 +245,18 @@ export default {
     { id: 'reactivity', label: 'reactivity',   type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
+  // Auto-phase walks the palettes alongside paired warp/glow tuning so each
+  // step has its own personality (cool wisps → ultraviolet density → lava
+  // bloom → sparse toxic). Mirrors the four presets below.
+  autoPhase: {
+    steps: [
+      { palette: 'voidcyan',    warp: 0.70, glow: 1.0 },
+      { palette: 'ultraviolet', warp: 1.20, glow: 1.6 },
+      { palette: 'lava',        warp: 0.95, glow: 2.0 },
+      { palette: 'toxic',       warp: 0.35, glow: 0.6 },
+    ],
+  },
+
   presets: {
     default: { warp: 0.70, glow: 1.0, timeScale: 0.6,  marchSteps: '64', palette: 'voidcyan',    reactivity: 1.0 },
     dense:   { warp: 1.20, glow: 1.6, timeScale: 0.45, marchSteps: '96', palette: 'ultraviolet' },

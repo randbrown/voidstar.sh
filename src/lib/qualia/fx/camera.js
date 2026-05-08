@@ -28,6 +28,20 @@ export default {
     { id: 'reactivity',label: 'reactivity', type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
 
+  // Auto-phase walks the tint options. Each tint is a different live-feed
+  // colour grade (mono is desaturate-and-flatten, then the three colour
+  // tints are warm/cool/neon). Cheap to swap — just changes the per-pixel
+  // recolour pass — so the cadence can be brisk without hitches.
+  autoPhase: {
+    steps: [
+      { tint: 'none' },
+      { tint: 'mono' },
+      { tint: 'cyan' },
+      { tint: 'magenta' },
+      { tint: 'amber' },
+    ],
+  },
+
   presets: {
     default:    { fit: 'cover', tint: 'none', vignette: 0.30, pulse: 0.30, reactivity: 1.0 },
     mono:       { tint: 'mono', vignette: 0.40 },
