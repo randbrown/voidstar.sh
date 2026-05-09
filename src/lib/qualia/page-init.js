@@ -30,6 +30,7 @@ import anomaly         from './fx/anomaly.js';
 import atomicOrbital   from './fx/atomic-orbital.js';
 import galaxy          from './fx/galaxy.js';
 import antireductionism from './fx/antireductionism.js';
+import dogSkeleton    from './fx/dog-skeleton.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -97,6 +98,7 @@ export function initQualiaPage() {
   mesh.register(atomicOrbital);
   mesh.register(galaxy);
   mesh.register(antireductionism);
+  mesh.register(dogSkeleton);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
