@@ -272,6 +272,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       model.syncStrudel = !!syncCb.checked;
       model.updatedAt = Date.now();
       persistSoon();
+      refreshSyncStatus();
       // When the user just turned sync on, immediately push the current
       // CPS to Strudel so the two engines align without waiting for the
       // next Strudel re-eval.
@@ -285,7 +286,13 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     const syncLabel = document.createElement('span');
     syncLabel.className = 'seq-prop-label';
     syncLabel.textContent = 'sync strudel';
-    syncWrap.append(syncCb, syncLabel);
+    // Status pip — paints connected/waiting state so the user can tell
+    // whether the toggle is actually wired to a live Strudel runtime.
+    // Strudel's REPL lazy-loads, so "waiting" is the normal state right
+    // after page load before the editor is opened for the first time.
+    const syncStatus = document.createElement('span');
+    syncStatus.className = 'seq-sync-status';
+    syncWrap.append(syncCb, syncLabel, syncStatus);
 
     propsEl.append(
       mk('beats',     beatsIn, { title: 'Beats per pattern (RR-style)' }),
@@ -304,6 +311,27 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     }
     const cb = propsEl.querySelector('input[type="checkbox"]');
     if (cb) cb.checked = !!model.syncStrudel;
+    refreshSyncStatus();
+  }
+
+  // Three states:
+  //   - off:       checkbox unchecked, no status text
+  //   - connected: checkbox checked AND a delivery path exists
+  //   - waiting:   checkbox checked but Strudel hasn't published a hook
+  //                yet (panel never opened, or REPL still loading)
+  // The "waiting" copy is the most actionable — it tells the user what
+  // they need to do (open Strudel and play a pattern) for sync to take.
+  function refreshSyncStatus() {
+    const el = propsEl?.querySelector('.seq-sync-status');
+    if (!el) return;
+    if (!model.syncStrudel) {
+      el.textContent = '';
+      el.dataset.state = 'off';
+      return;
+    }
+    const ready = !!syncStrudel?.isReady?.();
+    el.textContent = ready ? '· connected' : '· waiting for strudel';
+    el.dataset.state = ready ? 'connected' : 'waiting';
   }
 
   function renderMatrix() {
@@ -343,7 +371,11 @@ export function createSequencer({ audio, syncStrudel } = {}) {
 
       const cellsEl = document.createElement('div');
       cellsEl.className = 'seq-cells';
-      cellsEl.style.gridTemplateColumns = `repeat(${total}, minmax(0, 1fr))`;
+      // Floor the per-cell width at 22px so a phone-narrow row doesn't
+      // shrink the LEDs to invisible dashes. If the total exceeds the
+      // available width, #seq-matrix-wrap (overflow:auto) scrolls
+      // horizontally instead of squashing the cells.
+      cellsEl.style.gridTemplateColumns = `repeat(${total}, minmax(22px, 1fr))`;
       for (let i = 0; i < total; i++) {
         const c = document.createElement('button');
         c.type = 'button';
@@ -636,6 +668,13 @@ export function createSequencer({ audio, syncStrudel } = {}) {
 
   // Re-paint when audio.js flips sequencer source on/off.
   audio?.onChange?.(() => refreshSeqBtn());
+
+  // Repaint the "(connected)/(waiting)" status when the sync bridge in
+  // page-init.js wraps Strudel's setCps for the first time. The bridge
+  // emits this once Strudel's REPL has loaded enough to expose either
+  // setcps path; without the callback the user would see a stale
+  // "waiting" forever even after sync is actually working.
+  syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
 
   if (wasOpenLastSession) open();
 

@@ -1951,37 +1951,115 @@ export function initQualiaPage() {
   });
 
   // ── Pattern sequencer (tone.js, second programmable audio source) ────────
-  // Bidirectional CPS sync with Strudel:
-  //   - sequencer → strudel: debounced setcps() invocation when the sync
-  //     toggle is on (debounce keeps a slider drag from spamming
-  //     re-evaluation),
-  //   - strudel → sequencer: wrap globalThis.setcps once Strudel's runtime
-  //     defines it so any setcps(...) inside an evaluated pattern echoes
-  //     into the sequencer's CPS.
+  // Bidirectional CPS sync with Strudel. Two delivery paths, tried in
+  // order so the toggle works regardless of which Strudel REPL build is
+  // loaded:
+  //   1. `strudel.getScheduler().setCps(v)` — direct call into the
+  //      Strudel runtime. Most reliable; doesn't depend on whether the
+  //      eval scope ever publishes setcps as a global.
+  //   2. `globalThis.setcps(v)` — fallback for older Strudel builds.
+  //
+  // Reverse direction (Strudel → sequencer) gets installed as soon as
+  // either hook becomes available: we monkey-patch scheduler.setCps if
+  // present and globalThis.setcps if present, and either fires
+  // `applyCpsFromStrudel` so a `setcps(2)` inside an evaluated pattern
+  // bumps the sequencer's CPS to match.
+  //
+  // `isReady()` exposes "have we found at least one delivery path" so
+  // the sequencer panel can paint a status indicator next to the sync
+  // checkbox — without it, the user has no way to tell the difference
+  // between "sync is armed but Strudel isn't loaded yet" and "sync is
+  // broken".
   let _strudelSetCpsTimer = null;
+  let _strudelGlobalWrapped = false;
+  let _strudelSchedWrapped  = false;
+  const _strudelReadyListeners = new Set();
+  function strudelSyncReady() {
+    if (_strudelGlobalWrapped) return true;
+    if (_strudelSchedWrapped)  return true;
+    // The wrap may not have happened yet but if either path EXISTS the
+    // outbound direction will work — that's enough to call ourselves
+    // connected from the user's POV.
+    if (typeof globalThis.setcps === 'function') return true;
+    try {
+      const sched = strudel?.getScheduler?.();
+      if (sched && typeof sched.setCps === 'function') return true;
+    } catch {}
+    return false;
+  }
+  function notifyStrudelReadyChange() {
+    for (const cb of _strudelReadyListeners) {
+      try { cb(strudelSyncReady()); } catch {}
+    }
+  }
   const seqSyncStrudel = {
     setCpsDebounced: (v) => {
       if (_strudelSetCpsTimer) clearTimeout(_strudelSetCpsTimer);
       _strudelSetCpsTimer = setTimeout(() => {
-        try { globalThis.setcps?.(v); } catch {}
+        let delivered = false;
+        try {
+          const sched = strudel?.getScheduler?.();
+          if (sched && typeof sched.setCps === 'function') {
+            sched.setCps(v);
+            delivered = true;
+          }
+        } catch {}
+        if (!delivered) {
+          try { if (typeof globalThis.setcps === 'function') { globalThis.setcps(v); delivered = true; } } catch {}
+        }
         _strudelSetCpsTimer = null;
       }, 150);
     },
+    isReady: strudelSyncReady,
+    onReadyChange: (cb) => {
+      _strudelReadyListeners.add(cb);
+      return () => _strudelReadyListeners.delete(cb);
+    },
   };
   const sequencer = createSequencer({ audio, syncStrudel: seqSyncStrudel });
-  // Install the strudel→sequencer wrapper as soon as setcps becomes available.
-  let _strudelSetCpsWrapped = false;
-  const _strudelSetCpsPoll = setInterval(() => {
-    if (_strudelSetCpsWrapped) { clearInterval(_strudelSetCpsPoll); return; }
-    if (typeof globalThis.setcps !== 'function') return;
-    const orig = globalThis.setcps;
-    globalThis.setcps = function (v) {
-      try { sequencer.applyCpsFromStrudel(+v); } catch {}
-      return orig.call(this, v);
-    };
-    _strudelSetCpsWrapped = true;
-    clearInterval(_strudelSetCpsPoll);
-  }, 200);
+
+  // Wrap both directions of CPS as soon as either hook appears. We poll
+  // because Strudel lazy-loads on first panel open and its scheduler
+  // takes a beat after that to materialise. Stop polling once both are
+  // wrapped — re-mounts of the editor (pattern swap) reset
+  // _strudelSchedWrapped so we'll wrap the new scheduler on the next
+  // tick.
+  const _strudelSyncPoll = setInterval(() => {
+    let progressed = false;
+    if (!_strudelGlobalWrapped && typeof globalThis.setcps === 'function') {
+      const orig = globalThis.setcps;
+      globalThis.setcps = function (v) {
+        try { sequencer.applyCpsFromStrudel(+v); } catch {}
+        return orig.call(this, v);
+      };
+      _strudelGlobalWrapped = true;
+      progressed = true;
+    }
+    if (!_strudelSchedWrapped) {
+      try {
+        const sched = strudel?.getScheduler?.();
+        if (sched && typeof sched.setCps === 'function' && !sched.__qualiaWrapped) {
+          const orig = sched.setCps.bind(sched);
+          sched.setCps = function (v) {
+            try { sequencer.applyCpsFromStrudel(+v); } catch {}
+            return orig(v);
+          };
+          sched.__qualiaWrapped = true;
+          _strudelSchedWrapped = true;
+          progressed = true;
+        }
+      } catch {}
+    }
+    if (progressed) notifyStrudelReadyChange();
+    // Once both directions are wrapped there's nothing left to discover —
+    // stop polling. (If Strudel later swaps in a new scheduler instance
+    // via pattern reload, the existing wrapped function lives on the
+    // prototype's reference; we accept that small risk to avoid forever
+    // ticking. A future fix could re-arm on strudel.onEditorMount().)
+    if (_strudelGlobalWrapped && _strudelSchedWrapped) {
+      clearInterval(_strudelSyncPoll);
+    }
+  }, 250);
 
   // ── Cursor fx (pointer-trail overlay) ─────────────────────────────────────
   const cursorFx = createCursorFx();

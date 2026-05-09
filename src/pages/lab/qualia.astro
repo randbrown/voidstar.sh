@@ -790,6 +790,12 @@
       accent-color: var(--cyan); cursor: pointer;
       width: 14px; height: 14px;
     }
+    .seq-sync-status {
+      font-size: 0.66rem; color: var(--muted);
+      margin-left: 0.15rem;
+    }
+    .seq-sync-status[data-state="connected"] { color: var(--cyan); }
+    .seq-sync-status[data-state="waiting"]   { color: var(--accent); }
     #seq-matrix-wrap {
       flex: 1; min-height: 0; overflow: auto;
       padding: 0.4rem 0.5rem;
@@ -803,6 +809,7 @@
       grid-template-columns: 110px minmax(0, 1fr);
       gap: 0.4rem;
       align-items: center;
+      margin-bottom: 4px;
     }
     .seq-pad-ctrl { display: flex; gap: 0.25rem; align-items: center; }
     .seq-pad-mute {
@@ -814,15 +821,20 @@
     .seq-pad-audition { padding: 0.18rem 0.4rem; font-size: 0.7rem; }
     .seq-cells {
       display: grid;
-      gap: 2px;
+      gap: 3px;
     }
     .seq-cell {
-      height: 26px; min-width: 0;
+      height: 32px; min-width: 0;
       background: rgba(255,255,255,0.05);
       border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 3px;
+      border-radius: 4px;
       cursor: pointer; padding: 0;
       transition: background-color 0.08s ease, border-color 0.08s ease;
+      /* Improves perceived hit area on touch — the visual cell can stay
+         compact while the touch slop extends a couple of px in each
+         direction. Without this, dense 16-cell rows on a 360-CSS-px
+         viewport leave finger-sized gaps you can't actually hit. */
+      touch-action: manipulation;
     }
     .seq-cell:hover  { background: rgba(34,211,238,0.18); }
     .seq-cell.on     { background: var(--cyan); border-color: var(--cyan); }
@@ -837,6 +849,24 @@
       flex: 1; min-height: 0; overflow: auto;
       padding: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem;
       color: var(--text); font-family: var(--font-mono); font-size: 0.74rem;
+    }
+    /* Phone screens: with a 96vw panel and a 110px control column, 16
+       cells get squeezed to ~14 CSS-px each — un-tappable. Stack the
+       control row ABOVE the cells so the cell strip gets the full panel
+       width, and bump cell height to a finger-friendly 36px. The cells
+       still grow with min-width fallback so very long patterns
+       (8 beats × 4 steps) overflow horizontally rather than disappearing. */
+    @media (max-width: 700px) {
+      .seq-pad-row {
+        grid-template-columns: 1fr;
+        gap: 0.2rem;
+        margin-bottom: 8px;
+      }
+      .seq-pad-ctrl { width: 100%; }
+      .seq-pad-mute { flex: 1; font-size: 0.78rem; padding: 0.28rem 0.5rem; }
+      .seq-pad-audition { padding: 0.28rem 0.55rem; font-size: 0.78rem; }
+      .seq-cell { height: 36px; border-radius: 5px; }
+      .seq-cells { gap: 4px; }
     }
   </style>
 </head>

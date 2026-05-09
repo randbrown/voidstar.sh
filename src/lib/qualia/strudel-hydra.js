@@ -222,6 +222,16 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
 
   function getEditor() { return editorEl?.editor ?? null; }
 
+  // Reach for the inner scheduler (StrudelMirror.repl.scheduler in current
+  // Strudel; .scheduler on older builds). Used by the sequencer's sync
+  // bridge — calling scheduler.setCps directly is the most reliable way
+  // to push tempo into Strudel because it bypasses the eval-scope dance
+  // that decides whether `globalThis.setcps` ever appears.
+  function getScheduler() {
+    const ed = getEditor();
+    return ed?.repl?.scheduler ?? ed?.scheduler ?? null;
+  }
+
   // Strudel-editor's internal CodeMirror state is not exposed by a single
   // canonical API across versions. Order matters here:
   //
@@ -733,6 +743,11 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     stopPlayback,
     isPlaying: () => isPlayingFlag,
     isOpen: () => panel?.style.display !== 'none',
+    /** Inner StrudelMirror handle — null until the editor mounts. */
+    getEditor,
+    /** Inner scheduler (`StrudelMirror.repl.scheduler`) — null until
+     *  the editor mounts AND has produced a runtime. */
+    getScheduler,
     /** Call from the render loop so globalThis.a.fft stays current. */
     perFrame: refreshAFft,
     patterns: {
