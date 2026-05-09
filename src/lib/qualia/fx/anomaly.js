@@ -271,13 +271,18 @@ export default {
     const U        = makeUniformGetter(gl, prog);
     const UB       = makeUniformGetter(gl, blitProg);
 
-    // Offscreen render target. Allocated lazily in resize().
+    // Offscreen render target. Storage is allocated up front (1x1 placeholder)
+    // and resized lazily — Adreno/Mali drivers on Android latch FBO
+    // completeness at first attach, so attaching a storage-less texture
+    // leaves the FBO permanently incomplete even after storage shows up
+    // (pass 1 silently no-ops → blit samples all zero → empty background).
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.bindTexture(gl.TEXTURE_2D, null);
 
     const fbo = gl.createFramebuffer();
@@ -289,13 +294,18 @@ export default {
     // Internal (FBO) dimensions — fragment work happens at this resolution.
     let Wf = Math.max(1, Math.floor(W * INTERNAL_SCALE));
     let Hf = Math.max(1, Math.floor(H * INTERNAL_SCALE));
-    let texAllocatedW = 0, texAllocatedH = 0;
+    let texAllocatedW = 1, texAllocatedH = 1;
 
     function reallocateTexture() {
       if (Wf === texAllocatedW && Hf === texAllocatedH) return;
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, Wf, Hf, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       gl.bindTexture(gl.TEXTURE_2D, null);
+      // Re-attach after resize — some mobile drivers cache the previous
+      // attachment dimensions in the FBO completeness state.
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       texAllocatedW = Wf; texAllocatedH = Hf;
     }
 
