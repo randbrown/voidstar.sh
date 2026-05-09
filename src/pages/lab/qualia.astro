@@ -713,7 +713,130 @@
         right: max(0.5rem, env(safe-area-inset-right));
       }
       #strudel-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
+      #sequencer-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       .sp-tag, .sp-status { display: none; }
+    }
+
+    /* Sequencer panel — same draggable-window shape as #strudel-panel so
+       both panels feel like one family. The grid below ships its own
+       layout because RR-style cells × pads have no parallel in Strudel. */
+    #sequencer-panel {
+      position: fixed; left: 50%; top: 4.5rem;
+      transform: translateX(-50%);
+      z-index: 18;
+      width: min(96vw, 920px);
+      height: 480px;
+      min-width: 360px;  min-height: 220px;
+      max-width: 100vw;  max-height: calc(100dvh - 6rem);
+      background: rgba(10,10,26,0.55);
+      border: 1px solid var(--border); border-radius: 10px;
+      font-family: var(--font-mono); color: var(--text);
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+      backdrop-filter: blur(8px);
+      resize: both;
+    }
+    #sequencer-header {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.45rem 0.75rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+      cursor: grab; user-select: none;
+      touch-action: none;
+    }
+    #sequencer-header.dragging { cursor: grabbing; }
+    #sequencer-header .ctrl-btn { cursor: pointer; }
+    .seq-name-input {
+      background: transparent; border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--cyan); font-family: var(--font-mono); font-size: 0.75rem;
+      padding: 0.15rem 0.45rem; min-width: 8ch; max-width: 18ch;
+      outline: none;
+    }
+    .seq-name-input:focus { border-color: var(--accent); color: var(--accent); }
+    #btn-sequencer-play, #btn-sequencer-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
+    #btn-sequencer-play.playing { color: var(--pink); border-color: var(--pink); }
+    #btn-sequencer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    #sequencer-tabs {
+      display: flex; gap: 0.25rem;
+      padding: 0.3rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,0.25);
+    }
+    /* Grid pane — properties row above the pad-by-step matrix. Matrix
+       scrolls independently so the props row stays pinned. */
+    #sequencer-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    #seq-props {
+      display: flex; flex-wrap: wrap; gap: 0.55rem 0.85rem;
+      padding: 0.5rem 0.75rem;
+      background: rgba(0,0,0,0.2);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.72rem;
+    }
+    .seq-prop { display: inline-flex; align-items: center; gap: 0.35rem; }
+    .seq-prop-check { gap: 0.4rem; }
+    .seq-prop-label { color: var(--muted); }
+    .seq-num {
+      background: rgba(0,0,0,0.3); color: var(--cyan);
+      border: 1px solid var(--border); border-radius: 4px;
+      font-family: var(--font-mono); font-size: 0.74rem;
+      padding: 0.12rem 0.35rem; width: 4.5ch;
+      outline: none; text-align: right;
+    }
+    .seq-num-wide { width: 6ch; }
+    .seq-num:focus { border-color: var(--accent); color: var(--accent); }
+    .seq-prop-check input[type=checkbox] {
+      accent-color: var(--cyan); cursor: pointer;
+      width: 14px; height: 14px;
+    }
+    #seq-matrix-wrap {
+      flex: 1; min-height: 0; overflow: auto;
+      padding: 0.4rem 0.5rem;
+    }
+    #seq-matrix {
+      display: flex; flex-direction: column; gap: 3px;
+      min-width: 100%;
+    }
+    .seq-pad-row {
+      display: grid;
+      grid-template-columns: 110px minmax(0, 1fr);
+      gap: 0.4rem;
+      align-items: center;
+    }
+    .seq-pad-ctrl { display: flex; gap: 0.25rem; align-items: center; }
+    .seq-pad-mute {
+      flex: 1; min-width: 0;
+      padding: 0.18rem 0.35rem; font-size: 0.7rem;
+      text-align: left;
+    }
+    .seq-pad-mute.muted { color: var(--muted); border-color: var(--border); opacity: 0.55; }
+    .seq-pad-audition { padding: 0.18rem 0.4rem; font-size: 0.7rem; }
+    .seq-cells {
+      display: grid;
+      gap: 2px;
+    }
+    .seq-cell {
+      height: 26px; min-width: 0;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 3px;
+      cursor: pointer; padding: 0;
+      transition: background-color 0.08s ease, border-color 0.08s ease;
+    }
+    .seq-cell:hover  { background: rgba(34,211,238,0.18); }
+    .seq-cell.on     { background: var(--cyan); border-color: var(--cyan); }
+    .seq-cell.on:hover { background: var(--accent); border-color: var(--accent); }
+    /* Beat-start gets a brighter left edge so the underlying meter is
+       readable at a glance — same visual cue as RR's bold beat divider. */
+    .seq-cell.beat-start { border-left: 2px solid var(--accent); }
+    /* Current step indicator while playing — outline rather than fill so
+       the on/off state stays visible underneath. */
+    .seq-cell.cur { outline: 2px solid var(--pink); outline-offset: -1px; }
+    #sequencer-patterns {
+      flex: 1; min-height: 0; overflow: auto;
+      padding: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem;
+      color: var(--text); font-family: var(--font-mono); font-size: 0.74rem;
     }
   </style>
 </head>
@@ -738,6 +861,7 @@
     </div>
     <div id="topbar-corner">
       <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
+      <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
       <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
       <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen (X)">full</button>
     </div>
@@ -1109,6 +1233,37 @@
       <button class="ctrl-btn" id="btn-pat-random" title="Replace editor with a random pattern">random</button>
     </div>
     <div id="pat-list" class="sp-pat-list"></div>
+  </div>
+</div>
+
+<!-- Pattern sequencer panel — second programmable audio source. Lives as a
+     sibling of #strudel-panel so each draggable window is independent. -->
+<div id="sequencer-panel" style="display:none">
+  <div id="sequencer-header">
+    <span class="sp-title">seq <span class="sp-tag">// grid → qualia</span></span>
+    <input type="text" id="sequencer-name" class="seq-name-input" placeholder="pattern name" />
+    <span class="sp-status" id="sequencer-status">click ▶ to play</span>
+    <button class="ctrl-btn" id="btn-sequencer-play"  title="Play (Ctrl+Enter)">▶</button>
+    <button class="ctrl-btn" id="btn-sequencer-stop"  title="Stop">■</button>
+    <button class="ctrl-btn" id="btn-sequencer-close" title="Close (Q)">×</button>
+  </div>
+  <div id="sequencer-tabs">
+    <button class="sp-tab active" data-tab="grid">grid</button>
+    <button class="sp-tab"        data-tab="patterns">patterns</button>
+  </div>
+  <div id="sequencer-grid">
+    <div id="seq-props"></div>
+    <div id="seq-matrix-wrap">
+      <div id="seq-matrix"></div>
+    </div>
+  </div>
+  <div id="sequencer-patterns" style="display:none">
+    <div class="sp-pat-toolbar">
+      <button class="ctrl-btn" id="btn-seq-pat-save"   title="Save current grid as a new pattern">save current</button>
+      <button class="ctrl-btn" id="btn-seq-pat-new"    title="Replace grid with an empty pattern">new</button>
+      <button class="ctrl-btn" id="btn-seq-pat-random" title="Sprinkle some random hits over the default groove">random</button>
+    </div>
+    <div id="seq-pat-list" class="sp-pat-list"></div>
   </div>
 </div>
 

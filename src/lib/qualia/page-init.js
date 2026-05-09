@@ -11,6 +11,7 @@ import { wirePicker, getStoredDeviceId, storeDeviceId } from './devices.js';
 import { AUDIO_PRESETS, makeSettingsStore } from './presets.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
+import { createSequencer } from './sequencer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import { bindVideoElement, getRotation, cycleRotation, getMirror, toggleMirror } from './video.js';
@@ -57,7 +58,10 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 //   mix:     mic + strudel both feed (user opts in; pick this when the
 //            mic is on a clean line — guitar interface, etc — so there's
 //            no acoustic feedback path back from speakers)
-const AUDIO_MODES   = ['off', 'mic', 'strudel', 'mix'];
+// Audio source mode selector. 'all' = mic + strudel + sequencer (the
+// previous 'mix' mode was mic+strudel only and is migrated to 'all' on
+// load — see the audioMode restore block below).
+const AUDIO_MODES   = ['off', 'mic', 'strudel', 'sequencer', 'all'];
 const GLITCH_MODES  = ['off', 'on', 'blip', 'flip'];
 const GLITCH_KEYS   = ['ascii', 'mosh', 'edge'];
 const BLIP_DURATION_MS = 280;
@@ -279,11 +283,16 @@ export function initQualiaPage() {
   // Per-glitch blip auto-clear timestamps (epoch ms; 0 = inactive).
   const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0 };
 
-  // Audio mode (multi-state). Migration: prior shape was `audioOn` boolean
-  // (true = mic, false = off).
+  // Audio mode (multi-state). Migrations:
+  //   - earliest shape: `audioOn` boolean (true=mic, false=off).
+  //   - prior shape: `audioMode` ∈ {off,mic,strudel,mix} where mix=mic+strudel.
+  //     'mix' has been replaced by 'all' (which also includes sequencer);
+  //     remap on load so returning users keep their stored intent.
   let audioMode;
-  if (typeof stored.audioMode === 'string' && AUDIO_MODES.includes(stored.audioMode)) {
-    audioMode = stored.audioMode;
+  if (typeof stored.audioMode === 'string') {
+    if (stored.audioMode === 'mix') audioMode = 'all';
+    else if (AUDIO_MODES.includes(stored.audioMode)) audioMode = stored.audioMode;
+    else audioMode = 'off';
   } else if (typeof stored.audioOn === 'boolean') {
     audioMode = stored.audioOn ? 'mic' : 'off';
   } else {
@@ -714,10 +723,11 @@ export function initQualiaPage() {
 
   function applyAudioFilter() {
     switch (audioMode) {
-      case 'off':     audio.setSourceFilter([]);                  break;
-      case 'mic':     audio.setSourceFilter(['mic']);             break;
-      case 'strudel': audio.setSourceFilter(['strudel']);         break;
-      case 'mix':     audio.setSourceFilter(['mic', 'strudel']);  break;
+      case 'off':       audio.setSourceFilter([]);                              break;
+      case 'mic':       audio.setSourceFilter(['mic']);                         break;
+      case 'strudel':   audio.setSourceFilter(['strudel']);                     break;
+      case 'sequencer': audio.setSourceFilter(['sequencer']);                   break;
+      case 'all':       audio.setSourceFilter(['mic', 'strudel', 'sequencer']); break;
     }
   }
 
@@ -726,10 +736,12 @@ export function initQualiaPage() {
     btnAudio.textContent = `audio ${audioMode}`;
     if (audioMode !== 'off') {
       // Pink (active-audio) when the mic itself is engaged — visual hint
-      // that we're listening to the room. Cyan (active) for strudel-only.
-      btnAudio.classList.add(audioMode === 'mic' || audioMode === 'mix' ? 'active-audio' : 'active');
+      // that we're listening to the room. Cyan (active) for engine-only
+      // modes (strudel / sequencer) where no live mic is open.
+      const micEngaged = audioMode === 'mic' || audioMode === 'all';
+      btnAudio.classList.add(micEngaged ? 'active-audio' : 'active');
     }
-    btnAudio.title = 'Audio source (A) — off / mic / strudel / mix';
+    btnAudio.title = 'Audio source (A) — off / mic / strudel / sequencer / all';
     // Audio panel visibility tracks "is anything driving reactivity" — open
     // when mode != off.
     audioCard.style.display = audioMode === 'off' ? 'none' : '';
@@ -739,7 +751,7 @@ export function initQualiaPage() {
     if (!AUDIO_MODES.includes(mode)) return;
     const prevMode = audioMode;
     audioMode = mode;
-    const wantMic = mode === 'mic' || mode === 'mix';
+    const wantMic = mode === 'mic' || mode === 'all';
     try {
       if (wantMic && !audio.hasSource('mic')) {
         await startMic(getStoredDeviceId('mic'));
@@ -1155,7 +1167,7 @@ export function initQualiaPage() {
     // canvas" — only the start position decides.
     const el = document.elementFromPoint(x, y);
     if (!el) return false;
-    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #video, #zen-handle, #status-overlay, .qg-popover');
+    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #sequencer-panel, #video, #zen-handle, #status-overlay, .qg-popover');
   }
 
   function onCanvasPointerDown(ev) {
@@ -1938,6 +1950,39 @@ export function initQualiaPage() {
     scopeCanvas: document.getElementById('test-canvas'),
   });
 
+  // ── Pattern sequencer (tone.js, second programmable audio source) ────────
+  // Bidirectional CPS sync with Strudel:
+  //   - sequencer → strudel: debounced setcps() invocation when the sync
+  //     toggle is on (debounce keeps a slider drag from spamming
+  //     re-evaluation),
+  //   - strudel → sequencer: wrap globalThis.setcps once Strudel's runtime
+  //     defines it so any setcps(...) inside an evaluated pattern echoes
+  //     into the sequencer's CPS.
+  let _strudelSetCpsTimer = null;
+  const seqSyncStrudel = {
+    setCpsDebounced: (v) => {
+      if (_strudelSetCpsTimer) clearTimeout(_strudelSetCpsTimer);
+      _strudelSetCpsTimer = setTimeout(() => {
+        try { globalThis.setcps?.(v); } catch {}
+        _strudelSetCpsTimer = null;
+      }, 150);
+    },
+  };
+  const sequencer = createSequencer({ audio, syncStrudel: seqSyncStrudel });
+  // Install the strudel→sequencer wrapper as soon as setcps becomes available.
+  let _strudelSetCpsWrapped = false;
+  const _strudelSetCpsPoll = setInterval(() => {
+    if (_strudelSetCpsWrapped) { clearInterval(_strudelSetCpsPoll); return; }
+    if (typeof globalThis.setcps !== 'function') return;
+    const orig = globalThis.setcps;
+    globalThis.setcps = function (v) {
+      try { sequencer.applyCpsFromStrudel(+v); } catch {}
+      return orig.call(this, v);
+    };
+    _strudelSetCpsWrapped = true;
+    clearInterval(_strudelSetCpsPoll);
+  }, 200);
+
   // ── Cursor fx (pointer-trail overlay) ─────────────────────────────────────
   const cursorFx = createCursorFx();
   cursorFx.loadStored();
@@ -2074,10 +2119,28 @@ export function initQualiaPage() {
     strudel.patterns.random();
   });
 
+  // ── Sequencer pattern-manager toolbar ────────────────────────────────────
+  // Same shape as the Strudel toolbar above so the user has muscle memory:
+  // save current grid, drop to a blank one, or roll a new groove.
+  document.getElementById('btn-seq-pat-save')?.addEventListener('click', () => {
+    sequencer.patterns.add();
+    // Switch to the patterns tab so the freshly-saved entry is visible.
+    document.querySelector('#sequencer-tabs .sp-tab[data-tab="patterns"]')?.click();
+  });
+  document.getElementById('btn-seq-pat-new')?.addEventListener('click', () => {
+    document.querySelector('#sequencer-tabs .sp-tab[data-tab="grid"]')?.click();
+    sequencer.patterns.newBlank();
+  });
+  document.getElementById('btn-seq-pat-random')?.addEventListener('click', () => {
+    document.querySelector('#sequencer-tabs .sp-tab[data-tab="grid"]')?.click();
+    sequencer.patterns.random();
+  });
+
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   window.addEventListener('keydown', (e) => {
     if (e.target.matches('input, select, textarea, [contenteditable]')) return;
-    if (strudel.isOpen() && document.activeElement?.closest('#strudel-panel')) return;
+    if (strudel.isOpen()   && document.activeElement?.closest('#strudel-panel'))   return;
+    if (sequencer.isOpen() && document.activeElement?.closest('#sequencer-panel')) return;
 
     switch (e.key.toLowerCase()) {
       case 'v': {
@@ -2088,6 +2151,7 @@ export function initQualiaPage() {
       }
       case 'a': btnAudio.click(); break;
       case 's': document.getElementById('btn-strudel').click(); break;
+      case 'q': document.getElementById('btn-sequencer').click(); break;
       case 'p': {
         const opts = ['off','camera'];
         const i = opts.indexOf(poseSelect.value);
@@ -2236,6 +2300,7 @@ export function initQualiaPage() {
       lvlEl.textContent = 'audio off';
     }
     strudel.perFrame();
+    sequencer.perFrame();
 
     if (diagCard && !diagCard.classList.contains('collapsed')) {
       const a = field.audio;

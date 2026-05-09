@@ -225,20 +225,22 @@ export function createAudio() {
     notify();
   }
 
-  /** Adopt an externally-owned analyser+ctx (used by Strudel tap). */
-  function adoptAnalyser(externalCtx, externalAnalyser) {
-    // Replace any prior strudel source without touching mic.
-    if (sources.has('strudel')) sources.delete('strudel');
+  /** Adopt an externally-owned analyser+ctx. `sourceId` defaults to 'strudel'
+   *  for back-compat; new sources (sequencer, future tone.js panels) pass
+   *  their own id so each maintains its own slot in the source registry. */
+  function adoptAnalyser(externalCtx, externalAnalyser, sourceId = 'strudel') {
+    // Replace any prior source under this id without touching the others.
+    if (sources.has(sourceId)) sources.delete(sourceId);
     const src = { ctx: externalCtx, analyser: externalAnalyser, ownsCtx: false };
     configureSource(src);
-    sources.set('strudel', src);
+    sources.set(sourceId, src);
     refreshFrameBuffers();
     notify();
   }
 
-  function releaseAdopted() {
-    if (!sources.has('strudel')) return;
-    sources.delete('strudel');
+  function releaseAdopted(sourceId = 'strudel') {
+    if (!sources.has(sourceId)) return;
+    sources.delete(sourceId);
     refreshFrameBuffers();
     if (sources.size === 0) resetState();
     notify();
