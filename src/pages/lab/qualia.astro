@@ -835,11 +835,23 @@
     .seq-cells {
       display: grid;
       gap: 3px;
+      /* Pin the row height so a parent grid/flex with `align-items: center`
+         (or any other shrink-friendly alignment) can't collapse the cell
+         track. Without this, Android Chrome was squashing the buttons to
+         ~4px tall, leaving the LEDs unreadable as pill-shaped dashes. */
+      min-height: 32px;
+      align-self: stretch;
     }
     .seq-cell {
-      height: 32px; min-width: 0;
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.08);
+      /* Both `height` and `min-height` — `min-height` is the one grid/flex
+         parents actually have to honour, so use it as the floor while
+         `height` keeps the cell from growing past the row track. */
+      height: 32px; min-height: 32px; min-width: 0;
+      /* OFF-state contrast bumped from 5%/8% white. The previous values
+         disappeared into the panel's frosted backdrop, especially on
+         Android where backdrop-filter washes out low-alpha overlays. */
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.28);
       border-radius: 4px;
       cursor: pointer; padding: 0;
       transition: background-color 0.08s ease, border-color 0.08s ease;
@@ -874,12 +886,27 @@
         grid-template-columns: 1fr;
         gap: 0.2rem;
         margin-bottom: 8px;
+        /* Desktop sets `align-items: center` so the 110px label column
+           reads centred against the LED strip. Once the rows stack on
+           mobile, that alignment lets Android Chrome size the implicit
+           cells track to whatever the cell buttons report as their
+           min-content height — which collapsed to a few px. Stretch
+           gives the row its full intrinsic height back. */
+        align-items: stretch;
       }
       .seq-pad-ctrl { width: 100%; }
       .seq-pad-mute { flex: 1; font-size: 0.78rem; padding: 0.28rem 0.5rem; }
       .seq-pad-audition { padding: 0.28rem 0.55rem; font-size: 0.78rem; }
-      .seq-cell { height: 36px; border-radius: 5px; }
-      .seq-cells { gap: 4px; }
+      .seq-cell {
+        height: 36px; min-height: 36px;
+        border-radius: 5px;
+        /* Lift OFF contrast another notch on phone displays — outdoor
+           glare and lower native gamut still leave 10%/28% white reading
+           too softly to scan a 16-cell row at a glance. */
+        background: rgba(255,255,255,0.14);
+        border-color: rgba(255,255,255,0.38);
+      }
+      .seq-cells { gap: 4px; min-height: 36px; }
     }
   </style>
 </head>
