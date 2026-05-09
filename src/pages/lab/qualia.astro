@@ -172,6 +172,21 @@
     }
     select.ctrl-btn option { background: var(--surface); color: var(--text); }
 
+    /* Dynamic-text buttons: lock min-width to the longest possible label so
+       the topbar/popover layout doesn't reflow (and re-wrap) every time the
+       auto-cycle/phase timer ticks down a digit or a label flips. Sized in
+       `ch` (mono font) against the widest reachable string for each id. */
+    #btn-cycle, #btn-phase    { min-width: 13ch; } /* "cycle 45s (♪)" */
+    #btn-cycle-beat,
+    #btn-phase-beat           { min-width: 11ch; } /* "♪ cycle off" */
+    #btn-audio                { min-width: 13ch; } /* "audio strudel" */
+    #btn-camera               { min-width: 9ch;  } /* "cam large" */
+    #btn-cam-rotate           { min-width: 8ch;  } /* "rot 270°" */
+    #btn-cursor               { min-width: 15ch; } /* "cursor combined" */
+    #btn-pause                { min-width: 6ch;  } /* "paused" */
+    #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
+    #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
+
     /* Topbar group popovers — each `.qg-group` owns a trigger button + a
        hidden popover containing the original buttons unchanged. Click the
        trigger to open; click outside to close; click another trigger to
