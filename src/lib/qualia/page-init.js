@@ -58,10 +58,14 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 //   mix:     mic + strudel both feed (user opts in; pick this when the
 //            mic is on a clean line — guitar interface, etc — so there's
 //            no acoustic feedback path back from speakers)
-// Audio source mode selector. 'all' = mic + strudel + sequencer (the
-// previous 'mix' mode was mic+strudel only and is migrated to 'all' on
-// load — see the audioMode restore block below).
-const AUDIO_MODES   = ['off', 'mic', 'strudel', 'sequencer', 'all'];
+// Audio source mode selector — three real-world states:
+//   off → no reactivity
+//   mix → strudel + sequencer (no mic; play through speakers without
+//          feedback risk)
+//   all → strudel + sequencer + mic
+// Older multi-state values (mic, strudel, sequencer alone) get
+// remapped on load — see the audioMode restore block below.
+const AUDIO_MODES   = ['off', 'mix', 'all'];
 const GLITCH_MODES  = ['off', 'on', 'blip', 'flip'];
 const GLITCH_KEYS   = ['ascii', 'mosh', 'edge'];
 const BLIP_DURATION_MS = 280;
@@ -283,18 +287,25 @@ export function initQualiaPage() {
   // Per-glitch blip auto-clear timestamps (epoch ms; 0 = inactive).
   const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0 };
 
-  // Audio mode (multi-state). Migrations:
-  //   - earliest shape: `audioOn` boolean (true=mic, false=off).
-  //   - prior shape: `audioMode` ∈ {off,mic,strudel,mix} where mix=mic+strudel.
-  //     'mix' has been replaced by 'all' (which also includes sequencer);
-  //     remap on load so returning users keep their stored intent.
+  // Audio mode. The button now cycles through three real-world states:
+  //   off → mix (strudel + seq, no mic) → all (strudel + seq + mic)
+  // The intermediate mic-only / strudel-only / sequencer-only states
+  // were dropped — in practice everyone runs both engines together,
+  // and the only meaningful axis was "do we open the mic too".
+  //
+  // Migrations across earlier shapes:
+  //   - `audioOn` boolean: true → 'all' (legacy mic mode also wanted reactivity), false → 'off'.
+  //   - older `audioMode` ∈ {off, mic, strudel, sequencer, mix, all}:
+  //       'mic'/'all' → 'all'  (preserve mic intent)
+  //       'strudel'/'sequencer'/'mix' → 'mix'  (preserve "engines, no mic" intent)
+  //       'off' → 'off'
   let audioMode;
   if (typeof stored.audioMode === 'string') {
-    if (stored.audioMode === 'mix') audioMode = 'all';
-    else if (AUDIO_MODES.includes(stored.audioMode)) audioMode = stored.audioMode;
-    else audioMode = 'off';
+    if (stored.audioMode === 'mic' || stored.audioMode === 'all') audioMode = 'all';
+    else if (stored.audioMode === 'off') audioMode = 'off';
+    else audioMode = 'mix';
   } else if (typeof stored.audioOn === 'boolean') {
-    audioMode = stored.audioOn ? 'mic' : 'off';
+    audioMode = stored.audioOn ? 'all' : 'off';
   } else {
     audioMode = 'off';
   }
@@ -697,13 +708,11 @@ export function initQualiaPage() {
   window.matchMedia('(max-width: 768px), (pointer: coarse)')
     .addEventListener?.('change', setTabsVar);
 
-  // ── Audio source mode (off / mic / strudel / mix) ───────────────────────
-  // The button is a 4-state selector. The mode is the user's intent; the
-  // underlying mic stream + audio source filter are kept in sync with it.
-  //   off     → mic stopped, audio.setSourceFilter([])
-  //   mic     → mic running, filter ['mic'] (strudel ignored)
-  //   strudel → mic stopped, filter ['strudel']
-  //   mix     → mic running, filter ['mic','strudel']
+  // ── Audio source mode (off / mix / all) ─────────────────────────────────
+  // The button is a 3-state selector matching real-world usage:
+  //   off → mic stopped, audio.setSourceFilter([])
+  //   mix → mic stopped, filter ['strudel', 'sequencer']  (engines only)
+  //   all → mic running, filter ['mic', 'strudel', 'sequencer']
   // The `onChange` callback only handles visual side-effects from external
   // source changes (e.g. strudel adopt/release while panel is open) so the
   // panel visibility and label stay in sync with whatever's actually live.
@@ -723,11 +732,9 @@ export function initQualiaPage() {
 
   function applyAudioFilter() {
     switch (audioMode) {
-      case 'off':       audio.setSourceFilter([]);                              break;
-      case 'mic':       audio.setSourceFilter(['mic']);                         break;
-      case 'strudel':   audio.setSourceFilter(['strudel']);                     break;
-      case 'sequencer': audio.setSourceFilter(['sequencer']);                   break;
-      case 'all':       audio.setSourceFilter(['mic', 'strudel', 'sequencer']); break;
+      case 'off': audio.setSourceFilter([]);                              break;
+      case 'mix': audio.setSourceFilter(['strudel', 'sequencer']);        break;
+      case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer']); break;
     }
   }
 
@@ -736,12 +743,12 @@ export function initQualiaPage() {
     btnAudio.textContent = `audio ${audioMode}`;
     if (audioMode !== 'off') {
       // Pink (active-audio) when the mic itself is engaged — visual hint
-      // that we're listening to the room. Cyan (active) for engine-only
-      // modes (strudel / sequencer) where no live mic is open.
-      const micEngaged = audioMode === 'mic' || audioMode === 'all';
+      // that we're listening to the room. Cyan (active) for engines-only
+      // mix where no live mic is open.
+      const micEngaged = audioMode === 'all';
       btnAudio.classList.add(micEngaged ? 'active-audio' : 'active');
     }
-    btnAudio.title = 'Audio source (A) — off / mic / strudel / sequencer / all';
+    btnAudio.title = 'Audio source (A) — off / mix (strudel+seq) / all (+mic)';
     // Audio panel visibility tracks "is anything driving reactivity" — open
     // when mode != off.
     audioCard.style.display = audioMode === 'off' ? 'none' : '';
@@ -751,7 +758,7 @@ export function initQualiaPage() {
     if (!AUDIO_MODES.includes(mode)) return;
     const prevMode = audioMode;
     audioMode = mode;
-    const wantMic = mode === 'mic' || mode === 'all';
+    const wantMic = mode === 'all';
     try {
       if (wantMic && !audio.hasSource('mic')) {
         await startMic(getStoredDeviceId('mic'));
@@ -2440,10 +2447,10 @@ export function initQualiaPage() {
     core.start();
 
     // Restore audio source. `withMic` (from the "enable mic" overlay button)
-    // forces audio mode to 'mic' even if the persisted mode is 'off' — the
+    // forces audio mode to 'all' even if the persisted mode is 'off' — the
     // user explicitly requested mic via the boot overlay. Otherwise replay
     // the persisted mode (which itself decides whether to open the mic).
-    if (opts.withMic && audioMode === 'off') audioMode = 'mic';
+    if (opts.withMic && audioMode === 'off') audioMode = 'all';
     try {
       await setAudioMode(audioMode);
     } catch (err) {
