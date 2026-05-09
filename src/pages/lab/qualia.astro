@@ -835,23 +835,31 @@
     .seq-cells {
       display: grid;
       gap: 3px;
-      /* Pin the row height so a parent grid/flex with `align-items: center`
-         (or any other shrink-friendly alignment) can't collapse the cell
-         track. Without this, Android Chrome was squashing the buttons to
-         ~4px tall, leaving the LEDs unreadable as pill-shaped dashes. */
-      min-height: 32px;
+      /* `grid-auto-rows` pins the implicit row track to a fixed pixel
+         height. `min-height` and per-cell `height` both turned out
+         insufficient on Android Chrome — the engine sized the row to the
+         button's intrinsic min-content (effectively 0 for an empty
+         <button>) and the buttons collapsed to thin pill-dashes. With an
+         explicit auto-row, the track is the floor regardless of how the
+         child content reports its size. */
+      grid-auto-rows: 36px;
+      min-height: 36px;
       align-self: stretch;
     }
     .seq-cell {
-      /* Both `height` and `min-height` — `min-height` is the one grid/flex
-         parents actually have to honour, so use it as the floor while
-         `height` keeps the cell from growing past the row track. */
-      height: 32px; min-height: 32px; min-width: 0;
-      /* OFF-state contrast bumped from 5%/8% white. The previous values
-         disappeared into the panel's frosted backdrop, especially on
-         Android where backdrop-filter washes out low-alpha overlays. */
-      background: rgba(255,255,255,0.10);
-      border: 1px solid rgba(255,255,255,0.28);
+      /* `appearance: none` strips the user-agent button styling that
+         makes Android Chrome ignore explicit `height`/`min-height` on
+         empty <button>s in grid layout — that was the actual culprit
+         behind the white-dash collapse. With UA styling out of the way
+         the height props finally take, but we keep `grid-auto-rows`
+         above as a belt-and-braces backstop. */
+      appearance: none; -webkit-appearance: none;
+      width: 100%; height: 100%; min-width: 0;
+      /* OFF-state contrast: solid translucent fill + 1px border on the
+         frosted panel backdrop. The cyan ON state fills the whole cell
+         so on/off is unmistakable at a glance. */
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.32);
       border-radius: 4px;
       cursor: pointer; padding: 0;
       transition: background-color 0.08s ease, border-color 0.08s ease;
@@ -898,15 +906,16 @@
       .seq-pad-mute { flex: 1; font-size: 0.78rem; padding: 0.28rem 0.5rem; }
       .seq-pad-audition { padding: 0.28rem 0.55rem; font-size: 0.78rem; }
       .seq-cell {
-        height: 36px; min-height: 36px;
         border-radius: 5px;
         /* Lift OFF contrast another notch on phone displays — outdoor
-           glare and lower native gamut still leave 10%/28% white reading
+           glare and lower native gamut still leave 12%/32% white reading
            too softly to scan a 16-cell row at a glance. */
-        background: rgba(255,255,255,0.14);
-        border-color: rgba(255,255,255,0.38);
+        background: rgba(255,255,255,0.16);
+        border-color: rgba(255,255,255,0.42);
       }
-      .seq-cells { gap: 4px; min-height: 36px; }
+      /* Bump auto-row + min-height in lockstep so the cells get a
+         finger-friendly 40px tap target on phone screens. */
+      .seq-cells { gap: 4px; grid-auto-rows: 40px; min-height: 40px; }
     }
   </style>
 </head>
