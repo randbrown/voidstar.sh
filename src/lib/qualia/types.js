@@ -37,30 +37,17 @@
  */
 
 /**
- * Polymorphic Person — either a `human` (MediaPipe PoseLandmarker output) or
- * a `dog` (MediaPipe ObjectDetector bbox with a synthesized skeleton). Shared
- * core: `kind`, `head`, `neck`, `hips`, `confidence`. Human-only joints
- * (shoulders/elbows/wrists/knees/ankles) and dog-only fields (paws/tail/snout
- * /bbox/heading) are present only on their respective kinds — fx that read
- * them should null-check or filter by `kind` first.
- *
  * @typedef {Object} Person
- * @property {'human'|'dog'} kind
- * @property {Landmark} head        Humans: MediaPipe LM 0 (nose). Dogs: head end of bbox along heading.
- * @property {Landmark} neck        Humans: midpoint of shoulders. Dogs: 20% along long axis from head.
- * @property {{l:Landmark,r:Landmark}} hips    Both kinds. Humans: LMs 23/24. Dogs: 80% along long axis ±40% perp.
- * @property {{l:Landmark,r:Landmark}} [shoulders]  Humans only.
- * @property {{l:Landmark,r:Landmark}} [elbows]     Humans only.
- * @property {{l:Landmark,r:Landmark}} [wrists]     Humans only.
- * @property {{l:Landmark,r:Landmark}} [knees]      Humans only.
- * @property {{l:Landmark,r:Landmark}} [ankles]     Humans only.
- * @property {Landmark} [snout]                     Dogs only — small offset past head.
- * @property {Landmark} [tail]                      Dogs only — extends past hips opposite heading.
- * @property {{fl:Landmark,fr:Landmark,bl:Landmark,br:Landmark}} [paws]  Dogs only — front/back × left/right.
- * @property {{x:number,y:number,w:number,h:number}} [bbox]    Dogs only — normalized [0,1] image-space bbox.
- * @property {{x:number,y:number}} [heading]                   Dogs only — unit vector along bbox long axis (head end).
- * @property {Landmark[]|null} raw  Humans: original 33-element MediaPipe array. Dogs: null.
- * @property {number} confidence    Humans: mean visibility across named joints. Dogs: bbox detection score.
+ * @property {Landmark} head        MediaPipe LM 0 (nose).
+ * @property {Landmark} neck        Synthesised: midpoint of shoulders.
+ * @property {{l:Landmark,r:Landmark}} shoulders
+ * @property {{l:Landmark,r:Landmark}} elbows
+ * @property {{l:Landmark,r:Landmark}} wrists
+ * @property {{l:Landmark,r:Landmark}} hips
+ * @property {{l:Landmark,r:Landmark}} knees
+ * @property {{l:Landmark,r:Landmark}} ankles
+ * @property {Landmark[]} raw       Original 33-element MediaPipe array (for fx that want it).
+ * @property {number} confidence    Mean visibility across the named joints.
  */
 
 /**
