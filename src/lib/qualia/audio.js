@@ -68,7 +68,7 @@ export function createAudio() {
   let gain         = 1.0;
   let alpha        = 0.30;   // EMA factor on band values — higher = snappier
   let beatThresh   = 1.30;
-  let beatCooldown = 280;
+  let beatCooldown = 500;
 
   // Source filter — null = all active sources contribute, Set = allow-list.
   // Caller-set via setSourceFilter; the page binds this to the audio-mode
@@ -88,8 +88,27 @@ export function createAudio() {
   // onset detector that fires whenever the current level rises sharply
   // above the recent baseline, in both loud AND quiet sections.
   const SNARE_FLUX_THRESH = 0.018;
+  // Same shape for the kick detector — without an onset gate, a sustained
+  // bass tail (especially low-passed kicks like `bd.lpf(500)` whose
+  // envelope sits above threshold for hundreds of ms) double-fires the
+  // kick the moment the cooldown elapses. Flux > threshold means bass is
+  // RISING right now, not just steady-loud.
+  const KICK_FLUX_THRESH  = 0.025;
+  // For the snare to fire, mids must be at least SNARE_BASS_RATIO of the
+  // current bass level — guards against kick-drum click bleed into the mid
+  // band double-firing the snare detector. Tuned conservatively: real
+  // snares almost always have mids ≥ 60-70% of their bass content; kicks
+  // typically have mids < 40% of bass during the transient.
+  const SNARE_BASS_RATIO = 0.55;
+  // Same idea for highs: kick clicks bleed into the high band too. Cymbals
+  // and hats have highs ≫ bass; kicks have highs ≪ bass. Without this gate
+  // we get a "phantom" highs.active fire on every kick, which several
+  // quales (Code, Fractal, Voidstar Logo) read as a separate visual event
+  // and double-flash on top of the beat pulse.
+  const HIGHS_BASS_RATIO  = 0.45;
   let bassAvg = 0, highsAvg = 0;
   let snareFastEma = 0, snareSlowEma = 0;
+  let bassFastEma  = 0, bassSlowEma  = 0;
   let lastBeatMs = 0, lastMidsMs = 0, lastHighsMs = 0;
 
   function configureSource(src) {
@@ -366,33 +385,73 @@ export function createAudio() {
     // fast above slow before slow catches up — that gap is the transient.
     snareFastEma = 0.55 * snareFastEma + 0.45 * rawSnarePre;
     snareSlowEma = 0.94 * snareSlowEma + 0.06 * rawSnarePre;
+    // Same fast/slow EMA pair on bass for kick onset detection.
+    bassFastEma  = 0.55 * bassFastEma  + 0.45 * rawBassPre;
+    bassSlowEma  = 0.94 * bassSlowEma  + 0.06 * rawBassPre;
     const bassFloor  = Math.min(bassAvg,  BAND_CEILING);
     const highsFloor = Math.min(highsAvg, BAND_CEILING);
     const now = performance.now();
 
-    frame.beat.active = rawBassPre > bassFloor * beatThresh
+    // Onset gate: bassFlux > threshold means bass is rising fresh this
+    // frame, not just sustained loud. Without this, a kick's lingering
+    // tail re-crosses the threshold the moment the cooldown elapses and
+    // fires a phantom second kick.
+    const bassFlux = bassFastEma - bassSlowEma;
+    frame.beat.active = bassFlux > KICK_FLUX_THRESH
+                     && rawBassPre > bassFloor * beatThresh
                      && rawBassPre > bassFloor + BEAT_DELTA_BASS
                      && rawBassPre > 0.04
                      && now - lastBeatMs > beatCooldown;
-    if (frame.beat.active) { lastBeatMs = now; frame.beat.pulse = 1; }
+    if (frame.beat.active) {
+      lastBeatMs = now;
+      frame.beat.pulse = 1;
+      // Collapse flux on fire: slow EMA jumps to the current fast level so
+      // the next fire requires bass to rise ABOVE this level, not just
+      // hang at it. Without this snap-up, a long bd envelope (especially
+      // low-passed kicks) keeps flux elevated for >1s — easily long
+      // enough for the 280-600ms cooldown to elapse and fire a second,
+      // third, fourth phantom kick on the same physical hit.
+      bassSlowEma = bassFastEma;
+    }
 
     // Snare/clap transient via spectral flux. Fires whenever the snare
     // band's fast level pops above the slow baseline by SNARE_FLUX_THRESH.
     // Works in both loud and quiet sections because both EMAs adapt with
     // the surrounding loudness — only the *shape* of the rise matters.
+    //
+    // Band-dominance gate: real snares/claps have most of their energy
+    // above the bass band, so we require mids ≥ bass × SNARE_BASS_RATIO.
+    // Without this, a kick's broadband click leaks into the mid band and
+    // double-fires the snare detector (visible as 2× snare counts on a
+    // bd-heavy pattern). Mirror of the hard-kick detector's bass-dominance
+    // check, which guards the kick path the other way.
     const midCooldown = beatCooldown * 0.65;
     const snareFlux   = snareFastEma - snareSlowEma;
+    const midsDominant = rawMidsPre >= rawBassPre * SNARE_BASS_RATIO;
     frame.mids.active = snareFlux > SNARE_FLUX_THRESH
                      && rawSnarePre > 0.03
+                     && midsDominant
                      && now - lastMidsMs > midCooldown;
-    if (frame.mids.active) { lastMidsMs = now; frame.mids.pulse = 1; }
+    if (frame.mids.active) {
+      lastMidsMs = now;
+      frame.mids.pulse = 1;
+      // Same flux-collapse trick as the kick path — prevents a sustained
+      // snare body from re-firing the moment its cooldown elapses.
+      snareSlowEma = snareFastEma;
+    }
 
-    // Highs transient — looser threshold + shorter cooldown for hat / cymbal hits.
+    // Highs transient — looser threshold + shorter cooldown for hat / cymbal
+    // hits. Same band-dominance guard as the snare path: cymbals/hats have
+    // highs ≫ bass, kicks have highs ≪ bass, so requiring highs ≥ bass ×
+    // HIGHS_BASS_RATIO keeps the kick's broadband click from firing this
+    // detector and visually double-flashing.
     const hiThresh   = beatThresh   * 0.88;
     const hiCooldown = beatCooldown * 0.45;
+    const highsDominant = rawHighsPre >= rawBassPre * HIGHS_BASS_RATIO;
     frame.highs.active = rawHighsPre > highsFloor * hiThresh
                       && rawHighsPre > highsFloor + BEAT_DELTA_HIGHS
                       && rawHighsPre > 0.04
+                      && highsDominant
                       && now - lastHighsMs > hiCooldown;
     if (frame.highs.active) { lastHighsMs = now; frame.highs.pulse = 1; }
   }
@@ -402,7 +461,7 @@ export function createAudio() {
     if (t.gain         != null) gain         = clamp(t.gain, 0.25, 4.0);
     if (t.ema          != null) alpha        = clamp(t.ema, 0.05, 0.60);
     if (t.thresh       != null) beatThresh   = clamp(t.thresh, 1.10, 2.50);
-    if (t.cooldown     != null) beatCooldown = clamp(t.cooldown, 80, 600);
+    if (t.cooldown     != null) beatCooldown = clamp(t.cooldown, 80, 1000);
   }
   function getTunables() {
     return { gain, ema: alpha, thresh: beatThresh, cooldown: beatCooldown };

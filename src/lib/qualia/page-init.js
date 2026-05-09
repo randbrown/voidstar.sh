@@ -224,8 +224,10 @@ export function initQualiaPage() {
     edgeConfig:     overlay.getEdgeConfig(),
     autoPhaseSeconds,
     autoPhaseStyle,
+    autoPhaseBeatSync,
     autoCycleSeconds,
     autoCycleStyle,
+    autoCycleBeatSync,
     numPoses:       pose.getNumPoses(),
     poseSmoothing:  poseSmoothingValue,
     poseThresh:     pose.getThresholds(),
@@ -1523,6 +1525,7 @@ export function initQualiaPage() {
   // setPhasePeriod helper handles every transition.
   let autoPhaseSeconds = PHASE_PERIODS.includes(_phaseSecRaw) ? _phaseSecRaw : 0;
   let autoPhaseStyle = AUTO_PHASE_STYLES.includes(_phaseStyleRaw) ? _phaseStyleRaw : 'chapters';
+  let autoPhaseBeatSync = !!stored.autoPhaseBeatSync;
   let autoPhaseStartMs = 0;
   let autoPhaseStepCount = 0;
   let autoPhaseTickT = null;
@@ -1559,7 +1562,13 @@ export function initQualiaPage() {
     if (autoPhaseSeconds > 0) {
       const elapsed = (performance.now() - autoPhaseStartMs) / 1000;
       const remaining = Math.max(0, Math.ceil(autoPhaseSeconds - elapsed));
-      btnPhase.textContent = `phase ${remaining}s`;
+      if (autoPhaseBeatSync && audioActive()) {
+        btnPhase.textContent = remaining > 0 ? `phase ${remaining}s ♪` : 'phase ♪';
+      } else if (autoPhaseBeatSync) {
+        btnPhase.textContent = `phase ${remaining}s (♪)`;
+      } else {
+        btnPhase.textContent = `phase ${remaining}s`;
+      }
     } else {
       btnPhase.textContent = 'phase off';
     }
@@ -1621,10 +1630,29 @@ export function initQualiaPage() {
 
   function tickPhase() {
     if (autoPhaseSeconds <= 0) { refreshPhaseBtn(); return; }
-    const elapsed = (performance.now() - autoPhaseStartMs) / 1000;
+    const now = performance.now();
+    const elapsed = (now - autoPhaseStartMs) / 1000;
     refreshPhaseBtn();
+    if (autoPhaseBeatSync && audioActive()) {
+      // Beat-sync mode: dwell time is a floor (cooldown), 2× dwell is the
+      // silence-fallback ceiling. Between floor and ceiling, fire on a
+      // beat that arrives AFTER the floor timestamp.
+      if (elapsed >= autoPhaseSeconds * 2) {
+        autoPhaseStartMs = now;
+        phaseNext();
+        return;
+      }
+      if (elapsed >= autoPhaseSeconds) {
+        const floorMs = autoPhaseStartMs + autoPhaseSeconds * 1000;
+        if (lastBeatAt > floorMs) {
+          autoPhaseStartMs = now;
+          phaseNext();
+        }
+      }
+      return;
+    }
     if (elapsed >= autoPhaseSeconds) {
-      autoPhaseStartMs = performance.now();
+      autoPhaseStartMs = now;
       phaseNext();
     }
   }
@@ -1674,6 +1702,7 @@ export function initQualiaPage() {
   // — Auto-cycle (cross-fx) —
   let autoCycleSeconds = CYCLE_PERIODS.includes(_cycleSecRaw) ? _cycleSecRaw : 0;
   let autoCycleStyle = AUTO_CYCLE_STYLES.includes(_cycleStyleRaw) ? _cycleStyleRaw : 'sequential';
+  let autoCycleBeatSync = !!stored.autoCycleBeatSync;
   let autoCycleStartMs = 0;
   let autoCycleTickT = null;
   cycleStyleSelect.value = autoCycleStyle;
@@ -1684,7 +1713,20 @@ export function initQualiaPage() {
     if (autoCycleSeconds > 0) {
       const elapsed = (performance.now() - autoCycleStartMs) / 1000;
       const remaining = Math.max(0, Math.ceil(autoCycleSeconds - elapsed));
-      btnCycle.textContent = `cycle ${remaining}s`;
+      // Beat-sync visual states:
+      //   beat-sync ON, audio ON, in cooldown → "Ns ♪"  (floor counting down)
+      //   beat-sync ON, audio ON, armed       → "♪"     (waiting for kick)
+      //   beat-sync ON, audio OFF             → "Ns (♪)" (parens flag the
+      //     setting is on but audio is off so the cycle is firing on time
+      //     anyway — explicit visual cue, not a silent fall-through)
+      //   beat-sync OFF                       → "Ns"
+      if (autoCycleBeatSync && audioActive()) {
+        btnCycle.textContent = remaining > 0 ? `cycle ${remaining}s ♪` : 'cycle ♪';
+      } else if (autoCycleBeatSync) {
+        btnCycle.textContent = `cycle ${remaining}s (♪)`;
+      } else {
+        btnCycle.textContent = `cycle ${remaining}s`;
+      }
     } else {
       btnCycle.textContent = 'cycle off';
     }
@@ -1721,10 +1763,32 @@ export function initQualiaPage() {
     core.setActive(nextId).catch(err => console.error('[qualia] cycle setActive failed:', err));
   }
 
+  // Beat-sync only counts when there's an actual audio source. With audio
+  // off the trigger never fires, so we fall through to time-based behavior
+  // (matches the documented "audio=off → fall through to time cycle"
+  // contract).
+  function audioActive() { return audioMode !== 'off'; }
+
   function tickCycle() {
     if (autoCycleSeconds <= 0) { refreshCycleBtn(); return; }
-    const elapsed = (performance.now() - autoCycleStartMs) / 1000;
+    const now = performance.now();
+    const elapsed = (now - autoCycleStartMs) / 1000;
     refreshCycleBtn();
+    if (autoCycleBeatSync && audioActive()) {
+      // Beat-sync mode: dwell time is a floor (cooldown), 2× dwell is the
+      // silence-fallback ceiling. Between floor and ceiling, fire on the
+      // next beat that arrives AFTER the floor timestamp (not just any
+      // unconsumed beat — beats during the cooldown shouldn't count).
+      if (elapsed >= autoCycleSeconds * 2) {
+        cycleNext();
+        return;
+      }
+      if (elapsed >= autoCycleSeconds) {
+        const floorMs = autoCycleStartMs + autoCycleSeconds * 1000;
+        if (lastBeatAt > floorMs) cycleNext();
+      }
+      return;
+    }
     if (elapsed >= autoCycleSeconds) {
       // Don't reset autoCycleStartMs here — onFxChange does it after the
       // switch lands, so the dwell clock starts when the new fx is live.
@@ -1753,6 +1817,41 @@ export function initQualiaPage() {
     autoCycleStyle = cycleStyleSelect.value;
     settings.save();
   });
+
+  // ── Beat-sync toggles ────────────────────────────────────────────────────
+  // Both cycle and phase use the same trigger source: rising edge of
+  // beat.active. The user-set dwell time provides the gating — cycle dwell
+  // (typically 15-45s) feels rarer than phase dwell (5-15s) naturally. We
+  // tried using the hard-kick detector for cycle to get a more cinematic
+  // "fires on big hits" feel, but its built-in 10s cooldown clashed with
+  // short dwell times and made the cycle effectively never fire on beat.
+  const btnCycleBeat = document.getElementById('btn-cycle-beat');
+  const btnPhaseBeat = document.getElementById('btn-phase-beat');
+  function refreshBeatSyncBtns() {
+    if (btnCycleBeat) {
+      btnCycleBeat.classList.toggle('active', autoCycleBeatSync);
+      // Spell out the state in the label so the toggle is unambiguous —
+      // colour alone is easy to miss inside the popover.
+      btnCycleBeat.textContent = autoCycleBeatSync ? '♪ cycle on' : '♪ cycle off';
+    }
+    if (btnPhaseBeat) {
+      btnPhaseBeat.classList.toggle('active', autoPhaseBeatSync);
+      btnPhaseBeat.textContent = autoPhaseBeatSync ? '♪ phase on' : '♪ phase off';
+    }
+  }
+  btnCycleBeat?.addEventListener('click', () => {
+    autoCycleBeatSync = !autoCycleBeatSync;
+    refreshBeatSyncBtns();
+    refreshCycleBtn();
+    settings.save();
+  });
+  btnPhaseBeat?.addEventListener('click', () => {
+    autoPhaseBeatSync = !autoPhaseBeatSync;
+    refreshBeatSyncBtns();
+    refreshPhaseBtn();
+    settings.save();
+  });
+  refreshBeatSyncBtns();
 
   // ── Cycle pool manager ───────────────────────────────────────────────────
   // Lets the user pick which quales the auto-cycle rotates through. Stored
@@ -2042,38 +2141,44 @@ export function initQualiaPage() {
     prevBeat = a.beat.pulse; prevSnare = a.mids.pulse; prevHat = a.highs.pulse;
   });
 
-  // ── Glitch reactive trigger ──────────────────────────────────────────────
-  // Hard-kick detector for blip + flip glitch modes (across ascii / mosh /
-  // edge). Fires on a rising-edge beat pulse whose bass band is ≥85% of a
-  // slowly-decaying rolling peak, with an absolute floor so quiet sections
-  // don't fire on weak hits. The peak decays per-frame (~6s half-life @ 60
-  // fps) so a quiet stretch re-calibrates "powerful" to recent context.
+  // ── Hard-kick detector (shared) ──────────────────────────────────────────
+  // Detects rising-edge sub-bass kicks: bass pulse above a strict threshold,
+  // band absolutely loud, ≥92% of a slowly-decaying recent-rolling peak
+  // (~6s half-life @ 60fps so quiet stretches re-calibrate), and bass
+  // dominates mids/highs (rejects snares + full-spectrum metal hits). The
+  // detector also enforces a 10s cooldown so it fires "occasionally" rather
+  // than every kick.
   //
-  // When multiple glitches are reactive, each kick picks one of them at
-  // random — the overlay's own ascii/mosh/edge mutex enforces only one
-  // visible at a time anyway, so picking one cleanly avoids last-iteration-
-  // wins flicker.
-  let bassPeakEma = 0;
+  // Two consumers downstream:
+  //   - the glitch blip/flip handler (ASCII / mosh / edge flares)
+  //   - the beat-sync auto-cycle (when enabled — gated by the dwell time)
+  // Both read `lastHardKickAt`; their per-event consume tracking (compare
+  // against a previously-seen timestamp) prevents double-fires.
+  //
+  // Also tracks `lastBeatAt` (any rising-edge beat regardless of strength),
+  // which the beat-sync auto-phase consumer reads.
+  let bassPeakEma     = 0;
   let prevReactiveBeat = 0;
-  let lastHardKickAt = 0;
+  let prevAnyBeat      = 0;
+  let lastHardKickAt   = 0;
+  let lastBeatAt       = 0;
   core.onFrame((field) => {
-    const reactive = GLITCH_KEYS.filter(g =>
-      glitchModes[g] === 'blip' || glitchModes[g] === 'flip');
-    if (reactive.length === 0) {
-      // Decay even when inactive so the EMA isn't stale on next activation.
-      bassPeakEma *= HARD_KICK_PEAK_DECAY;
-      for (const g of GLITCH_KEYS) blipExpiresAt[g] = 0;
-      return;
-    }
     const a = field.audio;
     const now = performance.now();
     const beat = a.beat.pulse;
     const bass = a.bands.bass;
     const mids = a.bands.mids;
     const highs = a.bands.highs;
+    // Generic beat tracker — rising edge of beat.active (a softer threshold
+    // than hard-kick). Used by phase beat-sync.
+    if (a.beat.active && prevAnyBeat < 0.5) lastBeatAt = now;
+    prevAnyBeat = a.beat.active ? 1 : 0;
+    // Hard-kick — rising edge above the strict pulse threshold, with all
+    // the gating gates passing. Decays the EMA every frame so silence
+    // re-calibrates the "powerful" baseline.
+    bassPeakEma *= HARD_KICK_PEAK_DECAY;
     const rising = beat > HARD_KICK_PULSE_THRESH && prevReactiveBeat <= HARD_KICK_PULSE_THRESH;
     prevReactiveBeat = beat;
-    bassPeakEma *= HARD_KICK_PEAK_DECAY;
     if (rising) {
       const cooledDown = (now - lastHardKickAt) >= HARD_KICK_COOLDOWN_MS;
       const isLoud      = bass >= HARD_KICK_FLOOR;
@@ -2082,13 +2187,33 @@ export function initQualiaPage() {
       if (bass > bassPeakEma) bassPeakEma = bass;
       if (cooledDown && isLoud && isPeakLevel && isSubBass) {
         lastHardKickAt = now;
-        const winner = reactive[(Math.random() * reactive.length) | 0];
-        if (glitchModes[winner] === 'blip') {
-          overlay.setOption(winner, true);
-          blipExpiresAt[winner] = now + BLIP_DURATION_MS;
-        } else { // flip
-          overlay.setOption(winner, !overlay.getOption(winner));
-        }
+      }
+    }
+  });
+
+  // ── Glitch reactive trigger ──────────────────────────────────────────────
+  // Subscribes to the shared hard-kick detector above. When at least one of
+  // the glitches is in 'blip' / 'flip' mode, every fresh hard-kick picks one
+  // of those glitches at random and triggers it (the overlay's own ascii /
+  // mosh / edge mutex enforces only one visible glitch at a time, so picking
+  // one cleanly avoids last-iteration-wins flicker).
+  let glitchLastConsumedHardKickAt = 0;
+  core.onFrame((field) => {
+    const reactive = GLITCH_KEYS.filter(g =>
+      glitchModes[g] === 'blip' || glitchModes[g] === 'flip');
+    if (reactive.length === 0) {
+      for (const g of GLITCH_KEYS) blipExpiresAt[g] = 0;
+      return;
+    }
+    const now = performance.now();
+    if (lastHardKickAt > glitchLastConsumedHardKickAt) {
+      glitchLastConsumedHardKickAt = lastHardKickAt;
+      const winner = reactive[(Math.random() * reactive.length) | 0];
+      if (glitchModes[winner] === 'blip') {
+        overlay.setOption(winner, true);
+        blipExpiresAt[winner] = now + BLIP_DURATION_MS;
+      } else { // flip
+        overlay.setOption(winner, !overlay.getOption(winner));
       }
     }
     // Auto-clear any active blips whose windows have elapsed.

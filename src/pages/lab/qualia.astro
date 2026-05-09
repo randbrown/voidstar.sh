@@ -814,6 +814,7 @@
           <option value="sequential">sequential</option>
           <option value="random">random</option>
         </select>
+        <button class="ctrl-btn" id="btn-cycle-beat" title="Beat-sync cycle: dwell time becomes a minimum, then the next hard kick triggers the switch (silence fallback at 2× dwell). Falls through to time-based when audio is off.">♪ cycle off</button>
         <button class="ctrl-btn" id="btn-phase" title="Auto-phase modes within active quale (L)">phase</button>
         <select id="phase-style" class="ctrl-btn" title="Auto-phase style">
           <option value="chapters">chapters</option>
@@ -821,6 +822,7 @@
           <option value="random">random</option>
           <option value="hold">hold glitch</option>
         </select>
+        <button class="ctrl-btn" id="btn-phase-beat" title="Beat-sync phase: dwell time becomes a minimum, then the next beat triggers the next phase step (silence fallback at 2× dwell). Falls through to time-based when audio is off.">♪ phase off</button>
         <button class="ctrl-btn" id="btn-cycle-manage" title="Pick which quales the auto-cycle rotates through">manage</button>
       </div>
     </div>
@@ -910,7 +912,7 @@
       </div>
       <div class="qp-row" data-qp="audio-cooldown">
         <label>beat gap<span class="qp-val"></span></label>
-        <input type="range" min="80" max="600" step="10" value="280">
+        <input type="range" min="80" max="1000" step="10" value="500">
       </div>
       <div class="qp-row" data-qp="audio-ema">
         <label>response<span class="qp-val"></span></label>

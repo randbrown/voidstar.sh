@@ -223,13 +223,23 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   function getEditor() { return editorEl?.editor ?? null; }
 
   // Strudel-editor's internal CodeMirror state is not exposed by a single
-  // canonical API across versions. Try several access paths in order, ending
-  // with a DOM scrape of the rendered .cm-line nodes.
+  // canonical API across versions. Order matters here:
+  //
+  //   - The *outer* <strudel-editor> element exposes `ed.code`, but that's
+  //     just the initial value passed via the `code` attribute. The
+  //     attributeChangedCallback writes it once on mount; user edits never
+  //     update it. Reading it gives the original pattern, not the edited
+  //     one — that was the long-standing "save persists the original"
+  //     bug. Skip it.
+  //   - The *inner* `ed.editor` is the StrudelMirror/repl wrapper. Its
+  //     onChange callback does `this.code = w.state.doc.toString()` on
+  //     every CodeMirror docChanged tick, so `ed.editor.code` IS live.
+  //   - DOM scrape of `.cm-line` nodes is a fallback for any Strudel
+  //     version whose inner-editor API surface drifts.
   function readEditorCode() {
     const ed = editorEl;
     if (!ed) return null;
     try {
-      if (typeof ed.code === 'string') return ed.code;
       if (typeof ed.editor?.code === 'string') return ed.editor.code;
       if (typeof ed.editor?.getValue === 'function') return ed.editor.getValue();
       const root = ed.shadowRoot || ed;
@@ -241,6 +251,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
         }
         return cm.textContent;
       }
+      // Outer element's `code` attribute as last resort — likely stale,
+      // but better than null if all the inner paths above fail.
+      if (typeof ed.code === 'string') return ed.code;
     } catch {}
     return null;
   }

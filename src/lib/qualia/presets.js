@@ -3,9 +3,9 @@
 // not any specific visual).
 
 // Tunables: gain (linear scale 0.25–4×), ema (band response 0.05–0.60),
-// thresh (multiplicative beat ratio 1.10–2.50), cooldown (ms 80–600).
+// thresh (multiplicative beat ratio 1.10–2.50), cooldown (ms 80–1000).
 export const AUDIO_PRESETS = {
-  default:  { gain: 1.0, ema: 0.30, thresh: 1.30, cooldown: 280 },
+  default:  { gain: 1.0, ema: 0.30, thresh: 1.30, cooldown: 500 },
   ambient:  { gain: 1.0, ema: 0.18, thresh: 1.22, cooldown: 420 },
   acoustic: { gain: 1.0, ema: 0.20, thresh: 1.20, cooldown: 460 },
   edm:      { gain: 1.0, ema: 0.34, thresh: 1.32, cooldown: 240 },
