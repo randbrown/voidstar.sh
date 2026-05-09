@@ -11,7 +11,6 @@
 
 import { emptyPoseFrame } from './field.js';
 import { loadVision } from './vision-loader.js';
-import { createDogDetector } from './dog.js';
 
 const POSE_MODEL  = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
 
@@ -45,7 +44,6 @@ function shapePerson(raw) {
   const lm = i => raw[i] || emptyLandmark();
   const sL = lm(LM.L_SHOULDER), sR = lm(LM.R_SHOULDER);
   const named = {
-    kind: 'human',
     head: lm(LM.HEAD),
     neck: midpoint(sL, sR),
     shoulders: { l: sL, r: sR },
@@ -97,18 +95,6 @@ export function createPose() {
   // the slower update rate without visible jitter.
   let detectIntervalMs = 33;
   let lastDetectTickMs = 0;
-
-  // Dog detection — runs alongside human pose against the same source. We
-  // own a separate smoothing array (smoothedDogs) so a human entering /
-  // leaving doesn't perturb dog landmark indices, and a separate throttle
-  // (ObjectDetector inference is heavier than PoseLandmarker on some GPUs,
-  // and bboxes don't need 30fps to read smoothly). dogPersons is the most
-  // recent shaped output, kept around so frame.people can be rebuilt at
-  // human-detection cadence without re-synthesizing.
-  const dogDetector = createDogDetector();
-  let dogPersons = []; // shaped {kind:'dog', ...} objects, smoothed in place
-  let dogDetectIntervalMs = 100;
-  let lastDogTickMs = 0;
 
   let detectLoopStarted = false;
   let detectSource = null; // 'camera' | 'canvas' | null
@@ -167,47 +153,8 @@ export function createPose() {
   }
 
   function rebuildPeople(timestamp) {
-    const humans = smoothed.map(shapePerson);
-    // Concatenate dogs after humans. Dog objects are already shaped (and
-    // smoothed via per-landmark EMA on each detect tick), so this is a
-    // cheap reference splice — no per-frame re-synthesis.
-    frame.people = dogPersons.length ? humans.concat(dogPersons) : humans;
+    frame.people = smoothed.map(shapePerson);
     frame.timestamp = timestamp;
-  }
-
-  // Adaptive low-pass on a previously-shaped dog Person, matching the human
-  // smoother's shape (minA/maxA bounds + speed-driven alpha). We mutate the
-  // prior object in place so identity (and therefore heading state) carries
-  // forward across detect ticks.
-  function smoothDogTo(prev, fresh) {
-    const k = smoothing;
-    const minA = Math.pow(1 - k, 1.8) * 0.97 + 0.03;
-    const maxA = Math.pow(1 - k, 0.3) * 0.75 + 0.25;
-    const blendLm = (dst, src) => {
-      const dx = src.x - dst.x, dy = src.y - dst.y;
-      const speed = Math.sqrt(dx * dx + dy * dy);
-      let alpha = minA + speed * SMOOTH_SLOPE;
-      if (alpha > maxA) alpha = maxA;
-      dst.x += (src.x - dst.x) * alpha;
-      dst.y += (src.y - dst.y) * alpha;
-      dst.z = src.z;
-      dst.visibility = src.visibility;
-    };
-    blendLm(prev.head,  fresh.head);
-    blendLm(prev.neck,  fresh.neck);
-    blendLm(prev.snout, fresh.snout);
-    blendLm(prev.hips.l, fresh.hips.l);
-    blendLm(prev.hips.r, fresh.hips.r);
-    blendLm(prev.paws.fl, fresh.paws.fl);
-    blendLm(prev.paws.fr, fresh.paws.fr);
-    blendLm(prev.paws.bl, fresh.paws.bl);
-    blendLm(prev.paws.br, fresh.paws.br);
-    blendLm(prev.tail,  fresh.tail);
-    // bbox slides with the new detection (no smoothing — already stable
-    // enough at 10fps detect, and downstream fx may want crisp edges).
-    prev.bbox = fresh.bbox;
-    prev.heading = fresh.heading;
-    prev.confidence = fresh.confidence;
   }
 
   async function startCamera({ deviceId, video, facing } = {}) {
@@ -393,7 +340,6 @@ export function createPose() {
     if (detectSource === 'camera') {
       detectSource = null;
       smoothed = [];
-      dogPersons = [];
       frame.people = [];
     }
   }
@@ -412,109 +358,43 @@ export function createPose() {
       detectSource = null;
       detectCanvas = null;
       smoothed = [];
-      dogPersons = [];
       frame.people = [];
     }
   }
 
-  /** Resolve the active detect source and validate it's ready. Returns
-   *  {source, sourceW, sourceH} or null when nothing is detectable yet. */
-  function activeSource() {
-    if (detectSource === 'camera' && videoEl
-        && videoEl.readyState >= 2 && !videoEl.paused && !videoEl.ended) {
-      return { source: videoEl, sourceW: videoEl.videoWidth || 1, sourceH: videoEl.videoHeight || 1 };
-    }
-    if (detectSource === 'canvas' && detectCanvas) {
-      return { source: detectCanvas, sourceW: detectCanvas.width || 1, sourceH: detectCanvas.height || 1 };
-    }
-    return null;
-  }
-
-  /** Re-shape a fresh list of dog detections into smoothed dogPersons. */
-  function ingestDogs(rawDetections, sourceW, sourceH) {
-    if (!rawDetections) return; // null = detector not ready yet; skip silently
-    const matched = dogDetector.matchToPrev(rawDetections, dogPersons, sourceW, sourceH);
-    const next = [];
-    for (const m of matched) {
-      const fresh = dogDetector.shapeDog(m);
-      if (m.prior) {
-        smoothDogTo(m.prior, fresh);
-        next.push(m.prior);
-      } else {
-        next.push(fresh);
-      }
-    }
-    dogPersons = next;
-  }
-
   function startDetectLoop() {
     detectLoopStarted = true;
-    // Build the dog detector lazily on first loop tick after a source is
-    // available. We don't gate on its readiness — humans detect immediately
-    // either way, and detectSync returns null until the detector is up.
-    let dogEnsureStarted = false;
     (function detectLoop() {
       requestAnimationFrame(detectLoop);
       if (!landmarker) return;
+      // Throttle gate — cheap to spin the rAF, expensive to call
+      // detectForVideo. Skip ticks that come faster than the interval.
       const tickT = performance.now();
-      const src = activeSource();
-      if (!src) return;
-      const { source, sourceW, sourceH } = src;
-
-      // Kick the dog detector build the first time we have a live source.
-      // Idempotent thereafter — ensureDetector short-circuits when ready.
-      if (!dogEnsureStarted) {
-        dogEnsureStarted = true;
-        dogDetector.ensureDetector().catch(() => { /* fall through; dog detection stays no-op */ });
-      } else if (!dogDetector.isReady()) {
-        // Score-threshold or maxDogs changed — rebuild in background.
-        dogDetector.ensureDetector().catch(() => {});
-      }
-
-      // Human pose — gated by detectIntervalMs (default ~30fps).
-      let humanRan = false;
-      if (tickT - lastDetectTickMs >= detectIntervalMs) {
-        lastDetectTickMs = tickT;
-        try {
+      if (tickT - lastDetectTickMs < detectIntervalMs) return;
+      lastDetectTickMs = tickT;
+      try {
+        if (detectSource === 'camera' && videoEl
+            && videoEl.readyState >= 2 && !videoEl.paused && !videoEl.ended) {
           const t = performance.now();
-          const result = landmarker.detectForVideo(source, t);
+          const result = landmarker.detectForVideo(videoEl, t);
+          smoothLandmarks(result.landmarks ?? []);
+          if ((result.landmarks ?? []).length > 0) lastDetectMs = t;
+          rebuildPeople(t);
+        } else if (detectSource === 'canvas' && detectCanvas) {
+          const t = performance.now();
+          const result = landmarker.detectForVideo(detectCanvas, t);
           const fresh = result.landmarks ?? [];
-          if (detectSource === 'camera') {
+          if (fresh.length > 0) {
             smoothLandmarks(fresh);
-            if (fresh.length > 0) lastDetectMs = t;
-            humanRan = true;
-          } else if (detectSource === 'canvas') {
-            if (fresh.length > 0) {
-              smoothLandmarks(fresh);
-              lastDetectMs = t;
-              humanRan = true;
-            } else if (lingerMs > 0 && t - lastDetectMs > lingerMs) {
-              smoothed = [];
-              humanRan = true;
-            }
+            lastDetectMs = t;
+            rebuildPeople(t);
+          } else if (lingerMs > 0 && t - lastDetectMs > lingerMs) {
+            smoothed = [];
+            frame.people = [];
+            frame.timestamp = t;
           }
-        } catch { /* swallow timestamp regressions */ }
-      }
-
-      // Dog detection — gated independently. Skip entirely when the user
-      // has zeroed out maxDogs (no need to spin inference).
-      let dogRan = false;
-      if (dogDetector.getMaxDogs() > 0 && tickT - lastDogTickMs >= dogDetectIntervalMs) {
-        lastDogTickMs = tickT;
-        try {
-          const t = performance.now();
-          const dogs = dogDetector.detectSync(source, t);
-          if (dogs !== null) {
-            ingestDogs(dogs, sourceW, sourceH);
-            dogRan = true;
-          }
-        } catch { /* swallow timestamp regressions */ }
-      } else if (dogDetector.getMaxDogs() === 0 && dogPersons.length) {
-        dogPersons = [];
-        dogRan = true;
-      }
-
-      if (humanRan || dogRan) rebuildPeople(performance.now());
+        }
+      } catch { /* swallow timestamp regressions */ }
     })();
   }
 
@@ -541,17 +421,6 @@ export function createPose() {
   }
   function getDetectFps() { return Math.round(1000 / detectIntervalMs); }
 
-  // Dog detection knobs — independent from the human pose ones above.
-  function setNumDogs(n)      { dogDetector.setMaxDogs(n); }
-  function getNumDogs()       { return dogDetector.getMaxDogs(); }
-  function setDogMinScore(v)  { dogDetector.setMinScore(v); }
-  function getDogMinScore()   { return dogDetector.getMinScore(); }
-  function setDogDetectFps(fps) {
-    const f = Math.max(2, Math.min(30, fps | 0));
-    dogDetectIntervalMs = Math.round(1000 / f);
-  }
-  function getDogDetectFps() { return Math.round(1000 / dogDetectIntervalMs); }
-
   return {
     frame,
     startCamera,
@@ -572,11 +441,5 @@ export function createPose() {
     getSmoothing:  () => smoothing,
     getLingerMs:   () => lingerMs,
     getDetectFps,
-    setNumDogs,
-    getNumDogs,
-    setDogMinScore,
-    getDogMinScore,
-    setDogDetectFps,
-    getDogDetectFps,
   };
 }
