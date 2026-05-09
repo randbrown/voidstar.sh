@@ -412,10 +412,11 @@ export function generatePlanck(count, extent = 4) {
   return { positions, aSeed };
 }
 
-/** Beyond — a near-empty void with a few faint asymptotic glow points
- *  drifting at large radius. Visually the lights barely register; the
- *  point is the silence. */
-export function generateBeyond(count, radius = 30) {
+/** Beneath — a near-empty void with a few faint asymptotic glow points
+ *  drifting at large radius. Sits below the Planck cutoff: parameters here
+ *  cannot be modelled; nature does not exist under this scale. Visually the
+ *  lights barely register; the point is the silence. */
+export function generateBeneath(count, radius = 30) {
   const positions = new Float32Array(count * 3);
   const aLife     = new Float32Array(count);
   for (let i = 0; i < count; i++) {
@@ -426,6 +427,30 @@ export function generateBeyond(count, radius = 30) {
     positions[i * 3 + 1] = r * Math.sin(t) * Math.sin(p);
     positions[i * 3 + 2] = r * Math.cos(t);
     aLife[i] = Math.random();
+  }
+  return { positions, aLife };
+}
+
+/** Beyond — sits OUTSIDE the cosmic web (larger than the universal scale).
+ *  Same silent-void aesthetic as Beneath but spread thinner across an even
+ *  wider shell, with a few brighter "ghost universes" embedded — distant
+ *  cosmic-scale structures that would be inaccessible from inside our own
+ *  universe. */
+export function generateBeyond(count, radius = 60) {
+  const positions = new Float32Array(count * 3);
+  const aLife     = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const t = Math.acos(2 * Math.random() - 1);
+    const p = Math.random() * TAU;
+    // Distribute across a thicker shell than Beneath — meta-cosmic foam
+    // rather than sub-Planck fizz.
+    const r = radius * (0.55 + Math.random() * 0.85);
+    positions[i * 3 + 0] = r * Math.sin(t) * Math.cos(p);
+    positions[i * 3 + 1] = r * Math.sin(t) * Math.sin(p);
+    positions[i * 3 + 2] = r * Math.cos(t);
+    // ~8% chance of a brighter "ghost universe" speck so the void isn't
+    // perfectly uniform — gives the eye a few anchor points.
+    aLife[i] = Math.random() < 0.08 ? 0.85 + Math.random() * 0.15 : Math.random() * 0.4;
   }
   return { positions, aLife };
 }
