@@ -1943,11 +1943,25 @@ export function initQualiaPage() {
   btnCycle.classList.toggle('active', autoCycleSeconds > 0);
 
   // ── Strudel + Hydra ───────────────────────────────────────────────────────
+  // The onPlayStateChange callback lets transport sync flow Strudel →
+  // sequencer (when the user hits ▶ in the Strudel panel and sync is
+  // armed, the seq panel starts too). The sequencer is created below so
+  // we close over a holder that gets populated after construction —
+  // by the time Strudel actually fires play, the holder is set.
+  let _sequencerRef = null;
   const strudel = createStrudelHydra({
     audio,
     getField: () => core.field,
     setParam: (fxId, paramId, value) => core.setParam(fxId, paramId, value),
     scopeCanvas: document.getElementById('test-canvas'),
+    onPlayStateChange: (playing) => {
+      const seq = _sequencerRef;
+      if (!seq?.isSyncOn?.()) return;
+      try {
+        if (playing) seq.playFromStrudel?.();
+        else         seq.stopFromStrudel?.();
+      } catch (e) { console.warn('[qualia] seq follow strudel transport failed:', e); }
+    },
   });
 
   // ── Pattern sequencer (tone.js, second programmable audio source) ────────
@@ -2010,6 +2024,18 @@ export function initQualiaPage() {
         _strudelSetCpsTimer = null;
       }, 150);
     },
+    // Transport sync — sequencer asks us to mirror its play/stop into
+    // Strudel. `fromSync: true` tells strudel-hydra to suppress its
+    // onPlayStateChange callback for this invocation, breaking the
+    // play→play→play feedback loop.
+    playStrudel: () => {
+      try { strudel?.play?.({ fromSync: true }); }
+      catch (e) { console.warn('[qualia] strudel follow seq play failed:', e); }
+    },
+    stopStrudel: () => {
+      try { strudel?.stop?.({ fromSync: true }); }
+      catch (e) { console.warn('[qualia] strudel follow seq stop failed:', e); }
+    },
     isReady: strudelSyncReady,
     onReadyChange: (cb) => {
       _strudelReadyListeners.add(cb);
@@ -2017,6 +2043,7 @@ export function initQualiaPage() {
     },
   };
   const sequencer = createSequencer({ audio, syncStrudel: seqSyncStrudel });
+  _sequencerRef = sequencer;
 
   // Wrap both directions of CPS as soon as either hook appears. We poll
   // because Strudel lazy-loads on first panel open and its scheduler

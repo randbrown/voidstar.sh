@@ -35,6 +35,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   const btnClose    = document.getElementById('btn-sequencer-close');
   const btnPlay     = document.getElementById('btn-sequencer-play');
   const btnStop     = document.getElementById('btn-sequencer-stop');
+  const btnMute     = document.getElementById('btn-sequencer-mute');
   const nameInput   = document.getElementById('sequencer-name');
   const tabBar      = document.getElementById('sequencer-tabs');
   const gridPane    = document.getElementById('sequencer-grid');
@@ -57,11 +58,18 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   let _inhibitSync = false;      // set when applying CPS *from* Strudel so we don't recurse
 
   function pickInitialModel() {
+    let m = null;
     if (wasOpenLastSession) {
       const stored = loadCurrent();
-      if (stored) return stored;
+      if (stored) m = stored;
     }
-    return defaultPattern();
+    if (!m) m = defaultPattern();
+    // syncStrudel was added after the initial release, so older stored
+    // patterns won't have the field. Default ON to match the new
+    // behavior; users who explicitly turned it off will have the
+    // boolean persisted (false) and we leave that alone.
+    if (typeof m.syncStrudel !== 'boolean') m.syncStrudel = true;
+    return m;
   }
 
   // ── Persistence (debounced auto-save) ──────────────────────────────────
@@ -127,7 +135,48 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   function ensureKit() {
     if (kit) return;
     kit = createKit();
-    kit.output.connect(Tone.getDestination());
+    // Bypass Tone.getDestination() (the Tone.js master volume node) by
+    // routing to the raw AudioContext destination instead. This is what
+    // makes the per-panel mute work: Strudel's mute uses
+    // Tone.Destination.mute=true, and if the sequencer also fed through
+    // Tone.Destination it would be silenced as a side-effect. The raw
+    // destination has no mute/volume controls — those live on
+    // kit.output and we drive them from setMuted() below.
+    const rawDest = Tone.getContext().rawContext.destination;
+    kit.output.connect(rawDest);
+    // Apply current mute state in case the user toggled it before the
+    // first play (kit didn't exist yet, so the gain change had nowhere
+    // to land).
+    applyMuteToKit();
+  }
+  // Mute is per-session, not persisted in the pattern model — it's a
+  // performance gate ("silence this source for a moment"), not a saved
+  // attribute of the pattern. Survives play/stop cycles within the
+  // session because it lives on this closure.
+  let _muted = false;
+  function applyMuteToKit() {
+    if (!kit?.output?.gain) return;
+    const target = _muted ? 0 : 0.9;  // 0.9 matches createKit()'s default
+    try {
+      const t = Tone.now();
+      kit.output.gain.cancelScheduledValues(t);
+      kit.output.gain.linearRampToValueAtTime(target, t + 0.04);
+    } catch {
+      try { kit.output.gain.value = target; } catch {}
+    }
+  }
+  function setMuted(on) {
+    _muted = !!on;
+    applyMuteToKit();
+    refreshMuteBtn();
+  }
+  function refreshMuteBtn() {
+    if (!btnMute) return;
+    btnMute.classList.toggle('muted', _muted);
+    btnMute.textContent = _muted ? 'mute' : 'live';
+    btnMute.title = _muted
+      ? 'Unmute sequencer audio'
+      : 'Mute sequencer audio (transport keeps running so sync stays locked)';
   }
   function ensureAnalyserAdopted() {
     if (!kit) return;
@@ -146,7 +195,13 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     audio.adoptAnalyser(ctx, analyser, 'sequencer');
   }
 
-  async function play() {
+  // _inhibitTransportSync is set when play/stop *originates* in Strudel
+  // and is being mirrored INTO the sequencer. It keeps the resulting
+  // sequencer-side play() from echoing back out to Strudel, which would
+  // either no-op (Strudel already playing) or cause a stop/start
+  // flutter on certain orderings.
+  let _inhibitTransportSync = false;
+  async function play(opts = {}) {
     if (isPlaying) return true;
     try {
       await Tone.start();
@@ -165,12 +220,20 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     ensureAnalyserAdopted();
     persistNow();
     refreshSeqBtn();
+    if (!opts.fromStrudel && model.syncStrudel && !_inhibitTransportSync) {
+      try { syncStrudel?.playStrudel?.(); } catch {}
+    }
     return true;
   }
-  function stop() {
+  function stop(opts = {}) {
     if (!isPlaying && !audio.hasSource('sequencer')) {
       // Idempotent — keep the button paint correct even if called twice.
       btnPlay?.classList.remove('playing');
+      // Even when we were already idle, propagate the user's stop click
+      // to Strudel so the "stop" button feels like a master.
+      if (!opts.fromStrudel && model.syncStrudel && !_inhibitTransportSync) {
+        try { syncStrudel?.stopStrudel?.(); } catch {}
+      }
       return false;
     }
     isPlaying = false;
@@ -182,7 +245,26 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     paintCurrentStep(-1);
     persistNow();
     refreshSeqBtn();
+    if (!opts.fromStrudel && model.syncStrudel && !_inhibitTransportSync) {
+      try { syncStrudel?.stopStrudel?.(); } catch {}
+    }
     return true;
+  }
+  // Public hooks for Strudel→sequencer transport mirroring. Like
+  // applyCpsFromStrudel they're gated by the sync toggle so a closed
+  // Strudel session doesn't accidentally drive an unconnected
+  // sequencer.
+  function playFromStrudel() {
+    if (!model.syncStrudel) return;
+    if (isPlaying) return;
+    _inhibitTransportSync = true;
+    try { play({ fromStrudel: true }); } finally { _inhibitTransportSync = false; }
+  }
+  function stopFromStrudel() {
+    if (!model.syncStrudel) return;
+    if (!isPlaying) return;
+    _inhibitTransportSync = true;
+    try { stop({ fromStrudel: true }); } finally { _inhibitTransportSync = false; }
   }
 
   // ── CPS sync ───────────────────────────────────────────────────────────
@@ -282,7 +364,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     });
     const syncWrap = document.createElement('label');
     syncWrap.className = 'seq-prop seq-prop-check';
-    syncWrap.title = 'Sync this panel’s CPS with the Strudel REPL (bidirectional)';
+    syncWrap.title = 'Lock CPS + transport (play/stop) with the Strudel REPL (bidirectional). Use the live/mute toggle in each panel to silence one source while the other keeps playing in time.';
     const syncLabel = document.createElement('span');
     syncLabel.className = 'seq-prop-label';
     syncLabel.textContent = 'sync strudel';
@@ -576,6 +658,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     const wasPlaying = isPlaying;
     if (wasPlaying) stop();
     model = JSON.parse(JSON.stringify(found));
+    // Same upgrade as pickInitialModel — entries saved before sync was
+    // a persisted field default to ON when reloaded.
+    if (typeof model.syncStrudel !== 'boolean') model.syncStrudel = true;
     if (nameInput) nameInput.value = model.name || '';
     refreshPropsValues();
     renderMatrix();
@@ -591,6 +676,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       id: Date.now().toString(36),
       name: 'untitled',
       cps: 0.5, beats: 4, steps: 4,
+      // Default sync ON for fresh-blank patterns too — matches
+      // defaultPattern() and pickInitialModel()'s upgrade path.
+      syncStrudel: true,
       pads: VOICES.map(v => makePad(v.id, empty(total))),
       createdAt: Date.now(), updatedAt: Date.now(),
     };
@@ -652,7 +740,8 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   });
   if (btnClose) btnClose.addEventListener('click', close);
   if (btnPlay)  btnPlay .addEventListener('click', () => { play(); });
-  if (btnStop)  btnStop .addEventListener('click', stop);
+  if (btnStop)  btnStop .addEventListener('click', () => { stop(); });
+  if (btnMute)  btnMute .addEventListener('click', () => { setMuted(!_muted); });
   if (nameInput) nameInput.addEventListener('change', () => {
     model.name = nameInput.value;
     model.updatedAt = Date.now();
@@ -688,11 +777,20 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     }
   }
 
+  // First paint of the mute button so it's labelled "live" out of the
+  // box even though _muted starts false. Otherwise the empty default
+  // `<button>live</button>` markup is overwritten only on first toggle,
+  // and any inert state shift (e.g. session restore) leaves it stale.
+  refreshMuteBtn();
+
   return {
     open, close,
     isOpen:    () => panel?.style.display !== 'none',
     isPlaying: () => isPlaying,
+    isMuted:   () => _muted,
+    setMuted,
     play, stop,
+    playFromStrudel, stopFromStrudel,
     setCps,
     getCps:    () => model.cps,
     isSyncOn:  () => !!model.syncStrudel,

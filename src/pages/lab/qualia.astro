@@ -758,6 +758,19 @@
     #btn-sequencer-play, #btn-sequencer-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
     #btn-sequencer-play.playing { color: var(--pink); border-color: var(--pink); }
     #btn-sequencer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    /* Live/mute toggle — reads as a state badge ("live") in green when
+       audio is flowing and switches to a muted-red label when silenced.
+       Sized smaller than play/stop so it doesn't compete for the
+       primary-action slot. */
+    .panel-mute-btn {
+      padding: 0.1rem 0.5rem; font-size: 0.7rem; line-height: 1;
+      color: var(--cyan); border-color: var(--cyan);
+      min-width: 3.5ch; text-align: center;
+    }
+    .panel-mute-btn.muted {
+      color: var(--pink); border-color: var(--pink);
+      background: rgba(244, 114, 182, 0.10);
+    }
     #sequencer-tabs {
       display: flex; gap: 0.25rem;
       padding: 0.3rem 0.6rem;
@@ -1248,6 +1261,7 @@
     <span class="sp-status" id="strudel-status">click ▶ in editor to start</span>
     <button class="ctrl-btn" id="btn-strudel-play"    title="Evaluate / play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
+    <button class="ctrl-btn panel-mute-btn" id="btn-strudel-mute" title="Mute Strudel audio (transport keeps running so sync stays locked)">live</button>
     <button class="ctrl-btn" id="btn-strudel-newline" title="Insert newline at cursor (Android touch keyboards drop the Enter event)">↵</button>
     <button class="ctrl-btn" id="btn-strudel-close"   title="Close (S)">×</button>
   </div>
@@ -1275,6 +1289,7 @@
     <span class="sp-status" id="sequencer-status">click ▶ to play</span>
     <button class="ctrl-btn" id="btn-sequencer-play"  title="Play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-sequencer-stop"  title="Stop">■</button>
+    <button class="ctrl-btn panel-mute-btn" id="btn-sequencer-mute" title="Mute sequencer audio (transport keeps running so sync stays locked)">live</button>
     <button class="ctrl-btn" id="btn-sequencer-close" title="Close (Q)">×</button>
   </div>
   <div id="sequencer-tabs">
