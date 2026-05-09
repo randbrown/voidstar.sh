@@ -1,10 +1,12 @@
-// Antireductionism — a "powers of ten" scale traveler that drifts through 12
-// dynamically-independent strata: cosmic web → galaxy → solar system → Earth
-// → starling flock → bird → cell → molecule → atom → Higgs → Planck foam →
-// beyond. Each stratum visualises the song's thesis that reality is layered
-// into regimes that can't be flattened onto one another.
+// Antireductionism — a "powers of ten" scale traveler that drifts through 13
+// dynamically-independent strata: beyond (meta-cosmic) → cosmic web → galaxy
+// → solar system → Earth → starling flock → bird → cell → molecule → atom →
+// Higgs → Planck foam → beneath (sub-Planck). Each stratum visualises the
+// song's thesis that reality is layered into regimes that can't be flattened
+// onto one another. The two endpoints — beyond and beneath — both render as
+// silent voids: where reductionism reaches its outer and inner limits.
 //
-// Strata live as 12 z-stacked groups in a single Three.js scene. The camera
+// Strata live as 13 z-stacked groups in a single Three.js scene. The camera
 // dollies along the depth axis; each stratum's `uOpacity` uniform fades
 // gaussian-style with camera distance, so adjacent layers crossfade and far
 // layers short-circuit early in the fragment shader.
@@ -39,12 +41,18 @@ import { BUILTIN_LYRICS } from './antireductionism-lyrics.js';
 import {
   generateCosmicWeb, generateGalaxy, generateSolar, generateEarth,
   generateFlock, generateBird, generateCell, generateMolecule,
-  generateAtom, generateHiggsField, generatePlanck, generateBeyond,
+  generateAtom, generateHiggsField, generatePlanck,
+  generateBeyond, generateBeneath,
 } from './antireductionism-strata.js';
 
 // ─── Stratum table ────────────────────────────────────────────────────────
 // id, label, log-scale tag (for HUD), base color, low/med/high count tier.
+// Two strata sit off the physical-scale axis: 'beyond' caps the top (larger
+// than the cosmic web — meta-cosmic / outside-the-universe) and 'beneath'
+// caps the bottom (deeper than the Planck cutoff — where parameters cease
+// to model anything). Both render as quiet, near-empty voids.
 const STRATA = [
+  { id: 'beyond',   label: 'Beyond',      tag: '∞',      color: [0.55, 0.55, 0.70], counts: [40, 80, 140] },
   { id: 'cosmic',   label: 'Cosmic Web',  tag: '10²⁶ m', color: [0.45, 0.55, 0.95], counts: [2500, 5000, 10000] },
   { id: 'galaxy',   label: 'Galaxy',      tag: '10²¹ m', color: [0.95, 0.78, 0.30], counts: [4000, 8000, 16000] },
   { id: 'solar',    label: 'Solar System',tag: '10¹³ m', color: [1.00, 0.90, 0.45], counts: [800, 1600, 3200] },
@@ -56,7 +64,7 @@ const STRATA = [
   { id: 'atom',     label: 'Atom',        tag: '10⁻¹⁰ m',color: [0.40, 0.95, 1.00], counts: [4000, 7000, 12000] },
   { id: 'higgs',    label: 'Higgs',       tag: '10⁻¹⁸ m',color: [1.00, 0.45, 0.55], counts: [60, 60, 60] },  // grid res
   { id: 'planck',   label: 'Planck',      tag: '10⁻³⁵ m',color: [1.00, 0.85, 0.40], counts: [6000, 10000, 16000] },
-  { id: 'beyond',   label: 'Beyond',      tag: '∞',      color: [0.40, 0.40, 0.55], counts: [60, 120, 200] },
+  { id: 'beneath',  label: 'Beneath',     tag: '0',      color: [0.40, 0.40, 0.55], counts: [60, 120, 200] },
 ];
 
 const STRATUM_IDS  = STRATA.map(s => s.id);
@@ -95,7 +103,7 @@ const COMMON_DECL = /* glsl */`
 `;
 
 // Generic point shader — used by every stratum that draws a Points cloud
-// (cosmic, galaxy disk, solar, earth, cell, atom, planck, beyond). Each
+// (beyond, cosmic, galaxy disk, solar, earth, cell, atom, planck, beneath). Each
 // stratum supplies a per-particle attribute that maps to colour or size.
 const POINT_VERT = /* glsl */`
   ${COMMON_DECL}
@@ -266,6 +274,7 @@ export default {
     { id: 'particleScale', label: 'density',      type: 'select', options: PARTICLE_TIERS, default: 'medium' },
     { id: 'palette',       label: 'palette',      type: 'select', options: PALETTES, default: 'auto' },
     { id: 'gridLines',     label: 'grid',         type: 'toggle', default: true },
+    { id: 'showLegend',    label: 'legend',       type: 'toggle', default: true },
     { id: 'reactivity',    label: 'reactivity',   type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
     { id: 'lyrics',        label: 'lyrics',       type: 'select', options: ['off', 'builtin'], default: 'builtin' },
     { id: 'lyricsStyle',   label: 'lyric style',  type: 'select', options: STYLES, default: 'auto' },
@@ -280,10 +289,12 @@ export default {
     { id: 'ttsPitch',      label: 'voice pitch',  type: 'range', min: 0.3, max: 2, step: 0.05, default: 0.85 },
   ],
 
-  // Auto-phase walks every stratum + flips lyric style per step. The 12
-  // steps line up with the song's powers-of-ten arc.
+  // Auto-phase walks every stratum + flips lyric style per step. The 13
+  // steps line up with the song's arc — outer void → cosmic → … → Planck →
+  // sub-Planck void.
   autoPhase: {
     steps: [
+      { mode: 'focus', focusStratum: 'beyond',   lyricsStyle: 'concrete' },
       { mode: 'focus', focusStratum: 'cosmic',   lyricsStyle: 'concrete' },
       { mode: 'focus', focusStratum: 'galaxy',   lyricsStyle: 'fieldlines' },
       { mode: 'focus', focusStratum: 'solar',    lyricsStyle: 'orbital' },
@@ -295,19 +306,19 @@ export default {
       { mode: 'focus', focusStratum: 'atom',     lyricsStyle: 'orbital' },
       { mode: 'focus', focusStratum: 'higgs',    lyricsStyle: 'fieldlines' },
       { mode: 'focus', focusStratum: 'planck',   lyricsStyle: 'shatter' },
-      { mode: 'focus', focusStratum: 'beyond',   lyricsStyle: 'concrete' },
+      { mode: 'focus', focusStratum: 'beneath',  lyricsStyle: 'shatter' },
     ],
   },
 
   presets: {
-    default:   { mode: 'hybrid',  focusStratum: 'cosmic', travelSpeed: 0.6, dwellSec: 5, particleScale: 'medium', palette: 'auto',    gridLines: true,  reactivity: 1.0, lyrics: 'builtin', lyricsStyle: 'auto', lyricsAdvance: 'tempo', lyricsTempo: 4, lyricsOpacity: 0.85, lyricsTTS: 'off', ttsRate: 0.95, ttsPitch: 0.85 },
+    default:   { mode: 'hybrid',  focusStratum: 'cosmic', travelSpeed: 0.6, dwellSec: 5, particleScale: 'medium', palette: 'auto',    gridLines: true,  showLegend: true, reactivity: 1.0, lyrics: 'builtin', lyricsStyle: 'auto', lyricsAdvance: 'tempo', lyricsTempo: 4, lyricsOpacity: 0.85, lyricsTTS: 'off', ttsRate: 0.95, ttsPitch: 0.85 },
     journey:   { mode: 'travel',  travelSpeed: 0.4, lyricsAdvance: 'tempo', lyricsTempo: 5, palette: 'auto' },
     breakdown: { mode: 'shuffle', travelSpeed: 0.0, palette: 'inferno', lyricsStyle: 'shatter', lyricsAdvance: 'beat' },
     cosmic:    { mode: 'focus',   focusStratum: 'cosmic',   palette: 'cool',    lyricsStyle: 'concrete' },
     flock:     { mode: 'focus',   focusStratum: 'flock',    palette: 'mono',    lyricsStyle: 'fieldlines' },
     atom:      { mode: 'focus',   focusStratum: 'atom',     palette: 'cool',    lyricsStyle: 'orbital' },
     foam:      { mode: 'focus',   focusStratum: 'planck',   palette: 'inferno', lyricsStyle: 'shatter' },
-    silence:   { mode: 'focus',   focusStratum: 'beyond',   palette: 'mono',    lyrics: 'off', gridLines: false },
+    silence:   { mode: 'focus',   focusStratum: 'beneath',  palette: 'mono',    lyrics: 'off', gridLines: false },
     speak:     { mode: 'hybrid',  lyricsTTS: 'speak+react', ttsRate: 0.92, ttsPitch: 0.78 },
   },
 
@@ -722,8 +733,8 @@ export default {
       return buildPointsStratum(spec, positions, aSize, aBright, { pointSize: 1.0, jitter: 0.06 });
     }
 
-    function buildBeyond(spec, count) {
-      const { positions, aLife } = generateBeyond(count, 30);
+    function buildBeneath(spec, count) {
+      const { positions, aLife } = generateBeneath(count, 30);
       const N = positions.length / 3;
       const aSize = new Float32Array(N);
       const aBright = new Float32Array(N);
@@ -732,6 +743,19 @@ export default {
         aBright[i] = 0.20 + aLife[i] * 0.30;
       }
       return buildPointsStratum(spec, positions, aSize, aBright, { pointSize: 0.9 });
+    }
+
+    function buildBeyond(spec, count) {
+      const { positions, aLife } = generateBeyond(count, 60);
+      const N = positions.length / 3;
+      const aSize = new Float32Array(N);
+      const aBright = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        // Meta-cosmic ghosts: faint baseline + the rare bright speck.
+        aSize[i] = 0.5 + aLife[i] * 0.7;
+        aBright[i] = 0.15 + aLife[i] * 0.55;
+      }
+      return buildPointsStratum(spec, positions, aSize, aBright, { pointSize: 1.1 });
     }
 
     function buildAllStrata(tier) {
@@ -761,6 +785,7 @@ export default {
           case 'higgs':    s = buildHiggs(spec, count); break;
           case 'planck':   s = buildPlanck(spec, count); break;
           case 'beyond':   s = buildBeyond(spec, count); break;
+          case 'beneath':  s = buildBeneath(spec, count); break;
           default: continue;
         }
         // Position stratum at z = -i * SPACING.
@@ -811,6 +836,7 @@ export default {
     let azimuth = 0, elevation = 0.10;
 
     let audioRef = null;
+    let legendOn = true;
 
     // ── Helpers ───────────────────────────────────────────────────────────
     function clampIdx(i) {
@@ -1169,7 +1195,8 @@ export default {
       }
 
       // ── HUD ribbon: repaint only when the active stratum changes ──────
-      if (activeStratumIdx !== lastHudActive) {
+      legendOn = !!params.showLegend;
+      if (legendOn && activeStratumIdx !== lastHudActive) {
         repaintHud(activeStratumIdx);
         lastHudActive = activeStratumIdx;
       }
@@ -1183,9 +1210,11 @@ export default {
       }
       renderer.autoClear = true;
       renderer.render(scene, camera);
-      renderer.autoClear = false;
-      renderer.render(hudScene, hudCamera);
-      renderer.autoClear = true;
+      if (legendOn) {
+        renderer.autoClear = false;
+        renderer.render(hudScene, hudCamera);
+        renderer.autoClear = true;
+      }
     }
 
     function resize(w, h /*, dpr */) {
