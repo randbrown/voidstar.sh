@@ -136,6 +136,10 @@ export function defaultPattern() {
     cps: 0.5,
     beats: 4,
     steps: 4,
+    // Sync defaults to ON — most live-set use is "both engines locked
+    // and jamming together". Users who want them independent flick the
+    // checkbox off; the off-state persists with the pattern.
+    syncStrudel: true,
     pads,
     createdAt: Date.now(),
     updatedAt: Date.now(),

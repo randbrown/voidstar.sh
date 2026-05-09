@@ -161,7 +161,7 @@ function savePanelOpen(open) {
   try { localStorage.setItem(PANEL_OPEN_KEY, open ? '1' : '0'); } catch {}
 }
 
-export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
+export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange } = {}) {
   // Snapshot the previous-session panel state ONCE at init. open()/close()
   // mutate the flag for next time, but the answer to "should we restore the
   // last pattern?" is based on what the user did before this page load —
@@ -175,6 +175,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   const btnClose  = document.getElementById('btn-strudel-close');
   const btnPlay    = document.getElementById('btn-strudel-play');
   const btnStop    = document.getElementById('btn-strudel-stop');
+  const btnMute    = document.getElementById('btn-strudel-mute');
   const btnNewline = document.getElementById('btn-strudel-newline');
 
   let editorEl = null;
@@ -221,6 +222,16 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
   }
 
   function getEditor() { return editorEl?.editor ?? null; }
+
+  // Reach for the inner scheduler (StrudelMirror.repl.scheduler in current
+  // Strudel; .scheduler on older builds). Used by the sequencer's sync
+  // bridge — calling scheduler.setCps directly is the most reliable way
+  // to push tempo into Strudel because it bypasses the eval-scope dance
+  // that decides whether `globalThis.setcps` ever appears.
+  function getScheduler() {
+    const ed = getEditor();
+    return ed?.repl?.scheduler ?? ed?.scheduler ?? null;
+  }
 
   // Strudel-editor's internal CodeMirror state is not exposed by a single
   // canonical API across versions. Order matters here:
@@ -397,10 +408,22 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     }
   }
 
-  function play() {
+  // Suppress the play-state callback when our own play()/stop() is
+  // being invoked AS the result of an upstream sync (sequencer →
+  // strudel). Without this guard, the seq's "I just played, please
+  // play strudel" message would loop right back through onPlayStateChange
+  // and re-trigger the seq, causing flutter and double-fire bugs.
+  let _suppressPlayStateChange = false;
+  function emitPlayState(playing) {
+    if (_suppressPlayStateChange) return;
+    try { onPlayStateChange?.(!!playing); } catch {}
+  }
+  function play(opts = {}) {
     const ed = getEditor();
     if (!ed) return false;
     ensureEvalPatch();
+    const wasSuppressing = _suppressPlayStateChange;
+    if (opts.fromSync) _suppressPlayStateChange = true;
     try {
       if      (typeof ed.evaluate === 'function') ed.evaluate();
       else if (typeof ed.toggle   === 'function') ed.toggle();
@@ -411,13 +434,17 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       // until it's running and we can attach our analyser. Cheap to call
       // when we're already tapped — ensureTapPolling early-returns.
       ensureTapPolling();
+      emitPlayState(true);
       return true;
     } catch (e) { console.warn('[qualia] strudel play failed:', e); return false; }
+    finally { _suppressPlayStateChange = wasSuppressing; }
   }
-  function stop() {
+  function stop(opts = {}) {
     const ed = getEditor();
     if (!ed) return false;
     ensureEvalPatch();
+    const wasSuppressing = _suppressPlayStateChange;
+    if (opts.fromSync) _suppressPlayStateChange = true;
     try {
       if (typeof ed.stop === 'function') ed.stop();
       else return false;
@@ -428,9 +455,42 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
       // next play().
       audio.releaseAdopted();
       refreshStrudelBtn();
+      emitPlayState(false);
       return true;
     } catch (e) { console.warn('[qualia] strudel stop failed:', e); return false; }
+    finally { _suppressPlayStateChange = wasSuppressing; }
   }
+
+  // Mute Strudel's audio without stopping its transport. Strudel ships
+  // its own bundled Tone.js and exposes the wrapped destination as
+  // `globalThis.getDestination()` — set its `mute` property and the
+  // whole REPL output is silenced, while the scheduler keeps running so
+  // the cycle stays aligned with whoever else (the seq panel) is
+  // sync-locked. The sequencer's own audio bypasses this destination
+  // (it routes to the raw AudioContext.destination) so this mute is
+  // independent.
+  let _strudelMuted = false;
+  function setMuted(on) {
+    _strudelMuted = !!on;
+    try {
+      const dest = globalThis.getDestination?.();
+      if (dest) dest.mute = _strudelMuted;
+    } catch {}
+    refreshMuteBtn();
+  }
+  function refreshMuteBtn() {
+    if (!btnMute) return;
+    btnMute.classList.toggle('muted', _strudelMuted);
+    btnMute.textContent = _strudelMuted ? 'mute' : 'live';
+    btnMute.title = _strudelMuted
+      ? 'Unmute Strudel audio'
+      : 'Mute Strudel audio (transport keeps running so sync stays locked)';
+  }
+  if (btnMute) btnMute.addEventListener('click', () => setMuted(!_strudelMuted));
+  // Initial paint — same reason as the seq panel: the static "live"
+  // markup is correct for unmuted, but a programmatic preset would
+  // otherwise leave the chrome stale.
+  refreshMuteBtn();
 
   // Defensive stop used by panel-close and pattern-swap paths. Unlike
   // stop(), it doesn't care whether eval has been patched yet — the goal
@@ -731,8 +791,17 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas }) {
     open,
     close,
     stopPlayback,
+    play,
+    stop,
     isPlaying: () => isPlayingFlag,
     isOpen: () => panel?.style.display !== 'none',
+    isMuted: () => _strudelMuted,
+    setMuted,
+    /** Inner StrudelMirror handle — null until the editor mounts. */
+    getEditor,
+    /** Inner scheduler (`StrudelMirror.repl.scheduler`) — null until
+     *  the editor mounts AND has produced a runtime. */
+    getScheduler,
     /** Call from the render loop so globalThis.a.fft stays current. */
     perFrame: refreshAFft,
     patterns: {

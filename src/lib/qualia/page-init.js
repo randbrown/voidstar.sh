@@ -58,10 +58,14 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 //   mix:     mic + strudel both feed (user opts in; pick this when the
 //            mic is on a clean line — guitar interface, etc — so there's
 //            no acoustic feedback path back from speakers)
-// Audio source mode selector. 'all' = mic + strudel + sequencer (the
-// previous 'mix' mode was mic+strudel only and is migrated to 'all' on
-// load — see the audioMode restore block below).
-const AUDIO_MODES   = ['off', 'mic', 'strudel', 'sequencer', 'all'];
+// Audio source mode selector — three real-world states:
+//   off → no reactivity
+//   mix → strudel + sequencer (no mic; play through speakers without
+//          feedback risk)
+//   all → strudel + sequencer + mic
+// Older multi-state values (mic, strudel, sequencer alone) get
+// remapped on load — see the audioMode restore block below.
+const AUDIO_MODES   = ['off', 'mix', 'all'];
 const GLITCH_MODES  = ['off', 'on', 'blip', 'flip'];
 const GLITCH_KEYS   = ['ascii', 'mosh', 'edge'];
 const BLIP_DURATION_MS = 280;
@@ -283,18 +287,25 @@ export function initQualiaPage() {
   // Per-glitch blip auto-clear timestamps (epoch ms; 0 = inactive).
   const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0 };
 
-  // Audio mode (multi-state). Migrations:
-  //   - earliest shape: `audioOn` boolean (true=mic, false=off).
-  //   - prior shape: `audioMode` ∈ {off,mic,strudel,mix} where mix=mic+strudel.
-  //     'mix' has been replaced by 'all' (which also includes sequencer);
-  //     remap on load so returning users keep their stored intent.
+  // Audio mode. The button now cycles through three real-world states:
+  //   off → mix (strudel + seq, no mic) → all (strudel + seq + mic)
+  // The intermediate mic-only / strudel-only / sequencer-only states
+  // were dropped — in practice everyone runs both engines together,
+  // and the only meaningful axis was "do we open the mic too".
+  //
+  // Migrations across earlier shapes:
+  //   - `audioOn` boolean: true → 'all' (legacy mic mode also wanted reactivity), false → 'off'.
+  //   - older `audioMode` ∈ {off, mic, strudel, sequencer, mix, all}:
+  //       'mic'/'all' → 'all'  (preserve mic intent)
+  //       'strudel'/'sequencer'/'mix' → 'mix'  (preserve "engines, no mic" intent)
+  //       'off' → 'off'
   let audioMode;
   if (typeof stored.audioMode === 'string') {
-    if (stored.audioMode === 'mix') audioMode = 'all';
-    else if (AUDIO_MODES.includes(stored.audioMode)) audioMode = stored.audioMode;
-    else audioMode = 'off';
+    if (stored.audioMode === 'mic' || stored.audioMode === 'all') audioMode = 'all';
+    else if (stored.audioMode === 'off') audioMode = 'off';
+    else audioMode = 'mix';
   } else if (typeof stored.audioOn === 'boolean') {
-    audioMode = stored.audioOn ? 'mic' : 'off';
+    audioMode = stored.audioOn ? 'all' : 'off';
   } else {
     audioMode = 'off';
   }
@@ -697,13 +708,11 @@ export function initQualiaPage() {
   window.matchMedia('(max-width: 768px), (pointer: coarse)')
     .addEventListener?.('change', setTabsVar);
 
-  // ── Audio source mode (off / mic / strudel / mix) ───────────────────────
-  // The button is a 4-state selector. The mode is the user's intent; the
-  // underlying mic stream + audio source filter are kept in sync with it.
-  //   off     → mic stopped, audio.setSourceFilter([])
-  //   mic     → mic running, filter ['mic'] (strudel ignored)
-  //   strudel → mic stopped, filter ['strudel']
-  //   mix     → mic running, filter ['mic','strudel']
+  // ── Audio source mode (off / mix / all) ─────────────────────────────────
+  // The button is a 3-state selector matching real-world usage:
+  //   off → mic stopped, audio.setSourceFilter([])
+  //   mix → mic stopped, filter ['strudel', 'sequencer']  (engines only)
+  //   all → mic running, filter ['mic', 'strudel', 'sequencer']
   // The `onChange` callback only handles visual side-effects from external
   // source changes (e.g. strudel adopt/release while panel is open) so the
   // panel visibility and label stay in sync with whatever's actually live.
@@ -723,11 +732,9 @@ export function initQualiaPage() {
 
   function applyAudioFilter() {
     switch (audioMode) {
-      case 'off':       audio.setSourceFilter([]);                              break;
-      case 'mic':       audio.setSourceFilter(['mic']);                         break;
-      case 'strudel':   audio.setSourceFilter(['strudel']);                     break;
-      case 'sequencer': audio.setSourceFilter(['sequencer']);                   break;
-      case 'all':       audio.setSourceFilter(['mic', 'strudel', 'sequencer']); break;
+      case 'off': audio.setSourceFilter([]);                              break;
+      case 'mix': audio.setSourceFilter(['strudel', 'sequencer']);        break;
+      case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer']); break;
     }
   }
 
@@ -736,12 +743,12 @@ export function initQualiaPage() {
     btnAudio.textContent = `audio ${audioMode}`;
     if (audioMode !== 'off') {
       // Pink (active-audio) when the mic itself is engaged — visual hint
-      // that we're listening to the room. Cyan (active) for engine-only
-      // modes (strudel / sequencer) where no live mic is open.
-      const micEngaged = audioMode === 'mic' || audioMode === 'all';
+      // that we're listening to the room. Cyan (active) for engines-only
+      // mix where no live mic is open.
+      const micEngaged = audioMode === 'all';
       btnAudio.classList.add(micEngaged ? 'active-audio' : 'active');
     }
-    btnAudio.title = 'Audio source (A) — off / mic / strudel / sequencer / all';
+    btnAudio.title = 'Audio source (A) — off / mix (strudel+seq) / all (+mic)';
     // Audio panel visibility tracks "is anything driving reactivity" — open
     // when mode != off.
     audioCard.style.display = audioMode === 'off' ? 'none' : '';
@@ -751,7 +758,7 @@ export function initQualiaPage() {
     if (!AUDIO_MODES.includes(mode)) return;
     const prevMode = audioMode;
     audioMode = mode;
-    const wantMic = mode === 'mic' || mode === 'all';
+    const wantMic = mode === 'all';
     try {
       if (wantMic && !audio.hasSource('mic')) {
         await startMic(getStoredDeviceId('mic'));
@@ -1943,45 +1950,150 @@ export function initQualiaPage() {
   btnCycle.classList.toggle('active', autoCycleSeconds > 0);
 
   // ── Strudel + Hydra ───────────────────────────────────────────────────────
+  // The onPlayStateChange callback lets transport sync flow Strudel →
+  // sequencer (when the user hits ▶ in the Strudel panel and sync is
+  // armed, the seq panel starts too). The sequencer is created below so
+  // we close over a holder that gets populated after construction —
+  // by the time Strudel actually fires play, the holder is set.
+  let _sequencerRef = null;
   const strudel = createStrudelHydra({
     audio,
     getField: () => core.field,
     setParam: (fxId, paramId, value) => core.setParam(fxId, paramId, value),
     scopeCanvas: document.getElementById('test-canvas'),
+    onPlayStateChange: (playing) => {
+      const seq = _sequencerRef;
+      if (!seq?.isSyncOn?.()) return;
+      try {
+        if (playing) seq.playFromStrudel?.();
+        else         seq.stopFromStrudel?.();
+      } catch (e) { console.warn('[qualia] seq follow strudel transport failed:', e); }
+    },
   });
 
   // ── Pattern sequencer (tone.js, second programmable audio source) ────────
-  // Bidirectional CPS sync with Strudel:
-  //   - sequencer → strudel: debounced setcps() invocation when the sync
-  //     toggle is on (debounce keeps a slider drag from spamming
-  //     re-evaluation),
-  //   - strudel → sequencer: wrap globalThis.setcps once Strudel's runtime
-  //     defines it so any setcps(...) inside an evaluated pattern echoes
-  //     into the sequencer's CPS.
+  // Bidirectional CPS sync with Strudel. Two delivery paths, tried in
+  // order so the toggle works regardless of which Strudel REPL build is
+  // loaded:
+  //   1. `strudel.getScheduler().setCps(v)` — direct call into the
+  //      Strudel runtime. Most reliable; doesn't depend on whether the
+  //      eval scope ever publishes setcps as a global.
+  //   2. `globalThis.setcps(v)` — fallback for older Strudel builds.
+  //
+  // Reverse direction (Strudel → sequencer) gets installed as soon as
+  // either hook becomes available: we monkey-patch scheduler.setCps if
+  // present and globalThis.setcps if present, and either fires
+  // `applyCpsFromStrudel` so a `setcps(2)` inside an evaluated pattern
+  // bumps the sequencer's CPS to match.
+  //
+  // `isReady()` exposes "have we found at least one delivery path" so
+  // the sequencer panel can paint a status indicator next to the sync
+  // checkbox — without it, the user has no way to tell the difference
+  // between "sync is armed but Strudel isn't loaded yet" and "sync is
+  // broken".
   let _strudelSetCpsTimer = null;
+  let _strudelGlobalWrapped = false;
+  let _strudelSchedWrapped  = false;
+  const _strudelReadyListeners = new Set();
+  function strudelSyncReady() {
+    if (_strudelGlobalWrapped) return true;
+    if (_strudelSchedWrapped)  return true;
+    // The wrap may not have happened yet but if either path EXISTS the
+    // outbound direction will work — that's enough to call ourselves
+    // connected from the user's POV.
+    if (typeof globalThis.setcps === 'function') return true;
+    try {
+      const sched = strudel?.getScheduler?.();
+      if (sched && typeof sched.setCps === 'function') return true;
+    } catch {}
+    return false;
+  }
+  function notifyStrudelReadyChange() {
+    for (const cb of _strudelReadyListeners) {
+      try { cb(strudelSyncReady()); } catch {}
+    }
+  }
   const seqSyncStrudel = {
     setCpsDebounced: (v) => {
       if (_strudelSetCpsTimer) clearTimeout(_strudelSetCpsTimer);
       _strudelSetCpsTimer = setTimeout(() => {
-        try { globalThis.setcps?.(v); } catch {}
+        let delivered = false;
+        try {
+          const sched = strudel?.getScheduler?.();
+          if (sched && typeof sched.setCps === 'function') {
+            sched.setCps(v);
+            delivered = true;
+          }
+        } catch {}
+        if (!delivered) {
+          try { if (typeof globalThis.setcps === 'function') { globalThis.setcps(v); delivered = true; } } catch {}
+        }
         _strudelSetCpsTimer = null;
       }, 150);
     },
+    // Transport sync — sequencer asks us to mirror its play/stop into
+    // Strudel. `fromSync: true` tells strudel-hydra to suppress its
+    // onPlayStateChange callback for this invocation, breaking the
+    // play→play→play feedback loop.
+    playStrudel: () => {
+      try { strudel?.play?.({ fromSync: true }); }
+      catch (e) { console.warn('[qualia] strudel follow seq play failed:', e); }
+    },
+    stopStrudel: () => {
+      try { strudel?.stop?.({ fromSync: true }); }
+      catch (e) { console.warn('[qualia] strudel follow seq stop failed:', e); }
+    },
+    isReady: strudelSyncReady,
+    onReadyChange: (cb) => {
+      _strudelReadyListeners.add(cb);
+      return () => _strudelReadyListeners.delete(cb);
+    },
   };
   const sequencer = createSequencer({ audio, syncStrudel: seqSyncStrudel });
-  // Install the strudel→sequencer wrapper as soon as setcps becomes available.
-  let _strudelSetCpsWrapped = false;
-  const _strudelSetCpsPoll = setInterval(() => {
-    if (_strudelSetCpsWrapped) { clearInterval(_strudelSetCpsPoll); return; }
-    if (typeof globalThis.setcps !== 'function') return;
-    const orig = globalThis.setcps;
-    globalThis.setcps = function (v) {
-      try { sequencer.applyCpsFromStrudel(+v); } catch {}
-      return orig.call(this, v);
-    };
-    _strudelSetCpsWrapped = true;
-    clearInterval(_strudelSetCpsPoll);
-  }, 200);
+  _sequencerRef = sequencer;
+
+  // Wrap both directions of CPS as soon as either hook appears. We poll
+  // because Strudel lazy-loads on first panel open and its scheduler
+  // takes a beat after that to materialise. Stop polling once both are
+  // wrapped — re-mounts of the editor (pattern swap) reset
+  // _strudelSchedWrapped so we'll wrap the new scheduler on the next
+  // tick.
+  const _strudelSyncPoll = setInterval(() => {
+    let progressed = false;
+    if (!_strudelGlobalWrapped && typeof globalThis.setcps === 'function') {
+      const orig = globalThis.setcps;
+      globalThis.setcps = function (v) {
+        try { sequencer.applyCpsFromStrudel(+v); } catch {}
+        return orig.call(this, v);
+      };
+      _strudelGlobalWrapped = true;
+      progressed = true;
+    }
+    if (!_strudelSchedWrapped) {
+      try {
+        const sched = strudel?.getScheduler?.();
+        if (sched && typeof sched.setCps === 'function' && !sched.__qualiaWrapped) {
+          const orig = sched.setCps.bind(sched);
+          sched.setCps = function (v) {
+            try { sequencer.applyCpsFromStrudel(+v); } catch {}
+            return orig(v);
+          };
+          sched.__qualiaWrapped = true;
+          _strudelSchedWrapped = true;
+          progressed = true;
+        }
+      } catch {}
+    }
+    if (progressed) notifyStrudelReadyChange();
+    // Once both directions are wrapped there's nothing left to discover —
+    // stop polling. (If Strudel later swaps in a new scheduler instance
+    // via pattern reload, the existing wrapped function lives on the
+    // prototype's reference; we accept that small risk to avoid forever
+    // ticking. A future fix could re-arm on strudel.onEditorMount().)
+    if (_strudelGlobalWrapped && _strudelSchedWrapped) {
+      clearInterval(_strudelSyncPoll);
+    }
+  }, 250);
 
   // ── Cursor fx (pointer-trail overlay) ─────────────────────────────────────
   const cursorFx = createCursorFx();
@@ -2335,10 +2447,10 @@ export function initQualiaPage() {
     core.start();
 
     // Restore audio source. `withMic` (from the "enable mic" overlay button)
-    // forces audio mode to 'mic' even if the persisted mode is 'off' — the
+    // forces audio mode to 'all' even if the persisted mode is 'off' — the
     // user explicitly requested mic via the boot overlay. Otherwise replay
     // the persisted mode (which itself decides whether to open the mic).
-    if (opts.withMic && audioMode === 'off') audioMode = 'mic';
+    if (opts.withMic && audioMode === 'off') audioMode = 'all';
     try {
       await setAudioMode(audioMode);
     } catch (err) {

@@ -37,24 +37,31 @@ export function createKit() {
   snareBp.connect(reverb);
 
   // ── Hi-hats (closed + open) — MetalSynth FM-ish texture ─────────────
+  // Phone-speaker tuning: the original 4 kHz resonance + -18/-20 dB sat
+  // mostly above the speaker's usable band, so on a Samsung S25u the
+  // hats were inaudible. Drop resonance to 2.8 kHz (still bright but
+  // squarely in the speaker's sweet spot) and raise the trims by ~10 dB
+  // so the closed/open contrast stays intact at louder absolute levels.
+  // A high-pass on the kit output keeps the boosted trims from muddying
+  // the kick band.
   const hatClosed = new Tone.MetalSynth({
-    envelope:        { attack: 0.001, decay: 0.05, release: 0.02 },
+    envelope:        { attack: 0.001, decay: 0.06, release: 0.02 },
     harmonicity:     5.1,
     modulationIndex: 32,
-    resonance:       4000,
+    resonance:       2800,
     octaves:         1.5,
   });
-  hatClosed.volume.value = -18;
+  hatClosed.volume.value = -8;
   hatClosed.connect(out);
 
   const hatOpen = new Tone.MetalSynth({
-    envelope:        { attack: 0.001, decay: 0.4, release: 0.2 },
+    envelope:        { attack: 0.001, decay: 0.45, release: 0.2 },
     harmonicity:     5.1,
     modulationIndex: 32,
-    resonance:       4000,
+    resonance:       2800,
     octaves:         1.5,
   });
-  hatOpen.volume.value = -20;
+  hatOpen.volume.value = -10;
   hatOpen.connect(out);
 
   // ── Toms (low/mid/high — same synth, different note) ────────────────
@@ -72,14 +79,19 @@ export function createKit() {
   clapBp.connect(reverb);
 
   // ── Rim (short metallic click) ──────────────────────────────────────
+  // Original config (resonance 2200, 0.5 octaves, -22 dB, 30 ms decay)
+  // produced a click whose energy was barely above the noise floor on a
+  // phone speaker. Widen the partial spread (octaves 1.0), drop the
+  // centre to 1.6 kHz where speakers respond strongly, and trim 10 dB
+  // hotter so the tick is actually audible without drowning the kick.
   const rim = new Tone.MetalSynth({
-    envelope:        { attack: 0.001, decay: 0.03, release: 0.02 },
+    envelope:        { attack: 0.001, decay: 0.06, release: 0.04 },
     harmonicity:     3.1,
     modulationIndex: 12,
-    resonance:       2200,
-    octaves:         0.5,
+    resonance:       1600,
+    octaves:         1.0,
   });
-  rim.volume.value = -22;
+  rim.volume.value = -12;
   rim.connect(out);
 
   // Trigger thunks — voice id → (time, vel) => void. Velocity defaults to
