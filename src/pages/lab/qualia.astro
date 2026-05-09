@@ -47,7 +47,17 @@
       z-index: 2; mix-blend-mode: screen;
     }
   </style>
-  <style>
+  <!-- `is:global` is required because most of qualia's UI (sequencer pads,
+       cells, prop inputs, pattern-row chrome, etc.) is built at runtime via
+       document.createElement in src/lib/qualia/sequencer.js and friends.
+       Astro's default scoped <style> hashes selectors with
+       `[data-astro-cid-…]`, which is only attached to elements present in
+       this .astro file at build time — so dynamically-created nodes match
+       NONE of those rules and inherit raw UA defaults (which on Android
+       Chrome means seq cells render as tiny default-button white pills).
+       qualia.astro is a standalone page (no shared layout), so going
+       global has no cross-page bleed risk. -->
+  <style is:global>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --accent:    #8b5cf6;
