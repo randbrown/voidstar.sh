@@ -24,6 +24,7 @@ import fractal         from './fx/fractal.js';
 import spectrum        from './fx/spectrum.js';
 import vintageAnalog   from './fx/vintage-analog.js';
 import synthwave       from './fx/synthwave.js';
+import telemetry       from './fx/telemetry.js';
 import camera          from './fx/camera.js';
 import darkSpace       from './fx/dark-space.js';
 import code            from './fx/code.js';
@@ -98,6 +99,7 @@ export function initQualiaPage() {
   mesh.register(spectrum);
   mesh.register(vintageAnalog);
   mesh.register(synthwave);
+  mesh.register(telemetry);
   mesh.register(camera);
   mesh.register(darkSpace);
   mesh.register(code);
