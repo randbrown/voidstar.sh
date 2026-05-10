@@ -69,14 +69,37 @@ export function createKit() {
   const tomMid  = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(out);
   const tomHigh = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(out);
 
-  // ── Clap (noise burst, slightly longer + bandpassed) ────────────────
-  const clapNoise = new Tone.NoiseSynth({
-    envelope: { attack: 0.001, decay: 0.12, sustain: 0 },
+  // ── Crash (long bright shimmer, MetalSynth + reverb) ────────────────
+  // Long decay (~1.4s) + heavy modulation index gives the "explosive
+  // wash" feel of a crash cymbal. Routed through the room reverb so the
+  // tail blooms naturally; without it the synthesis sounds noticeably
+  // dry vs. a real cymbal recording. Volume sits below the kick/snare
+  // because crashes are accent hits — they shouldn't overwhelm the
+  // groove when the user lays one down.
+  const crash = new Tone.MetalSynth({
+    envelope:        { attack: 0.001, decay: 1.4, release: 1.2 },
+    harmonicity:     6.4,
+    modulationIndex: 40,
+    resonance:       4200,
+    octaves:         1.8,
   });
-  const clapBp = new Tone.Filter(1200, 'bandpass');
-  clapBp.Q.value = 0.8;
-  clapNoise.connect(clapBp);
-  clapBp.connect(reverb);
+  crash.volume.value = -16;
+  crash.connect(reverb);
+
+  // ── Ride (medium ping with sustain, MetalSynth) ─────────────────────
+  // Shorter than the crash (~0.6s) but longer than the closed hat,
+  // with a tighter resonance so the tone reads as a defined "ping"
+  // rather than a wash. Drier path (no reverb) keeps the attack
+  // articulate for jazz-style ride patterns.
+  const ride = new Tone.MetalSynth({
+    envelope:        { attack: 0.001, decay: 0.55, release: 0.35 },
+    harmonicity:     5.4,
+    modulationIndex: 22,
+    resonance:       3600,
+    octaves:         1.4,
+  });
+  ride.volume.value = -13;
+  ride.connect(out);
 
   // ── Rim (short metallic click) ──────────────────────────────────────
   // Original config (resonance 2200, 0.5 octaves, -22 dB, 30 ms decay)
@@ -115,13 +138,14 @@ export function createKit() {
     'tom-l': (t, v = 1) => tomLow.triggerAttackRelease('A1',  '8n', t, v),
     'tom-m': (t, v = 1) => tomMid.triggerAttackRelease('D2',  '8n', t, v),
     'tom-h': (t, v = 1) => tomHigh.triggerAttackRelease('G2', '8n', t, v),
-    'clap':  (t, v = 1) => clapNoise.triggerAttackRelease('16n', t, v),
+    'crash': (t, v = 1) => crash.triggerAttackRelease('C5', '4n', t, v),
+    'ride':  (t, v = 1) => ride.triggerAttackRelease('C5', '8n', t, v),
     'rim':   (t, v = 1) => rim.triggerAttackRelease('A4', '16n', t, v),
   };
 
   const nodes = [
     kick, snareNoise, snareBp, hatClosed, hatOpen,
-    tomLow, tomMid, tomHigh, clapNoise, clapBp, rim,
+    tomLow, tomMid, tomHigh, crash, ride, rim,
     reverb, out,
   ];
 

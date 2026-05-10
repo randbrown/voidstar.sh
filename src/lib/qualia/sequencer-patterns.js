@@ -31,7 +31,8 @@ export const VOICES = [
   { id: 'tom-l', label: 'tom-l' },
   { id: 'tom-m', label: 'tom-m' },
   { id: 'tom-h', label: 'tom-h' },
-  { id: 'clap',  label: 'clap'  },
+  { id: 'crash', label: 'crash' },
+  { id: 'ride',  label: 'ride'  },
   { id: 'rim',   label: 'rim'   },
 ];
 
@@ -115,15 +116,17 @@ export function resizeHits(pad, beats, steps) {
 }
 
 export function defaultPattern() {
-  // 4 beats × 4 steps = 16 cells. A passable groove out of the box: kick
-  // on 1+9 (downbeats of beats 1 + 3), snare on 5+13 (downbeats of beats
-  // 2 + 4), closed hat on every odd cell. Everything else empty so the
-  // user has somewhere to add their own hits without hunting for room.
+  // Chill-by-default groove — sibling to the Strudel default's `<bd sd>`
+  // half-time vibe. 4 beats × 4 steps = 16 cells. Kick on the downbeat,
+  // snare on the backbeat (cell 8), closed hat on quarter notes only.
+  // ~6 hits total, roughly half of the previous default — sparse enough
+  // that a new user hears the structure without feeling boxed in. CPS
+  // matches the Strudel default so the two engines start in lockstep.
   const total = 16;
   const empty = () => new Array(total).fill(0);
-  const kick  = empty(); kick[0]  = 1; kick[8]  = 1;
-  const snare = empty(); snare[4] = 1; snare[12] = 1;
-  const hat   = empty(); for (let i = 0; i < total; i += 2) hat[i] = 1;
+  const kick  = empty(); kick[0]  = 1;
+  const snare = empty(); snare[8] = 1;
+  const hat   = empty(); for (let i = 0; i < total; i += 4) hat[i] = 1;
   const pads = VOICES.map(v => {
     if (v.id === 'kick')  return makePad('kick',  kick);
     if (v.id === 'snare') return makePad('snare', snare);

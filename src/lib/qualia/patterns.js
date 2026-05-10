@@ -190,7 +190,10 @@ export function randomPattern() {
   // under the lead. Synth-strings GM voice gives the bass a sustained pad
   // character distinct from the lead's GM voice.
   const bass     = `n("<0 4>/2").scale('${rootNote}${bassOct} ${scale}').s("gm_synth_strings_2").gain(.5).lpf(800)`;
-  const cps      = (0.65 + Math.random() * 0.55).toFixed(2);
+  // Fixed at 0.5 to match the sequencer's default CPS so the two engines
+  // start in lockstep. Random patterns still vary in melody/scale/fx —
+  // tempo just stays at the chill house-of-house default.
+  const cps      = '0.5';
   const room     = (0.4 + Math.random() * 0.6).toFixed(1);
   // Pick 2–3 distinct fx so each random pattern has its own colour.
   const fxPool = [...FX_OPTS];
