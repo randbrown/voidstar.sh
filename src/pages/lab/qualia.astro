@@ -971,6 +971,65 @@
          32–40px; 36 sits in that band without sacrificing density. */
       .seq-cells { gap: 3px; grid-auto-rows: 36px; min-height: 36px; }
     }
+
+    /* Vocoder panel — same draggable-window shape as #strudel-panel /
+       #sequencer-panel. Smaller default footprint than the sequencer because
+       the body is just a column of property rows, no grid matrix. */
+    #vocoder-panel {
+      position: fixed; left: 50%; top: 4.5rem;
+      transform: translateX(-50%);
+      z-index: 18;
+      width: min(96vw, 560px);
+      height: auto;
+      min-width: 320px;
+      max-width: 100vw;  max-height: calc(100dvh - 6rem);
+      background: rgba(10,10,26,0.55);
+      border: 1px solid var(--border); border-radius: 10px;
+      font-family: var(--font-mono); color: var(--text);
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+      backdrop-filter: blur(8px);
+      resize: both;
+    }
+    #vocoder-header {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.45rem 0.75rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+      cursor: grab; user-select: none;
+      touch-action: none;
+    }
+    #vocoder-header.dragging { cursor: grabbing; }
+    #vocoder-header .ctrl-btn { cursor: pointer; }
+    #btn-vocoder-play, #btn-vocoder-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
+    #btn-vocoder-play.playing { color: var(--pink); border-color: var(--pink); }
+    #btn-vocoder-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    #vocoder-body {
+      flex: 1; min-height: 0; overflow: auto;
+      padding: 0.6rem 0.7rem;
+      display: flex; flex-direction: column; gap: 0.5rem;
+    }
+    #voc-props {
+      display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem;
+      font-size: 0.74rem;
+    }
+    /* Range rows widen the slider so a finger-drag actually has somewhere to
+       go on a phone — without flex-grow the slider collapses to its
+       intrinsic size and ends up the same width as the label. */
+    .voc-range { flex: 1 1 220px; min-width: 200px; }
+    .voc-range input[type=range] {
+      flex: 1; min-width: 0;
+      accent-color: var(--cyan);
+    }
+    #voc-help {
+      color: var(--muted); font-size: 0.66rem; line-height: 1.4;
+      padding: 0.3rem 0.1rem 0;
+      border-top: 1px solid var(--border);
+    }
+    @media (max-width: 768px) {
+      #vocoder-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; }
+    }
   </style>
 </head>
 <body>
@@ -995,6 +1054,7 @@
     <div id="topbar-corner">
       <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
+      <button class="ctrl-btn" id="btn-vocoder" title="Vocoder (W)">voc</button>
       <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
       <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen (X)">full</button>
     </div>
@@ -1399,6 +1459,67 @@
       <button class="ctrl-btn" id="btn-seq-pat-random" title="Sprinkle some random hits over the default groove">random</button>
     </div>
     <div id="seq-pat-list" class="sp-pat-list"></div>
+  </div>
+</div>
+
+<!-- Vocoder panel — mic-driven channel vocoder for live narration. Sibling
+     of #sequencer-panel so each draggable window stays independent. -->
+<div id="vocoder-panel" style="display:none">
+  <div id="vocoder-header">
+    <span class="sp-title">vocoder <span class="sp-tag">// voice → robot</span></span>
+    <span class="sp-status" id="vocoder-status">click ▶ to start</span>
+    <button class="ctrl-btn" id="btn-vocoder-play"  title="Engage vocoder (opens mic)">▶</button>
+    <button class="ctrl-btn" id="btn-vocoder-stop"  title="Disengage (releases mic)">■</button>
+    <button class="ctrl-btn panel-mute-btn" id="btn-vocoder-mute" title="Mute output (mic stays open)">live</button>
+    <button class="ctrl-btn" id="btn-vocoder-close" title="Close (W)">×</button>
+  </div>
+  <div id="vocoder-body">
+    <div id="voc-props">
+      <label class="seq-prop" title="Carrier waveform — drone (saw + sub) is the classic robot timbre; noise gives a whispered/breathy quality.">
+        <span class="seq-prop-label">carrier</span>
+        <select id="voc-carrier" class="ctrl-btn">
+          <option value="drone">drone</option>
+          <option value="sawtooth">sawtooth</option>
+          <option value="square">square</option>
+          <option value="triangle">triangle</option>
+          <option value="noise">noise</option>
+        </select>
+      </label>
+      <label class="seq-prop" title="Carrier fundamental in Hz. 100-130 Hz reads as a male robot, 180-240 Hz reads as a female / higher robot.">
+        <span class="seq-prop-label">pitch</span>
+        <input type="number" id="voc-pitch" class="seq-num seq-num-wide" min="40" max="500" step="1" />
+        <span class="seq-prop-label">Hz</span>
+      </label>
+      <label class="seq-prop" title="Number of analysis bands. More bands = more intelligible but heavier CPU. 16 is a good live default.">
+        <span class="seq-prop-label">bands</span>
+        <select id="voc-bands" class="ctrl-btn">
+          <option value="8">8</option>
+          <option value="16">16</option>
+          <option value="24">24</option>
+          <option value="32">32</option>
+        </select>
+      </label>
+      <label class="seq-prop voc-range" title="High-frequency voice passthrough — preserves sibilants (s, sh, t, f) which a pure vocoder mangles into low buzz.">
+        <span class="seq-prop-label">sibilance</span>
+        <input type="range" id="voc-sibilance" min="0" max="1" step="0.01" />
+        <span class="qp-val" id="voc-sibilance-val"></span>
+      </label>
+      <label class="seq-prop voc-range" title="Dry voice mix — sends a small amount of unprocessed mic to the output. Default 0; raise if a venue needs extra clarity.">
+        <span class="seq-prop-label">dry</span>
+        <input type="range" id="voc-dry" min="0" max="1" step="0.01" />
+        <span class="qp-val" id="voc-dry-val"></span>
+      </label>
+      <label class="seq-prop voc-range" title="Master output gain.">
+        <span class="seq-prop-label">output</span>
+        <input type="range" id="voc-output" min="0" max="2" step="0.01" />
+        <span class="qp-val" id="voc-output-val"></span>
+      </label>
+    </div>
+    <div id="voc-help">
+      mic input is the modulator; the carrier is shaped by your voice's
+      spectral envelope. Uses whichever microphone the topbar mic-select is
+      currently set to.
+    </div>
   </div>
 </div>
 

@@ -12,6 +12,7 @@ import { AUDIO_PRESETS, makeSettingsStore } from './presets.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
 import { createSequencer } from './sequencer.js';
+import { createVocoder } from './vocoder.js';
 import { createCursorFx } from './cursor-fx.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import { bindVideoElement, getRotation, cycleRotation, getMirror, toggleMirror } from './video.js';
@@ -808,6 +809,9 @@ export function initQualiaPage() {
   refreshAudioBtn();
 
   // ── Mic / cam pickers ─────────────────────────────────────────────────────
+  // Forward holder for the vocoder — created later, but the mic picker's
+  // onChoose needs to restart its capture when the user swaps devices.
+  let _vocoderRef = null;
   const micPicker = wirePicker({
     select: micSelect,
     kind: 'audioinput',
@@ -817,7 +821,13 @@ export function initQualiaPage() {
       // only restarts the mic source, leaving any active Strudel tap
       // (and its AudioContext) intact.
       if (audio.hasSource('mic')) await audio.stop();
-      return await audio.start(id);
+      const chosen = await audio.start(id);
+      // Vocoder owns its own getUserMedia stream; propagate the swap so it
+      // follows the topbar selection rather than holding onto the previous
+      // device. Awaited so a failure here surfaces through the picker's
+      // alert path the same way an audio.start failure would.
+      try { await _vocoderRef?.setDevice?.(chosen); } catch {}
+      return chosen;
     },
   });
   const camPicker = wirePicker({
@@ -2054,6 +2064,13 @@ export function initQualiaPage() {
   const sequencer = createSequencer({ audio, syncStrudel: seqSyncStrudel });
   _sequencerRef = sequencer;
 
+  // ── Vocoder (mic-driven channel vocoder for live narration) ─────────────
+  // Owns its own AudioContext + getUserMedia stream so it can route to the
+  // speakers without entangling with the analysis path or the strudel
+  // mute-patch. Follows whichever mic the topbar picker is currently on.
+  const vocoder = createVocoder({ getDeviceId: () => audio.getCurrentMicId() });
+  _vocoderRef = vocoder;
+
   // Wrap both directions of CPS as soon as either hook appears. We poll
   // because Strudel lazy-loads on first panel open and its scheduler
   // takes a beat after that to materialise. Stop polling once both are
@@ -2255,6 +2272,7 @@ export function initQualiaPage() {
     if (e.target.matches('input, select, textarea, [contenteditable]')) return;
     if (strudel.isOpen()   && document.activeElement?.closest('#strudel-panel'))   return;
     if (sequencer.isOpen() && document.activeElement?.closest('#sequencer-panel')) return;
+    if (vocoder.isOpen()   && document.activeElement?.closest('#vocoder-panel'))   return;
 
     switch (e.key.toLowerCase()) {
       case 'v': {
@@ -2266,6 +2284,7 @@ export function initQualiaPage() {
       case 'a': btnAudio.click(); break;
       case 's': document.getElementById('btn-strudel').click(); break;
       case 'q': document.getElementById('btn-sequencer').click(); break;
+      case 'w': document.getElementById('btn-vocoder').click(); break;
       case 'p': {
         const opts = ['off','camera'];
         const i = opts.indexOf(poseSelect.value);
