@@ -515,11 +515,12 @@ export function createSequencer({ audio, syncStrudel } = {}) {
 
       const cellsEl = document.createElement('div');
       cellsEl.className = 'seq-cells';
-      // Floor the per-cell width at 22px so a phone-narrow row doesn't
-      // shrink the LEDs to invisible dashes. If the total exceeds the
+      // Floor the per-cell width at 16px — small enough that a 16-cell
+      // row fits a phone-narrow viewport without horizontal scroll, but
+      // still wide enough to be tappable. If the total exceeds the
       // available width, #seq-matrix-wrap (overflow:auto) scrolls
       // horizontally instead of squashing the cells.
-      cellsEl.style.gridTemplateColumns = `repeat(${total}, minmax(22px, 1fr))`;
+      cellsEl.style.gridTemplateColumns = `repeat(${total}, minmax(16px, 1fr))`;
       for (let i = 0; i < total; i++) {
         const c = document.createElement('button');
         c.type = 'button';
