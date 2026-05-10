@@ -615,6 +615,22 @@ export function createVocoder({ getDeviceId } = {}) {
     isActive: () => active,
     setMuted, isMuted: () => muted,
     setDevice,
+    // Snapshot/restore for the qualem state-saving system. getConfig returns
+    // a plain copy of the current config; setConfig applies a partial config,
+    // routing each field through its setter so live audio nodes update.
+    getConfig: () => ({ ...cfg }),
+    setConfig(partial) {
+      if (!partial || typeof partial !== 'object') return;
+      if (typeof partial.carrierType === 'string') setCarrierType(partial.carrierType);
+      if (typeof partial.pitch       === 'number') setPitch(partial.pitch);
+      if (typeof partial.bands       === 'number') setBandCount(partial.bands);
+      if (typeof partial.sibilance   === 'number') setSibilance(partial.sibilance);
+      if (typeof partial.dry         === 'number') setDry(partial.dry);
+      if (typeof partial.output      === 'number') setOutput(partial.output);
+      // Re-paint sliders so the panel reflects the new values even if the
+      // setters left them untouched (some bail out on equal values).
+      syncPropsFromCfg();
+    },
     // 3rd-party Web Audio fx integration: the input node is the GainNode
     // straight off the mic source (insert pre-fx here), the output node is
     // the bus before output gain + mute (insert post-fx here), and the
