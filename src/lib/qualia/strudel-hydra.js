@@ -851,6 +851,11 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       newBlank: newBlankPattern,
       random:   newRandomPattern,
       getCurrentCode: readEditorCode,
+      // Load arbitrary code into the editor — used by the qualem
+      // state-saving system to recall a snapshot's strudel pattern. Same
+      // play-through behavior as newBlank/random (re-evaluates if was
+      // playing).
+      loadCode,
       meta:     parseMetadata,
       displayName: patternDisplayName,
     },

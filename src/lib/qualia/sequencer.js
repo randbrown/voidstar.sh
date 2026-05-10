@@ -716,13 +716,16 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     const list = loadList();
     const found = list.find(p => p.id === id);
     if (!found) return;
-    // Stop, swap model, re-render. Keep in mind the saved entry is the
-    // user's canonical copy — clone it so editing doesn't bleed back.
+    applyModel(found);
+  }
+  // Replace the live sequencer model with an arbitrary external one (used by
+  // the qualem state-saving system to recall a snapshot's grid). The argument
+  // is deep-cloned so the caller's reference can't bleed into edits.
+  function applyModel(next) {
+    if (!next || typeof next !== 'object') return;
     const wasPlaying = isPlaying;
     if (wasPlaying) stop();
-    model = JSON.parse(JSON.stringify(found));
-    // Same upgrade as pickInitialModel — entries saved before sync was
-    // a persisted field default to ON when reloaded.
+    model = JSON.parse(JSON.stringify(next));
     if (typeof model.syncStrudel !== 'boolean') model.syncStrudel = true;
     if (nameInput) nameInput.value = model.name || '';
     refreshPropsValues();
@@ -870,6 +873,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       newBlank,
       random:   newRandom,
       getCurrent: () => model,
+      applyModel,
     },
   };
 }

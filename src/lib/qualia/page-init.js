@@ -8,14 +8,18 @@ import { createAudio }   from './audio.js';
 import { createPose }    from './pose.js';
 import { createOverlay } from './overlay.js';
 import { wirePicker, getStoredDeviceId, storeDeviceId } from './devices.js';
-import { AUDIO_PRESETS, makeSettingsStore } from './presets.js';
+import {
+  AUDIO_PRESETS, makeSettingsStore,
+  loadFxParams, saveFxParams, loadFxModWeights, saveFxModWeights,
+} from './presets.js';
+import * as qualem from './qualem.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
 import { createSequencer } from './sequencer.js';
 import { createVocoder } from './vocoder.js';
 import { createCursorFx } from './cursor-fx.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
-import { bindVideoElement, getRotation, cycleRotation, getMirror, toggleMirror } from './video.js';
+import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror } from './video.js';
 import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
 import neuralField     from './fx/neural-field.js';
@@ -2267,6 +2271,545 @@ export function initQualiaPage() {
     sequencer.patterns.random();
   });
 
+  // ── Qualem (state snapshots) ─────────────────────────────────────────────
+  // A "qualem" is the singular noun for one entire macro-experience: every
+  // fx's params + modweights, top-level toggles, audio + pose + overlay
+  // settings, glitch modes, auto-phase/cycle, camera transform, cycle-pool
+  // exclusions, the live strudel pattern, the sequencer model, vocoder
+  // config, and panel layout. Captured into a JSON document; recall
+  // restores the full setup live (no page reload).
+  //
+  // Capture is sparse by default — for each fx we diff against the schema
+  // defaults so future builds whose defaults shift don't lock the user
+  // into stale values, and so URL-encoded payloads stay small. The list
+  // is keyed under `voidstar.qualia.qualem.list`.
+  //
+  // Sharing: each row + a toolbar button open a popover with a self-
+  // contained URL (`#q=<base64url-gzip-json>`) that any other instance of
+  // the page can auto-apply. Hardware (mic / cam) match by stored deviceId
+  // first, then label / fuzzy label / facingMode; full enumeration-based
+  // fallback lives in qualem.pickBestDevice.
+
+  const qualemListEl     = document.getElementById('qualem-list');
+  const qualemFileInput  = document.getElementById('qualem-file-input');
+  const qualemShare      = document.getElementById('qualem-share');
+  const qualemShareBack  = document.getElementById('qualem-share-backdrop');
+  const qualemShareUrl   = document.getElementById('qualem-share-url');
+  const qualemShareCopy  = document.getElementById('qualem-share-copy');
+  const qualemShareOpen  = document.getElementById('qualem-share-open');
+  const qualemShareClose = document.getElementById('qualem-share-close');
+  const qualemShareStat  = document.getElementById('qualem-share-status');
+
+  /**
+   * Scoop the entire live state into a qualem document. Sparse capture
+   * (default) drops fx params that match their schema default — the rest of
+   * the document records exact values, since "default" is a fuzzy concept
+   * for top-level toggles whose user intent matters even when they happen
+   * to coincide with the factory state.
+   */
+  function captureQualem({ name, full = false } = {}) {
+    const isSparse  = !full;
+    const activeFxId = core.activeId();
+
+    // Per-fx params + modweights from localStorage covers inactive fx.
+    // The active fx's *unsaved* slider edits are picked up by also overlaying
+    // core.getBaseParams() on top.
+    const fx = {};
+    for (const mod of mesh.list()) {
+      const params     = loadFxParams(mod.id);
+      const modweights = loadFxModWeights(mod.id);
+      const entry = {};
+      if (params) {
+        entry.params = isSparse ? qualem.sparseFxParams(mod, params) : params;
+      }
+      if (modweights && Object.keys(modweights).length) {
+        entry.modweights = modweights;
+      }
+      const hasParams = entry.params && Object.keys(entry.params).length;
+      const hasMods   = entry.modweights && Object.keys(entry.modweights).length;
+      if (hasParams || hasMods) fx[mod.id] = entry;
+    }
+    // Overlay live (unsaved) values for the active fx.
+    if (activeFxId) {
+      const activeMod = mesh.get(activeFxId);
+      const live      = core.getBaseParams();
+      const liveParams = isSparse ? qualem.sparseFxParams(activeMod, live) : live;
+      if (liveParams && Object.keys(liveParams).length) {
+        fx[activeFxId] = { ...(fx[activeFxId] || {}), params: liveParams };
+      }
+    }
+
+    return {
+      format:        qualem.QUALEM_FORMAT,
+      schemaVersion: qualem.QUALEM_SCHEMA_VERSION,
+      name:          name || `Qualem ${new Date().toLocaleString('sv-SE').slice(0, 16)}`,
+      createdAt:     Date.now(),
+      updatedAt:     Date.now(),
+      sparse:        isSparse,
+      activeFxId,
+      audio: {
+        mode:     audioMode,
+        tunables: audio.getTunables(),
+      },
+      pose: {
+        source:     poseSelect.value,
+        smoothing:  poseSmoothingValue,
+        thresholds: pose.getThresholds(),
+        lingerMs:   pose.getLingerMs(),
+        numPoses:   pose.getNumPoses(),
+      },
+      overlay: {
+        skeleton: overlay.getOption('skeleton'),
+        sparks:   overlay.getOption('sparks'),
+        aura:     overlay.getOption('aura'),
+        ripples:  overlay.getOption('ripples'),
+        mosh:     overlay.getMoshConfig(),
+        edge:     overlay.getEdgeConfig(),
+      },
+      glitch: { ...glitchModes },
+      auto: {
+        phaseSeconds:  autoPhaseSeconds,
+        phaseStyle:    autoPhaseStyle,
+        phaseBeatSync: autoPhaseBeatSync,
+        cycleSeconds:  autoCycleSeconds,
+        cycleStyle:    autoCycleStyle,
+        cycleBeatSync: autoCycleBeatSync,
+      },
+      camera: {
+        rotation:    getRotation(),
+        mirror:      getMirror(),
+        zoom:        lastZoomValue,
+        videoOffset: { ...videoOffset },
+        sizeIdx:     camSizeIdx,
+      },
+      cards: {
+        audio:  audioCard.classList.contains('collapsed'),
+        pose:   poseCard?.classList.contains('collapsed') ?? true,
+        diag:   document.getElementById('diag-card')?.classList.contains('collapsed') ?? true,
+        params: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
+        mosh:   document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
+        edge:   document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
+        camera: cameraCard?.classList.contains('collapsed') ?? true,
+        qualem: document.getElementById('qualem-card')?.classList.contains('collapsed') ?? true,
+      },
+      cyclePool: { excluded: [...loadCycleExcluded()] },
+      fx,
+      strudel:   { code: strudel.patterns.getCurrentCode() || '' },
+      sequencer: { model: sequencer.patterns.getCurrent() || null },
+      vocoder:   vocoder.getConfig(),
+      pausedZen: { paused: core.isPaused(), zen: core.isZen() },
+      // Hardware fingerprint — deviceId only by default; the label is
+      // already in localStorage via the picker. Cross-machine matching
+      // upgrades inside qualem.pickBestDevice (label fuzzy → groupId →
+      // facingMode → first-of-kind).
+      devices: {
+        mic: getStoredDeviceId('mic') ? { kind: 'audioinput', deviceId: getStoredDeviceId('mic') } : null,
+        cam: getStoredDeviceId('cam') ? { kind: 'videoinput', deviceId: getStoredDeviceId('cam') } : null,
+      },
+    };
+  }
+
+  /**
+   * Apply a qualem to the live page. Skips fields that are missing or
+   * malformed so partial / older qualems still load gracefully. Async
+   * because several stages (setActive, setNumPoses, setThresholds) await.
+   */
+  async function applyQualem(q) {
+    if (!q || q.format !== qualem.QUALEM_FORMAT) return;
+
+    // 1. Per-fx state → localStorage. core.setActive() picks them up on rebuild.
+    if (q.fx && typeof q.fx === 'object') {
+      for (const [fxId, body] of Object.entries(q.fx)) {
+        if (body?.params)     saveFxParams(fxId, body.params);
+        if (body?.modweights) saveFxModWeights(fxId, body.modweights);
+      }
+    }
+
+    // 2. Devices — best-effort fingerprint match. We persist whatever we
+    // chose so subsequent picker reopens reflect it.
+    if (q.devices?.mic) {
+      const id = await qualem.pickBestDevice(q.devices.mic);
+      if (id) storeDeviceId('mic', id);
+    }
+    if (q.devices?.cam) {
+      const id = await qualem.pickBestDevice(q.devices.cam);
+      if (id) storeDeviceId('cam', id);
+    }
+
+    // 3. Active fx — clean rebuild that swallows the new fx params.
+    if (q.activeFxId && mesh.get(q.activeFxId)) {
+      try { await core.setActive(q.activeFxId); }
+      catch (e) { console.warn('[qualia] qualem setActive failed:', e); }
+      fxSelect.value = q.activeFxId;
+    }
+
+    // 4. Audio
+    if (q.audio?.tunables) {
+      audio.setTunables(q.audio.tunables);
+      audioPanel.setTunables(q.audio.tunables);
+      audioPanel.setActivePreset(null);
+    }
+    if (typeof q.audio?.mode === 'string') {
+      try { await setAudioMode(q.audio.mode); } catch {}
+    }
+
+    // 5. Pose
+    if (q.pose) {
+      if (typeof q.pose.smoothing === 'number') {
+        poseSmoothingValue = q.pose.smoothing;
+        pose.setSmoothing(poseSmoothingValue);
+        const sm  = document.querySelector('[data-qp="pose-smooth"] input[type=range]');
+        const smv = document.querySelector('[data-qp="pose-smooth"] .qp-val');
+        if (sm)  sm.value = String(poseSmoothingValue);
+        if (smv) smv.textContent = `${Math.round(poseSmoothingValue * 100)}%`;
+      }
+      if (q.pose.thresholds) {
+        try { await pose.setThresholds(q.pose.thresholds); } catch {}
+      }
+      if (typeof q.pose.lingerMs === 'number') pose.setLingerMs(q.pose.lingerMs);
+      if (typeof q.pose.numPoses === 'number') {
+        try { await pose.setNumPoses(q.pose.numPoses); } catch {}
+        if (posesSelect) posesSelect.value = String(q.pose.numPoses);
+      }
+      if (typeof q.pose.source === 'string' && poseSelect.value !== q.pose.source) {
+        poseSelect.value = q.pose.source;
+        poseSelect.dispatchEvent(new Event('change'));
+      }
+    }
+
+    // 6. Overlay
+    if (q.overlay) {
+      const overlayKeys = ['skeleton', 'sparks', 'aura', 'ripples'];
+      for (const k of overlayKeys) {
+        if (typeof q.overlay[k] === 'boolean') overlay.setOption(k, q.overlay[k]);
+      }
+      if (q.overlay.mosh) overlay.setMoshConfig(q.overlay.mosh);
+      if (q.overlay.edge) overlay.setEdgeConfig(q.overlay.edge);
+      // Repaint button active classes since wireOverlayToggle's listener
+      // wasn't the source of these state changes.
+      btnSkel?.classList.toggle('active',    !!q.overlay.skeleton);
+      btnSparks?.classList.toggle('active',  !!q.overlay.sparks);
+      btnAura?.classList.toggle('active',    !!q.overlay.aura);
+      btnRipples?.classList.toggle('active', !!q.overlay.ripples);
+    }
+
+    // 7. Glitch modes
+    if (q.glitch && typeof q.glitch === 'object') {
+      for (const g of GLITCH_KEYS) {
+        const m = q.glitch[g];
+        if (typeof m === 'string' && GLITCH_MODES.includes(m)) {
+          glitchModes[g] = m;
+          // 'on' shows the overlay; reactive modes start hidden + flip on kick.
+          overlay.setOption(g, m === 'on');
+        }
+      }
+      syncPostBtns();
+    }
+
+    // 8. Auto-phase / cycle
+    if (q.auto) {
+      if (typeof q.auto.phaseStyle === 'string') {
+        autoPhaseStyle = q.auto.phaseStyle;
+        if (phaseStyleSelect) phaseStyleSelect.value = autoPhaseStyle;
+      }
+      if (typeof q.auto.cycleStyle === 'string') {
+        autoCycleStyle = q.auto.cycleStyle;
+        if (cycleStyleSelect) cycleStyleSelect.value = autoCycleStyle;
+      }
+      if (typeof q.auto.phaseBeatSync === 'boolean') autoPhaseBeatSync = q.auto.phaseBeatSync;
+      if (typeof q.auto.cycleBeatSync === 'boolean') autoCycleBeatSync = q.auto.cycleBeatSync;
+      if (typeof q.auto.phaseSeconds === 'number') {
+        autoPhaseSeconds = q.auto.phaseSeconds;
+        setPhasePeriod(autoPhaseSeconds);
+      }
+      if (typeof q.auto.cycleSeconds === 'number') {
+        autoCycleSeconds = q.auto.cycleSeconds;
+        setCyclePeriod(autoCycleSeconds);
+      }
+    }
+
+    // 9. Camera transform
+    if (q.camera) {
+      if (typeof q.camera.rotation === 'number') {
+        setRotation(q.camera.rotation);
+        if (btnCamRotate) {
+          btnCamRotate.textContent = `rot ${getRotation()}°`;
+          btnCamRotate.classList.toggle('active', getRotation() !== 0);
+        }
+      }
+      if (typeof q.camera.mirror === 'boolean') {
+        setMirror(q.camera.mirror);
+        btnCamMirror?.classList.toggle('active', getMirror());
+      }
+      if (typeof q.camera.zoom === 'number') lastZoomValue = q.camera.zoom;
+      if (q.camera.videoOffset && typeof q.camera.videoOffset === 'object') {
+        videoOffset = {
+          dx: +q.camera.videoOffset.dx || 0,
+          dy: +q.camera.videoOffset.dy || 0,
+        };
+        try { applyVideoOffset(); } catch {}
+      }
+      if (typeof q.camera.sizeIdx === 'number') {
+        camSizeIdx = q.camera.sizeIdx;
+        try { setCamSize(camSizeIdx); } catch {}
+      }
+    }
+
+    // 10. Card collapse state
+    if (q.cards) {
+      const cardMap = {
+        audio: 'audio-card', pose: 'pose-card', diag: 'diag-card',
+        params: 'fx-card', mosh: 'mosh-card', edge: 'edge-card',
+        camera: 'camera-card', qualem: 'qualem-card',
+      };
+      for (const [key, id] of Object.entries(cardMap)) {
+        const el = document.getElementById(id);
+        if (el && typeof q.cards[key] === 'boolean') {
+          el.classList.toggle('collapsed', q.cards[key]);
+        }
+      }
+    }
+
+    // 11. Cycle-pool exclusions
+    if (Array.isArray(q.cyclePool?.excluded)) {
+      saveCycleExcluded(new Set(q.cyclePool.excluded));
+    }
+
+    // 12. Strudel pattern + sequencer model
+    if (q.strudel?.code && typeof strudel.patterns.loadCode === 'function') {
+      try { strudel.patterns.loadCode(q.strudel.code); } catch (e) { console.warn('[qualia] strudel loadCode failed:', e); }
+    }
+    if (q.sequencer?.model && typeof sequencer.patterns.applyModel === 'function') {
+      try { sequencer.patterns.applyModel(q.sequencer.model); } catch (e) { console.warn('[qualia] sequencer applyModel failed:', e); }
+    }
+
+    // 13. Vocoder
+    if (q.vocoder && typeof vocoder.setConfig === 'function') {
+      try { vocoder.setConfig(q.vocoder); } catch (e) { console.warn('[qualia] vocoder setConfig failed:', e); }
+    }
+
+    // 14. Pause / zen
+    if (q.pausedZen) {
+      if (typeof q.pausedZen.paused === 'boolean') setPaused(q.pausedZen.paused);
+      if (typeof q.pausedZen.zen    === 'boolean') setZen(q.pausedZen.zen);
+    }
+
+    // 15. Persist top-level settings shape so a refresh restores the same.
+    settings.save();
+  }
+
+  /** Reset live state to a clean default qualem — fresh-visitor look. */
+  async function applyDefaultQualem() {
+    // Wipe all per-fx params + modweights so each fx's setActive picks up
+    // schema defaults on next activation.
+    for (const mod of mesh.list()) {
+      try { localStorage.removeItem(`voidstar.qualia.fx.${mod.id}.params`); } catch {}
+      try { localStorage.removeItem(`voidstar.qualia.fx.${mod.id}.modweights`); } catch {}
+    }
+    // Build a "blank" qualem reflecting the defaults the page boots with.
+    const blank = {
+      format:        qualem.QUALEM_FORMAT,
+      schemaVersion: qualem.QUALEM_SCHEMA_VERSION,
+      sparse:        true,
+      activeFxId:    mesh.ids()[0],
+      audio:   { mode: 'off', tunables: AUDIO_PRESETS.default },
+      pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, numPoses: 1 },
+      overlay: { skeleton: true, sparks: true, aura: true, ripples: true },
+      glitch:  { ascii: 'off', mosh: 'off', edge: 'off' },
+      auto:    { phaseSeconds: 0, phaseStyle: 'chapters', phaseBeatSync: false,
+                 cycleSeconds: 0, cycleStyle: 'sequential', cycleBeatSync: false },
+      camera:  { rotation: 0, mirror: true, zoom: 1.0, videoOffset: { dx: 0, dy: 0 }, sizeIdx: 0 },
+      cyclePool: { excluded: [] },
+      fx: {},
+      pausedZen: { paused: false, zen: false },
+    };
+    await applyQualem(blank);
+  }
+
+  /** Inline-rename row UI (mirrors the strudel patterns list at line ~2164). */
+  function renderQualemList() {
+    if (!qualemListEl) return;
+    const list = qualem.loadList();
+    qualemListEl.innerHTML = '';
+    if (!list.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sp-pat-empty';
+      empty.textContent = 'no saved qualems yet — hit "save current" to capture this state';
+      qualemListEl.appendChild(empty);
+      return;
+    }
+    for (const q of list) {
+      const row = document.createElement('div');
+      row.className = 'sp-pat-row';
+
+      const metaCol = document.createElement('div');
+      metaCol.className = 'sp-pat-meta';
+      const nameInput = document.createElement('input');
+      nameInput.className = 'sp-pat-name';
+      nameInput.value = q.name;
+      nameInput.title = 'rename';
+      nameInput.addEventListener('change', () => {
+        const next = nameInput.value.trim();
+        if (next && next !== q.name) {
+          qualem.updateInList(q.id, { name: next });
+          renderQualemList();
+        }
+      });
+      const byLine = document.createElement('div');
+      byLine.className = 'sp-pat-by';
+      const stamp = new Date(q.updatedAt).toLocaleDateString();
+      const fxName = mesh.get(q.activeFxId)?.name || q.activeFxId || '—';
+      byLine.textContent = `${fxName} · ${stamp}`;
+      metaCol.append(nameInput, byLine);
+
+      const actions = document.createElement('div');
+      actions.className = 'sp-pat-actions';
+      const mkBtn = (label, title, fn) => {
+        const b = document.createElement('button');
+        b.className = 'ctrl-btn';
+        b.textContent = label;
+        b.title = title;
+        b.addEventListener('click', fn);
+        return b;
+      };
+      actions.append(
+        mkBtn('load',     'Recall this qualem into the live state', async () => {
+          try { await applyQualem(q); }
+          catch (e) { console.error('[qualia] applyQualem failed:', e); alert('Load failed: ' + (e?.message || e)); }
+        }),
+        mkBtn('clone',    'Duplicate this entry', () => {
+          qualem.cloneEntry(q.id);
+          renderQualemList();
+        }),
+        mkBtn('share',    'Copy a self-contained share URL', () => openShare(q)),
+        mkBtn('download', 'Download as .qualem.json', () => qualem.downloadQualem(q)),
+        mkBtn('delete',   'Remove from list', () => {
+          if (confirm(`Delete "${q.name}"?`)) {
+            qualem.removeFromList(q.id);
+            renderQualemList();
+          }
+        }),
+      );
+      row.append(metaCol, actions);
+      qualemListEl.appendChild(row);
+    }
+  }
+
+  // ── Toolbar wiring ────────────────────────────────────────────────────────
+  document.getElementById('btn-qualem-save')?.addEventListener('click', () => {
+    const captured = captureQualem({});
+    qualem.addToList(captured, captured.name);
+    renderQualemList();
+  });
+  document.getElementById('btn-qualem-new')?.addEventListener('click', async () => {
+    if (!confirm('Reset live state to clean defaults? Saved qualems are kept.')) return;
+    try { await applyDefaultQualem(); }
+    catch (e) { console.error('[qualia] applyDefaultQualem failed:', e); }
+  });
+  // Random rolls only the audio patterns, on purpose: visuals stay put so the
+  // user can A/B beats against a chosen quale. Mirrors the Strudel +
+  // sequencer "random" buttons but with both engines rolled at once.
+  document.getElementById('btn-qualem-random')?.addEventListener('click', () => {
+    try { strudel.patterns.random(); } catch (e) { console.warn('[qualia] strudel random:', e); }
+    try { sequencer.patterns.random(); } catch (e) { console.warn('[qualia] sequencer random:', e); }
+  });
+  document.getElementById('btn-qualem-import')?.addEventListener('click', () => {
+    qualemFileInput?.click();
+  });
+  qualemFileInput?.addEventListener('change', async () => {
+    const f = qualemFileInput.files?.[0];
+    if (!f) return;
+    qualemFileInput.value = ''; // allow same file twice in a row
+    try {
+      const q = await qualem.readFileAsQualem(f);
+      // Imported qualems land in the library so they survive a reload.
+      const entry = qualem.addToList(q, q.name);
+      renderQualemList();
+      if (confirm(`Imported "${entry.name}". Load it now?`)) {
+        await applyQualem(entry);
+      }
+    } catch (e) {
+      console.error('[qualia] qualem import failed:', e);
+      alert('Import failed: ' + (e?.message || e));
+    }
+  });
+  document.getElementById('btn-qualem-share-current')?.addEventListener('click', () => {
+    openShare(captureQualem({}));
+  });
+
+  // ── Share popover ────────────────────────────────────────────────────────
+  async function openShare(q) {
+    if (!qualemShare) return;
+    if (qualemShareStat) qualemShareStat.textContent = 'building URL…';
+    qualemShareUrl.value = '';
+    qualemShareBack.style.display = '';
+    qualemShare.style.display = '';
+    try {
+      const url = await qualem.buildShareUrl(q);
+      qualemShareUrl.value = url;
+      qualemShareUrl.select();
+      if (qualemShareStat) qualemShareStat.textContent = `${(url.length / 1024).toFixed(1)} KB`;
+    } catch (e) {
+      console.error('[qualia] buildShareUrl failed:', e);
+      if (qualemShareStat) qualemShareStat.textContent = 'failed: ' + (e?.message || e);
+    }
+  }
+  function closeShare() {
+    if (!qualemShare) return;
+    qualemShare.style.display = 'none';
+    qualemShareBack.style.display = 'none';
+    if (qualemShareStat) qualemShareStat.textContent = '';
+  }
+  qualemShareClose?.addEventListener('click', closeShare);
+  qualemShareBack?.addEventListener('click', closeShare);
+  qualemShareCopy?.addEventListener('click', async () => {
+    const url = qualemShareUrl?.value;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      if (qualemShareStat) qualemShareStat.textContent = 'copied';
+    } catch {
+      // Fallback: manual select for "copy" via keyboard.
+      qualemShareUrl?.select();
+      if (qualemShareStat) qualemShareStat.textContent = 'press ⌘/Ctrl+C';
+    }
+  });
+  qualemShareOpen?.addEventListener('click', () => {
+    const url = qualemShareUrl?.value;
+    if (!url) return;
+    window.open(url, '_blank', 'noopener');
+  });
+
+  // ── URL hash boot — auto-apply `#q=<encoded>` after boot settles ────────
+  // Strudel uses the same UX. We decode synchronously and stash the qualem
+  // on a closure variable; boot() applies it as its very last step so we
+  // don't race against boot's own setActive(initialFx). The hash is cleared
+  // via history.replaceState immediately so a subsequent reload uses the
+  // user's saved settings instead of re-applying the qualem every refresh.
+  let pendingUrlQualem = null;
+  (async () => {
+    try {
+      const m = location.hash.match(/^#q=(.+)$/);
+      if (!m) return;
+      pendingUrlQualem = await qualem.decodeFromUrl(m[1]);
+      history.replaceState(null, '', location.pathname + location.search);
+    } catch (e) {
+      console.warn('[qualia] qualem URL decode failed:', e);
+    }
+  })();
+  // Picked up by boot() after its initial setActive — keeps the qualem's
+  // activeFxId choice from racing with the page's normal startup.
+  async function applyPendingUrlQualem() {
+    if (!pendingUrlQualem) return;
+    const q = pendingUrlQualem;
+    pendingUrlQualem = null;
+    try { await applyQualem(q); }
+    catch (e) { console.error('[qualia] qualem URL apply failed:', e); }
+  }
+
+  // First paint of the list once everything else is wired.
+  renderQualemList();
+
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   window.addEventListener('keydown', (e) => {
     if (e.target.matches('input, select, textarea, [contenteditable]')) return;
@@ -2493,6 +3036,12 @@ export function initQualiaPage() {
     // guard for quales that lack autoPhase.steps.
     if (autoPhaseSeconds > 0) setPhasePeriod(autoPhaseSeconds);
     if (autoCycleSeconds > 0) setCyclePeriod(autoCycleSeconds);
+
+    // Apply a `#q=…` URL qualem (if any) AFTER the page's own startup so
+    // the qualem's choice of activeFxId / audio mode / etc. wins without
+    // racing against boot's initial setActive. Decode happened earlier
+    // (synchronously when page-init ran) — this just runs the apply.
+    await applyPendingUrlQualem();
   }
   startBtn.addEventListener('click', () => boot({ withMic: true }));
   startSilentBtn.addEventListener('click', () => boot({ withMic: false }));
