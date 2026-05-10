@@ -96,16 +96,27 @@ export function createKit() {
 
   // Trigger thunks — voice id → (time, vel) => void. Velocity defaults to
   // 1; the sequencer multiplies its per-pad gain into this before calling.
+  //
+  // Tone.js v15 signatures, by base class:
+  //   - MembraneSynth / MetalSynth → Monophonic → Instrument:
+  //       triggerAttackRelease(note, duration, time, velocity)   [4 args]
+  //   - NoiseSynth (no pitch input):
+  //       triggerAttackRelease(duration, time, velocity)         [3 args]
+  // The hats and rim are MetalSynths and DO need a base note — without it
+  // the duration string ('32n', '8n', '16n') gets bound to `note` and
+  // fails the Frequency parse, so the attack is never scheduled (silence
+  // + no analyser energy → no FX reactivity). 'C5' / 'A4' pair cleanly
+  // with the existing harmonicity / modulationIndex / resonance config.
   const triggers = {
     'kick':  (t, v = 1) => kick.triggerAttackRelease('C1', '8n', t, v),
     'snare': (t, v = 1) => snareNoise.triggerAttackRelease('16n', t, v),
-    'hat-c': (t, v = 1) => hatClosed.triggerAttackRelease('32n', t, v),
-    'hat-o': (t, v = 1) => hatOpen.triggerAttackRelease('8n',  t, v),
+    'hat-c': (t, v = 1) => hatClosed.triggerAttackRelease('C5', '32n', t, v),
+    'hat-o': (t, v = 1) => hatOpen.triggerAttackRelease('C5',  '8n', t, v),
     'tom-l': (t, v = 1) => tomLow.triggerAttackRelease('A1',  '8n', t, v),
     'tom-m': (t, v = 1) => tomMid.triggerAttackRelease('D2',  '8n', t, v),
     'tom-h': (t, v = 1) => tomHigh.triggerAttackRelease('G2', '8n', t, v),
     'clap':  (t, v = 1) => clapNoise.triggerAttackRelease('16n', t, v),
-    'rim':   (t, v = 1) => rim.triggerAttackRelease('16n', t, v),
+    'rim':   (t, v = 1) => rim.triggerAttackRelease('A4', '16n', t, v),
   };
 
   const nodes = [

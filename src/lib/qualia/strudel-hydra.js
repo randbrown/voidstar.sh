@@ -461,17 +461,50 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     finally { _suppressPlayStateChange = wasSuppressing; }
   }
 
-  // Mute Strudel's audio without stopping its transport. Strudel ships
-  // its own bundled Tone.js and exposes the wrapped destination as
-  // `globalThis.getDestination()` — set its `mute` property and the
-  // whole REPL output is silenced, while the scheduler keeps running so
-  // the cycle stays aligned with whoever else (the seq panel) is
-  // sync-locked. The sequencer's own audio bypasses this destination
-  // (it routes to the raw AudioContext.destination) so this mute is
-  // independent.
+  // Mute Strudel's audio without stopping its transport. The previous
+  // implementation set `globalThis.getDestination().mute = true` on
+  // Strudel's bundled Tone.Destination — but Strudel's actual audio
+  // (superdough's voice graph) writes directly to ctx.destination,
+  // bypassing Tone.Destination entirely, so the toggle had no audible
+  // effect. The fix is a real audio-graph gate: tapMaster() patches
+  // AudioNode.prototype.connect to route everything destined for
+  // ctx.destination through a GainNode (`muteGate`) we own. setMuted()
+  // ramps that gain to 0 / 1.
+  //
+  // Caveats:
+  //   - Nodes already connected before the patch installs keep playing
+  //     through the unmuted path. In practice Strudel rebuilds its voice
+  //     graph on every eval, so the next ▶ in the editor picks up the
+  //     gate. We document this rather than monkey-patching retroactively.
+  //   - The sequencer also targets ctx.destination. Its kit.output node
+  //     is tagged with `__qualiaBypassMute = true` so the patch leaves
+  //     it alone — its own mute is per-source via kit.output.gain.
   let _strudelMuted = false;
+  let muteGate = null;
+  function ensureMuteGate(ctx) {
+    if (muteGate && muteGate.context === ctx) return muteGate;
+    muteGate = ctx.createGain();
+    muteGate.gain.value = _strudelMuted ? 0 : 1;
+    // Self-bypass — muteGate's own connect to ctx.destination must not
+    // recurse through the patch.
+    muteGate.__qualiaBypassMute = true;
+    muteGate.connect(ctx.destination);
+    return muteGate;
+  }
   function setMuted(on) {
     _strudelMuted = !!on;
+    if (muteGate) {
+      try {
+        const t = muteGate.context.currentTime;
+        muteGate.gain.cancelScheduledValues(t);
+        muteGate.gain.linearRampToValueAtTime(_strudelMuted ? 0 : 1, t + 0.04);
+      } catch {
+        try { muteGate.gain.value = _strudelMuted ? 0 : 1; } catch {}
+      }
+    }
+    // Belt + braces: also flip Tone.Destination.mute for any audio that
+    // DOES route through Strudel's bundled Tone.Destination (Sampler /
+    // Player nodes do). Costs nothing if it's already a no-op.
     try {
       const dest = globalThis.getDestination?.();
       if (dest) dest.mute = _strudelMuted;
@@ -515,25 +548,28 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       const an = ctx.createAnalyser();
       an.fftSize = 2048;
       an.smoothingTimeConstant = 0.72;
-      let didTap = false;
-      try {
-        if (typeof globalThis.getDestination === 'function') {
-          const dest = globalThis.getDestination();
-          if (dest && typeof dest.connect === 'function') {
-            dest.connect(an);
-            didTap = true;
-          }
-        }
-      } catch {}
-      if (!didTap && !_strudelConnectPatched) {
-        // Fallback: tee any node connecting to ctx.destination into our analyser.
+      // The connect-patch is now the *primary* path (was: fallback). It
+      // does two things at once: tees to our analyser AND routes through
+      // muteGate so setMuted() can actually silence Strudel. Tone's
+      // bundled-destination tap (`dest.connect(an)`) used to feed the
+      // analyser but missed superdough's direct ctx.destination writes
+      // — and crucially had no node we could mute. Going through the
+      // monkey-patch covers both source paths.
+      if (!_strudelConnectPatched) {
         const orig = AudioNode.prototype.connect;
         AudioNode.prototype.connect = function(target, ...rest) {
-          if (target === ctx.destination) { try { orig.call(this, an); } catch {} }
+          if (target === ctx.destination && !this.__qualiaBypassMute) {
+            try { orig.call(this, an); } catch {}
+            return orig.call(this, ensureMuteGate(ctx), ...rest);
+          }
           return orig.call(this, target, ...rest);
         };
         _strudelConnectPatched = true;
       }
+      // Materialise the gate up front so it exists before any pre-patch
+      // node connects (and so setMuted() has a target if the user toggles
+      // before Strudel plays its first eval).
+      ensureMuteGate(ctx);
       strudelAnalyser = an;
     }
     audio.adoptAnalyser(ctx, strudelAnalyser);
