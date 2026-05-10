@@ -142,7 +142,14 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // Tone.Destination it would be silenced as a side-effect. The raw
     // destination has no mute/volume controls — those live on
     // kit.output and we drive them from setMuted() below.
+    //
+    // The strudel mute fix patches AudioNode.prototype.connect to route
+    // every connection-into-ctx.destination through a Strudel-owned
+    // mute gate. Tag this output node so the patch leaves it alone —
+    // the sequencer has its own per-source mute (kit.output.gain) and
+    // must not be silenced by the Strudel toggle.
     const rawDest = Tone.getContext().rawContext.destination;
+    kit.output.__qualiaBypassMute = true;
     kit.output.connect(rawDest);
     // Apply current mute state in case the user toggled it before the
     // first play (kit didn't exist yet, so the gain change had nowhere
@@ -308,8 +315,47 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       if (opts.title) wrap.title = opts.title;
       return wrap;
     };
+    // Wrap a numeric input with finger-tappable [−] [input] [+] steppers.
+    // The native UA spinners are too small for touch; we still listen on
+    // the input's change/input event so the existing handler logic stays
+    // canonical — the buttons just dispatch the same event after mutating
+    // the value.
+    const stepperFor = (input, eventName) => {
+      const wrap = document.createElement('span');
+      wrap.className = 'seq-num-wrap';
+      const step = parseFloat(input.step) || 1;
+      const min  = input.min !== '' ? parseFloat(input.min) : -Infinity;
+      const max  = input.max !== '' ? parseFloat(input.max) : Infinity;
+      const isInt = Number.isInteger(step);
+      const decimals = isInt ? 0 : Math.max(0, (String(step).split('.')[1] || '').length);
+      const bump = (delta) => {
+        const cur = parseFloat(input.value);
+        const base = Number.isFinite(cur) ? cur : (Number.isFinite(min) ? min : 0);
+        let next = base + delta * step;
+        next = Math.min(max, Math.max(min, next));
+        // toFixed avoids float drift (0.05+0.05=0.10000000001) bleeding
+        // into the displayed value.
+        input.value = isInt ? String(Math.round(next)) : next.toFixed(decimals);
+        input.dispatchEvent(new Event(eventName, { bubbles: true }));
+      };
+      const mkBtn = (txt, delta, title) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ctrl-btn seq-num-step';
+        b.textContent = txt;
+        b.title = title;
+        b.addEventListener('click', (e) => { e.preventDefault(); bump(delta); });
+        return b;
+      };
+      wrap.append(
+        mkBtn('−', -1, 'Decrease'),
+        input,
+        mkBtn('+', +1, 'Increase'),
+      );
+      return wrap;
+    };
     const beatsIn = document.createElement('input');
-    beatsIn.type = 'number'; beatsIn.min = '1'; beatsIn.max = '32';
+    beatsIn.type = 'number'; beatsIn.min = '1'; beatsIn.max = '32'; beatsIn.step = '1';
     beatsIn.value = String(model.beats);
     beatsIn.className = 'seq-num';
     beatsIn.addEventListener('change', () => {
@@ -324,7 +370,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     });
 
     const stepsIn = document.createElement('input');
-    stepsIn.type = 'number'; stepsIn.min = '1'; stepsIn.max = '16';
+    stepsIn.type = 'number'; stepsIn.min = '1'; stepsIn.max = '16'; stepsIn.step = '1';
     stepsIn.value = String(model.steps);
     stepsIn.className = 'seq-num';
     stepsIn.addEventListener('change', () => {
@@ -377,9 +423,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     syncWrap.append(syncCb, syncLabel, syncStatus);
 
     propsEl.append(
-      mk('beats',     beatsIn, { title: 'Beats per pattern (RR-style)' }),
-      mk('steps/beat', stepsIn, { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
-      mk('cps',       cpsIn,   { title: 'Cycles per second — one cycle = one full pattern' }),
+      mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
+      mk('steps/beat', stepperFor(stepsIn, 'change'), { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
+      mk('cps',       stepperFor(cpsIn,  'input'),  { title: 'Cycles per second — one cycle = one full pattern' }),
       syncWrap,
     );
   }
@@ -424,21 +470,14 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       const row = document.createElement('div');
       row.className = 'seq-pad-row';
 
+      // Layout: [audition ▶] [voice name] [mute M]. The name used to BE
+      // the mute toggle, which made the label appear to "go blank" (it
+      // swapped to '·') when clicked — confusing UX. Splitting them keeps
+      // the name readable at all times and gives mute its own
+      // unambiguous, single-letter affordance.
       const ctrl = document.createElement('div');
       ctrl.className = 'seq-pad-ctrl';
-      const muteBtn = document.createElement('button');
-      muteBtn.className = 'ctrl-btn seq-pad-mute';
-      muteBtn.textContent = pad.mute ? '·' : pad.voice;
-      muteBtn.title = pad.mute ? 'Unmute pad' : 'Mute pad';
-      if (pad.mute) muteBtn.classList.add('muted');
-      muteBtn.addEventListener('click', () => {
-        pad.mute = !pad.mute;
-        model.updatedAt = Date.now();
-        muteBtn.classList.toggle('muted', pad.mute);
-        muteBtn.textContent = pad.mute ? '·' : pad.voice;
-        muteBtn.title = pad.mute ? 'Unmute pad' : 'Mute pad';
-        persistSoon();
-      });
+
       const audBtn = document.createElement('button');
       audBtn.className = 'ctrl-btn seq-pad-audition';
       audBtn.textContent = '▶';
@@ -449,7 +488,30 @@ export function createSequencer({ audio, syncStrudel } = {}) {
         ensureAnalyserAdopted();
         kit?.trigger(pad.voice, Tone.now(), pad.gain ?? 1);
       });
-      ctrl.append(muteBtn, audBtn);
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'seq-pad-name';
+      nameEl.textContent = pad.voice;
+      nameEl.title = pad.voice;
+
+      const muteBtn = document.createElement('button');
+      muteBtn.className = 'ctrl-btn seq-pad-mute';
+      muteBtn.textContent = 'M';
+      const refreshMuteBtnState = () => {
+        muteBtn.classList.toggle('muted', !!pad.mute);
+        muteBtn.title = pad.mute ? `Unmute ${pad.voice}` : `Mute ${pad.voice}`;
+        muteBtn.setAttribute('aria-label', muteBtn.title);
+        muteBtn.setAttribute('aria-pressed', pad.mute ? 'true' : 'false');
+      };
+      refreshMuteBtnState();
+      muteBtn.addEventListener('click', () => {
+        pad.mute = !pad.mute;
+        model.updatedAt = Date.now();
+        refreshMuteBtnState();
+        persistSoon();
+      });
+
+      ctrl.append(audBtn, nameEl, muteBtn);
 
       const cellsEl = document.createElement('div');
       cellsEl.className = 'seq-cells';

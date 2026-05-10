@@ -791,8 +791,8 @@
        scrolls independently so the props row stays pinned. */
     #sequencer-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     #seq-props {
-      display: flex; flex-wrap: wrap; gap: 0.55rem 0.85rem;
-      padding: 0.5rem 0.75rem;
+      display: flex; flex-wrap: wrap; gap: 0.4rem 0.7rem;
+      padding: 0.35rem 0.7rem;
       background: rgba(0,0,0,0.2);
       border-bottom: 1px solid var(--border);
       font-size: 0.72rem;
@@ -806,9 +806,34 @@
       font-family: var(--font-mono); font-size: 0.74rem;
       padding: 0.12rem 0.35rem; width: 4.5ch;
       outline: none; text-align: right;
+      /* The native UA spinner arrows are too small for touch; we render
+         our own [−] / [+] buttons via .seq-num-step instead. Hide the
+         defaults so the bare field reads cleanly between them. */
+      -moz-appearance: textfield;
+    }
+    .seq-num::-webkit-inner-spin-button,
+    .seq-num::-webkit-outer-spin-button {
+      -webkit-appearance: none; margin: 0;
     }
     .seq-num-wide { width: 6ch; }
     .seq-num:focus { border-color: var(--accent); color: var(--accent); }
+    /* [−] [input] [+] cluster — the buttons are oversized vs. the native
+       UA arrows so a finger can hit them without summoning the OS
+       keyboard. Uses inline-flex so the wrapper participates in the
+       enclosing flex/wrap layout the same way the bare input did. */
+    .seq-num-wrap {
+      display: inline-flex; align-items: stretch;
+      border-radius: 4px; overflow: hidden;
+    }
+    .seq-num-wrap .seq-num {
+      border-radius: 0; border-left: none; border-right: none;
+    }
+    .seq-num-step {
+      padding: 0.05rem 0.45rem; font-size: 0.85rem; line-height: 1;
+      min-width: 1.6rem; text-align: center;
+    }
+    .seq-num-wrap .seq-num-step:first-child  { border-radius: 4px 0 0 4px; }
+    .seq-num-wrap .seq-num-step:last-child   { border-radius: 0 4px 4px 0; }
     .seq-prop-check input[type=checkbox] {
       accent-color: var(--cyan); cursor: pointer;
       width: 14px; height: 14px;
@@ -824,7 +849,7 @@
       padding: 0.4rem 0.5rem;
     }
     #seq-matrix {
-      display: flex; flex-direction: column; gap: 3px;
+      display: flex; flex-direction: column; gap: 2px;
       min-width: 100%;
     }
     .seq-pad-row {
@@ -832,19 +857,36 @@
       grid-template-columns: 110px minmax(0, 1fr);
       gap: 0.4rem;
       align-items: center;
-      margin-bottom: 4px;
+      margin-bottom: 2px;
     }
-    .seq-pad-ctrl { display: flex; gap: 0.25rem; align-items: center; }
+    /* Three-column grid (audition / name / mute) keeps the controls tight
+       on either edge while the name flexes to fill. Replaces the old
+       2-button flex row that doubled the name as a mute toggle. */
+    .seq-pad-ctrl {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 0.2rem;
+      align-items: center;
+    }
+    .seq-pad-name {
+      min-width: 0;
+      padding: 0.1rem 0.3rem;
+      font-size: 0.7rem;
+      color: var(--text); font-family: var(--font-mono);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
     .seq-pad-mute {
-      flex: 1; min-width: 0;
-      padding: 0.18rem 0.35rem; font-size: 0.7rem;
-      text-align: left;
+      padding: 0.1rem 0.35rem; font-size: 0.7rem;
+      min-width: 1.6rem; text-align: center;
     }
-    .seq-pad-mute.muted { color: var(--muted); border-color: var(--border); opacity: 0.55; }
-    .seq-pad-audition { padding: 0.18rem 0.4rem; font-size: 0.7rem; }
+    .seq-pad-mute.muted {
+      color: var(--pink); border-color: var(--pink);
+      background: rgba(244, 114, 182, 0.10);
+    }
+    .seq-pad-audition { padding: 0.1rem 0.45rem; font-size: 0.7rem; }
     .seq-cells {
       display: grid;
-      gap: 3px;
+      gap: 2px;
       /* `grid-auto-rows` pins the implicit row track to a fixed pixel
          height. `min-height` and per-cell `height` both turned out
          insufficient on Android Chrome — the engine sized the row to the
@@ -852,8 +894,8 @@
          <button>) and the buttons collapsed to thin pill-dashes. With an
          explicit auto-row, the track is the floor regardless of how the
          child content reports its size. */
-      grid-auto-rows: 36px;
-      min-height: 36px;
+      grid-auto-rows: 28px;
+      min-height: 28px;
       align-self: stretch;
     }
     .seq-cell {
@@ -903,7 +945,7 @@
       .seq-pad-row {
         grid-template-columns: 1fr;
         gap: 0.2rem;
-        margin-bottom: 8px;
+        margin-bottom: 4px;
         /* Desktop sets `align-items: center` so the 110px label column
            reads centred against the LED strip. Once the rows stack on
            mobile, that alignment lets Android Chrome size the implicit
@@ -913,8 +955,9 @@
         align-items: stretch;
       }
       .seq-pad-ctrl { width: 100%; }
-      .seq-pad-mute { flex: 1; font-size: 0.78rem; padding: 0.28rem 0.5rem; }
-      .seq-pad-audition { padding: 0.28rem 0.55rem; font-size: 0.78rem; }
+      .seq-pad-name { font-size: 0.78rem; padding: 0.18rem 0.45rem; }
+      .seq-pad-mute { font-size: 0.78rem; padding: 0.18rem 0.5rem; min-width: 1.8rem; }
+      .seq-pad-audition { padding: 0.18rem 0.55rem; font-size: 0.78rem; }
       .seq-cell {
         border-radius: 5px;
         /* Lift OFF contrast another notch on phone displays — outdoor
@@ -923,9 +966,10 @@
         background: rgba(255,255,255,0.16);
         border-color: rgba(255,255,255,0.42);
       }
-      /* Bump auto-row + min-height in lockstep so the cells get a
-         finger-friendly 40px tap target on phone screens. */
-      .seq-cells { gap: 4px; grid-auto-rows: 40px; min-height: 40px; }
+      /* 36px keeps a finger-friendly tap target while letting more rows
+         fit on a phone viewport (was 40px). RR/MPC-class rhythm UIs run
+         32–40px; 36 sits in that band without sacrificing density. */
+      .seq-cells { gap: 3px; grid-auto-rows: 36px; min-height: 36px; }
     }
   </style>
 </head>
