@@ -69,7 +69,18 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // behavior; users who explicitly turned it off will have the
     // boolean persisted (false) and we leave that alone.
     if (typeof m.syncStrudel !== 'boolean') m.syncStrudel = true;
+    // Mirror the strudel @title when the sequencer would otherwise show
+    // the placeholder default — keeps the two engines reading as the same
+    // session ("qualem 4f9q") on a fresh load.
+    if (m.syncStrudel && (!m.name || m.name === 'untitled')) {
+      const stTitle = strudelTitleForName();
+      if (stTitle) m.name = stTitle;
+    }
     return m;
+  }
+  function strudelTitleForName() {
+    try { return syncStrudel?.getStrudelTitle?.() || ''; }
+    catch { return ''; }
   }
 
   // ── Persistence (debounced auto-save) ──────────────────────────────────
@@ -748,6 +759,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       pads: VOICES.map(v => makePad(v.id, empty(total))),
       createdAt: Date.now(), updatedAt: Date.now(),
     };
+    if (model.syncStrudel) {
+      const stTitle = strudelTitleForName();
+      if (stTitle) model.name = stTitle;
+    }
     if (nameInput) nameInput.value = model.name;
     refreshPropsValues();
     renderMatrix();
@@ -766,6 +781,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       for (let i = 0; i < pad.hits.length; i++) {
         if (Math.random() < 0.18) pad.hits[i] = 1;
       }
+    }
+    if (model.syncStrudel) {
+      const stTitle = strudelTitleForName();
+      if (stTitle) model.name = stTitle;
     }
     if (nameInput) nameInput.value = model.name;
     refreshPropsValues();
@@ -812,6 +831,16 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     model.name = nameInput.value;
     model.updatedAt = Date.now();
     persistSoon();
+    // When sync is on, propagate the rename into the strudel @title so
+    // both engines read as the same session. Skip empty inputs so users
+    // can clear the field without nuking the strudel title.
+    if (model.syncStrudel) {
+      const trimmed = (nameInput.value || '').trim();
+      if (trimmed) {
+        try { syncStrudel?.setStrudelTitle?.(trimmed); }
+        catch (e) { console.warn('[qualia] propagate name to strudel failed:', e); }
+      }
+    }
   });
 
   // Initial render even if the panel starts hidden — so the first open()

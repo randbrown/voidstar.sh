@@ -12,7 +12,7 @@
 import {
   loadCurrent, saveCurrent, loadList, addToList, updateInList,
   removeFromList, clonePattern, randomPattern, parseMetadata,
-  patternDisplayName, downloadPattern,
+  setMetadata, patternDisplayName, downloadPattern,
 } from './patterns.js';
 
 const STRUDEL_SCRIPT = 'https://unpkg.com/@strudel/repl@latest';
@@ -815,6 +815,53 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     loadCode(randomPattern());
   }
 
+  // Best-effort title read for cross-engine sync (sequencer mirrors this as
+  // its own pattern name when sync is on). Falls back to the persisted
+  // buffer so it works even before the editor has mounted.
+  function getCurrentTitle() {
+    const code = readEditorCode() || loadCurrent() || '';
+    return parseMetadata(code).title || '';
+  }
+
+  // Rewrite the `// @title ...` line in place. Tries a CodeMirror
+  // transaction first so live playback isn't interrupted; falls back to
+  // patching the persisted buffer so the next mount reflects the change.
+  function setTitle(name) {
+    if (typeof name !== 'string') return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    let inPlaceOk = false;
+    try {
+      const ed = getEditor();
+      const view = ed?.editor;
+      const doc = view?.state?.doc;
+      if (view && doc && typeof view.dispatch === 'function') {
+        const code = doc.toString();
+        const re = /^[ \t]*\/\/[ \t]*@title[ \t]+.*$/m;
+        const m  = re.exec(code);
+        const newLine = `// @title ${trimmed}`;
+        if (m) {
+          if (m[0] !== newLine) {
+            view.dispatch({
+              changes: { from: m.index, to: m.index + m[0].length, insert: newLine },
+            });
+          }
+          inPlaceOk = true;
+        } else {
+          view.dispatch({ changes: { from: 0, to: 0, insert: newLine + '\n' } });
+          inPlaceOk = true;
+        }
+      }
+    } catch {}
+    const cur = readEditorCode();
+    if (cur != null) {
+      saveCurrent(inPlaceOk ? cur : setMetadata(cur, 'title', trimmed));
+    } else {
+      const stored = loadCurrent();
+      if (stored != null) saveCurrent(setMetadata(stored, 'title', trimmed));
+    }
+  }
+
   // Restore last-session panel state. If the panel was open on the previous
   // visit, reopen it now (which mounts the editor and loads the last code
   // via pickInitialCode's restore branch). open() is async — fire and
@@ -850,6 +897,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       load:     loadPatternEntry,
       newBlank: newBlankPattern,
       random:   newRandomPattern,
+      getCurrentTitle,
+      setTitle,
       getCurrentCode: readEditorCode,
       // Load arbitrary code into the editor — used by the qualem
       // state-saving system to recall a snapshot's strudel pattern. Same

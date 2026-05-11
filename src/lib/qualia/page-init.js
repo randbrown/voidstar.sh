@@ -2093,6 +2093,17 @@ export function initQualiaPage() {
       _strudelReadyListeners.add(cb);
       return () => _strudelReadyListeners.delete(cb);
     },
+    // Title sync — sequencer uses these to default its name from the
+    // strudel @title and to push a renamed sequencer pattern back into
+    // the strudel buffer when sync is on.
+    getStrudelTitle: () => {
+      try { return strudel?.patterns?.getCurrentTitle?.() || ''; }
+      catch { return ''; }
+    },
+    setStrudelTitle: (name) => {
+      try { strudel?.patterns?.setTitle?.(name); }
+      catch (e) { console.warn('[qualia] strudel setTitle failed:', e); }
+    },
   };
   const sequencer = createSequencer({ audio, syncStrudel: seqSyncStrudel });
   _sequencerRef = sequencer;
@@ -2747,15 +2758,11 @@ export function initQualiaPage() {
 
   // ── Toolbar wiring ────────────────────────────────────────────────────────
   document.getElementById('btn-qualem-save')?.addEventListener('click', () => {
-    // Default to the strudel @title (the most user-visible name field) and
-    // let the user override before commit. Cancel aborts the save entirely;
-    // an empty string falls back to the default so users who Enter through
-    // the prompt still get a sensible name.
-    const defaultName = parseStrudelMeta(strudel.patterns.getCurrentCode() || '').title
+    // No prompt — default to the strudel @title (most user-visible name
+    // field) and stamp a timestamp fallback if it's missing. Renames live
+    // in the qualem panel where each row has an editable name input.
+    const finalName = parseStrudelMeta(strudel.patterns.getCurrentCode() || '').title
       || `Qualem ${new Date().toLocaleString('sv-SE').slice(0, 16)}`;
-    const entered = prompt('Save current state as qualem — name:', defaultName);
-    if (entered === null) return;
-    const finalName = entered.trim() || defaultName;
     const captured = captureQualem({ name: finalName });
     qualem.addToList(captured, captured.name);
     renderQualemList();
