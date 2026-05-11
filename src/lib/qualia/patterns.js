@@ -123,7 +123,7 @@ export function randomPattern() {
   // Tempo random across [0.5, 1.0] — chill range with a touch of headroom.
   const cps      = (0.5 + Math.random() * 0.5).toFixed(2);
   const tag      = Math.floor(Math.random() * 0xffff).toString(36);
-  return `// @title random ${tag}
+  return `// @title qualem ${tag}
 // @by voidstar
 setcps(${cps})
 stack(
