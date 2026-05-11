@@ -2094,8 +2094,10 @@ export function initQualiaPage() {
       return () => _strudelReadyListeners.delete(cb);
     },
     // Title sync — sequencer uses these to default its name from the
-    // strudel @title and to push a renamed sequencer pattern back into
-    // the strudel buffer when sync is on.
+    // strudel @title, to push a renamed sequencer pattern back into the
+    // strudel buffer when sync is on, and to listen for @title changes
+    // (random rolls, pattern loads, manual edits) so the sequencer name
+    // can mirror them in real time.
     getStrudelTitle: () => {
       try { return strudel?.patterns?.getCurrentTitle?.() || ''; }
       catch { return ''; }
@@ -2103,6 +2105,10 @@ export function initQualiaPage() {
     setStrudelTitle: (name) => {
       try { strudel?.patterns?.setTitle?.(name); }
       catch (e) { console.warn('[qualia] strudel setTitle failed:', e); }
+    },
+    onStrudelTitleChange: (cb) => {
+      try { return strudel?.patterns?.onTitleChange?.(cb) || (() => {}); }
+      catch { return () => {}; }
     },
   };
   const sequencer = createSequencer({ audio, syncStrudel: seqSyncStrudel });
@@ -2759,9 +2765,11 @@ export function initQualiaPage() {
   // ── Toolbar wiring ────────────────────────────────────────────────────────
   document.getElementById('btn-qualem-save')?.addEventListener('click', () => {
     // No prompt — default to the strudel @title (most user-visible name
-    // field) and stamp a timestamp fallback if it's missing. Renames live
-    // in the qualem panel where each row has an editable name input.
-    const finalName = parseStrudelMeta(strudel.patterns.getCurrentCode() || '').title
+    // field) and stamp a timestamp fallback if it's missing. getCurrentTitle
+    // also falls back to the persisted buffer when the live editor read
+    // fails (e.g. panel never opened this session). Renames live in the
+    // qualem panel where each row has an editable name input.
+    const finalName = (strudel.patterns.getCurrentTitle?.() || '').trim()
       || `Qualem ${new Date().toLocaleString('sv-SE').slice(0, 16)}`;
     const captured = captureQualem({ name: finalName });
     qualem.addToList(captured, captured.name);
