@@ -2747,7 +2747,16 @@ export function initQualiaPage() {
 
   // ── Toolbar wiring ────────────────────────────────────────────────────────
   document.getElementById('btn-qualem-save')?.addEventListener('click', () => {
-    const captured = captureQualem({});
+    // Default to the strudel @title (the most user-visible name field) and
+    // let the user override before commit. Cancel aborts the save entirely;
+    // an empty string falls back to the default so users who Enter through
+    // the prompt still get a sensible name.
+    const defaultName = parseStrudelMeta(strudel.patterns.getCurrentCode() || '').title
+      || `Qualem ${new Date().toLocaleString('sv-SE').slice(0, 16)}`;
+    const entered = prompt('Save current state as qualem — name:', defaultName);
+    if (entered === null) return;
+    const finalName = entered.trim() || defaultName;
+    const captured = captureQualem({ name: finalName });
     qualem.addToList(captured, captured.name);
     renderQualemList();
   });
