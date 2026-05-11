@@ -13,6 +13,7 @@ import {
   loadFxParams, saveFxParams, loadFxModWeights, saveFxModWeights,
 } from './presets.js';
 import * as qualem from './qualem.js';
+import { parseMetadata as parseStrudelMeta, setMetadata as setStrudelMeta } from './patterns.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
 import { createSequencer } from './sequencer.js';
@@ -1470,8 +1471,36 @@ export function initQualiaPage() {
   syncPostBtns();
 
   // ── Pause / Zen ───────────────────────────────────────────────────────────
+  // Pause also silences the audio sources so the spacebar gesture matches the
+  // live-performance expectation ("tap brake on everything"). Strudel + the
+  // sequencer get a transport stop+restart; the vocoder mutes instead of
+  // tearing down the mic stream (re-opening the mic prompts the OS indicator
+  // and rebuilds the audio graph — too heavy for a single keypress).
+  // _pauseAudioState remembers which sources were active pre-pause so they
+  // don't surprise-start on resume.
+  let _pauseAudioState = null;
   function setPaused(on) {
     core.setPaused(on);
+    if (on && !_pauseAudioState) {
+      _pauseAudioState = {
+        strudel:      !!strudel?.isPlaying?.(),
+        seq:          !!sequencer?.isPlaying?.(),
+        vocoderMuted: !!vocoder?.isMuted?.(),
+      };
+      try { if (_pauseAudioState.strudel) strudel.stopPlayback?.(); } catch (e) { console.warn('[qualia] pause strudel stop failed:', e); }
+      try { if (_pauseAudioState.seq)     sequencer.stop?.();       } catch (e) { console.warn('[qualia] pause seq stop failed:', e); }
+      try { if (vocoder?.isActive?.())    vocoder.setMuted?.(true); } catch (e) { console.warn('[qualia] pause vocoder mute failed:', e); }
+    } else if (!on && _pauseAudioState) {
+      const s = _pauseAudioState;
+      _pauseAudioState = null;
+      // Strudel + sequencer have a sync bridge — starting either may
+      // implicitly start the other when sync is armed. play() / stop()
+      // early-return when already in the target state, so the explicit
+      // double-call is safe and idempotent.
+      try { if (s.strudel) strudel.play?.(); } catch (e) { console.warn('[qualia] resume strudel failed:', e); }
+      try { if (s.seq)     sequencer.play?.(); } catch (e) { console.warn('[qualia] resume seq failed:', e); }
+      try { vocoder?.setMuted?.(s.vocoderMuted); } catch (e) { console.warn('[qualia] resume vocoder unmute failed:', e); }
+    }
     btnPause.classList.toggle('active', on);
     btnPause.textContent = on ? 'paused' : 'pause';
     settings.save();
@@ -2339,10 +2368,21 @@ export function initQualiaPage() {
       }
     }
 
+    // Name source priority: explicit arg → strudel @title (canonical user-
+    // facing name; users rename strudel patterns inline so this is what they
+    // expect to see) → timestamp fallback. The sequencer model.name is
+    // patched to match below so all three names align.
+    const strudelCode  = strudel.patterns.getCurrentCode() || '';
+    const strudelTitle = parseStrudelMeta(strudelCode).title;
+    const qualemName   = name
+      || strudelTitle
+      || `Qualem ${new Date().toLocaleString('sv-SE').slice(0, 16)}`;
+    const seqModel = sequencer.patterns.getCurrent() || null;
+
     return {
       format:        qualem.QUALEM_FORMAT,
       schemaVersion: qualem.QUALEM_SCHEMA_VERSION,
-      name:          name || `Qualem ${new Date().toLocaleString('sv-SE').slice(0, 16)}`,
+      name:          qualemName,
       createdAt:     Date.now(),
       updatedAt:     Date.now(),
       sparse:        isSparse,
@@ -2394,8 +2434,8 @@ export function initQualiaPage() {
       },
       cyclePool: { excluded: [...loadCycleExcluded()] },
       fx,
-      strudel:   { code: strudel.patterns.getCurrentCode() || '' },
-      sequencer: { model: sequencer.patterns.getCurrent() || null },
+      strudel:   { code: strudelCode },
+      sequencer: { model: seqModel ? { ...seqModel, name: qualemName } : null },
       vocoder:   vocoder.getConfig(),
       pausedZen: { paused: core.isPaused(), zen: core.isZen() },
       // Hardware fingerprint — deviceId only by default; the label is
@@ -2651,7 +2691,17 @@ export function initQualiaPage() {
       nameInput.addEventListener('change', () => {
         const next = nameInput.value.trim();
         if (next && next !== q.name) {
-          qualem.updateInList(q.id, { name: next });
+          // Propagate the rename into the embedded strudel @title and the
+          // embedded sequencer model.name so all three stay aligned. Pure
+          // qualem.js stays free of patterns.js — the patch lives here.
+          const patch = { name: next };
+          if (q.strudel?.code) {
+            patch.strudel = { ...q.strudel, code: setStrudelMeta(q.strudel.code, 'title', next) };
+          }
+          if (q.sequencer?.model) {
+            patch.sequencer = { ...q.sequencer, model: { ...q.sequencer.model, name: next } };
+          }
+          qualem.updateInList(q.id, patch);
           renderQualemList();
         }
       });

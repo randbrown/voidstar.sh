@@ -105,122 +105,31 @@ export function clonePattern(id) {
 }
 
 // ── Random pattern generator ─────────────────────────────────────────────
-// Curated parameter pools chosen to keep the generated output in the
-// same "ambient atmospheric" register as the hardcoded default — small
-// note pool, pads/leads only, gentle effect chain.
-const ROOTS    = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
-const OCTAVES  = ['3', '4', '4', '5'];          // bias toward 4
-const SCALES   = ['minor', 'major', 'dorian', 'mixolydian', 'lydian',
-                  'phrygian', 'harmonic minor', 'pentatonic'];
-// Sticking to the one confirmed-loading sample for now. The wider GM pool
-// (pad_2_warm, choir_aahs, etc.) was triggering "sample not found" errors
-// in some Strudel builds — better to play safe with the same source the
-// hardcoded default has always used.
-const SAMPLES  = ['gm_lead_6_voice'];
-// 8-step alternation with *4 density. The mini-notation itself loops in
-// 2 cycles — N_TRANSFORMS below stretches/rotates it over ~8 cycles so
-// the overall melody evolves instead of looping tightly.
-const PATTERNS = [
-  '<0 2 4 5 7 5 4 2>*4',
-  '<0 3 5 7 9 7 5 3>*4',
-  '<0 4 7 9 7 4 0 -3>*4',
-  '<0 1 4 7 5 4 2 -1>*4',
-  '<0 -1 2 -3 4 -3 2 -1>*4',
-  '<0 4 7 4 5 2 0 -3>*4',
-  '<0 5 7 5 4 2 0 -2>*4',
-  '<0 2 4 7 9 7 4 2>*4',
-  '<7 4 0 -3 0 4 7 9>*4',
-  '<0 2 5 7 5 2 0 -2>*4',
-  '<-3 0 4 7 4 0 -3 -5>*4',
-  '<0 1 2 3 4 3 2 1>*4',
-];
-
-// Strudel transforms applied to the n() pattern to spread variation
-// across multiple cycles. Mostly stretchers and slow rotations so the
-// underlying 2-cycle alternation becomes an ~8-cycle journey.
-const N_TRANSFORMS = [
-  '.slow(4)',
-  '.iter(8)',
-  '.every(4, rev)',
-  '.every(8, fast(2))',
-  '.chunk(4, rev)',
-  '.slow(2).every(4, rev)',
-  '.iter(4).slow(2)',
-  '.every(8, scramble(8))',
-];
-const FX_OPTS  = [
-  'jux(rev)',
-  'sometimes(add(note("12")))',
-  'sometimes(add(note("7")))',
-  'lpf(perlin.range(200,20000).slow(4))',
-  'lpf(sine.range(400,8000).slow(8))',
-  'gain(perlin.range(.4,.9).slow(6))',
-  'pan(sine.range(0,1).slow(4))',
-  'delay(0.5)',
-  'crush(sine.range(4,16).slow(8))',
-];
-
-// Drum voice pool. Steady backbeat (bd/sd alternating cycle-to-cycle, or
-// the more spacious bd-rest-sd-rest variant) with a slow LPF sine sweep
-// (500–2000 Hz over 8 cycles) so the drums breathe with the rest of the
-// texture. Variation across pool entries is intentionally small —
-// melody is where the random character should live.
-const DRUMS = [
-  's("<bd sd>").lpf(sine.range(500, 2000).slow(8)).gain(.8).delay(.2)',
-  's("<bd sd>").lpf(sine.range(500, 2000).slow(8)).gain(.8).delay(.2)',
-  's("<bd ~ sd ~>").lpf(sine.range(500, 2000).slow(8)).gain(.8).delay(.25)',
-];
+// Drums + bass only, octave-1 bass, tempo in [0.5, 1.0], no note-density
+// multipliers above 2. Tuned for chill live-ambient performance — the
+// melody/lead lines that used to ride on top were too prominent for that
+// register, so we dropped them entirely. Variation now lives in root note,
+// scale, and tempo; the rhythmic + timbral shape stays consistent so the
+// generated patterns all sit in the same sonic neighborhood.
+const ROOTS  = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+const SCALES = ['minor', 'major', 'dorian', 'mixolydian', 'lydian',
+                'phrygian', 'harmonic minor', 'pentatonic'];
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 export function randomPattern() {
-  const rootNote = pick(ROOTS);                              // e.g. 'C'
-  const leadOct  = pick(OCTAVES);                            // e.g. '4'
-  const root     = rootNote + leadOct;                       // 'C4'
-  // Bass sits two octaves below the lead so it reads as foundation, with a
-  // floor at octave 2 so we don't sub-rumble into inaudibility.
-  const bassOct  = String(Math.max(2, parseInt(leadOct, 10) - 2));
+  const rootNote = pick(ROOTS);
   const scale    = pick(SCALES);
-  const sample   = pick(SAMPLES);
-  const pat      = pick(PATTERNS);
-  const nMod     = pick(N_TRANSFORMS);
-  const drums    = pick(DRUMS);
-  // Simple root/fifth bass: degree 0 (root) for 2 cycles, then degree 4
-  // (fifth) for 2 cycles, alternating. Heavy LPF + low gain so it sits
-  // under the lead. Synth-strings GM voice gives the bass a sustained pad
-  // character distinct from the lead's GM voice.
-  const bass     = `n("<0 4>/2").scale('${rootNote}${bassOct} ${scale}').s("gm_synth_strings_2").gain(.5).lpf(800)`;
-  // Fixed at 0.5 to match the sequencer's default CPS so the two engines
-  // start in lockstep. Random patterns still vary in melody/scale/fx —
-  // tempo just stays at the chill house-of-house default.
-  const cps      = '0.5';
-  const room     = (0.4 + Math.random() * 0.6).toFixed(1);
-  // Pick 2–3 distinct fx so each random pattern has its own colour.
-  const fxPool = [...FX_OPTS];
-  const fxN    = 2 + Math.floor(Math.random() * 2);
-  const fxLines = [];
-  for (let i = 0; i < fxN && fxPool.length; i++) {
-    const idx = Math.floor(Math.random() * fxPool.length);
-    fxLines.push('.' + fxPool.splice(idx, 1)[0]);
-  }
-  // Stack body lives at 2-space indent (Strudel convention). Both the
-  // melody chain's continuation lines AND the random-fx lines sit at the
-  // same indent so the whole second-voice block reads as one chained
-  // expression nested inside stack(...).
-  const fxBlock = fxLines.map(line => '  ' + line).join('\n');
-  const tag = Math.floor(Math.random() * 0xffff).toString(36);
+  // Tempo random across [0.5, 1.0] — chill range with a touch of headroom.
+  const cps      = (0.5 + Math.random() * 0.5).toFixed(2);
+  const tag      = Math.floor(Math.random() * 0xffff).toString(36);
   return `// @title random ${tag}
 // @by voidstar
-// @license CC0
 setcps(${cps})
 stack(
-  ${drums},
-  ${bass},
-  n("${pat}")${nMod}
-  .scale('${root} ${scale}').s("${sample}")
-  .clip(sine.range(.2,.8).slow(8))
-${fxBlock}
-).room(${room})`;
+  s("<bd ~ sd ~>").lpf(sine.range(500, 2000).slow(8)).delay(.2),
+  n("<0 4>/2").scale('${rootNote}1 ${scale}').s("gm_synth_strings_2").lpf(800),
+).room(0.5)`;
 }
 
 // ── Download helper ──────────────────────────────────────────────────────
