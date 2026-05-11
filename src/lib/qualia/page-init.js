@@ -2001,6 +2001,16 @@ export function initQualiaPage() {
   // we close over a holder that gets populated after construction —
   // by the time Strudel actually fires play, the holder is set.
   let _sequencerRef = null;
+  // Sync between strudel and sequencer is held off until BOTH panels have
+  // been opened at least once this page session. On a fresh page load,
+  // playing strudel before the user has ever seen the sequencer (or vice
+  // versa) shouldn't auto-drive the other engine — they haven't opted in.
+  // A panel restored from the previous session via wasOpenLastSession→
+  // open() counts as opened, so reloads of an established setup behave
+  // normally.
+  function bothPanelsOpened() {
+    return !!(strudel?.hasBeenOpened?.() && _sequencerRef?.hasBeenOpened?.());
+  }
   const strudel = createStrudelHydra({
     audio,
     getField: () => core.field,
@@ -2009,6 +2019,7 @@ export function initQualiaPage() {
     onPlayStateChange: (playing) => {
       const seq = _sequencerRef;
       if (!seq?.isSyncOn?.()) return;
+      if (!bothPanelsOpened()) return;
       try {
         if (playing) seq.playFromStrudel?.();
         else         seq.stopFromStrudel?.();
@@ -2062,6 +2073,8 @@ export function initQualiaPage() {
     setCpsDebounced: (v) => {
       if (_strudelSetCpsTimer) clearTimeout(_strudelSetCpsTimer);
       _strudelSetCpsTimer = setTimeout(() => {
+        _strudelSetCpsTimer = null;
+        if (!bothPanelsOpened()) return;
         let delivered = false;
         try {
           const sched = strudel?.getScheduler?.();
@@ -2073,7 +2086,6 @@ export function initQualiaPage() {
         if (!delivered) {
           try { if (typeof globalThis.setcps === 'function') { globalThis.setcps(v); delivered = true; } } catch {}
         }
-        _strudelSetCpsTimer = null;
       }, 150);
     },
     // Transport sync — sequencer asks us to mirror its play/stop into
@@ -2081,10 +2093,12 @@ export function initQualiaPage() {
     // onPlayStateChange callback for this invocation, breaking the
     // play→play→play feedback loop.
     playStrudel: () => {
+      if (!bothPanelsOpened()) return;
       try { strudel?.play?.({ fromSync: true }); }
       catch (e) { console.warn('[qualia] strudel follow seq play failed:', e); }
     },
     stopStrudel: () => {
+      if (!bothPanelsOpened()) return;
       try { strudel?.stop?.({ fromSync: true }); }
       catch (e) { console.warn('[qualia] strudel follow seq stop failed:', e); }
     },
@@ -2097,17 +2111,22 @@ export function initQualiaPage() {
     // strudel @title, to push a renamed sequencer pattern back into the
     // strudel buffer when sync is on, and to listen for @title changes
     // (random rolls, pattern loads, manual edits) so the sequencer name
-    // can mirror them in real time.
+    // can mirror them in real time. getStrudelTitle is intentionally
+    // un-gated — it's a one-shot read at sequencer init to seed the
+    // default pattern name, not a runtime sync event.
     getStrudelTitle: () => {
       try { return strudel?.patterns?.getCurrentTitle?.() || ''; }
       catch { return ''; }
     },
     setStrudelTitle: (name) => {
+      if (!bothPanelsOpened()) return;
       try { strudel?.patterns?.setTitle?.(name); }
       catch (e) { console.warn('[qualia] strudel setTitle failed:', e); }
     },
     onStrudelTitleChange: (cb) => {
-      try { return strudel?.patterns?.onTitleChange?.(cb) || (() => {}); }
+      if (typeof cb !== 'function') return () => {};
+      const gated = (title) => { if (bothPanelsOpened()) cb(title); };
+      try { return strudel?.patterns?.onTitleChange?.(gated) || (() => {}); }
       catch { return () => {}; }
     },
   };
@@ -2132,7 +2151,9 @@ export function initQualiaPage() {
     if (!_strudelGlobalWrapped && typeof globalThis.setcps === 'function') {
       const orig = globalThis.setcps;
       globalThis.setcps = function (v) {
-        try { sequencer.applyCpsFromStrudel(+v); } catch {}
+        if (bothPanelsOpened()) {
+          try { sequencer.applyCpsFromStrudel(+v); } catch {}
+        }
         return orig.call(this, v);
       };
       _strudelGlobalWrapped = true;
@@ -2144,7 +2165,9 @@ export function initQualiaPage() {
         if (sched && typeof sched.setCps === 'function' && !sched.__qualiaWrapped) {
           const orig = sched.setCps.bind(sched);
           sched.setCps = function (v) {
-            try { sequencer.applyCpsFromStrudel(+v); } catch {}
+            if (bothPanelsOpened()) {
+              try { sequencer.applyCpsFromStrudel(+v); } catch {}
+            }
             return orig(v);
           };
           sched.__qualiaWrapped = true;
