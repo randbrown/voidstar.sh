@@ -640,21 +640,27 @@
     .sp-pat-toolbar { display: flex; gap: 0.4rem; flex-wrap: wrap; }
     .sp-pat-list   { display: flex; flex-direction: column; gap: 0.3rem; }
     .sp-pat-row {
-      display: grid; grid-template-columns: 1fr auto;
+      display: flex; flex-wrap: wrap;
       align-items: center; gap: 0.4rem;
       padding: 0.4rem 0.5rem;
       background: rgba(255,255,255,0.03);
       border: 1px solid var(--border); border-radius: 6px;
     }
-    .sp-pat-meta { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+    .sp-pat-meta {
+      display: flex; flex-direction: column; gap: 0.15rem;
+      min-width: 0; flex: 1 1 9rem;
+    }
     .sp-pat-name {
       background: transparent; border: none; outline: none;
       color: var(--cyan); font-family: var(--font-mono); font-size: 0.78rem;
-      padding: 0; width: 100%;
+      padding: 0; width: 100%; min-width: 0;
     }
     .sp-pat-name:focus { color: var(--accent); }
     .sp-pat-by { color: var(--muted); font-size: 0.66rem; }
-    .sp-pat-actions { display: flex; gap: 0.25rem; }
+    .sp-pat-actions {
+      display: flex; gap: 0.25rem; flex-wrap: wrap;
+      flex-shrink: 0; margin-left: auto;
+    }
     .sp-pat-actions .ctrl-btn { padding: 0.15rem 0.45rem; font-size: 0.68rem; }
     .sp-pat-empty { color: var(--muted); padding: 0.6rem; text-align: center; }
 
