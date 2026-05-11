@@ -182,6 +182,23 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   let mounted  = false;
   let strudelAnalyser = null;
   let pollT = null;
+  // Title-change observers. Subscribers (currently: sequencer via the
+  // page-init bridge) get fired when the strudel @title changes — random
+  // rolls, pattern loads, in-place setTitle, or manual edits picked up
+  // on persist. `_lastSeenTitle` de-dupes so a rename round-trip from the
+  // sequencer doesn't loop back to it.
+  const _titleListeners = new Set();
+  let _lastSeenTitle = null;
+  function notifyTitleIfChanged(forceTitle) {
+    const t = typeof forceTitle === 'string'
+      ? forceTitle
+      : (parseMetadata(readEditorCode() || loadCurrent() || '').title || '');
+    if (t === _lastSeenTitle) return;
+    _lastSeenTitle = t;
+    for (const cb of _titleListeners) {
+      try { cb(t); } catch (e) { console.warn('[qualia] strudel title listener failed:', e); }
+    }
+  }
   // Source of truth for "is Strudel adopted into audio analysis" is
   // `audio.hasSource('strudel')` — this module no longer carries its own
   // `tapped` flag, so the panel/playback/audio state can't drift from one
@@ -270,7 +287,13 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   }
   function persistCurrent() {
     const code = readEditorCode();
-    if (code != null) saveCurrent(code);
+    if (code != null) {
+      saveCurrent(code);
+      // Catch manual @title edits — fires on every play/stop tick (where
+      // persistCurrent is invoked), but the de-dup in notifyTitleIfChanged
+      // keeps it cheap when nothing changed.
+      notifyTitleIfChanged(parseMetadata(code).title || '');
+    }
     return code;
   }
 
@@ -339,6 +362,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     }, 150);
     injectStrudelTransparency(ed);
     saveCurrent(code);
+    // Surface the @title of whatever code we just mounted (initial random,
+    // restored buffer, or a load). Sequencer mirrors this when sync is on.
+    notifyTitleIfChanged(parseMetadata(code).title || '');
   }
   function loadCode(code) {
     if (typeof code !== 'string' || !code) return;
@@ -830,6 +856,10 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     if (typeof name !== 'string') return;
     const trimmed = name.trim();
     if (!trimmed) return;
+    // Prime the de-dup BEFORE editing so the persistCurrent notify path
+    // (fired on the next eval) sees the value as already-known and
+    // doesn't echo back to whoever just called setTitle.
+    _lastSeenTitle = trimmed;
     let inPlaceOk = false;
     try {
       const ed = getEditor();
@@ -899,6 +929,11 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       random:   newRandomPattern,
       getCurrentTitle,
       setTitle,
+      onTitleChange: (cb) => {
+        if (typeof cb !== 'function') return () => {};
+        _titleListeners.add(cb);
+        return () => _titleListeners.delete(cb);
+      },
       getCurrentCode: readEditorCode,
       // Load arbitrary code into the editor — used by the qualem
       // state-saving system to recall a snapshot's strudel pattern. Same

@@ -860,6 +860,21 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // "waiting" forever even after sync is actually working.
   syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
 
+  // Mirror strudel @title changes (random rolls, pattern loads, manual
+  // edits) into the sequencer name while sync is on. We don't echo this
+  // back via setStrudelTitle — the listener fires AFTER strudel already
+  // settled on the new title, and we only update programmatically (no
+  // user-input 'change' event), so the propagate-back path can't fire.
+  syncStrudel?.onStrudelTitleChange?.((title) => {
+    if (!model.syncStrudel) return;
+    const next = (title || '').trim();
+    if (!next || next === model.name) return;
+    model.name = next;
+    model.updatedAt = Date.now();
+    if (nameInput) nameInput.value = next;
+    persistSoon();
+  });
+
   if (wasOpenLastSession) open();
 
   // ── Public API ─────────────────────────────────────────────────────────
