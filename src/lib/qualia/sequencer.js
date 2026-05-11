@@ -799,8 +799,15 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   }
 
   // ── Open / close ───────────────────────────────────────────────────────
+  // Sticky in-session "this panel has been revealed at least once" flag.
+  // Cross-panel sync (transport/CPS/title) waits until BOTH the sequencer
+  // and strudel panels have been opened, so a fresh page load where the
+  // user only opens one doesn't surprise them by driving the other.
+  // Restored panels (wasOpenLastSession → open() below) count as opened.
+  let _everOpened = false;
   function open() {
     if (panel) panel.style.display = '';
+    _everOpened = true;
     savePanelOpen(true);
     reposition();
     if (nameInput) nameInput.value = model.name || '';
@@ -896,6 +903,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   return {
     open, close,
     isOpen:    () => panel?.style.display !== 'none',
+    hasBeenOpened: () => _everOpened,
     isPlaying: () => isPlaying,
     isMuted:   () => _muted,
     setMuted,

@@ -690,12 +690,20 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     header.addEventListener('pointercancel', end);
   })();
 
+  // Sticky in-session "this panel has been revealed at least once" flag.
+  // Cross-panel sync (transport/CPS/title) waits until BOTH the strudel
+  // and sequencer panels have been opened, so a fresh page load where the
+  // user only opens one doesn't surprise them by driving the other.
+  // Restored panels (wasOpenLastSession → open() below) count as opened.
+  let _everOpened = false;
+
   async function open() {
     // Mic and Strudel run side-by-side now — each owns its own analyser
     // and the audio module merges per-band readings every tick. Opening
     // Strudel must NOT stop the mic; if reopening with our analyser
     // already adopted, this is a no-op for audio.
     if (panel) panel.style.display = '';
+    _everOpened = true;
     savePanelOpen(true);
     reposition();
     refreshStrudelBtn();
@@ -908,6 +916,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     stop,
     isPlaying: () => isPlayingFlag,
     isOpen: () => panel?.style.display !== 'none',
+    hasBeenOpened: () => _everOpened,
     isMuted: () => _strudelMuted,
     setMuted,
     /** Inner StrudelMirror handle — null until the editor mounts. */
