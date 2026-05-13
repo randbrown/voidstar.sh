@@ -519,9 +519,11 @@ const VERT_PARTICLE = /* glsl */`
   uniform vec4  uBands;
   uniform vec2  uHighs;
   uniform vec2  uBeat;
+  uniform vec2  uMids;
   uniform float uPointScale;
   uniform float uEdgeDissolve;
   uniform float uBreath;
+  uniform float uCoherence;
 
   varying float vRole;
   varying float vPhase;
@@ -557,9 +559,20 @@ const VERT_PARTICLE = /* glsl */`
     float spread = mix(0.045, 0.090, step(0.5, aRole));
     spread = mix(spread, 0.140, step(1.5, aRole));
 
+    // Coherence dampens drift — at coherence ≈ 1 motes drift normally,
+    // at coherence ≫ 1 they stick close to their anchors so the
+    // particle layer locks in alongside the volumetric smoke instead
+    // of continuing to swirl freely. Sparks (role 2) get a much
+    // smaller dampening so high-freq sparkle still feels alive.
+    float cohRaw  = uCoherence + uBeat.y * 0.40 + uMids.x * 0.20;
+    float overLock = max(0.0, cohRaw - 1.0);
+    float driftDamp = clamp(1.0 / (1.0 + overLock * 0.80), 0.18, 1.0);
+    float roleIsSpark = step(1.5, aRole);
+    float driftDampApplied = mix(driftDamp, mix(driftDamp, 1.0, 0.6), roleIsSpark);
+
     vec2 pos = p
-             + c * spread * (0.6 + uEdgeDissolve * 0.7)
-             + orbit
+             + c * spread * (0.6 + uEdgeDissolve * 0.7) * driftDampApplied
+             + orbit * driftDampApplied
              + vec2(0.0, breath);
 
     // Sparks: short visual life, sized by treble.
