@@ -1,4 +1,4 @@
-// Modulation — audio + pose channels and the param resolver.
+// Modulation — audio + pose + time channels and the param resolver.
 //
 // Channels are named scalars derived from the current QualiaField. An fx
 // declares modulators on its params; the engine computes channels once per
@@ -16,6 +16,10 @@
 //   pose.wristSpread                  ([-1, +1] wide → +)
 //   pose.wristMidY                    ([-1, +1] hands high → -)
 //   pose.confidence                   ([0, 1] mean visibility)
+//   time.slow | time.med | time.fast  ([-1, +1] sin LFOs, ~31s/12s/5s)
+//   time.veryFast                     ([-1, +1] sin LFO, ~2s)
+//   time.slowCos | time.medCos        (cos counterparts — 90° phase, for
+//                                       circular / quadrature motion)
 //
 // Modulator modes:
 //   'add'     v += source * amount
@@ -112,10 +116,26 @@ const POSE_CHANNELS = {
   'pose.confidence':    poseConfidence,
 };
 
+// ── Time channels (LFOs) ───────────────────────────────────────────────
+// Output is in [-1, +1]. Periods are deliberately incommensurate so that
+// combining two channels rarely repeats a phase pattern — that keeps
+// "auto-pilot" visuals from feeling looped. The cos variants are 90°
+// shifted so an fx can use (slow, slowCos) as a quadrature pair for
+// circular or Lissajous-style motion.
+const TIME_CHANNELS = {
+  'time.slow':     t => Math.sin(t * 0.20),  // ≈ 31s period
+  'time.med':      t => Math.sin(t * 0.50),  // ≈ 12.5s
+  'time.fast':     t => Math.sin(t * 1.25),  // ≈ 5s
+  'time.veryFast': t => Math.sin(t * 3.10),  // ≈ 2s
+  'time.slowCos':  t => Math.cos(t * 0.20),
+  'time.medCos':   t => Math.cos(t * 0.50),
+};
+
 /** Names available as `modulators[].source`. Sorted for UI display. */
 export const CHANNEL_IDS = [
   ...Object.keys(AUDIO_CHANNELS),
   ...Object.keys(POSE_CHANNELS),
+  ...Object.keys(TIME_CHANNELS),
 ];
 
 /** Compute every channel value into `out` from the live field. Mutates `out`. */
@@ -124,6 +144,8 @@ export function computeChannels(field, out) {
   for (const id in AUDIO_CHANNELS) out[id] = AUDIO_CHANNELS[id](a);
   const p0 = field.pose?.people?.[0] ?? null;
   for (const id in POSE_CHANNELS) out[id] = POSE_CHANNELS[id](p0);
+  const t = field.time;
+  for (const id in TIME_CHANNELS) out[id] = TIME_CHANNELS[id](t);
   return out;
 }
 
