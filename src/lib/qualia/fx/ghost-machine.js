@@ -1,192 +1,141 @@
-// Ghost in the Machine — pose-driven volumetric "ghost" rendered as a single
-// Points cloud bound to the live MediaPipe skeleton, hovering over a
-// procedural circuit-grid background. The body is a haze of additive
-// particles strung along 14 bones (neck/spine/limbs); a denser cluster on
-// a unit sphere centered on the head joint forms a skull silhouette via
-// shader-baked eye-socket and jaw-stripe masks. No external assets.
+// Ghost in the Machine — a luminous cyan apparition made of smoke, fog, and
+// digital memory, breathing into humanoid form above a dark circuit-board
+// substrate. Rendered as two layered passes on an aspect-aware ortho frame:
 //
-// Coordinate system: a single Scene + OrthographicCamera with extents
-// (-aspect..+aspect) × (+1..-1). MediaPipe landmarks (mirrored, [0,1])
-// map directly into shader-space via `poseToOrtho`, so the skeleton's
-// proportions match the user's silhouette without any projection guess.
+//   1. Fullscreen volumetric pass (heavy fragment shader)
+//      ── procedural circuit board (grid, traces, pulsing nodes)
+//      ── humanoid SDF (head + neck + torso + shoulders + arms + lower body),
+//         softly unioned with smin, breathed by bass
+//      ── curl-noise/fBm smoke field, advected outward from the body so the
+//         silhouette frays into vapor instead of stopping at a hard edge
+//      ── face cavity mask (eye sockets, nose ridge, mouth) carved out of
+//         the head region as dark falloffs
+//      ── chest vortex glow with slow radial swirl
+//      ── filament threads carrying brighter cyan highlights
+//      ── soft cyan→white-blue core ramp + violet accent + Reinhard tonemap
 //
-// Modulation map (declarative):
-//   audio.total      → swirl        (overall energy tightens the breath)
-//   audio.bass       → glow         (low end swells body brightness)
-//   audio.beatPulse  → glow         (kick pumps the silhouette)
-//   audio.highs      → edgeShimmer  (hats sparkle wisp edges)
-//   audio.highsPulse → edgeShimmer
-//   audio.mids       → bgEnergy     (mids brighten the circuit traces)
-//   audio.beatPulse  → bgEnergy     (kick flashes the background)
-// Inline (in update(), not via modulation engine):
-//   pose head/neck/shoulders/elbows/wrists/hips/knees/ankles → uJoints[14]
-//   (smoothed; idleBlend ramps to a canned drift when confidence drops)
+//   2. Particle overlay (Points, additive blend)
+//      ── ~6–30k motes spawned with humanoid-biased positions
+//      ── three classes: core (dense in head/chest), edge (frays outward),
+//         sparks (bright, treble-reactive flickers)
+//      ── per-particle curl drift driven entirely in the vertex shader so
+//         the JS update path stays allocation-free
+//
+// Modulation map (declarative, see params below):
+//   audio.bass       → breath, chestGlow            (the figure inhales)
+//   audio.beatPulse  → chestGlow, circuitPulse      (machine locks on)
+//   audio.mids       → coherence, flowSpeed         (body becomes fluid)
+//   audio.highs      → edgeDissolve, shimmer        (face flickers, sparks)
+//   audio.highsPulse → shimmer                       (treble sparkle)
+//   audio.total      → density                       (overall presence)
+//
+// No external assets, no pose tracking — the apparition is procedural and
+// breathes on its own. The shader stays heavy; maxDpr is capped at 1.25 so
+// high-DPI screens don't push the fragment cost off a cliff.
 
 import {
   Scene, OrthographicCamera, Points, Mesh, PlaneGeometry,
   BufferGeometry, BufferAttribute, ShaderMaterial,
-  AdditiveBlending, Color, Vector2, Vector3, Vector4, Group,
+  AdditiveBlending, Color, Vector2, Vector4,
 } from 'three';
 import { applyAudioUniforms, disposeObject3D } from '../three-host.js';
 import { scaleAudio } from '../field.js';
 
-const COUNT_OPTS = ['15000', '30000', '60000', '120000'];
-const PALETTES   = ['cyan_spirit', 'magenta_wraith', 'green_phantom', 'white_shroud'];
+const COUNT_OPTS = ['6000', '15000', '30000', '60000'];
+const PALETTES   = ['cyan_spirit', 'violet_seance', 'emerald_phantom', 'white_shroud'];
 
-// Each palette: body (main mist), edge (outer wisps), skull, bg (circuit base).
+// Palette is four cyan-family colors plus a violet accent for highlights.
+//   bg     — circuit-board substrate base (deep navy)
+//   trace  — circuit traces / faint grid (dim cyan)
+//   deep   — outer ghost body fog (deep cyan)
+//   bright — main ghost glow (electric cyan)
+//   core   — brightest core / filament highlight (white-blue)
+//   violet — rare accent in highlights / face contour
 const PALETTE_COLORS = {
-  cyan_spirit:    { body: [0.55, 0.85, 1.00], edge: [0.20, 0.55, 0.90], skull: [0.85, 0.95, 1.00], bg: [0.10, 0.35, 0.65] },
-  magenta_wraith: { body: [0.95, 0.55, 0.95], edge: [0.55, 0.20, 0.75], skull: [1.00, 0.80, 0.95], bg: [0.45, 0.15, 0.55] },
-  green_phantom:  { body: [0.55, 1.00, 0.75], edge: [0.10, 0.55, 0.40], skull: [0.85, 1.00, 0.90], bg: [0.10, 0.45, 0.30] },
-  white_shroud:   { body: [0.90, 0.92, 0.98], edge: [0.55, 0.65, 0.80], skull: [1.00, 1.00, 1.00], bg: [0.20, 0.25, 0.40] },
+  cyan_spirit: {
+    bg:     [0.020, 0.040, 0.075],
+    trace:  [0.090, 0.420, 0.580],
+    deep:   [0.050, 0.500, 0.700],
+    bright: [0.260, 0.860, 0.960],
+    core:   [0.850, 0.985, 1.000],
+    violet: [0.420, 0.260, 1.000],
+  },
+  violet_seance: {
+    bg:     [0.030, 0.020, 0.060],
+    trace:  [0.380, 0.180, 0.620],
+    deep:   [0.380, 0.220, 0.680],
+    bright: [0.700, 0.450, 1.000],
+    core:   [0.970, 0.870, 1.000],
+    violet: [0.300, 0.700, 1.000],
+  },
+  emerald_phantom: {
+    bg:     [0.020, 0.040, 0.040],
+    trace:  [0.080, 0.520, 0.420],
+    deep:   [0.050, 0.560, 0.380],
+    bright: [0.300, 0.940, 0.700],
+    core:   [0.870, 1.000, 0.940],
+    violet: [0.350, 0.300, 1.000],
+  },
+  white_shroud: {
+    bg:     [0.035, 0.045, 0.075],
+    trace:  [0.350, 0.450, 0.560],
+    deep:   [0.500, 0.620, 0.760],
+    bright: [0.820, 0.900, 1.000],
+    core:   [1.000, 1.000, 1.000],
+    violet: [0.500, 0.420, 0.900],
+  },
 };
 
-// Joint slots in the uJoints[14] uniform. Order must agree with pickJoint().
-const J = {
-  HEAD: 0, NECK: 1,
-  SHOULDER_L: 2, SHOULDER_R: 3,
-  ELBOW_L: 4,    ELBOW_R: 5,
-  WRIST_L: 6,    WRIST_R: 7,
-  HIP_L: 8,      HIP_R: 9,
-  KNEE_L: 10,    KNEE_R: 11,
-  ANKLE_L: 12,   ANKLE_R: 13,
-};
-
-// Bones, as [jointA, jointB]. Particles distribute uniformly along these.
-const BONE_PAIRS = [
-  [J.NECK, J.HEAD],
-  [J.SHOULDER_L, J.SHOULDER_R],
-  [J.NECK, J.SHOULDER_L], [J.NECK, J.SHOULDER_R],
-  [J.SHOULDER_L, J.ELBOW_L], [J.ELBOW_L, J.WRIST_L],
-  [J.SHOULDER_R, J.ELBOW_R], [J.ELBOW_R, J.WRIST_R],
-  [J.NECK, J.HIP_L], [J.NECK, J.HIP_R],
-  [J.HIP_L, J.KNEE_L], [J.KNEE_L, J.ANKLE_L],
-  [J.HIP_R, J.KNEE_R], [J.KNEE_R, J.ANKLE_R],
-];
-
-// T-pose-ish idle skeleton (ortho units). Used when no pose is detected,
-// blended with a slow drift in update().
-const IDLE_POSE = [
-  [ 0.00,  0.55, 0.0],  // head
-  [ 0.00,  0.32, 0.0],  // neck
-  [-0.18,  0.30, 0.0],  // shoulder.l
-  [ 0.18,  0.30, 0.0],  // shoulder.r
-  [-0.28,  0.05, 0.0],  // elbow.l
-  [ 0.28,  0.05, 0.0],  // elbow.r
-  [-0.35, -0.20, 0.0],  // wrist.l
-  [ 0.35, -0.20, 0.0],  // wrist.r
-  [-0.12, -0.10, 0.0],  // hip.l
-  [ 0.12, -0.10, 0.0],  // hip.r
-  [-0.14, -0.45, 0.0],  // knee.l
-  [ 0.14, -0.45, 0.0],  // knee.r
-  [-0.16, -0.80, 0.0],  // ankle.l
-  [ 0.16, -0.80, 0.0],  // ankle.r
-];
-
-const VERT_GHOST = /* glsl */`
-  attribute float aBoneA;
-  attribute float aBoneB;
-  attribute float aT;
-  attribute float aPhase;
-  attribute float aSize;
-  attribute float aRole;
-  attribute vec3  aOffset;
-
-  uniform vec3  uJoints[14];
-  uniform float uTime;
-  uniform float uSwirl;
-  uniform float uFlinch;
-  uniform float uGlow;
-  uniform float uPointSize;
-  uniform float uSkullRadius;
-  uniform vec2  uBeat;
-
-  varying float vRole;
-  varying float vPhase;
-  varying vec2  vOffXY;
-  varying float vSize;
-
-  // Loop-based selection — GLSL ES 1.0 doesn't allow non-constant dynamic
-  // indexing of uniform arrays in the general case. A bounded for-loop with
-  // a loop-index compare is portable across WebGL1/2.
-  vec3 getJoint(int idx) {
-    vec3 j = uJoints[0];
-    for (int k = 0; k < 14; k++) {
-      if (k == idx) { j = uJoints[k]; }
-    }
-    return j;
+// ── Shared GLSL: hash + value noise + fBm + curl ─────────────────────────
+//
+// Used by both the volumetric pass and the particle vertex shader so the
+// two layers move through the same flow field — particles look like they
+// belong inside the fog, not pasted on top.
+const NOISE_GLSL = /* glsl */`
+  float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
   }
-
-  void main() {
-    vRole = aRole;
-    vPhase = aPhase;
-    vOffXY = aOffset.xy;
-    vSize  = aSize;
-
-    int ia = int(aBoneA + 0.5);
-    int ib = int(aBoneB + 0.5);
-    vec3 ja = getJoint(ia);
-    vec3 jb = getJoint(ib);
-    vec3 along = jb - ja;
-    vec3 perp = normalize(vec3(-along.y, along.x, 0.0001));
-
-    vec3 base = mix(ja, jb, aT) + perp * aOffset.x + vec3(0.0, 0.0, aOffset.z);
-
-    float ph = aPhase + uTime * (0.6 + uSwirl * 0.8);
-    vec3 swirl = vec3(cos(ph) * 0.018, sin(ph * 1.3) * 0.018, sin(ph * 0.7) * 0.018) * uSwirl;
-    swirl += perp * uBeat.y * uFlinch * 0.06;
-
-    if (aRole > 0.5) {
-      // Skull: place on unit sphere around the head joint (slot 0 = HEAD).
-      base = uJoints[0] + aOffset * uSkullRadius;
-      swirl *= 0.25;
+  float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+  float fbm(vec2 p) {
+    float a = 0.5;
+    float v = 0.0;
+    mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
+    for (int i = 0; i < 5; i++) {
+      v += a * vnoise(p);
+      p  = rot * p * 2.02 + 17.0;
+      a *= 0.5;
     }
-
-    vec4 mv = modelViewMatrix * vec4(base + swirl, 1.0);
-    gl_Position = projectionMatrix * mv;
-    gl_PointSize = uPointSize * aSize * (1.0 + uGlow * 0.25);
+    return v;
+  }
+  // 2D curl via finite differences on a scalar fbm potential. Cheap and
+  // gives the swirly, divergence-free flow the smoke needs.
+  vec2 curl2(vec2 p) {
+    float e = 0.06;
+    float n1 = fbm(p + vec2(0.0, e));
+    float n2 = fbm(p - vec2(0.0, e));
+    float n3 = fbm(p + vec2(e, 0.0));
+    float n4 = fbm(p - vec2(e, 0.0));
+    return vec2((n1 - n2), -(n3 - n4)) / (2.0 * e);
   }
 `;
 
-const FRAG_GHOST = /* glsl */`
-  precision highp float;
-  varying float vRole;
-  varying float vPhase;
-  varying vec2  vOffXY;
-  varying float vSize;
-
-  uniform vec3  uBodyColor;
-  uniform vec3  uEdgeColor;
-  uniform vec3  uSkullColor;
-  uniform vec4  uBands;
-  uniform vec2  uBeat;
-  uniform vec2  uHighs;
-  uniform float uGlow;
-  uniform float uShimmer;
-
-  void main() {
-    vec2 d = gl_PointCoord - 0.5;
-    float r2 = dot(d, d);
-    if (r2 > 0.25) discard;
-    float fall = exp(-r2 * 11.0);
-
-    vec3 col;
-    if (vRole > 0.5) {
-      // Skull particles — kill zero-sized (eye socket / jaw mask),
-      // tint with skull color and beat boost.
-      if (vSize < 0.05) discard;
-      col = uSkullColor * (0.85 + uBeat.y * 0.5 + uBands.x * 0.3);
-    } else {
-      float edge = clamp(length(vOffXY) * 6.0, 0.0, 1.0);
-      col = mix(uBodyColor, uEdgeColor, edge);
-      col *= 0.65 + 0.8 * uGlow + uBands.x * 0.5 + uBeat.y * 0.4;
-    }
-    float sparkle = uShimmer * uHighs.y * step(0.92, fract(vPhase * 43.7));
-    gl_FragColor = vec4((col + sparkle) * fall, fall * 0.85);
-  }
-`;
-
-const VERT_BG = /* glsl */`
+// ── Volumetric pass ─────────────────────────────────────────────────────
+//
+// Single fullscreen quad. Fragment shader does ALL the heavy lifting:
+// circuit BG, humanoid SDF, smoke field, face cavities, chest vortex,
+// composite + tonemap.
+const VERT_VOLUME = /* glsl */`
   varying vec2 vUv;
   void main() {
     vUv = uv;
@@ -194,195 +143,504 @@ const VERT_BG = /* glsl */`
   }
 `;
 
-const FRAG_BG = /* glsl */`
+const FRAG_VOLUME = /* glsl */`
   precision highp float;
   varying vec2 vUv;
-  uniform float uTime;
-  uniform float uBgEnergy;
-  uniform float uAspect;
-  uniform vec3  uBgColor;
-  uniform vec4  uBands;
-  uniform vec2  uBeat;
-  uniform vec2  uMids;
 
-  // Cheap hash for sparse trace seeds.
-  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  uniform float uTime;
+  uniform float uAspect;
+
+  uniform vec3  uBgColor;
+  uniform vec3  uTraceColor;
+  uniform vec3  uGhostDeep;
+  uniform vec3  uGhostBright;
+  uniform vec3  uGhostCore;
+  uniform vec3  uViolet;
+
+  uniform vec4  uBands;        // bass, mids, highs, total
+  uniform vec2  uBeat;         // active, pulse
+  uniform vec2  uMids;
+  uniform vec2  uHighs;
+
+  uniform float uDensity;
+  uniform float uBreath;
+  uniform float uCoherence;
+  uniform float uEdgeDissolve;
+  uniform float uChestGlow;
+  uniform float uCircuitPulse;
+  uniform float uShimmer;
+  uniform float uFlowSpeed;
+  uniform float uVioletGain;
+
+  ${NOISE_GLSL}
+
+  // Smooth-min for SDF unions. k is the blend radius — larger = puffier joints.
+  float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+  }
+
+  // Soft 2D ellipse SDF (approximate; good enough for the smooth union).
+  float sdEllipse(vec2 p, vec2 r) {
+    float k = min(r.x, r.y);
+    return (length(p / r) - 1.0) * k;
+  }
+
+  // 2D capsule SDF along segment a→b with radius r.
+  float sdCapsule(vec2 p, vec2 a, vec2 b, float r) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h) - r;
+  }
+
+  // Humanoid silhouette in ortho space. Compositional: a few overlapping
+  // ellipses + capsules glued with smin. breathExpand inflates the torso
+  // and slightly drops the shoulder line on inhale.
+  float humanoidSDF(vec2 p, float breathExpand) {
+    float headY = 0.58;
+    float head = sdEllipse(p - vec2(0.0, headY), vec2(0.115, 0.150));
+
+    float neck = sdEllipse(p - vec2(0.0, headY - 0.21), vec2(0.060, 0.055));
+
+    // Torso swells slightly with breath.
+    vec2  torsoR = vec2(0.245 + breathExpand * 0.030,
+                        0.260 + breathExpand * 0.030);
+    float torso  = sdEllipse(p - vec2(0.0, 0.08 - breathExpand * 0.010), torsoR);
+
+    // Shoulders — rounded caps that fuse with the torso/neck.
+    float shL = sdEllipse(p - vec2(-0.220, 0.235), vec2(0.115, 0.090));
+    float shR = sdEllipse(p - vec2( 0.220, 0.235), vec2(0.115, 0.090));
+
+    // Arms — vague capsules. The figure's arms are loose, almost
+    // dissolving; they're more about hint than form.
+    float armL = sdCapsule(p, vec2(-0.290, 0.180), vec2(-0.340, -0.180), 0.060);
+    float armR = sdCapsule(p, vec2( 0.290, 0.180), vec2( 0.340, -0.180), 0.060);
+
+    // Lower body — soft taper. We don't draw legs; the body diffuses.
+    float lower = sdEllipse(p - vec2(0.0, -0.45), vec2(0.215, 0.350));
+
+    // Glue with progressively wider smin radii toward the extremities so
+    // joints look like fused fog rather than hinged limbs.
+    float d = head;
+    d = smin(d, neck,  0.05);
+    d = smin(d, torso, 0.10);
+    d = smin(d, shL,   0.11);
+    d = smin(d, shR,   0.11);
+    d = smin(d, armL,  0.13);
+    d = smin(d, armR,  0.13);
+    d = smin(d, lower, 0.22);
+    return d;
+  }
+
+  // Face cavity mask. Returns a [0,1] dark amount localized to the head.
+  // Eye sockets are the dominant feature, then a faint vertical nose
+  // shadow and a soft horizontal mouth depression.
+  float faceCavities(vec2 p, float time) {
+    vec2 h = p - vec2(0.0, 0.58);
+
+    // Sockets — slightly elongated vertically; positioned a touch above
+    // head-center so the skull reads as elongated/elongated.
+    vec2 eyeL = h - vec2(-0.044, 0.012);
+    vec2 eyeR = h - vec2( 0.044, 0.012);
+    float eyeFL = exp(-dot(eyeL * vec2(1.0, 1.35), eyeL * vec2(1.0, 1.35)) / 0.0014);
+    float eyeFR = exp(-dot(eyeR * vec2(1.0, 1.35), eyeR * vec2(1.0, 1.35)) / 0.0014);
+    float eyes = max(eyeFL, eyeFR);
+
+    // Nose ridge — a slim vertical falloff, much fainter than eyes.
+    vec2 nose = h - vec2(0.0, -0.032);
+    float noseM = exp(-dot(nose * vec2(8.0, 1.8), nose * vec2(8.0, 1.8)));
+
+    // Mouth — a soft horizontal oval. Breathes very subtly with time so
+    // the face doesn't read as static even when the music is quiet.
+    float mouthBreathe = 0.85 + 0.15 * sin(time * 0.6);
+    vec2 mouth = h - vec2(0.0, -0.082);
+    float mouthM = exp(-dot(mouth * vec2(2.6, 5.2 / mouthBreathe),
+                            mouth * vec2(2.6, 5.2 / mouthBreathe)));
+
+    return clamp(eyes + noseM * 0.32 + mouthM * 0.55, 0.0, 1.0);
+  }
+
+  // PCB-style background. Restrained on purpose — the ghost is the star.
+  vec3 renderCircuit(vec2 uv) {
+    vec3 base = uBgColor;
+
+    // Faint cell grid for substrate depth.
+    vec2 cellUv = uv * 9.0;
+    vec2 g = abs(fract(cellUv) - 0.5);
+    float gridLine = smoothstep(0.46, 0.50, max(g.x, g.y));
+
+    // Horizontal traces — hashed rows, only a fraction are "live".
+    float traces = 0.0;
+    for (int i = 0; i < 4; i++) {
+      float fi = float(i);
+
+      // Row line — only rows with seed past a threshold get a trace.
+      float yLine = floor(uv.y * 14.0 + fi * 6.31);
+      float ySeed = hash21(vec2(yLine, fi + 7.0));
+      if (ySeed > 0.55) {
+        float yPos = (yLine + 0.5) / 14.0 - 1.0;
+        float thick = smoothstep(0.004, 0.0, abs(uv.y - yPos));
+        // Signal pulse traveling along the trace.
+        float wave = fract(uv.x * 0.45 - uTime * (0.15 + ySeed * 0.30) + fi * 0.31);
+        float pulse = exp(-pow((wave - 0.5) * 5.0, 2.0));
+        traces += thick * (0.20 + pulse * (0.50 + uCircuitPulse * 0.6));
+      }
+
+      // Column line — sparser.
+      float xLine = floor(uv.x * 14.0 + fi * 11.7);
+      float xSeed = hash21(vec2(xLine, fi + 19.0));
+      if (xSeed > 0.70) {
+        float xPos = (xLine + 0.5) / 14.0 - 1.0;
+        float thick = smoothstep(0.004, 0.0, abs(uv.x - xPos));
+        float wave = fract(uv.y * 0.45 - uTime * (0.10 + xSeed * 0.20) + fi * 0.71);
+        float pulse = exp(-pow((wave - 0.5) * 5.0, 2.0));
+        traces += thick * (0.15 + pulse * (0.40 + uCircuitPulse * 0.4));
+      }
+    }
+
+    // Nodes — sparse bright dots that flicker like neurons.
+    vec2 nodeId   = floor(uv * 12.0);
+    float nodeSeed = hash21(nodeId + 31.0);
+    vec2 nodeC = (nodeId + 0.5) / 12.0;
+    float nodeD = length(uv - nodeC) * uAspect;
+    float flicker = sin(uTime * (1.4 + nodeSeed * 3.5) + nodeSeed * 6.283) * 0.5 + 0.5;
+    float node = exp(-nodeD * 80.0)
+               * step(0.86, nodeSeed)
+               * (0.40 + flicker * 0.60)
+               * (1.0 + uBeat.y * 1.2 + uCircuitPulse * 0.5);
+
+    vec3 col = base;
+    col += uTraceColor * 0.04 * gridLine;
+    col += uTraceColor * traces * 0.7;
+    col += uTraceColor * node * 2.2;
+
+    // Subtle horizontal scan haze so the substrate feels deep.
+    float haze = smoothstep(0.0, 0.7, abs(uv.y)) * 0.025;
+    col -= haze * uBgColor;
+
+    // Vignette — pushes the eye to center where the apparition sits.
+    float vig = 1.0 - smoothstep(0.6, 1.45, length(uv));
+    col *= 0.55 + 0.45 * vig;
+    return col;
+  }
 
   void main() {
-    // Convert [0,1] uv into aspect-aware [-aspect, aspect] × [-1, 1].
+    // [-aspect, aspect] × [-1, 1]
     vec2 uv = (vUv * 2.0 - 1.0) * vec2(uAspect, 1.0);
 
-    // Substrate grid — thin cell lines.
-    vec2 grid = abs(fract(uv * 12.0) - 0.5);
-    float cell = smoothstep(0.48, 0.50, max(grid.x, grid.y));
+    // ── 1. Background ────────────────────────────────────────────────
+    vec3 bg = renderCircuit(uv);
 
-    // Horizontal data traces drifting right; modulated by row-wise noise.
-    float row = floor(uv.y * 18.0);
-    float seed = hash(vec2(row, 17.0));
-    float trace = step(0.985, fract(uv.x * 24.0 + uTime * (0.20 + seed * 0.4)
-                                    + sin(uv.y * 5.0) * 0.3));
-    trace *= smoothstep(0.55, 0.95, seed);
+    // ── 2. Breathing parameters ──────────────────────────────────────
+    // Slow underlying breath, amplified by bass.
+    float breathPhase  = sin(uTime * 0.45) * 0.5 + 0.5;
+    float breathExpand = breathPhase * (0.20 + uBreath * 1.6);
 
-    // Vertical capillaries — sparse, slower.
-    float col = floor(uv.x * 14.0);
-    float colSeed = hash(vec2(col, 31.0));
-    float cap = step(0.992, fract(uv.y * 18.0 - uTime * (0.10 + colSeed * 0.25)));
-    cap *= smoothstep(0.65, 0.98, colSeed);
+    // ── 3. Humanoid SDF + base mask ──────────────────────────────────
+    float sdfBase = humanoidSDF(uv, breathExpand);
+    float maskBase = smoothstep(0.06, -0.05, sdfBase);
 
-    float pulse = 0.35 + 0.85 * uBands.x * uBgEnergy;
-    float trans = (trace + cap) * pulse;
+    // ── 4. Curl-noise flow advection ─────────────────────────────────
+    // Upward drift for vapor, slow horizontal phase. Outside the body
+    // the flow has more authority so wisps peel off; inside, it churns
+    // but stays mostly contained.
+    vec2 flowP = uv * 2.2
+               + vec2(uTime * 0.04, -uTime * 0.13 * uFlowSpeed);
+    vec2 c = curl2(flowP);
 
-    // Soft radial vignette so the figure pops.
-    float vig = 1.0 - smoothstep(0.6, 1.4, length(uv));
+    // Edge-dissolve magnitude grows with high-mid energy and the
+    // uEdgeDissolve parameter.
+    float fray = 0.045 + uEdgeDissolve * 0.080 + uHighs.x * 0.020;
+    vec2  pAdv = uv + c * fray * (1.0 - maskBase * 0.55);
+    float sdfAdv  = humanoidSDF(pAdv, breathExpand);
+    float maskAdv = smoothstep(0.10, -0.02, sdfAdv);
 
-    vec3 base = uBgColor * (0.05 + cell * 0.12 + uBands.y * 0.06 * uBgEnergy);
-    vec3 hot  = uBgColor * (1.6 + uBeat.y * 0.8) + vec3(0.10, 0.20, 0.35);
-    vec3 col3 = base + hot * trans + uBgColor * uBeat.y * 0.05;
-    col3 *= 0.35 + 0.65 * vig;
+    // ── 5. Volumetric smoke field ────────────────────────────────────
+    // Two octaves of warped fBm: a slow churn + a faster wisp layer.
+    vec2 nP1 = uv * 3.2 + c * 1.1
+             + vec2(uTime * 0.03, -uTime * 0.20 * uFlowSpeed);
+    float smokeA = fbm(nP1);
 
-    gl_FragColor = vec4(col3, 1.0);
+    vec2 nP2 = uv * 7.0 + c * 1.6
+             + vec2(-uTime * 0.05, -uTime * 0.32 * uFlowSpeed);
+    float smokeB = fbm(nP2);
+    smokeB = pow(smokeB, 1.6);
+
+    // Filament threads — high-freq band with a hard ridge that picks
+    // out thin glowing strands.
+    float fil = abs(fbm(uv * 11.0 + c * 2.2 + uTime * 0.18) - 0.50);
+    fil = smoothstep(0.08, 0.0, fil);
+
+    // ── 6. Composite density ─────────────────────────────────────────
+    // Mix between the rigid SDF mask (high coherence) and the wildly
+    // advected one (low coherence) so the figure firms up on beats.
+    float coh = clamp(uCoherence + uBeat.y * 0.25 + uMids.x * 0.10, 0.0, 1.2);
+    float mask = mix(maskAdv, maskBase, clamp(coh * 0.6, 0.0, 0.9));
+
+    float density = mask * (0.32 + 0.55 * smokeA + 0.28 * smokeB);
+    density += mask * fil * 0.55;
+
+    // ── 7. Face cavities (subtractive, head-localized) ───────────────
+    float face = faceCavities(uv, uTime);
+    float headRegion = exp(-pow(length(uv - vec2(0.0, 0.58)) / 0.20, 2.0));
+    // High-mids deepen the eye sockets — face "haunts" harder on snares.
+    float socketDepth = 0.78 + uHighs.x * 0.18;
+    density *= 1.0 - face * headRegion * socketDepth;
+
+    // ── 8. Chest vortex ──────────────────────────────────────────────
+    vec2 chestP = uv - vec2(0.0, 0.05);
+    float chestR = length(chestP);
+    float chestAng = atan(chestP.y, chestP.x);
+    float swirl = sin(chestAng * 3.0 - uTime * 1.1 - chestR * 6.0);
+    float chestField = exp(-chestR * chestR * 18.0);
+    float chestGlow = chestField
+                    * (0.55 + 0.45 * (swirl * 0.5 + 0.5))
+                    * (0.6 + uChestGlow * 1.4 + uBeat.y * 0.6);
+    chestGlow *= mask;
+
+    // ── 9. Edge wisps outside the SDF ────────────────────────────────
+    // These let the figure leak vapor into the surrounding space.
+    float edgeBand = smoothstep(0.18, 0.0, sdfBase) - smoothstep(0.0, -0.10, sdfBase);
+    edgeBand = max(0.0, edgeBand);
+    float wisp = edgeBand * smokeB * (0.6 + uEdgeDissolve * 0.7);
+
+    // ── 10. Color ramp ───────────────────────────────────────────────
+    // Outer → mid → inner, governed by composite intensity.
+    float intensity = clamp(density * (0.7 + uDensity * 0.6), 0.0, 1.3);
+    vec3 colGhost = mix(uGhostDeep, uGhostBright, smoothstep(0.05, 0.55, intensity));
+    colGhost = mix(colGhost, uGhostCore, smoothstep(0.60, 1.0, intensity));
+
+    // Chest core glow — pushes toward white-blue at the heart.
+    colGhost += uGhostCore * chestGlow * 0.9;
+
+    // Filament highlight tinted slightly toward core.
+    colGhost += uGhostCore * fil * mask * 0.35;
+
+    // Outer wisps in deep cyan with a hint of violet.
+    vec3 wispCol = mix(uGhostDeep, uViolet, uVioletGain * 0.35);
+    colGhost += wispCol * wisp * 0.55;
+
+    // Violet accent in the brightest interior highlights, very sparing.
+    colGhost = mix(colGhost,
+                   mix(colGhost, uViolet, 0.18),
+                   uVioletGain * smoothstep(0.78, 1.05, intensity));
+
+    // ── 11. Treble shimmer over the ghost mask ───────────────────────
+    // High-frequency speckle on top of the smoke; intentionally faint.
+    float sparkleN = hash21(floor(uv * 240.0) + floor(uTime * 18.0));
+    float sparkle = step(0.985, sparkleN) * mask * uShimmer * (0.3 + uHighs.y * 0.7);
+    colGhost += uGhostCore * sparkle * 0.6;
+
+    // ── 12. Composite over BG ────────────────────────────────────────
+    vec3 col = bg + colGhost * (intensity + wisp * 0.6);
+
+    // ── 13. Soft bloom approximation + Reinhard tonemap ──────────────
+    // Heavy whites are intentionally pulled back — we want luminous,
+    // not blown out. Reinhard keeps highlights present without clipping.
+    col *= 1.05;
+    col = col / (1.0 + col * 0.34);
+
+    // Subtle final desaturation toward black to deepen shadow regions.
+    col = mix(col, col * 0.92, 1.0 - smoothstep(0.05, 0.45, length(col)));
+
+    gl_FragColor = vec4(col, 1.0);
   }
 `;
 
-// Build the per-particle attribute buffers. Buffers are static — bone
-// indices, t-along-bone, offsets, phases, and roles are baked once.
-// Skull particles (~20% of the count) get aOffset = unit Fibonacci-sphere
-// normal, with eye-socket and jaw-stripe masks zeroing aSize so the
-// fragment shader discards them — giving the iconic two dark eye voids
-// and bottom jaw band without any texture.
-function generateParticles(count) {
-  const skullN = Math.floor(count * 0.20);
-  const wispN  = Math.floor(count * 0.08);
-  const bodyN  = count - skullN - wispN;
+// ── Particle overlay ─────────────────────────────────────────────────────
+//
+// Lightweight motes that drift through the same curl field. Three roles:
+//   0 = core   — small, slow, bright, biased to head + chest
+//   1 = edge   — slightly larger, dissolves outward over time
+//   2 = spark  — tiny, treble-flickering, very short visual life
+const VERT_PARTICLE = /* glsl */`
+  attribute vec3  aAnchor;   // base position (humanoid-biased)
+  attribute float aPhase;    // random phase
+  attribute float aRole;     // 0/1/2
+  attribute float aSize;     // base size
 
-  const aBoneA  = new Float32Array(count);
-  const aBoneB  = new Float32Array(count);
-  const aT      = new Float32Array(count);
+  uniform float uTime;
+  uniform float uAspect;
+  uniform float uFlowSpeed;
+  uniform float uShimmer;
+  uniform float uDensity;
+  uniform vec4  uBands;
+  uniform vec2  uHighs;
+  uniform vec2  uBeat;
+  uniform float uPointScale;
+  uniform float uEdgeDissolve;
+  uniform float uBreath;
+
+  varying float vRole;
+  varying float vPhase;
+  varying float vAlpha;
+
+  ${NOISE_GLSL}
+
+  void main() {
+    vRole = aRole;
+    vPhase = aPhase;
+
+    vec2 p = aAnchor.xy;
+
+    // Slow upward drift (vapor rising).
+    float drift = uTime * 0.08 * (0.6 + uFlowSpeed * 0.6);
+
+    // Curl flow — same field the fragment shader uses, sampled at the
+    // anchor so motes ride the same currents as the fog.
+    vec2 flowP = p * 2.2 + vec2(uTime * 0.04, -uTime * 0.13 * uFlowSpeed);
+    float e = 0.06;
+    vec2 c = vec2(
+      fbm(flowP + vec2(0.0, e)) - fbm(flowP - vec2(0.0, e)),
+      -(fbm(flowP + vec2(e, 0.0)) - fbm(flowP - vec2(e, 0.0)))
+    ) / (2.0 * e);
+
+    // Per-mote orbit + breath sway.
+    float ph = aPhase + uTime * 0.7;
+    vec2 orbit = vec2(cos(ph), sin(ph * 1.3)) * 0.025;
+    float breath = sin(uTime * 0.45) * (0.018 + uBreath * 0.030);
+
+    // Spread amount scales with role: sparks fly farther, core stays put.
+    float spread = mix(0.045, 0.090, step(0.5, aRole));
+    spread = mix(spread, 0.140, step(1.5, aRole));
+
+    vec2 pos = p
+             + c * spread * (0.6 + uEdgeDissolve * 0.7)
+             + orbit
+             + vec2(0.0, breath);
+
+    // Sparks: short visual life, sized by treble.
+    float roleSpark = step(1.5, aRole);
+    float sparkLife = fract(aPhase * 0.31 + uTime * 1.4);
+    float sparkBoost = roleSpark * uHighs.y * (1.0 - sparkLife) * 1.6;
+
+    vec3 world = vec3(pos, 0.0);
+    vec4 mv = modelViewMatrix * vec4(world, 1.0);
+    gl_Position = projectionMatrix * mv;
+
+    // Size: core small + steady, edge medium, sparks tiny but boost on hits.
+    float sizeMul = 1.0 + uBands.w * 0.4 + uBeat.y * 0.3;
+    float size = aSize * uPointScale * sizeMul * (0.6 + uShimmer * 0.4);
+    size *= mix(1.0, 0.6 + sparkBoost * 2.0, roleSpark);
+    gl_PointSize = size;
+
+    // Alpha: core full, edge fades out at large displacement, sparks pulse.
+    float disp = length(c) * spread;
+    float fadeEdge = mix(1.0, 1.0 - smoothstep(0.05, 0.16, disp), step(0.5, aRole));
+    float a = 0.55 + 0.35 * uDensity;
+    a *= mix(1.0, fadeEdge, step(0.5, aRole));
+    a *= mix(1.0, 0.4 + sparkBoost * 1.2, roleSpark);
+    vAlpha = clamp(a, 0.0, 1.0);
+  }
+`;
+
+const FRAG_PARTICLE = /* glsl */`
+  precision highp float;
+  varying float vRole;
+  varying float vPhase;
+  varying float vAlpha;
+
+  uniform vec3 uGhostBright;
+  uniform vec3 uGhostCore;
+  uniform vec3 uGhostDeep;
+  uniform vec3 uViolet;
+  uniform float uVioletGain;
+
+  void main() {
+    vec2 d = gl_PointCoord - 0.5;
+    float r2 = dot(d, d);
+    if (r2 > 0.25) discard;
+    float fall = exp(-r2 * 9.0);
+
+    vec3 col;
+    if (vRole < 0.5) {
+      // Core: bright cyan-white
+      col = mix(uGhostBright, uGhostCore, 0.65);
+    } else if (vRole < 1.5) {
+      // Edge: deeper cyan
+      col = mix(uGhostDeep, uGhostBright, 0.55);
+    } else {
+      // Sparks: brightest, occasional violet
+      col = uGhostCore;
+      col = mix(col, uViolet, uVioletGain * 0.30);
+    }
+
+    gl_FragColor = vec4(col * fall, fall * vAlpha);
+  }
+`;
+
+// Generate anchor points biased to the humanoid silhouette. Particles are
+// sampled from soft body regions (head, chest, shoulders, lower body) with
+// different role weights — so the visual distribution matches the figure.
+function generateParticles(count) {
+  const aAnchor = new Float32Array(count * 3);
   const aPhase  = new Float32Array(count);
-  const aSize   = new Float32Array(count);
   const aRole   = new Float32Array(count);
-  const aOffset = new Float32Array(count * 3);
-  // BufferGeometry requires a `position` attribute (we never actually use
-  // it — the vert shader builds position from joints — but Three.js will
-  // refuse to draw without it).
+  const aSize   = new Float32Array(count);
   const positions = new Float32Array(count * 3);
 
-  let p = 0;
-
-  // Body particles strung along bones.
-  for (let i = 0; i < bodyN; i++, p++) {
-    const boneIdx = i % BONE_PAIRS.length;
-    const [a, b] = BONE_PAIRS[boneIdx];
-    aBoneA[p] = a;
-    aBoneB[p] = b;
-    aT[p]     = Math.random();
-    // Perpendicular jitter wider on torso bones (neck↔shoulders/hips),
-    // tighter on limbs — gives the dense central mist and trim limbs.
-    const isTorso = (a === J.NECK || b === J.NECK
-                  || a === J.SHOULDER_L || a === J.SHOULDER_R
-                  || b === J.HIP_L || b === J.HIP_R);
-    const sigma = isTorso ? 0.075 : 0.040;
-    aOffset[p * 3 + 0] = (Math.random() + Math.random() - 1.0) * sigma;
-    aOffset[p * 3 + 1] = 0.0;
-    aOffset[p * 3 + 2] = (Math.random() - 0.5) * 0.06;
-    aPhase[p]  = Math.random() * Math.PI * 2;
-    aSize[p]   = 0.6 + Math.random() * 1.4;
-    aRole[p]   = 0.0;
+  // Body region anchors: [cx, cy, sigmaX, sigmaY, weight]
+  const REGIONS = [
+    [ 0.000,  0.580, 0.085, 0.130, 1.5],  // head
+    [ 0.000,  0.300, 0.090, 0.080, 1.2],  // neck/upper-chest band
+    [ 0.000,  0.080, 0.190, 0.180, 2.6],  // chest/torso
+    [-0.220,  0.220, 0.080, 0.080, 0.9],  // shoulder L
+    [ 0.220,  0.220, 0.080, 0.080, 0.9],  // shoulder R
+    [-0.310, -0.020, 0.060, 0.180, 0.6],  // arm L
+    [ 0.310, -0.020, 0.060, 0.180, 0.6],  // arm R
+    [ 0.000, -0.380, 0.150, 0.250, 1.6],  // lower body
+  ];
+  let wsum = 0;
+  for (const r of REGIONS) wsum += r[4];
+  const cdf = new Float32Array(REGIONS.length);
+  let acc = 0;
+  for (let i = 0; i < REGIONS.length; i++) {
+    acc += REGIONS[i][4] / wsum;
+    cdf[i] = acc;
   }
 
-  // Wisp tails overshoot bone ends, with bigger lateral spread.
-  for (let i = 0; i < wispN; i++, p++) {
-    const boneIdx = Math.floor(Math.random() * BONE_PAIRS.length);
-    const [a, b] = BONE_PAIRS[boneIdx];
-    aBoneA[p] = a;
-    aBoneB[p] = b;
-    aT[p]     = Math.random() < 0.5 ? -0.15 - Math.random() * 0.15
-                                    :  1.15 + Math.random() * 0.15;
-    aOffset[p * 3 + 0] = (Math.random() - 0.5) * 0.18;
-    aOffset[p * 3 + 1] = 0.0;
-    aOffset[p * 3 + 2] = (Math.random() - 0.5) * 0.10;
-    aPhase[p]  = Math.random() * Math.PI * 2;
-    aSize[p]   = 0.3 + Math.random() * 0.7;
-    aRole[p]   = 0.0;
+  // Role splits: most particles are core/edge, a small fraction are sparks.
+  const coreFrac  = 0.55;
+  const edgeFrac  = 0.35;
+  // sparkFrac = 0.10 (implicit)
+
+  function gauss() {
+    // Box–Muller, sample once per call.
+    const u1 = Math.max(1e-6, Math.random());
+    const u2 = Math.random();
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
   }
 
-  // Skull cluster on Fibonacci-sphere centered on head joint.
-  // Face features are masked into per-particle aSize: zero-size particles
-  // are discarded in the fragment shader, leaving dark voids that read as
-  // eye sockets / mouth on the front hemisphere.
-  // Eye centers sit ON the unit sphere (lat 0.15, lon ±30° from +z).
-  const PHI = Math.PI * (3 - Math.sqrt(5));
-  const EYE_LY = 0.15;
-  const EYE_LX = 0.5;
-  const EYE_LZ = Math.sqrt(Math.max(0, 1 - EYE_LY * EYE_LY - EYE_LX * EYE_LX)); // ≈ 0.853
-  const EYE_R  = 0.30;
-  for (let i = 0; i < skullN; i++, p++) {
-    const t = i / Math.max(1, skullN - 1);
-    const y = 1.0 - t * 2.0;             // -1..+1 (lat)
-    const r = Math.sqrt(Math.max(0, 1.0 - y * y));
-    const theta = PHI * i;
-    const x = Math.cos(theta) * r;
-    const z = Math.sin(theta) * r;
-
-    aBoneA[p] = J.HEAD;
-    aBoneB[p] = J.HEAD;
-    aT[p]     = 0.0;
-    aOffset[p * 3 + 0] = x;
-    aOffset[p * 3 + 1] = y;
-    aOffset[p * 3 + 2] = z;
-    aPhase[p] = Math.random() * Math.PI * 2;
-    aRole[p]  = 1.0;
-
-    let size = 0.9 + Math.random() * 0.6;
-
-    // Face features only on the front hemisphere.
-    if (z > 0.2) {
-      const eyeL = Math.hypot(x - (-EYE_LX), y - EYE_LY, z - EYE_LZ);
-      const eyeR = Math.hypot(x - ( EYE_LX), y - EYE_LY, z - EYE_LZ);
-      if (eyeL < EYE_R || eyeR < EYE_R) size = 0.0;
-
-      // Nasal triangle — narrow strip just below eye line.
-      if (y < EYE_LY - 0.08 && y > -0.20 && Math.abs(x) < 0.10 && z > 0.7) {
-        size = 0.0;
-      }
-
-      // Mouth slit — horizontal opening between the upper and lower jaw.
-      if (y > -0.38 && y < -0.30 && Math.abs(x) < 0.40 && z > 0.55) {
-        size = 0.0;
-      }
-
-      // Teeth — alternating bands flanking the mouth slit, both above and
-      // below; the dark gaps between bands read as individual teeth.
-      if (((y >= -0.30 && y < -0.20) || (y >= -0.50 && y < -0.40))
-          && Math.abs(x) < 0.45 && z > 0.55) {
-        const band = Math.floor((x + 0.45) * 9);
-        if ((band & 1) === 0) size = 0.0;
-      }
+  for (let i = 0; i < count; i++) {
+    const t = Math.random();
+    let region = REGIONS[0];
+    for (let r = 0; r < REGIONS.length; r++) {
+      if (t <= cdf[r]) { region = REGIONS[r]; break; }
     }
-    aSize[p] = size;
-  }
+    const [cx, cy, sx, sy] = region;
+    aAnchor[i * 3 + 0] = cx + gauss() * sx;
+    aAnchor[i * 3 + 1] = cy + gauss() * sy;
+    aAnchor[i * 3 + 2] = 0;
 
-  return { positions, aBoneA, aBoneB, aT, aPhase, aSize, aRole, aOffset };
-}
+    aPhase[i] = Math.random() * Math.PI * 2;
 
-function pickJoint(person, idx) {
-  switch (idx) {
-    case J.HEAD:       return person.head;
-    case J.NECK:       return person.neck;
-    case J.SHOULDER_L: return person.shoulders.l;
-    case J.SHOULDER_R: return person.shoulders.r;
-    case J.ELBOW_L:    return person.elbows.l;
-    case J.ELBOW_R:    return person.elbows.r;
-    case J.WRIST_L:    return person.wrists.l;
-    case J.WRIST_R:    return person.wrists.r;
-    case J.HIP_L:      return person.hips.l;
-    case J.HIP_R:      return person.hips.r;
-    case J.KNEE_L:     return person.knees.l;
-    case J.KNEE_R:     return person.knees.r;
-    case J.ANKLE_L:    return person.ankles.l;
-    case J.ANKLE_R:    return person.ankles.r;
+    const rRand = Math.random();
+    let role, size;
+    if (rRand < coreFrac) {
+      role = 0;
+      size = 1.0 + Math.random() * 0.8;
+    } else if (rRand < coreFrac + edgeFrac) {
+      role = 1;
+      size = 1.2 + Math.random() * 1.4;
+    } else {
+      role = 2;
+      size = 0.6 + Math.random() * 0.8;
+    }
+    aRole[i] = role;
+    aSize[i] = size;
   }
-  return null;
+  return { positions, aAnchor, aPhase, aRole, aSize };
 }
 
 /** @type {import('../types.js').QFXModule} */
@@ -390,48 +648,76 @@ export default {
   id: 'ghost_machine',
   name: 'Ghost in the Machine',
   contextType: 'three',
+  // Heavy fragment shader — cap DPR so 2x retina screens don't double the
+  // fragment cost.
+  maxDpr: 1.25,
 
   params: [
-    { id: 'particleCount', label: 'Particles',     type: 'select', options: COUNT_OPTS, default: '30000' },
-    { id: 'palette',       label: 'Palette',       type: 'select', options: PALETTES,   default: 'cyan_spirit' },
-    { id: 'density',       label: 'Density',       type: 'range',  min: 0.4, max: 2.5, step: 0.05, default: 1.1 },
-    { id: 'swirl',         label: 'Swirl',         type: 'range',  min: 0,   max: 2.5, step: 0.05, default: 1.0,
+    { id: 'particleCount', label: 'Particles',    type: 'select', options: COUNT_OPTS, default: '15000' },
+    { id: 'palette',       label: 'Palette',      type: 'select', options: PALETTES,   default: 'cyan_spirit' },
+
+    { id: 'density',       label: 'Density',      type: 'range',  min: 0.3,  max: 2.0,  step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.total', mode: 'mul', amount: 0.25 },
       ] },
-    { id: 'glow',          label: 'Glow',          type: 'range',  min: 0,   max: 2,   step: 0.05, default: 1.0,
+
+    { id: 'breath',        label: 'Breath',       type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 1.0,
       modulators: [
-        { source: 'audio.bass',      mode: 'mul', amount: 0.50 },
+        { source: 'audio.bass',      mode: 'mul', amount: 0.45 },
+        { source: 'audio.beatPulse', mode: 'add', amount: 0.20 },
+      ] },
+
+    { id: 'coherence',     label: 'Coherence',    type: 'range',  min: 0.0,  max: 1.5,  step: 0.05, default: 0.7,
+      modulators: [
+        { source: 'audio.mids', mode: 'mul', amount: 0.20 },
+      ] },
+
+    { id: 'edgeDissolve',  label: 'Edge fray',    type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 0.8,
+      modulators: [
+        { source: 'audio.highs',      mode: 'mul', amount: 0.40 },
+        { source: 'audio.highsPulse', mode: 'add', amount: 0.20 },
+      ] },
+
+    { id: 'chestGlow',     label: 'Chest glow',   type: 'range',  min: 0.0,  max: 2.5,  step: 0.05, default: 1.0,
+      modulators: [
+        { source: 'audio.bass',      mode: 'mul', amount: 0.60 },
+        { source: 'audio.beatPulse', mode: 'add', amount: 0.40 },
+      ] },
+
+    { id: 'circuitPulse',  label: 'Circuit',      type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 1.0,
+      modulators: [
         { source: 'audio.beatPulse', mode: 'mul', amount: 0.40 },
+        { source: 'audio.highs',     mode: 'mul', amount: 0.25 },
       ] },
-    { id: 'edgeShimmer',   label: 'Edge shimmer',  type: 'range',  min: 0,   max: 2,   step: 0.05, default: 0.8,
+
+    { id: 'shimmer',       label: 'Shimmer',      type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 0.9,
       modulators: [
-        { source: 'audio.highs',      mode: 'mul', amount: 0.60 },
-        { source: 'audio.highsPulse', mode: 'mul', amount: 0.40 },
+        { source: 'audio.highs',      mode: 'mul', amount: 0.50 },
+        { source: 'audio.highsPulse', mode: 'add', amount: 0.30 },
       ] },
-    { id: 'bgEnergy',      label: 'BG energy',     type: 'range',  min: 0,   max: 2,   step: 0.05, default: 1.0,
+
+    { id: 'flowSpeed',     label: 'Flow speed',   type: 'range',  min: 0.2,  max: 2.5,  step: 0.05, default: 1.0,
       modulators: [
-        { source: 'audio.mids',      mode: 'mul', amount: 0.35 },
-        { source: 'audio.beatPulse', mode: 'mul', amount: 0.25 },
+        { source: 'audio.mids', mode: 'mul', amount: 0.20 },
       ] },
-    { id: 'flinch',        label: 'Beat flinch',   type: 'range',  min: 0,   max: 1,   step: 0.02, default: 0.4 },
-    { id: 'poseTrack',     label: 'pose tracks',   type: 'toggle', default: true },
-    { id: 'reactivity',    label: 'reactivity',    type: 'range',  min: 0,   max: 2,   step: 0.05, default: 1.0 },
+
+    { id: 'violet',        label: 'Violet hint',  type: 'range',  min: 0.0,  max: 1.5,  step: 0.05, default: 0.4 },
+    { id: 'reactivity',    label: 'reactivity',   type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 1.0 },
   ],
 
   presets: {
-    wraith:    { particleCount: '30000', palette: 'cyan_spirit',    density: 1.1, swirl: 1.0, glow: 1.0, edgeShimmer: 0.8, bgEnergy: 1.0, flinch: 0.4, reactivity: 1.0 },
-    seance:    { particleCount: '30000', palette: 'magenta_wraith', density: 1.3, swirl: 1.8, glow: 1.4, edgeShimmer: 1.4, bgEnergy: 1.5, flinch: 0.6 },
-    dataghost: { particleCount: '30000', palette: 'green_phantom',  density: 0.8, swirl: 0.6, glow: 0.8, edgeShimmer: 1.6, bgEnergy: 1.8, flinch: 0.3 },
-    shroud:    { particleCount: '60000', palette: 'white_shroud',   density: 1.6, swirl: 0.5, glow: 1.6, edgeShimmer: 0.5, bgEnergy: 0.7, flinch: 0.5 },
+    apparition: { particleCount: '15000', palette: 'cyan_spirit',     density: 1.0, breath: 1.0, coherence: 0.7,  edgeDissolve: 0.8, chestGlow: 1.0, circuitPulse: 1.0, shimmer: 0.9, flowSpeed: 1.0, violet: 0.4, reactivity: 1.0 },
+    seance:     { particleCount: '15000', palette: 'violet_seance',   density: 1.2, breath: 1.3, coherence: 0.4,  edgeDissolve: 1.4, chestGlow: 1.4, circuitPulse: 1.4, shimmer: 1.2, flowSpeed: 1.4, violet: 0.9, reactivity: 1.0 },
+    sentinel:   { particleCount: '30000', palette: 'emerald_phantom', density: 1.1, breath: 0.7, coherence: 1.0,  edgeDissolve: 0.5, chestGlow: 0.8, circuitPulse: 1.6, shimmer: 0.7, flowSpeed: 0.7, violet: 0.2, reactivity: 1.0 },
+    shroud:     { particleCount: '30000', palette: 'white_shroud',    density: 1.4, breath: 0.9, coherence: 0.9,  edgeDissolve: 0.4, chestGlow: 1.2, circuitPulse: 0.6, shimmer: 0.5, flowSpeed: 0.5, violet: 0.0, reactivity: 1.0 },
   },
 
   autoPhase: {
     steps: [
-      { palette: 'cyan_spirit',    swirl: 1.0, bgEnergy: 1.0 },
-      { palette: 'magenta_wraith', swirl: 1.8, bgEnergy: 1.5 },
-      { palette: 'green_phantom',  swirl: 0.6, bgEnergy: 1.8 },
-      { palette: 'white_shroud',   swirl: 0.5, bgEnergy: 0.7 },
+      { palette: 'cyan_spirit',     coherence: 0.7, edgeDissolve: 0.8, flowSpeed: 1.0, violet: 0.4 },
+      { palette: 'violet_seance',   coherence: 0.4, edgeDissolve: 1.4, flowSpeed: 1.4, violet: 0.9 },
+      { palette: 'emerald_phantom', coherence: 1.0, edgeDissolve: 0.5, flowSpeed: 0.7, violet: 0.2 },
+      { palette: 'white_shroud',    coherence: 0.9, edgeDissolve: 0.4, flowSpeed: 0.5, violet: 0.0 },
     ],
   },
 
@@ -441,88 +727,87 @@ export default {
     camera.position.z = 5;
     camera.lookAt(0, 0, 0);
 
-    const uJointsArr = Array.from({ length: 14 }, () => new Vector3());
-
+    // Shared uniforms — colors and audio uniforms feed both materials,
+    // so the particle layer breathes alongside the volumetric pass.
     const uniforms = {
-      uTime:        { value: 0 },
-      uAspect:      { value: 1 },
-      uSwirl:       { value: 1.0 },
-      uFlinch:      { value: 0.4 },
-      uGlow:        { value: 1.0 },
-      uShimmer:     { value: 0.8 },
-      uPointSize:   { value: 1.6 },
-      uSkullRadius: { value: 0.085 },
-      uBgEnergy:    { value: 1.0 },
-      uIdleBlend:   { value: 1 },
-      uBodyColor:   { value: new Color(0.55, 0.85, 1.00) },
-      uEdgeColor:   { value: new Color(0.20, 0.55, 0.90) },
-      uSkullColor:  { value: new Color(0.85, 0.95, 1.00) },
-      uBgColor:     { value: new Color(0.10, 0.35, 0.65) },
-      uJoints:      { value: uJointsArr },
-      uBands:       { value: new Vector4() },
-      uBeat:        { value: new Vector2() },
-      uMids:        { value: new Vector2() },
-      uHighs:       { value: new Vector2() },
-      uRms:         { value: 0 },
+      uTime:         { value: 0 },
+      uAspect:       { value: 1 },
+
+      uBgColor:      { value: new Color() },
+      uTraceColor:   { value: new Color() },
+      uGhostDeep:    { value: new Color() },
+      uGhostBright:  { value: new Color() },
+      uGhostCore:    { value: new Color() },
+      uViolet:       { value: new Color() },
+
+      uBands:        { value: new Vector4() },
+      uBeat:         { value: new Vector2() },
+      uMids:         { value: new Vector2() },
+      uHighs:        { value: new Vector2() },
+      uRms:          { value: 0 },
+
+      uDensity:      { value: 1.0 },
+      uBreath:       { value: 1.0 },
+      uCoherence:    { value: 0.7 },
+      uEdgeDissolve: { value: 0.8 },
+      uChestGlow:    { value: 1.0 },
+      uCircuitPulse: { value: 1.0 },
+      uShimmer:      { value: 0.9 },
+      uFlowSpeed:    { value: 1.0 },
+      uVioletGain:   { value: 0.4 },
+
+      uPointScale:   { value: 2.0 },
     };
 
-    // Background — fullscreen ortho plane, rendered first via renderOrder.
-    const bgMat = new ShaderMaterial({
+    // Volumetric pass — fullscreen quad, rendered first (renderOrder = -1).
+    const volMat = new ShaderMaterial({
       uniforms,
-      vertexShader:   VERT_BG,
-      fragmentShader: FRAG_BG,
+      vertexShader:   VERT_VOLUME,
+      fragmentShader: FRAG_VOLUME,
       depthWrite: false,
       depthTest:  false,
     });
-    const bgMesh = new Mesh(new PlaneGeometry(2, 2), bgMat);
-    bgMesh.renderOrder = -1;
-    bgMesh.frustumCulled = false;
-    scene.add(bgMesh);
-
-    const ghostGroup = new Group();
-    scene.add(ghostGroup);
+    const volMesh = new Mesh(new PlaneGeometry(2, 2), volMat);
+    volMesh.renderOrder = -1;
+    volMesh.frustumCulled = false;
+    scene.add(volMesh);
 
     let points = null;
-    let geometry = null;
-    let ghostMat = null;
+    let pGeom = null;
+    let pMat = null;
     let geomKey = '';
 
-    function rebuildGeometry(count) {
+    function rebuildParticles(count) {
       if (points) {
-        ghostGroup.remove(points);
-        if (geometry) geometry.dispose();
-        if (ghostMat) ghostMat.dispose();
-        points = null; geometry = null; ghostMat = null;
+        scene.remove(points);
+        if (pGeom) pGeom.dispose();
+        if (pMat)  pMat.dispose();
+        points = null; pGeom = null; pMat = null;
       }
       const a = generateParticles(count);
-      geometry = new BufferGeometry();
-      geometry.setAttribute('position', new BufferAttribute(a.positions, 3));
-      geometry.setAttribute('aBoneA',   new BufferAttribute(a.aBoneA,   1));
-      geometry.setAttribute('aBoneB',   new BufferAttribute(a.aBoneB,   1));
-      geometry.setAttribute('aT',       new BufferAttribute(a.aT,       1));
-      geometry.setAttribute('aPhase',   new BufferAttribute(a.aPhase,   1));
-      geometry.setAttribute('aSize',    new BufferAttribute(a.aSize,    1));
-      geometry.setAttribute('aRole',    new BufferAttribute(a.aRole,    1));
-      geometry.setAttribute('aOffset',  new BufferAttribute(a.aOffset,  3));
+      pGeom = new BufferGeometry();
+      // Three requires `position`; we never read it in the vert shader
+      // but the buffer has to exist for the draw call.
+      pGeom.setAttribute('position', new BufferAttribute(a.positions, 3));
+      pGeom.setAttribute('aAnchor',  new BufferAttribute(a.aAnchor, 3));
+      pGeom.setAttribute('aPhase',   new BufferAttribute(a.aPhase,  1));
+      pGeom.setAttribute('aRole',    new BufferAttribute(a.aRole,   1));
+      pGeom.setAttribute('aSize',    new BufferAttribute(a.aSize,   1));
 
-      ghostMat = new ShaderMaterial({
+      pMat = new ShaderMaterial({
         uniforms,
-        vertexShader:   VERT_GHOST,
-        fragmentShader: FRAG_GHOST,
+        vertexShader:   VERT_PARTICLE,
+        fragmentShader: FRAG_PARTICLE,
         transparent: true,
         depthWrite:  false,
         depthTest:   false,
         blending:    AdditiveBlending,
       });
-      points = new Points(geometry, ghostMat);
+      points = new Points(pGeom, pMat);
       points.frustumCulled = false;
-      ghostGroup.add(points);
+      scene.add(points);
     }
 
-    // Per-frame smoothing state (allocated once).
-    const smoothedJoints = Array.from({ length: 14 }, () => new Vector3());
-    const tmpTarget = new Vector3();
-    let idleBlend = 1;
     let audioRef = null;
 
     function update(field) {
@@ -530,66 +815,31 @@ export default {
       audioRef = audio;
       const p = field.params;
 
-      // Geometry rebuilds on count change only.
       const countStr = String(p.particleCount);
       if (countStr !== geomKey) {
-        const n = parseInt(countStr, 10) || 30000;
-        rebuildGeometry(n);
+        const n = parseInt(countStr, 10) || 15000;
+        rebuildParticles(n);
         geomKey = countStr;
       }
 
-      // Palette → color uniforms.
       const pal = PALETTE_COLORS[p.palette] || PALETTE_COLORS.cyan_spirit;
-      uniforms.uBodyColor.value.fromArray(pal.body);
-      uniforms.uEdgeColor.value.fromArray(pal.edge);
-      uniforms.uSkullColor.value.fromArray(pal.skull);
       uniforms.uBgColor.value.fromArray(pal.bg);
+      uniforms.uTraceColor.value.fromArray(pal.trace);
+      uniforms.uGhostDeep.value.fromArray(pal.deep);
+      uniforms.uGhostBright.value.fromArray(pal.bright);
+      uniforms.uGhostCore.value.fromArray(pal.core);
+      uniforms.uViolet.value.fromArray(pal.violet);
 
-      // Idle-vs-pose blend.
-      const person = field.pose?.people?.[0] ?? null;
-      const conf = person?.confidence ?? 0;
-      const wantIdle = (!p.poseTrack || !person || conf < 0.35) ? 1 : 0;
-      idleBlend += (wantIdle - idleBlend) * Math.min(1, field.dt * 3.0);
-      uniforms.uIdleBlend.value = idleBlend;
-
-      const aspect = uniforms.uAspect.value;
-      const lerpK = Math.min(1, field.dt * 12);
-
-      for (let i = 0; i < 14; i++) {
-        const idle = IDLE_POSE[i];
-        // Slow idle drift — same per-joint phase offsets so it reads as a
-        // single breathing figure, not jittering parts.
-        const driftX = Math.sin(field.time * 0.30 + i * 0.4) * 0.018;
-        const driftY = Math.sin(field.time * 0.45 + i * 0.7) * 0.013;
-
-        let tx, ty, tz;
-        if (idleBlend > 0.999 || !person) {
-          tx = idle[0] + driftX;
-          ty = idle[1] + driftY;
-          tz = idle[2];
-        } else {
-          const lm = pickJoint(person, i);
-          // Pose-to-ortho: mirror x (codebase convention, see modulation.poseHeadX).
-          const px = (1.0 - lm.x) * 2.0 * aspect - aspect;
-          const py = (0.5 - lm.y) * 2.0;
-          const pz = -(lm.z ?? 0) * 0.5;
-          // Blend toward idle when confidence is partial.
-          tx = px * (1 - idleBlend) + (idle[0] + driftX) * idleBlend;
-          ty = py * (1 - idleBlend) + (idle[1] + driftY) * idleBlend;
-          tz = pz * (1 - idleBlend) + idle[2] * idleBlend;
-        }
-        tmpTarget.set(tx, ty, tz);
-        smoothedJoints[i].lerp(tmpTarget, lerpK);
-        uJointsArr[i].copy(smoothedJoints[i]);
-      }
-
-      uniforms.uTime.value      = field.time;
-      uniforms.uSwirl.value     = p.swirl;
-      uniforms.uFlinch.value    = p.flinch;
-      uniforms.uGlow.value      = p.glow;
-      uniforms.uShimmer.value   = p.edgeShimmer;
-      uniforms.uPointSize.value = p.density * 1.6;
-      uniforms.uBgEnergy.value  = p.bgEnergy;
+      uniforms.uTime.value         = field.time;
+      uniforms.uDensity.value      = p.density;
+      uniforms.uBreath.value       = p.breath;
+      uniforms.uCoherence.value    = p.coherence;
+      uniforms.uEdgeDissolve.value = p.edgeDissolve;
+      uniforms.uChestGlow.value    = p.chestGlow;
+      uniforms.uCircuitPulse.value = p.circuitPulse;
+      uniforms.uShimmer.value      = p.shimmer;
+      uniforms.uFlowSpeed.value    = p.flowSpeed;
+      uniforms.uVioletGain.value   = p.violet;
     }
 
     function render() {
@@ -600,15 +850,18 @@ export default {
     function resize(w, h /*, dpr */) {
       const a = w / Math.max(1, h);
       camera.left = -a; camera.right = a;
-      camera.top = 1; camera.bottom = -1;
+      camera.top = 1;   camera.bottom = -1;
       camera.updateProjectionMatrix();
-      bgMesh.scale.set(a, 1, 1);
+      volMesh.scale.set(a, 1, 1);
       uniforms.uAspect.value = a;
+      // Scale point size with viewport height so the apparition looks the
+      // same density at any window size.
+      uniforms.uPointScale.value = Math.max(1.0, h / 360.0);
       renderer.setSize(w, h, false);
     }
 
     function dispose() {
-      // Renderer is core-owned. Only tear down our own scene graph.
+      // Renderer is core-owned; only tear down the scene graph.
       disposeObject3D(scene);
     }
 
