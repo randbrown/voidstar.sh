@@ -45,43 +45,46 @@ const COUNT_OPTS = ['6000', '15000', '30000', '60000'];
 const PALETTES   = ['cyan_spirit', 'violet_seance', 'emerald_phantom', 'white_shroud'];
 
 // Palette is four cyan-family colors plus a violet accent for highlights.
-//   bg     — circuit-board substrate base (deep navy)
-//   trace  — circuit traces / faint grid (dim cyan)
-//   deep   — outer ghost body fog (deep cyan)
-//   bright — main ghost glow (electric cyan)
-//   core   — brightest core / filament highlight (white-blue)
+// Defaults are tuned cold + dim — the figure should feel haunted, not
+// neon. The shader pulls a cool tint into shadows so a slightly darker
+// `bg` is fine even when audio is quiet.
+//   bg     — circuit-board substrate base (very dark navy / near-black)
+//   trace  — circuit traces / vias (dim icy cyan)
+//   deep   — outer ghost body fog (deep ocean cyan)
+//   bright — main ghost glow (electric cyan, never pure cyan-1.0)
+//   core   — brightest core / filament highlight (still tinted blue)
 //   violet — rare accent in highlights / face contour
 const PALETTE_COLORS = {
   cyan_spirit: {
-    bg:     [0.020, 0.040, 0.075],
-    trace:  [0.090, 0.420, 0.580],
-    deep:   [0.050, 0.500, 0.700],
-    bright: [0.260, 0.860, 0.960],
-    core:   [0.850, 0.985, 1.000],
+    bg:     [0.010, 0.022, 0.045],
+    trace:  [0.060, 0.300, 0.450],
+    deep:   [0.030, 0.260, 0.420],
+    bright: [0.180, 0.700, 0.880],
+    core:   [0.720, 0.940, 1.000],
     violet: [0.420, 0.260, 1.000],
   },
   violet_seance: {
-    bg:     [0.030, 0.020, 0.060],
-    trace:  [0.380, 0.180, 0.620],
-    deep:   [0.380, 0.220, 0.680],
-    bright: [0.700, 0.450, 1.000],
-    core:   [0.970, 0.870, 1.000],
+    bg:     [0.020, 0.014, 0.050],
+    trace:  [0.260, 0.130, 0.520],
+    deep:   [0.260, 0.150, 0.540],
+    bright: [0.560, 0.360, 0.960],
+    core:   [0.880, 0.780, 1.000],
     violet: [0.300, 0.700, 1.000],
   },
   emerald_phantom: {
-    bg:     [0.020, 0.040, 0.040],
-    trace:  [0.080, 0.520, 0.420],
-    deep:   [0.050, 0.560, 0.380],
-    bright: [0.300, 0.940, 0.700],
-    core:   [0.870, 1.000, 0.940],
+    bg:     [0.012, 0.030, 0.030],
+    trace:  [0.060, 0.380, 0.320],
+    deep:   [0.030, 0.420, 0.300],
+    bright: [0.220, 0.820, 0.620],
+    core:   [0.780, 0.980, 0.900],
     violet: [0.350, 0.300, 1.000],
   },
   white_shroud: {
-    bg:     [0.035, 0.045, 0.075],
-    trace:  [0.350, 0.450, 0.560],
-    deep:   [0.500, 0.620, 0.760],
-    bright: [0.820, 0.900, 1.000],
-    core:   [1.000, 1.000, 1.000],
+    bg:     [0.022, 0.030, 0.050],
+    trace:  [0.260, 0.340, 0.460],
+    deep:   [0.380, 0.500, 0.640],
+    bright: [0.700, 0.800, 0.920],
+    core:   [0.940, 0.960, 1.000],
     violet: [0.500, 0.420, 0.900],
   },
 };
@@ -170,6 +173,7 @@ const FRAG_VOLUME = /* glsl */`
   uniform float uCircuitPulse;
   uniform float uShimmer;
   uniform float uFlowSpeed;
+  uniform float uFlowPhase;   // monotonic accumulator (∫ flowSpeed dt)
   uniform float uVioletGain;
 
   ${NOISE_GLSL}
@@ -261,67 +265,91 @@ const FRAG_VOLUME = /* glsl */`
     return clamp(eyes + noseM * 0.32 + mouthM * 0.55, 0.0, 1.0);
   }
 
-  // PCB-style background. Restrained on purpose — the ghost is the star.
+  // PCB-style background. Each cell of a coarse grid hashes to one of a
+  // few trace primitives — straight, L-bend, T, pad — so the substrate
+  // reads as an actual circuit board rather than a tile pattern. Pulses
+  // travel along the horizontal traces; bright vias flicker sparsely.
   vec3 renderCircuit(vec2 uv) {
-    vec3 base = uBgColor;
+    vec3 col = uBgColor;
 
-    // Faint cell grid for substrate depth.
-    vec2 cellUv = uv * 9.0;
-    vec2 g = abs(fract(cellUv) - 0.5);
-    float gridLine = smoothstep(0.46, 0.50, max(g.x, g.y));
+    // Cell grid in [-aspect, aspect] × [-1, 1] space. Cells are roughly
+    // square because we multiply uv by a single scale.
+    float gridN = 14.0;
+    vec2 cellP  = uv * gridN * 0.5;
+    vec2 cellId = floor(cellP);
+    vec2 cuv    = fract(cellP) - 0.5;  // -0.5 .. 0.5 within the cell
+    float seed = hash21(cellId + 0.5);
 
-    // Horizontal traces — hashed rows, only a fraction are "live".
-    float traces = 0.0;
-    for (int i = 0; i < 4; i++) {
-      float fi = float(i);
+    float thickness = 0.045;
+    float core      = thickness * 0.45;
+    float trace = 0.0;
+    float pad   = 0.0;
 
-      // Row line — only rows with seed past a threshold get a trace.
-      float yLine = floor(uv.y * 14.0 + fi * 6.31);
-      float ySeed = hash21(vec2(yLine, fi + 7.0));
-      if (ySeed > 0.55) {
-        float yPos = (yLine + 0.5) / 14.0 - 1.0;
-        float thick = smoothstep(0.004, 0.0, abs(uv.y - yPos));
-        // Signal pulse traveling along the trace.
-        float wave = fract(uv.x * 0.45 - uTime * (0.15 + ySeed * 0.30) + fi * 0.31);
-        float pulse = exp(-pow((wave - 0.5) * 5.0, 2.0));
-        traces += thick * (0.20 + pulse * (0.50 + uCircuitPulse * 0.6));
-      }
-
-      // Column line — sparser.
-      float xLine = floor(uv.x * 14.0 + fi * 11.7);
-      float xSeed = hash21(vec2(xLine, fi + 19.0));
-      if (xSeed > 0.70) {
-        float xPos = (xLine + 0.5) / 14.0 - 1.0;
-        float thick = smoothstep(0.004, 0.0, abs(uv.x - xPos));
-        float wave = fract(uv.y * 0.45 - uTime * (0.10 + xSeed * 0.20) + fi * 0.71);
-        float pulse = exp(-pow((wave - 0.5) * 5.0, 2.0));
-        traces += thick * (0.15 + pulse * (0.40 + uCircuitPulse * 0.4));
-      }
+    if (seed < 0.30) {
+      // Empty cell — keeps the substrate sparse enough to breathe.
+    } else if (seed < 0.55) {
+      // Horizontal trace.
+      trace = smoothstep(thickness, core, abs(cuv.y));
+    } else if (seed < 0.74) {
+      // Vertical trace.
+      trace = smoothstep(thickness, core, abs(cuv.x));
+    } else if (seed < 0.90) {
+      // L-bend (one of four rotations).
+      float rs = hash21(cellId + 13.0);
+      float rot = floor(rs * 4.0);
+      vec2 lp = cuv;
+      if      (rot < 1.0) {}
+      else if (rot < 2.0) lp.x = -lp.x;
+      else if (rot < 3.0) lp.y = -lp.y;
+      else                lp   = -lp;
+      // Two arms: horizontal goes right from center, vertical goes up.
+      float h = (lp.x > -core) ? smoothstep(thickness, core, abs(lp.y)) : 0.0;
+      float v = (lp.y > -core) ? smoothstep(thickness, core, abs(lp.x)) : 0.0;
+      trace = max(h, v);
+      // Small pad at the bend to make the corner read.
+      pad = smoothstep(0.055, 0.025, length(cuv));
+    } else if (seed < 0.97) {
+      // Via / pad-only cell.
+      pad = smoothstep(0.080, 0.040, length(cuv));
+    } else {
+      // T-junction — three arms (left, right, down).
+      float h = smoothstep(thickness, core, abs(cuv.y));
+      float v = (cuv.y > -core) ? smoothstep(thickness, core, abs(cuv.x)) : 0.0;
+      trace = max(h, v);
+      pad = smoothstep(0.060, 0.025, length(cuv));
     }
 
-    // Nodes — sparse bright dots that flicker like neurons.
-    vec2 nodeId   = floor(uv * 12.0);
-    float nodeSeed = hash21(nodeId + 31.0);
-    vec2 nodeC = (nodeId + 0.5) / 12.0;
-    float nodeD = length(uv - nodeC) * uAspect;
-    float flicker = sin(uTime * (1.4 + nodeSeed * 3.5) + nodeSeed * 6.283) * 0.5 + 0.5;
-    float node = exp(-nodeD * 80.0)
-               * step(0.86, nodeSeed)
-               * (0.40 + flicker * 0.60)
-               * (1.0 + uBeat.y * 1.2 + uCircuitPulse * 0.5);
+    // Signal pulse traveling along horizontal traces. Per-cell phase so
+    // adjacent cells don't appear synchronized.
+    float pulse = 0.0;
+    float pSeed = hash21(cellId + 71.0);
+    if (trace > 0.02 && pSeed > 0.65) {
+      // Phase tied to uTime (not flow speed) so circuit timing stays steady.
+      float w = fract(uv.x * 0.42 - uTime * (0.20 + pSeed * 0.45) + pSeed * 9.7);
+      pulse = exp(-pow((w - 0.5) * 6.0, 2.0)) * trace;
+    }
 
-    vec3 col = base;
-    col += uTraceColor * 0.04 * gridLine;
-    col += uTraceColor * traces * 0.7;
-    col += uTraceColor * node * 2.2;
+    col += uTraceColor * trace * 0.28;
+    col += uTraceColor * pad   * 1.10;
+    col += uTraceColor * pulse * (0.55 + uCircuitPulse * 0.85 + uBeat.y * 0.6);
 
-    // Subtle horizontal scan haze so the substrate feels deep.
-    float haze = smoothstep(0.0, 0.7, abs(uv.y)) * 0.025;
-    col -= haze * uBgColor;
+    // Sparse bright vias — much smaller and rarer than before so they
+    // read as ICs powering on, not scattered LED tiles.
+    vec2 hotId = floor(uv * 6.0);
+    float hotSeed = hash21(hotId + 91.0);
+    vec2 hotC = (hotId + 0.5) / 6.0;
+    float hotD = length(uv - hotC) * uAspect;
+    float flicker = sin(uTime * (0.9 + hotSeed * 2.3) + hotSeed * 6.283) * 0.5 + 0.5;
+    float hotPad = exp(-hotD * 220.0)
+                 * step(0.94, hotSeed)
+                 * (0.45 + flicker * 0.55)
+                 * (1.0 + uBeat.y * 0.9 + uCircuitPulse * 0.4);
+    col += uTraceColor * hotPad * 1.6;
 
-    // Vignette — pushes the eye to center where the apparition sits.
-    float vig = 1.0 - smoothstep(0.6, 1.45, length(uv));
-    col *= 0.55 + 0.45 * vig;
+    // Strong vignette — corners go nearly black so the apparition lives
+    // in a pool of dark substrate rather than a uniform glow.
+    float vig = 1.0 - smoothstep(0.50, 1.45, length(uv));
+    col *= 0.22 + 0.78 * vig;
     return col;
   }
 
@@ -342,11 +370,12 @@ const FRAG_VOLUME = /* glsl */`
     float maskBase = smoothstep(0.06, -0.05, sdfBase);
 
     // ── 4. Curl-noise flow advection ─────────────────────────────────
-    // Upward drift for vapor, slow horizontal phase. Outside the body
-    // the flow has more authority so wisps peel off; inside, it churns
-    // but stays mostly contained.
+    // Flow uses uFlowPhase (a CPU-accumulated ∫ flowSpeed dt) instead of
+    // uTime * uFlowSpeed so changing flowSpeed at runtime doesn't make
+    // the phase jump — otherwise audio-modulated flowSpeed scrubs the
+    // noise field back and forth and the figure spazzes.
     vec2 flowP = uv * 2.2
-               + vec2(uTime * 0.04, -uTime * 0.13 * uFlowSpeed);
+               + vec2(uTime * 0.04, -uFlowPhase * 0.13);
     vec2 c = curl2(flowP);
 
     // Edge-dissolve magnitude grows with high-mid energy and the
@@ -359,17 +388,17 @@ const FRAG_VOLUME = /* glsl */`
     // ── 5. Volumetric smoke field ────────────────────────────────────
     // Two octaves of warped fBm: a slow churn + a faster wisp layer.
     vec2 nP1 = uv * 3.2 + c * 1.1
-             + vec2(uTime * 0.03, -uTime * 0.20 * uFlowSpeed);
+             + vec2(uTime * 0.03, -uFlowPhase * 0.20);
     float smokeA = fbm(nP1);
 
     vec2 nP2 = uv * 7.0 + c * 1.6
-             + vec2(-uTime * 0.05, -uTime * 0.32 * uFlowSpeed);
+             + vec2(-uTime * 0.05, -uFlowPhase * 0.32);
     float smokeB = fbm(nP2);
     smokeB = pow(smokeB, 1.6);
 
     // Filament threads — high-freq band with a hard ridge that picks
     // out thin glowing strands.
-    float fil = abs(fbm(uv * 11.0 + c * 2.2 + uTime * 0.18) - 0.50);
+    float fil = abs(fbm(uv * 11.0 + c * 2.2 + uFlowPhase * 0.18) - 0.50);
     fil = smoothstep(0.08, 0.0, fil);
 
     // ── 6. Composite density ─────────────────────────────────────────
@@ -382,67 +411,82 @@ const FRAG_VOLUME = /* glsl */`
     density += mask * fil * 0.55;
 
     // ── 7. Face cavities (subtractive, head-localized) ───────────────
+    // Cavities almost completely cut the density inside the head so the
+    // eye sockets read as dark holes in luminous fog. The head region
+    // mask is wider than the SDF so cavities can reach the edges of the
+    // skull without falling off.
     float face = faceCavities(uv, uTime);
-    float headRegion = exp(-pow(length(uv - vec2(0.0, 0.58)) / 0.20, 2.0));
-    // High-mids deepen the eye sockets — face "haunts" harder on snares.
-    float socketDepth = 0.78 + uHighs.x * 0.18;
+    float headRegion = exp(-pow(length(uv - vec2(0.0, 0.58)) / 0.22, 2.0));
+    // Sockets stay deep regardless of audio so the haunted face is the
+    // dominant visual feature.
+    float socketDepth = 0.94 + uHighs.x * 0.06;
     density *= 1.0 - face * headRegion * socketDepth;
 
     // ── 8. Chest vortex ──────────────────────────────────────────────
+    // Tighter falloff than before so the glow doesn't swallow the head.
     vec2 chestP = uv - vec2(0.0, 0.05);
     float chestR = length(chestP);
     float chestAng = atan(chestP.y, chestP.x);
-    float swirl = sin(chestAng * 3.0 - uTime * 1.1 - chestR * 6.0);
-    float chestField = exp(-chestR * chestR * 18.0);
+    float swirl = sin(chestAng * 3.0 - uFlowPhase * 1.0 - chestR * 6.0);
+    float chestField = exp(-chestR * chestR * 28.0);
     float chestGlow = chestField
-                    * (0.55 + 0.45 * (swirl * 0.5 + 0.5))
-                    * (0.6 + uChestGlow * 1.4 + uBeat.y * 0.6);
+                    * (0.45 + 0.55 * (swirl * 0.5 + 0.5))
+                    * (0.35 + uChestGlow * 0.70 + uBeat.y * 0.30);
     chestGlow *= mask;
 
     // ── 9. Edge wisps outside the SDF ────────────────────────────────
     // These let the figure leak vapor into the surrounding space.
     float edgeBand = smoothstep(0.18, 0.0, sdfBase) - smoothstep(0.0, -0.10, sdfBase);
     edgeBand = max(0.0, edgeBand);
-    float wisp = edgeBand * smokeB * (0.6 + uEdgeDissolve * 0.7);
+    float wisp = edgeBand * smokeB * (0.5 + uEdgeDissolve * 0.6);
 
     // ── 10. Color ramp ───────────────────────────────────────────────
-    // Outer → mid → inner, governed by composite intensity.
-    float intensity = clamp(density * (0.7 + uDensity * 0.6), 0.0, 1.3);
-    vec3 colGhost = mix(uGhostDeep, uGhostBright, smoothstep(0.05, 0.55, intensity));
-    colGhost = mix(colGhost, uGhostCore, smoothstep(0.60, 1.0, intensity));
+    // Deliberately restrained — outer → mid → inner without ever
+    // saturating to pure white. The intensity ceiling is now 1.0 (not
+    // 1.3) and the brightest tier uses uGhostBright biased toward core,
+    // not core directly, so the figure stays luminous instead of solar.
+    float intensity = clamp(density * (0.55 + uDensity * 0.55), 0.0, 1.0);
+    vec3 colGhost = mix(uGhostDeep * 0.55, uGhostBright * 0.85,
+                        smoothstep(0.04, 0.55, intensity));
+    colGhost = mix(colGhost,
+                   mix(uGhostBright, uGhostCore, 0.55),
+                   smoothstep(0.65, 1.0, intensity));
 
-    // Chest core glow — pushes toward white-blue at the heart.
-    colGhost += uGhostCore * chestGlow * 0.9;
+    // Chest core glow uses bright cyan, not pure white — the heart
+    // glows like cold plasma rather than blowing out.
+    colGhost += mix(uGhostBright, uGhostCore, 0.35) * chestGlow * 0.45;
 
-    // Filament highlight tinted slightly toward core.
-    colGhost += uGhostCore * fil * mask * 0.35;
+    // Filament highlight tinted toward bright cyan (not white).
+    colGhost += uGhostBright * fil * mask * 0.28;
 
     // Outer wisps in deep cyan with a hint of violet.
-    vec3 wispCol = mix(uGhostDeep, uViolet, uVioletGain * 0.35);
-    colGhost += wispCol * wisp * 0.55;
+    vec3 wispCol = mix(uGhostDeep, uViolet, uVioletGain * 0.40);
+    colGhost += wispCol * wisp * 0.50;
 
     // Violet accent in the brightest interior highlights, very sparing.
     colGhost = mix(colGhost,
-                   mix(colGhost, uViolet, 0.18),
+                   mix(colGhost, uViolet, 0.20),
                    uVioletGain * smoothstep(0.78, 1.05, intensity));
 
     // ── 11. Treble shimmer over the ghost mask ───────────────────────
-    // High-frequency speckle on top of the smoke; intentionally faint.
     float sparkleN = hash21(floor(uv * 240.0) + floor(uTime * 18.0));
-    float sparkle = step(0.985, sparkleN) * mask * uShimmer * (0.3 + uHighs.y * 0.7);
-    colGhost += uGhostCore * sparkle * 0.6;
+    float sparkle = step(0.985, sparkleN) * mask * uShimmer * (0.25 + uHighs.y * 0.55);
+    colGhost += uGhostBright * sparkle * 0.55;
 
     // ── 12. Composite over BG ────────────────────────────────────────
-    vec3 col = bg + colGhost * (intensity + wisp * 0.6);
+    vec3 col = bg + colGhost * (intensity + wisp * 0.55);
 
-    // ── 13. Soft bloom approximation + Reinhard tonemap ──────────────
-    // Heavy whites are intentionally pulled back — we want luminous,
-    // not blown out. Reinhard keeps highlights present without clipping.
-    col *= 1.05;
-    col = col / (1.0 + col * 0.34);
-
-    // Subtle final desaturation toward black to deepen shadow regions.
-    col = mix(col, col * 0.92, 1.0 - smoothstep(0.05, 0.45, length(col)));
+    // ── 13. Tonemap + ominous shadow lift ────────────────────────────
+    // Stronger Reinhard so bright regions hold colour instead of going
+    // pure white. Then darken shadows further and pull a cold blue
+    // tint into the darkest pixels so the substrate feels haunted.
+    col = col / (1.0 + col * 0.55);
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    // Lift only the brightest pixels slightly; crush the shadows.
+    col *= 0.82 + 0.30 * smoothstep(0.10, 0.85, lum);
+    // Cool-shadow tint: where col is dim, push a touch toward icy blue.
+    vec3 coolShadow = mix(col, col * vec3(0.85, 0.95, 1.10), 1.0 - smoothstep(0.0, 0.35, lum));
+    col = coolShadow;
 
     gl_FragColor = vec4(col, 1.0);
   }
@@ -463,6 +507,7 @@ const VERT_PARTICLE = /* glsl */`
   uniform float uTime;
   uniform float uAspect;
   uniform float uFlowSpeed;
+  uniform float uFlowPhase;
   uniform float uShimmer;
   uniform float uDensity;
   uniform vec4  uBands;
@@ -484,12 +529,13 @@ const VERT_PARTICLE = /* glsl */`
 
     vec2 p = aAnchor.xy;
 
-    // Slow upward drift (vapor rising).
-    float drift = uTime * 0.08 * (0.6 + uFlowSpeed * 0.6);
+    // Slow upward drift (vapor rising). Uses uFlowPhase so changes in
+    // flowSpeed don't cause discontinuous phase jumps.
+    float drift = uFlowPhase * 0.08;
 
     // Curl flow — same field the fragment shader uses, sampled at the
     // anchor so motes ride the same currents as the fog.
-    vec2 flowP = p * 2.2 + vec2(uTime * 0.04, -uTime * 0.13 * uFlowSpeed);
+    vec2 flowP = p * 2.2 + vec2(uTime * 0.04, -uFlowPhase * 0.13);
     float e = 0.06;
     vec2 c = vec2(
       fbm(flowP + vec2(0.0, e)) - fbm(flowP - vec2(0.0, e)),
@@ -656,53 +702,65 @@ export default {
     { id: 'particleCount', label: 'Particles',    type: 'select', options: COUNT_OPTS, default: '15000' },
     { id: 'palette',       label: 'Palette',      type: 'select', options: PALETTES,   default: 'cyan_spirit' },
 
-    { id: 'density',       label: 'Density',      type: 'range',  min: 0.3,  max: 2.0,  step: 0.05, default: 1.0,
+    // All numeric ranges go past 1.0 baseline so the user can push every
+    // dimension well beyond "default". Audio modulator amounts roughly
+    // doubled so the figure visibly breathes with the music.
+    { id: 'density',       label: 'Density',      type: 'range',  min: 0.0,  max: 3.0,  step: 0.05, default: 1.0,
       modulators: [
-        { source: 'audio.total', mode: 'mul', amount: 0.25 },
+        { source: 'audio.total',     mode: 'mul', amount: 0.50 },
+        { source: 'audio.beatPulse', mode: 'add', amount: 0.30 },
       ] },
 
-    { id: 'breath',        label: 'Breath',       type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 1.0,
+    { id: 'breath',        label: 'Breath',       type: 'range',  min: 0.0,  max: 3.5,  step: 0.05, default: 1.0,
       modulators: [
-        { source: 'audio.bass',      mode: 'mul', amount: 0.45 },
-        { source: 'audio.beatPulse', mode: 'add', amount: 0.20 },
+        { source: 'audio.bass',      mode: 'mul', amount: 0.90 },
+        { source: 'audio.beatPulse', mode: 'add', amount: 0.50 },
       ] },
 
-    { id: 'coherence',     label: 'Coherence',    type: 'range',  min: 0.0,  max: 1.5,  step: 0.05, default: 0.7,
+    { id: 'coherence',     label: 'Coherence',    type: 'range',  min: 0.0,  max: 2.5,  step: 0.05, default: 0.7,
       modulators: [
-        { source: 'audio.mids', mode: 'mul', amount: 0.20 },
+        { source: 'audio.mids',      mode: 'mul', amount: 0.45 },
+        { source: 'audio.beatPulse', mode: 'add', amount: 0.30 },
       ] },
 
-    { id: 'edgeDissolve',  label: 'Edge fray',    type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 0.8,
+    { id: 'edgeDissolve',  label: 'Edge fray',    type: 'range',  min: 0.0,  max: 3.0,  step: 0.05, default: 0.8,
       modulators: [
-        { source: 'audio.highs',      mode: 'mul', amount: 0.40 },
-        { source: 'audio.highsPulse', mode: 'add', amount: 0.20 },
+        { source: 'audio.highs',      mode: 'mul', amount: 0.80 },
+        { source: 'audio.highsPulse', mode: 'add', amount: 0.50 },
       ] },
 
-    { id: 'chestGlow',     label: 'Chest glow',   type: 'range',  min: 0.0,  max: 2.5,  step: 0.05, default: 1.0,
+    { id: 'chestGlow',     label: 'Chest glow',   type: 'range',  min: 0.0,  max: 4.0,  step: 0.05, default: 1.0,
       modulators: [
-        { source: 'audio.bass',      mode: 'mul', amount: 0.60 },
+        { source: 'audio.bass',      mode: 'mul', amount: 1.20 },
+        { source: 'audio.beatPulse', mode: 'add', amount: 0.80 },
+      ] },
+
+    { id: 'circuitPulse',  label: 'Circuit',      type: 'range',  min: 0.0,  max: 3.0,  step: 0.05, default: 1.0,
+      modulators: [
+        { source: 'audio.beatPulse', mode: 'mul', amount: 0.90 },
+        { source: 'audio.highs',     mode: 'mul', amount: 0.60 },
+      ] },
+
+    { id: 'shimmer',       label: 'Shimmer',      type: 'range',  min: 0.0,  max: 3.0,  step: 0.05, default: 0.9,
+      modulators: [
+        { source: 'audio.highs',      mode: 'mul', amount: 0.90 },
+        { source: 'audio.highsPulse', mode: 'add', amount: 0.60 },
+      ] },
+
+    // Flow speed is clamped to >= 0 (no reverse flow — that's what was
+    // making it spaz when audio swung it negative). Modulator is `add`
+    // so audio.mids tops it up rather than scaling, which is gentler
+    // when the slider sits low.
+    { id: 'flowSpeed',     label: 'Flow speed',   type: 'range',  min: 0.0,  max: 4.0,  step: 0.05, default: 1.0,
+      modulators: [
+        { source: 'audio.mids', mode: 'add', amount: 0.50 },
+      ] },
+
+    { id: 'violet',        label: 'Violet hint',  type: 'range',  min: 0.0,  max: 2.5,  step: 0.05, default: 0.4,
+      modulators: [
         { source: 'audio.beatPulse', mode: 'add', amount: 0.40 },
       ] },
-
-    { id: 'circuitPulse',  label: 'Circuit',      type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 1.0,
-      modulators: [
-        { source: 'audio.beatPulse', mode: 'mul', amount: 0.40 },
-        { source: 'audio.highs',     mode: 'mul', amount: 0.25 },
-      ] },
-
-    { id: 'shimmer',       label: 'Shimmer',      type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 0.9,
-      modulators: [
-        { source: 'audio.highs',      mode: 'mul', amount: 0.50 },
-        { source: 'audio.highsPulse', mode: 'add', amount: 0.30 },
-      ] },
-
-    { id: 'flowSpeed',     label: 'Flow speed',   type: 'range',  min: 0.2,  max: 2.5,  step: 0.05, default: 1.0,
-      modulators: [
-        { source: 'audio.mids', mode: 'mul', amount: 0.20 },
-      ] },
-
-    { id: 'violet',        label: 'Violet hint',  type: 'range',  min: 0.0,  max: 1.5,  step: 0.05, default: 0.4 },
-    { id: 'reactivity',    label: 'reactivity',   type: 'range',  min: 0.0,  max: 2.0,  step: 0.05, default: 1.0 },
+    { id: 'reactivity',    label: 'reactivity',   type: 'range',  min: 0.0,  max: 3.0,  step: 0.05, default: 1.0 },
   ],
 
   presets: {
@@ -755,6 +813,11 @@ export default {
       uCircuitPulse: { value: 1.0 },
       uShimmer:      { value: 0.9 },
       uFlowSpeed:    { value: 1.0 },
+      // uFlowPhase is the CPU-accumulated integral of flowSpeed*dt. The
+      // shader uses this for all flow-driven sampling so changing
+      // flowSpeed (or its audio modulation) changes the *rate* of phase
+      // advance, never the phase itself — no scrubbing.
+      uFlowPhase:    { value: 0 },
       uVioletGain:   { value: 0.4 },
 
       uPointScale:   { value: 2.0 },
@@ -831,6 +894,14 @@ export default {
       uniforms.uGhostCore.value.fromArray(pal.core);
       uniforms.uViolet.value.fromArray(pal.violet);
 
+      // Audio-modulated flowSpeed can swing below 0 if the user dials
+      // high reactivity and the modulator amount is large; clamp before
+      // integrating so the phase never runs backwards (which would
+      // visibly scrub the noise field — the "spaz" symptom).
+      const flowSpeed = Math.max(0, p.flowSpeed);
+      uniforms.uFlowSpeed.value = flowSpeed;
+      uniforms.uFlowPhase.value += flowSpeed * Math.min(field.dt, 0.1);
+
       uniforms.uTime.value         = field.time;
       uniforms.uDensity.value      = p.density;
       uniforms.uBreath.value       = p.breath;
@@ -839,7 +910,6 @@ export default {
       uniforms.uChestGlow.value    = p.chestGlow;
       uniforms.uCircuitPulse.value = p.circuitPulse;
       uniforms.uShimmer.value      = p.shimmer;
-      uniforms.uFlowSpeed.value    = p.flowSpeed;
       uniforms.uVioletGain.value   = p.violet;
     }
 
