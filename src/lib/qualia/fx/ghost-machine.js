@@ -37,6 +37,7 @@ import {
   Scene, OrthographicCamera, Points, Mesh, PlaneGeometry,
   BufferGeometry, BufferAttribute, ShaderMaterial,
   AdditiveBlending, Color, Vector2, Vector4,
+  LineSegments, Group,
 } from 'three';
 import { applyAudioUniforms, disposeObject3D } from '../three-host.js';
 import { scaleAudio } from '../field.js';
@@ -175,6 +176,10 @@ const FRAG_VOLUME = /* glsl */`
   uniform float uFlowSpeed;
   uniform float uFlowPhase;   // monotonic accumulator (∫ flowSpeed dt)
   uniform float uVioletGain;
+  uniform float uOffsetX;
+  uniform float uOffsetY;
+  uniform float uTilt;
+  uniform float uSkeletonVis;
 
   ${NOISE_GLSL}
 
@@ -358,7 +363,19 @@ const FRAG_VOLUME = /* glsl */`
     vec2 uv = (vUv * 2.0 - 1.0) * vec2(uAspect, 1.0);
 
     // ── 1. Background ────────────────────────────────────────────────
+    // Substrate is NOT tilted/offset — it's the world the apparition
+    // floats in front of, so it stays put.
     vec3 bg = renderCircuit(uv);
+
+    // Body-local UV: shift by drift offset and rotate by tilt. All
+    // figure-related sampling (SDF, smoke, face, chest vortex) uses
+    // this transformed coord so the apparition appears to sway and
+    // drift relative to the static circuit board.
+    vec2 uvBody = uv - vec2(uOffsetX, uOffsetY);
+    {
+      float ct = cos(uTilt), st = sin(uTilt);
+      uvBody = mat2(ct, -st, st, ct) * uvBody;
+    }
 
     // ── 2. Breathing parameters ──────────────────────────────────────
     // Slow underlying breath, amplified by bass.
@@ -366,7 +383,7 @@ const FRAG_VOLUME = /* glsl */`
     float breathExpand = breathPhase * (0.20 + uBreath * 1.6);
 
     // ── 3. Humanoid SDF + base mask ──────────────────────────────────
-    float sdfBase = humanoidSDF(uv, breathExpand);
+    float sdfBase = humanoidSDF(uvBody, breathExpand);
     float maskBase = smoothstep(0.06, -0.05, sdfBase);
 
     // ── 4. Curl-noise flow advection ─────────────────────────────────
@@ -374,31 +391,32 @@ const FRAG_VOLUME = /* glsl */`
     // uTime * uFlowSpeed so changing flowSpeed at runtime doesn't make
     // the phase jump — otherwise audio-modulated flowSpeed scrubs the
     // noise field back and forth and the figure spazzes.
-    vec2 flowP = uv * 2.2
+    vec2 flowP = uvBody * 2.2
                + vec2(uTime * 0.04, -uFlowPhase * 0.13);
     vec2 c = curl2(flowP);
 
     // Edge-dissolve magnitude grows with high-mid energy and the
     // uEdgeDissolve parameter.
     float fray = 0.045 + uEdgeDissolve * 0.080 + uHighs.x * 0.020;
-    vec2  pAdv = uv + c * fray * (1.0 - maskBase * 0.55);
+    vec2  pAdv = uvBody + c * fray * (1.0 - maskBase * 0.55);
     float sdfAdv  = humanoidSDF(pAdv, breathExpand);
     float maskAdv = smoothstep(0.10, -0.02, sdfAdv);
 
     // ── 5. Volumetric smoke field ────────────────────────────────────
-    // Two octaves of warped fBm: a slow churn + a faster wisp layer.
-    vec2 nP1 = uv * 3.2 + c * 1.1
+    // Two octaves of warped fBm sampled in body-local space so the
+    // smoke travels with the figure when it drifts.
+    vec2 nP1 = uvBody * 3.2 + c * 1.1
              + vec2(uTime * 0.03, -uFlowPhase * 0.20);
     float smokeA = fbm(nP1);
 
-    vec2 nP2 = uv * 7.0 + c * 1.6
+    vec2 nP2 = uvBody * 7.0 + c * 1.6
              + vec2(-uTime * 0.05, -uFlowPhase * 0.32);
     float smokeB = fbm(nP2);
     smokeB = pow(smokeB, 1.6);
 
     // Filament threads — high-freq band with a hard ridge that picks
     // out thin glowing strands.
-    float fil = abs(fbm(uv * 11.0 + c * 2.2 + uFlowPhase * 0.18) - 0.50);
+    float fil = abs(fbm(uvBody * 11.0 + c * 2.2 + uFlowPhase * 0.18) - 0.50);
     fil = smoothstep(0.08, 0.0, fil);
 
     // ── 6. Composite density ─────────────────────────────────────────
@@ -415,14 +433,22 @@ const FRAG_VOLUME = /* glsl */`
 
     float density = mask * (0.32 + 0.55 * smokeA2 + 0.28 * smokeB);
     density += mask * fil * (0.55 + solidify * 0.55);
+    // At very high coherence (and when the skeleton overlay is on)
+    // gently fade the volumetric body so the wireframe bones can read
+    // through. Holds the haunted-X-ray look without making the smoke
+    // disappear entirely.
+    float bodyFade = 1.0 - clamp((cohRaw - 2.5) * 0.18, 0.0, 0.55)
+                          * smoothstep(0.05, 0.40, uSkeletonVis);
+    density *= bodyFade;
 
     // ── 7. Face cavities (subtractive, head-localized) ───────────────
     // Cavities almost completely cut the density inside the head so the
     // eye sockets read as dark holes in luminous fog. The head region
     // mask is wider than the SDF so cavities can reach the edges of the
-    // skull without falling off.
-    float face = faceCavities(uv, uTime);
-    float headRegion = exp(-pow(length(uv - vec2(0.0, 0.58)) / 0.22, 2.0));
+    // skull without falling off. Body-local UV so the face travels with
+    // the figure when it drifts.
+    float face = faceCavities(uvBody, uTime);
+    float headRegion = exp(-pow(length(uvBody - vec2(0.0, 0.58)) / 0.22, 2.0));
     // Sockets stay deep regardless of audio so the haunted face is the
     // dominant visual feature.
     float socketDepth = 0.94 + uHighs.x * 0.06;
@@ -430,7 +456,7 @@ const FRAG_VOLUME = /* glsl */`
 
     // ── 8. Chest vortex ──────────────────────────────────────────────
     // Tighter falloff than before so the glow doesn't swallow the head.
-    vec2 chestP = uv - vec2(0.0, 0.05);
+    vec2 chestP = uvBody - vec2(0.0, 0.05);
     float chestR = length(chestP);
     float chestAng = atan(chestP.y, chestP.x);
     float swirl = sin(chestAng * 3.0 - uFlowPhase * 1.0 - chestR * 6.0);
@@ -635,6 +661,94 @@ const FRAG_PARTICLE = /* glsl */`
   }
 `;
 
+// ── Skeleton shaders ─────────────────────────────────────────────────────
+//
+// Both LineSegments + Points (joint nodes) use these two shaders. They
+// fade in via uSkeletonVis (= base param × coherence-derived gate) so
+// they're invisible at low coherence and dominate at high coherence.
+// A subtle breath drives a tiny vertical scale on the lines so the
+// skeleton appears to inhale alongside the apparition.
+const VERT_SKELETON_LINE = /* glsl */`
+  uniform float uTime;
+  uniform float uBreath;
+  varying float vY;
+  void main() {
+    vY = position.y;
+    // Subtle inflation: y stretches outward from waist (y≈0) on inhale.
+    float pulse = sin(uTime * 0.45) * 0.5 + 0.5;
+    float scale = 1.0 + pulse * uBreath * 0.012;
+    vec3 p = vec3(position.x, position.y * scale, position.z);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  }
+`;
+
+const FRAG_SKELETON_LINE = /* glsl */`
+  precision highp float;
+  uniform vec3  uGhostBright;
+  uniform vec3  uGhostCore;
+  uniform float uSkeletonVis;
+  uniform vec2  uBeat;
+  varying float vY;
+  void main() {
+    if (uSkeletonVis < 0.001) discard;
+    // Spine + ribs near vertical center brighten a touch on beats.
+    vec3 col = mix(uGhostBright, uGhostCore, 0.45 + uBeat.y * 0.35);
+    gl_FragColor = vec4(col, uSkeletonVis * 0.85);
+  }
+`;
+
+const VERT_SKELETON_NODE = /* glsl */`
+  attribute float aPhase;
+  attribute float aSize;
+
+  uniform float uTime;
+  uniform float uBreath;
+  uniform float uPointScale;
+  uniform float uSkeletonVis;
+  uniform vec2  uBeat;
+  uniform vec4  uBands;
+
+  varying float vPhase;
+
+  void main() {
+    vPhase = aPhase;
+    float pulse = sin(uTime * 0.45) * 0.5 + 0.5;
+    float scale = 1.0 + pulse * uBreath * 0.012;
+    vec3 p = vec3(position.x, position.y * scale, position.z);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+
+    // Per-node flicker so they feel alive even at static coherence.
+    float flick = 0.6 + 0.4 * sin(uTime * (1.4 + aPhase) + aPhase * 6.283);
+    float size = aSize * uPointScale * flick
+               * (0.7 + uBands.w * 0.5 + uBeat.y * 0.6);
+    // Hide nodes when the skeleton layer is off — saves overdraw.
+    size *= smoothstep(0.05, 0.30, uSkeletonVis);
+    gl_PointSize = size;
+  }
+`;
+
+const FRAG_SKELETON_NODE = /* glsl */`
+  precision highp float;
+  uniform vec3  uGhostBright;
+  uniform vec3  uGhostCore;
+  uniform float uSkeletonVis;
+  uniform vec2  uBeat;
+  varying float vPhase;
+  void main() {
+    if (uSkeletonVis < 0.001) discard;
+    vec2 d = gl_PointCoord - 0.5;
+    float r2 = dot(d, d);
+    if (r2 > 0.25) discard;
+    // Soft sphere with bright core.
+    float core = exp(-r2 * 24.0);
+    float halo = exp(-r2 * 4.0);
+    vec3 col = mix(uGhostBright, uGhostCore, core);
+    col += uGhostCore * core * (uBeat.y * 0.6);
+    float a = (halo * 0.35 + core * 1.10) * uSkeletonVis;
+    gl_FragColor = vec4(col * (0.4 + core * 1.2), a);
+  }
+`;
+
 // Generate anchor points biased to the humanoid silhouette. Particles are
 // sampled from soft body regions (head, chest, shoulders, lower body) with
 // different role weights — so the visual distribution matches the figure.
@@ -708,6 +822,152 @@ function generateParticles(count) {
   return { positions, aAnchor, aPhase, aRole, aSize };
 }
 
+// ── Skeleton overlay ─────────────────────────────────────────────────────
+//
+// Anatomical wireframe rendered as a LineSegments mesh + glowing joint
+// Points. Both layers are invisible at low coherence and fade in as the
+// figure locks down, so dialing coherence high reveals "the machine
+// generating consciousness" beneath the fog.
+//
+// Joints are anatomical landmarks in ortho space ([-aspect, aspect] × [-1,1]).
+// Coordinates were hand-tuned to align with the same humanoid SDF used by
+// the volumetric pass — head at y≈0.62, sternum at y≈0.25, pelvis at y≈-0.25.
+const JOINTS = {
+  // Skull octagon (cranium outline) — 8 perimeter points.
+  s0: [ 0.000,  0.760],
+  s1: [ 0.075,  0.730],
+  s2: [ 0.108,  0.660],
+  s3: [ 0.092,  0.580],
+  s4: [-0.092,  0.580],
+  s5: [-0.108,  0.660],
+  s6: [-0.075,  0.730],
+  // Mandible (jaw).
+  jL: [-0.060,  0.535],
+  jR: [ 0.060,  0.535],
+  jC: [ 0.000,  0.520],
+  // Cervical spine — short column under the skull.
+  c1: [ 0.000,  0.495],
+  c2: [ 0.000,  0.455],
+  c3: [ 0.000,  0.420],
+  // Thoracic spine — 7 vertebrae down through the chest.
+  t1: [ 0.000,  0.380],
+  t2: [ 0.000,  0.330],
+  t3: [ 0.000,  0.280],
+  t4: [ 0.000,  0.220],
+  t5: [ 0.000,  0.160],
+  t6: [ 0.000,  0.090],
+  t7: [ 0.000,  0.020],
+  // Lumbar spine — 5 vertebrae down to the sacrum.
+  l1: [ 0.000, -0.050],
+  l2: [ 0.000, -0.110],
+  l3: [ 0.000, -0.170],
+  l4: [ 0.000, -0.220],
+  l5: [ 0.000, -0.270],
+  // Pelvis triangle.
+  pL: [-0.150, -0.310],
+  pR: [ 0.150, -0.310],
+  pB: [ 0.000, -0.380],
+  // Clavicles & shoulders.
+  clL: [-0.080,  0.355],
+  clR: [ 0.080,  0.355],
+  shL: [-0.275,  0.310],
+  shR: [ 0.275,  0.310],
+  // Sternum — three plates of breastbone.
+  stT: [ 0.000,  0.310],
+  stM: [ 0.000,  0.205],
+  stB: [ 0.000,  0.105],
+  // Ribcage — 5 ribs per side, anchored to spine on inner end and
+  // curving out + slightly forward. Pairs (Ln, Rn) sit at matching y.
+  rL1: [-0.205,  0.295], rR1: [ 0.205,  0.295],
+  rL2: [-0.250,  0.215], rR2: [ 0.250,  0.215],
+  rL3: [-0.265,  0.135], rR3: [ 0.265,  0.135],
+  rL4: [-0.250,  0.055], rR4: [ 0.250,  0.055],
+  rL5: [-0.215, -0.015], rR5: [ 0.215, -0.015],
+  // Arms — humerus + forearm endpoints (vague; arms are looser).
+  elL: [-0.335,  0.075], elR: [ 0.335,  0.075],
+  wrL: [-0.380, -0.150], wrR: [ 0.380, -0.150],
+};
+
+// Bones — list of joint-pair edges that form the wireframe.
+const BONES = [
+  // Skull perimeter.
+  ['s0','s1'], ['s1','s2'], ['s2','s3'], ['s3','s4'],
+  ['s4','s5'], ['s5','s6'], ['s6','s0'],
+  // Skull inner ridges (cheekbones / brow).
+  ['s2','s5'], ['s1','s6'],
+  // Mandible.
+  ['s3','jR'], ['jR','jC'], ['jC','jL'], ['jL','s4'],
+  // Spine: skull → cervical → thoracic → lumbar → sacrum.
+  ['s0','c1'], ['c1','c2'], ['c2','c3'], ['c3','t1'],
+  ['t1','t2'], ['t2','t3'], ['t3','t4'], ['t4','t5'],
+  ['t5','t6'], ['t6','t7'], ['t7','l1'],
+  ['l1','l2'], ['l2','l3'], ['l3','l4'], ['l4','l5'],
+  // Pelvis triangle + sacrum connection.
+  ['l5','pL'], ['l5','pR'], ['pL','pB'], ['pR','pB'], ['pL','pR'],
+  // Clavicles & shoulders.
+  ['c3','clL'], ['c3','clR'], ['clL','shL'], ['clR','shR'],
+  // Sternum.
+  ['c3','stT'], ['stT','stM'], ['stM','stB'],
+  // Ribcage — spine anchors + lateral arcs + sternum cartilage.
+  ['t1','rL1'], ['rL1','rL2'], ['rL2','rL3'],
+  ['rL3','rL4'], ['rL4','rL5'], ['rL5','t6'],
+  ['t1','rR1'], ['rR1','rR2'], ['rR2','rR3'],
+  ['rR3','rR4'], ['rR4','rR5'], ['rR5','t6'],
+  ['rL1','stT'], ['rR1','stT'],
+  ['rL2','stM'], ['rR2','stM'],
+  ['rL3','stB'], ['rR3','stB'],
+  // Cross-bracing — short diagonals between adjacent ribs give the
+  // low-poly digital-wireframe feel of the inspiration images.
+  ['rL1','rL2'], ['rL2','rL3'], ['rL3','rL4'], ['rL4','rL5'],
+  ['rR1','rR2'], ['rR2','rR3'], ['rR3','rR4'], ['rR4','rR5'],
+  ['shL','rL1'], ['shR','rR1'],
+  // Arms.
+  ['shL','elL'], ['elL','wrL'],
+  ['shR','elR'], ['elR','wrR'],
+];
+
+// Subset of joints that get a glowing Point (visual emphasis at key
+// vertebrae + skull + shoulders + pelvis corners). Excludes most rib
+// midpoints to keep the node count restrained.
+const JOINT_NODES = [
+  's0','s1','s2','s3','s4','s5','s6','jL','jR','jC',
+  'c1','c2','c3','t1','t3','t5','t7','l1','l3','l5',
+  'pL','pR','pB','clL','clR','shL','shR',
+  'stT','stM','stB',
+  'rL1','rR1','rL3','rR3','rL5','rR5',
+  'elL','elR','wrL','wrR',
+];
+
+// Build flat Float32Arrays for the wireframe (lines) and joint nodes.
+// Each line vertex carries the y of its anchor so the breath uniform can
+// drive a per-vertex vertical scale (top of skeleton breathes a touch
+// more than the pelvis, like a chest swelling under fog).
+function buildSkeletonGeometry() {
+  const lineVerts = new Float32Array(BONES.length * 2 * 3);
+  let lp = 0;
+  for (const [a, b] of BONES) {
+    const A = JOINTS[a]; const B = JOINTS[b];
+    lineVerts[lp++] = A[0]; lineVerts[lp++] = A[1]; lineVerts[lp++] = 0;
+    lineVerts[lp++] = B[0]; lineVerts[lp++] = B[1]; lineVerts[lp++] = 0;
+  }
+
+  const nodeVerts = new Float32Array(JOINT_NODES.length * 3);
+  const nodePhase = new Float32Array(JOINT_NODES.length);
+  const nodeSize  = new Float32Array(JOINT_NODES.length);
+  for (let i = 0; i < JOINT_NODES.length; i++) {
+    const J = JOINTS[JOINT_NODES[i]];
+    nodeVerts[i * 3 + 0] = J[0];
+    nodeVerts[i * 3 + 1] = J[1];
+    nodeVerts[i * 3 + 2] = 0;
+    nodePhase[i] = Math.random() * Math.PI * 2;
+    // Skull + sternum joints a bit larger; ribs/arms smaller.
+    const key = JOINT_NODES[i];
+    nodeSize[i] = (key.startsWith('s') || key === 'jC' || key.startsWith('st'))
+      ? 2.2 : (key.startsWith('r')) ? 1.4 : 1.8;
+  }
+  return { lineVerts, nodeVerts, nodePhase, nodeSize };
+}
+
 /** @type {import('../types.js').QFXModule} */
 export default {
   id: 'ghost_machine',
@@ -728,12 +988,18 @@ export default {
       modulators: [
         { source: 'audio.total',     mode: 'mul', amount: 0.50 },
         { source: 'audio.beatPulse', mode: 'add', amount: 0.30 },
+        // Pose: a confident user makes the apparition more present.
+        { source: 'pose.confidence', mode: 'add', amount: 0.20 },
       ] },
 
     { id: 'breath',        label: 'Breath',       type: 'range',  min: 0.0,  max: 3.5,  step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.bass',      mode: 'mul', amount: 0.90 },
         { source: 'audio.beatPulse', mode: 'add', amount: 0.50 },
+        // Pose: leaning into camera (wider shoulder span) → deeper inhale.
+        { source: 'pose.shoulderSpan', mode: 'add', amount: 0.25 },
+        // Time: a slow secondary inhale layered on the main breath cycle.
+        { source: 'time.med',        mode: 'add', amount: 0.20 },
       ] },
 
     // Coherence past 1.0 keeps adding effect — the shader uses values
@@ -744,24 +1010,33 @@ export default {
       modulators: [
         { source: 'audio.mids',      mode: 'mul', amount: 0.45 },
         { source: 'audio.beatPulse', mode: 'add', amount: 0.30 },
+        // Pose: a confidently-tracked user steadies the figure into form.
+        { source: 'pose.confidence', mode: 'add', amount: 0.40 },
       ] },
 
     { id: 'edgeDissolve',  label: 'Edge fray',    type: 'range',  min: 0.0,  max: 3.0,  step: 0.05, default: 0.8,
       modulators: [
         { source: 'audio.highs',      mode: 'mul', amount: 0.80 },
         { source: 'audio.highsPulse', mode: 'add', amount: 0.50 },
+        // Pose: arms wide → vapor leaks out further.
+        { source: 'pose.wristSpread', mode: 'add', amount: 0.35 },
       ] },
 
     { id: 'chestGlow',     label: 'Chest glow',   type: 'range',  min: 0.0,  max: 4.0,  step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.bass',      mode: 'mul', amount: 1.20 },
         { source: 'audio.beatPulse', mode: 'add', amount: 0.80 },
+        // Pose: hands raised (wristMidY < 0) → chest brightens.
+        // amount negative so up = brighter.
+        { source: 'pose.wristMidY',  mode: 'add', amount: -0.45 },
       ] },
 
     { id: 'circuitPulse',  label: 'Circuit',      type: 'range',  min: 0.0,  max: 3.0,  step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.beatPulse', mode: 'mul', amount: 0.90 },
         { source: 'audio.highs',     mode: 'mul', amount: 0.60 },
+        // Time: substrate pulses slowly on its own, even in silence.
+        { source: 'time.fast',       mode: 'add', amount: 0.25 },
       ] },
 
     { id: 'shimmer',       label: 'Shimmer',      type: 'range',  min: 0.0,  max: 3.0,  step: 0.05, default: 0.9,
@@ -777,21 +1052,64 @@ export default {
     { id: 'flowSpeed',     label: 'Flow speed',   type: 'range',  min: 0.0,  max: 4.0,  step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.mids', mode: 'add', amount: 0.50 },
+        // Time: gentle ebb/flow over ~30s — feels like supernatural tide.
+        { source: 'time.slow',  mode: 'add', amount: 0.35 },
       ] },
 
     { id: 'violet',        label: 'Violet hint',  type: 'range',  min: 0.0,  max: 2.5,  step: 0.05, default: 0.4,
       modulators: [
         { source: 'audio.beatPulse', mode: 'add', amount: 0.40 },
+        // Pose: head leaned back → more violet (otherworldly).
+        { source: 'pose.headPitch',  mode: 'add', amount: 0.25 },
+        // Time: figure slowly cycles between cyan and violet hues.
+        { source: 'time.slow',       mode: 'add', amount: 0.30 },
       ] },
+
+    // Anatomical wireframe overlay. The on-screen layer fades in based
+    // on this base value AND on coherence (so the bones appear only
+    // when the figure has locked into a stable shape). Set to 0 for
+    // pure smoke; push past 1 for an aggressive HUD-skeleton look.
+    { id: 'skeleton',      label: 'Skeleton',     type: 'range',  min: 0.0,  max: 2.5,  step: 0.05, default: 1.0,
+      modulators: [
+        { source: 'audio.beatPulse', mode: 'add', amount: 0.30 },
+        { source: 'audio.bass',      mode: 'add', amount: 0.20 },
+        { source: 'pose.confidence', mode: 'add', amount: 0.25 },
+      ] },
+
+    // Drift / tilt: subtle motion that ties the figure to the user
+    // without becoming a literal pose tracker. Pose+time modulators
+    // sum so the apparition has autonomous sway even with no person
+    // in frame; when a user is detected they additionally shift it.
+    { id: 'driftX', label: 'Drift X', type: 'range', min: -0.35, max: 0.35, step: 0.01, default: 0.00,
+      modulators: [
+        { source: 'pose.head.x',   mode: 'add', amount: 0.12 },
+        { source: 'time.slow',     mode: 'add', amount: 0.04 },
+        { source: 'time.fast',     mode: 'add', amount: 0.015 },
+      ] },
+    { id: 'driftY', label: 'Drift Y', type: 'range', min: -0.25, max: 0.25, step: 0.01, default: 0.00,
+      modulators: [
+        { source: 'pose.head.y',   mode: 'add', amount: 0.06 },
+        { source: 'time.medCos',   mode: 'add', amount: 0.03 },
+      ] },
+    { id: 'tilt',   label: 'Tilt',   type: 'range', min: -0.50, max: 0.50, step: 0.01, default: 0.00,
+      modulators: [
+        // Shoulder roll → figure sways in the same direction.
+        { source: 'pose.shoulderRoll', mode: 'add', amount: 0.30 },
+        // Time: independent slow sway so the figure breathes laterally
+        // even in still rooms.
+        { source: 'time.slowCos',     mode: 'add', amount: 0.08 },
+      ] },
+
     { id: 'reactivity',    label: 'reactivity',   type: 'range',  min: 0.0,  max: 3.0,  step: 0.05, default: 1.0 },
   ],
 
   presets: {
     // 'default' is also wired to the topbar reset button (core.applyFxPreset('default')).
-    default:    { particleCount: '15000', palette: 'cyan_spirit',     density: 1.0, breath: 1.0, coherence: 0.7,  edgeDissolve: 0.8, chestGlow: 1.0, circuitPulse: 1.0, shimmer: 0.9, flowSpeed: 1.0, violet: 0.4, reactivity: 1.0 },
-    seance:     { particleCount: '15000', palette: 'violet_seance',   density: 1.2, breath: 1.3, coherence: 0.4,  edgeDissolve: 1.4, chestGlow: 1.4, circuitPulse: 1.4, shimmer: 1.2, flowSpeed: 1.4, violet: 0.9, reactivity: 1.0 },
-    sentinel:   { particleCount: '30000', palette: 'emerald_phantom', density: 1.1, breath: 0.7, coherence: 1.0,  edgeDissolve: 0.5, chestGlow: 0.8, circuitPulse: 1.6, shimmer: 0.7, flowSpeed: 0.7, violet: 0.2, reactivity: 1.0 },
-    shroud:     { particleCount: '30000', palette: 'white_shroud',    density: 1.4, breath: 0.9, coherence: 0.9,  edgeDissolve: 0.4, chestGlow: 1.2, circuitPulse: 0.6, shimmer: 0.5, flowSpeed: 0.5, violet: 0.0, reactivity: 1.0 },
+    default:    { particleCount: '15000', palette: 'cyan_spirit',     density: 1.0, breath: 1.0, coherence: 0.7,  edgeDissolve: 0.8, chestGlow: 1.0, circuitPulse: 1.0, shimmer: 0.9, flowSpeed: 1.0, violet: 0.4, skeleton: 1.0, driftX: 0.0, driftY: 0.0, tilt: 0.0, reactivity: 1.0 },
+    seance:     { particleCount: '15000', palette: 'violet_seance',   density: 1.2, breath: 1.3, coherence: 0.4,  edgeDissolve: 1.4, chestGlow: 1.4, circuitPulse: 1.4, shimmer: 1.2, flowSpeed: 1.4, violet: 0.9, skeleton: 0.4, driftX: 0.0, driftY: 0.0, tilt: 0.0, reactivity: 1.0 },
+    sentinel:   { particleCount: '30000', palette: 'emerald_phantom', density: 1.1, breath: 0.7, coherence: 2.5,  edgeDissolve: 0.5, chestGlow: 0.8, circuitPulse: 1.6, shimmer: 0.7, flowSpeed: 0.7, violet: 0.2, skeleton: 1.6, driftX: 0.0, driftY: 0.0, tilt: 0.0, reactivity: 1.0 },
+    xray:       { particleCount: '15000', palette: 'cyan_spirit',     density: 0.6, breath: 0.7, coherence: 4.5,  edgeDissolve: 0.2, chestGlow: 0.5, circuitPulse: 1.2, shimmer: 0.4, flowSpeed: 0.5, violet: 0.2, skeleton: 2.2, driftX: 0.0, driftY: 0.0, tilt: 0.0, reactivity: 1.0 },
+    shroud:     { particleCount: '30000', palette: 'white_shroud',    density: 1.4, breath: 0.9, coherence: 3.5,  edgeDissolve: 0.3, chestGlow: 1.2, circuitPulse: 0.6, shimmer: 0.5, flowSpeed: 0.5, violet: 0.0, skeleton: 1.4, driftX: 0.0, driftY: 0.0, tilt: 0.0, reactivity: 1.0 },
   },
 
   // Auto-phase walks these step-by-step on the topbar `auto` button.
@@ -847,6 +1165,18 @@ export default {
       // advance, never the phase itself — no scrubbing.
       uFlowPhase:    { value: 0 },
       uVioletGain:   { value: 0.4 },
+      // uSkeletonVis is the effective on-screen opacity for the
+      // wireframe overlay — base `skeleton` param × coherence-derived
+      // gate. Computed on the JS side each frame.
+      uSkeletonVis:  { value: 0 },
+      // Body offset + tilt — drives subtle drift/sway. The volumetric
+      // pass uses these directly in the shader to shift the SDF
+      // sampling; the skeleton/particle layers ride a Group whose
+      // position/rotation get the same values applied so all layers
+      // stay aligned.
+      uOffsetX:      { value: 0 },
+      uOffsetY:      { value: 0 },
+      uTilt:         { value: 0 },
 
       uPointScale:   { value: 2.0 },
     };
@@ -864,6 +1194,55 @@ export default {
     volMesh.frustumCulled = false;
     scene.add(volMesh);
 
+    // ── Body group ────────────────────────────────────────────────────
+    // Skeleton + particle layers ride a single Group so drift (offset)
+    // and tilt apply to all of them at once. The volumetric pass is a
+    // fullscreen quad and has to apply the same transform in-shader.
+    const bodyGroup = new Group();
+    scene.add(bodyGroup);
+
+    // ── Skeleton overlay ──────────────────────────────────────────────
+    // Built once — geometry is static; the shader fades / scales it
+    // each frame via uniforms. LineSegments handles the wireframe;
+    // Points handles the bright joint nodes on top.
+    const skelData = buildSkeletonGeometry();
+
+    const skelLineGeom = new BufferGeometry();
+    skelLineGeom.setAttribute('position',
+      new BufferAttribute(skelData.lineVerts, 3));
+    const skelLineMat = new ShaderMaterial({
+      uniforms,
+      vertexShader:   VERT_SKELETON_LINE,
+      fragmentShader: FRAG_SKELETON_LINE,
+      transparent: true,
+      depthWrite:  false,
+      depthTest:   false,
+      blending:    AdditiveBlending,
+    });
+    const skelLines = new LineSegments(skelLineGeom, skelLineMat);
+    skelLines.frustumCulled = false;
+    bodyGroup.add(skelLines);
+
+    const skelNodeGeom = new BufferGeometry();
+    skelNodeGeom.setAttribute('position',
+      new BufferAttribute(skelData.nodeVerts, 3));
+    skelNodeGeom.setAttribute('aPhase',
+      new BufferAttribute(skelData.nodePhase, 1));
+    skelNodeGeom.setAttribute('aSize',
+      new BufferAttribute(skelData.nodeSize, 1));
+    const skelNodeMat = new ShaderMaterial({
+      uniforms,
+      vertexShader:   VERT_SKELETON_NODE,
+      fragmentShader: FRAG_SKELETON_NODE,
+      transparent: true,
+      depthWrite:  false,
+      depthTest:   false,
+      blending:    AdditiveBlending,
+    });
+    const skelNodes = new Points(skelNodeGeom, skelNodeMat);
+    skelNodes.frustumCulled = false;
+    bodyGroup.add(skelNodes);
+
     let points = null;
     let pGeom = null;
     let pMat = null;
@@ -871,7 +1250,7 @@ export default {
 
     function rebuildParticles(count) {
       if (points) {
-        scene.remove(points);
+        bodyGroup.remove(points);
         if (pGeom) pGeom.dispose();
         if (pMat)  pMat.dispose();
         points = null; pGeom = null; pMat = null;
@@ -897,7 +1276,7 @@ export default {
       });
       points = new Points(pGeom, pMat);
       points.frustumCulled = false;
-      scene.add(points);
+      bodyGroup.add(points);
     }
 
     let audioRef = null;
@@ -939,6 +1318,30 @@ export default {
       uniforms.uCircuitPulse.value = p.circuitPulse;
       uniforms.uShimmer.value      = p.shimmer;
       uniforms.uVioletGain.value   = p.violet;
+
+      // Skeleton on-screen opacity. Two gates: the user's `skeleton`
+      // base param and a smoothstep on coherence so the bones only
+      // appear once the figure has locked into a stable shape (0.7 →
+      // 2.5). At coherence < 0.7 the skeleton is fully hidden.
+      const skelBase = Math.max(0, p.skeleton);
+      const cohGate  = Math.max(0, Math.min(1, (p.coherence - 0.7) / 1.8));
+      // Final opacity caps at ~1.0 so high `skeleton` alone (with low
+      // coherence) doesn't override the coherence gate.
+      uniforms.uSkeletonVis.value = Math.min(1.0, skelBase * cohGate);
+
+      // Drift + tilt — applied to the bodyGroup (skeleton + particles)
+      // AND mirrored as uniforms so the volumetric fragment shader can
+      // shift the SDF sampling to match. Clamp the param values
+      // defensively in case audio/pose modulators push them past the
+      // declared min/max.
+      const drX  = Math.max(-0.45, Math.min(0.45, p.driftX));
+      const drY  = Math.max(-0.35, Math.min(0.35, p.driftY));
+      const tlt  = Math.max(-0.80, Math.min(0.80, p.tilt));
+      bodyGroup.position.set(drX, drY, 0);
+      bodyGroup.rotation.z = tlt;
+      uniforms.uOffsetX.value = drX;
+      uniforms.uOffsetY.value = drY;
+      uniforms.uTilt.value    = tlt;
     }
 
     function render() {
