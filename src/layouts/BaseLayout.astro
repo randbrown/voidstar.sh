@@ -68,6 +68,35 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
       });
     }
   </script>
+
+  <!-- Mobile diagnostics: ?debug=1 (or ?debug=eruda) injects the Eruda
+       in-page DevTools overlay so phones can see console errors without
+       a USB cable. Sticky via localStorage so PWA navigations keep it.
+       ?debug=0 turns it off. -->
+  <script is:inline>
+    (function () {
+      try {
+        var qs = new URLSearchParams(location.search);
+        var qDebug = qs.get('debug');
+        var KEY = 'voidstar.debug.console';
+        if (qDebug === '0' || qDebug === 'off') {
+          localStorage.removeItem(KEY);
+          return;
+        }
+        if (qDebug === '1' || qDebug === 'eruda' || qDebug === 'on') {
+          localStorage.setItem(KEY, 'eruda');
+        }
+        if (localStorage.getItem(KEY) !== 'eruda') return;
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/eruda';
+        s.crossOrigin = 'anonymous';
+        s.onload = function () {
+          try { window.eruda && window.eruda.init(); } catch (_) {}
+        };
+        document.head.appendChild(s);
+      } catch (_) { /* localStorage blocked or similar — silently skip */ }
+    })();
+  </script>
 </head>
 <body>
   <Header />

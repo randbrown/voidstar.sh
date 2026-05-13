@@ -706,7 +706,8 @@ export default {
   ],
 
   presets: {
-    apparition: { particleCount: '15000', palette: 'cyan_spirit',     density: 1.0, breath: 1.0, coherence: 0.7,  edgeDissolve: 0.8, chestGlow: 1.0, circuitPulse: 1.0, shimmer: 0.9, flowSpeed: 1.0, violet: 0.4, reactivity: 1.0 },
+    // 'default' is also wired to the topbar reset button (core.applyFxPreset('default')).
+    default:    { particleCount: '15000', palette: 'cyan_spirit',     density: 1.0, breath: 1.0, coherence: 0.7,  edgeDissolve: 0.8, chestGlow: 1.0, circuitPulse: 1.0, shimmer: 0.9, flowSpeed: 1.0, violet: 0.4, reactivity: 1.0 },
     seance:     { particleCount: '15000', palette: 'violet_seance',   density: 1.2, breath: 1.3, coherence: 0.4,  edgeDissolve: 1.4, chestGlow: 1.4, circuitPulse: 1.4, shimmer: 1.2, flowSpeed: 1.4, violet: 0.9, reactivity: 1.0 },
     sentinel:   { particleCount: '30000', palette: 'emerald_phantom', density: 1.1, breath: 0.7, coherence: 1.0,  edgeDissolve: 0.5, chestGlow: 0.8, circuitPulse: 1.6, shimmer: 0.7, flowSpeed: 0.7, violet: 0.2, reactivity: 1.0 },
     shroud:     { particleCount: '30000', palette: 'white_shroud',    density: 1.4, breath: 0.9, coherence: 0.9,  edgeDissolve: 0.4, chestGlow: 1.2, circuitPulse: 0.6, shimmer: 0.5, flowSpeed: 0.5, violet: 0.0, reactivity: 1.0 },
