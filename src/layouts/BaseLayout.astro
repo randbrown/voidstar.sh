@@ -72,7 +72,10 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
   <!-- Mobile diagnostics: ?debug=1 (or ?debug=eruda) injects the Eruda
        in-page DevTools overlay so phones can see console errors without
        a USB cable. Sticky via localStorage so PWA navigations keep it.
-       ?debug=0 turns it off. -->
+       Always renders a small "DBG" status badge in the corner so users
+       can confirm the script ran even if eruda's CDN is blocked. Tap
+       the badge to open eruda; long-press to disable. ?debug=0 also
+       disables it. -->
   <script is:inline>
     (function () {
       try {
@@ -90,19 +93,67 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
         if (localStorage.getItem(KEY) !== 'eruda') return;
         console.log('[voidstar] debug=eruda — loading overlay…');
 
-        // Eruda's init() requires document.body. We're running in <head>,
-        // so defer init until DOMContentLoaded if we got there first.
+        // Status badge — appended to body once it exists. Color codes
+        // its state so users get a yes/no signal even without a console:
+        //   amber  "DBG…"  = script ran, eruda still loading
+        //   green  "DBG"   = eruda initialized
+        //   red    "DBG!"  = eruda CDN unreachable / init failed
+        var badge = null;
+        function ensureBadge() {
+          if (badge || !document.body) return badge;
+          badge = document.createElement('div');
+          badge.id = 'voidstar-debug-badge';
+          badge.textContent = 'DBG…';
+          badge.title = 'voidstar debug — tap to open console; long-press to disable';
+          var s = badge.style;
+          s.position = 'fixed';
+          s.top = 'calc(env(safe-area-inset-top, 0px) + 6px)';
+          s.right = '6px';
+          s.zIndex = '2147483647';
+          s.padding = '2px 6px';
+          s.borderRadius = '4px';
+          s.font = '11px ui-monospace, Menlo, Consolas, monospace';
+          s.background = 'rgba(0,0,0,0.72)';
+          s.color = '#ffc857';
+          s.border = '1px solid #ffc857';
+          s.pointerEvents = 'auto';
+          s.cursor = 'pointer';
+          var pressTimer = null;
+          badge.addEventListener('click', function () {
+            try { window.eruda && window.eruda.show(); } catch (_) {}
+          });
+          badge.addEventListener('touchstart', function () {
+            pressTimer = setTimeout(function () {
+              localStorage.removeItem(KEY);
+              location.reload();
+            }, 1200);
+          });
+          badge.addEventListener('touchend', function () { clearTimeout(pressTimer); });
+          document.body.appendChild(badge);
+          return badge;
+        }
+        function setBadge(text, color) {
+          var b = ensureBadge();
+          if (!b) return;
+          b.textContent = text;
+          b.style.color = color;
+          b.style.borderColor = color;
+        }
+
         function bootEruda() {
           if (!window.eruda) {
             console.error('[voidstar] eruda failed to load (CDN blocked?). '
               + 'Try chrome://inspect remote debugging instead.');
+            setBadge('DBG!', '#ff5e7e');
             return;
           }
           try {
             window.eruda.init();
-            console.log('[voidstar] eruda initialized — tap the floating gear.');
+            console.log('[voidstar] eruda initialized — tap the gear (or the badge).');
+            setBadge('DBG', '#7cf2a5');
           } catch (e) {
             console.error('[voidstar] eruda.init() threw', e);
+            setBadge('DBG!', '#ff5e7e');
           }
         }
         function loadFrom(src, next) {
@@ -112,10 +163,12 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
           s.onload  = bootEruda;
           s.onerror = next || function () {
             console.error('[voidstar] eruda CDN unreachable:', src);
+            setBadge('DBG!', '#ff5e7e');
           };
           document.head.appendChild(s);
         }
         function start() {
+          ensureBadge();
           // jsdelivr first, fall back to unpkg if it 404s or is blocked.
           loadFrom('https://cdn.jsdelivr.net/npm/eruda', function () {
             loadFrom('https://unpkg.com/eruda', null);

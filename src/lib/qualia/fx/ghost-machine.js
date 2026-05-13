@@ -402,13 +402,19 @@ const FRAG_VOLUME = /* glsl */`
     fil = smoothstep(0.08, 0.0, fil);
 
     // ── 6. Composite density ─────────────────────────────────────────
-    // Mix between the rigid SDF mask (high coherence) and the wildly
-    // advected one (low coherence) so the figure firms up on beats.
-    float coh = clamp(uCoherence + uBeat.y * 0.25 + uMids.x * 0.10, 0.0, 1.2);
-    float mask = mix(maskAdv, maskBase, clamp(coh * 0.6, 0.0, 0.9));
+    // Mix between the rigid SDF mask (low coherence → wildly advected)
+    // and the base mask (high coherence → firm silhouette). At
+    // coherence > 1 we also solidify the smoke (push it toward a
+    // constant) and brighten filaments, so dialing past 1.0 keeps
+    // making the figure more present rather than clipping.
+    float cohRaw   = uCoherence + uBeat.y * 0.40 + uMids.x * 0.20;
+    float lockMix  = clamp(cohRaw, 0.0, 1.0);
+    float solidify = clamp(cohRaw - 1.0, 0.0, 4.0) * 0.20;
+    float mask     = mix(maskAdv, maskBase, lockMix);
+    float smokeA2  = mix(smokeA, 1.0, clamp(solidify, 0.0, 0.85));
 
-    float density = mask * (0.32 + 0.55 * smokeA + 0.28 * smokeB);
-    density += mask * fil * 0.55;
+    float density = mask * (0.32 + 0.55 * smokeA2 + 0.28 * smokeB);
+    density += mask * fil * (0.55 + solidify * 0.55);
 
     // ── 7. Face cavities (subtractive, head-localized) ───────────────
     // Cavities almost completely cut the density inside the head so the
@@ -717,7 +723,11 @@ export default {
         { source: 'audio.beatPulse', mode: 'add', amount: 0.50 },
       ] },
 
-    { id: 'coherence',     label: 'Coherence',    type: 'range',  min: 0.0,  max: 2.5,  step: 0.05, default: 0.7,
+    // Coherence past 1.0 keeps adding effect — the shader uses values
+    // above 1 to "solidify" the figure (suppresses smoke variance,
+    // brightens filaments). Max bumped to 5.0 so the slider stays
+    // useful all the way up.
+    { id: 'coherence',     label: 'Coherence',    type: 'range',  min: 0.0,  max: 5.0,  step: 0.05, default: 0.7,
       modulators: [
         { source: 'audio.mids',      mode: 'mul', amount: 0.45 },
         { source: 'audio.beatPulse', mode: 'add', amount: 0.30 },
@@ -771,12 +781,17 @@ export default {
     shroud:     { particleCount: '30000', palette: 'white_shroud',    density: 1.4, breath: 0.9, coherence: 0.9,  edgeDissolve: 0.4, chestGlow: 1.2, circuitPulse: 0.6, shimmer: 0.5, flowSpeed: 0.5, violet: 0.0, reactivity: 1.0 },
   },
 
+  // Auto-phase walks these step-by-step on the topbar `auto` button.
+  // NOTE: each step rewrites the named param values (purple base
+  // sliders move visibly on phase change). That's the intended UX —
+  // if you don't want sliders animating, turn the auto-phase button
+  // off in the topbar.
   autoPhase: {
     steps: [
       { palette: 'cyan_spirit',     coherence: 0.7, edgeDissolve: 0.8, flowSpeed: 1.0, violet: 0.4 },
-      { palette: 'violet_seance',   coherence: 0.4, edgeDissolve: 1.4, flowSpeed: 1.4, violet: 0.9 },
-      { palette: 'emerald_phantom', coherence: 1.0, edgeDissolve: 0.5, flowSpeed: 0.7, violet: 0.2 },
-      { palette: 'white_shroud',    coherence: 0.9, edgeDissolve: 0.4, flowSpeed: 0.5, violet: 0.0 },
+      { palette: 'violet_seance',   coherence: 0.4, edgeDissolve: 1.6, flowSpeed: 1.4, violet: 1.0 },
+      { palette: 'emerald_phantom', coherence: 2.5, edgeDissolve: 0.4, flowSpeed: 0.6, violet: 0.2 },
+      { palette: 'white_shroud',    coherence: 3.5, edgeDissolve: 0.3, flowSpeed: 0.4, violet: 0.0 },
     ],
   },
 
