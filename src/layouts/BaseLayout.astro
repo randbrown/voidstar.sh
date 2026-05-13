@@ -81,20 +81,54 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
         var KEY = 'voidstar.debug.console';
         if (qDebug === '0' || qDebug === 'off') {
           localStorage.removeItem(KEY);
+          console.log('[voidstar] debug console disabled');
           return;
         }
         if (qDebug === '1' || qDebug === 'eruda' || qDebug === 'on') {
           localStorage.setItem(KEY, 'eruda');
         }
         if (localStorage.getItem(KEY) !== 'eruda') return;
-        var s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/eruda';
-        s.crossOrigin = 'anonymous';
-        s.onload = function () {
-          try { window.eruda && window.eruda.init(); } catch (_) {}
-        };
-        document.head.appendChild(s);
-      } catch (_) { /* localStorage blocked or similar — silently skip */ }
+        console.log('[voidstar] debug=eruda — loading overlay…');
+
+        // Eruda's init() requires document.body. We're running in <head>,
+        // so defer init until DOMContentLoaded if we got there first.
+        function bootEruda() {
+          if (!window.eruda) {
+            console.error('[voidstar] eruda failed to load (CDN blocked?). '
+              + 'Try chrome://inspect remote debugging instead.');
+            return;
+          }
+          try {
+            window.eruda.init();
+            console.log('[voidstar] eruda initialized — tap the floating gear.');
+          } catch (e) {
+            console.error('[voidstar] eruda.init() threw', e);
+          }
+        }
+        function loadFrom(src, next) {
+          var s = document.createElement('script');
+          s.src = src;
+          s.crossOrigin = 'anonymous';
+          s.onload  = bootEruda;
+          s.onerror = next || function () {
+            console.error('[voidstar] eruda CDN unreachable:', src);
+          };
+          document.head.appendChild(s);
+        }
+        function start() {
+          // jsdelivr first, fall back to unpkg if it 404s or is blocked.
+          loadFrom('https://cdn.jsdelivr.net/npm/eruda', function () {
+            loadFrom('https://unpkg.com/eruda', null);
+          });
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', start);
+        } else {
+          start();
+        }
+      } catch (e) {
+        try { console.error('[voidstar] debug-script error', e); } catch (_) {}
+      }
     })();
   </script>
 </head>
