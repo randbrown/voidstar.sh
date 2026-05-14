@@ -772,10 +772,23 @@
     .sp-pat-empty { color: var(--muted); padding: 0.6rem; text-align: center; }
 
     /* Qualem panel reuses .sp-pat-* row styling. The body just needs flex
-       column + small gap so the toolbar sits cleanly above the list. */
+       column + small gap so the toolbar sits cleanly above the list.
+       Cap the body height + scroll the list internally — with #panel-stack
+       on flex-direction: column-reverse, an uncapped qualem-body pushes
+       the qualem-card head upward as the list grows. On Safari/Mac the
+       column-reverse scrollbar inside #panel-stack doesn't reliably reach
+       that head once it's pushed offscreen, leaving the user unable to
+       click "▾" to minimize. Internal scrolling keeps the head pinned. */
     #qualem-body {
       display: flex; flex-direction: column; gap: 0.5rem;
       font-family: var(--font-mono); font-size: 0.74rem;
+      max-height: 55vh;
+    }
+    #qualem-list {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      min-height: 0;
     }
 
     /* Share popover — modal-ish dialog floating over everything else. The

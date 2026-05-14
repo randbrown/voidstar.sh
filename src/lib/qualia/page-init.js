@@ -50,7 +50,7 @@ const AUTO_PHASE_STYLES = ['chapters', 'alternate', 'random', 'hold'];
 // Auto-cycle: swaps the active qfx ITSELF on a longer timer. Independent of
 // auto-phase — the two can run together (a single qfx phases through its
 // modes, then cycle picks the next quale and the new one starts phasing).
-const CYCLE_PERIODS = [0, 15, 30, 45];          // seconds
+const CYCLE_PERIODS = [0, 5, 15, 30, 45];       // seconds
 const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 // "Glitch" post-process modes (shared by ascii / mosh / edge). The button
 // cycles through these:
@@ -67,14 +67,16 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 //   mix:     mic + strudel both feed (user opts in; pick this when the
 //            mic is on a clean line — guitar interface, etc — so there's
 //            no acoustic feedback path back from speakers)
-// Audio source mode selector — three real-world states:
+// Audio source mode selector — four real-world states:
 //   off → no reactivity
+//   mic → mic only (engines ignored — full venue mix from one input,
+//          useful when playing with others through a shared PA)
 //   mix → strudel + sequencer (no mic; play through speakers without
 //          feedback risk)
 //   all → strudel + sequencer + mic
-// Older multi-state values (mic, strudel, sequencer alone) get
-// remapped on load — see the audioMode restore block below.
-const AUDIO_MODES   = ['off', 'mix', 'all'];
+// Older multi-state values (strudel, sequencer alone) get remapped on
+// load — see the audioMode restore block below.
+const AUDIO_MODES   = ['off', 'mic', 'mix', 'all'];
 const GLITCH_MODES  = ['off', 'on', 'blip', 'flip'];
 const GLITCH_KEYS   = ['ascii', 'mosh', 'edge'];
 const BLIP_DURATION_MS = 280;
@@ -299,21 +301,22 @@ export function initQualiaPage() {
   // Per-glitch blip auto-clear timestamps (epoch ms; 0 = inactive).
   const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0 };
 
-  // Audio mode. The button now cycles through three real-world states:
-  //   off → mix (strudel + seq, no mic) → all (strudel + seq + mic)
-  // The intermediate mic-only / strudel-only / sequencer-only states
-  // were dropped — in practice everyone runs both engines together,
-  // and the only meaningful axis was "do we open the mic too".
+  // Audio mode. The button cycles through four real-world states:
+  //   off → mic (mic only) → mix (strudel + seq, no mic) → all (everything)
+  // The 'mic' mode is useful at venues — feed reactivity from a shared
+  // PA / room mic without adding the direct engine streams.
   //
   // Migrations across earlier shapes:
   //   - `audioOn` boolean: true → 'all' (legacy mic mode also wanted reactivity), false → 'off'.
   //   - older `audioMode` ∈ {off, mic, strudel, sequencer, mix, all}:
-  //       'mic'/'all' → 'all'  (preserve mic intent)
+  //       'mic' → 'mic'  (mic-only intent preserved)
+  //       'all' → 'all'
   //       'strudel'/'sequencer'/'mix' → 'mix'  (preserve "engines, no mic" intent)
   //       'off' → 'off'
   let audioMode;
   if (typeof stored.audioMode === 'string') {
-    if (stored.audioMode === 'mic' || stored.audioMode === 'all') audioMode = 'all';
+    if (stored.audioMode === 'all') audioMode = 'all';
+    else if (stored.audioMode === 'mic') audioMode = 'mic';
     else if (stored.audioMode === 'off') audioMode = 'off';
     else audioMode = 'mix';
   } else if (typeof stored.audioOn === 'boolean') {
@@ -720,9 +723,10 @@ export function initQualiaPage() {
   window.matchMedia('(max-width: 768px), (pointer: coarse)')
     .addEventListener?.('change', setTabsVar);
 
-  // ── Audio source mode (off / mix / all) ─────────────────────────────────
-  // The button is a 3-state selector matching real-world usage:
+  // ── Audio source mode (off / mic / mix / all) ──────────────────────────
+  // The button is a 4-state selector matching real-world usage:
   //   off → mic stopped, audio.setSourceFilter([])
+  //   mic → mic running, filter ['mic']  (engines ignored — venue mix)
   //   mix → mic stopped, filter ['strudel', 'sequencer']  (engines only)
   //   all → mic running, filter ['mic', 'strudel', 'sequencer']
   // The `onChange` callback only handles visual side-effects from external
@@ -745,6 +749,7 @@ export function initQualiaPage() {
   function applyAudioFilter() {
     switch (audioMode) {
       case 'off': audio.setSourceFilter([]);                              break;
+      case 'mic': audio.setSourceFilter(['mic']);                         break;
       case 'mix': audio.setSourceFilter(['strudel', 'sequencer']);        break;
       case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer']); break;
     }
@@ -757,10 +762,10 @@ export function initQualiaPage() {
       // Pink (active-audio) when the mic itself is engaged — visual hint
       // that we're listening to the room. Cyan (active) for engines-only
       // mix where no live mic is open.
-      const micEngaged = audioMode === 'all';
+      const micEngaged = audioMode === 'all' || audioMode === 'mic';
       btnAudio.classList.add(micEngaged ? 'active-audio' : 'active');
     }
-    btnAudio.title = 'Audio source (A) — off / mix (strudel+seq) / all (+mic)';
+    btnAudio.title = 'Audio source (A) — off / mic / mix (strudel+seq) / all (+mic)';
     // Audio panel visibility tracks "is anything driving reactivity" — open
     // when mode != off.
     audioCard.style.display = audioMode === 'off' ? 'none' : '';
@@ -770,7 +775,7 @@ export function initQualiaPage() {
     if (!AUDIO_MODES.includes(mode)) return;
     const prevMode = audioMode;
     audioMode = mode;
-    const wantMic = mode === 'all';
+    const wantMic = mode === 'all' || mode === 'mic';
     try {
       if (wantMic && !audio.hasSource('mic')) {
         await startMic(getStoredDeviceId('mic'));
@@ -1776,7 +1781,7 @@ export function initQualiaPage() {
   let autoCycleStartMs = 0;
   let autoCycleTickT = null;
   cycleStyleSelect.value = autoCycleStyle;
-  btnCycle.title = 'Cycle between qualia (N) — off / 15s / 30s / 45s';
+  btnCycle.title = 'Cycle between qualia (N) — off / 5s / 15s / 30s / 45s';
 
   function refreshCycleBtn() {
     if (!btnCycle) return;
