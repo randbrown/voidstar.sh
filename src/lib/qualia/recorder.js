@@ -230,6 +230,13 @@ export function createRecorder(opts = {}) {
   let sink = null;
   let writeChain = Promise.resolve();
   let stopping = false;
+  // Belt-and-braces: also collect every chunk in memory while recording.
+  // OPFS streaming was producing 0-byte and "header-only" MP4s on Chrome
+  // Android — the in-memory copy is used as a fallback when the sink blob
+  // comes back smaller than what we received, so a buggy OPFS path can't
+  // silently throw away the recording.
+  let memChunks = [];
+  let memBytes  = 0;
 
   function notify() {
     opts.onStateChange?.({
@@ -257,14 +264,21 @@ export function createRecorder(opts = {}) {
     if (success) {
       try {
         const info = await s.close();
-        // WebM duration fix. Chrome's MediaRecorder writes WebM without
-        // a final Duration tag, which Chrome itself reads fine but the
-        // Android stock players reject with "unknown error". The fix
-        // parses the EBML segment header and inserts the actual
-        // duration. Skip when the file is already saved to a user-
-        // picked location (we can't re-open + rewrite that), and skip
-        // for MP4 output (no fix needed).
         let blob = info.blob;
+        // Fallback to the in-memory chunks if the sink came back empty
+        // or way smaller than what we actually wrote. This recovers from
+        // Chrome Android's intermittent "OPFS writable.close() returns a
+        // zero-byte file even though we wrote N bytes through it" bug.
+        if ((!blob || blob.size < memBytes) && memChunks.length) {
+          const memBlob = new Blob(memChunks, { type: wasMime || 'video/mp4' });
+          console.warn(
+            `[recorder] sink blob ${blob?.size ?? 'null'} bytes < in-memory ${memBlob.size}` +
+            ` — falling back to memory copy`
+          );
+          blob = memBlob;
+        }
+        memChunks = [];
+        memBytes  = 0;
         if (!info.autoSaved && blob) {
           const durMs = Math.max(0, performance.now() - startedMs);
           try {
@@ -312,7 +326,13 @@ export function createRecorder(opts = {}) {
       // looked like a successful recording but had zero playable media.
       // teardown() awaits writeChain before closing the sink, so racing
       // a late write isn't a concern.
-      if (!e.data || e.data.size === 0 || !sink) return;
+      if (!e.data || e.data.size === 0 || !sink) {
+        console.log(`[recorder] chunk · ${e.data?.size ?? 'null'} bytes${stopping ? ' (during stop)' : ''} — skipped`);
+        return;
+      }
+      memChunks.push(e.data);
+      memBytes += e.data.size;
+      console.log(`[recorder] chunk · ${e.data.size} bytes${stopping ? ' (final flush)' : ''} · total ${memBytes}`);
       writeChain = writeChain.then(() => sink.write(e.data)).catch(err => {
         console.warn('[recorder] write failed:', err);
         opts.onError?.(err);
@@ -426,6 +446,8 @@ export function createRecorder(opts = {}) {
 
     writeChain = Promise.resolve();
     stopping = false;
+    memChunks = [];
+    memBytes  = 0;
     startMediaRecorder(s);
     // Diagnostics — visible via remote-debug (chrome://inspect on a
     // tethered Android device) so we can confirm which backend / sink
