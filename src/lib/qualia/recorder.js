@@ -43,18 +43,22 @@
 import fixWebmDuration from 'fix-webm-duration';
 
 const MIME_CANDIDATES = [
-  // MP4 first — Chrome Android 114+ supports h264 in MediaRecorder, and
-  // the resulting file plays in every Android video app without any
-  // post-processing.
-  'video/mp4;codecs=h264,aac',
-  'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-  'video/mp4;codecs=avc1,mp4a',
-  'video/mp4',
-  // WebM fallback for older Chrome. Requires the duration-fix
-  // post-process at finalize so the file plays outside Chrome.
+  // WebM preferred. Chrome's MediaRecorder writes WebM without a
+  // Duration tag in the segment header, but fix-webm-duration patches
+  // that at finalize so the file plays in every Android video app.
+  // MediaRecorder's MP4 output is fragmented MP4 (fMP4) with an
+  // uninitialized duration field in the moov header — Android stock
+  // Photos shows it as 0:00 with a broken-file icon and there's no
+  // small library equivalent of fix-webm-duration for the MP4 case,
+  // so we stick with WebM where the fix is reliable.
   'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
   'video/webm',
+  // MP4 last — only used when WebM is unavailable. Will likely still
+  // fail to open in stock Android Photos for the reason above; on
+  // browsers where this gets picked, suggest VLC for playback.
+  'video/mp4;codecs=h264,aac',
+  'video/mp4',
 ];
 
 const OPFS_STALE_MS = 10 * 60 * 1000;
@@ -123,8 +127,13 @@ async function sweepStaleOpfs() {
  * and then prompt the user to save it via an explicit gesture.
  */
 async function openSink(filename) {
-  // 1) Direct-to-disk via showSaveFilePicker (desktop).
-  if (typeof window !== 'undefined' && window.showSaveFilePicker) {
+  // 1) Direct-to-disk via showSaveFilePicker (desktop only). On mobile,
+  // we deliberately skip this — the picker streams chunks straight to
+  // the user-chosen location, so by the time MediaRecorder stops, the
+  // file is finalized and we can't apply fix-webm-duration before
+  // saving. OPFS lets us read the file back at close, patch the
+  // segment header, and only THEN trigger the download.
+  if (!looksLikeMobile() && typeof window !== 'undefined' && window.showSaveFilePicker) {
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: filename,
@@ -251,10 +260,14 @@ export function createRecorder(opts = {}) {
         if (!info.autoSaved && blob && wasMime?.startsWith('video/webm')) {
           try {
             const durMs = Math.max(0, performance.now() - startedMs);
+            console.log(`[recorder] applying webm duration fix · ${blob.size} bytes · ${Math.round(durMs)}ms`);
             blob = await fixWebmDuration(blob, durMs);
+            console.log(`[recorder] duration fix done · output ${blob.size} bytes`);
           } catch (err) {
             console.warn('[recorder] webm duration fix failed; saving unfixed:', err);
           }
+        } else if (!info.autoSaved && blob) {
+          console.log(`[recorder] skipping duration fix (mime=${wasMime}) · ${blob.size} bytes`);
         }
         const save = blob
           ? () => { triggerDownload(blob, info.filename); return Promise.resolve(); }
