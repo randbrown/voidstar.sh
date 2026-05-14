@@ -19,6 +19,7 @@ import { createStrudelHydra } from './strudel-hydra.js';
 import { createSequencer } from './sequencer.js';
 import { createVocoder } from './vocoder.js';
 import { createCursorFx } from './cursor-fx.js';
+import { createRecorder } from './recorder.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror } from './video.js';
 import chladni         from './fx/chladni.js';
@@ -132,6 +133,7 @@ export function initQualiaPage() {
   const btnPause   = document.getElementById('btn-pause');
   const btnZen     = document.getElementById('btn-zen');
   const btnFullscreen = document.getElementById('btn-fullscreen');
+  const btnRecord  = document.getElementById('btn-record');
   const btnCamera  = document.getElementById('btn-camera');
   const btnCamRotate = document.getElementById('btn-cam-rotate');
   const btnCamMirror = document.getElementById('btn-cam-mirror');
@@ -1553,6 +1555,48 @@ export function initQualiaPage() {
   document.addEventListener('fullscreenchange', refreshFullscreenBtn);
   document.addEventListener('webkitfullscreenchange', refreshFullscreenBtn);
 
+  // ── Screen recorder ──────────────────────────────────────────────────────
+  // getDisplayMedia + MediaRecorder. The user picks the capture source
+  // (this tab / window / screen) in the browser's share picker, including
+  // whether to mix in tab/system audio. We collect chunks in memory and
+  // download a .webm/.mp4 when they stop. Long sets are memory-bound —
+  // ~8 Mb/s, so ~3.6 GB/hour. Fine for typical performance lengths.
+  const recorder = createRecorder({
+    onStateChange: ({ recording }) => {
+      if (!btnRecord) return;
+      btnRecord.classList.toggle('active-audio', recording);
+      if (!recording) btnRecord.textContent = 'rec';
+    },
+  });
+  if (btnRecord) {
+    if (!recorder.isSupported()) {
+      btnRecord.disabled = true;
+      btnRecord.title = 'Screen recording not supported in this browser';
+    }
+    btnRecord.addEventListener('click', async () => {
+      try {
+        if (recorder.isRecording()) recorder.stop();
+        else await recorder.start();
+      } catch (err) {
+        // User cancelled the share picker, or the browser denied it.
+        // Only surface a real error — cancellation is expected and silent.
+        if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') {
+          alert(`Screen recording failed: ${err?.message || err}`);
+        }
+      }
+    });
+    // Per-second tick updates the "rec ●" label to "rec ● mm:ss" so the
+    // user can see how long the recording has been running. Idle ticks
+    // bail before touching the DOM.
+    setInterval(() => {
+      if (!recorder.isRecording()) return;
+      const sec = Math.floor((performance.now() - recorder.getStartedAt()) / 1000);
+      const mm = Math.floor(sec / 60).toString().padStart(2, '0');
+      const ss = (sec % 60).toString().padStart(2, '0');
+      btnRecord.textContent = `rec ● ${mm}:${ss}`;
+    }, 1000);
+  }
+
   // ── Reset fx params ───────────────────────────────────────────────────────
   fxResetBtn.addEventListener('click', () => core.applyFxPreset('default'));
 
@@ -2942,7 +2986,11 @@ export function initQualiaPage() {
         break;
       }
       case 'c': if (btnCamera.style.display !== 'none') btnCamera.click(); break;
-      case 'r': if (btnCamRotate.style.display !== 'none') btnCamRotate.click(); break;
+      case 'r':
+        // Shift+R toggles screen recording (R alone is camera-rotate).
+        if (e.shiftKey) btnRecord?.click();
+        else if (btnCamRotate.style.display !== 'none') btnCamRotate.click();
+        break;
       case 'm': if (btnCamMirror.style.display !== 'none') btnCamMirror.click(); break;
       case 'j': btnSkel.click(); break;
       case 'f': btnSparks.click(); break;
