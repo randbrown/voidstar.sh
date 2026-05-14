@@ -214,6 +214,7 @@ async function openSink(filename) {
  *   onError?: (err: Error) => void,
  *   getCanvas?: () => HTMLCanvasElement|null,
  *   getMicStream?: () => MediaStream|null,
+ *   getRecordableStream?: () => MediaStream|null,
  * }} opts
  */
 export function createRecorder(opts = {}) {
@@ -336,11 +337,24 @@ export function createRecorder(opts = {}) {
     const canvas = opts.getCanvas?.();
     if (!canvas?.captureStream) return null;
     const s = canvas.captureStream(30);
-    const micStream = opts.getMicStream?.();
-    if (micStream) {
+    // Pull a mixed audio bus that includes mic + strudel + sequencer +
+    // any other audio source the page has registered, so the saved file
+    // matches what the user hears. Fall back to raw mic stream if the mix
+    // bus isn't available (e.g. older page-init that doesn't pass the
+    // getRecordableStream callback).
+    const audioStream = opts.getRecordableStream?.() ?? opts.getMicStream?.();
+    if (audioStream) {
       try {
-        for (const t of micStream.getAudioTracks()) s.addTrack(t.clone());
-      } catch {}
+        const tracks = audioStream.getAudioTracks();
+        for (const t of tracks) s.addTrack(t.clone());
+        if (!tracks.length) {
+          console.warn('[recorder] canvas audio source has no tracks; recording will be silent');
+        }
+      } catch (err) {
+        console.warn('[recorder] failed to attach canvas audio:', err);
+      }
+    } else {
+      console.warn('[recorder] no audio source registered; canvas recording will be silent');
     }
     return s;
   }
@@ -364,6 +378,22 @@ export function createRecorder(opts = {}) {
     if (s) {
       backend = 'display';
       s.getVideoTracks()[0]?.addEventListener('ended', () => stop());
+      // If the user didn't tick "Share tab audio" in the display picker the
+      // display stream has zero audio tracks — top it up with the in-page
+      // mix bus so the saved file isn't silent. (When they DID tick it the
+      // tab audio already contains everything the page is producing, and
+      // adding the mix again would double the synth audio, so we only
+      // attach the mix as a fallback.)
+      if (s.getAudioTracks().length === 0) {
+        const mix = opts.getRecordableStream?.();
+        const mixTracks = mix?.getAudioTracks() ?? [];
+        for (const t of mixTracks) {
+          try { s.addTrack(t.clone()); } catch {}
+        }
+        if (mixTracks.length) {
+          console.log(`[recorder] display stream had no audio; attached ${mixTracks.length} mix track(s)`);
+        }
+      }
     } else {
       s = tryCanvasCapture();
       if (!s) {
@@ -391,7 +421,14 @@ export function createRecorder(opts = {}) {
     // Diagnostics — visible via remote-debug (chrome://inspect on a
     // tethered Android device) so we can confirm which backend / sink
     // the recorder ended up on without needing extra logging surface.
-    console.log(`[recorder] started · backend=${backend} sink=${sink?.kind} mime=${mimeType || '(default)'}`);
+    const audioTracks = s.getAudioTracks();
+    const videoTracks = s.getVideoTracks();
+    console.log(
+      `[recorder] started · backend=${backend} sink=${sink?.kind}` +
+      ` mime=${mimeType || '(default)'}` +
+      ` · video=${videoTracks.length} audio=${audioTracks.length}` +
+      (audioTracks.length ? ` (${audioTracks.map(t => t.label || '(unlabeled)').join(', ')})` : ' [SILENT]')
+    );
   }
 
   function stop() {
