@@ -1675,10 +1675,14 @@ export function initQualiaPage() {
   });
 
   if (btnRecord) {
-    if (!recorder.isSupported()) {
-      btnRecord.disabled = true;
-      btnRecord.title = 'Screen recording not supported in this browser';
-    }
+    // Don't preemptively disable on isSupported() — that check runs at
+    // page-init before the qualia canvas exists, so the canvas-capture
+    // fallback can't be detected yet, and Android builds that lack
+    // getDisplayMedia get the button disabled forever. Disabled buttons
+    // also break Chrome's tap routing (taps fall through to nearby
+    // selectable text, surfacing the Google "tap to search" hint). We
+    // just try to start on click and report a real error if both
+    // backends genuinely fail then.
     btnRecord.addEventListener('click', async () => {
       // Diagnostics — prints unconditionally so we can confirm via the
       // Eruda console (?debug=1) that the click handler is even bound.

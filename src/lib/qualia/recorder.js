@@ -372,10 +372,12 @@ export function createRecorder(opts = {}) {
     getBackend: () => backend,
     getSink: () => sink?.kind || '',
     isSupported: () => {
-      if (typeof MediaRecorder === 'undefined') return false;
-      if (navigator.mediaDevices?.getDisplayMedia) return true;
-      const c = opts.getCanvas?.();
-      return !!(c && c.captureStream);
+      // Lazy / permissive: MediaRecorder is the only hard requirement.
+      // The canvas-capture fallback evaluates at start() time when the
+      // qualia canvas definitely exists; if it doesn't, start() surfaces
+      // a real error then. Returning true here lets the button stay
+      // tappable so the user can trigger the real attempt themselves.
+      return typeof MediaRecorder !== 'undefined';
     },
   };
 }
