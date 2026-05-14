@@ -19,28 +19,47 @@
 //      closed at stop() — no second download step.
 //   2. OPFS (origin private file system). Chrome (desktop + Android),
 //      Safari 15.2+. Chunks stream into a private file under the origin.
-//      At stop() we surface a "tap to save" handle via the readyToSave
-//      callback so the caller can show an explicit user-gesture button —
-//      that gesture then triggers the actual download. We deliberately do
-//      NOT auto-click an anchor here because async stop() loses the
-//      original user-gesture context on most mobile browsers, and the
-//      download silently fails to fire.
+//      At stop() we surface a "tap to save" handle so the caller can
+//      prompt the user for an explicit save gesture — that gesture then
+//      triggers the actual download. Async stop() loses the original
+//      user-gesture context on most mobile browsers, so this two-step
+//      flow is required for the download to actually fire.
 //   3. In-memory Blob[]. Last resort for very old browsers — same
 //      "tap to save" handoff as OPFS.
+//
+// Codec preference: MP4 (H.264 + AAC) is tried first because every
+// Android player accepts it natively. WebM is the fallback. When we end
+// up writing WebM, we post-process the blob through fix-webm-duration
+// at close — Chrome's MediaRecorder emits a "live stream" WebM without
+// a Duration tag, which the Android stock players reject as "unknown
+// error". The fix reads the blob, rewrites the segment header to
+// include the actual duration, and returns a playable file.
 //
 // Recording is independent of any other audio engine (strudel / sequencer /
 // vocoder / mic). Start/stop the recorder; the rest keeps running.
 // Stale OPFS sweep: every start() prunes leftover qualia-*.webm files
 // older than ten minutes so an abandoned recording doesn't squat on quota.
 
+import fixWebmDuration from 'fix-webm-duration';
+
 const MIME_CANDIDATES = [
+  // MP4 first — Chrome Android 114+ supports h264 in MediaRecorder, and
+  // the resulting file plays in every Android video app without any
+  // post-processing.
+  'video/mp4;codecs=h264,aac',
+  'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+  'video/mp4;codecs=avc1,mp4a',
+  'video/mp4',
+  // WebM fallback for older Chrome. Requires the duration-fix
+  // post-process at finalize so the file plays outside Chrome.
   'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
   'video/webm',
-  'video/mp4',
 ];
 
 const OPFS_STALE_MS = 10 * 60 * 1000;
+const VIDEO_BITS_PER_SECOND = 4_000_000;     // 4 Mb/s — plenty for canvas/screen content,
+                                             // halves memory + disk footprint vs the old 8 Mb/s default.
 
 function pickMime() {
   if (typeof MediaRecorder === 'undefined') return '';
@@ -95,12 +114,13 @@ async function sweepStaleOpfs() {
 
 /**
  * Open a streaming sink for the recording. Returns:
- *   { kind, write(blob), close() → { autoSaved, savePending() } }
+ *   { kind, write(blob), close() → { autoSaved, blob, filename }, cleanup() }
  *
  * `autoSaved=true` means the sink already wrote to its final destination
- * (showSaveFilePicker path); no further action required.
- * `autoSaved=false` returns a `savePending()` function that triggers the
- * download. Caller MUST invoke it from a user-gesture handler.
+ * (showSaveFilePicker path); `blob` will be null because there's nothing
+ * left to fix or save. `autoSaved=false` returns the recorded file as a
+ * Blob so the caller can apply any post-processing (WebM duration fix)
+ * and then prompt the user to save it via an explicit gesture.
  */
 async function openSink(filename) {
   // 1) Direct-to-disk via showSaveFilePicker (desktop).
@@ -110,7 +130,10 @@ async function openSink(filename) {
         suggestedName: filename,
         types: [{
           description: 'Recording',
-          accept: { 'video/webm': ['.webm'], 'video/mp4': ['.mp4'] },
+          accept: {
+            'video/mp4':  ['.mp4'],
+            'video/webm': ['.webm'],
+          },
         }],
       });
       const writable = await handle.createWritable();
@@ -119,18 +142,18 @@ async function openSink(filename) {
         write: (blob) => writable.write(blob),
         close: async () => {
           await writable.close();
-          return { autoSaved: true, savePending: null, filename };
+          return { autoSaved: true, blob: null, filename };
         },
         cleanup: async () => { try { await writable.abort(); } catch {} },
       };
     } catch (err) {
       if (err?.name === 'AbortError') throw err;
-      // Other errors drop through to OPFS.
     }
   }
 
-  // 2) OPFS — chunks stream to a private file. Download requires a
-  // user gesture; we hand the caller a closure that does it.
+  // 2) OPFS — chunks stream to a private file. close() reads back the
+  // File reference (no memory copy at this point) so the recorder can
+  // apply duration-fix or hand it to the download trigger.
   if (navigator.storage?.getDirectory) {
     try {
       const dir = await navigator.storage.getDirectory();
@@ -141,13 +164,10 @@ async function openSink(filename) {
         write: (blob) => writable.write(blob),
         close: async () => {
           await writable.close();
-          // Lazy: only fetch the File when the user actually taps save,
-          // so a stop-without-save doesn't waste memory.
-          const savePending = async () => {
-            const file = await handle.getFile();
-            triggerDownload(file, filename);
-          };
-          return { autoSaved: false, savePending, filename };
+          // getFile() returns a File backed by the OPFS entry — no
+          // memory copy until something actually reads it.
+          const file = await handle.getFile();
+          return { autoSaved: false, blob: file, filename };
         },
         cleanup: async () => {
           try { await writable.abort(); } catch {}
@@ -157,8 +177,7 @@ async function openSink(filename) {
     } catch {}
   }
 
-  // 3) In-memory Blob[] fallback. Same shape as the OPFS path — caller
-  // must invoke savePending() from a user gesture.
+  // 3) In-memory Blob[] fallback.
   const chunks = [];
   return {
     kind: 'memory',
@@ -166,10 +185,7 @@ async function openSink(filename) {
     close: async () => {
       const blob = new Blob(chunks, { type: chunks[0]?.type || 'video/webm' });
       chunks.length = 0;
-      const savePending = blob.size > 0
-        ? async () => { triggerDownload(blob, filename); }
-        : null;
-      return { autoSaved: false, savePending, filename };
+      return { autoSaved: false, blob: blob.size > 0 ? blob : null, filename };
     },
     cleanup: () => { chunks.length = 0; },
   };
@@ -208,6 +224,10 @@ export function createRecorder(opts = {}) {
 
   async function teardown(success) {
     const s = sink;
+    // Capture before resetting — we need mime + duration for the WebM
+    // duration fix below.
+    const wasMime    = mimeType;
+    const startedMs  = startedAt;
     sink = null;
     if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
     stream = null;
@@ -220,9 +240,30 @@ export function createRecorder(opts = {}) {
     if (success) {
       try {
         const info = await s.close();
-        // Hand the save closure to the page so it can prompt the user
-        // for the second gesture (mobile-safe download trigger).
-        opts.onReadyToSave?.(info);
+        // WebM duration fix. Chrome's MediaRecorder writes WebM without
+        // a final Duration tag, which Chrome itself reads fine but the
+        // Android stock players reject with "unknown error". The fix
+        // parses the EBML segment header and inserts the actual
+        // duration. Skip when the file is already saved to a user-
+        // picked location (we can't re-open + rewrite that), and skip
+        // for MP4 output (no fix needed).
+        let blob = info.blob;
+        if (!info.autoSaved && blob && wasMime?.startsWith('video/webm')) {
+          try {
+            const durMs = Math.max(0, performance.now() - startedMs);
+            blob = await fixWebmDuration(blob, durMs);
+          } catch (err) {
+            console.warn('[recorder] webm duration fix failed; saving unfixed:', err);
+          }
+        }
+        const save = blob
+          ? () => { triggerDownload(blob, info.filename); return Promise.resolve(); }
+          : null;
+        opts.onReadyToSave?.({
+          filename:  info.filename,
+          autoSaved: info.autoSaved,
+          save,
+        });
       } catch (err) {
         opts.onError?.(err);
       }
@@ -233,7 +274,7 @@ export function createRecorder(opts = {}) {
 
   function startMediaRecorder(s) {
     mimeType = pickMime();
-    const recOpts = { videoBitsPerSecond: 8_000_000 };
+    const recOpts = { videoBitsPerSecond: VIDEO_BITS_PER_SECOND };
     if (mimeType) recOpts.mimeType = mimeType;
     recorder = new MediaRecorder(s, recOpts);
     recorder.ondataavailable = (e) => {
