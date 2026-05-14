@@ -1556,23 +1556,30 @@ export function initQualiaPage() {
   document.addEventListener('webkitfullscreenchange', refreshFullscreenBtn);
 
   // ── Screen recorder ──────────────────────────────────────────────────────
-  // Two backends inside createRecorder: getDisplayMedia (desktop) and a
-  // canvas.captureStream() fallback for mobile / restricted browsers where
-  // getDisplayMedia is missing or silently fails. The fallback only
+  // Two capture backends inside createRecorder: getDisplayMedia (desktop)
+  // and a canvas.captureStream() fallback for mobile / restricted browsers
+  // where getDisplayMedia is missing or silently fails. The fallback only
   // captures the fx canvas (no overlay/HUD), plus mic audio when live.
-  // We collect chunks in memory and download a .webm/.mp4 when they stop.
+  // Chunks stream straight to disk via showSaveFilePicker (desktop) or
+  // OPFS (mobile-friendly) so multi-hour sets don't OOM the tab — the
+  // in-memory path is only the last-resort fallback.
   const recorder = createRecorder({
     getCanvas:    () => core.getCanvas?.(),
     getMicStream: () => audio.getMicStream?.(),
-    onStateChange: ({ recording, backend }) => {
+    onStateChange: ({ recording, backend, sink }) => {
       if (!btnRecord) return;
       btnRecord.classList.toggle('active-audio', recording);
-      if (!recording) btnRecord.textContent = 'rec';
-      else if (backend === 'canvas') {
-        btnRecord.title = 'Recording fx canvas only (mobile fallback — no overlay/HUD). Shift+R to stop.';
-      } else {
-        btnRecord.title = 'Recording — Shift+R or click to stop.';
+      if (!recording) {
+        btnRecord.textContent = 'rec';
+        btnRecord.title = 'Record screen (Shift+R) — picks tab/window/screen via the browser share picker; tick to include audio';
+        return;
       }
+      const capLabel  = backend === 'canvas' ? 'fx canvas only (no HUD)' : 'full page';
+      const sinkLabel = sink === 'fsa'    ? 'streaming to chosen file'
+                      : sink === 'opfs'   ? 'streaming to disk (OPFS)'
+                      : sink === 'memory' ? 'buffered in RAM'
+                      : '';
+      btnRecord.title = `Recording ${capLabel} · ${sinkLabel}. Shift+R or click to stop.`;
     },
   });
   if (btnRecord) {
