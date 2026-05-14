@@ -1,12 +1,19 @@
-// Screen recorder — wraps getDisplayMedia + MediaRecorder. The user
-// picks the source (tab / window / screen) and audio inclusion in the
-// browser's standard share-picker; we just collect chunks and save a
-// .webm/.mp4 when they hit stop (or close the share UI).
+// Screen recorder — two backends, picked at start():
 //
-// Memory note: chunks live in RAM until finalize(). A 30-min set at the
-// default bitrate is ~2 GB — fine on a laptop, may hurt phones. If we
-// hit limits later we can stream chunks to OPFS / showSaveFilePicker
-// instead of buffering. Single recorder instance per page is enough.
+//   1. getDisplayMedia (desktop, some Android Chrome builds). User picks
+//      tab / window / screen + audio inclusion in the browser share
+//      picker. Highest fidelity — captures the whole page including the
+//      HUD, overlay, etc.
+//   2. canvas.captureStream() fallback for mobile / restricted environments
+//      where getDisplayMedia isn't available or silently fails. Captures
+//      only the active fx canvas (no overlay / topbar / HUD) and tries to
+//      mix in mic audio when a stream is available. iOS Safari, Android
+//      Firefox, Samsung Internet, and Android Chrome builds that block
+//      display-capture all land here.
+//
+// Memory note: chunks live in RAM until finalize(). At 8 Mb/s that's
+// ~3.6 GB/hour — fine for typical performance lengths on a laptop, may
+// stress phones. OPFS streaming is a future follow-up if needed.
 
 const MIME_CANDIDATES = [
   'video/webm;codecs=vp9,opus',
@@ -23,8 +30,26 @@ function pickMime() {
   return '';
 }
 
-/** @param {{ onStateChange?: (s: { recording: boolean, startedAt: number }) => void }} opts */
+/** Coarse runtime test for mobile / touch-only devices where
+ *  getDisplayMedia is usually broken or absent. We don't gate on it —
+ *  we still try getDisplayMedia first — but the canvas-capture path
+ *  prefers it when both could work. */
+function looksLikeMobile() {
+  if (typeof navigator === 'undefined') return false;
+  const uad = navigator.userAgentData;
+  if (uad?.mobile) return true;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+}
+
+/**
+ * @param {{
+ *   onStateChange?: (s: { recording: boolean, backend: ''|'display'|'canvas' }) => void,
+ *   getCanvas?: () => HTMLCanvasElement|null,
+ *   getMicStream?: () => MediaStream|null,
+ * }} opts
+ */
 export function createRecorder(opts = {}) {
+  /** @type {MediaStream|null} */
   let stream = null;
   /** @type {MediaRecorder|null} */
   let recorder = null;
@@ -32,9 +57,11 @@ export function createRecorder(opts = {}) {
   let chunks = [];
   let startedAt = 0;
   let mimeType = '';
+  /** @type {''|'display'|'canvas'} */
+  let backend = '';
 
   function notify() {
-    opts.onStateChange?.({ recording: !!recorder, startedAt });
+    opts.onStateChange?.({ recording: !!recorder, backend });
   }
 
   function finalize() {
@@ -47,6 +74,7 @@ export function createRecorder(opts = {}) {
     stream = null;
     recorder = null;
     startedAt = 0;
+    backend = '';
     notify();
 
     if (blob.size === 0) return;
@@ -60,41 +88,93 @@ export function createRecorder(opts = {}) {
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 200);
   }
 
-  async function start() {
-    if (recorder) return;
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      throw new Error('Screen capture not supported in this browser');
-    }
-    if (typeof MediaRecorder === 'undefined') {
-      throw new Error('MediaRecorder not supported in this browser');
-    }
-    // Ask for 60fps + audio; the browser will downgrade to what the
-    // chosen source can provide. audio:true at the getDisplayMedia layer
-    // lets the user opt into tab/system audio in the share picker.
-    stream = await navigator.mediaDevices.getDisplayMedia({
+  async function tryDisplayCapture() {
+    if (!navigator.mediaDevices?.getDisplayMedia) return null;
+    const s = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: 60 },
       audio: true,
     });
-    // If the user stops the share via the browser's "Stop sharing" UI,
-    // finalize the recording so they still get a file.
-    stream.getVideoTracks()[0]?.addEventListener('ended', () => stop());
+    return s;
+  }
 
+  function tryCanvasCapture() {
+    const canvas = opts.getCanvas?.();
+    if (!canvas?.captureStream) return null;
+    const s = canvas.captureStream(30);
+    // Best-effort: if the audio module exposes a live mic MediaStream,
+    // splice its audio tracks in so the fallback recording has sound.
+    // We don't have a way to capture strudel/sequencer audio without
+    // owning their AudioContexts, so this only lands the mic — which
+    // at venues is typically the full PA mix anyway.
+    const micStream = opts.getMicStream?.();
+    if (micStream) {
+      try {
+        for (const t of micStream.getAudioTracks()) s.addTrack(t.clone());
+      } catch {}
+    }
+    return s;
+  }
+
+  function startMediaRecorder(s) {
     mimeType = pickMime();
-    const recOpts = mimeType
-      ? { mimeType, videoBitsPerSecond: 8_000_000 }
-      : { videoBitsPerSecond: 8_000_000 };
-    recorder = new MediaRecorder(stream, recOpts);
+    const recOpts = { videoBitsPerSecond: 8_000_000 };
+    if (mimeType) recOpts.mimeType = mimeType;
+    recorder = new MediaRecorder(s, recOpts);
     chunks = [];
     recorder.ondataavailable = (e) => {
       if (e.data && e.data.size) chunks.push(e.data);
     };
     recorder.onstop = finalize;
-    // 1s timeslice — keeps chunks small enough that a forced page-close
-    // mid-recording at least leaves usable partial data in memory until
-    // GC, and gives `dataavailable` a chance to fire periodically.
+    // 1s timeslice — gives `dataavailable` a chance to fire periodically.
     recorder.start(1000);
     startedAt = performance.now();
+    stream = s;
     notify();
+  }
+
+  async function start() {
+    if (recorder) return;
+    if (typeof MediaRecorder === 'undefined') {
+      throw new Error('MediaRecorder not supported in this browser');
+    }
+
+    // 1) Try getDisplayMedia. On desktop this is the high-fidelity path —
+    // captures the whole page including overlay/HUD. On mobile it may
+    // throw NotAllowedError or NotSupportedError, in which case we fall
+    // through to canvas capture below.
+    let s = null;
+    let displayErr = null;
+    try {
+      s = await tryDisplayCapture();
+    } catch (err) {
+      displayErr = err;
+      // User-cancelled — respect it, don't silently fall back to a
+      // different surface than what they asked for. Other errors
+      // (NotSupportedError, SecurityError, NotAllowedError on mobile
+      // where it really means "not supported") drop through to canvas.
+      if (err?.name === 'AbortError') throw err;
+      if (err?.name === 'NotAllowedError' && !looksLikeMobile()) throw err;
+    }
+
+    if (s) {
+      backend = 'display';
+      s.getVideoTracks()[0]?.addEventListener('ended', () => stop());
+      startMediaRecorder(s);
+      return;
+    }
+
+    // 2) Canvas-capture fallback. Mobile-friendly: captures only the fx
+    // canvas (overlay/HUD are not included) plus any available mic audio.
+    s = tryCanvasCapture();
+    if (s) {
+      backend = 'canvas';
+      startMediaRecorder(s);
+      return;
+    }
+
+    // Both failed — surface whichever original error is most informative.
+    if (displayErr) throw displayErr;
+    throw new Error('Screen recording not supported on this device');
   }
 
   function stop() {
@@ -102,7 +182,6 @@ export function createRecorder(opts = {}) {
     if (recorder.state !== 'inactive') {
       try { recorder.stop(); } catch {}
     } else {
-      // Already inactive — finalize manually so state cleans up.
       finalize();
     }
   }
@@ -118,8 +197,13 @@ export function createRecorder(opts = {}) {
     toggle,
     isRecording: () => !!recorder,
     getStartedAt: () => startedAt,
-    isSupported: () =>
-      typeof MediaRecorder !== 'undefined'
-      && !!navigator.mediaDevices?.getDisplayMedia,
+    getBackend: () => backend,
+    isSupported: () => {
+      if (typeof MediaRecorder === 'undefined') return false;
+      // Either path is good enough to call it supported.
+      if (navigator.mediaDevices?.getDisplayMedia) return true;
+      const c = opts.getCanvas?.();
+      return !!(c && c.captureStream);
+    },
   };
 }

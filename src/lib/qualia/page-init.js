@@ -1556,16 +1556,23 @@ export function initQualiaPage() {
   document.addEventListener('webkitfullscreenchange', refreshFullscreenBtn);
 
   // ── Screen recorder ──────────────────────────────────────────────────────
-  // getDisplayMedia + MediaRecorder. The user picks the capture source
-  // (this tab / window / screen) in the browser's share picker, including
-  // whether to mix in tab/system audio. We collect chunks in memory and
-  // download a .webm/.mp4 when they stop. Long sets are memory-bound —
-  // ~8 Mb/s, so ~3.6 GB/hour. Fine for typical performance lengths.
+  // Two backends inside createRecorder: getDisplayMedia (desktop) and a
+  // canvas.captureStream() fallback for mobile / restricted browsers where
+  // getDisplayMedia is missing or silently fails. The fallback only
+  // captures the fx canvas (no overlay/HUD), plus mic audio when live.
+  // We collect chunks in memory and download a .webm/.mp4 when they stop.
   const recorder = createRecorder({
-    onStateChange: ({ recording }) => {
+    getCanvas:    () => core.getCanvas?.(),
+    getMicStream: () => audio.getMicStream?.(),
+    onStateChange: ({ recording, backend }) => {
       if (!btnRecord) return;
       btnRecord.classList.toggle('active-audio', recording);
       if (!recording) btnRecord.textContent = 'rec';
+      else if (backend === 'canvas') {
+        btnRecord.title = 'Recording fx canvas only (mobile fallback — no overlay/HUD). Shift+R to stop.';
+      } else {
+        btnRecord.title = 'Recording — Shift+R or click to stop.';
+      }
     },
   });
   if (btnRecord) {

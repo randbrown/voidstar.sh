@@ -496,6 +496,7 @@ export function createAudio() {
     getSources: () => Array.from(sources.keys()),
     getSource:       () => describeSources(),
     getCurrentMicId: () => micId,
+    getMicStream:    () => sources.get('mic')?.stream ?? null,
     getAnalyser: () => firstSource()?.analyser ?? null,
     getCtx:      () => firstSource()?.ctx ?? null,
   };
