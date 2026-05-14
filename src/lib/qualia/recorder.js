@@ -15,17 +15,23 @@
 // Sink backends, picked at start() (chunked / streaming, in priority order):
 //   1. showSaveFilePicker → FileSystemWritableFileStream. Desktop Chrome /
 //      Edge. User picks the save location up front, data streams straight
-//      to that file; nothing kept in memory.
+//      to that file; nothing kept in memory. The file is finished and
+//      closed at stop() — no second download step.
 //   2. OPFS (origin private file system). Chrome (desktop + Android),
-//      Safari 15.2+. Chunks stream into a private file under the origin;
-//      at stop() we hand a streaming blob:URL to the download. Mobile-
-//      friendly and survives long sets.
-//   3. In-memory Blob[]. Last resort for very old browsers — same code
-//      path as before, RAM-bound (~3.6 GB/hour at 8 Mb/s).
+//      Safari 15.2+. Chunks stream into a private file under the origin.
+//      At stop() we surface a "tap to save" handle via the readyToSave
+//      callback so the caller can show an explicit user-gesture button —
+//      that gesture then triggers the actual download. We deliberately do
+//      NOT auto-click an anchor here because async stop() loses the
+//      original user-gesture context on most mobile browsers, and the
+//      download silently fails to fire.
+//   3. In-memory Blob[]. Last resort for very old browsers — same
+//      "tap to save" handoff as OPFS.
 //
+// Recording is independent of any other audio engine (strudel / sequencer /
+// vocoder / mic). Start/stop the recorder; the rest keeps running.
 // Stale OPFS sweep: every start() prunes leftover qualia-*.webm files
-// older than ten minutes so an abandoned recording from a previous
-// session doesn't squat on origin storage forever.
+// older than ten minutes so an abandoned recording doesn't squat on quota.
 
 const MIME_CANDIDATES = [
   'video/webm;codecs=vp9,opus',
@@ -51,16 +57,20 @@ function looksLikeMobile() {
   return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
 }
 
+/** Trigger a browser download. Returns the chosen filename so the caller
+ *  can show it in a toast. Must be called from a user-gesture context for
+ *  reliable mobile behavior. */
 function triggerDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = filename;
   document.body.appendChild(a);
   a.click();
-  // Keep the object URL alive long enough for the browser to stream a
-  // multi-GB file off it. The actual filesystem source (OPFS / disk)
-  // outlives this URL, so revoking just frees the blob URL mapping.
+  // Keep the object URL alive for a generous window so the browser can
+  // stream a multi-GB file off it. The underlying source (OPFS / Blob)
+  // outlives this URL.
   setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 60_000);
+  return filename;
 }
 
 /** Sweep stale OPFS recordings older than OPFS_STALE_MS. Best-effort. */
@@ -69,8 +79,7 @@ async function sweepStaleOpfs() {
   try {
     const dir = await navigator.storage.getDirectory();
     const now = Date.now();
-    // entries() yields [name, handle] pairs. We only touch files we own.
-    // @ts-ignore — entries() is widely supported but not yet typed in lib.dom
+    // @ts-ignore — entries() is widely supported but not yet in lib.dom
     for await (const [name, handle] of dir.entries()) {
       if (!name.startsWith('qualia-') || !/\.(webm|mp4)$/.test(name)) continue;
       try {
@@ -85,9 +94,13 @@ async function sweepStaleOpfs() {
 }
 
 /**
- * Open a streaming sink for the recording. Returns an object with
- * `write(blob)` / `close()` / `cleanup()` regardless of which backend
- * was picked, so the caller doesn't branch.
+ * Open a streaming sink for the recording. Returns:
+ *   { kind, write(blob), close() → { autoSaved, savePending() } }
+ *
+ * `autoSaved=true` means the sink already wrote to its final destination
+ * (showSaveFilePicker path); no further action required.
+ * `autoSaved=false` returns a `savePending()` function that triggers the
+ * download. Caller MUST invoke it from a user-gesture handler.
  */
 async function openSink(filename) {
   // 1) Direct-to-disk via showSaveFilePicker (desktop).
@@ -97,29 +110,27 @@ async function openSink(filename) {
         suggestedName: filename,
         types: [{
           description: 'Recording',
-          accept: {
-            'video/webm': ['.webm'],
-            'video/mp4':  ['.mp4'],
-          },
+          accept: { 'video/webm': ['.webm'], 'video/mp4': ['.mp4'] },
         }],
       });
       const writable = await handle.createWritable();
       return {
         kind: 'fsa',
         write: (blob) => writable.write(blob),
-        close: async () => { await writable.close(); },
+        close: async () => {
+          await writable.close();
+          return { autoSaved: true, savePending: null, filename };
+        },
         cleanup: async () => { try { await writable.abort(); } catch {} },
       };
     } catch (err) {
-      // User cancelled the save picker — treat as "they want to abandon"
-      // and bubble up so the caller can skip starting the recording.
       if (err?.name === 'AbortError') throw err;
-      // Anything else (security policy, unsupported in iframe, etc.) —
-      // drop through to OPFS so we still record something.
+      // Other errors drop through to OPFS.
     }
   }
 
-  // 2) OPFS — chunks stream to a private file, then download via blob URL.
+  // 2) OPFS — chunks stream to a private file. Download requires a
+  // user gesture; we hand the caller a closure that does it.
   if (navigator.storage?.getDirectory) {
     try {
       const dir = await navigator.storage.getDirectory();
@@ -130,13 +141,13 @@ async function openSink(filename) {
         write: (blob) => writable.write(blob),
         close: async () => {
           await writable.close();
-          // getFile() returns a File backed by the OPFS entry — no
-          // memory copy, so multi-GB recordings stream off disk into
-          // the download instead of being loaded all at once.
-          const file = await handle.getFile();
-          triggerDownload(file, filename);
-          // Leave the OPFS file in place for the duration of the
-          // download; the next session's sweep will clean it up.
+          // Lazy: only fetch the File when the user actually taps save,
+          // so a stop-without-save doesn't waste memory.
+          const savePending = async () => {
+            const file = await handle.getFile();
+            triggerDownload(file, filename);
+          };
+          return { autoSaved: false, savePending, filename };
         },
         cleanup: async () => {
           try { await writable.abort(); } catch {}
@@ -146,8 +157,8 @@ async function openSink(filename) {
     } catch {}
   }
 
-  // 3) In-memory Blob[] fallback. Same shape as the disk paths; only
-  // the assembly differs.
+  // 3) In-memory Blob[] fallback. Same shape as the OPFS path — caller
+  // must invoke savePending() from a user gesture.
   const chunks = [];
   return {
     kind: 'memory',
@@ -155,7 +166,10 @@ async function openSink(filename) {
     close: async () => {
       const blob = new Blob(chunks, { type: chunks[0]?.type || 'video/webm' });
       chunks.length = 0;
-      if (blob.size > 0) triggerDownload(blob, filename);
+      const savePending = blob.size > 0
+        ? async () => { triggerDownload(blob, filename); }
+        : null;
+      return { autoSaved: false, savePending, filename };
     },
     cleanup: () => { chunks.length = 0; },
   };
@@ -164,6 +178,8 @@ async function openSink(filename) {
 /**
  * @param {{
  *   onStateChange?: (s: { recording: boolean, backend: ''|'display'|'canvas', sink: ''|'fsa'|'opfs'|'memory' }) => void,
+ *   onReadyToSave?: (info: { filename: string, autoSaved: boolean, save: (() => Promise<void>)|null }) => void,
+ *   onError?: (err: Error) => void,
  *   getCanvas?: () => HTMLCanvasElement|null,
  *   getMicStream?: () => MediaStream|null,
  * }} opts
@@ -179,11 +195,7 @@ export function createRecorder(opts = {}) {
   let backend = '';
   /** @type {Awaited<ReturnType<typeof openSink>>|null} */
   let sink = null;
-  // Serialize sink writes so chunks land in order, even if a previous
-  // write is still flushing when the next ondataavailable fires.
   let writeChain = Promise.resolve();
-  // Set on stop() so any in-flight writes know to skip — protects against
-  // a late chunk arriving after the user already abandoned.
   let stopping = false;
 
   function notify() {
@@ -206,8 +218,14 @@ export function createRecorder(opts = {}) {
     notify();
     if (!s) return;
     if (success) {
-      try { await s.close(); }
-      catch (err) { console.warn('[recorder] sink close failed:', err); }
+      try {
+        const info = await s.close();
+        // Hand the save closure to the page so it can prompt the user
+        // for the second gesture (mobile-safe download trigger).
+        opts.onReadyToSave?.(info);
+      } catch (err) {
+        opts.onError?.(err);
+      }
     } else {
       try { await s.cleanup(); } catch {}
     }
@@ -220,23 +238,21 @@ export function createRecorder(opts = {}) {
     recorder = new MediaRecorder(s, recOpts);
     recorder.ondataavailable = (e) => {
       if (!e.data || e.data.size === 0 || !sink || stopping) return;
-      // Chain writes so they serialize without ever blocking the audio
-      // thread that fired the event. A failed write logs once and stops
-      // the recording — better to fail loudly than silently drop data.
       writeChain = writeChain.then(() => sink.write(e.data)).catch(err => {
         console.warn('[recorder] write failed:', err);
+        opts.onError?.(err);
         if (!stopping) stop();
       });
     };
     recorder.onstop = async () => {
-      // Drain any pending writes before closing the sink so the file
-      // isn't truncated mid-chunk.
       try { await writeChain; } catch {}
       teardown(true);
     };
-    // 1s timeslice — small enough to drip chunks to the sink steadily
-    // even on slow flash storage, large enough to keep MediaRecorder's
-    // overhead modest.
+    recorder.onerror = (e) => {
+      const err = e?.error || new Error('MediaRecorder error');
+      opts.onError?.(err);
+      if (!stopping) stop();
+    };
     recorder.start(1000);
     startedAt = performance.now();
     stream = s;
@@ -269,11 +285,8 @@ export function createRecorder(opts = {}) {
     if (typeof MediaRecorder === 'undefined') {
       throw new Error('MediaRecorder not supported in this browser');
     }
-
-    // Best-effort housekeeping. Doesn't block start.
     sweepStaleOpfs().catch(() => {});
 
-    // 1) Capture backend.
     let s = null;
     let displayErr = null;
     try {
@@ -295,9 +308,6 @@ export function createRecorder(opts = {}) {
       backend = 'canvas';
     }
 
-    // 2) Sink backend — opened AFTER the capture stream so a failed
-    // display-capture doesn't get the user halfway through a save-as
-    // dialog before we know we even need one.
     mimeType = pickMime();
     const ext = (mimeType || '').includes('mp4') ? 'mp4' : 'webm';
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -305,8 +315,6 @@ export function createRecorder(opts = {}) {
     try {
       sink = await openSink(filename);
     } catch (err) {
-      // User cancelled the save-file picker — abandon the capture stream
-      // so the camera/screen indicator goes away.
       try { s.getTracks().forEach(t => t.stop()); } catch {}
       backend = '';
       throw err;
@@ -323,7 +331,6 @@ export function createRecorder(opts = {}) {
     if (recorder.state !== 'inactive') {
       try { recorder.stop(); } catch {}
     } else {
-      // Recorder already stopped on its own — drain + close manually.
       writeChain.catch(() => {}).finally(() => teardown(true));
     }
   }

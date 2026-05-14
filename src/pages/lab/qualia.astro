@@ -837,6 +837,40 @@
       color: var(--muted); font-size: 0.65rem; line-height: 1.3;
     }
 
+    /* Recording status pill. Fixed near the top of the viewport, above
+       everything (z above topbar 20, below #qualem-share modal 100) so
+       it's visible even in zen / fullscreen. .rec-active pulses the red
+       dot; .rec-ready (post-stop) flips the pill yellow with action
+       buttons exposed for the explicit "tap to save" user gesture. */
+    #rec-toast {
+      position: fixed;
+      top: max(0.75rem, env(safe-area-inset-top));
+      left: 50%; transform: translateX(-50%);
+      z-index: 50;
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.4rem 0.7rem;
+      background: rgba(10,10,26,0.92);
+      border: 1px solid var(--border); border-radius: 999px;
+      color: var(--text); font-family: var(--font-mono); font-size: 0.74rem;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+      max-width: 92vw;
+    }
+    #rec-toast-body { display: flex; align-items: center; gap: 0.4rem; }
+    #rec-toast-dot { color: #ff4d4d; }
+    #rec-toast.rec-active #rec-toast-dot { animation: rec-pulse 1.4s ease-in-out infinite; }
+    #rec-toast.rec-ready {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    #rec-toast.rec-ready #rec-toast-dot { color: var(--accent); animation: none; }
+    #rec-toast-actions { display: flex; gap: 0.3rem; }
+    #rec-toast-actions .ctrl-btn { padding: 0.15rem 0.55rem; font-size: 0.7rem; }
+    @keyframes rec-pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.25; }
+    }
+
     #strudel-mount {
       flex: 1; min-height: 0; overflow: auto;
       background: transparent;
@@ -1613,6 +1647,27 @@
       Anyone opening this link gets the same experience loaded automatically.
       QR-code display + GitHub Gist sync are coming in a follow-up.
     </div>
+  </div>
+</div>
+
+<!-- Recording status + save dialog. Two roles:
+     1. While recording, `#rec-toast` shows a fixed pill near the top of
+        the viewport so the user can SEE the recording is live even when
+        zen mode / fullscreen hides the topbar. It mirrors the rec button
+        state and shows mm:ss + the active backend.
+     2. After stop, the toast morphs into a "tap to save" prompt with an
+        explicit button. Mobile browsers reject anchor.click() inside an
+        async stop callback (lost user-gesture); the explicit tap is the
+        portable way to make sure the download fires. Desktop showSave-
+        FilePicker bypasses this entirely (file is already written). -->
+<div id="rec-toast" role="status" aria-live="polite" style="display:none">
+  <div id="rec-toast-body">
+    <span id="rec-toast-dot">●</span>
+    <span id="rec-toast-text">recording</span>
+  </div>
+  <div id="rec-toast-actions" style="display:none">
+    <button class="ctrl-btn" id="rec-toast-save" title="Download the recording">save</button>
+    <button class="ctrl-btn" id="rec-toast-dismiss" title="Dismiss without saving">dismiss</button>
   </div>
 </div>
 

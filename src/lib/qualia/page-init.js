@@ -1561,55 +1561,162 @@ export function initQualiaPage() {
   // where getDisplayMedia is missing or silently fails. The fallback only
   // captures the fx canvas (no overlay/HUD), plus mic audio when live.
   // Chunks stream straight to disk via showSaveFilePicker (desktop) or
-  // OPFS (mobile-friendly) so multi-hour sets don't OOM the tab — the
-  // in-memory path is only the last-resort fallback.
+  // OPFS (mobile-friendly) so multi-hour sets don't OOM the tab.
+  //
+  // Recording is INDEPENDENT of strudel / sequencer / vocoder / mic. The
+  // button only opens or closes the screen capture stream — engines play
+  // and stop as the user drives them; whatever's audible at the moment a
+  // chunk is captured is what lands in the file.
+  //
+  // Mobile save flow: after stop() the recorder fires onReadyToSave with
+  // a `save()` closure. We surface a "tap to save" button inside the
+  // rec-toast — that explicit user gesture is the portable way to fire a
+  // download on mobile, where async stop() loses its gesture context.
+  const recToast        = document.getElementById('rec-toast');
+  const recToastText    = document.getElementById('rec-toast-text');
+  const recToastActions = document.getElementById('rec-toast-actions');
+  const recToastSave    = document.getElementById('rec-toast-save');
+  const recToastDismiss = document.getElementById('rec-toast-dismiss');
+  let pendingSave = null;
+  let pendingFilename = '';
+
+  function refreshRecToastBackend(recording, backend, sink) {
+    if (!recording) return '';
+    const capLabel  = backend === 'canvas' ? 'fx canvas' : 'full page';
+    const sinkLabel = sink === 'fsa'    ? 'saving to chosen file'
+                    : sink === 'opfs'   ? 'streaming to device storage'
+                    : sink === 'memory' ? 'buffered in RAM'
+                    : '';
+    return `${capLabel} · ${sinkLabel}`;
+  }
+
+  function hideRecToast() {
+    if (!recToast) return;
+    recToast.style.display = 'none';
+    recToast.classList.remove('rec-active', 'rec-ready');
+    if (recToastActions) recToastActions.style.display = 'none';
+  }
+
+  function showRecToastActive(backend, sink) {
+    if (!recToast) return;
+    recToast.style.display = 'flex';
+    recToast.classList.add('rec-active');
+    recToast.classList.remove('rec-ready');
+    if (recToastActions) recToastActions.style.display = 'none';
+    const mode = refreshRecToastBackend(true, backend, sink);
+    if (recToastText) recToastText.textContent = `rec ● 00:00 — ${mode}`;
+  }
+
+  function showRecToastReady(filename, autoSaved) {
+    if (!recToast) return;
+    recToast.style.display = 'flex';
+    recToast.classList.remove('rec-active');
+    recToast.classList.add('rec-ready');
+    if (autoSaved) {
+      // showSaveFilePicker path — file is already on disk at the user's
+      // chosen location. No second tap needed; just confirm.
+      if (recToastText) recToastText.textContent = `saved · ${filename}`;
+      if (recToastActions) recToastActions.style.display = 'none';
+      setTimeout(hideRecToast, 6000);
+    } else {
+      if (recToastText) recToastText.textContent = `ready · tap save to download ${filename}`;
+      if (recToastActions) recToastActions.style.display = 'flex';
+    }
+  }
+
   const recorder = createRecorder({
     getCanvas:    () => core.getCanvas?.(),
     getMicStream: () => audio.getMicStream?.(),
     onStateChange: ({ recording, backend, sink }) => {
-      if (!btnRecord) return;
-      btnRecord.classList.toggle('active-audio', recording);
-      if (!recording) {
-        btnRecord.textContent = 'rec';
-        btnRecord.title = 'Record screen (Shift+R) — picks tab/window/screen via the browser share picker; tick to include audio';
-        return;
+      if (btnRecord) {
+        btnRecord.classList.toggle('active-audio', recording);
+        if (!recording) {
+          btnRecord.textContent = 'rec';
+          btnRecord.title = 'Record screen (Shift+R) — captures full page on desktop, fx canvas on mobile';
+        } else {
+          btnRecord.title = `Recording ${refreshRecToastBackend(true, backend, sink)}. Shift+R or click to stop.`;
+        }
       }
-      const capLabel  = backend === 'canvas' ? 'fx canvas only (no HUD)' : 'full page';
-      const sinkLabel = sink === 'fsa'    ? 'streaming to chosen file'
-                      : sink === 'opfs'   ? 'streaming to disk (OPFS)'
-                      : sink === 'memory' ? 'buffered in RAM'
-                      : '';
-      btnRecord.title = `Recording ${capLabel} · ${sinkLabel}. Shift+R or click to stop.`;
+      if (recording) showRecToastActive(backend, sink);
+      // When recording flips false, the toast either morphs to "ready"
+      // (via onReadyToSave below) or stays hidden — we don't auto-hide
+      // here so a pending-save indicator survives the state change.
+    },
+    onReadyToSave: ({ filename, autoSaved, save }) => {
+      pendingSave = save;
+      pendingFilename = filename;
+      showRecToastReady(filename, autoSaved);
+    },
+    onError: (err) => {
+      console.warn('[recorder]', err);
+      if (recToast && recToastText) {
+        recToast.style.display = 'flex';
+        recToast.classList.remove('rec-active');
+        recToast.classList.add('rec-ready');
+        recToastText.textContent = `recording error: ${err?.message || err}`;
+        if (recToastActions) recToastActions.style.display = 'none';
+        setTimeout(hideRecToast, 8000);
+      }
     },
   });
+
   if (btnRecord) {
     if (!recorder.isSupported()) {
       btnRecord.disabled = true;
       btnRecord.title = 'Screen recording not supported in this browser';
     }
     btnRecord.addEventListener('click', async () => {
+      // Hide any leftover post-stop toast — clicking rec again is the
+      // user telling us to start fresh, not save the previous one.
+      if (pendingSave) {
+        try { /* discard quietly */ } catch {}
+        pendingSave = null;
+        pendingFilename = '';
+        hideRecToast();
+      }
       try {
         if (recorder.isRecording()) recorder.stop();
         else await recorder.start();
       } catch (err) {
-        // User cancelled the share picker, or the browser denied it.
-        // Only surface a real error — cancellation is expected and silent.
-        if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') {
-          alert(`Screen recording failed: ${err?.message || err}`);
-        }
+        if (err?.name === 'NotAllowedError' || err?.name === 'AbortError') return;
+        alert(`Screen recording failed: ${err?.message || err}`);
       }
     });
-    // Per-second tick updates the "rec ●" label to "rec ● mm:ss" so the
-    // user can see how long the recording has been running. Idle ticks
-    // bail before touching the DOM.
+    // Per-second tick updates the toast + button label so the user can
+    // see the recording is live + how long it's been running.
     setInterval(() => {
       if (!recorder.isRecording()) return;
       const sec = Math.floor((performance.now() - recorder.getStartedAt()) / 1000);
       const mm = Math.floor(sec / 60).toString().padStart(2, '0');
       const ss = (sec % 60).toString().padStart(2, '0');
       btnRecord.textContent = `rec ● ${mm}:${ss}`;
+      if (recToastText && recToast?.classList.contains('rec-active')) {
+        const mode = refreshRecToastBackend(true, recorder.getBackend(), recorder.getSink());
+        recToastText.textContent = `rec ● ${mm}:${ss} — ${mode}`;
+      }
     }, 1000);
   }
+
+  // Save-dialog buttons. The tap inside this click handler IS the user
+  // gesture that lets the download anchor fire on mobile.
+  recToastSave?.addEventListener('click', async () => {
+    if (!pendingSave) return;
+    try {
+      await pendingSave();
+      if (recToastText) recToastText.textContent = `saved · ${pendingFilename}`;
+      if (recToastActions) recToastActions.style.display = 'none';
+      pendingSave = null;
+      pendingFilename = '';
+      setTimeout(hideRecToast, 4000);
+    } catch (err) {
+      alert(`Save failed: ${err?.message || err}`);
+    }
+  });
+  recToastDismiss?.addEventListener('click', () => {
+    pendingSave = null;
+    pendingFilename = '';
+    hideRecToast();
+  });
 
   // ── Reset fx params ───────────────────────────────────────────────────────
   fxResetBtn.addEventListener('click', () => core.applyFxPreset('default'));
