@@ -266,6 +266,7 @@ export function initQualiaPage() {
     moshCollapsed:  document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
     edgeCollapsed:  document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
     cameraCollapsed: cameraCard?.classList.contains('collapsed') ?? true,
+    qualemCollapsed: document.getElementById('qualem-card')?.classList.contains('collapsed') ?? true,
     cameraZoom:     lastZoomValue,
     videoPos:       videoOffset,
     captureMode,
@@ -455,6 +456,10 @@ export function initQualiaPage() {
   const fxCardEl = document.getElementById('fx-card');
   if (fxCardEl && typeof stored.paramsCollapsed === 'boolean') {
     fxCardEl.classList.toggle('collapsed', stored.paramsCollapsed);
+  }
+  const qualemCardEl = document.getElementById('qualem-card');
+  if (qualemCardEl && typeof stored.qualemCollapsed === 'boolean') {
+    qualemCardEl.classList.toggle('collapsed', stored.qualemCollapsed);
   }
   // Pose card visibility tracks the pose source — only shown when pose is on.
   function syncPoseCardVisibility() {

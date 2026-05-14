@@ -2,6 +2,24 @@
 // Qualia — pluggable visualizer harness. The shell here is intentionally
 // thin; everything reactive lives in src/lib/qualia/. Adding a new fx is
 // one new file in src/lib/qualia/fx/<name>.js plus a register() call below.
+import { execSync } from 'node:child_process';
+
+// Build stamp — short commit + commit timestamp + build timestamp.
+// Baked at build time so the deployed page can be verified against the
+// latest commit (avoids "is my browser serving a stale cache?" guesswork).
+// Surfaced three ways: <meta name="voidstar-build"> in view-source,
+// window.__VOIDSTAR_BUILD__ in the console, and a row at the top of the
+// diag panel. Same helper lives in BaseLayout.astro for non-lab pages;
+// qualia is standalone (doesn't wrap BaseLayout) so we recompute here.
+function readBuildStamp() {
+  let commit = '?', commitISO = '?';
+  try { commit    = execSync('git rev-parse --short HEAD').toString().trim(); } catch {}
+  try { commitISO = execSync('git log -1 --format=%cI').toString().trim();   } catch {}
+  return { commit, commitISO, builtAt: new Date().toISOString() };
+}
+const buildStamp = readBuildStamp();
+// Compact form for the diag panel readout — `<sha> · built YYYY-MM-DD HH:MM Z`.
+const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slice(0, 16).replace('T', ' ')}Z`;
 ---
 <!doctype html>
 <html lang="en">
@@ -19,6 +37,18 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="qualia" />
+  <meta name="voidstar-build" content={`${buildStamp.commit} · committed ${buildStamp.commitISO} · built ${buildStamp.builtAt}`} />
+
+  <!-- Build stamp on window + console — every page can be verified against
+       the latest deploy independent of the debug overlay. Run this BEFORE
+       the SW registration so the SW boot log lands after the build log in
+       DevTools order. -->
+  <script is:inline define:vars={{ build: buildStamp }}>
+    window.__VOIDSTAR_BUILD__ = build;
+    console.log('[voidstar/qualia] build ' + build.commit
+      + ' · committed ' + build.commitISO
+      + ' · built ' + build.builtAt);
+  </script>
 
   <!-- Register the PWA service worker (skipped on local dev hosts so
        Astro's HMR isn't fighting cached assets). -->
@@ -59,7 +89,10 @@
           badge = document.createElement('div');
           badge.id = 'voidstar-debug-badge';
           badge.textContent = 'DBG…';
-          badge.title = 'voidstar debug — tap to open console; long-press to disable';
+          var b = window.__VOIDSTAR_BUILD__ || {};
+          badge.title = 'voidstar build ' + (b.commit || '?')
+            + (b.builtAt ? ' · built ' + b.builtAt : '')
+            + ' — tap to open console; long-press to disable';
           var s = badge.style;
           s.position = 'fixed';
           s.top = 'calc(env(safe-area-inset-top, 0px) + 6px)';
@@ -622,6 +655,19 @@
     .diag-row { gap: 0.6rem; }
     .diag-row .diag-label { color: var(--text); }
     .diag-row .qp-val     { font-variant-numeric: tabular-nums; }
+    /* Build-stamp header at the top of the diag body. Selectable so the
+       user can copy the sha into a bug report. Tooltip carries the full
+       commit ISO + build ISO for cache-debugging. */
+    .diag-build {
+      font-family: var(--font-mono); font-size: 0.62rem;
+      color: var(--muted); letter-spacing: 0.03em;
+      text-align: center;
+      padding: 0.1rem 0 0.45rem;
+      border-bottom: 1px dashed var(--border);
+      margin-bottom: 0.15rem;
+      user-select: text; -webkit-user-select: text; cursor: text;
+    }
+    .diag-build:hover { color: var(--text); }
 
     #hints {
       position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 10;
@@ -779,9 +825,16 @@
        the qualem-card head upward as the list grows. On Safari/Mac the
        column-reverse scrollbar inside #panel-stack doesn't reliably reach
        that head once it's pushed offscreen, leaving the user unable to
-       click "▾" to minimize. Internal scrolling keeps the head pinned. */
+       click "▾" to minimize. Internal scrolling keeps the head pinned.
+
+       NOTE: do NOT set `display` here. The base `.qp-body` rule already
+       gives us `display: flex; flex-direction: column;`, and the collapse
+       rule `.qp-card.collapsed > .qp-body { display: none }` relies on
+       class specificity. An ID selector with `display: flex` would beat
+       the collapse rule (1,0,0 > 0,3,0) and the panel would refuse to
+       collapse on header click. */
     #qualem-body {
-      display: flex; flex-direction: column; gap: 0.5rem;
+      gap: 0.5rem;
       font-family: var(--font-mono); font-size: 0.74rem;
       max-height: 55vh;
     }
@@ -1451,6 +1504,7 @@
       <span>▾</span>
     </div>
     <div class="qp-body" id="diag-body">
+      <div class="diag-build" title={`commit ${buildStamp.commit} · committed ${buildStamp.commitISO} · built ${buildStamp.builtAt}`}>{buildStampShort}</div>
       <div class="qp-row diag-row"><span class="diag-label">fps</span><span class="qp-val" id="diag-fps">—</span></div>
       <div class="qp-row diag-row"><span class="diag-label">frame</span><span class="qp-val" id="diag-ms">—</span></div>
       <div class="qp-row diag-row"><span class="diag-label">bass</span><span class="qp-val" id="diag-bass">—</span></div>
