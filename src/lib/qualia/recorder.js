@@ -303,7 +303,16 @@ export function createRecorder(opts = {}) {
     if (mimeType) recOpts.mimeType = mimeType;
     recorder = new MediaRecorder(s, recOpts);
     recorder.ondataavailable = (e) => {
-      if (!e.data || e.data.size === 0 || !sink || stopping) return;
+      // Keep writing while `stopping` is true: MediaRecorder.stop() fires
+      // one final `ondataavailable` carrying the flushed tail. For WebM
+      // that's only a few KB (clusters land every timeslice) so dropping
+      // it merely truncated a frame or two — for Chrome's MP4 muxer on
+      // Android the moof+mdat fragments are almost entirely in the stop
+      // flush, so dropping them produced 752-byte "header-only" MP4s that
+      // looked like a successful recording but had zero playable media.
+      // teardown() awaits writeChain before closing the sink, so racing
+      // a late write isn't a concern.
+      if (!e.data || e.data.size === 0 || !sink) return;
       writeChain = writeChain.then(() => sink.write(e.data)).catch(err => {
         console.warn('[recorder] write failed:', err);
         opts.onError?.(err);
