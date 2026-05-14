@@ -40,25 +40,32 @@
 // Stale OPFS sweep: every start() prunes leftover qualia-*.webm files
 // older than ten minutes so an abandoned recording doesn't squat on quota.
 
-import fixWebmDuration from 'fix-webm-duration';
+// Codec preference: try MP4 first because Android's stock Photos /
+// Gallery decodes h264 natively and refuses WebM regardless of how
+// well-formed it is. Both MP4 and WebM from MediaRecorder need their
+// duration fields patched at finalize (Chrome writes neither during
+// recording), so we ship inline patchers for both formats and pick
+// based on which mime MediaRecorder actually chose.
+
+import fixWebmDuration       from 'fix-webm-duration';
+import { fixMp4Duration }    from './fix-mp4-duration.js';
 
 const MIME_CANDIDATES = [
-  // WebM preferred. Chrome's MediaRecorder writes WebM without a
-  // Duration tag in the segment header, but fix-webm-duration patches
-  // that at finalize so the file plays in every Android video app.
-  // MediaRecorder's MP4 output is fragmented MP4 (fMP4) with an
-  // uninitialized duration field in the moov header — Android stock
-  // Photos shows it as 0:00 with a broken-file icon and there's no
-  // small library equivalent of fix-webm-duration for the MP4 case,
-  // so we stick with WebM where the fix is reliable.
+  // MP4 first — fragmented MP4 from MediaRecorder, but the inline
+  // fix-mp4-duration patcher rewrites moov.mvhd / trak.tkhd / trak.mdia.mdhd
+  // and mvex.mehd to embed the actual duration, after which Android
+  // stock Photos opens and plays the file.
+  'video/mp4;codecs=h264,aac',
+  'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+  'video/mp4;codecs=avc1,mp4a',
+  'video/mp4',
+  // WebM fallback. fix-webm-duration patches the EBML segment header
+  // so Chrome plays the file. Some Android players still won't open
+  // WebM, so this branch is a "good enough on desktop, may need VLC
+  // on phones" path used only when MP4 is unavailable.
   'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
   'video/webm',
-  // MP4 last — only used when WebM is unavailable. Will likely still
-  // fail to open in stock Android Photos for the reason above; on
-  // browsers where this gets picked, suggest VLC for playback.
-  'video/mp4;codecs=h264,aac',
-  'video/mp4',
 ];
 
 const OPFS_STALE_MS = 10 * 60 * 1000;
@@ -257,17 +264,21 @@ export function createRecorder(opts = {}) {
         // picked location (we can't re-open + rewrite that), and skip
         // for MP4 output (no fix needed).
         let blob = info.blob;
-        if (!info.autoSaved && blob && wasMime?.startsWith('video/webm')) {
+        if (!info.autoSaved && blob) {
+          const durMs = Math.max(0, performance.now() - startedMs);
           try {
-            const durMs = Math.max(0, performance.now() - startedMs);
-            console.log(`[recorder] applying webm duration fix · ${blob.size} bytes · ${Math.round(durMs)}ms`);
-            blob = await fixWebmDuration(blob, durMs);
-            console.log(`[recorder] duration fix done · output ${blob.size} bytes`);
+            if (wasMime?.startsWith('video/mp4')) {
+              console.log(`[recorder] applying mp4 duration fix · ${blob.size} bytes · ${Math.round(durMs)}ms`);
+              blob = await fixMp4Duration(blob, durMs);
+              console.log(`[recorder] mp4 duration fix done · output ${blob.size} bytes`);
+            } else if (wasMime?.startsWith('video/webm')) {
+              console.log(`[recorder] applying webm duration fix · ${blob.size} bytes · ${Math.round(durMs)}ms`);
+              blob = await fixWebmDuration(blob, durMs);
+              console.log(`[recorder] webm duration fix done · output ${blob.size} bytes`);
+            }
           } catch (err) {
-            console.warn('[recorder] webm duration fix failed; saving unfixed:', err);
+            console.warn(`[recorder] duration fix failed (mime=${wasMime}); saving unfixed:`, err);
           }
-        } else if (!info.autoSaved && blob) {
-          console.log(`[recorder] skipping duration fix (mime=${wasMime}) · ${blob.size} bytes`);
         }
         const save = blob
           ? () => { triggerDownload(blob, info.filename); return Promise.resolve(); }
