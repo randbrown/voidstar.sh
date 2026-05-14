@@ -51,18 +51,25 @@ import fixWebmDuration       from 'fix-webm-duration';
 import { fixMp4Duration }    from './fix-mp4-duration.js';
 
 const MIME_CANDIDATES = [
-  // MP4 first — fragmented MP4 from MediaRecorder, but the inline
-  // fix-mp4-duration patcher rewrites moov.mvhd / trak.tkhd / trak.mdia.mdhd
-  // and mvex.mehd to embed the actual duration, after which Android
-  // stock Photos opens and plays the file.
-  'video/mp4;codecs=h264,aac',
-  'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-  'video/mp4;codecs=avc1,mp4a',
-  'video/mp4',
-  // WebM fallback. fix-webm-duration patches the EBML segment header
-  // so Chrome plays the file. Some Android players still won't open
-  // WebM, so this branch is a "good enough on desktop, may need VLC
-  // on phones" path used only when MP4 is unavailable.
+  // H.264 profile/level matters more than it looks. Chrome's Android
+  // MediaRecorder will happily report `avc1.42E01E` (Baseline 3.0) as
+  // supported via isTypeSupported(), but Baseline 3.0 caps at 720x480 —
+  // any modern phone canvas is bigger than that, so the hardware encoder
+  // throws `EncodingError: "The given encoder configuration is not
+  // supported by the encoder."` on the first frame and we get 0-byte
+  // recordings. Putting High 4.2 / High 4.0 first asks Chrome for an
+  // encoder configuration that actually fits a 1080p+ canvas, with
+  // Main 4.0 / Baseline 4.0 as fallbacks before bare 'video/mp4' lets
+  // Chrome pick (which would re-pick Baseline 3.0).
+  'video/mp4;codecs=avc1.64002A,mp4a.40.2',  // High 4.2  — up to 2048x1088
+  'video/mp4;codecs=avc1.640028,mp4a.40.2',  // High 4.0  — up to 1920x1080
+  'video/mp4;codecs=avc1.4D4028,mp4a.40.2',  // Main 4.0  — up to 1920x1080
+  'video/mp4;codecs=avc1.42E028,mp4a.40.2',  // Baseline 4.0 — up to 1920x1080
+  'video/mp4;codecs=avc1,mp4a',              // any AVC1 + any AAC — browser picks
+  'video/mp4',                                // last MP4 resort — likely Baseline 3.0
+  // WebM fallback. fix-webm-duration patches the EBML segment header so
+  // Chrome plays the file; Samsung Gallery doesn't open WebM but VLC
+  // does, so this branch is the "last-ditch saveable" path.
   'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
   'video/webm',
@@ -210,7 +217,7 @@ async function openSink(filename) {
 /**
  * @param {{
  *   onStateChange?: (s: { recording: boolean, backend: ''|'display'|'canvas', sink: ''|'fsa'|'opfs'|'memory' }) => void,
- *   onReadyToSave?: (info: { filename: string, autoSaved: boolean, save: (() => Promise<void>)|null }) => void,
+ *   onReadyToSave?: (info: { filename: string, autoSaved: boolean, save: (() => Promise<void>)|null, failed: boolean, size: number }) => void,
  *   onError?: (err: Error) => void,
  *   getCanvas?: () => HTMLCanvasElement|null,
  *   getMicStream?: () => MediaStream|null,
@@ -295,13 +302,22 @@ export function createRecorder(opts = {}) {
             console.warn(`[recorder] duration fix failed (mime=${wasMime}); saving unfixed:`, err);
           }
         }
-        const save = blob
+        // Only offer a save if there's actually something to save. A zero-
+        // byte blob (Chrome's EncodingError + nothing recoverable in
+        // memChunks, sink failure, etc.) used to fall through to auto-save
+        // and produce a Chrome "Download error" notification — now we
+        // surface a `failed` signal to the page so it can show an error
+        // toast instead of pretending we saved.
+        const hasData = info.autoSaved || (blob && blob.size > 0);
+        const save = hasData && blob && blob.size > 0
           ? () => { triggerDownload(blob, info.filename); return Promise.resolve(); }
           : null;
         opts.onReadyToSave?.({
           filename:  info.filename,
           autoSaved: info.autoSaved,
           save,
+          failed:    !hasData,
+          size:      blob?.size ?? 0,
         });
       } catch (err) {
         opts.onError?.(err);
@@ -317,22 +333,22 @@ export function createRecorder(opts = {}) {
     if (mimeType) recOpts.mimeType = mimeType;
     recorder = new MediaRecorder(s, recOpts);
     recorder.ondataavailable = (e) => {
-      // Keep writing while `stopping` is true: MediaRecorder.stop() fires
-      // one final `ondataavailable` carrying the flushed tail. For WebM
-      // that's only a few KB (clusters land every timeslice) so dropping
-      // it merely truncated a frame or two — for Chrome's MP4 muxer on
-      // Android the moof+mdat fragments are almost entirely in the stop
-      // flush, so dropping them produced 752-byte "header-only" MP4s that
-      // looked like a successful recording but had zero playable media.
-      // teardown() awaits writeChain before closing the sink, so racing
-      // a late write isn't a concern.
-      if (!e.data || e.data.size === 0 || !sink) {
-        console.log(`[recorder] chunk · ${e.data?.size ?? 'null'} bytes${stopping ? ' (during stop)' : ''} — skipped`);
+      // Always push non-empty chunks into the memory backup, even if the
+      // sink has already been torn down (e.g. EncodingError fired
+      // onerror → stop → teardown, and now a late flush is arriving).
+      // teardown's memChunks→blob fallback runs before we clear the
+      // array so any post-error data still gets a chance to be saved.
+      if (!e.data || e.data.size === 0) {
+        console.log(`[recorder] chunk · ${e.data?.size ?? 'null'} bytes — empty`);
         return;
       }
       memChunks.push(e.data);
       memBytes += e.data.size;
-      console.log(`[recorder] chunk · ${e.data.size} bytes${stopping ? ' (final flush)' : ''} · total ${memBytes}`);
+      console.log(
+        `[recorder] chunk · ${e.data.size} bytes${stopping ? ' (final flush)' : ''}` +
+        ` · total ${memBytes}${sink ? '' : ' (sink closed, memory only)'}`
+      );
+      if (!sink) return;
       writeChain = writeChain.then(() => sink.write(e.data)).catch(err => {
         console.warn('[recorder] write failed:', err);
         opts.onError?.(err);

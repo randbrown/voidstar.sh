@@ -1659,24 +1659,31 @@ export function initQualiaPage() {
       // (via onReadyToSave below) or stays hidden — we don't auto-hide
       // here so a pending-save indicator survives the state change.
     },
-    onReadyToSave: ({ filename, autoSaved, save }) => {
-      // Auto-save: fire the download immediately and surface a passive
-      // "saved · filename" toast that auto-hides — no tap-to-save / tap-
-      // to-dismiss step. The download uses `<a download>` with the
-      // pre-computed filename, so Chrome drops it straight into the
-      // browser's default download path with no save dialog.
-      //
-      // If the browser rejects the auto-save (rare: usually strict iOS
-      // Safari where the gesture chain has decayed past stop()), fall
-      // back to the old manual toast so the user can still recover.
+    onReadyToSave: ({ filename, autoSaved, save, failed, size }) => {
       pendingSave = save;
       pendingFilename = filename;
+      // Recording failed (encoder rejected the config, sink lost the data,
+      // etc.). Surface the error instead of pretending we saved nothing.
+      if (failed) {
+        if (recToast && recToastText) {
+          recToast.style.display = 'flex';
+          recToast.classList.remove('rec-active');
+          recToast.classList.add('rec-ready');
+          recToastText.textContent = `recording failed · ${size} bytes — check console`;
+          if (recToastActions) recToastActions.style.display = 'none';
+          setTimeout(hideRecToast, 8000);
+        }
+        return;
+      }
+      // Auto-save: fire the download immediately and surface a passive
+      // "saved · filename" toast that auto-hides — no tap-to-save step.
+      // If the browser rejects the auto-save (rare: very strict iOS
+      // Safari where the gesture chain has decayed past stop()), fall
+      // back to the old manual toast so the user can still recover.
       if (autoSaved || !save) {
         showRecToastReady(filename, true, null);
         return;
       }
-      // Show the "saved" toast up front — the download fires in the
-      // same task so it'll land within a few hundred ms.
       showRecToastReady(filename, true, null);
       save().catch(err => {
         console.warn('[recorder] auto-save failed, falling back to manual save:', err);
