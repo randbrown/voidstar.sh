@@ -837,32 +837,46 @@
       color: var(--muted); font-size: 0.65rem; line-height: 1.3;
     }
 
-    /* Recording status pill. Fixed near the top of the viewport, above
-       everything (z above topbar 20, below #qualem-share modal 100) so
-       it's visible even in zen / fullscreen. .rec-active pulses the red
-       dot; .rec-ready (post-stop) flips the pill yellow with action
-       buttons exposed for the explicit "tap to save" user gesture. */
+    /* Recording status pill. Two roles depending on which class is set:
+       - .rec-active: visible during recording, but COMPACT and pinned
+         bottom-center with pointer-events:none so it never obstructs
+         topbar menus. The rec button itself shows the timer + color
+         change as the primary indicator; this pill is a backup for
+         zen / fullscreen mode where the topbar is hidden.
+       - .rec-ready (post-stop): bottom-center, larger, interactive,
+         with save / dismiss buttons. This one has to capture taps so
+         the user gesture cascades into the download. */
     #rec-toast {
       position: fixed;
-      top: max(0.75rem, env(safe-area-inset-top));
       left: 50%; transform: translateX(-50%);
       z-index: 50;
-      display: flex; align-items: center; gap: 0.6rem;
-      padding: 0.4rem 0.7rem;
-      background: rgba(10,10,26,0.92);
+      display: flex; align-items: center; gap: 0.5rem;
+      background: rgba(10,10,26,0.85);
       border: 1px solid var(--border); border-radius: 999px;
-      color: var(--text); font-family: var(--font-mono); font-size: 0.74rem;
+      color: var(--text); font-family: var(--font-mono);
       box-shadow: 0 4px 16px rgba(0,0,0,0.5);
       backdrop-filter: blur(8px);
       max-width: 92vw;
     }
-    #rec-toast-body { display: flex; align-items: center; gap: 0.4rem; }
-    #rec-toast-dot { color: #ff4d4d; }
-    #rec-toast.rec-active #rec-toast-dot { animation: rec-pulse 1.4s ease-in-out infinite; }
+    /* Active recording: compact pill, bottom-center, click-through. */
+    #rec-toast.rec-active {
+      bottom: calc(env(safe-area-inset-bottom, 0px) + var(--tabs-h, 0px) + 0.6rem);
+      padding: 0.2rem 0.6rem;
+      font-size: 0.68rem;
+      pointer-events: none;     /* taps pass through to whatever's below */
+      opacity: 0.85;
+    }
+    /* Post-stop: bigger, interactive, same bottom anchor. */
     #rec-toast.rec-ready {
+      bottom: calc(env(safe-area-inset-bottom, 0px) + var(--tabs-h, 0px) + 0.6rem);
+      padding: 0.45rem 0.7rem;
+      font-size: 0.74rem;
       border-color: var(--accent);
       color: var(--accent);
     }
+    #rec-toast-body { display: flex; align-items: center; gap: 0.35rem; }
+    #rec-toast-dot { color: #ff4d4d; }
+    #rec-toast.rec-active #rec-toast-dot { animation: rec-pulse 1.4s ease-in-out infinite; }
     #rec-toast.rec-ready #rec-toast-dot { color: var(--accent); animation: none; }
     #rec-toast-actions { display: flex; gap: 0.3rem; }
     #rec-toast-actions .ctrl-btn { padding: 0.15rem 0.55rem; font-size: 0.7rem; }

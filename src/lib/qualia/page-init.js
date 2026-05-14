@@ -1598,9 +1598,12 @@ export function initQualiaPage() {
   }
 
   function showRecToastActive(backend, sink) {
-    // If the toast DOM is missing (stale build cached in the user's
-    // browser, etc.), fall back to a brief title-bar text on the rec
-    // button so the user gets SOME confirmation the recording started.
+    // Active pill: compact timer only, bottom-center, click-through. The
+    // rec button itself is the primary indicator (color + text); the
+    // pill is just a backup for zen / fullscreen mode where the topbar
+    // is hidden. Backend/sink detail goes in the button tooltip, not
+    // here — we don't want a wide pill blocking topbar dropdowns when
+    // it wraps to two lines on narrow phones.
     if (!recToast) {
       if (btnRecord) btnRecord.title = `Recording — ${refreshRecToastBackend(true, backend, sink)}`;
       return;
@@ -1609,8 +1612,7 @@ export function initQualiaPage() {
     recToast.classList.add('rec-active');
     recToast.classList.remove('rec-ready');
     if (recToastActions) recToastActions.style.display = 'none';
-    const mode = refreshRecToastBackend(true, backend, sink);
-    if (recToastText) recToastText.textContent = `rec ● 00:00 — ${mode}`;
+    if (recToastText) recToastText.textContent = '00:00';
   }
 
   function showRecToastReady(filename, autoSaved, save) {
@@ -1710,8 +1712,10 @@ export function initQualiaPage() {
         alert(`Screen recording failed: ${err?.message || err}`);
       }
     });
-    // Per-second tick updates the toast + button label so the user can
-    // see the recording is live + how long it's been running.
+    // Per-second tick updates the button label + compact pill timer so
+    // the user can see the recording is live + how long it's been
+    // running. Pill text stays just "mm:ss" — keeping it small enough
+    // to not obstruct anything when pinned bottom-center.
     setInterval(() => {
       if (!recorder.isRecording()) return;
       const sec = Math.floor((performance.now() - recorder.getStartedAt()) / 1000);
@@ -1719,8 +1723,7 @@ export function initQualiaPage() {
       const ss = (sec % 60).toString().padStart(2, '0');
       btnRecord.textContent = `rec ● ${mm}:${ss}`;
       if (recToastText && recToast?.classList.contains('rec-active')) {
-        const mode = refreshRecToastBackend(true, recorder.getBackend(), recorder.getSink());
-        recToastText.textContent = `rec ● ${mm}:${ss} — ${mode}`;
+        recToastText.textContent = `${mm}:${ss}`;
       }
     }, 1000);
   }
