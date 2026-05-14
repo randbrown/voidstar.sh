@@ -274,9 +274,9 @@ export default {
     { id: 'particleScale', label: 'density',      type: 'select', options: PARTICLE_TIERS, default: 'medium' },
     { id: 'palette',       label: 'palette',      type: 'select', options: PALETTES, default: 'auto' },
     { id: 'gridLines',     label: 'grid',         type: 'toggle', default: true },
-    { id: 'showLegend',    label: 'legend',       type: 'toggle', default: true },
+    { id: 'showLegend',    label: 'legend',       type: 'toggle', default: false },
     { id: 'reactivity',    label: 'reactivity',   type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
-    { id: 'lyrics',        label: 'lyrics',       type: 'select', options: ['off', 'builtin'], default: 'builtin' },
+    { id: 'lyrics',        label: 'lyrics',       type: 'select', options: ['off', 'builtin'], default: 'off' },
     { id: 'lyricsStyle',   label: 'lyric style',  type: 'select', options: STYLES, default: 'auto' },
     { id: 'lyricsAdvance', label: 'lyric advance',type: 'select', options: ADVANCE_MODES, default: 'tempo' },
     { id: 'lyricsTempo',   label: 'sec / line',   type: 'range', min: 1, max: 12, step: 0.5, default: 4 },
@@ -311,7 +311,7 @@ export default {
   },
 
   presets: {
-    default:   { mode: 'hybrid',  focusStratum: 'cosmic', travelSpeed: 0.6, dwellSec: 5, particleScale: 'medium', palette: 'auto',    gridLines: true,  showLegend: true, reactivity: 1.0, lyrics: 'builtin', lyricsStyle: 'auto', lyricsAdvance: 'tempo', lyricsTempo: 4, lyricsOpacity: 0.85, lyricsTTS: 'off', ttsRate: 0.95, ttsPitch: 0.85 },
+    default:   { mode: 'hybrid',  focusStratum: 'cosmic', travelSpeed: 0.6, dwellSec: 5, particleScale: 'medium', palette: 'auto',    gridLines: true,  showLegend: false, reactivity: 1.0, lyrics: 'off', lyricsStyle: 'auto', lyricsAdvance: 'tempo', lyricsTempo: 4, lyricsOpacity: 0.85, lyricsTTS: 'off', ttsRate: 0.95, ttsPitch: 0.85 },
     journey:   { mode: 'travel',  travelSpeed: 0.4, lyricsAdvance: 'tempo', lyricsTempo: 5, palette: 'auto' },
     breakdown: { mode: 'shuffle', travelSpeed: 0.0, palette: 'inferno', lyricsStyle: 'shatter', lyricsAdvance: 'beat' },
     cosmic:    { mode: 'focus',   focusStratum: 'cosmic',   palette: 'cool',    lyricsStyle: 'concrete' },

@@ -19,6 +19,7 @@ import { createStrudelHydra } from './strudel-hydra.js';
 import { createSequencer } from './sequencer.js';
 import { createVocoder } from './vocoder.js';
 import { createCursorFx } from './cursor-fx.js';
+import { createRecorder } from './recorder.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror } from './video.js';
 import chladni         from './fx/chladni.js';
@@ -50,7 +51,7 @@ const AUTO_PHASE_STYLES = ['chapters', 'alternate', 'random', 'hold'];
 // Auto-cycle: swaps the active qfx ITSELF on a longer timer. Independent of
 // auto-phase — the two can run together (a single qfx phases through its
 // modes, then cycle picks the next quale and the new one starts phasing).
-const CYCLE_PERIODS = [0, 15, 30, 45];          // seconds
+const CYCLE_PERIODS = [0, 5, 15, 30, 45];       // seconds
 const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 // "Glitch" post-process modes (shared by ascii / mosh / edge). The button
 // cycles through these:
@@ -67,14 +68,16 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 //   mix:     mic + strudel both feed (user opts in; pick this when the
 //            mic is on a clean line — guitar interface, etc — so there's
 //            no acoustic feedback path back from speakers)
-// Audio source mode selector — three real-world states:
+// Audio source mode selector — four real-world states:
 //   off → no reactivity
+//   mic → mic only (engines ignored — full venue mix from one input,
+//          useful when playing with others through a shared PA)
 //   mix → strudel + sequencer (no mic; play through speakers without
 //          feedback risk)
 //   all → strudel + sequencer + mic
-// Older multi-state values (mic, strudel, sequencer alone) get
-// remapped on load — see the audioMode restore block below.
-const AUDIO_MODES   = ['off', 'mix', 'all'];
+// Older multi-state values (strudel, sequencer alone) get remapped on
+// load — see the audioMode restore block below.
+const AUDIO_MODES   = ['off', 'mic', 'mix', 'all'];
 const GLITCH_MODES  = ['off', 'on', 'blip', 'flip'];
 const GLITCH_KEYS   = ['ascii', 'mosh', 'edge'];
 const BLIP_DURATION_MS = 280;
@@ -130,6 +133,7 @@ export function initQualiaPage() {
   const btnPause   = document.getElementById('btn-pause');
   const btnZen     = document.getElementById('btn-zen');
   const btnFullscreen = document.getElementById('btn-fullscreen');
+  const btnRecord  = document.getElementById('btn-record');
   const btnCamera  = document.getElementById('btn-camera');
   const btnCamRotate = document.getElementById('btn-cam-rotate');
   const btnCamMirror = document.getElementById('btn-cam-mirror');
@@ -299,21 +303,22 @@ export function initQualiaPage() {
   // Per-glitch blip auto-clear timestamps (epoch ms; 0 = inactive).
   const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0 };
 
-  // Audio mode. The button now cycles through three real-world states:
-  //   off → mix (strudel + seq, no mic) → all (strudel + seq + mic)
-  // The intermediate mic-only / strudel-only / sequencer-only states
-  // were dropped — in practice everyone runs both engines together,
-  // and the only meaningful axis was "do we open the mic too".
+  // Audio mode. The button cycles through four real-world states:
+  //   off → mic (mic only) → mix (strudel + seq, no mic) → all (everything)
+  // The 'mic' mode is useful at venues — feed reactivity from a shared
+  // PA / room mic without adding the direct engine streams.
   //
   // Migrations across earlier shapes:
   //   - `audioOn` boolean: true → 'all' (legacy mic mode also wanted reactivity), false → 'off'.
   //   - older `audioMode` ∈ {off, mic, strudel, sequencer, mix, all}:
-  //       'mic'/'all' → 'all'  (preserve mic intent)
+  //       'mic' → 'mic'  (mic-only intent preserved)
+  //       'all' → 'all'
   //       'strudel'/'sequencer'/'mix' → 'mix'  (preserve "engines, no mic" intent)
   //       'off' → 'off'
   let audioMode;
   if (typeof stored.audioMode === 'string') {
-    if (stored.audioMode === 'mic' || stored.audioMode === 'all') audioMode = 'all';
+    if (stored.audioMode === 'all') audioMode = 'all';
+    else if (stored.audioMode === 'mic') audioMode = 'mic';
     else if (stored.audioMode === 'off') audioMode = 'off';
     else audioMode = 'mix';
   } else if (typeof stored.audioOn === 'boolean') {
@@ -720,9 +725,10 @@ export function initQualiaPage() {
   window.matchMedia('(max-width: 768px), (pointer: coarse)')
     .addEventListener?.('change', setTabsVar);
 
-  // ── Audio source mode (off / mix / all) ─────────────────────────────────
-  // The button is a 3-state selector matching real-world usage:
+  // ── Audio source mode (off / mic / mix / all) ──────────────────────────
+  // The button is a 4-state selector matching real-world usage:
   //   off → mic stopped, audio.setSourceFilter([])
+  //   mic → mic running, filter ['mic']  (engines ignored — venue mix)
   //   mix → mic stopped, filter ['strudel', 'sequencer']  (engines only)
   //   all → mic running, filter ['mic', 'strudel', 'sequencer']
   // The `onChange` callback only handles visual side-effects from external
@@ -745,6 +751,7 @@ export function initQualiaPage() {
   function applyAudioFilter() {
     switch (audioMode) {
       case 'off': audio.setSourceFilter([]);                              break;
+      case 'mic': audio.setSourceFilter(['mic']);                         break;
       case 'mix': audio.setSourceFilter(['strudel', 'sequencer']);        break;
       case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer']); break;
     }
@@ -757,10 +764,10 @@ export function initQualiaPage() {
       // Pink (active-audio) when the mic itself is engaged — visual hint
       // that we're listening to the room. Cyan (active) for engines-only
       // mix where no live mic is open.
-      const micEngaged = audioMode === 'all';
+      const micEngaged = audioMode === 'all' || audioMode === 'mic';
       btnAudio.classList.add(micEngaged ? 'active-audio' : 'active');
     }
-    btnAudio.title = 'Audio source (A) — off / mix (strudel+seq) / all (+mic)';
+    btnAudio.title = 'Audio source (A) — off / mic / mix (strudel+seq) / all (+mic)';
     // Audio panel visibility tracks "is anything driving reactivity" — open
     // when mode != off.
     audioCard.style.display = audioMode === 'off' ? 'none' : '';
@@ -770,7 +777,7 @@ export function initQualiaPage() {
     if (!AUDIO_MODES.includes(mode)) return;
     const prevMode = audioMode;
     audioMode = mode;
-    const wantMic = mode === 'all';
+    const wantMic = mode === 'all' || mode === 'mic';
     try {
       if (wantMic && !audio.hasSource('mic')) {
         await startMic(getStoredDeviceId('mic'));
@@ -1548,6 +1555,200 @@ export function initQualiaPage() {
   document.addEventListener('fullscreenchange', refreshFullscreenBtn);
   document.addEventListener('webkitfullscreenchange', refreshFullscreenBtn);
 
+  // ── Screen recorder ──────────────────────────────────────────────────────
+  // Two capture backends inside createRecorder: getDisplayMedia (desktop)
+  // and a canvas.captureStream() fallback for mobile / restricted browsers
+  // where getDisplayMedia is missing or silently fails. The fallback only
+  // captures the fx canvas (no overlay/HUD), plus mic audio when live.
+  // Chunks stream straight to disk via showSaveFilePicker (desktop) or
+  // OPFS (mobile-friendly) so multi-hour sets don't OOM the tab.
+  //
+  // Recording is INDEPENDENT of strudel / sequencer / vocoder / mic. The
+  // button only opens or closes the screen capture stream — engines play
+  // and stop as the user drives them; whatever's audible at the moment a
+  // chunk is captured is what lands in the file.
+  //
+  // Mobile save flow: after stop() the recorder fires onReadyToSave with
+  // a `save()` closure. We surface a "tap to save" button inside the
+  // rec-toast — that explicit user gesture is the portable way to fire a
+  // download on mobile, where async stop() loses its gesture context.
+  const recToast        = document.getElementById('rec-toast');
+  const recToastText    = document.getElementById('rec-toast-text');
+  const recToastActions = document.getElementById('rec-toast-actions');
+  const recToastSave    = document.getElementById('rec-toast-save');
+  const recToastDismiss = document.getElementById('rec-toast-dismiss');
+  let pendingSave = null;
+  let pendingFilename = '';
+
+  function refreshRecToastBackend(recording, backend, sink) {
+    if (!recording) return '';
+    const capLabel  = backend === 'canvas' ? 'fx canvas' : 'full page';
+    const sinkLabel = sink === 'fsa'    ? 'saving to chosen file'
+                    : sink === 'opfs'   ? 'streaming to device storage'
+                    : sink === 'memory' ? 'buffered in RAM'
+                    : '';
+    return `${capLabel} · ${sinkLabel}`;
+  }
+
+  function hideRecToast() {
+    if (!recToast) return;
+    recToast.style.display = 'none';
+    recToast.classList.remove('rec-active', 'rec-ready');
+    if (recToastActions) recToastActions.style.display = 'none';
+  }
+
+  function showRecToastActive(backend, sink) {
+    // Active pill: compact timer only, bottom-center, click-through. The
+    // rec button itself is the primary indicator (color + text); the
+    // pill is just a backup for zen / fullscreen mode where the topbar
+    // is hidden. Backend/sink detail goes in the button tooltip, not
+    // here — we don't want a wide pill blocking topbar dropdowns when
+    // it wraps to two lines on narrow phones.
+    if (!recToast) {
+      if (btnRecord) btnRecord.title = `Recording — ${refreshRecToastBackend(true, backend, sink)}`;
+      return;
+    }
+    recToast.style.display = 'flex';
+    recToast.classList.add('rec-active');
+    recToast.classList.remove('rec-ready');
+    if (recToastActions) recToastActions.style.display = 'none';
+    if (recToastText) recToastText.textContent = '00:00';
+  }
+
+  function showRecToastReady(filename, autoSaved, save) {
+    if (!recToast) {
+      // No toast DOM — go straight to a confirm() so the user-gesture
+      // chain stays intact and the download still fires reliably.
+      if (autoSaved) {
+        alert(`Saved as ${filename}`);
+        return;
+      }
+      const wantSave = confirm(`Recording ready: ${filename}\n\nTap OK to save it now.`);
+      if (wantSave && save) save().catch(err => alert(`Save failed: ${err?.message || err}`));
+      return;
+    }
+    recToast.style.display = 'flex';
+    recToast.classList.remove('rec-active');
+    recToast.classList.add('rec-ready');
+    if (autoSaved) {
+      if (recToastText) recToastText.textContent = `saved · ${filename}`;
+      if (recToastActions) recToastActions.style.display = 'none';
+      setTimeout(hideRecToast, 6000);
+    } else {
+      if (recToastText) recToastText.textContent = `ready · tap save to download ${filename}`;
+      if (recToastActions) recToastActions.style.display = 'flex';
+    }
+  }
+
+  const recorder = createRecorder({
+    getCanvas:    () => core.getCanvas?.(),
+    getMicStream: () => audio.getMicStream?.(),
+    onStateChange: ({ recording, backend, sink }) => {
+      if (btnRecord) {
+        btnRecord.classList.toggle('active-audio', recording);
+        if (!recording) {
+          btnRecord.textContent = 'rec';
+          btnRecord.title = 'Record screen (Shift+R) — captures full page on desktop, fx canvas on mobile';
+        } else {
+          btnRecord.title = `Recording ${refreshRecToastBackend(true, backend, sink)}. Shift+R or click to stop.`;
+        }
+      }
+      if (recording) showRecToastActive(backend, sink);
+      // When recording flips false, the toast either morphs to "ready"
+      // (via onReadyToSave below) or stays hidden — we don't auto-hide
+      // here so a pending-save indicator survives the state change.
+    },
+    onReadyToSave: ({ filename, autoSaved, save }) => {
+      pendingSave = save;
+      pendingFilename = filename;
+      showRecToastReady(filename, autoSaved, save);
+    },
+    onError: (err) => {
+      console.warn('[recorder]', err);
+      if (recToast && recToastText) {
+        recToast.style.display = 'flex';
+        recToast.classList.remove('rec-active');
+        recToast.classList.add('rec-ready');
+        recToastText.textContent = `recording error: ${err?.message || err}`;
+        if (recToastActions) recToastActions.style.display = 'none';
+        setTimeout(hideRecToast, 8000);
+      }
+    },
+  });
+
+  if (btnRecord) {
+    // Don't preemptively disable on isSupported() — that check runs at
+    // page-init before the qualia canvas exists, so the canvas-capture
+    // fallback can't be detected yet, and Android builds that lack
+    // getDisplayMedia get the button disabled forever. Disabled buttons
+    // also break Chrome's tap routing (taps fall through to nearby
+    // selectable text, surfacing the Google "tap to search" hint). We
+    // just try to start on click and report a real error if both
+    // backends genuinely fail then.
+    btnRecord.addEventListener('click', async () => {
+      // Diagnostics — prints unconditionally so we can confirm via the
+      // Eruda console (?debug=1) that the click handler is even bound.
+      console.log('[recorder] rec button clicked · isRecording=', recorder.isRecording(),
+                  '· supported=', recorder.isSupported());
+      // Hide any leftover post-stop toast — clicking rec again is the
+      // user telling us to start fresh, not save the previous one.
+      if (pendingSave) {
+        try { /* discard quietly */ } catch {}
+        pendingSave = null;
+        pendingFilename = '';
+        hideRecToast();
+      }
+      try {
+        if (recorder.isRecording()) {
+          console.log('[recorder] stopping');
+          recorder.stop();
+        } else {
+          console.log('[recorder] starting…');
+          await recorder.start();
+        }
+      } catch (err) {
+        console.error('[recorder] click failed:', err?.name, err?.message, err);
+        if (err?.name === 'NotAllowedError' || err?.name === 'AbortError') return;
+        alert(`Screen recording failed: ${err?.message || err}`);
+      }
+    });
+    // Per-second tick updates the button label + compact pill timer so
+    // the user can see the recording is live + how long it's been
+    // running. Pill text stays just "mm:ss" — keeping it small enough
+    // to not obstruct anything when pinned bottom-center.
+    setInterval(() => {
+      if (!recorder.isRecording()) return;
+      const sec = Math.floor((performance.now() - recorder.getStartedAt()) / 1000);
+      const mm = Math.floor(sec / 60).toString().padStart(2, '0');
+      const ss = (sec % 60).toString().padStart(2, '0');
+      btnRecord.textContent = `rec ● ${mm}:${ss}`;
+      if (recToastText && recToast?.classList.contains('rec-active')) {
+        recToastText.textContent = `${mm}:${ss}`;
+      }
+    }, 1000);
+  }
+
+  // Save-dialog buttons. The tap inside this click handler IS the user
+  // gesture that lets the download anchor fire on mobile.
+  recToastSave?.addEventListener('click', async () => {
+    if (!pendingSave) return;
+    try {
+      await pendingSave();
+      if (recToastText) recToastText.textContent = `saved · ${pendingFilename}`;
+      if (recToastActions) recToastActions.style.display = 'none';
+      pendingSave = null;
+      pendingFilename = '';
+      setTimeout(hideRecToast, 4000);
+    } catch (err) {
+      alert(`Save failed: ${err?.message || err}`);
+    }
+  });
+  recToastDismiss?.addEventListener('click', () => {
+    pendingSave = null;
+    pendingFilename = '';
+    hideRecToast();
+  });
+
   // ── Reset fx params ───────────────────────────────────────────────────────
   fxResetBtn.addEventListener('click', () => core.applyFxPreset('default'));
 
@@ -1776,7 +1977,7 @@ export function initQualiaPage() {
   let autoCycleStartMs = 0;
   let autoCycleTickT = null;
   cycleStyleSelect.value = autoCycleStyle;
-  btnCycle.title = 'Cycle between qualia (N) — off / 15s / 30s / 45s';
+  btnCycle.title = 'Cycle between qualia (N) — off / 5s / 15s / 30s / 45s';
 
   function refreshCycleBtn() {
     if (!btnCycle) return;
@@ -2937,7 +3138,11 @@ export function initQualiaPage() {
         break;
       }
       case 'c': if (btnCamera.style.display !== 'none') btnCamera.click(); break;
-      case 'r': if (btnCamRotate.style.display !== 'none') btnCamRotate.click(); break;
+      case 'r':
+        // Shift+R toggles screen recording (R alone is camera-rotate).
+        if (e.shiftKey) btnRecord?.click();
+        else if (btnCamRotate.style.display !== 'none') btnCamRotate.click();
+        break;
       case 'm': if (btnCamMirror.style.display !== 'none') btnCamMirror.click(); break;
       case 'j': btnSkel.click(); break;
       case 'f': btnSparks.click(); break;

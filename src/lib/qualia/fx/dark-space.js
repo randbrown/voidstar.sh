@@ -87,7 +87,7 @@ export default {
       ] },
     { id: 'palette',           label: 'palette',     type: 'select',
       options: ['voidblue', 'mono', 'violet', 'inferno'], default: 'voidblue' },
-    { id: 'showLabels',        label: 'labels',      type: 'toggle', default: true },
+    { id: 'showLabels',        label: 'labels',      type: 'toggle', default: false },
     { id: 'poseBind',          label: 'pose bind',   type: 'toggle', default: true },
     { id: 'reactivity',        label: 'reactivity',  type: 'range', min: 0,   max: 2.0, step: 0.05, default: 1.0 },
   ],
@@ -105,7 +105,7 @@ export default {
   },
 
   presets: {
-    default:    { mode: 'cosmic_web', density: 1.0, voidSize: 1.0, expansion: 1.0, filamentBrightness: 1.0, twinkle: 1.0, palette: 'voidblue', showLabels: true, poseBind: true, reactivity: 1.0 },
+    default:    { mode: 'cosmic_web', density: 1.0, voidSize: 1.0, expansion: 1.0, filamentBrightness: 1.0, twinkle: 1.0, palette: 'voidblue', showLabels: false, poseBind: true, reactivity: 1.0 },
     cosmic:     { mode: 'cosmic_web', density: 1.3, voidSize: 0.9, filamentBrightness: 1.2, palette: 'voidblue' },
     voids:      { mode: 'voids',      voidSize: 1.2, density: 1.1, showLabels: true, palette: 'voidblue' },
     darkMatter: { mode: 'dark_matter', density: 1.4, filamentBrightness: 1.4, palette: 'mono' },
