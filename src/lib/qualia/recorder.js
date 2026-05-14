@@ -10,11 +10,12 @@
 // "share tab audio" toggle to remember.
 //
 // Audio: the recordable mix bus (audio.getRecordableStream) carries every
-// in-page source — mic, strudel, sequencer, vocoder — merged into one
-// MediaStream destination. We clone that destination's audio track into
-// the recorder's stream. Sources that come online mid-recording (user
-// enables mic, hits play on strudel) flow through the existing track
-// because the bus is materialised eagerly with persistent taps.
+// in-page source — mic, strudel, sequencer, vocoder — that passes the
+// audio source filter (the same filter that gates reactivity, set by the
+// audio-mode button: off / mic / mix / all). We clone that destination's
+// audio track into the recorder's stream. Sources that come online or
+// the filter that changes mid-recording flow through the existing track
+// because the bus is materialised eagerly and the taps refresh in place.
 //
 // Sink backends, picked at start() (chunked / streaming, in priority order):
 //   1. showSaveFilePicker → FileSystemWritableFileStream. Desktop Chrome /
@@ -564,16 +565,38 @@ export function createRecorder(opts = {}) {
     if (!navigator.mediaDevices?.getDisplayMedia) {
       throw new Error('Tab capture not supported on this device');
     }
-    // displaySurface 'browser' + preferCurrentTab tells Chrome to default
-    // the share picker to the current tab so the user only needs one click
-    // ("Share") to confirm. Audio is explicitly off — tab-audio capture
-    // would miss the mic anyway, and asking for it would mean a redundant
-    // "share tab audio" toggle for the user. We use the in-page mix bus
-    // (mic + strudel + sequencer + …) for audio instead, same as
-    // viewport mode.
+    // Picker UX:
+    //   displaySurface 'browser' + preferCurrentTab → current tab is the
+    //     default offered in the share dialog (one click to confirm).
+    //   selfBrowserSurface 'include' → makes the current tab actually
+    //     selectable (some Chrome versions hide it by default to prevent
+    //     "hall of mirrors" loops; for our self-capture it's the only
+    //     surface we want).
+    //   surfaceSwitching 'exclude' → no "Share a different tab" button on
+    //     the indicator pill; we're a one-tab capture, not a meeting app.
+    //   monitorTypeSurfaces 'exclude' → don't even offer "Entire screen"
+    //     in the picker; trims a misclick path.
+    //   audio: false → tab-audio capture would miss the mic anyway, and
+    //     asking for it would mean a redundant "share tab audio" toggle.
+    //     We use the in-page mix bus (mic + strudel + sequencer + …)
+    //     for audio instead, same as viewport mode.
+    //
+    // The "<site> is sharing this tab" notification bar that appears at
+    // the top of the page while recording is rendered by the Chrome
+    // browser itself as a privacy indicator — there is no page-JS option
+    // to suppress it (see crbug.com / Chrome DevTools "Privacy-preserving
+    // screen sharing controls"). The only way to hide it during recording
+    // is the user pressing F11 to enter fullscreen before recording —
+    // browser chrome (including the indicator bar) is then hidden until
+    // they Esc back out. We could nudge users toward that in the UI, but
+    // we don't force it because some users actually want the bar visible
+    // as a "still recording" reminder.
     const tabStream = await navigator.mediaDevices.getDisplayMedia({
       video: { displaySurface: 'browser', frameRate: 60 },
-      preferCurrentTab: true,
+      preferCurrentTab:    true,
+      selfBrowserSurface:  'include',
+      surfaceSwitching:    'exclude',
+      monitorTypeSurfaces: 'exclude',
       audio: false,
     });
     const videoTrack = tabStream.getVideoTracks()[0];

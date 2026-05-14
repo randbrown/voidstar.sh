@@ -178,7 +178,7 @@ export function createAudio() {
 
   // ── Recordable mix ─────────────────────────────────────────────────────
   // The screen recorder needs a single MediaStream containing audio from
-  // every active source (mic + strudel + sequencer + …) so the saved file
+  // active sources (mic + strudel + sequencer + …) so the saved file
   // matches what the user hears. Each source lives in its own
   // AudioContext, and cross-context audio nodes can't be connected
   // directly, so two bridging strategies cover the two source shapes:
@@ -191,13 +191,31 @@ export function createAudio() {
   //     MediaStreamAudioDestinationNode, then pull that stream into a
   //     MediaStreamAudioSourceNode in the mix ctx. AnalyserNode is a
   //     transparent passthrough so this taps the audio non-destructively.
+  //
+  // The mix bus respects sourceFilter — same allow-list the analyser uses.
+  // So `audioMode: 'mic'` puts mic-only in both the reactivity AND the
+  // recording; `mix` records strudel+seq without mic; `all` records
+  // everything; `off` records silence. This matters on a phone-with-
+  // speakers setup where the mic catches strudel coming back through the
+  // device speaker — without the filter, the recording carried BOTH the
+  // direct strudel tap and the mic-captured-strudel (with phone-speaker-
+  // mic latency), audible as an echo. With the filter, mic-only mode
+  // records only the mic stream so there's no doubled signal. (The mic
+  // can still catch strudel from the speaker; for fully clean output the
+  // user wears headphones or selects 'mix'.)
+  //
   // The mix bus is built lazily on first recorder access and refreshed
-  // when sources come or go so an in-flight recording picks up newly
-  // started mic/strudel/sequencer without re-attaching.
+  // when sources or the filter change so an in-flight recording picks up
+  // newly started mic/strudel/sequencer (and drops sources the user
+  // filtered out) without re-attaching the recorder track.
   let recMixCtx  = null;
   let recMixDest = null;
   /** sourceId -> { tapDest? (in source ctx), mixSrc (in mix ctx), gain, analyser? } */
   const recMixTaps = new Map();
+
+  function isRecordable(id) {
+    return sourceFilter === null || sourceFilter.has(id);
+  }
 
   function ensureRecordableMix() {
     if (!recMixCtx) {
@@ -205,8 +223,17 @@ export function createAudio() {
       recMixDest = recMixCtx.createMediaStreamDestination();
     }
     if (recMixCtx.state === 'suspended') recMixCtx.resume().catch(() => {});
+    // Drop taps for sources removed since we last synced OR newly excluded
+    // by the source filter. `Array.from` so we can mutate recMixTaps during
+    // the loop.
+    for (const id of Array.from(recMixTaps.keys())) {
+      if (!sources.has(id) || !isRecordable(id)) {
+        detachFromRecordableMix(id);
+      }
+    }
     for (const [id, src] of sources) {
       if (recMixTaps.has(id) || !src.ctx) continue;
+      if (!isRecordable(id)) continue;
       try {
         let mixSrc, tapDest = null, tappedAnalyser = null;
         if (src.stream) {
@@ -568,11 +595,18 @@ export function createAudio() {
     return sources.values().next().value || null;
   }
 
-  /** Restrict which sources contribute to band aggregation. Pass an array
-   *  of source ids (e.g. ['mic'], ['strudel'], ['mic','strudel']) or [] to
-   *  silence the analysis entirely. Pass null to allow every active source. */
+  /** Restrict which sources contribute to band aggregation AND to the
+   *  recordable mix bus. Pass an array of source ids (e.g. ['mic'],
+   *  ['strudel'], ['mic','strudel']) or [] to silence the analysis +
+   *  recording entirely. Pass null to allow every active source. */
   function setSourceFilter(allowed) {
     sourceFilter = (allowed === null || allowed === undefined) ? null : new Set(allowed);
+    // Re-sync the recordable-mix taps so an in-flight recording reflects
+    // the new filter immediately — flipping audioMode from 'all' to 'mic'
+    // mid-recording drops strudel from the saved audio without needing
+    // the user to stop/restart. No-op when the mix bus hasn't been built
+    // yet (no recording has been started).
+    if (recMixCtx) ensureRecordableMix();
   }
 
   return {
