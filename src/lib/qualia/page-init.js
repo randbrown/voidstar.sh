@@ -1660,9 +1660,28 @@ export function initQualiaPage() {
       // here so a pending-save indicator survives the state change.
     },
     onReadyToSave: ({ filename, autoSaved, save }) => {
+      // Auto-save: fire the download immediately and surface a passive
+      // "saved · filename" toast that auto-hides — no tap-to-save / tap-
+      // to-dismiss step. The download uses `<a download>` with the
+      // pre-computed filename, so Chrome drops it straight into the
+      // browser's default download path with no save dialog.
+      //
+      // If the browser rejects the auto-save (rare: usually strict iOS
+      // Safari where the gesture chain has decayed past stop()), fall
+      // back to the old manual toast so the user can still recover.
       pendingSave = save;
       pendingFilename = filename;
-      showRecToastReady(filename, autoSaved, save);
+      if (autoSaved || !save) {
+        showRecToastReady(filename, true, null);
+        return;
+      }
+      // Show the "saved" toast up front — the download fires in the
+      // same task so it'll land within a few hundred ms.
+      showRecToastReady(filename, true, null);
+      save().catch(err => {
+        console.warn('[recorder] auto-save failed, falling back to manual save:', err);
+        if (pendingSave) showRecToastReady(filename, false, save);
+      });
     },
     onError: (err) => {
       console.warn('[recorder]', err);
