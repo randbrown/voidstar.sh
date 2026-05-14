@@ -1598,7 +1598,13 @@ export function initQualiaPage() {
   }
 
   function showRecToastActive(backend, sink) {
-    if (!recToast) return;
+    // If the toast DOM is missing (stale build cached in the user's
+    // browser, etc.), fall back to a brief title-bar text on the rec
+    // button so the user gets SOME confirmation the recording started.
+    if (!recToast) {
+      if (btnRecord) btnRecord.title = `Recording — ${refreshRecToastBackend(true, backend, sink)}`;
+      return;
+    }
     recToast.style.display = 'flex';
     recToast.classList.add('rec-active');
     recToast.classList.remove('rec-ready');
@@ -1607,14 +1613,22 @@ export function initQualiaPage() {
     if (recToastText) recToastText.textContent = `rec ● 00:00 — ${mode}`;
   }
 
-  function showRecToastReady(filename, autoSaved) {
-    if (!recToast) return;
+  function showRecToastReady(filename, autoSaved, save) {
+    if (!recToast) {
+      // No toast DOM — go straight to a confirm() so the user-gesture
+      // chain stays intact and the download still fires reliably.
+      if (autoSaved) {
+        alert(`Saved as ${filename}`);
+        return;
+      }
+      const wantSave = confirm(`Recording ready: ${filename}\n\nTap OK to save it now.`);
+      if (wantSave && save) save().catch(err => alert(`Save failed: ${err?.message || err}`));
+      return;
+    }
     recToast.style.display = 'flex';
     recToast.classList.remove('rec-active');
     recToast.classList.add('rec-ready');
     if (autoSaved) {
-      // showSaveFilePicker path — file is already on disk at the user's
-      // chosen location. No second tap needed; just confirm.
       if (recToastText) recToastText.textContent = `saved · ${filename}`;
       if (recToastActions) recToastActions.style.display = 'none';
       setTimeout(hideRecToast, 6000);
@@ -1645,7 +1659,7 @@ export function initQualiaPage() {
     onReadyToSave: ({ filename, autoSaved, save }) => {
       pendingSave = save;
       pendingFilename = filename;
-      showRecToastReady(filename, autoSaved);
+      showRecToastReady(filename, autoSaved, save);
     },
     onError: (err) => {
       console.warn('[recorder]', err);

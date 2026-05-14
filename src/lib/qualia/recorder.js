@@ -323,16 +323,39 @@ export function createRecorder(opts = {}) {
     writeChain = Promise.resolve();
     stopping = false;
     startMediaRecorder(s);
+    // Diagnostics — visible via remote-debug (chrome://inspect on a
+    // tethered Android device) so we can confirm which backend / sink
+    // the recorder ended up on without needing extra logging surface.
+    console.log(`[recorder] started · backend=${backend} sink=${sink?.kind} mime=${mimeType || '(default)'}`);
   }
 
   function stop() {
     if (!recorder) return;
     stopping = true;
+    // Optimistically tell the page the recording is "no longer live" so
+    // the button + toast clear immediately, even if the underlying
+    // MediaRecorder.stop() takes a while (or, on broken Android builds,
+    // never fires onstop at all). Final state cleanup still runs in
+    // teardown() — this just decouples UI feedback from a possibly-slow
+    // codec flush.
+    opts.onStateChange?.({ recording: false, backend, sink: sink?.kind || '' });
     if (recorder.state !== 'inactive') {
-      try { recorder.stop(); } catch {}
+      try { recorder.stop(); } catch (err) {
+        // Stop threw — force teardown so we don't stay wedged.
+        console.warn('[recorder] stop threw, forcing teardown:', err);
+        writeChain.catch(() => {}).finally(() => teardown(true));
+      }
     } else {
       writeChain.catch(() => {}).finally(() => teardown(true));
     }
+    // Belt-and-braces: if onstop hasn't fired in 5 seconds, force teardown.
+    // Some Android builds drop onstop for canvas-backed streams entirely.
+    setTimeout(() => {
+      if (stopping && recorder) {
+        console.warn('[recorder] onstop never fired — forcing teardown');
+        teardown(true);
+      }
+    }, 5000);
   }
 
   async function toggle() {
