@@ -82,9 +82,26 @@ const OPFS_STALE_MS = 10 * 60 * 1000;
 const VIDEO_BITS_PER_SECOND = 4_000_000;     // 4 Mb/s — plenty for canvas/screen content,
                                              // halves memory + disk footprint vs the old 8 Mb/s default.
 
+// Per-device "MP4 isn't working here, just use WebM" memory. Chrome
+// reports MP4 as `isTypeSupported() === true` on Android while the
+// hardware encoder throws EncodingError mid-stream — there's no way to
+// detect this short of actually trying, so when we do try and fail we
+// flip this flag in localStorage and skip all MP4 candidates from then
+// on. The user can clear it by clearing site data (or we expose a reset
+// later if needed).
+const SKIP_MP4_KEY = 'voidstar.recorder.skipMp4';
+function shouldSkipMp4() {
+  try { return localStorage.getItem(SKIP_MP4_KEY) === '1'; } catch { return false; }
+}
+function rememberMp4Broken() {
+  try { localStorage.setItem(SKIP_MP4_KEY, '1'); } catch {}
+}
+
 function pickMime() {
   if (typeof MediaRecorder === 'undefined') return '';
+  const skipMp4 = shouldSkipMp4();
   for (const c of MIME_CANDIDATES) {
+    if (skipMp4 && c.startsWith('video/mp4')) continue;
     try { if (MediaRecorder.isTypeSupported(c)) return c; } catch {}
   }
   return '';
@@ -375,6 +392,17 @@ export function createRecorder(opts = {}) {
     recorder.onerror = (e) => {
       const err = e?.error || new Error('MediaRecorder error');
       erroredOut = true;
+      // If MP4 just blew up at the encoder layer, persist a flag so we
+      // skip MP4 candidates on this device for future recordings. Chrome
+      // Android's hardware encoder regularly throws EncodingError on the
+      // MP4 path even when isTypeSupported says yes — switching to WebM
+      // sidesteps the muxer entirely and produces a file that plays.
+      const isEncodingError = err?.name === 'EncodingError'
+        || /encoder configuration/i.test(err?.message || '');
+      if (isEncodingError && mimeType?.startsWith('video/mp4')) {
+        console.warn(`[recorder] MP4 encoder rejected the config (${err?.message || err}) — remembering this device as MP4-broken, future recordings will use WebM`);
+        rememberMp4Broken();
+      }
       opts.onError?.(err);
       if (!stopping) stop();
     };
