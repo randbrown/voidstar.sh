@@ -165,6 +165,7 @@ export function createAudio() {
   async function removeSource(id) {
     const src = sources.get(id);
     if (!src) return;
+    detachFromRecordableMix(id);
     if (src.stream) { try { src.stream.getTracks().forEach(t => t.stop()); } catch {} }
     if (src.ownsCtx && src.ctx) { try { await src.ctx.close(); } catch {} }
     sources.delete(id);
@@ -173,6 +174,63 @@ export function createAudio() {
     // source drops out we'd rather let the EMAs re-adapt to the surviving
     // signal than zero everything and re-floor.
     if (sources.size === 0) resetState();
+  }
+
+  // ── Recordable mix ─────────────────────────────────────────────────────
+  // The screen recorder needs a single MediaStream containing audio from
+  // every active source (mic + strudel + sequencer + …) so the saved file
+  // matches what the user hears. Each source has its own AudioContext, and
+  // cross-context audio nodes can't be connected directly, so we bridge by:
+  //   1. In each source's own ctx, add a MediaStreamAudioDestinationNode and
+  //      connect the source's analyser → destination. AnalyserNode is a
+  //      transparent passthrough, so this taps the audio non-destructively.
+  //   2. In a single mixer ctx, take the resulting tap stream as a
+  //      MediaStreamAudioSourceNode, run all sources through a shared gain,
+  //      and expose the mixer's destination stream to the recorder.
+  // The mix is built lazily on first recorder access and tracks are
+  // attached / detached as sources come and go.
+  let recMixCtx  = null;
+  let recMixDest = null;
+  /** sourceId -> { tapDest (in source ctx), mixSrc (in mix ctx), gain } */
+  const recMixTaps = new Map();
+
+  function ensureRecordableMix() {
+    if (!recMixCtx) {
+      recMixCtx  = new (window.AudioContext || window.webkitAudioContext)();
+      recMixDest = recMixCtx.createMediaStreamDestination();
+    }
+    if (recMixCtx.state === 'suspended') recMixCtx.resume().catch(() => {});
+    for (const [id, src] of sources) {
+      if (recMixTaps.has(id) || !src.analyser || !src.ctx) continue;
+      try {
+        const tapDest = src.ctx.createMediaStreamDestination();
+        src.analyser.connect(tapDest);
+        const mixSrc = recMixCtx.createMediaStreamSource(tapDest.stream);
+        const gain   = recMixCtx.createGain();
+        mixSrc.connect(gain).connect(recMixDest);
+        recMixTaps.set(id, { tapDest, mixSrc, gain });
+      } catch (err) {
+        console.warn(`[audio] recordable-mix: could not tap source ${id}:`, err);
+      }
+    }
+  }
+
+  function detachFromRecordableMix(id) {
+    const tap = recMixTaps.get(id);
+    if (!tap) return;
+    try { tap.gain.disconnect(); } catch {}
+    try { tap.mixSrc.disconnect(); } catch {}
+    try {
+      // tapDest belongs to the source's ctx — safe to leave; it'll be GC'd
+      // when the source's ctx is closed in removeSource.
+    } catch {}
+    recMixTaps.delete(id);
+  }
+
+  function getRecordableStream() {
+    ensureRecordableMix();
+    if (!recMixDest || recMixTaps.size === 0) return null;
+    return recMixDest.stream;
   }
 
   /** Start mic capture. Returns the chosen deviceId so callers can persist it. */
@@ -240,6 +298,7 @@ export function createAudio() {
 
   function releaseAdopted(sourceId = 'strudel') {
     if (!sources.has(sourceId)) return;
+    detachFromRecordableMix(sourceId);
     sources.delete(sourceId);
     refreshFrameBuffers();
     if (sources.size === 0) resetState();
@@ -497,6 +556,7 @@ export function createAudio() {
     getSource:       () => describeSources(),
     getCurrentMicId: () => micId,
     getMicStream:    () => sources.get('mic')?.stream ?? null,
+    getRecordableStream,
     getAnalyser: () => firstSource()?.analyser ?? null,
     getCtx:      () => firstSource()?.ctx ?? null,
   };

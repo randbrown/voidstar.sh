@@ -1643,6 +1643,7 @@ export function initQualiaPage() {
   const recorder = createRecorder({
     getCanvas:    () => core.getCanvas?.(),
     getMicStream: () => audio.getMicStream?.(),
+    getRecordableStream: () => audio.getRecordableStream?.(),
     onStateChange: ({ recording, backend, sink }) => {
       if (btnRecord) {
         btnRecord.classList.toggle('active-audio', recording);
