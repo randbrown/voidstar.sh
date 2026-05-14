@@ -1680,6 +1680,10 @@ export function initQualiaPage() {
       btnRecord.title = 'Screen recording not supported in this browser';
     }
     btnRecord.addEventListener('click', async () => {
+      // Diagnostics — prints unconditionally so we can confirm via the
+      // Eruda console (?debug=1) that the click handler is even bound.
+      console.log('[recorder] rec button clicked · isRecording=', recorder.isRecording(),
+                  '· supported=', recorder.isSupported());
       // Hide any leftover post-stop toast — clicking rec again is the
       // user telling us to start fresh, not save the previous one.
       if (pendingSave) {
@@ -1689,9 +1693,15 @@ export function initQualiaPage() {
         hideRecToast();
       }
       try {
-        if (recorder.isRecording()) recorder.stop();
-        else await recorder.start();
+        if (recorder.isRecording()) {
+          console.log('[recorder] stopping');
+          recorder.stop();
+        } else {
+          console.log('[recorder] starting…');
+          await recorder.start();
+        }
       } catch (err) {
+        console.error('[recorder] click failed:', err?.name, err?.message, err);
         if (err?.name === 'NotAllowedError' || err?.name === 'AbortError') return;
         alert(`Screen recording failed: ${err?.message || err}`);
       }
