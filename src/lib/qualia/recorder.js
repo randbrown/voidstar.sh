@@ -61,6 +61,9 @@ const MIME_CANDIDATES = [
   // encoder configuration that actually fits a 1080p+ canvas, with
   // Main 4.0 / Baseline 4.0 as fallbacks before bare 'video/mp4' lets
   // Chrome pick (which would re-pick Baseline 3.0).
+  'video/mp4;codecs=avc1.640034,mp4a.40.2',  // High 5.2  — up to 4096x2160
+  'video/mp4;codecs=avc1.640033,mp4a.40.2',  // High 5.1  — up to 4096x2048 (tall portrait canvases)
+  'video/mp4;codecs=avc1.640032,mp4a.40.2',  // High 5.0  — up to 3840x2160
   'video/mp4;codecs=avc1.64002A,mp4a.40.2',  // High 4.2  — up to 2048x1088
   'video/mp4;codecs=avc1.640028,mp4a.40.2',  // High 4.0  — up to 1920x1080
   'video/mp4;codecs=avc1.4D4028,mp4a.40.2',  // Main 4.0  — up to 1920x1080
@@ -244,6 +247,12 @@ export function createRecorder(opts = {}) {
   // silently throw away the recording.
   let memChunks = [];
   let memBytes  = 0;
+  // Set by recorder.onerror — any bytes we recover after this are from a
+  // crashed encoder mid-stream, not a usable file. teardown checks this
+  // before offering an auto-save so we don't hand the user a broken MP4
+  // that triggers Chrome's "Download error" or installs into Gallery as
+  // an unplayable thumbnail.
+  let erroredOut = false;
 
   function notify() {
     opts.onStateChange?.({
@@ -302,14 +311,18 @@ export function createRecorder(opts = {}) {
             console.warn(`[recorder] duration fix failed (mime=${wasMime}); saving unfixed:`, err);
           }
         }
-        // Only offer a save if there's actually something to save. A zero-
-        // byte blob (Chrome's EncodingError + nothing recoverable in
-        // memChunks, sink failure, etc.) used to fall through to auto-save
-        // and produce a Chrome "Download error" notification — now we
-        // surface a `failed` signal to the page so it can show an error
-        // toast instead of pretending we saved.
-        const hasData = info.autoSaved || (blob && blob.size > 0);
-        const save = hasData && blob && blob.size > 0
+        // Auto-save eligibility:
+        //   - autoSaved (FSA): file is already at the user-picked
+        //     location, just confirm.
+        //   - normal success: blob exists with non-zero size, offer save.
+        //   - errored encoder: refuse save even if we have bytes — those
+        //     bytes are a truncated stream from a crashed muxer and would
+        //     install in Gallery as an unplayable thumbnail or fail the
+        //     download outright.
+        const sizeBytes = blob?.size ?? 0;
+        const recoverable = !erroredOut && sizeBytes > 0;
+        const hasData = info.autoSaved || recoverable;
+        const save = recoverable
           ? () => { triggerDownload(blob, info.filename); return Promise.resolve(); }
           : null;
         opts.onReadyToSave?.({
@@ -317,7 +330,7 @@ export function createRecorder(opts = {}) {
           autoSaved: info.autoSaved,
           save,
           failed:    !hasData,
-          size:      blob?.size ?? 0,
+          size:      sizeBytes,
         });
       } catch (err) {
         opts.onError?.(err);
@@ -361,6 +374,7 @@ export function createRecorder(opts = {}) {
     };
     recorder.onerror = (e) => {
       const err = e?.error || new Error('MediaRecorder error');
+      erroredOut = true;
       opts.onError?.(err);
       if (!stopping) stop();
     };
@@ -461,19 +475,30 @@ export function createRecorder(opts = {}) {
     }
 
     writeChain = Promise.resolve();
-    stopping = false;
+    stopping  = false;
     memChunks = [];
     memBytes  = 0;
+    erroredOut = false;
     startMediaRecorder(s);
     // Diagnostics — visible via remote-debug (chrome://inspect on a
     // tethered Android device) so we can confirm which backend / sink
     // the recorder ended up on without needing extra logging surface.
     const audioTracks = s.getAudioTracks();
     const videoTracks = s.getVideoTracks();
+    // Log the actual video track resolution we're feeding the encoder —
+    // canvas.captureStream picks up canvas.width/height (DPR-scaled), which
+    // on a phone can easily exceed an H.264 level's macroblock cap and
+    // produce an EncodingError on the first frame. If recordings are
+    // failing this is the first number to check against the chosen codec
+    // level's max resolution.
+    const vSettings = videoTracks[0]?.getSettings?.() || {};
+    const vDims = (vSettings.width && vSettings.height)
+      ? `${vSettings.width}x${vSettings.height}@${vSettings.frameRate || '?'}fps`
+      : 'unknown';
     console.log(
       `[recorder] started · backend=${backend} sink=${sink?.kind}` +
       ` mime=${mimeType || '(default)'}` +
-      ` · video=${videoTracks.length} audio=${audioTracks.length}` +
+      ` · video=${videoTracks.length} (${vDims}) audio=${audioTracks.length}` +
       (audioTracks.length ? ` (${audioTracks.map(t => t.label || '(unlabeled)').join(', ')})` : ' [SILENT]')
     );
   }

@@ -1,4 +1,5 @@
 ---
+import { execSync } from 'node:child_process';
 import '../styles/global.css';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
@@ -9,6 +10,19 @@ interface Props {
   ogImage?: string;
   noIndex?: boolean;
 }
+
+// Build stamp — short commit + commit timestamp + build timestamp.
+// Computed in the layout frontmatter so it's available to both the
+// in-page <meta> tag (visible via "view source") and the inline debug
+// script (where we can't import from JS modules). Git calls fall back
+// to '?' so a non-git build env still works.
+function readBuildStamp() {
+  let commit = '?', commitISO = '?';
+  try { commit    = execSync('git rev-parse --short HEAD').toString().trim(); } catch {}
+  try { commitISO = execSync('git log -1 --format=%cI').toString().trim();   } catch {}
+  return { commit, commitISO, builtAt: new Date().toISOString() };
+}
+const buildStamp = readBuildStamp();
 
 const {
   title,
@@ -25,6 +39,7 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="voidstar-build" content={`${buildStamp.commit} · committed ${buildStamp.commitISO} · built ${buildStamp.builtAt}`} />
   <link rel="canonical" href={canonicalURL} />
   <title>{siteTitle}</title>
   <meta name="description" content={description} />
@@ -76,7 +91,12 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
        can confirm the script ran even if eruda's CDN is blocked. Tap
        the badge to open eruda; long-press to disable. ?debug=0 also
        disables it. -->
-  <script is:inline>
+  <script is:inline define:vars={{ build: buildStamp }}>
+    // Build stamp is set on window unconditionally so every page can be
+    // verified against the latest deploy (eg. `__VOIDSTAR_BUILD__` in the
+    // console, or "view source" → look for the meta tag) — independent of
+    // whether the debug overlay is enabled.
+    window.__VOIDSTAR_BUILD__ = build;
     (function () {
       try {
         var qs = new URLSearchParams(location.search);
@@ -91,6 +111,9 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
           localStorage.setItem(KEY, 'eruda');
         }
         if (localStorage.getItem(KEY) !== 'eruda') return;
+        console.log('[voidstar] build ' + build.commit
+          + ' · committed ' + build.commitISO
+          + ' · built ' + build.builtAt);
         console.log('[voidstar] debug=eruda — loading overlay…');
 
         // Status badge — appended to body once it exists. Color codes
@@ -104,7 +127,10 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
           badge = document.createElement('div');
           badge.id = 'voidstar-debug-badge';
           badge.textContent = 'DBG…';
-          badge.title = 'voidstar debug — tap to open console; long-press to disable';
+          badge.title = 'voidstar build ' + build.commit
+            + ' · committed ' + build.commitISO
+            + ' · built ' + build.builtAt
+            + ' — tap to open console; long-press to disable';
           var s = badge.style;
           s.position = 'fixed';
           s.top = 'calc(env(safe-area-inset-top, 0px) + 6px)';
