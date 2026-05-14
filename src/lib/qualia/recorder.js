@@ -1,16 +1,20 @@
-// Screen recorder — two capture backends + three sink backends.
+// Screen recorder — one capture backend (composite viewport canvas) +
+// three sink backends. No getDisplayMedia. The page composites the fx
+// canvas + the overlay canvas into a single recording canvas every frame
+// while we're recording, and we capture from that canvas. Result: the
+// saved file contains exactly the viewport content (fx + skeleton /
+// sparks / aura / ASCII / mosh / edge / ripples), with no browser chrome,
+// no topbar, and no HUD panels. Works the same on every platform —
+// no screen-share dialog interruption, no transient-activation games
+// between getDisplayMedia and showSaveFilePicker, no platform-specific
+// "share tab audio" toggle to remember.
 //
-// Capture backends, picked at start():
-//   1. getDisplayMedia (desktop, some Android Chrome builds). User picks
-//      tab / window / screen + audio inclusion in the browser share
-//      picker. Highest fidelity — captures the whole page including the
-//      HUD, overlay, etc.
-//   2. canvas.captureStream() fallback for mobile / restricted browsers
-//      where getDisplayMedia isn't available or silently fails. Captures
-//      only the active fx canvas (no overlay / topbar / HUD) and splices
-//      in mic audio when a stream is available. iOS Safari, Android
-//      Firefox, Samsung Internet, and Android Chrome builds that block
-//      display-capture all land here.
+// Audio: the recordable mix bus (audio.getRecordableStream) carries every
+// in-page source — mic, strudel, sequencer, vocoder — merged into one
+// MediaStream destination. We clone that destination's audio track into
+// the recorder's stream. Sources that come online mid-recording (user
+// enables mic, hits play on strudel) flow through the existing track
+// because the bus is materialised eagerly with persistent taps.
 //
 // Sink backends, picked at start() (chunked / streaming, in priority order):
 //   1. showSaveFilePicker → FileSystemWritableFileStream. Desktop Chrome /
@@ -19,13 +23,20 @@
 //      closed at stop() — no second download step.
 //   2. OPFS (origin private file system). Chrome (desktop + Android),
 //      Safari 15.2+. Chunks stream into a private file under the origin.
-//      At stop() we surface a "tap to save" handle so the caller can
-//      prompt the user for an explicit save gesture — that gesture then
-//      triggers the actual download. Async stop() loses the original
-//      user-gesture context on most mobile browsers, so this two-step
-//      flow is required for the download to actually fire.
+//      At stop() we trigger a download from the OPFS-backed File; on
+//      desktop this fires immediately, on mobile it surfaces a tap-to-save
+//      fallback if the download anchor's auto-fire is rejected.
 //   3. In-memory Blob[]. Last resort for very old browsers — same
-//      "tap to save" handoff as OPFS.
+//      download handoff as OPFS.
+//
+// showSaveFilePicker is called BEFORE any other API that consumes
+// transient user activation. The rec button click gives us one fresh
+// activation; the picker is the only async API in this codepath that
+// needs it, so it goes first. Earlier versions of this recorder called
+// getDisplayMedia first and showSaveFilePicker second, which silently
+// failed with SecurityError on Windows / macOS Chrome (activation was
+// already consumed) and fell back to OPFS — by which point the user
+// expected the file to already be saved.
 //
 // Codec preference: MP4 (H.264 + AAC) is tried first because every
 // Android player accepts it natively. WebM is the fallback. When we end
@@ -33,19 +44,13 @@
 // at close — Chrome's MediaRecorder emits a "live stream" WebM without
 // a Duration tag, which the Android stock players reject as "unknown
 // error". The fix reads the blob, rewrites the segment header to
-// include the actual duration, and returns a playable file.
+// include the actual duration, and returns a playable file. Same shape
+// applies to MP4 via fix-mp4-duration.
 //
 // Recording is independent of any other audio engine (strudel / sequencer /
 // vocoder / mic). Start/stop the recorder; the rest keeps running.
 // Stale OPFS sweep: every start() prunes leftover qualia-*.webm files
 // older than ten minutes so an abandoned recording doesn't squat on quota.
-
-// Codec preference: try MP4 first because Android's stock Photos /
-// Gallery decodes h264 natively and refuses WebM regardless of how
-// well-formed it is. Both MP4 and WebM from MediaRecorder need their
-// duration fields patched at finalize (Chrome writes neither during
-// recording), so we ship inline patchers for both formats and pick
-// based on which mime MediaRecorder actually chose.
 
 import fixWebmDuration       from 'fix-webm-duration';
 import { fixMp4Duration }    from './fix-mp4-duration.js';
@@ -160,14 +165,19 @@ async function sweepStaleOpfs() {
  * Blob so the caller can apply any post-processing (WebM duration fix)
  * and then prompt the user to save it via an explicit gesture.
  */
-async function openSink(filename) {
+async function openSink(filename, { skipFsa = false } = {}) {
   // 1) Direct-to-disk via showSaveFilePicker (desktop only). On mobile,
   // we deliberately skip this — the picker streams chunks straight to
   // the user-chosen location, so by the time MediaRecorder stops, the
   // file is finalized and we can't apply fix-webm-duration before
   // saving. OPFS lets us read the file back at close, patch the
   // segment header, and only THEN trigger the download.
-  if (!looksLikeMobile() && typeof window !== 'undefined' && window.showSaveFilePicker) {
+  //
+  // skipFsa is set when the caller already consumed the transient user
+  // activation on another API (notably getDisplayMedia for tab capture).
+  // showSaveFilePicker would throw SecurityError in that case; OPFS +
+  // anchor-download is the only viable sink left.
+  if (!skipFsa && !looksLikeMobile() && typeof window !== 'undefined' && window.showSaveFilePicker) {
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: filename,
@@ -180,12 +190,53 @@ async function openSink(filename) {
         }],
       });
       const writable = await handle.createWritable();
+      // Use the name the user actually typed into the picker, not the
+      // default we suggested. `handle.name` is the filename component of
+      // the picked path (no directory prefix). This propagates through
+      // to onReadyToSave so the anchor-download backup matches the FSA
+      // save's filename instead of falling back to qualia-<timestamp>.
+      const actualName = handle.name || filename;
+      let totalWritten = 0;
       return {
         kind: 'fsa',
-        write: (blob) => writable.write(blob),
+        write: (blob) => {
+          totalWritten += blob.size;
+          return writable.write(blob);
+        },
         close: async () => {
           await writable.close();
-          return { autoSaved: true, blob: null, filename };
+          // Verify the file actually materialised. Chrome's FSA on Windows
+          // has been observed to resolve writable.close() successfully but
+          // leave nothing at the target path — the .crswap temp file
+          // doesn't get renamed (antivirus quarantine, mark-of-the-web
+          // intervention, or a Chromium FSA bug). Reading the file back
+          // via the handle catches this: if we get an empty / missing
+          // file but wrote N bytes, signal the recorder to fall back to
+          // the in-memory blob + anchor-download path so the user still
+          // gets their recording.
+          let onDiskSize = -1;
+          try {
+            const file = await handle.getFile();
+            onDiskSize = file.size;
+          } catch (err) {
+            console.warn(`[recorder] fsa: post-close verify failed: ${err?.name}: ${err?.message || err}`);
+          }
+          console.log(`[recorder] fsa: wrote ${totalWritten} bytes · on-disk ${onDiskSize} bytes · name="${actualName}"`);
+          if (onDiskSize > 0 && onDiskSize >= totalWritten * 0.95) {
+            // File is on disk with at least 95% of the bytes we wrote
+            // (some FS implementations report slightly different sizes
+            // due to alignment / sparse-file behavior; treat anything
+            // close enough to written as success).
+            return { autoSaved: true, blob: null, filename: actualName };
+          }
+          // The FSA path looks intact (no exception) but the file isn't
+          // really there. Hand the caller back a null blob with
+          // autoSaved=false so teardown's memChunks fallback can build a
+          // recovery blob and the user gets prompted to download it.
+          console.warn(
+            `[recorder] fsa: file did not materialise (wrote=${totalWritten}, on-disk=${onDiskSize}) — falling back to in-memory recovery`
+          );
+          return { autoSaved: false, blob: null, filename: actualName };
         },
         cleanup: async () => { try { await writable.abort(); } catch {} },
       };
@@ -236,13 +287,31 @@ async function openSink(filename) {
 
 /**
  * @param {{
- *   onStateChange?: (s: { recording: boolean, backend: ''|'display'|'canvas', sink: ''|'fsa'|'opfs'|'memory' }) => void,
+ *   onStateChange?: (s: { recording: boolean, backend: ''|'composite'|'tab', sink: ''|'fsa'|'opfs'|'memory' }) => void,
  *   onReadyToSave?: (info: { filename: string, autoSaved: boolean, save: (() => Promise<void>)|null, failed: boolean, size: number }) => void,
  *   onError?: (err: Error) => void,
  *   getCanvas?: () => HTMLCanvasElement|null,
- *   getMicStream?: () => MediaStream|null,
  *   getRecordableStream?: () => MediaStream|null,
+ *   getCaptureMode?: () => 'viewport'|'tab',
+ *   onCaptureStart?: () => void,
+ *   onCaptureEnd?: () => void,
  * }} opts
+ *
+ * Two capture modes:
+ *   - 'viewport' (default): captures a composite canvas the page maintains,
+ *     containing fx + overlay layers. Zero per-frame DOM work, no
+ *     screen-share dialog, clean viewport-only output. Uses FSA / OPFS
+ *     for direct-to-disk save.
+ *   - 'tab': uses getDisplayMedia({preferCurrentTab: true}) to capture
+ *     the whole tab (including strudel REPL + sequencer + any open
+ *     panels). One share-picker click at start. Mix bus is still used
+ *     for audio (tab-audio capture would miss the mic). FSA is unavailable
+ *     after getDisplayMedia consumed the user activation, so the file
+ *     streams to OPFS and downloads via anchor.click() at stop.
+ *
+ * For viewport mode, `getCanvas` returns the composite canvas and
+ * `onCaptureStart` / `onCaptureEnd` let the page gate its per-frame
+ * composite update loop so the drawImage cost only fires while recording.
  */
 export function createRecorder(opts = {}) {
   /** @type {MediaStream|null} */
@@ -251,12 +320,19 @@ export function createRecorder(opts = {}) {
   let recorder = null;
   let startedAt = 0;
   let mimeType = '';
-  /** @type {''|'display'|'canvas'} */
+  /** @type {''|'composite'} */
   let backend = '';
   /** @type {Awaited<ReturnType<typeof openSink>>|null} */
   let sink = null;
   let writeChain = Promise.resolve();
   let stopping = false;
+  // Tracks we cloned and attached to the recorder stream (mix bus / mic).
+  // Held so teardown can stop them and break the reference cycle that
+  // would otherwise keep the underlying source streams alive past the
+  // recording. The composite canvas's own video track is owned by the
+  // capture stream and stopped via `stream.getTracks()`.
+  /** @type {MediaStreamTrack[]} */
+  let attachedAudio = [];
   // Belt-and-braces: also collect every chunk in memory while recording.
   // OPFS streaming was producing 0-byte and "header-only" MP4s on Chrome
   // Android — the in-memory copy is used as a fallback when the sink blob
@@ -270,6 +346,11 @@ export function createRecorder(opts = {}) {
   // that triggers Chrome's "Download error" or installs into Gallery as
   // an unplayable thumbnail.
   let erroredOut = false;
+  // Tracks whether opts.onCaptureStart() has been fired without a
+  // matching onCaptureEnd. Without this, an error after the composite
+  // started but before MediaRecorder ran would leave the composite frame
+  // loop running indefinitely.
+  let captureBegun = false;
 
   function notify() {
     opts.onStateChange?.({
@@ -277,6 +358,14 @@ export function createRecorder(opts = {}) {
       backend,
       sink: sink?.kind || '',
     });
+  }
+
+  function endCapture() {
+    if (!captureBegun) return;
+    captureBegun = false;
+    try { opts.onCaptureEnd?.(); } catch (err) {
+      console.warn('[recorder] onCaptureEnd threw:', err);
+    }
   }
 
   async function teardown(success) {
@@ -288,6 +377,12 @@ export function createRecorder(opts = {}) {
     sink = null;
     if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
     stream = null;
+    // Stop the cloned audio tracks we attached to the recorder. The
+    // underlying mix-bus + mic sources remain live for the rest of the
+    // page — only OUR clones go away.
+    for (const t of attachedAudio) { try { t.stop(); } catch {} }
+    attachedAudio = [];
+    endCapture();
     recorder = null;
     startedAt = 0;
     backend = '';
@@ -302,12 +397,22 @@ export function createRecorder(opts = {}) {
         // or way smaller than what we actually wrote. This recovers from
         // Chrome Android's intermittent "OPFS writable.close() returns a
         // zero-byte file even though we wrote N bytes through it" bug.
-        if ((!blob || blob.size < memBytes) && memChunks.length) {
+        // We also build the memBlob on the FSA success path so the page
+        // can offer a "save backup" download — Chrome on Windows has
+        // been observed to claim FSA writes succeeded while the file is
+        // missing from the picked location (AV / SmartScreen / OneDrive
+        // sync intervention after close). The backup gives the user a
+        // second route to the recording if their FSA save vanished.
+        const needFallback = !info.autoSaved && (!blob || blob.size < memBytes);
+        const buildBackup  = info.autoSaved && memChunks.length;
+        if ((needFallback || buildBackup) && memChunks.length) {
           const memBlob = new Blob(memChunks, { type: wasMime || 'video/mp4' });
-          console.warn(
-            `[recorder] sink blob ${blob?.size ?? 'null'} bytes < in-memory ${memBlob.size}` +
-            ` — falling back to memory copy`
-          );
+          if (needFallback) {
+            console.warn(
+              `[recorder] sink blob ${blob?.size ?? 'null'} bytes < in-memory ${memBlob.size}` +
+              ` — falling back to memory copy`
+            );
+          }
           blob = memBlob;
         }
         memChunks = [];
@@ -358,7 +463,6 @@ export function createRecorder(opts = {}) {
   }
 
   function startMediaRecorder(s) {
-    mimeType = pickMime();
     const recOpts = { videoBitsPerSecond: VIDEO_BITS_PER_SECOND };
     if (mimeType) recOpts.mimeType = mimeType;
     recorder = new MediaRecorder(s, recOpts);
@@ -412,37 +516,85 @@ export function createRecorder(opts = {}) {
     notify();
   }
 
-  async function tryDisplayCapture() {
-    if (!navigator.mediaDevices?.getDisplayMedia) return null;
-    return navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: 60 },
-      audio: true,
-    });
+  function attachMixBusAudio(s) {
+    // Mix bus carries every in-page audio source (mic + strudel +
+    // sequencer + vocoder + …) merged into one track. We clone the track
+    // so the recorder owns its lifetime — stopping our clone at teardown
+    // doesn't disturb the mix bus, which the rest of the page may still
+    // be reading via the audio analyser. The bus is materialised eagerly
+    // by audio.getRecordableStream() even when no source is currently
+    // active, so sources that come online mid-recording (user enables
+    // mic, hits play on strudel) feed into our already-attached track.
+    const mix = opts.getRecordableStream?.();
+    const mixTracks = mix?.getAudioTracks() ?? [];
+    for (const t of mixTracks) {
+      try {
+        const cloned = t.clone();
+        s.addTrack(cloned);
+        attachedAudio.push(cloned);
+      } catch (err) {
+        console.warn('[recorder] failed to attach mix track:', err);
+      }
+    }
+    if (mixTracks.length === 0) {
+      console.warn('[recorder] no audio source registered; recording will be silent');
+    }
   }
 
-  function tryCanvasCapture() {
+  function buildCompositeStream() {
+    // Tell the page to start its per-frame composite (fx + overlay → record
+    // canvas). Page hooks may throw if the composite is unavailable; in
+    // that case we surface the error to start() which cleans up the sink.
+    opts.onCaptureStart?.();
+    captureBegun = true;
+
     const canvas = opts.getCanvas?.();
-    if (!canvas?.captureStream) return null;
-    const s = canvas.captureStream(30);
-    // Pull a mixed audio bus that includes mic + strudel + sequencer +
-    // any other audio source the page has registered, so the saved file
-    // matches what the user hears. Fall back to raw mic stream if the mix
-    // bus isn't available (e.g. older page-init that doesn't pass the
-    // getRecordableStream callback).
-    const audioStream = opts.getRecordableStream?.() ?? opts.getMicStream?.();
-    if (audioStream) {
-      try {
-        const tracks = audioStream.getAudioTracks();
-        for (const t of tracks) s.addTrack(t.clone());
-        if (!tracks.length) {
-          console.warn('[recorder] canvas audio source has no tracks; recording will be silent');
-        }
-      } catch (err) {
-        console.warn('[recorder] failed to attach canvas audio:', err);
-      }
-    } else {
-      console.warn('[recorder] no audio source registered; canvas recording will be silent');
+    if (!canvas?.captureStream) {
+      throw new Error('Recording requires a canvas with captureStream support');
     }
+    // 30fps balances mobile encoder load with visual continuity. The
+    // composite update runs at the page's rAF cadence (usually 60fps);
+    // captureStream samples this canvas at the requested rate.
+    const s = canvas.captureStream(30);
+    attachMixBusAudio(s);
+    return s;
+  }
+
+  async function buildTabCaptureStream() {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      throw new Error('Tab capture not supported on this device');
+    }
+    // displaySurface 'browser' + preferCurrentTab tells Chrome to default
+    // the share picker to the current tab so the user only needs one click
+    // ("Share") to confirm. Audio is explicitly off — tab-audio capture
+    // would miss the mic anyway, and asking for it would mean a redundant
+    // "share tab audio" toggle for the user. We use the in-page mix bus
+    // (mic + strudel + sequencer + …) for audio instead, same as
+    // viewport mode.
+    const tabStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { displaySurface: 'browser', frameRate: 60 },
+      preferCurrentTab: true,
+      audio: false,
+    });
+    const videoTrack = tabStream.getVideoTracks()[0];
+    if (!videoTrack) {
+      try { tabStream.getTracks().forEach(t => t.stop()); } catch {}
+      throw new Error('Tab capture returned no video track');
+    }
+    // If the user revokes sharing via Chrome's "Stop sharing" UI badge,
+    // the video track ends — wire that to recorder.stop() so the rec
+    // button and toast clear and the file gets flushed instead of just
+    // hanging in an inactive state.
+    videoTrack.addEventListener('ended', () => stop());
+
+    const s = new MediaStream();
+    s.addTrack(videoTrack);
+    // Discard any tab-audio track the browser handed us (we set audio:
+    // false above so this shouldn't fire, but belt-and-braces).
+    for (const t of tabStream.getAudioTracks()) {
+      try { t.stop(); } catch {}
+    }
+    attachMixBusAudio(s);
     return s;
   }
 
@@ -453,53 +605,54 @@ export function createRecorder(opts = {}) {
     }
     sweepStaleOpfs().catch(() => {});
 
-    let s = null;
-    let displayErr = null;
-    try {
-      s = await tryDisplayCapture();
-    } catch (err) {
-      displayErr = err;
-      if (err?.name === 'AbortError') throw err;
-      if (err?.name === 'NotAllowedError' && !looksLikeMobile()) throw err;
-    }
-    if (s) {
-      backend = 'display';
-      s.getVideoTracks()[0]?.addEventListener('ended', () => stop());
-      // If the user didn't tick "Share tab audio" in the display picker the
-      // display stream has zero audio tracks — top it up with the in-page
-      // mix bus so the saved file isn't silent. (When they DID tick it the
-      // tab audio already contains everything the page is producing, and
-      // adding the mix again would double the synth audio, so we only
-      // attach the mix as a fallback.)
-      if (s.getAudioTracks().length === 0) {
-        const mix = opts.getRecordableStream?.();
-        const mixTracks = mix?.getAudioTracks() ?? [];
-        for (const t of mixTracks) {
-          try { s.addTrack(t.clone()); } catch {}
-        }
-        if (mixTracks.length) {
-          console.log(`[recorder] display stream had no audio; attached ${mixTracks.length} mix track(s)`);
-        }
-      }
-    } else {
-      s = tryCanvasCapture();
-      if (!s) {
-        if (displayErr) throw displayErr;
-        throw new Error('Screen recording not supported on this device');
-      }
-      backend = 'canvas';
-    }
+    const mode = opts.getCaptureMode?.() ?? 'viewport';
 
+    // Pick mime + filename first so the file picker can suggest a name.
+    // pickMime() is synchronous — it doesn't consume user activation, so
+    // doing this before openSink is fine and lets the picker offer the
+    // right extension.
     mimeType = pickMime();
     const ext = (mimeType || '').includes('mp4') ? 'mp4' : 'webm';
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const filename = `qualia-${ts}.${ext}`;
-    try {
+
+    // Two activation-consuming APIs in play: showSaveFilePicker (FSA
+    // sink) and getDisplayMedia (tab capture). Only one can run per
+    // click. For viewport mode we want FSA → composite (no
+    // getDisplayMedia at all). For tab mode we sacrifice FSA so
+    // getDisplayMedia can have the activation; the sink falls back to
+    // OPFS + anchor-download.
+    let s;
+    if (mode === 'tab') {
+      // Tab capture FIRST — consumes activation. We then open an OPFS
+      // (or memory) sink which doesn't need a fresh activation.
+      try {
+        s = await buildTabCaptureStream();
+      } catch (err) {
+        throw err;   // AbortError / NotAllowedError propagate to caller
+      }
+      try {
+        sink = await openSink(filename, { skipFsa: true });
+      } catch (err) {
+        try { s.getTracks().forEach(t => t.stop()); } catch {}
+        for (const t of attachedAudio) { try { t.stop(); } catch {} }
+        attachedAudio = [];
+        throw err;
+      }
+      backend = 'tab';
+    } else {
+      // Viewport mode: showSaveFilePicker first to preserve activation
+      // for the picker (no getDisplayMedia is called in this path).
       sink = await openSink(filename);
-    } catch (err) {
-      try { s.getTracks().forEach(t => t.stop()); } catch {}
-      backend = '';
-      throw err;
+      try {
+        s = buildCompositeStream();
+      } catch (err) {
+        try { await sink.cleanup(); } catch {}
+        sink = null;
+        endCapture();
+        throw err;
+      }
+      backend = 'composite';
     }
 
     writeChain = Promise.resolve();
@@ -507,10 +660,24 @@ export function createRecorder(opts = {}) {
     memChunks = [];
     memBytes  = 0;
     erroredOut = false;
-    startMediaRecorder(s);
+    try {
+      startMediaRecorder(s);
+    } catch (err) {
+      // MediaRecorder constructor / start can throw on unsupported mime
+      // or invalid state. Roll back the sink + composite + audio clones so
+      // the page is back to its idle state before we re-raise.
+      try { s.getTracks().forEach(t => t.stop()); } catch {}
+      for (const t of attachedAudio) { try { t.stop(); } catch {} }
+      attachedAudio = [];
+      endCapture();
+      try { await sink.cleanup(); } catch {}
+      sink = null;
+      backend = '';
+      throw err;
+    }
     // Diagnostics — visible via remote-debug (chrome://inspect on a
-    // tethered Android device) so we can confirm which backend / sink
-    // the recorder ended up on without needing extra logging surface.
+    // tethered Android device) so we can confirm sink + audio attachment
+    // without needing extra logging surface.
     const audioTracks = s.getAudioTracks();
     const videoTracks = s.getVideoTracks();
     // Log the actual video track resolution we're feeding the encoder —
@@ -575,10 +742,11 @@ export function createRecorder(opts = {}) {
     getSink: () => sink?.kind || '',
     isSupported: () => {
       // Lazy / permissive: MediaRecorder is the only hard requirement.
-      // The canvas-capture fallback evaluates at start() time when the
-      // qualia canvas definitely exists; if it doesn't, start() surfaces
-      // a real error then. Returning true here lets the button stay
-      // tappable so the user can trigger the real attempt themselves.
+      // The composite canvas + captureStream are checked at start() time
+      // when the qualia canvas definitely exists; if either is unavailable,
+      // start() surfaces a real error then. Returning true here lets the
+      // button stay tappable so the user can trigger the real attempt
+      // themselves.
       return typeof MediaRecorder !== 'undefined';
     },
   };

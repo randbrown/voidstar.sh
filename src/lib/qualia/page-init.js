@@ -134,6 +134,7 @@ export function initQualiaPage() {
   const btnZen     = document.getElementById('btn-zen');
   const btnFullscreen = document.getElementById('btn-fullscreen');
   const btnRecord  = document.getElementById('btn-record');
+  const btnRecordMode = document.getElementById('btn-record-mode');
   const btnCamera  = document.getElementById('btn-camera');
   const btnCamRotate = document.getElementById('btn-cam-rotate');
   const btnCamMirror = document.getElementById('btn-cam-mirror');
@@ -267,9 +268,17 @@ export function initQualiaPage() {
     cameraCollapsed: cameraCard?.classList.contains('collapsed') ?? true,
     cameraZoom:     lastZoomValue,
     videoPos:       videoOffset,
+    captureMode,
   }));
   const stored = settings.load();
   camSizeIdx = stored.camSizeIdx ?? 0;
+
+  // Recorder capture mode — restored from settings, cycled by the
+  // btn-record-mode button below. 'viewport' uses the composite canvas
+  // (clean fx + overlay output, no screen-share dialog); 'tab' uses
+  // getDisplayMedia({preferCurrentTab: true}) to capture the whole tab
+  // including strudel REPL + sequencer panels + any open HUD cards.
+  let captureMode = (stored.captureMode === 'tab') ? 'tab' : 'viewport';
 
   // ── Restore overlay toggles from settings ────────────────────────────────
   if (typeof stored.showOverlay === 'boolean') overlay.setOption('skeleton', stored.showOverlay);
@@ -1556,17 +1565,23 @@ export function initQualiaPage() {
   document.addEventListener('webkitfullscreenchange', refreshFullscreenBtn);
 
   // ── Screen recorder ──────────────────────────────────────────────────────
-  // Two capture backends inside createRecorder: getDisplayMedia (desktop)
-  // and a canvas.captureStream() fallback for mobile / restricted browsers
-  // where getDisplayMedia is missing or silently fails. The fallback only
-  // captures the fx canvas (no overlay/HUD), plus mic audio when live.
-  // Chunks stream straight to disk via showSaveFilePicker (desktop) or
-  // OPFS (mobile-friendly) so multi-hour sets don't OOM the tab.
+  // The recorder always captures from a composite canvas we build here:
+  // every frame, fx canvas + overlay canvas → record canvas. captureStream
+  // from that canvas feeds MediaRecorder. Audio rides on the recordable
+  // mix bus (mic + strudel + sequencer + vocoder), so the saved file
+  // mirrors exactly what the user is seeing AND hearing inside the
+  // viewport — no browser chrome, no topbar, no HUD panels. No
+  // screen-share picker, no transient-activation conflict with
+  // showSaveFilePicker. See recorder.js for the codec / sink details.
+  //
+  // The composite frame loop only runs while recording is live; the
+  // recorder's onCaptureStart / onCaptureEnd hooks gate it so we don't
+  // pay the per-frame drawImage cost when the recorder is idle.
   //
   // Recording is INDEPENDENT of strudel / sequencer / vocoder / mic. The
-  // button only opens or closes the screen capture stream — engines play
-  // and stop as the user drives them; whatever's audible at the moment a
-  // chunk is captured is what lands in the file.
+  // button only opens or closes the recorder — engines play and stop as
+  // the user drives them; whatever's audible at the moment a chunk is
+  // captured is what lands in the file.
   //
   // Mobile save flow: after stop() the recorder fires onReadyToSave with
   // a `save()` closure. We surface a "tap to save" button inside the
@@ -1580,15 +1595,133 @@ export function initQualiaPage() {
   let pendingSave = null;
   let pendingFilename = '';
 
+  // Composite canvas. Off-screen — the recorder is the only consumer,
+  // so we keep this DOM-attached but visually-hidden in case some
+  // browser refuses captureStream from a fully-detached canvas. Size is
+  // LOCKED at recording start: the fx canvas resizes whenever the user
+  // toggles fullscreen / rotates / orientation-changes, but the H.264
+  // hardware encoder backing MediaRecorder doesn't survive a mid-stream
+  // resolution change (the file ends up truncated or unplayable on
+  // Chrome/Windows). Locking the composite means fullscreen toggles
+  // mid-take squish/stretch the visual content into the locked frame —
+  // accepted as a far better failure mode than a broken file. To
+  // record at fullscreen size, the user enters fullscreen BEFORE
+  // clicking rec.
+  const recordCompositeCanvas = document.createElement('canvas');
+  recordCompositeCanvas.id = 'qualia-record-composite';
+  recordCompositeCanvas.style.cssText =
+    'position:fixed;left:-99999px;top:0;width:1px;height:1px;' +
+    'pointer-events:none;opacity:0;';
+  document.body.appendChild(recordCompositeCanvas);
+  const recordCompositeCtx = recordCompositeCanvas.getContext('2d');
+  let recordCompositeFrameOff = null;
+  // Once recording begins, recordCompositeUpdate stops resizing the
+  // canvas so the encoder sees stable dimensions for the entire take.
+  let recordCompositeLocked = false;
+
+  function recordCompositeUpdate() {
+    const fx = core.getCanvas?.();
+    if (!fx || !recordCompositeCtx) return;
+    // Resize to match fx ONLY when we aren't actively recording (the
+    // initial paint, or between takes). Once locked, drawImage scales
+    // fx + overlay into the locked frame.
+    if (!recordCompositeLocked) {
+      if (recordCompositeCanvas.width  !== fx.width ||
+          recordCompositeCanvas.height !== fx.height) {
+        recordCompositeCanvas.width  = fx.width;
+        recordCompositeCanvas.height = fx.height;
+      }
+    }
+    const W = recordCompositeCanvas.width;
+    const H = recordCompositeCanvas.height;
+    // Fill with black so the letterbox bars are opaque black instead of
+    // transparent (which the encoder would render as undefined colour).
+    recordCompositeCtx.fillStyle = '#000';
+    recordCompositeCtx.fillRect(0, 0, W, H);
+    // Letterbox: scale the source to fit the locked frame, preserving
+    // aspect ratio. fx + overlay always share aspect (both = viewport
+    // aspect, just different DPR caps), so a single fit rect works for
+    // both. When fx.width/height match the locked frame exactly (no
+    // resize since rec start), drawW/drawH equal W/H and there's no
+    // letterbox — the common case is zero-cost.
+    let drawW = W, drawH = H, drawX = 0, drawY = 0;
+    if (fx.width > 0 && fx.height > 0 && (fx.width !== W || fx.height !== H)) {
+      const srcAspect = fx.width / fx.height;
+      const dstAspect = W / H;
+      if (srcAspect > dstAspect) {
+        drawW = W;
+        drawH = Math.round(W / srcAspect);
+        drawY = Math.round((H - drawH) / 2);
+      } else {
+        drawH = H;
+        drawW = Math.round(H * srcAspect);
+        drawX = Math.round((W - drawW) / 2);
+      }
+    }
+    // 1) fx layer. preserveDrawingBuffer is set on the WebGL contexts so
+    // drawImage from a webgl2/three canvas works inside the same frame.
+    try { recordCompositeCtx.drawImage(fx, drawX, drawY, drawW, drawH); } catch {}
+    // 2) overlay layer (skeleton / sparks / aura / ascii / mosh / edge /
+    // ripples). Same fit rect — overlay shares the viewport's aspect.
+    try { recordCompositeCtx.drawImage(overlay.canvas, drawX, drawY, drawW, drawH); } catch {}
+  }
+  function recordCompositeBegin() {
+    if (recordCompositeFrameOff) return;
+    // Paint one frame at the current fx size so the canvas has content
+    // for captureStream's first sample AND the dimensions are stamped
+    // before we lock them.
+    recordCompositeLocked = false;
+    recordCompositeUpdate();
+    // Lock dimensions for the duration of the recording. Fullscreen
+    // toggles during a take still happen (we don't disable the
+    // fullscreen button), but the recorded canvas stays the same size
+    // so the encoder doesn't choke.
+    recordCompositeLocked = true;
+    // Subscribe to the rAF loop. core.onFrame fires AFTER fx render AND
+    // after the existing overlay frame listener, because listeners run
+    // in insertion order and overlay was registered earlier in setup. By
+    // the time our callback runs, both fx and overlay are painted into
+    // their respective canvases for the current frame.
+    recordCompositeFrameOff = core.onFrame(recordCompositeUpdate);
+  }
+  function recordCompositeEnd() {
+    if (recordCompositeFrameOff) recordCompositeFrameOff();
+    recordCompositeFrameOff = null;
+    recordCompositeLocked = false;
+  }
+
   function refreshRecToastBackend(recording, backend, sink) {
     if (!recording) return '';
-    const capLabel  = backend === 'canvas' ? 'fx canvas' : 'full page';
+    const capLabel  = backend === 'composite' ? 'viewport'
+                    : backend === 'tab'       ? 'full tab'
+                    : 'unknown';
     const sinkLabel = sink === 'fsa'    ? 'saving to chosen file'
                     : sink === 'opfs'   ? 'streaming to device storage'
                     : sink === 'memory' ? 'buffered in RAM'
                     : '';
     return `${capLabel} · ${sinkLabel}`;
   }
+
+  // Capture-mode toggle (viewport composite vs full tab capture).
+  // Refreshes button label / tooltip from the captureMode state.
+  function refreshRecordModeBtn() {
+    if (!btnRecordMode) return;
+    btnRecordMode.textContent = captureMode === 'tab' ? 'tab' : 'viewport';
+    btnRecordMode.title = captureMode === 'tab'
+      ? 'Capture mode: full tab — share-picker captures the entire tab (fx, overlay, topbar, strudel, sequencer, any open panels). Audio still comes from the in-page mix bus.'
+      : 'Capture mode: viewport — composites fx + overlay layers, no share-picker dialog, no HUD/topbar in the file. Click to switch to full-tab capture.';
+  }
+  refreshRecordModeBtn();
+  btnRecordMode?.addEventListener('click', () => {
+    if (recorder.isRecording()) return;   // locked during a take
+    captureMode = captureMode === 'tab' ? 'viewport' : 'tab';
+    refreshRecordModeBtn();
+    // Also refresh the rec button tooltip so it announces the new mode.
+    if (btnRecord) {
+      btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'viewport'} (Shift+R)`;
+    }
+    settings.save();
+  });
 
   function hideRecToast() {
     if (!recToast) return;
@@ -1641,19 +1774,25 @@ export function initQualiaPage() {
   }
 
   const recorder = createRecorder({
-    getCanvas:    () => core.getCanvas?.(),
-    getMicStream: () => audio.getMicStream?.(),
+    getCanvas:           () => recordCompositeCanvas,
     getRecordableStream: () => audio.getRecordableStream?.(),
+    getCaptureMode:      () => captureMode,
+    onCaptureStart:      recordCompositeBegin,
+    onCaptureEnd:        recordCompositeEnd,
     onStateChange: ({ recording, backend, sink }) => {
       if (btnRecord) {
         btnRecord.classList.toggle('active-audio', recording);
         if (!recording) {
           btnRecord.textContent = 'rec';
-          btnRecord.title = 'Record screen (Shift+R) — captures full page on desktop, fx canvas on mobile';
+          btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'viewport'} (Shift+R)`;
         } else {
           btnRecord.title = `Recording ${refreshRecToastBackend(true, backend, sink)}. Shift+R or click to stop.`;
         }
       }
+      // Lock the mode button while recording so the user can't flip the
+      // mode mid-take (we'd have no clean way to swap capture backends
+      // without restarting the MediaRecorder). It re-enables on stop.
+      if (btnRecordMode) btnRecordMode.disabled = recording;
       if (recording) showRecToastActive(backend, sink);
       // When recording flips false, the toast either morphs to "ready"
       // (via onReadyToSave below) or stays hidden — we don't auto-hide
@@ -1675,20 +1814,23 @@ export function initQualiaPage() {
         }
         return;
       }
-      // Auto-save: fire the download immediately and surface a passive
-      // "saved · filename" toast that auto-hides — no tap-to-save step.
-      // If the browser rejects the auto-save (rare: very strict iOS
-      // Safari where the gesture chain has decayed past stop()), fall
-      // back to the old manual toast so the user can still recover.
-      if (autoSaved || !save) {
-        showRecToastReady(filename, true, null);
-        return;
-      }
+      // Show the "saved · filename" toast. Auto-save: also fire an
+      // anchor-download from the in-memory backup blob when one is
+      // available. On the FSA happy path this means the user gets the
+      // file twice — once at the picker-picked location, once via
+      // Chrome's normal download flow — which is the cheap-and-cheerful
+      // workaround for a Chrome-on-Windows FSA bug where writable.close()
+      // resolves successfully but the target file silently vanishes
+      // (AV intervention, OneDrive sync re-staging, SmartScreen, etc).
+      // On the OPFS path autoSaved is false; the same save() call is
+      // the only path to disk, so we'd fire it regardless.
       showRecToastReady(filename, true, null);
-      save().catch(err => {
-        console.warn('[recorder] auto-save failed, falling back to manual save:', err);
-        if (pendingSave) showRecToastReady(filename, false, save);
-      });
+      if (save) {
+        save().catch(err => {
+          console.warn('[recorder] auto-save failed, falling back to manual save:', err);
+          if (pendingSave) showRecToastReady(filename, false, save);
+        });
+      }
     },
     onError: (err) => {
       console.warn('[recorder]', err);
@@ -1704,14 +1846,11 @@ export function initQualiaPage() {
   });
 
   if (btnRecord) {
-    // Don't preemptively disable on isSupported() — that check runs at
-    // page-init before the qualia canvas exists, so the canvas-capture
-    // fallback can't be detected yet, and Android builds that lack
-    // getDisplayMedia get the button disabled forever. Disabled buttons
-    // also break Chrome's tap routing (taps fall through to nearby
-    // selectable text, surfacing the Google "tap to search" hint). We
-    // just try to start on click and report a real error if both
-    // backends genuinely fail then.
+    // Don't preemptively disable on isSupported() — Disabled buttons
+    // break Chrome's tap routing (taps fall through to nearby selectable
+    // text, surfacing the Google "tap to search" hint). The recorder
+    // surfaces a real error on click if the composite canvas / encoder
+    // path genuinely can't run on this device.
     btnRecord.addEventListener('click', async () => {
       // Diagnostics — prints unconditionally so we can confirm via the
       // Eruda console (?debug=1) that the click handler is even bound.

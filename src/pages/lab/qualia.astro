@@ -303,6 +303,7 @@
     #btn-pause                { min-width: 6ch;  } /* "paused" */
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
+    #btn-record-mode          { min-width: 8ch;  } /* "viewport" */
 
     /* Topbar group popovers — each `.qg-group` owns a trigger button + a
        hidden popover containing the original buttons unchanged. Click the
@@ -1295,7 +1296,8 @@
       <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
       <button class="ctrl-btn" id="btn-vocoder" title="Vocoder (W)">voc</button>
-      <button class="ctrl-btn" id="btn-record" title="Record screen (Shift+R) — picks tab/window/screen via the browser share picker; tick to include audio">rec</button>
+      <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
+      <button class="ctrl-btn" id="btn-record-mode" title="Capture mode — viewport (fx + overlay only) or tab (everything visible, including strudel / sequencer / panels via the browser share picker)">viewport</button>
       <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
       <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen (X)">full</button>
     </div>
@@ -1668,7 +1670,7 @@
      1. While recording, `#rec-toast` shows a fixed pill near the top of
         the viewport so the user can SEE the recording is live even when
         zen mode / fullscreen hides the topbar. It mirrors the rec button
-        state and shows mm:ss + the active backend.
+        state and shows the elapsed time.
      2. After stop, the toast morphs into a "tap to save" prompt with an
         explicit button. Mobile browsers reject anchor.click() inside an
         async stop callback (lost user-gesture); the explicit tap is the

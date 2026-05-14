@@ -179,19 +179,24 @@ export function createAudio() {
   // ── Recordable mix ─────────────────────────────────────────────────────
   // The screen recorder needs a single MediaStream containing audio from
   // every active source (mic + strudel + sequencer + …) so the saved file
-  // matches what the user hears. Each source has its own AudioContext, and
-  // cross-context audio nodes can't be connected directly, so we bridge by:
-  //   1. In each source's own ctx, add a MediaStreamAudioDestinationNode and
-  //      connect the source's analyser → destination. AnalyserNode is a
-  //      transparent passthrough, so this taps the audio non-destructively.
-  //   2. In a single mixer ctx, take the resulting tap stream as a
-  //      MediaStreamAudioSourceNode, run all sources through a shared gain,
-  //      and expose the mixer's destination stream to the recorder.
-  // The mix is built lazily on first recorder access and tracks are
-  // attached / detached as sources come and go.
+  // matches what the user hears. Each source lives in its own
+  // AudioContext, and cross-context audio nodes can't be connected
+  // directly, so two bridging strategies cover the two source shapes:
+  //   - Sources we own a raw MediaStream for (mic from getUserMedia):
+  //     read that stream directly via MediaStreamAudioSourceNode in the
+  //     mix ctx. One bridge, simple and robust — observed to be far more
+  //     reliable on Android Chrome than the analyser-tap path below.
+  //   - Sources where we only adopt an analyser (strudel, sequencer,
+  //     vocoder): in the source's own ctx, connect the analyser to a
+  //     MediaStreamAudioDestinationNode, then pull that stream into a
+  //     MediaStreamAudioSourceNode in the mix ctx. AnalyserNode is a
+  //     transparent passthrough so this taps the audio non-destructively.
+  // The mix bus is built lazily on first recorder access and refreshed
+  // when sources come or go so an in-flight recording picks up newly
+  // started mic/strudel/sequencer without re-attaching.
   let recMixCtx  = null;
   let recMixDest = null;
-  /** sourceId -> { tapDest (in source ctx), mixSrc (in mix ctx), gain } */
+  /** sourceId -> { tapDest? (in source ctx), mixSrc (in mix ctx), gain, analyser? } */
   const recMixTaps = new Map();
 
   function ensureRecordableMix() {
@@ -201,14 +206,29 @@ export function createAudio() {
     }
     if (recMixCtx.state === 'suspended') recMixCtx.resume().catch(() => {});
     for (const [id, src] of sources) {
-      if (recMixTaps.has(id) || !src.analyser || !src.ctx) continue;
+      if (recMixTaps.has(id) || !src.ctx) continue;
       try {
-        const tapDest = src.ctx.createMediaStreamDestination();
-        src.analyser.connect(tapDest);
-        const mixSrc = recMixCtx.createMediaStreamSource(tapDest.stream);
-        const gain   = recMixCtx.createGain();
+        let mixSrc, tapDest = null, tappedAnalyser = null;
+        if (src.stream) {
+          // Mic path: take the original getUserMedia stream straight into
+          // the mix ctx. Skipping the analyser-tap bridge avoids a known
+          // class of cross-context-with-AnalyserNode silence bug on
+          // Android Chrome where the inner stream produces zero audio.
+          mixSrc = recMixCtx.createMediaStreamSource(src.stream);
+        } else if (src.analyser) {
+          // Strudel / sequencer / vocoder path: no raw MediaStream
+          // available — tap the analyser into a stream-dest in the
+          // source's own ctx and bridge from there.
+          tapDest = src.ctx.createMediaStreamDestination();
+          src.analyser.connect(tapDest);
+          tappedAnalyser = src.analyser;
+          mixSrc = recMixCtx.createMediaStreamSource(tapDest.stream);
+        } else {
+          continue;
+        }
+        const gain = recMixCtx.createGain();
         mixSrc.connect(gain).connect(recMixDest);
-        recMixTaps.set(id, { tapDest, mixSrc, gain });
+        recMixTaps.set(id, { tapDest, mixSrc, gain, analyser: tappedAnalyser });
       } catch (err) {
         console.warn(`[audio] recordable-mix: could not tap source ${id}:`, err);
       }
@@ -220,17 +240,23 @@ export function createAudio() {
     if (!tap) return;
     try { tap.gain.disconnect(); } catch {}
     try { tap.mixSrc.disconnect(); } catch {}
-    try {
-      // tapDest belongs to the source's ctx — safe to leave; it'll be GC'd
-      // when the source's ctx is closed in removeSource.
-    } catch {}
+    // For analyser-tap sources, also drop the analyser→tapDest edge so a
+    // strudel pattern that keeps playing after the recording stops doesn't
+    // keep feeding an unused destination node.
+    if (tap.analyser && tap.tapDest) {
+      try { tap.analyser.disconnect(tap.tapDest); } catch {}
+    }
     recMixTaps.delete(id);
   }
 
   function getRecordableStream() {
+    // Always materialise the mix bus, even if no sources are live yet.
+    // The recorder attaches the mix track up front; sources that come
+    // online mid-recording (user enables mic, hits play on strudel, etc)
+    // flow through the existing track without needing the recorder to
+    // re-attach.
     ensureRecordableMix();
-    if (!recMixDest || recMixTaps.size === 0) return null;
-    return recMixDest.stream;
+    return recMixDest?.stream ?? null;
   }
 
   /** Start mic capture. Returns the chosen deviceId so callers can persist it. */
@@ -273,6 +299,10 @@ export function createAudio() {
     micId = settings.deviceId || deviceId || null;
 
     refreshFrameBuffers();
+    // If a recordable mix is already live (e.g. recording started while the
+    // user was strudel-only), tap the new mic source into it so the
+    // recorder's existing audio track starts carrying mic audio.
+    if (recMixCtx) ensureRecordableMix();
     notify();
     return micId;
   }
@@ -288,11 +318,17 @@ export function createAudio() {
    *  their own id so each maintains its own slot in the source registry. */
   function adoptAnalyser(externalCtx, externalAnalyser, sourceId = 'strudel') {
     // Replace any prior source under this id without touching the others.
-    if (sources.has(sourceId)) sources.delete(sourceId);
+    if (sources.has(sourceId)) {
+      detachFromRecordableMix(sourceId);
+      sources.delete(sourceId);
+    }
     const src = { ctx: externalCtx, analyser: externalAnalyser, ownsCtx: false };
     configureSource(src);
     sources.set(sourceId, src);
     refreshFrameBuffers();
+    // Refresh the recordable-mix taps so a freshly adopted strudel /
+    // sequencer / vocoder analyser feeds into an already-live recording.
+    if (recMixCtx) ensureRecordableMix();
     notify();
   }
 
