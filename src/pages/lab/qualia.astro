@@ -1304,7 +1304,29 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.6rem 0.7rem;
       display: flex; flex-direction: column; gap: 0.5rem;
     }
-    #voc-props {
+    #vox-shared {
+      display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem;
+      font-size: 0.74rem;
+    }
+    /* Vocoder / master / harmonizer each read as a delineated, collapsible
+       container with a click-to-collapse head. */
+    .vox-section {
+      display: flex; flex-direction: column; gap: 0.4rem;
+      padding-top: 0.5rem; border-top: 1px solid var(--border);
+      font-size: 0.74rem;
+    }
+    .vox-sec-head {
+      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      cursor: pointer; user-select: none;
+    }
+    .vox-caret {
+      padding: 0 0.25rem; font-size: 0.7rem; line-height: 1.3;
+      background: none; border: none; color: var(--muted); cursor: pointer;
+    }
+    .vox-sec-body { display: flex; flex-direction: column; gap: 0.4rem; }
+    .vox-section.vox-collapsed .vox-sec-body { display: none; }
+    #voc-section.voc-disabled #voc-props { opacity: 0.4; pointer-events: none; }
+    .voc-props {
       display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem;
       font-size: 0.74rem;
     }
@@ -1316,6 +1338,28 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       flex: 1; min-width: 0;
       accent-color: var(--cyan);
     }
+    /* Cap the mic <select> so a long device label can't stretch the panel. */
+    #voc-mic { max-width: 13rem; }
+    #harm-chord {
+      margin-left: auto; color: var(--cyan);
+      font-variant-numeric: tabular-nums; letter-spacing: 0.02em;
+    }
+    #harm-section.harm-disabled #harm-picker,
+    #harm-section.harm-disabled #harm-keys-row,
+    #harm-section.harm-disabled #harm-track,
+    #harm-section.harm-disabled #harm-formant-row { opacity: 0.4; pointer-events: none; }
+    .harm-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    #harm-keys { display: flex; gap: 2px; flex: 1; min-width: 0; }
+    .harm-key {
+      flex: 1; min-width: 0; padding: 0.35rem 0.1rem;
+      font-size: 0.6rem; line-height: 1;
+      background: var(--surface); color: var(--text);
+      border: 1px solid var(--border); border-radius: 3px;
+      cursor: pointer;
+    }
+    .harm-key.blk { background: var(--void); color: var(--muted); }
+    .harm-key.on  { background: var(--cyan); color: var(--void); border-color: var(--cyan); }
+    .harm-key:active { transform: translateY(1px); }
     #voc-help {
       color: var(--muted); font-size: 0.66rem; line-height: 1.4;
       padding: 0.3rem 0.1rem 0;
@@ -1348,7 +1392,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div id="topbar-corner">
       <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
-      <button class="ctrl-btn" id="btn-vocoder" title="Vocoder (W)">voc</button>
+      <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
       <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
       <button class="ctrl-btn" id="btn-record-mode" title="Capture mode — viewport (fx + overlay only) or tab (everything visible, including strudel / sequencer / panels via the browser share picker)">viewport</button>
       <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
@@ -1833,59 +1877,195 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
      of #sequencer-panel so each draggable window stays independent. -->
 <div id="vocoder-panel" style="display:none">
   <div id="vocoder-header">
-    <span class="sp-title">vocoder <span class="sp-tag">// voice → robot</span></span>
+    <span class="sp-title">vox <span class="sp-tag">// vocal fx</span></span>
     <span class="sp-status" id="vocoder-status">click ▶ to start</span>
-    <button class="ctrl-btn" id="btn-vocoder-play"  title="Engage vocoder (opens mic)">▶</button>
-    <button class="ctrl-btn" id="btn-vocoder-stop"  title="Disengage (releases mic)">■</button>
+    <button class="ctrl-btn" id="btn-vocoder-play"  title="Open the mic">▶</button>
+    <button class="ctrl-btn" id="btn-vocoder-stop"  title="Close the mic">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-vocoder-mute" title="Mute output (mic stays open)">live</button>
     <button class="ctrl-btn" id="btn-vocoder-close" title="Close (W)">×</button>
   </div>
   <div id="vocoder-body">
-    <div id="voc-props">
-      <label class="seq-prop" title="Carrier waveform — drone (saw + sub) is the classic robot timbre; noise gives a whispered/breathy quality.">
-        <span class="seq-prop-label">carrier</span>
-        <select id="voc-carrier" class="ctrl-btn">
-          <option value="drone">drone</option>
-          <option value="sawtooth">sawtooth</option>
-          <option value="square">square</option>
-          <option value="triangle">triangle</option>
-          <option value="noise">noise</option>
-        </select>
+    <!-- Shared controls — affect every vox effect. -->
+    <div id="vox-shared">
+      <label class="seq-prop" title="Presets — artistic starting points (Daft Punk, Nightcall, Imogen Heap …). Loading one only sets controls that stay fully editable afterward; it leaves mic / gate / output / feed alone.">
+        <span class="seq-prop-label">preset</span>
+        <select id="voc-preset" class="ctrl-btn"><option value="">presets…</option></select>
       </label>
-      <label class="seq-prop" title="Carrier fundamental in Hz. 100-130 Hz reads as a male robot, 180-240 Hz reads as a female / higher robot.">
-        <span class="seq-prop-label">pitch</span>
-        <input type="number" id="voc-pitch" class="seq-num seq-num-wide" min="40" max="500" step="1" />
-        <span class="seq-prop-label">Hz</span>
+      <label class="seq-prop" title="Microphone — shared by every vox effect. 'same as main mic' follows the topbar mic selector; pick a device to give vox its own dedicated input.">
+        <span class="seq-prop-label">mic</span>
+        <select id="voc-mic" class="ctrl-btn"><option value="">same as main mic</option></select>
       </label>
-      <label class="seq-prop" title="Number of analysis bands. More bands = more intelligible but heavier CPU. 16 is a good live default.">
-        <span class="seq-prop-label">bands</span>
-        <select id="voc-bands" class="ctrl-btn">
-          <option value="8">8</option>
-          <option value="16">16</option>
-          <option value="24">24</option>
-          <option value="32">32</option>
-        </select>
+      <label class="seq-prop voc-range" title="Noise gate — mutes the vocoder and harmonizer when the mic drops below this level. Shared by both; also breaks acoustic feedback at silence. 0 = gate off.">
+        <span class="seq-prop-label">gate</span>
+        <input type="range" id="voc-gate" min="0" max="1" step="0.01" />
+        <span class="qp-val" id="voc-gate-val"></span>
       </label>
-      <label class="seq-prop voc-range" title="High-frequency voice passthrough — preserves sibilants (s, sh, t, f) which a pure vocoder mangles into low buzz.">
-        <span class="seq-prop-label">sibilance</span>
-        <input type="range" id="voc-sibilance" min="0" max="1" step="0.01" />
-        <span class="qp-val" id="voc-sibilance-val"></span>
-      </label>
-      <label class="seq-prop voc-range" title="Dry voice mix — sends a small amount of unprocessed mic to the output. Default 0; raise if a venue needs extra clarity.">
-        <span class="seq-prop-label">dry</span>
-        <input type="range" id="voc-dry" min="0" max="1" step="0.01" />
-        <span class="qp-val" id="voc-dry-val"></span>
-      </label>
-      <label class="seq-prop voc-range" title="Master output gain.">
+      <label class="seq-prop voc-range" title="Master output gain — the whole vox panel.">
         <span class="seq-prop-label">output</span>
         <input type="range" id="voc-output" min="0" max="2" step="0.01" />
         <span class="qp-val" id="voc-output-val"></span>
       </label>
+      <label class="seq-prop" title="Feed the vox output into audio-reactive modulation — it joins strudel + sequencer as an audio source, heard by fx and recordings in the 'mix' / 'all' audio modes.">
+        <span class="seq-prop-label">feed</span>
+        <button id="btn-vocoder-feed" class="ctrl-btn">off</button>
+      </label>
+    </div>
+    <!-- Vocoder effect. -->
+    <div id="voc-section" class="vox-section">
+      <div id="voc-fx-head" class="vox-sec-head">
+        <button class="vox-caret" type="button" title="Collapse / expand">▾</button>
+        <span class="seq-prop-label">vocoder</span>
+        <button class="ctrl-btn" id="btn-voc-fx" title="Vocoder effect on/off — the mic and the harmonizer stay live when it's off.">on</button>
+        <span class="sp-tag">// voice → robot</span>
+      </div>
+      <div class="vox-sec-body">
+        <div id="voc-props" class="voc-props">
+          <label class="seq-prop" title="Carrier waveform — drone (saw + sub) is the classic robot timbre; noise gives a whispered/breathy quality.">
+            <span class="seq-prop-label">carrier</span>
+            <select id="voc-carrier" class="ctrl-btn">
+              <option value="drone">drone</option>
+              <option value="sawtooth">sawtooth</option>
+              <option value="square">square</option>
+              <option value="triangle">triangle</option>
+              <option value="noise">noise</option>
+            </select>
+          </label>
+          <label class="seq-prop" title="Carrier fundamental in Hz. 100-130 Hz reads as a male robot, 180-240 Hz reads as a female / higher robot.">
+            <span class="seq-prop-label">pitch</span>
+            <input type="number" id="voc-pitch" class="seq-num seq-num-wide" min="40" max="500" step="1" />
+            <span class="seq-prop-label">Hz</span>
+          </label>
+          <label class="seq-prop" title="Number of analysis bands. More bands = more intelligible but heavier CPU. 24 is a good live default; 40 is clearest but heaviest.">
+            <span class="seq-prop-label">bands</span>
+            <select id="voc-bands" class="ctrl-btn">
+              <option value="8">8</option>
+              <option value="16">16</option>
+              <option value="24">24</option>
+              <option value="32">32</option>
+              <option value="40">40</option>
+            </select>
+          </label>
+          <label class="seq-prop" title="Detuned unison oscillators per carrier partial. More voices fill the gaps between harmonics for a thicker, less hollow tone. 1 = single oscillator.">
+            <span class="seq-prop-label">voices</span>
+            <select id="voc-voices" class="ctrl-btn">
+              <option value="1">1</option>
+              <option value="3">3</option>
+              <option value="5">5</option>
+              <option value="7">7</option>
+            </select>
+          </label>
+          <label class="seq-prop voc-range" title="Consonant clarity — blends a pink-noise carrier into the high bands so fricatives (s, sh, f, t) read as noise instead of a pitched whistle. The single biggest intelligibility control.">
+            <span class="seq-prop-label">consonant</span>
+            <input type="range" id="voc-consonant" min="0" max="1" step="0.01" />
+            <span class="qp-val" id="voc-consonant-val"></span>
+          </label>
+          <label class="seq-prop voc-range" title="High-frequency voice passthrough — preserves sibilants (s, sh, t, f) which a pure vocoder mangles into low buzz.">
+            <span class="seq-prop-label">sibilance</span>
+            <input type="range" id="voc-sibilance" min="0" max="1" step="0.01" />
+            <span class="qp-val" id="voc-sibilance-val"></span>
+          </label>
+          <label class="seq-prop voc-range" title="Dry voice mix — sends a small amount of unprocessed mic to the output. Default 0; raise if a venue needs extra clarity.">
+            <span class="seq-prop-label">dry</span>
+            <input type="range" id="voc-dry" min="0" max="1" step="0.01" />
+            <span class="qp-val" id="voc-dry-val"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <!-- Master output chain — clarity EQ + dynamics, shared by the vocoder
+         and the harmonizer's voice engine. -->
+    <div id="voc-output-section" class="vox-section">
+      <div class="vox-sec-head">
+        <button class="vox-caret" type="button" title="Collapse / expand">▾</button>
+        <span class="seq-prop-label">master</span>
+        <span class="sp-tag">// clarity eq + dynamics</span>
+      </div>
+      <div class="vox-sec-body">
+        <div class="voc-props">
+          <label class="seq-prop voc-range" title="Presence EQ — a lift around 3 kHz where word recognition lives. A little goes a long way for clarity.">
+            <span class="seq-prop-label">presence</span>
+            <input type="range" id="voc-presence" min="0" max="12" step="0.5" />
+            <span class="qp-val" id="voc-presence-val"></span>
+          </label>
+          <label class="seq-prop voc-range" title="Master compression — keeps quiet syllables audible under loud ones. 0 = near-transparent, 1 = heavy.">
+            <span class="seq-prop-label">compress</span>
+            <input type="range" id="voc-compress" min="0" max="1" step="0.01" />
+            <span class="qp-val" id="voc-compress-val"></span>
+          </label>
+          <label class="seq-prop voc-range" title="De-esser — tames loud sibilance ('sss', 'sh') with a dynamic 6 kHz shelf cut, so consonant clarity doesn't turn harsh. 0 = off.">
+            <span class="seq-prop-label">de-ess</span>
+            <input type="range" id="voc-deess" min="0" max="1" step="0.01" />
+            <span class="qp-val" id="voc-deess-val"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div id="harm-section" class="vox-section">
+      <div id="harm-head" class="vox-sec-head">
+        <button class="vox-caret" type="button" title="Collapse / expand">▾</button>
+        <span class="seq-prop-label">harmonizer</span>
+        <button class="ctrl-btn" id="btn-harm" title="Harmonizer on/off — independent of the vocoder.">off</button>
+        <select id="harm-engine" class="ctrl-btn" title="Engine — robot: the chord drives the vocoder carrier, the robot choir (turns the vocoder on) · voice: pitch-shifts your actual voice — natural, intelligible, standalone.">
+          <option value="synth">robot</option>
+          <option value="voice">voice</option>
+        </select>
+        <select id="harm-mode" class="ctrl-btn" title="Chord source — chord: a held chord · keys: tap notes · track: voices follow your pitch, snapped to the key.">
+          <option value="picker">chord</option>
+          <option value="keys">keys</option>
+          <option value="track">track</option>
+        </select>
+        <button class="ctrl-btn" id="btn-harm-tune" title="Autotune — snap your lead vocal to the nearest scale note so the lead and every harmony land on exact pitches (voice engine).">tune</button>
+        <span class="sp-tag" id="harm-chord">—</span>
+      </div>
+      <div class="vox-sec-body">
+        <div id="harm-picker" class="harm-row">
+          <label class="seq-prop" title="Chord root note.">
+            <span class="seq-prop-label">root</span>
+            <select id="harm-root" class="ctrl-btn"></select>
+          </label>
+          <label class="seq-prop" title="Chord quality.">
+            <span class="seq-prop-label">quality</span>
+            <select id="harm-quality" class="ctrl-btn"></select>
+          </label>
+        </div>
+        <div id="harm-keys-row" class="harm-row">
+          <button class="ctrl-btn" id="harm-oct-down" title="Octave down">▼</button>
+          <span class="seq-prop-label" id="harm-oct-label">C4</span>
+          <div id="harm-keys"></div>
+          <button class="ctrl-btn" id="harm-oct-up" title="Octave up">▲</button>
+        </div>
+        <div id="harm-track" class="harm-row">
+          <label class="seq-prop" title="Musical key the tracked voices snap to.">
+            <span class="seq-prop-label">key</span>
+            <select id="harm-key" class="ctrl-btn"></select>
+          </label>
+          <label class="seq-prop" title="Scale — the voices stay inside this key signature as your pitch moves.">
+            <span class="seq-prop-label">scale</span>
+            <select id="harm-scale" class="ctrl-btn"></select>
+          </label>
+          <label class="seq-prop" title="Harmony voicing stacked diatonically on the tracked lead.">
+            <span class="seq-prop-label">voicing</span>
+            <select id="harm-voicing" class="ctrl-btn"></select>
+          </label>
+        </div>
+        <div id="harm-formant-row" class="harm-row">
+          <label class="seq-prop voc-range" title="Formant shift — moves the harmony's vocal 'character' without moving its pitch. 0 keeps each voice's natural identity; negative is darker / larger, positive is brighter / smaller. Voice engine only (needs the formant-shift worklet; the granular fallback ignores it).">
+            <span class="seq-prop-label">formant</span>
+            <input type="range" id="harm-formant" min="-12" max="12" step="1" />
+            <span class="qp-val" id="harm-formant-val"></span>
+          </label>
+        </div>
+      </div>
     </div>
     <div id="voc-help">
-      mic input is the modulator; the carrier is shaped by your voice's
-      spectral envelope. Uses whichever microphone the topbar mic-select is
-      currently set to.
+      Load a <b>preset</b> as a starting point, then tweak freely. ▶ opens the
+      mic; <b>vocoder</b> and <b>harmonizer</b> are independent effects on it.
+      <b>consonant</b> blends noise into the high bands so words stay crisp;
+      <b>master</b> adds clarity EQ + dynamics. Harmonizer engine —
+      <b>robot</b>: the chord drives the vocoder carrier (robot choir);
+      <b>voice</b>: pitch-shifts your actual voice for natural harmony, with
+      <b>tune</b> (exact pitches) and <b>formant</b> (timbre) control.
+      <b>feed</b> routes the output into fx. Section heads collapse.
     </div>
   </div>
 </div>

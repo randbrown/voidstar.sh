@@ -18,6 +18,7 @@ import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
 import { createSequencer } from './sequencer.js';
 import { createVocoder } from './vocoder.js';
+import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { createRecorder } from './recorder.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
@@ -743,8 +744,11 @@ export function initQualiaPage() {
   // The button is a 4-state selector matching real-world usage:
   //   off → mic stopped, audio.setSourceFilter([])
   //   mic → mic running, filter ['mic']  (engines ignored — venue mix)
-  //   mix → mic stopped, filter ['strudel', 'sequencer']  (engines only)
-  //   all → mic running, filter ['mic', 'strudel', 'sequencer']
+  //   mix → mic stopped, filter ['strudel', 'sequencer', 'vocoder']  (engines)
+  //   all → mic running, filter ['mic', 'strudel', 'sequencer', 'vocoder']
+  // The 'vocoder' source only actually exists when the vocoder panel's feed
+  // toggle is on (page-init adopts it then); listing it here just means it's
+  // allowed through whenever it is present — opt-in, like the engines.
   // The `onChange` callback only handles visual side-effects from external
   // source changes (e.g. strudel adopt/release while panel is open) so the
   // panel visibility and label stay in sync with whatever's actually live.
@@ -764,10 +768,10 @@ export function initQualiaPage() {
 
   function applyAudioFilter() {
     switch (audioMode) {
-      case 'off': audio.setSourceFilter([]);                              break;
-      case 'mic': audio.setSourceFilter(['mic']);                         break;
-      case 'mix': audio.setSourceFilter(['strudel', 'sequencer']);        break;
-      case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer']); break;
+      case 'off': audio.setSourceFilter([]);                                          break;
+      case 'mic': audio.setSourceFilter(['mic']);                                     break;
+      case 'mix': audio.setSourceFilter(['strudel', 'sequencer', 'vocoder']);         break;
+      case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer', 'vocoder']);  break;
     }
   }
 
@@ -2513,8 +2517,35 @@ export function initQualiaPage() {
   // Owns its own AudioContext + getUserMedia stream so it can route to the
   // speakers without entangling with the analysis path or the strudel
   // mute-patch. Follows whichever mic the topbar picker is currently on.
-  const vocoder = createVocoder({ getDeviceId: () => audio.getCurrentMicId() });
+  // Harmonizer drives the vocoder's carrier into a chord (the "robot choir").
+  // It owns no audio — the vocoder subscribes to its onChange and retunes its
+  // carrier pool. Created first so it can be handed to createVocoder.
+  const harmonizer = createHarmonizer();
+  const vocoder = createVocoder({
+    getDeviceId:  () => audio.getCurrentMicId(),
+    onFeedChange: () => syncVocoderFeed(),
+    harmonizer,
+  });
   _vocoderRef = vocoder;
+
+  // Adopt or release the vocoder's output analyser as an audio source named
+  // 'vocoder'. When the panel's feed toggle is on and the vocoder is live,
+  // its vocoded signal joins strudel + sequencer in the analysis + recordable
+  // mix — gated, like every source, by the current audio mode's filter.
+  // Re-runs on every vocoder start / stop / graph rebuild / toggle.
+  function syncVocoderFeed() {
+    try {
+      const an   = vocoder.getFeedAnalyser?.();
+      const vctx = vocoder.getContext?.();
+      if (vocoder.isActive?.() && vocoder.isFeedEnabled?.() && an && vctx) {
+        audio.adoptAnalyser(vctx, an, 'vocoder');
+      } else {
+        audio.releaseAdopted('vocoder');
+      }
+    } catch (e) {
+      console.warn('[qualia] vocoder feed sync failed:', e);
+    }
+  }
 
   // Wrap both directions of CPS as soon as either hook appears. We poll
   // because Strudel lazy-loads on first panel open and its scheduler

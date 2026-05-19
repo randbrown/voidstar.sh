@@ -20,17 +20,39 @@ export function storeDeviceId(kind, id) {
  * Wire a device <select> for one kind ('audioinput' | 'videoinput').
  * `onChoose(deviceId)` should restart the relevant pipeline. The picker
  * starts hidden and only shows when ≥2 devices of that kind exist.
+ *
+ * Extra options, for callers like the vocoder that need a second,
+ * independent picker:
+ *   storeKind     — localStorage kind used to persist the choice; defaults
+ *                   to 'mic'/'cam' derived from `kind`. Ignored when
+ *                   persist is false.
+ *   persist       — when false, the picker writes nothing to localStorage;
+ *                   the caller owns persistence (e.g. its own config blob).
+ *   leadingOption — { value, label } synthetic first entry that is not a
+ *                   real device (e.g. the vocoder's "same as main mic").
+ *                   Selected when the current id is null or equals its value.
+ *   alwaysShow    — keep the <select> visible even with ≤1 real device.
  */
-export function wirePicker({ select, kind, onChoose, onError, getCurrentId }) {
+export function wirePicker({ select, kind, onChoose, onError, getCurrentId,
+                             storeKind, leadingOption = null,
+                             alwaysShow = false, persist = true }) {
   if (!select) return { populate: () => {}, hide: () => {} };
+  const persistKind = storeKind || (kind === 'audioinput' ? 'mic' : 'cam');
 
   async function populate(activeId) {
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
       const matching = all.filter(d => d.kind === kind);
-      if (matching.length <= 1) { select.style.display = 'none'; return; }
+      if (!alwaysShow && matching.length <= 1) { select.style.display = 'none'; return; }
       const current = activeId ?? (getCurrentId ? getCurrentId() : null);
       select.innerHTML = '';
+      if (leadingOption) {
+        const opt = document.createElement('option');
+        opt.value = leadingOption.value;
+        opt.textContent = leadingOption.label;
+        if (current == null || current === leadingOption.value) opt.selected = true;
+        select.appendChild(opt);
+      }
       matching.forEach((dev, i) => {
         const opt = document.createElement('option');
         opt.value = dev.deviceId;
@@ -49,8 +71,8 @@ export function wirePicker({ select, kind, onChoose, onError, getCurrentId }) {
     const id = select.value;
     try {
       const chosen = await onChoose(id);
-      if (chosen) storeDeviceId(kind === 'audioinput' ? 'mic' : 'cam', chosen);
-      await populate(chosen);
+      if (persist && chosen) storeDeviceId(persistKind, chosen);
+      await populate(chosen ?? id);
     } catch (err) {
       if (onError) onError(err);
       else alert(`Could not switch ${kind === 'audioinput' ? 'microphone' : 'camera'}: ${err.message || err}`);
