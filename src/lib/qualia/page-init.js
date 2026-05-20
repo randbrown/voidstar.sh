@@ -2455,6 +2455,12 @@ export function initQualiaPage() {
       _strudelSetCpsTimer = setTimeout(() => {
         _strudelSetCpsTimer = null;
         if (!bothPanelsOpened()) return;
+        // Snap the cycle epoch at the OLD cps before delivery so the
+        // sequencer's phase-align math stays exact across tempo edits.
+        // The wrap also fires reanchorEpoch, but the wrap may not be
+        // installed yet on first run — this is the belt to that
+        // suspenders.
+        try { strudel?.reanchorEpoch?.(+v); } catch {}
         let delivered = false;
         try {
           const sched = strudel?.getScheduler?.();
@@ -2467,6 +2473,16 @@ export function initQualiaPage() {
           try { if (typeof globalThis.setcps === 'function') { globalThis.setcps(v); delivered = true; } } catch {}
         }
       }, 150);
+    },
+    // Phase-alignment surface for the sequencer. `null` returns mean
+    // "couldn't probe / nothing to align to"; sequencer falls back to
+    // unaligned scheduling.
+    getSecondsUntilNextStrudelBoundary: () => {
+      try { return strudel?.getSecondsUntilNextStrudelBoundary?.() ?? null; }
+      catch { return null; }
+    },
+    isStrudelPlaying: () => {
+      try { return !!strudel?.isPlaying?.(); } catch { return false; }
     },
     // Transport sync — sequencer asks us to mirror its play/stop into
     // Strudel. `fromSync: true` tells strudel-hydra to suppress its
@@ -2558,6 +2574,10 @@ export function initQualiaPage() {
     if (!_strudelGlobalWrapped && typeof globalThis.setcps === 'function') {
       const orig = globalThis.setcps;
       globalThis.setcps = function (v) {
+        // Snap the strudel-side cycle epoch at the OLD cps before the
+        // scheduler picks up the new value — keeps phase-align math
+        // exact for the sequencer's next boundary probe.
+        try { strudel?.reanchorEpoch?.(+v); } catch {}
         if (bothPanelsOpened()) {
           try { sequencer.applyCpsFromStrudel(+v); } catch {}
         }
@@ -2572,6 +2592,7 @@ export function initQualiaPage() {
         if (sched && typeof sched.setCps === 'function' && !sched.__qualiaWrapped) {
           const orig = sched.setCps.bind(sched);
           sched.setCps = function (v) {
+            try { strudel?.reanchorEpoch?.(+v); } catch {}
             if (bothPanelsOpened()) {
               try { sequencer.applyCpsFromStrudel(+v); } catch {}
             }

@@ -1862,6 +1862,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="btn-sequencer-stop"  title="Stop">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-sequencer-mute" title="Mute sequencer audio (transport keeps running so sync stays locked)">live</button>
     <input type="range" class="panel-gain-slider" id="sequencer-gain" min="0" max="1" step="0.01" value="0.9" title="Output level (0–1×). Rides the sequencer mix without editing per-pad gain." />
+    <button class="ctrl-btn" id="btn-sequencer-sync" title="Realign sequencer to Strudel cycle boundary now" style="display:none">⟲</button>
     <button class="ctrl-btn" id="btn-sequencer-close" title="Close (Q)">×</button>
   </div>
   <div id="sequencer-tabs">

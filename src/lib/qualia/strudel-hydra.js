@@ -457,6 +457,130 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   // play strudel" message would loop right back through onPlayStateChange
   // and re-trigger the seq, causing flutter and double-fire bugs.
   let _suppressPlayStateChange = false;
+
+  // ── Cycle-clock epoch (for sequencer phase alignment) ────────────────────
+  // Two probes feed `getSecondsUntilNextStrudelBoundary()`:
+  //   A. live read of `scheduler.now()` (Strudel cyclist returns a cycle
+  //      position float). Preferred — uses Strudel's own clock.
+  //   B. epoch fallback: we anchor `_strudelEpoch` (audio-time of a known
+  //      cycle-0 boundary) on play(), and re-anchor it on every cps change
+  //      so cycle math stays exact across tempo edits. Used when probe A
+  //      isn't available.
+  let _strudelEpoch    = null;  // AudioContext seconds, OR null when not playing
+  let _strudelEpochCps = 0.5;   // cps at the anchor moment
+  function getAudioCtxSafe() {
+    try { return globalThis.getAudioContext?.() || null; } catch { return null; }
+  }
+  function readSchedulerCps() {
+    try {
+      const s = getScheduler();
+      const c = s?.cps;
+      if (typeof c === 'number' && c > 0) return c;
+    } catch {}
+    return _strudelEpochCps;
+  }
+  function readSchedulerLatency() {
+    try {
+      const s = getScheduler();
+      const l = s?.latency;
+      if (typeof l === 'number' && l >= 0) return l;
+    } catch {}
+    return 0.1;  // Strudel cyclist default
+  }
+  // Probe Strudel's scheduler state directly. Both cyclist (h3) and
+  // neocyclist (PT) expose enough internals to compute AUDIBLE boundary
+  // times exactly. Strudel schedules events at:
+  //   audio_time(cycle K) = (K - anchorCycle) / cps + anchorSec + latency
+  // where (anchorCycle, anchorSec) is the cycle/audio-time pair captured
+  // at the most recent cps change (or at start). `now()` returns the
+  // scheduling-cursor cycle position, which is `latency - duration`
+  // seconds AHEAD of audible — using it directly would put the sequencer
+  // a fixed offset early.
+  function probeStrudelState() {
+    try {
+      const s = getScheduler();
+      if (!s) return null;
+      const cps = (typeof s.cps === 'number' && s.cps > 0) ? s.cps : null;
+      if (cps == null) return null;
+      const latency = readSchedulerLatency();
+      // h3 (cyclist) — has both fields directly on the instance.
+      if (typeof s.seconds_at_cps_change === 'number' &&
+          typeof s.num_cycles_at_cps_change === 'number') {
+        return { cps, latency,
+                 anchorSec:   s.seconds_at_cps_change,
+                 anchorCycle: s.num_cycles_at_cps_change };
+      }
+      // PT (neocyclist, worker-backed) — anchor on last tick message.
+      if (typeof s.time_at_last_tick_message === 'number' &&
+          typeof s.cycle === 'number') {
+        return { cps, latency,
+                 anchorSec:   s.time_at_last_tick_message,
+                 anchorCycle: s.cycle };
+      }
+    } catch {}
+    return null;
+  }
+  // Anchor (or re-anchor) the cycle epoch used by Probe B. On a cps
+  // change, snap the epoch forward to the most recent boundary at the
+  // OLD cps before storing the NEW cps. Probe B is a coarse fallback —
+  // Probe A is always preferred when scheduler state is readable.
+  function reanchorEpoch(newCps) {
+    const c = typeof newCps === 'number' && newCps > 0 ? newCps : _strudelEpochCps;
+    if (_strudelEpoch != null) {
+      const ctx = getAudioCtxSafe();
+      const now = ctx?.currentTime;
+      if (typeof now === 'number') {
+        const elapsed = Math.max(0, now - _strudelEpoch);
+        const cyclesElapsed = elapsed * _strudelEpochCps;
+        _strudelEpoch = _strudelEpoch + Math.floor(cyclesElapsed) / _strudelEpochCps;
+      }
+    }
+    _strudelEpochCps = c;
+  }
+  // Smallest integer >= c, with a tiny epsilon so positions within ~1ms
+  // of an integer are treated as ON the integer rather than "about to
+  // hit the next one in a full cycle". Without this, first-play (where
+  // pos starts at exactly 0) would still align correctly via ceil(0)=0,
+  // but pos a few microseconds past an integer would unnecessarily wait
+  // a whole cycle.
+  function nextCycleAt(c) {
+    const eps = 1e-4;
+    return Math.ceil(c - eps);
+  }
+  // Return seconds-until-next-AUDIBLE-cycle-boundary. Null when not
+  // playing or both probes fail. Returning a RELATIVE duration (not an
+  // absolute audio time) is deliberate: Strudel and Tone may not share
+  // an AudioContext, so absolute `currentTime` values aren't comparable
+  // across the boundary. Both contexts advance at the same rate
+  // (1 audio second per real second), so a duration is portable —
+  // callers add it to their own clock to get an absolute time.
+  //
+  // The "audible" part matters: Strudel schedules events `latency`
+  // seconds ahead of their cursor time, so a naive read of `now()`
+  // would put downbeats ~50–100ms before the user hears them.
+  function getSecondsUntilNextStrudelBoundary() {
+    if (!isPlayingFlag) return null;
+    const ctx = getAudioCtxSafe();
+    const now = ctx?.currentTime;
+    if (typeof now !== 'number') return null;
+    // Probe A — direct read of scheduler state. Computes the audible
+    // event time from Strudel's own scheduling formula.
+    const st = probeStrudelState();
+    if (st) {
+      const absPos = (now - st.anchorSec - st.latency) * st.cps + st.anchorCycle;
+      const nextK  = nextCycleAt(absPos);
+      const boundaryStrudelTime =
+        (nextK - st.anchorCycle) / st.cps + st.anchorSec + st.latency;
+      return boundaryStrudelTime - now;
+    }
+    // Probe B — epoch fallback (no direct state). Epoch is set at play()
+    // to ctx.currentTime + latency so it points at audible cycle-0.
+    if (_strudelEpoch == null) return null;
+    const cyclesElapsed = (now - _strudelEpoch) * _strudelEpochCps;
+    const nextK = nextCycleAt(cyclesElapsed);
+    const boundaryStrudelTime = _strudelEpoch + nextK / _strudelEpochCps;
+    return boundaryStrudelTime - now;
+  }
   function emitPlayState(playing) {
     if (_suppressPlayStateChange) return;
     try { onPlayStateChange?.(!!playing); } catch {}
@@ -471,7 +595,22 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       if      (typeof ed.evaluate === 'function') ed.evaluate();
       else if (typeof ed.toggle   === 'function') ed.toggle();
       else return false;
+      // Anchor the cycle-clock epoch synchronously so the sequencer can
+      // align its next tick BEFORE Strudel has finished spinning up. Read
+      // cps live from the scheduler if it's already exposing one;
+      // otherwise keep the last-known value.
       isPlayingFlag = true;
+      _strudelEpochCps = readSchedulerCps();
+      const ctx = getAudioCtxSafe();
+      // Audible cycle 0 doesn't sound at currentTime — Strudel's first
+      // event is scheduled `latency` seconds in the future. Anchor on
+      // that audible moment so Probe B reports boundaries that match
+      // what the user actually hears. Probe A (direct scheduler read)
+      // takes over once the first cyclist tick has fired and overwrites
+      // these values with the true scheduler state.
+      _strudelEpoch = (typeof ctx?.currentTime === 'number')
+        ? ctx.currentTime + readSchedulerLatency()
+        : null;
       btnPlay?.classList.add('playing');
       // Strudel's AudioContext only spins up after the first play(); poll
       // until it's running and we can attach our analyser. Cheap to call
@@ -492,6 +631,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       if (typeof ed.stop === 'function') ed.stop();
       else return false;
       isPlayingFlag = false;
+      _strudelEpoch = null;
       btnPlay?.classList.remove('playing');
       // Real stop — drop the analyser so the audio mode's `strudel`
       // filter doesn't keep showing the user a ghost source. Re-tap on
@@ -960,6 +1100,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     /** Inner scheduler (`StrudelMirror.repl.scheduler`) — null until
      *  the editor mounts AND has produced a runtime. */
     getScheduler,
+    /** Cycle-clock probes for sequencer phase alignment. */
+    getSecondsUntilNextStrudelBoundary,
+    reanchorEpoch,
     /** Call from the render loop so globalThis.a.fft stays current. */
     perFrame: refreshAFft,
     patterns: {
