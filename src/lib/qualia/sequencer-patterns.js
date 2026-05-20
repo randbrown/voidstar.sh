@@ -8,11 +8,19 @@
 //     panel on next page load
 //
 // Pattern model:
-//   { id, name, cps, beats, steps, pads:[{id,voice,mute,gain,hits:[0|1...]}],
+//   { id, name, cps, beats, steps, cycles,
+//     pads:[{id,voice,mute,gain,hits:[0|1...]}],
 //     createdAt, updatedAt }
 // Cell count = beats * steps. CPS (cycles/sec) matches Strudel — one cycle
 // = one full pattern repeat, regardless of beats/steps. Triplets/quintuplets
 // are just different `steps` values.
+//
+// `cycles` (>= 0.25) stretches the pattern over N Strudel cycles so the
+// sequencer can sit at a half-time / quarter-time feel without dragging
+// Strudel's CPS down with it. cycles=1 is the canonical "one pattern per
+// cycle" behaviour; cycles=2 spreads the same grid across two cycles
+// (half-time); cycles=0.5 packs it into half a cycle (double-time). Only
+// the cell duration changes — `beats`/`steps` are still the pattern grid.
 
 const NS           = 'voidstar.qualia.sequencer';
 const CURRENT_KEY  = `${NS}.current`;
@@ -80,6 +88,12 @@ function validateModel(m) {
   if (typeof m.cps !== 'number' || !(m.cps > 0)) return false;
   if (!Number.isInteger(m.beats) || m.beats < 1) return false;
   if (!Number.isInteger(m.steps) || m.steps < 1) return false;
+  // `cycles` was added after the initial release. Accept patterns without
+  // it — the loader backfills cycles=1 — but if present, it must be a
+  // positive finite number.
+  if (m.cycles != null && (typeof m.cycles !== 'number' || !(m.cycles > 0))) {
+    return false;
+  }
   if (!Array.isArray(m.pads)) return false;
   const expectLen = m.beats * m.steps;
   for (const p of m.pads) {
@@ -139,6 +153,9 @@ export function defaultPattern() {
     cps: 0.5,
     beats: 4,
     steps: 4,
+    // One pattern per Strudel cycle by default. Users dial this up for
+    // half-time / quarter-time feels without changing CPS.
+    cycles: 1,
     // Sync defaults to ON — most live-set use is "both engines locked
     // and jamming together". Users who want them independent flick the
     // checkbox off; the off-state persists with the pattern.

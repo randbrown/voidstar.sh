@@ -161,6 +161,22 @@ function savePanelOpen(open) {
   try { localStorage.setItem(PANEL_OPEN_KEY, open ? '1' : '0'); } catch {}
 }
 
+// Persisted UI volume — multiplies the muteGate when un-muted. Stacks
+// with Strudel's own gain() so the user can ride the mix without editing
+// the pattern.
+const VOLUME_KEY = 'voidstar.qualia.strudel.volume';
+function loadVolume() {
+  try {
+    const raw = localStorage.getItem(VOLUME_KEY);
+    if (raw == null) return 1;
+    const v = parseFloat(raw);
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+  } catch { return 1; }
+}
+function saveVolume(v) {
+  try { localStorage.setItem(VOLUME_KEY, String(v)); } catch {}
+}
+
 export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange } = {}) {
   // Snapshot the previous-session panel state ONCE at init. open()/close()
   // mutate the flag for next time, but the answer to "should we restore the
@@ -176,6 +192,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const btnPlay    = document.getElementById('btn-strudel-play');
   const btnStop    = document.getElementById('btn-strudel-stop');
   const btnMute    = document.getElementById('btn-strudel-mute');
+  const elGain     = document.getElementById('strudel-gain');
   const btnNewline = document.getElementById('btn-strudel-newline');
 
   let editorEl = null;
@@ -506,28 +523,32 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   //     is tagged with `__qualiaBypassMute = true` so the patch leaves
   //     it alone — its own mute is per-source via kit.output.gain.
   let _strudelMuted = false;
+  let _strudelVolume = loadVolume();
   let muteGate = null;
   function ensureMuteGate(ctx) {
     if (muteGate && muteGate.context === ctx) return muteGate;
     muteGate = ctx.createGain();
-    muteGate.gain.value = _strudelMuted ? 0 : 1;
+    muteGate.gain.value = _strudelMuted ? 0 : _strudelVolume;
     // Self-bypass — muteGate's own connect to ctx.destination must not
     // recurse through the patch.
     muteGate.__qualiaBypassMute = true;
     muteGate.connect(ctx.destination);
     return muteGate;
   }
+  function applyMuteGate() {
+    if (!muteGate) return;
+    const target = _strudelMuted ? 0 : _strudelVolume;
+    try {
+      const t = muteGate.context.currentTime;
+      muteGate.gain.cancelScheduledValues(t);
+      muteGate.gain.linearRampToValueAtTime(target, t + 0.04);
+    } catch {
+      try { muteGate.gain.value = target; } catch {}
+    }
+  }
   function setMuted(on) {
     _strudelMuted = !!on;
-    if (muteGate) {
-      try {
-        const t = muteGate.context.currentTime;
-        muteGate.gain.cancelScheduledValues(t);
-        muteGate.gain.linearRampToValueAtTime(_strudelMuted ? 0 : 1, t + 0.04);
-      } catch {
-        try { muteGate.gain.value = _strudelMuted ? 0 : 1; } catch {}
-      }
-    }
+    applyMuteGate();
     // Belt + braces: also flip Tone.Destination.mute for any audio that
     // DOES route through Strudel's bundled Tone.Destination (Sampler /
     // Player nodes do). Costs nothing if it's already a no-op.
@@ -546,6 +567,21 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       : 'Mute Strudel audio (transport keeps running so sync stays locked)';
   }
   if (btnMute) btnMute.addEventListener('click', () => setMuted(!_strudelMuted));
+
+  // Output level — multiplies the muteGate while un-muted. Doesn't
+  // change Strudel's gain() in code; stacks with it. Persisted so the
+  // ride sticks across reloads.
+  function setVolume(v) {
+    const clamped = Math.max(0, Math.min(1, Number(v) || 0));
+    if (clamped === _strudelVolume) return;
+    _strudelVolume = clamped;
+    saveVolume(_strudelVolume);
+    applyMuteGate();
+  }
+  if (elGain) {
+    elGain.value = String(_strudelVolume);
+    elGain.addEventListener('input', () => setVolume(elGain.value));
+  }
   // Initial paint — same reason as the seq panel: the static "live"
   // markup is correct for unmuted, but a programmatic preset would
   // otherwise leave the chrome stale.

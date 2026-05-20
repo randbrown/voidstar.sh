@@ -21,6 +21,22 @@ import {
 } from './sequencer-patterns.js';
 import { createKit } from './sequencer-voices.js';
 
+// Persisted UI volume — multiplies kit.output while un-muted. Sits
+// alongside the mute toggle as a performance-time mix-ride control.
+// 0.9 default matches createKit()'s default kit.output.gain.
+const SEQ_VOLUME_KEY = 'voidstar.qualia.sequencer.volume';
+function loadSeqVolume() {
+  try {
+    const raw = localStorage.getItem(SEQ_VOLUME_KEY);
+    if (raw == null) return 0.9;
+    const v = parseFloat(raw);
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.9;
+  } catch { return 0.9; }
+}
+function saveSeqVolume(v) {
+  try { localStorage.setItem(SEQ_VOLUME_KEY, String(v)); } catch {}
+}
+
 export function createSequencer({ audio, syncStrudel } = {}) {
   // Snapshot panel-open state from the previous session ONCE — open()/close()
   // mutate the stored flag for next time, but the answer to "should we
@@ -36,6 +52,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   const btnPlay     = document.getElementById('btn-sequencer-play');
   const btnStop     = document.getElementById('btn-sequencer-stop');
   const btnMute     = document.getElementById('btn-sequencer-mute');
+  const elGain      = document.getElementById('sequencer-gain');
   const nameInput   = document.getElementById('sequencer-name');
   const tabBar      = document.getElementById('sequencer-tabs');
   const gridPane    = document.getElementById('sequencer-grid');
@@ -69,6 +86,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // behavior; users who explicitly turned it off will have the
     // boolean persisted (false) and we leave that alone.
     if (typeof m.syncStrudel !== 'boolean') m.syncStrudel = true;
+    // `cycles` was added later — older stored patterns won't have it.
+    // Default 1 = previous "one pattern per cycle" behaviour, so the
+    // upgrade is silent.
+    if (typeof m.cycles !== 'number' || !(m.cycles > 0)) m.cycles = 1;
     // Mirror the strudel @title when the sequencer would otherwise show
     // the placeholder default — keeps the two engines reading as the same
     // session ("qualem 4f9q") on a fresh load.
@@ -96,8 +117,12 @@ export function createSequencer({ audio, syncStrudel } = {}) {
 
   // ── Scheduling ─────────────────────────────────────────────────────────
   // Cell duration in seconds. CPS=cycles/sec, one cycle = beats*steps cells.
+  // `cycles` stretches the whole pattern across N Strudel cycles — cells
+  // get N× longer, the grid stays the same shape, and Strudel keeps
+  // running at its own CPS (we never push cps/cycles back to Strudel).
   function cellDuration() {
-    return 1 / (model.cps * model.beats * model.steps);
+    const cyc = model.cycles > 0 ? model.cycles : 1;
+    return cyc / (model.cps * model.beats * model.steps);
   }
   function totalCells() { return model.beats * model.steps; }
 
@@ -170,11 +195,14 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // Mute is per-session, not persisted in the pattern model — it's a
   // performance gate ("silence this source for a moment"), not a saved
   // attribute of the pattern. Survives play/stop cycles within the
-  // session because it lives on this closure.
+  // session because it lives on this closure. Output volume sits next to
+  // it — same shape, but persisted across reloads via localStorage since
+  // a mix-ride should survive a tab refresh.
   let _muted = false;
+  let _volume = loadSeqVolume();  // 0..1, applied when un-muted
   function applyMuteToKit() {
     if (!kit?.output?.gain) return;
-    const target = _muted ? 0 : 0.9;  // 0.9 matches createKit()'s default
+    const target = _muted ? 0 : _volume;
     try {
       const t = Tone.now();
       kit.output.gain.cancelScheduledValues(t);
@@ -187,6 +215,13 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     _muted = !!on;
     applyMuteToKit();
     refreshMuteBtn();
+  }
+  function setVolume(v) {
+    const clamped = Math.max(0, Math.min(1, Number(v) || 0));
+    if (clamped === _volume) return;
+    _volume = clamped;
+    saveSeqVolume(_volume);
+    applyMuteToKit();
   }
   function refreshMuteBtn() {
     if (!btnMute) return;
@@ -404,6 +439,22 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       if (Number.isFinite(v)) setCps(v);
     });
 
+    // Cycles-per-pattern stretch. step 0.5 covers the practical range
+    // (0.5 = double-time, 1 = locked, 2 = half-time, 4 = quarter-time);
+    // min 0.25 leaves headroom for finer-grained double-time experiments.
+    const cyclesIn = document.createElement('input');
+    cyclesIn.type = 'number'; cyclesIn.step = '0.5'; cyclesIn.min = '0.25'; cyclesIn.max = '16';
+    cyclesIn.value = String(model.cycles);
+    cyclesIn.className = 'seq-num seq-num-wide';
+    cyclesIn.addEventListener('change', () => {
+      const v = Math.max(0.25, Math.min(16, parseFloat(cyclesIn.value) || 1));
+      if (v === model.cycles) return;
+      model.cycles = v;
+      model.updatedAt = Date.now();
+      rescheduleIfPlaying();
+      persistSoon();
+    });
+
     const syncCb = document.createElement('input');
     syncCb.type = 'checkbox';
     syncCb.checked = !!model.syncStrudel;
@@ -436,17 +487,19 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     propsEl.append(
       mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
       mk('steps/beat', stepperFor(stepsIn, 'change'), { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
-      mk('cps',       stepperFor(cpsIn,  'input'),  { title: 'Cycles per second — one cycle = one full pattern' }),
+      mk('cps',       stepperFor(cpsIn,  'input'),  { title: 'Cycles per second — Strudel\'s master clock when sync is on' }),
+      mk('cycles',    stepperFor(cyclesIn, 'change'), { title: 'Cycles per pattern — how many Strudel cycles the pattern spans. 1 = locked, 2 = half-time, 4 = quarter-time. Spreads the same grid across more bars without slowing CPS.' }),
       syncWrap,
     );
   }
   function refreshPropsValues() {
     if (!propsEl) return;
     const inputs = propsEl.querySelectorAll('input[type="number"]');
-    if (inputs.length >= 3) {
+    if (inputs.length >= 4) {
       inputs[0].value = String(model.beats);
       inputs[1].value = String(model.steps);
       inputs[2].value = String(model.cps);
+      inputs[3].value = String(model.cycles);
     }
     const cb = propsEl.querySelector('input[type="checkbox"]');
     if (cb) cb.checked = !!model.syncStrudel;
@@ -738,6 +791,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     if (wasPlaying) stop();
     model = JSON.parse(JSON.stringify(next));
     if (typeof model.syncStrudel !== 'boolean') model.syncStrudel = true;
+    if (typeof model.cycles !== 'number' || !(model.cycles > 0)) model.cycles = 1;
     if (nameInput) nameInput.value = model.name || '';
     refreshPropsValues();
     renderMatrix();
@@ -752,7 +806,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     model = {
       id: Date.now().toString(36),
       name: 'untitled',
-      cps: 0.5, beats: 4, steps: 4,
+      cps: 0.5, beats: 4, steps: 4, cycles: 1,
       // Default sync ON for fresh-blank patterns too — matches
       // defaultPattern() and pickInitialModel()'s upgrade path.
       syncStrudel: true,
@@ -834,6 +888,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   if (btnPlay)  btnPlay .addEventListener('click', () => { play(); });
   if (btnStop)  btnStop .addEventListener('click', () => { stop(); });
   if (btnMute)  btnMute .addEventListener('click', () => { setMuted(!_muted); });
+  if (elGain) {
+    elGain.value = String(_volume);
+    elGain.addEventListener('input', () => setVolume(elGain.value));
+  }
   if (nameInput) nameInput.addEventListener('change', () => {
     model.name = nameInput.value;
     model.updatedAt = Date.now();

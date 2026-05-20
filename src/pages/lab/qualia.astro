@@ -1062,6 +1062,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--pink); border-color: var(--pink);
       background: rgba(244, 114, 182, 0.10);
     }
+    /* Compact gain slider in the panel header — sits next to the mute/live
+       button so the source-level controls cluster together. Narrow enough
+       not to crowd the play/stop/close run on phone-width viewports. */
+    .panel-gain-slider {
+      width: 70px; min-width: 60px;
+      accent-color: var(--cyan);
+      vertical-align: middle; cursor: pointer;
+      margin: 0 0.1rem;
+    }
     #sequencer-tabs {
       display: flex; gap: 0.25rem;
       padding: 0.3rem 0.6rem;
@@ -1823,6 +1832,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="btn-strudel-play"    title="Evaluate / play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-strudel-mute" title="Mute Strudel audio (transport keeps running so sync stays locked)">live</button>
+    <input type="range" class="panel-gain-slider" id="strudel-gain" min="0" max="1" step="0.01" value="1" title="Output level (0–1×). Stacks with Strudel's own gain() — use this to ride the mix without editing the pattern." />
     <button class="ctrl-btn" id="btn-strudel-newline" title="Insert newline at cursor (Android touch keyboards drop the Enter event)">↵</button>
     <button class="ctrl-btn" id="btn-strudel-close"   title="Close (S)">×</button>
   </div>
@@ -1851,6 +1861,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="btn-sequencer-play"  title="Play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-sequencer-stop"  title="Stop">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-sequencer-mute" title="Mute sequencer audio (transport keeps running so sync stays locked)">live</button>
+    <input type="range" class="panel-gain-slider" id="sequencer-gain" min="0" max="1" step="0.01" value="0.9" title="Output level (0–1×). Rides the sequencer mix without editing per-pad gain." />
     <button class="ctrl-btn" id="btn-sequencer-close" title="Close (Q)">×</button>
   </div>
   <div id="sequencer-tabs">
