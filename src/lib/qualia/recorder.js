@@ -46,7 +46,11 @@
 // a Duration tag, which the Android stock players reject as "unknown
 // error". The fix reads the blob, rewrites the segment header to
 // include the actual duration, and returns a playable file. Same shape
-// applies to MP4 via fix-mp4-duration.
+// applies to MP4 via fix-mp4-duration. MP4 files then get a second
+// post-process pass — mp4-timecode — which appends a SMPTE timecode
+// track (time-of-day, at the capture fps) and stamps the real
+// wall-clock creation_time, so a recording lines up against Reaper /
+// Resolve / Premiere sources captured at the same moment.
 //
 // Recording is independent of any other audio engine (strudel / sequencer /
 // vocoder / mic). Start/stop the recorder; the rest keeps running.
@@ -55,6 +59,7 @@
 
 import fixWebmDuration       from 'fix-webm-duration';
 import { fixMp4Duration }    from './fix-mp4-duration.js';
+import { addTimecodeTrack }  from './mp4-timecode.js';
 
 const MIME_CANDIDATES = [
   // H.264 profile/level matters more than it looks. Chrome's Android
@@ -87,6 +92,9 @@ const MIME_CANDIDATES = [
 const OPFS_STALE_MS = 10 * 60 * 1000;
 const VIDEO_BITS_PER_SECOND = 4_000_000;     // 4 Mb/s — plenty for canvas/screen content,
                                              // halves memory + disk footprint vs the old 8 Mb/s default.
+const AUDIO_BITS_PER_SECOND = 320_000;       // 320 kb/s AAC/Opus — headroom for DAW post-processing.
+                                             // Chrome may silently clamp below this on some platforms;
+                                             // verify with `ffprobe -show_streams -select_streams a`.
 
 // Per-device "MP4 isn't working here, just use WebM" memory. Chrome
 // reports MP4 as `isTypeSupported() === true` on Android while the
@@ -320,6 +328,11 @@ export function createRecorder(opts = {}) {
   /** @type {MediaRecorder|null} */
   let recorder = null;
   let startedAt = 0;
+  // Wall-clock Date of the first recorded frame. Snapshotted at
+  // recorder.start() and threaded through teardown into the MP4
+  // timecode pass, which needs a real time-of-day to compute the
+  // embedded SMPTE start timecode + the moov creation_time.
+  let startedAtWall = null;
   let mimeType = '';
   /** @type {''|'composite'} */
   let backend = '';
@@ -372,9 +385,12 @@ export function createRecorder(opts = {}) {
   async function teardown(success) {
     const s = sink;
     // Capture before resetting — we need mime + duration for the WebM
-    // duration fix below.
+    // duration fix below, and backend + wall-clock for the MP4 timecode
+    // pass (capture fps is backend-dependent: 30 viewport / 60 tab).
     const wasMime    = mimeType;
+    const wasBackend = backend;
     const startedMs  = startedAt;
+    const wallStart  = startedAtWall;
     sink = null;
     if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
     stream = null;
@@ -386,6 +402,7 @@ export function createRecorder(opts = {}) {
     endCapture();
     recorder = null;
     startedAt = 0;
+    startedAtWall = null;
     backend = '';
     stopping = false;
     notify();
@@ -425,6 +442,16 @@ export function createRecorder(opts = {}) {
               console.log(`[recorder] applying mp4 duration fix · ${blob.size} bytes · ${Math.round(durMs)}ms`);
               blob = await fixMp4Duration(blob, durMs);
               console.log(`[recorder] mp4 duration fix done · output ${blob.size} bytes`);
+              // Embed a SMPTE timecode track + stamp wall-clock creation
+              // time, so the file lands at the right spot on a Reaper /
+              // Resolve / Premiere timeline. Capture fps drives the
+              // timecode rate: composite viewport is captureStream(30),
+              // tab capture requests 60. Best-effort — addTimecodeTrack
+              // returns the input untouched on any unexpected structure.
+              if (wallStart) {
+                const fps = wasBackend === 'tab' ? 60 : 30;
+                blob = await addTimecodeTrack(blob, { durationMs: durMs, fps, startDate: wallStart });
+              }
             } else if (wasMime?.startsWith('video/webm')) {
               console.log(`[recorder] applying webm duration fix · ${blob.size} bytes · ${Math.round(durMs)}ms`);
               blob = await fixWebmDuration(blob, durMs);
@@ -464,7 +491,10 @@ export function createRecorder(opts = {}) {
   }
 
   function startMediaRecorder(s) {
-    const recOpts = { videoBitsPerSecond: VIDEO_BITS_PER_SECOND };
+    const recOpts = {
+      videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+      audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
+    };
     if (mimeType) recOpts.mimeType = mimeType;
     recorder = new MediaRecorder(s, recOpts);
     recorder.ondataavailable = (e) => {
@@ -513,6 +543,10 @@ export function createRecorder(opts = {}) {
     };
     recorder.start(1000);
     startedAt = performance.now();
+    // Snapshot wall-clock at the same point. There's a sub-frame gap
+    // between MediaRecorder.start() and the encoder's first sample —
+    // negligible against a timecode whose job is whole-frame alignment.
+    startedAtWall = new Date();
     stream = s;
     notify();
   }
