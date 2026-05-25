@@ -73,6 +73,11 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   let isPlaying = false;
   let pendingStepPaint = -1;     // last step seen by scheduleRepeat; perFrame() reads this
   let lastPaintedStep = -1;
+  // Column → cell elements, built once per renderMatrix. The playhead repaint
+  // walks these refs directly instead of querySelectorAll-ing the whole grid
+  // every step — that scan ran on the main thread and stole time from the
+  // Strudel cyclist while the sequencer was playing with its UI open.
+  let colCells = [];
   let _inhibitSync = false;      // set when applying CPS *from* Strudel so we don't recurse
 
   function pickInitialModel() {
@@ -217,8 +222,26 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // visibly drops one beat but keeps the pattern locked to strudel —
   // cleaner than leaving the whole pattern phase-shifted by a fraction
   // of a cellDur.
+  // When synced, adopt Strudel's actual tempo before aligning. Phase-lock is
+  // impossible if the cell grid (model.cps) and Strudel tick at different rates
+  // — e.g. a pattern's setcps() that never propagated to the sequencer. The
+  // boundary probe uses Strudel's cps while the cell duration uses model.cps,
+  // so a mismatch makes realign land then immediately drift. Snapping model.cps
+  // to Strudel here closes that gap.
+  function adoptStrudelCpsIfSynced() {
+    if (!model.syncStrudel || !syncStrudel?.isStrudelPlaying?.()) return;
+    const sCps = syncStrudel.getStrudelCps?.();
+    if (typeof sCps === 'number' && sCps > 0 && Math.abs(sCps - model.cps) > 1e-3) {
+      model.cps = sCps;
+      model.updatedAt = Date.now();
+      try { refreshPropsValues(); } catch {}
+      persistSoon();
+    }
+  }
+
   function resync() {
     if (!isPlaying) return;
+    adoptStrudelCpsIfSynced();
     if (!model.syncStrudel || !syncStrudel?.isStrudelPlaying?.()) {
       cellIdx = 0;
       pendingStepPaint = -1;
@@ -379,6 +402,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     if (!opts.fromStrudel && model.syncStrudel && !_inhibitTransportSync) {
       try { syncStrudel?.playStrudel?.(); } catch {}
     }
+    // Match Strudel's tempo before the first aligned schedule (best-effort —
+    // Strudel's eval may set cps a beat later, in which case a manual realign
+    // snaps it). Keeps the cell grid and boundary math on one clock.
+    adoptStrudelCpsIfSynced();
     Tone.getTransport().start();
     scheduleLoop({ align: true });
     ensureAnalyserAdopted();
@@ -639,6 +666,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     if (!matrixEl) return;
     matrixEl.innerHTML = '';
     const total = totalCells();
+    colCells = Array.from({ length: total }, () => []);
     for (const pad of model.pads) {
       const row = document.createElement('div');
       row.className = 'seq-pad-row';
@@ -707,6 +735,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
           c.classList.toggle('on', !!pad.hits[i]);
           persistSoon();
         });
+        colCells[i].push(c);
         cellsEl.appendChild(c);
       }
 
@@ -721,13 +750,12 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   function paintCurrentStep(stepIdx) {
     if (!matrixEl) return;
     if (stepIdx === lastPaintedStep) return;
-    if (lastPaintedStep >= 0) {
-      matrixEl.querySelectorAll(`.seq-cell.cur`).forEach(el => el.classList.remove('cur'));
+    // Walk cached column refs — no per-step querySelectorAll over the grid.
+    if (lastPaintedStep >= 0 && colCells[lastPaintedStep]) {
+      for (const el of colCells[lastPaintedStep]) el.classList.remove('cur');
     }
-    if (stepIdx >= 0) {
-      // One column highlighted across all rows. Selector handles dynamic
-      // pad count without us tracking row refs.
-      matrixEl.querySelectorAll(`.seq-cell[data-i="${stepIdx}"]`).forEach(el => el.classList.add('cur'));
+    if (stepIdx >= 0 && colCells[stepIdx]) {
+      for (const el of colCells[stepIdx]) el.classList.add('cur');
     }
     lastPaintedStep = stepIdx;
   }

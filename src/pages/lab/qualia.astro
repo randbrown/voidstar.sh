@@ -768,6 +768,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .sp-tag   { color: var(--accent); margin-left: 0.25rem; }
     .sp-status { color: var(--muted); margin-left: auto; font-size: 0.7rem; }
     .sp-status.live { color: var(--pink); }
+    /* Eval error indicator — shows the last Strudel syntax/runtime error right
+       after the panel title. Hidden until set; clears on the next clean eval.
+       flex-shrinks with an ellipsis (full text in the title tooltip) so a long
+       message never crowds the header controls, including on mobile. */
+    .sp-err {
+      margin-left: 0.5rem; min-width: 0; flex: 0 1 auto; max-width: 20rem;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 0.7rem; color: #ff6b6b; cursor: help;
+    }
     #btn-strudel-play, #btn-strudel-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
     #btn-strudel-play.playing { color: var(--pink); border-color: var(--pink); }
     #btn-strudel-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
@@ -785,6 +794,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .sp-tab:hover  { color: var(--accent); }
     .sp-tab.active { color: var(--cyan); border-color: var(--border); background: rgba(34,211,238,0.06); }
+    /* Editor view-option toggle (line numbers). Right-aligned in the tab bar;
+       styled like a tab but not one — the tab handler only binds .sp-tab. */
+    .sp-opt {
+      margin-left: auto;
+      background: none; border: 1px solid transparent; border-radius: 4px;
+      color: var(--muted); font-family: var(--font-mono); font-size: 0.72rem;
+      padding: 0.18rem 0.5rem; cursor: pointer; transition: all 0.15s;
+    }
+    .sp-opt:hover  { color: var(--accent); }
+    .sp-opt.active { color: var(--cyan); border-color: var(--border); background: rgba(34,211,238,0.06); }
 
     #strudel-patterns {
       flex: 1; min-height: 0; overflow: auto;
@@ -1568,6 +1587,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row diag-row"><span class="diag-label">snare / 5s</span><span class="qp-val" id="diag-snare">0</span></div>
       <div class="qp-row diag-row"><span class="diag-label">hat / 5s</span><span class="qp-val" id="diag-hat">0</span></div>
       <div class="qp-row diag-row"><span class="diag-label">poses</span><span class="qp-val" id="diag-poses">0</span></div>
+      <div class="qp-row" data-qp="viz-fps" title="Cap the visualizer frame rate. 'max' = uncapped. Lower frees the main thread (helps Strudel timing + UI on Windows) and doubles as a slow-motion / strobe aesthetic down to 1fps. Audio reactivity is unaffected.">
+        <label>render cap<span class="qp-val">max</span></label>
+        <input type="range" min="1" max="61" step="1" value="61">
+      </div>
       <div class="qp-section-tag">advanced</div>
       <div class="qp-row diag-row">
         <span class="diag-label">stuck state?</span>
@@ -1613,6 +1636,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="pose-smooth">
         <label>smooth<span class="qp-val">50%</span></label>
         <input type="range" min="0" max="1" step="0.01" value="0.5">
+      </div>
+      <div class="qp-row" data-qp="pose-fps" title="Pose detection rate. Independent of the visualizer frame rate — run the viz high while pose tracks slow (less CPU, or a deliberate stutter aesthetic).">
+        <label>rate<span class="qp-val">30fps</span></label>
+        <input type="range" min="1" max="60" step="1" value="30">
       </div>
       <div class="qp-row" data-qp="pose-detect">
         <label>detect<span class="qp-val"></span></label>
@@ -1827,7 +1854,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 
 <div id="strudel-panel" style="display:none">
   <div id="strudel-header">
-    <span class="sp-title">strudel <span class="sp-tag">// patterns → qualia</span></span>
+    <span class="sp-title">strudel</span>
+    <span class="sp-err" id="strudel-error" style="display:none" title="" role="alert"></span>
     <span class="sp-status" id="strudel-status">click ▶ in editor to start</span>
     <button class="ctrl-btn" id="btn-strudel-play"    title="Evaluate / play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
@@ -1839,6 +1867,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="strudel-tabs">
     <button class="sp-tab active" data-tab="editor">editor</button>
     <button class="sp-tab"        data-tab="patterns">patterns</button>
+    <button class="sp-opt" id="btn-strudel-lines" title="Toggle line numbers" aria-pressed="false">#</button>
   </div>
   <div id="strudel-mount"></div>
   <div id="strudel-patterns" style="display:none">
@@ -1855,7 +1884,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
      sibling of #strudel-panel so each draggable window is independent. -->
 <div id="sequencer-panel" style="display:none">
   <div id="sequencer-header">
-    <span class="sp-title">seq <span class="sp-tag">// grid → qualia</span></span>
+    <span class="sp-title">seq</span>
     <input type="text" id="sequencer-name" class="seq-name-input" placeholder="pattern name" />
     <span class="sp-status" id="sequencer-status">click ▶ to play</span>
     <button class="ctrl-btn" id="btn-sequencer-play"  title="Play (Ctrl+Enter)">▶</button>
