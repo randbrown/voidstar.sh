@@ -177,6 +177,14 @@ function saveVolume(v) {
   try { localStorage.setItem(VOLUME_KEY, String(v)); } catch {}
 }
 
+const LINES_KEY = 'voidstar.qualia.strudel.lineNumbers';
+function loadLineNumbers() {
+  try { return localStorage.getItem(LINES_KEY) === '1'; } catch { return false; }
+}
+function saveLineNumbers(on) {
+  try { localStorage.setItem(LINES_KEY, on ? '1' : '0'); } catch {}
+}
+
 export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange } = {}) {
   // Snapshot the previous-session panel state ONCE at init. open()/close()
   // mutate the flag for next time, but the answer to "should we restore the
@@ -187,6 +195,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const panel  = document.getElementById('strudel-panel');
   const mount  = document.getElementById('strudel-mount');
   const status = document.getElementById('strudel-status');
+  const errEl  = document.getElementById('strudel-error');
   const btnToggle = document.getElementById('btn-strudel');
   const btnClose  = document.getElementById('btn-strudel-close');
   const btnPlay    = document.getElementById('btn-strudel-play');
@@ -194,6 +203,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const btnMute    = document.getElementById('btn-strudel-mute');
   const elGain     = document.getElementById('strudel-gain');
   const btnNewline = document.getElementById('btn-strudel-newline');
+  const btnLines   = document.getElementById('btn-strudel-lines');
 
   let editorEl = null;
   let mounted  = false;
@@ -252,6 +262,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       // per-frame in-code highlighting + flash (the main editor-open cost).
       setStrudelEditorPerf: (on) => setEditorPerf(on),
       getStrudelEditorPerf: () => getEditorPerf(),
+      // Toggle editor line numbers (mirrors the "#" button in the tab bar).
+      setStrudelLineNumbers: (on) => setLineNumbers(on),
+      getStrudelLineNumbers: () => getLineNumbers(),
     };
   }
 
@@ -323,6 +336,42 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     return code;
   }
 
+  // Eval error indicator. Strudel reports syntax/runtime eval failures only to
+  // the console + a 'strudel.log' CustomEvent on `document`; it gives no
+  // in-panel signal. Surface the last error in the header (full text in the
+  // title tooltip). Pass a falsy err to clear.
+  function showEvalError(err) {
+    if (!errEl) return;
+    if (!err) {
+      errEl.style.display = 'none';
+      errEl.textContent = '';
+      errEl.removeAttribute('title');
+      return;
+    }
+    const msg = (err && (err.message ?? err.toString?.())) || String(err);
+    errEl.textContent = `⚠ ${msg}`;
+    errEl.title = msg;
+    errEl.style.display = '';
+  }
+  function clearEvalError() { showEvalError(null); }
+
+  // Capture errors from Strudel's own logger (version-stable public surface,
+  // no editor internals): it dispatches `strudel.log` on `document` with
+  // detail {message,type}. An eval failure is type 'error' ("[eval] error: …");
+  // a clean eval logs "[eval] code updated" (no type) — clear on that so the
+  // badge tracks every eval, including Strudel-internal re-evals our wrapped
+  // evaluate() never sees.
+  document.addEventListener('strudel.log', (e) => {
+    const d = e.detail;
+    if (!d) return;
+    const msg = String(d.message ?? '');
+    if (d.type === 'error') {
+      showEvalError(msg.replace(/^\[eval\]\s*error:\s*/i, '') || 'eval error');
+    } else if (msg.includes('[eval] code updated')) {
+      clearEvalError();
+    }
+  });
+
   function ensureEvalPatch() {
     if (_strudelEvalPatched) return false;
     const ed = getEditor();
@@ -368,6 +417,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   // unchanged, you just lose the moving in-code highlight + flash. Default off
   // (keep highlighting). A/B from the console: qualia.setStrudelEditorPerf(true).
   let _editorPerfMode = false;
+  let _lineNumbers = loadLineNumbers();   // opt-in; default off (CDN default)
   function applyEditorSettings() {
     const ed = getEditor();
     if (!ed || typeof ed.updateSettings !== 'function') return false;
@@ -375,6 +425,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       ed.updateSettings({
         isPatternHighlightingEnabled: !_editorPerfMode,
         isFlashEnabled: !_editorPerfMode,
+        isLineNumbersDisplayed: _lineNumbers,
       });
       return true;
     } catch (e) {
@@ -392,6 +443,28 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     return _editorPerfMode;
   }
   function getEditorPerf() { return _editorPerfMode; }
+
+  // Line numbers — optional, persisted, applied via the same editor settings
+  // call (so it survives editor re-mounts on load/new/random). The "#" toggle
+  // in the tab bar drives it; helpful for locating the "(line:col)" in eval
+  // errors. Default off.
+  function refreshLinesBtn() {
+    if (!btnLines) return;
+    btnLines.classList.toggle('active', _lineNumbers);
+    btnLines.setAttribute('aria-pressed', _lineNumbers ? 'true' : 'false');
+  }
+  function setLineNumbers(on) {
+    _lineNumbers = !!on;
+    saveLineNumbers(_lineNumbers);
+    applyEditorSettings();
+    refreshLinesBtn();
+    return _lineNumbers;
+  }
+  function getLineNumbers() { return _lineNumbers; }
+  if (btnLines) {
+    refreshLinesBtn();
+    btnLines.addEventListener('click', () => setLineNumbers(!_lineNumbers));
+  }
 
   // Initial code: a freshly-rolled random pattern by default. If the panel
   // was open on the previous visit, the user was probably mid-edit — in
@@ -421,6 +494,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     mount.appendChild(ed);
     editorEl = ed;
     _strudelEvalPatched = false;
+    clearEvalError();   // stale error from the previous buffer no longer applies
     let tries = 0;
     const t = setInterval(() => {
       if (ensureEvalPatch() || ++tries > 40) clearInterval(t);
@@ -1204,6 +1278,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     /** Disable the editor's per-frame highlight + flash (perf while open). */
     setEditorPerf,
     getEditorPerf,
+    setLineNumbers,
+    getLineNumbers,
     /** Call from the render loop so globalThis.a.fft stays current. */
     perFrame: refreshAFft,
     patterns: {
