@@ -243,6 +243,15 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     globalThis.qualia = {
       setParam: (fxId, paramId, value) => setParam?.(fxId, paramId, value),
       getField: () => getField?.(),
+      // Live A/B the cyclist lookahead from the console, e.g.
+      // qualia.setStrudelLatency(0.3) — higher = fewer dropouts, more delay.
+      // Re-run the sequencer realign after changing.
+      setStrudelLatency: (sec) => setStrudelLatency(sec),
+      getStrudelLatency: () => getStrudelLatency(),
+      // A/B the editor cost: qualia.setStrudelEditorPerf(true) disables the
+      // per-frame in-code highlighting + flash (the main editor-open cost).
+      setStrudelEditorPerf: (on) => setEditorPerf(on),
+      getStrudelEditorPerf: () => getEditorPerf(),
     };
   }
 
@@ -324,7 +333,12 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
         try { clearHydraOutputs(); } catch {}
         // Persist on play so the in-progress edit survives a refresh.
         try { persistCurrent(); } catch {}
-        return orig(...args);
+        const r = orig(...args);
+        // Re-assert a user-set latency override (if any) after a re-eval
+        // rebuilds the scheduler. No-op unless setStrudelLatency was called —
+        // by default we leave Strudel's own latency alone (keeps seq aligned).
+        try { tuneScheduler(); } catch {}
+        return r;
       };
     }
     if (typeof ed.stop === 'function') {
@@ -342,8 +356,42 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       };
     }
     _strudelEvalPatched = true;
+    applyEditorSettings();   // re-apply perf mode on this freshly-mounted editor
     return true;
   }
+
+  // Editor visual-cost control. Strudel's CodeMirror per-frame pattern-event
+  // highlighting (and the eval flash) are the dominant main-thread cost while
+  // the editor panel is open and playing — they update decorations every frame
+  // for every event, which is heavy on dense patterns (e.g. hh*15). Perf mode
+  // disables them via the editor's own settings API; editing/playback are
+  // unchanged, you just lose the moving in-code highlight + flash. Default off
+  // (keep highlighting). A/B from the console: qualia.setStrudelEditorPerf(true).
+  let _editorPerfMode = false;
+  function applyEditorSettings() {
+    const ed = getEditor();
+    if (!ed || typeof ed.updateSettings !== 'function') return false;
+    try {
+      ed.updateSettings({
+        isPatternHighlightingEnabled: !_editorPerfMode,
+        isFlashEnabled: !_editorPerfMode,
+      });
+      return true;
+    } catch (e) {
+      console.warn('[qualia] applyEditorSettings failed:', e);
+      return false;
+    }
+  }
+  function setEditorPerf(on) {
+    _editorPerfMode = !!on;
+    const ok = applyEditorSettings();
+    console.log(
+      `[qualia] strudel editor perf mode ${_editorPerfMode ? 'ON (highlight off)' : 'OFF (highlight on)'}` +
+      (ok ? '' : ' — editor not ready or settings API unavailable')
+    );
+    return _editorPerfMode;
+  }
+  function getEditorPerf() { return _editorPerfMode; }
 
   // Initial code: a freshly-rolled random pattern by default. If the panel
   // was open on the previous visit, the user was probably mid-edit — in
@@ -486,6 +534,45 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       if (typeof l === 'number' && l >= 0) return l;
     } catch {}
     return 0.1;  // Strudel cyclist default
+  }
+
+  // ── Cyclist lookahead (OPT-IN) ───────────────────────────────────────────
+  // Widening the cyclist's latency reduces "skip query: too late" dropouts
+  // under main-thread load, BUT auto-bumping it broke sequencer alignment: the
+  // boundary probe below reads scheduler.latency live, while the events for the
+  // current cycle were already scheduled at the OLD latency — leaving the
+  // sequencer a fixed (latency-delta) seconds off from Strudel. So we default
+  // to leaving Strudel's own latency untouched (= correct alignment) and treat
+  // the real dropout fix as freeing the main thread (pose inference now runs in
+  // a worker). The knob remains for manual tuning; when set, re-run the
+  // sequencer realign once afterward to re-lock the phase.
+  let _strudelLatency = null;   // null = don't override Strudel's default
+  function tuneScheduler() {
+    if (_strudelLatency == null) return false;   // opt-in only
+    const s = getScheduler();
+    if (!s) return false;
+    try {
+      const before = s.latency;
+      if (typeof s.latency === 'number') s.latency = _strudelLatency;
+      if (before !== s.latency) {
+        console.log(`[qualia] strudel scheduler latency ${before} → ${s.latency}`);
+      }
+      return true;
+    } catch (e) {
+      console.warn('[qualia] could not tune strudel scheduler:', e);
+      return false;
+    }
+  }
+  /** Live-adjust the cyclist lookahead (seconds). Higher = fewer dropouts,
+   *  more play→sound delay. Re-run the sequencer realign after changing.
+   *  Pass null/0 to release the override back to Strudel's own default. */
+  function setStrudelLatency(sec) {
+    _strudelLatency = (sec == null || +sec <= 0) ? null : Math.max(0.05, Math.min(0.5, +sec));
+    tuneScheduler();
+    return _strudelLatency;
+  }
+  function getStrudelLatency() {
+    return _strudelLatency != null ? _strudelLatency : readSchedulerLatency();
   }
   // Probe Strudel's scheduler state directly. Both cyclist (h3) and
   // neocyclist (PT) expose enough internals to compute AUDIBLE boundary
@@ -749,7 +836,11 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     if (!strudelAnalyser) {
       const an = ctx.createAnalyser();
       an.fftSize = 2048;
-      an.smoothingTimeConstant = 0.72;
+      // smoothingTimeConstant is the analyser's own temporal lag — the single
+      // biggest knob on how fast the visuals chase the music pulse. Was 0.72
+      // (smooth but sluggish); 0.5 tightens the response toward the mic
+      // analyser's 0.4 while still damping FFT jitter on sustained tones.
+      an.smoothingTimeConstant = 0.5;
       // The connect-patch is now the *primary* path (was: fallback). It
       // does two things at once: tees to our analyser AND routes through
       // muteGate so setMuted() can actually silence Strudel. Tone's
@@ -1103,6 +1194,16 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     /** Cycle-clock probes for sequencer phase alignment. */
     getSecondsUntilNextStrudelBoundary,
     reanchorEpoch,
+    /** Strudel's live cps (cycles/sec). The sequencer adopts this on realign
+     *  so both clocks share a tempo — phase-lock needs matching rates. */
+    getStrudelCps: () => readSchedulerCps(),
+    /** Cyclist lookahead (seconds). Higher = fewer dropouts under main-thread
+     *  load, slightly more play→sound delay. Re-run seq realign after change. */
+    setStrudelLatency,
+    getStrudelLatency,
+    /** Disable the editor's per-frame highlight + flash (perf while open). */
+    setEditorPerf,
+    getEditorPerf,
     /** Call from the render loop so globalThis.a.fft stays current. */
     perFrame: refreshAFft,
     patterns: {

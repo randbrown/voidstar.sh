@@ -106,6 +106,91 @@ export function createPose() {
   let activeTrack = null;    // primary MediaStreamTrack (for zoom etc.)
   let detectCanvas = null; // for source === 'canvas' (viz mode)
 
+  // ── Inference worker ─────────────────────────────────────────────────────
+  // Runs detectForVideo() off the main thread (see pose-worker.js). The main
+  // thread grabs a frame as an ImageBitmap, transfers it to the worker, and
+  // receives the raw landmark arrays back — smoothing / linger / reshaping
+  // stay here (cheap). Falls back to synchronous main-thread inference if the
+  // worker can't be created or fails to load. Disable manually (e.g. while
+  // debugging) with: localStorage['voidstar.pose.noWorker']='1'.
+  let worker      = null;
+  let useWorker   = false;   // a worker was successfully created
+  let workerReady = false;   // worker's landmarker is built
+  let workerBusy  = false;   // a frame is in flight (backpressure)
+  let workerSentAt = 0;      // watchdog timestamp
+  let _workerFailed = false; // don't recreate after a failure
+  function workerDisabled() {
+    try { return localStorage.getItem('voidstar.pose.noWorker') === '1'; } catch { return false; }
+  }
+  function ensureWorker() {
+    if (_workerFailed || workerDisabled()) return false;
+    if (worker) return useWorker;
+    try {
+      // CLASSIC worker (not type:'module'). MediaPipe's FilesetResolver loads
+      // its WASM glue via importScripts(), which only exists in classic
+      // workers — a module worker fails with "ModuleFactory not set". Dynamic
+      // import() (used in pose-worker.js to pull the Tasks-Vision ESM) still
+      // works inside a classic worker on Chrome.
+      worker = new Worker(new URL('./pose-worker.js', import.meta.url));
+      worker.addEventListener('message', onWorkerMessage);
+      worker.addEventListener('error', (err) => {
+        console.warn('[qualia] pose worker error — falling back to main thread:', err?.message || err);
+        disableWorker();
+      });
+      useWorker = true;
+      console.log('[qualia] pose: inference running in a worker (off main thread)');
+    } catch (err) {
+      console.warn('[qualia] pose worker unavailable — using main-thread inference:', err);
+      worker = null; useWorker = false; _workerFailed = true;
+    }
+    return useWorker;
+  }
+  function workerConfig() {
+    return { numPoses, detectConf, presenceConf, trackConf };
+  }
+  function hasLandmarker() { return useWorker ? workerReady : !!landmarker; }
+  function onWorkerMessage(e) {
+    const msg = e.data;
+    if (!msg) return;
+    if (msg.type === 'ready') { workerReady = true; return; }
+    if (msg.type === 'error') {
+      console.warn('[qualia] pose worker reported error — falling back:', msg.error);
+      disableWorker();
+      return;
+    }
+    if (msg.type === 'result') {
+      workerBusy = false;
+      // Drop stale results whose source no longer matches (camera stopped or
+      // switched to canvas mid-flight) so a ghost pose can't reappear.
+      if (!detectSource || detectSource !== msg.source) return;
+      const t = msg.t;
+      const fresh = msg.landmarks ?? [];
+      if (msg.source === 'camera') {
+        smoothLandmarks(fresh);
+        if (fresh.length > 0) lastDetectMs = t;
+        rebuildPeople(t);
+      } else { // 'canvas'
+        if (fresh.length > 0) {
+          smoothLandmarks(fresh);
+          lastDetectMs = t;
+          rebuildPeople(t);
+        } else if (lingerMs > 0 && t - lastDetectMs > lingerMs) {
+          smoothed = [];
+          frame.people = [];
+          frame.timestamp = t;
+        }
+      }
+    }
+  }
+  function disableWorker() {
+    _workerFailed = true;
+    useWorker = false; workerReady = false; workerBusy = false;
+    try { worker?.terminate(); } catch {}
+    worker = null;
+    // Ensure a main-thread landmarker exists for the fallback path.
+    if (!landmarker) buildLandmarker().catch(err => console.warn('[qualia] fallback landmarker build failed:', err));
+  }
+
   async function ensureVision() {
     if (vision) return vision;
     const { mod, fileset } = await loadVision();
@@ -115,6 +200,23 @@ export function createPose() {
   }
 
   async function buildLandmarker() {
+    // Worker path: (re)configure the off-thread landmarker, resolve on 'ready'.
+    if (ensureWorker()) {
+      workerReady = false;
+      await new Promise((resolve) => {
+        const onReady = (e) => {
+          const ty = e.data?.type;
+          if (ty === 'ready' || ty === 'error') {
+            worker?.removeEventListener('message', onReady);
+            resolve();
+          }
+        };
+        worker.addEventListener('message', onReady);
+        worker.postMessage({ type: 'init', opts: workerConfig() });
+      });
+      return;
+    }
+    // Main-thread fallback.
     if (!vision) await ensureVision();
     if (landmarker) { try { landmarker.close(); } catch {} landmarker = null; }
     landmarker = await PoseLandmarkerCls.createFromOptions(vision, {
@@ -158,8 +260,7 @@ export function createPose() {
   }
 
   async function startCamera({ deviceId, video, facing } = {}) {
-    await ensureVision();
-    if (!landmarker) await buildLandmarker();
+    if (!hasLandmarker()) await buildLandmarker();
 
     videoEl = video;
     // facing wins over deviceId when both are provided (used by flipFacing
@@ -346,8 +447,7 @@ export function createPose() {
 
   /** Start running PoseLandmarker against an arbitrary canvas (for "viz" mode). */
   async function startCanvasDetection(canvas) {
-    await ensureVision();
-    if (!landmarker) await buildLandmarker();
+    if (!hasLandmarker()) await buildLandmarker();
     detectCanvas = canvas;
     detectSource = 'canvas';
     if (!detectLoopStarted) startDetectLoop();
@@ -362,39 +462,78 @@ export function createPose() {
     }
   }
 
+  // Pick the live detection source (or null if not ready). Shared by both
+  // the worker and main-thread paths.
+  function currentDetectSource() {
+    if (detectSource === 'camera' && videoEl
+        && videoEl.readyState >= 2 && !videoEl.paused && !videoEl.ended) {
+      return videoEl;
+    }
+    if (detectSource === 'canvas' && detectCanvas) return detectCanvas;
+    return null;
+  }
+
+  // Worker path: snapshot the frame as an ImageBitmap and transfer it. The
+  // expensive inference happens in the worker; the result comes back via
+  // onWorkerMessage. Backpressure: only one frame in flight at a time so we
+  // never queue work the worker can't keep up with.
+  function detectViaWorker() {
+    if (workerBusy) {
+      // Watchdog — if a result never came back (worker stalled), unstick.
+      if (performance.now() - workerSentAt > 2000) workerBusy = false;
+      else return;
+    }
+    const source = currentDetectSource();
+    if (!source) return;
+    const src = detectSource;
+    const t = performance.now();
+    workerBusy = true;
+    workerSentAt = t;
+    createImageBitmap(source).then((bitmap) => {
+      if (!worker || !useWorker) { try { bitmap.close?.(); } catch {} workerBusy = false; return; }
+      worker.postMessage({ type: 'detect', bitmap, t, source: src }, [bitmap]);
+    }).catch(() => { workerBusy = false; });
+  }
+
+  // Main-thread fallback: synchronous detectForVideo (blocks until the
+  // forward pass finishes — the path we move OFF the main thread above).
+  function detectMainThread() {
+    const source = currentDetectSource();
+    if (!source) return;
+    const t = performance.now();
+    try {
+      const result = landmarker.detectForVideo(source, t);
+      const fresh = result.landmarks ?? [];
+      if (detectSource === 'camera') {
+        smoothLandmarks(fresh);
+        if (fresh.length > 0) lastDetectMs = t;
+        rebuildPeople(t);
+      } else {
+        if (fresh.length > 0) {
+          smoothLandmarks(fresh);
+          lastDetectMs = t;
+          rebuildPeople(t);
+        } else if (lingerMs > 0 && t - lastDetectMs > lingerMs) {
+          smoothed = [];
+          frame.people = [];
+          frame.timestamp = t;
+        }
+      }
+    } catch { /* swallow timestamp regressions */ }
+  }
+
   function startDetectLoop() {
     detectLoopStarted = true;
     (function detectLoop() {
       requestAnimationFrame(detectLoop);
-      if (!landmarker) return;
+      if (!hasLandmarker()) return;
       // Throttle gate — cheap to spin the rAF, expensive to call
       // detectForVideo. Skip ticks that come faster than the interval.
       const tickT = performance.now();
       if (tickT - lastDetectTickMs < detectIntervalMs) return;
       lastDetectTickMs = tickT;
-      try {
-        if (detectSource === 'camera' && videoEl
-            && videoEl.readyState >= 2 && !videoEl.paused && !videoEl.ended) {
-          const t = performance.now();
-          const result = landmarker.detectForVideo(videoEl, t);
-          smoothLandmarks(result.landmarks ?? []);
-          if ((result.landmarks ?? []).length > 0) lastDetectMs = t;
-          rebuildPeople(t);
-        } else if (detectSource === 'canvas' && detectCanvas) {
-          const t = performance.now();
-          const result = landmarker.detectForVideo(detectCanvas, t);
-          const fresh = result.landmarks ?? [];
-          if (fresh.length > 0) {
-            smoothLandmarks(fresh);
-            lastDetectMs = t;
-            rebuildPeople(t);
-          } else if (lingerMs > 0 && t - lastDetectMs > lingerMs) {
-            smoothed = [];
-            frame.people = [];
-            frame.timestamp = t;
-          }
-        }
-      } catch { /* swallow timestamp regressions */ }
+      if (useWorker) detectViaWorker();
+      else           detectMainThread();
     })();
   }
 
@@ -402,21 +541,23 @@ export function createPose() {
   async function setNumPoses(n) {
     if (n === numPoses) return;
     numPoses = Math.max(1, Math.min(6, n | 0));
-    if (landmarker) await buildLandmarker();
+    if (hasLandmarker()) await buildLandmarker();
   }
   async function setThresholds({ detect, presence, track }) {
     let dirty = false;
     if (detect   != null && detect   !== detectConf)   { detectConf   = detect;   dirty = true; }
     if (presence != null && presence !== presenceConf) { presenceConf = presence; dirty = true; }
     if (track    != null && track    !== trackConf)    { trackConf    = track;    dirty = true; }
-    if (dirty && landmarker) await buildLandmarker();
+    if (dirty && hasLandmarker()) await buildLandmarker();
   }
 
   function setSmoothing(v) { smoothing = Math.max(0, Math.min(1, v)); }
   function setLingerMs(v)  { lingerMs = Math.max(0, v | 0); }
-  /** Cap the inference rate. fps in [5..60]. Lower = less CPU/GPU duty. */
+  /** Cap the inference rate. fps in [1..60]. Lower = less CPU/GPU duty (and a
+   *  deliberate slow-tracking aesthetic). Floor is 1fps; at very low rates a
+   *  pose can vanish between detections if lingerMs is shorter than the gap. */
   function setDetectFps(fps) {
-    const f = Math.max(5, Math.min(60, fps | 0));
+    const f = Math.max(1, Math.min(60, fps | 0));
     detectIntervalMs = Math.round(1000 / f);
   }
   function getDetectFps() { return Math.round(1000 / detectIntervalMs); }

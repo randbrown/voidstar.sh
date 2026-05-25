@@ -1568,6 +1568,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row diag-row"><span class="diag-label">snare / 5s</span><span class="qp-val" id="diag-snare">0</span></div>
       <div class="qp-row diag-row"><span class="diag-label">hat / 5s</span><span class="qp-val" id="diag-hat">0</span></div>
       <div class="qp-row diag-row"><span class="diag-label">poses</span><span class="qp-val" id="diag-poses">0</span></div>
+      <div class="qp-row" data-qp="viz-fps" title="Cap the visualizer frame rate. 'max' = uncapped. Lower frees the main thread (helps Strudel timing + UI on Windows) and doubles as a slow-motion / strobe aesthetic down to 1fps. Audio reactivity is unaffected.">
+        <label>render cap<span class="qp-val">max</span></label>
+        <input type="range" min="1" max="61" step="1" value="61">
+      </div>
       <div class="qp-section-tag">advanced</div>
       <div class="qp-row diag-row">
         <span class="diag-label">stuck state?</span>
@@ -1613,6 +1617,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="pose-smooth">
         <label>smooth<span class="qp-val">50%</span></label>
         <input type="range" min="0" max="1" step="0.01" value="0.5">
+      </div>
+      <div class="qp-row" data-qp="pose-fps" title="Pose detection rate. Independent of the visualizer frame rate — run the viz high while pose tracks slow (less CPU, or a deliberate stutter aesthetic).">
+        <label>rate<span class="qp-val">30fps</span></label>
+        <input type="range" min="1" max="60" step="1" value="30">
       </div>
       <div class="qp-row" data-qp="pose-detect">
         <label>detect<span class="qp-val"></span></label>

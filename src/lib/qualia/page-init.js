@@ -260,6 +260,8 @@ export function initQualiaPage() {
     poseSmoothing:  poseSmoothingValue,
     poseThresh:     pose.getThresholds(),
     poseLingerMs:   pose.getLingerMs(),
+    poseFps:        pose.getDetectFps(),
+    vizFps:         core.getMaxFps(),
     audioCollapsed: audioCard.classList.contains('collapsed'),
     poseCollapsed:  poseCard?.classList.contains('collapsed') ?? true,
     diagCollapsed:  document.getElementById('diag-card')?.classList.contains('collapsed') ?? true,
@@ -436,6 +438,47 @@ export function initQualiaPage() {
       const v = parseInt(input.value, 10);
       val.textContent = `${v}ms`;
       pose.setLingerMs(v);
+      settings.save();
+    });
+  }
+
+  // ── Pose detect FPS — independent of the viz cap (pose has its own throttle).
+  // Lower = less main-thread inference cost; also a deliberate slow-tracking
+  // look while the visualizer runs at full rate.
+  const poseFpsRow = document.querySelector('[data-qp="pose-fps"]');
+  if (poseFpsRow) {
+    const input = poseFpsRow.querySelector('input[type=range]');
+    const val   = poseFpsRow.querySelector('.qp-val');
+    if (typeof stored.poseFps === 'number') pose.setDetectFps(stored.poseFps);
+    const cur = pose.getDetectFps();
+    input.value = String(cur);
+    val.textContent = `${cur}fps`;
+    input.addEventListener('input', () => {
+      pose.setDetectFps(parseInt(input.value, 10));
+      val.textContent = `${pose.getDetectFps()}fps`;
+      settings.save();
+    });
+  }
+
+  // ── Viz render FPS cap (diag card). Slider 61 = uncapped ("max"); 1..60
+  // caps the visual frame rate. Frees the main thread (Strudel timing + UI on
+  // Windows) and doubles as a slow-mo / strobe aesthetic. Audio + reactivity
+  // are unaffected (see core.frame()).
+  const vizFpsRow = document.querySelector('[data-qp="viz-fps"]');
+  if (vizFpsRow) {
+    const input = vizFpsRow.querySelector('input[type=range]');
+    const val   = vizFpsRow.querySelector('.qp-val');
+    const toFps   = sv  => (sv >= 61 ? 0 : sv);          // slider → fps (0 = uncapped)
+    const fromFps = fps => (fps > 0 ? Math.min(60, fps) : 61);
+    const label   = fps => (fps > 0 ? `${fps}fps` : 'max');
+    const initFps = (typeof stored.vizFps === 'number') ? stored.vizFps : 0;
+    core.setMaxFps(initFps);
+    input.value = String(fromFps(initFps));
+    val.textContent = label(initFps);
+    input.addEventListener('input', () => {
+      const fps = toFps(parseInt(input.value, 10));
+      core.setMaxFps(fps);
+      val.textContent = label(fps);
       settings.save();
     });
   }
@@ -2481,6 +2524,10 @@ export function initQualiaPage() {
       try { return strudel?.getSecondsUntilNextStrudelBoundary?.() ?? null; }
       catch { return null; }
     },
+    getStrudelCps: () => {
+      try { return strudel?.getStrudelCps?.() ?? null; }
+      catch { return null; }
+    },
     isStrudelPlaying: () => {
       try { return !!strudel?.isPlaying?.(); } catch { return false; }
     },
@@ -3403,7 +3450,9 @@ export function initQualiaPage() {
     while (arr.length && arr[0] < cutoff) arr.shift();
   }
   let prevBeat = 0, prevSnare = 0, prevHat = 0;
-  core.onFrame((field) => {
+  // onTick (full rAF rate, not the viz frame cap) so beat counts stay accurate
+  // even when the visual render is throttled to a low fps.
+  core.onTick((field) => {
     const a = field.audio;
     const now = performance.now();
     if (a.beat.pulse  > 0.95 && prevBeat  < 0.95) beatTimes.push(now);
@@ -3433,7 +3482,10 @@ export function initQualiaPage() {
   let prevAnyBeat      = 0;
   let lastHardKickAt   = 0;
   let lastBeatAt       = 0;
-  core.onFrame((field) => {
+  // onTick (full rAF rate): the hard-kick detector's per-frame EMA decay and
+  // rising-edge detection are tuned to display cadence — gating them behind a
+  // low viz fps cap would miss kicks and mis-calibrate the rolling peak.
+  core.onTick((field) => {
     const a = field.audio;
     const now = performance.now();
     const beat = a.beat.pulse;
@@ -3469,7 +3521,10 @@ export function initQualiaPage() {
   // mosh / edge mutex enforces only one visible glitch at a time, so picking
   // one cleanly avoids last-iteration-wins flicker).
   let glitchLastConsumedHardKickAt = 0;
-  core.onFrame((field) => {
+  // onTick (full rAF rate): consume hard-kicks and auto-clear blip windows
+  // promptly regardless of the viz frame cap; overlay.setOption just flips a
+  // flag, the visible change lands on the next rendered frame.
+  core.onTick((field) => {
     const reactive = GLITCH_KEYS.filter(g =>
       glitchModes[g] === 'blip' || glitchModes[g] === 'flip');
     if (reactive.length === 0) {

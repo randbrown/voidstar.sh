@@ -27,6 +27,10 @@ import { computeChannels, resolveParams, makeChannelSnapshot, modWeightKey } fro
 import { WebGLRenderer, LinearSRGBColorSpace } from 'three';
 
 const DEFAULT_DPR_CAP = 1.5;
+// Tolerance subtracted from the viz frame-cap interval so a cap set to the
+// panel's own refresh (e.g. 60 on a 60Hz display) isn't silently halved when
+// rAF delivers a frame a hair early. Small enough to never double-render.
+const FRAME_SLOP_MS = 3;
 
 /**
  * @param {Object} opts
@@ -62,6 +66,15 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   let fpsTimer = 0;
   let lastFps  = 0;
 
+  // Viz frame-rate cap. maxFps 0 = uncapped (render every rAF tick — the
+  // default + legacy behavior). When set, the heavy fx render + visual frame
+  // listeners gate on elapsed wall time; audio sampling and the audio-reactive
+  // tick listeners stay at full rAF rate (see frame()). Doubles as a Windows
+  // perf lever and a low-fps aesthetic knob (down to 1fps strobe).
+  let maxFps       = 0;
+  let minFrameMs   = 0;
+  let lastRenderMs = startMs;
+
   /** @type {HTMLCanvasElement|null} */
   let canvas = null;
   /** @type {'canvas2d'|'webgl2'|'three'|null} */
@@ -85,8 +98,14 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   /** Listeners notified after each canvas (re)creation. */
   const canvasListeners = new Set();
   /** Listeners notified every frame AFTER fx render — used by the overlay
-   *  layer (skeleton, sparks, ASCII post) so it composites on top. */
+   *  layer (skeleton, sparks, ASCII post) so it composites on top. Gated by
+   *  the viz frame cap (these are visual). */
   const frameListeners = new Set();
+  /** Listeners notified every rAF tick (NOT gated by the viz frame cap),
+   *  right after audio.tick(). Audio-reactive bookkeeping (beat counting,
+   *  hard-kick detection, glitch triggers) lives here so it never misses a
+   *  transient edge when the visual render is throttled to a low fps. */
+  const tickListeners = new Set();
 
   function ensureCanvas(forType) {
     if (canvas && canvasType === forType) return canvas;
@@ -276,14 +295,18 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     return true;
   }
 
-  // Render loop — single rAF, dt-clamped to 50ms so a long pause + resume
-  // can't fast-forward the fx.
+  // Render loop — single rAF. Audio + reactivity run every tick; the fx
+  // render is gated by the viz frame cap (maxFps). dt is clamped so a long
+  // pause + resume (or a low cap) can't fast-forward the fx.
   function frame(now) {
     requestAnimationFrame(frame);
     const dtRaw = (now - lastMs) / 1000;
     const dt = Math.min(dtRaw, 0.05);
     lastMs = now;
-    frames++; fpsTimer += dt;
+    // fpsTimer accumulates real time every tick; `frames` counts only
+    // rendered frames (incremented in the render path below) so the HUD
+    // reports the actual viz frame rate, not the rAF/display rate.
+    fpsTimer += dt;
     if (fpsTimer >= 0.2) {
       lastFps = Math.round(frames / fpsTimer);
       fpsListeners.forEach(fn => { try { fn(lastFps, field); } catch {} });
@@ -291,11 +314,29 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     }
     if (paused) return;
 
-    field.dt   = dt;
     field.time = (now - startMs) / 1000;
 
+    // Audio sampling + audio-reactive tick listeners run every rAF tick,
+    // decoupled from the viz frame cap: beat/onset detection and the
+    // hard-kick / glitch edge detectors are tuned to display-rate cadence and
+    // must not miss a transient when the visual render is throttled low.
     audio.tick(dt);
-    // pose runs its own detect rAF; nothing to tick here.
+    // pose runs its own detect rAF (separately throttled); nothing to tick here.
+    tickListeners.forEach(fn => { try { fn(field); } catch (e) { console.error('[qualia] tick listener error:', e); } });
+
+    // Viz frame-rate cap. minFrameMs === 0 → render every tick (default,
+    // byte-for-byte the legacy path since lastRenderMs then tracks `now`).
+    // Otherwise skip rendering until the chosen interval has elapsed since the
+    // last *rendered* frame.
+    if (minFrameMs > 0 && (now - lastRenderMs) < minFrameMs - FRAME_SLOP_MS) return;
+    // field.dt is the real elapsed time since the last render so motion stays
+    // wall-clock-correct at any cap; the clamp guards tab-switch fast-forward
+    // and scales with the cap so 1–5fps aesthetic rates still advance at true
+    // speed instead of slewing into slow motion.
+    const maxStep = Math.max(0.05, (minFrameMs / 1000) * 1.5);
+    field.dt = Math.min((now - lastRenderMs) / 1000, maxStep);
+    lastRenderMs = now;
+    frames++;
 
     if (activeInst && activeMod) {
       try {
@@ -309,13 +350,13 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
       }
     }
 
-    // Per-frame listeners (overlay etc.) fire AFTER fx render so they
-    // composite on top.
+    // Visual frame listeners (overlay, recording composite) fire AFTER fx
+    // render so they composite on top — gated by the viz cap alongside render.
     frameListeners.forEach(fn => { try { fn(field); } catch (e) { console.error('[qualia] frame listener error:', e); } });
   }
 
   function start() {
-    requestAnimationFrame(now => { startMs = now; lastMs = now; requestAnimationFrame(frame); });
+    requestAnimationFrame(now => { startMs = now; lastMs = now; lastRenderMs = now; requestAnimationFrame(frame); });
   }
 
   function setPaused(v) { paused = !!v; }
@@ -323,8 +364,17 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   function isPaused()   { return paused; }
   function isZen()      { return zen; }
   function setDprCap(v) { dprCap = Math.max(0.5, v); applyDpr(); }
+  /** Cap the visual frame rate. fps 0 (or falsy) = uncapped. Audio sampling +
+   *  reactivity are unaffected — only the fx render + overlay composite
+   *  throttle. Windows perf lever; also a low-fps aesthetic (down to 1fps). */
+  function setMaxFps(v) {
+    maxFps = Math.max(0, v | 0);
+    minFrameMs = maxFps > 0 ? 1000 / maxFps : 0;
+  }
+  function getMaxFps()  { return maxFps; }
   function onFps(fn)    { fpsListeners.add(fn); return () => fpsListeners.delete(fn); }
   function onFrame(fn)  { frameListeners.add(fn); return () => frameListeners.delete(fn); }
+  function onTick(fn)   { tickListeners.add(fn);  return () => tickListeners.delete(fn); }
   function onCanvas(fn) {
     canvasListeners.add(fn);
     if (canvas) { try { fn(canvas, canvasType); } catch {} }
@@ -343,8 +393,11 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     isPaused,
     isZen,
     setDprCap,
+    setMaxFps,
+    getMaxFps,
     onFps,
     onFrame,
+    onTick,
     onCanvas,
     getCanvas: () => canvas,
     getActiveContextType: () => canvasType,
