@@ -270,7 +270,10 @@ export default {
         }
       }
 
-      const inst = field.dt > 0 ? 1 / field.dt : 60;
+      // Use renderDt (the unclamped render interval), not field.dt — field.dt
+      // is clamped for motion stability and would floor this readout at ~20fps.
+      const rdt  = field.renderDt > 0 ? field.renderDt : field.dt;
+      const inst = rdt > 0 ? 1 / rdt : 60;
       scratch.fpsEMA = scratch.fpsEMA + (inst - scratch.fpsEMA) * 0.08;
 
       scratch.audio  = audio;

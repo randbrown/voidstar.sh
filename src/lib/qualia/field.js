@@ -25,6 +25,8 @@ export function makeField() {
   return {
     dt: 0,
     reactDt: 0,
+    renderDt: 0,
+    fps: 0,
     time: 0,
     audio: emptyAudioFrame(),
     pose:  emptyPoseFrame(),
