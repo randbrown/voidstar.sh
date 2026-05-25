@@ -2576,6 +2576,25 @@ export function initQualiaPage() {
   const sequencer = createSequencer({ audio, syncStrudel: seqSyncStrudel });
   _sequencerRef = sequencer;
 
+  // ── Editor-open viz throttle ──────────────────────────────────────────────
+  // While the Strudel or sequencer editor panel is visible the user is likely
+  // live-coding, and each re-eval/reschedule competes with the fx render for
+  // the main thread → the main-thread cyclist drops notes ("skip query: too
+  // late"). Cap the viz to free that budget the whole time an editor is open,
+  // then release it when both close. Layered on top of the user's render-cap
+  // (the stricter wins via core.setAuxFps), so a manual cap below this still
+  // holds and 'max' is restored on close. Polled on onTick (full rAF rate, not
+  // gated by the viz cap) so re-opening is detected even while throttled; acts
+  // only on a transition. Tune EDITOR_VIZ_FPS to taste.
+  const EDITOR_VIZ_FPS = 15;
+  let _editorViewOpen = null;   // null = unknown, force first sync
+  core.onTick(() => {
+    const open = strudel.isOpen() || sequencer.isOpen();
+    if (open === _editorViewOpen) return;
+    _editorViewOpen = open;
+    core.setAuxFps(open ? EDITOR_VIZ_FPS : 0);
+  });
+
   // ── Vocoder (mic-driven channel vocoder for live narration) ─────────────
   // Owns its own AudioContext + getUserMedia stream so it can route to the
   // speakers without entangling with the analysis path or the strudel

@@ -75,6 +75,14 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   let minFrameMs   = 0;
   let lastRenderMs = startMs;
 
+  // Auxiliary viz cap — a secondary frame cap that LAYERS on top of the user's
+  // maxFps via max(interval), so it never overwrites their render-cap setting
+  // (the slider keeps working) and the stricter of the two wins. The page
+  // drives this to free main-thread budget while the Strudel/sequencer editor
+  // panels are open, so the main-thread cyclist stops dropping notes while the
+  // user is live-coding (see setAuxFps()).
+  let auxFrameMs = 0;        // 0 = no aux cap active
+
   /** @type {HTMLCanvasElement|null} */
   let canvas = null;
   /** @type {'canvas2d'|'webgl2'|'three'|null} */
@@ -324,16 +332,19 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     // pose runs its own detect rAF (separately throttled); nothing to tick here.
     tickListeners.forEach(fn => { try { fn(field); } catch (e) { console.error('[qualia] tick listener error:', e); } });
 
-    // Viz frame-rate cap. minFrameMs === 0 → render every tick (default,
+    // Effective frame cap = the stricter (longer interval) of the user's cap
+    // and any auxiliary cap (set while the editor panels are open). 0 = uncapped.
+    const gateMs = Math.max(minFrameMs, auxFrameMs);
+    // Viz frame-rate cap. gateMs === 0 → render every tick (default,
     // byte-for-byte the legacy path since lastRenderMs then tracks `now`).
     // Otherwise skip rendering until the chosen interval has elapsed since the
     // last *rendered* frame.
-    if (minFrameMs > 0 && (now - lastRenderMs) < minFrameMs - FRAME_SLOP_MS) return;
+    if (gateMs > 0 && (now - lastRenderMs) < gateMs - FRAME_SLOP_MS) return;
     // field.dt is the real elapsed time since the last render so motion stays
     // wall-clock-correct at any cap; the clamp guards tab-switch fast-forward
     // and scales with the cap so 1–5fps aesthetic rates still advance at true
     // speed instead of slewing into slow motion.
-    const maxStep = Math.max(0.05, (minFrameMs / 1000) * 1.5);
+    const maxStep = Math.max(0.05, (gateMs / 1000) * 1.5);
     field.dt = Math.min((now - lastRenderMs) / 1000, maxStep);
     lastRenderMs = now;
     frames++;
@@ -372,6 +383,13 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     minFrameMs = maxFps > 0 ? 1000 / maxFps : 0;
   }
   function getMaxFps()  { return maxFps; }
+  /** Auxiliary viz cap, layered ON TOP of the user's maxFps (the stricter wins)
+   *  without touching it. The page drives this to free main-thread budget while
+   *  the Strudel/sequencer editor panels are open, so the main-thread cyclist
+   *  stops dropping notes during live-coding. fps<=0 clears it. */
+  function setAuxFps(fps) {
+    auxFrameMs = (fps > 0) ? 1000 / fps : 0;
+  }
   function onFps(fn)    { fpsListeners.add(fn); return () => fpsListeners.delete(fn); }
   function onFrame(fn)  { frameListeners.add(fn); return () => frameListeners.delete(fn); }
   function onTick(fn)   { tickListeners.add(fn);  return () => tickListeners.delete(fn); }
@@ -395,6 +413,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     setDprCap,
     setMaxFps,
     getMaxFps,
+    setAuxFps,
     onFps,
     onFrame,
     onTick,
