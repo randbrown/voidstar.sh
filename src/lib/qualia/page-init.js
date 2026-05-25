@@ -2605,6 +2605,11 @@ export function initQualiaPage() {
   if (typeof globalThis !== 'undefined' && globalThis.qualia) {
     globalThis.qualia.setReactFps = (fps) => core.setReactFps(fps);
     globalThis.qualia.getReactFps = () => core.getReactFps();
+    // DPR cap — the biggest GPU lever on a high-res / large display. Default
+    // 1.5; drop toward 1.0 to cut fragment work ~2.25x when GPU-bound. Not
+    // persisted (console-only A/B): qualia.setDprCap(1.0).
+    globalThis.qualia.setDprCap = (n) => core.setDprCap(n);
+    globalThis.qualia.getDprCap = () => core.getDprCap();
   }
 
   // ── Vocoder (mic-driven channel vocoder for live narration) ─────────────

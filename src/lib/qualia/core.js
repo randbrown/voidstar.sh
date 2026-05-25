@@ -73,9 +73,9 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   let paused   = false;
   let startMs  = performance.now();
   let lastMs   = startMs;
-  let frames   = 0;
-  let fpsTimer = 0;
-  let lastFps  = 0;
+  let frames      = 0;     // renders counted in the current fps window
+  let fpsWindowMs = startMs; // wall-clock start of the current fps window
+  let lastFps     = 0;
 
   // Viz frame-rate cap. maxFps 0 = uncapped (render every rAF tick — the
   // default + legacy behavior). When set, the heavy fx render + visual frame
@@ -337,14 +337,16 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     lastMs = now;
     // Smoothed rAF interval — feeds the adaptive frame-cap slop below.
     tickMsEma += (dt * 1000 - tickMsEma) * 0.1;
-    // fpsTimer accumulates real time every tick; `frames` counts only
-    // rendered frames (incremented in the render path below) so the HUD
-    // reports the actual viz frame rate, not the rAF/display rate.
-    fpsTimer += dt;
-    if (fpsTimer >= 0.2) {
-      lastFps = Math.round(frames / fpsTimer);
+    // FPS over real wall-clock time: `frames` counts rendered frames (below),
+    // divided by the true elapsed window — NOT by accumulated dt, whose 50ms
+    // clamp would floor the readout at 20fps and hide any slower (GPU-bound)
+    // rate. field.fps mirrors it so fx (e.g. telemetry) can read the same number.
+    const fpsWin = now - fpsWindowMs;
+    if (fpsWin >= 200) {
+      lastFps = Math.round((frames * 1000) / fpsWin);
+      field.fps = lastFps;
       fpsListeners.forEach(fn => { try { fn(lastFps, field); } catch {} });
-      frames = 0; fpsTimer = 0;
+      frames = 0; fpsWindowMs = now;
     }
     if (paused) return;
 
@@ -385,9 +387,14 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     // field.dt is the real elapsed time since the last render so motion stays
     // wall-clock-correct at any cap; the clamp guards tab-switch fast-forward
     // and scales with the cap so 1–5fps aesthetic rates still advance at true
-    // speed instead of slewing into slow motion.
-    const maxStep = Math.max(0.05, (gateMs / 1000) * 1.5);
-    field.dt = Math.min((now - lastRenderMs) / 1000, maxStep);
+    // speed instead of slewing into slow motion. Floor is 0.1s (10fps) so a
+    // GPU-bound viz running 12–20fps stays wall-correct instead of slow-mo'ing
+    // against the old 0.05s (20fps) clamp. field.renderDt is the SAME interval
+    // unclamped — fx that display fps (telemetry) read it for a true reading.
+    const renderDt = (now - lastRenderMs) / 1000;
+    const maxStep = Math.max(0.1, (gateMs / 1000) * 1.5);
+    field.dt = Math.min(renderDt, maxStep);
+    field.renderDt = renderDt;
     lastRenderMs = now;
     frames++;
 
@@ -409,7 +416,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   }
 
   function start() {
-    requestAnimationFrame(now => { startMs = now; lastMs = now; lastRenderMs = now; lastReactMs = now; requestAnimationFrame(frame); });
+    requestAnimationFrame(now => { startMs = now; lastMs = now; lastRenderMs = now; lastReactMs = now; fpsWindowMs = now; requestAnimationFrame(frame); });
   }
 
   function setPaused(v) { paused = !!v; }
@@ -417,6 +424,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   function isPaused()   { return paused; }
   function isZen()      { return zen; }
   function setDprCap(v) { dprCap = Math.max(0.5, v); applyDpr(); }
+  function getDprCap()  { return dprCap; }
   /** Cap the visual frame rate. fps 0 (or falsy) = uncapped. Audio sampling +
    *  reactivity are unaffected — only the fx render + overlay composite
    *  throttle. Windows perf lever; also a low-fps aesthetic (down to 1fps). */
@@ -461,6 +469,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     isPaused,
     isZen,
     setDprCap,
+    getDprCap,
     setMaxFps,
     getMaxFps,
     setAuxFps,
