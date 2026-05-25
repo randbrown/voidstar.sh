@@ -71,6 +71,20 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   let loopId = null;
   let cellIdx = 0;
   let isPlaying = false;
+  // Audio-time of transport position 0, captured at start(). Right after
+  // start() Tone clamps getTransport().seconds to ~0 for a whole lookAhead
+  // window (it evaluates seconds at now()=currentTime+lookAhead, the start
+  // boundary), so converting an absolute audio time via that getter lands
+  // the first aligned tick a full lookAhead (~100ms) late vs Strudel. We
+  // hold the real zero instead and subtract — exact even in that window,
+  // and identical to the running-transport math otherwise (we keep no Tone
+  // BPM automation, so transport seconds track audio seconds 1:1).
+  let _transportZeroAudio = null;
+  // Poll handle for the post-play auto-realign (see armAutoResync).
+  let _autoResyncTimer = null;
+  let _autoResyncTries = 0;
+  // Refs to the ÷2/×2 helper buttons, for enabled-state refresh.
+  let _scaleBtns = null;
   let pendingStepPaint = -1;     // last step seen by scheduleRepeat; perFrame() reads this
   let lastPaintedStep = -1;
   // Column → cell elements, built once per renderMatrix. The playhead repaint
@@ -139,6 +153,55 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     }
   }
 
+  // Convert an absolute rawContext audio time to Tone transport time. Uses
+  // the transport-zero captured at start() so it stays exact in the
+  // lookahead window right after start (when getTransport().seconds is
+  // clamped at ~0); falls back to the running getter if zero is unknown.
+  function absToTransport(desiredAbs) {
+    if (_transportZeroAudio != null) {
+      return Math.max(0, desiredAbs - _transportZeroAudio);
+    }
+    const nowAbs = Tone.getContext().rawContext.currentTime;
+    return Tone.getTransport().seconds + Math.max(0, desiredAbs - nowAbs);
+  }
+
+  // Phase-lock the pattern to Strudel's ABSOLUTE cycle position. Returns
+  // { startAtAbs, cellIdx } for the first cell tick, or null if Strudel isn't
+  // reporting a position. The key over the old "seconds-until-next-boundary"
+  // math: it anchors cell 0 to cycles that are a MULTIPLE of `cycles`, so a
+  // multi-cycle pattern can't land half a phrase off after a restart.
+  //   - fromTop: begin from cell 0 on Strudel's next pattern boundary (next
+  //     absolute cycle ≡ 0 mod `cycles`). Used by play() so a deliberate
+  //     start always lands on the phrase downbeat. On a co-start (Strudel at
+  //     cycle ~0) that's immediate; mid-jam it waits for the next phrase top.
+  //   - !fromTop (continuity): drop in at the current phase with no restart
+  //     and no silent gap, picking the cellIdx that keeps the grid locked.
+  //     Used by the align button, retempo, and the post-play auto-realign —
+  //     it can't skip a whole phrase.
+  function computeAlignedStart({ fromTop }) {
+    const info = syncStrudel?.getStrudelCyclePos?.();
+    if (!info || typeof info.pos !== 'number' || !(info.cps > 0)) return null;
+    const { pos, cps } = info;
+    const C      = model.cycles > 0 ? model.cycles : 1;
+    const cells  = totalCells();
+    const dur    = cellDuration();
+    const nowAbs = Tone.getContext().rawContext.currentTime;
+    const MARGIN = Tone.getContext().lookAhead ?? 0.1;
+    if (fromTop) {
+      // Next pattern boundary (cell 0) at absolute cycle k*C, ≥ MARGIN ahead
+      // so Tone's lookahead scheduler can catch it.
+      const k = Math.ceil((pos + MARGIN * cps) / C - 1e-6);
+      const secUntil = (k * C - pos) / cps;
+      return { startAtAbs: nowAbs + secUntil, cellIdx: 0 };
+    }
+    // Continuity: most-recent pattern boundary (k*C ≤ pos) is the cell-0
+    // anchor; fire the next cell tick ≥ MARGIN ahead with its matching cellIdx.
+    const anchorCycle = Math.floor(pos / C + 1e-9) * C;
+    const anchorAbs   = nowAbs - (pos - anchorCycle) / cps;
+    const n = Math.max(0, Math.ceil((nowAbs + MARGIN - anchorAbs) / dur - 1e-6));
+    return { startAtAbs: anchorAbs + n * dur, cellIdx: ((n % cells) + cells) % cells };
+  }
+
   function scheduleLoop(opts = {}) {
     clearLoop();
     const dur = cellDuration();
@@ -156,19 +219,24 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // every Nth wrap.
     let startT;
     if (opts.startAtAbs != null && Number.isFinite(opts.startAtAbs)) {
-      const nowAbs = Tone.getContext().rawContext.currentTime;
-      const offsetSec = Math.max(0, opts.startAtAbs - nowAbs);
-      startT = Tone.getTransport().seconds + offsetSec;
+      startT = absToTransport(opts.startAtAbs);
     } else if (opts.align && model.syncStrudel && syncStrudel?.isStrudelPlaying?.()) {
       try {
         // Strudel and Tone may not share an AudioContext, so we get a
-        // RELATIVE duration (seconds-until-boundary) and add it to our
-        // own clock — both contexts tick at the same rate, so the
-        // duration is portable across the gap.
+        // RELATIVE duration (seconds-until-boundary) and rebuild an
+        // absolute Tone audio time from our own clock — both contexts
+        // tick at the same rate, so the duration is portable across the gap.
         const secondsUntil = syncStrudel.getSecondsUntilNextStrudelBoundary?.();
         if (typeof secondsUntil === 'number' && Number.isFinite(secondsUntil)) {
-          const offsetSec = Math.max(0, secondsUntil);
-          startT = Tone.getTransport().seconds + offsetSec;
+          const nowAbs  = Tone.getContext().rawContext.currentTime;
+          const MARGIN  = Tone.getContext().lookAhead ?? 0.1;
+          const period  = model.cps > 0 ? 1 / model.cps : 2;
+          let desiredAbs = nowAbs + Math.max(0, secondsUntil);
+          // Tone's lookahead scheduler can't catch a tick less than
+          // lookAhead in the future; if the boundary is that close, lock
+          // to the next Strudel cycle instead of firing late or not at all.
+          for (let i = 0; i < 64 && desiredAbs < nowAbs + MARGIN; i++) desiredAbs += period;
+          startT = absToTransport(desiredAbs);
         }
       } catch (e) { console.warn('[qualia] phase-align probe failed:', e); }
     }
@@ -241,6 +309,8 @@ export function createSequencer({ audio, syncStrudel } = {}) {
 
   function resync() {
     if (!isPlaying) return;
+    // A manual align supersedes any pending post-play auto-realign.
+    clearAutoResync();
     adoptStrudelCpsIfSynced();
     if (!model.syncStrudel || !syncStrudel?.isStrudelPlaying?.()) {
       cellIdx = 0;
@@ -248,49 +318,42 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       scheduleLoop();
       return;
     }
-    try {
-      // Strudel and Tone may not share an AudioContext. We get a
-      // RELATIVE duration (seconds-until-boundary, measured in Strudel's
-      // clock) and rebuild our own absolute times in Tone's clock by
-      // adding to `nowAbs`. Both contexts advance at the same rate, so
-      // the duration is portable.
-      const secondsUntil = syncStrudel.getSecondsUntilNextStrudelBoundary?.();
-      if (typeof secondsUntil !== 'number' || !Number.isFinite(secondsUntil)) {
-        cellIdx = 0;
-        pendingStepPaint = -1;
-        scheduleLoop({ align: true });
-        return;
-      }
-      const nowAbs = Tone.getContext().rawContext.currentTime;
-      const dur    = cellDuration();
-      const cells  = totalCells();
-      const cyclePeriod = 1 / model.cps;
-      // Most recent strudel boundary in TONE's audio-time frame — the
-      // anchor where cellIdx=0 should have fired given strict phase-lock.
-      const nextBoundaryAbs = nowAbs + secondsUntil;
-      const anchorAbs = nextBoundaryAbs - cyclePeriod;
-      // Smallest integer n such that the n-th cell-tick from the anchor
-      // is at least lookAhead in the future. Tone's _loop processes
-      // events with time in [_lastUpdate, endTime); _lastUpdate is at
-      // most nowAbs + lookAhead, so any tick at exactly nowAbs+lookAhead
-      // is caught, anything strictly less is missed.
-      const MARGIN = Tone.getContext().lookAhead ?? 0.1;
-      const minTickAbs = nowAbs + MARGIN;
-      // Start at the next integer cell-tick past `minTickAbs`. Use a
-      // tiny epsilon for floating-point — a tick that lands within ~1µs
-      // of `minTickAbs` is "on" rather than "after."
-      const cellsFromAnchor = (minTickAbs - anchorAbs) / dur;
-      const n = Math.ceil(cellsFromAnchor - 1e-6);
-      const tickAbs = anchorAbs + n * dur;
-      cellIdx = ((n % cells) + cells) % cells;
-      pendingStepPaint = -1;
-      scheduleLoop({ startAtAbs: tickAbs });
-    } catch (e) {
-      console.warn('[qualia] resync phase-lock failed:', e);
+    // Continuity re-lock: drop in at Strudel's current absolute phase (no
+    // restart, no silent gap), anchoring cell 0 to a multiple of `cycles`.
+    const aligned = computeAlignedStart({ fromTop: false });
+    pendingStepPaint = -1;
+    if (aligned) {
+      cellIdx = aligned.cellIdx;
+      scheduleLoop({ startAtAbs: aligned.startAtAbs });
+    } else {
       cellIdx = 0;
-      pendingStepPaint = -1;
       scheduleLoop({ align: true });
     }
+  }
+
+  function clearAutoResync() {
+    if (_autoResyncTimer) { clearInterval(_autoResyncTimer); _autoResyncTimer = null; }
+    _autoResyncTries = 0;
+  }
+  // After a fresh sync-play the phase-align at play() runs against whatever
+  // Strudel state is readable microseconds after evaluate() — which can be
+  // stale from a prior run or not yet anchored, leaving the first downbeat a
+  // few ms off Strudel. Once Strudel reports a fresh anchor (the same state
+  // the manual align button relies on) re-run the align once. The aligned
+  // schedule leaves a silent lead-in before the first cell, so this usually
+  // lands BEFORE the first audible hit — the user just hears a locked start.
+  function armAutoResync() {
+    clearAutoResync();
+    if (!model.syncStrudel || !syncStrudel?.isStrudelPlaying?.()) return;
+    _autoResyncTimer = setInterval(() => {
+      if (!isPlaying || !model.syncStrudel) { clearAutoResync(); return; }
+      if (syncStrudel?.isStrudelSchedulerFresh?.()) {
+        clearAutoResync();
+        try { resync(); } catch (e) { console.warn('[qualia] auto-realign failed:', e); }
+        return;
+      }
+      if (++_autoResyncTries > 30) clearAutoResync();   // ~1.5s safety cap
+    }, 50);
   }
 
   // ── Audio tap ──────────────────────────────────────────────────────────
@@ -406,8 +469,28 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // Strudel's eval may set cps a beat later, in which case a manual realign
     // snaps it). Keeps the cell grid and boundary math on one clock.
     adoptStrudelCpsIfSynced();
-    Tone.getTransport().start();
-    scheduleLoop({ align: true });
+    // Start at an explicit audio time we keep, so the align math below can
+    // convert boundary times against the real transport-zero instead of the
+    // post-start getTransport().seconds (clamped ~0 for a lookAhead window).
+    const zeroAbs = Tone.now();   // = ctx.currentTime + lookAhead
+    Tone.getTransport().start(zeroAbs);
+    _transportZeroAudio = zeroAbs;
+    // Start the pattern from cell 0 on Strudel's next phrase boundary (an
+    // absolute cycle that's a multiple of `cycles`). Co-start → cycle 0
+    // (immediate); joining a running Strudel → its next phrase top.
+    const synced  = model.syncStrudel && syncStrudel?.isStrudelPlaying?.();
+    const aligned = synced ? computeAlignedStart({ fromTop: true }) : null;
+    if (aligned) {
+      cellIdx = aligned.cellIdx;
+      scheduleLoop({ startAtAbs: aligned.startAtAbs });
+    } else {
+      scheduleLoop({ align: true });   // fallback (no Strudel position yet)
+    }
+    // Only a cold start needs a warm correction: if Strudel just (re)started,
+    // its scheduler isn't anchored yet so the align above used the epoch
+    // estimate — re-lock once the real anchor lands. When Strudel was already
+    // running the probe is exact, so skip it.
+    if (synced && !syncStrudel?.isStrudelSchedulerFresh?.()) armAutoResync();
     ensureAnalyserAdopted();
     persistNow();
     refreshSeqBtn();
@@ -427,7 +510,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     isPlaying = false;
     btnPlay?.classList.remove('playing');
     clearLoop();
+    clearAutoResync();
     try { Tone.getTransport().stop(); } catch {}
+    _transportZeroAudio = null;
     audio.releaseAdopted('sequencer');
     pendingStepPaint = -1;
     paintCurrentStep(-1);
@@ -482,6 +567,96 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     finally { _inhibitSync = false; }
   }
 
+  // ── Double / halve helpers ───────────────────────────────────────────────
+  // One-tap performance moves. Two hit-remap shapes:
+  //   spread  — total cells ×2/÷2 at a CONSTANT span (resolution, beats):
+  //             keep every hit's audible position, so hit i → 2i (and back,
+  //             OR-ing the pair so a halve doesn't silently drop off-grid
+  //             hits). The grid gets finer/coarser; the groove is unchanged.
+  //   tile    — total cells ×2/÷2 by LENGTHENING the pattern (cycles+beats
+  //             together, cell duration constant): repeat the groove into the
+  //             new bars (×2) or keep the front half (÷2).
+  function remapHitsSpread(up) {
+    for (const pad of model.pads) {
+      const old = pad.hits || [];
+      if (up) {
+        const next = new Array(old.length * 2).fill(0);
+        for (let i = 0; i < old.length; i++) if (old[i]) next[i * 2] = 1;
+        pad.hits = next;
+      } else {
+        const next = new Array(Math.ceil(old.length / 2)).fill(0);
+        for (let j = 0; j < next.length; j++) next[j] = (old[2 * j] || old[2 * j + 1]) ? 1 : 0;
+        pad.hits = next;
+      }
+    }
+  }
+  function remapHitsTile(newTotal) {
+    for (const pad of model.pads) {
+      const old = pad.hits || [];
+      const len = old.length || 1;
+      const next = new Array(newTotal).fill(0);
+      for (let i = 0; i < newTotal; i++) next[i] = old[i % len] ? 1 : 0;
+      pad.hits = next;
+    }
+  }
+  // After any grid reshape, re-lock to Strudel (continuity, so the audible
+  // position is preserved) when synced; otherwise just reschedule. Then
+  // repaint props, helper-button enabled-states, and the matrix.
+  function afterGridChange() {
+    model.updatedAt = Date.now();
+    if (isPlaying && model.syncStrudel && syncStrudel?.isStrudelPlaying?.()) resync();
+    else rescheduleIfPlaying();
+    refreshPropsValues();
+    refreshScaleBtns();
+    renderMatrix();
+    persistSoon();
+  }
+  // Resolution: steps-per-beat ×2/÷2, spread hits (same audible positions).
+  function scaleResolution(up) {
+    if (up) { if (model.steps * 2 > 16) return; remapHitsSpread(true);  model.steps *= 2; }
+    else    { if (model.steps % 2 !== 0)  return; remapHitsSpread(false); model.steps /= 2; }
+    afterGridChange();
+  }
+  // Beats ×2/÷2, spread hits. Same span (cycles unchanged) → denser/sparser.
+  function scaleBeats(up) {
+    if (up) { if (model.beats * 2 > 32) return; remapHitsSpread(true);  model.beats *= 2; }
+    else    { if (model.beats % 2 !== 0)  return; remapHitsSpread(false); model.beats /= 2; }
+    afterGridChange();
+  }
+  // Length: cycles AND beats ×2/÷2 together (cell duration constant), tiling
+  // the groove. cycles steps on the 0.5 ↔ 1 ↔ 2 … ladder.
+  // Length ÷2 needs beats even AND cycles halvable onto the 0.5↔1↔2… ladder
+  // (cycles === 1 → 0.5, or an even cycle count → half). An odd cycles like 3
+  // can't halve cleanly, so it's blocked rather than producing 1.5.
+  function canHalveLength() {
+    return model.beats % 2 === 0 &&
+           (model.cycles === 1 || (model.cycles >= 2 && model.cycles % 2 === 0));
+  }
+  function scaleLength(up) {
+    if (up) {
+      if (model.beats * 2 > 32 || model.cycles * 2 > 16) return;
+      remapHitsTile(model.beats * 2 * model.steps);
+      model.beats  *= 2;
+      model.cycles *= 2;
+    } else {
+      if (!canHalveLength()) return;
+      remapHitsTile((model.beats / 2) * model.steps);
+      model.beats  /= 2;
+      model.cycles  = model.cycles === 1 ? 0.5 : model.cycles / 2;
+    }
+    afterGridChange();
+  }
+  function refreshScaleBtns() {
+    if (!_scaleBtns) return;
+    const b = _scaleBtns;
+    if (b.resHalf) b.resHalf.disabled = (model.steps % 2 !== 0);
+    if (b.resDbl)  b.resDbl.disabled  = (model.steps * 2 > 16);
+    if (b.beatHalf) b.beatHalf.disabled = (model.beats % 2 !== 0);
+    if (b.beatDbl)  b.beatDbl.disabled  = (model.beats * 2 > 32);
+    if (b.lenHalf) b.lenHalf.disabled = !canHalveLength();
+    if (b.lenDbl)  b.lenDbl.disabled  = (model.beats * 2 > 32 || model.cycles * 2 > 16);
+  }
+
   // ── UI ─────────────────────────────────────────────────────────────────
   function renderProps() {
     if (!propsEl) return;
@@ -501,7 +676,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // the input's change/input event so the existing handler logic stays
     // canonical — the buttons just dispatch the same event after mutating
     // the value.
-    const stepperFor = (input, eventName) => {
+    const stepperFor = (input, eventName, bumpFn) => {
       const wrap = document.createElement('span');
       wrap.className = 'seq-num-wrap';
       const step = parseFloat(input.step) || 1;
@@ -509,7 +684,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       const max  = input.max !== '' ? parseFloat(input.max) : Infinity;
       const isInt = Number.isInteger(step);
       const decimals = isInt ? 0 : Math.max(0, (String(step).split('.')[1] || '').length);
-      const bump = (delta) => {
+      // Custom stepping (e.g. cycles: 0.5 → 1 → 2 → 3…) overrides the linear
+      // default; it owns setting input.value and dispatching the event.
+      const bump = bumpFn || ((delta) => {
         const cur = parseFloat(input.value);
         const base = Number.isFinite(cur) ? cur : (Number.isFinite(min) ? min : 0);
         let next = base + delta * step;
@@ -518,7 +695,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
         // into the displayed value.
         input.value = isInt ? String(Math.round(next)) : next.toFixed(decimals);
         input.dispatchEvent(new Event(eventName, { bubbles: true }));
-      };
+      });
       const mkBtn = (txt, delta, title) => {
         const b = document.createElement('button');
         b.type = 'button';
@@ -547,6 +724,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       model.updatedAt = Date.now();
       rescheduleIfPlaying();
       renderMatrix();
+      refreshScaleBtns();
       persistSoon();
     });
 
@@ -562,6 +740,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       model.updatedAt = Date.now();
       rescheduleIfPlaying();
       renderMatrix();
+      refreshScaleBtns();
       persistSoon();
     });
 
@@ -574,21 +753,38 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       if (Number.isFinite(v)) setCps(v);
     });
 
-    // Cycles-per-pattern stretch. step 0.5 covers the practical range
-    // (0.5 = double-time, 1 = locked, 2 = half-time, 4 = quarter-time);
-    // min 0.25 leaves headroom for finer-grained double-time experiments.
+    // Cycles-per-pattern stretch. Practical values: 0.5 (double-time, the
+    // only sub-1 case) then whole cycles 1, 2, 3, 4… The +/- stepper walks
+    // 0.5 ↔ 1 ↔ 2 ↔ 3 — no in-between halves above 1.
     const cyclesIn = document.createElement('input');
-    cyclesIn.type = 'number'; cyclesIn.step = '0.5'; cyclesIn.min = '0.25'; cyclesIn.max = '16';
+    cyclesIn.type = 'number'; cyclesIn.step = '1'; cyclesIn.min = '0.5'; cyclesIn.max = '16';
     cyclesIn.value = String(model.cycles);
     cyclesIn.className = 'seq-num seq-num-wide';
     cyclesIn.addEventListener('change', () => {
-      const v = Math.max(0.25, Math.min(16, parseFloat(cyclesIn.value) || 1));
+      let v = parseFloat(cyclesIn.value);
+      if (!Number.isFinite(v)) v = 1;
+      // Snap to the allowed set: 0.5, or a whole number ≥ 1.
+      v = v < 0.75 ? 0.5 : Math.round(v);
+      v = Math.max(0.5, Math.min(16, v));
+      cyclesIn.value = v === 0.5 ? '0.5' : String(v);
       if (v === model.cycles) return;
       model.cycles = v;
       model.updatedAt = Date.now();
       rescheduleIfPlaying();
+      refreshScaleBtns();
       persistSoon();
     });
+    // Whole steps above 1; 0.5 is the single sub-1 stop.
+    const cyclesBump = (delta) => {
+      let cur = parseFloat(cyclesIn.value);
+      if (!Number.isFinite(cur)) cur = 1;
+      let next = delta > 0
+        ? (cur < 1 ? 1 : cur + 1)
+        : (cur > 1 ? cur - 1 : 0.5);
+      next = Math.max(0.5, Math.min(16, next));
+      cyclesIn.value = next === 0.5 ? '0.5' : String(Math.round(next));
+      cyclesIn.dispatchEvent(new Event('change', { bubbles: true }));
+    };
 
     const syncCb = document.createElement('input');
     syncCb.type = 'checkbox';
@@ -620,13 +816,50 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     syncStatus.className = 'seq-sync-status';
     syncWrap.append(syncCb, syncLabel, syncStatus);
 
+    // ÷2 / ×2 helper pair. Live "double it / halve it" moves that preserve
+    // the groove — buttons disable themselves when the move isn't valid.
+    const scalePair = (label, title, onHalf, onDouble) => {
+      const wrap = document.createElement('span');
+      wrap.className = 'seq-prop';
+      if (title) wrap.title = title;
+      const sp = document.createElement('span');
+      sp.className = 'seq-prop-label';
+      sp.textContent = label;
+      const grp = document.createElement('span');
+      grp.className = 'seq-num-wrap';
+      const mkB = (txt, fn, t) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ctrl-btn seq-num-step';
+        b.textContent = txt;
+        b.title = t;
+        b.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+        return b;
+      };
+      const bHalf = mkB('÷2', onHalf, title + ' — halve');
+      const bDbl  = mkB('×2', onDouble, title + ' — double');
+      grp.append(bHalf, bDbl);
+      wrap.append(sp, grp);
+      return { wrap, bHalf, bDbl };
+    };
+    const sRes = scalePair('res', 'Resolution (steps per beat) — keeps every hit at the same audible time, just finer/coarser grid', () => scaleResolution(false), () => scaleResolution(true));
+    const sBeat = scalePair('beats', 'Beats ×2/÷2 — denser/sparser within the same span; hits keep their audible time', () => scaleBeats(false), () => scaleBeats(true));
+    const sLen = scalePair('len', 'Length — cycles + beats together (tempo unchanged), groove tiled into the longer/shorter pattern', () => scaleLength(false), () => scaleLength(true));
+    _scaleBtns = {
+      resHalf: sRes.bHalf, resDbl: sRes.bDbl,
+      beatHalf: sBeat.bHalf, beatDbl: sBeat.bDbl,
+      lenHalf: sLen.bHalf, lenDbl: sLen.bDbl,
+    };
+
     propsEl.append(
       mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
       mk('steps/beat', stepperFor(stepsIn, 'change'), { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
       mk('cps',       stepperFor(cpsIn,  'input'),  { title: 'Cycles per second — Strudel\'s master clock when sync is on' }),
-      mk('cycles',    stepperFor(cyclesIn, 'change'), { title: 'Cycles per pattern — how many Strudel cycles the pattern spans. 1 = locked, 2 = half-time, 4 = quarter-time. Spreads the same grid across more bars without slowing CPS.' }),
+      mk('cycles',    stepperFor(cyclesIn, 'change', cyclesBump), { title: 'Cycles per pattern — how many Strudel cycles the pattern spans. 0.5 = double-time, 1 = locked, 2 = half-time, 3, 4… = longer phrases. Spreads the same grid across more bars without slowing CPS.' }),
+      sRes.wrap, sBeat.wrap, sLen.wrap,
       syncWrap,
     );
+    refreshScaleBtns();
   }
   function refreshPropsValues() {
     if (!propsEl) return;

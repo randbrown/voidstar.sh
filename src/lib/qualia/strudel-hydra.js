@@ -382,11 +382,23 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
         try { clearHydraOutputs(); } catch {}
         // Persist on play so the in-progress edit survives a refresh.
         try { persistCurrent(); } catch {}
-        const r = orig(...args);
+        _inEvaluate = true;
+        let r;
+        try { r = orig(...args); } finally { _inEvaluate = false; }
         // Re-assert a user-set latency override (if any) after a re-eval
         // rebuilds the scheduler. No-op unless setStrudelLatency was called —
         // by default we leave Strudel's own latency alone (keeps seq aligned).
         try { tuneScheduler(); } catch {}
+        // A Strudel-native evaluate (Ctrl-Enter / Shift-Enter in the editor)
+        // means "start playing" — mirror it into our play-state machinery so
+        // the ▶ button reflects it and, when sync is on + both panels open,
+        // the sequencer follows. When our own play() drove this evaluate it
+        // marks playing itself (and sets _inExplicitTransport so we don't
+        // double-fire). The <strudel-editor> element does not auto-evaluate
+        // on mount, so this only ever fires on a deliberate user evaluate.
+        if (!_inExplicitTransport) {
+          try { markStrudelPlaying(); } catch {}
+        }
         return r;
       };
     }
@@ -395,13 +407,18 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       ed.stop = function(...args) {
         try { clearHydraOutputs(); clearScopeCanvas(scopeCanvas); } catch {}
         try { persistCurrent(); } catch {}
-        // Deliberately do NOT touch isPlayingFlag / btnPlay here.
-        // Strudel's runtime calls this.stop() as part of evaluate() to
-        // halt the previous pattern before scheduling the new one — if
-        // we cleared the playing flag from this hook, every restart
-        // would race with the user's intent. Our explicit play()/stop()
-        // entrypoints are the source of truth.
-        return orig(...args);
+        const r = orig(...args);
+        // A Strudel-native stop (Ctrl-.) means "stop playback" — mirror it
+        // into our state so the ▶ button clears and, with sync on + both
+        // panels open, the sequencer follows. We must NOT do this for the
+        // internal stop evaluate() fires to swap patterns (_inEvaluate) nor
+        // for our own stop()/stopPlayback() (_inExplicitTransport) — those
+        // manage state themselves, and treating the eval-internal stop as a
+        // user stop would race every restart.
+        if (!_inEvaluate && !_inExplicitTransport) {
+          try { markStrudelStopped(); } catch {}
+        }
+        return r;
       };
     }
     _strudelEvalPatched = true;
@@ -579,6 +596,18 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   // play strudel" message would loop right back through onPlayStateChange
   // and re-trigger the seq, causing flutter and double-fire bugs.
   let _suppressPlayStateChange = false;
+  // True only while our own play()/stop()/stopPlayback() is driving
+  // ed.evaluate()/ed.stop(). The wrapped evaluate treats a Strudel-native
+  // evaluate (Ctrl-Enter) as "start playing" and the wrapped stop treats a
+  // Strudel-native stop (Ctrl-.) as "stop playing"; this flag tells them to
+  // stand down when our own entrypoints are the caller, so state is marked
+  // exactly once.
+  let _inExplicitTransport = false;
+  // True while we're inside the wrapped evaluate's orig() call. Strudel's
+  // evaluate() halts the previous pattern via this.stop() before scheduling
+  // the new one — that internal stop must NOT be read as the user stopping
+  // playback, so the wrapped stop checks this.
+  let _inEvaluate = false;
 
   // ── Cycle-clock epoch (for sequencer phase alignment) ────────────────────
   // Two probes feed `getSecondsUntilNextStrudelBoundary()`:
@@ -590,6 +619,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   //      isn't available.
   let _strudelEpoch    = null;  // AudioContext seconds, OR null when not playing
   let _strudelEpochCps = 0.5;   // cps at the anchor moment
+  let _playAnchorCtxTime = 0;   // ctx.currentTime captured when play started;
+                                // lets the sequencer tell a FRESH scheduler
+                                // anchor from a stale one left by a prior run.
   function getAudioCtxSafe() {
     try { return globalThis.getAudioContext?.() || null; } catch { return null; }
   }
@@ -681,6 +713,19 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     } catch {}
     return null;
   }
+  // Probe A, but only when its anchor is FRESH since the current play. Right
+  // after a (re)start the scheduler can still expose the PREVIOUS run's
+  // anchor for a tick or two; using that stale anchorCycle yields a wrong
+  // absolute cycle number — which is exactly what put the sequencer half a
+  // phrase out of phase on patterns spanning multiple cycles. Reject it so
+  // callers fall back to the freshly-anchored epoch (Probe B) until Probe A
+  // catches up.
+  function probeStrudelStateFresh() {
+    const st = probeStrudelState();
+    if (!st || typeof st.anchorSec !== 'number') return null;
+    if (st.anchorSec < _playAnchorCtxTime - 0.02) return null;
+    return st;
+  }
   // Anchor (or re-anchor) the cycle epoch used by Probe B. On a cps
   // change, snap the epoch forward to the most recent boundary at the
   // OLD cps before storing the NEW cps. Probe B is a coarse fallback —
@@ -726,7 +771,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     if (typeof now !== 'number') return null;
     // Probe A — direct read of scheduler state. Computes the audible
     // event time from Strudel's own scheduling formula.
-    const st = probeStrudelState();
+    const st = probeStrudelStateFresh();
     if (st) {
       const absPos = (now - st.anchorSec - st.latency) * st.cps + st.anchorCycle;
       const nextK  = nextCycleAt(absPos);
@@ -742,9 +787,83 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     const boundaryStrudelTime = _strudelEpoch + nextK / _strudelEpochCps;
     return boundaryStrudelTime - now;
   }
+  // Strudel's current AUDIBLE cycle position as a float (e.g. 5.3 = 30% into
+  // cycle 5), with its cps. Lets the sequencer phase-lock a multi-cycle
+  // pattern to Strudel's absolute cycle — so the pattern's cell 0 lands on a
+  // cycle that's a multiple of `cycles`, not on whichever single-cycle
+  // boundary happens to be nearest (which flipped the phase by a bar after a
+  // restart). Same audible-vs-cursor `latency` correction as the boundary
+  // probe; same fresh-Probe-A-else-epoch fallback.
+  function getStrudelAudibleCyclePos() {
+    if (!isPlayingFlag) return null;
+    const ctx = getAudioCtxSafe();
+    const now = ctx?.currentTime;
+    if (typeof now !== 'number') return null;
+    const st = probeStrudelStateFresh();
+    if (st) {
+      const pos = (now - st.anchorSec - st.latency) * st.cps + st.anchorCycle;
+      return { pos, cps: st.cps };
+    }
+    if (_strudelEpoch == null) return null;
+    const pos = (now - _strudelEpoch) * _strudelEpochCps;
+    return { pos, cps: _strudelEpochCps };
+  }
   function emitPlayState(playing) {
     if (_suppressPlayStateChange) return;
     try { onPlayStateChange?.(!!playing); } catch {}
+  }
+  // Mark Strudel as playing and emit the play-state. Shared by play() (the ▶
+  // button / sync mirror) and the wrapped evaluate (Ctrl-Enter), so both
+  // entrypoints update state identically. Anchors the cycle-clock epoch only
+  // on the stopped→playing transition: a re-eval while already playing keeps
+  // Strudel's running cycle clock, so re-anchoring there would be wrong.
+  function markStrudelPlaying() {
+    const wasPlaying = isPlayingFlag;
+    isPlayingFlag = true;
+    if (!wasPlaying) {
+      // Anchor the cycle-clock epoch synchronously so the sequencer can
+      // align its next tick BEFORE Strudel has finished spinning up. Read
+      // cps live from the scheduler if it's already exposing one; otherwise
+      // keep the last-known value.
+      _strudelEpochCps = readSchedulerCps();
+      const ctx = getAudioCtxSafe();
+      const nowCtx = (typeof ctx?.currentTime === 'number') ? ctx.currentTime : null;
+      // Audible cycle 0 doesn't sound at currentTime — Strudel's first event
+      // is scheduled `latency` seconds in the future. Anchor on that audible
+      // moment so Probe B reports boundaries that match what the user hears.
+      // Probe A (direct scheduler read) takes over once the first cyclist
+      // tick has fired and overwrites these with the true scheduler state.
+      _strudelEpoch = (nowCtx != null) ? nowCtx + readSchedulerLatency() : null;
+      _playAnchorCtxTime = nowCtx ?? 0;
+    }
+    btnPlay?.classList.add('playing');
+    // Strudel's AudioContext only spins up after the first play(); poll
+    // until it's running and we can attach our analyser. Cheap to call
+    // when we're already tapped — ensureTapPolling early-returns.
+    ensureTapPolling();
+    emitPlayState(true);
+  }
+  // Mark Strudel as stopped and emit the play-state. Shared by stop() (the ▶
+  // button / sync mirror) and the wrapped stop (Ctrl-.).
+  function markStrudelStopped() {
+    if (!isPlayingFlag) return;
+    isPlayingFlag = false;
+    _strudelEpoch = null;
+    btnPlay?.classList.remove('playing');
+    audio.releaseAdopted();
+    refreshStrudelBtn();
+    emitPlayState(false);
+  }
+  // Has Strudel's scheduler produced a FRESH anchor since the current play
+  // started? Right after evaluate() the scheduler state can be stale (left
+  // by a prior run) or not yet anchored, so the sequencer's cold phase-align
+  // can sit a few ms off. The sequencer polls this and, once it flips true,
+  // re-runs the (accurate) align — the same scheduler state the manual align
+  // button relies on. Works for both cyclist variants: h3 re-anchors
+  // seconds_at_cps_change on (re)start, neocyclist advances
+  // time_at_last_tick_message every tick.
+  function isSchedulerFreshSincePlay() {
+    return isPlayingFlag && probeStrudelStateFresh() != null;
   }
   function play(opts = {}) {
     const ed = getEditor();
@@ -752,35 +871,17 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     ensureEvalPatch();
     const wasSuppressing = _suppressPlayStateChange;
     if (opts.fromSync) _suppressPlayStateChange = true;
+    // Tell the wrapped evaluate to stand down — we mark playing ourselves
+    // right after, so it must not also fire markStrudelPlaying().
+    _inExplicitTransport = true;
     try {
       if      (typeof ed.evaluate === 'function') ed.evaluate();
       else if (typeof ed.toggle   === 'function') ed.toggle();
       else return false;
-      // Anchor the cycle-clock epoch synchronously so the sequencer can
-      // align its next tick BEFORE Strudel has finished spinning up. Read
-      // cps live from the scheduler if it's already exposing one;
-      // otherwise keep the last-known value.
-      isPlayingFlag = true;
-      _strudelEpochCps = readSchedulerCps();
-      const ctx = getAudioCtxSafe();
-      // Audible cycle 0 doesn't sound at currentTime — Strudel's first
-      // event is scheduled `latency` seconds in the future. Anchor on
-      // that audible moment so Probe B reports boundaries that match
-      // what the user actually hears. Probe A (direct scheduler read)
-      // takes over once the first cyclist tick has fired and overwrites
-      // these values with the true scheduler state.
-      _strudelEpoch = (typeof ctx?.currentTime === 'number')
-        ? ctx.currentTime + readSchedulerLatency()
-        : null;
-      btnPlay?.classList.add('playing');
-      // Strudel's AudioContext only spins up after the first play(); poll
-      // until it's running and we can attach our analyser. Cheap to call
-      // when we're already tapped — ensureTapPolling early-returns.
-      ensureTapPolling();
-      emitPlayState(true);
+      markStrudelPlaying();
       return true;
     } catch (e) { console.warn('[qualia] strudel play failed:', e); return false; }
-    finally { _suppressPlayStateChange = wasSuppressing; }
+    finally { _suppressPlayStateChange = wasSuppressing; _inExplicitTransport = false; }
   }
   function stop(opts = {}) {
     const ed = getEditor();
@@ -788,6 +889,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     ensureEvalPatch();
     const wasSuppressing = _suppressPlayStateChange;
     if (opts.fromSync) _suppressPlayStateChange = true;
+    // Drive ed.stop() ourselves; the wrapped stop must not also mark stopped.
+    _inExplicitTransport = true;
     try {
       if (typeof ed.stop === 'function') ed.stop();
       else return false;
@@ -802,7 +905,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       emitPlayState(false);
       return true;
     } catch (e) { console.warn('[qualia] strudel stop failed:', e); return false; }
-    finally { _suppressPlayStateChange = wasSuppressing; }
+    finally { _suppressPlayStateChange = wasSuppressing; _inExplicitTransport = false; }
   }
 
   // Mute Strudel's audio without stopping its transport. The previous
@@ -898,7 +1001,11 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   function stopPlayback() {
     const ed = getEditor();
     if (ed) {
+      // Guard so the wrapped stop doesn't read this defensive stop (pattern
+      // swap / panel close) as a user Ctrl-. and propagate it to the seq.
+      _inExplicitTransport = true;
       try { if (typeof ed.stop === 'function') ed.stop(); } catch {}
+      finally { _inExplicitTransport = false; }
     }
     isPlayingFlag = false;
     btnPlay?.classList.remove('playing');
@@ -1267,7 +1374,12 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     getScheduler,
     /** Cycle-clock probes for sequencer phase alignment. */
     getSecondsUntilNextStrudelBoundary,
+    /** Absolute audible cycle position {pos, cps} — for multi-cycle phase-lock. */
+    getStrudelCyclePos: getStrudelAudibleCyclePos,
     reanchorEpoch,
+    /** True once the scheduler has a fresh anchor since the current play —
+     *  the sequencer waits on this to auto-realign a fresh sync-play. */
+    isSchedulerFresh: isSchedulerFreshSincePlay,
     /** Strudel's live cps (cycles/sec). The sequencer adopts this on realign
      *  so both clocks share a tempo — phase-lock needs matching rates. */
     getStrudelCps: () => readSchedulerCps(),

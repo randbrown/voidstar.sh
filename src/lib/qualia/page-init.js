@@ -2525,12 +2525,25 @@ export function initQualiaPage() {
       try { return strudel?.getSecondsUntilNextStrudelBoundary?.() ?? null; }
       catch { return null; }
     },
+    // Absolute audible cycle position {pos, cps}, for phase-locking a
+    // multi-cycle sequencer pattern to Strudel's cycle (not just the nearest
+    // single-cycle boundary).
+    getStrudelCyclePos: () => {
+      try { return strudel?.getStrudelCyclePos?.() ?? null; }
+      catch { return null; }
+    },
     getStrudelCps: () => {
       try { return strudel?.getStrudelCps?.() ?? null; }
       catch { return null; }
     },
     isStrudelPlaying: () => {
       try { return !!strudel?.isPlaying?.(); } catch { return false; }
+    },
+    // True once Strudel's scheduler has anchored since the current play —
+    // the sequencer polls this to auto-realign a fresh sync-play once the
+    // cold boundary probe has become accurate.
+    isStrudelSchedulerFresh: () => {
+      try { return !!strudel?.isSchedulerFresh?.(); } catch { return false; }
     },
     // Transport sync — sequencer asks us to mirror its play/stop into
     // Strudel. `fromSync: true` tells strudel-hydra to suppress its
