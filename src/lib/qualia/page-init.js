@@ -7,6 +7,7 @@ import { createCore }    from './core.js';
 import { createAudio }   from './audio.js';
 import { createPose }    from './pose.js';
 import { createOverlay } from './overlay.js';
+import { decay } from './field.js';
 import { wirePicker, getStoredDeviceId, storeDeviceId } from './devices.js';
 import {
   AUDIO_PRESETS, makeSettingsStore,
@@ -96,7 +97,7 @@ const HARD_KICK_PULSE_THRESH = 0.95;     // rising-edge pulse minimum
 const HARD_KICK_FLOOR        = 0.70;     // absolute bass minimum
 const HARD_KICK_RATIO        = 0.92;     // ≥ 92% of recent rolling peak
 const HARD_KICK_DOMINANCE    = 1.15;     // bass ≥ 1.15× max(mids, highs)
-const HARD_KICK_PEAK_DECAY   = 0.998;    // ~6s half-life @ 60fps
+const HARD_KICK_PEAK_HALF_S  = 6;        // rolling-peak half-life (seconds)
 const HARD_KICK_COOLDOWN_MS  = 10000;    // ~10s between fires
 
 export function initQualiaPage() {
@@ -2595,6 +2596,17 @@ export function initQualiaPage() {
     core.setAuxFps(open ? EDITOR_VIZ_FPS : 0);
   });
 
+  // Console knob to A/B the reactivity cadence (audio.tick + reactivity
+  // listeners). Default 60Hz; on a 144Hz panel it auto-snaps to ~48. Lower
+  // trims main-thread load (helps the cyclist) at the cost of slightly coarser
+  // beat reactivity. e.g. qualia.setReactFps(40). 0 = every rAF tick (old
+  // behavior). strudel-hydra owns globalThis.qualia; extend it here where core
+  // is in scope.
+  if (typeof globalThis !== 'undefined' && globalThis.qualia) {
+    globalThis.qualia.setReactFps = (fps) => core.setReactFps(fps);
+    globalThis.qualia.getReactFps = () => core.getReactFps();
+  }
+
   // ── Vocoder (mic-driven channel vocoder for live narration) ─────────────
   // Owns its own AudioContext + getUserMedia stream so it can route to the
   // speakers without entangling with the analysis path or the strudel
@@ -3516,9 +3528,10 @@ export function initQualiaPage() {
     if (a.beat.active && prevAnyBeat < 0.5) lastBeatAt = now;
     prevAnyBeat = a.beat.active ? 1 : 0;
     // Hard-kick — rising edge above the strict pulse threshold, with all
-    // the gating gates passing. Decays the EMA every frame so silence
-    // re-calibrates the "powerful" baseline.
-    bassPeakEma *= HARD_KICK_PEAK_DECAY;
+    // the gating gates passing. Decays the rolling peak on a real-time half-
+    // life (not per-frame) so silence re-calibrates the "powerful" baseline at
+    // the same rate regardless of the reactivity cadence / display refresh.
+    bassPeakEma = decay(bassPeakEma, field.reactDt, HARD_KICK_PEAK_HALF_S);
     const rising = beat > HARD_KICK_PULSE_THRESH && prevReactiveBeat <= HARD_KICK_PULSE_THRESH;
     prevReactiveBeat = beat;
     if (rising) {

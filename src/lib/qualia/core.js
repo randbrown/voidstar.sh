@@ -29,8 +29,19 @@ import { WebGLRenderer, LinearSRGBColorSpace } from 'three';
 const DEFAULT_DPR_CAP = 1.5;
 // Tolerance subtracted from the viz frame-cap interval so a cap set to the
 // panel's own refresh (e.g. 60 on a 60Hz display) isn't silently halved when
-// rAF delivers a frame a hair early. Small enough to never double-render.
+// rAF delivers a frame a hair early. Scaled down to the actual tick length in
+// frame() so it stays a hair on a 60Hz panel but can't sneak a whole extra
+// render through on a 120/144Hz one (which would overshoot the cap). This is
+// the ceiling — never large enough to double-render within one tick.
 const FRAME_SLOP_MS = 3;
+
+// Default reactivity cadence (Hz). Audio sampling (audio.tick) + the audio-
+// reactive tick listeners are gated to this rate, decoupled from the display
+// refresh, so a 120/144Hz panel doesn't run that (viz-cap-exempt) work 2.4×
+// more per second than a 60Hz one — the extra main-thread load is what starves
+// Strudel's cyclist into `skip query: too late`. Pinning it also keeps the
+// frame-count-tuned beat EMAs behaving the same regardless of monitor.
+const REACT_FPS = 60;
 
 /**
  * @param {Object} opts
@@ -68,12 +79,24 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
 
   // Viz frame-rate cap. maxFps 0 = uncapped (render every rAF tick — the
   // default + legacy behavior). When set, the heavy fx render + visual frame
-  // listeners gate on elapsed wall time; audio sampling and the audio-reactive
-  // tick listeners stay at full rAF rate (see frame()). Doubles as a Windows
+  // listeners gate on elapsed wall time. Audio sampling + reactivity gate
+  // separately on reactFrameMs (see below), not on this. Doubles as a Windows
   // perf lever and a low-fps aesthetic knob (down to 1fps strobe).
   let maxFps       = 0;
   let minFrameMs   = 0;
   let lastRenderMs = startMs;
+
+  // Reactivity cadence cap — audio.tick + the audio-reactive tick listeners run
+  // at most this often, independent of both the viz cap and the display refresh
+  // (see REACT_FPS). lastReactMs tracks the last reactivity step; it's reset in
+  // start() to the first rAF timestamp. 0 = uncapped (every rAF tick).
+  let reactFrameMs = 1000 / REACT_FPS;
+  let lastReactMs  = startMs;
+
+  // Smoothed rAF interval (ms). Tracked so the frame-cap slop can scale to the
+  // real tick length — a fixed 3ms is harmless on a 16.7ms (60Hz) tick but a
+  // big enough fraction of a 6.9ms (144Hz) tick to overshoot the cap.
+  let tickMsEma = 1000 / 60;
 
   // Auxiliary viz cap — a secondary frame cap that LAYERS on top of the user's
   // maxFps via max(interval), so it never overwrites their render-cap setting
@@ -303,14 +326,17 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     return true;
   }
 
-  // Render loop — single rAF. Audio + reactivity run every tick; the fx
-  // render is gated by the viz frame cap (maxFps). dt is clamped so a long
-  // pause + resume (or a low cap) can't fast-forward the fx.
+  // Render loop — single rAF. Audio + reactivity run on their own cadence
+  // (reactFrameMs, default 60Hz); the fx render is gated separately by the viz
+  // frame cap (maxFps). Both intervals are decoupled from the display refresh.
+  // dt is clamped so a long pause + resume (or a low cap) can't fast-forward.
   function frame(now) {
     requestAnimationFrame(frame);
     const dtRaw = (now - lastMs) / 1000;
     const dt = Math.min(dtRaw, 0.05);
     lastMs = now;
+    // Smoothed rAF interval — feeds the adaptive frame-cap slop below.
+    tickMsEma += (dt * 1000 - tickMsEma) * 0.1;
     // fpsTimer accumulates real time every tick; `frames` counts only
     // rendered frames (incremented in the render path below) so the HUD
     // reports the actual viz frame rate, not the rAF/display rate.
@@ -324,13 +350,29 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
 
     field.time = (now - startMs) / 1000;
 
-    // Audio sampling + audio-reactive tick listeners run every rAF tick,
-    // decoupled from the viz frame cap: beat/onset detection and the
-    // hard-kick / glitch edge detectors are tuned to display-rate cadence and
-    // must not miss a transient when the visual render is throttled low.
-    audio.tick(dt);
-    // pose runs its own detect rAF (separately throttled); nothing to tick here.
-    tickListeners.forEach(fn => { try { fn(field); } catch (e) { console.error('[qualia] tick listener error:', e); } });
+    // Slop scaled to the real tick length: ~3ms on a 60Hz panel (so a 60 cap
+    // still hits 60), but a small fraction of a 144Hz tick (so it can't let a
+    // gate fire a whole tick early and overshoot the cap). Shared by the
+    // reactivity gate and the viz-cap gate below.
+    const slop = Math.min(FRAME_SLOP_MS, tickMsEma * 0.25);
+
+    // Reactivity step — audio sampling + audio-reactive tick listeners. Gated
+    // to reactFrameMs (default 60Hz), NOT to the viz cap: beat/onset detection
+    // and the hard-kick / glitch edge detectors must keep running when the
+    // visual render is throttled low. But running them at full rAF rate would
+    // make a 144Hz panel do 2.4× the per-second work of a 60Hz one (ungated by
+    // the viz cap, so it starves the Strudel cyclist) and would skew the
+    // frame-count-tuned beat EMAs by monitor. rdt is the real time since the
+    // last reactivity step (not since the last rAF) so dt-based decays stay
+    // wall-clock-correct.
+    if (reactFrameMs <= 0 || (now - lastReactMs) >= reactFrameMs - slop) {
+      const rdt = Math.min((now - lastReactMs) / 1000, 0.05);
+      lastReactMs = now;
+      field.reactDt = rdt;
+      audio.tick(rdt);
+      // pose runs its own detect rAF (separately throttled); nothing to tick here.
+      tickListeners.forEach(fn => { try { fn(field); } catch (e) { console.error('[qualia] tick listener error:', e); } });
+    }
 
     // Effective frame cap = the stricter (longer interval) of the user's cap
     // and any auxiliary cap (set while the editor panels are open). 0 = uncapped.
@@ -339,7 +381,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     // byte-for-byte the legacy path since lastRenderMs then tracks `now`).
     // Otherwise skip rendering until the chosen interval has elapsed since the
     // last *rendered* frame.
-    if (gateMs > 0 && (now - lastRenderMs) < gateMs - FRAME_SLOP_MS) return;
+    if (gateMs > 0 && (now - lastRenderMs) < gateMs - slop) return;
     // field.dt is the real elapsed time since the last render so motion stays
     // wall-clock-correct at any cap; the clamp guards tab-switch fast-forward
     // and scales with the cap so 1–5fps aesthetic rates still advance at true
@@ -367,7 +409,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   }
 
   function start() {
-    requestAnimationFrame(now => { startMs = now; lastMs = now; lastRenderMs = now; requestAnimationFrame(frame); });
+    requestAnimationFrame(now => { startMs = now; lastMs = now; lastRenderMs = now; lastReactMs = now; requestAnimationFrame(frame); });
   }
 
   function setPaused(v) { paused = !!v; }
@@ -390,6 +432,14 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   function setAuxFps(fps) {
     auxFrameMs = (fps > 0) ? 1000 / fps : 0;
   }
+  /** Cap the reactivity cadence — how often audio.tick + the audio-reactive
+   *  tick listeners run, independent of display refresh. Defaults to REACT_FPS
+   *  (60). Lower trims main-thread load on high-refresh panels; fps<=0 reverts
+   *  to running every rAF tick. */
+  function setReactFps(fps) {
+    reactFrameMs = (fps > 0) ? 1000 / fps : 0;
+  }
+  function getReactFps() { return reactFrameMs > 0 ? Math.round(1000 / reactFrameMs) : 0; }
   function onFps(fn)    { fpsListeners.add(fn); return () => fpsListeners.delete(fn); }
   function onFrame(fn)  { frameListeners.add(fn); return () => frameListeners.delete(fn); }
   function onTick(fn)   { tickListeners.add(fn);  return () => tickListeners.delete(fn); }
@@ -414,6 +464,8 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     setMaxFps,
     getMaxFps,
     setAuxFps,
+    setReactFps,
+    getReactFps,
     onFps,
     onFrame,
     onTick,
