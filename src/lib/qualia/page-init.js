@@ -43,6 +43,7 @@ import galaxy          from './fx/galaxy.js';
 import antireductionism from './fx/antireductionism.js';
 import detector       from './fx/detector.js';
 import ghostMachine   from './fx/ghost-machine.js';
+import video          from './fx/video.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -122,6 +123,7 @@ export function initQualiaPage() {
   mesh.register(antireductionism);
   mesh.register(detector);
   mesh.register(ghostMachine);
+  mesh.register(video);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
