@@ -203,7 +203,13 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     // Passed to every fx's create() so quales that want a custom panel
     // (e.g. the video qfx's playlist editor) can mount DOM alongside the
     // auto-generated param panel without reaching into the page globals.
-    const fxOptsBase = { paramsContainer };
+    // `applyPreset` is the same path as the page's reset button — quales
+    // that expose a "preset" select can drive named-preset application by
+    // calling it from their update() loop when the chosen name changes.
+    const fxOptsBase = {
+      paramsContainer,
+      applyPreset: (name) => applyFxPreset(name),
+    };
     let opts;
     if (mod.contextType === 'webgl2') {
       // preserveDrawingBuffer:true so the overlay's ASCII post-process can

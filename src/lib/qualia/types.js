@@ -171,10 +171,13 @@
  *           of the global DPR cap (default 1.5). Heavy fragment shaders
  *           (e.g. raymarchers) can declare 1.0 to halve fragment work on
  *           high-DPI screens. Lower wins.
- * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any, paramsContainer?:HTMLElement }) => Promise<QFXInstance>|QFXInstance} create
+ * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any, paramsContainer?:HTMLElement, applyPreset?:(name:string) => boolean }) => Promise<QFXInstance>|QFXInstance} create
  *           `paramsContainer` is the same DOM node the auto-generated param
  *           panel renders into. Quales with extra UI (file pickers, playlist
  *           editors) may append custom controls to it. Cleared on fx switch.
+ *           `applyPreset(name)` mirrors the page's preset application path —
+ *           updates all sliders + field.params atomically from the named
+ *           factory preset. Returns false if no such preset exists.
  */
 
 export {};

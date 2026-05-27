@@ -37,6 +37,17 @@ import { scaleAudio } from '../field.js';
 
 const PLAYLIST_KEY = 'voidstar.qualia.fx.video.playlist';
 
+// First-ever-load seed. Only applied when the localStorage key is *absent*
+// (never written), so a user who removes all entries and reloads doesn't
+// have their cleared list re-populated. All entries are CORS-friendly
+// direct-mp4 links so the glitch shader can actually read them.
+const DEFAULT_URLS = [
+  { src: 'https://assets.mixkit.co/videos/106/106-720.mp4',   name: 'mixkit · 106' },
+  { src: 'https://assets.mixkit.co/videos/17978/17978-720.mp4', name: 'mixkit · 17978' },
+  { src: 'https://assets.mixkit.co/videos/45404/45404-720.mp4', name: 'mixkit · 45404' },
+  { src: 'https://assets.mixkit.co/videos/25352/25352-720.mp4', name: 'mixkit · 25352' },
+];
+
 // Hard-kick detection thresholds — duplicate of the ones in page-init.js so
 // 'advance: on-kick' fires on the same beats the page-level glitch buttons do.
 // If these drift out of sync the user experience drifts; keep in lockstep.
@@ -58,6 +69,10 @@ uniform vec2  uVideoSize;      // intrinsic video size (px)
 uniform float uTime;
 uniform int   uFit;            // 0 cover, 1 contain
 uniform float uMix;            // [0,1] blend video vs backdrop
+uniform float uPanX;           // screen-space pan (negative = shift video right)
+uniform float uPanY;
+uniform float uRotation;       // radians
+uniform float uZoom;           // 1.0 = identity; >1 = zoom in
 uniform float uRgbSplit;
 uniform float uChroma;
 uniform float uDisplace;
@@ -135,7 +150,22 @@ void main() {
   // can't always set it in the same gl state, so flip in the shader.
   uv.y = 1.0 - uv.y;
 
-  // Pixelate first (quantise lookup uv).
+  // View transform — rotate, zoom, pan around frame center (0.5, 0.5).
+  // Done in uv-space, so the order is "inverse" of what you'd apply to
+  // points: divide by zoom (shrink the visible window → zoom-in), rotate,
+  // then translate by negative pan (sample to the left → texture shifts
+  // right onscreen, "background follows you" feel).
+  {
+    vec2 q = uv - 0.5;
+    float c = cos(uRotation), s = sin(uRotation);
+    q = mat2(c, -s, s, c) * q;
+    q /= max(uZoom, 0.001);
+    uv = q + 0.5 - vec2(uPanX, -uPanY);
+  }
+
+  // Pixelate (quantise lookup uv) — applied AFTER the view transform so the
+  // pixel grid sticks to the video, not the screen. With zoom this gives a
+  // satisfying "blocks zoom too" feel matching a hardware downsample.
   if (uPixelate > 0.001) {
     float chunks = mix(uResolution.x, 24.0, clamp(uPixelate, 0.0, 1.0));
     vec2 cells = max(vec2(4.0), vec2(chunks, chunks * uResolution.y / max(uResolution.x, 1.0)));
@@ -211,10 +241,16 @@ void main() {
 }
 `;
 
-/** Read the persisted playlist; only URL entries survive across reloads. */
+/** Read the persisted playlist; only URL entries survive across reloads.
+ *  Seeds DEFAULT_URLS the first time the key is missing so newcomers don't
+ *  land on an empty list. */
 function loadPlaylist() {
+  const stored = localStorage.getItem(PLAYLIST_KEY);
+  if (stored === null) {
+    return DEFAULT_URLS.map(e => ({ kind: 'url', src: e.src, name: e.name }));
+  }
   try {
-    const raw = JSON.parse(localStorage.getItem(PLAYLIST_KEY));
+    const raw = JSON.parse(stored);
     if (!Array.isArray(raw)) return [];
     return raw.filter(e => e && e.kind === 'url' && typeof e.src === 'string')
               .map(e => ({ kind: 'url', src: e.src, name: e.name || e.src }));
@@ -249,50 +285,94 @@ export default {
   // wasted fragment work on retina displays.
   maxDpr: 1.0,
 
+  // Preset is a real param so autoPhase can address it via setParam — each
+  // phase step just sets `preset: <name>` and the qfx applies the named
+  // factory snapshot in update(). The dropdown also lets users browse
+  // looks manually without digging into the phase button.
   params: [
+    { id: 'preset',       label: 'preset',       type: 'select', options: ['default', 'vhs', 'datamosh', 'cinema', 'crush', 'follow'], default: 'default' },
     { id: 'fit',          label: 'fit',          type: 'select', options: ['cover', 'contain'], default: 'cover' },
     { id: 'playbackRate', label: 'playback',     type: 'range',  min: 0.25, max: 2.5, step: 0.05, default: 1.0 },
     { id: 'volume',       label: 'volume',       type: 'range',  min: 0, max: 1, step: 0.02, default: 0 },
     { id: 'loop',         label: 'loop track',   type: 'toggle', default: true },
     { id: 'advance',      label: 'advance',      type: 'select', options: ['loop', 'next', 'random', 'on-kick'], default: 'loop' },
     { id: 'mix',          label: 'mix',          type: 'range',  min: 0, max: 1, step: 0.02, default: 1.0 },
+
+    // Pose-driven view transform — feel: the background follows the body.
+    // pose channels are signed [-1,+1] so a base of 0 / 1 + 'add' modulator
+    // lands a neutral pose on identity (no offset / no rotation / 1× zoom).
+    { id: 'panX',         label: 'pan x',        type: 'range',  min: -0.5, max: 0.5, step: 0.01, default: 0.0,
+      modulators: [{ source: 'pose.head.x', mode: 'add', amount: 0.20 }] },
+    { id: 'panY',         label: 'pan y',        type: 'range',  min: -0.5, max: 0.5, step: 0.01, default: 0.0,
+      modulators: [{ source: 'pose.head.y', mode: 'add', amount: 0.20 }] },
+    { id: 'rotation',     label: 'rotation',     type: 'range',  min: -1.5, max: 1.5, step: 0.02, default: 0.0,
+      modulators: [{ source: 'pose.shoulderRoll', mode: 'add', amount: 0.50 }] },
+    { id: 'zoom',         label: 'zoom',         type: 'range',  min: 0.25, max: 2.5, step: 0.02, default: 1.0,
+      modulators: [{ source: 'pose.shoulderSpan', mode: 'add', amount: 0.30 }] },
+
     { id: 'rgbSplit',     label: 'rgb split',    type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
       modulators: [{ source: 'audio.bass', mode: 'add', amount: 0.30 }] },
     { id: 'chroma',       label: 'chromatic',    type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
       modulators: [{ source: 'audio.beatPulse', mode: 'add', amount: 0.40 }] },
+    // Displace is pose-driven (wristSpread) per request — wide arms = jelly.
+    // Signed wristSpread is fine; the shader uses the magnitude direction
+    // as a sinusoid phase so negative reads as a flipped flow, still glitchy.
     { id: 'displace',     label: 'displace',     type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
-      modulators: [{ source: 'audio.beatPulse', mode: 'add', amount: 0.50 }] },
+      modulators: [{ source: 'pose.wristSpread', mode: 'add', amount: 0.50 }] },
     { id: 'hueShift',     label: 'hue shift',    type: 'range',  min: 0, max: 1, step: 0.01, default: 0.0,
       modulators: [{ source: 'audio.mids', mode: 'add', amount: 0.25 }] },
     { id: 'noise',        label: 'noise',        type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
       modulators: [{ source: 'audio.highs', mode: 'add', amount: 0.30 }] },
     { id: 'scanlines',    label: 'scanlines',    type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0 },
-    { id: 'posterize',    label: 'posterize',    type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0 },
-    { id: 'pixelate',     label: 'pixelate',     type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0 },
+    // Minimal audio reactivity on posterize/pixelate per request — dial weight
+    // up if you want stronger response, but the spec amount stays subtle.
+    { id: 'posterize',    label: 'posterize',    type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
+      modulators: [{ source: 'audio.beatPulse', mode: 'add', amount: 0.08 }] },
+    { id: 'pixelate',     label: 'pixelate',     type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
+      modulators: [{ source: 'audio.highs', mode: 'add', amount: 0.08 }] },
     { id: 'reactivity',   label: 'reactivity',   type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
+  // autoPhase walks the preset dropdown — one knob to control all the looks.
+  // Each step just flips the `preset` select; the qfx's update() loop sees
+  // the change and applies the full preset via opts.applyPreset.
   autoPhase: {
     steps: [
-      { rgbSplit: 0.1, chroma: 0.1, scanlines: 0.1, posterize: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0, pixelate: 0.0 }, // default
-      { rgbSplit: 0.0, chroma: 0.0, scanlines: 0.6, posterize: 0.3, displace: 0.0, hueShift: 0.05, noise: 0.4, pixelate: 0.0 }, // vhs
-      { rgbSplit: 0.4, chroma: 0.6, scanlines: 0.0, posterize: 0.0, displace: 0.7, hueShift: 0.0, noise: 0.2, pixelate: 0.0 }, // datamosh
-      { rgbSplit: 0.0, chroma: 0.0, scanlines: 0.0, posterize: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0, pixelate: 0.0 }, // cinema
+      { preset: 'default' },
+      { preset: 'vhs' },
+      { preset: 'datamosh' },
+      { preset: 'cinema' },
+      { preset: 'crush' },
+      { preset: 'follow' },
     ],
   },
 
+  // Presets reset ALL non-source params including the pose transform — so
+  // a 'cinema' preset is a true clean slate. The 'follow' preset is the
+  // pose-following showcase: zero glitch, pure body-driven view transform.
   presets: {
     default:  { fit: 'cover', playbackRate: 1.0, volume: 0, loop: true, advance: 'loop', mix: 1.0,
+                panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.1, chroma: 0.1, displace: 0.0, hueShift: 0.0, noise: 0.0,
                 scanlines: 0.1, posterize: 0.0, pixelate: 0.0, reactivity: 1.0 },
-    vhs:      { rgbSplit: 0.0, chroma: 0.0, scanlines: 0.6, posterize: 0.3, hueShift: 0.05, noise: 0.4 },
-    datamosh: { rgbSplit: 0.4, chroma: 0.6, displace: 0.7, mix: 0.95, noise: 0.2 },
-    cinema:   { rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
-                scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0 },
-    crush:    { posterize: 0.7, pixelate: 0.4, hueShift: 0.1, chroma: 0.2 },
+    vhs:      { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.05,
+                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0, mix: 1.0 },
+    datamosh: { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                rgbSplit: 0.4, chroma: 0.6, displace: 0.7, hueShift: 0.0,
+                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 0.95 },
+    cinema:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
+                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0 },
+    crush:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                rgbSplit: 0.0, chroma: 0.2, displace: 0.0, hueShift: 0.1,
+                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4, mix: 1.0 },
+    follow:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
+                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0 },
   },
 
-  async create(canvas, { gl, paramsContainer }) {
+  async create(canvas, { gl, paramsContainer, applyPreset }) {
     const prog = compileProgram(gl, FULLSCREEN_VERT, FRAG);
     const vao  = makeFullscreenTri(gl);
     const U    = makeUniformGetter(gl, prog);
@@ -405,8 +485,10 @@ export default {
     const hint = document.createElement('div');
     hint.style.cssText = 'font-size: 0.6rem; color: var(--muted); line-height: 1.4;';
     hint.innerHTML =
-      'URLs need CORS (Access-Control-Allow-Origin) to be glitched. ' +
-      'Try <code>https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4</code>. ' +
+      'URLs need CORS (<code>Access-Control-Allow-Origin</code>) to be glitched. ' +
+      'CORS-friendly sources: <strong>assets.mixkit.co</strong>, <strong>coverr.co</strong>, ' +
+      '<strong>archive.org</strong> (mp4 paths), <strong>commondatastorage.googleapis.com/gtv-videos-bucket</strong> (Google sample videos), ' +
+      '<strong>test-videos.co.uk</strong>. YouTube is not supported. ' +
       'Uploaded files are session-only — URLs persist.';
     panel.appendChild(hint);
 
@@ -586,10 +668,16 @@ export default {
 
     // ── Scratch state read by render() and updated by update() ──────────
     const currentParams = {
+      preset: 'default',
       fit: 'cover', loop: true, advance: 'loop', playbackRate: 1, volume: 0,
-      mix: 1, rgbSplit: 0, chroma: 0, displace: 0, hueShift: 0, noise: 0,
+      mix: 1, panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+      rgbSplit: 0, chroma: 0, displace: 0, hueShift: 0, noise: 0,
       scanlines: 0, posterize: 0, pixelate: 0,
     };
+    // Preset tracking — when this changes between frames, apply the named
+    // preset via the core's full-panel applyPreset machinery so every slider
+    // moves in lockstep. Seeded from the *resolved* params on first update().
+    let lastPreset = null;
     const scratch = {
       time: 0,
       ready: false,
@@ -603,12 +691,36 @@ export default {
     function update(field) {
       const { params, time, dt } = field;
       const audio = scaleAudio(field.audio, params.reactivity);
+
+      // Preset change detection — `preset` is a real param so autoPhase can
+      // address it via setParam. When it flips, run the full preset apply
+      // path (sliders + field.params + persistence) and bail before reading
+      // the rest of the params — they'll be re-read on the next tick after
+      // applyPreset has overwritten them.
+      if (lastPreset !== params.preset) {
+        const prev = lastPreset;
+        lastPreset = params.preset;
+        // Skip the first-frame "change" — initial null → 'default' would
+        // re-apply factory defaults and clobber any persisted user tweaks.
+        if (prev !== null && typeof applyPreset === 'function') {
+          applyPreset(params.preset);
+          // Don't return — we still want playback-affecting params applied
+          // this tick. The slider positions will catch up on the next
+          // frame's resolveParams pass.
+        }
+      }
+
+      currentParams.preset       = params.preset;
       currentParams.fit          = params.fit;
       currentParams.loop         = !!params.loop;
       currentParams.advance      = params.advance;
       currentParams.playbackRate = params.playbackRate;
       currentParams.volume       = params.volume;
       currentParams.mix          = params.mix;
+      currentParams.panX         = params.panX;
+      currentParams.panY         = params.panY;
+      currentParams.rotation     = params.rotation;
+      currentParams.zoom         = params.zoom;
       currentParams.rgbSplit     = params.rgbSplit;
       currentParams.chroma       = params.chroma;
       currentParams.displace     = params.displace;
@@ -707,9 +819,17 @@ export default {
       gl.uniform1f(U('uTime'), scratch.time);
       gl.uniform1i(U('uFit'), currentParams.fit === 'contain' ? 1 : 0);
       gl.uniform1f(U('uMix'), fallbackActive ? 0 : currentParams.mix);
-      // When tainted/fallback is active, force all glitch params to zero so
-      // we don't paint a black gradient on top of the DOM-fallback video.
+      // View transform — applied to the texture, not the canvas. Still
+      // active under fallback would be nice but the DOM-video can't be
+      // CSS-transformed easily with pose values updating each frame; keep
+      // it shader-only for now.
       const fxScale = fallbackActive ? 0 : 1;
+      gl.uniform1f(U('uPanX'),     currentParams.panX     * fxScale);
+      gl.uniform1f(U('uPanY'),     currentParams.panY     * fxScale);
+      gl.uniform1f(U('uRotation'), currentParams.rotation * fxScale);
+      // Zoom can't be zeroed under fallback (would map all pixels to texel 0).
+      // Hold it at identity instead.
+      gl.uniform1f(U('uZoom'),     fallbackActive ? 1.0 : currentParams.zoom);
       gl.uniform1f(U('uRgbSplit'),  currentParams.rgbSplit  * fxScale);
       gl.uniform1f(U('uChroma'),    currentParams.chroma    * fxScale);
       gl.uniform1f(U('uDisplace'),  currentParams.displace  * fxScale);
