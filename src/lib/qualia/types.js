@@ -113,7 +113,28 @@
  * @property {string[]} options
  * @property {string} default
  */
-/** @typedef {ParamRange | ParamToggle | ParamSelect} ParamSpec */
+/**
+ * @typedef {Object} ParamText
+ * @property {string} id
+ * @property {string} label
+ * @property {'text'} type
+ * @property {string} [placeholder]
+ * @property {string} default
+ */
+/**
+ * Single-file picker. The value handed to onChange / persisted in `field.params`
+ * is the live `File` object (not a string), so consumers can do their own
+ * `URL.createObjectURL` and own the blob URL's lifetime. Files are session-only
+ * — they don't round-trip through localStorage.
+ *
+ * @typedef {Object} ParamFile
+ * @property {string} id
+ * @property {string} label
+ * @property {'file'} type
+ * @property {string} [accept]    MIME / extension filter passed to <input accept>.
+ * @property {null}   default     Always null; a File can't be a default.
+ */
+/** @typedef {ParamRange | ParamToggle | ParamSelect | ParamText | ParamFile} ParamSpec */
 
 /**
  * @typedef {Object} QFXInstance
@@ -150,7 +171,13 @@
  *           of the global DPR cap (default 1.5). Heavy fragment shaders
  *           (e.g. raymarchers) can declare 1.0 to halve fragment work on
  *           high-DPI screens. Lower wins.
- * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any }) => Promise<QFXInstance>|QFXInstance} create
+ * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any, paramsContainer?:HTMLElement, applyPreset?:(name:string) => boolean }) => Promise<QFXInstance>|QFXInstance} create
+ *           `paramsContainer` is the same DOM node the auto-generated param
+ *           panel renders into. Quales with extra UI (file pickers, playlist
+ *           editors) may append custom controls to it. Cleared on fx switch.
+ *           `applyPreset(name)` mirrors the page's preset application path —
+ *           updates all sliders + field.params atomically from the named
+ *           factory preset. Returns false if no such preset exists.
  */
 
 export {};

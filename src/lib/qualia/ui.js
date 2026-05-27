@@ -32,6 +32,8 @@ function fmt(spec, raw) {
     return v.toFixed(3);
   }
   if (spec.type === 'toggle') return raw ? 'on' : 'off';
+  if (spec.type === 'text')   return raw ? '' : '';     // value lives in the input itself
+  if (spec.type === 'file')   return raw ? raw.name : '(none)';
   return String(raw);
 }
 
@@ -167,6 +169,33 @@ export function buildParamPanel({
         valSpan.textContent = fmt(spec, v);
         onChange?.(spec.id, v);
       });
+    } else if (spec.type === 'text') {
+      control = el('input', {
+        type: 'text',
+        class: 'qp-text',
+        value: spec.default ?? '',
+        placeholder: spec.placeholder ?? '',
+      });
+      control.addEventListener('input', () => {
+        const v = control.value;
+        state[spec.id] = v;
+        onChange?.(spec.id, v);
+      });
+    } else if (spec.type === 'file') {
+      control = el('input', {
+        type: 'file',
+        class: 'qp-file',
+        accept: spec.accept ?? '',
+      });
+      control.addEventListener('change', () => {
+        const f = control.files && control.files[0] ? control.files[0] : null;
+        state[spec.id] = f;
+        valSpan.textContent = fmt(spec, f);
+        onChange?.(spec.id, f);
+        // Reset so the same file can be picked again later (browsers ignore
+        // a second change event for an identical selection otherwise).
+        if (!f) control.value = '';
+      });
     } else {
       continue;
     }
@@ -239,6 +268,13 @@ export function buildParamPanel({
   function setValue(id, v) {
     const r = refs[id];
     if (!r) return;
+    if (r.spec.type === 'file') {
+      // Files can't be reinstated from localStorage (JSON.stringify turns a
+      // File into {}). Coerce anything non-File back to null so a fresh page
+      // load doesn't leave us holding a junk reference.
+      const isFile = (typeof File !== 'undefined') && (v instanceof File);
+      v = isFile ? v : null;
+    }
     state[id] = v;
     if (r.spec.type === 'range') {
       r.control.value = String(v);
@@ -247,6 +283,11 @@ export function buildParamPanel({
       r.control.textContent = v ? 'on' : 'off';
     } else if (r.spec.type === 'select') {
       r.control.value = String(v);
+    } else if (r.spec.type === 'text') {
+      r.control.value = (v == null) ? '' : String(v);
+    } else if (r.spec.type === 'file') {
+      // No way to write a value back into a <input type="file"> programmatically
+      // — just refresh the label. The underlying File reference is kept in state.
     }
     r.valSpan.textContent = fmt(r.spec, v);
   }

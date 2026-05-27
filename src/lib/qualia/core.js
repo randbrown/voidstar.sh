@@ -200,6 +200,16 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
 
     // (Re)create canvas of the right type.
     const c = ensureCanvas(mod.contextType);
+    // Passed to every fx's create() so quales that want a custom panel
+    // (e.g. the video qfx's playlist editor) can mount DOM alongside the
+    // auto-generated param panel without reaching into the page globals.
+    // `applyPreset` is the same path as the page's reset button — quales
+    // that expose a "preset" select can drive named-preset application by
+    // calling it from their update() loop when the chosen name changes.
+    const fxOptsBase = {
+      paramsContainer,
+      applyPreset: (name) => applyFxPreset(name),
+    };
     let opts;
     if (mod.contextType === 'webgl2') {
       // preserveDrawingBuffer:true so the overlay's ASCII post-process can
@@ -209,7 +219,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
         preserveDrawingBuffer: true,
       });
       if (!gl) throw new Error('webgl2 not available');
-      opts = { gl };
+      opts = { ...fxOptsBase, gl };
     } else if (mod.contextType === 'three') {
       // Three.js owns the canvas GL context exclusively. We build the
       // renderer once per canvas and hand the same instance to every
@@ -240,11 +250,11 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
         // existing webgl2 quales write linear-sRGB without tonemap.
         threeRenderer.outputColorSpace = LinearSRGBColorSpace;
       }
-      opts = { renderer: threeRenderer };
+      opts = { ...fxOptsBase, renderer: threeRenderer };
     } else {
       const ctx = c.getContext('2d');
       if (!ctx) throw new Error('canvas2d not available');
-      opts = { ctx };
+      opts = { ...fxOptsBase, ctx };
     }
 
     // Init mod weights from the schema (default 1 each), overlay any
