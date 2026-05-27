@@ -486,8 +486,8 @@ export default {
     hint.style.cssText = 'font-size: 0.6rem; color: var(--muted); line-height: 1.4;';
     hint.innerHTML =
       'URLs need CORS (<code>Access-Control-Allow-Origin</code>) to be glitched. ' +
-      'CORS-friendly sources: <strong>assets.mixkit.co</strong>, <strong>coverr.co</strong>, ' +
-      '<strong>archive.org</strong> (mp4 paths), <strong>commondatastorage.googleapis.com/gtv-videos-bucket</strong> (Google sample videos), ' +
+      'Reliable sources: <strong>assets.mixkit.co</strong>, <strong>coverr.co</strong>, ' +
+      '<strong>commondatastorage.googleapis.com/gtv-videos-bucket</strong> (Google sample videos like Big Buck Bunny), ' +
       '<strong>test-videos.co.uk</strong>. YouTube is not supported. ' +
       'Uploaded files are session-only — URLs persist.';
     panel.appendChild(hint);
