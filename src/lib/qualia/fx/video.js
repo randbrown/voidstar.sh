@@ -485,11 +485,11 @@ export default {
     const hint = document.createElement('div');
     hint.style.cssText = 'font-size: 0.6rem; color: var(--muted); line-height: 1.4;';
     hint.innerHTML =
-      'URLs need CORS (<code>Access-Control-Allow-Origin</code>) to be glitched. ' +
-      'Reliable sources: <strong>assets.mixkit.co</strong>, <strong>coverr.co</strong>, ' +
-      '<strong>commondatastorage.googleapis.com/gtv-videos-bucket</strong> (Google sample videos like Big Buck Bunny), ' +
-      '<strong>test-videos.co.uk</strong>. YouTube is not supported. ' +
-      'Uploaded files are session-only — URLs persist.';
+      'URLs need CORS (<code>Access-Control-Allow-Origin: *</code>) to be glitched. ' +
+      '<strong>assets.mixkit.co</strong> is reliable (see the seeded defaults). ' +
+      'Other hosts vary — test a URL by adding it; rows that block CORS get a ' +
+      '<em>no-cors</em> badge and still play via DOM fallback (no glitch FX). ' +
+      'YouTube is not supported. Uploads are session-only — URLs persist.';
     panel.appendChild(hint);
 
     paramsContainer?.appendChild(panel);
