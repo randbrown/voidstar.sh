@@ -1,8 +1,8 @@
-// Video — user-supplied clip as the visualizer. Plays one or more videos
-// (file uploads or direct mp4/webm URLs) into a WebGL2 texture, then runs
-// an audio-reactive glitch fragment shader (RGB split, chromatic
-// aberration, displacement, hue shift, scanlines, posterize, pixelate,
-// noise) on top.
+// Video — user-supplied clip (or the live camera) as the visualizer. Plays
+// one or more sources (file uploads, direct mp4/webm URLs, or the camera
+// feed) into a WebGL2 texture, then runs an audio-reactive glitch fragment
+// shader (RGB split, chromatic aberration, displacement, hue shift,
+// scanlines, posterize, pixelate, noise) on top.
 //
 // Source handling:
 //   - URL sources: <video> with crossOrigin='anonymous'. Servers that send
@@ -12,10 +12,19 @@
 //     still plays but the glitch FX silently disable themselves with a
 //     warning on the offending playlist row.
 //   - File sources: URL.createObjectURL on the File. Always canvas-safe.
+//   - Camera source: the live feed shared via video.js (getVideoEl). We do
+//     NOT own its lifecycle — the user turns the camera on through the topbar
+//     pose-source select (or any pose-using quale); this quale just samples
+//     whatever stream is flowing. A camera MediaStream is same-origin so it
+//     never taints, and the selfie mirror (getMirror) is folded into the
+//     shader so the glitched feed matches the rest of the app's orientation.
+//     Because the element is shared, the camera source skips every
+//     playback-owning write (src / loop / rate / volume) and the dispose
+//     teardown — those belong to whoever started the camera.
 //
-// Playlist persistence: URL entries are saved to localStorage. File entries
-// can't be — File objects are unrecoverable across page loads — so they
-// fall off on reload. We surface this in the empty-state hint.
+// Playlist persistence: URL + camera entries are saved to localStorage. File
+// entries can't be — File objects are unrecoverable across page loads — so
+// they fall off on reload. We surface this in the empty-state hint.
 //
 // Audio map (declarative — see `modulators` on params):
 //   audio.bass        → rgbSplit, displace
@@ -34,6 +43,8 @@ import {
   makeUniformGetter, uploadAudioUniforms,
 } from '../webgl.js';
 import { scaleAudio } from '../field.js';
+import { getVideoEl, getMirror } from '../video.js';
+
 
 const PLAYLIST_KEY = 'voidstar.qualia.fx.video.playlist';
 
@@ -68,6 +79,7 @@ uniform vec2  uResolution;     // canvas backing-buffer size (px)
 uniform vec2  uVideoSize;      // intrinsic video size (px)
 uniform float uTime;
 uniform int   uFit;            // 0 cover, 1 contain
+uniform float uFlipX;          // 1 = mirror horizontally (camera selfie feed)
 uniform float uMix;            // [0,1] blend video vs backdrop
 uniform float uPanX;           // screen-space pan (negative = shift video right)
 uniform float uPanY;
@@ -149,6 +161,11 @@ void main() {
   // bottom-up by convention. UNPACK_FLIP_Y_WEBGL would handle this but we
   // can't always set it in the same gl state, so flip in the shader.
   uv.y = 1.0 - uv.y;
+
+  // Selfie mirror for the camera source — flip X so the glitched feed reads
+  // the same way the rest of the app's camera preview does. Aspect-independent
+  // (a pure X flip), so it sits ahead of the view transform without fuss.
+  if (uFlipX > 0.5) uv.x = 1.0 - uv.x;
 
   // View transform — rotate, zoom, pan around frame center (0.5, 0.5).
   // Done in uv-space, so the order is "inverse" of what you'd apply to
@@ -241,9 +258,10 @@ void main() {
 }
 `;
 
-/** Read the persisted playlist; only URL entries survive across reloads.
- *  Seeds DEFAULT_URLS the first time the key is missing so newcomers don't
- *  land on an empty list. */
+/** Read the persisted playlist; only URL + camera entries survive across
+ *  reloads (a File can't be re-hydrated; a camera carries no src so it round-
+ *  trips as a bare marker). Seeds DEFAULT_URLS the first time the key is
+ *  missing so newcomers don't land on an empty list. */
 function loadPlaylist() {
   const stored = localStorage.getItem(PLAYLIST_KEY);
   if (stored === null) {
@@ -252,18 +270,25 @@ function loadPlaylist() {
   try {
     const raw = JSON.parse(stored);
     if (!Array.isArray(raw)) return [];
-    return raw.filter(e => e && e.kind === 'url' && typeof e.src === 'string')
-              .map(e => ({ kind: 'url', src: e.src, name: e.name || e.src }));
+    return raw
+      .filter(e => e && (
+        (e.kind === 'url' && typeof e.src === 'string') || e.kind === 'camera'
+      ))
+      .map(e => e.kind === 'camera'
+        ? { kind: 'camera', src: '', name: e.name || 'camera' }
+        : { kind: 'url', src: e.src, name: e.name || e.src });
   } catch {
     return [];
   }
 }
 
 function savePlaylist(entries) {
-  const urlOnly = entries.filter(e => e.kind === 'url').map(e => ({
-    kind: 'url', src: e.src, name: e.name,
-  }));
-  try { localStorage.setItem(PLAYLIST_KEY, JSON.stringify(urlOnly)); } catch {}
+  const persistable = entries
+    .filter(e => e.kind === 'url' || e.kind === 'camera')
+    .map(e => e.kind === 'camera'
+      ? { kind: 'camera', name: e.name }
+      : { kind: 'url', src: e.src, name: e.name });
+  try { localStorage.setItem(PLAYLIST_KEY, JSON.stringify(persistable)); } catch {}
 }
 
 function shortName(src) {
@@ -408,9 +433,19 @@ export default {
     const vidB = makeVideoEl();
     let activeVid = vidA;
 
-    /** @type {{kind:'url'|'file', src:string, name:string, file?:File, tainted?:boolean, error?:string}[]} */
+    /** @type {{kind:'url'|'file'|'camera', src:string, name:string, file?:File, tainted?:boolean, error?:string}[]} */
     const playlist = loadPlaylist();
     let cursor = 0;
+    // True while the active source is the live camera — we then sample the
+    // shared element from video.js instead of our own vidA/vidB, and skip
+    // every lifecycle write that would belong to the camera's real owner.
+    let usingCamera = false;
+    // Camera readiness for the source-row badge. Tracked so we only re-render
+    // the list on a transition (it's cheap, but not per-frame cheap).
+    let cameraLive = false;
+    let lastCamReady = null;
+    /** The element the texture is uploaded from this frame. */
+    function sourceEl() { return usingCamera ? getVideoEl() : activeVid; }
 
     // DOM-fallback overlay for tainted (CORS-blocked) URLs — when a clip
     // refuses cross-origin reads we can't upload it to the texture, so we
@@ -477,6 +512,19 @@ export default {
     fileRow.append(document.createTextNode('upload'), fileInput);
     panel.appendChild(fileRow);
 
+    // Camera-as-source row — adds (or jumps to) the live camera feed so the
+    // glitch shader runs on the camera instead of a clip. The camera itself is
+    // turned on elsewhere (topbar pose-source); this just routes it in.
+    const camRow = document.createElement('div');
+    camRow.style.cssText = 'display: flex; gap: 0.3rem; align-items: center;';
+    const camAddBtn = document.createElement('button');
+    camAddBtn.type = 'button';
+    camAddBtn.className = 'qp-toggle';
+    camAddBtn.textContent = '＋ use camera';
+    camAddBtn.title = 'Glitch the live camera. Turn the camera on via the topbar pose-source select.';
+    camRow.append(camAddBtn);
+    panel.appendChild(camRow);
+
     // The actual list rendered as a tight vertical stack.
     const listEl = document.createElement('div');
     listEl.style.cssText = 'display: flex; flex-direction: column; gap: 0.18rem; max-height: 9rem; overflow-y: auto;';
@@ -489,7 +537,9 @@ export default {
       '<strong>assets.mixkit.co</strong> is reliable (see the seeded defaults). ' +
       'Other hosts vary — test a URL by adding it; rows that block CORS get a ' +
       '<em>no-cors</em> badge and still play via DOM fallback (no glitch FX). ' +
-      'YouTube is not supported. Uploads are session-only — URLs persist.';
+      'YouTube is not supported. Uploads are session-only — URLs + camera persist. ' +
+      'The camera source glitches the live feed (turn the camera on via the ' +
+      'topbar pose-source).';
     panel.appendChild(hint);
 
     paramsContainer?.appendChild(panel);
@@ -522,6 +572,23 @@ export default {
         name.style.cssText = 'flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono);';
         name.textContent = entry.name + (entry.kind === 'file' ? '  (file)' : '');
         name.title = entry.kind === 'url' ? entry.src : entry.name;
+
+        // Camera rows show a live/off badge so it's obvious whether the feed
+        // is actually flowing (the camera is enabled outside this quale).
+        if (entry.kind === 'camera') {
+          const badge = document.createElement('span');
+          const live = isActive && cameraLive;
+          badge.textContent = live ? 'live' : 'off';
+          badge.title = live
+            ? 'Camera feed is live and being glitched.'
+            : 'Camera is off — enable it via the topbar pose-source select.';
+          badge.style.cssText = `font-size: 0.55rem; padding: 0 0.3rem; border-radius: 3px; ${
+            live
+              ? 'color: var(--green); border: 1px solid rgba(74,222,128,0.4);'
+              : 'color: var(--muted); border: 1px solid var(--border);'
+          }`;
+          row.appendChild(badge);
+        }
 
         if (entry.tainted) {
           const warn = document.createElement('span');
@@ -568,6 +635,7 @@ export default {
       savePlaylist(playlist);
       if (playlist.length === 0) {
         cursor = 0;
+        usingCamera = false;
         activeVid.pause();
         try { activeVid.removeAttribute('src'); activeVid.load(); } catch {}
         hideFallback();
@@ -593,6 +661,17 @@ export default {
       hideFallback();
       entry.tainted = false;
       entry.error = undefined;
+      // Camera source: don't touch src/loop/rate/volume — we don't own the
+      // element. Pause our own clip elements so they're not decoding in the
+      // background, and let render() sample getVideoEl() instead.
+      if (entry.kind === 'camera') {
+        usingCamera = true;
+        lastCamReady = null;
+        try { vidA.pause(); } catch {}
+        try { vidB.pause(); } catch {}
+        return;
+      }
+      usingCamera = false;
       activeVid.loop = !!(currentParams.loop && currentParams.advance === 'loop');
       activeVid.playbackRate = currentParams.playbackRate || 1;
       activeVid.muted = (currentParams.volume || 0) <= 0;
@@ -647,6 +726,15 @@ export default {
       const src = URL.createObjectURL(f);
       addEntry({ kind: 'file', src, name: f.name, file: f });
       fileInput.value = '';
+    });
+    camAddBtn.addEventListener('click', () => {
+      // One camera entry is enough — jump to the existing one if present,
+      // otherwise add it and switch to it immediately ("use camera" = now).
+      const existing = playlist.findIndex(e => e.kind === 'camera');
+      if (existing >= 0) { setCursor(existing); return; }
+      playlist.push({ kind: 'camera', src: '', name: 'camera' });
+      savePlaylist(playlist);
+      setCursor(playlist.length - 1);
     });
 
     // Auto-advance when a track ends (only fires when video.loop is false).
@@ -731,11 +819,14 @@ export default {
       currentParams.pixelate     = params.pixelate;
       scratch.time = time;
 
-      // Apply playback-affecting params live (cheap idempotent writes).
-      activeVid.loop = currentParams.loop && currentParams.advance === 'loop';
-      activeVid.playbackRate = currentParams.playbackRate;
-      activeVid.muted = currentParams.volume <= 0;
-      activeVid.volume = Math.max(0, Math.min(1, currentParams.volume));
+      // Apply playback-affecting params live (cheap idempotent writes) — but
+      // never on the camera, whose element we don't own.
+      if (!usingCamera) {
+        activeVid.loop = currentParams.loop && currentParams.advance === 'loop';
+        activeVid.playbackRate = currentParams.playbackRate;
+        activeVid.muted = currentParams.volume <= 0;
+        activeVid.volume = Math.max(0, Math.min(1, currentParams.volume));
+      }
       if (fallbackActive) {
         fallbackVid.playbackRate = currentParams.playbackRate;
         fallbackVid.muted = currentParams.volume <= 0;
@@ -770,17 +861,27 @@ export default {
       }
 
       // Texture upload — guard against tainted-canvas exceptions on a
-      // CORS-blocked URL. Only attempt when the video has actual frames
-      // (readyState ≥ 2 = HAVE_CURRENT_DATA).
+      // CORS-blocked URL. Only attempt when the source has actual frames
+      // (readyState ≥ 2 = HAVE_CURRENT_DATA). For the camera we read the
+      // shared element; it may be absent/empty until the user turns it on.
       const entry = playlist[cursor];
-      scratch.ready = !!entry && !entry.tainted && activeVid.readyState >= 2
-                                && activeVid.videoWidth > 0;
+      const el = sourceEl();
+      const elReady = !!el && el.readyState >= 2 && el.videoWidth > 0;
+      scratch.ready = usingCamera
+        ? elReady
+        : (!!entry && !entry.tainted && elReady);
       if (scratch.ready) {
-        scratch.videoSize[0] = activeVid.videoWidth;
-        scratch.videoSize[1] = activeVid.videoHeight;
+        scratch.videoSize[0] = el.videoWidth;
+        scratch.videoSize[1] = el.videoHeight;
         needsTextureUpdate = true;
       } else {
         needsTextureUpdate = false;
+      }
+
+      // Camera live/off badge — re-render the source list only on transition.
+      if (usingCamera) {
+        cameraLive = scratch.ready;
+        if (cameraLive !== lastCamReady) { lastCamReady = cameraLive; renderList(); }
       }
     }
 
@@ -792,13 +893,13 @@ export default {
       if (needsTextureUpdate) {
         gl.bindTexture(gl.TEXTURE_2D, tex);
         try {
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, activeVid);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceEl());
         } catch (err) {
-          // SecurityError → tainted canvas. Mark the current entry and fall
-          // back to a DOM-positioned <video> behind the canvas so the clip
-          // at least plays.
+          // SecurityError → tainted canvas. Only clips can taint (a camera
+          // MediaStream is same-origin); mark the current entry and fall back
+          // to a DOM-positioned <video> behind the canvas so it at least plays.
           const entry = playlist[cursor];
-          if (entry && !entry.tainted) {
+          if (!usingCamera && entry && !entry.tainted) {
             entry.tainted = true;
             renderList();
             showFallback(entry.src, currentParams.fit);
@@ -818,6 +919,9 @@ export default {
       gl.uniform2f(U('uVideoSize'), scratch.videoSize[0], scratch.videoSize[1]);
       gl.uniform1f(U('uTime'), scratch.time);
       gl.uniform1i(U('uFit'), currentParams.fit === 'contain' ? 1 : 0);
+      // Mirror only the camera feed (and only when the app's selfie mirror is
+      // on) so the glitched live image faces the same way as everywhere else.
+      gl.uniform1f(U('uFlipX'), (usingCamera && getMirror()) ? 1.0 : 0.0);
       gl.uniform1f(U('uMix'), fallbackActive ? 0 : currentParams.mix);
       // View transform — applied to the texture, not the canvas. Still
       // active under fallback would be nice but the DOM-video can't be
