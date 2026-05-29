@@ -171,13 +171,30 @@
  *           of the global DPR cap (default 1.5). Heavy fragment shaders
  *           (e.g. raymarchers) can declare 1.0 to halve fragment work on
  *           high-DPI screens. Lower wins.
- * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any, paramsContainer?:HTMLElement, applyPreset?:(name:string) => boolean }) => Promise<QFXInstance>|QFXInstance} create
+ * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any, paramsContainer?:HTMLElement, applyPreset?:(name:string) => boolean, audioFx?:AudioFxFacade }) => Promise<QFXInstance>|QFXInstance} create
  *           `paramsContainer` is the same DOM node the auto-generated param
  *           panel renders into. Quales with extra UI (file pickers, playlist
  *           editors) may append custom controls to it. Cleared on fx switch.
  *           `applyPreset(name)` mirrors the page's preset application path —
  *           updates all sliders + field.params atomically from the named
  *           factory preset. Returns false if no such preset exists.
+ *           `audioFx` is the narrow audio-producing bridge (see below) — only
+ *           the rare quale that EFFECTS/produces audio (slurmcore) uses it;
+ *           almost every fx is read-only on audio via `field.audio`.
+ */
+
+/**
+ * @typedef {Object} AudioFxFacade
+ * Narrow surface handed to audio-producing quales. The analyser is registered
+ * under a fixed source id ('slurmcore') so an fx can't stomp the mic / strudel
+ * / sequencer / vocoder slots. Adopting folds the fx's output into both
+ * per-band reactivity and the recordable mix; releasing must happen on dispose.
+ * @property {(ctx:AudioContext, analyser:AnalyserNode) => void} adoptAnalyser
+ * @property {() => void} releaseAnalyser
+ * @property {() => MediaStream|null} getMicStream
+ * @property {() => MediaStream|null} getRecordableStream
+ * @property {() => string[]} getSources
+ * @property {() => boolean} isEnabled
  */
 
 export {};

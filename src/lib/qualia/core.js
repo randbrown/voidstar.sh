@@ -209,6 +209,20 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     const fxOptsBase = {
       paramsContainer,
       applyPreset: (name) => applyFxPreset(name),
+      // Audio-fx facade — a NARROW surface for the rare quale that PRODUCES
+      // audio (slurmcore). Almost every fx is read-only on audio (via
+      // `field.audio`); this lets one register/unregister an externally-owned
+      // analyser under a fixed source id, and read which live streams exist to
+      // tap. The id is hard-bound to 'slurmcore' so an fx can't stomp the
+      // mic / strudel / sequencer / vocoder source slots.
+      audioFx: {
+        adoptAnalyser:       (ctx, an) => audio.adoptAnalyser(ctx, an, 'slurmcore'),
+        releaseAnalyser:     () => audio.releaseAdopted('slurmcore'),
+        getMicStream:        () => audio.getMicStream(),
+        getRecordableStream: () => audio.getRecordableStream(),
+        getSources:          () => audio.getSources(),
+        isEnabled:           () => audio.isEnabled(),
+      },
     };
     let opts;
     if (mod.contextType === 'webgl2') {
