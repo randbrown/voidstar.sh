@@ -85,12 +85,17 @@ function rgbToHsl(r, g, b) {
   return [h, s, l];
 }
 
-export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
-  // Overlay canvas — sized to viewport, sits above the fx canvas.
+export function createOverlay({ getMainCanvas, getStageRect, parent = document.body } = {}) {
+  // Overlay canvas — sits above the fx canvas and tracks the same on-screen
+  // box (the "stage"). Normally that's the full viewport; in split-screen
+  // mode the page hands us a half-viewport rect via getStageRect so the
+  // skeleton / sparks / mosh stay pixel-aligned with the fx panel rather
+  // than spilling across the camera half. position/size are set in
+  // applyDpr() so a stage change re-lays-out the element too.
   const canvas = document.createElement('canvas');
   canvas.id = 'qualia-overlay';
   canvas.style.cssText =
-    'position:fixed;inset:0;width:100vw;height:100vh;display:block;' +
+    'position:fixed;left:0;top:0;width:100vw;height:100vh;display:block;' +
     'pointer-events:none;z-index:3;';
   parent.appendChild(canvas);
   const ctx = canvas.getContext('2d');
@@ -98,8 +103,18 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
   let dprCap = 1.5;
   function applyDpr() {
     const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
-    canvas.width  = Math.max(1, Math.floor(window.innerWidth  * dpr));
-    canvas.height = Math.max(1, Math.floor(window.innerHeight * dpr));
+    const r = getStageRect?.() ||
+      { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    // CSS box first — keeps the overlay glued to the fx panel on screen.
+    canvas.style.left   = `${r.left}px`;
+    canvas.style.top    = `${r.top}px`;
+    canvas.style.width  = `${r.width}px`;
+    canvas.style.height = `${r.height}px`;
+    // Backing buffer matches the stage in device pixels. lmToCanvas (and the
+    // mosh/edge/ascii passes that read the main canvas) work in THIS canvas's
+    // pixel space, so a stage-sized buffer keeps everything registered.
+    canvas.width  = Math.max(1, Math.floor(r.width  * dpr));
+    canvas.height = Math.max(1, Math.floor(r.height * dpr));
     updateAsciiGrid();
   }
   // Initial applyDpr() is deferred to the bottom of createOverlay so that
@@ -766,6 +781,10 @@ export function createOverlay({ getMainCanvas, parent = document.body } = {}) {
     setEdgeConfig,
     getEdgeConfig,
     setDprCap(v) { dprCap = Math.max(0.5, v); applyDpr(); },
+    // Re-read the stage rect and re-size — called by the page when the
+    // split-screen layout changes (the window 'resize' listener handles the
+    // viewport-resize case on its own).
+    refreshSize: () => applyDpr(),
     dispose,
   };
 }

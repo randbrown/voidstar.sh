@@ -480,6 +480,12 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     isZen,
     setDprCap,
     getDprCap,
+    // Force a sizing pass against the canvas's current CSS box. The
+    // ResizeObserver only watches the host (full-width block), so a layout
+    // change that resizes the fixed canvas WITHOUT changing the host —
+    // e.g. toggling the split-screen stage — wouldn't otherwise re-sync the
+    // backing buffer. Callers invoke this after such a change.
+    refreshSize: () => applyDpr(),
     setMaxFps,
     getMaxFps,
     setAuxFps,
