@@ -216,6 +216,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* Swapped: fx panel hugs the far edge so the camera takes the near side. */
     body.split-v.split-swap { --viz-left: calc((1 - var(--split-ratio, 0.5)) * 100vw); }
     body.split-h.split-swap { --viz-top:  calc((1 - var(--split-ratio, 0.5)) * 100dvh); }
+    /* Split-screen: the bottom-left card stack (qualem / params / audio / diag
+       …) keeps its normal VIEWPORT-bottom anchor — a consistent menu position
+       regardless of split. It only vanished in "cam below" because of z-order:
+       the camera split panel (#video, z17) painted over it. As a big half-panel
+       (not the small floating preview), the camera should sit UNDER the UI
+       chrome — so in split we drop it below the card stack (15) and tab bar
+       (16) but keep it above the fx canvas (2) / overlay (5). The menus then
+       float over the camera at the bottom of the window. The cam-splitter (18)
+       and editors/topbar stay above. Pure z-order — no layout, no per-frame cost. */
+    body.split-v #video.visible, body.split-h #video.visible { z-index: 14; }
     body.split-dragging { user-select: none; -webkit-user-select: none; }
     body.split-dragging #video { transition: none; }
 
@@ -419,7 +429,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-pause                { min-width: 6ch;  } /* "paused" */
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
-    #btn-record-mode          { min-width: 3ch;  } /* "tab" */
+    #btn-record-mode          { min-width: 2.25ch; } /* ▾ caret (capture menu) */
 
     /* Topbar group popovers — each `.qg-group` owns a trigger button + a
        hidden popover containing the original buttons unchanged. Click the
@@ -428,6 +438,24 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        button is active so users can scan group state at a glance. */
     .qg-group { position: relative; display: inline-flex; }
     .qg-trigger { display: inline-flex; align-items: center; gap: 0.25rem; }
+    /* Capture group: join "rec" + the caret trigger into one segmented pill so
+       it reads as a single control while keeping rec's start/stop click and the
+       caret's menu separate. The caret-only trigger drops its own text. */
+    .qg-capture { gap: 0; }
+    .qg-capture #btn-record {
+      border-top-right-radius: 0; border-bottom-right-radius: 0;
+    }
+    .qg-capture .qg-trigger {
+      border-top-left-radius: 0; border-bottom-left-radius: 0;
+      border-left: none; padding-left: 0.4rem; padding-right: 0.45rem;
+    }
+    .qg-capture .qg-caret { margin: 0; }
+    /* Vertical menu variant of the popover (capture's qfx/tab list). */
+    .qg-popover.qg-menu { flex-direction: column; gap: 0.3rem; min-width: 5rem; }
+    .qg-menuitem { text-align: left; }
+    /* Glyph-only buttons (fullscreen ⛶) — nudge size + alignment so the icon
+       sits on the same baseline as the text buttons beside it. */
+    .btn-icon { font-size: 0.95rem; line-height: 1; padding-left: 0.5rem; padding-right: 0.5rem; }
     .qg-trigger .qg-caret {
       font-size: 0.7rem; opacity: 0.65; line-height: 1;
       transition: transform 0.15s ease;
@@ -1513,10 +1541,20 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
       <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
-      <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
-      <button class="ctrl-btn" id="btn-record-mode" title="Capture mode — fx (clean fx + overlay composite only, no share dialog) or tab (everything visible, including strudel / sequencer / panels via the browser share picker)">fx</button>
+      <div class="qg-group qg-capture" data-group="capture">
+        <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
+        <button type="button" class="ctrl-btn qg-trigger" id="btn-record-mode"
+                data-group-trigger="capture" aria-haspopup="menu" aria-expanded="false"
+                aria-label="Capture mode" title="Capture mode — qfx (clean fx + overlay composite, no share dialog) or full tab (everything visible via the browser share picker)">
+          <span class="qg-caret">▾</span>
+        </button>
+        <div class="qg-popover qg-menu" role="menu">
+          <button type="button" class="ctrl-btn qg-menuitem" data-capture="viewport" role="menuitemradio">qfx</button>
+          <button type="button" class="ctrl-btn qg-menuitem" data-capture="tab" role="menuitemradio">tab</button>
+        </div>
+      </div>
+      <button class="ctrl-btn btn-icon" id="btn-fullscreen" title="Fullscreen (X)" aria-label="Fullscreen">⛶</button>
       <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
-      <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen (X)">full</button>
     </div>
   </div>
   <!-- Controls row: status indicators + the primary fx picker + audio +
@@ -1718,6 +1756,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="audio-ema">
         <label>response<span class="qp-val"></span></label>
         <input type="range" min="0.05" max="0.60" step="0.01" value="0.30">
+      </div>
+      <div class="qp-row" data-qp="react-smooth" title="Reactive de-jitter — an extra time-based low-pass on the audio bands (bass/mids/highs) AND pose that every quale inherits. Distinct from 'response' (the raw band EMA): this adds slower global smoothing on top, and also covers pose. Beats/transients stay sharp. 0% = off. Double-click to reset.">
+        <label>react smooth<span class="qp-val">30%</span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0.3">
       </div>
     </div>
   </div>

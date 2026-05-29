@@ -26,9 +26,11 @@
 //   'mul'     v *= (1 + source * amount)         (amount=0 ⇒ identity)
 //   'replace' v  = source * amount               (param value ignored)
 //
-// The per-fx `reactivity` slider (when present) is applied as a global
-// multiplier on every audio modulator's amount. Pose modulators ignore it —
-// pose smoothing/confidence is handled at the source.
+// The per-fx `reactivity` slider (when present) is a global multiplier on
+// every audio modulator's amount; the parallel `poseReactivity` slider (when
+// present) does the same for pose modulators. A quale that declares neither
+// gets gain 1 on both. Pose smoothing/confidence is still handled at the
+// source; poseReactivity only scales the modulator contribution.
 
 const HEAD_VIS = 0.30;
 const SHOULDER_VIS = 0.40;
@@ -170,9 +172,13 @@ export function modWeightKey(paramId, modIdx) { return `${paramId}.${modIdx}`; }
  */
 export function resolveParams(into, base, schema, channels, modWeights) {
   for (const k in base) into[k] = base[k];
-  // Audio modulators scale by the per-fx reactivity slider when the fx
-  // declares one (default 1). Pose modulators ignore it.
+  // Reactivity masters: audio modulators scale by `reactivity`, pose
+  // modulators by `poseReactivity` — each when the fx declares that param
+  // (default 1 = unscaled). Lets a quale offer one global "how audio-reactive"
+  // and one "how pose-reactive" knob; both at 0 ⇒ the base values pass through
+  // untouched (e.g. the video quale's unmodified 'default' preset).
   const audioGain = (base.reactivity == null) ? 1 : base.reactivity;
+  const poseGain  = (base.poseReactivity == null) ? 1 : base.poseReactivity;
   const w = modWeights || null;
   for (const spec of schema) {
     const mods = spec.modulators;
@@ -185,7 +191,10 @@ export function resolveParams(into, base, schema, channels, modWeights) {
       if (src == null) continue;
       const isAudio = mod.source.charCodeAt(0) === 97 /* 'a' */
                    && mod.source.startsWith('audio.');
-      const gain = isAudio ? audioGain : 1;
+      const isPose  = !isAudio
+                   && mod.source.charCodeAt(0) === 112 /* 'p' */
+                   && mod.source.startsWith('pose.');
+      const gain = isAudio ? audioGain : (isPose ? poseGain : 1);
       const userWeight = w == null ? 1 : (w[modWeightKey(spec.id, i)] ?? 1);
       const amt = (mod.amount == null ? 1 : mod.amount) * userWeight * gain;
       if (amt === 0) continue;

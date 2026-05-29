@@ -1022,29 +1022,33 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       // (smooth but sluggish); 0.5 tightens the response toward the mic
       // analyser's 0.4 while still damping FFT jitter on sustained tones.
       an.smoothingTimeConstant = 0.5;
-      // The connect-patch is now the *primary* path (was: fallback). It
-      // does two things at once: tees to our analyser AND routes through
-      // muteGate so setMuted() can actually silence Strudel. Tone's
-      // bundled-destination tap (`dest.connect(an)`) used to feed the
-      // analyser but missed superdough's direct ctx.destination writes
-      // — and crucially had no node we could mute. Going through the
-      // monkey-patch covers both source paths.
+      strudelAnalyser = an;
+      // The connect-patch is now the *primary* path (was: fallback): every
+      // source that targets ctx.destination is rerouted THROUGH muteGate, so
+      // setMuted()/setVolume() can actually silence Strudel. Crucially the
+      // reactivity analyser is teed off the muteGate OUTPUT (below) — i.e.
+      // POST volume/mute — so a muted or zero-volume Strudel stops driving the
+      // visuals too. (It used to tap each source PRE-mute, so the visuals kept
+      // reacting to music nobody could hear.) Tone's old bundled-destination
+      // tap missed superdough's direct ctx.destination writes; the patch
+      // covers both source paths.
       if (!_strudelConnectPatched) {
         const orig = AudioNode.prototype.connect;
         AudioNode.prototype.connect = function(target, ...rest) {
           if (target === ctx.destination && !this.__qualiaBypassMute) {
-            try { orig.call(this, an); } catch {}
             return orig.call(this, ensureMuteGate(ctx), ...rest);
           }
           return orig.call(this, target, ...rest);
         };
         _strudelConnectPatched = true;
       }
-      // Materialise the gate up front so it exists before any pre-patch
-      // node connects (and so setMuted() has a target if the user toggles
-      // before Strudel plays its first eval).
-      ensureMuteGate(ctx);
-      strudelAnalyser = an;
+      // Materialise the gate up front (so it exists before any pre-patch node
+      // connects, and so setMuted() has a target if the user toggles before
+      // the first eval) and tee the analyser off its post-mute output.
+      // muteGate is bypass-tagged so these go through the unpatched connect;
+      // duplicate connects are coalesced by Web Audio, so it's idempotent.
+      const gate = ensureMuteGate(ctx);
+      try { gate.connect(strudelAnalyser); } catch {}
     }
     audio.adoptAnalyser(ctx, strudelAnalyser);
     refreshStrudelBtn();

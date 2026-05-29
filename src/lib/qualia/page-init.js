@@ -294,6 +294,7 @@ export function initQualiaPage() {
     autoCycleBeatSync,
     numPoses:       pose.getNumPoses(),
     poseSmoothing:  poseSmoothingValue,
+    reactSmoothing: reactSmoothingValue,
     poseThresh:     pose.getThresholds(),
     poseLingerMs:   pose.getLingerMs(),
     poseFps:        pose.getDetectFps(),
@@ -394,6 +395,10 @@ export function initQualiaPage() {
   }
   if (stored.poseThresh) pose.setThresholds(stored.poseThresh);
 
+  // Global reactive de-jitter (audio + pose modulation low-pass; see core.js).
+  let reactSmoothingValue = (typeof stored.reactSmoothing === 'number') ? stored.reactSmoothing : 0.3;
+  core.setReactSmoothing(reactSmoothingValue);
+
   if (typeof stored.numPoses === 'number') pose.setNumPoses(stored.numPoses);
 
   // ── Populate fx selector ──────────────────────────────────────────────────
@@ -444,6 +449,20 @@ export function initQualiaPage() {
       poseSmoothingValue = parseFloat(smoothInput.value);
       pose.setSmoothing(poseSmoothingValue);
       if (smoothVal) smoothVal.textContent = `${Math.round(poseSmoothingValue * 100)}%`;
+      settings.save();
+    });
+  }
+
+  // ── Reactive de-jitter slider (audio card; global, all quales) ───────────
+  const reactSmoothInput = document.querySelector('[data-qp="react-smooth"] input[type=range]');
+  const reactSmoothVal   = document.querySelector('[data-qp="react-smooth"] .qp-val');
+  if (reactSmoothInput) {
+    reactSmoothInput.value = String(reactSmoothingValue);
+    if (reactSmoothVal) reactSmoothVal.textContent = `${Math.round(reactSmoothingValue * 100)}%`;
+    reactSmoothInput.addEventListener('input', () => {
+      reactSmoothingValue = parseFloat(reactSmoothInput.value);
+      core.setReactSmoothing(reactSmoothingValue);
+      if (reactSmoothVal) reactSmoothVal.textContent = `${Math.round(reactSmoothingValue * 100)}%`;
       settings.save();
     });
   }
@@ -731,6 +750,31 @@ export function initQualiaPage() {
   // Escape closes too.
   window.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') closeAllGroupsExcept(null);
+  });
+
+  // ── Double-click any slider (or its value/label) to reset — Reaper-style ──
+  // One delegated handler covers every range input in the app (fx params, mod
+  // weights, audio/pose/viz cards, future sliders). The reset target is the
+  // slider's `data-reset` (mod weights → unity 1) or its `value=` attribute
+  // captured at creation (`defaultValue` = the spec/markup default; live edits
+  // only touch the .value PROPERTY, so this stays the original default). We
+  // re-dispatch a bubbling `input` so each slider's existing listener does the
+  // real work (state, label, field.params, persistence) through the normal path.
+  document.addEventListener('dblclick', (ev) => {
+    const t = ev.target;
+    if (!t || typeof t.closest !== 'function') return;
+    let input = t.closest('input[type="range"]');
+    if (!input) {
+      const row = t.closest('.qp-row');
+      if (row) input = row.querySelector('input[type="range"]');
+    }
+    if (!input) return;
+    const reset = input.dataset.reset ?? input.defaultValue;
+    if (reset == null || reset === '') return;
+    ev.preventDefault();                       // suppress text-selection on the value/label
+    if (input.value === String(reset)) return; // already at default — nothing to do
+    input.value = String(reset);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
   // ── Bottom-left panel tab bar (mobile only) ──────────────────────────────
@@ -1124,6 +1168,38 @@ export function initQualiaPage() {
     // won't fire for a fixed-canvas-only change).
     core.refreshSize();
     overlay.refreshSize();
+    syncSplitCameraBox();
+  }
+
+  // Camera rotation (90/270) + split: a CSS rotate() is visual-only, so the
+  // half-panel-sized #video, once rotated a quarter turn, no longer fills its
+  // panel — it becomes a centered landscape strip (the reported bug). For
+  // quarter rotations in split mode, transpose the element's box to the
+  // panel's swapped dimensions and re-center it so the post-rotation bounding
+  // box lands back exactly on the panel. 0/180 rotations and the non-split
+  // floating preview are left entirely to CSS (cleared inline overrides).
+  function syncSplitCameraBox() {
+    const rot = getRotation();
+    const quarter = (rot === 90 || rot === 270);
+    if (splitMode === 'off' || !quarter) {
+      videoEl.style.width = videoEl.style.height = videoEl.style.left = videoEl.style.top = '';
+      return;
+    }
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const swapped = isSwappedSplit(splitMode);
+    let pL, pT, pW, pH;
+    if (isVerticalSplit(splitMode)) {
+      pW = vw * (1 - splitRatio); pH = vh;
+      pL = swapped ? 0 : vw - pW;  pT = 0;
+    } else {
+      pW = vw; pH = vh * (1 - splitRatio);
+      pL = 0;  pT = swapped ? 0 : vh - pH;
+    }
+    // Transpose (so a 90/270 spin fills the panel) and centre on the panel.
+    videoEl.style.width  = `${pH}px`;
+    videoEl.style.height = `${pW}px`;
+    videoEl.style.left   = `${pL + (pW - pH) / 2}px`;
+    videoEl.style.top    = `${pT + (pH - pW) / 2}px`;
   }
 
   function setSplitMode(mode) {
@@ -1172,6 +1248,7 @@ export function initQualiaPage() {
         splitRafPending = false;
         core.refreshSize();
         overlay.refreshSize();
+        syncSplitCameraBox();
       });
     }
   });
@@ -1182,6 +1259,7 @@ export function initQualiaPage() {
     try { splitterEl.releasePointerCapture(ev.pointerId); } catch {}
     core.refreshSize();
     overlay.refreshSize();
+    syncSplitCameraBox();
     settings.save();
   }
   splitterEl?.addEventListener('pointerup', endSplitDrag);
@@ -1204,10 +1282,14 @@ export function initQualiaPage() {
     toggleMirror();
   }
   btnCamMirror.classList.toggle('active', getMirror());
+  // Re-fit the split camera box to the restored rotation (applySplit above ran
+  // before rotation was restored, so it saw rotation 0).
+  syncSplitCameraBox();
   btnCamRotate.addEventListener('click', () => {
     const r = cycleRotation();
     btnCamRotate.textContent = `rot ${r}°`;
     btnCamRotate.classList.toggle('active', r !== 0);
+    syncSplitCameraBox();
     settings.save();
   });
   btnCamMirror.addEventListener('click', () => {
@@ -1281,7 +1363,7 @@ export function initQualiaPage() {
   window.addEventListener('resize', () => {
     clampVideoOffset();
     applyVideoOffset();
-    if (splitMode !== 'off') { core.refreshSize(); overlay.refreshSize(); }
+    if (splitMode !== 'off') { core.refreshSize(); overlay.refreshSize(); syncSplitCameraBox(); }
   });
   applyVideoOffset();
 
@@ -1952,7 +2034,7 @@ export function initQualiaPage() {
 
   function refreshRecToastBackend(recording, backend, sink) {
     if (!recording) return '';
-    const capLabel  = backend === 'composite' ? 'fx'
+    const capLabel  = backend === 'composite' ? 'qfx'
                     : backend === 'tab'       ? 'full tab'
                     : 'unknown';
     const sinkLabel = sink === 'fsa'    ? 'saving to chosen file'
@@ -1962,25 +2044,33 @@ export function initQualiaPage() {
     return `${capLabel} · ${sinkLabel}`;
   }
 
-  // Capture-mode toggle (viewport composite vs full tab capture).
-  // Refreshes button label / tooltip from the captureMode state.
+  // Capture mode (viewport composite "qfx" vs full-tab "tab"). The caret
+  // trigger (btn-record-mode) opens the qfx/tab menu via the generic .qg-group
+  // popover wiring; the menu items below set the mode. refreshRecordModeBtn
+  // keeps the active menu item, the trigger tooltip, and the rec button
+  // tooltip in sync with captureMode.
+  const captureMenuItems = document.querySelectorAll('.qg-group[data-group="capture"] .qg-menuitem');
   function refreshRecordModeBtn() {
-    if (!btnRecordMode) return;
-    btnRecordMode.textContent = captureMode === 'tab' ? 'tab' : 'fx';
-    btnRecordMode.title = captureMode === 'tab'
-      ? 'Capture mode: full tab — share-picker captures the entire tab (fx, overlay, topbar, strudel, sequencer, any open panels). Audio still comes from the in-page mix bus.'
-      : 'Capture mode: fx — composites the fx + overlay layers only, no share-picker dialog, no HUD/topbar in the file. Click to switch to full-tab capture.';
+    captureMenuItems.forEach(it =>
+      it.classList.toggle('active', it.dataset.capture === captureMode));
+    if (btnRecordMode) {
+      btnRecordMode.title = captureMode === 'tab'
+        ? 'Capture mode: full tab — share-picker captures the entire tab (fx, overlay, topbar, strudel, sequencer, any open panels). Audio still comes from the in-page mix bus.'
+        : 'Capture mode: qfx — composites the fx + overlay layers only, no share-picker dialog, no HUD/topbar in the file.';
+    }
+    if (btnRecord) {
+      btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'qfx'} (Shift+R)`;
+    }
   }
   refreshRecordModeBtn();
-  btnRecordMode?.addEventListener('click', () => {
-    if (recorder.isRecording()) return;   // locked during a take
-    captureMode = captureMode === 'tab' ? 'viewport' : 'tab';
-    refreshRecordModeBtn();
-    // Also refresh the rec button tooltip so it announces the new mode.
-    if (btnRecord) {
-      btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'fx'} (Shift+R)`;
-    }
-    settings.save();
+  captureMenuItems.forEach(item => {
+    item.addEventListener('click', () => {
+      if (recorder.isRecording()) return;   // locked during a take
+      captureMode = item.dataset.capture === 'tab' ? 'tab' : 'viewport';
+      refreshRecordModeBtn();
+      closeAllGroupsExcept(null);            // dismiss the popover after picking
+      settings.save();
+    });
   });
 
   function hideRecToast() {
@@ -2044,7 +2134,7 @@ export function initQualiaPage() {
         btnRecord.classList.toggle('active-audio', recording);
         if (!recording) {
           btnRecord.textContent = 'rec';
-          btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'fx'} (Shift+R)`;
+          btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'qfx'} (Shift+R)`;
         } else {
           btnRecord.title = `Recording ${refreshRecToastBackend(true, backend, sink)}. Shift+R or click to stop.`;
         }
@@ -3347,6 +3437,7 @@ export function initQualiaPage() {
           btnCamRotate.textContent = `rot ${getRotation()}°`;
           btnCamRotate.classList.toggle('active', getRotation() !== 0);
         }
+        syncSplitCameraBox();   // re-fit split camera to the recalled rotation
       }
       if (typeof q.camera.mirror === 'boolean') {
         setMirror(q.camera.mirror);

@@ -68,6 +68,58 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   // the spec's declared amount. Default 1 (= use spec amount as-is).
   let modWeights = {};
 
+  // ── Global "react smooth" de-jitter ──────────────────────────────────────
+  // A dt-aware one-pole low-pass on the sustained reactive signals, so every
+  // quale inherits it without per-fx code. amount 0 ⇒ passthrough (legacy).
+  // Two insertion points, because quales read reactivity two ways:
+  //   1. field.audio.bands.* — smoothed IN PLACE after audio.tick (most quales
+  //      read these directly in update(), bypassing the channel system). This
+  //      also feeds computeChannels, so the audio.* channels come out smoothed.
+  //   2. pose.* channels — smoothed after computeChannels (pose has no
+  //      equivalent "bands" object; the channels are the shared surface).
+  // Left sharp on purpose: transient pulses (beat/snare/hat — both the
+  // field.audio.*.pulse values and the *Pulse channels) and the time LFOs, so
+  // hits stay punchy and LFOs don't phase-lag. Beat DETECTION is unaffected —
+  // audio.js runs it off raw pre-EMA values, not field.audio.bands.
+  let reactSmoothAmt = 0;                       // [0,1] user amount
+  let reactSmoothTau = 0;                       // derived time constant (s)
+  const smoothedChannels = makeChannelSnapshot();
+  let smoothPrimed = false;
+  const smBands = { bass: 0, mids: 0, highs: 0, total: 0, rms: 0 };
+  let smBandsPrimed = false;
+  /** Low-pass field.audio.bands (+ rms) in place. Pulses are left untouched. */
+  function smoothAudioBands(a, dt) {
+    const b = a.bands;
+    if (!smBandsPrimed) {
+      smBands.bass = b.bass; smBands.mids = b.mids; smBands.highs = b.highs;
+      smBands.total = b.total; smBands.rms = a.rms;
+      smBandsPrimed = true;
+      return;
+    }
+    const k = 1 - Math.exp(-dt / reactSmoothTau);
+    smBands.bass  += (b.bass  - smBands.bass)  * k; b.bass  = smBands.bass;
+    smBands.mids  += (b.mids  - smBands.mids)  * k; b.mids  = smBands.mids;
+    smBands.highs += (b.highs - smBands.highs) * k; b.highs = smBands.highs;
+    smBands.total += (b.total - smBands.total) * k; b.total = smBands.total;
+    smBands.rms   += (a.rms   - smBands.rms)   * k; a.rms   = smBands.rms;
+  }
+  /** Smooth the pose.* channels only — audio.* is already done at the band
+   *  source above; pulses + time LFOs stay sharp. */
+  function smoothChannels(ch, dt) {
+    if (!smoothPrimed) {
+      for (const id in ch) smoothedChannels[id] = ch[id];
+      smoothPrimed = true;
+      return;
+    }
+    const k = 1 - Math.exp(-dt / reactSmoothTau);
+    for (const id in ch) {
+      if (id.charCodeAt(0) !== 112 /* 'p' → pose.* */) { smoothedChannels[id] = ch[id]; continue; }
+      const s = smoothedChannels[id] + (ch[id] - smoothedChannels[id]) * k;
+      smoothedChannels[id] = s;
+      ch[id] = s;
+    }
+  }
+
   let dprCap   = DEFAULT_DPR_CAP;
   let zen      = false;
   let paused   = false;
@@ -382,6 +434,10 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
       lastReactMs = now;
       field.reactDt = rdt;
       audio.tick(rdt);
+      // De-jitter the bands in place (most quales read field.audio.bands.*
+      // directly, not via the channel system) — at the reactivity cadence so
+      // the time constant is wall-clock-correct regardless of the viz cap.
+      if (reactSmoothTau > 0) smoothAudioBands(field.audio, rdt);
       // pose runs its own detect rAF (separately throttled); nothing to tick here.
       tickListeners.forEach(fn => { try { fn(field); } catch (e) { console.error('[qualia] tick listener error:', e); } });
     }
@@ -412,6 +468,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
       try {
         // Refresh channels + resolve modulated params for this frame.
         computeChannels(field, field.channels);
+        if (reactSmoothTau > 0) smoothChannels(field.channels, field.dt);
         resolveParams(field.params, baseParams, activeMod.params, field.channels, modWeights);
         activeInst.update(field);
         activeInst.render();
@@ -458,6 +515,18 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     reactFrameMs = (fps > 0) ? 1000 / fps : 0;
   }
   function getReactFps() { return reactFrameMs > 0 ? Math.round(1000 / reactFrameMs) : 0; }
+  /** Global reactive de-jitter amount [0,1]. 0 = off (passthrough). Maps,
+   *  with a slight ease so the low end stays gentle, to a time constant up to
+   *  ~0.6s for the band + pose low-pass (smoothAudioBands / smoothChannels). */
+  function setReactSmoothing(v) {
+    reactSmoothAmt = Math.max(0, Math.min(1, Number(v) || 0));
+    // Quadratic-ish ease: 0.5 → ~0.21s, 1.0 → 0.6s. Gentle to start, clearly
+    // heavy at the top so the full sweep reads as a real change.
+    reactSmoothTau = reactSmoothAmt * (0.15 + 0.45 * reactSmoothAmt);
+    smoothPrimed = false;      // re-seed so toggling on doesn't lerp from stale state
+    smBandsPrimed = false;
+  }
+  function getReactSmoothing() { return reactSmoothAmt; }
   function onFps(fn)    { fpsListeners.add(fn); return () => fpsListeners.delete(fn); }
   function onFrame(fn)  { frameListeners.add(fn); return () => frameListeners.delete(fn); }
   function onTick(fn)   { tickListeners.add(fn);  return () => tickListeners.delete(fn); }
@@ -491,6 +560,8 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     setAuxFps,
     setReactFps,
     getReactFps,
+    setReactSmoothing,
+    getReactSmoothing,
     onFps,
     onFrame,
     onTick,

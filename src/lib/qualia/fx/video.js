@@ -367,7 +367,12 @@ export default {
       modulators: [{ source: 'audio.beatPulse', mode: 'add', amount: 0.08 }] },
     { id: 'pixelate',     label: 'pixelate',     type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
       modulators: [{ source: 'audio.highs', mode: 'add', amount: 0.08 }] },
-    { id: 'reactivity',   label: 'reactivity',   type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
+    // Two reactivity masters: `reactivity` scales every audio modulator,
+    // `pose react` scales every pose modulator (pan/zoom/rotation/displace).
+    // Both at 0 + zero base values ⇒ a genuinely unmodified clip (the
+    // 'default' preset). The engine reads these globally (see modulation.js).
+    { id: 'reactivity',     label: 'reactivity',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
+    { id: 'poseReactivity', label: 'pose react',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
   // autoPhase walks the preset dropdown — one knob to control all the looks.
@@ -384,29 +389,37 @@ export default {
     ],
   },
 
-  // Presets reset ALL non-source params including the pose transform — so
-  // a 'cinema' preset is a true clean slate. The 'follow' preset is the
-  // pose-following showcase: zero glitch, pure body-driven view transform.
+  // Presets reset ALL non-source params including the pose transform. Each
+  // sets BOTH reactivity masters explicitly so switching between presets is
+  // deterministic (a master left unset would carry over from the prior
+  // preset). 'default' is a genuinely unmodified clip: zero glitch, zero
+  // reactivity (audio AND pose). 'follow' is the pose-following showcase:
+  // zero glitch, no audio reactivity, full pose reactivity.
   presets: {
     default:  { fit: 'cover', playbackRate: 1.0, volume: 0, loop: true, advance: 'loop', mix: 1.0,
                 panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.1, chroma: 0.1, displace: 0.0, hueShift: 0.0, noise: 0.0,
-                scanlines: 0.1, posterize: 0.0, pixelate: 0.0, reactivity: 1.0 },
+                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
+                scanlines: 0.0, posterize: 0.0, pixelate: 0.0, reactivity: 0, poseReactivity: 0 },
     vhs:      { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.05,
-                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0, mix: 1.0 },
+                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0, mix: 1.0,
+                reactivity: 1.0, poseReactivity: 1.0 },
     datamosh: { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.4, chroma: 0.6, displace: 0.7, hueShift: 0.0,
-                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 0.95 },
+                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 0.95,
+                reactivity: 1.0, poseReactivity: 1.0 },
     cinema:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0,
+                reactivity: 1.0, poseReactivity: 1.0 },
     crush:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.2, displace: 0.0, hueShift: 0.1,
-                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4, mix: 1.0 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4, mix: 1.0,
+                reactivity: 1.0, poseReactivity: 1.0 },
     follow:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0,
+                reactivity: 0, poseReactivity: 1.0 },
   },
 
   async create(canvas, { gl, paramsContainer, applyPreset }) {

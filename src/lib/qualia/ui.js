@@ -138,6 +138,7 @@ export function buildParamPanel({
         max: String(spec.max),
         step: String(spec.step),
         value: String(spec.default),
+        title: 'double-click to reset to default',
       });
       control.addEventListener('input', () => {
         const v = parseFloat(control.value);
@@ -228,7 +229,10 @@ export function buildParamPanel({
         const weight = el('input', {
           type: 'range', class: 'qp-mod-weight',
           min: '0', max: '2', step: '0.05', value: String(initial),
-          title: `weight: spec ${mod.amount ?? 1}× — drag to attenuate (0) or boost (2)`,
+          // Reset target is unity (1× = spec amount), not the persisted start
+          // value — so double-click restores the author's intended strength.
+          'data-reset': '1',
+          title: `weight: spec ${mod.amount ?? 1}× — drag to attenuate (0) or boost (2); double-click to reset`,
         });
         const paramId = spec.id;
         const modIdx = mi;
