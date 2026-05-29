@@ -179,6 +179,25 @@ export function initQualiaPage() {
   bindVideoElement(videoEl);
 
   let camSizeIdx = 0;
+  // ── Split-screen state ────────────────────────────────────────────────────
+  // splitMode: 'off' | 'vertical' | 'horizontal'. splitRatio is the fx panel's
+  // fraction of the split axis. Declared HERE (before createOverlay above runs
+  // its first applyDpr) so the hoisted getStageRect() can read them without a
+  // temporal-dead-zone error; restored from settings further down.
+  const SPLIT_MODES = ['off', 'vertical', 'horizontal'];
+  const SPLIT_MIN = 0.18, SPLIT_MAX = 0.82;
+  let splitMode = 'off';
+  let splitRatio = 0.5;
+  /** Stage rect (CSS px) the fx canvas + overlay occupy — full viewport, or
+   *  one half in split mode. Mirrors the --viz-* CSS so the overlay's backing
+   *  buffer lines up with the fx panel. */
+  function getStageRect() {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (splitMode === 'vertical')   return { left: 0, top: 0, width: Math.round(vw * splitRatio), height: vh };
+    if (splitMode === 'horizontal') return { left: 0, top: 0, width: vw, height: Math.round(vh * splitRatio) };
+    return { left: 0, top: 0, width: vw, height: vh };
+  }
+
   // Camera zoom (hardware track-level zoom, gated by capability detection).
   // Persisted across reloads; reapplied after each camera open/flip.
   let lastZoomValue = 1.0;
@@ -226,6 +245,7 @@ export function initQualiaPage() {
   // fx canvas and runs once per frame after fx render.
   const overlay = createOverlay({
     getMainCanvas: () => core.getCanvas(),
+    getStageRect:  () => getStageRect(),
   });
   core.onFrame((field) => {
     overlay.tick(field.dt, field);
@@ -276,9 +296,15 @@ export function initQualiaPage() {
     cameraZoom:     lastZoomValue,
     videoPos:       videoOffset,
     captureMode,
+    splitMode,
+    splitRatio,
   }));
   const stored = settings.load();
   camSizeIdx = stored.camSizeIdx ?? 0;
+  if (SPLIT_MODES.includes(stored.splitMode)) splitMode = stored.splitMode;
+  if (typeof stored.splitRatio === 'number') {
+    splitRatio = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, stored.splitRatio));
+  }
 
   // Recorder capture mode — restored from settings, cycled by the
   // btn-record-mode button below. 'viewport' uses the composite canvas
@@ -655,7 +681,7 @@ export function initQualiaPage() {
   // lines and fixes the misleading display.
   function refreshGroupActiveDots() {
     const checks = {
-      camera: () => poseSelect.value === 'camera',
+      camera: () => poseSelect.value === 'camera' || splitMode !== 'off',
       // Pose group now also houses the audio-driven overlays (sparks /
       // aura) — light the dot whenever any of its controls is engaged,
       // not just when the camera-pose source is on.
@@ -1050,6 +1076,101 @@ export function initQualiaPage() {
   btnCamera.addEventListener('click', () => setCamSize(camSizeIdx + 1));
   setCamSize(camSizeIdx);
 
+  // ── Split-screen (camera ⟂ visualizer) ────────────────────────────────────
+  // A dedicated control, separate from the floating cam-size cycle: split is a
+  // layout mode (the fx stage shrinks to one half, the camera fills the other),
+  // not a placement of the floating preview. The fx backing buffer halves
+  // automatically once core.refreshSize() re-reads the (now-smaller) canvas
+  // box. Both panels are captured in viewport recordings — see
+  // recordCompositeUpdate. A draggable splitter with snap-assist sets the ratio.
+  const splitterEl  = document.getElementById('cam-splitter');
+  const btnCamSplit = document.getElementById('btn-cam-split');
+
+  function applySplit() {
+    const on = splitMode !== 'off';
+    document.body.classList.toggle('split-v', splitMode === 'vertical');
+    document.body.classList.toggle('split-h', splitMode === 'horizontal');
+    document.body.style.setProperty('--split-ratio', String(splitRatio));
+    if (btnCamSplit) {
+      btnCamSplit.classList.toggle('active', on);
+      btnCamSplit.textContent = splitMode === 'vertical' ? 'split vert'
+                              : splitMode === 'horizontal' ? 'split horiz'
+                              : 'split';
+    }
+    // Leaving split: restore the floating preview's dragged placement. Entering:
+    // clear the inline bottom/right so the CSS panel rules take over cleanly.
+    if (on) {
+      videoEl.style.top = videoEl.style.left = videoEl.style.right = videoEl.style.bottom = '';
+    } else {
+      applyVideoOffset();
+    }
+    // Re-sync both layers to the new stage (host-watching ResizeObserver
+    // won't fire for a fixed-canvas-only change).
+    core.refreshSize();
+    overlay.refreshSize();
+  }
+
+  function setSplitMode(mode) {
+    splitMode = SPLIT_MODES.includes(mode) ? mode : 'off';
+    applySplit();
+    refreshGroupActiveDots();
+    settings.save();
+  }
+
+  btnCamSplit?.addEventListener('click', () => {
+    const i = SPLIT_MODES.indexOf(splitMode);
+    setSplitMode(SPLIT_MODES[(i + 1) % SPLIT_MODES.length]);
+  });
+
+  // Splitter drag — free-drag with snap-assist near 1/3, 1/2, 2/3, clamped so
+  // neither panel collapses. Ratio updates the CSS var live; the fx re-size is
+  // rAF-throttled so a fast drag doesn't thrash applyDpr.
+  const SNAP_POINTS = [1 / 3, 1 / 2, 2 / 3];
+  const SNAP_TOL = 0.03;
+  let splitDragging = false;
+  let splitRafPending = false;
+  function ratioFromPointer(clientX, clientY) {
+    let r = splitMode === 'vertical'
+      ? clientX / Math.max(1, window.innerWidth)
+      : clientY / Math.max(1, window.innerHeight);
+    for (const p of SNAP_POINTS) { if (Math.abs(r - p) < SNAP_TOL) { r = p; break; } }
+    return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, r));
+  }
+  splitterEl?.addEventListener('pointerdown', (ev) => {
+    if (splitMode === 'off') return;
+    splitDragging = true;
+    document.body.classList.add('split-dragging');
+    try { splitterEl.setPointerCapture(ev.pointerId); } catch {}
+    ev.preventDefault();
+  });
+  splitterEl?.addEventListener('pointermove', (ev) => {
+    if (!splitDragging) return;
+    splitRatio = ratioFromPointer(ev.clientX, ev.clientY);
+    document.body.style.setProperty('--split-ratio', String(splitRatio));
+    if (!splitRafPending) {
+      splitRafPending = true;
+      requestAnimationFrame(() => {
+        splitRafPending = false;
+        core.refreshSize();
+        overlay.refreshSize();
+      });
+    }
+  });
+  function endSplitDrag(ev) {
+    if (!splitDragging) return;
+    splitDragging = false;
+    document.body.classList.remove('split-dragging');
+    try { splitterEl.releasePointerCapture(ev.pointerId); } catch {}
+    core.refreshSize();
+    overlay.refreshSize();
+    settings.save();
+  }
+  splitterEl?.addEventListener('pointerup', endSplitDrag);
+  splitterEl?.addEventListener('pointercancel', endSplitDrag);
+
+  // Apply the restored split state once everything's wired.
+  applySplit();
+
   // ── Cam rotate / mirror ───────────────────────────────────────────────────
   if (typeof stored.cameraRotation === 'number') {
     // Rotation is restored via setRotation; we cycle by 90° from 0 to match.
@@ -1104,6 +1225,7 @@ export function initQualiaPage() {
   function applyVideoOffset() {
     if (!videoEl.classList.contains('visible')) return;
     if (videoEl.classList.contains('size-full')) return; // no offset in full
+    if (splitMode !== 'off') return; // panel mode owns the camera geometry
     // The base anchor is bottom/right. Positive dx pushes left, dy pushes up.
     // We update both bottom & right to keep the existing CSS as the base.
     const isMobile   = window.matchMedia('(max-width: 768px)').matches;
@@ -1133,7 +1255,15 @@ export function initQualiaPage() {
     videoOffset = { dx: stored.videoPos.dx, dy: stored.videoPos.dy };
   }
   // Reapply offset on resize / orientation change so the pip stays visible.
-  window.addEventListener('resize', () => { clampVideoOffset(); applyVideoOffset(); });
+  // In split mode the panels are vw/dvh fractions that follow the viewport on
+  // their own, but the fx backing buffer needs a manual re-sync (the
+  // ResizeObserver watches the full-width host, not the fixed canvas) and the
+  // overlay needs its stage rect recomputed.
+  window.addEventListener('resize', () => {
+    clampVideoOffset();
+    applyVideoOffset();
+    if (splitMode !== 'off') { core.refreshSize(); overlay.refreshSize(); }
+  });
   applyVideoOffset();
 
   function onPointerDown(ev) {
@@ -1674,63 +1804,116 @@ export function initQualiaPage() {
   // canvas so the encoder sees stable dimensions for the entire take.
   let recordCompositeLocked = false;
 
+  // Layout frozen at recording start (or recomputed each idle frame while not
+  // recording). In split mode the composite spans BOTH panels — the fx stage
+  // in fxRect and the live camera in camRect — so the saved file shows exactly
+  // the split the user is watching. Off → a single full-frame fxRect.
+  let recordCompositeLayout = null;
+
+  function computeRecordLayout(fx) {
+    // fx.width/height is the fx stage backing buffer (already half-sized in
+    // split mode). The camera panel is sized at the same device-pixel density
+    // from the split ratio, so the composite is a faithful full-viewport frame.
+    if (splitMode === 'vertical') {
+      const r = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, splitRatio));
+      const camW = Math.max(1, Math.round(fx.width * (1 - r) / r));
+      return {
+        W: fx.width + camW, H: fx.height,
+        fxRect:  { x: 0, y: 0, w: fx.width, h: fx.height },
+        camRect: { x: fx.width, y: 0, w: camW, h: fx.height },
+      };
+    }
+    if (splitMode === 'horizontal') {
+      const r = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, splitRatio));
+      const camH = Math.max(1, Math.round(fx.height * (1 - r) / r));
+      return {
+        W: fx.width, H: fx.height + camH,
+        fxRect:  { x: 0, y: 0, w: fx.width, h: fx.height },
+        camRect: { x: 0, y: fx.height, w: fx.width, h: camH },
+      };
+    }
+    return {
+      W: fx.width, H: fx.height,
+      fxRect:  { x: 0, y: 0, w: fx.width, h: fx.height },
+      camRect: null,
+    };
+  }
+
+  // Draw a source canvas into a target sub-rect, letterboxed to preserve its
+  // aspect. In the common case (source aspect == rect aspect) it fills exactly.
+  function drawLayerFitted(src, rect) {
+    if (!src || src.width <= 0 || src.height <= 0) return;
+    let { x, y, w, h } = rect;
+    const sAsp = src.width / src.height;
+    const dAsp = w / h;
+    if (Math.abs(sAsp - dAsp) > 0.001) {
+      if (sAsp > dAsp) { const nh = Math.round(w / sAsp); y += Math.round((h - nh) / 2); h = nh; }
+      else             { const nw = Math.round(h * sAsp); x += Math.round((w - nw) / 2); w = nw; }
+    }
+    try { recordCompositeCtx.drawImage(src, x, y, w, h); } catch {}
+  }
+
+  // Draw the live camera into a sub-rect, cover-fitted with the same mirror +
+  // rotation the preview shows (matches applyPreviewTransform's scale→rotate
+  // order), clipped to the rect.
+  function drawCameraIntoRect(rect) {
+    const v = videoEl;
+    if (!v || v.videoWidth <= 0 || v.videoHeight <= 0) return;
+    const { x, y, w, h } = rect;
+    const vw = v.videoWidth, vh = v.videoHeight;
+    const rot = getRotation();
+    const rotated = rot === 90 || rot === 270;
+    const ew = rotated ? vh : vw, eh = rotated ? vw : vh;
+    const scale = Math.max(w / ew, h / eh); // cover
+    const ctx = recordCompositeCtx;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+    ctx.translate(x + w / 2, y + h / 2);
+    if (getMirror()) ctx.scale(-1, 1);
+    if (rot !== 0) ctx.rotate((rot * Math.PI) / 180);
+    try { ctx.drawImage(v, -vw * scale / 2, -vh * scale / 2, vw * scale, vh * scale); } catch {}
+    ctx.restore();
+  }
+
   function recordCompositeUpdate() {
     const fx = core.getCanvas?.();
     if (!fx || !recordCompositeCtx) return;
-    // Resize to match fx ONLY when we aren't actively recording (the
-    // initial paint, or between takes). Once locked, drawImage scales
-    // fx + overlay into the locked frame.
+    // While not recording, track the live layout (and size the canvas to it)
+    // so the first captured frame is already correct. Once locked, reuse the
+    // frozen layout so a mid-take fullscreen/split change can't resize the
+    // encoder's input (it'd truncate the file).
     if (!recordCompositeLocked) {
-      if (recordCompositeCanvas.width  !== fx.width ||
-          recordCompositeCanvas.height !== fx.height) {
-        recordCompositeCanvas.width  = fx.width;
-        recordCompositeCanvas.height = fx.height;
+      recordCompositeLayout = computeRecordLayout(fx);
+      const { W, H } = recordCompositeLayout;
+      if (recordCompositeCanvas.width !== W || recordCompositeCanvas.height !== H) {
+        recordCompositeCanvas.width  = W;
+        recordCompositeCanvas.height = H;
       }
     }
+    const layout = recordCompositeLayout || computeRecordLayout(fx);
     const W = recordCompositeCanvas.width;
     const H = recordCompositeCanvas.height;
-    // Fill with black so the letterbox bars are opaque black instead of
-    // transparent (which the encoder would render as undefined colour).
+    // Black base so any letterbox bars are opaque black, not undefined colour.
     recordCompositeCtx.fillStyle = '#000';
     recordCompositeCtx.fillRect(0, 0, W, H);
-    // Letterbox: scale the source to fit the locked frame, preserving
-    // aspect ratio. fx + overlay always share aspect (both = viewport
-    // aspect, just different DPR caps), so a single fit rect works for
-    // both. When fx.width/height match the locked frame exactly (no
-    // resize since rec start), drawW/drawH equal W/H and there's no
-    // letterbox — the common case is zero-cost.
-    let drawW = W, drawH = H, drawX = 0, drawY = 0;
-    if (fx.width > 0 && fx.height > 0 && (fx.width !== W || fx.height !== H)) {
-      const srcAspect = fx.width / fx.height;
-      const dstAspect = W / H;
-      if (srcAspect > dstAspect) {
-        drawW = W;
-        drawH = Math.round(W / srcAspect);
-        drawY = Math.round((H - drawH) / 2);
-      } else {
-        drawH = H;
-        drawW = Math.round(H * srcAspect);
-        drawX = Math.round((W - drawW) / 2);
-      }
-    }
-    // 1) fx layer. preserveDrawingBuffer is set on the WebGL contexts so
-    // drawImage from a webgl2/three canvas works inside the same frame.
-    try { recordCompositeCtx.drawImage(fx, drawX, drawY, drawW, drawH); } catch {}
-    // 2) overlay layer (skeleton / sparks / aura / ascii / mosh / edge /
-    // ripples). Same fit rect — overlay shares the viewport's aspect.
-    try { recordCompositeCtx.drawImage(overlay.canvas, drawX, drawY, drawW, drawH); } catch {}
+    // fx + overlay into the fx panel rect. preserveDrawingBuffer on the WebGL
+    // contexts lets us drawImage from a webgl2/three canvas mid-frame.
+    drawLayerFitted(fx, layout.fxRect);
+    drawLayerFitted(overlay.canvas, layout.fxRect);
+    // Camera panel (split mode only).
+    if (layout.camRect) drawCameraIntoRect(layout.camRect);
   }
   function recordCompositeBegin() {
     if (recordCompositeFrameOff) return;
-    // Paint one frame at the current fx size so the canvas has content
-    // for captureStream's first sample AND the dimensions are stamped
+    // Paint one frame at the current layout so the canvas has content for
+    // captureStream's first sample AND the dimensions/layout are stamped
     // before we lock them.
     recordCompositeLocked = false;
     recordCompositeUpdate();
-    // Lock dimensions for the duration of the recording. Fullscreen
-    // toggles during a take still happen (we don't disable the
-    // fullscreen button), but the recorded canvas stays the same size
-    // so the encoder doesn't choke.
+    // Lock dimensions + layout for the duration of the recording. Fullscreen
+    // / split toggles during a take still happen (we don't disable those
+    // buttons), but the recorded canvas stays the same size so the encoder
+    // doesn't choke; the source is letterboxed into the frozen rects instead.
     recordCompositeLocked = true;
     // Subscribe to the rAF loop. core.onFrame fires AFTER fx render AND
     // after the existing overlay frame listener, because listeners run

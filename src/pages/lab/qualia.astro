@@ -181,11 +181,64 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* Canvases that QualiaCore creates inside #qualia-host inherit fullscreen
        fixed positioning. mix-blend-mode:screen lets near-black fill reveal
        Hydra underneath. 100dvh tracks the dynamic viewport (handles the
-       Chrome URL bar collapse on Android without leaving a black band). */
+       Chrome URL bar collapse on Android without leaving a black band).
+
+       Geometry is driven by the --viz-* vars (defaults = full viewport) so
+       split-screen mode can shrink the fx panel to one half WITHOUT changing
+       the canvas's stacking sibling relationship to #hydra-canvas (the canvas
+       stays a fixed body-level layer, so mix-blend-mode:screen still composites
+       against Hydra). The host stays unpositioned/zero-size; the page calls
+       core.refreshSize() after a var change to re-sync the backing buffer,
+       since the ResizeObserver watches the host, not the fixed canvas. */
     #qualia-host > canvas {
-      position: fixed; inset: 0; width: 100vw; height: 100dvh; display: block;
-      z-index: 2; mix-blend-mode: screen;
+      position: fixed;
+      left: var(--viz-left, 0px); top: var(--viz-top, 0px);
+      width: var(--viz-w, 100vw); height: var(--viz-h, 100dvh);
+      display: block; z-index: 2; mix-blend-mode: screen;
     }
+
+    /* ── Split-screen stage ────────────────────────────────────────────────
+       body.split-v → fx panel | camera (side by side)
+       body.split-h → fx panel / camera (stacked)
+       --split-ratio is the fx panel's fraction of the axis (0.18–0.82),
+       driven live by the splitter drag in page-init.js. */
+    body.split-v {
+      --viz-left: 0px; --viz-top: 0px;
+      --viz-w: calc(var(--split-ratio, 0.5) * 100vw); --viz-h: 100dvh;
+    }
+    body.split-h {
+      --viz-left: 0px; --viz-top: 0px;
+      --viz-w: 100vw; --viz-h: calc(var(--split-ratio, 0.5) * 100dvh);
+    }
+    body.split-dragging { user-select: none; -webkit-user-select: none; }
+    body.split-dragging #video { transition: none; }
+
+    /* Splitter handle — a thin draggable bar at the panel boundary. Above the
+       camera (17) but below the topbar (20). */
+    #cam-splitter {
+      position: fixed; z-index: 18; display: none; touch-action: none;
+      background: transparent;
+    }
+    body.split-v #cam-splitter, body.split-h #cam-splitter { display: block; }
+    body.split-v #cam-splitter {
+      top: 0; height: 100dvh; width: 16px;
+      left: calc(var(--split-ratio, 0.5) * 100vw); transform: translateX(-50%);
+      cursor: col-resize;
+    }
+    body.split-h #cam-splitter {
+      left: 0; width: 100vw; height: 16px;
+      top: calc(var(--split-ratio, 0.5) * 100dvh); transform: translateY(-50%);
+      cursor: row-resize;
+    }
+    /* Visible grip line + dot, drawn centered in the (wider, easier-to-grab)
+       hit area. */
+    #cam-splitter::before {
+      content: ''; position: absolute;
+      background: var(--border); box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+    }
+    body.split-v #cam-splitter::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+    body.split-h #cam-splitter::before { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
+    #cam-splitter:hover::before, body.split-dragging #cam-splitter::before { background: var(--accent); }
   </style>
   <!-- `is:global` is required because most of qualia's UI (sequencer pads,
        cells, prop inputs, pattern-row chrome, etc.) is built at runtime via
@@ -253,6 +306,22 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       width: 100vw; height: 100dvh;
       opacity: 0.22; border-radius: 0; border: none;
       object-fit: contain; background: black;
+    }
+    /* Split-screen camera panel — fills the half opposite the fx stage.
+       Higher specificity (body class + #video + .visible) than the size-*
+       rules above, so it wins without needing to strip those classes; the
+       JS just clears the inline bottom/right offsets when entering split. */
+    body.split-v #video.visible, body.split-h #video.visible {
+      opacity: 1; border: none; border-radius: 0;
+      right: auto; bottom: auto; object-fit: cover; background: var(--void);
+    }
+    body.split-v #video.visible {
+      left: calc(var(--split-ratio, 0.5) * 100vw); top: 0;
+      width: calc((1 - var(--split-ratio, 0.5)) * 100vw); height: 100dvh;
+    }
+    body.split-h #video.visible {
+      left: 0; top: calc(var(--split-ratio, 0.5) * 100dvh);
+      width: 100vw; height: calc((1 - var(--split-ratio, 0.5)) * 100dvh);
     }
 
     /* Topbar always uses the column layout — title row on top, control
@@ -333,6 +402,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-audio                { min-width: 13ch; } /* "audio strudel" */
     #btn-camera               { min-width: 9ch;  } /* "cam large" */
     #btn-cam-rotate           { min-width: 8ch;  } /* "rot 270°" */
+    #btn-cam-split            { min-width: 8ch;  } /* "split horiz" */
     #btn-cursor               { min-width: 15ch; } /* "cursor combined" */
     #btn-pause                { min-width: 6ch;  } /* "paused" */
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
@@ -1407,6 +1477,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 <div id="qualia-host"></div>
 <canvas id="test-canvas"></canvas>
 <video id="video" autoplay playsinline muted></video>
+<!-- Split-screen splitter handle. Hidden until a split mode is active
+     (body.split-v / body.split-h); drag logic + snap-assist in page-init.js. -->
+<div id="cam-splitter" role="separator" aria-label="Resize split"></div>
 
 <div id="topbar">
   <!-- Title row: experiment label + the pinned strudel/zen corner. Sharing
@@ -1466,6 +1539,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn active" id="btn-camera"     title="Camera size (C)">camera</button>
         <button class="ctrl-btn"        id="btn-cam-rotate" title="Rotate camera (R)">rot 0°</button>
         <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (M)">mirror</button>
+        <!-- Split-screen: off → vertical (side by side) → horizontal (stacked).
+             Both panels are included in viewport screen recordings. -->
+        <button class="ctrl-btn"        id="btn-cam-split"  title="Split screen — camera ⟂ visualizer, draggable divider">split</button>
       </div>
     </div>
 
