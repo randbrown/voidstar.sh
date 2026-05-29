@@ -180,21 +180,34 @@ export function initQualiaPage() {
 
   let camSizeIdx = 0;
   // ── Split-screen state ────────────────────────────────────────────────────
-  // splitMode: 'off' | 'vertical' | 'horizontal'. splitRatio is the fx panel's
-  // fraction of the split axis. Declared HERE (before createOverlay above runs
-  // its first applyDpr) so the hoisted getStageRect() can read them without a
-  // temporal-dead-zone error; restored from settings further down.
-  const SPLIT_MODES = ['off', 'vertical', 'horizontal'];
+  // splitMode: 'off' | 'vertical' | 'horizontal' | 'vertical-swap' |
+  // 'horizontal-swap'. The plain modes put the camera on the right / below;
+  // the *-swap variants flip it to the left / above (fx panel hugs the far
+  // edge). splitRatio is the fx panel's fraction of the split axis. Declared
+  // HERE (before createOverlay above runs its first applyDpr) so the hoisted
+  // getStageRect() can read them without a temporal-dead-zone error; restored
+  // from settings further down.
+  const SPLIT_MODES = ['off', 'vertical', 'vertical-swap', 'horizontal', 'horizontal-swap'];
   const SPLIT_MIN = 0.18, SPLIT_MAX = 0.82;
+  const isVerticalSplit   = (m) => m === 'vertical'   || m === 'vertical-swap';
+  const isHorizontalSplit = (m) => m === 'horizontal' || m === 'horizontal-swap';
+  const isSwappedSplit    = (m) => m === 'vertical-swap' || m === 'horizontal-swap';
   let splitMode = 'off';
   let splitRatio = 0.5;
   /** Stage rect (CSS px) the fx canvas + overlay occupy — full viewport, or
    *  one half in split mode. Mirrors the --viz-* CSS so the overlay's backing
-   *  buffer lines up with the fx panel. */
+   *  buffer lines up with the fx panel (including the swapped offset). */
   function getStageRect() {
     const vw = window.innerWidth, vh = window.innerHeight;
-    if (splitMode === 'vertical')   return { left: 0, top: 0, width: Math.round(vw * splitRatio), height: vh };
-    if (splitMode === 'horizontal') return { left: 0, top: 0, width: vw, height: Math.round(vh * splitRatio) };
+    const swapped = isSwappedSplit(splitMode);
+    if (isVerticalSplit(splitMode)) {
+      const w = Math.round(vw * splitRatio);
+      return { left: swapped ? vw - w : 0, top: 0, width: w, height: vh };
+    }
+    if (isHorizontalSplit(splitMode)) {
+      const h = Math.round(vh * splitRatio);
+      return { left: 0, top: swapped ? vh - h : 0, width: vw, height: h };
+    }
     return { left: 0, top: 0, width: vw, height: vh };
   }
 
@@ -1088,13 +1101,16 @@ export function initQualiaPage() {
 
   function applySplit() {
     const on = splitMode !== 'off';
-    document.body.classList.toggle('split-v', splitMode === 'vertical');
-    document.body.classList.toggle('split-h', splitMode === 'horizontal');
+    document.body.classList.toggle('split-v', isVerticalSplit(splitMode));
+    document.body.classList.toggle('split-h', isHorizontalSplit(splitMode));
+    document.body.classList.toggle('split-swap', isSwappedSplit(splitMode));
     document.body.style.setProperty('--split-ratio', String(splitRatio));
     if (btnCamSplit) {
       btnCamSplit.classList.toggle('active', on);
-      btnCamSplit.textContent = splitMode === 'vertical' ? 'split vert'
-                              : splitMode === 'horizontal' ? 'split horiz'
+      btnCamSplit.textContent = splitMode === 'vertical'        ? 'cam right'
+                              : splitMode === 'vertical-swap'   ? 'cam left'
+                              : splitMode === 'horizontal'      ? 'cam below'
+                              : splitMode === 'horizontal-swap' ? 'cam above'
                               : 'split';
     }
     // Leaving split: restore the floating preview's dragged placement. Entering:
@@ -1130,9 +1146,12 @@ export function initQualiaPage() {
   let splitDragging = false;
   let splitRafPending = false;
   function ratioFromPointer(clientX, clientY) {
-    let r = splitMode === 'vertical'
+    let r = isVerticalSplit(splitMode)
       ? clientX / Math.max(1, window.innerWidth)
       : clientY / Math.max(1, window.innerHeight);
+    // Swapped layouts anchor the fx panel to the far edge, so the pointer's
+    // fraction of the axis is the camera's share — invert it to get fx's.
+    if (isSwappedSplit(splitMode)) r = 1 - r;
     for (const p of SNAP_POINTS) { if (Math.abs(r - p) < SNAP_TOL) { r = p; break; } }
     return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, r));
   }
@@ -1814,22 +1833,25 @@ export function initQualiaPage() {
     // fx.width/height is the fx stage backing buffer (already half-sized in
     // split mode). The camera panel is sized at the same device-pixel density
     // from the split ratio, so the composite is a faithful full-viewport frame.
-    if (splitMode === 'vertical') {
+    const swapped = isSwappedSplit(splitMode);
+    if (isVerticalSplit(splitMode)) {
       const r = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, splitRatio));
       const camW = Math.max(1, Math.round(fx.width * (1 - r) / r));
+      // Swapped → camera on the left, fx on the right.
       return {
         W: fx.width + camW, H: fx.height,
-        fxRect:  { x: 0, y: 0, w: fx.width, h: fx.height },
-        camRect: { x: fx.width, y: 0, w: camW, h: fx.height },
+        fxRect:  { x: swapped ? camW : 0, y: 0, w: fx.width, h: fx.height },
+        camRect: { x: swapped ? 0 : fx.width, y: 0, w: camW, h: fx.height },
       };
     }
-    if (splitMode === 'horizontal') {
+    if (isHorizontalSplit(splitMode)) {
       const r = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, splitRatio));
       const camH = Math.max(1, Math.round(fx.height * (1 - r) / r));
+      // Swapped → camera on top, fx below.
       return {
         W: fx.width, H: fx.height + camH,
-        fxRect:  { x: 0, y: 0, w: fx.width, h: fx.height },
-        camRect: { x: 0, y: fx.height, w: fx.width, h: camH },
+        fxRect:  { x: 0, y: swapped ? camH : 0, w: fx.width, h: fx.height },
+        camRect: { x: 0, y: swapped ? 0 : fx.height, w: fx.width, h: camH },
       };
     }
     return {
@@ -1930,7 +1952,7 @@ export function initQualiaPage() {
 
   function refreshRecToastBackend(recording, backend, sink) {
     if (!recording) return '';
-    const capLabel  = backend === 'composite' ? 'viewport'
+    const capLabel  = backend === 'composite' ? 'fx'
                     : backend === 'tab'       ? 'full tab'
                     : 'unknown';
     const sinkLabel = sink === 'fsa'    ? 'saving to chosen file'
@@ -1944,10 +1966,10 @@ export function initQualiaPage() {
   // Refreshes button label / tooltip from the captureMode state.
   function refreshRecordModeBtn() {
     if (!btnRecordMode) return;
-    btnRecordMode.textContent = captureMode === 'tab' ? 'tab' : 'viewport';
+    btnRecordMode.textContent = captureMode === 'tab' ? 'tab' : 'fx';
     btnRecordMode.title = captureMode === 'tab'
       ? 'Capture mode: full tab — share-picker captures the entire tab (fx, overlay, topbar, strudel, sequencer, any open panels). Audio still comes from the in-page mix bus.'
-      : 'Capture mode: viewport — composites fx + overlay layers, no share-picker dialog, no HUD/topbar in the file. Click to switch to full-tab capture.';
+      : 'Capture mode: fx — composites the fx + overlay layers only, no share-picker dialog, no HUD/topbar in the file. Click to switch to full-tab capture.';
   }
   refreshRecordModeBtn();
   btnRecordMode?.addEventListener('click', () => {
@@ -1956,7 +1978,7 @@ export function initQualiaPage() {
     refreshRecordModeBtn();
     // Also refresh the rec button tooltip so it announces the new mode.
     if (btnRecord) {
-      btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'viewport'} (Shift+R)`;
+      btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'fx'} (Shift+R)`;
     }
     settings.save();
   });
@@ -2022,7 +2044,7 @@ export function initQualiaPage() {
         btnRecord.classList.toggle('active-audio', recording);
         if (!recording) {
           btnRecord.textContent = 'rec';
-          btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'viewport'} (Shift+R)`;
+          btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'fx'} (Shift+R)`;
         } else {
           btnRecord.title = `Recording ${refreshRecToastBackend(true, backend, sink)}. Shift+R or click to stop.`;
         }

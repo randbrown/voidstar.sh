@@ -200,6 +200,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* ── Split-screen stage ────────────────────────────────────────────────
        body.split-v → fx panel | camera (side by side)
        body.split-h → fx panel / camera (stacked)
+       body.split-swap → camera and fx panel trade sides (camera on the
+         left / top instead of the right / bottom). The fx panel always
+         keeps --split-ratio of the axis; only the anchor flips.
        --split-ratio is the fx panel's fraction of the axis (0.18–0.82),
        driven live by the splitter drag in page-init.js. */
     body.split-v {
@@ -210,6 +213,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       --viz-left: 0px; --viz-top: 0px;
       --viz-w: 100vw; --viz-h: calc(var(--split-ratio, 0.5) * 100dvh);
     }
+    /* Swapped: fx panel hugs the far edge so the camera takes the near side. */
+    body.split-v.split-swap { --viz-left: calc((1 - var(--split-ratio, 0.5)) * 100vw); }
+    body.split-h.split-swap { --viz-top:  calc((1 - var(--split-ratio, 0.5)) * 100dvh); }
     body.split-dragging { user-select: none; -webkit-user-select: none; }
     body.split-dragging #video { transition: none; }
 
@@ -230,6 +236,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       top: calc(var(--split-ratio, 0.5) * 100dvh); transform: translateY(-50%);
       cursor: row-resize;
     }
+    /* Swapped: the panel boundary sits at the complement of the fx fraction. */
+    body.split-v.split-swap #cam-splitter { left: calc((1 - var(--split-ratio, 0.5)) * 100vw); }
+    body.split-h.split-swap #cam-splitter { top:  calc((1 - var(--split-ratio, 0.5)) * 100dvh); }
     /* Visible grip line + dot, drawn centered in the (wider, easier-to-grab)
        hit area. */
     #cam-splitter::before {
@@ -323,6 +332,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       left: 0; top: calc(var(--split-ratio, 0.5) * 100dvh);
       width: 100vw; height: calc((1 - var(--split-ratio, 0.5)) * 100dvh);
     }
+    /* Swapped: camera moves to the near edge (left / top); fx takes the far half. */
+    body.split-v.split-swap #video.visible { left: 0; }
+    body.split-h.split-swap #video.visible { top: 0; }
 
     /* Topbar always uses the column layout — title row on top, control
        buttons below — across every viewport. Keeps the upper-right corner
@@ -402,12 +414,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-audio                { min-width: 13ch; } /* "audio strudel" */
     #btn-camera               { min-width: 9ch;  } /* "cam large" */
     #btn-cam-rotate           { min-width: 8ch;  } /* "rot 270°" */
-    #btn-cam-split            { min-width: 8ch;  } /* "split horiz" */
+    #btn-cam-split            { min-width: 9ch;  } /* "cam below" */
     #btn-cursor               { min-width: 15ch; } /* "cursor combined" */
     #btn-pause                { min-width: 6ch;  } /* "paused" */
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
-    #btn-record-mode          { min-width: 8ch;  } /* "viewport" */
+    #btn-record-mode          { min-width: 3ch;  } /* "tab" */
 
     /* Topbar group popovers — each `.qg-group` owns a trigger button + a
        hidden popover containing the original buttons unchanged. Click the
@@ -1058,13 +1070,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        width (defined above) so we just dial in tighter spacing and hide
        non-essential pieces here. */
     @media (max-width: 768px) {
-      #topbar       { padding: 0.4rem 0.6rem; gap: 0.3rem; font-size: 0.72rem; }
-      #topbar-titlerow { gap: 0.6rem; }
-      #topbar-left  { gap: 0.6rem; }
-      #topbar-right { gap: 0.35rem; }
-      #topbar-corner { gap: 0.35rem; }
+      #topbar       { padding: 0.4rem 0.5rem; gap: 0.3rem; font-size: 0.72rem; }
+      /* Let the title row + corner cluster wrap rather than clip: if the
+         corner buttons can't fit beside the title they drop to their own
+         line (right-aligned) instead of squeezing "← lab / qualia" out of
+         existence and cutting off the last button. */
+      #topbar-titlerow { gap: 0.5rem; flex-wrap: wrap; }
+      #topbar-left  { gap: 0.5rem; }
+      #topbar-right { gap: 0.3rem; }
+      #topbar-corner { gap: 0.3rem; flex-wrap: wrap; justify-content: flex-end; }
       #lvl, #fxname { display: none; }
-      .ctrl-btn     { padding: 0.32rem 0.6rem; font-size: 0.7rem; }
+      /* Tighter horizontal padding reclaims ~0.3rem per button — enough for
+         the full corner cluster to sit on one line at typical phone widths. */
+      .ctrl-btn     { padding: 0.32rem 0.45rem; font-size: 0.7rem; }
       #panel-stack  {
         left: max(0.5rem, env(safe-area-inset-left));
         right: max(0.5rem, env(safe-area-inset-right));
@@ -1496,7 +1514,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
       <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
       <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
-      <button class="ctrl-btn" id="btn-record-mode" title="Capture mode — viewport (fx + overlay only) or tab (everything visible, including strudel / sequencer / panels via the browser share picker)">viewport</button>
+      <button class="ctrl-btn" id="btn-record-mode" title="Capture mode — fx (clean fx + overlay composite only, no share dialog) or tab (everything visible, including strudel / sequencer / panels via the browser share picker)">fx</button>
       <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
       <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen (X)">full</button>
     </div>
@@ -1539,9 +1557,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn active" id="btn-camera"     title="Camera size (C)">camera</button>
         <button class="ctrl-btn"        id="btn-cam-rotate" title="Rotate camera (R)">rot 0°</button>
         <button class="ctrl-btn active" id="btn-cam-mirror" title="Mirror camera (M)">mirror</button>
-        <!-- Split-screen: off → vertical (side by side) → horizontal (stacked).
-             Both panels are included in viewport screen recordings. -->
-        <button class="ctrl-btn"        id="btn-cam-split"  title="Split screen — camera ⟂ visualizer, draggable divider">split</button>
+        <!-- Split-screen: cycles camera position around the visualizer —
+             off → right → left → below → above → off. Both panels are
+             included in viewport (fx) screen recordings. -->
+        <button class="ctrl-btn"        id="btn-cam-split"  title="Split screen — live camera beside the visualizer. Click to cycle camera position (right → left → below → above → off); drag the divider to resize.">split</button>
       </div>
     </div>
 
