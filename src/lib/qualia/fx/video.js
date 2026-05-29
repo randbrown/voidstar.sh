@@ -42,8 +42,9 @@ import {
   compileProgram, makeFullscreenTri, FULLSCREEN_VERT,
   makeUniformGetter, uploadAudioUniforms,
 } from '../webgl.js';
-import { scaleAudio } from '../field.js';
-import { getVideoEl, getMirror } from '../video.js';
+import { scaleAudio, ema } from '../field.js';
+import { getVideoEl, getMirror, getRotation } from '../video.js';
+import { wirePicker, getStoredDeviceId } from '../devices.js';
 
 
 const PLAYLIST_KEY = 'voidstar.qualia.fx.video.playlist';
@@ -68,6 +69,12 @@ const KICK_RATIO        = 0.92;
 const KICK_DOMINANCE    = 1.15;
 const KICK_PEAK_HALF_S  = 6;
 const KICK_COOLDOWN_MS  = 1500; // tighter than page-init's 10s — this is per-fx advance, not screen flares
+
+// Pose-driven view transform smoothing. Pose channels carry residual landmark
+// jitter; low-pass the resolved transform so it reads as a deliberate camera
+// move, not noise. ~0.3s time constant; frame-rate independent via dt
+// (cf. gargantua-void / dark-space, which use dt*2.5).
+const POSE_SMOOTH_RATE = 3.5;
 
 const FRAG = /* glsl */`#version 300 es
 precision highp float;
@@ -174,8 +181,13 @@ void main() {
   // right onscreen, "background follows you" feel).
   {
     vec2 q = uv - 0.5;
+    // Aspect-correct the rotation: stretch to square space, rotate, unstretch.
+    // Without this a 90°/270° rotation shears by the canvas aspect ratio.
+    float ar = uResolution.x / max(uResolution.y, 1.0);
+    q.x *= ar;
     float c = cos(uRotation), s = sin(uRotation);
     q = mat2(c, -s, s, c) * q;
+    q.x /= ar;
     q /= max(uZoom, 0.001);
     uv = q + 0.5 - vec2(uPanX, -uPanY);
   }
@@ -327,13 +339,13 @@ export default {
     // pose channels are signed [-1,+1] so a base of 0 / 1 + 'add' modulator
     // lands a neutral pose on identity (no offset / no rotation / 1× zoom).
     { id: 'panX',         label: 'pan x',        type: 'range',  min: -0.5, max: 0.5, step: 0.01, default: 0.0,
-      modulators: [{ source: 'pose.head.x', mode: 'add', amount: 0.20 }] },
+      modulators: [{ source: 'pose.head.x', mode: 'add', amount: 0.12 }] },
     { id: 'panY',         label: 'pan y',        type: 'range',  min: -0.5, max: 0.5, step: 0.01, default: 0.0,
-      modulators: [{ source: 'pose.head.y', mode: 'add', amount: 0.20 }] },
+      modulators: [{ source: 'pose.head.y', mode: 'add', amount: 0.12 }] },
     { id: 'rotation',     label: 'rotation',     type: 'range',  min: -1.5, max: 1.5, step: 0.02, default: 0.0,
-      modulators: [{ source: 'pose.shoulderRoll', mode: 'add', amount: 0.50 }] },
+      modulators: [{ source: 'pose.shoulderRoll', mode: 'add', amount: 0.30 }] },
     { id: 'zoom',         label: 'zoom',         type: 'range',  min: 0.25, max: 2.5, step: 0.02, default: 1.0,
-      modulators: [{ source: 'pose.shoulderSpan', mode: 'add', amount: 0.30 }] },
+      modulators: [{ source: 'pose.shoulderSpan', mode: 'add', amount: 0.18 }] },
 
     { id: 'rgbSplit',     label: 'rgb split',    type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
       modulators: [{ source: 'audio.bass', mode: 'add', amount: 0.30 }] },
@@ -343,7 +355,7 @@ export default {
     // Signed wristSpread is fine; the shader uses the magnitude direction
     // as a sinusoid phase so negative reads as a flipped flow, still glitchy.
     { id: 'displace',     label: 'displace',     type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
-      modulators: [{ source: 'pose.wristSpread', mode: 'add', amount: 0.50 }] },
+      modulators: [{ source: 'pose.wristSpread', mode: 'add', amount: 0.30 }] },
     { id: 'hueShift',     label: 'hue shift',    type: 'range',  min: 0, max: 1, step: 0.01, default: 0.0,
       modulators: [{ source: 'audio.mids', mode: 'add', amount: 0.25 }] },
     { id: 'noise',        label: 'noise',        type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
@@ -444,8 +456,40 @@ export default {
     // the list on a transition (it's cheap, but not per-frame cheap).
     let cameraLive = false;
     let lastCamReady = null;
+
+    // Alternate camera source. By default the camera source reuses the shared
+    // pose-camera element (zero extra cost). The user can instead pick a
+    // different physical camera; we then open + own a second MediaStream and
+    // sample that element. `altCamDeviceId` is the chosen device (null = shared,
+    // i.e. same camera as pose). The stream is opened lazily — only while the
+    // camera source is active — so an unused alt camera costs nothing.
+    const ALT_CAM_KEY = 'voidstar.qualia.fx.video.altCam';
+    let altCamDeviceId = (() => { try { return localStorage.getItem(ALT_CAM_KEY) || null; } catch { return null; } })();
+    let altCamStream = null;
+    let altCamOpenedId = null;   // deviceId the live altCamStream belongs to
+    let altCamOpening = false;
+    let disposed = false;
+    const altCamVideoEl = document.createElement('video');
+    altCamVideoEl.playsInline = true;
+    altCamVideoEl.muted       = true;
+    // Hidden but in-DOM — Safari needs the element in the document for
+    // texImage2D to sample a MediaStream reliably (same as makeVideoEl).
+    altCamVideoEl.style.cssText = 'position:absolute;left:-10000px;top:-10000px;width:2px;height:2px;opacity:0;pointer-events:none;';
+    document.body.appendChild(altCamVideoEl);
+
+    // True when we're sampling our own alternate-camera stream rather than the
+    // shared pose feed. Drives mirror/rotation: the shared feed inherits the
+    // app's selfie mirror + camera rotation; alternate cameras get neither.
+    function altCamActive() {
+      return usingCamera && !!altCamStream
+          && altCamVideoEl.readyState >= 2 && altCamVideoEl.videoWidth > 0;
+    }
+
     /** The element the texture is uploaded from this frame. */
-    function sourceEl() { return usingCamera ? getVideoEl() : activeVid; }
+    function sourceEl() {
+      if (!usingCamera) return activeVid;
+      return altCamActive() ? altCamVideoEl : getVideoEl();
+    }
 
     // DOM-fallback overlay for tainted (CORS-blocked) URLs — when a clip
     // refuses cross-origin reads we can't upload it to the texture, so we
@@ -472,6 +516,51 @@ export default {
       fallbackVid.removeAttribute('src');
       fallbackVid.load();
       fallbackVid.style.display = 'none';
+    }
+
+    // Open the chosen alternate camera as its own MediaStream. Caller has
+    // already filtered out "shared"/pose-camera ids (those reuse getVideoEl).
+    async function openAltCamera(deviceId) {
+      closeAltCamera();
+      altCamOpening = true;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: deviceId } }, audio: false,
+        });
+        // Bail if we were torn down or the choice changed mid-await.
+        if (disposed || altCamDeviceId !== deviceId) {
+          stream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+          return;
+        }
+        altCamStream = stream;
+        altCamOpenedId = deviceId;
+        altCamVideoEl.srcObject = stream;
+        altCamVideoEl.play().catch(() => {});
+      } catch (err) {
+        altCamOpenedId = null;
+        console.warn('[qualia] video qfx: alt camera open failed:', err);
+      } finally {
+        altCamOpening = false;
+      }
+    }
+    function closeAltCamera() {
+      if (altCamStream) {
+        altCamStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+        altCamStream = null;
+      }
+      try { altCamVideoEl.srcObject = null; } catch {}
+      altCamOpenedId = null;
+    }
+    // Reconcile the alt-camera stream with current intent each frame: keep it
+    // open only while the camera source is active AND a non-shared device is
+    // chosen; release it otherwise so an unused alt camera costs nothing.
+    function maintainAltCamera() {
+      const want = (usingCamera && altCamDeviceId) ? altCamDeviceId : null;
+      if (want) {
+        if (altCamOpenedId !== want && !altCamOpening) openAltCamera(want);
+      } else if (altCamStream || altCamOpenedId) {
+        closeAltCamera();
+      }
     }
 
     // ── Playlist editor UI ───────────────────────────────────────────────
@@ -522,7 +611,14 @@ export default {
     camAddBtn.className = 'qp-toggle';
     camAddBtn.textContent = '＋ use camera';
     camAddBtn.title = 'Glitch the live camera. Turn the camera on via the topbar pose-source select.';
-    camRow.append(camAddBtn);
+    // Camera picker — choose which physical camera the source uses. Defaults
+    // to "same as pose camera" (reuses the shared feed, no extra cost). Hidden
+    // when there's ≤1 camera or the camera source isn't active.
+    const camSelect = document.createElement('select');
+    camSelect.title = 'Which camera to glitch. "same as pose camera" reuses the live pose feed (no extra cost); any other choice opens a second stream.';
+    camSelect.style.cssText = 'background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-family: var(--font-mono); font-size: 0.65rem; padding: 0.12rem 0.3rem; max-width: 11rem;';
+    camSelect.style.display = 'none';
+    camRow.append(camAddBtn, camSelect);
     panel.appendChild(camRow);
 
     // The actual list rendered as a tight vertical stack.
@@ -543,6 +639,36 @@ export default {
     panel.appendChild(hint);
 
     paramsContainer?.appendChild(panel);
+
+    // Wire the camera picker. We own persistence (ALT_CAM_KEY), so persist:
+    // false. The leadingOption is "same as pose camera" — selecting it (or the
+    // pose camera's own device) resolves to the shared feed (altCamDeviceId =
+    // null) so we never double-open one camera.
+    const SHARED_CAM = '';
+    const camPicker = wirePicker({
+      select: camSelect,
+      kind: 'videoinput',
+      persist: false,
+      leadingOption: { value: SHARED_CAM, label: 'same as pose camera' },
+      getCurrentId: () => altCamDeviceId || SHARED_CAM,
+      onChoose: async (id) => {
+        const poseCamId = getStoredDeviceId('cam');
+        const next = (!id || id === SHARED_CAM || id === poseCamId) ? null : id;
+        altCamDeviceId = next;
+        try {
+          if (next) localStorage.setItem(ALT_CAM_KEY, next);
+          else localStorage.removeItem(ALT_CAM_KEY);
+        } catch {}
+        maintainAltCamera();
+        return next ?? SHARED_CAM;
+      },
+    });
+    // Show the picker only while the camera source is active (and >1 camera —
+    // wirePicker.populate hides it otherwise).
+    function updateCamPickerVisibility() {
+      if (usingCamera) camPicker.populate(altCamDeviceId || SHARED_CAM);
+      else camSelect.style.display = 'none';
+    }
 
     // Surface a one-off error/info message inside the source list rather
     // than alert()-spamming on every CORS hiccup.
@@ -636,6 +762,7 @@ export default {
       if (playlist.length === 0) {
         cursor = 0;
         usingCamera = false;
+        updateCamPickerVisibility();
         activeVid.pause();
         try { activeVid.removeAttribute('src'); activeVid.load(); } catch {}
         hideFallback();
@@ -667,11 +794,13 @@ export default {
       if (entry.kind === 'camera') {
         usingCamera = true;
         lastCamReady = null;
+        updateCamPickerVisibility();
         try { vidA.pause(); } catch {}
         try { vidB.pause(); } catch {}
         return;
       }
       usingCamera = false;
+      updateCamPickerVisibility();
       activeVid.loop = !!(currentParams.loop && currentParams.advance === 'loop');
       activeVid.playbackRate = currentParams.playbackRate || 1;
       activeVid.muted = (currentParams.volume || 0) <= 0;
@@ -805,13 +934,18 @@ export default {
       currentParams.playbackRate = params.playbackRate;
       currentParams.volume       = params.volume;
       currentParams.mix          = params.mix;
-      currentParams.panX         = params.panX;
-      currentParams.panY         = params.panY;
-      currentParams.rotation     = params.rotation;
-      currentParams.zoom         = params.zoom;
+      // Pose-driven transform: low-pass to shed landmark jitter. These params
+      // are pose-only (no audio modulator), so smoothing the resolved value is
+      // safe — it eases the pose contribution + static slider/preset moves
+      // without touching the snappy audio-reactive params below.
+      const poseK = Math.min(1, dt * POSE_SMOOTH_RATE);
+      currentParams.panX         = ema(currentParams.panX,     params.panX,     poseK);
+      currentParams.panY         = ema(currentParams.panY,     params.panY,     poseK);
+      currentParams.rotation     = ema(currentParams.rotation, params.rotation, poseK);
+      currentParams.zoom         = ema(currentParams.zoom,     params.zoom,     poseK);
       currentParams.rgbSplit     = params.rgbSplit;
       currentParams.chroma       = params.chroma;
-      currentParams.displace     = params.displace;
+      currentParams.displace     = ema(currentParams.displace, params.displace, poseK);
       currentParams.hueShift     = params.hueShift;
       currentParams.noise        = params.noise;
       currentParams.scanlines    = params.scanlines;
@@ -859,6 +993,9 @@ export default {
         kickLastFireMs = nowMs;
         advanceNext();
       }
+
+      // Open/release the alternate camera stream to match current intent.
+      maintainAltCamera();
 
       // Texture upload — guard against tainted-canvas exceptions on a
       // CORS-blocked URL. Only attempt when the source has actual frames
@@ -919,9 +1056,11 @@ export default {
       gl.uniform2f(U('uVideoSize'), scratch.videoSize[0], scratch.videoSize[1]);
       gl.uniform1f(U('uTime'), scratch.time);
       gl.uniform1i(U('uFit'), currentParams.fit === 'contain' ? 1 : 0);
-      // Mirror only the camera feed (and only when the app's selfie mirror is
-      // on) so the glitched live image faces the same way as everywhere else.
-      gl.uniform1f(U('uFlipX'), (usingCamera && getMirror()) ? 1.0 : 0.0);
+      // Mirror only the SHARED pose feed (and only when the app's selfie mirror
+      // is on) so the glitched live image faces the same way as everywhere
+      // else. Alternate cameras are left un-mirrored.
+      const onSharedCam = usingCamera && !altCamActive();
+      gl.uniform1f(U('uFlipX'), (onSharedCam && getMirror()) ? 1.0 : 0.0);
       gl.uniform1f(U('uMix'), fallbackActive ? 0 : currentParams.mix);
       // View transform — applied to the texture, not the canvas. Still
       // active under fallback would be nice but the DOM-video can't be
@@ -930,7 +1069,11 @@ export default {
       const fxScale = fallbackActive ? 0 : 1;
       gl.uniform1f(U('uPanX'),     currentParams.panX     * fxScale);
       gl.uniform1f(U('uPanY'),     currentParams.panY     * fxScale);
-      gl.uniform1f(U('uRotation'), currentParams.rotation * fxScale);
+      // Shared pose feed: start from the app's camera rotation (0/90/180/270)
+      // so the glitched feed matches the preview orientation; the rotation
+      // param is then relative on top. Clips + alt cameras have no base.
+      const camRotBase = onSharedCam ? (getRotation() * Math.PI) / 180 : 0;
+      gl.uniform1f(U('uRotation'), camRotBase + currentParams.rotation * fxScale);
       // Zoom can't be zeroed under fallback (would map all pixels to texel 0).
       // Hold it at identity instead.
       gl.uniform1f(U('uZoom'),     fallbackActive ? 1.0 : currentParams.zoom);
@@ -958,6 +1101,9 @@ export default {
       update,
       render,
       dispose() {
+        disposed = true;
+        closeAltCamera();
+        try { altCamVideoEl.remove(); } catch {}
         try { activeVid.pause(); } catch {}
         try { vidA.pause(); vidA.removeAttribute('src'); vidA.load(); vidA.remove(); } catch {}
         try { vidB.pause(); vidB.removeAttribute('src'); vidB.load(); vidB.remove(); } catch {}
