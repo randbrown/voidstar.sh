@@ -328,6 +328,10 @@ export default {
   // looks manually without digging into the phase button.
   params: [
     { id: 'preset',       label: 'preset',       type: 'select', options: ['default', 'clean', 'vhs', 'datamosh', 'cinema', 'crush', 'follow'], default: 'default' },
+    // ── Source / playback + global reactivity — INDEPENDENT of presets ──────
+    // User-owned settings, grouped together up top: presets and auto-phase
+    // never touch these, so a clip's framing, playback, mix and overall
+    // audio/pose responsiveness hold steady while the look (below) cycles.
     { id: 'fit',          label: 'fit',          type: 'select', options: ['cover', 'contain'], default: 'cover' },
     { id: 'playbackRate', label: 'playback',     type: 'range',  min: 0.25, max: 2.5, step: 0.05, default: 1.0 },
     { id: 'volume',       label: 'volume',       type: 'range',  min: 0, max: 1, step: 0.02, default: 0 },
@@ -339,7 +343,18 @@ export default {
     // swap both the look (preset) and the clip. 'hold' = sources stay put.
     { id: 'phaseAdvance', label: 'phase src',    type: 'select', options: ['hold', 'next', 'random'], default: 'hold' },
     { id: 'mix',          label: 'mix',          type: 'range',  min: 0, max: 1, step: 0.02, default: 1.0 },
+    // Two reactivity masters: `reactivity` scales every audio modulator,
+    // `pose react` scales every pose modulator (pan/zoom/rotation/displace).
+    // Kept OUT of presets so the user's chosen responsiveness sticks across
+    // preset / auto-phase changes. The engine reads these globally (see
+    // modulation.js); 0 + zero look params ⇒ a genuinely unmodified clip.
+    { id: 'reactivity',     label: 'reactivity',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
+    { id: 'poseReactivity', label: 'pose react',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
 
+    // ── The look — PRESET-CONTROLLED aesthetic + reactive effects ───────────
+    // Everything below is addressed by presets (and therefore auto-phase): the
+    // pose-transform base, the glitch stack, and scanlines (not reactive, but
+    // an aesthetic artifact, so it belongs with the look).
     // Pose-driven view transform — feel: the background follows the body.
     // pose channels are signed [-1,+1] so a base of 0 / 1 + 'add' modulator
     // lands a neutral pose on identity (no offset / no rotation / 1× zoom).
@@ -372,12 +387,6 @@ export default {
       modulators: [{ source: 'audio.beatPulse', mode: 'add', amount: 0.08 }] },
     { id: 'pixelate',     label: 'pixelate',     type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
       modulators: [{ source: 'audio.highs', mode: 'add', amount: 0.08 }] },
-    // Two reactivity masters: `reactivity` scales every audio modulator,
-    // `pose react` scales every pose modulator (pan/zoom/rotation/displace).
-    // Both at 0 + zero base values ⇒ a genuinely unmodified clip (the
-    // 'default' preset). The engine reads these globally (see modulation.js).
-    { id: 'reactivity',     label: 'reactivity',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
-    { id: 'poseReactivity', label: 'pose react',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
   // autoPhase walks the preset dropdown — one knob to control all the looks.
@@ -395,44 +404,44 @@ export default {
     ],
   },
 
-  // Presets address the reactive look — the glitch strengths, the pose-transform
-  // base (pan/rotation/zoom at identity), and the two reactivity masters
-  // (reactivity / pose react). They deliberately do NOT touch the non-reactive
-  // playback/behavior params (fit, playback, volume, loop, advance,
-  // phaseAdvance, mix): those are user-owned and stick across preset/auto-phase
-  // changes. 'default' is a clean clip with slight reactivity (subtle audio
-  // glitch + natural pose follow). 'clean' is the genuinely unaffected video —
-  // zero audio AND pose reactivity — left for the user to dial up by hand.
-  // 'follow' is the pose-following showcase: zero glitch + audio, full pose.
+  // Presets address ONLY the look — the pose-transform base (pan/rotation/zoom
+  // at identity), the glitch stack, and scanlines. They deliberately do NOT
+  // touch the user-owned settings grouped up top: the playback/behavior params
+  // (fit, playback, volume, loop, advance, phaseAdvance, mix) OR the two
+  // reactivity masters (reactivity / pose react). Those stick across preset and
+  // auto-phase changes, so the user's framing + responsiveness hold while the
+  // look cycles. default / clean are both the pristine clip (clean is the
+  // explicit "no effects" entry); cinema is a subtle film grade; follow punches
+  // in for a tighter, body-tracking frame (its follow strength is the user's
+  // pose-react master).
   presets: {
     default:  { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
-                scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
-                reactivity: 0.5, poseReactivity: 1.0 },
+                scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
     clean:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
-                scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
-                reactivity: 0, poseReactivity: 0 },
+                scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
     vhs:      { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.05,
-                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0,
-                reactivity: 1.0, poseReactivity: 1.0 },
+                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0 },
     datamosh: { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.4, chroma: 0.6, displace: 0.7, hueShift: 0.0,
-                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
-                reactivity: 1.0, poseReactivity: 1.0 },
+                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
+    // Cinema — subtle film grade: a touch of warm hue + lens aberration, light
+    // grain, faint scanlines and gentle posterize banding. Reads distinctly
+    // "graded" against the pristine clip without tipping into glitch.
     cinema:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
-                reactivity: 1.0, poseReactivity: 1.0 },
+                rgbSplit: 0.0, chroma: 0.05, displace: 0.0, hueShift: 0.04,
+                noise: 0.06, scanlines: 0.12, posterize: 0.18, pixelate: 0.0 },
     crush:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.2, displace: 0.0, hueShift: 0.1,
-                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4,
-                reactivity: 1.0, poseReactivity: 1.0 },
-    follow:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4 },
+    // Follow — punched-in framing (base zoom 1.2). With the pose-react master
+    // up, the shoulderSpan modulator rides on top so the frame tracks the body;
+    // at pose-react 0 it's just a tighter static crop.
+    follow:   { panX: 0, panY: 0, rotation: 0, zoom: 1.2,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
-                reactivity: 0, poseReactivity: 1.0 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
   },
 
   async create(canvas, { gl, paramsContainer, applyPreset }) {
