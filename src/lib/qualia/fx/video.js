@@ -327,7 +327,7 @@ export default {
   // factory snapshot in update(). The dropdown also lets users browse
   // looks manually without digging into the phase button.
   params: [
-    { id: 'preset',       label: 'preset',       type: 'select', options: ['default', 'vhs', 'datamosh', 'cinema', 'crush', 'follow'], default: 'default' },
+    { id: 'preset',       label: 'preset',       type: 'select', options: ['default', 'clean', 'vhs', 'datamosh', 'cinema', 'crush', 'follow'], default: 'default' },
     { id: 'fit',          label: 'fit',          type: 'select', options: ['cover', 'contain'], default: 'cover' },
     { id: 'playbackRate', label: 'playback',     type: 'range',  min: 0.25, max: 2.5, step: 0.05, default: 1.0 },
     { id: 'volume',       label: 'volume',       type: 'range',  min: 0, max: 1, step: 0.02, default: 0 },
@@ -394,33 +394,44 @@ export default {
     ],
   },
 
-  // Presets address ONLY the glitch "look" — the per-effect strengths plus the
-  // pose-transform base (pan/rotation/zoom at identity). They deliberately do
-  // NOT touch the playback/behavior params (fit, playback, volume, loop,
-  // advance, phaseAdvance, mix) or the two reactivity masters (reactivity,
-  // pose react): those are user-owned and stick across preset/auto-phase
-  // changes. Because reactivity is no longer baked in, default / cinema /
-  // follow are all the same "clean" look now — the audio/pose response is
-  // whatever the user's masters are set to.
+  // Presets address the reactive look — the glitch strengths, the pose-transform
+  // base (pan/rotation/zoom at identity), and the two reactivity masters
+  // (reactivity / pose react). They deliberately do NOT touch the non-reactive
+  // playback/behavior params (fit, playback, volume, loop, advance,
+  // phaseAdvance, mix): those are user-owned and stick across preset/auto-phase
+  // changes. 'default' is a clean clip with slight reactivity (subtle audio
+  // glitch + natural pose follow). 'clean' is the genuinely unaffected video —
+  // zero audio AND pose reactivity — left for the user to dial up by hand.
+  // 'follow' is the pose-following showcase: zero glitch + audio, full pose.
   presets: {
     default:  { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
-                scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
+                scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
+                reactivity: 0.5, poseReactivity: 1.0 },
+    clean:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
+                scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
+                reactivity: 0, poseReactivity: 0 },
     vhs:      { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.05,
-                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0 },
+                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0,
+                reactivity: 1.0, poseReactivity: 1.0 },
     datamosh: { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.4, chroma: 0.6, displace: 0.7, hueShift: 0.0,
-                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
+                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
+                reactivity: 1.0, poseReactivity: 1.0 },
     cinema:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
+                reactivity: 1.0, poseReactivity: 1.0 },
     crush:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.2, displace: 0.0, hueShift: 0.1,
-                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4,
+                reactivity: 1.0, poseReactivity: 1.0 },
     follow:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0,
+                reactivity: 0, poseReactivity: 1.0 },
   },
 
   async create(canvas, { gl, paramsContainer, applyPreset }) {
