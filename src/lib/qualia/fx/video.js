@@ -404,41 +404,52 @@ export default {
     ],
   },
 
-  // Presets address ONLY the look — the pose-transform base (pan/rotation/zoom
-  // at identity), the glitch stack, and scanlines. They deliberately do NOT
-  // touch the user-owned settings grouped up top: the playback/behavior params
-  // (fit, playback, volume, loop, advance, phaseAdvance, mix) OR the two
-  // reactivity masters (reactivity / pose react). Those stick across preset and
-  // auto-phase changes, so the user's framing + responsiveness hold while the
-  // look cycles. default / clean are both the pristine clip (clean is the
-  // explicit "no effects" entry); cinema is a subtle film grade; follow punches
-  // in for a tighter, body-tracking frame (its follow strength is the user's
-  // pose-react master).
+  // Each preset is a complete LOOK — it sets a value for every look param: the
+  // pose-transform base (pan/rotation/zoom), the glitch stack (rgbSplit, chroma,
+  // displace, hueShift, noise, posterize, pixelate) and scanlines. For the
+  // reactive params these bases are the *floor*; the per-param audio/pose
+  // modulators ride on top, scaled by the global masters. Presets deliberately
+  // do NOT set those masters (reactivity / pose react) or the playback/behavior
+  // params (fit, playback, volume, loop, advance, phaseAdvance, mix) — all of
+  // which are grouped up top and stay user-owned, so framing + how hard the clip
+  // responds to audio/pose hold steady while the look cycles (handy for live
+  // use when lighting or occlusion makes you want to dial reactivity down).
   presets: {
-    default:  { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
-                scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
+    // clean — the neutral look: no baked-in effects. What you see is the raw
+    // clip plus whatever the reactivity / pose-react masters are dialed to.
     clean:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
                 scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
+    // default — the house look: a permanent whisper of chromatic split + light
+    // posterize grade so the clip has character even at rest, with the reactive
+    // modulation breathing on top.
+    default:  { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                rgbSplit: 0.10, chroma: 0.0, displace: 0.0, hueShift: 0.03, noise: 0.0,
+                scanlines: 0.0, posterize: 0.12, pixelate: 0.0 },
+    // vhs — worn tape: tracking-error rgb split, warm hue bleed, heavy grain,
+    // strong scanlines and color banding.
     vhs:      { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.05,
+                rgbSplit: 0.15, chroma: 0.0, displace: 0.0, hueShift: 0.05,
                 noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0 },
-    datamosh: { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+    // datamosh — compression smear: big rgb split + chroma, heavy displacement
+    // flow and a dusting of noise.
+    datamosh: { panX: 0, panY: 0, rotation: 0, zoom: 1.05,
                 rgbSplit: 0.4, chroma: 0.6, displace: 0.7, hueShift: 0.0,
                 noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
-    // Cinema — subtle film grade: a touch of warm hue + lens aberration, light
-    // grain, faint scanlines and gentle posterize banding. Reads distinctly
-    // "graded" against the pristine clip without tipping into glitch.
-    cinema:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.0, chroma: 0.05, displace: 0.0, hueShift: 0.04,
-                noise: 0.06, scanlines: 0.12, posterize: 0.18, pixelate: 0.0 },
+    // cinema — anamorphic film grade: a gentle punch-in, lens aberration, warm
+    // hue, fine grain, faint scanlines and a soft posterize grade.
+    cinema:   { panX: 0, panY: 0, rotation: 0, zoom: 1.1,
+                rgbSplit: 0.0, chroma: 0.1, displace: 0.0, hueShift: 0.06,
+                noise: 0.08, scanlines: 0.15, posterize: 0.2, pixelate: 0.0 },
+    // crush — bit/colour crush: chunky pixelation, hard posterize, chroma fringe
+    // and a hue push.
     crush:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.2, displace: 0.0, hueShift: 0.1,
                 noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4 },
-    // Follow — punched-in framing (base zoom 1.2). With the pose-react master
-    // up, the shoulderSpan modulator rides on top so the frame tracks the body;
-    // at pose-react 0 it's just a tighter static crop.
+    // follow — clean punched-in framing (base zoom 1.2). Look kept pristine so
+    // the framing reads; with the pose-react master up the shoulderSpan modulator
+    // rides on top and the frame tracks the body. At pose-react 0 it's a tighter
+    // static crop.
     follow:   { panX: 0, panY: 0, rotation: 0, zoom: 1.2,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
                 noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
