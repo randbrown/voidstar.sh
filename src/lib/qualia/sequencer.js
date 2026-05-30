@@ -57,6 +57,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   const nameInput   = document.getElementById('sequencer-name');
   const tabBar      = document.getElementById('sequencer-tabs');
   const gridPane    = document.getElementById('sequencer-grid');
+  const settingsPane= document.getElementById('sequencer-settings');
   const patternsPane= document.getElementById('sequencer-patterns');
   const patListEl   = document.getElementById('seq-pat-list');
 
@@ -1078,8 +1079,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     tabBar?.querySelectorAll('.sp-tab').forEach(t =>
       t.classList.toggle('active', t.dataset.tab === name));
     if (gridPane)     gridPane.style.display     = name === 'grid'     ? '' : 'none';
+    if (settingsPane) settingsPane.style.display = name === 'settings' ? '' : 'none';
     if (patternsPane) patternsPane.style.display = name === 'patterns' ? 'flex' : 'none';
     if (name === 'patterns') renderPatternList();
+    if (name === 'settings' && !propsEl?.children.length) renderProps();
   }
   tabBar?.querySelectorAll('.sp-tab').forEach(t => {
     t.addEventListener('click', () => setTab(t.dataset.tab));
