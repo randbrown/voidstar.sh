@@ -1242,11 +1242,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* Grid pane — just the pad-by-step matrix now (pattern settings moved to
        their own tab). Scrolls internally so the matrix fills the panel. */
     #sequencer-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-    /* Settings tab pane — holds the pattern-settings (#seq-props) controls
-       that used to sit pinned above the matrix. Scrolls independently so a
-       wrapped controls block never pushes the matrix tab around. */
+    /* Settings pane — the pattern-settings (#seq-props) controls. Sits above
+       the matrix when shown and is capped so it can't eat the whole panel
+       when both are visible; scrolls internally past the cap. The bottom
+       border divides it from the grid below. */
     #sequencer-settings {
-      flex: 1; min-height: 0; overflow: auto;
+      flex: 0 0 auto; min-height: 0;
+      max-height: 55%; overflow: auto;
+      border-bottom: 1px solid var(--border);
+    }
+    /* Grid hidden → settings is the only pane, so let it fill the body. */
+    #sequencer-settings.solo {
+      flex: 1 1 auto; max-height: none; border-bottom: none;
     }
     #seq-props {
       display: flex; flex-wrap: wrap; gap: 0.4rem 0.7rem;
@@ -2063,22 +2070,23 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="btn-sequencer-sync" title="Realign sequencer to Strudel cycle boundary now" style="display:none">⟲</button>
     <button class="ctrl-btn" id="btn-sequencer-close" title="Close (Q)">×</button>
   </div>
+  <!-- grid + settings are independent show/hide toggles (not exclusive
+       tabs) so the pad matrix and the pattern-settings controls can stay
+       visible together — or either one collapsed to reclaim space on a
+       phone. Settings stacks above the matrix when shown. patterns is an
+       exclusive view. -->
   <div id="sequencer-tabs">
-    <button class="sp-tab active" data-tab="grid">grid</button>
-    <button class="sp-tab"        data-tab="patterns">patterns</button>
-    <button class="sp-tab"        data-tab="settings" title="Pattern settings — beats, steps, tempo, sync">settings</button>
+    <button class="sp-tab active" data-tab="grid"     title="Show / hide the pad grid">grid</button>
+    <button class="sp-tab active" data-tab="settings" title="Show / hide pattern settings — beats, steps, tempo, sync">settings</button>
+    <button class="sp-tab"        data-tab="patterns" title="Saved patterns">patterns</button>
+  </div>
+  <div id="sequencer-settings">
+    <div id="seq-props"></div>
   </div>
   <div id="sequencer-grid">
     <div id="seq-matrix-wrap">
       <div id="seq-matrix"></div>
     </div>
-  </div>
-  <!-- Pattern settings live in their own tab rather than a pinned strip
-       above the grid: on a phone the beats/steps/tempo controls wrapped to
-       three rows and ate most of the panel before a single pad was visible.
-       Tucking them behind a tab gives the matrix the full panel height. -->
-  <div id="sequencer-settings" style="display:none">
-    <div id="seq-props"></div>
   </div>
   <div id="sequencer-patterns" style="display:none">
     <div class="sp-pat-toolbar">
