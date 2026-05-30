@@ -44,6 +44,7 @@ import antireductionism from './fx/antireductionism.js';
 import detector       from './fx/detector.js';
 import ghostMachine   from './fx/ghost-machine.js';
 import video          from './fx/video.js';
+import slurmcore      from './fx/slurmcore.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -124,6 +125,7 @@ export function initQualiaPage() {
   mesh.register(detector);
   mesh.register(ghostMachine);
   mesh.register(video);
+  mesh.register(slurmcore);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
@@ -896,11 +898,18 @@ export function initQualiaPage() {
   }
 
   function applyAudioFilter() {
+    // 'slurmcore' is the slurmcore quale's own chopped output (adopted via the
+    // audioFx facade in core.js). Like the engines, it's listed in every
+    // non-off mode so that when it IS present it feeds reactivity + the
+    // recordable mix; it's heard live regardless via its own ctx.destination.
+    // (Caveat: in 'mic'/'all' the raw mic is also in the mix, so slurming the
+    // mic records both the dry mic and the slurm. For a clean slurm recording
+    // use a file source under 'mix' — that mode excludes the raw mic.)
     switch (audioMode) {
-      case 'off': audio.setSourceFilter([]);                                          break;
-      case 'mic': audio.setSourceFilter(['mic']);                                     break;
-      case 'mix': audio.setSourceFilter(['strudel', 'sequencer', 'vocoder']);         break;
-      case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer', 'vocoder']);  break;
+      case 'off': audio.setSourceFilter([]);                                                       break;
+      case 'mic': audio.setSourceFilter(['mic', 'slurmcore']);                                     break;
+      case 'mix': audio.setSourceFilter(['strudel', 'sequencer', 'vocoder', 'slurmcore']);         break;
+      case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer', 'vocoder', 'slurmcore']);  break;
     }
   }
 
