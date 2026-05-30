@@ -386,6 +386,7 @@ export default {
   autoPhase: {
     steps: [
       { preset: 'default' },
+      { preset: 'clean' },
       { preset: 'vhs' },
       { preset: 'datamosh' },
       { preset: 'cinema' },
