@@ -333,6 +333,11 @@ export default {
     { id: 'volume',       label: 'volume',       type: 'range',  min: 0, max: 1, step: 0.02, default: 0 },
     { id: 'loop',         label: 'loop track',   type: 'toggle', default: true },
     { id: 'advance',      label: 'advance',      type: 'select', options: ['loop', 'next', 'random', 'on-kick'], default: 'loop' },
+    // Phase-driven source switching — independent of `advance` (which governs
+    // what happens when a clip ends). When set to next/random the playlist
+    // advances on every auto-phase step (see update()), so a phase change can
+    // swap both the look (preset) and the clip. 'hold' = sources stay put.
+    { id: 'phaseAdvance', label: 'phase src',    type: 'select', options: ['hold', 'next', 'random'], default: 'hold' },
     { id: 'mix',          label: 'mix',          type: 'range',  min: 0, max: 1, step: 0.02, default: 1.0 },
 
     // Pose-driven view transform — feel: the background follows the body.
@@ -389,37 +394,33 @@ export default {
     ],
   },
 
-  // Presets reset ALL non-source params including the pose transform. Each
-  // sets BOTH reactivity masters explicitly so switching between presets is
-  // deterministic (a master left unset would carry over from the prior
-  // preset). 'default' is a genuinely unmodified clip: zero glitch, zero
-  // reactivity (audio AND pose). 'follow' is the pose-following showcase:
-  // zero glitch, no audio reactivity, full pose reactivity.
+  // Presets address ONLY the glitch "look" — the per-effect strengths plus the
+  // pose-transform base (pan/rotation/zoom at identity). They deliberately do
+  // NOT touch the playback/behavior params (fit, playback, volume, loop,
+  // advance, phaseAdvance, mix) or the two reactivity masters (reactivity,
+  // pose react): those are user-owned and stick across preset/auto-phase
+  // changes. Because reactivity is no longer baked in, default / cinema /
+  // follow are all the same "clean" look now — the audio/pose response is
+  // whatever the user's masters are set to.
   presets: {
-    default:  { fit: 'cover', playbackRate: 1.0, volume: 0, loop: true, advance: 'loop', mix: 1.0,
-                panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+    default:  { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
-                scanlines: 0.0, posterize: 0.0, pixelate: 0.0, reactivity: 0, poseReactivity: 0 },
+                scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
     vhs:      { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.05,
-                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0, mix: 1.0,
-                reactivity: 1.0, poseReactivity: 1.0 },
+                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0 },
     datamosh: { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.4, chroma: 0.6, displace: 0.7, hueShift: 0.0,
-                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 0.95,
-                reactivity: 1.0, poseReactivity: 1.0 },
+                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
     cinema:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0,
-                reactivity: 1.0, poseReactivity: 1.0 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
     crush:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.2, displace: 0.0, hueShift: 0.1,
-                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4, mix: 1.0,
-                reactivity: 1.0, poseReactivity: 1.0 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4 },
     follow:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
                 rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0,
-                reactivity: 0, poseReactivity: 1.0 },
+                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0 },
   },
 
   async create(canvas, { gl, paramsContainer, applyPreset }) {
@@ -835,6 +836,21 @@ export default {
       }
     }
 
+    // Step the playlist by an explicit mode ('next' | 'random'), independent of
+    // the `advance` param. Shared by clip-end auto-advance and phase-driven
+    // source switching. No-op with fewer than two sources.
+    function advanceSource(mode) {
+      if (playlist.length < 2) return;
+      let nextIdx = cursor;
+      if (mode === 'random') {
+        do { nextIdx = Math.floor(Math.random() * playlist.length); }
+        while (nextIdx === cursor);
+      } else {
+        nextIdx = (cursor + 1) % playlist.length;
+      }
+      setCursor(nextIdx);
+    }
+
     function advanceNext() {
       if (playlist.length === 0) return;
       const mode = currentParams.advance;
@@ -842,14 +858,7 @@ export default {
         // single-track loop — the <video loop> attr handles this; nothing to do.
         return;
       }
-      let nextIdx = cursor;
-      if (mode === 'random' && playlist.length > 1) {
-        do { nextIdx = Math.floor(Math.random() * playlist.length); }
-        while (nextIdx === cursor);
-      } else {
-        nextIdx = (cursor + 1) % playlist.length;
-      }
-      setCursor(nextIdx);
+      advanceSource(mode === 'random' ? 'random' : 'next');
     }
 
     // Wire UI events
@@ -932,11 +941,19 @@ export default {
         lastPreset = params.preset;
         // Skip the first-frame "change" — initial null → 'default' would
         // re-apply factory defaults and clobber any persisted user tweaks.
-        if (prev !== null && typeof applyPreset === 'function') {
-          applyPreset(params.preset);
-          // Don't return — we still want playback-affecting params applied
-          // this tick. The slider positions will catch up on the next
-          // frame's resolveParams pass.
+        if (prev !== null) {
+          if (typeof applyPreset === 'function') {
+            applyPreset(params.preset);
+            // Don't return — we still want playback-affecting params applied
+            // this tick. The slider positions will catch up on the next
+            // frame's resolveParams pass.
+          }
+          // A preset flip is the auto-phase "step" signal (autoPhase cycles
+          // the preset select). When the user has opted into phase-driven
+          // source switching, advance the playlist on the same beat so a
+          // phase change can swap both the look and the clip.
+          const pa = params.phaseAdvance;
+          if (pa && pa !== 'hold') advanceSource(pa === 'random' ? 'random' : 'next');
         }
       }
 
