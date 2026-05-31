@@ -37,6 +37,18 @@ function saveSeqVolume(v) {
   try { localStorage.setItem(SEQ_VOLUME_KEY, String(v)); } catch {}
 }
 
+// Whether the pattern-settings pane shows alongside the grid. Persisted so a
+// user who collapses it (to give the matrix more room) doesn't get it back on
+// every reopen. Defaults to visible — the grid + settings are meant to be
+// usable side by side.
+const SEQ_SHOW_SETTINGS_KEY = 'voidstar.qualia.sequencer.showSettings';
+function loadShowSettings() {
+  try { return localStorage.getItem(SEQ_SHOW_SETTINGS_KEY) !== '0'; } catch { return true; }
+}
+function saveShowSettings(on) {
+  try { localStorage.setItem(SEQ_SHOW_SETTINGS_KEY, on ? '1' : '0'); } catch {}
+}
+
 export function createSequencer({ audio, syncStrudel } = {}) {
   // Snapshot panel-open state from the previous session ONCE — open()/close()
   // mutate the stored flag for next time, but the answer to "should we
@@ -57,6 +69,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   const nameInput   = document.getElementById('sequencer-name');
   const tabBar      = document.getElementById('sequencer-tabs');
   const gridPane    = document.getElementById('sequencer-grid');
+  const settingsPane= document.getElementById('sequencer-settings');
   const patternsPane= document.getElementById('sequencer-patterns');
   const patListEl   = document.getElementById('seq-pat-list');
 
@@ -1074,16 +1087,59 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   })();
 
   // ── Tabs ───────────────────────────────────────────────────────────────
+  // grid + settings aren't mutually exclusive: they're independent show/hide
+  // toggles so the pad matrix and the pattern-settings controls can stay on
+  // screen together (settings stacked above the matrix), or either one
+  // collapsed to reclaim space. patterns is an exclusive view — its save/load
+  // list replaces the edit panes while open; tapping grid/settings leaves it.
+  let patternsOpen = false;
+  let showGrid     = true;
+  let showSettings = loadShowSettings();
+
+  function applyTabs() {
+    const editGrid     = !patternsOpen && showGrid;
+    const editSettings = !patternsOpen && showSettings;
+    if (gridPane)     gridPane.style.display     = editGrid     ? '' : 'none';
+    if (settingsPane) settingsPane.style.display = editSettings ? '' : 'none';
+    if (patternsPane) patternsPane.style.display = patternsOpen ? 'flex' : 'none';
+    // When the grid is hidden, let settings expand to fill the body instead
+    // of sitting capped at its half-height with dead space below it.
+    settingsPane?.classList.toggle('solo', editSettings && !editGrid);
+    tabBar?.querySelectorAll('.sp-tab').forEach(t => {
+      const on = t.dataset.tab === 'grid'     ? editGrid
+               : t.dataset.tab === 'settings' ? editSettings
+               : t.dataset.tab === 'patterns' ? patternsOpen
+               : false;
+      t.classList.toggle('active', on);
+    });
+  }
+
   function setTab(name) {
-    tabBar?.querySelectorAll('.sp-tab').forEach(t =>
-      t.classList.toggle('active', t.dataset.tab === name));
-    if (gridPane)     gridPane.style.display     = name === 'grid'     ? '' : 'none';
-    if (patternsPane) patternsPane.style.display = name === 'patterns' ? 'flex' : 'none';
-    if (name === 'patterns') renderPatternList();
+    if (name === 'patterns') {
+      // Non-toggle: always surface (and refresh) the list. Callers like the
+      // save-current button rely on a click here meaning "show patterns".
+      patternsOpen = true;
+      renderPatternList();
+    } else if (patternsOpen) {
+      // Leaving the patterns view — reveal whichever pane was tapped.
+      patternsOpen = false;
+      if (name === 'grid')          showGrid = true;
+      else if (name === 'settings') showSettings = true;
+    } else {
+      // Edit view: toggle the tapped pane, but never hide both at once.
+      if (name === 'grid' && !(showGrid && !showSettings))          showGrid = !showGrid;
+      else if (name === 'settings' && !(showSettings && !showGrid)) showSettings = !showSettings;
+    }
+    if (name === 'settings') {
+      if (showSettings && !propsEl?.children.length) renderProps();
+      saveShowSettings(showSettings);
+    }
+    applyTabs();
   }
   tabBar?.querySelectorAll('.sp-tab').forEach(t => {
     t.addEventListener('click', () => setTab(t.dataset.tab));
   });
+  applyTabs();
 
   // ── Pattern manager ────────────────────────────────────────────────────
   function renderPatternList() {

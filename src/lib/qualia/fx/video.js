@@ -327,17 +327,39 @@ export default {
   // factory snapshot in update(). The dropdown also lets users browse
   // looks manually without digging into the phase button.
   params: [
-    { id: 'preset',       label: 'preset',       type: 'select', options: ['default', 'vhs', 'datamosh', 'cinema', 'crush', 'follow'], default: 'default' },
+    { id: 'preset',       label: 'preset',       type: 'select', options: ['default', 'clean', 'vhs', 'datamosh', 'cinema', 'crush', 'follow'], default: 'default' },
+
+    // ── Global reaction tamps — top-level masters, INDEPENDENT of presets ───
+    // `reactivity` multiplies every audio modulator; `pose react` every pose
+    // modulator (see modulation.js: audioGain / poseGain). Presets never set
+    // these, so a value you dial for a live room — e.g. pose tracking is flaky
+    // under stage lighting, so pull pose react down — PERSISTS across preset
+    // and auto-phase changes. Each preset bakes its own per-param reaction
+    // strength (via modWeights); these two just scale the whole lot on top.
+    { id: 'reactivity',     label: 'reactivity',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
+    { id: 'poseReactivity', label: 'pose react',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
+
+    // ── Source / playback — also INDEPENDENT of presets ─────────────────────
+    // User-owned: presets and auto-phase never touch these, so framing,
+    // playback and mix hold steady while the look cycles.
     { id: 'fit',          label: 'fit',          type: 'select', options: ['cover', 'contain'], default: 'cover' },
     { id: 'playbackRate', label: 'playback',     type: 'range',  min: 0.25, max: 2.5, step: 0.05, default: 1.0 },
     { id: 'volume',       label: 'volume',       type: 'range',  min: 0, max: 1, step: 0.02, default: 0 },
     { id: 'loop',         label: 'loop track',   type: 'toggle', default: true },
     { id: 'advance',      label: 'advance',      type: 'select', options: ['loop', 'next', 'random', 'on-kick'], default: 'loop' },
+    // Phase-driven source switching — independent of `advance` (which governs
+    // what happens when a clip ends). When set to next/random the playlist
+    // advances on every auto-phase step (see update()), so a phase change can
+    // swap both the look (preset) and the clip. 'hold' = sources stay put.
+    { id: 'phaseAdvance', label: 'phase src',    type: 'select', options: ['hold', 'next', 'random'], default: 'hold' },
     { id: 'mix',          label: 'mix',          type: 'range',  min: 0, max: 1, step: 0.02, default: 1.0 },
 
-    // Pose-driven view transform — feel: the background follows the body.
-    // pose channels are signed [-1,+1] so a base of 0 / 1 + 'add' modulator
-    // lands a neutral pose on identity (no offset / no rotation / 1× zoom).
+    // ── The look — PRESET-DRIVEN. Each preset sets these base values AND the
+    // per-modulator reaction weights (how hard each param responds to audio /
+    // pose), so a preset is a complete reactive look; the two tamps above then
+    // scale the whole reaction. Pose channels are signed [-1,+1], so a 0 / 1
+    // base + 'add' modulator lands a neutral pose on identity (no offset / no
+    // rotation / 1× zoom).
     { id: 'panX',         label: 'pan x',        type: 'range',  min: -0.5, max: 0.5, step: 0.01, default: 0.0,
       modulators: [{ source: 'pose.head.x', mode: 'add', amount: 0.12 }] },
     { id: 'panY',         label: 'pan y',        type: 'range',  min: -0.5, max: 0.5, step: 0.01, default: 0.0,
@@ -361,18 +383,12 @@ export default {
     { id: 'noise',        label: 'noise',        type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
       modulators: [{ source: 'audio.highs', mode: 'add', amount: 0.30 }] },
     { id: 'scanlines',    label: 'scanlines',    type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0 },
-    // Minimal audio reactivity on posterize/pixelate per request — dial weight
-    // up if you want stronger response, but the spec amount stays subtle.
+    // posterize / pixelate carry a deliberately small beat/highs modulator —
+    // presets that want a strong audio pulse here dial the weight up.
     { id: 'posterize',    label: 'posterize',    type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
-      modulators: [{ source: 'audio.beatPulse', mode: 'add', amount: 0.08 }] },
+      modulators: [{ source: 'audio.beatPulse', mode: 'add', amount: 0.12 }] },
     { id: 'pixelate',     label: 'pixelate',     type: 'range',  min: 0, max: 1, step: 0.02, default: 0.0,
-      modulators: [{ source: 'audio.highs', mode: 'add', amount: 0.08 }] },
-    // Two reactivity masters: `reactivity` scales every audio modulator,
-    // `pose react` scales every pose modulator (pan/zoom/rotation/displace).
-    // Both at 0 + zero base values ⇒ a genuinely unmodified clip (the
-    // 'default' preset). The engine reads these globally (see modulation.js).
-    { id: 'reactivity',     label: 'reactivity',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
-    { id: 'poseReactivity', label: 'pose react',  type: 'range',  min: 0, max: 2, step: 0.05, default: 1.0 },
+      modulators: [{ source: 'audio.highs', mode: 'add', amount: 0.10 }] },
   ],
 
   // autoPhase walks the preset dropdown — one knob to control all the looks.
@@ -381,6 +397,7 @@ export default {
   autoPhase: {
     steps: [
       { preset: 'default' },
+      { preset: 'clean' },
       { preset: 'vhs' },
       { preset: 'datamosh' },
       { preset: 'cinema' },
@@ -389,37 +406,77 @@ export default {
     ],
   },
 
-  // Presets reset ALL non-source params including the pose transform. Each
-  // sets BOTH reactivity masters explicitly so switching between presets is
-  // deterministic (a master left unset would carry over from the prior
-  // preset). 'default' is a genuinely unmodified clip: zero glitch, zero
-  // reactivity (audio AND pose). 'follow' is the pose-following showcase:
-  // zero glitch, no audio reactivity, full pose reactivity.
+  // Each preset is a COMPLETE reactive look: base values for the look params
+  // PLUS a `modWeights` block (keyed `${paramId}.${modIdx}`) giving the per-param
+  // reaction strength — how hard each param responds to its audio / pose
+  // modulator (multiplies the spec `amount`; 0 = inert, 1 = as authored, >1 =
+  // exaggerated). core.applyFxPreset applies both. Presets do NOT set the
+  // global tamps (reactivity / pose react) or the source/playback params — those
+  // stay user-owned, so a live tamp persists while looks cycle.
+  //
+  // Audio-driven params: rgbSplit, chroma, hueShift, noise, posterize, pixelate.
+  // Pose-driven params:   panX, panY, rotation, zoom, displace. scanlines is
+  // static (no modulator) so it only has a base value.
   presets: {
-    default:  { fit: 'cover', playbackRate: 1.0, volume: 0, loop: true, advance: 'loop', mix: 1.0,
-                panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0, noise: 0.0,
-                scanlines: 0.0, posterize: 0.0, pixelate: 0.0, reactivity: 0, poseReactivity: 0 },
+    // default — cleanish: no baked-in glitch, just a gentle audio shimmer and a
+    // light pose drift so it feels alive without distracting.
+    default:  { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                rgbSplit: 0, chroma: 0, displace: 0, hueShift: 0, noise: 0,
+                scanlines: 0, posterize: 0, pixelate: 0,
+                modWeights: { 'rgbSplit.0': 0.30, 'chroma.0': 0.20, 'hueShift.0': 0.25, 'noise.0': 0.20,
+                              'posterize.0': 0, 'pixelate.0': 0,
+                              'panX.0': 0.40, 'panY.0': 0.40, 'rotation.0': 0.30, 'zoom.0': 0.40, 'displace.0': 0 } },
+    // clean — pure source: every effect off and every modulator inert, so the
+    // raw clip plays through untouched regardless of the tamp sliders.
+    clean:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
+                rgbSplit: 0, chroma: 0, displace: 0, hueShift: 0, noise: 0,
+                scanlines: 0, posterize: 0, pixelate: 0,
+                modWeights: { 'rgbSplit.0': 0, 'chroma.0': 0, 'hueShift.0': 0, 'noise.0': 0,
+                              'posterize.0': 0, 'pixelate.0': 0,
+                              'panX.0': 0, 'panY.0': 0, 'rotation.0': 0, 'zoom.0': 0, 'displace.0': 0 } },
+    // vhs — worn tape: tracking rgb split, warm hue bleed, grain, scanlines and
+    // banding. Moderate audio reaction; only a slight pose drift.
     vhs:      { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.05,
-                noise: 0.4, scanlines: 0.6, posterize: 0.3, pixelate: 0.0, mix: 1.0,
-                reactivity: 1.0, poseReactivity: 1.0 },
-    datamosh: { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.4, chroma: 0.6, displace: 0.7, hueShift: 0.0,
-                noise: 0.2, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 0.95,
-                reactivity: 1.0, poseReactivity: 1.0 },
-    cinema:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0,
-                reactivity: 1.0, poseReactivity: 1.0 },
+                rgbSplit: 0.12, chroma: 0, displace: 0, hueShift: 0.04,
+                noise: 0.25, scanlines: 0.5, posterize: 0.25, pixelate: 0,
+                modWeights: { 'rgbSplit.0': 0.70, 'chroma.0': 0, 'hueShift.0': 0.50, 'noise.0': 0.70,
+                              'posterize.0': 0.50, 'pixelate.0': 0,
+                              'panX.0': 0.25, 'panY.0': 0.25, 'rotation.0': 0.20, 'zoom.0': 0.25, 'displace.0': 0 } },
+    // datamosh — compression smear: big rgb split + chroma, heavy displacement
+    // flow, grain. Hard audio AND pose reactions — it thrashes with the room.
+    datamosh: { panX: 0, panY: 0, rotation: 0, zoom: 1.05,
+                rgbSplit: 0.35, chroma: 0.45, displace: 0.5, hueShift: 0,
+                noise: 0.15, scanlines: 0, posterize: 0, pixelate: 0,
+                modWeights: { 'rgbSplit.0': 1.30, 'chroma.0': 1.30, 'hueShift.0': 0.50, 'noise.0': 1.00,
+                              'posterize.0': 0, 'pixelate.0': 0,
+                              'panX.0': 0.80, 'panY.0': 0.80, 'rotation.0': 0.80, 'zoom.0': 1.00, 'displace.0': 1.40 } },
+    // cinema — long-form comfort: a slow gentle punch-in, faint aberration, warm
+    // hue, fine grain, soft banding. Low reaction across the board so it stays
+    // relaxing and un-fatiguing over a long clip.
+    cinema:   { panX: 0, panY: 0, rotation: 0, zoom: 1.05,
+                rgbSplit: 0, chroma: 0.05, displace: 0, hueShift: 0.03,
+                noise: 0.04, scanlines: 0.1, posterize: 0.12, pixelate: 0,
+                modWeights: { 'rgbSplit.0': 0.15, 'chroma.0': 0.25, 'hueShift.0': 0.20, 'noise.0': 0.15,
+                              'posterize.0': 0.15, 'pixelate.0': 0,
+                              'panX.0': 0.30, 'panY.0': 0.30, 'rotation.0': 0.15, 'zoom.0': 0.30, 'displace.0': 0 } },
+    // crush — bit/colour crush: hard posterize + chunky pixelation, chroma fringe,
+    // hue push. Heavy audio AND pose reactions.
     crush:    { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.0, chroma: 0.2, displace: 0.0, hueShift: 0.1,
-                noise: 0.0, scanlines: 0.0, posterize: 0.7, pixelate: 0.4, mix: 1.0,
-                reactivity: 1.0, poseReactivity: 1.0 },
-    follow:   { panX: 0, panY: 0, rotation: 0, zoom: 1.0,
-                rgbSplit: 0.0, chroma: 0.0, displace: 0.0, hueShift: 0.0,
-                noise: 0.0, scanlines: 0.0, posterize: 0.0, pixelate: 0.0, mix: 1.0,
-                reactivity: 0, poseReactivity: 1.0 },
+                rgbSplit: 0.1, chroma: 0.2, displace: 0, hueShift: 0.1,
+                noise: 0, scanlines: 0, posterize: 0.6, pixelate: 0.4,
+                modWeights: { 'rgbSplit.0': 0.90, 'chroma.0': 1.00, 'hueShift.0': 0.70, 'noise.0': 0.50,
+                              'posterize.0': 1.20, 'pixelate.0': 1.20,
+                              'panX.0': 0.70, 'panY.0': 0.70, 'rotation.0': 0.70, 'zoom.0': 0.80, 'displace.0': 0.60 } },
+    // follow — magnifying glass: punched in (base zoom 1.5) and tracking VERY
+    // hard on pose, so head/shoulder motion sweeps the lens across the clip
+    // surface. Moderate audio shimmer. (Pose moves are low-passed in update() so
+    // the strong tracking reads as a deliberate camera move, not jitter.)
+    follow:   { panX: 0, panY: 0, rotation: 0, zoom: 1.5,
+                rgbSplit: 0, chroma: 0.04, displace: 0, hueShift: 0,
+                noise: 0, scanlines: 0, posterize: 0, pixelate: 0,
+                modWeights: { 'rgbSplit.0': 0.40, 'chroma.0': 0.40, 'hueShift.0': 0.30, 'noise.0': 0.30,
+                              'posterize.0': 0, 'pixelate.0': 0,
+                              'panX.0': 1.80, 'panY.0': 1.80, 'rotation.0': 1.20, 'zoom.0': 1.60, 'displace.0': 0.30 } },
   },
 
   async create(canvas, { gl, paramsContainer, applyPreset }) {
@@ -835,6 +892,21 @@ export default {
       }
     }
 
+    // Step the playlist by an explicit mode ('next' | 'random'), independent of
+    // the `advance` param. Shared by clip-end auto-advance and phase-driven
+    // source switching. No-op with fewer than two sources.
+    function advanceSource(mode) {
+      if (playlist.length < 2) return;
+      let nextIdx = cursor;
+      if (mode === 'random') {
+        do { nextIdx = Math.floor(Math.random() * playlist.length); }
+        while (nextIdx === cursor);
+      } else {
+        nextIdx = (cursor + 1) % playlist.length;
+      }
+      setCursor(nextIdx);
+    }
+
     function advanceNext() {
       if (playlist.length === 0) return;
       const mode = currentParams.advance;
@@ -842,14 +914,7 @@ export default {
         // single-track loop — the <video loop> attr handles this; nothing to do.
         return;
       }
-      let nextIdx = cursor;
-      if (mode === 'random' && playlist.length > 1) {
-        do { nextIdx = Math.floor(Math.random() * playlist.length); }
-        while (nextIdx === cursor);
-      } else {
-        nextIdx = (cursor + 1) % playlist.length;
-      }
-      setCursor(nextIdx);
+      advanceSource(mode === 'random' ? 'random' : 'next');
     }
 
     // Wire UI events
@@ -932,11 +997,19 @@ export default {
         lastPreset = params.preset;
         // Skip the first-frame "change" — initial null → 'default' would
         // re-apply factory defaults and clobber any persisted user tweaks.
-        if (prev !== null && typeof applyPreset === 'function') {
-          applyPreset(params.preset);
-          // Don't return — we still want playback-affecting params applied
-          // this tick. The slider positions will catch up on the next
-          // frame's resolveParams pass.
+        if (prev !== null) {
+          if (typeof applyPreset === 'function') {
+            applyPreset(params.preset);
+            // Don't return — we still want playback-affecting params applied
+            // this tick. The slider positions will catch up on the next
+            // frame's resolveParams pass.
+          }
+          // A preset flip is the auto-phase "step" signal (autoPhase cycles
+          // the preset select). When the user has opted into phase-driven
+          // source switching, advance the playlist on the same beat so a
+          // phase change can swap both the look and the clip.
+          const pa = params.phaseAdvance;
+          if (pa && pa !== 'hold') advanceSource(pa === 'random' ? 'random' : 'next');
         }
       }
 

@@ -366,6 +366,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #topbar-titlerow {
       display: flex; align-items: center; gap: 1rem;
       justify-content: space-between;
+      /* Reserve the top-right corner for the pinned zen button (positioned
+         absolutely below) so neither the title nor the wrapped control
+         cluster can slide underneath it. */
+      padding-right: 3.6rem;
     }
     #topbar-left  {
       display: flex; align-items: center; gap: 0.7rem;
@@ -508,6 +512,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         max-width: none;
         max-height: calc(100dvh - var(--topbar-h, 4.5rem) - var(--tabs-h, 2.4rem) - 1.5rem);
       }
+    }
+
+    /* Pin the zen button to the top-right corner so it lands in (almost)
+       the same spot the spinning #zen-handle fades into once zen mode hides
+       the topbar — tapping "zen" to enter and tapping the spinner to exit
+       share one muscle-memory target. Absolute (lifted out of the corner
+       flex flow) so it stays put even when the corner cluster wraps below
+       the title on a narrow phone. */
+    #btn-zen {
+      position: absolute; top: 0.5rem; right: 1rem; z-index: 22;
     }
 
     #zen-handle {
@@ -1142,6 +1156,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       #strudel-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       #sequencer-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       .sp-tag, .sp-status { display: none; }
+      /* Panel headers: at phone widths the play/stop/live/gain/close run
+         won't fit beside the name field on one line, so the trailing
+         controls used to clip against the panel's overflow:hidden (the
+         "live" badge lost its right border in the screenshot). Let the
+         header wrap and let the name field give up width first, so the
+         transport cluster stays whole and only spills to a second line
+         when there's genuinely no room. */
+      #sequencer-header, #strudel-header, #vocoder-header {
+        flex-wrap: wrap; gap: 0.4rem; padding: 0.4rem 0.6rem;
+      }
+      .seq-name-input { flex: 1 1 5ch; min-width: 4ch; max-width: none; }
+      .panel-gain-slider { width: 56px; min-width: 48px; }
     }
 
     /* Sequencer panel — same draggable-window shape as #strudel-panel so
@@ -1213,14 +1239,26 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       border-bottom: 1px solid var(--border);
       background: rgba(0,0,0,0.25);
     }
-    /* Grid pane — properties row above the pad-by-step matrix. Matrix
-       scrolls independently so the props row stays pinned. */
+    /* Grid pane — just the pad-by-step matrix now (pattern settings moved to
+       their own tab). Scrolls internally so the matrix fills the panel. */
     #sequencer-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    /* Settings pane — the pattern-settings (#seq-props) controls. Sits above
+       the matrix when shown and is capped so it can't eat the whole panel
+       when both are visible; scrolls internally past the cap. The bottom
+       border divides it from the grid below. */
+    #sequencer-settings {
+      flex: 0 0 auto; min-height: 0;
+      max-height: 55%; overflow: auto;
+      border-bottom: 1px solid var(--border);
+    }
+    /* Grid hidden → settings is the only pane, so let it fill the body. */
+    #sequencer-settings.solo {
+      flex: 1 1 auto; max-height: none; border-bottom: none;
+    }
     #seq-props {
       display: flex; flex-wrap: wrap; gap: 0.4rem 0.7rem;
-      padding: 0.35rem 0.7rem;
+      padding: 0.5rem 0.7rem;
       background: rgba(0,0,0,0.2);
-      border-bottom: 1px solid var(--border);
       font-size: 0.72rem;
     }
     .seq-prop { display: inline-flex; align-items: center; gap: 0.35rem; }
@@ -1393,12 +1431,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         background: rgba(255,255,255,0.16);
         border-color: rgba(255,255,255,0.42);
       }
-      /* 26px keeps the LEDs finger-tappable while letting twice as many
-         rows fit on a phone viewport. RR/MPC-class rhythm UIs run 24-36px;
-         26 sits at the compact end of that band — paired with the new
-         10-voice kit (kick…rim) it keeps the whole strip on-screen on
-         a typical 6"-class phone. */
-      .seq-cells { gap: 2px; grid-auto-rows: 26px; min-height: 26px; }
+      /* 22px keeps the LEDs finger-tappable (the touch-action slop adds a
+         couple px of hit area beyond the visual cell) while fitting more of
+         the 10-voice kit (kick…rim) on-screen at once. Sits just under the
+         RR/MPC 24-36px band — acceptable on a phone where vertical room is
+         the scarce resource. */
+      .seq-cells { gap: 2px; grid-auto-rows: 22px; min-height: 22px; }
       /* Tighten the pinned props row so the matrix gets more vertical
          space — with 10 voices vs. the previous 9 every row of header
          chrome is real estate stolen from the grid. */
@@ -2032,12 +2070,20 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="btn-sequencer-sync" title="Realign sequencer to Strudel cycle boundary now" style="display:none">⟲</button>
     <button class="ctrl-btn" id="btn-sequencer-close" title="Close (Q)">×</button>
   </div>
+  <!-- grid + settings are independent show/hide toggles (not exclusive
+       tabs) so the pad matrix and the pattern-settings controls can stay
+       visible together — or either one collapsed to reclaim space on a
+       phone. Settings stacks above the matrix when shown. patterns is an
+       exclusive view. -->
   <div id="sequencer-tabs">
-    <button class="sp-tab active" data-tab="grid">grid</button>
-    <button class="sp-tab"        data-tab="patterns">patterns</button>
+    <button class="sp-tab active" data-tab="grid"     title="Show / hide the pad grid">grid</button>
+    <button class="sp-tab active" data-tab="settings" title="Show / hide pattern settings — beats, steps, tempo, sync">settings</button>
+    <button class="sp-tab"        data-tab="patterns" title="Saved patterns">patterns</button>
+  </div>
+  <div id="sequencer-settings">
+    <div id="seq-props"></div>
   </div>
   <div id="sequencer-grid">
-    <div id="seq-props"></div>
     <div id="seq-matrix-wrap">
       <div id="seq-matrix"></div>
     </div>

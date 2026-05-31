@@ -375,15 +375,27 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     if (!activeMod || !activePanel) return false;
     const p = activeMod.presets?.[presetName];
     if (!p) return false;
-    activePanel.applyValues(p);
+    // A preset may carry per-modulator reaction weights under a reserved
+    // `modWeights` key (flat dict keyed `${paramId}.${modIdx}`). Pull it aside
+    // so it isn't fed to the panel as a bogus param value.
+    const presetMods = (p.modWeights && typeof p.modWeights === 'object') ? p.modWeights : null;
+    let paramValues = p;
+    if (presetMods) { const { modWeights: _omit, ...rest } = p; paramValues = rest; }
+    activePanel.applyValues(paramValues);
     baseParams = activePanel.values();
     field.params = { ...baseParams };
     saveFxParams(activeMod.id, activePanel.values());
-    // Reset modulator weights to 1.0 (spec defaults) — keeps "reset"
-    // semantics symmetric: param values + reactivity weights both go back
-    // to the fx author's intended baseline.
-    for (const k in modWeights) modWeights[k] = 1;
-    activePanel.resetModWeights(1);
+    // Modulator weights define each param's reaction strength. Reset every
+    // weight to the spec baseline (1), then overlay any the preset specifies —
+    // so a preset fully determines per-param reactivity. The global reactivity
+    // / poseReactivity sliders are NOT preset-set; they multiply on top, so a
+    // live "tamp" persists across preset / auto-phase changes.
+    for (const k in modWeights) {
+      const w = (presetMods && k in presetMods) ? presetMods[k] : 1;
+      modWeights[k] = w;
+      const dot = k.lastIndexOf('.');
+      activePanel.setModWeight(k.slice(0, dot), Number(k.slice(dot + 1)), w);
+    }
     saveFxModWeights(activeMod.id, modWeights);
     return true;
   }
