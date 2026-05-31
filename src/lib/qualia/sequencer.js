@@ -855,21 +855,47 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       wrap.append(sp, grp);
       return { wrap, bHalf, bDbl };
     };
-    const sRes = scalePair('res', 'Resolution (steps per beat) — keeps every hit at the same audible time, just finer/coarser grid', () => scaleResolution(false), () => scaleResolution(true));
-    const sBeat = scalePair('beats', 'Beats ×2/÷2 — denser/sparser within the same span; hits keep their audible time', () => scaleBeats(false), () => scaleBeats(true));
     const sLen = scalePair('len', 'Length — cycles + beats together (tempo unchanged), groove tiled into the longer/shorter pattern', () => scaleLength(false), () => scaleLength(true));
+
+    // Inline ×/÷ scale buttons into the ±1 steppers for beats and steps/beat
+    // so the user sees  [/] [−] [input] [+] [*]  in a single cluster.
+    const beatsWrap = stepperFor(beatsIn, 'change');
+    const stepsWrap = stepperFor(stepsIn, 'change');
+    const addScaleBtns = (wrap, onHalf, onDouble, halfTitle, dblTitle) => {
+      const mkS = (txt, fn, title) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ctrl-btn seq-num-step seq-scale-step';
+        b.textContent = txt;
+        b.title = title;
+        b.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+        return b;
+      };
+      const bHalf = mkS('/', onHalf, halfTitle);
+      const bDbl  = mkS('*', onDouble, dblTitle);
+      wrap.prepend(bHalf);
+      wrap.append(bDbl);
+      return { bHalf, bDbl };
+    };
+    const beatsScale = addScaleBtns(beatsWrap,
+      () => scaleBeats(false), () => scaleBeats(true),
+      'Beats ÷2 — halve', 'Beats ×2 — double');
+    const stepsScale = addScaleBtns(stepsWrap,
+      () => scaleResolution(false), () => scaleResolution(true),
+      'Resolution ÷2 — coarser grid', 'Resolution ×2 — finer grid');
+
     _scaleBtns = {
-      resHalf: sRes.bHalf, resDbl: sRes.bDbl,
-      beatHalf: sBeat.bHalf, beatDbl: sBeat.bDbl,
+      resHalf: stepsScale.bHalf, resDbl: stepsScale.bDbl,
+      beatHalf: beatsScale.bHalf, beatDbl: beatsScale.bDbl,
       lenHalf: sLen.bHalf, lenDbl: sLen.bDbl,
     };
 
     propsEl.append(
-      mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
-      mk('steps/beat', stepperFor(stepsIn, 'change'), { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
+      mk('beats',      beatsWrap, { title: 'Beats per pattern (RR-style)' }),
+      mk('steps/beat', stepsWrap, { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
       mk('cps',       stepperFor(cpsIn,  'input'),  { title: 'Cycles per second — Strudel\'s master clock when sync is on' }),
       mk('cycles',    stepperFor(cyclesIn, 'change', cyclesBump), { title: 'Cycles per pattern — how many Strudel cycles the pattern spans. 0.5 = double-time, 1 = locked, 2 = half-time, 3, 4… = longer phrases. Spreads the same grid across more bars without slowing CPS.' }),
-      sRes.wrap, sBeat.wrap, sLen.wrap,
+      sLen.wrap,
       syncWrap,
     );
     refreshScaleBtns();

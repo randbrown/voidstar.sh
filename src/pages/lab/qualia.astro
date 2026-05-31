@@ -904,7 +904,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     #btn-strudel-play, #btn-strudel-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
     #btn-strudel-play.playing { color: var(--pink); border-color: var(--pink); }
-    #btn-strudel-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    /* close button styles consolidated above with #btn-sequencer-close */
     #strudel-tabs {
       display: flex; gap: 0.25rem;
       padding: 0.3rem 0.6rem;
@@ -1156,17 +1156,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       #strudel-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       #sequencer-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       .sp-tag, .sp-status { display: none; }
-      /* Panel headers: at phone widths the play/stop/live/gain/close run
-         won't fit beside the name field on one line, so the trailing
-         controls used to clip against the panel's overflow:hidden (the
-         "live" badge lost its right border in the screenshot). Let the
-         header wrap and let the name field give up width first, so the
-         transport cluster stays whole and only spills to a second line
-         when there's genuinely no room. */
+      /* Panel headers: name input moved to settings, so the transport
+         controls fit on one line. Close button pinned right via
+         margin-left:auto (see consolidated rule above). */
       #sequencer-header, #strudel-header, #vocoder-header {
-        flex-wrap: wrap; gap: 0.4rem; padding: 0.4rem 0.6rem;
+        gap: 0.4rem; padding: 0.4rem 0.6rem;
       }
-      .seq-name-input { flex: 1 1 5ch; min-width: 4ch; max-width: none; }
       .panel-gain-slider { width: 56px; min-width: 48px; }
     }
 
@@ -1204,13 +1199,22 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       background: transparent; border: 1px solid var(--border);
       border-radius: 4px;
       color: var(--cyan); font-family: var(--font-mono); font-size: 0.75rem;
-      padding: 0.15rem 0.45rem; min-width: 8ch; max-width: 18ch;
-      outline: none;
+      padding: 0.15rem 0.45rem; min-width: 8ch; max-width: 24ch;
+      outline: none; flex: 1;
     }
     .seq-name-input:focus { border-color: var(--accent); color: var(--accent); }
+    #seq-settings-name {
+      display: flex; align-items: center; gap: 0.35rem;
+      padding: 0.5rem 0.7rem 0;
+      background: rgba(0,0,0,0.2);
+      font-size: 0.72rem;
+    }
     #btn-sequencer-play, #btn-sequencer-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
     #btn-sequencer-play.playing { color: var(--pink); border-color: var(--pink); }
-    #btn-sequencer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    #btn-sequencer-close, #btn-strudel-close, #btn-vocoder-close {
+      padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1;
+      margin-left: auto; flex-shrink: 0;
+    }
     /* Live/mute toggle — reads as a state badge ("live") in green when
        audio is flowing and switches to a muted-red label when silenced.
        Sized smaller than play/stop so it doesn't compete for the
@@ -1298,6 +1302,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .seq-num-wrap .seq-num-step:first-child  { border-radius: 4px 0 0 4px; }
     .seq-num-wrap .seq-num-step:last-child   { border-radius: 0 4px 4px 0; }
+    .seq-scale-step { color: var(--accent); }
     .seq-prop-check input[type=checkbox] {
       accent-color: var(--cyan); cursor: pointer;
       width: 14px; height: 14px;
@@ -1481,7 +1486,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #vocoder-header .ctrl-btn { cursor: pointer; }
     #btn-vocoder-play, #btn-vocoder-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
     #btn-vocoder-play.playing { color: var(--pink); border-color: var(--pink); }
-    #btn-vocoder-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    /* close button styles consolidated above with #btn-sequencer-close */
     #vocoder-body {
       flex: 1; min-height: 0; overflow: auto;
       padding: 0.6rem 0.7rem;
@@ -2061,7 +2066,6 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 <div id="sequencer-panel" style="display:none">
   <div id="sequencer-header">
     <span class="sp-title">seq</span>
-    <input type="text" id="sequencer-name" class="seq-name-input" placeholder="pattern name" />
     <span class="sp-status" id="sequencer-status">click ▶ to play</span>
     <button class="ctrl-btn" id="btn-sequencer-play"  title="Play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-sequencer-stop"  title="Stop">■</button>
@@ -2081,6 +2085,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="sp-tab"        data-tab="patterns" title="Saved patterns">patterns</button>
   </div>
   <div id="sequencer-settings">
+    <div id="seq-settings-name">
+      <span class="seq-prop-label">name</span>
+      <input type="text" id="sequencer-name" class="seq-name-input" placeholder="pattern name" />
+    </div>
     <div id="seq-props"></div>
   </div>
   <div id="sequencer-grid">

@@ -138,7 +138,7 @@ export function buildParamPanel({
         max: String(spec.max),
         step: String(spec.step),
         value: String(spec.default),
-        title: 'double-click to reset to default',
+        title: 'double-click (or double-tap label) to reset to default',
       });
       control.addEventListener('input', () => {
         const v = parseFloat(control.value);

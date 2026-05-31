@@ -760,22 +760,51 @@ export function initQualiaPage() {
   // only touch the .value PROPERTY, so this stays the original default). We
   // re-dispatch a bubbling `input` so each slider's existing listener does the
   // real work (state, label, field.params, persistence) through the normal path.
-  document.addEventListener('dblclick', (ev) => {
-    const t = ev.target;
-    if (!t || typeof t.closest !== 'function') return;
+  const resetSlider = (input) => {
+    const reset = input.dataset.reset ?? input.defaultValue;
+    if (reset == null || reset === '') return;
+    if (input.value === String(reset)) return;
+    input.value = String(reset);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const findSliderFromTarget = (t) => {
+    if (!t || typeof t.closest !== 'function') return null;
     let input = t.closest('input[type="range"]');
     if (!input) {
       const row = t.closest('.qp-row');
       if (row) input = row.querySelector('input[type="range"]');
     }
+    return input;
+  };
+  document.addEventListener('dblclick', (ev) => {
+    const input = findSliderFromTarget(ev.target);
     if (!input) return;
-    const reset = input.dataset.reset ?? input.defaultValue;
-    if (reset == null || reset === '') return;
-    ev.preventDefault();                       // suppress text-selection on the value/label
-    if (input.value === String(reset)) return; // already at default — nothing to do
-    input.value = String(reset);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    ev.preventDefault();
+    resetSlider(input);
   });
+  // Mobile: dblclick doesn't fire reliably on touch devices. Detect
+  // double-tap on a slider's label / value span and reset the slider.
+  // Scoped to the label area (not the slider thumb) to avoid conflicts
+  // with normal slider dragging.
+  let _lastTapTime = 0;
+  let _lastTapSlider = null;
+  document.addEventListener('touchend', (ev) => {
+    const t = ev.target;
+    if (!t || typeof t.closest !== 'function') return;
+    if (t.closest('input[type="range"]')) return;
+    const input = findSliderFromTarget(t);
+    if (!input) return;
+    const now = Date.now();
+    if (_lastTapSlider === input && now - _lastTapTime < 350) {
+      ev.preventDefault();
+      resetSlider(input);
+      _lastTapTime = 0;
+      _lastTapSlider = null;
+    } else {
+      _lastTapTime = now;
+      _lastTapSlider = input;
+    }
+  }, { passive: false });
 
   // ── Bottom-left panel tab bar (mobile only) ──────────────────────────────
   // The tab bar enforces accordion semantics on touch/narrow viewports:
