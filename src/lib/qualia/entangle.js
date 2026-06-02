@@ -1,0 +1,268 @@
+// Entanglement — host manager (headless).
+//
+// Owns the audience side of a live set: the P2P room, the participant
+// registry, the per-tick reduction of the whole crowd into the `crowd.*`
+// modulation snapshot, the vote tally, and the moderation gates. Knows nothing
+// about the DOM — entangle-ui.js drives it and paints the HUD.
+//
+// THE NO-LAG GUARANTEE lives here:
+//  • Heavy work (camera, pose ML) runs on participants' phones, never here.
+//  • Inbound messages only stamp a small per-peer record — they NEVER touch
+//    the field or the render loop.
+//  • The field is updated once per react-tick via reduceInto(), an O(N) pass
+//    over a small intimate crowd that writes 8 scalars. No per-message,
+//    per-frame, or async work on the hot path. Every handler is wrapped so a
+//    malformed message can't throw into the engine.
+
+import { createTransport } from './entangle-transport.js';
+import { T, MODES, APP_ID, makeRoomId, buildJoinUrl, clampToSpec, manifestParam } from './entangle-protocol.js';
+import { unpackFeatures } from './pose-features.js';
+
+const STALE_MS    = 9000;   // prune a peer we haven't heard from in this long
+const PARAM_MIN_MS = 40;    // per-peer param throttle (~25/s)
+const VOTE_MIN_MS  = 200;   // per-peer vote throttle
+const COUNT_FULL   = 12;    // crowd.count hits 1.0 at this many active posers
+const ENERGY_SCALE = 6;     // maps mean per-frame motion → [0,1]
+const ENERGY_TAU   = 0.35;  // motion EMA time constant (s)
+const SWAY_TAU     = 1.2;   // crowd.sway low-pass time constant (s)
+const MAX_PEERS    = 40;
+
+/**
+ * @param {object} opts
+ * @param {ReturnType<import('./core.js').createCore>} opts.core
+ * @param {ReturnType<import('./registry.js').createMesh>} opts.mesh
+ */
+export function createEntangle({ core, mesh }) {
+  /** @type {Map<string, any>} */
+  const peers = new Map();          // peerId → { id, name, feat, motion, vote, lastSeen, tParam, tVote }
+  let transport = null;
+  let roomId = null;
+  let opened = false;
+  const modes = { pose: true, param: true, vote: true };
+  /** @type {Set<string>} param ids the crowd may drive on the active fx. */
+  const whitelist = new Set();
+  let swayEma = 0;
+
+  // UI callbacks (set by entangle-ui). All optional.
+  const cb = { peers: null, tally: null, scene: null };
+  const fire = (name, ...a) => { try { cb[name]?.(...a); } catch (e) { console.error('[entangle] cb', name, e); } };
+
+  function activeFx() { return core.activeId(); }
+  function activeSpecs() {
+    const mod = mesh.get(activeFx());
+    return mod?.params || [];
+  }
+
+  // ── Manifest ────────────────────────────────────────────────────────────
+  function buildManifest() {
+    const base = core.getBaseParams();
+    const specs = activeSpecs();
+    const params = [];
+    if (modes.param) {
+      for (const spec of specs) {
+        if (!whitelist.has(spec.id)) continue;
+        // Only kinds a phone can sanely drive (range/toggle/select).
+        if (!['range', 'toggle', 'select'].includes(spec.type)) continue;
+        params.push(manifestParam(spec, base[spec.id]));
+      }
+    }
+    return {
+      activeFx: activeFx(),
+      fxList: modes.vote ? mesh.list().map(m => ({ id: m.id, name: m.name || m.id })) : [],
+      modes: { ...modes },
+      params,
+    };
+  }
+  /** Re-send the manifest to everyone (after a scene / whitelist / mode change). */
+  function broadcastManifest() {
+    if (transport) transport.send(T.MANIFEST, buildManifest());
+  }
+
+  // ── Inbound handlers (cheap; never touch the field) ───────────────────────
+  function touch(peerId) {
+    let p = peers.get(peerId);
+    if (!p) {
+      if (peers.size >= MAX_PEERS) return null;
+      p = { id: peerId, name: '', feat: null, motion: 0, vote: null, lastSeen: 0, tParam: 0, tVote: 0 };
+      peers.set(peerId, p);
+      fire('peers', peers.size);
+    }
+    p.lastSeen = performance.now();
+    return p;
+  }
+
+  function onHello(data, peerId) {
+    const p = touch(peerId);
+    if (!p) return;
+    if (data && typeof data.name === 'string') p.name = data.name.slice(0, 24);
+    // New arrival: send them the current scene directly.
+    if (transport) transport.send(T.MANIFEST, buildManifest(), peerId);
+  }
+
+  function onPose(arr, peerId) {
+    if (!modes.pose) return;
+    const p = touch(peerId);
+    if (!p || !Array.isArray(arr)) return;
+    const f = unpackFeatures(arr);
+    if (p.feat) {
+      // Instantaneous motion = how much the tracked body moved since last msg.
+      const m = Math.abs(f.headX - p.feat.headX)
+              + Math.abs(f.headY - p.feat.headY)
+              + Math.abs(f.wristSpread - p.feat.wristSpread);
+      p.motionInst = (p.motionInst || 0) + m;   // accumulate; drained in reduceInto
+    }
+    p.feat = f;
+  }
+
+  function onParam(data, peerId) {
+    if (!modes.param || !data) return;
+    const p = touch(peerId);
+    if (!p) return;
+    const now = performance.now();
+    if (now - p.tParam < PARAM_MIN_MS) return;   // per-peer throttle
+    p.tParam = now;
+    if (!whitelist.has(data.id)) return;          // not exposed → ignore
+    const spec = activeSpecs().find(s => s.id === data.id);
+    const v = clampToSpec(spec, data.value);      // clamp at ingress
+    if (v === undefined) return;
+    core.setParam(activeFx(), data.id, v);
+  }
+
+  function onVote(data, peerId) {
+    if (!modes.vote || !data) return;
+    const p = touch(peerId);
+    if (!p) return;
+    const now = performance.now();
+    if (now - p.tVote < VOTE_MIN_MS) return;
+    p.tVote = now;
+    if (!mesh.get(data.fxId)) return;             // unknown fx → ignore
+    p.vote = data.fxId;
+    fire('tally', tally());
+  }
+
+  function dropPeer(peerId) {
+    if (peers.delete(peerId)) { fire('peers', peers.size); fire('tally', tally()); }
+  }
+
+  // ── Crowd reduction — the ONLY field write, once per react-tick ───────────
+  /**
+   * Reduce every peer to the 8 crowd scalars, writing into `out` (= field.crowd).
+   * @param {object} out  the crowd snapshot object the field references
+   * @param {number} dt   seconds since last react-tick (field.reactDt)
+   */
+  function reduceInto(out, dt) {
+    const now = performance.now();
+    const kMot = dt > 0 ? 1 - Math.exp(-dt / ENERGY_TAU) : 1;
+    let n = 0, sx = 0, sy = 0, sSpread = 0, sRise = 0, sEnergy = 0, sConf = 0;
+
+    for (const [id, p] of peers) {
+      if (now - p.lastSeen > STALE_MS) { peers.delete(id); fire('peers', peers.size); continue; }
+      // Decay each peer's motion toward the freshly-accumulated instantaneous
+      // value, then drain it so a peer that stops sending settles to 0.
+      const inst = (p.motionInst || 0);
+      p.motion += (inst - p.motion) * kMot;
+      p.motionInst = 0;
+      const f = p.feat;
+      if (!modes.pose || !f || f.confidence < 0.15) continue;
+      n++;
+      sx += f.headX; sy += f.headY;
+      sSpread += f.wristSpread;
+      sRise += Math.max(0, -f.wristMidY);            // hands above center → up
+      sEnergy += p.motion;
+      sConf += f.confidence;
+    }
+
+    if (n > 0) {
+      out.x = sx / n;
+      out.y = sy / n;
+      out.spread = sSpread / n;
+      out.rise = Math.min(1, sRise / n);
+      out.energy = Math.min(1, (sEnergy / n) * ENERGY_SCALE);
+      out.confidence = sConf / n;
+      out.count = Math.min(1, n / COUNT_FULL);
+    } else {
+      out.x = 0; out.y = 0; out.spread = 0; out.rise = 0;
+      out.energy = 0; out.confidence = 0; out.count = 0;
+    }
+    // Sway is a slow low-pass of mean head x (settles to 0 when nobody's there).
+    const kSway = dt > 0 ? 1 - Math.exp(-dt / SWAY_TAU) : 1;
+    swayEma += (out.x - swayEma) * kSway;
+    out.sway = swayEma;
+  }
+
+  // ── Vote tally ────────────────────────────────────────────────────────────
+  function tally() {
+    const counts = new Map();
+    for (const p of peers.values()) if (p.vote) counts.set(p.vote, (counts.get(p.vote) || 0) + 1);
+    const out = [];
+    for (const [fxId, count] of counts) {
+      out.push({ fxId, name: mesh.get(fxId)?.name || fxId, count });
+    }
+    out.sort((a, b) => b.count - a.count);
+    return out;
+  }
+  /** Apply the current winning vote (host one-tap). Returns the fx id or null. */
+  function applyWinningVote() {
+    const t = tally();
+    if (!t.length) return null;
+    core.setActive(t[0].fxId).catch(err => console.error('[entangle] setActive', err));
+    return t[0].fxId;
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  async function open() {
+    if (opened) return { roomId, joinUrl: buildJoinUrl(roomId) };
+    roomId = makeRoomId();
+    // Seed the whitelist with a couple of safe range params from the active fx
+    // so the crowd has something to touch immediately (host can edit).
+    if (whitelist.size === 0) {
+      for (const s of activeSpecs()) {
+        if (s.type === 'range' && s.id !== 'reactivity' && s.id !== 'poseReactivity') {
+          whitelist.add(s.id);
+          if (whitelist.size >= 3) break;
+        }
+      }
+    }
+    transport = await createTransport({ appId: APP_ID, room: roomId });
+    transport.on(T.HELLO, (d, id) => { try { onHello(d, id); } catch (e) { console.error(e); } });
+    transport.on(T.POSE,  (d, id) => { try { onPose(d, id);  } catch (e) { console.error(e); } });
+    transport.on(T.PARAM, (d, id) => { try { onParam(d, id); } catch (e) { console.error(e); } });
+    transport.on(T.VOTE,  (d, id) => { try { onVote(d, id);  } catch (e) { console.error(e); } });
+    transport.on(T.BYE,   (_d, id) => dropPeer(id));
+    transport.onPeer((id) => { broadcastManifest(); });   // (re)send scene on connect
+    transport.onLeave((id) => dropPeer(id));
+    opened = true;
+    return { roomId, joinUrl: buildJoinUrl(roomId) };
+  }
+
+  function close() {
+    if (transport) { try { transport.send(T.KICK, { id: '*' }); } catch {} transport.close(); transport = null; }
+    peers.clear();
+    swayEma = 0;
+    opened = false;
+    fire('peers', 0);
+    fire('tally', []);
+  }
+
+  return {
+    open, close,
+    isOpen: () => opened,
+    getRoomId: () => roomId,
+    getJoinUrl: () => (roomId ? buildJoinUrl(roomId) : null),
+    reduceInto,
+    broadcastManifest,
+    // moderation
+    getModes: () => ({ ...modes }),
+    setMode(mode, on) { if (MODES.includes(mode)) { modes[mode] = !!on; broadcastManifest(); } },
+    getWhitelist: () => [...whitelist],
+    toggleWhitelist(id) { whitelist.has(id) ? whitelist.delete(id) : whitelist.add(id); broadcastManifest(); },
+    getSpecs: activeSpecs,
+    // votes
+    tally,
+    applyWinningVote,
+    // counts + event hooks
+    peerCount: () => peers.size,
+    onPeersChange(fn) { cb.peers = fn; },
+    onTallyChange(fn) { cb.tally = fn; },
+  };
+}

@@ -16,6 +16,13 @@
 //   pose.wristSpread                  ([-1, +1] wide → +)
 //   pose.wristMidY                    ([-1, +1] hands high → -)
 //   pose.confidence                   ([0, 1] mean visibility)
+//   crowd.x | crowd.y                 ([-1, +1] mean audience head position)
+//   crowd.energy                      ([0, 1] mean audience motion)
+//   crowd.spread                      ([-1, +1] mean arm spread)
+//   crowd.rise                        ([0, 1] hands raised across the crowd)
+//   crowd.sway                        ([-1, +1] low-passed mean head x)
+//   crowd.count                       ([0, 1] normalized active-participant count)
+//   crowd.confidence                  ([0, 1] mean tracking confidence)
 //   time.slow | time.med | time.fast  ([-1, +1] sin LFOs, ~31s/12s/5s)
 //   time.veryFast                     ([-1, +1] sin LFO, ~2s)
 //   time.slowCos | time.medCos        (cos counterparts — 90° phase, for
@@ -32,9 +39,10 @@
 // gets gain 1 on both. Pose smoothing/confidence is still handled at the
 // source; poseReactivity only scales the modulator contribution.
 
-const HEAD_VIS = 0.30;
-const SHOULDER_VIS = 0.40;
-const WRIST_VIS = 0.30;
+import {
+  poseHeadX, poseHeadY, poseShoulderSpan, poseShoulderRoll,
+  poseHeadPitch, poseWristSpread, poseWristMidY, poseConfidence,
+} from './pose-features.js';
 
 // ── Audio channels ─────────────────────────────────────────────────────
 const AUDIO_CHANNELS = {
@@ -48,65 +56,9 @@ const AUDIO_CHANNELS = {
   'audio.highsPulse': a => a.highs.pulse,
 };
 
-// ── Pose channels (single-person v1; person 0 only) ────────────────────
-function poseHeadX(p) {
-  // Camera frames are mirrored — flip so right-on-screen reads as positive x.
-  if (!p?.head || p.head.visibility < HEAD_VIS) return 0;
-  return (1.0 - p.head.x) * 2.0 - 1.0;
-}
-function poseHeadY(p) {
-  if (!p?.head || p.head.visibility < HEAD_VIS) return 0;
-  return p.head.y * 2.0 - 1.0;
-}
-function poseShoulderSpan(p) {
-  const sL = p?.shoulders?.l, sR = p?.shoulders?.r;
-  if (!sL || !sR || sL.visibility < SHOULDER_VIS || sR.visibility < SHOULDER_VIS) return 0;
-  const dx = sR.x - sL.x, dy = sR.y - sL.y;
-  const span = Math.sqrt(dx * dx + dy * dy);
-  // Same normalization gargantua-void uses: typical span ≈ 0.25, ±0.20 swing.
-  const v = (span - 0.25) / 0.20;
-  return v < -1 ? -1 : v > 1 ? 1 : v;
-}
-function poseShoulderRoll(p) {
-  const sL = p?.shoulders?.l, sR = p?.shoulders?.r;
-  if (!sL || !sR || sL.visibility < SHOULDER_VIS || sR.visibility < SHOULDER_VIS) return 0;
-  const v = (sR.y - sL.y) * 5.0;
-  return v < -1 ? -1 : v > 1 ? 1 : v;
-}
-function poseHeadPitch(p) {
-  const sL = p?.shoulders?.l, sR = p?.shoulders?.r, h = p?.head;
-  if (!sL || !sR || !h
-      || sL.visibility < SHOULDER_VIS || sR.visibility < SHOULDER_VIS
-      || h.visibility < HEAD_VIS) return 0;
-  const dx = sR.x - sL.x, dy = sR.y - sL.y;
-  const span = Math.sqrt(dx * dx + dy * dy);
-  if (span < 0.05) return 0;
-  const midY = (sL.y + sR.y) * 0.5;
-  const ratio = (midY - h.y) / span;
-  const v = (ratio - 0.75) / 0.40;
-  return v < -1 ? -1 : v > 1 ? 1 : v;
-}
-function poseWristSpread(p) {
-  const wL = p?.wrists?.l, wR = p?.wrists?.r;
-  if (!wL || !wR || wL.visibility < WRIST_VIS || wR.visibility < WRIST_VIS) return 0;
-  const dx = wR.x - wL.x, dy = wR.y - wL.y;
-  const spread = Math.sqrt(dx * dx + dy * dy);
-  // Loose normalization — 0.40 is a typical "arms moderately apart" value.
-  const v = (spread - 0.40) / 0.30;
-  return v < -1 ? -1 : v > 1 ? 1 : v;
-}
-function poseWristMidY(p) {
-  const wL = p?.wrists?.l, wR = p?.wrists?.r;
-  if (!wL || !wR || wL.visibility < WRIST_VIS || wR.visibility < WRIST_VIS) return 0;
-  const midY = (wL.y + wR.y) * 0.5;
-  // Above shoulders → negative; below hips → positive. Centered on 0.55.
-  const v = (midY - 0.55) * 2.5;
-  return v < -1 ? -1 : v > 1 ? 1 : v;
-}
-function poseConfidence(p) {
-  return p?.confidence ?? 0;
-}
-
+// ── Pose channels (single-person; person 0 only) ───────────────────────
+// The per-feature normalization lives in pose-features.js so the audience
+// (Entanglement) client computes identical values on participant phones.
 const POSE_CHANNELS = {
   'pose.head.x':        poseHeadX,
   'pose.head.y':        poseHeadY,
@@ -116,6 +68,22 @@ const POSE_CHANNELS = {
   'pose.wristSpread':   poseWristSpread,
   'pose.wristMidY':     poseWristMidY,
   'pose.confidence':    poseConfidence,
+};
+
+// ── Crowd channels (Entanglement — aggregated audience input) ──────────
+// Read from `field.crowd`, a snapshot the host fills once per react-tick by
+// reducing every connected participant down to these few scalars (O(N), and
+// N is a small intimate crowd). Zeroed when no one is entangled, so a quale
+// that modulates against crowd.* simply sees 0 (identity) during a solo set.
+const CROWD_CHANNELS = {
+  'crowd.x':          c => c.x,
+  'crowd.y':          c => c.y,
+  'crowd.energy':     c => c.energy,
+  'crowd.spread':     c => c.spread,
+  'crowd.rise':       c => c.rise,
+  'crowd.sway':       c => c.sway,
+  'crowd.count':      c => c.count,
+  'crowd.confidence': c => c.confidence,
 };
 
 // ── Time channels (LFOs) ───────────────────────────────────────────────
@@ -137,6 +105,7 @@ const TIME_CHANNELS = {
 export const CHANNEL_IDS = [
   ...Object.keys(AUDIO_CHANNELS),
   ...Object.keys(POSE_CHANNELS),
+  ...Object.keys(CROWD_CHANNELS),
   ...Object.keys(TIME_CHANNELS),
 ];
 
@@ -146,10 +115,15 @@ export function computeChannels(field, out) {
   for (const id in AUDIO_CHANNELS) out[id] = AUDIO_CHANNELS[id](a);
   const p0 = field.pose?.people?.[0] ?? null;
   for (const id in POSE_CHANNELS) out[id] = POSE_CHANNELS[id](p0);
+  const c = field.crowd || EMPTY_CROWD;
+  for (const id in CROWD_CHANNELS) out[id] = CROWD_CHANNELS[id](c);
   const t = field.time;
   for (const id in TIME_CHANNELS) out[id] = TIME_CHANNELS[id](t);
   return out;
 }
+
+// Zeroed fallback so computeChannels is safe before any crowd snapshot exists.
+const EMPTY_CROWD = { x: 0, y: 0, energy: 0, spread: 0, rise: 0, sway: 0, count: 0, confidence: 0 };
 
 export function makeChannelSnapshot() {
   const o = {};

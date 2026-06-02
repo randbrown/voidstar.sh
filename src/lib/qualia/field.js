@@ -20,6 +20,13 @@ export function emptyPoseFrame() {
   return { people: [], timestamp: 0 };
 }
 
+// Aggregated audience input (Entanglement). The host reduces every connected
+// participant into this one snapshot each react-tick; the crowd.* modulation
+// channels read it. All zero = nobody entangled (identity for any modulator).
+export function emptyCrowdSnapshot() {
+  return { x: 0, y: 0, energy: 0, spread: 0, rise: 0, sway: 0, count: 0, confidence: 0 };
+}
+
 /** @returns {import('./types.js').QualiaField} */
 export function makeField() {
   return {
@@ -30,6 +37,7 @@ export function makeField() {
     time: 0,
     audio: emptyAudioFrame(),
     pose:  emptyPoseFrame(),
+    crowd: emptyCrowdSnapshot(),
     params: {},
   };
 }

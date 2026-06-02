@@ -170,15 +170,18 @@ export default {
     { id: 'spiralWind',    label: 'Arm winding',   type: 'range', min: 0, max: 3, step: 0.05, default: 1.6,
       modulators: [
         { source: 'audio.total', mode: 'mul', amount: 0.20 },
+        { source: 'crowd.spread', mode: 'mul', amount: 0.25 },
       ] },
     { id: 'orbitSpeed',    label: 'Orbit speed',   type: 'range', min: 0, max: 2, step: 0.02, default: 0.6,
       modulators: [
         { source: 'audio.beatPulse', mode: 'mul', amount: 0.40 },
+        { source: 'crowd.energy',    mode: 'mul', amount: 0.50 },
       ] },
     { id: 'bulgeGlow',     label: 'Bulge glow',    type: 'range', min: 0, max: 2, step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.bass',      mode: 'mul', amount: 0.50 },
         { source: 'audio.beatPulse', mode: 'mul', amount: 0.30 },
+        { source: 'crowd.rise',      mode: 'mul', amount: 0.60 },
       ] },
     { id: 'pointSize',     label: 'Point size',    type: 'range', min: 0.4, max: 3.0, step: 0.05, default: 1.1 },
     { id: 'palette',       label: 'Palette',       type: 'select', options: PALETTES, default: 'andromeda' },
