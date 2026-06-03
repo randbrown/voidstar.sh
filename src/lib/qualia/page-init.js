@@ -2322,6 +2322,17 @@ export function initQualiaPage() {
   let autoPhaseStartMs = 0;
   let autoPhaseStepCount = 0;
   let autoPhaseTickT = null;
+
+  // Cross-guard between the two auto tracks. When one fires (a cycle swaps the
+  // whole quale, or a phase steps the active quale's mode/palette) the other
+  // holds off briefly so the two changes never land within the same beat and
+  // read as one jarring double-jump. A cycle already resets the phase clock
+  // (onFxChange → syncPhaseTimer), so in practice this mostly stops a cycle
+  // from firing right on the heels of a phase step; it's symmetric for safety.
+  const AUTO_TRANSITION_GUARD_MS = 1000;
+  let lastAutoTransitionMs = 0;
+  const autoGuardActive = (now) => (now - lastAutoTransitionMs) < AUTO_TRANSITION_GUARD_MS;
+
   phaseStyleSelect.value = autoPhaseStyle;
   // Tooltip lists the cycle so muscle-memory builds; users see "off → 5 →
   // 10 → 15" without poking the button to find the upper bound.
@@ -2334,36 +2345,26 @@ export function initQualiaPage() {
 
   function refreshPhaseBtn() {
     const supported = !!getActivePhaseSteps();
-    // Always enabled — clicks change the user's intent regardless of
-    // whether the active quale can act on it. Period change "stickiness"
-    // means a click while on a non-supporting quale still adjusts the
-    // period and resumes when cycle hits a supporting one.
-    btnPhase.disabled = false;
+    // The dropdown always reflects the user's chosen dwell — selecting a value
+    // (or "off") is one tap regardless of whether the active quale can act on
+    // it. Period "stickiness" means a pick while on a non-supporting quale
+    // still adjusts the intent and resumes when cycle hits a supporting one.
+    btnPhase.value = String(autoPhaseSeconds);
     btnPhase.classList.toggle('active', autoPhaseSeconds > 0);
     if (!supported) {
-      // Show the preserved period in parens so the user can see their
-      // intent isn't lost — it'll resume on the next supporting quale.
-      btnPhase.textContent = autoPhaseSeconds > 0
-        ? `phase n/a (${autoPhaseSeconds}s)`
-        : 'phase n/a';
       btnPhase.title = autoPhaseSeconds > 0
-        ? `phase set to ${autoPhaseSeconds}s — active quale has no phases; resumes on next supporting qfx (L cycles)`
-        : 'active quale has no phases (L cycles: off / 5s / 10s / 15s)';
+        ? `phase set to ${autoPhaseSeconds}s — active quale has no phases; resumes on next supporting qfx`
+        : 'active quale has no phases — pick a dwell to arm it for the next supporting qfx';
       return;
     }
-    btnPhase.title = 'Phase modes within active quale (L) — off / 5s / 10s / 15s';
+    // Beat-sync is shown on the separate ♪ phase button; the live countdown
+    // moves to the tooltip (a <select>'s face shows the chosen dwell).
     if (autoPhaseSeconds > 0) {
       const elapsed = (performance.now() - autoPhaseStartMs) / 1000;
       const remaining = Math.max(0, Math.ceil(autoPhaseSeconds - elapsed));
-      if (autoPhaseBeatSync && audioActive()) {
-        btnPhase.textContent = remaining > 0 ? `phase ${remaining}s ♪` : 'phase ♪';
-      } else if (autoPhaseBeatSync) {
-        btnPhase.textContent = `phase ${remaining}s (♪)`;
-      } else {
-        btnPhase.textContent = `phase ${remaining}s`;
-      }
+      btnPhase.title = `Auto-phase modes within active quale (L) — next in ${remaining}s${autoPhaseBeatSync ? ' · ♪ beat-sync armed' : ''}`;
     } else {
-      btnPhase.textContent = 'phase off';
+      btnPhase.title = 'Auto-phase modes within active quale (L) — off';
     }
   }
 
@@ -2394,6 +2395,7 @@ export function initQualiaPage() {
   function phaseNext() {
     const steps = getActivePhaseSteps();
     if (!steps || !steps.length) return;
+    lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-cycle
     const fxId = core.activeId();
     // Filter to the user's enabled steps (phase pool). `included` is never
     // empty — phaseIncludedIndices falls back to all steps when everything
@@ -2440,6 +2442,9 @@ export function initQualiaPage() {
     const now = performance.now();
     const elapsed = (now - autoPhaseStartMs) / 1000;
     refreshPhaseBtn();
+    // Hold off if a cycle just fired — don't reset the dwell clock, just let
+    // the next 250ms tick retry once the guard window clears.
+    if (autoGuardActive(now)) return;
     if (autoPhaseBeatSync && audioActive()) {
       // Beat-sync mode: dwell time is a floor (cooldown), 2× dwell is the
       // silence-fallback ceiling. Between floor and ceiling, fire on a
@@ -2489,10 +2494,9 @@ export function initQualiaPage() {
     settings.save();
   }
 
-  btnPhase.addEventListener('click', () => {
-    const i = PHASE_PERIODS.indexOf(autoPhaseSeconds);
-    const next = PHASE_PERIODS[(i + 1) % PHASE_PERIODS.length];
-    setPhasePeriod(next);
+  btnPhase.addEventListener('change', () => {
+    const sec = parseInt(btnPhase.value, 10);
+    setPhasePeriod(PHASE_PERIODS.includes(sec) ? sec : 0);
   });
   phaseStyleSelect.addEventListener('change', () => {
     autoPhaseStyle = phaseStyleSelect.value;
@@ -2511,25 +2515,16 @@ export function initQualiaPage() {
 
   function refreshCycleBtn() {
     if (!btnCycle) return;
+    // The dropdown face shows the chosen dwell (or "off"); beat-sync lives on
+    // the separate ♪ cycle button and the live countdown moves to the tooltip.
+    btnCycle.value = String(autoCycleSeconds);
+    btnCycle.classList.toggle('active', autoCycleSeconds > 0);
     if (autoCycleSeconds > 0) {
       const elapsed = (performance.now() - autoCycleStartMs) / 1000;
       const remaining = Math.max(0, Math.ceil(autoCycleSeconds - elapsed));
-      // Beat-sync visual states:
-      //   beat-sync ON, audio ON, in cooldown → "Ns ♪"  (floor counting down)
-      //   beat-sync ON, audio ON, armed       → "♪"     (waiting for kick)
-      //   beat-sync ON, audio OFF             → "Ns (♪)" (parens flag the
-      //     setting is on but audio is off so the cycle is firing on time
-      //     anyway — explicit visual cue, not a silent fall-through)
-      //   beat-sync OFF                       → "Ns"
-      if (autoCycleBeatSync && audioActive()) {
-        btnCycle.textContent = remaining > 0 ? `cycle ${remaining}s ♪` : 'cycle ♪';
-      } else if (autoCycleBeatSync) {
-        btnCycle.textContent = `cycle ${remaining}s (♪)`;
-      } else {
-        btnCycle.textContent = `cycle ${remaining}s`;
-      }
+      btnCycle.title = `Cycle between qualia (N) — next in ${remaining}s${autoCycleBeatSync ? ' · ♪ beat-sync armed' : ''}`;
     } else {
-      btnCycle.textContent = 'cycle off';
+      btnCycle.title = 'Cycle between qualia (N) — off';
     }
   }
 
@@ -2561,6 +2556,7 @@ export function initQualiaPage() {
       nextId = ids[i];
     }
     if (!nextId || nextId === cur) return;
+    lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-phase
     core.setActive(nextId).catch(err => console.error('[qualia] cycle setActive failed:', err));
   }
 
@@ -2575,6 +2571,8 @@ export function initQualiaPage() {
     const now = performance.now();
     const elapsed = (now - autoCycleStartMs) / 1000;
     refreshCycleBtn();
+    // Hold off if a phase step just fired so the two don't stack into one jump.
+    if (autoGuardActive(now)) return;
     if (autoCycleBeatSync && audioActive()) {
       // Beat-sync mode: dwell time is a floor (cooldown), 2× dwell is the
       // silence-fallback ceiling. Between floor and ceiling, fire on the
@@ -2609,10 +2607,9 @@ export function initQualiaPage() {
     settings.save();
   }
 
-  btnCycle.addEventListener('click', () => {
-    const i = CYCLE_PERIODS.indexOf(autoCycleSeconds);
-    const next = CYCLE_PERIODS[(i + 1) % CYCLE_PERIODS.length];
-    setCyclePeriod(next);
+  btnCycle.addEventListener('change', () => {
+    const sec = parseInt(btnCycle.value, 10);
+    setCyclePeriod(CYCLE_PERIODS.includes(sec) ? sec : 0);
   });
   cycleStyleSelect.addEventListener('change', () => {
     autoCycleStyle = cycleStyleSelect.value;
@@ -3854,8 +3851,18 @@ export function initQualiaPage() {
       case 't': btnAscii.click(); break;
       case 'k': btnMosh.click(); break;
       case 'e': btnEdge.click(); break;
-      case 'l': btnPhase.click(); break;
-      case 'n': btnCycle.click(); break;
+      // Phase/cycle are now <select> dropdowns; L/N still advance the dwell
+      // (off → … → off) so the keyboard muscle-memory survives the switch.
+      case 'l': {
+        const i = PHASE_PERIODS.indexOf(autoPhaseSeconds);
+        setPhasePeriod(PHASE_PERIODS[(i + 1) % PHASE_PERIODS.length]);
+        break;
+      }
+      case 'n': {
+        const i = CYCLE_PERIODS.indexOf(autoCycleSeconds);
+        setCyclePeriod(CYCLE_PERIODS[(i + 1) % CYCLE_PERIODS.length]);
+        break;
+      }
       case 'z': setZen(!core.isZen()); break;
       case 'x': btnFullscreen.click(); break;
       case ' ': btnPause.click(); e.preventDefault(); break;

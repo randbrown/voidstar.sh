@@ -91,6 +91,17 @@ export function buildParamPanel({
   container, params, onChange, getChannels, getModWeight, onModWeightChange,
 }) {
   container.innerHTML = '';
+  // Hoist the "look" selectors — mode + palette — to the top of every panel
+  // so the primary structure/colour controls sit above the finer sliders,
+  // consistently across every quale that declares them. Pure presentation:
+  // state, refs, presets and persistence are all keyed by id, so reordering
+  // the build list never touches behaviour. Relative order of the rest is
+  // preserved (stable partition).
+  const HOIST_FIRST = new Set(['mode', 'palette']);
+  params = [
+    ...params.filter(p => HOIST_FIRST.has(p.id)),
+    ...params.filter(p => !HOIST_FIRST.has(p.id)),
+  ];
   const state = {};
   const refs  = {};
   /** Per-frame meter targets: { source, fillEl } pairs. */

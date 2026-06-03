@@ -894,10 +894,14 @@ export default {
       // 2. Camera background layer (drawn before HUD so everything paints on top).
       if (params.cameraLayer) drawCameraLayer();
 
-      const padding = Math.max(10, Math.round(Math.min(W, H) * 0.018));
+      // Use the whole screen — tighter margins and larger spectrum / right
+      // column so the HUD fills the canvas instead of floating in a sea of
+      // empty real estate on big displays. The centre band stays clear for
+      // the pose overlay (boxes / skeleton / joint reticles).
+      const padding = Math.max(8, Math.round(Math.min(W, H) * 0.012));
       const topH    = 36;
-      const botH    = Math.round(Math.min(160, H * 0.18));
-      const rightW  = Math.round(Math.min(300, W * 0.22));
+      const botH    = Math.round(Math.min(300, H * 0.26));
+      const rightW  = Math.round(Math.min(480, W * 0.27));
 
       // 3. Spectrum (fullscreen sits between camera and HUD; strip mode lives
       //    in the bottom band along with the right column above it).
