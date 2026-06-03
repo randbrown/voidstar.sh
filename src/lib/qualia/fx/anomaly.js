@@ -232,11 +232,13 @@ export default {
       modulators: [
         { source: 'audio.mids',      mode: 'mul', amount: 0.40 },
         { source: 'audio.beatPulse', mode: 'mul', amount: 0.30 },
+        { source: 'crowd.energy',    mode: 'mul', amount: 0.40 },
       ] },
     { id: 'glow',       label: 'Rim glow',     type: 'range', min: 0, max: 3, step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.highs',     mode: 'mul', amount: 0.40 },
         { source: 'audio.beatPulse', mode: 'mul', amount: 0.50 },
+        { source: 'crowd.rise',      mode: 'mul', amount: 0.35 },
       ] },
     { id: 'timeScale',  label: 'Time scale',   type: 'range', min: 0.1, max: 2, step: 0.02, default: 0.6 },
     { id: 'marchSteps', label: 'March steps',  type: 'select', options: STEP_OPTS, default: '64' },

@@ -1,0 +1,84 @@
+---
+// Entanglement — the audience participant page.
+//
+// Deliberately lightweight: the heavy qualia viz engine never loads here. This
+// page only connects to the performer's P2P room (Trystero, serverless WebRTC)
+// and ships small control messages. Pose tracking, when enabled, runs the
+// MediaPipe pipeline LOCALLY on the participant's phone, so the performer's
+// laptop is never burdened. Reached by scanning the QR shown in the lab.
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Entanglement | voidstar</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent: #8b5cf6; --cyan: #22d3ee; --pink: #f472b6; --green: #4ade80;
+      --amber: #fbbf24; --void: #05050d; --text: #e9e6ff; --muted: #8a85b8;
+      --border: rgba(45,45,80,0.7);
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    html, body { min-height: 100%; background:
+      radial-gradient(120% 80% at 50% -10%, #150f2e 0%, var(--void) 60%); color: var(--text); }
+    body { font-family: var(--font-mono); padding:
+      max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+      max(2rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+      max-width: 34rem; margin: 0 auto; }
+    header { text-align: center; margin: 1.4rem 0 1rem; }
+    header h1 { font-size: 1.5rem; letter-spacing: .12em; font-weight: 600;
+      background: linear-gradient(90deg, var(--cyan), var(--accent), var(--pink));
+      -webkit-background-clip: text; background-clip: text; color: transparent; }
+    header .glyph { font-size: 2.4rem; display: block; margin-bottom: .3rem;
+      filter: drop-shadow(0 0 .6rem var(--accent)); }
+    header p { color: var(--muted); font-size: .82rem; margin-top: .35rem; }
+    [data-status] { text-align: center; padding: .6rem .8rem; border-radius: .5rem;
+      background: rgba(12,10,28,.7); border: 1px solid var(--border); font-size: .85rem; margin-bottom: 1rem; }
+    [data-status][data-kind="ok"]  { border-color: var(--cyan);  color: var(--cyan); }
+    [data-status][data-kind="err"] { border-color: var(--pink);  color: var(--pink); }
+    [data-status][data-kind="end"] { border-color: var(--accent); color: var(--accent); }
+    .ent-sect { background: rgba(12,10,28,.55); border: 1px solid var(--border);
+      border-radius: .7rem; padding: .9rem 1rem; margin-bottom: 1rem; }
+    .ent-sect h3 { font-size: .78rem; text-transform: uppercase; letter-spacing: .08em;
+      color: #b9b3e6; margin-bottom: .7rem; font-weight: 600; }
+    .ent-bigbtn { width: 100%; padding: .9rem; font: inherit; font-size: 1rem; cursor: pointer;
+      border-radius: .6rem; border: 1px solid var(--accent); background: #15132a; color: var(--text); }
+    .ent-bigbtn.on { background: var(--pink); border-color: var(--pink); color: #15021a; font-weight: 600; }
+    .ent-preview { margin-top: .7rem; }
+    .ent-param { display: flex; flex-direction: column; gap: .35rem; margin-bottom: .9rem; }
+    .ent-param label { font-size: .85rem; color: #cfcaf0; }
+    .ent-param input[type=range] { width: 100%; height: 28px; accent-color: var(--cyan); }
+    .ent-param select { padding: .5rem; border-radius: .4rem; background: #0c0a18;
+      color: var(--text); border: 1px solid var(--border); font: inherit; }
+    .ent-votegrid { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+    .ent-vote { padding: .7rem .5rem; font: inherit; cursor: pointer; border-radius: .5rem;
+      background: #120f24; color: var(--text); border: 1px solid var(--border); transition: .12s; }
+    .ent-vote.on { border-color: var(--cyan); color: var(--cyan); }
+    .ent-vote.active { box-shadow: inset 0 0 0 1px var(--amber); }
+    .ent-phaseprog { margin-top: .6rem; text-align: center; color: var(--cyan);
+      font-size: .85rem; font-variant-numeric: tabular-nums; }
+    .ent-wait { color: var(--muted); text-align: center; font-style: italic; padding: 1.2rem; }
+    footer { text-align: center; color: var(--muted); font-size: .72rem; margin-top: 1.5rem; opacity: .7; }
+  </style>
+</head>
+<body>
+  <main id="entangle-root">
+    <header>
+      <span class="glyph">⊛</span>
+      <h1>ENTANGLEMENT</h1>
+      <p>You're now part of the field. Spooky action across the room.</p>
+    </header>
+    <div data-status>Entangling…</div>
+    <div data-controls></div>
+    <footer>voidstar.sh — your camera never leaves your phone</footer>
+  </main>
+
+  <script>
+    import { initEntangleClient } from '../../lib/qualia/entangle-client.js';
+    initEntangleClient(document.getElementById('entangle-root'));
+  </script>
+</body>
+</html>

@@ -4,6 +4,7 @@
 
 import { createMesh }    from './registry.js';
 import { createCore }    from './core.js';
+import { initEntangleUI } from './entangle-ui.js';
 import { createAudio }   from './audio.js';
 import { createPose }    from './pose.js';
 import { createOverlay } from './overlay.js';
@@ -4026,6 +4027,13 @@ export function initQualiaPage() {
       if (fallback) await core.setActive(fallback.id);
     }
     core.start();
+
+    // Entanglement — audience participation layer. Self-mounts its topbar
+    // launcher, QR/moderation modal, and crowd HUD, and registers the
+    // core.onTick glue that folds the crowd snapshot into field.crowd. Runs
+    // dormant (no network) until the performer opens a room.
+    try { initEntangleUI({ core, mesh, actions: { phaseNext } }); }
+    catch (err) { console.error('[qualia] entangle init failed:', err); }
 
     // Restore audio source. `withMic` (from the "enable mic" overlay button)
     // forces audio mode to 'all' even if the persisted mode is 'off' — the

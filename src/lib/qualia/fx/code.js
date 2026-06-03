@@ -176,11 +176,13 @@ export default {
       modulators: [
         { source: 'audio.bass',      mode: 'mul', amount: 0.7 },
         { source: 'audio.beatPulse', mode: 'add', amount: 0.5 },
+        { source: 'crowd.energy',    mode: 'add', amount: 0.4 },
       ] },
     { id: 'bounce', label: 'scatter', type: 'range',
       min: 0, max: 1, step: 0.02, default: 0.55,
       modulators: [
         { source: 'audio.midsPulse', mode: 'add', amount: 0.25 },
+        { source: 'crowd.spread',    mode: 'add', amount: 0.20 },
       ] },
     { id: 'matchLen', label: 'match len', type: 'range',
       min: 2, max: 8, step: 1, default: 3 },
