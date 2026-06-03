@@ -31,12 +31,16 @@ export default {
 
   params: [
     { id: 'density',   label: 'density',     type: 'range', min: 0.2, max: 1.5, step: 0.02, default: 1.0 },
-    { id: 'glow',      label: 'soma glow',   type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
+    { id: 'glow',      label: 'soma glow',   type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0,
+      modulators: [
+        { source: 'crowd.rise', mode: 'add', amount: 0.50 },
+      ] },
     { id: 'pulseRate', label: 'pulse rate',  type: 'range', min: 0,   max: 4,   step: 0.05, default: 1.5 },
     { id: 'curve',     label: 'edge curve',  type: 'range', min: 0,   max: 0.6, step: 0.01, default: 0.18 },
     { id: 'motion',    label: '3d motion',   type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0,
       modulators: [
-        { source: 'audio.total', mode: 'mul', amount: 0.30 },
+        { source: 'audio.total',  mode: 'mul', amount: 0.30 },
+        { source: 'crowd.energy', mode: 'mul', amount: 0.40 },
       ] },
     { id: 'depth',     label: 'depth',       type: 'range', min: 0,   max: 1,   step: 0.02, default: 0.6 },
     { id: 'palette',   label: 'palette',     type: 'select', options: ['violet','cyan','magenta','amber'], default: 'violet' },

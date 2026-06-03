@@ -36,8 +36,13 @@ export async function initEntangleClient(root) {
     return;
   }
 
-  let manifest = { activeFx: null, fxList: [], modes: { pose: false, param: false, vote: false }, params: [] };
+  let manifest = { activeFx: null, fxList: [], modes: { pose: false, param: false, vote: false, phase: false }, params: [] };
   let myVote = null;
+  // Live-synced controls, keyed by param id → { input, type, lastEdit }. Lets
+  // host / auto-phase value updates (T.VALUES) move the sliders without
+  // clobbering a control the participant is actively dragging.
+  const paramInputs = new Map();
+  let phaseProgEl = null;
 
   // Announce ourselves; re-announce whenever a (new) host appears.
   const hello = () => transport.send(T.HELLO, { name: '' });
@@ -46,6 +51,30 @@ export async function initEntangleClient(root) {
 
   transport.on(T.MANIFEST, (m) => { if (m && typeof m === 'object') { manifest = m; renderControls(); } });
   transport.on(T.KICK, () => { teardown(); setStatus('The performance has ended. Thanks for entangling. ⊛', 'end'); });
+
+  // Live value-sync — host / auto-phase moved a param; reflect it on our slider
+  // unless the participant is actively touching that control.
+  transport.on(T.VALUES, (delta) => {
+    if (!delta || typeof delta !== 'object') return;
+    const now = performance.now();
+    for (const id in delta) {
+      const ctl = paramInputs.get(id);
+      if (!ctl) continue;
+      if (document.activeElement === ctl.input) continue;       // user focused
+      if (now - ctl.lastEdit < 1200) continue;                  // recently dragged
+      const v = delta[id];
+      if (ctl.type === 'toggle') ctl.input.checked = !!v;
+      else ctl.input.value = v;
+    }
+  });
+
+  // Crowd phase-shift progress (host → all).
+  transport.on(T.PHASEPROG, (p) => {
+    if (!phaseProgEl || !p) return;
+    phaseProgEl.textContent = p.fired
+      ? '⟳ the phase shifted!'
+      : `${p.have} / ${p.need} pushing…`;
+  });
 
   window.addEventListener('pagehide', () => { try { transport.send(T.BYE, 1); } catch {} });
 
@@ -99,8 +128,11 @@ export async function initEntangleClient(root) {
   function renderControls() {
     if (!controlsEl) return;
     const m = manifest;
-    const hasAny = m.modes.pose || (m.modes.param && m.params.length) || (m.modes.vote && m.fxList.length);
+    const hasAny = m.modes.pose || (m.modes.param && m.params.length)
+      || (m.modes.vote && m.fxList.length) || m.modes.phase;
     controlsEl.innerHTML = '';
+    paramInputs.clear();
+    phaseProgEl = null;
 
     if (m.modes.pose) {
       const sect = section('Your body → the field');
@@ -134,6 +166,21 @@ export async function initEntangleClient(root) {
       controlsEl.appendChild(sect);
     }
 
+    if (m.modes.phase) {
+      const sect = section('Shift the phase');
+      const btn = el('button', 'ent-bigbtn');
+      btn.textContent = '⟳ shift the phase';
+      btn.addEventListener('click', () => {
+        try { transport.send(T.PHASE, 1); } catch {}
+        btn.classList.add('on');
+        setTimeout(() => btn.classList.remove('on'), 180);
+      });
+      phaseProgEl = el('div', 'ent-phaseprog');
+      phaseProgEl.textContent = 'tap together with the crowd to advance';
+      sect.append(btn, phaseProgEl);
+      controlsEl.appendChild(sect);
+    }
+
     if (!hasAny) controlsEl.innerHTML = '<p class="ent-wait">Waiting for the performer to open a mode…</p>';
   }
 
@@ -141,22 +188,30 @@ export async function initEntangleClient(root) {
     const row = el('div', 'ent-param');
     const label = el('label'); label.textContent = p.label;
     row.appendChild(label);
+    // Mark a control as locally edited so incoming value-sync leaves it alone.
+    const stamp = (ctl) => { ctl.lastEdit = performance.now(); };
     if (p.type === 'range') {
       const input = document.createElement('input');
       input.type = 'range'; input.min = p.min; input.max = p.max; input.step = p.step;
       input.value = (p.value ?? (p.min + p.max) / 2);
-      input.addEventListener('input', () => sendParam(p.id, parseFloat(input.value)));
+      const ctl = { input, type: 'range', lastEdit: 0 };
+      input.addEventListener('input', () => { stamp(ctl); sendParam(p.id, parseFloat(input.value)); });
+      paramInputs.set(p.id, ctl);
       row.appendChild(input);
     } else if (p.type === 'toggle') {
       const input = document.createElement('input');
       input.type = 'checkbox'; input.checked = !!p.value;
-      input.addEventListener('change', () => sendParam(p.id, input.checked));
+      const ctl = { input, type: 'toggle', lastEdit: 0 };
+      input.addEventListener('change', () => { stamp(ctl); sendParam(p.id, input.checked); });
+      paramInputs.set(p.id, ctl);
       label.prepend(input);
     } else if (p.type === 'select') {
       const sel = document.createElement('select');
       for (const o of (p.options || [])) { const opt = document.createElement('option'); opt.value = opt.textContent = o; sel.appendChild(opt); }
       if (p.value != null) sel.value = p.value;
-      sel.addEventListener('change', () => sendParam(p.id, sel.value));
+      const ctl = { input: sel, type: 'select', lastEdit: 0 };
+      sel.addEventListener('change', () => { stamp(ctl); sendParam(p.id, sel.value); });
+      paramInputs.set(p.id, ctl);
       row.appendChild(sel);
     }
     return row;

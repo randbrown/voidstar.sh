@@ -18,11 +18,14 @@ export const T = {
   POSE:     'pose',      // participant → host: packed feature array
   PARAM:    'param',     // participant → host: { id, value }
   VOTE:     'vote',      // participant → host: { fxId }
+  PHASE:    'phase',     // participant → host: a phase-shift nudge (no body)
+  PHASEPROG:'phaseprog', // host → all: { have, need } shift-charge progress
+  VALUES:   'values',    // host → all: { id: value } live whitelisted base values
   BYE:      'bye',       // participant → host: leaving (best-effort)
   KICK:     'kick',      // host → all: { id } — that peer should disconnect
 };
 
-export const MODES = ['pose', 'param', 'vote'];
+export const MODES = ['pose', 'param', 'vote', 'phase'];
 
 // ── Room ids ───────────────────────────────────────────────────────────────
 // Unguessable, URL-safe, short enough to keep the QR dense. Crockford-ish

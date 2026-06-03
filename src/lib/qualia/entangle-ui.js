@@ -57,8 +57,8 @@ const CSS = `
 #entangle-hud[data-live="1"]{display:inline-flex}
 `;
 
-export function initEntangleUI({ core, mesh }) {
-  const entangle = createEntangle({ core, mesh });
+export function initEntangleUI({ core, mesh, actions = {} }) {
+  const entangle = createEntangle({ core, mesh, actions });
 
   // ── Hot-path glue: fold the crowd snapshot into field.crowd each tick. ────
   // Runs at the react cadence (≤60Hz), before computeChannels. reduceInto is
@@ -148,7 +148,9 @@ export function initEntangleUI({ core, mesh }) {
           <span class="ent-chip ${modes.pose ? 'on' : ''}" data-mode="pose">pose → field</span>
           <span class="ent-chip ${modes.param ? 'on' : ''}" data-mode="param">param control</span>
           <span class="ent-chip ${modes.vote ? 'on' : ''}" data-mode="vote">visual vote</span>
+          ${entangle.phaseAvailable ? `<span class="ent-chip ${modes.phase ? 'on' : ''}" data-mode="phase">crowd phase-shift</span>` : ''}
         </div>
+        ${modes.phase && entangle.phaseAvailable ? `<div class="ent-sub" data-phase>shift charge: 0 / 0 — the crowd taps together to advance the phase</div>` : ''}
       </div>
 
       ${modes.param ? `
@@ -207,6 +209,15 @@ export function initEntangleUI({ core, mesh }) {
     const nEl = modal.querySelector('[data-n]'); if (nEl) nEl.textContent = String(n);
   });
   entangle.onTallyChange(() => { if (open) render(); });
+  entangle.onPhaseCharge((have, need, fired) => {
+    const el = modal.querySelector('[data-phase]');
+    if (!el) return;
+    el.textContent = fired
+      ? '⟳ phase shifted by the crowd!'
+      : `shift charge: ${have} / ${need} — the crowd taps together to advance the phase`;
+    el.style.color = fired ? 'var(--cyan,#22d3ee)' : '';
+    if (fired) setTimeout(() => { const e2 = modal.querySelector('[data-phase]'); if (e2) e2.style.color = ''; }, 1500);
+  });
 
   // Detect scene (active fx) changes → refresh manifest + whitelist UI.
   let lastFx = core.activeId();

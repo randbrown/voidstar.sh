@@ -432,12 +432,14 @@ export default {
     { id: 'diskBrightness', label: 'disk brightness', type: 'range', min: 0,   max: 4,   step: 0.05, default: 2.2,
       modulators: [
         { source: 'audio.beatPulse', mode: 'mul', amount: 0.30 },
+        { source: 'crowd.energy',    mode: 'mul', amount: 0.40 },
       ] },
     { id: 'turbulence',     label: 'turbulence',      type: 'range', min: 0,   max: 2,   step: 0.05, default: 0.8 },
     { id: 'flowSpeed',      label: 'flow speed',      type: 'range', min: 0,   max: 3,   step: 0.05, default: 1.0 },
     { id: 'horizonSize',    label: 'horizon r_s',     type: 'range', min: 0.1, max: 0.6, step: 0.005, default: 0.28,
       modulators: [
-        { source: 'audio.bass', mode: 'mul', amount: 0.10 },
+        { source: 'audio.bass',  mode: 'mul', amount: 0.10 },
+        { source: 'crowd.count', mode: 'mul', amount: 0.12 },
       ] },
     { id: 'bloomFake',      label: 'bloom',           type: 'range', min: 0,   max: 2,   step: 0.05, default: 1.0 },
     { id: 'haloIntensity',  label: 'horizon halo',    type: 'range', min: 0,   max: 3,   step: 0.05, default: 1.0 },

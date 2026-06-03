@@ -21,30 +21,42 @@ import { unpackFeatures } from './pose-features.js';
 const STALE_MS    = 9000;   // prune a peer we haven't heard from in this long
 const PARAM_MIN_MS = 40;    // per-peer param throttle (~25/s)
 const VOTE_MIN_MS  = 200;   // per-peer vote throttle
+const PHASE_MIN_MS = 600;   // per-peer phase-nudge throttle
 const COUNT_FULL   = 12;    // crowd.count hits 1.0 at this many active posers
 const ENERGY_SCALE = 6;     // maps mean per-frame motion → [0,1]
 const ENERGY_TAU   = 0.35;  // motion EMA time constant (s)
 const SWAY_TAU     = 1.2;   // crowd.sway low-pass time constant (s)
 const MAX_PEERS    = 40;
+const VALUE_SYNC_MS = 200;  // cadence of live base-value broadcasts to phones
+const PHASE_WINDOW_MS = 4000; // distinct pushers must land within this window
+const PHASE_COOLDOWN_MS = 4000; // min gap between crowd-triggered shifts
 
 /**
  * @param {object} opts
  * @param {ReturnType<import('./core.js').createCore>} opts.core
  * @param {ReturnType<import('./registry.js').createMesh>} opts.mesh
+ * @param {{ phaseNext?: () => void }} [opts.actions]  host-side actions the
+ *        crowd can collectively trigger (e.g. advancing the auto-phase step).
  */
-export function createEntangle({ core, mesh }) {
+export function createEntangle({ core, mesh, actions = {} }) {
   /** @type {Map<string, any>} */
   const peers = new Map();          // peerId → { id, name, feat, motion, vote, lastSeen, tParam, tVote }
   let transport = null;
   let roomId = null;
   let opened = false;
-  const modes = { pose: true, param: true, vote: true };
+  const phaseAvailable = typeof actions.phaseNext === 'function';
+  const modes = { pose: true, param: true, vote: true, phase: false };
   /** @type {Set<string>} param ids the crowd may drive on the active fx. */
   const whitelist = new Set();
   let swayEma = 0;
+  // Live value-sync: last base values we pushed to phones (per whitelisted id).
+  let lastSentValues = {};
+  let valueSyncTimer = 0;
+  // Crowd phase-shift: per-peer last nudge time, plus charge/cooldown state.
+  let lastPhaseFireMs = 0;
 
   // UI callbacks (set by entangle-ui). All optional.
-  const cb = { peers: null, tally: null, scene: null };
+  const cb = { peers: null, tally: null, scene: null, phase: null };
   const fire = (name, ...a) => { try { cb[name]?.(...a); } catch (e) { console.error('[entangle] cb', name, e); } };
 
   function activeFx() { return core.activeId(); }
@@ -69,13 +81,32 @@ export function createEntangle({ core, mesh }) {
     return {
       activeFx: activeFx(),
       fxList: modes.vote ? mesh.list().map(m => ({ id: m.id, name: m.name || m.id })) : [],
-      modes: { ...modes },
+      // Only advertise `phase` when the host actually supplied a phaseNext.
+      modes: { ...modes, phase: modes.phase && phaseAvailable },
       params,
     };
   }
   /** Re-send the manifest to everyone (after a scene / whitelist / mode change). */
   function broadcastManifest() {
     if (transport) transport.send(T.MANIFEST, buildManifest());
+    // Force the next value-sync to re-push every value so freshly-rendered
+    // phone controls immediately reflect the live scene.
+    lastSentValues = {};
+  }
+
+  // ── Live value-sync — keep phone sliders tracking host / auto-phase ───────
+  // Diffs the active fx's whitelisted base values against what we last sent and
+  // broadcasts only the deltas. Cheap (a handful of numbers at VALUE_SYNC_MS).
+  function pushValueSync() {
+    if (!transport || !modes.param) return;
+    const base = core.getBaseParams();
+    let delta = null;
+    for (const id of whitelist) {
+      const v = base[id];
+      if (v === undefined) continue;
+      if (lastSentValues[id] !== v) { (delta ||= {})[id] = v; lastSentValues[id] = v; }
+    }
+    if (delta) transport.send(T.VALUES, delta);
   }
 
   // ── Inbound handlers (cheap; never touch the field) ───────────────────────
@@ -83,7 +114,7 @@ export function createEntangle({ core, mesh }) {
     let p = peers.get(peerId);
     if (!p) {
       if (peers.size >= MAX_PEERS) return null;
-      p = { id: peerId, name: '', feat: null, motion: 0, vote: null, lastSeen: 0, tParam: 0, tVote: 0 };
+      p = { id: peerId, name: '', feat: null, motion: 0, vote: null, lastSeen: 0, tParam: 0, tVote: 0, tPhase: 0, phaseAt: 0 };
       peers.set(peerId, p);
       fire('peers', peers.size);
     }
@@ -138,6 +169,35 @@ export function createEntangle({ core, mesh }) {
     if (!mesh.get(data.fxId)) return;             // unknown fx → ignore
     p.vote = data.fxId;
     fire('tally', tally());
+  }
+
+  // ── Crowd phase-shift — a quorum of distinct pushers advances the phase ───
+  function phaseCharge() {
+    const now = performance.now();
+    let have = 0;
+    for (const p of peers.values()) if (p.phaseAt && now - p.phaseAt <= PHASE_WINDOW_MS) have++;
+    // Quorum scales with the crowd: half the connected peers, at least 1.
+    const need = Math.max(1, Math.ceil(peers.size * 0.5));
+    return { have, need };
+  }
+  function onPhase(_data, peerId) {
+    if (!modes.phase || !phaseAvailable) return;
+    const p = touch(peerId);
+    if (!p) return;
+    const now = performance.now();
+    if (now - (p.tPhase || 0) < PHASE_MIN_MS) return;   // per-peer throttle
+    p.tPhase = now;
+    p.phaseAt = now;
+    const { have, need } = phaseCharge();
+    if (transport) transport.send(T.PHASEPROG, { have, need });
+    fire('phase', have, need);
+    if (have >= need && now - lastPhaseFireMs > PHASE_COOLDOWN_MS) {
+      lastPhaseFireMs = now;
+      for (const q of peers.values()) q.phaseAt = 0;       // reset the charge
+      try { actions.phaseNext(); } catch (e) { console.error('[entangle] phaseNext', e); }
+      if (transport) transport.send(T.PHASEPROG, { have: 0, need, fired: true });
+      fire('phase', 0, need, true);
+    }
   }
 
   function dropPeer(peerId) {
@@ -228,17 +288,21 @@ export function createEntangle({ core, mesh }) {
     transport.on(T.POSE,  (d, id) => { try { onPose(d, id);  } catch (e) { console.error(e); } });
     transport.on(T.PARAM, (d, id) => { try { onParam(d, id); } catch (e) { console.error(e); } });
     transport.on(T.VOTE,  (d, id) => { try { onVote(d, id);  } catch (e) { console.error(e); } });
+    transport.on(T.PHASE, (d, id) => { try { onPhase(d, id); } catch (e) { console.error(e); } });
     transport.on(T.BYE,   (_d, id) => dropPeer(id));
     transport.onPeer((id) => { broadcastManifest(); });   // (re)send scene on connect
     transport.onLeave((id) => dropPeer(id));
+    valueSyncTimer = setInterval(() => { try { pushValueSync(); } catch {} }, VALUE_SYNC_MS);
     opened = true;
     return { roomId, joinUrl: buildJoinUrl(roomId) };
   }
 
   function close() {
+    if (valueSyncTimer) { clearInterval(valueSyncTimer); valueSyncTimer = 0; }
     if (transport) { try { transport.send(T.KICK, { id: '*' }); } catch {} transport.close(); transport = null; }
     peers.clear();
     swayEma = 0;
+    lastSentValues = {};
     opened = false;
     fire('peers', 0);
     fire('tally', []);
@@ -260,9 +324,13 @@ export function createEntangle({ core, mesh }) {
     // votes
     tally,
     applyWinningVote,
+    // phase
+    phaseAvailable,
+    phaseCharge,
     // counts + event hooks
     peerCount: () => peers.size,
     onPeersChange(fn) { cb.peers = fn; },
     onTallyChange(fn) { cb.tally = fn; },
+    onPhaseCharge(fn) { cb.phase = fn; },
   };
 }

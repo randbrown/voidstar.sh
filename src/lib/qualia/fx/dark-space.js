@@ -76,10 +76,14 @@ export default {
       modulators: [
         { source: 'audio.bass', mode: 'mul', amount: 0.25 },
       ] },
-    { id: 'expansion',         label: 'expansion',   type: 'range', min: 0,   max: 3.0, step: 0.05, default: 1.0 },
+    { id: 'expansion',         label: 'expansion',   type: 'range', min: 0,   max: 3.0, step: 0.05, default: 1.0,
+      modulators: [
+        { source: 'crowd.count', mode: 'mul', amount: 0.30 },
+      ] },
     { id: 'filamentBrightness',label: 'filaments',   type: 'range', min: 0,   max: 2.5, step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.beatPulse', mode: 'add', amount: 0.40 },
+        { source: 'crowd.energy',    mode: 'add', amount: 0.40 },
       ] },
     { id: 'twinkle',           label: 'twinkle',     type: 'range', min: 0,   max: 2.0, step: 0.05, default: 1.0,
       modulators: [

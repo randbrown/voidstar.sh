@@ -4032,7 +4032,7 @@ export function initQualiaPage() {
     // launcher, QR/moderation modal, and crowd HUD, and registers the
     // core.onTick glue that folds the crowd snapshot into field.crowd. Runs
     // dormant (no network) until the performer opens a room.
-    try { initEntangleUI({ core, mesh }); }
+    try { initEntangleUI({ core, mesh, actions: { phaseNext } }); }
     catch (err) { console.error('[qualia] entangle init failed:', err); }
 
     // Restore audio source. `withMic` (from the "enable mic" overlay button)
