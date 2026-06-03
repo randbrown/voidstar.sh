@@ -490,7 +490,7 @@ function rotateXYZ(out, vx, vy, vz, ax, ay, az) {
 
 // Bake a single text into a black-background canvas → GL texture (red channel
 // holds the white text mask in the shader).
-function bakeTextTex(gl, text, w, h, fontSize) {
+function bakeTextTex(gl, text, w, h, fontSize, centerInk = false) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
@@ -500,7 +500,25 @@ function bakeTextTex(gl, text, w, h, fontSize) {
   ctx.font = `700 ${fontSize}px "JetBrains Mono", "Cascadia Code", "Fira Code", "Source Code Pro", "Ubuntu Mono", "Menlo", "Consolas", monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, w / 2, h / 2 + 4);
+  // Default placement is centred on the em box (fine for the "void" word).
+  // But some glyphs don't sit at the visual centre of their em box — notably
+  // "*", which rides high in the cell — so a texture baked this way has its
+  // ink offset from the canvas centre. When that texture is rotated, the
+  // off-centre ink ORBITS the rotation centre, making the spinning star
+  // wander in a little circle relative to "void". With centerInk we measure
+  // the actual ink box and shift the draw so the ink is centred → the sprite
+  // spins in place.
+  let dx = 0, dy = 4;
+  if (centerInk) {
+    const m  = ctx.measureText(text);
+    const aL = m.actualBoundingBoxLeft    || 0;
+    const aR = m.actualBoundingBoxRight   || 0;
+    const aA = m.actualBoundingBoxAscent  || 0;
+    const aD = m.actualBoundingBoxDescent || 0;
+    dx = (aL - aR) / 2;
+    dy = (aA - aD) / 2;
+  }
+  ctx.fillText(text, w / 2 + dx, h / 2 + dy);
   const t = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, t);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -564,7 +582,7 @@ export default {
     // used to occupy in "void*" — the * cell is left blank for the rotating
     // sprite to fill. Star is its own 256² square sprite.
     const logoTex = bakeTextTex(gl, 'void ', 1024, 256, 168);
-    const starTex = bakeTextTex(gl, '*',     256, 256, 240);
+    const starTex = bakeTextTex(gl, '*',     256, 256, 240, true);   // centre the * ink so it spins in place
 
     let W = canvas.width, H = canvas.height;
 
