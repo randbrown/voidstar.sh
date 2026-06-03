@@ -637,8 +637,15 @@ export default {
       const logoHalfAngX = Math.asin(logoHalfPX / sphereR);
       const starAngX = 0.40 * logoHalfAngX;     // → logoUV.x ≈ 0.70 (snug past "d")
       scratch.starCenterX = sphereR * Math.sin(starAngX);
-      scratch.starHalfPX  = 0.20 * logoHalfPX;
-      scratch.starHalfPY  = 0.55 * logoHalfPY;
+      // Square sampling box so the spinning * stays rigid. A non-uniform box
+      // (wider in X than Y) makes the screen-space rotation sweep the arms
+      // along an ellipse — the "wobble" that periodically swung a tip into the
+      // "d". Equal half-extents give constant reach in every orientation, so
+      // the gap to "void" never changes as it spins. Sized off the (smaller)
+      // Y extent so the rigid reach stays clear of the "d".
+      const starHalf = 0.55 * logoHalfPY;
+      scratch.starHalfPX  = starHalf;
+      scratch.starHalfPY  = starHalf;
 
       // Ring rotations + per-ring electron parameter advance. Beat boosts
       // electron speed transiently — gives a sense of radiation events.
