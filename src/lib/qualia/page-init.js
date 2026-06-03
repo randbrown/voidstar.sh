@@ -1237,6 +1237,10 @@ export function initQualiaPage() {
     document.body.classList.add('split-dragging');
     try { splitterEl.setPointerCapture(ev.pointerId); } catch {}
     ev.preventDefault();
+    // Keep the drag from bubbling to the body-level canvas gesture handler,
+    // which would otherwise read the splitter drag as a swipe and cycle the
+    // active quale on release.
+    ev.stopPropagation();
   });
   splitterEl?.addEventListener('pointermove', (ev) => {
     if (!splitDragging) return;
@@ -1497,7 +1501,7 @@ export function initQualiaPage() {
     // canvas" — only the start position decides.
     const el = document.elementFromPoint(x, y);
     if (!el) return false;
-    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #sequencer-panel, #video, #zen-handle, #status-overlay, .qg-popover');
+    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #sequencer-panel, #video, #zen-handle, #status-overlay, #cam-splitter, .qg-popover');
   }
 
   function onCanvasPointerDown(ev) {

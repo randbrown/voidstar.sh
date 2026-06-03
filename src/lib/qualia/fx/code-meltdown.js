@@ -37,7 +37,7 @@ const MAXV      = 46;     // terminal speed, cells/s (≤ ~0.8 cell at 60fps)
 const SETTLE    = 4.0;    // below this speed a grounded block comes to rest
 const WIND      = 26;     // head-lean → lateral gravity, cells/s²
 const WRISTPUSH = 34;     // wrist-spread → outward blast, cells/s²
-const FLASH     = 0.14;   // Tetris clear flash duration, seconds
+const FLASH     = 0.06;   // Tetris clear flash duration, seconds
 
 // Single-char string cache for ASCII so fillText never allocates in the hot
 // render loop (String.fromCharCode would churn the GC at thousands/frame).
@@ -404,10 +404,14 @@ export function createMeltEngine({ ctx, sourceLines, tokenizeLine, fontFamily })
     const bass    = audio.bands.bass;
     const beatP   = audio.beat.pulse;
     const midsHit = audio.mids.active;
-    // Falling speed in cells/sec; beats slam pieces down.
-    const fallSpeed = 11 * (1 + bass * 1.2 + beatP * 2.4);
+    // Falling speed in cells/sec, driven by the quale's `scroll speed` knob so
+    // the same control sets the pace here as in the scrolling text modes. Audio
+    // adds urgency; a beat slams pieces down. Tuned slow by default — a low
+    // scroll speed reads as a gentle settling rain.
+    const speed = Math.max(0, params.scrollSpeed ?? 0.3);
+    const fallSpeed = (1.5 + speed * 12) * (1 + bass * 0.5 + beatP * 1.0);
     fallAccum += dt * fallSpeed;
-    let passes = Math.min(5, Math.floor(fallAccum));
+    let passes = Math.min(6, Math.floor(fallAccum));
     fallAccum -= passes;
 
     let moved = false;
@@ -422,20 +426,19 @@ export function createMeltEngine({ ctx, sourceLines, tokenizeLine, fontFamily })
       }
     }
 
-    // When the board is momentarily at rest, look for matched runs to clear.
-    if (!moved) {
-      const matchLen = Math.max(2, (params.matchLen ?? 3) - (midsHit ? 1 : 0));
-      const cleared = scanClears(matchLen);
-      if (cleared > 0) tetrisIdle = 0; else tetrisIdle += dt;
-    } else {
-      tetrisIdle = 0;
-    }
+    // Scan for matched runs every frame, not just at full rest — this is what
+    // keeps the action flowing: clears fire as soon as a run forms, so the
+    // board doesn't sit still between the slow descents. Already-clearing cells
+    // (kind < 0) are skipped, so a run is only marked once.
+    const matchLen = Math.max(2, (params.matchLen ?? 3) - (midsHit ? 1 : 0));
+    const cleared = scanClears(matchLen);
+    if (moved || cleared > 0) tetrisIdle = 0; else tetrisIdle += dt;
 
-    // Loop: empty board, or a stagnant one, rolls to fresh source.
+    // Loop: empty board, or a brief stagnation, rolls to fresh source.
     let occupied = false;
     for (let i = 0; i < n; i++) { if (kindCell[i] >= 0) { occupied = true; break; } }
     meltClock += dt;
-    if (!occupied || tetrisIdle > 5) {
+    if (!occupied || tetrisIdle > 1.5) {
       seedCursor += rows;
       reseed();
     }
