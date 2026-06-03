@@ -350,8 +350,11 @@ export default {
     // Phase-driven source switching — independent of `advance` (which governs
     // what happens when a clip ends). When set to next/random the playlist
     // advances on every auto-phase step (see update()), so a phase change can
-    // swap both the look (preset) and the clip. 'hold' = sources stay put.
-    { id: 'phaseAdvance', label: 'phase src',    type: 'select', options: ['hold', 'next', 'random'], default: 'hold' },
+    // swap both the look (preset) and the clip. Defaults to 'next' so turning
+    // on auto-phase rolls through the playlist too; 'hold' opts out (sources
+    // stay put while only the look cycles). Each clip resumes from where it
+    // last left off (see rememberPosition / loadCurrent).
+    { id: 'phaseAdvance', label: 'phase src',    type: 'select', options: ['hold', 'next', 'random'], default: 'next' },
     { id: 'mix',          label: 'mix',          type: 'range',  min: 0, max: 1, step: 0.02, default: 1.0 },
 
     // ── The look — PRESET-DRIVEN. Each preset sets these base values AND the
@@ -515,7 +518,26 @@ export default {
     const vidB = makeVideoEl();
     let activeVid = vidA;
 
-    /** @type {{kind:'url'|'file'|'camera', src:string, name:string, file?:File, tainted?:boolean, error?:string}[]} */
+    // Per-source resume. We stash each clip's playback position when we leave
+    // it (rememberPosition) and seek back there the next time it's selected —
+    // so an auto-phase clip swap, or a manual reselect, picks up where the clip
+    // left off rather than restarting from 0. Held in memory only (not in the
+    // persisted playlist), so a fresh session starts every clip at the top.
+    // `pendingResume` carries the target into the loadedmetadata handler, which
+    // is the first point a freshly-loaded clip knows its duration to clamp to.
+    let pendingResume = 0;
+    vidA.addEventListener('loadedmetadata', () => {
+      if (pendingResume <= 0) return;
+      const d = vidA.duration;
+      let t = pendingResume;
+      pendingResume = 0;
+      // Clamp just shy of the end so a near-end resume doesn't instantly trip
+      // the loop/advance the moment it starts.
+      if (Number.isFinite(d) && d > 0) t = Math.min(t, Math.max(0, d - 0.25));
+      try { vidA.currentTime = t; } catch {}
+    });
+
+    /** @type {{kind:'url'|'file'|'camera', src:string, name:string, file?:File, tainted?:boolean, error?:string, resumeAt?:number}[]} */
     const playlist = loadPlaylist();
     let cursor = 0;
     // True while the active source is the live camera — we then sample the
@@ -843,8 +865,20 @@ export default {
       }
       renderList();
     }
+    // Snapshot the active clip's playback position onto its entry so it can
+    // resume later. Skips the camera (we don't own its clock) and a fresh 0.
+    function rememberPosition() {
+      if (usingCamera) return;
+      const entry = playlist[cursor];
+      if (!entry || entry.kind === 'camera') return;
+      const t = activeVid.currentTime;
+      if (Number.isFinite(t) && t > 0) entry.resumeAt = t;
+    }
     function setCursor(idx) {
       if (idx < 0 || idx >= playlist.length) return;
+      // Stash where the outgoing clip was before we leave it, so reselecting it
+      // (e.g. on the next auto-phase pass) resumes instead of restarting.
+      rememberPosition();
       cursor = idx;
       // Bootstrap flag — any explicit setCursor() means we've now loaded a
       // source, so update()'s first-tick bootstrap shouldn't reload it.
@@ -858,6 +892,7 @@ export default {
       hideFallback();
       entry.tainted = false;
       entry.error = undefined;
+      pendingResume = 0;
       // Camera source: don't touch src/loop/rate/volume — we don't own the
       // element. Pause our own clip elements so they're not decoding in the
       // background, and let render() sample getVideoEl() instead.
@@ -875,6 +910,9 @@ export default {
       activeVid.playbackRate = currentParams.playbackRate || 1;
       activeVid.muted = (currentParams.volume || 0) <= 0;
       activeVid.volume = Math.max(0, Math.min(1, currentParams.volume || 0));
+      // Arm the resume seek (consumed by the loadedmetadata handler once the
+      // new src reports its duration). 0/undefined = start from the top.
+      pendingResume = Number.isFinite(entry.resumeAt) ? entry.resumeAt : 0;
       try {
         activeVid.src = entry.src;
         activeVid.play().catch((err) => {
