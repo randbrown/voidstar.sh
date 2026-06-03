@@ -86,7 +86,8 @@ export function createMeltEngine({ ctx, sourceLines, tokenizeLine, fontFamily })
   let meltClock = 0;
 
   // Tetris bookkeeping.
-  let fallAccum = 0, tetrisIdle = 0;
+  let fallAccum = 0, tetrisSpawnAccum = 0, tetrisClearAccum = 0;
+  let tetrisBest = 0, tetrisStall = 0;   // saturation tracker for the reset loop
 
   let mode = 'meltdown';
   let seedCursor = 0;     // advances each reseed so loops show fresh source
@@ -131,37 +132,56 @@ export function createMeltEngine({ ctx, sourceLines, tokenizeLine, fontFamily })
     reseed();
   }
 
-  // Lay the next slab of source into kindCell/charCode, then (for meltdown)
-  // flood-fill colour-connected blocks.
+  // Write one source line into grid `row`, only into cells that are currently
+  // EMPTY (so it never clobbers a settled/falling cell). Returns cells placed.
+  function layLine(rec, row) {
+    const base = row * cols;
+    let placed = 0;
+    if (rec.header) {
+      // Header bars read as one solid comment-coloured ribbon.
+      const t = rec.text;
+      for (let col = 0; col < cols && col < t.length; col++) {
+        const ch = t.charCodeAt(col);
+        if (ch > 32 && kindCell[base + col] === EMPTY) {
+          kindCell[base + col] = KIND_IDX.com; charCode[base + col] = ch; placed++;
+        }
+      }
+      return placed;
+    }
+    const toks = tokenizeLine(rec.text);
+    let col = 0;
+    for (let ti = 0; ti < toks.length && col < cols; ti++) {
+      const k = KIND_IDX[toks[ti].t] ?? 0;
+      const s = toks[ti].s;
+      for (let si = 0; si < s.length && col < cols; si++) {
+        const ch = s.charCodeAt(si);
+        if (ch > 32 && kindCell[base + col] === EMPTY) {
+          kindCell[base + col] = k; charCode[base + col] = ch; placed++;
+        }
+        col++;
+      }
+    }
+    return placed;
+  }
+
+  // Fill the whole grid from source (meltdown's starting slab).
   function seedGrid() {
     kindCell.fill(EMPTY);
     charCode.fill(0);
     clearTm.fill(0);
     const total = sourceLines.length;
     for (let r = 0; r < rows; r++) {
-      const rec = sourceLines[((seedCursor + r) % total + total) % total];
-      const base = r * cols;
-      if (rec.header) {
-        // Header bars read as one solid comment-coloured ribbon.
-        const t = rec.text;
-        for (let col = 0; col < cols && col < t.length; col++) {
-          const ch = t.charCodeAt(col);
-          if (ch > 32) { kindCell[base + col] = KIND_IDX.com; charCode[base + col] = ch; }
-        }
-        continue;
-      }
-      const toks = tokenizeLine(rec.text);
-      let col = 0;
-      for (let ti = 0; ti < toks.length && col < cols; ti++) {
-        const k = KIND_IDX[toks[ti].t] ?? 0;
-        const s = toks[ti].s;
-        for (let si = 0; si < s.length && col < cols; si++) {
-          const ch = s.charCodeAt(si);
-          if (ch > 32) { kindCell[base + col] = k; charCode[base + col] = ch; }
-          col++;
-        }
-      }
+      layLine(sourceLines[((seedCursor + r) % total + total) % total], r);
     }
+  }
+
+  // Drop the next source line into the top row — tetris feeds the stack from
+  // here, so the pile grows upward as lines rain in and settle.
+  function spawnLineTetris() {
+    const total = sourceLines.length;
+    const rec = sourceLines[((seedCursor % total) + total) % total];
+    seedCursor++;
+    layLine(rec, 0);
   }
 
   function buildBlocks() {
@@ -217,9 +237,21 @@ export function createMeltEngine({ ctx, sourceLines, tokenizeLine, fontFamily })
   }
 
   function reseed() {
-    seedGrid();
-    if (mode === 'meltdown') buildBlocks();
-    else { fallAccum = 0; tetrisIdle = 0; }
+    if (mode === 'meltdown') {
+      seedGrid();
+      buildBlocks();
+    } else {
+      // Tetris starts from an EMPTY board and grows upward — lines are fed in
+      // from the top by spawnLineTetris() and stack until the pile tops out.
+      kindCell.fill(EMPTY);
+      charCode.fill(0);
+      clearTm.fill(0);
+      fallAccum = 0;
+      tetrisSpawnAccum = 0;
+      tetrisClearAccum = 0;
+      tetrisBest = 0;
+      tetrisStall = 0;
+    }
     meltClock = 0;
     seeded = true;
   }
@@ -413,35 +445,77 @@ export function createMeltEngine({ ctx, sourceLines, tokenizeLine, fontFamily })
     fallAccum += dt * fallSpeed;
     let passes = Math.min(6, Math.floor(fallAccum));
     fallAccum -= passes;
+    while (passes-- > 0) fallPass();
 
-    let moved = false;
-    while (passes-- > 0) if (fallPass()) moved = true;
-
-    // Clear timers (flash → vanish).
+    // Clear timers (flash → vanish), and tally live occupancy in the same pass.
     const n = cols * rows;
+    let occCount = 0;
     for (let i = 0; i < n; i++) {
-      if (kindCell[i] === CLEARING) {
+      const k = kindCell[i];
+      if (k === CLEARING) {
         clearTm[i] -= dt;
         if (clearTm[i] <= 0) { kindCell[i] = EMPTY; charCode[i] = 0; }
+      } else if (k >= 0) {
+        occCount++;
       }
     }
 
-    // Scan for matched runs every frame, not just at full rest — this is what
-    // keeps the action flowing: clears fire as soon as a run forms, so the
-    // board doesn't sit still between the slow descents. Already-clearing cells
-    // (kind < 0) are skipped, so a run is only marked once.
-    const matchLen = Math.max(2, (params.matchLen ?? 3) - (midsHit ? 1 : 0));
-    const cleared = scanClears(matchLen);
-    if (moved || cleared > 0) tetrisIdle = 0; else tetrisIdle += dt;
-
-    // Loop: empty board, or a brief stagnation, rolls to fresh source.
-    let occupied = false;
-    for (let i = 0; i < n; i++) { if (kindCell[i] >= 0) { occupied = true; break; } }
-    meltClock += dt;
-    if (!occupied || tetrisIdle > 1.5) {
-      seedCursor += rows;
-      reseed();
+    // Feed fresh lines in from the top so the stack grows upward. Spacing is a
+    // few cells (tied to fall speed) so distinct lines rain down rather than a
+    // solid wall. layLine only fills EMPTY cells, so a topped-out column simply
+    // stops receiving — the rest keep filling until the pile reaches the top.
+    // Spacing must exceed the time for a line to fall clear of the top few
+    // rows, or the feed jams at the top and the pile builds downward. 2.4 cells
+    // of headroom keeps lines raining bottom-up.
+    tetrisSpawnAccum += dt;
+    const spawnGap = Math.max(0.05, 2.4 / Math.max(1, fallSpeed));
+    if (tetrisSpawnAccum >= spawnGap) {
+      tetrisSpawnAccum = 0;
+      // Stop feeding only when the very top row jams (pile pressed to the top).
+      let topFilled = 0;
+      for (let x = 0; x < cols; x++) if (kindCell[x] >= 0) topFilled++;
+      if (topFilled < cols * 0.95) spawnLineTetris();
     }
+
+    // Clears are rare punctuation, not a balancing mechanism — the feed has to
+    // win so the pile climbs to the top. They stay off until the board is
+    // well-grown (so the early rise is unobstructed), then fire on a beat but
+    // no more often than every 2s (3.5s when silent). Matched colour runs pop
+    // and the blocks above cascade down; the stack keeps rising between them.
+    tetrisClearAccum += dt;
+    const fillFrac = occCount / Math.max(1, n);
+    if (fillFrac > 0.6 && tetrisClearAccum >= 2.0 &&
+        (audio.beat.active || tetrisClearAccum >= 3.5)) {
+      tetrisClearAccum = 0;
+      const matchLen = Math.max(4, (params.matchLen ?? 5) - (midsHit ? 1 : 0));
+      scanClears(matchLen);
+    }
+
+    // Reset on either of two conditions, whichever lands first:
+    //
+    //   1. Top-out — a wall of the settled pile has reached the top. Judged by
+    //      the row beneath the feeder (row 1) being settled (supported by row 2)
+    //      across enough columns. Requiring a span of columns, not a single
+    //      spike, keeps one tall sliver from resetting a mostly-empty board.
+    //   2. Saturation — the pile has stopped reaching new heights for a while
+    //      (growth and clears have balanced out). This is the graceful exit
+    //      when the board is wider than the source lines, so the mound fills as
+    //      far as it can and then recycles instead of sitting forever.
+    //
+    // seedCursor has already advanced via the spawns, so the refill is fresh.
+    meltClock += dt;
+    let topped = 0;
+    if (rows >= 3) {
+      for (let x = 0; x < cols; x++) {
+        if (kindCell[cols + x] >= 0 && kindCell[2 * cols + x] >= 0) topped++;
+      }
+    }
+    if (occCount > tetrisBest + Math.max(2, cols * 0.02)) {
+      tetrisBest = occCount; tetrisStall = 0;
+    } else {
+      tetrisStall += dt;
+    }
+    if (topped >= Math.max(3, cols * 0.5) || tetrisStall > 3.5) reseed();
   }
 
   // One gravity pass: every cell with empty air directly below drops one row.

@@ -203,7 +203,7 @@ export default {
     heatmap:     { mode: 'heatmap',  glow: 0.6, glitch: 0.0, scrollSpeed: 0.15 },
     meltdown:       { mode: 'meltdown', palette: 'neon',    meltRate: 0.6, bounce: 0.55, glow: 0.4, fontScale: 1.1, blockFill: false },
     meltdown_block: { mode: 'meltdown', palette: 'monokai', meltRate: 0.8, bounce: 0.50, glow: 0.3, fontScale: 1.2, blockFill: true },
-    tetris:         { mode: 'tetris',   palette: 'classic', matchLen: 3,   glow: 0.3, fontScale: 1.2, blockFill: true, scrollSpeed: 0.3 },
+    tetris:         { mode: 'tetris',   palette: 'classic', matchLen: 5,   glow: 0.3, fontScale: 1.2, blockFill: true, scrollSpeed: 0.3 },
   },
 
   // Phase steps walk every mode plus a couple palette variants. Stays inside
