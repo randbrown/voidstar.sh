@@ -629,13 +629,13 @@ export default {
 
       // Compute static * sprite geometry from the param uVoidRadius — it
       // does NOT track the audio breathing so the * stays anchored. The *
-      // sits just to the right of the "d" (logoUV.x ≈ 0.78) so it reads
-      // as part of the logotype, not a detached element.
+      // sits snug to the right of the "d" (logoUV.x ≈ 0.70) so it reads as
+      // part of the logotype "void*", not a detached element.
       const sphereR = Math.max(params.voidRadius * 2.10, 0.30);
       const logoHalfPX = Math.min(0.55, sphereR * 0.94);
       const logoHalfPY = Math.min(0.16, sphereR * 0.30);
       const logoHalfAngX = Math.asin(logoHalfPX / sphereR);
-      const starAngX = 0.50 * logoHalfAngX;     // → logoUV.x ≈ 0.75 (just past "d")
+      const starAngX = 0.40 * logoHalfAngX;     // → logoUV.x ≈ 0.70 (snug past "d")
       scratch.starCenterX = sphereR * Math.sin(starAngX);
       scratch.starHalfPX  = 0.20 * logoHalfPX;
       scratch.starHalfPY  = 0.55 * logoHalfPY;

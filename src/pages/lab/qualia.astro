@@ -366,10 +366,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #topbar-titlerow {
       display: flex; align-items: center; gap: 1rem;
       justify-content: space-between;
-      /* Reserve the top-right corner for the pinned zen button (positioned
-         absolutely below) so neither the title nor the wrapped control
-         cluster can slide underneath it. */
-      padding-right: 3.6rem;
+      /* Reserve the top-right corner for the pinned fullscreen + zen pair
+         (positioned absolutely below) so neither the title nor the wrapped
+         control cluster can slide underneath it. */
+      padding-right: 6.5rem;
     }
     #topbar-left  {
       display: flex; align-items: center; gap: 0.7rem;
@@ -422,7 +422,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        the topbar/popover layout doesn't reflow (and re-wrap) every time the
        auto-cycle/phase timer ticks down a digit or a label flips. Sized in
        `ch` (mono font) against the widest reachable string for each id. */
-    #btn-cycle, #btn-phase    { min-width: 13ch; } /* "cycle 45s (♪)" */
+    #btn-cycle, #btn-phase    { min-width: 11ch; } /* dropdown "cycle 45s" + arrow */
     #btn-cycle-beat,
     #btn-phase-beat           { min-width: 11ch; } /* "♪ cycle off" */
     #btn-audio                { min-width: 13ch; } /* "audio strudel" */
@@ -514,14 +514,17 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       }
     }
 
-    /* Pin the zen button to the top-right corner so it lands in (almost)
-       the same spot the spinning #zen-handle fades into once zen mode hides
-       the topbar — tapping "zen" to enter and tapping the spinner to exit
-       share one muscle-memory target. Absolute (lifted out of the corner
-       flex flow) so it stays put even when the corner cluster wraps below
-       the title on a narrow phone. */
-    #btn-zen {
+    /* Pin fullscreen + zen together at the top-right corner so they stay a
+       single pair regardless of how the rest of the corner cluster (strudel /
+       seq / vox / rec) wraps below the title on a narrow phone. zen sits at
+       the far-right edge so it lands in (almost) the same spot the spinning
+       #zen-handle fades into once zen mode hides the topbar — tapping "zen"
+       to enter and the spinner to exit share one muscle-memory target;
+       fullscreen rides immediately to its left. Absolute (lifted out of the
+       corner flex flow) so the pair never gets split apart. */
+    #topbar-corner-pinned {
       position: absolute; top: 0.5rem; right: 1rem; z-index: 22;
+      display: flex; align-items: center; gap: 0.5rem;
     }
 
     #zen-handle {
@@ -1610,8 +1613,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <button type="button" class="ctrl-btn qg-menuitem" data-capture="tab" role="menuitemradio">tab</button>
         </div>
       </div>
-      <button class="ctrl-btn btn-icon" id="btn-fullscreen" title="Fullscreen (X)" aria-label="Fullscreen">⛶</button>
-      <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
+      <div id="topbar-corner-pinned">
+        <button class="ctrl-btn btn-icon" id="btn-fullscreen" title="Fullscreen (X)" aria-label="Fullscreen">⛶</button>
+        <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
+      </div>
     </div>
   </div>
   <!-- Controls row: status indicators + the primary fx picker + audio +
@@ -1700,13 +1705,24 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="auto"
               title="Auto-cycle + auto-phase (N/L)" aria-haspopup="true" aria-expanded="false">auto<span class="qg-caret">▾</span></button>
       <div class="qg-popover" role="menu">
-        <button class="ctrl-btn" id="btn-cycle" title="Auto-cycle between qualia (N)">cycle</button>
+        <select id="btn-cycle" class="ctrl-btn" title="Auto-cycle between qualia (N) — pick a dwell, or 'off' to disable in one tap">
+          <option value="0">cycle off</option>
+          <option value="5">cycle 5s</option>
+          <option value="15">cycle 15s</option>
+          <option value="30">cycle 30s</option>
+          <option value="45">cycle 45s</option>
+        </select>
         <select id="cycle-style" class="ctrl-btn" title="Auto-cycle style">
           <option value="sequential">sequential</option>
           <option value="random">random</option>
         </select>
         <button class="ctrl-btn" id="btn-cycle-beat" title="Beat-sync cycle: dwell time becomes a minimum, then the next hard kick triggers the switch (silence fallback at 2× dwell). Falls through to time-based when audio is off.">♪ cycle off</button>
-        <button class="ctrl-btn" id="btn-phase" title="Auto-phase modes within active quale (L)">phase</button>
+        <select id="btn-phase" class="ctrl-btn" title="Auto-phase modes within active quale (L) — pick a dwell, or 'off' to disable in one tap">
+          <option value="0">phase off</option>
+          <option value="5">phase 5s</option>
+          <option value="10">phase 10s</option>
+          <option value="15">phase 15s</option>
+        </select>
         <select id="phase-style" class="ctrl-btn" title="Auto-phase style — sequential: steps in order · palettes: cycle colours only · random: random phase + colour">
           <option value="sequential">sequential</option>
           <option value="palettes">palettes</option>
