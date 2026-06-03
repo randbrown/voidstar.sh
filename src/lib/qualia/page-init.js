@@ -24,6 +24,14 @@ import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { createRecorder } from './recorder.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
+import {
+  loadExcludedFor as loadPhaseExcludedFor,
+  saveExcludedFor as savePhaseExcludedFor,
+  loadExcludedMap as loadPhaseExcludedMap,
+  saveExcludedMap as savePhaseExcludedMap,
+  includedStepIndices as phaseIncludedIndices,
+  stepLabel as phaseStepLabel,
+} from './phase-pool.js';
 import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror } from './video.js';
 import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
@@ -49,9 +57,15 @@ import video          from './fx/video.js';
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
 // QFXModule.autoPhase.steps; the topbar `phase` button drives them. Each
-// click advances through PHASE_PERIODS (0 = off).
+// click advances through PHASE_PERIODS (0 = off). Styles (see phaseNext):
+//   sequential — walk the enabled phase steps in authored order.
+//   palettes   — hold the mode/structure, cycle only the colour palette
+//                (falls back to sequential on quales with no palette axis).
+//   random     — random phase × random palette each tick.
+// Glitch overlays (ascii / mosh / edge) are NOT driven by phase styles — a
+// glitch you turn on stays on.
 const PHASE_PERIODS = [0, 5, 10, 15];          // seconds
-const AUTO_PHASE_STYLES = ['chapters', 'alternate', 'random', 'hold'];
+const AUTO_PHASE_STYLES = ['sequential', 'palettes', 'random'];
 // Auto-cycle: swaps the active qfx ITSELF on a longer timer. Independent of
 // auto-phase — the two can run together (a single qfx phases through its
 // modes, then cycle picks the next quale and the new one starts phasing).
@@ -60,11 +74,11 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 // "Glitch" post-process modes (shared by ascii / mosh / edge). The button
 // cycles through these:
 //   off:  glitch disabled (always)
-//   on:   glitch enabled (always); also: included in auto-phase roster
+//   on:   glitch enabled (always)
 //   blip: brief flash on hard kicks, auto-clears after BLIP_DURATION_MS
 //   flip: toggles glitch state on each hard kick (persists between hits)
-// blip + flip stay reactive regardless of auto-phase rotation; only the
-// 'on' modes form the rotation roster.
+// Glitches are independent of the auto-phase styles — whatever mode you set
+// here stays put while phases/palettes rotate.
 // Audio source modes. The button cycles through these:
 //   off:     no streams feed analysis (mic stopped, strudel ignored)
 //   mic:     mic only — strudel ignored even while playing
@@ -247,6 +261,9 @@ export function initQualiaPage() {
       // having to re-enable.
       syncPhaseTimer();
       refreshPhaseBtn();
+      // Keep an open pool manager in sync: the phase-pool tab is scoped to
+      // the active quale, and the cycle-pool tab highlights it.
+      if (cycleMgr?.classList.contains('visible')) renderCycleMgrList();
       // Auto-cycle: any switch (manual or via cycleNext) restarts the
       // dwell clock so the new fx gets the full autoCycleSeconds window.
       autoCycleStartMs = performance.now();
@@ -1238,6 +1255,10 @@ export function initQualiaPage() {
     document.body.classList.add('split-dragging');
     try { splitterEl.setPointerCapture(ev.pointerId); } catch {}
     ev.preventDefault();
+    // Keep the drag from bubbling to the body-level canvas gesture handler,
+    // which would otherwise read the splitter drag as a swipe and cycle the
+    // active quale on release.
+    ev.stopPropagation();
   });
   splitterEl?.addEventListener('pointermove', (ev) => {
     if (!splitDragging) return;
@@ -1498,7 +1519,7 @@ export function initQualiaPage() {
     // canvas" — only the start position decides.
     const el = document.elementFromPoint(x, y);
     if (!el) return false;
-    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #sequencer-panel, #video, #zen-handle, #status-overlay, .qg-popover');
+    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #sequencer-panel, #video, #zen-handle, #status-overlay, #cam-splitter, .qg-popover');
   }
 
   function onCanvasPointerDown(ev) {
@@ -1657,11 +1678,10 @@ export function initQualiaPage() {
 
   // ── Glitches: ascii / mosh / edge share the same multi-state semantics ──
   // (off / on / blip / flip). blip + flip react to hard kicks (see the
-  // core.onFrame handler below). 'on' is the only mode that participates
-  // in auto-phase rotation. Buttons cycle modes on click; the active
-  // class is bound to the MODE (not the overlay option) so a glitch in
-  // 'on' still reads as active even when auto-phase has temporarily
-  // switched the overlay onto a different roster member.
+  // core.onFrame handler below). Glitches are independent of the auto-phase
+  // styles — whatever mode is set here stays put while phases/palettes
+  // rotate. Buttons cycle modes on click; the active class is bound to the
+  // MODE so a glitch in 'on' always reads as active.
   const btnByGlitch = { ascii: btnAscii, mosh: btnMosh, edge: btnEdge };
   function refreshGlitchBtn(glitch) {
     const btn = btnByGlitch[glitch];
@@ -1677,16 +1697,12 @@ export function initQualiaPage() {
     glitchModes[glitch] = mode;
     blipExpiresAt[glitch] = 0;
     // Sync overlay option: 'on' shows, reactive modes start hidden and
-    // are toggled by the kick handler. 'off' hides. The overlay's
-    // internal ascii/mosh/edge mutex still keeps only one rendering at
-    // a time when the user has multiple set to 'on' — auto-phase rotation
-    // is what moves between them in that case.
+    // are toggled by the kick handler. 'off' hides. The overlay's internal
+    // ascii/mosh/edge mutex keeps only one rendering at a time if the user
+    // sets multiple to 'on'.
     overlay.setOption(glitch, mode === 'on');
     refreshGlitchBtn(glitch);
     syncPostBtns();
-    // Re-sync the phase timer if a glitch's mode change affects the chapters
-    // boundary (active roster shifted). Reuses the existing chapter-reset
-    // path below by deferring to the next tick.
     settings.save();
   }
   function cycleGlitchMode(glitch) {
@@ -1709,20 +1725,6 @@ export function initQualiaPage() {
   // Roster of glitches included in auto-phase rotation. Computed live from
   // current modes — only 'on' glitches participate; off / blip / flip are
   // skipped (per spec: blip + flip stay reactive on their own; off stays off).
-  function getGlitchRoster() {
-    return GLITCH_KEYS.filter(g => glitchModes[g] === 'on');
-  }
-  // Apply a rotation choice. `target` is either a glitch key or null (for
-  // a no-glitch chapter). Only roster members get their overlay toggled —
-  // we never touch glitches outside the roster, so blip / flip stay free
-  // to do their kick-driven thing.
-  function applyGlitchRotation(target) {
-    const roster = getGlitchRoster();
-    for (const g of roster) {
-      overlay.setOption(g, g === target);
-    }
-  }
-
   // Mosh slider wiring — every input writes back into the overlay's
   // moshConfig. The overlay reads its own state each frame so changes
   // take effect on the next paint without further plumbing.
@@ -2274,7 +2276,8 @@ export function initQualiaPage() {
   // camera mode button). Click advances through the period array; the last
   // step wraps back to off. Tooltip lists the cycle so the muscle-memory is
   // discoverable.
-  //   - phase: walks modes/presets WITHIN the active qfx (palettes, modes).
+  //   - phase: walks modes/presets WITHIN the active qfx (palettes, modes)
+  //     per the active style (sequential / palettes / random — see phaseNext).
   //     Each QFXModule may declare `autoPhase: { steps: [...] }`. If the
   //     active quale has no autoPhase, the button reads "phase n/a" and
   //     clicks are no-ops.
@@ -2312,7 +2315,9 @@ export function initQualiaPage() {
   // design means we never need a separate startPhase/stopPhase split — the
   // setPhasePeriod helper handles every transition.
   let autoPhaseSeconds = PHASE_PERIODS.includes(_phaseSecRaw) ? _phaseSecRaw : 0;
-  let autoPhaseStyle = AUTO_PHASE_STYLES.includes(_phaseStyleRaw) ? _phaseStyleRaw : 'chapters';
+  // Old style values (chapters / alternate / hold) are no longer valid and
+  // fall through to the default — see AUTO_PHASE_STYLES.
+  let autoPhaseStyle = AUTO_PHASE_STYLES.includes(_phaseStyleRaw) ? _phaseStyleRaw : 'sequential';
   let autoPhaseBeatSync = !!stored.autoPhaseBeatSync;
   let autoPhaseStartMs = 0;
   let autoPhaseStepCount = 0;
@@ -2362,58 +2367,72 @@ export function initQualiaPage() {
     }
   }
 
+  // Distinct `palette` values across a list of phase steps, in first-seen
+  // order. The colour dimension of every quale's steps is the literal
+  // `palette` key (steps that omit it have no colour axis).
+  function distinctPalettes(stepList) {
+    const seen = new Set();
+    const out = [];
+    for (const s of stepList) {
+      if (s && s.palette != null && !seen.has(s.palette)) {
+        seen.add(s.palette);
+        out.push(s.palette);
+      }
+    }
+    return out;
+  }
+
+  // Apply a step's partial params to the active quale via core.setParam so
+  // the panel UI and persistence stay in sync. Only the keys present are
+  // touched — everything else the user dialed in stays.
+  function applyPhaseStep(step) {
+    const fxId = core.activeId();
+    if (!fxId) return;
+    for (const [k, v] of Object.entries(step)) core.setParam(fxId, k, v);
+  }
+
   function phaseNext() {
     const steps = getActivePhaseSteps();
     if (!steps || !steps.length) return;
-    autoPhaseStepCount++;
-    const step = steps[autoPhaseStepCount % steps.length];
-    // Glitch scheduling. Roster = glitches whose mode is 'on'; off / blip /
-    // flip are skipped so they keep doing their own thing. Step granularity
-    // == one phase-step. With one roster member this falls back to the old
-    // single-glitch on/off chapters behavior; with multiple, each chapter
-    // (and alternate / random tick) round-robins between them.
-    const roster = getGlitchRoster();
-    if (roster.length > 0) {
-      const pool = ['off', ...roster];   // 'off' = no glitch chapter
-      switch (autoPhaseStyle) {
-        case 'chapters': {
-          // One full pass through the phase steps = one chapter. Alternate
-          // between off-chapters and roster-chapters; the roster-chapter
-          // index advances each time we land on one (so chapters cycle
-          // through all roster members over time).
-          const pass = Math.floor(autoPhaseStepCount / steps.length);
-          if (pass % 2 === 0) {
-            applyGlitchRotation(null);
-          } else {
-            const rIdx = ((pass - 1) >> 1) % roster.length;
-            applyGlitchRotation(roster[rIdx]);
-          }
-          break;
-        }
-        case 'alternate': {
-          // Each step bumps to the next entry in [off, ...roster].
-          const idx = autoPhaseStepCount % pool.length;
-          applyGlitchRotation(pool[idx] === 'off' ? null : pool[idx]);
-          break;
-        }
-        case 'random': {
-          // 30% off, otherwise pick a random roster member.
-          if (Math.random() < 0.3) applyGlitchRotation(null);
-          else applyGlitchRotation(roster[(Math.random() * roster.length) | 0]);
-          break;
-        }
-        case 'hold':
-        default: break;
-      }
-    }
-    // Apply the step's partial params via core.setParam so the panel UI
-    // and persistence stay in sync.
     const fxId = core.activeId();
-    if (fxId) {
-      for (const [k, v] of Object.entries(step)) {
-        core.setParam(fxId, k, v);
+    // Filter to the user's enabled steps (phase pool). `included` is never
+    // empty — phaseIncludedIndices falls back to all steps when everything
+    // is excluded.
+    const excluded = fxId ? loadPhaseExcludedFor(fxId) : new Set();
+    const incl = phaseIncludedIndices(steps, excluded).map(i => steps[i]);
+
+    // autoPhaseStepCount is a monotonic counter that is NOT reset when the
+    // active quale changes (only on explicit style change). Indexing it via
+    // modulo means each quale resumes at a rolling offset rather than always
+    // reopening on phase 0 — so cycling never lands on the same look twice.
+    autoPhaseStepCount++;
+
+    if (autoPhaseStyle === 'random') {
+      // Random walk: jump to a random phase, then remix a random palette on
+      // top (independent structure × colour). Mode-only quales (no palette
+      // axis) just get the random phase.
+      const structure = incl[(Math.random() * incl.length) | 0];
+      const pals = distinctPalettes(incl);
+      const step = pals.length
+        ? { ...structure, palette: pals[(Math.random() * pals.length) | 0] }
+        : structure;
+      applyPhaseStep(step);
+      return;
+    }
+
+    if (autoPhaseStyle === 'palettes') {
+      // Hold the current mode/structure; cycle only the colour palette.
+      // Falls back to sequential phase-stepping on quales with no palette
+      // axis (chladni, spectrum, …) so the style is never inert.
+      const pals = distinctPalettes(incl);
+      if (pals.length) {
+        applyPhaseStep({ palette: pals[autoPhaseStepCount % pals.length] });
+        return;
       }
     }
+
+    // sequential (and palettes fallback): walk the enabled steps in order.
+    applyPhaseStep(incl[autoPhaseStepCount % incl.length]);
   }
 
   function tickPhase() {
@@ -2449,16 +2468,13 @@ export function initQualiaPage() {
   // the timer when off or unsupported; (re)starts it otherwise. Does NOT
   // mutate autoPhaseSeconds — that's the user's preserved intent and
   // needs to survive cycling through a quale that lacks phase support so
-  // the next supporting quale resumes at the chosen period.
+  // the next supporting quale resumes at the chosen period. It also does
+  // NOT reset autoPhaseStepCount: the counter is monotonic across quale
+  // changes so each quale resumes at a rolling phase offset (see phaseNext).
   function syncPhaseTimer() {
     if (autoPhaseTickT) { clearInterval(autoPhaseTickT); autoPhaseTickT = null; }
     if (autoPhaseSeconds > 0 && getActivePhaseSteps()) {
       autoPhaseStartMs = performance.now();
-      autoPhaseStepCount = 0;
-      // Reset roster glitches to off at the start of a chapters pass so
-      // the first chapter is the off-chapter. Only roster ('on') glitches
-      // are touched — blip / flip stay reactive on their own.
-      if (autoPhaseStyle === 'chapters') applyGlitchRotation(null);
       autoPhaseTickT = setInterval(tickPhase, 250);
     }
   }
@@ -2480,10 +2496,7 @@ export function initQualiaPage() {
   });
   phaseStyleSelect.addEventListener('change', () => {
     autoPhaseStyle = phaseStyleSelect.value;
-    autoPhaseStepCount = 0;
-    if (autoPhaseSeconds > 0 && autoPhaseStyle === 'chapters') {
-      applyGlitchRotation(null);
-    }
+    autoPhaseStepCount = 0;   // explicit style change starts the new style fresh
     settings.save();
   });
 
@@ -2641,22 +2654,29 @@ export function initQualiaPage() {
   });
   refreshBeatSyncBtns();
 
-  // ── Cycle pool manager ───────────────────────────────────────────────────
-  // Lets the user pick which quales the auto-cycle rotates through. Stored
-  // as an EXCLUDED set in localStorage; cycleNext above filters by it.
+  // ── Pool manager (cycle + phase) ─────────────────────────────────────────
+  // One modal, two tabs:
+  //   • cycle pool — which quales the auto-cycle rotates through (flat list
+  //     of all quales; EXCLUDED set keyed by mod.id in cycle-pool.js).
+  //   • phase pool — which steps the auto-phase rotates through, scoped to
+  //     the ACTIVE quale (EXCLUDED indices keyed by fx id in phase-pool.js).
+  // Both filter their respective rotations above.
   const cycleMgr         = document.getElementById('cycle-mgr');
   const cycleMgrBackdrop = document.getElementById('cycle-mgr-backdrop');
   const cycleMgrList     = document.getElementById('cycle-mgr-list');
+  const cycleMgrSub      = document.getElementById('cycle-mgr-sub');
   const cycleMgrAll      = document.getElementById('cycle-mgr-all');
   const cycleMgrNone     = document.getElementById('cycle-mgr-none');
   const cycleMgrClose    = document.getElementById('cycle-mgr-close');
+  const cycleMgrTabCycle = document.getElementById('cycle-mgr-tab-cycle');
+  const cycleMgrTabPhase = document.getElementById('cycle-mgr-tab-phase');
   const btnCycleManage   = document.getElementById('btn-cycle-manage');
 
-  function renderCycleMgrList() {
-    if (!cycleMgrList) return;
+  let mgrPool = 'cycle';  // 'cycle' | 'phase'
+
+  function renderCycleRows() {
     const excluded = loadCycleExcluded();
     const curId = core.activeId();
-    cycleMgrList.innerHTML = '';
     for (const mod of mesh.list()) {
       const row = document.createElement('label');
       row.className = 'cycle-mgr-row' + (mod.id === curId ? ' active' : '');
@@ -2677,6 +2697,49 @@ export function initQualiaPage() {
       cycleMgrList.appendChild(row);
     }
   }
+
+  function renderPhaseRows() {
+    const fxId  = core.activeId();
+    const mod   = fxId ? mesh.get?.(fxId) : null;
+    const steps = getActivePhaseSteps();
+    if (cycleMgrSub) {
+      cycleMgrSub.style.display = '';
+      cycleMgrSub.textContent = steps
+        ? `phases for ${mod?.name || fxId}`
+        : `${mod?.name || fxId || 'active quale'} has no phases`;
+    }
+    if (!steps || !steps.length) return;
+    const excluded = loadPhaseExcludedFor(fxId);
+    steps.forEach((step, i) => {
+      const row = document.createElement('label');
+      row.className = 'cycle-mgr-row';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !excluded.has(i);
+      cb.addEventListener('change', () => {
+        const cur = loadPhaseExcludedFor(fxId);
+        if (cb.checked) cur.delete(i);
+        else            cur.add(i);
+        savePhaseExcludedFor(fxId, cur);
+      });
+      const name = document.createElement('span');
+      name.className = 'cycle-mgr-name';
+      name.textContent = `${i + 1}. ${phaseStepLabel(step)}`;
+      row.appendChild(cb);
+      row.appendChild(name);
+      cycleMgrList.appendChild(row);
+    });
+  }
+
+  function renderCycleMgrList() {
+    if (!cycleMgrList) return;
+    cycleMgrList.innerHTML = '';
+    if (cycleMgrSub) cycleMgrSub.style.display = 'none';
+    cycleMgrTabCycle?.classList.toggle('active', mgrPool === 'cycle');
+    cycleMgrTabPhase?.classList.toggle('active', mgrPool === 'phase');
+    if (mgrPool === 'phase') renderPhaseRows();
+    else                     renderCycleRows();
+  }
   function openCycleMgr() {
     renderCycleMgrList();
     cycleMgr?.classList.add('visible');
@@ -2691,18 +2754,32 @@ export function initQualiaPage() {
   btnCycleManage?.addEventListener('click', openCycleMgr);
   cycleMgrClose?.addEventListener('click', closeCycleMgr);
   cycleMgrBackdrop?.addEventListener('click', closeCycleMgr);
+  cycleMgrTabCycle?.addEventListener('click', () => { mgrPool = 'cycle'; renderCycleMgrList(); });
+  cycleMgrTabPhase?.addEventListener('click', () => { mgrPool = 'phase'; renderCycleMgrList(); });
   cycleMgrAll?.addEventListener('click', () => {
-    saveCycleExcluded(new Set());
+    if (mgrPool === 'phase') {
+      const fxId = core.activeId();
+      if (fxId) savePhaseExcludedFor(fxId, new Set());
+    } else {
+      saveCycleExcluded(new Set());
+    }
     renderCycleMgrList();
   });
   cycleMgrNone?.addEventListener('click', () => {
-    saveCycleExcluded(new Set(mesh.ids()));
+    if (mgrPool === 'phase') {
+      const fxId  = core.activeId();
+      const steps = getActivePhaseSteps();
+      if (fxId && steps) savePhaseExcludedFor(fxId, new Set(steps.map((_, i) => i)));
+    } else {
+      saveCycleExcluded(new Set(mesh.ids()));
+    }
     renderCycleMgrList();
   });
   // Repaint when the active quale changes so the highlighted "active" row
-  // stays in sync if the manager happens to be open. (When the modal is
-  // closed, renderCycleMgrList() reruns on next open anyway, so this is
-  // only for the "manager open while user cycles via V/N keys" case.)
+  // (cycle pool) and the per-quale step list (phase pool) stay in sync if the
+  // manager happens to be open. (When the modal is closed, renderCycleMgrList()
+  // reruns on next open anyway, so this is only for the "manager open while
+  // user cycles via V/N keys" case.)
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && cycleMgr?.classList.contains('visible')) {
       closeCycleMgr();
@@ -3295,6 +3372,7 @@ export function initQualiaPage() {
         qualem: document.getElementById('qualem-card')?.classList.contains('collapsed') ?? true,
       },
       cyclePool: { excluded: [...loadCycleExcluded()] },
+      phasePool: { excluded: loadPhaseExcludedMap() },
       fx,
       strudel:   { code: strudelCode },
       sequencer: { model: seqModel ? { ...seqModel, name: qualemName } : null },
@@ -3411,7 +3489,9 @@ export function initQualiaPage() {
     // 8. Auto-phase / cycle
     if (q.auto) {
       if (typeof q.auto.phaseStyle === 'string') {
-        autoPhaseStyle = q.auto.phaseStyle;
+        // Retired style values (chapters / alternate / hold) coerce to the
+        // default so an old saved qualem never lands on a dead dropdown.
+        autoPhaseStyle = AUTO_PHASE_STYLES.includes(q.auto.phaseStyle) ? q.auto.phaseStyle : 'sequential';
         if (phaseStyleSelect) phaseStyleSelect.value = autoPhaseStyle;
       }
       if (typeof q.auto.cycleStyle === 'string') {
@@ -3473,9 +3553,13 @@ export function initQualiaPage() {
       }
     }
 
-    // 11. Cycle-pool exclusions
+    // 11. Cycle-pool + phase-pool exclusions
     if (Array.isArray(q.cyclePool?.excluded)) {
       saveCycleExcluded(new Set(q.cyclePool.excluded));
+    }
+    if (q.phasePool?.excluded && typeof q.phasePool.excluded === 'object'
+        && !Array.isArray(q.phasePool.excluded)) {
+      savePhaseExcludedMap(q.phasePool.excluded);
     }
 
     // 12. Strudel pattern + sequencer model
@@ -3519,10 +3603,11 @@ export function initQualiaPage() {
       pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, numPoses: 1 },
       overlay: { skeleton: true, sparks: true, aura: true, ripples: true },
       glitch:  { ascii: 'off', mosh: 'off', edge: 'off' },
-      auto:    { phaseSeconds: 0, phaseStyle: 'chapters', phaseBeatSync: false,
+      auto:    { phaseSeconds: 0, phaseStyle: 'sequential', phaseBeatSync: false,
                  cycleSeconds: 0, cycleStyle: 'sequential', cycleBeatSync: false },
       camera:  { rotation: 0, mirror: true, zoom: 1.0, videoOffset: { dx: 0, dy: 0 }, sizeIdx: 0 },
       cyclePool: { excluded: [] },
+      phasePool: { excluded: {} },
       fx: {},
       pausedZen: { paused: false, zen: false },
     };

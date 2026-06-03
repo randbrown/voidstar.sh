@@ -13,13 +13,23 @@
 //                glyphs mixed in. Palette tints the trail.
 //   drift        Code lines floating in 3D space with depth-fade and
 //                parallax — the "floating-code" cinematic look.
+//   meltdown     After andreasgysin's "Meltdown": colour-connected token
+//                blocks slough off and tumble down, scattering off the walls
+//                and the pile they build. See fx/code-meltdown.js.
+//   tetris       Cellular cousin of meltdown — matched colour runs clear and
+//                everything above cascades down.
 //
 // Audio bindings (declarative on params): bass + beatPulse → scrollSpeed,
 // highs → glow, midsPulse → glitch. Spectrum tilts binary column intensity.
+// meltdown/tetris additionally bind bass+beat → meltRate, mids → scatter.
 // Pose: shoulderSpan → fontScale (lean-in/out for bigger/smaller code), and
-// head.x is used directly as a small tilt on rotated greenscreen panels.
+// head.x is used directly as a small tilt on rotated greenscreen panels. In
+// meltdown/tetris the engine reads pose directly: head.x tilts the melt's
+// gravity, wrist-spread blasts blocks outward, shoulder-span (lean-in) melts
+// faster — all scaled by the `poseReactivity` master.
 
 import { scaleAudio } from '../field.js';
+import { createMeltEngine } from './code-meltdown.js';
 
 // ── Source code ingestion ──────────────────────────────────────────────────
 // Pull every .js file in src/lib/qualia/** as raw text at build time. Vite
@@ -131,7 +141,7 @@ export default {
 
   params: [
     { id: 'mode', label: 'mode', type: 'select',
-      options: ['greenscreen', 'mono', 'syntax', 'binary', 'drift', 'spectrum', 'heatmap'], default: 'greenscreen' },
+      options: ['greenscreen', 'mono', 'syntax', 'binary', 'drift', 'spectrum', 'heatmap', 'meltdown', 'tetris'], default: 'greenscreen' },
     { id: 'palette', label: 'palette', type: 'select',
       options: PALETTE_NAMES, default: 'dracula' },
     { id: 'scrollSpeed', label: 'scroll speed', type: 'range',
@@ -160,10 +170,29 @@ export default {
       min: 0, max: 3, step: 1, default: 1 },
     { id: 'reactivity', label: 'reactivity', type: 'range',
       min: 0, max: 2, step: 0.05, default: 1.0 },
+    // ── meltdown / tetris knobs ──────────────────────────────────────────
+    { id: 'meltRate', label: 'melt rate', type: 'range',
+      min: 0, max: 2, step: 0.02, default: 0.6,
+      modulators: [
+        { source: 'audio.bass',      mode: 'mul', amount: 0.7 },
+        { source: 'audio.beatPulse', mode: 'add', amount: 0.5 },
+        { source: 'crowd.energy',    mode: 'add', amount: 0.4 },
+      ] },
+    { id: 'bounce', label: 'scatter', type: 'range',
+      min: 0, max: 1, step: 0.02, default: 0.55,
+      modulators: [
+        { source: 'audio.midsPulse', mode: 'add', amount: 0.25 },
+        { source: 'crowd.spread',    mode: 'add', amount: 0.20 },
+      ] },
+    { id: 'matchLen', label: 'match len', type: 'range',
+      min: 2, max: 8, step: 1, default: 3 },
+    { id: 'blockFill', label: 'block fill', type: 'toggle', default: false },
+    { id: 'poseReactivity', label: 'pose react', type: 'range',
+      min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
   presets: {
-    default:     { mode: 'greenscreen', palette: 'dracula', scrollSpeed: 0.2, fontScale: 1.0, glow: 0.7, glitch: 0.25, layers: 1, reactivity: 1.0 },
+    default:     { mode: 'greenscreen', palette: 'dracula', scrollSpeed: 0.2, fontScale: 1.0, glow: 0.7, glitch: 0.25, layers: 1, reactivity: 1.0, meltRate: 0.6, bounce: 0.55, matchLen: 3, blockFill: false, poseReactivity: 1.0 },
     greenscreen: { mode: 'greenscreen', layers: 0, glow: 0.9, glitch: 0.15 },
     layered:     { mode: 'greenscreen', layers: 3, glow: 1.0, glitch: 0.30, fontScale: 0.9 },
     mono:        { mode: 'mono', layers: 0, glow: 0.0, glitch: 0.05, scrollSpeed: 0.12 },
@@ -174,6 +203,9 @@ export default {
     drift:       { mode: 'drift', glow: 0.5, scrollSpeed: 0.4, fontScale: 1.1 },
     spectrum:    { mode: 'spectrum', glow: 0.4, glitch: 0.0, scrollSpeed: 0.18 },
     heatmap:     { mode: 'heatmap',  glow: 0.6, glitch: 0.0, scrollSpeed: 0.15 },
+    meltdown:       { mode: 'meltdown', palette: 'neon',    meltRate: 0.6, bounce: 0.55, glow: 0.4, fontScale: 1.1, blockFill: false },
+    meltdown_block: { mode: 'meltdown', palette: 'monokai', meltRate: 0.8, bounce: 0.50, glow: 0.3, fontScale: 1.2, blockFill: true },
+    tetris:         { mode: 'tetris',   palette: 'classic', matchLen: 5,   glow: 0.3, fontScale: 1.2, blockFill: true, scrollSpeed: 0.3 },
   },
 
   // Phase steps walk every mode plus a couple palette variants. Stays inside
@@ -192,6 +224,9 @@ export default {
       { mode: 'drift' },
       { mode: 'spectrum' },
       { mode: 'heatmap' },
+      { mode: 'meltdown', palette: 'neon' },
+      { mode: 'meltdown', palette: 'monokai', blockFill: true },
+      { mode: 'tetris', palette: 'classic' },
     ],
   },
 
@@ -227,6 +262,15 @@ export default {
       };
     }
     for (let i = 0; i < DRIFT_LINES; i++) spawnDriftLine(i);
+
+    // Meltdown / tetris physics engine. Self-contained, bounded by a cell
+    // budget; reads source + tokenizer from this module.
+    const melt = createMeltEngine({
+      ctx,
+      sourceLines: SOURCE_LINES,
+      tokenizeLine,
+      fontFamily: FONT_FAMILY,
+    });
 
     // Pose-driven smoothed inputs.
     let smoothHeadX = 0;
@@ -674,6 +718,16 @@ export default {
       scratch.params = field.params;
       scratch.time = field.time;
 
+      // Meltdown / tetris run their own grid sim — skip the scroll/3D/binary
+      // bookkeeping below. Slightly larger cells than the text modes read as
+      // chunkier "blocks" while staying inside the engine's cell budget.
+      const m = field.params.mode;
+      if (m === 'meltdown' || m === 'tetris') {
+        const fontPx = Math.max(12, Math.round(BASE_FONT_PX * field.params.fontScale * 1.1));
+        melt.step(W, H, fontPx, field, field.params, audio, m);
+        return;
+      }
+
       const dt = field.dt;
       const speed = Math.max(0, field.params.scrollSpeed);
       const fontPx = fontSizeFor(field.params);
@@ -746,6 +800,11 @@ export default {
         return;
       }
       const mode = params.mode || 'greenscreen';
+      if (mode === 'meltdown' || mode === 'tetris') {
+        const palette = SYNTAX_PALETTES[params.palette] || SYNTAX_PALETTES.dracula;
+        melt.draw(palette, params, audio, mode);
+        return;
+      }
       switch (mode) {
         case 'greenscreen': renderGreenscreen(audio, params); break;
         case 'mono':        renderMono(audio, params);        break;
@@ -775,6 +834,7 @@ export default {
         tokenCache.clear();
         bandHistory.clear();
         dropPool.length = 0;
+        melt.dispose();
       },
     };
   },
