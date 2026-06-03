@@ -56,9 +56,15 @@ import video          from './fx/video.js';
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
 // QFXModule.autoPhase.steps; the topbar `phase` button drives them. Each
-// click advances through PHASE_PERIODS (0 = off).
+// click advances through PHASE_PERIODS (0 = off). Styles (see phaseNext):
+//   sequential — walk the enabled phase steps in authored order.
+//   palettes   — hold the mode/structure, cycle only the colour palette
+//                (falls back to sequential on quales with no palette axis).
+//   random     — random phase × random palette each tick.
+// Glitch overlays (ascii / mosh / edge) are NOT driven by phase styles — a
+// glitch you turn on stays on.
 const PHASE_PERIODS = [0, 5, 10, 15];          // seconds
-const AUTO_PHASE_STYLES = ['chapters', 'alternate', 'random', 'hold'];
+const AUTO_PHASE_STYLES = ['sequential', 'palettes', 'random'];
 // Auto-cycle: swaps the active qfx ITSELF on a longer timer. Independent of
 // auto-phase — the two can run together (a single qfx phases through its
 // modes, then cycle picks the next quale and the new one starts phasing).
@@ -67,11 +73,11 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 // "Glitch" post-process modes (shared by ascii / mosh / edge). The button
 // cycles through these:
 //   off:  glitch disabled (always)
-//   on:   glitch enabled (always); also: included in auto-phase roster
+//   on:   glitch enabled (always)
 //   blip: brief flash on hard kicks, auto-clears after BLIP_DURATION_MS
 //   flip: toggles glitch state on each hard kick (persists between hits)
-// blip + flip stay reactive regardless of auto-phase rotation; only the
-// 'on' modes form the rotation roster.
+// Glitches are independent of the auto-phase styles — whatever mode you set
+// here stays put while phases/palettes rotate.
 // Audio source modes. The button cycles through these:
 //   off:     no streams feed analysis (mic stopped, strudel ignored)
 //   mic:     mic only — strudel ignored even while playing
@@ -1671,11 +1677,10 @@ export function initQualiaPage() {
 
   // ── Glitches: ascii / mosh / edge share the same multi-state semantics ──
   // (off / on / blip / flip). blip + flip react to hard kicks (see the
-  // core.onFrame handler below). 'on' is the only mode that participates
-  // in auto-phase rotation. Buttons cycle modes on click; the active
-  // class is bound to the MODE (not the overlay option) so a glitch in
-  // 'on' still reads as active even when auto-phase has temporarily
-  // switched the overlay onto a different roster member.
+  // core.onFrame handler below). Glitches are independent of the auto-phase
+  // styles — whatever mode is set here stays put while phases/palettes
+  // rotate. Buttons cycle modes on click; the active class is bound to the
+  // MODE so a glitch in 'on' always reads as active.
   const btnByGlitch = { ascii: btnAscii, mosh: btnMosh, edge: btnEdge };
   function refreshGlitchBtn(glitch) {
     const btn = btnByGlitch[glitch];
@@ -1691,16 +1696,12 @@ export function initQualiaPage() {
     glitchModes[glitch] = mode;
     blipExpiresAt[glitch] = 0;
     // Sync overlay option: 'on' shows, reactive modes start hidden and
-    // are toggled by the kick handler. 'off' hides. The overlay's
-    // internal ascii/mosh/edge mutex still keeps only one rendering at
-    // a time when the user has multiple set to 'on' — auto-phase rotation
-    // is what moves between them in that case.
+    // are toggled by the kick handler. 'off' hides. The overlay's internal
+    // ascii/mosh/edge mutex keeps only one rendering at a time if the user
+    // sets multiple to 'on'.
     overlay.setOption(glitch, mode === 'on');
     refreshGlitchBtn(glitch);
     syncPostBtns();
-    // Re-sync the phase timer if a glitch's mode change affects the chapters
-    // boundary (active roster shifted). Reuses the existing chapter-reset
-    // path below by deferring to the next tick.
     settings.save();
   }
   function cycleGlitchMode(glitch) {
@@ -1723,20 +1724,6 @@ export function initQualiaPage() {
   // Roster of glitches included in auto-phase rotation. Computed live from
   // current modes — only 'on' glitches participate; off / blip / flip are
   // skipped (per spec: blip + flip stay reactive on their own; off stays off).
-  function getGlitchRoster() {
-    return GLITCH_KEYS.filter(g => glitchModes[g] === 'on');
-  }
-  // Apply a rotation choice. `target` is either a glitch key or null (for
-  // a no-glitch chapter). Only roster members get their overlay toggled —
-  // we never touch glitches outside the roster, so blip / flip stay free
-  // to do their kick-driven thing.
-  function applyGlitchRotation(target) {
-    const roster = getGlitchRoster();
-    for (const g of roster) {
-      overlay.setOption(g, g === target);
-    }
-  }
-
   // Mosh slider wiring — every input writes back into the overlay's
   // moshConfig. The overlay reads its own state each frame so changes
   // take effect on the next paint without further plumbing.
@@ -2288,7 +2275,8 @@ export function initQualiaPage() {
   // camera mode button). Click advances through the period array; the last
   // step wraps back to off. Tooltip lists the cycle so the muscle-memory is
   // discoverable.
-  //   - phase: walks modes/presets WITHIN the active qfx (palettes, modes).
+  //   - phase: walks modes/presets WITHIN the active qfx (palettes, modes)
+  //     per the active style (sequential / palettes / random — see phaseNext).
   //     Each QFXModule may declare `autoPhase: { steps: [...] }`. If the
   //     active quale has no autoPhase, the button reads "phase n/a" and
   //     clicks are no-ops.
@@ -2326,7 +2314,9 @@ export function initQualiaPage() {
   // design means we never need a separate startPhase/stopPhase split — the
   // setPhasePeriod helper handles every transition.
   let autoPhaseSeconds = PHASE_PERIODS.includes(_phaseSecRaw) ? _phaseSecRaw : 0;
-  let autoPhaseStyle = AUTO_PHASE_STYLES.includes(_phaseStyleRaw) ? _phaseStyleRaw : 'chapters';
+  // Old style values (chapters / alternate / hold) are no longer valid and
+  // fall through to the default — see AUTO_PHASE_STYLES.
+  let autoPhaseStyle = AUTO_PHASE_STYLES.includes(_phaseStyleRaw) ? _phaseStyleRaw : 'sequential';
   let autoPhaseBeatSync = !!stored.autoPhaseBeatSync;
   let autoPhaseStartMs = 0;
   let autoPhaseStepCount = 0;
@@ -2376,66 +2366,72 @@ export function initQualiaPage() {
     }
   }
 
+  // Distinct `palette` values across a list of phase steps, in first-seen
+  // order. The colour dimension of every quale's steps is the literal
+  // `palette` key (steps that omit it have no colour axis).
+  function distinctPalettes(stepList) {
+    const seen = new Set();
+    const out = [];
+    for (const s of stepList) {
+      if (s && s.palette != null && !seen.has(s.palette)) {
+        seen.add(s.palette);
+        out.push(s.palette);
+      }
+    }
+    return out;
+  }
+
+  // Apply a step's partial params to the active quale via core.setParam so
+  // the panel UI and persistence stay in sync. Only the keys present are
+  // touched — everything else the user dialed in stays.
+  function applyPhaseStep(step) {
+    const fxId = core.activeId();
+    if (!fxId) return;
+    for (const [k, v] of Object.entries(step)) core.setParam(fxId, k, v);
+  }
+
   function phaseNext() {
     const steps = getActivePhaseSteps();
     if (!steps || !steps.length) return;
     const fxId = core.activeId();
     // Filter to the user's enabled steps (phase pool). `included` is never
-    // empty — phaseIncludedIndices falls back to all steps when everything is
-    // excluded. The rotation indexes into the included subset, and the
-    // chapters math below uses its length so a "pass" = one sweep of the
-    // enabled steps, not all declared ones.
+    // empty — phaseIncludedIndices falls back to all steps when everything
+    // is excluded.
     const excluded = fxId ? loadPhaseExcludedFor(fxId) : new Set();
-    const included = phaseIncludedIndices(steps, excluded);
-    const stepLen  = included.length;
+    const incl = phaseIncludedIndices(steps, excluded).map(i => steps[i]);
+
+    // autoPhaseStepCount is a monotonic counter that is NOT reset when the
+    // active quale changes (only on explicit style change). Indexing it via
+    // modulo means each quale resumes at a rolling offset rather than always
+    // reopening on phase 0 — so cycling never lands on the same look twice.
     autoPhaseStepCount++;
-    const step = steps[included[autoPhaseStepCount % stepLen]];
-    // Glitch scheduling. Roster = glitches whose mode is 'on'; off / blip /
-    // flip are skipped so they keep doing their own thing. Step granularity
-    // == one phase-step. With one roster member this falls back to the old
-    // single-glitch on/off chapters behavior; with multiple, each chapter
-    // (and alternate / random tick) round-robins between them.
-    const roster = getGlitchRoster();
-    if (roster.length > 0) {
-      const pool = ['off', ...roster];   // 'off' = no glitch chapter
-      switch (autoPhaseStyle) {
-        case 'chapters': {
-          // One full pass through the phase steps = one chapter. Alternate
-          // between off-chapters and roster-chapters; the roster-chapter
-          // index advances each time we land on one (so chapters cycle
-          // through all roster members over time).
-          const pass = Math.floor(autoPhaseStepCount / stepLen);
-          if (pass % 2 === 0) {
-            applyGlitchRotation(null);
-          } else {
-            const rIdx = ((pass - 1) >> 1) % roster.length;
-            applyGlitchRotation(roster[rIdx]);
-          }
-          break;
-        }
-        case 'alternate': {
-          // Each step bumps to the next entry in [off, ...roster].
-          const idx = autoPhaseStepCount % pool.length;
-          applyGlitchRotation(pool[idx] === 'off' ? null : pool[idx]);
-          break;
-        }
-        case 'random': {
-          // 30% off, otherwise pick a random roster member.
-          if (Math.random() < 0.3) applyGlitchRotation(null);
-          else applyGlitchRotation(roster[(Math.random() * roster.length) | 0]);
-          break;
-        }
-        case 'hold':
-        default: break;
+
+    if (autoPhaseStyle === 'random') {
+      // Random walk: jump to a random phase, then remix a random palette on
+      // top (independent structure × colour). Mode-only quales (no palette
+      // axis) just get the random phase.
+      const structure = incl[(Math.random() * incl.length) | 0];
+      const pals = distinctPalettes(incl);
+      const step = pals.length
+        ? { ...structure, palette: pals[(Math.random() * pals.length) | 0] }
+        : structure;
+      applyPhaseStep(step);
+      return;
+    }
+
+    if (autoPhaseStyle === 'palettes') {
+      // Hold the current mode/structure; cycle only the colour palette.
+      // Falls back to sequential phase-stepping on quales with no palette
+      // axis (chladni, spectrum, …) so the style is never inert.
+      const pals = distinctPalettes(incl);
+      if (pals.length) {
+        applyPhaseStep({ palette: pals[autoPhaseStepCount % pals.length] });
+        return;
       }
     }
-    // Apply the step's partial params via core.setParam so the panel UI
-    // and persistence stay in sync.
-    if (fxId) {
-      for (const [k, v] of Object.entries(step)) {
-        core.setParam(fxId, k, v);
-      }
-    }
+
+    // sequential (and palettes fallback): walk the enabled steps in order.
+    applyPhaseStep(incl[autoPhaseStepCount % incl.length]);
   }
 
   function tickPhase() {
@@ -2471,16 +2467,13 @@ export function initQualiaPage() {
   // the timer when off or unsupported; (re)starts it otherwise. Does NOT
   // mutate autoPhaseSeconds — that's the user's preserved intent and
   // needs to survive cycling through a quale that lacks phase support so
-  // the next supporting quale resumes at the chosen period.
+  // the next supporting quale resumes at the chosen period. It also does
+  // NOT reset autoPhaseStepCount: the counter is monotonic across quale
+  // changes so each quale resumes at a rolling phase offset (see phaseNext).
   function syncPhaseTimer() {
     if (autoPhaseTickT) { clearInterval(autoPhaseTickT); autoPhaseTickT = null; }
     if (autoPhaseSeconds > 0 && getActivePhaseSteps()) {
       autoPhaseStartMs = performance.now();
-      autoPhaseStepCount = 0;
-      // Reset roster glitches to off at the start of a chapters pass so
-      // the first chapter is the off-chapter. Only roster ('on') glitches
-      // are touched — blip / flip stay reactive on their own.
-      if (autoPhaseStyle === 'chapters') applyGlitchRotation(null);
       autoPhaseTickT = setInterval(tickPhase, 250);
     }
   }
@@ -2502,10 +2495,7 @@ export function initQualiaPage() {
   });
   phaseStyleSelect.addEventListener('change', () => {
     autoPhaseStyle = phaseStyleSelect.value;
-    autoPhaseStepCount = 0;
-    if (autoPhaseSeconds > 0 && autoPhaseStyle === 'chapters') {
-      applyGlitchRotation(null);
-    }
+    autoPhaseStepCount = 0;   // explicit style change starts the new style fresh
     settings.save();
   });
 
@@ -3498,7 +3488,9 @@ export function initQualiaPage() {
     // 8. Auto-phase / cycle
     if (q.auto) {
       if (typeof q.auto.phaseStyle === 'string') {
-        autoPhaseStyle = q.auto.phaseStyle;
+        // Retired style values (chapters / alternate / hold) coerce to the
+        // default so an old saved qualem never lands on a dead dropdown.
+        autoPhaseStyle = AUTO_PHASE_STYLES.includes(q.auto.phaseStyle) ? q.auto.phaseStyle : 'sequential';
         if (phaseStyleSelect) phaseStyleSelect.value = autoPhaseStyle;
       }
       if (typeof q.auto.cycleStyle === 'string') {
@@ -3610,7 +3602,7 @@ export function initQualiaPage() {
       pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, numPoses: 1 },
       overlay: { skeleton: true, sparks: true, aura: true, ripples: true },
       glitch:  { ascii: 'off', mosh: 'off', edge: 'off' },
-      auto:    { phaseSeconds: 0, phaseStyle: 'chapters', phaseBeatSync: false,
+      auto:    { phaseSeconds: 0, phaseStyle: 'sequential', phaseBeatSync: false,
                  cycleSeconds: 0, cycleStyle: 'sequential', cycleBeatSync: false },
       camera:  { rotation: 0, mirror: true, zoom: 1.0, videoOffset: { dx: 0, dy: 0 }, sizeIdx: 0 },
       cyclePool: { excluded: [] },

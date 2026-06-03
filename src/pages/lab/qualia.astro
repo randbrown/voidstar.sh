@@ -1704,11 +1704,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         </select>
         <button class="ctrl-btn" id="btn-cycle-beat" title="Beat-sync cycle: dwell time becomes a minimum, then the next hard kick triggers the switch (silence fallback at 2× dwell). Falls through to time-based when audio is off.">♪ cycle off</button>
         <button class="ctrl-btn" id="btn-phase" title="Auto-phase modes within active quale (L)">phase</button>
-        <select id="phase-style" class="ctrl-btn" title="Auto-phase style">
-          <option value="chapters">chapters</option>
-          <option value="alternate">alternate</option>
+        <select id="phase-style" class="ctrl-btn" title="Auto-phase style — sequential: steps in order · palettes: cycle colours only · random: random phase + colour">
+          <option value="sequential">sequential</option>
+          <option value="palettes">palettes</option>
           <option value="random">random</option>
-          <option value="hold">hold glitch</option>
         </select>
         <button class="ctrl-btn" id="btn-phase-beat" title="Beat-sync phase: dwell time becomes a minimum, then the next beat triggers the next phase step (silence fallback at 2× dwell). Falls through to time-based when audio is off.">♪ phase off</button>
         <button class="ctrl-btn" id="btn-cycle-manage" title="Pick which quales the auto-cycle rotates through, and which phases the auto-phase rotates through">manage</button>
