@@ -23,6 +23,14 @@ import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { createRecorder } from './recorder.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
+import {
+  loadExcludedFor as loadPhaseExcludedFor,
+  saveExcludedFor as savePhaseExcludedFor,
+  loadExcludedMap as loadPhaseExcludedMap,
+  saveExcludedMap as savePhaseExcludedMap,
+  includedStepIndices as phaseIncludedIndices,
+  stepLabel as phaseStepLabel,
+} from './phase-pool.js';
 import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror } from './video.js';
 import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
@@ -246,6 +254,9 @@ export function initQualiaPage() {
       // having to re-enable.
       syncPhaseTimer();
       refreshPhaseBtn();
+      // Keep an open pool manager in sync: the phase-pool tab is scoped to
+      // the active quale, and the cycle-pool tab highlights it.
+      if (cycleMgr?.classList.contains('visible')) renderCycleMgrList();
       // Auto-cycle: any switch (manual or via cycleNext) restarts the
       // dwell clock so the new fx gets the full autoCycleSeconds window.
       autoCycleStartMs = performance.now();
@@ -2368,8 +2379,17 @@ export function initQualiaPage() {
   function phaseNext() {
     const steps = getActivePhaseSteps();
     if (!steps || !steps.length) return;
+    const fxId = core.activeId();
+    // Filter to the user's enabled steps (phase pool). `included` is never
+    // empty — phaseIncludedIndices falls back to all steps when everything is
+    // excluded. The rotation indexes into the included subset, and the
+    // chapters math below uses its length so a "pass" = one sweep of the
+    // enabled steps, not all declared ones.
+    const excluded = fxId ? loadPhaseExcludedFor(fxId) : new Set();
+    const included = phaseIncludedIndices(steps, excluded);
+    const stepLen  = included.length;
     autoPhaseStepCount++;
-    const step = steps[autoPhaseStepCount % steps.length];
+    const step = steps[included[autoPhaseStepCount % stepLen]];
     // Glitch scheduling. Roster = glitches whose mode is 'on'; off / blip /
     // flip are skipped so they keep doing their own thing. Step granularity
     // == one phase-step. With one roster member this falls back to the old
@@ -2384,7 +2404,7 @@ export function initQualiaPage() {
           // between off-chapters and roster-chapters; the roster-chapter
           // index advances each time we land on one (so chapters cycle
           // through all roster members over time).
-          const pass = Math.floor(autoPhaseStepCount / steps.length);
+          const pass = Math.floor(autoPhaseStepCount / stepLen);
           if (pass % 2 === 0) {
             applyGlitchRotation(null);
           } else {
@@ -2411,7 +2431,6 @@ export function initQualiaPage() {
     }
     // Apply the step's partial params via core.setParam so the panel UI
     // and persistence stay in sync.
-    const fxId = core.activeId();
     if (fxId) {
       for (const [k, v] of Object.entries(step)) {
         core.setParam(fxId, k, v);
@@ -2644,22 +2663,29 @@ export function initQualiaPage() {
   });
   refreshBeatSyncBtns();
 
-  // ── Cycle pool manager ───────────────────────────────────────────────────
-  // Lets the user pick which quales the auto-cycle rotates through. Stored
-  // as an EXCLUDED set in localStorage; cycleNext above filters by it.
+  // ── Pool manager (cycle + phase) ─────────────────────────────────────────
+  // One modal, two tabs:
+  //   • cycle pool — which quales the auto-cycle rotates through (flat list
+  //     of all quales; EXCLUDED set keyed by mod.id in cycle-pool.js).
+  //   • phase pool — which steps the auto-phase rotates through, scoped to
+  //     the ACTIVE quale (EXCLUDED indices keyed by fx id in phase-pool.js).
+  // Both filter their respective rotations above.
   const cycleMgr         = document.getElementById('cycle-mgr');
   const cycleMgrBackdrop = document.getElementById('cycle-mgr-backdrop');
   const cycleMgrList     = document.getElementById('cycle-mgr-list');
+  const cycleMgrSub      = document.getElementById('cycle-mgr-sub');
   const cycleMgrAll      = document.getElementById('cycle-mgr-all');
   const cycleMgrNone     = document.getElementById('cycle-mgr-none');
   const cycleMgrClose    = document.getElementById('cycle-mgr-close');
+  const cycleMgrTabCycle = document.getElementById('cycle-mgr-tab-cycle');
+  const cycleMgrTabPhase = document.getElementById('cycle-mgr-tab-phase');
   const btnCycleManage   = document.getElementById('btn-cycle-manage');
 
-  function renderCycleMgrList() {
-    if (!cycleMgrList) return;
+  let mgrPool = 'cycle';  // 'cycle' | 'phase'
+
+  function renderCycleRows() {
     const excluded = loadCycleExcluded();
     const curId = core.activeId();
-    cycleMgrList.innerHTML = '';
     for (const mod of mesh.list()) {
       const row = document.createElement('label');
       row.className = 'cycle-mgr-row' + (mod.id === curId ? ' active' : '');
@@ -2680,6 +2706,49 @@ export function initQualiaPage() {
       cycleMgrList.appendChild(row);
     }
   }
+
+  function renderPhaseRows() {
+    const fxId  = core.activeId();
+    const mod   = fxId ? mesh.get?.(fxId) : null;
+    const steps = getActivePhaseSteps();
+    if (cycleMgrSub) {
+      cycleMgrSub.style.display = '';
+      cycleMgrSub.textContent = steps
+        ? `phases for ${mod?.name || fxId}`
+        : `${mod?.name || fxId || 'active quale'} has no phases`;
+    }
+    if (!steps || !steps.length) return;
+    const excluded = loadPhaseExcludedFor(fxId);
+    steps.forEach((step, i) => {
+      const row = document.createElement('label');
+      row.className = 'cycle-mgr-row';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !excluded.has(i);
+      cb.addEventListener('change', () => {
+        const cur = loadPhaseExcludedFor(fxId);
+        if (cb.checked) cur.delete(i);
+        else            cur.add(i);
+        savePhaseExcludedFor(fxId, cur);
+      });
+      const name = document.createElement('span');
+      name.className = 'cycle-mgr-name';
+      name.textContent = `${i + 1}. ${phaseStepLabel(step)}`;
+      row.appendChild(cb);
+      row.appendChild(name);
+      cycleMgrList.appendChild(row);
+    });
+  }
+
+  function renderCycleMgrList() {
+    if (!cycleMgrList) return;
+    cycleMgrList.innerHTML = '';
+    if (cycleMgrSub) cycleMgrSub.style.display = 'none';
+    cycleMgrTabCycle?.classList.toggle('active', mgrPool === 'cycle');
+    cycleMgrTabPhase?.classList.toggle('active', mgrPool === 'phase');
+    if (mgrPool === 'phase') renderPhaseRows();
+    else                     renderCycleRows();
+  }
   function openCycleMgr() {
     renderCycleMgrList();
     cycleMgr?.classList.add('visible');
@@ -2694,18 +2763,32 @@ export function initQualiaPage() {
   btnCycleManage?.addEventListener('click', openCycleMgr);
   cycleMgrClose?.addEventListener('click', closeCycleMgr);
   cycleMgrBackdrop?.addEventListener('click', closeCycleMgr);
+  cycleMgrTabCycle?.addEventListener('click', () => { mgrPool = 'cycle'; renderCycleMgrList(); });
+  cycleMgrTabPhase?.addEventListener('click', () => { mgrPool = 'phase'; renderCycleMgrList(); });
   cycleMgrAll?.addEventListener('click', () => {
-    saveCycleExcluded(new Set());
+    if (mgrPool === 'phase') {
+      const fxId = core.activeId();
+      if (fxId) savePhaseExcludedFor(fxId, new Set());
+    } else {
+      saveCycleExcluded(new Set());
+    }
     renderCycleMgrList();
   });
   cycleMgrNone?.addEventListener('click', () => {
-    saveCycleExcluded(new Set(mesh.ids()));
+    if (mgrPool === 'phase') {
+      const fxId  = core.activeId();
+      const steps = getActivePhaseSteps();
+      if (fxId && steps) savePhaseExcludedFor(fxId, new Set(steps.map((_, i) => i)));
+    } else {
+      saveCycleExcluded(new Set(mesh.ids()));
+    }
     renderCycleMgrList();
   });
   // Repaint when the active quale changes so the highlighted "active" row
-  // stays in sync if the manager happens to be open. (When the modal is
-  // closed, renderCycleMgrList() reruns on next open anyway, so this is
-  // only for the "manager open while user cycles via V/N keys" case.)
+  // (cycle pool) and the per-quale step list (phase pool) stay in sync if the
+  // manager happens to be open. (When the modal is closed, renderCycleMgrList()
+  // reruns on next open anyway, so this is only for the "manager open while
+  // user cycles via V/N keys" case.)
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && cycleMgr?.classList.contains('visible')) {
       closeCycleMgr();
@@ -3298,6 +3381,7 @@ export function initQualiaPage() {
         qualem: document.getElementById('qualem-card')?.classList.contains('collapsed') ?? true,
       },
       cyclePool: { excluded: [...loadCycleExcluded()] },
+      phasePool: { excluded: loadPhaseExcludedMap() },
       fx,
       strudel:   { code: strudelCode },
       sequencer: { model: seqModel ? { ...seqModel, name: qualemName } : null },
@@ -3476,9 +3560,13 @@ export function initQualiaPage() {
       }
     }
 
-    // 11. Cycle-pool exclusions
+    // 11. Cycle-pool + phase-pool exclusions
     if (Array.isArray(q.cyclePool?.excluded)) {
       saveCycleExcluded(new Set(q.cyclePool.excluded));
+    }
+    if (q.phasePool?.excluded && typeof q.phasePool.excluded === 'object'
+        && !Array.isArray(q.phasePool.excluded)) {
+      savePhaseExcludedMap(q.phasePool.excluded);
     }
 
     // 12. Strudel pattern + sequencer model
@@ -3526,6 +3614,7 @@ export function initQualiaPage() {
                  cycleSeconds: 0, cycleStyle: 'sequential', cycleBeatSync: false },
       camera:  { rotation: 0, mirror: true, zoom: 1.0, videoOffset: { dx: 0, dy: 0 }, sizeIdx: 0 },
       cyclePool: { excluded: [] },
+      phasePool: { excluded: {} },
       fx: {},
       pausedZen: { paused: false, zen: false },
     };

@@ -832,8 +832,24 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       display: flex; align-items: center; gap: 0.6rem;
       color: var(--muted);
     }
-    #cycle-mgr-head .cycle-mgr-title { color: var(--cyan); }
     #cycle-mgr-head .cycle-mgr-spacer { flex: 1; }
+    #cycle-mgr-tabs { display: flex; gap: 0.3rem; }
+    .cycle-mgr-tab {
+      font-family: var(--font-mono); font-size: 0.74rem;
+      padding: 0.18rem 0.5rem;
+      background: transparent; color: var(--muted);
+      border: 1px solid transparent; border-bottom: 1px solid var(--border);
+      border-radius: 5px 5px 0 0;
+      cursor: pointer;
+    }
+    .cycle-mgr-tab:hover { color: var(--text); }
+    .cycle-mgr-tab.active {
+      color: var(--cyan);
+      border-color: var(--border); border-bottom-color: transparent;
+    }
+    #cycle-mgr-sub {
+      color: var(--muted); font-size: 0.7rem; padding: 0 0.1rem;
+    }
     #cycle-mgr-bulk {
       display: flex; gap: 0.35rem; flex-wrap: wrap;
     }
@@ -1695,7 +1711,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="hold">hold glitch</option>
         </select>
         <button class="ctrl-btn" id="btn-phase-beat" title="Beat-sync phase: dwell time becomes a minimum, then the next beat triggers the next phase step (silence fallback at 2× dwell). Falls through to time-based when audio is off.">♪ phase off</button>
-        <button class="ctrl-btn" id="btn-cycle-manage" title="Pick which quales the auto-cycle rotates through">manage</button>
+        <button class="ctrl-btn" id="btn-cycle-manage" title="Pick which quales the auto-cycle rotates through, and which phases the auto-phase rotates through">manage</button>
       </div>
     </div>
 
@@ -2017,7 +2033,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 <div id="cycle-mgr-backdrop"></div>
 <div id="cycle-mgr" role="dialog" aria-modal="true" aria-labelledby="cycle-mgr-title">
   <div id="cycle-mgr-head">
-    <span class="cycle-mgr-title" id="cycle-mgr-title">cycle pool</span>
+    <div id="cycle-mgr-tabs" role="tablist">
+      <button class="cycle-mgr-tab active" id="cycle-mgr-tab-cycle" role="tab"
+              title="Pick which quales the auto-cycle rotates through">cycle pool</button>
+      <button class="cycle-mgr-tab" id="cycle-mgr-tab-phase" role="tab"
+              title="Pick which phases (presets) the auto-phase rotates through, for the active quale">phase pool</button>
+    </div>
     <span class="cycle-mgr-spacer"></span>
     <button class="ctrl-btn" id="cycle-mgr-close" title="Close">×</button>
   </div>
@@ -2025,6 +2046,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="cycle-mgr-all">select all</button>
     <button class="ctrl-btn" id="cycle-mgr-none">deselect all</button>
   </div>
+  <div id="cycle-mgr-sub" style="display:none"></div>
   <div id="cycle-mgr-list"></div>
 </div>
 
