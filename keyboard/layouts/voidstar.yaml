@@ -1,0 +1,20 @@
+name: Voidstar
+# A clean QWERTY canvas for the S26U, meant as YOUR editable starting point.
+#
+# It is deliberately close to the stock QWERTY (which is already Samsung-clean) so the
+# real wins come from the fork's defaults: the built-in ARROW ROW is on (renders above
+# the spacebar) and the transformer personal-LM is learning your phrases.
+#
+# The number row is left user-configurable (toggle in Settings -> Typing) so you don't
+# pay the vertical space unless you want it -- addresses the "wasted space" gripe.
+#
+# How to extend (see futo-keyboard-layouts/LayoutSpec.md):
+#   - add long-press alternates:  - [a, ä, á, à]
+#   - relocate backspace/shift by placing $delete / $shift explicitly
+#   - define an explicit `bottom:` row to fully control the space row
+rows:
+  - letters: q w e r t y u i o p
+  - letters: a s d f g h j k l
+  - letters: z x c v b n m
+# numberRowMode defaults to UserConfigurable when omitted; arrow row is controlled by
+# the global "Show arrow row" setting (defaulted ON in this fork).
