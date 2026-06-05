@@ -19,6 +19,7 @@ import { parseMetadata as parseStrudelMeta, setMetadata as setStrudelMeta } from
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
 import { createSequencer } from './sequencer.js';
+import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
@@ -2962,6 +2963,13 @@ export function initQualiaPage() {
   const sequencer = createSequencer({ audio, syncStrudel: seqSyncStrudel });
   _sequencerRef = sequencer;
 
+  // ── Looper station (third programmable audio source) ─────────────────────
+  // Reads the same Strudel cycle clock as the sequencer (cycle position, cps,
+  // boundary) to snap record IN/OUT and phase-lock loop playback. It only
+  // *reads* the clock — it doesn't drive Strudel transport — so the existing
+  // seqSyncStrudel adapter is reused as-is.
+  const looper = createLooper({ audio, syncStrudel: seqSyncStrudel });
+
   // ── Editor-open viz throttle ──────────────────────────────────────────────
   // While the Strudel or sequencer editor panel is visible the user is likely
   // live-coding, and each re-eval/reschedule competes with the fx render for
@@ -2975,7 +2983,7 @@ export function initQualiaPage() {
   const EDITOR_VIZ_FPS = 15;
   let _editorViewOpen = null;   // null = unknown, force first sync
   core.onTick(() => {
-    const open = strudel.isOpen() || sequencer.isOpen();
+    const open = strudel.isOpen() || sequencer.isOpen() || looper.isOpen();
     if (open === _editorViewOpen) return;
     _editorViewOpen = open;
     core.setAuxFps(open ? EDITOR_VIZ_FPS : 0);
@@ -3818,6 +3826,7 @@ export function initQualiaPage() {
     if (strudel.isOpen()   && document.activeElement?.closest('#strudel-panel'))   return;
     if (sequencer.isOpen() && document.activeElement?.closest('#sequencer-panel')) return;
     if (vocoder.isOpen()   && document.activeElement?.closest('#vocoder-panel'))   return;
+    if (looper.isOpen()    && document.activeElement?.closest('#looper-panel'))    return;
 
     switch (e.key.toLowerCase()) {
       case 'v': {
@@ -3830,6 +3839,7 @@ export function initQualiaPage() {
       case 's': document.getElementById('btn-strudel').click(); break;
       case 'q': document.getElementById('btn-sequencer').click(); break;
       case 'w': document.getElementById('btn-vocoder').click(); break;
+      case 'o': document.getElementById('btn-looper').click(); break;
       case 'p': {
         const opts = ['off','camera'];
         const i = opts.indexOf(poseSelect.value);
@@ -4002,6 +4012,7 @@ export function initQualiaPage() {
     }
     strudel.perFrame();
     sequencer.perFrame();
+    looper.perFrame();
 
     if (diagCard && !diagCard.classList.contains('collapsed')) {
       const a = field.audio;
