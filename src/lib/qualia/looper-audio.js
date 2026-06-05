@@ -2,19 +2,20 @@
 // AudioBuffer with sample-accurate timing, snaps the loop region to Strudel
 // metacycle boundaries, and plays it back phase-locked to those boundaries.
 //
-// Everything runs in Tone's rawContext (`Tone.getContext().rawContext`) so the
-// capture/playback sample clock shares a frame of reference with the sequencer
-// and the same Strudel cycle-position math is reusable. Strudel may live in a
-// different AudioContext, but `getStrudelCyclePos()` is only ever used to form
-// RELATIVE durations (boundary − pos)/cps, which are portable across contexts
-// because both advance at one audio-second per real-second — the same trick the
-// sequencer uses (see sequencer.js computeAlignedStart).
+// Everything runs in the looper's own native AudioContext (like the mic in
+// audio.js). We deliberately do NOT reuse Tone's context: Tone wraps a
+// standardized-audio-context, whose objects the native `AudioWorkletNode`
+// constructor rejects. A separate context is fine for sync because
+// `getStrudelCyclePos()` is only ever used to form RELATIVE durations
+// (boundary − pos)/cps, which are portable across contexts — both advance at
+// one audio-second per real-second, the same reason the mic's own context
+// stays phase-aligned. This mirrors the sequencer's "durations are portable"
+// note (see sequencer.js computeAlignedStart / getSecondsUntilNextStrudelBoundary).
 //
 // v1 is varispeed: fitting a take into N cycles changes playbackRate, so pitch
 // shifts with speed. A pitch-preserving time-stretch is a future pass (the
 // disabled "preserve pitch" toggle in the panel marks the seam).
 
-import * as Tone from 'tone';
 // Vite emits the worklet as a standalone asset and returns its URL — the
 // processor loads into the AudioWorklet global scope, it can't be page-bundled.
 // `no-inline` keeps it a real network asset: the file is small enough that
@@ -58,8 +59,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let _muted = false, _gain = 0.9;
 
   async function ensureContext() {
-    await Tone.start();
-    ctx = Tone.getContext().rawContext;
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
     if (!workletReady) {
       if (ctx.audioWorklet && typeof ctx.audioWorklet.addModule === 'function') {
@@ -326,6 +326,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { masterGain?.disconnect(); } catch {}
     try { analyser?.disconnect(); } catch {}
     masterGain = analyser = null;
+    try { ctx?.close(); } catch {}
+    ctx = null; workletReady = null;
   }
 
   return {
