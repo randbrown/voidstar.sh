@@ -448,7 +448,12 @@ export function initQualiaPage() {
       audioPanel.setActivePreset(name);
       settings.save();
     },
+    // Mic monitor (hear the input) — shared level with the looper's input knob.
+    onMonitor: (level) => audio.setMonitorLevel(level),
   });
+  // Keep the audio-panel monitor slider in sync when the level is changed
+  // elsewhere (the looper's input knob writes the same shared value).
+  audio.onMonitorChange?.((m) => audioPanel.setMonitor(m.level));
   if (stored.audioTunables) {
     audio.setTunables(stored.audioTunables);
     audioPanel.setTunables(stored.audioTunables);

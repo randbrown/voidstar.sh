@@ -77,17 +77,16 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let liveAccMin = 1, liveAccMax = -1, liveAccN = 0;
   let liveTotalFrames = 0;
 
-  // ── playback / monitor graph ──
-  //   input(mic) → inputGain ┐
-  //   loop source → loopGain ┼→ masterGain → destination + analyser('looper')
-  // Like a Ditto looper: the live input passes through at full volume while the
-  // recorded loop sits under it (default 50%); master rides the whole looper.
-  let masterGain = null, analyser = null, inputGain = null, loopGain = null;
+  // ── playback graph ──
+  //   loop source → loopGain → masterGain → destination + analyser('looper')
+  // Only the recorded loop runs through the looper. Live-input monitoring is a
+  // page-level concern (audio.js mic monitor) so it isn't double-captured; the
+  // raw input already reaches the visualizers + recording via the 'mic' source.
+  let masterGain = null, analyser = null, loopGain = null;
   let source = null;
   let playStartAbs = null, playLoopDur = 0;
   let _muted = false;
   let _master = 0.9;                // overall looper output level
-  let _inputVol = 1.0;              // live input monitor level (full)
   let _loopVol = 0.5;               // recorded-loop playback level (Ditto-centre)
   let _adopted = false;             // 'looper' registered with audio.js
   let _offsetMs = 0;                // nudge: + = take plays earlier (compensates lateness)
@@ -171,15 +170,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     streamDeviceId = want || settings.deviceId || '';
 
     srcNode = ctx.createMediaStreamSource(stream);
-    // Live input monitor: pass the mic through inputGain → masterGain so the
-    // performer hears it (and the visualizers + screen recording get it). On
-    // speakers this can feed back — the user sets input level to taste / 0.
-    ensureBus();
-    srcNode.connect(inputGain);
-    ensureAdopted();
     // A worklet/ScriptProcessor only gets pulled if it has a live downstream;
-    // route it through a silent sink so process() keeps firing (the monitor
-    // path above is a separate fan-out and doesn't carry the recorder).
+    // route it through a silent sink so process() keeps firing. The input is NOT
+    // monitored here — that's the page-level mic monitor (audio.js).
     sinkGain = ctx.createGain();
     sinkGain.gain.value = 0;
     sinkGain.connect(ctx.destination);
@@ -342,19 +335,17 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     // Tag so Strudel's connect-into-destination mute patch leaves the looper
     // alone — the looper owns its own mute on masterGain (mirrors kit.output).
     masterGain.__qualiaBypassMute = true;
-    inputGain = ctx.createGain(); inputGain.gain.value = _inputVol;
     loopGain  = ctx.createGain(); loopGain.gain.value  = _loopVol;
     analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.40;
-    inputGain.connect(masterGain);
     loopGain.connect(masterGain);
     masterGain.connect(ctx.destination);
     masterGain.connect(analyser);
   }
 
-  // Register the looper's output (input monitor + loop) with audio.js so it
-  // drives the visualizers AND lands in the recordable screen-recording mix.
+  // Register the looper's loop output with audio.js so it drives the
+  // visualizers AND lands in the recordable screen-recording mix.
   function ensureAdopted() {
     if (_adopted || !analyser) return;
     audio?.adoptAnalyser?.(ctx, analyser, 'looper');
@@ -426,10 +417,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     playStartAbs = null;
   }
 
-  // Stop loop playback. The input monitor (if capturing) stays live, so we keep
-  // the 'looper' source adopted until dispose.
   function stop() {
     stopSource();
+    if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
   }
 
   function ramp(param, target) {
@@ -442,20 +432,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
   const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
   function setMuted(on) { _muted = !!on; if (masterGain) ramp(masterGain.gain, _muted ? 0 : _master); }
-  function setMaster(v)   { _master = clamp01(v); if (masterGain && !_muted) ramp(masterGain.gain, _master); }
-  function setInputVol(v) { _inputVol = clamp01(v); if (inputGain) ramp(inputGain.gain, _inputVol); }
-  function setLoopVol(v)  { _loopVol = clamp01(v); if (loopGain) ramp(loopGain.gain, _loopVol); }
+  function setMaster(v)  { _master = clamp01(v); if (masterGain && !_muted) ramp(masterGain.gain, _master); }
+  function setLoopVol(v) { _loopVol = clamp01(v); if (loopGain) ramp(loopGain.gain, _loopVol); }
   function setOffsetMs(v) { _offsetMs = Number(v) || 0; }
   function getOffsetMs() { return _offsetMs; }
-
-  // Begin monitoring the input without recording — only when we can reuse the
-  // page mic stream (no permission prompt). Otherwise monitoring begins on the
-  // first record (which carries the user gesture).
-  async function startMonitor() {
-    if (recording || srcNode) return;
-    if (!audio?.getMicStream?.()) return;
-    try { await openCapture(''); } catch (e) { console.warn('[qualia] looper monitor failed:', e); }
-  }
 
   // Loop phase 0..1 across the whole take, or null when not playing.
   function getPlayhead01() {
@@ -491,7 +471,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
     try { masterGain?.disconnect(); } catch {}
     try { analyser?.disconnect(); } catch {}
-    masterGain = analyser = inputGain = loopGain = null;
+    masterGain = analyser = loopGain = null;
     try { ctx?.close(); } catch {}
     ctx = null; workletReady = null;
   }
@@ -500,15 +480,13 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     ensureContext,
     setInputDevice: async (id) => { if (!recording) await openCapture(id || ''); else streamDeviceId = id || ''; },
     getInputDeviceId: () => streamDeviceId,
-    startMonitor,
     startRecording, stopRecording,
     play, stop,
-    setMuted, setMaster, setInputVol, setLoopVol,
+    setMuted, setMaster, setLoopVol,
     setOffsetMs, getOffsetMs,
     getLoopRegion,
     getPlayhead01,
     getLiveView,
-    isMonitoring: () => !!srcNode,
     isRecording: () => recording,
     isPlaying:   () => !!source,
     dispose,

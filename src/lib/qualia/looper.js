@@ -20,7 +20,6 @@ import { wirePicker } from './devices.js';
 const NS = 'voidstar.qualia.looper';
 const PANEL_OPEN_KEY = `${NS}.panelOpen`;
 const MASTER_KEY     = `${NS}.master`;     // overall looper output (header slider)
-const INPUT_KEY      = `${NS}.inputVol`;   // live input monitor level
 const LOOP_KEY       = `${NS}.loopVol`;    // recorded-loop playback level
 const SYNC_KEY       = `${NS}.sync`;
 const METACYCLE_KEY  = `${NS}.metacycle`;
@@ -56,11 +55,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
     cps: 0.5,                       // used when sync is off / Strudel idle
     offsetMs: (() => { const v = parseInt(lsGet(OFFSET_KEY, '0'), 10); return Number.isFinite(v) ? Math.max(-200, Math.min(500, v)) : 0; })(),
     master:   num01(lsGet(MASTER_KEY, '0.9'), 0.9),   // overall looper output
-    inputVol: num01(lsGet(INPUT_KEY, '1'), 1.0),      // live input monitor (full, Ditto-style)
     loopVol:  num01(lsGet(LOOP_KEY, '0.5'), 0.5),     // recorded-loop playback (centre, Ditto-style)
     deviceId: '',                   // '' = default input; set by the picker
     track: null,                    // { buffer, sampleRate, loopStartBase, regionFrames, naturalSeconds, recordedCycles, cycles }
   };
+  // The "input" knob is a proxy for the page-level mic monitor (audio.js) — one
+  // shared path, so it's never double-counted. Off by default for feedback
+  // safety; raise it (here or in the audio panel) to hear the live input.
   let _muted = false;
   let recording = false;
   let playing = false;
@@ -68,7 +69,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   const looperAudio = createLooperAudio({ audio, syncStrudel });
   looperAudio.setMaster(model.master);
-  looperAudio.setInputVol(model.inputVol);
   looperAudio.setLoopVol(model.loopVol);
   looperAudio.setOffsetMs(model.offsetMs);
 
@@ -207,18 +207,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setMuted(_muted);
     refreshMuteBtn();
   }
-  // Master = overall looper output (header slider). Input = live-input monitor
-  // level (full by default). Loop = recorded-take playback level (50% default).
+  // Master = overall looper output (header slider). Loop = recorded-take
+  // playback level (50% default). Input = the shared page-level mic monitor.
   function setMaster(v) {
     model.master = Math.max(0, Math.min(1, Number(v) || 0));
     looperAudio.setMaster(model.master);
     lsSet(MASTER_KEY, model.master);
   }
-  function setInputVol(v) {
-    model.inputVol = Math.max(0, Math.min(1, Number(v) || 0));
-    looperAudio.setInputVol(model.inputVol);
-    lsSet(INPUT_KEY, model.inputVol);
-  }
+  // Proxy the page-level mic monitor (audio.js) — one shared path, no doubling.
+  function setInputVol(v) { audio?.setMonitorLevel?.(Math.max(0, Math.min(1, Number(v) || 0))); }
   function setLoopVol(v) {
     model.loopVol = Math.max(0, Math.min(1, Number(v) || 0));
     looperAudio.setLoopVol(model.loopVol);
@@ -240,6 +237,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   let cyclesIn = null;
   let _scaleBtns = null;
   let syncStatusEl = null;
+  let inputVolSl = null;
 
   function renderProps() {
     if (!propsEl) return;
@@ -385,7 +383,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
       sl.addEventListener('input', () => onInput(sl.value));
       return sl;
     };
-    const inputVolSl = volSlider(model.inputVol, setInputVol, 'Live input monitor level — your mic passed through to the mix (full by default).');
+    inputVolSl = volSlider(audio?.getMonitor?.().level ?? 0, setInputVol,
+      'Live input monitor — hear your mic through the speakers. Shared with the audio panel\'s monitor. OFF (0) by default; raising it can feed back on speakers (fine on headphones / an interface). For zero latency use your interface\'s direct monitoring instead.');
     const loopVolSl  = volSlider(model.loopVol, setLoopVol, 'Recorded-loop playback level — sits under the live input (50% by default, like a Ditto).');
 
     // preserve pitch — deferred seam (time-stretch not yet implemented).
@@ -538,10 +537,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!propsEl?.children.length) renderProps();
     renderer.resize();
     try { picker?.populate?.(model.deviceId); } catch {}
-    // Start monitoring the live input (and feeding the visualizers) when the
-    // page mic is already running — no permission prompt. Otherwise monitoring
-    // begins on the first record.
-    looperAudio.startMonitor().then(refreshLooperBtn).catch(() => {});
+    if (inputVolSl) inputVolSl.value = String(audio?.getMonitor?.().level ?? 0);
     refreshLooperBtn();
     refreshTransport();
   }
@@ -569,11 +565,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
 
   // Repaint topbar/state when audio.js flips the looper source on/off.
-  audio?.onChange?.(() => {
-    refreshLooperBtn();
-    // If the page mic comes online while the looper is open, start monitoring.
-    if (panel && panel.style.display !== 'none') looperAudio.startMonitor().then(refreshLooperBtn).catch(() => {});
-  });
+  audio?.onChange?.(() => refreshLooperBtn());
+  // Keep the "input" knob in sync with the shared page-level mic monitor (it can
+  // also be changed from the audio panel).
+  audio?.onMonitorChange?.((m) => { if (inputVolSl) inputVolSl.value = String(m.level); });
   syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
 
   // Initial paint even while hidden so first open() shows content immediately.

@@ -57,6 +57,34 @@ export function createAudio() {
   }
   function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
+  // Mic monitor: route the mic source to the speakers so the performer can hear
+  // their input (for the looper station). OFF by default (level 0) — enabling
+  // it on speakers can feed back, so it's a deliberate move. Session-only (not
+  // persisted) so it always starts off. One shared value drives every UI that
+  // exposes it (audio panel + looper "input" knob) via monitorListeners.
+  let monitorLevel = 0;
+  const monitorListeners = new Set();
+  function onMonitorChange(fn) { monitorListeners.add(fn); return () => monitorListeners.delete(fn); }
+  function notifyMonitor() {
+    const snap = { level: monitorLevel, available: sources.has('mic') };
+    monitorListeners.forEach(fn => { try { fn(snap); } catch {} });
+  }
+  function applyMonitor() {
+    const m = sources.get('mic');
+    if (!m?.monitorGain) return;
+    const t = m.ctx.currentTime;
+    try {
+      m.monitorGain.gain.cancelScheduledValues(t);
+      m.monitorGain.gain.linearRampToValueAtTime(monitorLevel, t + 0.03);
+    } catch { try { m.monitorGain.gain.value = monitorLevel; } catch {} }
+  }
+  function setMonitorLevel(v) {
+    monitorLevel = Math.max(0, Math.min(1, Number(v) || 0));
+    applyMonitor();
+    notifyMonitor();
+  }
+  function getMonitor() { return { level: monitorLevel, available: sources.has('mic') }; }
+
   // Joined description for back-compat callers that compared getSource()
   // against literal strings — 'off' | 'mic' | 'strudel' | 'mic+strudel'.
   function describeSources() {
@@ -166,10 +194,12 @@ export function createAudio() {
     const src = sources.get(id);
     if (!src) return;
     detachFromRecordableMix(id);
+    try { src.monitorGain?.disconnect(); } catch {}
     if (src.stream) { try { src.stream.getTracks().forEach(t => t.stop()); } catch {} }
     if (src.ownsCtx && src.ctx) { try { await src.ctx.close(); } catch {} }
     sources.delete(id);
     refreshFrameBuffers();
+    if (id === 'mic') notifyMonitor();   // monitor availability changed
     // Only reset running averages once *all* inputs are gone — when one
     // source drops out we'd rather let the EMAs re-adapt to the surviving
     // signal than zero everything and re-floor.
@@ -315,9 +345,16 @@ export function createAudio() {
     // aren't washed out by its built-in temporal smoothing.
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.40;
-    // source ➝ analyser only. Connecting to destination would loop mic to speakers.
-    ctx.createMediaStreamSource(stream).connect(analyser);
-    const src = { ctx, analyser, ownsCtx: true, stream };
+    // source ➝ analyser for reactivity. Also fan out to a monitor gain → speakers
+    // so the input can be heard when the user enables monitoring (0 = silent by
+    // default, so no feedback unless deliberately turned up).
+    const micSource = ctx.createMediaStreamSource(stream);
+    micSource.connect(analyser);
+    const monitorGain = ctx.createGain();
+    monitorGain.gain.value = monitorLevel;
+    monitorGain.__qualiaBypassMute = true;   // never silenced by the Strudel mute gate
+    micSource.connect(monitorGain).connect(ctx.destination);
+    const src = { ctx, analyser, ownsCtx: true, stream, micSource, monitorGain };
     configureSource(src);
     sources.set('mic', src);
 
@@ -330,7 +367,9 @@ export function createAudio() {
     // user was strudel-only), tap the new mic source into it so the
     // recorder's existing audio track starts carrying mic audio.
     if (recMixCtx) ensureRecordableMix();
+    applyMonitor();
     notify();
+    notifyMonitor();
     return micId;
   }
 
@@ -620,6 +659,9 @@ export function createAudio() {
     getTunables,
     onChange,
     setSourceFilter,
+    setMonitorLevel,
+    getMonitor,
+    onMonitorChange,
     isEnabled: () => sources.size > 0,
     hasSource: (id) => sources.has(id),
     getSources: () => Array.from(sources.keys()),
