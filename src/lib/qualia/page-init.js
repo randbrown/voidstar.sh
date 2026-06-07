@@ -148,7 +148,6 @@ export function initQualiaPage() {
   const fxnameEl   = document.getElementById('fxname');
   const fxSelect   = document.getElementById('fx-select');
   const micSelect  = document.getElementById('mic-select');
-  const micChannelSelect = document.getElementById('mic-channel-select');
   const camSelect  = document.getElementById('cam-select');
   const btnAudio   = document.getElementById('btn-audio');
   const btnPause   = document.getElementById('btn-pause');
@@ -1018,42 +1017,6 @@ export function initQualiaPage() {
       return chosen;
     },
   });
-  // Mic channel selector — only meaningful for multichannel interfaces that
-  // macOS presents as one device (e.g. a 4-in UMC). Hidden for mono/stereo
-  // inputs. Persisted and applied to the shared mic source (audio.js), so it
-  // reaches the visualizers, monitor, recording, and the looper alike.
-  const MIC_CHANNEL_KEY = 'voidstar.qualia.micChannel';
-  if (micChannelSelect) {
-    let storedCh = '1+2';
-    try { storedCh = localStorage.getItem(MIC_CHANNEL_KEY) || '1+2'; } catch {}
-    audio.setMicChannel(storedCh);
-    micChannelSelect.addEventListener('change', () => {
-      audio.setMicChannel(micChannelSelect.value);
-      try { localStorage.setItem(MIC_CHANNEL_KEY, micChannelSelect.value); } catch {}
-    });
-  }
-  let _micChannelCount = -1;
-  function refreshMicChannelUI() {
-    if (!micChannelSelect) return;
-    const { count, selected } = audio.getMicChannels();
-    if (count > 2) {
-      // Rebuild options only when the channel count changes (device swap).
-      if (count !== _micChannelCount) {
-        _micChannelCount = count;
-        const opts = ['<option value="1+2">in 1+2</option>'];
-        for (let i = 1; i <= count; i++) opts.push(`<option value="${i}">in ${i}</option>`);
-        micChannelSelect.innerHTML = opts.join('');
-      }
-      micChannelSelect.value = selected;
-      micChannelSelect.style.display = '';
-    } else {
-      _micChannelCount = -1;
-      micChannelSelect.style.display = 'none';
-    }
-  }
-  audio.onChange(refreshMicChannelUI);
-  refreshMicChannelUI();
-
   const camPicker = wirePicker({
     select: camSelect,
     kind: 'videoinput',

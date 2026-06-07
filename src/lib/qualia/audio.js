@@ -23,11 +23,6 @@ const MIC_CONSTRAINTS = {
   echoCancellation: false,
   noiseSuppression: false,
   autoGainControl:  false,
-  // Ask for every channel the device offers (a hint, not a hard cap) so
-  // multichannel interfaces — e.g. a 4-in UMC, which macOS Core Audio presents
-  // as ONE device — hand us all their inputs instead of just channels 1/2.
-  // Processing (AEC/NS/AGC) must stay off or the browser forces mono.
-  channelCount: { ideal: 8 },
 };
 
 export function createAudio() {
@@ -57,7 +52,6 @@ export function createAudio() {
       source: describeSources(),
       sources: Array.from(sources.keys()),
       micId,
-      micChannels: getMicChannels(),
     };
     listeners.forEach(fn => { try { fn(snap); } catch {} });
   }
@@ -94,32 +88,6 @@ export function createAudio() {
     notifyMonitor();
   }
   function getMonitor() { return { level: monitorLevel, available: sources.has('mic') }; }
-
-  // Mic channel selection for multichannel interfaces. '1+2' = first pair
-  // summed (default, == the old two-channel behaviour); 'N' = isolate input N.
-  // The selection re-routes the splitter live and is reflected by every
-  // consumer because it sits upstream of the analyser, monitor, recordable mix,
-  // and the republished mic stream the looper borrows.
-  let micChannel = '1+2';
-  function channelIndices(sel, count) {
-    if (sel === '1+2') return [0, 1].filter(i => i < count);
-    const n = parseInt(sel, 10);
-    return Number.isFinite(n) && n >= 1 && n <= count ? [n - 1] : [0];
-  }
-  function applyChannelSelect(splitter, selGain, count) {
-    try { splitter.disconnect(); } catch {}
-    for (const i of channelIndices(micChannel, count)) splitter.connect(selGain, i, 0);
-  }
-  function setMicChannel(sel) {
-    micChannel = sel || '1+2';
-    const m = sources.get('mic');
-    if (m?.splitter && m?.selGain) applyChannelSelect(m.splitter, m.selGain, m.channelCount);
-    notify();
-  }
-  function getMicChannels() {
-    const m = sources.get('mic');
-    return { count: m?.channelCount || 0, selected: micChannel };
-  }
 
   // Joined description for back-compat callers that compared getSource()
   // against literal strings — 'off' | 'mic' | 'strudel' | 'mic+strudel'.
@@ -231,12 +199,7 @@ export function createAudio() {
     if (!src) return;
     detachFromRecordableMix(id);
     try { src.monitorGain?.disconnect(); } catch {}
-    // Stop the underlying getUserMedia tracks. src.stream may be a republished
-    // (selected-channel) stream whose tracks end with ctx.close, but the raw
-    // capture stream must be stopped explicitly or the mic stays hot.
-    for (const s of new Set([src.rawStream, src.stream].filter(Boolean))) {
-      try { s.getTracks().forEach(t => t.stop()); } catch {}
-    }
+    if (src.stream) { try { src.stream.getTracks().forEach(t => t.stop()); } catch {} }
     if (src.ownsCtx && src.ctx) { try { await src.ctx.close(); } catch {} }
     sources.delete(id);
     refreshFrameBuffers();
@@ -396,33 +359,12 @@ export function createAudio() {
     // so the input can be heard when the user enables monitoring (0 = silent by
     // default, so no feedback unless deliberately turned up).
     const micSource = ctx.createMediaStreamSource(stream);
-    const chCount = stream.getAudioTracks()[0]?.getSettings()?.channelCount
-                    || micSource.channelCount || 1;
-    // Multichannel interface (e.g. a 4-in UMC on macOS): split the channels so
-    // the user can isolate which input feeds everything, instead of being stuck
-    // on channels 1/2. For mono/stereo devices keep the original direct path —
-    // no extra nodes, no cross-context bridging (protects the common case).
-    let splitter = null, selGain = null, micDest = null, outStream = stream;
-    if (chCount > 2) {
-      splitter = ctx.createChannelSplitter(chCount);
-      micSource.connect(splitter);
-      selGain = ctx.createGain();
-      selGain.connect(analyser);
-      // Re-publish the selected channel as a mono MediaStream so the recorder
-      // and the looper capture the chosen input too — not a downmix of all.
-      micDest = ctx.createMediaStreamDestination();
-      selGain.connect(micDest);
-      outStream = micDest.stream;
-      applyChannelSelect(splitter, selGain, chCount);
-    } else {
-      micSource.connect(analyser);
-    }
+    micSource.connect(analyser);
     const monitorGain = ctx.createGain();
     monitorGain.gain.value = monitorLevel;
     monitorGain.__qualiaBypassMute = true;   // never silenced by the Strudel mute gate
-    (selGain || micSource).connect(monitorGain).connect(ctx.destination);
-    const src = { ctx, analyser, ownsCtx: true, stream: outStream, rawStream: stream,
-                  micSource, monitorGain, splitter, selGain, channelCount: chCount };
+    micSource.connect(monitorGain).connect(ctx.destination);
+    const src = { ctx, analyser, ownsCtx: true, stream, micSource, monitorGain };
     configureSource(src);
     sources.set('mic', src);
 
@@ -730,8 +672,6 @@ export function createAudio() {
     setMonitorLevel,
     getMonitor,
     onMonitorChange,
-    setMicChannel,
-    getMicChannels,
     isEnabled: () => sources.size > 0,
     hasSource: (id) => sources.has(id),
     getSources: () => Array.from(sources.keys()),
