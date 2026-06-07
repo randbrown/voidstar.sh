@@ -215,7 +215,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
     lsSet(MASTER_KEY, model.master);
   }
   // Proxy the page-level mic monitor (audio.js) — one shared path, no doubling.
-  function setInputVol(v) { audio?.setMonitorLevel?.(Math.max(0, Math.min(1, Number(v) || 0))); }
+  // When the page mic isn't running (mix/off mode) there's no page source to
+  // monitor, so bring up the looper's own capture to hear the input.
+  function setInputVol(v) {
+    const lvl = Math.max(0, Math.min(1, Number(v) || 0));
+    audio?.setMonitorLevel?.(lvl);
+    if (lvl > 0 && !audio?.hasSource?.('mic') && !looperAudio.isCapturing?.()) {
+      looperAudio.startMonitor().then(refreshLooperBtn).catch(() => {});
+    }
+  }
   function setLoopVol(v) {
     model.loopVol = Math.max(0, Math.min(1, Number(v) || 0));
     looperAudio.setLoopVol(model.loopVol);
