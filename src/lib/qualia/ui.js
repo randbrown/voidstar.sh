@@ -358,7 +358,7 @@ export function buildParamPanel({
  * outside the panel changes them (none currently, but symmetrical with the
  * fx panel).
  */
-export function buildAudioPanel({ root, presets, onTunablesChange, onPreset }) {
+export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onMonitor }) {
   // Preset buttons
   const presetRow = root.querySelector('[data-qp="audio-presets"]');
   if (presetRow) {
@@ -392,6 +392,26 @@ export function buildAudioPanel({ root, presets, onTunablesChange, onPreset }) {
   wire('cooldown', 'cooldown', v => parseInt(v, 10), v => `${v|0}ms`);
   wire('ema',      'ema',      parseFloat, v => `${Math.round((v - 0.05) / (0.60 - 0.05) * 100)}%`);
 
+  // Mic monitor — not a band tunable; drives the shared audio.js monitor level.
+  // 0 reads as "off". Also reflected from external changes (the looper's input
+  // knob writes the same value) via setMonitor().
+  const monitorRow = root.querySelector('[data-qp="audio-monitor"]');
+  const monitorInput = monitorRow?.querySelector('input[type=range]');
+  const monitorVal = monitorRow?.querySelector('.qp-val');
+  const fmtMonitor = (v) => (v <= 0 ? 'off' : `${Math.round(v * 100)}%`);
+  if (monitorInput && monitorVal) {
+    monitorInput.addEventListener('input', () => {
+      const v = parseFloat(monitorInput.value);
+      monitorVal.textContent = fmtMonitor(v);
+      onMonitor?.(v);
+    });
+  }
+  function setMonitor(level) {
+    if (!monitorInput || !monitorVal) return;
+    monitorInput.value = String(level);
+    monitorVal.textContent = fmtMonitor(level);
+  }
+
   function clampToInput(input, v) {
     const min = parseFloat(input.min), max = parseFloat(input.max);
     if (Number.isFinite(min) && v < min) v = min;
@@ -411,5 +431,5 @@ export function buildAudioPanel({ root, presets, onTunablesChange, onPreset }) {
       b.classList.toggle('active', b.dataset.preset === name));
   }
 
-  return { setTunables, setActivePreset };
+  return { setTunables, setActivePreset, setMonitor };
 }

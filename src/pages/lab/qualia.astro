@@ -1471,6 +1471,71 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       .seq-num-step { padding: 0.02rem 0.35rem; min-width: 1.4rem; }
     }
 
+    /* Looper station panel — same draggable-window shape as the sequencer.
+       Body is a single waveform canvas (the take in wrapped lanes) under a
+       compact props row. */
+    #looper-panel {
+      position: fixed; left: 50%; top: 4.5rem;
+      transform: translateX(-50%);
+      z-index: 18;
+      width: min(96vw, 920px);
+      height: 340px;
+      min-width: 360px;  min-height: 200px;
+      max-width: 100vw;  max-height: calc(100dvh - 6rem);
+      background: rgba(10,10,26,0.55);
+      border: 1px solid var(--border); border-radius: 10px;
+      font-family: var(--font-mono); color: var(--text);
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+      backdrop-filter: blur(8px);
+      resize: both;
+    }
+    #looper-header {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.45rem 0.75rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+      cursor: grab; user-select: none;
+      touch-action: none;
+    }
+    #looper-header.dragging { cursor: grabbing; }
+    #looper-header .ctrl-btn { cursor: pointer; }
+    .looper-input-select { max-width: 14ch; }
+    #btn-looper-record, #btn-looper-play, #btn-looper-stop {
+      padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1;
+    }
+    #btn-looper-record.recording {
+      color: var(--pink); border-color: var(--pink);
+      background: rgba(244, 114, 182, 0.14);
+    }
+    #btn-looper-play.playing { color: var(--pink); border-color: var(--pink); }
+    #btn-looper-close, #btn-looper-delete {
+      padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1;
+    }
+    #btn-looper-delete:disabled, #btn-looper-play:disabled, #btn-looper-stop:disabled {
+      opacity: 0.4; cursor: default;
+    }
+    #looper-props {
+      display: flex; flex-wrap: wrap; gap: 0.4rem 0.7rem;
+      padding: 0.45rem 0.7rem;
+      background: rgba(0,0,0,0.2);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.72rem;
+    }
+    #looper-body {
+      flex: 1; min-height: 0;
+      padding: 0.35rem;
+    }
+    #looper-canvas {
+      width: 100%; height: 100%; display: block;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.28);
+    }
+    @media (max-width: 700px) {
+      #looper-props { padding: 0.25rem 0.45rem; gap: 0.25rem 0.45rem; font-size: 0.68rem; }
+    }
+
     /* Vocoder panel — same draggable-window shape as #strudel-panel /
        #sequencer-panel. Smaller default footprint than the sequencer because
        the body is just a column of property rows, no grid matrix. */
@@ -1601,6 +1666,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
       <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
+      <button class="ctrl-btn" id="btn-looper" title="Looper station (O)">loop</button>
       <div class="qg-group qg-capture" data-group="capture">
         <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
         <button type="button" class="ctrl-btn qg-trigger" id="btn-record-mode"
@@ -1813,6 +1879,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <div class="qp-body">
       <div class="qp-presets" data-qp="audio-presets"></div>
+      <div class="qp-row" data-qp="audio-monitor" title="Hear your mic through the output (input monitor) — for the looper station. OFF by default: turning it up can feed back on speakers (fine on headphones / an audio interface). Shared with the looper's input knob. For zero-latency monitoring, use your interface's direct monitoring instead.">
+        <label>mic monitor<span class="qp-val">off</span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0">
+      </div>
       <div class="qp-row" data-qp="audio-gain">
         <label>gain<span class="qp-val"></span></label>
         <input type="range" min="0.25" max="4" step="0.05" value="1.0">
@@ -2135,6 +2205,30 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-seq-pat-random" title="Sprinkle some random hits over the default groove">random</button>
     </div>
     <div id="seq-pat-list" class="sp-pat-list"></div>
+  </div>
+</div>
+
+<!-- Looper station panel — third programmable audio source. Captures the live
+     audio input, loops it locked to the Strudel metacycle grid, and shows the
+     take in Reaper-style wrapped waveform lanes. Sibling of #sequencer-panel so
+     each draggable window stays independent. -->
+<div id="looper-panel" style="display:none">
+  <div id="looper-header">
+    <span class="sp-title">loop</span>
+    <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
+    <span class="sp-status" id="looper-status">click ● to record</span>
+    <button class="ctrl-btn" id="btn-looper-record" title="Record">●</button>
+    <button class="ctrl-btn" id="btn-looper-play"   title="Play loop">▶</button>
+    <button class="ctrl-btn" id="btn-looper-stop"   title="Stop">■</button>
+    <button class="ctrl-btn panel-mute-btn" id="btn-looper-mute" title="Mute loop output (keeps looping in time)">live</button>
+    <input type="range" class="panel-gain-slider" id="looper-gain" min="0" max="1" step="0.01" value="0.9" title="Output level (0–1×)" />
+    <button class="ctrl-btn" id="btn-looper-sync"   title="Realign loop to the next cycle boundary" style="display:none">⟲</button>
+    <button class="ctrl-btn" id="btn-looper-delete" title="Delete loop">🗑</button>
+    <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
+  </div>
+  <div id="looper-props"></div>
+  <div id="looper-body">
+    <canvas id="looper-canvas"></canvas>
   </div>
 </div>
 
