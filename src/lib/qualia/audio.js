@@ -80,6 +80,10 @@ export function createAudio() {
   }
   function setMonitorLevel(v) {
     monitorLevel = Math.max(0, Math.min(1, Number(v) || 0));
+    // Raising the slider is a user gesture — a good moment to recover a mic
+    // context that started suspended (so the monitor actually sounds).
+    const m = sources.get('mic');
+    if (monitorLevel > 0 && m?.ctx?.state === 'suspended') m.ctx.resume().catch(() => {});
     applyMonitor();
     notifyMonitor();
   }
@@ -339,6 +343,12 @@ export function createAudio() {
     }
     if (!stream) throw lastErr || new Error('getUserMedia failed');
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // Awaiting getUserMedia above expires the user-gesture activation, so on
+    // some platforms (notably macOS Chrome) the new context starts 'suspended'.
+    // A realtime MediaStream still feeds the analyser while suspended — so the
+    // visualizers react — but a suspended context won't drive its destination,
+    // which silently kills mic monitoring. Resume it so output flows.
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
     const analyser = ctx.createAnalyser();
     // Smaller FFT → less internal latency; lower smoothingTimeConstant
     // makes the analyser itself respond more quickly so beat transients
