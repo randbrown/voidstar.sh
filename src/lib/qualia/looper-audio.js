@@ -36,6 +36,10 @@ const MIC_CONSTRAINTS = {
   echoCancellation: false,
   noiseSuppression: false,
   autoGainControl:  false,
+  // Hint the browser toward the lowest input buffering it can manage. Chrome on
+  // Windows (shared-mode WASAPI) often ignores this, but where it's honoured it
+  // shaves real latency off the recording. The rest is compensated by `nudge`.
+  latency: 0,
 };
 const EPS = 1e-6;
 // Small scheduling lookahead so `source.start()` lands a hair in the future.
@@ -84,7 +88,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   const frameZeroAbs = () => (firstChunkAbs != null ? firstChunkAbs : armEstimateAbs);
 
   async function ensureContext() {
-    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
     if (!workletReady) {
       if (ctx.audioWorklet && typeof ctx.audioWorklet.addModule === 'function') {
@@ -318,11 +322,18 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
             if (Math.abs(region[i]) > thr) { firstIdx = i; break; }
           }
           const measMs = firstIdx >= 0 ? ((firstIdx - loopStartBase) / sr) * 1000 : null;
-          const estMs = ((ctx.outputLatency || ctx.baseLatency || 0) + inputLatencySec) * 1000;
+          const outMs = (ctx.outputLatency || 0) * 1000;
+          const baseMs = (ctx.baseLatency || 0) * 1000;
+          const inMs = inputLatencySec * 1000;
+          // The measured onset is an UPPER bound for soft attacks (pedal-steel
+          // volume swells cross the threshold late), and the browser-reported
+          // numbers UNDER-count the OS buffer — so neither is gospel. The
+          // pipeline latency is stable, so dial `nudge` by ear/eye once: it
+          // persists and then locks every take.
           console.info(
-            `[looper] downbeat offset ≈ ${measMs == null ? 'n/a' : measMs.toFixed(0) + ' ms'} · ` +
-            `est out+in latency ≈ ${estMs.toFixed(0)} ms · ` +
-            `set nudge ≈ ${measMs == null ? Math.round(estMs) : Math.round(measMs)} ms`,
+            `[looper] latency · measured onset ≈ ${measMs == null ? 'n/a (soft attack)' : measMs.toFixed(0) + ' ms'} ` +
+            `(upper bound) · reported out ${outMs.toFixed(0)} / base ${baseMs.toFixed(0)} / in ${inMs.toFixed(0)} ms · ` +
+            `dial nudge until the take's onset sits on the lane's left edge`,
           );
         } catch {}
 
