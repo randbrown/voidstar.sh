@@ -19,10 +19,14 @@ import { wirePicker } from './devices.js';
 
 const NS = 'voidstar.qualia.looper';
 const PANEL_OPEN_KEY = `${NS}.panelOpen`;
-const GAIN_KEY       = `${NS}.gain`;
+const MASTER_KEY     = `${NS}.master`;     // overall looper output (header slider)
+const INPUT_KEY      = `${NS}.inputVol`;   // live input monitor level
+const LOOP_KEY       = `${NS}.loopVol`;    // recorded-loop playback level
 const SYNC_KEY       = `${NS}.sync`;
 const METACYCLE_KEY  = `${NS}.metacycle`;
 const OFFSET_KEY     = `${NS}.offsetMs`;
+
+const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
 
 function lsGet(k, fallback) { try { const v = localStorage.getItem(k); return v == null ? fallback : v; } catch { return fallback; } }
 function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch {} }
@@ -51,17 +55,21 @@ export function createLooper({ audio, syncStrudel } = {}) {
     metacycle: Math.max(1, Math.min(16, parseInt(lsGet(METACYCLE_KEY, '1'), 10) || 1)),
     cps: 0.5,                       // used when sync is off / Strudel idle
     offsetMs: (() => { const v = parseInt(lsGet(OFFSET_KEY, '0'), 10); return Number.isFinite(v) ? Math.max(-200, Math.min(500, v)) : 0; })(),
+    master:   num01(lsGet(MASTER_KEY, '0.9'), 0.9),   // overall looper output
+    inputVol: num01(lsGet(INPUT_KEY, '1'), 1.0),      // live input monitor (full, Ditto-style)
+    loopVol:  num01(lsGet(LOOP_KEY, '0.5'), 0.5),     // recorded-loop playback (centre, Ditto-style)
     deviceId: '',                   // '' = default input; set by the picker
     track: null,                    // { buffer, sampleRate, loopStartBase, regionFrames, naturalSeconds, recordedCycles, cycles }
   };
-  let _gain = (() => { const v = parseFloat(lsGet(GAIN_KEY, '0.9')); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.9; })();
   let _muted = false;
   let recording = false;
   let playing = false;
   let _everOpened = false;
 
   const looperAudio = createLooperAudio({ audio, syncStrudel });
-  looperAudio.setGain(_gain);
+  looperAudio.setMaster(model.master);
+  looperAudio.setInputVol(model.inputVol);
+  looperAudio.setLoopVol(model.loopVol);
   looperAudio.setOffsetMs(model.offsetMs);
 
   const renderer = createLooperRenderer({
@@ -199,10 +207,22 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setMuted(_muted);
     refreshMuteBtn();
   }
-  function setGain(v) {
-    _gain = Math.max(0, Math.min(1, Number(v) || 0));
-    looperAudio.setGain(_gain);
-    lsSet(GAIN_KEY, _gain);
+  // Master = overall looper output (header slider). Input = live-input monitor
+  // level (full by default). Loop = recorded-take playback level (50% default).
+  function setMaster(v) {
+    model.master = Math.max(0, Math.min(1, Number(v) || 0));
+    looperAudio.setMaster(model.master);
+    lsSet(MASTER_KEY, model.master);
+  }
+  function setInputVol(v) {
+    model.inputVol = Math.max(0, Math.min(1, Number(v) || 0));
+    looperAudio.setInputVol(model.inputVol);
+    lsSet(INPUT_KEY, model.inputVol);
+  }
+  function setLoopVol(v) {
+    model.loopVol = Math.max(0, Math.min(1, Number(v) || 0));
+    looperAudio.setLoopVol(model.loopVol);
+    lsSet(LOOP_KEY, model.loopVol);
   }
   // Nudge (ms): slides the loop window live to compensate record latency.
   // + = take plays earlier (pulls a late take into the pocket).
@@ -356,6 +376,18 @@ export function createLooper({ audio, syncStrudel } = {}) {
       nudgeIn.value = String(model.offsetMs);
     });
 
+    // input / loop volumes (Ditto-style): raw input full, loop playback centred.
+    const volSlider = (value, onInput, title) => {
+      const sl = document.createElement('input');
+      sl.type = 'range'; sl.min = '0'; sl.max = '1'; sl.step = '0.01';
+      sl.value = String(value); sl.className = 'panel-gain-slider';
+      if (title) sl.title = title;
+      sl.addEventListener('input', () => onInput(sl.value));
+      return sl;
+    };
+    const inputVolSl = volSlider(model.inputVol, setInputVol, 'Live input monitor level — your mic passed through to the mix (full by default).');
+    const loopVolSl  = volSlider(model.loopVol, setLoopVol, 'Recorded-loop playback level — sits under the live input (50% by default, like a Ditto).');
+
     // preserve pitch — deferred seam (time-stretch not yet implemented).
     const ppCb = document.createElement('input');
     ppCb.type = 'checkbox'; ppCb.disabled = true;
@@ -370,7 +402,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
       mk('metacycle', stepperFor(metaIn, 'change'), 'Strudel cycles per metacycle — set this to your bar / phrase length. It is the record-snap grid (IN→next downbeat, OUT→nearest boundary) and the width of each waveform lane.'),
       mk('cycles', stepperFor(cyclesIn, 'change', cyclesBump), 'How many Strudel cycles the recorded loop occupies (a multiple of the metacycle).'),
       sLen.wrap,
-      mk('nudge ms', stepperFor(nudgeIn, 'change'), 'Slide the loop into the pocket. + pulls a late take earlier to compensate record latency. After recording, the console logs a suggested value.'),
+      mk('nudge ms', stepperFor(nudgeIn, 'change'), 'Slide the loop into the pocket. + pulls a late take earlier to compensate record latency.'),
+      mk('input', inputVolSl, 'Live input monitor level (full by default).'),
+      mk('loop', loopVolSl, 'Recorded-loop playback level (50% by default, like a Ditto).'),
       syncWrap,
       ppWrap,
     );
@@ -504,6 +538,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!propsEl?.children.length) renderProps();
     renderer.resize();
     try { picker?.populate?.(model.deviceId); } catch {}
+    // Start monitoring the live input (and feeding the visualizers) when the
+    // page mic is already running — no permission prompt. Otherwise monitoring
+    // begins on the first record.
+    looperAudio.startMonitor().then(refreshLooperBtn).catch(() => {});
     refreshLooperBtn();
     refreshTransport();
   }
@@ -526,12 +564,16 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnSync)   btnSync.addEventListener('click', () => { realign(); });
   if (btnDelete) btnDelete.addEventListener('click', () => { if (model.track) deleteTrack(); });
   if (elGain) {
-    elGain.value = String(_gain);
-    elGain.addEventListener('input', () => setGain(elGain.value));
+    elGain.value = String(model.master);
+    elGain.addEventListener('input', () => setMaster(elGain.value));
   }
 
   // Repaint topbar/state when audio.js flips the looper source on/off.
-  audio?.onChange?.(() => refreshLooperBtn());
+  audio?.onChange?.(() => {
+    refreshLooperBtn();
+    // If the page mic comes online while the looper is open, start monitoring.
+    if (panel && panel.style.display !== 'none') looperAudio.startMonitor().then(refreshLooperBtn).catch(() => {});
+  });
   syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
 
   // Initial paint even while hidden so first open() shows content immediately.

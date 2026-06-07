@@ -58,7 +58,6 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let stream = null;
   let streamOwned = false;          // false when we borrowed audio.getMicStream()
   let streamDeviceId = '';
-  let inputLatencySec = 0;          // from the input track's getSettings().latency
   let srcNode = null, recNode = null, sinkGain = null;
   let usingWorklet = false;
 
@@ -78,11 +77,19 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let liveAccMin = 1, liveAccMax = -1, liveAccN = 0;
   let liveTotalFrames = 0;
 
-  // ── playback graph ──
-  let masterGain = null, analyser = null;
-  let source = null, trackGain = null;
+  // ── playback / monitor graph ──
+  //   input(mic) → inputGain ┐
+  //   loop source → loopGain ┼→ masterGain → destination + analyser('looper')
+  // Like a Ditto looper: the live input passes through at full volume while the
+  // recorded loop sits under it (default 50%); master rides the whole looper.
+  let masterGain = null, analyser = null, inputGain = null, loopGain = null;
+  let source = null;
   let playStartAbs = null, playLoopDur = 0;
-  let _muted = false, _gain = 0.9;
+  let _muted = false;
+  let _master = 0.9;                // overall looper output level
+  let _inputVol = 1.0;              // live input monitor level (full)
+  let _loopVol = 0.5;               // recorded-loop playback level (Ditto-centre)
+  let _adopted = false;             // 'looper' registered with audio.js
   let _offsetMs = 0;                // nudge: + = take plays earlier (compensates lateness)
 
   const frameZeroAbs = () => (firstChunkAbs != null ? firstChunkAbs : armEstimateAbs);
@@ -162,14 +169,17 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     streamOwned = owned;
     const settings = stream.getAudioTracks()[0]?.getSettings() || {};
     streamDeviceId = want || settings.deviceId || '';
-    // Input latency (seconds) when the browser exposes it — used only as a
-    // diagnostic estimate to seed the manual nudge, not auto-applied.
-    inputLatencySec = (typeof settings.latency === 'number' && settings.latency > 0) ? settings.latency : 0;
 
     srcNode = ctx.createMediaStreamSource(stream);
+    // Live input monitor: pass the mic through inputGain → masterGain so the
+    // performer hears it (and the visualizers + screen recording get it). On
+    // speakers this can feed back — the user sets input level to taste / 0.
+    ensureBus();
+    srcNode.connect(inputGain);
+    ensureAdopted();
     // A worklet/ScriptProcessor only gets pulled if it has a live downstream;
-    // route it through a silent sink so process() keeps firing without
-    // monitoring the input to the speakers (that would feed back).
+    // route it through a silent sink so process() keeps firing (the monitor
+    // path above is a separate fan-out and doesn't carry the recorder).
     sinkGain = ctx.createGain();
     sinkGain.gain.value = 0;
     sinkGain.connect(ctx.destination);
@@ -307,36 +317,6 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         buffer.copyToChannel(region, 0);
         const loopStartBase = padStart;   // sample idx of the musical IN within `buffer`
 
-        // ── diagnostic: measure the recorded downbeat's offset from the IN ──
-        // First transient at/after the IN boundary, within ~0.5 cycle, vs the
-        // device/context latency estimate. Tells us how far to set the nudge.
-        try {
-          const win = Math.min(region.length - loopStartBase, Math.round((0.5 / (recCps || 0.5)) * sr));
-          let peak = 1e-6;
-          for (let i = loopStartBase; i < loopStartBase + regionFrames && i < region.length; i++) {
-            const a = Math.abs(region[i]); if (a > peak) peak = a;
-          }
-          let firstIdx = -1;
-          const thr = 0.3 * peak;
-          for (let i = loopStartBase; i < loopStartBase + win; i++) {
-            if (Math.abs(region[i]) > thr) { firstIdx = i; break; }
-          }
-          const measMs = firstIdx >= 0 ? ((firstIdx - loopStartBase) / sr) * 1000 : null;
-          const outMs = (ctx.outputLatency || 0) * 1000;
-          const baseMs = (ctx.baseLatency || 0) * 1000;
-          const inMs = inputLatencySec * 1000;
-          // The measured onset is an UPPER bound for soft attacks (pedal-steel
-          // volume swells cross the threshold late), and the browser-reported
-          // numbers UNDER-count the OS buffer — so neither is gospel. The
-          // pipeline latency is stable, so dial `nudge` by ear/eye once: it
-          // persists and then locks every take.
-          console.info(
-            `[looper] latency · measured onset ≈ ${measMs == null ? 'n/a (soft attack)' : measMs.toFixed(0) + ' ms'} ` +
-            `(upper bound) · reported out ${outMs.toFixed(0)} / base ${baseMs.toFixed(0)} / in ${inMs.toFixed(0)} ms · ` +
-            `dial nudge until the take's onset sits on the lane's left edge`,
-          );
-        } catch {}
-
         snapIn = null;
         resolve({
           buffer, sampleRate: sr,
@@ -354,19 +334,31 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     });
   }
 
-  // ── playback ──
+  // ── playback / monitor bus ──
   function ensureBus() {
     if (masterGain) return;
     masterGain = ctx.createGain();
-    masterGain.gain.value = 1;
+    masterGain.gain.value = _muted ? 0 : _master;
     // Tag so Strudel's connect-into-destination mute patch leaves the looper
-    // alone — the looper owns its own mute on trackGain (mirrors kit.output).
+    // alone — the looper owns its own mute on masterGain (mirrors kit.output).
     masterGain.__qualiaBypassMute = true;
+    inputGain = ctx.createGain(); inputGain.gain.value = _inputVol;
+    loopGain  = ctx.createGain(); loopGain.gain.value  = _loopVol;
     analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.40;
+    inputGain.connect(masterGain);
+    loopGain.connect(masterGain);
     masterGain.connect(ctx.destination);
     masterGain.connect(analyser);
+  }
+
+  // Register the looper's output (input monitor + loop) with audio.js so it
+  // drives the visualizers AND lands in the recordable screen-recording mix.
+  function ensureAdopted() {
+    if (_adopted || !analyser) return;
+    audio?.adoptAnalyser?.(ctx, analyser, 'looper');
+    _adopted = true;
   }
 
   function derivePlaybackRate(track, cps) {
@@ -421,25 +413,23 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     source.loopStart = startFrame / sr;
     source.loopEnd = (startFrame + track.regionFrames) / sr;
     source.playbackRate.value = rate;
-    trackGain = ctx.createGain();
-    trackGain.gain.value = _muted ? 0 : _gain;
-    source.connect(trackGain).connect(masterGain);
+    source.connect(loopGain);
     source.start(startAbs, startFrame / sr);
     playStartAbs = startAbs;
     playLoopDur = (track.regionFrames / sr) / rate;   // == track.cycles / cps
-    audio?.adoptAnalyser?.(ctx, analyser, 'looper');
+    ensureAdopted();
     return true;
   }
 
   function stopSource() {
     if (source) { try { source.stop(); } catch {}; try { source.disconnect(); } catch {}; source = null; }
-    if (trackGain) { try { trackGain.disconnect(); } catch {}; trackGain = null; }
     playStartAbs = null;
   }
 
+  // Stop loop playback. The input monitor (if capturing) stays live, so we keep
+  // the 'looper' source adopted until dispose.
   function stop() {
     stopSource();
-    audio?.releaseAdopted?.('looper');
   }
 
   function ramp(param, target) {
@@ -450,13 +440,22 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     } catch { try { param.value = target; } catch {} }
   }
 
-  function setMuted(on) { _muted = !!on; if (trackGain) ramp(trackGain.gain, _muted ? 0 : _gain); }
-  function setGain(v) {
-    _gain = Math.max(0, Math.min(1, Number(v) || 0));
-    if (trackGain && !_muted) ramp(trackGain.gain, _gain);
-  }
+  const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
+  function setMuted(on) { _muted = !!on; if (masterGain) ramp(masterGain.gain, _muted ? 0 : _master); }
+  function setMaster(v)   { _master = clamp01(v); if (masterGain && !_muted) ramp(masterGain.gain, _master); }
+  function setInputVol(v) { _inputVol = clamp01(v); if (inputGain) ramp(inputGain.gain, _inputVol); }
+  function setLoopVol(v)  { _loopVol = clamp01(v); if (loopGain) ramp(loopGain.gain, _loopVol); }
   function setOffsetMs(v) { _offsetMs = Number(v) || 0; }
   function getOffsetMs() { return _offsetMs; }
+
+  // Begin monitoring the input without recording — only when we can reuse the
+  // page mic stream (no permission prompt). Otherwise monitoring begins on the
+  // first record (which carries the user gesture).
+  async function startMonitor() {
+    if (recording || srcNode) return;
+    if (!audio?.getMicStream?.()) return;
+    try { await openCapture(''); } catch (e) { console.warn('[qualia] looper monitor failed:', e); }
+  }
 
   // Loop phase 0..1 across the whole take, or null when not playing.
   function getPlayhead01() {
@@ -489,9 +488,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   function dispose() {
     stop();
     teardownCapture();
+    if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
     try { masterGain?.disconnect(); } catch {}
     try { analyser?.disconnect(); } catch {}
-    masterGain = analyser = null;
+    masterGain = analyser = inputGain = loopGain = null;
     try { ctx?.close(); } catch {}
     ctx = null; workletReady = null;
   }
@@ -500,13 +500,15 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     ensureContext,
     setInputDevice: async (id) => { if (!recording) await openCapture(id || ''); else streamDeviceId = id || ''; },
     getInputDeviceId: () => streamDeviceId,
+    startMonitor,
     startRecording, stopRecording,
     play, stop,
-    setMuted, setGain,
+    setMuted, setMaster, setInputVol, setLoopVol,
     setOffsetMs, getOffsetMs,
     getLoopRegion,
     getPlayhead01,
     getLiveView,
+    isMonitoring: () => !!srcNode,
     isRecording: () => recording,
     isPlaying:   () => !!source,
     dispose,

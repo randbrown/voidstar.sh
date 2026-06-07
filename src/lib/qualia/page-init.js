@@ -892,8 +892,8 @@ export function initQualiaPage() {
   // The button is a 4-state selector matching real-world usage:
   //   off → mic stopped, audio.setSourceFilter([])
   //   mic → mic running, filter ['mic']  (engines ignored — venue mix)
-  //   mix → mic stopped, filter ['strudel', 'sequencer', 'vocoder']  (engines)
-  //   all → mic running, filter ['mic', 'strudel', 'sequencer', 'vocoder']
+  //   mix → mic stopped, filter ['strudel', 'sequencer', 'vocoder', 'looper']  (engines)
+  //   all → mic running, filter ['mic', 'strudel', 'sequencer', 'vocoder', 'looper']
   // The 'vocoder' source only actually exists when the vocoder panel's feed
   // toggle is on (page-init adopts it then); listing it here just means it's
   // allowed through whenever it is present — opt-in, like the engines.
@@ -918,8 +918,8 @@ export function initQualiaPage() {
     switch (audioMode) {
       case 'off': audio.setSourceFilter([]);                                          break;
       case 'mic': audio.setSourceFilter(['mic']);                                     break;
-      case 'mix': audio.setSourceFilter(['strudel', 'sequencer', 'vocoder']);         break;
-      case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer', 'vocoder']);  break;
+      case 'mix': audio.setSourceFilter(['strudel', 'sequencer', 'vocoder', 'looper']);         break;
+      case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer', 'vocoder', 'looper']);  break;
     }
   }
 
