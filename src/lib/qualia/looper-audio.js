@@ -12,9 +12,18 @@
 // stays phase-aligned. This mirrors the sequencer's "durations are portable"
 // note (see sequencer.js computeAlignedStart / getSecondsUntilNextStrudelBoundary).
 //
+// Length: IN snaps to the next metacycle downbeat (preserves the prep bar);
+// OUT rounds to the NEAREST metacycle boundary so a slow Stop is discarded.
+// The trimmed loop is always an integer number of metacycles.
+//
+// Alignment: the captured downbeat lands later than the IN boundary by the
+// round-trip latency (output + input + acoustic + reaction). We bake a PAD of
+// silence-headroom on both sides of the loop region into the stored buffer so a
+// "nudge (ms)" offset can slide the loop window live (no re-record) to dial the
+// take into the pocket. A diagnostic logs the measured first-transient offset.
+//
 // v1 is varispeed: fitting a take into N cycles changes playbackRate, so pitch
-// shifts with speed. A pitch-preserving time-stretch is a future pass (the
-// disabled "preserve pitch" toggle in the panel marks the seam).
+// shifts with speed. Pitch-preserving time-stretch is a future pass.
 
 // Vite emits the worklet as a standalone asset and returns its URL — the
 // processor loads into the AudioWorklet global scope, it can't be page-bundled.
@@ -33,6 +42,9 @@ const EPS = 1e-6;
 // Strudel's cycle position is already audible-corrected, so this only needs to
 // cover the gap between reading the clock and the node actually starting.
 const START_MARGIN = 0.08;
+// Headroom baked on each side of the loop region so the "nudge (ms)" offset can
+// slide the playback window live without re-recording. Bounds the offset range.
+const PAD_SEC = 0.5;
 
 export function createLooperAudio({ audio, syncStrudel } = {}) {
   let ctx = null;
@@ -42,6 +54,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let stream = null;
   let streamOwned = false;          // false when we borrowed audio.getMicStream()
   let streamDeviceId = '';
+  let inputLatencySec = 0;          // from the input track's getSettings().latency
   let srcNode = null, recNode = null, sinkGain = null;
   let usingWorklet = false;
 
@@ -49,14 +62,26 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let recording = false;
   let recChunks = [];
   let recFrames = 0;
-  let captureStartAbs = 0;
-  let snapIn = null;                // { cycleIn, inAbs, cps, N } when synced, else null
+  let firstChunkAbs = null;         // precise ctx time of buffer frame 0 (worklet t0)
+  let armEstimateAbs = 0;           // fallback frame-0 estimate (arm time)
+  let snapIn = null;                // { cycleIn, inAbs, cps } when synced, else null
+  let recN = 1;                     // metacycle (cycles) for this take
+  let recCps = 0.5;                 // cps captured at record time (for unsynced lane math)
+
+  // ── live record peaks (min/max per bin, grown as chunks arrive) ──
+  let liveMin = null, liveMax = null;
+  let liveBins = 0, liveBinSamples = 0;
+  let liveAccMin = 1, liveAccMax = -1, liveAccN = 0;
+  let liveTotalFrames = 0;
 
   // ── playback graph ──
   let masterGain = null, analyser = null;
   let source = null, trackGain = null;
   let playStartAbs = null, playLoopDur = 0;
   let _muted = false, _gain = 0.9;
+  let _offsetMs = 0;                // nudge: + = take plays earlier (compensates lateness)
+
+  const frameZeroAbs = () => (firstChunkAbs != null ? firstChunkAbs : armEstimateAbs);
 
   async function ensureContext() {
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -74,6 +99,41 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       }
     }
     return ctx;
+  }
+
+  // ── live peak accumulation ──
+  function resetLivePeaks() {
+    liveBinSamples = Math.max(64, Math.round((ctx?.sampleRate || 48000) * 0.012)); // ~12 ms bins
+    liveBins = 0; liveAccMin = 1; liveAccMax = -1; liveAccN = 0; liveTotalFrames = 0;
+    liveMin = new Float32Array(4096);
+    liveMax = new Float32Array(4096);
+  }
+  function pushLiveBin(mn, mx) {
+    if (liveBins >= liveMin.length) {
+      const nMin = new Float32Array(liveMin.length * 2);
+      const nMax = new Float32Array(liveMax.length * 2);
+      nMin.set(liveMin); nMax.set(liveMax);
+      liveMin = nMin; liveMax = nMax;
+    }
+    liveMin[liveBins] = mn; liveMax[liveBins] = mx; liveBins++;
+  }
+  function foldChunkIntoLive(chunk) {
+    for (let i = 0; i < chunk.length; i++) {
+      const s = chunk[i];
+      if (s < liveAccMin) liveAccMin = s;
+      if (s > liveAccMax) liveAccMax = s;
+      if (++liveAccN >= liveBinSamples) {
+        pushLiveBin(liveAccMin, liveAccMax);
+        liveAccMin = 1; liveAccMax = -1; liveAccN = 0;
+      }
+    }
+    liveTotalFrames += chunk.length;
+  }
+
+  function onChunk(chunk) {
+    recChunks.push(chunk);
+    recFrames += chunk.length;
+    foldChunkIntoLive(chunk);
   }
 
   // Open (or replace) the input capture. deviceId '' means "default input":
@@ -96,7 +156,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     teardownCapture();
     stream = useStream;
     streamOwned = owned;
-    streamDeviceId = want || (stream.getAudioTracks()[0]?.getSettings().deviceId) || '';
+    const settings = stream.getAudioTracks()[0]?.getSettings() || {};
+    streamDeviceId = want || settings.deviceId || '';
+    // Input latency (seconds) when the browser exposes it — used only as a
+    // diagnostic estimate to seed the manual nudge, not auto-applied.
+    inputLatencySec = (typeof settings.latency === 'number' && settings.latency > 0) ? settings.latency : 0;
 
     srcNode = ctx.createMediaStreamSource(stream);
     // A worklet/ScriptProcessor only gets pulled if it has a live downstream;
@@ -113,9 +177,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
       });
       recNode.port.onmessage = (e) => {
+        const d = e.data;
+        // Control message: precise ctx time of the first armed quantum (frame 0).
+        if (d && d.t0 !== undefined) { if (firstChunkAbs == null) firstChunkAbs = d.t0; return; }
         if (!recording) return;
-        recChunks.push(e.data);
-        recFrames += e.data.length;
+        onChunk(d);
       };
       srcNode.connect(recNode);
       recNode.connect(sinkGain);
@@ -124,11 +190,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       recNode = ctx.createScriptProcessor(4096, 1, 1);
       recNode.onaudioprocess = (e) => {
         if (!recording) return;
+        if (firstChunkAbs == null) firstChunkAbs = e.playbackTime;
         const ch = e.inputBuffer.getChannelData(0);
         const copy = new Float32Array(ch.length);
         copy.set(ch);
-        recChunks.push(copy);
-        recFrames += copy.length;
+        onChunk(copy);
       };
       srcNode.connect(recNode);
       recNode.connect(sinkGain);
@@ -158,20 +224,24 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   // ── record ──
-  async function startRecording({ metacycle = 1, syncOn = false, deviceId = '' } = {}) {
-    if (recording) return;
+  async function startRecording({ metacycle = 1, syncOn = false, cps = 0.5, deviceId = '' } = {}) {
+    if (recording) return { snapped: false };
     await ensureContext();
     await ensureCapture(deviceId);
     recChunks = []; recFrames = 0;
-    captureStartAbs = ctx.currentTime;
+    firstChunkAbs = null;
+    armEstimateAbs = ctx.currentTime;
+    recN = metacycle > 0 ? metacycle : 1;
+    recCps = cps > 0 ? cps : 0.5;
+    resetLivePeaks();
     snapIn = null;
     if (syncOn) {
       const info = syncStrudel?.getStrudelCyclePos?.();
       if (info && info.cps > 0 && typeof info.pos === 'number') {
-        const N = metacycle > 0 ? metacycle : 1;
-        const cycleIn = Math.ceil(info.pos / N - EPS) * N;     // next multiple of N
-        const inAbs = captureStartAbs + (cycleIn - info.pos) / info.cps;
-        snapIn = { cycleIn, inAbs, cps: info.cps, N };
+        const cycleIn = Math.ceil(info.pos / recN - EPS) * recN;   // next metacycle downbeat
+        const inAbs = armEstimateAbs + (cycleIn - info.pos) / info.cps;  // absolute ctx time
+        snapIn = { cycleIn, inAbs, cps: info.cps };
+        recCps = info.cps;
       }
     }
     recording = true;
@@ -179,10 +249,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return { snapped: !!snapIn };
   }
 
-  // Resolves to { buffer, sampleRate, naturalSeconds, recordedCycles } or null
-  // if nothing usable was captured. When synced, waits for the OUT boundary's
-  // audio to actually arrive before building the buffer (captures the user's
-  // late Stop press up to the metacycle boundary).
+  // Resolves to a track { buffer, sampleRate, loopStartBase, regionFrames,
+  // naturalSeconds, recordedCycles } or null. The stored buffer is the loop
+  // region with PAD_SEC of headroom on each side so the nudge can slide it.
   function stopRecording({ metacycle = 1, syncOn = false } = {}) {
     return new Promise((resolve) => {
       if (!recording) { resolve(null); return; }
@@ -193,11 +262,12 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         const info = syncStrudel?.getStrudelCyclePos?.();
         if (info && info.cps > 0 && typeof info.pos === 'number') {
           const stopAbs = ctx.currentTime;
-          cycleOut = Math.ceil(info.pos / N - EPS) * N;        // next multiple of N at/after stop
-          if (cycleOut <= snapIn.cycleIn) cycleOut = snapIn.cycleIn + N;  // ≥ one metacycle
+          cycleOut = Math.round(info.pos / N) * N;                 // NEAREST metacycle boundary
+          if (cycleOut <= snapIn.cycleIn) cycleOut = snapIn.cycleIn + N;   // ≥ one metacycle
           outAbs = stopAbs + (cycleOut - info.pos) / info.cps;
         }
       }
+
       const finish = () => {
         recording = false;
         armRecorder(false);
@@ -208,23 +278,68 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         for (const c of recChunks) { all.set(c, off); off += c.length; }
         recChunks = [];
 
-        let inFrame = 0, outFrame = total, recordedCycles = null;
+        const z = frameZeroAbs();
+        const pad = Math.round(PAD_SEC * sr);
+        let inFrame, outFrame, recordedCycles;
         if (snapIn && cycleOut != null) {
-          inFrame  = Math.max(0, Math.round((snapIn.inAbs - captureStartAbs) * sr));
-          outFrame = Math.min(total, Math.round((outAbs - captureStartAbs) * sr));
+          inFrame  = Math.round((snapIn.inAbs - z) * sr);
+          outFrame = Math.round((outAbs - z) * sr);
           recordedCycles = cycleOut - snapIn.cycleIn;
+        } else {
+          inFrame = 0; outFrame = total; recordedCycles = null;
         }
-        snapIn = null;
-        if (outFrame - inFrame < 16) { resolve(null); return; }
-        const region = all.subarray(inFrame, outFrame);
+        inFrame = Math.max(0, Math.min(total, inFrame));
+        outFrame = Math.max(inFrame, Math.min(total, outFrame));
+        const regionFrames = outFrame - inFrame;
+        if (regionFrames < 16) { snapIn = null; resolve(null); return; }
+
+        // Slice with PAD on each side (clamped to what was captured).
+        const padStart = Math.min(pad, inFrame);
+        const padEnd   = Math.min(pad, total - outFrame);
+        const sliceFrom = inFrame - padStart;
+        const sliceTo   = outFrame + padEnd;
+        const region = all.subarray(sliceFrom, sliceTo);
         const buffer = ctx.createBuffer(1, region.length, sr);
         buffer.copyToChannel(region, 0);
-        resolve({ buffer, sampleRate: sr, naturalSeconds: region.length / sr, recordedCycles });
+        const loopStartBase = padStart;   // sample idx of the musical IN within `buffer`
+
+        // ── diagnostic: measure the recorded downbeat's offset from the IN ──
+        // First transient at/after the IN boundary, within ~0.5 cycle, vs the
+        // device/context latency estimate. Tells us how far to set the nudge.
+        try {
+          const win = Math.min(region.length - loopStartBase, Math.round((0.5 / (recCps || 0.5)) * sr));
+          let peak = 1e-6;
+          for (let i = loopStartBase; i < loopStartBase + regionFrames && i < region.length; i++) {
+            const a = Math.abs(region[i]); if (a > peak) peak = a;
+          }
+          let firstIdx = -1;
+          const thr = 0.3 * peak;
+          for (let i = loopStartBase; i < loopStartBase + win; i++) {
+            if (Math.abs(region[i]) > thr) { firstIdx = i; break; }
+          }
+          const measMs = firstIdx >= 0 ? ((firstIdx - loopStartBase) / sr) * 1000 : null;
+          const estMs = ((ctx.outputLatency || ctx.baseLatency || 0) + inputLatencySec) * 1000;
+          console.info(
+            `[looper] downbeat offset ≈ ${measMs == null ? 'n/a' : measMs.toFixed(0) + ' ms'} · ` +
+            `est out+in latency ≈ ${estMs.toFixed(0)} ms · ` +
+            `set nudge ≈ ${measMs == null ? Math.round(estMs) : Math.round(measMs)} ms`,
+          );
+        } catch {}
+
+        snapIn = null;
+        resolve({
+          buffer, sampleRate: sr,
+          loopStartBase, regionFrames,
+          naturalSeconds: regionFrames / sr,
+          recordedCycles,
+        });
       };
 
-      const waitMs = (outAbs - ctx.currentTime) * 1000;
+      // Wait for the OUT boundary + the post-pad audio to arrive (so the nudge
+      // has headroom). If OUT already elapsed (rounded down), finish now.
+      const waitMs = (outAbs + PAD_SEC - ctx.currentTime) * 1000;
       if (waitMs < 5) finish();
-      else setTimeout(finish, waitMs + 20);   // small cushion for the boundary audio
+      else setTimeout(finish, waitMs + 20);
     });
   }
 
@@ -249,6 +364,22 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return (rate > 0 && isFinite(rate)) ? rate : 1;
   }
 
+  // Effective loop-start sample within track.buffer after applying the nudge,
+  // clamped so the region stays inside the padded buffer.
+  function effLoopStartFrame(track) {
+    const sr = track.sampleRate;
+    const maxStart = Math.max(0, track.buffer.length - track.regionFrames);
+    const want = track.loopStartBase + Math.round((_offsetMs / 1000) * sr);
+    return Math.max(0, Math.min(maxStart, want));
+  }
+
+  // The current loop region [startFrame, endFrame] for the renderer.
+  function getLoopRegion(track) {
+    if (!track || !track.buffer) return null;
+    const startFrame = effLoopStartFrame(track);
+    return { startFrame, endFrame: startFrame + track.regionFrames };
+  }
+
   // Absolute rawContext time of the next metacycle boundary (≡ 0 mod N), or a
   // tiny lookahead when unsynced / Strudel isn't reporting a position.
   function nextBoundaryAbs(metacycle, syncOn) {
@@ -269,20 +400,22 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     await ensureContext();
     ensureBus();
     stopSource();
+    const sr = track.sampleRate;
     const rate = derivePlaybackRate(track, cps);
     const startAbs = nextBoundaryAbs(metacycle, syncOn);
+    const startFrame = effLoopStartFrame(track);
     source = ctx.createBufferSource();
     source.buffer = track.buffer;
     source.loop = true;
-    source.loopStart = 0;
-    source.loopEnd = track.buffer.duration;
+    source.loopStart = startFrame / sr;
+    source.loopEnd = (startFrame + track.regionFrames) / sr;
     source.playbackRate.value = rate;
     trackGain = ctx.createGain();
     trackGain.gain.value = _muted ? 0 : _gain;
     source.connect(trackGain).connect(masterGain);
-    source.start(startAbs, 0);
+    source.start(startAbs, startFrame / sr);
     playStartAbs = startAbs;
-    playLoopDur = track.buffer.duration / rate;   // == track.cycles / cps
+    playLoopDur = (track.regionFrames / sr) / rate;   // == track.cycles / cps
     audio?.adoptAnalyser?.(ctx, analyser, 'looper');
     return true;
   }
@@ -311,6 +444,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     _gain = Math.max(0, Math.min(1, Number(v) || 0));
     if (trackGain && !_muted) ramp(trackGain.gain, _gain);
   }
+  function setOffsetMs(v) { _offsetMs = Number(v) || 0; }
+  function getOffsetMs() { return _offsetMs; }
 
   // Loop phase 0..1 across the whole take, or null when not playing.
   function getPlayhead01() {
@@ -318,6 +453,26 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     const t = ctx.currentTime;
     if (t < playStartAbs) return 0;
     return ((t - playStartAbs) % playLoopDur) / playLoopDur;
+  }
+
+  // Live view for the renderer while recording: min/max peak bins (from frame
+  // 0), the bin index of the musical IN, the head position in cycles, and the
+  // lane geometry (metacycle, cps).
+  function getLiveView() {
+    if (!recording) return { recording: false };
+    const sr = ctx?.sampleRate || 48000;
+    const inFrame = snapIn ? Math.max(0, Math.round((snapIn.inAbs - frameZeroAbs()) * sr)) : 0;
+    const headCycle = snapIn
+      ? Math.max(0, (ctx.currentTime - snapIn.inAbs) * snapIn.cps)
+      : (liveTotalFrames / sr) * recCps;
+    return {
+      recording: true,
+      min: liveMin, max: liveMax, bins: liveBins,
+      binSamples: liveBinSamples, sampleRate: sr,
+      inBin: Math.floor(inFrame / Math.max(1, liveBinSamples)),
+      metacycle: recN, cps: recCps,
+      headCycle,
+    };
   }
 
   function dispose() {
@@ -337,7 +492,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     startRecording, stopRecording,
     play, stop,
     setMuted, setGain,
+    setOffsetMs, getOffsetMs,
+    getLoopRegion,
     getPlayhead01,
+    getLiveView,
     isRecording: () => recording,
     isPlaying:   () => !!source,
     dispose,

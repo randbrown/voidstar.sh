@@ -11,9 +11,10 @@ class LooperRecorderProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.armed = false;
+    this.sendStart = false;
     this.port.onmessage = (e) => {
       const cmd = e.data && e.data.cmd;
-      if (cmd === 'start') this.armed = true;
+      if (cmd === 'start') { this.armed = true; this.sendStart = true; }
       else if (cmd === 'stop') this.armed = false;
     };
   }
@@ -22,6 +23,12 @@ class LooperRecorderProcessor extends AudioWorkletProcessor {
     const input = inputs[0];
     const ch0 = input && input[0];
     if (this.armed && ch0 && ch0.length) {
+      if (this.sendStart) {
+        // Stamp the precise ctx time of the first armed quantum (frame 0) so the
+        // main thread can anchor the recording without arm-latency jitter.
+        this.sendStart = false;
+        this.port.postMessage({ t0: currentTime });
+      }
       // The host reuses the input buffer across quanta, so copy before
       // transferring ownership to the main thread.
       const copy = new Float32Array(ch0.length);

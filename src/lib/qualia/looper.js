@@ -22,6 +22,7 @@ const PANEL_OPEN_KEY = `${NS}.panelOpen`;
 const GAIN_KEY       = `${NS}.gain`;
 const SYNC_KEY       = `${NS}.sync`;
 const METACYCLE_KEY  = `${NS}.metacycle`;
+const OFFSET_KEY     = `${NS}.offsetMs`;
 
 function lsGet(k, fallback) { try { const v = localStorage.getItem(k); return v == null ? fallback : v; } catch { return fallback; } }
 function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch {} }
@@ -49,8 +50,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     syncStrudel: lsGet(SYNC_KEY, '1') !== '0',
     metacycle: Math.max(1, Math.min(16, parseInt(lsGet(METACYCLE_KEY, '1'), 10) || 1)),
     cps: 0.5,                       // used when sync is off / Strudel idle
+    offsetMs: (() => { const v = parseInt(lsGet(OFFSET_KEY, '0'), 10); return Number.isFinite(v) ? Math.max(-200, Math.min(500, v)) : 0; })(),
     deviceId: '',                   // '' = default input; set by the picker
-    track: null,                    // { buffer, sampleRate, naturalSeconds, recordedCycles, cycles }
+    track: null,                    // { buffer, sampleRate, loopStartBase, regionFrames, naturalSeconds, recordedCycles, cycles }
   };
   let _gain = (() => { const v = parseFloat(lsGet(GAIN_KEY, '0.9')); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.9; })();
   let _muted = false;
@@ -60,12 +62,24 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   const looperAudio = createLooperAudio({ audio, syncStrudel });
   looperAudio.setGain(_gain);
+  looperAudio.setOffsetMs(model.offsetMs);
 
   const renderer = createLooperRenderer({
     canvas,
-    getTrack: () => model.track,
-    getPlayhead: () => (playing ? looperAudio.getPlayhead01() : null),
-    getLayout: () => ({ metacycle: model.metacycle, cycles: model.track?.cycles || model.metacycle }),
+    getView: () => {
+      const t = model.track;
+      if (!t || !t.buffer) return null;
+      const region = looperAudio.getLoopRegion(t) || { startFrame: 0, endFrame: t.buffer.length };
+      return {
+        buffer: t.buffer,
+        startFrame: region.startFrame,
+        endFrame: region.endFrame,
+        metacycle: model.metacycle,
+        cycles: t.cycles || model.metacycle,
+        playhead01: playing ? looperAudio.getPlayhead01() : null,
+      };
+    },
+    getRecordView: () => looperAudio.getLiveView(),
   });
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -86,7 +100,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (playing) stop();
     setStatus('arming…');
     try {
-      const res = await looperAudio.startRecording({ metacycle: model.metacycle, syncOn: syncOn(), deviceId: model.deviceId });
+      const res = await looperAudio.startRecording({ metacycle: model.metacycle, syncOn: syncOn(), cps: currentCps(), deviceId: model.deviceId });
       recording = true;
       refreshTransport();
       refreshLooperBtn();
@@ -121,6 +135,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     model.track = {
       buffer: res.buffer,
       sampleRate: res.sampleRate,
+      loopStartBase: res.loopStartBase,
+      regionFrames: res.regionFrames,
       naturalSeconds: res.naturalSeconds,
       recordedCycles: cyc,
       cycles: cyc,
@@ -187,6 +203,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
     _gain = Math.max(0, Math.min(1, Number(v) || 0));
     looperAudio.setGain(_gain);
     lsSet(GAIN_KEY, _gain);
+  }
+  // Nudge (ms): slides the loop window live to compensate record latency.
+  // + = take plays earlier (pulls a late take into the pocket).
+  function setOffsetMs(v) {
+    model.offsetMs = Math.max(-200, Math.min(500, Math.round(Number(v) || 0)));
+    looperAudio.setOffsetMs(model.offsetMs);
+    lsSet(OFFSET_KEY, model.offsetMs);
+    renderer.invalidate();        // region shifted → recompute peaks
+    if (playing) play();          // re-lock at the next boundary with the new window
   }
 
   function fmtCyc(v) { return v === 0.5 ? '0.5' : String(v); }
@@ -322,6 +347,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
     syncStatusEl = document.createElement('span'); syncStatusEl.className = 'seq-sync-status';
     syncWrap.append(syncCb, syncLabel, syncStatusEl);
 
+    // nudge (ms) — slides the loop window live to compensate record latency.
+    const nudgeIn = document.createElement('input');
+    nudgeIn.type = 'number'; nudgeIn.step = '5'; nudgeIn.min = '-200'; nudgeIn.max = '500';
+    nudgeIn.value = String(model.offsetMs); nudgeIn.className = 'seq-num';
+    nudgeIn.addEventListener('change', () => {
+      setOffsetMs(nudgeIn.value);
+      nudgeIn.value = String(model.offsetMs);
+    });
+
     // preserve pitch — deferred seam (time-stretch not yet implemented).
     const ppCb = document.createElement('input');
     ppCb.type = 'checkbox'; ppCb.disabled = true;
@@ -333,9 +367,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
     propsEl.append(
       mk('cps', stepperFor(cpsIn, 'input'), 'Cycles per second when sync is off (Strudel\'s clock drives it when synced).'),
-      mk('metacycle', stepperFor(metaIn, 'change'), 'Strudel cycles per metacycle — the record-snap grid and the width of each waveform lane.'),
-      mk('cycles', stepperFor(cyclesIn, 'change', cyclesBump), 'How many Strudel cycles the recorded loop occupies.'),
+      mk('metacycle', stepperFor(metaIn, 'change'), 'Strudel cycles per metacycle — set this to your bar / phrase length. It is the record-snap grid (IN→next downbeat, OUT→nearest boundary) and the width of each waveform lane.'),
+      mk('cycles', stepperFor(cyclesIn, 'change', cyclesBump), 'How many Strudel cycles the recorded loop occupies (a multiple of the metacycle).'),
       sLen.wrap,
+      mk('nudge ms', stepperFor(nudgeIn, 'change'), 'Slide the loop into the pocket. + pulls a late take earlier to compensate record latency. After recording, the console logs a suggested value.'),
       syncWrap,
       ppWrap,
     );
