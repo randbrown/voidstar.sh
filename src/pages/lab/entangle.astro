@@ -6,6 +6,8 @@
 // and ships small control messages. Pose tracking, when enabled, runs the
 // MediaPipe pipeline LOCALLY on the participant's phone, so the performer's
 // laptop is never burdened. Reached by scanning the QR shown in the lab.
+import { Image } from 'astro:assets';
+import logo from '../../assets/art/logos_alpha/voidstar_logo_cosmos_atom_0.png';
 ---
 <!doctype html>
 <html lang="en">
@@ -32,9 +34,18 @@
     header h1 { font-size: 1.5rem; letter-spacing: .12em; font-weight: 600;
       background: linear-gradient(90deg, var(--cyan), var(--accent), var(--pink));
       -webkit-background-clip: text; background-clip: text; color: transparent; }
-    header .glyph { font-size: 2.4rem; display: block; margin-bottom: .3rem;
-      filter: drop-shadow(0 0 .6rem var(--accent)); }
     header p { color: var(--muted); font-size: .82rem; margin-top: .35rem; }
+    /* Brand line doubles as an unobtrusive "open the full lab" link (new tab). */
+    .brand { display: inline-flex; align-items: center; gap: .55rem; text-decoration: none;
+      color: var(--muted); margin-bottom: .9rem; padding: .25rem .6rem; border-radius: .55rem;
+      border: 1px solid transparent; transition: .15s; }
+    .brand:hover, .brand:focus-visible { color: var(--text); border-color: var(--border);
+      background: rgba(12,10,28,.55); outline: none; }
+    .brand-logo { width: 2.4rem; height: 2.4rem; display: block;
+      filter: drop-shadow(0 0 .5rem var(--accent)); }
+    .brand-tag { font-size: .9rem; letter-spacing: .02em; }
+    .brand-tag b { color: var(--text); font-weight: 600; }
+    .brand-ext { font-size: .8rem; opacity: .65; }
     [data-status] { text-align: center; padding: .6rem .8rem; border-radius: .5rem;
       background: rgba(12,10,28,.7); border: 1px solid var(--border); font-size: .85rem; margin-bottom: 1rem; }
     [data-status][data-kind="ok"]  { border-color: var(--cyan);  color: var(--cyan); }
@@ -67,7 +78,12 @@
 <body>
   <main id="entangle-root">
     <header>
-      <span class="glyph">⊛</span>
+      <a class="brand" href="/lab/qualia" target="_blank" rel="noopener"
+         title="Open the full qualia lab in a new tab">
+        <Image src={logo} alt="voidstar" width={96} height={96} class="brand-logo" />
+        <span class="brand-tag"><b>qualia</b> // what it's like</span>
+        <span class="brand-ext" aria-hidden="true">↗</span>
+      </a>
       <h1>ENTANGLEMENT</h1>
       <p>You're now part of the field. Spooky action across the room.</p>
     </header>

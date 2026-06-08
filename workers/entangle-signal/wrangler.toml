@@ -1,0 +1,27 @@
+# Entanglement signaling Worker — Durable Object star relay for the qualia lab.
+#
+# Local dev:   npx wrangler dev -c workers/entangle-signal/wrangler.toml
+#              → ws://localhost:8787  (the CF transport auto-targets this on localhost)
+# Deploy:      npx wrangler deploy -c workers/entangle-signal/wrangler.toml
+#              → wss://voidstar-entangle-signal.<your-subdomain>.workers.dev
+#
+# For a clean prod URL, add a custom domain/route (e.g. entangle.voidstar.sh) in
+# the Cloudflare dashboard or below, and point SIGNAL_URL in
+# src/lib/qualia/entangle-transport-cf.js at it.
+
+name = "voidstar-entangle-signal"
+main = "index.js"
+compatibility_date = "2025-05-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "ENTANGLE_ROOM"
+class_name = "EntangleRoom"
+
+# SQLite-backed DO class → eligible for the Workers free tier.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["EntangleRoom"]
+
+# To serve from a custom domain instead of *.workers.dev, uncomment and set:
+# routes = [{ pattern = "entangle.voidstar.sh", custom_domain = true }]

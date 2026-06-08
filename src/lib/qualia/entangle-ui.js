@@ -27,7 +27,10 @@ const CSS = `
 #entangle-modal h2{margin:0;font-size:1rem;letter-spacing:.04em;color:var(--text,#e9e6ff);font-weight:600;
   display:flex;align-items:center;gap:.5rem}
 #entangle-modal .ent-sub{color:#9b96c4;font-size:.78rem;margin:.15rem 0 .9rem}
-#entangle-modal .ent-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem}
+#entangle-modal .ent-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;cursor:move;user-select:none;touch-action:none}
+#entangle-modal.ent-dragging{user-select:none}
+#entangle-modal.ent-dragging .ent-head{cursor:grabbing}
+#entangle-modal .ent-head .ent-close{cursor:pointer}
 #entangle-modal button{font:inherit;cursor:pointer;border-radius:.4rem;padding:.4rem .7rem;
   background:#15132a;color:var(--text,#e9e6ff);border:1px solid #2c2750;transition:.12s}
 #entangle-modal button:hover{border-color:var(--accent,#8b5cf6)}
@@ -104,6 +107,36 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
   backdrop.addEventListener('click', hide);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) hide(); });
 
+  // ── Draggable panel — grab the header to reposition (sticky for the session). ─
+  // Opens centred via CSS transform; on first drag we convert to explicit px so
+  // pointer deltas are absolute, then clamp to keep a graspable strip on-screen.
+  // Pointer capture keeps the drag alive past the panel edges. Survives modal
+  // re-renders (those touch innerHTML, not the modal's own inline style) and
+  // re-opens wherever it was left.
+  let drag = null;
+  modal.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest('.ent-head') || e.target.closest('button')) return;  // header only, never the ×
+    const rect = modal.getBoundingClientRect();
+    drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+    modal.style.left = rect.left + 'px';
+    modal.style.top = rect.top + 'px';
+    modal.style.transform = 'none';
+    modal.classList.add('ent-dragging');
+    try { modal.setPointerCapture(e.pointerId); } catch {}
+    e.preventDefault();
+  });
+  modal.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const w = modal.offsetWidth;
+    const left = Math.max(80 - w, Math.min(e.clientX - drag.dx, window.innerWidth - 80));
+    const top  = Math.max(0,      Math.min(e.clientY - drag.dy, window.innerHeight - 40));
+    modal.style.left = left + 'px';
+    modal.style.top  = top + 'px';
+  });
+  const endDrag = (e) => { if (!drag) return; drag = null; modal.classList.remove('ent-dragging'); try { modal.releasePointerCapture(e.pointerId); } catch {} };
+  modal.addEventListener('pointerup', endDrag);
+  modal.addEventListener('pointercancel', endDrag);
+
   function setLive(live) {
     launch.dataset.live = live ? '1' : '0';
     hud.dataset.live = live ? '1' : '0';
@@ -118,6 +151,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     const specs = entangle.getSpecs().filter(s => ['range', 'toggle', 'select'].includes(s.type));
     const url = entangle.getJoinUrl();
     const tally = entangle.tally();
+    const autoVote = entangle.getAutoVote();
 
     modal.innerHTML = `
       <div class="ent-head">
@@ -169,7 +203,10 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
           ${tally.length ? tally.map(t => `<div class="ent-t"><span>${t.name}</span><b>${t.count}</b></div>`).join('')
             : '<span class="ent-empty">no votes yet</span>'}
         </div>
-        <div class="ent-row"><button data-act="applyvote" ${tally.length ? '' : 'disabled'}>switch to top vote</button></div>
+        <div class="ent-row between">
+          <span class="ent-chip ${autoVote ? 'on' : ''}" data-act="autovote" title="Let the crowd's top vote switch the visual automatically (≤ every 5s)">⟳ auto-switch (5s)</span>
+          <button data-act="applyvote" ${tally.length ? '' : 'disabled'}>switch now</button>
+        </div>
       </div>` : ''}
     `;
 
@@ -199,6 +236,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
         if (url) { try { await navigator.clipboard.writeText(url); el.textContent = 'copied!'; setTimeout(() => (el.textContent = 'copy link'), 1200); } catch {} }
         break;
       }
+      case 'autovote': { entangle.setAutoVote(!entangle.getAutoVote()); render(); break; }
       case 'applyvote': { const id = entangle.applyWinningVote(); if (id) setTimeout(render, 50); break; }
     }
   });
@@ -209,6 +247,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     const nEl = modal.querySelector('[data-n]'); if (nEl) nEl.textContent = String(n);
   });
   entangle.onTallyChange(() => { if (open) render(); });
+  entangle.onAutoVote(() => { if (open) render(); });   // reflect the new active scene in the tally promptly
   entangle.onPhaseCharge((have, need, fired) => {
     const el = modal.querySelector('[data-phase]');
     if (!el) return;

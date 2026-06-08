@@ -11,7 +11,9 @@
 // Everything is best-effort and defensive: a dropped host, a denied camera, or
 // a malformed manifest must never hard-crash the page.
 
-import { createTransport } from './entangle-transport.js';
+// Owned signaling via the Cloudflare Durable Object star relay (drop-in for the
+// Nostr/WebRTC ./entangle-transport.js — same interface).
+import { createTransport } from './entangle-transport-cf.js';
 import { T, APP_ID, readRoomFromHash } from './entangle-protocol.js';
 import { poseFeatures, packFeatures } from './pose-features.js';
 
@@ -29,7 +31,7 @@ export async function initEntangleClient(root) {
   setStatus('Entangling…');
   let transport;
   try {
-    transport = await createTransport({ appId: APP_ID, room: roomId });
+    transport = await createTransport({ appId: APP_ID, room: roomId, role: 'participant' });
   } catch (err) {
     console.error('[entangle] transport failed', err);
     setStatus('Could not connect. Check your network and reload.', 'err');
@@ -44,9 +46,21 @@ export async function initEntangleClient(root) {
   const paramInputs = new Map();
   let phaseProgEl = null;
 
+  // Connection feedback. Trystero's joinRoom resolves immediately — that is NOT
+  // a connection. Stay in a "looking" state until the performer's peer actually
+  // appears (onPeer), and fail loudly if it never does, so a relay outage shows
+  // an actionable message instead of hanging forever on "waiting".
+  let peerSeen = false;
+  const connectTimer = setTimeout(() => {
+    if (!peerSeen) setStatus("Couldn't reach the performer — make sure the field is still open, then reload this page.", 'err');
+  }, 20000);
+
   // Announce ourselves; re-announce whenever a (new) host appears.
   const hello = () => transport.send(T.HELLO, { name: '' });
-  transport.onPeer(() => hello());
+  transport.onPeer(() => {
+    if (!peerSeen) { peerSeen = true; clearTimeout(connectTimer); setStatus('Entangled ⊛ — waiting for the performer.', 'ok'); }
+    hello();
+  });
   hello();
 
   transport.on(T.MANIFEST, (m) => { if (m && typeof m === 'object') { manifest = m; renderControls(); } });
@@ -221,10 +235,11 @@ export async function initEntangleClient(root) {
   function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
 
   function teardown() {
+    clearTimeout(connectTimer);
     stopPose(controlsEl?.querySelector('.ent-preview'));
     try { transport.close(); } catch {}
   }
 
-  setStatus('Entangled — waiting for the performer.', 'ok');
+  setStatus('Looking for the performer…');
   renderControls();
 }

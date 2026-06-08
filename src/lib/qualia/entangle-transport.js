@@ -21,6 +21,35 @@
 
 const TRYSTERO_URL = 'https://esm.sh/trystero@0.21/nostr';
 
+// Signaling relays — pinned, NOT Trystero's defaults.
+//
+// Trystero picks its default relays by *deterministically* shuffling its
+// built-in list seeded on the appId hash, then taking the first few. For our
+// appId that subset rotted onto dead/hostile relays (every join failed at the
+// WebSocket layer — host stuck on "0 entangled", phones on "waiting for the
+// performer"), and because the pick is deterministic it failed 100% of the
+// time, not intermittently. Pinning a vetted list removes that fragility: both
+// ends use the SAME relays, Trystero connects to ALL of them, and a single
+// reachable relay is enough to exchange WebRTC offers. Each was verified with a
+// signed ephemeral-event round-trip — the exact handshake Trystero performs.
+// If joins start failing again, re-probe and refresh this list.
+//
+// relay.damus.io is deliberately OMITTED: it rate-limits aggressively per-IP
+// ("noting too much") — which a crowd sharing one venue's wifi (a single NAT IP)
+// would trip, and which bit us even in two-tab local testing. The relays below
+// are laxer. The real cure for rate-limits / relay-rot is owned signaling: a
+// Cloudflare Durable Object WebSocket hub can replace this module behind the
+// same seam (no caller changes).
+const RELAY_URLS = [
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://nostr-pub.wellorder.net',
+  'wss://nostr.oxtr.dev',
+  'wss://nostr.mom',
+  'wss://relay.snort.social',
+  'wss://nostr.bitcoiner.social',
+];
+
 /**
  * @param {object} opts
  * @param {string} opts.appId   transport namespace (keep stable across builds)
@@ -29,7 +58,7 @@ const TRYSTERO_URL = 'https://esm.sh/trystero@0.21/nostr';
  */
 export async function createTransport({ appId, room }) {
   const { joinRoom, selfId } = await import(/* @vite-ignore */ TRYSTERO_URL);
-  const r = joinRoom({ appId }, room);
+  const r = joinRoom({ appId, relayUrls: RELAY_URLS }, room);
 
   // Trystero actions are created once and return a [send, receive] pair; both
   // ends of a namespace must exist for messages to flow. Cache per topic and

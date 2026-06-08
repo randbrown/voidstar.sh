@@ -14,7 +14,9 @@
 //    per-frame, or async work on the hot path. Every handler is wrapped so a
 //    malformed message can't throw into the engine.
 
-import { createTransport } from './entangle-transport.js';
+// Owned signaling via the Cloudflare Durable Object star relay. The Nostr/WebRTC
+// transport (./entangle-transport.js) remains as a drop-in fallback — same shape.
+import { createTransport } from './entangle-transport-cf.js';
 import { T, MODES, APP_ID, makeRoomId, buildJoinUrl, clampToSpec, manifestParam } from './entangle-protocol.js';
 import { unpackFeatures } from './pose-features.js';
 
@@ -30,6 +32,7 @@ const MAX_PEERS    = 40;
 const VALUE_SYNC_MS = 200;  // cadence of live base-value broadcasts to phones
 const PHASE_WINDOW_MS = 4000; // distinct pushers must land within this window
 const PHASE_COOLDOWN_MS = 4000; // min gap between crowd-triggered shifts
+const VOTE_APPLY_MS = 5000;   // auto-switch governor: min gap between vote-driven scene changes
 
 /**
  * @param {object} opts
@@ -54,9 +57,14 @@ export function createEntangle({ core, mesh, actions = {} }) {
   let valueSyncTimer = 0;
   // Crowd phase-shift: per-peer last nudge time, plus charge/cooldown state.
   let lastPhaseFireMs = 0;
+  // Visual vote auto-switch: the crowd's plurality drives the active fx,
+  // governed so the scene can't flip faster than VOTE_APPLY_MS. Host-toggleable.
+  let autoVote = true;
+  let lastVoteApplyMs = 0;
+  let voteApplyTimer = 0;
 
   // UI callbacks (set by entangle-ui). All optional.
-  const cb = { peers: null, tally: null, scene: null, phase: null };
+  const cb = { peers: null, tally: null, scene: null, phase: null, autovote: null };
   const fire = (name, ...a) => { try { cb[name]?.(...a); } catch (e) { console.error('[entangle] cb', name, e); } };
 
   function activeFx() { return core.activeId(); }
@@ -265,8 +273,29 @@ export function createEntangle({ core, mesh, actions = {} }) {
   function applyWinningVote() {
     const t = tally();
     if (!t.length) return null;
+    lastVoteApplyMs = performance.now();   // share the governor with auto-switch
     core.setActive(t[0].fxId).catch(err => console.error('[entangle] setActive', err));
     return t[0].fxId;
+  }
+  /** Auto-switch governor (polled). Drives the active fx from the crowd's
+   *  plurality, but no more often than VOTE_APPLY_MS, and only when a challenger
+   *  STRICTLY beats the current scene — a tie leaves it be, so it won't
+   *  flip-flop. Polled (not vote-triggered) so a winner that emerged during the
+   *  cooldown still applies the moment the cooldown clears. */
+  function autoApplyVote() {
+    if (!autoVote || !modes.vote || !transport) return;
+    const now = performance.now();
+    if (now - lastVoteApplyMs < VOTE_APPLY_MS) return;
+    const t = tally();
+    if (!t.length) return;
+    const top = t[0];
+    const cur = activeFx();
+    if (top.fxId === cur) return;                          // already on the leader
+    const curVotes = t.find(x => x.fxId === cur)?.count || 0;
+    if (top.count <= curVotes) return;                     // must beat the active scene
+    lastVoteApplyMs = now;
+    core.setActive(top.fxId).catch(err => console.error('[entangle] auto-vote', err));
+    fire('autovote', top.fxId, top.name);
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -283,7 +312,7 @@ export function createEntangle({ core, mesh, actions = {} }) {
         }
       }
     }
-    transport = await createTransport({ appId: APP_ID, room: roomId });
+    transport = await createTransport({ appId: APP_ID, room: roomId, role: 'host' });
     transport.on(T.HELLO, (d, id) => { try { onHello(d, id); } catch (e) { console.error(e); } });
     transport.on(T.POSE,  (d, id) => { try { onPose(d, id);  } catch (e) { console.error(e); } });
     transport.on(T.PARAM, (d, id) => { try { onParam(d, id); } catch (e) { console.error(e); } });
@@ -293,12 +322,14 @@ export function createEntangle({ core, mesh, actions = {} }) {
     transport.onPeer((id) => { broadcastManifest(); });   // (re)send scene on connect
     transport.onLeave((id) => dropPeer(id));
     valueSyncTimer = setInterval(() => { try { pushValueSync(); } catch {} }, VALUE_SYNC_MS);
+    voteApplyTimer = setInterval(() => { try { autoApplyVote(); } catch {} }, 1000);
     opened = true;
     return { roomId, joinUrl: buildJoinUrl(roomId) };
   }
 
   function close() {
     if (valueSyncTimer) { clearInterval(valueSyncTimer); valueSyncTimer = 0; }
+    if (voteApplyTimer) { clearInterval(voteApplyTimer); voteApplyTimer = 0; }
     if (transport) { try { transport.send(T.KICK, { id: '*' }); } catch {} transport.close(); transport = null; }
     peers.clear();
     swayEma = 0;
@@ -324,6 +355,8 @@ export function createEntangle({ core, mesh, actions = {} }) {
     // votes
     tally,
     applyWinningVote,
+    getAutoVote: () => autoVote,
+    setAutoVote(on) { autoVote = !!on; if (autoVote) lastVoteApplyMs = 0; },  // re-enable → allow an immediate apply
     // phase
     phaseAvailable,
     phaseCharge,
@@ -332,5 +365,6 @@ export function createEntangle({ core, mesh, actions = {} }) {
     onPeersChange(fn) { cb.peers = fn; },
     onTallyChange(fn) { cb.tally = fn; },
     onPhaseCharge(fn) { cb.phase = fn; },
+    onAutoVote(fn) { cb.autovote = fn; },
   };
 }
