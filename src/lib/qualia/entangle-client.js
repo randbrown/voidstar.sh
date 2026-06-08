@@ -15,7 +15,7 @@
 // Nostr/WebRTC ./entangle-transport.js — same interface).
 import { createTransport } from './entangle-transport-cf.js';
 import { T, APP_ID, readRoomFromHash } from './entangle-protocol.js';
-import { poseFeatures, packFeatures } from './pose-features.js';
+import { poseFeatures, packFeatures, packSkeleton } from './pose-features.js';
 
 const POSE_INTERVAL_MS = 66;     // ~15Hz upstream
 const PARAM_DEBOUNCE_MS = 40;
@@ -38,7 +38,7 @@ export async function initEntangleClient(root) {
     return;
   }
 
-  let manifest = { activeFx: null, fxList: [], modes: { pose: false, param: false, vote: false, phase: false }, params: [] };
+  let manifest = { activeFx: null, fxList: [], modes: { pose: false, param: false, vote: false, phase: false }, crowdReacts: false, params: [] };
   let myVote = null;
   // Live-synced controls, keyed by param id → { input, type, lastEdit }. Lets
   // host / auto-phase value updates (T.VALUES) move the sliders without
@@ -115,6 +115,11 @@ export async function initEntangleClient(root) {
         lastSent = now;
         const person = pose.frame.people?.[0] || null;
         try { transport.send(T.POSE, packFeatures(poseFeatures(person))); } catch {}
+        // Skeleton overlay: ship raw joints too, but ONLY when the host has the
+        // overlay on (keeps the default upstream tiny). Same camera, same loop.
+        if (manifest.modes?.skeleton && person) {
+          try { transport.send(T.SKELETON, packSkeleton(person)); } catch {}
+        }
       };
       poseRAF = requestAnimationFrame(loop);
     } catch (err) {
@@ -142,6 +147,9 @@ export async function initEntangleClient(root) {
   function renderControls() {
     if (!controlsEl) return;
     const m = manifest;
+    // Host disabled pose entirely → release the camera. (A mere quale switch
+    // keeps pose on; we preserve the running camera through the re-render below.)
+    if (!m.modes.pose && poseOn) stopPose();
     const hasAny = m.modes.pose || (m.modes.param && m.params.length)
       || (m.modes.vote && m.fxList.length) || m.modes.phase;
     controlsEl.innerHTML = '';
@@ -152,12 +160,23 @@ export async function initEntangleClient(root) {
       const sect = section('Your body → the field');
       const previewBox = el('div', 'ent-preview');
       const btn = el('button', 'ent-bigbtn');
-      btn.textContent = 'tap to entangle your pose';
+      const reflect = () => { btn.textContent = poseOn ? 'stop' : 'tap to entangle your pose'; btn.classList.toggle('on', poseOn); };
       btn.addEventListener('click', () => {
-        if (poseOn) { stopPose(previewBox); btn.textContent = 'tap to entangle your pose'; btn.classList.remove('on'); }
-        else { startPose(previewBox); btn.textContent = 'stop'; btn.classList.add('on'); }
+        if (poseOn) stopPose(previewBox); else startPose(previewBox);
+        reflect();
       });
-      sect.append(btn, previewBox);
+      // Persist across re-renders: a quale switch re-sends the manifest, which
+      // rebuilds these controls. If the camera is already running, keep it on
+      // and re-home the live preview into the fresh box instead of resetting.
+      if (poseOn && video) { previewBox.appendChild(video); try { video.play?.().catch(() => {}); } catch {} }
+      reflect();
+      // Tell the participant whether their movement actually does anything on
+      // THIS quale — drives the field, shows as a skeleton, or neither.
+      const note = el('div', 'ent-posenote');
+      if (m.crowdReacts)        { note.textContent = '✓ this visual moves with you'; note.dataset.kind = 'ok'; }
+      else if (m.modes.skeleton){ note.textContent = '✦ your pose is drawn on the big screen'; note.dataset.kind = 'ok'; }
+      else                      { note.textContent = 'this visual doesn’t react to movement right now'; note.dataset.kind = 'muted'; }
+      sect.append(btn, note, previewBox);
       controlsEl.appendChild(sect);
     }
 

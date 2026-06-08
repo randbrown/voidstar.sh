@@ -15,7 +15,8 @@ export const PARTICIPANT_PATH = '/lab/entangle'; // participant page route
 export const T = {
   HELLO:    'hello',     // participant → host: I joined { name?, caps }
   MANIFEST: 'manifest',  // host → all: current scene + what's open
-  POSE:     'pose',      // participant → host: packed feature array
+  POSE:     'pose',      // participant → host: packed feature array (aggregate)
+  SKELETON: 'skeleton',  // participant → host: packed 9-joint array (overlay only)
   PARAM:    'param',     // participant → host: { id, value }
   VOTE:     'vote',      // participant → host: { fxId }
   PHASE:    'phase',     // participant → host: a phase-shift nudge (no body)
@@ -25,7 +26,9 @@ export const T = {
   KICK:     'kick',      // host → all: { id } — that peer should disconnect
 };
 
-export const MODES = ['pose', 'param', 'vote', 'phase'];
+// 'skeleton' draws each participant's body as an overlay; it rides the same
+// phone camera as 'pose', so enabling it implies pose (host UI forces it on).
+export const MODES = ['pose', 'param', 'vote', 'phase', 'skeleton'];
 
 // ── Room ids ───────────────────────────────────────────────────────────────
 // Unguessable, URL-safe, short enough to keep the QR dense. Crockford-ish

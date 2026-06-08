@@ -10,6 +10,7 @@
 // no markup changes; colors come from the existing voidstar CSS tokens.
 
 import { createEntangle } from './entangle.js';
+import { SKELETON_BONES } from './pose-features.js';
 
 const STYLE_ID = 'entangle-style';
 const CSS = `
@@ -18,7 +19,10 @@ const CSS = `
 #entangle-dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--cyan,#22d3ee);box-shadow:0 0 .4rem var(--cyan,#22d3ee);display:none}
 #entangle-launch[data-live="1"] #entangle-dot{display:inline-block;animation:ent-pulse 1.6s ease-in-out infinite}
 @keyframes ent-pulse{0%,100%{opacity:.35}50%{opacity:1}}
-#entangle-backdrop{position:fixed;inset:0;background:rgba(2,2,8,.62);backdrop-filter:blur(3px);z-index:40;display:none}
+/* Modeless: no dim, no blur, no click-catch — so the performer keeps watching
+   the field (and using the rest of the UI) with the panel open. Close via ×,
+   Esc, or the topbar toggle. */
+#entangle-backdrop{position:fixed;inset:0;background:transparent;z-index:40;display:none;pointer-events:none}
 #entangle-modal{position:fixed;z-index:41;top:50%;left:50%;transform:translate(-50%,-50%);
   width:min(30rem,calc(100vw - 2rem));max-height:calc(100dvh - 2rem);overflow:auto;
   background:linear-gradient(180deg,#0b0b18,#070710);border:1px solid var(--accent,#8b5cf6);
@@ -53,6 +57,13 @@ const CSS = `
 .ent-tally .ent-t{display:flex;justify-content:space-between;gap:.5rem;padding:.2rem .4rem;background:#100d20;border-radius:.3rem}
 .ent-tally .ent-t b{color:var(--amber,#fbbf24)}
 .ent-empty{color:#6f6a93;font-size:.8rem;font-style:italic}
+.ent-crowdsig{font:12px/1.55 ui-monospace,monospace;margin:.15rem 0}
+.ent-crowdsig .ent-csline{color:var(--cyan,#22d3ee);margin-bottom:.25rem}
+.ent-crowdsig .ent-csrow{display:flex;align-items:center;gap:.5rem;color:#9b96c4}
+.ent-crowdsig .ent-cslabel{width:3.6rem}
+.ent-crowdsig .ent-csbar{color:var(--cyan,#22d3ee);letter-spacing:.04em}
+.ent-crowdhint{margin-top:.4rem}
+#entangle-skeletons{position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:12;display:none}
 #entangle-hud{position:fixed;left:max(.6rem,env(safe-area-inset-left));bottom:max(.6rem,env(safe-area-inset-bottom));
   z-index:16;display:none;align-items:center;gap:.45rem;padding:.3rem .6rem;border-radius:.5rem;
   background:rgba(8,7,18,.7);border:1px solid var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);
@@ -62,6 +73,18 @@ const CSS = `
 
 export function initEntangleUI({ core, mesh, actions = {} }) {
   const entangle = createEntangle({ core, mesh, actions });
+
+  // Which qualia actually map crowd.* — used in the "switch to…" hint when the
+  // crowd is moving but the active visual ignores it. Static, so compute once.
+  let crowdReactiveLabels = '';
+  try {
+    crowdReactiveLabels = mesh.list()
+      .filter(m => (mesh.get(m.id)?.params || [])
+        .some(s => (s.modulators || []).some(md => typeof md?.source === 'string' && md.source.startsWith('crowd.'))))
+      .map(m => m.name || m.id)
+      .join(' · ');
+  } catch {}
+  if (!crowdReactiveLabels) crowdReactiveLabels = 'code · galaxy · anomaly · gargantua-void · dark-space · neural-field';
 
   // ── Hot-path glue: fold the crowd snapshot into field.crowd each tick. ────
   // Runs at the react cadence (≤60Hz), before computeChannels. reduceInto is
@@ -94,6 +117,104 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
   document.body.appendChild(hud);
   const hudN = hud.querySelector('.ent-hud-n');
 
+  // ── Crowd-skeletons overlay ───────────────────────────────────────────────
+  // A full-screen canvas drawing each participant's body (glowing, grid-laid)
+  // over whatever quale is active, while the host has skeleton mode on. Own rAF
+  // loop reading engine.getSkeletons(); per-id alpha fades people in/out. Mirror
+  // x so a raised right hand reads on the right (selfie-natural). Cheap and
+  // inert when off (display:none, no draw).
+  const skelCanvas = document.createElement('canvas');
+  skelCanvas.id = 'entangle-skeletons';
+  document.body.appendChild(skelCanvas);
+  const sctx = skelCanvas.getContext('2d');
+  let skelW = 0, skelH = 0, skelDpr = 1;
+  function sizeSkel() {
+    skelDpr = Math.min(2, window.devicePixelRatio || 1);
+    skelW = window.innerWidth; skelH = window.innerHeight;
+    skelCanvas.width = Math.round(skelW * skelDpr);
+    skelCanvas.height = Math.round(skelH * skelDpr);
+  }
+  sizeSkel();
+  window.addEventListener('resize', sizeSkel);
+
+  const skelLayer = new Map();   // id → { alpha, order, hue, joints }
+  let skelOrder = 0;
+  const idHue = (id) => { let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0; return 175 + (h % 130); }; // cyan→violet→pink
+
+  function drawSkeletons() {
+    requestAnimationFrame(drawSkeletons);
+    const show = entangle.isOpen() && entangle.getModes().skeleton;
+    if (!show) {
+      if (skelCanvas.style.display !== 'none') {
+        skelCanvas.style.display = 'none';
+        sctx.setTransform(1, 0, 0, 1, 0, 0);
+        sctx.clearRect(0, 0, skelCanvas.width, skelCanvas.height);
+      }
+      if (skelLayer.size) skelLayer.clear();
+      return;
+    }
+    if (skelCanvas.style.display !== 'block') skelCanvas.style.display = 'block';
+
+    const list = entangle.getSkeletons();
+    const present = new Set();
+    for (const s of list) {
+      present.add(s.id);
+      let L = skelLayer.get(s.id);
+      if (!L) { L = { alpha: 0, order: skelOrder++, hue: idHue(s.id) }; skelLayer.set(s.id, L); }
+      L.joints = s.joints;
+      L.alpha += (1 - L.alpha) * 0.12;
+    }
+    for (const [id, L] of skelLayer) {
+      if (!present.has(id)) { L.alpha += (0 - L.alpha) * 0.12; if (L.alpha < 0.01) skelLayer.delete(id); }
+    }
+
+    sctx.setTransform(skelDpr, 0, 0, skelDpr, 0, 0);
+    sctx.clearRect(0, 0, skelW, skelH);
+    const cells = [...skelLayer.values()].sort((a, b) => a.order - b.order);
+    const n = cells.length;
+    if (!n) return;
+    const cols = Math.ceil(Math.sqrt(n));
+    const rows = Math.ceil(n / cols);
+    const cw = skelW / cols, ch = skelH / rows;
+    for (let i = 0; i < n; i++) {
+      const L = cells[i];
+      if (!L.joints) continue;
+      drawOne(L.joints, (i % cols) * cw, ((i / cols) | 0) * ch, cw, ch, L.hue, L.alpha);
+    }
+  }
+
+  function drawOne(joints, cx, cy, cw, ch, hue, alpha) {
+    let minX = 1, minY = 1, maxX = 0, maxY = 0, any = false;
+    for (const j of joints) { if (!j) continue; any = true; if (j.x < minX) minX = j.x; if (j.x > maxX) maxX = j.x; if (j.y < minY) minY = j.y; if (j.y > maxY) maxY = j.y; }
+    if (!any) return;
+    const bw = Math.max(1e-3, maxX - minX), bh = Math.max(1e-3, maxY - minY);
+    const pad = Math.min(cw, ch) * 0.16;
+    const s = Math.min((cw - pad * 2) / bw, (ch - pad * 2) / bh);
+    const drawW = bw * s, drawH = bh * s;
+    const ox = cx + (cw - drawW) / 2, oy = cy + (ch - drawH) / 2;
+    const P = (j) => j ? { x: ox + (1 - (j.x - minX) / bw) * drawW, y: oy + ((j.y - minY) / bh) * drawH } : null;
+
+    const col = `hsla(${hue},85%,66%,${alpha})`;
+    sctx.lineCap = 'round'; sctx.lineJoin = 'round';
+    sctx.strokeStyle = col; sctx.fillStyle = col;
+    sctx.shadowColor = `hsla(${hue},90%,60%,${alpha})`;
+    sctx.shadowBlur = Math.max(6, Math.min(cw, ch) * 0.03);
+    sctx.lineWidth = Math.max(2, Math.min(cw, ch) * 0.014);
+
+    const head = P(joints[0]), shL = P(joints[1]), shR = P(joints[2]);
+    if (head && shL && shR) line(head, { x: (shL.x + shR.x) / 2, y: (shL.y + shR.y) / 2 });
+    for (const [a, b] of SKELETON_BONES) { const pa = P(joints[a]), pb = P(joints[b]); if (pa && pb) line(pa, pb); }
+
+    const r = Math.max(2, Math.min(cw, ch) * 0.012);
+    for (const j of joints) { const p = P(j); if (p) dot(p, r); }
+    if (head) dot(head, r * 2.4);
+    sctx.shadowBlur = 0;
+  }
+  function line(a, b) { sctx.beginPath(); sctx.moveTo(a.x, a.y); sctx.lineTo(b.x, b.y); sctx.stroke(); }
+  function dot(p, r) { sctx.beginPath(); sctx.arc(p.x, p.y, r, 0, Math.PI * 2); sctx.fill(); }
+
+  requestAnimationFrame(drawSkeletons);
+
   // ── Modal ─────────────────────────────────────────────────────────────────
   const backdrop = document.createElement('div'); backdrop.id = 'entangle-backdrop';
   const modal = document.createElement('div');
@@ -104,7 +225,8 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
   function show() { open = true; backdrop.style.display = modal.style.display = 'block'; render(); }
   function hide() { open = false; backdrop.style.display = modal.style.display = 'none'; }
   launch.addEventListener('click', () => (open ? hide() : show()));
-  backdrop.addEventListener('click', hide);
+  // Modeless panel: no click-outside-to-close (the backdrop no longer catches
+  // clicks). Close via ×, Esc, or the topbar toggle.
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) hide(); });
 
   // ── Draggable panel — grab the header to reposition (sticky for the session). ─
@@ -171,6 +293,11 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
             <button class="ent-danger" data-act="closeroom">collapse</button>
           </span>
         </div>
+        <div class="ent-sect">
+          <h3>Crowd signal</h3>
+          <div class="ent-crowdsig" data-crowdsig></div>
+          <div class="ent-sub ent-crowdhint" data-crowdhint></div>
+        </div>
       ` : `
         <div class="ent-row"><button class="ent-primary" data-act="openroom">⊛ open the field</button></div>
         <div class="ent-sub">Generates a private room + QR. Audience scans to join. Nothing runs on your machine for them — phones do their own pose tracking.</div>
@@ -182,6 +309,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
           <span class="ent-chip ${modes.pose ? 'on' : ''}" data-mode="pose">pose → field</span>
           <span class="ent-chip ${modes.param ? 'on' : ''}" data-mode="param">param control</span>
           <span class="ent-chip ${modes.vote ? 'on' : ''}" data-mode="vote">visual vote</span>
+          <span class="ent-chip ${modes.skeleton ? 'on' : ''}" data-mode="skeleton" title="Draw each participant's body as a glowing overlay on top of the visual">⛓ crowd skeletons</span>
           ${entangle.phaseAvailable ? `<span class="ent-chip ${modes.phase ? 'on' : ''}" data-mode="phase">crowd phase-shift</span>` : ''}
         </div>
         ${modes.phase && entangle.phaseAvailable ? `<div class="ent-sub" data-phase>shift charge: 0 / 0 — the crowd taps together to advance the phase</div>` : ''}
@@ -214,6 +342,42 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
       const canvas = modal.querySelector('#entangle-qr');
       import('./qr.js').then(m => m.renderQR(canvas, url, 300)).catch(err => console.warn('[entangle] qr', err));
     }
+    if (live) updateCrowdSig();
+  }
+
+  // ── Live crowd-signal meter — confirms phone motion is actually landing. ───
+  // Updated on a light interval (the engine snapshots it each reduceInto); shows
+  // confidence-gated posers (not just sockets) plus energy / hands / spread, and
+  // a hint that pinpoints why nothing's moving (mode off, nobody posing, or the
+  // active quale simply doesn't map crowd.*).
+  const sigBar = (v, n = 8) => { const f = Math.max(0, Math.min(n, Math.round((v || 0) * n))); return '█'.repeat(f) + '░'.repeat(n - f); };
+  function updateCrowdSig() {
+    if (!open || !entangle.isOpen()) return;
+    const el = modal.querySelector('[data-crowdsig]');
+    if (!el) return;
+    const s = entangle.getCrowdSignal();
+    const connected = entangle.peerCount();
+    el.innerHTML =
+      `<div class="ent-csline">${s.posing} posing · ${connected} entangled</div>` +
+      `<div class="ent-csrow"><span class="ent-cslabel">energy</span><span class="ent-csbar">${sigBar(s.energy)}</span></div>` +
+      `<div class="ent-csrow"><span class="ent-cslabel">hands</span><span class="ent-csbar">${sigBar(s.rise)}</span></div>` +
+      `<div class="ent-csrow"><span class="ent-cslabel">spread</span><span class="ent-csbar">${sigBar(Math.abs(s.spread))}</span></div>`;
+    const hint = modal.querySelector('[data-crowdhint]');
+    if (!hint) return;
+    const m = entangle.getModes();
+    let msg, warn = false;
+    if (!m.pose)              { msg = '“pose → field” is off — enable it above to feel the crowd.'; warn = true; }
+    else if (connected === 0) { msg = 'no one has joined yet — share the QR.'; }
+    else if (s.posing === 0)  { msg = 'connected, but nobody has tapped “entangle your pose” yet.'; }
+    else {
+      const reacts = entangle.activeReactsToCrowd();
+      if (reacts && m.skeleton) msg = '✓ field reacting + skeletons drawing.';
+      else if (reacts)          msg = '✓ the field is reacting to the crowd.';
+      else if (m.skeleton)      msg = '✓ skeletons drawing (this quale doesn’t map crowd motion to the field).';
+      else { msg = `this quale ignores the crowd — switch to: ${crowdReactiveLabels} (or turn on ⛓ skeletons).`; warn = true; }
+    }
+    hint.textContent = msg;
+    hint.style.color = warn ? 'var(--amber,#fbbf24)' : '';
   }
 
   // ── Modal interactions (event-delegated) ──────────────────────────────────
@@ -257,6 +421,9 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     el.style.color = fired ? 'var(--cyan,#22d3ee)' : '';
     if (fired) setTimeout(() => { const e2 = modal.querySelector('[data-phase]'); if (e2) e2.style.color = ''; }, 1500);
   });
+
+  // Drive the live crowd-signal meter while the panel is open.
+  setInterval(updateCrowdSig, 250);
 
   // Detect scene (active fx) changes → refresh manifest + whitelist UI.
   let lastFx = core.activeId();

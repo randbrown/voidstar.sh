@@ -103,3 +103,42 @@ export function unpackFeatures(arr) {
   for (let i = 0; i < FEATURE_ORDER.length; i++) o[FEATURE_ORDER[i]] = arr?.[i] ?? 0;
   return o;
 }
+
+// ── Skeleton (overlay-only) ──────────────────────────────────────────────────
+// A compact upper-body skeleton for the host's crowd-overlay render. Unlike the
+// 8 aggregate features above, this is the raw joint geometry — sent ONLY while a
+// host has the skeleton overlay on (manifest gates it), so the default path
+// stays tiny. 9 joints × (x, y) in normalized [0,1] camera space; a joint below
+// the visibility floor (or absent) is encoded as (-1, -1) = "don't draw".
+export const SKELETON_JOINTS = ['head', 'shL', 'shR', 'elL', 'elR', 'wrL', 'wrR', 'hipL', 'hipR'];
+// Bone connections (index pairs into SKELETON_JOINTS) the renderer draws.
+export const SKELETON_BONES = [
+  [1, 2],          // shoulders
+  [1, 3], [3, 5],  // left arm  (shoulder→elbow→wrist)
+  [2, 4], [4, 6],  // right arm
+  [1, 7], [2, 8],  // torso sides (shoulder→hip)
+  [7, 8],          // hips
+];
+const SKEL_VIS = 0.30;
+function jointXY(j) {
+  if (!j || (j.visibility != null && j.visibility < SKEL_VIS)) return [-1, -1];
+  return [+(j.x).toFixed(3), +(j.y).toFixed(3)];
+}
+/** Pack a Person → flat [hx,hy, shLx,shLy, …] of 18 numbers. */
+export function packSkeleton(p) {
+  const head = jointXY(p?.head);
+  const shL = jointXY(p?.shoulders?.l), shR = jointXY(p?.shoulders?.r);
+  const elL = jointXY(p?.elbows?.l),    elR = jointXY(p?.elbows?.r);
+  const wrL = jointXY(p?.wrists?.l),    wrR = jointXY(p?.wrists?.r);
+  const hipL = jointXY(p?.hips?.l),     hipR = jointXY(p?.hips?.r);
+  return [...head, ...shL, ...shR, ...elL, ...elR, ...wrL, ...wrR, ...hipL, ...hipR];
+}
+/** Unpack → array of {x,y}|null in SKELETON_JOINTS order (null = don't draw). */
+export function unpackSkeleton(arr) {
+  const out = [];
+  for (let i = 0; i < SKELETON_JOINTS.length; i++) {
+    const x = arr?.[i * 2], y = arr?.[i * 2 + 1];
+    out.push((x == null || x < 0 || y < 0) ? null : { x, y });
+  }
+  return out;
+}

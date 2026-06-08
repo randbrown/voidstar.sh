@@ -18,9 +18,10 @@
 // transport (./entangle-transport.js) remains as a drop-in fallback — same shape.
 import { createTransport } from './entangle-transport-cf.js';
 import { T, MODES, APP_ID, makeRoomId, buildJoinUrl, clampToSpec, manifestParam } from './entangle-protocol.js';
-import { unpackFeatures } from './pose-features.js';
+import { unpackFeatures, unpackSkeleton } from './pose-features.js';
 
 const STALE_MS    = 9000;   // prune a peer we haven't heard from in this long
+const SKEL_STALE_MS = 1200; // drop a peer's overlay skeleton if its feed pauses
 const PARAM_MIN_MS = 40;    // per-peer param throttle (~25/s)
 const VOTE_MIN_MS  = 200;   // per-peer vote throttle
 const PHASE_MIN_MS = 600;   // per-peer phase-nudge throttle
@@ -62,6 +63,10 @@ export function createEntangle({ core, mesh, actions = {} }) {
   let autoVote = true;
   let lastVoteApplyMs = 0;
   let voteApplyTimer = 0;
+  // Last reduced crowd signal — for the host's live diagnostic readout, so the
+  // performer can SEE that phones' motion is actually landing (vs. just "N
+  // entangled", which is only socket count). Set fresh each reduceInto.
+  let lastSignal = { posing: 0, energy: 0, rise: 0, spread: 0, sway: 0, count: 0, confidence: 0 };
 
   // UI callbacks (set by entangle-ui). All optional.
   const cb = { peers: null, tally: null, scene: null, phase: null, autovote: null };
@@ -71,6 +76,15 @@ export function createEntangle({ core, mesh, actions = {} }) {
   function activeSpecs() {
     const mod = mesh.get(activeFx());
     return mod?.params || [];
+  }
+  /** Does the active quale map ANY crowd.* channel? Only 6 of the qualia do;
+   *  drives the host hint when the crowd is moving but the visual ignores it. */
+  function activeReactsToCrowd() {
+    for (const spec of activeSpecs()) {
+      const mods = spec.modulators;
+      if (mods) for (const m of mods) if (typeof m?.source === 'string' && m.source.startsWith('crowd.')) return true;
+    }
+    return false;
   }
 
   // ── Manifest ────────────────────────────────────────────────────────────
@@ -91,6 +105,9 @@ export function createEntangle({ core, mesh, actions = {} }) {
       fxList: modes.vote ? mesh.list().map(m => ({ id: m.id, name: m.name || m.id })) : [],
       // Only advertise `phase` when the host actually supplied a phaseNext.
       modes: { ...modes, phase: modes.phase && phaseAvailable },
+      // Does the active quale map crowd.* → field? Lets the phone tell the
+      // participant whether their movement actually drives the visual.
+      crowdReacts: activeReactsToCrowd(),
       params,
     };
   }
@@ -122,7 +139,7 @@ export function createEntangle({ core, mesh, actions = {} }) {
     let p = peers.get(peerId);
     if (!p) {
       if (peers.size >= MAX_PEERS) return null;
-      p = { id: peerId, name: '', feat: null, motion: 0, vote: null, lastSeen: 0, tParam: 0, tVote: 0, tPhase: 0, phaseAt: 0 };
+      p = { id: peerId, name: '', feat: null, motion: 0, vote: null, lastSeen: 0, tParam: 0, tVote: 0, tPhase: 0, phaseAt: 0, skel: null, skelAt: 0 };
       peers.set(peerId, p);
       fire('peers', peers.size);
     }
@@ -151,6 +168,14 @@ export function createEntangle({ core, mesh, actions = {} }) {
       p.motionInst = (p.motionInst || 0) + m;   // accumulate; drained in reduceInto
     }
     p.feat = f;
+  }
+
+  function onSkeleton(arr, peerId) {
+    if (!modes.skeleton) return;            // overlay off → ignore (shouldn't arrive)
+    const p = touch(peerId);
+    if (!p || !Array.isArray(arr)) return;
+    p.skel = unpackSkeleton(arr);
+    p.skelAt = performance.now();
   }
 
   function onParam(data, peerId) {
@@ -256,6 +281,28 @@ export function createEntangle({ core, mesh, actions = {} }) {
     const kSway = dt > 0 ? 1 - Math.exp(-dt / SWAY_TAU) : 1;
     swayEma += (out.x - swayEma) * kSway;
     out.sway = swayEma;
+
+    // Snapshot for the host diagnostic. `posing` = confidence-gated contributors
+    // (NOT just connected peers), so the readout reflects who is actually moving.
+    lastSignal.posing = n;
+    lastSignal.energy = out.energy;
+    lastSignal.rise = out.rise;
+    lastSignal.spread = out.spread;
+    lastSignal.sway = out.sway;
+    lastSignal.count = out.count;
+    lastSignal.confidence = out.confidence;
+  }
+
+  /** Snapshot of every peer's current skeleton, for the host overlay renderer.
+   *  Stale feeds (a phone that paused) drop out so the overlay can fade them. */
+  function getSkeletons() {
+    const now = performance.now();
+    const out = [];
+    for (const p of peers.values()) {
+      if (!p.skel || now - p.skelAt > SKEL_STALE_MS) continue;
+      out.push({ id: p.id, joints: p.skel });
+    }
+    return out;
   }
 
   // ── Vote tally ────────────────────────────────────────────────────────────
@@ -315,6 +362,7 @@ export function createEntangle({ core, mesh, actions = {} }) {
     transport = await createTransport({ appId: APP_ID, room: roomId, role: 'host' });
     transport.on(T.HELLO, (d, id) => { try { onHello(d, id); } catch (e) { console.error(e); } });
     transport.on(T.POSE,  (d, id) => { try { onPose(d, id);  } catch (e) { console.error(e); } });
+    transport.on(T.SKELETON, (d, id) => { try { onSkeleton(d, id); } catch (e) { console.error(e); } });
     transport.on(T.PARAM, (d, id) => { try { onParam(d, id); } catch (e) { console.error(e); } });
     transport.on(T.VOTE,  (d, id) => { try { onVote(d, id);  } catch (e) { console.error(e); } });
     transport.on(T.PHASE, (d, id) => { try { onPhase(d, id); } catch (e) { console.error(e); } });
@@ -348,7 +396,16 @@ export function createEntangle({ core, mesh, actions = {} }) {
     broadcastManifest,
     // moderation
     getModes: () => ({ ...modes }),
-    setMode(mode, on) { if (MODES.includes(mode)) { modes[mode] = !!on; broadcastManifest(); } },
+    setMode(mode, on) {
+      if (!MODES.includes(mode)) return;
+      modes[mode] = !!on;
+      // The skeleton overlay rides the phone camera that 'pose' turns on, so
+      // keep them coherent: enabling skeleton forces pose on; turning pose off
+      // also drops skeleton (no camera ⇒ no joints).
+      if (mode === 'skeleton' && modes.skeleton) modes.pose = true;
+      if (mode === 'pose' && !modes.pose) modes.skeleton = false;
+      broadcastManifest();
+    },
     getWhitelist: () => [...whitelist],
     toggleWhitelist(id) { whitelist.has(id) ? whitelist.delete(id) : whitelist.add(id); broadcastManifest(); },
     getSpecs: activeSpecs,
@@ -362,6 +419,9 @@ export function createEntangle({ core, mesh, actions = {} }) {
     phaseCharge,
     // counts + event hooks
     peerCount: () => peers.size,
+    getCrowdSignal: () => ({ ...lastSignal }),
+    getSkeletons,
+    activeReactsToCrowd,
     onPeersChange(fn) { cb.peers = fn; },
     onTallyChange(fn) { cb.tally = fn; },
     onPhaseCharge(fn) { cb.phase = fn; },
