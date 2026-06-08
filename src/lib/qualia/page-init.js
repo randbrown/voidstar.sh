@@ -120,13 +120,15 @@ const HARD_KICK_COOLDOWN_MS  = 10000;    // ~10s between fires
 export function initQualiaPage() {
   // ── Registry ──────────────────────────────────────────────────────────────
   const mesh = createMesh();
+  // Registration order drives the fx-select dropdown order AND the new-user
+  // default (mesh.ids()[0] — see initialFx in boot). Spectrum leads on both.
+  mesh.register(spectrum);
   mesh.register(chladni);
   mesh.register(singularityLens);
   mesh.register(gargantuaVoid);
   mesh.register(voidstarLogo);
   mesh.register(neuralField);
   mesh.register(fractal);
-  mesh.register(spectrum);
   mesh.register(vintageAnalog);
   mesh.register(synthwave);
   mesh.register(telemetry);

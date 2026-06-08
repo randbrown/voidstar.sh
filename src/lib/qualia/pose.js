@@ -90,10 +90,11 @@ export function createPose() {
   let lastDetectMs = 0;
   // Detection throttle. detectForVideo() is a sync call that blocks the
   // main thread waiting for inference; running it every rAF (60fps) is
-  // overkill for whole-body landmarks. Default 33ms ≈ 30fps detection,
-  // which roughly halves the duty cycle. Smoothing in pose.js adapts to
-  // the slower update rate without visible jitter.
-  let detectIntervalMs = 33;
+  // overkill for whole-body landmarks. Default 67ms ≈ 15fps detection —
+  // higher rates tend to read as jittery (raw landmark noise updates faster
+  // than smoothing can settle it), so 15fps is the calmer default. Smoothing
+  // adapts to the slower update rate; the UI slider can raise it if wanted.
+  let detectIntervalMs = 67;
   let lastDetectTickMs = 0;
 
   let detectLoopStarted = false;

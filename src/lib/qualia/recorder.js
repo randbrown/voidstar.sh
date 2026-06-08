@@ -444,12 +444,18 @@ export function createRecorder(opts = {}) {
               console.log(`[recorder] mp4 duration fix done · output ${blob.size} bytes`);
               // Embed a SMPTE timecode track + stamp wall-clock creation
               // time, so the file lands at the right spot on a Reaper /
-              // Resolve / Premiere timeline. Capture fps drives the
-              // timecode rate: composite viewport is captureStream(30),
-              // tab capture requests 60. Best-effort — addTimecodeTrack
-              // returns the input untouched on any unexpected structure.
-              if (wallStart) {
-                const fps = wasBackend === 'tab' ? 60 : 30;
+              // Resolve / Premiere timeline.
+              //
+              // SKIPPED for tab captures. The timecode pass restructures the
+              // MP4 (grows `moov`, appends an `mdat`, shifts the whole
+              // fragment run); strict players reject the result — macOS
+              // QuickTime refuses to open it. The tab path is the only macOS
+              // route that reaches this pass (viewport mode saves straight to
+              // disk via the file picker, untouched), which is exactly why
+              // "tab mode" files were unopenable. The in-place duration fix
+              // above is a safe field patch and stays.
+              if (wallStart && wasBackend !== 'tab') {
+                const fps = 30;   // composite viewport capture rate
                 blob = await addTimecodeTrack(blob, { durationMs: durMs, fps, startDate: wallStart });
               }
             } else if (wasMime?.startsWith('video/webm')) {

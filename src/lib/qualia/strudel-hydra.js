@@ -523,11 +523,14 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     notifyTitleIfChanged(parseMetadata(code).title || '');
   }
   function loadCode(code) {
-    if (typeof code !== 'string' || !code) return;
+    // Allow '' through (a blank/new pattern is a legitimate buffer); only
+    // reject non-strings. instantiateEditor persists whatever we mount.
+    if (typeof code !== 'string') return;
     // If the user was mid-playback when they swapped patterns, immediately
     // re-evaluate the new code on the freshly-mounted editor — keeps the
     // jam continuous instead of forcing a manual ▶ after every change.
-    const wasPlaying = isPlayingFlag;
+    // (Nothing to re-eval for an empty buffer.)
+    const wasPlaying = isPlayingFlag && !!code.trim();
     // Stop the old editor's scheduler before we destroy its DOM. Without
     // this, Strudel's runtime keeps firing events on the orphaned editor
     // and you get double-playback layered with the new pattern.
@@ -1288,14 +1291,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     if (p) loadCode(p.code);
   }
   function newBlankPattern() {
-    loadCode([
-      '// @title untitled',
-      '// @by you',
-      '// @license CC0',
-      '',
-      'setcps(1)',
-      'silence',
-    ].join('\n'));
+    // Literally empty, like the stock Strudel REPL's new pattern — no
+    // @title/@by/@license header, no setcps/silence seed.
+    loadCode('');
   }
   function newRandomPattern() {
     loadCode(randomPattern());
