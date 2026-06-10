@@ -23,6 +23,7 @@ import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
+import { createChron } from './chron.js';
 import { createRecorder } from './recorder.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import {
@@ -190,6 +191,9 @@ export function initQualiaPage() {
   const camZoomInput = camZoomRow?.querySelector('input[type=range]');
   const camZoomVal   = camZoomRow?.querySelector('.qp-val');
   const camZoomNoneRow = document.getElementById('cam-zoom-unsupported');
+  const chronHudEl   = document.getElementById('chron-hud');
+  const chronPulseEl = document.getElementById('chron-pulse');
+  const chronCard    = document.getElementById('chron-card');
 
   // ── Core wiring ───────────────────────────────────────────────────────────
   const audio = createAudio();
@@ -286,6 +290,21 @@ export function initQualiaPage() {
     overlay.render(field);
   });
 
+  // ── Chron — session stopwatch (τ) ─────────────────────────────────────────
+  // HUD readout in the topbar (auto-hidden in zen with the rest of the bar),
+  // soft minute pulses at the screen edge while in zen, warn/horizon nudges
+  // in any mode. Driven from core.onFps below — that cadence (~5Hz) keeps
+  // firing while paused, so the wall-clock readout never freezes mid-set.
+  const chron = createChron({
+    hudEl:   chronHudEl,
+    pulseEl: chronPulseEl,
+    isZen:   () => core.isZen(),
+    // Live cps for the 'cycles' format. `strudel` is wired further down;
+    // ticks only start after boot() (core.start()), long after it exists.
+    getCps:  () => { try { return strudel.getStrudelCps() || 0; } catch { return 0; } },
+  });
+  core.onFps(() => chron.tick());
+
   // ── Settings (top-level) ──────────────────────────────────────────────────
   // Whatever the page-state surface is, it gets serialized here so that a
   // page reload restores the user's exact session. Per-fx params are
@@ -333,6 +352,8 @@ export function initQualiaPage() {
     captureMode,
     splitMode,
     splitRatio,
+    chron:          chron.getConfig(),
+    chronCollapsed: chronCard?.classList.contains('collapsed') ?? true,
   }));
   const stored = settings.load();
   camSizeIdx = stored.camSizeIdx ?? 0;
@@ -347,6 +368,11 @@ export function initQualiaPage() {
   // getDisplayMedia({preferCurrentTab: true}) to capture the whole tab
   // including strudel REPL + sequencer panels + any open HUD cards.
   let captureMode = (stored.captureMode === 'tab') ? 'tab' : 'viewport';
+
+  // ── Chron config restore ─────────────────────────────────────────────────
+  // setConfig deep-merges over CHRON_DEFAULTS, so partial/legacy shapes are
+  // tolerated and new keys pick up their defaults.
+  if (stored.chron) chron.setConfig(stored.chron);
 
   // ── Restore overlay toggles from settings ────────────────────────────────
   if (typeof stored.showOverlay === 'boolean') overlay.setOption('skeleton', stored.showOverlay);
@@ -1786,6 +1812,80 @@ export function initQualiaPage() {
     edgeCard.classList.toggle('collapsed', stored.edgeCollapsed);
   }
   syncPostBtns();
+
+  // ── Chron card wiring ────────────────────────────────────────────────────
+  // Every control writes through chron.setConfig (which deep-merges + clamps)
+  // and persists via the settings store. The chron instance itself is created
+  // up top, next to the overlay, so the settings serializer can read it.
+  if (chronCard && typeof stored.chronCollapsed === 'boolean') {
+    chronCard.classList.toggle('collapsed', stored.chronCollapsed);
+  }
+  function chronPatch(patch) { chron.setConfig(patch); settings.save(); }
+  function wireChronToggle(btnId, isOn, patchFor) {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    const paint = () => {
+      const on = isOn(chron.getConfig());
+      btn.classList.toggle('active', on);
+      btn.textContent = on ? 'on' : 'off';
+    };
+    paint();
+    btn.addEventListener('click', () => {
+      chronPatch(patchFor(!isOn(chron.getConfig())));
+      paint();
+    });
+  }
+  wireChronToggle('chron-enabled',   c => c.enabled,          on => ({ enabled: on }));
+  wireChronToggle('chron-hud-toggle', c => c.hud,             on => ({ hud: on }));
+  wireChronToggle('chron-redshift',  c => c.horizon.redshift, on => ({ horizon: { redshift: on } }));
+  function wireChronSelect(selId, get, patchFor) {
+    const sel = document.getElementById(selId);
+    if (!sel) return;
+    sel.value = get(chron.getConfig());
+    sel.addEventListener('change', () => chronPatch(patchFor(sel.value)));
+  }
+  wireChronSelect('chron-format',       c => c.format,          v => ({ format: v }));
+  wireChronSelect('chron-pulse-format', c => c.zen.pulseFormat, v => ({ zen: { pulseFormat: v } }));
+  wireChronSelect('chron-position',     c => c.zen.position,    v => ({ zen: { position: v } }));
+  function wireChronRange(qpId, get, patchFor, fmt) {
+    const row = document.querySelector(`[data-qp="${qpId}"]`);
+    if (!row) return;
+    const input = row.querySelector('input[type=range]');
+    const val   = row.querySelector('.qp-val');
+    const initial = get(chron.getConfig());
+    input.value = String(initial);
+    val.textContent = fmt(initial);
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      chronPatch(patchFor(v));
+      val.textContent = fmt(v);
+    });
+  }
+  wireChronRange('chron-pulse-every',  c => c.zen.pulseEvery,    v => ({ zen: { pulseEvery: v } }),
+                 v => v > 0 ? `${Math.round(v)}m` : 'off');
+  wireChronRange('chron-pulse-length', c => c.zen.pulseDuration, v => ({ zen: { pulseDuration: v } }),
+                 v => `${v}s`);
+  wireChronRange('chron-horizon',      c => c.horizon.at,        v => ({ horizon: { at: v } }),
+                 v => v > 0 ? `${Math.round(v)}m` : 'off');
+  wireChronRange('chron-warn-at',      c => c.horizon.warnAt,    v => ({ horizon: { warnAt: v } }),
+                 v => `${Math.round(v * 100)}%`);
+  document.getElementById('btn-chron-reset')?.addEventListener('click', (ev) => {
+    // Header button — stop the click reaching the qp-head collapse toggle.
+    ev.stopPropagation();
+    chron.reset();
+  });
+  // Tapping the τ readout opens the chron card — same accordion semantics
+  // the tab bar enforces on touch/narrow viewports.
+  chronHudEl?.addEventListener('click', () => {
+    if (!chronCard) return;
+    chronCard.classList.remove('collapsed');
+    if (ACCORDION_MQ.matches) {
+      document.querySelectorAll('#panel-stack > .qp-card').forEach(c => {
+        if (c.id !== 'chron-card') c.classList.add('collapsed');
+      });
+    }
+    settings.save();
+  });
 
   // ── Pause / Zen ───────────────────────────────────────────────────────────
   // Pause also silences the audio sources so the spacebar gesture matches the
