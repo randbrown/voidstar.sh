@@ -55,10 +55,25 @@ export const VOX_PRESETS = {
       },
     },
   },
-  // Maximum word clarity — bright carrier, 40 bands, heavy consonant noise,
-  // audible dry highs, a strong presence lift.
+  // Plain voice — NO vocoder, NO harmonizer: just the raw mic routed straight
+  // to the master clarity EQ + compressor + limiter. The quick "people can't
+  // understand me, drop to plain speech" mode. Loading it switches the vocoder
+  // off and opens the raw-voice passthrough; switch the vocoder back on (or
+  // load another preset) to return to the robot.
   clean: {
-    label: 'Clean / max clarity',
+    label: 'Clean · raw voice',
+    config: {
+      vocoderEnabled: false,
+      rawVoice: 0.9, dry: 0.0, sibilance: 0.0,
+      presence: 2, compress: 0.35, deess: 0.30,
+      harmonizer: { enabled: false },
+    },
+  },
+  // Maximum word clarity — bright carrier, 40 bands, heavy consonant noise,
+  // audible dry highs, a strong presence lift. Still the robot vocoder, just
+  // tuned for intelligibility (distinct from the no-vocoder "clean" above).
+  clarity: {
+    label: 'Max clarity (vocoder)',
     config: {
       carrierType: 'sawtooth', pitch: 130, bands: 40, voices: 5,
       consonant: 0.80, sibilance: 0.55, dry: 0.14,

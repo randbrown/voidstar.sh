@@ -2454,6 +2454,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       </div>
       <div class="vox-sec-body">
         <div class="voc-props">
+          <label class="seq-prop voc-range" title="Raw voice — a direct, unprocessed mic passthrough that is independent of the vocoder. Raise it (and switch the vocoder off) for plain speech that still gets the master leveling, then drop it to return to the robot. The 'Clean · raw voice' preset sets this up.">
+            <span class="seq-prop-label">raw vox</span>
+            <input type="range" id="voc-raw" min="0" max="1" step="0.01" />
+            <span class="qp-val" id="voc-raw-val"></span>
+          </label>
           <label class="seq-prop voc-range" title="Presence EQ — a lift around 3 kHz where word recognition lives. A little goes a long way for clarity.">
             <span class="seq-prop-label">presence</span>
             <input type="range" id="voc-presence" min="0" max="12" step="0.5" />

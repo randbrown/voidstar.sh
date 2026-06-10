@@ -55,7 +55,8 @@ const DEFAULT_CONFIG = {
   pitch:       110,     // Hz — fundamental for tonal carriers
   bands:       24,      // BPF count across the formant range
   sibilance:   0.40,    // HF voice passthrough mix (0..1)
-  dry:         0.0,     // dry voice passthrough mix (0..1)
+  dry:         0.0,     // dry voice passthrough mix (0..1) — inside the vocoder bus
+  rawVoice:    0.0,     // raw mic → master, INDEPENDENT of the vocoder on/off (0..1)
   output:      0.9,     // master output gain (0..2)
   gate:        0.04,    // carrier noise gate — mutes the carrier below this voice level
   voices:      3,       // detuned unison oscillators per carrier partial (1 = off)
@@ -244,6 +245,8 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   const elSibVal  = document.getElementById('voc-sibilance-val');
   const elDry     = document.getElementById('voc-dry');
   const elDryVal  = document.getElementById('voc-dry-val');
+  const elRaw     = document.getElementById('voc-raw');
+  const elRawVal  = document.getElementById('voc-raw-val');
   const elOut     = document.getElementById('voc-output');
   const elOutVal  = document.getElementById('voc-output-val');
   const elGate    = document.getElementById('voc-gate');
@@ -277,6 +280,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   let outputGain   = null;
   let muteGate     = null;
   let dryGain      = null;
+  let rawGain      = null;     // raw mic → outBus, independent of the vocoder (clean voice)
   let sibChain     = null;     // {hpf, lpf, gain}
   let carrierBus   = null;
   let carrierVoices = [];      // [{ sources: [{node, ratio}], outGain }]
@@ -334,6 +338,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (elBands)     elBands.value     = String(cfg.bands);
     if (elSib)       elSib.value       = String(cfg.sibilance);
     if (elDry)       elDry.value       = String(cfg.dry);
+    if (elRaw)       elRaw.value       = String(cfg.rawVoice);
     if (elOut)       elOut.value       = String(cfg.output);
     if (elGate)      elGate.value      = String(cfg.gate);
     if (elVoices)    elVoices.value    = String(cfg.voices);
@@ -356,6 +361,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   function paintRanges() {
     if (elSibVal)       elSibVal.textContent       = cfg.sibilance.toFixed(2);
     if (elDryVal)       elDryVal.textContent       = cfg.dry.toFixed(2);
+    if (elRawVal)       elRawVal.textContent       = cfg.rawVoice.toFixed(2);
     if (elOutVal)       elOutVal.textContent       = cfg.output.toFixed(2);
     if (elGateVal)      elGateVal.textContent      = cfg.gate.toFixed(2);
     if (elConsonantVal) elConsonantVal.textContent = cfg.consonant.toFixed(2);
@@ -671,12 +677,22 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
       sibChain = { hpf, lpf, gain: g };
     }
 
-    // Dry passthrough.
+    // Dry passthrough — a touch of raw voice summed INSIDE the vocoder bus, so
+    // it tracks the vocoder on/off (an intelligibility helper for the robot).
     {
       const g = c.createGain(); g.gain.value = cfg.dry;
       inputGate.connect(g); g.connect(vocoderMix);
       dryGain = g;
     }
+
+    // Raw-voice passthrough — the "clean" / plain-speech path. Taps the mic
+    // straight off inputGate and sums into outBus AFTER vocoderMix, so it is
+    // INDEPENDENT of the vocoder on/off: the performer can bypass the robot
+    // (vocoder off, harmonizer off) and still be heard, level-conditioned by
+    // the shared master chain (clarity EQ + compressor + limiter). 0 by
+    // default; the "Clean · raw voice" preset opens it.
+    rawGain = c.createGain(); rawGain.gain.value = cfg.rawVoice;
+    inputGate.connect(rawGain); rawGain.connect(outBus);
 
     // ── Carrier — pitched synth + pink noise ────────────────────────────
     // The pitched carrier voices vowels; the noise carrier voices the
@@ -813,6 +829,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     carrierTaps = [];
     if (sibChain)  { disc(sibChain.hpf); disc(sibChain.lpf); disc(sibChain.gain); sibChain = null; }
     if (dryGain)   { disc(dryGain);   dryGain   = null; }
+    if (rawGain)   { disc(rawGain);   rawGain   = null; }
     if (carrierBus){ disc(carrierBus); carrierBus = null; }
     if (carrierTilt){ disc(carrierTilt); carrierTilt = null; }
     if (noiseCarrier) { stopSafe(noiseCarrier); disc(noiseCarrier); noiseCarrier = null; }
@@ -1176,6 +1193,14 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
       try { dryGain.gain.linearRampToValueAtTime(cfg.dry, ctx.currentTime + 0.05); } catch {}
     }
   }
+  function setRawVoice(v) {
+    cfg.rawVoice = Math.max(0, Math.min(1, +v || 0));
+    persistSoon();
+    paintRanges();
+    if (rawGain && ctx) {
+      try { rawGain.gain.linearRampToValueAtTime(cfg.rawVoice, ctx.currentTime + 0.05); } catch {}
+    }
+  }
   function setOutput(v) {
     cfg.output = Math.max(0, Math.min(2, +v || 0));
     persistSoon();
@@ -1265,6 +1290,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (typeof partial.bands       === 'number') setBandCount(partial.bands);
     if (typeof partial.sibilance   === 'number') setSibilance(partial.sibilance);
     if (typeof partial.dry         === 'number') setDry(partial.dry);
+    if (typeof partial.rawVoice    === 'number') setRawVoice(partial.rawVoice);
     if (typeof partial.output      === 'number') setOutput(partial.output);
     if (typeof partial.gate        === 'number') setGate(partial.gate);
     if (typeof partial.voices      === 'number') setVoices(partial.voices);
@@ -1289,6 +1315,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   if (elBands)   elBands.addEventListener('change',   () => setBandCount(elBands.value));
   if (elSib)     elSib.addEventListener('input',      () => setSibilance(elSib.value));
   if (elDry)     elDry.addEventListener('input',      () => setDry(elDry.value));
+  if (elRaw)     elRaw.addEventListener('input',      () => setRawVoice(elRaw.value));
   if (elOut)     elOut.addEventListener('input',      () => setOutput(elOut.value));
   if (elGate)    elGate.addEventListener('input',     () => setGate(elGate.value));
   if (elVoices)  elVoices.addEventListener('change',  () => setVoices(elVoices.value));
