@@ -114,6 +114,8 @@ export default {
       default: 'blueprint' },
     { id: 'accentHue',   label: 'accent hue (custom)', type: 'range', min: 0, max: 360, step: 1, default: 195 },
 
+    { id: 'edgeMargin',  label: 'edge margin',  type: 'range',  min: 0, max: 0.12, step: 0.005, default: 0.045 },
+
     { id: 'gridStyle',   label: 'grid',         type: 'select',
       options: ['off', 'radial', 'square', 'both'], default: 'radial' },
     { id: 'gridDensity', label: 'grid density', type: 'range',  min: 0, max: 1, step: 0.05, default: 0.55 },
@@ -131,6 +133,8 @@ export default {
     { id: 'showScope',   label: 'oscilloscope', type: 'toggle', default: true  },
     { id: 'showMeters',  label: 'band meters',  type: 'toggle', default: true  },
     { id: 'showBeats',   label: 'beat ticks',   type: 'toggle', default: true  },
+    { id: 'showRadar',   label: 'radar (polar)',type: 'toggle', default: true  },
+    { id: 'showCore',    label: 'centre core',  type: 'toggle', default: true  },
     { id: 'showStats',   label: 'frame stats',  type: 'toggle', default: true  },
 
     { id: 'cameraLayer', label: 'camera layer', type: 'toggle', default: false },
@@ -141,17 +145,20 @@ export default {
   presets: {
     default: {
       palette: 'blueprint', accentHue: 195,
+      edgeMargin: 0.045,
       gridStyle: 'radial', gridDensity: 0.55,
       labelDetail: 'standard',
       showSkeleton: false, showBoxes: true,
       showSpectrum: true, spectrumFullscreen: false, spectrumSeries: 'full',
-      showScope: true, showMeters: true, showBeats: true, showStats: true,
+      showScope: true, showMeters: true, showBeats: true,
+      showRadar: true, showCore: true, showStats: true,
       cameraLayer: false, reactivity: 1.0,
     },
     minimal: {
       palette: 'monochrome', labelDetail: 'minimal',
       gridStyle: 'off', gridDensity: 0.20,
       showStats: false, showBeats: false,
+      showRadar: false, showCore: false,
     },
     broadcast: {
       palette: 'blueprint', labelDetail: 'verbose',
@@ -162,12 +169,14 @@ export default {
       palette: 'phosphor',
       spectrumFullscreen: true, spectrumSeries: 'full',
       showScope: false, showMeters: false, showBeats: false,
+      showRadar: false, showCore: false,
       gridStyle: 'off', labelDetail: 'minimal',
     },
     cinema: {
       palette: 'magma', cameraLayer: true,
       showBoxes: true, showSkeleton: false,
       showSpectrum: false, showScope: false, showMeters: false, showBeats: false,
+      showRadar: false, showCore: false,
       showStats: false, gridStyle: 'off',
     },
     'phosphor-crt': {
@@ -238,6 +247,7 @@ export default {
       time: 0,
       dt: 0,
       fpsEMA: 60,
+      frame: 0,
     };
 
     function update(field) {
@@ -281,6 +291,7 @@ export default {
       scratch.pose   = field.pose;
       scratch.time   = t;
       scratch.dt     = field.dt;
+      scratch.frame++;   // engine update/cycle counter — surfaced in the HUD
     }
 
     // ── Tiny helpers ────────────────────────────────────────────────────────
@@ -443,12 +454,20 @@ export default {
       const my = y + h / 2;
       const fps = scratch.fpsEMA;
       const ms  = 1000 / Math.max(fps, 1);
-      ctx.fillStyle = accent;
-      ctx.fillText(`${fps.toFixed(1)} fps`, x + 14, my);
-      ctx.fillStyle = secondary;
-      ctx.fillText(`${ms.toFixed(1)} ms`, x + 14 + 80, my);
-      ctx.fillStyle = accent;
-      ctx.fillText(`t=${fmtTime(scratch.time)}`, x + 14 + 80 + 70, my);
+      // Left cluster — lay out left-to-right with a running cursor so items
+      // never collide as labels change width. τ (tau) replaces the old `t=`
+      // for elapsed set time; `cyc` is the engine update-cycle counter.
+      let lx = x + 14;
+      ctx.textAlign = 'left';
+      const leftItem = (txt, color) => {
+        ctx.fillStyle = color;
+        ctx.fillText(txt, lx, my);
+        lx += ctx.measureText(txt).width + 18;
+      };
+      leftItem(`${fps.toFixed(1)} fps`, accent);
+      leftItem(`${ms.toFixed(1)} ms`,   secondary);
+      leftItem(`τ=${fmtTime(scratch.time)}`, accent);
+      leftItem(`cyc=${scratch.frame}`,  secondary);
 
       const persons = scratch.pose?.people?.length || 0;
       const kicks  = countWithin(kickT,  scratch.time, BEAT_WINDOW_S);
@@ -772,6 +791,115 @@ export default {
       }
     }
 
+    // ── Polar radar — the spectrum swept around a circle ────────────────────
+    // A second, instantaneous view of the same analyser data as the bottom
+    // spectrum, drawn as a closed polar trace with guide rings + a slow sweep
+    // arm. Fills the lower-left column; reads as a classic sonar/radar scope.
+    function drawRadarPanel(x, y, w, h, pal, audio, audioOn) {
+      const accent    = hslaArr(pal.primary,   0.95);
+      const secondary = hslaArr(pal.secondary, 0.70);
+      const secSoft   = hslaArr(pal.secondary, 0.30);
+      const warning   = hslaArr(pal.warning,   0.85);
+      panel(x, y, w, h, 'RADAR', accent, secondary);
+      const cx = x + w / 2, cy = y + h / 2 + 4;
+      const R  = Math.min(w, h) * 0.5 - 16;
+      if (R < 12) return;
+
+      // Guide rings + spokes.
+      ctx.strokeStyle = secSoft; ctx.lineWidth = 0.5;
+      for (let i = 1; i <= 3; i++) {
+        ctx.beginPath(); ctx.arc(cx, cy, (R * i) / 3, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R);
+      }
+      ctx.stroke();
+
+      const sp = audioOn ? audio.spectrum : null;
+      const hasSp = sp && sp.length > 0;
+      const hzPerBin = hasSp ? ASSUMED_SAMPLE_RATE / (sp.length * 2) : 0;
+      const N = 96;                 // angular resolution
+      const innerR = R * 0.18;
+      ctx.beginPath();
+      for (let i = 0; i <= N; i++) {
+        const u = (i % N) / N;
+        let v;
+        if (hasSp) {
+          const f = SPEC_F_MIN * Math.pow(SPEC_F_MAX / SPEC_F_MIN, u);
+          const bin = Math.max(0, Math.min(sp.length - 1, Math.round(f / hzPerBin)));
+          v = sp[bin] / 255;
+        } else {
+          v = 0.10 + 0.06 * Math.sin(scratch.time * 0.8 + u * Math.PI * 6);
+        }
+        const a = -Math.PI / 2 + u * Math.PI * 2;
+        const r = innerR + v * (R - innerR);
+        const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = hslaArr(pal.primary, 0.10); ctx.fill();
+      ctx.strokeStyle = accent; ctx.lineWidth = 1.4; ctx.stroke();
+
+      // Slow rotating sweep arm.
+      const sweep = ((scratch.time * 0.6) % (Math.PI * 2)) - Math.PI / 2;
+      ctx.strokeStyle = warning; ctx.lineWidth = 1; ctx.globalAlpha = 0.55;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(sweep) * R, cy + Math.sin(sweep) * R);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // ── Centre core — concentric band gauges + the headline τ / cycle readout.
+    // Sits on the radial grid in the middle of the screen, so the centre band
+    // is no longer dead space. Drawn before the pose overlay so people /
+    // reticles paint on top when present.
+    function drawCorePanel(cx, cy, R, pal, audio, audioOn) {
+      if (R < 30) return;
+      const accent    = hslaArr(pal.primary,   0.95);
+      const secondary = hslaArr(pal.secondary, 0.75);
+      const warning   = hslaArr(pal.warning,   0.95);
+      const bass  = audioOn ? Math.min(1, audio.bands.bass)  : 0;
+      const mids  = audioOn ? Math.min(1, audio.bands.mids)  : 0;
+      const highs = audioOn ? Math.min(1, audio.bands.highs) : 0;
+      const rms   = audioOn ? Math.min(1, audio.rms)         : 0;
+      const beat  = audioOn ? audio.beat.pulse : 0;
+
+      const lw = Math.max(3, R * 0.045);
+      const rings = [
+        [R * 0.92, highs, hslaArr(pal.primary,   0.85)],
+        [R * 0.74, mids,  hslaArr(pal.secondary, 0.85)],
+        [R * 0.56, bass,  warning],
+      ];
+      ctx.lineCap = 'round';
+      for (const [r, v, col] of rings) {
+        ctx.strokeStyle = hslaArr(pal.secondary, 0.16); ctx.lineWidth = lw;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = col;
+        ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + v * Math.PI * 2); ctx.stroke();
+      }
+      ctx.lineCap = 'butt';
+
+      // RMS core disc — pulses on the beat — and a thin reference ring.
+      const rr = R * 0.34 * (0.45 + 0.55 * rms) * (1 + beat * 0.18);
+      ctx.fillStyle = hslaArr(pal.primary, 0.10 + 0.45 * rms);
+      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = hslaArr(pal.primary, 0.5); ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.arc(cx, cy, R * 0.40, 0, Math.PI * 2); ctx.stroke();
+
+      // Headline readout — big τ time, cycle counter under it.
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = accent;
+      ctx.font = FONT(Math.round(R * 0.20));
+      ctx.fillText(`τ ${fmtTime(scratch.time)}`, cx, cy - R * 0.04);
+      ctx.fillStyle = secondary;
+      ctx.font = FONT(Math.round(R * 0.10));
+      ctx.fillText(`cyc ${scratch.frame}`, cx, cy + R * 0.16);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    }
+
     // ── Pose overlay: bounding box, joint reticles, labels, optional skel ──
     function drawPoseOverlay(personHueBase, labelDetail, showBoxes, showSkeleton, audio, audioOn) {
       const people = scratch.pose?.people || [];
@@ -894,27 +1022,33 @@ export default {
       // 2. Camera background layer (drawn before HUD so everything paints on top).
       if (params.cameraLayer) drawCameraLayer();
 
-      // Use the whole screen — tighter margins and larger spectrum / right
-      // column so the HUD fills the canvas instead of floating in a sea of
-      // empty real estate on big displays. The centre band stays clear for
-      // the pose overlay (boxes / skeleton / joint reticles).
-      const padding = Math.max(8, Math.round(Math.min(W, H) * 0.012));
-      const topH    = 36;
-      const botH    = Math.round(Math.min(300, H * 0.26));
-      const rightW  = Math.round(Math.min(480, W * 0.27));
+      // Use the whole screen. Generous edge margins buffer the projector's
+      // clipped top edge and the performers blocking the bottom, pulling all
+      // content inward off the physical edges; `margin` is the outer inset,
+      // `gap` the smaller inter-panel spacing. edgeMargin is a per-venue slider
+      // (0..12% of the short axis) so the operator can dial the safe area on
+      // site. Panels live in BOTH a left and a right column with a centre core
+      // between them, so the HUD fills the canvas — centre and left included —
+      // instead of clustering at the top/right.
+      const minWH  = Math.min(W, H);
+      const margin = Math.max(8, Math.round(minWH * (params.edgeMargin ?? 0.045)));
+      const gap    = Math.max(6, Math.round(minWH * 0.012));
+      const topH   = Math.max(34, Math.round(minWH * 0.030));
+      const botH   = Math.round(Math.min(300, H * 0.24));
+      const colW   = Math.round(Math.min(420, W * 0.24));
 
       // 3. Spectrum (fullscreen sits between camera and HUD; strip mode lives
-      //    in the bottom band along with the right column above it).
+      //    in the bottom band along with the columns above it).
       if (params.showSpectrum) {
         if (fullscreenFx) {
-          const sx = padding;
-          const sy = padding + (params.showStats ? topH + padding : 0);
-          const sw = W - padding * 2;
-          const sh = H - sy - padding;
+          const sx = margin;
+          const sy = margin + (params.showStats ? topH + gap : 0);
+          const sw = W - margin * 2;
+          const sh = H - sy - margin;
           drawSpectrumPanel(sx, sy, sw, sh, pal, audio, audioOn,
                             params.spectrumSeries || 'full', true);
         } else {
-          drawSpectrumPanel(padding, H - botH - padding, W - padding * 2, botH,
+          drawSpectrumPanel(margin, H - botH - margin, W - margin * 2, botH,
                             pal, audio, audioOn,
                             params.spectrumSeries || 'full', false);
         }
@@ -924,35 +1058,60 @@ export default {
       //    spectrum's own dB+Hz grid carries the structure.
       if (!fullscreenFx) drawHudGrid(accentSoft, gridDens, gridStyle);
 
-      // 5. Top stats strip + right column + pose overlay (always painted on
-      //    top of camera + spectrum).
+      // 5. Top stats strip (full width, inset by the margin).
       if (params.showStats) {
-        drawTopStrip(padding, padding, W - padding * 2, topH, accent, secondary, audioOn);
+        drawTopStrip(margin, margin, W - margin * 2, topH, accent, secondary, audioOn);
       }
 
-      const colX = W - rightW - padding;
-      let   colY = padding + (params.showStats ? topH + padding : 0);
-      // When fullscreen spectrum is on the right column overlays the spectrum.
-      const remaining = fullscreenFx
-        ? H - colY - padding
-        : H - colY - (params.showSpectrum ? botH + padding * 2 : padding);
-      const visiblePanels = (params.showScope ? 1 : 0) + (params.showMeters ? 1 : 0) + (params.showBeats ? 1 : 0);
-      const colGap = padding;
-      const colPanelH = visiblePanels > 0
-        ? Math.floor((remaining - (visiblePanels - 1) * colGap) / visiblePanels)
-        : 0;
+      // Column band — the vertical extent shared by the left + right panel
+      // stacks and the centre core, bounded by the top strip and the bottom
+      // spectrum.
+      const colTop = margin + (params.showStats ? topH + gap : 0);
+      const colBot = H - (!fullscreenFx && params.showSpectrum ? botH + gap : 0) - margin;
 
-      if (params.showScope && colPanelH > 30) {
-        drawScopePanel(colX, colY, rightW, colPanelH, accent, secondary, audio, audioOn);
-        colY += colPanelH + colGap;
-      }
-      if (params.showMeters && colPanelH > 30) {
-        drawMetersPanel(colX, colY, rightW, colPanelH, accent, secondary, warning, audio, audioOn);
-        colY += colPanelH + colGap;
-      }
-      if (params.showBeats && colPanelH > 30) {
-        drawBeatsPanel(colX, colY, rightW, colPanelH, accent, secondary, warning, pal.secondary[0]);
-        colY += colPanelH + colGap;
+      // When the spectrum is fullscreen the columns/core would overlap it, so
+      // only paint them in strip mode (or when the spectrum is off entirely).
+      const sideCols = !fullscreenFx || !params.showSpectrum;
+
+      // Stack a list of draw callbacks evenly down a column.
+      const stackColumn = (cx0, cw, list) => {
+        const n = list.length;
+        if (!n) return;
+        const ph = Math.floor((colBot - colTop - (n - 1) * gap) / n);
+        if (ph <= 30) return;
+        let cy = colTop;
+        for (const fn of list) { fn(cx0, cy, cw, ph); cy += ph + gap; }
+      };
+
+      if (sideCols) {
+        const rightX = W - colW - margin;
+        const leftX  = margin;
+
+        // Right column: oscilloscope + band meters.
+        const right = [];
+        if (params.showScope)  right.push((x, y, w, h) => drawScopePanel(x, y, w, h, accent, secondary, audio, audioOn));
+        if (params.showMeters) right.push((x, y, w, h) => drawMetersPanel(x, y, w, h, accent, secondary, warning, audio, audioOn));
+        stackColumn(rightX, colW, right);
+
+        // Left column: beat ticks + polar radar — fills the previously empty
+        // left gutter.
+        const left = [];
+        if (params.showBeats)  left.push((x, y, w, h) => drawBeatsPanel(x, y, w, h, accent, secondary, warning, pal.secondary[0]));
+        if (params.showRadar)  left.push((x, y, w, h) => drawRadarPanel(x, y, w, h, pal, audio, audioOn));
+        stackColumn(leftX, colW, left);
+
+        // Centre core — concentric band gauges + the τ / cycle readout, filling
+        // the middle of the screen between the two columns.
+        if (params.showCore) {
+          const cX0 = leftX + colW + gap;
+          const cX1 = rightX - gap;
+          const cw  = cX1 - cX0;
+          const ch  = colBot - colTop;
+          if (cw > 80 && ch > 80) {
+            const R = Math.min(cw, ch) * 0.5 - 10;
+            drawCorePanel(cX0 + cw / 2, colTop + ch / 2, R, pal, audio, audioOn);
+          }
+        }
       }
 
       drawPoseOverlay(pal.primary[0], labelDetail,
