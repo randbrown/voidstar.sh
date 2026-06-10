@@ -396,6 +396,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #fps     { color: var(--muted); min-width: 5ch; }
     #fxname  { color: var(--cyan);  min-width: 8ch; }
     #lvl     { color: var(--muted); min-width: 11ch; font-size: 0.72rem; }
+    /* Chron τ readout — persistent session stopwatch. Inline color is set
+       by chron.js when redshift is active (horizon set); otherwise this
+       muted default applies. min-width + tabular digits keep the wrapping
+       control row from reflowing as the digits tick. */
+    #chron-hud {
+      color: var(--muted); min-width: 7ch; cursor: pointer;
+      font-variant-numeric: tabular-nums;
+    }
+    #chron-hud:hover { text-decoration: underline dotted; }
 
     .ctrl-btn {
       background: none; border: 1px solid var(--border); border-radius: 5px;
@@ -542,6 +551,34 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       user-select: none; line-height: 1;
     }
     @keyframes zen-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+    /* Chron pulse — fades in/out purely via the opacity transition (chron.js
+       just toggles .visible). z19 floats it above the panel stack (15), tab
+       bar (16), video preview (17) and splitter (18) but under the topbar
+       (20) — in zen mode the topbar is gone anyway. pointer-events: none —
+       it's a nudge, not a control. */
+    #chron-pulse {
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: max(2.75rem, env(safe-area-inset-bottom));
+      z-index: 19;
+      font-family: var(--font-mono); font-size: 0.85rem;
+      letter-spacing: 0.08em; font-variant-numeric: tabular-nums;
+      color: var(--muted);
+      opacity: 0; pointer-events: none; user-select: none;
+      transition: opacity 0.7s ease;
+      text-shadow: 0 0 12px rgba(5,5,13,0.9);
+    }
+    #chron-pulse.top { bottom: auto; top: 2.75rem; }
+    #chron-pulse.visible { opacity: 0.9; }
+    /* warn / horizon nudges — larger + red-tinted, regardless of redshift. */
+    #chron-pulse.warn {
+      font-size: 1.1rem; color: var(--amber);
+      text-shadow: 0 0 14px rgba(251,191,36,0.45);
+    }
+    #chron-pulse.horizon {
+      font-size: 1.3rem; color: #f87171;
+      text-shadow: 0 0 18px rgba(248,113,113,0.55);
+    }
 
     #status-overlay {
       position: fixed; inset: 0; z-index: 30;
@@ -1695,6 +1732,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <span id="fps">-- fps</span>
     <span id="fxname">—</span>
     <span id="lvl">b-- m-- h--</span>
+    <span id="chron-hud" title="chron — session stopwatch (τ). Tap to open the chron panel (format · zen pulses · horizon).">τ 0:00</span>
     <select id="fx-select" class="ctrl-btn" title="Active fx (V)"></select>
     <select id="mic-select" class="ctrl-btn" title="Choose microphone" style="display:none;"></select>
     <button class="ctrl-btn" id="btn-audio" title="Mic audio (A)">audio</button>
@@ -1807,6 +1845,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 <div id="zen-handle" title="Exit zen mode (Z)">
   <span class="zen-icon">✦</span>
 </div>
+
+<!-- Chron pulse — the τ nudge chron.js fades in at the bottom (or top) of
+     the screen: soft minute-count pulses in zen mode, plus the louder
+     warn/horizon nudges in any mode. Non-interactive by design. -->
+<div id="chron-pulse" aria-hidden="true"></div>
 
 <div id="status-overlay">
   <div class="status-dot"></div>
@@ -2021,6 +2064,75 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
   </div>
 
+  <!-- Chron card — the session stopwatch's config surface. The stopwatch
+       itself lives in src/lib/qualia/chron.js; the τ readout sits in the
+       topbar and the pulses render into #chron-pulse. -->
+  <div id="chron-card" class="qp-card collapsed">
+    <div class="qp-head" data-toggle="chron-card">
+      <span class="qp-title">chron</span>
+      <span class="qp-spacer"></span>
+      <button class="qp-toggle" id="btn-chron-reset" title="Rezero the τ stopwatch (and re-arm the horizon nudges)">reset τ</button>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-row" data-qp="chron-enabled" title="Chron — session stopwatch. Starts with the session; off hides the τ readout and silences every pulse (the clock keeps counting underneath).">
+        <label>chron</label>
+        <button class="qp-toggle active" id="chron-enabled">on</button>
+      </div>
+      <div class="qp-row" data-qp="chron-hud" title="Show the persistent τ readout in the topbar (hidden in zen mode either way).">
+        <label>hud readout</label>
+        <button class="qp-toggle active" id="chron-hud-toggle">on</button>
+      </div>
+      <div class="qp-row" data-qp="chron-format" title="τ readout format. 'cycles' shows elapsed Strudel cycles (⟳) — integrated from the live cps, so tempo changes mid-set stay accurate.">
+        <label>format</label>
+        <select class="qp-select" id="chron-format">
+          <option value="mm">mm</option>
+          <option value="mm:ss" selected>mm:ss</option>
+          <option value="hh:mm:ss">hh:mm:ss</option>
+          <option value="cycles">cycles ⟳</option>
+        </select>
+      </div>
+      <div class="qp-section-tag">pulse · zen</div>
+      <div class="qp-row" data-qp="chron-pulse-every" title="In zen mode, briefly fade in the elapsed count every N minutes — a soft pulsar nudge instead of a persistent clock. 0 = off.">
+        <label>pulse every<span class="qp-val">5m</span></label>
+        <input type="range" min="0" max="30" step="1" value="5">
+      </div>
+      <div class="qp-row" data-qp="chron-pulse-format" title="Format for the zen pulse text (e.g. 'τ 25m').">
+        <label>pulse format</label>
+        <select class="qp-select" id="chron-pulse-format">
+          <option value="mm" selected>mm</option>
+          <option value="mm:ss">mm:ss</option>
+          <option value="hh:mm:ss">hh:mm:ss</option>
+          <option value="cycles">cycles ⟳</option>
+        </select>
+      </div>
+      <div class="qp-row" data-qp="chron-pulse-length" title="How long a soft pulse stays visible before fading out.">
+        <label>pulse length<span class="qp-val">3s</span></label>
+        <input type="range" min="1" max="10" step="0.5" value="3">
+      </div>
+      <div class="qp-row" data-qp="chron-position" title="Screen edge the pulses fade in at.">
+        <label>position</label>
+        <select class="qp-select" id="chron-position">
+          <option value="bottom" selected>bottom</option>
+          <option value="top">top</option>
+        </select>
+      </div>
+      <div class="qp-section-tag">horizon</div>
+      <div class="qp-row" data-qp="chron-horizon" title="Hard set-limit. Crossing the warn fraction and then the horizon itself fires bigger, longer, red-tinted nudges — in any mode. 0 = no horizon.">
+        <label>horizon<span class="qp-val">off</span></label>
+        <input type="range" min="0" max="180" step="5" value="0">
+      </div>
+      <div class="qp-row" data-qp="chron-warn-at" title="Fraction of the horizon at which the early warning fires (0.9 of a 50m horizon → warn at 45m).">
+        <label>warn at<span class="qp-val">90%</span></label>
+        <input type="range" min="0.5" max="0.99" step="0.01" value="0.9">
+      </div>
+      <div class="qp-row" data-qp="chron-redshift" title="Tint the τ readout and soft pulses blue → white → amber → red as elapsed/horizon approaches 1. Only applies while a horizon is set.">
+        <label>redshift</label>
+        <button class="qp-toggle active" id="chron-redshift">on</button>
+      </div>
+    </div>
+  </div>
+
   <div id="fx-card" class="qp-card">
     <div class="qp-head" data-toggle="fx-card">
       <span class="qp-title">params</span>
@@ -2113,6 +2225,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <button class="qp-tab" data-card="camera-card" role="tab">camera</button>
   <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
   <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
+  <button class="qp-tab" data-card="chron-card"  role="tab">chron</button>
   <button class="qp-tab" data-card="diag-card"   role="tab">diag</button>
 </div>
 
