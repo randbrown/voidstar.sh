@@ -1,27 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap');
-
-:root {
-  --void:        #05050d;
-  --void-2:      #0a0a1a;
-  --surface:     #0f0f24;
-  --surface-2:   #17173a;
-  --border:      #252550;
-  --border-2:    #3a3a78;
-  --text:        #dde1f0;
-  --text-muted:  #7878a8;
-  --text-dim:    #4a4a70;
-  --accent:      #8b5cf6;
-  --accent-glow: rgba(139, 92, 246, 0.35);
-  --cyan:        #22d3ee;
-  --cyan-glow:   rgba(34, 211, 238, 0.3);
-  --pink:        #f472b6;
-  --pink-glow:   rgba(244, 114, 182, 0.3);
-  --green:       #4ade80;
-  --font-sans:   'Space Grotesk', system-ui, sans-serif;
-  --font-mono:   'JetBrains Mono', ui-monospace, monospace;
-  --radius:      6px;
-  --radius-lg:   12px;
-}
+/* Design tokens + all alternate themes live in themes.css (imported here so
+   the whole site gets them; the standalone lab pages import it directly). */
+@import './themes.css';
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -133,10 +112,10 @@ img, video { max-width: 100%; display: block; }
   margin: 1.5rem auto;
 }
 
-/* Glow effects */
-.glow-accent { text-shadow: 0 0 20px var(--accent-glow); }
-.glow-cyan   { text-shadow: 0 0 20px var(--cyan-glow); }
-.glow-pink   { text-shadow: 0 0 20px var(--pink-glow); }
+/* Glow effects (blur scaled by --glow-strength so flat themes stay flat) */
+.glow-accent { text-shadow: 0 0 calc(20px * var(--glow-strength)) var(--accent-glow); }
+.glow-cyan   { text-shadow: 0 0 calc(20px * var(--glow-strength)) var(--cyan-glow); }
+.glow-pink   { text-shadow: 0 0 calc(20px * var(--glow-strength)) var(--pink-glow); }
 
 /* Tag pill */
 .tag {

@@ -2,28 +2,21 @@
 // Full-screen pose-driven particle field.
 // Multi-person via @mediapipe/tasks-vision PoseLandmarker (numPoses:2).
 // Audio reactivity via Web Audio API AnalyserNode.
+import ThemeBoot from '../../components/ThemeBoot.astro';
+import '../../styles/themes.css';
 ---
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <ThemeBoot />
   <title>Pose Particles | voidstar lab</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --accent:    #8b5cf6;
-      --cyan:      #22d3ee;
-      --pink:      #f472b6;
-      --green:     #4ade80;
-      --void:      #05050d;
-      --surface:   rgba(10,10,26,0.82);
-      --border:    rgba(45,45,80,0.7);
-      --text:      #dde1f0;
-      --muted:     #7878a8;
-      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-    }
+    /* Palette tokens come from themes.css (imported above) so the HUD follows
+       the active theme; HUD panels use --surface-glass. */
     html, body { width: 100%; height: 100%; overflow: hidden; background: var(--void); }
     canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 
@@ -50,7 +43,7 @@
       position: fixed; top: 0; left: 0; right: 0; z-index: 20;
       display: flex; align-items: center; justify-content: space-between;
       padding: 0.6rem 1.25rem;
-      background: var(--surface); backdrop-filter: blur(10px);
+      background: var(--surface-glass); backdrop-filter: blur(var(--panel-blur));
       border-bottom: 1px solid var(--border);
       font-family: var(--font-mono); font-size: 0.8rem;
       transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
@@ -111,7 +104,7 @@
       position: fixed; inset: 0; z-index: 30;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 1.25rem;
-      background: rgba(5,5,13,0.93); font-family: var(--font-mono);
+      background: color-mix(in srgb, var(--void) 93%, transparent); font-family: var(--font-mono);
       transition: opacity 0.5s;
     }
     #status-overlay.hidden { opacity: 0; pointer-events: none; }
@@ -129,7 +122,7 @@
       color: white; font-family: var(--font-mono); font-size: 0.875rem;
       cursor: pointer; transition: all 0.2s;
     }
-    .start-btn:hover { background: #7c3aed; box-shadow: 0 0 20px rgba(139,92,246,0.5); }
+    .start-btn:hover { filter: brightness(1.12); box-shadow: 0 0 calc(20px * var(--glow-strength)) var(--accent-glow); }
 
     #hints {
       position: fixed; bottom: 1.25rem; left: 1.25rem; z-index: 10;
@@ -146,7 +139,7 @@
       position: fixed; bottom: 1.25rem; left: 50%;
       transform: translateX(-50%);
       z-index: 15;
-      background: var(--surface); backdrop-filter: blur(12px);
+      background: var(--surface-glass); backdrop-filter: blur(var(--panel-blur));
       border: 1px solid var(--border); border-radius: 10px;
       padding: 0.75rem 1rem; font-family: var(--font-mono);
       font-size: 0.72rem; color: var(--text);
@@ -194,6 +187,7 @@
   </div>
   <div id="topbar-right">
     <span id="fps">-- fps</span>
+    <select id="theme-select" class="ctrl-btn" title="Theme (Y)"></select>
     <span id="pcount">---- pts</span>
     <span id="pose-count">0 pose</span>
     <span id="cam-res"></span>
@@ -258,6 +252,19 @@
 </div>
 
 <script>
+import { initThemeControl, cycleTheme, readKnobs, onThemeChange } from '../../lib/qualia/theme.js';
+
+// ── Theme knobs ──────────────────────────────────────────────────────────────
+// Canvas colors follow the active theme via the --viz-* tokens (themes.css).
+function hexToRgb(h) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec((h || '').trim());
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [5, 5, 13];
+}
+let K = readKnobs();
+let bgRGB = hexToRgb(K.bg);
+onThemeChange(() => { K = readKnobs(); bgRGB = hexToRgb(K.bg); });
+initThemeControl(document.getElementById('theme-select'));
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 const N               = 9000;
 const DAMPING         = 0.972;
@@ -280,15 +287,19 @@ const LM_WEIGHT = {
   27: 0.6, 28: 0.6,
 };
 
-// Per-person overlay colour palettes
-const PERSON_PALETTE = [
-  { boneA: 'rgba(139,92,246,0.75)',  boneB: 'rgba(34,211,238,0.75)',
-    attractor: 'rgba(139,92,246,0.95)', repeller: 'rgba(34,211,238,0.95)',
-    halo: 'rgba(139,92,246,0.18)' },
-  { boneA: 'rgba(244,114,182,0.75)', boneB: 'rgba(74,222,128,0.75)',
-    attractor: 'rgba(244,114,182,0.95)', repeller: 'rgba(74,222,128,0.95)',
-    halo: 'rgba(244,114,182,0.18)' },
-];
+// Per-person overlay colour palettes — built from the theme's curated accent
+// set (K.ac) so skeletons stay in-family on every skin; under voidstar this
+// reproduces the original hardcoded colors.
+function buildPersonPalette() {
+  const mk = (a, b) => ({
+    boneA: a.rgba(0.75), boneB: b.rgba(0.75),
+    attractor: a.rgba(0.95), repeller: b.rgba(0.95),
+    halo: a.rgba(0.18),
+  });
+  return [mk(K.ac.accent, K.ac.cyan), mk(K.ac.pink, K.ac.green)];
+}
+let PERSON_PALETTE = buildPersonPalette();
+onThemeChange(() => { PERSON_PALETTE = buildPersonPalette(); });
 
 // Audio beat detection — mutable, controlled by UI sliders (defaults = "default" preset)
 let audioGain     = 1.2;
@@ -527,12 +538,12 @@ function draw() {
   const baseFade = trailMode ? 0.07 : 0.16;
   const fade     = audioEnabled ? baseFade * (1 + aBass * 0.6) : baseFade;
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = `rgba(5,5,13,${fade})`;
+  ctx.fillStyle = `rgba(${bgRGB[0]},${bgRGB[1]},${bgRGB[2]},${fade})`;
   ctx.fillRect(0, 0, W, H);
 
   // Beat flash — subtle purple bloom
   if (beatActive) {
-    ctx.fillStyle = `rgba(139,92,246,${aBass * 0.07})`;
+    ctx.fillStyle = K.ac.accent.rgba(aBass * 0.07);
     ctx.fillRect(0, 0, W, H);
   }
 
@@ -543,7 +554,7 @@ function draw() {
     // Audio highs → hue shift toward warmer colours
     const hueShift = audioEnabled ? aHighs * 40 : 0;
     const t01      = Math.min(speed / 4.5, 1);
-    const h        = 270 + hue[i] + hueShift + t01 * 70;
+    const h        = K.hueBase + (K.mono ? 0 : hue[i] + hueShift + t01 * 70);
     const l        = 45 + t01 * 30;
     const alpha    = 0.5 + t01 * 0.4;
     const radius   = 0.85 + t01 * 0.65;
@@ -575,7 +586,7 @@ function draw() {
     const barW = 3, gap = 3, maxH = 50;
     const bx   = 12, by = H - 12;
     const levels = [aBass, aMids, aHighs];
-    const cols   = ['rgba(139,92,246,0.85)', 'rgba(34,211,238,0.85)', 'rgba(244,114,182,0.85)'];
+    const cols   = [K.ac.accent.rgba(0.85), K.ac.cyan.rgba(0.85), K.ac.pink.rgba(0.85)];
     levels.forEach((lvl, j) => {
       const h = Math.max(2, lvl * maxH);
       ctx.fillStyle = cols[j];
@@ -980,10 +991,11 @@ document.addEventListener('keydown', e => {
     case 'Digit0':
     case 'Numpad0': btnRotate.click();  break;
     case 'KeyZ':    setZen(!zenMode);   break;
+    case 'KeyY':    cycleTheme(e.shiftKey ? -1 : 1); break;
     case 'KeyR':
       for (let i = 0; i < N; i++) spawnParticle(i);
       simTime = 0;
-      ctx.fillStyle = '#05050d';
+      ctx.fillStyle = K.bg;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       break;
   }

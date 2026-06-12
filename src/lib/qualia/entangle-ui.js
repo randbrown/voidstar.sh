@@ -11,6 +11,7 @@
 
 import { createEntangle } from './entangle.js';
 import { SKELETON_BONES } from './pose-features.js';
+import { readKnobs } from './theme.js';
 
 const STYLE_ID = 'entangle-style';
 const CSS = `
@@ -139,7 +140,13 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
 
   const skelLayer = new Map();   // id → { alpha, order, hue, joints }
   let skelOrder = 0;
-  const idHue = (id) => { let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0; return 175 + (h % 130); }; // cyan→violet→pink
+  // Each participant gets a stable hue spread across the active theme's range.
+  const idHue = (id) => {
+    let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    const K = readKnobs();
+    const spread = K.mono ? 0 : Math.max(1, K.hueSpread);
+    return K.hueBase + (h % spread);
+  };
 
   function drawSkeletons() {
     requestAnimationFrame(drawSkeletons);

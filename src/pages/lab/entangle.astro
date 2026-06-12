@@ -8,24 +8,22 @@
 // laptop is never burdened. Reached by scanning the QR shown in the lab.
 import { Image } from 'astro:assets';
 import logo from '../../assets/art/logos_alpha/voidstar_logo_cosmos_atom_0.png';
+import ThemeBoot from '../../components/ThemeBoot.astro';
+import '../../styles/themes.css';
 ---
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <ThemeBoot />
   <title>Entanglement | voidstar</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --accent: #8b5cf6; --cyan: #22d3ee; --pink: #f472b6; --green: #4ade80;
-      --amber: #fbbf24; --void: #05050d; --text: #e9e6ff; --muted: #8a85b8;
-      --border: rgba(45,45,80,0.7);
-      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-    }
+    /* Palette tokens come from themes.css (imported above). */
     html, body { min-height: 100%; background:
-      radial-gradient(120% 80% at 50% -10%, #150f2e 0%, var(--void) 60%); color: var(--text); }
+      radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent) 22%, var(--void)) 0%, var(--void) 60%); color: var(--text); }
     body { font-family: var(--font-mono); padding:
       max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
       max(2rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));

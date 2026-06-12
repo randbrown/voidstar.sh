@@ -18,10 +18,14 @@ async function lib() {
  */
 export async function renderQR(canvas, text, size = 320) {
   const QR = await lib();
+  // Pull the active theme's colors so the QR matches whatever skin is live.
+  const cs = getComputedStyle(document.documentElement);
+  const dark  = cs.getPropertyValue('--text').trim()    || '#e9e6ff';
+  const light = cs.getPropertyValue('--viz-bg').trim()   || '#05050d';
   await QR.toCanvas(canvas, text, {
     width: size,
     margin: 2,
     errorCorrectionLevel: 'M',
-    color: { dark: '#e9e6ff', light: '#05050d' },   // --text on --void
+    color: { dark, light },   // --text on --viz-bg (theme-aware)
   });
 }

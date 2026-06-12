@@ -1,6 +1,7 @@
 ---
 import { Image } from 'astro:assets';
 import logo from '../assets/art/logos_alpha/voidstar_logo_cosmos_atom_0.png';
+import ThemeSwitch from './ThemeSwitch.astro';
 
 const nav = [
   { href: '/posts',   label: 'posts'   },
@@ -26,6 +27,7 @@ const current = Astro.url.pathname;
           {label}
         </a>
       ))}
+      <ThemeSwitch class="nav-theme" />
     </nav>
 
     <button class="menu-toggle" id="menu-toggle" aria-label="Toggle menu" aria-expanded="false">
@@ -39,6 +41,7 @@ const current = Astro.url.pathname;
         {label}
       </a>
     ))}
+    <ThemeSwitch class="mobile-theme" />
   </nav>
 </header>
 
@@ -58,7 +61,7 @@ const current = Astro.url.pathname;
   position: sticky;
   top: 0;
   z-index: 100;
-  background: rgba(5, 5, 13, 0.85);
+  background: color-mix(in srgb, var(--void) 85%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
@@ -91,6 +94,8 @@ const current = Astro.url.pathname;
   align-items: center;
   gap: 0.25rem;
 }
+.nav-theme { margin-left: 0.5rem; }
+.mobile-theme { margin-top: 0.75rem; }
 .nav-link {
   font-family: var(--font-mono);
   font-size: 0.85rem;

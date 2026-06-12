@@ -1,0 +1,459 @@
+/* ============================================================================
+   themes.css — single source of truth for design tokens + alternate themes.
+
+   Imported by global.css (whole site) AND directly by each standalone lab page
+   (the labs don't go through BaseLayout, so they pull this in themselves).
+
+   A theme = a set of token overrides selected by `data-theme` on <html>.
+   Everything a theme needs to restyle — chrome AND canvas visuals — is a token
+   here, so one attribute reskins the site and the labs together.
+
+   Canvas visuals read the `--viz-*` knobs via JS (src/lib/qualia/theme.js).
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=VT323&display=swap');
+
+/* ---- Voidstar (default) --------------------------------------------------- */
+:root {
+  /* surfaces & text */
+  --void:        #05050d;
+  --void-2:      #0a0a1a;
+  --surface:     #0f0f24;
+  --surface-2:   #17173a;
+  --border:      #252550;
+  --border-2:    #3a3a78;
+  --text:        #dde1f0;
+  --text-muted:  #7878a8;
+  --text-dim:    #4a4a70;
+  --muted:       var(--text-muted);   /* alias used by the lab HUDs */
+
+  /* translucent HUD ("glass") surfaces — auto-derived from --void so every
+     theme gets a matching frosted panel for free; win95 overrides to opaque */
+  --surface-glass:   color-mix(in srgb, var(--void) 82%, transparent);
+  --surface-glass-2: color-mix(in srgb, var(--void-2) 70%, transparent);
+  --hud-border:      color-mix(in srgb, var(--border-2) 55%, transparent);
+
+  /* accents + their glows */
+  --accent:      #8b5cf6;
+  --accent-glow: rgba(139, 92, 246, 0.35);
+  --cyan:        #22d3ee;
+  --cyan-glow:   rgba(34, 211, 238, 0.3);
+  --pink:        #f472b6;
+  --pink-glow:   rgba(244, 114, 182, 0.3);
+  --green:       #4ade80;
+  --amber:       #fbbf24;             /* used by cymatics HUD */
+
+  /* typography */
+  --font-sans:   'Space Grotesk', system-ui, sans-serif;
+  --font-mono:   'JetBrains Mono', ui-monospace, monospace;
+  --font-ui:     var(--font-sans);   /* chrome font; some themes swap it */
+
+  /* chrome feel */
+  --radius:      6px;
+  --radius-lg:   12px;
+  --glow-strength: 1;                 /* multiplier gating CSS bloom (0 = flat) */
+  --panel-blur:  10px;                /* backdrop-filter amount for HUD panels */
+
+  /* texture overlays (opacity, 0 = off) */
+  --tex-scanline: 0;
+  --tex-grain:    0;
+
+  /* canvas knobs — read by JS (src/lib/qualia/theme.js) to skin the visuals */
+  --viz-bg:        #05050d;           /* canvas clear color */
+  --viz-hue-base:  250;               /* base hue (deg) */
+  --viz-hue-spread: 90;               /* hue range (deg) */
+  --viz-sat:       85;                /* base saturation (%) */
+  --viz-light:     55;                /* base lightness (%) */
+  --viz-glow:      1;                 /* canvas bloom / shadowBlur multiplier */
+  --viz-mono:      0;                 /* 1 = render monochrome (phosphor) */
+
+  /* Retint filter for embedded code editors / widgets (the Strudel REPL's
+     syntax colors live inside its shadow-DOM CodeMirror theme, so a CSS
+     filter is the reliable way to pull them into the theme's family).
+     sepia() collapses hues to a warm monochrome, hue-rotate() steers it,
+     and luminance differences keep syntax highlighting readable. */
+  --code-filter:   none;
+}
+
+/* Explicit voidstar selector so it can be chosen from the switcher too. */
+[data-theme="voidstar"] { /* identity — uses :root defaults */ }
+
+/* ---- Phosphor Terminal (mono CRT — harsh-noise / experimental) ----------- */
+[data-theme="phosphor"] {
+  --void:        #050805;
+  --void-2:      #0a100a;
+  --surface:     #0a140a;
+  --surface-2:   #0f1c0f;
+  --border:      #1d3a1d;
+  --border-2:    #2f5f2f;
+  --text:        #b6ffb0;
+  --text-muted:  #5fa85a;
+  --text-dim:    #356b32;
+  --accent:      #4dff5a;
+  --accent-glow: rgba(77, 255, 90, 0.18);
+  --cyan:        #7dffc0;
+  --cyan-glow:   rgba(125, 255, 192, 0.15);
+  --pink:        #b6ff7a;
+  --pink-glow:   rgba(182, 255, 122, 0.15);
+  --green:       #4dff5a;
+  --amber:       #b6ff7a;
+  --font-sans:   'VT323', 'JetBrains Mono', ui-monospace, monospace;
+  --font-ui:     'VT323', 'JetBrains Mono', ui-monospace, monospace;
+  --radius:      0;
+  --radius-lg:   0;
+  --glow-strength: 0.4;
+  --panel-blur:  4px;
+  --tex-scanline: 0.35;
+  --viz-bg:        #050805;
+  --viz-hue-base:  130;
+  --viz-hue-spread: 22;
+  --viz-sat:       95;
+  --viz-light:     58;
+  --viz-glow:      0.5;
+  --viz-mono:      1;
+  --code-filter:   sepia(1) hue-rotate(85deg) saturate(3);
+}
+
+/* Amber phosphor variant — same CRT, warm tube. */
+[data-theme="phosphor-amber"] {
+  --void:        #0a0700;
+  --void-2:      #120c00;
+  --surface:     #140d00;
+  --surface-2:   #1c1300;
+  --border:      #3a2a0d;
+  --border-2:    #5f4416;
+  --text:        #ffd27a;
+  --text-muted:  #b58a3c;
+  --text-dim:    #6b5016;
+  --accent:      #ffb000;
+  --accent-glow: rgba(255, 176, 0, 0.18);
+  --cyan:        #ffcf6e;
+  --cyan-glow:   rgba(255, 207, 110, 0.15);
+  --pink:        #ff8a3c;
+  --pink-glow:   rgba(255, 138, 60, 0.15);
+  --green:       #ffb000;
+  --amber:       #ffb000;
+  --font-sans:   'VT323', 'JetBrains Mono', ui-monospace, monospace;
+  --font-ui:     'VT323', 'JetBrains Mono', ui-monospace, monospace;
+  --radius:      0;
+  --radius-lg:   0;
+  --glow-strength: 0.4;
+  --panel-blur:  4px;
+  --tex-scanline: 0.35;
+  --viz-bg:        #0a0700;
+  --viz-hue-base:  38;
+  --viz-hue-spread: 22;
+  --viz-sat:       95;
+  --viz-light:     58;
+  --viz-glow:      0.5;
+  --viz-mono:      1;
+  --code-filter:   sepia(1) saturate(3) brightness(1.05);
+}
+
+/* ---- Tape Saturation (warm analog — lo-fi tape ambient) ------------------ */
+[data-theme="tape"] {
+  --void:        #15110c;
+  --void-2:      #1b150d;
+  --surface:     #20180e;
+  --surface-2:   #2a2013;
+  --border:      #4a3a22;
+  --border-2:    #6b5230;
+  --text:        #ece3d0;
+  --text-muted:  #b09a78;
+  --text-dim:    #7a6647;
+  --accent:      #c8743a;
+  --accent-glow: rgba(200, 116, 58, 0.28);
+  --cyan:        #d9a441;
+  --cyan-glow:   rgba(217, 164, 65, 0.22);
+  --pink:        #b5683a;
+  --pink-glow:   rgba(181, 104, 58, 0.22);
+  --green:       #9aa24a;
+  --amber:       #d9a441;
+  --radius:      12px;
+  --radius-lg:   16px;
+  --glow-strength: 0.6;
+  --panel-blur:  6px;
+  --tex-grain:   0.08;
+  --viz-bg:        #15110c;
+  --viz-hue-base:  30;
+  --viz-hue-spread: 40;
+  --viz-sat:       60;
+  --viz-light:     52;
+  --viz-glow:      0.7;
+  --code-filter:   sepia(0.85) hue-rotate(-12deg) saturate(1.3);
+}
+
+/* ---- Abyssal Bioluminescence (deep-sea glow — dark ambient / drone) ------ */
+[data-theme="abyssal"] {
+  --void:        #02080a;
+  --void-2:      #041014;
+  --surface:     #04181b;
+  --surface-2:   #08242a;
+  --border:      #11414a;
+  --border-2:    #1d6b78;
+  --text:        #cfeee8;
+  --text-muted:  #5fa0a0;
+  --text-dim:    #356b6b;
+  --accent:      #2fd6b0;
+  --accent-glow: rgba(47, 214, 176, 0.4);
+  --cyan:        #46e8ff;
+  --cyan-glow:   rgba(70, 232, 255, 0.35);
+  --pink:        #6ef0c8;
+  --pink-glow:   rgba(110, 240, 200, 0.3);
+  --green:       #58f5b0;
+  --amber:       #5ef0e0;
+  --radius:      10px;
+  --radius-lg:   14px;
+  --glow-strength: 1.3;
+  --panel-blur:  12px;
+  --viz-bg:        #02080a;
+  --viz-hue-base:  168;
+  --viz-hue-spread: 60;
+  --viz-sat:       80;
+  --viz-light:     58;
+  --viz-glow:      1.4;
+  --code-filter:   sepia(1) hue-rotate(125deg) saturate(2.2);
+}
+
+/* ---- Glacial Drift (icy minimal — Nordic / ECM ambient) ------------------ */
+[data-theme="glacial"] {
+  --void:        #0c1014;
+  --void-2:      #11161b;
+  --surface:     #141b22;
+  --surface-2:   #1b242d;
+  --border:      #2a3742;
+  --border-2:    #45586a;
+  --text:        #e8eef5;
+  --text-muted:  #9fb3c4;
+  --text-dim:    #5f7384;
+  --accent:      #8fb6cf;
+  --accent-glow: rgba(143, 182, 207, 0.22);
+  --cyan:        #b9e0f0;
+  --cyan-glow:   rgba(185, 224, 240, 0.2);
+  --pink:        #c9b6d6;
+  --pink-glow:   rgba(201, 182, 214, 0.2);
+  --green:       #a9d4c4;
+  --amber:       #cfe0ec;
+  --radius:      4px;
+  --radius-lg:   6px;
+  --glow-strength: 0.4;
+  --panel-blur:  20px;
+  --viz-bg:        #0c1014;
+  --viz-hue-base:  200;
+  --viz-hue-spread: 40;
+  --viz-sat:       35;
+  --viz-light:     70;
+  --viz-glow:      0.5;
+  --code-filter:   sepia(0.9) hue-rotate(165deg) saturate(0.8) brightness(1.08);
+}
+
+/* ---- Retro Windows 95 / 3.1 (net-art / vaporwave) ------------------------ *
+   The one theme that changes the chrome *metaphor*: square beveled panels,
+   navy title bars, no glow/blur. Color tokens here; the bevel + title-bar
+   treatment is the scoped skin layer further below.                          */
+[data-theme="win95"] {
+  --void:        #008080;            /* teal desktop */
+  --void-2:      #007575;
+  --surface:     #c0c0c0;            /* classic gray chrome */
+  --surface-2:   #d4d0c8;
+  --border:      #808080;
+  --border-2:    #ffffff;
+  --text:        #000000;
+  --text-muted:  #3a3a3a;
+  --text-dim:    #707070;
+  /* opaque beveled panels — no glass */
+  --surface-glass:   #c0c0c0;
+  --surface-glass-2: #d4d0c8;
+  --hud-border:      #808080;
+  --accent:      #000080;            /* title-bar navy */
+  --accent-glow: transparent;
+  --cyan:        #008080;
+  --cyan-glow:   transparent;
+  --pink:        #800080;
+  --pink-glow:   transparent;
+  --green:       #008000;
+  --amber:       #808000;
+  --font-sans:   'Tahoma', 'Geneva', Verdana, 'MS Sans Serif', sans-serif;
+  --font-ui:     'Tahoma', 'Geneva', Verdana, 'MS Sans Serif', sans-serif;
+  --font-mono:   'Consolas', ui-monospace, monospace;
+  --radius:      0;
+  --radius-lg:   0;
+  --glow-strength: 0;
+  --panel-blur:  0px;
+  --viz-bg:        #008080;
+  --viz-hue-base:  240;
+  --viz-hue-spread: 120;
+  --viz-sat:       90;
+  --viz-light:     55;
+  --viz-glow:      0.2;
+  --code-filter:   grayscale(1) brightness(1.1) contrast(1.1);
+}
+
+/* ============================================================================
+   Texture overlays — scanlines (phosphor) and film grain (tape).
+   A fixed, pointer-events:none layer over the page; opacity driven by the
+   theme tokens so it's invisible (0) on themes that don't use it.
+   ========================================================================== */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9;                        /* above canvas (z2), below HUD (z20) */
+  mix-blend-mode: overlay;
+  background:
+    /* scanlines */
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, calc(0.55 * var(--tex-scanline))) 0px,
+      rgba(0, 0, 0, calc(0.55 * var(--tex-scanline))) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  opacity: calc(var(--tex-scanline));
+  transition: opacity 0.3s;
+}
+/* Film grain overlay (separate layer so it can coexist / use its own blend). */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9;
+  mix-blend-mode: soft-light;
+  opacity: var(--tex-grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  transition: opacity 0.3s;
+}
+
+/* ============================================================================
+   Win95 skin layer — scoped to [data-theme="win95"] so it can't leak.
+   Bevels via box-shadow, square corners, navy title bars, no blur/glow.
+   Targets existing site + HUD selectors, so no markup changes are required.
+   ========================================================================== */
+[data-theme="win95"] {
+  /* classic raised / sunken 3-D edges */
+  --bevel-raised:
+    inset 1px 1px #ffffff, inset -1px -1px #000000,
+    inset 2px 2px #dfdfdf, inset -2px -2px #808080;
+  --bevel-sunken:
+    inset 1px 1px #808080, inset -1px -1px #ffffff,
+    inset 2px 2px #000000, inset -2px -2px #dfdfdf;
+}
+[data-theme="win95"] body::after,
+[data-theme="win95"] body::before { display: none; }
+
+/* No bloom anywhere. */
+[data-theme="win95"] .glow-accent,
+[data-theme="win95"] .glow-cyan,
+[data-theme="win95"] .glow-pink { text-shadow: none; }
+
+/* Raised beveled buttons / controls. */
+[data-theme="win95"] .btn,
+[data-theme="win95"] .ctrl-btn,
+[data-theme="win95"] .qp-toggle,
+[data-theme="win95"] .ap-preset,
+[data-theme="win95"] select.ctrl-btn,
+[data-theme="win95"] .theme-switch select {
+  background: #c0c0c0 !important;
+  color: #000 !important;
+  border: 1px solid #000 !important;
+  border-radius: 0 !important;
+  box-shadow: var(--bevel-raised) !important;
+  backdrop-filter: none !important;
+}
+[data-theme="win95"] .btn:active,
+[data-theme="win95"] .ctrl-btn:active,
+[data-theme="win95"] .qp-toggle.active,
+[data-theme="win95"] .ap-preset.active,
+[data-theme="win95"] .ctrl-btn.active {
+  box-shadow: var(--bevel-sunken) !important;
+  transform: translate(1px, 1px);
+}
+
+/* Site cards / panels become raised gray windows. */
+[data-theme="win95"] .post-card,
+[data-theme="win95"] .video-card,
+[data-theme="win95"] .prose pre,
+[data-theme="win95"] .tag {
+  background: #c0c0c0 !important;
+  color: #000 !important;
+  border: 1px solid #000 !important;
+  border-radius: 0 !important;
+  box-shadow: var(--bevel-raised) !important;
+}
+
+/* Frosted HUD panels → opaque beveled gray windows. Real selectors here:
+   the qualia params/diag/fx cards are `.qp-card`, the mobile tab bar is
+   `.qp-tabs`, plus the topbar + cymatics/spectrum audio panel. !important so
+   the per-page mobile alpha override (.qp-card on small screens) can't win. */
+[data-theme="win95"] #topbar,
+[data-theme="win95"] #audio-panel,
+[data-theme="win95"] .qp-card,
+[data-theme="win95"] .qp-tabs {
+  background: #c0c0c0 !important;
+  border: 1px solid #000 !important;
+  border-radius: 0 !important;
+  box-shadow: var(--bevel-raised) !important;
+  backdrop-filter: none !important;
+  color: #000 !important;
+}
+/* Card text reads black; values/titles use the navy accent for contrast. */
+[data-theme="win95"] .qp-card .qp-row label,
+[data-theme="win95"] .qp-card .qp-head,
+[data-theme="win95"] .qp-card .qp-preset-label,
+[data-theme="win95"] #audio-panel,
+[data-theme="win95"] #audio-panel * { color: #000 !important; }
+[data-theme="win95"] .qp-card .qp-val,
+[data-theme="win95"] .qp-card .qp-head .qp-title { color: #000080 !important; }
+
+/* Each qualia card header becomes a classic navy title bar. */
+[data-theme="win95"] .qp-card > .qp-head {
+  background: linear-gradient(90deg, #000080, #1084d0) !important;
+  color: #fff !important;
+  padding: 0.2rem 0.45rem !important;
+  border-radius: 0 !important;
+}
+[data-theme="win95"] .qp-card > .qp-head .qp-title,
+[data-theme="win95"] .qp-card > .qp-head span { color: #fff !important; }
+
+/* Mobile tab bar buttons → beveled. */
+[data-theme="win95"] .qp-tab {
+  background: #c0c0c0 !important; color: #000 !important;
+  border: 1px solid #000 !important; border-radius: 0 !important;
+  box-shadow: var(--bevel-raised) !important;
+}
+[data-theme="win95"] .qp-tab.active { box-shadow: var(--bevel-sunken) !important; }
+
+/* ── Main-site header → classic gray menu bar (black nav, navy hover). ── */
+[data-theme="win95"] .site-header {
+  background: #c0c0c0 !important;
+  border-bottom: 1px solid #000 !important;
+  box-shadow: var(--bevel-raised) !important;
+  backdrop-filter: none !important;
+}
+[data-theme="win95"] .nav-link,
+[data-theme="win95"] .mobile-nav-link { color: #000 !important; }
+[data-theme="win95"] .nav-link:hover { background: #000080 !important; color: #fff !important; }
+[data-theme="win95"] .mobile-nav {
+  background: #c0c0c0 !important;
+  border-top: 1px solid #000 !important;
+}
+[data-theme="win95"] .mobile-nav-link { border-bottom: 1px solid #808080 !important; }
+[data-theme="win95"] .menu-toggle span { background: #000 !important; }
+
+/* ── Text sitting directly on the teal desktop goes light so it reads. ──
+   (Cards/panels above set their own dark-on-gray text and win out.) */
+[data-theme="win95"] .hero-eyebrow,
+[data-theme="win95"] .hero-desc,
+[data-theme="win95"] .section-heading,
+[data-theme="win95"] .section-link,
+[data-theme="win95"] .lab-desc,
+[data-theme="win95"] .page-title {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  background: none !important;
+}
+[data-theme="win95"] .prose,
+[data-theme="win95"] .prose :is(p, li, h1, h2, h3, blockquote) { color: #eafdfd; }

@@ -17,12 +17,15 @@
 //     never sees a real person in chladni / lissajous / interference, so
 //     poses surface only when bright clusters happen to look human —
 //     "ghosts in the signal" emerging from the visualizer.
+import ThemeBoot from '../../components/ThemeBoot.astro';
+import '../../styles/themes.css';
 ---
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <ThemeBoot />
   <title>Cymatics | voidstar lab</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <!-- Astro auto-scopes <style> blocks via a per-component data attribute,
@@ -41,19 +44,8 @@
   </style>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --accent:    #8b5cf6;
-      --cyan:      #22d3ee;
-      --pink:      #f472b6;
-      --green:     #4ade80;
-      --amber:     #fbbf24;
-      --void:      #05050d;
-      --surface:   rgba(10,10,26,0.82);
-      --border:    rgba(45,45,80,0.7);
-      --text:      #dde1f0;
-      --muted:     #7878a8;
-      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-    }
+    /* Palette tokens come from themes.css (imported above) so the HUD follows
+       the active theme. HUD panels use the translucent --surface-glass token. */
     html, body { width: 100%; height: 100%; overflow: hidden; background: var(--void); }
     /* Only OUR canvases get fullscreen-fixed treatment. A blanket `canvas {}`
        rule would also catch Strudel widget canvases (.scope, ._punchcard,
@@ -69,7 +61,9 @@
     /* Strudel's getDrawContext() looks for #test-canvas — used by .scope(),
        .pianoroll(), and other draw outputs. Sits above the viz, below the
        topbar (z:20) and strudel panel (z:18). */
-    #test-canvas  { z-index: 5; pointer-events: none; background: transparent; }
+    #test-canvas  { z-index: 5; pointer-events: none; background: transparent;
+                    /* Strudel scope/pianoroll widgets follow the theme retint. */
+                    filter: var(--code-filter, none); }
 
     /* `transform` is set imperatively by updateVideoTransform() so mirror
        (scaleX(-1)) and rotation can compose. Don't hardcode it here. */
@@ -97,7 +91,7 @@
       position: fixed; top: 0; left: 0; right: 0; z-index: 20;
       display: flex; align-items: center; justify-content: space-between;
       padding: 0.6rem 1.25rem;
-      background: var(--surface); backdrop-filter: blur(10px);
+      background: var(--surface-glass); backdrop-filter: blur(var(--panel-blur));
       border-bottom: 1px solid var(--border);
       font-family: var(--font-mono); font-size: 0.8rem;
       transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
@@ -158,7 +152,7 @@
       position: fixed; inset: 0; z-index: 30;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 1.25rem;
-      background: rgba(5,5,13,0.93); font-family: var(--font-mono);
+      background: color-mix(in srgb, var(--void) 93%, transparent); font-family: var(--font-mono);
       transition: opacity 0.5s;
     }
     #status-overlay.hidden { opacity: 0; pointer-events: none; }
@@ -177,7 +171,7 @@
       color: white; font-family: var(--font-mono); font-size: 0.875rem;
       cursor: pointer; transition: all 0.2s;
     }
-    .start-btn:hover { background: #7c3aed; box-shadow: 0 0 20px rgba(139,92,246,0.5); }
+    .start-btn:hover { filter: brightness(1.12); box-shadow: 0 0 calc(20px * var(--glow-strength)) var(--accent-glow); }
     .start-btn.alt {
       background: transparent; border: 1px solid var(--border);
       color: var(--muted); margin-top: 0;
@@ -199,7 +193,7 @@
       position: fixed; bottom: 1.25rem; left: 50%;
       transform: translateX(-50%);
       z-index: 15;
-      background: var(--surface); backdrop-filter: blur(12px);
+      background: var(--surface-glass); backdrop-filter: blur(var(--panel-blur));
       border: 1px solid var(--border); border-radius: 10px;
       padding: 0.75rem 1rem; font-family: var(--font-mono);
       font-size: 0.72rem; color: var(--text);
@@ -259,7 +253,7 @@
     #strudel-header {
       display: flex; align-items: center; gap: 0.75rem;
       padding: 0.45rem 0.75rem;
-      background: var(--surface); backdrop-filter: blur(8px);
+      background: var(--surface-glass); backdrop-filter: blur(var(--panel-blur));
       border-bottom: 1px solid var(--border);
       font-size: 0.75rem;
       cursor: grab; user-select: none;
@@ -277,6 +271,8 @@
     #strudel-mount {
       flex: 1; min-height: 0; overflow: auto;
       background: transparent;
+      /* Retint the embedded editor's shadow-DOM syntax colors per theme. */
+      filter: var(--code-filter, none);
     }
     /* Light-DOM CSS overrides — work if the editor renders into the regular
        DOM tree. Shadow-root injection (see injectStrudelTransparency) covers
@@ -353,6 +349,7 @@
     <span id="mode-name">chladni</span>
     <span id="lvl">b-- m-- h--</span>
     <span id="mn">m-- n--</span>
+    <select id="theme-select" class="ctrl-btn" title="Theme (Y)"></select>
     <select id="mic-select" class="ctrl-btn" title="Choose microphone" style="display:none;"></select>
     <select id="cam-select" class="ctrl-btn" title="Choose camera" style="display:none;"></select>
     <button class="ctrl-btn active" id="btn-camera" title="Camera size (C)" style="display:none;">camera</button>
@@ -510,6 +507,20 @@
 </div>
 
 <script>
+import { initThemeControl, cycleTheme, readKnobs, onThemeChange } from '../../lib/qualia/theme.js';
+
+// ── Theme knobs ──────────────────────────────────────────────────────────────
+// Canvas colors follow the active theme via the --viz-* tokens (themes.css).
+// Read once and re-read on theme change; never call getComputedStyle per-frame.
+function hexToRgb(h) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec((h || '').trim());
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [5, 5, 13];
+}
+let K = readKnobs();
+let bgRGB = hexToRgb(K.bg);
+onThemeChange(() => { K = readKnobs(); bgRGB = hexToRgb(K.bg); });
+initThemeControl(document.getElementById('theme-select'));
+
 // ── Persistent settings ──────────────────────────────────────────────────────
 // Same shape as spectrum-pose: every toggle / slider writes to localStorage,
 // debounced. Loaded after all UI wiring is in place so toggles fire correctly.
@@ -662,7 +673,7 @@ function renderAsciiPost(W, H) {
   const data = asciiSrcCtx.getImageData(0, 0, asciiCols, asciiRows).data;
 
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = '#05050d';
+  ctx.fillStyle = K.bg;
   ctx.fillRect(0, 0, W, H);
 
   const cellW    = W / asciiCols;
@@ -670,7 +681,7 @@ function renderAsciiPost(W, H) {
   const fontSize = Math.min(cellH * 1.02, cellW / 0.55);
   ctx.font         = `${fontSize}px 'JetBrains Mono', ui-monospace, monospace`;
   ctx.textBaseline = 'top';
-  ctx.fillStyle    = 'rgba(122,230,170,0.92)';
+  ctx.fillStyle    = K.color(0.4, { light: 75, alpha: 0.92 });
 
   const N = ASCII_RAMP.length - 1;
   const gamma = 0.85;
@@ -916,8 +927,8 @@ function updateParticles(dt) {
 function drawParticles(W, H) {
   ctx.globalCompositeOperation = 'lighter';
   // Hue base shifts slowly with audio for live evolution.
-  const hueBase = 250 + (audioEnabled ? aMids * 60 + beatPulse * 30 : 0);
-  const hueSpread = 90;
+  const hueBase = K.hueBase + (audioEnabled ? aMids * 60 + beatPulse * 30 : 0);
+  const hueSpread = K.mono ? 0 : K.hueSpread;
   const baseAlpha = 0.45 + (audioEnabled ? aTotal * 0.35 : 0);
   const r = 0.9 + (audioEnabled ? beatPulse * 0.8 : 0);
 
@@ -970,7 +981,7 @@ function drawField(W, H) {
   const img = fieldBufCtx.createImageData(fieldBufW, fieldBufH);
   const data = img.data;
   // Audio-driven hue base & saturation
-  const hueBase = audioEnabled ? 250 + aMids * 80 : 250;
+  const hueBase = audioEnabled ? K.hueBase + aMids * 80 : K.hueBase;
   const energy  = audioEnabled ? aTotal : 0.4;
   for (let j = 0; j < fieldBufH; j++) {
     const y = (j + 0.5) / fieldBufH;
@@ -1147,14 +1158,22 @@ function fireRippleOnBeat() {
 // of FX. Landmarks are stored as { x, y, z, visibility } in [0,1] field
 // coords, just like MediaPipe's PoseLandmarker output.
 
-const PERSON_PALETTE = [
-  { boneA:'rgba(139,92,246,0.75)',  boneB:'rgba(34,211,238,0.75)',
-    spark:[270,190], halo:'rgba(139,92,246,0.20)', joint:'rgba(139,92,246,0.95)' },
-  { boneA:'rgba(244,114,182,0.75)', boneB:'rgba(74,222,128,0.75)',
-    spark:[330,130], halo:'rgba(244,114,182,0.20)', joint:'rgba(244,114,182,0.95)' },
-  { boneA:'rgba(251,191,36,0.75)',  boneB:'rgba(139,92,246,0.75)',
-    spark:[ 45,270], halo:'rgba(251,191,36,0.20)', joint:'rgba(251,191,36,0.95)' },
-];
+// Built from the theme's curated accent set (K.ac) so skeletons stay in-family
+// on every skin; under voidstar this reproduces the original hardcoded colors.
+function buildPersonPalette() {
+  const mk = (a, b) => ({
+    boneA: a.rgba(0.75), boneB: b.rgba(0.75),
+    spark: [Math.round(a.hue), Math.round(b.hue)],
+    halo: a.rgba(0.20), joint: a.rgba(0.95),
+  });
+  return [
+    mk(K.ac.accent, K.ac.cyan),
+    mk(K.ac.pink,   K.ac.green),
+    mk(K.ac.amber,  K.ac.accent),
+  ];
+}
+let PERSON_PALETTE = buildPersonPalette();
+onThemeChange(() => { PERSON_PALETTE = buildPersonPalette(); });
 
 const LM_WEIGHT = {
   0:0.6, 1:0.35, 3:0.35, 4:0.35, 6:0.35,
@@ -1619,12 +1638,12 @@ function draw(now) {
   const baseFade = trails ? 0.05 : 0.18;
   const fade = audioEnabled ? baseFade * (0.85 + aBass * 0.5) : baseFade;
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = `rgba(5,5,13,${fade})`;
+  ctx.fillStyle = `rgba(${bgRGB[0]},${bgRGB[1]},${bgRGB[2]},${fade})`;
   ctx.fillRect(0, 0, W, H);
 
   // Subtle beat flash
   if (beatPulse > 0.08) {
-    ctx.fillStyle = `rgba(139,92,246,${beatPulse * 0.05})`;
+    ctx.fillStyle = K.ac.accent.rgba(beatPulse * 0.05);
     ctx.fillRect(0, 0, W, H);
   }
 
@@ -1641,7 +1660,7 @@ function draw(now) {
       break;
     case 'ripples':
       // Ripples-only mode: deeper background fade so ripples ring out alone.
-      ctx.fillStyle = `rgba(5,5,13,${0.06})`;
+      ctx.fillStyle = `rgba(${bgRGB[0]},${bgRGB[1]},${bgRGB[2]},${0.06})`;
       ctx.fillRect(0, 0, W, H);
       break;
     case 'field':
@@ -1673,7 +1692,7 @@ function draw(now) {
     const barW = 3, gap = 3, maxH = 50;
     const bx = 12, by = H - 12;
     const levels = [aBass, aMids, aHighs];
-    const cols   = ['rgba(139,92,246,0.85)', 'rgba(34,211,238,0.85)', 'rgba(244,114,182,0.85)'];
+    const cols   = [K.ac.accent.rgba(0.85), K.ac.cyan.rgba(0.85), K.ac.pink.rgba(0.85)];
     levels.forEach((lvl, j) => {
       const h = Math.max(2, lvl * maxH);
       ctx.fillStyle = cols[j];
@@ -2691,6 +2710,7 @@ document.addEventListener('keydown', e => {
     case 'KeyM':    btnAudio.click();   break;
     case 'KeyD':    btnStrudel.click(); break;
     case 'KeyZ':    setZen(!zenMode);   break;
+    case 'KeyY':    cycleTheme(e.shiftKey ? -1 : 1); break;
     case 'KeyC':    btnCamera.click();    break;
     case 'KeyO':
     case 'Numpad0': btnCamRotate.click(); break;
@@ -2699,7 +2719,7 @@ document.addEventListener('keydown', e => {
       initParticles();
       for (let i = 0; i < MAX_RIPPLES; i++) { rage[i] = rlife[i] = 0; }
       for (let i = 0; i < MAX_SPARKS;  i++) { sage[i] = slife[i] = 0; }
-      ctx.fillStyle = '#05050d'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = K.bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
       break;
   }
 });
