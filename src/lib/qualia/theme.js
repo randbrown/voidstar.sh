@@ -21,6 +21,9 @@ export const THEMES = [
   { id: 'abyssal',        label: 'abyssal ≈' },
   { id: 'glacial',        label: 'glacial ❄' },
   { id: 'win95',          label: 'win95 ▣' },
+  { id: 'stained-glass',  label: 'stained glass ◆' },
+  { id: 'visioneer',      label: 'visioneer ◉' },
+  { id: 'gardens',        label: 'gardens ❀' },
 ];
 
 const IDS = THEMES.map((t) => t.id);
