@@ -225,11 +225,23 @@ split. Check WCAG contrast for small text on the page background.
 
 ## Ideas parking lot (unbuilt)
 
+> **Brand context:** see [`docs/agent-reference.md`](./agent-reference.md) for the
+> wider voidstar / Randyland creative brief. Its voidstar palette already names
+> accents that map cleanly onto new themes — **accretion gold**, **neural
+> magenta**, **plasma orange**, **ghost green**, **CRT phosphor white**, on a
+> `#000000 / #050816 / #0A0F2A` void with `#00D4FF / #66F0FF` cyans. Good seeds
+> for the `--accent` / `--cyan` / `--pink` / `--green` / `--amber` set. Keep the
+> brand north stars in mind: restraint, glitch, "consciousness rendered as
+> light, sound rendered as geometry" — not generic EDM/cyberpunk.
+
 Directions that fit the ambient/avant-garde brief and the current architecture
 (each ≈ one `[data-theme]` block, plus a skin layer only if noted):
+- **Gargantua / Accretion** — black + accretion-gold + cyan rim; the qualia
+  "gargantua" fx aesthetic as a global theme.
 - **Ember Ritual** — ember-red on charcoal, occult serif accent (dark ambient).
 - **Solar Plasma** — gold↔magenta plasma on black (cosmic ambient).
-- **Botanical / Mycelial** — moss/soil greens & browns, organic (generative).
+- **Botanical / Mycelial** — moss/soil greens & browns, organic (generative);
+  ties to the Cindy Lynn's Gardens branch (stained-glass botany / chemistry).
 - **Risograph** — 2–3 flat spot inks on warm paper, grain, halftone overlay
   (would want a new texture overlay like `--tex-grain`).
 - **Teletext / Mode 7** — chunky blocky palette, scanlines, big type (skin-ish).
