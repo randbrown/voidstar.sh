@@ -289,6 +289,112 @@
   --code-filter:   grayscale(1) brightness(1.1) contrast(1.1);
 }
 
+/* ---- Stained Glass (Cindy Lynn's leaded jewel glass — Randyland2) --------- *
+   Jewel panes glowing against near-black lead came: ruby, cobalt, amethyst,
+   emerald, amber gold. Sharp small radii (cut panes), bloom up (light through
+   glass). See docs/agent-reference.md §2/§5 — stained glass as structure.     */
+[data-theme="stained-glass"] {
+  --void:        #0b0609;
+  --void-2:      #130a12;
+  --surface:     #180d18;
+  --surface-2:   #221224;
+  --border:      #3c2440;
+  --border-2:    #5e3a62;
+  --text:        #f2e8dc;
+  --text-muted:  #b48ba6;
+  --text-dim:    #6e5468;
+  --accent:      #d8385e;            /* ruby pane */
+  --accent-glow: rgba(216, 56, 94, 0.35);
+  --cyan:        #3b7ee8;            /* cobalt pane */
+  --cyan-glow:   rgba(59, 126, 232, 0.32);
+  --pink:        #c95cd8;            /* amethyst pane */
+  --pink-glow:   rgba(201, 92, 216, 0.3);
+  --green:       #2fae62;            /* emerald pane */
+  --amber:       #f0a83c;            /* amber-gold pane */
+  --radius:      2px;
+  --radius-lg:   4px;
+  --glow-strength: 1.1;
+  --panel-blur:  8px;
+  --viz-bg:        #0b0609;
+  --viz-hue-base:  300;              /* amethyst… */
+  --viz-hue-spread: 160;             /* …sweeping through ruby into amber */
+  --viz-sat:       82;
+  --viz-light:     56;
+  --viz-glow:      1.2;
+  --code-filter:   sepia(1) hue-rotate(-55deg) saturate(2.4);
+}
+
+/* ---- Ramblin' Visioneer (cosmic Sasquatch on the night road — RV3) -------- *
+   Twilight indigo highway; Sasquatch-eye glow blue as the accent, evil-eye
+   turquoise, psychedelic flower magenta, pine green, campfire amber. A touch
+   of grain for the handmade folk-art feel. docs/agent-reference.md §3/§4.     */
+[data-theme="visioneer"] {
+  --void:        #100a1c;
+  --void-2:      #161026;
+  --surface:     #1a1230;
+  --surface-2:   #241a40;
+  --border:      #362a58;
+  --border-2:    #544487;
+  --text:        #e8e4f5;
+  --text-muted:  #9a8fc0;
+  --text-dim:    #5e5588;
+  --accent:      #4f8ff7;            /* glowing Sasquatch eyes */
+  --accent-glow: rgba(79, 143, 247, 0.35);
+  --cyan:        #37c8e8;            /* evil-eye turquoise */
+  --cyan-glow:   rgba(55, 200, 232, 0.3);
+  --pink:        #e561b8;            /* psychedelic garden magenta */
+  --pink-glow:   rgba(229, 97, 184, 0.3);
+  --green:       #5fbf6e;            /* pine / trailside green */
+  --amber:       #f5a623;            /* campfire / porch light */
+  --radius:      8px;
+  --radius-lg:   12px;
+  --glow-strength: 1.1;
+  --panel-blur:  10px;
+  --tex-grain:   0.05;
+  --viz-bg:        #100a1c;
+  --viz-hue-base:  215;              /* eye-glow blue… */
+  --viz-hue-spread: 140;             /* …drifting to magenta back-roads */
+  --viz-sat:       80;
+  --viz-light:     58;
+  --viz-glow:      1.15;
+  --code-filter:   sepia(1) hue-rotate(185deg) saturate(2);
+}
+
+/* ---- Gardens (Cindy Lynn's Gardens — stained-glass botany / chemistry) ---- *
+   Greenhouse at dusk: moss/soil green-black, iris violet accent, dewdrop
+   jade, lily pink, chlorophyll green, daylily gold. Rounded, organic, softly
+   luminous. docs/agent-reference.md §5 — botanical, not floral clipart.       */
+[data-theme="gardens"] {
+  --void:        #060d08;
+  --void-2:      #0a140c;
+  --surface:     #0d180f;
+  --surface-2:   #142114;
+  --border:      #28422a;
+  --border-2:    #3f6b40;
+  --text:        #e4f0dc;
+  --text-muted:  #8fb08a;
+  --text-dim:    #587a55;
+  --accent:      #a06ee8;            /* iris violet */
+  --accent-glow: rgba(160, 110, 232, 0.3);
+  --cyan:        #62d9c4;            /* dewdrop jade */
+  --cyan-glow:   rgba(98, 217, 196, 0.28);
+  --pink:        #f08fb4;            /* lily pink */
+  --pink-glow:   rgba(240, 143, 180, 0.28);
+  --green:       #86d94e;            /* chlorophyll */
+  --amber:       #f5b942;            /* daylily gold */
+  --radius:      10px;
+  --radius-lg:   14px;
+  --glow-strength: 0.8;
+  --panel-blur:  10px;
+  --viz-bg:        #060d08;
+  --viz-hue-base:  100;              /* leaf green… */
+  --viz-hue-spread: 60;              /* …to jade; florals come via the accents */
+  --viz-sat:       65;
+  --viz-light:     55;
+  --viz-glow:      0.9;
+  --code-filter:   sepia(1) hue-rotate(55deg) saturate(1.8);
+}
+
 /* ============================================================================
    Texture overlays — scanlines (phosphor) and film grain (tape).
    A fixed, pointer-events:none layer over the page; opacity driven by the

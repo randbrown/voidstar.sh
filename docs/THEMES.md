@@ -41,7 +41,8 @@ exactly, so "voidstar" is a visual no-op.
 
 Theme IDs (keep these in sync across `themes.css`, `theme.js` `THEMES`, and
 `ThemeBoot.astro`'s `OK` list):
-`voidstar`, `phosphor`, `phosphor-amber`, `tape`, `abyssal`, `glacial`, `win95`.
+`voidstar`, `phosphor`, `phosphor-amber`, `tape`, `abyssal`, `glacial`, `win95`,
+`stained-glass`, `visioneer`, `gardens`.
 
 ---
 
@@ -210,7 +211,7 @@ split. Check WCAG contrast for small text on the page background.
 
 ---
 
-## The six shipped themes (intent + lever)
+## The shipped themes (intent + lever)
 
 | Theme | Niche | Defining levers |
 |---|---|---|
@@ -220,6 +221,16 @@ split. Check WCAG contrast for small text on the page background.
 | **abyssal** | dark ambient / drone | teal/jade on near-black, high `--viz-glow`/`--glow-strength` |
 | **glacial** | Nordic / ECM ambient | icy low-sat blue-white, heavy `--panel-blur`, crisp small radius, low glow |
 | **win95** | net-art / vaporwave | teal desktop, beveled gray chrome + title bars (skin layer), no glow/blur |
+| **stained-glass** | Randyland2 leaded jewel glass | ruby/cobalt/amethyst/emerald/amber accents on near-black "lead", sharp 2px radius, hue 300/spread 160 (full jewel sweep), bloom up |
+| **visioneer** | Ramblin' Visioneer — cosmic Sasquatch on the night road | Sasquatch-eye blue `--accent`, evil-eye turquoise, campfire amber, twilight indigo void, light film grain, hue 215/spread 140 |
+| **gardens** | Cindy Lynn's Gardens — stained-glass botany / chemistry | iris-violet `--accent` on moss/soil green-black, lily pink + daylily gold, rounded organic radii, verdant hue 100/spread 60 |
+
+The last three are the **Randyland family** — palettes drawn from
+[`docs/agent-reference.md`](./agent-reference.md) (stained glass §2/§5,
+Ramblin' Visioneer §3/§4, Cindy Lynn's Gardens §5). Token-only themes, no skin
+layer: stained glass reads as structure via sharp pane-like radii + jewel
+accents; visioneer keeps the folk-art warmth with grain + porch-amber;
+gardens stays luminous-botanical, not floral clipart.
 
 ---
 
@@ -240,8 +251,8 @@ Directions that fit the ambient/avant-garde brief and the current architecture
   "gargantua" fx aesthetic as a global theme.
 - **Ember Ritual** — ember-red on charcoal, occult serif accent (dark ambient).
 - **Solar Plasma** — gold↔magenta plasma on black (cosmic ambient).
-- **Botanical / Mycelial** — moss/soil greens & browns, organic (generative);
-  ties to the Cindy Lynn's Gardens branch (stained-glass botany / chemistry).
+- **Mycelial** — soil browns & fungal off-whites, subterranean (generative);
+  a darker, weirder sibling of the shipped **gardens** theme.
 - **Risograph** — 2–3 flat spot inks on warm paper, grain, halftone overlay
   (would want a new texture overlay like `--tex-grain`).
 - **Teletext / Mode 7** — chunky blocky palette, scanlines, big type (skin-ish).
