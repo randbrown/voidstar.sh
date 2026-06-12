@@ -3,29 +3,21 @@
 // Audio via Web Audio API AnalyserNode (frequency + waveform).
 // Multi-person via @mediapipe/tasks-vision PoseLandmarker.
 // Audio-reactive skeleton fx: colour modulation, beat sparks, resonance aura.
+import ThemeBoot from '../../components/ThemeBoot.astro';
+import '../../styles/themes.css';
 ---
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <ThemeBoot />
   <title>Spectrum Pose | voidstar lab</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --accent:    #8b5cf6;
-      --cyan:      #22d3ee;
-      --pink:      #f472b6;
-      --green:     #4ade80;
-      --amber:     #fbbf24;
-      --void:      #05050d;
-      --surface:   rgba(10,10,26,0.82);
-      --border:    rgba(45,45,80,0.7);
-      --text:      #dde1f0;
-      --muted:     #7878a8;
-      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-    }
+    /* Palette tokens come from themes.css (imported above) so the HUD follows
+       the active theme; HUD panels use --surface-glass. */
     html, body { width: 100%; height: 100%; overflow: hidden; background: var(--void); }
     canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 
@@ -50,7 +42,7 @@
       position: fixed; top: 0; left: 0; right: 0; z-index: 20;
       display: flex; align-items: center; justify-content: space-between;
       padding: 0.6rem 1.25rem;
-      background: var(--surface); backdrop-filter: blur(10px);
+      background: var(--surface-glass); backdrop-filter: blur(var(--panel-blur));
       border-bottom: 1px solid var(--border);
       font-family: var(--font-mono); font-size: 0.8rem;
       transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
@@ -112,7 +104,7 @@
       position: fixed; inset: 0; z-index: 30;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 1.25rem;
-      background: rgba(5,5,13,0.93); font-family: var(--font-mono);
+      background: color-mix(in srgb, var(--void) 93%, transparent); font-family: var(--font-mono);
       transition: opacity 0.5s;
     }
     #status-overlay.hidden { opacity: 0; pointer-events: none; }
@@ -148,7 +140,7 @@
       position: fixed; bottom: 1.25rem; left: 50%;
       transform: translateX(-50%);
       z-index: 15;
-      background: var(--surface); backdrop-filter: blur(12px);
+      background: var(--surface-glass); backdrop-filter: blur(var(--panel-blur));
       border: 1px solid var(--border); border-radius: 10px;
       padding: 0.75rem 1rem; font-family: var(--font-mono);
       font-size: 0.72rem; color: var(--text);
@@ -208,6 +200,7 @@
   </div>
   <div id="topbar-right">
     <span id="fps">-- fps</span>
+    <select id="theme-select" class="ctrl-btn" title="Theme (Y)"></select>
     <span id="pose-count">0 pose</span>
     <span id="mode-name">bars</span>
     <span id="lvl">b-- m-- h--</span>
@@ -304,6 +297,22 @@
 </div>
 
 <script>
+import { initThemeControl, cycleTheme, readKnobs, onThemeChange } from '../../lib/qualia/theme.js';
+
+// ── Theme knobs ──────────────────────────────────────────────────────────────
+// Canvas colors follow the active theme via the --viz-* tokens (themes.css).
+function hexToRgb(h) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec((h || '').trim());
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [5, 5, 13];
+}
+let K = readKnobs();
+let bgRGB = hexToRgb(K.bg);
+onThemeChange(() => { K = readKnobs(); bgRGB = hexToRgb(K.bg); });
+initThemeControl(document.getElementById('theme-select'));
+// Map a 0..1 fraction across the theme's hue range. `n` is the lab's native
+// span (kept proportional to the theme spread so voidstar looks unchanged).
+const hspan = (frac, n) => K.hueBase + (K.mono ? 0 : frac * n * (K.hueSpread / 90));
+
 // ── Audio-reactive palette ────────────────────────────────────────────────────
 // Each person gets a base palette; hue shifts with audio intensity at draw time.
 const PERSON_PALETTE = [
@@ -626,7 +635,7 @@ function drawBars(W, H) {
     const x = i * slot + (slot - bw) / 2;
     const h = Math.min(1, v) * H * 0.55;
     const frac = i / BAR_COUNT;
-    const hue  = 260 + frac * 160 + aHighs * 20; // purple → cyan → pink → amber
+    const hue  = hspan(frac, 160) + aHighs * 20; // base→spread across the theme
     const grad = ctx.createLinearGradient(0, baseY, 0, baseY - h);
     grad.addColorStop(0, `hsla(${hue},80%,55%,0.05)`);
     grad.addColorStop(1, `hsla(${hue},85%,65%,0.65)`);
@@ -641,7 +650,7 @@ function drawBars(W, H) {
     const x = i * slot + (slot - bw) / 2;
     const h = Math.min(1, v) * H * 0.35;
     const frac = i / BAR_COUNT;
-    const hue  = 260 + frac * 160 + aHighs * 20;
+    const hue  = hspan(frac, 160) + aHighs * 20;
     ctx.fillStyle = `hsla(${hue},80%,65%,0.45)`;
     ctx.fillRect(x, 0, bw, h);
   }
@@ -666,7 +675,7 @@ function drawRadial(W, H) {
     const y1 = cy + Math.sin(ang) * r0;
     const x2 = cx + Math.cos(ang) * (r0 + len);
     const y2 = cy + Math.sin(ang) * (r0 + len);
-    const hue = 260 + (i / BAR_COUNT) * 160 + aHighs * 20;
+    const hue = hspan(i / BAR_COUNT, 160) + aHighs * 20;
     ctx.strokeStyle = `hsla(${hue},85%,62%,0.7)`;
     ctx.lineWidth = Math.max(1.2, (Math.PI * 2 * r0 / BAR_COUNT) * 0.55);
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
@@ -696,7 +705,7 @@ function drawWaterfall(W, H) {
     if (v < 0.03) continue;
     const x0 = Math.floor((i / BAR_COUNT) * W);
     const x1 = Math.floor(((i + 1) / BAR_COUNT) * W);
-    const hue = 260 + (i / BAR_COUNT) * 160;
+    const hue = hspan(i / BAR_COUNT, 160);
     const l   = 18 + Math.min(1, v) * 22;   // 18–40% (was 30–70%)
     const a   = Math.min(0.55, v * 0.8);    // softer than before
     waterfallCtx.fillStyle = `hsla(${hue},75%,${l}%,${a})`;
@@ -796,7 +805,7 @@ function renderAsciiPost(W, H) {
   const data = asciiSrcCtx.getImageData(0, 0, asciiCols, asciiRows).data;
 
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = '#05050d';
+  ctx.fillStyle = K.bg;
   ctx.fillRect(0, 0, W, H);
 
   const cellW    = W / asciiCols;
@@ -804,7 +813,7 @@ function renderAsciiPost(W, H) {
   const fontSize = Math.min(cellH * 1.02, cellW / 0.55);
   ctx.font         = `${fontSize}px 'JetBrains Mono', ui-monospace, monospace`;
   ctx.textBaseline = 'top';
-  ctx.fillStyle    = 'rgba(122,230,170,0.92)';
+  ctx.fillStyle    = K.color(0.4, { light: 75, alpha: 0.92 });
 
   const N = ASCII_RAMP.length - 1;
   // Boost highlights a touch so peaks punch through.
@@ -1061,7 +1070,7 @@ function draw() {
   const baseFade = trailMode ? 0.08 : 0.22;
   const fade     = audioEnabled ? baseFade * (0.9 + aBass * 0.4) : baseFade;
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = `rgba(5,5,13,${fade})`;
+  ctx.fillStyle = `rgba(${bgRGB[0]},${bgRGB[1]},${bgRGB[2]},${fade})`;
   ctx.fillRect(0, 0, W, H);
 
   // Gentle beat flash
@@ -1611,10 +1620,11 @@ document.addEventListener('keydown', e => {
     case 'Numpad0': btnRotate.click();  break;
     case 'KeyI':    btnMirror.click();  break;
     case 'KeyZ':    setZen(!zenMode);   break;
+    case 'KeyY':    cycleTheme(e.shiftKey ? -1 : 1); break;
     case 'KeyR':
       for (let i = 0; i < MAX_SPARKS; i++) { sage[i] = slife[i] = 0; }
       if (waterfallCtx) waterfallCtx.clearRect(0, 0, waterfallCanvas.width, waterfallCanvas.height);
-      ctx.fillStyle = '#05050d'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = K.bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
       break;
   }
 });

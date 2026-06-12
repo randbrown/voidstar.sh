@@ -1,0 +1,18 @@
+---
+// Inline, synchronous theme bootstrap. Emitted at the very top of <head> so
+// `data-theme` is set before first paint (no flash of the default theme).
+// Self-contained (no imports — inline scripts can't import); the theme id list
+// mirrors THEMES in src/lib/qualia/theme.js.
+---
+<script is:inline>
+  (function () {
+    try {
+      var KEY = 'voidstar.theme';
+      var OK = ['voidstar', 'phosphor', 'phosphor-amber', 'tape', 'abyssal', 'glacial', 'win95'];
+      var t = localStorage.getItem(KEY);
+      document.documentElement.setAttribute('data-theme', OK.indexOf(t) >= 0 ? t : 'voidstar');
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'voidstar');
+    }
+  })();
+</script>
