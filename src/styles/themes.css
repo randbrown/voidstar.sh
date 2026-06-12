@@ -384,11 +384,14 @@ body::before {
   box-shadow: var(--bevel-raised) !important;
 }
 
-/* Frosted HUD panels become opaque beveled windows with a navy title bar. */
+/* Frosted HUD panels → opaque beveled gray windows. Real selectors here:
+   the qualia params/diag/fx cards are `.qp-card`, the mobile tab bar is
+   `.qp-tabs`, plus the topbar + cymatics/spectrum audio panel. !important so
+   the per-page mobile alpha override (.qp-card on small screens) can't win. */
 [data-theme="win95"] #topbar,
 [data-theme="win95"] #audio-panel,
-[data-theme="win95"] #qualia-params,
-[data-theme="win95"] .qp-panel {
+[data-theme="win95"] .qp-card,
+[data-theme="win95"] .qp-tabs {
   background: #c0c0c0 !important;
   border: 1px solid #000 !important;
   border-radius: 0 !important;
@@ -396,22 +399,61 @@ body::before {
   backdrop-filter: none !important;
   color: #000 !important;
 }
+/* Card text reads black; values/titles use the navy accent for contrast. */
+[data-theme="win95"] .qp-card .qp-row label,
+[data-theme="win95"] .qp-card .qp-head,
+[data-theme="win95"] .qp-card .qp-preset-label,
 [data-theme="win95"] #audio-panel,
-[data-theme="win95"] #qualia-params,
-[data-theme="win95"] .qp-panel { padding-top: 1.4rem !important; position: relative; }
-[data-theme="win95"] #audio-panel::before,
-[data-theme="win95"] #qualia-params::before,
-[data-theme="win95"] .qp-panel::before {
-  content: "▣ qualia";
-  position: absolute;
-  top: 2px; left: 2px; right: 2px;
-  height: 1.05rem;
-  display: flex;
-  align-items: center;
-  padding: 0 0.4rem;
-  background: linear-gradient(90deg, #000080, #1084d0);
-  color: #fff;
-  font: 600 0.7rem/1 'Tahoma', sans-serif;
-  letter-spacing: 0.02em;
+[data-theme="win95"] #audio-panel * { color: #000 !important; }
+[data-theme="win95"] .qp-card .qp-val,
+[data-theme="win95"] .qp-card .qp-head .qp-title { color: #000080 !important; }
+
+/* Each qualia card header becomes a classic navy title bar. */
+[data-theme="win95"] .qp-card > .qp-head {
+  background: linear-gradient(90deg, #000080, #1084d0) !important;
+  color: #fff !important;
+  padding: 0.2rem 0.45rem !important;
+  border-radius: 0 !important;
 }
-[data-theme="win95"] #audio-panel::before { content: "♪ audio"; }
+[data-theme="win95"] .qp-card > .qp-head .qp-title,
+[data-theme="win95"] .qp-card > .qp-head span { color: #fff !important; }
+
+/* Mobile tab bar buttons → beveled. */
+[data-theme="win95"] .qp-tab {
+  background: #c0c0c0 !important; color: #000 !important;
+  border: 1px solid #000 !important; border-radius: 0 !important;
+  box-shadow: var(--bevel-raised) !important;
+}
+[data-theme="win95"] .qp-tab.active { box-shadow: var(--bevel-sunken) !important; }
+
+/* ── Main-site header → classic gray menu bar (black nav, navy hover). ── */
+[data-theme="win95"] .site-header {
+  background: #c0c0c0 !important;
+  border-bottom: 1px solid #000 !important;
+  box-shadow: var(--bevel-raised) !important;
+  backdrop-filter: none !important;
+}
+[data-theme="win95"] .nav-link,
+[data-theme="win95"] .mobile-nav-link { color: #000 !important; }
+[data-theme="win95"] .nav-link:hover { background: #000080 !important; color: #fff !important; }
+[data-theme="win95"] .mobile-nav {
+  background: #c0c0c0 !important;
+  border-top: 1px solid #000 !important;
+}
+[data-theme="win95"] .mobile-nav-link { border-bottom: 1px solid #808080 !important; }
+[data-theme="win95"] .menu-toggle span { background: #000 !important; }
+
+/* ── Text sitting directly on the teal desktop goes light so it reads. ──
+   (Cards/panels above set their own dark-on-gray text and win out.) */
+[data-theme="win95"] .hero-eyebrow,
+[data-theme="win95"] .hero-desc,
+[data-theme="win95"] .section-heading,
+[data-theme="win95"] .section-link,
+[data-theme="win95"] .lab-desc,
+[data-theme="win95"] .page-title {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  background: none !important;
+}
+[data-theme="win95"] .prose,
+[data-theme="win95"] .prose :is(p, li, h1, h2, h3, blockquote) { color: #eafdfd; }
