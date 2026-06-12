@@ -287,15 +287,19 @@ const LM_WEIGHT = {
   27: 0.6, 28: 0.6,
 };
 
-// Per-person overlay colour palettes
-const PERSON_PALETTE = [
-  { boneA: 'rgba(139,92,246,0.75)',  boneB: 'rgba(34,211,238,0.75)',
-    attractor: 'rgba(139,92,246,0.95)', repeller: 'rgba(34,211,238,0.95)',
-    halo: 'rgba(139,92,246,0.18)' },
-  { boneA: 'rgba(244,114,182,0.75)', boneB: 'rgba(74,222,128,0.75)',
-    attractor: 'rgba(244,114,182,0.95)', repeller: 'rgba(74,222,128,0.95)',
-    halo: 'rgba(244,114,182,0.18)' },
-];
+// Per-person overlay colour palettes — built from the theme's curated accent
+// set (K.ac) so skeletons stay in-family on every skin; under voidstar this
+// reproduces the original hardcoded colors.
+function buildPersonPalette() {
+  const mk = (a, b) => ({
+    boneA: a.rgba(0.75), boneB: b.rgba(0.75),
+    attractor: a.rgba(0.95), repeller: b.rgba(0.95),
+    halo: a.rgba(0.18),
+  });
+  return [mk(K.ac.accent, K.ac.cyan), mk(K.ac.pink, K.ac.green)];
+}
+let PERSON_PALETTE = buildPersonPalette();
+onThemeChange(() => { PERSON_PALETTE = buildPersonPalette(); });
 
 // Audio beat detection — mutable, controlled by UI sliders (defaults = "default" preset)
 let audioGain     = 1.2;
@@ -539,7 +543,7 @@ function draw() {
 
   // Beat flash — subtle purple bloom
   if (beatActive) {
-    ctx.fillStyle = `rgba(139,92,246,${aBass * 0.07})`;
+    ctx.fillStyle = K.ac.accent.rgba(aBass * 0.07);
     ctx.fillRect(0, 0, W, H);
   }
 
@@ -582,7 +586,7 @@ function draw() {
     const barW = 3, gap = 3, maxH = 50;
     const bx   = 12, by = H - 12;
     const levels = [aBass, aMids, aHighs];
-    const cols   = ['rgba(139,92,246,0.85)', 'rgba(34,211,238,0.85)', 'rgba(244,114,182,0.85)'];
+    const cols   = [K.ac.accent.rgba(0.85), K.ac.cyan.rgba(0.85), K.ac.pink.rgba(0.85)];
     levels.forEach((lvl, j) => {
       const h = Math.max(2, lvl * maxH);
       ctx.fillStyle = cols[j];

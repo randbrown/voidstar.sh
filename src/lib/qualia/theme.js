@@ -88,12 +88,40 @@ function num(name, fallback) {
   return Number.isFinite(v) ? v : fallback;
 }
 
+function parseRgb(s) {
+  s = (s || '').trim();
+  let m = /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(s);
+  if (m) return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+  m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(s);
+  if (m) return [+m[1], +m[2], +m[3]];
+  return null;
+}
+
+function rgbHue([r, g, b]) {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  if (!d) return 0;
+  let h;
+  if (max === r)      h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else                h = (r - g) / d + 4;
+  return (h * 60 + 360) % 360;
+}
+
+function accent(name, fallbackHex) {
+  const rgb = parseRgb(cssVar(name)) || parseRgb(fallbackHex);
+  return { rgb, hue: rgbHue(rgb), rgba: (a) => `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})` };
+}
+
 /**
  * Read the active theme's canvas knobs (cached until the next theme change).
  * Returns numbers/strings plus helpers used by the lab draw loops:
  *   hueBase, hueSpread, sat, light, glow, mono(0/1), bg
  *   hue(t)          → hue in degrees for a normalized t∈[0,1] (mono-aware)
  *   color(t, opts)  → an hsla() string at hue(t); opts: {alpha, light, sat}
+ *   ac              → the theme's curated accent set, each parsed as
+ *                     { rgb:[r,g,b], hue, rgba(alpha) }. Use these for
+ *                     fixed multi-color palettes (pose skeletons, HUD bars)
+ *                     so they stay in-family on every theme.
  */
 export function readKnobs() {
   if (_cache) return _cache;
@@ -113,6 +141,14 @@ export function readKnobs() {
     return `hsla(${hue(t)},${s}%,${l}%,${a})`;
   };
 
-  _cache = { hueBase, hueSpread, sat, light, glow, mono, bg, hue, color };
+  const ac = {
+    accent: accent('--accent', '#8b5cf6'),
+    cyan:   accent('--cyan',   '#22d3ee'),
+    pink:   accent('--pink',   '#f472b6'),
+    green:  accent('--green',  '#4ade80'),
+    amber:  accent('--amber',  '#fbbf24'),
+  };
+
+  _cache = { hueBase, hueSpread, sat, light, glow, mono, bg, hue, color, ac };
   return _cache;
 }

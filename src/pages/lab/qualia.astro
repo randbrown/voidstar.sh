@@ -280,6 +280,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #test-canvas {
       position: fixed; inset: 0; width: 100%; height: 100%; display: block;
       z-index: 5; pointer-events: none; background: transparent;
+      /* Strudel scope/pianoroll widgets follow the theme's code retint. */
+      filter: var(--code-filter, none);
     }
 
     #video {
@@ -1136,6 +1138,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #strudel-mount {
       flex: 1; min-height: 0; overflow: auto;
       background: transparent;
+      /* Retint the embedded editor's shadow-DOM syntax colors per theme. */
+      filter: var(--code-filter, none);
     }
     #strudel-mount strudel-editor {
       display: block; width: 100%; background: transparent !important;

@@ -12,23 +12,36 @@
 // after the active fx's render() so the overlay lands on top.
 
 import { lmToCanvas } from './video.js';
+import { readKnobs, onThemeChange } from './theme.js';
 
 // ─── Pose visuals ───────────────────────────────────────────────────────────
 
-const PERSON_PALETTE = [
-  { boneA: 'rgba(139,92,246,0.75)', boneB: 'rgba(34,211,238,0.75)',
-    spark: [270, 190], halo: 'rgba(139,92,246,0.20)', joint: 'rgba(139,92,246,0.95)' },
-  { boneA: 'rgba(244,114,182,0.75)', boneB: 'rgba(74,222,128,0.75)',
-    spark: [330, 130], halo: 'rgba(244,114,182,0.20)', joint: 'rgba(244,114,182,0.95)' },
-  { boneA: 'rgba(251,191,36,0.75)',  boneB: 'rgba(139,92,246,0.75)',
-    spark: [ 45, 270], halo: 'rgba(251,191,36,0.20)', joint: 'rgba(251,191,36,0.95)' },
-  { boneA: 'rgba(74,222,128,0.75)',  boneB: 'rgba(244,114,182,0.75)',
-    spark: [130, 330], halo: 'rgba(74,222,128,0.20)', joint: 'rgba(74,222,128,0.95)' },
-  { boneA: 'rgba(34,211,238,0.75)',  boneB: 'rgba(251,191,36,0.75)',
-    spark: [195,  45], halo: 'rgba(34,211,238,0.20)', joint: 'rgba(34,211,238,0.95)' },
-  { boneA: 'rgba(255,255,255,0.75)', boneB: 'rgba(139,92,246,0.75)',
-    spark: [  0, 270], halo: 'rgba(255,255,255,0.18)', joint: 'rgba(255,255,255,0.95)' },
-];
+// Built from the theme's curated accent set so skeletons stay in-family on
+// every skin; under voidstar this reproduces the original hardcoded colors.
+// The last entry pairs neutral white with the accent (works on every theme).
+let K = readKnobs();
+
+function buildPersonPalette() {
+  const { ac } = K;
+  const mk = (a, b) => ({
+    boneA: a.rgba(0.75), boneB: b.rgba(0.75),
+    spark: [Math.round(a.hue), Math.round(b.hue)],
+    halo: a.rgba(0.20), joint: a.rgba(0.95),
+  });
+  const white = { hue: 0, rgba: (al) => `rgba(255,255,255,${al})` };
+  return [
+    mk(ac.accent, ac.cyan),
+    mk(ac.pink,   ac.green),
+    mk(ac.amber,  ac.accent),
+    mk(ac.green,  ac.pink),
+    mk(ac.cyan,   ac.amber),
+    { boneA: white.rgba(0.75), boneB: ac.accent.rgba(0.75),
+      spark: [0, Math.round(ac.accent.hue)],
+      halo: white.rgba(0.18), joint: white.rgba(0.95) },
+  ];
+}
+let PERSON_PALETTE = buildPersonPalette();
+onThemeChange(() => { K = readKnobs(); PERSON_PALETTE = buildPersonPalette(); });
 
 const LM_WEIGHT = {
   0: 0.6, 1: 0.35, 3: 0.35, 4: 0.35, 6: 0.35,
@@ -415,11 +428,11 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       const r   = Math.random() * 0.18;
       const x   = 0.5 + r * Math.cos(ang);
       const y   = 0.5 + r * Math.sin(ang);
-      spawnRipple(x, y, 270 + audio.bands.bass * 40, 0.7 + audio.bands.bass * 0.6);
+      spawnRipple(x, y, K.ac.accent.hue + audio.bands.bass * 40, 0.7 + audio.bands.bass * 0.6);
     }
     if (audio.highs.active) {
       spawnRipple(Math.random(), Math.random(),
-                  330 + audio.bands.highs * 40, 0.35 + audio.bands.highs * 0.4);
+                  K.ac.pink.hue + audio.bands.highs * 40, 0.35 + audio.bands.highs * 0.4);
     }
   }
   function drawRipples() {
@@ -484,7 +497,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const data = asciiSrcCtx.getImageData(0, 0, asciiCols, asciiRows).data;
 
     ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#05050d';
+    ctx.fillStyle = K.bg;
     ctx.fillRect(0, 0, W, H);
 
     const cellW    = W / asciiCols;
@@ -492,7 +505,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const fontSize = Math.min(cellH * 1.02, cellW / 0.55);
     ctx.font         = `${fontSize}px 'JetBrains Mono', ui-monospace, monospace`;
     ctx.textBaseline = 'top';
-    ctx.fillStyle    = 'rgba(122,230,170,0.92)';
+    ctx.fillStyle    = K.color(0.4, { light: 75, alpha: 0.92 });
 
     const N = ASCII_RAMP.length - 1;
     const gamma = 0.85;

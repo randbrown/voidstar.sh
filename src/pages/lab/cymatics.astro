@@ -61,7 +61,9 @@ import '../../styles/themes.css';
     /* Strudel's getDrawContext() looks for #test-canvas — used by .scope(),
        .pianoroll(), and other draw outputs. Sits above the viz, below the
        topbar (z:20) and strudel panel (z:18). */
-    #test-canvas  { z-index: 5; pointer-events: none; background: transparent; }
+    #test-canvas  { z-index: 5; pointer-events: none; background: transparent;
+                    /* Strudel scope/pianoroll widgets follow the theme retint. */
+                    filter: var(--code-filter, none); }
 
     /* `transform` is set imperatively by updateVideoTransform() so mirror
        (scaleX(-1)) and rotation can compose. Don't hardcode it here. */
@@ -269,6 +271,8 @@ import '../../styles/themes.css';
     #strudel-mount {
       flex: 1; min-height: 0; overflow: auto;
       background: transparent;
+      /* Retint the embedded editor's shadow-DOM syntax colors per theme. */
+      filter: var(--code-filter, none);
     }
     /* Light-DOM CSS overrides — work if the editor renders into the regular
        DOM tree. Shadow-root injection (see injectStrudelTransparency) covers
@@ -1154,14 +1158,22 @@ function fireRippleOnBeat() {
 // of FX. Landmarks are stored as { x, y, z, visibility } in [0,1] field
 // coords, just like MediaPipe's PoseLandmarker output.
 
-const PERSON_PALETTE = [
-  { boneA:'rgba(139,92,246,0.75)',  boneB:'rgba(34,211,238,0.75)',
-    spark:[270,190], halo:'rgba(139,92,246,0.20)', joint:'rgba(139,92,246,0.95)' },
-  { boneA:'rgba(244,114,182,0.75)', boneB:'rgba(74,222,128,0.75)',
-    spark:[330,130], halo:'rgba(244,114,182,0.20)', joint:'rgba(244,114,182,0.95)' },
-  { boneA:'rgba(251,191,36,0.75)',  boneB:'rgba(139,92,246,0.75)',
-    spark:[ 45,270], halo:'rgba(251,191,36,0.20)', joint:'rgba(251,191,36,0.95)' },
-];
+// Built from the theme's curated accent set (K.ac) so skeletons stay in-family
+// on every skin; under voidstar this reproduces the original hardcoded colors.
+function buildPersonPalette() {
+  const mk = (a, b) => ({
+    boneA: a.rgba(0.75), boneB: b.rgba(0.75),
+    spark: [Math.round(a.hue), Math.round(b.hue)],
+    halo: a.rgba(0.20), joint: a.rgba(0.95),
+  });
+  return [
+    mk(K.ac.accent, K.ac.cyan),
+    mk(K.ac.pink,   K.ac.green),
+    mk(K.ac.amber,  K.ac.accent),
+  ];
+}
+let PERSON_PALETTE = buildPersonPalette();
+onThemeChange(() => { PERSON_PALETTE = buildPersonPalette(); });
 
 const LM_WEIGHT = {
   0:0.6, 1:0.35, 3:0.35, 4:0.35, 6:0.35,
@@ -1631,7 +1643,7 @@ function draw(now) {
 
   // Subtle beat flash
   if (beatPulse > 0.08) {
-    ctx.fillStyle = `rgba(139,92,246,${beatPulse * 0.05})`;
+    ctx.fillStyle = K.ac.accent.rgba(beatPulse * 0.05);
     ctx.fillRect(0, 0, W, H);
   }
 
@@ -1680,7 +1692,7 @@ function draw(now) {
     const barW = 3, gap = 3, maxH = 50;
     const bx = 12, by = H - 12;
     const levels = [aBass, aMids, aHighs];
-    const cols   = ['rgba(139,92,246,0.85)', 'rgba(34,211,238,0.85)', 'rgba(244,114,182,0.85)'];
+    const cols   = [K.ac.accent.rgba(0.85), K.ac.cyan.rgba(0.85), K.ac.pink.rgba(0.85)];
     levels.forEach((lvl, j) => {
       const h = Math.max(2, lvl * maxH);
       ctx.fillStyle = cols[j];

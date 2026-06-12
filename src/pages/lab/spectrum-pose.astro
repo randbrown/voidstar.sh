@@ -123,7 +123,7 @@ import '../../styles/themes.css';
       color: white; font-family: var(--font-mono); font-size: 0.875rem;
       cursor: pointer; transition: all 0.2s;
     }
-    .start-btn:hover { background: #7c3aed; box-shadow: 0 0 20px rgba(139,92,246,0.5); }
+    .start-btn:hover { filter: brightness(1.12); box-shadow: 0 0 calc(20px * var(--glow-strength)) var(--accent-glow); }
 
     #hints {
       position: fixed; bottom: 1.25rem; left: 1.25rem; z-index: 10;
@@ -315,18 +315,22 @@ const hspan = (frac, n) => K.hueBase + (K.mono ? 0 : frac * n * (K.hueSpread / 9
 
 // ── Audio-reactive palette ────────────────────────────────────────────────────
 // Each person gets a base palette; hue shifts with audio intensity at draw time.
-const PERSON_PALETTE = [
-  { boneA: 'rgba(139,92,246,0.75)',  boneB: 'rgba(34,211,238,0.75)',
-    spark: [270, 190], halo: 'rgba(139,92,246,0.20)',
-    joint: 'rgba(139,92,246,0.95)' },
-  { boneA: 'rgba(244,114,182,0.75)', boneB: 'rgba(74,222,128,0.75)',
-    spark: [330, 130], halo: 'rgba(244,114,182,0.20)',
-    joint: 'rgba(244,114,182,0.95)' },
-  { boneA: 'rgba(251,191,36,0.75)',  boneB: 'rgba(139,92,246,0.75)',
-    spark: [45, 270],  halo: 'rgba(251,191,36,0.20)',
-    joint: 'rgba(251,191,36,0.95)' },
-];
-
+// Built from the theme's curated accent set (K.ac) so skeletons stay in-family
+// on every skin; under voidstar this reproduces the original hardcoded colors.
+function buildPersonPalette() {
+  const mk = (a, b) => ({
+    boneA: a.rgba(0.75), boneB: b.rgba(0.75),
+    spark: [Math.round(a.hue), Math.round(b.hue)],
+    halo: a.rgba(0.20), joint: a.rgba(0.95),
+  });
+  return [
+    mk(K.ac.accent, K.ac.cyan),
+    mk(K.ac.pink,   K.ac.green),
+    mk(K.ac.amber,  K.ac.accent),
+  ];
+}
+let PERSON_PALETTE = buildPersonPalette();
+onThemeChange(() => { PERSON_PALETTE = buildPersonPalette(); });
 // Landmarks of interest (index → draw weight)
 const LM_WEIGHT = {
   // Face — nose + inner/outer corner of each eye. Inner-to-nose bones form the
@@ -682,7 +686,7 @@ function drawRadial(W, H) {
   }
   // Inner breathing ring
   const breath = 1 + aTotal * 0.6 + beatPulse * 0.2;
-  ctx.strokeStyle = `rgba(139,92,246,${0.08 + aBass * 0.25})`;
+  ctx.strokeStyle = K.ac.accent.rgba(0.08 + aBass * 0.25);
   ctx.lineWidth = 2 + aBass * 6;
   ctx.beginPath(); ctx.arc(cx, cy, r0 * breath, 0, Math.PI * 2); ctx.stroke();
   ctx.globalCompositeOperation = 'source-over';
@@ -758,24 +762,24 @@ function drawNebula(W, H) {
   if (aBass > 0.02) {
     const r = Math.min(W, H) * (0.18 + aBass * 0.35);
     const g = ctx.createRadialGradient(W * 0.5, H * 0.72, 0, W * 0.5, H * 0.72, r);
-    g.addColorStop(0, `rgba(139,92,246,${0.35 * aBass})`);
-    g.addColorStop(1, 'rgba(139,92,246,0)');
+    g.addColorStop(0, K.ac.accent.rgba(0.35 * aBass));
+    g.addColorStop(1, K.ac.accent.rgba(0));
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
   // Mids blob, left-centre
   if (aMids > 0.02) {
     const r = Math.min(W, H) * (0.16 + aMids * 0.30);
     const g = ctx.createRadialGradient(W * 0.28, H * 0.42, 0, W * 0.28, H * 0.42, r);
-    g.addColorStop(0, `rgba(34,211,238,${0.32 * aMids})`);
-    g.addColorStop(1, 'rgba(34,211,238,0)');
+    g.addColorStop(0, K.ac.cyan.rgba(0.32 * aMids));
+    g.addColorStop(1, K.ac.cyan.rgba(0));
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
   // Highs blob, top-right
   if (aHighs > 0.02) {
     const r = Math.min(W, H) * (0.12 + aHighs * 0.28);
     const g = ctx.createRadialGradient(W * 0.75, H * 0.28, 0, W * 0.75, H * 0.28, r);
-    g.addColorStop(0, `rgba(244,114,182,${0.35 * aHighs})`);
-    g.addColorStop(1, 'rgba(244,114,182,0)');
+    g.addColorStop(0, K.ac.pink.rgba(0.35 * aHighs));
+    g.addColorStop(1, K.ac.pink.rgba(0));
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
   // Small roving bright specks at peak bins
@@ -786,8 +790,8 @@ function drawNebula(W, H) {
     const y = H * (0.25 + Math.sin(performance.now() * 0.0003) * 0.15);
     const r = 6 + peak * 14;
     const g = ctx.createRadialGradient(x, y, 0, x, y, r * 3);
-    g.addColorStop(0, `rgba(251,191,36,${peak * 0.55})`);
-    g.addColorStop(1, 'rgba(251,191,36,0)');
+    g.addColorStop(0, K.ac.amber.rgba(peak * 0.55));
+    g.addColorStop(1, K.ac.amber.rgba(0));
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
   ctx.globalCompositeOperation = 'source-over';
@@ -1075,7 +1079,7 @@ function draw() {
 
   // Gentle beat flash
   if (beatPulse > 0.1) {
-    ctx.fillStyle = `rgba(139,92,246,${beatPulse * 0.06})`;
+    ctx.fillStyle = K.ac.accent.rgba(beatPulse * 0.06);
     ctx.fillRect(0, 0, W, H);
   }
 
@@ -1104,7 +1108,7 @@ function draw() {
     const barW = 3, gap = 3, maxH = 50;
     const bx = 12, by = H - 12;
     const levels = [aBass, aMids, aHighs];
-    const cols   = ['rgba(139,92,246,0.85)', 'rgba(34,211,238,0.85)', 'rgba(244,114,182,0.85)'];
+    const cols   = [K.ac.accent.rgba(0.85), K.ac.cyan.rgba(0.85), K.ac.pink.rgba(0.85)];
     levels.forEach((lvl, j) => {
       const h = Math.max(2, lvl * maxH);
       ctx.fillStyle = cols[j];

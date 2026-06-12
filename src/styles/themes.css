@@ -66,6 +66,13 @@
   --viz-light:     55;                /* base lightness (%) */
   --viz-glow:      1;                 /* canvas bloom / shadowBlur multiplier */
   --viz-mono:      0;                 /* 1 = render monochrome (phosphor) */
+
+  /* Retint filter for embedded code editors / widgets (the Strudel REPL's
+     syntax colors live inside its shadow-DOM CodeMirror theme, so a CSS
+     filter is the reliable way to pull them into the theme's family).
+     sepia() collapses hues to a warm monochrome, hue-rotate() steers it,
+     and luminance differences keep syntax highlighting readable. */
+  --code-filter:   none;
 }
 
 /* Explicit voidstar selector so it can be chosen from the switcher too. */
@@ -104,6 +111,7 @@
   --viz-light:     58;
   --viz-glow:      0.5;
   --viz-mono:      1;
+  --code-filter:   sepia(1) hue-rotate(85deg) saturate(3);
 }
 
 /* Amber phosphor variant — same CRT, warm tube. */
@@ -139,6 +147,7 @@
   --viz-light:     58;
   --viz-glow:      0.5;
   --viz-mono:      1;
+  --code-filter:   sepia(1) saturate(3) brightness(1.05);
 }
 
 /* ---- Tape Saturation (warm analog — lo-fi tape ambient) ------------------ */
@@ -171,6 +180,7 @@
   --viz-sat:       60;
   --viz-light:     52;
   --viz-glow:      0.7;
+  --code-filter:   sepia(0.85) hue-rotate(-12deg) saturate(1.3);
 }
 
 /* ---- Abyssal Bioluminescence (deep-sea glow — dark ambient / drone) ------ */
@@ -202,6 +212,7 @@
   --viz-sat:       80;
   --viz-light:     58;
   --viz-glow:      1.4;
+  --code-filter:   sepia(1) hue-rotate(125deg) saturate(2.2);
 }
 
 /* ---- Glacial Drift (icy minimal — Nordic / ECM ambient) ------------------ */
@@ -233,6 +244,7 @@
   --viz-sat:       35;
   --viz-light:     70;
   --viz-glow:      0.5;
+  --code-filter:   sepia(0.9) hue-rotate(165deg) saturate(0.8) brightness(1.08);
 }
 
 /* ---- Retro Windows 95 / 3.1 (net-art / vaporwave) ------------------------ *
@@ -274,6 +286,7 @@
   --viz-sat:       90;
   --viz-light:     55;
   --viz-glow:      0.2;
+  --code-filter:   grayscale(1) brightness(1.1) contrast(1.1);
 }
 
 /* ============================================================================
