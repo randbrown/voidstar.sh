@@ -853,6 +853,14 @@ body::before {
    came; panels carry an actual leaded grid (repeating came lines) over a
    backlit jewel wash; headers sweep ruby→cobalt→amber behind white type.
    ──────────────────────────────────────────────────────────────────────── */
+/* Three clearly separated states, lit like real glass:
+   inactive = a dim unlit pane (deep jewel over near-black came, in shadow);
+   hover    = a glimmer (the pane catches a little light);
+   active   = full sunshine through the glass — a warm sunburst blooms from the
+              top-left as if a light source is behind it, the pane goes bright
+              and saturated, and the label flips to dark for high contrast.
+   The jump in lightness + the warm highlight (not just a hue change) is what
+   makes active unmistakable against inactive. */
 [data-theme="stained-glass"] .btn,
 [data-theme="stained-glass"] .ctrl-btn,
 [data-theme="stained-glass"] .qp-toggle,
@@ -860,29 +868,55 @@ body::before {
 [data-theme="stained-glass"] .qp-tab,
 [data-theme="stained-glass"] .start-btn {
   background: linear-gradient(145deg,
-    color-mix(in srgb, var(--accent) 32%, var(--surface)),
-    color-mix(in srgb, var(--cyan) 26%, var(--surface))) !important;
-  border: 2px solid #0b0609 !important;
+    color-mix(in srgb, var(--accent) 24%, #0b0609),
+    color-mix(in srgb, var(--cyan) 20%, #0b0609)) !important;
+  border: 2px solid #000 !important;
   border-radius: 2px !important;
-  color: var(--text) !important;
+  color: color-mix(in srgb, var(--text) 72%, transparent) !important;
   box-shadow:
-    inset 0 0 8px color-mix(in srgb, var(--accent) 45%, transparent),
-    0 0 8px var(--accent-glow) !important;
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 7px rgba(0, 0, 0, 0.65) !important;
 }
 [data-theme="stained-glass"] .ctrl-btn:hover,
 [data-theme="stained-glass"] .qp-toggle:hover,
 [data-theme="stained-glass"] .qp-preset:hover,
 [data-theme="stained-glass"] .qp-tab:hover,
+[data-theme="stained-glass"] .btn:hover,
+[data-theme="stained-glass"] .start-btn:hover {
+  background:
+    radial-gradient(130% 95% at 28% -10%,
+      rgba(255, 248, 224, 0.4), transparent 55%),
+    linear-gradient(145deg,
+      color-mix(in srgb, var(--accent) 42%, #1a0d16),
+      color-mix(in srgb, var(--cyan) 36%, #1a0d16)) !important;
+  color: var(--text) !important;
+  box-shadow:
+    inset 0 0 9px color-mix(in srgb, var(--accent) 40%, transparent),
+    0 0 12px var(--accent-glow) !important;
+}
 [data-theme="stained-glass"] .ctrl-btn.active,
 [data-theme="stained-glass"] .qp-toggle.active,
 [data-theme="stained-glass"] .qp-preset.active,
-[data-theme="stained-glass"] .qp-tab.active {
-  background: linear-gradient(145deg,
-    color-mix(in srgb, var(--pink) 40%, var(--surface)),
-    color-mix(in srgb, var(--amber) 30%, var(--surface))) !important;
+[data-theme="stained-glass"] .qp-tab.active,
+[data-theme="stained-glass"] .ctrl-btn.active:hover,
+[data-theme="stained-glass"] .qp-toggle.active:hover,
+[data-theme="stained-glass"] .qp-preset.active:hover,
+[data-theme="stained-glass"] .qp-tab.active:hover {
+  background:
+    radial-gradient(135% 110% at 26% -18%,
+      rgba(255, 251, 235, 0.95),
+      rgba(255, 235, 188, 0.45) 30%,
+      transparent 62%),
+    linear-gradient(145deg,
+      color-mix(in srgb, var(--pink) 58%, #fff 14%),
+      color-mix(in srgb, var(--amber) 52%, #fff 10%)) !important;
+  color: #2a0a18 !important;
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--amber) 55%, #000) !important;
   box-shadow:
-    inset 0 0 10px color-mix(in srgb, var(--pink) 50%, transparent),
-    0 0 14px var(--pink-glow) !important;
+    inset 0 0 14px rgba(255, 244, 210, 0.7),
+    0 0 18px var(--pink-glow),
+    0 0 30px color-mix(in srgb, var(--amber) 60%, transparent) !important;
 }
 [data-theme="stained-glass"] .qp-card,
 [data-theme="stained-glass"] #topbar,
