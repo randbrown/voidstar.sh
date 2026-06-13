@@ -225,10 +225,10 @@ export default {
       // forward tilt off vertical, scaled by swagger/lunge and pulsed per step.
       const swag = scratch.swayAmt;
       const step = Math.max(0, Math.sin(2 * TAU * p));   // 0..1, peaks at push-off
-      const leanLower = 0.30 + 0.10 * swag + 0.10 * lungeAmt * step + 0.10 * scratch.beatP * lungeAmt;
-      const hunch     = 0.22 + 0.10 * swag + 0.06 * lungeAmt * step;
+      const leanLower = 0.16 + 0.06 * swag + 0.20 * lungeAmt * step + 0.12 * scratch.beatP * lungeAmt;
+      const hunch     = 0.12 + 0.06 * swag + 0.14 * lungeAmt * step;
       const leanUpper = leanLower + hunch;
-      const neckFwd   = 0.30 + 0.05 * swag;
+      const neckFwd   = 0.22 + 0.05 * swag;
 
       const torsoLungeShift = lungeAmt * 0.03 * S * Math.sin(2 * TAU * p);
       const hipY = rootY + bob;
