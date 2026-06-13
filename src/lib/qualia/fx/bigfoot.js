@@ -235,10 +235,16 @@ export default {
       const shX = hipX + Math.cos(torsoAng) * torsoLen;
       const shY = hipY + Math.sin(torsoAng) * torsoLen;
 
-      // Head — short neck, big domed skull with a back-leaning crest.
-      const neck = 0.06 * S, headR = 0.135 * S;
-      const headCX = shX + Math.cos(torsoAng) * (neck + headR * 0.7);
-      const headCY = shY + Math.sin(torsoAng) * (neck + headR * 0.7);
+      // Head — a heavy humanoid/cavemanish dome set low on broad shoulders
+      // (sasquatch = no neck). Kept mostly upright with only a gentle forward
+      // set so it doesn't read snouty/baboonish; deliberately uses its own
+      // soft tilt rather than the per-step lunge lean of the torso.
+      const headR = 0.145 * S;
+      const headTilt = face * (0.05 + lean * 0.30);
+      const upX = Math.cos(-PI / 2 + headTilt);
+      const upY = Math.sin(-PI / 2 + headTilt);
+      const headCX = shX + upX * (headR * 0.72);
+      const headCY = (shY - 0.03 * S) + upY * (headR * 0.72);
 
       // ── Legs (two, π out of phase) ──────────────────────────────────────
       const a = 0.27 * S, b = 0.27 * S;
@@ -275,7 +281,7 @@ export default {
       }
 
       scratch.joints = {
-        hipX, hipY, shX, shY, headCX, headCY, headR, torsoAng, legs, arms, face,
+        hipX, hipY, shX, shY, headCX, headCY, headR, headTilt, torsoAng, legs, arms, face,
         // foot plant strength for contact shadows
         plant: legs.map(l => l.psi < 0.62 ? 1 : 0),
       };
@@ -399,16 +405,21 @@ export default {
 
       // Torso — bulky, broadening to the shoulders.
       addBone(path, j.hipX, j.hipY + 0.02 * S, j.shX, j.shY, 0.125 * S, 0.15 * S, 13);
-      // Shoulder yoke + head + conical crest.
+      // Broad shoulder yoke.
       path.moveTo(j.shX + 0.14 * S, j.shY);
       path.arc(j.shX, j.shY - 0.02 * S, 0.135 * S, 0, TAU);
-      path.moveTo(j.headCX + j.headR, j.headCY);
-      path.arc(j.headCX, j.headCY, j.headR, 0, TAU);
-      // crest: a smaller blob up-and-back from head top
-      const crestX = j.headCX - j.face * 0.05 * S + Math.cos(j.torsoAng) * j.headR * 0.7;
-      const crestY = j.headCY + Math.sin(j.torsoAng) * j.headR * 0.7;
-      path.moveTo(crestX + 0.075 * S, crestY);
-      path.arc(crestX, crestY, 0.075 * S, 0, TAU);
+      // Thick neck bridging shoulders to head — no gap (sasquatch = no neck).
+      addBone(path, j.shX, j.shY - 0.04 * S, j.headCX, j.headCY, 0.115 * S, 0.10 * S, 14);
+      // Head — a rounded humanoid dome, taller than wide, leaning just slightly
+      // forward into the walk. An ellipse gives the smooth cranium/jaw.
+      const hrx = j.headR * 0.94, hry = j.headR * 1.14, ht = j.headTilt;
+      path.moveTo(j.headCX + Math.cos(ht) * hrx, j.headCY + Math.sin(ht) * hrx);
+      path.ellipse(j.headCX, j.headCY, hrx, hry, ht, 0, TAU);
+      // Heavy cavemanish brow ridge — a low forward bulge over the eyes.
+      const browX = j.headCX + j.face * hrx * 0.60;
+      const browY = j.headCY - hry * 0.14;
+      path.moveTo(browX + 0.06 * S, browY);
+      path.arc(browX, browY, 0.06 * S, 0, TAU);
 
       return path;
     }
