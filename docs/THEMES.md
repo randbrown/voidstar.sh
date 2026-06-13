@@ -33,16 +33,18 @@ exactly, so "voidstar" is a visual no-op.
 | `src/styles/themes.css` | **Source of truth.** All tokens, every `[data-theme]` block, texture overlays, the win95 skin layer. Imported by `global.css` (site) and directly by each lab page. |
 | `src/styles/global.css` | Site-wide base styles; `@import './themes.css'` at top. |
 | `src/lib/qualia/theme.js` | Runtime controller (`setTheme`/`cycleTheme`/`getTheme`), the switcher wiring (`initThemeControl`), and the canvas knob bridge (`readKnobs`, `onThemeChange`). |
-| `src/components/ThemeBoot.astro` | Inline no-flash bootstrap. In `BaseLayout` head + each lab head. |
+| `src/components/ThemeBoot.astro` | Inline no-flash bootstrap. In `BaseLayout` head + each lab head. Derives its valid-id list from `THEMES` (via `define:vars`) — no parallel array to hand-sync. |
 | `src/components/ThemeSwitch.astro` | Header switcher `<select>`. |
 | Lab pages: `src/pages/lab/{cymatics,spectrum-pose,pose-particles,qualia,entangle}.astro` | Import `themes.css` + `ThemeBoot`; have an in-HUD theme `<select id="theme-select">` and a `Y` / `shift+Y` cycle shortcut; canvas draw code reads `readKnobs()`. |
 | `src/lib/qualia/overlay.js` | Shared pose skeleton/sparks/ripple/ASCII overlay (used by qualia). Palette derived from theme accents. |
 | `src/lib/qualia/entangle-ui.js`, `qr.js` | Crowd skeleton hues + QR colors, theme-aware. |
 
-Theme IDs (keep these in sync across `themes.css`, `theme.js` `THEMES`, and
-`ThemeBoot.astro`'s `OK` list):
-`voidstar`, `phosphor`, `phosphor-amber`, `tape`, `abyssal`, `glacial`, `win95`,
-`stained-glass`, `visioneer`, `gardens`.
+Theme IDs — the single source of truth is `THEMES` in `theme.js`.
+`ThemeBoot.astro` now derives its valid-id list from `THEMES` automatically, so
+the only manual pairing left is **`theme.js` `THEMES` ↔ the matching
+`[data-theme]` block in `themes.css`** (CSS can't read the JS array). Current
+IDs: `voidstar`, `phosphor`, `phosphor-amber`, `tape`, `abyssal`, `glacial`,
+`win95`, `stained-glass`, `visioneer`, `gardens`.
 
 ---
 
@@ -53,13 +55,18 @@ Theme IDs (keep these in sync across `themes.css`, `theme.js` `THEMES`, and
    Rename the selector to `[data-theme="yourname"]`.
 2. **Set the palette + knobs** (see Token reference). You only need to override
    tokens that differ from `:root`.
-3. **Register the id** in three places: `theme.js` `THEMES` (id + label),
-   `ThemeBoot.astro` `OK` array, and (implicitly) the block in `themes.css`.
+3. **Register the id** in two places: `theme.js` `THEMES` (id + label) and the
+   `[data-theme]` block in `themes.css`. (`ThemeBoot.astro` reads `THEMES`
+   automatically — no third edit.)
 4. **Build + flip through it** (checklist at the end). The labs and site update
    from the one block — no per-lab edits needed for a normal color theme.
 
-A "normal" theme = colors + a few knobs. Only reach for a **skin layer** (see
-win95) if you're changing the chrome *metaphor* (bevels, title bars, etc.).
+A "normal" theme = colors + a few knobs, and it inherits a full themed control
+surface (buttons, panels, sliders, selects, mod pills, meters) **for free**
+from the shared skin + `--ctl-*` layers, which derive from your palette. Reach
+for a **skin layer** (see win95) only if you're changing the chrome *metaphor*
+(bevels, title bars, etc.); override a `--ctl-slider-*` / `--ctl-*` token only
+if you want a control's specific *material or shape* to differ.
 
 ---
 
@@ -114,6 +121,26 @@ Mono, VT323). Add a font there if a theme needs it.
                           theme family (the editor's colors live in shadow DOM,
                           so a filter is the reliable lever). e.g.
                           sepia()+hue-rotate() duotone; `none` = untouched.
+```
+
+### Advanced chrome tokens (generated controls)
+A second tier of tokens for the **generated** qualia controls (the sliders /
+selects / inputs / mod pills / meters that `ui.js` builds at runtime) and the
+panels around them. Like `--surface-glass`, the `:root` defaults are *derived*
+from the base palette via `color-mix`, so a theme gets a coherent control
+surface for free; override one only to change a control's material or shape.
+Consumed by the "Generated controls" layer at the bottom of `themes.css`.
+```
+--ctl-panel-*             panel bg / border / shadow / tex (texture image)
+--ctl-btn-*               button bg / border / radius / shadow / active-bg
+--ctl-input-*             select+text+file bg / border / radius / shadow
+--ctl-slider-track/fill/thumb            slider colours
+--ctl-slider-track-h / -track-radius /   slider geometry — override these to
+  -track-shadow / -thumb-w / -thumb-h /    reshape the rail without re-writing
+  -thumb-radius / -thumb-border / -thumb-shadow   the vendor pseudo-elements
+--ctl-meter-bg / --ctl-meter-fill        mod-pill activity meter
+--ctl-focus-ring          keyboard focus box-shadow (slider thumb)
+--ctl-scrollbar-track / --ctl-scrollbar-thumb
 ```
 
 ### Texture overlays (opacity, 0 = off)
@@ -211,7 +238,51 @@ split. Check WCAG contrast for small text on the page background.
 
 ---
 
+## Generated controls (sliders, selects, inputs, mod pills, meters)
+
+The skin layers above restyle the **static** chrome (buttons, cards, panels,
+headers). A separate **Generated controls** layer at the bottom of `themes.css`
+covers the controls `src/lib/qualia/ui.js` builds at runtime, so a theme's
+instrument panel is consistent down to the knobs:
+
+- **Selects / text / file inputs** (`.qp-select`, `.qp-text`, `.qp-file`) —
+  painted from `--ctl-input-*`.
+- **Range sliders** (`input[type="range"]`, all labs) — one custom rail,
+  fully token-driven. The base rules declare the four vendor pseudo-elements
+  (`::-webkit-slider-runnable-track` / `-thumb`, `::-moz-range-track` /
+  `-progress` / `-thumb`) once; a theme reshapes the rail purely by overriding
+  `--ctl-slider-*` (colours **and** geometry). The thumb auto-centers on the
+  track at any size via `calc()`. Firefox gets a value-aware fill
+  (`::-moz-range-progress`); WebKit shows the themed track (no native progress
+  pseudo) — an accepted, pure-CSS trade-off (no per-frame JS).
+- **Mod pills + meters** (`.qp-mod-pill`, `.qp-mod-meter`) — each theme gives
+  the pills a scoped material/shape; the per-channel border + meter colour
+  (audio cyan / pose pink / crowd accent) is kept so the modulator source stays
+  legible. Mod-weight sliders carry that channel colour and cap their thumb
+  geometry to fit the thin pill row.
+
+These rules are **global** (not per-theme) and read the `--ctl-*` tokens, so one
+rule set themes every skin. `!important` on contested props beats the qualia
+page's own `is:global` baseline (loaded after `themes.css`). `input[type=range]`
+exists only in the labs, so the global rule can't reach the main site. Each
+theme's distinct slider/pill identity lives in the **PER-THEME CONTROL
+IDENTITIES** block (voidstar neon waveform rail, phosphor terminal progress bar,
+tape fader slot, abyssal sonar rail, glacial measurement line, win95 sunken
+trough, stained-glass leaded strip, visioneer road-line, gardens dew-drop stem).
+
+### Reduced motion
+A `prefers-reduced-motion: reduce` block (bottom of `themes.css`) damps the
+looping/decorative animations this file adds — CRT flicker, biolume pulse, glass
+shimmer, cursor blink — and collapses transitions to ~instant. It does **not**
+hide state: hover/focus/active end-states still apply, they just don't animate.
+
+---
+
 ## The shipped themes (intent + lever)
+
+> **All shipped themes now carry at least a light skin layer** (PR #67) plus the
+> shared generated-controls layer — none is "token-only" anymore. The table's
+> "defining levers" are each theme's *signature*, not its whole implementation.
 
 | Theme | Niche | Defining levers |
 |---|---|---|
@@ -227,10 +298,12 @@ split. Check WCAG contrast for small text on the page background.
 
 The last three are the **Randyland family** — palettes drawn from
 [`docs/agent-reference.md`](./agent-reference.md) (stained glass §2/§5,
-Ramblin' Visioneer §3/§4, Cindy Lynn's Gardens §5). Token-only themes, no skin
-layer: stained glass reads as structure via sharp pane-like radii + jewel
-accents; visioneer keeps the folk-art warmth with grain + porch-amber;
-gardens stays luminous-botanical, not floral clipart.
+Ramblin' Visioneer §3/§4, Cindy Lynn's Gardens §5). Each now has its own skin
+layer + control identity (not token-only): stained glass is a leaded grid with
+sunlit-glass buttons and a jewel-in-came slider; visioneer is a starlit
+twilight card with a gradient-rim button and a dashed road-line slider; gardens
+is a softly luminous greenhouse console with dew-drop slider thumbs — botanical,
+not floral clipart.
 
 ---
 
@@ -272,7 +345,20 @@ non-qualia labs are fully knob-driven).
 3. **Site** (`/`, `/posts`, `/about`): header/menu, buttons, cards, prose, tags,
    tag pills readable; nothing low-contrast. Switcher persists across nav.
 4. **Each lab** (`/lab/cymatics`, `/spectrum-pose`, `/pose-particles`,
-   `/qualia`): switch via HUD select + `Y`. HUD chrome + canvas (particles /
-   skeleton / spectrum / bg / QR) recolor **live** (next frame), FPS unaffected.
-5. Contrast: small text ≥ 4.5:1 on its actual background (mind teal/dark areas).
-6. Default **voidstar** is unchanged vs `main`.
+   `/qualia`): switch via HUD select + `Y` / `shift+Y`. HUD chrome + canvas
+   (particles / skeleton / spectrum / bg / QR) recolor **live** (next frame),
+   FPS unaffected.
+5. **Generated controls** (qualia panels): range **sliders** (track + thumb on
+   theme, thumb grabbable, centered, fill follows on Firefox), **selects**,
+   **text + file inputs**, **mod pills** + their activity **meters**, and
+   **mod-weight sliders** (per-channel colour) all read the theme. Drag a
+   slider; pick a select; check the focus ring (Tab to a control).
+6. Contrast: small text ≥ 4.5:1 on its actual background (mind teal/dark areas);
+   slider thumbs + mod pills readable against the panel.
+7. **Reduced motion**: with `prefers-reduced-motion: reduce` set, CRT flicker /
+   biolume pulse / shimmer / cursor blink stop and transitions are instant, but
+   hover/focus/active states are still visible.
+8. **Mobile** layout + touch slider hit-targets intact (coarse-pointer sizing).
+9. **Perf**: FPS steady on the glow-heavy themes (`abyssal`, `stained-glass`,
+   `visioneer`).
+10. Default **voidstar** is unchanged vs `main`.

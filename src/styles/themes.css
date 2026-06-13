@@ -73,6 +73,60 @@
      sepia() collapses hues to a warm monochrome, hue-rotate() steers it,
      and luminance differences keep syntax highlighting readable. */
   --code-filter:   none;
+
+  /* ---- Advanced chrome tokens ---------------------------------------------
+     A second tier of design tokens for the *generated* utility controls
+     (qualia's JS-built sliders / selects / inputs / mod pills / meters) and
+     the panels around them. Like --surface-glass, the defaults are *derived*
+     from the base palette via color-mix, so every theme gets a coherent
+     control surface for free; a theme only overrides one of these when it
+     wants a distinct material or shape. Consumed by the "Generated controls"
+     layer at the bottom of this file. ----------------------------------- */
+
+  /* panels */
+  --ctl-panel-bg:      var(--surface-glass);
+  --ctl-panel-border:  var(--hud-border);
+  --ctl-panel-shadow:  0 8px 30px rgba(0, 0, 0, 0.45);
+  --ctl-panel-tex:     none;                 /* optional repeating bg image */
+
+  /* buttons */
+  --ctl-btn-bg:        color-mix(in srgb, var(--surface-2) 78%, transparent);
+  --ctl-btn-border:    var(--border);
+  --ctl-btn-radius:    var(--radius);
+  --ctl-btn-shadow:    none;
+  --ctl-btn-active-bg: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
+
+  /* text / select / file inputs */
+  --ctl-input-bg:      var(--surface-glass-2);
+  --ctl-input-border:  var(--border);
+  --ctl-input-radius:  var(--radius);
+  --ctl-input-shadow:  none;
+
+  /* range sliders — colors (the requested track/thumb/fill tokens) … */
+  --ctl-slider-track:  color-mix(in srgb, var(--text) 14%, transparent);
+  --ctl-slider-fill:   var(--accent);
+  --ctl-slider-thumb:  var(--accent);
+  /* … plus geometry, so a theme can reshape the rail without re-declaring
+     all four vendor pseudo-elements (the base rules read these vars). */
+  --ctl-slider-track-h:     4px;
+  --ctl-slider-track-radius: 999px;
+  --ctl-slider-track-shadow: none;
+  --ctl-slider-thumb-w:     13px;
+  --ctl-slider-thumb-h:     13px;
+  --ctl-slider-thumb-radius: 50%;
+  --ctl-slider-thumb-border: 1px solid rgba(0, 0, 0, 0.35);
+  --ctl-slider-thumb-shadow: none;
+
+  /* meters (mod-pill activity bars) */
+  --ctl-meter-bg:      rgba(255, 255, 255, 0.08);
+  --ctl-meter-fill:    var(--accent);
+
+  /* focus ring (keyboard) */
+  --ctl-focus-ring:    0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+
+  /* scrollbars */
+  --ctl-scrollbar-track: color-mix(in srgb, var(--void) 55%, transparent);
+  --ctl-scrollbar-thumb: color-mix(in srgb, var(--border-2) 70%, transparent);
 }
 
 /* Explicit voidstar selector so it can be chosen from the switcher too. */
@@ -1044,3 +1098,369 @@ body::before {
     0 0 26px color-mix(in srgb, var(--green) 22%, transparent) !important;
 }
 [data-theme="gardens"] .qp-head .qp-title::before { content: "❀ "; color: var(--pink); }
+
+/* ============================================================================
+   GENERATED CONTROLS — the JS-built qualia utility controls.
+   ----------------------------------------------------------------------------
+   The skin layers above restyle the *static* chrome (buttons, cards, panels,
+   headers). This layer covers the controls that `src/lib/qualia/ui.js` builds
+   at runtime — sliders, selects, text/file inputs, modulator pills and their
+   meters — so each theme's instrument panel is consistent down to the knobs.
+
+   These rules are GLOBAL (not scoped to one theme): they read the --ctl-*
+   tokens, which each theme overrides, so one rule set themes every skin. They
+   live here (not in a lab page) so all labs share them and a new lab gets them
+   for free. `!important` on contested props beats the qualia page's own
+   `is:global` baseline, which is loaded after this file. Range inputs only
+   exist in the labs, so a global `input[type="range"]` rule can't touch the
+   main site.
+   ========================================================================== */
+
+/* ── Select / text / file inputs ─────────────────────────────────────────── */
+.qp-select,
+.qp-text,
+.qp-file {
+  background: var(--ctl-input-bg) !important;
+  border: 1px solid var(--ctl-input-border) !important;
+  border-radius: var(--ctl-input-radius) !important;
+  box-shadow: var(--ctl-input-shadow) !important;
+  color: var(--text) !important;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 0.12rem 0.4rem;
+}
+.qp-text::placeholder { color: var(--text-dim); }
+.qp-file { font-size: 0.62rem; padding: 0.1rem; }
+.qp-select option,
+.qp-text,
+.qp-file { color: var(--text); }
+
+/* ── Modulator meters ────────────────────────────────────────────────────── */
+.qp-mod-meter { background: var(--ctl-meter-bg) !important; }
+
+/* ── Range sliders — one custom rail, fully token-driven ─────────────────────
+   Every theme reshapes the rail by overriding --ctl-slider-* (colors AND
+   geometry) — no need to re-declare the four vendor pseudo-elements. The page
+   keeps control of the outer box (width + touch height); we only paint the
+   track + thumb. The thumb auto-centers on the track at any size via calc(). */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent !important;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--ctl-slider-track-h);
+  border-radius: var(--ctl-slider-track-radius);
+  background: var(--ctl-slider-track);
+  box-shadow: var(--ctl-slider-track-shadow);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--ctl-slider-thumb-w);
+  height: var(--ctl-slider-thumb-h);
+  border-radius: var(--ctl-slider-thumb-radius);
+  background: var(--ctl-slider-thumb);
+  border: var(--ctl-slider-thumb-border);
+  box-shadow: var(--ctl-slider-thumb-shadow);
+  margin-top: calc((var(--ctl-slider-track-h) - var(--ctl-slider-thumb-h)) / 2);
+}
+input[type="range"]::-moz-range-track {
+  height: var(--ctl-slider-track-h);
+  border-radius: var(--ctl-slider-track-radius);
+  background: var(--ctl-slider-track);
+  box-shadow: var(--ctl-slider-track-shadow);
+}
+input[type="range"]::-moz-range-progress {
+  height: var(--ctl-slider-track-h);
+  border-radius: var(--ctl-slider-track-radius);
+  background: var(--ctl-slider-fill);
+}
+input[type="range"]::-moz-range-thumb {
+  width: var(--ctl-slider-thumb-w);
+  height: var(--ctl-slider-thumb-h);
+  border-radius: var(--ctl-slider-thumb-radius);
+  background: var(--ctl-slider-thumb);
+  border: var(--ctl-slider-thumb-border);
+  box-shadow: var(--ctl-slider-thumb-shadow);
+}
+/* Keyboard focus ring on the thumb (mouse drags stay clean). */
+input[type="range"]:focus-visible { outline: none; }
+input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--ctl-focus-ring); }
+input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-focus-ring); }
+
+/* Mod-weight sliders sit in a thin (11px) pill row — cap their geometry so a
+   theme's chunky thumb can't overflow, and carry the per-channel colour the
+   pill used to get from accent-color. */
+.qp-mod-weight {
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-thumb-w: 11px;
+  --ctl-slider-thumb-h: 11px;
+}
+.qp-mod-pill.audio .qp-mod-weight {
+  --ctl-slider-thumb: var(--cyan); --ctl-slider-fill: var(--cyan);
+  --ctl-slider-track: color-mix(in srgb, var(--cyan) 25%, transparent);
+}
+.qp-mod-pill.pose .qp-mod-weight {
+  --ctl-slider-thumb: var(--pink); --ctl-slider-fill: var(--pink);
+  --ctl-slider-track: color-mix(in srgb, var(--pink) 25%, transparent);
+}
+.qp-mod-pill.crowd .qp-mod-weight {
+  --ctl-slider-thumb: var(--accent); --ctl-slider-fill: var(--accent);
+  --ctl-slider-track: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+/* ── Keyboard focus ring on buttons / inputs (outline, so it never disturbs a
+   theme's button box-shadow / bevel) ─────────────────────────────────────── */
+.btn:focus-visible,
+.ctrl-btn:focus-visible,
+.qp-toggle:focus-visible,
+.qp-preset:focus-visible,
+.qp-tab:focus-visible,
+.qp-select:focus-visible,
+.qp-text:focus-visible,
+.qp-file:focus-visible,
+.start-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 2px;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+* { scrollbar-color: var(--ctl-scrollbar-thumb) var(--ctl-scrollbar-track); scrollbar-width: thin; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--ctl-scrollbar-track); }
+::-webkit-scrollbar-thumb {
+  background: var(--ctl-scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--ctl-scrollbar-thumb) 60%, var(--accent)); background-clip: padding-box; }
+
+/* ============================================================================
+   PER-THEME CONTROL IDENTITIES — sliders + modulator pills.
+   Sliders are reshaped purely by overriding --ctl-slider-* tokens (the base
+   pseudo-elements above read them). Mod pills get a scoped background/shape so
+   each panel's modulator badges read as part of the theme's instrument; the
+   per-channel border + meter colour (audio cyan / pose pink / crowd accent)
+   is left intact wherever possible so the modulator's source stays legible.
+   ========================================================================== */
+
+/* ── Voidstar — neon waveform rail / glowing signal capsules ─────────────── */
+[data-theme="voidstar"] {
+  --ctl-slider-track:
+    repeating-linear-gradient(90deg,
+      color-mix(in srgb, var(--accent) 45%, transparent) 0 2px,
+      color-mix(in srgb, var(--cyan) 30%, transparent) 2px 7px);
+  --ctl-slider-thumb: var(--accent);
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 0 9px var(--accent-glow);
+}
+[data-theme="voidstar"] .qp-mod-pill {
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-glass-2)) !important;
+  box-shadow: inset 0 0 9px color-mix(in srgb, var(--accent) 14%, transparent) !important;
+}
+
+/* ── Phosphor (+ amber) — terminal progress bar / status cells ───────────── */
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) {
+  --ctl-slider-track: color-mix(in srgb, var(--accent) 20%, var(--void));
+  --ctl-slider-track-h: 10px;
+  --ctl-slider-track-radius: 0;
+  --ctl-slider-track-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb: var(--accent);
+  --ctl-slider-thumb-w: 6px;
+  --ctl-slider-thumb-h: 14px;
+  --ctl-slider-thumb-radius: 0;
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 0 5px var(--accent-glow);
+}
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-mod-pill {
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* ── Tape — physical fader slot / channel strips ─────────────────────────── */
+[data-theme="tape"] {
+  --ctl-slider-track: color-mix(in srgb, #000 58%, var(--surface));
+  --ctl-slider-track-h: 6px;
+  --ctl-slider-track-radius: 3px;
+  --ctl-slider-track-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.75);
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 68%, #fff 32%), var(--surface-2));
+  --ctl-slider-thumb-w: 12px;
+  --ctl-slider-thumb-h: 20px;
+  --ctl-slider-thumb-radius: 3px;
+  --ctl-slider-thumb-border: 1px solid var(--border-2);
+  --ctl-slider-thumb-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 2px 3px rgba(0, 0, 0, 0.5);
+}
+[data-theme="tape"] .qp-mod-pill {
+  border-radius: 5px !important;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 86%, #fff 14%), var(--surface-2)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 2px rgba(0, 0, 0, 0.35) !important;
+}
+
+/* ── Abyssal — bioluminescent sonar rail / glowing organisms ─────────────── */
+[data-theme="abyssal"] {
+  --ctl-slider-track: color-mix(in srgb, var(--cyan) 20%, transparent);
+  --ctl-slider-track-shadow: 0 0 8px var(--cyan-glow);
+  --ctl-slider-fill: var(--cyan);
+  --ctl-slider-thumb: var(--cyan);
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 0 10px var(--cyan-glow), 0 0 4px var(--cyan);
+}
+[data-theme="abyssal"] .qp-mod-pill {
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--cyan) 6%, var(--surface-glass-2)) !important;
+  box-shadow:
+    0 0 8px color-mix(in srgb, var(--cyan) 22%, transparent),
+    inset 0 0 6px color-mix(in srgb, var(--cyan) 10%, transparent) !important;
+}
+
+/* ── Glacial — thin measurement line / measurement tags ──────────────────── */
+[data-theme="glacial"] {
+  --ctl-slider-track: color-mix(in srgb, var(--text) 22%, transparent);
+  --ctl-slider-track-h: 1px;
+  --ctl-slider-track-radius: 0;
+  --ctl-slider-fill: var(--text-muted);
+  --ctl-slider-thumb: var(--text);
+  --ctl-slider-thumb-w: 8px;
+  --ctl-slider-thumb-h: 8px;
+  --ctl-slider-thumb-radius: 0;
+  --ctl-slider-thumb-border: 1px solid color-mix(in srgb, var(--text) 45%, transparent);
+  --ctl-slider-thumb-shadow: none;
+}
+[data-theme="glacial"] .qp-mod-pill {
+  border-radius: 2px !important;
+  background: color-mix(in srgb, var(--void) 40%, transparent) !important;
+  box-shadow: none !important;
+}
+[data-theme="glacial"] .qp-mod-name { text-transform: uppercase; letter-spacing: 0.1em; }
+
+/* ── Win95 — sunken OS trough / beveled cells ────────────────────────────── */
+[data-theme="win95"] {
+  --ctl-slider-track: #808080;
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 0;
+  --ctl-slider-track-shadow: inset 1px 1px #000, inset -1px -1px #fff;
+  --ctl-slider-fill: #000080;
+  --ctl-slider-thumb: #c0c0c0;
+  --ctl-slider-thumb-w: 12px;
+  --ctl-slider-thumb-h: 20px;
+  --ctl-slider-thumb-radius: 0;
+  --ctl-slider-thumb-border: 1px solid #000;
+  --ctl-slider-thumb-shadow: var(--bevel-raised);
+  /* sunken inputs + classic gray scrollbars to match the desktop relic */
+  --ctl-input-shadow: var(--bevel-sunken);
+  --ctl-scrollbar-track: #c0c0c0;
+  --ctl-scrollbar-thumb: #808080;
+}
+[data-theme="win95"] .qp-mod-pill {
+  border-radius: 0 !important;
+  background: #c0c0c0 !important;
+  border: 1px solid #808080 !important;
+  box-shadow: var(--bevel-sunken) !important;
+  color: #000 !important;
+}
+[data-theme="win95"] .qp-mod-name { color: #000 !important; }
+[data-theme="win95"] .qp-mod-meter { background: #808080 !important; box-shadow: var(--bevel-sunken) !important; }
+[data-theme="win95"] .qp-select,
+[data-theme="win95"] .qp-text,
+[data-theme="win95"] .qp-file {
+  background: #fff !important; color: #000 !important; border: 1px solid #808080 !important;
+}
+[data-theme="win95"] ::-webkit-scrollbar-thumb { border-radius: 0; border: 0; box-shadow: var(--bevel-raised); }
+
+/* ── Stained Glass — leaded glass strip / tiny backlit panes ──────────────── */
+[data-theme="stained-glass"] {
+  --ctl-slider-track:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--accent) 30%, #0b0609),
+      color-mix(in srgb, var(--cyan) 30%, #0b0609));
+  --ctl-slider-track-h: 6px;
+  --ctl-slider-track-radius: 1px;
+  --ctl-slider-track-shadow: inset 0 0 0 1px #000;
+  --ctl-slider-fill: var(--amber);
+  --ctl-slider-thumb: radial-gradient(circle at 35% 30%, rgba(255, 251, 235, 0.95), var(--accent) 62%);
+  --ctl-slider-thumb-w: 12px;
+  --ctl-slider-thumb-h: 12px;
+  --ctl-slider-thumb-radius: 2px;
+  --ctl-slider-thumb-border: 2px solid #000;
+  --ctl-slider-thumb-shadow: 0 0 8px var(--accent-glow);
+}
+[data-theme="stained-glass"] .qp-mod-pill {
+  border-radius: 2px !important;
+  border: 2px solid #0b0609 !important;
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--accent) 22%, #0b0609),
+    color-mix(in srgb, var(--cyan) 20%, #0b0609)) !important;
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6) !important;
+}
+
+/* ── Visioneer — road-line / horizon rail / trail markers ────────────────── */
+[data-theme="visioneer"] {
+  --ctl-slider-track:
+    repeating-linear-gradient(90deg, var(--amber) 0 8px, transparent 8px 18px),
+    color-mix(in srgb, var(--surface-2) 78%, #000);
+  --ctl-slider-track-h: 5px;
+  --ctl-slider-track-radius: 2px;
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb: var(--accent);
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 0 10px var(--accent-glow), 0 0 4px var(--cyan-glow);
+}
+[data-theme="visioneer"] .qp-mod-pill {
+  border-radius: 9px !important;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(135deg, var(--accent), var(--pink), var(--cyan)) border-box !important;
+  border: 1px solid transparent !important;
+  box-shadow: 0 0 8px var(--accent-glow) !important;
+}
+
+/* ── Gardens — stem/vine with dew-drop thumb / seed labels ───────────────── */
+[data-theme="gardens"] {
+  --ctl-slider-track: color-mix(in srgb, var(--green) 30%, var(--surface));
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 999px;
+  --ctl-slider-fill: var(--green);
+  --ctl-slider-thumb:
+    radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.9),
+      color-mix(in srgb, var(--cyan) 70%, var(--green)) 70%);
+  --ctl-slider-thumb-w: 14px;
+  --ctl-slider-thumb-h: 14px;
+  --ctl-slider-thumb-border: 1px solid color-mix(in srgb, var(--green) 50%, transparent);
+  --ctl-slider-thumb-shadow: 0 0 8px color-mix(in srgb, var(--green) 40%, transparent);
+}
+[data-theme="gardens"] .qp-mod-pill {
+  border-radius: 10px !important;
+  background:
+    radial-gradient(120% 140% at 30% 0%, rgba(255, 255, 255, 0.08), transparent 50%),
+    color-mix(in srgb, var(--green) 8%, var(--surface-glass-2)) !important;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--green) 20%, transparent) !important;
+}
+
+/* ============================================================================
+   Reduced motion — honour prefers-reduced-motion.
+   Stops the looping/decorative animations this file adds (CRT flicker, biolume
+   pulse, glass shimmer, cursor blink) and collapses transitions to ~instant,
+   WITHOUT hiding state: hover/focus/active end-states still apply, they just
+   don't animate. Standard, widely-recommended global damping.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* The CRT scanline overlay's flicker is an opacity animation — pin it off. */
+  :is([data-theme="phosphor"], [data-theme="phosphor-amber"]) body::after { animation: none !important; }
+}
