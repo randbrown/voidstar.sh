@@ -224,13 +224,19 @@ export default {
       // shoulders (forward-head primate posture). Values are radians of
       // forward tilt off vertical, scaled by swagger/lunge and pulsed per step.
       const swag = scratch.swayAmt;
-      const step = Math.max(0, Math.sin(2 * TAU * p));   // 0..1, peaks at push-off
+      // Lunge envelope: a smooth raised-cosine swell (0..1) that peaks once per
+      // step. Unlike a rectified sine — which crammed the whole drive into a
+      // quarter-cycle then sat flat — this spreads the motion across the full
+      // cycle, ~halving the peak speed so the forward lunge eases in/out
+      // instead of snapping. Still rests (0) at footfall, deepest mid-step.
+      const step = 0.5 - 0.5 * Math.cos(2 * TAU * p);
       const leanLower = 0.16 + 0.06 * swag + 0.20 * lungeAmt * step + 0.12 * scratch.beatP * lungeAmt;
       const hunch     = 0.12 + 0.06 * swag + 0.14 * lungeAmt * step;
       const leanUpper = leanLower + hunch;
       const neckFwd   = 0.22 + 0.05 * swag;
 
-      const torsoLungeShift = lungeAmt * 0.03 * S * Math.sin(2 * TAU * p);
+      // Body eases forward as he lunges (in phase with the swell), back at rest.
+      const torsoLungeShift = lungeAmt * 0.025 * S * step;
       const hipY = rootY + bob;
       const hipX = rootX + face * torsoLungeShift;
 
