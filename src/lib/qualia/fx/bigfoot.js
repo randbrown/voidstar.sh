@@ -218,33 +218,52 @@ export default {
       // Pelvis bob — two per cycle, raised at mid-stance. Swagger deepens it.
       const bob = -scratch.bobAmt * S * Math.cos(2 * TAU * p);
 
-      // Forward lean: a base saunter lean + a lunge that deepens at each
-      // push-off (when a foot is leaving the ground) + beat thrust. Eased so
-      // it stays intentional. faceDir flips the whole rig left/right.
-      const lean = scratch.lean
-        + lungeAmt * 0.10 * Math.max(0, Math.sin(2 * TAU * p))
-        + scratch.beatP * 0.10 * lungeAmt;
-      const torsoLungeShift = lungeAmt * 0.03 * S * Math.sin(2 * TAU * p);
+      // ── Hunched, forward-driving upper body ──────────────────────────────
+      // A confident lunge, not a flagpole: the spine arches forward, the
+      // shoulders round over the lead leg, and the head juts AHEAD of the
+      // shoulders (forward-head primate posture). Values are radians of
+      // forward tilt off vertical, scaled by swagger/lunge and pulsed per step.
+      const swag = scratch.swayAmt;
+      const step = Math.max(0, Math.sin(2 * TAU * p));   // 0..1, peaks at push-off
+      const leanLower = 0.30 + 0.10 * swag + 0.10 * lungeAmt * step + 0.10 * scratch.beatP * lungeAmt;
+      const hunch     = 0.22 + 0.10 * swag + 0.06 * lungeAmt * step;
+      const leanUpper = leanLower + hunch;
+      const neckFwd   = 0.30 + 0.05 * swag;
 
+      const torsoLungeShift = lungeAmt * 0.03 * S * Math.sin(2 * TAU * p);
       const hipY = rootY + bob;
       const hipX = rootX + face * torsoLungeShift;
 
-      // Torso up-vector tilted forward by `lean` (toward face).
-      const torsoLen = 0.34 * S;
-      const torsoAng = -PI / 2 + face * lean;
-      const shX = hipX + Math.cos(torsoAng) * torsoLen;
-      const shY = hipY + Math.sin(torsoAng) * torsoLen;
+      // Curved spine: hip → mid-back → shoulders. The upper segment bends
+      // further forward than the lower, so the back bows (the hunch).
+      const torsoLen = 0.36 * S;
+      const lowerLen = torsoLen * 0.45, upperLen = torsoLen * 0.55;
+      const lowAng = -PI / 2 + face * leanLower;
+      const midX = hipX + Math.cos(lowAng) * lowerLen;
+      const midY = hipY + Math.sin(lowAng) * lowerLen;
+      const upAng = -PI / 2 + face * leanUpper;
+      const shX = midX + Math.cos(upAng) * upperLen;
+      const shY = midY + Math.sin(upAng) * upperLen;
+      const torsoAng = upAng;     // arm-hang reference
 
-      // Head — a heavy humanoid/cavemanish dome set low on broad shoulders
-      // (sasquatch = no neck). Kept mostly upright with only a gentle forward
-      // set so it doesn't read snouty/baboonish; deliberately uses its own
-      // soft tilt rather than the per-step lunge lean of the torso.
+      // Head leads forward: the neck angles further forward than the upper
+      // spine, pushing the dome ahead of the shoulders, peering down the lunge.
       const headR = 0.145 * S;
-      const headTilt = face * (0.05 + lean * 0.30);
-      const upX = Math.cos(-PI / 2 + headTilt);
-      const upY = Math.sin(-PI / 2 + headTilt);
-      const headCX = shX + upX * (headR * 0.72);
-      const headCY = (shY - 0.03 * S) + upY * (headR * 0.72);
+      const neckLen = 0.10 * S;
+      const neckAng = -PI / 2 + face * (leanUpper + neckFwd);
+      const headCX = shX + Math.cos(neckAng) * (neckLen + headR * 0.55);
+      const headCY = shY + Math.sin(neckAng) * (neckLen + headR * 0.55);
+      const headTilt = face * (0.18 + leanUpper * 0.35);
+
+      // Eyes + brow, rotated to follow the head tilt so they ride the face.
+      const ct = Math.cos(headTilt), st = Math.sin(headTilt);
+      const place = (fwd, up) => {
+        const lx = face * fwd, ly = up;
+        return { x: headCX + lx * ct - ly * st, y: headCY + lx * st + ly * ct };
+      };
+      const eye0 = place(headR * 0.50, -headR * 0.06);
+      const eye1 = place(headR * 0.20, -headR * 0.06);
+      const brow = place(headR * 0.55, -headR * 0.20);
 
       // ── Legs (two, π out of phase) ──────────────────────────────────────
       const a = 0.27 * S, b = 0.27 * S;
@@ -268,8 +287,9 @@ export default {
         // opposite phase to same-side leg + small lag for swagger overlap
         const ph = (p + i * 0.5 + 0.5 + 0.05) % 1;
         const swing = scratch.armSwing * Math.sin(TAU * ph);
-        // shoulder points down (+PI/2), swing rotates toward/away from face
-        const shoAng = PI / 2 - face * swing;
+        // shoulder points down (+PI/2) with a slight forward bias to match the
+        // lunge; swing rotates toward/away from face.
+        const shoAng = PI / 2 - face * (swing + 0.10);
         const sX = shX + face * (i === 0 ? 0.03 : -0.03) * S;
         const sY = shY - 0.02 * S;
         const eX = sX + Math.cos(shoAng) * ua;
@@ -281,7 +301,9 @@ export default {
       }
 
       scratch.joints = {
-        hipX, hipY, shX, shY, headCX, headCY, headR, headTilt, torsoAng, legs, arms, face,
+        hipX, hipY, midX, midY, shX, shY, headCX, headCY, headR, headTilt, torsoAng,
+        eyes: [eye0, eye1], browX: brow.x, browY: brow.y,
+        legs, arms, face,
         // foot plant strength for contact shadows
         plant: legs.map(l => l.psi < 0.62 ? 1 : 0),
       };
@@ -316,7 +338,6 @@ export default {
       scratch.bobAmt    = 0.012 + 0.022 * params.swagger;
       scratch.swayAmt   = params.swagger;
       scratch.lungeAmt  = params.lunge;
-      scratch.lean      = 0.12 + 0.05 * params.swagger;
 
       // ── Pose binding: shoulderSpan → scale, head.x → face/roam ───────────
       let scaleTarget = 0, faceTarget = scratch.faceDir;
@@ -403,23 +424,23 @@ export default {
         path.arc(arm.wX, arm.wY, 0.05 * S * am, 0, TAU);
       }
 
-      // Torso — bulky, broadening to the shoulders.
-      addBone(path, j.hipX, j.hipY + 0.02 * S, j.shX, j.shY, 0.125 * S, 0.15 * S, 13);
-      // Broad shoulder yoke.
+      // Curved spine — hip → mid-back → shoulders. Two tapered segments make
+      // the back bow forward into the lunge (no flagpole).
+      addBone(path, j.hipX, j.hipY + 0.02 * S, j.midX, j.midY, 0.125 * S, 0.135 * S, 12);
+      addBone(path, j.midX, j.midY, j.shX, j.shY, 0.135 * S, 0.145 * S, 13);
+      // Broad shoulder yoke, hunched over the lead leg.
       path.moveTo(j.shX + 0.14 * S, j.shY);
-      path.arc(j.shX, j.shY - 0.02 * S, 0.135 * S, 0, TAU);
-      // Thick neck bridging shoulders to head — no gap (sasquatch = no neck).
-      addBone(path, j.shX, j.shY - 0.04 * S, j.headCX, j.headCY, 0.115 * S, 0.10 * S, 14);
-      // Head — a rounded humanoid dome, taller than wide, leaning just slightly
-      // forward into the walk. An ellipse gives the smooth cranium/jaw.
+      path.arc(j.shX, j.shY, 0.14 * S, 0, TAU);
+      // Thick forward-angled neck bridging shoulders to the leading head.
+      addBone(path, j.shX, j.shY, j.headCX, j.headCY, 0.12 * S, 0.10 * S, 14);
+      // Head — a rounded humanoid dome, taller than wide, tilted to peer down
+      // the lunge. An ellipse gives the smooth cranium/jaw.
       const hrx = j.headR * 0.94, hry = j.headR * 1.14, ht = j.headTilt;
       path.moveTo(j.headCX + Math.cos(ht) * hrx, j.headCY + Math.sin(ht) * hrx);
       path.ellipse(j.headCX, j.headCY, hrx, hry, ht, 0, TAU);
-      // Heavy cavemanish brow ridge — a low forward bulge over the eyes.
-      const browX = j.headCX + j.face * hrx * 0.60;
-      const browY = j.headCY - hry * 0.14;
-      path.moveTo(browX + 0.06 * S, browY);
-      path.arc(browX, browY, 0.06 * S, 0, TAU);
+      // Heavy cavemanish brow ridge — a forward bulge over the eyes.
+      path.moveTo(j.browX + 0.06 * S, j.browY);
+      path.arc(j.browX, j.browY, 0.06 * S, 0, TAU);
 
       return path;
     }
@@ -566,25 +587,19 @@ export default {
       ctx.globalCompositeOperation = 'lighter';
       const er = j.headR * 0.14;
       const glow = (0.8 + scratch.eyeFlare * 1.2) * scratch.eyeGlow;
-      const fwd = j.face;
-      // two eyes, level with each other, set forward along the face
-      const eyeY = j.headCY - j.headR * 0.08;
-      const eyes = [
-        { ex: j.headCX + fwd * j.headR * 0.52, ey: eyeY },
-        { ex: j.headCX + fwd * j.headR * 0.22, ey: eyeY },
-      ];
-      for (const e of eyes) {
-        const bloom = ctx.createRadialGradient(e.ex, e.ey, 0, e.ex, e.ey, er * 6);
+      // eye positions are computed in computePose (tilt + face aware)
+      for (const e of j.eyes) {
+        const bloom = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, er * 6);
         bloom.addColorStop(0, rgba(pal.eye, Math.min(1, 0.5 * glow)));
         bloom.addColorStop(0.4, rgba(pal.eye, 0.12 * glow));
         bloom.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = bloom;
         ctx.beginPath();
-        ctx.arc(e.ex, e.ey, er * 6, 0, TAU);
+        ctx.arc(e.x, e.y, er * 6, 0, TAU);
         ctx.fill();
         ctx.fillStyle = rgba([255, 255, 255], Math.min(1, 0.9 * glow));
         ctx.beginPath();
-        ctx.arc(e.ex, e.ey, er, 0, TAU);
+        ctx.arc(e.x, e.y, er, 0, TAU);
         ctx.fill();
       }
       ctx.globalCompositeOperation = 'source-over';
