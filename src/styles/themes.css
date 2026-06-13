@@ -563,3 +563,450 @@ body::before {
 }
 [data-theme="win95"] .prose,
 [data-theme="win95"] .prose :is(p, li, h1, h2, h3, blockquote) { color: #eafdfd; }
+
+/* ============================================================================
+   PER-THEME SKIN LAYERS — distinction beyond color.
+   ----------------------------------------------------------------------------
+   win95 (above) proved the model: a theme can change the chrome *metaphor*,
+   not just the palette, by skinning the real site + HUD selectors with scoped
+   `!important` rules (no markup changes). These layers do the same for every
+   other theme so each one is a different design language — its own button
+   shape, panel material, title-bar treatment, border idiom and texture — and
+   not merely a recolor of the default.
+
+   Conventions, so the labs (Astro-scoped, higher specificity) actually take:
+     • scope every rule to [data-theme="…"] so a skin can never leak
+     • !important on contested props (background/border/box-shadow/radius)
+     • lean on the theme's own tokens (--accent, --cyan, --surface, glows…)
+       via color-mix so each skin stays in its own family for free
+   Shared button + panel selector groups are repeated per theme (CSS has no
+   selector variables); :is() collapses the two phosphor tubes into one.
+   ========================================================================== */
+
+@keyframes vs-cursor-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes vs-crt-flicker {
+  0%, 100% { opacity: 1; } 92% { opacity: 1; } 93% { opacity: 0.82; }
+  94% { opacity: 1; } 96% { opacity: 0.9; } 97% { opacity: 1; }
+}
+@keyframes vs-biolume {
+  0%, 100% { box-shadow: 0 0 8px var(--cyan-glow), inset 0 0 6px var(--cyan-glow); }
+  50%      { box-shadow: 0 0 18px var(--cyan-glow), inset 0 0 12px var(--cyan-glow); }
+}
+@keyframes vs-glass-shimmer {
+  0%   { background-position: -180% 0; }
+  100% { background-position: 180% 0; }
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Voidstar — luminous deep-space chrome: glowing pill controls and panels
+   lit from a thin accent "horizon" along their top edge. The signature look,
+   pushed from neutral-dark to unmistakably voidstar.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="voidstar"] .btn,
+[data-theme="voidstar"] .ctrl-btn,
+[data-theme="voidstar"] .qp-toggle,
+[data-theme="voidstar"] .qp-preset,
+[data-theme="voidstar"] .qp-tab,
+[data-theme="voidstar"] .start-btn {
+  border-radius: 999px !important;
+  transition: box-shadow 0.25s, border-color 0.25s, color 0.25s, transform 0.25s;
+}
+[data-theme="voidstar"] .ctrl-btn:hover,
+[data-theme="voidstar"] .qp-toggle:hover,
+[data-theme="voidstar"] .qp-preset:hover,
+[data-theme="voidstar"] .qp-tab:hover {
+  box-shadow: 0 0 14px var(--accent-glow);
+  transform: translateY(-1px);
+}
+[data-theme="voidstar"] .qp-card,
+[data-theme="voidstar"] #topbar,
+[data-theme="voidstar"] #audio-panel,
+[data-theme="voidstar"] .qp-tabs,
+[data-theme="voidstar"] .post-card,
+[data-theme="voidstar"] .video-card {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 9%, var(--surface-glass)),
+      var(--surface-glass)) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 45%, transparent),
+    0 8px 30px rgba(0, 0, 0, 0.45) !important;
+}
+[data-theme="voidstar"] .qp-head .qp-title::before { content: "✦ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Phosphor (+ amber) — a real text-mode terminal. Controls become bracketed
+   [ commands ] that invert on hover/active like a selected TUI line; panels
+   get the classic ═══ double-rule frame with square corners; title bars carry
+   a "> " prompt and a blinking block cursor; the scanline layer flickers.
+   ──────────────────────────────────────────────────────────────────────── */
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .btn,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .start-btn {
+  background: transparent !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent) !important;
+  border-radius: 0 !important;
+  color: var(--accent) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  box-shadow: none !important;
+  transition: none;
+}
+/* [ bracketed ] labels — skipped on <select> (pseudos don't render there). */
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn:not(select)::before,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle::before,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset::before,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab::before { content: "["; opacity: 0.7; }
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn:not(select)::after,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle::after,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset::after,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab::after { content: "]"; opacity: 0.7; }
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn:hover,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle:hover,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset:hover,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab:hover,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .btn:hover,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn.active,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle.active,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset.active,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab.active {
+  background: var(--accent) !important;
+  color: var(--void) !important;
+  border-color: var(--accent) !important;
+  text-shadow: none;
+}
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-card,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) #topbar,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) #audio-panel,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tabs,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .post-card,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .video-card,
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) #cycle-mgr {
+  border: 3px double var(--border-2) !important;
+  border-radius: 0 !important;
+  box-shadow: inset 0 0 24px color-mix(in srgb, var(--accent) 6%, transparent) !important;
+}
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-card > .qp-head {
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent) !important;
+}
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-head .qp-title::before { content: "> "; }
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-head .qp-title::after {
+  content: "_"; animation: vs-cursor-blink 1.1s steps(1) infinite;
+}
+:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) body::after { animation: vs-crt-flicker 7s infinite; }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Tape — warm analog hardware. Controls are chunky moulded-plastic keys with
+   a top highlight and a soft drop shadow; panels are warm cards with an inset
+   highlight; each card header is a cream "cassette label" strip.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="tape"] .btn,
+[data-theme="tape"] .ctrl-btn,
+[data-theme="tape"] .qp-toggle,
+[data-theme="tape"] .qp-preset,
+[data-theme="tape"] .qp-tab,
+[data-theme="tape"] .start-btn {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 82%, #fff 18%),
+    var(--surface-2)) !important;
+  border: 1px solid var(--border-2) !important;
+  border-radius: 8px !important;
+  color: var(--text) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 2px 3px rgba(0, 0, 0, 0.4) !important;
+}
+[data-theme="tape"] .ctrl-btn:active,
+[data-theme="tape"] .qp-toggle.active,
+[data-theme="tape"] .qp-preset.active,
+[data-theme="tape"] .qp-tab.active {
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.45) !important;
+  color: var(--accent) !important;
+  transform: translateY(1px);
+}
+[data-theme="tape"] .qp-card,
+[data-theme="tape"] #topbar,
+[data-theme="tape"] #audio-panel,
+[data-theme="tape"] .qp-tabs,
+[data-theme="tape"] .post-card,
+[data-theme="tape"] .video-card {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 40px rgba(0, 0, 0, 0.25),
+    0 6px 20px rgba(0, 0, 0, 0.4) !important;
+}
+[data-theme="tape"] .qp-card > .qp-head {
+  background: color-mix(in srgb, var(--text) 13%, var(--surface)) !important;
+  border-radius: 6px !important;
+  padding: 0.22rem 0.55rem !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1) !important;
+  letter-spacing: 0.04em;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Abyssal — bioluminescent deep sea. Glowing translucent capsules over
+   heavily blurred glass; rims pulse with cyan light; panels are rim-lit and
+   backlit from within. Everything breathes.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="abyssal"] .btn,
+[data-theme="abyssal"] .ctrl-btn,
+[data-theme="abyssal"] .qp-toggle,
+[data-theme="abyssal"] .qp-preset,
+[data-theme="abyssal"] .qp-tab,
+[data-theme="abyssal"] .start-btn {
+  background: color-mix(in srgb, var(--cyan) 8%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--cyan) 38%, transparent) !important;
+  border-radius: 999px !important;
+  color: var(--cyan) !important;
+  backdrop-filter: blur(6px) !important;
+  box-shadow: 0 0 10px var(--cyan-glow) !important;
+}
+[data-theme="abyssal"] .ctrl-btn:hover,
+[data-theme="abyssal"] .qp-toggle:hover,
+[data-theme="abyssal"] .qp-preset:hover,
+[data-theme="abyssal"] .qp-tab:hover,
+[data-theme="abyssal"] .ctrl-btn.active,
+[data-theme="abyssal"] .qp-toggle.active,
+[data-theme="abyssal"] .qp-preset.active,
+[data-theme="abyssal"] .qp-tab.active {
+  animation: vs-biolume 2.4s ease-in-out infinite;
+  border-color: var(--cyan) !important;
+}
+[data-theme="abyssal"] .qp-card,
+[data-theme="abyssal"] #topbar,
+[data-theme="abyssal"] #audio-panel,
+[data-theme="abyssal"] .qp-tabs,
+[data-theme="abyssal"] .post-card,
+[data-theme="abyssal"] .video-card,
+[data-theme="abyssal"] #cycle-mgr {
+  background:
+    radial-gradient(120% 80% at 50% -20%,
+      color-mix(in srgb, var(--cyan) 14%, transparent), transparent 70%),
+    var(--surface-glass) !important;
+  border: 1px solid color-mix(in srgb, var(--cyan) 25%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(1.3) !important;
+  box-shadow:
+    inset 0 0 30px color-mix(in srgb, var(--cyan) 12%, transparent),
+    0 0 28px var(--accent-glow) !important;
+}
+[data-theme="abyssal"] .qp-card > .qp-head {
+  border-bottom: 1px solid transparent !important;
+  border-image: linear-gradient(90deg, transparent, var(--cyan), transparent) 1 !important;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Glacial — Nordic minimalism. Hairline controls with no fill, uppercase
+   wide-tracked micro-labels; deeply frosted near-borderless panels with
+   generous quiet; title bars are thin uppercase rules. Restraint as a style.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="glacial"] .btn,
+[data-theme="glacial"] .ctrl-btn,
+[data-theme="glacial"] .qp-toggle,
+[data-theme="glacial"] .qp-preset,
+[data-theme="glacial"] .qp-tab,
+[data-theme="glacial"] .start-btn {
+  background: transparent !important;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent) !important;
+  border-radius: 3px !important;
+  color: var(--text-muted) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  box-shadow: none !important;
+}
+[data-theme="glacial"] .ctrl-btn:hover,
+[data-theme="glacial"] .qp-toggle:hover,
+[data-theme="glacial"] .qp-preset:hover,
+[data-theme="glacial"] .qp-tab:hover,
+[data-theme="glacial"] .ctrl-btn.active,
+[data-theme="glacial"] .qp-toggle.active,
+[data-theme="glacial"] .qp-preset.active,
+[data-theme="glacial"] .qp-tab.active {
+  background: color-mix(in srgb, var(--text) 9%, transparent) !important;
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--text) 30%, transparent) !important;
+}
+[data-theme="glacial"] .qp-card,
+[data-theme="glacial"] #topbar,
+[data-theme="glacial"] #audio-panel,
+[data-theme="glacial"] .qp-tabs,
+[data-theme="glacial"] .post-card,
+[data-theme="glacial"] .video-card,
+[data-theme="glacial"] #cycle-mgr {
+  background: color-mix(in srgb, var(--void) 55%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent) !important;
+  backdrop-filter: blur(26px) saturate(1.1) brightness(1.05) !important;
+  box-shadow: 0 12px 44px rgba(0, 0, 0, 0.3) !important;
+}
+[data-theme="glacial"] .qp-card > .qp-head {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.66rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent) !important;
+  padding-bottom: 0.3rem !important;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Stained Glass — leaded jewel panes. Controls are cut gems set in near-black
+   came; panels carry an actual leaded grid (repeating came lines) over a
+   backlit jewel wash; headers sweep ruby→cobalt→amber behind white type.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="stained-glass"] .btn,
+[data-theme="stained-glass"] .ctrl-btn,
+[data-theme="stained-glass"] .qp-toggle,
+[data-theme="stained-glass"] .qp-preset,
+[data-theme="stained-glass"] .qp-tab,
+[data-theme="stained-glass"] .start-btn {
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--accent) 32%, var(--surface)),
+    color-mix(in srgb, var(--cyan) 26%, var(--surface))) !important;
+  border: 2px solid #0b0609 !important;
+  border-radius: 2px !important;
+  color: var(--text) !important;
+  box-shadow:
+    inset 0 0 8px color-mix(in srgb, var(--accent) 45%, transparent),
+    0 0 8px var(--accent-glow) !important;
+}
+[data-theme="stained-glass"] .ctrl-btn:hover,
+[data-theme="stained-glass"] .qp-toggle:hover,
+[data-theme="stained-glass"] .qp-preset:hover,
+[data-theme="stained-glass"] .qp-tab:hover,
+[data-theme="stained-glass"] .ctrl-btn.active,
+[data-theme="stained-glass"] .qp-toggle.active,
+[data-theme="stained-glass"] .qp-preset.active,
+[data-theme="stained-glass"] .qp-tab.active {
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--pink) 40%, var(--surface)),
+    color-mix(in srgb, var(--amber) 30%, var(--surface))) !important;
+  box-shadow:
+    inset 0 0 10px color-mix(in srgb, var(--pink) 50%, transparent),
+    0 0 14px var(--pink-glow) !important;
+}
+[data-theme="stained-glass"] .qp-card,
+[data-theme="stained-glass"] #topbar,
+[data-theme="stained-glass"] #audio-panel,
+[data-theme="stained-glass"] .qp-tabs,
+[data-theme="stained-glass"] .post-card,
+[data-theme="stained-glass"] .video-card,
+[data-theme="stained-glass"] #cycle-mgr {
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 37px, rgba(11, 6, 9, 0.55) 37px 40px),
+    repeating-linear-gradient(90deg, transparent 0 37px, rgba(11, 6, 9, 0.55) 37px 40px),
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--accent) 18%, var(--surface)),
+      color-mix(in srgb, var(--cyan) 16%, var(--surface))) !important;
+  border: 3px solid #0b0609 !important;
+  border-radius: 2px !important;
+  box-shadow:
+    inset 0 0 34px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 0 22px var(--accent-glow) !important;
+}
+[data-theme="stained-glass"] .qp-card > .qp-head {
+  background: linear-gradient(90deg, var(--accent), var(--pink), var(--amber)) !important;
+  color: #fff !important;
+  border-bottom: 2px solid #0b0609 !important;
+  padding: 0.2rem 0.5rem !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+[data-theme="stained-glass"] .qp-card > .qp-head .qp-title { color: #fff !important; }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Visioneer — psychedelic folk-art twilight. Controls are organically rounded
+   with a glowing eye-blue→magenta→turquoise gradient rim; panels are starlit
+   twilight cards. Handmade, luminous, a little uncanny.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="visioneer"] .btn,
+[data-theme="visioneer"] .ctrl-btn,
+[data-theme="visioneer"] .qp-toggle,
+[data-theme="visioneer"] .qp-preset,
+[data-theme="visioneer"] .qp-tab,
+[data-theme="visioneer"] .start-btn {
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(135deg, var(--accent), var(--pink), var(--cyan)) border-box !important;
+  border: 1px solid transparent !important;
+  border-radius: 11px !important;
+  color: var(--text) !important;
+  box-shadow: 0 0 10px var(--accent-glow) !important;
+}
+[data-theme="visioneer"] .ctrl-btn:hover,
+[data-theme="visioneer"] .qp-toggle:hover,
+[data-theme="visioneer"] .qp-preset:hover,
+[data-theme="visioneer"] .qp-tab:hover,
+[data-theme="visioneer"] .ctrl-btn.active,
+[data-theme="visioneer"] .qp-toggle.active,
+[data-theme="visioneer"] .qp-preset.active,
+[data-theme="visioneer"] .qp-tab.active {
+  box-shadow: 0 0 18px var(--pink-glow), 0 0 8px var(--cyan-glow) !important;
+  color: var(--cyan) !important;
+}
+[data-theme="visioneer"] .qp-card,
+[data-theme="visioneer"] #topbar,
+[data-theme="visioneer"] #audio-panel,
+[data-theme="visioneer"] .qp-tabs,
+[data-theme="visioneer"] .post-card,
+[data-theme="visioneer"] .video-card,
+[data-theme="visioneer"] #cycle-mgr {
+  background-image:
+    radial-gradient(1px 1px at 18% 24%, rgba(255, 255, 255, 0.5), transparent),
+    radial-gradient(1px 1px at 72% 38%, rgba(255, 255, 255, 0.35), transparent),
+    radial-gradient(1px 1px at 44% 78%, rgba(255, 255, 255, 0.3), transparent),
+    radial-gradient(1px 1px at 88% 66%, rgba(255, 255, 255, 0.4), transparent),
+    linear-gradient(170deg,
+      color-mix(in srgb, var(--accent) 12%, var(--surface-glass)),
+      color-mix(in srgb, var(--pink) 8%, var(--surface-glass))) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent) !important;
+  box-shadow: 0 0 24px var(--accent-glow) !important;
+}
+[data-theme="visioneer"] .qp-head .qp-title::before { content: "◉ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Gardens — greenhouse at dusk. Soft luminous pill controls with a dewdrop
+   highlight and a chlorophyll glow; panels glow gently from a low light with
+   a faint canopy gradient; headers carry a small bloom.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="gardens"] .btn,
+[data-theme="gardens"] .ctrl-btn,
+[data-theme="gardens"] .qp-toggle,
+[data-theme="gardens"] .qp-preset,
+[data-theme="gardens"] .qp-tab,
+[data-theme="gardens"] .start-btn {
+  background:
+    radial-gradient(120% 140% at 30% 0%, rgba(255, 255, 255, 0.18), transparent 45%),
+    color-mix(in srgb, var(--green) 12%, var(--surface)) !important;
+  border: 1px solid color-mix(in srgb, var(--green) 32%, transparent) !important;
+  border-radius: 999px !important;
+  color: var(--text) !important;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--green) 30%, transparent) !important;
+}
+[data-theme="gardens"] .ctrl-btn:hover,
+[data-theme="gardens"] .qp-toggle:hover,
+[data-theme="gardens"] .qp-preset:hover,
+[data-theme="gardens"] .qp-tab:hover,
+[data-theme="gardens"] .ctrl-btn.active,
+[data-theme="gardens"] .qp-toggle.active,
+[data-theme="gardens"] .qp-preset.active,
+[data-theme="gardens"] .qp-tab.active {
+  border-color: var(--green) !important;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--green) 45%, transparent) !important;
+  color: var(--green) !important;
+}
+[data-theme="gardens"] .qp-card,
+[data-theme="gardens"] #topbar,
+[data-theme="gardens"] #audio-panel,
+[data-theme="gardens"] .qp-tabs,
+[data-theme="gardens"] .post-card,
+[data-theme="gardens"] .video-card,
+[data-theme="gardens"] #cycle-mgr {
+  background:
+    radial-gradient(140% 100% at 50% -10%,
+      color-mix(in srgb, var(--green) 14%, transparent), transparent 65%),
+    var(--surface-glass) !important;
+  border: 1px solid color-mix(in srgb, var(--green) 22%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 26px color-mix(in srgb, var(--green) 22%, transparent) !important;
+}
+[data-theme="gardens"] .qp-head .qp-title::before { content: "❀ "; color: var(--pink); }
