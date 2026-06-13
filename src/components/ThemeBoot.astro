@@ -1,14 +1,19 @@
 ---
 // Inline, synchronous theme bootstrap. Emitted at the very top of <head> so
 // `data-theme` is set before first paint (no flash of the default theme).
-// Self-contained (no imports — inline scripts can't import); the theme id list
-// mirrors THEMES in src/lib/qualia/theme.js.
+//
+// The valid-id list is derived from THEMES (the single source of truth in
+// theme.js) at build time and passed into the inline script via `define:vars`,
+// so adding a theme no longer means hand-editing a parallel `OK` array here.
+// The script body stays inline (no imports / no module defer) so it runs
+// synchronously before paint.
+import { THEMES } from '../lib/qualia/theme.js';
+const OK = THEMES.map((t) => t.id);
 ---
-<script is:inline>
+<script is:inline define:vars={{ OK }}>
   (function () {
     try {
       var KEY = 'voidstar.theme';
-      var OK = ['voidstar', 'phosphor', 'phosphor-amber', 'tape', 'abyssal', 'glacial', 'win95', 'stained-glass', 'visioneer', 'gardens'];
       var t = localStorage.getItem(KEY);
       document.documentElement.setAttribute('data-theme', OK.indexOf(t) >= 0 ? t : 'voidstar');
     } catch (e) {
