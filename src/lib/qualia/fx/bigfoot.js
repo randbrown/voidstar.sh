@@ -76,7 +76,7 @@ export default {
 
   params: [
     { id: 'animationState', label: 'state', type: 'select',
-      options: ['idle', 'walk', 'loom', 'apparition', 'ritual'], default: 'idle' },
+      options: ['idle', 'walk', 'loom', 'apparition', 'ritual'], default: 'walk' },
     { id: 'backgroundMode', label: 'backdrop', type: 'select',
       options: ['void', 'stainedGlass', 'gardenRitual', 'evilEye', 'apparitionGlass'], default: 'void' },
     { id: 'palette', label: 'palette', type: 'select', options: ['cosmic', 'aurora', 'ember', 'mono'], default: 'cosmic' },
@@ -122,7 +122,7 @@ export default {
   },
 
   presets: {
-    default:      { animationState: 'idle', backgroundMode: 'void', palette: 'cosmic', quality: 'high', bigfootScale: 1.0, breathAmount: 0.45, swayAmount: 0.35, furAmount: 0.55, furMotion: 0.30, eyeGlow: 0.85, eyePulse: 0.50, auraAmount: 0.45, apparitionAmount: 0.15, loomAmount: 0.0, stainedGlassAmount: 0.25, audioBodyAmount: 0.35, audioEyeAmount: 0.55, audioAuraAmount: 0.65, audioFurAmount: 0.25, poseInfluence: 0.30, debugRig: false },
+    default:      { animationState: 'walk', backgroundMode: 'void', palette: 'cosmic', quality: 'high', bigfootScale: 1.0, breathAmount: 0.45, swayAmount: 0.35, furAmount: 0.55, furMotion: 0.30, eyeGlow: 0.85, eyePulse: 0.50, auraAmount: 0.45, apparitionAmount: 0.15, loomAmount: 0.0, stainedGlassAmount: 0.25, audioBodyAmount: 0.35, audioEyeAmount: 0.55, audioAuraAmount: 0.65, audioFurAmount: 0.25, poseInfluence: 0.30, debugRig: false },
     ramblin:      { animationState: 'walk', backgroundMode: 'void', walkSpeed: 1.0, furAmount: 0.6, auraAmount: 0.5, palette: 'cosmic' },
     stagePresence:{ animationState: 'loom', backgroundMode: 'evilEye', loomAmount: 0.8, eyeGlow: 1.3, auraAmount: 0.8, evilEyeAmount: 0.7 },
     apparition:   { animationState: 'apparition', backgroundMode: 'apparitionGlass', apparitionAmount: 0.8, auraAmount: 0.6, furAmount: 0.45, eyeGlow: 1.0 },
@@ -271,10 +271,10 @@ export default {
       const neckAng = -PI / 2 + face * (leanUpper + neckFwd);
       const neck = { x: shoulder.x + Math.cos(neckAng) * 0.05 * S, y: shoulder.y + Math.sin(neckAng) * 0.05 * S };
       const headTarget = {
-        x: neck.x + Math.cos(neckAng) * (headR * 0.7),
-        y: neck.y + Math.sin(neckAng) * (headR * 0.7),
+        x: neck.x + Math.cos(neckAng) * (headR * 0.7) + st.gazeX * headR * 0.55,
+        y: neck.y + Math.sin(neckAng) * (headR * 0.7) + st.gazeY * headR * 0.4,
       };
-      const headTilt = face * (0.16 + leanUpper * 0.30) + st.gazeX * 0.12;
+      const headTilt = face * (0.16 + leanUpper * 0.30) + st.gazeX * 0.45;
       // Head follows almost exactly but with the tiniest lag + idle tilt.
       const idleTilt = state === 'idle' ? Math.sin(t * 0.7) * 0.03 : 0;
       if (!st.head) st.head = { ...headTarget };
@@ -341,8 +341,8 @@ export default {
       const ct = Math.cos(head.tilt), si = Math.sin(head.tilt);
       const place = (fwd, up) => ({ x: head.x + (face * fwd) * ct - up * si, y: head.y + (face * fwd) * si + up * ct });
       const eyeGap = headR * 0.30;
-      const eyeFwd = headR * 0.40 + st.gazeX * headR * 0.10;
-      const eyeUp  = -headR * 0.02 + st.gazeY * headR * 0.10;
+      const eyeFwd = headR * 0.40 + st.gazeX * headR * 0.30;
+      const eyeUp  = -headR * 0.02 + st.gazeY * headR * 0.25;
       const eyes = [place(eyeFwd + eyeGap, eyeUp), place(eyeFwd - eyeGap, eyeUp)];
       const brow = place(headR * 0.55, -headR * 0.22);
 
@@ -454,22 +454,10 @@ export default {
         const tx = (j1.x - j0.x) / nl, ty = (j1.y - j0.y) / nl;
         const bend = (fu.lean + flutter * (0.6 + P.furMotion)) * len * 0.6;
         const tipX = rootX + nx * len + tx * bend, tipY = rootY + ny * len + ty * bend;
-        ctx.strokeStyle = rgba(VOID_BLACK, 0.95);
+        ctx.strokeStyle = rgba(VOID_BLACK, 0.97);
         ctx.lineWidth = Math.max(1, 2.2 * (S / 320));
         ctx.beginPath(); ctx.moveTo(rootX, rootY); ctx.lineTo(tipX, tipY); ctx.stroke();
       }
-      // faint blue rim on a subset of tips
-      ctx.globalCompositeOperation = 'lighter';
-      for (let i = 0; i < n; i += 3) {
-        const fu = furAll[i];
-        const [j0, j1] = segFor(fu.g);
-        const px = lerp(j0.x, j1.x, fu.t), py = lerp(j0.y, j1.y, fu.t);
-        let nx = -(j1.y - j0.y), ny = (j1.x - j0.x); const nl = Math.hypot(nx, ny) || 1;
-        nx = nx / nl * fu.side; ny = ny / nl * fu.side;
-        ctx.fillStyle = rgba(RIM_BLUE, 0.05);
-        ctx.beginPath(); ctx.arc(px + nx * 0.13 * S, py + ny * 0.13 * S, 1.2, 0, TAU); ctx.fill();
-      }
-      ctx.globalCompositeOperation = 'source-over';
     }
 
     // ── Backgrounds ─────────────────────────────────────────────────────────
@@ -480,8 +468,21 @@ export default {
       g.addColorStop(0.6, rgba([pal.bg[0] + 6, pal.bg[1] + 9, pal.bg[2] + 12], 1));
       g.addColorStop(1, rgba(pal.bg, 1));
       ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-      // swirls
+      // Cosmic nebula clouds drifting across the sky (the cosmos he walks through).
       ctx.globalCompositeOperation = 'lighter';
+      const nebCols = [sc.pal.neb, sc.pal.glassC, sc.pal.glassB];
+      for (let i = 0; i < 3; i++) {
+        const ph = t * (0.02 + i * 0.012) + i * 2.1;
+        const nx = (0.24 + i * 0.26) * W + Math.cos(ph) * 0.05 * W;
+        const ny = (0.32 + 0.16 * Math.sin(ph * 1.1) + i * 0.14) * H;
+        const nr = (0.30 + 0.08 * Math.sin(ph * 1.3)) * minDim;
+        const ng = ctx.createRadialGradient(nx, ny, 0, nx, ny, nr);
+        ng.addColorStop(0, rgba(nebCols[i], 0.10 + 0.06 * sc.mids));
+        ng.addColorStop(0.5, rgba(nebCols[i], 0.035));
+        ng.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = ng; ctx.fillRect(nx - nr, ny - nr, nr * 2, nr * 2);
+      }
+      // swirls
       for (const e of eddies) {
         const cx = e.x * W, cy = e.y * H;
         ctx.strokeStyle = rgba(pal.neb, 0.04 * (0.6 + sc.mids));
@@ -502,6 +503,14 @@ export default {
         const a = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(t * 1.5 + bgp[i])) * (0.6 + tw);
         ctx.fillStyle = rgba(pal.star, Math.min(0.85, a) * 0.6);
         ctx.fillRect(x * W, bgy[i] * H, bgs[i], bgs[i]);
+      }
+      // Nearer parallax layer — rounder, brighter, drifts faster.
+      const drift2 = (t * 0.02) % 1;
+      for (let i = 0; i < N; i += 2) {
+        let x = bgx[i] * 0.97 + 0.013 - drift2; x -= Math.floor(x);
+        const a = (0.4 + 0.45 * Math.sin(t * (1 + (i % 5) * 0.4) + bgp[i])) * (0.6 + tw);
+        ctx.fillStyle = rgba(pal.star, Math.min(1, a) * 0.7);
+        ctx.beginPath(); ctx.arc(x * W, (bgy[i] * 1.01 % 1) * H, bgs[i] * 0.8, 0, TAU); ctx.fill();
       }
       ctx.globalCompositeOperation = 'source-over';
     }
@@ -617,7 +626,7 @@ export default {
         const dir = s === 0 ? -1 : 1;
         const tx = st.aura.x + dir * S * 0.4, ty = st.aura.y - S * 0.2 * amtT;
         const gg = ctx.createRadialGradient(tx, ty, 0, tx, ty, S * 0.3);
-        gg.addColorStop(0, rgba(AURA_BLUE, 0.18 * amtT)); gg.addColorStop(1, 'rgba(0,0,0,0)');
+        gg.addColorStop(0, rgba(AURA_BLUE, 0.30 * amtT)); gg.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(tx, ty, S * 0.3, 0, TAU); ctx.fill();
       }
       ctx.globalCompositeOperation = 'source-over';
@@ -743,7 +752,7 @@ export default {
       const apparTarget = clamp((params.animationState === 'apparition' ? 0.7 : 0) + params.apparitionAmount + st.ripple, 0, 1);
       st.appar = approach(st.appar, apparTarget, dt, 3); sc.appar = st.appar;
 
-      sc.S = params.bigfootScale * minDim * 0.62 * (1 + sc.loom * 0.12);
+      sc.S = params.bigfootScale * minDim * 0.62 * (1 + sc.loom * 0.16);
       sc.face = 1;
       sc.rootX = W * (0.5 + params.bigfootX);
       sc.groundY = H * (0.82 + params.bigfootY);
@@ -792,20 +801,21 @@ export default {
       drawAura(P);
       // ground contact
       drawContactShadow(P);
-      // body silhouette: void-black fill + tight blue rim
+      // Body: clean negative space punched out of the cosmos — near-opaque
+      // void fill + a soft inner rim light so the edge reads without a hard
+      // glowing outline. (Restores the void-silhouette look.)
       const path = buildBody();
-      ctx.save();
-      ctx.shadowColor = rgba(RIM_BLUE, 1);
-      ctx.shadowBlur = (0.018 + sc.beat * 0.01) * Math.min(W, H);
-      ctx.fillStyle = rgba(VOID_BLACK, 1);
-      ctx.fill(path); ctx.fill(path);
-      ctx.restore();
-      // subtle interior depth so it isn't a flat hole
-      ctx.save(); ctx.clip(path);
       const r = sc.rig;
-      const ig = ctx.createLinearGradient(0, r.head.y - sc.S, 0, sc.groundY);
-      ig.addColorStop(0, rgba([10, 14, 30], 0.5)); ig.addColorStop(1, rgba(VOID_BLACK, 0.9));
-      ctx.fillStyle = ig; ctx.fillRect(r.head.x - 1.4 * sc.S, r.head.y - 1.3 * sc.S, 2.8 * sc.S, 2.8 * sc.S);
+      ctx.save();
+      ctx.clip(path);
+      const bx = r.head.x - 1.6 * sc.S, by = r.head.y - 1.5 * sc.S, bw = 3.2 * sc.S, bh = 3.2 * sc.S;
+      ctx.fillStyle = rgba([2, 3, 6], 0.985);
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.globalCompositeOperation = 'lighter';
+      const rim = ctx.createRadialGradient(r.chest.x, r.chest.y, 0.5 * sc.S, r.chest.x, r.chest.y, 1.05 * sc.S);
+      rim.addColorStop(0, 'rgba(0,0,0,0)');
+      rim.addColorStop(1, rgba(AURA_BLUE, 0.10 + sc.beat * 0.08 * P.audioAuraAmount));
+      ctx.fillStyle = rim; ctx.fillRect(bx, by, bw, bh);
       ctx.restore();
       // fur edge breakup (dissolves with apparition)
       if (sc.appar < 0.85) drawFur(P);
