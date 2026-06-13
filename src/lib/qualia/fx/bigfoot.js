@@ -415,6 +415,7 @@ export default {
 
     function drawBackground() {
       const pal = scratch.pal, t = scratch.time;
+      const minDim = Math.min(W, H);
       // Base wash — slight vertical gradient, a touch lighter at the horizon.
       const g = ctx.createLinearGradient(0, 0, 0, H);
       g.addColorStop(0,   rgba(pal.bg, 1));
@@ -424,16 +425,31 @@ export default {
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, W, H);
 
+      // Cosmic nebula clouds drifting across the whole sky — the cosmos now
+      // lives in the background; the body is the void cut out of it.
+      ctx.globalCompositeOperation = 'lighter';
+      const nebCols = [pal.nebA, pal.nebB, pal.nebC];
+      const nebAmt = scratch.nebula;
+      for (let i = 0; i < 3; i++) {
+        const ph = t * (0.02 + i * 0.012) + i * 2.1;
+        const nx = (0.24 + i * 0.26) * W + Math.cos(ph) * 0.05 * W;
+        const ny = (0.32 + 0.16 * Math.sin(ph * 1.1) + i * 0.14) * H;
+        const nr = (0.30 + 0.08 * Math.sin(ph * 1.3)) * minDim;
+        const grad = ctx.createRadialGradient(nx, ny, 0, nx, ny, nr);
+        grad.addColorStop(0,   rgba(nebCols[i], (0.12 + 0.08 * scratch.mids) * nebAmt));
+        grad.addColorStop(0.5, rgba(nebCols[i], 0.04 * nebAmt));
+        grad.addColorStop(1,   'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(nx - nr, ny - nr, nr * 2, nr * 2);
+      }
+
       // Van-Gogh swirl eddies.
       const swirlAmt = scratch.swirl;
       if (swirlAmt > 0.01) {
-        ctx.globalCompositeOperation = 'lighter';
-        const minDim = Math.min(W, H);
         for (const e of eddies) {
           const cx = e.x * W, cy = e.y * H;
           const ink = e.ink === 0 ? pal.swirlA : pal.swirlB;
-          const baseA = 0.05 * swirlAmt;
-          ctx.strokeStyle = rgba(ink, baseA);
+          ctx.strokeStyle = rgba(ink, 0.05 * swirlAmt);
           ctx.lineWidth = 1.0 + scratch.rms * 1.5;
           ctx.beginPath();
           for (let s = 0; s <= EDDY_SEGS; s++) {
@@ -448,16 +464,29 @@ export default {
         }
       }
 
-      // Background drifting starfield.
+      // Cosmic starfield — two parallax layers drifting left to imply travel,
+      // density gated by `starDensity`. (Now the main star show, not the body.)
       ctx.globalCompositeOperation = 'lighter';
-      const drift = (t * 0.012) % 1;
       const tw = scratch.highs;
+      const drift = (t * 0.012) % 1;
       for (let i = 0; i < NUM_BG_STARS; i++) {
         let x = (bgx[i] - drift); x -= Math.floor(x);
         const px = x * W, py = bgy[i] * H;
         const a = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(t * 1.5 + bgp[i])) * (0.6 + tw);
-        ctx.fillStyle = rgba(pal.star, Math.min(0.8, a) * 0.5);
+        ctx.fillStyle = rgba(pal.star, Math.min(0.85, a) * 0.6);
         ctx.fillRect(px, py, bgs[i], bgs[i]);
+      }
+      const drift2 = (t * 0.02) % 1;   // nearer layer drifts faster
+      const N = Math.min(MAX_BODY_STARS, (MAX_BODY_STARS * scratch.starDensity) | 0);
+      for (let i = 0; i < N; i++) {
+        let x = (sx[i] - drift2); x -= Math.floor(x);
+        const px = x * W, py = sy[i] * H;
+        const a = (0.40 + 0.45 * Math.sin(t * (1 + (i % 5) * 0.4) + sp[i])) * (0.6 + tw);
+        const r = ss[i] * 0.8;
+        ctx.fillStyle = rgba(pal.star, Math.min(1, a) * 0.7);
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, TAU);
+        ctx.fill();
       }
       ctx.globalCompositeOperation = 'source-over';
     }
@@ -488,7 +517,7 @@ export default {
     }
 
     function drawFigure() {
-      const j = scratch.joints, pal = scratch.pal, S = scratch.S, t = scratch.time;
+      const j = scratch.joints, pal = scratch.pal, S = scratch.S;
       const path = buildSilhouette();
       const minDim = Math.min(W, H);
 
@@ -501,55 +530,25 @@ export default {
       ctx.fill(path);
       ctx.restore();
 
-      // Cosmic interior — clip to the body, paint deep space.
+      // Void interior — the silhouette is negative space punched out of the
+      // cosmos. Clip to the body, fill with near-opaque void, then a faint
+      // inner rim light so the edge catches the surrounding glow and reads
+      // as a form rather than a flat hole.
       ctx.save();
       ctx.clip(path);
-
-      // Deep base fill (near-opaque so the body stays distinct from the sky).
+      const bx = j.headCX - 1.4 * S, by = scratch.rootY - 1.2 * S;
+      const bw = 2.8 * S, bh = 2.4 * S;
       ctx.globalCompositeOperation = 'source-over';
-      const bx = j.headCX - 1.2 * S, by = scratch.rootY - 1.1 * S;
-      const bw = 2.4 * S, bh = 2.2 * S;
-      ctx.fillStyle = rgba([3, 4, 8], 0.97);
+      ctx.fillStyle = rgba([2, 3, 6], 0.985);
       ctx.fillRect(bx, by, bw, bh);
 
-      // Nebula glows drifting inside the body (local, anchored to the figure).
       ctx.globalCompositeOperation = 'lighter';
-      const nebCols = [pal.nebA, pal.nebB, pal.nebC];
-      const nebAmt = scratch.nebula;
-      for (let i = 0; i < 3; i++) {
-        const ph = t * (0.05 + i * 0.02) + i * 2.1;
-        const nx = j.hipX + j.face * 0.05 * S + Math.cos(ph) * 0.12 * S;
-        const ny = scratch.rootY - 0.1 * S + (i - 1) * 0.28 * S + Math.sin(ph) * 0.1 * S;
-        const nr = (0.34 + 0.06 * Math.sin(ph * 1.3)) * S;
-        const grad = ctx.createRadialGradient(nx, ny, 0, nx, ny, nr);
-        grad.addColorStop(0,   rgba(nebCols[i], (0.18 + 0.1 * scratch.mids) * nebAmt));
-        grad.addColorStop(0.5, rgba(nebCols[i], 0.06 * nebAmt));
-        grad.addColorStop(1,   'rgba(0,0,0,0)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(nx - nr, ny - nr, nr * 2, nr * 2);
-      }
-
-      // Body starfield — local box mapped to screen, riding the figure.
-      const N = Math.min(MAX_BODY_STARS, (MAX_BODY_STARS * scratch.starDensity) | 0);
-      const boxX = j.hipX - 0.6 * S, boxY = scratch.rootY - 0.95 * S;
-      const boxW = 1.2 * S, boxH = 1.45 * S;
-      const tw = scratch.highs;
-      for (let i = 0; i < N; i++) {
-        const px = boxX + sx[i] * boxW;
-        const py = boxY + sy[i] * boxH;
-        const a = (0.45 + 0.45 * Math.sin(t * (1 + (i % 5) * 0.4) + sp[i])) * (0.6 + tw);
-        ctx.fillStyle = rgba(pal.star, Math.min(1, a));
-        const r = ss[i];
-        ctx.beginPath();
-        ctx.arc(px, py, r, 0, TAU);
-        ctx.fill();
-        if (r > 1.7) {
-          ctx.fillStyle = rgba(pal.star, a * 0.25);
-          ctx.beginPath();
-          ctx.arc(px, py, r * 3, 0, TAU);
-          ctx.fill();
-        }
-      }
+      const rcx = j.hipX, rcy = scratch.rootY - 0.18 * S, rr = 0.98 * S;
+      const rim = ctx.createRadialGradient(rcx, rcy, rr * 0.5, rcx, rcy, rr);
+      rim.addColorStop(0, 'rgba(0,0,0,0)');
+      rim.addColorStop(1, rgba(pal.aura, 0.12 + 0.10 * scratch.beatP));
+      ctx.fillStyle = rim;
+      ctx.fillRect(bx, by, bw, bh);
       ctx.restore();
 
       // Eyes — ride the head front, glowing, flaring on the beat.
@@ -557,10 +556,11 @@ export default {
       const er = j.headR * 0.14;
       const glow = (0.8 + scratch.eyeFlare * 1.2) * scratch.eyeGlow;
       const fwd = j.face;
-      // two eyes: forward on the face, slightly stacked
+      // two eyes, level with each other, set forward along the face
+      const eyeY = j.headCY - j.headR * 0.08;
       const eyes = [
-        { ex: j.headCX + fwd * j.headR * 0.5, ey: j.headCY - j.headR * 0.12 },
-        { ex: j.headCX + fwd * j.headR * 0.34, ey: j.headCY - j.headR * 0.30 },
+        { ex: j.headCX + fwd * j.headR * 0.52, ey: eyeY },
+        { ex: j.headCX + fwd * j.headR * 0.22, ey: eyeY },
       ];
       for (const e of eyes) {
         const bloom = ctx.createRadialGradient(e.ex, e.ey, 0, e.ex, e.ey, er * 6);
