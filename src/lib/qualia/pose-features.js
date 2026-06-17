@@ -133,6 +133,35 @@ export function packSkeleton(p) {
   const hipL = jointXY(p?.hips?.l),     hipR = jointXY(p?.hips?.r);
   return [...head, ...shL, ...shR, ...elL, ...elR, ...wrL, ...wrR, ...hipL, ...hipR];
 }
+/**
+ * Re-orient a packed skeleton in normalized [0,1] space. Applied on the
+ * participant's PHONE before shipping, so the performer's machine can draw each
+ * body exactly as the participant chose — no host-side mirror-guessing (which
+ * was what left bodies flipped/mirrored on the big screen). flipH/flipV mirror;
+ * `rot` is a clockwise quarter-turn in {0,90,180,270} for a sideways phone.
+ * Sentinel (-1,-1) joints pass through untouched ("don't draw").
+ * @param {number[]} arr  packed skeleton (flat x,y pairs)
+ * @param {{flipH?:boolean,flipV?:boolean,rot?:number}} [ori]
+ */
+export function orientSkeleton(arr, ori) {
+  if (!arr || !ori) return arr;
+  const flipH = !!ori.flipH, flipV = !!ori.flipV;
+  const rot = (((ori.rot || 0) % 360) + 360) % 360;
+  if (!flipH && !flipV && !rot) return arr;
+  const out = new Array(arr.length);
+  for (let i = 0; i < arr.length; i += 2) {
+    let x = arr[i], y = arr[i + 1];
+    if (x == null || y == null || x < 0 || y < 0) { out[i] = -1; out[i + 1] = -1; continue; }
+    if (rot === 90)       { const nx = 1 - y, ny = x;     x = nx; y = ny; }
+    else if (rot === 180) { x = 1 - x; y = 1 - y; }
+    else if (rot === 270) { const nx = y, ny = 1 - x;     x = nx; y = ny; }
+    if (flipH) x = 1 - x;
+    if (flipV) y = 1 - y;
+    out[i] = +x.toFixed(3); out[i + 1] = +y.toFixed(3);
+  }
+  return out;
+}
+
 /** Unpack → array of {x,y}|null in SKELETON_JOINTS order (null = don't draw). */
 export function unpackSkeleton(arr) {
   const out = [];

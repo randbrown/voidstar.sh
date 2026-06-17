@@ -64,6 +64,9 @@ const CSS = `
 .ent-crowdsig .ent-cslabel{width:3.6rem}
 .ent-crowdsig .ent-csbar{color:var(--cyan,#22d3ee);letter-spacing:.04em}
 .ent-crowdhint{margin-top:.4rem}
+.ent-skelview{display:flex;flex-direction:column;gap:.3rem;margin-top:.5rem}
+.ent-skelview .ent-slabel{display:flex;justify-content:space-between;font-size:.78rem;color:#b9b3e6}
+.ent-skelview input[type=range]{width:100%;height:22px;accent-color:var(--cyan,#22d3ee)}
 #entangle-skeletons{position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:12;display:none}
 #entangle-hud{position:fixed;left:max(.6rem,env(safe-area-inset-left));bottom:max(.6rem,env(safe-area-inset-bottom));
   z-index:16;display:none;align-items:center;gap:.45rem;padding:.3rem .6rem;border-radius:.5rem;
@@ -74,6 +77,38 @@ const CSS = `
 
 export function initEntangleUI({ core, mesh, actions = {} }) {
   const entangle = createEntangle({ core, mesh, actions });
+
+  // ── Crowd-skeleton VIEW state (host-controlled, persisted) ────────────────
+  // How the entangled audience's bodies are laid out on the big screen. The
+  // performer owns size + placement; the participant only owns orientation
+  // (flip/mirror/rotate), set on their own phone. Persisted so a venue setup
+  // survives a reload between sets.
+  const SKEL_MODES = [
+    { id: 'bottom',       label: 'bottom row' },
+    { id: 'microgravity', label: 'microgravity' },
+    { id: 'antigravity',  label: 'antigravity' },
+    { id: 'grid',         label: 'grid' },
+  ];
+  const SKEL_VIEW_BLURB = {
+    bottom:       'Small bodies lined along the bottom, clear of the projector edge.',
+    microgravity: 'Bodies drift weightlessly, bouncing softly off the safe margins.',
+    antigravity:  'Bodies rise and sway as if gravity were reversed.',
+    grid:         'Auto-grid — each body fills its own tile (the legacy look).',
+  };
+  const VIEW_KEY = 'voidstar.entangle.skelview';
+  const skelView = (() => {
+    const d = { mode: 'bottom', size: 0.22, margin: 0.05 };
+    try {
+      const o = JSON.parse(localStorage.getItem(VIEW_KEY));
+      if (o && typeof o === 'object') {
+        if (SKEL_MODES.some(m => m.id === o.mode)) d.mode = o.mode;
+        if (Number.isFinite(o.size))   d.size   = Math.min(0.6, Math.max(0.08, o.size));
+        if (Number.isFinite(o.margin)) d.margin = Math.min(0.2, Math.max(0,    o.margin));
+      }
+    } catch {}
+    return d;
+  })();
+  function saveSkelView() { try { localStorage.setItem(VIEW_KEY, JSON.stringify(skelView)); } catch {} }
 
   // Which qualia actually map crowd.* — used in the "switch to…" hint when the
   // crowd is moving but the active visual ignores it. Static, so compute once.
@@ -148,8 +183,12 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     return K.hueBase + (h % spread);
   };
 
+  let skelLastT = performance.now();
   function drawSkeletons() {
     requestAnimationFrame(drawSkeletons);
+    const now = performance.now();
+    const dt = Math.min(0.05, Math.max(0, (now - skelLastT) / 1000));
+    skelLastT = now;
     const show = entangle.isOpen() && entangle.getModes().skeleton;
     if (!show) {
       if (skelCanvas.style.display !== 'none') {
@@ -167,7 +206,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     for (const s of list) {
       present.add(s.id);
       let L = skelLayer.get(s.id);
-      if (!L) { L = { alpha: 0, order: skelOrder++, hue: idHue(s.id) }; skelLayer.set(s.id, L); }
+      if (!L) { L = { alpha: 0, order: skelOrder++, hue: idHue(s.id), px: null }; skelLayer.set(s.id, L); }
       L.joints = s.joints;
       L.alpha += (1 - L.alpha) * 0.12;
     }
@@ -180,42 +219,112 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     const cells = [...skelLayer.values()].sort((a, b) => a.order - b.order);
     const n = cells.length;
     if (!n) return;
-    const cols = Math.ceil(Math.sqrt(n));
-    const rows = Math.ceil(n / cols);
-    const cw = skelW / cols, ch = skelH / rows;
+    layoutAndDraw(cells, n, dt);
+  }
+
+  const clampN = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+  // ── Layout engine ─────────────────────────────────────────────────────────
+  // Positions, sizes and (for floating modes) spins each body per skelView.
+  //  • bottom       — small bodies in a row along the bottom, clear of the edge.
+  //  • microgravity — slow inertial drift, soft bounce off the safe margins.
+  //  • antigravity  — buoyant rise + sway, as if gravity were reversed.
+  //  • grid         — legacy: one body per auto-grid tile.
+  // Per-id physics (px,py,vx,vy,rot…) lives on the skelLayer entry.
+  function layoutAndDraw(cells, n, dt) {
+    const mode = skelView.mode;
+    const th   = Math.max(24, skelView.size * skelH);          // target body height (px)
+    const mN   = Math.min(0.25, Math.max(0, skelView.margin)); // edge margin (fraction)
+    const mPx  = mN * Math.min(skelW, skelH);
+
+    if (mode === 'grid') {
+      const cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols);
+      const cw = skelW / cols, ch = skelH / rows;
+      for (let i = 0; i < n; i++) {
+        const L = cells[i]; if (!L.joints) continue;
+        const cx = (i % cols) * cw + cw / 2, cy = ((i / cols) | 0) * ch + ch / 2;
+        drawSkeletonAt(L.joints, cx, cy, cw * 0.84, ch * 0.84, L.hue, L.alpha, 0);
+      }
+      return;
+    }
+
+    if (mode === 'bottom') {
+      const slotW = (skelW - 2 * mPx) / n;
+      const cy = skelH - mPx - th / 2;
+      for (let i = 0; i < n; i++) {
+        const L = cells[i]; if (!L.joints) continue;
+        const cx = mPx + slotW * (i + 0.5);
+        drawSkeletonAt(L.joints, cx, cy, Math.min(slotW * 0.9, th * 0.7), th, L.hue, L.alpha, 0);
+      }
+      return;
+    }
+
+    // Floating modes. Margins are inset by the body's half-extent so nobody
+    // clips the projector edge (the venue cutoff the performer worried about).
+    const halfH = (th / skelH) / 2, halfW = halfH * 0.6;
+    const loX = mN + halfW, hiX = 1 - mN - halfW;
+    const loY = mN + halfH, hiY = 1 - mN - halfH;
     for (let i = 0; i < n; i++) {
-      const L = cells[i];
-      if (!L.joints) continue;
-      drawOne(L.joints, (i % cols) * cw, ((i / cols) | 0) * ch, cw, ch, L.hue, L.alpha);
+      const L = cells[i]; if (!L.joints) continue;
+      if (L.px == null) {
+        L.px = loX + Math.random() * Math.max(0.01, hiX - loX);
+        L.py = loY + Math.random() * Math.max(0.01, hiY - loY);
+        L.phase = Math.random() * Math.PI * 2;
+        const a = Math.random() * Math.PI * 2, sp = 0.025 + Math.random() * 0.03;
+        L.vx = Math.cos(a) * sp; L.vy = Math.sin(a) * sp;
+        L.rot  = (Math.random() - 0.5) * 0.3;
+        L.vrot = (Math.random() - 0.5) * (mode === 'antigravity' ? 0.8 : 0.3);
+      }
+      let drawX, drawY;
+      if (mode === 'antigravity') {
+        L.py -= 0.05 * dt;                       // rise
+        if (L.py < loY) L.py = hiY;              // wrap bottom → top
+        L.phase += dt;
+        drawX = clampN(L.px + Math.sin(L.phase * 0.8) * 0.05, loX, hiX);
+        drawY = L.py;
+      } else {                                   // microgravity
+        L.px += L.vx * dt; L.py += L.vy * dt;
+        if (L.px < loX) { L.px = loX; L.vx =  Math.abs(L.vx); }
+        if (L.px > hiX) { L.px = hiX; L.vx = -Math.abs(L.vx); }
+        if (L.py < loY) { L.py = loY; L.vy =  Math.abs(L.vy); }
+        if (L.py > hiY) { L.py = hiY; L.vy = -Math.abs(L.vy); }
+        drawX = L.px; drawY = L.py;
+      }
+      L.rot += L.vrot * dt;
+      drawSkeletonAt(L.joints, drawX * skelW, drawY * skelH, skelW, th, L.hue, L.alpha, L.rot);
     }
   }
 
-  function drawOne(joints, cx, cy, cw, ch, hue, alpha) {
+  // Draw one body fit into a maxW×maxH box centred on (cx,cy), optionally spun.
+  // Joints arrive already in the participant's chosen orientation, so there's
+  // no host-side mirror here — we render exactly what the phone shipped.
+  function drawSkeletonAt(joints, cx, cy, maxW, maxH, hue, alpha, spin) {
     let minX = 1, minY = 1, maxX = 0, maxY = 0, any = false;
     for (const j of joints) { if (!j) continue; any = true; if (j.x < minX) minX = j.x; if (j.x > maxX) maxX = j.x; if (j.y < minY) minY = j.y; if (j.y > maxY) maxY = j.y; }
     if (!any) return;
     const bw = Math.max(1e-3, maxX - minX), bh = Math.max(1e-3, maxY - minY);
-    const pad = Math.min(cw, ch) * 0.16;
-    const s = Math.min((cw - pad * 2) / bw, (ch - pad * 2) / bh);
+    const s = Math.min(maxW / bw, maxH / bh);
     const drawW = bw * s, drawH = bh * s;
-    const ox = cx + (cw - drawW) / 2, oy = cy + (ch - drawH) / 2;
-    const P = (j) => j ? { x: ox + (1 - (j.x - minX) / bw) * drawW, y: oy + ((j.y - minY) / bh) * drawH } : null;
+    const P = (j) => j ? { x: ((j.x - minX) / bw - 0.5) * drawW, y: ((j.y - minY) / bh - 0.5) * drawH } : null;
 
+    sctx.save();
+    sctx.translate(cx, cy);
+    if (spin) sctx.rotate(spin);
     const col = `hsla(${hue},85%,66%,${alpha})`;
     sctx.lineCap = 'round'; sctx.lineJoin = 'round';
     sctx.strokeStyle = col; sctx.fillStyle = col;
     sctx.shadowColor = `hsla(${hue},90%,60%,${alpha})`;
-    sctx.shadowBlur = Math.max(6, Math.min(cw, ch) * 0.03);
-    sctx.lineWidth = Math.max(2, Math.min(cw, ch) * 0.014);
+    sctx.shadowBlur = Math.max(4, drawH * 0.05);
+    sctx.lineWidth = Math.max(2, drawH * 0.03);
 
     const head = P(joints[0]), shL = P(joints[1]), shR = P(joints[2]);
     if (head && shL && shR) line(head, { x: (shL.x + shR.x) / 2, y: (shL.y + shR.y) / 2 });
     for (const [a, b] of SKELETON_BONES) { const pa = P(joints[a]), pb = P(joints[b]); if (pa && pb) line(pa, pb); }
 
-    const r = Math.max(2, Math.min(cw, ch) * 0.012);
+    const r = Math.max(1.5, drawH * 0.02);
     for (const j of joints) { const p = P(j); if (p) dot(p, r); }
     if (head) dot(head, r * 2.4);
-    sctx.shadowBlur = 0;
+    sctx.restore();
   }
   function line(a, b) { sctx.beginPath(); sctx.moveTo(a.x, a.y); sctx.lineTo(b.x, b.y); sctx.stroke(); }
   function dot(p, r) { sctx.beginPath(); sctx.arc(p.x, p.y, r, 0, Math.PI * 2); sctx.fill(); }
@@ -322,6 +431,21 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
         ${modes.phase && entangle.phaseAvailable ? `<div class="ent-sub" data-phase>shift charge: 0 / 0 — the crowd taps together to advance the phase</div>` : ''}
       </div>
 
+      ${modes.skeleton ? `
+      <div class="ent-sect">
+        <h3>Crowd skeletons <span class="ent-sub" style="text-transform:none">(big screen)</span></h3>
+        <div class="ent-row">
+          ${SKEL_MODES.map(m => `<span class="ent-chip ${skelView.mode === m.id ? 'on' : ''}" data-skelmode="${m.id}">${m.label}</span>`).join('')}
+        </div>
+        <div class="ent-skelview">
+          <label class="ent-slabel">size <span data-skelsize-val>${Math.round(skelView.size * 100)}%</span></label>
+          <input type="range" min="8" max="60" step="1" value="${Math.round(skelView.size * 100)}" data-skelsize aria-label="skeleton size">
+          <label class="ent-slabel">edge margin <span data-skelmargin-val>${Math.round(skelView.margin * 100)}%</span></label>
+          <input type="range" min="0" max="20" step="1" value="${Math.round(skelView.margin * 100)}" data-skelmargin aria-label="edge margin">
+        </div>
+        <div class="ent-sub">${SKEL_VIEW_BLURB[skelView.mode] || ''}</div>
+      </div>` : ''}
+
       ${modes.param ? `
       <div class="ent-sect">
         <h3>Crowd-controllable params <span class="ent-sub" style="text-transform:none">(active quale)</span></h3>
@@ -389,10 +513,11 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
 
   // ── Modal interactions (event-delegated) ──────────────────────────────────
   modal.addEventListener('click', async (e) => {
-    const el = e.target.closest('[data-act],[data-mode],[data-wl]');
+    const el = e.target.closest('[data-act],[data-mode],[data-wl],[data-skelmode]');
     if (!el) return;
-    if (el.dataset.mode)  { entangle.setMode(el.dataset.mode, !entangle.getModes()[el.dataset.mode]); render(); return; }
-    if (el.dataset.wl)    { entangle.toggleWhitelist(el.dataset.wl); render(); return; }
+    if (el.dataset.mode)     { entangle.setMode(el.dataset.mode, !entangle.getModes()[el.dataset.mode]); render(); return; }
+    if (el.dataset.wl)       { entangle.toggleWhitelist(el.dataset.wl); render(); return; }
+    if (el.dataset.skelmode) { skelView.mode = el.dataset.skelmode; saveSkelView(); render(); return; }
     switch (el.dataset.act) {
       case 'close': hide(); break;
       case 'openroom': {
@@ -409,6 +534,20 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
       }
       case 'autovote': { entangle.setAutoVote(!entangle.getAutoVote()); render(); break; }
       case 'applyvote': { const id = entangle.applyWinningVote(); if (id) setTimeout(render, 50); break; }
+    }
+  });
+
+  // Skeleton view sliders — live (the render loop reads skelView each frame), so
+  // we update state + the inline %-readout WITHOUT a full re-render that would
+  // interrupt the drag.
+  modal.addEventListener('input', (e) => {
+    const t = e.target;
+    if (t.matches('[data-skelsize]')) {
+      skelView.size = (+t.value) / 100; saveSkelView();
+      const v = modal.querySelector('[data-skelsize-val]'); if (v) v.textContent = t.value + '%';
+    } else if (t.matches('[data-skelmargin]')) {
+      skelView.margin = (+t.value) / 100; saveSkelView();
+      const v = modal.querySelector('[data-skelmargin-val]'); if (v) v.textContent = t.value + '%';
     }
   });
 
