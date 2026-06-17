@@ -15,13 +15,29 @@
 // Nostr/WebRTC ./entangle-transport.js — same interface).
 import { createTransport } from './entangle-transport-cf.js';
 import { T, APP_ID, readRoomFromHash } from './entangle-protocol.js';
-import { poseFeatures, packFeatures, packSkeleton } from './pose-features.js';
+import { poseFeatures, packFeatures, packSkeleton, unpackSkeleton, orientSkeleton, SKELETON_BONES } from './pose-features.js';
 
 const POSE_INTERVAL_MS = 66;     // ~15Hz upstream
 const PARAM_DEBOUNCE_MS = 40;
+const ORI_KEY = 'voidstar.entangle.orient';
 
 export async function initEntangleClient(root) {
   const roomId = readRoomFromHash();
+
+  // Orientation the participant ships their skeleton in. The PHONE owns this so
+  // the body lands on the big screen the right way up — the host draws exactly
+  // what we send, no mirror-guessing. Default flipH mirrors (selfie-natural).
+  const orientation = (() => {
+    const d = { flipH: true, flipV: false, rot: 0 };
+    try {
+      const o = JSON.parse(localStorage.getItem(ORI_KEY));
+      if (o && typeof o === 'object') {
+        d.flipH = !!o.flipH; d.flipV = !!o.flipV; d.rot = (((o.rot | 0) % 360) + 360) % 360;
+      }
+    } catch {}
+    return d;
+  })();
+  const saveOrientation = () => { try { localStorage.setItem(ORI_KEY, JSON.stringify(orientation)); } catch {} };
   const statusEl = root.querySelector('[data-status]');
   const controlsEl = root.querySelector('[data-controls]');
   const setStatus = (msg, kind = '') => { if (statusEl) { statusEl.textContent = msg; statusEl.dataset.kind = kind; } };
@@ -94,7 +110,12 @@ export async function initEntangleClient(root) {
 
   // ── Pose ──────────────────────────────────────────────────────────────────
   let pose = null, video = null, poseRAF = 0, lastSent = 0, poseOn = false;
-  async function startPose(previewBox) {
+  // Local preview surfaces, (re)bound by renderControls. camHolder hosts the
+  // live camera; poseOverlay draws the skeleton on top of it; stageCanvas shows
+  // the oriented body exactly as the performer's screen will render it.
+  let camHolder = null, poseOverlay = null, poseOverlayCtx = null, stageCanvas = null, stageCtx = null;
+
+  async function startPose() {
     if (poseOn) return;
     poseOn = true;
     setStatus('Starting camera…');
@@ -104,8 +125,8 @@ export async function initEntangleClient(root) {
       pose.setDetectFps(20);
       video = document.createElement('video');
       video.playsInline = true; video.muted = true;
-      video.style.cssText = 'width:100%;border-radius:.6rem;transform:scaleX(-1)';
-      previewBox.innerHTML = ''; previewBox.appendChild(video);
+      video.className = 'ent-cam-video';
+      if (camHolder) { camHolder.innerHTML = ''; camHolder.appendChild(video); }
       await pose.startCamera({ video, facing: 'user' });
       setStatus('Entangled — move and the field responds.', 'ok');
       const loop = () => {
@@ -115,11 +136,15 @@ export async function initEntangleClient(root) {
         lastSent = now;
         const person = pose.frame.people?.[0] || null;
         try { transport.send(T.POSE, packFeatures(poseFeatures(person))); } catch {}
-        // Skeleton overlay: ship raw joints too, but ONLY when the host has the
-        // overlay on (keeps the default upstream tiny). Same camera, same loop.
-        if (manifest.modes?.skeleton && person) {
-          try { transport.send(T.SKELETON, packSkeleton(person)); } catch {}
+        // Skeleton: pack once, orient on-device, then ship — but ONLY when the
+        // host has the overlay on (keeps the default upstream tiny). The same
+        // raw + oriented arrays feed the local previews below.
+        let raw = null, oriented = null;
+        if (person) { raw = packSkeleton(person); oriented = orientSkeleton(raw, orientation); }
+        if (manifest.modes?.skeleton && oriented) {
+          try { transport.send(T.SKELETON, oriented); } catch {}
         }
+        drawLocalPose(raw, oriented);
       };
       poseRAF = requestAnimationFrame(loop);
     } catch (err) {
@@ -128,12 +153,65 @@ export async function initEntangleClient(root) {
       setStatus('Camera unavailable or denied. Other controls still work.', 'err');
     }
   }
-  function stopPose(previewBox) {
+  function stopPose() {
     poseOn = false;
     if (poseRAF) cancelAnimationFrame(poseRAF), (poseRAF = 0);
     try { pose?.stopCamera(); } catch {}
     pose = null; video = null;
-    if (previewBox) previewBox.innerHTML = '';
+    if (camHolder) camHolder.innerHTML = '';
+    if (poseOverlay && poseOverlayCtx) poseOverlayCtx.clearRect(0, 0, poseOverlay.width, poseOverlay.height);
+    if (stageCanvas && stageCtx) stageCtx.clearRect(0, 0, stageCanvas.width, stageCanvas.height);
+  }
+
+  // Paint the two local previews. The camera overlay tracks the body on the
+  // selfie-mirrored video (raw coords, mirrored to match). The stage preview is
+  // strictly WYSIWYG — the oriented skeleton the performer's machine receives.
+  function drawLocalPose(raw, oriented) {
+    if (poseOverlay && poseOverlayCtx) {
+      const w = poseOverlay.clientWidth || poseOverlay.width;
+      const h = poseOverlay.clientHeight || poseOverlay.height;
+      if (poseOverlay.width !== w)  poseOverlay.width = w;
+      if (poseOverlay.height !== h) poseOverlay.height = h;
+      poseOverlayCtx.clearRect(0, 0, poseOverlay.width, poseOverlay.height);
+      if (raw) drawSkel(poseOverlayCtx, poseOverlay.width, poseOverlay.height, unpackSkeleton(raw), { mirror: true, fit: false });
+    }
+    if (stageCanvas && stageCtx) {
+      stageCtx.clearRect(0, 0, stageCanvas.width, stageCanvas.height);
+      if (oriented) drawSkel(stageCtx, stageCanvas.width, stageCanvas.height, unpackSkeleton(oriented), { fit: true });
+    }
+  }
+
+  const cssVar = (name) => { try { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); } catch { return ''; } };
+  // Compact skeleton renderer shared by both previews. `fit` bbox-fits the body
+  // into the canvas (stage preview); otherwise joints map straight to the frame
+  // (camera overlay), optionally mirrored to match the selfie video.
+  function drawSkel(ctx, w, h, joints, { mirror = false, fit = false } = {}) {
+    let minX = 1, minY = 1, maxX = 0, maxY = 0, any = false;
+    for (const j of joints) { if (!j) continue; any = true; if (j.x < minX) minX = j.x; if (j.x > maxX) maxX = j.x; if (j.y < minY) minY = j.y; if (j.y > maxY) maxY = j.y; }
+    if (!any) return;
+    let P;
+    if (fit) {
+      const bw = Math.max(1e-3, maxX - minX), bh = Math.max(1e-3, maxY - minY);
+      const pad = Math.min(w, h) * 0.16, s = Math.min((w - 2 * pad) / bw, (h - 2 * pad) / bh);
+      const dw = bw * s, dh = bh * s, ox = (w - dw) / 2, oy = (h - dh) / 2;
+      P = (j) => j ? { x: ox + ((j.x - minX) / bw) * dw, y: oy + ((j.y - minY) / bh) * dh } : null;
+    } else {
+      P = (j) => j ? { x: (mirror ? 1 - j.x : j.x) * w, y: j.y * h } : null;
+    }
+    const accent = cssVar('--cyan') || '#22d3ee';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = accent; ctx.fillStyle = accent;
+    ctx.shadowColor = accent; ctx.shadowBlur = Math.max(3, Math.min(w, h) * 0.04);
+    ctx.lineWidth = Math.max(2, Math.min(w, h) * 0.02);
+    const ln = (a, b) => { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); };
+    const dt = (p, r) => { ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill(); };
+    const head = P(joints[0]), shL = P(joints[1]), shR = P(joints[2]);
+    if (head && shL && shR) ln(head, { x: (shL.x + shR.x) / 2, y: (shL.y + shR.y) / 2 });
+    for (const [a, b] of SKELETON_BONES) { const pa = P(joints[a]), pb = P(joints[b]); if (pa && pb) ln(pa, pb); }
+    const r = Math.max(1.5, Math.min(w, h) * 0.018);
+    for (const j of joints) { const p = P(j); if (p) dt(p, r); }
+    if (head) dt(head, r * 2);
+    ctx.shadowBlur = 0;
   }
 
   // ── Param debounce ──────────────────────────────────────────────────────
@@ -155,20 +233,28 @@ export async function initEntangleClient(root) {
     controlsEl.innerHTML = '';
     paramInputs.clear();
     phaseProgEl = null;
+    camHolder = poseOverlay = poseOverlayCtx = stageCanvas = stageCtx = null;
 
     if (m.modes.pose) {
       const sect = section('Your body → the field');
+      // Camera + live skeleton overlay (your own pose, shown locally).
       const previewBox = el('div', 'ent-preview');
+      camHolder = el('div', 'ent-cam');
+      poseOverlay = document.createElement('canvas');
+      poseOverlay.className = 'ent-pose-overlay';
+      poseOverlayCtx = poseOverlay.getContext('2d');
+      previewBox.append(camHolder, poseOverlay);
+
       const btn = el('button', 'ent-bigbtn');
       const reflect = () => { btn.textContent = poseOn ? 'stop' : 'tap to entangle your pose'; btn.classList.toggle('on', poseOn); };
       btn.addEventListener('click', () => {
-        if (poseOn) stopPose(previewBox); else startPose(previewBox);
+        if (poseOn) stopPose(); else startPose();
         reflect();
       });
       // Persist across re-renders: a quale switch re-sends the manifest, which
       // rebuilds these controls. If the camera is already running, keep it on
       // and re-home the live preview into the fresh box instead of resetting.
-      if (poseOn && video) { previewBox.appendChild(video); try { video.play?.().catch(() => {}); } catch {} }
+      if (poseOn && video) { camHolder.appendChild(video); try { video.play?.().catch(() => {}); } catch {} }
       reflect();
       // Tell the participant whether their movement actually does anything on
       // THIS quale — drives the field, shows as a skeleton, or neither.
@@ -177,6 +263,37 @@ export async function initEntangleClient(root) {
       else if (m.modes.skeleton){ note.textContent = '✦ your pose is drawn on the big screen'; note.dataset.kind = 'ok'; }
       else                      { note.textContent = 'this visual doesn’t react to movement right now'; note.dataset.kind = 'muted'; }
       sect.append(btn, note, previewBox);
+
+      // Orientation — only when the performer is drawing crowd skeletons (the
+      // only time it matters). Adjust mirror/flip/rotate so the body lands the
+      // right way up on the big screen; the stage preview is exactly what they
+      // see, and the same orientation is what we ship.
+      if (m.modes.skeleton) {
+        const stage = el('div', 'ent-stage');
+        const slabel = el('div', 'ent-stage-label'); slabel.textContent = 'what the performer sees';
+        stageCanvas = document.createElement('canvas');
+        stageCanvas.className = 'ent-stage-canvas';
+        stageCanvas.width = 160; stageCanvas.height = 200;
+        stageCtx = stageCanvas.getContext('2d');
+        stage.append(slabel, stageCanvas);
+
+        const orient = el('div', 'ent-orient');
+        const mk = (label, title, onClick, isOn) => {
+          const b = el('button', 'ent-oribtn');
+          b.type = 'button'; b.title = title;
+          const sync = () => { b.textContent = label(); b.classList.toggle('on', isOn()); };
+          b.addEventListener('click', () => { onClick(); saveOrientation(); orient.querySelectorAll('.ent-oribtn').forEach(x => x._sync && x._sync()); });
+          b._sync = sync; sync();
+          return b;
+        };
+        orient.append(
+          mk(() => '⇄ mirror',                                       'Flip left ↔ right', () => { orientation.flipH = !orientation.flipH; }, () => orientation.flipH),
+          mk(() => '⇅ flip',                                          'Flip up ↕ down',    () => { orientation.flipV = !orientation.flipV; }, () => orientation.flipV),
+          mk(() => orientation.rot ? `⟳ ${orientation.rot}°` : '⟳ rotate', 'Rotate 90°',  () => { orientation.rot = (orientation.rot + 90) % 360; }, () => !!orientation.rot),
+        );
+        sect.append(stage, orient);
+      }
+
       controlsEl.appendChild(sect);
     }
 
@@ -255,7 +372,7 @@ export async function initEntangleClient(root) {
 
   function teardown() {
     clearTimeout(connectTimer);
-    stopPose(controlsEl?.querySelector('.ent-preview'));
+    stopPose();
     try { transport.close(); } catch {}
   }
 
