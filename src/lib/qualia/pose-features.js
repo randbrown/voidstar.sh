@@ -150,16 +150,41 @@ export function orientSkeleton(arr, ori) {
   if (!flipH && !flipV && !rot) return arr;
   const out = new Array(arr.length);
   for (let i = 0; i < arr.length; i += 2) {
-    let x = arr[i], y = arr[i + 1];
+    const x = arr[i], y = arr[i + 1];
     if (x == null || y == null || x < 0 || y < 0) { out[i] = -1; out[i + 1] = -1; continue; }
-    if (rot === 90)       { const nx = 1 - y, ny = x;     x = nx; y = ny; }
-    else if (rot === 180) { x = 1 - x; y = 1 - y; }
-    else if (rot === 270) { const nx = y, ny = 1 - x;     x = nx; y = ny; }
-    if (flipH) x = 1 - x;
-    if (flipV) y = 1 - y;
-    out[i] = +x.toFixed(3); out[i + 1] = +y.toFixed(3);
+    const [nx, ny] = orientPoint(x, y, rot, flipH, flipV);
+    out[i] = +nx.toFixed(3); out[i + 1] = +ny.toFixed(3);
   }
   return out;
+}
+
+// Re-orient one normalized point. Rotate (clockwise quarter-turn) THEN flip —
+// the single source of truth shared by orientSkeleton (wire) and orientMatrix
+// (local camera preview), so what a phone shows == what the performer draws.
+function orientPoint(x, y, rot, flipH, flipV) {
+  let nx, ny;
+  if (rot === 90)       { nx = 1 - y; ny = x; }
+  else if (rot === 180) { nx = 1 - x; ny = 1 - y; }
+  else if (rot === 270) { nx = y;     ny = 1 - x; }
+  else                  { nx = x;     ny = y; }
+  if (flipH) nx = 1 - nx;
+  if (flipV) ny = 1 - ny;
+  return [nx, ny];
+}
+
+/**
+ * The same orientation as an affine matrix on normalized coords
+ * (oriented = M·raw), for transforming the local camera + overlay in one pass.
+ * Returns canvas-style coeffs { a,b,c,d,e,f } where x' = a·x + c·y + e, etc.
+ * @param {{flipH?:boolean,flipV?:boolean,rot?:number}} [ori]
+ */
+export function orientMatrix(ori) {
+  const flipH = !!ori?.flipH, flipV = !!ori?.flipV;
+  const rot = (((ori?.rot || 0) % 360) + 360) % 360;
+  const [e, f]     = orientPoint(0, 0, rot, flipH, flipV);
+  const [x10, y10] = orientPoint(1, 0, rot, flipH, flipV);
+  const [x01, y01] = orientPoint(0, 1, rot, flipH, flipV);
+  return { a: x10 - e, b: y10 - f, c: x01 - e, d: y01 - f, e, f };
 }
 
 /** Unpack → array of {x,y}|null in SKELETON_JOINTS order (null = don't draw). */

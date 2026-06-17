@@ -56,15 +56,18 @@ import '../../styles/themes.css';
     .ent-bigbtn { width: 100%; padding: .9rem; font: inherit; font-size: 1rem; cursor: pointer;
       border-radius: .6rem; border: 1px solid var(--accent); background: #15132a; color: var(--text); }
     .ent-bigbtn.on { background: var(--pink); border-color: var(--pink); color: #15021a; font-weight: 600; }
-    .ent-preview { margin-top: .7rem; position: relative; }
-    .ent-cam { position: relative; line-height: 0; }
-    .ent-cam-video { width: 100%; border-radius: .6rem; display: block; transform: scaleX(-1); }
-    .ent-pose-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-    .ent-stage { margin-top: .8rem; display: flex; flex-direction: column; align-items: center; gap: .35rem;
-      background: rgba(5,5,13,.6); border: 1px solid var(--border); border-radius: .6rem; padding: .6rem; }
-    .ent-stage-label { font-size: .72rem; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; }
-    .ent-stage-canvas { width: 120px; height: 150px; }
-    .ent-orient { display: flex; gap: .4rem; margin-top: .6rem; justify-content: center; flex-wrap: wrap; }
+    /* Camera compositor — capped height so a portrait camera never swamps the
+       page; the canvas paints camera + pose overlay, the <video> just decodes. */
+    .ent-cam { position: relative; margin-top: .7rem; width: 100%; height: 38vh;
+      border-radius: .6rem; overflow: hidden; background: var(--void); }
+    .ent-cam-video { position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; opacity: 0; pointer-events: none; }
+    .ent-cam-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    .ent-camctl { margin-top: .7rem; display: flex; flex-direction: column; gap: .3rem; }
+    .ent-camctl .ent-slabel { display: flex; justify-content: space-between; font-size: .8rem; color: #cfcaf0; }
+    .ent-camctl .ent-sval { color: var(--muted); }
+    .ent-camctl input[type=range] { width: 100%; height: 28px; accent-color: var(--cyan); }
+    .ent-orient { display: flex; gap: .4rem; margin-top: .3rem; justify-content: center; flex-wrap: wrap; }
     .ent-oribtn { padding: .55rem .8rem; font: inherit; font-size: .82rem; cursor: pointer; border-radius: .5rem;
       background: #120f24; color: var(--text); border: 1px solid var(--border); transition: .12s; }
     .ent-oribtn.on { border-color: var(--cyan); color: var(--cyan); }
