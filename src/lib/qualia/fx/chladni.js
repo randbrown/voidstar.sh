@@ -29,10 +29,14 @@ export default {
       modulators: [
         { source: 'audio.bass',      mode: 'add', amount: 6.0 },
         { source: 'audio.beatPulse', mode: 'add', amount: 1.5 },
+        // Play the plate with your body: wide arms add nodal lines on this axis.
+        { source: 'pose.wristSpread', mode: 'add', amount: 4.0 },
       ] },
     { id: 'n',         label: 'n',          type: 'range', min: 1,    max: 14,   step: 0.1,   default: 5.0,
       modulators: [
         { source: 'audio.mids', mode: 'add', amount: 6.0 },
+        // Lean back/forward morphs the other axis of the standing-wave pattern.
+        { source: 'pose.headPitch', mode: 'add', amount: 3.0 },
       ] },
     { id: 'count',     label: 'particles',  type: 'range', min: 500,  max: 6000, step: 100,   default: 3000 },
     { id: 'pull',      label: 'pull',       type: 'range', min: 0,    max: 2,    step: 0.02,  default: 0.85 },
@@ -40,6 +44,7 @@ export default {
     { id: 'symmetry',  label: '4-way symm', type: 'toggle', default: true },
     { id: 'trails',    label: 'trails',     type: 'toggle', default: false },
     { id: 'reactivity',label: 'reactivity', type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
+    { id: 'poseReactivity', label: 'pose react', type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
   // Auto-phase drives the `mode` param through every wave-field family so
@@ -56,7 +61,7 @@ export default {
   },
 
   presets: {
-    default:      { mode: 'chladni', m: 3.0, n: 5.0, symmetry: true, trails: false, reactivity: 1.0 },
+    default:      { mode: 'chladni', m: 3.0, n: 5.0, symmetry: true, trails: false, reactivity: 1.0, poseReactivity: 1.0 },
     chladni:      { mode: 'chladni', m: 3.0, n: 5.0 },
     high:         { mode: 'chladni', m: 8.0, n: 11.0 },
     radial:       { mode: 'radial', m: 4.0, n: 5.0 },

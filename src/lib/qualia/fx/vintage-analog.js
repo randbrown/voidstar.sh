@@ -47,17 +47,26 @@ export default {
   params: [
     { id: 'mode', label: 'mode', type: 'select',
       options: ['vu', 'oscilloscope', 'vfd', 'color-organ'], default: 'vu' },
-    { id: 'gain',       label: 'gain',       type: 'range', min: 0.25, max: 4,    step: 0.05, default: 1.0 },
+    { id: 'gain',       label: 'gain',       type: 'range', min: 0.25, max: 4,    step: 0.05, default: 1.0,
+      modulators: [
+        // Conduct the meters — spread your arms to crank the input gain.
+        { source: 'pose.wristSpread', mode: 'mul', amount: 0.50 },
+      ] },
     { id: 'damping',    label: 'damping',    type: 'range', min: 0.0,  max: 1,    step: 0.02, default: 0.55 },
     { id: 'persistence',label: 'persistence',type: 'range', min: 0.02, max: 0.98, step: 0.01, default: 0.85 },
     { id: 'peakHold',   label: 'peak hold',  type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
-    { id: 'bias',       label: 'bias glow',  type: 'range', min: 0,    max: 0.6,  step: 0.01, default: 0.10 },
+    { id: 'bias',       label: 'bias glow',  type: 'range', min: 0,    max: 0.6,  step: 0.01, default: 0.10,
+      modulators: [
+        // Lean back to warm the tube/bulb bias glow.
+        { source: 'pose.headPitch', mode: 'add', amount: 0.15 },
+      ] },
     { id: 'bulbLag',    label: 'bulb lag',   type: 'range', min: 0,    max: 1,    step: 0.02, default: 0.40 },
     { id: 'bands',      label: 'bands',      type: 'select', options: ['10', '15', '31'], default: '15' },
     { id: 'colorTemp',  label: 'color temp', type: 'select', options: ['teal', 'amber'], default: 'teal' },
     { id: 'graticule',  label: 'graticule',  type: 'range', min: 0,    max: 1,    step: 0.02, default: 0.35 },
     { id: 'peakPin',    label: 'peak pin',   type: 'toggle', default: true },
     { id: 'reactivity', label: 'reactivity', type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
+    { id: 'poseReactivity', label: 'pose react', type: 'range', min: 0, max: 2,  step: 0.05, default: 1.0 },
   ],
 
   // Auto-phase walks the four units so the topbar `phase` button gives a

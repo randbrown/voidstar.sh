@@ -184,7 +184,11 @@ export default {
 
   params: [
     { id: 'target',     label: 'target',     type: 'select', options: ['cycle', ...TARGET_IDS], default: 'cycle' },
-    { id: 'zoomSpeed',  label: 'zoom speed', type: 'range', min: 0,    max: 2,   step: 0.02, default: 0.55 },
+    { id: 'zoomSpeed',  label: 'zoom speed', type: 'range', min: 0,    max: 2,   step: 0.02, default: 0.55,
+      modulators: [
+        // Reach your arms out to dive into the fractal faster.
+        { source: 'pose.wristSpread', mode: 'add', amount: 0.60 },
+      ] },
     { id: 'iterations', label: 'iterations', type: 'range', min: 60,   max: 400, step: 10,   default: 220,
       modulators: [
         { source: 'audio.bass',      mode: 'mul', amount: 0.45 },
@@ -195,8 +199,11 @@ export default {
     { id: 'hueDrift',   label: 'hue drift',  type: 'range', min: 0,    max: 1,   step: 0.01, default: 0.35,
       modulators: [
         { source: 'audio.beatPulse', mode: 'mul', amount: 0.80 },
+        // Lean side to side to push the palette through its hue cycle.
+        { source: 'pose.head.x', mode: 'add', amount: 0.30 },
       ] },
     { id: 'reactivity', label: 'reactivity', type: 'range', min: 0,    max: 2,   step: 0.05, default: 1.0 },
+    { id: 'poseReactivity', label: 'pose react', type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
   // Auto-phase walks the palettes — the zoom motion already provides visual
@@ -213,7 +220,7 @@ export default {
   },
 
   presets: {
-    default:        { target: 'cycle', zoomSpeed: 0.55, iterations: 220, palette: 'voidstar',       hueDrift: 0.35, reactivity: 1.0 },
+    default:        { target: 'cycle', zoomSpeed: 0.55, iterations: 220, palette: 'voidstar',       hueDrift: 0.35, reactivity: 1.0, poseReactivity: 1.0 },
     deep_voidstar:  { target: 'spiral', zoomSpeed: 0.40, iterations: 320, palette: 'voidstar',      hueDrift: 0.20 },
     inferno_dive:   { target: 'mini',   zoomSpeed: 0.85, iterations: 260, palette: 'inferno',       hueDrift: 0.50 },
     ambient_drift:  { target: 'seahorse', zoomSpeed: 0.30, iterations: 200, palette: 'ambient_cyan', hueDrift: 0.15 },

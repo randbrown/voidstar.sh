@@ -34,8 +34,11 @@ export default {
     { id: 'fade',       label: 'background fade', type: 'range', min: 0.02, max: 0.50, step: 0.01, default: 0.18,
       modulators: [
         { source: 'audio.bass', mode: 'mul', amount: 0.50 },
+        // Spread your arms → less fade → the spectrum blooms with longer trails.
+        { source: 'pose.wristSpread', mode: 'mul', amount: -0.40 },
       ] },
     { id: 'reactivity', label: 'reactivity',      type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
+    { id: 'poseReactivity', label: 'pose react',  type: 'range', min: 0,    max: 2,    step: 0.05, default: 1.0 },
   ],
 
   // Auto-phase walks the modes — the topbar `phase` button surfaces all
@@ -51,7 +54,7 @@ export default {
   },
 
   presets: {
-    default:     { mode: 'bars',         fade: 0.18, reactivity: 1.0 },
+    default:     { mode: 'bars',         fade: 0.18, reactivity: 1.0, poseReactivity: 1.0 },
     bars:        { mode: 'bars' },
     radial:      { mode: 'radial' },
     waterfall:   { mode: 'waterfall',    fade: 0.30 },
