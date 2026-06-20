@@ -105,6 +105,7 @@ export default function create(eng) {
   }
 
   let crashes = 0;       // collision counter (for the headless perfect-play test)
+  let lastAudio = null;  // stashed for render()
 
   function reset() {
     dist = 0; speed = 0.6; curve = curveTarget = curveKick = 0; laneX = 0; bank = 0; crash = 0;
@@ -181,6 +182,7 @@ export default function create(eng) {
   }
 
   function update(dt, intent, audio, params) {
+    lastAudio = audio;
     const intensity = (params.enemyIntensity ?? 1) * (0.7 + intent.intensity * 0.9);
 
     // Speed: cruise toward a target lifted by audio + boost; brake on duck /
@@ -310,6 +312,7 @@ export default function create(eng) {
   }
 
   function render(params, intent) {
+    const audio = lastAudio;
     const vw = eng.vw, vh = eng.vh, vctx = eng.vctx;
     const horizon = Math.round(vh * horizonF);
     eng.clear('#04040c');
@@ -328,15 +331,23 @@ export default function create(eng) {
       eng.rect(s.x * vw, s.y * horizon, 1, 1, eng.C.white, Math.max(0.1, a));
     }
 
-    // Black hole at the vanishing point.
+    // Black hole at the vanishing point — accretion disc pulses with bass.
     const hx = centerAt(0, vw), hr = vh * 0.12;
-    eng.disc(hx, horizon, hr * 1.7, eng.C.gold, 0.10);
-    eng.disc(hx, horizon, hr * 1.15, eng.C.amber, 0.5);
+    const bassGlow = audio ? audio.bands.bass * 0.15 : 0;
+    const beatPop = audio ? audio.beat.pulse * 0.08 : 0;
+    eng.disc(hx, horizon, hr * (1.7 + bassGlow), eng.C.gold, 0.10 + bassGlow * 0.3);
+    eng.disc(hx, horizon, hr * (1.15 + beatPop), eng.C.amber, 0.5 + bassGlow * 0.2);
     eng.disc(hx, horizon, hr, '#000', 1);
     vctx.strokeStyle = eng.C.gold; vctx.lineWidth = 1.5;
     vctx.globalAlpha = 0.9; vctx.beginPath();
-    vctx.ellipse(hx, horizon, hr * 1.18, hr * 0.5, 0, 0, Math.PI * 2); vctx.stroke();
+    vctx.ellipse(hx, horizon, hr * (1.18 + beatPop * 0.5), hr * (0.5 + beatPop * 0.2), 0, 0, Math.PI * 2); vctx.stroke();
     vctx.globalAlpha = 1;
+
+    // Radial spectrum around the black hole — subtle, behind the road.
+    if (audio) {
+      eng.spectrumRadial(audio.spectrum, hx, horizon, hr * 1.3, hr * 2.8, 32, eng.C.gold, 0.12);
+      eng.waveformLine(audio.waveform, hx - hr * 2, horizon - 2, hr * 4, 4, eng.C.amber, 0.15);
+    }
 
     // Road — per-row fill from horizon to the bottom.
     for (let y = horizon; y < vh; y++) {

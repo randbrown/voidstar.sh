@@ -16,6 +16,7 @@ export default function create(eng) {
   let topAI = 0, botAI = 0;                // paddles' own AI target x (smoothed)
   let sTop = 0, sBot = 0, t = 0, serveT = 0, served = -1;
   let rally = 0, trailT = 0;
+  let lastAudio = null;
   const TRAIL = 14;
   const trail = new Float32Array(TRAIL * 2);   // ring of past mote positions
   let trailHead = 0;
@@ -67,6 +68,7 @@ export default function create(eng) {
   }
 
   function update(dt, intent, audio, params) {
+    lastAudio = audio;
     t += dt;
     curIntensity = (params.enemyIntensity ?? 1) * (0.7 + intent.intensity * 0.6);
     const vw = eng.vw, vh = eng.vh;
@@ -144,17 +146,24 @@ export default function create(eng) {
     eng.clear('#04040e');
     const halfP = pw() * 0.5, topY = margin(), botY = vh - margin();
 
+    const audio = lastAudio;
+    const bassV = audio ? audio.bands.bass : 0;
+    const beatP = audio ? audio.beat.pulse : 0;
+
     // Event horizon — a glowing band + black-hole disc across the court centre.
     const cy = vh * 0.5;
     for (let i = 0; i < 5; i++) eng.rect(0, cy - 2 + i, vw, 1, i === 2 ? eng.C.gold : eng.C.amber, i === 2 ? 0.18 : 0.07);
-    // centre dashes
     for (let x = 4; x < vw; x += 10) eng.rect(x, cy, 5, 1, eng.C.dim, 0.6);
     const hr = vh * 0.07, hx = vw * 0.5;
-    eng.disc(hx, cy, hr * 1.7, eng.C.gold, 0.06);
+    eng.disc(hx, cy, hr * (1.7 + bassV * 0.25), eng.C.gold, 0.06 + bassV * 0.06);
+    // Radial spectrum around the black hole.
+    if (audio) eng.spectrumRadial(audio.spectrum, hx, cy, hr * 1.2, hr * 2.5, 24, eng.C.amber, 0.14);
     eng.disc(hx, cy, hr, '#05050d', 1);
-    vctx.strokeStyle = eng.C.gold; vctx.lineWidth = 1; vctx.globalAlpha = 0.5;
-    vctx.beginPath(); vctx.ellipse(hx, cy, hr * 1.2, hr * 0.45, 0, 0, Math.PI * 2); vctx.stroke();
+    vctx.strokeStyle = eng.C.gold; vctx.lineWidth = 1; vctx.globalAlpha = 0.5 + beatP * 0.2;
+    vctx.beginPath(); vctx.ellipse(hx, cy, hr * (1.2 + beatP * 0.3), hr * (0.45 + beatP * 0.1), 0, 0, Math.PI * 2); vctx.stroke();
     vctx.globalAlpha = 1;
+    // Waveform trace along the event horizon band.
+    if (audio) eng.waveformLine(audio.waveform, 0, cy - 2, vw, 4, eng.C.gold, 0.12);
 
     // mote trail.
     for (let k = 0; k < TRAIL; k++) {

@@ -29,6 +29,7 @@ export default function create(eng) {
   const board = new Uint8Array(W * H);   // 0 empty, else index+1 into TYPES
   let cur = null, next = null;           // {t, rot, x, y}
   let fall = 0, score = 0, lines = 0, level = 1, t = 0, topout = 0, flash = 0, topouts = 0;
+  let lastAudio = null;
   let clearAnim = 0; const clearRows = [];
   const parts = eng.createParticles(120);
 
@@ -259,6 +260,7 @@ export default function create(eng) {
   }
 
   function update(dt, intent, audio, params) {
+    lastAudio = audio;
     t += dt;
     if (flash > 0) flash -= dt * 2;
     if (topout > 0) { topout -= dt; return; }
@@ -274,13 +276,14 @@ export default function create(eng) {
     // (Re)plan whenever a new piece is in play so the AI has a fresh target.
     if (cur && aiPlanFor !== cur) planPiece();
 
-    // ── player edges (always act on the frame they occur) ─────────────────
+    // ── player edges — gated by autonomy so CPU/noisy-pose DAS edges don't
+    // fight the AI at high autonomy (the root cause of piece jitter). ──────
     let playerActed = false;
-    if (intent.left && !collide(cur, cur.x - 1, cur.y)) { cur.x--; playerActed = true; }
-    if (intent.right && !collide(cur, cur.x + 1, cur.y)) { cur.x++; playerActed = true; }
-    if (intent.jump) { rotateCur(); playerActed = true; }
-    // Any player nudge invalidates the old plan so the AI re-targets from the
-    // piece's new position next tick (keeps AI + player from fighting).
+    if (intent.autonomy < 0.5) {
+      if (intent.left && !collide(cur, cur.x - 1, cur.y)) { cur.x--; playerActed = true; }
+      if (intent.right && !collide(cur, cur.x + 1, cur.y)) { cur.x++; playerActed = true; }
+      if (intent.jump) { rotateCur(); playerActed = true; }
+    }
     if (playerActed) aiPlanFor = null;
     // Ambient aesthetic: pieces are NEVER hard-dropped — they settle under
     // gravity alone (see the gravity block below). So `fire` no longer slams the
@@ -308,19 +311,18 @@ export default function create(eng) {
       while (cur.x > aiTarget.x && !collide(cur, cur.x - 1, cur.y)) cur.x--;
     }
     if (!expert && !playerActed && auto > 0.04 && aiTimer <= 0 && aiTarget.valid) {
-      // period: ~0.10s at autonomy 1 → ~1.2s near the low end (crowd dominates).
-      aiTimer = 0.10 + (1 - auto) * 1.1;
-      if (cur.rot !== aiTarget.rot) {
-        rotateCur();
-      } else if (cur.x < aiTarget.x && !collide(cur, cur.x + 1, cur.y)) {
-        cur.x++;
-      } else if (cur.x > aiTarget.x && !collide(cur, cur.x - 1, cur.y)) {
-        cur.x--;
-      } else if (cur.x === aiTarget.x && cur.rot === aiTarget.rot) {
-        // aligned — let gravity carry it the rest of the way down (no slam).
-      } else {
-        // Blocked from reaching target (rare) — nudge down so we don't stall.
-        if (!collide(cur, cur.x, cur.y + 1)) cur.y++;
+      const aligned = cur.x === aiTarget.x && cur.rot === aiTarget.rot;
+      if (!aligned) {
+        aiTimer = 0.10 + (1 - auto) * 1.1;
+        if (cur.rot !== aiTarget.rot) {
+          rotateCur();
+        } else if (cur.x < aiTarget.x && !collide(cur, cur.x + 1, cur.y)) {
+          cur.x++;
+        } else if (cur.x > aiTarget.x && !collide(cur, cur.x - 1, cur.y)) {
+          cur.x--;
+        } else {
+          if (!collide(cur, cur.x, cur.y + 1)) cur.y++;
+        }
       }
     }
 
@@ -360,12 +362,19 @@ export default function create(eng) {
 
   function render(params, intent) {
     const vw = eng.vw, vh = eng.vh, vctx = eng.vctx;
+    const audio = lastAudio;
     eng.clear('#04040e');
     const g = geom();
     // Well.
     eng.rect(g.ox, g.oy, g.bw, g.bh, '#070a18', 1);
+    const bassV = audio ? audio.bands.bass : 0;
     const border = flash > 0 ? eng.C.white : eng.C.cyan;
     eng.box(g.ox - 1, g.oy - 1, g.bw + 2, g.bh + 2, border, 0.6 + 0.4 * (flash > 0 ? 1 : 0.5 + 0.5 * Math.sin(t * 3)));
+    if (bassV > 0.2) eng.box(g.ox - 2, g.oy - 2, g.bw + 4, g.bh + 4, eng.C.magenta, bassV * 0.2);
+    if (audio) {
+      eng.spectrumBar(audio.spectrum, g.ox, g.oy + g.bh - 6, g.bw, 6, 10, eng.C.cyan, 0.18, 2);
+      eng.waveformLine(audio.waveform, g.ox, g.oy - 4, g.bw, 4, eng.C.magenta, 0.18);
+    }
 
     // Locked cells.
     for (let r = 0; r < H; r++) {

@@ -38,6 +38,7 @@ export default function create(eng) {
   // unfinishable (the last pellets get permanently camped by the ghost pack), we
   // refresh it so the attract screen never sits dead bleeding score to catches.
   let sinceEat = 0;
+  let lastAudio = null;
   const parts = eng.createParticles(80);
 
   // entity start + ghost homes — all (odd,odd) so always on an open cell in a
@@ -548,6 +549,7 @@ export default function create(eng) {
   }
 
   function update(dt, intent, audio, params) {
+    lastAudio = audio;
     t += dt;
     chomp += dt * (6 + audio.bands.total * 6);
     if (fright > 0) fright -= dt;
@@ -648,21 +650,27 @@ export default function create(eng) {
   }
   const px = (c, prog, dx, g) => g.ox + (c + dx * prog + 0.5) * g.tile;
 
-  // flavor glyph set for scattered code-look (deterministic by cell).
-  const FLAVOR = ['0', ';', '/', '%'];
   // per-ghost base colours (hoisted — was a per-frame array literal in render).
   const GHOST_COL = [eng.C.red, eng.C.magenta, eng.C.cyan, eng.C.amber];
 
   function render(params, intent) {
     const vw = eng.vw, vh = eng.vh, vctx = eng.vctx;
+    const audio = lastAudio;
     eng.clear('#03030a');
     const g = geom();
-    // Maze walls.
+    // Maze walls — subtly tinted by audio spectrum bins.
+    const spectrum = audio && audio.spectrum;
+    const bassV = audio ? audio.bands.bass : 0;
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
       if (!isWall(c, r)) continue;
       const x = g.ox + c * g.tile, y = g.oy + r * g.tile;
       eng.rect(x + 1, y + 1, g.tile - 2, g.tile - 2, '#12235a', 1);
       eng.box(x + 1, y + 1, g.tile - 2, g.tile - 2, eng.C.cyan, 0.5);
+      if (spectrum) {
+        const bin = ((c * 7 + r * 3) % (spectrum.length >> 1)) + 2;
+        const v = spectrum[bin] / 255;
+        if (v > 0.15) eng.rect(x + 1, y + 1, g.tile - 2, g.tile - 2, eng.C.magenta, v * 0.12);
+      }
     }
     // Pellets as tiny CODE glyphs — the maze reads as eating null-pointers.
     // Glyphs are 3×5 at scale 1; center in the tile with align "center". The y
@@ -680,8 +688,7 @@ export default function create(eng) {
       } else {
         // normal: a scattered code glyph keyed deterministically by (c*7+r), so
         // the board looks like strewn code but every glyph is clearly food.
-        const fg = FLAVOR[(c * 7 + r) & 3];
-        eng.text(fg, cx, cy - 2, eng.C.ice, 1, 'center', 0.8);
+        eng.disc(cx, cy, 1.2, eng.C.ice, 0.7);
       }
     }
     // Muncher — a readable gold chomping mouth.
@@ -698,11 +705,15 @@ export default function create(eng) {
     vctx.arc(mx, my, rad, ang + mouth, ang - mouth + Math.PI * 2);
     vctx.closePath(); vctx.fill();
     vctx.globalAlpha = 1;
-    // Ghosts.
+    // Ghosts — base colours shift subtly with audio intensity.
     for (const gh of ghosts) {
       const gx = px(gh.c, gh.prog, gh.dx, g), gy = g.oy + (gh.r + gh.dy * gh.prog + 0.5) * g.tile;
-      const col = fright > 0 ? (fright < 1.6 && (Math.floor(t * 8) & 1) ? eng.C.white : '#2a4cff')
-                             : GHOST_COL[gh.hue];
+      let col;
+      if (fright > 0) {
+        col = fright < 1.6 && (Math.floor(t * 8) & 1) ? eng.C.white : '#2a4cff';
+      } else {
+        col = GHOST_COL[gh.hue];
+      }
       const s = g.tile * 0.42;
       eng.rect(gx - s, gy - s, s * 2, s * 2 - 1, col, 1);
       eng.disc(gx, gy - s * 0.4, s * 0.95, col, 1);
@@ -714,6 +725,12 @@ export default function create(eng) {
       eng.rect(gx + s * 0.2, gy - s * 0.3, 2, 2, eng.C.white, 1);
       eng.rect(gx - s * 0.5 + ex * 0.5, gy - s * 0.3 + ey * 0.5, 1, 1, '#001', 1);
       eng.rect(gx + s * 0.2 + ex * 0.5, gy - s * 0.3 + ey * 0.5, 1, 1, '#001', 1);
+      if (bassV > 0.2 && fright <= 0) eng.disc(gx, gy, s * 1.6, col, bassV * 0.12);
+    }
+    // Spectrum bar along the bottom edge of the maze — a subtle VFD-style EQ.
+    if (spectrum) {
+      const mazeW = COLS * g.tile;
+      eng.spectrumBar(spectrum, g.ox, g.oy + ROWS * g.tile + 1, mazeW, 4, 16, eng.C.cyan, 0.15, 2);
     }
     parts.draw(vctx);
 

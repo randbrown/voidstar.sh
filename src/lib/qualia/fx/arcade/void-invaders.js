@@ -26,6 +26,7 @@ export default function create(eng) {
   for (let i = 0; i < 60; i++) stars.push({ x: Math.random(), y: Math.random(), s: 8 + Math.random() * 30 });
 
   let px = 0, swayP = 0, descend = 0, fireCool = 0, diveT = 0;
+  let lastAudio = null;
   let score = 0, stun = 0, scroll = 0, wave = 1, cols = 8, rows = 4;
   // autopilot scratch — desired cannon lean in -1..1, a slow musical wander, and
   // a self-fire cadence so it keeps raining shots even through quiet passages.
@@ -85,6 +86,7 @@ export default function create(eng) {
   }
 
   function update(dt, intent, audio, params) {
+    lastAudio = audio;
     const vw = eng.vw, vh = eng.vh;
     const intensity = (params.enemyIntensity ?? 1) * (0.7 + intent.intensity * 0.8);
     scroll += dt * (10 + audio.bands.total * 30);
@@ -140,7 +142,7 @@ export default function create(eng) {
     // the player signal takes over.
     const blendX = intent.x * intent.playerWeight + aiX * intent.autonomy;
     const tx = vw * 0.5 + Math.max(-1, Math.min(1, blendX)) * vw * 0.46;
-    px += (tx - px) * Math.min(1, dt * 13);   // fast cannon → reaches the safe gap in time
+    px += (tx - px) * Math.min(1, dt * 3);
     px = Math.max(vw * 0.05, Math.min(vw * 0.95, px));
     if (stun > 0) stun -= dt;
 
@@ -167,7 +169,7 @@ export default function create(eng) {
     // Launch dives on a timer + on beats (bounded) — much rarer now so a swoop
     // is an occasional event, not a constant barrage.
     diveT -= dt;
-    const wantDive = (diveT <= 0) || (audio.beat.active && Math.random() < 0.08 * diff);
+    const wantDive = (diveT <= 0) || (audio.beat.active && Math.random() < 0.12 * diff);
     if (wantDive) {
       diveT = 4.2 / diff;
       // pick a random alive, non-diving enemy
@@ -193,7 +195,7 @@ export default function create(eng) {
         e.x = e.hx + swayX;
         e.y = e.hy + descend + Math.sin(swayP * 1.5 + e.hx * 0.05) * 2 + bob;
         if (e.y > vh * 0.82) reached = true;
-        if (audio.beat.active && Math.random() < 0.01 * diff) fireEnemy(e.x, e.y);
+        if (audio.beat.active && Math.random() < 0.03 * diff) fireEnemy(e.x, e.y);
       }
     }
 
@@ -234,7 +236,13 @@ export default function create(eng) {
   }
 
   function drawEnemy(e) {
-    const col = [eng.C.cyan, eng.C.ice, eng.C.magenta, eng.C.green, eng.C.gold][e.hue % 5];
+    const baseCols = [eng.C.cyan, eng.C.ice, eng.C.magenta, eng.C.green, eng.C.gold];
+    const hotCols = [eng.C.white, eng.C.gold, eng.C.red, eng.C.amber, eng.C.white];
+    let col = baseCols[e.hue % 5];
+    if (lastAudio && lastAudio.spectrum) {
+      const bin = Math.min(lastAudio.spectrum.length - 1, ((e.hue * 16) | 0) + 4);
+      if (lastAudio.spectrum[bin] > 115) col = hotCols[e.hue % 5];
+    }
     const x = Math.round(e.x), y = Math.round(e.y);
     // little bracket-ship: [ o ]
     eng.rect(x - 4, y - 2, 2, 5, col, 1);
@@ -245,12 +253,18 @@ export default function create(eng) {
 
   function render(params, intent) {
     const vw = eng.vw, vh = eng.vh, vctx = eng.vctx;
+    const audio = lastAudio;
     eng.clear('#04030a');
     // Scrolling starfield.
     for (let i = 0; i < stars.length; i++) {
       const s = stars[i];
       const y = (s.y * vh + scroll * (s.s / 30)) % vh;
       eng.rect(s.x * vw, y, 1, 1, eng.C.white, 0.25 + (s.s / 60));
+    }
+    // Spectrum bar along top edge — a subtle deep-space EQ.
+    if (audio) {
+      eng.spectrumBar(audio.spectrum, 0, vh - 5, vw, 5, 24, eng.C.magenta, 0.18, 2);
+      eng.waveformLine(audio.waveform, 0, 1, vw, 3, eng.C.cyan, 0.12);
     }
     for (const e of enemies) if (e.alive) drawEnemy(e);
     for (const b of pb) if (b.on) eng.rect(b.x - 0.5, b.y, 1, 4, eng.C.gold, 1);

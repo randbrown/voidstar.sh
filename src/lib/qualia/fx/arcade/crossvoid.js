@@ -50,6 +50,7 @@ export default function create(eng) {
   let score = 0, t = 0, deaths = 0, deathFlash = 0, goalFlash = 0;
   let dCar = 0, dWater = 0, dEdge = 0;   // death-cause tally (headless verification probe)
   let lastSide = 0;            // hysteresis for sidestep alignment
+  let lastAudio = null;
   const parts = eng.createParticles(60);
 
   const CAR_COL = [eng.C.red, eng.C.amber, eng.C.magenta, eng.C.cyan];
@@ -226,6 +227,7 @@ export default function create(eng) {
   }
 
   function update(dt, intent, audio, params) {
+    lastAudio = audio;
     t += dt;
     if (deathFlash > 0) deathFlash -= dt;
     if (goalFlash > 0) goalFlash -= dt;
@@ -292,76 +294,90 @@ export default function create(eng) {
 
   function render(params, intent) {
     const vw = eng.vw, vh = eng.vh, vctx = eng.vctx;
+    const audio = lastAudio;
+    const spectrum = audio && audio.spectrum;
     eng.clear('#04040e');
     const g = geom();
     const W = COLS * g.tile;
 
-    // Lane bands.
+    // Lane bands — cosmic themed: dark matter, plasma jets, gravitational wells.
     for (let r = 0; r < ROWS; r++) {
       const L = LANES[r], y = g.oy + r * g.tile;
-      let col = '#0a1226';
-      if (L.type === 'safe') col = '#10261a';
-      else if (L.type === 'road') col = (r & 1) ? '#15131f' : '#191622';
-      else if (L.type === 'river') col = (r & 1) ? '#08152e' : '#0a1838';
-      else if (L.type === 'goal') col = '#1a1230';
+      let col = '#0a0a1e';
+      if (L.type === 'safe') col = '#0a1220';
+      else if (L.type === 'road') col = (r & 1) ? '#120818' : '#160a1e';
+      else if (L.type === 'river') col = (r & 1) ? '#06102a' : '#081435';
+      else if (L.type === 'goal') col = '#1a0830';
       eng.rect(g.ox, y, W, g.tile, col, 1);
-      if (L.type === 'safe') {                                  // grass speckle
-        for (let c = 0; c < COLS; c += 2) eng.rect(g.ox + c * g.tile + 1, y + g.tile - 2, 1, 1, eng.C.green, 0.5);
+      if (L.type === 'safe') {
+        for (let c = 0; c < COLS; c += 2) {
+          const twinkle = 0.2 + 0.3 * Math.sin(t * 2.5 + c * 1.7 + r);
+          eng.rect(g.ox + c * g.tile + 1, y + g.tile - 2, 1, 1, eng.C.cyan, twinkle);
+        }
       }
     }
-    // Goal portal glow on the top row.
+    // Goal portal — a Calabi-Yau manifold fold (pulsing dimensional rift).
     const gy0 = g.oy;
-    eng.rect(g.ox, gy0, W, g.tile, eng.C.magenta, 0.06 + (goalFlash > 0 ? 0.25 : 0.04 + 0.04 * Math.sin(t * 3)));
-    for (let c = 0; c < COLS; c += 3) {
+    const portalPulse = goalFlash > 0 ? 0.35 : 0.06 + 0.06 * Math.sin(t * 3);
+    eng.rect(g.ox, gy0, W, g.tile, eng.C.magenta, portalPulse);
+    for (let c = 0; c < COLS; c += 2) {
       const cxp = g.ox + (c + 0.5) * g.tile;
-      eng.disc(cxp, gy0 + g.tile * 0.5, 1.5, eng.C.magenta, 0.5 + 0.3 * Math.sin(t * 4 + c));
+      const phase = Math.sin(t * 5 + c * 0.8);
+      eng.disc(cxp, gy0 + g.tile * 0.5, 1 + phase * 0.8, eng.C.magenta, 0.4 + 0.3 * phase);
+      if (c % 4 === 0) eng.disc(cxp, gy0 + g.tile * 0.5, 0.5, eng.C.white, 0.6 + 0.3 * phase);
     }
+    if (spectrum) eng.spectrumRow(spectrum, g.ox, gy0 + 1, W, eng.C.magenta, 0.12, 2);
     eng.box(g.ox, g.oy, W, ROWS * g.tile, eng.C.dim, 0.4);
 
-    // Vehicles.
+    // Vehicles — cosmic hazards: quarks/gluons on road rows, plasma streams on river rows.
     for (let r = 0; r < ROWS; r++) {
       const L = LANES[r];
       if (!L.vehicles) continue;
       const y = g.oy + r * g.tile;
       for (let i = 0; i < L.vehicles.length; i++) {
         const wx = vWorldAt(L.vehicles[i], L, 0);
-        // draw the vehicle at wx and its wrap copy (one will be off-screen).
         for (const base of [wx, wx - L.period]) {
           const x = g.ox + base * g.tile, w = L.len * g.tile;
           if (x + w < g.ox || x > g.ox + W) continue;
           if (L.type === 'road') {
             const col = CAR_COL[L.vehicles[i].hue];
-            eng.rect(x + 1, y + 2, w - 2, g.tile - 4, col, 1);
-            eng.rect(x + w * 0.18, y + 2, w * 0.64, g.tile * 0.3, '#0a1430', 1);   // window
-            // headlights point in travel dir
-            const hx = L.dir > 0 ? x + w - 2 : x;
-            eng.rect(hx, y + 2, 2, g.tile - 4, eng.C.white, 0.8);
+            const flicker = 0.7 + 0.3 * Math.sin(t * 12 + i * 3 + r);
+            const pad = Math.max(1, g.tile * 0.12);
+            eng.rect(x + 1, y + pad, w - 2, g.tile - pad * 2, col, flicker * 0.85);
+            eng.rect(x + 1, y + pad, w - 2, Math.max(1, g.tile * 0.15), eng.C.white, 0.25);
+            const wcx = L.dir > 0 ? x + w * 0.65 : x + w * 0.15;
+            eng.rect(wcx, y + pad + 1, w * 0.18, g.tile - pad * 2 - 2, eng.C.ice, 0.35);
+            const ex = L.dir > 0 ? x + 1 : x + w - 3;
+            eng.rect(ex, y + g.tile * 0.35, 2, g.tile * 0.3, eng.C.cyan, flicker * 0.5);
           } else {
-            // log-packet: a teal/brown bar with code-glyph rivets
-            eng.rect(x, y + 2, w, g.tile - 4, '#3a2c1e', 1);
-            eng.rect(x, y + 2, w, 1, '#5c4630', 1);
-            eng.rect(x, y + g.tile - 3, w, 1, '#241a10', 1);
-            for (let s = 0; s < L.len; s++) eng.rect(x + s * g.tile + g.tile * 0.5, y + g.tile * 0.5 - 1, 1, 1, eng.C.ice, 0.5);
+            eng.rect(x, y + 2, w, g.tile - 4, eng.C.cyan, 0.18);
+            eng.rect(x, y + g.tile * 0.5 - 1, w, 2, eng.C.ice, 0.35);
+            for (let s = 0; s < L.len; s++) {
+              const sparkle = 0.3 + 0.4 * Math.sin(t * 6 + s * 2 + i);
+              eng.rect(x + s * g.tile + g.tile * 0.5, y + g.tile * 0.5 - 1, 1, 1, eng.C.white, sparkle);
+            }
+            eng.rect(x, y + 2, 1, g.tile - 4, eng.C.ice, 0.4);
+            eng.rect(x + w - 1, y + 2, 1, g.tile - 4, eng.C.ice, 0.4);
           }
         }
       }
     }
 
-    // Avatar.
+    // Avatar — a void particle navigating the cosmic field.
     let avx, avr;
     if (hopping) {
       avx = hopFromX + (hopToX - hopFromX) * hopT;
       avr = hopFromR + (hopToR - hopFromR) * hopT;
     } else { avx = ax; avr = ar; }
     const px = g.ox + (avx + 0.5) * g.tile, py = g.oy + (avr + 0.5) * g.tile;
-    const hop = hopping ? Math.sin(hopT * Math.PI) : 0;          // little arc squash
+    const hop = hopping ? Math.sin(hopT * Math.PI) : 0;
     const rad = g.tile * (0.34 + hop * 0.06);
     const body = deathFlash > 0 && (Math.floor(t * 12) & 1) ? eng.C.red : eng.C.green;
+    eng.disc(px, py - hop * g.tile * 0.25, rad * 1.5, body, 0.15);
     eng.disc(px, py - hop * g.tile * 0.25, rad, body, 1);
-    eng.disc(px, py - hop * g.tile * 0.25, rad * 0.62, '#1a3a26', 0.5);
-    // eyes (look upward — toward the goal)
-    eng.rect(px - rad * 0.45, py - hop * g.tile * 0.25 - rad * 0.5, 1.5, 1.5, eng.C.white, 1);
-    eng.rect(px + rad * 0.25, py - hop * g.tile * 0.25 - rad * 0.5, 1.5, 1.5, eng.C.white, 1);
+    eng.disc(px, py - hop * g.tile * 0.25, rad * 0.5, eng.C.white, 0.7);
+    // Waveform along the bottom border.
+    if (audio) eng.waveformLine(audio.waveform, g.ox, g.oy + ROWS * g.tile + 1, W, 4, eng.C.cyan, 0.18);
     parts.draw(vctx);
 
     if (params.hud) {
