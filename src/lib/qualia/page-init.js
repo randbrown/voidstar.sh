@@ -54,6 +54,8 @@ import galaxy          from './fx/galaxy.js';
 import antireductionism from './fx/antireductionism.js';
 import detector       from './fx/detector.js';
 import ghostMachine   from './fx/ghost-machine.js';
+import bigfoot        from './fx/bigfoot.js';
+import bigfoot3d      from './fx/bigfoot3d.js';
 import video          from './fx/video.js';
 import arcade         from './fx/arcade.js';
 
@@ -143,6 +145,8 @@ export function initQualiaPage() {
   mesh.register(antireductionism);
   mesh.register(detector);
   mesh.register(ghostMachine);
+  mesh.register(bigfoot);
+  mesh.register(bigfoot3d);
   mesh.register(video);
   mesh.register(arcade);
 
