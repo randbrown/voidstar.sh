@@ -1,4 +1,4 @@
-// Page bootstrap for /lab/qualia. Lives outside the .astro file so Astro/Vite
+// Page bootstrap for /qualia. Lives outside the .astro file so Astro/Vite
 // resolves the ESM import graph correctly — inline <script type="module"> in
 // .astro pages is served verbatim and would 404 on the relative paths.
 
@@ -152,7 +152,6 @@ export function initQualiaPage() {
   const topbarEl   = document.getElementById('topbar');
   const fpsEl      = document.getElementById('fps');
   const lvlEl      = document.getElementById('lvl');
-  const fxnameEl   = document.getElementById('fxname');
   const fxSelect   = document.getElementById('fx-select');
   const micSelect  = document.getElementById('mic-select');
   const camSelect  = document.getElementById('cam-select');
@@ -262,8 +261,6 @@ export function initQualiaPage() {
     pose,
     paramsContainer: fxParamsEl,
     onFxChange: (id) => {
-      const mod = mesh.get(id);
-      fxnameEl.textContent = mod ? mod.name : '—';
       fxSelect.value = id;
       // Re-sync the phase timer for the new quale. autoPhaseSeconds (the
       // user's intended period) is preserved across switches — if the new
@@ -785,6 +782,7 @@ export function initQualiaPage() {
       // Auto group now owns auto-phase too; either an auto-cycle or an
       // auto-phase being scheduled lights the dot.
       auto:   () => autoCycleSeconds > 0 || autoPhaseSeconds > 0,
+      audio:  () => audio.isEnabled(),
     };
     document.querySelectorAll('.qg-group').forEach(g => {
       const key = g.dataset.group;

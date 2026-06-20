@@ -36,8 +36,10 @@ const ROW_GEOMETRY = [
   { x: CELL_X, dx: 102, w: 102 },
   { x: CELL_X, dx: 103, w: 103 },
 ];
-const FACING_COOLDOWN = 1.0;
-const FACING_DEADZONE = 0.055;
+const FACING_COOLDOWN = 0.25;
+const FACING_DEADZONE = 0.022;
+const BEAT_ACTION_CLIPS = ['jump', 'attack', 'hit'];
+const BEAT_ACTION_HOLD = 0.6;
 
 function rowCells(row, count) {
   const geom = ROW_GEOMETRY[row] || ROW_GEOMETRY[0];
@@ -414,6 +416,9 @@ export default {
       lastBeat: 0,
       landing: 0,
       attackPhase: 0,
+      beatActionIndex: 0,
+      beatActionClip: null,
+      beatActionTimer: 0,
       audio: scaleAudio({
         bands: { bass: 0, mids: 0, highs: 0, total: 0 },
         beat: { active: false, pulse: 0 },
@@ -432,6 +437,7 @@ export default {
     }
 
     function autoClip(time, audio) {
+      if (state.beatActionClip) return state.beatActionClip;
       const cycle = time % 24;
       if (cycle < 7) return 'idle';
       if (cycle < 13) return 'walk';
@@ -465,13 +471,18 @@ export default {
       const maxMove = dt * (0.055 + params.speed * 0.045 + audio.bands.bass * 0.035);
       state.charX = clamp(moveToward(state.charX, state.targetX, maxMove), margin, 1 - margin);
       state.charY = clamp(moveToward(state.charY, state.targetY + 0.19, maxMove * 0.72), 0.52, 0.78);
-      const facingDelta = state.targetX - state.charX;
-      const desiredFacing = facingDelta > FACING_DEADZONE ? 1 : (facingDelta < -FACING_DEADZONE ? -1 : state.facingSign);
+      const intentDelta = tx - state.charX;
+      const desiredFacing = intentDelta > FACING_DEADZONE ? 1 : (intentDelta < -FACING_DEADZONE ? -1 : state.facingSign);
       if (desiredFacing !== state.facingSign && field.time - state.lastFacingFlip >= FACING_COOLDOWN) {
         state.facingSign = desiredFacing;
         state.lastFacingFlip = field.time;
       }
-      state.facing = smoothToward(state.facing, state.facingSign, dt, 0.20);
+      state.facing = smoothToward(state.facing, state.facingSign, dt, 0.12);
+
+      if (state.beatActionTimer > 0) {
+        state.beatActionTimer -= dt;
+        if (state.beatActionTimer <= 0) state.beatActionClip = null;
+      }
 
       const clip = params.clip === 'auto' ? autoClip(field.time, audio) : params.clip;
       const set = FRAME_SETS[clip] || FRAME_SETS.idle;
@@ -485,6 +496,12 @@ export default {
       if (audio.beat.pulse > 0.72 && state.lastBeat <= 0.72) {
         state.beatFlash = Math.min(1, state.beatFlash + 0.75);
         state.landing = Math.min(1, state.landing + (clip === 'jump' ? 0.55 : 0.25));
+        if (params.clip === 'auto') {
+          state.beatActionClip = BEAT_ACTION_CLIPS[state.beatActionIndex % BEAT_ACTION_CLIPS.length];
+          state.beatActionIndex++;
+          state.beatActionTimer = BEAT_ACTION_HOLD;
+          state.t = 0;
+        }
       }
       state.lastBeat = audio.beat.pulse;
       state.beatFlash = smoothToward(state.beatFlash, 0, dt, 0.11);

@@ -550,8 +550,12 @@ export default function create(eng) {
 
   function update(dt, intent, audio, params) {
     lastAudio = audio;
-    t += dt;
-    chomp += dt * (6 + audio.bands.total * 6);
+    // Animation time runs at 2× sim-dt to compensate for the global 0.5×
+    // speed multiplier — keeps mouth chomp and flash rates at their original
+    // visual cadence even though movement is slower.
+    const animDt = dt * 2;
+    t += animDt;
+    chomp += animDt * (6 + audio.bands.total * 6);
     if (fright > 0) fright -= dt;
     // Chase ~8s, scatter ~4.5s. During scatter the ghosts head home → the
     // muncher gets a guaranteed safe window to feed.

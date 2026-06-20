@@ -405,6 +405,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
         <div class="ent-row between">
           <span><span class="ent-count" data-n>${entangle.peerCount()}</span> entangled</span>
           <span class="ent-row">
+            <button data-act="pin" title="${entangle.isPinned() ? 'Unpin — next open generates a fresh room' : 'Pin — reuse this room across reloads (pre-print the QR)'}">${entangle.isPinned() ? '📌 pinned' : 'pin room'}</button>
             <button data-act="copy">copy link</button>
             <button class="ent-danger" data-act="closeroom">collapse</button>
           </span>
@@ -530,6 +531,11 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
       case 'copy': {
         const url = entangle.getJoinUrl();
         if (url) { try { await navigator.clipboard.writeText(url); el.textContent = 'copied!'; setTimeout(() => (el.textContent = 'copy link'), 1200); } catch {} }
+        break;
+      }
+      case 'pin': {
+        if (entangle.isPinned()) entangle.unpinRoom(); else entangle.pinRoom();
+        render();
         break;
       }
       case 'autovote': { entangle.setAutoVote(!entangle.getAutoVote()); render(); break; }

@@ -30,10 +30,10 @@
   ],
   "shortcuts": [
     {
-      "name": "Qualia lab",
+      "name": "Qualia",
       "short_name": "Qualia",
       "description": "Pluggable audio-reactive visualizer harness",
-      "url": "/lab/qualia",
+      "url": "/qualia",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     }
   ]

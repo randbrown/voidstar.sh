@@ -83,10 +83,10 @@ export default {
         { source: 'audio.beatPulse', mode: 'add', amount: 0.40 },
         { source: 'crowd.energy',    mode: 'mul', amount: 0.50 },
       ] },
-    // Global pace — multiplies the sim clock for EVERY game. Lower = slower /
-    // more ambient (the whole brief); 1 = each game's tuned baseline. Input
-    // timing stays real-time, so control still feels responsive at any speed.
-    { id: 'speed', label: 'speed', type: 'range', min: 0.3, max: 1.75, step: 0.05, default: 1.0 },
+    // Global pace — multiplies the sim clock for EVERY game. 1.0 = relaxed
+    // ambient baseline (~half the original tuned speed); 2.0 = original full
+    // speed. Input timing stays real-time so control feels responsive at any pace.
+    { id: 'speed', label: 'speed', type: 'range', min: 0, max: 2.0, step: 0.05, default: 1.0 },
     // Cabinet pixel chunkiness — higher = bigger pixels (lower virtual res).
     { id: 'pixelScale', label: 'pixels', type: 'range', min: 1, max: 3, step: 0.25, default: 1.6 },
     { id: 'crt', label: 'crt', type: 'toggle', default: true },
@@ -97,7 +97,7 @@ export default {
   autoPhase: {
     steps: [
       { game: 'outrun' },
-      { game: 'phagein' },
+      { game: 'phagein', speed: 1.25 },
       { game: 'invaders' },
       { game: 'tetra' },
       { game: 'ping' },
@@ -110,7 +110,7 @@ export default {
   presets: {
     default:   { game: 'outrun', controlMode: 'auto' },
     outrun:    { game: 'outrun' },
-    phagein:   { game: 'phagein' },
+    phagein:   { game: 'phagein', speed: 1.25 },
     invaders:  { game: 'invaders' },
     tetra:     { game: 'tetra' },
     ping:      { game: 'ping' },
@@ -119,7 +119,7 @@ export default {
     hopper:    { game: 'hopper' },
     crowd:     { game: 'outrun', controlMode: 'crowd' },
     chunky:        { pixelScale: 2.5 },
-    slow:          { speed: 0.6 },
+    slow:          { speed: 0.5 },
   },
 
   async create(canvas, { ctx }) {
@@ -157,7 +157,7 @@ export default {
       // Global pace knob scales the sim clock (capped so a slow display +
       // speed-up can't tunnel collisions). Input/edge timing above stays on the
       // real dt so control feels the same regardless of game speed.
-      const sp = typeof params.speed === 'number' ? params.speed : 1;
+      const sp = (typeof params.speed === 'number' ? params.speed : 1) * 0.5;
       const simDt = Math.min(0.05, dt * sp);
       activeGame.update(simDt, intent, audio, params);
       scratch.params = params;

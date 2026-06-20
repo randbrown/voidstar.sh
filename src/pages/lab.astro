@@ -65,7 +65,7 @@ const experiments = [
               {exp.tags.map(t => <span class="tag">{t}</span>)}
             </div>
             {exp.status === 'live' ? (
-              <a href={`/lab/${exp.id}`} class="btn btn-primary">open →</a>
+              <a href={exp.id === 'qualia' ? '/qualia' : `/lab/${exp.id}`} class="btn btn-primary">open →</a>
             ) : (
               <span class="btn btn-outline disabled" aria-disabled="true">coming soon</span>
             )}
