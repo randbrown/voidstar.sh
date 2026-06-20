@@ -44,6 +44,7 @@ export default function create(eng) {
   let cellC = 1, cellR = 1, moveDir = 0, prog = 0;
   let px = 1.5, py = 1.5, viewAng = 0, lookOff = 0;
   let t = 0, score = 0, fireT = 0, muzzle = 0, bob = 0;
+  let lastAudio = null;
 
   const ENEMY_CAP = 6;
   const enemies = [];
@@ -145,6 +146,7 @@ export default function create(eng) {
   }
 
   function update(dt, intent, audio, params) {
+    lastAudio = audio;
     t += dt;
     if (muzzle > 0) muzzle -= dt;
 
@@ -159,15 +161,39 @@ export default function create(eng) {
     px = cellC + 0.5 + DIR4[moveDir][0] * prog;
     py = cellR + 0.5 + DIR4[moveDir][1] * prog;
     bob += speed * dt * 6;
-    // view: ease toward the heading; the player's lean adds a look offset (a
-    // glance left/right) without altering the locked path.
+    // view: ease toward the heading; the player's lean adds a look offset.
+    // Arcing turn: start easing the view early (at prog 0.55) so the camera
+    // sweeps into corners well before reaching the junction cell, giving a
+    // smooth arc rather than a last-instant snap.
     const targetLook = intent.x * 0.5;
     lookOff += (targetLook - lookOff) * Math.min(1, dt * 4);
     const headAng = Math.atan2(DIR4[moveDir][1], DIR4[moveDir][0]);
-    let da = headAng + lookOff - viewAng;
+    // Check if the next cell after the current leg is a turn — if so,
+    // pre-blend the heading toward the upcoming direction for an arc.
+    const nextC = cellC + DIR4[moveDir][0], nextR = cellR + DIR4[moveDir][1];
+    let peekAng = headAng;
+    if (prog > 0.4 && nextC >= 0 && nextR >= 0 && nextC < MAPW && nextR < MAPH && map[nextR * MAPW + nextC] === 0) {
+      let peekDir = moveDir;
+      for (let d = 0; d < 4; d++) {
+        if (d === ((moveDir + 2) & 3)) continue;
+        if (map[(nextR + DIR4[d][1]) * MAPW + (nextC + DIR4[d][0])] === 0) {
+          if (d !== moveDir) { peekDir = d; break; }
+        }
+      }
+      if (peekDir !== moveDir) {
+        const peekA = Math.atan2(DIR4[peekDir][1], DIR4[peekDir][0]);
+        const blend = Math.max(0, (prog - 0.4) / 0.6);
+        const smoothBlend = blend * blend * (3 - 2 * blend);
+        let dp = peekA - headAng;
+        while (dp > Math.PI) dp -= Math.PI * 2;
+        while (dp < -Math.PI) dp += Math.PI * 2;
+        peekAng = headAng + dp * smoothBlend * 0.45;
+      }
+    }
+    let da = peekAng + lookOff - viewAng;
     while (da > Math.PI) da -= Math.PI * 2;
     while (da < -Math.PI) da += Math.PI * 2;
-    viewAng += da * Math.min(1, dt * 5);
+    viewAng += da * Math.min(1, dt * 6);
 
     // ── enemies ──────────────────────────────────────────────────────────────
     const wantCount = Math.max(1, Math.min(ENEMY_CAP, Math.round(2 + (params.enemyIntensity ?? 1) * 2)));
@@ -245,6 +271,10 @@ export default function create(eng) {
     const dx = Math.cos(viewAng), dy = Math.sin(viewAng);
     const planeX = -dy * TAN_HALF_FOV, planeY = dx * TAN_HALF_FOV;
 
+    const audio = lastAudio;
+    const spectrum = audio && audio.spectrum;
+    const bassV = audio ? audio.bands.bass : 0;
+
     // ── wall cast: one ray per column ─────────────────────────────────────────
     for (let x = 0; x < vw; x++) {
       const cameraX = 2 * x / vw - 1;
@@ -263,15 +293,27 @@ export default function create(eng) {
       let perp = side === 0 ? (mapX - px + (1 - stepX) / 2) / rdx : (mapY - py + (1 - stepY) / 2) / rdy;
       if (perp < 0.02) perp = 0.02;
       zbuf[x] = perp;
-      if (hit === 2) continue;                         // ray left the map (open) — skip wall
+      if (hit === 2) continue;
       const lh = Math.min(vh * 4, vh / perp);
       const y0 = Math.max(0, ((vh - lh) / 2) | 0), y1 = Math.min(vh, ((vh + lh) / 2) | 0);
       const mat = ((mapX + mapY) & 1);
       const shade = Math.max(0.12, Math.min(1, 1 - (perp - 0.5) / 14));
       const lvl = Math.max(0, Math.min(RAMP_N - 1, (shade * (RAMP_N - 1)) | 0));
       eng.rect(x, y0, 1, y1 - y0, RAMPS[mat][side][lvl], 1);
-      // a thin bright cap line at the top of the wall for a neon-trim read.
       if (y1 - y0 > 6) eng.rect(x, y0, 1, 1, RAMPS[mat][0][RAMP_N - 1], 0.5);
+      // Spectrum EQ on the wall surface: each column samples a spectrum bin
+      // mapped by its screen-x position, drawn as a small bar rising from the
+      // wall's vertical midpoint. Only on near walls (perp < 6) for perf.
+      if (spectrum && perp < 6 && y1 - y0 > 8) {
+        const si = Math.min(spectrum.length - 1, ((x * (spectrum.length >> 1) / vw) | 0) + 2);
+        const v = spectrum[si] / 255;
+        if (v > 0.1) {
+          const barH = (y1 - y0) * v * 0.3;
+          const midY = (y0 + y1) >> 1;
+          const eqCol = mat === 0 ? eng.C.cyan : eng.C.magenta;
+          eng.rect(x, midY - barH * 0.5, 1, barH, eqCol, v * 0.18 * shade);
+        }
+      }
     }
 
     // ── billboard wraiths (depth-sorted far→near, z-tested per column) ────────

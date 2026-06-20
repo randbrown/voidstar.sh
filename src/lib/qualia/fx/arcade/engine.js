@@ -466,6 +466,87 @@ export function createEngine(mainCtx) {
       hctx.clearRect(0, 0, vw, vh);
       dc = vctx;
     },
+
+    // ── Audio viz helpers — shared across games ──────────────────────────────
+    // Tiny routines that draw spectrum / waveform / EQ bar overlays directly
+    // into the framebuffer. Designed for SUBTLE use: low alpha, no allocation,
+    // safe when spectrum/waveform is null (no-op). Games call these from render()
+    // to paint audio-reactive texture onto backgrounds/walls/borders WITHOUT
+    // moving or shaking the board.
+
+    // Horizontal spectrum bar: draws `bins` vertical bars within the rect
+    // [x,y,w,h], heights driven by the spectrum. `skipLo`/`skipHi` trim ends.
+    spectrumBar(spectrum, x, y, w, h, bins, color, alpha = 0.25, skipLo = 0, skipHi = 0) {
+      if (!spectrum || !spectrum.length) return;
+      const usable = spectrum.length - skipLo - skipHi;
+      if (usable <= 0 || bins <= 0) return;
+      vctx.globalAlpha = alpha;
+      vctx.fillStyle = color;
+      const bw = w / bins;
+      for (let i = 0; i < bins; i++) {
+        const si = skipLo + ((i * usable / bins) | 0);
+        const v = spectrum[si] / 255;
+        const bh = v * h;
+        vctx.fillRect(Math.round(x + i * bw), Math.round(y + h - bh), Math.max(1, bw - 1), Math.round(bh));
+      }
+      vctx.globalAlpha = 1;
+    },
+
+    // Waveform oscilloscope line within [x,y,w,h]. Draws a thin 1px-high
+    // displaced path — cheap and reads as a scope trace.
+    waveformLine(waveform, x, y, w, h, color, alpha = 0.3) {
+      if (!waveform || !waveform.length) return;
+      vctx.globalAlpha = alpha;
+      vctx.fillStyle = color;
+      const n = waveform.length;
+      const step = Math.max(1, (n / w) | 0);
+      for (let px = 0; px < w; px++) {
+        const si = Math.min(n - 1, ((px * n / w) | 0));
+        const v = (waveform[si] - 128) / 128;
+        const py = y + h * 0.5 + v * h * 0.45;
+        vctx.fillRect(Math.round(x + px), Math.round(py), 1, 1);
+      }
+      vctx.globalAlpha = 1;
+    },
+
+    // Radial spectrum — bins arranged in a circle around (cx,cy), heights
+    // radiating outward. Good for black-hole / disc backdrops.
+    spectrumRadial(spectrum, cx, cy, innerR, outerR, bins, color, alpha = 0.2, skipLo = 2) {
+      if (!spectrum || !spectrum.length) return;
+      const usable = spectrum.length - skipLo;
+      if (usable <= 0 || bins <= 0) return;
+      vctx.globalAlpha = alpha;
+      vctx.fillStyle = color;
+      const step = (Math.PI * 2) / bins;
+      for (let i = 0; i < bins; i++) {
+        const si = skipLo + ((i * usable / bins) | 0);
+        const v = spectrum[si] / 255;
+        const r = innerR + v * (outerR - innerR);
+        const a = i * step;
+        const x1 = cx + Math.cos(a) * innerR, y1 = cy + Math.sin(a) * innerR;
+        const x2 = cx + Math.cos(a) * r, y2 = cy + Math.sin(a) * r;
+        vctx.fillRect(Math.round(x2), Math.round(y2), 2, 2);
+        if (v > 0.3) vctx.fillRect(Math.round((x1 + x2) * 0.5), Math.round((y1 + y2) * 0.5), 1, 1);
+      }
+      vctx.globalAlpha = 1;
+    },
+
+    // Vertical spectrum waterfall column — a single-pixel-tall row of colour
+    // brightness, like a VFD bar graph. Draws within [x,y,w,1].
+    spectrumRow(spectrum, x, y, w, color, alpha = 0.2, skipLo = 0) {
+      if (!spectrum || !spectrum.length) return;
+      const usable = spectrum.length - skipLo;
+      if (usable <= 0) return;
+      vctx.fillStyle = color;
+      for (let px = 0; px < w; px++) {
+        const si = skipLo + ((px * usable / w) | 0);
+        const v = spectrum[si] / 255;
+        if (v < 0.05) continue;
+        vctx.globalAlpha = v * alpha;
+        vctx.fillRect(Math.round(x + px), Math.round(y), 1, 1);
+      }
+      vctx.globalAlpha = 1;
+    },
   };
   return eng;
 }

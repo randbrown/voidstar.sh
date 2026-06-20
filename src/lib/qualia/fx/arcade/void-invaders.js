@@ -26,6 +26,7 @@ export default function create(eng) {
   for (let i = 0; i < 60; i++) stars.push({ x: Math.random(), y: Math.random(), s: 8 + Math.random() * 30 });
 
   let px = 0, swayP = 0, descend = 0, fireCool = 0, diveT = 0;
+  let lastAudio = null;
   let score = 0, stun = 0, scroll = 0, wave = 1, cols = 8, rows = 4;
   // autopilot scratch — desired cannon lean in -1..1, a slow musical wander, and
   // a self-fire cadence so it keeps raining shots even through quiet passages.
@@ -85,6 +86,7 @@ export default function create(eng) {
   }
 
   function update(dt, intent, audio, params) {
+    lastAudio = audio;
     const vw = eng.vw, vh = eng.vh;
     const intensity = (params.enemyIntensity ?? 1) * (0.7 + intent.intensity * 0.8);
     scroll += dt * (10 + audio.bands.total * 30);
@@ -140,7 +142,7 @@ export default function create(eng) {
     // the player signal takes over.
     const blendX = intent.x * intent.playerWeight + aiX * intent.autonomy;
     const tx = vw * 0.5 + Math.max(-1, Math.min(1, blendX)) * vw * 0.46;
-    px += (tx - px) * Math.min(1, dt * 13);   // fast cannon → reaches the safe gap in time
+    px += (tx - px) * Math.min(1, dt * 6);    // smoother, less jerky cannon motion
     px = Math.max(vw * 0.05, Math.min(vw * 0.95, px));
     if (stun > 0) stun -= dt;
 
@@ -245,6 +247,7 @@ export default function create(eng) {
 
   function render(params, intent) {
     const vw = eng.vw, vh = eng.vh, vctx = eng.vctx;
+    const audio = lastAudio;
     eng.clear('#04030a');
     // Scrolling starfield.
     for (let i = 0; i < stars.length; i++) {
@@ -252,6 +255,8 @@ export default function create(eng) {
       const y = (s.y * vh + scroll * (s.s / 30)) % vh;
       eng.rect(s.x * vw, y, 1, 1, eng.C.white, 0.25 + (s.s / 60));
     }
+    // Spectrum bar along top edge — a subtle deep-space EQ.
+    if (audio) eng.spectrumBar(audio.spectrum, 0, vh - 5, vw, 5, 24, eng.C.magenta, 0.10, 2);
     for (const e of enemies) if (e.alive) drawEnemy(e);
     for (const b of pb) if (b.on) eng.rect(b.x - 0.5, b.y, 1, 4, eng.C.gold, 1);
     for (const b of ebx) if (b.on) eng.rect(b.x - 1, b.y, 2, 3, eng.C.red, 1);
