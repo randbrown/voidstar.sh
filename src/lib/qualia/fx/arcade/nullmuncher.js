@@ -688,7 +688,7 @@ export default function create(eng) {
       } else {
         // normal: a scattered code glyph keyed deterministically by (c*7+r), so
         // the board looks like strewn code but every glyph is clearly food.
-        eng.text('·', cx, cy - 2, eng.C.ice, 1, 'center', 0.8);
+        eng.disc(cx, cy, 1.2, eng.C.ice, 0.7);
       }
     }
     // Muncher — a readable gold chomping mouth.
