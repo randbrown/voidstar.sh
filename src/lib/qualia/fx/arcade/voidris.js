@@ -249,12 +249,6 @@ export default function create(eng) {
     spawn();
   }
 
-  function hardDrop() {
-    let d = 0;
-    while (!collide(cur, cur.x, cur.y + 1)) { cur.y++; d++; }
-    score += d * 2; lockPiece();
-  }
-
   function rotateCur() {
     const nr = (cur.rot + 1) % 4;
     for (let i = 0; i < KICKS.length; i++) {
@@ -288,8 +282,9 @@ export default function create(eng) {
     // Any player nudge invalidates the old plan so the AI re-targets from the
     // piece's new position next tick (keeps AI + player from fighting).
     if (playerActed) aiPlanFor = null;
-    // Hard drop on fire (wrist thrust / deep crowd raise) — player priority.
-    if (intent.fire) { hardDrop(); return; }
+    // Ambient aesthetic: pieces are NEVER hard-dropped — they settle under
+    // gravity alone (see the gravity block below). So `fire` no longer slams the
+    // piece home; the AI/player only positions it and gravity does the rest.
 
     // ── autopilot: at most ONE step toward (aiTarget.x, aiTarget.rot) per
     // tick, gated by a timer that runs faster at high autonomy and stalls at
@@ -297,16 +292,16 @@ export default function create(eng) {
     aiTimer -= dt;
     const auto = intent.autonomy;
     // EXPERT (autonomy ~1): fully position the piece THIS tick — rotate to the
-    // target rotation, slide all the way to the target column, then slam it home.
-    // Optimal placement on every piece means the well never outruns the AI and
-    // never tops out (verified headless). Lower autonomy keeps the gradual,
-    // human-paced stepping below so the crowd/performer stays in control.
+    // target rotation, slide all the way to the target column — then hand it to
+    // gravity. Optimal placement on every piece means the well never outruns the
+    // AI and never tops out, and because positioning happens up high (long
+    // before the gentle gravity lands it) the slow fall can't spoil the
+    // placement. Lower autonomy keeps the gradual, human-paced stepping below.
     const expert = !playerActed && auto > 0.95 && aiTarget.valid;
     if (expert) {
       // Snap to the target column + rotation THIS tick (so gravity can never
-      // catch it mid-position), but DON'T hard-drop — let it fall at a
-      // controlled rate (set below) so it's ~2-3 pieces/sec, not 60. At that
-      // rate the one-piece heuristic never tops out.
+      // catch it mid-position), then let it fall the rest of the way at the
+      // gentle gravity rate set below — no hard drop.
       let guard = 0;
       while (cur.rot !== aiTarget.rot && guard++ < 4 && rotateCur()) { /* rotate to target */ }
       while (cur.x < aiTarget.x && !collide(cur, cur.x + 1, cur.y)) cur.x++;
@@ -322,21 +317,21 @@ export default function create(eng) {
       } else if (cur.x > aiTarget.x && !collide(cur, cur.x - 1, cur.y)) {
         cur.x--;
       } else if (cur.x === aiTarget.x && cur.rot === aiTarget.rot) {
-        hardDrop(); return;   // aligned → slam it home, plan next piece on spawn
+        // aligned — let gravity carry it the rest of the way down (no slam).
       } else {
         // Blocked from reaching target (rare) — nudge down so we don't stall.
         if (!collide(cur, cur.x, cur.y + 1)) cur.y++;
       }
     }
 
-    // Gravity: level + audio shove + soft-drop hold. The player's soft-drop
-    // (intent.down) always speeds it; the AI also leans into gravity at high
-    // autonomy so the well keeps filling even between AI move ticks.
-    const beat = 1 + audio.beat.pulse * 1.2 + audio.bands.bass * 0.5;
-    let step = Math.max(0.06, 0.85 - (level - 1) * 0.06) / beat;
-    if (expert) step = 0.06;                             // controlled ~1.8 pieces/sec
-    else if (intent.down) step *= 0.18;
-    else if (!playerActed && auto > 0.25) step *= 0.5;   // gentle AI soft-drop
+    // Gravity ONLY — once positioned, a piece falls all the way down at a
+    // gentle, ambient rate (no hard/instant drop anywhere, including expert).
+    // A soft beat shove + a slow level ramp with a high floor keep it
+    // meditative; the global `speed` knob in arcade.js scales it further.
+    const beat = 1 + audio.beat.pulse * 0.5 + audio.bands.bass * 0.25;
+    let step = Math.max(0.22, 0.7 - (level - 1) * 0.03) / beat;
+    if (intent.down) step *= 0.3;                        // soft drop still nudges it down
+    else if (!playerActed && auto > 0.25) step *= 0.7;   // mild AI lean into gravity
     fall += dt;
     while (fall >= step) {
       fall -= step;
@@ -405,6 +400,7 @@ export default function create(eng) {
     }
 
     if (params.hud) {
+      eng.beginHud();
       const sy = g.oy + g.bh * 0.40;
       eng.textOutline('SCORE', nx, sy, eng.C.dim, 1, 'left');
       eng.textOutline('' + (score | 0), nx, sy + 8, eng.C.gold, 1, 'left');
@@ -412,6 +408,7 @@ export default function create(eng) {
       eng.hud(nx, sy + 30, 'LN', lines, eng.C.ice, 'left');
       if (topout > 0) eng.textOutline('TOP OUT', g.ox + g.bw / 2, g.oy + g.bh / 2, eng.C.red, 2, 'center');
       if (intent.source === 'cpu') eng.text('LEAN+RAISE', nx, sy + 44, eng.C.white, 1, 'left', 0.4 + 0.4 * Math.sin(t * 2));
+      eng.endHud();
     }
   }
 

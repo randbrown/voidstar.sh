@@ -404,10 +404,12 @@ export default function create(eng) {
     // Top HUD strip (game stats, Outrun style). The quale shell adds the bottom
     // diagnostics strip. Idle prompt sits high so it clears both + the car.
     if (params.hud) {
+      eng.beginHud();
       eng.hud(3, 3, 'SCORE', score | 0, eng.C.gold, 'left');
       eng.hud(vw / 2, 3, 'KM/H', (speed * 78) | 0, eng.C.cyan, 'center');
       eng.hud(vw - 3, 3, 'STAGE', (Math.floor(dist / 200) + 1), eng.C.green, 'right');
       if (intent.source === 'cpu') eng.text('LEAN TO STEER', vw / 2, vh * 0.30, eng.C.white, 1, 'center', 0.4 + 0.4 * Math.sin(dist * 0.2));
+      eng.endHud();
     }
   }
 

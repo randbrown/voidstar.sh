@@ -278,3 +278,44 @@ all in `auto`; only deliberate movement should register.
   taillights, authored by rendering to PNG and iterating visually), sized to ~22% screen
   (was ~43%); much stronger **road curve** (continuous sweeping bends + beat kicks,
   clamped so the vanishing point reaches but doesn't clip the screen edge).
+
+### 10c. Ambient pass + 4 more games (2026-06-19)
+
+Performer feedback (todo list): slower/ambient feel, stationary HUDs, and four more
+genres. Now **8 games**.
+
+- **Stationary HUDs.** `engine.js` gained a second framebuffer (`hbuf`) composited in
+  `present()` WITHOUT the screen-shake offset. `eng.beginHud()/endHud()` switch the
+  `text()`/`rect()` draw target to it; every game's HUD block + the shell `drawDiag()` are
+  wrapped. The world shakes; the score/diagnostics stay rock-steady (the brief: shake
+  read as jarring on the HUD specifically).
+- **Global `speed` param** (0.3–1.75, default 1) scales the sim clock for every game
+  (`simDt = dt × speed`, capped 0.05 so a slow display + speed-up can't tunnel). Input
+  timing stays real-time.
+- **Per-game ambient tuning:** `voidris` never hard-drops — pieces settle under gentle
+  gravity only (positioned optimally up high, so the slow fall can't spoil placement);
+  `void_invaders` swarm motion ~5× slower (`ATTACK=0.2`) + slower bullets + a swarm that
+  slips past now silently re-forms (no "you lost" stun/shake); `nullmuncher` 0.8× pace.
+- **New games:** `event-pong.js` EVENT HORIZON PONG (top/bottom paddles, bounded-angle
+  reflections, long ambient rallies), `voidsnake.js` VOIDSNAKE (flood-fill survival AI +
+  tail-reachability invariant → effectively never self-traps; rare graceful soft-reset),
+  `the-corridor.js` THE CORRIDOR (the deferred Doom raycaster — DDA per virtual column,
+  precomputed wall shade ramps for zero per-frame string alloc, depth-buffered billboard
+  wraiths, corridor-locked self-navigating camera so there's nothing to die to),
+  `crossvoid.js` CROSSVOID (Frogger — **never dies in auto**, see below).
+
+**CROSSVOID never-die (explicit ask).** Provably-cautious autopilot: per-frame `staySafe`
+look-ahead leads every hazard by > one hop; landings must be CENTRAL on a log
+(`logContains`, margin > the beat/frame-quantization prediction error — landing on a
+log's trailing edge was the main leak); the lane layout brackets every river row with an
+always-safe escape row. Subtle bug fixed: the river edge-death zone must sit a cell BEYOND
+the playfield (`ax < -0.5 || ax > COLS-0.5`), not at the valid end cells, else landing on a
+left-moving log at the last column died instantly.
+
+Verified via a headless render-loop sim (mock canvas flags any non-finite draw coord;
+each game's `__test()` probes deaths): `npm run build` clean; no throws / 0 NaN across all
+8 games × {cpu, expert, performer-auto, crowd, performer} sources with live
+pixelScale/speed sweeps + display resizes. Never-die stress: **crossvoid 0 deaths over
+416k frames / 160 random seeds** (auto + expert); voidris / void_invaders / the_corridor
+also 0; voidsnake 0–1 graceful soft-resets per ~130k frames. Visual polish pending
+in-browser.

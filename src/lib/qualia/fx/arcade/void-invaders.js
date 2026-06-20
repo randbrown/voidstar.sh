@@ -6,6 +6,14 @@
 
 const E_CAP = 72, PB_CAP = 28, EB_CAP = 28;
 
+// Ambient pacing: the swarm motion (sway / descend / dive swoop) is the part
+// that reads as "jarring" at full speed, so it runs ~5× slower for a languid
+// drift. Enemy bullets slow less (they stay readable + always dodgeable). The
+// cannon + player bullets keep their speed so the firefight still feels alive.
+// (The global `speed` knob in arcade.js scales everything on top of this.)
+const ATTACK = 0.2;     // swarm-motion scale — 5× slower
+const EB_SPEED = 70;    // enemy-bullet fall px/s (was 120)
+
 export default function create(eng) {
   const enemies = [];   // {alive, hx, hy, x, y, dive, dt, tx, hue}
   const pb = [];        // player bullets {on, x, y}
@@ -106,15 +114,15 @@ export default function create(eng) {
       let cross = 0;
       for (const b of ebx) {
         if (!b.on) continue;
-        const tt = (CANNON_Y - b.y) / 120;            // seconds until it reaches our row
-        if (tt < -0.15 || tt > 1.3) continue;
+        const tt = (CANNON_Y - b.y) / EB_SPEED;       // seconds until it reaches our row
+        if (tt < -0.15 || tt > 2.4) continue;         // wider window (bullets fly slower now)
         const projX = b.x + b.vx * tt;
         const d = Math.abs(cand - projX);
         if (d < minD) minD = d;
         // CROSSING guard: reaching `cand` from the cannon's current x must not
         // route THROUGH an imminent bullet's column (that's how a "safe" target
         // still gets you clipped in transit). Dodge to the SAME side instead.
-        if (tt < 0.6 && Math.abs(px - projX) > 1 && (px < projX) !== (cand < projX)) cross += 300;
+        if (tt < 1.1 && Math.abs(px - projX) > 1 && (px < projX) !== (cand < projX)) cross += 300;
       }
       const score = minD - Math.abs(cand - enemyX) * 0.12 - cross;
       if (score > bestScore) { bestScore = score; aiTarget = cand; }
@@ -123,7 +131,7 @@ export default function create(eng) {
     // the cannon only leaves the enemy column when a bullet is imminent).
     let aiFire = false;
     aiFireT -= dt;
-    if (aiFireT <= 0 && aliveCount() > 0) { aiFire = true; aiFireT = 0.16; }
+    if (aiFireT <= 0 && aliveCount() > 0) { aiFire = true; aiFireT = 0.34; }   // calmer cadence
     aiFire = aiFire || audio.beat.active;
     aiX = Math.max(-1, Math.min(1, (aiTarget - vw * 0.5) / (vw * 0.46)));
 
@@ -142,24 +150,26 @@ export default function create(eng) {
     const wantFire = intent.fire || intent.fireHeld
       || (aiFire && intent.autonomy > 0.25)
       || (audio.beat.active && intent.intensity > 0.2);
-    if (wantFire && fireCool <= 0) { firePlayer(); fireCool = 0.12; }   // fast, constant clear rate
+    if (wantFire && fireCool <= 0) { firePlayer(); fireCool = 0.22; }   // gentle, ambient clear rate
 
     // Difficulty is CAPPED (Math.min) so a high enemyIntensity never makes the
     // wave un-clearable / un-dodgeable — expert play stays perfect.
     const diff = Math.min(1.4, Math.max(0.5, intensity));
 
-    // Swarm formation motion. Descend slowly so the cannon always has time to
+    // Swarm formation motion — scaled by ATTACK so it drifts ~5× slower (the
+    // languid ambient swarm). Descend slowly so the cannon always has time to
     // clear the wave before it reaches the bottom.
-    swayP += dt * (0.7 + diff * 0.4);
+    swayP += dt * (0.7 + diff * 0.4) * ATTACK;
     const swayX = Math.sin(swayP) * vw * 0.05;
-    descend += dt * (0.8 + diff * 0.25);
+    descend += dt * (0.8 + diff * 0.25) * ATTACK;
     const bob = audio.bands.bass * vh * 0.02;
 
-    // Launch dives on a timer + on beats (bounded).
+    // Launch dives on a timer + on beats (bounded) — much rarer now so a swoop
+    // is an occasional event, not a constant barrage.
     diveT -= dt;
-    const wantDive = (diveT <= 0) || (audio.beat.active && Math.random() < 0.2 * diff);
+    const wantDive = (diveT <= 0) || (audio.beat.active && Math.random() < 0.08 * diff);
     if (wantDive) {
-      diveT = 1.7 / diff;
+      diveT = 4.2 / diff;
       // pick a random alive, non-diving enemy
       const start = (Math.random() * E_CAP) | 0;
       for (let n = 0; n < E_CAP; n++) {
@@ -172,7 +182,7 @@ export default function create(eng) {
     for (const e of enemies) {
       if (!e.alive) continue;
       if (e.dive) {
-        e.dt += dt * (0.8 + diff * 0.4);
+        e.dt += dt * (0.8 + diff * 0.4) * ATTACK;   // slow, gliding swoop (was a fast swoop)
         const t = e.dt;
         // Arc from home down across screen toward the launch-time target.
         e.x = e.hx + (e.tx - e.hx) * Math.min(1, t) + Math.sin(t * 6) * vw * 0.06;
@@ -201,10 +211,11 @@ export default function create(eng) {
         }
       }
     }
-    // Enemy bullets.
+    // Enemy bullets — slower fall (EB_SPEED) so they read clearly and stay
+    // dodgeable; the AI projection above uses the same constant.
     for (const b of ebx) {
       if (!b.on) continue;
-      b.y += dt * 120; b.x += b.vx * dt;
+      b.y += dt * EB_SPEED; b.x += b.vx * dt;
       if (b.y > vh + 4) { b.on = false; continue; }
       if (stun <= 0 && Math.abs(b.x - px) < 5 && Math.abs(b.y - vh * 0.9) < 5) {
         b.on = false; stun = 1.0; deaths++; deathsBullet++; score = Math.max(0, score - 200);
@@ -216,7 +227,10 @@ export default function create(eng) {
 
     // Wave logic.
     if (aliveCount() === 0) { wave++; buildWave(intensity); }
-    if (reached) { stun = 1.0; deaths++; deathsReached++; eng.shake(6); buildWave(intensity); }
+    // Ambient: a swarm that drifts past the cannon just quietly re-forms at the
+    // top — no penalty, no stun, no shake. A "you lost the line" flash would be
+    // exactly the jarring beat this quale is trying to avoid.
+    if (reached) buildWave(intensity);
   }
 
   function drawEnemy(e) {
@@ -253,10 +267,12 @@ export default function create(eng) {
     }
 
     if (params.hud) {
+      eng.beginHud();
       eng.hud(3, 3, 'SCORE', score | 0, eng.C.gold, 'left');
       eng.hud(vw / 2, 3, 'WAVE', wave, eng.C.magenta, 'center');
       eng.hud(vw - 3, 3, 'FOES', aliveCount(), eng.C.cyan, 'right');
       if (intent.source === 'cpu') eng.text('HANDS UP TO FIRE', vw / 2, vh * 0.30, eng.C.white, 1, 'center', 0.4 + 0.4 * Math.sin(scroll * 0.1));
+      eng.endHud();
     }
   }
 

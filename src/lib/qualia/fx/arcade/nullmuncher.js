@@ -570,7 +570,10 @@ export default function create(eng) {
     }
 
     const beat = 1 + audio.beat.pulse * 0.4;
-    const mSpeed = 5.2 * beat;
+    // 0.8× base pace — ~20% slower than the original for a more ambient chomp
+    // (the global `speed` knob in arcade.js scales this further). Ghost speed is
+    // derived from mSpeed below, so the muncher keeps its survivable speed edge.
+    const mSpeed = 5.2 * 0.8 * beat;
     // Ghosts are ALWAYS capped below the muncher's speed (≤0.82×) — a faster
     // evader can always avoid capture, so this is what makes perfect (expert)
     // play possible. enemyIntensity can speed them up to the cap but never past it.
@@ -715,10 +718,12 @@ export default function create(eng) {
     parts.draw(vctx);
 
     if (params.hud) {
+      eng.beginHud();
       eng.hud(3, 3, 'SCORE', score | 0, eng.C.gold, 'left');
       eng.hud(vw - 3, 3, 'NULLS', remaining, eng.C.ice, 'right');
       if (fright > 0) eng.textOutline('HUNT', vw / 2, 3, eng.C.green, 1, 'center');
       if (intent.source === 'cpu') eng.text('LEAN TO MUNCH', vw / 2, vh * 0.32, eng.C.white, 1, 'center', 0.4 + 0.4 * Math.sin(t * 2));
+      eng.endHud();
     }
   }
 

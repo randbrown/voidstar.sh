@@ -611,7 +611,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        however tall the dynamic column-flex topbar happens to be. */
     #panel-stack {
       position: fixed;
-      bottom: max(1.25rem, env(safe-area-inset-bottom));
+      bottom: calc(max(1.25rem, env(safe-area-inset-bottom)) + var(--tabs-h, 0px) + 0.4rem);
       left:   max(1.25rem, env(safe-area-inset-left));
       z-index: 15;
       display: flex; flex-direction: column-reverse; gap: 0.5rem;
@@ -647,6 +647,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       position: fixed;
       left:   max(0.5rem, env(safe-area-inset-left));
       right:  max(0.5rem, env(safe-area-inset-right));
+      max-width: min(94vw, 620px);
       bottom: max(0.5rem, env(safe-area-inset-bottom));
       z-index: 16;
       flex-direction: row; gap: 0.3rem;
@@ -674,7 +675,6 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        --tabs-h to 0 so any anchored elements (#video preview) reclaim the
        freed bottom margin. */
     #panel-tabs.zen { transform: translateY(150%); opacity: 0; pointer-events: none; }
-    @media (max-width: 768px), (pointer: coarse) {
       .qp-tabs { display: flex; }
 
       /* On mobile the tab bar is the discovery + navigation surface, so
@@ -699,7 +699,6 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       #panel-stack > .qp-card > .qp-head:not(:has(button, input, select, a)) {
         display: none;
       }
-    }
     .qp-card.collapsed > .qp-body { display: none; }
     .qp-head {
       display: flex; align-items: center; gap: 0.5rem;
@@ -926,6 +925,13 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       display: flex; flex-direction: column; overflow: hidden;
       box-shadow: 0 12px 36px rgba(0,0,0,0.45);
       resize: both;
+    }
+    /* Optional frosted backdrop — toggled by the ⬚ button in the header. Default
+       off (transparent); enable when the visual behind makes the editor hard to
+       read. Mirrors the sequencer panel's glass. */
+    #strudel-panel.blurred {
+      background: rgba(10,10,26,0.55);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     }
     #strudel-header {
       display: flex; align-items: center; gap: 0.75rem;
@@ -1207,6 +1213,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         bottom: calc(max(0.5rem, env(safe-area-inset-bottom)) + var(--tabs-h, 2.4rem) + 0.4rem);
         right: max(0.5rem, env(safe-area-inset-right));
       }
+      /* "cam large" on mobile: proportional to the viewport (the desktop 420px
+         covers a phone screen). Desktop keeps 420px — this override is mobile-only. */
+      #video.visible.size-large { width: 46vw; max-width: 420px; }
       #strudel-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       #sequencer-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       .sp-tag, .sp-status { display: none; }
@@ -2257,6 +2266,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn panel-mute-btn" id="btn-strudel-mute" title="Mute Strudel audio (transport keeps running so sync stays locked)">live</button>
     <input type="range" class="panel-gain-slider" id="strudel-gain" min="0" max="1" step="0.01" value="1" title="Output level (0–1×). Stacks with Strudel's own gain() — use this to ride the mix without editing the pattern." />
     <button class="ctrl-btn" id="btn-strudel-newline" title="Insert newline at cursor (Android touch keyboards drop the Enter event)">↵</button>
+    <button class="ctrl-btn" id="btn-strudel-blur"    title="Toggle a frosted backdrop behind the editor (helps legibility over a busy visual)" aria-pressed="false">⬚</button>
     <button class="ctrl-btn" id="btn-strudel-close"   title="Close (S)">×</button>
   </div>
   <div id="strudel-tabs">

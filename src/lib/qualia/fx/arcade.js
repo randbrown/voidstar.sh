@@ -5,6 +5,10 @@
 //   nullmuncher    maze muncher eating null-pointers (lean to turn)
 //   void_invaders  fixed shooter; the crowd is the cannon (hands up to fire)
 //   voidris        falling blocks (lean to move, raise to rotate)
+//   event_pong     EVENT HORIZON PONG — lean to volley the mote (crowd vs house)
+//   voidsnake      a light-ribbon snake threading a grid for code pellets
+//   the_corridor   raycast FPS crawl through the machine (Doom homage; lean to look)
+//   crossvoid      lane-crosser to the portal (Frogger homage; never dies in auto)
 //
 // Every game reads ONE normalized intent (see ./arcade/input.js), so it plays
 // identically whether driven by the entangled CROWD (field.crowd — the whole
@@ -30,12 +34,20 @@ import accretionRun from './arcade/accretion-run.js';
 import nullmuncher from './arcade/nullmuncher.js';
 import voidInvaders from './arcade/void-invaders.js';
 import voidris from './arcade/voidris.js';
+import eventPong from './arcade/event-pong.js';
+import voidsnake from './arcade/voidsnake.js';
+import theCorridor from './arcade/the-corridor.js';
+import crossvoid from './arcade/crossvoid.js';
 
 const FACTORIES = {
   accretion_run: accretionRun,
   nullmuncher,
   void_invaders: voidInvaders,
   voidris,
+  event_pong: eventPong,
+  voidsnake,
+  the_corridor: theCorridor,
+  crossvoid,
 };
 
 /** @type {import('../types.js').QFXModule} */
@@ -46,7 +58,8 @@ export default {
 
   params: [
     { id: 'game', label: 'game', type: 'select',
-      options: ['accretion_run', 'nullmuncher', 'void_invaders', 'voidris'], default: 'accretion_run' },
+      options: ['accretion_run', 'nullmuncher', 'void_invaders', 'voidris',
+                'event_pong', 'voidsnake', 'the_corridor', 'crossvoid'], default: 'accretion_run' },
     // Who drives. 'auto' = the crowd when anyone's entangled, else the
     // performer's camera, else a CPU attract loop. This is the param to expose
     // to phones (whitelist) so the room can pick collective control.
@@ -70,6 +83,10 @@ export default {
         { source: 'audio.beatPulse', mode: 'add', amount: 0.40 },
         { source: 'crowd.energy',    mode: 'mul', amount: 0.50 },
       ] },
+    // Global pace — multiplies the sim clock for EVERY game. Lower = slower /
+    // more ambient (the whole brief); 1 = each game's tuned baseline. Input
+    // timing stays real-time, so control still feels responsive at any speed.
+    { id: 'speed', label: 'speed', type: 'range', min: 0.3, max: 1.75, step: 0.05, default: 1.0 },
     // Cabinet pixel chunkiness — higher = bigger pixels (lower virtual res).
     { id: 'pixelScale', label: 'pixels', type: 'range', min: 1, max: 3, step: 0.25, default: 1.6 },
     { id: 'crt', label: 'crt', type: 'toggle', default: true },
@@ -83,6 +100,10 @@ export default {
       { game: 'nullmuncher' },
       { game: 'void_invaders' },
       { game: 'voidris' },
+      { game: 'event_pong' },
+      { game: 'voidsnake' },
+      { game: 'the_corridor' },
+      { game: 'crossvoid' },
     ],
   },
 
@@ -92,8 +113,13 @@ export default {
     nullmuncher:   { game: 'nullmuncher' },
     void_invaders: { game: 'void_invaders' },
     voidris:       { game: 'voidris' },
+    event_pong:    { game: 'event_pong' },
+    voidsnake:     { game: 'voidsnake' },
+    the_corridor:  { game: 'the_corridor' },
+    crossvoid:     { game: 'crossvoid' },
     crowd:         { game: 'accretion_run', controlMode: 'crowd' },
     chunky:        { pixelScale: 2.5 },
+    slow:          { speed: 0.6 },
   },
 
   async create(canvas, { ctx }) {
@@ -128,7 +154,12 @@ export default {
       ensureGame(params.game);
       const intent = input.read(field, params);
       const audio = scaleAudio(field.audio, params.reactivity);
-      activeGame.update(dt, intent, audio, params);
+      // Global pace knob scales the sim clock (capped so a slow display +
+      // speed-up can't tunnel collisions). Input/edge timing above stays on the
+      // real dt so control feels the same regardless of game speed.
+      const sp = typeof params.speed === 'number' ? params.speed : 1;
+      const simDt = Math.min(0.05, dt * sp);
+      activeGame.update(simDt, intent, audio, params);
       scratch.params = params;
       scratch.intent = intent;
       // Diagnostics for the shared HUD strip.
@@ -168,7 +199,8 @@ export default {
         return;
       }
       activeGame.render(scratch.params, scratch.intent);
-      if (scratch.params.hud) drawDiag();
+      // Diagnostics strip on the stationary HUD layer so it never shakes.
+      if (scratch.params.hud) { eng.beginHud(); drawDiag(); eng.endHud(); }
       eng.present({ crt: scratch.params.crt });
     }
 

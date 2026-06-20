@@ -185,6 +185,14 @@ function saveLineNumbers(on) {
   try { localStorage.setItem(LINES_KEY, on ? '1' : '0'); } catch {}
 }
 
+const BLUR_KEY = 'voidstar.qualia.strudel.blur';
+function loadBlur() {
+  try { return localStorage.getItem(BLUR_KEY) === '1'; } catch { return false; }
+}
+function saveBlur(on) {
+  try { localStorage.setItem(BLUR_KEY, on ? '1' : '0'); } catch {}
+}
+
 export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange } = {}) {
   // Snapshot the previous-session panel state ONCE at init. open()/close()
   // mutate the flag for next time, but the answer to "should we restore the
@@ -204,6 +212,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const elGain     = document.getElementById('strudel-gain');
   const btnNewline = document.getElementById('btn-strudel-newline');
   const btnLines   = document.getElementById('btn-strudel-lines');
+  const btnBlur    = document.getElementById('btn-strudel-blur');
 
   let editorEl = null;
   let mounted  = false;
@@ -482,6 +491,19 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     refreshLinesBtn();
     btnLines.addEventListener('click', () => setLineNumbers(!_lineNumbers));
   }
+
+  // Optional frosted backdrop behind the editor — persisted, default off.
+  // The ⬚ button in the header toggles `.blurred` on the panel.
+  let _blur = loadBlur();
+  function refreshBlurBtn() {
+    if (!btnBlur) return;
+    btnBlur.classList.toggle('active', _blur);
+    btnBlur.setAttribute('aria-pressed', _blur ? 'true' : 'false');
+  }
+  function applyBlur() { if (panel) panel.classList.toggle('blurred', _blur); }
+  function setBlur(on) { _blur = !!on; saveBlur(_blur); applyBlur(); refreshBlurBtn(); return _blur; }
+  applyBlur(); refreshBlurBtn();
+  if (btnBlur) btnBlur.addEventListener('click', () => setBlur(!_blur));
 
   // Initial code: a freshly-rolled random pattern by default. If the panel
   // was open on the previous visit, the user was probably mid-edit — in

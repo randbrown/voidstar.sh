@@ -175,6 +175,16 @@ export function createEngine(mainCtx) {
   const vctx = vbuf.getContext('2d');
   vctx.imageSmoothingEnabled = false;
 
+  // Separate HUD layer — composited in present() WITHOUT the screen-shake
+  // offset so the score/diagnostics read rock-steady while the game world
+  // shakes underneath. `dc` is the current draw target for text()/rect():
+  // the game buffer (vctx) by default, the HUD buffer (hctx) only between
+  // beginHud()/endHud(). Every other primitive always targets the game buffer.
+  const hbuf = document.createElement('canvas');
+  const hctx = hbuf.getContext('2d');
+  hctx.imageSmoothingEnabled = false;
+  let dc = vctx;
+
   let W = 1, H = 1;           // display (backing-buffer) px
   let vw = 256, vh = 224;     // virtual px — games render against these
   let shakeX = 0, shakeY = 0, shakeMag = 0;
@@ -220,7 +230,9 @@ export function createEngine(mainCtx) {
     if (nvw === vw && nvh === vh) return false;
     vw = nvw; vh = nvh;
     vbuf.width = vw; vbuf.height = vh;
+    hbuf.width = vw; hbuf.height = vh;
     vctx.imageSmoothingEnabled = false;
+    hctx.imageSmoothingEnabled = false;
     return true;     // signal: dims changed (games may need to relayout)
   }
 
@@ -235,19 +247,23 @@ export function createEngine(mainCtx) {
     resize(w, h) { W = w; H = h; scanForH = -1; vigForKey = ''; },
     setVirtualHeight,
 
-    // Clear the framebuffer to a colour (default void).
+    // Clear the framebuffer to a colour (default void). Also resets the draw
+    // target back to the game layer — a frame always opens with clear(), so an
+    // unbalanced beginHud() (e.g. a game that threw mid-HUD) can't leak.
     clear(color = C.void) {
+      dc = vctx;
       vctx.globalAlpha = 1;
       vctx.fillStyle = color;
       vctx.fillRect(0, 0, vw, vh);
     },
 
     // Filled rect in virtual space (rounds to whole pixels for crisp edges).
+    // Targets the current layer (`dc`) so HUD rects land on the stationary layer.
     rect(x, y, w, h, color, alpha = 1) {
-      vctx.globalAlpha = alpha;
-      vctx.fillStyle = color;
-      vctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
-      vctx.globalAlpha = 1;
+      dc.globalAlpha = alpha;
+      dc.fillStyle = color;
+      dc.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+      dc.globalAlpha = 1;
     },
 
     // 1-px-thick rectangle outline.
@@ -297,26 +313,34 @@ export function createEngine(mainCtx) {
       vctx.globalAlpha = 1;
     },
 
+    // Switch text()/rect() to the stationary HUD layer. Wrap a game's HUD block
+    // (and the shell's diagnostics strip) in beginHud()/endHud() so they
+    // composite WITHOUT the screen-shake offset — the world shakes, the HUD
+    // doesn't. Everything drawn outside the pair stays on the shakeable layer.
+    beginHud() { dc = hctx; },
+    endHud()   { dc = vctx; },
+
     // Bitmap text. `align`: 'left' | 'center' | 'right'. Returns the right edge.
+    // Targets the current layer (`dc`).
     text(str, x, y, color = C.white, s = 1, align = 'left', alpha = 1) {
       str = String(str).toUpperCase();
       const w = textWidth(str, s);
       let px = align === 'center' ? Math.round(x - w / 2)
              : align === 'right'  ? Math.round(x - w)
              : Math.round(x);
-      vctx.globalAlpha = alpha;
-      vctx.fillStyle = color;
+      dc.globalAlpha = alpha;
+      dc.fillStyle = color;
       for (let ci = 0; ci < str.length; ci++) {
         const g = FONT[str[ci]] || FONT['?'];
         for (let r = 0; r < GLYPH_H; r++) {
           const row = g[r];
           for (let cphi = 0; cphi < GLYPH_W; cphi++) {
-            if (row[cphi] === '1') vctx.fillRect(px + cphi * s, y + r * s, s, s);
+            if (row[cphi] === '1') dc.fillRect(px + cphi * s, y + r * s, s, s);
           }
         }
         px += (GLYPH_W + 1) * s;
       }
-      vctx.globalAlpha = 1;
+      dc.globalAlpha = 1;
       return px;
     },
 
@@ -423,6 +447,10 @@ export function createEngine(mainCtx) {
       const pad = shakeMag > 0 || shakeX !== 0 ? Math.ceil(Math.max(Math.abs(shakeX), Math.abs(shakeY))) + 2 : 0;
       mainCtx.drawImage(vbuf, 0, 0, vw, vh,
         -pad + shakeX, -pad + shakeY, W + pad * 2, H + pad * 2);
+      // HUD layer — drawn at the EXACT 1:1 upscale (no shake offset, no
+      // overscale pad) so it stays stationary over the shaking world. Composited
+      // before the CRT post so it gets the same scanline/vignette treatment.
+      mainCtx.drawImage(hbuf, 0, 0, vw, vh, 0, 0, W, H);
       mainCtx.restore();
 
       if (crt) {
@@ -433,6 +461,10 @@ export function createEngine(mainCtx) {
         mainCtx.fillRect(0, 0, W, H);
         mainCtx.restore();
       }
+      // Wipe the HUD layer for the next frame (the game layer is cleared by the
+      // game's own clear()). Cheap: only the small virtual buffer.
+      hctx.clearRect(0, 0, vw, vh);
+      dc = vctx;
     },
   };
   return eng;

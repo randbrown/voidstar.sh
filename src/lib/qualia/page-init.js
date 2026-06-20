@@ -634,7 +634,9 @@ export function initQualiaPage() {
   // uses pointer: coarse OR width <= 768px, matching the mobile media query
   // above. Re-evaluated on each click so flipping the device into landscape
   // doesn't get stuck in the wrong mode.
-  const ACCORDION_MQ = window.matchMedia('(max-width: 768px), (pointer: coarse)');
+  // Accordion semantics (one card open at a time) now apply at ALL viewport
+  // sizes — the bottom tab bar is the panel nav on desktop too now, matching mobile.
+  const ACCORDION_MQ = { matches: true };
   document.querySelectorAll('[data-toggle]').forEach(h => {
     h.addEventListener('click', (e) => {
       if (e.target.closest('button, input, select')) return;
@@ -4112,7 +4114,7 @@ export function initQualiaPage() {
   });
 
   core.onFps((fps, field) => {
-    fpsEl.textContent = `${fps} fps`;
+    fpsEl.textContent = `${String(fps).padStart(2, '0')} fps`;
     if (audio.isEnabled()) {
       const fmt = v => Math.round(v * 99).toString().padStart(2, '0');
       lvlEl.textContent = `b${fmt(field.audio.bands.bass)} m${fmt(field.audio.bands.mids)} h${fmt(field.audio.bands.highs)}`;
