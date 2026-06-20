@@ -86,7 +86,7 @@ export default {
     // Global pace — multiplies the sim clock for EVERY game. Lower = slower /
     // more ambient (the whole brief); 1 = each game's tuned baseline. Input
     // timing stays real-time, so control still feels responsive at any speed.
-    { id: 'speed', label: 'speed', type: 'range', min: 0.3, max: 1.75, step: 0.05, default: 1.0 },
+    { id: 'speed', label: 'speed', type: 'range', min: 0, max: 2.0, step: 0.05, default: 0.5 },
     // Cabinet pixel chunkiness — higher = bigger pixels (lower virtual res).
     { id: 'pixelScale', label: 'pixels', type: 'range', min: 1, max: 3, step: 0.25, default: 1.6 },
     { id: 'crt', label: 'crt', type: 'toggle', default: true },
@@ -119,7 +119,7 @@ export default {
     hopper:    { game: 'hopper' },
     crowd:     { game: 'outrun', controlMode: 'crowd' },
     chunky:        { pixelScale: 2.5 },
-    slow:          { speed: 0.6 },
+    slow:          { speed: 0.3 },
   },
 
   async create(canvas, { ctx }) {

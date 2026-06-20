@@ -782,6 +782,7 @@ export function initQualiaPage() {
       // Auto group now owns auto-phase too; either an auto-cycle or an
       // auto-phase being scheduled lights the dot.
       auto:   () => autoCycleSeconds > 0 || autoPhaseSeconds > 0,
+      audio:  () => audio.isEnabled(),
     };
     document.querySelectorAll('.qg-group').forEach(g => {
       const key = g.dataset.group;
