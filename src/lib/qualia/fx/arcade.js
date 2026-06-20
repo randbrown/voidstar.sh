@@ -97,7 +97,7 @@ export default {
   autoPhase: {
     steps: [
       { game: 'outrun' },
-      { game: 'phagein' },
+      { game: 'phagein', speed: 1.25 },
       { game: 'invaders' },
       { game: 'tetra' },
       { game: 'ping' },
@@ -110,7 +110,7 @@ export default {
   presets: {
     default:   { game: 'outrun', controlMode: 'auto' },
     outrun:    { game: 'outrun' },
-    phagein:   { game: 'phagein' },
+    phagein:   { game: 'phagein', speed: 1.25 },
     invaders:  { game: 'invaders' },
     tetra:     { game: 'tetra' },
     ping:      { game: 'ping' },
