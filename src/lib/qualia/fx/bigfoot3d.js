@@ -29,6 +29,9 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { disposeObject3D } from '../three-host.js';
 
 const MODELS = {
+  // Ramblin' Visioneer — produced from docs/ramblin-visioneer/ spec. Drop the
+  // delivered GLB here; until then this slot gracefully falls back.
+  visioneer: '/models/ramblin-visioneer.glb',
   yeti:  '/models/yeti.glb',
   giant: '/models/giant.glb',
   robot: '/models/bigfoot-rig.glb',
@@ -76,7 +79,7 @@ export default {
   maxDpr: 1.5,
 
   params: [
-    { id: 'model',          label: 'creature', type: 'select', options: ['yeti', 'giant', 'robot'], default: 'yeti' },
+    { id: 'model',          label: 'creature', type: 'select', options: ['yeti', 'giant', 'visioneer', 'robot'], default: 'yeti' },
     { id: 'animationState', label: 'state',    type: 'select', options: ['idle', 'walk', 'loom', 'apparition', 'ritual'], default: 'walk' },
     { id: 'palette',   label: 'palette',   type: 'select', options: ['cosmic', 'aurora', 'ember', 'blood', 'mono'], default: 'cosmic' },
     { id: 'walkSpeed', label: 'walk speed', type: 'range', min: 0, max: 2.5, step: 0.05, default: 1.0 },
@@ -111,6 +114,7 @@ export default {
     brute:    { model: 'giant', animationState: 'walk', palette: 'ember', rimGlow: 1.6, eyeGlow: 2.2, modelScale: 1.2 },
     loom:     { model: 'yeti', animationState: 'loom', palette: 'aurora', rimGlow: 2.0, eyeGlow: 2.6, auraAmount: 1.4, orbit: 0.0, camHeight: 0.7 },
     omen:     { model: 'giant', animationState: 'ritual', palette: 'blood', rimGlow: 1.8, eyeGlow: 2.4, auraAmount: 1.3, orbit: 0.0 },
+    visioneer:{ model: 'visioneer', animationState: 'walk', palette: 'cosmic', rimGlow: 1.3, eyeGlow: 2.0, eyeSize: 1.0, auraAmount: 1.0, orbit: 0.14, camHeight: 0.64 },
   },
 
   create(canvas, { renderer }) {
@@ -183,6 +187,7 @@ export default {
     scene.add(rig);
     const loader = new GLTFLoader();
     let model = null, mixer = null, headBone = null, current = null;
+    let eyeLocators = [];         // explicit Eye.L/Eye.R nodes, if the rig has them
     let actions = {};
     let baseY = TARGET_HEIGHT;
     let loadToken = 0;            // bumped per load; stale loads are discarded
@@ -209,7 +214,7 @@ export default {
     function teardownModel() {
       if (mixer) { mixer.stopAllAction(); mixer = null; }
       if (model) { rig.remove(model); disposeObject3D(model); model = null; }
-      headBone = null; current = null; actions = {};
+      headBone = null; eyeLocators = []; current = null; actions = {};
       for (const e of eyes) e.visible = false;
     }
 
@@ -234,10 +239,19 @@ export default {
       teardownModel();
       model = gltf.scene;
       const bodyMat = makeBodyMat();
+      const foundEyes = [];
       model.traverse((o) => {
-        if (o.isMesh) { o.material = bodyMat; o.castShadow = false; o.frustumCulled = false; }
-        if (o.isBone && !headBone && /head/i.test(o.name)) headBone = o;
+        if (o.isMesh) { o.material = bodyMat; o.castShadow = false; o.frustumCulled = false; return; }
+        // Head bone (for eye approximation + gaze) and explicit eye locators.
+        if (o.name && !headBone && /head/i.test(o.name)) headBone = o;
+        if (o.name && /eye/i.test(o.name)) foundEyes.push(o);
       });
+      // Prefer explicit Eye.L/Eye.R locators — pin eyes to them exactly.
+      if (foundEyes.length >= 2) {
+        const L = foundEyes.find((n) => /(\.l$|_l$|\bl\b|left)/i.test(n.name));
+        const R = foundEyes.find((n) => /(\.r$|_r$|\br\b|right)/i.test(n.name));
+        eyeLocators = (L && R && L !== R) ? [L, R] : foundEyes.slice(0, 2);
+      }
       // Normalize: scale to TARGET_HEIGHT, recenter x/z, feet at y=0.
       const box = new Box3().setFromObject(model);
       const size = new Vector3(); box.getSize(size);
@@ -300,29 +314,44 @@ export default {
       rimUniforms.uRimColor.value.setRGB(pal.rim[0], pal.rim[1], pal.rim[2]);
       rimUniforms.uRimIntensity.value = params.rimGlow;
 
-      // Eyes: place at head world-pos, nudged toward camera, split horizontally.
+      // Eyes: pinned exactly to Eye.L/Eye.R locators when the rig provides them
+      // (per spec), else approximated from the Head bone, split horizontally.
       eyePulse += ((1 + Math.sin(time * 1.6) * 0.18) - eyePulse) * Math.min(1, dt * 4);
       eyeColor.setRGB(pal.eye[0], pal.eye[1], pal.eye[2]);
       const wScale = TARGET_HEIGHT * params.modelScale;
-      if (eyes.length && (headBone || model) && params.eyeSize > 0) {
-        if (headBone) headBone.getWorldPosition(tmpHead);
-        else { tmpHead.set(0, baseY * 0.92, 0); rig.localToWorld(tmpHead); }
-        const e = camera.matrixWorld.elements;
-        camRight.set(e[0], e[1], e[2]).normalize();
-        camUp.set(e[4], e[5], e[6]).normalize();
-        eyeDir.copy(camera.position).sub(tmpHead).normalize();
+      const haveLoc = eyeLocators.length === 2;
+      if (eyes.length && params.eyeSize > 0 && (haveLoc || headBone || model)) {
         const sz = 0.085 * wScale * params.eyeSize * (0.85 + 0.3 * eyePulse) * (1 + beat * 0.25) * Math.max(0.15, params.eyeGlow);
         const op = clamp(0.5 * params.eyeGlow * eyePulse, 0, 1);
-        for (let i = 0; i < 2; i++) {
-          const e2 = eyes[i];
-          e2.visible = true;
-          e2.position.copy(tmpHead)
-            .addScaledVector(eyeDir, 0.10 * wScale)
-            .addScaledVector(camRight, (i === 0 ? -1 : 1) * 0.065 * wScale)
-            .addScaledVector(camUp, 0.012 * wScale);
-          e2.scale.setScalar(Math.max(0.001, sz));
-          e2.material.color.copy(eyeColor);
-          e2.material.opacity = op;
+        if (haveLoc) {
+          for (let i = 0; i < 2; i++) {
+            const e2 = eyes[i];
+            e2.visible = true;
+            eyeLocators[i].getWorldPosition(tmpHead);
+            eyeDir.copy(camera.position).sub(tmpHead).normalize();
+            e2.position.copy(tmpHead).addScaledVector(eyeDir, 0.02 * wScale); // tiny lift off the face
+            e2.scale.setScalar(Math.max(0.001, sz));
+            e2.material.color.copy(eyeColor);
+            e2.material.opacity = op;
+          }
+        } else {
+          if (headBone) headBone.getWorldPosition(tmpHead);
+          else { tmpHead.set(0, baseY * 0.92, 0); rig.localToWorld(tmpHead); }
+          const e = camera.matrixWorld.elements;
+          camRight.set(e[0], e[1], e[2]).normalize();
+          camUp.set(e[4], e[5], e[6]).normalize();
+          eyeDir.copy(camera.position).sub(tmpHead).normalize();
+          for (let i = 0; i < 2; i++) {
+            const e2 = eyes[i];
+            e2.visible = true;
+            e2.position.copy(tmpHead)
+              .addScaledVector(eyeDir, 0.10 * wScale)
+              .addScaledVector(camRight, (i === 0 ? -1 : 1) * 0.065 * wScale)
+              .addScaledVector(camUp, 0.012 * wScale);
+            e2.scale.setScalar(Math.max(0.001, sz));
+            e2.material.color.copy(eyeColor);
+            e2.material.opacity = op;
+          }
         }
       } else {
         for (const e2 of eyes) e2.visible = false;
