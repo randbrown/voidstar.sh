@@ -1,4 +1,4 @@
-// Page bootstrap for /lab/qualia. Lives outside the .astro file so Astro/Vite
+// Page bootstrap for /qualia. Lives outside the .astro file so Astro/Vite
 // resolves the ESM import graph correctly — inline <script type="module"> in
 // .astro pages is served verbatim and would 404 on the relative paths.
 

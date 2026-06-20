@@ -10,6 +10,7 @@
 
 export const APP_ID = 'voidstar-entangle-v1';   // Trystero namespace
 export const PARTICIPANT_PATH = '/lab/entangle'; // participant page route
+const PINNED_ROOM_KEY = 'voidstar.entangle.pinnedRoom';
 
 // Trystero action names (host ⇄ participant). Keep ≤ 12 chars.
 export const T = {
@@ -50,6 +51,35 @@ export function buildJoinUrl(roomId, origin = location.origin) {
 export function readRoomFromHash(hash = location.hash) {
   const m = /[#&]r=([^&]+)/.exec(hash || '');
   return m ? decodeURIComponent(m[1]) : null;
+}
+
+/** Read a ?room= query param from the host page URL. */
+export function readRoomFromQuery(search = location.search) {
+  const m = /[?&]room=([^&]+)/.exec(search || '');
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/** Get the pinned room from localStorage (if any). */
+export function getPinnedRoom() {
+  try { return localStorage.getItem(PINNED_ROOM_KEY) || null; } catch { return null; }
+}
+/** Pin a room id to localStorage so it survives reloads. */
+export function pinRoom(roomId) {
+  try { localStorage.setItem(PINNED_ROOM_KEY, roomId); } catch {}
+}
+/** Unpin — next open will generate a fresh room. */
+export function unpinRoom() {
+  try { localStorage.removeItem(PINNED_ROOM_KEY); } catch {}
+}
+
+/**
+ * Resolve which room id to use on open, in priority order:
+ * 1. ?room= query param (explicit URL override)
+ * 2. pinned room in localStorage (persistent across reloads)
+ * 3. fresh random id
+ */
+export function resolveRoomId() {
+  return readRoomFromQuery() || getPinnedRoom() || makeRoomId();
 }
 
 // ── Ingress validation ───────────────────────────────────────────────────

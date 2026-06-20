@@ -17,7 +17,7 @@
 // Owned signaling via the Cloudflare Durable Object star relay. The Nostr/WebRTC
 // transport (./entangle-transport.js) remains as a drop-in fallback — same shape.
 import { createTransport } from './entangle-transport-cf.js';
-import { T, MODES, APP_ID, makeRoomId, buildJoinUrl, clampToSpec, manifestParam } from './entangle-protocol.js';
+import { T, MODES, APP_ID, resolveRoomId, buildJoinUrl, clampToSpec, manifestParam, getPinnedRoom, pinRoom, unpinRoom } from './entangle-protocol.js';
 import { unpackFeatures, unpackSkeleton } from './pose-features.js';
 
 const STALE_MS    = 9000;   // prune a peer we haven't heard from in this long
@@ -348,7 +348,7 @@ export function createEntangle({ core, mesh, actions = {} }) {
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   async function open() {
     if (opened) return { roomId, joinUrl: buildJoinUrl(roomId) };
-    roomId = makeRoomId();
+    roomId = resolveRoomId();
     // Seed the whitelist with a couple of safe range params from the active fx
     // so the crowd has something to touch immediately (host can edit).
     if (whitelist.size === 0) {
@@ -422,6 +422,9 @@ export function createEntangle({ core, mesh, actions = {} }) {
     getCrowdSignal: () => ({ ...lastSignal }),
     getSkeletons,
     activeReactsToCrowd,
+    isPinned: () => !!getPinnedRoom(),
+    pinRoom()  { if (roomId) pinRoom(roomId); },
+    unpinRoom() { unpinRoom(); },
     onPeersChange(fn) { cb.peers = fn; },
     onTallyChange(fn) { cb.tally = fn; },
     onPhaseCharge(fn) { cb.phase = fn; },
