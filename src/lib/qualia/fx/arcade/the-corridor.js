@@ -151,7 +151,7 @@ export default function create(eng) {
     if (muzzle > 0) muzzle -= dt;
 
     // ── camera glide along the corridor ──────────────────────────────────────
-    const speed = 1.15 * (0.85 + (params.enemyIntensity ?? 1) * 0.2) * (1 + audio.beat.pulse * 0.15);
+    const speed = 1.15 * 0.75 * (0.85 + (params.enemyIntensity ?? 1) * 0.2) * (1 + audio.beat.pulse * 0.15);
     prog += speed * dt;
     while (prog >= 1) {
       prog -= 1;
@@ -172,7 +172,7 @@ export default function create(eng) {
     // pre-blend the heading toward the upcoming direction for an arc.
     const nextC = cellC + DIR4[moveDir][0], nextR = cellR + DIR4[moveDir][1];
     let peekAng = headAng;
-    if (prog > 0.4 && nextC >= 0 && nextR >= 0 && nextC < MAPW && nextR < MAPH && map[nextR * MAPW + nextC] === 0) {
+    if (prog > 0.3 && nextC >= 0 && nextR >= 0 && nextC < MAPW && nextR < MAPH && map[nextR * MAPW + nextC] === 0) {
       let peekDir = moveDir;
       for (let d = 0; d < 4; d++) {
         if (d === ((moveDir + 2) & 3)) continue;
@@ -182,18 +182,18 @@ export default function create(eng) {
       }
       if (peekDir !== moveDir) {
         const peekA = Math.atan2(DIR4[peekDir][1], DIR4[peekDir][0]);
-        const blend = Math.max(0, (prog - 0.4) / 0.6);
+        const blend = Math.max(0, (prog - 0.3) / 0.7);
         const smoothBlend = blend * blend * (3 - 2 * blend);
         let dp = peekA - headAng;
         while (dp > Math.PI) dp -= Math.PI * 2;
         while (dp < -Math.PI) dp += Math.PI * 2;
-        peekAng = headAng + dp * smoothBlend * 0.45;
+        peekAng = headAng + dp * smoothBlend * 0.65;
       }
     }
     let da = peekAng + lookOff - viewAng;
     while (da > Math.PI) da -= Math.PI * 2;
     while (da < -Math.PI) da += Math.PI * 2;
-    viewAng += da * Math.min(1, dt * 6);
+    viewAng += da * Math.min(1, dt * 4);
 
     // ── enemies ──────────────────────────────────────────────────────────────
     const wantCount = Math.max(1, Math.min(ENEMY_CAP, Math.round(2 + (params.enemyIntensity ?? 1) * 2)));
@@ -311,7 +311,7 @@ export default function create(eng) {
           const barH = (y1 - y0) * v * 0.3;
           const midY = (y0 + y1) >> 1;
           const eqCol = mat === 0 ? eng.C.cyan : eng.C.magenta;
-          eng.rect(x, midY - barH * 0.5, 1, barH, eqCol, v * 0.18 * shade);
+          eng.rect(x, midY - barH * 0.5, 1, barH, eqCol, v * 0.38 * shade);
         }
       }
     }

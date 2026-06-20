@@ -1,14 +1,14 @@
 // Arcade — interactive retro-game simulations driven by pose, audio, and the
 // entangled crowd. One quale, many cabinets (selected by the `game` param):
 //
-//   accretion_run  pseudo-3D racer diving toward a black hole (lean to steer)
-//   nullmuncher    maze muncher eating null-pointers (lean to turn)
-//   void_invaders  fixed shooter; the crowd is the cannon (hands up to fire)
-//   voidris        falling blocks (lean to move, raise to rotate)
-//   event_pong     EVENT HORIZON PONG — lean to volley the mote (crowd vs house)
-//   voidsnake      a light-ribbon snake threading a grid for code pellets
-//   the_corridor   raycast FPS crawl through the machine (Doom homage; lean to look)
-//   crossvoid      lane-crosser to the portal (Frogger homage; never dies in auto)
+//   outrun     pseudo-3D racer diving toward a black hole (lean to steer)
+//   phagein    maze muncher eating null-pointers (lean to turn)
+//   invaders   fixed shooter; the crowd is the cannon (hands up to fire)
+//   tetra      falling blocks (lean to move, raise to rotate)
+//   ping       EVENT HORIZON PONG — lean to volley the mote (crowd vs house)
+//   worm       a light-ribbon snake threading a grid for code pellets
+//   corridor   raycast FPS crawl through the machine (Doom homage; lean to look)
+//   hopper     lane-crosser to the portal (Frogger homage; never dies in auto)
 //
 // Every game reads ONE normalized intent (see ./arcade/input.js), so it plays
 // identically whether driven by the entangled CROWD (field.crowd — the whole
@@ -40,14 +40,14 @@ import theCorridor from './arcade/the-corridor.js';
 import crossvoid from './arcade/crossvoid.js';
 
 const FACTORIES = {
-  accretion_run: accretionRun,
-  nullmuncher,
-  void_invaders: voidInvaders,
-  voidris,
-  event_pong: eventPong,
-  voidsnake,
-  the_corridor: theCorridor,
-  crossvoid,
+  outrun: accretionRun,
+  phagein: nullmuncher,
+  invaders: voidInvaders,
+  tetra: voidris,
+  ping: eventPong,
+  worm: voidsnake,
+  corridor: theCorridor,
+  hopper: crossvoid,
 };
 
 /** @type {import('../types.js').QFXModule} */
@@ -58,8 +58,8 @@ export default {
 
   params: [
     { id: 'game', label: 'game', type: 'select',
-      options: ['accretion_run', 'nullmuncher', 'void_invaders', 'voidris',
-                'event_pong', 'voidsnake', 'the_corridor', 'crossvoid'], default: 'accretion_run' },
+      options: ['outrun', 'phagein', 'invaders', 'tetra',
+                'ping', 'worm', 'corridor', 'hopper'], default: 'outrun' },
     // Who drives. 'auto' = the crowd when anyone's entangled, else the
     // performer's camera, else a CPU attract loop. This is the param to expose
     // to phones (whitelist) so the room can pick collective control.
@@ -96,28 +96,28 @@ export default {
 
   autoPhase: {
     steps: [
-      { game: 'accretion_run' },
-      { game: 'nullmuncher' },
-      { game: 'void_invaders' },
-      { game: 'voidris' },
-      { game: 'event_pong' },
-      { game: 'voidsnake' },
-      { game: 'the_corridor' },
-      { game: 'crossvoid' },
+      { game: 'outrun' },
+      { game: 'phagein' },
+      { game: 'invaders' },
+      { game: 'tetra' },
+      { game: 'ping' },
+      { game: 'worm' },
+      { game: 'corridor' },
+      { game: 'hopper' },
     ],
   },
 
   presets: {
-    default:       { game: 'accretion_run', controlMode: 'auto' },
-    accretion_run: { game: 'accretion_run' },
-    nullmuncher:   { game: 'nullmuncher' },
-    void_invaders: { game: 'void_invaders' },
-    voidris:       { game: 'voidris' },
-    event_pong:    { game: 'event_pong' },
-    voidsnake:     { game: 'voidsnake' },
-    the_corridor:  { game: 'the_corridor' },
-    crossvoid:     { game: 'crossvoid' },
-    crowd:         { game: 'accretion_run', controlMode: 'crowd' },
+    default:   { game: 'outrun', controlMode: 'auto' },
+    outrun:    { game: 'outrun' },
+    phagein:   { game: 'phagein' },
+    invaders:  { game: 'invaders' },
+    tetra:     { game: 'tetra' },
+    ping:      { game: 'ping' },
+    worm:      { game: 'worm' },
+    corridor:  { game: 'corridor' },
+    hopper:    { game: 'hopper' },
+    crowd:     { game: 'outrun', controlMode: 'crowd' },
     chunky:        { pixelScale: 2.5 },
     slow:          { speed: 0.6 },
   },
@@ -136,7 +136,7 @@ export default {
     const scratch = { params: null, intent: null, fps: 60, time: 0, bass: 0, mids: 0, highs: 0, beat: false, source: 'cpu' };
 
     function ensureGame(id) {
-      if (!FACTORIES[id]) id = 'accretion_run';
+      if (!FACTORIES[id]) id = 'outrun';
       if (!games[id]) games[id] = FACTORIES[id](eng);
       if (id !== activeId) {
         activeId = id;
@@ -144,7 +144,7 @@ export default {
         activeGame.reset();
       }
     }
-    ensureGame('accretion_run');
+    ensureGame('outrun');
 
     function update(field) {
       const params = field.params;

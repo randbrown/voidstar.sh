@@ -342,11 +342,13 @@ export default function create(eng) {
           if (L.type === 'road') {
             const col = CAR_COL[L.vehicles[i].hue];
             const flicker = 0.7 + 0.3 * Math.sin(t * 12 + i * 3 + r);
-            eng.disc(x + w * 0.5, y + g.tile * 0.5, g.tile * 0.38, col, flicker);
-            eng.disc(x + w * 0.5, y + g.tile * 0.5, g.tile * 0.55, col, 0.15);
-            eng.disc(x + w * 0.5, y + g.tile * 0.5, g.tile * 0.18, eng.C.white, 0.6);
-            const wakeOff = L.dir > 0 ? -g.tile * 0.3 : g.tile * 0.3;
-            eng.disc(x + w * 0.5 + wakeOff, y + g.tile * 0.5, g.tile * 0.12, col, 0.3 * flicker);
+            const pad = Math.max(1, g.tile * 0.12);
+            eng.rect(x + 1, y + pad, w - 2, g.tile - pad * 2, col, flicker * 0.85);
+            eng.rect(x + 1, y + pad, w - 2, Math.max(1, g.tile * 0.15), eng.C.white, 0.25);
+            const wcx = L.dir > 0 ? x + w * 0.65 : x + w * 0.15;
+            eng.rect(wcx, y + pad + 1, w * 0.18, g.tile - pad * 2 - 2, eng.C.ice, 0.35);
+            const ex = L.dir > 0 ? x + 1 : x + w - 3;
+            eng.rect(ex, y + g.tile * 0.35, 2, g.tile * 0.3, eng.C.cyan, flicker * 0.5);
           } else {
             eng.rect(x, y + 2, w, g.tile - 4, eng.C.cyan, 0.18);
             eng.rect(x, y + g.tile * 0.5 - 1, w, 2, eng.C.ice, 0.35);
@@ -370,7 +372,7 @@ export default function create(eng) {
     const px = g.ox + (avx + 0.5) * g.tile, py = g.oy + (avr + 0.5) * g.tile;
     const hop = hopping ? Math.sin(hopT * Math.PI) : 0;
     const rad = g.tile * (0.34 + hop * 0.06);
-    const body = deathFlash > 0 && (Math.floor(t * 12) & 1) ? eng.C.red : eng.C.gold;
+    const body = deathFlash > 0 && (Math.floor(t * 12) & 1) ? eng.C.red : eng.C.green;
     eng.disc(px, py - hop * g.tile * 0.25, rad * 1.5, body, 0.15);
     eng.disc(px, py - hop * g.tile * 0.25, rad, body, 1);
     eng.disc(px, py - hop * g.tile * 0.25, rad * 0.5, eng.C.white, 0.7);

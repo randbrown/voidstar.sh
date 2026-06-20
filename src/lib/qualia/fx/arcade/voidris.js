@@ -276,13 +276,14 @@ export default function create(eng) {
     // (Re)plan whenever a new piece is in play so the AI has a fresh target.
     if (cur && aiPlanFor !== cur) planPiece();
 
-    // ── player edges (always act on the frame they occur) ─────────────────
+    // ── player edges — gated by autonomy so CPU/noisy-pose DAS edges don't
+    // fight the AI at high autonomy (the root cause of piece jitter). ──────
     let playerActed = false;
-    if (intent.left && !collide(cur, cur.x - 1, cur.y)) { cur.x--; playerActed = true; }
-    if (intent.right && !collide(cur, cur.x + 1, cur.y)) { cur.x++; playerActed = true; }
-    if (intent.jump) { rotateCur(); playerActed = true; }
-    // Any player nudge invalidates the old plan so the AI re-targets from the
-    // piece's new position next tick (keeps AI + player from fighting).
+    if (intent.autonomy < 0.5) {
+      if (intent.left && !collide(cur, cur.x - 1, cur.y)) { cur.x--; playerActed = true; }
+      if (intent.right && !collide(cur, cur.x + 1, cur.y)) { cur.x++; playerActed = true; }
+      if (intent.jump) { rotateCur(); playerActed = true; }
+    }
     if (playerActed) aiPlanFor = null;
     // Ambient aesthetic: pieces are NEVER hard-dropped — they settle under
     // gravity alone (see the gravity block below). So `fire` no longer slams the
@@ -366,10 +367,14 @@ export default function create(eng) {
     const g = geom();
     // Well.
     eng.rect(g.ox, g.oy, g.bw, g.bh, '#070a18', 1);
+    const bassV = audio ? audio.bands.bass : 0;
     const border = flash > 0 ? eng.C.white : eng.C.cyan;
     eng.box(g.ox - 1, g.oy - 1, g.bw + 2, g.bh + 2, border, 0.6 + 0.4 * (flash > 0 ? 1 : 0.5 + 0.5 * Math.sin(t * 3)));
-    // Spectrum bar behind the well — subtle EQ rising from the bottom.
-    if (audio) eng.spectrumBar(audio.spectrum, g.ox, g.oy + g.bh - 8, g.bw, 8, 10, eng.C.cyan, 0.06, 2);
+    if (bassV > 0.2) eng.box(g.ox - 2, g.oy - 2, g.bw + 4, g.bh + 4, eng.C.magenta, bassV * 0.2);
+    if (audio) {
+      eng.spectrumBar(audio.spectrum, g.ox, g.oy + g.bh - 6, g.bw, 6, 10, eng.C.cyan, 0.18, 2);
+      eng.waveformLine(audio.waveform, g.ox, g.oy - 4, g.bw, 4, eng.C.magenta, 0.18);
+    }
 
     // Locked cells.
     for (let r = 0; r < H; r++) {

@@ -650,8 +650,6 @@ export default function create(eng) {
   }
   const px = (c, prog, dx, g) => g.ox + (c + dx * prog + 0.5) * g.tile;
 
-  // flavor glyph set for scattered code-look (deterministic by cell).
-  const FLAVOR = ['0', ';', '/', '%'];
   // per-ghost base colours (hoisted — was a per-frame array literal in render).
   const GHOST_COL = [eng.C.red, eng.C.magenta, eng.C.cyan, eng.C.amber];
 
@@ -690,8 +688,7 @@ export default function create(eng) {
       } else {
         // normal: a scattered code glyph keyed deterministically by (c*7+r), so
         // the board looks like strewn code but every glyph is clearly food.
-        const fg = FLAVOR[(c * 7 + r) & 3];
-        eng.text(fg, cx, cy - 2, eng.C.ice, 1, 'center', 0.8);
+        eng.text('·', cx, cy - 2, eng.C.ice, 1, 'center', 0.8);
       }
     }
     // Muncher — a readable gold chomping mouth.

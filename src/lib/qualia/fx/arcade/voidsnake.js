@@ -192,8 +192,7 @@ export default function create(eng) {
     headPtr = (headPtr + 1) % N;
     body[headPtr] = ni; occ[ni] = 1;
     if (willEat) {
-      score += 10; eatPop = 1; grow += 2;             // grow 2 cells per pellet
-      eng.shake(1.2);
+      score += 10; eatPop = 1; grow += 2;
       for (let k = 0; k < 8; k++) {
         const a = Math.random() * 6.28, sp = 16 + Math.random() * 40;
         parts.spawn(cx(ni) + 0.5, cy(ni) + 0.5, Math.cos(a) * sp, Math.sin(a) * sp, 0.35, eng.C.gold, 1);
@@ -260,14 +259,22 @@ export default function create(eng) {
     eng.disc(fcx, fcy, 1 + pulse * 1.4, eng.C.gold, 0.22);
     eng.text(FLAVOR[foodGlyph], fcx, fcy - 2, eng.C.gold, 1, 'center', pulse);
 
-    // Snake — head bright, body fading toward the tail; gold flash on eat.
+    const segPal = [eng.C.red, eng.C.amber, eng.C.gold, eng.C.green, eng.C.cyan, eng.C.magenta];
     for (let k = 0; k < len; k++) {
       const i = body[((headPtr - k) % N + N) % N];
       const x = g.ox + cx(i) * g.tile, y = g.oy + cy(i) * g.tile;
       const f = k / Math.max(1, len);
       const isHead = k === 0;
-      const col = isHead ? (eatPop > 0 ? eng.C.gold : eng.C.green)
-                         : (k & 1 ? '#3ad17a' : '#2ea866');
+      let col;
+      if (isHead) {
+        col = eatPop > 0 ? eng.C.gold : eng.C.green;
+      } else if (spectrum) {
+        const bin = Math.min((spectrum.length >> 1) - 1, ((k * (spectrum.length >> 2) / Math.max(1, len)) | 0) + 2);
+        const v = spectrum[bin] / 255;
+        col = v > 0.2 ? segPal[((k * segPal.length / Math.max(1, len)) | 0) % segPal.length] : (k & 1 ? '#3ad17a' : '#2ea866');
+      } else {
+        col = k & 1 ? '#3ad17a' : '#2ea866';
+      }
       eng.rect(x + 1, y + 1, g.tile - 2, g.tile - 2, col, isHead ? 1 : (0.9 - f * 0.45));
       if (isHead) {
         // eyes looking along the heading
