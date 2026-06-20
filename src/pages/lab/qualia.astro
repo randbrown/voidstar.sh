@@ -387,7 +387,6 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .experiment-title { color: var(--text); font-weight: 500; }
     .experiment-tag   { color: var(--accent); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     #fps     { color: var(--muted); min-width: 5ch; }
-    #fxname  { color: var(--cyan);  min-width: 8ch; }
     #lvl     { color: var(--muted); min-width: 11ch; font-size: 0.72rem; }
     /* Chron τ readout — persistent session stopwatch. Inline color is set
        by chron.js when redshift is active (horizon set); otherwise this
@@ -1181,7 +1180,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       #topbar-left  { gap: 0.5rem; }
       #topbar-right { gap: 0.3rem; }
       #topbar-corner { gap: 0.3rem; flex-wrap: wrap; justify-content: flex-end; }
-      #lvl, #fxname { display: none; }
+      #lvl { display: none; }
       /* Tighter horizontal padding reclaims ~0.3rem per button — enough for
          the full corner cluster to sit on one line at typical phone widths. */
       .ctrl-btn     { padding: 0.32rem 0.45rem; font-size: 0.7rem; }
@@ -1733,12 +1732,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        button IDs are preserved verbatim so every keyboard shortcut and
        page-init.js handler keeps working without changes. -->
   <div id="topbar-right">
-    <span id="fps">-- fps</span>
     <select id="theme-select" class="ctrl-btn" title="Theme (Y)"></select>
-    <span id="fxname">—</span>
+    <select id="fx-select" class="ctrl-btn" title="Active fx (V)"></select>
+    <span id="fps">-- fps</span>
     <span id="lvl">b-- m-- h--</span>
     <span id="chron-hud" title="chron — session stopwatch (τ). Tap to open the chron panel (format · zen pulses · horizon).">τ 0:00</span>
-    <select id="fx-select" class="ctrl-btn" title="Active fx (V)"></select>
     <select id="mic-select" class="ctrl-btn" title="Choose microphone" style="display:none;"></select>
     <button class="ctrl-btn" id="btn-audio" title="Mic audio (A)">audio</button>
 

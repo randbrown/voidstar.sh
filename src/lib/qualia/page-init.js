@@ -152,7 +152,6 @@ export function initQualiaPage() {
   const topbarEl   = document.getElementById('topbar');
   const fpsEl      = document.getElementById('fps');
   const lvlEl      = document.getElementById('lvl');
-  const fxnameEl   = document.getElementById('fxname');
   const fxSelect   = document.getElementById('fx-select');
   const micSelect  = document.getElementById('mic-select');
   const camSelect  = document.getElementById('cam-select');
@@ -262,8 +261,6 @@ export function initQualiaPage() {
     pose,
     paramsContainer: fxParamsEl,
     onFxChange: (id) => {
-      const mod = mesh.get(id);
-      fxnameEl.textContent = mod ? mod.name : '—';
       fxSelect.value = id;
       // Re-sync the phase timer for the new quale. autoPhaseSeconds (the
       // user's intended period) is preserved across switches — if the new
