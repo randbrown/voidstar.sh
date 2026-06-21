@@ -376,6 +376,21 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return Math.max(0, Math.min(maxStart, want));
   }
 
+  // Rebuild an AudioBuffer from stored mono PCM (for IndexedDB restore). Uses
+  // the looper's own ctx; a buffer may carry its own sampleRate (BufferSource
+  // resamples on playback) so a recording survives a different-rate reload.
+  function makeBuffer(pcm, sampleRate) {
+    if (!pcm || !pcm.length) return null;
+    if (!ctx) {
+      try { ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' }); }
+      catch { return null; }
+    }
+    const data = pcm instanceof Float32Array ? pcm : new Float32Array(pcm);
+    const buf = ctx.createBuffer(1, data.length, sampleRate || ctx.sampleRate);
+    buf.copyToChannel(data, 0);
+    return buf;
+  }
+
   // The current loop region [startFrame, endFrame] for the renderer.
   function getLoopRegion(track) {
     if (!track || !track.buffer) return null;
@@ -601,6 +616,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     setMuted, setMaster,
     setTrackVolume, setTrackMuted,
     setOffsetMs, getOffsetMs,
+    makeBuffer,
     getLoopRegion,
     getPlayhead01,
     getLiveView,

@@ -20,6 +20,7 @@
 
 import { createLooperAudio } from './looper-audio.js';
 import { createLooperRenderer } from './looper-render.js';
+import * as loopStore from './looper-store.js';
 import { wirePicker } from './devices.js';
 
 const NS = 'voidstar.qualia.looper';
@@ -129,22 +130,24 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   // Per-track renderers + DOM handles, keyed by track id.
   const renderers = new Map();      // id -> renderer
-  const rowEls = new Map();         // id -> { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn }
+  const rowEls = new Map();         // id -> { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn, ppBtn }
   let _addWrap = null;              // the "+ track" container
   let inputVolSl = null, inputMuteBtn = null, syncStatusEl = null;
+  let _orderSeq = 0;                // stable per-track order (persisted, append-only)
 
   // ── track model ──────────────────────────────────────────────────────────
   function makeTrack() {
     const prev = model.tracks[model.tracks.length - 1];
     return {
       id: nextTrackId(),
+      order: _orderSeq++,                           // stable display/persist order
       buffer: null, sampleRate: 0, loopStartBase: 0, regionFrames: 0,
       naturalSeconds: 0, recordedCycles: null,
       grid: prev ? prev.grid : model.gridDefault,   // record-snap + lane width
       length: null,                                 // cycles the take occupies
       volume: 0.5,                                  // Ditto-centre default
       muted: false,
-      preservePitch: false,                         // varispeed until Phase 4
+      preservePitch: false,                         // varispeed by default
     };
   }
   function getTrack(id) { return model.tracks.find(t => t.id === id) || null; }
@@ -175,6 +178,86 @@ export function createLooper({ audio, syncStrudel } = {}) {
       length: track.length || track.grid,
       playhead01: looperAudio.isVoicePlaying(track.id) ? looperAudio.getPlayhead01(track.id) : null,
     };
+  }
+
+  // ── persistence (IndexedDB) ──────────────────────────────────────────────
+  // Recorded loops + per-track settings survive a reload. PCM is stored once on
+  // record; setting tweaks re-write the (debounced) record. Buffers are large,
+  // so write quietly and degrade gracefully on quota errors.
+  const _dirty = new Set();
+  let _persistTimer = null;
+  function toRecord(t) {
+    return {
+      id: t.id, order: t.order,
+      pcm: new Float32Array(t.buffer.getChannelData(0)),
+      sampleRate: t.sampleRate, regionFrames: t.regionFrames,
+      loopStartBase: t.loopStartBase, naturalSeconds: t.naturalSeconds,
+      recordedCycles: t.recordedCycles,
+      grid: t.grid, length: t.length, volume: t.volume, muted: t.muted, preservePitch: t.preservePitch,
+    };
+  }
+  function onPersistErr(e) {
+    console.warn('[qualia] looper persist failed:', e);
+    if (e && (e.name === 'QuotaExceededError' || /quota/i.test(String(e?.message || '')))) {
+      setStatus('storage full — loop kept in memory only');
+    }
+  }
+  function flushPersist() {
+    _persistTimer = null;
+    for (const id of _dirty) {
+      const t = getTrack(id);
+      if (t && t.buffer) loopStore.putTrack(toRecord(t)).catch(onPersistErr);
+    }
+    _dirty.clear();
+  }
+  function persistSoon(id) {
+    if (!loopStore.isAvailable()) return;
+    _dirty.add(id);
+    if (_persistTimer) clearTimeout(_persistTimer);
+    _persistTimer = setTimeout(flushPersist, 250);
+  }
+  // Rebuild persisted loops on load. Does NOT auto-play; arms a fresh empty
+  // track so the next record doesn't clobber a restored take.
+  async function restoreFromStore() {
+    if (!loopStore.isAvailable()) return;
+    let recs;
+    try { recs = await loopStore.getAllTracks(); }
+    catch (e) { console.warn('[qualia] looper restore failed:', e); return; }
+    if (!recs || !recs.length) return;
+    // If the user already recorded during the (brief) async load, don't clobber.
+    if (model.tracks.some(t => t.buffer)) return;
+    const restored = [];
+    let maxOrder = -1;
+    for (const r of recs) {
+      const buffer = looperAudio.makeBuffer(r.pcm, r.sampleRate);
+      if (!buffer) continue;
+      const order = Number.isFinite(r.order) ? r.order : restored.length;
+      if (order > maxOrder) maxOrder = order;
+      const sr = r.sampleRate || buffer.sampleRate;
+      restored.push({
+        id: r.id, order,
+        buffer, sampleRate: sr,
+        loopStartBase: r.loopStartBase || 0,
+        regionFrames: r.regionFrames || buffer.length,
+        naturalSeconds: r.naturalSeconds || (buffer.length / sr),
+        recordedCycles: r.recordedCycles ?? null,
+        grid: Math.max(1, Math.min(16, r.grid || model.gridDefault)),
+        length: r.length || r.recordedCycles || model.gridDefault,
+        volume: clamp01(r.volume == null ? 0.5 : r.volume),
+        muted: !!r.muted,
+        preservePitch: !!r.preservePitch,
+      });
+    }
+    if (!restored.length) return;
+    _orderSeq = maxOrder + 1;
+    model.tracks = restored;
+    const fresh = makeTrack();
+    model.tracks.push(fresh);
+    model.armedTrackId = fresh.id;
+    renderTracks();
+    refreshTransport();
+    refreshLooperBtn();
+    setStatus(`restored ${restored.length} loop${restored.length === 1 ? '' : 's'}`);
   }
 
   // ── transport ──────────────────────────────────────────────────────────
@@ -225,6 +308,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshTrackRow(t);
     refreshAddBtn();
     refreshTransport();
+    persistSoon(t.id);            // save the new take (PCM + settings) to IndexedDB
     setStatus(`recorded · ${fmtLen(cyc)} cyc`);
     await playVoice(t);            // play the new take; other tracks keep looping
     syncRenderers();
@@ -274,12 +358,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
     renderers.get(id)?.invalidate();
     refreshTrackRow(t);
     if (looperAudio.isVoicePlaying(id)) playVoice(t);
+    persistSoon(id);
   }
   function setTrackVolume(id, v) {
     const t = getTrack(id);
     if (!t) return;
     t.volume = clamp01(v);
     looperAudio.setTrackVolume(id, t.volume);
+    persistSoon(id);
   }
   function setTrackMuted(id, on) {
     const t = getTrack(id);
@@ -287,6 +373,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     t.muted = !!on;
     looperAudio.setTrackMuted(id, t.muted);
     refreshTrackRow(t);
+    persistSoon(id);
   }
   function setTrackGrid(id, v) {
     const t = getTrack(id);
@@ -297,6 +384,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     model.gridDefault = g; lsSet(GRID_KEY, g);   // next new track inherits it
     renderers.get(id)?.invalidate();
     if (looperAudio.isVoicePlaying(id)) playVoice(t);
+    persistSoon(id);
   }
   // Toggle pitch-preserving time-stretch for a track. Re-locks the voice so the
   // varispeed ⇄ stretch swap takes effect seamlessly (others keep playing).
@@ -306,11 +394,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
     t.preservePitch = !!on;
     refreshTrackRow(t);
     if (looperAudio.isVoicePlaying(id)) playVoice(t);
+    persistSoon(id);
   }
   function deleteTrack(id) {
     looperAudio.removeTrack(id);
     renderers.get(id)?.dispose();
     renderers.delete(id);
+    _dirty.delete(id);
+    if (loopStore.isAvailable()) loopStore.deleteTrack(id).catch(() => {});
     model.tracks = model.tracks.filter(t => t.id !== id);
     if (model.armedTrackId === id) model.armedTrackId = null;
     if (!model.tracks.length) {
@@ -327,6 +418,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.removeAll();
     for (const r of renderers.values()) r.dispose();
     renderers.clear();
+    _dirty.clear();
+    if (loopStore.isAvailable()) loopStore.clearAll().catch(() => {});
     model.tracks = [];
     const t = makeTrack(); model.tracks.push(t); model.armedTrackId = t.id;
     renderTracks();
@@ -754,6 +847,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
   refreshSyncBtnVisibility();
 
   if (wasOpenLastSession) open();
+
+  // Restore persisted loops (async). Replaces the seeded empty track if any
+  // saved loops are found; otherwise the seeded empty armed track stays.
+  restoreFromStore();
 
   // perFrame is a no-op: each renderer self-drives its own rAF while
   // recording/playing. Exposed for symmetry with the sequencer's page-init hook.
