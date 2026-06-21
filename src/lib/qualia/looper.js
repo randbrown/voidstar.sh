@@ -440,6 +440,84 @@ export function createLooper({ audio, syncStrudel } = {}) {
     model.armedTrackId = id;
     refreshArmIndicators();
   }
+  // Trim one lane (grid cycles) off the front or back of a take — for dropping
+  // a late start or a trailing bar. Removes the matching slice of buffer frames
+  // and the same number of cycles from `length`, so tempo/pitch are unchanged
+  // (rate = naturalSeconds/(length/cps) stays constant). Needs length > grid so
+  // at least one lane remains.
+  function trimTrack(id, which) {
+    const t = getTrack(id);
+    if (!t || !t.buffer || !t.length || t.length <= t.grid) return;
+    const oldRegion = t.regionFrames;
+    const fpl = Math.round(oldRegion * (t.grid / t.length));   // frames in one lane
+    if (fpl <= 0 || fpl >= oldRegion) return;
+    if (which === 'first') t.loopStartBase += fpl;
+    t.regionFrames = oldRegion - fpl;
+    t.length = t.length - t.grid;
+    t.naturalSeconds = t.regionFrames / (t.sampleRate || 48000);
+    if (t.recordedCycles) t.recordedCycles = t.recordedCycles * (t.regionFrames / oldRegion);
+    applyCanvasHeight(t);
+    renderers.get(id)?.invalidate();
+    refreshTrackRow(t);
+    if (looperAudio.isVoicePlaying(id)) playVoice(t);
+    persistSoon(id);
+    setStatus(which === 'first' ? 'trimmed first lane' : 'trimmed last lane');
+  }
+
+  // ── per-track waveform height ──────────────────────────────────────────────
+  // Lanes are compact and the canvas grows with lane count (capped) so a take
+  // takes only the space it needs and more tracks fit on screen.
+  const LANE_PX = 24, CANVAS_MIN = 40, CANVAS_MAX = 140;
+  function laneCount(t) {
+    if (!t.buffer || !t.length) return 1;
+    return Math.max(1, Math.ceil(t.length / t.grid - 1e-6));
+  }
+  function applyCanvasHeight(t) {
+    const el = rowEls.get(t.id);
+    if (!el?.canvas) return;
+    const h = Math.max(CANVAS_MIN, Math.min(CANVAS_MAX, laneCount(t) * LANE_PX));
+    el.canvas.style.height = h + 'px';
+    renderers.get(t.id)?.resize();
+  }
+
+  // ── right-click context menu (trim / delete) on a track's waveform ─────────
+  let _ctxMenu = null;
+  function hideCtxMenu() {
+    if (!_ctxMenu) return;
+    _ctxMenu.remove(); _ctxMenu = null;
+    document.removeEventListener('pointerdown', onCtxAway, true);
+    document.removeEventListener('keydown', onCtxKey, true);
+    window.removeEventListener('blur', hideCtxMenu);
+  }
+  function onCtxAway(e) { if (_ctxMenu && !_ctxMenu.contains(e.target)) hideCtxMenu(); }
+  function onCtxKey(e) { if (e.key === 'Escape') hideCtxMenu(); }
+  function showTrackMenu(track, x, y) {
+    hideCtxMenu();
+    const menu = document.createElement('div');
+    menu.className = 'looper-ctx-menu';
+    const canTrim = !!track.buffer && track.length > track.grid;
+    const item = (label, fn, disabled) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = label; b.disabled = !!disabled;
+      b.addEventListener('click', () => { hideCtxMenu(); fn(); });
+      return b;
+    };
+    const hr = document.createElement('hr');
+    menu.append(
+      item(`Trim first lane (−${track.grid} cyc)`, () => trimTrack(track.id, 'first'), !canTrim),
+      item(`Trim last lane (−${track.grid} cyc)`, () => trimTrack(track.id, 'last'), !canTrim),
+      hr,
+      item('Delete track', () => deleteTrack(track.id)),
+    );
+    document.body.append(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(6, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
+    menu.style.top  = Math.max(6, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
+    _ctxMenu = menu;
+    document.addEventListener('pointerdown', onCtxAway, true);
+    document.addEventListener('keydown', onCtxKey, true);
+    window.addEventListener('blur', hideCtxMenu);
+  }
 
   // ── master / input / nudge / cps ─────────────────────────────────────────
   function setMuted(on) { _muted = !!on; looperAudio.setMuted(_muted); refreshMuteBtn(); }
@@ -572,6 +650,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
     const canvas = document.createElement('canvas');
     canvas.className = 'looper-track-canvas';
+    canvas.title = 'Right-click (two-finger tap) for trim / delete';
+    canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); showTrackMenu(track, e.clientX, e.clientY); });
 
     row.append(head, canvas);
 
@@ -647,6 +727,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       el.ppBtn.classList.toggle('active', !!track.preservePitch);
       el.ppBtn.textContent = track.preservePitch ? 'keep' : 'vari';
     }
+    applyCanvasHeight(track);
   }
   function refreshArmIndicators() {
     for (const [id, el] of rowEls) {
@@ -864,6 +945,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
     isRecording: () => recording,
     play: playAll, stop,
     perFrame,
-    dispose: () => { looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
+    dispose: () => { hideCtxMenu(); looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
   };
 }

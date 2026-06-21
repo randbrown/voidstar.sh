@@ -1574,44 +1574,61 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     #looper-body {
       flex: 1; min-height: 0;
-      padding: 0.35rem;
+      padding: 0.3rem;
       overflow-y: auto;
     }
-    #looper-tracks { display: flex; flex-direction: column; gap: 0.35rem; }
+    #looper-tracks { display: flex; flex-direction: column; gap: 0.25rem; }
     .looper-track {
-      display: flex; align-items: stretch; gap: 0.5rem;
-      padding: 0.35rem;
+      display: flex; align-items: center; gap: 0.45rem;
+      padding: 0.2rem 0.3rem;
       border: 1px solid var(--border); border-radius: 6px;
       background: rgba(0,0,0,0.18);
     }
     .looper-track.armed { border-color: var(--pink); background: rgba(244,114,182,0.07); }
     .looper-track-head {
-      display: flex; flex-direction: column; gap: 0.25rem;
-      min-width: 250px; flex: 0 0 auto; font-size: 0.68rem;
+      display: flex; flex-direction: column; gap: 0.15rem;
+      min-width: 244px; flex: 0 0 auto; font-size: 0.66rem;
     }
-    .looper-track-row { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
-    .looper-track-row .seq-prop { gap: 0.2rem; }
-    .looper-track-name { color: var(--muted); font-size: 0.72rem; min-width: 1.4ch; text-align: center; }
+    .looper-track-row { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
+    .looper-track-row .seq-prop { gap: 0.15rem; }
+    .looper-track-name { color: var(--muted); font-size: 0.7rem; min-width: 1.4ch; text-align: center; }
     .looper-arm {
-      padding: 0.05rem 0.4rem; font-size: 0.8rem; line-height: 1;
+      padding: 0.02rem 0.4rem; font-size: 0.8rem; line-height: 1;
       color: var(--muted); min-width: 2ch; text-align: center;
     }
     .looper-arm.armed { color: var(--pink); border-color: var(--pink); background: rgba(244,114,182,0.10); }
-    .looper-track-del { padding: 0.05rem 0.4rem; font-size: 0.85rem; line-height: 1; }
+    .looper-track-del { padding: 0.02rem 0.4rem; font-size: 0.85rem; line-height: 1; }
     .looper-track-mute { margin-left: auto; }
     .looper-track-canvas {
-      flex: 1; min-width: 0; align-self: stretch;
-      height: auto; min-height: 72px; display: block;
+      flex: 1; min-width: 0;
+      height: 48px; display: block;
       border-radius: 4px; background: rgba(0,0,0,0.28);
     }
+    /* Right-click menu over a track waveform (trim / delete). */
+    .looper-ctx-menu {
+      position: fixed; z-index: 40;
+      background: rgba(10,10,26,0.96);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 0.2rem; min-width: 168px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+      font-family: var(--font-mono); font-size: 0.72rem;
+    }
+    .looper-ctx-menu button {
+      display: block; width: 100%; text-align: left;
+      background: none; border: none; color: var(--text);
+      padding: 0.3rem 0.5rem; border-radius: 4px; cursor: pointer; font: inherit;
+    }
+    .looper-ctx-menu button:hover:not(:disabled) { background: rgba(255,255,255,0.08); color: var(--cyan); }
+    .looper-ctx-menu button:disabled { opacity: 0.35; cursor: default; }
+    .looper-ctx-menu hr { border: none; border-top: 1px solid var(--border); margin: 0.2rem 0; }
     .looper-pp { padding: 0.02rem 0.45rem; font-size: 0.66rem; line-height: 1; min-width: 3.5ch; text-align: center; }
     .looper-pp.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10); }
     .looper-add { display: flex; justify-content: center; padding: 0.15rem; }
     @media (max-width: 700px) {
       #looper-props { padding: 0.25rem 0.45rem; gap: 0.25rem 0.45rem; font-size: 0.68rem; }
-      .looper-track { flex-direction: column; }
+      .looper-track { flex-direction: column; align-items: stretch; }
       .looper-track-head { min-width: 0; }
-      .looper-track-canvas { min-height: 56px; }
     }
 
     /* Vocoder panel — same draggable-window shape as #strudel-panel /
