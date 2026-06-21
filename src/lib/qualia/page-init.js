@@ -351,6 +351,7 @@ export function initQualiaPage() {
     cameraZoom:     lastZoomValue,
     videoPos:       videoOffset,
     captureMode,
+    recAutoSave:    autoSaveRec,
     splitMode,
     splitRatio,
     chron:          chron.getConfig(),
@@ -369,6 +370,9 @@ export function initQualiaPage() {
   // getDisplayMedia({preferCurrentTab: true}) to capture the whole tab
   // including strudel REPL + sequencer panels + any open HUD cards.
   let captureMode = (stored.captureMode === 'tab') ? 'tab' : 'viewport';
+  // Auto-save (default on): qfx recordings save with a default filename and
+  // no save-dialog (which on macOS leaves fullscreen). Off = choose location.
+  let autoSaveRec = stored.recAutoSave !== false;
 
   // ── Chron config restore ─────────────────────────────────────────────────
   // setConfig deep-merges over CHRON_DEFAULTS, so partial/legacy shapes are
@@ -2173,10 +2177,16 @@ export function initQualiaPage() {
   // popover wiring; the menu items below set the mode. refreshRecordModeBtn
   // keeps the active menu item, the trigger tooltip, and the rec button
   // tooltip in sync with captureMode.
-  const captureMenuItems = document.querySelectorAll('.qg-group[data-group="capture"] .qg-menuitem');
+  const captureMenuItems = document.querySelectorAll('.qg-group[data-group="capture"] .qg-menuitem[data-capture]');
+  const btnRecAutoSave = document.getElementById('btn-rec-autosave');
   function refreshRecordModeBtn() {
     captureMenuItems.forEach(it =>
       it.classList.toggle('active', it.dataset.capture === captureMode));
+    if (btnRecAutoSave) {
+      btnRecAutoSave.classList.toggle('active', autoSaveRec);
+      btnRecAutoSave.setAttribute('aria-checked', autoSaveRec ? 'true' : 'false');
+      btnRecAutoSave.textContent = autoSaveRec ? 'auto-save ✓' : 'auto-save';
+    }
     if (btnRecordMode) {
       btnRecordMode.title = captureMode === 'tab'
         ? 'Capture mode: full tab — share-picker captures the entire tab (fx, overlay, topbar, strudel, sequencer, any open panels). Audio still comes from the in-page mix bus.'
@@ -2196,6 +2206,14 @@ export function initQualiaPage() {
       settings.save();
     });
   });
+  if (btnRecAutoSave) {
+    btnRecAutoSave.addEventListener('click', () => {
+      if (recorder.isRecording()) return;   // locked during a take
+      autoSaveRec = !autoSaveRec;
+      refreshRecordModeBtn();
+      settings.save();
+    });
+  }
 
   function hideRecToast() {
     if (!recToast) return;
@@ -2251,6 +2269,7 @@ export function initQualiaPage() {
     getCanvas:           () => recordCompositeCanvas,
     getRecordableStream: () => audio.getRecordableStream?.(),
     getCaptureMode:      () => captureMode,
+    getAutoSave:         () => autoSaveRec,
     onCaptureStart:      recordCompositeBegin,
     onCaptureEnd:        recordCompositeEnd,
     onStateChange: ({ recording, backend, sink }) => {

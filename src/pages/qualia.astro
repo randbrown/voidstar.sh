@@ -458,6 +458,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* Vertical menu variant of the popover (capture's qfx/tab list). */
     .qg-popover.qg-menu { flex-direction: column; gap: 0.3rem; min-width: 5rem; }
     .qg-menuitem { text-align: left; }
+    .qg-menu-sep { height: 1px; background: var(--border); margin: 0.1rem 0; }
     /* Glyph-only buttons (fullscreen ⛶) — nudge size + alignment so the icon
        sits on the same baseline as the text buttons beside it. */
     .btn-icon { font-size: 0.95rem; line-height: 1; padding-left: 0.5rem; padding-right: 0.5rem; }
@@ -1772,6 +1773,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <div class="qg-popover qg-menu" role="menu">
           <button type="button" class="ctrl-btn qg-menuitem" data-capture="viewport" role="menuitemradio">qfx</button>
           <button type="button" class="ctrl-btn qg-menuitem" data-capture="tab" role="menuitemradio">tab</button>
+          <div class="qg-menu-sep" role="separator"></div>
+          <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-autosave" role="menuitemcheckbox" aria-checked="true"
+                  title="Auto-save: save with a default filename and no save dialog (qfx mode). Off = choose the save location up front (the dialog leaves fullscreen on macOS).">auto-save ✓</button>
         </div>
       </div>
       <div id="topbar-corner-pinned">

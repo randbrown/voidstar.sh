@@ -365,6 +365,11 @@ export function createRecorder(opts = {}) {
   // started but before MediaRecorder ran would leave the composite frame
   // loop running indefinitely.
   let captureBegun = false;
+  // Skip the SMPTE timecode remux at teardown for this take. Set for tab
+  // captures (always) and auto-save takes — the remux restructures the MP4
+  // in a way macOS QuickTime/Preview refuses to open. The in-place duration
+  // fix still runs (safe).
+  let skipTimecode = false;
 
   function notify() {
     opts.onStateChange?.({
@@ -389,6 +394,7 @@ export function createRecorder(opts = {}) {
     // pass (capture fps is backend-dependent: 30 viewport / 60 tab).
     const wasMime    = mimeType;
     const wasBackend = backend;
+    const wasSkipTimecode = skipTimecode;
     const startedMs  = startedAt;
     const wallStart  = startedAtWall;
     sink = null;
@@ -404,6 +410,7 @@ export function createRecorder(opts = {}) {
     startedAt = 0;
     startedAtWall = null;
     backend = '';
+    skipTimecode = false;
     stopping = false;
     notify();
     if (!s) return;
@@ -446,15 +453,12 @@ export function createRecorder(opts = {}) {
               // time, so the file lands at the right spot on a Reaper /
               // Resolve / Premiere timeline.
               //
-              // SKIPPED for tab captures. The timecode pass restructures the
-              // MP4 (grows `moov`, appends an `mdat`, shifts the whole
-              // fragment run); strict players reject the result — macOS
-              // QuickTime refuses to open it. The tab path is the only macOS
-              // route that reaches this pass (viewport mode saves straight to
-              // disk via the file picker, untouched), which is exactly why
-              // "tab mode" files were unopenable. The in-place duration fix
-              // above is a safe field patch and stays.
-              if (wallStart && wasBackend !== 'tab') {
+              // SKIPPED for tab + auto-save takes. The timecode pass
+              // restructures the MP4 (grows `moov`, appends an `mdat`, shifts
+              // the whole fragment run); strict players reject the result —
+              // macOS QuickTime/Preview refuses to open it. The in-place
+              // duration fix above is a safe field patch and stays.
+              if (wallStart && !wasSkipTimecode) {
                 const fps = 30;   // composite viewport capture rate
                 blob = await addTimecodeTrack(blob, { durationMs: durMs, fps, startDate: wallStart });
               }
@@ -685,6 +689,13 @@ export function createRecorder(opts = {}) {
     // getDisplayMedia at all). For tab mode we sacrifice FSA so
     // getDisplayMedia can have the activation; the sink falls back to
     // OPFS + anchor-download.
+    // Auto-save (default): skip the showSaveFilePicker prompt entirely and
+    // stream to OPFS, then download with the default `filename` at stop. This
+    // keeps the rec button from popping the OS save dialog — which on macOS
+    // drops the page out of fullscreen mid-performance. Turn it off to choose
+    // a save location up front (viewport mode only; tab mode is always OPFS).
+    const autoSave = opts.getAutoSave?.() ?? true;
+
     let s;
     if (mode === 'tab') {
       // Tab capture FIRST — consumes activation. We then open an OPFS
@@ -703,10 +714,12 @@ export function createRecorder(opts = {}) {
         throw err;
       }
       backend = 'tab';
+      skipTimecode = true;
     } else {
-      // Viewport mode: showSaveFilePicker first to preserve activation
-      // for the picker (no getDisplayMedia is called in this path).
-      sink = await openSink(filename);
+      // Viewport mode. With auto-save we skip the file picker (skipFsa) so
+      // there's no prompt; the file streams to OPFS and downloads at stop.
+      // Without it, showSaveFilePicker runs first to preserve activation.
+      sink = await openSink(filename, { skipFsa: autoSave });
       try {
         s = buildCompositeStream();
       } catch (err) {
@@ -716,6 +729,10 @@ export function createRecorder(opts = {}) {
         throw err;
       }
       backend = 'composite';
+      // Auto-save downloads via anchor; skip the QuickTime-hostile timecode
+      // remux so the file opens in Preview/QuickTime (canvas encoding + the
+      // safe in-place duration fix only).
+      skipTimecode = autoSave;
     }
 
     writeChain = Promise.resolve();
