@@ -1908,10 +1908,12 @@ export function initQualiaPage() {
       _pauseAudioState = {
         strudel:      !!strudel?.isPlaying?.(),
         seq:          !!sequencer?.isPlaying?.(),
+        looper:       !!looper?.isPlaying?.(),
         vocoderMuted: !!vocoder?.isMuted?.(),
       };
       try { if (_pauseAudioState.strudel) strudel.stopPlayback?.(); } catch (e) { console.warn('[qualia] pause strudel stop failed:', e); }
       try { if (_pauseAudioState.seq)     sequencer.stop?.();       } catch (e) { console.warn('[qualia] pause seq stop failed:', e); }
+      try { if (_pauseAudioState.looper)  looper.stop?.();          } catch (e) { console.warn('[qualia] pause looper stop failed:', e); }
       try { if (vocoder?.isActive?.())    vocoder.setMuted?.(true); } catch (e) { console.warn('[qualia] pause vocoder mute failed:', e); }
     } else if (!on && _pauseAudioState) {
       const s = _pauseAudioState;
@@ -1919,9 +1921,11 @@ export function initQualiaPage() {
       // Strudel + sequencer have a sync bridge — starting either may
       // implicitly start the other when sync is armed. play() / stop()
       // early-return when already in the target state, so the explicit
-      // double-call is safe and idempotent.
+      // double-call is safe and idempotent. The looper re-locks its loops to
+      // the next cycle boundary on play(), staying in time with Strudel.
       try { if (s.strudel) strudel.play?.(); } catch (e) { console.warn('[qualia] resume strudel failed:', e); }
       try { if (s.seq)     sequencer.play?.(); } catch (e) { console.warn('[qualia] resume seq failed:', e); }
+      try { if (s.looper)  looper.play?.(); } catch (e) { console.warn('[qualia] resume looper failed:', e); }
       try { vocoder?.setMuted?.(s.vocoderMuted); } catch (e) { console.warn('[qualia] resume vocoder unmute failed:', e); }
     }
     btnPause.classList.toggle('active', on);
