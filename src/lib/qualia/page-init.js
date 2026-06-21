@@ -352,6 +352,7 @@ export function initQualiaPage() {
     videoPos:       videoOffset,
     captureMode,
     recAutoSave:    autoSaveRec,
+    recAutoFullscreen: autoFullscreenRec,
     splitMode,
     splitRatio,
     chron:          chron.getConfig(),
@@ -373,6 +374,10 @@ export function initQualiaPage() {
   // Auto-save (default on): qfx recordings save with a default filename and
   // no save-dialog (which on macOS leaves fullscreen). Off = choose location.
   let autoSaveRec = stored.recAutoSave !== false;
+  // Auto-fullscreen (default on): the rec button enters fullscreen first and
+  // captures qfx at full-screen resolution (one-button performance capture).
+  // qfx only — tab capture can't compose with the async fullscreen gesture.
+  let autoFullscreenRec = stored.recAutoFullscreen !== false;
   // One-shot per-recording override (set by "fullscreen + rec"), read at
   // start() and cleared after — doesn't change the user's persisted mode.
   let recOverride = null;
@@ -2182,9 +2187,15 @@ export function initQualiaPage() {
   // tooltip in sync with captureMode.
   const captureMenuItems = document.querySelectorAll('.qg-group[data-group="capture"] .qg-menuitem[data-capture]');
   const btnRecAutoSave = document.getElementById('btn-rec-autosave');
+  const btnRecAutoFs = document.getElementById('btn-rec-autofs');
   function refreshRecordModeBtn() {
     captureMenuItems.forEach(it =>
       it.classList.toggle('active', it.dataset.capture === captureMode));
+    if (btnRecAutoFs) {
+      btnRecAutoFs.classList.toggle('active', autoFullscreenRec);
+      btnRecAutoFs.setAttribute('aria-checked', autoFullscreenRec ? 'true' : 'false');
+      btnRecAutoFs.textContent = autoFullscreenRec ? 'auto-⛶ ✓' : 'auto-⛶';
+    }
     if (btnRecAutoSave) {
       btnRecAutoSave.classList.toggle('active', autoSaveRec);
       btnRecAutoSave.setAttribute('aria-checked', autoSaveRec ? 'true' : 'false');
@@ -2196,7 +2207,8 @@ export function initQualiaPage() {
         : 'Capture mode: qfx (recommended) — composites the fx + overlay + camera, no share dialog, opens in Preview. Does not include the HUD panels (use OBS / ⌘⇧5 for those).';
     }
     if (btnRecord) {
-      btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'qfx'} (Shift+R)`;
+      const fs = (autoFullscreenRec && captureMode !== 'tab') ? 'fullscreen ' : '';
+      btnRecord.title = `Record ${fs}${captureMode === 'tab' ? 'tab' : 'qfx'} (Shift+R)`;
     }
   }
   refreshRecordModeBtn();
@@ -2213,6 +2225,14 @@ export function initQualiaPage() {
     btnRecAutoSave.addEventListener('click', () => {
       if (recorder.isRecording()) return;   // locked during a take
       autoSaveRec = !autoSaveRec;
+      refreshRecordModeBtn();
+      settings.save();
+    });
+  }
+  if (btnRecAutoFs) {
+    btnRecAutoFs.addEventListener('click', () => {
+      if (recorder.isRecording()) return;   // locked during a take
+      autoFullscreenRec = !autoFullscreenRec;
       refreshRecordModeBtn();
       settings.save();
     });
@@ -2251,10 +2271,6 @@ export function initQualiaPage() {
     try { await recorder.start(); }
     catch (err) { console.warn('[recorder] fullscreen+rec failed:', err); }
     finally { recOverride = null; }
-  }
-  const btnRecFullscreen = document.getElementById('btn-rec-fullscreen');
-  if (btnRecFullscreen) {
-    btnRecFullscreen.addEventListener('click', () => { fullscreenAndRecord(); });
   }
 
   function hideRecToast() {
@@ -2320,7 +2336,8 @@ export function initQualiaPage() {
         btnRecord.classList.toggle('active-audio', recording);
         if (!recording) {
           btnRecord.textContent = 'rec';
-          btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'qfx'} (Shift+R)`;
+          const fs = (autoFullscreenRec && captureMode !== 'tab') ? 'fullscreen ' : '';
+          btnRecord.title = `Record ${fs}${captureMode === 'tab' ? 'tab' : 'qfx'} (Shift+R)`;
         } else {
           btnRecord.title = `Recording ${refreshRecToastBackend(true, backend, sink)}. Shift+R or click to stop.`;
         }
@@ -2404,6 +2421,12 @@ export function initQualiaPage() {
         if (recorder.isRecording()) {
           console.log('[recorder] stopping');
           recorder.stop();
+        } else if (autoFullscreenRec && captureMode !== 'tab') {
+          // Default: one-button fullscreen qfx capture (auto-⛶). Tab capture
+          // can't compose with the async fullscreen gesture, so it falls
+          // through to a normal start.
+          console.log('[recorder] starting… (auto-fullscreen qfx)');
+          await fullscreenAndRecord();
         } else {
           console.log('[recorder] starting…');
           await recorder.start();

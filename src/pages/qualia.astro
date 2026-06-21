@@ -1774,10 +1774,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <button type="button" class="ctrl-btn qg-menuitem" data-capture="viewport" role="menuitemradio">qfx</button>
           <button type="button" class="ctrl-btn qg-menuitem" data-capture="tab" role="menuitemradio">tab</button>
           <div class="qg-menu-sep" role="separator"></div>
+          <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-autofs" role="menuitemcheckbox" aria-checked="true"
+                  title="Auto fullscreen: the rec button enters fullscreen first and captures qfx at full-screen resolution (auto-saved, opens in Preview, no nag). Esc exits fullscreen; the take keeps going. qfx only.">auto-⛶ ✓</button>
           <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-autosave" role="menuitemcheckbox" aria-checked="true"
                   title="Auto-save: save with a default filename and no save dialog (qfx mode). Off = choose the save location up front (the dialog leaves fullscreen on macOS).">auto-save ✓</button>
-          <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-fullscreen" role="menuitem"
-                  title="Enter fullscreen, then start a qfx recording at full-screen resolution (auto-saved, opens in Preview). Esc exits fullscreen; the recording keeps going.">⛶ + rec</button>
         </div>
       </div>
       <div id="topbar-corner-pinned">
