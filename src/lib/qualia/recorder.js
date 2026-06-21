@@ -575,6 +575,7 @@ export function createRecorder(opts = {}) {
     for (const t of mixTracks) {
       try {
         const cloned = t.clone();
+        cloned.enabled = true;   // a disabled clone records silence
         s.addTrack(cloned);
         attachedAudio.push(cloned);
       } catch (err) {
@@ -735,6 +736,11 @@ export function createRecorder(opts = {}) {
       skipTimecode = autoSave;
     }
 
+    // Resume the audio mix bus (and mic) before the encoder starts so the
+    // first samples aren't dropped — a suspended mix ctx was a likely cause of
+    // intermittently-silent recordings.
+    try { await opts.resumeAudio?.(); } catch {}
+
     writeChain = Promise.resolve();
     stopping  = false;
     memChunks = [];
@@ -774,7 +780,9 @@ export function createRecorder(opts = {}) {
       `[recorder] started · backend=${backend} sink=${sink?.kind}` +
       ` mime=${mimeType || '(default)'}` +
       ` · video=${videoTracks.length} (${vDims}) audio=${audioTracks.length}` +
-      (audioTracks.length ? ` (${audioTracks.map(t => t.label || '(unlabeled)').join(', ')})` : ' [SILENT]')
+      (audioTracks.length
+        ? ` (${audioTracks.map(t => `${t.label || '(unlabeled)'}[${t.readyState}/${t.enabled ? 'on' : 'off'}/${t.muted ? 'muted' : 'live'}]`).join(', ')})`
+        : ' [SILENT]')
     );
   }
 

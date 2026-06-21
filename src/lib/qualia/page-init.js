@@ -2189,8 +2189,8 @@ export function initQualiaPage() {
     }
     if (btnRecordMode) {
       btnRecordMode.title = captureMode === 'tab'
-        ? 'Capture mode: full tab — share-picker captures the entire tab (fx, overlay, topbar, strudel, sequencer, any open panels). Audio still comes from the in-page mix bus.'
-        : 'Capture mode: qfx — composites the fx + overlay layers only, no share-picker dialog, no HUD/topbar in the file.';
+        ? 'Capture mode: full tab — share-picker captures the whole tab incl. panels. NOTE: many browsers/GPUs capture the WebGL visuals as a frozen still via tab capture, and the file may not open in macOS Preview. For panel-inclusive performance capture, use OBS or macOS ⌘⇧5 instead. Audio comes from the in-page mix bus.'
+        : 'Capture mode: qfx (recommended) — composites the fx + overlay + camera, no share dialog, opens in Preview. Does not include the HUD panels (use OBS / ⌘⇧5 for those).';
     }
     if (btnRecord) {
       btnRecord.title = `Record ${captureMode === 'tab' ? 'tab' : 'qfx'} (Shift+R)`;
@@ -2270,6 +2270,7 @@ export function initQualiaPage() {
     getRecordableStream: () => audio.getRecordableStream?.(),
     getCaptureMode:      () => captureMode,
     getAutoSave:         () => autoSaveRec,
+    resumeAudio:         () => audio.resumeRecordableMix?.(),
     onCaptureStart:      recordCompositeBegin,
     onCaptureEnd:        recordCompositeEnd,
     onStateChange: ({ recording, backend, sink }) => {

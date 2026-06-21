@@ -363,6 +363,18 @@ export function createAudio() {
     return recMixDest?.stream ?? null;
   }
 
+  // Resume the recordable-mix context (and the mic context, if any) — awaited
+  // at record start so the first audio actually reaches the encoder. A
+  // suspended mix ctx was a likely cause of intermittently-silent recordings.
+  async function resumeRecordableMix() {
+    ensureRecordableMix();
+    const ps = [];
+    if (recMixCtx?.state === 'suspended') ps.push(recMixCtx.resume().catch(() => {}));
+    const m = sources.get('mic');
+    if (m?.ctx?.state === 'suspended') ps.push(m.ctx.resume().catch(() => {}));
+    await Promise.all(ps);
+  }
+
   /** Start mic capture. Returns the chosen deviceId so callers can persist it. */
   async function start(deviceId) {
     await removeSource('mic');
@@ -726,6 +738,7 @@ export function createAudio() {
     getCurrentMicId: () => micId,
     getMicStream:    () => sources.get('mic')?.stream ?? null,
     getRecordableStream,
+    resumeRecordableMix,
     getAnalyser: () => firstSource()?.analyser ?? null,
     getCtx:      () => firstSource()?.ctx ?? null,
   };
