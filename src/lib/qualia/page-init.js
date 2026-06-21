@@ -373,6 +373,9 @@ export function initQualiaPage() {
   // Auto-save (default on): qfx recordings save with a default filename and
   // no save-dialog (which on macOS leaves fullscreen). Off = choose location.
   let autoSaveRec = stored.recAutoSave !== false;
+  // One-shot per-recording override (set by "fullscreen + rec"), read at
+  // start() and cleared after — doesn't change the user's persisted mode.
+  let recOverride = null;
 
   // ── Chron config restore ─────────────────────────────────────────────────
   // setConfig deep-merges over CHRON_DEFAULTS, so partial/legacy shapes are
@@ -2215,6 +2218,45 @@ export function initQualiaPage() {
     });
   }
 
+  // "Fullscreen + rec": enter fullscreen, let the canvas resize settle so the
+  // composite locks at full-screen resolution, then start a qfx + auto-save
+  // take (forced via recOverride — no save dialog / getDisplayMedia, so the
+  // async fullscreen wait can't expire the user gesture). The recording keeps
+  // going if you Esc out of fullscreen (the composite size is already locked).
+  function nextFrame() { return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); }
+  // Resolve once an event fires (or after a cap). Used to wait for the
+  // fullscreen transition + the window resize it triggers.
+  function awaitEvent(target, type, capMs) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; target.removeEventListener(type, finish); resolve(); };
+      target.addEventListener(type, finish);
+      setTimeout(finish, capMs);
+    });
+  }
+  async function fullscreenAndRecord() {
+    if (recorder.isRecording()) return;
+    closeAllGroupsExcept(null);              // dismiss the popover
+    if (!isFullscreen()) {
+      setFullscreen(true);
+      await awaitEvent(document, 'fullscreenchange', 800);
+      // macOS animates into fullscreen (a Space) noticeably slower than
+      // Windows; wait for the window resize the transition triggers so the
+      // composite locks at the true full-screen size, not the windowed size.
+      await awaitEvent(window, 'resize', 800);
+      try { core.refreshSize?.(); } catch {}
+      await nextFrame();
+    }
+    recOverride = { mode: 'viewport', autoSave: true };
+    try { await recorder.start(); }
+    catch (err) { console.warn('[recorder] fullscreen+rec failed:', err); }
+    finally { recOverride = null; }
+  }
+  const btnRecFullscreen = document.getElementById('btn-rec-fullscreen');
+  if (btnRecFullscreen) {
+    btnRecFullscreen.addEventListener('click', () => { fullscreenAndRecord(); });
+  }
+
   function hideRecToast() {
     if (!recToast) return;
     recToast.style.display = 'none';
@@ -2268,8 +2310,8 @@ export function initQualiaPage() {
   const recorder = createRecorder({
     getCanvas:           () => recordCompositeCanvas,
     getRecordableStream: () => audio.getRecordableStream?.(),
-    getCaptureMode:      () => captureMode,
-    getAutoSave:         () => autoSaveRec,
+    getCaptureMode:      () => recOverride?.mode ?? captureMode,
+    getAutoSave:         () => recOverride?.autoSave ?? autoSaveRec,
     resumeAudio:         () => audio.resumeRecordableMix?.(),
     onCaptureStart:      recordCompositeBegin,
     onCaptureEnd:        recordCompositeEnd,
