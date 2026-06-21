@@ -1,6 +1,6 @@
 // Looper station panel — a third programmable audio source alongside Strudel
 // and the sequencer. Captures the live audio input (pedal steel, voice, …),
-// loops it locked to the Strudel metacycle grid, and plays it back for live
+// loops it locked to the Strudel cycle grid, and plays it back for live
 // performance / screen recording, with a Reaper-style "take in lanes" display.
 //
 // Mirrors createSequencer in shape: owns its floating panel DOM, lifecycle,
@@ -22,7 +22,7 @@ const PANEL_OPEN_KEY = `${NS}.panelOpen`;
 const MASTER_KEY     = `${NS}.master`;     // overall looper output (header slider)
 const LOOP_KEY       = `${NS}.loopVol`;    // recorded-loop playback level
 const SYNC_KEY       = `${NS}.sync`;
-const METACYCLE_KEY  = `${NS}.metacycle`;
+const GRID_KEY       = `${NS}.grid`;       // per-track "cycles" default (was "metacycle")
 const OFFSET_KEY     = `${NS}.offsetMs`;
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
@@ -51,13 +51,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // Live model. Single track in v1; `track` becomes an array element in vNext.
   const model = {
     syncStrudel: lsGet(SYNC_KEY, '1') !== '0',
-    metacycle: Math.max(1, Math.min(16, parseInt(lsGet(METACYCLE_KEY, '1'), 10) || 1)),
+    // "cycles" control (the record-snap grid + waveform lane width). Reads the
+    // new key, falling back to the legacy `metacycle` key for returning users.
+    grid: Math.max(1, Math.min(16, parseInt(lsGet(GRID_KEY, lsGet(`${NS}.metacycle`, '1')), 10) || 1)),
     cps: 0.5,                       // used when sync is off / Strudel idle
     offsetMs: (() => { const v = parseInt(lsGet(OFFSET_KEY, '0'), 10); return Number.isFinite(v) ? Math.max(-200, Math.min(500, v)) : 0; })(),
     master:   num01(lsGet(MASTER_KEY, '0.9'), 0.9),   // overall looper output
     loopVol:  num01(lsGet(LOOP_KEY, '0.5'), 0.5),     // recorded-loop playback (centre, Ditto-style)
     deviceId: '',                   // '' = default input; set by the picker
-    track: null,                    // { buffer, sampleRate, loopStartBase, regionFrames, naturalSeconds, recordedCycles, cycles }
+    track: null,                    // { buffer, sampleRate, loopStartBase, regionFrames, naturalSeconds, recordedCycles, length }
   };
   // The "input" knob is a proxy for the page-level mic monitor (audio.js) — one
   // shared path, so it's never double-counted. Off by default for feedback
@@ -82,8 +84,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
         buffer: t.buffer,
         startFrame: region.startFrame,
         endFrame: region.endFrame,
-        metacycle: model.metacycle,
-        cycles: t.cycles || model.metacycle,
+        grid: model.grid,
+        length: t.length || model.grid,
         playhead01: playing ? looperAudio.getPlayhead01() : null,
       };
     },
@@ -108,7 +110,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (playing) stop();
     setStatus('arming…');
     try {
-      const res = await looperAudio.startRecording({ metacycle: model.metacycle, syncOn: syncOn(), cps: currentCps(), deviceId: model.deviceId });
+      const res = await looperAudio.startRecording({ grid: model.grid, syncOn: syncOn(), cps: currentCps(), deviceId: model.deviceId });
       recording = true;
       refreshTransport();
       refreshLooperBtn();
@@ -127,7 +129,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   async function stopRecording() {
     if (!recording) return;
     setStatus('finishing…');
-    const res = await looperAudio.stopRecording({ metacycle: model.metacycle, syncOn: syncOn() });
+    const res = await looperAudio.stopRecording({ grid: model.grid, syncOn: syncOn() });
     recording = false;
     refreshLooperBtn();
     if (!res) {
@@ -138,7 +140,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     const cyc = (res.recordedCycles != null && res.recordedCycles > 0)
       ? res.recordedCycles
-      : Math.max(model.metacycle, 1);
+      : Math.max(model.grid, 1);
     // TODO(persist): encode res.buffer → IndexedDB for vNext reload survival.
     model.track = {
       buffer: res.buffer,
@@ -147,18 +149,18 @@ export function createLooper({ audio, syncStrudel } = {}) {
       regionFrames: res.regionFrames,
       naturalSeconds: res.naturalSeconds,
       recordedCycles: cyc,
-      cycles: cyc,
+      length: cyc,
     };
     renderer.invalidate();
     refreshTransport();
-    refreshCyclesUI();
-    setStatus(`recorded · ${fmtCyc(cyc)} cyc`);
+    refreshLengthUI();
+    setStatus(`recorded · ${fmtLen(cyc)} cyc`);
     await play();
   }
 
   async function play() {
     if (!model.track) return;
-    const ok = await looperAudio.play(model.track, { metacycle: model.metacycle, syncOn: syncOn(), cps: currentCps() });
+    const ok = await looperAudio.play(model.track, { grid: model.grid, syncOn: syncOn(), cps: currentCps() });
     if (!ok) return;
     playing = true;
     refreshTransport();
@@ -183,20 +185,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
     renderer.invalidate();
     renderer.stop();
     refreshTransport();
-    refreshCyclesUI();
+    refreshLengthUI();
     refreshLooperBtn();
     setStatus('cleared');
   }
 
   // ÷2 / ×2 — change how many Strudel cycles the loop occupies (varispeed). The
   // buffer never changes; only playbackRate. Re-locks to the next boundary.
-  function setTrackCycles(v) {
+  function setTrackLength(v) {
     if (!model.track) return;
     const next = Math.max(0.5, Math.min(64, v));
-    if (next === model.track.cycles) return;
-    model.track.cycles = next;
+    if (next === model.track.length) return;
+    model.track.length = next;
     renderer.invalidate();
-    refreshCyclesUI();
+    refreshLengthUI();
     if (playing) play();
   }
 
@@ -239,10 +241,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (playing) play();          // re-lock at the next boundary with the new window
   }
 
-  function fmtCyc(v) { return v === 0.5 ? '0.5' : String(v); }
+  function fmtLen(v) { return v === 0.5 ? '0.5' : String(v); }
 
   // ── props UI ───────────────────────────────────────────────────────────
-  let cyclesIn = null;
+  let lengthIn = null;
   let _scaleBtns = null;
   let syncStatusEl = null;
   let inputVolSl = null;
@@ -298,37 +300,37 @@ export function createLooper({ audio, syncStrudel } = {}) {
       if (playing && !strudelLive()) play();
     });
 
-    // metacycle — Strudel cycles per metacycle (the record-snap grid + lane width).
-    const metaIn = document.createElement('input');
-    metaIn.type = 'number'; metaIn.step = '1'; metaIn.min = '1'; metaIn.max = '16';
-    metaIn.value = String(model.metacycle); metaIn.className = 'seq-num';
-    metaIn.addEventListener('change', () => {
-      const v = Math.max(1, Math.min(16, parseInt(metaIn.value, 10) || 1));
-      metaIn.value = String(v);
-      if (v === model.metacycle) return;
-      model.metacycle = v;
-      lsSet(METACYCLE_KEY, v);
+    // cycles — Strudel cycles per bar/phrase (the record-snap grid + lane width).
+    const gridIn = document.createElement('input');
+    gridIn.type = 'number'; gridIn.step = '1'; gridIn.min = '1'; gridIn.max = '16';
+    gridIn.value = String(model.grid); gridIn.className = 'seq-num';
+    gridIn.addEventListener('change', () => {
+      const v = Math.max(1, Math.min(16, parseInt(gridIn.value, 10) || 1));
+      gridIn.value = String(v);
+      if (v === model.grid) return;
+      model.grid = v;
+      lsSet(GRID_KEY, v);
       renderer.invalidate();
       if (playing) play();
     });
 
-    // cycles — how many Strudel cycles the recorded loop occupies (÷2/×2).
-    cyclesIn = document.createElement('input');
-    cyclesIn.type = 'number'; cyclesIn.step = '1'; cyclesIn.min = '0.5'; cyclesIn.max = '64';
-    cyclesIn.value = model.track ? fmtCyc(model.track.cycles) : '—';
-    cyclesIn.className = 'seq-num seq-num-wide';
-    cyclesIn.disabled = !model.track;
-    cyclesIn.addEventListener('change', () => {
-      let v = parseFloat(cyclesIn.value);
-      if (!Number.isFinite(v)) { refreshCyclesUI(); return; }
+    // length — how many Strudel cycles the recorded loop occupies (÷2/×2).
+    lengthIn = document.createElement('input');
+    lengthIn.type = 'number'; lengthIn.step = '1'; lengthIn.min = '0.5'; lengthIn.max = '64';
+    lengthIn.value = model.track ? fmtLen(model.track.length) : '—';
+    lengthIn.className = 'seq-num seq-num-wide';
+    lengthIn.disabled = !model.track;
+    lengthIn.addEventListener('change', () => {
+      let v = parseFloat(lengthIn.value);
+      if (!Number.isFinite(v)) { refreshLengthUI(); return; }
       v = v < 0.75 ? 0.5 : Math.round(v);
-      setTrackCycles(v);
+      setTrackLength(v);
     });
-    const cyclesBump = (delta) => {
+    const lengthBump = (delta) => {
       if (!model.track) return;
-      const cur = model.track.cycles;
+      const cur = model.track.length;
       const next = delta > 0 ? (cur < 1 ? 1 : cur + 1) : (cur > 1 ? cur - 1 : 0.5);
-      setTrackCycles(next);
+      setTrackLength(next);
     };
 
     // ÷2 / ×2 length pair — halves/doubles the cycles span (varispeed stretch).
@@ -352,9 +354,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
       return { wrap, bHalf, bDbl };
     };
     const sLen = scalePair('stretch',
-      'Stretch the loop to occupy half / double the Strudel cycles. v1 is varispeed — pitch shifts with speed.',
-      () => { if (model.track) setTrackCycles(model.track.cycles / 2); },
-      () => { if (model.track) setTrackCycles(model.track.cycles * 2); });
+      'Stretch the loop to occupy half / double the length (in cycles). v1 is varispeed — pitch shifts with speed.',
+      () => { if (model.track) setTrackLength(model.track.length / 2); },
+      () => { if (model.track) setTrackLength(model.track.length * 2); });
     _scaleBtns = { half: sLen.bHalf, dbl: sLen.bDbl };
 
     // sync strudel
@@ -406,8 +408,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
     propsEl.append(
       mk('cps', stepperFor(cpsIn, 'input'), 'Cycles per second when sync is off (Strudel\'s clock drives it when synced).'),
-      mk('metacycle', stepperFor(metaIn, 'change'), 'Strudel cycles per metacycle — set this to your bar / phrase length. It is the record-snap grid (IN→next downbeat, OUT→nearest boundary) and the width of each waveform lane.'),
-      mk('cycles', stepperFor(cyclesIn, 'change', cyclesBump), 'How many Strudel cycles the recorded loop occupies (a multiple of the metacycle).'),
+      mk('cycles', stepperFor(gridIn, 'change'), 'Strudel cycles per bar / phrase — set this to your bar length. It is the record-snap grid (IN→next downbeat, OUT→nearest boundary) and the width of each waveform lane.'),
+      mk('length', stepperFor(lengthIn, 'change', lengthBump), 'How many Strudel cycles the recorded loop occupies (a multiple of the cycles/bar value).'),
       sLen.wrap,
       mk('nudge ms', stepperFor(nudgeIn, 'change'), 'Slide the loop into the pocket. + pulls a late take earlier to compensate record latency.'),
       mk('input', inputVolSl, 'Live input monitor level (full by default).'),
@@ -415,17 +417,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
       syncWrap,
       ppWrap,
     );
-    refreshCyclesUI();
+    refreshLengthUI();
     refreshSyncStatus();
   }
 
-  function refreshCyclesUI() {
-    if (!cyclesIn) return;
-    cyclesIn.disabled = !model.track;
-    cyclesIn.value = model.track ? fmtCyc(model.track.cycles) : '—';
+  function refreshLengthUI() {
+    if (!lengthIn) return;
+    lengthIn.disabled = !model.track;
+    lengthIn.value = model.track ? fmtLen(model.track.length) : '—';
     if (_scaleBtns) {
-      _scaleBtns.half.disabled = !model.track || model.track.cycles <= 0.5;
-      _scaleBtns.dbl.disabled  = !model.track || model.track.cycles >= 64;
+      _scaleBtns.half.disabled = !model.track || model.track.length <= 0.5;
+      _scaleBtns.dbl.disabled  = !model.track || model.track.length >= 64;
     }
   }
 

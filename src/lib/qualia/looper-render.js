@@ -1,10 +1,11 @@
 // Looper waveform renderer — Reaper-style "take in lanes".
 //
 // The loop region is drawn as min/max peaks wrapped into horizontal lanes,
-// where each lane is `metacycle` Strudel cycles wide. A take that occupies more
-// cycles than one metacycle wraps onto successive lanes (top → bottom), so a
-// long pedal-steel phrase stays on-screen instead of scrolling off. A playhead
-// sweeps each lane left→right and wraps to the next, following loop playback.
+// where each lane is `grid` Strudel cycles wide (the per-track "cycles" control).
+// A take whose `length` spans more cycles than one grid wraps onto successive
+// lanes (top → bottom), so a long pedal-steel phrase stays on-screen instead of
+// scrolling off. A playhead sweeps each lane left→right and wraps to the next,
+// following loop playback.
 //
 // Two draw paths:
 //   • static   — a recorded loop region [startFrame,endFrame] of an AudioBuffer
@@ -12,8 +13,8 @@
 //   • live     — while recording: min/max peak bins accumulated so far, wrapped
 //                into lanes with a record-head at the current input position.
 //
-// Both map a musical position (cycles) → lane + x via the same metacycle width,
-// so stretching the loop visually stretches the take across more/fewer lanes.
+// Both map a musical position (cycles) → lane + x via the same grid width, so
+// stretching the loop visually stretches the take across more/fewer lanes.
 
 export function createLooperRenderer({ canvas, getView, getRecordView }) {
   const ctx2d = canvas.getContext('2d');
@@ -58,9 +59,9 @@ export function createLooperRenderer({ canvas, getView, getRecordView }) {
     ctx2d.beginPath(); ctx2d.moveTo(0, y0 + laneH * 0.5); ctx2d.lineTo(W, y0 + laneH * 0.5); ctx2d.stroke();
   }
 
-  function drawHead(cyclePos, metacycle, lanes, laneH, W, colour) {
-    const L = Math.min(lanes - 1, Math.floor(cyclePos / metacycle));
-    const x = Math.round(((cyclePos - L * metacycle) / metacycle) * W) + 0.5;
+  function drawHead(cyclePos, grid, lanes, laneH, W, colour) {
+    const L = Math.min(lanes - 1, Math.floor(cyclePos / grid));
+    const x = Math.round(((cyclePos - L * grid) / grid) * W) + 0.5;
     ctx2d.strokeStyle = colour;
     ctx2d.lineWidth = 2 * dpr;
     ctx2d.beginPath(); ctx2d.moveTo(x, L * laneH); ctx2d.lineTo(x, (L + 1) * laneH); ctx2d.stroke();
@@ -75,16 +76,16 @@ export function createLooperRenderer({ canvas, getView, getRecordView }) {
   }
 
   function drawStatic(view, W, H) {
-    const metacycle = view.metacycle > 0 ? view.metacycle : 1;
-    const cycles = view.cycles > 0 ? view.cycles : metacycle;
-    const lanes = Math.max(1, Math.ceil(cycles / metacycle - 1e-6));
+    const grid = view.grid > 0 ? view.grid : 1;
+    const length = view.length > 0 ? view.length : grid;
+    const lanes = Math.max(1, Math.ceil(length / grid - 1e-6));
     const laneH = H / lanes;
     const P = ensurePeaks(view.buffer, view.startFrame, view.endFrame);
     const cols = Math.max(1, Math.round(W));
 
     for (let L = 0; L < lanes; L++) {
-      const a = Math.min(1, (L * metacycle) / cycles);
-      const b = Math.min(1, ((L + 1) * metacycle) / cycles);
+      const a = Math.min(1, (L * grid) / length);
+      const b = Math.min(1, ((L + 1) * grid) / length);
       const y0 = L * laneH, mid = y0 + laneH * 0.5, amp = laneH * 0.45;
       laneBg(L, laneH, W);
       if (b <= a) continue;
@@ -100,25 +101,25 @@ export function createLooperRenderer({ canvas, getView, getRecordView }) {
       ctx2d.stroke();
     }
     if (view.playhead01 != null) {
-      drawHead(Math.max(0, Math.min(cycles, view.playhead01 * cycles)), metacycle, lanes, laneH, W, 'rgba(244,114,182,0.95)');
+      drawHead(Math.max(0, Math.min(length, view.playhead01 * length)), grid, lanes, laneH, W, 'rgba(244,114,182,0.95)');
     }
   }
 
   function drawLive(rv, W, H) {
-    const metacycle = rv.metacycle > 0 ? rv.metacycle : 1;
+    const grid = rv.grid > 0 ? rv.grid : 1;
     const sr = rv.sampleRate || 48000;
     const cyclesPerBin = (rv.binSamples / sr) * (rv.cps > 0 ? rv.cps : 0.5);
     const head = Math.max(0, rv.headCycle || 0);
-    const lanes = Math.max(1, Math.ceil((head + 1e-3) / metacycle));
+    const lanes = Math.max(1, Math.ceil((head + 1e-3) / grid));
     const laneH = H / lanes;
     for (let L = 0; L < lanes; L++) laneBg(L, laneH, W);
 
     // Draw each peak bin at/after the musical IN at its lane+x.
     for (let i = rv.inBin; i < rv.bins; i++) {
       const cycle = (i - rv.inBin) * cyclesPerBin;
-      if (cycle < 0 || cycle > lanes * metacycle) continue;
-      const L = Math.min(lanes - 1, Math.floor(cycle / metacycle));
-      const x = Math.round(((cycle - L * metacycle) / metacycle) * W) + 0.5;
+      if (cycle < 0 || cycle > lanes * grid) continue;
+      const L = Math.min(lanes - 1, Math.floor(cycle / grid));
+      const x = Math.round(((cycle - L * grid) / grid) * W) + 0.5;
       const y0 = L * laneH, mid = y0 + laneH * 0.5, amp = laneH * 0.45;
       ctx2d.strokeStyle = (L % 2) ? 'rgba(34,211,238,0.7)' : 'rgba(139,92,246,0.7)';
       ctx2d.beginPath();
@@ -127,7 +128,7 @@ export function createLooperRenderer({ canvas, getView, getRecordView }) {
       ctx2d.stroke();
     }
     // Bright red record-head at the current input position.
-    drawHead(head, metacycle, lanes, laneH, W, 'rgba(248,113,113,0.98)');
+    drawHead(head, grid, lanes, laneH, W, 'rgba(248,113,113,0.98)');
   }
 
   function draw() {

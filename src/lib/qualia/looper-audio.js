@@ -1,6 +1,6 @@
 // Looper capture + playback engine. Records the selected audio input into an
 // AudioBuffer with sample-accurate timing, snaps the loop region to Strudel
-// metacycle boundaries, and plays it back phase-locked to those boundaries.
+// grid boundaries, and plays it back phase-locked to those boundaries.
 //
 // Everything runs in the looper's own native AudioContext (like the mic in
 // audio.js). We deliberately do NOT reuse Tone's context: Tone wraps a
@@ -12,9 +12,10 @@
 // stays phase-aligned. This mirrors the sequencer's "durations are portable"
 // note (see sequencer.js computeAlignedStart / getSecondsUntilNextStrudelBoundary).
 //
-// Length: IN snaps to the next metacycle downbeat (preserves the prep bar);
-// OUT rounds to the NEAREST metacycle boundary so a slow Stop is discarded.
-// The trimmed loop is always an integer number of metacycles.
+// Length: IN snaps to the next grid downbeat (preserves the prep bar);
+// OUT rounds to the NEAREST grid boundary so a slow Stop is discarded.
+// The trimmed loop is always an integer number of grid units (the per-track
+// "cycles" control).
 //
 // Alignment: the captured downbeat lands later than the IN boundary by the
 // round-trip latency (output + input + acoustic + reaction). We bake a PAD of
@@ -69,7 +70,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let firstChunkAbs = null;         // precise ctx time of buffer frame 0 (worklet t0)
   let armEstimateAbs = 0;           // fallback frame-0 estimate (arm time)
   let snapIn = null;                // { cycleIn, inAbs, cps } when synced, else null
-  let recN = 1;                     // metacycle (cycles) for this take
+  let recN = 1;                     // grid (per-track "cycles") for this take
   let recCps = 0.5;                 // cps captured at record time (for unsynced lane math)
 
   // ── live record peaks (min/max per bin, grown as chunks arrive) ──
@@ -252,21 +253,21 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   // ── record ──
-  async function startRecording({ metacycle = 1, syncOn = false, cps = 0.5, deviceId = '' } = {}) {
+  async function startRecording({ grid = 1, syncOn = false, cps = 0.5, deviceId = '' } = {}) {
     if (recording) return { snapped: false };
     await ensureContext();
     await ensureCapture(deviceId);
     recChunks = []; recFrames = 0;
     firstChunkAbs = null;
     armEstimateAbs = ctx.currentTime;
-    recN = metacycle > 0 ? metacycle : 1;
+    recN = grid > 0 ? grid : 1;
     recCps = cps > 0 ? cps : 0.5;
     resetLivePeaks();
     snapIn = null;
     if (syncOn) {
       const info = syncStrudel?.getStrudelCyclePos?.();
       if (info && info.cps > 0 && typeof info.pos === 'number') {
-        const cycleIn = Math.ceil(info.pos / recN - EPS) * recN;   // next metacycle downbeat
+        const cycleIn = Math.ceil(info.pos / recN - EPS) * recN;   // next grid downbeat
         const inAbs = armEstimateAbs + (cycleIn - info.pos) / info.cps;  // absolute ctx time
         snapIn = { cycleIn, inAbs, cps: info.cps };
         recCps = info.cps;
@@ -280,18 +281,18 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Resolves to a track { buffer, sampleRate, loopStartBase, regionFrames,
   // naturalSeconds, recordedCycles } or null. The stored buffer is the loop
   // region with PAD_SEC of headroom on each side so the nudge can slide it.
-  function stopRecording({ metacycle = 1, syncOn = false } = {}) {
+  function stopRecording({ grid = 1, syncOn = false } = {}) {
     return new Promise((resolve) => {
       if (!recording) { resolve(null); return; }
-      const N = metacycle > 0 ? metacycle : 1;
+      const N = grid > 0 ? grid : 1;
       let outAbs = ctx.currentTime;
       let cycleOut = null;
       if (snapIn) {
         const info = syncStrudel?.getStrudelCyclePos?.();
         if (info && info.cps > 0 && typeof info.pos === 'number') {
           const stopAbs = ctx.currentTime;
-          cycleOut = Math.round(info.pos / N) * N;                 // NEAREST metacycle boundary
-          if (cycleOut <= snapIn.cycleIn) cycleOut = snapIn.cycleIn + N;   // ≥ one metacycle
+          cycleOut = Math.round(info.pos / N) * N;                 // NEAREST grid boundary
+          if (cycleOut <= snapIn.cycleIn) cycleOut = snapIn.cycleIn + N;   // ≥ one grid unit
           outAbs = stopAbs + (cycleOut - info.pos) / info.cps;
         }
       }
@@ -374,7 +375,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   function derivePlaybackRate(track, cps) {
-    const targetSec = track.cycles / (cps > 0 ? cps : 0.5);   // wall seconds for N cycles
+    const targetSec = track.length / (cps > 0 ? cps : 0.5);   // wall seconds for `length` cycles
     const rate = track.naturalSeconds / targetSec;
     return (rate > 0 && isFinite(rate)) ? rate : 1;
   }
@@ -395,14 +396,14 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return { startFrame, endFrame: startFrame + track.regionFrames };
   }
 
-  // Absolute rawContext time of the next metacycle boundary (≡ 0 mod N), or a
+  // Absolute rawContext time of the next grid boundary (≡ 0 mod N), or a
   // tiny lookahead when unsynced / Strudel isn't reporting a position.
-  function nextBoundaryAbs(metacycle, syncOn) {
+  function nextBoundaryAbs(grid, syncOn) {
     const now = ctx.currentTime;
     if (syncOn) {
       const info = syncStrudel?.getStrudelCyclePos?.();
       if (info && info.cps > 0 && typeof info.pos === 'number') {
-        const N = metacycle > 0 ? metacycle : 1;
+        const N = grid > 0 ? grid : 1;
         const k = Math.ceil((info.pos + START_MARGIN * info.cps) / N - EPS);
         return now + (k * N - info.pos) / info.cps;
       }
@@ -410,14 +411,14 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return now + START_MARGIN;
   }
 
-  async function play(track, { metacycle = 1, syncOn = false, cps = 0.5 } = {}) {
+  async function play(track, { grid = 1, syncOn = false, cps = 0.5 } = {}) {
     if (!track || !track.buffer) return false;
     await ensureContext();
     ensureBus();
     stopSource();
     const sr = track.sampleRate;
     const rate = derivePlaybackRate(track, cps);
-    const startAbs = nextBoundaryAbs(metacycle, syncOn);
+    const startAbs = nextBoundaryAbs(grid, syncOn);
     const startFrame = effLoopStartFrame(track);
     source = ctx.createBufferSource();
     source.buffer = track.buffer;
@@ -428,7 +429,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     source.connect(loopGain);
     source.start(startAbs, startFrame / sr);
     playStartAbs = startAbs;
-    playLoopDur = (track.regionFrames / sr) / rate;   // == track.cycles / cps
+    playLoopDur = (track.regionFrames / sr) / rate;   // == track.length / cps
     ensureAdopted();
     return true;
   }
@@ -468,7 +469,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
   // Live view for the renderer while recording: min/max peak bins (from frame
   // 0), the bin index of the musical IN, the head position in cycles, and the
-  // lane geometry (metacycle, cps).
+  // lane geometry (grid, cps).
   function getLiveView() {
     if (!recording) return { recording: false };
     const sr = ctx?.sampleRate || 48000;
@@ -481,7 +482,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       min: liveMin, max: liveMax, bins: liveBins,
       binSamples: liveBinSamples, sampleRate: sr,
       inBin: Math.floor(inFrame / Math.max(1, liveBinSamples)),
-      metacycle: recN, cps: recCps,
+      grid: recN, cps: recCps,
       headCycle,
     };
   }
