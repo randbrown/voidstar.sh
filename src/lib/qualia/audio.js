@@ -57,37 +57,67 @@ export function createAudio() {
   }
   function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
-  // Mic monitor: route the mic source to the speakers so the performer can hear
-  // their input (for the looper station). OFF by default (level 0) — enabling
-  // it on speakers can feed back, so it's a deliberate move. Session-only (not
-  // persisted) so it always starts off. One shared value drives every UI that
-  // exposes it (audio panel + looper "input" knob) via monitorListeners.
-  let monitorLevel = 0;
-  const monitorListeners = new Set();
-  function onMonitorChange(fn) { monitorListeners.add(fn); return () => monitorListeners.delete(fn); }
-  function notifyMonitor() {
-    const snap = { level: monitorLevel, available: sources.has('mic') };
-    monitorListeners.forEach(fn => { try { fn(snap); } catch {} });
+  // Live input channel: the mic/instrument input as a first-class mixer
+  // channel with VOLUME + MUTE. The fader (gated by mute) drives BOTH the
+  // speaker monitor (`monitorGain`) AND the input's level in the screen
+  // recording (its per-source gain on the recordable-mix bus), so the saved
+  // file matches what you hear. The visualizer analyser is wired PRE-fader
+  // (see start()), so reactivity follows the input whenever it's captured,
+  // independent of this fader. OFF by default (level 0) — raising it on
+  // speakers can feed back, so it's a deliberate move. Session-only (not
+  // persisted) so it always starts off/unmuted. One shared value drives every
+  // UI that exposes it (audio panel + looper "input" controls).
+  let inputLevel = 0;
+  let inputMuted = false;
+  const inputListeners = new Set();
+  function onInputChange(fn) { inputListeners.add(fn); return () => inputListeners.delete(fn); }
+  function notifyInput() {
+    const snap = { level: inputLevel, muted: inputMuted, available: sources.has('mic') };
+    inputListeners.forEach(fn => { try { fn(snap); } catch {} });
   }
+  // Effective audible/recorded level — the fader gated by mute.
+  function effInput() { return inputMuted ? 0 : inputLevel; }
+  function rampGain(param, ctxRef, target) {
+    if (!param || !ctxRef) return;
+    const t = ctxRef.currentTime;
+    try {
+      param.cancelScheduledValues(t);
+      param.linearRampToValueAtTime(target, t + 0.03);
+    } catch { try { param.value = target; } catch {} }
+  }
+  // Speakers: ramp the mic's monitorGain to the effective level.
   function applyMonitor() {
     const m = sources.get('mic');
-    if (!m?.monitorGain) return;
-    const t = m.ctx.currentTime;
-    try {
-      m.monitorGain.gain.cancelScheduledValues(t);
-      m.monitorGain.gain.linearRampToValueAtTime(monitorLevel, t + 0.03);
-    } catch { try { m.monitorGain.gain.value = monitorLevel; } catch {} }
+    if (m?.monitorGain) rampGain(m.monitorGain.gain, m.ctx, effInput());
   }
-  function setMonitorLevel(v) {
-    monitorLevel = Math.max(0, Math.min(1, Number(v) || 0));
-    // Raising the slider is a user gesture — a good moment to recover a mic
+  // Recording: ramp the mic's per-source mix gain to the effective level so
+  // the recording carries the input at the fader setting. The tap itself stays
+  // on the raw getUserMedia stream (Android-safe); only this gain follows.
+  function applyInputToMix() {
+    const tap = recMixTaps.get('mic');
+    if (tap?.gain && recMixCtx) rampGain(tap.gain.gain, recMixCtx, effInput());
+  }
+  function applyInput() { applyMonitor(); applyInputToMix(); }
+  function setInputLevel(v) {
+    inputLevel = Math.max(0, Math.min(1, Number(v) || 0));
+    // Raising the fader is a user gesture — a good moment to recover a mic
     // context that started suspended (so the monitor actually sounds).
     const m = sources.get('mic');
-    if (monitorLevel > 0 && m?.ctx?.state === 'suspended') m.ctx.resume().catch(() => {});
-    applyMonitor();
-    notifyMonitor();
+    if (effInput() > 0 && m?.ctx?.state === 'suspended') m.ctx.resume().catch(() => {});
+    applyInput();
+    notifyInput();
   }
-  function getMonitor() { return { level: monitorLevel, available: sources.has('mic') }; }
+  function setInputMuted(on) {
+    inputMuted = !!on;
+    applyInput();
+    notifyInput();
+  }
+  function getInput() { return { level: inputLevel, muted: inputMuted, available: sources.has('mic') }; }
+  // Back-compat aliases for the prior "mic monitor" API (level-only).
+  const setMonitorLevel = setInputLevel;
+  const getMonitor = () => ({ level: inputLevel, available: sources.has('mic') });
+  const onMonitorChange = onInputChange;
+  const notifyMonitor = notifyInput;
 
   // Joined description for back-compat callers that compared getSource()
   // against literal strings — 'off' | 'mic' | 'strudel' | 'mic+strudel'.
@@ -294,6 +324,9 @@ export function createAudio() {
         console.warn(`[audio] recordable-mix: could not tap source ${id}:`, err);
       }
     }
+    // The mic's mix gain follows the input fader/mute (every other source
+    // stays at unity). Apply it now so a tap built mid-session is at level.
+    applyInputToMix();
   }
 
   function detachFromRecordableMix(id) {
@@ -359,9 +392,9 @@ export function createAudio() {
     // so the input can be heard when the user enables monitoring (0 = silent by
     // default, so no feedback unless deliberately turned up).
     const micSource = ctx.createMediaStreamSource(stream);
-    micSource.connect(analyser);
+    micSource.connect(analyser);            // viz tap is PRE-fader (always reactive)
     const monitorGain = ctx.createGain();
-    monitorGain.gain.value = monitorLevel;
+    monitorGain.gain.value = effInput();
     monitorGain.__qualiaBypassMute = true;   // never silenced by the Strudel mute gate
     micSource.connect(monitorGain).connect(ctx.destination);
     const src = { ctx, analyser, ownsCtx: true, stream, micSource, monitorGain };
@@ -669,6 +702,10 @@ export function createAudio() {
     getTunables,
     onChange,
     setSourceFilter,
+    setInputLevel,
+    setInputMuted,
+    getInput,
+    onInputChange,
     setMonitorLevel,
     getMonitor,
     onMonitorChange,

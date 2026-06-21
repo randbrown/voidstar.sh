@@ -216,15 +216,25 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setMaster(model.master);
     lsSet(MASTER_KEY, model.master);
   }
-  // Proxy the page-level mic monitor (audio.js) — one shared path, no doubling.
-  // When the page mic isn't running (mix/off mode) there's no page source to
-  // monitor, so bring up the looper's own capture to hear the input.
+  // Live input is the page-level input channel (audio.js) — one shared path
+  // (volume + mute) that lands on the speakers, in the screen recording, and
+  // drives the visualizer. Raising / unmuting it ensures the page mic source is
+  // live so the input actually reaches reactivity + recording.
+  async function ensureInputLive() {
+    if (audio?.hasSource?.('mic')) return;
+    try { await audio?.start?.(model.deviceId || ''); }
+    catch (e) { console.warn('[qualia] looper input start failed:', e); }
+    refreshLooperBtn();
+  }
   function setInputVol(v) {
     const lvl = Math.max(0, Math.min(1, Number(v) || 0));
-    audio?.setMonitorLevel?.(lvl);
-    if (lvl > 0 && !audio?.hasSource?.('mic') && !looperAudio.isCapturing?.()) {
-      looperAudio.startMonitor().then(refreshLooperBtn).catch(() => {});
-    }
+    audio?.setInputLevel?.(lvl);
+    if (lvl > 0) ensureInputLive();
+  }
+  function setInputMuted(on) {
+    audio?.setInputMuted?.(!!on);
+    if (!on) ensureInputLive();
+    refreshInputMuteBtn();
   }
   function setLoopVol(v) {
     model.loopVol = Math.max(0, Math.min(1, Number(v) || 0));
@@ -248,6 +258,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   let _scaleBtns = null;
   let syncStatusEl = null;
   let inputVolSl = null;
+  let inputMuteBtn = null;
 
   function renderProps() {
     if (!propsEl) return;
@@ -393,8 +404,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
       sl.addEventListener('input', () => onInput(sl.value));
       return sl;
     };
-    inputVolSl = volSlider(audio?.getMonitor?.().level ?? 0, setInputVol,
-      'Live input monitor — hear your mic through the speakers. Shared with the audio panel\'s monitor. OFF (0) by default; raising it can feed back on speakers (fine on headphones / an interface). For zero latency use your interface\'s direct monitoring instead.');
+    inputVolSl = volSlider(audio?.getInput?.().level ?? 0, setInputVol,
+      'Live input level — your guitar / mic through the speakers AND into the screen recording at this level. Shared with the audio panel. The visualizer reacts to the input whenever it is captured (pre-fader). OFF (0) by default; raising it can feed back on speakers (fine on headphones / an interface).');
+    inputMuteBtn = document.createElement('button');
+    inputMuteBtn.type = 'button';
+    inputMuteBtn.className = 'ctrl-btn seq-mini-mute';
+    inputMuteBtn.addEventListener('click', () => setInputMuted(!(audio?.getInput?.().muted)));
+    const inputGroup = document.createElement('span');
+    inputGroup.className = 'seq-num-wrap';
+    inputGroup.append(inputVolSl, inputMuteBtn);
     const loopVolSl  = volSlider(model.loopVol, setLoopVol, 'Recorded-loop playback level — sits under the live input (50% by default, like a Ditto).');
 
     // preserve pitch — deferred seam (time-stretch not yet implemented).
@@ -412,13 +430,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
       mk('length', stepperFor(lengthIn, 'change', lengthBump), 'How many Strudel cycles the recorded loop occupies (a multiple of the cycles/bar value).'),
       sLen.wrap,
       mk('nudge ms', stepperFor(nudgeIn, 'change'), 'Slide the loop into the pocket. + pulls a late take earlier to compensate record latency.'),
-      mk('input', inputVolSl, 'Live input monitor level (full by default).'),
+      mk('input', inputGroup, 'Live input level + mute — lands on speakers + the screen recording; the visualizer reacts whenever input is captured.'),
       mk('loop', loopVolSl, 'Recorded-loop playback level (50% by default, like a Ditto).'),
       syncWrap,
       ppWrap,
     );
     refreshLengthUI();
     refreshSyncStatus();
+    refreshInputMuteBtn();
   }
 
   function refreshLengthUI() {
@@ -437,6 +456,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const ready = !!syncStrudel?.isReady?.();
     syncStatusEl.textContent = ready ? '· connected' : '· waiting for strudel';
     syncStatusEl.dataset.state = ready ? 'connected' : 'waiting';
+  }
+
+  function refreshInputMuteBtn() {
+    if (!inputMuteBtn) return;
+    const muted = !!(audio?.getInput?.().muted);
+    inputMuteBtn.classList.toggle('muted', muted);
+    inputMuteBtn.textContent = muted ? 'muted' : 'mute';
+    inputMuteBtn.title = muted ? 'Unmute live input' : 'Mute live input (speakers + recording)';
   }
 
   // ── button paint ─────────────────────────────────────────────────────────
@@ -547,7 +574,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!propsEl?.children.length) renderProps();
     renderer.resize();
     try { picker?.populate?.(model.deviceId); } catch {}
-    if (inputVolSl) inputVolSl.value = String(audio?.getMonitor?.().level ?? 0);
+    if (inputVolSl) inputVolSl.value = String(audio?.getInput?.().level ?? 0);
+    refreshInputMuteBtn();
     refreshLooperBtn();
     refreshTransport();
   }
@@ -576,9 +604,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   // Repaint topbar/state when audio.js flips the looper source on/off.
   audio?.onChange?.(() => refreshLooperBtn());
-  // Keep the "input" knob in sync with the shared page-level mic monitor (it can
-  // also be changed from the audio panel).
-  audio?.onMonitorChange?.((m) => { if (inputVolSl) inputVolSl.value = String(m.level); });
+  // Keep the "input" controls in sync with the shared page-level input channel
+  // (it can also be changed from the audio panel).
+  audio?.onInputChange?.((m) => {
+    if (inputVolSl) inputVolSl.value = String(m.level);
+    refreshInputMuteBtn();
+  });
   syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
 
   // Initial paint even while hidden so first open() shows content immediately.

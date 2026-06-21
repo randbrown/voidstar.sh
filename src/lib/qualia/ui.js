@@ -358,7 +358,7 @@ export function buildParamPanel({
  * outside the panel changes them (none currently, but symmetrical with the
  * fx panel).
  */
-export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onMonitor }) {
+export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onMonitor, onInputMute }) {
   // Preset buttons
   const presetRow = root.querySelector('[data-qp="audio-presets"]');
   if (presetRow) {
@@ -392,12 +392,14 @@ export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onM
   wire('cooldown', 'cooldown', v => parseInt(v, 10), v => `${v|0}ms`);
   wire('ema',      'ema',      parseFloat, v => `${Math.round((v - 0.05) / (0.60 - 0.05) * 100)}%`);
 
-  // Mic monitor — not a band tunable; drives the shared audio.js monitor level.
-  // 0 reads as "off". Also reflected from external changes (the looper's input
-  // knob writes the same value) via setMonitor().
+  // Live input channel — not a band tunable; drives the shared audio.js input
+  // level + mute. 0 reads as "off". Also reflected from external changes (the
+  // looper's input controls write the same channel) via setInput().
   const monitorRow = root.querySelector('[data-qp="audio-monitor"]');
   const monitorInput = monitorRow?.querySelector('input[type=range]');
   const monitorVal = monitorRow?.querySelector('.qp-val');
+  const muteBtn = monitorRow?.querySelector('[data-qp="audio-input-mute"]');
+  let _inputMuted = false;
   const fmtMonitor = (v) => (v <= 0 ? 'off' : `${Math.round(v * 100)}%`);
   if (monitorInput && monitorVal) {
     monitorInput.addEventListener('input', () => {
@@ -406,10 +408,26 @@ export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onM
       onMonitor?.(v);
     });
   }
+  function paintMute() {
+    if (!muteBtn) return;
+    muteBtn.classList.toggle('muted', _inputMuted);
+    muteBtn.textContent = _inputMuted ? 'muted' : 'mute';
+    muteBtn.title = _inputMuted ? 'Unmute live input' : 'Mute live input (speakers + recording)';
+  }
+  if (muteBtn) {
+    muteBtn.addEventListener('click', () => onInputMute?.(!_inputMuted));
+    paintMute();
+  }
+  // Back-compat: level-only sync.
   function setMonitor(level) {
     if (!monitorInput || !monitorVal) return;
     monitorInput.value = String(level);
     monitorVal.textContent = fmtMonitor(level);
+  }
+  // Full channel sync (level + mute) from the shared audio.js input channel.
+  function setInput(snap) {
+    if (snap && typeof snap.level === 'number') setMonitor(snap.level);
+    if (snap && typeof snap.muted === 'boolean') { _inputMuted = snap.muted; paintMute(); }
   }
 
   function clampToInput(input, v) {
@@ -431,5 +449,5 @@ export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onM
       b.classList.toggle('active', b.dataset.preset === name));
   }
 
-  return { setTunables, setActivePreset, setMonitor };
+  return { setTunables, setActivePreset, setMonitor, setInput };
 }

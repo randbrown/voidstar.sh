@@ -477,12 +477,14 @@ export function initQualiaPage() {
       audioPanel.setActivePreset(name);
       settings.save();
     },
-    // Mic monitor (hear the input) — shared level with the looper's input knob.
-    onMonitor: (level) => audio.setMonitorLevel(level),
+    // Live input channel (volume + mute) — shared with the looper's input
+    // controls; lands on speakers + the screen recording, drives the visualizer.
+    onMonitor: (level) => audio.setInputLevel(level),
+    onInputMute: (muted) => audio.setInputMuted(muted),
   });
-  // Keep the audio-panel monitor slider in sync when the level is changed
-  // elsewhere (the looper's input knob writes the same shared value).
-  audio.onMonitorChange?.((m) => audioPanel.setMonitor(m.level));
+  // Keep the audio-panel input controls in sync when the channel is changed
+  // elsewhere (the looper's input controls write the same shared channel).
+  audio.onInputChange?.((m) => audioPanel.setInput(m));
   if (stored.audioTunables) {
     audio.setTunables(stored.audioTunables);
     audioPanel.setTunables(stored.audioTunables);

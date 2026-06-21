@@ -1286,6 +1286,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--pink); border-color: var(--pink);
       background: rgba(244, 114, 182, 0.10);
     }
+    /* Compact inline mute for props-row channels (looper "input"). */
+    .seq-mini-mute {
+      padding: 0.02rem 0.4rem; font-size: 0.66rem; line-height: 1;
+      min-width: 4ch; text-align: center;
+    }
+    .seq-mini-mute.muted {
+      color: var(--pink); border-color: var(--pink);
+      background: rgba(244, 114, 182, 0.10);
+    }
     /* Compact gain slider in the panel header — sits next to the mute/live
        button so the source-level controls cluster together. Narrow enough
        not to crowd the play/stop/close run on phone-width viewports. */
@@ -1931,9 +1940,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <div class="qp-body">
       <div class="qp-presets" data-qp="audio-presets"></div>
-      <div class="qp-row" data-qp="audio-monitor" title="Hear your mic through the output (input monitor) — for the looper station. OFF by default: turning it up can feed back on speakers (fine on headphones / an audio interface). Shared with the looper's input knob. For zero-latency monitoring, use your interface's direct monitoring instead.">
-        <label>mic monitor<span class="qp-val">off</span></label>
+      <div class="qp-row" data-qp="audio-monitor" title="Live input level — your guitar / mic through the output AND into the screen recording at this level. The visualizer reacts whenever the input is captured (pre-fader). OFF by default: turning it up can feed back on speakers (fine on headphones / an audio interface). Shared with the looper's input controls.">
+        <label>input<span class="qp-val">off</span></label>
         <input type="range" min="0" max="1" step="0.01" value="0">
+        <button type="button" class="ctrl-btn seq-mini-mute" data-qp="audio-input-mute">mute</button>
       </div>
       <div class="qp-row" data-qp="audio-gain">
         <label>gain<span class="qp-val"></span></label>

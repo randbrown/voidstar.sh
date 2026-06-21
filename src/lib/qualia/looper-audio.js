@@ -60,7 +60,6 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let streamOwned = false;          // false when we borrowed audio.getMicStream()
   let streamDeviceId = '';
   let srcNode = null, recNode = null, sinkGain = null;
-  let monitorOut = null;            // input → speakers fallback (mix/off mode)
   let usingWorklet = false;
 
   // ── recording state ──
@@ -172,18 +171,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     streamDeviceId = want || settings.deviceId || '';
 
     srcNode = ctx.createMediaStreamSource(stream);
-    // Fallback monitor: hear the input through the speakers when the *page* mic
-    // source isn't already doing it. In mic/all mode audio.js monitors the page
-    // mic (this same stream), so we keep this gain at 0 then — exactly one
-    // audible path, never doubled. In mix/off mode there's no page mic source,
-    // so this is the only monitor. Speaker-only fan-out: it never touches the
-    // recorder or the visualizers, so it can't double-count the input either.
-    monitorOut = ctx.createGain();
-    monitorOut.gain.value = 0;
-    monitorOut.__qualiaBypassMute = true;
-    srcNode.connect(monitorOut);
-    monitorOut.connect(ctx.destination);
-    applyInputMonitor();
+    // Capture is recording-only: live-input monitoring is owned by the
+    // page-level input channel (audio.js mic source → monitorGain), so the
+    // looper never fans the input to the speakers itself — exactly one audible
+    // path, never doubled.
     // A worklet/ScriptProcessor only gets pulled if it has a live downstream;
     // route it through a silent sink so process() keeps firing.
     sinkGain = ctx.createGain();
@@ -221,21 +212,12 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     }
   }
 
-  // Drive the fallback monitor: audible only when no page mic source exists
-  // (otherwise audio.js already monitors this stream — avoid doubling).
-  function applyInputMonitor() {
-    if (!monitorOut) return;
-    const lvl = audio?.hasSource?.('mic') ? 0 : (audio?.getMonitor?.().level ?? 0);
-    ramp(monitorOut.gain, lvl);
-  }
-
   function teardownCapture() {
     try { srcNode?.disconnect(); } catch {}
     if (recNode) { try { recNode.disconnect(); } catch {}; if ('onaudioprocess' in recNode) recNode.onaudioprocess = null; }
     try { sinkGain?.disconnect(); } catch {}
-    try { monitorOut?.disconnect(); } catch {}
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
-    srcNode = recNode = sinkGain = monitorOut = null;
+    srcNode = recNode = sinkGain = null;
     stream = null; streamOwned = false;
   }
 
@@ -487,19 +469,6 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     };
   }
 
-  // Open capture purely to monitor (no recording yet) so the performer can hear
-  // themselves before the first loop — borrows the page mic if live, else opens
-  // the default input (which prompts for permission the first time).
-  async function startMonitor() {
-    if (srcNode) { applyInputMonitor(); return; }
-    await openCapture(streamDeviceId || '');
-  }
-
-  // Re-evaluate the fallback monitor when the page mic appears/disappears or the
-  // shared monitor level changes (the audio panel / looper knob write it).
-  audio?.onChange?.(() => applyInputMonitor());
-  audio?.onMonitorChange?.(() => applyInputMonitor());
-
   function dispose() {
     stop();
     teardownCapture();
@@ -515,7 +484,6 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     ensureContext,
     setInputDevice: async (id) => { if (!recording) await openCapture(id || ''); else streamDeviceId = id || ''; },
     getInputDeviceId: () => streamDeviceId,
-    startMonitor,
     startRecording, stopRecording,
     play, stop,
     setMuted, setMaster, setLoopVol,
