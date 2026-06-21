@@ -485,6 +485,9 @@ export function initQualiaPage() {
   // Keep the audio-panel input controls in sync when the channel is changed
   // elsewhere (the looper's input controls write the same shared channel).
   audio.onInputChange?.((m) => audioPanel.setInput(m));
+  // (Double-click-to-reset for every range slider is already handled by the
+  // delegated handler below; the looper's dynamic sliders now carry a default
+  // value attribute so they participate too.)
   if (stored.audioTunables) {
     audio.setTunables(stored.audioTunables);
     audioPanel.setTunables(stored.audioTunables);

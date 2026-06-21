@@ -38,6 +38,10 @@ const MIC_CONSTRAINTS = {
   echoCancellation: false,
   noiseSuppression: false,
   autoGainControl:  false,
+  // Capture stereo when the interface offers it (the looper records whatever
+  // channel count the source provides — mono stays mono). `ideal` so a
+  // mono-only input doesn't OverconstrainedError.
+  channelCount: { ideal: 2 },
   // Hint the browser toward the lowest input buffering it can manage. Chrome on
   // Windows (shared-mode WASAPI) often ignores this, but where it's honoured it
   // shaves real latency off the recording. The rest is compensated by `nudge`.
@@ -65,7 +69,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
   // ── recording state ──
   let recording = false;
-  let recChunks = [];
+  let recChans = [];                 // per-channel array of Float32 chunk arrays
+  let recChannelCount = 1;
   let recFrames = 0;
   let firstChunkAbs = null;         // precise ctx time of buffer frame 0 (worklet t0)
   let armEstimateAbs = 0;           // fallback frame-0 estimate (arm time)
@@ -148,10 +153,19 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     liveTotalFrames += chunk.length;
   }
 
-  function onChunk(chunk) {
-    recChunks.push(chunk);
-    recFrames += chunk.length;
-    foldChunkIntoLive(chunk);
+  // Accept one render quantum as an array of per-channel Float32Arrays. The
+  // channel count is fixed from the first quantum of a take; live peaks come
+  // from channel 0.
+  function onChunks(chans) {
+    if (!chans || !chans.length) return;
+    if (!recChans.length) {
+      recChannelCount = chans.length;
+      recChans = Array.from({ length: recChannelCount }, () => []);
+    }
+    const n = Math.min(chans.length, recChannelCount);
+    for (let c = 0; c < n; c++) recChans[c].push(chans[c]);
+    recFrames += chans[0].length;
+    foldChunkIntoLive(chans[0]);
   }
 
   // Open (or replace) the input capture. deviceId '' means "default input":
@@ -188,6 +202,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     sinkGain.gain.value = 0;
     sinkGain.connect(ctx.destination);
 
+    // Native channel count of this input (1 mono / 2 stereo) — drives the
+    // ScriptProcessor fallback; the worklet adopts it automatically via the
+    // default 'max' channelCountMode.
+    const inCh = Math.max(1, Math.min(2, settings.channelCount || 2));
+
     const ready = await workletReady;
     if (ready) {
       usingWorklet = true;
@@ -199,20 +218,25 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         // Control message: precise ctx time of the first armed quantum (frame 0).
         if (d && d.t0 !== undefined) { if (firstChunkAbs == null) firstChunkAbs = d.t0; return; }
         if (!recording) return;
-        onChunk(d);
+        if (d && d.chans) onChunks(d.chans);
       };
       srcNode.connect(recNode);
       recNode.connect(sinkGain);
     } else {
       usingWorklet = false;
-      recNode = ctx.createScriptProcessor(4096, 1, 1);
+      recNode = ctx.createScriptProcessor(4096, inCh, inCh);
       recNode.onaudioprocess = (e) => {
         if (!recording) return;
         if (firstChunkAbs == null) firstChunkAbs = e.playbackTime;
-        const ch = e.inputBuffer.getChannelData(0);
-        const copy = new Float32Array(ch.length);
-        copy.set(ch);
-        onChunk(copy);
+        const ib = e.inputBuffer;
+        const chans = [];
+        for (let c = 0; c < ib.numberOfChannels; c++) {
+          const ch = ib.getChannelData(c);
+          const copy = new Float32Array(ch.length);
+          copy.set(ch);
+          chans.push(copy);
+        }
+        onChunks(chans);
       };
       srcNode.connect(recNode);
       recNode.connect(sinkGain);
@@ -246,7 +270,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     if (recording) return { snapped: false };
     await ensureContext();
     await ensureCapture(deviceId);
-    recChunks = []; recFrames = 0;
+    recChans = []; recChannelCount = 1; recFrames = 0;
     firstChunkAbs = null;
     armEstimateAbs = ctx.currentTime;
     recN = grid > 0 ? grid : 1;
@@ -291,10 +315,16 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         armRecorder(false);
         const sr = ctx.sampleRate;
         const total = recFrames;
-        const all = new Float32Array(total);
-        let off = 0;
-        for (const c of recChunks) { all.set(c, off); off += c.length; }
-        recChunks = [];
+        const nch = Math.max(1, recChannelCount);
+        // Concat per-channel chunk lists into contiguous channel arrays.
+        const all = [];
+        for (let c = 0; c < nch; c++) {
+          const a = new Float32Array(total);
+          let off = 0;
+          for (const chunk of (recChans[c] || [])) { a.set(chunk, off); off += chunk.length; }
+          all.push(a);
+        }
+        recChans = [];
 
         const z = frameZeroAbs();
         const pad = Math.round(PAD_SEC * sr);
@@ -316,9 +346,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         const padEnd   = Math.min(pad, total - outFrame);
         const sliceFrom = inFrame - padStart;
         const sliceTo   = outFrame + padEnd;
-        const region = all.subarray(sliceFrom, sliceTo);
-        const buffer = ctx.createBuffer(1, region.length, sr);
-        buffer.copyToChannel(region, 0);
+        const regionLen = sliceTo - sliceFrom;
+        const buffer = ctx.createBuffer(nch, regionLen, sr);
+        for (let c = 0; c < nch; c++) buffer.copyToChannel(all[c].subarray(sliceFrom, sliceTo), c);
         const loopStartBase = padStart;   // sample idx of the musical IN within `buffer`
 
         snapIn = null;
@@ -376,18 +406,24 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return Math.max(0, Math.min(maxStart, want));
   }
 
-  // Rebuild an AudioBuffer from stored mono PCM (for IndexedDB restore). Uses
-  // the looper's own ctx; a buffer may carry its own sampleRate (BufferSource
-  // resamples on playback) so a recording survives a different-rate reload.
+  // Rebuild an AudioBuffer from stored PCM (for IndexedDB restore). Accepts a
+  // single Float32Array (legacy mono) or an array of per-channel Float32Arrays
+  // (stereo). Uses the looper's own ctx; a buffer may carry its own sampleRate
+  // (BufferSource resamples on playback) so a recording survives a
+  // different-rate reload.
   function makeBuffer(pcm, sampleRate) {
-    if (!pcm || !pcm.length) return null;
+    const chans = Array.isArray(pcm) ? pcm : (pcm ? [pcm] : null);
+    if (!chans || !chans.length || !chans[0] || !chans[0].length) return null;
     if (!ctx) {
       try { ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' }); }
       catch { return null; }
     }
-    const data = pcm instanceof Float32Array ? pcm : new Float32Array(pcm);
-    const buf = ctx.createBuffer(1, data.length, sampleRate || ctx.sampleRate);
-    buf.copyToChannel(data, 0);
+    const len = chans[0].length;
+    const buf = ctx.createBuffer(chans.length, len, sampleRate || ctx.sampleRate);
+    for (let c = 0; c < chans.length; c++) {
+      const d = chans[c] instanceof Float32Array ? chans[c] : new Float32Array(chans[c]);
+      buf.copyToChannel(d.length === len ? d : d.subarray(0, len), c);
+    }
     return buf;
   }
 
@@ -413,6 +449,19 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return now + START_MARGIN;
   }
 
+  // Loop phase 0..1 at `now + ahead`, locked so Strudel cycle ≡ 0 (mod length)
+  // is phase 0. Used by "start now" to drop in mid-cycle. 0 when unsynced / no
+  // Strudel position (so immediate start just begins at the loop head).
+  function currentPhase(length, syncOn, ahead = 0) {
+    if (!syncOn) return 0;
+    const info = syncStrudel?.getStrudelCyclePos?.();
+    if (!info || !(info.cps > 0) || typeof info.pos !== 'number') return 0;
+    const L = length > 0 ? length : 1;
+    let ph = ((info.pos + ahead * info.cps) % L) / L;
+    if (ph < 0) ph += 1;
+    return ph;
+  }
+
   // The persistent output channel for a track (gain → loopMaster), created on
   // demand and reused across play/stop. Volume + mute live here.
   function ensureChan(id) {
@@ -430,9 +479,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Lazily attach a Signalsmith stretch node to a channel (pitch-preserving
   // time-stretch). Cached on the channel; null if the library fails to load
   // (caller falls back to varispeed).
-  async function ensureStretch(c) {
+  async function ensureStretch(c, channels) {
     if (c.stretch) return c.stretch;
-    const node = await createStretchNode(ctx);
+    const node = await createStretchNode(ctx, channels);
     if (!node) return null;
     try { node.connect(c.gain); } catch {}
     c.stretch = node;
@@ -442,7 +491,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Start (or restart) one track's loop voice. Other voices keep playing — only
   // the voice for this track.id is replaced, so re-locking one loop to a new
   // boundary (length / nudge change) doesn't disturb the rest.
-  async function playVoice(track, { grid = 1, syncOn = false, cps = 0.5 } = {}) {
+  async function playVoice(track, { grid = 1, syncOn = false, cps = 0.5, immediate = false } = {}) {
     if (!track || !track.buffer || !track.id) return false;
     await ensureContext();
     ensureBus();
@@ -457,20 +506,28 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     const regionSec = track.regionFrames / sr;
     const playLoopDur = regionSec / rate;   // == track.length / cps (output seconds)
 
-    // Pitch-preserving path: feed the nudge-adjusted region into the stretch
-    // node and loop it at `rate` with no pitch shift. Scheduling `output` at the
-    // boundary lets the node compensate for its own latency. The boundary is
-    // (re)computed after the async load/feed so first-play stays aligned.
+    // When + phase to start at: the next grid boundary at the loop head
+    // (default), or — with "start now" — immediately at the current Strudel
+    // phase within the loop. Computed fresh per call (after any async load).
+    const plan = () => immediate
+      ? { when: ctx.currentTime + START_MARGIN, phase: currentPhase(track.length, syncOn, START_MARGIN) }
+      : { when: nextBoundaryAbs(grid, syncOn), phase: 0 };
+
+    // Pitch-preserving path: feed the nudge-adjusted region (all channels) into
+    // the stretch node and loop it at `rate` with no pitch shift. Scheduling
+    // `output` lets the node compensate for its own latency.
     if (track.preservePitch) {
-      const node = await ensureStretch(c);
+      const nch = track.buffer.numberOfChannels;
+      const node = await ensureStretch(c, nch);
       if (node) {
-        const region = track.buffer.getChannelData(0).slice(startFrame, startFrame + track.regionFrames);
+        const regions = [];
+        for (let ch = 0; ch < nch; ch++) regions.push(track.buffer.getChannelData(ch).slice(startFrame, startFrame + track.regionFrames));
         try {
           node.dropBuffers();
-          await node.addBuffers([region]);
-          const startAbs = nextBoundaryAbs(grid, syncOn);
-          node.schedule({ output: startAbs, active: true, input: 0, rate, semitones: 0, loopStart: 0, loopEnd: regionSec });
-          voices.set(track.id, { kind: 'stretch', playStartAbs: startAbs, playLoopDur });
+          await node.addBuffers(regions);
+          const { when, phase } = plan();   // re-read after the async load for a tight lock
+          node.schedule({ output: when, active: true, input: phase * regionSec, rate, semitones: 0, loopStart: 0, loopEnd: regionSec });
+          voices.set(track.id, { kind: 'stretch', playStartAbs: when - phase * playLoopDur, playLoopDur });
           ensureAdopted();
           return true;
         } catch (err) {
@@ -480,7 +537,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     }
 
     // Varispeed path (default): a looping BufferSource (pitch shifts with rate).
-    const startAbs = nextBoundaryAbs(grid, syncOn);
+    // Stereo buffers play natively; `offset` drops in at the current phase.
+    const { when, phase } = plan();
     const source = ctx.createBufferSource();
     source.buffer = track.buffer;
     source.loop = true;
@@ -488,8 +546,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     source.loopEnd = (startFrame + track.regionFrames) / sr;
     source.playbackRate.value = rate;
     source.connect(c.gain);
-    source.start(startAbs, startFrame / sr);
-    voices.set(track.id, { kind: 'buffer', source, playStartAbs: startAbs, playLoopDur });
+    source.start(when, (startFrame + phase * track.regionFrames) / sr);
+    voices.set(track.id, { kind: 'buffer', source, playStartAbs: when - phase * playLoopDur, playLoopDur });
     ensureAdopted();
     return true;
   }

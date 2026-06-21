@@ -23,7 +23,14 @@ const MIC_CONSTRAINTS = {
   echoCancellation: false,
   noiseSuppression: false,
   autoGainControl:  false,
+  // Capture stereo when the device offers it (so the input monitor + the
+  // recordable mix are stereo). `ideal` so mono-only inputs don't fail.
+  channelCount: { ideal: 2 },
 };
+
+const NS = 'voidstar.qualia.audio';
+function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch { return d; } }
+function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch {} }
 
 export function createAudio() {
   const frame = emptyAudioFrame();
@@ -65,10 +72,11 @@ export function createAudio() {
   // (see start()), so reactivity follows the input whenever it's captured,
   // independent of this fader. OFF by default (level 0) — raising it on
   // speakers can feed back, so it's a deliberate move. Session-only (not
-  // persisted) so it always starts off/unmuted. One shared value drives every
-  // UI that exposes it (audio panel + looper "input" controls).
-  let inputLevel = 0;
-  let inputMuted = false;
+  // persisted across reloads — the live rig wants its input level/mute to come
+  // back (raising it on speakers can still feed back; that's on the user). One
+  // shared value drives every UI that exposes it (audio panel + looper "input").
+  let inputLevel = (() => { const v = parseFloat(lsGet(`${NS}.inputLevel`, '0')); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0; })();
+  let inputMuted = lsGet(`${NS}.inputMuted`, '0') === '1';
   const inputListeners = new Set();
   function onInputChange(fn) { inputListeners.add(fn); return () => inputListeners.delete(fn); }
   function notifyInput() {
@@ -100,6 +108,7 @@ export function createAudio() {
   function applyInput() { applyMonitor(); applyInputToMix(); }
   function setInputLevel(v) {
     inputLevel = Math.max(0, Math.min(1, Number(v) || 0));
+    lsSet(`${NS}.inputLevel`, inputLevel);
     // Raising the fader is a user gesture — a good moment to recover a mic
     // context that started suspended (so the monitor actually sounds).
     const m = sources.get('mic');
@@ -109,6 +118,7 @@ export function createAudio() {
   }
   function setInputMuted(on) {
     inputMuted = !!on;
+    lsSet(`${NS}.inputMuted`, inputMuted ? '1' : '0');
     applyInput();
     notifyInput();
   }

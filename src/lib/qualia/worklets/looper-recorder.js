@@ -1,11 +1,12 @@
 // Looper input recorder — AudioWorklet processor.
 //
 // While armed (`{cmd:'start'}` / `{cmd:'stop'}` over the port) it copies each
-// input render quantum (mono — first channel) back to the main thread, where
-// looper-audio.js accumulates the Float32 chunks into an AudioBuffer. Running
-// on the audio render thread keeps capture off the main thread (which the
-// Strudel cyclist competes for) and gives sample-accurate, 128-frame quanta so
-// loop IN/OUT points can be pinned to Strudel cycle boundaries.
+// input render quantum (ALL channels — stereo when the interface provides it)
+// back to the main thread, where looper-audio.js accumulates the per-channel
+// Float32 chunks into an AudioBuffer. Running on the audio render thread keeps
+// capture off the main thread (which the Strudel cyclist competes for) and
+// gives sample-accurate, 128-frame quanta so loop IN/OUT points can be pinned
+// to Strudel cycle boundaries.
 
 class LooperRecorderProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -30,10 +31,16 @@ class LooperRecorderProcessor extends AudioWorkletProcessor {
         this.port.postMessage({ t0: currentTime });
       }
       // The host reuses the input buffer across quanta, so copy before
-      // transferring ownership to the main thread.
-      const copy = new Float32Array(ch0.length);
-      copy.set(ch0);
-      this.port.postMessage(copy, [copy.buffer]);
+      // transferring ownership to the main thread. One Float32Array per channel.
+      const chans = [];
+      const transfer = [];
+      for (let c = 0; c < input.length; c++) {
+        const copy = new Float32Array(input[c].length);
+        copy.set(input[c]);
+        chans.push(copy);
+        transfer.push(copy.buffer);
+      }
+      this.port.postMessage({ chans }, transfer);
     }
     // Keep the processor alive even when idle (returning false would let the
     // browser garbage-collect it once it has no references).

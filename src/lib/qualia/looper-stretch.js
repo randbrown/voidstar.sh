@@ -14,10 +14,11 @@
 
 let _modPromise = null;
 
-// Create one mono stretch node on the given context, or null if the library
-// fails to load (caller falls back to varispeed). The WASM module + worklet are
-// shared across nodes — the library memoises addModule per AudioContext.
-export async function createStretchNode(ctx) {
+// Create a stretch node with `channels` outputs (1 mono / 2 stereo) on the
+// given context, or null if the library fails to load (caller falls back to
+// varispeed). The WASM module + worklet are shared across nodes — the library
+// memoises addModule per AudioContext.
+export async function createStretchNode(ctx, channels = 1) {
   if (!ctx) return null;
   if (!_modPromise) {
     _modPromise = import('signalsmith-stretch')
@@ -26,8 +27,9 @@ export async function createStretchNode(ctx) {
   }
   const SignalsmithStretch = await _modPromise;
   if (typeof SignalsmithStretch !== 'function') return null;
+  const ch = Math.max(1, Math.min(2, (channels | 0) || 1));
   try {
-    return await SignalsmithStretch(ctx, { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+    return await SignalsmithStretch(ctx, { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [ch] });
   } catch (err) {
     console.warn('[qualia] signalsmith-stretch node init failed:', err);
     return null;

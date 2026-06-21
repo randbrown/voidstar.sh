@@ -21,7 +21,7 @@
 import { createLooperAudio } from './looper-audio.js';
 import { createLooperRenderer } from './looper-render.js';
 import * as loopStore from './looper-store.js';
-import { wirePicker } from './devices.js';
+import { wirePicker, getStoredDeviceId } from './devices.js';
 
 const NS = 'voidstar.qualia.looper';
 const PANEL_OPEN_KEY = `${NS}.panelOpen`;
@@ -29,6 +29,8 @@ const MASTER_KEY     = `${NS}.master`;     // overall looper output (header slid
 const SYNC_KEY       = `${NS}.sync`;
 const GRID_KEY       = `${NS}.grid`;       // default "cycles" (grid) for new tracks
 const OFFSET_KEY     = `${NS}.offsetMs`;
+const IMMEDIATE_KEY  = `${NS}.immediate`;  // "start now" (drop in mid-cycle) vs wait for boundary
+const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
 const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
@@ -80,9 +82,11 @@ function stepper(input, eventName, bumpFn) {
   wrap.append(miniBtn('−', () => bump(-1), 'Decrease'), input, miniBtn('+', () => bump(+1), 'Increase'));
   return wrap;
 }
-function volSlider(value, onInput, title) {
+function volSlider(value, onInput, title, def) {
   const sl = document.createElement('input');
   sl.type = 'range'; sl.min = '0'; sl.max = '1'; sl.step = '0.01';
+  // The `value` attribute is the defaultValue used by double-click-to-reset.
+  if (def != null) sl.setAttribute('value', String(def));
   sl.value = String(value); sl.className = 'panel-gain-slider';
   if (title) sl.title = title;
   sl.addEventListener('input', () => onInput(sl.value));
@@ -111,11 +115,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // Live model. `track` became `tracks[]` + an armed id in v2.
   const model = {
     syncStrudel: lsGet(SYNC_KEY, '1') !== '0',
+    immediate: lsGet(IMMEDIATE_KEY, '0') === '1',   // "start now" vs wait for boundary
     cps: 0.5,                       // used when sync is off / Strudel idle
     offsetMs: (() => { const v = parseInt(lsGet(OFFSET_KEY, '0'), 10); return Number.isFinite(v) ? Math.max(-200, Math.min(500, v)) : 0; })(),
     master:   num01(lsGet(MASTER_KEY, '0.9'), 0.9),   // overall looper output
     gridDefault: defaultGrid,       // "cycles" each new track starts with
-    deviceId: '',                   // '' = default input; set by the picker
+    deviceId: getStoredDeviceId('looperInput') || '',   // remembered input device
     tracks: [],                     // Track[] — see makeTrack()
     armedTrackId: null,             // the one track that record targets
   };
@@ -187,9 +192,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const _dirty = new Set();
   let _persistTimer = null;
   function toRecord(t) {
+    // Store every channel (stereo when recorded so) — array of Float32Array.
+    const pcm = [];
+    for (let c = 0; c < t.buffer.numberOfChannels; c++) pcm.push(new Float32Array(t.buffer.getChannelData(c)));
     return {
       id: t.id, order: t.order,
-      pcm: new Float32Array(t.buffer.getChannelData(0)),
+      pcm,
       sampleRate: t.sampleRate, regionFrames: t.regionFrames,
       loopStartBase: t.loopStartBase, naturalSeconds: t.naturalSeconds,
       recordedCycles: t.recordedCycles,
@@ -317,7 +325,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // Play (or re-lock) one track's voice.
   async function playVoice(track) {
     if (!track || !track.buffer) return;
-    await looperAudio.playVoice(track, { grid: track.grid, syncOn: syncOn(), cps: currentCps() });
+    await looperAudio.playVoice(track, { grid: track.grid, syncOn: syncOn(), cps: currentCps(), immediate: model.immediate });
     renderers.get(track.id)?.start();
     refreshTransport();
     refreshLooperBtn();
@@ -328,7 +336,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const withAudio = model.tracks.filter(t => t.buffer);
     if (!withAudio.length) return;
     for (const t of withAudio) {
-      await looperAudio.playVoice(t, { grid: t.grid, syncOn: syncOn(), cps: currentCps() });
+      await looperAudio.playVoice(t, { grid: t.grid, syncOn: syncOn(), cps: currentCps(), immediate: model.immediate });
     }
     syncRenderers();
     refreshTransport();
@@ -640,7 +648,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // row 3 — volume · preserve-pitch
     const r3 = document.createElement('div');
     r3.className = 'looper-track-row';
-    const volSl = volSlider(track.volume, (v) => setTrackVolume(track.id, v), 'Track playback volume');
+    const volSl = volSlider(track.volume, (v) => setTrackVolume(track.id, v), 'Track playback volume (double-click to reset)', 0.5);
     const ppBtn = document.createElement('button');
     ppBtn.type = 'button'; ppBtn.className = 'ctrl-btn looper-pp';
     ppBtn.addEventListener('click', () => setTrackPreserve(track.id, !track.preservePitch));
@@ -678,7 +686,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     nudgeIn.addEventListener('change', () => { setOffsetMs(nudgeIn.value); nudgeIn.value = String(model.offsetMs); });
 
     inputVolSl = volSlider(audio?.getInput?.().level ?? 0, setInputVol,
-      'Live input level — your guitar / mic through the speakers AND into the screen recording at this level. Shared with the audio panel. The visualizer reacts to the input whenever it is captured (pre-fader). OFF (0) by default; raising it can feed back on speakers (fine on headphones / an interface).');
+      'Live input level — your guitar / mic through the speakers AND into the screen recording at this level. Shared with the audio panel. The visualizer reacts to the input whenever it is captured (pre-fader). Raising it can feed back on speakers (fine on headphones / an interface). Double-click to reset.',
+      INPUT_DEFAULT);
     inputMuteBtn = miniBtn('mute', () => setInputMuted(!(audio?.getInput?.().muted)));
     inputMuteBtn.classList.add('seq-mini-mute');
     const inputGroup = document.createElement('span'); inputGroup.className = 'seq-num-wrap';
@@ -699,11 +708,26 @@ export function createLooper({ audio, syncStrudel } = {}) {
     syncStatusEl = document.createElement('span'); syncStatusEl.className = 'seq-sync-status';
     syncWrap.append(syncCb, syncLabel, syncStatusEl);
 
+    // "start now" — drop in immediately at the current Strudel phase instead of
+    // waiting for the next cycle block to come round to the loop head.
+    const immCb = document.createElement('input');
+    immCb.type = 'checkbox'; immCb.checked = !!model.immediate;
+    immCb.addEventListener('change', () => {
+      model.immediate = !!immCb.checked;
+      lsSet(IMMEDIATE_KEY, model.immediate ? '1' : '0');
+    });
+    const immWrap = document.createElement('label');
+    immWrap.className = 'seq-prop seq-prop-check';
+    immWrap.title = 'Play starts immediately at the current position within the Strudel cycle, rather than waiting for the next block of cycles to start at the loop head.';
+    const immLabel = document.createElement('span'); immLabel.className = 'seq-prop-label'; immLabel.textContent = 'start now';
+    immWrap.append(immCb, immLabel);
+
     propsEl.append(
       mk('cps', stepper(cpsIn, 'input'), 'Cycles per second when sync is off (Strudel\'s clock drives it when synced).'),
       mk('nudge ms', stepper(nudgeIn, 'change'), 'Slide all loops into the pocket. + pulls a late take earlier to compensate record latency.'),
       mk('input', inputGroup, 'Live input level + mute — lands on speakers + the screen recording; the visualizer reacts whenever input is captured.'),
       syncWrap,
+      immWrap,
     );
     refreshSyncStatus();
     refreshInputMuteBtn();
@@ -877,8 +901,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!propsEl?.children.length) renderProps();
     for (const r of renderers.values()) r.resize();
     try { picker?.populate?.(model.deviceId); } catch {}
-    if (inputVolSl) inputVolSl.value = String(audio?.getInput?.().level ?? 0);
+    const inp = audio?.getInput?.() || { level: 0, muted: false };
+    if (inputVolSl) inputVolSl.value = String(inp.level);
     refreshInputMuteBtn();
+    // Resume live-input monitoring on open (a user gesture) if it was left up —
+    // so a remembered input level/device comes back without a manual nudge.
+    if (inp.level > 0 && !inp.muted && !audio?.hasSource?.('mic')) ensureInputLive();
     refreshLooperBtn();
     refreshTransport();
   }
