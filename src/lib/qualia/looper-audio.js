@@ -32,6 +32,7 @@
 // Vite would otherwise inline it as a data: URL, which addModule() can't load
 // reliably across browsers.
 import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
+import { createStretchNode } from './looper-stretch.js';
 
 const MIC_CONSTRAINTS = {
   echoCancellation: false,
@@ -79,13 +80,20 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let liveTotalFrames = 0;
 
   // ── playback graph (multi-voice) ──
-  //   each track:  bufferSource → trackGain (vol × mute) → loopMaster (master × mute)
+  //   each track:  bufferSource | stretchNode → chan.gain (vol × mute) → loopMaster (master × mute)
   //   loopMaster → destination + analyser('looper')
   // Only recorded loops run through the looper. Live-input monitoring +
   // recording are a page-level concern (the audio.js 'mic' input channel), so
   // the input is never routed here and can't be double-counted.
+  //
+  // A per-track CHANNEL (chans) is persistent for the track's life: its gain
+  // (volume × mute) and optional Signalsmith stretch node survive play/stop, so
+  // volume/mute work whether or not the track is currently looping and a stretch
+  // node isn't re-created on every re-lock. A VOICE (voices) is the transient
+  // playback: the live bufferSource (varispeed) or the active stretch schedule.
   let loopMaster = null, analyser = null;
-  const voices = new Map();         // trackId -> { source, gain, vol, muted, playStartAbs, playLoopDur }
+  const chans = new Map();          // trackId -> { gain, stretch, vol, muted }
+  const voices = new Map();         // trackId -> { kind: 'buffer'|'stretch', source?, playStartAbs, playLoopDur }
   let _muted = false;               // header master mute (all loops)
   let _master = 0.9;                // overall looper output level
   let _adopted = false;             // 'looper' registered with audio.js
@@ -390,6 +398,32 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return now + START_MARGIN;
   }
 
+  // The persistent output channel for a track (gain → loopMaster), created on
+  // demand and reused across play/stop. Volume + mute live here.
+  function ensureChan(id) {
+    let c = chans.get(id);
+    if (!c) {
+      const gain = ctx.createGain();
+      gain.gain.value = 1;
+      gain.connect(loopMaster);
+      c = { gain, stretch: null, vol: 0.5, muted: false };
+      chans.set(id, c);
+    }
+    return c;
+  }
+
+  // Lazily attach a Signalsmith stretch node to a channel (pitch-preserving
+  // time-stretch). Cached on the channel; null if the library fails to load
+  // (caller falls back to varispeed).
+  async function ensureStretch(c) {
+    if (c.stretch) return c.stretch;
+    const node = await createStretchNode(ctx);
+    if (!node) return null;
+    try { node.connect(c.gain); } catch {}
+    c.stretch = node;
+    return node;
+  }
+
   // Start (or restart) one track's loop voice. Other voices keep playing — only
   // the voice for this track.id is replaced, so re-locking one loop to a new
   // boundary (length / nudge change) doesn't disturb the rest.
@@ -398,28 +432,49 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     await ensureContext();
     ensureBus();
     stopVoice(track.id);
+    const c = ensureChan(track.id);
+    c.vol = clamp01(track.volume == null ? 0.5 : track.volume);
+    c.muted = !!track.muted;
+    c.gain.gain.value = c.muted ? 0 : c.vol;
     const sr = track.sampleRate;
     const rate = derivePlaybackRate(track, cps);
-    const startAbs = nextBoundaryAbs(grid, syncOn);
     const startFrame = effLoopStartFrame(track);
-    const vol = clamp01(track.volume == null ? 0.5 : track.volume);
-    const muted = !!track.muted;
-    const gain = ctx.createGain();
-    gain.gain.value = muted ? 0 : vol;
-    gain.connect(loopMaster);
+    const regionSec = track.regionFrames / sr;
+    const playLoopDur = regionSec / rate;   // == track.length / cps (output seconds)
+
+    // Pitch-preserving path: feed the nudge-adjusted region into the stretch
+    // node and loop it at `rate` with no pitch shift. Scheduling `output` at the
+    // boundary lets the node compensate for its own latency. The boundary is
+    // (re)computed after the async load/feed so first-play stays aligned.
+    if (track.preservePitch) {
+      const node = await ensureStretch(c);
+      if (node) {
+        const region = track.buffer.getChannelData(0).slice(startFrame, startFrame + track.regionFrames);
+        try {
+          node.dropBuffers();
+          await node.addBuffers([region]);
+          const startAbs = nextBoundaryAbs(grid, syncOn);
+          node.schedule({ output: startAbs, active: true, input: 0, rate, semitones: 0, loopStart: 0, loopEnd: regionSec });
+          voices.set(track.id, { kind: 'stretch', playStartAbs: startAbs, playLoopDur });
+          ensureAdopted();
+          return true;
+        } catch (err) {
+          console.warn('[qualia] looper stretch playback failed; varispeed fallback:', err);
+        }
+      }
+    }
+
+    // Varispeed path (default): a looping BufferSource (pitch shifts with rate).
+    const startAbs = nextBoundaryAbs(grid, syncOn);
     const source = ctx.createBufferSource();
     source.buffer = track.buffer;
     source.loop = true;
     source.loopStart = startFrame / sr;
     source.loopEnd = (startFrame + track.regionFrames) / sr;
     source.playbackRate.value = rate;
-    source.connect(gain);
+    source.connect(c.gain);
     source.start(startAbs, startFrame / sr);
-    voices.set(track.id, {
-      source, gain, vol, muted,
-      playStartAbs: startAbs,
-      playLoopDur: (track.regionFrames / sr) / rate,   // == track.length / cps
-    });
+    voices.set(track.id, { kind: 'buffer', source, playStartAbs: startAbs, playLoopDur });
     ensureAdopted();
     return true;
   }
@@ -427,14 +482,35 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   function stopVoice(id) {
     const v = voices.get(id);
     if (!v) return;
-    try { v.source.stop(); } catch {}
-    try { v.source.disconnect(); } catch {}
-    try { v.gain.disconnect(); } catch {}
+    if (v.kind === 'buffer' && v.source) {
+      try { v.source.stop(); } catch {}
+      try { v.source.disconnect(); } catch {}
+    } else if (v.kind === 'stretch') {
+      // Keep the cached stretch node; just stop processing.
+      try { chans.get(id)?.stretch?.stop(); } catch {}
+    }
     voices.delete(id);
     maybeRelease();
   }
 
   function stopAll() {
+    for (const id of Array.from(voices.keys())) stopVoice(id);
+  }
+
+  // Tear down a track's whole channel (gain + stretch node) — on delete.
+  function removeTrack(id) {
+    stopVoice(id);
+    const c = chans.get(id);
+    if (c) {
+      try { c.stretch?.stop?.(); } catch {}
+      try { c.stretch?.disconnect?.(); } catch {}
+      try { c.gain.disconnect(); } catch {}
+      chans.delete(id);
+    }
+  }
+
+  function removeAll() {
+    for (const id of Array.from(chans.keys())) removeTrack(id);
     for (const id of Array.from(voices.keys())) stopVoice(id);
   }
 
@@ -456,19 +532,21 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Header master (all loops) — volume + mute on loopMaster.
   function setMuted(on) { _muted = !!on; if (loopMaster) ramp(loopMaster.gain, _muted ? 0 : _master); }
   function setMaster(v)  { _master = clamp01(v); if (loopMaster && !_muted) ramp(loopMaster.gain, _master); }
-  // Per-track volume + mute — operate on the live voice if the track is playing
-  // (otherwise the model holds the value and playVoice applies it on next play).
+  // Per-track volume + mute — operate on the persistent channel gain, so they
+  // work whether or not the track is currently playing. Before a track has ever
+  // played there's no channel yet; the model holds the value and playVoice
+  // applies it on next play.
   function setTrackVolume(id, v) {
-    const voice = voices.get(id);
-    if (!voice) return;
-    voice.vol = clamp01(v);
-    if (!voice.muted) ramp(voice.gain.gain, voice.vol);
+    const c = chans.get(id);
+    if (!c) return;
+    c.vol = clamp01(v);
+    if (!c.muted) ramp(c.gain.gain, c.vol);
   }
   function setTrackMuted(id, on) {
-    const voice = voices.get(id);
-    if (!voice) return;
-    voice.muted = !!on;
-    ramp(voice.gain.gain, voice.muted ? 0 : voice.vol);
+    const c = chans.get(id);
+    if (!c) return;
+    c.muted = !!on;
+    ramp(c.gain.gain, c.muted ? 0 : c.vol);
   }
   function setOffsetMs(v) { _offsetMs = Number(v) || 0; }
   function getOffsetMs() { return _offsetMs; }
@@ -504,7 +582,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   function dispose() {
-    stopAll();
+    removeAll();
     teardownCapture();
     if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
     try { loopMaster?.disconnect(); } catch {}
@@ -519,7 +597,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     setInputDevice: async (id) => { if (!recording) await openCapture(id || ''); else streamDeviceId = id || ''; },
     getInputDeviceId: () => streamDeviceId,
     startRecording, stopRecording,
-    playVoice, stopVoice, stopAll,
+    playVoice, stopVoice, stopAll, removeTrack, removeAll,
     setMuted, setMaster,
     setTrackVolume, setTrackMuted,
     setOffsetMs, getOffsetMs,

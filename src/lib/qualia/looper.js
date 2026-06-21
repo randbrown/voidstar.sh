@@ -298,8 +298,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
     renderers.get(id)?.invalidate();
     if (looperAudio.isVoicePlaying(id)) playVoice(t);
   }
+  // Toggle pitch-preserving time-stretch for a track. Re-locks the voice so the
+  // varispeed ⇄ stretch swap takes effect seamlessly (others keep playing).
+  function setTrackPreserve(id, on) {
+    const t = getTrack(id);
+    if (!t) return;
+    t.preservePitch = !!on;
+    refreshTrackRow(t);
+    if (looperAudio.isVoicePlaying(id)) playVoice(t);
+  }
   function deleteTrack(id) {
-    looperAudio.stopVoice(id);
+    looperAudio.removeTrack(id);
     renderers.get(id)?.dispose();
     renderers.delete(id);
     model.tracks = model.tracks.filter(t => t.id !== id);
@@ -315,7 +324,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     setStatus('deleted');
   }
   function clearAll() {
-    looperAudio.stopAll();
+    looperAudio.removeAll();
     for (const r of renderers.values()) r.dispose();
     renderers.clear();
     model.tracks = [];
@@ -388,6 +397,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     rowEls.clear();
     tracksEl.innerHTML = '';
     model.tracks.forEach((t, i) => tracksEl.append(buildRow(t, i)));
+    model.tracks.forEach((t) => refreshTrackRow(t));
 
     const addWrap = document.createElement('div');
     addWrap.className = 'looper-add';
@@ -456,11 +466,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
               mk('length', lengthStep, 'How many cycles the loop occupies (a multiple of cycles).'),
               mk('stretch', stretchGrp, 'Halve / double the length. Varispeed — pitch shifts with speed.'));
 
-    // row 3 — volume
+    // row 3 — volume · preserve-pitch
     const r3 = document.createElement('div');
     r3.className = 'looper-track-row';
     const volSl = volSlider(track.volume, (v) => setTrackVolume(track.id, v), 'Track playback volume');
-    r3.append(mk('vol', volSl));
+    const ppBtn = document.createElement('button');
+    ppBtn.type = 'button'; ppBtn.className = 'ctrl-btn looper-pp';
+    ppBtn.addEventListener('click', () => setTrackPreserve(track.id, !track.preservePitch));
+    r3.append(mk('vol', volSl), mk('pitch', ppBtn, 'Stretch mode: "vari" = varispeed (pitch follows speed); "keep" = pitch-preserving time-stretch (Signalsmith).'));
 
     head.append(r1, r2, r3);
 
@@ -475,7 +488,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       getRecordView: () => (recording && model.armedTrackId === track.id) ? looperAudio.getLiveView() : { recording: false },
     });
     renderers.set(track.id, renderer);
-    rowEls.set(track.id, { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn });
+    rowEls.set(track.id, { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn, ppBtn });
 
     return row;
   }
@@ -537,6 +550,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     el.muteBtn.title = track.muted ? 'Unmute this track' : 'Mute this track (keeps looping in time)';
     el.gridIn.value = String(track.grid);
     if (el.volSl) el.volSl.value = String(track.volume);
+    if (el.ppBtn) {
+      el.ppBtn.classList.toggle('active', !!track.preservePitch);
+      el.ppBtn.textContent = track.preservePitch ? 'keep' : 'vari';
+    }
   }
   function refreshArmIndicators() {
     for (const [id, el] of rowEls) {
