@@ -169,7 +169,7 @@
 }
 
 /* Amber phosphor variant — same CRT, warm tube. */
-[data-theme="phosphor-amber"] {
+[data-theme="amber"] {
   --void:        #0a0700;
   --void-2:      #120c00;
   --surface:     #140d00;
@@ -343,11 +343,11 @@
   --code-filter:   grayscale(1) brightness(1.1) contrast(1.1);
 }
 
-/* ---- Stained Glass (Cindy Lynn's leaded jewel glass — Randyland2) --------- *
+/* ---- Glass (Cindy Lynn's leaded jewel glass — Randyland2) ----------------- *
    Jewel panes glowing against near-black lead came: ruby, cobalt, amethyst,
    emerald, amber gold. Sharp small radii (cut panes), bloom up (light through
    glass). See docs/agent-reference.md §2/§5 — stained glass as structure.     */
-[data-theme="stained-glass"] {
+[data-theme="glass"] {
   --void:        #0b0609;
   --void-2:      #130a12;
   --surface:     #180d18;
@@ -694,12 +694,12 @@ body::before {
    get the classic ═══ double-rule frame with square corners; title bars carry
    a "> " prompt and a blinking block cursor; the scanline layer flickers.
    ──────────────────────────────────────────────────────────────────────── */
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .btn,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .start-btn {
+:is([data-theme="phosphor"], [data-theme="amber"]) .ctrl-btn,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-toggle,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-preset,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-tab,
+:is([data-theme="phosphor"], [data-theme="amber"]) .btn,
+:is([data-theme="phosphor"], [data-theme="amber"]) .start-btn {
   background: transparent !important;
   border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent) !important;
   border-radius: 0 !important;
@@ -710,47 +710,47 @@ body::before {
   transition: none;
 }
 /* [ bracketed ] labels — skipped on <select> (pseudos don't render there). */
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn:not(select)::before,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle::before,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset::before,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab::before { content: "["; opacity: 0.7; }
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn:not(select)::after,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle::after,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset::after,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab::after { content: "]"; opacity: 0.7; }
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn:hover,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle:hover,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset:hover,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab:hover,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .btn:hover,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .ctrl-btn.active,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-toggle.active,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-preset.active,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tab.active {
+:is([data-theme="phosphor"], [data-theme="amber"]) .ctrl-btn:not(select)::before,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-toggle::before,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-preset::before,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-tab::before { content: "["; opacity: 0.7; }
+:is([data-theme="phosphor"], [data-theme="amber"]) .ctrl-btn:not(select)::after,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-toggle::after,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-preset::after,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-tab::after { content: "]"; opacity: 0.7; }
+:is([data-theme="phosphor"], [data-theme="amber"]) .ctrl-btn:hover,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-toggle:hover,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-preset:hover,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-tab:hover,
+:is([data-theme="phosphor"], [data-theme="amber"]) .btn:hover,
+:is([data-theme="phosphor"], [data-theme="amber"]) .ctrl-btn.active,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-toggle.active,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-preset.active,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-tab.active {
   background: var(--accent) !important;
   color: var(--void) !important;
   border-color: var(--accent) !important;
   text-shadow: none;
 }
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-card,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) #topbar,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) #audio-panel,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-tabs,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .post-card,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .video-card,
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) #cycle-mgr {
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-card,
+:is([data-theme="phosphor"], [data-theme="amber"]) #topbar,
+:is([data-theme="phosphor"], [data-theme="amber"]) #audio-panel,
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-tabs,
+:is([data-theme="phosphor"], [data-theme="amber"]) .post-card,
+:is([data-theme="phosphor"], [data-theme="amber"]) .video-card,
+:is([data-theme="phosphor"], [data-theme="amber"]) #cycle-mgr {
   border: 3px double var(--border-2) !important;
   border-radius: 0 !important;
   box-shadow: inset 0 0 24px color-mix(in srgb, var(--accent) 6%, transparent) !important;
 }
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-card > .qp-head {
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-card > .qp-head {
   border-bottom: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent) !important;
 }
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-head .qp-title::before { content: "> "; }
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-head .qp-title::after {
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-head .qp-title::before { content: "> "; }
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-head .qp-title::after {
   content: "_"; animation: vs-cursor-blink 1.1s steps(1) infinite;
 }
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) body::after { animation: vs-crt-flicker 7s infinite; }
+:is([data-theme="phosphor"], [data-theme="amber"]) body::after { animation: vs-crt-flicker 7s infinite; }
 
 /* ────────────────────────────────────────────────────────────────────────
    Tape — warm analog hardware. Controls are chunky moulded-plastic keys with
@@ -903,7 +903,7 @@ body::before {
 }
 
 /* ────────────────────────────────────────────────────────────────────────
-   Stained Glass — leaded jewel panes. Controls are cut gems set in near-black
+   Glass — leaded jewel panes. Controls are cut gems set in near-black
    came; panels carry an actual leaded grid (repeating came lines) over a
    backlit jewel wash; headers sweep ruby→cobalt→amber behind white type.
    ──────────────────────────────────────────────────────────────────────── */
@@ -915,12 +915,12 @@ body::before {
               and saturated, and the label flips to dark for high contrast.
    The jump in lightness + the warm highlight (not just a hue change) is what
    makes active unmistakable against inactive. */
-[data-theme="stained-glass"] .btn,
-[data-theme="stained-glass"] .ctrl-btn,
-[data-theme="stained-glass"] .qp-toggle,
-[data-theme="stained-glass"] .qp-preset,
-[data-theme="stained-glass"] .qp-tab,
-[data-theme="stained-glass"] .start-btn {
+[data-theme="glass"] .btn,
+[data-theme="glass"] .ctrl-btn,
+[data-theme="glass"] .qp-toggle,
+[data-theme="glass"] .qp-preset,
+[data-theme="glass"] .qp-tab,
+[data-theme="glass"] .start-btn {
   background: linear-gradient(145deg,
     color-mix(in srgb, var(--accent) 24%, #0b0609),
     color-mix(in srgb, var(--cyan) 20%, #0b0609)) !important;
@@ -931,12 +931,12 @@ body::before {
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     inset 0 0 7px rgba(0, 0, 0, 0.65) !important;
 }
-[data-theme="stained-glass"] .ctrl-btn:hover,
-[data-theme="stained-glass"] .qp-toggle:hover,
-[data-theme="stained-glass"] .qp-preset:hover,
-[data-theme="stained-glass"] .qp-tab:hover,
-[data-theme="stained-glass"] .btn:hover,
-[data-theme="stained-glass"] .start-btn:hover {
+[data-theme="glass"] .ctrl-btn:hover,
+[data-theme="glass"] .qp-toggle:hover,
+[data-theme="glass"] .qp-preset:hover,
+[data-theme="glass"] .qp-tab:hover,
+[data-theme="glass"] .btn:hover,
+[data-theme="glass"] .start-btn:hover {
   background:
     radial-gradient(130% 95% at 28% -10%,
       rgba(255, 248, 224, 0.4), transparent 55%),
@@ -948,14 +948,14 @@ body::before {
     inset 0 0 9px color-mix(in srgb, var(--accent) 40%, transparent),
     0 0 12px var(--accent-glow) !important;
 }
-[data-theme="stained-glass"] .ctrl-btn.active,
-[data-theme="stained-glass"] .qp-toggle.active,
-[data-theme="stained-glass"] .qp-preset.active,
-[data-theme="stained-glass"] .qp-tab.active,
-[data-theme="stained-glass"] .ctrl-btn.active:hover,
-[data-theme="stained-glass"] .qp-toggle.active:hover,
-[data-theme="stained-glass"] .qp-preset.active:hover,
-[data-theme="stained-glass"] .qp-tab.active:hover {
+[data-theme="glass"] .ctrl-btn.active,
+[data-theme="glass"] .qp-toggle.active,
+[data-theme="glass"] .qp-preset.active,
+[data-theme="glass"] .qp-tab.active,
+[data-theme="glass"] .ctrl-btn.active:hover,
+[data-theme="glass"] .qp-toggle.active:hover,
+[data-theme="glass"] .qp-preset.active:hover,
+[data-theme="glass"] .qp-tab.active:hover {
   background:
     radial-gradient(135% 110% at 26% -18%,
       rgba(255, 251, 235, 0.95),
@@ -972,13 +972,13 @@ body::before {
     0 0 18px var(--pink-glow),
     0 0 30px color-mix(in srgb, var(--amber) 60%, transparent) !important;
 }
-[data-theme="stained-glass"] .qp-card,
-[data-theme="stained-glass"] #topbar,
-[data-theme="stained-glass"] #audio-panel,
-[data-theme="stained-glass"] .qp-tabs,
-[data-theme="stained-glass"] .post-card,
-[data-theme="stained-glass"] .video-card,
-[data-theme="stained-glass"] #cycle-mgr {
+[data-theme="glass"] .qp-card,
+[data-theme="glass"] #topbar,
+[data-theme="glass"] #audio-panel,
+[data-theme="glass"] .qp-tabs,
+[data-theme="glass"] .post-card,
+[data-theme="glass"] .video-card,
+[data-theme="glass"] #cycle-mgr {
   background-image:
     repeating-linear-gradient(0deg, transparent 0 37px, rgba(11, 6, 9, 0.55) 37px 40px),
     repeating-linear-gradient(90deg, transparent 0 37px, rgba(11, 6, 9, 0.55) 37px 40px),
@@ -991,14 +991,14 @@ body::before {
     inset 0 0 34px color-mix(in srgb, var(--accent) 22%, transparent),
     0 0 22px var(--accent-glow) !important;
 }
-[data-theme="stained-glass"] .qp-card > .qp-head {
+[data-theme="glass"] .qp-card > .qp-head {
   background: linear-gradient(90deg, var(--accent), var(--pink), var(--amber)) !important;
   color: #fff !important;
   border-bottom: 2px solid #0b0609 !important;
   padding: 0.2rem 0.5rem !important;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
-[data-theme="stained-glass"] .qp-card > .qp-head .qp-title { color: #fff !important; }
+[data-theme="glass"] .qp-card > .qp-head .qp-title { color: #fff !important; }
 
 /* ────────────────────────────────────────────────────────────────────────
    Visioneer — psychedelic folk-art twilight. Controls are organically rounded
@@ -1264,7 +1264,7 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
 }
 
 /* ── Phosphor (+ amber) — terminal progress bar / status cells ───────────── */
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) {
+:is([data-theme="phosphor"], [data-theme="amber"]) {
   --ctl-slider-track: color-mix(in srgb, var(--accent) 20%, var(--void));
   --ctl-slider-track-h: 10px;
   --ctl-slider-track-radius: 0;
@@ -1277,7 +1277,7 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
   --ctl-slider-thumb-border: 0;
   --ctl-slider-thumb-shadow: 0 0 5px var(--accent-glow);
 }
-:is([data-theme="phosphor"], [data-theme="phosphor-amber"]) .qp-mod-pill {
+:is([data-theme="phosphor"], [data-theme="amber"]) .qp-mod-pill {
   border-radius: 0 !important;
   background: transparent !important;
   box-shadow: none !important;
@@ -1376,8 +1376,8 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
 }
 [data-theme="win95"] ::-webkit-scrollbar-thumb { border-radius: 0; border: 0; box-shadow: var(--bevel-raised); }
 
-/* ── Stained Glass — leaded glass strip / tiny backlit panes ──────────────── */
-[data-theme="stained-glass"] {
+/* ── Glass — leaded glass strip / tiny backlit panes ──────────────────────── */
+[data-theme="glass"] {
   --ctl-slider-track:
     linear-gradient(90deg,
       color-mix(in srgb, var(--accent) 30%, #0b0609),
@@ -1393,7 +1393,7 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
   --ctl-slider-thumb-border: 2px solid #000;
   --ctl-slider-thumb-shadow: 0 0 8px var(--accent-glow);
 }
-[data-theme="stained-glass"] .qp-mod-pill {
+[data-theme="glass"] .qp-mod-pill {
   border-radius: 2px !important;
   border: 2px solid #0b0609 !important;
   background: linear-gradient(145deg,
@@ -1462,5 +1462,5 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
     scroll-behavior: auto !important;
   }
   /* The CRT scanline overlay's flicker is an opacity animation — pin it off. */
-  :is([data-theme="phosphor"], [data-theme="phosphor-amber"]) body::after { animation: none !important; }
+  :is([data-theme="phosphor"], [data-theme="amber"]) body::after { animation: none !important; }
 }

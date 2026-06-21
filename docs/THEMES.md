@@ -43,8 +43,8 @@ Theme IDs — the single source of truth is `THEMES` in `theme.js`.
 `ThemeBoot.astro` now derives its valid-id list from `THEMES` automatically, so
 the only manual pairing left is **`theme.js` `THEMES` ↔ the matching
 `[data-theme]` block in `themes.css`** (CSS can't read the JS array). Current
-IDs: `voidstar`, `phosphor`, `phosphor-amber`, `tape`, `abyssal`, `glacial`,
-`win95`, `stained-glass`, `visioneer`, `gardens`.
+IDs: `voidstar`, `phosphor`, `amber`, `tape`, `abyssal`, `glacial`,
+`win95`, `glass`, `visioneer`, `gardens`.
 
 ---
 
@@ -268,7 +268,7 @@ exists only in the labs, so the global rule can't reach the main site. Each
 theme's distinct slider/pill identity lives in the **PER-THEME CONTROL
 IDENTITIES** block (voidstar neon waveform rail, phosphor terminal progress bar,
 tape fader slot, abyssal sonar rail, glacial measurement line, win95 sunken
-trough, stained-glass leaded strip, visioneer road-line, gardens dew-drop stem).
+trough, glass leaded strip, visioneer road-line, gardens dew-drop stem).
 
 ### Reduced motion
 A `prefers-reduced-motion: reduce` block (bottom of `themes.css`) damps the
@@ -287,19 +287,19 @@ hide state: hover/focus/active end-states still apply, they just don't animate.
 | Theme | Niche | Defining levers |
 |---|---|---|
 | **voidstar** | cosmic synthwave (default) | purple `--accent`, hue 250/spread 90, glow on |
-| **phosphor** (+ **phosphor-amber**) | harsh-noise / experimental | mono CRT green/amber, `--viz-mono:1`, scanlines, square, VT323, low bloom |
+| **phosphor** (+ **amber**) | harsh-noise / experimental | mono CRT green/amber, `--viz-mono:1`, scanlines, square, VT323, low bloom |
 | **tape** | lo-fi tape ambient | warm cream/rust/ochre, film grain, rounded, soft glow |
 | **abyssal** | dark ambient / drone | teal/jade on near-black, high `--viz-glow`/`--glow-strength` |
 | **glacial** | Nordic / ECM ambient | icy low-sat blue-white, heavy `--panel-blur`, crisp small radius, low glow |
 | **win95** | net-art / vaporwave | teal desktop, beveled gray chrome + title bars (skin layer), no glow/blur |
-| **stained-glass** | Randyland2 leaded jewel glass | ruby/cobalt/amethyst/emerald/amber accents on near-black "lead", sharp 2px radius, hue 300/spread 160 (full jewel sweep), bloom up |
+| **glass** | Randyland2 leaded jewel glass | ruby/cobalt/amethyst/emerald/amber accents on near-black "lead", sharp 2px radius, hue 300/spread 160 (full jewel sweep), bloom up |
 | **visioneer** | Ramblin' Visioneer — cosmic Sasquatch on the night road | Sasquatch-eye blue `--accent`, evil-eye turquoise, campfire amber, twilight indigo void, light film grain, hue 215/spread 140 |
 | **gardens** | Cindy Lynn's Gardens — stained-glass botany / chemistry | iris-violet `--accent` on moss/soil green-black, lily pink + daylily gold, rounded organic radii, verdant hue 100/spread 60 |
 
 The last three are the **Randyland family** — palettes drawn from
 [`docs/agent-reference.md`](./agent-reference.md) (stained glass §2/§5,
 Ramblin' Visioneer §3/§4, Cindy Lynn's Gardens §5). Each now has its own skin
-layer + control identity (not token-only): stained glass is a leaded grid with
+layer + control identity (not token-only): glass is a leaded grid with
 sunlit-glass buttons and a jewel-in-came slider; visioneer is a starlit
 twilight card with a gradient-rim button and a dashed road-line slider; gardens
 is a softly luminous greenhouse console with dew-drop slider thumbs — botanical,
@@ -359,6 +359,6 @@ non-qualia labs are fully knob-driven).
    biolume pulse / shimmer / cursor blink stop and transitions are instant, but
    hover/focus/active states are still visible.
 8. **Mobile** layout + touch slider hit-targets intact (coarse-pointer sizing).
-9. **Perf**: FPS steady on the glow-heavy themes (`abyssal`, `stained-glass`,
+9. **Perf**: FPS steady on the glow-heavy themes (`abyssal`, `glass`,
    `visioneer`).
 10. Default **voidstar** is unchanged vs `main`.

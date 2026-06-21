@@ -568,6 +568,51 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (looperAudio.anyPlaying() && !strudelLive()) playAll();
   }
 
+  // ── qualem snapshot/restore ───────────────────────────────────────────────
+  // The looper's device-independent, shareable settings: master out, sync,
+  // "start now", nudge, default grid, and free-run cps. Deliberately excludes
+  // the recorded loops (PCM is large + session-local — it lives in IndexedDB
+  // across reloads and never belongs in a URL/QR-sized qualem) and the input
+  // deviceId (machine-specific; restored via its own picker). Mirrors the
+  // vocoder/harmonizer getConfig/setConfig the qualem system already consumes.
+  function getConfig() {
+    return {
+      master:      model.master,
+      sync:        !!model.syncStrudel,
+      immediate:   !!model.immediate,
+      offsetMs:    model.offsetMs,
+      gridDefault: model.gridDefault,
+      cps:         model.cps,
+    };
+  }
+  function setConfig(cfg) {
+    if (!cfg || typeof cfg !== 'object') return;
+    if (typeof cfg.master === 'number') {
+      setMaster(cfg.master);
+      if (elGain) elGain.value = String(model.master);   // sync header slider
+    }
+    if (typeof cfg.offsetMs === 'number') setOffsetMs(cfg.offsetMs);
+    if (typeof cfg.cps === 'number')      setCps(cfg.cps);
+    if (typeof cfg.sync === 'boolean') {
+      model.syncStrudel = cfg.sync;
+      lsSet(SYNC_KEY, model.syncStrudel ? '1' : '0');
+    }
+    if (typeof cfg.immediate === 'boolean') {
+      model.immediate = cfg.immediate;
+      lsSet(IMMEDIATE_KEY, model.immediate ? '1' : '0');
+    }
+    if (typeof cfg.gridDefault === 'number') {
+      model.gridDefault = Math.max(1, Math.min(16, cfg.gridDefault | 0));
+      lsSet(GRID_KEY, model.gridDefault);
+    }
+    // Repaint the props row so the panel mirrors the applied settings
+    // (master slider, nudge, sync/start-now checkboxes) whether or not it's
+    // currently open; renderProps re-reads model on the next open anyway.
+    if (propsEl) renderProps();
+    refreshSyncStatus();
+    refreshSyncBtnVisibility();
+  }
+
   // ── track rows UI ─────────────────────────────────────────────────────
   function renderTracks() {
     if (!tracksEl) return;
@@ -973,6 +1018,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     isRecording: () => recording,
     play: playAll, stop,
     perFrame,
+    getConfig, setConfig,
     dispose: () => { hideCtxMenu(); looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
   };
 }
