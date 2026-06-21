@@ -1,17 +1,22 @@
-// Looper station panel — a third programmable audio source alongside Strudel
-// and the sequencer. Captures the live audio input (pedal steel, voice, …),
-// loops it locked to the Strudel cycle grid, and plays it back for live
-// performance / screen recording, with a Reaper-style "take in lanes" display.
+// Looper station panel — a programmable audio source alongside Strudel and the
+// sequencer. Captures the live audio input, loops it locked to the Strudel
+// cycle grid, and plays it back for live performance / screen recording, as a
+// Reaper-style multi-track list of "take in lanes" waveforms.
 //
-// Mirrors createSequencer in shape: owns its floating panel DOM, lifecycle,
-// drag, Strudel-sync controls (cycles + ÷2/×2), per-source mute/gain, and
-// adoption into the audio.js source registry (so the loop feeds reactivity AND
-// the recordable mix bus). Capture/playback live in looper-audio.js; the
-// waveform canvas lives in looper-render.js.
+// Multi-track: a list of loop tracks, ONE armed at a time. Recording targets
+// the armed track (replace). Each track has its own cycles (grid), length,
+// stretch (÷2/×2), volume, and mute, mixed independently into one summed
+// 'looper' output adopted into audio.js (so the mix feeds reactivity AND the
+// recordable screen-recording bus). Capture/playback live in looper-audio.js
+// (multi-voice); each row's waveform canvas lives in looper-render.js.
 //
-// v1: single track, in-memory only (loops vanish on reload), varispeed stretch
-// (pitch shifts with speed). Seams marked for multi-track, IndexedDB
-// persistence, and pitch-preserving time-stretch.
+// The live input is a page-level concern now (the audio.js 'mic' input
+// channel, surfaced here as the "input" row) — it lands on speakers + the
+// recording + the visualizer independent of the looper's loop voices.
+//
+// v2: in-memory only (loops vanish on reload — IndexedDB persistence is a
+// later pass), varispeed stretch (pitch shifts with speed; pitch-preserving
+// time-stretch is a later pass).
 
 import { createLooperAudio } from './looper-audio.js';
 import { createLooperRenderer } from './looper-render.js';
@@ -20,20 +25,73 @@ import { wirePicker } from './devices.js';
 const NS = 'voidstar.qualia.looper';
 const PANEL_OPEN_KEY = `${NS}.panelOpen`;
 const MASTER_KEY     = `${NS}.master`;     // overall looper output (header slider)
-const LOOP_KEY       = `${NS}.loopVol`;    // recorded-loop playback level
 const SYNC_KEY       = `${NS}.sync`;
-const GRID_KEY       = `${NS}.grid`;       // per-track "cycles" default (was "metacycle")
+const GRID_KEY       = `${NS}.grid`;       // default "cycles" (grid) for new tracks
 const OFFSET_KEY     = `${NS}.offsetMs`;
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
+const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
 
 function lsGet(k, fallback) { try { const v = localStorage.getItem(k); return v == null ? fallback : v; } catch { return fallback; } }
 function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch {} }
 
+let _trackSeq = 0;
+function nextTrackId() { return `t${Date.now().toString(36)}${(_trackSeq++).toString(36)}`; }
+function fmtLen(v) { return v === 0.5 ? '0.5' : String(v); }
+
+// ── DOM builders (stateless; shared by the global props row + track rows) ───
+function mkLabel(text) { const sp = document.createElement('span'); sp.className = 'seq-prop-label'; sp.textContent = text; return sp; }
+function mk(label, child, title) {
+  const w = document.createElement('label');
+  w.className = 'seq-prop';
+  w.append(mkLabel(label), child);
+  if (title) w.title = title;
+  return w;
+}
+function numInput(value, min, max, step, wide) {
+  const i = document.createElement('input');
+  i.type = 'number'; i.step = String(step); i.min = String(min); i.max = String(max);
+  i.value = String(value); i.className = 'seq-num' + (wide ? ' seq-num-wide' : '');
+  return i;
+}
+function miniBtn(txt, fn, title) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'ctrl-btn seq-num-step';
+  b.textContent = txt; if (title) b.title = title;
+  b.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+  return b;
+}
+function stepper(input, eventName, bumpFn) {
+  const wrap = document.createElement('span');
+  wrap.className = 'seq-num-wrap';
+  const step = parseFloat(input.step) || 1;
+  const min  = input.min !== '' ? parseFloat(input.min) : -Infinity;
+  const max  = input.max !== '' ? parseFloat(input.max) : Infinity;
+  const isInt = Number.isInteger(step);
+  const decimals = isInt ? 0 : Math.max(0, (String(step).split('.')[1] || '').length);
+  const bump = bumpFn || ((delta) => {
+    const cur = parseFloat(input.value);
+    const base = Number.isFinite(cur) ? cur : (Number.isFinite(min) ? min : 0);
+    let next = Math.min(max, Math.max(min, base + delta * step));
+    input.value = isInt ? String(Math.round(next)) : next.toFixed(decimals);
+    input.dispatchEvent(new Event(eventName, { bubbles: true }));
+  });
+  wrap.append(miniBtn('−', () => bump(-1), 'Decrease'), input, miniBtn('+', () => bump(+1), 'Increase'));
+  return wrap;
+}
+function volSlider(value, onInput, title) {
+  const sl = document.createElement('input');
+  sl.type = 'range'; sl.min = '0'; sl.max = '1'; sl.step = '0.01';
+  sl.value = String(value); sl.className = 'panel-gain-slider';
+  if (title) sl.title = title;
+  sl.addEventListener('input', () => onInput(sl.value));
+  return sl;
+}
+
 export function createLooper({ audio, syncStrudel } = {}) {
   const panel       = document.getElementById('looper-panel');
   const propsEl     = document.getElementById('looper-props');
-  const canvas      = document.getElementById('looper-canvas');
+  const tracksEl    = document.getElementById('looper-tracks');
   const status      = document.getElementById('looper-status');
   const inputSelect = document.getElementById('looper-input');
   const btnToggle   = document.getElementById('btn-looper');
@@ -47,52 +105,53 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnClose    = document.getElementById('btn-looper-close');
 
   const wasOpenLastSession = lsGet(PANEL_OPEN_KEY, '0') === '1';
+  const defaultGrid = Math.max(1, Math.min(16, parseInt(lsGet(GRID_KEY, lsGet(`${NS}.metacycle`, '1')), 10) || 1));
 
-  // Live model. Single track in v1; `track` becomes an array element in vNext.
+  // Live model. `track` became `tracks[]` + an armed id in v2.
   const model = {
     syncStrudel: lsGet(SYNC_KEY, '1') !== '0',
-    // "cycles" control (the record-snap grid + waveform lane width). Reads the
-    // new key, falling back to the legacy `metacycle` key for returning users.
-    grid: Math.max(1, Math.min(16, parseInt(lsGet(GRID_KEY, lsGet(`${NS}.metacycle`, '1')), 10) || 1)),
     cps: 0.5,                       // used when sync is off / Strudel idle
     offsetMs: (() => { const v = parseInt(lsGet(OFFSET_KEY, '0'), 10); return Number.isFinite(v) ? Math.max(-200, Math.min(500, v)) : 0; })(),
     master:   num01(lsGet(MASTER_KEY, '0.9'), 0.9),   // overall looper output
-    loopVol:  num01(lsGet(LOOP_KEY, '0.5'), 0.5),     // recorded-loop playback (centre, Ditto-style)
+    gridDefault: defaultGrid,       // "cycles" each new track starts with
     deviceId: '',                   // '' = default input; set by the picker
-    track: null,                    // { buffer, sampleRate, loopStartBase, regionFrames, naturalSeconds, recordedCycles, length }
+    tracks: [],                     // Track[] — see makeTrack()
+    armedTrackId: null,             // the one track that record targets
   };
-  // The "input" knob is a proxy for the page-level mic monitor (audio.js) — one
-  // shared path, so it's never double-counted. Off by default for feedback
-  // safety; raise it (here or in the audio panel) to hear the live input.
+  // Header master mute (all loops). The live input is independent (audio.js).
   let _muted = false;
   let recording = false;
-  let playing = false;
   let _everOpened = false;
 
   const looperAudio = createLooperAudio({ audio, syncStrudel });
   looperAudio.setMaster(model.master);
-  looperAudio.setLoopVol(model.loopVol);
   looperAudio.setOffsetMs(model.offsetMs);
 
-  const renderer = createLooperRenderer({
-    canvas,
-    getView: () => {
-      const t = model.track;
-      if (!t || !t.buffer) return null;
-      const region = looperAudio.getLoopRegion(t) || { startFrame: 0, endFrame: t.buffer.length };
-      return {
-        buffer: t.buffer,
-        startFrame: region.startFrame,
-        endFrame: region.endFrame,
-        grid: model.grid,
-        length: t.length || model.grid,
-        playhead01: playing ? looperAudio.getPlayhead01() : null,
-      };
-    },
-    getRecordView: () => looperAudio.getLiveView(),
-  });
+  // Per-track renderers + DOM handles, keyed by track id.
+  const renderers = new Map();      // id -> renderer
+  const rowEls = new Map();         // id -> { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn }
+  let _addWrap = null;              // the "+ track" container
+  let inputVolSl = null, inputMuteBtn = null, syncStatusEl = null;
 
-  // ── helpers ──────────────────────────────────────────────────────────────
+  // ── track model ──────────────────────────────────────────────────────────
+  function makeTrack() {
+    const prev = model.tracks[model.tracks.length - 1];
+    return {
+      id: nextTrackId(),
+      buffer: null, sampleRate: 0, loopStartBase: 0, regionFrames: 0,
+      naturalSeconds: 0, recordedCycles: null,
+      grid: prev ? prev.grid : model.gridDefault,   // record-snap + lane width
+      length: null,                                 // cycles the take occupies
+      volume: 0.5,                                  // Ditto-centre default
+      muted: false,
+      preservePitch: false,                         // varispeed until Phase 4
+    };
+  }
+  function getTrack(id) { return model.tracks.find(t => t.id === id) || null; }
+  function armedTrack() { return getTrack(model.armedTrackId); }
+  function hasAnyAudio() { return model.tracks.some(t => t.buffer); }
+
+  // ── sync helpers ───────────────────────────────────────────────────────
   function syncOn() { return !!model.syncStrudel; }
   function strudelLive() { return syncOn() && !!syncStrudel?.isStrudelPlaying?.(); }
   function currentCps() {
@@ -104,18 +163,33 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function setStatus(t) { if (status) status.textContent = t; }
 
-  // ── transport ────────────────────────────────────────────────────────────
+  // The renderer view for one track (its loop region, grid, length, playhead).
+  function viewForTrack(track) {
+    if (!track || !track.buffer) return null;
+    const region = looperAudio.getLoopRegion(track) || { startFrame: 0, endFrame: track.buffer.length };
+    return {
+      buffer: track.buffer,
+      startFrame: region.startFrame,
+      endFrame: region.endFrame,
+      grid: track.grid,
+      length: track.length || track.grid,
+      playhead01: looperAudio.isVoicePlaying(track.id) ? looperAudio.getPlayhead01(track.id) : null,
+    };
+  }
+
+  // ── transport ──────────────────────────────────────────────────────────
   async function startRecording() {
     if (recording) return;
-    if (playing) stop();
+    const t = armedTrack();
+    if (!t) return;
+    looperAudio.stopVoice(t.id);   // record replaces the armed take
     setStatus('arming…');
     try {
-      const res = await looperAudio.startRecording({ grid: model.grid, syncOn: syncOn(), cps: currentCps(), deviceId: model.deviceId });
+      const res = await looperAudio.startRecording({ grid: t.grid, syncOn: syncOn(), cps: currentCps(), deviceId: model.deviceId });
       recording = true;
       refreshTransport();
       refreshLooperBtn();
-      renderer.start();
-      // Labels become available once getUserMedia has granted — repopulate.
+      renderers.get(t.id)?.start();
       try { picker?.populate?.(model.deviceId); } catch {}
       setStatus(res?.snapped ? 'recording — locks to cycle' : (syncOn() ? 'recording (strudel idle — free)' : 'recording…'));
     } catch (err) {
@@ -128,98 +202,153 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   async function stopRecording() {
     if (!recording) return;
+    const t = armedTrack();
     setStatus('finishing…');
-    const res = await looperAudio.stopRecording({ grid: model.grid, syncOn: syncOn() });
+    const res = await looperAudio.stopRecording({ grid: t ? t.grid : model.gridDefault, syncOn: syncOn() });
     recording = false;
     refreshLooperBtn();
-    if (!res) {
+    if (!res || !t) {
       refreshTransport();
-      renderer.stop();
+      if (t) renderers.get(t.id)?.stop();
       setStatus('nothing captured');
       return;
     }
-    const cyc = (res.recordedCycles != null && res.recordedCycles > 0)
-      ? res.recordedCycles
-      : Math.max(model.grid, 1);
-    // TODO(persist): encode res.buffer → IndexedDB for vNext reload survival.
-    model.track = {
-      buffer: res.buffer,
-      sampleRate: res.sampleRate,
-      loopStartBase: res.loopStartBase,
-      regionFrames: res.regionFrames,
-      naturalSeconds: res.naturalSeconds,
-      recordedCycles: cyc,
-      length: cyc,
-    };
-    renderer.invalidate();
+    const cyc = (res.recordedCycles != null && res.recordedCycles > 0) ? res.recordedCycles : Math.max(t.grid, 1);
+    t.buffer = res.buffer;
+    t.sampleRate = res.sampleRate;
+    t.loopStartBase = res.loopStartBase;
+    t.regionFrames = res.regionFrames;
+    t.naturalSeconds = res.naturalSeconds;
+    t.recordedCycles = cyc;
+    t.length = cyc;
+    renderers.get(t.id)?.invalidate();
+    refreshTrackRow(t);
+    refreshAddBtn();
     refreshTransport();
-    refreshLengthUI();
     setStatus(`recorded · ${fmtLen(cyc)} cyc`);
-    await play();
+    await playVoice(t);            // play the new take; other tracks keep looping
+    syncRenderers();
   }
 
-  async function play() {
-    if (!model.track) return;
-    const ok = await looperAudio.play(model.track, { grid: model.grid, syncOn: syncOn(), cps: currentCps() });
-    if (!ok) return;
-    playing = true;
+  // Play (or re-lock) one track's voice.
+  async function playVoice(track) {
+    if (!track || !track.buffer) return;
+    await looperAudio.playVoice(track, { grid: track.grid, syncOn: syncOn(), cps: currentCps() });
+    renderers.get(track.id)?.start();
     refreshTransport();
     refreshLooperBtn();
-    renderer.start();
+  }
+
+  // ▶ — play every recorded track, locked to the same boundary.
+  async function playAll() {
+    const withAudio = model.tracks.filter(t => t.buffer);
+    if (!withAudio.length) return;
+    for (const t of withAudio) {
+      await looperAudio.playVoice(t, { grid: t.grid, syncOn: syncOn(), cps: currentCps() });
+    }
+    syncRenderers();
+    refreshTransport();
+    refreshLooperBtn();
     setStatus(strudelLive() ? 'looping · locked' : 'looping');
   }
 
+  // ■ — stop all loops (they re-lock from the boundary on next play).
   function stop() {
-    looperAudio.stop();
-    playing = false;
+    looperAudio.stopAll();
+    syncRenderers();
     refreshTransport();
     refreshLooperBtn();
-    renderer.stop();
-    if (model.track) setStatus('stopped');
+    if (hasAnyAudio()) setStatus('stopped');
   }
 
-  function deleteTrack() {
-    looperAudio.stop();
-    playing = false;
-    model.track = null;
-    renderer.invalidate();
-    renderer.stop();
+  // ⟲ — realign all playing loops to the next boundary.
+  function realign() { if (looperAudio.anyPlaying()) playAll(); }
+
+  // ── per-track operations ─────────────────────────────────────────────────
+  function setTrackLength(id, v) {
+    const t = getTrack(id);
+    if (!t || !t.buffer) return;
+    const next = Math.max(0.5, Math.min(64, v));
+    if (next === t.length) return;
+    t.length = next;
+    renderers.get(id)?.invalidate();
+    refreshTrackRow(t);
+    if (looperAudio.isVoicePlaying(id)) playVoice(t);
+  }
+  function setTrackVolume(id, v) {
+    const t = getTrack(id);
+    if (!t) return;
+    t.volume = clamp01(v);
+    looperAudio.setTrackVolume(id, t.volume);
+  }
+  function setTrackMuted(id, on) {
+    const t = getTrack(id);
+    if (!t) return;
+    t.muted = !!on;
+    looperAudio.setTrackMuted(id, t.muted);
+    refreshTrackRow(t);
+  }
+  function setTrackGrid(id, v) {
+    const t = getTrack(id);
+    if (!t) return;
+    const g = Math.max(1, Math.min(16, parseInt(v, 10) || 1));
+    if (g === t.grid) return;
+    t.grid = g;
+    model.gridDefault = g; lsSet(GRID_KEY, g);   // next new track inherits it
+    renderers.get(id)?.invalidate();
+    if (looperAudio.isVoicePlaying(id)) playVoice(t);
+  }
+  function deleteTrack(id) {
+    looperAudio.stopVoice(id);
+    renderers.get(id)?.dispose();
+    renderers.delete(id);
+    model.tracks = model.tracks.filter(t => t.id !== id);
+    if (model.armedTrackId === id) model.armedTrackId = null;
+    if (!model.tracks.length) {
+      const t = makeTrack(); model.tracks.push(t); model.armedTrackId = t.id;
+    } else if (!getTrack(model.armedTrackId)) {
+      model.armedTrackId = model.tracks[model.tracks.length - 1].id;
+    }
+    renderTracks();
     refreshTransport();
-    refreshLengthUI();
+    refreshLooperBtn();
+    setStatus('deleted');
+  }
+  function clearAll() {
+    looperAudio.stopAll();
+    for (const r of renderers.values()) r.dispose();
+    renderers.clear();
+    model.tracks = [];
+    const t = makeTrack(); model.tracks.push(t); model.armedTrackId = t.id;
+    renderTracks();
+    refreshTransport();
     refreshLooperBtn();
     setStatus('cleared');
   }
-
-  // ÷2 / ×2 — change how many Strudel cycles the loop occupies (varispeed). The
-  // buffer never changes; only playbackRate. Re-locks to the next boundary.
-  function setTrackLength(v) {
-    if (!model.track) return;
-    const next = Math.max(0.5, Math.min(64, v));
-    if (next === model.track.length) return;
-    model.track.length = next;
-    renderer.invalidate();
-    refreshLengthUI();
-    if (playing) play();
+  function addTrack() {
+    const t = makeTrack();
+    model.tracks.push(t);
+    model.armedTrackId = t.id;
+    renderTracks();
+    refreshTransport();
+    setStatus('track added — armed');
+  }
+  function armTrack(id) {
+    if (!getTrack(id) || recording) return;
+    model.armedTrackId = id;
+    refreshArmIndicators();
   }
 
-  function realign() { if (playing) play(); }
-
-  function setMuted(on) {
-    _muted = !!on;
-    looperAudio.setMuted(_muted);
-    refreshMuteBtn();
-  }
-  // Master = overall looper output (header slider). Loop = recorded-take
-  // playback level (50% default). Input = the shared page-level mic monitor.
+  // ── master / input / nudge / cps ─────────────────────────────────────────
+  function setMuted(on) { _muted = !!on; looperAudio.setMuted(_muted); refreshMuteBtn(); }
   function setMaster(v) {
-    model.master = Math.max(0, Math.min(1, Number(v) || 0));
+    model.master = clamp01(v);
     looperAudio.setMaster(model.master);
     lsSet(MASTER_KEY, model.master);
   }
-  // Live input is the page-level input channel (audio.js) — one shared path
-  // (volume + mute) that lands on the speakers, in the screen recording, and
-  // drives the visualizer. Raising / unmuting it ensures the page mic source is
-  // live so the input actually reaches reactivity + recording.
+  // The live input is the page-level input channel (audio.js) — one shared
+  // path (volume + mute) that lands on speakers + the screen recording and
+  // drives the visualizer. Raising / unmuting ensures the page mic is live.
   async function ensureInputLive() {
     if (audio?.hasSource?.('mic')) return;
     try { await audio?.start?.(model.deviceId || ''); }
@@ -227,7 +356,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshLooperBtn();
   }
   function setInputVol(v) {
-    const lvl = Math.max(0, Math.min(1, Number(v) || 0));
+    const lvl = clamp01(v);
     audio?.setInputLevel?.(lvl);
     if (lvl > 0) ensureInputLive();
   }
@@ -236,141 +365,139 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!on) ensureInputLive();
     refreshInputMuteBtn();
   }
-  function setLoopVol(v) {
-    model.loopVol = Math.max(0, Math.min(1, Number(v) || 0));
-    looperAudio.setLoopVol(model.loopVol);
-    lsSet(LOOP_KEY, model.loopVol);
-  }
-  // Nudge (ms): slides the loop window live to compensate record latency.
-  // + = take plays earlier (pulls a late take into the pocket).
+  // Nudge (ms): slides every loop window live to compensate record latency.
   function setOffsetMs(v) {
     model.offsetMs = Math.max(-200, Math.min(500, Math.round(Number(v) || 0)));
     looperAudio.setOffsetMs(model.offsetMs);
     lsSet(OFFSET_KEY, model.offsetMs);
-    renderer.invalidate();        // region shifted → recompute peaks
-    if (playing) play();          // re-lock at the next boundary with the new window
+    for (const t of model.tracks) renderers.get(t.id)?.invalidate();
+    if (looperAudio.anyPlaying()) playAll();   // re-lock with the new window
+  }
+  function setCps(v) {
+    const c = parseFloat(v);
+    if (!Number.isFinite(c)) return;
+    model.cps = Math.max(0.1, Math.min(4, c));
+    if (looperAudio.anyPlaying() && !strudelLive()) playAll();
   }
 
-  function fmtLen(v) { return v === 0.5 ? '0.5' : String(v); }
+  // ── track rows UI ─────────────────────────────────────────────────────
+  function renderTracks() {
+    if (!tracksEl) return;
+    for (const r of renderers.values()) r.dispose();
+    renderers.clear();
+    rowEls.clear();
+    tracksEl.innerHTML = '';
+    model.tracks.forEach((t, i) => tracksEl.append(buildRow(t, i)));
 
-  // ── props UI ───────────────────────────────────────────────────────────
-  let lengthIn = null;
-  let _scaleBtns = null;
-  let syncStatusEl = null;
-  let inputVolSl = null;
-  let inputMuteBtn = null;
+    const addWrap = document.createElement('div');
+    addWrap.className = 'looper-add';
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button'; addBtn.className = 'ctrl-btn'; addBtn.id = 'btn-looper-add';
+    addBtn.textContent = '+ track';
+    addBtn.title = 'Add a loop track (armed for recording)';
+    addBtn.addEventListener('click', addTrack);
+    addWrap.append(addBtn);
+    tracksEl.append(addWrap);
+    _addWrap = addWrap;
 
+    refreshAddBtn();
+    refreshArmIndicators();
+    syncRenderers();
+  }
+
+  function buildRow(track, index) {
+    const row = document.createElement('div');
+    row.className = 'looper-track';
+    row.dataset.id = track.id;
+
+    const head = document.createElement('div');
+    head.className = 'looper-track-head';
+
+    // row 1 — arm · name · mute · delete
+    const r1 = document.createElement('div');
+    r1.className = 'looper-track-row';
+    const armBtn = document.createElement('button');
+    armBtn.type = 'button'; armBtn.className = 'ctrl-btn looper-arm';
+    armBtn.addEventListener('click', () => armTrack(track.id));
+    const nameSp = document.createElement('span');
+    nameSp.className = 'looper-track-name';
+    nameSp.textContent = String(index + 1);
+    const muteBtn = document.createElement('button');
+    muteBtn.type = 'button'; muteBtn.className = 'ctrl-btn seq-mini-mute looper-track-mute';
+    muteBtn.addEventListener('click', () => setTrackMuted(track.id, !track.muted));
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button'; delBtn.className = 'ctrl-btn looper-track-del';
+    delBtn.textContent = '🗑'; delBtn.title = 'Delete this track';
+    delBtn.addEventListener('click', () => deleteTrack(track.id));
+    r1.append(armBtn, nameSp, muteBtn, delBtn);
+
+    // row 2 — cycles (grid) · length + stretch
+    const r2 = document.createElement('div');
+    r2.className = 'looper-track-row';
+    const gridIn = numInput(track.grid, 1, 16, 1);
+    gridIn.addEventListener('change', () => { setTrackGrid(track.id, gridIn.value); gridIn.value = String(track.grid); });
+    const lengthIn = numInput(track.buffer ? fmtLen(track.length) : '—', 0.5, 64, 1, true);
+    lengthIn.disabled = !track.buffer;
+    lengthIn.addEventListener('change', () => {
+      let v = parseFloat(lengthIn.value);
+      if (!Number.isFinite(v)) { lengthIn.value = track.buffer ? fmtLen(track.length) : '—'; return; }
+      v = v < 0.75 ? 0.5 : Math.round(v);
+      setTrackLength(track.id, v);
+    });
+    const lengthStep = stepper(lengthIn, 'change', (delta) => {
+      if (!track.buffer) return;
+      const cur = track.length;
+      setTrackLength(track.id, delta > 0 ? (cur < 1 ? 1 : cur + 1) : (cur > 1 ? cur - 1 : 0.5));
+    });
+    const half = miniBtn('÷2', () => { if (track.buffer) setTrackLength(track.id, track.length / 2); }, 'Halve length (varispeed)');
+    const dbl  = miniBtn('×2', () => { if (track.buffer) setTrackLength(track.id, track.length * 2); }, 'Double length (varispeed)');
+    const stretchGrp = document.createElement('span'); stretchGrp.className = 'seq-num-wrap'; stretchGrp.append(half, dbl);
+    r2.append(mk('cycles', stepper(gridIn, 'change'), 'Strudel cycles per bar — record-snap grid + waveform lane width for this track.'),
+              mk('length', lengthStep, 'How many cycles the loop occupies (a multiple of cycles).'),
+              mk('stretch', stretchGrp, 'Halve / double the length. Varispeed — pitch shifts with speed.'));
+
+    // row 3 — volume
+    const r3 = document.createElement('div');
+    r3.className = 'looper-track-row';
+    const volSl = volSlider(track.volume, (v) => setTrackVolume(track.id, v), 'Track playback volume');
+    r3.append(mk('vol', volSl));
+
+    head.append(r1, r2, r3);
+
+    const canvas = document.createElement('canvas');
+    canvas.className = 'looper-track-canvas';
+
+    row.append(head, canvas);
+
+    const renderer = createLooperRenderer({
+      canvas,
+      getView: () => viewForTrack(track),
+      getRecordView: () => (recording && model.armedTrackId === track.id) ? looperAudio.getLiveView() : { recording: false },
+    });
+    renderers.set(track.id, renderer);
+    rowEls.set(track.id, { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn });
+
+    return row;
+  }
+
+  // ── global props row (cps · nudge · input · sync) ─────────────────────────
   function renderProps() {
     if (!propsEl) return;
     propsEl.innerHTML = '';
 
-    const mk = (label, child, title) => {
-      const wrap = document.createElement('label');
-      wrap.className = 'seq-prop';
-      const sp = document.createElement('span');
-      sp.className = 'seq-prop-label';
-      sp.textContent = label;
-      wrap.append(sp, child);
-      if (title) wrap.title = title;
-      return wrap;
-    };
-    const stepperFor = (input, eventName, bumpFn) => {
-      const wrap = document.createElement('span');
-      wrap.className = 'seq-num-wrap';
-      const step = parseFloat(input.step) || 1;
-      const min  = input.min !== '' ? parseFloat(input.min) : -Infinity;
-      const max  = input.max !== '' ? parseFloat(input.max) : Infinity;
-      const isInt = Number.isInteger(step);
-      const decimals = isInt ? 0 : Math.max(0, (String(step).split('.')[1] || '').length);
-      const bump = bumpFn || ((delta) => {
-        const cur = parseFloat(input.value);
-        const base = Number.isFinite(cur) ? cur : (Number.isFinite(min) ? min : 0);
-        let next = Math.min(max, Math.max(min, base + delta * step));
-        input.value = isInt ? String(Math.round(next)) : next.toFixed(decimals);
-        input.dispatchEvent(new Event(eventName, { bubbles: true }));
-      });
-      const mkBtn = (txt, delta, title) => {
-        const b = document.createElement('button');
-        b.type = 'button'; b.className = 'ctrl-btn seq-num-step';
-        b.textContent = txt; b.title = title;
-        b.addEventListener('click', (e) => { e.preventDefault(); bump(delta); });
-        return b;
-      };
-      wrap.append(mkBtn('−', -1, 'Decrease'), input, mkBtn('+', +1, 'Increase'));
-      return wrap;
-    };
+    const cpsIn = numInput(model.cps, 0.1, 4, 0.05, true);
+    cpsIn.addEventListener('input', () => setCps(cpsIn.value));
 
-    // cps — only used when sync is off / Strudel idle.
-    const cpsIn = document.createElement('input');
-    cpsIn.type = 'number'; cpsIn.step = '0.05'; cpsIn.min = '0.1'; cpsIn.max = '4';
-    cpsIn.value = String(model.cps); cpsIn.className = 'seq-num seq-num-wide';
-    cpsIn.addEventListener('input', () => {
-      const v = parseFloat(cpsIn.value);
-      if (!Number.isFinite(v)) return;
-      model.cps = Math.max(0.1, Math.min(4, v));
-      if (playing && !strudelLive()) play();
-    });
+    const nudgeIn = numInput(model.offsetMs, -200, 500, 5);
+    nudgeIn.addEventListener('change', () => { setOffsetMs(nudgeIn.value); nudgeIn.value = String(model.offsetMs); });
 
-    // cycles — Strudel cycles per bar/phrase (the record-snap grid + lane width).
-    const gridIn = document.createElement('input');
-    gridIn.type = 'number'; gridIn.step = '1'; gridIn.min = '1'; gridIn.max = '16';
-    gridIn.value = String(model.grid); gridIn.className = 'seq-num';
-    gridIn.addEventListener('change', () => {
-      const v = Math.max(1, Math.min(16, parseInt(gridIn.value, 10) || 1));
-      gridIn.value = String(v);
-      if (v === model.grid) return;
-      model.grid = v;
-      lsSet(GRID_KEY, v);
-      renderer.invalidate();
-      if (playing) play();
-    });
+    inputVolSl = volSlider(audio?.getInput?.().level ?? 0, setInputVol,
+      'Live input level — your guitar / mic through the speakers AND into the screen recording at this level. Shared with the audio panel. The visualizer reacts to the input whenever it is captured (pre-fader). OFF (0) by default; raising it can feed back on speakers (fine on headphones / an interface).');
+    inputMuteBtn = miniBtn('mute', () => setInputMuted(!(audio?.getInput?.().muted)));
+    inputMuteBtn.classList.add('seq-mini-mute');
+    const inputGroup = document.createElement('span'); inputGroup.className = 'seq-num-wrap';
+    inputGroup.append(inputVolSl, inputMuteBtn);
 
-    // length — how many Strudel cycles the recorded loop occupies (÷2/×2).
-    lengthIn = document.createElement('input');
-    lengthIn.type = 'number'; lengthIn.step = '1'; lengthIn.min = '0.5'; lengthIn.max = '64';
-    lengthIn.value = model.track ? fmtLen(model.track.length) : '—';
-    lengthIn.className = 'seq-num seq-num-wide';
-    lengthIn.disabled = !model.track;
-    lengthIn.addEventListener('change', () => {
-      let v = parseFloat(lengthIn.value);
-      if (!Number.isFinite(v)) { refreshLengthUI(); return; }
-      v = v < 0.75 ? 0.5 : Math.round(v);
-      setTrackLength(v);
-    });
-    const lengthBump = (delta) => {
-      if (!model.track) return;
-      const cur = model.track.length;
-      const next = delta > 0 ? (cur < 1 ? 1 : cur + 1) : (cur > 1 ? cur - 1 : 0.5);
-      setTrackLength(next);
-    };
-
-    // ÷2 / ×2 length pair — halves/doubles the cycles span (varispeed stretch).
-    const scalePair = (label, title, onHalf, onDouble) => {
-      const wrap = document.createElement('span');
-      wrap.className = 'seq-prop';
-      if (title) wrap.title = title;
-      const sp = document.createElement('span'); sp.className = 'seq-prop-label'; sp.textContent = label;
-      const grp = document.createElement('span'); grp.className = 'seq-num-wrap';
-      const mkB = (txt, fn, t) => {
-        const b = document.createElement('button');
-        b.type = 'button'; b.className = 'ctrl-btn seq-num-step';
-        b.textContent = txt; b.title = t;
-        b.addEventListener('click', (e) => { e.preventDefault(); fn(); });
-        return b;
-      };
-      const bHalf = mkB('÷2', onHalf, title + ' — halve');
-      const bDbl  = mkB('×2', onDouble, title + ' — double');
-      grp.append(bHalf, bDbl);
-      wrap.append(sp, grp);
-      return { wrap, bHalf, bDbl };
-    };
-    const sLen = scalePair('stretch',
-      'Stretch the loop to occupy half / double the length (in cycles). v1 is varispeed — pitch shifts with speed.',
-      () => { if (model.track) setTrackLength(model.track.length / 2); },
-      () => { if (model.track) setTrackLength(model.track.length * 2); });
-    _scaleBtns = { half: sLen.bHalf, dbl: sLen.bDbl };
-
-    // sync strudel
     const syncCb = document.createElement('input');
     syncCb.type = 'checkbox'; syncCb.checked = !!model.syncStrudel;
     syncCb.addEventListener('change', () => {
@@ -381,75 +508,56 @@ export function createLooper({ audio, syncStrudel } = {}) {
     });
     const syncWrap = document.createElement('label');
     syncWrap.className = 'seq-prop seq-prop-check';
-    syncWrap.title = 'Lock record IN/OUT and loop playback to the Strudel cycle grid. Off = free capture, set cps + cycles manually.';
+    syncWrap.title = 'Lock record IN/OUT and loop playback to the Strudel cycle grid. Off = free capture, set cps + length manually.';
     const syncLabel = document.createElement('span'); syncLabel.className = 'seq-prop-label'; syncLabel.textContent = 'sync strudel';
     syncStatusEl = document.createElement('span'); syncStatusEl.className = 'seq-sync-status';
     syncWrap.append(syncCb, syncLabel, syncStatusEl);
 
-    // nudge (ms) — slides the loop window live to compensate record latency.
-    const nudgeIn = document.createElement('input');
-    nudgeIn.type = 'number'; nudgeIn.step = '5'; nudgeIn.min = '-200'; nudgeIn.max = '500';
-    nudgeIn.value = String(model.offsetMs); nudgeIn.className = 'seq-num';
-    nudgeIn.addEventListener('change', () => {
-      setOffsetMs(nudgeIn.value);
-      nudgeIn.value = String(model.offsetMs);
-    });
-
-    // input / loop volumes (Ditto-style): raw input full, loop playback centred.
-    const volSlider = (value, onInput, title) => {
-      const sl = document.createElement('input');
-      sl.type = 'range'; sl.min = '0'; sl.max = '1'; sl.step = '0.01';
-      sl.value = String(value); sl.className = 'panel-gain-slider';
-      if (title) sl.title = title;
-      sl.addEventListener('input', () => onInput(sl.value));
-      return sl;
-    };
-    inputVolSl = volSlider(audio?.getInput?.().level ?? 0, setInputVol,
-      'Live input level — your guitar / mic through the speakers AND into the screen recording at this level. Shared with the audio panel. The visualizer reacts to the input whenever it is captured (pre-fader). OFF (0) by default; raising it can feed back on speakers (fine on headphones / an interface).');
-    inputMuteBtn = document.createElement('button');
-    inputMuteBtn.type = 'button';
-    inputMuteBtn.className = 'ctrl-btn seq-mini-mute';
-    inputMuteBtn.addEventListener('click', () => setInputMuted(!(audio?.getInput?.().muted)));
-    const inputGroup = document.createElement('span');
-    inputGroup.className = 'seq-num-wrap';
-    inputGroup.append(inputVolSl, inputMuteBtn);
-    const loopVolSl  = volSlider(model.loopVol, setLoopVol, 'Recorded-loop playback level — sits under the live input (50% by default, like a Ditto).');
-
-    // preserve pitch — deferred seam (time-stretch not yet implemented).
-    const ppCb = document.createElement('input');
-    ppCb.type = 'checkbox'; ppCb.disabled = true;
-    const ppWrap = document.createElement('label');
-    ppWrap.className = 'seq-prop seq-prop-check';
-    ppWrap.title = 'Preserve pitch while stretching (time-stretch) — coming in a later pass. v1 stretch is varispeed.';
-    const ppLabel = document.createElement('span'); ppLabel.className = 'seq-prop-label'; ppLabel.textContent = 'preserve pitch (soon)';
-    ppWrap.append(ppCb, ppLabel);
-
     propsEl.append(
-      mk('cps', stepperFor(cpsIn, 'input'), 'Cycles per second when sync is off (Strudel\'s clock drives it when synced).'),
-      mk('cycles', stepperFor(gridIn, 'change'), 'Strudel cycles per bar / phrase — set this to your bar length. It is the record-snap grid (IN→next downbeat, OUT→nearest boundary) and the width of each waveform lane.'),
-      mk('length', stepperFor(lengthIn, 'change', lengthBump), 'How many Strudel cycles the recorded loop occupies (a multiple of the cycles/bar value).'),
-      sLen.wrap,
-      mk('nudge ms', stepperFor(nudgeIn, 'change'), 'Slide the loop into the pocket. + pulls a late take earlier to compensate record latency.'),
+      mk('cps', stepper(cpsIn, 'input'), 'Cycles per second when sync is off (Strudel\'s clock drives it when synced).'),
+      mk('nudge ms', stepper(nudgeIn, 'change'), 'Slide all loops into the pocket. + pulls a late take earlier to compensate record latency.'),
       mk('input', inputGroup, 'Live input level + mute — lands on speakers + the screen recording; the visualizer reacts whenever input is captured.'),
-      mk('loop', loopVolSl, 'Recorded-loop playback level (50% by default, like a Ditto).'),
       syncWrap,
-      ppWrap,
     );
-    refreshLengthUI();
     refreshSyncStatus();
     refreshInputMuteBtn();
   }
 
-  function refreshLengthUI() {
-    if (!lengthIn) return;
-    lengthIn.disabled = !model.track;
-    lengthIn.value = model.track ? fmtLen(model.track.length) : '—';
-    if (_scaleBtns) {
-      _scaleBtns.half.disabled = !model.track || model.track.length <= 0.5;
-      _scaleBtns.dbl.disabled  = !model.track || model.track.length >= 64;
+  // ── refreshers ───────────────────────────────────────────────────────────
+  function refreshTrackRow(track) {
+    const el = rowEls.get(track.id);
+    if (!el) return;
+    const hasBuf = !!track.buffer;
+    el.lengthIn.disabled = !hasBuf;
+    el.lengthIn.value = hasBuf ? fmtLen(track.length) : '—';
+    el.half.disabled = !hasBuf || track.length <= 0.5;
+    el.dbl.disabled  = !hasBuf || track.length >= 64;
+    el.muteBtn.classList.toggle('muted', !!track.muted);
+    el.muteBtn.textContent = track.muted ? 'muted' : 'mute';
+    el.muteBtn.title = track.muted ? 'Unmute this track' : 'Mute this track (keeps looping in time)';
+    el.gridIn.value = String(track.grid);
+    if (el.volSl) el.volSl.value = String(track.volume);
+  }
+  function refreshArmIndicators() {
+    for (const [id, el] of rowEls) {
+      const armed = id === model.armedTrackId;
+      el.row.classList.toggle('armed', armed);
+      el.armBtn.classList.toggle('armed', armed);
+      el.armBtn.textContent = armed ? '●' : '○';
+      el.armBtn.title = armed ? 'Armed for recording' : 'Arm this track for recording';
     }
   }
-
+  function refreshAddBtn() {
+    if (_addWrap) _addWrap.style.display = hasAnyAudio() ? '' : 'none';
+  }
+  function syncRenderers() {
+    for (const t of model.tracks) {
+      const r = renderers.get(t.id);
+      if (!r) continue;
+      const active = (recording && model.armedTrackId === t.id) || looperAudio.isVoicePlaying(t.id);
+      if (active) r.start(); else r.stop();
+    }
+  }
   function refreshSyncStatus() {
     if (!syncStatusEl) return;
     if (!model.syncStrudel) { syncStatusEl.textContent = ''; syncStatusEl.dataset.state = 'off'; return; }
@@ -457,7 +565,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
     syncStatusEl.textContent = ready ? '· connected' : '· waiting for strudel';
     syncStatusEl.dataset.state = ready ? 'connected' : 'waiting';
   }
-
   function refreshInputMuteBtn() {
     if (!inputMuteBtn) return;
     const muted = !!(audio?.getInput?.().muted);
@@ -468,25 +575,27 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   // ── button paint ─────────────────────────────────────────────────────────
   function refreshTransport() {
+    const any = hasAnyAudio();
+    const playing = looperAudio.anyPlaying();
     if (btnRecord) {
       btnRecord.classList.toggle('recording', recording);
       btnRecord.textContent = recording ? '■' : '●';
-      btnRecord.title = recording ? 'Stop recording' : 'Record';
+      btnRecord.title = recording ? 'Stop recording' : 'Record into the armed track';
     }
-    if (btnPlay) { btnPlay.classList.toggle('playing', playing); btnPlay.disabled = !model.track || recording; }
+    if (btnPlay) { btnPlay.classList.toggle('playing', playing); btnPlay.disabled = !any || recording; }
     if (btnStop) btnStop.disabled = !playing;
-    if (btnDelete) btnDelete.disabled = !model.track || recording;
+    if (btnDelete) btnDelete.disabled = !any || recording;
     refreshSyncBtnVisibility();
   }
   function refreshMuteBtn() {
     if (!btnMute) return;
     btnMute.classList.toggle('muted', _muted);
     btnMute.textContent = _muted ? 'mute' : 'live';
-    btnMute.title = _muted ? 'Unmute loop output' : 'Mute loop output (keeps looping in time)';
+    btnMute.title = _muted ? 'Unmute loop output' : 'Mute all loop output (keeps looping in time)';
   }
   function refreshSyncBtnVisibility() {
     if (!btnSync) return;
-    btnSync.style.display = (model.syncStrudel && model.track) ? '' : 'none';
+    btnSync.style.display = (model.syncStrudel && hasAnyAudio()) ? '' : 'none';
   }
   function refreshLooperBtn() {
     if (!btnToggle) return;
@@ -508,6 +617,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     onChoose: async (id) => {
       model.deviceId = id || '';
       try { await looperAudio.setInputDevice(model.deviceId); } catch (e) { console.warn('[qualia] looper device switch failed:', e); }
+      // Keep the page input channel on the same device when it's live.
+      if (audio?.hasSource?.('mic')) { try { await audio.start(model.deviceId || ''); } catch {} }
       return model.deviceId;
     },
   });
@@ -571,8 +682,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     _everOpened = true;
     lsSet(PANEL_OPEN_KEY, '1');
     reposition();
+    if (!rowEls.size) renderTracks();
     if (!propsEl?.children.length) renderProps();
-    renderer.resize();
+    for (const r of renderers.values()) r.resize();
     try { picker?.populate?.(model.deviceId); } catch {}
     if (inputVolSl) inputVolSl.value = String(audio?.getInput?.().level ?? 0);
     refreshInputMuteBtn();
@@ -592,11 +704,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
   });
   if (btnClose)  btnClose.addEventListener('click', close);
   if (btnRecord) btnRecord.addEventListener('click', () => { recording ? stopRecording() : startRecording(); });
-  if (btnPlay)   btnPlay.addEventListener('click', () => { play(); });
+  if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
   if (btnStop)   btnStop.addEventListener('click', () => { stop(); });
   if (btnMute)   btnMute.addEventListener('click', () => { setMuted(!_muted); });
   if (btnSync)   btnSync.addEventListener('click', () => { realign(); });
-  if (btnDelete) btnDelete.addEventListener('click', () => { if (model.track) deleteTrack(); });
+  if (btnDelete) btnDelete.addEventListener('click', () => { clearAll(); });
   if (elGain) {
     elGain.value = String(model.master);
     elGain.addEventListener('input', () => setMaster(elGain.value));
@@ -612,8 +724,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
   });
   syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
 
+  // Seed with one empty armed track (Phase 5 restores persisted tracks here).
+  model.tracks.push(makeTrack());
+  model.armedTrackId = model.tracks[0].id;
+
   // Initial paint even while hidden so first open() shows content immediately.
   if (propsEl) renderProps();
+  if (tracksEl) renderTracks();
   refreshMuteBtn();
   refreshTransport();
   refreshLooperBtn();
@@ -621,7 +738,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   if (wasOpenLastSession) open();
 
-  // perFrame is a no-op: the renderer self-drives its own rAF while
+  // perFrame is a no-op: each renderer self-drives its own rAF while
   // recording/playing. Exposed for symmetry with the sequencer's page-init hook.
   function perFrame() {}
 
@@ -629,10 +746,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     open, close,
     isOpen: () => panel?.style.display !== 'none',
     hasBeenOpened: () => _everOpened,
-    isPlaying: () => playing,
+    isPlaying: () => looperAudio.anyPlaying(),
     isRecording: () => recording,
-    play, stop,
+    play: playAll, stop,
     perFrame,
-    dispose: () => { looperAudio.dispose(); renderer.dispose(); },
+    dispose: () => { looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
   };
 }

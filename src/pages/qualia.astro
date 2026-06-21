@@ -1575,14 +1575,41 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #looper-body {
       flex: 1; min-height: 0;
       padding: 0.35rem;
+      overflow-y: auto;
     }
-    #looper-canvas {
-      width: 100%; height: 100%; display: block;
-      border-radius: 6px;
-      background: rgba(0,0,0,0.28);
+    #looper-tracks { display: flex; flex-direction: column; gap: 0.35rem; }
+    .looper-track {
+      display: flex; align-items: stretch; gap: 0.5rem;
+      padding: 0.35rem;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: rgba(0,0,0,0.18);
     }
+    .looper-track.armed { border-color: var(--pink); background: rgba(244,114,182,0.07); }
+    .looper-track-head {
+      display: flex; flex-direction: column; gap: 0.25rem;
+      min-width: 250px; flex: 0 0 auto; font-size: 0.68rem;
+    }
+    .looper-track-row { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+    .looper-track-row .seq-prop { gap: 0.2rem; }
+    .looper-track-name { color: var(--muted); font-size: 0.72rem; min-width: 1.4ch; text-align: center; }
+    .looper-arm {
+      padding: 0.05rem 0.4rem; font-size: 0.8rem; line-height: 1;
+      color: var(--muted); min-width: 2ch; text-align: center;
+    }
+    .looper-arm.armed { color: var(--pink); border-color: var(--pink); background: rgba(244,114,182,0.10); }
+    .looper-track-del { padding: 0.05rem 0.4rem; font-size: 0.85rem; line-height: 1; }
+    .looper-track-mute { margin-left: auto; }
+    .looper-track-canvas {
+      flex: 1; min-width: 0; align-self: stretch;
+      height: auto; min-height: 72px; display: block;
+      border-radius: 4px; background: rgba(0,0,0,0.28);
+    }
+    .looper-add { display: flex; justify-content: center; padding: 0.15rem; }
     @media (max-width: 700px) {
       #looper-props { padding: 0.25rem 0.45rem; gap: 0.25rem 0.45rem; font-size: 0.68rem; }
+      .looper-track { flex-direction: column; }
+      .looper-track-head { min-width: 0; }
+      .looper-track-canvas { min-height: 56px; }
     }
 
     /* Vocoder panel — same draggable-window shape as #strudel-panel /
@@ -2355,13 +2382,13 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="btn-looper-stop"   title="Stop">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-looper-mute" title="Mute loop output (keeps looping in time)">live</button>
     <input type="range" class="panel-gain-slider" id="looper-gain" min="0" max="1" step="0.01" value="0.9" title="Output level (0–1×)" />
-    <button class="ctrl-btn" id="btn-looper-sync"   title="Realign loop to the next cycle boundary" style="display:none">⟲</button>
-    <button class="ctrl-btn" id="btn-looper-delete" title="Delete loop">🗑</button>
+    <button class="ctrl-btn" id="btn-looper-sync"   title="Realign all loops to the next cycle boundary" style="display:none">⟲</button>
+    <button class="ctrl-btn" id="btn-looper-delete" title="Clear all loops">🗑</button>
     <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
   </div>
   <div id="looper-props"></div>
   <div id="looper-body">
-    <canvas id="looper-canvas"></canvas>
+    <div id="looper-tracks"></div>
   </div>
 </div>
 

@@ -78,17 +78,16 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let liveAccMin = 1, liveAccMax = -1, liveAccN = 0;
   let liveTotalFrames = 0;
 
-  // ── playback graph ──
-  //   loop source → loopGain → masterGain → destination + analyser('looper')
-  // Only the recorded loop runs through the looper. Live-input monitoring is a
-  // page-level concern (audio.js mic monitor) so it isn't double-captured; the
-  // raw input already reaches the visualizers + recording via the 'mic' source.
-  let masterGain = null, analyser = null, loopGain = null;
-  let source = null;
-  let playStartAbs = null, playLoopDur = 0;
-  let _muted = false;
+  // ── playback graph (multi-voice) ──
+  //   each track:  bufferSource → trackGain (vol × mute) → loopMaster (master × mute)
+  //   loopMaster → destination + analyser('looper')
+  // Only recorded loops run through the looper. Live-input monitoring +
+  // recording are a page-level concern (the audio.js 'mic' input channel), so
+  // the input is never routed here and can't be double-counted.
+  let loopMaster = null, analyser = null;
+  const voices = new Map();         // trackId -> { source, gain, vol, muted, playStartAbs, playLoopDur }
+  let _muted = false;               // header master mute (all loops)
   let _master = 0.9;                // overall looper output level
-  let _loopVol = 0.5;               // recorded-loop playback level (Ditto-centre)
   let _adopted = false;             // 'looper' registered with audio.js
   let _offsetMs = 0;                // nudge: + = take plays earlier (compensates lateness)
 
@@ -333,19 +332,17 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
   // ── playback / monitor bus ──
   function ensureBus() {
-    if (masterGain) return;
-    masterGain = ctx.createGain();
-    masterGain.gain.value = _muted ? 0 : _master;
+    if (loopMaster) return;
+    loopMaster = ctx.createGain();
+    loopMaster.gain.value = _muted ? 0 : _master;
     // Tag so Strudel's connect-into-destination mute patch leaves the looper
-    // alone — the looper owns its own mute on masterGain (mirrors kit.output).
-    masterGain.__qualiaBypassMute = true;
-    loopGain  = ctx.createGain(); loopGain.gain.value  = _loopVol;
+    // alone — the looper owns its own mute on loopMaster (mirrors kit.output).
+    loopMaster.__qualiaBypassMute = true;
     analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.40;
-    loopGain.connect(masterGain);
-    masterGain.connect(ctx.destination);
-    masterGain.connect(analyser);
+    loopMaster.connect(ctx.destination);
+    loopMaster.connect(analyser);
   }
 
   // Register the looper's loop output with audio.js so it drives the
@@ -393,37 +390,58 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return now + START_MARGIN;
   }
 
-  async function play(track, { grid = 1, syncOn = false, cps = 0.5 } = {}) {
-    if (!track || !track.buffer) return false;
+  // Start (or restart) one track's loop voice. Other voices keep playing — only
+  // the voice for this track.id is replaced, so re-locking one loop to a new
+  // boundary (length / nudge change) doesn't disturb the rest.
+  async function playVoice(track, { grid = 1, syncOn = false, cps = 0.5 } = {}) {
+    if (!track || !track.buffer || !track.id) return false;
     await ensureContext();
     ensureBus();
-    stopSource();
+    stopVoice(track.id);
     const sr = track.sampleRate;
     const rate = derivePlaybackRate(track, cps);
     const startAbs = nextBoundaryAbs(grid, syncOn);
     const startFrame = effLoopStartFrame(track);
-    source = ctx.createBufferSource();
+    const vol = clamp01(track.volume == null ? 0.5 : track.volume);
+    const muted = !!track.muted;
+    const gain = ctx.createGain();
+    gain.gain.value = muted ? 0 : vol;
+    gain.connect(loopMaster);
+    const source = ctx.createBufferSource();
     source.buffer = track.buffer;
     source.loop = true;
     source.loopStart = startFrame / sr;
     source.loopEnd = (startFrame + track.regionFrames) / sr;
     source.playbackRate.value = rate;
-    source.connect(loopGain);
+    source.connect(gain);
     source.start(startAbs, startFrame / sr);
-    playStartAbs = startAbs;
-    playLoopDur = (track.regionFrames / sr) / rate;   // == track.length / cps
+    voices.set(track.id, {
+      source, gain, vol, muted,
+      playStartAbs: startAbs,
+      playLoopDur: (track.regionFrames / sr) / rate,   // == track.length / cps
+    });
     ensureAdopted();
     return true;
   }
 
-  function stopSource() {
-    if (source) { try { source.stop(); } catch {}; try { source.disconnect(); } catch {}; source = null; }
-    playStartAbs = null;
+  function stopVoice(id) {
+    const v = voices.get(id);
+    if (!v) return;
+    try { v.source.stop(); } catch {}
+    try { v.source.disconnect(); } catch {}
+    try { v.gain.disconnect(); } catch {}
+    voices.delete(id);
+    maybeRelease();
   }
 
-  function stop() {
-    stopSource();
-    if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
+  function stopAll() {
+    for (const id of Array.from(voices.keys())) stopVoice(id);
+  }
+
+  // Drop the adopted 'looper' analyser once nothing is looping, so the source
+  // disappears from the visualizer + recordable mix when silent.
+  function maybeRelease() {
+    if (voices.size === 0 && _adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
   }
 
   function ramp(param, target) {
@@ -435,18 +453,34 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
-  function setMuted(on) { _muted = !!on; if (masterGain) ramp(masterGain.gain, _muted ? 0 : _master); }
-  function setMaster(v)  { _master = clamp01(v); if (masterGain && !_muted) ramp(masterGain.gain, _master); }
-  function setLoopVol(v) { _loopVol = clamp01(v); if (loopGain) ramp(loopGain.gain, _loopVol); }
+  // Header master (all loops) — volume + mute on loopMaster.
+  function setMuted(on) { _muted = !!on; if (loopMaster) ramp(loopMaster.gain, _muted ? 0 : _master); }
+  function setMaster(v)  { _master = clamp01(v); if (loopMaster && !_muted) ramp(loopMaster.gain, _master); }
+  // Per-track volume + mute — operate on the live voice if the track is playing
+  // (otherwise the model holds the value and playVoice applies it on next play).
+  function setTrackVolume(id, v) {
+    const voice = voices.get(id);
+    if (!voice) return;
+    voice.vol = clamp01(v);
+    if (!voice.muted) ramp(voice.gain.gain, voice.vol);
+  }
+  function setTrackMuted(id, on) {
+    const voice = voices.get(id);
+    if (!voice) return;
+    voice.muted = !!on;
+    ramp(voice.gain.gain, voice.muted ? 0 : voice.vol);
+  }
   function setOffsetMs(v) { _offsetMs = Number(v) || 0; }
   function getOffsetMs() { return _offsetMs; }
 
-  // Loop phase 0..1 across the whole take, or null when not playing.
-  function getPlayhead01() {
-    if (playStartAbs == null || !(playLoopDur > 0) || !ctx) return null;
+  // Loop phase 0..1 across the whole take for one track, or null when that
+  // track isn't playing.
+  function getPlayhead01(id) {
+    const v = voices.get(id);
+    if (!v || v.playStartAbs == null || !(v.playLoopDur > 0) || !ctx) return null;
     const t = ctx.currentTime;
-    if (t < playStartAbs) return 0;
-    return ((t - playStartAbs) % playLoopDur) / playLoopDur;
+    if (t < v.playStartAbs) return 0;
+    return ((t - v.playStartAbs) % v.playLoopDur) / v.playLoopDur;
   }
 
   // Live view for the renderer while recording: min/max peak bins (from frame
@@ -470,12 +504,12 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   function dispose() {
-    stop();
+    stopAll();
     teardownCapture();
     if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
-    try { masterGain?.disconnect(); } catch {}
+    try { loopMaster?.disconnect(); } catch {}
     try { analyser?.disconnect(); } catch {}
-    masterGain = analyser = loopGain = null;
+    loopMaster = analyser = null;
     try { ctx?.close(); } catch {}
     ctx = null; workletReady = null;
   }
@@ -485,15 +519,17 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     setInputDevice: async (id) => { if (!recording) await openCapture(id || ''); else streamDeviceId = id || ''; },
     getInputDeviceId: () => streamDeviceId,
     startRecording, stopRecording,
-    play, stop,
-    setMuted, setMaster, setLoopVol,
+    playVoice, stopVoice, stopAll,
+    setMuted, setMaster,
+    setTrackVolume, setTrackMuted,
     setOffsetMs, getOffsetMs,
     getLoopRegion,
     getPlayhead01,
     getLiveView,
     isCapturing: () => !!srcNode,
     isRecording: () => recording,
-    isPlaying:   () => !!source,
+    isVoicePlaying: (id) => voices.has(id),
+    anyPlaying: () => voices.size > 0,
     dispose,
   };
 }
