@@ -1574,6 +1574,13 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       background: rgba(0,0,0,0.34);
       border-top: 1px solid rgba(255,255,255,0.04);
     }
+    #btn-rig-buffer { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
+    #btn-rig-buffer.active {
+      color: var(--cyan); border-color: var(--cyan);
+      background: rgba(34,211,238,0.10);
+    }
+    #btn-looper-retro { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
+    #btn-looper-retro:disabled { opacity: 0.4; cursor: default; }
     .looper-input-select { max-width: 14ch; }
     #btn-looper-record, #btn-looper-play, #btn-looper-stop {
       padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1;
@@ -2439,6 +2446,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span class="sp-subtitle">signal</span>
       <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
       <span id="rig-input-controls" class="rig-input-controls"></span>
+      <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
       <span class="sp-status" id="rig-signal-status"></span>
     </div>
     <canvas id="rig-scope" class="rig-scope" title="Live input scope (pre-fader)"></canvas>
@@ -2451,6 +2459,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span class="sp-status" id="looper-status">click ● to record</span>
       <span class="rig-head-spacer"></span>
       <button class="ctrl-btn" id="btn-looper-record" title="Record">●</button>
+      <button class="ctrl-btn" id="btn-looper-retro"  title="Grab the last N cycles you just played into the armed track (retro-loop). Needs the live buffer on.">grab</button>
       <button class="ctrl-btn" id="btn-looper-play"   title="Play loop">▶</button>
       <button class="ctrl-btn" id="btn-looper-stop"   title="Stop">■</button>
       <button class="ctrl-btn panel-mute-btn" id="btn-looper-mute" title="Mute loop output (keeps looping in time)">live</button>

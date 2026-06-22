@@ -37,6 +37,8 @@ const SYNC_KEY       = `${NS}.sync`;
 const GRID_KEY       = `${NS}.grid`;       // default "cycles" (grid) for new tracks
 const OFFSET_KEY     = `${NS}.offsetMs`;
 const IMMEDIATE_KEY  = `${NS}.immediate`;  // "start now" (drop in mid-cycle) vs wait for boundary
+const RETRO_KEY      = `${NS}.retroCycles`;// cycles the retro "grab" captures
+const BUFFER_KEY     = `${NS}.buffer`;     // keep the live lookback buffer filling
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
@@ -111,6 +113,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const scopeCanvas = document.getElementById('rig-scope');
   const btnToggle   = document.getElementById('btn-looper');
   const btnRecord   = document.getElementById('btn-looper-record');
+  const btnRetro    = document.getElementById('btn-looper-retro');
+  const bufferBtn   = document.getElementById('btn-rig-buffer');
   const btnPlay     = document.getElementById('btn-looper-play');
   const btnStop     = document.getElementById('btn-looper-stop');
   const btnMute     = document.getElementById('btn-looper-mute');
@@ -129,6 +133,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     cps: 0.5,                       // used when sync is off / Strudel idle
     offsetMs: (() => { const v = parseInt(lsGet(OFFSET_KEY, '0'), 10); return Number.isFinite(v) ? Math.max(-200, Math.min(500, v)) : 0; })(),
     master:   num01(lsGet(MASTER_KEY, '0.9'), 0.9),   // overall looper output
+    retroCycles: (() => { const v = parseInt(lsGet(RETRO_KEY, '4'), 10); return Number.isFinite(v) ? Math.max(1, Math.min(64, v)) : 4; })(),
+    bufferOn: lsGet(BUFFER_KEY, '0') === '1',          // live lookback running
     gridDefault: defaultGrid,       // "cycles" each new track starts with
     deviceId: getStoredDeviceId('looperInput') || '',   // remembered input device
     tracks: [],                     // Track[] — see makeTrack()
@@ -314,6 +320,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
       setStatus('nothing captured');
       return;
     }
+    await commitTake(t, res, 'recorded');
+  }
+
+  // Apply a finished take (from record OR retro grab) to a track: store the
+  // buffer + region metadata, refresh the row, persist, and play it (other
+  // tracks keep looping). `verb` is the status prefix ("recorded" / "grabbed").
+  async function commitTake(t, res, verb) {
     const cyc = (res.recordedCycles != null && res.recordedCycles > 0) ? res.recordedCycles : Math.max(t.grid, 1);
     t.buffer = res.buffer;
     t.sampleRate = res.sampleRate;
@@ -327,9 +340,55 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshAddBtn();
     refreshTransport();
     persistSoon(t.id);            // save the new take (PCM + settings) to IndexedDB
-    setStatus(`recorded · ${fmtLen(cyc)} cyc`);
+    setStatus(`${verb} · ${fmtLen(cyc)} cyc`);
     await playVoice(t);            // play the new take; other tracks keep looping
     syncRenderers();
+  }
+
+  // ⟲ retro — grab the last N cycles from the always-on live buffer into the
+  // armed track, phase-locked to the grid. The buffer must be running (capture
+  // open) and the AudioWorklet available (the ring lives in the processor).
+  async function doRetroGrab() {
+    if (recording) return;
+    if (!looperAudio.isRetroCapable()) { setStatus('retro needs AudioWorklet'); return; }
+    if (!looperAudio.isCapturing()) { setStatus('turn the buffer on first'); return; }
+    const t = armedTrack();
+    if (!t) return;
+    looperAudio.stopVoice(t.id);   // retro replaces the armed take
+    setStatus('grabbing…');
+    let res = null;
+    try {
+      res = await looperAudio.grabRetro({ grid: t.grid, syncOn: syncOn(), cps: currentCps(), cycles: model.retroCycles });
+    } catch (e) { console.warn('[qualia] retro grab failed:', e); }
+    if (!res) { setStatus('buffer too short — play a few more bars'); refreshTransport(); return; }
+    await commitTake(t, res, 'grabbed');
+  }
+
+  // ── live lookback buffer ───────────────────────────────────────────────────
+  async function setBuffer(on) {
+    model.bufferOn = !!on;
+    lsSet(BUFFER_KEY, model.bufferOn ? '1' : '0');
+    if (model.bufferOn) {
+      try {
+        const capable = await looperAudio.startBuffer(model.deviceId);
+        setStatus(capable ? 'live buffer on' : 'retro unavailable (no AudioWorklet)');
+        try { picker?.populate?.(model.deviceId); } catch {}
+      } catch (e) {
+        console.warn('[qualia] buffer start failed:', e);
+        model.bufferOn = false; lsSet(BUFFER_KEY, '0');
+        setStatus('mic error — check permissions');
+      }
+    } else {
+      looperAudio.stopBuffer();
+      setStatus('live buffer off');
+    }
+    refreshBufferBtn();
+    refreshTransport();
+  }
+  function setRetroCycles(v) {
+    const n = Math.max(1, Math.min(64, parseInt(v, 10) || 1));
+    model.retroCycles = n;
+    lsSet(RETRO_KEY, n);
   }
 
   // Play (or re-lock) one track's voice.
@@ -592,6 +651,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       immediate:   !!model.immediate,
       offsetMs:    model.offsetMs,
       gridDefault: model.gridDefault,
+      retroCycles: model.retroCycles,
       cps:         model.cps,
     };
   }
@@ -615,6 +675,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       model.gridDefault = Math.max(1, Math.min(16, cfg.gridDefault | 0));
       lsSet(GRID_KEY, model.gridDefault);
     }
+    if (typeof cfg.retroCycles === 'number') setRetroCycles(cfg.retroCycles);
     // Repaint the props row so the panel mirrors the applied settings
     // (master slider, nudge, sync/start-now checkboxes) whether or not it's
     // currently open; renderProps re-reads model on the next open anyway.
@@ -740,6 +801,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const nudgeIn = numInput(model.offsetMs, -200, 500, 5);
     nudgeIn.addEventListener('change', () => { setOffsetMs(nudgeIn.value); nudgeIn.value = String(model.offsetMs); });
 
+    const retroIn = numInput(model.retroCycles, 1, 64, 1);
+    retroIn.addEventListener('change', () => { setRetroCycles(retroIn.value); retroIn.value = String(model.retroCycles); });
+
     const syncCb = document.createElement('input');
     syncCb.type = 'checkbox'; syncCb.checked = !!model.syncStrudel;
     syncCb.addEventListener('change', () => {
@@ -772,6 +836,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     propsEl.append(
       mk('cps', stepper(cpsIn, 'input'), 'Cycles per second when sync is off (Strudel\'s clock drives it when synced).'),
       mk('nudge ms', stepper(nudgeIn, 'change'), 'Slide all loops into the pocket. + pulls a late take earlier to compensate record latency.'),
+      mk('retro cyc', stepper(retroIn, 'change'), 'How many cycles the “grab” button captures from the live buffer (snapped to the armed track\'s grid).'),
       syncWrap,
       immWrap,
     );
@@ -823,7 +888,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     g.strokeStyle = 'rgba(255,255,255,0.06)';
     g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
 
-    const an = audio?.getInputAnalyser?.();
+    // Prefer the looper's own capture analyser (live when the buffer/record is
+    // running, pre-everything) so the scope shows the buffered signal even at
+    // monitor 0; fall back to the page input channel's analyser otherwise.
+    const an = looperAudio.getCaptureAnalyser?.() || audio?.getInputAnalyser?.();
     if (an) {
       const n = an.fftSize;
       if (!scopeBuf || scopeBuf.length !== n) scopeBuf = new Uint8Array(n);
@@ -937,7 +1005,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (btnPlay) { btnPlay.classList.toggle('playing', playing); btnPlay.disabled = !any || recording; }
     if (btnStop) btnStop.disabled = !playing;
     if (btnDelete) btnDelete.disabled = !any || recording;
+    if (btnRetro) btnRetro.disabled = recording || !(looperAudio.isRetroCapable() && looperAudio.isCapturing());
     refreshSyncBtnVisibility();
+  }
+  function refreshBufferBtn() {
+    if (!bufferBtn) return;
+    const on = looperAudio.isBuffering();
+    bufferBtn.classList.toggle('active', on);
+    bufferBtn.textContent = on ? 'buffer ●' : 'buffer';
+    bufferBtn.title = on
+      ? 'Live buffer on — last 40s captured; use “grab” to retro-loop. Click to stop.'
+      : 'Live buffer — continuously capture the last 40s so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).';
   }
   function refreshMuteBtn() {
     if (!btnMute) return;
@@ -1047,6 +1125,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // Resume live-input monitoring on open (a user gesture) if it was left up —
     // so a remembered input level/device comes back without a manual nudge.
     if (inp.level > 0 && !inp.muted && !audio?.hasSource?.('mic')) ensureInputLive();
+    // Resume the live lookback buffer if it was left on (open() is a gesture, so
+    // a getUserMedia prompt — when the looper can't borrow the page mic — is OK).
+    if (model.bufferOn && !looperAudio.isBuffering()) setBuffer(true);
+    refreshBufferBtn();
     startScope();
     refreshLooperBtn();
     refreshTransport();
@@ -1065,6 +1147,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   });
   if (btnClose)  btnClose.addEventListener('click', close);
   if (btnRecord) btnRecord.addEventListener('click', () => { recording ? stopRecording() : startRecording(); });
+  if (btnRetro)  btnRetro.addEventListener('click', () => { doRetroGrab(); });
+  if (bufferBtn) bufferBtn.addEventListener('click', () => { setBuffer(!model.bufferOn); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
   if (btnStop)   btnStop.addEventListener('click', () => { stop(); });
   if (btnMute)   btnMute.addEventListener('click', () => { setMuted(!_muted); });
@@ -1094,6 +1178,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (propsEl) renderProps();
   if (tracksEl) renderTracks();
   refreshMuteBtn();
+  refreshBufferBtn();
   refreshTransport();
   refreshLooperBtn();
   refreshSyncBtnVisibility();

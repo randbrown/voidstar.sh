@@ -64,8 +64,17 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let stream = null;
   let streamOwned = false;          // false when we borrowed audio.getMicStream()
   let streamDeviceId = '';
-  let srcNode = null, recNode = null, sinkGain = null;
+  let srcNode = null, recNode = null, sinkGain = null, captureAnalyser = null;
   let usingWorklet = false;
+
+  // ── retroactive ring buffer ──
+  // The worklet keeps an always-on ring of the last ~40s; `_bufferOn` is the
+  // user's "keep the lookback filling" intent (capture stays open even when not
+  // recording). Grabs are request/response over the port, keyed by id.
+  let _bufferOn = false;
+  const _pendingGrabs = new Map();
+  let _grabSeq = 0;
+  const RING_SECONDS = 40;          // mirror of the worklet's RING_SECONDS
 
   // ── recording state ──
   let recording = false;
@@ -202,6 +211,14 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     sinkGain.gain.value = 0;
     sinkGain.connect(ctx.destination);
 
+    // A non-audible analyser on the raw capture so the rig scope can show the
+    // exact signal being buffered/recorded (pre-everything), even when the page
+    // input channel's monitor is at 0 or its own mic isn't running.
+    captureAnalyser = ctx.createAnalyser();
+    captureAnalyser.fftSize = 1024;
+    captureAnalyser.smoothingTimeConstant = 0.40;
+    srcNode.connect(captureAnalyser);
+
     // Native channel count of this input (1 mono / 2 stereo) — drives the
     // ScriptProcessor fallback; the worklet adopts it automatically via the
     // default 'max' channelCountMode.
@@ -215,10 +232,17 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       });
       recNode.port.onmessage = (e) => {
         const d = e.data;
+        if (!d) return;
         // Control message: precise ctx time of the first armed quantum (frame 0).
-        if (d && d.t0 !== undefined) { if (firstChunkAbs == null) firstChunkAbs = d.t0; return; }
+        if (d.t0 !== undefined) { if (firstChunkAbs == null) firstChunkAbs = d.t0; return; }
+        // Retro grab response — resolve the matching pending request.
+        if (d.grab !== undefined) {
+          const resolve = _pendingGrabs.get(d.grab);
+          if (resolve) { _pendingGrabs.delete(d.grab); resolve(d); }
+          return;
+        }
         if (!recording) return;
-        if (d && d.chans) onChunks(d.chans);
+        if (d.chans) onChunks(d.chans);
       };
       srcNode.connect(recNode);
       recNode.connect(sinkGain);
@@ -247,8 +271,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { srcNode?.disconnect(); } catch {}
     if (recNode) { try { recNode.disconnect(); } catch {}; if ('onaudioprocess' in recNode) recNode.onaudioprocess = null; }
     try { sinkGain?.disconnect(); } catch {}
+    try { captureAnalyser?.disconnect(); } catch {}
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
-    srcNode = recNode = sinkGain = null;
+    srcNode = recNode = sinkGain = captureAnalyser = null;
     stream = null; streamOwned = false;
   }
 
@@ -366,6 +391,110 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       if (waitMs < 5) finish();
       else setTimeout(finish, waitMs + 20);
     });
+  }
+
+  // ── retroactive ring buffer ──
+  // Keep the capture open so the worklet's always-on ring keeps filling, even
+  // when not recording. Retro only works on the worklet path (the ring lives in
+  // the processor); the ScriptProcessor fallback returns not-capable.
+  async function startBuffer(deviceId) {
+    await ensureContext();
+    await ensureCapture(deviceId || streamDeviceId || '');
+    _bufferOn = true;
+    return usingWorklet;
+  }
+  function stopBuffer() {
+    _bufferOn = false;
+    if (!recording) teardownCapture();
+  }
+
+  // Grab the most recent `cycles` of the live ring as a loop, phase-locked to
+  // the Strudel grid. Resolves to the same track shape as stopRecording (buffer
+  // padded both sides, loopStartBase, regionFrames, naturalSeconds,
+  // recordedCycles) or null when the ring can't cover a single grid unit.
+  async function grabRetro({ grid = 1, syncOn = false, cps = 0.5, cycles = 4 } = {}) {
+    if (!usingWorklet || !recNode) return null;     // ring lives in the worklet
+    await ensureContext();
+    if (!srcNode) return null;                       // capture must be open
+    const N = grid > 0 ? grid : 1;
+    let L = Math.max(N, Math.round((cycles > 0 ? cycles : N) / N) * N);
+
+    // Anchor the Strudel grid to a looper-ctx reference time read right now.
+    const tRef = ctx.currentTime;
+    let info = null;
+    if (syncOn) {
+      const i = syncStrudel?.getStrudelCyclePos?.();
+      if (i && i.cps > 0 && typeof i.pos === 'number') info = i;
+    }
+    const effCps = info ? info.cps : (cps > 0 ? cps : 0.5);
+
+    // Clamp to what the ring can hold (leave PAD headroom on both ends).
+    const maxByRing = Math.max(N, Math.floor(((RING_SECONDS - 2 * PAD_SEC - 0.2) * effCps) / N) * N);
+    if (L > maxByRing) L = maxByRing;
+
+    const secondsWanted = L / effCps + 2 * PAD_SEC + 0.3;
+    const id = `g${(_grabSeq++).toString(36)}`;
+    const resp = await new Promise((resolve) => {
+      _pendingGrabs.set(id, resolve);
+      try { recNode.port.postMessage({ cmd: 'grab', seconds: secondsWanted, id }); }
+      catch { _pendingGrabs.delete(id); resolve(null); }
+      setTimeout(() => { if (_pendingGrabs.has(id)) { _pendingGrabs.delete(id); resolve(null); } }, 600);
+    });
+    if (!resp || !resp.chans || !resp.chans.length || !resp.frames) return null;
+
+    const sr = resp.sampleRate || ctx.sampleRate;
+    const total = resp.frames;
+    const fpc = sr / effCps;                          // frames per cycle
+
+    // OUT boundary. Snap to the NEAREST grid boundary; if that boundary is
+    // still in the future, fall back to the last one that passed. Then clamp to
+    // the captured end — the boundary may sit a few ms past the worklet's last
+    // block (it can't grab audio not yet captured); the residual offset is what
+    // the global "nudge ms" compensates, same as a normal recording.
+    let outAbs;
+    if (info) {
+      let endCycle = Math.round(info.pos / N) * N;
+      outAbs = tRef + (endCycle - info.pos) / info.cps;
+      if (outAbs > tRef + EPS) {
+        endCycle = Math.floor(info.pos / N) * N;
+        outAbs = tRef + (endCycle - info.pos) / info.cps;
+      }
+      if (outAbs > resp.tEnd) outAbs = resp.tEnd;
+    } else {
+      outAbs = resp.tEnd;                             // free mode: end "now"
+    }
+    let outFrame = Math.round((outAbs - resp.tStart) * sr);
+    outFrame = Math.max(0, Math.min(total, outFrame));
+
+    // Step back whole grid units from OUT, clamped to the audio present, so the
+    // loop is an integer number of cycles and phase-locked to the grid.
+    const maxL = Math.floor(outFrame / fpc / N) * N;
+    if (maxL < N) return null;                        // ring too short for one unit
+    const effL = Math.max(N, Math.min(L, maxL));
+    let inFrame = Math.round(outFrame - effL * fpc);
+    inFrame = Math.max(0, Math.min(outFrame, inFrame));
+    const regionFrames = outFrame - inFrame;
+    if (regionFrames < 16) return null;
+
+    const pad = Math.round(PAD_SEC * sr);
+    const padStart = Math.min(pad, inFrame);
+    const padEnd   = Math.min(pad, total - outFrame);
+    const sliceFrom = inFrame - padStart;
+    const sliceTo   = outFrame + padEnd;
+    const regionLen = sliceTo - sliceFrom;
+    const nch = resp.chans.length;
+    const buffer = ctx.createBuffer(nch, regionLen, sr);
+    for (let c = 0; c < nch; c++) {
+      const src = resp.chans[c] instanceof Float32Array ? resp.chans[c] : new Float32Array(resp.chans[c]);
+      buffer.copyToChannel(src.subarray(sliceFrom, sliceTo), c);
+    }
+    return {
+      buffer, sampleRate: sr,
+      loopStartBase: padStart,
+      regionFrames,
+      naturalSeconds: regionFrames / sr,
+      recordedCycles: effL,
+    };
   }
 
   // ── playback / monitor bus ──
@@ -655,6 +784,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   function dispose() {
+    for (const resolve of _pendingGrabs.values()) { try { resolve(null); } catch {} }
+    _pendingGrabs.clear();
     removeAll();
     teardownCapture();
     if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
@@ -670,6 +801,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     setInputDevice: async (id) => { if (!recording) await openCapture(id || ''); else streamDeviceId = id || ''; },
     getInputDeviceId: () => streamDeviceId,
     startRecording, stopRecording,
+    startBuffer, stopBuffer, grabRetro,
+    isBuffering: () => _bufferOn && !!srcNode,
+    isRetroCapable: () => usingWorklet,
+    getCaptureAnalyser: () => captureAnalyser,
     playVoice, stopVoice, stopAll, removeTrack, removeAll,
     setMuted, setMaster,
     setTrackVolume, setTrackMuted,
