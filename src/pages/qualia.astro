@@ -1774,8 +1774,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <button type="button" class="ctrl-btn qg-menuitem" data-capture="viewport" role="menuitemradio">qfx</button>
           <button type="button" class="ctrl-btn qg-menuitem" data-capture="tab" role="menuitemradio">tab</button>
           <div class="qg-menu-sep" role="separator"></div>
-          <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-autofs" role="menuitemcheckbox" aria-checked="true"
-                  title="Auto fullscreen: the rec button enters fullscreen first and captures qfx at full-screen resolution (auto-saved, opens in Preview, no nag). Esc exits fullscreen; the take keeps going. qfx only.">auto-⛶ ✓</button>
+          <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-autofs" role="menuitemcheckbox" aria-checked="false"
+                  title="Auto fullscreen: the rec button enters fullscreen first and captures qfx at full-screen resolution (auto-saved, opens in Preview, no nag). Esc exits fullscreen; the take keeps going. qfx only.">auto-⛶</button>
+          <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-autozen" role="menuitemcheckbox" aria-checked="false"
+                  title="Auto-zen: the rec button drops into zen (hides the in-page HUD) before recording. Independent of auto-⛶ — pair them for a fullscreen + zen performance view. The zen handle / Esc bring the HUD back; the take keeps going. qfx only.">auto-zen</button>
           <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-autosave" role="menuitemcheckbox" aria-checked="true"
                   title="Auto-save: save with a default filename and no save dialog (qfx mode). Off = choose the save location up front (the dialog leaves fullscreen on macOS).">auto-save ✓</button>
         </div>
@@ -2441,12 +2443,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       </label>
       <label class="seq-prop voc-range" title="Noise gate — mutes the vocoder and harmonizer when the mic drops below this level. Shared by both; also breaks acoustic feedback at silence. 0 = gate off.">
         <span class="seq-prop-label">gate</span>
-        <input type="range" id="voc-gate" min="0" max="1" step="0.01" />
+        <input type="range" id="voc-gate" min="0" max="1" step="0.01" value="0.04" />
         <span class="qp-val" id="voc-gate-val"></span>
       </label>
       <label class="seq-prop voc-range" title="Master output gain — the whole vox panel.">
         <span class="seq-prop-label">output</span>
-        <input type="range" id="voc-output" min="0" max="2" step="0.01" />
+        <input type="range" id="voc-output" min="0" max="2" step="0.01" value="0.9" />
         <span class="qp-val" id="voc-output-val"></span>
       </label>
       <label class="seq-prop" title="Feed the vox output into audio-reactive modulation — it joins strudel + sequencer as an audio source, heard by fx and recordings in the 'mix' / 'all' audio modes.">
@@ -2500,17 +2502,17 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           </label>
           <label class="seq-prop voc-range" title="Consonant clarity — blends a pink-noise carrier into the high bands so fricatives (s, sh, f, t) read as noise instead of a pitched whistle. The single biggest intelligibility control.">
             <span class="seq-prop-label">consonant</span>
-            <input type="range" id="voc-consonant" min="0" max="1" step="0.01" />
+            <input type="range" id="voc-consonant" min="0" max="1" step="0.01" value="0.6" />
             <span class="qp-val" id="voc-consonant-val"></span>
           </label>
           <label class="seq-prop voc-range" title="High-frequency voice passthrough — preserves sibilants (s, sh, t, f) which a pure vocoder mangles into low buzz.">
             <span class="seq-prop-label">sibilance</span>
-            <input type="range" id="voc-sibilance" min="0" max="1" step="0.01" />
+            <input type="range" id="voc-sibilance" min="0" max="1" step="0.01" value="0.4" />
             <span class="qp-val" id="voc-sibilance-val"></span>
           </label>
           <label class="seq-prop voc-range" title="Dry voice mix — sends a small amount of unprocessed mic to the output. Default 0; raise if a venue needs extra clarity.">
             <span class="seq-prop-label">dry</span>
-            <input type="range" id="voc-dry" min="0" max="1" step="0.01" />
+            <input type="range" id="voc-dry" min="0" max="1" step="0.01" value="0" />
             <span class="qp-val" id="voc-dry-val"></span>
           </label>
         </div>
@@ -2528,22 +2530,22 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <div class="voc-props">
           <label class="seq-prop voc-range" title="Raw voice — a direct, unprocessed mic passthrough that is independent of the vocoder. Raise it (and switch the vocoder off) for plain speech that still gets the master leveling, then drop it to return to the robot. The 'Clean · raw voice' preset sets this up.">
             <span class="seq-prop-label">raw vox</span>
-            <input type="range" id="voc-raw" min="0" max="1" step="0.01" />
+            <input type="range" id="voc-raw" min="0" max="1" step="0.01" value="0" />
             <span class="qp-val" id="voc-raw-val"></span>
           </label>
           <label class="seq-prop voc-range" title="Presence EQ — a lift around 3 kHz where word recognition lives. A little goes a long way for clarity.">
             <span class="seq-prop-label">presence</span>
-            <input type="range" id="voc-presence" min="0" max="12" step="0.5" />
+            <input type="range" id="voc-presence" min="0" max="12" step="0.5" value="3.5" />
             <span class="qp-val" id="voc-presence-val"></span>
           </label>
           <label class="seq-prop voc-range" title="Master compression — keeps quiet syllables audible under loud ones. 0 = near-transparent, 1 = heavy.">
             <span class="seq-prop-label">compress</span>
-            <input type="range" id="voc-compress" min="0" max="1" step="0.01" />
+            <input type="range" id="voc-compress" min="0" max="1" step="0.01" value="0.45" />
             <span class="qp-val" id="voc-compress-val"></span>
           </label>
           <label class="seq-prop voc-range" title="De-esser — tames loud sibilance ('sss', 'sh') with a dynamic 6 kHz shelf cut, so consonant clarity doesn't turn harsh. 0 = off.">
             <span class="seq-prop-label">de-ess</span>
-            <input type="range" id="voc-deess" min="0" max="1" step="0.01" />
+            <input type="range" id="voc-deess" min="0" max="1" step="0.01" value="0.3" />
             <span class="qp-val" id="voc-deess-val"></span>
           </label>
         </div>
@@ -2600,7 +2602,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <div id="harm-formant-row" class="harm-row">
           <label class="seq-prop voc-range" title="Formant shift — moves the harmony's vocal 'character' without moving its pitch. 0 keeps each voice's natural identity; negative is darker / larger, positive is brighter / smaller. Voice engine only (needs the formant-shift worklet; the granular fallback ignores it).">
             <span class="seq-prop-label">formant</span>
-            <input type="range" id="harm-formant" min="-12" max="12" step="1" />
+            <input type="range" id="harm-formant" min="-12" max="12" step="1" value="0" />
             <span class="qp-val" id="harm-formant-val"></span>
           </label>
         </div>

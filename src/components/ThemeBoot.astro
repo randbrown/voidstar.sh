@@ -7,14 +7,18 @@
 // so adding a theme no longer means hand-editing a parallel `OK` array here.
 // The script body stays inline (no imports / no module defer) so it runs
 // synchronously before paint.
-import { THEMES } from '../lib/qualia/theme.js';
+import { THEMES, LEGACY_THEME_IDS } from '../lib/qualia/theme.js';
 const OK = THEMES.map((t) => t.id);
+const LEGACY = LEGACY_THEME_IDS;
 ---
-<script is:inline define:vars={{ OK }}>
+<script is:inline define:vars={{ OK, LEGACY }}>
   (function () {
     try {
       var KEY = 'voidstar.theme';
       var t = localStorage.getItem(KEY);
+      // Heal a renamed id (e.g. stained-glass → glass) so the saved theme
+      // survives the rename, and rewrite storage to the current id.
+      if (t && LEGACY[t]) { t = LEGACY[t]; try { localStorage.setItem(KEY, t); } catch (e2) {} }
       document.documentElement.setAttribute('data-theme', OK.indexOf(t) >= 0 ? t : 'voidstar');
     } catch (e) {
       document.documentElement.setAttribute('data-theme', 'voidstar');

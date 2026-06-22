@@ -16,26 +16,41 @@ export const STORAGE_KEY = 'voidstar.theme';
 export const THEMES = [
   { id: 'voidstar',       label: 'voidstar ✦' },
   { id: 'phosphor',       label: 'phosphor ▒' },
-  { id: 'phosphor-amber', label: 'phosphor·amber ▒' },
+  { id: 'amber',          label: 'amber ▒' },
   { id: 'tape',           label: 'tape ▤' },
   { id: 'abyssal',        label: 'abyssal ≈' },
   { id: 'glacial',        label: 'glacial ❄' },
   { id: 'win95',          label: 'win95 ▣' },
-  { id: 'stained-glass',  label: 'stained glass ◆' },
+  { id: 'glass',          label: 'glass ◆' },
   { id: 'visioneer',      label: 'visioneer ◉' },
   { id: 'gardens',        label: 'gardens ❀' },
 ];
 
+// Renamed theme ids → their current id. Keeps a saved preference (and any old
+// `#q=` share link / qualem) working after a rename instead of silently
+// reverting the user to the default. Read at boot (ThemeBoot.astro), in
+// getTheme(), and in setTheme(). Add an entry here whenever a theme id changes.
+export const LEGACY_THEME_IDS = {
+  'stained-glass':  'glass',
+  'phosphor-amber': 'amber',
+};
+
 const IDS = THEMES.map((t) => t.id);
 const DEFAULT = 'voidstar';
 
+/** Map a possibly-legacy id to its current id (passes through unknown ids). */
+function canonicalId(id) {
+  return LEGACY_THEME_IDS[id] || id;
+}
+
 export function getTheme() {
-  const t = document.documentElement.getAttribute('data-theme');
+  const t = canonicalId(document.documentElement.getAttribute('data-theme'));
   return IDS.includes(t) ? t : DEFAULT;
 }
 
 export function setTheme(id) {
-  const theme = IDS.includes(id) ? id : DEFAULT;
+  const mapped = canonicalId(id);
+  const theme = IDS.includes(mapped) ? mapped : DEFAULT;
   document.documentElement.setAttribute('data-theme', theme);
   try { localStorage.setItem(STORAGE_KEY, theme); } catch (_) {}
   invalidate();

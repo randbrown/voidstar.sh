@@ -353,6 +353,7 @@ export function initQualiaPage() {
     captureMode,
     recAutoSave:    autoSaveRec,
     recAutoFullscreen: autoFullscreenRec,
+    recAutoZen:     autoZenRec,
     splitMode,
     splitRatio,
     chron:          chron.getConfig(),
@@ -374,10 +375,17 @@ export function initQualiaPage() {
   // Auto-save (default on): qfx recordings save with a default filename and
   // no save-dialog (which on macOS leaves fullscreen). Off = choose location.
   let autoSaveRec = stored.recAutoSave !== false;
-  // Auto-fullscreen (default on): the rec button enters fullscreen first and
-  // captures qfx at full-screen resolution (one-button performance capture).
-  // qfx only — tab capture can't compose with the async fullscreen gesture.
-  let autoFullscreenRec = stored.recAutoFullscreen !== false;
+  // Auto-fullscreen (default OFF): when on, the rec button enters fullscreen
+  // first and captures qfx at full-screen resolution (one-button performance
+  // capture). Off by default so a first-time rec click doesn't surprise new
+  // users by jumping to fullscreen; persisted once toggled, like every other
+  // setting. qfx only — tab capture can't compose with the async fullscreen
+  // gesture.
+  let autoFullscreenRec = stored.recAutoFullscreen === true;
+  // Auto-zen (default OFF): when on, the rec button drops into zen (HUD hidden)
+  // before recording — pair with auto-⛶ for a fullscreen + zen performance
+  // view. Independent of auto-⛶. qfx only. Persisted like the others.
+  let autoZenRec = stored.recAutoZen === true;
   // One-shot per-recording override (set by "fullscreen + rec"), read at
   // start() and cleared after — doesn't change the user's persisted mode.
   let recOverride = null;
@@ -2188,6 +2196,16 @@ export function initQualiaPage() {
   const captureMenuItems = document.querySelectorAll('.qg-group[data-group="capture"] .qg-menuitem[data-capture]');
   const btnRecAutoSave = document.getElementById('btn-rec-autosave');
   const btnRecAutoFs = document.getElementById('btn-rec-autofs');
+  const btnRecAutoZen = document.getElementById('btn-rec-autozen');
+  // Idle rec-button tooltip, reflecting the independent one-button modifiers
+  // that apply on a qfx take (auto-⛶ → fullscreen, auto-zen → HUD hidden).
+  // Single source of truth so refreshRecordModeBtn + onStateChange agree.
+  function recBtnTitle() {
+    const qfx = captureMode !== 'tab';
+    const fs  = autoFullscreenRec && qfx ? 'fullscreen ' : '';
+    const zen = autoZenRec && qfx ? 'zen ' : '';
+    return `Record ${fs}${zen}${qfx ? 'qfx' : 'tab'} (Shift+R)`;
+  }
   function refreshRecordModeBtn() {
     captureMenuItems.forEach(it =>
       it.classList.toggle('active', it.dataset.capture === captureMode));
@@ -2195,6 +2213,11 @@ export function initQualiaPage() {
       btnRecAutoFs.classList.toggle('active', autoFullscreenRec);
       btnRecAutoFs.setAttribute('aria-checked', autoFullscreenRec ? 'true' : 'false');
       btnRecAutoFs.textContent = autoFullscreenRec ? 'auto-⛶ ✓' : 'auto-⛶';
+    }
+    if (btnRecAutoZen) {
+      btnRecAutoZen.classList.toggle('active', autoZenRec);
+      btnRecAutoZen.setAttribute('aria-checked', autoZenRec ? 'true' : 'false');
+      btnRecAutoZen.textContent = autoZenRec ? 'auto-zen ✓' : 'auto-zen';
     }
     if (btnRecAutoSave) {
       btnRecAutoSave.classList.toggle('active', autoSaveRec);
@@ -2206,10 +2229,7 @@ export function initQualiaPage() {
         ? 'Capture mode: full tab — share-picker captures the whole tab incl. panels. NOTE: many browsers/GPUs capture the WebGL visuals as a frozen still via tab capture, and the file may not open in macOS Preview. For panel-inclusive performance capture, use OBS or macOS ⌘⇧5 instead. Audio comes from the in-page mix bus.'
         : 'Capture mode: qfx (recommended) — composites the fx + overlay + camera, no share dialog, opens in Preview. Does not include the HUD panels (use OBS / ⌘⇧5 for those).';
     }
-    if (btnRecord) {
-      const fs = (autoFullscreenRec && captureMode !== 'tab') ? 'fullscreen ' : '';
-      btnRecord.title = `Record ${fs}${captureMode === 'tab' ? 'tab' : 'qfx'} (Shift+R)`;
-    }
+    if (btnRecord) btnRecord.title = recBtnTitle();
   }
   refreshRecordModeBtn();
   captureMenuItems.forEach(item => {
@@ -2237,12 +2257,26 @@ export function initQualiaPage() {
       settings.save();
     });
   }
+  if (btnRecAutoZen) {
+    btnRecAutoZen.addEventListener('click', () => {
+      if (recorder.isRecording()) return;   // locked during a take
+      autoZenRec = !autoZenRec;
+      refreshRecordModeBtn();
+      settings.save();
+    });
+  }
 
-  // "Fullscreen + rec": enter fullscreen, let the canvas resize settle so the
-  // composite locks at full-screen resolution, then start a qfx + auto-save
-  // take (forced via recOverride — no save dialog / getDisplayMedia, so the
-  // async fullscreen wait can't expire the user gesture). The recording keeps
-  // going if you Esc out of fullscreen (the composite size is already locked).
+  // One-button qfx capture prep + start. The two rec modifiers are independent:
+  //   auto-⛶  → enter fullscreen first (await the transition + resize so the
+  //             composite locks at full-screen resolution), then force a qfx +
+  //             auto-save take via recOverride — the async fullscreen wait would
+  //             otherwise expire the user gesture the save-picker needs.
+  //   auto-zen → drop into zen (hide the in-page HUD). Synchronous (only toggles
+  //             panel/topbar opacity, not the composite canvas), so no resize
+  //             wait and no save-gesture concern — a zen-only take keeps the
+  //             user's chosen save behavior.
+  // Either, both, or (via the click handler) neither can be active. The take
+  // keeps going if you Esc out of fullscreen / zen (composite size is locked).
   function nextFrame() { return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); }
   // Resolve once an event fires (or after a cap). Used to wait for the
   // fullscreen transition + the window resize it triggers.
@@ -2254,10 +2288,10 @@ export function initQualiaPage() {
       setTimeout(finish, capMs);
     });
   }
-  async function fullscreenAndRecord() {
+  async function autoRecord() {
     if (recorder.isRecording()) return;
     closeAllGroupsExcept(null);              // dismiss the popover
-    if (!isFullscreen()) {
+    if (autoFullscreenRec && !isFullscreen()) {
       setFullscreen(true);
       await awaitEvent(document, 'fullscreenchange', 800);
       // macOS animates into fullscreen (a Space) noticeably slower than
@@ -2267,9 +2301,12 @@ export function initQualiaPage() {
       try { core.refreshSize?.(); } catch {}
       await nextFrame();
     }
-    recOverride = { mode: 'viewport', autoSave: true };
+    if (autoZenRec && !core.isZen()) setZen(true);
+    // Force auto-save only on the fullscreen path (its async wait threatens the
+    // save-picker gesture); a zen-only take respects the user's save setting.
+    if (autoFullscreenRec) recOverride = { mode: 'viewport', autoSave: true };
     try { await recorder.start(); }
-    catch (err) { console.warn('[recorder] fullscreen+rec failed:', err); }
+    catch (err) { console.warn('[recorder] auto-record failed:', err); }
     finally { recOverride = null; }
   }
 
@@ -2336,8 +2373,7 @@ export function initQualiaPage() {
         btnRecord.classList.toggle('active-audio', recording);
         if (!recording) {
           btnRecord.textContent = 'rec';
-          const fs = (autoFullscreenRec && captureMode !== 'tab') ? 'fullscreen ' : '';
-          btnRecord.title = `Record ${fs}${captureMode === 'tab' ? 'tab' : 'qfx'} (Shift+R)`;
+          btnRecord.title = recBtnTitle();
         } else {
           btnRecord.title = `Recording ${refreshRecToastBackend(true, backend, sink)}. Shift+R or click to stop.`;
         }
@@ -2421,12 +2457,13 @@ export function initQualiaPage() {
         if (recorder.isRecording()) {
           console.log('[recorder] stopping');
           recorder.stop();
-        } else if (autoFullscreenRec && captureMode !== 'tab') {
-          // Default: one-button fullscreen qfx capture (auto-⛶). Tab capture
-          // can't compose with the async fullscreen gesture, so it falls
-          // through to a normal start.
-          console.log('[recorder] starting… (auto-fullscreen qfx)');
-          await fullscreenAndRecord();
+        } else if ((autoFullscreenRec || autoZenRec) && captureMode !== 'tab') {
+          // One-button qfx capture: apply the independent modifiers (auto-⛶ →
+          // fullscreen, auto-zen → hide HUD), then record. Tab capture can't
+          // compose with the async fullscreen gesture, so it falls through to a
+          // normal start.
+          console.log('[recorder] starting… (one-button qfx)');
+          await autoRecord();
         } else {
           console.log('[recorder] starting…');
           await recorder.start();
@@ -3587,6 +3624,9 @@ export function initQualiaPage() {
       strudel:   { code: strudelCode },
       sequencer: { model: seqModel ? { ...seqModel, name: qualemName } : null },
       vocoder:   vocoder.getConfig(),
+      // Looper settings only (master/sync/nudge/grid) — the recorded loops are
+      // large + session-local (IndexedDB) and never travel in a qualem.
+      looper:    looper.getConfig(),
       pausedZen: { paused: core.isPaused(), zen: core.isZen() },
       // Hardware fingerprint — deviceId only by default; the label is
       // already in localStorage via the picker. Cross-machine matching
@@ -3783,6 +3823,12 @@ export function initQualiaPage() {
     // 13. Vocoder
     if (q.vocoder && typeof vocoder.setConfig === 'function') {
       try { vocoder.setConfig(q.vocoder); } catch (e) { console.warn('[qualia] vocoder setConfig failed:', e); }
+    }
+
+    // 13b. Looper settings (config only; the recorded loops live in IndexedDB
+    // and are never carried in a qualem). Restores master / sync / nudge / grid.
+    if (q.looper && typeof looper.setConfig === 'function') {
+      try { looper.setConfig(q.looper); } catch (e) { console.warn('[qualia] looper setConfig failed:', e); }
     }
 
     // 14. Pause / zen
