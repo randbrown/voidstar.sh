@@ -1521,16 +1521,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       .seq-num-step { padding: 0.02rem 0.35rem; min-width: 1.4rem; }
     }
 
-    /* Looper station panel — same draggable-window shape as the sequencer.
-       Body is a single waveform canvas (the take in wrapped lanes) under a
-       compact props row. */
+    /* Rig panel — same draggable-window shape as the sequencer. A slim
+       titlebar over two stacked subpanels: "signal" (live input + scope) and
+       "loop" (the looper's transport, props, and wrapped waveform lanes). */
     #looper-panel {
       position: fixed; left: 50%; top: 4.5rem;
       transform: translateX(-50%);
       z-index: 18;
       width: min(96vw, 920px);
-      height: 340px;
-      min-width: 360px;  min-height: 200px;
+      height: 440px;
+      min-width: 360px;  min-height: 260px;
       max-width: 100vw;  max-height: calc(100dvh - 6rem);
       background: rgba(10,10,26,0.55);
       border: 1px solid var(--border); border-radius: 10px;
@@ -1551,6 +1551,29 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     #looper-header.dragging { cursor: grabbing; }
     #looper-header .ctrl-btn { cursor: pointer; }
+    .rig-head-spacer { flex: 1; }
+
+    /* Rig subpanels — "signal" stacks above "loop"; loop takes the slack. */
+    .rig-subpanel { display: flex; flex-direction: column; min-height: 0; }
+    #rig-signal { flex: 0 0 auto; border-bottom: 1px solid var(--border); }
+    #rig-loop   { flex: 1 1 auto; }
+    .rig-subhead {
+      display: flex; align-items: center; gap: 0.45rem;
+      padding: 0.35rem 0.7rem;
+      background: rgba(0,0,0,0.20);
+      font-size: 0.72rem;
+    }
+    .sp-subtitle {
+      color: var(--muted); font-size: 0.7rem;
+      letter-spacing: 0.06em; text-transform: lowercase;
+    }
+    .rig-input-controls { display: inline-flex; align-items: center; gap: 0.3rem; }
+    #rig-signal-status { margin-left: auto; color: var(--muted); font-size: 0.64rem; min-width: 4ch; text-align: right; }
+    .rig-scope {
+      display: block; width: 100%; height: 76px;
+      background: rgba(0,0,0,0.34);
+      border-top: 1px solid rgba(255,255,255,0.04);
+    }
     .looper-input-select { max-width: 14ch; }
     #btn-looper-record, #btn-looper-play, #btn-looper-stop {
       padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1;
@@ -1762,7 +1785,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
       <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
-      <button class="ctrl-btn" id="btn-looper" title="Looper station (O)">loop</button>
+      <button class="ctrl-btn" id="btn-looper" title="Rig — live signal + looper (O)">rig</button>
       <div class="qg-group qg-capture" data-group="capture">
         <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
         <button type="button" class="ctrl-btn qg-trigger" id="btn-record-mode"
@@ -2395,28 +2418,51 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   </div>
 </div>
 
-<!-- Looper station panel — third programmable audio source. Captures the live
-     audio input, loops it locked to the Strudel metacycle grid, and shows the
-     take in Reaper-style wrapped waveform lanes. Sibling of #sequencer-panel so
-     each draggable window stays independent. -->
+<!-- Rig — the live performance station. Top level is the live instrument signal
+     (the "signal" subpanel: source input, level/mute, scope) feeding the
+     speakers, the visualizer, and the recordable mix; the looper (the "loop"
+     subpanel) captures and replays that signal locked to the Strudel grid.
+     Sibling of #sequencer-panel so each draggable window stays independent.
+     IDs stay `looper-*` for the loop subpanel's controls (the JS keys off them);
+     new rig-level chrome uses `rig-*`. -->
 <div id="looper-panel" style="display:none">
   <div id="looper-header">
-    <span class="sp-title">loop</span>
-    <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
-    <span class="sp-status" id="looper-status">click ● to record</span>
-    <button class="ctrl-btn" id="btn-looper-record" title="Record">●</button>
-    <button class="ctrl-btn" id="btn-looper-play"   title="Play loop">▶</button>
-    <button class="ctrl-btn" id="btn-looper-stop"   title="Stop">■</button>
-    <button class="ctrl-btn panel-mute-btn" id="btn-looper-mute" title="Mute loop output (keeps looping in time)">live</button>
-    <input type="range" class="panel-gain-slider" id="looper-gain" min="0" max="1" step="0.01" value="0.9" title="Output level (0–1×)" />
-    <button class="ctrl-btn" id="btn-looper-sync"   title="Realign all loops to the next cycle boundary" style="display:none">⟲</button>
-    <button class="ctrl-btn" id="btn-looper-delete" title="Clear all loops">🗑</button>
+    <span class="sp-title">rig</span>
+    <span class="sp-tag">// live station</span>
+    <span class="rig-head-spacer"></span>
     <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
   </div>
-  <div id="looper-props"></div>
-  <div id="looper-body">
-    <div id="looper-tracks"></div>
-  </div>
+
+  <!-- SIGNAL subpanel — the live instrument source: device, level/mute, scope. -->
+  <section id="rig-signal" class="rig-subpanel">
+    <div class="rig-subhead">
+      <span class="sp-subtitle">signal</span>
+      <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
+      <span id="rig-input-controls" class="rig-input-controls"></span>
+      <span class="sp-status" id="rig-signal-status"></span>
+    </div>
+    <canvas id="rig-scope" class="rig-scope" title="Live input scope (pre-fader)"></canvas>
+  </section>
+
+  <!-- LOOP subpanel — the looper, built on the rig signal. -->
+  <section id="rig-loop" class="rig-subpanel">
+    <div class="rig-subhead" id="rig-loop-bar">
+      <span class="sp-subtitle">loop</span>
+      <span class="sp-status" id="looper-status">click ● to record</span>
+      <span class="rig-head-spacer"></span>
+      <button class="ctrl-btn" id="btn-looper-record" title="Record">●</button>
+      <button class="ctrl-btn" id="btn-looper-play"   title="Play loop">▶</button>
+      <button class="ctrl-btn" id="btn-looper-stop"   title="Stop">■</button>
+      <button class="ctrl-btn panel-mute-btn" id="btn-looper-mute" title="Mute loop output (keeps looping in time)">live</button>
+      <input type="range" class="panel-gain-slider" id="looper-gain" min="0" max="1" step="0.01" value="0.9" title="Loop output level (0–1×)" />
+      <button class="ctrl-btn" id="btn-looper-sync"   title="Realign all loops to the next cycle boundary" style="display:none">⟲</button>
+      <button class="ctrl-btn" id="btn-looper-delete" title="Clear all loops">🗑</button>
+    </div>
+    <div id="looper-props"></div>
+    <div id="looper-body">
+      <div id="looper-tracks"></div>
+    </div>
+  </section>
 </div>
 
 <!-- Vocoder panel — mic-driven channel vocoder for live narration. Sibling

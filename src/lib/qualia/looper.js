@@ -1,7 +1,14 @@
-// Looper station panel — a programmable audio source alongside Strudel and the
-// sequencer. Captures the live audio input, loops it locked to the Strudel
-// cycle grid, and plays it back for live performance / screen recording, as a
-// Reaper-style multi-track list of "take in lanes" waveforms.
+// Rig panel — the live performance station. Top level is the live instrument
+// "signal" (the page-level input channel: level + mute + an oscilloscope of the
+// captured signal, feeding speakers + visualizer + the recordable mix). Built
+// on top of it is the "loop" subpanel — a programmable audio source alongside
+// Strudel and the sequencer that captures the input, loops it locked to the
+// Strudel cycle grid, and plays it back for live performance / screen recording
+// as a Reaper-style multi-track list of "take in lanes" waveforms.
+//
+// The factory is still createLooper(); the loop subpanel's controls keep their
+// `looper-*` element ids (this code keys off them), while rig-level chrome
+// (signal scope, subpanels) uses `rig-*` ids.
 //
 // Multi-track: a list of loop tracks, ONE armed at a time. Recording targets
 // the armed track (replace). Each track has its own cycles (grid), length,
@@ -99,6 +106,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const tracksEl    = document.getElementById('looper-tracks');
   const status      = document.getElementById('looper-status');
   const inputSelect = document.getElementById('looper-input');
+  const signalCtrls = document.getElementById('rig-input-controls');
+  const signalStat  = document.getElementById('rig-signal-status');
+  const scopeCanvas = document.getElementById('rig-scope');
   const btnToggle   = document.getElementById('btn-looper');
   const btnRecord   = document.getElementById('btn-looper-record');
   const btnPlay     = document.getElementById('btn-looper-play');
@@ -730,14 +740,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const nudgeIn = numInput(model.offsetMs, -200, 500, 5);
     nudgeIn.addEventListener('change', () => { setOffsetMs(nudgeIn.value); nudgeIn.value = String(model.offsetMs); });
 
-    inputVolSl = volSlider(audio?.getInput?.().level ?? 0, setInputVol,
-      'Live input level — your guitar / mic through the speakers AND into the screen recording at this level. Shared with the audio panel. The visualizer reacts to the input whenever it is captured (pre-fader). Raising it can feed back on speakers (fine on headphones / an interface). Double-click to reset.',
-      INPUT_DEFAULT);
-    inputMuteBtn = miniBtn('mute', () => setInputMuted(!(audio?.getInput?.().muted)));
-    inputMuteBtn.classList.add('seq-mini-mute');
-    const inputGroup = document.createElement('span'); inputGroup.className = 'seq-num-wrap';
-    inputGroup.append(inputVolSl, inputMuteBtn);
-
     const syncCb = document.createElement('input');
     syncCb.type = 'checkbox'; syncCb.checked = !!model.syncStrudel;
     syncCb.addEventListener('change', () => {
@@ -770,12 +772,102 @@ export function createLooper({ audio, syncStrudel } = {}) {
     propsEl.append(
       mk('cps', stepper(cpsIn, 'input'), 'Cycles per second when sync is off (Strudel\'s clock drives it when synced).'),
       mk('nudge ms', stepper(nudgeIn, 'change'), 'Slide all loops into the pocket. + pulls a late take earlier to compensate record latency.'),
-      mk('input', inputGroup, 'Live input level + mute — lands on speakers + the screen recording; the visualizer reacts whenever input is captured.'),
       syncWrap,
       immWrap,
     );
     refreshSyncStatus();
+  }
+
+  // ── signal subpanel (live input level + mute + scope) ─────────────────────
+  // The live instrument signal is the page-level input channel (audio.js): its
+  // fader (gated by mute) lands on the speakers AND the screen recording, while
+  // the visualizer + scope tap the analyser PRE-fader (reactive even at level
+  // 0). Built once; the scope self-drives a rAF while the panel is open.
+  function renderSignal() {
+    if (!signalCtrls || signalCtrls.children.length) return;
+    inputVolSl = volSlider(audio?.getInput?.().level ?? 0, setInputVol,
+      'Live input level — your guitar / mic through the speakers AND into the screen recording at this level. Shared with the audio panel. The visualizer + scope react whenever input is captured (pre-fader). Raising it can feed back on speakers (fine on headphones / an interface). Double-click to reset.',
+      INPUT_DEFAULT);
+    inputMuteBtn = miniBtn('mute', () => setInputMuted(!(audio?.getInput?.().muted)));
+    inputMuteBtn.classList.add('seq-mini-mute');
+    signalCtrls.append(inputVolSl, inputMuteBtn);
     refreshInputMuteBtn();
+  }
+
+  // ── live input scope (oscilloscope) ───────────────────────────────────────
+  // Draws the captured input's time-domain waveform when the mic source is
+  // live, else a faint idle trace so the panel still looks alive. Allocation-
+  // free: one reused Uint8Array sized to the analyser's fftSize.
+  let scope2d = null, scopeBuf = null, scopeRAF = 0, scopeStatN = 0;
+  function sizeScope() {
+    if (!scopeCanvas) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = scopeCanvas.clientWidth || 360, h = scopeCanvas.clientHeight || 76;
+    scopeCanvas.width  = Math.max(1, Math.round(w * dpr));
+    scopeCanvas.height = Math.max(1, Math.round(h * dpr));
+  }
+  function setSignalStatus(peak, clip) {
+    if (!signalStat) return;
+    if (peak == null) { signalStat.textContent = 'input off'; signalStat.style.color = ''; return; }
+    if (clip) { signalStat.textContent = 'clip'; signalStat.style.color = 'var(--pink)'; return; }
+    const db = peak > 0.0003 ? Math.round(20 * Math.log10(peak)) : -99;
+    signalStat.textContent = db <= -99 ? '−∞ dB' : `${db} dB`;
+    signalStat.style.color = '';
+  }
+  function drawScope() {
+    const cv = scopeCanvas, g = scope2d;
+    if (!cv || !g) return;
+    const W = cv.width, H = cv.height, mid = H / 2;
+    g.clearRect(0, 0, W, H);
+    g.lineWidth = 1;
+    g.strokeStyle = 'rgba(255,255,255,0.06)';
+    g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
+
+    const an = audio?.getInputAnalyser?.();
+    if (an) {
+      const n = an.fftSize;
+      if (!scopeBuf || scopeBuf.length !== n) scopeBuf = new Uint8Array(n);
+      an.getByteTimeDomainData(scopeBuf);
+      let peak = 0;
+      g.beginPath();
+      for (let i = 0; i < n; i++) {
+        const v = (scopeBuf[i] - 128) / 128;
+        const a = v < 0 ? -v : v; if (a > peak) peak = a;
+        const x = (i / (n - 1)) * W;
+        const y = mid - v * mid * 0.92;
+        if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      }
+      const clip = peak > 0.985;
+      g.lineWidth = Math.max(1, Math.round(window.devicePixelRatio || 1));
+      g.strokeStyle = clip ? 'rgba(244,114,182,0.95)' : 'rgba(34,211,238,0.9)';
+      g.stroke();
+      if (scopeStatN++ % 6 === 0) setSignalStatus(peak, clip);
+    } else {
+      const t = performance.now() / 1000;
+      g.beginPath();
+      for (let i = 0; i <= 96; i++) {
+        const x = (i / 96) * W;
+        const y = mid - Math.sin(i * 0.18 + t * 1.1) * mid * 0.12;
+        if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      }
+      g.strokeStyle = 'rgba(148,163,184,0.26)';
+      g.stroke();
+      if (scopeStatN++ % 6 === 0) setSignalStatus(null, false);
+    }
+  }
+  function startScope() {
+    if (scopeRAF || !scopeCanvas) return;
+    if (!scope2d) scope2d = scopeCanvas.getContext('2d');
+    sizeScope();
+    const loop = () => { scopeRAF = requestAnimationFrame(loop); drawScope(); };
+    scopeRAF = requestAnimationFrame(loop);
+  }
+  function stopScope() {
+    if (scopeRAF) cancelAnimationFrame(scopeRAF);
+    scopeRAF = 0;
+  }
+  if (scopeCanvas && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => { if (scopeRAF) sizeScope(); }).observe(scopeCanvas);
   }
 
   // ── refreshers ───────────────────────────────────────────────────────────
@@ -860,11 +952,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function refreshLooperBtn() {
     if (!btnToggle) return;
     btnToggle.classList.remove('active', 'active-audio');
-    const live = audio?.hasSource?.('looper');
+    // Rig is "live" when anything it owns is audible — a loop voice OR the live
+    // input channel (the processed signal feeding the mix).
+    const live = audio?.hasSource?.('looper') || audio?.hasSource?.('mic');
     const open = panel?.style.display !== 'none';
-    if (live) { btnToggle.classList.add('active-audio'); btnToggle.textContent = 'loop ●'; }
-    else if (open) { btnToggle.classList.add('active'); btnToggle.textContent = 'loop on'; }
-    else btnToggle.textContent = 'loop';
+    if (live) { btnToggle.classList.add('active-audio'); btnToggle.textContent = 'rig ●'; }
+    else if (open) { btnToggle.classList.add('active'); btnToggle.textContent = 'rig on'; }
+    else btnToggle.textContent = 'rig';
   }
 
   // ── device picker ────────────────────────────────────────────────────────
@@ -942,6 +1036,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     _everOpened = true;
     lsSet(PANEL_OPEN_KEY, '1');
     reposition();
+    renderSignal();
     if (!rowEls.size) renderTracks();
     if (!propsEl?.children.length) renderProps();
     for (const r of renderers.values()) r.resize();
@@ -952,12 +1047,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // Resume live-input monitoring on open (a user gesture) if it was left up —
     // so a remembered input level/device comes back without a manual nudge.
     if (inp.level > 0 && !inp.muted && !audio?.hasSource?.('mic')) ensureInputLive();
+    startScope();
     refreshLooperBtn();
     refreshTransport();
   }
   function close() {
     if (panel) panel.style.display = 'none';
     lsSet(PANEL_OPEN_KEY, '0');
+    stopScope();
     refreshLooperBtn();
   }
 
@@ -993,6 +1090,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   model.armedTrackId = model.tracks[0].id;
 
   // Initial paint even while hidden so first open() shows content immediately.
+  renderSignal();           // build input controls up front (onInputChange reads them)
   if (propsEl) renderProps();
   if (tracksEl) renderTracks();
   refreshMuteBtn();
@@ -1019,6 +1117,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
     play: playAll, stop,
     perFrame,
     getConfig, setConfig,
-    dispose: () => { hideCtxMenu(); looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
+    dispose: () => { hideCtxMenu(); stopScope(); looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
   };
 }

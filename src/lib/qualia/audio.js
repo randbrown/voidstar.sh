@@ -741,5 +741,9 @@ export function createAudio() {
     resumeRecordableMix,
     getAnalyser: () => firstSource()?.analyser ?? null,
     getCtx:      () => firstSource()?.ctx ?? null,
+    // The live input (mic / instrument) analyser, wired PRE-fader in start(),
+    // so a scope reads the captured signal even when the monitor level is 0.
+    // Null when the input isn't being captured. Used by the rig's signal scope.
+    getInputAnalyser: () => sources.get('mic')?.analyser ?? null,
   };
 }
