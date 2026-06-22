@@ -92,11 +92,12 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 //            no acoustic feedback path back from speakers)
 // Audio source mode selector — four real-world states:
 //   off → no reactivity
-//   mic → mic only (engines ignored — full venue mix from one input,
-//          useful when playing with others through a shared PA)
-//   mix → strudel + sequencer (no mic; play through speakers without
-//          feedback risk)
-//   all → strudel + sequencer + mic
+//   mic → live input only (engines ignored) — the quick "grab whatever's on
+//          the mic" case, also a full venue mix from one input
+//   mix → live rig input + strudel + sequencer + vocoder + looper. The rig's
+//          signal is mixed in like any engine, so the full produced mix drives
+//          the visualizers AND the recording. This is the normal rig mode.
+//   all → same set as mix (kept as a distinct selector slot for now)
 // Older multi-state values (strudel, sequencer alone) get remapped on
 // load — see the audioMode restore block below.
 const AUDIO_MODES   = ['off', 'mic', 'mix', 'all'];
@@ -953,9 +954,11 @@ export function initQualiaPage() {
   // ── Audio source mode (off / mic / mix / all) ──────────────────────────
   // The button is a 4-state selector matching real-world usage:
   //   off → mic stopped, audio.setSourceFilter([])
-  //   mic → mic running, filter ['mic']  (engines ignored — venue mix)
-  //   mix → mic stopped, filter ['strudel', 'sequencer', 'vocoder', 'looper']  (engines)
-  //   all → mic running, filter ['mic', 'strudel', 'sequencer', 'vocoder', 'looper']
+  //   mic → mic running, filter ['mic']  (engines ignored — quick venue/mic mix)
+  //   mix → mic running, filter ['mic', 'strudel', 'sequencer', 'vocoder', 'looper']
+  //          — the rig's live signal is mixed in like an engine (drives the
+  //          visualizers AND the recording alongside strudel/seq/looper)
+  //   all → mic running, same filter as mix (kept as a distinct slot for now)
   // The 'vocoder' source only actually exists when the vocoder panel's feed
   // toggle is on (page-init adopts it then); listing it here just means it's
   // allowed through whenever it is present — opt-in, like the engines.
@@ -978,9 +981,9 @@ export function initQualiaPage() {
 
   function applyAudioFilter() {
     switch (audioMode) {
-      case 'off': audio.setSourceFilter([]);                                          break;
-      case 'mic': audio.setSourceFilter(['mic']);                                     break;
-      case 'mix': audio.setSourceFilter(['strudel', 'sequencer', 'vocoder', 'looper']);         break;
+      case 'off': audio.setSourceFilter([]);                                                     break;
+      case 'mic': audio.setSourceFilter(['mic']);                                                break;
+      case 'mix': audio.setSourceFilter(['mic', 'strudel', 'sequencer', 'vocoder', 'looper']);  break;
       case 'all': audio.setSourceFilter(['mic', 'strudel', 'sequencer', 'vocoder', 'looper']);  break;
     }
   }
@@ -989,13 +992,11 @@ export function initQualiaPage() {
     btnAudio.classList.remove('active', 'active-audio');
     btnAudio.textContent = `audio ${audioMode}`;
     if (audioMode !== 'off') {
-      // Pink (active-audio) when the mic itself is engaged — visual hint
-      // that we're listening to the room. Cyan (active) for engines-only
-      // mix where no live mic is open.
-      const micEngaged = audioMode === 'all' || audioMode === 'mic';
-      btnAudio.classList.add(micEngaged ? 'active-audio' : 'active');
+      // Pink (active-audio) whenever the live input is engaged — which is every
+      // active mode now that the rig signal is part of the mix.
+      btnAudio.classList.add('active-audio');
     }
-    btnAudio.title = 'Audio source (A) — off / mic / mix (strudel+seq) / all (+mic)';
+    btnAudio.title = 'Audio source (A) — off / mic (input only) / mix (rig + engines) / all';
     // Audio panel visibility tracks "is anything driving reactivity" — open
     // when mode != off.
     audioCard.style.display = audioMode === 'off' ? 'none' : '';
@@ -1005,7 +1006,10 @@ export function initQualiaPage() {
     if (!AUDIO_MODES.includes(mode)) return;
     const prevMode = audioMode;
     audioMode = mode;
-    const wantMic = mode === 'all' || mode === 'mic';
+    // The rig's live input is part of the mix now, so every active mode except
+    // off runs the mic (mic / mix / all). 'mix' and 'all' mix it in with the
+    // engines; 'mic' is the input on its own.
+    const wantMic = mode !== 'off';
     try {
       if (wantMic && !audio.hasSource('mic')) {
         await startMic(getStoredDeviceId('mic'));
