@@ -382,10 +382,9 @@ export function initQualiaPage() {
   // setting. qfx only — tab capture can't compose with the async fullscreen
   // gesture.
   let autoFullscreenRec = stored.recAutoFullscreen === true;
-  // Auto-zen (default OFF): when on, the rec button additionally drops into zen
-  // (HUD hidden) along with fullscreen before recording — "fullscreen + zen +
-  // rec" in one click for a clean performance capture. Implies the fullscreen
-  // step regardless of auto-⛶. qfx only. Persisted like the others.
+  // Auto-zen (default OFF): when on, the rec button drops into zen (HUD hidden)
+  // before recording — pair with auto-⛶ for a fullscreen + zen performance
+  // view. Independent of auto-⛶. qfx only. Persisted like the others.
   let autoZenRec = stored.recAutoZen === true;
   // One-shot per-recording override (set by "fullscreen + rec"), read at
   // start() and cleared after — doesn't change the user's persisted mode.
@@ -2198,13 +2197,13 @@ export function initQualiaPage() {
   const btnRecAutoSave = document.getElementById('btn-rec-autosave');
   const btnRecAutoFs = document.getElementById('btn-rec-autofs');
   const btnRecAutoZen = document.getElementById('btn-rec-autozen');
-  // Idle rec-button tooltip, reflecting the one-button modifiers that apply on
-  // a qfx take. auto-zen implies the fullscreen step too. Single source of
-  // truth so refreshRecordModeBtn + the recorder onStateChange agree.
+  // Idle rec-button tooltip, reflecting the independent one-button modifiers
+  // that apply on a qfx take (auto-⛶ → fullscreen, auto-zen → HUD hidden).
+  // Single source of truth so refreshRecordModeBtn + onStateChange agree.
   function recBtnTitle() {
     const qfx = captureMode !== 'tab';
-    const fs  = qfx && (autoFullscreenRec || autoZenRec) ? 'fullscreen ' : '';
-    const zen = qfx && autoZenRec ? 'zen ' : '';
+    const fs  = autoFullscreenRec && qfx ? 'fullscreen ' : '';
+    const zen = autoZenRec && qfx ? 'zen ' : '';
     return `Record ${fs}${zen}${qfx ? 'qfx' : 'tab'} (Shift+R)`;
   }
   function refreshRecordModeBtn() {
@@ -2267,12 +2266,17 @@ export function initQualiaPage() {
     });
   }
 
-  // "Fullscreen (+ zen) + rec": enter fullscreen, let the canvas resize settle
-  // so the composite locks at full-screen resolution, optionally drop into zen
-  // (auto-zen — hides the in-page HUD), then start a qfx + auto-save take
-  // (forced via recOverride — no save dialog / getDisplayMedia, so the async
-  // fullscreen wait can't expire the user gesture). The recording keeps going
-  // if you Esc out of fullscreen / zen (the composite size is already locked).
+  // One-button qfx capture prep + start. The two rec modifiers are independent:
+  //   auto-⛶  → enter fullscreen first (await the transition + resize so the
+  //             composite locks at full-screen resolution), then force a qfx +
+  //             auto-save take via recOverride — the async fullscreen wait would
+  //             otherwise expire the user gesture the save-picker needs.
+  //   auto-zen → drop into zen (hide the in-page HUD). Synchronous (only toggles
+  //             panel/topbar opacity, not the composite canvas), so no resize
+  //             wait and no save-gesture concern — a zen-only take keeps the
+  //             user's chosen save behavior.
+  // Either, both, or (via the click handler) neither can be active. The take
+  // keeps going if you Esc out of fullscreen / zen (composite size is locked).
   function nextFrame() { return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); }
   // Resolve once an event fires (or after a cap). Used to wait for the
   // fullscreen transition + the window resize it triggers.
@@ -2284,10 +2288,10 @@ export function initQualiaPage() {
       setTimeout(finish, capMs);
     });
   }
-  async function fullscreenAndRecord() {
+  async function autoRecord() {
     if (recorder.isRecording()) return;
     closeAllGroupsExcept(null);              // dismiss the popover
-    if (!isFullscreen()) {
+    if (autoFullscreenRec && !isFullscreen()) {
       setFullscreen(true);
       await awaitEvent(document, 'fullscreenchange', 800);
       // macOS animates into fullscreen (a Space) noticeably slower than
@@ -2297,12 +2301,12 @@ export function initQualiaPage() {
       try { core.refreshSize?.(); } catch {}
       await nextFrame();
     }
-    // auto-zen: hide the in-page HUD too. Zen only toggles panel/topbar
-    // opacity (not the composite canvas), so no resize wait is needed.
     if (autoZenRec && !core.isZen()) setZen(true);
-    recOverride = { mode: 'viewport', autoSave: true };
+    // Force auto-save only on the fullscreen path (its async wait threatens the
+    // save-picker gesture); a zen-only take respects the user's save setting.
+    if (autoFullscreenRec) recOverride = { mode: 'viewport', autoSave: true };
     try { await recorder.start(); }
-    catch (err) { console.warn('[recorder] fullscreen+rec failed:', err); }
+    catch (err) { console.warn('[recorder] auto-record failed:', err); }
     finally { recOverride = null; }
   }
 
@@ -2454,12 +2458,12 @@ export function initQualiaPage() {
           console.log('[recorder] stopping');
           recorder.stop();
         } else if ((autoFullscreenRec || autoZenRec) && captureMode !== 'tab') {
-          // One-button qfx capture: enter fullscreen (auto-⛶ or auto-zen) and
-          // optionally zen (auto-zen), then record. Tab capture can't compose
-          // with the async fullscreen gesture, so it falls through to a normal
-          // start.
+          // One-button qfx capture: apply the independent modifiers (auto-⛶ →
+          // fullscreen, auto-zen → hide HUD), then record. Tab capture can't
+          // compose with the async fullscreen gesture, so it falls through to a
+          // normal start.
           console.log('[recorder] starting… (one-button qfx)');
-          await fullscreenAndRecord();
+          await autoRecord();
         } else {
           console.log('[recorder] starting…');
           await recorder.start();
