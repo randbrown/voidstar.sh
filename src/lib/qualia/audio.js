@@ -68,9 +68,12 @@ export function createAudio() {
   // channel with VOLUME + MUTE. The fader (gated by mute) drives BOTH the
   // speaker monitor (`monitorGain`) AND the input's level in the screen
   // recording (its per-source gain on the recordable-mix bus), so the saved
-  // file matches what you hear. The visualizer analyser is wired PRE-fader
-  // (see start()), so reactivity follows the input whenever it's captured,
-  // independent of this fader. OFF by default (level 0) — raising it on
+  // file matches what you hear. The visualizer/band analyser is wired POST-fader
+  // (see start()), so the mic's reactivity AND its share of the merged mix
+  // waveform/spectrum follow this fader + mute — muting drops it from the
+  // visuals and the recording, like a channel strip's mix send. A separate
+  // pre-fader analyser feeds the rig scope so the raw input stays monitorable.
+  // OFF by default (level 0) — raising it on
   // speakers can feed back, so it's a deliberate move. Session-only (not
   // persisted across reloads — the live rig wants its input level/mute to come
   // back (raising it on speakers can still feed back; that's on the user). One
@@ -410,16 +413,24 @@ export function createAudio() {
     // aren't washed out by its built-in temporal smoothing.
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.40;
-    // source ➝ analyser for reactivity. Also fan out to a monitor gain → speakers
-    // so the input can be heard when the user enables monitoring (0 = silent by
-    // default, so no feedback unless deliberately turned up).
     const micSource = ctx.createMediaStreamSource(stream);
-    micSource.connect(analyser);            // viz tap is PRE-fader (always reactive)
     const monitorGain = ctx.createGain();
     monitorGain.gain.value = effInput();
     monitorGain.__qualiaBypassMute = true;   // never silenced by the Strudel mute gate
-    micSource.connect(monitorGain).connect(ctx.destination);
-    const src = { ctx, analyser, ownsCtx: true, stream, micSource, monitorGain };
+    micSource.connect(monitorGain);
+    monitorGain.connect(ctx.destination);    // speaker monitor
+    // Bands + the merged mix waveform/spectrum tap POST the fader, so the mic's
+    // contribution to reactivity AND the recording follows its volume + mute —
+    // muting the rig drops it from the visuals and the mix, like a channel
+    // strip's mix send. (The recordable-mix tap is already post-fader.)
+    monitorGain.connect(analyser);
+    // A separate PRE-fader analyser feeds the rig scope only — a monitor that
+    // still shows the raw input even when the signal is muted out of the mix.
+    const scopeAnalyser = ctx.createAnalyser();
+    scopeAnalyser.fftSize = 1024;
+    scopeAnalyser.smoothingTimeConstant = 0.40;
+    micSource.connect(scopeAnalyser);
+    const src = { ctx, analyser, ownsCtx: true, stream, micSource, monitorGain, scopeAnalyser };
     configureSource(src);
     sources.set('mic', src);
 
@@ -741,9 +752,10 @@ export function createAudio() {
     resumeRecordableMix,
     getAnalyser: () => firstSource()?.analyser ?? null,
     getCtx:      () => firstSource()?.ctx ?? null,
-    // The live input (mic / instrument) analyser, wired PRE-fader in start(),
-    // so a scope reads the captured signal even when the monitor level is 0.
-    // Null when the input isn't being captured. Used by the rig's signal scope.
-    getInputAnalyser: () => sources.get('mic')?.analyser ?? null,
+    // The live input's PRE-fader analyser (scopeAnalyser), so the rig scope can
+    // monitor the raw signal even when it's muted out of the mix. Null when the
+    // input isn't being captured. (The source's main `analyser` is post-fader —
+    // it drives reactivity + the recording, which follow volume + mute.)
+    getInputAnalyser: () => sources.get('mic')?.scopeAnalyser ?? null,
   };
 }
