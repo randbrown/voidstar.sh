@@ -1,12 +1,11 @@
-# randyland / ramblin’ visioneer / rv3 / voidstar reference
+# randyland / ramblin’ visioneer / voidstar reference
 
 *A reusable creative, branding, coding, and visual-design brief for Randy Brown’s art/music/software universe.*
 
 This document collects durable context and aesthetic direction for agents working on:
 
 - **Randyland2**: the home/garden/art/consciousness space.
-- **Ramblin’ Visioneer**: the stained-glass Sasquatch/RV identity.
-- **RV3 / The Rambler / Randyland3**: the mobile extension of Randyland2.
+- **Ramblin’ Visioneer**: the stained-glass Sasquatch character/avatar for voidstar.sh and its apps.
 - **Cindy Lynn’s Gardens / CindyLynn**: stained glass, flowers, science/chemistry, garden energy.
 - **voidstar / voidstar.sh / qualia lab**: live coding, pedal steel, visual FX, ambient/avant-garde performance systems.
 - Related album art, stickers, websites, shader work, audience participation, live visuals, and personal mythology.
@@ -98,7 +97,6 @@ Avoid:
 - generic corporate wellness
 - generic new age clichés
 - sterile “AI futuristic” branding
-- overly polished luxury RV lifestyle vibes
 - flat stock-photo garden aesthetics
 - generic festival poster tropes
 
@@ -108,7 +106,7 @@ Avoid:
 
 ### canonical concept
 
-**Ramblin’ Visioneer** is the canonical Randyland/RV identity. It is both an artwork and a name for the mobile mythos.
+**Ramblin’ Visioneer** is the canonical Randyland character — the friendly Sasquatch guardian/avatar of voidstar.sh and its apps. It is both an artwork and a recurring figure in the software.
 
 The strongest canonical version is:
 
@@ -125,7 +123,6 @@ It has been used or considered for:
 
 - stickers
 - posters
-- RV branding
 - social identity
 - album/artwork experiments
 - phone wallpapers / lock screens
@@ -149,7 +146,6 @@ Key ingredients:
 - angel + Mahakala as dual guardian figures
 - Evil Eye as watcher/protector
 - flower/garden motifs from Randyland2
-- a travel/rambling/RV sense without becoming generic “van life”
 - square sticker/poster compatibility
 - bold readable title text
 - subtle or lower-key `@randbrown` placement
@@ -191,66 +187,39 @@ Swagger walk details:
 
 Bigfoot monster truck imagery may be referenced as an easter egg or energetic influence, but it should be **less prominent** than the mystical stained-glass Sasquatch guardian concept.
 
----
+### character palette
 
-## 4. rv3 / the rambler / randyland3
-
-### identity
-
-The RV is affectionately known as:
+A canonical Ramblin’ Visioneer color palette, useful for sprites, decals, avatars, and fx:
 
 ```text
-RV3
-The Rambler
-Ramblin’ Visioneer
+fur_dark        #2B1B14
+fur_mid         #5B3A26
+hair_silver     #D8D0C3
+hair_warm       #B99A73
+eye_cyan        #66F0FF
+mahakala_blue   #123B9A
+angel_gold      #FFD166
+flower_pink     #FF7AE6
+flower_green    #83FFCC
+void_shadow     #050816
 ```
 
-**Randyland3** is the mobile extension of Randyland2: a traveling version of the same universe.
+### animation vocabulary
 
-Think:
+When the Visioneer is animated (sprite sheet or rig), the canonical motion set is:
 
-```text
-Randyland2 becomes mobile, mythic, campable, and road-ready
-```
+- `idle_breathe` — slow belly/chest/hair motion, cyan eye shimmer
+- `swagger_walk` — wide stance, hip-led, arms lag, shallow bob (the canonical gait)
+- `turn_head` — eyes lead, beard lags
+- `audio_react` — bass squash, eye bloom, stained-glass flicker
+- `pose_pull` — hand/field attractor response
+- `glitch_phase` — CRT displacement / spectral split (non-destructive)
 
-### design direction
-
-RV3 design should combine:
-
-- stained glass
-- Sasquatch
-- garden spirits
-- cosmic travel
-- folk-art decals
-- personal mythology
-- low-key practical RV utility
-- “the house/garden/porch has gone on the road”
-
-Avoid turning it into:
-
-- generic camping clipart
-- macho off-road truck branding
-- slick influencer van-life minimalism
-- random psychedelic patterning without the Randyland canon
-
-### use cases
-
-RV3 / Ramblin’ Visioneer material may be useful for:
-
-- decals
-- spare tire covers
-- social avatars
-- phone wallpapers
-- camping cards
-- stickers
-- small merch
-- title cards for travel videos
-- live-performance road visuals
-- narrative intros for videos
+Stretch flourishes: `mahakala_flash`, `angel_glint`, `flower_bloom`, `voidstep` (footstep leaves a black/cyan ripple), `portal_enter` (walks through a null-pointer portal).
 
 ---
 
-## 5. cindy lynn’s gardens / cindylynn / @born4chem
+## 4. cindy lynn’s gardens / cindylynn / @born4chem
 
 ### identity
 
@@ -308,7 +277,7 @@ Avoid:
 
 ---
 
-## 6. voidstar
+## 5. voidstar
 
 ### identity
 
@@ -380,7 +349,7 @@ stained-glass folk art inside a WebGL shader
 
 ---
 
-## 7. voidstar visual identity
+## 6. voidstar visual identity
 
 ### logo concepts
 
@@ -492,7 +461,7 @@ Avoid:
 
 ---
 
-## 8. qualia lab / voidstar.sh
+## 7. qualia lab / voidstar.sh
 
 ### identity
 
@@ -672,9 +641,33 @@ Constraints:
 - performer remains in control
 - audience input should be rate-limited, smoothed, sandboxed, and visually meaningful
 
+#### vision / opencv layers
+
+OpenCV-style processing can complement MediaPipe pose. Use it sparingly in-browser — avoid CPU-heavy full-resolution loops during a live set:
+
+- optical flow → full-frame motion energy
+- background subtraction → ghost trails
+- contour fields → body silhouettes
+- frame differencing → smear / glitch layers
+- edge detection → CRT / vector overlays
+
+### live aural coding (code as visual)
+
+Treat code and sound as a shared score. The live-coding surface should read as part of the visual field, not an IDE screenshot:
+
+- live code as a phosphor overlay, not a giant editor window
+- Strudel pattern names as score annotations
+- pattern density as "particle weather"
+- parameter automation as visible "knob ghosts" or field lines
+- code edits as localized wavefunction collapses
+- syntax fragments as short-lived glyphs in the field
+- tempo/cycle phase as orbital motion, not a metronome dot
+
+A long-form set wants a visual arc, not constant intensity: quiet intro → slow evolution → stable middle → controlled eruption → return to stillness → a title/transition moment.
+
 ---
 
-## 9. performance practice
+## 8. performance practice
 
 ### live performance setup
 
@@ -719,7 +712,7 @@ Album art and live releases should generally preserve the raw weirdness of the e
 
 ---
 
-## 10. instruments and sonic identity
+## 9. instruments and sonic identity
 
 ### key instruments
 
@@ -778,7 +771,7 @@ Avoid:
 
 ---
 
-## 11. agent design rules
+## 10. agent design rules
 
 ### for coding agents
 
@@ -831,8 +824,7 @@ voidstar        artist/project identity
 voidstar.sh     web/software/performance platform
 qualia lab      visual FX / live instrument system
 Randyland2      home/garden/art myth-space
-Randyland3/RV3  mobile/RV extension
-Ramblin’ Visioneer  canonical RV/Sasquatch artwork identity
+Ramblin’ Visioneer  canonical Sasquatch character/avatar
 CindyLynn / @born4chem  science/stained-glass/garden identity
 ```
 
@@ -867,7 +859,7 @@ Avoid:
 
 ---
 
-## 12. concrete prompt snippets
+## 11. concrete prompt snippets
 
 ### one-paragraph Randyland2 prompt
 
@@ -878,13 +870,7 @@ Create in the Randyland2 universe: a warm, weird, handmade home/garden myth-spac
 ### one-paragraph Ramblin’ Visioneer prompt
 
 ```text
-Create Ramblin’ Visioneer artwork: a stained-glass Sasquatch/Bigfoot guardian with glowing blue eyes, centered Evil Eye above, angel on the left, Mahakala on the right, surrounded by flowers and Randyland2 garden energy. It should feel mystical, friendly, psychedelic, handmade, road-ready, and iconic enough for a square sticker, RV decal, poster, or social avatar. Include “Ramblin’ Visioneer” and a subtle “@randbrown” when text is appropriate.
-```
-
-### one-paragraph RV3 prompt
-
-```text
-Design for RV3 / The Rambler / Randyland3: the mobile extension of Randyland2. The RV should feel like the stained-glass Sasquatch garden universe has gone on the road — mystical, funny, handmade, cosmic, campable, and personal. Avoid generic van-life minimalism or stock camping clipart. Keep Ramblin’ Visioneer, Sasquatch, stained glass, flowers, and guardian-symbol energy central.
+Create Ramblin’ Visioneer artwork: a stained-glass Sasquatch/Bigfoot guardian with glowing blue eyes, centered Evil Eye above, angel on the left, Mahakala on the right, surrounded by flowers and Randyland2 garden energy. It should feel mystical, friendly, psychedelic, handmade, and iconic enough for a square sticker, poster, social avatar, or in-app character. Include “Ramblin’ Visioneer” and a subtle “@randbrown” when text is appropriate.
 ```
 
 ### one-paragraph Cindy Lynn’s Gardens prompt
@@ -907,19 +893,13 @@ Design/build for qualia lab: a realtime browser-based visual FX instrument for v
 
 ---
 
-## 13. possible taglines and titles
+## 12. possible taglines and titles
 
-### randyland / rv / ramblin’ visioneer
+### randyland / ramblin’ visioneer
 
-- stained glass road spirit
 - sasquatch at the garden gate
-- the rambler sees all
-- mobile backyard simulation
-- folk art from the liminal campground
 - bigfoot in the stained-glass garden
 - porch light / portal light
-- guardian of the ramble
-- the garden has wheels now
 
 ### voidstar / qualia
 
@@ -944,7 +924,7 @@ Design/build for qualia lab: a realtime browser-based visual FX instrument for v
 
 ---
 
-## 14. dos and don’ts
+## 13. dos and don’ts
 
 ### do
 
@@ -966,7 +946,6 @@ Design/build for qualia lab: a realtime browser-based visual FX instrument for v
 - Don’t make voidstar look like stock cyberpunk/EDM visuals.
 - Don’t make Ramblin’ Visioneer too horror, too cute, or too realistic.
 - Don’t overuse Bigfoot monster truck imagery.
-- Don’t make RV3 generic camping/van-life branding.
 - Don’t make Cindy Lynn’s Gardens generic floral clipart.
 - Don’t sacrifice live-performance stability for flashy effects.
 - Don’t bury the emotional/family/home/garden context under tech language.
@@ -974,26 +953,25 @@ Design/build for qualia lab: a realtime browser-based visual FX instrument for v
 
 ---
 
-## 15. quick reference table
+## 14. quick reference table
 
 | Domain | Core symbols | Mood | Primary uses |
 |---|---|---|---|
 | Randyland2 | stained glass, flowers, angels, Mahakala, Sasquatch, porch, garden | warm, weird, handmade, mystical | home mythos, art prompts, personal branding |
-| Ramblin’ Visioneer | stained-glass Sasquatch, Evil Eye, angel, Mahakala, `@randbrown` | road-mystic, playful, iconic | stickers, RV decals, posters, avatars |
-| RV3 / Randyland3 | mobile Randyland, travel, camp, Sasquatch guardian | rambling, campable, personal | RV identity, travel visuals, decals |
+| Ramblin’ Visioneer | stained-glass Sasquatch, Evil Eye, angel, Mahakala, `@randbrown` | mystic, playful, iconic | stickers, posters, avatars, in-app character |
 | Cindy Lynn’s Gardens | stained glass, flowers, chemistry, atoms, butterflies | luminous, botanical, scientific | garden art, science art, teacher/art identity |
 | voidstar | black void, null pointer, monospaced type, orbitals, CRT | dark, cosmic, code-aware | artist identity, web, album art, performance branding |
 | qualia lab | shaders, pose, audio fields, particles, observer input | intelligent, alive, responsive | live visuals, qfx plugins, performance instrument |
 
 ---
 
-## 16. final north star
+## 15. final north star
 
 The shared north star:
 
 ```text
 Randyland is the handmade mythic home.
-Ramblin’ Visioneer is the Sasquatch guardian that carries it onto the road.
+Ramblin’ Visioneer is the Sasquatch guardian and avatar that carries the myth into voidstar.sh and its apps.
 Cindy Lynn’s Gardens is the stained-glass botanical science blooming inside it.
 voidstar is the dark cosmic code-music portal.
 qualia lab is the realtime instrument that makes the invisible field visible.
