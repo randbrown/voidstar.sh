@@ -49,6 +49,7 @@ const RIG_LEVEL_KEY  = `${NS}.rigLevel`;  // rig master output level
 const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo'
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
+const LOOPOPEN_KEY     = `${NS}.loopOpen`;      // loop section visible
 const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
 const TUNER_KEY      = `${NS}.tuner`;      // tuner enabled
 const TUNERMUTE_KEY  = `${NS}.tunerMute`; // mute rig signal while tuner is on
@@ -207,6 +208,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnStripReset = document.getElementById('btn-rig-strip-reset');
   const rigLoopSection = document.getElementById('rig-loop');
   const looperBody  = document.getElementById('looper-body');
+  const btnLoop         = document.getElementById('btn-rig-loop');
   const btnLoopCollapse = document.getElementById('btn-rig-loop-collapse');
   const tunerEl     = document.getElementById('rig-tuner');
   const temperEl    = document.getElementById('rig-temper');
@@ -243,6 +245,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     channels: lsGet(CHANNELS_KEY, 'mono') === 'stereo' ? 'stereo' : 'mono',
     strip: loadStripConfig(),                          // channel strip config
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
+    loopOpen: lsGet(LOOPOPEN_KEY, '1') !== '0',              // loop section visible
     loopCollapsed: lsGet(LOOPCOLLAPSE_KEY, '0') === '1',
     tunerOn: lsGet(TUNER_KEY, '0') === '1',
     tunerMute: lsGet(TUNERMUTE_KEY, '1') !== '0',
@@ -1310,6 +1313,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshStripBtn();
   }
 
+  // ── loop section toggle (signal header button) ──────────────────────────────
+  function refreshLoopBtn() { if (btnLoop) btnLoop.classList.toggle('active', !!model.loopOpen); }
+  function toggleLoop(on) {
+    model.loopOpen = on == null ? !model.loopOpen : !!on;
+    lsSet(LOOPOPEN_KEY, model.loopOpen ? '1' : '0');
+    if (rigLoopSection) rigLoopSection.style.display = model.loopOpen ? '' : 'none';
+    refreshLoopBtn();
+  }
+
   // ── collapsible looper ─────────────────────────────────────────────────────
   // Hide the props + tracks (keeping the transport bar) and shrink the window to
   // fit, so the rig can run as a live amp/fx rig without the looper taking room.
@@ -1753,6 +1765,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     refreshStripBtn();
     refreshTunerBtn();
+    refreshLoopBtn();
+    if (rigLoopSection) rigLoopSection.style.display = model.loopOpen ? '' : 'none';
     applyLoopCollapse();
     startScope();
     refreshLooperBtn();
@@ -1777,6 +1791,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnChannels) btnChannels.addEventListener('click', () => { setChannels(model.channels === 'stereo' ? 'mono' : 'stereo'); });
   if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
   if (btnStripReset) btnStripReset.addEventListener('click', () => { resetStrip(); });
+  if (btnLoop) btnLoop.addEventListener('click', () => { toggleLoop(); });
   if (btnLoopCollapse) btnLoopCollapse.addEventListener('click', () => { toggleLoopCollapse(); });
   if (btnTuner)  btnTuner.addEventListener('click', () => { toggleTuner(); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
@@ -1811,6 +1826,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   refreshChannelsBtn();
   refreshStripBtn();
   refreshTunerBtn();
+  refreshLoopBtn();
+  if (!model.loopOpen && rigLoopSection) rigLoopSection.style.display = 'none';
   refreshTransport();
   refreshLooperBtn();
   refreshSyncBtnVisibility();

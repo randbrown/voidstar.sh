@@ -1583,8 +1583,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-looper-retro { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
     #btn-looper-retro:disabled { opacity: 0.4; cursor: default; }
     .rig-collapse { padding: 0.02rem 0.35rem; font-size: 0.7rem; line-height: 1; }
-    #btn-rig-strip, #btn-rig-tuner { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
-    #btn-rig-strip.active, #btn-rig-tuner.active {
+    #btn-rig-strip, #btn-rig-tuner, #btn-rig-loop { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
+    #btn-rig-strip.active, #btn-rig-tuner.active, #btn-rig-loop.active {
       color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10);
     }
 
@@ -2531,6 +2531,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
       <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — HPF, drive, comp, EQ, delay, reverb, pan on the rig signal">strip</button>
       <button class="ctrl-btn" id="btn-rig-tuner" title="Chromatic tuner — reads the raw rig input (pre-distortion)">tune</button>
+      <button class="ctrl-btn" id="btn-rig-loop" title="Looper — record, layer, and loop your signal">loop</button>
       <span class="sp-status" id="rig-signal-status"></span>
     </div>
     <canvas id="rig-scope" class="rig-scope" title="Live input scope (pre-fader)"></canvas>
