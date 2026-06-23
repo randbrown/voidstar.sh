@@ -374,15 +374,8 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (!btnToggle) return;
     btnToggle.classList.remove('active', 'active-audio');
     const open = panel?.style.display !== 'none';
-    if (open && active) {
-      btnToggle.classList.add('active-audio');
-      btnToggle.textContent = 'vox ●';
-    } else if (open) {
-      btnToggle.classList.add('active');
-      btnToggle.textContent = 'vox on';
-    } else {
-      btnToggle.textContent = 'vox';
-    }
+    if (open) btnToggle.classList.add('active');
+    btnToggle.textContent = active ? 'vox ●' : 'vox';
     if (status) {
       if (active)    status.textContent = muted ? 'live · muted' : 'live';
       else if (open) status.textContent = 'click ▶ to start';

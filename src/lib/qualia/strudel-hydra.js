@@ -595,17 +595,10 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   function refreshStrudelBtn() {
     if (!btnToggle) return;
     btnToggle.classList.remove('active', 'active-audio');
-    const live    = audio.hasSource('strudel');
-    const open    = panel?.style.display !== 'none';
-    if (open && live) {
-      btnToggle.classList.add('active-audio');
-      btnToggle.textContent = 'strudel ●';
-    } else if (open) {
-      btnToggle.classList.add('active');
-      btnToggle.textContent = 'strudel on';
-    } else {
-      btnToggle.textContent = 'strudel';
-    }
+    const live = audio.hasSource('strudel');
+    const open = panel?.style.display !== 'none';
+    if (open) btnToggle.classList.add('active');
+    btnToggle.textContent = live ? 'strudel ●' : 'strudel';
     if (status) {
       if (live) {
         status.textContent = 'audio: live';

@@ -1013,15 +1013,8 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     btnToggle.classList.remove('active', 'active-audio');
     const live = audio.hasSource('sequencer');
     const open = panel?.style.display !== 'none';
-    if (open && live) {
-      btnToggle.classList.add('active-audio');
-      btnToggle.textContent = 'seq ●';
-    } else if (open) {
-      btnToggle.classList.add('active');
-      btnToggle.textContent = 'seq on';
-    } else {
-      btnToggle.textContent = 'seq';
-    }
+    if (open) btnToggle.classList.add('active');
+    btnToggle.textContent = live ? 'seq ●' : 'seq';
     if (status) {
       if (live)       status.textContent = 'audio: live';
       else if (open)  status.textContent = isPlaying ? 'starting…' : 'click ▶ to play';
