@@ -17,7 +17,7 @@
 // Owned signaling via the Cloudflare Durable Object star relay. The Nostr/WebRTC
 // transport (./entangle-transport.js) remains as a drop-in fallback — same shape.
 import { createTransport } from './entangle-transport-cf.js';
-import { T, MODES, APP_ID, resolveRoomId, buildJoinUrl, clampToSpec, manifestParam, getPinnedRoom, pinRoom, unpinRoom } from './entangle-protocol.js';
+import { T, MODES, APP_ID, resolveRoomId, buildJoinUrl, clampToSpec, manifestParam, getPinnedRoom, pinRoom, unpinRoom, readRoomFromQuery, makeRoomId, normalizeRoomSlug } from './entangle-protocol.js';
 import { unpackFeatures, unpackSkeleton } from './pose-features.js';
 
 const STALE_MS    = 9000;   // prune a peer we haven't heard from in this long
@@ -375,6 +375,16 @@ export function createEntangle({ core, mesh, actions = {} }) {
     return { roomId, joinUrl: buildJoinUrl(roomId) };
   }
 
+  // ── Performance code (pre-print + reuse) ──────────────────────────────────
+  // The room id a NEXT open() would resolve to, WITHOUT generating one: a
+  // ?room= URL override, or a code saved on this device. Lets the host preview /
+  // download / print a QR before the field is live, then open into the very same
+  // code on stage (and again for the next set). null ⇒ nothing chosen yet.
+  function preparedRoomId() {
+    if (opened && roomId) return roomId;
+    return readRoomFromQuery() || getPinnedRoom() || null;
+  }
+
   function close() {
     if (valueSyncTimer) { clearInterval(valueSyncTimer); valueSyncTimer = 0; }
     if (voteApplyTimer) { clearInterval(voteApplyTimer); voteApplyTimer = 0; }
@@ -425,6 +435,16 @@ export function createEntangle({ core, mesh, actions = {} }) {
     isPinned: () => !!getPinnedRoom(),
     pinRoom()  { if (roomId) pinRoom(roomId); },
     unpinRoom() { unpinRoom(); },
+    // Performance code — pre-print + reuse across sets.
+    getPreparedRoomId: preparedRoomId,
+    getPreparedJoinUrl: (origin) => { const r = preparedRoomId(); return r ? buildJoinUrl(r, origin) : null; },
+    isRoomFromUrl: () => !!readRoomFromQuery(),   // ?room= override locks the code
+    /** Set a custom, memorable performance code and save it for reuse. Returns
+     *  the normalized id, or null if it normalized to nothing. Applies on the
+     *  next open() — collapse the field first to change a live code. */
+    setRoom(slug) { const id = normalizeRoomSlug(slug); if (!id) return null; pinRoom(id); return id; },
+    /** Roll a fresh random performance code and save it for reuse. */
+    newRoom() { const id = makeRoomId(); pinRoom(id); return id; },
     onPeersChange(fn) { cb.peers = fn; },
     onTallyChange(fn) { cb.tally = fn; },
     onPhaseCharge(fn) { cb.phase = fn; },

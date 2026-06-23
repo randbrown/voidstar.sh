@@ -73,7 +73,92 @@ const CSS = `
   background:rgba(8,7,18,.7);border:1px solid var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);
   font:12px/1 ui-monospace,monospace;pointer-events:none}
 #entangle-hud[data-live="1"]{display:inline-flex}
+#entangle-modal .ent-input{flex:1;min-width:8rem;background:#0c0a18;color:var(--text,#e9e6ff);
+  border:1px solid #2c2750;border-radius:.4rem;padding:.45rem;font:inherit}
+#entangle-modal .ent-input[readonly]{color:var(--cyan,#22d3ee);opacity:.85}
+#entangle-modal .ent-iconbtn{padding:.4rem .55rem}
+#entangle-modal [data-codenote]{margin-top:.45rem}
+#entangle-modal [data-codenote] a{color:var(--cyan,#22d3ee);text-decoration:none;border-bottom:1px dotted}
+#entangle-modal .ent-card-details{margin-top:.6rem;border-top:1px dashed #221d40;padding-top:.5rem}
+#entangle-modal .ent-card-details summary{cursor:pointer;color:#9b96c4;font-size:.78rem;list-style:none}
+#entangle-modal .ent-card-details summary::-webkit-details-marker{display:none}
+#entangle-modal .ent-card-details summary::before{content:'▸ ';color:var(--accent,#8b5cf6)}
+#entangle-modal .ent-card-details[open] summary::before{content:'▾ '}
+#entangle-modal .ent-card-details label{display:flex;flex-direction:column;gap:.2rem;margin-top:.5rem;
+  font-size:.76rem;color:#b9b3e6;text-transform:uppercase;letter-spacing:.04em}
+#entangle-modal .ent-card-details input{background:#0c0a18;color:var(--text,#e9e6ff);
+  border:1px solid #2c2750;border-radius:.4rem;padding:.4rem;font:inherit;text-transform:none;letter-spacing:0}
 `;
+
+// ── Performer details for the printable card (persisted, reused per show) ────
+const PERF_KEY = 'voidstar.entangle.performer';
+function loadPerf() {
+  const d = { name: '', tagline: '', link: '' };
+  try { const o = JSON.parse(localStorage.getItem(PERF_KEY)); if (o && typeof o === 'object') Object.assign(d, o); } catch {}
+  return d;
+}
+function savePerf(p) { try { localStorage.setItem(PERF_KEY, JSON.stringify(p)); } catch {} }
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Open a print-ready flyer in a new tab: a big scannable QR (dark-on-white chip,
+// so it reads off paper) plus the performer's name / tagline / link, styled
+// on-brand. Self-prints once the QR image decodes; leaves room around the code
+// for the performer to add their own art before printing.
+function openPrintCard(url, qrDataUrl, perf) {
+  const w = window.open('', '_blank');
+  if (!w) { alert('Allow pop-ups for this page to print the entanglement card.'); return; }
+  const name = esc(perf.name) || 'voidstar';
+  const tagline = esc(perf.tagline) || 'a live set — spooky action across the room';
+  const link = esc(perf.link) || esc(url);
+  const doc = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entangle with ${name}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{--void:#05050d;--accent:#8b5cf6;--cyan:#22d3ee;--pink:#f472b6;--text:#e9e6ff;--muted:#9b96c4}
+  html,body{height:100%}
+  body{background:radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent) 26%, var(--void)) 0%, var(--void) 62%);
+    color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact;
+    display:flex;align-items:center;justify-content:center;min-height:100%;padding:2rem}
+  .card{width:min(30rem,100%);text-align:center}
+  .kicker{font-size:.8rem;letter-spacing:.32em;color:var(--cyan);text-transform:uppercase;margin-bottom:.6rem}
+  h1{font-size:2.2rem;letter-spacing:.04em;font-weight:700;line-height:1.1;
+    background:linear-gradient(90deg,var(--cyan),var(--accent),var(--pink));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .tag{color:var(--muted);font-size:.95rem;margin-top:.5rem}
+  .chip{margin:1.6rem auto 1.1rem;width:min(20rem,72%);aspect-ratio:1;background:#fff;
+    border-radius:1rem;padding:.7rem;box-shadow:0 0 2.4rem rgba(139,92,246,.4)}
+  .chip img{width:100%;height:100%;display:block}
+  .scan{font-size:.95rem;color:var(--text)}
+  .scan b{color:var(--cyan)}
+  .url{margin-top:.7rem;font-size:.82rem;color:var(--cyan);word-break:break-all}
+  .foot{margin-top:1.6rem;font-size:.72rem;color:var(--muted);opacity:.8}
+  .bar{position:fixed;top:.8rem;right:.8rem;display:flex;gap:.5rem}
+  .bar button{font:inherit;cursor:pointer;border-radius:.5rem;padding:.45rem .8rem;
+    background:var(--accent);border:0;color:#0b0b18;font-weight:600}
+  .bar button.ghost{background:transparent;border:1px solid var(--muted);color:var(--text)}
+  @media print{.bar{display:none}body{padding:0}}
+</style></head><body>
+  <div class="bar">
+    <button onclick="window.print()">print</button>
+    <button class="ghost" onclick="window.close()">close</button>
+  </div>
+  <div class="card">
+    <div class="kicker">⊛ entanglement</div>
+    <h1>${name}</h1>
+    <div class="tag">${tagline}</div>
+    <div class="chip"><img src="${qrDataUrl}" alt="Scan to entangle" onload="setTimeout(function(){try{window.focus();window.print()}catch(e){}},150)"></div>
+    <div class="scan">scan to join the field — <b>your camera never leaves your phone</b></div>
+    <div class="url">${link}</div>
+    <div class="foot">voidstar.sh — what it's like</div>
+  </div>
+</body></html>`;
+  w.document.open();
+  w.document.write(doc);
+  w.document.close();
+}
 
 export function initEntangleUI({ core, mesh, actions = {} }) {
   const entangle = createEntangle({ core, mesh, actions });
@@ -380,6 +465,9 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     hud.dataset.live = live ? '1' : '0';
   }
 
+  // Performer details for the printable card — persisted, reused show to show.
+  const perf = loadPerf();
+
   // ── Render the modal body from current state ──────────────────────────────
   function render() {
     if (!open) return;
@@ -387,7 +475,12 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     const modes = entangle.getModes();
     const wl = new Set(entangle.getWhitelist());
     const specs = entangle.getSpecs().filter(s => ['range', 'toggle', 'select'].includes(s.type));
-    const url = entangle.getJoinUrl();
+    // The performance code + its join URL: the live room when open, otherwise
+    // the code a next open() would resolve to (so the QR is printable offline).
+    const urlDriven = entangle.isRoomFromUrl();
+    const code = live ? entangle.getRoomId() : entangle.getPreparedRoomId();
+    const url  = live ? entangle.getJoinUrl() : entangle.getPreparedJoinUrl();
+    const pinned = entangle.isPinned();
     const tally = entangle.tally();
     const autoVote = entangle.getAutoVote();
 
@@ -399,26 +492,54 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
         </div>
         <button class="ent-close" data-act="close" title="Close">×</button>
       </div>
-      ${live ? `
-        <canvas id="entangle-qr" width="320" height="320"></canvas>
-        <textarea id="entangle-url" readonly spellcheck="false">${url || ''}</textarea>
-        <div class="ent-row between">
-          <span><span class="ent-count" data-n>${entangle.peerCount()}</span> entangled</span>
-          <span class="ent-row">
-            <button data-act="pin" title="${entangle.isPinned() ? 'Unpin — next open generates a fresh room' : 'Pin — reuse this room across reloads (pre-print the QR)'}">${entangle.isPinned() ? '📌 pinned' : 'pin room'}</button>
+      <div class="ent-sect" style="border-top:none;margin-top:.4rem;padding-top:0">
+        <h3>Performance code <span class="ent-sub" style="text-transform:none">— scan to entangle</span></h3>
+        ${code
+          ? `<canvas id="entangle-qr" width="320" height="320"></canvas>`
+          : `<div class="ent-empty">Name a code or roll a random one, then download or print it ahead of the show.</div>`}
+        ${urlDriven
+          ? `<div class="ent-sub">Locked to this page's URL (<code>?room=</code>): <b>${esc(code || '')}</b></div>`
+          : `<div class="ent-row">
+               <input id="entangle-slug" class="ent-input" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="my-show-code" value="${esc(code || '')}" ${live ? 'readonly' : ''}
+                 aria-label="performance code">
+               ${live ? '' : `<button data-act="setcode" title="Use this code — saved on this device">set</button>
+                 <button class="ent-iconbtn" data-act="newcode" title="Roll a fresh random code">🎲</button>`}
+             </div>`}
+        ${code ? `
+          <textarea id="entangle-url" readonly spellcheck="false">${esc(url || '')}</textarea>
+          <div class="ent-row">
             <button data-act="copy">copy link</button>
-            <button class="ent-danger" data-act="closeroom">collapse</button>
-          </span>
-        </div>
+            <button data-act="dlqr">⬇ QR png</button>
+            <button data-act="printcard">🖨 print card</button>
+          </div>
+          <div class="ent-sub" data-codenote>${pinned
+            ? '📌 saved on this device — the same code returns every time you open the field, set after set. <a href="#" data-act="forget">forget</a>'
+            : 'Ephemeral — a fresh code each open. <a href="#" data-act="save">save this code for reuse</a>'}</div>
+        ` : ''}
+        ${live ? '' : `<div class="ent-sub" style="text-transform:none">Print it once, scan all night — reopen the same code for a second set, or roll a new one for the next show.</div>`}
+        <details class="ent-card-details">
+          <summary>card details — for the printout</summary>
+          <label>name / handle<input data-card="name" value="${esc(perf.name)}" placeholder="your name" maxlength="40"></label>
+          <label>tagline<input data-card="tagline" value="${esc(perf.tagline)}" placeholder="live set · spooky action across the room" maxlength="80"></label>
+          <label>link (optional)<input data-card="link" value="${esc(perf.link)}" placeholder="${esc(url || 'voidstar.sh')}" maxlength="120"></label>
+        </details>
+      </div>
+
+      <div class="ent-row between">
+        ${live
+          ? `<span><span class="ent-count" data-n>${entangle.peerCount()}</span> entangled</span>
+             <button class="ent-danger" data-act="closeroom">collapse the field</button>`
+          : `<button class="ent-primary" data-act="openroom">⊛ open the field</button>`}
+      </div>
+
+      ${live ? `
         <div class="ent-sect">
           <h3>Crowd signal</h3>
           <div class="ent-crowdsig" data-crowdsig></div>
           <div class="ent-sub ent-crowdhint" data-crowdhint></div>
-        </div>
-      ` : `
-        <div class="ent-row"><button class="ent-primary" data-act="openroom">⊛ open the field</button></div>
-        <div class="ent-sub">Generates a private room + QR. Audience scans to join. Nothing runs on your machine for them — phones do their own pose tracking.</div>
-      `}
+        </div>`
+        : `<div class="ent-sub">Opening the field goes live with the code above — audience scans, and nothing runs on your machine for them (phones do their own pose tracking).</div>`}
 
       <div class="ent-sect">
         <h3>Modes</h3>
@@ -470,9 +591,9 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
       </div>` : ''}
     `;
 
-    if (live && url) {
+    if (code && url) {
       const canvas = modal.querySelector('#entangle-qr');
-      import('./qr.js').then(m => m.renderQR(canvas, url, 300)).catch(err => console.warn('[entangle] qr', err));
+      if (canvas) import('./qr.js').then(m => m.renderQR(canvas, url, 300)).catch(err => console.warn('[entangle] qr', err));
     }
     if (live) updateCrowdSig();
   }
@@ -516,6 +637,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
   modal.addEventListener('click', async (e) => {
     const el = e.target.closest('[data-act],[data-mode],[data-wl],[data-skelmode]');
     if (!el) return;
+    if (el.tagName === 'A') e.preventDefault();   // inline [save]/[forget] links
     if (el.dataset.mode)     { entangle.setMode(el.dataset.mode, !entangle.getModes()[el.dataset.mode]); render(); return; }
     if (el.dataset.wl)       { entangle.toggleWhitelist(el.dataset.wl); render(); return; }
     if (el.dataset.skelmode) { skelView.mode = el.dataset.skelmode; saveSkelView(); render(); return; }
@@ -529,13 +651,40 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
       }
       case 'closeroom': entangle.close(); setLive(false); render(); break;
       case 'copy': {
-        const url = entangle.getJoinUrl();
+        const url = entangle.isOpen() ? entangle.getJoinUrl() : entangle.getPreparedJoinUrl();
         if (url) { try { await navigator.clipboard.writeText(url); el.textContent = 'copied!'; setTimeout(() => (el.textContent = 'copy link'), 1200); } catch {} }
         break;
       }
-      case 'pin': {
-        if (entangle.isPinned()) entangle.unpinRoom(); else entangle.pinRoom();
-        render();
+      // ── Performance code ─────────────────────────────────────────────────
+      case 'setcode': {
+        const input = modal.querySelector('#entangle-slug');
+        const id = entangle.setRoom(input ? input.value : '');
+        if (id) render(); else if (input) input.focus();
+        break;
+      }
+      case 'newcode': { entangle.newRoom(); render(); break; }
+      case 'save':    { entangle.pinRoom(); render(); break; }
+      case 'forget':  { entangle.unpinRoom(); render(); break; }
+      case 'dlqr': {
+        const u = entangle.isOpen() ? entangle.getJoinUrl() : entangle.getPreparedJoinUrl();
+        if (!u) break;
+        try {
+          const { qrToDataURL } = await import('./qr.js');
+          const data = await qrToDataURL(u);
+          const a = document.createElement('a');
+          a.href = data;
+          a.download = `voidstar-entangle-${(entangle.isOpen() ? entangle.getRoomId() : entangle.getPreparedRoomId()) || 'code'}.png`;
+          document.body.appendChild(a); a.click(); a.remove();
+        } catch (err) { console.warn('[entangle] qr download', err); }
+        break;
+      }
+      case 'printcard': {
+        const u = entangle.isOpen() ? entangle.getJoinUrl() : entangle.getPreparedJoinUrl();
+        if (!u) break;
+        try {
+          const { qrToDataURL } = await import('./qr.js');
+          openPrintCard(u, await qrToDataURL(u), perf);
+        } catch (err) { console.warn('[entangle] print card', err); }
         break;
       }
       case 'autovote': { entangle.setAutoVote(!entangle.getAutoVote()); render(); break; }
@@ -554,6 +703,17 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     } else if (t.matches('[data-skelmargin]')) {
       skelView.margin = (+t.value) / 100; saveSkelView();
       const v = modal.querySelector('[data-skelmargin-val]'); if (v) v.textContent = t.value + '%';
+    } else if (t.matches('[data-card]')) {
+      // Printable-card details — persist live, no re-render (don't interrupt typing).
+      perf[t.dataset.card] = t.value; savePerf(perf);
+    }
+  });
+
+  // Enter in the performance-code field commits it (same as the “set” button).
+  modal.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.id === 'entangle-slug') {
+      e.preventDefault();
+      if (entangle.setRoom(e.target.value)) render();
     }
   });
 

@@ -43,6 +43,24 @@ export function makeRoomId(len = 10) {
   return s;
 }
 
+/**
+ * Normalize a performer-typed room code into a safe, URL-clean id: lowercase,
+ * runs of anything non-alphanumeric collapse to a single '-', trimmed, length
+ * capped. Lets a performer pick a memorable code ("randy-0623") to pre-print,
+ * while keeping the id transport- and URL-safe. Returns '' if nothing usable
+ * survives (the caller then falls back to a generated id).
+ * @param {string} s
+ * @param {number} [max]
+ */
+export function normalizeRoomSlug(s, max = 32) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, max)
+    .replace(/-+$/g, '');
+}
+
 /** Build the participant URL a QR code encodes. */
 export function buildJoinUrl(roomId, origin = location.origin) {
   return `${origin}${PARTICIPANT_PATH}#r=${roomId}`;
