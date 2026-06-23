@@ -1013,7 +1013,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     btnToggle.classList.remove('active', 'active-audio');
     const live = audio.hasSource('sequencer');
     const open = panel?.style.display !== 'none';
-    if (live) {
+    if (open && live) {
       btnToggle.classList.add('active-audio');
       btnToggle.textContent = 'seq ●';
     } else if (open) {

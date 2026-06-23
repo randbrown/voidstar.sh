@@ -1610,7 +1610,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // signal source (the processed live input feeding the mix).
     const live = audio?.hasSource?.('looper') || audio?.hasSource?.('rig');
     const open = panel?.style.display !== 'none';
-    if (live) { btnToggle.classList.add('active-audio'); btnToggle.textContent = 'rig ●'; }
+    if (open && live) { btnToggle.classList.add('active-audio'); btnToggle.textContent = 'rig ●'; }
     else if (open) { btnToggle.classList.add('active'); btnToggle.textContent = 'rig on'; }
     else btnToggle.textContent = 'rig';
   }

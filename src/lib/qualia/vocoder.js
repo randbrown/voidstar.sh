@@ -374,7 +374,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (!btnToggle) return;
     btnToggle.classList.remove('active', 'active-audio');
     const open = panel?.style.display !== 'none';
-    if (active) {
+    if (open && active) {
       btnToggle.classList.add('active-audio');
       btnToggle.textContent = 'vox ●';
     } else if (open) {
