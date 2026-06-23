@@ -527,7 +527,8 @@ body::before {
 [data-theme="win95"] .ctrl-btn:active,
 [data-theme="win95"] .qp-toggle.active,
 [data-theme="win95"] .ap-preset.active,
-[data-theme="win95"] .ctrl-btn.active {
+[data-theme="win95"] .ctrl-btn.active,
+[data-theme="win95"] .ctrl-btn.active-audio {
   box-shadow: var(--bevel-sunken) !important;
   transform: translate(1px, 1px);
 }
@@ -724,6 +725,7 @@ body::before {
 :is([data-theme="phosphor"], [data-theme="amber"]) .qp-tab:hover,
 :is([data-theme="phosphor"], [data-theme="amber"]) .btn:hover,
 :is([data-theme="phosphor"], [data-theme="amber"]) .ctrl-btn.active,
+:is([data-theme="phosphor"], [data-theme="amber"]) .ctrl-btn.active-audio,
 :is([data-theme="phosphor"], [data-theme="amber"]) .qp-toggle.active,
 :is([data-theme="phosphor"], [data-theme="amber"]) .qp-preset.active,
 :is([data-theme="phosphor"], [data-theme="amber"]) .qp-tab.active {
@@ -823,6 +825,7 @@ body::before {
 [data-theme="abyssal"] .qp-preset:hover,
 [data-theme="abyssal"] .qp-tab:hover,
 [data-theme="abyssal"] .ctrl-btn.active,
+[data-theme="abyssal"] .ctrl-btn.active-audio,
 [data-theme="abyssal"] .qp-toggle.active,
 [data-theme="abyssal"] .qp-preset.active,
 [data-theme="abyssal"] .qp-tab.active {
@@ -875,6 +878,7 @@ body::before {
 [data-theme="glacial"] .qp-preset:hover,
 [data-theme="glacial"] .qp-tab:hover,
 [data-theme="glacial"] .ctrl-btn.active,
+[data-theme="glacial"] .ctrl-btn.active-audio,
 [data-theme="glacial"] .qp-toggle.active,
 [data-theme="glacial"] .qp-preset.active,
 [data-theme="glacial"] .qp-tab.active {
@@ -955,7 +959,9 @@ body::before {
 [data-theme="glass"] .ctrl-btn.active:hover,
 [data-theme="glass"] .qp-toggle.active:hover,
 [data-theme="glass"] .qp-preset.active:hover,
-[data-theme="glass"] .qp-tab.active:hover {
+[data-theme="glass"] .qp-tab.active:hover,
+[data-theme="glass"] .ctrl-btn.active-audio,
+[data-theme="glass"] .ctrl-btn.active-audio:hover {
   background:
     radial-gradient(135% 110% at 26% -18%,
       rgba(255, 251, 235, 0.95),
@@ -1024,6 +1030,7 @@ body::before {
 [data-theme="visioneer"] .qp-preset:hover,
 [data-theme="visioneer"] .qp-tab:hover,
 [data-theme="visioneer"] .ctrl-btn.active,
+[data-theme="visioneer"] .ctrl-btn.active-audio,
 [data-theme="visioneer"] .qp-toggle.active,
 [data-theme="visioneer"] .qp-preset.active,
 [data-theme="visioneer"] .qp-tab.active {
@@ -1074,6 +1081,7 @@ body::before {
 [data-theme="gardens"] .qp-preset:hover,
 [data-theme="gardens"] .qp-tab:hover,
 [data-theme="gardens"] .ctrl-btn.active,
+[data-theme="gardens"] .ctrl-btn.active-audio,
 [data-theme="gardens"] .qp-toggle.active,
 [data-theme="gardens"] .qp-preset.active,
 [data-theme="gardens"] .qp-tab.active {
