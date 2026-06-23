@@ -76,6 +76,16 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let _grabSeq = 0;
   const RING_SECONDS = 40;          // mirror of the worklet's RING_SECONDS
 
+  // ── rig signal monitor ──
+  // The rig's live instrument signal is its own source: srcNode → sigGain
+  // (volume × mute) → speakers (monitor) + sigAnalyser (post-fader), and that
+  // analyser is adopted into audio.js as the 'rig' source so the processed
+  // signal lands in the mix (visuals + recording). Independent of the
+  // audio-panel 'mic'. The scope reads the PRE-fader captureAnalyser, so the
+  // raw input stays monitorable even when the signal is muted out of the mix.
+  let sigGain = null, sigAnalyser = null;
+  let _sigLevel = 0, _sigMuted = false, _rigAdopted = false;
+
   // ── recording state ──
   let recording = false;
   let recChans = [];                 // per-channel array of Float32 chunk arrays
@@ -177,43 +187,46 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     foldChunkIntoLive(chans[0]);
   }
 
-  // Open (or replace) the input capture. deviceId '' means "default input":
-  // reuse the page mic's stream when one is live, else open the default device.
+  // Open (or replace) the rig input capture on its OWN device (independent of
+  // the audio-panel mic). deviceId '' means the default input.
   async function openCapture(deviceId) {
     await ensureContext();
     const want = deviceId || '';
-    let useStream = null, owned = false;
-    if (!want) {
-      const mic = audio?.getMicStream?.();
-      if (mic) { useStream = mic; owned = false; }
-    }
-    if (!useStream) {
-      const constraints = want
-        ? { ...MIC_CONSTRAINTS, deviceId: { exact: want } }
-        : { ...MIC_CONSTRAINTS };
-      useStream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
-      owned = true;
-    }
+    const constraints = want
+      ? { ...MIC_CONSTRAINTS, deviceId: { exact: want } }
+      : { ...MIC_CONSTRAINTS };
+    const useStream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
     teardownCapture();
     stream = useStream;
-    streamOwned = owned;
+    streamOwned = true;
     const settings = stream.getAudioTracks()[0]?.getSettings() || {};
     streamDeviceId = want || settings.deviceId || '';
 
     srcNode = ctx.createMediaStreamSource(stream);
-    // Capture is recording-only: live-input monitoring is owned by the
-    // page-level input channel (audio.js mic source → monitorGain), so the
-    // looper never fans the input to the speakers itself — exactly one audible
-    // path, never doubled.
+
+    // Rig signal monitor: srcNode → sigGain (volume × mute) → speakers, plus a
+    // post-fader analyser adopted into audio.js as 'rig' so the live signal
+    // lands in the mix (visuals + recording) and follows volume/mute — muting
+    // pulls it from the mix, like a channel strip's send.
+    sigGain = ctx.createGain();
+    sigGain.gain.value = effSignal();
+    sigGain.__qualiaBypassMute = true;        // the rig owns its own mute
+    srcNode.connect(sigGain);
+    sigGain.connect(ctx.destination);
+    sigAnalyser = ctx.createAnalyser();
+    sigAnalyser.fftSize = 1024;
+    sigAnalyser.smoothingTimeConstant = 0.40;
+    sigGain.connect(sigAnalyser);
+    if (audio?.adoptAnalyser) { try { audio.adoptAnalyser(ctx, sigAnalyser, 'rig'); _rigAdopted = true; } catch {} }
+
     // A worklet/ScriptProcessor only gets pulled if it has a live downstream;
     // route it through a silent sink so process() keeps firing.
     sinkGain = ctx.createGain();
     sinkGain.gain.value = 0;
     sinkGain.connect(ctx.destination);
 
-    // A non-audible analyser on the raw capture so the rig scope can show the
-    // exact signal being buffered/recorded (pre-everything), even when the page
-    // input channel's monitor is at 0 or its own mic isn't running.
+    // A non-audible analyser on the raw capture (PRE-fader) so the rig scope can
+    // show the exact signal being buffered/recorded even when it's muted.
     captureAnalyser = ctx.createAnalyser();
     captureAnalyser.fftSize = 1024;
     captureAnalyser.smoothingTimeConstant = 0.40;
@@ -268,19 +281,60 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   function teardownCapture() {
+    if (_rigAdopted) { try { audio?.releaseAdopted?.('rig'); } catch {} _rigAdopted = false; }
     try { srcNode?.disconnect(); } catch {}
     if (recNode) { try { recNode.disconnect(); } catch {}; if ('onaudioprocess' in recNode) recNode.onaudioprocess = null; }
     try { sinkGain?.disconnect(); } catch {}
+    try { sigGain?.disconnect(); } catch {}
+    try { sigAnalyser?.disconnect(); } catch {}
     try { captureAnalyser?.disconnect(); } catch {}
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
-    srcNode = recNode = sinkGain = captureAnalyser = null;
+    srcNode = recNode = sinkGain = sigGain = sigAnalyser = captureAnalyser = null;
     stream = null; streamOwned = false;
   }
 
+  // ── rig signal level / mute (channel-strip volume + mute) ──────────────────
+  function effSignal() { return _sigMuted ? 0 : _sigLevel; }
+  function wantCapture() { return _bufferOn || recording || _sigLevel > 0; }
+  // Open capture if anything needs it; close it when nothing does.
+  async function ensureCaptureOpen(deviceId) {
+    await ensureContext();
+    await ensureCapture(deviceId ?? streamDeviceId ?? '');
+  }
+  function maybeCloseCapture() {
+    if (!wantCapture() && srcNode) teardownCapture();
+  }
+  // Set value only (no capture open) — for restoring persisted state pre-gesture.
+  function primeSignal(level, muted) {
+    _sigLevel = clamp01(level);
+    _sigMuted = !!muted;
+    if (sigGain) ramp(sigGain.gain, effSignal());
+  }
+  async function setSignalLevel(v, deviceId) {
+    _sigLevel = clamp01(v);
+    if (_sigLevel > 0 && !srcNode) { try { await ensureCaptureOpen(deviceId); } catch (e) { console.warn('[qualia] rig signal capture failed:', e); } }
+    if (sigGain) ramp(sigGain.gain, effSignal());
+    maybeCloseCapture();
+  }
+  function setSignalMuted(on) {
+    _sigMuted = !!on;
+    if (sigGain) ramp(sigGain.gain, effSignal());
+  }
+  function getSignal() { return { level: _sigLevel, muted: _sigMuted, live: !!srcNode }; }
+
+  // Dedupe concurrent opens — a fader drag from 0 can call this many times
+  // before the first getUserMedia resolves (srcNode is still null), which would
+  // otherwise open several streams and teardown-race each other.
+  let _openPromise = null;
   async function ensureCapture(deviceId) {
     const want = deviceId || '';
     if (srcNode && want === (streamDeviceId || '')) return;
-    await openCapture(want);
+    if (_openPromise) {
+      try { await _openPromise; } catch {}
+      if (srcNode && want === (streamDeviceId || '')) return;
+    }
+    _openPromise = openCapture(want).finally(() => { _openPromise = null; });
+    return _openPromise;
   }
 
   function armRecorder(on) {
@@ -338,6 +392,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       const finish = () => {
         recording = false;
         armRecorder(false);
+        // Release the rig capture if nothing else wants it open (buffer off and
+        // the signal monitor down); the ring keeps filling otherwise.
+        maybeCloseCapture();
         const sr = ctx.sampleRate;
         const total = recFrames;
         const nch = Math.max(1, recChannelCount);
@@ -405,7 +462,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
   function stopBuffer() {
     _bufferOn = false;
-    if (!recording) teardownCapture();
+    maybeCloseCapture();   // keep open if the signal monitor or a record needs it
   }
 
   // Grab the most recent `cycles` of the live ring as a loop, phase-locked to
@@ -798,10 +855,18 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
   return {
     ensureContext,
-    setInputDevice: async (id) => { if (!recording) await openCapture(id || ''); else streamDeviceId = id || ''; },
+    // Switch the rig input device: reopen on the new device when capture is
+    // live, otherwise just remember it for the next open.
+    setInputDevice: async (id) => {
+      const want = id || '';
+      if (srcNode && !recording) await openCapture(want);
+      else streamDeviceId = want;
+    },
     getInputDeviceId: () => streamDeviceId,
     startRecording, stopRecording,
     startBuffer, stopBuffer, grabRetro,
+    ensureCaptureOpen,
+    setSignalLevel, setSignalMuted, getSignal, primeSignal,
     isBuffering: () => _bufferOn && !!srcNode,
     isRetroCapable: () => usingWorklet,
     getCaptureAnalyser: () => captureAnalyser,

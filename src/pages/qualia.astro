@@ -2024,7 +2024,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <div class="qp-body">
       <div class="qp-presets" data-qp="audio-presets"></div>
-      <div class="qp-row" data-qp="audio-monitor" title="Live input level — your guitar / mic through the output AND into the screen recording at this level. The visualizer reacts whenever the input is captured (pre-fader). OFF by default: turning it up can feed back on speakers (fine on headphones / an audio interface). Shared with the looper's input controls.">
+      <div class="qp-row" data-qp="audio-monitor" title="Audio-panel mic level — the casual 'whatever's on the mic' input (its own device), monitored through the output and into the recording at this level, post-fader. Used by the 'mic' and 'all' audio modes. Separate from the rig signal (controlled in the rig panel). OFF by default: turning it up can feed back on speakers (fine on headphones / an interface).">
         <label>input<span class="qp-val">off</span></label>
         <input type="range" min="0" max="1" step="0.01" value="0">
         <button type="button" class="ctrl-btn seq-mini-mute" data-qp="audio-input-mute">mute</button>

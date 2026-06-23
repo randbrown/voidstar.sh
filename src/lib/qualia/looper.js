@@ -39,6 +39,8 @@ const OFFSET_KEY     = `${NS}.offsetMs`;
 const IMMEDIATE_KEY  = `${NS}.immediate`;  // "start now" (drop in mid-cycle) vs wait for boundary
 const RETRO_KEY      = `${NS}.retroCycles`;// cycles the retro "grab" captures
 const BUFFER_KEY     = `${NS}.buffer`;     // keep the live lookback buffer filling
+const SIGLEVEL_KEY   = `${NS}.signalLevel`;// rig signal monitor/mix level
+const SIGMUTE_KEY    = `${NS}.signalMuted`;// rig signal mute
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
@@ -135,6 +137,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     master:   num01(lsGet(MASTER_KEY, '0.9'), 0.9),   // overall looper output
     retroCycles: (() => { const v = parseInt(lsGet(RETRO_KEY, '4'), 10); return Number.isFinite(v) ? Math.max(1, Math.min(64, v)) : 4; })(),
     bufferOn: lsGet(BUFFER_KEY, '0') === '1',          // live lookback running
+    signalLevel: num01(lsGet(SIGLEVEL_KEY, '0'), 0),   // rig signal monitor/mix level
+    signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
     gridDefault: defaultGrid,       // "cycles" each new track starts with
     deviceId: getStoredDeviceId('looperInput') || '',   // remembered input device
     tracks: [],                     // Track[] — see makeTrack()
@@ -148,6 +152,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const looperAudio = createLooperAudio({ audio, syncStrudel });
   looperAudio.setMaster(model.master);
   looperAudio.setOffsetMs(model.offsetMs);
+  looperAudio.primeSignal(model.signalLevel, model.signalMuted);   // value-only; capture opens on a gesture
 
   // Per-track renderers + DOM handles, keyed by track id.
   const renderers = new Map();      // id -> renderer
@@ -603,23 +608,18 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setMaster(model.master);
     lsSet(MASTER_KEY, model.master);
   }
-  // The live input is the page-level input channel (audio.js) — one shared
-  // path (volume + mute) that lands on speakers + the screen recording and
-  // drives the visualizer. Raising / unmuting ensures the page mic is live.
-  async function ensureInputLive() {
-    if (audio?.hasSource?.('mic')) return;
-    try { await audio?.start?.(model.deviceId || ''); }
-    catch (e) { console.warn('[qualia] looper input start failed:', e); }
-    refreshLooperBtn();
-  }
+  // The rig signal is the rig's OWN input source (looperAudio), independent of
+  // the audio-panel mic: volume + mute land on the monitor + the mix ('rig'
+  // source). Raising the level opens the rig capture (a user gesture).
   function setInputVol(v) {
-    const lvl = clamp01(v);
-    audio?.setInputLevel?.(lvl);
-    if (lvl > 0) ensureInputLive();
+    model.signalLevel = clamp01(v);
+    lsSet(SIGLEVEL_KEY, model.signalLevel);
+    looperAudio.setSignalLevel(model.signalLevel, model.deviceId).then(refreshLooperBtn).catch(() => {});
   }
   function setInputMuted(on) {
-    audio?.setInputMuted?.(!!on);
-    if (!on) ensureInputLive();
+    model.signalMuted = !!on;
+    lsSet(SIGMUTE_KEY, model.signalMuted ? '1' : '0');
+    looperAudio.setSignalMuted(model.signalMuted);
     refreshInputMuteBtn();
   }
   // Nudge (ms): slides every loop window live to compensate record latency.
@@ -843,17 +843,18 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshSyncStatus();
   }
 
-  // ── signal subpanel (live input level + mute + scope) ─────────────────────
-  // The live instrument signal is the page-level input channel (audio.js): its
-  // fader (gated by mute) lands on the speakers AND the screen recording, while
-  // the visualizer + scope tap the analyser PRE-fader (reactive even at level
-  // 0). Built once; the scope self-drives a rAF while the panel is open.
+  // ── signal subpanel (rig signal level + mute + scope) ─────────────────────
+  // The rig signal is the rig's own input source (looperAudio): its fader
+  // (gated by mute) lands on the speakers AND the mix ('rig' source — visuals +
+  // recording), POST-fader, so muting pulls it from the mix. The scope reads the
+  // capture PRE-fader, so the raw input stays visible even when muted. Built
+  // once; the scope self-drives a rAF while the panel is open.
   function renderSignal() {
     if (!signalCtrls || signalCtrls.children.length) return;
-    inputVolSl = volSlider(audio?.getInput?.().level ?? 0, setInputVol,
-      'Live input level — your guitar / mic through the speakers AND into the screen recording at this level. Shared with the audio panel. The visualizer + scope react whenever input is captured (pre-fader). Raising it can feed back on speakers (fine on headphones / an interface). Double-click to reset.',
+    inputVolSl = volSlider(model.signalLevel, setInputVol,
+      'Rig signal level — your guitar through the speakers AND into the mix (visuals + recording) at this level, like a channel strip. Muting/lowering it pulls the signal from the mix; the scope still shows the raw input. Raising it can feed back on speakers (fine on headphones / an interface). Double-click to reset.',
       INPUT_DEFAULT);
-    inputMuteBtn = miniBtn('mute', () => setInputMuted(!(audio?.getInput?.().muted)));
+    inputMuteBtn = miniBtn('mute', () => setInputMuted(!model.signalMuted));
     inputMuteBtn.classList.add('seq-mini-mute');
     signalCtrls.append(inputVolSl, inputMuteBtn);
     refreshInputMuteBtn();
@@ -888,10 +889,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     g.strokeStyle = 'rgba(255,255,255,0.06)';
     g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
 
-    // Prefer the looper's own capture analyser (live when the buffer/record is
-    // running, pre-everything) so the scope shows the buffered signal even at
-    // monitor 0; fall back to the page input channel's analyser otherwise.
-    const an = looperAudio.getCaptureAnalyser?.() || audio?.getInputAnalyser?.();
+    // The rig's own capture analyser (pre-fader) — shows the raw rig input
+    // whenever capture is open (signal up, buffer on, or recording), even when
+    // the signal is muted out of the mix. Idle trace otherwise.
+    const an = looperAudio.getCaptureAnalyser?.();
     if (an) {
       const n = an.fftSize;
       if (!scopeBuf || scopeBuf.length !== n) scopeBuf = new Uint8Array(n);
@@ -987,10 +988,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function refreshInputMuteBtn() {
     if (!inputMuteBtn) return;
-    const muted = !!(audio?.getInput?.().muted);
+    const muted = !!model.signalMuted;
     inputMuteBtn.classList.toggle('muted', muted);
     inputMuteBtn.textContent = muted ? 'muted' : 'mute';
-    inputMuteBtn.title = muted ? 'Unmute live input' : 'Mute live input (speakers + recording)';
+    inputMuteBtn.title = muted ? 'Unmute rig signal' : 'Mute rig signal (out of monitor + mix)';
   }
 
   // ── button paint ─────────────────────────────────────────────────────────
@@ -1030,9 +1031,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function refreshLooperBtn() {
     if (!btnToggle) return;
     btnToggle.classList.remove('active', 'active-audio');
-    // Rig is "live" when anything it owns is audible — a loop voice OR the live
-    // input channel (the processed signal feeding the mix).
-    const live = audio?.hasSource?.('looper') || audio?.hasSource?.('mic');
+    // Rig is "live" when anything it owns is audible — a loop voice OR the rig
+    // signal source (the processed live input feeding the mix).
+    const live = audio?.hasSource?.('looper') || audio?.hasSource?.('rig');
     const open = panel?.style.display !== 'none';
     if (live) { btnToggle.classList.add('active-audio'); btnToggle.textContent = 'rig ●'; }
     else if (open) { btnToggle.classList.add('active'); btnToggle.textContent = 'rig on'; }
@@ -1048,9 +1049,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     getCurrentId: () => model.deviceId || null,
     onChoose: async (id) => {
       model.deviceId = id || '';
-      try { await looperAudio.setInputDevice(model.deviceId); } catch (e) { console.warn('[qualia] looper device switch failed:', e); }
-      // Keep the page input channel on the same device when it's live.
-      if (audio?.hasSource?.('mic')) { try { await audio.start(model.deviceId || ''); } catch {} }
+      // The rig input is its own device, independent of the audio-panel mic.
+      try { await looperAudio.setInputDevice(model.deviceId); } catch (e) { console.warn('[qualia] rig device switch failed:', e); }
       return model.deviceId;
     },
   });
@@ -1119,14 +1119,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!propsEl?.children.length) renderProps();
     for (const r of renderers.values()) r.resize();
     try { picker?.populate?.(model.deviceId); } catch {}
-    const inp = audio?.getInput?.() || { level: 0, muted: false };
-    if (inputVolSl) inputVolSl.value = String(inp.level);
+    if (inputVolSl) inputVolSl.value = String(model.signalLevel);
     refreshInputMuteBtn();
-    // Resume live-input monitoring on open (a user gesture) if it was left up —
-    // so a remembered input level/device comes back without a manual nudge.
-    if (inp.level > 0 && !inp.muted && !audio?.hasSource?.('mic')) ensureInputLive();
-    // Resume the live lookback buffer if it was left on (open() is a gesture, so
-    // a getUserMedia prompt — when the looper can't borrow the page mic — is OK).
+    // open() is a user gesture, so a getUserMedia prompt is allowed here.
+    // Resume the rig signal monitor if it was left up, and the lookback buffer
+    // if it was left on — so a remembered rig comes back without a manual nudge.
+    if (model.signalLevel > 0 && !looperAudio.getSignal().live) {
+      looperAudio.ensureCaptureOpen(model.deviceId).then(refreshLooperBtn).catch(() => {});
+    }
     if (model.bufferOn && !looperAudio.isBuffering()) setBuffer(true);
     refreshBufferBtn();
     startScope();
@@ -1159,14 +1159,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     elGain.addEventListener('input', () => setMaster(elGain.value));
   }
 
-  // Repaint topbar/state when audio.js flips the looper source on/off.
+  // Repaint topbar/state when audio.js flips the looper / rig source on/off.
   audio?.onChange?.(() => refreshLooperBtn());
-  // Keep the "input" controls in sync with the shared page-level input channel
-  // (it can also be changed from the audio panel).
-  audio?.onInputChange?.((m) => {
-    if (inputVolSl) inputVolSl.value = String(m.level);
-    refreshInputMuteBtn();
-  });
   syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
 
   // Seed with one empty armed track (Phase 5 restores persisted tracks here).
@@ -1174,7 +1168,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   model.armedTrackId = model.tracks[0].id;
 
   // Initial paint even while hidden so first open() shows content immediately.
-  renderSignal();           // build input controls up front (onInputChange reads them)
+  renderSignal();           // build the rig signal controls up front
   if (propsEl) renderProps();
   if (tracksEl) renderTracks();
   refreshMuteBtn();
