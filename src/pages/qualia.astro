@@ -1621,10 +1621,20 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       font-size: 0.72rem;
     }
     .rig-tuner-note { font-size: 1.1rem; min-width: 3.5ch; color: var(--text); font-variant-numeric: tabular-nums; }
+    .rig-tuner-hz { color: var(--muted); font-size: 0.66rem; min-width: 7ch; font-variant-numeric: tabular-nums; }
+    .rig-tuner-tgt { color: var(--cyan); font-size: 0.66rem; min-width: 6ch; font-variant-numeric: tabular-nums; }
     .rig-tuner-bar { position: relative; flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; }
     .rig-tuner-bar::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,0.25); }
     .rig-tuner-needle { position: absolute; top: -1px; bottom: -1px; width: 3px; border-radius: 2px; background: var(--cyan); transition: left 0.06s linear; }
     .rig-tuner-cents { min-width: 5ch; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    /* Temperament editor — ET / custom toggle + 12 per-note cent spinners. */
+    .rig-temper { padding: 0 0.7rem 0.45rem; }
+    .rig-temper-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; }
+    #rig-temper .ctrl-btn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10); }
+    .rig-temper-grid { display: flex; flex-wrap: wrap; gap: 0.25rem 0.4rem; }
+    .rig-temper-cell { display: flex; align-items: center; gap: 0.2rem; font-size: 0.62rem; }
+    .rig-temper-note { color: var(--muted); min-width: 2.2ch; text-align: right; }
     .looper-input-select { max-width: 14ch; }
     #btn-looper-record, #btn-looper-play, #btn-looper-stop {
       padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1;
@@ -2497,6 +2507,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <canvas id="rig-scope" class="rig-scope" title="Live input scope (pre-fader)"></canvas>
     <div id="rig-tuner" class="rig-tuner" style="display:none"></div>
+    <div id="rig-temper" class="rig-temper" style="display:none"></div>
   </section>
 
   <!-- STRIP subpanel — the rig channel strip (collapsible). -->

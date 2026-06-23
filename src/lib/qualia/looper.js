@@ -45,6 +45,8 @@ const SIGMUTE_KEY    = `${NS}.signalMuted`;// rig signal mute
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
 const TUNER_KEY      = `${NS}.tuner`;      // tuner enabled
+const TEMPER_KEY     = `${NS}.temperament`;// 'et' | 'custom'
+const CUSTOMCENTS_KEY = `${NS}.customCents`;// custom temperament: int cents[12]
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
 // Channel strip UI schema — stages + params (the audio side lives in
@@ -64,6 +66,16 @@ const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
 
 function lsGet(k, fallback) { try { const v = localStorage.getItem(k); return v == null ? fallback : v; } catch { return fallback; } }
 function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch {} }
+
+// Custom temperament = 12 integer cent offsets (C..B), persisted as JSON.
+function loadCustomCents() {
+  const out = new Array(12).fill(0);
+  try {
+    const raw = localStorage.getItem(CUSTOMCENTS_KEY);
+    if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) for (let i = 0; i < 12; i++) out[i] = Math.max(-50, Math.min(50, Math.round(+a[i] || 0))); }
+  } catch {}
+  return out;
+}
 
 // Strip config = STRIP_DEFAULTS deep-merged with any persisted JSON.
 function loadStripConfig() {
@@ -145,6 +157,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const stripPanel  = document.getElementById('rig-strip');
   const stripBody   = document.getElementById('rig-strip-body');
   const tunerEl     = document.getElementById('rig-tuner');
+  const temperEl    = document.getElementById('rig-temper');
   const btnToggle   = document.getElementById('btn-looper');
   const btnRecord   = document.getElementById('btn-looper-record');
   const btnRetro    = document.getElementById('btn-looper-retro');
@@ -174,6 +187,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     strip: loadStripConfig(),                          // channel strip config
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
     tunerOn: lsGet(TUNER_KEY, '0') === '1',
+    temperament: lsGet(TEMPER_KEY, 'et') === 'custom' ? 'custom' : 'et',
+    customCents: loadCustomCents(),
     gridDefault: defaultGrid,       // "cycles" each new track starts with
     deviceId: getStoredDeviceId('looperInput') || '',   // remembered input device
     tracks: [],                     // Track[] — see makeTrack()
@@ -690,6 +705,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
       retroCycles: model.retroCycles,
       cps:         model.cps,
       strip:       JSON.parse(JSON.stringify(model.strip)),
+      temperament: model.temperament,
+      customCents: model.customCents.slice(),
     };
   }
   function setConfig(cfg) {
@@ -718,6 +735,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
       looperAudio.setStripConfig(model.strip);
       lsSet(STRIP_KEY, JSON.stringify(model.strip));
       rebuildStrip();
+    }
+    if (cfg.temperament === 'et' || cfg.temperament === 'custom') setTemperament(cfg.temperament);
+    if (Array.isArray(cfg.customCents)) {
+      for (let i = 0; i < 12; i++) model.customCents[i] = Math.max(-50, Math.min(50, Math.round(+cfg.customCents[i] || 0)));
+      persistCustomCents();
+      syncTemperCells();
     }
     // Repaint the props row so the panel mirrors the applied settings
     // (master slider, nudge, sync/start-now checkboxes) whether or not it's
@@ -1059,16 +1082,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   // ── chromatic tuner ───────────────────────────────────────────────────────
   const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  let tunerNoteEl = null, tunerNeedleEl = null, tunerCentsEl = null, tunerBuf = null;
+  let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerNeedleEl = null, tunerCentsEl = null, tunerBuf = null;
   function buildTunerUI() {
     if (!tunerEl || tunerEl.children.length) return;
     tunerNoteEl = document.createElement('span'); tunerNoteEl.className = 'rig-tuner-note'; tunerNoteEl.textContent = '—';
+    tunerHzEl   = document.createElement('span'); tunerHzEl.className   = 'rig-tuner-hz';
+    tunerTgtEl  = document.createElement('span'); tunerTgtEl.className  = 'rig-tuner-tgt';
     const bar = document.createElement('span'); bar.className = 'rig-tuner-bar';
     tunerNeedleEl = document.createElement('span'); tunerNeedleEl.className = 'rig-tuner-needle'; tunerNeedleEl.style.left = '50%';
     bar.append(tunerNeedleEl);
     tunerCentsEl = document.createElement('span'); tunerCentsEl.className = 'rig-tuner-cents'; tunerCentsEl.textContent = 'play a note';
-    tunerEl.append(tunerNoteEl, bar, tunerCentsEl);
+    tunerEl.append(tunerNoteEl, tunerHzEl, tunerTgtEl, bar, tunerCentsEl);
   }
+  // Target cents offset for a note class under the active temperament.
+  function temperOffset(noteClass) { return model.temperament === 'custom' ? (model.customCents[noteClass] | 0) : 0; }
   // Bounded autocorrelation pitch detector (parabolic-interpolated). Returns Hz
   // or -1 when the signal is too quiet / not periodic.
   function autoCorrelate(buf, sr) {
@@ -1096,7 +1123,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function updateTuner() {
     if (!model.tunerOn || !tunerNoteEl) return;
     const an = looperAudio.getCaptureAnalyser?.();
-    const clear = () => { tunerNoteEl.textContent = '—'; tunerNoteEl.style.color = ''; tunerCentsEl.textContent = an ? 'play a note' : 'rig signal off'; tunerNeedleEl.style.left = '50%'; };
+    const clear = () => {
+      tunerNoteEl.textContent = '—'; tunerNoteEl.style.color = '';
+      if (tunerHzEl) tunerHzEl.textContent = ''; if (tunerTgtEl) tunerTgtEl.textContent = '';
+      tunerCentsEl.textContent = an ? 'play a note' : 'rig signal off'; tunerNeedleEl.style.left = '50%';
+    };
     if (!an || typeof an.getFloatTimeDomainData !== 'function') { clear(); return; }
     const n = an.fftSize;
     if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
@@ -1105,21 +1136,78 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (f <= 0) { clear(); return; }
     const midi = 69 + 12 * Math.log2(f / 440);
     const rounded = Math.round(midi);
-    const cents = Math.round((midi - rounded) * 100);
-    tunerNoteEl.textContent = `${NOTE_NAMES[((rounded % 12) + 12) % 12]}${Math.floor(rounded / 12) - 1}`;
-    const inTune = Math.abs(cents) <= 5;
+    const cls = ((rounded % 12) + 12) % 12;
+    const rawCents = Math.round((midi - rounded) * 100);   // deviation from ET
+    const target = temperOffset(cls);                      // sweetened target offset
+    const err = rawCents - target;                         // deviation from the target
+    tunerNoteEl.textContent = `${NOTE_NAMES[cls]}${Math.floor(rounded / 12) - 1}`;
+    if (tunerHzEl) tunerHzEl.textContent = `${f.toFixed(1)} Hz`;
+    if (tunerTgtEl) tunerTgtEl.textContent = `tgt ${target > 0 ? '+' : ''}${target}¢`;
+    const inTune = Math.abs(err) <= 3;
     tunerNoteEl.style.color = inTune ? 'var(--cyan)' : '';
-    tunerCentsEl.textContent = `${cents > 0 ? '+' : ''}${cents}¢`;
-    tunerNeedleEl.style.left = Math.max(0, Math.min(100, 50 + cents)) + '%';
-    tunerNeedleEl.style.background = inTune ? 'var(--cyan)' : (Math.abs(cents) <= 15 ? '#fbbf24' : 'var(--pink)');
+    tunerCentsEl.textContent = `${err > 0 ? '+' : ''}${err}¢`;
+    tunerNeedleEl.style.left = Math.max(0, Math.min(100, 50 + err)) + '%';
+    tunerNeedleEl.style.background = inTune ? 'var(--cyan)' : (Math.abs(err) <= 12 ? '#fbbf24' : 'var(--pink)');
+  }
+
+  // ── temperament editor (ET / custom + per-note cent spinners) ──────────────
+  let temperToggleBtn = null, temperGridEl = null;
+  const temperCells = new Array(12).fill(null);
+  function persistCustomCents() { lsSet(CUSTOMCENTS_KEY, JSON.stringify(model.customCents)); }
+  function setTemperament(t) {
+    model.temperament = t === 'custom' ? 'custom' : 'et';
+    lsSet(TEMPER_KEY, model.temperament);
+    refreshTemperUI();
+  }
+  function setCustomCent(i, v) {
+    model.customCents[i] = Math.max(-50, Math.min(50, (v | 0)));
+    persistCustomCents();
+  }
+  function refreshTemperUI() {
+    if (temperToggleBtn) {
+      temperToggleBtn.textContent = model.temperament === 'custom' ? 'custom' : 'ET';
+      temperToggleBtn.classList.toggle('active', model.temperament === 'custom');
+      temperToggleBtn.title = model.temperament === 'custom'
+        ? 'Custom temperament — click for Equal Temperament'
+        : 'Equal Temperament — click for your custom temperament';
+    }
+    if (temperGridEl) temperGridEl.style.display = model.temperament === 'custom' ? '' : 'none';
+  }
+  function buildTemperamentUI() {
+    if (!temperEl || temperEl.children.length) return;
+    const head = document.createElement('div'); head.className = 'rig-temper-head';
+    const lab = document.createElement('span'); lab.className = 'seq-prop-label'; lab.textContent = 'temperament';
+    temperToggleBtn = document.createElement('button');
+    temperToggleBtn.type = 'button'; temperToggleBtn.className = 'ctrl-btn';
+    temperToggleBtn.addEventListener('click', () => setTemperament(model.temperament === 'custom' ? 'et' : 'custom'));
+    head.append(lab, temperToggleBtn);
+
+    temperGridEl = document.createElement('div'); temperGridEl.className = 'rig-temper-grid';
+    for (let i = 0; i < 12; i++) {
+      const cell = document.createElement('div'); cell.className = 'rig-temper-cell';
+      const nl = document.createElement('span'); nl.className = 'rig-temper-note'; nl.textContent = NOTE_NAMES[i];
+      const inp = numInput(model.customCents[i], -50, 50, 1);
+      inp.title = `${NOTE_NAMES[i]} cents offset`;
+      inp.addEventListener('change', () => { setCustomCent(i, parseInt(inp.value, 10) || 0); inp.value = String(model.customCents[i]); });
+      temperCells[i] = inp;
+      cell.append(nl, stepper(inp, 'change'));
+      temperGridEl.append(cell);
+    }
+    temperEl.append(head, temperGridEl);
+    refreshTemperUI();
+  }
+  function syncTemperCells() {
+    for (let i = 0; i < 12; i++) if (temperCells[i]) temperCells[i].value = String(model.customCents[i]);
   }
   function refreshTunerBtn() { if (btnTuner) btnTuner.classList.toggle('active', !!model.tunerOn); }
   function toggleTuner(on) {
     model.tunerOn = on == null ? !model.tunerOn : !!on;
     lsSet(TUNER_KEY, model.tunerOn ? '1' : '0');
     if (tunerEl) tunerEl.style.display = model.tunerOn ? '' : 'none';
+    if (temperEl) temperEl.style.display = model.tunerOn ? '' : 'none';
     if (model.tunerOn) {
       buildTunerUI();
+      buildTemperamentUI();
       // The tuner reads the raw rig capture — engage it (this is a user gesture).
       looperAudio.ensureCaptureOpen(model.deviceId).then(refreshLooperBtn).catch(() => {});
     }
@@ -1320,7 +1408,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (model.stripOpen) { buildStripUI(); if (stripPanel) stripPanel.style.display = ''; }
     if (model.tunerOn) {
       buildTunerUI();
+      buildTemperamentUI();
       if (tunerEl) tunerEl.style.display = '';
+      if (temperEl) temperEl.style.display = '';
       if (!looperAudio.getSignal().live) looperAudio.ensureCaptureOpen(model.deviceId).then(refreshLooperBtn).catch(() => {});
     }
     refreshStripBtn();
