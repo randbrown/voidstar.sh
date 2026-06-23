@@ -67,7 +67,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let stream = null;
   let streamOwned = false;          // false when we borrowed audio.getMicStream()
   let streamDeviceId = '';
-  let srcNode = null, recNode = null, sinkGain = null, captureAnalyser = null;
+  let srcNode = null, recNode = null, sinkGain = null, captureAnalyser = null, tunerAnalyser = null;
   let usingWorklet = false;
 
   // ── retroactive ring buffer ──
@@ -261,6 +261,14 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     captureAnalyser.smoothingTimeConstant = 0.40;
     srcNode.connect(captureAnalyser);
 
+    // A long-window analyser dedicated to the tuner — ~171ms at 48k so the
+    // autocorrelation has several periods of even very low notes (G0 ≈ 24.5 Hz,
+    // ~41ms period). Separate from the scope so the scope stays responsive.
+    tunerAnalyser = ctx.createAnalyser();
+    tunerAnalyser.fftSize = 8192;
+    tunerAnalyser.smoothingTimeConstant = 0;
+    srcNode.connect(tunerAnalyser);
+
     // Native channel count of this input (1 mono / 2 stereo) — drives the
     // ScriptProcessor fallback; the worklet adopts it automatically via the
     // default 'max' channelCountMode.
@@ -317,10 +325,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { sigGain?.disconnect(); } catch {}
     try { sigAnalyser?.disconnect(); } catch {}
     try { captureAnalyser?.disconnect(); } catch {}
+    try { tunerAnalyser?.disconnect(); } catch {}
     try { strip?.dispose(); } catch {}
     strip = null;
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
-    srcNode = recNode = sinkGain = sigGain = sigAnalyser = captureAnalyser = null;
+    srcNode = recNode = sinkGain = sigGain = sigAnalyser = captureAnalyser = tunerAnalyser = null;
     stream = null; streamOwned = false;
   }
 
@@ -936,6 +945,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     isBuffering: () => _bufferOn && !!srcNode,
     isRetroCapable: () => usingWorklet,
     getCaptureAnalyser: () => captureAnalyser,
+    getTunerAnalyser: () => tunerAnalyser,
     playVoice, stopVoice, stopAll, removeTrack, removeAll,
     setMuted, setMaster,
     setTrackVolume, setTrackMuted,

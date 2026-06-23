@@ -1030,11 +1030,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (scopeRAF || !scopeCanvas) return;
     if (!scope2d) scope2d = scopeCanvas.getContext('2d');
     sizeScope();
-    let tn = 0;
     const loop = () => {
       scopeRAF = requestAnimationFrame(loop);
       drawScope();
-      if (model.tunerOn && (tn++ % 5 === 0)) updateTuner();   // ~12 Hz
+      if (model.tunerOn) {
+        const now = performance.now();
+        if (now - _tunerLastMs >= TUNER_INTERVAL_MS) { _tunerLastMs = now; updateTuner(); }
+      }
     };
     scopeRAF = requestAnimationFrame(loop);
   }
@@ -1246,7 +1248,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   // ── chromatic tuner ───────────────────────────────────────────────────────
   const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerNeedleEl = null, tunerCentsEl = null, tunerBuf = null;
+  const TUNER_MIN_HZ = 22;     // reach below G0 (~24.5 Hz)
+  const TUNER_INTERVAL_MS = 180;  // slower update = steadier reading
+  let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerNeedleEl = null, tunerCentsEl = null;
+  let tunerBuf = null, tunerDec = null, _tunerLastMs = 0;
+  let _tunerNoteKey = '', _tunerErrSmooth = 0;
   function buildTunerUI() {
     if (!tunerEl || tunerEl.children.length) return;
     tunerNoteEl = document.createElement('span'); tunerNoteEl.className = 'rig-tuner-note'; tunerNoteEl.textContent = '—';
@@ -1268,7 +1274,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     for (let i = 0; i < SIZE; i++) energy += buf[i] * buf[i];
     if (Math.sqrt(energy / SIZE) < 0.01) return -1;
     const minLag = Math.max(2, Math.floor(sr / 1200));
-    const maxLag = Math.min(SIZE - 1, Math.floor(sr / 45));
+    const maxLag = Math.min(SIZE - 1, Math.floor(sr / TUNER_MIN_HZ));
     const corr = new Float32Array(maxLag + 2);
     let best = -1, bestVal = 0;
     for (let lag = minLag; lag <= maxLag; lag++) {
@@ -1286,30 +1292,43 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function updateTuner() {
     if (!model.tunerOn || !tunerNoteEl) return;
-    const an = looperAudio.getCaptureAnalyser?.();
+    const an = looperAudio.getTunerAnalyser?.() || looperAudio.getCaptureAnalyser?.();
     const clear = () => {
       tunerNoteEl.textContent = '—'; tunerNoteEl.style.color = '';
       if (tunerHzEl) tunerHzEl.textContent = ''; if (tunerTgtEl) tunerTgtEl.textContent = '';
       tunerCentsEl.textContent = an ? 'play a note' : 'rig signal off'; tunerNeedleEl.style.left = '50%';
+      _tunerNoteKey = '';
     };
     if (!an || typeof an.getFloatTimeDomainData !== 'function') { clear(); return; }
     const n = an.fftSize;
     if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
     an.getFloatTimeDomainData(tunerBuf);
-    const f = autoCorrelate(tunerBuf, an.context?.sampleRate || 48000);
+    // Decimate ×2 (average pairs) — cheaper autocorrelation and a gentle
+    // low-pass that steadies low-note detection.
+    const m = n >> 1;
+    if (!tunerDec || tunerDec.length !== m) tunerDec = new Float32Array(m);
+    for (let i = 0; i < m; i++) tunerDec[i] = (tunerBuf[2 * i] + tunerBuf[2 * i + 1]) * 0.5;
+    const sr = (an.context?.sampleRate || 48000) / 2;
+    const f = autoCorrelate(tunerDec, sr);
     if (f <= 0) { clear(); return; }
     const midi = 69 + 12 * Math.log2(f / model.refPitch);
     const rounded = Math.round(midi);
     const cls = ((rounded % 12) + 12) % 12;
-    const rawCents = Math.round((midi - rounded) * 100);   // deviation from ET
+    const octave = Math.floor(rounded / 12) - 1;
+    const rawCents = (midi - rounded) * 100;                // deviation from ET
     const target = temperOffset(cls);                      // sweetened target offset
-    const err = rawCents - target;                         // deviation from the target
-    tunerNoteEl.textContent = `${NOTE_NAMES[cls]}${Math.floor(rounded / 12) - 1}`;
+    let err = rawCents - target;                           // deviation from the target
+    // Smooth within a held note (snap on note change) to calm the needle.
+    const key = `${cls}.${octave}`;
+    err = key === _tunerNoteKey ? _tunerErrSmooth * 0.5 + err * 0.5 : err;
+    _tunerNoteKey = key; _tunerErrSmooth = err;
+    const shown = Math.round(err);
+    tunerNoteEl.textContent = `${NOTE_NAMES[cls]}${octave}`;
     if (tunerHzEl) tunerHzEl.textContent = `${f.toFixed(1)} Hz`;
     if (tunerTgtEl) tunerTgtEl.textContent = `tgt ${target > 0 ? '+' : ''}${target}¢`;
     const inTune = Math.abs(err) <= 3;
     tunerNoteEl.style.color = inTune ? 'var(--cyan)' : '';
-    tunerCentsEl.textContent = `${err > 0 ? '+' : ''}${err}¢`;
+    tunerCentsEl.textContent = `${shown > 0 ? '+' : ''}${shown}¢`;
     tunerNeedleEl.style.left = Math.max(0, Math.min(100, 50 + err)) + '%';
     tunerNeedleEl.style.background = inTune ? 'var(--cyan)' : (Math.abs(err) <= 12 ? '#fbbf24' : 'var(--pink)');
   }
