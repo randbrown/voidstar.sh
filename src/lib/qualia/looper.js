@@ -56,7 +56,7 @@ const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the 
 // rig-strip.js; STRIP_DEFAULTS supplies initial values).
 const STRIP_SCHEMA = [
   { id: 'hpf',    name: 'hpf',    toggle: true,  params: [{ id: 'freq', label: 'freq', min: 20, max: 400, step: 1, fmt: v => `${v|0}Hz` }] },
-  { id: 'drive',  name: 'drive',  toggle: true,  params: [{ id: 'drive', label: 'amt', min: 0, max: 1, step: 0.01 }, { id: 'tone', label: 'tone', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 }] },
+  { id: 'drive',  name: 'drive',  toggle: true,  model: true },
   { id: 'comp',   name: 'comp',   toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
   { id: 'eq',     name: 'eq',     toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
   { id: 'cab',    name: 'cab',    toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
@@ -64,6 +64,23 @@ const STRIP_SCHEMA = [
   { id: 'reverb', name: 'reverb', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
   { id: 'pan',    name: 'pan',    toggle: false, params: [{ id: 'pan', label: 'pan', min: -1, max: 1, step: 0.02, fmt: v => v == 0 ? 'C' : (v < 0 ? `L${Math.round(-v*100)}` : `R${Math.round(v*100)}`) }] },
 ];
+
+// Drive models (voiced emulations) + the params each one exposes.
+const DRIVE_MODELS = ['soft', 'earth', 'metal'];
+const DRIVE_MODEL_PARAMS = {
+  soft:  ['drive', 'tone', 'level'],
+  earth: ['drive', 'tone', 'level'],
+  metal: ['drive', 'low', 'mid', 'midFreq', 'high', 'level'],
+};
+const DRIVE_PARAM_META = {
+  drive:   { label: 'gain', min: 0, max: 1, step: 0.01 },
+  tone:    { label: 'tone', min: 0, max: 1, step: 0.01 },
+  level:   { label: 'lvl',  min: 0, max: 1, step: 0.01 },
+  low:     { label: 'low',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+  mid:     { label: 'mid',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+  midFreq: { label: 'mFq',  min: 200, max: 5000, step: 10, fmt: v => `${v|0}Hz` },
+  high:    { label: 'high', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+};
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
 const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
@@ -1068,23 +1085,51 @@ export function createLooper({ audio, syncStrudel } = {}) {
         nameEl = document.createElement('span'); nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
       }
       head.append(nameEl); box.append(head);
-      for (const p of stage.params) {
-        const row = document.createElement('div'); row.className = 'rig-ctl';
-        const lab = document.createElement('span'); lab.className = 'rig-ctl-label'; lab.textContent = p.label;
-        const sl = document.createElement('input');
-        sl.type = 'range'; sl.min = String(p.min); sl.max = String(p.max); sl.step = String(p.step);
-        sl.value = String(model.strip[stage.id][p.id]);
-        const val = document.createElement('span'); val.className = 'rig-ctl-val';
-        const fmt = p.fmt || (v => (+v).toFixed(2));
-        val.textContent = fmt(parseFloat(sl.value));
-        sl.addEventListener('input', () => { const v = parseFloat(sl.value); val.textContent = fmt(v); stripSet(stage.id, p.id, v); });
-        row.append(lab, sl, val); box.append(row);
+      if (stage.model) {
+        buildDriveControls(box);
+      } else {
+        for (const p of stage.params) box.append(buildCtl(stage.id, p));
       }
       if (stage.loader) box.append(buildCabLoader());
       stripBody.append(box);
     }
     refreshStripStages();
   }
+  // One labelled slider bound to model.strip[stageId][p.id].
+  function buildCtl(stageId, p) {
+    const row = document.createElement('div'); row.className = 'rig-ctl';
+    const lab = document.createElement('span'); lab.className = 'rig-ctl-label'; lab.textContent = p.label;
+    const sl = document.createElement('input');
+    sl.type = 'range'; sl.min = String(p.min); sl.max = String(p.max); sl.step = String(p.step);
+    sl.value = String(model.strip[stageId][p.id]);
+    const val = document.createElement('span'); val.className = 'rig-ctl-val';
+    const fmt = p.fmt || (v => (+v).toFixed(2));
+    val.textContent = fmt(parseFloat(sl.value));
+    sl.addEventListener('input', () => { const v = parseFloat(sl.value); val.textContent = fmt(v); stripSet(stageId, p.id, v); });
+    row.append(lab, sl, val);
+    return row;
+  }
+  // Drive stage: model select + the active model's params (rebuilt on switch).
+  function buildDriveControls(box) {
+    const selRow = document.createElement('div'); selRow.className = 'rig-ctl';
+    const lab = document.createElement('span'); lab.className = 'rig-ctl-label'; lab.textContent = 'model';
+    const sel = document.createElement('select'); sel.className = 'rig-drive-model';
+    for (const m of DRIVE_MODELS) { const o = document.createElement('option'); o.value = m; o.textContent = m; sel.append(o); }
+    sel.value = model.strip.drive.model || 'soft';
+    const pwrap = document.createElement('div'); pwrap.className = 'rig-drive-params';
+    sel.addEventListener('change', () => { stripSet('drive', 'model', sel.value); renderDriveParams(pwrap); });
+    selRow.append(lab, sel);
+    box.append(selRow, pwrap);
+    renderDriveParams(pwrap);
+  }
+  function renderDriveParams(wrap) {
+    wrap.innerHTML = '';
+    const m = model.strip.drive.model || 'soft';
+    for (const pid of (DRIVE_MODEL_PARAMS[m] || DRIVE_MODEL_PARAMS.soft)) {
+      wrap.append(buildCtl('drive', { id: pid, ...DRIVE_PARAM_META[pid] }));
+    }
+  }
+
   // Cab IR loader row — file picker + filename + clear.
   let cabNameEl = null;
   function buildCabLoader() {

@@ -14,7 +14,7 @@
 
 export const STRIP_DEFAULTS = {
   hpf:    { on: false, freq: 80 },
-  drive:  { on: false, drive: 0.35, tone: 0.6, level: 1.0 },
+  drive:  { on: false, model: 'soft', drive: 0.35, tone: 0.6, level: 1.0, low: 0, mid: 0, midFreq: 600, high: 0 },
   comp:   { on: false, threshold: -18, ratio: 3, attack: 0.003, release: 0.25 },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
   cab:    { on: false, mix: 1, level: 1 },
@@ -44,6 +44,35 @@ function makeDriveCurve(amount) {
   return c;
 }
 
+// Earth Drive-voiced curve: lower gain, ASYMMETRIC soft clip (a DC bias before
+// the tanh adds the even harmonics of a JFET stage), so it stays transparent
+// and touch-dynamic rather than fuzzy.
+function makeEarthCurve(amount) {
+  const n = 2048, c = new Float32Array(n);
+  const g = 1 + clamp(amount, 0, 1) * 12;
+  const bias = 0.12;
+  const off = Math.tanh(g * bias);
+  const norm = Math.tanh(g * (1 + bias)) - off || 1;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    c[i] = (Math.tanh(g * (x + bias)) - off) / norm;
+  }
+  return c;
+}
+
+// Metal Zone-voiced curve: high gain, harder (near-square) symmetric clip; two
+// of these cascade for the MT-2's saturation wall.
+function makeMetalCurve(amount) {
+  const n = 2048, c = new Float32Array(n);
+  const g = 2 + clamp(amount, 0, 1) * 30;
+  const norm = Math.tanh(g) || 1;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    c[i] = Math.tanh(g * x) / norm;
+  }
+  return c;
+}
+
 function deepMerge(base, over) {
   const out = {};
   for (const k of Object.keys(base)) {
@@ -64,9 +93,16 @@ export function createRigStrip(ctx, cfg) {
   const hpf = ctx.createBiquadFilter();
   hpf.type = 'highpass'; hpf.Q.value = 0.707;
 
-  // Drive: pre-gain → waveshaper (4× oversample) → tone LPF → post-gain
-  const drivePre  = ctx.createGain();
-  const shaper    = ctx.createWaveShaper(); shaper.oversample = '4x';
+  // Drive (model-based: soft / earth / metal). Two cascaded waveshaper stages
+  // (metal uses both), a post-clip 3-band EQ (the Metal Zone's active EQ with a
+  // sweepable parametric mid), a tone LPF (soft/earth), and an output level.
+  const drivePre   = ctx.createGain();
+  const shaper1    = ctx.createWaveShaper(); shaper1.oversample = '4x';
+  const driveStage = ctx.createGain();
+  const shaper2    = ctx.createWaveShaper(); shaper2.oversample = '4x';
+  const dLow  = ctx.createBiquadFilter(); dLow.type = 'lowshelf';  dLow.frequency.value = 100;
+  const dMid  = ctx.createBiquadFilter(); dMid.type = 'peaking';   dMid.frequency.value = 600; dMid.Q.value = 0.7;
+  const dHigh = ctx.createBiquadFilter(); dHigh.type = 'highshelf'; dHigh.frequency.value = 3500;
   const driveTone = ctx.createBiquadFilter(); driveTone.type = 'lowpass'; driveTone.Q.value = 0.707;
   const drivePost = ctx.createGain();
 
@@ -113,8 +149,13 @@ export function createRigStrip(ctx, cfg) {
   // ── wire the graph ──
   input.connect(hpf);
   hpf.connect(drivePre);
-  drivePre.connect(shaper);
-  shaper.connect(driveTone);
+  drivePre.connect(shaper1);
+  shaper1.connect(driveStage);
+  driveStage.connect(shaper2);
+  shaper2.connect(dLow);
+  dLow.connect(dMid);
+  dMid.connect(dHigh);
+  dHigh.connect(driveTone);
   driveTone.connect(drivePost);
   drivePost.connect(comp);
   comp.connect(eqLow);
@@ -172,16 +213,44 @@ export function createRigStrip(ctx, cfg) {
     hpf.frequency.setTargetAtTime(state.hpf.on ? clamp(state.hpf.freq, 20, 1000) : 10, ctx.currentTime, 0.01);
   }
   function applyDrive() {
-    if (state.drive.on) {
-      shaper.curve = makeDriveCurve(state.drive.drive);
-      drivePre.gain.value = 1;
-      driveTone.frequency.value = 800 * Math.pow(2, clamp(state.drive.tone, 0, 1) * 4); // 800Hz..12.8kHz
-      drivePost.gain.value = clamp(state.drive.level, 0, 1);
-    } else {
-      shaper.curve = IDENTITY_CURVE;
-      drivePre.gain.value = 1;
+    const d = state.drive;
+    // EQ flat unless the metal model drives it.
+    dLow.gain.value = 0; dMid.gain.value = 0; dHigh.gain.value = 0;
+    if (!d.on) {
+      shaper1.curve = IDENTITY_CURVE; shaper2.curve = IDENTITY_CURVE;
+      drivePre.gain.value = 1; driveStage.gain.value = 1; drivePost.gain.value = 1;
       driveTone.frequency.value = 20000;
-      drivePost.gain.value = 1;
+      return;
+    }
+    const drive = clamp(d.drive, 0, 1), level = clamp(d.level, 0, 1), tone = clamp(d.tone, 0, 1);
+    if (d.model === 'earth') {
+      // Brad Sarno Earth Drive — transparent, dynamic, low/mid gain, keeps treble.
+      drivePre.gain.value = 1 + drive * 8;
+      shaper1.curve = makeEarthCurve(drive);
+      driveStage.gain.value = 1; shaper2.curve = IDENTITY_CURVE;
+      driveTone.frequency.value = 1200 * Math.pow(2, tone * 3.2);   // ~1.2k..11k
+      drivePost.gain.value = level;
+    } else if (d.model === 'metal') {
+      // Boss Metal Zone — cascaded high-gain clipping + active 3-band EQ with a
+      // sweepable parametric mid (the heart of the MT-2's voice; mid cut = the
+      // classic scoop, mid boost = leads).
+      drivePre.gain.value = 1 + drive * 16;
+      shaper1.curve = makeMetalCurve(0.55 + drive * 0.45);
+      driveStage.gain.value = 1 + drive * 6;
+      shaper2.curve = makeMetalCurve(0.6 + drive * 0.4);
+      dLow.gain.value  = clamp(d.low, -15, 15);
+      dMid.frequency.value = clamp(d.midFreq, 200, 5000);
+      dMid.gain.value  = clamp(d.mid, -15, 15);
+      dHigh.gain.value = clamp(d.high, -15, 15);
+      driveTone.frequency.value = 20000;   // the EQ shapes the tone here
+      drivePost.gain.value = level;
+    } else {
+      // soft — generic transparent soft-clip
+      drivePre.gain.value = 1 + drive * 8;
+      shaper1.curve = makeDriveCurve(drive);
+      driveStage.gain.value = 1; shaper2.curve = IDENTITY_CURVE;
+      driveTone.frequency.value = 800 * Math.pow(2, tone * 4);
+      drivePost.gain.value = level;
     }
   }
   function applyComp() {
@@ -254,7 +323,8 @@ export function createRigStrip(ctx, cfg) {
   function getConfig() { return deepMerge(state, null); }
 
   function dispose() {
-    for (const n of [input, hpf, drivePre, shaper, driveTone, drivePost, comp,
+    for (const n of [input, hpf, drivePre, shaper1, driveStage, shaper2, dLow,
+                     dMid, dHigh, driveTone, drivePost, comp,
                      eqLow, eqMid, eqHigh, cabIn, cabConv, cabDry, cabWet, cabSum,
                      fxIn, dry, sum, delaySend, delayL, delayR, delayFb, merger,
                      delayWet, reverbSend, convolver, reverbWet, panner, output]) {
