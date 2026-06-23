@@ -21,11 +21,29 @@ export function restorePanelPos(id, panel) {
     const raw = localStorage.getItem(`${NS}.${id}`);
     if (!raw) return false;
     const d = JSON.parse(raw);
-    if (d.left) { panel.style.transform = 'none'; panel.style.left = d.left; }
-    if (d.top)  panel.style.top    = d.top;
+    if (!d.left && !d.top) return false;
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const left = parseFloat(d.left) || 0;
+    const top  = parseFloat(d.top)  || 0;
+    const w = parseFloat(d.width)  || 360;
+    const h = parseFloat(d.height) || 260;
+
+    // At least 60px of the panel must be visible in the viewport —
+    // otherwise discard the saved position and fall back to defaults.
+    const MIN_VIS = 60;
+    if (left + MIN_VIS > vw || top + MIN_VIS > vh || left + w < MIN_VIS || top < -20) {
+      localStorage.removeItem(`${NS}.${id}`);
+      return false;
+    }
+
+    panel.style.transform = 'none';
+    if (d.left) panel.style.left = d.left;
+    if (d.top)  panel.style.top  = d.top;
     if (d.width)  panel.style.width  = d.width;
     if (d.height) panel.style.height = d.height;
-    return !!(d.left || d.top);
+    return true;
   } catch { return false; }
 }
 
