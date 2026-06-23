@@ -49,6 +49,7 @@ const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
 const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
 const TUNER_KEY      = `${NS}.tuner`;      // tuner enabled
+const TUNERMUTE_KEY  = `${NS}.tunerMute`; // mute rig signal while tuner is on
 const TEMPER_KEY     = `${NS}.temperament`;// 'et' | 'custom'
 const CUSTOMCENTS_KEY = `${NS}.customCents`;// custom temperament: int cents[12]
 const REFPITCH_KEY   = `${NS}.refPitch`;   // tuner reference A (Hz)
@@ -238,6 +239,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
     loopCollapsed: lsGet(LOOPCOLLAPSE_KEY, '0') === '1',
     tunerOn: lsGet(TUNER_KEY, '0') === '1',
+    tunerMute: lsGet(TUNERMUTE_KEY, '1') !== '0',
     temperament: lsGet(TEMPER_KEY, 'et') === 'custom' ? 'custom' : 'et',
     customCents: loadCustomCents(),
     refPitch: (() => { const v = parseFloat(lsGet(REFPITCH_KEY, '440')); return Number.isFinite(v) ? Math.max(400, Math.min(480, v)) : 440; })(),
@@ -1334,7 +1336,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
     tunerNeedleEl = document.createElement('span'); tunerNeedleEl.className = 'rig-tuner-needle'; tunerNeedleEl.style.left = '50%';
     bar.append(tunerNeedleEl);
     tunerCentsEl = document.createElement('span'); tunerCentsEl.className = 'rig-tuner-cents'; tunerCentsEl.textContent = 'play a note';
-    tunerEl.append(tunerNoteEl, tunerHzEl, tunerTgtEl, bar, tunerCentsEl);
+    _tunerMuteBtn = document.createElement('button');
+    _tunerMuteBtn.type = 'button'; _tunerMuteBtn.className = 'ctrl-btn rig-tuner-mute';
+    _tunerMuteBtn.addEventListener('click', () => {
+      model.tunerMute = !model.tunerMute;
+      lsSet(TUNERMUTE_KEY, model.tunerMute ? '1' : '0');
+      applyTunerMute();
+    });
+    refreshTunerMuteBtn();
+    tunerEl.append(tunerNoteEl, tunerHzEl, tunerTgtEl, bar, tunerCentsEl, _tunerMuteBtn);
   }
   // Target cents offset for a note class under the active temperament.
   function temperOffset(noteClass) { return model.temperament === 'custom' ? (model.customCents[noteClass] | 0) : 0; }
@@ -1464,6 +1474,31 @@ export function createLooper({ audio, syncStrudel } = {}) {
     for (let i = 0; i < 12; i++) if (temperCells[i]) temperCells[i].value = String(model.customCents[i]);
   }
   function refreshTunerBtn() { if (btnTuner) btnTuner.classList.toggle('active', !!model.tunerOn); }
+  // Mute/unmute rig signal output while the tuner is active so the raw
+  // instrument doesn't bleed into the mix or visualizers during tuning.
+  // The mute piggybacks on the existing signalMuted path — it remembers
+  // whether the user had it manually muted beforehand so we don't
+  // accidentally unmute on tuner-close.
+  let _preTunerMuted = false;
+  function applyTunerMute() {
+    if (model.tunerOn && model.tunerMute) {
+      _preTunerMuted = model.signalMuted;
+      if (!model.signalMuted) { looperAudio.setSignalMuted(true); }
+    } else {
+      if (!_preTunerMuted) { looperAudio.setSignalMuted(model.signalMuted); }
+      _preTunerMuted = false;
+    }
+    refreshInputMuteBtn();
+    refreshTunerMuteBtn();
+  }
+  let _tunerMuteBtn = null;
+  function refreshTunerMuteBtn() {
+    if (_tunerMuteBtn) {
+      _tunerMuteBtn.classList.toggle('active', !!model.tunerMute);
+      _tunerMuteBtn.textContent = model.tunerMute ? 'mute' : 'thru';
+      _tunerMuteBtn.title = model.tunerMute ? 'Rig output muted while tuning (click for pass-through)' : 'Rig output audible while tuning (click to mute)';
+    }
+  }
   function toggleTuner(on) {
     model.tunerOn = on == null ? !model.tunerOn : !!on;
     lsSet(TUNER_KEY, model.tunerOn ? '1' : '0');
@@ -1472,9 +1507,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (model.tunerOn) {
       buildTunerUI();
       buildTemperamentUI();
-      // The tuner reads the raw rig capture — engage it (this is a user gesture).
       looperAudio.ensureCaptureOpen(model.deviceId).then(refreshLooperBtn).catch(() => {});
     }
+    applyTunerMute();
     refreshTunerBtn();
   }
 
@@ -1527,10 +1562,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function refreshInputMuteBtn() {
     if (!inputMuteBtn) return;
-    const muted = !!model.signalMuted;
+    const tunerMuting = model.tunerOn && model.tunerMute && !model.signalMuted;
+    const muted = !!model.signalMuted || tunerMuting;
     inputMuteBtn.classList.toggle('muted', muted);
-    inputMuteBtn.textContent = muted ? 'muted' : 'mute';
-    inputMuteBtn.title = muted ? 'Unmute rig signal' : 'Mute rig signal (out of monitor + mix)';
+    inputMuteBtn.textContent = tunerMuting ? 'tuner' : (model.signalMuted ? 'muted' : 'mute');
+    inputMuteBtn.title = tunerMuting ? 'Muted by tuner (auto)' : (model.signalMuted ? 'Unmute rig signal' : 'Mute rig signal (out of monitor + mix)');
   }
 
   // ── button paint ─────────────────────────────────────────────────────────

@@ -1647,6 +1647,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-tuner-bar::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,0.25); }
     .rig-tuner-needle { position: absolute; top: -1px; bottom: -1px; width: 3px; border-radius: 2px; background: var(--cyan); transition: left 0.06s linear; }
     .rig-tuner-cents { min-width: 5ch; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .rig-tuner-mute { padding: 0.05rem 0.4rem; font-size: 0.56rem; line-height: 1; margin-left: 0.3rem; }
+    .rig-tuner-mute.active { color: var(--pink); border-color: var(--pink); background: rgba(255,122,230,0.10); }
 
     /* Temperament editor — ET / custom toggle + 12 per-note cent spinners. */
     .rig-temper { padding: 0 0.7rem 0.45rem; }
