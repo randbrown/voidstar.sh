@@ -3,7 +3,7 @@
 // Tone's wrapped context can't host the recorder worklet, and these nodes don't
 // need it). Fixed-order series chain with parallel send-style time fx:
 //
-//   in → HPF → drive → comp → EQ(lo/mid/hi) → ┬→ dry ───────────────┐
+//   in → HPF → earth → metal → comp → EQ(lo/mid/hi) → ┬→ dry ───────────────┐
 //                                              ├→ delay (ping-pong) ──┤→ pan → out
 //                                              └→ reverb (convolver) ─┘
 //
@@ -14,7 +14,8 @@
 
 export const STRIP_DEFAULTS = {
   hpf:    { on: false, freq: 80 },
-  drive:  { on: false, model: 'soft', drive: 0.35, tone: 0.6, level: 1.0, low: 0, mid: 0, midFreq: 600, high: 0 },
+  earth:  { on: false, drive: 0.35, tone: 0.6, level: 1.0 },
+  metal:  { on: false, drive: 0.35, low: 0, mid: 0, midFreq: 600, high: 0, level: 1.0 },
   comp:   { on: false, threshold: -18, ratio: 3, attack: 0.003, release: 0.25 },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
   amp:    { on: false, mix: 1, level: 1 },
@@ -94,18 +95,22 @@ export function createRigStrip(ctx, cfg) {
   const hpf = ctx.createBiquadFilter();
   hpf.type = 'highpass'; hpf.Q.value = 0.707;
 
-  // Drive (model-based: soft / earth / metal). Two cascaded waveshaper stages
-  // (metal uses both), a post-clip 3-band EQ (the Metal Zone's active EQ with a
-  // sweepable parametric mid), a tone LPF (soft/earth), and an output level.
-  const drivePre   = ctx.createGain();
-  const shaper1    = ctx.createWaveShaper(); shaper1.oversample = '4x';
-  const driveStage = ctx.createGain();
-  const shaper2    = ctx.createWaveShaper(); shaper2.oversample = '4x';
-  const dLow  = ctx.createBiquadFilter(); dLow.type = 'lowshelf';  dLow.frequency.value = 100;
-  const dMid  = ctx.createBiquadFilter(); dMid.type = 'peaking';   dMid.frequency.value = 600; dMid.Q.value = 0.7;
-  const dHigh = ctx.createBiquadFilter(); dHigh.type = 'highshelf'; dHigh.frequency.value = 3500;
-  const driveTone = ctx.createBiquadFilter(); driveTone.type = 'lowpass'; driveTone.Q.value = 0.707;
-  const drivePost = ctx.createGain();
+  // Earth Drive — single waveshaper (asymmetric JFET curve) + tone LPF + level.
+  const earthPre   = ctx.createGain();
+  const earthShaper = ctx.createWaveShaper(); earthShaper.oversample = '4x';
+  const earthTone  = ctx.createBiquadFilter(); earthTone.type = 'lowpass'; earthTone.Q.value = 0.707;
+  const earthPost  = ctx.createGain();
+
+  // Metal Zone — cascaded waveshapers (hard symmetric clip) + 3-band parametric
+  // EQ (the MT-2's active EQ with sweepable mid) + level.
+  const metalPre    = ctx.createGain();
+  const metalShaper1 = ctx.createWaveShaper(); metalShaper1.oversample = '4x';
+  const metalStage  = ctx.createGain();
+  const metalShaper2 = ctx.createWaveShaper(); metalShaper2.oversample = '4x';
+  const mLow  = ctx.createBiquadFilter(); mLow.type = 'lowshelf';  mLow.frequency.value = 100;
+  const mMid  = ctx.createBiquadFilter(); mMid.type = 'peaking';   mMid.frequency.value = 600; mMid.Q.value = 0.7;
+  const mHigh = ctx.createBiquadFilter(); mHigh.type = 'highshelf'; mHigh.frequency.value = 3500;
+  const metalPost   = ctx.createGain();
 
   // Compressor
   const comp = ctx.createDynamicsCompressor();
@@ -164,16 +169,21 @@ export function createRigStrip(ctx, cfg) {
 
   // ── wire the graph ──
   input.connect(hpf);
-  hpf.connect(drivePre);
-  drivePre.connect(shaper1);
-  shaper1.connect(driveStage);
-  driveStage.connect(shaper2);
-  shaper2.connect(dLow);
-  dLow.connect(dMid);
-  dMid.connect(dHigh);
-  dHigh.connect(driveTone);
-  driveTone.connect(drivePost);
-  drivePost.connect(comp);
+  // Earth stage: HPF → earthPre → shaper → tone LPF → earthPost
+  hpf.connect(earthPre);
+  earthPre.connect(earthShaper);
+  earthShaper.connect(earthTone);
+  earthTone.connect(earthPost);
+  // Metal stage: earthPost → metalPre → shaper1 → stage gain → shaper2 → 3-band EQ → metalPost
+  earthPost.connect(metalPre);
+  metalPre.connect(metalShaper1);
+  metalShaper1.connect(metalStage);
+  metalStage.connect(metalShaper2);
+  metalShaper2.connect(mLow);
+  mLow.connect(mMid);
+  mMid.connect(mHigh);
+  mHigh.connect(metalPost);
+  metalPost.connect(comp);
   comp.connect(eqLow);
   eqLow.connect(eqMid);
   eqMid.connect(eqHigh);
@@ -231,46 +241,41 @@ export function createRigStrip(ctx, cfg) {
   function applyHpf() {
     hpf.frequency.setTargetAtTime(state.hpf.on ? clamp(state.hpf.freq, 20, 1000) : 10, ctx.currentTime, 0.01);
   }
-  function applyDrive() {
-    const d = state.drive;
-    // EQ flat unless the metal model drives it.
-    dLow.gain.value = 0; dMid.gain.value = 0; dHigh.gain.value = 0;
+  function applyEarth() {
+    const d = state.earth;
     if (!d.on) {
-      shaper1.curve = IDENTITY_CURVE; shaper2.curve = IDENTITY_CURVE;
-      drivePre.gain.value = 1; driveStage.gain.value = 1; drivePost.gain.value = 1;
-      driveTone.frequency.value = 20000;
+      earthShaper.curve = IDENTITY_CURVE;
+      earthPre.gain.value = 1; earthPost.gain.value = 1;
+      earthTone.frequency.value = 20000;
       return;
     }
     const drive = clamp(d.drive, 0, 1), level = clamp(d.level, 0, 1), tone = clamp(d.tone, 0, 1);
-    if (d.model === 'earth') {
-      // Brad Sarno Earth Drive — transparent, dynamic, low/mid gain, keeps treble.
-      drivePre.gain.value = 1 + drive * 8;
-      shaper1.curve = makeEarthCurve(drive);
-      driveStage.gain.value = 1; shaper2.curve = IDENTITY_CURVE;
-      driveTone.frequency.value = 1200 * Math.pow(2, tone * 3.2);   // ~1.2k..11k
-      drivePost.gain.value = level;
-    } else if (d.model === 'metal') {
-      // Boss Metal Zone — cascaded high-gain clipping + active 3-band EQ with a
-      // sweepable parametric mid (the heart of the MT-2's voice; mid cut = the
-      // classic scoop, mid boost = leads).
-      drivePre.gain.value = 1 + drive * 16;
-      shaper1.curve = makeMetalCurve(0.55 + drive * 0.45);
-      driveStage.gain.value = 1 + drive * 6;
-      shaper2.curve = makeMetalCurve(0.6 + drive * 0.4);
-      dLow.gain.value  = clamp(d.low, -15, 15);
-      dMid.frequency.value = clamp(d.midFreq, 200, 5000);
-      dMid.gain.value  = clamp(d.mid, -15, 15);
-      dHigh.gain.value = clamp(d.high, -15, 15);
-      driveTone.frequency.value = 20000;   // the EQ shapes the tone here
-      drivePost.gain.value = level;
-    } else {
-      // soft — generic transparent soft-clip
-      drivePre.gain.value = 1 + drive * 8;
-      shaper1.curve = makeDriveCurve(drive);
-      driveStage.gain.value = 1; shaper2.curve = IDENTITY_CURVE;
-      driveTone.frequency.value = 800 * Math.pow(2, tone * 4);
-      drivePost.gain.value = level;
+    // Earth Drive — asymmetric JFET soft clip, transparent and touch-dynamic.
+    earthPre.gain.value = 1 + drive * 8;
+    earthShaper.curve = makeEarthCurve(drive);
+    earthTone.frequency.value = 1200 * Math.pow(2, tone * 3.2);   // ~1.2k..11k
+    earthPost.gain.value = level;
+  }
+  function applyMetal() {
+    const d = state.metal;
+    mLow.gain.value = 0; mMid.gain.value = 0; mHigh.gain.value = 0;
+    if (!d.on) {
+      metalShaper1.curve = IDENTITY_CURVE; metalShaper2.curve = IDENTITY_CURVE;
+      metalPre.gain.value = 1; metalStage.gain.value = 1; metalPost.gain.value = 1;
+      return;
     }
+    const drive = clamp(d.drive, 0, 1), level = clamp(d.level, 0, 1);
+    // Metal Zone — cascaded high-gain clipping + active 3-band EQ with a
+    // sweepable parametric mid (the heart of the MT-2's voice).
+    metalPre.gain.value = 1 + drive * 16;
+    metalShaper1.curve = makeMetalCurve(0.55 + drive * 0.45);
+    metalStage.gain.value = 1 + drive * 6;
+    metalShaper2.curve = makeMetalCurve(0.6 + drive * 0.4);
+    mLow.gain.value  = clamp(d.low, -15, 15);
+    mMid.frequency.value = clamp(d.midFreq, 200, 5000);
+    mMid.gain.value  = clamp(d.mid, -15, 15);
+    mHigh.gain.value = clamp(d.high, -15, 15);
+    metalPost.gain.value = level;
   }
   function applyComp() {
     const t = ctx.currentTime;
@@ -332,9 +337,9 @@ export function createRigStrip(ctx, cfg) {
   function applyPan() {
     panner.pan.setTargetAtTime(clamp(state.pan.pan, -1, 1), ctx.currentTime, 0.01);
   }
-  function applyAll() { applyHpf(); applyDrive(); applyComp(); applyEq(); applyAmp(); applyCab(); applyDelay(); applyReverb(); applyPan(); }
+  function applyAll() { applyHpf(); applyEarth(); applyMetal(); applyComp(); applyEq(); applyAmp(); applyCab(); applyDelay(); applyReverb(); applyPan(); }
 
-  const APPLY = { hpf: applyHpf, drive: applyDrive, comp: applyComp, eq: applyEq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
+  const APPLY = { hpf: applyHpf, earth: applyEarth, metal: applyMetal, comp: applyComp, eq: applyEq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
 
   applyAll();
 
@@ -356,8 +361,10 @@ export function createRigStrip(ctx, cfg) {
   function getConfig() { return deepMerge(state, null); }
 
   function dispose() {
-    for (const n of [input, hpf, drivePre, shaper1, driveStage, shaper2, dLow,
-                     dMid, dHigh, driveTone, drivePost, comp,
+    for (const n of [input, hpf,
+                     earthPre, earthShaper, earthTone, earthPost,
+                     metalPre, metalShaper1, metalStage, metalShaper2,
+                     mLow, mMid, mHigh, metalPost, comp,
                      eqLow, eqMid, eqHigh, ampIn, ampDry, ampWet, ampSum,
                      cabIn, cabConv, cabDry, cabWet, cabSum,
                      fxIn, dry, sum, delaySend, delayL, delayR, delayFb, merger,

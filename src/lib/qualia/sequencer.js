@@ -20,6 +20,7 @@ import {
   loadPanelOpen, savePanelOpen, downloadPattern, VOICES,
 } from './sequencer-patterns.js';
 import { createKit } from './sequencer-voices.js';
+import { savePanelPos, restorePanelPos } from './panel-pos.js';
 
 // Persisted UI volume — multiplies kit.output while un-muted. Sits
 // alongside the mute toggle as a performance-time mix-ride control.
@@ -1028,7 +1029,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   }
 
   // ── Drag / reposition (mirror strudel-hydra) ───────────────────────────
-  let movedByUser = false;
+  let movedByUser = restorePanelPos('sequencer', panel);
   function reposition() {
     if (!panel || panel.style.display === 'none') return;
     const tb = document.getElementById('topbar');
@@ -1079,12 +1080,23 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       if (!dragging) return;
       dragging = false;
       header.classList.remove('dragging');
+      savePanelPos('sequencer', panel);
       try { header.releasePointerCapture(pointerId); } catch {}
       pointerId = null;
     };
     header.addEventListener('pointerup', end);
     header.addEventListener('pointercancel', end);
   })();
+
+  // ResizeObserver — persist position when the user resizes via CSS resize: both.
+  if (panel && typeof ResizeObserver !== 'undefined') {
+    let _rDebounce = 0;
+    new ResizeObserver(() => {
+      if (!movedByUser && !panel.style.width) return;
+      clearTimeout(_rDebounce);
+      _rDebounce = setTimeout(() => savePanelPos('sequencer', panel), 300);
+    }).observe(panel);
+  }
 
   // ── Tabs ───────────────────────────────────────────────────────────────
   // grid + settings aren't mutually exclusive: they're independent show/hide

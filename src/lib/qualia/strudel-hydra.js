@@ -14,6 +14,7 @@ import {
   removeFromList, clonePattern, randomPattern, parseMetadata,
   setMetadata, patternDisplayName, downloadPattern,
 } from './patterns.js';
+import { savePanelPos, restorePanelPos } from './panel-pos.js';
 
 const STRUDEL_SCRIPT = 'https://unpkg.com/@strudel/repl@latest';
 
@@ -1104,7 +1105,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   }
 
   // Topbar can grow tall on narrow viewports — measure & pin the panel below it.
-  let movedByUser = false;
+  let movedByUser = restorePanelPos('strudel', panel);
   function reposition() {
     if (!panel || panel.style.display === 'none') return;
     const tb = document.getElementById('topbar');
@@ -1160,12 +1161,23 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       if (!dragging) return;
       dragging = false;
       header.classList.remove('dragging');
+      savePanelPos('strudel', panel);
       try { header.releasePointerCapture(pointerId); } catch {}
       pointerId = null;
     };
     header.addEventListener('pointerup', end);
     header.addEventListener('pointercancel', end);
   })();
+
+  // ResizeObserver — persist position when the user resizes via CSS resize: both.
+  if (panel && typeof ResizeObserver !== 'undefined') {
+    let _rDebounce = 0;
+    new ResizeObserver(() => {
+      if (!movedByUser && !panel.style.width) return;
+      clearTimeout(_rDebounce);
+      _rDebounce = setTimeout(() => savePanelPos('strudel', panel), 300);
+    }).observe(panel);
+  }
 
   // Sticky in-session "this panel has been revealed at least once" flag.
   // Cross-panel sync (transport/CPS/title) waits until BOTH the strudel

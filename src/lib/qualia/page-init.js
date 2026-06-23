@@ -4134,8 +4134,49 @@ export function initQualiaPage() {
       case 'z': setZen(!core.isZen()); break;
       case 'x': btnFullscreen.click(); break;
       case ' ': btnPause.click(); e.preventDefault(); break;
+
+      // ── Rig / looper performance hotkeys (Megalodon macro-pad friendly) ──
+      case '1': looper.toggleStripStage?.('earth'); break;       // Earth drive on/off
+      case '2': looper.toggleStripStage?.('metal'); break;       // Metal zone on/off
+      case '3': {                                                 // Start/stop looper recording
+        const recBtn = document.getElementById('btn-looper-record');
+        if (recBtn) recBtn.click();
+        break;
+      }
+      case '0': {                                                 // Toggle tuner
+        const tunerBtn = document.getElementById('btn-rig-tuner');
+        if (tunerBtn) tunerBtn.click();
+        break;
+      }
+      // Delay mix: [ / ]    Reverb mix: - / =    Rig level: , / .
+      case '[': looper.nudgeStripParam?.('delay', 'mix', -0.05); break;
+      case ']': looper.nudgeStripParam?.('delay', 'mix', +0.05); break;
+      case '-': looper.nudgeStripParam?.('reverb', 'mix', -0.05); break;
+      case '=': looper.nudgeStripParam?.('reverb', 'mix', +0.05); break;
+      case ',': looper.nudgeSignalLevel?.(-0.05); break;
+      case '.': looper.nudgeSignalLevel?.(+0.05); break;
     }
   });
+
+  // ── MIDI macro-pad support (Megalodon Triple Knob / generic CC) ──────────
+  if (navigator.requestMIDIAccess) {
+    navigator.requestMIDIAccess().then((midi) => {
+      function onMIDIMessage(e) {
+        const [status, cc, val] = e.data;
+        if ((status & 0xf0) !== 0xb0) return;          // CC messages only
+        const norm = val / 127;
+        switch (cc) {
+          case 1:  looper.setStripParam?.('delay', 'mix', norm);  break;  // CC1 — delay mix
+          case 2:  looper.setStripParam?.('reverb', 'mix', norm); break;  // CC2 — reverb mix
+          case 7:  looper.setSignalLevel?.(norm);                 break;  // CC7 (volume) — rig level
+        }
+      }
+      for (const input of midi.inputs.values()) input.onmidimessage = onMIDIMessage;
+      midi.onstatechange = () => {
+        for (const input of midi.inputs.values()) input.onmidimessage = onMIDIMessage;
+      };
+    }).catch(() => {});
+  }
 
   // ── FPS / level HUD + diagnostics panel ───────────────────────────────────
   // Per-frame rising-edge detection on transient pulses powers the rolling

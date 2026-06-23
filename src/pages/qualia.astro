@@ -1622,6 +1622,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-drive-model { flex: 1; min-width: 0; font-size: 0.62rem; background: rgba(0,0,0,0.3); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.05rem 0.2rem; }
     .rig-drive-params { display: contents; }
 
+    /* Collapsed stage — hide controls, shrink box. */
+    .rig-stage.collapsed .rig-ctl,
+    .rig-stage.collapsed .rig-drive-model,
+    .rig-stage.collapsed .rig-drive-params,
+    .rig-stage.collapsed .rig-cab-load { display: none; }
+    .rig-stage.collapsed { min-width: 70px; flex: 0 0 auto; }
+    .rig-stage-chev {
+      padding: 0; font-size: 0.55rem; line-height: 1;
+      min-width: 1.2ch; color: var(--muted); background: none; border: none; cursor: pointer;
+    }
+    .rig-stage-head { cursor: pointer; }
+
     /* Tuner readout — note + cents bar. */
     .rig-tuner {
       display: flex; align-items: center; gap: 0.6rem;

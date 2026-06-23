@@ -31,6 +31,7 @@ import { parseAmpModel } from './neural-amp-model.js';
 import { createLooperRenderer } from './looper-render.js';
 import * as loopStore from './looper-store.js';
 import { wirePicker, getStoredDeviceId } from './devices.js';
+import { savePanelPos, restorePanelPos } from './panel-pos.js';
 
 const NS = 'voidstar.qualia.looper';
 const PANEL_OPEN_KEY = `${NS}.panelOpen`;
@@ -61,7 +62,19 @@ const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the 
 // rig-strip.js; STRIP_DEFAULTS supplies initial values).
 const STRIP_SCHEMA = [
   { id: 'hpf',    name: 'hpf',    toggle: true,  params: [{ id: 'freq', label: 'freq', min: 20, max: 400, step: 1, fmt: v => `${v|0}Hz` }] },
-  { id: 'drive',  name: 'drive',  toggle: true,  model: true },
+  { id: 'earth',  name: 'earth',  toggle: true,  params: [
+    { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
+    { id: 'tone', label: 'tone', min: 0, max: 1, step: 0.01 },
+    { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
+  ] },
+  { id: 'metal',  name: 'metal',  toggle: true,  params: [
+    { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
+    { id: 'low', label: 'low', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'midFreq', label: 'mFq', min: 200, max: 5000, step: 10, fmt: v => `${v|0}Hz` },
+    { id: 'high', label: 'high', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
+  ] },
   { id: 'comp',   name: 'comp',   toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
   { id: 'eq',     name: 'eq',     toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
   { id: 'amp',    name: 'amp',    toggle: true,  ampLoader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
@@ -71,22 +84,6 @@ const STRIP_SCHEMA = [
   { id: 'pan',    name: 'pan',    toggle: false, params: [{ id: 'pan', label: 'pan', min: -1, max: 1, step: 0.02, fmt: v => v == 0 ? 'C' : (v < 0 ? `L${Math.round(-v*100)}` : `R${Math.round(v*100)}`) }] },
 ];
 
-// Drive models (voiced emulations) + the params each one exposes.
-const DRIVE_MODELS = ['soft', 'earth', 'metal'];
-const DRIVE_MODEL_PARAMS = {
-  soft:  ['drive', 'tone', 'level'],
-  earth: ['drive', 'tone', 'level'],
-  metal: ['drive', 'low', 'mid', 'midFreq', 'high', 'level'],
-};
-const DRIVE_PARAM_META = {
-  drive:   { label: 'gain', min: 0, max: 1, step: 0.01 },
-  tone:    { label: 'tone', min: 0, max: 1, step: 0.01 },
-  level:   { label: 'lvl',  min: 0, max: 1, step: 0.01 },
-  low:     { label: 'low',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
-  mid:     { label: 'mid',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
-  midFreq: { label: 'mFq',  min: 200, max: 5000, step: 10, fmt: v => `${v|0}Hz` },
-  high:    { label: 'high', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
-};
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
 const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
@@ -115,7 +112,22 @@ function loadStripConfig() {
   const base = loadDefaultStrip();
   try {
     const raw = localStorage.getItem(STRIP_KEY);
-    if (raw) { const o = JSON.parse(raw); for (const k of Object.keys(base)) if (o && o[k]) Object.assign(base[k], o[k]); }
+    if (raw) {
+      const o = JSON.parse(raw);
+      // Migrate old single-drive config to earth/metal
+      if (o && o.drive && !o.earth && !o.metal) {
+        const d = o.drive;
+        if (d.model === 'metal') {
+          Object.assign(base.metal, d, { on: d.on });
+          delete base.metal.model; delete base.metal.tone;
+        } else {
+          Object.assign(base.earth, d, { on: d.on });
+          delete base.earth.model; delete base.earth.low; delete base.earth.mid;
+          delete base.earth.midFreq; delete base.earth.high;
+        }
+      }
+      for (const k of Object.keys(base)) if (o && o[k]) Object.assign(base[k], o[k]);
+    }
   } catch {}
   return base;
 }
@@ -1106,20 +1118,46 @@ export function createLooper({ audio, syncStrudel } = {}) {
       box.className = 'rig-stage'; box.dataset.stage = stage.id;
       const head = document.createElement('div'); head.className = 'rig-stage-head';
       const nameEl = document.createElement('span'); nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
+
+      // Collapse toggle
+      const collapsed = !!model.strip[stage.id]?.collapsed;
+      if (collapsed) box.classList.add('collapsed');
+      const chev = document.createElement('button');
+      chev.type = 'button'; chev.className = 'ctrl-btn rig-stage-chev';
+      chev.textContent = collapsed ? '▸' : '▾';
+      chev.title = 'Collapse / expand';
+      chev.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const c = box.classList.toggle('collapsed');
+        chev.textContent = c ? '▸' : '▾';
+        if (!model.strip[stage.id]) model.strip[stage.id] = {};
+        model.strip[stage.id].collapsed = c;
+        persistStrip();
+      });
+
       if (stage.toggle) {
         const tg = document.createElement('button');
         tg.type = 'button'; tg.className = 'ctrl-btn rig-stage-toggle';
         tg.title = `Enable / bypass ${stage.name}`;
         tg.addEventListener('click', () => stripToggle(stage.id, !model.strip[stage.id].on));
-        head.append(tg, nameEl);
+        head.append(chev, tg, nameEl);
       } else {
         box.classList.add('on');   // non-toggle stages (pan) are always active
-        head.append(nameEl);
+        head.append(chev, nameEl);
       }
+
+      // Click anywhere on head to toggle collapse (except the on/off button)
+      head.addEventListener('click', (e) => {
+        if (e.target.closest('.rig-stage-toggle')) return;
+        const c = box.classList.toggle('collapsed');
+        chev.textContent = c ? '▸' : '▾';
+        if (!model.strip[stage.id]) model.strip[stage.id] = {};
+        model.strip[stage.id].collapsed = c;
+        persistStrip();
+      });
+
       box.append(head);
-      if (stage.model) {
-        buildDriveControls(box);
-      } else {
+      if (stage.params) {
         for (const p of stage.params) box.append(buildCtl(stage.id, p));
       }
       if (stage.loader) box.append(buildCabLoader());
@@ -1142,27 +1180,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
     row.append(lab, sl, val);
     return row;
   }
-  // Drive stage: model select + the active model's params (rebuilt on switch).
-  function buildDriveControls(box) {
-    const selRow = document.createElement('div'); selRow.className = 'rig-ctl';
-    const lab = document.createElement('span'); lab.className = 'rig-ctl-label'; lab.textContent = 'model';
-    const sel = document.createElement('select'); sel.className = 'rig-drive-model';
-    for (const m of DRIVE_MODELS) { const o = document.createElement('option'); o.value = m; o.textContent = m; sel.append(o); }
-    sel.value = model.strip.drive.model || 'soft';
-    const pwrap = document.createElement('div'); pwrap.className = 'rig-drive-params';
-    sel.addEventListener('change', () => { stripSet('drive', 'model', sel.value); renderDriveParams(pwrap); });
-    selRow.append(lab, sel);
-    box.append(selRow, pwrap);
-    renderDriveParams(pwrap);
-  }
-  function renderDriveParams(wrap) {
-    wrap.innerHTML = '';
-    const m = model.strip.drive.model || 'soft';
-    for (const pid of (DRIVE_MODEL_PARAMS[m] || DRIVE_MODEL_PARAMS.soft)) {
-      wrap.append(buildCtl('drive', { id: pid, ...DRIVE_PARAM_META[pid] }));
-    }
-  }
-
   // Cab IR loader row — file picker + filename + clear.
   let cabNameEl = null;
   function buildCabLoader() {
@@ -1578,7 +1595,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   });
 
   // ── drag (mirror sequencer) ──────────────────────────────────────────────
-  let movedByUser = false;
+  let movedByUser = restorePanelPos('looper', panel);
   function reposition() {
     if (!panel || panel.style.display === 'none') return;
     const tb = document.getElementById('topbar');
@@ -1623,12 +1640,23 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const end = () => {
       if (!dragging) return;
       dragging = false; header.classList.remove('dragging');
+      savePanelPos('looper', panel);
       try { header.releasePointerCapture(pointerId); } catch {}
       pointerId = null;
     };
     header.addEventListener('pointerup', end);
     header.addEventListener('pointercancel', end);
   })();
+
+  // ResizeObserver — persist position when the user resizes via CSS resize: both.
+  if (panel && typeof ResizeObserver !== 'undefined') {
+    let _rDebounce = 0;
+    new ResizeObserver(() => {
+      if (!movedByUser && !panel.style.width) return;
+      clearTimeout(_rDebounce);
+      _rDebounce = setTimeout(() => savePanelPos('looper', panel), 300);
+    }).observe(panel);
+  }
 
   // ── open / close ─────────────────────────────────────────────────────────
   function open() {
@@ -1744,5 +1772,35 @@ export function createLooper({ audio, syncStrudel } = {}) {
     perFrame,
     getConfig, setConfig,
     dispose: () => { hideCtxMenu(); stopScope(); looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
+
+    // ── Hotkey / MIDI helpers ──────────────────────────────────────────────
+    toggleStripStage(stageId) {
+      if (!model.strip[stageId]) return;
+      const on = !model.strip[stageId].on;
+      stripToggle(stageId, on);
+    },
+    setStripParam(stageId, paramId, value) {
+      if (!model.strip[stageId]) return;
+      stripSet(stageId, paramId, value);
+    },
+    nudgeStripParam(stageId, paramId, delta) {
+      if (!model.strip[stageId]) return;
+      const cur = model.strip[stageId][paramId] ?? 0;
+      stripSet(stageId, paramId, Math.max(0, Math.min(1, cur + delta)));
+    },
+    setSignalLevel(level) {
+      const v = Math.max(0, Math.min(1, level));
+      model.signalLevel = v;
+      lsSet(SIGLEVEL_KEY, String(v));
+      looperAudio.setSignalLevel(v, model.deviceId).then(refreshLooperBtn).catch(() => {});
+      if (inputVolSl) inputVolSl.value = String(v);
+    },
+    nudgeSignalLevel(delta) {
+      const next = Math.max(0, Math.min(1, model.signalLevel + delta));
+      model.signalLevel = next;
+      lsSet(SIGLEVEL_KEY, String(next));
+      looperAudio.setSignalLevel(next, model.deviceId).then(refreshLooperBtn).catch(() => {});
+      if (inputVolSl) inputVolSl.value = String(next);
+    },
   };
 }
