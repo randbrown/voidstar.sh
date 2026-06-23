@@ -27,6 +27,7 @@
 
 import { createLooperAudio } from './looper-audio.js';
 import { STRIP_DEFAULTS } from './rig-strip.js';
+import { parseAmpModel } from './neural-amp-model.js';
 import { createLooperRenderer } from './looper-render.js';
 import * as loopStore from './looper-store.js';
 import { wirePicker, getStoredDeviceId } from './devices.js';
@@ -50,6 +51,8 @@ const CUSTOMCENTS_KEY = `${NS}.customCents`;// custom temperament: int cents[12]
 const REFPITCH_KEY   = `${NS}.refPitch`;   // tuner reference A (Hz)
 const CABNAME_KEY    = `${NS}.cabName`;     // loaded cab IR filename (display)
 const CAB_IR_ID      = 'cabIR';            // IndexedDB misc key for the IR bytes
+const AMPNAME_KEY    = `${NS}.ampName`;     // loaded neural amp model name (display)
+const AMP_MODEL_ID   = 'ampModel';         // IndexedDB misc key for the normalised model
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
 // Channel strip UI schema — stages + params (the audio side lives in
@@ -59,6 +62,7 @@ const STRIP_SCHEMA = [
   { id: 'drive',  name: 'drive',  toggle: true,  model: true },
   { id: 'comp',   name: 'comp',   toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
   { id: 'eq',     name: 'eq',     toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
+  { id: 'amp',    name: 'amp',    toggle: true,  ampLoader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'cab',    name: 'cab',    toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'delay',  name: 'delay',  toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
   { id: 'reverb', name: 'reverb', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
@@ -218,6 +222,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     customCents: loadCustomCents(),
     refPitch: (() => { const v = parseFloat(lsGet(REFPITCH_KEY, '440')); return Number.isFinite(v) ? Math.max(400, Math.min(480, v)) : 440; })(),
     cabName: lsGet(CABNAME_KEY, '') || '',
+    ampName: lsGet(AMPNAME_KEY, '') || '',
     gridDefault: defaultGrid,       // "cycles" each new track starts with
     deviceId: getStoredDeviceId('looperInput') || '',   // remembered input device
     tracks: [],                     // Track[] — see makeTrack()
@@ -1091,6 +1096,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
         for (const p of stage.params) box.append(buildCtl(stage.id, p));
       }
       if (stage.loader) box.append(buildCabLoader());
+      if (stage.ampLoader) box.append(buildAmpLoader());
       stripBody.append(box);
     }
     refreshStripStages();
@@ -1166,6 +1172,53 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (cabNameEl) cabNameEl.textContent = 'no IR';
     if (loopStore.isAvailable()) loopStore.deleteMisc(CAB_IR_ID).catch(() => {});
   }
+  // Neural amp model loader row — file picker + name + clear.
+  let ampNameEl = null;
+  function buildAmpLoader() {
+    const row = document.createElement('div'); row.className = 'rig-ctl rig-cab-load';
+    const file = document.createElement('input');
+    file.type = 'file'; file.accept = '.json,.nam,.aidax,application/json'; file.style.display = 'none';
+    file.addEventListener('change', () => { const f = file.files && file.files[0]; if (f) loadAmpFile(f); file.value = ''; });
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'ctrl-btn'; btn.textContent = 'load amp';
+    btn.title = 'Load a neural amp capture (GuitarML / AIDA-X / NAM-LSTM JSON)';
+    btn.addEventListener('click', () => file.click());
+    if (!looperAudio.isAmpCapable?.()) { btn.disabled = true; btn.title = 'Neural amp needs AudioWorklet support'; }
+    ampNameEl = document.createElement('span'); ampNameEl.className = 'rig-cab-name';
+    ampNameEl.textContent = model.ampName || 'no amp';
+    const clr = document.createElement('button');
+    clr.type = 'button'; clr.className = 'ctrl-btn'; clr.textContent = '×'; clr.title = 'Clear amp model';
+    clr.addEventListener('click', clearAmpModel);
+    row.append(file, btn, ampNameEl, clr);
+    return row;
+  }
+  async function loadAmpFile(file) {
+    try {
+      const text = await file.text();
+      let json; try { json = JSON.parse(text); } catch { setStatus('amp: not valid JSON'); return; }
+      const parsed = parseAmpModel(json);
+      if (!parsed.ok) { setStatus(`amp: ${parsed.reason}`); return; }
+      looperAudio.setAmpModel(parsed);
+      model.ampName = file.name; lsSet(AMPNAME_KEY, model.ampName);
+      if (ampNameEl) ampNameEl.textContent = model.ampName;
+      if (loopStore.isAvailable()) loopStore.putMisc({ id: AMP_MODEL_ID, name: file.name, model: parsed }).catch(() => {});
+      setStatus(`amp: ${file.name}${parsed.experimental ? ' (experimental)' : ''} · ${parsed.hidden}-cell`);
+    } catch (e) { console.warn('[qualia] amp load failed:', e); setStatus('amp load failed'); }
+  }
+  function clearAmpModel() {
+    looperAudio.clearAmp();
+    model.ampName = ''; lsSet(AMPNAME_KEY, '');
+    if (ampNameEl) ampNameEl.textContent = 'no amp';
+    if (loopStore.isAvailable()) loopStore.deleteMisc(AMP_MODEL_ID).catch(() => {});
+  }
+  async function restoreAmp() {
+    if (!loopStore.isAvailable()) return;
+    try {
+      const rec = await loopStore.getMisc(AMP_MODEL_ID);
+      if (rec && rec.model) { looperAudio.setAmpModel(rec.model); model.ampName = rec.name || model.ampName; if (ampNameEl) ampNameEl.textContent = model.ampName || 'amp'; }
+    } catch (e) { console.warn('[qualia] amp restore failed:', e); }
+  }
+
   // Restore a persisted cab IR (async; applies to the strip whenever capture opens).
   async function restoreCabIR() {
     if (!loopStore.isAvailable()) return;
@@ -1181,7 +1234,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     rebuildStrip();
     setStatus('strip reset');
   }
-  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; cabNameEl = null; buildStripUI(); } }
+  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; cabNameEl = null; ampNameEl = null; buildStripUI(); } }
   function refreshStripBtn() { if (btnStrip) btnStrip.classList.toggle('active', !!model.stripOpen); }
   function toggleStrip(on) {
     model.stripOpen = on == null ? !model.stripOpen : !!on;
@@ -1593,8 +1646,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // Restore persisted loops (async). Replaces the seeded empty track if any
   // saved loops are found; otherwise the seeded empty armed track stays.
   restoreFromStore();
-  // Restore a persisted cab IR (async; applied to the strip on next capture open).
+  // Restore a persisted cab IR + neural amp model (async; applied to the strip
+  // on next capture open).
   restoreCabIR();
+  restoreAmp();
 
   // perFrame is a no-op: each renderer self-drives its own rAF while
   // recording/playing. Exposed for symmetry with the sequencer's page-init hook.

@@ -32,6 +32,7 @@
 // Vite would otherwise inline it as a data: URL, which addModule() can't load
 // reliably across browsers.
 import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
+import neuralWorkletUrl from './worklets/neural-amp.js?url&no-inline';
 import { createStretchNode } from './looper-stretch.js';
 import { createRigStrip } from './rig-strip.js';
 
@@ -60,6 +61,7 @@ const PAD_SEC = 0.5;
 export function createLooperAudio({ audio, syncStrudel } = {}) {
   let ctx = null;
   let workletReady = null;          // Promise<boolean> — memoised module load
+  let neuralReady = null;           // Promise<boolean> — neural-amp worklet module
 
   // ── capture graph ──
   let stream = null;
@@ -89,7 +91,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Channel strip (HPF/drive/comp/EQ/delay/reverb/pan) inserted between the raw
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
   // persisted config and primes it via setStripConfig().
-  let strip = null, _stripConfig = null, _cabBuffer = null;
+  let strip = null, _stripConfig = null, _cabBuffer = null, _ampModel = null;
 
   // ── recording state ──
   let recording = false;
@@ -145,6 +147,18 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         workletReady = Promise.resolve(false);
       }
     }
+    // Neural-amp worklet (best-effort; the strip degrades to a passthrough if it
+    // isn't available). Awaited so the strip can construct the node on open.
+    if (!neuralReady) {
+      if (ctx.audioWorklet && typeof ctx.audioWorklet.addModule === 'function') {
+        neuralReady = ctx.audioWorklet.addModule(neuralWorkletUrl)
+          .then(() => true)
+          .catch((err) => { console.warn('[qualia] neural-amp worklet failed to load:', err); return false; });
+      } else {
+        neuralReady = Promise.resolve(false);
+      }
+    }
+    try { await neuralReady; } catch {}
     return ctx;
   }
 
@@ -214,6 +228,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     // the raw input (srcNode) below, pre-strip.
     strip = createRigStrip(ctx, _stripConfig);
     if (_cabBuffer) strip.setCabBuffer(_cabBuffer);
+    if (_ampModel) strip.setAmpModel(_ampModel);
     srcNode.connect(strip.input);
 
     // Rig signal monitor: strip → sigGain (volume × mute) → speakers, plus a
@@ -912,6 +927,12 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     },
     clearCabIR: () => { _cabBuffer = null; strip?.setCabBuffer(null); },
     hasCabIR: () => !!_cabBuffer,
+    // Neural amp: a normalised LSTM model (from neural-amp-model.js) applied to
+    // the strip's worklet node; kept across capture reopens.
+    setAmpModel: (model) => { _ampModel = model || null; strip?.setAmpModel(_ampModel); },
+    clearAmp: () => { _ampModel = null; strip?.setAmpModel(null); },
+    hasAmp: () => !!_ampModel,
+    isAmpCapable: () => typeof AudioWorkletNode !== 'undefined',
     isBuffering: () => _bufferOn && !!srcNode,
     isRetroCapable: () => usingWorklet,
     getCaptureAnalyser: () => captureAnalyser,

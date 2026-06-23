@@ -17,6 +17,7 @@ export const STRIP_DEFAULTS = {
   drive:  { on: false, model: 'soft', drive: 0.35, tone: 0.6, level: 1.0, low: 0, mid: 0, midFreq: 600, high: 0 },
   comp:   { on: false, threshold: -18, ratio: 3, attack: 0.003, release: 0.25 },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
+  amp:    { on: false, mix: 1, level: 1 },
   cab:    { on: false, mix: 1, level: 1 },
   delay:  { on: false, time: 0.3, feedback: 0.35, mix: 0.25 },
   reverb: { on: false, decay: 2.0, mix: 0.25 },
@@ -114,9 +115,24 @@ export function createRigStrip(ctx, cfg) {
   const eqMid  = ctx.createBiquadFilter(); eqMid.type  = 'peaking';   eqMid.frequency.value  = 1000; eqMid.Q.value = 0.9;
   const eqHigh = ctx.createBiquadFilter(); eqHigh.type = 'highshelf'; eqHigh.frequency.value = 4500;
 
-  // Cab / IR loader — convolution insert after EQ (dry/wet so bypass = dry, and
-  // it's transparent until an IR is loaded). Sits before the time fx so delay /
-  // reverb sit on the cab'd tone.
+  // Neural amp — LSTM capture inference in an AudioWorklet, as a dry/wet insert
+  // after the EQ (transparent until a model is loaded; never blocks the graph if
+  // the worklet isn't available). amp → cab is the natural order.
+  const ampIn  = ctx.createGain();
+  const ampDry = ctx.createGain();
+  const ampWet = ctx.createGain();
+  const ampSum = ctx.createGain();
+  let neural = null, ampLoaded = false;
+  try {
+    neural = new AudioWorkletNode(ctx, 'neural-amp', {
+      numberOfInputs: 1, numberOfOutputs: 1,
+      channelCountMode: 'explicit', channelCount: 1, outputChannelCount: [1],
+    });
+  } catch { neural = null; }
+
+  // Cab / IR loader — convolution insert after the amp (dry/wet so bypass = dry,
+  // and it's transparent until an IR is loaded). Sits before the time fx so
+  // delay / reverb sit on the cab'd tone.
   const cabIn  = ctx.createGain();
   const cabConv = ctx.createConvolver();
   const cabDry = ctx.createGain();
@@ -162,7 +178,10 @@ export function createRigStrip(ctx, cfg) {
   eqLow.connect(eqMid);
   eqMid.connect(eqHigh);
 
-  eqHigh.connect(cabIn);
+  eqHigh.connect(ampIn);
+  ampIn.connect(ampDry); ampDry.connect(ampSum);
+  if (neural) { ampIn.connect(neural); neural.connect(ampWet); ampWet.connect(ampSum); }
+  ampSum.connect(cabIn);
   cabIn.connect(cabDry); cabDry.connect(cabSum);
   cabIn.connect(cabConv); cabConv.connect(cabWet); cabWet.connect(cabSum);
   cabSum.connect(fxIn);
@@ -284,6 +303,20 @@ export function createRigStrip(ctx, cfg) {
     buildIR(state.reverb.decay);
     reverbWet.gain.value = state.reverb.on ? clamp(state.reverb.mix, 0, 1) : 0;
   }
+  function applyAmp() {
+    const active = state.amp.on && ampLoaded && !!neural;
+    if (neural) { try { neural.port.postMessage({ cmd: 'bypass', on: !active }); } catch {} }
+    const mix = clamp(state.amp.mix, 0, 1);
+    ampDry.gain.value = active ? (1 - mix) : 1;
+    ampWet.gain.value = active ? mix * clamp(state.amp.level, 0, 2) : 0;
+  }
+  function setAmpModel(model) {
+    if (!neural) return false;
+    if (!model) { ampLoaded = false; try { neural.port.postMessage({ cmd: 'clear' }); } catch {} applyAmp(); return false; }
+    try { neural.port.postMessage({ cmd: 'load', model }); ampLoaded = true; } catch { ampLoaded = false; }
+    applyAmp();
+    return ampLoaded;
+  }
   function applyCab() {
     // Transparent until an IR is loaded; bypass (or no IR) = full dry, no wet.
     const active = state.cab.on && !!cabBuf;
@@ -299,9 +332,9 @@ export function createRigStrip(ctx, cfg) {
   function applyPan() {
     panner.pan.setTargetAtTime(clamp(state.pan.pan, -1, 1), ctx.currentTime, 0.01);
   }
-  function applyAll() { applyHpf(); applyDrive(); applyComp(); applyEq(); applyCab(); applyDelay(); applyReverb(); applyPan(); }
+  function applyAll() { applyHpf(); applyDrive(); applyComp(); applyEq(); applyAmp(); applyCab(); applyDelay(); applyReverb(); applyPan(); }
 
-  const APPLY = { hpf: applyHpf, drive: applyDrive, comp: applyComp, eq: applyEq, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
+  const APPLY = { hpf: applyHpf, drive: applyDrive, comp: applyComp, eq: applyEq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
 
   applyAll();
 
@@ -325,12 +358,14 @@ export function createRigStrip(ctx, cfg) {
   function dispose() {
     for (const n of [input, hpf, drivePre, shaper1, driveStage, shaper2, dLow,
                      dMid, dHigh, driveTone, drivePost, comp,
-                     eqLow, eqMid, eqHigh, cabIn, cabConv, cabDry, cabWet, cabSum,
+                     eqLow, eqMid, eqHigh, ampIn, ampDry, ampWet, ampSum,
+                     cabIn, cabConv, cabDry, cabWet, cabSum,
                      fxIn, dry, sum, delaySend, delayL, delayR, delayFb, merger,
                      delayWet, reverbSend, convolver, reverbWet, panner, output]) {
       try { n.disconnect(); } catch {}
     }
+    try { neural?.disconnect(); } catch {}
   }
 
-  return { input, output, setParam, setEnabled, setConfig, getConfig, setCabBuffer, dispose };
+  return { input, output, setParam, setEnabled, setConfig, getConfig, setCabBuffer, setAmpModel, dispose };
 }
