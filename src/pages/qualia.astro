@@ -2515,6 +2515,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="looper-header">
     <span class="sp-title">rig</span>
     <span class="sp-tag">// live station</span>
+    <button class="ctrl-btn panel-mute-btn" id="btn-rig-master-mute" title="Mute all rig output (signal + loops)">live</button>
+    <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="1" step="0.01" value="1" title="Rig master output level" />
     <span class="rig-head-spacer"></span>
     <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
   </div>
