@@ -32,7 +32,9 @@
 // Vite would otherwise inline it as a data: URL, which addModule() can't load
 // reliably across browsers.
 import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
+import neuralWorkletUrl from './worklets/neural-amp.js?url&no-inline';
 import { createStretchNode } from './looper-stretch.js';
+import { createRigStrip } from './rig-strip.js';
 
 const MIC_CONSTRAINTS = {
   echoCancellation: false,
@@ -59,13 +61,39 @@ const PAD_SEC = 0.5;
 export function createLooperAudio({ audio, syncStrudel } = {}) {
   let ctx = null;
   let workletReady = null;          // Promise<boolean> — memoised module load
+  let neuralReady = null;           // Promise<boolean> — neural-amp worklet module
 
   // ── capture graph ──
   let stream = null;
   let streamOwned = false;          // false when we borrowed audio.getMicStream()
   let streamDeviceId = '';
-  let srcNode = null, recNode = null, sinkGain = null;
+  let srcNode = null, recNode = null, sinkGain = null, captureAnalyser = null, tunerAnalyser = null;
+  let inputNode = null, monoSplitter = null;
+  let _channels = 'mono';           // 'mono' (sum to centre) | 'stereo' (pass L/R)
   let usingWorklet = false;
+
+  // ── retroactive ring buffer ──
+  // The worklet keeps an always-on ring of the last ~40s; `_bufferOn` is the
+  // user's "keep the lookback filling" intent (capture stays open even when not
+  // recording). Grabs are request/response over the port, keyed by id.
+  let _bufferOn = false;
+  const _pendingGrabs = new Map();
+  let _grabSeq = 0;
+  const RING_SECONDS = 40;          // mirror of the worklet's RING_SECONDS
+
+  // ── rig signal monitor ──
+  // The rig's live instrument signal is its own source: srcNode → sigGain
+  // (volume × mute) → speakers (monitor) + sigAnalyser (post-fader), and that
+  // analyser is adopted into audio.js as the 'rig' source so the processed
+  // signal lands in the mix (visuals + recording). Independent of the
+  // audio-panel 'mic'. The scope reads the PRE-fader captureAnalyser, so the
+  // raw input stays monitorable even when the signal is muted out of the mix.
+  let sigGain = null, sigAnalyser = null;
+  let _sigLevel = 0, _sigMuted = false, _rigAdopted = false;
+  // Channel strip (HPF/drive/comp/EQ/delay/reverb/pan) inserted between the raw
+  // input and the volume fader. Rebuilt with each capture; looper.js owns the
+  // persisted config and primes it via setStripConfig().
+  let strip = null, _stripConfig = null, _cabBuffer = null, _ampModel = null;
 
   // ── recording state ──
   let recording = false;
@@ -121,6 +149,18 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         workletReady = Promise.resolve(false);
       }
     }
+    // Neural-amp worklet (best-effort; the strip degrades to a passthrough if it
+    // isn't available). Awaited so the strip can construct the node on open.
+    if (!neuralReady) {
+      if (ctx.audioWorklet && typeof ctx.audioWorklet.addModule === 'function') {
+        neuralReady = ctx.audioWorklet.addModule(neuralWorkletUrl)
+          .then(() => true)
+          .catch((err) => { console.warn('[qualia] neural-amp worklet failed to load:', err); return false; });
+      } else {
+        neuralReady = Promise.resolve(false);
+      }
+    }
+    try { await neuralReady; } catch {}
     return ctx;
   }
 
@@ -168,44 +208,90 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     foldChunkIntoLive(chans[0]);
   }
 
-  // Open (or replace) the input capture. deviceId '' means "default input":
-  // reuse the page mic's stream when one is live, else open the default device.
+  // Open (or replace) the rig input capture on its OWN device (independent of
+  // the audio-panel mic). deviceId '' means the default input.
   async function openCapture(deviceId) {
     await ensureContext();
     const want = deviceId || '';
-    let useStream = null, owned = false;
-    if (!want) {
-      const mic = audio?.getMicStream?.();
-      if (mic) { useStream = mic; owned = false; }
-    }
-    if (!useStream) {
-      const constraints = want
-        ? { ...MIC_CONSTRAINTS, deviceId: { exact: want } }
-        : { ...MIC_CONSTRAINTS };
-      useStream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
-      owned = true;
-    }
+    const constraints = want
+      ? { ...MIC_CONSTRAINTS, deviceId: { exact: want } }
+      : { ...MIC_CONSTRAINTS };
+    const useStream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
     teardownCapture();
     stream = useStream;
-    streamOwned = owned;
+    streamOwned = true;
     const settings = stream.getAudioTracks()[0]?.getSettings() || {};
     streamDeviceId = want || settings.deviceId || '';
 
     srcNode = ctx.createMediaStreamSource(stream);
-    // Capture is recording-only: live-input monitoring is owned by the
-    // page-level input channel (audio.js mic source → monitorGain), so the
-    // looper never fans the input to the speakers itself — exactly one audible
-    // path, never doubled.
+
+    // Input channel handling. Everything downstream (strip, recorder, scope,
+    // tuner) taps `inputNode`:
+    //   mono   → sum L+R to one channel, so a single-input instrument is
+    //            centred and gets full stereo treatment from the strip's pan /
+    //            ping-pong delay / stereo reverb (the panner up-mixes mono to
+    //            both channels). Also records mono.
+    //   stereo → pass both channels straight through.
+    if (_channels === 'stereo') {
+      inputNode = ctx.createGain();
+      srcNode.connect(inputNode);
+    } else {
+      monoSplitter = ctx.createChannelSplitter(2);
+      inputNode = ctx.createGain();   // both split channels summed into one input
+      srcNode.connect(monoSplitter);
+      monoSplitter.connect(inputNode, 0);
+      monoSplitter.connect(inputNode, 1);
+    }
+
+    // Channel strip inserted between the input and the volume fader, so the
+    // monitor + the mix carry the PROCESSED signal. Recording + the scope tap
+    // the input (post channel-mode), pre-strip.
+    strip = createRigStrip(ctx, _stripConfig);
+    if (_cabBuffer) strip.setCabBuffer(_cabBuffer);
+    if (_ampModel) strip.setAmpModel(_ampModel);
+    inputNode.connect(strip.input);
+
+    // Rig signal monitor: strip → sigGain (volume × mute) → speakers, plus a
+    // post-fader analyser adopted into audio.js as 'rig' so the processed signal
+    // lands in the mix (visuals + recording) and follows volume/mute — muting
+    // pulls it from the mix, like a channel strip's send.
+    sigGain = ctx.createGain();
+    sigGain.gain.value = effSignal();
+    sigGain.__qualiaBypassMute = true;        // the rig owns its own mute
+    strip.output.connect(sigGain);
+    sigGain.connect(ctx.destination);
+    sigAnalyser = ctx.createAnalyser();
+    sigAnalyser.fftSize = 1024;
+    sigAnalyser.smoothingTimeConstant = 0.40;
+    sigGain.connect(sigAnalyser);
+    if (audio?.adoptAnalyser) { try { audio.adoptAnalyser(ctx, sigAnalyser, 'rig'); _rigAdopted = true; } catch {} }
+
     // A worklet/ScriptProcessor only gets pulled if it has a live downstream;
     // route it through a silent sink so process() keeps firing.
     sinkGain = ctx.createGain();
     sinkGain.gain.value = 0;
     sinkGain.connect(ctx.destination);
 
-    // Native channel count of this input (1 mono / 2 stereo) — drives the
-    // ScriptProcessor fallback; the worklet adopts it automatically via the
-    // default 'max' channelCountMode.
-    const inCh = Math.max(1, Math.min(2, settings.channelCount || 2));
+    // A non-audible analyser on the raw capture (PRE-fader) so the rig scope can
+    // show the exact signal being buffered/recorded even when it's muted, and so
+    // the tuner gets a clean pre-distortion window (2048 ≈ 43ms handles low
+    // strings down to ~50 Hz).
+    captureAnalyser = ctx.createAnalyser();
+    captureAnalyser.fftSize = 2048;
+    captureAnalyser.smoothingTimeConstant = 0.40;
+    inputNode.connect(captureAnalyser);
+
+    // A long-window analyser dedicated to the tuner — ~171ms at 48k so the
+    // autocorrelation has several periods of even very low notes (G0 ≈ 24.5 Hz,
+    // ~41ms period). Separate from the scope so the scope stays responsive.
+    tunerAnalyser = ctx.createAnalyser();
+    tunerAnalyser.fftSize = 8192;
+    tunerAnalyser.smoothingTimeConstant = 0;
+    inputNode.connect(tunerAnalyser);
+
+    // Channel count for the ScriptProcessor fallback: forced to 1 in mono mode,
+    // else the native input count. The worklet adopts it via 'max' channelCount.
+    const inCh = _channels === 'stereo' ? Math.max(1, Math.min(2, settings.channelCount || 2)) : 1;
 
     const ready = await workletReady;
     if (ready) {
@@ -215,12 +301,19 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       });
       recNode.port.onmessage = (e) => {
         const d = e.data;
+        if (!d) return;
         // Control message: precise ctx time of the first armed quantum (frame 0).
-        if (d && d.t0 !== undefined) { if (firstChunkAbs == null) firstChunkAbs = d.t0; return; }
+        if (d.t0 !== undefined) { if (firstChunkAbs == null) firstChunkAbs = d.t0; return; }
+        // Retro grab response — resolve the matching pending request.
+        if (d.grab !== undefined) {
+          const resolve = _pendingGrabs.get(d.grab);
+          if (resolve) { _pendingGrabs.delete(d.grab); resolve(d); }
+          return;
+        }
         if (!recording) return;
-        if (d && d.chans) onChunks(d.chans);
+        if (d.chans) onChunks(d.chans);
       };
-      srcNode.connect(recNode);
+      inputNode.connect(recNode);
       recNode.connect(sinkGain);
     } else {
       usingWorklet = false;
@@ -238,24 +331,81 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         }
         onChunks(chans);
       };
-      srcNode.connect(recNode);
+      inputNode.connect(recNode);
       recNode.connect(sinkGain);
     }
   }
 
   function teardownCapture() {
+    if (_rigAdopted) { try { audio?.releaseAdopted?.('rig'); } catch {} _rigAdopted = false; }
     try { srcNode?.disconnect(); } catch {}
+    try { monoSplitter?.disconnect(); } catch {}
+    try { inputNode?.disconnect(); } catch {}
     if (recNode) { try { recNode.disconnect(); } catch {}; if ('onaudioprocess' in recNode) recNode.onaudioprocess = null; }
     try { sinkGain?.disconnect(); } catch {}
+    try { sigGain?.disconnect(); } catch {}
+    try { sigAnalyser?.disconnect(); } catch {}
+    try { captureAnalyser?.disconnect(); } catch {}
+    try { tunerAnalyser?.disconnect(); } catch {}
+    try { strip?.dispose(); } catch {}
+    strip = null;
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
-    srcNode = recNode = sinkGain = null;
+    srcNode = recNode = sinkGain = sigGain = sigAnalyser = captureAnalyser = tunerAnalyser = null;
+    inputNode = monoSplitter = null;
     stream = null; streamOwned = false;
   }
 
+  // ── rig signal level / mute (channel-strip volume + mute) ──────────────────
+  function effSignal() { return _sigMuted ? 0 : _sigLevel; }
+  function wantCapture() { return _bufferOn || recording || _sigLevel > 0; }
+  // Open capture if anything needs it; close it when nothing does.
+  async function ensureCaptureOpen(deviceId) {
+    await ensureContext();
+    await ensureCapture(deviceId ?? streamDeviceId ?? '');
+  }
+  function maybeCloseCapture() {
+    if (!wantCapture() && srcNode) teardownCapture();
+  }
+  // Set value only (no capture open) — for restoring persisted state pre-gesture.
+  function primeSignal(level, muted) {
+    _sigLevel = clamp01(level);
+    _sigMuted = !!muted;
+    if (sigGain) ramp(sigGain.gain, effSignal());
+  }
+  async function setSignalLevel(v, deviceId) {
+    _sigLevel = clamp01(v);
+    if (_sigLevel > 0 && !srcNode) { try { await ensureCaptureOpen(deviceId); } catch (e) { console.warn('[qualia] rig signal capture failed:', e); } }
+    if (sigGain) ramp(sigGain.gain, effSignal());
+    maybeCloseCapture();
+  }
+  function setSignalMuted(on) {
+    _sigMuted = !!on;
+    if (sigGain) ramp(sigGain.gain, effSignal());
+  }
+  function getSignal() { return { level: _sigLevel, muted: _sigMuted, live: !!srcNode }; }
+  function getChannels() { return _channels; }
+  // Switch mono/stereo input. Reopens the capture (cheap; loops keep playing) so
+  // the input routing rebuilds — unless mid-record, where it applies next open.
+  async function setChannels(mode) {
+    const next = mode === 'stereo' ? 'stereo' : 'mono';
+    if (next === _channels) return;
+    _channels = next;
+    if (srcNode && !recording) { try { await openCapture(streamDeviceId); } catch (e) { console.warn('[qualia] channel mode switch failed:', e); } }
+  }
+
+  // Dedupe concurrent opens — a fader drag from 0 can call this many times
+  // before the first getUserMedia resolves (srcNode is still null), which would
+  // otherwise open several streams and teardown-race each other.
+  let _openPromise = null;
   async function ensureCapture(deviceId) {
     const want = deviceId || '';
     if (srcNode && want === (streamDeviceId || '')) return;
-    await openCapture(want);
+    if (_openPromise) {
+      try { await _openPromise; } catch {}
+      if (srcNode && want === (streamDeviceId || '')) return;
+    }
+    _openPromise = openCapture(want).finally(() => { _openPromise = null; });
+    return _openPromise;
   }
 
   function armRecorder(on) {
@@ -313,6 +463,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       const finish = () => {
         recording = false;
         armRecorder(false);
+        // Release the rig capture if nothing else wants it open (buffer off and
+        // the signal monitor down); the ring keeps filling otherwise.
+        maybeCloseCapture();
         const sr = ctx.sampleRate;
         const total = recFrames;
         const nch = Math.max(1, recChannelCount);
@@ -366,6 +519,110 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       if (waitMs < 5) finish();
       else setTimeout(finish, waitMs + 20);
     });
+  }
+
+  // ── retroactive ring buffer ──
+  // Keep the capture open so the worklet's always-on ring keeps filling, even
+  // when not recording. Retro only works on the worklet path (the ring lives in
+  // the processor); the ScriptProcessor fallback returns not-capable.
+  async function startBuffer(deviceId) {
+    await ensureContext();
+    await ensureCapture(deviceId || streamDeviceId || '');
+    _bufferOn = true;
+    return usingWorklet;
+  }
+  function stopBuffer() {
+    _bufferOn = false;
+    maybeCloseCapture();   // keep open if the signal monitor or a record needs it
+  }
+
+  // Grab the most recent `cycles` of the live ring as a loop, phase-locked to
+  // the Strudel grid. Resolves to the same track shape as stopRecording (buffer
+  // padded both sides, loopStartBase, regionFrames, naturalSeconds,
+  // recordedCycles) or null when the ring can't cover a single grid unit.
+  async function grabRetro({ grid = 1, syncOn = false, cps = 0.5, cycles = 4 } = {}) {
+    if (!usingWorklet || !recNode) return null;     // ring lives in the worklet
+    await ensureContext();
+    if (!srcNode) return null;                       // capture must be open
+    const N = grid > 0 ? grid : 1;
+    let L = Math.max(N, Math.round((cycles > 0 ? cycles : N) / N) * N);
+
+    // Anchor the Strudel grid to a looper-ctx reference time read right now.
+    const tRef = ctx.currentTime;
+    let info = null;
+    if (syncOn) {
+      const i = syncStrudel?.getStrudelCyclePos?.();
+      if (i && i.cps > 0 && typeof i.pos === 'number') info = i;
+    }
+    const effCps = info ? info.cps : (cps > 0 ? cps : 0.5);
+
+    // Clamp to what the ring can hold (leave PAD headroom on both ends).
+    const maxByRing = Math.max(N, Math.floor(((RING_SECONDS - 2 * PAD_SEC - 0.2) * effCps) / N) * N);
+    if (L > maxByRing) L = maxByRing;
+
+    const secondsWanted = L / effCps + 2 * PAD_SEC + 0.3;
+    const id = `g${(_grabSeq++).toString(36)}`;
+    const resp = await new Promise((resolve) => {
+      _pendingGrabs.set(id, resolve);
+      try { recNode.port.postMessage({ cmd: 'grab', seconds: secondsWanted, id }); }
+      catch { _pendingGrabs.delete(id); resolve(null); }
+      setTimeout(() => { if (_pendingGrabs.has(id)) { _pendingGrabs.delete(id); resolve(null); } }, 600);
+    });
+    if (!resp || !resp.chans || !resp.chans.length || !resp.frames) return null;
+
+    const sr = resp.sampleRate || ctx.sampleRate;
+    const total = resp.frames;
+    const fpc = sr / effCps;                          // frames per cycle
+
+    // OUT boundary. Snap to the NEAREST grid boundary; if that boundary is
+    // still in the future, fall back to the last one that passed. Then clamp to
+    // the captured end — the boundary may sit a few ms past the worklet's last
+    // block (it can't grab audio not yet captured); the residual offset is what
+    // the global "nudge ms" compensates, same as a normal recording.
+    let outAbs;
+    if (info) {
+      let endCycle = Math.round(info.pos / N) * N;
+      outAbs = tRef + (endCycle - info.pos) / info.cps;
+      if (outAbs > tRef + EPS) {
+        endCycle = Math.floor(info.pos / N) * N;
+        outAbs = tRef + (endCycle - info.pos) / info.cps;
+      }
+      if (outAbs > resp.tEnd) outAbs = resp.tEnd;
+    } else {
+      outAbs = resp.tEnd;                             // free mode: end "now"
+    }
+    let outFrame = Math.round((outAbs - resp.tStart) * sr);
+    outFrame = Math.max(0, Math.min(total, outFrame));
+
+    // Step back whole grid units from OUT, clamped to the audio present, so the
+    // loop is an integer number of cycles and phase-locked to the grid.
+    const maxL = Math.floor(outFrame / fpc / N) * N;
+    if (maxL < N) return null;                        // ring too short for one unit
+    const effL = Math.max(N, Math.min(L, maxL));
+    let inFrame = Math.round(outFrame - effL * fpc);
+    inFrame = Math.max(0, Math.min(outFrame, inFrame));
+    const regionFrames = outFrame - inFrame;
+    if (regionFrames < 16) return null;
+
+    const pad = Math.round(PAD_SEC * sr);
+    const padStart = Math.min(pad, inFrame);
+    const padEnd   = Math.min(pad, total - outFrame);
+    const sliceFrom = inFrame - padStart;
+    const sliceTo   = outFrame + padEnd;
+    const regionLen = sliceTo - sliceFrom;
+    const nch = resp.chans.length;
+    const buffer = ctx.createBuffer(nch, regionLen, sr);
+    for (let c = 0; c < nch; c++) {
+      const src = resp.chans[c] instanceof Float32Array ? resp.chans[c] : new Float32Array(resp.chans[c]);
+      buffer.copyToChannel(src.subarray(sliceFrom, sliceTo), c);
+    }
+    return {
+      buffer, sampleRate: sr,
+      loopStartBase: padStart,
+      regionFrames,
+      naturalSeconds: regionFrames / sr,
+      recordedCycles: effL,
+    };
   }
 
   // ── playback / monitor bus ──
@@ -655,6 +912,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   function dispose() {
+    for (const resolve of _pendingGrabs.values()) { try { resolve(null); } catch {} }
+    _pendingGrabs.clear();
     removeAll();
     teardownCapture();
     if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
@@ -667,9 +926,58 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
   return {
     ensureContext,
-    setInputDevice: async (id) => { if (!recording) await openCapture(id || ''); else streamDeviceId = id || ''; },
+    // Switch the rig input device: reopen on the new device when capture is
+    // live, otherwise just remember it for the next open.
+    setInputDevice: async (id) => {
+      const want = id || '';
+      if (srcNode && !recording) await openCapture(want);
+      else streamDeviceId = want;
+    },
     getInputDeviceId: () => streamDeviceId,
     startRecording, stopRecording,
+    startBuffer, stopBuffer, grabRetro,
+    ensureCaptureOpen,
+    setSignalLevel, setSignalMuted, getSignal, primeSignal,
+    setChannels, getChannels,
+    // Channel strip — persisted config lives in looper.js; updates apply to the
+    // live strip when capture is open and are remembered for the next open.
+    setStripConfig: (cfg) => { _stripConfig = cfg; strip?.setConfig(cfg); },
+    getStripConfig: () => (strip ? strip.getConfig() : _stripConfig),
+    setStripParam: (stage, param, val) => {
+      if (!_stripConfig) _stripConfig = {};
+      _stripConfig[stage] = { ...(_stripConfig[stage] || {}), [param]: val };
+      strip?.setParam(stage, param, val);
+    },
+    setStripEnabled: (stage, on) => {
+      if (!_stripConfig) _stripConfig = {};
+      _stripConfig[stage] = { ...(_stripConfig[stage] || {}), on: !!on };
+      strip?.setEnabled(stage, !!on);
+    },
+    // Cab / IR loader: decode raw file bytes with the looper's ctx and apply to
+    // the strip's convolver (kept across capture reopens). bytes are copied so
+    // the caller's ArrayBuffer survives (decodeAudioData detaches its input).
+    setCabIRBytes: async (bytes) => {
+      if (!bytes) return false;
+      await ensureContext();
+      try {
+        const buf = await ctx.decodeAudioData(bytes.slice(0));
+        _cabBuffer = buf;
+        strip?.setCabBuffer(buf);
+        return true;
+      } catch (e) { console.warn('[qualia] cab IR decode failed:', e); return false; }
+    },
+    clearCabIR: () => { _cabBuffer = null; strip?.setCabBuffer(null); },
+    hasCabIR: () => !!_cabBuffer,
+    // Neural amp: a normalised LSTM model (from neural-amp-model.js) applied to
+    // the strip's worklet node; kept across capture reopens.
+    setAmpModel: (model) => { _ampModel = model || null; strip?.setAmpModel(_ampModel); },
+    clearAmp: () => { _ampModel = null; strip?.setAmpModel(null); },
+    hasAmp: () => !!_ampModel,
+    isAmpCapable: () => typeof AudioWorkletNode !== 'undefined',
+    isBuffering: () => _bufferOn && !!srcNode,
+    isRetroCapable: () => usingWorklet,
+    getCaptureAnalyser: () => captureAnalyser,
+    getTunerAnalyser: () => tunerAnalyser,
     playVoice, stopVoice, stopAll, removeTrack, removeAll,
     setMuted, setMaster,
     setTrackVolume, setTrackMuted,
