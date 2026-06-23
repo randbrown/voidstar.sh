@@ -1581,6 +1581,50 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     #btn-looper-retro { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
     #btn-looper-retro:disabled { opacity: 0.4; cursor: default; }
+    #btn-rig-strip, #btn-rig-tuner { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
+    #btn-rig-strip.active, #btn-rig-tuner.active {
+      color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10);
+    }
+
+    /* Channel strip — wrapped row of compact stage boxes. */
+    #rig-strip-body {
+      display: flex; flex-wrap: wrap; gap: 0.4rem;
+      padding: 0.45rem 0.6rem;
+      max-height: 220px; overflow-y: auto;
+    }
+    .rig-stage {
+      border: 1px solid var(--border); border-radius: 6px;
+      background: rgba(0,0,0,0.20);
+      padding: 0.3rem 0.4rem;
+      min-width: 116px; flex: 1 1 116px;
+    }
+    .rig-stage.on { border-color: var(--cyan); background: rgba(34,211,238,0.06); }
+    .rig-stage-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.3rem; margin-bottom: 0.25rem;
+    }
+    .rig-stage-name {
+      font-size: 0.66rem; letter-spacing: 0.04em; color: var(--muted);
+      background: none; border: none; cursor: pointer; padding: 0.05rem 0.25rem;
+      border-radius: 4px; font-family: inherit;
+    }
+    .rig-stage-name.on { color: var(--cyan); }
+    .rig-ctl { display: flex; align-items: center; gap: 0.3rem; font-size: 0.6rem; margin: 0.12rem 0; }
+    .rig-ctl-label { color: var(--muted); min-width: 2.4ch; }
+    .rig-ctl input[type=range] { flex: 1; min-width: 0; }
+    .rig-ctl-val { color: var(--text); min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
+
+    /* Tuner readout — note + cents bar. */
+    .rig-tuner {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.25rem 0.7rem 0.4rem;
+      font-size: 0.72rem;
+    }
+    .rig-tuner-note { font-size: 1.1rem; min-width: 3.5ch; color: var(--text); font-variant-numeric: tabular-nums; }
+    .rig-tuner-bar { position: relative; flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; }
+    .rig-tuner-bar::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,0.25); }
+    .rig-tuner-needle { position: absolute; top: -1px; bottom: -1px; width: 3px; border-radius: 2px; background: var(--cyan); transition: left 0.06s linear; }
+    .rig-tuner-cents { min-width: 5ch; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
     .looper-input-select { max-width: 14ch; }
     #btn-looper-record, #btn-looper-play, #btn-looper-stop {
       padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1;
@@ -2447,9 +2491,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
       <span id="rig-input-controls" class="rig-input-controls"></span>
       <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
+      <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — HPF, drive, comp, EQ, delay, reverb, pan on the rig signal">strip</button>
+      <button class="ctrl-btn" id="btn-rig-tuner" title="Chromatic tuner — reads the raw rig input (pre-distortion)">tune</button>
       <span class="sp-status" id="rig-signal-status"></span>
     </div>
     <canvas id="rig-scope" class="rig-scope" title="Live input scope (pre-fader)"></canvas>
+    <div id="rig-tuner" class="rig-tuner" style="display:none"></div>
+  </section>
+
+  <!-- STRIP subpanel — the rig channel strip (collapsible). -->
+  <section id="rig-strip" class="rig-subpanel" style="display:none">
+    <div class="rig-subhead"><span class="sp-subtitle">strip</span></div>
+    <div id="rig-strip-body"></div>
   </section>
 
   <!-- LOOP subpanel — the looper, built on the rig signal. -->

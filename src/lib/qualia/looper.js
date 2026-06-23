@@ -26,6 +26,7 @@
 // time-stretch is a later pass).
 
 import { createLooperAudio } from './looper-audio.js';
+import { STRIP_DEFAULTS } from './rig-strip.js';
 import { createLooperRenderer } from './looper-render.js';
 import * as loopStore from './looper-store.js';
 import { wirePicker, getStoredDeviceId } from './devices.js';
@@ -41,13 +42,39 @@ const RETRO_KEY      = `${NS}.retroCycles`;// cycles the retro "grab" captures
 const BUFFER_KEY     = `${NS}.buffer`;     // keep the live lookback buffer filling
 const SIGLEVEL_KEY   = `${NS}.signalLevel`;// rig signal monitor/mix level
 const SIGMUTE_KEY    = `${NS}.signalMuted`;// rig signal mute
+const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
+const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
+const TUNER_KEY      = `${NS}.tuner`;      // tuner enabled
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
+
+// Channel strip UI schema — stages + params (the audio side lives in
+// rig-strip.js; STRIP_DEFAULTS supplies initial values).
+const STRIP_SCHEMA = [
+  { id: 'hpf',    name: 'hpf',    toggle: true,  params: [{ id: 'freq', label: 'freq', min: 20, max: 400, step: 1, fmt: v => `${v|0}Hz` }] },
+  { id: 'drive',  name: 'drive',  toggle: true,  params: [{ id: 'drive', label: 'amt', min: 0, max: 1, step: 0.01 }, { id: 'tone', label: 'tone', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 }] },
+  { id: 'comp',   name: 'comp',   toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
+  { id: 'eq',     name: 'eq',     toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
+  { id: 'delay',  name: 'delay',  toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
+  { id: 'reverb', name: 'reverb', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
+  { id: 'pan',    name: 'pan',    toggle: false, params: [{ id: 'pan', label: 'pan', min: -1, max: 1, step: 0.02, fmt: v => v == 0 ? 'C' : (v < 0 ? `L${Math.round(-v*100)}` : `R${Math.round(v*100)}`) }] },
+];
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
 const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
 
 function lsGet(k, fallback) { try { const v = localStorage.getItem(k); return v == null ? fallback : v; } catch { return fallback; } }
 function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch {} }
+
+// Strip config = STRIP_DEFAULTS deep-merged with any persisted JSON.
+function loadStripConfig() {
+  const base = {};
+  for (const k of Object.keys(STRIP_DEFAULTS)) base[k] = { ...STRIP_DEFAULTS[k] };
+  try {
+    const raw = localStorage.getItem(STRIP_KEY);
+    if (raw) { const o = JSON.parse(raw); for (const k of Object.keys(base)) if (o && o[k]) Object.assign(base[k], o[k]); }
+  } catch {}
+  return base;
+}
 
 let _trackSeq = 0;
 function nextTrackId() { return `t${Date.now().toString(36)}${(_trackSeq++).toString(36)}`; }
@@ -113,6 +140,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const signalCtrls = document.getElementById('rig-input-controls');
   const signalStat  = document.getElementById('rig-signal-status');
   const scopeCanvas = document.getElementById('rig-scope');
+  const btnStrip    = document.getElementById('btn-rig-strip');
+  const btnTuner    = document.getElementById('btn-rig-tuner');
+  const stripPanel  = document.getElementById('rig-strip');
+  const stripBody   = document.getElementById('rig-strip-body');
+  const tunerEl     = document.getElementById('rig-tuner');
   const btnToggle   = document.getElementById('btn-looper');
   const btnRecord   = document.getElementById('btn-looper-record');
   const btnRetro    = document.getElementById('btn-looper-retro');
@@ -139,6 +171,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     bufferOn: lsGet(BUFFER_KEY, '0') === '1',          // live lookback running
     signalLevel: num01(lsGet(SIGLEVEL_KEY, '0'), 0),   // rig signal monitor/mix level
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
+    strip: loadStripConfig(),                          // channel strip config
+    stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
+    tunerOn: lsGet(TUNER_KEY, '0') === '1',
     gridDefault: defaultGrid,       // "cycles" each new track starts with
     deviceId: getStoredDeviceId('looperInput') || '',   // remembered input device
     tracks: [],                     // Track[] — see makeTrack()
@@ -153,6 +188,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   looperAudio.setMaster(model.master);
   looperAudio.setOffsetMs(model.offsetMs);
   looperAudio.primeSignal(model.signalLevel, model.signalMuted);   // value-only; capture opens on a gesture
+  looperAudio.setStripConfig(model.strip);                         // applied when capture opens
 
   // Per-track renderers + DOM handles, keyed by track id.
   const renderers = new Map();      // id -> renderer
@@ -653,6 +689,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       gridDefault: model.gridDefault,
       retroCycles: model.retroCycles,
       cps:         model.cps,
+      strip:       JSON.parse(JSON.stringify(model.strip)),
     };
   }
   function setConfig(cfg) {
@@ -676,6 +713,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
       lsSet(GRID_KEY, model.gridDefault);
     }
     if (typeof cfg.retroCycles === 'number') setRetroCycles(cfg.retroCycles);
+    if (cfg.strip && typeof cfg.strip === 'object') {
+      for (const k of Object.keys(model.strip)) if (cfg.strip[k]) Object.assign(model.strip[k], cfg.strip[k]);
+      looperAudio.setStripConfig(model.strip);
+      lsSet(STRIP_KEY, JSON.stringify(model.strip));
+      rebuildStrip();
+    }
     // Repaint the props row so the panel mirrors the applied settings
     // (master slider, nudge, sync/start-now checkboxes) whether or not it's
     // currently open; renderProps re-reads model on the next open anyway.
@@ -928,7 +971,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (scopeRAF || !scopeCanvas) return;
     if (!scope2d) scope2d = scopeCanvas.getContext('2d');
     sizeScope();
-    const loop = () => { scopeRAF = requestAnimationFrame(loop); drawScope(); };
+    let tn = 0;
+    const loop = () => {
+      scopeRAF = requestAnimationFrame(loop);
+      drawScope();
+      if (model.tunerOn && (tn++ % 5 === 0)) updateTuner();   // ~12 Hz
+    };
     scopeRAF = requestAnimationFrame(loop);
   }
   function stopScope() {
@@ -937,6 +985,145 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   if (scopeCanvas && typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(() => { if (scopeRAF) sizeScope(); }).observe(scopeCanvas);
+  }
+
+  // ── channel strip UI ──────────────────────────────────────────────────────
+  let _stripTimer = null;
+  function persistStrip() {
+    if (_stripTimer) clearTimeout(_stripTimer);
+    _stripTimer = setTimeout(() => { _stripTimer = null; lsSet(STRIP_KEY, JSON.stringify(model.strip)); }, 200);
+  }
+  function stripSet(stage, param, v) {
+    model.strip[stage][param] = v;
+    looperAudio.setStripParam(stage, param, v);
+    persistStrip();
+  }
+  function stripToggle(stage, on) {
+    model.strip[stage].on = !!on;
+    looperAudio.setStripEnabled(stage, !!on);
+    refreshStripStages();
+    persistStrip();
+  }
+  function refreshStripStages() {
+    if (!stripBody) return;
+    for (const stage of STRIP_SCHEMA) {
+      if (!stage.toggle) continue;
+      const box = stripBody.querySelector(`.rig-stage[data-stage="${stage.id}"]`);
+      if (!box) continue;
+      const on = !!model.strip[stage.id].on;
+      box.classList.toggle('on', on);
+      box.querySelector('.rig-stage-name')?.classList.toggle('on', on);
+    }
+  }
+  function buildStripUI() {
+    if (!stripBody || stripBody.children.length) return;
+    for (const stage of STRIP_SCHEMA) {
+      const box = document.createElement('div');
+      box.className = 'rig-stage'; box.dataset.stage = stage.id;
+      const head = document.createElement('div'); head.className = 'rig-stage-head';
+      let nameEl;
+      if (stage.toggle) {
+        nameEl = document.createElement('button');
+        nameEl.type = 'button'; nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
+        nameEl.title = 'Toggle ' + stage.name;
+        nameEl.addEventListener('click', () => stripToggle(stage.id, !model.strip[stage.id].on));
+      } else {
+        nameEl = document.createElement('span'); nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
+      }
+      head.append(nameEl); box.append(head);
+      for (const p of stage.params) {
+        const row = document.createElement('div'); row.className = 'rig-ctl';
+        const lab = document.createElement('span'); lab.className = 'rig-ctl-label'; lab.textContent = p.label;
+        const sl = document.createElement('input');
+        sl.type = 'range'; sl.min = String(p.min); sl.max = String(p.max); sl.step = String(p.step);
+        sl.value = String(model.strip[stage.id][p.id]);
+        const val = document.createElement('span'); val.className = 'rig-ctl-val';
+        const fmt = p.fmt || (v => (+v).toFixed(2));
+        val.textContent = fmt(parseFloat(sl.value));
+        sl.addEventListener('input', () => { const v = parseFloat(sl.value); val.textContent = fmt(v); stripSet(stage.id, p.id, v); });
+        row.append(lab, sl, val); box.append(row);
+      }
+      stripBody.append(box);
+    }
+    refreshStripStages();
+  }
+  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; buildStripUI(); } }
+  function refreshStripBtn() { if (btnStrip) btnStrip.classList.toggle('active', !!model.stripOpen); }
+  function toggleStrip(on) {
+    model.stripOpen = on == null ? !model.stripOpen : !!on;
+    lsSet(STRIPOPEN_KEY, model.stripOpen ? '1' : '0');
+    if (model.stripOpen) buildStripUI();
+    if (stripPanel) stripPanel.style.display = model.stripOpen ? '' : 'none';
+    refreshStripBtn();
+  }
+
+  // ── chromatic tuner ───────────────────────────────────────────────────────
+  const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  let tunerNoteEl = null, tunerNeedleEl = null, tunerCentsEl = null, tunerBuf = null;
+  function buildTunerUI() {
+    if (!tunerEl || tunerEl.children.length) return;
+    tunerNoteEl = document.createElement('span'); tunerNoteEl.className = 'rig-tuner-note'; tunerNoteEl.textContent = '—';
+    const bar = document.createElement('span'); bar.className = 'rig-tuner-bar';
+    tunerNeedleEl = document.createElement('span'); tunerNeedleEl.className = 'rig-tuner-needle'; tunerNeedleEl.style.left = '50%';
+    bar.append(tunerNeedleEl);
+    tunerCentsEl = document.createElement('span'); tunerCentsEl.className = 'rig-tuner-cents'; tunerCentsEl.textContent = 'play a note';
+    tunerEl.append(tunerNoteEl, bar, tunerCentsEl);
+  }
+  // Bounded autocorrelation pitch detector (parabolic-interpolated). Returns Hz
+  // or -1 when the signal is too quiet / not periodic.
+  function autoCorrelate(buf, sr) {
+    const SIZE = buf.length;
+    let energy = 0;
+    for (let i = 0; i < SIZE; i++) energy += buf[i] * buf[i];
+    if (Math.sqrt(energy / SIZE) < 0.01) return -1;
+    const minLag = Math.max(2, Math.floor(sr / 1200));
+    const maxLag = Math.min(SIZE - 1, Math.floor(sr / 45));
+    const corr = new Float32Array(maxLag + 2);
+    let best = -1, bestVal = 0;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      let c = 0;
+      for (let i = 0; i < SIZE - lag; i++) c += buf[i] * buf[i + lag];
+      corr[lag] = c;
+      if (c > bestVal) { bestVal = c; best = lag; }
+    }
+    if (best <= 0 || bestVal < energy * 0.01) return -1;
+    const x1 = corr[best - 1] || 0, x2 = corr[best], x3 = corr[best + 1] || 0;
+    const denom = x1 + x3 - 2 * x2;
+    let shift = denom ? 0.5 * (x1 - x3) / denom : 0;
+    if (!isFinite(shift) || Math.abs(shift) > 1) shift = 0;
+    return sr / (best + shift);
+  }
+  function updateTuner() {
+    if (!model.tunerOn || !tunerNoteEl) return;
+    const an = looperAudio.getCaptureAnalyser?.();
+    const clear = () => { tunerNoteEl.textContent = '—'; tunerNoteEl.style.color = ''; tunerCentsEl.textContent = an ? 'play a note' : 'rig signal off'; tunerNeedleEl.style.left = '50%'; };
+    if (!an || typeof an.getFloatTimeDomainData !== 'function') { clear(); return; }
+    const n = an.fftSize;
+    if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
+    an.getFloatTimeDomainData(tunerBuf);
+    const f = autoCorrelate(tunerBuf, an.context?.sampleRate || 48000);
+    if (f <= 0) { clear(); return; }
+    const midi = 69 + 12 * Math.log2(f / 440);
+    const rounded = Math.round(midi);
+    const cents = Math.round((midi - rounded) * 100);
+    tunerNoteEl.textContent = `${NOTE_NAMES[((rounded % 12) + 12) % 12]}${Math.floor(rounded / 12) - 1}`;
+    const inTune = Math.abs(cents) <= 5;
+    tunerNoteEl.style.color = inTune ? 'var(--cyan)' : '';
+    tunerCentsEl.textContent = `${cents > 0 ? '+' : ''}${cents}¢`;
+    tunerNeedleEl.style.left = Math.max(0, Math.min(100, 50 + cents)) + '%';
+    tunerNeedleEl.style.background = inTune ? 'var(--cyan)' : (Math.abs(cents) <= 15 ? '#fbbf24' : 'var(--pink)');
+  }
+  function refreshTunerBtn() { if (btnTuner) btnTuner.classList.toggle('active', !!model.tunerOn); }
+  function toggleTuner(on) {
+    model.tunerOn = on == null ? !model.tunerOn : !!on;
+    lsSet(TUNER_KEY, model.tunerOn ? '1' : '0');
+    if (tunerEl) tunerEl.style.display = model.tunerOn ? '' : 'none';
+    if (model.tunerOn) {
+      buildTunerUI();
+      // The tuner reads the raw rig capture — engage it (this is a user gesture).
+      looperAudio.ensureCaptureOpen(model.deviceId).then(refreshLooperBtn).catch(() => {});
+    }
+    refreshTunerBtn();
   }
 
   // ── refreshers ───────────────────────────────────────────────────────────
@@ -1129,6 +1316,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     if (model.bufferOn && !looperAudio.isBuffering()) setBuffer(true);
     refreshBufferBtn();
+    // Restore the strip / tuner subpanels if they were left open.
+    if (model.stripOpen) { buildStripUI(); if (stripPanel) stripPanel.style.display = ''; }
+    if (model.tunerOn) {
+      buildTunerUI();
+      if (tunerEl) tunerEl.style.display = '';
+      if (!looperAudio.getSignal().live) looperAudio.ensureCaptureOpen(model.deviceId).then(refreshLooperBtn).catch(() => {});
+    }
+    refreshStripBtn();
+    refreshTunerBtn();
     startScope();
     refreshLooperBtn();
     refreshTransport();
@@ -1149,6 +1345,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnRecord) btnRecord.addEventListener('click', () => { recording ? stopRecording() : startRecording(); });
   if (btnRetro)  btnRetro.addEventListener('click', () => { doRetroGrab(); });
   if (bufferBtn) bufferBtn.addEventListener('click', () => { setBuffer(!model.bufferOn); });
+  if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
+  if (btnTuner)  btnTuner.addEventListener('click', () => { toggleTuner(); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
   if (btnStop)   btnStop.addEventListener('click', () => { stop(); });
   if (btnMute)   btnMute.addEventListener('click', () => { setMuted(!_muted); });
@@ -1173,6 +1371,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (tracksEl) renderTracks();
   refreshMuteBtn();
   refreshBufferBtn();
+  refreshStripBtn();
+  refreshTunerBtn();
   refreshTransport();
   refreshLooperBtn();
   refreshSyncBtnVisibility();

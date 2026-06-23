@@ -33,6 +33,7 @@
 // reliably across browsers.
 import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
 import { createStretchNode } from './looper-stretch.js';
+import { createRigStrip } from './rig-strip.js';
 
 const MIC_CONSTRAINTS = {
   echoCancellation: false,
@@ -85,6 +86,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // raw input stays monitorable even when the signal is muted out of the mix.
   let sigGain = null, sigAnalyser = null;
   let _sigLevel = 0, _sigMuted = false, _rigAdopted = false;
+  // Channel strip (HPF/drive/comp/EQ/delay/reverb/pan) inserted between the raw
+  // input and the volume fader. Rebuilt with each capture; looper.js owns the
+  // persisted config and primes it via setStripConfig().
+  let strip = null, _stripConfig = null;
 
   // ── recording state ──
   let recording = false;
@@ -204,14 +209,20 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
     srcNode = ctx.createMediaStreamSource(stream);
 
-    // Rig signal monitor: srcNode → sigGain (volume × mute) → speakers, plus a
-    // post-fader analyser adopted into audio.js as 'rig' so the live signal
+    // Channel strip inserted between the raw input and the volume fader, so the
+    // monitor + the mix carry the PROCESSED signal. Recording + the scope tap
+    // the raw input (srcNode) below, pre-strip.
+    strip = createRigStrip(ctx, _stripConfig);
+    srcNode.connect(strip.input);
+
+    // Rig signal monitor: strip → sigGain (volume × mute) → speakers, plus a
+    // post-fader analyser adopted into audio.js as 'rig' so the processed signal
     // lands in the mix (visuals + recording) and follows volume/mute — muting
     // pulls it from the mix, like a channel strip's send.
     sigGain = ctx.createGain();
     sigGain.gain.value = effSignal();
     sigGain.__qualiaBypassMute = true;        // the rig owns its own mute
-    srcNode.connect(sigGain);
+    strip.output.connect(sigGain);
     sigGain.connect(ctx.destination);
     sigAnalyser = ctx.createAnalyser();
     sigAnalyser.fftSize = 1024;
@@ -226,9 +237,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     sinkGain.connect(ctx.destination);
 
     // A non-audible analyser on the raw capture (PRE-fader) so the rig scope can
-    // show the exact signal being buffered/recorded even when it's muted.
+    // show the exact signal being buffered/recorded even when it's muted, and so
+    // the tuner gets a clean pre-distortion window (2048 ≈ 43ms handles low
+    // strings down to ~50 Hz).
     captureAnalyser = ctx.createAnalyser();
-    captureAnalyser.fftSize = 1024;
+    captureAnalyser.fftSize = 2048;
     captureAnalyser.smoothingTimeConstant = 0.40;
     srcNode.connect(captureAnalyser);
 
@@ -288,6 +301,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { sigGain?.disconnect(); } catch {}
     try { sigAnalyser?.disconnect(); } catch {}
     try { captureAnalyser?.disconnect(); } catch {}
+    try { strip?.dispose(); } catch {}
+    strip = null;
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
     srcNode = recNode = sinkGain = sigGain = sigAnalyser = captureAnalyser = null;
     stream = null; streamOwned = false;
@@ -867,6 +882,20 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     startBuffer, stopBuffer, grabRetro,
     ensureCaptureOpen,
     setSignalLevel, setSignalMuted, getSignal, primeSignal,
+    // Channel strip — persisted config lives in looper.js; updates apply to the
+    // live strip when capture is open and are remembered for the next open.
+    setStripConfig: (cfg) => { _stripConfig = cfg; strip?.setConfig(cfg); },
+    getStripConfig: () => (strip ? strip.getConfig() : _stripConfig),
+    setStripParam: (stage, param, val) => {
+      if (!_stripConfig) _stripConfig = {};
+      _stripConfig[stage] = { ...(_stripConfig[stage] || {}), [param]: val };
+      strip?.setParam(stage, param, val);
+    },
+    setStripEnabled: (stage, on) => {
+      if (!_stripConfig) _stripConfig = {};
+      _stripConfig[stage] = { ...(_stripConfig[stage] || {}), on: !!on };
+      strip?.setEnabled(stage, !!on);
+    },
     isBuffering: () => _bufferOn && !!srcNode,
     isRetroCapable: () => usingWorklet,
     getCaptureAnalyser: () => captureAnalyser,
