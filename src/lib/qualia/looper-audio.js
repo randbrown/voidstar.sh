@@ -89,7 +89,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Channel strip (HPF/drive/comp/EQ/delay/reverb/pan) inserted between the raw
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
   // persisted config and primes it via setStripConfig().
-  let strip = null, _stripConfig = null;
+  let strip = null, _stripConfig = null, _cabBuffer = null;
 
   // ── recording state ──
   let recording = false;
@@ -213,6 +213,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     // monitor + the mix carry the PROCESSED signal. Recording + the scope tap
     // the raw input (srcNode) below, pre-strip.
     strip = createRigStrip(ctx, _stripConfig);
+    if (_cabBuffer) strip.setCabBuffer(_cabBuffer);
     srcNode.connect(strip.input);
 
     // Rig signal monitor: strip → sigGain (volume × mute) → speakers, plus a
@@ -896,6 +897,21 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       _stripConfig[stage] = { ...(_stripConfig[stage] || {}), on: !!on };
       strip?.setEnabled(stage, !!on);
     },
+    // Cab / IR loader: decode raw file bytes with the looper's ctx and apply to
+    // the strip's convolver (kept across capture reopens). bytes are copied so
+    // the caller's ArrayBuffer survives (decodeAudioData detaches its input).
+    setCabIRBytes: async (bytes) => {
+      if (!bytes) return false;
+      await ensureContext();
+      try {
+        const buf = await ctx.decodeAudioData(bytes.slice(0));
+        _cabBuffer = buf;
+        strip?.setCabBuffer(buf);
+        return true;
+      } catch (e) { console.warn('[qualia] cab IR decode failed:', e); return false; }
+    },
+    clearCabIR: () => { _cabBuffer = null; strip?.setCabBuffer(null); },
+    hasCabIR: () => !!_cabBuffer,
     isBuffering: () => _bufferOn && !!srcNode,
     isRetroCapable: () => usingWorklet,
     getCaptureAnalyser: () => captureAnalyser,

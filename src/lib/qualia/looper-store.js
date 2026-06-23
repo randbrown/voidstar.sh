@@ -8,8 +8,9 @@
 //     naturalSeconds, recordedCycles, grid, length, volume, muted, preservePitch }
 
 const DB_NAME = 'voidstar.qualia.looper';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'tracks';
+const MISC = 'misc';      // small keyed blobs (e.g. the cab IR), keyPath 'id'
 
 let _dbPromise = null;
 
@@ -29,6 +30,9 @@ function openDb() {
         const os = db.createObjectStore(STORE, { keyPath: 'id' });
         os.createIndex('order', 'order', { unique: false });
       }
+      if (!db.objectStoreNames.contains(MISC)) {
+        db.createObjectStore(MISC, { keyPath: 'id' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -39,36 +43,36 @@ function openDb() {
 // Resolve to { store, done } for a fresh transaction. The caller must use
 // `store` synchronously (no awaits before the first request) so the
 // transaction doesn't auto-commit.
-async function tx(mode) {
+async function tx(storeName, mode) {
   const db = await openDb();
-  const t = db.transaction(STORE, mode);
+  const t = db.transaction(storeName, mode);
   const done = new Promise((res, rej) => {
     t.oncomplete = () => res();
     t.onabort = t.onerror = () => rej(t.error);
   });
-  return { store: t.objectStore(STORE), done };
+  return { store: t.objectStore(storeName), done };
 }
 
 export async function putTrack(record) {
-  const { store, done } = await tx('readwrite');
+  const { store, done } = await tx(STORE, 'readwrite');
   store.put(record);
   await done;
 }
 
 export async function deleteTrack(id) {
-  const { store, done } = await tx('readwrite');
+  const { store, done } = await tx(STORE, 'readwrite');
   store.delete(id);
   await done;
 }
 
 export async function clearAll() {
-  const { store, done } = await tx('readwrite');
+  const { store, done } = await tx(STORE, 'readwrite');
   store.clear();
   await done;
 }
 
 export async function getAllTracks() {
-  const { store, done } = await tx('readonly');
+  const { store, done } = await tx(STORE, 'readonly');
   const all = await new Promise((res, rej) => {
     const req = store.getAll();
     req.onsuccess = () => res(req.result || []);
@@ -77,4 +81,28 @@ export async function getAllTracks() {
   await done.catch(() => {});
   all.sort((a, b) => (a.order || 0) - (b.order || 0));
   return all;
+}
+
+// ── misc keyed blobs (cab IR, etc.) ──
+export async function putMisc(record) {
+  const { store, done } = await tx(MISC, 'readwrite');
+  store.put(record);
+  await done;
+}
+
+export async function getMisc(id) {
+  const { store, done } = await tx(MISC, 'readonly');
+  const rec = await new Promise((res, rej) => {
+    const req = store.get(id);
+    req.onsuccess = () => res(req.result || null);
+    req.onerror = () => rej(req.error);
+  });
+  await done.catch(() => {});
+  return rec;
+}
+
+export async function deleteMisc(id) {
+  const { store, done } = await tx(MISC, 'readwrite');
+  store.delete(id);
+  await done;
 }

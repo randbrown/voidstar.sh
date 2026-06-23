@@ -1630,7 +1630,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 
     /* Temperament editor — ET / custom toggle + 12 per-note cent spinners. */
     .rig-temper { padding: 0 0.7rem 0.45rem; }
-    .rig-temper-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; }
+    .rig-temper-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.5rem; margin-bottom: 0.3rem; }
+    .rig-cab-load { gap: 0.3rem; }
+    .rig-cab-load .ctrl-btn { padding: 0.05rem 0.4rem; font-size: 0.6rem; }
+    .rig-cab-name { color: var(--muted); font-size: 0.58rem; max-width: 9ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #rig-temper .ctrl-btn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10); }
     .rig-temper-grid { display: flex; flex-wrap: wrap; gap: 0.25rem 0.4rem; }
     .rig-temper-cell { display: flex; align-items: center; gap: 0.2rem; font-size: 0.62rem; }
@@ -2512,7 +2515,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 
   <!-- STRIP subpanel — the rig channel strip (collapsible). -->
   <section id="rig-strip" class="rig-subpanel" style="display:none">
-    <div class="rig-subhead"><span class="sp-subtitle">strip</span></div>
+    <div class="rig-subhead">
+      <span class="sp-subtitle">strip</span>
+      <span class="rig-head-spacer"></span>
+      <button class="ctrl-btn" id="btn-rig-strip-reset" title="Reset all strip effects to off / unity defaults">reset</button>
+    </div>
     <div id="rig-strip-body"></div>
   </section>
 

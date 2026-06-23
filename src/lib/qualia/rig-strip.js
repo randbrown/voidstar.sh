@@ -14,9 +14,10 @@
 
 export const STRIP_DEFAULTS = {
   hpf:    { on: false, freq: 80 },
-  drive:  { on: false, drive: 0.35, tone: 0.6, level: 0.8 },
+  drive:  { on: false, drive: 0.35, tone: 0.6, level: 1.0 },
   comp:   { on: false, threshold: -18, ratio: 3, attack: 0.003, release: 0.25 },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
+  cab:    { on: false, mix: 1, level: 1 },
   delay:  { on: false, time: 0.3, feedback: 0.35, mix: 0.25 },
   reverb: { on: false, decay: 2.0, mix: 0.25 },
   pan:    { pan: 0 },
@@ -77,7 +78,17 @@ export function createRigStrip(ctx, cfg) {
   const eqMid  = ctx.createBiquadFilter(); eqMid.type  = 'peaking';   eqMid.frequency.value  = 1000; eqMid.Q.value = 0.9;
   const eqHigh = ctx.createBiquadFilter(); eqHigh.type = 'highshelf'; eqHigh.frequency.value = 4500;
 
-  // Time-fx split: post-EQ fans to dry + delay send + reverb send, summed pre-pan.
+  // Cab / IR loader — convolution insert after EQ (dry/wet so bypass = dry, and
+  // it's transparent until an IR is loaded). Sits before the time fx so delay /
+  // reverb sit on the cab'd tone.
+  const cabIn  = ctx.createGain();
+  const cabConv = ctx.createConvolver();
+  const cabDry = ctx.createGain();
+  const cabWet = ctx.createGain();
+  const cabSum = ctx.createGain();
+  let cabBuf = null;
+
+  // Time-fx split: post-cab fans to dry + delay send + reverb send, summed pre-pan.
   const fxIn = ctx.createGain();
   const dry  = ctx.createGain();
   const sum  = ctx.createGain();
@@ -109,7 +120,11 @@ export function createRigStrip(ctx, cfg) {
   comp.connect(eqLow);
   eqLow.connect(eqMid);
   eqMid.connect(eqHigh);
-  eqHigh.connect(fxIn);
+
+  eqHigh.connect(cabIn);
+  cabIn.connect(cabDry); cabDry.connect(cabSum);
+  cabIn.connect(cabConv); cabConv.connect(cabWet); cabWet.connect(cabSum);
+  cabSum.connect(fxIn);
 
   fxIn.connect(dry); dry.connect(sum);
 
@@ -200,12 +215,24 @@ export function createRigStrip(ctx, cfg) {
     buildIR(state.reverb.decay);
     reverbWet.gain.value = state.reverb.on ? clamp(state.reverb.mix, 0, 1) : 0;
   }
+  function applyCab() {
+    // Transparent until an IR is loaded; bypass (or no IR) = full dry, no wet.
+    const active = state.cab.on && !!cabBuf;
+    const mix = clamp(state.cab.mix, 0, 1);
+    cabDry.gain.value = active ? (1 - mix) : 1;
+    cabWet.gain.value = active ? mix * clamp(state.cab.level, 0, 2) : 0;
+  }
+  function setCabBuffer(buf) {
+    cabBuf = buf || null;
+    try { cabConv.buffer = cabBuf; } catch {}
+    applyCab();
+  }
   function applyPan() {
     panner.pan.setTargetAtTime(clamp(state.pan.pan, -1, 1), ctx.currentTime, 0.01);
   }
-  function applyAll() { applyHpf(); applyDrive(); applyComp(); applyEq(); applyDelay(); applyReverb(); applyPan(); }
+  function applyAll() { applyHpf(); applyDrive(); applyComp(); applyEq(); applyCab(); applyDelay(); applyReverb(); applyPan(); }
 
-  const APPLY = { hpf: applyHpf, drive: applyDrive, comp: applyComp, eq: applyEq, delay: applyDelay, reverb: applyReverb, pan: applyPan };
+  const APPLY = { hpf: applyHpf, drive: applyDrive, comp: applyComp, eq: applyEq, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
 
   applyAll();
 
@@ -228,12 +255,12 @@ export function createRigStrip(ctx, cfg) {
 
   function dispose() {
     for (const n of [input, hpf, drivePre, shaper, driveTone, drivePost, comp,
-                     eqLow, eqMid, eqHigh, fxIn, dry, sum, delaySend, delayL,
-                     delayR, delayFb, merger, delayWet, reverbSend, convolver,
-                     reverbWet, panner, output]) {
+                     eqLow, eqMid, eqHigh, cabIn, cabConv, cabDry, cabWet, cabSum,
+                     fxIn, dry, sum, delaySend, delayL, delayR, delayFb, merger,
+                     delayWet, reverbSend, convolver, reverbWet, panner, output]) {
       try { n.disconnect(); } catch {}
     }
   }
 
-  return { input, output, setParam, setEnabled, setConfig, getConfig, dispose };
+  return { input, output, setParam, setEnabled, setConfig, getConfig, setCabBuffer, dispose };
 }

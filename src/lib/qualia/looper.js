@@ -47,6 +47,9 @@ const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
 const TUNER_KEY      = `${NS}.tuner`;      // tuner enabled
 const TEMPER_KEY     = `${NS}.temperament`;// 'et' | 'custom'
 const CUSTOMCENTS_KEY = `${NS}.customCents`;// custom temperament: int cents[12]
+const REFPITCH_KEY   = `${NS}.refPitch`;   // tuner reference A (Hz)
+const CABNAME_KEY    = `${NS}.cabName`;     // loaded cab IR filename (display)
+const CAB_IR_ID      = 'cabIR';            // IndexedDB misc key for the IR bytes
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
 // Channel strip UI schema — stages + params (the audio side lives in
@@ -56,6 +59,7 @@ const STRIP_SCHEMA = [
   { id: 'drive',  name: 'drive',  toggle: true,  params: [{ id: 'drive', label: 'amt', min: 0, max: 1, step: 0.01 }, { id: 'tone', label: 'tone', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 }] },
   { id: 'comp',   name: 'comp',   toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
   { id: 'eq',     name: 'eq',     toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
+  { id: 'cab',    name: 'cab',    toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'delay',  name: 'delay',  toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
   { id: 'reverb', name: 'reverb', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
   { id: 'pan',    name: 'pan',    toggle: false, params: [{ id: 'pan', label: 'pan', min: -1, max: 1, step: 0.02, fmt: v => v == 0 ? 'C' : (v < 0 ? `L${Math.round(-v*100)}` : `R${Math.round(v*100)}`) }] },
@@ -77,10 +81,15 @@ function loadCustomCents() {
   return out;
 }
 
-// Strip config = STRIP_DEFAULTS deep-merged with any persisted JSON.
-function loadStripConfig() {
+// A fresh strip config at unity defaults (all effects off).
+function loadDefaultStrip() {
   const base = {};
   for (const k of Object.keys(STRIP_DEFAULTS)) base[k] = { ...STRIP_DEFAULTS[k] };
+  return base;
+}
+// Strip config = unity defaults deep-merged with any persisted JSON.
+function loadStripConfig() {
+  const base = loadDefaultStrip();
   try {
     const raw = localStorage.getItem(STRIP_KEY);
     if (raw) { const o = JSON.parse(raw); for (const k of Object.keys(base)) if (o && o[k]) Object.assign(base[k], o[k]); }
@@ -156,6 +165,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnTuner    = document.getElementById('btn-rig-tuner');
   const stripPanel  = document.getElementById('rig-strip');
   const stripBody   = document.getElementById('rig-strip-body');
+  const btnStripReset = document.getElementById('btn-rig-strip-reset');
   const tunerEl     = document.getElementById('rig-tuner');
   const temperEl    = document.getElementById('rig-temper');
   const btnToggle   = document.getElementById('btn-looper');
@@ -189,6 +199,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     tunerOn: lsGet(TUNER_KEY, '0') === '1',
     temperament: lsGet(TEMPER_KEY, 'et') === 'custom' ? 'custom' : 'et',
     customCents: loadCustomCents(),
+    refPitch: (() => { const v = parseFloat(lsGet(REFPITCH_KEY, '440')); return Number.isFinite(v) ? Math.max(400, Math.min(480, v)) : 440; })(),
+    cabName: lsGet(CABNAME_KEY, '') || '',
     gridDefault: defaultGrid,       // "cycles" each new track starts with
     deviceId: getStoredDeviceId('looperInput') || '',   // remembered input device
     tracks: [],                     // Track[] — see makeTrack()
@@ -707,6 +719,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       strip:       JSON.parse(JSON.stringify(model.strip)),
       temperament: model.temperament,
       customCents: model.customCents.slice(),
+      refPitch:    model.refPitch,
     };
   }
   function setConfig(cfg) {
@@ -742,6 +755,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       persistCustomCents();
       syncTemperCells();
     }
+    if (typeof cfg.refPitch === 'number') setRefPitch(cfg.refPitch);
     // Repaint the props row so the panel mirrors the applied settings
     // (master slider, nudge, sync/start-now checkboxes) whether or not it's
     // currently open; renderProps re-reads model on the next open anyway.
@@ -1066,11 +1080,63 @@ export function createLooper({ audio, syncStrudel } = {}) {
         sl.addEventListener('input', () => { const v = parseFloat(sl.value); val.textContent = fmt(v); stripSet(stage.id, p.id, v); });
         row.append(lab, sl, val); box.append(row);
       }
+      if (stage.loader) box.append(buildCabLoader());
       stripBody.append(box);
     }
     refreshStripStages();
   }
-  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; buildStripUI(); } }
+  // Cab IR loader row — file picker + filename + clear.
+  let cabNameEl = null;
+  function buildCabLoader() {
+    const row = document.createElement('div'); row.className = 'rig-ctl rig-cab-load';
+    const file = document.createElement('input');
+    file.type = 'file'; file.accept = 'audio/*,.wav'; file.style.display = 'none';
+    file.addEventListener('change', () => { const f = file.files && file.files[0]; if (f) loadCabFile(f); file.value = ''; });
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'ctrl-btn'; btn.textContent = 'load IR';
+    btn.title = 'Load a cabinet / reverb impulse response (WAV)';
+    btn.addEventListener('click', () => file.click());
+    cabNameEl = document.createElement('span'); cabNameEl.className = 'rig-cab-name';
+    cabNameEl.textContent = model.cabName || 'no IR';
+    const clr = document.createElement('button');
+    clr.type = 'button'; clr.className = 'ctrl-btn'; clr.textContent = '×'; clr.title = 'Clear IR';
+    clr.addEventListener('click', clearCabIR);
+    row.append(file, btn, cabNameEl, clr);
+    return row;
+  }
+  async function loadCabFile(file) {
+    try {
+      const bytes = await file.arrayBuffer();
+      const ok = await looperAudio.setCabIRBytes(bytes);
+      if (!ok) { setStatus('IR decode failed'); return; }
+      model.cabName = file.name; lsSet(CABNAME_KEY, model.cabName);
+      if (cabNameEl) cabNameEl.textContent = model.cabName;
+      if (loopStore.isAvailable()) loopStore.putMisc({ id: CAB_IR_ID, name: file.name, bytes }).catch(() => {});
+      setStatus(`cab IR: ${file.name}`);
+    } catch (e) { console.warn('[qualia] cab IR load failed:', e); setStatus('IR load failed'); }
+  }
+  function clearCabIR() {
+    looperAudio.clearCabIR();
+    model.cabName = ''; lsSet(CABNAME_KEY, '');
+    if (cabNameEl) cabNameEl.textContent = 'no IR';
+    if (loopStore.isAvailable()) loopStore.deleteMisc(CAB_IR_ID).catch(() => {});
+  }
+  // Restore a persisted cab IR (async; applies to the strip whenever capture opens).
+  async function restoreCabIR() {
+    if (!loopStore.isAvailable()) return;
+    try {
+      const rec = await loopStore.getMisc(CAB_IR_ID);
+      if (rec && rec.bytes) { await looperAudio.setCabIRBytes(rec.bytes); model.cabName = rec.name || model.cabName; if (cabNameEl) cabNameEl.textContent = model.cabName || 'IR'; }
+    } catch (e) { console.warn('[qualia] cab IR restore failed:', e); }
+  }
+  function resetStrip() {
+    model.strip = loadDefaultStrip();
+    looperAudio.setStripConfig(model.strip);
+    lsSet(STRIP_KEY, JSON.stringify(model.strip));
+    rebuildStrip();
+    setStatus('strip reset');
+  }
+  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; cabNameEl = null; buildStripUI(); } }
   function refreshStripBtn() { if (btnStrip) btnStrip.classList.toggle('active', !!model.stripOpen); }
   function toggleStrip(on) {
     model.stripOpen = on == null ? !model.stripOpen : !!on;
@@ -1134,7 +1200,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     an.getFloatTimeDomainData(tunerBuf);
     const f = autoCorrelate(tunerBuf, an.context?.sampleRate || 48000);
     if (f <= 0) { clear(); return; }
-    const midi = 69 + 12 * Math.log2(f / 440);
+    const midi = 69 + 12 * Math.log2(f / model.refPitch);
     const rounded = Math.round(midi);
     const cls = ((rounded % 12) + 12) % 12;
     const rawCents = Math.round((midi - rounded) * 100);   // deviation from ET
@@ -1163,6 +1229,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
     model.customCents[i] = Math.max(-50, Math.min(50, (v | 0)));
     persistCustomCents();
   }
+  function setRefPitch(v) {
+    const f = parseFloat(v);
+    if (!Number.isFinite(f)) return;
+    model.refPitch = Math.round(Math.max(400, Math.min(480, f)) * 10) / 10;
+    lsSet(REFPITCH_KEY, model.refPitch);
+  }
   function refreshTemperUI() {
     if (temperToggleBtn) {
       temperToggleBtn.textContent = model.temperament === 'custom' ? 'custom' : 'ET';
@@ -1180,7 +1252,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     temperToggleBtn = document.createElement('button');
     temperToggleBtn.type = 'button'; temperToggleBtn.className = 'ctrl-btn';
     temperToggleBtn.addEventListener('click', () => setTemperament(model.temperament === 'custom' ? 'et' : 'custom'));
-    head.append(lab, temperToggleBtn);
+    // Reference pitch (A, Hz) — one-decimal spinner.
+    const refIn = numInput(model.refPitch.toFixed(1), 400, 480, 0.1);
+    refIn.addEventListener('change', () => { setRefPitch(parseFloat(refIn.value)); refIn.value = model.refPitch.toFixed(1); });
+    head.append(lab, temperToggleBtn, mk('ref Hz', stepper(refIn, 'change'), 'Reference pitch for A (Hz) — equal-temperament anchor for the tuner.'));
 
     temperGridEl = document.createElement('div'); temperGridEl.className = 'rig-temper-grid';
     for (let i = 0; i < 12; i++) {
@@ -1436,6 +1511,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnRetro)  btnRetro.addEventListener('click', () => { doRetroGrab(); });
   if (bufferBtn) bufferBtn.addEventListener('click', () => { setBuffer(!model.bufferOn); });
   if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
+  if (btnStripReset) btnStripReset.addEventListener('click', () => { resetStrip(); });
   if (btnTuner)  btnTuner.addEventListener('click', () => { toggleTuner(); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
   if (btnStop)   btnStop.addEventListener('click', () => { stop(); });
@@ -1472,6 +1548,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // Restore persisted loops (async). Replaces the seeded empty track if any
   // saved loops are found; otherwise the seeded empty armed track stays.
   restoreFromStore();
+  // Restore a persisted cab IR (async; applied to the strip on next capture open).
+  restoreCabIR();
 
   // perFrame is a no-op: each renderer self-drives its own rAF while
   // recording/playing. Exposed for symmetry with the sequencer's page-init hook.
