@@ -1581,6 +1581,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     #btn-looper-retro { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
     #btn-looper-retro:disabled { opacity: 0.4; cursor: default; }
+    .rig-collapse { padding: 0.02rem 0.35rem; font-size: 0.7rem; line-height: 1; }
     #btn-rig-strip, #btn-rig-tuner { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
     #btn-rig-strip.active, #btn-rig-tuner.active {
       color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10);
@@ -1600,15 +1601,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .rig-stage.on { border-color: var(--cyan); background: rgba(34,211,238,0.06); }
     .rig-stage-head {
-      display: flex; align-items: center; justify-content: space-between;
+      display: flex; align-items: center; justify-content: flex-start;
       gap: 0.3rem; margin-bottom: 0.25rem;
     }
     .rig-stage-name {
       font-size: 0.66rem; letter-spacing: 0.04em; color: var(--muted);
-      background: none; border: none; cursor: pointer; padding: 0.05rem 0.25rem;
-      border-radius: 4px; font-family: inherit;
     }
-    .rig-stage-name.on { color: var(--cyan); }
+    .rig-stage.on .rig-stage-name { color: var(--text); }
+    .rig-stage-toggle {
+      padding: 0.02rem 0.4rem; font-size: 0.56rem; line-height: 1;
+      min-width: 2.6ch; text-align: center; color: var(--muted);
+    }
+    .rig-stage-toggle.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.12); }
+    .rig-stage:not(.on) .rig-ctl { opacity: 0.4; }
     .rig-ctl { display: flex; align-items: center; gap: 0.3rem; font-size: 0.6rem; margin: 0.12rem 0; }
     .rig-ctl-label { color: var(--muted); min-width: 2.4ch; }
     .rig-ctl input[type=range] { flex: 1; min-width: 0; }
@@ -2528,6 +2533,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <!-- LOOP subpanel — the looper, built on the rig signal. -->
   <section id="rig-loop" class="rig-subpanel">
     <div class="rig-subhead" id="rig-loop-bar">
+      <button class="ctrl-btn rig-collapse" id="btn-rig-loop-collapse" title="Collapse / expand the looper tracks">▾</button>
       <span class="sp-subtitle">loop</span>
       <span class="sp-status" id="looper-status">click ● to record</span>
       <span class="rig-head-spacer"></span>

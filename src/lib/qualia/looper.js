@@ -45,6 +45,7 @@ const SIGLEVEL_KEY   = `${NS}.signalLevel`;// rig signal monitor/mix level
 const SIGMUTE_KEY    = `${NS}.signalMuted`;// rig signal mute
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
+const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
 const TUNER_KEY      = `${NS}.tuner`;      // tuner enabled
 const TEMPER_KEY     = `${NS}.temperament`;// 'et' | 'custom'
 const CUSTOMCENTS_KEY = `${NS}.customCents`;// custom temperament: int cents[12]
@@ -187,6 +188,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const stripPanel  = document.getElementById('rig-strip');
   const stripBody   = document.getElementById('rig-strip-body');
   const btnStripReset = document.getElementById('btn-rig-strip-reset');
+  const rigLoopSection = document.getElementById('rig-loop');
+  const looperBody  = document.getElementById('looper-body');
+  const btnLoopCollapse = document.getElementById('btn-rig-loop-collapse');
   const tunerEl     = document.getElementById('rig-tuner');
   const temperEl    = document.getElementById('rig-temper');
   const btnToggle   = document.getElementById('btn-looper');
@@ -217,6 +221,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
     strip: loadStripConfig(),                          // channel strip config
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
+    loopCollapsed: lsGet(LOOPCOLLAPSE_KEY, '0') === '1',
     tunerOn: lsGet(TUNER_KEY, '0') === '1',
     temperament: lsGet(TEMPER_KEY, 'et') === 'custom' ? 'custom' : 'et',
     customCents: loadCustomCents(),
@@ -1073,7 +1078,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
       if (!box) continue;
       const on = !!model.strip[stage.id].on;
       box.classList.toggle('on', on);
-      box.querySelector('.rig-stage-name')?.classList.toggle('on', on);
+      const tg = box.querySelector('.rig-stage-toggle');
+      if (tg) { tg.textContent = on ? 'on' : 'off'; tg.classList.toggle('active', on); }
     }
   }
   function buildStripUI() {
@@ -1082,16 +1088,18 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const box = document.createElement('div');
       box.className = 'rig-stage'; box.dataset.stage = stage.id;
       const head = document.createElement('div'); head.className = 'rig-stage-head';
-      let nameEl;
+      const nameEl = document.createElement('span'); nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
       if (stage.toggle) {
-        nameEl = document.createElement('button');
-        nameEl.type = 'button'; nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
-        nameEl.title = 'Toggle ' + stage.name;
-        nameEl.addEventListener('click', () => stripToggle(stage.id, !model.strip[stage.id].on));
+        const tg = document.createElement('button');
+        tg.type = 'button'; tg.className = 'ctrl-btn rig-stage-toggle';
+        tg.title = `Enable / bypass ${stage.name}`;
+        tg.addEventListener('click', () => stripToggle(stage.id, !model.strip[stage.id].on));
+        head.append(tg, nameEl);
       } else {
-        nameEl = document.createElement('span'); nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
+        box.classList.add('on');   // non-toggle stages (pan) are always active
+        head.append(nameEl);
       }
-      head.append(nameEl); box.append(head);
+      box.append(head);
       if (stage.model) {
         buildDriveControls(box);
       } else {
@@ -1244,6 +1252,36 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (model.stripOpen) buildStripUI();
     if (stripPanel) stripPanel.style.display = model.stripOpen ? '' : 'none';
     refreshStripBtn();
+  }
+
+  // ── collapsible looper ─────────────────────────────────────────────────────
+  // Hide the props + tracks (keeping the transport bar) and shrink the window to
+  // fit, so the rig can run as a live amp/fx rig without the looper taking room.
+  let _loopExpandedH = null;
+  function applyLoopCollapse() {
+    const c = !!model.loopCollapsed;
+    if (looperBody) looperBody.style.display = c ? 'none' : '';
+    if (propsEl) propsEl.style.display = c ? 'none' : '';
+    if (rigLoopSection) rigLoopSection.style.flex = c ? '0 0 auto' : '';
+    if (btnLoopCollapse) { btnLoopCollapse.textContent = c ? '▸' : '▾'; btnLoopCollapse.classList.toggle('collapsed', c); }
+    if (panel) {
+      if (c) {
+        const h = panel.getBoundingClientRect().height;
+        if (h > 0) _loopExpandedH = h;
+        panel.style.height = 'auto';
+        panel.style.minHeight = '0';
+      } else if (panel.style.height === 'auto') {
+        // Only restore when coming back from a collapsed state — leave a
+        // user-resized height untouched otherwise.
+        panel.style.height = _loopExpandedH ? `${_loopExpandedH}px` : '';
+        panel.style.minHeight = '';
+      }
+    }
+  }
+  function toggleLoopCollapse() {
+    model.loopCollapsed = !model.loopCollapsed;
+    lsSet(LOOPCOLLAPSE_KEY, model.loopCollapsed ? '1' : '0');
+    applyLoopCollapse();
   }
 
   // ── chromatic tuner ───────────────────────────────────────────────────────
@@ -1607,6 +1645,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     refreshStripBtn();
     refreshTunerBtn();
+    applyLoopCollapse();
     startScope();
     refreshLooperBtn();
     refreshTransport();
@@ -1629,6 +1668,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (bufferBtn) bufferBtn.addEventListener('click', () => { setBuffer(!model.bufferOn); });
   if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
   if (btnStripReset) btnStripReset.addEventListener('click', () => { resetStrip(); });
+  if (btnLoopCollapse) btnLoopCollapse.addEventListener('click', () => { toggleLoopCollapse(); });
   if (btnTuner)  btnTuner.addEventListener('click', () => { toggleTuner(); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
   if (btnStop)   btnStop.addEventListener('click', () => { stop(); });
