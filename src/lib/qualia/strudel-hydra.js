@@ -598,7 +598,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     const live = audio.hasSource('strudel');
     const open = panel?.style.display !== 'none';
     if (open) btnToggle.classList.add('active');
-    btnToggle.textContent = live ? 'strudel ●' : 'strudel';
+    btnToggle.textContent = isPlayingFlag ? 'strudel ●' : 'strudel';
     if (status) {
       if (live) {
         status.textContent = 'audio: live';
