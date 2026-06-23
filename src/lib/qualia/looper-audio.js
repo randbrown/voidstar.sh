@@ -68,6 +68,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let streamOwned = false;          // false when we borrowed audio.getMicStream()
   let streamDeviceId = '';
   let srcNode = null, recNode = null, sinkGain = null, captureAnalyser = null, tunerAnalyser = null;
+  let inputNode = null, monoSplitter = null;
+  let _channels = 'mono';           // 'mono' (sum to centre) | 'stereo' (pass L/R)
   let usingWorklet = false;
 
   // ── retroactive ring buffer ──
@@ -223,13 +225,31 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
     srcNode = ctx.createMediaStreamSource(stream);
 
-    // Channel strip inserted between the raw input and the volume fader, so the
+    // Input channel handling. Everything downstream (strip, recorder, scope,
+    // tuner) taps `inputNode`:
+    //   mono   → sum L+R to one channel, so a single-input instrument is
+    //            centred and gets full stereo treatment from the strip's pan /
+    //            ping-pong delay / stereo reverb (the panner up-mixes mono to
+    //            both channels). Also records mono.
+    //   stereo → pass both channels straight through.
+    if (_channels === 'stereo') {
+      inputNode = ctx.createGain();
+      srcNode.connect(inputNode);
+    } else {
+      monoSplitter = ctx.createChannelSplitter(2);
+      inputNode = ctx.createGain();   // both split channels summed into one input
+      srcNode.connect(monoSplitter);
+      monoSplitter.connect(inputNode, 0);
+      monoSplitter.connect(inputNode, 1);
+    }
+
+    // Channel strip inserted between the input and the volume fader, so the
     // monitor + the mix carry the PROCESSED signal. Recording + the scope tap
-    // the raw input (srcNode) below, pre-strip.
+    // the input (post channel-mode), pre-strip.
     strip = createRigStrip(ctx, _stripConfig);
     if (_cabBuffer) strip.setCabBuffer(_cabBuffer);
     if (_ampModel) strip.setAmpModel(_ampModel);
-    srcNode.connect(strip.input);
+    inputNode.connect(strip.input);
 
     // Rig signal monitor: strip → sigGain (volume × mute) → speakers, plus a
     // post-fader analyser adopted into audio.js as 'rig' so the processed signal
@@ -259,7 +279,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     captureAnalyser = ctx.createAnalyser();
     captureAnalyser.fftSize = 2048;
     captureAnalyser.smoothingTimeConstant = 0.40;
-    srcNode.connect(captureAnalyser);
+    inputNode.connect(captureAnalyser);
 
     // A long-window analyser dedicated to the tuner — ~171ms at 48k so the
     // autocorrelation has several periods of even very low notes (G0 ≈ 24.5 Hz,
@@ -267,12 +287,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     tunerAnalyser = ctx.createAnalyser();
     tunerAnalyser.fftSize = 8192;
     tunerAnalyser.smoothingTimeConstant = 0;
-    srcNode.connect(tunerAnalyser);
+    inputNode.connect(tunerAnalyser);
 
-    // Native channel count of this input (1 mono / 2 stereo) — drives the
-    // ScriptProcessor fallback; the worklet adopts it automatically via the
-    // default 'max' channelCountMode.
-    const inCh = Math.max(1, Math.min(2, settings.channelCount || 2));
+    // Channel count for the ScriptProcessor fallback: forced to 1 in mono mode,
+    // else the native input count. The worklet adopts it via 'max' channelCount.
+    const inCh = _channels === 'stereo' ? Math.max(1, Math.min(2, settings.channelCount || 2)) : 1;
 
     const ready = await workletReady;
     if (ready) {
@@ -294,7 +313,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         if (!recording) return;
         if (d.chans) onChunks(d.chans);
       };
-      srcNode.connect(recNode);
+      inputNode.connect(recNode);
       recNode.connect(sinkGain);
     } else {
       usingWorklet = false;
@@ -312,7 +331,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         }
         onChunks(chans);
       };
-      srcNode.connect(recNode);
+      inputNode.connect(recNode);
       recNode.connect(sinkGain);
     }
   }
@@ -320,6 +339,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   function teardownCapture() {
     if (_rigAdopted) { try { audio?.releaseAdopted?.('rig'); } catch {} _rigAdopted = false; }
     try { srcNode?.disconnect(); } catch {}
+    try { monoSplitter?.disconnect(); } catch {}
+    try { inputNode?.disconnect(); } catch {}
     if (recNode) { try { recNode.disconnect(); } catch {}; if ('onaudioprocess' in recNode) recNode.onaudioprocess = null; }
     try { sinkGain?.disconnect(); } catch {}
     try { sigGain?.disconnect(); } catch {}
@@ -330,6 +351,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     strip = null;
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
     srcNode = recNode = sinkGain = sigGain = sigAnalyser = captureAnalyser = tunerAnalyser = null;
+    inputNode = monoSplitter = null;
     stream = null; streamOwned = false;
   }
 
@@ -361,6 +383,15 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     if (sigGain) ramp(sigGain.gain, effSignal());
   }
   function getSignal() { return { level: _sigLevel, muted: _sigMuted, live: !!srcNode }; }
+  function getChannels() { return _channels; }
+  // Switch mono/stereo input. Reopens the capture (cheap; loops keep playing) so
+  // the input routing rebuilds — unless mid-record, where it applies next open.
+  async function setChannels(mode) {
+    const next = mode === 'stereo' ? 'stereo' : 'mono';
+    if (next === _channels) return;
+    _channels = next;
+    if (srcNode && !recording) { try { await openCapture(streamDeviceId); } catch (e) { console.warn('[qualia] channel mode switch failed:', e); } }
+  }
 
   // Dedupe concurrent opens — a fader drag from 0 can call this many times
   // before the first getUserMedia resolves (srcNode is still null), which would
@@ -907,6 +938,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     startBuffer, stopBuffer, grabRetro,
     ensureCaptureOpen,
     setSignalLevel, setSignalMuted, getSignal, primeSignal,
+    setChannels, getChannels,
     // Channel strip — persisted config lives in looper.js; updates apply to the
     // live strip when capture is open and are remembered for the next open.
     setStripConfig: (cfg) => { _stripConfig = cfg; strip?.setConfig(cfg); },

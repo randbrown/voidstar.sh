@@ -43,6 +43,7 @@ const RETRO_KEY      = `${NS}.retroCycles`;// cycles the retro "grab" captures
 const BUFFER_KEY     = `${NS}.buffer`;     // keep the live lookback buffer filling
 const SIGLEVEL_KEY   = `${NS}.signalLevel`;// rig signal monitor/mix level
 const SIGMUTE_KEY    = `${NS}.signalMuted`;// rig signal mute
+const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo'
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
 const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
@@ -182,6 +183,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const inputSelect = document.getElementById('looper-input');
   const signalCtrls = document.getElementById('rig-input-controls');
   const signalStat  = document.getElementById('rig-signal-status');
+  const btnChannels = document.getElementById('btn-rig-channels');
   const scopeCanvas = document.getElementById('rig-scope');
   const btnStrip    = document.getElementById('btn-rig-strip');
   const btnTuner    = document.getElementById('btn-rig-tuner');
@@ -219,6 +221,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     bufferOn: lsGet(BUFFER_KEY, '0') === '1',          // live lookback running
     signalLevel: num01(lsGet(SIGLEVEL_KEY, '0'), 0),   // rig signal monitor/mix level
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
+    channels: lsGet(CHANNELS_KEY, 'mono') === 'stereo' ? 'stereo' : 'mono',
     strip: loadStripConfig(),                          // channel strip config
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
     loopCollapsed: lsGet(LOOPCOLLAPSE_KEY, '0') === '1',
@@ -242,6 +245,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   looperAudio.setMaster(model.master);
   looperAudio.setOffsetMs(model.offsetMs);
   looperAudio.primeSignal(model.signalLevel, model.signalMuted);   // value-only; capture opens on a gesture
+  looperAudio.setChannels(model.channels);                         // value-only until capture opens
   looperAudio.setStripConfig(model.strip);                         // applied when capture opens
 
   // Per-track renderers + DOM handles, keyed by track id.
@@ -712,6 +716,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setSignalMuted(model.signalMuted);
     refreshInputMuteBtn();
   }
+  function refreshChannelsBtn() {
+    if (!btnChannels) return;
+    btnChannels.textContent = model.channels;
+    btnChannels.classList.toggle('active', model.channels === 'stereo');
+  }
+  function setChannels(mode) {
+    model.channels = mode === 'stereo' ? 'stereo' : 'mono';
+    lsSet(CHANNELS_KEY, model.channels);
+    looperAudio.setChannels(model.channels);   // reopens capture if live
+    refreshChannelsBtn();
+  }
   // Nudge (ms): slides every loop window live to compensate record latency.
   function setOffsetMs(v) {
     model.offsetMs = Math.max(-200, Math.min(500, Math.round(Number(v) || 0)));
@@ -747,6 +762,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       temperament: model.temperament,
       customCents: model.customCents.slice(),
       refPitch:    model.refPitch,
+      channels:    model.channels,
     };
   }
   function setConfig(cfg) {
@@ -783,6 +799,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       syncTemperCells();
     }
     if (typeof cfg.refPitch === 'number') setRefPitch(cfg.refPitch);
+    if (cfg.channels === 'mono' || cfg.channels === 'stereo') setChannels(cfg.channels);
     // Repaint the props row so the panel mirrors the applied settings
     // (master slider, nudge, sync/start-now checkboxes) whether or not it's
     // currently open; renderProps re-reads model on the next open anyway.
@@ -1634,6 +1651,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     if (model.bufferOn && !looperAudio.isBuffering()) setBuffer(true);
     refreshBufferBtn();
+    refreshChannelsBtn();
     // Restore the strip / tuner subpanels if they were left open.
     if (model.stripOpen) { buildStripUI(); if (stripPanel) stripPanel.style.display = ''; }
     if (model.tunerOn) {
@@ -1666,6 +1684,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnRecord) btnRecord.addEventListener('click', () => { recording ? stopRecording() : startRecording(); });
   if (btnRetro)  btnRetro.addEventListener('click', () => { doRetroGrab(); });
   if (bufferBtn) bufferBtn.addEventListener('click', () => { setBuffer(!model.bufferOn); });
+  if (btnChannels) btnChannels.addEventListener('click', () => { setChannels(model.channels === 'stereo' ? 'mono' : 'stereo'); });
   if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
   if (btnStripReset) btnStripReset.addEventListener('click', () => { resetStrip(); });
   if (btnLoopCollapse) btnLoopCollapse.addEventListener('click', () => { toggleLoopCollapse(); });
@@ -1694,6 +1713,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (tracksEl) renderTracks();
   refreshMuteBtn();
   refreshBufferBtn();
+  refreshChannelsBtn();
   refreshStripBtn();
   refreshTunerBtn();
   refreshTransport();

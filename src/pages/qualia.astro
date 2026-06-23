@@ -1574,6 +1574,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       background: rgba(0,0,0,0.34);
       border-top: 1px solid rgba(255,255,255,0.04);
     }
+    #btn-rig-channels { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; min-width: 4ch; }
     #btn-rig-buffer { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
     #btn-rig-buffer.active {
       color: var(--cyan); border-color: var(--cyan);
@@ -2510,6 +2511,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span class="sp-subtitle">signal</span>
       <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
       <span id="rig-input-controls" class="rig-input-controls"></span>
+      <button class="ctrl-btn" id="btn-rig-channels" title="Input: mono (sum to centre, then full stereo treatment) or stereo (pass L/R)">mono</button>
       <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
       <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — HPF, drive, comp, EQ, delay, reverb, pan on the rig signal">strip</button>
       <button class="ctrl-btn" id="btn-rig-tuner" title="Chromatic tuner — reads the raw rig input (pre-distortion)">tune</button>
