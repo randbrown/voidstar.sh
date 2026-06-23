@@ -45,6 +45,7 @@ import { getStoredDeviceId, wirePicker } from './devices.js';
 import { autoCorrelate } from './pitch.js';
 import { createVoiceShifter } from './voice-shifter.js';
 import { VOX_PRESETS } from './vox-presets.js';
+import { savePanelPos, restorePanelPos } from './panel-pos.js';
 
 const NS              = 'voidstar.qualia.vocoder';
 const PANEL_OPEN_KEY  = `${NS}.panelOpen`;
@@ -373,15 +374,8 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (!btnToggle) return;
     btnToggle.classList.remove('active', 'active-audio');
     const open = panel?.style.display !== 'none';
-    if (active) {
-      btnToggle.classList.add('active-audio');
-      btnToggle.textContent = 'vox ●';
-    } else if (open) {
-      btnToggle.classList.add('active');
-      btnToggle.textContent = 'vox on';
-    } else {
-      btnToggle.textContent = 'vox';
-    }
+    if (open) btnToggle.classList.add('active');
+    btnToggle.textContent = active ? 'vox ●' : 'vox';
     if (status) {
       if (active)    status.textContent = muted ? 'live · muted' : 'live';
       else if (open) status.textContent = 'click ▶ to start';
@@ -1393,7 +1387,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   })();
 
   // ── Drag / reposition (mirror sequencer & strudel panels) ──────────────
-  let movedByUser = false;
+  let movedByUser = restorePanelPos('vocoder', panel);
   function reposition() {
     if (!panel || panel.style.display === 'none') return;
     const tb = document.getElementById('topbar');
@@ -1444,12 +1438,23 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
       if (!dragging) return;
       dragging = false;
       header.classList.remove('dragging');
+      savePanelPos('vocoder', panel);
       try { header.releasePointerCapture(pointerId); } catch {}
       pointerId = null;
     };
     header.addEventListener('pointerup', end);
     header.addEventListener('pointercancel', end);
   })();
+
+  // ResizeObserver — persist position when the user resizes via CSS resize: both.
+  if (panel && typeof ResizeObserver !== 'undefined') {
+    let _rDebounce = 0;
+    new ResizeObserver(() => {
+      if (!movedByUser && !panel.style.width) return;
+      clearTimeout(_rDebounce);
+      _rDebounce = setTimeout(() => savePanelPos('vocoder', panel), 300);
+    }).observe(panel);
+  }
 
   // ── Open / close ───────────────────────────────────────────────────────
   function open() {

@@ -407,8 +407,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .ctrl-btn:hover  { border-color: var(--accent); color: var(--accent); }
     .ctrl-btn:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
-    .ctrl-btn.active { border-color: var(--cyan);   color: var(--cyan);   }
-    .ctrl-btn.active-audio { border-color: var(--pink); color: var(--pink); }
+    .ctrl-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.08); }
+    .ctrl-btn.active-audio { border-color: var(--pink); color: var(--pink); background: rgba(255,122,230,0.08); }
     select.ctrl-btn {
       max-width: 200px; appearance: none;
       padding-right: 1.2rem;
@@ -1583,8 +1583,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-looper-retro { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
     #btn-looper-retro:disabled { opacity: 0.4; cursor: default; }
     .rig-collapse { padding: 0.02rem 0.35rem; font-size: 0.7rem; line-height: 1; }
-    #btn-rig-strip, #btn-rig-tuner { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
-    #btn-rig-strip.active, #btn-rig-tuner.active {
+    #btn-rig-strip, #btn-rig-tuner, #btn-rig-loop { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
+    #btn-rig-strip.active, #btn-rig-tuner.active, #btn-rig-loop.active {
       color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10);
     }
 
@@ -1622,6 +1622,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-drive-model { flex: 1; min-width: 0; font-size: 0.62rem; background: rgba(0,0,0,0.3); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.05rem 0.2rem; }
     .rig-drive-params { display: contents; }
 
+    /* Collapsed stage — hide controls, shrink box. */
+    .rig-stage.collapsed .rig-ctl,
+    .rig-stage.collapsed .rig-drive-model,
+    .rig-stage.collapsed .rig-drive-params,
+    .rig-stage.collapsed .rig-cab-load { display: none; }
+    .rig-stage.collapsed { min-width: 70px; flex: 0 0 auto; }
+    .rig-stage-chev {
+      padding: 0; font-size: 0.55rem; line-height: 1;
+      min-width: 1.2ch; color: var(--muted); background: none; border: none; cursor: pointer;
+    }
+    .rig-stage-head { cursor: pointer; }
+
     /* Tuner readout — note + cents bar. */
     .rig-tuner {
       display: flex; align-items: center; gap: 0.6rem;
@@ -1635,6 +1647,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-tuner-bar::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,0.25); }
     .rig-tuner-needle { position: absolute; top: -1px; bottom: -1px; width: 3px; border-radius: 2px; background: var(--cyan); transition: left 0.06s linear; }
     .rig-tuner-cents { min-width: 5ch; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .rig-tuner-mute { padding: 0.05rem 0.4rem; font-size: 0.56rem; line-height: 1; margin-left: 0.3rem; }
+    .rig-tuner-mute.active { color: var(--pink); border-color: var(--pink); background: rgba(255,122,230,0.10); }
 
     /* Temperament editor — ET / custom toggle + 12 per-note cent spinners. */
     .rig-temper { padding: 0 0.7rem 0.45rem; }
@@ -2501,6 +2515,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="looper-header">
     <span class="sp-title">rig</span>
     <span class="sp-tag">// live station</span>
+    <button class="ctrl-btn panel-mute-btn" id="btn-rig-master-mute" title="Mute all rig output (signal + loops)">live</button>
+    <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="1" step="0.01" value="1" title="Rig master output level" />
     <span class="rig-head-spacer"></span>
     <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
   </div>
@@ -2515,6 +2531,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
       <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — HPF, drive, comp, EQ, delay, reverb, pan on the rig signal">strip</button>
       <button class="ctrl-btn" id="btn-rig-tuner" title="Chromatic tuner — reads the raw rig input (pre-distortion)">tune</button>
+      <button class="ctrl-btn" id="btn-rig-loop" title="Looper — record, layer, and loop your signal">loop</button>
       <span class="sp-status" id="rig-signal-status"></span>
     </div>
     <canvas id="rig-scope" class="rig-scope" title="Live input scope (pre-fader)"></canvas>

@@ -90,6 +90,13 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // raw input stays monitorable even when the signal is muted out of the mix.
   let sigGain = null, sigAnalyser = null;
   let _sigLevel = 0, _sigMuted = false, _rigAdopted = false;
+
+  // ── rig master output ──
+  // Both the signal path (sigGain) and the loop bus (loopMaster) route through
+  // rigMaster before hitting ctx.destination, giving a single mute + level
+  // control over all rig output.
+  let rigMaster = null;
+  let _rigMuted = false, _rigLevel = 1.0;
   // Channel strip (HPF/drive/comp/EQ/delay/reverb/pan) inserted between the raw
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
   // persisted config and primes it via setStripConfig().
@@ -259,7 +266,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     sigGain.gain.value = effSignal();
     sigGain.__qualiaBypassMute = true;        // the rig owns its own mute
     strip.output.connect(sigGain);
-    sigGain.connect(ctx.destination);
+    ensureRigMaster();
+    sigGain.connect(rigMaster);
     sigAnalyser = ctx.createAnalyser();
     sigAnalyser.fftSize = 1024;
     sigAnalyser.smoothingTimeConstant = 0.40;
@@ -354,6 +362,20 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     inputNode = monoSplitter = null;
     stream = null; streamOwned = false;
   }
+
+  // ── rig master output ──────────────────────────────────────────────────────
+  function ensureRigMaster() {
+    if (rigMaster || !ctx) return;
+    rigMaster = ctx.createGain();
+    rigMaster.gain.value = effRig();
+    rigMaster.__qualiaBypassMute = true;
+    rigMaster.connect(ctx.destination);
+  }
+  function effRig() { return _rigMuted ? 0 : _rigLevel; }
+  function setRigMuted(on) { _rigMuted = !!on; if (rigMaster) ramp(rigMaster.gain, effRig()); }
+  function setRigLevel(v) { _rigLevel = clamp01(v); if (rigMaster && !_rigMuted) ramp(rigMaster.gain, _rigLevel); }
+  function primeRig(level, muted) { _rigLevel = clamp01(level); _rigMuted = !!muted; if (rigMaster) ramp(rigMaster.gain, effRig()); }
+  function getRigMaster() { return { level: _rigLevel, muted: _rigMuted }; }
 
   // ── rig signal level / mute (channel-strip volume + mute) ──────────────────
   function effSignal() { return _sigMuted ? 0 : _sigLevel; }
@@ -636,7 +658,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.40;
-    loopMaster.connect(ctx.destination);
+    ensureRigMaster();
+    loopMaster.connect(rigMaster);
     loopMaster.connect(analyser);
   }
 
@@ -919,6 +942,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
     try { loopMaster?.disconnect(); } catch {}
     try { analyser?.disconnect(); } catch {}
+    try { rigMaster?.disconnect(); } catch {}
+    rigMaster = null;
     loopMaster = analyser = null;
     try { ctx?.close(); } catch {}
     ctx = null; workletReady = null;
@@ -937,6 +962,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     startRecording, stopRecording,
     startBuffer, stopBuffer, grabRetro,
     ensureCaptureOpen,
+    setRigMuted, setRigLevel, primeRig, getRigMaster,
     setSignalLevel, setSignalMuted, getSignal, primeSignal,
     setChannels, getChannels,
     // Channel strip — persisted config lives in looper.js; updates apply to the
