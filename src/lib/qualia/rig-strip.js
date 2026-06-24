@@ -27,6 +27,19 @@ export const STRIP_DEFAULTS = {
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v) || 0));
 
+// ── Earth/Metal output trims ──────────────────────────────────────────────
+// Both drives run hot: heavy pre-gain pushes a unity-peak-normalised waveshaper,
+// so saturation inflates loudness while `level` adds no compensating makeup.
+// Measured AC-RMS gain at noon (drive 0.5, level 0.5, ref -12 dBFS sine) vs the
+// dry/bypass path: Earth ~+18.7 dB, Metal ~+9.0 dB. (Earth's asymmetric JFET
+// curve also injects a large DC offset, excluded here as inaudible.) These
+// post-shaper trims pull noon back to ~unity — so the modelled drives match the
+// reference hardware (a Sarno Earth sits at unity at noon) instead of jumping in
+// level when engaged; the `level` knob then rides ~unity..+6 dB. Tune by ear if a
+// given rig's input level differs.
+const EARTH_OUT_TRIM = 0.12;   // -18.4 dB
+const METAL_OUT_TRIM = 0.35;   // -9.1 dB
+
 // Identity shaper curve (pass-through) — used when drive is off.
 const IDENTITY_CURVE = (() => {
   const n = 2048, c = new Float32Array(n);
@@ -262,7 +275,7 @@ export function createRigStrip(ctx, cfg) {
     earthPre.gain.value = 1 + drive * 8;
     earthShaper.curve = makeEarthCurve(drive);
     earthTone.frequency.value = 1200 * Math.pow(2, tone * 3.2);   // ~1.2k..11k
-    earthPost.gain.value = level;
+    earthPost.gain.value = level * EARTH_OUT_TRIM;   // makeup, calibrated to ~unity at noon
   }
   function applyMetal() {
     const d = state.metal;
@@ -283,7 +296,7 @@ export function createRigStrip(ctx, cfg) {
     mMid.frequency.value = clamp(d.midFreq, 200, 5000);
     mMid.gain.value  = clamp(d.mid, -15, 15);
     mHigh.gain.value = clamp(d.high, -15, 15);
-    metalPost.gain.value = level;
+    metalPost.gain.value = level * METAL_OUT_TRIM;   // makeup, calibrated to ~unity at noon
   }
   function applyComp() {
     const t = ctx.currentTime;
