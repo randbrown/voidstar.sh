@@ -3035,6 +3035,38 @@ export function initQualiaPage() {
     }
   });
 
+  // ── Controls / macropad reference modal ──────────────────────────────────
+  // The full key + knob map, including the rig/looper performance keys and the
+  // knob CCs that aren't in the always-on #hints strip. Opened with ? or by
+  // clicking the hints strip; same backdrop / × / Esc dismissal as the cycle
+  // manager.
+  const controlsPanel    = document.getElementById('controls-panel');
+  const controlsBackdrop = document.getElementById('controls-backdrop');
+  const controlsClose    = document.getElementById('controls-close');
+  const hintsStrip       = document.getElementById('hints');
+  function openControls() {
+    closeCycleMgr();             // don't stack centred modals
+    closeAllGroupsExcept(null);  // collapse the topbar auto popover behind it
+    controlsPanel?.classList.add('visible');
+    controlsBackdrop?.classList.add('visible');
+  }
+  function closeControls() {
+    controlsPanel?.classList.remove('visible');
+    controlsBackdrop?.classList.remove('visible');
+  }
+  function toggleControls() {
+    if (controlsPanel?.classList.contains('visible')) closeControls();
+    else openControls();
+  }
+  controlsClose?.addEventListener('click', closeControls);
+  controlsBackdrop?.addEventListener('click', closeControls);
+  hintsStrip?.addEventListener('click', openControls);
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && controlsPanel?.classList.contains('visible')) {
+      closeControls();
+    }
+  });
+
 
   // Render initial labels (active class will catch up below if periods > 0).
   refreshPhaseBtn();
@@ -4157,6 +4189,14 @@ export function initQualiaPage() {
       case '=': looper.nudgeStripParam?.('reverb', 'mix', +0.05); break;
       case ',': looper.nudgeSignalLevel?.(-0.05); break;
       case '.': looper.nudgeSignalLevel?.(+0.05); break;
+
+      // Controls / knob-map cheat sheet (macro-pad reference). ? is shift+/,
+      // so accept bare / too for macro-pads that send the unshifted key.
+      case '?':
+      case '/':
+        toggleControls();
+        e.preventDefault();
+        break;
     }
   });
 

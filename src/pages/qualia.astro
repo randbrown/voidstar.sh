@@ -833,7 +833,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 10;
       font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted);
       display: flex; flex-direction: column; gap: 0.25rem; opacity: 0.5;
+      cursor: pointer; transition: opacity 0.15s ease;
     }
+    #hints:hover { opacity: 0.85; }
     kbd {
       display: inline-block; background: rgba(45,45,80,0.8);
       border-radius: 3px; padding: 0 4px; color: var(--text);
@@ -909,6 +911,71 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .cycle-mgr-row .cycle-mgr-name { color: var(--text); }
     .cycle-mgr-row.active .cycle-mgr-name { color: var(--cyan); font-weight: 500; }
+
+    /* Controls / macropad reference modal — shares the cycle-manager shell. */
+    #controls-backdrop {
+      position: fixed; inset: 0; z-index: 30;
+      display: none;
+      background: rgba(5, 5, 13, 0.55);
+      backdrop-filter: blur(2px);
+    }
+    #controls-backdrop.visible { display: block; }
+    #controls-panel {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 31;
+      display: none;
+      flex-direction: column; gap: 0.5rem;
+      width: min(92vw, 420px);
+      max-height: min(84dvh, 620px);
+      padding: 0.75rem 0.85rem 0.85rem;
+      background: var(--surface-glass); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+      font-family: var(--font-mono); font-size: 0.72rem; color: var(--text);
+    }
+    #controls-panel.visible { display: flex; }
+    #controls-head { display: flex; align-items: center; gap: 0.6rem; color: var(--muted); }
+    #controls-head .controls-spacer { flex: 1; }
+    .controls-title { color: var(--text); letter-spacing: 0.05em; }
+    #controls-body {
+      display: flex; flex-direction: column; gap: 0.25rem;
+      overflow-y: auto;
+      padding: 0.1rem 0.2rem 0.1rem 0;
+    }
+    .ctrls-sec {
+      color: var(--cyan); font-size: 0.62rem; letter-spacing: 0.09em;
+      text-transform: uppercase;
+      margin-top: 0.55rem; padding-bottom: 0.12rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .ctrls-sec:first-child { margin-top: 0; }
+    .ctrls-tag {
+      color: var(--muted); text-transform: none; letter-spacing: 0.02em;
+      font-size: 0.6rem;
+    }
+    .ctrls-grid { display: flex; flex-direction: column; gap: 0.26rem; padding-top: 0.2rem; }
+    .ctrl-row { display: flex; align-items: baseline; gap: 0.6rem; }
+    .ctrl-keys { display: inline-flex; gap: 0.18rem; flex: 0 0 auto; }
+    .ctrl-row .ctrl-keys { min-width: 4.2rem; }
+    .ctrl-lbl { color: var(--muted); }
+    .ctrls-grid.knobs {
+      display: grid; grid-template-columns: max-content 1fr max-content;
+      gap: 0.3rem 0.7rem; align-items: baseline;
+    }
+    .ctrl-cc {
+      color: var(--text); background: rgba(45,45,80,0.55);
+      border: 1px solid var(--border); border-radius: 3px;
+      padding: 0 5px; font-size: 0.66rem; justify-self: end;
+    }
+    .ctrls-note {
+      color: var(--muted); font-size: 0.64rem; line-height: 1.45;
+      padding: 0.5rem 0.1rem 0;
+      border-top: 1px solid var(--border);
+      margin-top: 0.35rem;
+    }
+    @media (max-width: 520px) {
+      .ctrl-row .ctrl-keys { min-width: 3.2rem; }
+    }
 
     /* Strudel panel — same layout as cymatics so the embed feels familiar. */
     #strudel-panel {
@@ -2058,7 +2125,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <button class="start-btn alt" id="start-silent-btn">start without mic</button>
 </div>
 
-<div id="hints">
+<div id="hints" title="Full key + knob map — click or press ?">
   <span><kbd>V</kbd> next fx</span>
   <span><kbd>L</kbd> phase</span>
   <span><kbd>N</kbd> cycle</span>
@@ -2078,6 +2145,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <span><kbd>Space</kbd> pause</span>
   <span><kbd>Z</kbd> zen</span>
   <span><kbd>X</kbd> fullscreen</span>
+  <span><kbd>?</kbd> all keys + knobs</span>
 </div>
 
 <!-- Bottom-left HUD: audio panel + dynamically-built fx params card. -->
@@ -2448,6 +2516,62 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   </div>
   <div id="cycle-mgr-sub" style="display:none"></div>
   <div id="cycle-mgr-list"></div>
+</div>
+
+<!-- Controls / macropad reference — the full key + knob map (DOIO & generic
+     macro-pad friendly). The rig/looper performance keys and knob CCs are
+     otherwise undocumented in-app; this modal is their home. Same shell as the
+     cycle manager: backdrop-click / × / Esc all close it. Opened with ? or by
+     clicking the #hints strip. -->
+<div id="controls-backdrop"></div>
+<div id="controls-panel" role="dialog" aria-modal="true" aria-labelledby="controls-title">
+  <div id="controls-head">
+    <span id="controls-title" class="controls-title">controls</span>
+    <span class="controls-spacer"></span>
+    <button class="ctrl-btn" id="controls-close" title="Close (Esc)">×</button>
+  </div>
+  <div id="controls-body">
+    <div class="ctrls-sec">visuals</div>
+    <div class="ctrls-grid">
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>V</kbd></span><span class="ctrl-lbl">next fx</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>L</kbd><kbd>N</kbd></span><span class="ctrl-lbl">phase / cycle period</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>T</kbd><kbd>K</kbd><kbd>E</kbd></span><span class="ctrl-lbl">ascii / mosh / edge</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>B</kbd></span><span class="ctrl-lbl">ripples</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>J</kbd><kbd>F</kbd><kbd>G</kbd></span><span class="ctrl-lbl">skeleton / sparks / aura</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>P</kbd></span><span class="ctrl-lbl">pose source</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>C</kbd><kbd>R</kbd><kbd>M</kbd></span><span class="ctrl-lbl">cam size / rotate / mirror</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧</kbd><kbd>R</kbd></span><span class="ctrl-lbl">screen record</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>A</kbd></span><span class="ctrl-lbl">audio on/off</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>S</kbd><kbd>Q</kbd><kbd>W</kbd><kbd>O</kbd></span><span class="ctrl-lbl">strudel / seq / vocoder / looper</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>Z</kbd><kbd>X</kbd></span><span class="ctrl-lbl">zen / fullscreen</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>Space</kbd></span><span class="ctrl-lbl">pause</span></div>
+    </div>
+
+    <div class="ctrls-sec">rig · looper <span class="ctrls-tag">macro-pad keys</span></div>
+    <div class="ctrls-grid">
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>1</kbd></span><span class="ctrl-lbl">earth drive on/off</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>2</kbd></span><span class="ctrl-lbl">metal zone on/off</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>3</kbd></span><span class="ctrl-lbl">looper record start/stop</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>0</kbd></span><span class="ctrl-lbl">tuner</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>[</kbd><kbd>]</kbd></span><span class="ctrl-lbl">delay mix −/+</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>-</kbd><kbd>=</kbd></span><span class="ctrl-lbl">reverb mix −/+</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>,</kbd><kbd>.</kbd></span><span class="ctrl-lbl">rig level −/+</span></div>
+    </div>
+
+    <div class="ctrls-sec">knobs <span class="ctrls-tag">encoder ↔ MIDI CC</span></div>
+    <div class="ctrls-grid knobs">
+      <div class="ctrl-keys"><kbd>[</kbd><kbd>]</kbd></div><div class="ctrl-lbl">delay mix</div><div class="ctrl-cc">CC1</div>
+      <div class="ctrl-keys"><kbd>-</kbd><kbd>=</kbd></div><div class="ctrl-lbl">reverb mix</div><div class="ctrl-cc">CC2</div>
+      <div class="ctrl-keys"><kbd>,</kbd><kbd>.</kbd></div><div class="ctrl-lbl">rig level</div><div class="ctrl-cc">CC7</div>
+    </div>
+
+    <div class="ctrls-note">
+      Encoders: map turn ←/→ to the key pairs (stepped ±0.05). MIDI knobs give
+      absolute 0–1 on <b>CC1 / CC2 / CC7</b> (any channel) and need a
+      Chromium-based browser (Chrome / Edge). Keys pause while you're typing in
+      an editor panel — click the canvas to re-arm.
+    </div>
+  </div>
 </div>
 
 <div id="strudel-panel" style="display:none">
