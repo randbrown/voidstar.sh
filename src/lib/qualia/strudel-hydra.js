@@ -193,6 +193,18 @@ function saveLineNumbers(on) {
   try { localStorage.setItem(LINES_KEY, on ? '1' : '0'); } catch {}
 }
 
+// Editor font size (px) — driven by the header slider, double-click resets.
+// Persisted so projector/large-display sizing survives reloads.
+const FONT_KEY = 'voidstar.qualia.strudel.fontSize';
+const FONT_DEFAULT = 14, FONT_MIN = 11, FONT_MAX = 64;
+function loadFontSize() {
+  try {
+    const v = parseFloat(localStorage.getItem(FONT_KEY));
+    return Number.isFinite(v) ? Math.max(FONT_MIN, Math.min(FONT_MAX, v)) : FONT_DEFAULT;
+  } catch { return FONT_DEFAULT; }
+}
+function saveFontSize(px) { try { localStorage.setItem(FONT_KEY, String(px)); } catch {} }
+
 const BLUR_KEY = 'voidstar.qualia.strudel.blur';
 function loadBlur() {
   try { return localStorage.getItem(BLUR_KEY) === '1'; } catch { return false; }
@@ -232,6 +244,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const btnStop    = document.getElementById('btn-strudel-stop');
   const btnMute    = document.getElementById('btn-strudel-mute');
   const elGain     = document.getElementById('strudel-gain');
+  const elFont     = document.getElementById('strudel-font-size');
   const btnNewline = document.getElementById('btn-strudel-newline');
   const btnLines   = document.getElementById('btn-strudel-lines');
   const btnAuto    = document.getElementById('btn-strudel-autocomplete');
@@ -297,6 +310,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       // Toggle editor line numbers (mirrors the "#" button in the tab bar).
       setStrudelLineNumbers: (on) => setLineNumbers(on),
       getStrudelLineNumbers: () => getLineNumbers(),
+      // Editor font size (mirrors the header slider; double-click it to reset).
+      setStrudelFontSize: (px) => setFontSize(px),
+      getStrudelFontSize: () => getFontSize(),
     };
   }
 
@@ -468,6 +484,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   let _editorPerfMode = false;
   let _lineNumbers = loadLineNumbers();   // opt-in; default off (CDN default)
   let _autocomplete = loadAutocomplete(); // built-in intellisense; default on
+  let _fontSize    = loadFontSize();      // editor font px; slider + dblclick-reset
   function applyEditorSettings() {
     const ed = getEditor();
     if (!ed || typeof ed.updateSettings !== 'function') return false;
@@ -521,6 +538,21 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     refreshLinesBtn();
     btnLines.addEventListener('click', () => setLineNumbers(!_lineNumbers));
   }
+
+  // Editor font size — a CSS var on :root drives the #strudel-mount font-size
+  // rule (CM6 line-height is em-relative, so the gutter scales with it).
+  function applyFontSize() {
+    try { document.documentElement.style.setProperty('--strudel-font-size', _fontSize + 'px'); } catch {}
+  }
+  function setFontSize(px) {
+    const n = Math.round(Number(px));
+    _fontSize = Number.isFinite(n) ? Math.max(FONT_MIN, Math.min(FONT_MAX, n)) : FONT_DEFAULT;
+    saveFontSize(_fontSize);
+    applyFontSize();
+    return _fontSize;
+  }
+  function getFontSize() { return _fontSize; }
+  applyFontSize();   // apply the persisted size on init
 
   // Built-in autocomplete + hover docs toggle — same settings call, same
   // persistence pattern as line numbers. The ⌨ button in the tab bar drives
@@ -1083,6 +1115,12 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     elGain.value = String(_strudelVolume);
     elGain.addEventListener('input', () => setVolume(elGain.value));
   }
+  if (elFont) {
+    elFont.value = String(_fontSize);
+    elFont.addEventListener('input', () => { elFont.value = String(setFontSize(elFont.value)); });
+    // double-click resets to the default size
+    elFont.addEventListener('dblclick', () => { elFont.value = String(setFontSize(FONT_DEFAULT)); });
+  }
   // Initial paint — same reason as the seq panel: the static "live"
   // markup is correct for unmuted, but a programmatic preset would
   // otherwise leave the chrome stale.
@@ -1554,6 +1592,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     getEditorPerf,
     setLineNumbers,
     getLineNumbers,
+    /** Editor font size (px) — header slider; double-click resets. */
+    setFontSize,
+    getFontSize,
     /** Built-in Strudel intellisense (autocomplete + hover docs) toggle. */
     setAutocomplete,
     getAutocomplete,

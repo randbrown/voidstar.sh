@@ -3595,6 +3595,17 @@ export function initQualiaPage() {
   }
   const funcByName = new Map(STRUDEL_FUNCTIONS.map(f => [f.name, f]));
 
+  // Copy text to the clipboard and briefly confirm on the button (mirrors the
+  // qualem share-copy pattern). Fire-and-forget; silent if the API is blocked.
+  function copyToClipboard(text, btn, label = 'copied!') {
+    try { Promise.resolve(navigator.clipboard?.writeText(text)).catch(() => {}); } catch {}
+    if (!btn) return;
+    const prev = btn.textContent;
+    btn.textContent = label;
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = prev; btn.classList.remove('copied'); }, 1200);
+  }
+
   // Build one function row. Mini-notation entries render compactly (the symbol
   // + its meaning inline) so the category reads as a quick-glance cheatsheet;
   // everything else gets the full signature / doc / example layout.
@@ -3602,7 +3613,7 @@ export function initQualiaPage() {
     const compact = f.category === 'mini-notation';
     const row = document.createElement('div');
     row.className = compact ? 'sp-ref-row sp-ref-compact' : 'sp-ref-row';
-    row.title = `insert  ${f.insert ?? f.name}`;
+    row.title = `copy  ${f.insert ?? f.name}`;
 
     const headRow = document.createElement('div');
     headRow.className = 'sp-ref-head';
@@ -3621,6 +3632,16 @@ export function initQualiaPage() {
       sig.textContent = f.signature;
       headRow.appendChild(sig);
     }
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'sp-ref-copy';
+    copyBtn.textContent = 'copy';
+    copyBtn.title = `Copy  ${f.insert ?? f.name}`;
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      copyToClipboard(f.insert ?? f.name, copyBtn);
+      pushRecent(RECENT_FUNCS_KEY, f.name);
+    });
+    headRow.appendChild(copyBtn);
     row.appendChild(headRow);
 
     if (!compact && f.doc) {
@@ -3635,11 +3656,6 @@ export function initQualiaPage() {
       ex.textContent = f.example;
       row.appendChild(ex);
     }
-    row.addEventListener('click', () => {
-      strudel.insertAtCursor(f.insert ?? f.name);
-      pushRecent(RECENT_FUNCS_KEY, f.name);
-      setStrudelTab('editor');
-    });
     return row;
   }
 
@@ -3682,15 +3698,16 @@ export function initQualiaPage() {
   // Lists the sounds/samples Strudel currently has registered (read live from
   // superdough's soundMap), grouped by type. The registry fills in as sample
   // banks load over the network, so the list re-reads on tab-open and via the
-  // ↻ button. Clicking a row inserts s("name") at the cursor.
+  // ↻ button. Rows are inert; the ▶ button auditions and the copy button copies
+  // the bare sound name (the row itself never inserts — that flipped tabs).
   const SOUND_TYPE_LABELS = { sample: 'samples', synth: 'synths', soundfont: 'soundfonts', other: 'other' };
   const SOUND_TYPE_ORDER  = ['sample', 'synth', 'soundfont', 'other'];
-  // Build one sound row, with a ▶ preview button that auditions the sound
-  // without inserting it (stopPropagation keeps the row-click insert separate).
+  // Build one sound row: a ▶ preview button that auditions the sound and a copy
+  // button for the bare name. Both stopPropagation; the row has no click action.
   function buildSoundRow(s) {
     const row = document.createElement('div');
     row.className = 'sp-ref-row';
-    row.title = `insert  s("${s.name}")`;
+    row.title = `copy  ${s.name}`;
     const headRow = document.createElement('div');
     headRow.className = 'sp-ref-head';
 
@@ -3714,12 +3731,17 @@ export function initQualiaPage() {
       meta.textContent = `${s.count} variants`;
       headRow.appendChild(meta);
     }
-    row.appendChild(headRow);
-    row.addEventListener('click', () => {
-      strudel.insertAtCursor(`s("${s.name}")`);
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'sp-ref-copy';
+    copyBtn.textContent = 'copy';
+    copyBtn.title = `Copy  ${s.name}`;
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      copyToClipboard(s.name, copyBtn);
       pushRecent(RECENT_SOUNDS_KEY, s.name);
-      setStrudelTab('editor');
     });
+    headRow.appendChild(copyBtn);
+    row.appendChild(headRow);
     return row;
   }
 
