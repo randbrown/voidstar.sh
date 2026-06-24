@@ -1020,6 +1020,52 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .sp-pat-actions .ctrl-btn { padding: 0.15rem 0.45rem; font-size: 0.68rem; }
     .sp-pat-empty { color: var(--muted); padding: 0.6rem; text-align: center; }
 
+    /* Reference panels (funcs + sounds) — same container + row idiom as the
+       patterns list, plus a search box and category headers. Rows are
+       click-to-insert into the editor at the cursor. */
+    #strudel-funcs, #strudel-sounds {
+      flex: 1; min-height: 0; overflow: auto;
+      padding: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem;
+      color: var(--text); font-family: var(--font-mono); font-size: 0.74rem;
+    }
+    .sp-ref-toolbar { display: flex; gap: 0.4rem; align-items: center; }
+    .sp-ref-search {
+      flex: 1; min-width: 0;
+      background: rgba(0,0,0,0.4); color: var(--cyan);
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 0.3rem 0.5rem;
+      font-family: var(--font-mono); font-size: 0.72rem;
+    }
+    .sp-ref-search:focus { outline: none; border-color: var(--cyan); }
+    .sp-ref-list { display: flex; flex-direction: column; gap: 0.3rem; }
+    .sp-ref-cat {
+      color: var(--muted); font-size: 0.62rem; text-transform: uppercase;
+      letter-spacing: 0.08em; margin-top: 0.45rem; padding: 0 0.1rem;
+    }
+    .sp-ref-cat:first-child { margin-top: 0; }
+    .sp-ref-row {
+      display: flex; flex-direction: column; gap: 0.12rem;
+      padding: 0.35rem 0.5rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; transition: background-color 0.12s, border-color 0.12s;
+    }
+    .sp-ref-row:hover  { background: rgba(34,211,238,0.06); border-color: var(--cyan); }
+    .sp-ref-head { display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap; }
+    .sp-ref-name { color: var(--cyan); font-size: 0.78rem; }
+    .sp-ref-sig  {
+      color: var(--muted); font-size: 0.66rem;
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .sp-ref-meta { margin-left: auto; color: var(--muted); font-size: 0.62rem; flex-shrink: 0; }
+    .sp-ref-doc  { color: var(--text); font-size: 0.68rem; opacity: 0.85; }
+    .sp-ref-ex   {
+      color: var(--green, #7ee787); font-size: 0.66rem; opacity: 0.82;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .sp-ref-empty { color: var(--muted); padding: 0.6rem; text-align: center; }
+    #btn-sound-refresh { padding: 0.2rem 0.5rem; font-size: 0.8rem; line-height: 1; }
+
     /* Qualem panel reuses .sp-pat-* row styling. The body just needs flex
        column + small gap so the toolbar sits cleanly above the list.
        Cap the body height + scroll the list internally — with #panel-stack
@@ -2466,6 +2512,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="strudel-tabs">
     <button class="sp-tab active" data-tab="editor">editor</button>
     <button class="sp-tab"        data-tab="patterns">patterns</button>
+    <button class="sp-tab"        data-tab="funcs"  title="Searchable Strudel function reference — click to insert">funcs</button>
+    <button class="sp-tab"        data-tab="sounds" title="Browse loaded samples & sounds — click to insert">sounds</button>
+    <button class="sp-opt" id="btn-strudel-autocomplete" title="Toggle autocomplete + hover docs (Strudel's built-in intellisense)" aria-pressed="true">⌨</button>
     <button class="sp-opt" id="btn-strudel-lines" title="Toggle line numbers" aria-pressed="false">#</button>
   </div>
   <div id="strudel-mount"></div>
@@ -2476,6 +2525,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-pat-random" title="Replace editor with a random pattern">random</button>
     </div>
     <div id="pat-list" class="sp-pat-list"></div>
+  </div>
+  <div id="strudel-funcs" style="display:none">
+    <div class="sp-ref-toolbar">
+      <input type="text" id="func-search" class="sp-ref-search" placeholder="search functions…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+    </div>
+    <div id="func-list" class="sp-ref-list"></div>
+  </div>
+  <div id="strudel-sounds" style="display:none">
+    <div class="sp-ref-toolbar">
+      <input type="text" id="sound-search" class="sp-ref-search" placeholder="search sounds…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+      <button class="ctrl-btn" id="btn-sound-refresh" title="Re-read the sound list (samples keep loading in the background)">↻</button>
+    </div>
+    <div id="sound-list" class="sp-ref-list"></div>
   </div>
 </div>
 

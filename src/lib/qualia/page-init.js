@@ -18,6 +18,7 @@ import * as qualem from './qualem.js';
 import { parseMetadata as parseStrudelMeta, setMetadata as setStrudelMeta } from './patterns.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
+import { filterFunctions, groupByCategory } from './strudel-reference.js';
 import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
@@ -3377,13 +3378,23 @@ export function initQualiaPage() {
   const tabBar       = document.getElementById('strudel-tabs');
   const editorPane   = document.getElementById('strudel-mount');
   const patternsPane = document.getElementById('strudel-patterns');
+  const funcsPane    = document.getElementById('strudel-funcs');
+  const soundsPane   = document.getElementById('strudel-sounds');
   const patListEl    = document.getElementById('pat-list');
+  const funcListEl   = document.getElementById('func-list');
+  const soundListEl  = document.getElementById('sound-list');
+  const funcSearch   = document.getElementById('func-search');
+  const soundSearch  = document.getElementById('sound-search');
   function setStrudelTab(name) {
     tabBar?.querySelectorAll('.sp-tab').forEach(t =>
       t.classList.toggle('active', t.dataset.tab === name));
     if (editorPane)   editorPane.style.display   = name === 'editor'   ? '' : 'none';
     if (patternsPane) patternsPane.style.display = name === 'patterns' ? 'flex' : 'none';
+    if (funcsPane)    funcsPane.style.display    = name === 'funcs'    ? 'flex' : 'none';
+    if (soundsPane)   soundsPane.style.display   = name === 'sounds'   ? 'flex' : 'none';
     if (name === 'patterns') renderPatternList();
+    if (name === 'funcs')    renderFuncList();
+    if (name === 'sounds')   renderSoundList();
   }
   tabBar?.querySelectorAll('.sp-tab').forEach(t => {
     t.addEventListener('click', () => setStrudelTab(t.dataset.tab));
@@ -3477,6 +3488,139 @@ export function initQualiaPage() {
     setStrudelTab('editor');
     strudel.patterns.random();
   });
+
+  // ── Strudel function reference ("funcs" tab) ──────────────────────────────
+  // Curated, searchable list grouped by category. Clicking a row drops the
+  // function's insert-snippet at the editor cursor and jumps back to the
+  // editor so the change is visible. Render is lazy (on tab-open / search),
+  // so there's no cost until the tab is used.
+  function renderFuncList() {
+    if (!funcListEl) return;
+    const groups = groupByCategory(filterFunctions(funcSearch?.value || ''));
+    funcListEl.innerHTML = '';
+    if (!groups.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sp-ref-empty';
+      empty.textContent = 'no matching functions';
+      funcListEl.appendChild(empty);
+      return;
+    }
+    for (const [cat, entries] of groups) {
+      const head = document.createElement('div');
+      head.className = 'sp-ref-cat';
+      head.textContent = cat;
+      funcListEl.appendChild(head);
+      for (const f of entries) {
+        const row = document.createElement('div');
+        row.className = 'sp-ref-row';
+        row.title = `insert  ${f.insert ?? f.name}`;
+
+        const headRow = document.createElement('div');
+        headRow.className = 'sp-ref-head';
+        const name = document.createElement('span');
+        name.className = 'sp-ref-name';
+        name.textContent = f.name;
+        headRow.appendChild(name);
+        if (f.signature) {
+          const sig = document.createElement('span');
+          sig.className = 'sp-ref-sig';
+          sig.textContent = f.signature;
+          headRow.appendChild(sig);
+        }
+        row.appendChild(headRow);
+
+        if (f.doc) {
+          const doc = document.createElement('div');
+          doc.className = 'sp-ref-doc';
+          doc.textContent = f.doc;
+          row.appendChild(doc);
+        }
+        if (f.example) {
+          const ex = document.createElement('div');
+          ex.className = 'sp-ref-ex';
+          ex.textContent = f.example;
+          row.appendChild(ex);
+        }
+        row.addEventListener('click', () => {
+          strudel.insertAtCursor(f.insert ?? f.name);
+          setStrudelTab('editor');
+        });
+        funcListEl.appendChild(row);
+      }
+    }
+  }
+  funcSearch?.addEventListener('input', renderFuncList);
+
+  // ── Strudel sounds browser ("sounds" tab) ─────────────────────────────────
+  // Lists the sounds/samples Strudel currently has registered (read live from
+  // superdough's soundMap), grouped by type. The registry fills in as sample
+  // banks load over the network, so the list re-reads on tab-open and via the
+  // ↻ button. Clicking a row inserts s("name") at the cursor.
+  const SOUND_TYPE_LABELS = { sample: 'samples', synth: 'synths', soundfont: 'soundfonts', other: 'other' };
+  const SOUND_TYPE_ORDER  = ['sample', 'synth', 'soundfont', 'other'];
+  function renderSoundList() {
+    if (!soundListEl) return;
+    soundListEl.innerHTML = '';
+    let sounds = strudel.listSounds();
+    if (!sounds.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sp-ref-empty';
+      empty.textContent = 'sounds still loading — press ▶ once, then ↻ to refresh';
+      soundListEl.appendChild(empty);
+      return;
+    }
+    const q = (soundSearch?.value || '').trim().toLowerCase();
+    if (q) sounds = sounds.filter(s => s.name.toLowerCase().includes(q) || s.type.includes(q));
+    if (!sounds.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sp-ref-empty';
+      empty.textContent = 'no matching sounds';
+      soundListEl.appendChild(empty);
+      return;
+    }
+    const byType = new Map();
+    for (const s of sounds) {
+      const t = s.type || 'other';
+      if (!byType.has(t)) byType.set(t, []);
+      byType.get(t).push(s);
+    }
+    const types = [
+      ...SOUND_TYPE_ORDER.filter(t => byType.has(t)),
+      ...[...byType.keys()].filter(t => !SOUND_TYPE_ORDER.includes(t)).sort(),
+    ];
+    for (const t of types) {
+      const items = byType.get(t);
+      const head = document.createElement('div');
+      head.className = 'sp-ref-cat';
+      head.textContent = `${SOUND_TYPE_LABELS[t] || t} (${items.length})`;
+      soundListEl.appendChild(head);
+      for (const s of items) {
+        const row = document.createElement('div');
+        row.className = 'sp-ref-row';
+        row.title = `insert  s("${s.name}")`;
+        const headRow = document.createElement('div');
+        headRow.className = 'sp-ref-head';
+        const name = document.createElement('span');
+        name.className = 'sp-ref-name';
+        name.textContent = s.name;
+        headRow.appendChild(name);
+        if (s.count > 1) {
+          const meta = document.createElement('span');
+          meta.className = 'sp-ref-meta';
+          meta.textContent = `${s.count} variants`;
+          headRow.appendChild(meta);
+        }
+        row.appendChild(headRow);
+        row.addEventListener('click', () => {
+          strudel.insertAtCursor(`s("${s.name}")`);
+          setStrudelTab('editor');
+        });
+        soundListEl.appendChild(row);
+      }
+    }
+  }
+  soundSearch?.addEventListener('input', renderSoundList);
+  document.getElementById('btn-sound-refresh')?.addEventListener('click', renderSoundList);
 
   // ── Sequencer pattern-manager toolbar ────────────────────────────────────
   // Same shape as the Strudel toolbar above so the user has muscle memory:
