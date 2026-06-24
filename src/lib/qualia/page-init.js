@@ -4476,13 +4476,13 @@ export function initQualiaPage() {
         }
         break;
       case 'i': phaseShift(e.shiftKey ? -1 : +1); break;          // Phase step prev / next
-      // Delay mix: [ / ]    Reverb mix: - / =    Rig level: , / .
+      // Delay mix: [ / ]    Reverb mix: - / =    Rig master vol: , / .
       case '[': looper.nudgeStripParam?.('delay', 'mix', -0.05); break;
       case ']': looper.nudgeStripParam?.('delay', 'mix', +0.05); break;
       case '-': looper.nudgeStripParam?.('reverb', 'mix', -0.05); break;
       case '=': looper.nudgeStripParam?.('reverb', 'mix', +0.05); break;
-      case ',': looper.nudgeSignalLevel?.(-0.05); break;
-      case '.': looper.nudgeSignalLevel?.(+0.05); break;
+      case ',': looper.nudgeRigLevel?.(-0.05); break;   // big knob — rig master volume
+      case '.': looper.nudgeRigLevel?.(+0.05); break;
 
       // Controls / knob-map cheat sheet (macro-pad reference). ? is shift+/,
       // so accept bare / too for macro-pads that send the unshifted key.
@@ -4504,7 +4504,7 @@ export function initQualiaPage() {
         switch (cc) {
           case 1:  looper.setStripParam?.('delay', 'mix', norm);  break;  // CC1 — delay mix
           case 2:  looper.setStripParam?.('reverb', 'mix', norm); break;  // CC2 — reverb mix
-          case 7:  looper.setSignalLevel?.(norm);                 break;  // CC7 (volume) — rig level
+          case 7:  looper.setRigLevel?.(norm);                    break;  // CC7 (volume) — rig master
         }
       }
       for (const input of midi.inputs.values()) input.onmidimessage = onMIDIMessage;

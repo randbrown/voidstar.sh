@@ -2066,6 +2066,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     getConfig, setConfig,
     // ── Mixer surface — rig master (= rig signal + loops) ──────────────────
     setRigLevel, setRigMuted, setRigLimiter,
+    nudgeRigLevel(delta) { setRigLevel(clamp01((model.rigLevel ?? 1) + delta)); },
     getRig: () => ({ level: model.rigLevel, muted: model.rigMuted, limiter: model.rigLimiter }),
     onMixChange,
     dispose: () => { hideCtxMenu(); stopScope(); looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },

@@ -28,8 +28,8 @@ strip, bottom-right).
 
 ## Notes
 
-- **Volume** = the rig signal level (what the app already treats as "volume" /
-  MIDI CC7). Knob turns nudge ±0.05 per detent.
+- **Volume** = the rig master fader — your pedal-steel signal + loops (the
+  mixer's "Rig master"); MIDI CC7 drives the same. Turns nudge ±0.05 per detent.
 - **Left / right small knobs:** the launcher renders these as encoder 0 (left)
   and encoder 1 (right). If your physical units feel reversed, swap `knob[0]`↔
   `knob[1]` and the encoder-push keys (`row 0,col 4` ↔ `row 1,col 4`) in the
