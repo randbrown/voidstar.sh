@@ -2684,43 +2684,43 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="controls-body">
     <div class="ctrls-sec">visuals</div>
     <div class="ctrls-grid">
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>V</kbd></span><span class="ctrl-lbl">next fx</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>V</kbd><kbd>⇧V</kbd></span><span class="ctrl-lbl">fx next / prev</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>L</kbd><kbd>N</kbd></span><span class="ctrl-lbl">phase / cycle period</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>I</kbd><kbd>⇧I</kbd></span><span class="ctrl-lbl">phase step next / prev</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>T</kbd><kbd>K</kbd><kbd>E</kbd></span><span class="ctrl-lbl">ascii / mosh / edge</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>B</kbd></span><span class="ctrl-lbl">ripples</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>J</kbd><kbd>F</kbd><kbd>G</kbd></span><span class="ctrl-lbl">skeleton / sparks / aura</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>P</kbd></span><span class="ctrl-lbl">pose source</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>C</kbd><kbd>R</kbd><kbd>M</kbd></span><span class="ctrl-lbl">cam size / rotate / mirror</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧</kbd><kbd>R</kbd></span><span class="ctrl-lbl">screen record</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>C</kbd><kbd>8</kbd><kbd>M</kbd><kbd>R</kbd></span><span class="ctrl-lbl">cam size / next / mirror / rotate</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧R</kbd></span><span class="ctrl-lbl">screen record</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>A</kbd></span><span class="ctrl-lbl">audio on/off</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>S</kbd><kbd>Q</kbd><kbd>W</kbd><kbd>O</kbd></span><span class="ctrl-lbl">strudel / seq / vocoder / looper</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>Z</kbd><kbd>X</kbd></span><span class="ctrl-lbl">zen / fullscreen</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>Space</kbd></span><span class="ctrl-lbl">pause</span></div>
     </div>
 
-    <div class="ctrls-sec">rig · looper <span class="ctrls-tag">macro-pad keys</span></div>
+    <div class="ctrls-sec">rig · looper <span class="ctrls-tag">keys</span></div>
     <div class="ctrls-grid">
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>1</kbd></span><span class="ctrl-lbl">earth drive on/off</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>2</kbd></span><span class="ctrl-lbl">metal zone on/off</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>3</kbd></span><span class="ctrl-lbl">looper record start/stop</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>0</kbd></span><span class="ctrl-lbl">tuner</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>[</kbd><kbd>]</kbd></span><span class="ctrl-lbl">delay mix −/+</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>-</kbd><kbd>=</kbd></span><span class="ctrl-lbl">reverb mix −/+</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>,</kbd><kbd>.</kbd></span><span class="ctrl-lbl">rig level −/+</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>0</kbd><kbd>1</kbd><kbd>2</kbd></span><span class="ctrl-lbl">tuner / earth / metal</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>O</kbd></span><span class="ctrl-lbl">rig panel show/hide</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>4</kbd></span><span class="ctrl-lbl">loop play / stop</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>5</kbd><kbd>6</kbd></span><span class="ctrl-lbl">record start / stop</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>7</kbd></span><span class="ctrl-lbl">grab (retro-loop)</span></div>
     </div>
 
-    <div class="ctrls-sec">knobs <span class="ctrls-tag">encoder ↔ MIDI CC</span></div>
-    <div class="ctrls-grid knobs">
-      <div class="ctrl-keys"><kbd>[</kbd><kbd>]</kbd></div><div class="ctrl-lbl">delay mix</div><div class="ctrl-cc">CC1</div>
-      <div class="ctrl-keys"><kbd>-</kbd><kbd>=</kbd></div><div class="ctrl-lbl">reverb mix</div><div class="ctrl-cc">CC2</div>
-      <div class="ctrl-keys"><kbd>,</kbd><kbd>.</kbd></div><div class="ctrl-lbl">rig level</div><div class="ctrl-cc">CC7</div>
+    <div class="ctrls-sec">knobs <span class="ctrls-tag">DOIO encoders — turn · push</span></div>
+    <div class="ctrls-grid">
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>,</kbd><kbd>.</kbd></span><span class="ctrl-lbl">big — volume · push <kbd>Space</kbd> pause</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>[</kbd><kbd>]</kbd></span><span class="ctrl-lbl">left — delay mix · push <kbd>D</kbd> delay on/off</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>-</kbd><kbd>=</kbd></span><span class="ctrl-lbl">right — reverb mix · push <kbd>9</kbd> reverb on/off</span></div>
     </div>
 
     <div class="ctrls-note">
-      Encoders: map turn ←/→ to the key pairs (stepped ±0.05). MIDI knobs give
-      absolute 0–1 on <b>CC1 / CC2 / CC7</b> (any channel) and need a
-      Chromium-based browser (Chrome / Edge). Keys pause while you're typing in
-      an editor panel — click the canvas to re-arm.
+      Mapped for a DOIO / macro-pad that sends these keystrokes — knob turns
+      nudge ±0.05 per detent, pushes toggle. A MIDI controller can instead drive
+      <b>CC1</b> delay · <b>CC2</b> reverb · <b>CC7</b> volume (absolute 0–1, any
+      channel; Chromium only). Keys pause while you're typing in an editor
+      panel — click the canvas to re-arm.
     </div>
   </div>
 </div>

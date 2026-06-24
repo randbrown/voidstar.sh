@@ -2688,7 +2688,27 @@ export function initQualiaPage() {
     }
 
     // sequential (and palettes fallback): walk the enabled steps in order.
-    applyPhaseStep(incl[autoPhaseStepCount % incl.length]);
+    // Safe modulo so a negative autoPhaseStepCount (manual phaseShift back past
+    // 0) still indexes a real step instead of incl[-1] === undefined.
+    applyPhaseStep(incl[((autoPhaseStepCount % incl.length) + incl.length) % incl.length]);
+  }
+
+  // Manual phase step (controller / hotkey): sequential walk in `dir` (+1/-1)
+  // through the active quale's enabled phase steps, independent of the
+  // auto-phase STYLE (random/palettes only make sense for the hands-off timer).
+  // Shares autoPhaseStepCount so manual and auto stepping stay on the same
+  // position.
+  function phaseShift(dir) {
+    const steps = getActivePhaseSteps();
+    if (!steps || !steps.length) return;
+    const fxId = core.activeId();
+    const excluded = fxId ? loadPhaseExcludedFor(fxId) : new Set();
+    const incl = phaseIncludedIndices(steps, excluded).map(i => steps[i]);
+    if (!incl.length) return;
+    lastAutoTransitionMs = performance.now();   // arm the auto-cycle cross-guard
+    autoPhaseStepCount += dir;
+    const idx = ((autoPhaseStepCount % incl.length) + incl.length) % incl.length;
+    applyPhaseStep(incl[idx]);
   }
 
   function tickPhase() {
@@ -4373,9 +4393,12 @@ export function initQualiaPage() {
 
     switch (e.key.toLowerCase()) {
       case 'v': {
+        // V = next fx, Shift+V = previous (quale prev / next).
         const ids = mesh.ids();
+        if (!ids.length) break;
         const i = ids.indexOf(core.activeId() || ids[0]);
-        core.setActive(ids[(i + 1) % ids.length]);
+        const j = e.shiftKey ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
+        core.setActive(ids[j]).catch(err => console.error('[qualia] setActive failed:', err));
         break;
       }
       case 'a': btnAudio.click(); break;
@@ -4433,6 +4456,26 @@ export function initQualiaPage() {
         if (tunerBtn) tunerBtn.click();
         break;
       }
+      // ── DOIO macro-pad: looper transport, knob-push toggles, cam, phase ───
+      case '4':                                                   // Loop play / stop
+        document.getElementById(looper.isPlaying?.() ? 'btn-looper-stop' : 'btn-looper-play')?.click();
+        break;
+      case '5':                                                   // Start recording (idempotent)
+        if (!looper.isRecording?.()) document.getElementById('btn-looper-record')?.click();
+        break;
+      case '6':                                                   // Stop recording (idempotent)
+        if (looper.isRecording?.()) document.getElementById('btn-looper-record')?.click();
+        break;
+      case '7': document.getElementById('btn-looper-retro')?.click(); break;  // Grab (retro-loop)
+      case 'd': looper.toggleStripStage?.('delay');  break;       // Delay on/off (left knob push)
+      case '9': looper.toggleStripStage?.('reverb'); break;       // Reverb on/off (right knob push)
+      case '8':                                                   // Next camera device
+        if (camSelect && !camSelect.disabled && camSelect.options.length > 1) {
+          camSelect.selectedIndex = (camSelect.selectedIndex + 1) % camSelect.options.length;
+          camSelect.dispatchEvent(new Event('change'));
+        }
+        break;
+      case 'i': phaseShift(e.shiftKey ? -1 : +1); break;          // Phase step prev / next
       // Delay mix: [ / ]    Reverb mix: - / =    Rig level: , / .
       case '[': looper.nudgeStripParam?.('delay', 'mix', -0.05); break;
       case ']': looper.nudgeStripParam?.('delay', 'mix', +0.05); break;
