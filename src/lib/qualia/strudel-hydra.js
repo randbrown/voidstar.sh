@@ -194,6 +194,20 @@ function saveBlur(on) {
   try { localStorage.setItem(BLUR_KEY, on ? '1' : '0'); } catch {}
 }
 
+const AUTOCOMPLETE_KEY = 'voidstar.qualia.strudel.autocomplete';
+// Default ON: function-name completion + hover docs are the whole point of
+// having them, and they cost nothing until you type or hover. A first visit
+// (no stored value) opts in; the toggle then persists an explicit 0/1.
+function loadAutocomplete() {
+  try {
+    const v = localStorage.getItem(AUTOCOMPLETE_KEY);
+    return v === null ? true : v === '1';
+  } catch { return true; }
+}
+function saveAutocomplete(on) {
+  try { localStorage.setItem(AUTOCOMPLETE_KEY, on ? '1' : '0'); } catch {}
+}
+
 export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange } = {}) {
   // Snapshot the previous-session panel state ONCE at init. open()/close()
   // mutate the flag for next time, but the answer to "should we restore the
@@ -213,6 +227,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const elGain     = document.getElementById('strudel-gain');
   const btnNewline = document.getElementById('btn-strudel-newline');
   const btnLines   = document.getElementById('btn-strudel-lines');
+  const btnAuto    = document.getElementById('btn-strudel-autocomplete');
   const btnBlur    = document.getElementById('btn-strudel-blur');
 
   let editorEl = null;
@@ -445,6 +460,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   // (keep highlighting). A/B from the console: qualia.setStrudelEditorPerf(true).
   let _editorPerfMode = false;
   let _lineNumbers = loadLineNumbers();   // opt-in; default off (CDN default)
+  let _autocomplete = loadAutocomplete(); // built-in intellisense; default on
   function applyEditorSettings() {
     const ed = getEditor();
     if (!ed || typeof ed.updateSettings !== 'function') return false;
@@ -453,6 +469,12 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
         isPatternHighlightingEnabled: !_editorPerfMode,
         isFlashEnabled: !_editorPerfMode,
         isLineNumbersDisplayed: _lineNumbers,
+        // Strudel's own CodeMirror intellisense — the same function-name
+        // completion + doc tooltips as strudel.cc. Both ride this settings
+        // call so they re-apply on every editor re-mount. Independent of
+        // perf mode (event-driven: completion on keystroke, tooltip on hover).
+        isAutoCompletionEnabled: _autocomplete,
+        isTooltipEnabled: _autocomplete,
       });
       return true;
     } catch (e) {
@@ -491,6 +513,27 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   if (btnLines) {
     refreshLinesBtn();
     btnLines.addEventListener('click', () => setLineNumbers(!_lineNumbers));
+  }
+
+  // Built-in autocomplete + hover docs toggle — same settings call, same
+  // persistence pattern as line numbers. The ⌨ button in the tab bar drives
+  // it. Default on (see loadAutocomplete).
+  function refreshAutoBtn() {
+    if (!btnAuto) return;
+    btnAuto.classList.toggle('active', _autocomplete);
+    btnAuto.setAttribute('aria-pressed', _autocomplete ? 'true' : 'false');
+  }
+  function setAutocomplete(on) {
+    _autocomplete = !!on;
+    saveAutocomplete(_autocomplete);
+    applyEditorSettings();
+    refreshAutoBtn();
+    return _autocomplete;
+  }
+  function getAutocomplete() { return _autocomplete; }
+  if (btnAuto) {
+    refreshAutoBtn();
+    btnAuto.addEventListener('click', () => setAutocomplete(!_autocomplete));
   }
 
   // Optional frosted backdrop behind the editor — persisted, default off.
@@ -1241,15 +1284,14 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   });
   if (btnStop) btnStop.addEventListener('click', stop);
 
-  // Insert a newline at the cursor — Android touch keyboards (GBoard
-  // especially) drop the keydown event for Enter inside a contenteditable
-  // nested in a Shadow DOM, which is exactly what strudel-editor is. We
-  // try a chain of insertion paths so this works across CodeMirror
-  // versions exposed by different @strudel/repl builds, then fall back to
-  // a synthetic keydown which the editor's keymap treats like a real
-  // Enter press. Intentionally idempotent: clicking when the editor isn't
-  // mounted is a no-op.
-  function insertNewlineAtCursor() {
+  // Insert text at the editor cursor. Path 1 is the CodeMirror 6 transaction
+  // API — works for any text, so it backs both the newline button and the
+  // funcs/sounds panels' click-to-insert. Path 2 is a newline-only fallback:
+  // Android touch keyboards (GBoard especially) drop the keydown for Enter
+  // inside the contenteditable nested in strudel-editor's Shadow DOM, so we
+  // synthesize a keydown the editor's keymap treats like a real Enter press.
+  // Intentionally idempotent: a no-op when the editor isn't mounted.
+  function insertAtCursor(text) {
     const ed = editorEl;
     if (!ed) return false;
 
@@ -1259,30 +1301,33 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       const view = ed.editor?.editor || ed.editor;
       if (view && view.state && typeof view.dispatch === 'function') {
         view.focus?.();
-        view.dispatch(view.state.replaceSelection('\n'));
+        view.dispatch(view.state.replaceSelection(text));
         return true;
       }
     } catch {}
 
-    // Path 2: synthetic keydown on the .cm-content node inside the
-    // shadow root. CodeMirror's keymap responds to this even when the
+    // Path 2 (newline only): synthetic keydown on the .cm-content node inside
+    // the shadow root. CodeMirror's keymap responds to this even when the
     // OS-level keyboard never fires the original event.
-    try {
-      const root = ed.shadowRoot || ed;
-      const cm = root.querySelector?.('.cm-content');
-      if (cm) {
-        cm.focus();
-        const ev = new KeyboardEvent('keydown', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-          bubbles: true, cancelable: true,
-        });
-        cm.dispatchEvent(ev);
-        return true;
-      }
-    } catch {}
+    if (text === '\n') {
+      try {
+        const root = ed.shadowRoot || ed;
+        const cm = root.querySelector?.('.cm-content');
+        if (cm) {
+          cm.focus();
+          const ev = new KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            bubbles: true, cancelable: true,
+          });
+          cm.dispatchEvent(ev);
+          return true;
+        }
+      } catch {}
+    }
 
     return false;
   }
+  function insertNewlineAtCursor() { return insertAtCursor('\n'); }
   if (btnNewline) btnNewline.addEventListener('click', insertNewlineAtCursor);
 
   // Periodic auto-save while editing. Cheap (one DOM scrape every 8 sec)
@@ -1385,6 +1430,53 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     open();
   }
 
+  // Enumerate the sounds/samples Strudel currently has registered, for the
+  // sounds browser panel. superdough keeps them in a nanostores `soundMap`
+  // that the @strudel/repl bundle exposes on globalThis via evalScope — the
+  // same bulk-global path that gives us getAudioContext(). The map fills in
+  // asynchronously as prebake loads the default banks over the network, so
+  // the panel re-reads on open and via a refresh button. Returns a sorted
+  // [{ name, type, count }]; empty array until the registry exists.
+  function listSounds() {
+    try {
+      const sm = globalThis.soundMap;
+      const dict = (sm && typeof sm.get === 'function') ? sm.get() : null;
+      if (!dict) return [];
+      const out = [];
+      for (const name of Object.keys(dict)) {
+        const data = dict[name]?.data || {};
+        let type = data.type || '';
+        if (!type) type = /^gm_/.test(name) ? 'soundfont' : 'other';
+        const s = data.samples;
+        let count = 0;
+        if (Array.isArray(s)) count = s.length;
+        else if (s && typeof s === 'object') count = Object.keys(s).length;
+        out.push({ name, type, count });
+      }
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      return out;
+    } catch { return []; }
+  }
+
+  // Audition a registered sound through superdough directly — no effect on the
+  // editor's pattern or the scheduler. superdough(value, t, dur, cps) wants an
+  // ABSOLUTE AudioContext onset time, so we schedule a hair in the future.
+  // Pitched sources (synths/soundfonts) get a default note so there's
+  // something to hear; samples play as-is. superdough is exposed on globalThis
+  // by the bundle, same path as getAudioContext().
+  function previewSound(name, type) {
+    try {
+      const ac = globalThis.getAudioContext?.();
+      const dough = globalThis.superdough;
+      if (!ac || typeof dough !== 'function') return false;
+      ac.resume?.();
+      const value = { s: name, gain: 0.9 };
+      if (type && type !== 'sample') value.note = 'c3';
+      dough(value, ac.currentTime + 0.05, 0.5);
+      return true;
+    } catch { return false; }
+  }
+
   return {
     open,
     close,
@@ -1421,6 +1513,15 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     getEditorPerf,
     setLineNumbers,
     getLineNumbers,
+    /** Built-in Strudel intellisense (autocomplete + hover docs) toggle. */
+    setAutocomplete,
+    getAutocomplete,
+    /** Insert text at the editor cursor — used by the funcs/sounds panels. */
+    insertAtCursor,
+    /** Snapshot of currently-registered Strudel sounds for the browser tab. */
+    listSounds,
+    /** Audition a sound by name without touching the editor/scheduler. */
+    previewSound,
     /** Call from the render loop so globalThis.a.fft stays current. */
     perFrame: refreshAFft,
     patterns: {
