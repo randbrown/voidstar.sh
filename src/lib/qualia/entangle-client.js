@@ -308,7 +308,7 @@ export async function initEntangleClient(root) {
         setTimeout(() => btn.classList.remove('on'), 180);
       });
       phaseProgEl = el('div', 'ent-phaseprog');
-      phaseProgEl.textContent = 'tap together with the crowd to advance';
+      phaseProgEl.textContent = 'tap together with the observers to advance';
       sect.append(btn, phaseProgEl);
       controlsEl.appendChild(sect);
     }

@@ -57,14 +57,14 @@ const SOURCE_ALIASES = {
   'pose.wristSpread': 'wrists',
   'pose.wristMidY':   'wristY',
   'pose.confidence':  'conf',
-  'crowd.x':          'crowd.x',
-  'crowd.y':          'crowd.y',
-  'crowd.energy':     'crowd.E',
-  'crowd.spread':     'crowd.spr',
-  'crowd.rise':       'crowd.rise',
-  'crowd.sway':       'crowd.sway',
-  'crowd.count':      'crowd.n',
-  'crowd.confidence': 'crowd.conf',
+  'crowd.x':          'observer.x',
+  'crowd.y':          'observer.y',
+  'crowd.energy':     'observer.E',
+  'crowd.spread':     'observer.spr',
+  'crowd.rise':       'observer.rise',
+  'crowd.sway':       'observer.sway',
+  'crowd.count':      'observer.n',
+  'crowd.confidence': 'observer.conf',
 };
 function shortSource(src) {
   return SOURCE_ALIASES[src] || src.replace(/^audio\./, '').replace(/^pose\./, '').replace(/^crowd\./, '↯');
