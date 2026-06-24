@@ -46,6 +46,7 @@ const SIGLEVEL_KEY   = `${NS}.signalLevel`;// rig signal monitor/mix level
 const SIGMUTE_KEY    = `${NS}.signalMuted`;// rig signal mute
 const RIG_MUTE_KEY   = `${NS}.rigMuted`;  // rig master mute (signal + loops)
 const RIG_LEVEL_KEY  = `${NS}.rigLevel`;  // rig master output level
+const RIG_LIMITER_KEY = `${NS}.rigLimiter`; // rig master brickwall limiter (signal + loops)
 const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo'
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
@@ -246,6 +247,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     bufferOn: lsGet(BUFFER_KEY, '0') === '1',          // live lookback running
     rigMuted: lsGet(RIG_MUTE_KEY, '0') === '1',         // rig master mute
     rigLevel: num01(lsGet(RIG_LEVEL_KEY, '1'), 1.0),   // rig master output level
+    rigLimiter: lsGet(RIG_LIMITER_KEY, '1') !== '0',   // rig master brickwall limiter (on by default)
     signalLevel: num01(lsGet(SIGLEVEL_KEY, '0'), 0),   // rig signal monitor/mix level
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
     channels: lsGet(CHANNELS_KEY, 'mono') === 'stereo' ? 'stereo' : 'mono',
@@ -274,6 +276,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   looperAudio.setMaster(model.master);
   looperAudio.setOffsetMs(model.offsetMs);
   looperAudio.primeRig(model.rigLevel, model.rigMuted);             // rig master output level + mute
+  looperAudio.primeRigLimiter(model.rigLimiter);                    // rig master brickwall limiter
   looperAudio.primeSignal(model.signalLevel, model.signalMuted);   // value-only; capture opens on a gesture
   looperAudio.setChannels(model.channels);                         // value-only until capture opens
   looperAudio.setStripConfig(model.strip);                         // applied when capture opens
@@ -726,24 +729,46 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
 
   // ── rig master / loop master / input / nudge / cps ───────────────────────
+  // Mix-change listeners — fire whenever the rig master or loop master change
+  // so the mixer panel's rig channel stays in sync with this panel's controls.
+  const mixListeners = new Set();
+  function onMixChange(fn) { mixListeners.add(fn); return () => mixListeners.delete(fn); }
+  function notifyMix() {
+    const snap = {
+      rigLevel: model.rigLevel, rigMuted: model.rigMuted, rigLimiter: model.rigLimiter,
+      master: model.master, masterMuted: _muted,
+    };
+    mixListeners.forEach(fn => { try { fn(snap); } catch {} });
+  }
   function setRigMuted(on) {
     model.rigMuted = !!on;
     lsSet(RIG_MUTE_KEY, model.rigMuted ? '1' : '0');
     looperAudio.setRigMuted(model.rigMuted);
     refreshRigMuteBtn();
     refreshLooperBtn();
+    notifyMix();
   }
   function setRigLevel(v) {
     model.rigLevel = clamp01(v);
     lsSet(RIG_LEVEL_KEY, model.rigLevel);
     looperAudio.setRigLevel(model.rigLevel);
+    if (rigMasterGain && rigMasterGain.value !== String(model.rigLevel)) rigMasterGain.value = String(model.rigLevel);
     refreshLooperBtn();
+    notifyMix();
   }
-  function setMuted(on) { _muted = !!on; looperAudio.setMuted(_muted); refreshMuteBtn(); refreshLooperBtn(); }
+  function setRigLimiter(on) {
+    model.rigLimiter = !!on;
+    lsSet(RIG_LIMITER_KEY, model.rigLimiter ? '1' : '0');
+    looperAudio.setRigLimiter(model.rigLimiter);
+    notifyMix();
+  }
+  function setMuted(on) { _muted = !!on; looperAudio.setMuted(_muted); refreshMuteBtn(); refreshLooperBtn(); notifyMix(); }
   function setMaster(v) {
     model.master = clamp01(v);
     looperAudio.setMaster(model.master);
     lsSet(MASTER_KEY, model.master);
+    if (elGain && elGain.value !== String(model.master)) elGain.value = String(model.master);
+    notifyMix();
   }
   // The rig signal is the rig's OWN input source (looperAudio), independent of
   // the audio-panel mic: volume + mute land on the monitor + the mix ('rig'
@@ -2012,6 +2037,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     play: playAll, stop,
     perFrame,
     getConfig, setConfig,
+    // ── Mixer surface — rig master (= rig signal + loops) ──────────────────
+    setRigLevel, setRigMuted, setRigLimiter,
+    getRig: () => ({ level: model.rigLevel, muted: model.rigMuted, limiter: model.rigLimiter }),
+    onMixChange,
     dispose: () => { hideCtxMenu(); stopScope(); looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
 
     // ── Hotkey / MIDI helpers ──────────────────────────────────────────────

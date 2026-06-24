@@ -18,6 +18,7 @@
 //   - Android's VOICE_COMMUNICATION mode would fight a screen recorder.
 
 import { emptyAudioFrame, ema } from './field.js';
+import { makeLimiter, setLimiterEngaged } from './limiter.js';
 
 const MIC_CONSTRAINTS = {
   echoCancellation: false,
@@ -41,6 +42,41 @@ export function createAudio() {
   // must leave it intact for its owner.
   const sources = new Map();
   let micId = null;
+
+  // ── Clip / level metering ────────────────────────────────────────────────
+  // Per-source peak + clip flags are computed in tick() from the same
+  // time-domain buffer already read for the bands/RMS — no extra analyser
+  // reads. A "rail hit" (a sample pinned at the 0 or 255 byte extreme) means
+  // the signal touched full scale, i.e. it is clipping or right on the edge.
+  // Each hit lights a per-source flag held for CLIP_HOLD seconds so brief overs
+  // stay visible. The aggregate drives the topbar CLIP light; the per-source
+  // peak + flag drive the mixer's channel meters and clip LEDs. Metering runs
+  // for EVERY active source, even ones filtered out of the reactivity mix — a
+  // source dropped from the visuals still plays to the speakers and can clip.
+  const CLIP_HOLD = 0.5;                 // seconds a clip stays flagged
+  const METER_IDS = ['mic', 'rig', 'looper', 'strudel', 'sequencer', 'vocoder'];
+  const _levelsOut = {};                 // reused object — getLevels() never allocates
+  const clipListeners = new Set();
+  let _anyClip = false;
+  function onClipChange(fn) { clipListeners.add(fn); return () => clipListeners.delete(fn); }
+  function notifyClip(v) {
+    if (v === _anyClip) return;
+    _anyClip = v;
+    clipListeners.forEach(fn => { try { fn(v); } catch {} });
+  }
+  function isClipping() { return _anyClip; }
+  // Per-source { peak:0..1, clipping:bool } for every meterable id. Absent
+  // sources read as silent. Fills (and returns) a reused object by default.
+  function getLevels(out) {
+    out = out || _levelsOut;
+    for (const id of METER_IDS) {
+      const s = sources.get(id);
+      let e = out[id]; if (!e) e = out[id] = { peak: 0, clipping: false };
+      e.peak = s ? (s.peak || 0) : 0;
+      e.clipping = s ? !!s.clipping : false;
+    }
+    return out;
+  }
 
   // When more than one source is active we need merged spectrum/waveform
   // buffers to expose a single Uint8Array to fx that read them directly
@@ -80,10 +116,13 @@ export function createAudio() {
   // shared value drives every UI that exposes it (audio panel + looper "input").
   let inputLevel = (() => { const v = parseFloat(lsGet(`${NS}.inputLevel`, '0')); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0; })();
   let inputMuted = lsGet(`${NS}.inputMuted`, '0') === '1';
+  // Brickwall limiter on the mic monitor — on by default. Persisted so the
+  // protection survives reloads independent of whether the mixer ever opens.
+  let inputLimiterOn = lsGet(`${NS}.inputLimiter`, '1') === '1';
   const inputListeners = new Set();
   function onInputChange(fn) { inputListeners.add(fn); return () => inputListeners.delete(fn); }
   function notifyInput() {
-    const snap = { level: inputLevel, muted: inputMuted, available: sources.has('mic') };
+    const snap = { level: inputLevel, muted: inputMuted, limiter: inputLimiterOn, available: sources.has('mic') };
     inputListeners.forEach(fn => { try { fn(snap); } catch {} });
   }
   // Effective audible/recorded level — the fader gated by mute.
@@ -125,7 +164,18 @@ export function createAudio() {
     applyInput();
     notifyInput();
   }
-  function getInput() { return { level: inputLevel, muted: inputMuted, available: sources.has('mic') }; }
+  function applyInputLimiter() {
+    const m = sources.get('mic');
+    if (m?.inputLimiter) setLimiterEngaged(m.inputLimiter, inputLimiterOn);
+  }
+  function setInputLimiter(on) {
+    inputLimiterOn = !!on;
+    lsSet(`${NS}.inputLimiter`, inputLimiterOn ? '1' : '0');
+    applyInputLimiter();
+    notifyInput();
+  }
+  function getInputLimiter() { return inputLimiterOn; }
+  function getInput() { return { level: inputLevel, muted: inputMuted, limiter: inputLimiterOn, available: sources.has('mic') }; }
   // Back-compat aliases for the prior "mic monitor" API (level-only).
   const setMonitorLevel = setInputLevel;
   const getMonitor = () => ({ level: inputLevel, available: sources.has('mic') });
@@ -418,7 +468,13 @@ export function createAudio() {
     monitorGain.gain.value = effInput();
     monitorGain.__qualiaBypassMute = true;   // never silenced by the Strudel mute gate
     micSource.connect(monitorGain);
-    monitorGain.connect(ctx.destination);    // speaker monitor
+    // Brickwall limiter between the fader and the speakers so a hot input
+    // transient can't clip the device output. The analyser below taps
+    // monitorGain (PRE-limiter), so the meter shows the true level even while
+    // the limiter is catching it. Toggle/bypass from the mixer.
+    const inputLimiter = makeLimiter(ctx, inputLimiterOn);
+    monitorGain.connect(inputLimiter);
+    inputLimiter.connect(ctx.destination);   // speaker monitor (post-limiter)
     // Bands + the merged mix waveform/spectrum tap POST the fader, so the mic's
     // contribution to reactivity AND the recording follows its volume + mute —
     // muting the rig drops it from the visuals and the mix, like a channel
@@ -430,7 +486,7 @@ export function createAudio() {
     scopeAnalyser.fftSize = 1024;
     scopeAnalyser.smoothingTimeConstant = 0.40;
     micSource.connect(scopeAnalyser);
-    const src = { ctx, analyser, ownsCtx: true, stream, micSource, monitorGain, scopeAnalyser };
+    const src = { ctx, analyser, ownsCtx: true, stream, micSource, monitorGain, inputLimiter, scopeAnalyser };
     configureSource(src);
     sources.set('mic', src);
 
@@ -548,6 +604,7 @@ export function createAudio() {
       frame.beat.active  = false;
       frame.mids.active  = false;
       frame.highs.active = false;
+      notifyClip(false);   // nothing playing ⇒ nothing clipping
       return;
     }
 
@@ -566,10 +623,33 @@ export function createAudio() {
     // controls whether mic, strudel, both, or neither feed the analysis.
     // Skipping a filtered source here also skips the analyser read below.
     const filter = sourceFilter;
+    let anyClip = false;
     for (const [id, src] of sources) {
-      if (filter && !filter.has(id)) continue;
-      src.analyser.getByteFrequencyData(src.freqBuf);
+      const inFilter = !filter || filter.has(id);
+      // Time-domain is read for EVERY source (metering must see sources the
+      // reactivity filter drops — they still reach the speakers). Peak + rail
+      // detection ride the same pass; RMS still accumulates filtered-in only.
       src.analyser.getByteTimeDomainData(src.timeBuf);
+      const tb = src.timeBuf;
+      let peak = 0, rails = 0;
+      for (let i = 0; i < tb.length; i++) {
+        const u = tb[i];
+        const v = (u - 128) / 128;
+        const a = v < 0 ? -v : v;
+        if (a > peak) peak = a;
+        if (u <= 1 || u >= 254) rails++;       // pinned at full scale
+        if (inFilter) rmsAcc += v * v;
+      }
+      if (inFilter) rmsCount += tb.length;
+      src.peak = peak;
+      // 2+ rail samples in a frame ⇒ real clipping (a lone extreme sample can
+      // be coincidence). Hold the flag for CLIP_HOLD so brief overs stay lit.
+      src.clipHold = (rails >= 2) ? CLIP_HOLD : Math.max(0, (src.clipHold || 0) - dt);
+      src.clipping = src.clipHold > 0;
+      if (src.clipping) anyClip = true;
+
+      if (!inFilter) continue;   // metered above, but excluded from band/visual aggregation
+      src.analyser.getByteFrequencyData(src.freqBuf);
       const b = src.bins;
       const bass  = avgBins(src.freqBuf, b.bassLo,  b.bassHi)  / 255;
       const mids  = avgBins(src.freqBuf, b.midsLo,  b.midsHi)  / 255;
@@ -579,17 +659,13 @@ export function createAudio() {
       if (mids  > rawMidsPre0)  rawMidsPre0  = mids;
       if (highs > rawHighsPre0) rawHighsPre0 = highs;
       if (snare > rawSnarePre0) rawSnarePre0 = snare;
-      for (let i = 0; i < src.timeBuf.length; i++) {
-        const v = (src.timeBuf[i] - 128) / 128;
-        rmsAcc += v * v;
-      }
-      rmsCount += src.timeBuf.length;
       if (combinedFreqBuf) {
         mergeFreqInto(combinedFreqBuf, src);
         mergeWaveformInto(combinedTimeBuf, src, firstWave);
         firstWave = false;
       }
     }
+    notifyClip(anyClip);
 
     // Apply user gain to all transient/visual paths. The transient detector
     // works on UNCLAMPED gained values (so headroom > 1 is fine, the
@@ -737,8 +813,14 @@ export function createAudio() {
     setSourceFilter,
     setInputLevel,
     setInputMuted,
+    setInputLimiter,
+    getInputLimiter,
     getInput,
     onInputChange,
+    // Clip / level metering (single source of truth for the mixer + topbar).
+    getLevels,
+    onClipChange,
+    isClipping,
     setMonitorLevel,
     getMonitor,
     onMonitorChange,

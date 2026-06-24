@@ -21,6 +21,7 @@ import { createStrudelHydra } from './strudel-hydra.js';
 import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
+import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { createChron } from './chron.js';
@@ -3270,6 +3271,35 @@ export function initQualiaPage() {
     harmonizer,
   });
   _vocoderRef = vocoder;
+
+  // ── Mixer + clip metering ────────────────────────────────────────────────
+  // One panel gathering every track's level / mute / limiter, with live peak
+  // meters + clip LEDs fed by audio.getLevels(). Created last so all the
+  // source modules (strudel, sequencer, looper, vocoder, mic) are in scope.
+  const mixer = createMixer({ audio, strudel, sequencer, looper, vocoder });
+
+  // Topbar CLIP indicator — lights whenever ANY track hits full scale, even
+  // with the mixer panel closed (event-driven off audio.onClipChange, so no
+  // extra polling). Click it to jump straight to the mixer.
+  const clipIndicator = document.getElementById('clip-indicator');
+  if (clipIndicator) {
+    audio.onClipChange((on) => clipIndicator.classList.toggle('lit', on));
+    clipIndicator.addEventListener('click', () => mixer.open());
+  }
+
+  // Mixer surface on the live-coding hook — drive any track's level/mute/limiter
+  // by id ('mic','rig','strudel','seq','vox'), e.g.
+  // qualia.mixer.setLevel('strudel', 0.7). strudel-hydra owns globalThis.qualia.
+  if (typeof globalThis !== 'undefined' && globalThis.qualia) {
+    globalThis.qualia.mixer = {
+      open:       () => mixer.open(),
+      close:      () => mixer.close(),
+      setLevel:   (id, v)  => mixer.setLevel(id, v),
+      setMuted:   (id, on) => mixer.setMuted(id, on),
+      setLimiter: (id, on) => mixer.setLimiter(id, on),
+      isClipping: () => audio.isClipping(),
+    };
+  }
 
   // Adopt or release the vocoder's output analyser as an audio source named
   // 'vocoder'. When the panel's feed toggle is on and the vocoder is live,
