@@ -1356,7 +1356,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const TUNER_MIN_HZ = 22;     // reach below G0 (~24.5 Hz)
   const TUNER_INTERVAL_MS = 180;  // slower update = steadier reading
-  let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerNeedleEl = null, tunerCentsEl = null;
+  let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerNeedleEl = null, tunerCentsEl = null, tunerTickEl = null;
   let tunerBuf = null, tunerDec = null, _tunerLastMs = 0;
   let _tunerNoteKey = '', _tunerErrSmooth = 0;
   function buildTunerUI() {
@@ -1365,8 +1365,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
     tunerHzEl   = document.createElement('span'); tunerHzEl.className   = 'rig-tuner-hz';
     tunerTgtEl  = document.createElement('span'); tunerTgtEl.className  = 'rig-tuner-tgt';
     const bar = document.createElement('span'); bar.className = 'rig-tuner-bar';
+    // Tick marking the sweetened target offset (under center for ET) — the
+    // note is in tune when the needle lands on it.
+    tunerTickEl = document.createElement('span'); tunerTickEl.className = 'rig-tuner-tick'; tunerTickEl.style.left = '50%';
     tunerNeedleEl = document.createElement('span'); tunerNeedleEl.className = 'rig-tuner-needle'; tunerNeedleEl.style.left = '50%';
-    bar.append(tunerNeedleEl);
+    bar.append(tunerTickEl, tunerNeedleEl);
     tunerCentsEl = document.createElement('span'); tunerCentsEl.className = 'rig-tuner-cents'; tunerCentsEl.textContent = 'play a note';
     _tunerMuteBtn = document.createElement('button');
     _tunerMuteBtn.type = 'button'; _tunerMuteBtn.className = 'ctrl-btn rig-tuner-mute';
@@ -1410,7 +1413,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const clear = () => {
       tunerNoteEl.textContent = '—'; tunerNoteEl.style.color = '';
       if (tunerHzEl) tunerHzEl.textContent = ''; if (tunerTgtEl) tunerTgtEl.textContent = '';
-      tunerCentsEl.textContent = an ? 'play a note' : 'rig signal off'; tunerNeedleEl.style.left = '50%';
+      tunerCentsEl.textContent = an ? 'play a note' : 'rig signal off'; tunerCentsEl.style.color = '';
+      tunerNeedleEl.style.left = '50%'; tunerNeedleEl.style.boxShadow = 'none';
+      if (tunerTickEl) { tunerTickEl.style.left = '50%'; tunerTickEl.classList.remove('in-tune'); }
       _tunerNoteKey = '';
     };
     if (!an || typeof an.getFloatTimeDomainData !== 'function') { clear(); return; }
@@ -1440,11 +1445,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
     tunerNoteEl.textContent = `${NOTE_NAMES[cls]}${octave}`;
     if (tunerHzEl) tunerHzEl.textContent = `${f.toFixed(1)} Hz`;
     if (tunerTgtEl) tunerTgtEl.textContent = `tgt ${target > 0 ? '+' : ''}${target}¢`;
-    const inTune = Math.abs(err) <= 3;
-    tunerNoteEl.style.color = inTune ? 'var(--cyan)' : '';
+    const inTune = Math.abs(err) <= 3;                      // on/near the target tick
+    const good = 'var(--green)';
+    tunerNoteEl.style.color = inTune ? good : '';
     tunerCentsEl.textContent = `${shown > 0 ? '+' : ''}${shown}¢`;
-    tunerNeedleEl.style.left = Math.max(0, Math.min(100, 50 + err)) + '%';
-    tunerNeedleEl.style.background = inTune ? 'var(--cyan)' : (Math.abs(err) <= 12 ? '#fbbf24' : 'var(--pink)');
+    tunerCentsEl.style.color = inTune ? good : '';
+    // Needle tracks the raw deviation from equal temperament so it lines up
+    // with the tick (the sweetened target sits at 50 + target).
+    tunerNeedleEl.style.left = Math.max(0, Math.min(100, 50 + target + err)) + '%';
+    tunerNeedleEl.style.background = inTune ? good : (Math.abs(err) <= 12 ? '#fbbf24' : 'var(--pink)');
+    tunerNeedleEl.style.boxShadow = inTune ? '0 0 6px var(--green)' : 'none';
+    if (tunerTickEl) {
+      tunerTickEl.style.left = Math.max(0, Math.min(100, 50 + target)) + '%';
+      tunerTickEl.classList.toggle('in-tune', inTune);
+    }
   }
 
   // ── temperament editor (ET / custom + per-note cent spinners) ──────────────
