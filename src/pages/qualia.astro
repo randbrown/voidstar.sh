@@ -1609,6 +1609,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       min-width: 116px; flex: 1 1 116px;
     }
     .rig-stage.on { border-color: var(--cyan); background: rgba(34,211,238,0.06); }
+    /* amp + cab carry a saved-file picker — give them more room so the IR / amp
+       library names are legible (collapsed still wins via :not). */
+    .rig-stage[data-stage="amp"]:not(.collapsed),
+    .rig-stage[data-stage="cab"]:not(.collapsed) { min-width: 220px; flex-basis: 220px; }
     .rig-stage-head {
       display: flex; align-items: center; justify-content: flex-start;
       gap: 0.3rem; margin-bottom: 0.25rem;
@@ -1664,14 +1668,17 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* Temperament editor — ET / custom toggle + 12 per-note cent spinners. */
     .rig-temper { padding: 0 0.7rem 0.45rem; }
     .rig-temper-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.5rem; margin-bottom: 0.3rem; }
-    .rig-cab-load { gap: 0.3rem; }
+    /* Loader row: [load] [✕] on the top line, the saved-file picker on its own
+       full-width line below so long IR / amp names stay legible. */
+    .rig-cab-load { gap: 0.3rem; flex-wrap: wrap; }
     .rig-cab-load .ctrl-btn { padding: 0.05rem 0.4rem; font-size: 0.6rem; }
     /* Saved-file picker (cab IR / amp capture libraries). */
     .rig-lib-select {
-      flex: 1; min-width: 0; max-width: 13ch;
+      flex: 1 1 100%; min-width: 0;
       font-size: 0.58rem; padding: 0.05rem 0.2rem;
       color: var(--text); background: rgba(0,0,0,0.30);
       border: 1px solid var(--border); border-radius: 4px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     #rig-temper .ctrl-btn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10); }
     .rig-temper-grid { display: flex; flex-wrap: wrap; gap: 0.25rem 0.4rem; }
@@ -2541,6 +2548,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <!-- SIGNAL subpanel — the live instrument source: device, level/mute, scope. -->
   <section id="rig-signal" class="rig-subpanel">
     <div class="rig-subhead">
+      <button class="ctrl-btn rig-collapse" id="btn-rig-scope-collapse" title="Collapse / expand the input + output scopes">▾</button>
       <span class="sp-subtitle">signal</span>
       <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
       <span id="rig-input-controls" class="rig-input-controls"></span>
@@ -2551,13 +2559,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-rig-loop" title="Looper — record, layer, and loop your signal">loop</button>
       <span class="sp-status" id="rig-signal-status"></span>
     </div>
-    <div class="rig-scope-wrap">
-      <canvas id="rig-scope" class="rig-scope" title="Live input scope — the raw rig input (pre-fader, post channel-mode)"></canvas>
-      <span class="rig-scope-tag">in</span>
-    </div>
-    <div class="rig-scope-wrap">
-      <canvas id="rig-scope-out" class="rig-scope rig-scope-out" title="Rig output scope — everything leaving the rig (channel strip + loops), post master level/mute: what's actually going to the speakers"></canvas>
-      <span class="rig-scope-tag">out</span>
+    <div id="rig-scopes">
+      <div class="rig-scope-wrap">
+        <canvas id="rig-scope" class="rig-scope" title="Live input scope — the raw rig input (pre-fader, post channel-mode)"></canvas>
+        <span class="rig-scope-tag">in</span>
+      </div>
+      <div class="rig-scope-wrap">
+        <canvas id="rig-scope-out" class="rig-scope rig-scope-out" title="Rig output scope — everything leaving the rig (channel strip + loops), post master level/mute: what's actually going to the speakers"></canvas>
+        <span class="rig-scope-tag">out</span>
+      </div>
     </div>
     <div id="rig-tuner" class="rig-tuner" style="display:none"></div>
     <div id="rig-temper" class="rig-temper" style="display:none"></div>
