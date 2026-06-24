@@ -1065,6 +1065,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .sp-ref-empty { color: var(--muted); padding: 0.6rem; text-align: center; }
     #btn-sound-refresh { padding: 0.2rem 0.5rem; font-size: 0.8rem; line-height: 1; }
+    /* Mini-notation cheatsheet rows: symbol + meaning on one tight line. */
+    .sp-ref-compact { padding: 0.22rem 0.5rem; }
+    .sp-ref-compact .sp-ref-name { flex: 0 0 auto; }
+    .sp-ref-compact .sp-ref-sig { white-space: normal; }
+    /* Per-sound audition button. */
+    .sp-ref-preview {
+      flex-shrink: 0;
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--cyan); font-size: 0.6rem; line-height: 1;
+      padding: 0.12rem 0.32rem; cursor: pointer; transition: all 0.12s;
+    }
+    .sp-ref-preview:hover { border-color: var(--cyan); background: rgba(34,211,238,0.12); }
+    .sp-ref-preview:active { transform: scale(0.92); }
 
     /* Qualem panel reuses .sp-pat-* row styling. The body just needs flex
        column + small gap so the toolbar sits cleanly above the list.

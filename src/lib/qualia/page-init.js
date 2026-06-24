@@ -18,7 +18,7 @@ import * as qualem from './qualem.js';
 import { parseMetadata as parseStrudelMeta, setMetadata as setStrudelMeta } from './patterns.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
-import { filterFunctions, groupByCategory } from './strudel-reference.js';
+import { filterFunctions, groupByCategory, STRUDEL_FUNCTIONS } from './strudel-reference.js';
 import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
@@ -3494,10 +3494,91 @@ export function initQualiaPage() {
   // function's insert-snippet at the editor cursor and jumps back to the
   // editor so the change is visible. Render is lazy (on tab-open / search),
   // so there's no cost until the tab is used.
+  // Recently-used tracking for both reference panels — a small MRU list per
+  // panel in localStorage, surfaced as a "★ recently used" group at the top of
+  // an unfiltered view for quick re-access.
+  const RECENT_FUNCS_KEY  = 'voidstar.qualia.strudel.recentFuncs';
+  const RECENT_SOUNDS_KEY = 'voidstar.qualia.strudel.recentSounds';
+  const RECENT_MAX = 8;
+  function loadRecent(key) {
+    try { const v = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(v) ? v : []; }
+    catch { return []; }
+  }
+  function pushRecent(key, id) {
+    try {
+      const list = loadRecent(key).filter(x => x !== id);
+      list.unshift(id);
+      localStorage.setItem(key, JSON.stringify(list.slice(0, RECENT_MAX)));
+    } catch {}
+  }
+  const funcByName = new Map(STRUDEL_FUNCTIONS.map(f => [f.name, f]));
+
+  // Build one function row. Mini-notation entries render compactly (the symbol
+  // + its meaning inline) so the category reads as a quick-glance cheatsheet;
+  // everything else gets the full signature / doc / example layout.
+  function buildFuncRow(f) {
+    const compact = f.category === 'mini-notation';
+    const row = document.createElement('div');
+    row.className = compact ? 'sp-ref-row sp-ref-compact' : 'sp-ref-row';
+    row.title = `insert  ${f.insert ?? f.name}`;
+
+    const headRow = document.createElement('div');
+    headRow.className = 'sp-ref-head';
+    const name = document.createElement('span');
+    name.className = 'sp-ref-name';
+    name.textContent = f.name;
+    headRow.appendChild(name);
+    if (compact && f.doc) {
+      const d = document.createElement('span');
+      d.className = 'sp-ref-sig';
+      d.textContent = f.doc;
+      headRow.appendChild(d);
+    } else if (!compact && f.signature) {
+      const sig = document.createElement('span');
+      sig.className = 'sp-ref-sig';
+      sig.textContent = f.signature;
+      headRow.appendChild(sig);
+    }
+    row.appendChild(headRow);
+
+    if (!compact && f.doc) {
+      const doc = document.createElement('div');
+      doc.className = 'sp-ref-doc';
+      doc.textContent = f.doc;
+      row.appendChild(doc);
+    }
+    if (!compact && f.example) {
+      const ex = document.createElement('div');
+      ex.className = 'sp-ref-ex';
+      ex.textContent = f.example;
+      row.appendChild(ex);
+    }
+    row.addEventListener('click', () => {
+      strudel.insertAtCursor(f.insert ?? f.name);
+      pushRecent(RECENT_FUNCS_KEY, f.name);
+      setStrudelTab('editor');
+    });
+    return row;
+  }
+
   function renderFuncList() {
     if (!funcListEl) return;
-    const groups = groupByCategory(filterFunctions(funcSearch?.value || ''));
+    const q = funcSearch?.value || '';
     funcListEl.innerHTML = '';
+
+    if (!q.trim()) {
+      const recent = loadRecent(RECENT_FUNCS_KEY)
+        .map(n => funcByName.get(n)).filter(Boolean).slice(0, RECENT_MAX);
+      if (recent.length) {
+        const head = document.createElement('div');
+        head.className = 'sp-ref-cat';
+        head.textContent = '★ recently used';
+        funcListEl.appendChild(head);
+        for (const f of recent) funcListEl.appendChild(buildFuncRow(f));
+      }
+    }
+
+    const groups = groupByCategory(filterFunctions(q));
     if (!groups.length) {
       const empty = document.createElement('div');
       empty.className = 'sp-ref-empty';
@@ -3510,43 +3591,7 @@ export function initQualiaPage() {
       head.className = 'sp-ref-cat';
       head.textContent = cat;
       funcListEl.appendChild(head);
-      for (const f of entries) {
-        const row = document.createElement('div');
-        row.className = 'sp-ref-row';
-        row.title = `insert  ${f.insert ?? f.name}`;
-
-        const headRow = document.createElement('div');
-        headRow.className = 'sp-ref-head';
-        const name = document.createElement('span');
-        name.className = 'sp-ref-name';
-        name.textContent = f.name;
-        headRow.appendChild(name);
-        if (f.signature) {
-          const sig = document.createElement('span');
-          sig.className = 'sp-ref-sig';
-          sig.textContent = f.signature;
-          headRow.appendChild(sig);
-        }
-        row.appendChild(headRow);
-
-        if (f.doc) {
-          const doc = document.createElement('div');
-          doc.className = 'sp-ref-doc';
-          doc.textContent = f.doc;
-          row.appendChild(doc);
-        }
-        if (f.example) {
-          const ex = document.createElement('div');
-          ex.className = 'sp-ref-ex';
-          ex.textContent = f.example;
-          row.appendChild(ex);
-        }
-        row.addEventListener('click', () => {
-          strudel.insertAtCursor(f.insert ?? f.name);
-          setStrudelTab('editor');
-        });
-        funcListEl.appendChild(row);
-      }
+      for (const f of entries) funcListEl.appendChild(buildFuncRow(f));
     }
   }
   funcSearch?.addEventListener('input', renderFuncList);
@@ -3558,11 +3603,49 @@ export function initQualiaPage() {
   // ↻ button. Clicking a row inserts s("name") at the cursor.
   const SOUND_TYPE_LABELS = { sample: 'samples', synth: 'synths', soundfont: 'soundfonts', other: 'other' };
   const SOUND_TYPE_ORDER  = ['sample', 'synth', 'soundfont', 'other'];
+  // Build one sound row, with a ▶ preview button that auditions the sound
+  // without inserting it (stopPropagation keeps the row-click insert separate).
+  function buildSoundRow(s) {
+    const row = document.createElement('div');
+    row.className = 'sp-ref-row';
+    row.title = `insert  s("${s.name}")`;
+    const headRow = document.createElement('div');
+    headRow.className = 'sp-ref-head';
+
+    const preview = document.createElement('button');
+    preview.className = 'sp-ref-preview';
+    preview.textContent = '▶';
+    preview.title = 'Preview this sound';
+    preview.addEventListener('click', (e) => {
+      e.stopPropagation();
+      strudel.previewSound(s.name, s.type);
+    });
+    headRow.appendChild(preview);
+
+    const name = document.createElement('span');
+    name.className = 'sp-ref-name';
+    name.textContent = s.name;
+    headRow.appendChild(name);
+    if (s.count > 1) {
+      const meta = document.createElement('span');
+      meta.className = 'sp-ref-meta';
+      meta.textContent = `${s.count} variants`;
+      headRow.appendChild(meta);
+    }
+    row.appendChild(headRow);
+    row.addEventListener('click', () => {
+      strudel.insertAtCursor(`s("${s.name}")`);
+      pushRecent(RECENT_SOUNDS_KEY, s.name);
+      setStrudelTab('editor');
+    });
+    return row;
+  }
+
   function renderSoundList() {
     if (!soundListEl) return;
     soundListEl.innerHTML = '';
-    let sounds = strudel.listSounds();
-    if (!sounds.length) {
+    const all = strudel.listSounds();
+    if (!all.length) {
       const empty = document.createElement('div');
       empty.className = 'sp-ref-empty';
       empty.textContent = 'sounds still loading — press ▶ once, then ↻ to refresh';
@@ -3570,7 +3653,23 @@ export function initQualiaPage() {
       return;
     }
     const q = (soundSearch?.value || '').trim().toLowerCase();
-    if (q) sounds = sounds.filter(s => s.name.toLowerCase().includes(q) || s.type.includes(q));
+
+    if (!q) {
+      const byName = new Map(all.map(s => [s.name, s]));
+      const recent = loadRecent(RECENT_SOUNDS_KEY)
+        .map(n => byName.get(n)).filter(Boolean).slice(0, RECENT_MAX);
+      if (recent.length) {
+        const head = document.createElement('div');
+        head.className = 'sp-ref-cat';
+        head.textContent = '★ recently used';
+        soundListEl.appendChild(head);
+        for (const s of recent) soundListEl.appendChild(buildSoundRow(s));
+      }
+    }
+
+    const sounds = q
+      ? all.filter(s => s.name.toLowerCase().includes(q) || s.type.includes(q))
+      : all;
     if (!sounds.length) {
       const empty = document.createElement('div');
       empty.className = 'sp-ref-empty';
@@ -3594,29 +3693,7 @@ export function initQualiaPage() {
       head.className = 'sp-ref-cat';
       head.textContent = `${SOUND_TYPE_LABELS[t] || t} (${items.length})`;
       soundListEl.appendChild(head);
-      for (const s of items) {
-        const row = document.createElement('div');
-        row.className = 'sp-ref-row';
-        row.title = `insert  s("${s.name}")`;
-        const headRow = document.createElement('div');
-        headRow.className = 'sp-ref-head';
-        const name = document.createElement('span');
-        name.className = 'sp-ref-name';
-        name.textContent = s.name;
-        headRow.appendChild(name);
-        if (s.count > 1) {
-          const meta = document.createElement('span');
-          meta.className = 'sp-ref-meta';
-          meta.textContent = `${s.count} variants`;
-          headRow.appendChild(meta);
-        }
-        row.appendChild(headRow);
-        row.addEventListener('click', () => {
-          strudel.insertAtCursor(`s("${s.name}")`);
-          setStrudelTab('editor');
-        });
-        soundListEl.appendChild(row);
-      }
+      for (const s of items) soundListEl.appendChild(buildSoundRow(s));
     }
   }
   soundSearch?.addEventListener('input', renderSoundList);

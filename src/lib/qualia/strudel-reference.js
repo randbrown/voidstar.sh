@@ -11,6 +11,7 @@ import functions from '../../data/strudel-functions.json';
 
 /** Category display order in the panel. Unknown categories sort after these. */
 export const CATEGORY_ORDER = [
+  'templates',
   'sources',
   'mini-notation',
   'time',

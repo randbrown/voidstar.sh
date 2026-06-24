@@ -1458,6 +1458,25 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     } catch { return []; }
   }
 
+  // Audition a registered sound through superdough directly — no effect on the
+  // editor's pattern or the scheduler. superdough(value, t, dur, cps) wants an
+  // ABSOLUTE AudioContext onset time, so we schedule a hair in the future.
+  // Pitched sources (synths/soundfonts) get a default note so there's
+  // something to hear; samples play as-is. superdough is exposed on globalThis
+  // by the bundle, same path as getAudioContext().
+  function previewSound(name, type) {
+    try {
+      const ac = globalThis.getAudioContext?.();
+      const dough = globalThis.superdough;
+      if (!ac || typeof dough !== 'function') return false;
+      ac.resume?.();
+      const value = { s: name, gain: 0.9 };
+      if (type && type !== 'sample') value.note = 'c3';
+      dough(value, ac.currentTime + 0.05, 0.5);
+      return true;
+    } catch { return false; }
+  }
+
   return {
     open,
     close,
@@ -1501,6 +1520,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     insertAtCursor,
     /** Snapshot of currently-registered Strudel sounds for the browser tab. */
     listSounds,
+    /** Audition a sound by name without touching the editor/scheduler. */
+    previewSound,
     /** Call from the render loop so globalThis.a.fft stays current. */
     perFrame: refreshAFft,
     patterns: {
