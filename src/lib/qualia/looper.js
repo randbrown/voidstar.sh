@@ -44,6 +44,7 @@ const RETRO_KEY      = `${NS}.retroCycles`;// cycles the retro "grab" captures
 const BUFFER_KEY     = `${NS}.buffer`;     // keep the live lookback buffer filling
 const SIGLEVEL_KEY   = `${NS}.signalLevel`;// rig signal monitor/mix level
 const SIGMUTE_KEY    = `${NS}.signalMuted`;// rig signal mute
+const SCOPESOPEN_KEY = `${NS}.scopesOpen`; // in/out scopes visible (collapsible)
 const RIG_MUTE_KEY   = `${NS}.rigMuted`;  // rig master mute (signal + loops)
 const RIG_LEVEL_KEY  = `${NS}.rigLevel`;  // rig master output level
 const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo'
@@ -207,6 +208,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnChannels = document.getElementById('btn-rig-channels');
   const scopeCanvas = document.getElementById('rig-scope');
   const scopeOutCanvas = document.getElementById('rig-scope-out');
+  const scopesWrap  = document.getElementById('rig-scopes');
+  const btnScopeCollapse = document.getElementById('btn-rig-scope-collapse');
   const btnStrip    = document.getElementById('btn-rig-strip');
   const btnTuner    = document.getElementById('btn-rig-tuner');
   const stripPanel  = document.getElementById('rig-strip');
@@ -248,6 +251,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     rigLevel: num01(lsGet(RIG_LEVEL_KEY, '1'), 1.0),   // rig master output level
     signalLevel: num01(lsGet(SIGLEVEL_KEY, '0'), 0),   // rig signal monitor/mix level
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
+    scopesOpen: lsGet(SCOPESOPEN_KEY, '1') !== '0',    // in/out scopes visible (default on)
     channels: lsGet(CHANNELS_KEY, 'mono') === 'stereo' ? 'stereo' : 'mono',
     strip: loadStripConfig(),                          // channel strip config
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
@@ -1154,6 +1158,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (scopeCanvas) ro.observe(scopeCanvas);
     if (scopeOutCanvas) ro.observe(scopeOutCanvas);
   }
+  // Collapse / expand the in + out scopes together (the scope rAF keeps running
+  // so the dB readout in the always-visible subhead stays live; we just hide the
+  // canvases). Re-size on expand since a hidden canvas has zero client width.
+  function applyScopesCollapse() {
+    const open = model.scopesOpen !== false;
+    if (scopesWrap) scopesWrap.style.display = open ? '' : 'none';
+    if (btnScopeCollapse) { btnScopeCollapse.textContent = open ? '▾' : '▸'; btnScopeCollapse.classList.toggle('collapsed', !open); }
+    if (open && scopeRAF) sizeScope();
+  }
+  function toggleScopesCollapse() {
+    model.scopesOpen = !model.scopesOpen;
+    lsSet(SCOPESOPEN_KEY, model.scopesOpen ? '1' : '0');
+    applyScopesCollapse();
+  }
 
   // ── channel strip UI ──────────────────────────────────────────────────────
   let _stripTimer = null;
@@ -1293,6 +1311,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const sel = document.createElement('select');
     sel.className = 'rig-lib-select';
     sel.title = cab ? 'Saved IRs — pick one to load instantly' : 'Saved amp captures — pick one to load instantly';
+    sel.dataset.help = sel.title;   // fallback tooltip when nothing is selected
     sel.addEventListener('change', () => (cab ? selectCab(sel.value) : selectAmp(sel.value)));
     const del = document.createElement('button');
     del.type = 'button'; del.className = 'ctrl-btn'; del.textContent = '✕';
@@ -1300,7 +1319,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     del.addEventListener('click', () => (cab ? removeCab(sel.value) : removeAmp(sel.value)));
     if (!cab && !looperAudio.isAmpCapable?.()) { btn.disabled = true; btn.title = 'Neural amp needs AudioWorklet support'; }
     if (cab) cabSelEl = sel; else ampSelEl = sel;
-    row.append(file, btn, sel, del);
+    // load + remove on the top line; the picker (sel) flex-wraps to a full-width
+    // line beneath them, so it has room to show the saved file's full name.
+    row.append(file, btn, del, sel);
     if (cab) renderCabLib(); else renderAmpLib();
     return row;
   }
@@ -1318,6 +1339,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
       sel.append(o);
     }
     sel.value = cur && list.some((e) => e.id === cur) ? cur : '';
+    // Tooltip mirrors the selected filename (the collapsed select may ellipsize
+    // a long name); fall back to the help text when nothing is loaded.
+    const selName = list.find((e) => e.id === sel.value)?.name;
+    sel.title = selName || sel.dataset.help || '';
   }
   let cabSelEl = null, ampSelEl = null;
   function buildCabLoader() { return buildLibLoader('cab'); }
@@ -1926,6 +1951,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (rigLoopSection) rigLoopSection.style.display = model.loopOpen ? '' : 'none';
     applyLoopCollapse();
     startScope();
+    applyScopesCollapse();
     refreshLooperBtn();
     refreshTransport();
   }
@@ -1950,6 +1976,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnStripReset) btnStripReset.addEventListener('click', () => { resetStrip(); });
   if (btnLoop) btnLoop.addEventListener('click', () => { toggleLoop(); });
   if (btnLoopCollapse) btnLoopCollapse.addEventListener('click', () => { toggleLoopCollapse(); });
+  if (btnScopeCollapse) btnScopeCollapse.addEventListener('click', () => { toggleScopesCollapse(); });
   if (btnTuner)  btnTuner.addEventListener('click', () => { toggleTuner(); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
   if (btnStop)   btnStop.addEventListener('click', () => { stop(); });
