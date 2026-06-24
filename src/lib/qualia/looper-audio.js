@@ -35,6 +35,7 @@ import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
 import neuralWorkletUrl from './worklets/neural-amp.js?url&no-inline';
 import { createStretchNode } from './looper-stretch.js';
 import { createRigStrip } from './rig-strip.js';
+import { makeLimiter, setLimiterEngaged } from './limiter.js';
 
 const MIC_CONSTRAINTS = {
   echoCancellation: false,
@@ -95,8 +96,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Both the signal path (sigGain) and the loop bus (loopMaster) route through
   // rigMaster before hitting ctx.destination, giving a single mute + level
   // control over all rig output.
-  let rigMaster = null, outputAnalyser = null;
-  let _rigMuted = false, _rigLevel = 1.0;
+  let rigMaster = null, outputAnalyser = null, rigLimiter = null;
+  let _rigMuted = false, _rigLevel = 1.0, _rigLimiterOn = true;
   // Channel strip (HPF/drive/comp/EQ/delay/reverb/pan) inserted between the raw
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
   // persisted config and primes it via setStripConfig().
@@ -369,11 +370,18 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     rigMaster = ctx.createGain();
     rigMaster.gain.value = effRig();
     rigMaster.__qualiaBypassMute = true;
-    rigMaster.connect(ctx.destination);
+    // Brickwall limiter on the combined rig output (live signal + loop bus)
+    // before the speakers — clip insurance so the rig can't push full-scale
+    // into the device-level sum. The rig strip's own compressor shapes tone
+    // upstream; this only catches true overs. Bypassable from the mixer.
+    rigLimiter = makeLimiter(ctx, _rigLimiterOn);
+    rigLimiter.__qualiaBypassMute = true;
+    rigMaster.connect(rigLimiter);
+    rigLimiter.connect(ctx.destination);
     // Non-audible analyser on the FULL rig output (processed signal + loop bus,
-    // POST master level/mute) — exactly what's going to the speakers. Lives as
-    // long as rigMaster, so the output scope keeps drawing even when the input
-    // capture is closed but loops are still playing.
+    // POST master level/mute, PRE limiter) — exactly what's going to the
+    // speakers. Lives as long as rigMaster, so the output scope keeps drawing
+    // even when the input capture is closed but loops are still playing.
     outputAnalyser = ctx.createAnalyser();
     outputAnalyser.fftSize = 2048;
     outputAnalyser.smoothingTimeConstant = 0.40;
@@ -383,7 +391,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   function setRigMuted(on) { _rigMuted = !!on; if (rigMaster) ramp(rigMaster.gain, effRig()); }
   function setRigLevel(v) { _rigLevel = clamp01(v); if (rigMaster && !_rigMuted) ramp(rigMaster.gain, _rigLevel); }
   function primeRig(level, muted) { _rigLevel = clamp01(level); _rigMuted = !!muted; if (rigMaster) ramp(rigMaster.gain, effRig()); }
-  function getRigMaster() { return { level: _rigLevel, muted: _rigMuted }; }
+  function setRigLimiter(on) { _rigLimiterOn = !!on; setLimiterEngaged(rigLimiter, _rigLimiterOn); }
+  function getRigLimiter() { return _rigLimiterOn; }
+  function primeRigLimiter(on) { _rigLimiterOn = !!on; setLimiterEngaged(rigLimiter, _rigLimiterOn); }
+  function getRigMaster() { return { level: _rigLevel, muted: _rigMuted, limiter: _rigLimiterOn }; }
 
   // ── rig signal level / mute (channel-strip volume + mute) ──────────────────
   function effSignal() { return _sigMuted ? 0 : _sigLevel; }
@@ -951,8 +962,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { loopMaster?.disconnect(); } catch {}
     try { analyser?.disconnect(); } catch {}
     try { outputAnalyser?.disconnect(); } catch {}
+    try { rigLimiter?.disconnect(); } catch {}
     try { rigMaster?.disconnect(); } catch {}
-    rigMaster = outputAnalyser = null;
+    rigMaster = outputAnalyser = rigLimiter = null;
     loopMaster = analyser = null;
     try { ctx?.close(); } catch {}
     ctx = null; workletReady = null;
@@ -972,6 +984,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     startBuffer, stopBuffer, grabRetro,
     ensureCaptureOpen,
     setRigMuted, setRigLevel, primeRig, getRigMaster,
+    setRigLimiter, getRigLimiter, primeRigLimiter,
     setSignalLevel, setSignalMuted, getSignal, primeSignal,
     setChannels, getChannels,
     // Channel strip — persisted config lives in looper.js; updates apply to the

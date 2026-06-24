@@ -1087,6 +1087,65 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .sp-pat-actions .ctrl-btn { padding: 0.15rem 0.45rem; font-size: 0.68rem; }
     .sp-pat-empty { color: var(--muted); padding: 0.6rem; text-align: center; }
 
+    /* Reference panels (funcs + sounds) — same container + row idiom as the
+       patterns list, plus a search box and category headers. Rows are
+       click-to-insert into the editor at the cursor. */
+    #strudel-funcs, #strudel-sounds {
+      flex: 1; min-height: 0; overflow: auto;
+      padding: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem;
+      color: var(--text); font-family: var(--font-mono); font-size: 0.74rem;
+    }
+    .sp-ref-toolbar { display: flex; gap: 0.4rem; align-items: center; }
+    .sp-ref-search {
+      flex: 1; min-width: 0;
+      background: rgba(0,0,0,0.4); color: var(--cyan);
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 0.3rem 0.5rem;
+      font-family: var(--font-mono); font-size: 0.72rem;
+    }
+    .sp-ref-search:focus { outline: none; border-color: var(--cyan); }
+    .sp-ref-list { display: flex; flex-direction: column; gap: 0.3rem; }
+    .sp-ref-cat {
+      color: var(--muted); font-size: 0.62rem; text-transform: uppercase;
+      letter-spacing: 0.08em; margin-top: 0.45rem; padding: 0 0.1rem;
+    }
+    .sp-ref-cat:first-child { margin-top: 0; }
+    .sp-ref-row {
+      display: flex; flex-direction: column; gap: 0.12rem;
+      padding: 0.35rem 0.5rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; transition: background-color 0.12s, border-color 0.12s;
+    }
+    .sp-ref-row:hover  { background: rgba(34,211,238,0.06); border-color: var(--cyan); }
+    .sp-ref-head { display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap; }
+    .sp-ref-name { color: var(--cyan); font-size: 0.78rem; }
+    .sp-ref-sig  {
+      color: var(--muted); font-size: 0.66rem;
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .sp-ref-meta { margin-left: auto; color: var(--muted); font-size: 0.62rem; flex-shrink: 0; }
+    .sp-ref-doc  { color: var(--text); font-size: 0.68rem; opacity: 0.85; }
+    .sp-ref-ex   {
+      color: var(--green, #7ee787); font-size: 0.66rem; opacity: 0.82;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .sp-ref-empty { color: var(--muted); padding: 0.6rem; text-align: center; }
+    #btn-sound-refresh { padding: 0.2rem 0.5rem; font-size: 0.8rem; line-height: 1; }
+    /* Mini-notation cheatsheet rows: symbol + meaning on one tight line. */
+    .sp-ref-compact { padding: 0.22rem 0.5rem; }
+    .sp-ref-compact .sp-ref-name { flex: 0 0 auto; }
+    .sp-ref-compact .sp-ref-sig { white-space: normal; }
+    /* Per-sound audition button. */
+    .sp-ref-preview {
+      flex-shrink: 0;
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--cyan); font-size: 0.6rem; line-height: 1;
+      padding: 0.12rem 0.32rem; cursor: pointer; transition: all 0.12s;
+    }
+    .sp-ref-preview:hover { border-color: var(--cyan); background: rgba(34,211,238,0.12); }
+    .sp-ref-preview:active { transform: scale(0.92); }
+
     /* Qualem panel reuses .sp-pat-* row styling. The body just needs flex
        column + small gap so the toolbar sits cleanly above the list.
        Cap the body height + scroll the list internally — with #panel-stack
@@ -1353,6 +1412,89 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .panel-mute-btn.muted {
       color: var(--pink); border-color: var(--pink);
       background: rgba(244, 114, 182, 0.10);
+    }
+    /* ── Mixer panel ──────────────────────────────────────────────────────
+       Compact channel-strip mixer: per-track level fader, mute, limiter
+       toggle, live peak meter + clip LED. Chrome mirrors the seq/vox panels. */
+    #mixer-panel {
+      position: fixed; left: 50%; top: 4.5rem;
+      transform: translateX(-50%);
+      z-index: 18;
+      width: min(94vw, 460px);
+      min-width: 300px;
+      max-width: 100vw; max-height: calc(100dvh - 6rem);
+      background: rgba(10,10,26,0.55);
+      border: 1px solid var(--border); border-radius: 10px;
+      font-family: var(--font-mono); color: var(--text);
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+      backdrop-filter: blur(8px);
+      resize: both;
+    }
+    #mixer-header {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.45rem 0.75rem;
+      background: var(--surface-glass);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+      cursor: grab; user-select: none; touch-action: none;
+    }
+    #mixer-header.dragging { cursor: grabbing; }
+    #btn-mixer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    #mixer-body {
+      display: flex; flex-direction: column; gap: 0.4rem;
+      padding: 0.6rem 0.75rem; overflow: auto;
+    }
+    .mx-ch { display: flex; align-items: center; gap: 0.55rem; }
+    .mx-ch-name {
+      width: 4.5ch; flex: none;
+      color: var(--cyan); font-size: 0.74rem;
+    }
+    .mx-meter {
+      position: relative; flex: 1 1 auto; min-width: 44px;
+      height: 8px; border-radius: 4px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border); overflow: hidden;
+    }
+    .mx-meter-fill {
+      position: absolute; left: 0; top: 0; bottom: 0;
+      width: 0%; background: var(--cyan);
+      transition: width 0.04s linear;
+    }
+    .mx-fader {
+      flex: none; width: 116px; accent-color: var(--accent);
+      height: 22px; cursor: pointer; touch-action: none;
+    }
+    .mx-lim {
+      padding: 0.1rem 0.45rem; font-size: 0.66rem; line-height: 1;
+      min-width: 4ch; text-align: center;
+      color: var(--muted); border-color: var(--border);
+    }
+    .mx-lim.active { color: var(--cyan); border-color: var(--cyan); }
+    .mx-clip {
+      flex: none; width: 9px; height: 9px; border-radius: 50%;
+      background: rgba(255,255,255,0.12);
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
+    .mx-clip.lit {
+      background: var(--pink);
+      box-shadow: 0 0 8px var(--pink), 0 0 2px var(--pink);
+    }
+    @media (pointer: coarse) {
+      .mx-fader { height: 28px; width: 132px; }
+    }
+    /* Topbar CLIP indicator — dim until a track hits full scale, then pink. */
+    #clip-indicator {
+      font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.06em;
+      padding: 0.08rem 0.4rem; border-radius: 4px;
+      border: 1px solid var(--border); background: none;
+      color: var(--muted); opacity: 0.45; cursor: pointer;
+      transition: color 0.1s, border-color 0.1s, opacity 0.1s, box-shadow 0.1s;
+    }
+    #clip-indicator.lit {
+      color: var(--pink); border-color: var(--pink); opacity: 1;
+      background: rgba(244,114,182,0.12);
+      box-shadow: 0 0 8px rgba(244,114,182,0.5);
     }
     /* Compact inline mute for props-row channels (looper "input"). */
     .seq-mini-mute {
@@ -1676,6 +1818,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       min-width: 116px; flex: 1 1 116px;
     }
     .rig-stage.on { border-color: var(--cyan); background: rgba(34,211,238,0.06); }
+    /* amp + cab carry a saved-file picker — give them more room so the IR / amp
+       library names are legible (collapsed still wins via :not). */
+    .rig-stage[data-stage="amp"]:not(.collapsed),
+    .rig-stage[data-stage="cab"]:not(.collapsed) { min-width: 220px; flex-basis: 220px; }
     .rig-stage-head {
       display: flex; align-items: center; justify-content: flex-start;
       gap: 0.3rem; margin-bottom: 0.25rem;
@@ -1731,14 +1877,17 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* Temperament editor — ET / custom toggle + 12 per-note cent spinners. */
     .rig-temper { padding: 0 0.7rem 0.45rem; }
     .rig-temper-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.5rem; margin-bottom: 0.3rem; }
-    .rig-cab-load { gap: 0.3rem; }
+    /* Loader row: [load] [✕] on the top line, the saved-file picker on its own
+       full-width line below so long IR / amp names stay legible. */
+    .rig-cab-load { gap: 0.3rem; flex-wrap: wrap; }
     .rig-cab-load .ctrl-btn { padding: 0.05rem 0.4rem; font-size: 0.6rem; }
     /* Saved-file picker (cab IR / amp capture libraries). */
     .rig-lib-select {
-      flex: 1; min-width: 0; max-width: 13ch;
+      flex: 1 1 100%; min-width: 0;
       font-size: 0.58rem; padding: 0.05rem 0.2rem;
       color: var(--text); background: rgba(0,0,0,0.30);
       border: 1px solid var(--border); border-radius: 4px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     #rig-temper .ctrl-btn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10); }
     .rig-temper-grid { display: flex; flex-wrap: wrap; gap: 0.25rem 0.4rem; }
@@ -1956,6 +2105,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-sequencer" title="Pattern sequencer (Q)">seq</button>
       <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
       <button class="ctrl-btn" id="btn-looper" title="Rig — live signal + looper (O)">rig</button>
+      <button class="ctrl-btn" id="btn-mixer" title="Mixer — levels, mutes, limiters &amp; clip meters">mix</button>
       <div class="qg-group qg-capture" data-group="capture">
         <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
         <button type="button" class="ctrl-btn qg-trigger" id="btn-record-mode"
@@ -1992,6 +2142,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <select id="fx-select" class="ctrl-btn" title="Active fx (V)"></select>
     <span id="fps">-- fps</span>
     <span id="lvl">b-- m-- h--</span>
+    <button type="button" id="clip-indicator" title="Clip detected — a track is hitting full scale. Click to open the mixer.">CLIP</button>
     <span id="chron-hud" title="chron — session stopwatch (τ). Tap to open the chron panel (format · zen pulses · horizon).">τ 0:00</span>
     <div class="qg-group" data-group="audio">
       <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="audio"
@@ -2574,6 +2725,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   </div>
 </div>
 
+<div id="mixer-panel" style="display:none">
+  <div id="mixer-header">
+    <span class="sp-title">mix <span class="sp-tag">// levels · limiters · clip</span></span>
+    <span class="sp-status" id="mixer-status">per-track level · mute · limiter</span>
+    <button class="ctrl-btn" id="btn-mixer-close" title="Close">×</button>
+  </div>
+  <!-- Channel strips (mic · rig · strudel · seq · vox) are built by mixer.js. -->
+  <div id="mixer-body"></div>
+</div>
+
 <div id="strudel-panel" style="display:none">
   <div id="strudel-header">
     <span class="sp-title">strudel</span>
@@ -2590,6 +2751,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="strudel-tabs">
     <button class="sp-tab active" data-tab="editor">editor</button>
     <button class="sp-tab"        data-tab="patterns">patterns</button>
+    <button class="sp-tab"        data-tab="funcs"  title="Searchable Strudel function reference — click to insert">funcs</button>
+    <button class="sp-tab"        data-tab="sounds" title="Browse loaded samples & sounds — click to insert">sounds</button>
+    <button class="sp-opt" id="btn-strudel-autocomplete" title="Toggle autocomplete + hover docs (Strudel's built-in intellisense)" aria-pressed="true">⌨</button>
     <button class="sp-opt" id="btn-strudel-lines" title="Toggle line numbers" aria-pressed="false">#</button>
   </div>
   <div id="strudel-mount"></div>
@@ -2600,6 +2764,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-pat-random" title="Replace editor with a random pattern">random</button>
     </div>
     <div id="pat-list" class="sp-pat-list"></div>
+  </div>
+  <div id="strudel-funcs" style="display:none">
+    <div class="sp-ref-toolbar">
+      <input type="text" id="func-search" class="sp-ref-search" placeholder="search functions…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+    </div>
+    <div id="func-list" class="sp-ref-list"></div>
+  </div>
+  <div id="strudel-sounds" style="display:none">
+    <div class="sp-ref-toolbar">
+      <input type="text" id="sound-search" class="sp-ref-search" placeholder="search sounds…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+      <button class="ctrl-btn" id="btn-sound-refresh" title="Re-read the sound list (samples keep loading in the background)">↻</button>
+    </div>
+    <div id="sound-list" class="sp-ref-list"></div>
   </div>
 </div>
 
@@ -2665,6 +2842,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <!-- SIGNAL subpanel — the live instrument source: device, level/mute, scope. -->
   <section id="rig-signal" class="rig-subpanel">
     <div class="rig-subhead">
+      <button class="ctrl-btn rig-collapse" id="btn-rig-scope-collapse" title="Collapse / expand the input + output scopes">▾</button>
       <span class="sp-subtitle">signal</span>
       <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
       <span id="rig-input-controls" class="rig-input-controls"></span>
@@ -2675,13 +2853,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-rig-loop" title="Looper — record, layer, and loop your signal">loop</button>
       <span class="sp-status" id="rig-signal-status"></span>
     </div>
-    <div class="rig-scope-wrap">
-      <canvas id="rig-scope" class="rig-scope" title="Live input scope — the raw rig input (pre-fader, post channel-mode)"></canvas>
-      <span class="rig-scope-tag">in</span>
-    </div>
-    <div class="rig-scope-wrap">
-      <canvas id="rig-scope-out" class="rig-scope rig-scope-out" title="Rig output scope — everything leaving the rig (channel strip + loops), post master level/mute: what's actually going to the speakers"></canvas>
-      <span class="rig-scope-tag">out</span>
+    <div id="rig-scopes">
+      <div class="rig-scope-wrap">
+        <canvas id="rig-scope" class="rig-scope" title="Live input scope — the raw rig input (pre-fader, post channel-mode)"></canvas>
+        <span class="rig-scope-tag">in</span>
+      </div>
+      <div class="rig-scope-wrap">
+        <canvas id="rig-scope-out" class="rig-scope rig-scope-out" title="Rig output scope — everything leaving the rig (channel strip + loops), post master level/mute: what's actually going to the speakers"></canvas>
+        <span class="rig-scope-tag">out</span>
+      </div>
     </div>
     <div id="rig-tuner" class="rig-tuner" style="display:none"></div>
     <div id="rig-temper" class="rig-temper" style="display:none"></div>
