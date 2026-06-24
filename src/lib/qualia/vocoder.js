@@ -59,6 +59,7 @@ const DEFAULT_CONFIG = {
   dry:         0.0,     // dry voice passthrough mix (0..1) — inside the vocoder bus
   rawVoice:    0.0,     // raw mic → master, INDEPENDENT of the vocoder on/off (0..1)
   output:      0.9,     // master output gain (0..2)
+  limiter:     true,    // master brickwall limiter (clip insurance) on/off
   gate:        0.04,    // carrier noise gate — mutes the carrier below this voice level
   voices:      3,       // detuned unison oscillators per carrier partial (1 = off)
   consonant:   0.6,     // HF pink-noise carrier blend (0..1) — fricative clarity
@@ -596,6 +597,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     postLimiter = c.createDynamicsCompressor();
     postLimiter.threshold.value = -1.5; postLimiter.knee.value = 0;
     postLimiter.ratio.value = 20; postLimiter.attack.value = 0.002; postLimiter.release.value = 0.05;
+    applyVoxLimiter();   // honor cfg.limiter (transparent when the user bypassed it)
 
     outBus.connect(postLowcut);
     postLowcut.connect(postMud);
@@ -1114,6 +1116,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     }
     refreshMuteBtn();
     refreshButton();
+    notifyMix();
   }
 
   // External hook used by page-init when the user changes the topbar mic
@@ -1202,6 +1205,33 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (outputGain && ctx) {
       try { outputGain.gain.linearRampToValueAtTime(cfg.output, ctx.currentTime + 0.05); } catch {}
     }
+    notifyMix();
+  }
+  // Master brickwall limiter (postLimiter) bypass — "off" makes it transparent
+  // (ratio 1) rather than rerouting the graph, so toggling never clicks. The
+  // ceiling stays at -1.5 dBFS when engaged (vox's hand-tuned value).
+  function applyVoxLimiter() {
+    if (!postLimiter) return;
+    try {
+      postLimiter.ratio.value     = cfg.limiter === false ? 1 : 20;
+      postLimiter.threshold.value = cfg.limiter === false ? 0 : -1.5;
+    } catch {}
+  }
+  function setLimiter(on) {
+    cfg.limiter = !!on;
+    persistSoon();
+    applyVoxLimiter();
+    notifyMix();
+  }
+  function getLimiter() { return cfg.limiter !== false; }
+
+  // Mix-change listeners — fire on output/mute/limiter change so the mixer
+  // panel's vox channel and this panel's own controls stay in sync.
+  const mixListeners = new Set();
+  function onChange(fn) { mixListeners.add(fn); return () => mixListeners.delete(fn); }
+  function notifyMix() {
+    const snap = { output: cfg.output, muted, limiter: cfg.limiter !== false };
+    mixListeners.forEach(fn => { try { fn(snap); } catch {} });
   }
   function setGate(v) {
     cfg.gate = Math.max(0, Math.min(1, +v || 0));
@@ -1295,6 +1325,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (typeof partial.vocoderEnabled === 'boolean') setVocoderEnabled(partial.vocoderEnabled);
     if (typeof partial.micId       === 'string') applyMicId(partial.micId);
     if (typeof partial.feedMix     === 'boolean') setFeedMix(partial.feedMix);
+    if (typeof partial.limiter     === 'boolean') setLimiter(partial.limiter);
     if (partial.harmonizer && harmonizer?.setConfig) harmonizer.setConfig(partial.harmonizer);
     // Re-paint sliders so the panel reflects the new values even if a setter
     // bailed out on an equal value.
@@ -1499,6 +1530,10 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     isActive: () => active,
     setMuted, isMuted: () => muted,
     setDevice,
+    // Mixer surface — output level (0..2), limiter toggle, change subscription.
+    setOutput, getOutput: () => cfg.output,
+    setLimiter, getLimiter,
+    onChange,
     // Snapshot/restore for the qualem state-saving system. getConfig returns
     // a plain copy of the current config; setConfig applies a partial config,
     // routing each field through its setter so live audio nodes update.

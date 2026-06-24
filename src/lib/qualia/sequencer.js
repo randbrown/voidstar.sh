@@ -21,6 +21,7 @@ import {
 } from './sequencer-patterns.js';
 import { createKit } from './sequencer-voices.js';
 import { savePanelPos, restorePanelPos } from './panel-pos.js';
+import { makeLimiter, setLimiterEngaged } from './limiter.js';
 
 // Persisted UI volume — multiplies kit.output while un-muted. Sits
 // alongside the mute toggle as a performance-time mix-ride control.
@@ -37,6 +38,11 @@ function loadSeqVolume() {
 function saveSeqVolume(v) {
   try { localStorage.setItem(SEQ_VOLUME_KEY, String(v)); } catch {}
 }
+
+// Brickwall limiter on the kit bus — on by default. Persisted across reloads.
+const SEQ_LIMITER_KEY = 'voidstar.qualia.sequencer.limiter';
+function loadSeqLimiter() { try { return localStorage.getItem(SEQ_LIMITER_KEY) !== '0'; } catch { return true; } }
+function saveSeqLimiter(on) { try { localStorage.setItem(SEQ_LIMITER_KEY, on ? '1' : '0'); } catch {} }
 
 // Whether the pattern-settings pane shows alongside the grid. Persisted so a
 // user who collapses it (to give the matrix more room) doesn't get it back on
@@ -387,9 +393,16 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // mute gate. Tag this output node so the patch leaves it alone —
     // the sequencer has its own per-source mute (kit.output.gain) and
     // must not be silenced by the Strudel toggle.
-    const rawDest = Tone.getContext().rawContext.destination;
+    const rawCtx = Tone.getContext().rawContext;
+    const rawDest = rawCtx.destination;
     kit.output.__qualiaBypassMute = true;
-    kit.output.connect(rawDest);
+    // Brickwall limiter between the kit bus and the speakers — clip insurance
+    // so a stack of loud hits can't push full-scale into the device-level sum.
+    // The analyser taps kit.output (PRE-limiter), so the meter reads true.
+    seqLimiter = makeLimiter(rawCtx, _seqLimiterOn);
+    seqLimiter.__qualiaBypassMute = true;
+    kit.output.connect(seqLimiter);
+    seqLimiter.connect(rawDest);
     // Apply current mute state in case the user toggled it before the
     // first play (kit didn't exist yet, so the gain change had nowhere
     // to land).
@@ -403,6 +416,24 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // a mix-ride should survive a tab refresh.
   let _muted = false;
   let _volume = loadSeqVolume();  // 0..1, applied when un-muted
+  let _seqLimiterOn = loadSeqLimiter();
+  let seqLimiter = null;          // brickwall on the kit bus (created in ensureKit)
+
+  // Mix-change listeners — fire on volume/mute/limiter change so the mixer
+  // panel's seq channel and this panel's own slider stay in sync.
+  const mixListeners = new Set();
+  function onChange(fn) { mixListeners.add(fn); return () => mixListeners.delete(fn); }
+  function notifyMix() {
+    const snap = { volume: _volume, muted: _muted, limiter: _seqLimiterOn };
+    mixListeners.forEach(fn => { try { fn(snap); } catch {} });
+  }
+  function setLimiter(on) {
+    _seqLimiterOn = !!on;
+    saveSeqLimiter(_seqLimiterOn);
+    setLimiterEngaged(seqLimiter, _seqLimiterOn);
+    notifyMix();
+  }
+  function getLimiter() { return _seqLimiterOn; }
   function applyMuteToKit() {
     if (!kit?.output?.gain) return;
     const target = _muted ? 0 : _volume;
@@ -418,6 +449,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     _muted = !!on;
     applyMuteToKit();
     refreshMuteBtn();
+    notifyMix();
   }
   function setVolume(v) {
     const clamped = Math.max(0, Math.min(1, Number(v) || 0));
@@ -425,6 +457,8 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     _volume = clamped;
     saveSeqVolume(_volume);
     applyMuteToKit();
+    if (elGain && elGain.value !== String(_volume)) elGain.value = String(_volume);
+    notifyMix();
   }
   function refreshMuteBtn() {
     if (!btnMute) return;
@@ -1403,6 +1437,12 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     isPlaying: () => isPlaying,
     isMuted:   () => _muted,
     setMuted,
+    // Mixer surface — level/limiter control + change subscription.
+    setVolume,
+    getVolume: () => _volume,
+    setLimiter,
+    getLimiter,
+    onChange,
     play, stop,
     playFromStrudel, stopFromStrudel,
     setCps,

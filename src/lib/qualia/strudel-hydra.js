@@ -15,6 +15,7 @@ import {
   setMetadata, patternDisplayName, downloadPattern,
 } from './patterns.js';
 import { savePanelPos, restorePanelPos } from './panel-pos.js';
+import { makeLimiter, setLimiterEngaged } from './limiter.js';
 
 const STRUDEL_SCRIPT = 'https://unpkg.com/@strudel/repl@latest';
 
@@ -177,6 +178,12 @@ function loadVolume() {
 function saveVolume(v) {
   try { localStorage.setItem(VOLUME_KEY, String(v)); } catch {}
 }
+
+// Brickwall limiter on the Strudel bus — on by default (superdough can get
+// hot). Persisted so protection survives reloads.
+const LIMITER_KEY = 'voidstar.qualia.strudel.limiter';
+function loadLimiter() { try { return localStorage.getItem(LIMITER_KEY) !== '0'; } catch { return true; } }
+function saveLimiter(on) { try { localStorage.setItem(LIMITER_KEY, on ? '1' : '0'); } catch {} }
 
 const LINES_KEY = 'voidstar.qualia.strudel.lineNumbers';
 function loadLineNumbers() {
@@ -990,7 +997,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   //     it alone — its own mute is per-source via kit.output.gain.
   let _strudelMuted = false;
   let _strudelVolume = loadVolume();
+  let _strudelLimiterOn = loadLimiter();
   let muteGate = null;
+  let strudelLimiter = null;
   function ensureMuteGate(ctx) {
     if (muteGate && muteGate.context === ctx) return muteGate;
     muteGate = ctx.createGain();
@@ -998,8 +1007,31 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     // Self-bypass — muteGate's own connect to ctx.destination must not
     // recurse through the patch.
     muteGate.__qualiaBypassMute = true;
-    muteGate.connect(ctx.destination);
+    // Brickwall limiter between the gate and the speakers — clip insurance so
+    // a loud pattern can't shove full-scale into the device-level sum. The
+    // strudelAnalyser still taps muteGate (PRE-limiter) so the meter reads true.
+    strudelLimiter = makeLimiter(ctx, _strudelLimiterOn);
+    strudelLimiter.__qualiaBypassMute = true;
+    muteGate.connect(strudelLimiter);
+    strudelLimiter.connect(ctx.destination);
     return muteGate;
+  }
+  function setLimiter(on) {
+    _strudelLimiterOn = !!on;
+    saveLimiter(_strudelLimiterOn);
+    setLimiterEngaged(strudelLimiter, _strudelLimiterOn);
+    notifyMix();
+  }
+  function getLimiter() { return _strudelLimiterOn; }
+
+  // Mix-change listeners — fire whenever volume/mute/limiter change so the
+  // mixer panel's Strudel channel stays in sync with the strudel panel's own
+  // slider (and vice-versa). Mirrors audio.js's onInputChange.
+  const mixListeners = new Set();
+  function onChange(fn) { mixListeners.add(fn); return () => mixListeners.delete(fn); }
+  function notifyMix() {
+    const snap = { volume: _strudelVolume, muted: _strudelMuted, limiter: _strudelLimiterOn };
+    mixListeners.forEach(fn => { try { fn(snap); } catch {} });
   }
   function applyMuteGate() {
     if (!muteGate) return;
@@ -1023,6 +1055,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       if (dest) dest.mute = _strudelMuted;
     } catch {}
     refreshMuteBtn();
+    notifyMix();
   }
   function refreshMuteBtn() {
     if (!btnMute) return;
@@ -1043,6 +1076,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     _strudelVolume = clamped;
     saveVolume(_strudelVolume);
     applyMuteGate();
+    if (elGain && elGain.value !== String(_strudelVolume)) elGain.value = String(_strudelVolume);
+    notifyMix();
   }
   if (elGain) {
     elGain.value = String(_strudelVolume);
@@ -1488,6 +1523,12 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     hasBeenOpened: () => _everOpened,
     isMuted: () => _strudelMuted,
     setMuted,
+    // Mixer surface — level/limiter control + change subscription.
+    setVolume,
+    getVolume: () => _strudelVolume,
+    setLimiter,
+    getLimiter,
+    onChange,
     /** Inner StrudelMirror handle — null until the editor mounts. */
     getEditor,
     /** Inner scheduler (`StrudelMirror.repl.scheduler`) — null until
