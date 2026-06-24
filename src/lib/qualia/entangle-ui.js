@@ -109,7 +109,7 @@ function openPrintCard(url, qrDataUrl, perf) {
   const w = window.open('', '_blank');
   if (!w) { alert('Allow pop-ups for this page to print the entanglement card.'); return; }
   const name = esc(perf.name) || 'voidstar';
-  const tagline = esc(perf.tagline) || 'a live set — spooky action across the room';
+  const tagline = esc(perf.tagline) || 'a live set — every observer bends the field';
   const link = esc(perf.link) || esc(url);
   const doc = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -225,7 +225,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
   const launch = document.createElement('button');
   launch.id = 'entangle-launch';
   launch.className = 'ctrl-btn';
-  launch.title = 'Entanglement — audience participation';
+  launch.title = 'Entanglement — observer participation';
   launch.innerHTML = '<span id="entangle-dot"></span>⊛ entangle';
   const topbarRight = document.getElementById('topbar-right');
   if (topbarRight) topbarRight.appendChild(launch);
@@ -488,7 +488,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
       <div class="ent-head">
         <div>
           <h2>⊛ Entanglement</h2>
-          <div class="ent-sub">Let the crowd entangle with the field — spooky action across the room.</div>
+          <div class="ent-sub">Let the room into the field — every observer bends it.</div>
         </div>
         <button class="ent-close" data-act="close" title="Close">×</button>
       </div>
@@ -521,7 +521,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
         <details class="ent-card-details">
           <summary>card details — for the printout</summary>
           <label>name / handle<input data-card="name" value="${esc(perf.name)}" placeholder="your name" maxlength="40"></label>
-          <label>tagline<input data-card="tagline" value="${esc(perf.tagline)}" placeholder="live set · spooky action across the room" maxlength="80"></label>
+          <label>tagline<input data-card="tagline" value="${esc(perf.tagline)}" placeholder="live set · every observer bends the field" maxlength="80"></label>
           <label>link (optional)<input data-card="link" value="${esc(perf.link)}" placeholder="${esc(url || 'voidstar.sh')}" maxlength="120"></label>
         </details>
       </div>
@@ -535,11 +535,11 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
 
       ${live ? `
         <div class="ent-sect">
-          <h3>Crowd signal</h3>
+          <h3>Observer signal</h3>
           <div class="ent-crowdsig" data-crowdsig></div>
           <div class="ent-sub ent-crowdhint" data-crowdhint></div>
         </div>`
-        : `<div class="ent-sub">Opening the field goes live with the code above — audience scans, and nothing runs on your machine for them (phones do their own pose tracking).</div>`}
+        : `<div class="ent-sub">Opening the field goes live with the code above — observers scan, and nothing runs on your machine for them (phones do their own pose tracking).</div>`}
 
       <div class="ent-sect">
         <h3>Modes</h3>
@@ -547,15 +547,15 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
           <span class="ent-chip ${modes.pose ? 'on' : ''}" data-mode="pose">pose → field</span>
           <span class="ent-chip ${modes.param ? 'on' : ''}" data-mode="param">param control</span>
           <span class="ent-chip ${modes.vote ? 'on' : ''}" data-mode="vote">visual vote</span>
-          <span class="ent-chip ${modes.skeleton ? 'on' : ''}" data-mode="skeleton" title="Draw each participant's body as a glowing overlay on top of the visual">⛓ crowd skeletons</span>
-          ${entangle.phaseAvailable ? `<span class="ent-chip ${modes.phase ? 'on' : ''}" data-mode="phase">crowd phase-shift</span>` : ''}
+          <span class="ent-chip ${modes.skeleton ? 'on' : ''}" data-mode="skeleton" title="Draw each participant's body as a glowing overlay on top of the visual">⛓ observer skeletons</span>
+          ${entangle.phaseAvailable ? `<span class="ent-chip ${modes.phase ? 'on' : ''}" data-mode="phase">observer phase-shift</span>` : ''}
         </div>
-        ${modes.phase && entangle.phaseAvailable ? `<div class="ent-sub" data-phase>shift charge: 0 / 0 — the crowd taps together to advance the phase</div>` : ''}
+        ${modes.phase && entangle.phaseAvailable ? `<div class="ent-sub" data-phase>shift charge: 0 / 0 — the observers tap together to advance the phase</div>` : ''}
       </div>
 
       ${modes.skeleton ? `
       <div class="ent-sect">
-        <h3>Crowd skeletons <span class="ent-sub" style="text-transform:none">(big screen)</span></h3>
+        <h3>Observer skeletons <span class="ent-sub" style="text-transform:none">(big screen)</span></h3>
         <div class="ent-row">
           ${SKEL_MODES.map(m => `<span class="ent-chip ${skelView.mode === m.id ? 'on' : ''}" data-skelmode="${m.id}">${m.label}</span>`).join('')}
         </div>
@@ -570,10 +570,10 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
 
       ${modes.param ? `
       <div class="ent-sect">
-        <h3>Crowd-controllable params <span class="ent-sub" style="text-transform:none">(active quale)</span></h3>
+        <h3>Observer-controllable params <span class="ent-sub" style="text-transform:none">(active quale)</span></h3>
         <div class="ent-wl">
           ${specs.length ? specs.map(s => `<span class="ent-chip ${wl.has(s.id) ? 'on' : ''}" data-wl="${s.id}">${s.label || s.id}</span>`).join('')
-            : '<span class="ent-empty">this quale exposes no crowd-friendly params</span>'}
+            : '<span class="ent-empty">this quale exposes no observer-friendly params</span>'}
         </div>
       </div>` : ''}
 
@@ -585,7 +585,7 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
             : '<span class="ent-empty">no votes yet</span>'}
         </div>
         <div class="ent-row between">
-          <span class="ent-chip ${autoVote ? 'on' : ''}" data-act="autovote" title="Let the crowd's top vote switch the visual automatically (≤ every 5s)">⟳ auto-switch (5s)</span>
+          <span class="ent-chip ${autoVote ? 'on' : ''}" data-act="autovote" title="Let the observers' top vote switch the visual automatically (≤ every 5s)">⟳ auto-switch (5s)</span>
           <button data-act="applyvote" ${tally.length ? '' : 'disabled'}>switch now</button>
         </div>
       </div>` : ''}
@@ -619,15 +619,15 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     if (!hint) return;
     const m = entangle.getModes();
     let msg, warn = false;
-    if (!m.pose)              { msg = '“pose → field” is off — enable it above to feel the crowd.'; warn = true; }
+    if (!m.pose)              { msg = '“pose → field” is off — enable it above to feel the observers.'; warn = true; }
     else if (connected === 0) { msg = 'no one has joined yet — share the QR.'; }
     else if (s.posing === 0)  { msg = 'connected, but nobody has tapped “entangle your pose” yet.'; }
     else {
       const reacts = entangle.activeReactsToCrowd();
       if (reacts && m.skeleton) msg = '✓ field reacting + skeletons drawing.';
-      else if (reacts)          msg = '✓ the field is reacting to the crowd.';
-      else if (m.skeleton)      msg = '✓ skeletons drawing (this quale doesn’t map crowd motion to the field).';
-      else { msg = `this quale ignores the crowd — switch to: ${crowdReactiveLabels} (or turn on ⛓ skeletons).`; warn = true; }
+      else if (reacts)          msg = '✓ the field is reacting to the observers.';
+      else if (m.skeleton)      msg = '✓ skeletons drawing (this quale doesn’t map observer motion to the field).';
+      else { msg = `this quale ignores the observers — switch to: ${crowdReactiveLabels} (or turn on ⛓ skeletons).`; warn = true; }
     }
     hint.textContent = msg;
     hint.style.color = warn ? 'var(--amber,#fbbf24)' : '';
@@ -728,8 +728,8 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
     const el = modal.querySelector('[data-phase]');
     if (!el) return;
     el.textContent = fired
-      ? '⟳ phase shifted by the crowd!'
-      : `shift charge: ${have} / ${need} — the crowd taps together to advance the phase`;
+      ? '⟳ phase shifted by the observers!'
+      : `shift charge: ${have} / ${need} — the observers tap together to advance the phase`;
     el.style.color = fired ? 'var(--cyan,#22d3ee)' : '';
     if (fired) setTimeout(() => { const e2 = modal.querySelector('[data-phase]'); if (e2) e2.style.color = ''; }, 1500);
   });
