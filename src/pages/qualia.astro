@@ -1324,9 +1324,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       box-shadow: 0 12px 36px rgba(0,0,0,0.45);
       color: var(--text);
     }
-    #strudel-mount .cm-tooltip-autocomplete > ul { max-height: 16rem; }
+    /* Keep the popups compact and a FIXED size: they sit inside .cm-editor, so
+       without this they inherit the editor font-size slider and balloon. Pin a
+       small rem font (independent of the slider) and cap the docs panel so it
+       can't sprawl across the editor — it scrolls instead. */
+    #strudel-mount :is(.cm-tooltip-autocomplete, .cm-completionInfo) {
+      font-size: 0.72rem !important; line-height: 1.4;
+    }
+    #strudel-mount .cm-tooltip-autocomplete > ul { max-height: 12rem; }
     #strudel-mount .cm-tooltip-autocomplete > ul > li {
-      padding: 0.18rem 0.5rem; color: var(--text-muted);
+      padding: 0.12rem 0.5rem; color: var(--text-muted);
     }
     #strudel-mount .cm-tooltip-autocomplete > ul > li[aria-selected] {
       background: color-mix(in srgb, var(--accent) 22%, transparent) !important;
@@ -1336,7 +1343,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--cyan); text-decoration: none; font-weight: 600;
     }
     #strudel-mount .cm-completionInfo {
-      color: var(--text-muted); padding: 0.4rem 0.6rem;
+      color: var(--text-muted); padding: 0.35rem 0.55rem;
+      max-width: 18rem; max-height: 13rem; overflow: auto;
     }
 
     /* Mobile-only tweaks — the topbar layout itself is column-flex at every
