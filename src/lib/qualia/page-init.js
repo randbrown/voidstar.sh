@@ -847,7 +847,9 @@ export function initQualiaPage() {
     if (!t || typeof t.closest !== 'function') return;
     let input = t.closest('input[type="range"]');
     if (!input) {
-      const row = t.closest('.qp-row');
+      // Also reset when the label / value beside a slider is double-clicked
+      // (.qp-row = fx & card params; .rig-ctl = rig channel-strip stages).
+      const row = t.closest('.qp-row, .rig-ctl');
       if (row) input = row.querySelector('input[type="range"]');
     }
     if (!input) return;

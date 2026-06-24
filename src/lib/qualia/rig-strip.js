@@ -18,7 +18,7 @@ export const STRIP_DEFAULTS = {
   metal:  { on: false, drive: 0.35, low: 0, mid: 0, midFreq: 600, high: 0, level: 1.0 },
   comp:   { on: false, threshold: -18, ratio: 3, attack: 0.003, release: 0.25 },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
-  amp:    { on: false, mix: 1, level: 1 },
+  amp:    { on: false, gain: 1, mix: 1, level: 1 },
   cab:    { on: false, mix: 1, level: 1 },
   delay:  { on: false, time: 0.3, feedback: 0.35, mix: 0.25 },
   reverb: { on: false, decay: 2.0, mix: 0.25 },
@@ -115,15 +115,21 @@ export function createRigStrip(ctx, cfg) {
   // Compressor
   const comp = ctx.createDynamicsCompressor();
 
-  // EQ: low shelf · mid peak · high shelf
+  // EQ: low shelf · mid peak · high shelf. The "hi" shelf corners at 3.2 kHz —
+  // the presence/treble band where guitar + pedal-steel brightness actually
+  // lives. (A 4.5 kHz corner sat in the cab's rolloff, so boosting it was nearly
+  // inaudible once an IR was loaded; 3.2 kHz makes the control clearly do work.)
   const eqLow  = ctx.createBiquadFilter(); eqLow.type  = 'lowshelf';  eqLow.frequency.value  = 180;
   const eqMid  = ctx.createBiquadFilter(); eqMid.type  = 'peaking';   eqMid.frequency.value  = 1000; eqMid.Q.value = 0.9;
-  const eqHigh = ctx.createBiquadFilter(); eqHigh.type = 'highshelf'; eqHigh.frequency.value = 4500;
+  const eqHigh = ctx.createBiquadFilter(); eqHigh.type = 'highshelf'; eqHigh.frequency.value = 3200;
 
   // Neural amp — LSTM capture inference in an AudioWorklet, as a dry/wet insert
   // after the EQ (transparent until a model is loaded; never blocks the graph if
   // the worklet isn't available). amp → cab is the natural order.
   const ampIn  = ctx.createGain();
+  const ampDrive = ctx.createGain();   // input drive INTO the model — how hard you
+                                       // hit the (nonlinear) capture, like a real
+                                       // amp's gain knob; output `level` is makeup.
   const ampDry = ctx.createGain();
   const ampWet = ctx.createGain();
   const ampSum = ctx.createGain();
@@ -190,7 +196,9 @@ export function createRigStrip(ctx, cfg) {
 
   eqHigh.connect(ampIn);
   ampIn.connect(ampDry); ampDry.connect(ampSum);
-  if (neural) { ampIn.connect(neural); neural.connect(ampWet); ampWet.connect(ampSum); }
+  // Drive only feeds the wet (model) path — the dry blend stays unity so `mix`
+  // crossfades cleanly and bypass is exactly the input.
+  if (neural) { ampIn.connect(ampDrive); ampDrive.connect(neural); neural.connect(ampWet); ampWet.connect(ampSum); }
   ampSum.connect(cabIn);
   cabIn.connect(cabDry); cabDry.connect(cabSum);
   cabIn.connect(cabConv); cabConv.connect(cabWet); cabWet.connect(cabSum);
@@ -312,6 +320,7 @@ export function createRigStrip(ctx, cfg) {
     const active = state.amp.on && ampLoaded && !!neural;
     if (neural) { try { neural.port.postMessage({ cmd: 'bypass', on: !active }); } catch {} }
     const mix = clamp(state.amp.mix, 0, 1);
+    ampDrive.gain.value = clamp(state.amp.gain, 0, 4);   // input drive into the model
     ampDry.gain.value = active ? (1 - mix) : 1;
     ampWet.gain.value = active ? mix * clamp(state.amp.level, 0, 2) : 0;
   }
@@ -365,7 +374,7 @@ export function createRigStrip(ctx, cfg) {
                      earthPre, earthShaper, earthTone, earthPost,
                      metalPre, metalShaper1, metalStage, metalShaper2,
                      mLow, mMid, mHigh, metalPost, comp,
-                     eqLow, eqMid, eqHigh, ampIn, ampDry, ampWet, ampSum,
+                     eqLow, eqMid, eqHigh, ampIn, ampDrive, ampDry, ampWet, ampSum,
                      cabIn, cabConv, cabDry, cabWet, cabSum,
                      fxIn, dry, sum, delaySend, delayL, delayR, delayFb, merger,
                      delayWet, reverbSend, convolver, reverbWet, panner, output]) {
