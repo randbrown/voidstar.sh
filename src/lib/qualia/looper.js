@@ -57,9 +57,14 @@ const TEMPER_KEY     = `${NS}.temperament`;// 'et' | 'custom'
 const CUSTOMCENTS_KEY = `${NS}.customCents`;// custom temperament: int cents[12]
 const REFPITCH_KEY   = `${NS}.refPitch`;   // tuner reference A (Hz)
 const CABNAME_KEY    = `${NS}.cabName`;     // loaded cab IR filename (display)
-const CAB_IR_ID      = 'cabIR';            // IndexedDB misc key for the IR bytes
+const CAB_IR_ID      = 'cabIR';            // legacy single-IR misc key (migrated → library)
+const CABLIB_KEY     = `${NS}.cabLib`;      // saved cab IR library index: [{ id, name }]
+const CABCUR_KEY     = `${NS}.cabCur`;      // misc id of the currently-loaded cab IR
 const AMPNAME_KEY    = `${NS}.ampName`;     // loaded neural amp model name (display)
-const AMP_MODEL_ID   = 'ampModel';         // IndexedDB misc key for the normalised model
+const AMP_MODEL_ID   = 'ampModel';         // legacy single-model misc key (migrated → library)
+const AMPLIB_KEY     = `${NS}.ampLib`;      // saved amp model library index: [{ id, name }]
+const AMPCUR_KEY     = `${NS}.ampCur`;      // misc id of the currently-loaded amp model
+const LIB_MAX        = 24;                  // cap on saved files per library
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
 // Channel strip UI schema — stages + params (the audio side lives in
@@ -81,7 +86,7 @@ const STRIP_SCHEMA = [
   ] },
   { id: 'comp',   name: 'comp',   toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
   { id: 'eq',     name: 'eq',     toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
-  { id: 'amp',    name: 'amp',    toggle: true,  ampLoader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
+  { id: 'amp',    name: 'amp',    toggle: true,  ampLoader: true, params: [{ id: 'gain', label: 'gain', min: 0, max: 4, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'cab',    name: 'cab',    toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'delay',  name: 'delay',  toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
   { id: 'reverb', name: 'reverb', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
@@ -201,6 +206,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const signalStat  = document.getElementById('rig-signal-status');
   const btnChannels = document.getElementById('btn-rig-channels');
   const scopeCanvas = document.getElementById('rig-scope');
+  const scopeOutCanvas = document.getElementById('rig-scope-out');
   const btnStrip    = document.getElementById('btn-rig-strip');
   const btnTuner    = document.getElementById('btn-rig-tuner');
   const stripPanel  = document.getElementById('rig-strip');
@@ -1026,12 +1032,40 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // live, else a faint idle trace so the panel still looks alive. Allocation-
   // free: one reused Uint8Array sized to the analyser's fftSize.
   let scope2d = null, scopeBuf = null, scopeRAF = 0, scopeStatN = 0;
-  function sizeScope() {
-    if (!scopeCanvas) return;
+  let scopeOut2d = null, scopeOutBuf = null;
+  function sizeCanvas(cv) {
+    if (!cv) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = scopeCanvas.clientWidth || 360, h = scopeCanvas.clientHeight || 76;
-    scopeCanvas.width  = Math.max(1, Math.round(w * dpr));
-    scopeCanvas.height = Math.max(1, Math.round(h * dpr));
+    const w = cv.clientWidth || 360, h = cv.clientHeight || 60;
+    cv.width  = Math.max(1, Math.round(w * dpr));
+    cv.height = Math.max(1, Math.round(h * dpr));
+  }
+  function sizeScope() { sizeCanvas(scopeCanvas); sizeCanvas(scopeOutCanvas); }
+  // Trace one analyser's time-domain waveform across the canvas; returns the
+  // peak |sample| so the caller can flag clipping. Allocation-free.
+  function traceWave(g, buf, n, W, mid) {
+    let peak = 0;
+    g.beginPath();
+    for (let i = 0; i < n; i++) {
+      const v = (buf[i] - 128) / 128;
+      const a = v < 0 ? -v : v; if (a > peak) peak = a;
+      const x = (i / (n - 1)) * W;
+      const y = mid - v * mid * 0.92;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    return peak;
+  }
+  // Faint idle sine so a scope still looks alive when its source is silent.
+  function idleTrace(g, W, mid) {
+    const t = performance.now() / 1000;
+    g.beginPath();
+    for (let i = 0; i <= 96; i++) {
+      const x = (i / 96) * W;
+      const y = mid - Math.sin(i * 0.18 + t * 1.1) * mid * 0.12;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.strokeStyle = 'rgba(148,163,184,0.26)';
+    g.stroke();
   }
   function setSignalStatus(peak, clip) {
     if (!signalStat) return;
@@ -1058,40 +1092,52 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const n = an.fftSize;
       if (!scopeBuf || scopeBuf.length !== n) scopeBuf = new Uint8Array(n);
       an.getByteTimeDomainData(scopeBuf);
-      let peak = 0;
-      g.beginPath();
-      for (let i = 0; i < n; i++) {
-        const v = (scopeBuf[i] - 128) / 128;
-        const a = v < 0 ? -v : v; if (a > peak) peak = a;
-        const x = (i / (n - 1)) * W;
-        const y = mid - v * mid * 0.92;
-        if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-      }
+      const peak = traceWave(g, scopeBuf, n, W, mid);
       const clip = peak > 0.985;
       g.lineWidth = Math.max(1, Math.round(window.devicePixelRatio || 1));
       g.strokeStyle = clip ? 'rgba(244,114,182,0.95)' : 'rgba(34,211,238,0.9)';
       g.stroke();
       if (scopeStatN++ % 6 === 0) setSignalStatus(peak, clip);
     } else {
-      const t = performance.now() / 1000;
-      g.beginPath();
-      for (let i = 0; i <= 96; i++) {
-        const x = (i / 96) * W;
-        const y = mid - Math.sin(i * 0.18 + t * 1.1) * mid * 0.12;
-        if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-      }
-      g.strokeStyle = 'rgba(148,163,184,0.26)';
-      g.stroke();
+      idleTrace(g, W, mid);
       if (scopeStatN++ % 6 === 0) setSignalStatus(null, false);
     }
   }
+  // Output scope — the full rig output (channel strip signal + loop bus, post
+  // master level/mute): what's going to the speakers. Distinct violet trace so
+  // it reads apart from the cyan input above it; pink on clip. The input scope
+  // owns the dB readout, so this one is trace-only.
+  function drawScopeOut() {
+    const cv = scopeOutCanvas, g = scopeOut2d;
+    if (!cv || !g) return;
+    const W = cv.width, H = cv.height, mid = H / 2;
+    g.clearRect(0, 0, W, H);
+    g.lineWidth = 1;
+    g.strokeStyle = 'rgba(255,255,255,0.06)';
+    g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
+
+    const an = looperAudio.getOutputAnalyser?.();
+    if (an) {
+      const n = an.fftSize;
+      if (!scopeOutBuf || scopeOutBuf.length !== n) scopeOutBuf = new Uint8Array(n);
+      an.getByteTimeDomainData(scopeOutBuf);
+      const peak = traceWave(g, scopeOutBuf, n, W, mid);
+      g.lineWidth = Math.max(1, Math.round(window.devicePixelRatio || 1));
+      g.strokeStyle = peak > 0.985 ? 'rgba(244,114,182,0.95)' : 'rgba(167,139,250,0.92)';
+      g.stroke();
+    } else {
+      idleTrace(g, W, mid);
+    }
+  }
   function startScope() {
-    if (scopeRAF || !scopeCanvas) return;
-    if (!scope2d) scope2d = scopeCanvas.getContext('2d');
+    if (scopeRAF || (!scopeCanvas && !scopeOutCanvas)) return;
+    if (!scope2d && scopeCanvas) scope2d = scopeCanvas.getContext('2d');
+    if (!scopeOut2d && scopeOutCanvas) scopeOut2d = scopeOutCanvas.getContext('2d');
     sizeScope();
     const loop = () => {
       scopeRAF = requestAnimationFrame(loop);
       drawScope();
+      drawScopeOut();
       if (model.tunerOn) {
         const now = performance.now();
         if (now - _tunerLastMs >= TUNER_INTERVAL_MS) { _tunerLastMs = now; updateTuner(); }
@@ -1103,8 +1149,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (scopeRAF) cancelAnimationFrame(scopeRAF);
     scopeRAF = 0;
   }
-  if (scopeCanvas && typeof ResizeObserver !== 'undefined') {
-    new ResizeObserver(() => { if (scopeRAF) sizeScope(); }).observe(scopeCanvas);
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => { if (scopeRAF) sizeScope(); });
+    if (scopeCanvas) ro.observe(scopeCanvas);
+    if (scopeOutCanvas) ro.observe(scopeOutCanvas);
   }
 
   // ── channel strip UI ──────────────────────────────────────────────────────
@@ -1197,6 +1245,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const lab = document.createElement('span'); lab.className = 'rig-ctl-label'; lab.textContent = p.label;
     const sl = document.createElement('input');
     sl.type = 'range'; sl.min = String(p.min); sl.max = String(p.max); sl.step = String(p.step);
+    // The `value` ATTRIBUTE is the default the global double-click-to-reset reads
+    // (page-init.js, via input.defaultValue); the `.value` PROPERTY below carries
+    // the live/persisted value. Set the attribute first so it survives.
+    const def = STRIP_DEFAULTS[stageId]?.[p.id];
+    if (def != null) { sl.setAttribute('value', String(def)); sl.title = 'double-click to reset to default'; }
     sl.value = String(model.strip[stageId][p.id]);
     const val = document.createElement('span'); val.className = 'rig-ctl-val';
     const fmt = p.fmt || (v => (+v).toFixed(2));
@@ -1205,62 +1258,111 @@ export function createLooper({ audio, syncStrudel } = {}) {
     row.append(lab, sl, val);
     return row;
   }
-  // Cab IR loader row — file picker + filename + clear.
-  let cabNameEl = null;
-  function buildCabLoader() {
+  // ── amp / cab file libraries ───────────────────────────────────────────────
+  // A few uploaded IRs / amp captures are kept in IndexedDB (heavy bytes/model)
+  // plus a lightweight localStorage index (id + name) so the picker lists them
+  // without loading every blob. The library IS the "file browser": load a file
+  // once and it stays a click away — no re-upload to switch between a few. (The
+  // browser sandbox can't list a real folder; a Chromium-only directory picker
+  // via showDirectoryPicker is a possible future add.) misc id = `cab:`/`amp:`
+  // + filename, so re-loading the same name overwrites instead of duplicating.
+  function lsGetJSON(k) { try { const v = localStorage.getItem(k); const a = v ? JSON.parse(v) : []; return Array.isArray(a) ? a : []; } catch { return []; } }
+  function lsSetJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  function libAdd(key, id, name) {
+    const list = lsGetJSON(key).filter((e) => e && e.id !== id);
+    list.unshift({ id, name });
+    lsSetJSON(key, list.slice(0, LIB_MAX));
+  }
+  function libRemove(key, id) {
+    lsSetJSON(key, lsGetJSON(key).filter((e) => e && e.id !== id));
+  }
+  // Build one loader row: [load] [▼ saved files] [✕ remove]. `kind` differs only
+  // in labels/accept/keys, so cab + amp share this builder.
+  function buildLibLoader(kind) {
+    const cab = kind === 'cab';
     const row = document.createElement('div'); row.className = 'rig-ctl rig-cab-load';
     const file = document.createElement('input');
-    file.type = 'file'; file.accept = 'audio/*,.wav'; file.style.display = 'none';
-    file.addEventListener('change', () => { const f = file.files && file.files[0]; if (f) loadCabFile(f); file.value = ''; });
+    file.type = 'file'; file.accept = cab ? 'audio/*,.wav' : '.json,.nam,.aidax,application/json'; file.style.display = 'none';
+    file.addEventListener('change', () => { const f = file.files && file.files[0]; if (f) (cab ? loadCabFile(f) : loadAmpFile(f)); file.value = ''; });
     const btn = document.createElement('button');
-    btn.type = 'button'; btn.className = 'ctrl-btn'; btn.textContent = 'load IR';
-    btn.title = 'Load a cabinet / reverb impulse response (WAV)';
+    btn.type = 'button'; btn.className = 'ctrl-btn'; btn.textContent = cab ? 'load IR' : 'load amp';
+    btn.title = cab
+      ? 'Load a cabinet / reverb impulse response (WAV) from disk — it’s saved to the picker so you can switch back without re-uploading'
+      : 'Load a neural amp capture (GuitarML / AIDA-X / NAM-LSTM JSON) from disk — it’s saved to the picker so you can switch back without re-uploading';
     btn.addEventListener('click', () => file.click());
-    cabNameEl = document.createElement('span'); cabNameEl.className = 'rig-cab-name';
-    cabNameEl.textContent = model.cabName || 'no IR';
-    const clr = document.createElement('button');
-    clr.type = 'button'; clr.className = 'ctrl-btn'; clr.textContent = '×'; clr.title = 'Clear IR';
-    clr.addEventListener('click', clearCabIR);
-    row.append(file, btn, cabNameEl, clr);
+    const sel = document.createElement('select');
+    sel.className = 'rig-lib-select';
+    sel.title = cab ? 'Saved IRs — pick one to load instantly' : 'Saved amp captures — pick one to load instantly';
+    sel.addEventListener('change', () => (cab ? selectCab(sel.value) : selectAmp(sel.value)));
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'ctrl-btn'; del.textContent = '✕';
+    del.title = cab ? 'Remove the selected IR from the picker' : 'Remove the selected amp from the picker';
+    del.addEventListener('click', () => (cab ? removeCab(sel.value) : removeAmp(sel.value)));
+    if (!cab && !looperAudio.isAmpCapable?.()) { btn.disabled = true; btn.title = 'Neural amp needs AudioWorklet support'; }
+    if (cab) cabSelEl = sel; else ampSelEl = sel;
+    row.append(file, btn, sel, del);
+    if (cab) renderCabLib(); else renderAmpLib();
     return row;
   }
+  // Repaint a picker's options from its localStorage index, selecting the current.
+  function renderLib(sel, libKey, curKey, emptyTxt) {
+    if (!sel) return;
+    const list = lsGetJSON(libKey);
+    const cur = lsGet(curKey, '') || '';
+    sel.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = ''; none.textContent = list.length ? emptyTxt.have : emptyTxt.empty;
+    sel.append(none);
+    for (const e of list) {
+      const o = document.createElement('option'); o.value = e.id; o.textContent = e.name;
+      sel.append(o);
+    }
+    sel.value = cur && list.some((e) => e.id === cur) ? cur : '';
+  }
+  let cabSelEl = null, ampSelEl = null;
+  function buildCabLoader() { return buildLibLoader('cab'); }
+  function buildAmpLoader() { return buildLibLoader('amp'); }
+  function renderCabLib() { renderLib(cabSelEl, CABLIB_KEY, CABCUR_KEY, { have: 'no IR', empty: 'no saved IRs' }); }
+  function renderAmpLib() { renderLib(ampSelEl, AMPLIB_KEY, AMPCUR_KEY, { have: 'no amp', empty: 'no saved amps' }); }
+
   async function loadCabFile(file) {
     try {
       const bytes = await file.arrayBuffer();
       const ok = await looperAudio.setCabIRBytes(bytes);
       if (!ok) { setStatus('IR decode failed'); return; }
-      model.cabName = file.name; lsSet(CABNAME_KEY, model.cabName);
-      if (cabNameEl) cabNameEl.textContent = model.cabName;
-      if (loopStore.isAvailable()) loopStore.putMisc({ id: CAB_IR_ID, name: file.name, bytes }).catch(() => {});
+      const id = `cab:${file.name}`;
+      model.cabName = file.name; lsSet(CABNAME_KEY, model.cabName); lsSet(CABCUR_KEY, id);
+      if (loopStore.isAvailable()) loopStore.putMisc({ id, name: file.name, bytes }).catch(() => {});
+      libAdd(CABLIB_KEY, id, file.name); renderCabLib();
       setStatus(`cab IR: ${file.name}`);
     } catch (e) { console.warn('[qualia] cab IR load failed:', e); setStatus('IR load failed'); }
   }
-  function clearCabIR() {
-    looperAudio.clearCabIR();
-    model.cabName = ''; lsSet(CABNAME_KEY, '');
-    if (cabNameEl) cabNameEl.textContent = 'no IR';
-    if (loopStore.isAvailable()) loopStore.deleteMisc(CAB_IR_ID).catch(() => {});
+  // Switch to a saved IR (or unload when '' is chosen). Library entry stays.
+  async function selectCab(id) {
+    if (!id) {
+      looperAudio.clearCabIR();
+      model.cabName = ''; lsSet(CABNAME_KEY, ''); lsSet(CABCUR_KEY, ''); renderCabLib();
+      return;
+    }
+    if (!loopStore.isAvailable()) return;
+    try {
+      const rec = await loopStore.getMisc(id);
+      if (!rec || !rec.bytes) { setStatus('IR missing — removed'); removeCab(id); return; }
+      const ok = await looperAudio.setCabIRBytes(rec.bytes);
+      if (!ok) { setStatus('IR decode failed'); return; }
+      model.cabName = rec.name || ''; lsSet(CABNAME_KEY, model.cabName); lsSet(CABCUR_KEY, id); renderCabLib();
+      setStatus(`cab IR: ${model.cabName}`);
+    } catch (e) { console.warn('[qualia] cab IR select failed:', e); setStatus('IR load failed'); }
   }
-  // Neural amp model loader row — file picker + name + clear.
-  let ampNameEl = null;
-  function buildAmpLoader() {
-    const row = document.createElement('div'); row.className = 'rig-ctl rig-cab-load';
-    const file = document.createElement('input');
-    file.type = 'file'; file.accept = '.json,.nam,.aidax,application/json'; file.style.display = 'none';
-    file.addEventListener('change', () => { const f = file.files && file.files[0]; if (f) loadAmpFile(f); file.value = ''; });
-    const btn = document.createElement('button');
-    btn.type = 'button'; btn.className = 'ctrl-btn'; btn.textContent = 'load amp';
-    btn.title = 'Load a neural amp capture (GuitarML / AIDA-X / NAM-LSTM JSON)';
-    btn.addEventListener('click', () => file.click());
-    if (!looperAudio.isAmpCapable?.()) { btn.disabled = true; btn.title = 'Neural amp needs AudioWorklet support'; }
-    ampNameEl = document.createElement('span'); ampNameEl.className = 'rig-cab-name';
-    ampNameEl.textContent = model.ampName || 'no amp';
-    const clr = document.createElement('button');
-    clr.type = 'button'; clr.className = 'ctrl-btn'; clr.textContent = '×'; clr.title = 'Clear amp model';
-    clr.addEventListener('click', clearAmpModel);
-    row.append(file, btn, ampNameEl, clr);
-    return row;
+  function removeCab(id) {
+    if (!id) return;
+    const wasCur = (lsGet(CABCUR_KEY, '') || '') === id;
+    libRemove(CABLIB_KEY, id);
+    if (loopStore.isAvailable()) loopStore.deleteMisc(id).catch(() => {});
+    if (wasCur) { looperAudio.clearCabIR(); model.cabName = ''; lsSet(CABNAME_KEY, ''); lsSet(CABCUR_KEY, ''); }
+    renderCabLib();
   }
+
   async function loadAmpFile(file) {
     try {
       const text = await file.text();
@@ -1268,32 +1370,73 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const parsed = parseAmpModel(json);
       if (!parsed.ok) { setStatus(`amp: ${parsed.reason}`); return; }
       looperAudio.setAmpModel(parsed);
-      model.ampName = file.name; lsSet(AMPNAME_KEY, model.ampName);
-      if (ampNameEl) ampNameEl.textContent = model.ampName;
-      if (loopStore.isAvailable()) loopStore.putMisc({ id: AMP_MODEL_ID, name: file.name, model: parsed }).catch(() => {});
+      const id = `amp:${file.name}`;
+      model.ampName = file.name; lsSet(AMPNAME_KEY, model.ampName); lsSet(AMPCUR_KEY, id);
+      if (loopStore.isAvailable()) loopStore.putMisc({ id, name: file.name, model: parsed }).catch(() => {});
+      libAdd(AMPLIB_KEY, id, file.name); renderAmpLib();
       setStatus(`amp: ${file.name}${parsed.experimental ? ' (experimental)' : ''} · ${parsed.hidden}-cell`);
     } catch (e) { console.warn('[qualia] amp load failed:', e); setStatus('amp load failed'); }
   }
-  function clearAmpModel() {
-    looperAudio.clearAmp();
-    model.ampName = ''; lsSet(AMPNAME_KEY, '');
-    if (ampNameEl) ampNameEl.textContent = 'no amp';
-    if (loopStore.isAvailable()) loopStore.deleteMisc(AMP_MODEL_ID).catch(() => {});
+  async function selectAmp(id) {
+    if (!id) {
+      looperAudio.clearAmp();
+      model.ampName = ''; lsSet(AMPNAME_KEY, ''); lsSet(AMPCUR_KEY, ''); renderAmpLib();
+      return;
+    }
+    if (!loopStore.isAvailable()) return;
+    try {
+      const rec = await loopStore.getMisc(id);
+      if (!rec || !rec.model) { setStatus('amp missing — removed'); removeAmp(id); return; }
+      looperAudio.setAmpModel(rec.model);
+      model.ampName = rec.name || ''; lsSet(AMPNAME_KEY, model.ampName); lsSet(AMPCUR_KEY, id); renderAmpLib();
+      setStatus(`amp: ${model.ampName}`);
+    } catch (e) { console.warn('[qualia] amp select failed:', e); setStatus('amp load failed'); }
   }
+  function removeAmp(id) {
+    if (!id) return;
+    const wasCur = (lsGet(AMPCUR_KEY, '') || '') === id;
+    libRemove(AMPLIB_KEY, id);
+    if (loopStore.isAvailable()) loopStore.deleteMisc(id).catch(() => {});
+    if (wasCur) { looperAudio.clearAmp(); model.ampName = ''; lsSet(AMPNAME_KEY, ''); lsSet(AMPCUR_KEY, ''); }
+    renderAmpLib();
+  }
+
+  // Fold a legacy single-record (old builds) into the library exactly once.
+  async function migrateLegacy(legacyId, libKey, curKey, nameKey, prefix, dataKey, fallbackName) {
+    if (lsGetJSON(libKey).length) return;
+    const legacy = await loopStore.getMisc(legacyId);
+    if (!legacy || !legacy[dataKey]) return;
+    const name = legacy.name || fallbackName;
+    const id = `${prefix}:${name}`;
+    await loopStore.putMisc({ id, name, [dataKey]: legacy[dataKey] });
+    libAdd(libKey, id, name);
+    lsSet(curKey, id); lsSet(nameKey, name);
+    loopStore.deleteMisc(legacyId).catch(() => {});
+  }
+  // Restore the currently-selected amp / cab on reload (applies to the strip
+  // whenever capture opens). Both migrate any legacy single record first.
   async function restoreAmp() {
     if (!loopStore.isAvailable()) return;
     try {
-      const rec = await loopStore.getMisc(AMP_MODEL_ID);
-      if (rec && rec.model) { looperAudio.setAmpModel(rec.model); model.ampName = rec.name || model.ampName; if (ampNameEl) ampNameEl.textContent = model.ampName || 'amp'; }
+      await migrateLegacy(AMP_MODEL_ID, AMPLIB_KEY, AMPCUR_KEY, AMPNAME_KEY, 'amp', 'model', 'amp');
+      const cur = lsGet(AMPCUR_KEY, '') || '';
+      if (cur) {
+        const rec = await loopStore.getMisc(cur);
+        if (rec && rec.model) { looperAudio.setAmpModel(rec.model); model.ampName = rec.name || model.ampName; }
+      }
+      renderAmpLib();
     } catch (e) { console.warn('[qualia] amp restore failed:', e); }
   }
-
-  // Restore a persisted cab IR (async; applies to the strip whenever capture opens).
   async function restoreCabIR() {
     if (!loopStore.isAvailable()) return;
     try {
-      const rec = await loopStore.getMisc(CAB_IR_ID);
-      if (rec && rec.bytes) { await looperAudio.setCabIRBytes(rec.bytes); model.cabName = rec.name || model.cabName; if (cabNameEl) cabNameEl.textContent = model.cabName || 'IR'; }
+      await migrateLegacy(CAB_IR_ID, CABLIB_KEY, CABCUR_KEY, CABNAME_KEY, 'cab', 'bytes', 'cab IR');
+      const cur = lsGet(CABCUR_KEY, '') || '';
+      if (cur) {
+        const rec = await loopStore.getMisc(cur);
+        if (rec && rec.bytes) { await looperAudio.setCabIRBytes(rec.bytes); model.cabName = rec.name || model.cabName; }
+      }
+      renderCabLib();
     } catch (e) { console.warn('[qualia] cab IR restore failed:', e); }
   }
   function resetStrip() {
@@ -1303,7 +1446,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     rebuildStrip();
     setStatus('strip reset');
   }
-  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; cabNameEl = null; ampNameEl = null; buildStripUI(); } }
+  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; cabSelEl = null; ampSelEl = null; buildStripUI(); } }
   function refreshStripBtn() { if (btnStrip) btnStrip.classList.toggle('active', !!model.stripOpen); }
   function toggleStrip(on) {
     model.stripOpen = on == null ? !model.stripOpen : !!on;

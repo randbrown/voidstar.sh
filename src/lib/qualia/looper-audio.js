@@ -95,7 +95,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Both the signal path (sigGain) and the loop bus (loopMaster) route through
   // rigMaster before hitting ctx.destination, giving a single mute + level
   // control over all rig output.
-  let rigMaster = null;
+  let rigMaster = null, outputAnalyser = null;
   let _rigMuted = false, _rigLevel = 1.0;
   // Channel strip (HPF/drive/comp/EQ/delay/reverb/pan) inserted between the raw
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
@@ -370,6 +370,14 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     rigMaster.gain.value = effRig();
     rigMaster.__qualiaBypassMute = true;
     rigMaster.connect(ctx.destination);
+    // Non-audible analyser on the FULL rig output (processed signal + loop bus,
+    // POST master level/mute) — exactly what's going to the speakers. Lives as
+    // long as rigMaster, so the output scope keeps drawing even when the input
+    // capture is closed but loops are still playing.
+    outputAnalyser = ctx.createAnalyser();
+    outputAnalyser.fftSize = 2048;
+    outputAnalyser.smoothingTimeConstant = 0.40;
+    rigMaster.connect(outputAnalyser);
   }
   function effRig() { return _rigMuted ? 0 : _rigLevel; }
   function setRigMuted(on) { _rigMuted = !!on; if (rigMaster) ramp(rigMaster.gain, effRig()); }
@@ -942,8 +950,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     if (_adopted) { audio?.releaseAdopted?.('looper'); _adopted = false; }
     try { loopMaster?.disconnect(); } catch {}
     try { analyser?.disconnect(); } catch {}
+    try { outputAnalyser?.disconnect(); } catch {}
     try { rigMaster?.disconnect(); } catch {}
-    rigMaster = null;
+    rigMaster = outputAnalyser = null;
     loopMaster = analyser = null;
     try { ctx?.close(); } catch {}
     ctx = null; workletReady = null;
@@ -1004,6 +1013,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     isRetroCapable: () => usingWorklet,
     getCaptureAnalyser: () => captureAnalyser,
     getTunerAnalyser: () => tunerAnalyser,
+    // Full rig output (signal + loops, post master) — for the output scope.
+    getOutputAnalyser: () => outputAnalyser,
     playVoice, stopVoice, stopAll, removeTrack, removeAll,
     setMuted, setMaster,
     setTrackVolume, setTrackMuted,
