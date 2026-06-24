@@ -1645,7 +1645,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-tuner-tgt { color: var(--cyan); font-size: 0.66rem; min-width: 6ch; font-variant-numeric: tabular-nums; }
     .rig-tuner-bar { position: relative; flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; }
     .rig-tuner-bar::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,0.25); }
-    .rig-tuner-needle { position: absolute; top: -1px; bottom: -1px; width: 3px; border-radius: 2px; background: var(--cyan); transition: left 0.06s linear; }
+    /* Target tick — sweetened cents offset the needle should land on. */
+    .rig-tuner-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--cyan); opacity: 0.8; pointer-events: none; transition: left 0.1s linear, background 0.12s linear, box-shadow 0.12s linear, opacity 0.12s linear; }
+    .rig-tuner-tick.in-tune { background: var(--green); opacity: 1; box-shadow: 0 0 6px var(--green); }
+    .rig-tuner-needle { position: absolute; top: -1px; bottom: -1px; width: 3px; border-radius: 2px; background: var(--cyan); transition: left 0.06s linear, box-shadow 0.12s linear; }
     .rig-tuner-cents { min-width: 5ch; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
     .rig-tuner-mute { padding: 0.05rem 0.4rem; font-size: 0.56rem; line-height: 1; margin-left: 0.3rem; }
     .rig-tuner-mute.active { color: var(--pink); border-color: var(--pink); background: rgba(255,122,230,0.10); }
