@@ -540,6 +540,23 @@ export default {
     /** @type {{kind:'url'|'file'|'camera', src:string, name:string, file?:File, tainted?:boolean, error?:string, resumeAt?:number}[]} */
     const playlist = loadPlaylist();
     let cursor = 0;
+    // Best-effort bridge for the .qualem.zip bundler: while this fx is active,
+    // expose the bytes of any dropped-file clips (the only ones not otherwise
+    // persisted) so a bundle can travel cross-machine. Cleared on dispose.
+    globalThis.__qualiaVideoFiles = async () => {
+      const out = [];
+      for (const e of playlist) {
+        if (e?.kind !== 'file') continue;
+        try {
+          if (e.file instanceof Blob) out.push({ name: e.name || 'clip', bytes: new Uint8Array(await e.file.arrayBuffer()) });
+          else if (typeof e.src === 'string' && e.src.startsWith('blob:')) {
+            const b = await (await fetch(e.src)).blob();
+            out.push({ name: e.name || 'clip', bytes: new Uint8Array(await b.arrayBuffer()) });
+          }
+        } catch {}
+      }
+      return out;
+    };
     // True while the active source is the live camera — we then sample the
     // shared element from video.js instead of our own vidA/vidB, and skip
     // every lifecycle write that would belong to the camera's real owner.
@@ -1226,6 +1243,7 @@ export default {
       render,
       dispose() {
         disposed = true;
+        if (globalThis.__qualiaVideoFiles) { try { delete globalThis.__qualiaVideoFiles; } catch { globalThis.__qualiaVideoFiles = null; } }
         closeAltCamera();
         try { altCamVideoEl.remove(); } catch {}
         try { activeVid.pause(); } catch {}
