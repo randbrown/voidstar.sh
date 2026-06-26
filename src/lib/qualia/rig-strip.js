@@ -3,9 +3,14 @@
 // Tone's wrapped context can't host the recorder worklet, and these nodes don't
 // need it). Fixed-order series chain with parallel send-style time fx:
 //
-//   in → HPF → earth → metal → comp → EQ(lo/mid/hi) → ┬→ dry ───────────────┐
-//                                              ├→ delay (ping-pong) ──┤→ pan → out
-//                                              └→ reverb (convolver) ─┘
+//   in → HPF → earth → metal → comp → amp → cab → EQ(lo/mid/hi) → ┬→ dry ─────┐
+//                                                         ├→ delay (ping-pong) ┤→ pan → out
+//                                                         └→ reverb (convolver)┘
+//
+// EQ sits POST amp+cab on purpose: the neural amp captures bake in the amp's own
+// tone stack (the model has no live EQ of its own), so a post-cab EQ is the only
+// place to shape the final amp'd + cab'd tone — it acts as a true output tone
+// control rather than a pre-amp stack.
 //
 // Every stage BYPASSES to a clean pass-through (neutral params / zero wet), so
 // toggling a stage never re-wires the graph or interrupts audio. The strip is
@@ -128,10 +133,10 @@ export function createRigStrip(ctx, cfg) {
   // Compressor
   const comp = ctx.createDynamicsCompressor();
 
-  // EQ: low shelf · mid peak · high shelf. The "hi" shelf corners at 3.2 kHz —
-  // the presence/treble band where guitar + pedal-steel brightness actually
-  // lives. (A 4.5 kHz corner sat in the cab's rolloff, so boosting it was nearly
-  // inaudible once an IR was loaded; 3.2 kHz makes the control clearly do work.)
+  // EQ: low shelf · mid peak · high shelf — now POST amp+cab (output tone stack).
+  // The "hi" shelf corners at 3.2 kHz, the presence/treble band where guitar +
+  // pedal-steel brightness lives; sitting after the cab it shapes the final mic'd
+  // tone directly (a boost here adds audible air rather than feeding the amp).
   const eqLow  = ctx.createBiquadFilter(); eqLow.type  = 'lowshelf';  eqLow.frequency.value  = 180;
   const eqMid  = ctx.createBiquadFilter(); eqMid.type  = 'peaking';   eqMid.frequency.value  = 1000; eqMid.Q.value = 0.9;
   const eqHigh = ctx.createBiquadFilter(); eqHigh.type = 'highshelf'; eqHigh.frequency.value = 3200;
@@ -202,12 +207,9 @@ export function createRigStrip(ctx, cfg) {
   mLow.connect(mMid);
   mMid.connect(mHigh);
   mHigh.connect(metalPost);
+  // comp → amp (EQ moved downstream of the cab; see chain diagram above).
   metalPost.connect(comp);
-  comp.connect(eqLow);
-  eqLow.connect(eqMid);
-  eqMid.connect(eqHigh);
-
-  eqHigh.connect(ampIn);
+  comp.connect(ampIn);
   ampIn.connect(ampDry); ampDry.connect(ampSum);
   // Drive only feeds the wet (model) path — the dry blend stays unity so `mix`
   // crossfades cleanly and bypass is exactly the input.
@@ -215,7 +217,11 @@ export function createRigStrip(ctx, cfg) {
   ampSum.connect(cabIn);
   cabIn.connect(cabDry); cabDry.connect(cabSum);
   cabIn.connect(cabConv); cabConv.connect(cabWet); cabWet.connect(cabSum);
-  cabSum.connect(fxIn);
+  // Post-cab EQ → time-fx split.
+  cabSum.connect(eqLow);
+  eqLow.connect(eqMid);
+  eqMid.connect(eqHigh);
+  eqHigh.connect(fxIn);
 
   fxIn.connect(dry); dry.connect(sum);
 

@@ -1874,34 +1874,41 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10);
     }
 
-    /* Channel strip — wrapped row of compact stage boxes. */
-    #rig-strip-body, #rig-strip-util-body {
+    /* Channel strip. The MAIN row is a FIXED grid (container-query sized) so the
+       six performance stages keep stable positions + sizes for muscle memory
+       mid-set — earth·metal·amp·cab·delay·reverb never reflow as you toggle them.
+       The utility drawer stays a modular wrapped flex row. */
+    #rig-strip { container-type: inline-size; }
+    #rig-strip-body {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.4rem; padding: 0.45rem 0.6rem;
+      max-height: 300px; overflow-y: auto;
+      align-items: stretch;
+    }
+    /* Wide panel (laptop / resized-up) → 3 fixed columns: earth·metal·amp / cab·delay·reverb. */
+    @container (min-width: 640px) {
+      #rig-strip-body { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    #rig-strip-util-body {
       display: flex; flex-wrap: wrap; gap: 0.4rem;
-      padding: 0.45rem 0.6rem;
+      padding: 0.45rem 0.6rem 0.5rem;
       max-height: 220px; overflow-y: auto;
     }
-    /* Utility drawer — hpf/comp/eq/pan tucked behind a toggle. */
+    /* Utility drawer — hpf/comp/eq/pan behind a chevron subhead like the loop. */
     #rig-strip-util { border-top: 1px solid var(--border); }
-    .rig-strip-util-toggle {
-      display: block; width: 100%; text-align: left;
-      padding: 0.28rem 0.6rem; font-size: 0.66rem; line-height: 1;
-      border: none; border-radius: 0; background: rgba(0,0,0,0.18);
-      color: var(--muted); letter-spacing: 0.04em;
-    }
-    .rig-strip-util-toggle:hover { color: var(--text); background: rgba(255,255,255,0.04); }
-    .rig-strip-util-toggle.active { color: var(--cyan); }
-    #rig-strip-util-body { padding-top: 0.4rem; }
+    .rig-util-hint { color: var(--muted); font-size: 0.6rem; opacity: 0.6; letter-spacing: 0.04em; }
     .rig-stage {
       border: 1px solid var(--border); border-radius: 6px;
       background: rgba(0,0,0,0.20);
       padding: 0.3rem 0.4rem;
-      min-width: 116px; flex: 1 1 116px;
+      min-width: 0;
     }
+    /* Utility (flex) stages keep their old min-width so they wrap sensibly;
+       :not(.collapsed) so the collapse-shrink rule below still wins. */
+    #rig-strip-util-body .rig-stage:not(.collapsed) { min-width: 116px; flex: 1 1 116px; }
     .rig-stage.on { border-color: var(--cyan); background: rgba(34,211,238,0.06); }
-    /* amp + cab carry a saved-file picker — give them more room so the IR / amp
-       library names are legible (collapsed still wins via :not). */
-    .rig-stage[data-stage="amp"]:not(.collapsed),
-    .rig-stage[data-stage="cab"]:not(.collapsed) { min-width: 220px; flex-basis: 220px; }
+    /* Fixed-head stages (main row) have no collapse chevron. */
+    .rig-stage-head.rig-stage-head-fixed { cursor: default; }
     .rig-stage-head {
       display: flex; align-items: center; justify-content: flex-start;
       gap: 0.3rem; margin-bottom: 0.25rem;
@@ -2975,9 +2982,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <!-- Main row — the stages reached for live: earth · metal · amp · cab · delay · reverb. -->
     <div id="rig-strip-body"></div>
-    <!-- Utility drawer — hpf · comp · eq · pan, tucked away until needed. -->
+    <!-- Utility drawer — hpf · comp · eq · pan, tucked away until needed.
+         Same chevron + subtitle subhead as the loop / signal subpanels. -->
     <div id="rig-strip-util">
-      <button class="ctrl-btn rig-strip-util-toggle" id="btn-rig-strip-util" title="Collapse / expand the utility stages (HPF, compressor, EQ, pan)">▸ utility · hpf comp eq pan</button>
+      <div class="rig-subhead">
+        <button class="ctrl-btn rig-collapse" id="btn-rig-strip-util" title="Collapse / expand the utility stages (HPF · comp · EQ · pan)">▸</button>
+        <span class="sp-subtitle">utility</span>
+        <span class="rig-util-hint">hpf · comp · eq · pan</span>
+      </div>
       <div id="rig-strip-util-body" style="display:none"></div>
     </div>
   </section>

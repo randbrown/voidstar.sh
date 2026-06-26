@@ -1295,49 +1295,48 @@ export function createLooper({ audio, syncStrudel } = {}) {
       if (tg) { tg.textContent = on ? 'on' : 'off'; tg.classList.toggle('active', on); }
     }
   }
-  // Build one strip-stage box (head + toggle + collapse + param controls).
-  function buildStripStage(stage) {
+  // Build one strip-stage box (head + toggle + param controls). `collapsible`
+  // off (main row) gives every stage a fixed footprint so positions never shift
+  // mid-performance — muscle memory over space-saving; the utility drawer keeps
+  // per-stage collapse since it's the modular "tuck away" group.
+  function buildStripStage(stage, { collapsible = true } = {}) {
     const box = document.createElement('div');
     box.className = 'rig-stage'; box.dataset.stage = stage.id;
     const head = document.createElement('div'); head.className = 'rig-stage-head';
     const nameEl = document.createElement('span'); nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
 
-    // Collapse toggle
-    const collapsed = !!model.strip[stage.id]?.collapsed;
-    if (collapsed) box.classList.add('collapsed');
-    const chev = document.createElement('button');
-    chev.type = 'button'; chev.className = 'ctrl-btn rig-stage-chev';
-    chev.textContent = collapsed ? '▸' : '▾';
-    chev.title = 'Collapse / expand';
-    chev.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const c = box.classList.toggle('collapsed');
-      chev.textContent = c ? '▸' : '▾';
-      if (!model.strip[stage.id]) model.strip[stage.id] = {};
-      model.strip[stage.id].collapsed = c;
-      persistStrip();
-    });
+    let chev = null;
+    if (collapsible) {
+      const collapsed = !!model.strip[stage.id]?.collapsed;
+      if (collapsed) box.classList.add('collapsed');
+      chev = document.createElement('button');
+      chev.type = 'button'; chev.className = 'ctrl-btn rig-stage-chev';
+      chev.textContent = collapsed ? '▸' : '▾';
+      chev.title = 'Collapse / expand';
+      const toggleCollapse = (e) => {
+        if (e) { if (e.target.closest('.rig-stage-toggle')) return; e.stopPropagation(); }
+        const c = box.classList.toggle('collapsed');
+        chev.textContent = c ? '▸' : '▾';
+        if (!model.strip[stage.id]) model.strip[stage.id] = {};
+        model.strip[stage.id].collapsed = c;
+        persistStrip();
+      };
+      chev.addEventListener('click', toggleCollapse);
+      head.addEventListener('click', toggleCollapse);
+    } else {
+      head.classList.add('rig-stage-head-fixed');
+    }
 
     if (stage.toggle) {
       const tg = document.createElement('button');
       tg.type = 'button'; tg.className = 'ctrl-btn rig-stage-toggle';
       tg.title = `Enable / bypass ${stage.name}`;
       tg.addEventListener('click', () => stripToggle(stage.id, !model.strip[stage.id].on));
-      head.append(chev, tg, nameEl);
+      if (chev) head.append(chev, tg, nameEl); else head.append(tg, nameEl);
     } else {
       box.classList.add('on');   // non-toggle stages (pan) are always active
-      head.append(chev, nameEl);
+      if (chev) head.append(chev, nameEl); else head.append(nameEl);
     }
-
-    // Click anywhere on head to toggle collapse (except the on/off button)
-    head.addEventListener('click', (e) => {
-      if (e.target.closest('.rig-stage-toggle')) return;
-      const c = box.classList.toggle('collapsed');
-      chev.textContent = c ? '▸' : '▾';
-      if (!model.strip[stage.id]) model.strip[stage.id] = {};
-      model.strip[stage.id].collapsed = c;
-      persistStrip();
-    });
 
     box.append(head);
     if (stage.params) {
@@ -1349,28 +1348,30 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function buildStripUI() {
     if (!stripBody || stripBody.children.length) return;
-    // Main group → always-visible row; util group → collapsible drawer. Schema
-    // order already yields the desired sub-orders (earth·metal·amp·cab·delay·
-    // reverb / hpf·comp·eq·pan), so a simple group filter is enough.
+    // Main group → fixed always-visible grid; util group → collapsible drawer.
+    // Schema order already yields the desired sub-orders (earth·metal·amp·cab·
+    // delay·reverb / hpf·comp·eq·pan), so a simple group filter is enough.
     for (const stage of STRIP_SCHEMA) {
       if (stage.group === 'util') continue;
-      stripBody.append(buildStripStage(stage));
+      stripBody.append(buildStripStage(stage, { collapsible: false }));
     }
     if (stripUtilBody) {
       for (const stage of STRIP_SCHEMA) {
         if (stage.group !== 'util') continue;
-        stripUtilBody.append(buildStripStage(stage));
+        stripUtilBody.append(buildStripStage(stage, { collapsible: true }));
       }
     }
     applyStripUtil();
     refreshStripStages();
   }
   function applyStripUtil() {
+    // Mirror the loop/signal subpanels: a .rig-collapse chevron drives the body
+    // show/hide, so utility + loop collapse the same way.
     const open = !!model.stripUtilOpen;
     if (stripUtilBody) stripUtilBody.style.display = open ? '' : 'none';
     if (btnStripUtil) {
-      btnStripUtil.textContent = (open ? '▾' : '▸') + ' utility · hpf comp eq pan';
-      btnStripUtil.classList.toggle('active', open);
+      btnStripUtil.textContent = open ? '▾' : '▸';
+      btnStripUtil.classList.toggle('collapsed', !open);
     }
   }
   function toggleStripUtil() {
