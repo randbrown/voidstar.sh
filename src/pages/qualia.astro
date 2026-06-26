@@ -750,6 +750,13 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.1rem 0.55rem; cursor: pointer; transition: all 0.15s;
     }
     .qp-toggle.active { border-color: var(--pink); color: var(--pink); }
+    /* Per-panel save/load chips injected into panel headers + the qualem picker row. */
+    .panel-io { display: inline-flex; align-items: center; gap: 0.15rem; }
+    .panel-io-btn { padding: 0.05rem 0.35rem; font-size: 0.7rem; line-height: 1; opacity: 0.7; }
+    .panel-io-btn:hover { opacity: 1; }
+    .qualem-panelio { display: flex; align-items: center; gap: 0.4rem; margin: 0.3rem 0; flex-wrap: wrap; }
+    .qualem-panelio .seq-prop-label { color: var(--muted); }
+    .qualem-panelio select { flex: 1 1 auto; min-width: 8ch; }
     .qp-select {
       background: var(--surface-glass-2); border: 1px solid var(--border);
       border-radius: 4px; color: var(--text);
@@ -1834,19 +1841,25 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .rig-input-controls { display: inline-flex; align-items: center; gap: 0.3rem; }
     #rig-signal-status { margin-left: auto; color: var(--muted); font-size: 0.64rem; min-width: 4ch; text-align: right; }
-    .rig-scope-wrap { position: relative; display: block; }
+    /* IN + OUT scopes share one line to save vertical real estate. */
+    #rig-scopes { display: flex; align-items: stretch; gap: 1px; }
+    .rig-scope-wrap { position: relative; flex: 1 1 0; min-width: 0; }
     .rig-scope {
-      display: block; width: 100%; height: 60px;
+      display: block; width: 100%; height: 34px;
       background: rgba(0,0,0,0.34);
       border-top: 1px solid rgba(255,255,255,0.04);
     }
-    /* Second scope (rig output) sits just under the input scope. */
-    .rig-scope-out { border-top: 1px solid rgba(255,255,255,0.09); }
+    /* Second scope (rig output) sits beside the input scope now. */
+    .rig-scope-out { border-left: 1px solid rgba(255,255,255,0.09); }
     .rig-scope-tag {
-      position: absolute; top: 3px; left: 7px; pointer-events: none;
-      font-size: 0.52rem; letter-spacing: 0.12em; text-transform: uppercase;
+      position: absolute; top: 2px; left: 6px; pointer-events: none;
+      font-size: 0.5rem; letter-spacing: 0.12em; text-transform: uppercase;
       color: var(--muted); opacity: 0.55;
     }
+    /* Scope display-gain magnifier (visual only) — compact slider in the subhead. */
+    .rig-scope-gain-wrap { display: inline-flex; align-items: center; gap: 0.2rem; }
+    .rig-scope-gain-lab { color: var(--muted); font-size: 0.66rem; opacity: 0.7; }
+    .rig-scope-gain { width: 60px; }
     #btn-rig-channels { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; min-width: 4ch; }
     #btn-rig-buffer { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
     #btn-rig-buffer.active {
@@ -1861,23 +1874,41 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10);
     }
 
-    /* Channel strip — wrapped row of compact stage boxes. */
+    /* Channel strip. The MAIN row is a FIXED grid (container-query sized) so the
+       six performance stages keep stable positions + sizes for muscle memory
+       mid-set — earth·metal·amp·cab·delay·reverb never reflow as you toggle them.
+       The utility drawer stays a modular wrapped flex row. */
+    #rig-strip { container-type: inline-size; }
     #rig-strip-body {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.4rem; padding: 0.45rem 0.6rem;
+      max-height: 300px; overflow-y: auto;
+      align-items: stretch;
+    }
+    /* Wide panel (laptop / resized-up) → 3 fixed columns: earth·metal·amp / cab·delay·reverb. */
+    @container (min-width: 640px) {
+      #rig-strip-body { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    #rig-strip-util-body {
       display: flex; flex-wrap: wrap; gap: 0.4rem;
-      padding: 0.45rem 0.6rem;
+      padding: 0.45rem 0.6rem 0.5rem;
       max-height: 220px; overflow-y: auto;
     }
+    /* Utility drawer — hpf/comp/eq/pan behind a chevron subhead like the loop. */
+    #rig-strip-util { border-top: 1px solid var(--border); }
+    .rig-util-hint { color: var(--muted); font-size: 0.6rem; opacity: 0.6; letter-spacing: 0.04em; }
     .rig-stage {
       border: 1px solid var(--border); border-radius: 6px;
       background: rgba(0,0,0,0.20);
       padding: 0.3rem 0.4rem;
-      min-width: 116px; flex: 1 1 116px;
+      min-width: 0;
     }
+    /* Utility (flex) stages keep their old min-width so they wrap sensibly;
+       :not(.collapsed) so the collapse-shrink rule below still wins. */
+    #rig-strip-util-body .rig-stage:not(.collapsed) { min-width: 116px; flex: 1 1 116px; }
     .rig-stage.on { border-color: var(--cyan); background: rgba(34,211,238,0.06); }
-    /* amp + cab carry a saved-file picker — give them more room so the IR / amp
-       library names are legible (collapsed still wins via :not). */
-    .rig-stage[data-stage="amp"]:not(.collapsed),
-    .rig-stage[data-stage="cab"]:not(.collapsed) { min-width: 220px; flex-basis: 220px; }
+    /* Fixed-head stages (main row) have no collapse chevron. */
+    .rig-stage-head.rig-stage-head-fixed { cursor: default; }
     .rig-stage-head {
       display: flex; align-items: center; justify-content: flex-start;
       gap: 0.3rem; margin-bottom: 0.25rem;
@@ -1912,23 +1943,25 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-stage-head { cursor: pointer; }
 
     /* Tuner readout — note + cents bar. */
+    /* Virtual strobe tuner — a readout row above the strobe-band canvas. */
     .rig-tuner {
-      display: flex; align-items: center; gap: 0.6rem;
-      padding: 0.25rem 0.7rem 0.4rem;
+      display: flex; flex-direction: column; gap: 0.3rem;
+      padding: 0.25rem 0.7rem 0.45rem;
       font-size: 0.72rem;
     }
-    .rig-tuner-note { font-size: 1.1rem; min-width: 3.5ch; color: var(--text); font-variant-numeric: tabular-nums; }
+    .rig-tuner-readout { display: flex; align-items: center; gap: 0.6rem; }
+    .rig-tuner-note { font-size: 1.2rem; min-width: 3.5ch; color: var(--text); font-variant-numeric: tabular-nums; }
+    .rig-tuner-cents { min-width: 5ch; color: var(--muted); font-variant-numeric: tabular-nums; }
     .rig-tuner-hz { color: var(--muted); font-size: 0.66rem; min-width: 7ch; font-variant-numeric: tabular-nums; }
     .rig-tuner-tgt { color: var(--cyan); font-size: 0.66rem; min-width: 6ch; font-variant-numeric: tabular-nums; }
-    .rig-tuner-bar { position: relative; flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; }
-    .rig-tuner-bar::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,0.25); }
-    /* Target tick — sweetened cents offset the needle should land on. */
-    .rig-tuner-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--cyan); opacity: 0.8; pointer-events: none; transition: left 0.1s linear, background 0.12s linear, box-shadow 0.12s linear, opacity 0.12s linear; }
-    .rig-tuner-tick.in-tune { background: var(--green); opacity: 1; box-shadow: 0 0 6px var(--green); }
-    .rig-tuner-needle { position: absolute; top: -1px; bottom: -1px; width: 3px; border-radius: 2px; background: var(--cyan); transition: left 0.06s linear, box-shadow 0.12s linear; }
-    .rig-tuner-cents { min-width: 5ch; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-    .rig-tuner-mute { padding: 0.05rem 0.4rem; font-size: 0.56rem; line-height: 1; margin-left: 0.3rem; }
+    .rig-tuner-mute { padding: 0.05rem 0.4rem; font-size: 0.56rem; line-height: 1; margin-left: auto; }
     .rig-tuner-mute.active { color: var(--pink); border-color: var(--pink); background: rgba(255,122,230,0.10); }
+    /* Strobe band display — drifts off-pitch, freezes in tune. */
+    .rig-strobe {
+      display: block; width: 100%; height: 46px;
+      background: rgba(0,0,0,0.34); border-radius: 5px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
 
     /* Temperament editor — ET / custom toggle + 12 per-note cent spinners. */
     .rig-temper { padding: 0 0.7rem 0.45rem; }
@@ -2636,8 +2669,24 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn" id="btn-qualem-import" title="Load a .qualem.json file from disk">import</button>
         <button class="ctrl-btn" id="btn-qualem-share-current" title="Share current live state as a URL">share live</button>
       </div>
+      <!-- Bundle: a .qualem.zip that also packs loop WAVs + cab IRs + amp
+           captures + video clips so a whole rig moves between machines. -->
+      <div class="sp-pat-toolbar">
+        <button class="ctrl-btn" id="btn-qualem-bundle"        title="Export a .qualem.zip — the qualem JSON plus loop WAVs, cab IRs, amp captures, and video clips (portable across machines)">export .zip</button>
+        <button class="ctrl-btn" id="btn-qualem-bundle-import" title="Import a .qualem.zip bundle (installs its loops / cab IRs / amp captures, then loads it)">import .zip</button>
+      </div>
+      <!-- Panel I/O — save or load just ONE panel's settings to/from a file.
+           Loading ignores everything outside the chosen panel. -->
+      <div class="qualem-panelio">
+        <span class="seq-prop-label">panel</span>
+        <select id="qualem-section" class="rig-lib-select" title="Which panel's settings to save / load on its own"></select>
+        <button class="ctrl-btn" id="btn-qualem-section-save" title="Save just this panel's settings to a .qualem.json file">save</button>
+        <button class="ctrl-btn" id="btn-qualem-section-load" title="Load just this panel's settings from any .qualem file (ignores the rest)">load</button>
+      </div>
       <div id="qualem-list" class="sp-pat-list"></div>
       <input type="file" id="qualem-file-input" accept=".json,application/json" style="display:none" />
+      <input type="file" id="qualem-zip-input" accept=".zip,application/zip" style="display:none" />
+      <input type="file" id="qualem-section-input" accept=".json,application/json" style="display:none" />
     </div>
   </div>
 </div>
@@ -2905,8 +2954,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-rig-channels" title="Input: mono (sum to centre, then full stereo treatment) or stereo (pass L/R)">mono</button>
       <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
       <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — HPF, drive, comp, EQ, delay, reverb, pan on the rig signal">strip</button>
-      <button class="ctrl-btn" id="btn-rig-tuner" title="Chromatic tuner — reads the raw rig input (pre-distortion)">tune</button>
+      <button class="ctrl-btn" id="btn-rig-tuner" title="Strobe tuner — Peterson-style strobe reading the raw rig input (pre-distortion); bands freeze when in tune">tune</button>
       <button class="ctrl-btn" id="btn-rig-loop" title="Looper — record, layer, and loop your signal">loop</button>
+      <span id="rig-scope-gain-wrap" class="rig-scope-gain-wrap"></span>
       <span class="sp-status" id="rig-signal-status"></span>
     </div>
     <div id="rig-scopes">
@@ -2930,7 +2980,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span class="rig-head-spacer"></span>
       <button class="ctrl-btn" id="btn-rig-strip-reset" title="Reset all strip effects to off / unity defaults">reset</button>
     </div>
+    <!-- Main row — the stages reached for live: earth · metal · amp · cab · delay · reverb. -->
     <div id="rig-strip-body"></div>
+    <!-- Utility drawer — hpf · comp · eq · pan, tucked away until needed.
+         Same chevron + subtitle subhead as the loop / signal subpanels. -->
+    <div id="rig-strip-util">
+      <div class="rig-subhead">
+        <button class="ctrl-btn rig-collapse" id="btn-rig-strip-util" title="Collapse / expand the utility stages (HPF · comp · EQ · pan)">▸</button>
+        <span class="sp-subtitle">utility</span>
+        <span class="rig-util-hint">hpf · comp · eq · pan</span>
+      </div>
+      <div id="rig-strip-util-body" style="display:none"></div>
+    </div>
   </section>
 
   <!-- LOOP subpanel — the looper, built on the rig signal. -->

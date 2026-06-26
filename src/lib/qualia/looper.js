@@ -45,12 +45,14 @@ const BUFFER_KEY     = `${NS}.buffer`;     // keep the live lookback buffer fill
 const SIGLEVEL_KEY   = `${NS}.signalLevel`;// rig signal monitor/mix level
 const SIGMUTE_KEY    = `${NS}.signalMuted`;// rig signal mute
 const SCOPESOPEN_KEY = `${NS}.scopesOpen`; // in/out scopes visible (collapsible)
+const SCOPEGAIN_KEY  = `${NS}.scopeGain`;  // scope DISPLAY gain (visual only, not audio)
 const RIG_MUTE_KEY   = `${NS}.rigMuted`;  // rig master mute (signal + loops)
 const RIG_LEVEL_KEY  = `${NS}.rigLevel`;  // rig master output level
 const RIG_LIMITER_KEY = `${NS}.rigLimiter`; // rig master brickwall limiter (signal + loops)
 const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo'
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
+const STRIPUTIL_KEY  = `${NS}.stripUtilOpen`; // utility drawer (hpf/comp/eq/pan) expanded
 const LOOPOPEN_KEY     = `${NS}.loopOpen`;      // loop section visible
 const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
 const TUNER_KEY      = `${NS}.tuner`;      // tuner enabled
@@ -70,15 +72,19 @@ const LIB_MAX        = 24;                  // cap on saved files per library
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
 // Channel strip UI schema — stages + params (the audio side lives in
-// rig-strip.js; STRIP_DEFAULTS supplies initial values).
+// rig-strip.js; STRIP_DEFAULTS supplies initial values). `group` controls only
+// the UI placement (the audio graph order is fixed in rig-strip.js): 'main'
+// stages live in the always-visible row a performer reaches for live (earth,
+// metal, amp, cab, delay, reverb); 'util' stages (hpf, comp, eq, pan) tuck into
+// a collapsible "utility" drawer so they're out of the way until needed.
 const STRIP_SCHEMA = [
-  { id: 'hpf',    name: 'hpf',    toggle: true,  params: [{ id: 'freq', label: 'freq', min: 20, max: 400, step: 1, fmt: v => `${v|0}Hz` }] },
-  { id: 'earth',  name: 'earth',  toggle: true,  params: [
+  { id: 'hpf',    name: 'hpf',    group: 'util', toggle: true,  params: [{ id: 'freq', label: 'freq', min: 20, max: 400, step: 1, fmt: v => `${v|0}Hz` }] },
+  { id: 'earth',  name: 'earth',  group: 'main', toggle: true,  params: [
     { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
     { id: 'tone', label: 'tone', min: 0, max: 1, step: 0.01 },
     { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
   ] },
-  { id: 'metal',  name: 'metal',  toggle: true,  params: [
+  { id: 'metal',  name: 'metal',  group: 'main', toggle: true,  params: [
     { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
     { id: 'low', label: 'low', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
     { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
@@ -86,13 +92,13 @@ const STRIP_SCHEMA = [
     { id: 'high', label: 'high', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
     { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
   ] },
-  { id: 'comp',   name: 'comp',   toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
-  { id: 'eq',     name: 'eq',     toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
-  { id: 'amp',    name: 'amp',    toggle: true,  ampLoader: true, params: [{ id: 'gain', label: 'gain', min: 0, max: 4, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
-  { id: 'cab',    name: 'cab',    toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
-  { id: 'delay',  name: 'delay',  toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
-  { id: 'reverb', name: 'reverb', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
-  { id: 'pan',    name: 'pan',    toggle: false, params: [{ id: 'pan', label: 'pan', min: -1, max: 1, step: 0.02, fmt: v => v == 0 ? 'C' : (v < 0 ? `L${Math.round(-v*100)}` : `R${Math.round(v*100)}`) }] },
+  { id: 'comp',   name: 'comp',   group: 'util', toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
+  { id: 'eq',     name: 'eq',     group: 'util', toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
+  { id: 'amp',    name: 'amp',    group: 'main', toggle: true,  ampLoader: true, params: [{ id: 'gain', label: 'gain', min: 0, max: 4, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
+  { id: 'cab',    name: 'cab',    group: 'main', toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
+  { id: 'delay',  name: 'delay',  group: 'main', toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
+  { id: 'reverb', name: 'reverb', group: 'main', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
+  { id: 'pan',    name: 'pan',    group: 'util', toggle: false, params: [{ id: 'pan', label: 'pan', min: -1, max: 1, step: 0.02, fmt: v => v == 0 ? 'C' : (v < 0 ? `L${Math.round(-v*100)}` : `R${Math.round(v*100)}`) }] },
 ];
 
 
@@ -215,6 +221,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnTuner    = document.getElementById('btn-rig-tuner');
   const stripPanel  = document.getElementById('rig-strip');
   const stripBody   = document.getElementById('rig-strip-body');
+  const stripUtilBody = document.getElementById('rig-strip-util-body');
+  const btnStripUtil  = document.getElementById('btn-rig-strip-util');
   const btnStripReset = document.getElementById('btn-rig-strip-reset');
   const rigLoopSection = document.getElementById('rig-loop');
   const looperBody  = document.getElementById('looper-body');
@@ -254,9 +262,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
     signalLevel: num01(lsGet(SIGLEVEL_KEY, '0'), 0),   // rig signal monitor/mix level
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
     scopesOpen: lsGet(SCOPESOPEN_KEY, '1') !== '0',    // in/out scopes visible (default on)
+    scopeGain: (() => { const v = parseFloat(lsGet(SCOPEGAIN_KEY, '1.8')); return Number.isFinite(v) ? Math.max(0.5, Math.min(6, v)) : 1.8; })(),  // visual-only display gain (scopes are short now)
     channels: lsGet(CHANNELS_KEY, 'mono') === 'stereo' ? 'stereo' : 'mono',
     strip: loadStripConfig(),                          // channel strip config
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
+    stripUtilOpen: lsGet(STRIPUTIL_KEY, '0') === '1',  // utility drawer (default tucked away)
     loopOpen: lsGet(LOOPOPEN_KEY, '1') !== '0',              // loop section visible
     loopCollapsed: lsGet(LOOPCOLLAPSE_KEY, '0') === '1',
     tunerOn: lsGet(TUNER_KEY, '0') === '1',
@@ -378,14 +388,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   // Rebuild persisted loops on load. Does NOT auto-play; arms a fresh empty
   // track so the next record doesn't clobber a restored take.
-  async function restoreFromStore() {
+  async function restoreFromStore({ force = false } = {}) {
     if (!loopStore.isAvailable()) return;
     let recs;
     try { recs = await loopStore.getAllTracks(); }
     catch (e) { console.warn('[qualia] looper restore failed:', e); return; }
     if (!recs || !recs.length) return;
-    // If the user already recorded during the (brief) async load, don't clobber.
-    if (model.tracks.some(t => t.buffer)) return;
+    // If the user already recorded during the (brief) async load, don't clobber
+    // — unless we're explicitly reloading after a bundle import.
+    if (!force && model.tracks.some(t => t.buffer)) return;
     const restored = [];
     let maxOrder = -1;
     for (const r of recs) {
@@ -835,6 +846,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
       customCents: model.customCents.slice(),
       refPitch:    model.refPitch,
       channels:    model.channels,
+      scopeGain:   model.scopeGain,
+      // Which cab IR / amp capture is loaded (pointer by id + display name). The
+      // bytes live in IndexedDB (same machine) or the .qualem.zip (cross-machine);
+      // setConfig re-selects by id so the tone comes back with the qualem.
+      cabFile:     { id: lsGet(CABCUR_KEY, '') || '', name: model.cabName || '' },
+      ampFile:     { id: lsGet(AMPCUR_KEY, '') || '', name: model.ampName || '' },
     };
   }
   function setConfig(cfg) {
@@ -871,7 +888,21 @@ export function createLooper({ audio, syncStrudel } = {}) {
       syncTemperCells();
     }
     if (typeof cfg.refPitch === 'number') setRefPitch(cfg.refPitch);
+    if (typeof cfg.scopeGain === 'number') { setScopeGain(cfg.scopeGain); if (scopeGainSl) scopeGainSl.value = String(model.scopeGain); }
     if (cfg.channels === 'mono' || cfg.channels === 'stereo') setChannels(cfg.channels);
+    // Re-select the cab IR / amp by id if it's present in the local library
+    // (bytes already installed by the bundle importer, or already on this
+    // machine). Fire-and-forget; a missing id just leaves the current tone.
+    if (cfg.cabFile && typeof cfg.cabFile === 'object') {
+      const id = cfg.cabFile.id || '';
+      if (id && id !== (lsGet(CABCUR_KEY, '') || '')) selectCab(id).catch?.(() => {});
+      else if (!id && (lsGet(CABCUR_KEY, '') || '')) selectCab('');
+    }
+    if (cfg.ampFile && typeof cfg.ampFile === 'object') {
+      const id = cfg.ampFile.id || '';
+      if (id && id !== (lsGet(AMPCUR_KEY, '') || '')) selectAmp(id).catch?.(() => {});
+      else if (!id && (lsGet(AMPCUR_KEY, '') || '')) selectAmp('');
+    }
     // Repaint the props row so the panel mirrors the applied settings
     // (master slider, nudge, sync/start-now checkboxes) whether or not it's
     // currently open; renderProps re-reads model on the next open anyway.
@@ -1056,6 +1087,34 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshInputMuteBtn();
   }
 
+  // ── scope display gain (visual magnifier; NOT audio gain) ──────────────────
+  // The IN/OUT scopes are short by default to save real estate, so a small
+  // signal can vanish. This slider vertically magnifies the trace only — it
+  // never touches the audio or the dB readout (which always reflects true peak).
+  let scopeGainSl = null;
+  function buildScopeGain() {
+    const wrap = document.getElementById('rig-scope-gain-wrap');
+    if (!wrap || wrap.children.length) return;
+    const lab = document.createElement('span');
+    lab.className = 'rig-scope-gain-lab'; lab.textContent = '◹';
+    lab.title = 'Scope display gain — magnifies the IN/OUT traces visually only (no audio change)';
+    scopeGainSl = document.createElement('input');
+    scopeGainSl.type = 'range'; scopeGainSl.min = '0.5'; scopeGainSl.max = '6'; scopeGainSl.step = '0.1';
+    scopeGainSl.className = 'rig-scope-gain';
+    scopeGainSl.setAttribute('value', '1.8');   // double-click-to-reset default
+    scopeGainSl.value = String(model.scopeGain);
+    scopeGainSl.title = lab.title;
+    scopeGainSl.addEventListener('input', () => setScopeGain(scopeGainSl.value));
+    wrap.append(lab, scopeGainSl);
+  }
+  function setScopeGain(v) {
+    const g = parseFloat(v);
+    if (!Number.isFinite(g)) return;
+    model.scopeGain = Math.max(0.5, Math.min(6, g));
+    lsSet(SCOPEGAIN_KEY, model.scopeGain);
+    if (scopeGainSl && scopeGainSl.value !== String(model.scopeGain)) scopeGainSl.value = String(model.scopeGain);
+  }
+
   // ── live input scope (oscilloscope) ───────────────────────────────────────
   // Draws the captured input's time-domain waveform when the mic source is
   // live, else a faint idle trace so the panel still looks alive. Allocation-
@@ -1065,21 +1124,27 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function sizeCanvas(cv) {
     if (!cv) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = cv.clientWidth || 360, h = cv.clientHeight || 60;
+    const w = cv.clientWidth || 360, h = cv.clientHeight || 36;
     cv.width  = Math.max(1, Math.round(w * dpr));
     cv.height = Math.max(1, Math.round(h * dpr));
   }
   function sizeScope() { sizeCanvas(scopeCanvas); sizeCanvas(scopeOutCanvas); }
   // Trace one analyser's time-domain waveform across the canvas; returns the
-  // peak |sample| so the caller can flag clipping. Allocation-free.
+  // TRUE peak |sample| (pre display-gain) so the caller can flag real clipping.
+  // The vertical scale folds in model.scopeGain — a VISUAL-only magnifier so the
+  // (now short) scopes stay legible — and clamps the trace inside the canvas so a
+  // boosted wave smears against the rails instead of drawing off-screen.
   function traceWave(g, buf, n, W, mid) {
     let peak = 0;
+    const k = mid * 0.92 * (model.scopeGain || 1);
+    const H = mid * 2;
     g.beginPath();
     for (let i = 0; i < n; i++) {
       const v = (buf[i] - 128) / 128;
       const a = v < 0 ? -v : v; if (a > peak) peak = a;
       const x = (i / (n - 1)) * W;
-      const y = mid - v * mid * 0.92;
+      let y = mid - v * k;
+      if (y < 0) y = 0; else if (y > H) y = H;
       if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
     }
     return peak;
@@ -1170,6 +1235,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       if (model.tunerOn) {
         const now = performance.now();
         if (now - _tunerLastMs >= TUNER_INTERVAL_MS) { _tunerLastMs = now; updateTuner(); }
+        drawStrobe();   // every frame for smooth strobe motion
       }
     };
     scopeRAF = requestAnimationFrame(loop);
@@ -1216,10 +1282,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
     persistStrip();
   }
   function refreshStripStages() {
-    if (!stripBody) return;
+    if (!stripPanel) return;
     for (const stage of STRIP_SCHEMA) {
       if (!stage.toggle) continue;
-      const box = stripBody.querySelector(`.rig-stage[data-stage="${stage.id}"]`);
+      // Query the whole strip panel so stages in either group (main row or the
+      // utility drawer) get their on/off state synced.
+      const box = stripPanel.querySelector(`.rig-stage[data-stage="${stage.id}"]`);
       if (!box) continue;
       const on = !!model.strip[stage.id].on;
       box.classList.toggle('on', on);
@@ -1227,60 +1295,89 @@ export function createLooper({ audio, syncStrudel } = {}) {
       if (tg) { tg.textContent = on ? 'on' : 'off'; tg.classList.toggle('active', on); }
     }
   }
-  function buildStripUI() {
-    if (!stripBody || stripBody.children.length) return;
-    for (const stage of STRIP_SCHEMA) {
-      const box = document.createElement('div');
-      box.className = 'rig-stage'; box.dataset.stage = stage.id;
-      const head = document.createElement('div'); head.className = 'rig-stage-head';
-      const nameEl = document.createElement('span'); nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
+  // Build one strip-stage box (head + toggle + param controls). `collapsible`
+  // off (main row) gives every stage a fixed footprint so positions never shift
+  // mid-performance — muscle memory over space-saving; the utility drawer keeps
+  // per-stage collapse since it's the modular "tuck away" group.
+  function buildStripStage(stage, { collapsible = true } = {}) {
+    const box = document.createElement('div');
+    box.className = 'rig-stage'; box.dataset.stage = stage.id;
+    const head = document.createElement('div'); head.className = 'rig-stage-head';
+    const nameEl = document.createElement('span'); nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
 
-      // Collapse toggle
+    let chev = null;
+    if (collapsible) {
       const collapsed = !!model.strip[stage.id]?.collapsed;
       if (collapsed) box.classList.add('collapsed');
-      const chev = document.createElement('button');
+      chev = document.createElement('button');
       chev.type = 'button'; chev.className = 'ctrl-btn rig-stage-chev';
       chev.textContent = collapsed ? '▸' : '▾';
       chev.title = 'Collapse / expand';
-      chev.addEventListener('click', (e) => {
-        e.stopPropagation();
+      const toggleCollapse = (e) => {
+        if (e) { if (e.target.closest('.rig-stage-toggle')) return; e.stopPropagation(); }
         const c = box.classList.toggle('collapsed');
         chev.textContent = c ? '▸' : '▾';
         if (!model.strip[stage.id]) model.strip[stage.id] = {};
         model.strip[stage.id].collapsed = c;
         persistStrip();
-      });
-
-      if (stage.toggle) {
-        const tg = document.createElement('button');
-        tg.type = 'button'; tg.className = 'ctrl-btn rig-stage-toggle';
-        tg.title = `Enable / bypass ${stage.name}`;
-        tg.addEventListener('click', () => stripToggle(stage.id, !model.strip[stage.id].on));
-        head.append(chev, tg, nameEl);
-      } else {
-        box.classList.add('on');   // non-toggle stages (pan) are always active
-        head.append(chev, nameEl);
-      }
-
-      // Click anywhere on head to toggle collapse (except the on/off button)
-      head.addEventListener('click', (e) => {
-        if (e.target.closest('.rig-stage-toggle')) return;
-        const c = box.classList.toggle('collapsed');
-        chev.textContent = c ? '▸' : '▾';
-        if (!model.strip[stage.id]) model.strip[stage.id] = {};
-        model.strip[stage.id].collapsed = c;
-        persistStrip();
-      });
-
-      box.append(head);
-      if (stage.params) {
-        for (const p of stage.params) box.append(buildCtl(stage.id, p));
-      }
-      if (stage.loader) box.append(buildCabLoader());
-      if (stage.ampLoader) box.append(buildAmpLoader());
-      stripBody.append(box);
+      };
+      chev.addEventListener('click', toggleCollapse);
+      head.addEventListener('click', toggleCollapse);
+    } else {
+      head.classList.add('rig-stage-head-fixed');
     }
+
+    if (stage.toggle) {
+      const tg = document.createElement('button');
+      tg.type = 'button'; tg.className = 'ctrl-btn rig-stage-toggle';
+      tg.title = `Enable / bypass ${stage.name}`;
+      tg.addEventListener('click', () => stripToggle(stage.id, !model.strip[stage.id].on));
+      if (chev) head.append(chev, tg, nameEl); else head.append(tg, nameEl);
+    } else {
+      box.classList.add('on');   // non-toggle stages (pan) are always active
+      if (chev) head.append(chev, nameEl); else head.append(nameEl);
+    }
+
+    box.append(head);
+    if (stage.params) {
+      for (const p of stage.params) box.append(buildCtl(stage.id, p));
+    }
+    if (stage.loader) box.append(buildCabLoader());
+    if (stage.ampLoader) box.append(buildAmpLoader());
+    return box;
+  }
+  function buildStripUI() {
+    if (!stripBody || stripBody.children.length) return;
+    // Main group → fixed always-visible grid; util group → collapsible drawer.
+    // Schema order already yields the desired sub-orders (earth·metal·amp·cab·
+    // delay·reverb / hpf·comp·eq·pan), so a simple group filter is enough.
+    for (const stage of STRIP_SCHEMA) {
+      if (stage.group === 'util') continue;
+      stripBody.append(buildStripStage(stage, { collapsible: false }));
+    }
+    if (stripUtilBody) {
+      for (const stage of STRIP_SCHEMA) {
+        if (stage.group !== 'util') continue;
+        stripUtilBody.append(buildStripStage(stage, { collapsible: true }));
+      }
+    }
+    applyStripUtil();
     refreshStripStages();
+  }
+  function applyStripUtil() {
+    // Mirror the loop/signal subpanels: a .rig-collapse chevron drives the body
+    // show/hide, so utility + loop collapse the same way.
+    const open = !!model.stripUtilOpen;
+    if (stripUtilBody) stripUtilBody.style.display = open ? '' : 'none';
+    if (btnStripUtil) {
+      btnStripUtil.textContent = open ? '▾' : '▸';
+      btnStripUtil.classList.toggle('collapsed', !open);
+    }
+  }
+  function toggleStripUtil() {
+    model.stripUtilOpen = !model.stripUtilOpen;
+    lsSet(STRIPUTIL_KEY, model.stripUtilOpen ? '1' : '0');
+    applyStripUtil();
   }
   // One labelled slider bound to model.strip[stageId][p.id].
   function buildCtl(stageId, p) {
@@ -1496,7 +1593,86 @@ export function createLooper({ audio, syncStrudel } = {}) {
     rebuildStrip();
     setStatus('strip reset');
   }
-  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; cabSelEl = null; ampSelEl = null; buildStripUI(); } }
+
+  // ── bundle asset I/O (for the .qualem.zip exporter) ────────────────────────
+  // Gather the heavy local assets needed to recreate this rig elsewhere: the
+  // recorded loops (raw PCM channels), the saved cab IRs, and the saved amp
+  // captures. Pointers (ids) match what getConfig() records, so the importer can
+  // re-link the active cab/amp after install.
+  async function collectAssets() {
+    const out = { loops: [], cabs: [], amps: [] };
+    if (!loopStore.isAvailable()) return out;
+    try {
+      const recs = await loopStore.getAllTracks();
+      for (const r of recs) {
+        const channels = Array.isArray(r.pcm) ? r.pcm : [r.pcm];
+        out.loops.push({
+          id: r.id, name: `track-${(r.order ?? out.loops.length) + 1}`,
+          sampleRate: r.sampleRate || 48000,
+          channels,
+          meta: {
+            order: r.order, regionFrames: r.regionFrames, loopStartBase: r.loopStartBase,
+            naturalSeconds: r.naturalSeconds, recordedCycles: r.recordedCycles,
+            grid: r.grid, length: r.length, volume: r.volume, muted: r.muted, preservePitch: r.preservePitch,
+          },
+        });
+      }
+    } catch (e) { console.warn('[qualia] collect loops failed:', e); }
+    try {
+      for (const e of lsGetJSON(CABLIB_KEY)) {
+        const rec = await loopStore.getMisc(e.id);
+        if (rec && rec.bytes) out.cabs.push({ id: e.id, name: e.name || rec.name || 'cab', bytes: rec.bytes });
+      }
+      for (const e of lsGetJSON(AMPLIB_KEY)) {
+        const rec = await loopStore.getMisc(e.id);
+        if (rec && rec.model) out.amps.push({ id: e.id, name: e.name || rec.name || 'amp', model: rec.model });
+      }
+    } catch (e) { console.warn('[qualia] collect cab/amp failed:', e); }
+    return out;
+  }
+  // Install assets pulled from a bundle into IndexedDB + the library indexes,
+  // then rebuild the loop tracks. The active cab/amp is selected afterwards by
+  // setConfig (via cabFile/ampFile pointers).
+  async function installAssets(assets, { replaceLoops = true } = {}) {
+    if (!assets || !loopStore.isAvailable()) return;
+    try {
+      for (const c of (assets.cabs || [])) {
+        if (!c?.id || !c.bytes) continue;
+        await loopStore.putMisc({ id: c.id, name: c.name, bytes: c.bytes });
+        libAdd(CABLIB_KEY, c.id, c.name);
+      }
+      for (const a of (assets.amps || [])) {
+        if (!a?.id || !a.model) continue;
+        await loopStore.putMisc({ id: a.id, name: a.name, model: a.model });
+        libAdd(AMPLIB_KEY, a.id, a.name);
+      }
+      renderCabLib(); renderAmpLib();
+    } catch (e) { console.warn('[qualia] install cab/amp failed:', e); }
+    try {
+      if (assets.loops && assets.loops.length) {
+        if (replaceLoops) await loopStore.clearAll();
+        for (const l of assets.loops) {
+          const m = l.meta || {};
+          await loopStore.putTrack({
+            id: l.id, order: m.order,
+            pcm: l.channels, sampleRate: l.sampleRate || 48000,
+            regionFrames: m.regionFrames, loopStartBase: m.loopStartBase,
+            naturalSeconds: m.naturalSeconds, recordedCycles: m.recordedCycles,
+            grid: m.grid, length: m.length, volume: m.volume, muted: m.muted, preservePitch: m.preservePitch,
+          });
+        }
+        await reloadTracks();
+      }
+    } catch (e) { console.warn('[qualia] install loops failed:', e); }
+  }
+  // Force-rebuild the loop tracks from IndexedDB (drops the in-memory set first).
+  async function reloadTracks() {
+    looperAudio.stopAll?.();
+    model.tracks = [];
+    await restoreFromStore({ force: true });
+    if (!model.tracks.length) { const t = makeTrack(); model.tracks.push(t); model.armedTrackId = t.id; renderTracks(); }
+  }
+  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; if (stripUtilBody) stripUtilBody.innerHTML = ''; cabSelEl = null; ampSelEl = null; buildStripUI(); } }
   function refreshStripBtn() { if (btnStrip) btnStrip.classList.toggle('active', !!model.stripOpen); }
   function toggleStrip(on) {
     model.stripOpen = on == null ? !model.stripOpen : !!on;
@@ -1545,25 +1721,36 @@ export function createLooper({ audio, syncStrudel } = {}) {
     applyLoopCollapse();
   }
 
-  // ── chromatic tuner ───────────────────────────────────────────────────────
+  // ── virtual strobe tuner ───────────────────────────────────────────────────
+  // A Peterson-StroboStomp-style strobe: instead of a needle, a row of striped
+  // bands that DRIFT when the note is off (right = sharp, left = flat) and FREEZE
+  // when it's in tune. The note name + cents readout stays for a coarse glance.
+  //
+  // The strobe is driven by PHASE, not by the pitch estimate: each frame we
+  // demodulate the input against a reference oscillator running at the target
+  // note's exact frequency (I/Q heterodyne, incrementally rotated — allocation-
+  // free). The reference is anchored to the audio clock (ctx.currentTime), so a
+  // perfectly-tuned note holds a constant phase (frozen bands) while a δ-Hz error
+  // rotates the phase at exactly δ cycles/sec — sub-cent precise and cheap.
+  // Pitch *detection* (autocorrelation, throttled) only picks WHICH note to lock
+  // the strobe to. Three octave-stacked bands give coarse→fine sensitivity.
   const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const TUNER_MIN_HZ = 22;     // reach below G0 (~24.5 Hz)
-  const TUNER_INTERVAL_MS = 180;  // slower update = steadier reading
-  let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerNeedleEl = null, tunerCentsEl = null, tunerTickEl = null;
+  const TUNER_INTERVAL_MS = 140;  // note-detection cadence (strobe itself runs every frame)
+  const STROBE_BANDS = 3;      // octave-stacked sensitivity rows (×1, ×2, ×4)
+  let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerCentsEl = null;
+  let strobeCanvas = null, strobe2d = null, _strobeWin = null;
   let tunerBuf = null, tunerDec = null, _tunerLastMs = 0;
   let _tunerNoteKey = '', _tunerErrSmooth = 0;
+  // Shared strobe state written by updateTuner (throttled) + read by drawStrobe (per-frame).
+  const _strobe = { fRef: 0, voiced: false, inTune: false, near: false, msg: 'play a note' };
   function buildTunerUI() {
     if (!tunerEl || tunerEl.children.length) return;
+    const row = document.createElement('div'); row.className = 'rig-tuner-readout';
     tunerNoteEl = document.createElement('span'); tunerNoteEl.className = 'rig-tuner-note'; tunerNoteEl.textContent = '—';
+    tunerCentsEl = document.createElement('span'); tunerCentsEl.className = 'rig-tuner-cents'; tunerCentsEl.textContent = 'play a note';
     tunerHzEl   = document.createElement('span'); tunerHzEl.className   = 'rig-tuner-hz';
     tunerTgtEl  = document.createElement('span'); tunerTgtEl.className  = 'rig-tuner-tgt';
-    const bar = document.createElement('span'); bar.className = 'rig-tuner-bar';
-    // Tick marking the sweetened target offset (under center for ET) — the
-    // note is in tune when the needle lands on it.
-    tunerTickEl = document.createElement('span'); tunerTickEl.className = 'rig-tuner-tick'; tunerTickEl.style.left = '50%';
-    tunerNeedleEl = document.createElement('span'); tunerNeedleEl.className = 'rig-tuner-needle'; tunerNeedleEl.style.left = '50%';
-    bar.append(tunerTickEl, tunerNeedleEl);
-    tunerCentsEl = document.createElement('span'); tunerCentsEl.className = 'rig-tuner-cents'; tunerCentsEl.textContent = 'play a note';
     _tunerMuteBtn = document.createElement('button');
     _tunerMuteBtn.type = 'button'; _tunerMuteBtn.className = 'ctrl-btn rig-tuner-mute';
     _tunerMuteBtn.addEventListener('click', () => {
@@ -1572,7 +1759,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
       applyTunerMute();
     });
     refreshTunerMuteBtn();
-    tunerEl.append(tunerNoteEl, tunerHzEl, tunerTgtEl, bar, tunerCentsEl, _tunerMuteBtn);
+    row.append(tunerNoteEl, tunerCentsEl, tunerHzEl, tunerTgtEl, _tunerMuteBtn);
+    strobeCanvas = document.createElement('canvas');
+    strobeCanvas.className = 'rig-strobe';
+    strobeCanvas.title = 'Strobe tuner — bands freeze when in tune, drift right when sharp / left when flat';
+    tunerEl.append(row, strobeCanvas);
   }
   // Target cents offset for a note class under the active temperament.
   function temperOffset(noteClass) { return model.temperament === 'custom' ? (model.customCents[noteClass] | 0) : 0; }
@@ -1600,18 +1791,19 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!isFinite(shift) || Math.abs(shift) > 1) shift = 0;
     return sr / (best + shift);
   }
+  // Throttled note pick: detect the fundamental, name it, and set the strobe's
+  // target reference frequency (temperament-aware). Updates the text readout.
   function updateTuner() {
     if (!model.tunerOn || !tunerNoteEl) return;
     const an = looperAudio.getTunerAnalyser?.() || looperAudio.getCaptureAnalyser?.();
-    const clear = () => {
+    const clear = (msg) => {
       tunerNoteEl.textContent = '—'; tunerNoteEl.style.color = '';
       if (tunerHzEl) tunerHzEl.textContent = ''; if (tunerTgtEl) tunerTgtEl.textContent = '';
-      tunerCentsEl.textContent = an ? 'play a note' : 'rig signal off'; tunerCentsEl.style.color = '';
-      tunerNeedleEl.style.left = '50%'; tunerNeedleEl.style.boxShadow = 'none';
-      if (tunerTickEl) { tunerTickEl.style.left = '50%'; tunerTickEl.classList.remove('in-tune'); }
+      tunerCentsEl.textContent = msg; tunerCentsEl.style.color = '';
       _tunerNoteKey = '';
+      _strobe.voiced = false; _strobe.inTune = false; _strobe.near = false; _strobe.msg = msg;
     };
-    if (!an || typeof an.getFloatTimeDomainData !== 'function') { clear(); return; }
+    if (!an || typeof an.getFloatTimeDomainData !== 'function') { clear('rig signal off'); return; }
     const n = an.fftSize;
     if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
     an.getFloatTimeDomainData(tunerBuf);
@@ -1622,7 +1814,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     for (let i = 0; i < m; i++) tunerDec[i] = (tunerBuf[2 * i] + tunerBuf[2 * i + 1]) * 0.5;
     const sr = (an.context?.sampleRate || 48000) / 2;
     const f = autoCorrelate(tunerDec, sr);
-    if (f <= 0) { clear(); return; }
+    if (f <= 0) { clear('play a note'); return; }
     const midi = 69 + 12 * Math.log2(f / model.refPitch);
     const rounded = Math.round(midi);
     const cls = ((rounded % 12) + 12) % 12;
@@ -1630,27 +1822,111 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const rawCents = (midi - rounded) * 100;                // deviation from ET
     const target = temperOffset(cls);                      // sweetened target offset
     let err = rawCents - target;                           // deviation from the target
-    // Smooth within a held note (snap on note change) to calm the needle.
+    // Smooth within a held note (snap on note change) to calm the readout.
     const key = `${cls}.${octave}`;
     err = key === _tunerNoteKey ? _tunerErrSmooth * 0.5 + err * 0.5 : err;
     _tunerNoteKey = key; _tunerErrSmooth = err;
     const shown = Math.round(err);
+    const inTune = Math.abs(err) <= 3;
+    const near   = Math.abs(err) <= 12;
+    const good = 'var(--green)';
     tunerNoteEl.textContent = `${NOTE_NAMES[cls]}${octave}`;
+    tunerNoteEl.style.color = inTune ? good : '';
     if (tunerHzEl) tunerHzEl.textContent = `${f.toFixed(1)} Hz`;
     if (tunerTgtEl) tunerTgtEl.textContent = `tgt ${target > 0 ? '+' : ''}${target}¢`;
-    const inTune = Math.abs(err) <= 3;                      // on/near the target tick
-    const good = 'var(--green)';
-    tunerNoteEl.style.color = inTune ? good : '';
     tunerCentsEl.textContent = `${shown > 0 ? '+' : ''}${shown}¢`;
-    tunerCentsEl.style.color = inTune ? good : '';
-    // Needle tracks the raw deviation from equal temperament so it lines up
-    // with the tick (the sweetened target sits at 50 + target).
-    tunerNeedleEl.style.left = Math.max(0, Math.min(100, 50 + target + err)) + '%';
-    tunerNeedleEl.style.background = inTune ? good : (Math.abs(err) <= 12 ? '#fbbf24' : 'var(--pink)');
-    tunerNeedleEl.style.boxShadow = inTune ? '0 0 6px var(--green)' : 'none';
-    if (tunerTickEl) {
-      tunerTickEl.style.left = Math.max(0, Math.min(100, 50 + target)) + '%';
-      tunerTickEl.classList.toggle('in-tune', inTune);
+    tunerCentsEl.style.color = inTune ? good : (near ? '#fbbf24' : 'var(--pink)');
+    // The strobe locks to the note's IDEAL frequency (temperament-aware), so the
+    // bands measure the true pitch error continuously, independent of `err`.
+    _strobe.fRef    = model.refPitch * Math.pow(2, (rounded - 69) / 12 + target / 1200);
+    _strobe.voiced  = true;
+    _strobe.inTune  = inTune;
+    _strobe.near    = near;
+  }
+  // Per-frame strobe: demodulate the live input at each band frequency and paint
+  // the drifting/frozen bands. Allocation-free (reused buffer + lazy Hann window).
+  function drawStrobe() {
+    const cv = strobeCanvas; if (!cv) return;
+    if (!strobe2d) strobe2d = cv.getContext('2d');
+    const g = strobe2d; if (!g) return;
+    // Self-healing size (the canvas was display:none until the tuner opened).
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const wantW = Math.max(1, Math.round((cv.clientWidth || 300) * dpr));
+    const wantH = Math.max(1, Math.round((cv.clientHeight || 46) * dpr));
+    if (cv.width !== wantW || cv.height !== wantH) { cv.width = wantW; cv.height = wantH; }
+    const W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+
+    const an = looperAudio.getTunerAnalyser?.() || looperAudio.getCaptureAnalyser?.();
+    if (!_strobe.voiced || !an || !(_strobe.fRef > 0) || typeof an.getFloatTimeDomainData !== 'function') {
+      // Idle: faint static bands + a hint.
+      drawStrobeIdle(g, W, H);
+      return;
+    }
+    const n = an.fftSize;
+    if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
+    an.getFloatTimeDomainData(tunerBuf);
+    if (!_strobeWin || _strobeWin.length !== n) {
+      _strobeWin = new Float32Array(n);
+      for (let i = 0; i < n; i++) _strobeWin[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)); // Hann
+    }
+    const sr = an.context?.sampleRate || 48000;
+    const t0 = (an.context?.currentTime || 0);   // audio-clock anchor → phase continuity
+    const bandH = H / STROBE_BANDS;
+    const period = Math.max(10 * dpr, bandH * 0.92);   // stripe period (px)
+    const inTune = _strobe.inTune;
+    const baseColor = inTune ? [52, 211, 153] : (_strobe.near ? [251, 191, 36] : [167, 139, 250]);
+    let maxMag = 1e-9;
+    const mags = _strobeMags, phs = _strobePhs;
+    for (let b = 0; b < STROBE_BANDS; b++) {
+      const fb = _strobe.fRef * (1 << b);
+      if (fb > sr * 0.45) { mags[b] = 0; phs[b] = 0; continue; }
+      // I/Q correlation at fb via incremental unit-vector rotation.
+      const w = (2 * Math.PI * fb) / sr;
+      const cw = Math.cos(w), sw = Math.sin(w);
+      let ang = 2 * Math.PI * ((fb * t0) % 1);
+      let cr = Math.cos(ang), si = Math.sin(ang);
+      let I = 0, Q = 0;
+      for (let i = 0; i < n; i++) {
+        const x = tunerBuf[i] * _strobeWin[i];
+        I += x * cr; Q += x * si;
+        const ncr = cr * cw - si * sw; si = si * cw + cr * sw; cr = ncr;
+      }
+      mags[b] = Math.sqrt(I * I + Q * Q);
+      // atan2(Q,I) drifts at 2π(fRef−fIn); negate so the phase advances at
+      // 2π(fIn−fRef) — i.e. SHARP drifts the bands right, flat left (Peterson
+      // convention). In tune (fIn==fRef) the phase is constant → bands freeze.
+      phs[b] = Math.atan2(-Q, I);
+      if (mags[b] > maxMag) maxMag = mags[b];
+    }
+    for (let b = 0; b < STROBE_BANDS; b++) {
+      const y = b * bandH;
+      // Band opacity follows its share of energy so weak harmonics fade out
+      // rather than flickering as noise.
+      const rel = mags[b] / maxMag;
+      const alpha = 0.12 + 0.78 * Math.min(1, rel);
+      // Frozen when in tune; otherwise the phase drifts → stripes scroll.
+      const off = ((phs[b] / (2 * Math.PI)) % 1 + 1) % 1 * period;
+      g.fillStyle = `rgba(${baseColor[0]},${baseColor[1]},${baseColor[2]},${alpha.toFixed(3)})`;
+      for (let x = -period + off; x < W; x += period) {
+        g.fillRect(x, y + bandH * 0.12, period * 0.5, bandH * 0.76);
+      }
+    }
+    if (inTune) {
+      g.strokeStyle = 'rgba(52,211,153,0.9)';
+      g.lineWidth = Math.max(1, Math.round(dpr));
+      g.strokeRect(g.lineWidth, g.lineWidth, W - 2 * g.lineWidth, H - 2 * g.lineWidth);
+    }
+  }
+  const _strobeMags = new Float32Array(STROBE_BANDS);
+  const _strobePhs  = new Float32Array(STROBE_BANDS);
+  function drawStrobeIdle(g, W, H) {
+    const bandH = H / STROBE_BANDS;
+    const period = Math.max(18, bandH * 0.92);
+    g.fillStyle = 'rgba(148,163,184,0.10)';
+    for (let b = 0; b < STROBE_BANDS; b++) {
+      const y = b * bandH;
+      for (let x = 0; x < W; x += period) g.fillRect(x, y + bandH * 0.12, period * 0.5, bandH * 0.76);
     }
   }
 
@@ -1998,6 +2274,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (bufferBtn) bufferBtn.addEventListener('click', () => { setBuffer(!model.bufferOn); });
   if (btnChannels) btnChannels.addEventListener('click', () => { setChannels(model.channels === 'stereo' ? 'mono' : 'stereo'); });
   if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
+  if (btnStripUtil) btnStripUtil.addEventListener('click', () => { toggleStripUtil(); });
   if (btnStripReset) btnStripReset.addEventListener('click', () => { resetStrip(); });
   if (btnLoop) btnLoop.addEventListener('click', () => { toggleLoop(); });
   if (btnLoopCollapse) btnLoopCollapse.addEventListener('click', () => { toggleLoopCollapse(); });
@@ -2028,6 +2305,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   // Initial paint even while hidden so first open() shows content immediately.
   renderSignal();           // build the rig signal controls up front
+  buildScopeGain();         // scope display-gain magnifier
   if (propsEl) renderProps();
   if (tracksEl) renderTracks();
   refreshMuteBtn();
@@ -2064,6 +2342,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     play: playAll, stop,
     perFrame,
     getConfig, setConfig,
+    collectAssets, installAssets,
     // ── Mixer surface — rig master (= rig signal + loops) ──────────────────
     setRigLevel, setRigMuted, setRigLimiter,
     nudgeRigLevel(delta) { setRigLevel(clamp01((model.rigLevel ?? 1) + delta)); },

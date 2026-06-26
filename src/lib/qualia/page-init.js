@@ -15,6 +15,8 @@ import {
   loadFxParams, saveFxParams, loadFxModWeights, saveFxModWeights,
 } from './presets.js';
 import * as qualem from './qualem.js';
+import { zipStore, unzip } from './zip.js';
+import { encodeWav, decodeWav } from './wav.js';
 import { parseMetadata as parseStrudelMeta, setMetadata as setStrudelMeta } from './patterns.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
@@ -3951,6 +3953,7 @@ export function initQualiaPage() {
         edge:   document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
         camera: cameraCard?.classList.contains('collapsed') ?? true,
         qualem: document.getElementById('qualem-card')?.classList.contains('collapsed') ?? true,
+        chron:  chronCard?.classList.contains('collapsed') ?? true,
       },
       cyclePool: { excluded: [...loadCycleExcluded()] },
       phasePool: { excluded: loadPhaseExcludedMap() },
@@ -3962,6 +3965,20 @@ export function initQualiaPage() {
       // large + session-local (IndexedDB) and never travel in a qualem.
       looper:    looper.getConfig(),
       pausedZen: { paused: core.isPaused(), zen: core.isZen() },
+      // Misc settings that aren't a "panel" of their own but are part of the
+      // full scene — captured so a recalled qualem reproduces the experience as
+      // faithfully as feasible (these were previously settings-only / local).
+      misc: {
+        reactSmoothing: reactSmoothingValue,
+        vizFps:    core.getMaxFps?.(),
+        poseFps:   pose.getDetectFps?.(),
+        split:     { mode: splitMode, ratio: splitRatio },
+        chron:     chron.getConfig?.(),
+        recorder:  { captureMode, autoSave: autoSaveRec, autoFullscreen: autoFullscreenRec, autoZen: autoZenRec },
+        // Video-quale playlist manifest (URL + camera entries; dropped-file
+        // entries restore by name, with bytes travelling only in a .qualem.zip).
+        videoPlaylist: (() => { try { return JSON.parse(localStorage.getItem('voidstar.qualia.fx.video.playlist') || 'null'); } catch { return null; } })(),
+      },
       // Hardware fingerprint — deviceId only by default; the label is
       // already in localStorage via the picker. Cross-machine matching
       // upgrades inside qualem.pickBestDevice (label fuzzy → groupId →
@@ -4127,7 +4144,7 @@ export function initQualiaPage() {
       const cardMap = {
         audio: 'audio-card', pose: 'pose-card', diag: 'diag-card',
         params: 'fx-card', mosh: 'mosh-card', edge: 'edge-card',
-        camera: 'camera-card', qualem: 'qualem-card',
+        camera: 'camera-card', qualem: 'qualem-card', chron: 'chron-card',
       };
       for (const [key, id] of Object.entries(cardMap)) {
         const el = document.getElementById(id);
@@ -4169,6 +4186,38 @@ export function initQualiaPage() {
     if (q.pausedZen) {
       if (typeof q.pausedZen.paused === 'boolean') setPaused(q.pausedZen.paused);
       if (typeof q.pausedZen.zen    === 'boolean') setZen(q.pausedZen.zen);
+    }
+
+    // 14b. Misc settings (reactivity smoothing, FPS caps, split, chron, recorder
+    // prefs, video playlist). Each is guarded so partial qualems load cleanly.
+    if (q.misc && typeof q.misc === 'object') {
+      const mi = q.misc;
+      if (typeof mi.reactSmoothing === 'number') {
+        reactSmoothingValue = mi.reactSmoothing;
+        core.setReactSmoothing(reactSmoothingValue);
+        if (reactSmoothInput) reactSmoothInput.value = String(reactSmoothingValue);
+        const rv = document.querySelector('[data-qp="react-smooth"] .qp-val');
+        if (rv) rv.textContent = `${Math.round(reactSmoothingValue * 100)}%`;
+      }
+      if (typeof mi.vizFps === 'number')  { try { core.setMaxFps(mi.vizFps); } catch {} }
+      if (typeof mi.poseFps === 'number') { try { pose.setDetectFps(mi.poseFps); } catch {} }
+      if (mi.split && typeof mi.split === 'object') {
+        if (SPLIT_MODES.includes(mi.split.mode)) setSplitMode(mi.split.mode);
+        if (typeof mi.split.ratio === 'number') {
+          splitRatio = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, mi.split.ratio));
+          try { applySplit(); } catch {}
+        }
+      }
+      if (mi.chron && typeof chron.setConfig === 'function') { try { chron.setConfig(mi.chron); } catch {} }
+      if (mi.recorder && typeof mi.recorder === 'object') {
+        if (mi.recorder.captureMode === 'tab' || mi.recorder.captureMode === 'viewport') captureMode = mi.recorder.captureMode;
+        if (typeof mi.recorder.autoSave === 'boolean')       autoSaveRec = mi.recorder.autoSave;
+        if (typeof mi.recorder.autoFullscreen === 'boolean') autoFullscreenRec = mi.recorder.autoFullscreen;
+        if (typeof mi.recorder.autoZen === 'boolean')        autoZenRec = mi.recorder.autoZen;
+      }
+      if (mi.videoPlaylist) {
+        try { localStorage.setItem('voidstar.qualia.fx.video.playlist', JSON.stringify(mi.videoPlaylist)); } catch {}
+      }
     }
 
     // 15. Persist top-level settings shape so a refresh restores the same.
@@ -4330,6 +4379,201 @@ export function initQualiaPage() {
   });
   document.getElementById('btn-qualem-share-current')?.addEventListener('click', () => {
     openShare(captureQualem({}));
+  });
+
+  // ── Per-panel save/load ────────────────────────────────────────────────────
+  // Each panel owns a slice of the qualem (a set of top-level keys). Saving a
+  // section writes just those keys to a .qualem.json; loading one applies ONLY
+  // those keys (applyQualem already tolerates partial documents), so importing a
+  // rig file into the rig panel ignores everything else in it.
+  const QUALEM_SECTIONS = {
+    rig:       { label: 'rig',       keys: ['looper'] },
+    fx:        { label: 'params (fx)', keys: ['fx', 'activeFxId'] },
+    overlay:   { label: 'overlay',   keys: ['overlay', 'glitch'] },
+    audio:     { label: 'audio',     keys: ['audio'] },
+    pose:      { label: 'pose',      keys: ['pose'] },
+    camera:    { label: 'camera',    keys: ['camera'] },
+    sequencer: { label: 'sequencer', keys: ['sequencer'] },
+    strudel:   { label: 'strudel',   keys: ['strudel'] },
+    vocoder:   { label: 'vocoder',   keys: ['vocoder'] },
+    auto:      { label: 'auto-phase/cycle', keys: ['auto', 'cyclePool', 'phasePool'] },
+  };
+  const safeFile = (s) => (String(s || '').replace(/[^\w.-]+/g, '_').slice(0, 50) || 'qualem');
+  function pickQualemSection(q, keys) {
+    const out = { format: qualem.QUALEM_FORMAT, schemaVersion: qualem.QUALEM_SCHEMA_VERSION, partial: true };
+    for (const k of keys) if (q && k in q) out[k] = q[k];
+    return out;
+  }
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 200);
+  }
+  function saveSection(key) {
+    const sec = QUALEM_SECTIONS[key]; if (!sec) return;
+    const full = captureQualem({});
+    const part = pickQualemSection(full, sec.keys);
+    part.name = `${full.name} · ${key}`;
+    qualem.downloadQualem(part, `${safeFile(full.name)}.${key}`);
+  }
+  async function loadSectionFromFile(key, file) {
+    const sec = QUALEM_SECTIONS[key]; if (!sec || !file) return;
+    try {
+      const q = await qualem.readFileAsQualem(file);
+      await applyQualem(pickQualemSection(q, sec.keys));
+    } catch (e) {
+      console.error('[qualia] section load failed:', e);
+      alert('Load failed: ' + (e?.message || e));
+    }
+  }
+
+  // Shared file input for all per-panel loads; remembers which section asked.
+  const qualemSectionInput = document.getElementById('qualem-section-input');
+  let _sectionLoadTarget = 'rig';
+  function triggerSectionLoad(key) { _sectionLoadTarget = key; qualemSectionInput?.click(); }
+  qualemSectionInput?.addEventListener('change', async () => {
+    const f = qualemSectionInput.files?.[0];
+    qualemSectionInput.value = '';
+    if (f) await loadSectionFromFile(_sectionLoadTarget, f);
+  });
+
+  // Central picker in the qualem card (covers every section uniformly).
+  const qualemSectionSel = document.getElementById('qualem-section');
+  if (qualemSectionSel) {
+    for (const [key, sec] of Object.entries(QUALEM_SECTIONS)) {
+      const o = document.createElement('option'); o.value = key; o.textContent = sec.label; qualemSectionSel.append(o);
+    }
+  }
+  document.getElementById('btn-qualem-section-save')?.addEventListener('click', () => {
+    if (qualemSectionSel?.value) saveSection(qualemSectionSel.value);
+  });
+  document.getElementById('btn-qualem-section-load')?.addEventListener('click', () => {
+    if (qualemSectionSel?.value) triggerSectionLoad(qualemSectionSel.value);
+  });
+
+  // Inline save/load chips injected into each panel's own header, so a panel can
+  // be saved/loaded in place (the central picker also covers everything).
+  function makeIOChip(key) {
+    const span = document.createElement('span');
+    span.className = 'panel-io';
+    const mk = (txt, title, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'ctrl-btn panel-io-btn';
+      b.textContent = txt; b.title = title;
+      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
+      return b;
+    };
+    span.append(
+      mk('⤓', `Save just the ${QUALEM_SECTIONS[key].label} settings to a file`, () => saveSection(key)),
+      mk('⤒', `Load just the ${QUALEM_SECTIONS[key].label} settings from a .qualem file`, () => triggerSectionLoad(key)),
+    );
+    return span;
+  }
+  function injectPanelIO() {
+    // section → { head element, insertBefore? }. qp-card heads insert before the
+    // trailing chevron; panel headers append (or insert before the × close).
+    const targets = [
+      { key: 'rig',       head: document.getElementById('looper-header'),       before: document.getElementById('btn-looper-close') },
+      { key: 'fx',        head: document.querySelector('#fx-card .qp-head') },
+      { key: 'audio',     head: document.querySelector('#audio-card .qp-head') },
+      { key: 'pose',      head: document.querySelector('#pose-card .qp-head') },
+      { key: 'camera',    head: document.querySelector('#camera-card .qp-head') },
+      { key: 'sequencer', head: document.getElementById('sequencer-header') },
+      { key: 'strudel',   head: document.getElementById('strudel-header') },
+      { key: 'vocoder',   head: document.getElementById('vocoder-header') },
+    ];
+    for (const t of targets) {
+      if (!t.head || t.head.querySelector('.panel-io')) continue;
+      const chip = makeIOChip(t.key);
+      const before = t.before || (t.head.classList.contains('qp-head') ? t.head.lastElementChild : null);
+      if (before) t.head.insertBefore(chip, before); else t.head.append(chip);
+    }
+  }
+  injectPanelIO();
+
+  // ── .qualem.zip bundle (qualem JSON + loop WAVs + cab/amp + video) ──────────
+  async function exportBundle() {
+    let q, assets;
+    try {
+      q = captureQualem({ full: true });
+      assets = (typeof looper.collectAssets === 'function') ? await looper.collectAssets() : { loops: [], cabs: [], amps: [] };
+    } catch (e) { console.error('[qualia] bundle capture failed:', e); alert('Export failed: ' + (e?.message || e)); return; }
+    const files = [{ name: 'qualem.json', data: JSON.stringify(q, null, 2) }];
+    const manifest = { schema: 1, loops: [], cabs: [], amps: [], video: [] };
+    let li = 0;
+    for (const l of (assets.loops || [])) {
+      const fn = `loops/${safeFile(l.id) || ('loop' + (li++))}.wav`;
+      files.push({ name: fn, data: encodeWav(l.channels, l.sampleRate) });
+      manifest.loops.push({ id: l.id, name: l.name, file: fn, sampleRate: l.sampleRate, meta: l.meta });
+    }
+    for (const c of (assets.cabs || [])) {
+      const fn = `cab/${safeFile(c.name) || safeFile(c.id)}.wav`;
+      files.push({ name: fn, data: c.bytes });
+      manifest.cabs.push({ id: c.id, name: c.name, file: fn });
+    }
+    for (const a of (assets.amps || [])) {
+      const fn = `amp/${safeFile(a.name) || safeFile(a.id)}.json`;
+      files.push({ name: fn, data: JSON.stringify(a.model) });
+      manifest.amps.push({ id: a.id, name: a.name, file: fn });
+    }
+    // Video-quale clips — only if the active video fx exposes its in-memory File
+    // blobs (dropped files aren't otherwise persisted). Best-effort.
+    try {
+      const vids = (typeof globalThis.__qualiaVideoFiles === 'function') ? (await globalThis.__qualiaVideoFiles()) : null;
+      for (const v of (vids || [])) {
+        if (!v?.bytes) continue;
+        const fn = `video/${safeFile(v.name)}`;
+        files.push({ name: fn, data: v.bytes });
+        manifest.video.push({ name: v.name, file: fn });
+      }
+    } catch (e) { console.warn('[qualia] video bundling skipped:', e); }
+    files.push({ name: 'assets.json', data: JSON.stringify(manifest) });
+    try {
+      downloadBlob(zipStore(files), `${safeFile(q.name)}.qualem.zip`);
+    } catch (e) { console.error('[qualia] zip failed:', e); alert('Export failed: ' + (e?.message || e)); }
+  }
+  async function importBundle(file) {
+    if (!file) return;
+    let map;
+    try { map = unzip(await file.arrayBuffer()); }
+    catch (e) { console.error('[qualia] unzip failed:', e); alert('Not a readable .qualem.zip'); return; }
+    const qbytes = map.get('qualem.json');
+    if (!qbytes) { alert('Bundle has no qualem.json'); return; }
+    let q;
+    try { q = JSON.parse(new TextDecoder().decode(qbytes)); }
+    catch (e) { alert('Bundle qualem.json is corrupt'); return; }
+    let man = { loops: [], cabs: [], amps: [] };
+    const mbytes = map.get('assets.json');
+    if (mbytes) { try { man = JSON.parse(new TextDecoder().decode(mbytes)); } catch {} }
+    const assets = { loops: [], cabs: [], amps: [] };
+    for (const l of (man.loops || [])) {
+      const wav = map.get(l.file); if (!wav) continue;
+      const dec = decodeWav(wav); if (!dec) continue;
+      assets.loops.push({ id: l.id, name: l.name, sampleRate: dec.sampleRate, channels: dec.channels, meta: l.meta });
+    }
+    for (const c of (man.cabs || [])) { const b = map.get(c.file); if (b) assets.cabs.push({ id: c.id, name: c.name, bytes: b.slice() }); }
+    for (const a of (man.amps || [])) {
+      const j = map.get(a.file); if (!j) continue;
+      try { assets.amps.push({ id: a.id, name: a.name, model: JSON.parse(new TextDecoder().decode(j)) }); } catch {}
+    }
+    try {
+      if (typeof looper.installAssets === 'function') await looper.installAssets(assets);
+    } catch (e) { console.warn('[qualia] installAssets failed:', e); }
+    const entry = qualem.addToList(q, q.name);
+    renderQualemList();
+    if (confirm(`Imported bundle "${entry.name}" (${assets.loops.length} loop(s), ${assets.cabs.length} cab, ${assets.amps.length} amp). Load it now?`)) {
+      try { await applyQualem(entry); } catch (e) { console.error('[qualia] applyQualem failed:', e); alert('Load failed: ' + (e?.message || e)); }
+    }
+  }
+  document.getElementById('btn-qualem-bundle')?.addEventListener('click', () => { exportBundle(); });
+  const qualemZipInput = document.getElementById('qualem-zip-input');
+  document.getElementById('btn-qualem-bundle-import')?.addEventListener('click', () => { qualemZipInput?.click(); });
+  qualemZipInput?.addEventListener('change', async () => {
+    const f = qualemZipInput.files?.[0];
+    qualemZipInput.value = '';
+    if (f) await importBundle(f);
   });
 
   // ── Share popover ────────────────────────────────────────────────────────
