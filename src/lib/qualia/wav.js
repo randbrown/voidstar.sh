@@ -64,7 +64,10 @@ export function decodeWav(input) {
     const id = rStr(off, 4);
     const sz = dv.getUint32(off + 4, true);
     const body = off + 8;
-    if (id === 'fmt ') {
+    if (id === 'fmt ' && body + 16 <= dv.byteLength) {
+      // Guard the field reads — a truncated/malformed fmt chunk would otherwise
+      // throw RangeError and abort a whole bundle import on one bad WAV. Leaving
+      // fmt null falls through to the `return null` below, which callers handle.
       fmt = {
         format: dv.getUint16(body, true),
         numCh:  dv.getUint16(body + 2, true),
