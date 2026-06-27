@@ -4695,7 +4695,16 @@ export function initQualiaPage() {
       case 's': document.getElementById('btn-strudel').click(); break;
       case 'q': document.getElementById('btn-sequencer').click(); break;
       case 'w': document.getElementById('btn-vocoder').click(); break;
-      case 'o': document.getElementById('btn-looper').click(); break;
+      case 'o':
+        // O = show/hide the rig panel. Shift+O = switch it between mini
+        // (pedalboard) and full, opening it first if it's closed.
+        if (e.shiftKey) {
+          if (!looper.isOpen()) document.getElementById('btn-looper').click();
+          document.getElementById('btn-rig-mini')?.click();
+        } else {
+          document.getElementById('btn-looper').click();
+        }
+        break;
       case 'p': {
         const opts = ['off','camera'];
         const i = opts.indexOf(poseSelect.value);
