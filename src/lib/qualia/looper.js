@@ -265,7 +265,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     rigLimiter: lsGet(RIG_LIMITER_KEY, '1') !== '0',   // rig master brickwall limiter (on by default)
     signalLevel: num01(lsGet(SIGLEVEL_KEY, '0'), 0),   // rig signal monitor/mix level
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
-    scopesOpen: lsGet(SCOPESOPEN_KEY, '1') !== '0',    // in/out scopes visible (default on)
+    scopesOpen: lsGet(SCOPESOPEN_KEY, '0') === '1',    // in/out scopes visible (default collapsed to save room)
     scopeGain: (() => { const v = parseFloat(lsGet(SCOPEGAIN_KEY, '1.8')); return Number.isFinite(v) ? Math.max(0.5, Math.min(6, v)) : 1.8; })(),  // visual-only display gain (scopes are short now)
     channels: lsGet(CHANNELS_KEY, 'mono') === 'stereo' ? 'stereo' : 'mono',
     strip: loadStripConfig(),                          // channel strip config
@@ -315,11 +315,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
       order: _orderSeq++,                           // stable display/persist order
       buffer: null, sampleRate: 0, loopStartBase: 0, regionFrames: 0,
       naturalSeconds: 0, recordedCycles: null,
+      contentFrames: 0,                             // region minus trailing silence (for "tile")
       grid: prev ? prev.grid : model.gridDefault,   // record-snap + lane width
       length: null,                                 // cycles the take occupies
+      fitMode: prev ? prev.fitMode : 'once',        // once | tile | fit (how the take fills the bar)
       volume: 0.5,                                  // Ditto-centre default
       muted: false,
-      preservePitch: false,                         // varispeed by default
+      preservePitch: false,                         // varispeed by default (only used in "fit")
     };
   }
   function getTrack(id) { return model.tracks.find(t => t.id === id) || null; }
@@ -365,10 +367,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     return {
       id: t.id, order: t.order,
       pcm,
-      sampleRate: t.sampleRate, regionFrames: t.regionFrames,
+      sampleRate: t.sampleRate, regionFrames: t.regionFrames, contentFrames: t.contentFrames,
       loopStartBase: t.loopStartBase, naturalSeconds: t.naturalSeconds,
       recordedCycles: t.recordedCycles,
-      grid: t.grid, length: t.length, volume: t.volume, muted: t.muted, preservePitch: t.preservePitch,
+      grid: t.grid, length: t.length, fitMode: t.fitMode, volume: t.volume, muted: t.muted, preservePitch: t.preservePitch,
     };
   }
   function onPersistErr(e) {
@@ -415,10 +417,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
         buffer, sampleRate: sr,
         loopStartBase: r.loopStartBase || 0,
         regionFrames: r.regionFrames || buffer.length,
+        contentFrames: r.contentFrames || r.regionFrames || buffer.length,
         naturalSeconds: r.naturalSeconds || (buffer.length / sr),
         recordedCycles: r.recordedCycles ?? null,
         grid: Math.max(1, Math.min(16, r.grid || model.gridDefault)),
         length: r.length || r.recordedCycles || model.gridDefault,
+        // Migrate pre-fitMode loops: a take deliberately stretched (length ≠ its
+        // recorded cycles) keeps stretching ("fit"); everything else defaults to
+        // the new natural-rate "once".
+        fitMode: r.fitMode || ((r.recordedCycles && r.length && r.length !== r.recordedCycles) ? 'fit' : 'once'),
         volume: clamp01(r.volume == null ? 0.5 : r.volume),
         muted: !!r.muted,
         preservePitch: !!r.preservePitch,
@@ -484,6 +491,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     t.sampleRate = res.sampleRate;
     t.loopStartBase = res.loopStartBase;
     t.regionFrames = res.regionFrames;
+    t.contentFrames = res.contentFrames || res.regionFrames;
     t.naturalSeconds = res.naturalSeconds;
     t.recordedCycles = cyc;
     t.length = cyc;
@@ -638,6 +646,22 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshTrackRow(t);
     if (looperAudio.isVoicePlaying(id)) playVoice(t);
     persistSoon(id);
+  }
+  const FIT_MODES = ['once', 'tile', 'fit'];
+  function setTrackFitMode(id, mode) {
+    const t = getTrack(id);
+    if (!t || !FIT_MODES.includes(mode)) return;
+    t.fitMode = mode;
+    renderers.get(id)?.invalidate();
+    refreshTrackRow(t);
+    if (looperAudio.isVoicePlaying(id)) playVoice(t);
+    persistSoon(id);
+  }
+  function cycleTrackFitMode(id) {
+    const t = getTrack(id);
+    if (!t) return;
+    const i = FIT_MODES.indexOf(t.fitMode || 'once');
+    setTrackFitMode(id, FIT_MODES[(i + 1) % FIT_MODES.length]);
   }
   function deleteTrack(id) {
     looperAudio.removeTrack(id);
@@ -1012,12 +1036,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const r3 = document.createElement('div');
     r3.className = 'looper-track-row';
     const volSl = volSlider(track.volume, (v) => setTrackVolume(track.id, v), 'Track playback volume (double-click to reset)', 0.5);
+    const fillBtn = document.createElement('button');
+    fillBtn.type = 'button'; fillBtn.className = 'ctrl-btn looper-fill';
+    fillBtn.addEventListener('click', () => cycleTrackFitMode(track.id));
     const ppBtn = document.createElement('button');
     ppBtn.type = 'button'; ppBtn.className = 'ctrl-btn looper-pp';
     ppBtn.addEventListener('click', () => setTrackPreserve(track.id, !track.preservePitch));
     const rateEl = document.createElement('span'); rateEl.className = 'looper-track-rate';
-    r3.append(mk('vol', volSl), mk('pitch', ppBtn, 'Stretch mode: "vari" = varispeed (pitch follows speed); "keep" = pitch-preserving time-stretch (Signalsmith).'),
-              mk('speed', rateEl, 'Playback speed vs the recorded take. 1.00× plays at its natural length. In "vari" mode anything off 1.00× is pitch-shifted by the shown semitones — because the take didn’t fill a whole number of cycles at the current tempo, so it’s sped/slowed to fit "length". Fix by setting length/cycles to match the take, or switch pitch to "keep".'));
+    r3.append(mk('vol', volSl),
+              mk('fill', fillBtn, 'How the take fills the bar (click to cycle): "once" plays it once at natural pitch then rests; "tile" repeats it (trailing silence trimmed) at natural pitch; "fit" time-stretches it to the length (this is where the pitch vari/keep choice applies).'),
+              mk('pitch', ppBtn, 'Only used in "fit": "vari" = varispeed (pitch follows speed); "keep" = pitch-preserving time-stretch (Signalsmith).'),
+              mk('speed', rateEl, 'Playback speed vs the recorded take. 1.00× plays at its natural length (once/tile). In "fit" + "vari", anything off 1.00× is pitch-shifted by the shown semitones; "keep" stretches without pitch shift.'));
 
     head.append(r1, r2, r3);
 
@@ -1034,7 +1063,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       getRecordView: () => (recording && model.armedTrackId === track.id) ? looperAudio.getLiveView() : { recording: false },
     });
     renderers.set(track.id, renderer);
-    rowEls.set(track.id, { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn, ppBtn, rateEl });
+    rowEls.set(track.id, { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn, ppBtn, fillBtn, rateEl });
 
     return row;
   }
@@ -1879,9 +1908,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
           sampleRate: r.sampleRate || 48000,
           channels,
           meta: {
-            order: r.order, regionFrames: r.regionFrames, loopStartBase: r.loopStartBase,
+            order: r.order, regionFrames: r.regionFrames, contentFrames: r.contentFrames, loopStartBase: r.loopStartBase,
             naturalSeconds: r.naturalSeconds, recordedCycles: r.recordedCycles,
-            grid: r.grid, length: r.length, volume: r.volume, muted: r.muted, preservePitch: r.preservePitch,
+            grid: r.grid, length: r.length, fitMode: r.fitMode, volume: r.volume, muted: r.muted, preservePitch: r.preservePitch,
           },
         });
       }
@@ -1924,9 +1953,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
           await loopStore.putTrack({
             id: l.id, order: m.order,
             pcm: l.channels, sampleRate: l.sampleRate || 48000,
-            regionFrames: m.regionFrames, loopStartBase: m.loopStartBase,
+            regionFrames: m.regionFrames, contentFrames: m.contentFrames, loopStartBase: m.loopStartBase,
             naturalSeconds: m.naturalSeconds, recordedCycles: m.recordedCycles,
-            grid: m.grid, length: m.length, volume: m.volume, muted: m.muted, preservePitch: m.preservePitch,
+            grid: m.grid, length: m.length, fitMode: m.fitMode, volume: m.volume, muted: m.muted, preservePitch: m.preservePitch,
           });
         }
         await reloadTracks();
@@ -2317,9 +2346,16 @@ export function createLooper({ audio, syncStrudel } = {}) {
     el.muteBtn.title = track.muted ? 'Unmute this track' : 'Mute this track (keeps looping in time)';
     el.gridIn.value = String(track.grid);
     if (el.volSl) el.volSl.value = String(track.volume);
+    const mode = track.fitMode || 'once';
+    if (el.fillBtn) {
+      el.fillBtn.textContent = mode;
+      el.fillBtn.classList.toggle('active', mode === 'fit');
+    }
     if (el.ppBtn) {
       el.ppBtn.classList.toggle('active', !!track.preservePitch);
       el.ppBtn.textContent = track.preservePitch ? 'keep' : 'vari';
+      // Pitch vari/keep only matters when stretching ("fit").
+      el.ppBtn.disabled = mode !== 'fit';
     }
     updateTrackRate(track);
     applyCanvasHeight(track);
@@ -2341,6 +2377,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const el = rowEls.get(track.id)?.rateEl;
     if (!el) return;
     if (!track.buffer) { el.textContent = '—'; el.className = 'looper-track-rate'; return; }
+    // once/tile always play at natural rate — no stretch, no shift.
+    if ((track.fitMode || 'once') !== 'fit') {
+      el.textContent = '1.00×';
+      el.className = 'looper-track-rate';
+      return;
+    }
     const r = trackRate(track);
     const semis = 12 * Math.log2(r);
     const off = Math.abs(r - 1) > 0.01;

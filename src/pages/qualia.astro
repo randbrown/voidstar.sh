@@ -2109,17 +2109,17 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.3rem;
       overflow-y: auto;
     }
-    #looper-tracks { display: flex; flex-direction: column; gap: 0.25rem; }
+    #looper-tracks { display: flex; flex-direction: column; gap: 0.2rem; }
     .looper-track {
       display: flex; align-items: center; gap: 0.45rem;
-      padding: 0.2rem 0.3rem;
+      padding: 0.15rem 0.3rem;
       border: 1px solid var(--border); border-radius: 6px;
       background: rgba(0,0,0,0.18);
     }
     .looper-track.armed { border-color: var(--pink); background: rgba(244,114,182,0.07); }
     .looper-track-head {
       display: flex; flex-direction: column; gap: 0.15rem;
-      min-width: 244px; flex: 0 0 auto; font-size: 0.66rem;
+      min-width: 292px; flex: 0 0 auto; font-size: 0.66rem;
     }
     .looper-track-row { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
     .looper-track-row .seq-prop { gap: 0.15rem; }
@@ -2133,7 +2133,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .looper-track-mute { margin-left: auto; }
     .looper-track-canvas {
       flex: 1; min-width: 0;
-      height: 48px; display: block;
+      height: 44px; display: block;
       border-radius: 4px; background: rgba(0,0,0,0.28);
     }
     /* Right-click menu over a track waveform (trim / delete). */
@@ -2156,6 +2156,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .looper-ctx-menu hr { border: none; border-top: 1px solid var(--border); margin: 0.2rem 0; }
     .looper-pp { padding: 0.02rem 0.45rem; font-size: 0.66rem; line-height: 1; min-width: 3.5ch; text-align: center; }
     .looper-pp.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10); }
+    .looper-pp:disabled { opacity: 0.4; cursor: default; }
+    .looper-fill { padding: 0.02rem 0.45rem; font-size: 0.66rem; line-height: 1; min-width: 3.5ch; text-align: center; }
+    .looper-fill.active { color: var(--pink); border-color: var(--pink); background: rgba(255,122,230,0.10); }
     /* Live playback-speed readout — quiet at 1.00×, lights amber when a varispeed
        take is pitch-shifted (off 1.00×), cyan when "keep" time-stretches it. */
     .looper-track-rate { font-size: 0.62rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 4ch; }
