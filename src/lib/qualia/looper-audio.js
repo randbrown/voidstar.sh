@@ -106,6 +106,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
   // ── recording state ──
   let recording = false;
+  let _ringStartT = null;           // ctx time the lookback ring began filling (capture open)
   let recChans = [];                 // per-channel array of Float32 chunk arrays
   let recChannelCount = 1;
   let recFrames = 0;
@@ -360,9 +361,12 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       recTap.connect(recNode);
       recNode.connect(sinkGain);
     }
+    // The ring starts filling now (worklet path only — the SP fallback has no ring).
+    _ringStartT = usingWorklet ? ctx.currentTime : null;
   }
 
   function teardownCapture() {
+    _ringStartT = null;
     if (_rigAdopted) { try { audio?.releaseAdopted?.('rig'); } catch {} _rigAdopted = false; }
     try { srcNode?.disconnect(); } catch {}
     try { monoSplitter?.disconnect(); } catch {}
@@ -1043,6 +1047,13 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     isAmpCapable: () => typeof AudioWorkletNode !== 'undefined',
     isBuffering: () => _bufferOn && !!srcNode,
     isRetroCapable: () => usingWorklet,
+    // How much lookback is available right now, for the "grab" buffer readout.
+    // `seconds` grows from capture-open to the RING_SECONDS cap.
+    getBufferInfo: () => {
+      const capable = usingWorklet && !!srcNode && _ringStartT != null;
+      const seconds = capable ? Math.min(Math.max(0, ctx.currentTime - _ringStartT), RING_SECONDS) : 0;
+      return { capable, seconds, capSeconds: RING_SECONDS };
+    },
     getCaptureAnalyser: () => captureAnalyser,
     getTunerAnalyser: () => tunerAnalyser,
     // Full rig output (signal + loops, post master) — for the output scope.

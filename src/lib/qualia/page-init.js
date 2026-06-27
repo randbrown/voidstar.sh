@@ -4496,9 +4496,11 @@ export function initQualiaPage() {
       { key: 'audio',     head: document.querySelector('#audio-card .qp-head') },
       { key: 'pose',      head: document.querySelector('#pose-card .qp-head') },
       { key: 'camera',    head: document.querySelector('#camera-card .qp-head') },
-      { key: 'sequencer', head: document.getElementById('sequencer-header') },
-      { key: 'strudel',   head: document.getElementById('strudel-header') },
-      { key: 'vocoder',   head: document.getElementById('vocoder-header') },
+      // `before` the close × so the chip sits just left of it and × stays flush
+      // right, consistent across every panel.
+      { key: 'sequencer', head: document.getElementById('sequencer-header'), before: document.getElementById('btn-sequencer-close') },
+      { key: 'strudel',   head: document.getElementById('strudel-header'),   before: document.getElementById('btn-strudel-close') },
+      { key: 'vocoder',   head: document.getElementById('vocoder-header'),   before: document.getElementById('btn-vocoder-close') },
     ];
     for (const t of targets) {
       if (!t.head || t.head.querySelector('.panel-io')) continue;

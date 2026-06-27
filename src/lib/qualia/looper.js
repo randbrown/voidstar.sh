@@ -1015,7 +1015,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const ppBtn = document.createElement('button');
     ppBtn.type = 'button'; ppBtn.className = 'ctrl-btn looper-pp';
     ppBtn.addEventListener('click', () => setTrackPreserve(track.id, !track.preservePitch));
-    r3.append(mk('vol', volSl), mk('pitch', ppBtn, 'Stretch mode: "vari" = varispeed (pitch follows speed); "keep" = pitch-preserving time-stretch (Signalsmith).'));
+    const rateEl = document.createElement('span'); rateEl.className = 'looper-track-rate';
+    r3.append(mk('vol', volSl), mk('pitch', ppBtn, 'Stretch mode: "vari" = varispeed (pitch follows speed); "keep" = pitch-preserving time-stretch (Signalsmith).'),
+              mk('speed', rateEl, 'Playback speed vs the recorded take. 1.00× plays at its natural length. In "vari" mode anything off 1.00× is pitch-shifted by the shown semitones — because the take didn’t fill a whole number of cycles at the current tempo, so it’s sped/slowed to fit "length". Fix by setting length/cycles to match the take, or switch pitch to "keep".'));
 
     head.append(r1, r2, r3);
 
@@ -1032,7 +1034,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       getRecordView: () => (recording && model.armedTrackId === track.id) ? looperAudio.getLiveView() : { recording: false },
     });
     renderers.set(track.id, renderer);
-    rowEls.set(track.id, { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn, ppBtn });
+    rowEls.set(track.id, { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn, ppBtn, rateEl });
 
     return row;
   }
@@ -2319,8 +2321,63 @@ export function createLooper({ audio, syncStrudel } = {}) {
       el.ppBtn.classList.toggle('active', !!track.preservePitch);
       el.ppBtn.textContent = track.preservePitch ? 'keep' : 'vari';
     }
+    updateTrackRate(track);
     applyCanvasHeight(track);
   }
+
+  // ── varispeed / buffer readouts ────────────────────────────────────────────
+  // Mirror of looper-audio's derivePlaybackRate so the row can SHOW why a take
+  // plays back sharp/flat: rate = recorded length ÷ the wall-time of `length`
+  // cycles at the current tempo. 1.00× = natural; off 1.00× in "vari" is pitch-
+  // shifted (the take didn't fill a whole number of cycles, so it's sped to fit).
+  function trackRate(t) {
+    if (!t.buffer || !t.naturalSeconds || !t.length) return 1;
+    const cps = currentCps();
+    const targetSec = t.length / (cps > 0 ? cps : 0.5);
+    const r = t.naturalSeconds / targetSec;
+    return (r > 0 && isFinite(r)) ? r : 1;
+  }
+  function updateTrackRate(track) {
+    const el = rowEls.get(track.id)?.rateEl;
+    if (!el) return;
+    if (!track.buffer) { el.textContent = '—'; el.className = 'looper-track-rate'; return; }
+    const r = trackRate(track);
+    const semis = 12 * Math.log2(r);
+    const off = Math.abs(r - 1) > 0.01;
+    if (track.preservePitch) {
+      // Pitch preserved — only the tempo is stretched, no semitone shift.
+      el.textContent = `${r.toFixed(2)}×`;
+      el.className = 'looper-track-rate' + (off ? ' stretched' : '');
+    } else {
+      el.textContent = off ? `${r.toFixed(2)}× ${semis >= 0 ? '+' : ''}${semis.toFixed(1)}st` : `${r.toFixed(2)}×`;
+      el.className = 'looper-track-rate' + (Math.abs(semis) > 0.25 ? ' shift' : '');
+    }
+  }
+  // Live "grab" buffer readout: how much lookback is filled vs what a grab needs.
+  function updateBufferReadout() {
+    const info = looperAudio.getBufferInfo?.() || { capable: false, seconds: 0, capSeconds: 40 };
+    if (bufferBtn && looperAudio.isBuffering() && info.capable) {
+      bufferBtn.textContent = `buffer ● ${Math.floor(info.seconds)}s`;
+    }
+    if (btnRetro && info.capable) {
+      const cps = currentCps() || 0.5;
+      const needSec = model.retroCycles / cps;
+      const haveCyc = info.seconds * cps;
+      const enough = info.seconds >= needSec * 0.98;
+      btnRetro.classList.toggle('insufficient', !enough);
+      btnRetro.title = `${enough ? 'Grab' : 'Buffer still filling — grab'} the last ${model.retroCycles} cyc (~${needSec.toFixed(1)}s). `
+        + `Buffered ${info.seconds.toFixed(0)}s ≈ ${haveCyc.toFixed(1)} cyc.`;
+    }
+  }
+  let _bufRateTimer = null;
+  function startBufRateTick() {
+    if (_bufRateTimer) return;
+    _bufRateTimer = setInterval(() => {
+      updateBufferReadout();
+      for (const t of model.tracks) updateTrackRate(t);
+    }, 500);
+  }
+  function stopBufRateTick() { if (_bufRateTimer) { clearInterval(_bufRateTimer); _bufRateTimer = null; } }
   function refreshArmIndicators() {
     for (const [id, el] of rowEls) {
       const armed = id === model.armedTrackId;
@@ -2533,11 +2590,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // Restore mini (pedalboard) mode last — it swaps which view is visible,
     // relocates the strobe tuner, and re-runs syncScopeLoop to right-size the rAF.
     applyMiniMode(model.mini);
+    startBufRateTick();
   }
   function close() {
     if (panel) panel.style.display = 'none';
     lsSet(PANEL_OPEN_KEY, '0');
     stopScope();
+    stopBufRateTick();
     refreshLooperBtn();
   }
 
