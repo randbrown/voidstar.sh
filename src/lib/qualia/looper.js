@@ -1273,7 +1273,26 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function stripSet(stage, param, v) {
     model.strip[stage][param] = v;
     looperAudio.setStripParam(stage, param, v);
+    syncStripCtl(stage, param, v);
     persistStrip();
+  }
+  // Mirror a model value back onto its on-screen slider + readout. Called by
+  // stripSet so knob/MIDI nudges (which go straight to the model) visibly move the
+  // control. No-ops when the strip UI isn't built (panel/subpanel closed) — the
+  // value is already in the model, so buildCtl picks it up on next build. The
+  // slider's own `input` handler also routes through stripSet, but writing the
+  // same value back is idempotent.
+  function syncStripCtl(stage, param, v) {
+    if (!stripPanel) return;
+    const sl = stripPanel.querySelector(`.rig-ctl input[data-stage="${stage}"][data-param="${param}"]`);
+    if (!sl) return;
+    sl.value = String(v);
+    const valEl = sl.parentElement?.querySelector('.rig-ctl-val');
+    if (valEl) {
+      const p = STRIP_SCHEMA.find(s => s.id === stage)?.params?.find(q => q.id === param);
+      const fmt = p?.fmt || (x => (+x).toFixed(2));
+      valEl.textContent = fmt(parseFloat(sl.value));
+    }
   }
   function stripToggle(stage, on) {
     model.strip[stage].on = !!on;
@@ -1385,6 +1404,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const lab = document.createElement('span'); lab.className = 'rig-ctl-label'; lab.textContent = p.label;
     const sl = document.createElement('input');
     sl.type = 'range'; sl.min = String(p.min); sl.max = String(p.max); sl.step = String(p.step);
+    // Tag the slider so external setters (knob/MIDI nudges via stripSet) can find
+    // it and keep the on-screen control in sync — otherwise a knob-driven change
+    // moves the audio but not the slider, reading as "nothing happened".
+    sl.dataset.stage = stageId; sl.dataset.param = p.id;
     // The `value` ATTRIBUTE is the default the global double-click-to-reset reads
     // (page-init.js, via input.defaultValue); the `.value` PROPERTY below carries
     // the live/persisted value. Set the attribute first so it survives.

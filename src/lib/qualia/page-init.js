@@ -4650,12 +4650,36 @@ export function initQualiaPage() {
   renderQualemList();
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  // Input types that are NOT text entry — focusing one of these must not disarm
+  // the hotkeys/knob keys (a range slider, checkbox or button is exactly the kind
+  // of control the rig panel is built from, and the knob keys exist to drive it).
+  const NON_TEXT_INPUT_TYPES = new Set([
+    'range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color',
+  ]);
   window.addEventListener('keydown', (e) => {
-    if (e.target.matches('input, select, textarea, [contenteditable]')) return;
+    // Ctrl/Cmd/Alt combos belong to the browser/OS — never let a bare-key hotkey
+    // fire on paste, zoom, reload, etc. (Shift IS a hotkey modifier: ⇧V prev fx,
+    // ⇧I prev phase, ⇧R record — so it must pass through.)
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    // Code-editor panels own every keystroke while focused — they're text editors,
+    // so a hotkey must never steal a character mid-livecode.
     if (strudel.isOpen()   && document.activeElement?.closest('#strudel-panel'))   return;
     if (sequencer.isOpen() && document.activeElement?.closest('#sequencer-panel')) return;
     if (vocoder.isOpen()   && document.activeElement?.closest('#vocoder-panel'))   return;
-    if (looper.isOpen()    && document.activeElement?.closest('#looper-panel'))    return;
+
+    // A focused TEXT-ENTRY field (typing) swallows hotkeys so we don't hijack it.
+    // Crucially this is NOT a blanket "any control in the rig panel" guard like it
+    // used to be: the rig panel (#looper-panel) is all sliders/buttons, and the
+    // knob keys ([ ] - = , .) are meant to nudge them — so clicking a rig slider
+    // no longer kills the pad. Only real typing surfaces bail.
+    const ae = e.target;
+    if (ae && (
+      ae.isContentEditable ||
+      ae.tagName === 'TEXTAREA' ||
+      ae.tagName === 'SELECT' ||
+      (ae.tagName === 'INPUT' && !NON_TEXT_INPUT_TYPES.has(ae.type))
+    )) return;
 
     switch (e.key.toLowerCase()) {
       case 'v': {
