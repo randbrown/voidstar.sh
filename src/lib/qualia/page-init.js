@@ -4479,9 +4479,10 @@ export function initQualiaPage() {
     });
     const actions = document.createElement('span');
     actions.className = 'panel-io-actions';
+    actions.setAttribute('role', 'menu');
     actions.append(
-      mk('⤓', `Save just the ${QUALEM_SECTIONS[key].label} settings to a file`, () => saveSection(key)),
-      mk('⤒', `Load just the ${QUALEM_SECTIONS[key].label} settings from a .qualem file`, () => triggerSectionLoad(key)),
+      mk('⤓ save', `Save just the ${QUALEM_SECTIONS[key].label} settings to a file`, () => saveSection(key)),
+      mk('⤒ load', `Load just the ${QUALEM_SECTIONS[key].label} settings from a .qualem file`, () => triggerSectionLoad(key)),
     );
     span.append(toggle, actions);
     return span;
@@ -4711,6 +4712,23 @@ export function initQualiaPage() {
   const NON_TEXT_INPUT_TYPES = new Set([
     'range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color',
   ]);
+  // Knob keys matched by PHYSICAL key (e.code), not character (e.key). A DOIO/
+  // macro-pad encoder mapped to the Comma key always reports code 'Comma' no
+  // matter what character the OS layout / NumLock / IME resolves it to — so the
+  // big knob's CCW detent nudges down even when its char isn't a literal ','.
+  // Numpad twins are included because some keymaps send the numpad variants.
+  const KNOB_BY_CODE = {
+    BracketLeft:    () => looper.nudgeStripParam?.('delay', 'mix', -0.05),
+    BracketRight:   () => looper.nudgeStripParam?.('delay', 'mix', +0.05),
+    Minus:          () => looper.nudgeStripParam?.('reverb', 'mix', -0.05),
+    NumpadSubtract: () => looper.nudgeStripParam?.('reverb', 'mix', -0.05),
+    Equal:          () => looper.nudgeStripParam?.('reverb', 'mix', +0.05),
+    NumpadAdd:      () => looper.nudgeStripParam?.('reverb', 'mix', +0.05),
+    Comma:          () => looper.nudgeRigLevel?.(-0.05),
+    NumpadComma:    () => looper.nudgeRigLevel?.(-0.05),
+    Period:         () => looper.nudgeRigLevel?.(+0.05),
+    NumpadDecimal:  () => looper.nudgeRigLevel?.(+0.05),
+  };
   window.addEventListener('keydown', (e) => {
     // Ctrl/Cmd/Alt combos belong to the browser/OS — never let a bare-key hotkey
     // fire on paste, zoom, reload, etc. (Shift IS a hotkey modifier: ⇧V prev fx,
@@ -4735,6 +4753,13 @@ export function initQualiaPage() {
       ae.tagName === 'SELECT' ||
       (ae.tagName === 'INPUT' && !NON_TEXT_INPUT_TYPES.has(ae.type))
     )) return;
+
+    // Knob nudges first, by physical key — robust to layout/NumLock/IME. The
+    // e.key cases below stay as a fallback for pads that send only a character
+    // (e.code empty/unknown); a key that matches here returns before the switch
+    // so it can't double-fire.
+    const knob = KNOB_BY_CODE[e.code];
+    if (knob) { knob(); e.preventDefault(); return; }
 
     switch (e.key.toLowerCase()) {
       case 'v': {

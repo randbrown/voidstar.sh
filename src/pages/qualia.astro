@@ -751,14 +751,22 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .qp-toggle.active { border-color: var(--pink); color: var(--pink); }
     /* Per-panel save/load chips injected into panel headers + the qualem picker row.
-       Collapsed to a single ⇅ glyph; clicking it expands the save (⤓) / load (⤒)
-       buttons inline so the header stays tidy until you need them. */
-    .panel-io { display: inline-flex; align-items: center; gap: 0.15rem; }
+       Collapsed to a single ⇅ glyph; clicking it opens a little dropdown menu with
+       the save (⤓) / load (⤒) actions, so the header stays tidy until you need it. */
+    .panel-io { display: inline-flex; align-items: center; gap: 0.15rem; position: relative; }
     .panel-io-btn { padding: 0.05rem 0.35rem; font-size: 0.7rem; line-height: 1; opacity: 0.7; }
     .panel-io-btn:hover { opacity: 1; }
-    .panel-io-actions { display: none; align-items: center; gap: 0.15rem; margin-left: 0.15rem; }
-    .panel-io.open .panel-io-actions { display: inline-flex; }
     .panel-io.open .panel-io-toggle { opacity: 1; border-color: var(--cyan); color: var(--cyan); }
+    .panel-io-actions {
+      display: none; position: absolute; top: calc(100% + 5px); right: 0;
+      flex-direction: column; gap: 0.15rem; z-index: 6;
+      background: rgba(10,10,26,0.97); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.25rem;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .panel-io.open .panel-io-actions { display: flex; }
+    .panel-io-actions .panel-io-btn { white-space: nowrap; text-align: left; opacity: 0.9; }
+    .panel-io-actions .panel-io-btn:hover { opacity: 1; border-color: var(--cyan); color: var(--cyan); }
     .qualem-panelio { display: flex; align-items: center; gap: 0.4rem; margin: 0.3rem 0; flex-wrap: wrap; }
     .qualem-panelio .seq-prop-label { color: var(--muted); }
     .qualem-panelio select { flex: 1 1 auto; min-width: 8ch; }

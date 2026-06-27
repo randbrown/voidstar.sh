@@ -102,6 +102,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
   // persisted config and primes it via setStripConfig().
   let strip = null, _stripConfig = null, _cabBuffer = null, _ampModel = null;
+  let recMerge = null;   // mono-sum of strip.output feeding the recorder in mono mode
 
   // ── recording state ──
   let recording = false;
@@ -252,8 +253,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     }
 
     // Channel strip inserted between the input and the volume fader, so the
-    // monitor + the mix carry the PROCESSED signal. Recording + the scope tap
-    // the input (post channel-mode), pre-strip.
+    // monitor + the mix carry the PROCESSED signal. The RECORDER taps the strip's
+    // OUTPUT (post-fx, see recTap below) so loops bake in the effects that were on
+    // at record time; the scope + tuner stay PRE-strip for a clean signal.
     strip = createRigStrip(ctx, _stripConfig);
     if (_cabBuffer) strip.setCabBuffer(_cabBuffer);
     if (_ampModel) strip.setAmpModel(_ampModel);
@@ -298,6 +300,21 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     tunerAnalyser.smoothingTimeConstant = 0;
     inputNode.connect(tunerAnalyser);
 
+    // Recorder source — the strip OUTPUT, so the captured loop carries whatever
+    // effects were on. In mono mode, sum the strip's stereo output back to one
+    // channel (the loop stays mono, just effected); stereo keeps both channels.
+    let recTap;
+    if (_channels === 'stereo') {
+      recTap = strip.output;
+    } else {
+      recMerge = ctx.createGain();
+      recMerge.channelCount = 1;
+      recMerge.channelCountMode = 'explicit';
+      recMerge.channelInterpretation = 'speakers';
+      strip.output.connect(recMerge);
+      recTap = recMerge;
+    }
+
     // Channel count for the ScriptProcessor fallback: forced to 1 in mono mode,
     // else the native input count. The worklet adopts it via 'max' channelCount.
     const inCh = _channels === 'stereo' ? Math.max(1, Math.min(2, settings.channelCount || 2)) : 1;
@@ -322,7 +339,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         if (!recording) return;
         if (d.chans) onChunks(d.chans);
       };
-      inputNode.connect(recNode);
+      recTap.connect(recNode);
       recNode.connect(sinkGain);
     } else {
       usingWorklet = false;
@@ -340,7 +357,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         }
         onChunks(chans);
       };
-      inputNode.connect(recNode);
+      recTap.connect(recNode);
       recNode.connect(sinkGain);
     }
   }
@@ -356,6 +373,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { sigAnalyser?.disconnect(); } catch {}
     try { captureAnalyser?.disconnect(); } catch {}
     try { tunerAnalyser?.disconnect(); } catch {}
+    try { recMerge?.disconnect(); } catch {}
+    recMerge = null;
     try { strip?.dispose(); } catch {}
     strip = null;
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }

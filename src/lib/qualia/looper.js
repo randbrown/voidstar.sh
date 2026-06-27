@@ -504,15 +504,29 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (recording) return;
     if (!looperAudio.isRetroCapable()) { setStatus('retro needs AudioWorklet'); return; }
     if (!looperAudio.isCapturing()) { setStatus('turn the buffer on first'); return; }
-    const t = armedTrack();
-    if (!t) return;
-    looperAudio.stopVoice(t.id);   // retro replaces the armed take
+    // Grab off the armed take's grid (or the default if nothing's armed yet).
+    const armed = armedTrack();
+    const grid = armed ? armed.grid : model.gridDefault;
     setStatus('grabbing…');
     let res = null;
     try {
-      res = await looperAudio.grabRetro({ grid: t.grid, syncOn: syncOn(), cps: currentCps(), cycles: model.retroCycles });
+      res = await looperAudio.grabRetro({ grid, syncOn: syncOn(), cps: currentCps(), cycles: model.retroCycles });
     } catch (e) { console.warn('[qualia] retro grab failed:', e); }
     if (!res) { setStatus('buffer too short — play a few more bars'); refreshTransport(); return; }
+    // Grab is additive: land it in a FRESH track so it layers instead of
+    // overwriting. Reuse the armed track only when it's still blank, so we don't
+    // strand an empty lane (and only after a successful grab, so a failed grab
+    // never spawns a stray track).
+    let t;
+    if (armed && !armed.buffer) {
+      t = armed;
+      looperAudio.stopVoice(t.id);
+    } else {
+      t = makeTrack(); t.grid = grid;
+      model.tracks.push(t);
+      model.armedTrackId = t.id;
+      renderTracks();
+    }
     await commitTake(t, res, 'grabbed');
   }
 
