@@ -1963,6 +1963,86 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       border: 1px solid rgba(255,255,255,0.06);
     }
 
+    /* ── Mini mode — a pedalboard toolbar (built in looper.js) ─────────────── */
+    /* In mini mode the signal / strip / loop subpanels + the header master fader
+       are hidden; #rig-mini takes over with LED + one knob per effect. */
+    #btn-rig-mini.active { border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.08); }
+    #looper-panel.mini #rig-signal,
+    #looper-panel.mini #rig-strip,
+    #looper-panel.mini #rig-loop { display: none !important; }
+    #looper-panel.mini #rig-master-gain,
+    #looper-panel.mini #btn-rig-master-mute { display: none; }
+    #looper-panel.mini { height: auto !important; min-height: 0 !important; width: auto; }
+
+    #rig-mini { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.6rem; }
+    .rig-mini-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
+    .rig-mini-sep { align-self: stretch; width: 1px; background: var(--border); margin: 0.1rem 0.15rem; }
+
+    /* One pedal: LED toggle · circular knob · label. */
+    .rig-pedal { display: flex; flex-direction: column; align-items: center; gap: 0.22rem; width: 48px; }
+    .rig-pedal-led {
+      width: 11px; height: 11px; padding: 0; border-radius: 50%;
+      border: 1px solid var(--border); background: rgba(255,255,255,0.07);
+      cursor: pointer; box-shadow: none; transition: background .12s, box-shadow .12s, border-color .12s;
+    }
+    .rig-pedal-led.on { background: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 7px var(--cyan); }
+    .rig-pedal.off { --knob-accent: var(--muted); }
+    .rig-pedal:not(.off) { --knob-accent: var(--cyan); }
+    .rig-pedal.off .rig-pedal-knob { opacity: 0.45; }
+    .rig-pedal.off .rig-pedal-label { opacity: 0.6; }
+
+    /* Circular "analog" knob: conic-gradient ring (value), rotating pointer,
+       center numeric face. Driven by a single CSS var --p (0..1). All static —
+       repaints only when a value changes, never per frame. */
+    .rig-pedal-knob { position: relative; width: 44px; height: 44px; cursor: ns-resize; touch-action: none; outline: none; }
+    .rig-pedal-knob:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: 50%; }
+    .rig-pedal-ring {
+      position: absolute; inset: 0; border-radius: 50%;
+      background: conic-gradient(from 225deg,
+        var(--knob-accent, var(--cyan)) calc(var(--p, 0) * 270deg),
+        rgba(255,255,255,0.10) calc(var(--p, 0) * 270deg) 270deg,
+        transparent 270deg 360deg);
+      -webkit-mask: radial-gradient(circle closest-side, transparent 0 60%, #000 62%);
+              mask: radial-gradient(circle closest-side, transparent 0 60%, #000 62%);
+    }
+    .rig-pedal-ptr { position: absolute; inset: 0; transform: rotate(calc(225deg + var(--p, 0) * 270deg)); }
+    .rig-pedal-ptr::before {
+      content: ''; position: absolute; left: 50%; top: 7%;
+      width: 2px; height: 22%; border-radius: 2px;
+      background: var(--knob-accent, var(--cyan)); transform: translateX(-50%);
+    }
+    .rig-pedal-face {
+      position: absolute; inset: 22%; border-radius: 50%;
+      background: rgba(5,5,13,0.92);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .rig-pedal-val { font-size: 0.52rem; color: var(--text); font-variant-numeric: tabular-nums; }
+    .rig-pedal-label { font-size: 0.56rem; color: var(--muted); letter-spacing: 0.03em; }
+
+    /* Tiny tap-to-expand strobe tuner. */
+    .rig-mini-tune { display: flex; flex-direction: column; align-items: center; gap: 0.22rem; }
+    .rig-mini-tune-sq {
+      width: 44px; height: 44px; border-radius: 6px; padding: 0;
+      border: 1px solid var(--border); background: rgba(0,0,0,0.3);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.62rem; color: var(--muted); cursor: pointer; line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+    .rig-mini-tune-sq.active { border-color: var(--cyan); color: var(--cyan); }
+    .rig-mini-tune-sq.near   { border-color: #fbbf24; color: #fbbf24; }
+    .rig-mini-tune-sq.intune { border-color: #34d399; color: #34d399; box-shadow: 0 0 9px rgba(52,211,153,0.5); }
+    #rig-mini-tuner-mount:empty { display: none; }
+    #rig-mini-tuner-mount { width: 100%; }
+
+    /* Compact looper transport. */
+    .rig-mini-transport { display: flex; flex-direction: column; align-items: center; gap: 0.22rem; }
+    .rig-mini-tr-row { display: flex; gap: 0.25rem; align-items: center; }
+    .rig-mini-tr-row .ctrl-btn { padding: 0.12rem 0.45rem; font-size: 0.7rem; line-height: 1; }
+    .rig-mini-play-led { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,0.16); transition: background .12s, box-shadow .12s; }
+    .rig-mini-play-led.playing { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+    .rig-mini-play-led.recording { background: var(--pink); box-shadow: 0 0 6px var(--pink); }
+    .rig-mini-cap { font-size: 0.5rem; color: var(--muted); letter-spacing: 0.04em; }
+
     /* Temperament editor — ET / custom toggle + 12 per-note cent spinners. */
     .rig-temper { padding: 0 0.7rem 0.45rem; }
     .rig-temper-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.5rem; margin-bottom: 0.3rem; }
@@ -2941,8 +3021,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn panel-mute-btn" id="btn-rig-master-mute" title="Mute all rig output (signal + loops)">live</button>
     <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="1" step="0.01" value="1" title="Rig master output level" />
     <span class="rig-head-spacer"></span>
+    <button class="ctrl-btn" id="btn-rig-mini" title="Mini mode — condense the rig to a pedalboard toolbar (LED + one knob per effect, tiny tuner, compact looper)">mini</button>
     <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
   </div>
+
+  <!-- MINI mode — a condensed pedalboard toolbar (built in looper.js). Replaces
+       the signal / strip / loop subpanels when on: LED + one knob per effect,
+       a tap-to-expand strobe tuner, and compact looper transport. -->
+  <div id="rig-mini" style="display:none"></div>
 
   <!-- SIGNAL subpanel — the live instrument source: device, level/mute, scope. -->
   <section id="rig-signal" class="rig-subpanel">
