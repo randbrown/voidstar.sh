@@ -4462,13 +4462,29 @@ export function initQualiaPage() {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'ctrl-btn panel-io-btn';
       b.textContent = txt; b.title = title;
-      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
+      // Run the action, then collapse the chip back to its single glyph.
+      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); span.classList.remove('open'); });
       return b;
     };
-    span.append(
-      mk('⤓', `Save just the ${QUALEM_SECTIONS[key].label} settings to a file`, () => saveSection(key)),
-      mk('⤒', `Load just the ${QUALEM_SECTIONS[key].label} settings from a .qualem file`, () => triggerSectionLoad(key)),
+    // Collapsed: one quiet glyph. Click expands to reveal save (⤓) / load (⤒).
+    const toggle = document.createElement('button');
+    toggle.type = 'button'; toggle.className = 'ctrl-btn panel-io-btn panel-io-toggle';
+    toggle.textContent = '⇅';
+    toggle.title = `Save / load the ${QUALEM_SECTIONS[key].label} settings`;
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const open = span.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    const actions = document.createElement('span');
+    actions.className = 'panel-io-actions';
+    actions.setAttribute('role', 'menu');
+    actions.append(
+      mk('⤓ save', `Save just the ${QUALEM_SECTIONS[key].label} settings to a file`, () => saveSection(key)),
+      mk('⤒ load', `Load just the ${QUALEM_SECTIONS[key].label} settings from a .qualem file`, () => triggerSectionLoad(key)),
     );
+    span.append(toggle, actions);
     return span;
   }
   function injectPanelIO() {
@@ -4480,9 +4496,11 @@ export function initQualiaPage() {
       { key: 'audio',     head: document.querySelector('#audio-card .qp-head') },
       { key: 'pose',      head: document.querySelector('#pose-card .qp-head') },
       { key: 'camera',    head: document.querySelector('#camera-card .qp-head') },
-      { key: 'sequencer', head: document.getElementById('sequencer-header') },
-      { key: 'strudel',   head: document.getElementById('strudel-header') },
-      { key: 'vocoder',   head: document.getElementById('vocoder-header') },
+      // `before` the close × so the chip sits just left of it and × stays flush
+      // right, consistent across every panel.
+      { key: 'sequencer', head: document.getElementById('sequencer-header'), before: document.getElementById('btn-sequencer-close') },
+      { key: 'strudel',   head: document.getElementById('strudel-header'),   before: document.getElementById('btn-strudel-close') },
+      { key: 'vocoder',   head: document.getElementById('vocoder-header'),   before: document.getElementById('btn-vocoder-close') },
     ];
     for (const t of targets) {
       if (!t.head || t.head.querySelector('.panel-io')) continue;
@@ -4492,6 +4510,46 @@ export function initQualiaPage() {
     }
   }
   injectPanelIO();
+  // Collapse any open save/load chip when you click away from it.
+  document.addEventListener('pointerdown', (e) => {
+    for (const io of document.querySelectorAll('.panel-io.open')) {
+      if (!io.contains(e.target)) io.classList.remove('open');
+    }
+  }, true);
+
+  // ── Click-to-front for the floating panels ─────────────────────────────────
+  // The panels all share z-index:18, so overlap ties break by DOM order and
+  // feel "stuck". Raise whichever panel you touch (or open) to the top of the
+  // band (19) and drop the rest back to the CSS default — classic window focus,
+  // kept just under the topbar (20) so nothing covers the chrome.
+  const FLOAT_PANELS = ['strudel-panel', 'sequencer-panel', 'vocoder-panel', 'mixer-panel', 'looper-panel'];
+  const FLOAT_SEL = FLOAT_PANELS.map((id) => '#' + id).join(',');
+  function bringPanelToFront(panel) {
+    if (!panel) return;
+    for (const id of FLOAT_PANELS) {
+      const el = document.getElementById(id);
+      if (el) el.style.zIndex = (el === panel) ? '19' : '';   // '' → CSS default (18)
+    }
+  }
+  // Capture phase so it lands before each panel's own drag handler.
+  document.addEventListener('pointerdown', (e) => {
+    const panel = e.target?.closest?.(FLOAT_SEL);
+    if (panel) bringPanelToFront(panel);
+  }, true);
+  // Opening a panel from its topbar button also raises it (covers "close, reopen
+  // → on top" without needing a click inside). rAF runs after the toggle handler.
+  const PANEL_TOGGLE_BTNS = {
+    'btn-strudel': 'strudel-panel', 'btn-sequencer': 'sequencer-panel',
+    'btn-vocoder': 'vocoder-panel', 'btn-mixer': 'mixer-panel', 'btn-looper': 'looper-panel',
+  };
+  for (const [btnId, panelId] of Object.entries(PANEL_TOGGLE_BTNS)) {
+    document.getElementById(btnId)?.addEventListener('click', () => {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(panelId);
+        if (el && el.style.display !== 'none') bringPanelToFront(el);
+      });
+    });
+  }
 
   // ── .qualem.zip bundle (qualem JSON + loop WAVs + cab/amp + video) ──────────
   async function exportBundle() {
@@ -4650,12 +4708,60 @@ export function initQualiaPage() {
   renderQualemList();
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  // Input types that are NOT text entry — focusing one of these must not disarm
+  // the hotkeys/knob keys (a range slider, checkbox or button is exactly the kind
+  // of control the rig panel is built from, and the knob keys exist to drive it).
+  const NON_TEXT_INPUT_TYPES = new Set([
+    'range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color',
+  ]);
+  // Knob keys matched by PHYSICAL key (e.code), not character (e.key). A DOIO/
+  // macro-pad encoder mapped to the Comma key always reports code 'Comma' no
+  // matter what character the OS layout / NumLock / IME resolves it to — so the
+  // big knob's CCW detent nudges down even when its char isn't a literal ','.
+  // Numpad twins are included because some keymaps send the numpad variants.
+  const KNOB_BY_CODE = {
+    BracketLeft:    () => looper.nudgeStripParam?.('delay', 'mix', -0.05),
+    BracketRight:   () => looper.nudgeStripParam?.('delay', 'mix', +0.05),
+    Minus:          () => looper.nudgeStripParam?.('reverb', 'mix', -0.05),
+    NumpadSubtract: () => looper.nudgeStripParam?.('reverb', 'mix', -0.05),
+    Equal:          () => looper.nudgeStripParam?.('reverb', 'mix', +0.05),
+    NumpadAdd:      () => looper.nudgeStripParam?.('reverb', 'mix', +0.05),
+    Comma:          () => looper.nudgeRigLevel?.(-0.05),
+    NumpadComma:    () => looper.nudgeRigLevel?.(-0.05),
+    Period:         () => looper.nudgeRigLevel?.(+0.05),
+    NumpadDecimal:  () => looper.nudgeRigLevel?.(+0.05),
+  };
   window.addEventListener('keydown', (e) => {
-    if (e.target.matches('input, select, textarea, [contenteditable]')) return;
+    // Ctrl/Cmd/Alt combos belong to the browser/OS — never let a bare-key hotkey
+    // fire on paste, zoom, reload, etc. (Shift IS a hotkey modifier: ⇧V prev fx,
+    // ⇧I prev phase, ⇧R record — so it must pass through.)
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    // Code-editor panels own every keystroke while focused — they're text editors,
+    // so a hotkey must never steal a character mid-livecode.
     if (strudel.isOpen()   && document.activeElement?.closest('#strudel-panel'))   return;
     if (sequencer.isOpen() && document.activeElement?.closest('#sequencer-panel')) return;
     if (vocoder.isOpen()   && document.activeElement?.closest('#vocoder-panel'))   return;
-    if (looper.isOpen()    && document.activeElement?.closest('#looper-panel'))    return;
+
+    // A focused TEXT-ENTRY field (typing) swallows hotkeys so we don't hijack it.
+    // Crucially this is NOT a blanket "any control in the rig panel" guard like it
+    // used to be: the rig panel (#looper-panel) is all sliders/buttons, and the
+    // knob keys ([ ] - = , .) are meant to nudge them — so clicking a rig slider
+    // no longer kills the pad. Only real typing surfaces bail.
+    const ae = e.target;
+    if (ae && (
+      ae.isContentEditable ||
+      ae.tagName === 'TEXTAREA' ||
+      ae.tagName === 'SELECT' ||
+      (ae.tagName === 'INPUT' && !NON_TEXT_INPUT_TYPES.has(ae.type))
+    )) return;
+
+    // Knob nudges first, by physical key — robust to layout/NumLock/IME. The
+    // e.key cases below stay as a fallback for pads that send only a character
+    // (e.code empty/unknown); a key that matches here returns before the switch
+    // so it can't double-fire.
+    const knob = KNOB_BY_CODE[e.code];
+    if (knob) { knob(); e.preventDefault(); return; }
 
     switch (e.key.toLowerCase()) {
       case 'v': {
@@ -4671,7 +4777,16 @@ export function initQualiaPage() {
       case 's': document.getElementById('btn-strudel').click(); break;
       case 'q': document.getElementById('btn-sequencer').click(); break;
       case 'w': document.getElementById('btn-vocoder').click(); break;
-      case 'o': document.getElementById('btn-looper').click(); break;
+      case 'o':
+        // O = show/hide the rig panel. Shift+O = switch it between mini
+        // (pedalboard) and full, opening it first if it's closed.
+        if (e.shiftKey) {
+          if (!looper.isOpen()) document.getElementById('btn-looper').click();
+          document.getElementById('btn-rig-mini')?.click();
+        } else {
+          document.getElementById('btn-looper').click();
+        }
+        break;
       case 'p': {
         const opts = ['off','camera'];
         const i = opts.indexOf(poseSelect.value);
