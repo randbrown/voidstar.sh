@@ -1834,12 +1834,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
     model.mini = !!on;
     lsSet(MINI_KEY, model.mini ? '1' : '0');
     if (panel) panel.classList.toggle('mini', model.mini);
-    // Subtle indicator: the glyph stays put; the cyan `active` highlight is the
-    // only tell that mini is engaged (no "mini"/"full" word swap).
+    // Subtle indicator: the glyph stays put; the cyan `active` highlight marks the
+    // FULL rig view, so mini is the quiet/unhighlighted state (no word swap).
     if (btnMini) {
-      btnMini.classList.toggle('active', model.mini);
-      btnMini.setAttribute('aria-pressed', model.mini ? 'true' : 'false');
-      btnMini.title = model.mini ? 'Pedalboard (mini) view — click for the full rig (⇧O)' : 'Pedalboard (mini) view — condense the rig (⇧O)';
+      btnMini.classList.toggle('active', !model.mini);
+      btnMini.setAttribute('aria-pressed', model.mini ? 'false' : 'true');
+      btnMini.title = model.mini ? 'Pedalboard (mini) view — click for the full rig (⇧O)' : 'Full rig view — click to condense to the pedalboard (⇧O)';
     }
     if (model.mini) {
       buildMiniUI();
