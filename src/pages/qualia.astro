@@ -750,10 +750,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.1rem 0.55rem; cursor: pointer; transition: all 0.15s;
     }
     .qp-toggle.active { border-color: var(--pink); color: var(--pink); }
-    /* Per-panel save/load chips injected into panel headers + the qualem picker row. */
+    /* Per-panel save/load chips injected into panel headers + the qualem picker row.
+       Collapsed to a single ⇅ glyph; clicking it expands the save (⤓) / load (⤒)
+       buttons inline so the header stays tidy until you need them. */
     .panel-io { display: inline-flex; align-items: center; gap: 0.15rem; }
     .panel-io-btn { padding: 0.05rem 0.35rem; font-size: 0.7rem; line-height: 1; opacity: 0.7; }
     .panel-io-btn:hover { opacity: 1; }
+    .panel-io-actions { display: none; align-items: center; gap: 0.15rem; margin-left: 0.15rem; }
+    .panel-io.open .panel-io-actions { display: inline-flex; }
+    .panel-io.open .panel-io-toggle { opacity: 1; border-color: var(--cyan); color: var(--cyan); }
     .qualem-panelio { display: flex; align-items: center; gap: 0.4rem; margin: 0.3rem 0; flex-wrap: wrap; }
     .qualem-panelio .seq-prop-label { color: var(--muted); }
     .qualem-panelio select { flex: 1 1 auto; min-width: 8ch; }
@@ -1500,7 +1505,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       cursor: grab; user-select: none; touch-action: none;
     }
     #mixer-header.dragging { cursor: grabbing; }
-    #btn-mixer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    /* The mixer header has no status spacer, so push its × to the far right for
+       consistency with the other panels (whose .sp-status / spacer does it). */
+    #btn-mixer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; margin-left: auto; }
     #mixer-body {
       display: flex; flex-direction: column; gap: 0.4rem;
       padding: 0.6rem 0.75rem; overflow: auto;
@@ -1976,7 +1983,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 
     #rig-mini { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.6rem; }
     .rig-mini-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
+    .rig-mini-group { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
     .rig-mini-sep { align-self: stretch; width: 1px; background: var(--border); margin: 0.1rem 0.15rem; }
+    /* Subtle mini-mode toggle — a quiet glyph; the cyan active state is the tell. */
+    .rig-mini-toggle { opacity: 0.6; padding: 0.05rem 0.4rem; }
+    .rig-mini-toggle:hover { opacity: 1; }
+    .rig-mini-toggle.active { opacity: 1; border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.08); }
 
     /* One pedal: LED toggle · circular knob · label. */
     .rig-pedal { display: flex; flex-direction: column; align-items: center; gap: 0.22rem; width: 48px; }
@@ -3021,7 +3033,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn panel-mute-btn" id="btn-rig-master-mute" title="Mute all rig output (signal + loops)">live</button>
     <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="1" step="0.01" value="1" title="Rig master output level" />
     <span class="rig-head-spacer"></span>
-    <button class="ctrl-btn" id="btn-rig-mini" title="Mini mode — condense the rig to a pedalboard toolbar (LED + one knob per effect, tiny tuner, compact looper)">mini</button>
+    <button class="ctrl-btn rig-mini-toggle" id="btn-rig-mini" aria-pressed="false" title="Pedalboard (mini) view — condense the rig (⇧O)">▤</button>
     <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
   </div>
 

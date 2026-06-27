@@ -4462,13 +4462,28 @@ export function initQualiaPage() {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'ctrl-btn panel-io-btn';
       b.textContent = txt; b.title = title;
-      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
+      // Run the action, then collapse the chip back to its single glyph.
+      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); fn(); span.classList.remove('open'); });
       return b;
     };
-    span.append(
+    // Collapsed: one quiet glyph. Click expands to reveal save (⤓) / load (⤒).
+    const toggle = document.createElement('button');
+    toggle.type = 'button'; toggle.className = 'ctrl-btn panel-io-btn panel-io-toggle';
+    toggle.textContent = '⇅';
+    toggle.title = `Save / load the ${QUALEM_SECTIONS[key].label} settings`;
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const open = span.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    const actions = document.createElement('span');
+    actions.className = 'panel-io-actions';
+    actions.append(
       mk('⤓', `Save just the ${QUALEM_SECTIONS[key].label} settings to a file`, () => saveSection(key)),
       mk('⤒', `Load just the ${QUALEM_SECTIONS[key].label} settings from a .qualem file`, () => triggerSectionLoad(key)),
     );
+    span.append(toggle, actions);
     return span;
   }
   function injectPanelIO() {
@@ -4492,6 +4507,46 @@ export function initQualiaPage() {
     }
   }
   injectPanelIO();
+  // Collapse any open save/load chip when you click away from it.
+  document.addEventListener('pointerdown', (e) => {
+    for (const io of document.querySelectorAll('.panel-io.open')) {
+      if (!io.contains(e.target)) io.classList.remove('open');
+    }
+  }, true);
+
+  // ── Click-to-front for the floating panels ─────────────────────────────────
+  // The panels all share z-index:18, so overlap ties break by DOM order and
+  // feel "stuck". Raise whichever panel you touch (or open) to the top of the
+  // band (19) and drop the rest back to the CSS default — classic window focus,
+  // kept just under the topbar (20) so nothing covers the chrome.
+  const FLOAT_PANELS = ['strudel-panel', 'sequencer-panel', 'vocoder-panel', 'mixer-panel', 'looper-panel'];
+  const FLOAT_SEL = FLOAT_PANELS.map((id) => '#' + id).join(',');
+  function bringPanelToFront(panel) {
+    if (!panel) return;
+    for (const id of FLOAT_PANELS) {
+      const el = document.getElementById(id);
+      if (el) el.style.zIndex = (el === panel) ? '19' : '';   // '' → CSS default (18)
+    }
+  }
+  // Capture phase so it lands before each panel's own drag handler.
+  document.addEventListener('pointerdown', (e) => {
+    const panel = e.target?.closest?.(FLOAT_SEL);
+    if (panel) bringPanelToFront(panel);
+  }, true);
+  // Opening a panel from its topbar button also raises it (covers "close, reopen
+  // → on top" without needing a click inside). rAF runs after the toggle handler.
+  const PANEL_TOGGLE_BTNS = {
+    'btn-strudel': 'strudel-panel', 'btn-sequencer': 'sequencer-panel',
+    'btn-vocoder': 'vocoder-panel', 'btn-mixer': 'mixer-panel', 'btn-looper': 'looper-panel',
+  };
+  for (const [btnId, panelId] of Object.entries(PANEL_TOGGLE_BTNS)) {
+    document.getElementById(btnId)?.addEventListener('click', () => {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(panelId);
+        if (el && el.style.display !== 'none') bringPanelToFront(el);
+      });
+    });
+  }
 
   // ── .qualem.zip bundle (qualem JSON + loop WAVs + cab/amp + video) ──────────
   async function exportBundle() {

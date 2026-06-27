@@ -1711,19 +1711,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
     _miniBuilt = true;
     const row = document.createElement('div'); row.className = 'rig-mini-row';
 
-    // Master pedal — rig level + mute LED (lit = live).
-    row.append(buildMiniPedal({
-      stage: 'master', param: 'level', label: 'rig',
-      min: 0, max: 1, step: 0.05, def: 1, fmt: v => (+v).toFixed(2),
-      get: () => model.rigLevel, set: (v) => setRigLevel(v),
-      toggle: () => setRigMuted(!model.rigMuted),
-    }));
-    row.append(makeSep());
+    // Tuner (left) — tap-to-expand strobe (the strobe node is relocated here).
+    const tune = document.createElement('div'); tune.className = 'rig-mini-tune';
+    miniTunerSq = document.createElement('button');
+    miniTunerSq.type = 'button'; miniTunerSq.className = 'rig-mini-tune-sq'; miniTunerSq.textContent = '♪';
+    miniTunerSq.title = 'Strobe tuner — tap to expand for a quick check';
+    miniTunerSq.addEventListener('click', () => toggleTuner());
+    const tuneCap = document.createElement('span'); tuneCap.className = 'rig-pedal-label'; tuneCap.textContent = 'tune';
+    tune.append(miniTunerSq, tuneCap);
 
     // One pedal per primary effect (param ranges come from STRIP_SCHEMA).
+    const effects = document.createElement('div'); effects.className = 'rig-mini-group';
     for (const p of MINI_PEDALS) {
       const spec = stripParamSpec(p.stage, p.param) || { min: 0, max: 1, step: 0.01 };
-      row.append(buildMiniPedal({
+      effects.append(buildMiniPedal({
         stage: p.stage, param: p.param, label: p.label,
         min: spec.min, max: spec.max, step: spec.step,
         def: STRIP_DEFAULTS[p.stage]?.[p.param],
@@ -1733,18 +1734,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
         toggle: () => stripToggle(p.stage, !model.strip[p.stage].on),
       }));
     }
-    row.append(makeSep());
-
-    // Tap-to-expand strobe tuner (the strobe node is relocated here in mini).
-    const tune = document.createElement('div'); tune.className = 'rig-mini-tune';
-    miniTunerSq = document.createElement('button');
-    miniTunerSq.type = 'button'; miniTunerSq.className = 'rig-mini-tune-sq'; miniTunerSq.textContent = '♪';
-    miniTunerSq.title = 'Strobe tuner — tap to expand for a quick check';
-    miniTunerSq.addEventListener('click', () => toggleTuner());
-    const tuneCap = document.createElement('span'); tuneCap.className = 'rig-pedal-label'; tuneCap.textContent = 'tune';
-    tune.append(miniTunerSq, tuneCap);
-    row.append(tune);
-    row.append(makeSep());
 
     // Compact looper transport — record · play · stop + a playing/recording LED.
     const tr = document.createElement('div'); tr.className = 'rig-mini-transport';
@@ -1759,7 +1748,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
     );
     const trCap = document.createElement('span'); trCap.className = 'rig-mini-cap'; trCap.textContent = 'loop';
     tr.append(trRow, trCap);
-    row.append(tr);
+
+    // Master pedal (right) — rig level + mute LED (lit = live).
+    const master = buildMiniPedal({
+      stage: 'master', param: 'level', label: 'rig',
+      min: 0, max: 1, step: 0.05, def: 1, fmt: v => (+v).toFixed(2),
+      get: () => model.rigLevel, set: (v) => setRigLevel(v),
+      toggle: () => setRigMuted(!model.rigMuted),
+    });
+
+    // Order: tuner · effects · looper · master (master ends on the far right).
+    row.append(tune, makeSep(), effects, makeSep(), tr, makeSep(), master);
 
     miniTunerMount = document.createElement('div'); miniTunerMount.id = 'rig-mini-tuner-mount';
     miniEl.append(row, miniTunerMount);
@@ -1819,7 +1818,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
     model.mini = !!on;
     lsSet(MINI_KEY, model.mini ? '1' : '0');
     if (panel) panel.classList.toggle('mini', model.mini);
-    if (btnMini) { btnMini.classList.toggle('active', model.mini); btnMini.textContent = model.mini ? 'full' : 'mini'; }
+    // Subtle indicator: the glyph stays put; the cyan `active` highlight is the
+    // only tell that mini is engaged (no "mini"/"full" word swap).
+    if (btnMini) {
+      btnMini.classList.toggle('active', model.mini);
+      btnMini.setAttribute('aria-pressed', model.mini ? 'true' : 'false');
+      btnMini.title = model.mini ? 'Pedalboard (mini) view — click for the full rig (⇧O)' : 'Pedalboard (mini) view — condense the rig (⇧O)';
+    }
     if (model.mini) {
       buildMiniUI();
       if (miniEl) miniEl.style.display = '';
