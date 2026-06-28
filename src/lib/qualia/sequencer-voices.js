@@ -470,7 +470,9 @@ export function createSynthKit(spec = {}) {
 // path dead-simple and sidesteps any Tone-context/wrapper edge cases — the
 // sequencer only ever touches `output.connect`, `output.gain`, the bypass tag,
 // and `dispose()`, all of which a native GainNode supports.
-export function createSampleKit({ manifestUrl, voiceMap = {}, gain = 0.95 } = {}) {
+export function createSampleKit({
+  manifestUrl, manifestUrls, voiceMap = {}, gain = 0.95, fillUnmapped = false,
+} = {}) {
   const ctx = Tone.getContext().rawContext;
   const out = ctx.createGain(); out.gain.value = gain;
   // Headroom stage to match the synth kits — sample one-shots are normalised
@@ -482,29 +484,53 @@ export function createSampleKit({ manifestUrl, voiceMap = {}, gain = 0.95 } = {}
   let disposed = false;
   let loaded = 0, total = 0;
 
+  // Try each candidate manifest URL (e.g. main then master) until one resolves.
+  const urls = manifestUrls && manifestUrls.length ? manifestUrls : (manifestUrl ? [manifestUrl] : []);
+
   const ready = (async () => {
-    if (!manifestUrl) return;
-    let resolved;
-    try {
-      resolved = await resolveManifest(manifestUrl);
-    } catch (e) {
-      console.warn(`[qualia] sample kit "${manifestUrl}" manifest load failed:`, e);
-      return;
+    if (!urls.length) return { loaded: 0, total: 0 };
+    let resolved = null, lastErr = null;
+    for (const u of urls) {
+      try { resolved = await resolveManifest(u); break; }
+      catch (e) { lastErr = e; }
     }
-    const tasks = [];
+    if (!resolved) {
+      console.warn(`[qualia] sample kit manifest load failed (${urls.join(' , ')}):`, lastErr);
+      return { loaded: 0, total: 0 };
+    }
+
+    // Pick a sample name per pad voice. First pass: the voice's preferred name
+    // / candidate list (bd, sd, …). Optional second pass (external packs whose
+    // names don't follow the drum convention): hand each still-empty voice a
+    // leftover name from the manifest, in order, so *any* pack makes sound.
+    const used = new Set();
+    const firstUrl = (entry) => Array.isArray(entry) ? entry[0]
+      : (entry && typeof entry === 'object') ? Object.values(entry)[0] : null;
+    const assign = {};   // voiceId → sampleName
     for (const voiceId of Object.keys(voiceMap)) {
-      // A mapping value may be a single sample name or an ordered list of
-      // candidates (e.g. ['sd','sn','snare']) — used by externally-loaded packs
-      // whose naming differs from Strudel's bd/sd/hh convention. Take the first
-      // name that exists in the manifest.
       const cand = voiceMap[voiceId];
       const names = Array.isArray(cand) ? cand : [cand];
-      const sampleName = names.find((n) => resolved.names[n]);
-      const entry = sampleName ? resolved.names[sampleName] : null;
-      // First variation of an array; for a pitched map, the first value.
-      const url = Array.isArray(entry) ? entry[0]
-                : (entry && typeof entry === 'object') ? Object.values(entry)[0]
-                : null;
+      const name = names.find((n) => resolved.names[n] && !used.has(n));
+      if (name) { assign[voiceId] = name; used.add(name); }
+    }
+    if (fillUnmapped) {
+      // Audio-only leftovers: skip pitched maps (objects) — those are melodic
+      // instruments, not drum one-shots.
+      const leftovers = Object.keys(resolved.names)
+        .filter((n) => !used.has(n) && Array.isArray(resolved.names[n]));
+      let li = 0;
+      for (const voiceId of Object.keys(voiceMap)) {
+        if (assign[voiceId]) continue;
+        if (li >= leftovers.length) break;
+        assign[voiceId] = leftovers[li];
+        used.add(leftovers[li]);
+        li++;
+      }
+    }
+
+    const tasks = [];
+    for (const voiceId of Object.keys(assign)) {
+      const url = firstUrl(resolved.names[assign[voiceId]]);
       if (!url) continue;
       total++;
       tasks.push((async () => {
@@ -521,13 +547,13 @@ export function createSampleKit({ manifestUrl, voiceMap = {}, gain = 0.95 } = {}
           });
           if (!disposed) { buffers[voiceId] = audioBuf; loaded++; }
         } catch (e) {
-          console.warn(`[qualia] sample "${sampleName}" (${voiceId}) from ${url} failed:`, e);
+          console.warn(`[qualia] sample "${assign[voiceId]}" (${voiceId}) from ${url} failed:`, e);
         }
       })());
     }
     await Promise.all(tasks);
     if (!disposed) {
-      const where = manifestUrl.replace(/^.*\/samples\//, 'samples/');
+      const where = (resolved.base || urls[0]).replace(/^.*\/samples\//, 'samples/');
       if (loaded === 0) console.warn(`[qualia] sample kit "${where}" loaded 0/${total} — kit will be silent`);
       else console.info(`[qualia] sample kit "${where}" loaded ${loaded}/${total} voices`);
     }

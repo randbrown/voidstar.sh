@@ -111,11 +111,14 @@ export function parsePackSpec(input) {
     if (!user || !repo) return null;
     // Hand Strudel the spec as documented — bare `github:user/repo` when no
     // branch is given (Strudel resolves the default), branch-qualified otherwise.
-    // The sequencer fetches the raw manifest itself, defaulting to `main`.
-    const br = branch || 'main';
+    // The sequencer fetches the raw manifest itself; with no branch it tries
+    // `main` then `master` (the two common defaults) so more packs resolve.
+    const raw0 = (b) => `https://raw.githubusercontent.com/${user}/${repo}/${b}/strudel.json`;
+    const manifestUrls = branch ? [raw0(branch)] : [raw0('main'), raw0('master')];
     return {
       strudelArg: branch ? `github:${user}/${repo}/${branch}` : `github:${user}/${repo}`,
-      manifestUrl: `https://raw.githubusercontent.com/${user}/${repo}/${br}/strudel.json`,
+      manifestUrls,
+      manifestUrl: manifestUrls[0],
       id: `ext:${user}/${repo}`,
       label: repo,
     };
@@ -127,7 +130,7 @@ export function parsePackSpec(input) {
   }
   let label = manifestUrl;
   try { label = new URL(manifestUrl, 'https://x/').pathname.split('/').filter(Boolean).slice(-2, -1)[0] || 'pack'; } catch {}
-  return { strudelArg: manifestUrl, manifestUrl, id: `ext:${manifestUrl}`, label };
+  return { strudelArg: manifestUrl, manifestUrls: [manifestUrl], manifestUrl, id: `ext:${manifestUrl}`, label };
 }
 
 /**

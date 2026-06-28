@@ -109,10 +109,14 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // Metadata only — the sample buffers load lazily when the kit is first built.
   const _dynamicKits = new Map();
   function addDynamicKit(p) {
+    const manifestUrls = (p.manifestUrls && p.manifestUrls.length) ? p.manifestUrls : [p.manifestUrl];
     _dynamicKits.set(p.id, {
       id: p.id, group: 'loaded', label: `${p.label} · samples`, type: 'sample',
       desc: `External pack: ${p.strudelArg}`,
-      make: () => createSampleKit({ manifestUrl: p.manifestUrl, voiceMap: EXTERNAL_VOICE_MAP }),
+      // fillUnmapped: external packs rarely use bd/sd/hh names, so after the
+      // candidate match, hand each empty pad a leftover sample so the kit makes
+      // sound instead of sitting silent.
+      make: () => createSampleKit({ manifestUrls, voiceMap: EXTERNAL_VOICE_MAP, fillUnmapped: true }),
       _spec: p,
     });
   }

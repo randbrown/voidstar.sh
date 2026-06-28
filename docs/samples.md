@@ -159,8 +159,12 @@ Loaded packs persist (`voidstar.qualia.sequencer.extPacks`) and reappear under a
 
 > These are real, public repos chosen as starting points — contents and licenses
 > vary per repo, so audition and check terms before using one in a set. The
-> Strudel side always gets every name; the sequencer side maps what it can onto
-> the ten pad voices and leaves the rest silent.
+> Strudel side gets every name; the sequencer maps drum-named samples onto the
+> matching pad voices (`bd`→kick, `sn`/`sd`→snare, …) and then **auto-fills** any
+> still-empty pads with the pack's remaining samples, so even a pack that doesn't
+> follow the drum convention makes sound on the grid (remap by curating). Packs
+> with no branch given are tried on `main` then `master`. Watch the console /
+> status line for `loaded N/M` to see how a pack mapped.
 
 ---
 
