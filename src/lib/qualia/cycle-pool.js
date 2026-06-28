@@ -14,22 +14,20 @@
 // the "phase" semantics where toggling autoPhase doesn't immediately
 // reset the active mode.
 
+import { getJSON, setJSON } from './prefs.js';
+
 const NS       = 'voidstar.qualia.cyclePool';
 const EXCL_KEY = `${NS}.excluded`;
 
 /** @returns {Set<string>} */
 export function loadExcluded() {
-  try {
-    const raw = localStorage.getItem(EXCL_KEY);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    return new Set(Array.isArray(arr) ? arr : []);
-  } catch { return new Set(); }
+  const arr = getJSON(EXCL_KEY, null);
+  return new Set(Array.isArray(arr) ? arr : []);
 }
 
 /** @param {Set<string>} set */
 export function saveExcluded(set) {
-  try { localStorage.setItem(EXCL_KEY, JSON.stringify([...set])); } catch {}
+  setJSON(EXCL_KEY, [...set]);
 }
 
 /**

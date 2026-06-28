@@ -19,6 +19,7 @@
 
 import { emptyAudioFrame, ema } from './field.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
+import { openMicStream } from './devices.js';
 
 const MIC_CONSTRAINTS = {
   echoCancellation: false,
@@ -431,25 +432,10 @@ export function createAudio() {
   /** Start mic capture. Returns the chosen deviceId so callers can persist it. */
   async function start(deviceId) {
     await removeSource('mic');
-    // Try the requested deviceId first; if it's stale (OverconstrainedError
-    // or NotFoundError — e.g. the mic was unplugged since last session),
-    // fall back to whatever default the browser hands us so a returning
-    // user isn't blocked by a missing previous device.
-    const attempts = deviceId
-      ? [{ ...MIC_CONSTRAINTS, deviceId: { exact: deviceId } }, { ...MIC_CONSTRAINTS }]
-      : [{ ...MIC_CONSTRAINTS }];
-    let stream = null;
-    let lastErr = null;
-    for (const constraints of attempts) {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
-        break;
-      } catch (err) {
-        lastErr = err;
-        if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') break;
-      }
-    }
-    if (!stream) throw lastErr || new Error('getUserMedia failed');
+    // Try the requested deviceId first; if it's stale (e.g. the mic was
+    // unplugged since last session), the shared ladder falls back to the
+    // browser default so a returning user isn't blocked by a missing device.
+    const stream = await openMicStream(deviceId, MIC_CONSTRAINTS);
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     // Awaiting getUserMedia above expires the user-gesture activation, so on
     // some platforms (notably macOS Chrome) the new context starts 'suspended'.

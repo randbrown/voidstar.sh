@@ -32,6 +32,7 @@ import { createLooperRenderer } from './looper-render.js';
 import * as loopStore from './looper-store.js';
 import { wirePicker, getStoredDeviceId } from './devices.js';
 import { savePanelPos, restorePanelPos } from './panel-pos.js';
+import { getRaw as lsGet, setRaw as lsSet, clamp01 } from './prefs.js';
 
 const NS = 'voidstar.qualia.looper';
 const PANEL_OPEN_KEY = `${NS}.panelOpen`;
@@ -104,10 +105,7 @@ const STRIP_SCHEMA = [
 
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
-const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
-
-function lsGet(k, fallback) { try { const v = localStorage.getItem(k); return v == null ? fallback : v; } catch { return fallback; } }
-function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch {} }
+// clamp01, lsGet (getRaw), lsSet (setRaw) now come from ./prefs.js — see imports.
 
 // Custom temperament = 12 integer cent offsets (C..B), persisted as JSON.
 function loadCustomCents() {

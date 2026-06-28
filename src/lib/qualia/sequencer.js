@@ -20,41 +20,29 @@ import {
   loadPanelOpen, savePanelOpen, downloadPattern, VOICES,
 } from './sequencer-patterns.js';
 import { createKit } from './sequencer-voices.js';
-import { savePanelPos, restorePanelPos } from './panel-pos.js';
+import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
+import { getNum, getBool, setBool, setRaw } from './prefs.js';
 
 // Persisted UI volume — multiplies kit.output while un-muted. Sits
 // alongside the mute toggle as a performance-time mix-ride control.
 // 0.9 default matches createKit()'s default kit.output.gain.
 const SEQ_VOLUME_KEY = 'voidstar.qualia.sequencer.volume';
-function loadSeqVolume() {
-  try {
-    const raw = localStorage.getItem(SEQ_VOLUME_KEY);
-    if (raw == null) return 0.9;
-    const v = parseFloat(raw);
-    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.9;
-  } catch { return 0.9; }
-}
-function saveSeqVolume(v) {
-  try { localStorage.setItem(SEQ_VOLUME_KEY, String(v)); } catch {}
-}
+function loadSeqVolume() { return getNum(SEQ_VOLUME_KEY, 0.9, 0, 1); }
+function saveSeqVolume(v) { setRaw(SEQ_VOLUME_KEY, v); }
 
 // Brickwall limiter on the kit bus — on by default. Persisted across reloads.
 const SEQ_LIMITER_KEY = 'voidstar.qualia.sequencer.limiter';
-function loadSeqLimiter() { try { return localStorage.getItem(SEQ_LIMITER_KEY) !== '0'; } catch { return true; } }
-function saveSeqLimiter(on) { try { localStorage.setItem(SEQ_LIMITER_KEY, on ? '1' : '0'); } catch {} }
+function loadSeqLimiter() { return getBool(SEQ_LIMITER_KEY, true); }
+function saveSeqLimiter(on) { setBool(SEQ_LIMITER_KEY, on); }
 
 // Whether the pattern-settings pane shows alongside the grid. Persisted so a
 // user who collapses it (to give the matrix more room) doesn't get it back on
 // every reopen. Defaults to visible — the grid + settings are meant to be
 // usable side by side.
 const SEQ_SHOW_SETTINGS_KEY = 'voidstar.qualia.sequencer.showSettings';
-function loadShowSettings() {
-  try { return localStorage.getItem(SEQ_SHOW_SETTINGS_KEY) !== '0'; } catch { return true; }
-}
-function saveShowSettings(on) {
-  try { localStorage.setItem(SEQ_SHOW_SETTINGS_KEY, on ? '1' : '0'); } catch {}
-}
+function loadShowSettings() { return getBool(SEQ_SHOW_SETTINGS_KEY, true); }
+function saveShowSettings(on) { setBool(SEQ_SHOW_SETTINGS_KEY, on); }
 
 export function createSequencer({ audio, syncStrudel } = {}) {
   // Snapshot panel-open state from the previous session ONCE — open()/close()
@@ -264,7 +252,11 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       // Read model live each tick so cell toggles, mute changes, and gain
       // tweaks land in the next hit without a play/stop dance.
       const m = model;
-      for (const pad of m.pads) {
+      // Indexed loop, not for…of: this runs on Tone's audio-scheduling thread,
+      // and for…of allocates an iterator object per tick.
+      const pads = m.pads;
+      for (let p = 0; p < pads.length; p++) {
+        const pad = pads[p];
         if (pad.mute) continue;
         if (pad.hits[cellIdx]) {
           kit?.trigger(pad.voice, time, Math.max(0, Math.min(1, pad.gain ?? 1)));
@@ -1055,75 +1047,8 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     }
   }
 
-  // ── Drag / reposition (mirror strudel-hydra) ───────────────────────────
-  let movedByUser = restorePanelPos('sequencer', panel);
-  function reposition() {
-    if (!panel || panel.style.display === 'none') return;
-    const tb = document.getElementById('topbar');
-    if (!tb) return;
-    const h = tb.getBoundingClientRect().height;
-    panel.style.maxHeight = `calc(100vh - ${h + 24}px)`;
-    if (!movedByUser) panel.style.top = (h + 8) + 'px';
-  }
-  window.addEventListener('resize', reposition);
-  const topbarEl = document.getElementById('topbar');
-  if (topbarEl && typeof ResizeObserver !== 'undefined') {
-    new ResizeObserver(reposition).observe(topbarEl);
-  }
-  (() => {
-    const header = document.getElementById('sequencer-header');
-    if (!header || !panel) return;
-    let dragging = false, dx = 0, dy = 0, pointerId = null;
-    const VP_PAD = 4;
-    header.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('button, input, select, textarea')) return;
-      if (e.button !== undefined && e.button !== 0) return;
-      const r = panel.getBoundingClientRect();
-      if (!movedByUser) {
-        panel.style.transform = 'none';
-        panel.style.left = r.left + 'px';
-        panel.style.top  = r.top  + 'px';
-        movedByUser = true;
-      }
-      dx = e.clientX - r.left;
-      dy = e.clientY - r.top;
-      pointerId = e.pointerId;
-      dragging = true;
-      header.classList.add('dragging');
-      try { header.setPointerCapture(pointerId); } catch {}
-      e.preventDefault();
-    });
-    header.addEventListener('pointermove', (e) => {
-      if (!dragging || e.pointerId !== pointerId) return;
-      const r = panel.getBoundingClientRect();
-      const maxX = window.innerWidth  - r.width  - VP_PAD;
-      const maxY = window.innerHeight - 32;
-      const x = Math.min(Math.max(VP_PAD, e.clientX - dx), Math.max(VP_PAD, maxX));
-      const y = Math.min(Math.max(VP_PAD, e.clientY - dy), Math.max(VP_PAD, maxY));
-      panel.style.left = x + 'px';
-      panel.style.top  = y + 'px';
-    });
-    const end = () => {
-      if (!dragging) return;
-      dragging = false;
-      header.classList.remove('dragging');
-      savePanelPos('sequencer', panel);
-      try { header.releasePointerCapture(pointerId); } catch {}
-      pointerId = null;
-    };
-    header.addEventListener('pointerup', end);
-    header.addEventListener('pointercancel', end);
-  })();
-
-  // ResizeObserver — persist position when the user resizes via CSS resize: both.
-  if (panel && typeof ResizeObserver !== 'undefined') {
-    let _rDebounce = 0;
-    new ResizeObserver(() => {
-      if (!movedByUser && !panel.style.width) return;
-      clearTimeout(_rDebounce);
-      _rDebounce = setTimeout(() => savePanelPos('sequencer', panel), 300);
-    }).observe(panel);
-  }
+  // ── Drag / reposition / persist (shared helper) ────────────────────────
+  const reposition = makeDraggablePanel('sequencer', panel);
 
   // ── Tabs ───────────────────────────────────────────────────────────────
   // grid + settings aren't mutually exclusive: they're independent show/hide

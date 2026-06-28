@@ -14,8 +14,11 @@
 //    per-frame, or async work on the hot path. Every handler is wrapped so a
 //    malformed message can't throw into the engine.
 
-// Owned signaling via the Cloudflare Durable Object star relay. The Nostr/WebRTC
-// transport (./entangle-transport.js) remains as a drop-in fallback — same shape.
+// Owned signaling via the Cloudflare Durable Object star relay. (A Nostr/WebRTC
+// transport survives in ./entangle-transport.js as RESEARCH ONLY — it predates
+// the role-aware routing and ignores the `role` arg this file passes, so it is
+// NOT a drop-in fallback as-is; it would need updating before it could be swapped
+// back in.)
 import { createTransport } from './entangle-transport-cf.js';
 import { T, MODES, APP_ID, resolveRoomId, buildJoinUrl, clampToSpec, manifestParam, getPinnedRoom, pinRoom, unpinRoom, readRoomFromQuery, makeRoomId, normalizeRoomSlug } from './entangle-protocol.js';
 import { unpackFeatures, unpackSkeleton } from './pose-features.js';
@@ -49,7 +52,7 @@ export function createEntangle({ core, mesh, actions = {} }) {
   let roomId = null;
   let opened = false;
   const phaseAvailable = typeof actions.phaseNext === 'function';
-  const modes = { pose: true, param: true, vote: true, phase: false };
+  const modes = { pose: true, param: true, vote: true, phase: false, skeleton: false };
   /** @type {Set<string>} param ids the crowd may drive on the active fx. */
   const whitelist = new Set();
   let swayEma = 0;

@@ -41,11 +41,11 @@
 // it can drive audio-reactive fx and flow into recordings. onFeedChange()
 // fires whenever that analyser appears, disappears, or is rebuilt.
 
-import { getStoredDeviceId, wirePicker } from './devices.js';
+import { getStoredDeviceId, wirePicker, openMicStream } from './devices.js';
 import { autoCorrelate } from './pitch.js';
 import { createVoiceShifter } from './voice-shifter.js';
 import { VOX_PRESETS } from './vox-presets.js';
-import { savePanelPos, restorePanelPos } from './panel-pos.js';
+import { makeDraggablePanel } from './panel-pos.js';
 
 const NS              = 'voidstar.qualia.vocoder';
 const PANEL_OPEN_KEY  = `${NS}.panelOpen`;
@@ -210,7 +210,16 @@ function deessCurve(amount, len = 1025) {
 // Voss–McCartney pink noise — a closer match to vocal spectral tilt than
 // white noise, which makes the noise carrier still feel "speech-shaped"
 // rather than hissy.
+// Memoized per (context, seconds): an AudioBuffer is immutable once filled and
+// can be shared by any number of BufferSourceNodes, so there's no reason to
+// regenerate a ~2s × sampleRate Math.random() fill on every graph build (it was
+// generated at least twice per build — carrier + noise carrier).
+const _pinkCache = new WeakMap(); // ctx → Map(seconds → AudioBuffer)
 function pinkNoiseBuffer(ctx, seconds = 2) {
+  let perCtx = _pinkCache.get(ctx);
+  if (!perCtx) { perCtx = new Map(); _pinkCache.set(ctx, perCtx); }
+  const cached = perCtx.get(seconds);
+  if (cached) return cached;
   const buf = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
   const d = buf.getChannelData(0);
   let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
@@ -225,6 +234,7 @@ function pinkNoiseBuffer(ctx, seconds = 2) {
     d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11;
     b6 = w * 0.115926;
   }
+  perCtx.set(seconds, buf);
   return buf;
 }
 
@@ -409,23 +419,10 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   }
 
   async function openMic(deviceId) {
-    // Same fallback ladder as audio.js: try the requested device, then any
-    // default — a stale stored deviceId shouldn't block startup.
-    const attempts = deviceId
-      ? [{ ...MIC_CONSTRAINTS, deviceId: { exact: deviceId } }, { ...MIC_CONSTRAINTS }]
-      : [{ ...MIC_CONSTRAINTS }];
-    let s = null, lastErr = null;
-    for (const constraints of attempts) {
-      try {
-        s = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
-        break;
-      } catch (err) {
-        lastErr = err;
-        if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') break;
-      }
-    }
-    if (!s) throw lastErr || new Error('getUserMedia failed');
-    return s;
+    // Shared fallback ladder (devices.js): try the requested device, then any
+    // default — a stale stored deviceId shouldn't block startup. The vocoder's
+    // own MIC_CONSTRAINTS (low-latency hint) is the capture profile.
+    return openMicStream(deviceId, MIC_CONSTRAINTS);
   }
 
   // True when the harmonizer should drive the vocoder carrier into a chord —
@@ -1417,75 +1414,8 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     });
   })();
 
-  // ── Drag / reposition (mirror sequencer & strudel panels) ──────────────
-  let movedByUser = restorePanelPos('vocoder', panel);
-  function reposition() {
-    if (!panel || panel.style.display === 'none') return;
-    const tb = document.getElementById('topbar');
-    if (!tb) return;
-    const h = tb.getBoundingClientRect().height;
-    panel.style.maxHeight = `calc(100vh - ${h + 24}px)`;
-    if (!movedByUser) panel.style.top = (h + 8) + 'px';
-  }
-  window.addEventListener('resize', reposition);
-  const topbarEl = document.getElementById('topbar');
-  if (topbarEl && typeof ResizeObserver !== 'undefined') {
-    new ResizeObserver(reposition).observe(topbarEl);
-  }
-  (() => {
-    const header = document.getElementById('vocoder-header');
-    if (!header || !panel) return;
-    let dragging = false, dx = 0, dy = 0, pointerId = null;
-    const VP_PAD = 4;
-    header.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('button, input, select, textarea')) return;
-      if (e.button !== undefined && e.button !== 0) return;
-      const r = panel.getBoundingClientRect();
-      if (!movedByUser) {
-        panel.style.transform = 'none';
-        panel.style.left = r.left + 'px';
-        panel.style.top  = r.top  + 'px';
-        movedByUser = true;
-      }
-      dx = e.clientX - r.left;
-      dy = e.clientY - r.top;
-      pointerId = e.pointerId;
-      dragging = true;
-      header.classList.add('dragging');
-      try { header.setPointerCapture(pointerId); } catch {}
-      e.preventDefault();
-    });
-    header.addEventListener('pointermove', (e) => {
-      if (!dragging || e.pointerId !== pointerId) return;
-      const r = panel.getBoundingClientRect();
-      const maxX = window.innerWidth  - r.width  - VP_PAD;
-      const maxY = window.innerHeight - 32;
-      const x = Math.min(Math.max(VP_PAD, e.clientX - dx), Math.max(VP_PAD, maxX));
-      const y = Math.min(Math.max(VP_PAD, e.clientY - dy), Math.max(VP_PAD, maxY));
-      panel.style.left = x + 'px';
-      panel.style.top  = y + 'px';
-    });
-    const end = () => {
-      if (!dragging) return;
-      dragging = false;
-      header.classList.remove('dragging');
-      savePanelPos('vocoder', panel);
-      try { header.releasePointerCapture(pointerId); } catch {}
-      pointerId = null;
-    };
-    header.addEventListener('pointerup', end);
-    header.addEventListener('pointercancel', end);
-  })();
-
-  // ResizeObserver — persist position when the user resizes via CSS resize: both.
-  if (panel && typeof ResizeObserver !== 'undefined') {
-    let _rDebounce = 0;
-    new ResizeObserver(() => {
-      if (!movedByUser && !panel.style.width) return;
-      clearTimeout(_rDebounce);
-      _rDebounce = setTimeout(() => savePanelPos('vocoder', panel), 300);
-    }).observe(panel);
-  }
+  // ── Drag / reposition / persist (shared helper) ────────────────────────
+  const reposition = makeDraggablePanel('vocoder', panel);
 
   // ── Open / close ───────────────────────────────────────────────────────
   function open() {

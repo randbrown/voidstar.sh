@@ -8,26 +8,25 @@
 // name + author + license are parsed from Strudel-style `// @key value`
 // comments at runtime.
 
+import { getRaw, setRaw, getJSON, setJSON } from './prefs.js';
+
 const NS           = 'voidstar.qualia.patterns';
 const CURRENT_KEY  = `${NS}.current`;
 const LIST_KEY     = `${NS}.list`;
 
 // ── Storage ──────────────────────────────────────────────────────────────
 export function loadCurrent() {
-  try { return localStorage.getItem(CURRENT_KEY); } catch { return null; }
+  return getRaw(CURRENT_KEY, null);
 }
 export function saveCurrent(code) {
   if (typeof code !== 'string') return;
-  try { localStorage.setItem(CURRENT_KEY, code); } catch {}
+  setRaw(CURRENT_KEY, code);
 }
 export function loadList() {
-  try {
-    const raw = localStorage.getItem(LIST_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+  return getJSON(LIST_KEY, []);
 }
 export function saveList(list) {
-  try { localStorage.setItem(LIST_KEY, JSON.stringify(list)); } catch {}
+  setJSON(LIST_KEY, list);
 }
 
 // ── Metadata ─────────────────────────────────────────────────────────────

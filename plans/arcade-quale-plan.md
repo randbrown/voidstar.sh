@@ -1,5 +1,10 @@
 # Arcade quale — research & design
 
+> ⚠️ **Historical design + build log (point-in-time).** §10 is a dated build log. Phase 0/1 + 8
+> games shipped (`src/lib/qualia/fx/arcade/`); **Tier B** (virtual gamepad / `T.INPUT` / per-player
+> avatars) remains **deferred/unbuilt**. Read for design rationale, not current state — see
+> [`../AGENTS.md`](../AGENTS.md) and [`../docs/architecture.md`](../docs/architecture.md).
+
 *New qualia-lab fx: interactive retro-game simulations driven by pose, audio, and the
 entangled crowd. Researched against the existing stack (Astro + canvas2d/webgl2/three fx
 harness, MediaPipe pose worker, Cloudflare-relay entanglement). Author: design pass, 2026-06.*

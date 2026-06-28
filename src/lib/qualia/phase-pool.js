@@ -16,22 +16,21 @@
 // existing quale's steps would drift stored exclusions, but that's rare and
 // no worse than the cycle pool's "rename an id" edge.
 
+import { getJSON, setJSON } from './prefs.js';
+import { isInCycle } from './cycle-pool.js';
+
 const NS       = 'voidstar.qualia.phasePool';
 const EXCL_KEY = `${NS}.excluded`;
 
 /** @returns {Object<string, number[]>} raw fxId → excluded-index list map */
 export function loadExcludedMap() {
-  try {
-    const raw = localStorage.getItem(EXCL_KEY);
-    if (!raw) return {};
-    const obj = JSON.parse(raw);
-    return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
-  } catch { return {}; }
+  const obj = getJSON(EXCL_KEY, null);
+  return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
 }
 
 /** @param {Object<string, number[]>} map */
 export function saveExcludedMap(map) {
-  try { localStorage.setItem(EXCL_KEY, JSON.stringify(map)); } catch {}
+  setJSON(EXCL_KEY, map);
 }
 
 /**
@@ -58,20 +57,17 @@ export function saveExcludedFor(fxId, set) {
 }
 
 /**
- * Should step `index` participate in the auto-phase right now? Mirrors
- * cycle-pool.isInCycle:
- * - excluded empty → yes (default)
- * - excluded covers every step → yes (fallback so phase never goes dead)
- * - otherwise → not in excluded
+ * Should step `index` participate in the auto-phase right now? This is exactly
+ * cycle-pool's `isInCycle` predicate (excluded empty → yes; excluded covers
+ * every step → yes, the never-dead fallback; otherwise → not in excluded), kept
+ * as a named alias so phase-pool call sites and docs read in their own terms.
  *
  * @param {Set<number>} excluded
  * @param {number} index
  * @param {number} total  number of declared steps
  */
 export function isStepInPhase(excluded, index, total) {
-  if (excluded.size === 0) return true;
-  if (excluded.size >= total) return true;
-  return !excluded.has(index);
+  return isInCycle(excluded, index, total);
 }
 
 /**

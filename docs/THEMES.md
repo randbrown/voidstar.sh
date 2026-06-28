@@ -35,7 +35,7 @@ exactly, so "voidstar" is a visual no-op.
 | `src/lib/qualia/theme.js` | Runtime controller (`setTheme`/`cycleTheme`/`getTheme`), the switcher wiring (`initThemeControl`), and the canvas knob bridge (`readKnobs`, `onThemeChange`). |
 | `src/components/ThemeBoot.astro` | Inline no-flash bootstrap. In `BaseLayout` head + each lab head. Derives its valid-id list from `THEMES` (via `define:vars`) — no parallel array to hand-sync. |
 | `src/components/ThemeSwitch.astro` | Header switcher `<select>`. |
-| Lab pages: `src/pages/lab/{cymatics,spectrum-pose,pose-particles,qualia,entangle}.astro` | Import `themes.css` + `ThemeBoot`; have an in-HUD theme `<select id="theme-select">` and a `Y` / `shift+Y` cycle shortcut; canvas draw code reads `readKnobs()`. |
+| Main workstation `src/pages/qualia.astro` + lab pages `src/pages/lab/{cymatics,spectrum-pose,pose-particles,entangle}.astro` | Import `themes.css` + `ThemeBoot`; have an in-HUD theme `<select id="theme-select">` and a `Y` / `shift+Y` cycle shortcut; canvas draw code reads `readKnobs()`. (`src/pages/lab/qualia.astro` is just a redirect to `/qualia`.) |
 | `src/lib/qualia/overlay.js` | Shared pose skeleton/sparks/ripple/ASCII overlay (used by qualia). Palette derived from theme accents. |
 | `src/lib/qualia/entangle-ui.js`, `qr.js` | Crowd skeleton hues + QR colors, theme-aware. |
 
