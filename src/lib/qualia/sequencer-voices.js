@@ -14,9 +14,22 @@ import * as Tone from 'tone';
 
 export function createKit() {
   const out    = new Tone.Gain(0.9);
+  // Fixed headroom stage between the voices and the user-volume `out` bus.
+  // Every voice is synthesised near full scale (the MembraneSynth kick and
+  // toms peak at ~0 dBFS on their own), so as soon as two pads land on the
+  // same cell — e.g. the default groove fires kick + closed-hat together on
+  // the downbeat — their sum runs past 0 dBFS and hard-clips at the device
+  // DAC. Clipped low frequencies are exactly what reads as a "distorted"
+  // kick/tom, on any output (it's digital, not a phone-speaker artefact).
+  // Pulling the whole kit down ~4.5 dB here keeps realistic pad stacks under
+  // the ceiling — and below the bus limiter's threshold, so the common
+  // groove never even engages it — while preserving the per-voice balance
+  // tuned below. `out` stays the 0..1 user-volume control on top of this.
+  const bus    = new Tone.Gain(0.6);
+  bus.connect(out);
   // Light room reverb so hits don't feel sterile; wet stays low so the
   // analyser still sees clean transients.
-  const reverb = new Tone.Reverb({ decay: 1.4, wet: 0.12 }).connect(out);
+  const reverb = new Tone.Reverb({ decay: 1.4, wet: 0.12 }).connect(bus);
 
   // ── Kick ────────────────────────────────────────────────────────────
   const kick = new Tone.MembraneSynth({
@@ -24,7 +37,7 @@ export function createKit() {
     octaves:    6,
     oscillator: { type: 'sine' },
     envelope:   { attack: 0.001, decay: 0.4, sustain: 0.01, release: 1.2 },
-  }).connect(out);
+  }).connect(bus);
 
   // ── Snare (noise + bandpass) ────────────────────────────────────────
   const snareNoise = new Tone.NoiseSynth({
@@ -52,7 +65,7 @@ export function createKit() {
     octaves:         1.5,
   });
   hatClosed.volume.value = -8;
-  hatClosed.connect(out);
+  hatClosed.connect(bus);
 
   const hatOpen = new Tone.MetalSynth({
     envelope:        { attack: 0.001, decay: 0.45, release: 0.2 },
@@ -62,12 +75,12 @@ export function createKit() {
     octaves:         1.5,
   });
   hatOpen.volume.value = -10;
-  hatOpen.connect(out);
+  hatOpen.connect(bus);
 
   // ── Toms (low/mid/high — same synth, different note) ────────────────
-  const tomLow  = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(out);
-  const tomMid  = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(out);
-  const tomHigh = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(out);
+  const tomLow  = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(bus);
+  const tomMid  = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(bus);
+  const tomHigh = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(bus);
 
   // ── Crash (long bright shimmer, MetalSynth + reverb) ────────────────
   // Long decay (~1.4s) + heavy modulation index gives the "explosive
@@ -99,7 +112,7 @@ export function createKit() {
     octaves:         1.4,
   });
   ride.volume.value = -13;
-  ride.connect(out);
+  ride.connect(bus);
 
   // ── Rim (short metallic click) ──────────────────────────────────────
   // Original config (resonance 2200, 0.5 octaves, -22 dB, 30 ms decay)
@@ -115,7 +128,7 @@ export function createKit() {
     octaves:         1.0,
   });
   rim.volume.value = -12;
-  rim.connect(out);
+  rim.connect(bus);
 
   // Trigger thunks — voice id → (time, vel) => void. Velocity defaults to
   // 1; the sequencer multiplies its per-pad gain into this before calling.
@@ -146,7 +159,7 @@ export function createKit() {
   const nodes = [
     kick, snareNoise, snareBp, hatClosed, hatOpen,
     tomLow, tomMid, tomHigh, crash, ride, rim,
-    reverb, out,
+    reverb, bus, out,
   ];
 
   return {
