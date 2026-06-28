@@ -1,49 +1,35 @@
-# Astro Starter Kit: Basics
+# voidstar.sh
+
+A **browser-native audiovisual live-coding instrument** — a single-performer workstation that fuses
+live coding (Strudel + Hydra), a pedal-steel/guitar rig with neural amp modeling, a multi-track
+looper, a sequencer, vocal processing, realtime audio analysis, pose tracking, audience
+participation, and shader/canvas visuals into one realtime instrument: **qualia**.
+
+Built for solo pedal-steel + live-coded ambient performance with audio-reactive visuals. Astro
+static site, hosted on Cloudflare Pages.
+
+## Where to start (for agents & contributors)
+
+Read **[`AGENTS.md`](AGENTS.md)** first — it's the map and the non-negotiables. Then the canonical
+docs it links:
+
+- **[`docs/architecture.md`](docs/architecture.md)** — tech stack, decisions, realtime budgets.
+- **[`src/lib/qualia/README.md`](src/lib/qualia/README.md)** — how to author a visualizer ("fx").
+- **[`docs/audio-engine.md`](docs/audio-engine.md)**, **[`docs/looper-and-sequencer.md`](docs/looper-and-sequencer.md)**,
+  **[`docs/livecoding.md`](docs/livecoding.md)**, **[`docs/entanglement.md`](docs/entanglement.md)** — the subsystems.
+- **[`docs/agent-reference.md`](docs/agent-reference.md)** — the creative/brand/aesthetic canon.
+
+## Develop
 
 ```sh
-npm create astro@latest -- --template basics
+npm install
+npm run dev        # http://localhost:4321  — the workstation is at /qualia
+npm run build      # static output to ./dist/
+npm run preview    # preview the production build
 ```
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
-
-## 🚀 Project Structure
-
-Inside of your Astro project, you'll see the following folders and files:
-
-```text
-/
-├── public/
-│   └── favicon.svg
-├── src
-│   ├── assets
-│   │   └── astro.svg
-│   ├── components
-│   │   └── Welcome.astro
-│   ├── layouts
-│   │   └── Layout.astro
-│   └── pages
-│       └── index.astro
-└── package.json
-```
-
-To learn more about the folder structure of an Astro project, refer to [our guide on project structure](https://docs.astro.build/en/basics/project-structure/).
-
-## 🧞 Commands
-
-All commands are run from the root of the project, from a terminal:
-
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
-
-## 👀 Want to learn more?
-
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+The audience-signaling Cloudflare Worker lives in `workers/entangle-signal/` and is deployed
+separately (`wrangler deploy -c workers/entangle-signal/wrangler.toml`).
 
 ## Qualia Lab recordings: post-processing for multi-camera sync
 

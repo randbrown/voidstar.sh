@@ -1,5 +1,13 @@
 # Plan: `qualia` — pluggable lab harness for voidstar visualizers
 
+> ⚠️ **Historical design doc (point-in-time).** This is the *original* plan from when qualia was a
+> three-fx MVP in `/lab/qualia`. Reality has moved well past it: qualia is now the main workstation
+> at **`/qualia`**, there are **22+ fx** (not 3), **Three.js is a dependency** (the "no Three.js"
+> rule below was reversed), and registration lives in `page-init.js`. Read this for *why* the
+> harness exists, not for current state. Current state lives in
+> [`../AGENTS.md`](../AGENTS.md), [`../docs/architecture.md`](../docs/architecture.md), and
+> [`../src/lib/qualia/README.md`](../src/lib/qualia/README.md).
+
 ## Context
 
 `voidstar.sh` is a live-performance Astro app with three working lab pages: **cymatics** (audio-reactive Chladni patterns, ~2781 lines), **spectrum-pose** (FFT + MediaPipe pose, ~1711 lines), and **pose-particles**. Each is a self-contained Astro page with all logic inline. Cymatics has the richest feature set — Strudel REPL, Hydra layer, mic/cam pickers, localStorage presets, zen mode — but its visualizer modes (`chladni`, `radial`, `interference`, `lissajous`, `ripples`, `field`) are **hardcoded `switch` cases** sharing global state. Adding a new mode means editing the file in 5 places. Sliders, presets, and beat-detection are also bespoke per file, duplicated between cymatics and spectrum-pose.

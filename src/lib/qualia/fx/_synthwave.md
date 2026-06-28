@@ -1,7 +1,11 @@
 # Synthwave qfx — implementation spec
 
-Planning doc for a new qualia visualizer. **Not yet implemented.** Read this
-first, then `_template.js`, then one reference fx (recommended: `spectrum.js`
+> ✅ **Shipped.** This was the planning doc; `synthwave.js` is implemented and registered. Kept as
+> the design rationale + the resolved-decisions record (§10). For the live param schema, read the
+> source. (Note: the `ParamText` follow-up in §10a has since landed — `text`/`file` param types now
+> exist; see `types.js`.)
+
+Read this first, then `_template.js`, then one reference fx (recommended: `spectrum.js`
 for the log-binning + multi-mode pattern, plus `vintage-analog.js` for
 multi-mode-with-distinct-renderers within one fx).
 

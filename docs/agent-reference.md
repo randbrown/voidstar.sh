@@ -525,7 +525,7 @@ Important implementation assumptions:
 
 - browser-first
 - client-only where possible
-- GitLab Pages / static hosting compatible
+- Cloudflare Pages / static hosting compatible
 - serverless preferred
 - WebGL2 / canvas / Web Audio
 - MediaPipe pose tracking has been used

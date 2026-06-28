@@ -27,7 +27,7 @@ Plugin ids stay descriptive snake_case (`singularity_lens`, `neural_field`). Plu
 export default {
   id: 'my_fx',                 // snake_case, used as localStorage key + Strudel hook
   name: 'My Fx',               // Title Case, shown in topbar
-  contextType: 'canvas2d',     // 'canvas2d' | 'webgl2'
+  contextType: 'canvas2d',     // 'canvas2d' | 'webgl2' | 'three'
 
   params: [/* ParamSpec[] — see below */],
   presets: { default: { /* required */ } },
@@ -53,6 +53,19 @@ mesh.register(myFx);
 ```
 
 That's it. UI controls are generated from `params`. Persistence is automatic. The Strudel hook (`globalThis.qualia.setParam('my_fx', 'thickness', 0.7)`) just works.
+
+### Beyond the basics (the contract has grown — see `types.js`)
+
+- **`contextType: 'three'`** — a third render path alongside `canvas2d`/`webgl2`. The
+  `WebGLRenderer` is **core-owned and shared** across all three-quales; your `create()` receives it
+  as `opts.renderer` and you must **not** dispose it. Read `three-host.js` for the authoring
+  contract (named imports only, hash-and-rebuild geometry, `disposeObject3D` helper).
+- **`autoPhase: { steps: [...] }`** — declares the topbar `phase` button's behaviour (one partial
+  param dict applied per interval). Omit it and the button reads "phase n/a".
+- **`maxDpr`** — per-quale DPR cap on top of the global 1.5× (heavy raymarchers declare `1.0`).
+- **`crowd.*` modulation channels** — when entanglement is open, `field.crowd` (audience input) is
+  exposed as modulator sources (`crowd.energy`, `crowd.rise`, …) exactly like `audio.*`/`pose.*`.
+  All-zero when no one is connected. See `modulation.js`.
 
 ---
 
@@ -83,6 +96,9 @@ field = {
       confidence,                          // mean visibility over named joints
     }],
     timestamp,                             // performance.now() at last detection
+  },
+  crowd: {                                 // aggregated audience input (Entanglement)
+    x, y, energy, spread, rise, sway, count, confidence,  // all 0 when nobody's connected
   },
   params: { /* current values keyed by your param ids */ },
 };
@@ -120,7 +136,9 @@ If you're using the landmark just as a positional input (not visually overlaying
 
 ## ParamSpec
 
-Three types only. Keep the schema small — 4–8 params is the sweet spot.
+Five types: `range`, `toggle`, `select` (the three core ones below), plus `text` and `file`.
+Keep the schema small — 4–8 params is the sweet spot. `types.js` is the authoritative shape for all
+five.
 
 ```js
 // range  — slider
@@ -134,6 +152,15 @@ Three types only. Keep the schema small — 4–8 params is the sweet spot.
 // select — dropdown
 { id: 'palette', label: 'palette', type: 'select',
   options: ['violet', 'cyan', 'magenta', 'amber'], default: 'violet' }
+
+// text — free-text input (titles, labels, lyrics overlays)
+{ id: 'caption', label: 'caption', type: 'text',
+  placeholder: 'voidstar', default: '' }
+
+// file — single-file picker. The value is the live `File` object (not a
+// string), session-only — it does NOT round-trip through localStorage.
+{ id: 'clip', label: 'clip', type: 'file',
+  accept: 'video/*', default: null }
 ```
 
 Param `id`s become localStorage keys *and* the public Strudel hook surface (`qualia.setParam(fxId, paramId, value)`). Choose them like you would a small public API — clear, stable, lowercase camelCase.
@@ -355,7 +382,7 @@ Read src/lib/qualia/README.md before writing code. Reference fx for style:
 
 Verify:
   - npm run build is clean
-  - boots in /lab/qualia
+  - boots in /qualia
   - swaps cleanly to/from chladni and singularity_lens 5x without errors
   - params persist across reload
   - default audio bindings visibly track a kick beat without sliders

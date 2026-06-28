@@ -1,0 +1,122 @@
+# Maintenance backlog — refactors, perf wins, tech debt
+
+A living, prioritized record of code-health findings from a full-codebase review (2026-06). These
+are **identified, not yet done** — pick from here when you have cleanup budget. Nothing here is a
+correctness emergency; the instrument works. Items are grouped and roughly ordered by leverage.
+
+Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf budgets),
+[`../docs/audio-engine.md`](../docs/audio-engine.md), [`../docs/looper-and-sequencer.md`](../docs/looper-and-sequencer.md),
+[`../docs/livecoding.md`](../docs/livecoding.md), [`../docs/entanglement.md`](../docs/entanglement.md).
+
+---
+
+## A. Structural refactors (highest leverage)
+
+1. **Split `page-init.js` (~5,100 lines).** The entire imperative integration layer is one file.
+   Extract, in rough order of independence: the fx registration list; the export/import
+   `.qualem.zip` bundle (`exportBundle`/`importBundle`); the DOIO keymap + MIDI handlers (already
+   spec'd in `docs/doio-kb16-qualia-keymap.md`); per-panel wiring. `core.js` is already cleanly
+   injectable — this is pure mechanical decomposition.
+2. **Harden + decompose `strudel-hydra.js` (~1,636 lines).**
+   - **Pin the Strudel CDN version** (currently `@latest`) — removes a class of drift bugs.
+   - Add a real `dispose()`: the global `AudioNode.connect` patch, two ResizeObservers, two
+     intervals, window/document listeners, and audio nodes all leak.
+   - Split into transport / audio-tap / cycle-clock / editor-settings / pattern-API.
+3. **Shed UI from the large audio files:** `looper.js` (~2,765), `vocoder.js` (~1,557),
+   `sequencer.js`. Each mixes engine + DOM; extract the panel UI (and the shared drag block, B2).
+4. **Split `overlay.js` (~803 lines)** into pose-visuals / ripples / post-process (ASCII, mosh,
+   edge) — three independent units.
+
+## B. Cross-cutting duplication → shared utilities
+
+1. **`prefs.js` (`boolPref`/`numPref`/`jsonPref`).** The localStorage try/catch + clamp-IIFE
+   boilerplate is copy-pasted across `looper.js`, `sequencer.js`, `sequencer-patterns.js`,
+   `patterns.js`. Also `clamp01` is defined 3× independently.
+2. **`makeDraggablePanel(panel, header, key)`.** The drag/reposition/ResizeObserver block is
+   verbatim in `mixer.js`, `vocoder.js`, `sequencer.js`, and the Strudel panel (~60 lines × 4).
+3. **`fx-helpers.js`.** `ema`/`damp`/`decay`, idle-spectrum sine fallback, fade-fill,
+   smoothed-pose-target, `hslToRgb`, `drawFullscreen` (webgl) are reinvented across nearly every fx
+   (~6 hand-rolled EMA variants). Centralizing also kills per-fx allocation drift.
+4. **Reuse `limiter.js` in the vocoder** (it reimplements `makeLimiter`/`setLimiterEngaged` with a
+   −1.5 dB ceiling) — parameterize the ceiling.
+5. **Move the `getUserMedia` ladder + `MIC_CONSTRAINTS` into `devices.js`** (duplicated in
+   `audio.js` and `vocoder.js`).
+6. **Array-based disposal** for `rig-strip.js` and `vocoder.js` — both hand-list ~40 nodes in
+   teardown (drift risk). Push nodes into an array at creation; iterate on dispose.
+7. **Share the cycle-pool / phase-pool predicate** (`isInCycle` / `isStepInPhase` are the same fn).
+8. **Unify the audio-uniform upload** shape (`webgl.js` vs `three-host.js`).
+
+## C. Realtime performance wins (ranked)
+
+1. **Neural amp LSTM worklet (`worklets/neural-amp.js`)** — hottest loop in the app (O(4·H²)
+   mul-adds + 4 `exp`/`tanh` per hidden unit per sample). tanh/sigmoid **lookup table** (or the
+   tanh-based sigmoid identity to share one call); a WASM/SIMD backend is the bigger lever; add
+   **denormal flushing** for silent-decay state.
+2. **Waveshaper curve churn on knob drags** — rig Earth/Metal and vocoder gate/de-ess rebuild
+   1–2K-float arrays on every slider tick. Quantize/cache by amount, rebuild on epsilon change.
+3. **`pinkNoiseBuffer` generated 2× per vocoder build** — generate once, share.
+4. **`pitch.js` allocates a `Float32Array` per call**, called per frame — hoist to module scratch.
+5. **`field.js scaleAudio` allocates a nested frame object** every frame for every fx with
+   reactivity ≠ 1 — write into a reused scratch frame instead.
+6. **Per-frame canvas2d gradients** — `overlay.js` creates a linear gradient *per bone per person*;
+   `neural-field.js` a radial gradient *per soma*. Cache by quantized hue.
+7. **`sequencer.js` audio callback uses `for…of`** (iterator alloc per tick on the audio thread) —
+   switch to indexed loop.
+8. **`chladni.js evalField` returns 3-tuple arrays per particle** (~6,000 allocs/frame) + a
+   `createImageData` every frame in field mode — return via out-params, reuse the ImageData.
+9. **Strudel editor "perf mode" default-on** in performance contexts (disable per-frame pattern
+   highlighting) — the biggest single main-thread lever during a set.
+10. **Fix/clarify `strudel.perFrame` wired to `core.onFps` (~5 Hz)** — Hydra `a.fft` visuals update
+    at ~5 fps despite the name. Rename or rewire.
+11. **`mp4-timecode.addTimecodeTrack` full second copy** of a multi-GB file via `concat` — pass
+    subarray views to `new Blob([...])`. (Auto-save already skips this pass.)
+12. **`recMixCtx` (recordable-mix AudioContext) is never closed** — persistent extra audio graph
+    after the first recording; notable on mobile. Close on recorder teardown.
+13. **Pose:** downscale the source before `createImageBitmap` (landmarks don't need 1920px) to cut
+    copy + inference cost, especially on phones.
+14. **Looper record** keeps every 128-frame quantum as a separate array then concatenates — pre-grow
+    a single buffer (the live-view ring already does this).
+15. **Overlay sparks** loop iterates the full 2,400-slot ring every frame regardless of live count —
+    track a live-count cursor.
+
+## D. Correctness / robustness
+
+1. **Entangle Worker/DO has no validation, rate-limiting, size-cap, or auth** — bandwidth flood +
+   `role`/`target` spoof are possible. Add a per-socket token bucket, message-size cap, drop unknown
+   topics. (Low-stakes for an intimate set; do before any public deployment.)
+2. **Delete or honestly relabel `entangle-transport.js`** — dead (imported nowhere) and
+   signature-drifted (ignores `role`), so it is *not* the drop-in fallback `entangle.js` claims.
+3. **Smooth direct audience param control** — add a per-param slew so phone-driven sliders don't
+   step on the projection.
+4. **Add `dispose()` paths** where missing: `strudel-hydra.js` (worst), `sequencer.js`,
+   `entangle-ui.js` (intervals + perpetual skeleton rAF), and terminate the **pose worker** on
+   `stopCamera`.
+5. **`entangle.js`** — initialize `modes.skeleton` explicitly (currently relies on falsy-undefined).
+6. **`looper-audio.js stopRecording`** uses `setTimeout` to wait for the OUT boundary — fragile
+   under tab-throttling; the worklet has sample-accurate timing it could use.
+
+## E. Documentation drifts (most fixed in this pass — keep them fixed)
+
+- `agent-reference.md` said "GitLab Pages" → it's **Cloudflare Pages**. *(fixed)*
+- `/lab/qualia` is a redirect to `/qualia`; AGENTS.md / THEMES.md / fx-contract README referenced
+  the old path. *(fixed)*
+- `lab.astro` card + `qualia-plan.md` said "3 reference fx" → there are **22 + arcade**.
+  *(lab.astro fixed; plan files carry a historical-doc banner)*
+- `qualia-plan.md` "no Three.js" is reversed → Three.js is a dependency. *(banner added)*
+- `src/lib/qualia/README.md` (fx contract) predated `types.js`: missing `'three'` context, `text`/
+  `file` param types, `autoPhase`, `maxDpr`, `crowd.*` channels. *(fixed)*
+- `_synthwave.md` said "not yet implemented" → `synthwave.js` ships. *(banner added)*
+- Root `README.md` was the Astro starter boilerplate. *(rewritten)*
+- GitHub handle drift: `lab.astro` linked `github.com/voidstar` vs `randbrown` elsewhere. *(fixed)*
+
+## F. Easy value-adds (low cost, existing infra)
+
+- **`ParamText`/`ParamFile` already exist** in `types.js` — synthwave's deferred custom text and any
+  title/label/cue text is now trivial.
+- **MIDI-learn for any param** — the MIDI CC path + the modulation channel registry already exist;
+  generalize beyond the three hard-coded CCs.
+- **Recorder chapter markers** — a SMPTE timecode track is already written; add a hotkey to drop
+  named markers for post.
+- **Visual metronome / click** bound to `cps` (the tuner + cps clock already exist).
+- **Scene crossfade** between two `qualem` snapshots (whole-experience state already encodes).
+- **Shared offscreen-canvas pool** for the overlay post-FX (each currently keeps its own).
