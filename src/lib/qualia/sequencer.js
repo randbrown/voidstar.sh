@@ -1009,27 +1009,19 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   function refreshKitSelect() {
     if (_kitSelectEl && _kitSelectEl.value !== _kitId) _kitSelectEl.value = _kitId;
   }
-  // (Re)fill a kit <select> with the static catalog + any loaded external packs,
-  // grouped by genre/family so the list stays scannable. Called on render and
-  // whenever a pack is loaded.
+  // (Re)fill a kit <select> with the static catalog + any loaded external packs.
+  // A flat list of full "genre · variant" labels — optgroups render as bulky,
+  // non-selectable headers on mobile and bury the actual options, so we avoid
+  // them. Called on render and whenever a pack is loaded.
   function populateKitOptions(sel) {
     if (!sel) return;
     sel.innerHTML = '';
-    let curGroup = null, groupEl = null;
     for (const k of [...KITS, ..._dynamicKits.values()]) {
-      const g = k.group || '';
-      if (g !== curGroup) {
-        curGroup = g;
-        groupEl = document.createElement('optgroup');
-        groupEl.label = g;
-        sel.appendChild(groupEl);
-      }
       const opt = document.createElement('option');
       opt.value = k.id;
-      // The genre is the optgroup label; show just the variant on the option.
-      opt.textContent = k.label.includes('·') ? k.label.split('·').pop().trim() : k.label;
+      opt.textContent = k.label;   // e.g. "voidstar · synth"
       opt.title = k.desc || '';
-      (groupEl || sel).appendChild(opt);
+      sel.appendChild(opt);
     }
     sel.value = _kitId;
   }
