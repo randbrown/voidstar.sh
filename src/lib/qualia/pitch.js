@@ -16,6 +16,9 @@
  * @param {number} fMax  highest fundamental to consider (Hz)
  * @returns {number} fundamental frequency in Hz, or -1 if unvoiced/too quiet
  */
+// Reused autocorrelation scratch (grown on demand). See note in autoCorrelate.
+let _corr = new Float32Array(0);
+
 export function autoCorrelate(buf, sampleRate, fMin = 70, fMax = 1100) {
   const SIZE = buf.length;
 
@@ -34,7 +37,17 @@ export function autoCorrelate(buf, sampleRate, fMin = 70, fMax = 1100) {
   // confidence test below is then meaningful for a quiet mic too. (Comparing
   // the raw, un-normalised sum against an absolute threshold only ever
   // cleared for a very loud signal, so the tracker produced no pitch.)
-  const corr = new Float32Array(maxLag + 2);
+  //
+  // The corr buffer is hoisted to a reused module-level scratch: this runs
+  // every frame while the harmonizer tracks, so a per-call Float32Array was
+  // pure GC churn. Only indices [minLag, maxLag] are written each call; the two
+  // guard cells the parabolic interp can touch (minLag-1, maxLag+1) are zeroed
+  // to preserve the old fresh-allocation behaviour.
+  const need = maxLag + 2;
+  if (_corr.length < need) _corr = new Float32Array(need);
+  const corr = _corr;
+  corr[minLag - 1] = 0;
+  corr[maxLag + 1] = 0;
   let best = -1, bestVal = 0;
   for (let lag = minLag; lag <= maxLag; lag++) {
     let sum = 0;

@@ -54,14 +54,15 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
    **denormal flushing** for silent-decay state.
 2. **Waveshaper curve churn on knob drags** — rig Earth/Metal and vocoder gate/de-ess rebuild
    1–2K-float arrays on every slider tick. Quantize/cache by amount, rebuild on epsilon change.
-3. **`pinkNoiseBuffer` generated 2× per vocoder build** — generate once, share.
-4. **`pitch.js` allocates a `Float32Array` per call**, called per frame — hoist to module scratch.
-5. **`field.js scaleAudio` allocates a nested frame object** every frame for every fx with
-   reactivity ≠ 1 — write into a reused scratch frame instead.
+3. ✅ **`pinkNoiseBuffer` generated 2× per vocoder build** — *done:* memoized per (ctx, seconds).
+4. ✅ **`pitch.js` allocates a `Float32Array` per call**, called per frame — *done:* hoisted to a
+   reused module scratch (guard cells zeroed to preserve fresh-alloc semantics).
+5. ✅ **`field.js scaleAudio` allocates a nested frame object** every frame for every fx with
+   reactivity ≠ 1 — *done:* writes into a reused module scratch.
 6. **Per-frame canvas2d gradients** — `overlay.js` creates a linear gradient *per bone per person*;
    `neural-field.js` a radial gradient *per soma*. Cache by quantized hue.
-7. **`sequencer.js` audio callback uses `for…of`** (iterator alloc per tick on the audio thread) —
-   switch to indexed loop.
+7. ✅ **`sequencer.js` audio callback uses `for…of`** (iterator alloc per tick on the audio thread)
+   — *done:* indexed loop.
 8. **`chladni.js evalField` returns 3-tuple arrays per particle** (~6,000 allocs/frame) + a
    `createImageData` every frame in field mode — return via out-params, reuse the ImageData.
 9. **Strudel editor "perf mode" default-on** in performance contexts (disable per-frame pattern
@@ -84,14 +85,14 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
 1. **Entangle Worker/DO has no validation, rate-limiting, size-cap, or auth** — bandwidth flood +
    `role`/`target` spoof are possible. Add a per-socket token bucket, message-size cap, drop unknown
    topics. (Low-stakes for an intimate set; do before any public deployment.)
-2. **Delete or honestly relabel `entangle-transport.js`** — dead (imported nowhere) and
-   signature-drifted (ignores `role`), so it is *not* the drop-in fallback `entangle.js` claims.
+2. ✅ **Delete or honestly relabel `entangle-transport.js`** — *done (relabeled):* banner on the
+   file + corrected the `entangle.js` comment so it's marked research-only, not a drop-in fallback.
 3. **Smooth direct audience param control** — add a per-param slew so phone-driven sliders don't
    step on the projection.
 4. **Add `dispose()` paths** where missing: `strudel-hydra.js` (worst), `sequencer.js`,
    `entangle-ui.js` (intervals + perpetual skeleton rAF), and terminate the **pose worker** on
    `stopCamera`.
-5. **`entangle.js`** — initialize `modes.skeleton` explicitly (currently relies on falsy-undefined).
+5. ✅ **`entangle.js`** — *done:* `modes.skeleton` now initialized to `false` explicitly.
 6. **`looper-audio.js stopRecording`** uses `setTimeout` to wait for the OUT boundary — fragile
    under tab-throttling; the worklet has sample-accurate timing it could use.
 

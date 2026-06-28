@@ -210,7 +210,16 @@ function deessCurve(amount, len = 1025) {
 // Voss–McCartney pink noise — a closer match to vocal spectral tilt than
 // white noise, which makes the noise carrier still feel "speech-shaped"
 // rather than hissy.
+// Memoized per (context, seconds): an AudioBuffer is immutable once filled and
+// can be shared by any number of BufferSourceNodes, so there's no reason to
+// regenerate a ~2s × sampleRate Math.random() fill on every graph build (it was
+// generated at least twice per build — carrier + noise carrier).
+const _pinkCache = new WeakMap(); // ctx → Map(seconds → AudioBuffer)
 function pinkNoiseBuffer(ctx, seconds = 2) {
+  let perCtx = _pinkCache.get(ctx);
+  if (!perCtx) { perCtx = new Map(); _pinkCache.set(ctx, perCtx); }
+  const cached = perCtx.get(seconds);
+  if (cached) return cached;
   const buf = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
   const d = buf.getChannelData(0);
   let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
@@ -225,6 +234,7 @@ function pinkNoiseBuffer(ctx, seconds = 2) {
     d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11;
     b6 = w * 0.115926;
   }
+  perCtx.set(seconds, buf);
   return buf;
 }
 

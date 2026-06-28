@@ -1,3 +1,10 @@
+// ⚠️ RESEARCH / REFERENCE ONLY — NOT WIRED IN, NOT A DROP-IN FALLBACK.
+// The live transport is ./entangle-transport-cf.js (Cloudflare DO star relay).
+// This Nostr/WebRTC implementation predates the role-aware routing and ignores
+// the `role` argument the host/client now pass, so swapping it back in would
+// break fan-out. Kept for its relay-selection notes and P2P rationale; update
+// the signature (honour `role`) before relying on it. See plans/maintenance-backlog.md (D2).
+//
 // Entanglement transport seam.
 //
 // The ONLY module that knows about the underlying P2P library. Everything else

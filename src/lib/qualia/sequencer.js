@@ -264,7 +264,11 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       // Read model live each tick so cell toggles, mute changes, and gain
       // tweaks land in the next hit without a play/stop dance.
       const m = model;
-      for (const pad of m.pads) {
+      // Indexed loop, not for…of: this runs on Tone's audio-scheduling thread,
+      // and for…of allocates an iterator object per tick.
+      const pads = m.pads;
+      for (let p = 0; p < pads.length; p++) {
+        const pad = pads[p];
         if (pad.mute) continue;
         if (pad.hits[cellIdx]) {
           kit?.trigger(pad.voice, time, Math.max(0, Math.min(1, pad.gain ?? 1)));
