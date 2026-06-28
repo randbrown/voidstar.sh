@@ -35,8 +35,14 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
    (behavior-preserving — same keys, defaults, and post-parse validation) and pointed `looper.js`'s
    `lsGet`/`lsSet`/`clamp01` at it. Remaining inline localStorage lives in `looper.js`'s larger
    config blob and `strudel-hydra.js`/`vocoder.js` panel state — migrate opportunistically.
-2. **`makeDraggablePanel(panel, header, key)`.** The drag/reposition/ResizeObserver block is
-   verbatim in `mixer.js`, `vocoder.js`, `sequencer.js`, and the Strudel panel (~60 lines × 4).
+2. ✅ **`makeDraggablePanel(id, panel)`.** *Done:* the verbatim drag/reposition/ResizeObserver
+   block (~70 lines × 4) now lives in `panel-pos.js`; `mixer.js`, `sequencer.js`, `vocoder.js`, and
+   `strudel-hydra.js` each call `makeDraggablePanel('<id>', panel)` (grip derived as `${id}-header`,
+   returns `reposition` for their `open()`). **Needs a smoke test** (UI, not build-checkable): open
+   each panel, drag it by the header, confirm it moves and clamps to the viewport, resize via the
+   corner, reload → position persists, and each panel still tucks under the topbar on open.
+   *Remaining:* `entangle-ui.js` and `looper.js`/`page-init.js` have their own drag variants — fold
+   in opportunistically if they match.
 3. **`fx-helpers.js`.** `ema`/`damp`/`decay`, idle-spectrum sine fallback, fade-fill,
    smoothed-pose-target, `hslToRgb`, `drawFullscreen` (webgl) are reinvented across nearly every fx
    (~6 hand-rolled EMA variants). Centralizing also kills per-fx allocation drift.

@@ -14,7 +14,7 @@
 // just polls audio.getLevels() while the panel is open. The topbar CLIP light
 // is wired separately (page-init) off audio.onClipChange so it works panel-shut.
 
-import { savePanelPos, restorePanelPos } from './panel-pos.js';
+import { makeDraggablePanel } from './panel-pos.js';
 
 const OPEN_KEY = 'voidstar.qualia.mixer.open';
 
@@ -217,74 +217,8 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
   if (btnToggle) btnToggle.addEventListener('click', toggle);
   if (btnClose)  btnClose.addEventListener('click', close);
 
-  // ── Drag / reposition (mirrors sequencer / strudel panels) ────────────────
-  let movedByUser = restorePanelPos('mixer', panel);
-  function reposition() {
-    if (!panel || panel.style.display === 'none') return;
-    const tb = document.getElementById('topbar');
-    if (!tb) return;
-    const h = tb.getBoundingClientRect().height;
-    panel.style.maxHeight = `calc(100vh - ${h + 24}px)`;
-    if (!movedByUser) panel.style.top = (h + 8) + 'px';
-  }
-  window.addEventListener('resize', reposition);
-  const topbarEl = document.getElementById('topbar');
-  if (topbarEl && typeof ResizeObserver !== 'undefined') {
-    new ResizeObserver(reposition).observe(topbarEl);
-  }
-  (() => {
-    const header = document.getElementById('mixer-header');
-    if (!header) return;
-    let dragging = false, dx = 0, dy = 0, pointerId = null;
-    const VP_PAD = 4;
-    header.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('button, input, select, textarea')) return;
-      if (e.button !== undefined && e.button !== 0) return;
-      const r = panel.getBoundingClientRect();
-      if (!movedByUser) {
-        panel.style.transform = 'none';
-        panel.style.left = r.left + 'px';
-        panel.style.top  = r.top  + 'px';
-        movedByUser = true;
-      }
-      dx = e.clientX - r.left;
-      dy = e.clientY - r.top;
-      pointerId = e.pointerId;
-      dragging = true;
-      header.classList.add('dragging');
-      try { header.setPointerCapture(pointerId); } catch {}
-      e.preventDefault();
-    });
-    header.addEventListener('pointermove', (e) => {
-      if (!dragging || e.pointerId !== pointerId) return;
-      const r = panel.getBoundingClientRect();
-      const maxX = window.innerWidth  - r.width  - VP_PAD;
-      const maxY = window.innerHeight - 32;
-      const x = Math.min(Math.max(VP_PAD, e.clientX - dx), Math.max(VP_PAD, maxX));
-      const y = Math.min(Math.max(VP_PAD, e.clientY - dy), Math.max(VP_PAD, maxY));
-      panel.style.left = x + 'px';
-      panel.style.top  = y + 'px';
-    });
-    const end = () => {
-      if (!dragging) return;
-      dragging = false;
-      header.classList.remove('dragging');
-      savePanelPos('mixer', panel);
-      try { header.releasePointerCapture(pointerId); } catch {}
-      pointerId = null;
-    };
-    header.addEventListener('pointerup', end);
-    header.addEventListener('pointercancel', end);
-  })();
-
-  if (panel && typeof ResizeObserver !== 'undefined') {
-    let _rDebounce = 0;
-    new ResizeObserver(() => {
-      if (!movedByUser && !panel.style.width) return;
-      clearTimeout(_rDebounce);
-      _rDebounce = setTimeout(() => savePanelPos('mixer', panel), 300);
-    }).observe(panel);
-  }
+  // ── Drag / reposition / persist (shared helper) ───────────────────────────
+  const reposition = makeDraggablePanel('mixer', panel);
 
   // Restore last-session open state (parity with the other panels).
   let wasOpen = false;
