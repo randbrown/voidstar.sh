@@ -14,33 +14,22 @@ import * as Tone from 'tone';
 
 export function createKit() {
   const out    = new Tone.Gain(0.9);
+  // Fixed headroom stage between the voices and the user-volume `out` bus.
+  // Every voice is synthesised near full scale (the MembraneSynth kick and
+  // toms peak at ~0 dBFS on their own), so as soon as two pads land on the
+  // same cell — e.g. the default groove fires kick + closed-hat together on
+  // the downbeat — their sum runs past 0 dBFS and hard-clips at the device
+  // DAC. Clipped low frequencies are exactly what reads as a "distorted"
+  // kick/tom, on any output (it's digital, not a phone-speaker artefact).
+  // Pulling the whole kit down ~4.5 dB here keeps realistic pad stacks under
+  // the ceiling — and below the bus limiter's threshold, so the common
+  // groove never even engages it — while preserving the per-voice balance
+  // tuned below. `out` stays the 0..1 user-volume control on top of this.
+  const bus    = new Tone.Gain(0.6);
+  bus.connect(out);
   // Light room reverb so hits don't feel sterile; wet stays low so the
   // analyser still sees clean transients.
-  const reverb = new Tone.Reverb({ decay: 1.4, wet: 0.12 }).connect(out);
-
-  // ── Low-end conditioning bus (kick + toms) ──────────────────────────
-  // Phone-speaker fix. The kick (~33 Hz) and toms (55–98 Hz) are nearly
-  // pure sine tones whose fundamentals sit at or below what a phone speaker
-  // can physically move air at. Driven at performance level the tiny driver
-  // goes non-linear (mechanical buzz/distortion) and the unreproducible
-  // sub-bass eats its whole excursion budget — which is why they read as
-  // "distorted" on an Android handset but clean on desktop/headphones that
-  // actually have low-end. Three cheap stages tame it without gutting the
-  // bass on full-range systems:
-  //   1. a 34 Hz high-pass strips the infrasonic energy that only makes the
-  //      cone flap — inaudible on a real woofer, headroom back on a phone;
-  //   2. gentle wave-shaping adds 2nd/3rd harmonics so the pitch still reads
-  //      via the "missing fundamental" on a small speaker, and soft-clips
-  //      peaks instead of letting coincident kick+tom hits hard-clip the
-  //      device sum;
-  //   3. per-voice level trims (below) keep a kick+tom stack under the bus
-  //      limiter's threshold, so the brickwall DynamicsCompressor isn't
-  //      gain-tracking the bass waveform within each cycle (which itself
-  //      distorts sustained low tones).
-  const lowHp  = new Tone.Filter({ type: 'highpass', frequency: 34, Q: 0.707 });
-  const lowSat = new Tone.Distortion({ distortion: 0.12, oversample: '4x', wet: 0.22 });
-  lowHp.connect(lowSat);
-  lowSat.connect(out);
+  const reverb = new Tone.Reverb({ decay: 1.4, wet: 0.12 }).connect(bus);
 
   // ── Kick ────────────────────────────────────────────────────────────
   const kick = new Tone.MembraneSynth({
@@ -48,8 +37,7 @@ export function createKit() {
     octaves:    6,
     oscillator: { type: 'sine' },
     envelope:   { attack: 0.001, decay: 0.4, sustain: 0.01, release: 1.2 },
-  }).connect(lowHp);
-  kick.volume.value = -3;
+  }).connect(bus);
 
   // ── Snare (noise + bandpass) ────────────────────────────────────────
   const snareNoise = new Tone.NoiseSynth({
@@ -67,6 +55,8 @@ export function createKit() {
   // hats were inaudible. Drop resonance to 2.8 kHz (still bright but
   // squarely in the speaker's sweet spot) and raise the trims by ~10 dB
   // so the closed/open contrast stays intact at louder absolute levels.
+  // A high-pass on the kit output keeps the boosted trims from muddying
+  // the kick band.
   const hatClosed = new Tone.MetalSynth({
     envelope:        { attack: 0.001, decay: 0.06, release: 0.02 },
     harmonicity:     5.1,
@@ -75,7 +65,7 @@ export function createKit() {
     octaves:         1.5,
   });
   hatClosed.volume.value = -8;
-  hatClosed.connect(out);
+  hatClosed.connect(bus);
 
   const hatOpen = new Tone.MetalSynth({
     envelope:        { attack: 0.001, decay: 0.45, release: 0.2 },
@@ -85,20 +75,12 @@ export function createKit() {
     octaves:         1.5,
   });
   hatOpen.volume.value = -10;
-  hatOpen.connect(out);
+  hatOpen.connect(bus);
 
   // ── Toms (low/mid/high — same synth, different note) ────────────────
-  // Routed through the low-end bus (HP + soft-saturation) like the kick.
-  // An explicit short envelope (sustain 0, ~0.5 s release) replaces the
-  // MembraneSynth default's long boomy tail so the low fundamentals don't
-  // linger and mud up a phone speaker.
-  const tomEnv = { attack: 0.001, decay: 0.3, sustain: 0, release: 0.5 };
-  const tomLow  = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4, envelope: { ...tomEnv } }).connect(lowHp);
-  const tomMid  = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4, envelope: { ...tomEnv } }).connect(lowHp);
-  const tomHigh = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4, envelope: { ...tomEnv } }).connect(lowHp);
-  tomLow.volume.value  = -4;
-  tomMid.volume.value  = -4;
-  tomHigh.volume.value = -4;
+  const tomLow  = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(bus);
+  const tomMid  = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(bus);
+  const tomHigh = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4 }).connect(bus);
 
   // ── Crash (long bright shimmer, MetalSynth + reverb) ────────────────
   // Long decay (~1.4s) + heavy modulation index gives the "explosive
@@ -130,7 +112,7 @@ export function createKit() {
     octaves:         1.4,
   });
   ride.volume.value = -13;
-  ride.connect(out);
+  ride.connect(bus);
 
   // ── Rim (short metallic click) ──────────────────────────────────────
   // Original config (resonance 2200, 0.5 octaves, -22 dB, 30 ms decay)
@@ -146,7 +128,7 @@ export function createKit() {
     octaves:         1.0,
   });
   rim.volume.value = -12;
-  rim.connect(out);
+  rim.connect(bus);
 
   // Trigger thunks — voice id → (time, vel) => void. Velocity defaults to
   // 1; the sequencer multiplies its per-pad gain into this before calling.
@@ -177,7 +159,7 @@ export function createKit() {
   const nodes = [
     kick, snareNoise, snareBp, hatClosed, hatOpen,
     tomLow, tomMid, tomHigh, crash, ride, rim,
-    lowHp, lowSat, reverb, out,
+    reverb, bus, out,
   ];
 
   return {

@@ -22,7 +22,12 @@ export const LIMITER_CEILING_DB = -1.0;   // ceiling when engaged — just under
 export function makeLimiter(ctx, on = true) {
   const node = ctx.createDynamicsCompressor();
   node.knee.value    = 0;        // hard knee — a wall, not a slope
-  node.attack.value  = 0.003;    // catch transients fast
+  // 1 ms attack. The old 3 ms let the leading edge of a low-frequency
+  // transient (a kick is ~30 ms per cycle) pass before the gain reduction
+  // engaged, so peaks slipped through several dB above the ceiling and
+  // clipped the device DAC anyway. 1 ms catches the front of the wave while
+  // still being slow enough not to distort sustained mids/highs.
+  node.attack.value  = 0.001;
   node.release.value = 0.10;     // recover gently so it doesn't pump
   setLimiterEngaged(node, on);
   return node;
