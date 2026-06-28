@@ -17,7 +17,7 @@ import {
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
 import {
-  resolveManifest, toStrudelSampleMap, VOIDSTAR_LOFI_PACK_URL,
+  resolveManifest, toStrudelSampleMap, BUNDLED_PACKS,
 } from './samples-manifest.js';
 
 // Pinned, NOT @latest: a live set must not break because unpkg served a new
@@ -63,16 +63,18 @@ async function registerSharedSamples() {
     await sleep(150);
   }
   if (typeof globalThis.samples !== 'function') return;
-  try {
-    const resolved = await resolveManifest(VOIDSTAR_LOFI_PACK_URL);
-    // Absolute URLs in the map → Strudel registers them as-is (empty base).
-    // `lofi_` prefix keeps this additive (doesn't clobber Strudel's stock
-    // bd/sd/hh): play as s("lofi_bd lofi_sd") or s("bd sd").bank("lofi").
-    await globalThis.samples(toStrudelSampleMap(resolved, 'lofi_'));
-    _sharedSamplesRegistered = true;
-  } catch (e) {
-    console.warn('[qualia] shared samples registration failed:', e);
+  // Register every bundled genre pack under its own `<id>_` namespace so they're
+  // additive (never clobber Strudel's stock bd/sd/hh). Play a pack as
+  // s("metal_bd metal_sd") or idiomatically s("bd sd").bank("metal").
+  for (const pack of BUNDLED_PACKS) {
+    try {
+      const resolved = await resolveManifest(pack.url);
+      await globalThis.samples(toStrudelSampleMap(resolved, pack.prefix));
+    } catch (e) {
+      console.warn(`[qualia] shared samples (${pack.id}) registration failed:`, e);
+    }
   }
+  _sharedSamplesRegistered = true;
 }
 
 function injectLateStrudelOverride() {
@@ -1515,10 +1517,25 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     } catch { return false; }
   }
 
+  // Register an external sample pack into Strudel at runtime — used by the
+  // sequencer's one-click GitHub loader. `arg` is whatever Strudel's samples()
+  // accepts: a `github:user/repo` shorthand or a strudel.json URL. Ensures the
+  // bundle is loaded and `samples()` exists first. Returns true on success.
+  async function loadSamplesSpec(arg) {
+    try { await loadStrudelScript(); } catch {}
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let i = 0; i < 60 && typeof globalThis.samples !== 'function'; i++) await sleep(150);
+    if (typeof globalThis.samples !== 'function') return false;
+    try { await globalThis.samples(arg); return true; }
+    catch (e) { console.warn('[qualia] load samples spec failed:', e); return false; }
+  }
+
   return {
     open,
     close,
     stopPlayback,
+    /** Register an external pack (github: shorthand or strudel.json URL). */
+    loadSamplesSpec,
     play,
     stop,
     isPlaying: () => isPlayingFlag,

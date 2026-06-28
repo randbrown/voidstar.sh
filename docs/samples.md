@@ -58,12 +58,12 @@ uses, so all three base styles resolve identically in both engines.
 ```
 
 - **Strudel side** — `strudel-hydra.js` calls `registerSharedSamples()` once the
-  `@strudel/repl` bundle has loaded. It resolves the bundled pack and hands the
-  name→URL map to the global `samples()` the bundle exposes (same path as
+  `@strudel/repl` bundle has loaded. It resolves every bundled pack and hands the
+  name→URL maps to the global `samples()` the bundle exposes (same path as
   `getAudioContext` / `superdough` / `soundMap`). Registration is **additive** —
-  names are namespaced with a `lofi_` prefix so they don't clobber Strudel's
-  stock `bd`/`sd`/`hh` banks. Play them as `s("lofi_bd lofi_sd lofi_hh")` or
-  idiomatically with `s("bd sd hh").bank("lofi")`. Decoding is lazy (on first
+  each pack is namespaced with a `<genre>_` prefix so it never clobbers Strudel's
+  stock `bd`/`sd`/`hh` banks. Play a pack as `s("metal_bd metal_sd")` or
+  idiomatically with `s("bd sd hh").bank("metal")`. Decoding is lazy (on first
   play), so this is cheap at load.
 - **Sequencer side** — `createSampleKit({ manifestUrl, voiceMap })` in
   `sequencer-voices.js` resolves the same manifest, fetches + `decodeAudioData`s
@@ -71,8 +71,8 @@ uses, so all three base styles resolve identically in both engines.
   `ToneBufferSource`s. `voiceMap` maps the sequencer's stable voice ids
   (`kick`, `snare`, `hat-c`, …) onto manifest sample names (`bd`, `sd`, `hh`, …).
 
-The single shared constant `VOIDSTAR_LOFI_PACK_URL` (in `samples-manifest.js`)
-is what both sides point at, so there's no chance of them drifting apart.
+The single shared list `BUNDLED_PACKS` (in `samples-manifest.js`) is what both
+sides enumerate, so there's no chance of them drifting apart.
 
 ---
 
@@ -80,38 +80,87 @@ is what both sides point at, so there's no chance of them drifting apart.
 
 A **kit** is the instrument the sequencer pads play through. Every kit speaks the
 same voice ids, so a groove re-voices onto any kit without touching the grid.
-Kits live in `sequencer-kits.js`; the selected kit persists across reloads
-(`voidstar.qualia.sequencer.kit`) and is picked from the **kit** dropdown in the
-sequencer's settings pane. Switching is live (no play/stop).
+Kits live in `sequencer-kits.js` and are picked from the **kit** dropdown in the
+sequencer's settings pane (grouped by genre, synth/samples under each). Switching
+is live (no play/stop).
 
-| Kit | Type | What it is |
-|---|---|---|
-| `default · synth` | synth | The original 808/909-flavoured Tone.js kit. Clean, punchy, always available offline. **Unchanged.** |
-| `lofi · synth` | synth | Warm, filtered, tape-flavoured synthesis (low-pass blanket → light bit-crush → roomy reverb; softer, lower-tuned voices). Boom-bap / chillhop feel. |
-| `lofi tape · samples` | sample | The bundled synthetic lofi one-shots, loaded from the shared `strudel.json` — the same sounds Strudel plays via `s("bd sd hh")`. |
+Each genre family ships in **two variants**:
+
+| Family | What it is |
+|---|---|
+| **voidstar** | Clean, punchy 808/909 — the original default. |
+| **lofi** | Warm, filtered boom-bap / chillhop. |
+| **tape** | Saturated cassette character — mellow, rolled-off, dusty. |
+| **dub** | Heavy dubstep — deep sub kick, huge snare, wide space (San Holo / Com Truise). |
+| **jazz** | Clean modern-jazz kit — soft, brushed, ride-forward. |
+| **metal** | Tight, aggressive metal — clicky kick, cracking snare (Pantera / Metallica / Gojira). |
+| **death** | Extreme death metal — ultra-tight kick, pingy snare (Suffocation / Devourment). |
+| **hiphop** | Dusty Dilla-style boom-bap. |
+
+- **synth** variant — a Tone.js synth factory (offline, zero-network, always
+  available). `voidstar` and `lofi` are hand-written (`createKit` /
+  `createLofiKit`); the rest are data-driven specs fed to `createSynthKit`.
+- **samples** variant — decoded one-shots from the bundled `strudel.json` pack of
+  the same genre (`createSampleKit`), the same files Strudel registers, playable
+  in the REPL as `s("bd sd hh").bank("<genre>")`.
 
 Synth kits are zero-network and always work. Sample kits load asynchronously and
 degrade gracefully — an unmapped or not-yet-decoded voice is simply silent.
+
+**Per-pattern kit.** The selected kit is saved on the pattern model (`kitId`), so
+a recalled or downloaded `.seq.json` (and a `.qualem` snapshot) restores its
+instrument. The last-used kit (`voidstar.qualia.sequencer.kit`) seeds fresh
+patterns; an unknown id normalises back to the default.
 
 ---
 
 ## The bundled synthetic packs
 
 `scripts/gen-samples.mjs` is a **dependency-free** Node generator that
-synthesises lofi drum one-shots with pure math (no recordings → tiny, CC0-clean,
-deterministic) and writes them as 16-bit/22.05 kHz mono WAVs plus a
-`strudel.json` to `public/samples/voidstar-lofi/`. Lofi character comes from the
-low sample rate + sample-rate reduction + bit-crush + soft saturation + a touch
-of hiss, applied as a shared finishing chain so the kit reads as one instrument.
+synthesises one drum pack **per genre** with pure math (no recordings → tiny,
+CC0-clean, deterministic) and writes each as 16-bit/22.05 kHz mono WAVs plus a
+`strudel.json` to `public/samples/<genre>/`. Genre character comes from a
+per-genre profile (tuning, decay, brightness) plus a shared finishing chain
+(sample-rate reduction + bit-crush + saturation + hiss) dialed per genre — clean
+for jazz/metal/death, dusty for lofi/tape/hiphop. The pack list lives in
+`BUNDLED_PACKS` (`samples-manifest.js`); both engines key off it.
 
 ```
-node scripts/gen-samples.mjs     # regenerate after editing voice recipes
+npm run gen:samples              # → node scripts/gen-samples.mjs
 ```
 
-The whole pack is ~150 KB, so it's committed and served statically — the sample
-kit and Strudel's `s("bd sd hh lt mt ht rd cr oh rim").bank("lofi")` work offline
+All eight packs total ~1.5 MB, committed and served statically, so every kit's
+sample variant — and `s("bd sd hh").bank("<genre>")` in Strudel — works offline
 out of the box. Re-run the script and commit the regenerated WAVs + json after
-edits.
+editing a profile.
+
+## One-click GitHub pack loader
+
+The sequencer settings pane has a **pack loader** — a text field + genre preset
+chips — that pulls an external Strudel pack into **both engines** at once:
+
+- registers it in Strudel (so `s("name")` / `.bank()` work in the REPL), and
+- adds a runtime **sequencer sample kit** (best-effort name matching via
+  `EXTERNAL_VOICE_MAP`, since external packs use names like `sn`/`cp`), then
+  selects it.
+
+Loaded packs persist (`voidstar.qualia.sequencer.extPacks`) and reappear under a
+**loaded** group in the kit picker on reload. Type any `github:user/repo`
+(optionally `/branch`) or a direct `strudel.json` URL, or tap a preset:
+
+| Chip | Pack | Note |
+|---|---|---|
+| lofi | `github:eddyflux/crate` | lo-fi / boom-bap one-shots |
+| hiphop | `github:tidalcycles/Dirt-Samples` | classic hip-hop hits + drum machines |
+| jazz | `github:yaxu/clean-breaks` | acoustic break kits |
+| dubstep | `github:switchangel/breaks` | heavy / halftime breaks |
+| ambient | `github:mot4i/garden` | textural / ambient material |
+| metal | `github:tidalcycles/Dirt-Samples` | metallic / industrial banks (`s("metal")`) |
+
+> These are real, public repos chosen as starting points — contents and licenses
+> vary per repo, so audition and check terms before using one in a set. The
+> Strudel side always gets every name; the sequencer side maps what it can onto
+> the ten pad voices and leaves the rest silent.
 
 ---
 

@@ -343,6 +343,115 @@ export function createLofiKit() {
   };
 }
 
+// ── Config-driven synth kit ────────────────────────────────────────────────
+// The default and lofi kits above are hand-written; the remaining genre synth
+// kits (tape/dub/jazz/metal/death/hiphop) share this one parameterised builder
+// so a kit is a small data `spec`, not 100 lines of copy-paste. Same ten voice
+// ids, same {output, trigger, has, dispose} interface. The specs live in
+// sequencer-kits.js (SYNTH_SPECS).
+//
+// spec shape (all fields optional except per-voice synth params):
+//   { outGain, busGain, lowpass, bitcrush:{bits,wet}, drive, driveWet,
+//     reverb:{decay,wet},
+//     kick:{synth, note, dur},
+//     snare:{noise, bp:{freq,Q}, dur, toReverb, body:{synth,note,dur,vol}},
+//     hatC:{synth,note,dur,vol}, hatO:{…}, toms:{synth, notes:[3], dur},
+//     crash:{synth,note,dur,vol,toReverb}, ride:{…}, rim:{…} }
+export function createSynthKit(spec = {}) {
+  const out = new Tone.Gain(spec.outGain ?? 0.9);
+  const bus = new Tone.Gain(spec.busGain ?? 0.6);
+
+  // Optional bus tone-shaping: bit-crush → drive → low-pass blanket → out.
+  // BitCrusher / Distortion are guarded so a missing worklet can't break the kit.
+  const chain = [];
+  let crush = null, drive = null, blanket = null;
+  if (spec.bitcrush) {
+    try {
+      crush = new Tone.BitCrusher(spec.bitcrush.bits ?? 8);
+      crush.wet.value = spec.bitcrush.wet ?? 0.3;
+      chain.push(crush);
+    } catch (e) { console.warn('[qualia] synth-kit BitCrusher unavailable:', e); crush = null; }
+  }
+  if (spec.drive) {
+    try {
+      drive = new Tone.Distortion(spec.drive);
+      drive.wet.value = spec.driveWet ?? 0.3;
+      chain.push(drive);
+    } catch (e) { console.warn('[qualia] synth-kit Distortion unavailable:', e); drive = null; }
+  }
+  if (spec.lowpass) {
+    blanket = new Tone.Filter(spec.lowpass, 'lowpass');
+    blanket.Q.value = 0.4;
+    chain.push(blanket);
+  }
+  bus.chain(...chain, out);
+
+  const reverb = new Tone.Reverb(spec.reverb || { decay: 1.4, wet: 0.12 }).connect(bus);
+
+  const kick = new Tone.MembraneSynth(spec.kick?.synth || {}).connect(bus);
+
+  // Snare: noise → bandpass (+ optional membrane body), tunable wet path.
+  const snareNoise = new Tone.NoiseSynth(spec.snare?.noise || {});
+  const snareBp = new Tone.Filter(spec.snare?.bp?.freq ?? 1800, 'bandpass');
+  snareBp.Q.value = spec.snare?.bp?.Q ?? 1.2;
+  snareNoise.connect(snareBp);
+  snareBp.connect(spec.snare?.toReverb ? reverb : bus);
+  let snareBody = null;
+  if (spec.snare?.body) {
+    snareBody = new Tone.MembraneSynth(spec.snare.body.synth || {});
+    snareBody.volume.value = spec.snare.body.vol ?? -10;
+    snareBody.connect(bus);
+  }
+
+  const mkMetal = (cfg) => {
+    const m = new Tone.MetalSynth(cfg?.synth || {});
+    if (typeof cfg?.vol === 'number') m.volume.value = cfg.vol;
+    m.connect(cfg?.toReverb ? reverb : bus);
+    return m;
+  };
+  const hatC = mkMetal(spec.hatC);
+  const hatO = mkMetal(spec.hatO);
+  const crash = mkMetal(spec.crash);
+  const ride = mkMetal(spec.ride);
+  const rim = mkMetal(spec.rim);
+
+  const tomSynth = () => new Tone.MembraneSynth(spec.toms?.synth || { pitchDecay: 0.05, octaves: 4 }).connect(bus);
+  const tomLow = tomSynth(), tomMid = tomSynth(), tomHigh = tomSynth();
+  const tomNotes = spec.toms?.notes || ['A1', 'D2', 'G2'];
+
+  const kNote = spec.kick?.note || 'C1', kDur = spec.kick?.dur || '8n';
+  const sDur = spec.snare?.dur || '16n';
+  const tDur = spec.toms?.dur || '8n';
+  const triggers = {
+    'kick':  (t, v = 1) => kick.triggerAttackRelease(kNote, kDur, t, v),
+    'snare': (t, v = 1) => {
+      snareNoise.triggerAttackRelease(sDur, t, v);
+      if (snareBody) snareBody.triggerAttackRelease(spec.snare.body.note || 'G2', spec.snare.body.dur || '16n', t, v);
+    },
+    'hat-c': (t, v = 1) => hatC.triggerAttackRelease(spec.hatC?.note || 'C5', spec.hatC?.dur || '32n', t, v),
+    'hat-o': (t, v = 1) => hatO.triggerAttackRelease(spec.hatO?.note || 'C5', spec.hatO?.dur || '8n', t, v),
+    'tom-l': (t, v = 1) => tomLow.triggerAttackRelease(tomNotes[0], tDur, t, v),
+    'tom-m': (t, v = 1) => tomMid.triggerAttackRelease(tomNotes[1], tDur, t, v),
+    'tom-h': (t, v = 1) => tomHigh.triggerAttackRelease(tomNotes[2], tDur, t, v),
+    'crash': (t, v = 1) => crash.triggerAttackRelease(spec.crash?.note || 'C5', spec.crash?.dur || '4n', t, v),
+    'ride':  (t, v = 1) => ride.triggerAttackRelease(spec.ride?.note || 'C5', spec.ride?.dur || '8n', t, v),
+    'rim':   (t, v = 1) => rim.triggerAttackRelease(spec.rim?.note || 'A4', spec.rim?.dur || '16n', t, v),
+  };
+
+  const nodes = [
+    kick, snareNoise, snareBp, snareBody, hatC, hatO,
+    tomLow, tomMid, tomHigh, crash, ride, rim,
+    reverb, crush, drive, blanket, bus, out,
+  ].filter(Boolean);
+
+  return {
+    output: out,
+    trigger(voiceId, time, velocity) { const fn = triggers[voiceId]; if (fn) fn(time, velocity); },
+    has(voiceId) { return Object.prototype.hasOwnProperty.call(triggers, voiceId); },
+    dispose() { for (const n of nodes) { try { n.dispose?.(); } catch {} } },
+  };
+}
+
 // ── Sample kit ───────────────────────────────────────────────────────────
 // Plays decoded one-shots from a Strudel-format `strudel.json` manifest — the
 // exact same packs Strudel loads via `samples()`, so a sound heard in the REPL
@@ -379,8 +488,14 @@ export function createSampleKit({ manifestUrl, voiceMap = {}, gain = 0.95 } = {}
     const rawCtx = Tone.getContext().rawContext;
     const tasks = [];
     for (const voiceId of Object.keys(voiceMap)) {
-      const sampleName = voiceMap[voiceId];
-      const entry = resolved.names[sampleName];
+      // A mapping value may be a single sample name or an ordered list of
+      // candidates (e.g. ['sd','sn','snare']) — used by externally-loaded packs
+      // whose naming differs from Strudel's bd/sd/hh convention. Take the first
+      // name that exists in the manifest.
+      const cand = voiceMap[voiceId];
+      const names = Array.isArray(cand) ? cand : [cand];
+      const sampleName = names.find((n) => resolved.names[n]);
+      const entry = sampleName ? resolved.names[sampleName] : null;
       // First variation of an array; for a pitched map, the first value.
       const url = Array.isArray(entry) ? entry[0]
                 : (entry && typeof entry === 'object') ? Object.values(entry)[0]

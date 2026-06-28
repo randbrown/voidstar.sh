@@ -1649,6 +1649,26 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.12rem 0.35rem; outline: none; cursor: pointer;
     }
     .seq-kit-select:focus { border-color: var(--accent); color: var(--accent); }
+    /* One-click GitHub pack loader — spans the full settings row. */
+    .seq-pack-loader {
+      flex-basis: 100%; display: flex; flex-direction: column; gap: 0.3rem;
+      margin-top: 0.1rem;
+    }
+    .seq-pack-row { display: flex; gap: 0.3rem; align-items: stretch; }
+    .seq-pack-input {
+      flex: 1; min-width: 0;
+      background: rgba(0,0,0,0.3); color: var(--cyan);
+      border: 1px solid var(--border); border-radius: 4px;
+      font-family: var(--font-mono); font-size: 0.72rem;
+      padding: 0.12rem 0.4rem; outline: none;
+    }
+    .seq-pack-input:focus { border-color: var(--accent); color: var(--accent); }
+    .seq-pack-presets { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+    .seq-pack-chip { padding: 0.05rem 0.5rem; font-size: 0.68rem; }
+    .seq-pack-status {
+      font-size: 0.66rem; color: var(--muted); min-height: 0.9rem;
+    }
+    .seq-pack-status[data-state="err"] { color: var(--pink, #f0f); }
     /* [−] [input] [+] cluster — the buttons are oversized vs. the native
        UA arrows so a finger can hit them without summoning the OS
        keyboard. Uses inline-flex so the wrapper participates in the

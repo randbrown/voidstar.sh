@@ -19,10 +19,29 @@ import {
   removeFromList, clonePattern, defaultPattern, resizeHits, makePad,
   loadPanelOpen, savePanelOpen, downloadPattern, VOICES,
 } from './sequencer-patterns.js';
-import { KITS, getKit, DEFAULT_KIT_ID } from './sequencer-kits.js';
+import { KITS, getKit, DEFAULT_KIT_ID, EXTERNAL_VOICE_MAP } from './sequencer-kits.js';
+import { createSampleKit } from './sequencer-voices.js';
+import { parsePackSpec } from './samples-manifest.js';
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
-import { getNum, getBool, setBool, setRaw, getRaw } from './prefs.js';
+import { getNum, getBool, setBool, setRaw, getRaw, getJSON, setJSON } from './prefs.js';
+
+// Curated, real GitHub sample packs for the one-click loader — starting points
+// across the requested genres. Contents/licenses vary per repo; treat as
+// examples to audition, not vetted CC0 sets. Loaded into BOTH engines.
+const PACK_PRESETS = [
+  { label: 'lofi',    spec: 'github:eddyflux/crate',           title: 'Eddyflux "crate" — lo-fi / boom-bap one-shots' },
+  { label: 'hiphop',  spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — classic hip-hop hits + drum machines' },
+  { label: 'jazz',    spec: 'github:yaxu/clean-breaks',        title: 'Clean breaks — acoustic break kits (jazzy drums)' },
+  { label: 'dubstep', spec: 'github:switchangel/breaks',       title: 'Switch Angel breaks — heavy / halftime break fodder' },
+  { label: 'ambient', spec: 'github:mot4i/garden',             title: '"garden" — textural / ambient material (verify contents)' },
+  { label: 'metal',   spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — metallic / industrial banks (s("metal"))' },
+];
+
+// Persisted list of externally-loaded packs so they survive a reload.
+const SEQ_EXTPACKS_KEY = 'voidstar.qualia.sequencer.extPacks';
+function loadExtPacks() { const l = getJSON(SEQ_EXTPACKS_KEY, []); return Array.isArray(l) ? l : []; }
+function saveExtPacks(list) { setJSON(SEQ_EXTPACKS_KEY, list); }
 
 // Persisted UI volume — multiplies kit.output while un-muted. Sits
 // alongside the mute toggle as a performance-time mix-ride control.
@@ -86,7 +105,26 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // Kit + scheduling state, lazily created on first open() since spinning
   // up Tone.js touches the AudioContext (must follow a user gesture).
   let kit = null;
-  let _kitId = loadSeqKit();   // selected instrument; persisted across reloads
+  // Runtime kits loaded from external GitHub/URL packs (id → kit catalog entry).
+  // Metadata only — the sample buffers load lazily when the kit is first built.
+  const _dynamicKits = new Map();
+  function addDynamicKit(p) {
+    _dynamicKits.set(p.id, {
+      id: p.id, group: 'loaded', label: `${p.label} · samples`, type: 'sample',
+      desc: `External pack: ${p.strudelArg}`,
+      make: () => createSampleKit({ manifestUrl: p.manifestUrl, voiceMap: EXTERNAL_VOICE_MAP }),
+      _spec: p,
+    });
+  }
+  // Resolve a kit id against the dynamic registry first, then the static catalog.
+  function resolveKit(id) { return _dynamicKits.get(id) || getKit(id); }
+  // Restore persisted external packs as dynamic kits before we resolve the
+  // initial kit id (so a pattern saved on an external pack reloads onto it).
+  for (const p of loadExtPacks()) { try { addDynamicKit(p); } catch {} }
+  // Selected instrument. The pattern model is the source of truth (so a saved
+  // groove restores its kit); the global pref is the fallback for patterns with
+  // no stored kit and the "last-used" seed for fresh ones.
+  let _kitId = resolveKit(model.kitId).id;
   let analyser = null;
   let loopId = null;
   let cellIdx = 0;
@@ -130,6 +168,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // Default 1 = previous "one pattern per cycle" behaviour, so the
     // upgrade is silent.
     if (typeof m.cycles !== 'number' || !(m.cycles > 0)) m.cycles = 1;
+    // `kitId` was added later — backfill older patterns from the last-used kit
+    // (the global pref) so they don't all snap to the default on upgrade.
+    if (typeof m.kitId !== 'string') m.kitId = loadSeqKit();
     // Mirror the strudel @title when the sequencer would otherwise show
     // the placeholder default — keeps the two engines reading as the same
     // session ("qualem 4f9q") on a fresh load.
@@ -394,7 +435,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // output node so the patch leaves it alone — the sequencer has its own
   // per-source mute (kit.output.gain) and must not be silenced by Strudel.
   function buildKit() {
-    const k = getKit(_kitId).make();
+    const k = resolveKit(_kitId).make();
     k.output.__qualiaBypassMute = true;
     // Sample kits load asynchronously — surface the loaded state in the status
     // line so the user knows why an unmapped/unloaded pad is silent for a beat.
@@ -429,10 +470,15 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // first, then dispose the old one, so there's no silent gap (the old kit's
   // tails are cut, which is the expected feel of changing instruments).
   function setKit(id) {
-    const next = getKit(id);
-    if (next.id === _kitId && kit) return;
+    const next = resolveKit(id);
+    // Record on the model even if the kit is unchanged — backfills a pattern
+    // that had no kitId so the next save/export carries it.
+    model.kitId = next.id;
+    if (next.id === _kitId && kit) { refreshKitSelect(); return; }
     _kitId = next.id;
-    saveSeqKit(_kitId);
+    saveSeqKit(_kitId);     // remember as last-used for fresh patterns
+    model.updatedAt = Date.now();
+    persistSoon();
     if (kit) {
       const old = kit;
       kit = buildKit();
@@ -940,19 +986,13 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // instant; sample kits decode their pack in the background.
     const kitSel = document.createElement('select');
     kitSel.className = 'seq-kit-select';
-    for (const k of KITS) {
-      const opt = document.createElement('option');
-      opt.value = k.id;
-      opt.textContent = k.label;
-      opt.title = k.desc || '';
-      kitSel.appendChild(opt);
-    }
-    kitSel.value = _kitId;
+    populateKitOptions(kitSel);
     kitSel.addEventListener('change', () => setKit(kitSel.value));
     _kitSelectEl = kitSel;
 
     propsEl.append(
       mk('kit',       kitSel, { title: 'Instrument the pads play through. Synth kits are offline; sample kits load the same strudel.json packs Strudel uses.' }),
+      mkPackLoader(),
       mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
       mk('steps/beat', stepperFor(stepsIn, 'change'), { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
       mk('cps',       stepperFor(cpsIn,  'input'),  { title: 'Cycles per second — Strudel\'s master clock when sync is on' }),
@@ -965,8 +1005,109 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // Keep the kit dropdown in sync when the kit is changed programmatically
   // (e.g. a future remote/macro path) or re-rendered.
   let _kitSelectEl = null;
+  let _packStatusEl = null;
   function refreshKitSelect() {
     if (_kitSelectEl && _kitSelectEl.value !== _kitId) _kitSelectEl.value = _kitId;
+  }
+  // (Re)fill a kit <select> with the static catalog + any loaded external packs,
+  // grouped by genre/family so the list stays scannable. Called on render and
+  // whenever a pack is loaded.
+  function populateKitOptions(sel) {
+    if (!sel) return;
+    sel.innerHTML = '';
+    let curGroup = null, groupEl = null;
+    for (const k of [...KITS, ..._dynamicKits.values()]) {
+      const g = k.group || '';
+      if (g !== curGroup) {
+        curGroup = g;
+        groupEl = document.createElement('optgroup');
+        groupEl.label = g;
+        sel.appendChild(groupEl);
+      }
+      const opt = document.createElement('option');
+      opt.value = k.id;
+      // The genre is the optgroup label; show just the variant on the option.
+      opt.textContent = k.label.includes('·') ? k.label.split('·').pop().trim() : k.label;
+      opt.title = k.desc || '';
+      (groupEl || sel).appendChild(opt);
+    }
+    sel.value = _kitId;
+  }
+  function setPackStatus(msg, isErr) {
+    if (!_packStatusEl) return;
+    _packStatusEl.textContent = msg || '';
+    _packStatusEl.dataset.state = isErr ? 'err' : '';
+  }
+  // Build the one-click GitHub pack loader: a text field + load button + genre
+  // preset chips. Loads into BOTH engines — registers the pack in Strudel (so
+  // s("name") / .bank() work in the REPL) and adds a runtime sequencer sample
+  // kit (best-effort name matching), then selects it.
+  function mkPackLoader() {
+    const wrap = document.createElement('div');
+    wrap.className = 'seq-pack-loader';
+
+    const row = document.createElement('div');
+    row.className = 'seq-pack-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'seq-pack-input';
+    input.placeholder = 'github:user/repo or strudel.json URL';
+    input.title = 'Load a Strudel sample pack into both engines';
+    const loadBtn = document.createElement('button');
+    loadBtn.type = 'button';
+    loadBtn.className = 'ctrl-btn';
+    loadBtn.textContent = 'load';
+    loadBtn.addEventListener('click', () => loadPack(input.value));
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); loadPack(input.value); } });
+    row.append(input, loadBtn);
+
+    const chips = document.createElement('div');
+    chips.className = 'seq-pack-presets';
+    for (const p of PACK_PRESETS) {
+      const c = document.createElement('button');
+      c.type = 'button';
+      c.className = 'ctrl-btn seq-pack-chip';
+      c.textContent = p.label;
+      c.title = `${p.title} — ${p.spec}`;
+      c.addEventListener('click', () => { input.value = p.spec; loadPack(p.spec); });
+      chips.appendChild(c);
+    }
+
+    const status = document.createElement('div');
+    status.className = 'seq-pack-status';
+    _packStatusEl = status;
+
+    wrap.append(row, chips, status);
+    return wrap;
+  }
+  // Load a pack spec (github:user/repo or a strudel.json URL) into both engines.
+  async function loadPack(input) {
+    const spec = parsePackSpec(input);
+    if (!spec) { setPackStatus('enter github:user/repo or a strudel.json URL', true); return; }
+    setPackStatus(`loading "${spec.label}"…`);
+    // Strudel side (best-effort; sequencer still gets the kit if this fails).
+    let okStrudel = false;
+    try { okStrudel = !!(await syncStrudel?.loadSamplesSpec?.(spec.strudelArg)); } catch {}
+    // Sequencer side: register + persist a dynamic sample kit, then select it.
+    addDynamicKit(spec);
+    const list = loadExtPacks().filter((p) => p.id !== spec.id);
+    list.unshift(spec);
+    saveExtPacks(list);
+    populateKitOptions(_kitSelectEl);
+    setKit(spec.id);   // builds the kit (decodes buffers in the background)
+    setPackStatus(okStrudel
+      ? `loaded "${spec.label}" → Strudel + sequencer kit`
+      : `loaded "${spec.label}" → sequencer kit (open Strudel to use s("…"))`);
+  }
+  // Re-register restored external packs into Strudel once it's ready — lazily,
+  // so a boot that never opens Strudel doesn't force-load its bundle.
+  let _extPacksPushedToStrudel = false;
+  function pushExtPacksToStrudel() {
+    if (_extPacksPushedToStrudel) return;
+    const packs = loadExtPacks();
+    if (!packs.length) return;
+    _extPacksPushedToStrudel = true;
+    for (const p of packs) { try { syncStrudel?.loadSamplesSpec?.(p.strudelArg); } catch {} }
   }
   function refreshPropsValues() {
     if (!propsEl) return;
@@ -979,6 +1120,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     }
     const cb = propsEl.querySelector('input[type="checkbox"]');
     if (cb) cb.checked = !!model.syncStrudel;
+    refreshKitSelect();
     refreshSyncStatus();
   }
 
@@ -1249,6 +1391,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     model = JSON.parse(JSON.stringify(next));
     if (typeof model.syncStrudel !== 'boolean') model.syncStrudel = true;
     if (typeof model.cycles !== 'number' || !(model.cycles > 0)) model.cycles = 1;
+    if (typeof model.kitId !== 'string') model.kitId = _kitId;
+    // Recall the pattern's saved instrument (swaps the live kit if needed).
+    setKit(model.kitId);
     if (nameInput) nameInput.value = model.name || '';
     refreshPropsValues();
     refreshSyncBtnVisibility();
@@ -1268,6 +1413,8 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       // Default sync ON for fresh-blank patterns too — matches
       // defaultPattern() and pickInitialModel()'s upgrade path.
       syncStrudel: true,
+      // Keep the current instrument on a fresh blank pattern.
+      kitId: _kitId,
       pads: VOICES.map(v => makePad(v.id, empty(total))),
       createdAt: Date.now(), updatedAt: Date.now(),
     };
@@ -1285,6 +1432,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     const wasPlaying = isPlaying;
     if (wasPlaying) stop();
     model = defaultPattern();
+    model.kitId = _kitId;   // keep the current instrument, not the default
     // Sprinkle a little chaos on top of the default groove so each
     // "random" press produces a different starting point. Keep kick/snare
     // as-is so the result is recognisable as a beat.
@@ -1387,7 +1535,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // emits this once Strudel's REPL has loaded enough to expose either
   // setcps path; without the callback the user would see a stale
   // "waiting" forever even after sync is actually working.
-  syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
+  syncStrudel?.onReadyChange?.(() => { refreshSyncStatus(); pushExtPacksToStrudel(); });
+  // If Strudel is already ready at construction (panel reopened from a prior
+  // session), push restored packs now rather than waiting for a ready flip.
+  if (syncStrudel?.isReady?.()) pushExtPacksToStrudel();
 
   // Mirror strudel @title changes (random rolls, pattern loads, manual
   // edits) into the sequencer name while sync is on. We don't echo this
