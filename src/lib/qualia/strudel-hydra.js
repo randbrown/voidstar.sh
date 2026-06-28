@@ -17,7 +17,11 @@ import {
 import { savePanelPos, restorePanelPos } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
 
-const STRUDEL_SCRIPT = 'https://unpkg.com/@strudel/repl@latest';
+// Pinned, NOT @latest: a live set must not break because unpkg served a new
+// @strudel/repl mid-tour. Bump this deliberately (and re-test a set) when you
+// want a newer Strudel — don't float it. Last verified: 1.3.0.
+const STRUDEL_VERSION = '1.3.0';
+const STRUDEL_SCRIPT = `https://unpkg.com/@strudel/repl@${STRUDEL_VERSION}`;
 
 let _strudelLoadingP = null;
 let _strudelConnectPatched = false;

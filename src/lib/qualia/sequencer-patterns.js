@@ -22,6 +22,8 @@
 // (half-time); cycles=0.5 packs it into half a cycle (double-time). Only
 // the cell duration changes — `beats`/`steps` are still the pattern grid.
 
+import { getJSON, setJSON, getBool, setBool } from './prefs.js';
+
 const NS           = 'voidstar.qualia.sequencer';
 const CURRENT_KEY  = `${NS}.current`;
 const LIST_KEY     = `${NS}.list`;
@@ -50,34 +52,23 @@ function uid() {
 
 // ── Storage ──────────────────────────────────────────────────────────────
 export function loadCurrent() {
-  try {
-    const raw = localStorage.getItem(CURRENT_KEY);
-    if (!raw) return null;
-    const m = JSON.parse(raw);
-    return validateModel(m) ? m : null;
-  } catch { return null; }
+  const m = getJSON(CURRENT_KEY, null);
+  return m && validateModel(m) ? m : null;
 }
 export function saveCurrent(model) {
   if (!validateModel(model)) return;
-  try { localStorage.setItem(CURRENT_KEY, JSON.stringify(model)); } catch {}
+  setJSON(CURRENT_KEY, model);
 }
 export function loadList() {
-  try {
-    const raw = localStorage.getItem(LIST_KEY);
-    const list = raw ? JSON.parse(raw) : [];
-    return Array.isArray(list) ? list.filter(validateModel) : [];
-  } catch { return []; }
+  const list = getJSON(LIST_KEY, []);
+  return Array.isArray(list) ? list.filter(validateModel) : [];
 }
 export function saveList(list) {
-  try { localStorage.setItem(LIST_KEY, JSON.stringify(list)); } catch {}
+  setJSON(LIST_KEY, list);
 }
 
-export function loadPanelOpen() {
-  try { return localStorage.getItem(PANEL_OPEN_KEY) === '1'; } catch { return false; }
-}
-export function savePanelOpen(open) {
-  try { localStorage.setItem(PANEL_OPEN_KEY, open ? '1' : '0'); } catch {}
-}
+export function loadPanelOpen() { return getBool(PANEL_OPEN_KEY, false); }
+export function savePanelOpen(open) { setBool(PANEL_OPEN_KEY, open); }
 
 // ── Validation ───────────────────────────────────────────────────────────
 // Defensive: a corrupt or partial `current` blob shouldn't crash the panel

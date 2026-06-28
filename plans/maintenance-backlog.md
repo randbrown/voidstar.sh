@@ -18,7 +18,8 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
    spec'd in `docs/doio-kb16-qualia-keymap.md`); per-panel wiring. `core.js` is already cleanly
    injectable — this is pure mechanical decomposition.
 2. **Harden + decompose `strudel-hydra.js` (~1,636 lines).**
-   - **Pin the Strudel CDN version** (currently `@latest`) — removes a class of drift bugs.
+   - ✅ **Pin the Strudel CDN version** — *done:* pinned to `@1.3.0` (was `@latest`) via a
+     `STRUDEL_VERSION` const with a bump note.
    - Add a real `dispose()`: the global `AudioNode.connect` patch, two ResizeObservers, two
      intervals, window/document listeners, and audio nodes all leak.
    - Split into transport / audio-tap / cycle-clock / editor-settings / pattern-API.
@@ -29,9 +30,11 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
 
 ## B. Cross-cutting duplication → shared utilities
 
-1. **`prefs.js` (`boolPref`/`numPref`/`jsonPref`).** The localStorage try/catch + clamp-IIFE
-   boilerplate is copy-pasted across `looper.js`, `sequencer.js`, `sequencer-patterns.js`,
-   `patterns.js`. Also `clamp01` is defined 3× independently.
+1. ✅ **`prefs.js` (`getRaw`/`setRaw`/`getBool`/`setBool`/`getNum`/`getJSON`/`setJSON`/`clamp01`).**
+   *Done:* added the module and migrated `sequencer.js`, `sequencer-patterns.js`, `patterns.js`
+   (behavior-preserving — same keys, defaults, and post-parse validation) and pointed `looper.js`'s
+   `lsGet`/`lsSet`/`clamp01` at it. Remaining inline localStorage lives in `looper.js`'s larger
+   config blob and `strudel-hydra.js`/`vocoder.js` panel state — migrate opportunistically.
 2. **`makeDraggablePanel(panel, header, key)`.** The drag/reposition/ResizeObserver block is
    verbatim in `mixer.js`, `vocoder.js`, `sequencer.js`, and the Strudel panel (~60 lines × 4).
 3. **`fx-helpers.js`.** `ema`/`damp`/`decay`, idle-spectrum sine fallback, fade-fill,
