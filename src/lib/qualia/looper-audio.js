@@ -102,9 +102,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
   // persisted config and primes it via setStripConfig().
   let strip = null, _stripConfig = null, _cabBuffer = null, _ampModel = null;
+  let recMerge = null;   // mono-sum of strip.output feeding the recorder in mono mode
 
   // ── recording state ──
   let recording = false;
+  let _ringStartT = null;           // ctx time the lookback ring began filling (capture open)
   let recChans = [];                 // per-channel array of Float32 chunk arrays
   let recChannelCount = 1;
   let recFrames = 0;
@@ -252,8 +254,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     }
 
     // Channel strip inserted between the input and the volume fader, so the
-    // monitor + the mix carry the PROCESSED signal. Recording + the scope tap
-    // the input (post channel-mode), pre-strip.
+    // monitor + the mix carry the PROCESSED signal. The RECORDER taps the strip's
+    // OUTPUT (post-fx, see recTap below) so loops bake in the effects that were on
+    // at record time; the scope + tuner stay PRE-strip for a clean signal.
     strip = createRigStrip(ctx, _stripConfig);
     if (_cabBuffer) strip.setCabBuffer(_cabBuffer);
     if (_ampModel) strip.setAmpModel(_ampModel);
@@ -298,6 +301,21 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     tunerAnalyser.smoothingTimeConstant = 0;
     inputNode.connect(tunerAnalyser);
 
+    // Recorder source — the strip OUTPUT, so the captured loop carries whatever
+    // effects were on. In mono mode, sum the strip's stereo output back to one
+    // channel (the loop stays mono, just effected); stereo keeps both channels.
+    let recTap;
+    if (_channels === 'stereo') {
+      recTap = strip.output;
+    } else {
+      recMerge = ctx.createGain();
+      recMerge.channelCount = 1;
+      recMerge.channelCountMode = 'explicit';
+      recMerge.channelInterpretation = 'speakers';
+      strip.output.connect(recMerge);
+      recTap = recMerge;
+    }
+
     // Channel count for the ScriptProcessor fallback: forced to 1 in mono mode,
     // else the native input count. The worklet adopts it via 'max' channelCount.
     const inCh = _channels === 'stereo' ? Math.max(1, Math.min(2, settings.channelCount || 2)) : 1;
@@ -322,7 +340,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         if (!recording) return;
         if (d.chans) onChunks(d.chans);
       };
-      inputNode.connect(recNode);
+      recTap.connect(recNode);
       recNode.connect(sinkGain);
     } else {
       usingWorklet = false;
@@ -340,12 +358,15 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         }
         onChunks(chans);
       };
-      inputNode.connect(recNode);
+      recTap.connect(recNode);
       recNode.connect(sinkGain);
     }
+    // The ring starts filling now (worklet path only — the SP fallback has no ring).
+    _ringStartT = usingWorklet ? ctx.currentTime : null;
   }
 
   function teardownCapture() {
+    _ringStartT = null;
     if (_rigAdopted) { try { audio?.releaseAdopted?.('rig'); } catch {} _rigAdopted = false; }
     try { srcNode?.disconnect(); } catch {}
     try { monoSplitter?.disconnect(); } catch {}
@@ -356,6 +377,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { sigAnalyser?.disconnect(); } catch {}
     try { captureAnalyser?.disconnect(); } catch {}
     try { tunerAnalyser?.disconnect(); } catch {}
+    try { recMerge?.disconnect(); } catch {}
+    recMerge = null;
     try { strip?.dispose(); } catch {}
     strip = null;
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
@@ -551,6 +574,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
           loopStartBase, regionFrames,
           naturalSeconds: regionFrames / sr,
           recordedCycles,
+          contentFrames: trailingContentFrames(buffer, loopStartBase, regionFrames, sr),
         });
       };
 
@@ -663,6 +687,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       regionFrames,
       naturalSeconds: regionFrames / sr,
       recordedCycles: effL,
+      contentFrames: trailingContentFrames(buffer, padStart, regionFrames, sr),
     };
   }
 
@@ -694,6 +719,34 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     const targetSec = track.length / (cps > 0 ? cps : 0.5);   // wall seconds for `length` cycles
     const rate = track.naturalSeconds / targetSec;
     return (rate > 0 && isFinite(rate)) ? rate : 1;
+  }
+
+  // Frames of audible content from the region head, i.e. the region minus
+  // trailing near-silence — so "tile" can repeat gaplessly while "once" keeps the
+  // full region (its trailing silence becomes the rest-of-the-bar). Scans back in
+  // 5ms windows for the last sound, adds a 20ms tail, snaps to a zero-crossing to
+  // avoid a click. Returns regionFrames when there's no trailing silence.
+  function trailingContentFrames(buffer, startFrame, regionFrames, sr) {
+    const THRESH = 0.008;                          // ≈ -42 dBFS
+    const win = Math.max(1, Math.round(0.005 * sr));
+    const nch = buffer.numberOfChannels;
+    const end = startFrame + regionFrames;
+    let last = startFrame;
+    for (let w = end; w > startFrame; w -= win) {
+      const from = Math.max(startFrame, w - win);
+      let peak = 0;
+      for (let c = 0; c < nch; c++) {
+        const d = buffer.getChannelData(c);
+        for (let i = from; i < w; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; }
+      }
+      if (peak >= THRESH) { last = w; break; }
+    }
+    let content = Math.min(regionFrames, (last - startFrame) + Math.round(0.02 * sr));
+    const d0 = buffer.getChannelData(0);
+    for (let i = startFrame + content; i < end - 1; i++) {
+      if ((d0[i] <= 0 && d0[i + 1] > 0) || (d0[i] >= 0 && d0[i + 1] < 0)) { content = i - startFrame; break; }
+    }
+    return Math.max(1, Math.min(regionFrames, content));
   }
 
   // Effective loop-start sample within track.buffer after applying the nudge,
@@ -800,10 +853,19 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     c.muted = !!track.muted;
     c.gain.gain.value = c.muted ? 0 : c.vol;
     const sr = track.sampleRate;
-    const rate = derivePlaybackRate(track, cps);
+    // Fill mode decides rate + loop length:
+    //   fit  → stretch the region to `length` cycles (rate ≠ 1; vari/keep pitch)
+    //   once → natural rate, loop the FULL region (trailing silence = rest of bar)
+    //   tile → natural rate, loop the region trimmed of trailing silence (gapless)
+    const mode = track.fitMode || 'once';
+    const isFit = mode === 'fit';
+    const rate = isFit ? derivePlaybackRate(track, cps) : 1;
+    const loopFrames = (mode === 'tile')
+      ? Math.max(1, Math.min(track.regionFrames, track.contentFrames || track.regionFrames))
+      : track.regionFrames;
     const startFrame = effLoopStartFrame(track);
-    const regionSec = track.regionFrames / sr;
-    const playLoopDur = regionSec / rate;   // == track.length / cps (output seconds)
+    const regionSec = loopFrames / sr;
+    const playLoopDur = regionSec / rate;   // output seconds per loop
 
     // When + phase to start at: the next grid boundary at the loop head
     // (default), or — with "start now" — immediately at the current Strudel
@@ -813,9 +875,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       : { when: nextBoundaryAbs(grid, syncOn), phase: 0 };
 
     // Pitch-preserving path: feed the nudge-adjusted region (all channels) into
-    // the stretch node and loop it at `rate` with no pitch shift. Scheduling
-    // `output` lets the node compensate for its own latency.
-    if (track.preservePitch) {
+    // the stretch node and loop it at `rate` with no pitch shift. Only in `fit`
+    // mode — once/tile play at natural rate (1×), where there's nothing to
+    // pitch-preserve, so they take the plain varispeed path below.
+    if (isFit && track.preservePitch) {
       const nch = track.buffer.numberOfChannels;
       const node = await ensureStretch(c, nch);
       if (node) {
@@ -842,10 +905,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     source.buffer = track.buffer;
     source.loop = true;
     source.loopStart = startFrame / sr;
-    source.loopEnd = (startFrame + track.regionFrames) / sr;
+    source.loopEnd = (startFrame + loopFrames) / sr;
     source.playbackRate.value = rate;
     source.connect(c.gain);
-    source.start(when, (startFrame + phase * track.regionFrames) / sr);
+    source.start(when, (startFrame + phase * loopFrames) / sr);
     voices.set(track.id, { kind: 'buffer', source, playStartAbs: when - phase * playLoopDur, playLoopDur });
     ensureAdopted();
     return true;
@@ -1024,6 +1087,13 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     isAmpCapable: () => typeof AudioWorkletNode !== 'undefined',
     isBuffering: () => _bufferOn && !!srcNode,
     isRetroCapable: () => usingWorklet,
+    // How much lookback is available right now, for the "grab" buffer readout.
+    // `seconds` grows from capture-open to the RING_SECONDS cap.
+    getBufferInfo: () => {
+      const capable = usingWorklet && !!srcNode && _ringStartT != null;
+      const seconds = capable ? Math.min(Math.max(0, ctx.currentTime - _ringStartT), RING_SECONDS) : 0;
+      return { capable, seconds, capSeconds: RING_SECONDS };
+    },
     getCaptureAnalyser: () => captureAnalyser,
     getTunerAnalyser: () => tunerAnalyser,
     // Full rig output (signal + loops, post master) — for the output scope.

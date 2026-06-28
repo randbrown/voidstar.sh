@@ -750,10 +750,23 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.1rem 0.55rem; cursor: pointer; transition: all 0.15s;
     }
     .qp-toggle.active { border-color: var(--pink); color: var(--pink); }
-    /* Per-panel save/load chips injected into panel headers + the qualem picker row. */
-    .panel-io { display: inline-flex; align-items: center; gap: 0.15rem; }
+    /* Per-panel save/load chips injected into panel headers + the qualem picker row.
+       Collapsed to a single ⇅ glyph; clicking it opens a little dropdown menu with
+       the save (⤓) / load (⤒) actions, so the header stays tidy until you need it. */
+    .panel-io { display: inline-flex; align-items: center; gap: 0.15rem; position: relative; }
     .panel-io-btn { padding: 0.05rem 0.35rem; font-size: 0.7rem; line-height: 1; opacity: 0.7; }
     .panel-io-btn:hover { opacity: 1; }
+    .panel-io.open .panel-io-toggle { opacity: 1; border-color: var(--cyan); color: var(--cyan); }
+    .panel-io-actions {
+      display: none; position: absolute; top: calc(100% + 5px); right: 0;
+      flex-direction: column; gap: 0.15rem; z-index: 6;
+      background: rgba(10,10,26,0.97); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.25rem;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .panel-io.open .panel-io-actions { display: flex; }
+    .panel-io-actions .panel-io-btn { white-space: nowrap; text-align: left; opacity: 0.9; }
+    .panel-io-actions .panel-io-btn:hover { opacity: 1; border-color: var(--cyan); color: var(--cyan); }
     .qualem-panelio { display: flex; align-items: center; gap: 0.4rem; margin: 0.3rem 0; flex-wrap: wrap; }
     .qualem-panelio .seq-prop-label { color: var(--muted); }
     .qualem-panelio select { flex: 1 1 auto; min-width: 8ch; }
@@ -1500,7 +1513,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       cursor: grab; user-select: none; touch-action: none;
     }
     #mixer-header.dragging { cursor: grabbing; }
-    #btn-mixer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    /* The mixer header has no status spacer, so push its × to the far right for
+       consistency with the other panels (whose .sp-status / spacer does it). */
+    #btn-mixer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; margin-left: auto; }
     #mixer-body {
       display: flex; flex-direction: column; gap: 0.4rem;
       padding: 0.6rem 0.75rem; overflow: auto;
@@ -1963,6 +1978,91 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       border: 1px solid rgba(255,255,255,0.06);
     }
 
+    /* ── Mini mode — a pedalboard toolbar (built in looper.js) ─────────────── */
+    /* In mini mode the signal / strip / loop subpanels + the header master fader
+       are hidden; #rig-mini takes over with LED + one knob per effect. */
+    #btn-rig-mini.active { border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.08); }
+    #looper-panel.mini #rig-signal,
+    #looper-panel.mini #rig-strip,
+    #looper-panel.mini #rig-loop { display: none !important; }
+    #looper-panel.mini #rig-master-gain,
+    #looper-panel.mini #btn-rig-master-mute { display: none; }
+    #looper-panel.mini { height: auto !important; min-height: 0 !important; width: auto; }
+
+    #rig-mini { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.6rem; }
+    .rig-mini-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
+    .rig-mini-group { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
+    .rig-mini-sep { align-self: stretch; width: 1px; background: var(--border); margin: 0.1rem 0.15rem; }
+    /* Subtle mini-mode toggle — a quiet glyph; the cyan active state is the tell. */
+    .rig-mini-toggle { opacity: 0.6; padding: 0.05rem 0.4rem; }
+    .rig-mini-toggle:hover { opacity: 1; }
+    .rig-mini-toggle.active { opacity: 1; border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.08); }
+
+    /* One pedal: LED toggle · circular knob · label. */
+    .rig-pedal { display: flex; flex-direction: column; align-items: center; gap: 0.22rem; width: 48px; }
+    .rig-pedal-led {
+      width: 11px; height: 11px; padding: 0; border-radius: 50%;
+      border: 1px solid var(--border); background: rgba(255,255,255,0.07);
+      cursor: pointer; box-shadow: none; transition: background .12s, box-shadow .12s, border-color .12s;
+    }
+    .rig-pedal-led.on { background: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 7px var(--cyan); }
+    .rig-pedal.off { --knob-accent: var(--muted); }
+    .rig-pedal:not(.off) { --knob-accent: var(--cyan); }
+    .rig-pedal.off .rig-pedal-knob { opacity: 0.45; }
+    .rig-pedal.off .rig-pedal-label { opacity: 0.6; }
+
+    /* Circular "analog" knob: conic-gradient ring (value), rotating pointer,
+       center numeric face. Driven by a single CSS var --p (0..1). All static —
+       repaints only when a value changes, never per frame. */
+    .rig-pedal-knob { position: relative; width: 44px; height: 44px; cursor: ns-resize; touch-action: none; outline: none; }
+    .rig-pedal-knob:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: 50%; }
+    .rig-pedal-ring {
+      position: absolute; inset: 0; border-radius: 50%;
+      background: conic-gradient(from 225deg,
+        var(--knob-accent, var(--cyan)) calc(var(--p, 0) * 270deg),
+        rgba(255,255,255,0.10) calc(var(--p, 0) * 270deg) 270deg,
+        transparent 270deg 360deg);
+      -webkit-mask: radial-gradient(circle closest-side, transparent 0 60%, #000 62%);
+              mask: radial-gradient(circle closest-side, transparent 0 60%, #000 62%);
+    }
+    .rig-pedal-ptr { position: absolute; inset: 0; transform: rotate(calc(225deg + var(--p, 0) * 270deg)); }
+    .rig-pedal-ptr::before {
+      content: ''; position: absolute; left: 50%; top: 7%;
+      width: 2px; height: 22%; border-radius: 2px;
+      background: var(--knob-accent, var(--cyan)); transform: translateX(-50%);
+    }
+    .rig-pedal-face {
+      position: absolute; inset: 22%; border-radius: 50%;
+      background: rgba(5,5,13,0.92);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .rig-pedal-val { font-size: 0.52rem; color: var(--text); font-variant-numeric: tabular-nums; }
+    .rig-pedal-label { font-size: 0.56rem; color: var(--muted); letter-spacing: 0.03em; }
+
+    /* Tiny tap-to-expand strobe tuner. */
+    .rig-mini-tune { display: flex; flex-direction: column; align-items: center; gap: 0.22rem; }
+    .rig-mini-tune-sq {
+      width: 44px; height: 44px; border-radius: 6px; padding: 0;
+      border: 1px solid var(--border); background: rgba(0,0,0,0.3);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.62rem; color: var(--muted); cursor: pointer; line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+    .rig-mini-tune-sq.active { border-color: var(--cyan); color: var(--cyan); }
+    .rig-mini-tune-sq.near   { border-color: #fbbf24; color: #fbbf24; }
+    .rig-mini-tune-sq.intune { border-color: #34d399; color: #34d399; box-shadow: 0 0 9px rgba(52,211,153,0.5); }
+    #rig-mini-tuner-mount:empty { display: none; }
+    #rig-mini-tuner-mount { width: 100%; }
+
+    /* Compact looper transport. */
+    .rig-mini-transport { display: flex; flex-direction: column; align-items: center; gap: 0.22rem; }
+    .rig-mini-tr-row { display: flex; gap: 0.25rem; align-items: center; }
+    .rig-mini-tr-row .ctrl-btn { padding: 0.12rem 0.45rem; font-size: 0.7rem; line-height: 1; }
+    .rig-mini-play-led { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,0.16); transition: background .12s, box-shadow .12s; }
+    .rig-mini-play-led.playing { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+    .rig-mini-play-led.recording { background: var(--pink); box-shadow: 0 0 6px var(--pink); }
+    .rig-mini-cap { font-size: 0.5rem; color: var(--muted); letter-spacing: 0.04em; }
+
     /* Temperament editor — ET / custom toggle + 12 per-note cent spinners. */
     .rig-temper { padding: 0 0.7rem 0.45rem; }
     .rig-temper-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.5rem; margin-bottom: 0.3rem; }
@@ -2009,17 +2109,17 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.3rem;
       overflow-y: auto;
     }
-    #looper-tracks { display: flex; flex-direction: column; gap: 0.25rem; }
+    #looper-tracks { display: flex; flex-direction: column; gap: 0.2rem; }
     .looper-track {
       display: flex; align-items: center; gap: 0.45rem;
-      padding: 0.2rem 0.3rem;
+      padding: 0.15rem 0.3rem;
       border: 1px solid var(--border); border-radius: 6px;
       background: rgba(0,0,0,0.18);
     }
     .looper-track.armed { border-color: var(--pink); background: rgba(244,114,182,0.07); }
     .looper-track-head {
       display: flex; flex-direction: column; gap: 0.15rem;
-      min-width: 244px; flex: 0 0 auto; font-size: 0.66rem;
+      min-width: 292px; flex: 0 0 auto; font-size: 0.66rem;
     }
     .looper-track-row { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
     .looper-track-row .seq-prop { gap: 0.15rem; }
@@ -2033,7 +2133,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .looper-track-mute { margin-left: auto; }
     .looper-track-canvas {
       flex: 1; min-width: 0;
-      height: 48px; display: block;
+      height: 44px; display: block;
       border-radius: 4px; background: rgba(0,0,0,0.28);
     }
     /* Right-click menu over a track waveform (trim / delete). */
@@ -2056,6 +2156,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .looper-ctx-menu hr { border: none; border-top: 1px solid var(--border); margin: 0.2rem 0; }
     .looper-pp { padding: 0.02rem 0.45rem; font-size: 0.66rem; line-height: 1; min-width: 3.5ch; text-align: center; }
     .looper-pp.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10); }
+    .looper-pp:disabled { opacity: 0.4; cursor: default; }
+    .looper-fill { padding: 0.02rem 0.45rem; font-size: 0.66rem; line-height: 1; min-width: 3.5ch; text-align: center; }
+    .looper-fill.active { color: var(--pink); border-color: var(--pink); background: rgba(255,122,230,0.10); }
+    /* Live playback-speed readout — quiet at 1.00×, lights amber when a varispeed
+       take is pitch-shifted (off 1.00×), cyan when "keep" time-stretches it. */
+    .looper-track-rate { font-size: 0.62rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 4ch; }
+    .looper-track-rate.shift { color: #fbbf24; }
+    .looper-track-rate.stretched { color: var(--cyan); }
+    /* Grab while the lookback ring is still filling past what it needs. */
+    #btn-looper-retro.insufficient { color: #fbbf24; border-color: rgba(251,191,36,0.5); }
     .looper-add { display: flex; justify-content: center; padding: 0.15rem; }
     @media (max-width: 700px) {
       #looper-props { padding: 0.25rem 0.45rem; gap: 0.25rem 0.45rem; font-size: 0.68rem; }
@@ -2807,7 +2917,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div class="ctrls-sec">rig · looper <span class="ctrls-tag">keys</span></div>
     <div class="ctrls-grid">
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>0</kbd><kbd>1</kbd><kbd>2</kbd></span><span class="ctrl-lbl">tuner / earth / metal</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>O</kbd></span><span class="ctrl-lbl">rig panel show/hide</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>O</kbd></span><span class="ctrl-lbl">rig panel show/hide · <kbd>⇧O</kbd> mini / full</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>4</kbd></span><span class="ctrl-lbl">loop play / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>5</kbd><kbd>6</kbd></span><span class="ctrl-lbl">record start / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>7</kbd></span><span class="ctrl-lbl">grab (retro-loop)</span></div>
@@ -2824,8 +2934,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       Mapped for a DOIO / macro-pad that sends these keystrokes — knob turns
       nudge ±0.05 per detent, pushes toggle. A MIDI controller can instead drive
       <b>CC1</b> delay · <b>CC2</b> reverb · <b>CC7</b> volume (absolute 0–1, any
-      channel; Chromium only). Keys pause while you're typing in an editor
-      panel — click the canvas to re-arm.
+      channel; Chromium only). Keys pause only while you're typing in a code
+      editor or text field — the rig panel's sliders stay live to the knobs.
     </div>
   </div>
 </div>
@@ -2941,8 +3051,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn panel-mute-btn" id="btn-rig-master-mute" title="Mute all rig output (signal + loops)">live</button>
     <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="1" step="0.01" value="1" title="Rig master output level" />
     <span class="rig-head-spacer"></span>
+    <button class="ctrl-btn rig-mini-toggle active" id="btn-rig-mini" aria-pressed="true" title="Full rig view — click to condense to the pedalboard (⇧O)">▤</button>
     <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
   </div>
+
+  <!-- MINI mode — a condensed pedalboard toolbar (built in looper.js). Replaces
+       the signal / strip / loop subpanels when on: LED + one knob per effect,
+       a tap-to-expand strobe tuner, and compact looper transport. -->
+  <div id="rig-mini" style="display:none"></div>
 
   <!-- SIGNAL subpanel — the live instrument source: device, level/mute, scope. -->
   <section id="rig-signal" class="rig-subpanel">

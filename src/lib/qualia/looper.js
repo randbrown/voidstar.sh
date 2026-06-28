@@ -51,6 +51,7 @@ const RIG_LEVEL_KEY  = `${NS}.rigLevel`;  // rig master output level
 const RIG_LIMITER_KEY = `${NS}.rigLimiter`; // rig master brickwall limiter (signal + loops)
 const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo'
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
+const MINI_KEY       = `${NS}.mini`;       // rig panel mini (pedalboard) mode
 const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
 const STRIPUTIL_KEY  = `${NS}.stripUtilOpen`; // utility drawer (hpf/comp/eq/pan) expanded
 const LOOPOPEN_KEY     = `${NS}.loopOpen`;      // loop section visible
@@ -232,6 +233,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const temperEl    = document.getElementById('rig-temper');
   const btnRigMute  = document.getElementById('btn-rig-master-mute');
   const rigMasterGain = document.getElementById('rig-master-gain');
+  const rigSignalEl = document.getElementById('rig-signal');
+  const miniEl      = document.getElementById('rig-mini');
+  const btnMini     = document.getElementById('btn-rig-mini');
   const btnToggle   = document.getElementById('btn-looper');
   const btnRecord   = document.getElementById('btn-looper-record');
   const btnRetro    = document.getElementById('btn-looper-retro');
@@ -261,10 +265,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
     rigLimiter: lsGet(RIG_LIMITER_KEY, '1') !== '0',   // rig master brickwall limiter (on by default)
     signalLevel: num01(lsGet(SIGLEVEL_KEY, '0'), 0),   // rig signal monitor/mix level
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
-    scopesOpen: lsGet(SCOPESOPEN_KEY, '1') !== '0',    // in/out scopes visible (default on)
+    scopesOpen: lsGet(SCOPESOPEN_KEY, '0') === '1',    // in/out scopes visible (default collapsed to save room)
     scopeGain: (() => { const v = parseFloat(lsGet(SCOPEGAIN_KEY, '1.8')); return Number.isFinite(v) ? Math.max(0.5, Math.min(6, v)) : 1.8; })(),  // visual-only display gain (scopes are short now)
     channels: lsGet(CHANNELS_KEY, 'mono') === 'stereo' ? 'stereo' : 'mono',
     strip: loadStripConfig(),                          // channel strip config
+    mini: lsGet(MINI_KEY, '0') === '1',                // pedalboard (mini) mode
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
     stripUtilOpen: lsGet(STRIPUTIL_KEY, '0') === '1',  // utility drawer (default tucked away)
     loopOpen: lsGet(LOOPOPEN_KEY, '1') !== '0',              // loop section visible
@@ -310,11 +315,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
       order: _orderSeq++,                           // stable display/persist order
       buffer: null, sampleRate: 0, loopStartBase: 0, regionFrames: 0,
       naturalSeconds: 0, recordedCycles: null,
+      contentFrames: 0,                             // region minus trailing silence (for "tile")
       grid: prev ? prev.grid : model.gridDefault,   // record-snap + lane width
       length: null,                                 // cycles the take occupies
+      fitMode: prev ? prev.fitMode : 'once',        // once | tile | fit (how the take fills the bar)
       volume: 0.5,                                  // Ditto-centre default
       muted: false,
-      preservePitch: false,                         // varispeed by default
+      preservePitch: false,                         // varispeed by default (only used in "fit")
     };
   }
   function getTrack(id) { return model.tracks.find(t => t.id === id) || null; }
@@ -360,10 +367,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     return {
       id: t.id, order: t.order,
       pcm,
-      sampleRate: t.sampleRate, regionFrames: t.regionFrames,
+      sampleRate: t.sampleRate, regionFrames: t.regionFrames, contentFrames: t.contentFrames,
       loopStartBase: t.loopStartBase, naturalSeconds: t.naturalSeconds,
       recordedCycles: t.recordedCycles,
-      grid: t.grid, length: t.length, volume: t.volume, muted: t.muted, preservePitch: t.preservePitch,
+      grid: t.grid, length: t.length, fitMode: t.fitMode, volume: t.volume, muted: t.muted, preservePitch: t.preservePitch,
     };
   }
   function onPersistErr(e) {
@@ -410,10 +417,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
         buffer, sampleRate: sr,
         loopStartBase: r.loopStartBase || 0,
         regionFrames: r.regionFrames || buffer.length,
+        contentFrames: r.contentFrames || r.regionFrames || buffer.length,
         naturalSeconds: r.naturalSeconds || (buffer.length / sr),
         recordedCycles: r.recordedCycles ?? null,
         grid: Math.max(1, Math.min(16, r.grid || model.gridDefault)),
         length: r.length || r.recordedCycles || model.gridDefault,
+        // Migrate pre-fitMode loops: a take deliberately stretched (length ≠ its
+        // recorded cycles) keeps stretching ("fit"); everything else defaults to
+        // the new natural-rate "once".
+        fitMode: r.fitMode || ((r.recordedCycles && r.length && r.length !== r.recordedCycles) ? 'fit' : 'once'),
         volume: clamp01(r.volume == null ? 0.5 : r.volume),
         muted: !!r.muted,
         preservePitch: !!r.preservePitch,
@@ -479,6 +491,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     t.sampleRate = res.sampleRate;
     t.loopStartBase = res.loopStartBase;
     t.regionFrames = res.regionFrames;
+    t.contentFrames = res.contentFrames || res.regionFrames;
     t.naturalSeconds = res.naturalSeconds;
     t.recordedCycles = cyc;
     t.length = cyc;
@@ -499,15 +512,29 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (recording) return;
     if (!looperAudio.isRetroCapable()) { setStatus('retro needs AudioWorklet'); return; }
     if (!looperAudio.isCapturing()) { setStatus('turn the buffer on first'); return; }
-    const t = armedTrack();
-    if (!t) return;
-    looperAudio.stopVoice(t.id);   // retro replaces the armed take
+    // Grab off the armed take's grid (or the default if nothing's armed yet).
+    const armed = armedTrack();
+    const grid = armed ? armed.grid : model.gridDefault;
     setStatus('grabbing…');
     let res = null;
     try {
-      res = await looperAudio.grabRetro({ grid: t.grid, syncOn: syncOn(), cps: currentCps(), cycles: model.retroCycles });
+      res = await looperAudio.grabRetro({ grid, syncOn: syncOn(), cps: currentCps(), cycles: model.retroCycles });
     } catch (e) { console.warn('[qualia] retro grab failed:', e); }
     if (!res) { setStatus('buffer too short — play a few more bars'); refreshTransport(); return; }
+    // Grab is additive: land it in a FRESH track so it layers instead of
+    // overwriting. Reuse the armed track only when it's still blank, so we don't
+    // strand an empty lane (and only after a successful grab, so a failed grab
+    // never spawns a stray track).
+    let t;
+    if (armed && !armed.buffer) {
+      t = armed;
+      looperAudio.stopVoice(t.id);
+    } else {
+      t = makeTrack(); t.grid = grid;
+      model.tracks.push(t);
+      model.armedTrackId = t.id;
+      renderTracks();
+    }
     await commitTake(t, res, 'grabbed');
   }
 
@@ -619,6 +646,22 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshTrackRow(t);
     if (looperAudio.isVoicePlaying(id)) playVoice(t);
     persistSoon(id);
+  }
+  const FIT_MODES = ['once', 'tile', 'fit'];
+  function setTrackFitMode(id, mode) {
+    const t = getTrack(id);
+    if (!t || !FIT_MODES.includes(mode)) return;
+    t.fitMode = mode;
+    renderers.get(id)?.invalidate();
+    refreshTrackRow(t);
+    if (looperAudio.isVoicePlaying(id)) playVoice(t);
+    persistSoon(id);
+  }
+  function cycleTrackFitMode(id) {
+    const t = getTrack(id);
+    if (!t) return;
+    const i = FIT_MODES.indexOf(t.fitMode || 'once');
+    setTrackFitMode(id, FIT_MODES[(i + 1) % FIT_MODES.length]);
   }
   function deleteTrack(id) {
     looperAudio.removeTrack(id);
@@ -768,6 +811,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     lsSet(RIG_LEVEL_KEY, model.rigLevel);
     looperAudio.setRigLevel(model.rigLevel);
     if (rigMasterGain && rigMasterGain.value !== String(model.rigLevel)) rigMasterGain.value = String(model.rigLevel);
+    syncMiniKnob('master', 'level', model.rigLevel);
     refreshLooperBtn();
     notifyMix();
   }
@@ -992,10 +1036,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const r3 = document.createElement('div');
     r3.className = 'looper-track-row';
     const volSl = volSlider(track.volume, (v) => setTrackVolume(track.id, v), 'Track playback volume (double-click to reset)', 0.5);
+    const fillBtn = document.createElement('button');
+    fillBtn.type = 'button'; fillBtn.className = 'ctrl-btn looper-fill';
+    fillBtn.addEventListener('click', () => cycleTrackFitMode(track.id));
     const ppBtn = document.createElement('button');
     ppBtn.type = 'button'; ppBtn.className = 'ctrl-btn looper-pp';
     ppBtn.addEventListener('click', () => setTrackPreserve(track.id, !track.preservePitch));
-    r3.append(mk('vol', volSl), mk('pitch', ppBtn, 'Stretch mode: "vari" = varispeed (pitch follows speed); "keep" = pitch-preserving time-stretch (Signalsmith).'));
+    const rateEl = document.createElement('span'); rateEl.className = 'looper-track-rate';
+    r3.append(mk('vol', volSl),
+              mk('fill', fillBtn, 'How the take fills the bar (click to cycle): "once" plays it once at natural pitch then rests; "tile" repeats it (trailing silence trimmed) at natural pitch; "fit" time-stretches it to the length (this is where the pitch vari/keep choice applies).'),
+              mk('pitch', ppBtn, 'Only used in "fit": "vari" = varispeed (pitch follows speed); "keep" = pitch-preserving time-stretch (Signalsmith).'),
+              mk('speed', rateEl, 'Playback speed vs the recorded take. 1.00× plays at its natural length (once/tile). In "fit" + "vari", anything off 1.00× is pitch-shifted by the shown semitones; "keep" stretches without pitch shift.'));
 
     head.append(r1, r2, r3);
 
@@ -1012,7 +1063,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       getRecordView: () => (recording && model.armedTrackId === track.id) ? looperAudio.getLiveView() : { recording: false },
     });
     renderers.set(track.id, renderer);
-    rowEls.set(track.id, { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn, ppBtn });
+    rowEls.set(track.id, { row, canvas, gridIn, lengthIn, half, dbl, volSl, muteBtn, armBtn, ppBtn, fillBtn, rateEl });
 
     return row;
   }
@@ -1230,8 +1281,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     sizeScope();
     const loop = () => {
       scopeRAF = requestAnimationFrame(loop);
-      drawScope();
-      drawScopeOut();
+      // Mini mode hides the scopes — skip drawing them (the loop may still run to
+      // drive the tuner). Full mode draws even when collapsed (dB readout).
+      if (!model.mini) { drawScope(); drawScopeOut(); }
       if (model.tunerOn) {
         const now = performance.now();
         if (now - _tunerLastMs >= TUNER_INTERVAL_MS) { _tunerLastMs = now; updateTuner(); }
@@ -1273,12 +1325,33 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function stripSet(stage, param, v) {
     model.strip[stage][param] = v;
     looperAudio.setStripParam(stage, param, v);
+    syncStripCtl(stage, param, v);   // full-mode slider (no-ops if strip UI unbuilt)
+    syncMiniKnob(stage, param, v);   // mini knob — independent of the full strip UI
     persistStrip();
+  }
+  // Mirror a model value back onto its on-screen slider + readout. Called by
+  // stripSet so knob/MIDI nudges (which go straight to the model) visibly move the
+  // control. No-ops when the strip UI isn't built (panel/subpanel closed) — the
+  // value is already in the model, so buildCtl picks it up on next build. The
+  // slider's own `input` handler also routes through stripSet, but writing the
+  // same value back is idempotent.
+  function syncStripCtl(stage, param, v) {
+    if (!stripPanel) return;
+    const sl = stripPanel.querySelector(`.rig-ctl input[data-stage="${stage}"][data-param="${param}"]`);
+    if (!sl) return;
+    sl.value = String(v);
+    const valEl = sl.parentElement?.querySelector('.rig-ctl-val');
+    if (valEl) {
+      const p = STRIP_SCHEMA.find(s => s.id === stage)?.params?.find(q => q.id === param);
+      const fmt = p?.fmt || (x => (+x).toFixed(2));
+      valEl.textContent = fmt(parseFloat(sl.value));
+    }
   }
   function stripToggle(stage, on) {
     model.strip[stage].on = !!on;
     looperAudio.setStripEnabled(stage, !!on);
     refreshStripStages();
+    syncMiniLed(stage, !!on);
     persistStrip();
   }
   function refreshStripStages() {
@@ -1385,6 +1458,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const lab = document.createElement('span'); lab.className = 'rig-ctl-label'; lab.textContent = p.label;
     const sl = document.createElement('input');
     sl.type = 'range'; sl.min = String(p.min); sl.max = String(p.max); sl.step = String(p.step);
+    // Tag the slider so external setters (knob/MIDI nudges via stripSet) can find
+    // it and keep the on-screen control in sync — otherwise a knob-driven change
+    // moves the audio but not the slider, reading as "nothing happened".
+    sl.dataset.stage = stageId; sl.dataset.param = p.id;
     // The `value` ATTRIBUTE is the default the global double-click-to-reset reads
     // (page-init.js, via input.defaultValue); the `.value` PROPERTY below carries
     // the live/persisted value. Set the attribute first so it survives.
@@ -1591,8 +1668,228 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setStripConfig(model.strip);
     lsSet(STRIP_KEY, JSON.stringify(model.strip));
     rebuildStrip();
+    refreshMini();
     setStatus('strip reset');
   }
+
+  // ── Mini mode — pedalboard toolbar ──────────────────────────────────────────
+  // A condensed view of the rig: one LED (on/off) + one circular knob (the single
+  // most useful param) per effect, a tap-to-expand strobe tuner, and compact
+  // looper transport. Reads/writes the SAME model as the full strip via stripSet /
+  // stripToggle / setRigLevel, so the two views stay in lockstep (syncStripCtl and
+  // the refreshers below mirror every change into the mini knobs/LEDs). It's all
+  // static DOM — knobs repaint only on change, never per frame — and it hides the
+  // scopes/meters/waveforms, so mini is cheaper to run than the full panel.
+  const MINI_PEDALS = [
+    { stage: 'earth',  param: 'drive', label: 'earth'  },
+    { stage: 'metal',  param: 'drive', label: 'metal'  },
+    { stage: 'amp',    param: 'gain',  label: 'amp'    },
+    { stage: 'cab',    param: 'level', label: 'cab'    },
+    { stage: 'delay',  param: 'mix',   label: 'delay'  },
+    { stage: 'reverb', param: 'mix',   label: 'reverb' },
+  ];
+  const miniKnobs = new Map();   // `${stage}:${param}` -> { knob, valEl, min, max, fmt }
+  const miniLeds  = new Map();   // stage ('master' | effect id) -> led element
+  let miniTunerSq = null, miniTunerMount = null, miniPlayLed = null, _miniBuilt = false;
+
+  function stripParamSpec(stage, param) {
+    return STRIP_SCHEMA.find(s => s.id === stage)?.params?.find(p => p.id === param);
+  }
+  const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  function makeSep() { const s = document.createElement('div'); s.className = 'rig-mini-sep'; return s; }
+
+  // One pedal: LED toggle · circular knob · label. get/set/toggle bridge the model.
+  function buildMiniPedal({ stage, param, label, min, max, step, def, fmt, get, set, toggle }) {
+    const pedal = document.createElement('div');
+    pedal.className = 'rig-pedal'; pedal.dataset.stage = stage;
+
+    const led = document.createElement('button');
+    led.type = 'button'; led.className = 'rig-pedal-led';
+    led.title = stage === 'master' ? 'Rig live / mute' : `Enable / bypass ${label}`;
+    led.addEventListener('click', toggle);
+    miniLeds.set(stage, led);
+
+    const knob = document.createElement('div');
+    knob.className = 'rig-pedal-knob'; knob.tabIndex = 0;
+    knob.dataset.stage = stage; knob.dataset.param = param;
+    knob.title = `${label} ${param} — drag / wheel to adjust, double-click to reset`;
+    const ring = document.createElement('div'); ring.className = 'rig-pedal-ring';
+    const ptr  = document.createElement('div'); ptr.className  = 'rig-pedal-ptr';
+    const face = document.createElement('div'); face.className = 'rig-pedal-face';
+    const valEl = document.createElement('span'); valEl.className = 'rig-pedal-val';
+    face.append(valEl); knob.append(ring, ptr, face);
+
+    const labEl = document.createElement('span'); labEl.className = 'rig-pedal-label'; labEl.textContent = label;
+    pedal.append(led, knob, labEl);
+    miniKnobs.set(stage + ':' + param, { knob, valEl, min, max, fmt });
+
+    const apply = (v) => set(clampN(v, min, max));
+    // Vertical drag — ~150px sweeps the full range.
+    let dragging = false, startY = 0, startV = 0, pid = null;
+    knob.addEventListener('pointerdown', (e) => {
+      dragging = true; startY = e.clientY; startV = get(); pid = e.pointerId;
+      try { knob.setPointerCapture(pid); } catch {}
+      e.preventDefault();
+    });
+    knob.addEventListener('pointermove', (e) => {
+      if (!dragging || e.pointerId !== pid) return;
+      apply(startV + ((startY - e.clientY) / 150) * (max - min));
+    });
+    const endDrag = (e) => {
+      if (!dragging || (pid != null && e.pointerId !== pid)) return;
+      dragging = false; try { knob.releasePointerCapture(pid); } catch {} pid = null;
+    };
+    knob.addEventListener('pointerup', endDrag);
+    knob.addEventListener('pointercancel', endDrag);
+    // Wheel — one step per notch.
+    knob.addEventListener('wheel', (e) => { e.preventDefault(); apply(get() + (e.deltaY < 0 ? step : -step)); }, { passive: false });
+    knob.addEventListener('dblclick', (e) => { e.preventDefault(); if (def != null) apply(def); });
+    knob.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowUp' || e.key === 'ArrowRight') { apply(get() + step); e.preventDefault(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') { apply(get() - step); e.preventDefault(); }
+    });
+    return pedal;
+  }
+
+  function buildMiniUI() {
+    if (!miniEl || _miniBuilt) return;
+    _miniBuilt = true;
+    const row = document.createElement('div'); row.className = 'rig-mini-row';
+
+    // Tuner (left) — tap-to-expand strobe (the strobe node is relocated here).
+    const tune = document.createElement('div'); tune.className = 'rig-mini-tune';
+    miniTunerSq = document.createElement('button');
+    miniTunerSq.type = 'button'; miniTunerSq.className = 'rig-mini-tune-sq'; miniTunerSq.textContent = '♪';
+    miniTunerSq.title = 'Strobe tuner — tap to expand for a quick check';
+    miniTunerSq.addEventListener('click', () => toggleTuner());
+    const tuneCap = document.createElement('span'); tuneCap.className = 'rig-pedal-label'; tuneCap.textContent = 'tune';
+    tune.append(miniTunerSq, tuneCap);
+
+    // One pedal per primary effect (param ranges come from STRIP_SCHEMA).
+    const effects = document.createElement('div'); effects.className = 'rig-mini-group';
+    for (const p of MINI_PEDALS) {
+      const spec = stripParamSpec(p.stage, p.param) || { min: 0, max: 1, step: 0.01 };
+      effects.append(buildMiniPedal({
+        stage: p.stage, param: p.param, label: p.label,
+        min: spec.min, max: spec.max, step: spec.step,
+        def: STRIP_DEFAULTS[p.stage]?.[p.param],
+        fmt: spec.fmt || (v => (+v).toFixed(2)),
+        get: () => model.strip[p.stage]?.[p.param] ?? 0,
+        set: (v) => stripSet(p.stage, p.param, v),
+        toggle: () => stripToggle(p.stage, !model.strip[p.stage].on),
+      }));
+    }
+
+    // Compact looper transport — record · play · stop + a playing/recording LED.
+    const tr = document.createElement('div'); tr.className = 'rig-mini-transport';
+    const trRow = document.createElement('div'); trRow.className = 'rig-mini-tr-row';
+    const mkBtn = (txt, title, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'ctrl-btn'; b.textContent = txt; b.title = title; b.addEventListener('click', fn); return b; };
+    miniPlayLed = document.createElement('span'); miniPlayLed.className = 'rig-mini-play-led';
+    trRow.append(
+      miniPlayLed,
+      mkBtn('●', 'Record into the armed track', () => { recording ? stopRecording() : startRecording(); }),
+      mkBtn('▶', 'Play loop', () => { playAll(); }),
+      mkBtn('■', 'Stop', () => { stop(); }),
+    );
+    const trCap = document.createElement('span'); trCap.className = 'rig-mini-cap'; trCap.textContent = 'loop';
+    tr.append(trRow, trCap);
+
+    // Master pedal (right) — rig level + mute LED (lit = live).
+    const master = buildMiniPedal({
+      stage: 'master', param: 'level', label: 'rig',
+      min: 0, max: 1, step: 0.05, def: 1, fmt: v => (+v).toFixed(2),
+      get: () => model.rigLevel, set: (v) => setRigLevel(v),
+      toggle: () => setRigMuted(!model.rigMuted),
+    });
+
+    // Order: tuner · effects · looper · master (master ends on the far right).
+    row.append(tune, makeSep(), effects, makeSep(), tr, makeSep(), master);
+
+    miniTunerMount = document.createElement('div'); miniTunerMount.id = 'rig-mini-tuner-mount';
+    miniEl.append(row, miniTunerMount);
+  }
+
+  // Mirror a model value onto its mini knob (ring fill + pointer + readout).
+  function syncMiniKnob(stage, param, v) {
+    const k = miniKnobs.get(stage + ':' + param);
+    if (!k) return;
+    const frac = k.max > k.min ? clampN((v - k.min) / (k.max - k.min), 0, 1) : 0;
+    k.knob.style.setProperty('--p', frac.toFixed(4));
+    k.valEl.textContent = k.fmt(v);
+  }
+  function syncMiniLed(stage, on) {
+    const led = miniLeds.get(stage);
+    if (!led) return;
+    led.classList.toggle('on', !!on);
+    led.parentElement?.classList.toggle('off', !on);
+  }
+  // Repaint every mini control from the model (after build / reset / mode-enter).
+  function refreshMini() {
+    if (!_miniBuilt) return;
+    syncMiniKnob('master', 'level', model.rigLevel);
+    syncMiniLed('master', !model.rigMuted);
+    for (const p of MINI_PEDALS) {
+      syncMiniKnob(p.stage, p.param, model.strip[p.stage]?.[p.param] ?? 0);
+      syncMiniLed(p.stage, !!model.strip[p.stage]?.on);
+    }
+    refreshMiniTransport();
+    refreshMiniTuner();
+  }
+  function refreshMiniTransport() {
+    if (!miniPlayLed) return;
+    miniPlayLed.classList.toggle('recording', recording);
+    miniPlayLed.classList.toggle('playing', !recording && looperAudio.anyPlaying());
+  }
+  function refreshMiniTuner() {
+    if (!miniTunerSq) return;
+    miniTunerSq.classList.toggle('active', !!model.tunerOn);
+    const inTune = model.tunerOn && _strobe.inTune;
+    const near   = model.tunerOn && _strobe.near && !_strobe.inTune;
+    miniTunerSq.classList.toggle('intune', inTune);
+    miniTunerSq.classList.toggle('near', near);
+    miniTunerSq.textContent = (model.tunerOn && _strobe.voiced && _tunerNoteKey) ? _tunerNoteKey : '♪';
+  }
+
+  // Run the scope rAF only when needed: full mode always (scopes); mini mode only
+  // while the tuner is expanded. Keeps mini idle-cheap.
+  function syncScopeLoop() {
+    const open = panel && panel.style.display !== 'none';
+    if (open && (!model.mini || model.tunerOn)) startScope(); else stopScope();
+  }
+
+  // Enter/leave mini mode: swap which view is visible, relocate the strobe tuner
+  // so it can show in either mode, size the window to content, persist.
+  function applyMiniMode(on) {
+    model.mini = !!on;
+    lsSet(MINI_KEY, model.mini ? '1' : '0');
+    if (panel) panel.classList.toggle('mini', model.mini);
+    // Subtle indicator: the glyph stays put; the cyan `active` highlight marks the
+    // FULL rig view, so mini is the quiet/unhighlighted state (no word swap).
+    if (btnMini) {
+      btnMini.classList.toggle('active', !model.mini);
+      btnMini.setAttribute('aria-pressed', model.mini ? 'false' : 'true');
+      btnMini.title = model.mini ? 'Pedalboard (mini) view — click for the full rig (⇧O)' : 'Full rig view — click to condense to the pedalboard (⇧O)';
+    }
+    if (model.mini) {
+      buildMiniUI();
+      if (miniEl) miniEl.style.display = '';
+      // Relocate the strobe tuner into the mini mount so a tap-expand shows here.
+      if (tunerEl && miniTunerMount && tunerEl.parentElement !== miniTunerMount) miniTunerMount.append(tunerEl);
+      if (temperEl) temperEl.style.display = 'none';   // temperament editor is full-mode only
+      refreshMini();
+    } else {
+      if (miniEl) miniEl.style.display = 'none';
+      // Restore the tuner to the signal subpanel (its home, just before temper).
+      if (tunerEl && rigSignalEl && tunerEl.parentElement !== rigSignalEl) {
+        if (temperEl && temperEl.parentElement === rigSignalEl) rigSignalEl.insertBefore(tunerEl, temperEl);
+        else rigSignalEl.append(tunerEl);
+      }
+      if (temperEl) temperEl.style.display = model.tunerOn ? '' : 'none';
+    }
+    syncScopeLoop();
+    reposition();
+  }
+  function toggleMini() { applyMiniMode(!model.mini); }
 
   // ── bundle asset I/O (for the .qualem.zip exporter) ────────────────────────
   // Gather the heavy local assets needed to recreate this rig elsewhere: the
@@ -1611,9 +1908,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
           sampleRate: r.sampleRate || 48000,
           channels,
           meta: {
-            order: r.order, regionFrames: r.regionFrames, loopStartBase: r.loopStartBase,
+            order: r.order, regionFrames: r.regionFrames, contentFrames: r.contentFrames, loopStartBase: r.loopStartBase,
             naturalSeconds: r.naturalSeconds, recordedCycles: r.recordedCycles,
-            grid: r.grid, length: r.length, volume: r.volume, muted: r.muted, preservePitch: r.preservePitch,
+            grid: r.grid, length: r.length, fitMode: r.fitMode, volume: r.volume, muted: r.muted, preservePitch: r.preservePitch,
           },
         });
       }
@@ -1656,9 +1953,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
           await loopStore.putTrack({
             id: l.id, order: m.order,
             pcm: l.channels, sampleRate: l.sampleRate || 48000,
-            regionFrames: m.regionFrames, loopStartBase: m.loopStartBase,
+            regionFrames: m.regionFrames, contentFrames: m.contentFrames, loopStartBase: m.loopStartBase,
             naturalSeconds: m.naturalSeconds, recordedCycles: m.recordedCycles,
-            grid: m.grid, length: m.length, volume: m.volume, muted: m.muted, preservePitch: m.preservePitch,
+            grid: m.grid, length: m.length, fitMode: m.fitMode, volume: m.volume, muted: m.muted, preservePitch: m.preservePitch,
           });
         }
         await reloadTracks();
@@ -1802,6 +2099,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       tunerCentsEl.textContent = msg; tunerCentsEl.style.color = '';
       _tunerNoteKey = '';
       _strobe.voiced = false; _strobe.inTune = false; _strobe.near = false; _strobe.msg = msg;
+      refreshMiniTuner();
     };
     if (!an || typeof an.getFloatTimeDomainData !== 'function') { clear('rig signal off'); return; }
     const n = an.fftSize;
@@ -1842,6 +2140,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     _strobe.voiced  = true;
     _strobe.inTune  = inTune;
     _strobe.near    = near;
+    refreshMiniTuner();
   }
   // Per-frame strobe: demodulate the live input at each band frequency and paint
   // the drifting/frozen bands. Allocation-free (reused buffer + lazy Hann window).
@@ -2018,7 +2317,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     model.tunerOn = on == null ? !model.tunerOn : !!on;
     lsSet(TUNER_KEY, model.tunerOn ? '1' : '0');
     if (tunerEl) tunerEl.style.display = model.tunerOn ? '' : 'none';
-    if (temperEl) temperEl.style.display = model.tunerOn ? '' : 'none';
+    // In mini mode the temperament editor stays tucked away; show it only in full.
+    if (temperEl) temperEl.style.display = (model.tunerOn && !model.mini) ? '' : 'none';
     if (model.tunerOn) {
       buildTunerUI();
       buildTemperamentUI();
@@ -2026,6 +2326,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     applyTunerMute();
     refreshTunerBtn();
+    refreshMiniTuner();
+    // The strobe is driven by the scope rAF — start/stop it as tuner visibility
+    // changes so mini stays idle-cheap when the tuner is collapsed.
+    syncScopeLoop();
   }
 
   // ── refreshers ───────────────────────────────────────────────────────────
@@ -2042,12 +2346,80 @@ export function createLooper({ audio, syncStrudel } = {}) {
     el.muteBtn.title = track.muted ? 'Unmute this track' : 'Mute this track (keeps looping in time)';
     el.gridIn.value = String(track.grid);
     if (el.volSl) el.volSl.value = String(track.volume);
+    const mode = track.fitMode || 'once';
+    if (el.fillBtn) {
+      el.fillBtn.textContent = mode;
+      el.fillBtn.classList.toggle('active', mode === 'fit');
+    }
     if (el.ppBtn) {
       el.ppBtn.classList.toggle('active', !!track.preservePitch);
       el.ppBtn.textContent = track.preservePitch ? 'keep' : 'vari';
+      // Pitch vari/keep only matters when stretching ("fit").
+      el.ppBtn.disabled = mode !== 'fit';
     }
+    updateTrackRate(track);
     applyCanvasHeight(track);
   }
+
+  // ── varispeed / buffer readouts ────────────────────────────────────────────
+  // Mirror of looper-audio's derivePlaybackRate so the row can SHOW why a take
+  // plays back sharp/flat: rate = recorded length ÷ the wall-time of `length`
+  // cycles at the current tempo. 1.00× = natural; off 1.00× in "vari" is pitch-
+  // shifted (the take didn't fill a whole number of cycles, so it's sped to fit).
+  function trackRate(t) {
+    if (!t.buffer || !t.naturalSeconds || !t.length) return 1;
+    const cps = currentCps();
+    const targetSec = t.length / (cps > 0 ? cps : 0.5);
+    const r = t.naturalSeconds / targetSec;
+    return (r > 0 && isFinite(r)) ? r : 1;
+  }
+  function updateTrackRate(track) {
+    const el = rowEls.get(track.id)?.rateEl;
+    if (!el) return;
+    if (!track.buffer) { el.textContent = '—'; el.className = 'looper-track-rate'; return; }
+    // once/tile always play at natural rate — no stretch, no shift.
+    if ((track.fitMode || 'once') !== 'fit') {
+      el.textContent = '1.00×';
+      el.className = 'looper-track-rate';
+      return;
+    }
+    const r = trackRate(track);
+    const semis = 12 * Math.log2(r);
+    const off = Math.abs(r - 1) > 0.01;
+    if (track.preservePitch) {
+      // Pitch preserved — only the tempo is stretched, no semitone shift.
+      el.textContent = `${r.toFixed(2)}×`;
+      el.className = 'looper-track-rate' + (off ? ' stretched' : '');
+    } else {
+      el.textContent = off ? `${r.toFixed(2)}× ${semis >= 0 ? '+' : ''}${semis.toFixed(1)}st` : `${r.toFixed(2)}×`;
+      el.className = 'looper-track-rate' + (Math.abs(semis) > 0.25 ? ' shift' : '');
+    }
+  }
+  // Live "grab" buffer readout: how much lookback is filled vs what a grab needs.
+  function updateBufferReadout() {
+    const info = looperAudio.getBufferInfo?.() || { capable: false, seconds: 0, capSeconds: 40 };
+    if (bufferBtn && looperAudio.isBuffering() && info.capable) {
+      bufferBtn.textContent = `buffer ● ${Math.floor(info.seconds)}s`;
+    }
+    if (btnRetro && info.capable) {
+      const cps = currentCps() || 0.5;
+      const needSec = model.retroCycles / cps;
+      const haveCyc = info.seconds * cps;
+      const enough = info.seconds >= needSec * 0.98;
+      btnRetro.classList.toggle('insufficient', !enough);
+      btnRetro.title = `${enough ? 'Grab' : 'Buffer still filling — grab'} the last ${model.retroCycles} cyc (~${needSec.toFixed(1)}s). `
+        + `Buffered ${info.seconds.toFixed(0)}s ≈ ${haveCyc.toFixed(1)} cyc.`;
+    }
+  }
+  let _bufRateTimer = null;
+  function startBufRateTick() {
+    if (_bufRateTimer) return;
+    _bufRateTimer = setInterval(() => {
+      updateBufferReadout();
+      for (const t of model.tracks) updateTrackRate(t);
+    }, 500);
+  }
+  function stopBufRateTick() { if (_bufRateTimer) { clearInterval(_bufRateTimer); _bufRateTimer = null; } }
   function refreshArmIndicators() {
     for (const [id, el] of rowEls) {
       const armed = id === model.armedTrackId;
@@ -2098,6 +2470,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (btnDelete) btnDelete.disabled = !any || recording;
     if (btnRetro) btnRetro.disabled = recording || !(looperAudio.isRetroCapable() && looperAudio.isCapturing());
     refreshSyncBtnVisibility();
+    refreshMiniTransport();
   }
   function refreshBufferBtn() {
     if (!bufferBtn) return;
@@ -2119,6 +2492,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     btnSync.style.display = (model.syncStrudel && hasAnyAudio()) ? '' : 'none';
   }
   function refreshRigMuteBtn() {
+    syncMiniLed('master', !model.rigMuted);
     if (!btnRigMute) return;
     btnRigMute.classList.toggle('muted', model.rigMuted);
     btnRigMute.textContent = model.rigMuted ? 'muted' : 'live';
@@ -2255,11 +2629,16 @@ export function createLooper({ audio, syncStrudel } = {}) {
     applyScopesCollapse();
     refreshLooperBtn();
     refreshTransport();
+    // Restore mini (pedalboard) mode last — it swaps which view is visible,
+    // relocates the strobe tuner, and re-runs syncScopeLoop to right-size the rAF.
+    applyMiniMode(model.mini);
+    startBufRateTick();
   }
   function close() {
     if (panel) panel.style.display = 'none';
     lsSet(PANEL_OPEN_KEY, '0');
     stopScope();
+    stopBufRateTick();
     refreshLooperBtn();
   }
 
@@ -2273,6 +2652,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnRetro)  btnRetro.addEventListener('click', () => { doRetroGrab(); });
   if (bufferBtn) bufferBtn.addEventListener('click', () => { setBuffer(!model.bufferOn); });
   if (btnChannels) btnChannels.addEventListener('click', () => { setChannels(model.channels === 'stereo' ? 'mono' : 'stereo'); });
+  if (btnMini)   btnMini.addEventListener('click', () => { toggleMini(); });
   if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
   if (btnStripUtil) btnStripUtil.addEventListener('click', () => { toggleStripUtil(); });
   if (btnStripReset) btnStripReset.addEventListener('click', () => { resetStrip(); });

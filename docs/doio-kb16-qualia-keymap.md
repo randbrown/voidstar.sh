@@ -34,9 +34,10 @@ strip, bottom-right).
   and encoder 1 (right). If your physical units feel reversed, swap `knob[0]`↔
   `knob[1]` and the encoder-push keys (`row 0,col 4` ↔ `row 1,col 4`) in the
   launcher — everything else stays put.
-- Keys are ignored while a text editor panel (Strudel / sequencer / vocoder /
-  looper) has focus, so the pad never fights your typing — click the canvas to
-  re-arm.
+- Keys are ignored only while a code editor (Strudel / sequencer / vocoder) or a
+  text field has focus, so the pad never fights your typing. The rig panel's
+  sliders and buttons do **not** disarm the pad — turn the knobs with the rig
+  panel open and focused; the on-screen sliders move to match.
 - A true MIDI controller can instead drive **CC1** delay · **CC2** reverb ·
   **CC7** volume (absolute 0–1, any channel; Chromium browsers only). The DOIO
   on Keychron Launcher sends keystrokes, so it uses the key map above.
