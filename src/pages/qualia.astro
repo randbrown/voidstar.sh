@@ -1649,6 +1649,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.12rem 0.35rem; outline: none; cursor: pointer;
     }
     .seq-kit-select:focus { border-color: var(--accent); color: var(--accent); }
+    /* ‹ select › — prev/next kit steppers flanking the dropdown. */
+    .seq-kit-nav { display: inline-flex; align-items: stretch; gap: 0.2rem; }
+    .seq-kit-arrow {
+      padding: 0.05rem 0.4rem; font-size: 0.9rem; line-height: 1;
+      min-width: 1.5rem; text-align: center;
+    }
     /* One-click GitHub pack loader — spans the full settings row. */
     .seq-pack-loader {
       flex-basis: 100%; display: flex; flex-direction: column; gap: 0.3rem;

@@ -435,11 +435,28 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // output node so the patch leaves it alone — the sequencer has its own
   // per-source mute (kit.output.gain) and must not be silenced by Strudel.
   function buildKit() {
-    const k = resolveKit(_kitId).make();
+    let k;
+    try {
+      k = resolveKit(_kitId).make();
+    } catch (e) {
+      // A kit that fails to construct must NOT silently strand the previous
+      // one (that reads as "the samples kit just plays the old sound"). Log
+      // loudly and let the caller keep the old kit instead.
+      console.error(`[qualia] kit "${_kitId}" failed to build:`, e);
+      return null;
+    }
     k.output.__qualiaBypassMute = true;
-    // Sample kits load asynchronously — surface the loaded state in the status
-    // line so the user knows why an unmapped/unloaded pad is silent for a beat.
-    k.ready?.then(() => { if (kit === k) refreshSeqBtn(); }).catch(() => {});
+    // Sample kits load asynchronously — surface the loaded state (and a clear
+    // warning when nothing decoded) so the user knows why pads are silent.
+    k.ready?.then((info) => {
+      if (kit !== k) return;
+      refreshSeqBtn();
+      if (info && status) {
+        status.textContent = info.loaded === 0
+          ? `kit: 0/${info.total} samples loaded — check console`
+          : `kit: ${info.loaded}/${info.total} samples`;
+      }
+    }).catch(() => {});
     return k;
   }
   // Connect a freshly-built kit into the live graph (limiter + analyser).
@@ -456,10 +473,15 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     const rawDest = rawCtx.destination;
     // Brickwall limiter between the kit bus and the speakers — clip insurance
     // so a stack of loud hits can't push full-scale into the device-level sum.
-    seqLimiter = makeLimiter(rawCtx, _seqLimiterOn);
-    seqLimiter.__qualiaBypassMute = true;
-    seqLimiter.connect(rawDest);
-    kit = buildKit();
+    // Created once and reused across kit swaps.
+    if (!seqLimiter) {
+      seqLimiter = makeLimiter(rawCtx, _seqLimiterOn);
+      seqLimiter.__qualiaBypassMute = true;
+      seqLimiter.connect(rawDest);
+    }
+    const built = buildKit();
+    if (!built) return;   // build failed (logged) — try again on next call
+    kit = built;
     wireKit(kit);
     // Apply current mute state in case the user toggled it before the
     // first play (kit didn't exist yet, so the gain change had nowhere
@@ -480,11 +502,14 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     model.updatedAt = Date.now();
     persistSoon();
     if (kit) {
-      const old = kit;
-      kit = buildKit();
-      wireKit(kit);
-      applyMuteToKit();
-      try { old.dispose(); } catch {}
+      const built = buildKit();
+      if (built) {
+        const old = kit;
+        kit = built;
+        wireKit(kit);
+        applyMuteToKit();
+        try { old.dispose(); } catch {}
+      }
     }
     refreshKitSelect();
     refreshSeqBtn();
@@ -989,9 +1014,24 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     populateKitOptions(kitSel);
     kitSel.addEventListener('change', () => setKit(kitSel.value));
     _kitSelectEl = kitSel;
+    // ‹ › step through the kit list (wraps) — faster than opening the dropdown
+    // to audition adjacent kits during a set.
+    const kitNav = document.createElement('span');
+    kitNav.className = 'seq-kit-nav';
+    const mkNavBtn = (txt, dir, title) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ctrl-btn seq-kit-arrow';
+      b.textContent = txt;
+      b.title = title;
+      b.setAttribute('aria-label', title);
+      b.addEventListener('click', (e) => { e.preventDefault(); stepKit(dir); });
+      return b;
+    };
+    kitNav.append(mkNavBtn('‹', -1, 'Previous kit'), kitSel, mkNavBtn('›', +1, 'Next kit'));
 
     propsEl.append(
-      mk('kit',       kitSel, { title: 'Instrument the pads play through. Synth kits are offline; sample kits load the same strudel.json packs Strudel uses.' }),
+      mk('kit',       kitNav, { title: 'Instrument the pads play through. Synth kits are offline; sample kits load the same strudel.json packs Strudel uses.' }),
       mkPackLoader(),
       mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
       mk('steps/beat', stepperFor(stepsIn, 'change'), { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
@@ -1024,6 +1064,16 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       sel.appendChild(opt);
     }
     sel.value = _kitId;
+  }
+  // Step the selection through the ordered kit list (static + loaded), wrapping
+  // at the ends. Drives the ‹ › buttons.
+  function stepKit(dir) {
+    const ids = [...KITS, ..._dynamicKits.values()].map((k) => k.id);
+    if (!ids.length) return;
+    let i = ids.indexOf(_kitId);
+    if (i < 0) i = 0;
+    i = (i + dir + ids.length) % ids.length;
+    setKit(ids[i]);
   }
   function setPackStatus(msg, isErr) {
     if (!_packStatusEl) return;

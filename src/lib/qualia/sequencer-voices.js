@@ -463,18 +463,24 @@ export function createSynthKit(spec = {}) {
 // Loading is async and best-effort: the kit returns immediately with a `ready`
 // promise; `trigger` is a no-op until the buffer for that voice has decoded, so
 // playback can start before every sample is in (early hits just don't sound).
-// Per-hit it spins up a short-lived ToneBufferSource → velocity Gain so hits
-// can overlap (a fast open-hat roll, a flam) without choking each other; both
-// nodes self-dispose on `onended`.
+//
+// Playback uses RAW Web Audio nodes (not Tone wrappers): one decode per sample,
+// then a short-lived AudioBufferSourceNode → velocity GainNode per hit so hits
+// overlap cleanly and self-disconnect on `onended`. Going native here keeps the
+// path dead-simple and sidesteps any Tone-context/wrapper edge cases — the
+// sequencer only ever touches `output.connect`, `output.gain`, the bypass tag,
+// and `dispose()`, all of which a native GainNode supports.
 export function createSampleKit({ manifestUrl, voiceMap = {}, gain = 0.95 } = {}) {
-  const out = new Tone.Gain(gain);
+  const ctx = Tone.getContext().rawContext;
+  const out = ctx.createGain(); out.gain.value = gain;
   // Headroom stage to match the synth kits — sample one-shots are normalised
   // near full scale, so a kick+hat stack would otherwise sum past 0 dBFS.
-  const bus = new Tone.Gain(0.7);
+  const bus = ctx.createGain(); bus.gain.value = 0.7;
   bus.connect(out);
 
   const buffers = Object.create(null);   // voiceId → AudioBuffer
   let disposed = false;
+  let loaded = 0, total = 0;
 
   const ready = (async () => {
     if (!manifestUrl) return;
@@ -482,10 +488,9 @@ export function createSampleKit({ manifestUrl, voiceMap = {}, gain = 0.95 } = {}
     try {
       resolved = await resolveManifest(manifestUrl);
     } catch (e) {
-      console.warn('[qualia] sample kit manifest load failed:', e);
+      console.warn(`[qualia] sample kit "${manifestUrl}" manifest load failed:`, e);
       return;
     }
-    const rawCtx = Tone.getContext().rawContext;
     const tasks = [];
     for (const voiceId of Object.keys(voiceMap)) {
       // A mapping value may be a single sample name or an ordered list of
@@ -501,35 +506,54 @@ export function createSampleKit({ manifestUrl, voiceMap = {}, gain = 0.95 } = {}
                 : (entry && typeof entry === 'object') ? Object.values(entry)[0]
                 : null;
       if (!url) continue;
+      total++;
       tasks.push((async () => {
         try {
-          const ab = await (await fetch(url, { cache: 'force-cache' })).arrayBuffer();
+          const res = await fetch(url, { cache: 'force-cache' });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const ab = await res.arrayBuffer();
           // decodeAudioData detaches the ArrayBuffer; one decode per URL.
-          const audioBuf = await rawCtx.decodeAudioData(ab);
-          if (!disposed) buffers[voiceId] = audioBuf;
+          // Promise form isn't universal — wrap the callback form so old
+          // Safari/WebKit still resolves.
+          const audioBuf = await new Promise((resolve, reject) => {
+            const p = ctx.decodeAudioData(ab, resolve, reject);
+            if (p && typeof p.then === 'function') p.then(resolve, reject);
+          });
+          if (!disposed) { buffers[voiceId] = audioBuf; loaded++; }
         } catch (e) {
-          console.warn(`[qualia] sample "${sampleName}" (${voiceId}) failed:`, e);
+          console.warn(`[qualia] sample "${sampleName}" (${voiceId}) from ${url} failed:`, e);
         }
       })());
     }
     await Promise.all(tasks);
+    if (!disposed) {
+      const where = manifestUrl.replace(/^.*\/samples\//, 'samples/');
+      if (loaded === 0) console.warn(`[qualia] sample kit "${where}" loaded 0/${total} — kit will be silent`);
+      else console.info(`[qualia] sample kit "${where}" loaded ${loaded}/${total} voices`);
+    }
+    return { loaded, total };
   })();
 
   return {
     output: out,
     ready,
     /** True once at least one voice has decoded — UI can show a loading pip. */
-    isReady() { return Object.keys(buffers).length > 0; },
+    isReady() { return loaded > 0; },
+    /** {loaded,total} for diagnostics / status. */
+    loadInfo() { return { loaded, total }; },
     trigger(voiceId, time, velocity = 1) {
       const audioBuf = buffers[voiceId];
       if (!audioBuf) return;   // not loaded / unmapped → silent, never crash
       try {
-        const src = new Tone.ToneBufferSource(audioBuf);
-        const vg = new Tone.Gain(Math.max(0, Math.min(1, velocity))).connect(bus);
-        src.connect(vg);
-        src.onended = () => { try { src.dispose(); vg.dispose(); } catch {} };
-        src.start(time);
-      } catch (e) { /* scheduling past/edge times — drop the hit */ }
+        const src = ctx.createBufferSource();
+        src.buffer = audioBuf;
+        const vg = ctx.createGain();
+        vg.gain.value = Math.max(0, Math.min(1, velocity));
+        src.connect(vg); vg.connect(bus);
+        src.onended = () => { try { src.disconnect(); vg.disconnect(); } catch {} };
+        // Guard against a scheduled time that's already elapsed (clamp to now).
+        src.start(Math.max(time || 0, ctx.currentTime));
+      } catch (e) { /* edge scheduling — drop the hit */ }
     },
     // A voice is "playable" if it's mapped in the kit — greys out unmapped pads
     // exactly like the synth kits do, even before the buffer has finished
@@ -537,8 +561,8 @@ export function createSampleKit({ manifestUrl, voiceMap = {}, gain = 0.95 } = {}
     has(voiceId) { return Object.prototype.hasOwnProperty.call(voiceMap, voiceId); },
     dispose() {
       disposed = true;
-      try { bus.dispose(); } catch {}
-      try { out.dispose(); } catch {}
+      try { bus.disconnect(); } catch {}
+      try { out.disconnect(); } catch {}
       for (const k of Object.keys(buffers)) delete buffers[k];
     },
   };
