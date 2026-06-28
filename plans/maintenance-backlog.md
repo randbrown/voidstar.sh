@@ -46,7 +46,8 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
    `audio.js` and `vocoder.js`).
 6. **Array-based disposal** for `rig-strip.js` and `vocoder.js` — both hand-list ~40 nodes in
    teardown (drift risk). Push nodes into an array at creation; iterate on dispose.
-7. **Share the cycle-pool / phase-pool predicate** (`isInCycle` / `isStepInPhase` are the same fn).
+7. ✅ **Share the cycle-pool / phase-pool predicate** — *done:* `isStepInPhase` now delegates to
+   `isInCycle`; both pool files + `panel-pos.js` also moved their raw localStorage onto `prefs.js`.
 8. **Unify the audio-uniform upload** shape (`webgl.js` vs `three-host.js`).
 
 ## C. Realtime performance wins (ranked)

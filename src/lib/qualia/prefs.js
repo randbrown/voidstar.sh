@@ -17,6 +17,11 @@ export function setRaw(key, value) {
   try { localStorage.setItem(key, String(value)); } catch {}
 }
 
+/** Best-effort key removal. */
+export function removeRaw(key) {
+  try { localStorage.removeItem(key); } catch {}
+}
+
 // Booleans are stored as '1' / '0'. Writes are always one of those, so reading
 // `v !== '0'` matches both the old `!== '0'` (default-true) and `=== '1'`
 // (default-false) idioms — the `dflt` arg covers the missing-value case.
