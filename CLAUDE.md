@@ -9,6 +9,7 @@ Quick map of the canonical docs:
 - qualia fx module contract → [`src/lib/qualia/README.md`](src/lib/qualia/README.md)
 - Audio engine (rig, neural amp, vox, mixer) → [`docs/audio-engine.md`](docs/audio-engine.md)
 - Looper, sequencer & recording → [`docs/looper-and-sequencer.md`](docs/looper-and-sequencer.md)
+- Sequencer kits & samples shared with Strudel → [`docs/samples.md`](docs/samples.md)
 - Live coding (Strudel + Hydra) → [`docs/livecoding.md`](docs/livecoding.md)
 - Audience entanglement & pose → [`docs/entanglement.md`](docs/entanglement.md)
 - Arcade design → [`plans/arcade-quale-plan.md`](plans/arcade-quale-plan.md)

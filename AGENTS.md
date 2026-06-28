@@ -46,6 +46,7 @@ non-negotiables; the technical detail lives in the docs below.
 | A qualia visualizer ("fx") — the module contract, field shape, helpers | [`src/lib/qualia/README.md`](src/lib/qualia/README.md) |
 | The audio engine — rig/pedalboard, neural amp, vocoder, harmonizer, voice shifter, mixer | [`docs/audio-engine.md`](docs/audio-engine.md) |
 | The looper, the sequencer, and the recording/export pipeline | [`docs/looper-and-sequencer.md`](docs/looper-and-sequencer.md) |
+| Sequencer kits + samples shared with Strudel (the `strudel.json` pipeline) | [`docs/samples.md`](docs/samples.md) |
 | Live coding — Strudel REPL, Hydra bridge, the `qualia.setParam` surface | [`docs/livecoding.md`](docs/livecoding.md) |
 | Audience participation + pose — the entanglement mesh and pose pipeline | [`docs/entanglement.md`](docs/entanglement.md) |
 | Arcade games / playable visualizers | [`plans/arcade-quale-plan.md`](plans/arcade-quale-plan.md) (+ `src/lib/qualia/fx/arcade/`) |

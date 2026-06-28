@@ -55,9 +55,19 @@ different `steps`, not special cases. Plays sample-accurately locked to the Stru
 
 | File | Responsibility |
 |---|---|
-| `sequencer.js` | Orchestrator + UI + transport + Tone scheduling + Strudel sync. |
-| `sequencer-voices.js` | `createKit()` — Tone.js synth factory (kick/snare/hats/toms/cymbals/rim), phone-speaker-tuned, returns stable trigger thunks. |
+| `sequencer.js` | Orchestrator + UI + transport + Tone scheduling + Strudel sync + kit selection/swap. |
+| `sequencer-voices.js` | Kit builders, all sharing one `{ output, trigger, has, dispose }` interface: `createKit()` (default 808/909 synth), `createLofiKit()` (warm tape-flavoured synth), `createSampleKit()` (plays decoded samples from a shared `strudel.json`). Phone-speaker-tuned, stable trigger thunks. |
+| `sequencer-kits.js` | The kit **catalog** — names each kit, marks it synth/sample, and maps voice ids → sample names for sample kits. |
 | `sequencer-patterns.js` | JSON pattern **model** storage/validation/CRUD + `VOICES` catalog (localStorage). Stores models, not code strings. |
+
+**Kits.** A kit is the instrument the pads play through; all kits speak the same
+voice ids so a groove re-voices onto any kit without touching the grid. The
+choice persists (`voidstar.qualia.sequencer.kit`) and is swapped live from the
+settings-pane dropdown — `setKit()` builds + wires the new kit, then disposes the
+old (no silent gap). **Sample kits** load one-shots from the same Strudel
+`strudel.json` packs Strudel uses, so both engines share sounds — see
+[`samples.md`](samples.md). Synth kits are offline/always-available; sample kits
+load async and a not-yet-loaded voice is simply silent.
 
 **Scheduling.** `kit.output → seqLimiter → rawCtx.destination`, deliberately **bypassing
 `Tone.getDestination()`** (both nodes tagged `__qualiaBypassMute`) because Strudel mutes via

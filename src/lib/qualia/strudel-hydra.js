@@ -16,6 +16,9 @@ import {
 } from './patterns.js';
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
+import {
+  resolveManifest, toStrudelSampleMap, VOIDSTAR_LOFI_PACK_URL,
+} from './samples-manifest.js';
 
 // Pinned, NOT @latest: a live set must not break because unpkg served a new
 // @strudel/repl mid-tour. Bump this deliberately (and re-test a set) when you
@@ -39,7 +42,37 @@ function loadStrudelScript() {
     document.head.appendChild(s);
   });
   _strudelLoadingP.then(injectLateStrudelOverride).catch(() => {});
+  // Register the shared sample pack(s) into Strudel so the same sounds the
+  // sequencer's sample kits play are also playable in the REPL (`s("bd sd hh")`,
+  // `s("lt mt ht")`, etc.). Fire-and-forget — a pack that fails to load just
+  // isn't there, exactly like a default bank that didn't reach the CDN.
+  _strudelLoadingP.then(registerSharedSamples).catch(() => {});
   return _strudelLoadingP;
+}
+
+// Register voidstar's bundled sample packs via the global `samples()` that the
+// @strudel/repl bundle exposes (same bulk-global path as getAudioContext /
+// superdough / soundMap). `samples()` only registers the name→URL map; audio
+// decodes lazily on first play, so it's safe to call as soon as the function
+// exists — we just poll briefly for it after the script loads.
+let _sharedSamplesRegistered = false;
+async function registerSharedSamples() {
+  if (_sharedSamplesRegistered) return;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < 60 && typeof globalThis.samples !== 'function'; i++) {
+    await sleep(150);
+  }
+  if (typeof globalThis.samples !== 'function') return;
+  try {
+    const resolved = await resolveManifest(VOIDSTAR_LOFI_PACK_URL);
+    // Absolute URLs in the map → Strudel registers them as-is (empty base).
+    // `lofi_` prefix keeps this additive (doesn't clobber Strudel's stock
+    // bd/sd/hh): play as s("lofi_bd lofi_sd") or s("bd sd").bank("lofi").
+    await globalThis.samples(toStrudelSampleMap(resolved, 'lofi_'));
+    _sharedSamplesRegistered = true;
+  } catch (e) {
+    console.warn('[qualia] shared samples registration failed:', e);
+  }
 }
 
 function injectLateStrudelOverride() {

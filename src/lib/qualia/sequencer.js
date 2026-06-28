@@ -19,10 +19,10 @@ import {
   removeFromList, clonePattern, defaultPattern, resizeHits, makePad,
   loadPanelOpen, savePanelOpen, downloadPattern, VOICES,
 } from './sequencer-patterns.js';
-import { createKit } from './sequencer-voices.js';
+import { KITS, getKit, DEFAULT_KIT_ID } from './sequencer-kits.js';
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
-import { getNum, getBool, setBool, setRaw } from './prefs.js';
+import { getNum, getBool, setBool, setRaw, getRaw } from './prefs.js';
 
 // Persisted UI volume — multiplies kit.output while un-muted. Sits
 // alongside the mute toggle as a performance-time mix-ride control.
@@ -43,6 +43,17 @@ function saveSeqLimiter(on) { setBool(SEQ_LIMITER_KEY, on); }
 const SEQ_SHOW_SETTINGS_KEY = 'voidstar.qualia.sequencer.showSettings';
 function loadShowSettings() { return getBool(SEQ_SHOW_SETTINGS_KEY, true); }
 function saveShowSettings(on) { setBool(SEQ_SHOW_SETTINGS_KEY, on); }
+
+// Selected kit (instrument the pads play through). A performance-time choice
+// like volume/limiter — global to the sequencer and persisted across reloads,
+// not stored per-pattern (grooves are voice-id rhythms; they sound on whatever
+// kit is loaded). Falls back to the default synth kit if the stored id is gone.
+const SEQ_KIT_KEY = 'voidstar.qualia.sequencer.kit';
+function loadSeqKit() {
+  const id = getRaw(SEQ_KIT_KEY, DEFAULT_KIT_ID);
+  return getKit(id).id;   // normalises an unknown/removed id to the default
+}
+function saveSeqKit(id) { setRaw(SEQ_KIT_KEY, id); }
 
 export function createSequencer({ audio, syncStrudel } = {}) {
   // Snapshot panel-open state from the previous session ONCE — open()/close()
@@ -75,6 +86,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // Kit + scheduling state, lazily created on first open() since spinning
   // up Tone.js touches the AudioContext (must follow a user gesture).
   let kit = null;
+  let _kitId = loadSeqKit();   // selected instrument; persisted across reloads
   let analyser = null;
   let loopId = null;
   let cellIdx = 0;
@@ -369,37 +381,69 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   }
 
   // ── Audio tap ──────────────────────────────────────────────────────────
+  // Build the currently-selected kit and tag its output. Bypass
+  // Tone.getDestination() (the Tone.js master volume node) by routing to the
+  // raw AudioContext destination instead. This is what makes the per-panel
+  // mute work: Strudel's mute uses Tone.Destination.mute=true, and if the
+  // sequencer also fed through Tone.Destination it would be silenced as a
+  // side-effect. The raw destination has no mute/volume controls — those live
+  // on kit.output and we drive them from setMuted() below.
+  //
+  // The strudel mute fix patches AudioNode.prototype.connect to route every
+  // connection-into-ctx.destination through a Strudel-owned mute gate. Tag this
+  // output node so the patch leaves it alone — the sequencer has its own
+  // per-source mute (kit.output.gain) and must not be silenced by Strudel.
+  function buildKit() {
+    const k = getKit(_kitId).make();
+    k.output.__qualiaBypassMute = true;
+    // Sample kits load asynchronously — surface the loaded state in the status
+    // line so the user knows why an unmapped/unloaded pad is silent for a beat.
+    k.ready?.then(() => { if (kit === k) refreshSeqBtn(); }).catch(() => {});
+    return k;
+  }
+  // Connect a freshly-built kit into the live graph (limiter + analyser).
+  function wireKit(k) {
+    if (seqLimiter) k.output.connect(seqLimiter);
+    // Tap the kit output (PRE-limiter) into the source analyser so the meter
+    // reads true. ensureAnalyserAdopted creates `analyser` lazily; on a later
+    // kit swap it already exists, so reconnect the new output here.
+    if (analyser) k.output.connect(analyser);
+  }
   function ensureKit() {
     if (kit) return;
-    kit = createKit();
-    // Bypass Tone.getDestination() (the Tone.js master volume node) by
-    // routing to the raw AudioContext destination instead. This is what
-    // makes the per-panel mute work: Strudel's mute uses
-    // Tone.Destination.mute=true, and if the sequencer also fed through
-    // Tone.Destination it would be silenced as a side-effect. The raw
-    // destination has no mute/volume controls — those live on
-    // kit.output and we drive them from setMuted() below.
-    //
-    // The strudel mute fix patches AudioNode.prototype.connect to route
-    // every connection-into-ctx.destination through a Strudel-owned
-    // mute gate. Tag this output node so the patch leaves it alone —
-    // the sequencer has its own per-source mute (kit.output.gain) and
-    // must not be silenced by the Strudel toggle.
     const rawCtx = Tone.getContext().rawContext;
     const rawDest = rawCtx.destination;
-    kit.output.__qualiaBypassMute = true;
     // Brickwall limiter between the kit bus and the speakers — clip insurance
     // so a stack of loud hits can't push full-scale into the device-level sum.
-    // The analyser taps kit.output (PRE-limiter), so the meter reads true.
     seqLimiter = makeLimiter(rawCtx, _seqLimiterOn);
     seqLimiter.__qualiaBypassMute = true;
-    kit.output.connect(seqLimiter);
     seqLimiter.connect(rawDest);
+    kit = buildKit();
+    wireKit(kit);
     // Apply current mute state in case the user toggled it before the
     // first play (kit didn't exist yet, so the gain change had nowhere
     // to land).
     applyMuteToKit();
   }
+  // Swap the live kit without a play/stop dance. Build + wire the new kit
+  // first, then dispose the old one, so there's no silent gap (the old kit's
+  // tails are cut, which is the expected feel of changing instruments).
+  function setKit(id) {
+    const next = getKit(id);
+    if (next.id === _kitId && kit) return;
+    _kitId = next.id;
+    saveSeqKit(_kitId);
+    if (kit) {
+      const old = kit;
+      kit = buildKit();
+      wireKit(kit);
+      applyMuteToKit();
+      try { old.dispose(); } catch {}
+    }
+    refreshKitSelect();
+    refreshSeqBtn();
+  }
+  function getKitId() { return _kitId; }
   // Mute is per-session, not persisted in the pattern model — it's a
   // performance gate ("silence this source for a moment"), not a saved
   // attribute of the pattern. Survives play/stop cycles within the
@@ -891,7 +935,24 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       lenHalf: sLen.bHalf, lenDbl: sLen.bDbl,
     };
 
+    // Kit picker — the instrument the pads play through. Switching is live;
+    // the same groove re-voices onto the new kit (see setKit). Synth kits are
+    // instant; sample kits decode their pack in the background.
+    const kitSel = document.createElement('select');
+    kitSel.className = 'seq-kit-select';
+    for (const k of KITS) {
+      const opt = document.createElement('option');
+      opt.value = k.id;
+      opt.textContent = k.label;
+      opt.title = k.desc || '';
+      kitSel.appendChild(opt);
+    }
+    kitSel.value = _kitId;
+    kitSel.addEventListener('change', () => setKit(kitSel.value));
+    _kitSelectEl = kitSel;
+
     propsEl.append(
+      mk('kit',       kitSel, { title: 'Instrument the pads play through. Synth kits are offline; sample kits load the same strudel.json packs Strudel uses.' }),
       mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
       mk('steps/beat', stepperFor(stepsIn, 'change'), { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
       mk('cps',       stepperFor(cpsIn,  'input'),  { title: 'Cycles per second — Strudel\'s master clock when sync is on' }),
@@ -900,6 +961,12 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       syncWrap,
     );
     refreshScaleBtns();
+  }
+  // Keep the kit dropdown in sync when the kit is changed programmatically
+  // (e.g. a future remote/macro path) or re-rendered.
+  let _kitSelectEl = null;
+  function refreshKitSelect() {
+    if (_kitSelectEl && _kitSelectEl.value !== _kitId) _kitSelectEl.value = _kitId;
   }
   function refreshPropsValues() {
     if (!propsEl) return;
@@ -1368,6 +1435,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     setLimiter,
     getLimiter,
     onChange,
+    // Kit selection — instrument the pads play through.
+    getKits: () => KITS.map(({ id, label, type, desc }) => ({ id, label, type, desc })),
+    getKitId,
+    setKit,
     play, stop,
     playFromStrudel, stopFromStrudel,
     setCps,

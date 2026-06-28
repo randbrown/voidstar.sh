@@ -1640,6 +1640,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .seq-num-wide { width: 6ch; }
     .seq-num:focus { border-color: var(--accent); color: var(--accent); }
+    /* Kit picker — matches the .seq-num field aesthetic but sizes to its
+       label text rather than a fixed char width. */
+    .seq-kit-select {
+      background: rgba(0,0,0,0.3); color: var(--cyan);
+      border: 1px solid var(--border); border-radius: 4px;
+      font-family: var(--font-mono); font-size: 0.74rem;
+      padding: 0.12rem 0.35rem; outline: none; cursor: pointer;
+    }
+    .seq-kit-select:focus { border-color: var(--accent); color: var(--accent); }
     /* [−] [input] [+] cluster — the buttons are oversized vs. the native
        UA arrows so a finger can hit them without summoning the OS
        keyboard. Uses inline-flex so the wrapper participates in the

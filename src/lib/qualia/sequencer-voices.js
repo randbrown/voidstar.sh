@@ -9,8 +9,19 @@
 // AudioContext time provided by Tone.Transport.scheduleRepeat — using the
 // scheduled time (instead of `Tone.now()`) keeps the hits sample-accurate
 // even if the JS thread is busy.
+//
+// This module exports three kit builders, all sharing one interface
+// (`{ output, trigger, has, dispose }`) so the sequencer can swap between
+// them without caring how a voice makes sound:
+//   - createKit()      — the canonical 808/909-flavoured synth kit (default)
+//   - createLofiKit()  — a warm, filtered, tape-flavoured synth kit
+//   - createSampleKit()— plays decoded samples from a shared strudel.json
+//                        manifest (the same packs Strudel loads)
+// The kit catalog that names and instantiates these lives in
+// sequencer-kits.js.
 
 import * as Tone from 'tone';
+import { resolveManifest } from './samples-manifest.js';
 
 export function createKit() {
   const out    = new Tone.Gain(0.9);
@@ -178,6 +189,242 @@ export function createKit() {
       for (const n of nodes) {
         try { n.dispose?.(); } catch {}
       }
+    },
+  };
+}
+
+// ── Lofi synth kit ─────────────────────────────────────────────────────────
+// A warm, dusty cousin of the default kit: same ten voice ids, but tuned for a
+// boom-bap / chillhop feel rather than a clean 909. The character is three
+// things working together — softer, lower-tuned voices; a bus tone-shaping
+// chain (low-pass "blanket" → gentle bit-crush grit → longer room) so the kit
+// sounds like it's coming off tape; and lower transients so it sits *under* a
+// pad/Strudel patch instead of cutting through it.
+export function createLofiKit() {
+  const out = new Tone.Gain(0.9);
+
+  // Bus tone chain (voices → [crush] → blanket LPF → out). Matched to
+  // createKit's ~4.5 dB headroom pull so stacked pads stay below the bus
+  // limiter.
+  const bus = new Tone.Gain(0.6);
+  // The lofi "blanket": roll off the highs so nothing sparkles. 3.4 kHz keeps
+  // the kit audible on a phone speaker (see createKit's hat tuning) while still
+  // reading as muffled/warm.
+  const blanket = new Tone.Filter(3400, 'lowpass');
+  blanket.Q.value = 0.4;
+  // Subtle sample-rate/bit reduction for the "old sampler" grain. Kept light
+  // (8-bit, 35% wet) — heavy crushing turns musical hits into harsh noise.
+  // BitCrusher is AudioWorklet-backed; if the worklet isn't available we drop
+  // it from the chain rather than failing to build the whole kit.
+  let crush = null;
+  try {
+    crush = new Tone.BitCrusher(8);
+    crush.wet.value = 0.35;
+    bus.chain(crush, blanket, out);
+  } catch (e) {
+    console.warn('[qualia] lofi BitCrusher unavailable, using clean bus:', e);
+    bus.chain(blanket, out);
+  }
+
+  // Roomier than the default kit — a chillhop kit lives in its reverb tail.
+  const reverb = new Tone.Reverb({ decay: 2.2, wet: 0.22 }).connect(bus);
+
+  // ── Kick — low, round, slow pitch fall (boom-bap thump) ─────────────────
+  const kick = new Tone.MembraneSynth({
+    pitchDecay: 0.08,
+    octaves:    5,
+    oscillator: { type: 'sine' },
+    envelope:   { attack: 0.001, decay: 0.5, sustain: 0.01, release: 1.4 },
+  }).connect(bus);
+
+  // ── Snare — softer body, more reverb, less crack ────────────────────────
+  const snareNoise = new Tone.NoiseSynth({
+    noise:    { type: 'pink' },
+    envelope: { attack: 0.001, decay: 0.16, sustain: 0 },
+  });
+  const snareBp = new Tone.Filter(1400, 'bandpass');
+  snareBp.Q.value = 0.9;
+  snareNoise.connect(snareBp);
+  snareBp.connect(reverb);
+  const snareBody = new Tone.MembraneSynth({
+    pitchDecay: 0.03, octaves: 2,
+    envelope: { attack: 0.001, decay: 0.12, sustain: 0 },
+  });
+  snareBody.volume.value = -10;
+  snareBody.connect(bus);
+
+  // ── Hats — darker MetalSynth, dustier and quieter ───────────────────────
+  const hatClosed = new Tone.MetalSynth({
+    envelope:        { attack: 0.001, decay: 0.05, release: 0.02 },
+    harmonicity:     4.2,
+    modulationIndex: 24,
+    resonance:       2400,
+    octaves:         1.2,
+  });
+  hatClosed.volume.value = -14;
+  hatClosed.connect(bus);
+
+  const hatOpen = new Tone.MetalSynth({
+    envelope:        { attack: 0.001, decay: 0.32, release: 0.18 },
+    harmonicity:     4.2,
+    modulationIndex: 24,
+    resonance:       2400,
+    octaves:         1.2,
+  });
+  hatOpen.volume.value = -16;
+  hatOpen.connect(bus);
+
+  // ── Toms — lower & softer than the default kit ──────────────────────────
+  const tomLow  = new Tone.MembraneSynth({ pitchDecay: 0.07, octaves: 3 }).connect(bus);
+  const tomMid  = new Tone.MembraneSynth({ pitchDecay: 0.07, octaves: 3 }).connect(bus);
+  const tomHigh = new Tone.MembraneSynth({ pitchDecay: 0.07, octaves: 3 }).connect(bus);
+
+  // ── Crash / ride — washed back into the room, trimmed low ───────────────
+  const crash = new Tone.MetalSynth({
+    envelope:        { attack: 0.001, decay: 1.6, release: 1.4 },
+    harmonicity:     5.6,
+    modulationIndex: 32,
+    resonance:       3400,
+    octaves:         1.5,
+  });
+  crash.volume.value = -20;
+  crash.connect(reverb);
+
+  const ride = new Tone.MetalSynth({
+    envelope:        { attack: 0.001, decay: 0.5, release: 0.35 },
+    harmonicity:     4.8,
+    modulationIndex: 18,
+    resonance:       3000,
+    octaves:         1.2,
+  });
+  ride.volume.value = -17;
+  ride.connect(bus);
+
+  // ── Rim — soft woody tick ───────────────────────────────────────────────
+  const rim = new Tone.MetalSynth({
+    envelope:        { attack: 0.001, decay: 0.05, release: 0.04 },
+    harmonicity:     2.8,
+    modulationIndex: 10,
+    resonance:       1400,
+    octaves:         0.9,
+  });
+  rim.volume.value = -15;
+  rim.connect(bus);
+
+  const triggers = {
+    'kick':  (t, v = 1) => kick.triggerAttackRelease('A0', '4n', t, v),
+    'snare': (t, v = 1) => { snareNoise.triggerAttackRelease('8n', t, v); snareBody.triggerAttackRelease('G2', '16n', t, v); },
+    'hat-c': (t, v = 1) => hatClosed.triggerAttackRelease('C5', '32n', t, v),
+    'hat-o': (t, v = 1) => hatOpen.triggerAttackRelease('C5',  '8n', t, v),
+    'tom-l': (t, v = 1) => tomLow.triggerAttackRelease('G1',  '8n', t, v),
+    'tom-m': (t, v = 1) => tomMid.triggerAttackRelease('C2',  '8n', t, v),
+    'tom-h': (t, v = 1) => tomHigh.triggerAttackRelease('F2', '8n', t, v),
+    'crash': (t, v = 1) => crash.triggerAttackRelease('C5', '4n', t, v),
+    'ride':  (t, v = 1) => ride.triggerAttackRelease('C5', '8n', t, v),
+    'rim':   (t, v = 1) => rim.triggerAttackRelease('A4', '16n', t, v),
+  };
+
+  const nodes = [
+    kick, snareNoise, snareBp, snareBody, hatClosed, hatOpen,
+    tomLow, tomMid, tomHigh, crash, ride, rim,
+    reverb, crush, blanket, bus, out,
+  ].filter(Boolean);   // crush may be null if the worklet was unavailable
+
+  return {
+    output: out,
+    trigger(voiceId, time, velocity) {
+      const fn = triggers[voiceId];
+      if (fn) fn(time, velocity);
+    },
+    has(voiceId) { return Object.prototype.hasOwnProperty.call(triggers, voiceId); },
+    dispose() {
+      for (const n of nodes) { try { n.dispose?.(); } catch {} }
+    },
+  };
+}
+
+// ── Sample kit ───────────────────────────────────────────────────────────
+// Plays decoded one-shots from a Strudel-format `strudel.json` manifest — the
+// exact same packs Strudel loads via `samples()`, so a sound heard in the REPL
+// is the sound the sequencer plays. `voiceMap` maps the sequencer's stable
+// voice ids (kick/snare/hat-c/…) onto sample names in the manifest (bd/sd/hh/…);
+// a voice with no mapping (or whose sample failed to load) simply stays silent,
+// matching createKit()'s "unknown voice = no-op" contract.
+//
+// Loading is async and best-effort: the kit returns immediately with a `ready`
+// promise; `trigger` is a no-op until the buffer for that voice has decoded, so
+// playback can start before every sample is in (early hits just don't sound).
+// Per-hit it spins up a short-lived ToneBufferSource → velocity Gain so hits
+// can overlap (a fast open-hat roll, a flam) without choking each other; both
+// nodes self-dispose on `onended`.
+export function createSampleKit({ manifestUrl, voiceMap = {}, gain = 0.95 } = {}) {
+  const out = new Tone.Gain(gain);
+  // Headroom stage to match the synth kits — sample one-shots are normalised
+  // near full scale, so a kick+hat stack would otherwise sum past 0 dBFS.
+  const bus = new Tone.Gain(0.7);
+  bus.connect(out);
+
+  const buffers = Object.create(null);   // voiceId → AudioBuffer
+  let disposed = false;
+
+  const ready = (async () => {
+    if (!manifestUrl) return;
+    let resolved;
+    try {
+      resolved = await resolveManifest(manifestUrl);
+    } catch (e) {
+      console.warn('[qualia] sample kit manifest load failed:', e);
+      return;
+    }
+    const rawCtx = Tone.getContext().rawContext;
+    const tasks = [];
+    for (const voiceId of Object.keys(voiceMap)) {
+      const sampleName = voiceMap[voiceId];
+      const entry = resolved.names[sampleName];
+      // First variation of an array; for a pitched map, the first value.
+      const url = Array.isArray(entry) ? entry[0]
+                : (entry && typeof entry === 'object') ? Object.values(entry)[0]
+                : null;
+      if (!url) continue;
+      tasks.push((async () => {
+        try {
+          const ab = await (await fetch(url, { cache: 'force-cache' })).arrayBuffer();
+          // decodeAudioData detaches the ArrayBuffer; one decode per URL.
+          const audioBuf = await rawCtx.decodeAudioData(ab);
+          if (!disposed) buffers[voiceId] = audioBuf;
+        } catch (e) {
+          console.warn(`[qualia] sample "${sampleName}" (${voiceId}) failed:`, e);
+        }
+      })());
+    }
+    await Promise.all(tasks);
+  })();
+
+  return {
+    output: out,
+    ready,
+    /** True once at least one voice has decoded — UI can show a loading pip. */
+    isReady() { return Object.keys(buffers).length > 0; },
+    trigger(voiceId, time, velocity = 1) {
+      const audioBuf = buffers[voiceId];
+      if (!audioBuf) return;   // not loaded / unmapped → silent, never crash
+      try {
+        const src = new Tone.ToneBufferSource(audioBuf);
+        const vg = new Tone.Gain(Math.max(0, Math.min(1, velocity))).connect(bus);
+        src.connect(vg);
+        src.onended = () => { try { src.dispose(); vg.dispose(); } catch {} };
+        src.start(time);
+      } catch (e) { /* scheduling past/edge times — drop the hit */ }
+    },
+    // A voice is "playable" if it's mapped in the kit — greys out unmapped pads
+    // exactly like the synth kits do, even before the buffer has finished
+    // loading (so the grid doesn't flicker as samples arrive).
+    has(voiceId) { return Object.prototype.hasOwnProperty.call(voiceMap, voiceId); },
+    dispose() {
+      disposed = true;
+      try { bus.dispose(); } catch {}
+      try { out.dispose(); } catch {}
+      for (const k of Object.keys(buffers)) delete buffers[k];
     },
   };
 }
