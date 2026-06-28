@@ -41,7 +41,7 @@
 // it can drive audio-reactive fx and flow into recordings. onFeedChange()
 // fires whenever that analyser appears, disappears, or is rebuilt.
 
-import { getStoredDeviceId, wirePicker } from './devices.js';
+import { getStoredDeviceId, wirePicker, openMicStream } from './devices.js';
 import { autoCorrelate } from './pitch.js';
 import { createVoiceShifter } from './voice-shifter.js';
 import { VOX_PRESETS } from './vox-presets.js';
@@ -419,23 +419,10 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   }
 
   async function openMic(deviceId) {
-    // Same fallback ladder as audio.js: try the requested device, then any
-    // default — a stale stored deviceId shouldn't block startup.
-    const attempts = deviceId
-      ? [{ ...MIC_CONSTRAINTS, deviceId: { exact: deviceId } }, { ...MIC_CONSTRAINTS }]
-      : [{ ...MIC_CONSTRAINTS }];
-    let s = null, lastErr = null;
-    for (const constraints of attempts) {
-      try {
-        s = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
-        break;
-      } catch (err) {
-        lastErr = err;
-        if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') break;
-      }
-    }
-    if (!s) throw lastErr || new Error('getUserMedia failed');
-    return s;
+    // Shared fallback ladder (devices.js): try the requested device, then any
+    // default — a stale stored deviceId shouldn't block startup. The vocoder's
+    // own MIC_CONSTRAINTS (low-latency hint) is the capture profile.
+    return openMicStream(deviceId, MIC_CONSTRAINTS);
   }
 
   // True when the harmonizer should drive the vocoder carrier into a chord —

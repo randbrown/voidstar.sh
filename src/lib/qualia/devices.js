@@ -17,6 +17,39 @@ export function storeDeviceId(kind, id) {
 }
 
 /**
+ * getUserMedia for a microphone, with a stale-device fallback ladder: try the
+ * requested deviceId exactly, then fall back to any default — so an unplugged or
+ * renamed stored device can't block startup for a returning user. Only retries
+ * on OverconstrainedError / NotFoundError (a real permission denial fails fast).
+ * Throws the last error if every attempt fails.
+ *
+ * Callers pass their own base constraints (audio.js wants stereo; the vocoder
+ * wants a low-latency hint), so the ladder is shared but the capture profile
+ * stays per-caller.
+ *
+ * @param {string|undefined|null} deviceId
+ * @param {MediaTrackConstraints} base  base audio constraints
+ * @returns {Promise<MediaStream>}
+ */
+export async function openMicStream(deviceId, base) {
+  const attempts = deviceId
+    ? [{ ...base, deviceId: { exact: deviceId } }, { ...base }]
+    : [{ ...base }];
+  let stream = null, lastErr = null;
+  for (const constraints of attempts) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') break;
+    }
+  }
+  if (!stream) throw lastErr || new Error('getUserMedia failed');
+  return stream;
+}
+
+/**
  * Wire a device <select> for one kind ('audioinput' | 'videoinput').
  * `onChoose(deviceId)` should restart the relevant pipeline. The picker
  * starts hidden and only shows when ≥2 devices of that kind exist.

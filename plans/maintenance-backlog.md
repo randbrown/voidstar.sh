@@ -48,8 +48,11 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
    (~6 hand-rolled EMA variants). Centralizing also kills per-fx allocation drift.
 4. **Reuse `limiter.js` in the vocoder** (it reimplements `makeLimiter`/`setLimiterEngaged` with a
    −1.5 dB ceiling) — parameterize the ceiling.
-5. **Move the `getUserMedia` ladder + `MIC_CONSTRAINTS` into `devices.js`** (duplicated in
-   `audio.js` and `vocoder.js`).
+5. ✅ **Move the `getUserMedia` ladder into `devices.js`** — *done:* `openMicStream(deviceId, base)`
+   holds the try-exact-then-default fallback ladder; `audio.js` and `vocoder.js` each keep their own
+   `MIC_CONSTRAINTS` (stereo vs low-latency hint) and pass it in. **Needs a mic smoke test:** mic
+   input still drives visuals/monitor (audio.js) and the vocoder still captures; switching the mic
+   picker to a now-unplugged device falls back to default rather than erroring.
 6. **Array-based disposal** for `rig-strip.js` and `vocoder.js` — both hand-list ~40 nodes in
    teardown (drift risk). Push nodes into an array at creation; iterate on dispose.
 7. ✅ **Share the cycle-pool / phase-pool predicate** — *done:* `isStepInPhase` now delegates to
