@@ -75,8 +75,7 @@ both engines.
   each mapped sample into a Tone `AudioBuffer`, and plays per-hit
   `ToneBufferSource`s. `voiceMap` maps the sequencer's stable voice ids
   (`kick`, `snare`, `hat-c`, …) onto manifest sample names (`bd`, `sd`, `hh`, …).
-  Each `<genre> · samples` kit resolves the **active collection** at build time
-  (`packUrl(getActiveCollectionId(), genre)`).
+  A sample kit is built for a (genre, source) pair from `packUrl(source, genre)`.
 
 Both sides enumerate the collections via `COLLECTIONS` / `collectionPacks()` (in
 `samples-manifest.js`), so there's no chance of them drifting apart.
@@ -85,50 +84,54 @@ Both sides enumerate the collections via `COLLECTIONS` / `collectionPacks()` (in
 
 ## Kits (the sequencer's instruments)
 
-A **kit** is the instrument the sequencer pads play through. Every kit speaks the
-same voice ids, so a groove re-voices onto any kit without touching the grid.
-Kits live in `sequencer-kits.js` and are picked from the **kit** dropdown in the
-sequencer's settings pane (grouped by genre, synth/samples under each). Switching
+A **kit** is the instrument the sequencer pads play through, modelled as a
+**genre × source** pair. Every kit speaks the same voice ids, so a groove
+re-voices onto any kit without touching the grid. Kits live in
+`sequencer-kits.js` and are picked from **two dropdowns** in the sequencer's
+settings pane — **genre** (with ‹ › steppers) and **source**. Switching either
 is live (no play/stop).
 
-Each genre family ships in **two variants**:
+- **genre** — the voicing (tuning / decay / character):
 
-| Family | What it is |
-|---|---|
-| **voidstar** | Clean, punchy 808/909 — the original default. |
-| **lofi** | Warm, filtered boom-bap / chillhop. |
-| **tape** | Saturated cassette character — mellow, rolled-off, dusty. |
-| **dub** | Heavy dubstep — deep sub kick, huge snare, wide space (San Holo / Com Truise). |
-| **jazz** | Clean modern-jazz kit — soft, brushed, ride-forward. |
-| **metal** | Tight, aggressive metal — clicky kick, cracking snare (Pantera / Metallica / Gojira). |
-| **death** | Extreme death metal — ultra-tight kick, pingy snare (Suffocation / Devourment). |
-| **hiphop** | Dusty Dilla-style boom-bap. |
+  | Genre | What it is |
+  |---|---|
+  | **voidstar** | Clean, punchy 808/909 — the original default. |
+  | **lofi** | Warm, filtered boom-bap / chillhop. |
+  | **tape** | Saturated cassette character — mellow, rolled-off, dusty. |
+  | **dub** | Heavy dubstep — deep sub kick, huge snare, wide space. |
+  | **jazz** | Clean modern-jazz kit — soft, brushed, ride-forward. |
+  | **metal** | Tight, aggressive metal — clicky kick, cracking snare. |
+  | **death** | Extreme death metal — ultra-tight kick, pingy snare. |
+  | **hiphop** | Dusty Dilla-style boom-bap. |
 
-- **synth** variant — a Tone.js synth factory (offline, zero-network, always
-  available). `voidstar` and `lofi` are hand-written (`createKit` /
-  `createLofiKit`); the rest are data-driven specs fed to `createSynthKit`.
-- **samples** variant — decoded one-shots from the bundled `strudel.json` pack of
-  the same genre (`createSampleKit`), the same files Strudel registers, playable
-  in the REPL as `s("bd sd hh").bank("<genre>")`. Which sound set those samples
-  come from is the **active collection** (see below) — picked once, applies to
-  every genre's samples kit.
+- **source** — where the sound comes from for that genre:
+  - **synth** — a Tone.js synth factory (offline, zero-network, always there).
+    `voidstar`/`lofi` are hand-written (`createKit`/`createLofiKit`); the rest are
+    data-driven specs fed to `createSynthKit`.
+  - a bundled **collection** (`signature` / `voidstar_0` / `real_0`) — decoded
+    one-shots from that collection's pack for the genre (`createSampleKit`), the
+    same files Strudel registers, playable in the REPL as `s("bd sd").bank("…")`.
+  - a **loaded pack** — any external GitHub/URL pack appears here once loaded.
 
-Synth kits are zero-network and always work. Sample kits load asynchronously and
-degrade gracefully — an unmapped or not-yet-decoded voice is simply silent.
+Switching **source** while keeping the genre is the in-place A/B: same groove,
+same voicing, different sound set (synth ↔ signature ↔ voidstar_0 ↔ real_0).
+`synth` is just another source, so it's treated uniformly — no separate "is this
+synth or samples" toggle. Synth sources are zero-network and always work; sample
+sources load asynchronously and degrade gracefully (an unmapped/not-yet-decoded
+voice is simply silent).
 
-**Per-pattern kit.** The selected kit is saved on the pattern model (`kitId`), so
-a recalled or downloaded `.seq.json` (and a `.qualem` snapshot) restores its
+A kit id encodes the pair: `"<genre>"` for synth, `"<genre>@<collection>"` for a
+sample source (e.g. `metal@real_0`); external packs keep their own id. `getKit()`
+in `sequencer-kits.js` parses these (and migrates legacy `"<genre>-samples"` ids).
+
+**Per-pattern kit.** The selected kit id is saved on the pattern model (`kitId`),
+so a recalled or downloaded `.seq.json` (and a `.qualem` snapshot) restores its
 instrument. The last-used kit (`voidstar.qualia.sequencer.kit`) seeds fresh
-patterns; an unknown id normalises back to the default.
-
-**Collection (A/B the whole bank).** The **collection** dropdown next to the kit
-picker swaps the entire sample bank — every `<genre> · samples` kit at once —
-between `signature` (the characterful default) and `voidstar_0` (the original
-baseline). It only affects sample kits; synth kits are unchanged. The choice is
-global and persisted (`voidstar.qualia.sequencer.collection`), so the same groove
-A/Bs across sound sets without changing kit selection. The default is
-`signature`; flip `DEFAULT_COLLECTION_ID` in `samples-manifest.js` to change the
-out-of-box default.
+patterns; a legacy/unknown id normalises back to the default. Choosing a
+collection source also sets the **active collection**
+(`voidstar.qualia.sequencer.collection`), which is what Strudel's plain
+`.bank("<genre>")` resolves to; flip `DEFAULT_COLLECTION_ID` in
+`samples-manifest.js` to change the out-of-box default.
 
 ---
 
