@@ -21,7 +21,10 @@ import {
 } from './sequencer-patterns.js';
 import { KITS, getKit, DEFAULT_KIT_ID, EXTERNAL_VOICE_MAP } from './sequencer-kits.js';
 import { createSampleKit } from './sequencer-voices.js';
-import { parsePackSpec } from './samples-manifest.js';
+import {
+  parsePackSpec, COLLECTIONS, DEFAULT_COLLECTION_ID, getCollection,
+  getActiveCollectionId, setActiveCollectionId,
+} from './samples-manifest.js';
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
 import { getNum, getBool, setBool, setRaw, getRaw, getJSON, setJSON } from './prefs.js';
@@ -74,6 +77,20 @@ function loadSeqKit() {
   return getKit(id).id;   // normalises an unknown/removed id to the default
 }
 function saveSeqKit(id) { setRaw(SEQ_KIT_KEY, id); }
+
+// Active sample collection (signature / voidstar_0) — the bank every
+// "<genre> · samples" kit resolves to. Global + persisted like the kit choice:
+// a collection swap re-points all sample kits at once for A/B, and the choice
+// survives reloads. The manifest module holds the live value (both engines read
+// it); we mirror it to localStorage and re-apply on boot.
+const SEQ_COLLECTION_KEY = 'voidstar.qualia.sequencer.collection';
+function loadSeqCollection() {
+  return getCollection(getRaw(SEQ_COLLECTION_KEY, DEFAULT_COLLECTION_ID)).id;
+}
+function saveSeqCollection(id) { setRaw(SEQ_COLLECTION_KEY, id); }
+// Apply the persisted collection to the manifest module as early as module load,
+// so the first kit build + Strudel registration both see the right collection.
+setActiveCollectionId(loadSeqCollection());
 
 export function createSequencer({ audio, syncStrudel } = {}) {
   // Snapshot panel-open state from the previous session ONCE — open()/close()
@@ -506,20 +523,40 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     saveSeqKit(_kitId);     // remember as last-used for fresh patterns
     model.updatedAt = Date.now();
     persistSoon();
-    if (kit) {
-      const built = buildKit();
-      if (built) {
-        const old = kit;
-        kit = built;
-        wireKit(kit);
-        applyMuteToKit();
-        try { old.dispose(); } catch {}
-      }
-    }
+    rebuildCurrentKit();
     refreshKitSelect();
     refreshSeqBtn();
   }
+  // Rebuild the live kit in place (no-op if the panel hasn't built one yet).
+  // Shared by kit selection and collection swaps — the new buffers decode in the
+  // background; the old kit is disposed only once its replacement is wired.
+  function rebuildCurrentKit() {
+    if (!kit) return;
+    const built = buildKit();
+    if (!built) return;
+    const old = kit;
+    kit = built;
+    wireKit(kit);
+    applyMuteToKit();
+    try { old.dispose(); } catch {}
+  }
   function getKitId() { return _kitId; }
+  // Swap the active sample collection (signature ⇄ voidstar_0). Re-points every
+  // "<genre> · samples" kit at the new bank; if the current kit is a sample kit
+  // it rebuilds in place so the same groove A/Bs without changing kit selection.
+  function setCollection(id) {
+    const next = getCollection(id);
+    if (next.id === getActiveCollectionId()) { refreshCollectionSelect(); return; }
+    setActiveCollectionId(next.id);
+    saveSeqCollection(next.id);
+    // Only bundled "<genre> · samples" kits resolve the active collection;
+    // synth kits and externally-loaded packs are unaffected, so don't rebuild them.
+    if (KITS.some((k) => k.id === _kitId && k.type === 'sample')) rebuildCurrentKit();
+    refreshCollectionSelect();
+    refreshSeqBtn();
+    if (status) status.textContent = `collection: ${next.label}`;
+  }
+  function getCollectionId() { return getActiveCollectionId(); }
   // Mute is per-session, not persisted in the pattern model — it's a
   // performance gate ("silence this source for a moment"), not a saved
   // attribute of the pattern. Survives play/stop cycles within the
@@ -1035,7 +1072,24 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     };
     kitNav.append(mkNavBtn('‹', -1, 'Previous kit'), kitSel, mkNavBtn('›', +1, 'Next kit'));
 
+    // Collection picker — swaps the whole sample bank (signature ⇄ voidstar_0)
+    // under every "<genre> · samples" kit at once, for A/B'ing the same groove
+    // across sound sets. Only affects sample kits; synth kits are unchanged.
+    const colSel = document.createElement('select');
+    colSel.className = 'seq-kit-select seq-collection-select';
+    for (const c of COLLECTIONS) {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.label;
+      opt.title = c.desc;
+      colSel.appendChild(opt);
+    }
+    colSel.value = getActiveCollectionId();
+    colSel.addEventListener('change', () => setCollection(colSel.value));
+    _collectionSelectEl = colSel;
+
     propsEl.append(
+      mk('collection', colSel, { title: 'Bundled sample bank the "· samples" kits play. signature = characterful default; voidstar_0 = the original baseline. Swap to A/B the same groove. In Strudel use .bank("sig…") / .bank("v0…").' }),
       mk('kit',       kitNav, { title: 'Instrument the pads play through. Synth kits are offline; sample kits load the same strudel.json packs Strudel uses.' }),
       mkPackLoader(),
       mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
@@ -1050,9 +1104,14 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // Keep the kit dropdown in sync when the kit is changed programmatically
   // (e.g. a future remote/macro path) or re-rendered.
   let _kitSelectEl = null;
+  let _collectionSelectEl = null;
   let _packStatusEl = null;
   function refreshKitSelect() {
     if (_kitSelectEl && _kitSelectEl.value !== _kitId) _kitSelectEl.value = _kitId;
+  }
+  function refreshCollectionSelect() {
+    const id = getActiveCollectionId();
+    if (_collectionSelectEl && _collectionSelectEl.value !== id) _collectionSelectEl.value = id;
   }
   // (Re)fill a kit <select> with the static catalog + any loaded external packs.
   // A flat list of full "genre · variant" labels — optgroups render as bulky,
@@ -1637,6 +1696,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     getKits: () => KITS.map(({ id, label, type, desc }) => ({ id, label, type, desc })),
     getKitId,
     setKit,
+    // Sample collection — swap the whole bundled bank (signature ⇄ voidstar_0).
+    getCollections: () => COLLECTIONS.map(({ id, label, desc }) => ({ id, label, desc })),
+    getCollectionId,
+    setCollection,
     play, stop,
     playFromStrudel, stopFromStrudel,
     setCps,

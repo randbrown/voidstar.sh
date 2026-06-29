@@ -15,7 +15,7 @@
 import {
   createKit, createLofiKit, createSynthKit, createSampleKit,
 } from './sequencer-voices.js';
-import { BUNDLED_PACKS } from './samples-manifest.js';
+import { getActiveCollectionId, packUrl } from './samples-manifest.js';
 
 // Map the sequencer's voice ids onto the sample names used by Strudel's default
 // drum-machine banks (bd/sd/hh/oh/…) — every bundled pack uses these names, so a
@@ -171,10 +171,12 @@ const FAMILIES = [
   { id: 'hiphop',   label: 'hiphop',   desc: 'Dusty Dilla-style boom-bap.',                                 synth: () => createSynthKit(SYNTH_SPECS.hiphop) },
 ];
 
-const PACK_BY_ID = Object.fromEntries(BUNDLED_PACKS.map((p) => [p.id, p]));
-
 // Flatten families → 16 kit entries: "<genre> · synth" and "<genre> · samples".
-// `group` drives the optgroup label in the picker.
+// `group` drives the optgroup label in the picker. The sample kit's id is stable
+// across collections (`<genre>-samples`) — switching the active collection
+// (see sequencer.js) rebuilds it from the new collection's pack, so a groove
+// A/Bs in place without changing kit. `make` reads the active collection at build
+// time, so the same kit entry resolves to whichever collection is selected.
 export const KITS = FAMILIES.flatMap((f) => [
   {
     id: f.id, group: f.label, label: `${f.label} · synth`, type: 'synth',
@@ -184,7 +186,10 @@ export const KITS = FAMILIES.flatMap((f) => [
   {
     id: `${f.id}-samples`, group: f.label, label: `${f.label} · samples`, type: 'sample',
     desc: `${f.desc} (bundled samples — same pack Strudel plays via .bank("${f.id}"))`,
-    make: () => createSampleKit({ manifestUrl: PACK_BY_ID[f.id].url, voiceMap: DRUM_VOICE_MAP }),
+    make: () => createSampleKit({
+      manifestUrl: packUrl(getActiveCollectionId(), f.id),
+      voiceMap: DRUM_VOICE_MAP,
+    }),
   },
 ]);
 

@@ -2,10 +2,15 @@
 //
 // Renders one original one-shot drum pack per genre (voidstar / lofi / tape /
 // dub / jazz / metal / death / hiphop) directly into each Strudel-format
-// `public/samples/<genre>/strudel.json`. The manifest entries are data:audio/wav
-// URLs, so the sequencer and Strudel share the exact same offline samples without
-// needing a binary-file write step. Pass `--wavs` to also emit loose WAV files for
-// auditioning / external editing.
+// `public/samples/signature/<genre>/strudel.json`. The manifest entries are
+// data:audio/wav URLs, so the sequencer and Strudel share the exact same offline
+// samples without needing a binary-file write step. Pass `--wavs` to also emit
+// loose WAV files for auditioning / external editing.
+//
+// `signature` is one of two bundled collections (see docs/samples.md): the
+// characterful default, alongside the original `voidstar_0` baseline
+// (scripts/gen-samples-voidstar0.mjs). Both ship the same bd/sd/rim/hh/oh/lt/mt/
+// ht/rd/cr voice contract so a groove A/Bs cleanly between them.
 //
 // Every sound is pure synthesis from the code below: no recordings, no external
 // packs, no licensing ambiguity. Treat the rendered one-shots as CC0/project-local
@@ -17,7 +22,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SAMPLES_ROOT = join(__dirname, '..', 'public', 'samples');
+const COLLECTION = 'signature';
+const SAMPLES_ROOT = join(__dirname, '..', 'public', 'samples', COLLECTION);
 const SR = 22050;
 const WRITE_WAVS = process.argv.includes('--wavs') || process.argv.includes('--files');
 
