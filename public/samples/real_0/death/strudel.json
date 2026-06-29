@@ -1,0 +1,32 @@
+{
+  "bd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-bd/Bassdrum-01.wav"
+  ],
+  "sd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-sd/Snaredrum-01.wav"
+  ],
+  "rim": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-rim/Rim%20Shot-01.wav"
+  ],
+  "hh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-hh/Hat%20Closed.wav"
+  ],
+  "oh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-oh/Hat%20Open.wav"
+  ],
+  "lt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-lt/Tom%20L-01.wav"
+  ],
+  "mt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-mt/Tom%20M-01.wav"
+  ],
+  "ht": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-ht/Tom%20H-02.wav"
+  ],
+  "rd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-rd/Ride.wav"
+  ],
+  "cr": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiXR10/akaixr10-cr/Crash-01.wav"
+  ]
+}

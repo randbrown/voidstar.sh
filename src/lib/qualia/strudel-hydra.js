@@ -17,7 +17,7 @@ import {
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
 import {
-  resolveManifest, toStrudelSampleMap, BUNDLED_PACKS,
+  resolveManifest, toStrudelSampleMap, COLLECTIONS, collectionPacks, getActiveCollectionId,
 } from './samples-manifest.js';
 
 // Pinned, NOT @latest: a live set must not break because unpkg served a new
@@ -63,15 +63,23 @@ async function registerSharedSamples() {
     await sleep(150);
   }
   if (typeof globalThis.samples !== 'function') return;
-  // Register every bundled genre pack under its own `<id>_` namespace so they're
-  // additive (never clobber Strudel's stock bd/sd/hh). Play a pack as
-  // s("metal_bd metal_sd") or idiomatically s("bd sd").bank("metal").
-  for (const pack of BUNDLED_PACKS) {
-    try {
-      const resolved = await resolveManifest(pack.url);
-      await globalThis.samples(toStrudelSampleMap(resolved, pack.prefix));
-    } catch (e) {
-      console.warn(`[qualia] shared samples (${pack.id}) registration failed:`, e);
+  // Register both bundled collections, additively (never clobber Strudel's stock
+  // bd/sd/hh). Each pack registers under a collection-qualified `<bank><genre>_`
+  // namespace so .bank("sigmetal") / .bank("v0metal") always reach a specific
+  // collection; the ACTIVE collection additionally registers under the plain
+  // `<genre>_` namespace so s("bd sd").bank("metal") plays whatever's active.
+  const activeId = getActiveCollectionId();
+  for (const c of COLLECTIONS) {
+    for (const pack of collectionPacks(c.id)) {
+      try {
+        const resolved = await resolveManifest(pack.url);
+        await globalThis.samples(toStrudelSampleMap(resolved, pack.bankPrefix));
+        if (c.id === activeId) {
+          await globalThis.samples(toStrudelSampleMap(resolved, pack.prefix));
+        }
+      } catch (e) {
+        console.warn(`[qualia] shared samples (${pack.id}) registration failed:`, e);
+      }
     }
   }
   _sharedSamplesRegistered = true;

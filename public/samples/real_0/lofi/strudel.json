@@ -1,0 +1,32 @@
+{
+  "bd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-bd/0%20Bassdrum.wav"
+  ],
+  "sd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-sd/Snare%201.wav"
+  ],
+  "rim": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-rim/Rim%20Gated.wav"
+  ],
+  "hh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-hh/Closed%20Hat.wav"
+  ],
+  "oh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-oh/Open%20Hat.wav"
+  ],
+  "lt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-lt/Tom%20L.wav"
+  ],
+  "mt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-mt/Tom%20M.wav"
+  ],
+  "ht": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-ht/Tom%20H.wav"
+  ],
+  "rd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-rd/Ride.wav"
+  ],
+  "cr": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/AkaiMPC60/akaimpc60-cr/Crash.wav"
+  ]
+}

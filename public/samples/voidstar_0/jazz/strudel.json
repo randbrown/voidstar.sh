@@ -1,0 +1,33 @@
+{
+  "_base": "/samples/voidstar_0/jazz/",
+  "bd": [
+    "bd.wav"
+  ],
+  "sd": [
+    "sd.wav"
+  ],
+  "rim": [
+    "rim.wav"
+  ],
+  "hh": [
+    "hh.wav"
+  ],
+  "oh": [
+    "oh.wav"
+  ],
+  "lt": [
+    "lt.wav"
+  ],
+  "mt": [
+    "mt.wav"
+  ],
+  "ht": [
+    "ht.wav"
+  ],
+  "rd": [
+    "rd.wav"
+  ],
+  "cr": [
+    "cr.wav"
+  ]
+}

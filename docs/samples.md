@@ -1,7 +1,7 @@
 # Samples & sequencer kits
 
 How sounds are shared between **Strudel** and the **sequencer**, the kit system,
-the bundled synthetic packs, and how to add your own / pull in free sample packs.
+the bundled collections, and how to add your own / pull in free sample packs.
 
 Read [`looper-and-sequencer.md`](looper-and-sequencer.md) for the sequencer
 itself and [`livecoding.md`](livecoding.md) for the Strudel embed.
@@ -14,8 +14,8 @@ All paths under `src/lib/qualia/` unless noted.
 
 Both engines load the **same** manifest format — Strudel's
 [`strudel.json`](https://strudel.cc/learn/samples) — so a pack is defined once
-and plays in either place. A manifest maps **sample names** to files, with an
-optional base URL:
+and plays in either place. A manifest maps **sample names** to files or URLs,
+with an optional base URL:
 
 ```json
 {
@@ -32,13 +32,15 @@ optional base URL:
 `_base` may be:
 
 - **absolute** (`https://…/`) — a remote pack, e.g. one copied from GitHub;
-- **root-relative** (`/samples/…/`) — a pack bundled in `public/`, the case for
-  voidstar's own packs;
+- **root-relative** (`/samples/…/`) — a pack bundled in `public/`;
 - **relative** (`./`, `drums/`) — resolved against the manifest URL's directory.
 
-`samples-manifest.js` (`resolveManifest(url)`) fetches a manifest and resolves
-every path to an absolute URL using the same concatenation rules superdough
-uses, so all three base styles resolve identically in both engines.
+A sample value may also be a complete `data:audio/wav;base64,…` URL. The bundled
+voidstar packs currently use that form so the committed `strudel.json` is the
+one offline source of truth. `samples-manifest.js` (`resolveManifest(url)`) treats
+`data:` URLs as absolute and resolves every other path using the same
+concatenation rules superdough uses, so all base styles resolve identically in
+both engines.
 
 ---
 
@@ -58,81 +60,168 @@ uses, so all three base styles resolve identically in both engines.
 ```
 
 - **Strudel side** — `strudel-hydra.js` calls `registerSharedSamples()` once the
-  `@strudel/repl` bundle has loaded. It resolves every bundled pack and hands the
-  name→URL maps to the global `samples()` the bundle exposes (same path as
-  `getAudioContext` / `superdough` / `soundMap`). Registration is **additive** —
-  each pack is namespaced with a `<genre>_` prefix so it never clobbers Strudel's
-  stock `bd`/`sd`/`hh` banks. Play a pack as `s("metal_bd metal_sd")` or
-  idiomatically with `s("bd sd hh").bank("metal")`. Decoding is lazy (on first
-  play), so this is cheap at load.
+  `@strudel/repl` bundle has loaded. It resolves every pack of **both bundled
+  collections** and hands the name→URL maps to the global `samples()` the bundle
+  exposes (same path as `getAudioContext` / `superdough` / `soundMap`).
+  Registration is **additive** — each pack registers under a collection-qualified
+  `<bank><genre>_` prefix (`sigmetal_`, `v0metal_`), and the **active** collection
+  *also* registers under the plain `<genre>_` prefix. So `s("bd sd").bank("metal")`
+  plays whatever collection is active, while `.bank("sigmetal")` / `.bank("v0metal")`
+  reach a specific one for explicit A/B. None of this clobbers Strudel's stock
+  `bd`/`sd`/`hh`. Decoding is lazy (on first play), so this is cheap at load even
+  when a manifest embeds offline data URLs.
 - **Sequencer side** — `createSampleKit({ manifestUrl, voiceMap })` in
   `sequencer-voices.js` resolves the same manifest, fetches + `decodeAudioData`s
   each mapped sample into a Tone `AudioBuffer`, and plays per-hit
   `ToneBufferSource`s. `voiceMap` maps the sequencer's stable voice ids
   (`kick`, `snare`, `hat-c`, …) onto manifest sample names (`bd`, `sd`, `hh`, …).
+  A sample kit is built for a (genre, source) pair from `packUrl(source, genre)`.
 
-The single shared list `BUNDLED_PACKS` (in `samples-manifest.js`) is what both
-sides enumerate, so there's no chance of them drifting apart.
+Both sides enumerate the collections via `COLLECTIONS` / `collectionPacks()` (in
+`samples-manifest.js`), so there's no chance of them drifting apart.
 
 ---
 
 ## Kits (the sequencer's instruments)
 
-A **kit** is the instrument the sequencer pads play through. Every kit speaks the
-same voice ids, so a groove re-voices onto any kit without touching the grid.
-Kits live in `sequencer-kits.js` and are picked from the **kit** dropdown in the
-sequencer's settings pane (grouped by genre, synth/samples under each). Switching
+A **kit** is the instrument the sequencer pads play through, modelled as a
+**genre × source** pair. Every kit speaks the same voice ids, so a groove
+re-voices onto any kit without touching the grid. Kits live in
+`sequencer-kits.js` and are picked from **two dropdowns** in the sequencer's
+settings pane — **genre** (with ‹ › steppers) and **source**. Switching either
 is live (no play/stop).
 
-Each genre family ships in **two variants**:
+- **genre** — the voicing (tuning / decay / character):
 
-| Family | What it is |
-|---|---|
-| **voidstar** | Clean, punchy 808/909 — the original default. |
-| **lofi** | Warm, filtered boom-bap / chillhop. |
-| **tape** | Saturated cassette character — mellow, rolled-off, dusty. |
-| **dub** | Heavy dubstep — deep sub kick, huge snare, wide space (San Holo / Com Truise). |
-| **jazz** | Clean modern-jazz kit — soft, brushed, ride-forward. |
-| **metal** | Tight, aggressive metal — clicky kick, cracking snare (Pantera / Metallica / Gojira). |
-| **death** | Extreme death metal — ultra-tight kick, pingy snare (Suffocation / Devourment). |
-| **hiphop** | Dusty Dilla-style boom-bap. |
+  | Genre | What it is |
+  |---|---|
+  | **voidstar** | Clean, punchy 808/909 — the original default. |
+  | **lofi** | Warm, filtered boom-bap / chillhop. |
+  | **tape** | Saturated cassette character — mellow, rolled-off, dusty. |
+  | **dub** | Heavy dubstep — deep sub kick, huge snare, wide space. |
+  | **jazz** | Clean modern-jazz kit — soft, brushed, ride-forward. |
+  | **metal** | Tight, aggressive metal — clicky kick, cracking snare. |
+  | **death** | Extreme death metal — ultra-tight kick, pingy snare. |
+  | **hiphop** | Dusty Dilla-style boom-bap. |
 
-- **synth** variant — a Tone.js synth factory (offline, zero-network, always
-  available). `voidstar` and `lofi` are hand-written (`createKit` /
-  `createLofiKit`); the rest are data-driven specs fed to `createSynthKit`.
-- **samples** variant — decoded one-shots from the bundled `strudel.json` pack of
-  the same genre (`createSampleKit`), the same files Strudel registers, playable
-  in the REPL as `s("bd sd hh").bank("<genre>")`.
+- **source** — where the sound comes from for that genre:
+  - **synth** — a Tone.js synth factory (offline, zero-network, always there).
+    `voidstar`/`lofi` are hand-written (`createKit`/`createLofiKit`); the rest are
+    data-driven specs fed to `createSynthKit`.
+  - a bundled **collection** (`signature` / `voidstar_0` / `real_0`) — decoded
+    one-shots from that collection's pack for the genre (`createSampleKit`), the
+    same files Strudel registers, playable in the REPL as `s("bd sd").bank("…")`.
+  - a **loaded pack** — any external GitHub/URL pack appears here once loaded.
 
-Synth kits are zero-network and always work. Sample kits load asynchronously and
-degrade gracefully — an unmapped or not-yet-decoded voice is simply silent.
+Switching **source** while keeping the genre is the in-place A/B: same groove,
+same voicing, different sound set (synth ↔ signature ↔ voidstar_0 ↔ real_0).
+`synth` is just another source, so it's treated uniformly — no separate "is this
+synth or samples" toggle. Synth sources are zero-network and always work; sample
+sources load asynchronously and degrade gracefully (an unmapped/not-yet-decoded
+voice is simply silent).
 
-**Per-pattern kit.** The selected kit is saved on the pattern model (`kitId`), so
-a recalled or downloaded `.seq.json` (and a `.qualem` snapshot) restores its
+A kit id encodes the pair: `"<genre>"` for synth, `"<genre>@<collection>"` for a
+sample source (e.g. `metal@real_0`); external packs keep their own id. `getKit()`
+in `sequencer-kits.js` parses these (and migrates legacy `"<genre>-samples"` ids).
+
+**Per-pattern kit.** The selected kit id is saved on the pattern model (`kitId`),
+so a recalled or downloaded `.seq.json` (and a `.qualem` snapshot) restores its
 instrument. The last-used kit (`voidstar.qualia.sequencer.kit`) seeds fresh
-patterns; an unknown id normalises back to the default.
+patterns; a legacy/unknown id normalises back to the default. Choosing a
+collection source also sets the **active collection**
+(`voidstar.qualia.sequencer.collection`), which is what Strudel's plain
+`.bank("<genre>")` resolves to; flip `DEFAULT_COLLECTION_ID` in
+`samples-manifest.js` to change the out-of-box default.
 
 ---
 
-## The bundled synthetic packs
+## The bundled collections
 
-`scripts/gen-samples.mjs` is a **dependency-free** Node generator that
-synthesises one drum pack **per genre** with pure math (no recordings → tiny,
-CC0-clean, deterministic) and writes each as 16-bit/22.05 kHz mono WAVs plus a
-`strudel.json` to `public/samples/<genre>/`. Genre character comes from a
-per-genre profile (tuning, decay, brightness) plus a shared finishing chain
-(sample-rate reduction + bit-crush + saturation + hiss) dialed per genre — clean
-for jazz/metal/death, dusty for lofi/tape/hiphop. The pack list lives in
-`BUNDLED_PACKS` (`samples-manifest.js`); both engines key off it.
+A **collection** is a full bundled bank — one pack per genre, swapped all at once.
+Two ship today, each generated by a **dependency-free** Node generator (pure math,
+no recordings, no downloaded libraries, no uncleared samples → CC0-clean,
+project-local, deterministic):
+
+| Collection | Generator | Layout | Character |
+|---|---|---|---|
+| **signature** *(default)* | `scripts/gen-samples.mjs` | `public/samples/signature/<genre>/strudel.json` with `data:audio/wav;base64,…` payloads (manifest is the source of truth) | Characterful, intentional synthetic one-shots — the on-brand default. |
+| **voidstar_0** | `scripts/gen-samples-voidstar0.mjs` | `public/samples/voidstar_0/<genre>/` loose 16-bit WAVs + a relative-`_base` `strudel.json` | The original synthetic packs — a clean, neutral baseline. |
+| **real_0** | `scripts/gen-real-manifests.mjs` | `public/samples/real_0/<genre>/strudel.json` holding **remote URLs** (no binaries committed) | Real recorded drum-machine one-shots — one classic machine per genre. Streams at play time; **needs network**. |
 
 ```
-npm run gen:samples              # → node scripts/gen-samples.mjs
+npm run gen:samples              # signature  → scripts/gen-samples.mjs
+npm run gen:samples -- --wavs    # signature, also write loose WAV audition files
+npm run gen:samples:v0           # voidstar_0 → scripts/gen-samples-voidstar0.mjs
+npm run gen:samples:all          # both synthetic collections (offline, deterministic)
+npm run gen:samples:real         # real_0 → re-resolve remote manifests (needs network)
 ```
 
-All eight packs total ~1.5 MB, committed and served statically, so every kit's
-sample variant — and `s("bd sd hh").bank("<genre>")` in Strudel — works offline
-out of the box. Re-run the script and commit the regenerated WAVs + json after
-editing a profile.
+**real_0** is the real-recording counterpart to the synthetic packs, for an
+honest A/B. To avoid re-hosting samples we don't own, its committed manifests
+reference the audio by URL (the same posture as the in-app GitHub pack loader) —
+real one-shots from the TidalCycles/Strudel drum-machine library
+([`ritchse/tidal-drum-machines`](https://github.com/ritchse/tidal-drum-machines)).
+The genre→machine map lives in `scripts/gen-real-manifests.mjs`; rerun it to
+re-resolve filenames or change machines. Because the audio is remote, real_0 is
+the one collection that needs network at play time (the sample kit degrades to
+silence offline). See `public/samples/README.md` for source/credit.
+
+The two synthetic generators emit 16-bit / 22.05 kHz mono and the same
+`bd/sd/rim/hh/oh/lt/mt/ht/rd/cr` voice contract, so a groove A/Bs cleanly between
+collections. `signature` embeds its audio as `data:` URLs (works in both engines
+because `resolveManifest()` treats `data:` URLs as already-resolved); `voidstar_0`
+keeps loose WAVs referenced via a root-relative `_base`.
+
+**Per-voice loudness + headroom.** Both the sequencer's sample kits and Strudel's
+`.bank()` apply a single flat gain to every voice, so the one-shots themselves
+must carry the mix balance. The `signature` generator levels each voice with
+`rmsTarget()` to a `TARGET_RMS_DB` table (loudness, not peak) plus a hard peak
+ceiling — two reasons:
+
+- **Balance** — bright, sustained cymbals hold ~10-40× the kick's HF energy, so
+  equal *peaks* read far louder; loudness targets put cymbals ~15-18 dB under the
+  kick (mirroring the synth kits).
+- **Headroom** — peak-normalising every voice to ~0.9 slammed each hit against
+  the ceiling, so a kick+tom stack drove the kit limiter and the groove sounded
+  squashed. Loudness targets leave the sustained body well below 0 dBFS (kick body
+  ~-6 dBFS, RMS ~-13).
+
+`voidstar_0` keeps the simpler peak-normalise + `VOICE_TRIM_DB` approach as the
+baseline. Retune `TARGET_RMS_DB` if a voice sits wrong across the board.
+
+**Kick/tom punch.** A decaying sine body is low-crest (~5 dB → reads as hum). The
+`signature` kick/tom add a short, bright attack transient *after* the saturation
+stage (so it isn't flattened), scaled to a multiple of the body peak so it becomes
+the loudest sample — raising crest to ~10-11 dB. Crest is gain-invariant, so the
+later `rmsTarget()` keeps the punch; the transient dial is `k.atk` / `t.atk`.
+
+**Cymbal/hat timbre.** The signature hats/ride/crash are built from a dense
+inharmonic partial cluster (`metalCluster()`) plus shaped noise + an attack
+chiff, rather than a few clean sines over white noise — much closer to real metal
+and far less "synthetic". `voidstar_0` keeps its original simpler synthesis as the
+baseline. For genuinely real cymbals, switch to the `real_0` collection.
+
+Signature pack character:
+
+| Pack | Sample voice |
+|---|---|
+| **voidstar** | Neon-clean 808/909: round sub kick, crisp snare, glassy ride/crash. |
+| **lofi** | Warm boom-bap: thick low kick, velvet hats, sampler dust and soft clipping. |
+| **tape** | Cassette-smudged: rolled highs, rounded transients, hissy tails. |
+| **dub** | Halftime weight: long sub kick, cavern snare, smoky metallic cymbals. |
+| **jazz** | Brushed kit: soft kick, rattle/brush snare, woody toms, ride-forward cymbal. |
+| **metal** | Tight modern metal: hard beater click, cracking snare, bright tight cymbals. |
+| **death** | Triggered extreme kit: surgical kick, pingy snare, clipped-fast cymbal voices. |
+| **hiphop** | SP-style Dilla dust: thick lows, vinyl snap snare, softened hats. |
+
+Collections live in `COLLECTIONS` (`samples-manifest.js`); `collectionPacks(id)`
+enumerates one collection's packs and both engines key off it. To add a
+collection: add a generator that writes `public/samples/<id>/<genre>/strudel.json`
+for every genre, add a `{ id, label, bank, desc }` entry to `COLLECTIONS` (the
+`bank` token must be unique), and it shows up in the sequencer's collection
+dropdown and as `.bank("<bank><genre>")` in Strudel automatically.
+
+---
 
 ## One-click GitHub pack loader
 
@@ -165,8 +254,8 @@ loop played as a one-shot just runs away on the pads):
 > matching pad voices (`bd`→kick, `sn`/`sd`→snare, …) and then **auto-fills** any
 > still-empty pads with the pack's remaining single-shot samples (loop/break-named
 > entries are skipped — they'd run away as a one-shot), so even a pack that
-> doesn't follow the drum convention makes sound on the grid (remap by curating). Packs
-> with no branch given are tried on `main` then `master`. Watch the console /
+> doesn't follow the drum convention makes sound on the grid (remap by curating).
+> Packs with no branch given are tried on `main` then `master`. Watch the console /
 > status line for `loaded N/M` to see how a pack mapped.
 
 ---
@@ -207,9 +296,10 @@ to that pack's sample names:
 }
 ```
 
-To bundle it instead (offline, no network dependency), drop the WAVs +
-`strudel.json` under `public/samples/<pack>/` and use a root-relative
-`manifestUrl` (`/samples/<pack>/strudel.json`). Remember the
+To bundle it instead (offline, no network dependency), drop a `strudel.json`
+under `public/samples/<pack>/` and reference it with a root-relative
+`manifestUrl` (`/samples/<pack>/strudel.json`). The manifest may point at loose
+WAVs in that folder or embed short one-shots as `data:` URLs. Remember the
 **static-host / degrade-gracefully** rule in `AGENTS.md`: a core performance
 feature must not *depend* on a remote pack — keep the synth kits as the offline
 fallback.
@@ -223,12 +313,10 @@ Licenses vary per pack and per file — confirm before shipping anything in a se
 - **TidalCycles Dirt-Samples** — the classic live-coding drum/instrument set,
   strudel-ready: `samples('github:tidalcycles/dirt-samples')`.
 - **Freesound CC0 packs** — genuinely public-domain one-shots and loops, e.g.
-  [Erokia's CC0 electronic samples](https://freesound.org/people/Erokia/packs/26717/)
-  and [Stereo Surgeon's CC0 drum loops](https://freesound.org/people/Stereo%20Surgeon/packs/16043/).
-  Download, host (or bundle), add a `strudel.json`.
-- **Community strudel packs** — discoverable via
-  [open-strudel-samples](https://github.com/therebelrobot/open-strudel-samples)
-  (an explorer for GitHub-hosted strudel sample packs).
+  Erokia's CC0 electronic samples and Stereo Surgeon's CC0 drum loops. Download,
+  host (or bundle), add a `strudel.json`, and keep only single hits for the grid.
+- **Community strudel packs** — discoverable via `open-strudel-samples`, an
+  explorer for GitHub-hosted strudel sample packs.
 - **Royalty-free lofi kits** (not CC0 — check terms): BVKER "Lunar", Clark Audio
   free lofi kit, and the roundups at hiphopmakers / cymatics.fm.
 

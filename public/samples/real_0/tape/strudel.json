@@ -1,0 +1,32 @@
+{
+  "bd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-bd/Bassdrum.wav"
+  ],
+  "sd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-sd/Snaredrum.wav"
+  ],
+  "rim": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-rim/Rimshot.wav"
+  ],
+  "hh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-hh/Hat%20Closed.wav"
+  ],
+  "oh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-oh/Hat%20Open.wav"
+  ],
+  "lt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-lt/Tom%20L.wav"
+  ],
+  "mt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-mt/Tom%20M.wav"
+  ],
+  "ht": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-ht/Tom%20H.wav"
+  ],
+  "rd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-rd/Ride.wav"
+  ],
+  "cr": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandCompurhythm1000/rolandcompurhythm1000-cr/Crash.wav"
+  ]
+}

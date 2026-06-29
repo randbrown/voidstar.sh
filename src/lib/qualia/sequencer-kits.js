@@ -15,7 +15,7 @@
 import {
   createKit, createLofiKit, createSynthKit, createSampleKit,
 } from './sequencer-voices.js';
-import { BUNDLED_PACKS } from './samples-manifest.js';
+import { getActiveCollectionId, COLLECTIONS, getCollection, packUrl } from './samples-manifest.js';
 
 // Map the sequencer's voice ids onto the sample names used by Strudel's default
 // drum-machine banks (bd/sd/hh/oh/…) — every bundled pack uses these names, so a
@@ -171,25 +171,78 @@ const FAMILIES = [
   { id: 'hiphop',   label: 'hiphop',   desc: 'Dusty Dilla-style boom-bap.',                                 synth: () => createSynthKit(SYNTH_SPECS.hiphop) },
 ];
 
-const PACK_BY_ID = Object.fromEntries(BUNDLED_PACKS.map((p) => [p.id, p]));
+// ── Kits as a (genre × source) grid ─────────────────────────────────────────
+// A kit is one GENRE played through one SOURCE. The genre picks the voicing
+// (tuning/decay/character); the source picks where the sound comes from:
+//   - 'synth'      → the genre's Tone.js synth factory (offline, always there)
+//   - a collection → that genre's bundled sample pack (signature / voidstar_0 /
+//                    real_0), decoded by createSampleKit
+// This is the model the sequencer UI exposes as two dropdowns, so 'synth' reads
+// as just another source alongside the sample collections (no more 16-entry list,
+// and the source choice applies uniformly across genres).
+export const GENRES_META = FAMILIES;       // [{ id, label, desc, synth }]
+export const DEFAULT_GENRE = 'voidstar';
+export const DEFAULT_SOURCE = 'synth';
 
-// Flatten families → 16 kit entries: "<genre> · synth" and "<genre> · samples".
-// `group` drives the optgroup label in the picker.
-export const KITS = FAMILIES.flatMap((f) => [
-  {
-    id: f.id, group: f.label, label: `${f.label} · synth`, type: 'synth',
-    desc: `${f.desc} (synthesised)`,
-    make: f.synth,
-  },
-  {
-    id: `${f.id}-samples`, group: f.label, label: `${f.label} · samples`, type: 'sample',
-    desc: `${f.desc} (bundled samples — same pack Strudel plays via .bank("${f.id}"))`,
-    make: () => createSampleKit({ manifestUrl: PACK_BY_ID[f.id].url, voiceMap: DRUM_VOICE_MAP }),
-  },
-]);
+// Selectable sources: synth first, then every bundled collection. (Externally
+// loaded GitHub/URL packs are added as extra sources at runtime by sequencer.js.)
+export const SOURCES = [
+  { id: 'synth', label: 'synth', desc: 'Tone.js synthesis — offline, always available.' },
+  ...COLLECTIONS.map((c) => ({ id: c.id, label: c.label, desc: c.desc })),
+];
 
-export const DEFAULT_KIT_ID = 'voidstar';
+const FAMILY_BY_ID = Object.fromEntries(FAMILIES.map((f) => [f.id, f]));
+const GENRE_SET = new Set(FAMILIES.map((f) => f.id));
+const COLLECTION_IDS = new Set(COLLECTIONS.map((c) => c.id));
 
+// Canonical kit id from (genre, source): synth stays a bare "<genre>" (so old
+// saved patterns keep working); a collection source is "<genre>@<collection>".
+export function kitIdFor(genre, source) {
+  return source === 'synth' ? genre : `${genre}@${source}`;
+}
+
+// Parse a kit id into { genre, source }, tolerant of legacy forms:
+//   "voidstar"          → { voidstar, synth }     (current + legacy synth)
+//   "voidstar-samples"  → { voidstar, <active collection> }   (legacy sample kit)
+//   "metal@real_0"      → { metal, real_0 }
+// Returns null for anything else (e.g. an external pack id) so callers fall back.
+export function parseKitId(id = '') {
+  if (id.includes('@')) {
+    const [genre, source] = id.split('@');
+    if (GENRE_SET.has(genre) && COLLECTION_IDS.has(source)) return { genre, source };
+  }
+  if (id.endsWith('-samples')) {
+    const genre = id.slice(0, -'-samples'.length);
+    if (GENRE_SET.has(genre)) return { genre, source: getActiveCollectionId() };
+  }
+  if (GENRE_SET.has(id)) return { genre: id, source: 'synth' };
+  return null;
+}
+
+// Build the live kit (Tone synth or decoded sample kit) for a (genre, source).
+export function makeKit(genre, source) {
+  const fam = FAMILY_BY_ID[genre] || FAMILIES[0];
+  if (source === 'synth') return fam.synth();
+  return createSampleKit({ manifestUrl: packUrl(source, genre), voiceMap: DRUM_VOICE_MAP });
+}
+
+export const DEFAULT_KIT_ID = kitIdFor(DEFAULT_GENRE, DEFAULT_SOURCE);   // 'voidstar'
+
+// Descriptor (metadata + make) for a kit id — null for ids we don't own (the
+// sequencer resolves those against its external-pack registry first).
 export function getKit(id) {
-  return KITS.find((k) => k.id === id) || KITS[0];
+  const p = parseKitId(id);
+  if (!p) return null;
+  const fam = FAMILY_BY_ID[p.genre] || FAMILIES[0];
+  const isSynth = p.source === 'synth';
+  const srcLabel = isSynth ? 'synth' : getCollection(p.source).label;
+  return {
+    id: kitIdFor(p.genre, p.source),
+    genre: p.genre,
+    source: p.source,
+    type: isSynth ? 'synth' : 'sample',
+    label: `${fam.label} · ${srcLabel}`,
+    desc: `${fam.desc} (${isSynth ? 'synthesised' : `${srcLabel} samples`})`,
+    make: () => makeKit(p.genre, p.source),
+  };
 }

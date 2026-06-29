@@ -19,9 +19,14 @@ import {
   removeFromList, clonePattern, defaultPattern, resizeHits, makePad,
   loadPanelOpen, savePanelOpen, downloadPattern, VOICES,
 } from './sequencer-patterns.js';
-import { KITS, getKit, DEFAULT_KIT_ID, EXTERNAL_VOICE_MAP } from './sequencer-kits.js';
+import {
+  getKit, kitIdFor, parseKitId, GENRES_META, SOURCES,
+  DEFAULT_KIT_ID, DEFAULT_GENRE, DEFAULT_SOURCE, EXTERNAL_VOICE_MAP,
+} from './sequencer-kits.js';
 import { createSampleKit } from './sequencer-voices.js';
-import { parsePackSpec } from './samples-manifest.js';
+import {
+  parsePackSpec, DEFAULT_COLLECTION_ID, getCollection, setActiveCollectionId,
+} from './samples-manifest.js';
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
 import { getNum, getBool, setBool, setRaw, getRaw, getJSON, setJSON } from './prefs.js';
@@ -32,6 +37,7 @@ import { getNum, getBool, setBool, setRaw, getRaw, getJSON, setJSON } from './pr
 // vary per repo; treat as examples to audition, not vetted CC0 sets. Loaded
 // into BOTH engines.
 const PACK_PRESETS = [
+  { label: 'drum machines', spec: 'github:ritchse/tidal-drum-machines', title: 'tidal-drum-machines — real 808/909/MPC/Linn… one-shots (the same source as the bundled real_0 collection)' },
   { label: 'lofi',    spec: 'github:eddyflux/crate',           title: 'Eddyflux "crate" — lo-fi one-shots' },
   { label: 'hiphop',  spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — classic hip-hop one-shot hits + drum machines' },
   { label: 'jazz',    spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — acoustic / jazz one-shots (jazz, jvbass…)' },
@@ -71,9 +77,23 @@ function saveShowSettings(on) { setBool(SEQ_SHOW_SETTINGS_KEY, on); }
 const SEQ_KIT_KEY = 'voidstar.qualia.sequencer.kit';
 function loadSeqKit() {
   const id = getRaw(SEQ_KIT_KEY, DEFAULT_KIT_ID);
-  return getKit(id).id;   // normalises an unknown/removed id to the default
+  return (getKit(id) || getKit(DEFAULT_KIT_ID)).id;   // normalise legacy/unknown ids
 }
 function saveSeqKit(id) { setRaw(SEQ_KIT_KEY, id); }
+
+// Active sample collection (signature / voidstar_0) — the bank every
+// "<genre> · samples" kit resolves to. Global + persisted like the kit choice:
+// a collection swap re-points all sample kits at once for A/B, and the choice
+// survives reloads. The manifest module holds the live value (both engines read
+// it); we mirror it to localStorage and re-apply on boot.
+const SEQ_COLLECTION_KEY = 'voidstar.qualia.sequencer.collection';
+function loadSeqCollection() {
+  return getCollection(getRaw(SEQ_COLLECTION_KEY, DEFAULT_COLLECTION_ID)).id;
+}
+function saveSeqCollection(id) { setRaw(SEQ_COLLECTION_KEY, id); }
+// Apply the persisted collection to the manifest module as early as module load,
+// so the first kit build + Strudel registration both see the right collection.
+setActiveCollectionId(loadSeqCollection());
 
 export function createSequencer({ audio, syncStrudel } = {}) {
   // Snapshot panel-open state from the previous session ONCE — open()/close()
@@ -121,8 +141,17 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       _spec: p,
     });
   }
-  // Resolve a kit id against the dynamic registry first, then the static catalog.
-  function resolveKit(id) { return _dynamicKits.get(id) || getKit(id); }
+  // Resolve a kit id against the dynamic registry first, then the static catalog,
+  // falling back to the default kit for legacy/unknown ids.
+  function resolveKit(id) { return _dynamicKits.get(id) || getKit(id) || getKit(DEFAULT_KIT_ID); }
+  // Is this id an externally-loaded pack (vs a bundled genre×source kit)?
+  function isExternalKit(id) { return _dynamicKits.has(id); }
+  // Current (genre, source) for the selectors. External packs have no genre and
+  // their own id as the source; bundled kits parse to a real genre + source.
+  function currentGS() {
+    if (isExternalKit(_kitId)) return { genre: null, source: _kitId };
+    return parseKitId(_kitId) || { genre: DEFAULT_GENRE, source: DEFAULT_SOURCE };
+  }
   // Restore persisted external packs as dynamic kits before we resolve the
   // initial kit id (so a pattern saved on an external pack reloads onto it).
   for (const p of loadExtPacks()) { try { addDynamicKit(p); } catch {} }
@@ -130,6 +159,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // groove restores its kit); the global pref is the fallback for patterns with
   // no stored kit and the "last-used" seed for fresh ones.
   let _kitId = resolveKit(model.kitId).id;
+  // Last bundled (synth/collection) source chosen — so switching genre while an
+  // external pack is selected falls back to a sensible source.
+  let _lastBundledSource = isExternalKit(_kitId) ? DEFAULT_SOURCE : (parseKitId(_kitId)?.source || DEFAULT_SOURCE);
   let analyser = null;
   let loopId = null;
   let cellIdx = 0;
@@ -506,20 +538,41 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     saveSeqKit(_kitId);     // remember as last-used for fresh patterns
     model.updatedAt = Date.now();
     persistSoon();
-    if (kit) {
-      const built = buildKit();
-      if (built) {
-        const old = kit;
-        kit = built;
-        wireKit(kit);
-        applyMuteToKit();
-        try { old.dispose(); } catch {}
-      }
-    }
+    rebuildCurrentKit();
     refreshKitSelect();
     refreshSeqBtn();
   }
+  // Rebuild the live kit in place (no-op if the panel hasn't built one yet).
+  // Shared by kit selection and collection swaps — the new buffers decode in the
+  // background; the old kit is disposed only once its replacement is wired.
+  function rebuildCurrentKit() {
+    if (!kit) return;
+    const built = buildKit();
+    if (!built) return;
+    const old = kit;
+    kit = built;
+    wireKit(kit);
+    applyMuteToKit();
+    try { old.dispose(); } catch {}
+  }
   function getKitId() { return _kitId; }
+  function getGenreId() { return currentGS().genre; }
+  function getSourceId() { return currentGS().source; }
+  // Pick a genre, keeping the current source. If an external pack is selected
+  // (no genre), fall back to the last bundled source so genre means something.
+  function setGenre(genre) {
+    const source = isExternalKit(_kitId) ? _lastBundledSource : currentGS().source;
+    setKit(kitIdFor(genre, source));
+  }
+  // Pick a source. 'synth' or a collection apply to the current genre; an
+  // external-pack id selects that pack directly (genre doesn't apply). Choosing a
+  // collection also makes it the active one (Strudel's plain .bank() + legacy).
+  function setSource(source) {
+    if (isExternalKit(source)) { setKit(source); return; }
+    _lastBundledSource = source;
+    if (source !== 'synth') { setActiveCollectionId(source); saveSeqCollection(source); }
+    setKit(kitIdFor(currentGS().genre || DEFAULT_GENRE, source));
+  }
   // Mute is per-session, not persisted in the pattern model — it's a
   // performance gate ("silence this source for a moment"), not a saved
   // attribute of the pattern. Survives play/stop cycles within the
@@ -1011,16 +1064,15 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       lenHalf: sLen.bHalf, lenDbl: sLen.bDbl,
     };
 
-    // Kit picker — the instrument the pads play through. Switching is live;
-    // the same groove re-voices onto the new kit (see setKit). Synth kits are
-    // instant; sample kits decode their pack in the background.
-    const kitSel = document.createElement('select');
-    kitSel.className = 'seq-kit-select';
-    populateKitOptions(kitSel);
-    kitSel.addEventListener('change', () => setKit(kitSel.value));
-    _kitSelectEl = kitSel;
-    // ‹ › step through the kit list (wraps) — faster than opening the dropdown
-    // to audition adjacent kits during a set.
+    // Kit = genre × source (two dropdowns). The GENRE picks the voicing; the
+    // SOURCE picks where the sound comes from (synth or a sample collection).
+    // Switching either is live — the same groove re-voices onto the new kit.
+    const genreSel = document.createElement('select');
+    genreSel.className = 'seq-kit-select seq-genre-select';
+    populateGenreOptions(genreSel);
+    genreSel.addEventListener('change', () => setGenre(genreSel.value));
+    _genreSelectEl = genreSel;
+    // ‹ › step through genres (wraps) — faster than opening the dropdown.
     const kitNav = document.createElement('span');
     kitNav.className = 'seq-kit-nav';
     const mkNavBtn = (txt, dir, title) => {
@@ -1033,10 +1085,20 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       b.addEventListener('click', (e) => { e.preventDefault(); stepKit(dir); });
       return b;
     };
-    kitNav.append(mkNavBtn('‹', -1, 'Previous kit'), kitSel, mkNavBtn('›', +1, 'Next kit'));
+    kitNav.append(mkNavBtn('‹', -1, 'Previous genre'), genreSel, mkNavBtn('›', +1, 'Next genre'));
+
+    // Source picker — synth or a bundled sample collection (signature / voidstar_0
+    // / real_0), plus any loaded external packs. This is the A/B control: same
+    // genre + groove, different sound source. Applies uniformly to every genre.
+    const sourceSel = document.createElement('select');
+    sourceSel.className = 'seq-kit-select seq-source-select';
+    populateSourceOptions(sourceSel);
+    sourceSel.addEventListener('change', () => setSource(sourceSel.value));
+    _sourceSelectEl = sourceSel;
 
     propsEl.append(
-      mk('kit',       kitNav, { title: 'Instrument the pads play through. Synth kits are offline; sample kits load the same strudel.json packs Strudel uses.' }),
+      mk('genre',  kitNav,    { title: 'Kit voicing the pads play (tuning / decay / character). ‹ › step through genres.' }),
+      mk('source', sourceSel, { title: 'Where the sound comes from for this genre: synth (offline) or a bundled sample collection — signature (default), voidstar_0 (original baseline), real_0 (real drum-machine recordings, needs network). Loaded packs appear here too. In Strudel the collections are .bank("sig…"/"v0…"/"r0…").' }),
       mkPackLoader(),
       mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
       mk('steps/beat', stepperFor(stepsIn, 'change'), { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
@@ -1049,36 +1111,60 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   }
   // Keep the kit dropdown in sync when the kit is changed programmatically
   // (e.g. a future remote/macro path) or re-rendered.
-  let _kitSelectEl = null;
+  let _genreSelectEl = null;
+  let _sourceSelectEl = null;
   let _packStatusEl = null;
+  // Reflect the current kit in both dropdowns. An external pack has no genre, so
+  // the genre picker is disabled and the source picker shows the pack.
   function refreshKitSelect() {
-    if (_kitSelectEl && _kitSelectEl.value !== _kitId) _kitSelectEl.value = _kitId;
+    const { genre, source } = currentGS();
+    if (_genreSelectEl) {
+      _genreSelectEl.disabled = !genre;
+      if (genre && _genreSelectEl.value !== genre) _genreSelectEl.value = genre;
+    }
+    if (_sourceSelectEl && _sourceSelectEl.value !== source) _sourceSelectEl.value = source;
   }
-  // (Re)fill a kit <select> with the static catalog + any loaded external packs.
-  // A flat list of full "genre · variant" labels — optgroups render as bulky,
-  // non-selectable headers on mobile and bury the actual options, so we avoid
-  // them. Called on render and whenever a pack is loaded.
-  function populateKitOptions(sel) {
+  function populateGenreOptions(sel) {
     if (!sel) return;
     sel.innerHTML = '';
-    for (const k of [...KITS, ..._dynamicKits.values()]) {
+    for (const g of GENRES_META) {
+      const opt = document.createElement('option');
+      opt.value = g.id;
+      opt.textContent = g.label;
+      opt.title = g.desc || '';
+      sel.appendChild(opt);
+    }
+    const { genre } = currentGS();
+    if (genre) sel.value = genre;
+  }
+  // Sources = synth + bundled collections + any loaded external packs.
+  function populateSourceOptions(sel) {
+    if (!sel) return;
+    sel.innerHTML = '';
+    for (const s of SOURCES) {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.label;
+      opt.title = s.desc || '';
+      sel.appendChild(opt);
+    }
+    for (const k of _dynamicKits.values()) {
       const opt = document.createElement('option');
       opt.value = k.id;
-      opt.textContent = k.label;   // e.g. "voidstar · synth"
+      opt.textContent = `pack: ${k._spec?.label || k.label}`;
       opt.title = k.desc || '';
       sel.appendChild(opt);
     }
-    sel.value = _kitId;
+    sel.value = currentGS().source;
   }
-  // Step the selection through the ordered kit list (static + loaded), wrapping
-  // at the ends. Drives the ‹ › buttons.
+  // ‹ › step through genres (wraps), keeping the current source.
   function stepKit(dir) {
-    const ids = [...KITS, ..._dynamicKits.values()].map((k) => k.id);
+    const ids = GENRES_META.map((g) => g.id);
     if (!ids.length) return;
-    let i = ids.indexOf(_kitId);
+    let i = ids.indexOf(currentGS().genre);
     if (i < 0) i = 0;
     i = (i + dir + ids.length) % ids.length;
-    setKit(ids[i]);
+    setGenre(ids[i]);
   }
   function setPackStatus(msg, isErr) {
     if (!_packStatusEl) return;
@@ -1140,7 +1226,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     const list = loadExtPacks().filter((p) => p.id !== spec.id);
     list.unshift(spec);
     saveExtPacks(list);
-    populateKitOptions(_kitSelectEl);
+    populateSourceOptions(_sourceSelectEl);   // pack shows up as a selectable source
     setKit(spec.id);   // builds the kit (decodes buffers in the background)
     setPackStatus(okStrudel
       ? `loaded "${spec.label}" → Strudel + sequencer kit`
@@ -1633,10 +1719,18 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     setLimiter,
     getLimiter,
     onChange,
-    // Kit selection — instrument the pads play through.
-    getKits: () => KITS.map(({ id, label, type, desc }) => ({ id, label, type, desc })),
+    // Kit selection — a kit is a genre × source pairing.
+    getGenres: () => GENRES_META.map(({ id, label, desc }) => ({ id, label, desc })),
+    getSources: () => [
+      ...SOURCES.map(({ id, label, desc }) => ({ id, label, desc })),
+      ..._dynamicKits.values().map((k) => ({ id: k.id, label: `pack: ${k._spec?.label || k.label}`, desc: k.desc, external: true })),
+    ],
     getKitId,
+    getGenreId,
+    getSourceId,
     setKit,
+    setGenre,
+    setSource,
     play, stop,
     playFromStrudel, stopFromStrudel,
     setCps,
