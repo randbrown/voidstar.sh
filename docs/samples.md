@@ -169,15 +169,28 @@ collections. `signature` embeds its audio as `data:` URLs (works in both engines
 because `resolveManifest()` treats `data:` URLs as already-resolved); `voidstar_0`
 keeps loose WAVs referenced via a root-relative `_base`.
 
-**Per-voice loudness balance.** Both the sequencer's sample kits and Strudel's
+**Per-voice loudness + headroom.** Both the sequencer's sample kits and Strudel's
 `.bank()` apply a single flat gain to every voice, so the one-shots themselves
-must carry the mix balance. Peak-normalising every voice to the same level makes
-bright, sustained cymbals read far louder/harsher than the kick (they hold
-~10-40× the kick's high-frequency energy at equal peak). Each generator therefore
-applies a `VOICE_TRIM_DB` table after normalisation — kick + toms anchor at 0 dB,
-snare/rim/hats step down, and ride/crash come down hardest (~-13/-15 dB) — so the
-samples land ~15-22 dB under the kick, matching the synth kits' per-voice trims.
-Retune that table if a voice sits wrong across the board.
+must carry the mix balance. The `signature` generator levels each voice with
+`rmsTarget()` to a `TARGET_RMS_DB` table (loudness, not peak) plus a hard peak
+ceiling — two reasons:
+
+- **Balance** — bright, sustained cymbals hold ~10-40× the kick's HF energy, so
+  equal *peaks* read far louder; loudness targets put cymbals ~15-18 dB under the
+  kick (mirroring the synth kits).
+- **Headroom** — peak-normalising every voice to ~0.9 slammed each hit against
+  the ceiling, so a kick+tom stack drove the kit limiter and the groove sounded
+  squashed. Loudness targets leave the sustained body well below 0 dBFS (kick body
+  ~-6 dBFS, RMS ~-13).
+
+`voidstar_0` keeps the simpler peak-normalise + `VOICE_TRIM_DB` approach as the
+baseline. Retune `TARGET_RMS_DB` if a voice sits wrong across the board.
+
+**Kick/tom punch.** A decaying sine body is low-crest (~5 dB → reads as hum). The
+`signature` kick/tom add a short, bright attack transient *after* the saturation
+stage (so it isn't flattened), scaled to a multiple of the body peak so it becomes
+the loudest sample — raising crest to ~10-11 dB. Crest is gain-invariant, so the
+later `rmsTarget()` keeps the punch; the transient dial is `k.atk` / `t.atk`.
 
 **Cymbal/hat timbre.** The signature hats/ride/crash are built from a dense
 inharmonic partial cluster (`metalCluster()`) plus shaped noise + an attack

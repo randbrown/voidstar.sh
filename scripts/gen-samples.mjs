@@ -56,6 +56,8 @@ function add(dst, src, g = 1, off = 0) {
   return dst;
 }
 function scale(x, g) { for (let i = 0; i < x.length; i++) x[i] *= g; return x; }
+function peakOf(x) { let m = 0; for (let i = 0; i < x.length; i++) { const a = Math.abs(x[i]); if (a > m) m = a; } return m; }
+function peakNorm(x, to = 1) { const m = peakOf(x); if (m > 1e-8) scale(x, to / m); return x; }
 function envExp(t, tau) { return Math.exp(-t / Math.max(0.001, tau)); }
 
 function onePoleLP(x, cutoff) {
@@ -105,11 +107,19 @@ function fadeInOut(x, inMs = 0.8, outMs = 8) {
   for (let i = 0; i < no; i++) x[x.length - 1 - i] *= i / Math.max(1, no);
   return x;
 }
-function normalize(x, peak = 0.9) {
-  let m = 0;
-  for (let i = 0; i < x.length; i++) m = Math.max(m, Math.abs(x[i]));
-  if (m > 1e-8) scale(x, peak / m);
-  return x;
+// Scale a buffer to a target loudness (dB RMS), with a hard peak ceiling so it
+// can never clip. Unlike peak-normalising every voice to ~0.9 (which slams each
+// hit against the ceiling and leaves no headroom — so a kick+tom stack drives the
+// kit limiter and the groove reads as squashed), this lands each voice at a
+// perceptual level AND leaves real headroom: punchy, high-crest voices keep their
+// transient peaks well below full scale.
+function rmsTarget(x, targetDb, ceil = 0.8) {
+  let sumsq = 0, peak = 0;
+  for (let i = 0; i < x.length; i++) { sumsq += x[i] * x[i]; const a = Math.abs(x[i]); if (a > peak) peak = a; }
+  const rms = Math.sqrt(sumsq / x.length) || 1e-9;
+  let g = (10 ** (targetDb / 20)) / rms;
+  if (peak * g > ceil) g = ceil / (peak || 1e-9);   // safety: never exceed the ceiling
+  return scale(x, g);
 }
 function finish(x, p, rand) {
   const f = p.fin || {};
@@ -124,7 +134,7 @@ function finish(x, p, rand) {
     add(x, h, f.hiss);
   }
   fadeInOut(x, 0.6, f.fadeMs || 8);
-  return normalize(x, f.peak || 0.9);
+  return x;   // level is set per-voice by rmsTarget() in the render loop, not here
 }
 function sineSweep(dst, { f0, f1, bend = 0.03, tau = 0.2, amp = 1, phase = 0, start = 0 }) {
   let ph = phase;
@@ -193,7 +203,20 @@ function renderKick(p, seed) {
     for (let i = 0; i < n.length; i++) n[i] *= envExp(i / SR, k.clickTau || 0.004);
     add(x, n, k.click);
   }
-  return finish(x, p, rand);
+  // Sharp beater transient — added AFTER finish() (below) so the saturation stage
+  // can't flatten it. The sine body alone is a low-crest decaying tone (~5 dB
+  // crest → reads as hum, not hit); a tall, short peak on top restores punch.
+  // rmsTarget() then levels by RMS, so the transient survives as real crest.
+  const out = finish(x, p, rand);
+  const katk = bandpassNoise(rand, secs(0.004), k.atkHp || 1700, SR / 2 - 500);
+  for (let i = 0; i < katk.length; i++) katk[i] *= envExp(i / SR, 0.0013);
+  // Peak-normalise the transient, then set it to a multiple of the body peak so
+  // it actually becomes the loudest sample → raw crest rises to ~9-10 dB (punch).
+  // Crest is gain-invariant, so rmsTarget() preserves it; the kick then lands at
+  // ~-2 dBFS peak / -12 dB RMS — punchy with headroom.
+  peakNorm(katk);
+  add(out, katk, (k.atk ?? 1.6) * peakOf(out));
+  return out;
 }
 function renderSnare(p, seed) {
   const rand = mulberry32(seed);
@@ -250,7 +273,14 @@ function renderTom(p, seed, idx) {
   sineSweep(x, { f0: f * (t.drop || 1.65), f1: f, bend: t.bend || 0.05, tau: t.tau || 0.25, amp: t.amp || 0.9 });
   modal(x, [[f * 1.5, (t.tau || 0.25) * 0.7, 0.22], [f * 2.02, (t.tau || 0.25) * 0.45, 0.12]], 1);
   if (t.hit) add(x, bandpassNoise(rand, secs(0.012), 900, 6000), t.hit);
-  return finish(x, p, rand);
+  // Sharp stick transient for punch (same idea as the kick) — added post-finish
+  // so saturation doesn't flatten it; toms are otherwise a low-crest sine body.
+  const out = finish(x, p, rand);
+  const tatk = bandpassNoise(rand, secs(0.0035), 1400, 9000);
+  for (let i = 0; i < tatk.length; i++) tatk[i] *= envExp(i / SR, 0.0012);
+  peakNorm(tatk);
+  add(out, tatk, (t.atk ?? 1.4) * peakOf(out));
+  return out;
 }
 function renderRide(p, seed) {
   const rand = mulberry32(seed);
@@ -299,18 +329,20 @@ const VOICES = {
 };
 const VOICE_SEED = { bd: 1, sd: 2, rim: 3, hh: 4, oh: 5, lt: 6, mt: 7, ht: 8, rd: 9, cr: 10 };
 
-// Per-voice loudness balance (dB), applied AFTER each one-shot is peak-normalised.
-// Without this every voice sits at the same ~-1 dB peak, but a bright, sustained
-// cymbal carries ~10-40× the kick's high-frequency energy at that peak, so it
-// reads far louder and harsher to the ear — and ~15 dB hotter than the SYNTH
-// kits, which trim each cymbal individually (crash -14..-21, ride -10..-18, hats
-// -9..-17 vs the kick). Bake the same balance into the samples so both the
-// sequencer and Strudel's .bank() playback (both apply one flat kit gain) sit
-// right. Kick + toms anchor at 0 dB; cymbals come down hardest.
-const VOICE_TRIM_DB = {
-  bd: 0, lt: -1, mt: -1, ht: -1, sd: -3, rim: -8, hh: -10, oh: -10, rd: -13, cr: -15,
+// Per-voice loudness targets (dB RMS). Each one-shot is scaled to one of these by
+// rmsTarget() (with a peak ceiling), instead of peak-normalising every voice to
+// ~0.9. Two wins over flat peak-normalisation:
+//   1. Balance — a bright, sustained cymbal carries ~10-40× the kick's HF energy,
+//      so equal peaks read far louder; loudness targets put cymbals ~15-18 dB
+//      under the kick (mirroring the synth kits' per-voice trims).
+//   2. Headroom — kick/toms no longer slam the ceiling, so peaks land well below
+//      0 dBFS and a dense kick+tom stack doesn't drive the kit limiter into
+//      pumping. That headroom (plus the new attack transients) is what keeps the
+//      groove from sounding squashed.
+// The relative balance matches the approved tuning; the whole set just sits lower.
+const TARGET_RMS_DB = {
+  bd: -12, lt: -13, mt: -13, ht: -13, sd: -24, rim: -26, hh: -28, oh: -28, rd: -27, cr: -30,
 };
-const dbToLin = (db) => 10 ** (db / 20);
 
 // ── Genre profiles — characterful, not placeholder-neutral ─────────────────
 const BASE = {
@@ -465,7 +497,7 @@ for (let gi = 0; gi < GENRES.length; gi++) {
   const base = 1000 + gi * 100;
   for (const [name, render] of Object.entries(VOICES)) {
     const rendered = render(genre.profile, base + VOICE_SEED[name]);
-    scale(rendered, dbToLin(VOICE_TRIM_DB[name] ?? 0));   // per-voice loudness balance
+    rmsTarget(rendered, TARGET_RMS_DB[name] ?? -16);   // per-voice loudness + headroom
     const wav = encodeWav(rendered);
     audioBytes += wav.length;
     manifest[name] = [dataUrl(wav)];
