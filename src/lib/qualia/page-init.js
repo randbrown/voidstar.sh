@@ -79,6 +79,14 @@ const AUTO_PHASE_STYLES = ['sequential', 'palettes', 'random'];
 // modes, then cycle picks the next quale and the new one starts phasing).
 const CYCLE_PERIODS = [0, 5, 15, 30, 45];       // seconds
 const AUTO_CYCLE_STYLES = ['sequential', 'random'];
+// Scene transitions: how a switch between two looks is bridged. Applies to
+// EVERY scene change — auto-phase steps, auto-cycle swaps, manual quale
+// switches, swipes, and qualem recalls — via core.beginTransition().
+//   cut      — instant (legacy behaviour, no freeze-frame)
+//   dissolve — additive crossfade: the outgoing look fades over the incoming
+//   wipe     — the outgoing look is erased left-to-right to reveal the incoming
+const TRANSITION_STYLES  = ['cut', 'dissolve', 'wipe'];
+const TRANSITION_MS_OPTS = [300, 600, 1200, 1800, 2500];    // ms
 // "Glitch" post-process modes (shared by ascii / mosh / edge). The button
 // cycles through these:
 //   off:  glitch disabled (always)
@@ -182,6 +190,8 @@ export function initQualiaPage() {
   const phaseStyleSelect = document.getElementById('phase-style');
   const btnCycle   = document.getElementById('btn-cycle');
   const cycleStyleSelect = document.getElementById('cycle-style');
+  const transStyleSelect = document.getElementById('transition-style');
+  const transMsSelect    = document.getElementById('transition-ms');
   const zenHandle  = document.getElementById('zen-handle');
   const overlayUI  = document.getElementById('status-overlay');
   const startBtn   = document.getElementById('start-btn');
@@ -338,6 +348,8 @@ export function initQualiaPage() {
     autoCycleSeconds,
     autoCycleStyle,
     autoCycleBeatSync,
+    transitionStyle,
+    transitionMs,
     numPoses:       pose.getNumPoses(),
     poseSmoothing:  poseSmoothingValue,
     reactSmoothing: reactSmoothingValue,
@@ -482,6 +494,7 @@ export function initQualiaPage() {
     fxSelect.appendChild(opt);
   }
   fxSelect.addEventListener('change', () => {
+    runSceneTransition();
     core.setActive(fxSelect.value).catch(err => console.error('[qualia] setActive failed:', err));
   });
 
@@ -1698,6 +1711,7 @@ export function initQualiaPage() {
             const i = ids.indexOf(cur || ids[0]);
             const step = dy < 0 ? 1 : -1;
             const nextId = ids[(i + step + ids.length) % ids.length];
+            runSceneTransition();
             core.setActive(nextId).catch(err => console.error('[qualia] swipe setActive failed:', err));
           }
         }
@@ -2160,6 +2174,16 @@ export function initQualiaPage() {
     // fx + overlay into the fx panel rect. preserveDrawingBuffer on the WebGL
     // contexts lets us drawImage from a webgl2/three canvas mid-frame.
     drawLayerFitted(fx, layout.fxRect);
+    // Scene-transition freeze-frame (when one is running) — drawn over the new
+    // fx at its current opacity, matching the live viz→transition→overlay
+    // z-order, so dissolves/wipes appear in the recording too.
+    const transCanvas = core.getTransitionCanvas?.();
+    if (transCanvas) {
+      recordCompositeCtx.save();
+      recordCompositeCtx.globalAlpha = core.getTransitionAlpha?.() ?? 1;
+      drawLayerFitted(transCanvas, layout.fxRect);
+      recordCompositeCtx.restore();
+    }
     drawLayerFitted(overlay.canvas, layout.fxRect);
     // Camera panel (split mode only).
     if (layout.camRect) drawCameraIntoRect(layout.camRect);
@@ -2652,6 +2676,7 @@ export function initQualiaPage() {
     const steps = getActivePhaseSteps();
     if (!steps || !steps.length) return;
     lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-cycle
+    runSceneTransition();                        // freeze the old look before the step lands
     const fxId = core.activeId();
     // Filter to the user's enabled steps (phase pool). `included` is never
     // empty — phaseIncludedIndices falls back to all steps when everything
@@ -2708,6 +2733,7 @@ export function initQualiaPage() {
     const incl = phaseIncludedIndices(steps, excluded).map(i => steps[i]);
     if (!incl.length) return;
     lastAutoTransitionMs = performance.now();   // arm the auto-cycle cross-guard
+    runSceneTransition();                        // freeze the old look before the step lands
     autoPhaseStepCount += dir;
     const idx = ((autoPhaseStepCount % incl.length) + incl.length) % incl.length;
     applyPhaseStep(incl[idx]);
@@ -2784,6 +2810,33 @@ export function initQualiaPage() {
   let autoCycleSeconds = CYCLE_PERIODS.includes(_cycleSecRaw) ? _cycleSecRaw : 0;
   let autoCycleStyle = AUTO_CYCLE_STYLES.includes(_cycleStyleRaw) ? _cycleStyleRaw : 'sequential';
   let autoCycleBeatSync = !!stored.autoCycleBeatSync;
+
+  // — Scene transitions —
+  // One style/length pair, shared by every scene change. `runSceneTransition`
+  // freezes the current frame just before the caller swaps the quale or steps
+  // a phase; core.beginTransition fades it out as the new look renders. 'cut'
+  // is the no-op (instant) path, preserving the original hard-swap behaviour.
+  let transitionStyle = TRANSITION_STYLES.includes(stored.transitionStyle) ? stored.transitionStyle : 'dissolve';
+  let transitionMs = TRANSITION_MS_OPTS.includes(stored.transitionMs) ? stored.transitionMs : 600;
+  function runSceneTransition() {
+    if (transitionStyle === 'cut') return;
+    core.beginTransition({ style: transitionStyle, durationMs: transitionMs });
+  }
+  if (transStyleSelect) {
+    transStyleSelect.value = transitionStyle;
+    transStyleSelect.addEventListener('change', () => {
+      transitionStyle = TRANSITION_STYLES.includes(transStyleSelect.value) ? transStyleSelect.value : 'dissolve';
+      settings.save();
+    });
+  }
+  if (transMsSelect) {
+    transMsSelect.value = String(transitionMs);
+    transMsSelect.addEventListener('change', () => {
+      const v = parseInt(transMsSelect.value, 10);
+      transitionMs = TRANSITION_MS_OPTS.includes(v) ? v : 600;
+      settings.save();
+    });
+  }
   let autoCycleStartMs = 0;
   let autoCycleTickT = null;
   cycleStyleSelect.value = autoCycleStyle;
@@ -2833,6 +2886,7 @@ export function initQualiaPage() {
     }
     if (!nextId || nextId === cur) return;
     lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-phase
+    runSceneTransition();                        // freeze the old quale before the swap
     core.setActive(nextId).catch(err => console.error('[qualia] cycle setActive failed:', err));
   }
 
@@ -4019,6 +4073,7 @@ export function initQualiaPage() {
 
     // 3. Active fx — clean rebuild that swallows the new fx params.
     if (q.activeFxId && mesh.get(q.activeFxId)) {
+      runSceneTransition();   // dissolve from the current scene into the recalled one
       try { await core.setActive(q.activeFxId); }
       catch (e) { console.warn('[qualia] qualem setActive failed:', e); }
       fxSelect.value = q.activeFxId;
@@ -4770,6 +4825,7 @@ export function initQualiaPage() {
         if (!ids.length) break;
         const i = ids.indexOf(core.activeId() || ids[0]);
         const j = e.shiftKey ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
+        runSceneTransition();
         core.setActive(ids[j]).catch(err => console.error('[qualia] setActive failed:', err));
         break;
       }

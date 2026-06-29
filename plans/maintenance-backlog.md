@@ -132,5 +132,10 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
 - **Recorder chapter markers** — a SMPTE timecode track is already written; add a hotkey to drop
   named markers for post.
 - **Visual metronome / click** bound to `cps` (the tuner + cps clock already exist).
-- **Scene crossfade** between two `qualem` snapshots (whole-experience state already encodes).
+- ✅ **Scene crossfade** between scenes — *done:* `core.beginTransition({style, durationMs})`
+  freezes the outgoing viz canvas in a screen-blended layer and dissolves/wipes it out as
+  the incoming scene renders underneath. Wired into every scene change (auto-phase steps,
+  auto-cycle swaps, manual quale switch / V / swipe, qualem recall). Global `transition-style`
+  (cut / dissolve / wipe) + `transition-ms` controls in the topbar `auto` popover, persisted in
+  settings; also composited into recordings.
 - **Shared offscreen-canvas pool** for the overlay post-FX (each currently keeps its own).
