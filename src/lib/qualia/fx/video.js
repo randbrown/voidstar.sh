@@ -49,11 +49,22 @@ import { wirePicker, getStoredDeviceId } from '../devices.js';
 
 const PLAYLIST_KEY = 'voidstar.qualia.fx.video.playlist';
 
-// First-ever-load seed. Only applied when the localStorage key is *absent*
-// (never written), so a user who removes all entries and reloads doesn't
-// have their cleared list re-populated. All entries are CORS-friendly
-// direct-mp4 links so the glitch shader can actually read them.
+// Bumped whenever DEFAULT_URLS gains clips that existing visitors should also
+// receive. On the next load each visitor whose recorded version is lower gets
+// any default they're missing merged into their saved playlist (see
+// migrateDefaults). Bump this when you add an entry below that should reach
+// people who've already used the lab.
+const PLAYLIST_MIGRATION_KEY = 'voidstar.qualia.fx.video.playlist.migration';
+const PLAYLIST_MIGRATION = 1;
+
+// First-ever-load seed. Applied verbatim when the localStorage key is *absent*
+// (never written); returning visitors instead get these merged in once via the
+// migration above. Entries are either same-origin local files under
+// public/videos (always CORS-clean) or CORS-friendly direct-mp4 links — both
+// are readable by the glitch shader's WebGL texture upload.
 const DEFAULT_URLS = [
+  { src: '/videos/waterfall-portrait.mp4', name: 'waterfall · portrait' },
+  { src: '/videos/waterfall-cascade.mp4',  name: 'waterfall · cascade' },
   { src: 'https://assets.mixkit.co/videos/106/106-720.mp4',   name: 'mixkit · 106' },
   { src: 'https://assets.mixkit.co/videos/17978/17978-720.mp4', name: 'mixkit · 17978' },
   { src: 'https://assets.mixkit.co/videos/45404/45404-720.mp4', name: 'mixkit · 45404' },
@@ -277,21 +288,49 @@ void main() {
 function loadPlaylist() {
   const stored = localStorage.getItem(PLAYLIST_KEY);
   if (stored === null) {
+    // First-ever load: seed the full default playlist and mark this visitor
+    // current so the migration never re-adds the same defaults later.
+    try { localStorage.setItem(PLAYLIST_MIGRATION_KEY, String(PLAYLIST_MIGRATION)); } catch {}
     return DEFAULT_URLS.map(e => ({ kind: 'url', src: e.src, name: e.name }));
   }
+  let entries;
   try {
     const raw = JSON.parse(stored);
-    if (!Array.isArray(raw)) return [];
-    return raw
-      .filter(e => e && (
-        (e.kind === 'url' && typeof e.src === 'string') || e.kind === 'camera'
-      ))
-      .map(e => e.kind === 'camera'
-        ? { kind: 'camera', src: '', name: e.name || 'camera' }
-        : { kind: 'url', src: e.src, name: e.name || e.src });
+    entries = Array.isArray(raw)
+      ? raw
+          .filter(e => e && (
+            (e.kind === 'url' && typeof e.src === 'string') || e.kind === 'camera'
+          ))
+          .map(e => e.kind === 'camera'
+            ? { kind: 'camera', src: '', name: e.name || 'camera' }
+            : { kind: 'url', src: e.src, name: e.name || e.src })
+      : [];
   } catch {
-    return [];
+    entries = [];
   }
+  return migrateDefaults(entries);
+}
+
+// One-time merge for returning visitors: when DEFAULT_URLS gains clips that
+// existing users should also see, bump PLAYLIST_MIGRATION. On the next load
+// anyone whose recorded version is lower gets every default they're missing
+// (matched by src) appended, while their own custom entries and ordering are
+// preserved. The merged list and the new version are persisted immediately so
+// it runs exactly once per version per browser.
+function migrateDefaults(entries) {
+  let done = 0;
+  try { done = parseInt(localStorage.getItem(PLAYLIST_MIGRATION_KEY), 10) || 0; } catch {}
+  if (done >= PLAYLIST_MIGRATION) return entries;
+
+  const have = new Set(entries.filter(e => e.kind === 'url').map(e => e.src));
+  const missing = DEFAULT_URLS
+    .filter(d => !have.has(d.src))
+    .map(d => ({ kind: 'url', src: d.src, name: d.name }));
+  const merged = entries.concat(missing);
+
+  savePlaylist(merged);
+  try { localStorage.setItem(PLAYLIST_MIGRATION_KEY, String(PLAYLIST_MIGRATION)); } catch {}
+  return merged;
 }
 
 function savePlaylist(entries) {
