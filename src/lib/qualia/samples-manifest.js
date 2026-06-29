@@ -41,6 +41,11 @@ export const GENRES = ['voidstar', 'lofi', 'tape', 'dub', 'jazz', 'metal', 'deat
 export const COLLECTIONS = [
   { id: 'signature',  label: 'signature',  bank: 'sig', desc: 'voidstar signature one-shots — characterful, embedded offline.' },
   { id: 'voidstar_0', label: 'voidstar_0', bank: 'v0',  desc: 'The original synthetic packs — neutral baseline (v0).' },
+  // Real recorded drum-machine one-shots (one classic machine per genre), kept as
+  // committed manifests that REFERENCE the samples by URL rather than re-hosting
+  // them — so this collection streams + decodes at play time and needs network,
+  // unlike the two synthetic ones. Source/credit: public/samples/README.md.
+  { id: 'real_0',     label: 'real_0',     bank: 'r0',  desc: 'Real drum-machine recordings (909/808/MPC/Linn…). Streamed — needs network.', remote: true },
 ];
 export const DEFAULT_COLLECTION_ID = 'signature';
 

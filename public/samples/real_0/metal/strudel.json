@@ -1,0 +1,32 @@
+{
+  "bd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-bd/Bassdrum-01.wav"
+  ],
+  "sd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-sd/Snaredrum-01.wav"
+  ],
+  "rim": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-rim/Rim%20Shot.wav"
+  ],
+  "hh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-hh/Hat%20Closed.wav"
+  ],
+  "oh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-oh/Hat%20Open.wav"
+  ],
+  "lt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-lt/Tom%20L.wav"
+  ],
+  "mt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-mt/Tom%20M.wav"
+  ],
+  "ht": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-ht/Tom%20H.wav"
+  ],
+  "rd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-rd/Ride.wav"
+  ],
+  "cr": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/OberheimDMX/oberheimdmx-cr/Crash.wav"
+  ]
+}

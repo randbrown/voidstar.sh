@@ -1,0 +1,32 @@
+{
+  "bd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-bd/Bassdrum-01.wav"
+  ],
+  "sd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-sd/naredrum.wav"
+  ],
+  "rim": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-rim/Rimhot.wav"
+  ],
+  "hh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-hh/hh01.wav"
+  ],
+  "oh": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-oh/Hat%20Open.wav"
+  ],
+  "lt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-lt/Tom%20L.wav"
+  ],
+  "mt": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-mt/Tom%20M.wav"
+  ],
+  "ht": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-ht/Tom%20H.wav"
+  ],
+  "rd": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-rd/Ride.wav"
+  ],
+  "cr": [
+    "https://raw.githubusercontent.com/ritchse/tidal-drum-machines/main/machines/RolandTR909/rolandtr909-cr/Crash.wav"
+  ]
+}

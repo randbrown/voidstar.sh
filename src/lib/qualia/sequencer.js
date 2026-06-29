@@ -35,6 +35,7 @@ import { getNum, getBool, setBool, setRaw, getRaw, getJSON, setJSON } from './pr
 // vary per repo; treat as examples to audition, not vetted CC0 sets. Loaded
 // into BOTH engines.
 const PACK_PRESETS = [
+  { label: 'drum machines', spec: 'github:ritchse/tidal-drum-machines', title: 'tidal-drum-machines — real 808/909/MPC/Linn… one-shots (the same source as the bundled real_0 collection)' },
   { label: 'lofi',    spec: 'github:eddyflux/crate',           title: 'Eddyflux "crate" — lo-fi one-shots' },
   { label: 'hiphop',  spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — classic hip-hop one-shot hits + drum machines' },
   { label: 'jazz',    spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — acoustic / jazz one-shots (jazz, jvbass…)' },

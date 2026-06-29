@@ -12,6 +12,7 @@
     "astro": "astro",
     "gen:samples": "node scripts/gen-samples.mjs",
     "gen:samples:v0": "node scripts/gen-samples-voidstar0.mjs",
+    "gen:samples:real": "node scripts/gen-real-manifests.mjs",
     "gen:samples:all": "node scripts/gen-samples.mjs && node scripts/gen-samples-voidstar0.mjs"
   },
   "dependencies": {

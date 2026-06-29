@@ -155,6 +155,30 @@ function sprinkleClicks(dst, rand, count, durMs, hp, gain) {
     add(dst, click, gain * (0.4 + rand() * 0.8), off);
   }
 }
+// Dense inharmonic "metal" cluster — the backbone of a believable cymbal/hat.
+// A real cymbal is a thicket of mutually-inharmonic partials, not 3 clean sines
+// or flat white noise (which is what reads as "synthetic"). This sums many
+// partials at stretched, TR-style inharmonic ratios with seeded micro-detune
+// (→ shimmer/beating) plus a few odd harmonics each for metallic bite. Per-mode
+// decays shorten up the spectrum so the top sparkles off first, like real metal.
+const METAL_RATIOS = [1, 1.418, 1.882, 2.314, 2.91, 3.74, 4.61, 5.40, 6.35, 7.62, 8.91, 10.4];
+function metalCluster(dst, rand, { f0, count = 10, tau = 0.3, gain = 1, stretch = 1, odd = 2 }) {
+  for (let m = 0; m < count; m++) {
+    const ratio = METAL_RATIOS[m % METAL_RATIOS.length] * (m >= METAL_RATIOS.length ? 1.5 : 1);
+    const f = f0 * ratio ** stretch * (1 + (rand() - 0.5) * 0.013);   // micro-detune → beating
+    if (f >= SR / 2 - 200) continue;
+    const g = gain * (0.9 / (1 + m * 0.33));
+    const mtau = Math.max(0.01, tau * (1 - m * 0.045));
+    let ph = rand() * TAU;
+    for (let i = 0; i < dst.length; i++) {
+      ph += TAU * f / SR;
+      let s = Math.sin(ph);
+      for (let h = 3; h <= odd * 2 + 1; h += 2) s += Math.sin(ph * h) / h;   // odd harmonics = square-ish bite
+      dst[i] += s * Math.exp(-i / SR / mtau) * g;
+    }
+  }
+  return dst;
+}
 
 // ── Voice renderers ─────────────────────────────────────────────────────────
 function renderKick(p, seed) {
@@ -203,11 +227,14 @@ function renderHat(p, seed, open) {
   const rand = mulberry32(seed);
   const h = open ? p.oh : p.hh;
   const x = make(h.dur || ((open ? 0.32 : 0.07)));
+  const tau = h.tau || (open ? 0.16 : 0.035);
+  // Metallic core: dense inharmonic cluster keyed off the hat's brightness — the
+  // part that makes it read as a real hat rather than a noise burst.
+  metalCluster(x, rand, { f0: (h.hp || 6000) * 0.5, count: 12, tau, gain: (h.metal ?? 0.22) * 1.7, stretch: 1.0, odd: 3 });
+  // Shaped noise for air/sizzle — present but no longer the whole sound.
   const n = bandpassNoise(rand, x.length, h.hp || 6000, h.lp || (SR / 2 - 500));
-  for (let i = 0; i < n.length; i++) n[i] *= envExp(i / SR, h.tau || (open ? 0.16 : 0.035));
-  add(x, n, h.noise || 0.9);
-  const modes = h.modes || [[7600, 0.025, 0.35], [10400, 0.02, 0.22], [5300, 0.04, 0.18]];
-  modal(x, modes, h.metal || 0.22);
+  for (let i = 0; i < n.length; i++) n[i] *= envExp(i / SR, tau * 0.85);
+  add(x, n, (h.noise || 0.9) * 0.5);
   if (h.chick) {
     const c = bandpassNoise(rand, secs(0.012), 2200, 8500);
     for (let i = 0; i < c.length; i++) c[i] *= envExp(i / SR, 0.003);
@@ -229,25 +256,32 @@ function renderRide(p, seed) {
   const rand = mulberry32(seed);
   const r = p.ride;
   const x = make(r.dur || 0.48);
-  const ratios = r.ratios || [1, 1.37, 1.91, 2.56, 3.21, 4.06];
-  const modes = ratios.map((q, i) => [r.base * q, (r.tau || 0.35) * (1 - i * 0.08), i ? 0.38 / i : 1]);
-  modal(x, modes, r.ping || 0.55);
+  // Dense stick "ping": inharmonic cluster off the ride's fundamental.
+  metalCluster(x, rand, { f0: r.base || 520, count: 12, tau: r.tau || 0.35, gain: r.ping || 0.55, stretch: 1.0, odd: 2 });
+  // Bright contact chiff so the stick attack is audible (ride is attack-forward).
+  const tick = bandpassNoise(rand, secs(0.01), 3000, SR / 2 - 500);
+  for (let i = 0; i < tick.length; i++) tick[i] *= envExp(i / SR, 0.0035);
+  add(x, tick, (r.ping || 0.55) * 0.5);
+  // Sustained wash underneath — shaped and pulled back so the ping leads.
   const wash = bandpassNoise(rand, x.length, r.hp || 2600, r.lp || (SR / 2 - 400));
   for (let i = 0; i < wash.length; i++) wash[i] *= envExp(i / SR, r.washTau || 0.28);
-  add(x, wash, r.wash || 0.35);
+  add(x, wash, (r.wash || 0.35) * 0.7);
   return finish(x, p, rand);
 }
 function renderCrash(p, seed) {
   const rand = mulberry32(seed);
   const c = p.crash;
   const x = make(c.dur || 0.8);
+  // Metallic body: a broad, dense, slightly-stretched cluster with a long tail.
+  metalCluster(x, rand, { f0: (c.hp || 2300) * 0.42, count: 14, tau: c.tau || 0.55, gain: (c.metal || 0.35) * 1.5, stretch: 1.02, odd: 3 });
+  // Noise wash with a fast splash build, then decay + slow shimmer for movement.
   const wash = bandpassNoise(rand, x.length, c.hp || 2300, c.lp || (SR / 2 - 300));
   for (let i = 0; i < wash.length; i++) {
     const t = i / SR;
-    wash[i] *= envExp(t, c.tau || 0.55) * (0.8 + 0.2 * Math.sin(TAU * (5.5 + c.wobble || 0) * t));
+    const build = Math.min(1, t / 0.006);
+    wash[i] *= build * envExp(t, c.tau || 0.55) * (0.85 + 0.15 * Math.sin(TAU * (5.5 + (c.wobble || 0)) * t));
   }
-  add(x, wash, c.wash || 1);
-  modal(x, c.modes || [[1800, 0.18, 0.18], [3100, 0.25, 0.12], [5200, 0.18, 0.08]], c.metal || 0.35);
+  add(x, wash, (c.wash || 1) * 0.8);
   return finish(x, p, rand);
 }
 

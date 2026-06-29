@@ -141,17 +141,29 @@ project-local, deterministic):
 
 | Collection | Generator | Layout | Character |
 |---|---|---|---|
-| **signature** *(default)* | `scripts/gen-samples.mjs` | `public/samples/signature/<genre>/strudel.json` with `data:audio/wav;base64,…` payloads (manifest is the source of truth) | Characterful, intentional one-shots — the on-brand default. |
+| **signature** *(default)* | `scripts/gen-samples.mjs` | `public/samples/signature/<genre>/strudel.json` with `data:audio/wav;base64,…` payloads (manifest is the source of truth) | Characterful, intentional synthetic one-shots — the on-brand default. |
 | **voidstar_0** | `scripts/gen-samples-voidstar0.mjs` | `public/samples/voidstar_0/<genre>/` loose 16-bit WAVs + a relative-`_base` `strudel.json` | The original synthetic packs — a clean, neutral baseline. |
+| **real_0** | `scripts/gen-real-manifests.mjs` | `public/samples/real_0/<genre>/strudel.json` holding **remote URLs** (no binaries committed) | Real recorded drum-machine one-shots — one classic machine per genre. Streams at play time; **needs network**. |
 
 ```
 npm run gen:samples              # signature  → scripts/gen-samples.mjs
 npm run gen:samples -- --wavs    # signature, also write loose WAV audition files
 npm run gen:samples:v0           # voidstar_0 → scripts/gen-samples-voidstar0.mjs
-npm run gen:samples:all          # both
+npm run gen:samples:all          # both synthetic collections (offline, deterministic)
+npm run gen:samples:real         # real_0 → re-resolve remote manifests (needs network)
 ```
 
-Both generators emit 16-bit / 22.05 kHz mono and the same
+**real_0** is the real-recording counterpart to the synthetic packs, for an
+honest A/B. To avoid re-hosting samples we don't own, its committed manifests
+reference the audio by URL (the same posture as the in-app GitHub pack loader) —
+real one-shots from the TidalCycles/Strudel drum-machine library
+([`ritchse/tidal-drum-machines`](https://github.com/ritchse/tidal-drum-machines)).
+The genre→machine map lives in `scripts/gen-real-manifests.mjs`; rerun it to
+re-resolve filenames or change machines. Because the audio is remote, real_0 is
+the one collection that needs network at play time (the sample kit degrades to
+silence offline). See `public/samples/README.md` for source/credit.
+
+The two synthetic generators emit 16-bit / 22.05 kHz mono and the same
 `bd/sd/rim/hh/oh/lt/mt/ht/rd/cr` voice contract, so a groove A/Bs cleanly between
 collections. `signature` embeds its audio as `data:` URLs (works in both engines
 because `resolveManifest()` treats `data:` URLs as already-resolved); `voidstar_0`
@@ -166,6 +178,12 @@ applies a `VOICE_TRIM_DB` table after normalisation — kick + toms anchor at 0 
 snare/rim/hats step down, and ride/crash come down hardest (~-13/-15 dB) — so the
 samples land ~15-22 dB under the kick, matching the synth kits' per-voice trims.
 Retune that table if a voice sits wrong across the board.
+
+**Cymbal/hat timbre.** The signature hats/ride/crash are built from a dense
+inharmonic partial cluster (`metalCluster()`) plus shaped noise + an attack
+chiff, rather than a few clean sines over white noise — much closer to real metal
+and far less "synthetic". `voidstar_0` keeps its original simpler synthesis as the
+baseline. For genuinely real cymbals, switch to the `real_0` collection.
 
 Signature pack character:
 
