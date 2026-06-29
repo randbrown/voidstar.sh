@@ -1,7 +1,7 @@
 # Samples & sequencer kits
 
 How sounds are shared between **Strudel** and the **sequencer**, the kit system,
-the bundled synthetic packs, and how to add your own / pull in free sample packs.
+the bundled signature packs, and how to add your own / pull in free sample packs.
 
 Read [`looper-and-sequencer.md`](looper-and-sequencer.md) for the sequencer
 itself and [`livecoding.md`](livecoding.md) for the Strudel embed.
@@ -14,8 +14,8 @@ All paths under `src/lib/qualia/` unless noted.
 
 Both engines load the **same** manifest format — Strudel's
 [`strudel.json`](https://strudel.cc/learn/samples) — so a pack is defined once
-and plays in either place. A manifest maps **sample names** to files, with an
-optional base URL:
+and plays in either place. A manifest maps **sample names** to files or URLs,
+with an optional base URL:
 
 ```json
 {
@@ -32,13 +32,15 @@ optional base URL:
 `_base` may be:
 
 - **absolute** (`https://…/`) — a remote pack, e.g. one copied from GitHub;
-- **root-relative** (`/samples/…/`) — a pack bundled in `public/`, the case for
-  voidstar's own packs;
+- **root-relative** (`/samples/…/`) — a pack bundled in `public/`;
 - **relative** (`./`, `drums/`) — resolved against the manifest URL's directory.
 
-`samples-manifest.js` (`resolveManifest(url)`) fetches a manifest and resolves
-every path to an absolute URL using the same concatenation rules superdough
-uses, so all three base styles resolve identically in both engines.
+A sample value may also be a complete `data:audio/wav;base64,…` URL. The bundled
+voidstar packs currently use that form so the committed `strudel.json` is the
+one offline source of truth. `samples-manifest.js` (`resolveManifest(url)`) treats
+`data:` URLs as absolute and resolves every other path using the same
+concatenation rules superdough uses, so all base styles resolve identically in
+both engines.
 
 ---
 
@@ -64,7 +66,8 @@ uses, so all three base styles resolve identically in both engines.
   each pack is namespaced with a `<genre>_` prefix so it never clobbers Strudel's
   stock `bd`/`sd`/`hh` banks. Play a pack as `s("metal_bd metal_sd")` or
   idiomatically with `s("bd sd hh").bank("metal")`. Decoding is lazy (on first
-  play), so this is cheap at load.
+  play), so this is cheap at audio decode time even when the manifest embeds
+  offline data URLs.
 - **Sequencer side** — `createSampleKit({ manifestUrl, voiceMap })` in
   `sequencer-voices.js` resolves the same manifest, fetches + `decodeAudioData`s
   each mapped sample into a Tone `AudioBuffer`, and plays per-hit
@@ -114,25 +117,45 @@ patterns; an unknown id normalises back to the default.
 
 ---
 
-## The bundled synthetic packs
+## The bundled signature packs
 
-`scripts/gen-samples.mjs` is a **dependency-free** Node generator that
-synthesises one drum pack **per genre** with pure math (no recordings → tiny,
-CC0-clean, deterministic) and writes each as 16-bit/22.05 kHz mono WAVs plus a
-`strudel.json` to `public/samples/<genre>/`. Genre character comes from a
-per-genre profile (tuning, decay, brightness) plus a shared finishing chain
-(sample-rate reduction + bit-crush + saturation + hiss) dialed per genre — clean
-for jazz/metal/death, dusty for lofi/tape/hiphop. The pack list lives in
-`BUNDLED_PACKS` (`samples-manifest.js`); both engines key off it.
+`scripts/gen-samples.mjs` is a **dependency-free** Node generator that renders one
+original drum pack **per genre** with pure math — no recordings, no downloaded
+libraries, no uncleared samples. The generated one-shots are therefore
+CC0-clean/project-local and deterministic.
 
 ```
 npm run gen:samples              # → node scripts/gen-samples.mjs
+npm run gen:samples -- --wavs    # also write loose WAV audition files
 ```
 
-All eight packs total ~1.5 MB, committed and served statically, so every kit's
-sample variant — and `s("bd sd hh").bank("<genre>")` in Strudel — works offline
-out of the box. Re-run the script and commit the regenerated WAVs + json after
-editing a profile.
+By default the generator writes 16-bit / 22.05 kHz mono WAV payloads as
+`data:audio/wav;base64,…` entries inside each
+`public/samples/<genre>/strudel.json`. This keeps the manifest as the committed
+source of truth and works with both engines because `resolveManifest()` treats
+`data:` URLs as already-resolved sample URLs. Passing `--wavs` writes matching
+loose WAV files beside the manifests for auditioning or editing, but the app
+loads from the manifests.
+
+Current pack character:
+
+| Pack | Sample voice |
+|---|---|
+| **voidstar** | Neon-clean 808/909: round sub kick, crisp snare, glassy ride/crash. |
+| **lofi** | Warm boom-bap: thick low kick, velvet hats, sampler dust and soft clipping. |
+| **tape** | Cassette-smudged: rolled highs, rounded transients, hissy tails. |
+| **dub** | Halftime weight: long sub kick, cavern snare, smoky metallic cymbals. |
+| **jazz** | Brushed kit: soft kick, rattle/brush snare, woody toms, ride-forward cymbal. |
+| **metal** | Tight modern metal: hard beater click, cracking snare, bright tight cymbals. |
+| **death** | Triggered extreme kit: surgical kick, pingy snare, clipped-fast cymbal voices. |
+| **hiphop** | SP-style Dilla dust: thick lows, vinyl snap snare, softened hats. |
+
+The pack list lives in `BUNDLED_PACKS` (`samples-manifest.js`); both engines key
+off it. If you add a new bundled pack, add a folder under `public/samples/`, add
+its id to `BUNDLED_PACKS`, and add/retune the corresponding family in
+`sequencer-kits.js` if it should appear in the kit picker.
+
+---
 
 ## One-click GitHub pack loader
 
@@ -165,8 +188,8 @@ loop played as a one-shot just runs away on the pads):
 > matching pad voices (`bd`→kick, `sn`/`sd`→snare, …) and then **auto-fills** any
 > still-empty pads with the pack's remaining single-shot samples (loop/break-named
 > entries are skipped — they'd run away as a one-shot), so even a pack that
-> doesn't follow the drum convention makes sound on the grid (remap by curating). Packs
-> with no branch given are tried on `main` then `master`. Watch the console /
+> doesn't follow the drum convention makes sound on the grid (remap by curating).
+> Packs with no branch given are tried on `main` then `master`. Watch the console /
 > status line for `loaded N/M` to see how a pack mapped.
 
 ---
@@ -207,9 +230,10 @@ to that pack's sample names:
 }
 ```
 
-To bundle it instead (offline, no network dependency), drop the WAVs +
-`strudel.json` under `public/samples/<pack>/` and use a root-relative
-`manifestUrl` (`/samples/<pack>/strudel.json`). Remember the
+To bundle it instead (offline, no network dependency), drop a `strudel.json`
+under `public/samples/<pack>/` and reference it with a root-relative
+`manifestUrl` (`/samples/<pack>/strudel.json`). The manifest may point at loose
+WAVs in that folder or embed short one-shots as `data:` URLs. Remember the
 **static-host / degrade-gracefully** rule in `AGENTS.md`: a core performance
 feature must not *depend* on a remote pack — keep the synth kits as the offline
 fallback.
@@ -223,12 +247,10 @@ Licenses vary per pack and per file — confirm before shipping anything in a se
 - **TidalCycles Dirt-Samples** — the classic live-coding drum/instrument set,
   strudel-ready: `samples('github:tidalcycles/dirt-samples')`.
 - **Freesound CC0 packs** — genuinely public-domain one-shots and loops, e.g.
-  [Erokia's CC0 electronic samples](https://freesound.org/people/Erokia/packs/26717/)
-  and [Stereo Surgeon's CC0 drum loops](https://freesound.org/people/Stereo%20Surgeon/packs/16043/).
-  Download, host (or bundle), add a `strudel.json`.
-- **Community strudel packs** — discoverable via
-  [open-strudel-samples](https://github.com/therebelrobot/open-strudel-samples)
-  (an explorer for GitHub-hosted strudel sample packs).
+  Erokia's CC0 electronic samples and Stereo Surgeon's CC0 drum loops. Download,
+  host (or bundle), add a `strudel.json`, and keep only single hits for the grid.
+- **Community strudel packs** — discoverable via `open-strudel-samples`, an
+  explorer for GitHub-hosted strudel sample packs.
 - **Royalty-free lofi kits** (not CC0 — check terms): BVKER "Lunar", Clark Audio
   free lofi kit, and the roundups at hiphopmakers / cymatics.fm.
 
