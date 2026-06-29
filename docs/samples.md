@@ -157,6 +157,16 @@ collections. `signature` embeds its audio as `data:` URLs (works in both engines
 because `resolveManifest()` treats `data:` URLs as already-resolved); `voidstar_0`
 keeps loose WAVs referenced via a root-relative `_base`.
 
+**Per-voice loudness balance.** Both the sequencer's sample kits and Strudel's
+`.bank()` apply a single flat gain to every voice, so the one-shots themselves
+must carry the mix balance. Peak-normalising every voice to the same level makes
+bright, sustained cymbals read far louder/harsher than the kick (they hold
+~10-40× the kick's high-frequency energy at equal peak). Each generator therefore
+applies a `VOICE_TRIM_DB` table after normalisation — kick + toms anchor at 0 dB,
+snare/rim/hats step down, and ride/crash come down hardest (~-13/-15 dB) — so the
+samples land ~15-22 dB under the kick, matching the synth kits' per-voice trims.
+Retune that table if a voice sits wrong across the board.
+
 Signature pack character:
 
 | Pack | Sample voice |

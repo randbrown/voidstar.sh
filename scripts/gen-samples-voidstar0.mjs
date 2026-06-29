@@ -328,6 +328,14 @@ function encodeWav(samples, sampleRate = SR) {
 let grand = 0;
 // Stable per-voice seed offsets so noise textures stay distinct but reproducible.
 const VOICE_SEED = { bd: 1, sd: 2, rim: 3, hh: 4, oh: 5, lt: 6, mt: 7, ht: 8, rd: 9, cr: 10 };
+// Per-voice loudness balance (dB), applied AFTER each one-shot is peak-normalised.
+// Equal-peak one-shots make bright cymbals read far louder/harsher than the kick;
+// the synth kits trim each cymbal individually, so we bake the same balance into
+// the samples (see scripts/gen-samples.mjs for the rationale).
+const VOICE_TRIM_DB = {
+  bd: 0, lt: -1, mt: -1, ht: -1, sd: -3, rim: -8, hh: -10, oh: -10, rd: -13, cr: -15,
+};
+const dbToLin = (db) => 10 ** (db / 20);
 for (const genre of GENRES) {
   const dir = join(SAMPLES_ROOT, genre.id);
   rmSync(dir, { recursive: true, force: true });
@@ -336,7 +344,9 @@ for (const genre of GENRES) {
   let total = 0;
   const base = 1000 + GENRES.indexOf(genre) * 100;
   for (const [name, render] of Object.entries(VOICE_RENDERERS)) {
-    const wav = encodeWav(render(genre.profile, base + VOICE_SEED[name]));
+    const rendered = render(genre.profile, base + VOICE_SEED[name]);
+    gain(rendered, dbToLin(VOICE_TRIM_DB[name] ?? 0));   // per-voice loudness balance
+    const wav = encodeWav(rendered);
     writeFileSync(join(dir, `${name}.wav`), wav);
     manifest[name] = [`${name}.wav`];
     total += wav.length;

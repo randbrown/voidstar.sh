@@ -265,6 +265,19 @@ const VOICES = {
 };
 const VOICE_SEED = { bd: 1, sd: 2, rim: 3, hh: 4, oh: 5, lt: 6, mt: 7, ht: 8, rd: 9, cr: 10 };
 
+// Per-voice loudness balance (dB), applied AFTER each one-shot is peak-normalised.
+// Without this every voice sits at the same ~-1 dB peak, but a bright, sustained
+// cymbal carries ~10-40× the kick's high-frequency energy at that peak, so it
+// reads far louder and harsher to the ear — and ~15 dB hotter than the SYNTH
+// kits, which trim each cymbal individually (crash -14..-21, ride -10..-18, hats
+// -9..-17 vs the kick). Bake the same balance into the samples so both the
+// sequencer and Strudel's .bank() playback (both apply one flat kit gain) sit
+// right. Kick + toms anchor at 0 dB; cymbals come down hardest.
+const VOICE_TRIM_DB = {
+  bd: 0, lt: -1, mt: -1, ht: -1, sd: -3, rim: -8, hh: -10, oh: -10, rd: -13, cr: -15,
+};
+const dbToLin = (db) => 10 ** (db / 20);
+
 // ── Genre profiles — characterful, not placeholder-neutral ─────────────────
 const BASE = {
   fin:   { drive: 1.18, srr: SR, bits: 16, peak: 0.9, hp: 18, fadeMs: 10 },
@@ -417,7 +430,9 @@ for (let gi = 0; gi < GENRES.length; gi++) {
   let audioBytes = 0;
   const base = 1000 + gi * 100;
   for (const [name, render] of Object.entries(VOICES)) {
-    const wav = encodeWav(render(genre.profile, base + VOICE_SEED[name]));
+    const rendered = render(genre.profile, base + VOICE_SEED[name]);
+    scale(rendered, dbToLin(VOICE_TRIM_DB[name] ?? 0));   // per-voice loudness balance
+    const wav = encodeWav(rendered);
     audioBytes += wav.length;
     manifest[name] = [dataUrl(wav)];
     if (WRITE_WAVS) writeFileSync(join(dir, `${name}.wav`), wav);
