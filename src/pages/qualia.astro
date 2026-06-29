@@ -2483,6 +2483,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="random">random</option>
         </select>
         <button class="ctrl-btn" id="btn-phase-beat" title="Beat-sync phase: dwell time becomes a minimum, then the next beat triggers the next phase step (silence fallback at 2× dwell). Falls through to time-based when audio is off.">♪ phase off</button>
+        <select id="transition-style" class="ctrl-btn" title="Scene transition for every quale/phase change — cut: instant · dissolve: crossfade · wipe: reveal">
+          <option value="cut">cut</option>
+          <option value="dissolve">dissolve</option>
+          <option value="wipe">wipe</option>
+        </select>
+        <select id="transition-ms" class="ctrl-btn" title="Scene transition length">
+          <option value="300">0.3s</option>
+          <option value="600">0.6s</option>
+          <option value="1200">1.2s</option>
+        </select>
         <button class="ctrl-btn" id="btn-cycle-manage" title="Pick which quales the auto-cycle rotates through, and which phases the auto-phase rotates through">manage</button>
       </div>
     </div>

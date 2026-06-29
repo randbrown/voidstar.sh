@@ -400,6 +400,91 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     return true;
   }
 
+  // ── Scene transitions (dissolve / wipe) ──────────────────────────────────
+  // A freeze-frame of the OUTGOING scene, layered just above the viz canvas
+  // and faded out while the incoming scene renders underneath. One primitive
+  // serves every scene change — auto-phase steps, auto-cycle swaps, manual
+  // switches, swipes, qualem recalls — so transitions look uniform regardless
+  // of what triggered them. The snapshot is copied off the live viz canvas
+  // (works for canvas2d / webgl2 / three — the GL contexts run with
+  // preserveDrawingBuffer), so it survives the canvas teardown an fx switch
+  // performs and keeps showing the old look until the new one has rendered.
+  /** @type {HTMLCanvasElement|null} */
+  let transCanvas = null;
+  let transCtx    = null;
+  let transActive = false;
+  let transStartMs = 0;
+  let transDurMs   = 0;
+  let transStyle   = 'dissolve';  // 'dissolve' | 'wipe'
+  let transAlpha   = 0;           // current element opacity (for the recorder composite)
+
+  function ensureTransCanvas() {
+    if (transCanvas) return transCanvas;
+    const t = document.createElement('canvas');
+    t.id = 'qualia-transition';
+    // Inherits the `#qualia-host > canvas` slot (fixed full-viewport, screen
+    // blend). Override only what the slot doesn't: sit one above the viz
+    // canvas (z:2) so a freshly-created incoming canvas paints UNDER the
+    // freeze-frame, and never eat pointer input during the fade.
+    t.style.zIndex = '3';
+    t.style.pointerEvents = 'none';
+    t.style.opacity = '0';
+    t.style.display = 'none';
+    host.appendChild(t);
+    transCanvas = t;
+    transCtx = t.getContext('2d');
+    return t;
+  }
+
+  /**
+   * Freeze the current scene and start a transition into whatever renders
+   * next. Call BEFORE the state change (setActive / phase step) so the
+   * snapshot captures the OUTGOING look. style 'cut' (or durationMs <= 0) is
+   * a no-op = instant change. Safe with no active canvas (no-ops).
+   * @param {{ style?: 'cut'|'dissolve'|'wipe', durationMs?: number }} [opts]
+   */
+  function beginTransition({ style = 'dissolve', durationMs = 600 } = {}) {
+    if (!canvas || style === 'cut' || !(durationMs > 0)) return;
+    const w = canvas.width, h = canvas.height;
+    if (w <= 0 || h <= 0) return;
+    const t = ensureTransCanvas();
+    if (t.width !== w || t.height !== h) { t.width = w; t.height = h; }
+    transCtx.clearRect(0, 0, w, h);
+    // A lost/tainted source just skips the visual — the scene change still
+    // happens, it's only the freeze-frame that's lost.
+    try { transCtx.drawImage(canvas, 0, 0); } catch { return; }
+    transStyle   = (style === 'wipe') ? 'wipe' : 'dissolve';
+    transDurMs   = durationMs;
+    transStartMs = performance.now();
+    transActive  = true;
+    transAlpha   = 1;
+    t.style.display = 'block';
+    t.style.opacity = '1';
+  }
+
+  function tickTransition(now) {
+    if (!transActive) return;
+    const p = Math.min(1, (now - transStartMs) / transDurMs);
+    if (transStyle === 'wipe') {
+      // Hold full opacity; erase a growing left-to-right band so the incoming
+      // scene is revealed through the moving wipe edge. Clearing the whole
+      // 0→x span each tick is cheap and keeps the edge crisp.
+      transCtx.clearRect(0, 0, Math.round(p * transCanvas.width), transCanvas.height);
+      transAlpha = 1;
+    } else {
+      // Dissolve — ease-out opacity so the outgoing scene lingers, then drops.
+      const a = 1 - p;
+      transAlpha = a * a;
+      transCanvas.style.opacity = String(transAlpha);
+    }
+    if (p >= 1) {
+      transActive = false;
+      transAlpha  = 0;
+      transCanvas.style.display = 'none';
+      transCanvas.style.opacity = '0';
+    }
+  }
+
   // Render loop — single rAF. Audio + reactivity run on their own cadence
   // (reactFrameMs, default 60Hz); the fx render is gated separately by the viz
   // frame cap (maxFps). Both intervals are decoupled from the display refresh.
@@ -422,6 +507,9 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
       fpsListeners.forEach(fn => { try { fn(lastFps, field); } catch {} });
       frames = 0; fpsWindowMs = now;
     }
+    // Advance any running scene transition before the pause gate so a freeze
+    // frame can't get stuck on screen if a switch lands while paused.
+    tickTransition(now);
     if (paused) return;
 
     field.time = (now - startMs) / 1000;
@@ -552,6 +640,12 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     field,
     start,
     setActive,
+    beginTransition,
+    // The live freeze-frame canvas while a transition runs (else null), plus
+    // its current opacity — the recorder composite layers it over the fx so
+    // transitions land in recordings too.
+    getTransitionCanvas: () => (transActive ? transCanvas : null),
+    getTransitionAlpha:  () => transAlpha,
     activeId: () => activeMod?.id ?? null,
     setParam,
     applyFxPreset,
