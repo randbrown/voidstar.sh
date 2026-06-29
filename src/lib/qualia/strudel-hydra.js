@@ -16,6 +16,9 @@ import {
 } from './patterns.js';
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
+import {
+  resolveManifest, toStrudelSampleMap, BUNDLED_PACKS,
+} from './samples-manifest.js';
 
 // Pinned, NOT @latest: a live set must not break because unpkg served a new
 // @strudel/repl mid-tour. Bump this deliberately (and re-test a set) when you
@@ -39,7 +42,39 @@ function loadStrudelScript() {
     document.head.appendChild(s);
   });
   _strudelLoadingP.then(injectLateStrudelOverride).catch(() => {});
+  // Register the shared sample pack(s) into Strudel so the same sounds the
+  // sequencer's sample kits play are also playable in the REPL (`s("bd sd hh")`,
+  // `s("lt mt ht")`, etc.). Fire-and-forget — a pack that fails to load just
+  // isn't there, exactly like a default bank that didn't reach the CDN.
+  _strudelLoadingP.then(registerSharedSamples).catch(() => {});
   return _strudelLoadingP;
+}
+
+// Register voidstar's bundled sample packs via the global `samples()` that the
+// @strudel/repl bundle exposes (same bulk-global path as getAudioContext /
+// superdough / soundMap). `samples()` only registers the name→URL map; audio
+// decodes lazily on first play, so it's safe to call as soon as the function
+// exists — we just poll briefly for it after the script loads.
+let _sharedSamplesRegistered = false;
+async function registerSharedSamples() {
+  if (_sharedSamplesRegistered) return;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < 60 && typeof globalThis.samples !== 'function'; i++) {
+    await sleep(150);
+  }
+  if (typeof globalThis.samples !== 'function') return;
+  // Register every bundled genre pack under its own `<id>_` namespace so they're
+  // additive (never clobber Strudel's stock bd/sd/hh). Play a pack as
+  // s("metal_bd metal_sd") or idiomatically s("bd sd").bank("metal").
+  for (const pack of BUNDLED_PACKS) {
+    try {
+      const resolved = await resolveManifest(pack.url);
+      await globalThis.samples(toStrudelSampleMap(resolved, pack.prefix));
+    } catch (e) {
+      console.warn(`[qualia] shared samples (${pack.id}) registration failed:`, e);
+    }
+  }
+  _sharedSamplesRegistered = true;
 }
 
 function injectLateStrudelOverride() {
@@ -1482,10 +1517,25 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     } catch { return false; }
   }
 
+  // Register an external sample pack into Strudel at runtime — used by the
+  // sequencer's one-click GitHub loader. `arg` is whatever Strudel's samples()
+  // accepts: a `github:user/repo` shorthand or a strudel.json URL. Ensures the
+  // bundle is loaded and `samples()` exists first. Returns true on success.
+  async function loadSamplesSpec(arg) {
+    try { await loadStrudelScript(); } catch {}
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let i = 0; i < 60 && typeof globalThis.samples !== 'function'; i++) await sleep(150);
+    if (typeof globalThis.samples !== 'function') return false;
+    try { await globalThis.samples(arg); return true; }
+    catch (e) { console.warn('[qualia] load samples spec failed:', e); return false; }
+  }
+
   return {
     open,
     close,
     stopPlayback,
+    /** Register an external pack (github: shorthand or strudel.json URL). */
+    loadSamplesSpec,
     play,
     stop,
     isPlaying: () => isPlayingFlag,

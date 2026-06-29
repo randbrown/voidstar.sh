@@ -85,6 +85,11 @@ function validateModel(m) {
   if (m.cycles != null && (typeof m.cycles !== 'number' || !(m.cycles > 0))) {
     return false;
   }
+  // `kitId` (which instrument the pads play through) was added later. Optional;
+  // when present it must be a string. An unknown id is normalised to the
+  // default kit by the sequencer (getKit), so we don't validate it against the
+  // catalog here — that would couple this pure-data module to Tone/kit code.
+  if (m.kitId != null && typeof m.kitId !== 'string') return false;
   if (!Array.isArray(m.pads)) return false;
   const expectLen = m.beats * m.steps;
   for (const p of m.pads) {
@@ -151,6 +156,10 @@ export function defaultPattern() {
     // and jamming together". Users who want them independent flick the
     // checkbox off; the off-state persists with the pattern.
     syncStrudel: true,
+    // Instrument the pads play through, saved with the pattern so a recalled
+    // groove restores its kit. 'voidstar' is the default synth kit; the
+    // sequencer normalises any unknown id back to it.
+    kitId: 'voidstar',
     pads,
     createdAt: Date.now(),
     updatedAt: Date.now(),

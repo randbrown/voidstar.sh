@@ -19,10 +19,30 @@ import {
   removeFromList, clonePattern, defaultPattern, resizeHits, makePad,
   loadPanelOpen, savePanelOpen, downloadPattern, VOICES,
 } from './sequencer-patterns.js';
-import { createKit } from './sequencer-voices.js';
+import { KITS, getKit, DEFAULT_KIT_ID, EXTERNAL_VOICE_MAP } from './sequencer-kits.js';
+import { createSampleKit } from './sequencer-voices.js';
+import { parsePackSpec } from './samples-manifest.js';
 import { makeDraggablePanel } from './panel-pos.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
-import { getNum, getBool, setBool, setRaw } from './prefs.js';
+import { getNum, getBool, setBool, setRaw, getRaw, getJSON, setJSON } from './prefs.js';
+
+// Curated, real GitHub sample packs for the one-click loader — starting points
+// for the sequencer's pads, so deliberately SINGLE-SHOT packs (no drum-break /
+// loop packs: a loop played as a one-shot just runs away). Contents/licenses
+// vary per repo; treat as examples to audition, not vetted CC0 sets. Loaded
+// into BOTH engines.
+const PACK_PRESETS = [
+  { label: 'lofi',    spec: 'github:eddyflux/crate',           title: 'Eddyflux "crate" — lo-fi one-shots' },
+  { label: 'hiphop',  spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — classic hip-hop one-shot hits + drum machines' },
+  { label: 'jazz',    spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — acoustic / jazz one-shots (jazz, jvbass…)' },
+  { label: 'metal',   spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — metallic / industrial one-shots (s("metal"))' },
+  { label: 'ambient', spec: 'github:klo-e-1/sampls4strudel',   title: 'sampls4strudel — ambient one-shots / textures' },
+];
+
+// Persisted list of externally-loaded packs so they survive a reload.
+const SEQ_EXTPACKS_KEY = 'voidstar.qualia.sequencer.extPacks';
+function loadExtPacks() { const l = getJSON(SEQ_EXTPACKS_KEY, []); return Array.isArray(l) ? l : []; }
+function saveExtPacks(list) { setJSON(SEQ_EXTPACKS_KEY, list); }
 
 // Persisted UI volume — multiplies kit.output while un-muted. Sits
 // alongside the mute toggle as a performance-time mix-ride control.
@@ -43,6 +63,17 @@ function saveSeqLimiter(on) { setBool(SEQ_LIMITER_KEY, on); }
 const SEQ_SHOW_SETTINGS_KEY = 'voidstar.qualia.sequencer.showSettings';
 function loadShowSettings() { return getBool(SEQ_SHOW_SETTINGS_KEY, true); }
 function saveShowSettings(on) { setBool(SEQ_SHOW_SETTINGS_KEY, on); }
+
+// Selected kit (instrument the pads play through). A performance-time choice
+// like volume/limiter — global to the sequencer and persisted across reloads,
+// not stored per-pattern (grooves are voice-id rhythms; they sound on whatever
+// kit is loaded). Falls back to the default synth kit if the stored id is gone.
+const SEQ_KIT_KEY = 'voidstar.qualia.sequencer.kit';
+function loadSeqKit() {
+  const id = getRaw(SEQ_KIT_KEY, DEFAULT_KIT_ID);
+  return getKit(id).id;   // normalises an unknown/removed id to the default
+}
+function saveSeqKit(id) { setRaw(SEQ_KIT_KEY, id); }
 
 export function createSequencer({ audio, syncStrudel } = {}) {
   // Snapshot panel-open state from the previous session ONCE — open()/close()
@@ -75,6 +106,30 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // Kit + scheduling state, lazily created on first open() since spinning
   // up Tone.js touches the AudioContext (must follow a user gesture).
   let kit = null;
+  // Runtime kits loaded from external GitHub/URL packs (id → kit catalog entry).
+  // Metadata only — the sample buffers load lazily when the kit is first built.
+  const _dynamicKits = new Map();
+  function addDynamicKit(p) {
+    const manifestUrls = (p.manifestUrls && p.manifestUrls.length) ? p.manifestUrls : [p.manifestUrl];
+    _dynamicKits.set(p.id, {
+      id: p.id, group: 'loaded', label: `${p.label} · samples`, type: 'sample',
+      desc: `External pack: ${p.strudelArg}`,
+      // fillUnmapped: external packs rarely use bd/sd/hh names, so after the
+      // candidate match, hand each empty pad a leftover sample so the kit makes
+      // sound instead of sitting silent.
+      make: () => createSampleKit({ manifestUrls, voiceMap: EXTERNAL_VOICE_MAP, fillUnmapped: true }),
+      _spec: p,
+    });
+  }
+  // Resolve a kit id against the dynamic registry first, then the static catalog.
+  function resolveKit(id) { return _dynamicKits.get(id) || getKit(id); }
+  // Restore persisted external packs as dynamic kits before we resolve the
+  // initial kit id (so a pattern saved on an external pack reloads onto it).
+  for (const p of loadExtPacks()) { try { addDynamicKit(p); } catch {} }
+  // Selected instrument. The pattern model is the source of truth (so a saved
+  // groove restores its kit); the global pref is the fallback for patterns with
+  // no stored kit and the "last-used" seed for fresh ones.
+  let _kitId = resolveKit(model.kitId).id;
   let analyser = null;
   let loopId = null;
   let cellIdx = 0;
@@ -118,6 +173,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     // Default 1 = previous "one pattern per cycle" behaviour, so the
     // upgrade is silent.
     if (typeof m.cycles !== 'number' || !(m.cycles > 0)) m.cycles = 1;
+    // `kitId` was added later — backfill older patterns from the last-used kit
+    // (the global pref) so they don't all snap to the default on upgrade.
+    if (typeof m.kitId !== 'string') m.kitId = loadSeqKit();
     // Mirror the strudel @title when the sequencer would otherwise show
     // the placeholder default — keeps the two engines reading as the same
     // session ("qualem 4f9q") on a fresh load.
@@ -369,37 +427,99 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   }
 
   // ── Audio tap ──────────────────────────────────────────────────────────
+  // Build the currently-selected kit and tag its output. Bypass
+  // Tone.getDestination() (the Tone.js master volume node) by routing to the
+  // raw AudioContext destination instead. This is what makes the per-panel
+  // mute work: Strudel's mute uses Tone.Destination.mute=true, and if the
+  // sequencer also fed through Tone.Destination it would be silenced as a
+  // side-effect. The raw destination has no mute/volume controls — those live
+  // on kit.output and we drive them from setMuted() below.
+  //
+  // The strudel mute fix patches AudioNode.prototype.connect to route every
+  // connection-into-ctx.destination through a Strudel-owned mute gate. Tag this
+  // output node so the patch leaves it alone — the sequencer has its own
+  // per-source mute (kit.output.gain) and must not be silenced by Strudel.
+  function buildKit() {
+    let k;
+    try {
+      k = resolveKit(_kitId).make();
+    } catch (e) {
+      // A kit that fails to construct must NOT silently strand the previous
+      // one (that reads as "the samples kit just plays the old sound"). Log
+      // loudly and let the caller keep the old kit instead.
+      console.error(`[qualia] kit "${_kitId}" failed to build:`, e);
+      return null;
+    }
+    k.output.__qualiaBypassMute = true;
+    // Sample kits load asynchronously — surface the loaded state (and a clear
+    // warning when nothing decoded) so the user knows why pads are silent.
+    k.ready?.then((info) => {
+      if (kit !== k) return;
+      refreshSeqBtn();
+      if (info && status) {
+        status.textContent = info.loaded === 0
+          ? `kit: 0/${info.total} samples loaded — check console`
+          : `kit: ${info.loaded}/${info.total} samples`;
+      }
+    }).catch(() => {});
+    return k;
+  }
+  // Connect a freshly-built kit into the live graph (limiter + analyser).
+  function wireKit(k) {
+    if (seqLimiter) k.output.connect(seqLimiter);
+    // Tap the kit output (PRE-limiter) into the source analyser so the meter
+    // reads true. ensureAnalyserAdopted creates `analyser` lazily; on a later
+    // kit swap it already exists, so reconnect the new output here.
+    if (analyser) k.output.connect(analyser);
+  }
   function ensureKit() {
     if (kit) return;
-    kit = createKit();
-    // Bypass Tone.getDestination() (the Tone.js master volume node) by
-    // routing to the raw AudioContext destination instead. This is what
-    // makes the per-panel mute work: Strudel's mute uses
-    // Tone.Destination.mute=true, and if the sequencer also fed through
-    // Tone.Destination it would be silenced as a side-effect. The raw
-    // destination has no mute/volume controls — those live on
-    // kit.output and we drive them from setMuted() below.
-    //
-    // The strudel mute fix patches AudioNode.prototype.connect to route
-    // every connection-into-ctx.destination through a Strudel-owned
-    // mute gate. Tag this output node so the patch leaves it alone —
-    // the sequencer has its own per-source mute (kit.output.gain) and
-    // must not be silenced by the Strudel toggle.
     const rawCtx = Tone.getContext().rawContext;
     const rawDest = rawCtx.destination;
-    kit.output.__qualiaBypassMute = true;
     // Brickwall limiter between the kit bus and the speakers — clip insurance
     // so a stack of loud hits can't push full-scale into the device-level sum.
-    // The analyser taps kit.output (PRE-limiter), so the meter reads true.
-    seqLimiter = makeLimiter(rawCtx, _seqLimiterOn);
-    seqLimiter.__qualiaBypassMute = true;
-    kit.output.connect(seqLimiter);
-    seqLimiter.connect(rawDest);
+    // Created once and reused across kit swaps.
+    if (!seqLimiter) {
+      seqLimiter = makeLimiter(rawCtx, _seqLimiterOn);
+      seqLimiter.__qualiaBypassMute = true;
+      seqLimiter.connect(rawDest);
+    }
+    const built = buildKit();
+    if (!built) return;   // build failed (logged) — try again on next call
+    kit = built;
+    wireKit(kit);
     // Apply current mute state in case the user toggled it before the
     // first play (kit didn't exist yet, so the gain change had nowhere
     // to land).
     applyMuteToKit();
   }
+  // Swap the live kit without a play/stop dance. Build + wire the new kit
+  // first, then dispose the old one, so there's no silent gap (the old kit's
+  // tails are cut, which is the expected feel of changing instruments).
+  function setKit(id) {
+    const next = resolveKit(id);
+    // Record on the model even if the kit is unchanged — backfills a pattern
+    // that had no kitId so the next save/export carries it.
+    model.kitId = next.id;
+    if (next.id === _kitId && kit) { refreshKitSelect(); return; }
+    _kitId = next.id;
+    saveSeqKit(_kitId);     // remember as last-used for fresh patterns
+    model.updatedAt = Date.now();
+    persistSoon();
+    if (kit) {
+      const built = buildKit();
+      if (built) {
+        const old = kit;
+        kit = built;
+        wireKit(kit);
+        applyMuteToKit();
+        try { old.dispose(); } catch {}
+      }
+    }
+    refreshKitSelect();
+    refreshSeqBtn();
+  }
+  function getKitId() { return _kitId; }
   // Mute is per-session, not persisted in the pattern model — it's a
   // performance gate ("silence this source for a moment"), not a saved
   // attribute of the pattern. Survives play/stop cycles within the
@@ -891,7 +1011,33 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       lenHalf: sLen.bHalf, lenDbl: sLen.bDbl,
     };
 
+    // Kit picker — the instrument the pads play through. Switching is live;
+    // the same groove re-voices onto the new kit (see setKit). Synth kits are
+    // instant; sample kits decode their pack in the background.
+    const kitSel = document.createElement('select');
+    kitSel.className = 'seq-kit-select';
+    populateKitOptions(kitSel);
+    kitSel.addEventListener('change', () => setKit(kitSel.value));
+    _kitSelectEl = kitSel;
+    // ‹ › step through the kit list (wraps) — faster than opening the dropdown
+    // to audition adjacent kits during a set.
+    const kitNav = document.createElement('span');
+    kitNav.className = 'seq-kit-nav';
+    const mkNavBtn = (txt, dir, title) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ctrl-btn seq-kit-arrow';
+      b.textContent = txt;
+      b.title = title;
+      b.setAttribute('aria-label', title);
+      b.addEventListener('click', (e) => { e.preventDefault(); stepKit(dir); });
+      return b;
+    };
+    kitNav.append(mkNavBtn('‹', -1, 'Previous kit'), kitSel, mkNavBtn('›', +1, 'Next kit'));
+
     propsEl.append(
+      mk('kit',       kitNav, { title: 'Instrument the pads play through. Synth kits are offline; sample kits load the same strudel.json packs Strudel uses.' }),
+      mkPackLoader(),
       mk('beats',     stepperFor(beatsIn, 'change'), { title: 'Beats per pattern (RR-style)' }),
       mk('steps/beat', stepperFor(stepsIn, 'change'), { title: 'Subdivisions per beat — 3 for triplets, 5 for quintuplets, etc.' }),
       mk('cps',       stepperFor(cpsIn,  'input'),  { title: 'Cycles per second — Strudel\'s master clock when sync is on' }),
@@ -900,6 +1046,115 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       syncWrap,
     );
     refreshScaleBtns();
+  }
+  // Keep the kit dropdown in sync when the kit is changed programmatically
+  // (e.g. a future remote/macro path) or re-rendered.
+  let _kitSelectEl = null;
+  let _packStatusEl = null;
+  function refreshKitSelect() {
+    if (_kitSelectEl && _kitSelectEl.value !== _kitId) _kitSelectEl.value = _kitId;
+  }
+  // (Re)fill a kit <select> with the static catalog + any loaded external packs.
+  // A flat list of full "genre · variant" labels — optgroups render as bulky,
+  // non-selectable headers on mobile and bury the actual options, so we avoid
+  // them. Called on render and whenever a pack is loaded.
+  function populateKitOptions(sel) {
+    if (!sel) return;
+    sel.innerHTML = '';
+    for (const k of [...KITS, ..._dynamicKits.values()]) {
+      const opt = document.createElement('option');
+      opt.value = k.id;
+      opt.textContent = k.label;   // e.g. "voidstar · synth"
+      opt.title = k.desc || '';
+      sel.appendChild(opt);
+    }
+    sel.value = _kitId;
+  }
+  // Step the selection through the ordered kit list (static + loaded), wrapping
+  // at the ends. Drives the ‹ › buttons.
+  function stepKit(dir) {
+    const ids = [...KITS, ..._dynamicKits.values()].map((k) => k.id);
+    if (!ids.length) return;
+    let i = ids.indexOf(_kitId);
+    if (i < 0) i = 0;
+    i = (i + dir + ids.length) % ids.length;
+    setKit(ids[i]);
+  }
+  function setPackStatus(msg, isErr) {
+    if (!_packStatusEl) return;
+    _packStatusEl.textContent = msg || '';
+    _packStatusEl.dataset.state = isErr ? 'err' : '';
+  }
+  // Build the one-click GitHub pack loader: a text field + load button + genre
+  // preset chips. Loads into BOTH engines — registers the pack in Strudel (so
+  // s("name") / .bank() work in the REPL) and adds a runtime sequencer sample
+  // kit (best-effort name matching), then selects it.
+  function mkPackLoader() {
+    const wrap = document.createElement('div');
+    wrap.className = 'seq-pack-loader';
+
+    const row = document.createElement('div');
+    row.className = 'seq-pack-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'seq-pack-input';
+    input.placeholder = 'github:user/repo or strudel.json URL';
+    input.title = 'Load a Strudel sample pack into both engines';
+    const loadBtn = document.createElement('button');
+    loadBtn.type = 'button';
+    loadBtn.className = 'ctrl-btn';
+    loadBtn.textContent = 'load';
+    loadBtn.addEventListener('click', () => loadPack(input.value));
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); loadPack(input.value); } });
+    row.append(input, loadBtn);
+
+    const chips = document.createElement('div');
+    chips.className = 'seq-pack-presets';
+    for (const p of PACK_PRESETS) {
+      const c = document.createElement('button');
+      c.type = 'button';
+      c.className = 'ctrl-btn seq-pack-chip';
+      c.textContent = p.label;
+      c.title = `${p.title} — ${p.spec}`;
+      c.addEventListener('click', () => { input.value = p.spec; loadPack(p.spec); });
+      chips.appendChild(c);
+    }
+
+    const status = document.createElement('div');
+    status.className = 'seq-pack-status';
+    _packStatusEl = status;
+
+    wrap.append(row, chips, status);
+    return wrap;
+  }
+  // Load a pack spec (github:user/repo or a strudel.json URL) into both engines.
+  async function loadPack(input) {
+    const spec = parsePackSpec(input);
+    if (!spec) { setPackStatus('enter github:user/repo or a strudel.json URL', true); return; }
+    setPackStatus(`loading "${spec.label}"…`);
+    // Strudel side (best-effort; sequencer still gets the kit if this fails).
+    let okStrudel = false;
+    try { okStrudel = !!(await syncStrudel?.loadSamplesSpec?.(spec.strudelArg)); } catch {}
+    // Sequencer side: register + persist a dynamic sample kit, then select it.
+    addDynamicKit(spec);
+    const list = loadExtPacks().filter((p) => p.id !== spec.id);
+    list.unshift(spec);
+    saveExtPacks(list);
+    populateKitOptions(_kitSelectEl);
+    setKit(spec.id);   // builds the kit (decodes buffers in the background)
+    setPackStatus(okStrudel
+      ? `loaded "${spec.label}" → Strudel + sequencer kit`
+      : `loaded "${spec.label}" → sequencer kit (open Strudel to use s("…"))`);
+  }
+  // Re-register restored external packs into Strudel once it's ready — lazily,
+  // so a boot that never opens Strudel doesn't force-load its bundle.
+  let _extPacksPushedToStrudel = false;
+  function pushExtPacksToStrudel() {
+    if (_extPacksPushedToStrudel) return;
+    const packs = loadExtPacks();
+    if (!packs.length) return;
+    _extPacksPushedToStrudel = true;
+    for (const p of packs) { try { syncStrudel?.loadSamplesSpec?.(p.strudelArg); } catch {} }
   }
   function refreshPropsValues() {
     if (!propsEl) return;
@@ -912,6 +1167,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     }
     const cb = propsEl.querySelector('input[type="checkbox"]');
     if (cb) cb.checked = !!model.syncStrudel;
+    refreshKitSelect();
     refreshSyncStatus();
   }
 
@@ -1182,6 +1438,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     model = JSON.parse(JSON.stringify(next));
     if (typeof model.syncStrudel !== 'boolean') model.syncStrudel = true;
     if (typeof model.cycles !== 'number' || !(model.cycles > 0)) model.cycles = 1;
+    if (typeof model.kitId !== 'string') model.kitId = _kitId;
+    // Recall the pattern's saved instrument (swaps the live kit if needed).
+    setKit(model.kitId);
     if (nameInput) nameInput.value = model.name || '';
     refreshPropsValues();
     refreshSyncBtnVisibility();
@@ -1201,6 +1460,8 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       // Default sync ON for fresh-blank patterns too — matches
       // defaultPattern() and pickInitialModel()'s upgrade path.
       syncStrudel: true,
+      // Keep the current instrument on a fresh blank pattern.
+      kitId: _kitId,
       pads: VOICES.map(v => makePad(v.id, empty(total))),
       createdAt: Date.now(), updatedAt: Date.now(),
     };
@@ -1218,6 +1479,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     const wasPlaying = isPlaying;
     if (wasPlaying) stop();
     model = defaultPattern();
+    model.kitId = _kitId;   // keep the current instrument, not the default
     // Sprinkle a little chaos on top of the default groove so each
     // "random" press produces a different starting point. Keep kick/snare
     // as-is so the result is recognisable as a beat.
@@ -1320,7 +1582,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // emits this once Strudel's REPL has loaded enough to expose either
   // setcps path; without the callback the user would see a stale
   // "waiting" forever even after sync is actually working.
-  syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
+  syncStrudel?.onReadyChange?.(() => { refreshSyncStatus(); pushExtPacksToStrudel(); });
+  // If Strudel is already ready at construction (panel reopened from a prior
+  // session), push restored packs now rather than waiting for a ready flip.
+  if (syncStrudel?.isReady?.()) pushExtPacksToStrudel();
 
   // Mirror strudel @title changes (random rolls, pattern loads, manual
   // edits) into the sequencer name while sync is on. We don't echo this
@@ -1368,6 +1633,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     setLimiter,
     getLimiter,
     onChange,
+    // Kit selection — instrument the pads play through.
+    getKits: () => KITS.map(({ id, label, type, desc }) => ({ id, label, type, desc })),
+    getKitId,
+    setKit,
     play, stop,
     playFromStrudel, stopFromStrudel,
     setCps,

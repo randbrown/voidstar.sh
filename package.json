@@ -9,7 +9,8 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "gen:samples": "node scripts/gen-samples.mjs"
   },
   "dependencies": {
     "@astrojs/mdx": "^5.0.0",
