@@ -27,15 +27,16 @@ import { makeLimiter, setLimiterEngaged } from './limiter.js';
 import { getNum, getBool, setBool, setRaw, getRaw, getJSON, setJSON } from './prefs.js';
 
 // Curated, real GitHub sample packs for the one-click loader — starting points
-// across the requested genres. Contents/licenses vary per repo; treat as
-// examples to audition, not vetted CC0 sets. Loaded into BOTH engines.
+// for the sequencer's pads, so deliberately SINGLE-SHOT packs (no drum-break /
+// loop packs: a loop played as a one-shot just runs away). Contents/licenses
+// vary per repo; treat as examples to audition, not vetted CC0 sets. Loaded
+// into BOTH engines.
 const PACK_PRESETS = [
-  { label: 'lofi',    spec: 'github:eddyflux/crate',           title: 'Eddyflux "crate" — lo-fi / boom-bap one-shots' },
-  { label: 'hiphop',  spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — classic hip-hop hits + drum machines' },
-  { label: 'jazz',    spec: 'github:yaxu/clean-breaks',        title: 'Clean breaks — acoustic break kits (jazzy drums)' },
-  { label: 'dubstep', spec: 'github:switchangel/breaks',       title: 'Switch Angel breaks — heavy / halftime break fodder' },
-  { label: 'ambient', spec: 'github:mot4i/garden',             title: '"garden" — textural / ambient material (verify contents)' },
-  { label: 'metal',   spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — metallic / industrial banks (s("metal"))' },
+  { label: 'lofi',    spec: 'github:eddyflux/crate',           title: 'Eddyflux "crate" — lo-fi one-shots' },
+  { label: 'hiphop',  spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — classic hip-hop one-shot hits + drum machines' },
+  { label: 'jazz',    spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — acoustic / jazz one-shots (jazz, jvbass…)' },
+  { label: 'metal',   spec: 'github:tidalcycles/Dirt-Samples', title: 'Dirt-Samples — metallic / industrial one-shots (s("metal"))' },
+  { label: 'ambient', spec: 'github:klo-e-1/sampls4strudel',   title: 'sampls4strudel — ambient one-shots / textures' },
 ];
 
 // Persisted list of externally-loaded packs so they survive a reload.

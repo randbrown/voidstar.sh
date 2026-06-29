@@ -514,10 +514,13 @@ export function createSampleKit({
       if (name) { assign[voiceId] = name; used.add(name); }
     }
     if (fillUnmapped) {
-      // Audio-only leftovers: skip pitched maps (objects) — those are melodic
-      // instruments, not drum one-shots.
+      // Audio-only leftovers for filling empty pads. Skip pitched maps (objects
+      // — melodic instruments) and anything whose name reads as a loop/break
+      // rather than a single hit: a drum loop played as a one-shot just sounds
+      // like a runaway groove. Pads want short single hits.
+      const LOOP_NAME = /break|loop|amen|jungle|fill|riff|phrase|melod|groove|\bbpm\b|sample/i;
       const leftovers = Object.keys(resolved.names)
-        .filter((n) => !used.has(n) && Array.isArray(resolved.names[n]));
+        .filter((n) => !used.has(n) && Array.isArray(resolved.names[n]) && !LOOP_NAME.test(n));
       let li = 0;
       for (const voiceId of Object.keys(voiceMap)) {
         if (assign[voiceId]) continue;

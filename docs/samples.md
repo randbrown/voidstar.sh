@@ -148,21 +148,24 @@ Loaded packs persist (`voidstar.qualia.sequencer.extPacks`) and reappear under a
 **loaded** group in the kit picker on reload. Type any `github:user/repo`
 (optionally `/branch`) or a direct `strudel.json` URL, or tap a preset:
 
+Presets are deliberately **single-shot** packs (no drum-break / loop packs — a
+loop played as a one-shot just runs away on the pads):
+
 | Chip | Pack | Note |
 |---|---|---|
-| lofi | `github:eddyflux/crate` | lo-fi / boom-bap one-shots |
-| hiphop | `github:tidalcycles/Dirt-Samples` | classic hip-hop hits + drum machines |
-| jazz | `github:yaxu/clean-breaks` | acoustic break kits |
-| dubstep | `github:switchangel/breaks` | heavy / halftime breaks |
-| ambient | `github:mot4i/garden` | textural / ambient material |
-| metal | `github:tidalcycles/Dirt-Samples` | metallic / industrial banks (`s("metal")`) |
+| lofi | `github:eddyflux/crate` | lo-fi one-shots |
+| hiphop | `github:tidalcycles/Dirt-Samples` | classic hip-hop one-shot hits + drum machines |
+| jazz | `github:tidalcycles/Dirt-Samples` | acoustic / jazz one-shots (`jazz`, `jvbass`…) |
+| metal | `github:tidalcycles/Dirt-Samples` | metallic / industrial one-shots (`s("metal")`) |
+| ambient | `github:klo-e-1/sampls4strudel` | ambient one-shots / textures |
 
 > These are real, public repos chosen as starting points — contents and licenses
 > vary per repo, so audition and check terms before using one in a set. The
 > Strudel side gets every name; the sequencer maps drum-named samples onto the
 > matching pad voices (`bd`→kick, `sn`/`sd`→snare, …) and then **auto-fills** any
-> still-empty pads with the pack's remaining samples, so even a pack that doesn't
-> follow the drum convention makes sound on the grid (remap by curating). Packs
+> still-empty pads with the pack's remaining single-shot samples (loop/break-named
+> entries are skipped — they'd run away as a one-shot), so even a pack that
+> doesn't follow the drum convention makes sound on the grid (remap by curating). Packs
 > with no branch given are tried on `main` then `master`. Watch the console /
 > status line for `loaded N/M` to see how a pack mapped.
 
