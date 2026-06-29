@@ -470,14 +470,22 @@ export function createSynthKit(spec = {}) {
 // path dead-simple and sidesteps any Tone-context/wrapper edge cases — the
 // sequencer only ever touches `output.connect`, `output.gain`, the bypass tag,
 // and `dispose()`, all of which a native GainNode supports.
+// Loudness-match the sample kits to the synth kits. Synth voices carry heavy
+// per-voice attenuation (cymbals -14..-21 dB), so a synth kit averages much
+// quieter than a sample kit, whose one-shots play at full velocity with the
+// balance baked in. Without this trim the sample kits sound noticeably louder.
+// Net sample gain = SAMPLE_KIT_GAIN * bus(0.6); the synth kits sit at 0.9*0.6.
+// This is the dial to tweak if sample vs synth loudness still feels off — a
+// static trim, NOT a compressor (which would re-squash the restored dynamics).
+const SAMPLE_KIT_GAIN = 0.6;
 export function createSampleKit({
-  manifestUrl, manifestUrls, voiceMap = {}, gain = 0.95, fillUnmapped = false,
+  manifestUrl, manifestUrls, voiceMap = {}, gain = SAMPLE_KIT_GAIN, fillUnmapped = false,
 } = {}) {
   const ctx = Tone.getContext().rawContext;
   const out = ctx.createGain(); out.gain.value = gain;
-  // Headroom stage to match the synth kits — sample one-shots are normalised
-  // near full scale, so a kick+hat stack would otherwise sum past 0 dBFS.
-  const bus = ctx.createGain(); bus.gain.value = 0.7;
+  // Headroom stage, matched to the synth kits' bus so the two kit types share the
+  // same gain staging — sample one-shots already leave headroom (see gen-samples).
+  const bus = ctx.createGain(); bus.gain.value = 0.6;
   bus.connect(out);
 
   const buffers = Object.create(null);   // voiceId → AudioBuffer
