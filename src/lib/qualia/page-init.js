@@ -86,7 +86,7 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 //   dissolve — additive crossfade: the outgoing look fades over the incoming
 //   wipe     — the outgoing look is erased left-to-right to reveal the incoming
 const TRANSITION_STYLES  = ['cut', 'dissolve', 'wipe'];
-const TRANSITION_MS_OPTS = [300, 600, 1200];    // ms
+const TRANSITION_MS_OPTS = [300, 600, 1200, 1800, 2500];    // ms
 // "Glitch" post-process modes (shared by ascii / mosh / edge). The button
 // cycles through these:
 //   off:  glitch disabled (always)
