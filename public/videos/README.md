@@ -1,5 +1,10 @@
 # public/videos — local clips for the Video quale
 
+Committed defaults (wired into `DEFAULT_URLS` in `src/lib/qualia/fx/video.js`):
+
+- `waterfall-portrait.mp4` — 720×1280, H.264/AAC, 30 fps, ~7.6 MiB
+- `waterfall-cascade.mp4` — 960×720, H.264/AAC, 30 fps, ~6.1 MiB
+
 Drop `.mp4` (or `.webm`) files here to serve them as same-origin sources for
 the Video quale (`src/lib/qualia/fx/video.js`). Astro copies everything under
 `public/` to the site root verbatim, so a file at `public/videos/clip.mp4` is
