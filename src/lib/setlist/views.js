@@ -10,6 +10,21 @@ import { findBestMatch as fuzzyMatch } from './match.js';
 import { initGdriveSync, isGdriveSyncEnabled } from './gdrive-sync.js';
 import { initAnnotationCanvas } from './annotation.js';
 
+function formatTimecode(seconds) {
+  if (seconds == null) return '';
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function parseTimecodeInput(val) {
+  if (val.includes(':')) {
+    const [m, s] = val.split(':').map(Number);
+    return (m || 0) * 60 + (s || 0);
+  }
+  return parseInt(val) || 0;
+}
+
 function downloadJson(data, filename) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -508,18 +523,21 @@ export async function renderSongFocus(root, songId, setlistId) {
   // Action buttons
   const actionBar = el('div', 'sl-action-bar');
   if (song.chartUrl) {
-    const chartBtn = btn('open chart', 'sl-btn-accent', () => window.open(song.chartUrl, '_blank'));
-    actionBar.appendChild(chartBtn);
-    actionBar.appendChild(btn('annotate', 'sl-btn-ghost sl-btn-sm', () => {
+    const inlineChartBtn = btn('chart', 'sl-btn-accent', () => {
       navigate(`#song/${songId}/${setlistId || '_'}/annotate`);
-    }));
-    const scrapeBtn = btn('scrape chart', 'sl-btn-ghost sl-btn-sm', async () => {
+    });
+    actionBar.appendChild(inlineChartBtn);
+    actionBar.appendChild(btn('open chart', 'sl-btn-ghost sl-btn-sm', () => window.open(song.chartUrl, '_blank')));
+    const scrapeBtn = btn('scrape', 'sl-btn-ghost sl-btn-sm', async () => {
       scrapeBtn.textContent = 'scraping...';
       const updates = await deepScrapeChart(song);
       if (updates) {
         let applied = 0;
         for (const [k, v] of Object.entries(updates)) {
-          if (!k.startsWith('_') && !song[k]) { song[k] = v; applied++; }
+          if (k.startsWith('_')) continue;
+          const cur = song[k];
+          const empty = cur === '' || cur === 0 || cur === null || cur === undefined;
+          if (empty) { song[k] = v; applied++; }
         }
         if (applied) {
           await store.putSong(song);
@@ -531,12 +549,12 @@ export async function renderSongFocus(root, songId, setlistId) {
       } else {
         scrapeBtn.textContent = 'no data found';
       }
-      setTimeout(() => { scrapeBtn.textContent = 'scrape chart'; }, 2500);
+      setTimeout(() => { scrapeBtn.textContent = 'scrape'; }, 2500);
     });
     actionBar.appendChild(scrapeBtn);
   }
   if (song.spotifyUri) {
-    const spBtn = btn('open in spotify', 'sl-btn-spotify', () => {
+    const spBtn = btn('open in spotify', 'sl-btn-spotify sl-btn-sm', () => {
       window.open(getSpotifyOpenUrl(song.spotifyUri), '_blank');
     });
     actionBar.appendChild(spBtn);
@@ -547,11 +565,43 @@ export async function renderSongFocus(root, songId, setlistId) {
   }));
   root.appendChild(actionBar);
 
-  // Spotify embed
+  // Spotify embed + timecode tracker
+  let currentTimecode = 0;
+  let timecodeInterval = null;
+  let isPlaying = false;
   if (song.spotifyUri && parseSpotifyUrl(song.spotifyUri)) {
     const embedWrap = el('div', 'sl-spotify-embed');
     renderSpotifyEmbed(embedWrap, song.spotifyUri, 80);
     root.appendChild(embedWrap);
+
+    const tcRow = el('div', 'sl-timecode-row');
+    const tcDisplay = el('span', 'sl-timecode-display', '0:00');
+    const tcPlayBtn = btn('start timer', 'sl-btn-ghost sl-btn-xs', () => {
+      if (isPlaying) {
+        clearInterval(timecodeInterval);
+        isPlaying = false;
+        tcPlayBtn.textContent = 'resume';
+      } else {
+        isPlaying = true;
+        tcPlayBtn.textContent = 'pause';
+        timecodeInterval = setInterval(() => {
+          currentTimecode++;
+          tcDisplay.textContent = formatTimecode(currentTimecode);
+        }, 1000);
+      }
+    });
+    const tcResetBtn = btn('reset', 'sl-btn-ghost sl-btn-xs', () => {
+      clearInterval(timecodeInterval);
+      currentTimecode = 0;
+      isPlaying = false;
+      tcDisplay.textContent = '0:00';
+      tcPlayBtn.textContent = 'start timer';
+    });
+    tcRow.appendChild(el('span', 'sl-timecode-label', 'timecode'));
+    tcRow.appendChild(tcDisplay);
+    tcRow.appendChild(tcPlayBtn);
+    tcRow.appendChild(tcResetBtn);
+    root.appendChild(tcRow);
   }
 
   // Notes
@@ -572,13 +622,35 @@ export async function renderSongFocus(root, songId, setlistId) {
       const nEl = el('div', 'sl-note');
       const date = new Date(n.createdAt);
       const ts = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const tcBadge = n.timecode != null ? `<span class="sl-tc-badge" title="Click to edit timecode">${formatTimecode(n.timecode)}</span>` : '';
+      const sectionBadge = n.section ? `<span class="sl-section-badge">${n.section}</span>` : '';
+      const steelBadge = n.steelType ? `<span class="sl-steel-note-badge">${n.steelType}</span>` : '';
       nEl.innerHTML = `
         <div class="sl-note-text">${n.text}</div>
         <div class="sl-note-meta">
           <span>${ts}</span>
+          ${tcBadge}
+          ${sectionBadge}
+          ${steelBadge}
           ${n.source === 'voice' ? '<span class="sl-voice-badge">voice</span>' : ''}
         </div>
       `;
+      // Timecode badge click to edit
+      const tcEl = nEl.querySelector('.sl-tc-badge');
+      if (tcEl) {
+        tcEl.style.cursor = 'pointer';
+        tcEl.addEventListener('click', async () => {
+          const val = prompt('Edit timecode (m:ss or seconds, blank to remove):', formatTimecode(n.timecode));
+          if (val === null) return;
+          if (val.trim() === '') {
+            delete n.timecode;
+          } else {
+            n.timecode = parseTimecodeInput(val.trim());
+          }
+          await store.putNote(n);
+          renderNotes();
+        });
+      }
       const delBtn = btn('&times;', 'sl-btn-icon sl-btn-danger sl-btn-xs', async () => {
         await store.deleteNote(n.id);
         const idx = notes.indexOf(n);
@@ -591,22 +663,55 @@ export async function renderSongFocus(root, songId, setlistId) {
   }
   renderNotes();
 
-  // Add note
+  // Add note input
   const noteInput = el('div', 'sl-note-input');
   const textarea = el('textarea', 'sl-textarea sl-textarea-sm');
   textarea.placeholder = 'Add a note...';
   textarea.rows = 2;
   noteInput.appendChild(textarea);
 
-  const noteBtns = el('div', 'sl-note-btns');
-  noteBtns.appendChild(btn('add note', 'sl-btn-primary sl-btn-sm', async () => {
-    const text = textarea.value.trim();
+  // Section selector
+  const sectionRow = el('div', 'sl-note-section-row');
+  const sectionSelect = el('select', 'sl-ann-size');
+  sectionSelect.innerHTML = `
+    <option value="">no section</option>
+    <option value="intro">intro</option>
+    <option value="verse 1">verse 1</option>
+    <option value="verse 2">verse 2</option>
+    <option value="verse 3">verse 3</option>
+    <option value="pre-chorus">pre-chorus</option>
+    <option value="chorus">chorus</option>
+    <option value="chorus 2">chorus 2</option>
+    <option value="bridge">bridge</option>
+    <option value="solo">solo</option>
+    <option value="interlude">interlude</option>
+    <option value="outro">outro</option>
+    <option value="tag">tag</option>
+    <option value="turnaround">turnaround</option>
+  `;
+  sectionRow.appendChild(el('span', 'sl-timecode-label', 'section'));
+  sectionRow.appendChild(sectionSelect);
+  noteInput.appendChild(sectionRow);
+
+  async function addNote(text, source, extras = {}) {
     if (!text) return;
-    const note = store.createNote(songId, text, 'typed');
+    const note = store.createNote(songId, text, source);
+    if (isPlaying || currentTimecode > 0) note.timecode = currentTimecode;
+    if (sectionSelect.value) note.section = sectionSelect.value;
+    Object.assign(note, extras);
     await store.putNote(note);
     notes.push(note);
     textarea.value = '';
     renderNotes();
+  }
+
+  const noteBtns = el('div', 'sl-note-btns');
+  noteBtns.appendChild(btn('add note', 'sl-btn-primary sl-btn-sm', () => {
+    addNote(textarea.value.trim(), 'typed');
+  }));
+  noteBtns.appendChild(btn('+ timecode', 'sl-btn-ghost sl-btn-xs', () => {
+    const text = textarea.value.trim() || `marker at ${formatTimecode(currentTimecode)}`;
+    addNote(text, 'typed');
   }));
 
   if (voiceSupported()) {
@@ -620,10 +725,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       dictation = createDictation(
         async (text) => {
           micBtn.classList.remove('sl-listening');
-          const note = store.createNote(songId, text, 'voice');
-          await store.putNote(note);
-          notes.push(note);
-          renderNotes();
+          await addNote(text, 'voice');
         },
         (err) => {
           micBtn.classList.remove('sl-listening');
@@ -637,6 +739,19 @@ export async function renderSongFocus(root, songId, setlistId) {
   }
 
   noteInput.appendChild(noteBtns);
+
+  // Steel quick-buttons
+  const steelRow = el('div', 'sl-steel-buttons');
+  steelRow.appendChild(el('span', 'sl-timecode-label', 'steel'));
+  const steelTypes = ['steel solo', 'steel intro', 'light steel', 'heavy steel'];
+  for (const st of steelTypes) {
+    steelRow.appendChild(btn(st, 'sl-btn-ghost sl-btn-xs sl-steel-qb', () => {
+      const extra = textarea.value.trim();
+      addNote(extra || st, 'typed', { steelType: st });
+    }));
+  }
+  noteInput.appendChild(steelRow);
+
   notesSection.appendChild(noteInput);
   root.appendChild(notesSection);
 
@@ -1017,7 +1132,14 @@ export async function renderPerformMode(root, setlistId) {
         ${vocalist ? vocalistDot(vocalist, sl.vocalistLegend) : ''}
       </div>
       ${song.steelEntry ? `<div class="sl-perform-steel">steel: ${song.steelEntry}</div>` : ''}
-      ${notes.length ? `<div class="sl-perform-notes">${notes.map(n => `<div class="sl-perform-note">${n.text}</div>`).join('')}</div>` : ''}
+      ${notes.length ? `<div class="sl-perform-notes">${notes.map(n => {
+        const badges = [
+          n.timecode != null ? `<span class="sl-tc-badge">${formatTimecode(n.timecode)}</span>` : '',
+          n.section ? `<span class="sl-section-badge">${n.section}</span>` : '',
+          n.steelType ? `<span class="sl-steel-note-badge">${n.steelType}</span>` : '',
+        ].filter(Boolean).join(' ');
+        return `<div class="sl-perform-note">${badges ? badges + ' ' : ''}${n.text}</div>`;
+      }).join('')}</div>` : ''}
       ${song.chartUrl ? `<a class="sl-btn sl-btn-accent sl-perform-chart" href="${song.chartUrl}" target="_blank" rel="noopener">open chart</a>` : ''}
     `;
   }

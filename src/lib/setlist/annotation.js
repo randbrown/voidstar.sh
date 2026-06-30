@@ -1,38 +1,13 @@
 // Annotation canvas for drawing on top of chart PDFs/documents.
 // Supports pen, highlighter, text, arrow, and eraser tools.
-// Persists strokes per-song in IndexedDB.
+// Persists strokes per-song in IndexedDB via the shared store connection.
 
-const DB_NAME = 'voidstar.setlist';
+import { _openDb } from './store.js';
+
 const ANNOTATIONS_STORE = 'annotations';
-const DB_VERSION = 2;
-
-let _dbPromise = null;
-
-function openDb() {
-  if (_dbPromise) return _dbPromise;
-  _dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains('songs'))
-        db.createObjectStore('songs', { keyPath: 'id' }).createIndex('by-title', 'title', { unique: false });
-      if (!db.objectStoreNames.contains('notes')) {
-        const n = db.createObjectStore('notes', { keyPath: 'id' });
-        n.createIndex('by-song', 'songId', { unique: false });
-      }
-      if (!db.objectStoreNames.contains('setlists'))
-        db.createObjectStore('setlists', { keyPath: 'id' }).createIndex('by-name', 'name', { unique: false });
-      if (!db.objectStoreNames.contains(ANNOTATIONS_STORE))
-        db.createObjectStore(ANNOTATIONS_STORE, { keyPath: 'songId' });
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  return _dbPromise;
-}
 
 async function loadAnnotation(songId) {
-  const db = await openDb();
+  const db = await _openDb();
   const tx = db.transaction(ANNOTATIONS_STORE, 'readonly');
   const store = tx.objectStore(ANNOTATIONS_STORE);
   return new Promise((resolve) => {
@@ -43,7 +18,7 @@ async function loadAnnotation(songId) {
 }
 
 async function saveAnnotation(songId, strokes) {
-  const db = await openDb();
+  const db = await _openDb();
   const tx = db.transaction(ANNOTATIONS_STORE, 'readwrite');
   const store = tx.objectStore(ANNOTATIONS_STORE);
   store.put({ songId, strokes, updatedAt: Date.now() });
