@@ -54,7 +54,7 @@ async function route() {
         }
         break;
       case 'perform':
-        await renderPerformMode(_root, id);
+        await renderPerformMode(_root, id, extra);
         break;
       default:
         await renderDashboard(_root);

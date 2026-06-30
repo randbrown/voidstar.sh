@@ -7,7 +7,7 @@ import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } f
 import { createDictation, isSupported as voiceSupported } from './voice.js';
 import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
-import { initGdriveSync, isGdriveSyncEnabled } from './gdrive-sync.js';
+import { initGdriveSync, isGdriveSyncEnabled, mergeData, setSyncClient, debouncedPush } from './gdrive-sync.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 
 function formatTimecode(seconds) {
@@ -159,6 +159,31 @@ export async function renderDashboard(root) {
   }));
   dataSection.appendChild(dataActions);
   root.appendChild(dataSection);
+
+  // Auto-sync from Google Drive on page load
+  if (isGdriveSyncEnabled()) {
+    autoSyncFromGdrive().catch(e => console.warn('[gdrive] auto-sync:', e.message));
+  }
+}
+
+let _autoSyncDone = false;
+
+async function autoSyncFromGdrive() {
+  if (_autoSyncDone) return;
+  _autoSyncDone = true;
+  const client = await initGdriveSync();
+  if (!client) return;
+  setSyncClient(client);
+
+  const remote = await client.pull();
+  if (remote) {
+    const local = await store.exportAll();
+    const merged = mergeData(local, remote);
+    await store.importAll(merged);
+    await client.push({ ...merged, version: 1, exportedAt: Date.now() });
+  }
+
+  store.setOnWrite(() => debouncedPush(() => store.exportAll()));
 }
 
 // ── Song Library ──
@@ -873,7 +898,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       if (currentIdx < flatSongIds.length - 1) navigate(`#song/${flatSongIds[currentIdx + 1]}/${setlistId}`);
     });
     if (currentIdx >= flatSongIds.length - 1) { nextBtn.disabled = true; nextBtn.style.opacity = '0.3'; }
-    const performBtn = btn('perform', 'sl-btn-accent sl-btn-sm', () => navigate(`#perform/${setlistId}`));
+    const performBtn = btn('perform', 'sl-btn-accent sl-btn-sm', () => navigate(`#perform/${setlistId}/${songId}`));
 
     navBar.appendChild(prevBtn);
     navBar.appendChild(posLabel);
@@ -1182,7 +1207,7 @@ export async function renderSettings(root) {
 
 // ── Performance Mode ──
 
-export async function renderPerformMode(root, setlistId) {
+export async function renderPerformMode(root, setlistId, startSongId) {
   const sl = await store.getSetlist(setlistId);
   if (!sl) { root.appendChild(emptyState('Setlist not found.')); return; }
 
@@ -1205,7 +1230,13 @@ export async function renderPerformMode(root, setlistId) {
     }
   }
 
-  let idx = entries.findIndex(e => e.type === 'song');
+  // Start on the requested song, or fall back to lastSongId, or first song
+  let idx = -1;
+  const effectiveStartId = startSongId || getLastSongId();
+  if (effectiveStartId) {
+    idx = entries.findIndex(e => e.type === 'song' && e.songId === effectiveStartId);
+  }
+  if (idx < 0) idx = entries.findIndex(e => e.type === 'song');
   if (idx < 0) { root.appendChild(emptyState('No songs in this setlist.')); return; }
 
   let wakeLock = null;
@@ -1239,18 +1270,29 @@ export async function renderPerformMode(root, setlistId) {
   });
   detailBtn.title = 'Song details';
 
+  // Bottom nav bar
+  const navBar = el('div', 'sl-perform-nav');
+  const prevBtn = btn('&larr; prev', 'sl-btn-ghost sl-btn-sm', () => go(-1));
+  const navPos = el('span', 'sl-song-nav-pos');
+  const nextBtn = btn('next &rarr;', 'sl-btn-ghost sl-btn-sm', () => go(1));
+  navBar.appendChild(prevBtn);
+  navBar.appendChild(navPos);
+  navBar.appendChild(nextBtn);
+
   container.appendChild(progress);
   container.appendChild(exitBtn);
   container.appendChild(fsBtn);
   container.appendChild(detailBtn);
   container.appendChild(counter);
   container.appendChild(content);
+  container.appendChild(navBar);
   root.appendChild(container);
 
   const songEntries = entries.filter(e => e.type === 'song');
   const totalSongs = songEntries.length;
 
   let chartAnnotationCtrl = null;
+  let invertActive = localStorage.getItem('voidstar.setlist.invertChart') === '1';
 
   function getSongIndex() {
     let n = 0;
@@ -1260,6 +1302,18 @@ export async function renderPerformMode(root, setlistId) {
     return n;
   }
 
+  function updateNavState() {
+    const songNum = getSongIndex();
+    navPos.textContent = `${songNum} / ${totalSongs}`;
+    let hasPrev = false, hasNext = false;
+    for (let i = idx - 1; i >= 0; i--) { if (entries[i].type === 'song') { hasPrev = true; break; } }
+    for (let i = idx + 1; i < entries.length; i++) { if (entries[i].type === 'song') { hasNext = true; break; } }
+    prevBtn.disabled = !hasPrev;
+    prevBtn.style.opacity = hasPrev ? '' : '0.3';
+    nextBtn.disabled = !hasNext;
+    nextBtn.style.opacity = hasNext ? '' : '0.3';
+  }
+
   function render() {
     if (chartAnnotationCtrl) { chartAnnotationCtrl.destroy(); chartAnnotationCtrl = null; }
 
@@ -1267,6 +1321,7 @@ export async function renderPerformMode(root, setlistId) {
     const songNum = getSongIndex();
     progress.style.width = `${(songNum / totalSongs) * 100}%`;
     counter.textContent = `${songNum} / ${totalSongs}`;
+    updateNavState();
 
     if (entry.type === 'divider') {
       content.innerHTML = `<div class="sl-perform-divider">${entry.name}</div>`;
@@ -1296,6 +1351,17 @@ export async function renderPerformMode(root, setlistId) {
 
     if (song.chartUrl) {
       const chartWrap = el('div', 'sl-perform-chart-wrap');
+      if (invertActive) chartWrap.classList.add('sl-chart-inverted');
+
+      const invertBtn = btn('invert', `sl-btn-ghost sl-btn-sm sl-perform-invert${invertActive ? ' sl-btn-active' : ''}`, () => {
+        invertActive = !invertActive;
+        localStorage.setItem('voidstar.setlist.invertChart', invertActive ? '1' : '0');
+        chartWrap.classList.toggle('sl-chart-inverted', invertActive);
+        invertBtn.classList.toggle('sl-btn-active', invertActive);
+      });
+      invertBtn.title = 'Invert colors for dark stage';
+      chartWrap.appendChild(invertBtn);
+
       const embedUrl = buildChartEmbedUrl(song.chartUrl);
       if (embedUrl) {
         const iframe = document.createElement('iframe');

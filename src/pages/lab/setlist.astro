@@ -538,7 +538,7 @@ import '../../styles/themes.css';
     .sl-perform-content {
       flex: 1;
       overflow-y: auto;
-      padding: 3rem 1.5rem 2rem;
+      padding: 3rem 1.5rem 1rem;
       display: flex;
       flex-direction: column;
       -webkit-overflow-scrolling: touch;
@@ -936,6 +936,41 @@ import '../../styles/themes.css';
       width: 100%;
       height: 100%;
       pointer-events: none;
+    }
+
+    /* ── Perform bottom nav bar ── */
+    .sl-perform-nav {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      padding: 0.5rem 1rem;
+      padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    /* ── Invert colors toggle for chart ── */
+    .sl-perform-invert {
+      position: absolute;
+      top: 0.35rem;
+      right: 0.35rem;
+      z-index: 3;
+      font-size: 0.75rem;
+      opacity: 0.5;
+    }
+    .sl-perform-invert:hover { opacity: 0.8; }
+    .sl-perform-invert.sl-btn-active {
+      opacity: 1;
+      color: var(--accent);
+    }
+    .sl-chart-inverted .sl-perform-chart-iframe,
+    .sl-chart-inverted .sl-perform-chart-img {
+      filter: invert(1) hue-rotate(180deg);
+    }
+    .sl-chart-inverted .sl-perform-chart-canvas {
+      filter: invert(1) hue-rotate(180deg);
     }
 
     /* ── Annotation controls container ── */
