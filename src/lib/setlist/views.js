@@ -723,6 +723,26 @@ export async function renderSongFocus(root, songId, setlistId) {
 
   const notes = await store.getNotesForSong(songId);
 
+  function startEditNote(nEl, n) {
+    const ta = el('textarea', 'sl-textarea sl-textarea-sm');
+    ta.value = n.text;
+    ta.rows = Math.min(8, Math.max(2, (n.text.match(/\n/g) || []).length + 1));
+    const actions = el('div', 'sl-note-btns');
+    actions.appendChild(btn('save', 'sl-btn-primary sl-btn-xs', async () => {
+      const v = ta.value.trim();
+      if (!v) return;
+      n.text = v;
+      await store.putNote(n);
+      renderNotes();
+    }));
+    actions.appendChild(btn('cancel', 'sl-btn-ghost sl-btn-xs', () => renderNotes()));
+    nEl.innerHTML = '';
+    nEl.appendChild(ta);
+    nEl.appendChild(actions);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+
   function renderNotes() {
     notesList.innerHTML = '';
     if (!notes.length) {
@@ -762,6 +782,9 @@ export async function renderSongFocus(root, songId, setlistId) {
           renderNotes();
         });
       }
+      const editBtn = btn('✎', 'sl-btn-icon sl-btn-xs sl-note-edit', () => startEditNote(nEl, n));
+      editBtn.title = 'Edit note';
+      nEl.appendChild(editBtn);
       const delBtn = btn('&times;', 'sl-btn-icon sl-btn-danger sl-btn-xs', async () => {
         await store.deleteNote(n.id);
         const idx = notes.indexOf(n);
