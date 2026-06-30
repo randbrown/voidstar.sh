@@ -1284,14 +1284,27 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   });
   detailBtn.title = 'Song details';
 
+  let invertActive = localStorage.getItem('voidstar.setlist.invertChart') === '1';
+  let currentChartWrap = null;
+
   // Bottom nav bar
   const navBar = el('div', 'sl-perform-nav');
   const prevBtn = btn('&larr; prev', 'sl-btn-ghost sl-btn-sm', () => go(-1));
   const navPos = el('span', 'sl-song-nav-pos');
   const nextBtn = btn('next &rarr;', 'sl-btn-ghost sl-btn-sm', () => go(1));
+  // Invert lives in the nav bar (not over the chart, where it covered content).
+  const invertBtn = btn('invert', 'sl-btn-ghost sl-btn-sm', () => {
+    invertActive = !invertActive;
+    localStorage.setItem('voidstar.setlist.invertChart', invertActive ? '1' : '0');
+    if (currentChartWrap) currentChartWrap.classList.toggle('sl-chart-inverted', invertActive);
+    invertBtn.classList.toggle('sl-btn-active', invertActive);
+  });
+  invertBtn.title = 'Invert chart colors for dark stage';
+  if (invertActive) invertBtn.classList.add('sl-btn-active');
   navBar.appendChild(prevBtn);
   navBar.appendChild(navPos);
   navBar.appendChild(nextBtn);
+  navBar.appendChild(invertBtn);
 
   container.appendChild(progress);
   container.appendChild(exitBtn);
@@ -1306,7 +1319,6 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const totalSongs = songEntries.length;
 
   let chartAnnotationCtrl = null;
-  let invertActive = localStorage.getItem('voidstar.setlist.invertChart') === '1';
 
   function getSongIndex() {
     let n = 0;
@@ -1330,6 +1342,8 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 
   function render() {
     if (chartAnnotationCtrl) { chartAnnotationCtrl.destroy(); chartAnnotationCtrl = null; }
+    currentChartWrap = null;
+    invertBtn.style.display = 'none';
 
     const entry = entries[idx];
     const songNum = getSongIndex();
@@ -1364,17 +1378,12 @@ export async function renderPerformMode(root, setlistId, startSongId) {
     `;
 
     if (song.chartUrl) {
-      const chartWrap = el('div', 'sl-perform-chart-wrap');
-      if (invertActive) chartWrap.classList.add('sl-chart-inverted');
+      invertBtn.style.display = '';
+      invertBtn.classList.toggle('sl-btn-active', invertActive);
 
-      const invertBtn = btn('invert', `sl-btn-ghost sl-btn-sm sl-perform-invert${invertActive ? ' sl-btn-active' : ''}`, () => {
-        invertActive = !invertActive;
-        localStorage.setItem('voidstar.setlist.invertChart', invertActive ? '1' : '0');
-        chartWrap.classList.toggle('sl-chart-inverted', invertActive);
-        invertBtn.classList.toggle('sl-btn-active', invertActive);
-      });
-      invertBtn.title = 'Invert colors for dark stage';
-      chartWrap.appendChild(invertBtn);
+      const chartWrap = el('div', 'sl-perform-chart-wrap');
+      currentChartWrap = chartWrap;
+      if (invertActive) chartWrap.classList.add('sl-chart-inverted');
 
       const embedUrl = buildChartEmbedUrl(song.chartUrl);
       if (embedUrl) {
@@ -1394,6 +1403,12 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       content.appendChild(chartWrap);
 
       loadAnnotation(entry.songId).then(data => {
+        // Reproduce the aspect ratio the strokes were authored at so the
+        // overlay lines up with the chart. Older annotations saved without it
+        // fall back to the current viewport's annotation-box shape.
+        const aspect = data?.aspect ||
+          (window.innerWidth / Math.max(1, window.innerHeight - 96));
+        chartWrap.style.aspectRatio = String(aspect);
         if (data?.strokes?.length) {
           chartAnnotationCtrl = renderReadonlyAnnotations(chartCanvas, data.strokes);
         }

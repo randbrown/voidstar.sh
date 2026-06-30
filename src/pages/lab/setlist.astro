@@ -926,19 +926,21 @@ import '../../styles/themes.css';
     .sl-perform-chart-wrap {
       position: relative;
       width: 100%;
+      /* Aspect locked at runtime to the annotation's authoring ratio so the
+         overlay lines up; this is just the pre-load fallback. */
+      aspect-ratio: 3 / 4;
       margin-top: 0.75rem;
       border-radius: var(--radius, 6px);
       overflow: hidden;
       border: 1px solid var(--border);
     }
-    .sl-perform-chart-iframe {
-      width: 100%;
-      height: 60vh;
-      border: none;
-      display: block;
-    }
+    .sl-perform-chart-iframe,
     .sl-perform-chart-img {
+      position: absolute;
+      inset: 0;
       width: 100%;
+      height: 100%;
+      border: none;
       display: block;
     }
     .sl-perform-chart-canvas {
@@ -962,19 +964,10 @@ import '../../styles/themes.css';
       flex-shrink: 0;
     }
 
-    /* ── Invert colors toggle for chart ── */
-    .sl-perform-invert {
-      position: absolute;
-      top: 0.35rem;
-      right: 0.35rem;
-      z-index: 3;
-      font-size: 0.75rem;
-      opacity: 0.5;
-    }
-    .sl-perform-invert:hover { opacity: 0.8; }
-    .sl-perform-invert.sl-btn-active {
-      opacity: 1;
+    /* ── Invert colors toggle for chart (lives in the nav bar) ── */
+    .sl-btn-active {
       color: var(--accent);
+      border-color: var(--accent);
     }
     .sl-chart-inverted .sl-perform-chart-iframe,
     .sl-chart-inverted .sl-perform-chart-img {

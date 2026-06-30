@@ -17,11 +17,13 @@ export async function loadAnnotation(songId) {
   });
 }
 
-async function saveAnnotation(songId, strokes) {
+async function saveAnnotation(songId, strokes, aspect) {
   const db = await _openDb();
   const tx = db.transaction(ANNOTATIONS_STORE, 'readwrite');
   const store = tx.objectStore(ANNOTATIONS_STORE);
-  store.put({ songId, strokes, updatedAt: Date.now() });
+  // Persist the authoring canvas aspect ratio so other views (perform mode)
+  // can reproduce the same box shape and keep strokes lined up with the chart.
+  store.put({ songId, strokes, aspect: aspect || null, updatedAt: Date.now() });
   return new Promise((resolve, reject) => {
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
@@ -458,7 +460,8 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   }, { signal });
 
   toolbar.querySelector('#sl-ann-save')?.addEventListener('click', async () => {
-    await saveAnnotation(songId, strokes);
+    const aspect = canvas.height ? canvas.width / canvas.height : null;
+    await saveAnnotation(songId, strokes, aspect);
     const saveBtn = toolbar.querySelector('#sl-ann-save');
     if (saveBtn) {
       saveBtn.textContent = 'Saved!';

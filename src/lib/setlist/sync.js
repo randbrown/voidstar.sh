@@ -10,11 +10,15 @@ import { parseSpotifyUrl } from './spotify.js';
 const SOURCES_KEY = 'voidstar.setlist.sources';
 
 export function getSources() {
-  try {
-    return JSON.parse(localStorage.getItem(SOURCES_KEY)) || defaultSources();
-  } catch {
-    return defaultSources();
-  }
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(SOURCES_KEY)); } catch { stored = null; }
+  // Merge over defaults so sources saved by older versions (missing newer
+  // fields like driveFolders) don't crash callers that read e.g. .length.
+  const s = { ...defaultSources(), ...(stored || {}) };
+  if (!Array.isArray(s.driveFolders)) s.driveFolders = [];
+  if (!Array.isArray(s.driveCharts)) s.driveCharts = [];
+  if (typeof s.workerUrl !== 'string') s.workerUrl = '';
+  return s;
 }
 
 function defaultSources() {
