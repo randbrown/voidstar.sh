@@ -51,9 +51,14 @@ function storeToken(token, expiresIn) {
   }));
 }
 
-async function getAccessToken() {
+async function getAccessToken({ interactive = true } = {}) {
   const existing = getStoredToken();
   if (existing) return existing;
+
+  // Non-interactive callers (e.g. auto-sync on page load) must never trigger
+  // the OAuth popup: browsers block popups not opened from a user gesture,
+  // which surfaces as the noisy GSI_LOGGER "Failed to open popup" error.
+  if (!interactive) return null;
 
   const clientId = getClientId();
   if (!clientId) throw new Error('Google Drive client ID not configured. Set it in Sources & Sync settings.');
@@ -131,8 +136,8 @@ async function updateFile(token, fileId, data) {
   return res.json();
 }
 
-export async function initGdriveSync() {
-  const token = await getAccessToken();
+export async function initGdriveSync({ interactive = true } = {}) {
+  const token = await getAccessToken({ interactive });
   if (!token) return null;
 
   return {

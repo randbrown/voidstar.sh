@@ -118,6 +118,8 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   let color = '#ff5e7e';
   let lineWidth = 4;
   let undoStack = [];
+  let selectedIndex = -1;
+  let selDrag = null;
 
   function resize() {
     const wrap = canvas.parentElement;
@@ -133,6 +135,80 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     for (const stroke of strokes) {
       drawStrokeOnCanvas(ctx, canvas, stroke);
     }
+    if (selectedIndex >= 0 && strokes[selectedIndex]) {
+      const b = strokeBBox(strokes[selectedIndex]);
+      if (b) {
+        ctx.save();
+        ctx.strokeStyle = '#4ea1ff';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
+        ctx.restore();
+      }
+    }
+  }
+
+  // Bounding box of a stroke in canvas pixels (used for select/hit-test).
+  function strokeBBox(stroke) {
+    if (stroke.type === 'text') {
+      const fontPx = stroke.size * 4;
+      ctx.font = `${fontPx}px var(--font-mono), monospace`;
+      const w = ctx.measureText(stroke.text || '').width;
+      const x = stroke.x * canvas.width;
+      const y = stroke.y * canvas.height;
+      return { x: x - 4, y: y - fontPx, w: w + 8, h: fontPx + 8 };
+    }
+    const pts = stroke.points;
+    if (!pts || !pts.length) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of pts) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const stroked = stroke.type === 'highlighter' ? stroke.size * 3 : stroke.size;
+    const pad = stroked / 2 + 8;
+    return {
+      x: minX * canvas.width - pad,
+      y: minY * canvas.height - pad,
+      w: (maxX - minX) * canvas.width + pad * 2,
+      h: (maxY - minY) * canvas.height + pad * 2,
+    };
+  }
+
+  // Topmost (last-drawn) stroke whose bbox contains the normalized point.
+  function hitTest(pos) {
+    const px = pos.x * canvas.width;
+    const py = pos.y * canvas.height;
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      const b = strokeBBox(strokes[i]);
+      if (!b) continue;
+      if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) return i;
+    }
+    return -1;
+  }
+
+  function cloneStroke(s) {
+    return { ...s, points: s.points ? s.points.map(p => ({ x: p.x, y: p.y })) : undefined };
+  }
+
+  // Translate a stroke by a normalized delta, relative to a pristine copy.
+  function applyTranslate(stroke, orig, dx, dy) {
+    if (stroke.type === 'text') {
+      stroke.x = orig.x + dx;
+      stroke.y = orig.y + dy;
+    } else if (orig.points) {
+      stroke.points = orig.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    }
+  }
+
+  function clearSelection() {
+    if (selectedIndex < 0) return;
+    selectedIndex = -1;
+    selDrag = null;
+    updateSelMenu();
+    redraw();
   }
 
   function getPos(e) {
@@ -148,6 +224,17 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     if (tool === 'pan') return;
     e.preventDefault();
     const pos = getPos(e);
+
+    if (tool === 'select') {
+      const idx = hitTest(pos);
+      selectedIndex = idx;
+      selDrag = idx >= 0
+        ? { startPos: pos, orig: cloneStroke(strokes[idx]), moved: false }
+        : null;
+      redraw();
+      updateSelMenu();
+      return;
+    }
 
     if (tool === 'text') {
       const text = prompt('Annotation text:');
@@ -183,6 +270,18 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   }
 
   function moveStroke(e) {
+    if (tool === 'select') {
+      if (!selDrag || selectedIndex < 0) return;
+      e.preventDefault();
+      const pos = getPos(e);
+      const dx = pos.x - selDrag.startPos.x;
+      const dy = pos.y - selDrag.startPos.y;
+      if (Math.abs(dx) > 0.004 || Math.abs(dy) > 0.004) selDrag.moved = true;
+      applyTranslate(strokes[selectedIndex], selDrag.orig, dx, dy);
+      redraw();
+      updateSelMenu();
+      return;
+    }
     if (!currentStroke) return;
     e.preventDefault();
     const pos = getPos(e);
@@ -192,6 +291,11 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   }
 
   function endStroke(e) {
+    if (tool === 'select') {
+      if (selDrag?.moved) undoStack = [];
+      selDrag = null;
+      return;
+    }
     if (!currentStroke) return;
     e.preventDefault();
     if (currentStroke.points.length >= 2) {
@@ -219,17 +323,92 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
         canvas.style.cursor = 'default';
       } else {
         canvas.style.pointerEvents = '';
-        canvas.style.cursor = 'crosshair';
+        canvas.style.cursor = tool === 'select' ? 'move' : 'crosshair';
       }
+      if (tool !== 'select') clearSelection();
     }, { signal });
   });
   toolbar.querySelector('[data-tool="pen"]')?.classList.add('sl-btn-primary');
 
   const colorInput = toolbar.querySelector('.sl-ann-color');
-  if (colorInput) colorInput.addEventListener('input', (e) => { color = e.target.value; }, { signal });
+  if (colorInput) colorInput.addEventListener('input', (e) => {
+    color = e.target.value;
+    // While an element is selected, the color picker recolors it in place.
+    if (tool === 'select' && selectedIndex >= 0) {
+      strokes[selectedIndex].color = color;
+      undoStack = [];
+      redraw();
+    }
+  }, { signal });
 
   const sizeSelect = toolbar.querySelector('.sl-ann-size');
-  if (sizeSelect) sizeSelect.addEventListener('change', (e) => { lineWidth = parseInt(e.target.value); }, { signal });
+  if (sizeSelect) sizeSelect.addEventListener('change', (e) => {
+    lineWidth = parseInt(e.target.value);
+    if (tool === 'select' && selectedIndex >= 0) {
+      strokes[selectedIndex].size = lineWidth;
+      undoStack = [];
+      redraw();
+      updateSelMenu();
+    }
+  }, { signal });
+
+  // ── Floating selection menu (edit / delete the selected element) ──
+  const selWrap = canvas.parentElement;
+  const selMenu = document.createElement('div');
+  selMenu.className = 'sl-ann-selmenu';
+  selMenu.style.display = 'none';
+  const makeSelBtn = (cls, label) => {
+    const b = document.createElement('button');
+    b.className = `sl-btn ${cls}`;
+    b.textContent = label;
+    return b;
+  };
+  const selEditBtn = makeSelBtn('sl-btn-xs', 'edit text');
+  const selDelBtn = makeSelBtn('sl-btn-xs sl-btn-danger', 'delete');
+  const selCloseBtn = makeSelBtn('sl-btn-xs sl-btn-ghost', '×');
+  selCloseBtn.title = 'Deselect';
+  selMenu.append(selEditBtn, selDelBtn, selCloseBtn);
+  if (selWrap) selWrap.appendChild(selMenu);
+
+  function updateSelMenu() {
+    const s = selectedIndex >= 0 ? strokes[selectedIndex] : null;
+    const b = s ? strokeBBox(s) : null;
+    if (!s || !b) { selMenu.style.display = 'none'; return; }
+    selEditBtn.style.display = s.type === 'text' ? '' : 'none';
+    selMenu.style.display = 'flex';
+    const maxLeft = Math.max(2, canvas.width - selMenu.offsetWidth - 2);
+    selMenu.style.left = Math.min(Math.max(2, b.x), maxLeft) + 'px';
+    selMenu.style.top = Math.max(2, b.y - selMenu.offsetHeight - 6) + 'px';
+  }
+
+  selEditBtn.addEventListener('click', () => {
+    if (selectedIndex < 0) return;
+    const s = strokes[selectedIndex];
+    if (s.type !== 'text') return;
+    const text = prompt('Edit annotation text:', s.text);
+    if (text === null) return;
+    if (text.trim() === '') {
+      strokes.splice(selectedIndex, 1);
+      selectedIndex = -1;
+    } else {
+      s.text = text;
+    }
+    undoStack = [];
+    redraw();
+    updateSelMenu();
+  }, { signal });
+
+  selDelBtn.addEventListener('click', () => {
+    if (selectedIndex < 0) return;
+    strokes.splice(selectedIndex, 1);
+    selectedIndex = -1;
+    selDrag = null;
+    undoStack = [];
+    redraw();
+    updateSelMenu();
+  }, { signal });
+
+  selCloseBtn.addEventListener('click', () => clearSelection(), { signal });
 
   toolbar.querySelector('#sl-ann-undo')?.addEventListener('click', () => {
     if (strokes.length) {
@@ -268,7 +447,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   return {
     resize,
     redraw,
-    destroy() { ac.abort(); },
+    destroy() { ac.abort(); selMenu.remove(); },
     getStrokes() { return strokes; },
   };
 }

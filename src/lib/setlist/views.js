@@ -171,7 +171,10 @@ let _autoSyncDone = false;
 async function autoSyncFromGdrive() {
   if (_autoSyncDone) return;
   _autoSyncDone = true;
-  const client = await initGdriveSync();
+  // Silent: only sync if we already hold a valid token. If the token has
+  // expired, skip rather than popping an OAuth window the browser will block
+  // (the user can re-connect from Sources & Sync, which is a real gesture).
+  const client = await initGdriveSync({ interactive: false });
   if (!client) return;
   setSyncClient(client);
 
@@ -906,11 +909,17 @@ export async function renderSongFocus(root, songId, setlistId) {
     navBar.appendChild(performBtn);
     root.appendChild(navBar);
 
+    // Swipe listeners live on the persistent root element, which route() only
+    // clears via innerHTML — that never detaches listeners bound to root itself.
+    // Without explicit teardown they leak into the next view (e.g. the chart
+    // annotation view, where a horizontal pen stroke would fire a song nav).
+    // Tear them down on the next hashchange so they're scoped to this view.
+    const swipeAc = new AbortController();
     let touchStartX = 0, touchStartY = 0;
     root.addEventListener('touchstart', (e) => {
       touchStartX = e.touches[0].clientX;
       touchStartY = e.touches[0].clientY;
-    }, { passive: true });
+    }, { passive: true, signal: swipeAc.signal });
     root.addEventListener('touchend', (e) => {
       const dx = e.changedTouches[0].clientX - touchStartX;
       const dy = e.changedTouches[0].clientY - touchStartY;
@@ -921,7 +930,12 @@ export async function renderSongFocus(root, songId, setlistId) {
           navigate(`#song/${flatSongIds[currentIdx - 1]}/${setlistId}`);
         }
       }
-    }, { passive: true });
+    }, { passive: true, signal: swipeAc.signal });
+    const cleanupSwipe = () => {
+      swipeAc.abort();
+      window.removeEventListener('hashchange', cleanupSwipe);
+    };
+    window.addEventListener('hashchange', cleanupSwipe);
   }
 }
 
@@ -1476,6 +1490,7 @@ export async function renderAnnotation(root, songId, setlistId) {
     <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="text" title="Text">T</button>
     <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="arrow" title="Arrow">→</button>
     <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="eraser" title="Eraser">◻</button>
+    <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="select" title="Select to move, edit, recolor, or delete">⌖</button>
     <span class="sl-ann-sep"></span>
     <input type="color" class="sl-ann-color" value="#ff5e7e" title="Color">
     <select class="sl-ann-size">
