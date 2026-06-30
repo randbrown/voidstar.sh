@@ -1,0 +1,26 @@
+name: Deploy setlist-sync worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/setlist-sync/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: workers/setlist-sync
+          secrets: |
+            SPOTIFY_CLIENT_ID
+            SPOTIFY_CLIENT_SECRET
+            GOOGLE_API_KEY
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
