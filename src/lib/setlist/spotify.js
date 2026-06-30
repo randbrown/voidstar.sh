@@ -15,7 +15,7 @@ export function parseSpotifyUrl(url) {
   return null;
 }
 
-export function getEmbedUrl(urlOrUri, compact = true) {
+export function getEmbedUrl(urlOrUri, compact = false) {
   const parsed = parseSpotifyUrl(urlOrUri);
   if (!parsed) return null;
   const h = compact ? '&compact=1' : '';

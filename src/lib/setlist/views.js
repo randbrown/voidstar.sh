@@ -571,7 +571,7 @@ export async function renderSongFocus(root, songId, setlistId) {
   let isPlaying = false;
   if (song.spotifyUri && parseSpotifyUrl(song.spotifyUri)) {
     const embedWrap = el('div', 'sl-spotify-embed');
-    renderSpotifyEmbed(embedWrap, song.spotifyUri, 80);
+    renderSpotifyEmbed(embedWrap, song.spotifyUri, 152);
     root.appendChild(embedWrap);
 
     const tcRow = el('div', 'sl-timecode-row');
