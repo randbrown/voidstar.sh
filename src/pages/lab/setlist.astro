@@ -965,7 +965,17 @@ import '../../styles/themes.css';
       flex-shrink: 0;
     }
 
-    /* ── Invert colors toggle for chart (lives in the nav bar) ── */
+    /* ── Invert colors toggle for chart (top control strip) ── */
+    .sl-perform-invert {
+      position: absolute;
+      top: 0.55rem;
+      left: 5.5rem;
+      z-index: 2;
+      opacity: 0.5;
+      font-size: 0.8rem;
+    }
+    .sl-perform-invert:hover { opacity: 0.85; }
+    .sl-perform-invert.sl-btn-active { opacity: 1; }
     .sl-btn-active {
       color: var(--accent);
       border-color: var(--accent);

@@ -562,6 +562,11 @@ export async function renderSongFocus(root, songId, setlistId) {
   setLastSongId(songId);
   const backHash = setlistId ? `#setlist/${setlistId}` : '#library';
   const bar = topBar(merged.title, backHash);
+  if (setlist) {
+    const topActions = el('div', 'sl-actions');
+    topActions.appendChild(btn('perform', 'sl-btn-accent sl-btn-sm', () => navigate(`#perform/${setlistId}/${songId}`)));
+    bar.appendChild(topActions);
+  }
   root.appendChild(bar);
 
   root.classList.add('sl-focus');
@@ -924,12 +929,10 @@ export async function renderSongFocus(root, songId, setlistId) {
       if (currentIdx < flatSongIds.length - 1) navigate(`#song/${flatSongIds[currentIdx + 1]}/${setlistId}`);
     });
     if (currentIdx >= flatSongIds.length - 1) { nextBtn.disabled = true; nextBtn.style.opacity = '0.3'; }
-    const performBtn = btn('perform', 'sl-btn-accent sl-btn-sm', () => navigate(`#perform/${setlistId}/${songId}`));
 
     navBar.appendChild(prevBtn);
     navBar.appendChild(posLabel);
     navBar.appendChild(nextBtn);
-    navBar.appendChild(performBtn);
     root.appendChild(navBar);
 
     // Swipe listeners live on the persistent root element, which route() only
@@ -1315,8 +1318,8 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const prevBtn = btn('&larr; prev', 'sl-btn-ghost sl-btn-sm', () => go(-1));
   const navPos = el('span', 'sl-song-nav-pos');
   const nextBtn = btn('next &rarr;', 'sl-btn-ghost sl-btn-sm', () => go(1));
-  // Invert lives in the nav bar (not over the chart, where it covered content).
-  const invertBtn = btn('invert', 'sl-btn-ghost sl-btn-sm', () => {
+  // Invert sits in the top control strip; nav bar keeps only prev/next.
+  const invertBtn = btn('invert', 'sl-btn-ghost sl-btn-sm sl-perform-invert', () => {
     invertActive = !invertActive;
     localStorage.setItem('voidstar.setlist.invertChart', invertActive ? '1' : '0');
     if (currentChartWrap) currentChartWrap.classList.toggle('sl-chart-inverted', invertActive);
@@ -1327,12 +1330,12 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   navBar.appendChild(prevBtn);
   navBar.appendChild(navPos);
   navBar.appendChild(nextBtn);
-  navBar.appendChild(invertBtn);
 
   container.appendChild(progress);
   container.appendChild(exitBtn);
   container.appendChild(fsBtn);
   container.appendChild(detailBtn);
+  container.appendChild(invertBtn);
   container.appendChild(counter);
   container.appendChild(content);
   container.appendChild(navBar);
