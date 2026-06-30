@@ -82,6 +82,31 @@ function emptyState(msg) {
   return el('div', 'sl-empty', msg);
 }
 
+// Transient toast with an Undo action. Used for destructive taps (note delete)
+// so an accidental swipe/press during a live set is one tap to recover.
+let _activeToast = null;
+function showUndoToast(msg, onUndo, ms = 6000) {
+  if (_activeToast) _activeToast.remove();
+  const toast = el('div', 'sl-toast');
+  toast.appendChild(el('span', 'sl-toast-msg', msg));
+  let timer = null;
+  const dismiss = () => {
+    if (timer) clearTimeout(timer);
+    window.removeEventListener('hashchange', dismiss);
+    toast.remove();
+    if (_activeToast === toast) _activeToast = null;
+  };
+  const undoBtn = btn('undo', 'sl-btn-sm sl-btn-accent', () => { dismiss(); onUndo(); });
+  toast.appendChild(undoBtn);
+  document.body.appendChild(toast);
+  _activeToast = toast;
+  timer = setTimeout(dismiss, ms);
+  // Leaving the view (e.g. swiping to the next song) clears the toast so it
+  // can't linger over unrelated content.
+  window.addEventListener('hashchange', dismiss);
+  return dismiss;
+}
+
 function keyBadge(key, origKey) {
   if (!key) return '';
   const label = origKey && origKey !== key ? `${key} <span class="sl-orig">(orig ${origKey})</span>` : key;
@@ -845,10 +870,15 @@ export async function renderSongFocus(root, songId, setlistId) {
       editBtn.title = 'Edit note';
       nEl.appendChild(editBtn);
       const delBtn = btn('&times;', 'sl-btn-icon sl-btn-danger sl-btn-xs', async () => {
-        await store.deleteNote(n.id);
         const idx = notes.indexOf(n);
+        await store.deleteNote(n.id);
         if (idx >= 0) notes.splice(idx, 1);
         renderNotes();
+        showUndoToast('Note deleted', async () => {
+          await store.putNote(n);
+          if (idx >= 0) notes.splice(idx, 0, n); else notes.push(n);
+          renderNotes();
+        });
       });
       nEl.appendChild(delBtn);
       notesList.appendChild(nEl);
@@ -1003,7 +1033,7 @@ export async function renderSongFocus(root, songId, setlistId) {
     root.addEventListener('touchend', (e) => {
       const dx = e.changedTouches[0].clientX - touchStartX;
       const dy = e.changedTouches[0].clientY - touchStartY;
-      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+      if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.8) {
         if (dx < 0 && currentIdx < flatSongIds.length - 1) {
           navigate(`#song/${flatSongIds[currentIdx + 1]}/${setlistId}`);
         } else if (dx > 0 && currentIdx > 0) {
@@ -1526,7 +1556,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   container.addEventListener('touchend', (e) => {
     const dx = e.changedTouches[0].clientX - touchStartX;
     const dy = e.changedTouches[0].clientY - touchStartY;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+    if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.8) {
       go(dx < 0 ? 1 : -1);
     }
   }, { passive: true });
