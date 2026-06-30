@@ -54,14 +54,32 @@ async function runSync(songs, playlistUrls, onProgress) {
     done: 0,
   };
 
-  const spotifyTracks = [];
+  // Try playlist fetch first, fall back to batch search
+  let spotifyTracks = [];
+  let playlistFailed = false;
   const uniqueUrls = [...new Set(playlistUrls)];
   for (const url of uniqueUrls) {
     try {
       const tracks = await fetchSpotifyTracks(sources.workerUrl, url);
       spotifyTracks.push(...tracks);
     } catch (e) {
+      playlistFailed = true;
       results.spotify.errors.push(e.message);
+    }
+  }
+
+  // If playlist fetch failed (e.g. dev mode 403), use batch search instead
+  const useSearch = playlistFailed && sources.workerUrl && spotifyTracks.length === 0;
+  let searchResults = {};
+  if (useSearch) {
+    const unlinked = songs.filter(s => !s.spotifyUri).map(s => s.title);
+    if (unlinked.length) {
+      try {
+        searchResults = await batchSearchSpotify(sources.workerUrl, unlinked);
+        results.spotify.errors = [];
+      } catch (e) {
+        results.spotify.errors.push(`Search: ${e.message}`);
+      }
     }
   }
 
@@ -81,14 +99,24 @@ async function runSync(songs, playlistUrls, onProgress) {
   for (const song of songs) {
     let updated = false;
 
-    if (!song.spotifyUri && spotifyTracks.length) {
-      const result = findBestMatch(song.title, spotifyTracks);
-      if (result) {
-        song.spotifyUri = result.match.spotifyUrl;
-        if (result.match.artist && !song.artist) song.artist = result.match.artist;
+    if (!song.spotifyUri) {
+      if (spotifyTracks.length) {
+        const result = findBestMatch(song.title, spotifyTracks);
+        if (result) {
+          song.spotifyUri = result.match.spotifyUrl;
+          if (result.match.artist && !song.artist) song.artist = result.match.artist;
+          results.spotify.matched++;
+          updated = true;
+        } else {
+          results.spotify.skipped++;
+        }
+      } else if (searchResults[song.title]) {
+        const match = searchResults[song.title];
+        song.spotifyUri = match.spotifyUrl;
+        if (match.artist && !song.artist) song.artist = match.artist;
         results.spotify.matched++;
         updated = true;
-      } else {
+      } else if (useSearch) {
         results.spotify.skipped++;
       }
     }
@@ -118,10 +146,23 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
 
   if (workerUrl) {
     const res = await fetch(`${workerUrl}/spotify/playlist/${parsed.id}`);
-    if (!res.ok) throw new Error(`Spotify API ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Spotify API ${res.status}`);
+    }
     return await res.json();
   }
   return [];
+}
+
+async function batchSearchSpotify(workerUrl, titles) {
+  const res = await fetch(`${workerUrl}/spotify/search-batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ titles }),
+  });
+  if (!res.ok) throw new Error(`Search API ${res.status}`);
+  return await res.json();
 }
 
 async function fetchDriveFiles(workerUrl, folderUrl) {
