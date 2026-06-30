@@ -8,7 +8,7 @@ import { createDictation, isSupported as voiceSupported } from './voice.js';
 import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
 import { initGdriveSync, isGdriveSyncEnabled } from './gdrive-sync.js';
-import { initAnnotationCanvas } from './annotation.js';
+import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -381,25 +381,37 @@ export async function renderSetlistEdit(root, setlistId) {
   }));
   root.appendChild(importSection);
 
-  // Songs per set
+  // Songs per set (with drag reorder)
   for (let si = 0; si < sl.sets.length; si++) {
     const set = sl.sets[si];
     const section = el('div', 'sl-section');
     section.innerHTML = `<div class="sl-section-title">${set.name} <span class="sl-dim">(${set.songIds.length} songs)</span></div>`;
 
+    const rowContainer = el('div', 'sl-drag-container');
+
     for (let i = 0; i < set.songIds.length; i++) {
       const song = await store.getSong(set.songIds[i]);
       if (!song) continue;
       const row = el('div', 'sl-edit-row');
-      row.innerHTML = `<span class="sl-song-num">${i + 1}</span><span>${song.title}</span>`;
+      row.dataset.songId = song.id;
+      row.innerHTML = `<span class="sl-drag-handle" title="Drag to reorder">⠿</span><span class="sl-song-num">${i + 1}</span><span>${song.title}</span>`;
+      const songLink = btn('▸', 'sl-btn-icon sl-edit-song-link', (e) => {
+        e.stopPropagation();
+        navigate(`#song/${song.id}/${sl.id}`);
+      });
+      songLink.title = 'Go to song';
+      row.appendChild(songLink);
       const removeBtn = btn('&times;', 'sl-btn-icon sl-btn-danger', async () => {
-        set.songIds.splice(i, 1);
+        set.songIds.splice(set.songIds.indexOf(song.id), 1);
         await store.putSetlist(sl);
         navigate(`#setlist/${sl.id}/edit`);
       });
       row.appendChild(removeBtn);
-      section.appendChild(row);
+      rowContainer.appendChild(row);
     }
+
+    section.appendChild(rowContainer);
+    setupDragReorder(rowContainer, set, sl);
 
     section.appendChild(btn('+ add song', 'sl-btn-sm', async () => {
       const allSongs = await store.getAllSongs();
@@ -432,6 +444,78 @@ export async function renderSetlistEdit(root, setlistId) {
     navigate('#home');
   }));
   root.appendChild(danger);
+}
+
+function setupDragReorder(container, set, setlist) {
+  let dragState = null;
+
+  container.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('.sl-drag-handle');
+    if (!handle) return;
+    e.preventDefault();
+
+    const row = handle.closest('[data-song-id]');
+    if (!row) return;
+
+    row.classList.add('sl-dragging');
+    dragState = { row, startY: e.clientY };
+
+    const onMove = (e2) => {
+      if (!dragState) return;
+      e2.preventDefault();
+
+      const dy = e2.clientY - dragState.startY;
+      dragState.row.style.transform = `translateY(${dy}px)`;
+
+      const rows = [...container.querySelectorAll('[data-song-id]')];
+      const dragRect = dragState.row.getBoundingClientRect();
+      const dragMid = dragRect.top + dragRect.height / 2;
+      const ci = rows.indexOf(dragState.row);
+
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i] === dragState.row) continue;
+        const rect = rows[i].getBoundingClientRect();
+        const mid = rect.top + rect.height / 2;
+
+        if (ci < i && dragMid > mid) {
+          rows[i].after(dragState.row);
+          dragState.startY = e2.clientY;
+          dragState.row.style.transform = '';
+          break;
+        } else if (ci > i && dragMid < mid) {
+          rows[i].before(dragState.row);
+          dragState.startY = e2.clientY;
+          dragState.row.style.transform = '';
+          break;
+        }
+      }
+    };
+
+    const onUp = async () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+
+      if (!dragState) return;
+      dragState.row.classList.remove('sl-dragging');
+      dragState.row.style.transform = '';
+
+      const rows = [...container.querySelectorAll('[data-song-id]')];
+      set.songIds = rows.map(r => r.dataset.songId);
+      await store.putSetlist(setlist);
+
+      rows.forEach((r, i) => {
+        const num = r.querySelector('.sl-song-num');
+        if (num) num.textContent = i + 1;
+      });
+
+      dragState = null;
+    };
+
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  });
 }
 
 // ── Song Focus ──
@@ -524,10 +608,9 @@ export async function renderSongFocus(root, songId, setlistId) {
   const actionBar = el('div', 'sl-action-bar');
   if (song.chartUrl) {
     const inlineChartBtn = btn('chart', 'sl-btn-accent', () => {
-      navigate(`#song/${songId}/${setlistId || '_'}/annotate`);
+      navigate(`#song/${songId}/${setlistId || '_'}/chart`);
     });
     actionBar.appendChild(inlineChartBtn);
-    actionBar.appendChild(btn('open chart', 'sl-btn-ghost sl-btn-sm', () => window.open(song.chartUrl, '_blank')));
     const scrapeBtn = btn('scrape', 'sl-btn-ghost sl-btn-sm', async () => {
       scrapeBtn.textContent = 'scraping...';
       const updates = await deepScrapeChart(song);
@@ -773,6 +856,47 @@ export async function renderSongFocus(root, songId, setlistId) {
       navigate('#library');
     }));
     root.appendChild(danger);
+  }
+
+  // Swipe navigation + bottom nav bar (when viewing within a setlist)
+  if (setlist) {
+    const flatSongIds = setlist.sets.flatMap(s => s.songIds);
+    const currentIdx = flatSongIds.indexOf(songId);
+
+    const navBar = el('div', 'sl-song-nav');
+    const prevBtn = btn('&larr;', 'sl-btn-ghost sl-btn-sm', () => {
+      if (currentIdx > 0) navigate(`#song/${flatSongIds[currentIdx - 1]}/${setlistId}`);
+    });
+    if (currentIdx <= 0) { prevBtn.disabled = true; prevBtn.style.opacity = '0.3'; }
+    const posLabel = el('span', 'sl-song-nav-pos', `${currentIdx + 1} / ${flatSongIds.length}`);
+    const nextBtn = btn('next &rarr;', 'sl-btn-ghost sl-btn-sm', () => {
+      if (currentIdx < flatSongIds.length - 1) navigate(`#song/${flatSongIds[currentIdx + 1]}/${setlistId}`);
+    });
+    if (currentIdx >= flatSongIds.length - 1) { nextBtn.disabled = true; nextBtn.style.opacity = '0.3'; }
+    const performBtn = btn('perform', 'sl-btn-accent sl-btn-sm', () => navigate(`#perform/${setlistId}`));
+
+    navBar.appendChild(prevBtn);
+    navBar.appendChild(posLabel);
+    navBar.appendChild(nextBtn);
+    navBar.appendChild(performBtn);
+    root.appendChild(navBar);
+
+    let touchStartX = 0, touchStartY = 0;
+    root.addEventListener('touchstart', (e) => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    root.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      const dy = e.changedTouches[0].clientY - touchStartY;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+        if (dx < 0 && currentIdx < flatSongIds.length - 1) {
+          navigate(`#song/${flatSongIds[currentIdx + 1]}/${setlistId}`);
+        } else if (dx > 0 && currentIdx > 0) {
+          navigate(`#song/${flatSongIds[currentIdx - 1]}/${setlistId}`);
+        }
+      }
+    }, { passive: true });
   }
 }
 
@@ -1105,15 +1229,28 @@ export async function renderPerformMode(root, setlistId) {
   });
   fsBtn.title = 'Toggle fullscreen';
 
+  const detailBtn = btn('detail', 'sl-btn-ghost sl-btn-sm sl-perform-detail', () => {
+    const entry = entries[idx];
+    if (entry?.type === 'song') {
+      try { document.exitFullscreen?.(); } catch {}
+      try { wakeLock?.release(); } catch {}
+      navigate(`#song/${entry.songId}/${setlistId}`);
+    }
+  });
+  detailBtn.title = 'Song details';
+
   container.appendChild(progress);
   container.appendChild(exitBtn);
   container.appendChild(fsBtn);
+  container.appendChild(detailBtn);
   container.appendChild(counter);
   container.appendChild(content);
   root.appendChild(container);
 
   const songEntries = entries.filter(e => e.type === 'song');
   const totalSongs = songEntries.length;
+
+  let chartAnnotationCtrl = null;
 
   function getSongIndex() {
     let n = 0;
@@ -1124,6 +1261,8 @@ export async function renderPerformMode(root, setlistId) {
   }
 
   function render() {
+    if (chartAnnotationCtrl) { chartAnnotationCtrl.destroy(); chartAnnotationCtrl = null; }
+
     const entry = entries[idx];
     const songNum = getSongIndex();
     progress.style.width = `${(songNum / totalSongs) * 100}%`;
@@ -1153,15 +1292,39 @@ export async function renderPerformMode(root, setlistId) {
         ].filter(Boolean).join(' ');
         return `<div class="sl-perform-note">${badges ? badges + ' ' : ''}${n.text}</div>`;
       }).join('')}</div>` : ''}
-      ${song.chartUrl ? `<a class="sl-btn sl-btn-accent sl-perform-chart" href="${song.chartUrl}" target="_blank" rel="noopener">open chart</a>` : ''}
     `;
+
+    if (song.chartUrl) {
+      const chartWrap = el('div', 'sl-perform-chart-wrap');
+      const embedUrl = buildChartEmbedUrl(song.chartUrl);
+      if (embedUrl) {
+        const iframe = document.createElement('iframe');
+        iframe.src = embedUrl;
+        iframe.className = 'sl-perform-chart-iframe';
+        chartWrap.appendChild(iframe);
+      } else {
+        const img = document.createElement('img');
+        img.src = song.chartUrl;
+        img.className = 'sl-perform-chart-img';
+        chartWrap.appendChild(img);
+      }
+      const chartCanvas = document.createElement('canvas');
+      chartCanvas.className = 'sl-perform-chart-canvas';
+      chartWrap.appendChild(chartCanvas);
+      content.appendChild(chartWrap);
+
+      loadAnnotation(entry.songId).then(data => {
+        if (data?.strokes?.length) {
+          chartAnnotationCtrl = renderReadonlyAnnotations(chartCanvas, data.strokes);
+        }
+      });
+    }
   }
 
   function go(dir) {
     const next = idx + dir;
     if (next >= 0 && next < entries.length) {
       idx = next;
-      // Skip dividers if swiping
       if (entries[idx].type === 'divider') {
         render();
         setTimeout(() => {
@@ -1203,13 +1366,14 @@ export async function renderPerformMode(root, setlistId) {
 
   // Cleanup on navigation
   const cleanup = () => {
+    if (chartAnnotationCtrl) chartAnnotationCtrl.destroy();
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('hashchange', cleanup);
   };
   window.addEventListener('hashchange', cleanup);
 }
 
-// ── Annotation View (stylus/pen/touch drawing on chart) ──
+// ── Chart View (read-only by default, toggle to annotate) ──
 
 export async function renderAnnotation(root, songId, setlistId) {
   const song = await store.getSong(songId);
@@ -1221,8 +1385,25 @@ export async function renderAnnotation(root, songId, setlistId) {
 
   const backHash = setlistId ? `#song/${songId}/${setlistId}` : `#song/${songId}`;
   const toolbar = el('div', 'sl-annotation-toolbar');
-  toolbar.innerHTML = `
-    <button class="sl-btn sl-btn-icon" id="sl-ann-back" title="Back">&larr;</button>
+
+  const backBtn = btn('&larr;', 'sl-btn-icon', () => navigate(backHash));
+  toolbar.appendChild(backBtn);
+  toolbar.appendChild(el('span', 'sl-ann-sep'));
+
+  // View controls (visible in read-only mode)
+  const viewControls = el('div', 'sl-ann-controls');
+  viewControls.style.cssText = 'display:flex;align-items:center;gap:0.35rem;flex:1;justify-content:flex-end';
+  viewControls.appendChild(btn('edit chart', 'sl-btn-ghost sl-btn-sm', () => {
+    window.open(song.chartUrl, '_blank');
+  }));
+  viewControls.appendChild(btn('annotate', 'sl-btn-sm sl-btn-primary', () => enterAnnotateMode()));
+  toolbar.appendChild(viewControls);
+
+  // Draw controls (hidden by default)
+  const drawControls = el('div', 'sl-ann-controls');
+  drawControls.style.cssText = 'display:none;align-items:center;gap:0.35rem;flex-wrap:wrap';
+  drawControls.innerHTML = `
+    <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="pan" title="Scroll chart">🖐</button>
     <span class="sl-ann-sep"></span>
     <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="pen" title="Pen">✎</button>
     <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="highlighter" title="Highlighter">▮</button>
@@ -1241,7 +1422,10 @@ export async function renderAnnotation(root, songId, setlistId) {
     <button class="sl-btn sl-btn-sm sl-btn-ghost" id="sl-ann-clear" title="Clear all">Clear</button>
     <button class="sl-btn sl-btn-sm sl-btn-primary" id="sl-ann-save">Save</button>
   `;
-  toolbar.querySelector('#sl-ann-back').addEventListener('click', () => navigate(backHash));
+  const doneBtn = btn('done', 'sl-btn-ghost sl-btn-sm', () => exitAnnotateMode());
+  drawControls.appendChild(doneBtn);
+  toolbar.appendChild(drawControls);
+
   container.appendChild(toolbar);
 
   const canvasWrap = el('div', 'sl-annotation-wrap');
@@ -1262,13 +1446,46 @@ export async function renderAnnotation(root, songId, setlistId) {
 
   const canvas = document.createElement('canvas');
   canvas.className = 'sl-annotation-canvas';
+  canvas.style.pointerEvents = 'none';
   canvasWrap.appendChild(canvas);
   container.appendChild(canvasWrap);
   root.appendChild(container);
 
-  requestAnimationFrame(() => {
-    initAnnotationCanvas(canvas, songId, toolbar);
+  let readonlyCtrl = null;
+  let canvasCtrl = null;
+
+  requestAnimationFrame(async () => {
+    const data = await loadAnnotation(songId);
+    if (data?.strokes?.length) {
+      readonlyCtrl = renderReadonlyAnnotations(canvas, data.strokes);
+    }
   });
+
+  function enterAnnotateMode() {
+    viewControls.style.display = 'none';
+    drawControls.style.display = 'flex';
+    canvas.style.pointerEvents = '';
+    canvas.style.cursor = 'crosshair';
+    if (readonlyCtrl) { readonlyCtrl.destroy(); readonlyCtrl = null; }
+    canvasCtrl = initAnnotationCanvas(canvas, songId, drawControls);
+  }
+
+  async function exitAnnotateMode() {
+    const saveBtn = drawControls.querySelector('#sl-ann-save');
+    if (saveBtn) saveBtn.click();
+
+    if (canvasCtrl) { canvasCtrl.destroy(); canvasCtrl = null; }
+    viewControls.style.display = 'flex';
+    drawControls.style.display = 'none';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.cursor = '';
+
+    await new Promise(r => setTimeout(r, 100));
+    const data = await loadAnnotation(songId);
+    if (data?.strokes?.length) {
+      readonlyCtrl = renderReadonlyAnnotations(canvas, data.strokes);
+    }
+  }
 }
 
 function buildChartEmbedUrl(url) {
