@@ -19,7 +19,7 @@ export function getEmbedUrl(urlOrUri, compact = false) {
   const parsed = parseSpotifyUrl(urlOrUri);
   if (!parsed) return null;
   const h = compact ? '&compact=1' : '';
-  return `https://open.spotify.com/embed/${parsed.type}/${parsed.id}?theme=0${h}`;
+  return `https://open.spotify.com/embed/${parsed.type}/${parsed.id}?utm_source=generator&theme=0${h}`;
 }
 
 export function getSpotifyOpenUrl(urlOrUri) {
@@ -42,6 +42,7 @@ export async function fetchOEmbed(url) {
 export function renderSpotifyEmbed(container, urlOrUri, height = 80) {
   const embedUrl = getEmbedUrl(urlOrUri);
   if (!embedUrl) return;
+  const parsed = parseSpotifyUrl(urlOrUri);
   container.innerHTML = '';
   const iframe = document.createElement('iframe');
   iframe.src = embedUrl;
@@ -52,4 +53,12 @@ export function renderSpotifyEmbed(container, urlOrUri, height = 80) {
   iframe.loading = 'lazy';
   iframe.style.borderRadius = '8px';
   container.appendChild(iframe);
+
+  if (parsed) {
+    const link = document.createElement('a');
+    link.href = `https://open.spotify.com/${parsed.type}/${parsed.id}`;
+    link.textContent = 'open in spotify';
+    link.style.cssText = 'display:block;text-align:center;font-size:0.75rem;color:var(--text-dim);margin-top:0.25rem;text-decoration:none;';
+    container.appendChild(link);
+  }
 }
