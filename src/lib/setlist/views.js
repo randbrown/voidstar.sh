@@ -305,12 +305,52 @@ export async function renderSetlistView(root, setlistId) {
 
 // ── Setlist Edit ──
 
+// Undo stack for set edits, kept at module scope so it survives the in-place
+// re-renders that add/remove/reorder trigger. Reset when a different setlist
+// is opened for editing.
+let _setlistEditUndo = null;
+
 export async function renderSetlistEdit(root, setlistId) {
   let sl = await store.getSetlist(setlistId);
   if (!sl) { root.appendChild(emptyState('Setlist not found.')); return; }
 
   const bar = topBar('edit: ' + sl.name, `#setlist/${sl.id}`);
+
+  if (!_setlistEditUndo || _setlistEditUndo.id !== setlistId) {
+    _setlistEditUndo = { id: setlistId, stack: [] };
+  }
+  let reorderEnabled = false;
+
+  const snapshotSets = () => sl.sets.map(s => ({ name: s.name, songIds: [...s.songIds] }));
+  const pushUndo = (snap) => { _setlistEditUndo.stack.push(snap || snapshotSets()); updateUndoBtn(); };
+  function updateUndoBtn() {
+    const has = _setlistEditUndo.stack.length > 0;
+    undoBtn.disabled = !has;
+    undoBtn.style.opacity = has ? '' : '0.4';
+  }
+
+  const editActions = el('div', 'sl-actions');
+  const reorderBtn = btn('↕ reorder', 'sl-btn-ghost sl-btn-sm', () => {
+    reorderEnabled = !reorderEnabled;
+    root.classList.toggle('sl-reorder-on', reorderEnabled);
+    reorderBtn.classList.toggle('sl-btn-active', reorderEnabled);
+    reorderBtn.innerHTML = reorderEnabled ? '✓ done' : '↕ reorder';
+  });
+  reorderBtn.title = 'Unlock drag-to-reorder';
+  const undoBtn = btn('↶ undo', 'sl-btn-ghost sl-btn-sm', async () => {
+    const prev = _setlistEditUndo.stack.pop();
+    if (!prev) return;
+    sl.sets = prev;
+    await store.putSetlist(sl);
+    navigate(`#setlist/${sl.id}/edit`);
+  });
+  editActions.appendChild(reorderBtn);
+  editActions.appendChild(undoBtn);
+  bar.appendChild(editActions);
+  root.classList.remove('sl-reorder-on');
+
   root.appendChild(bar);
+  updateUndoBtn();
 
   const form = el('div', 'sl-edit-form');
   form.innerHTML = `
@@ -401,6 +441,7 @@ export async function renderSetlistEdit(root, setlistId) {
       newSets.push({ name: pSet.name, songIds });
     }
 
+    pushUndo();
     sl.sets = newSets;
     await store.putSetlist(sl);
     textarea.value = '';
@@ -430,6 +471,7 @@ export async function renderSetlistEdit(root, setlistId) {
       songLink.title = 'Go to song';
       row.appendChild(songLink);
       const removeBtn = btn('&times;', 'sl-btn-icon sl-btn-danger', async () => {
+        pushUndo();
         set.songIds.splice(set.songIds.indexOf(song.id), 1);
         await store.putSetlist(sl);
         navigate(`#setlist/${sl.id}/edit`);
@@ -439,7 +481,10 @@ export async function renderSetlistEdit(root, setlistId) {
     }
 
     section.appendChild(rowContainer);
-    setupDragReorder(rowContainer, set, sl);
+    setupDragReorder(rowContainer, set, sl, {
+      isEnabled: () => reorderEnabled,
+      onCommit: (snap) => pushUndo(snap),
+    });
 
     section.appendChild(btn('+ add song', 'sl-btn-sm', async () => {
       const allSongs = await store.getAllSongs();
@@ -450,6 +495,7 @@ export async function renderSetlistEdit(root, setlistId) {
         song = store.createSong(title);
         await store.putSong(song);
       }
+      pushUndo();
       set.songIds.push(song.id);
       await store.putSetlist(sl);
       navigate(`#setlist/${sl.id}/edit`);
@@ -459,6 +505,7 @@ export async function renderSetlistEdit(root, setlistId) {
 
   // Add set
   root.appendChild(btn('+ add set', 'sl-btn-ghost', async () => {
+    pushUndo();
     sl.sets.push({ name: `Set ${sl.sets.length + 1}`, songIds: [] });
     await store.putSetlist(sl);
     navigate(`#setlist/${sl.id}/edit`);
@@ -474,10 +521,11 @@ export async function renderSetlistEdit(root, setlistId) {
   root.appendChild(danger);
 }
 
-function setupDragReorder(container, set, setlist) {
+function setupDragReorder(container, set, setlist, opts = {}) {
   let dragState = null;
 
   container.addEventListener('pointerdown', (e) => {
+    if (opts.isEnabled && !opts.isEnabled()) return;
     const handle = e.target.closest('.sl-drag-handle');
     if (!handle) return;
     e.preventDefault();
@@ -485,6 +533,8 @@ function setupDragReorder(container, set, setlist) {
     const row = handle.closest('[data-song-id]');
     if (!row) return;
 
+    const beforeSnapshot = setlist.sets.map(s => ({ name: s.name, songIds: [...s.songIds] }));
+    const oldOrder = [...set.songIds];
     row.classList.add('sl-dragging');
     dragState = { row, startY: e.clientY };
 
@@ -529,7 +579,11 @@ function setupDragReorder(container, set, setlist) {
       dragState.row.style.transform = '';
 
       const rows = [...container.querySelectorAll('[data-song-id]')];
-      set.songIds = rows.map(r => r.dataset.songId);
+      const newOrder = rows.map(r => r.dataset.songId);
+      if (newOrder.join('|') !== oldOrder.join('|')) {
+        opts.onCommit?.(beforeSnapshot);
+      }
+      set.songIds = newOrder;
       await store.putSetlist(setlist);
 
       rows.forEach((r, i) => {

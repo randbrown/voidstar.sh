@@ -859,6 +859,7 @@ import '../../styles/themes.css';
 
     /* ── Drag reorder ── */
     .sl-drag-handle {
+      display: none;
       cursor: grab;
       color: var(--text-dim);
       font-size: 1.1rem;
@@ -867,6 +868,9 @@ import '../../styles/themes.css';
       user-select: none;
       flex-shrink: 0;
     }
+    /* Reordering is locked until the user toggles it on. */
+    .sl-reorder-on .sl-drag-handle { display: inline-block; }
+    .sl-reorder-on .sl-edit-row { background: var(--surface); }
     .sl-drag-handle:active { cursor: grabbing; }
     .sl-dragging {
       background: var(--surface-2) !important;
