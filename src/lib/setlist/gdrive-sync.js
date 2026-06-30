@@ -72,6 +72,9 @@ async function getAccessToken() {
         storeToken(response.access_token, parseInt(response.expires_in) || 3600);
         resolve(response.access_token);
       },
+      error_callback: (err) => {
+        reject(new Error(err.message || err.type || 'Authorization Error'));
+      },
     });
     client.requestAccessToken();
   });
