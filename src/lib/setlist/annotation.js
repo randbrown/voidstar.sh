@@ -120,6 +120,9 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   let undoStack = [];
   let selectedIndex = -1;
   let selDrag = null;
+  let longPressTimer = null;
+  let longPressStart = null;
+  const LONG_PRESS_MS = 500;
 
   function resize() {
     const wrap = canvas.parentElement;
@@ -211,6 +214,10 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     redraw();
   }
 
+  function cancelLongPress() {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  }
+
   function getPos(e) {
     const rect = canvas.getBoundingClientRect();
     const touch = e.touches?.[0] || e.changedTouches?.[0] || e;
@@ -267,6 +274,23 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
       size: lineWidth,
       points: [pos],
     };
+
+    // Long-press over an existing element grabs it and drops into select mode,
+    // so you can move/edit/delete without first switching to the select tool.
+    longPressStart = pos;
+    cancelLongPress();
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      const idx = hitTest(pos);
+      if (idx < 0) return;
+      currentStroke = null;
+      setTool('select');
+      selectedIndex = idx;
+      selDrag = { startPos: pos, orig: cloneStroke(strokes[idx]), moved: false };
+      redraw();
+      updateSelMenu();
+      try { navigator.vibrate?.(15); } catch {}
+    }, LONG_PRESS_MS);
   }
 
   function moveStroke(e) {
@@ -285,12 +309,18 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     if (!currentStroke) return;
     e.preventDefault();
     const pos = getPos(e);
+    // Real drawing motion means it's a stroke, not a long-press — disarm.
+    if (longPressTimer && longPressStart &&
+        Math.hypot(pos.x - longPressStart.x, pos.y - longPressStart.y) > 0.02) {
+      cancelLongPress();
+    }
     currentStroke.points.push(pos);
     redraw();
     drawStrokeOnCanvas(ctx, canvas, currentStroke);
   }
 
   function endStroke(e) {
+    cancelLongPress();
     if (tool === 'select') {
       if (selDrag?.moved) undoStack = [];
       selDrag = null;
@@ -313,20 +343,22 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   canvas.style.touchAction = 'none';
 
   // Toolbar wiring
+  function setTool(name) {
+    tool = name;
+    toolbar.querySelectorAll('.sl-ann-tool').forEach(t => {
+      t.classList.toggle('sl-btn-primary', t.dataset.tool === name);
+    });
+    if (name === 'pan') {
+      canvas.style.pointerEvents = 'none';
+      canvas.style.cursor = 'default';
+    } else {
+      canvas.style.pointerEvents = '';
+      canvas.style.cursor = name === 'select' ? 'move' : 'crosshair';
+    }
+    if (name !== 'select') clearSelection();
+  }
   toolbar.querySelectorAll('.sl-ann-tool').forEach(b => {
-    b.addEventListener('click', () => {
-      toolbar.querySelectorAll('.sl-ann-tool').forEach(t => t.classList.remove('sl-btn-primary'));
-      b.classList.add('sl-btn-primary');
-      tool = b.dataset.tool;
-      if (tool === 'pan') {
-        canvas.style.pointerEvents = 'none';
-        canvas.style.cursor = 'default';
-      } else {
-        canvas.style.pointerEvents = '';
-        canvas.style.cursor = tool === 'select' ? 'move' : 'crosshair';
-      }
-      if (tool !== 'select') clearSelection();
-    }, { signal });
+    b.addEventListener('click', () => setTool(b.dataset.tool), { signal });
   });
   toolbar.querySelector('[data-tool="pen"]')?.classList.add('sl-btn-primary');
 
@@ -447,7 +479,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   return {
     resize,
     redraw,
-    destroy() { ac.abort(); selMenu.remove(); },
+    destroy() { ac.abort(); cancelLongPress(); selMenu.remove(); },
     getStrokes() { return strokes; },
   };
 }
