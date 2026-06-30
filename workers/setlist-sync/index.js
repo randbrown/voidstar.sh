@@ -48,7 +48,10 @@ async function getSpotifyToken(env) {
     },
     body: 'grant_type=client_credentials',
   });
-  if (!res.ok) throw new Error(`Spotify token: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Spotify token ${res.status}: ${body}`);
+  }
   const data = await res.json();
   _spotifyToken = data.access_token;
   _spotifyExpiry = Date.now() + (data.expires_in - 60) * 1000;
@@ -58,13 +61,16 @@ async function getSpotifyToken(env) {
 async function handleSpotifyPlaylist(playlistId, request, env) {
   const token = await getSpotifyToken(env);
   const tracks = [];
-  let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?fields=items(track(name,artists(name),uri,external_urls)),next&limit=100`;
+  let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&market=US`;
 
   while (url) {
     const res = await fetch(url, {
       headers: { 'Authorization': `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(`Spotify API: ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Spotify API ${res.status}: ${body}`);
+    }
     const data = await res.json();
     for (const item of (data.items || [])) {
       const t = item.track;
@@ -100,7 +106,10 @@ async function handleDriveFolder(folderId, request, env) {
     if (pageToken) params.set('pageToken', pageToken);
 
     const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`);
-    if (!res.ok) throw new Error(`Drive API: ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Drive API ${res.status}: ${body}`);
+    }
     const data = await res.json();
 
     for (const f of (data.files || [])) {
