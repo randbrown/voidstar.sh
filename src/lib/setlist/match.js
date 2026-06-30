@@ -68,6 +68,32 @@ export function findBestMatch(songTitle, candidates, threshold = 0.7) {
 }
 
 /**
+ * Cross-reference matching: when multiple candidates share a similar title score,
+ * use artist from a secondary source to disambiguate.
+ * @param {string} songTitle
+ * @param {string} songArtist - known artist (from Drive or manual entry)
+ * @param {Array<{title: string, artist?: string}>} candidates
+ * @param {number} threshold
+ * @returns {{match: object, score: number} | null}
+ */
+export function findBestMatchWithArtist(songTitle, songArtist, candidates, threshold = 0.7) {
+  const scored = [];
+  for (const c of candidates) {
+    const titleScore = matchScore(songTitle, c.title);
+    if (titleScore < threshold) continue;
+    let artistBonus = 0;
+    if (songArtist && c.artist) {
+      const artistScore = matchScore(songArtist, c.artist);
+      if (artistScore >= 0.7) artistBonus = 0.15 * artistScore;
+    }
+    scored.push({ match: c, score: titleScore + artistBonus });
+  }
+  if (!scored.length) return null;
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0];
+}
+
+/**
  * Parse a Google Drive filename into title and artist.
  * Handles formats like: "06. Two Dozen Roses - Shenandoah" or "Song Title - Artist.pdf"
  */

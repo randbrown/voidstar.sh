@@ -1,8 +1,9 @@
 // Sync orchestration — matches songs against Spotify playlists and Google Drive folders.
 // Uses the setlist-sync Cloudflare Worker for API access when configured,
 // falls back to client-side matching with manually provided URLs.
+// Cross-references Spotify and Drive data for better disambiguation.
 
-import { findBestMatch, parseDriveFilename } from './match.js';
+import { findBestMatch, findBestMatchWithArtist, parseDriveFilename } from './match.js';
 import * as store from './store.js';
 import { parseSpotifyUrl } from './spotify.js';
 
@@ -54,7 +55,7 @@ async function runSync(songs, playlistUrls, onProgress) {
     done: 0,
   };
 
-  // Try playlist fetch first, fall back to batch search
+  // Fetch Spotify tracks from playlists
   let spotifyTracks = [];
   let playlistFailed = false;
   const uniqueUrls = [...new Set(playlistUrls)];
@@ -68,7 +69,7 @@ async function runSync(songs, playlistUrls, onProgress) {
     }
   }
 
-  // If playlist fetch failed (e.g. dev mode 403), use batch search instead
+  // If playlist fetch failed, use batch search instead
   const useSearch = playlistFailed && sources.workerUrl && spotifyTracks.length === 0;
   let searchResults = {};
   if (useSearch) {
@@ -83,6 +84,7 @@ async function runSync(songs, playlistUrls, onProgress) {
     }
   }
 
+  // Fetch Drive files
   const driveFiles = [];
   for (const folder of sources.driveFolders) {
     try {
@@ -96,12 +98,25 @@ async function runSync(songs, playlistUrls, onProgress) {
     if (chart.title) driveFiles.push({ title: chart.title, webViewLink: chart.url });
   }
 
+  // Build a Drive artist lookup: title → artist from Drive filenames
+  const driveArtistMap = {};
+  for (const f of driveFiles) {
+    if (f.artist) {
+      driveArtistMap[f.title.toLowerCase().trim()] = f.artist;
+    }
+  }
+
   for (const song of songs) {
     let updated = false;
 
+    // Spotify matching — cross-reference with Drive artist when available
     if (!song.spotifyUri) {
+      const knownArtist = song.artist || driveArtistMap[song.title.toLowerCase().trim()] || '';
+
       if (spotifyTracks.length) {
-        const result = findBestMatch(song.title, spotifyTracks);
+        const result = knownArtist
+          ? findBestMatchWithArtist(song.title, knownArtist, spotifyTracks)
+          : findBestMatch(song.title, spotifyTracks);
         if (result) {
           song.spotifyUri = result.match.spotifyUrl;
           if (result.match.artist && !song.artist) song.artist = result.match.artist;
@@ -121,8 +136,12 @@ async function runSync(songs, playlistUrls, onProgress) {
       }
     }
 
+    // Drive matching — cross-reference with Spotify artist
     if (!song.chartUrl && driveFiles.length) {
-      const result = findBestMatch(song.title, driveFiles);
+      const knownArtist = song.artist || '';
+      const result = knownArtist
+        ? findBestMatchWithArtist(song.title, knownArtist, driveFiles)
+        : findBestMatch(song.title, driveFiles);
       if (result) {
         song.chartUrl = result.match.webViewLink;
         if (result.match.artist && !song.artist) song.artist = result.match.artist;
@@ -192,10 +211,10 @@ export async function deepScrapeChart(song) {
     const meta = await res.json();
 
     const updates = {};
-    if (meta.inferredKey && !song.key) updates.key = meta.inferredKey;
-    if (meta.inferredBpm && !song.bpm) updates.bpm = meta.inferredBpm;
-    if (meta.inferredCapo && !song.capo) updates.capo = meta.inferredCapo;
-    if (meta.artist && !song.artist) updates.artist = meta.artist;
+    if (meta.inferredKey) updates.key = meta.inferredKey;
+    if (meta.inferredBpm) updates.bpm = meta.inferredBpm;
+    if (meta.inferredCapo) updates.capo = meta.inferredCapo;
+    if (meta.artist) updates.artist = meta.artist;
     if (meta.sections) updates._sections = meta.sections;
     if (meta.isNashvilleChart) updates._isNashvilleChart = true;
     if (meta.textContent) updates._textPreview = meta.textContent.slice(0, 500);

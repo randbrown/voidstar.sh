@@ -2,10 +2,11 @@
 // Follows the looper-store.js pattern: lazy singleton, tx() helper, async CRUD.
 
 const DB_NAME = 'voidstar.setlist';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const SONGS = 'songs';
 const NOTES = 'notes';
 const SETLISTS = 'setlists';
+const ANNOTATIONS = 'annotations';
 
 let _dbPromise = null;
 
@@ -33,12 +34,17 @@ function openDb() {
         const sl = db.createObjectStore(SETLISTS, { keyPath: 'id' });
         sl.createIndex('by-name', 'name', { unique: false });
       }
+      if (!db.objectStoreNames.contains(ANNOTATIONS)) {
+        db.createObjectStore(ANNOTATIONS, { keyPath: 'songId' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
   return _dbPromise;
 }
+
+export { openDb as _openDb };
 
 async function tx(storeName, mode) {
   const db = await openDb();
