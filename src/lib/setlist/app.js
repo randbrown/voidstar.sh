@@ -47,7 +47,7 @@ async function route() {
         break;
       case 'song':
         if (id) setLastSongId(id);
-        if (extra2 === 'annotate') {
+        if (extra2 === 'chart' || extra2 === 'annotate') {
           await renderAnnotation(_root, id, extra === '_' ? null : extra);
         } else {
           await renderSongFocus(_root, id, extra);

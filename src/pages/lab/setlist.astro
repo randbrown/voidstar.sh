@@ -845,6 +845,106 @@ import '../../styles/themes.css';
       margin-right: 0.25rem;
     }
 
+    /* ── Drag reorder ── */
+    .sl-drag-handle {
+      cursor: grab;
+      color: var(--text-dim);
+      font-size: 1.1rem;
+      padding: 0.2rem 0.15rem;
+      touch-action: none;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .sl-drag-handle:active { cursor: grabbing; }
+    .sl-dragging {
+      background: var(--surface-2) !important;
+      border-color: var(--accent) !important;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      z-index: 100;
+      position: relative;
+    }
+    .sl-drag-container {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Song link in edit mode ── */
+    .sl-edit-song-link {
+      font-size: 0.85rem;
+      opacity: 0.4;
+    }
+    .sl-edit-song-link:hover { opacity: 1; }
+
+    /* ── Song navigation bar (bottom, song focus) ── */
+    .sl-song-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      z-index: 20;
+    }
+    .sl-song-nav-pos {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      min-width: 3rem;
+      text-align: center;
+    }
+
+    /* ── Perform detail button ── */
+    .sl-perform-detail {
+      position: absolute;
+      top: 0.55rem;
+      right: 4.5rem;
+      z-index: 2;
+      opacity: 0.35;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .sl-perform-detail:hover { opacity: 0.8; }
+
+    /* ── Chart preview in perform mode ── */
+    .sl-perform-chart-wrap {
+      position: relative;
+      width: 100%;
+      margin-top: 0.75rem;
+      border-radius: var(--radius, 6px);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .sl-perform-chart-iframe {
+      width: 100%;
+      height: 60vh;
+      border: none;
+      display: block;
+    }
+    .sl-perform-chart-img {
+      width: 100%;
+      display: block;
+    }
+    .sl-perform-chart-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    /* ── Annotation controls container ── */
+    .sl-ann-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
     @media (min-width: 640px) {
       .sl-grid {
         display: grid;
