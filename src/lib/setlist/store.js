@@ -78,16 +78,21 @@ async function getOne(storeName, id) {
   return rec;
 }
 
+let _onWrite = null;
+export function setOnWrite(fn) { _onWrite = fn; }
+
 async function put(storeName, record) {
   const { store, done } = await tx(storeName, 'readwrite');
   store.put(record);
   await done;
+  _onWrite?.();
 }
 
 async function del(storeName, id) {
   const { store, done } = await tx(storeName, 'readwrite');
   store.delete(id);
   await done;
+  _onWrite?.();
 }
 
 // ── Songs ──
@@ -129,11 +134,12 @@ export function createNote(songId, text, source = 'typed') {
     songId,
     text,
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     source,
   };
 }
 
-export const putNote = (note) => put(NOTES, note);
+export const putNote = (note) => put(NOTES, { ...note, updatedAt: Date.now() });
 export const deleteNote = (id) => del(NOTES, id);
 
 export async function getNotesForSong(songId) {

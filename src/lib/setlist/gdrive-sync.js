@@ -151,3 +151,50 @@ export async function initGdriveSync() {
     },
   };
 }
+
+// ── Auto-sync: merge by "newer wins" ──
+
+function mergeById(localArr, remoteArr, keyField = 'id') {
+  const map = new Map();
+  for (const item of localArr) map.set(item[keyField], item);
+  for (const remote of remoteArr) {
+    const key = remote[keyField];
+    const local = map.get(key);
+    if (!local) {
+      map.set(key, remote);
+    } else {
+      const localTs = local.updatedAt || local.createdAt || 0;
+      const remoteTs = remote.updatedAt || remote.createdAt || 0;
+      if (remoteTs > localTs) map.set(key, remote);
+    }
+  }
+  return [...map.values()];
+}
+
+export function mergeData(local, remote) {
+  return {
+    songs: mergeById(local.songs || [], remote.songs || []),
+    notes: mergeById(local.notes || [], remote.notes || []),
+    setlists: mergeById(local.setlists || [], remote.setlists || []),
+    sources: local.sources || remote.sources || {},
+  };
+}
+
+let _pushTimer = null;
+let _syncClient = null;
+
+export function setSyncClient(client) { _syncClient = client; }
+
+export async function debouncedPush(exportFn, delayMs = 3000) {
+  if (!_syncClient) return;
+  if (_pushTimer) clearTimeout(_pushTimer);
+  _pushTimer = setTimeout(async () => {
+    _pushTimer = null;
+    try {
+      const data = await exportFn();
+      await _syncClient.push(data);
+    } catch (e) {
+      console.warn('[gdrive] auto-push failed:', e.message);
+    }
+  }, delayMs);
+}
