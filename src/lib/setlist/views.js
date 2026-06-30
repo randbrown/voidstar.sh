@@ -571,7 +571,7 @@ export async function renderSongFocus(root, songId, setlistId) {
   let isPlaying = false;
   if (song.spotifyUri && parseSpotifyUrl(song.spotifyUri)) {
     const embedWrap = el('div', 'sl-spotify-embed');
-    renderSpotifyEmbed(embedWrap, song.spotifyUri, 80);
+    renderSpotifyEmbed(embedWrap, song.spotifyUri, 152);
     root.appendChild(embedWrap);
 
     const tcRow = el('div', 'sl-timecode-row');
@@ -981,16 +981,28 @@ export async function renderSettings(root) {
     localStorage.setItem('voidstar.setlist.gdrive.clientId', clientIdInput.value.trim());
   });
   const gdriveActions = el('div', 'sl-action-bar');
+  function formatGdriveError(e) {
+    const msg = e.message || String(e);
+    if (msg.includes('invalid_client') || msg.includes('no registered origin') || msg.includes('Authorization Error')) {
+      return `OAuth error: add ${location.origin} as an authorized JavaScript origin in your Google Cloud Console → Credentials → OAuth client ID`;
+    }
+    if (msg.includes('popup_closed') || msg.includes('user_cancel')) {
+      return 'Sign-in cancelled.';
+    }
+    return `Error: ${msg}`;
+  }
+
   gdriveActions.appendChild(btn('connect google drive', 'sl-btn-primary sl-btn-sm', async () => {
     try {
       const gdrive = await initGdriveSync();
       if (!gdrive) return;
       gdriveStatus.textContent = 'Connected. Syncing...';
+      gdriveStatus.style.color = '';
       await gdrive.push(await store.exportAll());
       gdriveStatus.textContent = 'Synced to Google Drive.';
       gdriveStatus.style.color = 'var(--green)';
     } catch (e) {
-      gdriveStatus.textContent = `Error: ${e.message}`;
+      gdriveStatus.textContent = formatGdriveError(e);
       gdriveStatus.style.color = 'var(--pink)';
     }
   }));
@@ -999,6 +1011,7 @@ export async function renderSettings(root) {
       const gdrive = await initGdriveSync();
       if (!gdrive) return;
       gdriveStatus.textContent = 'Pulling...';
+      gdriveStatus.style.color = '';
       const data = await gdrive.pull();
       if (data) {
         await store.importAll(data);
@@ -1008,7 +1021,7 @@ export async function renderSettings(root) {
         gdriveStatus.textContent = 'No data found in Drive.';
       }
     } catch (e) {
-      gdriveStatus.textContent = `Error: ${e.message}`;
+      gdriveStatus.textContent = formatGdriveError(e);
       gdriveStatus.style.color = 'var(--pink)';
     }
   }));

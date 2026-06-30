@@ -171,6 +171,9 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
     const res = await fetch(`${workerUrl}/spotify/playlist/${parsed.id}`);
     if (!res.ok) {
       const body = await res.text().catch(() => '');
+      if (res.status === 403 || res.status === 401) {
+        throw new Error('Spotify credentials invalid — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your worker env vars');
+      }
       throw new Error(`Spotify API ${res.status}`);
     }
     return await res.json();
