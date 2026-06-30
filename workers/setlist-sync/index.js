@@ -150,7 +150,7 @@ async function handleDriveFolder(folderId, request, env) {
     const params = new URLSearchParams({
       q: `'${folderId}' in parents and trashed = false`,
       key: apiKey,
-      fields: 'nextPageToken,files(id,name,mimeType,webViewLink)',
+      fields: 'nextPageToken,files(id,name,mimeType,webViewLink,description)',
       pageSize: '100',
     });
     if (pageToken) params.set('pageToken', pageToken);
@@ -164,12 +164,14 @@ async function handleDriveFolder(folderId, request, env) {
 
     for (const f of (data.files || [])) {
       const parsed = parseDriveFilename(f.name);
+      const meta = extractChartMeta(f.name, f.description || '');
       files.push({
         title: parsed.title,
         artist: parsed.artist,
         webViewLink: f.webViewLink,
         mimeType: f.mimeType,
         name: f.name,
+        ...meta,
       });
     }
     pageToken = data.nextPageToken || '';
@@ -178,6 +180,121 @@ async function handleDriveFolder(folderId, request, env) {
   return corsResponse(JSON.stringify(files), 200, request, env, {
     'Cache-Control': 'public, max-age=300',
   });
+}
+
+async function handleDriveFileMeta(fileId, request, env) {
+  const apiKey = env.GOOGLE_API_KEY;
+  if (!apiKey) return corsResponse(JSON.stringify({ error: 'GOOGLE_API_KEY not configured' }), 500, request, env);
+
+  const params = new URLSearchParams({
+    key: apiKey,
+    fields: 'id,name,mimeType,webViewLink,description,properties,appProperties',
+  });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?${params}`);
+  if (!res.ok) throw new Error(`Drive API ${res.status}`);
+  const file = await res.json();
+
+  const parsed = parseDriveFilename(file.name);
+  const meta = extractChartMeta(file.name, file.description || '');
+
+  // Try to export as plain text for Google Docs to scrape more data
+  let textContent = '';
+  if (file.mimeType === 'application/vnd.google-apps.document') {
+    try {
+      const exportRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain&key=${apiKey}`
+      );
+      if (exportRes.ok) textContent = await exportRes.text();
+    } catch {}
+  }
+
+  const textMeta = textContent ? extractFromText(textContent) : {};
+
+  return corsResponse(JSON.stringify({
+    ...parsed,
+    ...meta,
+    ...textMeta,
+    name: file.name,
+    mimeType: file.mimeType,
+    webViewLink: file.webViewLink,
+    textContent: textContent.slice(0, 2000),
+  }), 200, request, env);
+}
+
+// Extract musical key, tempo, capo, time signature from filename and description
+function extractChartMeta(filename, description) {
+  const combined = `${filename} ${description}`;
+  const meta = {};
+
+  // Key detection: look for standalone key names (A, Bb, C#m, etc.)
+  const keyMatch = combined.match(/\b(key\s*(?:of\s*)?[:=]?\s*)?([A-G][b#]?(?:m(?:aj|in)?|sus|dim|aug)?)\b/i);
+  if (keyMatch && keyMatch[2]) {
+    const k = keyMatch[2];
+    if (k.length > 1 || /key/i.test(keyMatch[1] || '')) {
+      meta.inferredKey = k.charAt(0).toUpperCase() + k.slice(1);
+    }
+  }
+
+  // BPM/tempo
+  const bpmMatch = combined.match(/(\d{2,3})\s*bpm/i);
+  if (bpmMatch) meta.inferredBpm = parseInt(bpmMatch[1]);
+
+  // Capo
+  const capoMatch = combined.match(/capo\s*(\d{1,2})/i);
+  if (capoMatch) meta.inferredCapo = parseInt(capoMatch[1]);
+
+  // Time signature
+  const timeMatch = combined.match(/\b([2-9])\/([248])\b/);
+  if (timeMatch) meta.inferredTime = `${timeMatch[1]}/${timeMatch[2]}`;
+
+  return meta;
+}
+
+// Extract musical info from exported text content of a Google Doc
+function extractFromText(text) {
+  const meta = {};
+  const lines = text.split('\n').slice(0, 30);
+  const header = lines.join('\n');
+
+  // Key in upper left area — Nashville charts often put "Key: A" or just "A" or "G"
+  const keyPatterns = [
+    /key\s*(?:of\s*)?[:=]\s*([A-G][b#]?(?:m(?:aj|in)?)?)/i,
+    /^([A-G][b#]?(?:m(?:aj|in)?)?)\s*$/m,
+    /^\s*([A-G][b#]?(?:m(?:aj|in)?)?)\s*(?:major|minor)?\s*$/im,
+  ];
+  for (const re of keyPatterns) {
+    const m = header.match(re);
+    if (m) {
+      meta.inferredKey = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+      break;
+    }
+  }
+
+  // BPM
+  const bpmMatch = header.match(/(?:tempo|bpm)\s*[:=]?\s*(\d{2,3})/i) ||
+                    header.match(/(\d{2,3})\s*bpm/i);
+  if (bpmMatch) meta.inferredBpm = parseInt(bpmMatch[1]);
+
+  // Capo
+  const capoMatch = header.match(/capo\s*[:=]?\s*(\d{1,2})/i);
+  if (capoMatch) meta.inferredCapo = parseInt(capoMatch[1]);
+
+  // Time signature
+  const timeMatch = header.match(/(?:time\s*(?:sig)?|meter)\s*[:=]?\s*([2-9])\/([248])/i);
+  if (timeMatch) meta.inferredTime = `${timeMatch[1]}/${timeMatch[2]}`;
+
+  // Nashville Number patterns — try to detect if this is a NNS chart
+  const nnsNumbers = header.match(/\b[1-7][b#]?\b/g);
+  if (nnsNumbers && nnsNumbers.length >= 4) meta.isNashvilleChart = true;
+
+  // Look for section markers
+  const sections = [];
+  const sectionRe = /\b(intro|verse|chorus|bridge|pre-chorus|outro|solo|interlude|tag|coda|turnaround|vamp)\b/gi;
+  let sm;
+  while ((sm = sectionRe.exec(text))) sections.push(sm[1].toLowerCase());
+  if (sections.length) meta.sections = [...new Set(sections)];
+
+  return meta;
 }
 
 function parseDriveFilename(name) {
@@ -225,6 +342,11 @@ export default {
       const driveMatch = url.pathname.match(/^\/drive\/folder\/([a-zA-Z0-9_-]+)$/);
       if (driveMatch) {
         return await handleDriveFolder(driveMatch[1], request, env);
+      }
+
+      const driveFileMatch = url.pathname.match(/^\/drive\/file\/([a-zA-Z0-9_-]+)\/meta$/);
+      if (driveFileMatch) {
+        return await handleDriveFileMeta(driveFileMatch[1], request, env);
       }
 
       return corsResponse(JSON.stringify({ error: 'not found' }), 404, request, env);

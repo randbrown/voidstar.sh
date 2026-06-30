@@ -678,6 +678,88 @@ import '../../styles/themes.css';
       border-radius: 3px;
     }
 
+    /* ── Song card artist ── */
+    .sl-song-card-artist {
+      font-weight: 400;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-left: 0.15rem;
+    }
+
+    /* ── Fullscreen toggle in performance mode ── */
+    .sl-perform-fs {
+      position: absolute;
+      top: 0.5rem;
+      left: 3rem;
+      z-index: 2;
+      font-size: 1.3rem;
+      opacity: 0.4;
+    }
+    .sl-perform-fs:hover { opacity: 1; }
+
+    /* ── Annotation view ── */
+    .sl-annotation-container {
+      position: fixed;
+      inset: 0;
+      background: var(--void);
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+    }
+    .sl-annotation-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      z-index: 2;
+    }
+    .sl-ann-sep {
+      width: 1px;
+      height: 1.2rem;
+      background: var(--border);
+      margin: 0 0.2rem;
+    }
+    .sl-ann-color {
+      width: 2rem;
+      height: 1.8rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: transparent;
+      cursor: pointer;
+      padding: 0;
+    }
+    .sl-ann-size {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      padding: 0.2rem 0.4rem;
+    }
+    .sl-annotation-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    .sl-annotation-iframe,
+    .sl-annotation-img {
+      width: 100%;
+      height: 100%;
+      border: none;
+      display: block;
+    }
+    .sl-annotation-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+    }
+
     @media (min-width: 640px) {
       .sl-grid {
         display: grid;

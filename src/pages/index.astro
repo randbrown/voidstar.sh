@@ -112,7 +112,14 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
         particle systems, WebGL shaders, pose tracking, generative audio.
         No install required.
       </p>
-      <a href="/lab" class="btn btn-outline">open lab →</a>
+      <div class="lab-links">
+        <a href="/lab/setlist" class="lab-link"><span class="lab-link-accent">♫</span> Setlist</a>
+        <a href="/qualia" class="lab-link"><span class="lab-link-accent">◈</span> Qualia</a>
+        <a href="/lab/cymatics" class="lab-link"><span class="lab-link-accent">∿</span> Cymatics</a>
+        <a href="/lab/spectrum-pose" class="lab-link"><span class="lab-link-accent">▮</span> Spectrum Pose</a>
+        <a href="/lab/pose-particles" class="lab-link"><span class="lab-link-accent">⊹</span> Pose Particles</a>
+      </div>
+      <a href="/lab" class="section-link">all experiments →</a>
     </div>
   </section>
 
@@ -244,6 +251,26 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
   color: var(--text-muted);
   max-width: 60ch;
   line-height: 1.7;
+  margin-bottom: 1.25rem;
+}
+.lab-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin-bottom: 1.5rem;
 }
+.lab-link {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.85rem;
+  border-radius: var(--radius-lg, 10px);
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.lab-link:hover { color: var(--accent); border-color: var(--accent); }
+.lab-link-accent { color: var(--accent); font-size: 1rem; }
 </style>

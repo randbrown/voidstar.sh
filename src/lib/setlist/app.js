@@ -1,7 +1,7 @@
 // Setlist app controller — hash-based routing and view dispatch.
 
 import * as store from './store.js';
-import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings } from './views.js';
+import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings, renderAnnotation } from './views.js';
 
 let _root = null;
 let _lastSongId = null;
@@ -17,12 +17,12 @@ function parseHash() {
   const h = (location.hash || '#').slice(1);
   const parts = h.split('/').filter(Boolean);
   const view = parts[0] || 'home';
-  return { view, parts, id: parts[1] || null, extra: parts[2] || null };
+  return { view, parts, id: parts[1] || null, extra: parts[2] || null, extra2: parts[3] || null };
 }
 
 async function route() {
   if (!_root) return;
-  const { view, id, extra } = parseHash();
+  const { view, id, extra, extra2 } = parseHash();
 
   _root.innerHTML = '';
   _root.className = 'setlist-root';
@@ -47,7 +47,11 @@ async function route() {
         break;
       case 'song':
         if (id) setLastSongId(id);
-        await renderSongFocus(_root, id, extra);
+        if (extra2 === 'annotate') {
+          await renderAnnotation(_root, id, extra === '_' ? null : extra);
+        } else {
+          await renderSongFocus(_root, id, extra);
+        }
         break;
       case 'perform':
         await renderPerformMode(_root, id);
