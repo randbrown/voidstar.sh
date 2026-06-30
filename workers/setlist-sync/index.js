@@ -3,12 +3,14 @@
 // songs to Spotify tracks and Google Drive charts.
 //
 // Routes:
-//   GET /spotify/playlist/:id  → playlist track list
-//   GET /drive/folder/:id      → folder file list
-//   GET /health                → ok
+//   GET /spotify/playlist/:id       → playlist track list
+//   GET /spotify/search?q=...       → search for a track
+//   GET /spotify/search-batch       → search multiple songs (POST body: {titles:[]})
+//   GET /drive/folder/:id           → folder file list
+//   GET /health                     → ok
 
 const CORS_HEADERS = {
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Max-Age': '86400',
 };
@@ -89,6 +91,54 @@ async function handleSpotifyPlaylist(playlistId, request, env) {
   });
 }
 
+async function searchSpotifyTrack(token, query) {
+  const params = new URLSearchParams({
+    q: query,
+    type: 'track',
+    limit: '1',
+    market: 'US',
+  });
+  const res = await fetch(`https://api.spotify.com/v1/search?${params}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const t = data.tracks?.items?.[0];
+  if (!t) return null;
+  return {
+    title: t.name,
+    artist: t.artists?.map(a => a.name).join(', ') || '',
+    spotifyUrl: t.external_urls?.spotify || '',
+  };
+}
+
+async function handleSpotifySearch(request, env) {
+  const url = new URL(request.url);
+  const q = url.searchParams.get('q');
+  if (!q) return corsResponse(JSON.stringify({ error: 'missing q param' }), 400, request, env);
+
+  const token = await getSpotifyToken(env);
+  const result = await searchSpotifyTrack(token, q);
+  return corsResponse(JSON.stringify(result), result ? 200 : 404, request, env);
+}
+
+async function handleSpotifySearchBatch(request, env) {
+  const body = await request.json().catch(() => null);
+  if (!body?.titles?.length) {
+    return corsResponse(JSON.stringify({ error: 'POST {titles: ["song1", "song2"]}' }), 400, request, env);
+  }
+
+  const token = await getSpotifyToken(env);
+  const results = {};
+  for (const title of body.titles.slice(0, 100)) {
+    results[title] = await searchSpotifyTrack(token, title);
+  }
+
+  return corsResponse(JSON.stringify(results), 200, request, env, {
+    'Cache-Control': 'public, max-age=300',
+  });
+}
+
 async function handleDriveFolder(folderId, request, env) {
   const apiKey = env.GOOGLE_API_KEY;
   if (!apiKey) return corsResponse(JSON.stringify({ error: 'GOOGLE_API_KEY not configured' }), 500, request, env);
@@ -159,6 +209,14 @@ export default {
     }
 
     try {
+      if (url.pathname === '/spotify/search-batch' && request.method === 'POST') {
+        return await handleSpotifySearchBatch(request, env);
+      }
+
+      if (url.pathname === '/spotify/search') {
+        return await handleSpotifySearch(request, env);
+      }
+
       const spotifyMatch = url.pathname.match(/^\/spotify\/playlist\/([a-zA-Z0-9]+)$/);
       if (spotifyMatch) {
         return await handleSpotifyPlaylist(spotifyMatch[1], request, env);
