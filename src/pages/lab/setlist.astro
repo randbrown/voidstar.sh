@@ -67,8 +67,9 @@ import '../../styles/themes.css';
     /* ── Buttons ── */
     .sl-btn {
       font-family: var(--font-mono);
-      font-size: 0.8rem;
-      padding: 0.4rem 0.75rem;
+      font-size: 0.85rem;
+      padding: 0.55rem 0.9rem;
+      min-height: 2.6rem;
       border-radius: var(--radius, 6px);
       border: 1px solid var(--border);
       background: var(--surface);
@@ -77,9 +78,11 @@ import '../../styles/themes.css';
       text-decoration: none;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 0.3rem;
       transition: border-color 0.15s, background 0.15s;
       white-space: nowrap;
+      touch-action: manipulation;
     }
     .sl-btn:hover { border-color: var(--border-2); }
     .sl-btn-primary { background: var(--accent); color: var(--void); border-color: var(--accent); }
@@ -90,10 +93,10 @@ import '../../styles/themes.css';
     .sl-btn-ghost:hover { color: var(--text); border-color: var(--border-2); }
     .sl-btn-danger { color: var(--pink); border-color: transparent; background: transparent; }
     .sl-btn-danger:hover { background: rgba(255, 94, 126, 0.1); }
-    .sl-btn-icon { background: transparent; border: none; font-size: 1.2rem; padding: 0.2rem 0.5rem; color: var(--text-muted); }
+    .sl-btn-icon { background: transparent; border: none; font-size: 1.3rem; padding: 0.3rem 0.6rem; min-height: 2.6rem; min-width: 2.6rem; color: var(--text-muted); }
     .sl-btn-icon:hover { color: var(--text); }
-    .sl-btn-sm { font-size: 0.75rem; padding: 0.3rem 0.6rem; }
-    .sl-btn-xs { font-size: 0.7rem; padding: 0.15rem 0.4rem; }
+    .sl-btn-sm { font-size: 0.8rem; padding: 0.45rem 0.7rem; min-height: 2.25rem; }
+    .sl-btn-xs { font-size: 0.74rem; padding: 0.35rem 0.55rem; min-height: 2rem; }
     .sl-btn-spotify { background: #1DB954; color: #000; border-color: #1DB954; }
     .sl-btn-mic {
       background: var(--surface);
@@ -495,6 +498,36 @@ import '../../styles/themes.css';
       border-top: 1px solid var(--border);
     }
 
+    /* ── Undo toast ── *
+       A live set is full of fat-finger taps; destructive actions (deleting a
+       note) drop a toast here that restores the item on tap. Sits above the
+       bottom nav so the performer can reach it without hunting. */
+    .sl-toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(4.5rem + env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      z-index: 1200;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      max-width: calc(100vw - 2rem);
+      padding: 0.6rem 0.75rem 0.6rem 1rem;
+      background: var(--surface-2);
+      border: 1px solid var(--border-2);
+      border-radius: 999px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+      font-size: 0.85rem;
+      color: var(--text);
+      animation: sl-toast-in 0.18s ease-out;
+    }
+    .sl-toast-msg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sl-toast .sl-btn { min-height: 2.2rem; }
+    @keyframes sl-toast-in {
+      from { opacity: 0; transform: translate(-50%, 0.5rem); }
+      to   { opacity: 1; transform: translate(-50%, 0); }
+    }
+
     /* ── Performance Mode ── */
     .sl-perform {
       max-width: none;
@@ -508,6 +541,14 @@ import '../../styles/themes.css';
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      /* ── Low-light stage palette ──
+         Pull text off pure white toward the theme's warm accent and knock the
+         intensity down a notch. On a near-black background this keeps a strong
+         contrast ratio (easy to read at a glance) while avoiding a bright white
+         glow that would pollute a dark stage and wreck the performer's night
+         vision. Built from theme tokens so it adapts per theme. */
+      --sl-stage-text: color-mix(in srgb, var(--text) 70%, var(--amber));
+      --sl-stage-muted: color-mix(in srgb, var(--text-muted) 82%, var(--amber));
     }
     .sl-perform-progress {
       position: absolute;
@@ -539,9 +580,10 @@ import '../../styles/themes.css';
     .sl-perform-content {
       flex: 1;
       overflow-y: auto;
-      padding: 3rem 1.5rem 1rem;
+      padding: 3rem 1.5rem 1.5rem;
       display: flex;
       flex-direction: column;
+      color: var(--sl-stage-text);
       -webkit-overflow-scrolling: touch;
     }
     .sl-perform-title {
@@ -549,10 +591,11 @@ import '../../styles/themes.css';
       font-weight: 700;
       line-height: 1.15;
       margin-bottom: 0.3rem;
+      color: var(--sl-stage-text);
     }
     .sl-perform-artist {
       font-size: 1.1rem;
-      color: var(--text-muted);
+      color: var(--sl-stage-muted);
       margin-bottom: 0.75rem;
     }
     .sl-perform-badges {
@@ -583,12 +626,13 @@ import '../../styles/themes.css';
       margin-bottom: 1rem;
     }
     .sl-perform-note {
-      font-size: 1rem;
-      line-height: 1.5;
-      background: var(--surface);
+      font-size: 1.05rem;
+      line-height: 1.55;
+      color: var(--sl-stage-text);
+      background: color-mix(in srgb, var(--surface) 72%, var(--void));
       border: 1px solid var(--border);
       border-radius: var(--radius, 6px);
-      padding: 0.6rem 0.85rem;
+      padding: 0.7rem 0.95rem;
     }
     .sl-perform-chart {
       align-self: flex-start;
@@ -909,10 +953,17 @@ import '../../styles/themes.css';
     }
     .sl-song-nav-pos {
       font-family: var(--font-mono);
-      font-size: 0.8rem;
+      font-size: 0.85rem;
       color: var(--text-dim);
       min-width: 3rem;
       text-align: center;
+    }
+    /* Larger touch targets on the song-focus bottom nav too. */
+    .sl-song-nav .sl-btn {
+      flex: 1;
+      max-width: 11rem;
+      min-height: 3rem;
+      font-size: 0.9rem;
     }
 
     /* ── Perform detail button ── */
@@ -934,7 +985,13 @@ import '../../styles/themes.css';
       /* Aspect locked at runtime to the annotation's authoring ratio so the
          overlay lines up; this is just the pre-load fallback. */
       aspect-ratio: 3 / 4;
+      /* Never let the surrounding notes squeeze the chart: in the flex-column
+         scroll container it would otherwise shrink, forcing the embed's own
+         inner scrollbar. Keeping its full height means the whole page (notes +
+         chart) scrolls as one document — a single scrollbar. */
+      flex-shrink: 0;
       margin-top: 0.75rem;
+      margin-bottom: 0.5rem;
       border-radius: var(--radius, 6px);
       overflow: hidden;
       border: 1px solid var(--border);
@@ -961,12 +1018,21 @@ import '../../styles/themes.css';
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 0.75rem;
-      padding: 0.5rem 1rem;
-      padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+      gap: 0.6rem;
+      padding: 0.6rem 0.85rem;
+      padding-bottom: calc(0.6rem + env(safe-area-inset-bottom));
       background: var(--surface);
       border-top: 1px solid var(--border);
       flex-shrink: 0;
+    }
+    /* Big thumb-reach prev/next for live use — fill the bar so an imprecise
+       tap in low light still lands. */
+    .sl-perform-nav .sl-btn {
+      flex: 1;
+      max-width: 13rem;
+      min-height: 3.25rem;
+      font-size: 1rem;
+      padding: 0.8rem 1rem;
     }
 
     /* ── Invert colors toggle for chart (top control strip) ── */
