@@ -5,8 +5,37 @@ import { navigate, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
+import { initGdriveSync, isGdriveSyncEnabled } from './gdrive-sync.js';
+import { initAnnotationCanvas } from './annotation.js';
+
+function downloadJson(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function uploadJson() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) { resolve(null); return; }
+      try {
+        const text = await file.text();
+        resolve(JSON.parse(text));
+      } catch { resolve(null); }
+    });
+    input.click();
+  });
+}
 
 // ── Helpers ──
 
@@ -54,6 +83,11 @@ function vocalistDot(code, legend) {
 
 export async function renderDashboard(root) {
   const bar = topBar('setlist');
+  const homeLink = el('a', 'sl-btn sl-btn-icon', '⬡');
+  homeLink.href = '/';
+  homeLink.title = 'voidstar.sh';
+  homeLink.style.textDecoration = 'none';
+  bar.insertBefore(homeLink, bar.firstChild);
   const actions = el('div', 'sl-actions');
   actions.appendChild(btn('+ new setlist', 'sl-btn-primary', async () => {
     const name = prompt('Setlist name:');
@@ -70,27 +104,46 @@ export async function renderDashboard(root) {
   const setlists = await store.getAllSetlists();
   if (!setlists.length) {
     root.appendChild(emptyState('No setlists yet. Create one or import from text.'));
-    return;
+  } else {
+    setlists.sort((a, b) => b.updatedAt - a.updatedAt);
+    const grid = el('div', 'sl-grid');
+    for (const sl of setlists) {
+      const songCount = sl.sets.reduce((n, s) => n + s.songIds.length, 0);
+      const card = el('div', 'sl-setlist-card');
+      card.innerHTML = `
+        <div class="sl-setlist-card-title">${sl.name}</div>
+        <div class="sl-setlist-card-meta">
+          ${sl.venue ? `<span>${sl.venue}</span>` : ''}
+          ${sl.gigDate ? `<span>${sl.gigDate}</span>` : ''}
+          <span>${songCount} song${songCount !== 1 ? 's' : ''}</span>
+          <span>${sl.sets.length} set${sl.sets.length !== 1 ? 's' : ''}</span>
+        </div>
+      `;
+      card.addEventListener('click', () => navigate(`#setlist/${sl.id}`));
+      grid.appendChild(card);
+    }
+    root.appendChild(grid);
   }
 
-  setlists.sort((a, b) => b.updatedAt - a.updatedAt);
-  const grid = el('div', 'sl-grid');
-  for (const sl of setlists) {
-    const songCount = sl.sets.reduce((n, s) => n + s.songIds.length, 0);
-    const card = el('div', 'sl-setlist-card');
-    card.innerHTML = `
-      <div class="sl-setlist-card-title">${sl.name}</div>
-      <div class="sl-setlist-card-meta">
-        ${sl.venue ? `<span>${sl.venue}</span>` : ''}
-        ${sl.gigDate ? `<span>${sl.gigDate}</span>` : ''}
-        <span>${songCount} song${songCount !== 1 ? 's' : ''}</span>
-        <span>${sl.sets.length} set${sl.sets.length !== 1 ? 's' : ''}</span>
-      </div>
-    `;
-    card.addEventListener('click', () => navigate(`#setlist/${sl.id}`));
-    grid.appendChild(card);
-  }
-  root.appendChild(grid);
+  // Export/Import section
+  const dataSection = el('div', 'sl-section');
+  dataSection.innerHTML = '<div class="sl-section-title">data</div>';
+  const dataActions = el('div', 'sl-action-bar');
+  dataActions.appendChild(btn('export all', 'sl-btn-ghost sl-btn-sm', async () => {
+    const data = await store.exportAll();
+    downloadJson(data, `setlist-backup-${new Date().toISOString().slice(0, 10)}.json`);
+  }));
+  dataActions.appendChild(btn('import', 'sl-btn-ghost sl-btn-sm', async () => {
+    const data = await uploadJson();
+    if (!data) return;
+    if (data.type === 'setlist') await store.importSetlist(data);
+    else if (data.type === 'song') await store.importSong(data);
+    else if (data.type === 'sources') await store.importSources(data);
+    else await store.importAll(data);
+    navigate('#home');
+  }));
+  dataSection.appendChild(dataActions);
+  root.appendChild(dataSection);
 }
 
 // ── Song Library ──
@@ -155,6 +208,10 @@ export async function renderSetlistView(root, setlistId) {
   actions.appendChild(btn('sync', 'sl-btn-ghost', () => runSetlistSync(root, sl.id)));
   actions.appendChild(btn('perform', 'sl-btn-accent', () => navigate(`#perform/${sl.id}`)));
   actions.appendChild(btn('edit', 'sl-btn-ghost', () => navigate(`#setlist/${sl.id}/edit`)));
+  actions.appendChild(btn('⇣', 'sl-btn-icon', async () => {
+    const data = await store.exportSetlist(sl.id);
+    if (data) downloadJson(data, `setlist-${sl.name.replace(/\s+/g, '-').toLowerCase()}.json`);
+  }));
   bar.appendChild(actions);
   root.appendChild(bar);
 
@@ -190,7 +247,7 @@ export async function renderSetlistView(root, setlistId) {
       card.innerHTML = `
         <div class="sl-song-card-row">
           <span class="sl-song-num">${i + 1}</span>
-          <span class="sl-song-card-title">${merged.title}</span>
+          <span class="sl-song-card-title">${merged.title}${merged.artist ? ` <span class="sl-song-card-artist">${merged.artist}</span>` : ''}</span>
           ${keyBadge(merged.key, merged._origKey)}
           ${vocalistDot(vocalist, sl.vocalistLegend)}
         </div>
@@ -453,6 +510,30 @@ export async function renderSongFocus(root, songId, setlistId) {
   if (song.chartUrl) {
     const chartBtn = btn('open chart', 'sl-btn-accent', () => window.open(song.chartUrl, '_blank'));
     actionBar.appendChild(chartBtn);
+    actionBar.appendChild(btn('annotate', 'sl-btn-ghost sl-btn-sm', () => {
+      navigate(`#song/${songId}/${setlistId || '_'}/annotate`);
+    }));
+    const scrapeBtn = btn('scrape chart', 'sl-btn-ghost sl-btn-sm', async () => {
+      scrapeBtn.textContent = 'scraping...';
+      const updates = await deepScrapeChart(song);
+      if (updates) {
+        let applied = 0;
+        for (const [k, v] of Object.entries(updates)) {
+          if (!k.startsWith('_') && !song[k]) { song[k] = v; applied++; }
+        }
+        if (applied) {
+          await store.putSong(song);
+          scrapeBtn.textContent = `found ${applied} field(s)!`;
+          setTimeout(() => navigate(`#song/${songId}${setlistId ? '/' + setlistId : ''}`), 1200);
+        } else {
+          scrapeBtn.textContent = 'no new data';
+        }
+      } else {
+        scrapeBtn.textContent = 'no data found';
+      }
+      setTimeout(() => { scrapeBtn.textContent = 'scrape chart'; }, 2500);
+    });
+    actionBar.appendChild(scrapeBtn);
   }
   if (song.spotifyUri) {
     const spBtn = btn('open in spotify', 'sl-btn-spotify', () => {
@@ -460,6 +541,10 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     actionBar.appendChild(spBtn);
   }
+  actionBar.appendChild(btn('⇣', 'sl-btn-icon', async () => {
+    const data = await store.exportSong(songId);
+    if (data) downloadJson(data, `song-${song.title.replace(/\s+/g, '-').toLowerCase()}.json`);
+  }));
   root.appendChild(actionBar);
 
   // Spotify embed
@@ -763,6 +848,78 @@ export async function renderSettings(root) {
   syncSection.appendChild(el('div', 'sl-hint', 'Scans all configured Spotify playlists and Drive folders, auto-links matching songs.'));
   root.appendChild(syncSection);
 
+  // Google Drive data sync
+  const gdriveSection = el('div', 'sl-section');
+  const currentClientId = localStorage.getItem('voidstar.setlist.gdrive.clientId') || '';
+  gdriveSection.innerHTML = `
+    <div class="sl-section-title">google drive data sync</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Store your setlist data, notes, and song markups in Google Drive so they sync across all your devices.
+      Requires a Google Cloud OAuth2 client ID with Drive API enabled.
+    </div>
+    <label class="sl-label">Google OAuth Client ID
+      <input class="sl-input" id="sl-gdrive-client-id" value="${currentClientId}" placeholder="xxxx.apps.googleusercontent.com">
+    </label>
+  `;
+  const clientIdInput = gdriveSection.querySelector('#sl-gdrive-client-id');
+  clientIdInput?.addEventListener('change', () => {
+    localStorage.setItem('voidstar.setlist.gdrive.clientId', clientIdInput.value.trim());
+  });
+  const gdriveActions = el('div', 'sl-action-bar');
+  gdriveActions.appendChild(btn('connect google drive', 'sl-btn-primary sl-btn-sm', async () => {
+    try {
+      const gdrive = await initGdriveSync();
+      if (!gdrive) return;
+      gdriveStatus.textContent = 'Connected. Syncing...';
+      await gdrive.push(await store.exportAll());
+      gdriveStatus.textContent = 'Synced to Google Drive.';
+      gdriveStatus.style.color = 'var(--green)';
+    } catch (e) {
+      gdriveStatus.textContent = `Error: ${e.message}`;
+      gdriveStatus.style.color = 'var(--pink)';
+    }
+  }));
+  gdriveActions.appendChild(btn('pull from drive', 'sl-btn-ghost sl-btn-sm', async () => {
+    try {
+      const gdrive = await initGdriveSync();
+      if (!gdrive) return;
+      gdriveStatus.textContent = 'Pulling...';
+      const data = await gdrive.pull();
+      if (data) {
+        await store.importAll(data);
+        gdriveStatus.textContent = 'Imported from Google Drive.';
+        gdriveStatus.style.color = 'var(--green)';
+      } else {
+        gdriveStatus.textContent = 'No data found in Drive.';
+      }
+    } catch (e) {
+      gdriveStatus.textContent = `Error: ${e.message}`;
+      gdriveStatus.style.color = 'var(--pink)';
+    }
+  }));
+  gdriveSection.appendChild(gdriveActions);
+  const gdriveStatus = el('div', 'sl-hint');
+  gdriveSection.appendChild(gdriveStatus);
+  root.appendChild(gdriveSection);
+
+  // Export/import sources config
+  const configSection = el('div', 'sl-section');
+  configSection.innerHTML = '<div class="sl-section-title">config backup</div>';
+  const configActions = el('div', 'sl-action-bar');
+  configActions.appendChild(btn('export sources', 'sl-btn-ghost sl-btn-sm', async () => {
+    const data = await store.exportSources();
+    downloadJson(data, 'setlist-sources.json');
+  }));
+  configActions.appendChild(btn('import sources', 'sl-btn-ghost sl-btn-sm', async () => {
+    const data = await uploadJson();
+    if (data?.sources) {
+      await store.importSources(data);
+      navigate('#settings');
+    }
+  }));
+  configSection.appendChild(configActions);
+  root.appendChild(configSection);
+
   // Save on change
   const saveWorker = () => {
     sources.workerUrl = document.getElementById('sl-worker-url').value.trim().replace(/\/+$/, '');
@@ -799,8 +956,6 @@ export async function renderPerformMode(root, setlistId) {
   let idx = entries.findIndex(e => e.type === 'song');
   if (idx < 0) { root.appendChild(emptyState('No songs in this setlist.')); return; }
 
-  // Request fullscreen + wake lock
-  try { document.documentElement.requestFullscreen?.(); } catch {}
   let wakeLock = null;
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
 
@@ -813,9 +968,18 @@ export async function renderPerformMode(root, setlistId) {
     try { wakeLock?.release(); } catch {}
     navigate(`#setlist/${setlistId}`);
   });
+  const fsBtn = btn('⛶', 'sl-btn-icon sl-perform-fs', () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      document.documentElement.requestFullscreen?.();
+    }
+  });
+  fsBtn.title = 'Toggle fullscreen';
 
   container.appendChild(progress);
   container.appendChild(exitBtn);
+  container.appendChild(fsBtn);
   container.appendChild(counter);
   container.appendChild(content);
   root.appendChild(container);
@@ -908,4 +1072,75 @@ export async function renderPerformMode(root, setlistId) {
     window.removeEventListener('hashchange', cleanup);
   };
   window.addEventListener('hashchange', cleanup);
+}
+
+// ── Annotation View (stylus/pen/touch drawing on chart) ──
+
+export async function renderAnnotation(root, songId, setlistId) {
+  const song = await store.getSong(songId);
+  if (!song) { root.appendChild(emptyState('Song not found.')); return; }
+  if (!song.chartUrl) { root.appendChild(emptyState('No chart linked to this song.')); return; }
+
+  root.classList.add('sl-perform');
+  const container = el('div', 'sl-annotation-container');
+
+  const backHash = setlistId ? `#song/${songId}/${setlistId}` : `#song/${songId}`;
+  const toolbar = el('div', 'sl-annotation-toolbar');
+  toolbar.innerHTML = `
+    <button class="sl-btn sl-btn-icon" id="sl-ann-back" title="Back">&larr;</button>
+    <span class="sl-ann-sep"></span>
+    <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="pen" title="Pen">✎</button>
+    <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="highlighter" title="Highlighter">▮</button>
+    <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="text" title="Text">T</button>
+    <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="arrow" title="Arrow">→</button>
+    <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="eraser" title="Eraser">◻</button>
+    <span class="sl-ann-sep"></span>
+    <input type="color" class="sl-ann-color" value="#ff5e7e" title="Color">
+    <select class="sl-ann-size">
+      <option value="2">Fine</option>
+      <option value="4" selected>Medium</option>
+      <option value="8">Thick</option>
+    </select>
+    <span class="sl-ann-sep"></span>
+    <button class="sl-btn sl-btn-sm sl-btn-ghost" id="sl-ann-undo" title="Undo">↶</button>
+    <button class="sl-btn sl-btn-sm sl-btn-ghost" id="sl-ann-clear" title="Clear all">Clear</button>
+    <button class="sl-btn sl-btn-sm sl-btn-primary" id="sl-ann-save">Save</button>
+  `;
+  toolbar.querySelector('#sl-ann-back').addEventListener('click', () => navigate(backHash));
+  container.appendChild(toolbar);
+
+  const canvasWrap = el('div', 'sl-annotation-wrap');
+
+  const embedUrl = buildChartEmbedUrl(song.chartUrl);
+  if (embedUrl) {
+    const iframe = document.createElement('iframe');
+    iframe.src = embedUrl;
+    iframe.className = 'sl-annotation-iframe';
+    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+    canvasWrap.appendChild(iframe);
+  } else {
+    const img = document.createElement('img');
+    img.src = song.chartUrl;
+    img.className = 'sl-annotation-img';
+    canvasWrap.appendChild(img);
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'sl-annotation-canvas';
+  canvasWrap.appendChild(canvas);
+  container.appendChild(canvasWrap);
+  root.appendChild(container);
+
+  requestAnimationFrame(() => {
+    initAnnotationCanvas(canvas, songId, toolbar);
+  });
+}
+
+function buildChartEmbedUrl(url) {
+  const gdocMatch = url.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]+)/);
+  if (gdocMatch) return `https://docs.google.com/document/d/${gdocMatch[1]}/preview`;
+  const gfileMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (gfileMatch) return `https://drive.google.com/file/d/${gfileMatch[1]}/preview`;
+  if (url.match(/\.(pdf|png|jpg|jpeg|gif|webp)(\?|$)/i)) return url;
+  return null;
 }

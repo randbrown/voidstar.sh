@@ -183,11 +183,68 @@ export async function exportAll() {
   const [songs, notes, setlists] = await Promise.all([
     getAllSongs(), getAllNotes(), getAllSetlists(),
   ]);
-  return { songs, notes, setlists, exportedAt: Date.now() };
+  const sources = getSourcesRaw();
+  return { version: 1, songs, notes, setlists, sources, exportedAt: Date.now() };
 }
 
 export async function importAll(data) {
   if (data.songs) for (const s of data.songs) await put(SONGS, s);
   if (data.notes) for (const n of data.notes) await put(NOTES, n);
   if (data.setlists) for (const sl of data.setlists) await put(SETLISTS, sl);
+  if (data.sources) setSourcesRaw(data.sources);
+}
+
+export async function exportSetlist(setlistId) {
+  const sl = await getSetlist(setlistId);
+  if (!sl) return null;
+  const songIds = sl.sets.flatMap(s => s.songIds);
+  const songs = (await Promise.all(songIds.map(id => getSong(id)))).filter(Boolean);
+  const noteArrays = await Promise.all(songIds.map(id => getNotesForSong(id)));
+  const notes = noteArrays.flat();
+  return { version: 1, type: 'setlist', setlist: sl, songs, notes, exportedAt: Date.now() };
+}
+
+export async function exportSong(songId) {
+  const song = await getSong(songId);
+  if (!song) return null;
+  const notes = await getNotesForSong(songId);
+  return { version: 1, type: 'song', song, notes, exportedAt: Date.now() };
+}
+
+export async function exportSources() {
+  return { version: 1, type: 'sources', sources: getSourcesRaw(), exportedAt: Date.now() };
+}
+
+export async function importSetlist(data) {
+  if (data.setlist) await put(SETLISTS, data.setlist);
+  if (data.songs) for (const s of data.songs) await put(SONGS, s);
+  if (data.notes) for (const n of data.notes) await put(NOTES, n);
+}
+
+export async function importSong(data) {
+  if (data.song) await put(SONGS, data.song);
+  if (data.notes) for (const n of data.notes) await put(NOTES, n);
+}
+
+export async function importSources(data) {
+  if (data.sources) setSourcesRaw(data.sources);
+}
+
+function getSourcesRaw() {
+  try { return JSON.parse(localStorage.getItem('voidstar.setlist.sources')) || {}; }
+  catch { return {}; }
+}
+
+function setSourcesRaw(sources) {
+  localStorage.setItem('voidstar.setlist.sources', JSON.stringify(sources));
+}
+
+export async function getNotesForSongBulk(songIds) {
+  const allNotes = await getAllNotes();
+  const map = {};
+  for (const n of allNotes) {
+    if (!map[n.songId]) map[n.songId] = [];
+    map[n.songId].push(n);
+  }
+  return map;
 }

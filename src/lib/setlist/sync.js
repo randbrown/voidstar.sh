@@ -125,6 +125,10 @@ async function runSync(songs, playlistUrls, onProgress) {
       const result = findBestMatch(song.title, driveFiles);
       if (result) {
         song.chartUrl = result.match.webViewLink;
+        if (result.match.artist && !song.artist) song.artist = result.match.artist;
+        if (result.match.inferredKey && !song.key) song.key = result.match.inferredKey;
+        if (result.match.inferredBpm && !song.bpm) song.bpm = result.match.inferredBpm;
+        if (result.match.inferredCapo && !song.capo) song.capo = result.match.inferredCapo;
         results.drive.matched++;
         updated = true;
       } else {
@@ -173,6 +177,33 @@ async function fetchDriveFiles(workerUrl, folderUrl) {
   const res = await fetch(`${workerUrl}/drive/folder/${m[1]}`);
   if (!res.ok) throw new Error(`Drive API ${res.status}`);
   return await res.json();
+}
+
+export async function deepScrapeChart(song) {
+  const sources = getSources();
+  if (!sources.workerUrl || !song.chartUrl) return null;
+
+  const fileMatch = song.chartUrl.match(/(?:file|document)\/d\/([a-zA-Z0-9_-]+)/);
+  if (!fileMatch) return null;
+
+  try {
+    const res = await fetch(`${sources.workerUrl}/drive/file/${fileMatch[1]}/meta`);
+    if (!res.ok) return null;
+    const meta = await res.json();
+
+    const updates = {};
+    if (meta.inferredKey && !song.key) updates.key = meta.inferredKey;
+    if (meta.inferredBpm && !song.bpm) updates.bpm = meta.inferredBpm;
+    if (meta.inferredCapo && !song.capo) updates.capo = meta.inferredCapo;
+    if (meta.artist && !song.artist) updates.artist = meta.artist;
+    if (meta.sections) updates._sections = meta.sections;
+    if (meta.isNashvilleChart) updates._isNashvilleChart = true;
+    if (meta.textContent) updates._textPreview = meta.textContent.slice(0, 500);
+
+    return Object.keys(updates).length ? updates : null;
+  } catch {
+    return null;
+  }
 }
 
 export function spotifySearchUrl(title, artist) {
