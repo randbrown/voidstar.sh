@@ -1,7 +1,7 @@
 // Setlist app controller — hash-based routing and view dispatch.
 
 import * as store from './store.js';
-import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode } from './views.js';
+import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings } from './views.js';
 
 let _root = null;
 let _lastSongId = null;
@@ -34,6 +34,9 @@ async function route() {
         break;
       case 'library':
         await renderLibrary(_root);
+        break;
+      case 'settings':
+        await renderSettings(_root);
         break;
       case 'setlist':
         if (extra === 'edit') {

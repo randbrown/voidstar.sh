@@ -1,0 +1,18 @@
+# Setlist sync Worker — proxies Spotify Web API and Google Drive API
+# for the setlist lab's auto-linking feature.
+#
+# Secrets (set via `wrangler secret put`):
+#   SPOTIFY_CLIENT_ID
+#   SPOTIFY_CLIENT_SECRET
+#   GOOGLE_API_KEY
+#
+# Local dev:   npx wrangler dev -c workers/setlist-sync/wrangler.toml
+# Deploy:      npx wrangler deploy -c workers/setlist-sync/wrangler.toml
+
+name = "voidstar-setlist-sync"
+main = "index.js"
+compatibility_date = "2025-05-01"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGIN = "https://voidstar.sh"

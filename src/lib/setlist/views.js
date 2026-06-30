@@ -5,6 +5,8 @@ import { navigate, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls } from './sync.js';
+import { findBestMatch as fuzzyMatch } from './match.js';
 
 // ── Helpers ──
 
@@ -60,7 +62,8 @@ export async function renderDashboard(root) {
     await store.putSetlist(sl);
     navigate(`#setlist/${sl.id}/edit`);
   }));
-  actions.appendChild(btn('song library', 'sl-btn-ghost', () => navigate('#library')));
+  actions.appendChild(btn('library', 'sl-btn-ghost', () => navigate('#library')));
+  actions.appendChild(btn('sources', 'sl-btn-ghost', () => navigate('#settings')));
   bar.appendChild(actions);
   root.appendChild(bar);
 
@@ -149,6 +152,7 @@ export async function renderSetlistView(root, setlistId) {
 
   const bar = topBar(sl.name, '#home');
   const actions = el('div', 'sl-actions');
+  actions.appendChild(btn('sync', 'sl-btn-ghost', () => runSetlistSync(root, sl.id)));
   actions.appendChild(btn('perform', 'sl-btn-accent', () => navigate(`#perform/${sl.id}`)));
   actions.appendChild(btn('edit', 'sl-btn-ghost', () => navigate(`#setlist/${sl.id}/edit`)));
   bar.appendChild(actions);
@@ -570,6 +574,201 @@ export async function renderSongFocus(root, songId, setlistId) {
     }));
     root.appendChild(danger);
   }
+}
+
+// ── Sync helpers ──
+
+function showSyncOverlay(root) {
+  const overlay = el('div', 'sl-sync-overlay');
+  overlay.innerHTML = '<div class="sl-sync-spinner"></div><div class="sl-sync-status">syncing...</div>';
+  root.appendChild(overlay);
+  return {
+    update(msg) { overlay.querySelector('.sl-sync-status').textContent = msg; },
+    done(results) {
+      const sm = results.spotify.matched;
+      const dm = results.drive.matched;
+      const errs = [...results.spotify.errors, ...results.drive.errors];
+      let msg = '';
+      if (sm || dm) msg += `Linked: ${sm ? sm + ' Spotify' : ''}${sm && dm ? ', ' : ''}${dm ? dm + ' chart' : ''}.`;
+      else msg += 'No new matches found.';
+      if (errs.length) msg += ` Errors: ${errs.join('; ')}`;
+      overlay.innerHTML = `<div class="sl-sync-result">${msg}</div>`;
+      overlay.addEventListener('click', () => overlay.remove());
+      setTimeout(() => overlay.remove(), 4000);
+    },
+    error(msg) {
+      overlay.innerHTML = `<div class="sl-sync-result sl-sync-error">${msg}</div>`;
+      overlay.addEventListener('click', () => overlay.remove());
+      setTimeout(() => overlay.remove(), 4000);
+    },
+  };
+}
+
+async function runSetlistSync(root, setlistId) {
+  const ov = showSyncOverlay(root);
+  try {
+    const results = await syncSetlist(setlistId, (r) => {
+      ov.update(`${r.done}/${r.total} songs...`);
+    });
+    ov.done(results);
+    setTimeout(() => navigate(`#setlist/${setlistId}`), 500);
+  } catch (e) {
+    ov.error(e.message);
+  }
+}
+
+async function runGlobalSync(root) {
+  const ov = showSyncOverlay(root);
+  try {
+    const results = await syncAll((r) => {
+      ov.update(`${r.done}/${r.total} songs...`);
+    });
+    ov.done(results);
+  } catch (e) {
+    ov.error(e.message);
+  }
+}
+
+// ── Settings ──
+
+export async function renderSettings(root) {
+  const bar = topBar('sources & sync', '#home');
+  root.appendChild(bar);
+
+  const sources = getSources();
+
+  // Worker URL
+  const workerSection = el('div', 'sl-section');
+  workerSection.innerHTML = `
+    <div class="sl-section-title">sync worker url</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">Optional. Deploy the setlist-sync Cloudflare Worker to enable auto-linking from Spotify playlists and Google Drive folders.</div>
+    <input class="sl-input" id="sl-worker-url" value="${sources.workerUrl || ''}" placeholder="https://voidstar-setlist-sync.YOUR.workers.dev">
+  `;
+  root.appendChild(workerSection);
+
+  // Google Drive folders
+  const driveSection = el('div', 'sl-section');
+  driveSection.innerHTML = `
+    <div class="sl-section-title">google drive folders</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">Add Google Drive folder URLs containing Nashville Number charts. Requires the sync worker to be deployed.</div>
+  `;
+  const driveFolderList = el('div', 'sl-source-list');
+  driveSection.appendChild(driveFolderList);
+
+  function renderDriveFolders() {
+    driveFolderList.innerHTML = '';
+    for (let i = 0; i < sources.driveFolders.length; i++) {
+      const f = sources.driveFolders[i];
+      const row = el('div', 'sl-source-row');
+      row.innerHTML = `<span class="sl-source-url">${f.url}</span>`;
+      const removeBtn = btn('&times;', 'sl-btn-icon sl-btn-danger', () => {
+        sources.driveFolders.splice(i, 1);
+        setSources(sources);
+        renderDriveFolders();
+      });
+      row.appendChild(removeBtn);
+      driveFolderList.appendChild(row);
+    }
+  }
+  renderDriveFolders();
+
+  const addDriveRow = el('div', 'sl-row');
+  const driveInput = el('input', 'sl-input');
+  driveInput.placeholder = 'https://drive.google.com/drive/folders/...';
+  driveInput.style.flex = '1';
+  addDriveRow.appendChild(driveInput);
+  addDriveRow.appendChild(btn('add', 'sl-btn-primary sl-btn-sm', () => {
+    const url = driveInput.value.trim();
+    if (!url) return;
+    sources.driveFolders.push({ url });
+    setSources(sources);
+    driveInput.value = '';
+    renderDriveFolders();
+  }));
+  driveSection.appendChild(addDriveRow);
+  root.appendChild(driveSection);
+
+  // Manual chart batch import
+  const chartSection = el('div', 'sl-section');
+  chartSection.innerHTML = `
+    <div class="sl-section-title">batch link charts</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Paste chart URLs with song titles, one per line. The app will fuzzy-match against your song library.<br>
+      Format: <code>URL  Song Title - Artist</code> or <code>Song Title  URL</code>
+    </div>
+  `;
+  const chartTextarea = el('textarea', 'sl-textarea');
+  chartTextarea.rows = 6;
+  chartTextarea.placeholder = 'https://docs.google.com/document/d/abc  Two Dozen Roses - Shenandoah\nhttps://drive.google.com/file/d/xyz  Amarillo By Morning';
+  chartSection.appendChild(chartTextarea);
+  chartSection.appendChild(btn('match & link', 'sl-btn-primary', async () => {
+    const text = chartTextarea.value.trim();
+    if (!text) return;
+    const parsed = parseBatchChartUrls(text);
+    if (!parsed.length) { alert('No valid URLs found.'); return; }
+
+    const songs = await store.getAllSongs();
+    let matched = 0;
+    for (const chart of parsed) {
+      if (!chart.title) continue;
+      const candidates = songs.filter(s => !s.chartUrl);
+      const result = fuzzyMatch(chart.title, candidates);
+      if (result) {
+        result.match.chartUrl = chart.url;
+        await store.putSong(result.match);
+        matched++;
+      }
+    }
+    alert(`Linked ${matched} chart${matched !== 1 ? 's' : ''} out of ${parsed.length} entries.`);
+    chartTextarea.value = '';
+  }));
+  root.appendChild(chartSection);
+
+  // Spotify search links fallback
+  const spotifySection = el('div', 'sl-section');
+  spotifySection.innerHTML = `
+    <div class="sl-section-title">spotify quick-link</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Songs without a Spotify link get a "search" button that opens Spotify search.
+      With the sync worker deployed, the sync button auto-links from your setlist playlists.
+    </div>
+  `;
+  const unlinkedBtn = btn('show unlinked songs', 'sl-btn-ghost', async () => {
+    const songs = await store.getAllSongs();
+    const unlinked = songs.filter(s => !s.spotifyUri);
+    unlinkedList.innerHTML = '';
+    if (!unlinked.length) {
+      unlinkedList.appendChild(emptyState('All songs linked!'));
+      return;
+    }
+    for (const s of unlinked) {
+      const row = el('div', 'sl-source-row');
+      const searchUrl = spotifySearchUrl(s.title, s.artist);
+      row.innerHTML = `
+        <span class="sl-source-url">${s.title}</span>
+        <a href="${searchUrl}" target="_blank" rel="noopener" class="sl-btn sl-btn-spotify sl-btn-sm">search</a>
+      `;
+      unlinkedList.appendChild(row);
+    }
+  });
+  spotifySection.appendChild(unlinkedBtn);
+  const unlinkedList = el('div', 'sl-source-list');
+  spotifySection.appendChild(unlinkedList);
+  root.appendChild(spotifySection);
+
+  // Global sync
+  const syncSection = el('div', 'sl-section');
+  syncSection.innerHTML = '<div class="sl-section-title">sync all songs</div>';
+  syncSection.appendChild(btn('sync now', 'sl-btn-accent', () => runGlobalSync(root)));
+  syncSection.appendChild(el('div', 'sl-hint', 'Scans all configured Spotify playlists and Drive folders, auto-links matching songs.'));
+  root.appendChild(syncSection);
+
+  // Save on change
+  const saveWorker = () => {
+    sources.workerUrl = document.getElementById('sl-worker-url').value.trim().replace(/\/+$/, '');
+    setSources(sources);
+  };
+  document.getElementById('sl-worker-url').addEventListener('change', saveWorker);
 }
 
 // ── Performance Mode ──
