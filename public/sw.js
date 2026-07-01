@@ -18,7 +18,7 @@
 // purge-old-caches on the next page load. clients.claim() makes the new
 // SW take over immediately so users don't need a hard reload.
 
-const SW_VERSION = 'v5';
+const SW_VERSION = 'v6';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
@@ -26,8 +26,10 @@ const CACHE      = `voidstar-${SW_VERSION}`;
 // revalidate as the page references them.
 const PRECACHE = [
   '/',
+  '/lab/setlist',
   '/manifest.webmanifest',
   '/manifest-qualia.webmanifest',
+  '/manifest-setlist.webmanifest',
   '/favicon.svg',
   '/favicon.ico',
   '/icon-192.png',
@@ -37,7 +39,14 @@ const PRECACHE = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(PRECACHE))
+    // Cache precache entries individually rather than via cache.addAll(),
+    // which is atomic — a single 404/redirect (e.g. a route path that a host
+    // serves only with a trailing slash) would otherwise reject the whole
+    // install and leave users with no SW at all. Per-item with catch means a
+    // stray miss just skips that one entry.
+    caches.open(CACHE).then((cache) =>
+      Promise.all(PRECACHE.map((url) => cache.add(url).catch(() => {})))
+    )
   );
   // Don't sit in the "waiting" state — take over right after install so
   // first-deploy users get the new SW without a manual refresh.

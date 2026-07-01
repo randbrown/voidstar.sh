@@ -29,6 +29,29 @@ const buildStamp = readBuildStamp();
   <ThemeBoot />
   <title>Setlist | voidstar lab</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <!-- Setlist uses its own manifest so installing from this page anchors
+       start_url to /lab/setlist (the default manifest's start_url is /
+       so installs from that page would always boot to home). Installing
+       as an app is what makes the SW-cached shell available offline at a
+       gig with no signal. -->
+  <link rel="manifest" href="/manifest-setlist.webmanifest" />
+  <meta name="theme-color" content="#05050d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="setlist" />
+
+  <!-- Register the PWA service worker (skipped on local dev hosts so
+       Astro's HMR isn't fighting cached assets). This is what caches the
+       app shell + hashed JS so perform mode still boots offline. -->
+  <script is:inline>
+    if ('serviceWorker' in navigator
+        && !/^(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.)/.test(location.hostname)) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
   <style is:global>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -167,6 +190,34 @@ const buildStamp = readBuildStamp();
       margin-bottom: 1rem;
       font-family: var(--font-mono);
     }
+
+    /* ── Sync / connectivity pill (dashboard) ── */
+    .sl-sync-pill {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      margin: -0.4rem 0 0.8rem;
+      letter-spacing: 0.02em;
+    }
+    .sl-sync-pill:empty { display: none; margin: 0; }
+    .sl-sync-offline { color: var(--pink); }
+    .sl-sync-pending { color: var(--amber, #ffc857); }
+    .sl-sync-syncing { color: var(--text-muted); }
+    .sl-sync-synced  { color: var(--green); }
+
+    /* ── Offline-charts bar (setlist view) ── */
+    .sl-offline-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.4rem 0.6rem;
+      margin-bottom: 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+    }
+    .sl-offline-bar:empty { display: none; margin: 0; }
+    .sl-offline-label { color: var(--text-muted); }
+    .sl-offline-label.sl-offline-ready { color: var(--green); }
+    .sl-offline-hint { color: var(--text-muted); opacity: 0.75; }
 
     /* ── Song cards (setlist view) ── */
     .sl-song-card {

@@ -7,8 +7,9 @@ import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } f
 import { createDictation, isSupported as voiceSupported } from './voice.js';
 import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
-import { initGdriveSync, isGdriveSyncEnabled, mergeData, setSyncClient, debouncedPush } from './gdrive-sync.js';
+import { initGdriveSync, isGdriveSyncEnabled, mergeData, setSyncClient, debouncedPush, watchConnectivity, onSyncState } from './gdrive-sync.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
+import { cacheSetlistCharts, getSetlistOfflineStatus, getOfflineChartUrl } from './chart-cache.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -141,6 +142,39 @@ export async function renderDashboard(root) {
   bar.appendChild(actions);
   root.appendChild(bar);
 
+  // Connectivity / sync pill. Shows 'offline' whenever the device is offline,
+  // and (when Drive sync is on) syncing / unsynced / synced so the user knows
+  // edits are safe. Hidden when online and there's nothing noteworthy to say.
+  const pill = el('div', 'sl-sync-pill');
+  root.appendChild(pill);
+  const gsync = isGdriveSyncEnabled();
+  const paintPill = (state) => {
+    const online = typeof navigator === 'undefined' || navigator.onLine;
+    let text = '', cls = '';
+    if (!online) { text = '● offline'; cls = 'sl-sync-offline'; }
+    else if (!gsync) { text = ''; }
+    else if (state === 'syncing') { text = '⟳ syncing…'; cls = 'sl-sync-syncing'; }
+    else if (state === 'pending') { text = '● unsynced changes'; cls = 'sl-sync-pending'; }
+    else if (state === 'synced') { text = '✓ synced'; cls = 'sl-sync-synced'; }
+    pill.className = `sl-sync-pill ${cls}`;
+    pill.textContent = text;
+  };
+  const unsubPill = onSyncState(paintPill);
+  const onOnline = () => paintPill(undefined);
+  const onOffline = () => paintPill('offline');
+  window.addEventListener('online', onOnline);
+  window.addEventListener('offline', onOffline);
+  paintPill(undefined);
+  // Tear down when leaving the dashboard so listeners don't pile up across
+  // navigations (the dashboard re-renders on every return to #home).
+  const pillCleanup = () => {
+    unsubPill();
+    window.removeEventListener('online', onOnline);
+    window.removeEventListener('offline', onOffline);
+    window.removeEventListener('hashchange', pillCleanup);
+  };
+  window.addEventListener('hashchange', pillCleanup);
+
   const setlists = await store.getAllSetlists();
   if (!setlists.length) {
     root.appendChild(emptyState('No setlists yet. Create one or import from text.'));
@@ -212,6 +246,7 @@ async function autoSyncFromGdrive() {
   }
 
   store.setOnWrite(() => debouncedPush(() => store.exportAll()));
+  watchConnectivity();
 }
 
 // ── Song Library ──
@@ -287,6 +322,38 @@ export async function renderSetlistView(root, setlistId) {
     const meta = el('div', 'sl-setlist-meta', `${sl.venue || ''} ${sl.gigDate ? '&middot; ' + sl.gigDate : ''}`);
     root.appendChild(meta);
   }
+
+  // Offline readiness — cache every chart so perform mode works with no signal
+  // at a gig. Only shown when the setlist actually has charts to cache.
+  const offlineBar = el('div', 'sl-offline-bar');
+  root.appendChild(offlineBar);
+  async function paintOfflineBar(overrideLabel) {
+    const { cached, total } = await getSetlistOfflineStatus(sl);
+    offlineBar.innerHTML = '';
+    if (!total) return; // no charted songs — nothing to cache
+    const ready = cached >= total;
+    const label = el('span', 'sl-offline-label',
+      overrideLabel || `${ready ? '✓' : '⤓'} offline charts ${cached}/${total}`);
+    if (ready) label.classList.add('sl-offline-ready');
+    offlineBar.appendChild(label);
+    if (!navigator.onLine) {
+      offlineBar.appendChild(el('span', 'sl-offline-hint', '· offline — connect to cache'));
+      return;
+    }
+    const dlBtn = btn(ready ? 'refresh' : 'download', 'sl-btn-ghost sl-btn-xs', async () => {
+      dlBtn.disabled = true;
+      const res = await cacheSetlistCharts(sl, ({ done, total: t }) => {
+        label.textContent = `caching ${done}/${t}…`;
+      });
+      const hint = res.failed
+        ? `· ${res.failed} couldn't cache (check worker / sharing)`
+        : '';
+      await paintOfflineBar();
+      if (hint) offlineBar.appendChild(el('span', 'sl-offline-hint', hint));
+    });
+    offlineBar.appendChild(dlBtn);
+  }
+  paintOfflineBar();
 
   const allNotes = await store.getAllNotes();
   const notesBySong = {};
@@ -992,6 +1059,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       if (!confirm(`Delete "${song.title}" and all its notes?`)) return;
       const songNotes = await store.getNotesForSong(songId);
       for (const n of songNotes) await store.deleteNote(n.id);
+      await store.deleteChartBlob(songId).catch(() => {});
       await store.deleteSong(songId);
       navigate('#library');
     }));
@@ -1546,6 +1614,10 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 
   let invertActive = localStorage.getItem('voidstar.setlist.invertChart') === '1';
   let currentChartWrap = null;
+  // Object URL for the currently-shown cached chart blob, if any. Revoked when
+  // we move off the song (in render's reset) and on teardown, so blobs don't
+  // leak across a long set.
+  let currentChartObjectUrl = null;
 
   // Bottom nav bar
   const navBar = el('div', 'sl-perform-nav');
@@ -1603,6 +1675,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 
   function render() {
     if (chartAnnotationCtrl) { chartAnnotationCtrl.destroy(); chartAnnotationCtrl = null; }
+    if (currentChartObjectUrl) { URL.revokeObjectURL(currentChartObjectUrl); currentChartObjectUrl = null; }
     currentChartWrap = null;
     invertBtn.style.display = 'none';
     // Every song starts at 1× so a leftover zoom from the previous chart doesn't
@@ -1649,48 +1722,73 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       currentChartWrap = chartWrap;
       if (invertActive) chartWrap.classList.add('sl-chart-inverted');
 
-      const embedUrl = buildChartEmbedUrl(song.chartUrl);
-      const flatImageUrl = buildChartImageUrl(song.chartUrl);
-      if (flatImageUrl) {
-        // Prefer a flattened image so the area around the chart is our own dark
-        // backdrop (which doesn't flip to white in invert mode). Top-aligned +
-        // fit-to-width mirrors the viewer's layout, so annotations stay lined
-        // up. If the image endpoint can't serve the file (e.g. a private Drive
-        // file), fall back to the embeddable viewer so the chart still shows.
-        const img = document.createElement('img');
-        img.src = flatImageUrl;
-        img.className = 'sl-perform-chart-img sl-chart-flat';
-        img.addEventListener('error', () => {
-          if (img.parentElement !== chartWrap) return;
-          img.remove();
-          if (embedUrl) {
-            const iframe = document.createElement('iframe');
-            iframe.src = embedUrl;
-            iframe.className = 'sl-perform-chart-iframe';
-            chartWrap.insertBefore(iframe, chartWrap.firstChild);
-          } else {
-            const raw = document.createElement('img');
-            raw.src = song.chartUrl;
-            raw.className = 'sl-perform-chart-img';
-            chartWrap.insertBefore(raw, chartWrap.firstChild);
-          }
-        }, { once: true });
-        chartWrap.appendChild(img);
-      } else if (embedUrl) {
-        const iframe = document.createElement('iframe');
-        iframe.src = embedUrl;
-        iframe.className = 'sl-perform-chart-iframe';
-        chartWrap.appendChild(iframe);
-      } else {
-        const img = document.createElement('img');
-        img.src = song.chartUrl;
-        img.className = 'sl-perform-chart-img';
-        chartWrap.appendChild(img);
-      }
+      // Canvas (annotation overlay) is appended first so it stays the last
+      // child — i.e. stacked above whatever chart element we insert before it.
       const chartCanvas = document.createElement('canvas');
       chartCanvas.className = 'sl-perform-chart-canvas';
       chartWrap.appendChild(chartCanvas);
       zoomLayer.appendChild(chartWrap);
+
+      const insertChart = (node) => chartWrap.insertBefore(node, chartWrap.firstChild);
+
+      // Live Google rendering — used when there's no offline copy cached.
+      function mountRemoteChart() {
+        const embedUrl = buildChartEmbedUrl(song.chartUrl);
+        const flatImageUrl = buildChartImageUrl(song.chartUrl);
+        if (flatImageUrl) {
+          // Prefer a flattened image so the area around the chart is our own
+          // dark backdrop (which doesn't flip to white in invert mode).
+          // Top-aligned + fit-to-width mirrors the viewer's layout, so
+          // annotations stay lined up. If the image endpoint can't serve the
+          // file (e.g. a private Drive file), fall back to the embeddable
+          // viewer so the chart still shows.
+          const img = document.createElement('img');
+          img.src = flatImageUrl;
+          img.className = 'sl-perform-chart-img sl-chart-flat';
+          img.addEventListener('error', () => {
+            if (img.parentElement !== chartWrap) return;
+            img.remove();
+            if (embedUrl) {
+              const iframe = document.createElement('iframe');
+              iframe.src = embedUrl;
+              iframe.className = 'sl-perform-chart-iframe';
+              insertChart(iframe);
+            } else {
+              const raw = document.createElement('img');
+              raw.src = song.chartUrl;
+              raw.className = 'sl-perform-chart-img';
+              insertChart(raw);
+            }
+          }, { once: true });
+          insertChart(img);
+        } else if (embedUrl) {
+          const iframe = document.createElement('iframe');
+          iframe.src = embedUrl;
+          iframe.className = 'sl-perform-chart-iframe';
+          insertChart(iframe);
+        } else {
+          const img = document.createElement('img');
+          img.src = song.chartUrl;
+          img.className = 'sl-perform-chart-img';
+          insertChart(img);
+        }
+      }
+
+      // Offline-cached blob first (renders with no network); live URLs
+      // otherwise. Async cache read is guarded against a fast swipe that has
+      // already moved us to a different song.
+      getOfflineChartUrl(entry.songId).then(objUrl => {
+        if (currentChartWrap !== chartWrap) { if (objUrl) URL.revokeObjectURL(objUrl); return; }
+        if (objUrl) {
+          currentChartObjectUrl = objUrl;
+          const img = document.createElement('img');
+          img.src = objUrl;
+          img.className = 'sl-perform-chart-img sl-chart-flat';
+          insertChart(img);
+        } else {
+          mountRemoteChart();
+        }
+      });
 
       loadAnnotation(entry.songId).then(data => {
         // Reproduce the aspect ratio the strokes were authored at so the
@@ -1755,6 +1853,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   // Cleanup on navigation
   const cleanup = () => {
     if (chartAnnotationCtrl) chartAnnotationCtrl.destroy();
+    if (currentChartObjectUrl) { URL.revokeObjectURL(currentChartObjectUrl); currentChartObjectUrl = null; }
     zoomCtrl.destroy();
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('hashchange', cleanup);
@@ -1829,18 +1928,29 @@ export async function renderAnnotation(root, songId, setlistId) {
   // regardless of toolbar height.
   const stage = el('div', 'sl-annotation-stage');
 
-  const embedUrl = buildChartEmbedUrl(song.chartUrl);
-  if (embedUrl) {
-    const iframe = document.createElement('iframe');
-    iframe.src = embedUrl;
-    iframe.className = 'sl-annotation-iframe';
-    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-    stage.appendChild(iframe);
-  } else {
+  // Offline-cached blob first (also gives a flat image to annotate against,
+  // which lines up better than a live Google Doc iframe); live URL otherwise.
+  const cachedChartUrl = await getOfflineChartUrl(songId);
+  if (cachedChartUrl) {
     const img = document.createElement('img');
-    img.src = song.chartUrl;
+    img.src = cachedChartUrl;
     img.className = 'sl-annotation-img';
     stage.appendChild(img);
+    window.addEventListener('hashchange', () => URL.revokeObjectURL(cachedChartUrl), { once: true });
+  } else {
+    const embedUrl = buildChartEmbedUrl(song.chartUrl);
+    if (embedUrl) {
+      const iframe = document.createElement('iframe');
+      iframe.src = embedUrl;
+      iframe.className = 'sl-annotation-iframe';
+      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+      stage.appendChild(iframe);
+    } else {
+      const img = document.createElement('img');
+      img.src = song.chartUrl;
+      img.className = 'sl-annotation-img';
+      stage.appendChild(img);
+    }
   }
 
   const canvas = document.createElement('canvas');

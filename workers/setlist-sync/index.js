@@ -7,6 +7,10 @@
 //   GET /spotify/search?q=...       → search for a track
 //   GET /spotify/search-batch       → search multiple songs (POST body: {titles:[]})
 //   GET /drive/folder/:id           → folder file list
+//   GET /drive/file/:id/meta        → scraped chart metadata (key/bpm/etc)
+//   GET /drive/file/:id/image       → chart rendered as image bytes (for
+//                                     offline caching in the browser; CORS
+//                                     lets the client read + store the blob)
 //   GET /health                     → ok
 
 const CORS_HEADERS = {
@@ -221,6 +225,58 @@ async function handleDriveFileMeta(fileId, request, env) {
   }), 200, request, env);
 }
 
+// Return the chart as raw image bytes with our own CORS headers so the browser
+// can fetch() + store the blob in IndexedDB for offline use. The <img>-based
+// online rendering works cross-origin without CORS, but *reading* the bytes to
+// cache them does not — hence this proxy.
+//   - Real image files stream through as-is (best fidelity).
+//   - PDFs / Google Docs are rasterized to a first-page image via Drive's
+//     thumbnail renderer (multi-page charts only cache their first page; the
+//     client surfaces that as a caveat).
+// Access model matches the folder scan: files must be reachable by the API key
+// (i.e. link-shared), which they already are if they showed up in a scan.
+async function handleDriveFileImage(fileId, request, env) {
+  const apiKey = env.GOOGLE_API_KEY;
+  if (!apiKey) return corsResponse(JSON.stringify({ error: 'GOOGLE_API_KEY not configured' }), 500, request, env);
+
+  let mimeType = '';
+  try {
+    const metaRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?fields=mimeType&key=${apiKey}`
+    );
+    if (metaRes.ok) mimeType = (await metaRes.json()).mimeType || '';
+  } catch {}
+
+  let upstream;
+  if (mimeType.startsWith('image/')) {
+    upstream = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${apiKey}`
+    );
+  } else {
+    // PDF, Google Doc, or unknown → let Drive rasterize the first page.
+    upstream = await fetch(`https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`);
+  }
+
+  if (!upstream || !upstream.ok) {
+    return corsResponse(
+      JSON.stringify({ error: `Drive image ${upstream ? upstream.status : 'fetch failed'}` }),
+      upstream ? upstream.status : 502, request, env,
+    );
+  }
+
+  const contentType = upstream.headers.get('Content-Type') || 'image/jpeg';
+  const body = await upstream.arrayBuffer();
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': contentType,
+      'Access-Control-Allow-Origin': corsOrigin(request, env),
+      ...CORS_HEADERS,
+      'Cache-Control': 'public, max-age=86400',
+    },
+  });
+}
+
 // Extract musical key, tempo, capo, time signature from filename and description
 function extractChartMeta(filename, description) {
   const combined = `${filename} ${description}`;
@@ -342,6 +398,11 @@ export default {
       const driveMatch = url.pathname.match(/^\/drive\/folder\/([a-zA-Z0-9_-]+)$/);
       if (driveMatch) {
         return await handleDriveFolder(driveMatch[1], request, env);
+      }
+
+      const driveImageMatch = url.pathname.match(/^\/drive\/file\/([a-zA-Z0-9_-]+)\/image$/);
+      if (driveImageMatch) {
+        return await handleDriveFileImage(driveImageMatch[1], request, env);
       }
 
       const driveFileMatch = url.pathname.match(/^\/drive\/file\/([a-zA-Z0-9_-]+)\/meta$/);
