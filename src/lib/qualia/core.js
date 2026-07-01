@@ -123,6 +123,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   let dprCap   = DEFAULT_DPR_CAP;
   let zen      = false;
   let paused   = false;
+  let renderSuspended = false;
   let startMs  = performance.now();
   let lastMs   = startMs;
   let frames      = 0;     // renders counted in the current fps window
@@ -542,6 +543,13 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
       tickListeners.forEach(fn => { try { fn(field); } catch (e) { console.error('[qualia] tick listener error:', e); } });
     }
 
+    // Blackout / eco: skip all drawing (fx render + overlay composite) while
+    // keeping the audio engine and reactivity running. A black overlay hides
+    // the frozen canvas; suspending the render frees the GPU so the rig, looper,
+    // sequencer, Strudel and vox keep playing with the screen dark. Independent
+    // of `paused` (which also brakes the audio transports) so the two compose.
+    if (renderSuspended) return;
+
     // Effective frame cap = the stricter (longer interval) of the user's cap
     // and any auxiliary cap (set while the editor panels are open). 0 = uncapped.
     const gateMs = Math.max(minFrameMs, auxFrameMs);
@@ -590,6 +598,11 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   function setZen(v)    { zen    = !!v; }
   function isPaused()   { return paused; }
   function isZen()      { return zen; }
+  // Blackout / eco — suspend only the visual render (audio + reactivity keep
+  // running). Independent of paused so the topbar ☾ / H key can go dark without
+  // touching the pause transport state.
+  function setRenderSuspended(v) { renderSuspended = !!v; }
+  function isRenderSuspended()   { return renderSuspended; }
   function setDprCap(v) { dprCap = Math.max(0.5, v); applyDpr(); }
   function getDprCap()  { return dprCap; }
   /** Cap the visual frame rate. fps 0 (or falsy) = uncapped. Audio sampling +
@@ -653,6 +666,8 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     setZen,
     isPaused,
     isZen,
+    setRenderSuspended,
+    isRenderSuspended,
     setDprCap,
     getDprCap,
     // Force a sizing pass against the canvas's current CSS box. The

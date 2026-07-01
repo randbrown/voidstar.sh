@@ -41,6 +41,16 @@ strip, bottom-right).
 - A true MIDI controller can instead drive **CC1** delay · **CC2** reverb ·
   **CC7** volume (absolute 0–1, any channel; Chromium browsers only). The DOIO
   on Keychron Launcher sends keystrokes, so it uses the key map above.
+- **Screen off (blackout):** `H` (topbar ☾) blacks the viewport and suspends the
+  visual render to free the GPU — **the audio engine, looper, sequencer and the
+  pad keep running**; tap the dark screen or press `H` again to wake. The 16-key
+  pad is fully mapped above, so bind `H` to a freed slot if you want it on the
+  pad. Note this is an *in-app* blackout: a web page can't power down the panel
+  backlight. For a real backlight-off, sleep the display at the OS level
+  (macOS: `Ctrl`+`Shift`+`Power`, or bind `pmset displaysleepnow` via
+  Hammerspoon) and keep the Mac awake (`caffeinate -i`, or "prevent sleep when
+  display is off"). Heads-up: HID keystrokes wake a sleeping Mac display, so the
+  pad's *keys* re-light it — the true-MIDI knobs (CC1/2/7) don't.
 
 ## Regenerating
 

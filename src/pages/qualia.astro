@@ -603,6 +603,28 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .start-btn.alt:hover { border-color: var(--cyan); color: var(--cyan); box-shadow: none; }
 
+    /* Blackout overlay — full-viewport black covering the topbar, panels and
+       popovers (z-index above the 100 popover layer). The fx render is
+       suspended via core.setRenderSuspended while this is up; audio keeps
+       playing. Tap it (or press H) to wake. */
+    #blackout-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      display: flex; align-items: center; justify-content: center;
+      background: #000; cursor: pointer;
+      transition: opacity 0.4s ease;
+    }
+    #blackout-overlay.hidden { opacity: 0; pointer-events: none; }
+    .blackout-hint {
+      color: rgba(255,255,255,0.16); font-family: var(--font-mono);
+      font-size: 0.72rem; letter-spacing: 0.08em; text-align: center;
+      padding: 0 1rem;
+      /* Fade the wake hint out so the screen settles to full black. */
+      animation: blackout-hint-fade 3.5s ease forwards;
+    }
+    .blackout-hint kbd { color: rgba(255,255,255,0.34); }
+    @keyframes blackout-hint-fade { 0%, 55% { opacity: 1; } 100% { opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) { .blackout-hint { animation: none; opacity: 0.16; } }
+
     /* Param panel — bottom-left HUD that builds itself from the active fx's
        schema. Audio panel is a sibling row above it. The stack is height-
        capped to (viewport − topbar − margin) and scrolls internally so that
@@ -2374,6 +2396,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div id="topbar-corner-pinned">
         <button class="ctrl-btn btn-icon" id="btn-fullscreen" title="Fullscreen (X)" aria-label="Fullscreen">⛶</button>
         <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
+        <button class="ctrl-btn btn-icon" id="btn-blackout" title="Blackout — screen off, audio keeps playing (H). Tap the dark screen to wake." aria-label="Blackout" aria-pressed="false">☾</button>
       </div>
     </div>
   </div>
@@ -2532,6 +2555,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div class="status-sub">pluggable visualizer harness — chladni · singularity lens · neural field. audio + pose drive a shared QualiaField; new fx are one file.</div>
   <button class="start-btn" id="start-btn">enable mic →</button>
   <button class="start-btn alt" id="start-silent-btn">start without mic</button>
+</div>
+
+<!-- Blackout — a stage "screen off": blacks the viewport and suspends the fx
+     render (frees the GPU) while the audio engine + controller keep running.
+     Toggled by the topbar ☾, the H key, or a mapped DOIO key; tap to wake.
+     NB the browser can't power down the panel backlight — sleep the real
+     display at the OS level for that (see docs/doio-kb16-qualia-keymap.md). -->
+<div id="blackout-overlay" class="hidden" title="Screen off — audio still playing. Tap or press H to wake.">
+  <span class="blackout-hint">screen off · audio still running — tap or press <kbd>H</kbd> to wake</span>
 </div>
 
 <div id="hints" title="Full key + knob map — click or press ?">
@@ -2970,6 +3002,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>A</kbd></span><span class="ctrl-lbl">audio on/off</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>S</kbd><kbd>Q</kbd><kbd>W</kbd><kbd>O</kbd></span><span class="ctrl-lbl">strudel / seq / vocoder / looper</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>Z</kbd><kbd>X</kbd></span><span class="ctrl-lbl">zen / fullscreen</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>H</kbd></span><span class="ctrl-lbl">blackout — screen off, audio keeps playing</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>Space</kbd></span><span class="ctrl-lbl">pause</span></div>
     </div>
 

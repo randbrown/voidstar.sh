@@ -172,6 +172,8 @@ export function initQualiaPage() {
   const btnPause   = document.getElementById('btn-pause');
   const btnZen     = document.getElementById('btn-zen');
   const btnFullscreen = document.getElementById('btn-fullscreen');
+  const btnBlackout    = document.getElementById('btn-blackout');
+  const blackoutOverlay = document.getElementById('blackout-overlay');
   const btnRecord  = document.getElementById('btn-record');
   const btnRecordMode = document.getElementById('btn-record-mode');
   const btnCamera  = document.getElementById('btn-camera');
@@ -1999,6 +2001,29 @@ export function initQualiaPage() {
   }
   btnZen.addEventListener('click', () => setZen(!core.isZen()));
   zenHandle.addEventListener('click', () => setZen(false));
+
+  // Blackout — a stage "screen off": black the viewport and suspend the fx
+  // render to free the GPU, while the whole audio engine (rig, looper,
+  // sequencer, Strudel, vox) and the pad/MIDI keep running. Unlike pause
+  // (Space), which brakes the audio transports too, this is purely visual — for
+  // dialing in the rig and walking away with the screen dark. Transient by
+  // design (not persisted): a reload should never come back to a black screen.
+  // NB the browser can't power down the panel backlight; to actually cut the
+  // backlight, sleep the display at the OS level (see docs/doio-… keymap notes).
+  function setBlackout(on) {
+    core.setRenderSuspended(on);
+    blackoutOverlay?.classList.toggle('hidden', !on);
+    btnBlackout?.classList.toggle('active', on);
+    btnBlackout?.setAttribute('aria-pressed', String(on));
+    if (on) {
+      // Replay the wake-hint fade each time we go dark, then settle to full black.
+      const hint = blackoutOverlay?.querySelector('.blackout-hint');
+      if (hint) { hint.style.animation = 'none'; void hint.offsetWidth; hint.style.animation = ''; }
+    }
+  }
+  btnBlackout?.addEventListener('click', () => setBlackout(!core.isRenderSuspended()));
+  // Tap the black overlay to wake the screen back up.
+  blackoutOverlay?.addEventListener('click', () => setBlackout(false));
 
   // Browser fullscreen — hides chrome (URL bar, tabs) via the Fullscreen API.
   // Independent of zen mode (which only hides our in-page topbar/HUD), so the
@@ -4878,6 +4903,7 @@ export function initQualiaPage() {
       }
       case 'z': setZen(!core.isZen()); break;
       case 'x': btnFullscreen.click(); break;
+      case 'h': setBlackout(!core.isRenderSuspended()); break;   // blackout — screen off, audio keeps playing
       case ' ': btnPause.click(); e.preventDefault(); break;
 
       // ── Rig / looper performance hotkeys (Megalodon macro-pad friendly) ──
