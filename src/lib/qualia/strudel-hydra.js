@@ -212,14 +212,17 @@ function savePanelOpen(open) {
 
 // Persisted UI volume — multiplies the muteGate when un-muted. Stacks
 // with Strudel's own gain() so the user can ride the mix without editing
-// the pattern.
+// the pattern. Runs 0..STRUDEL_MAX_GAIN: 1.0 is nominal, 1.0..1.5 is boost
+// headroom for a weak pattern. The track's brickwall limiter (strudelLimiter)
+// catches anything the boost pushes over the ceiling.
+const STRUDEL_MAX_GAIN = 1.5;
 const VOLUME_KEY = 'voidstar.qualia.strudel.volume';
 function loadVolume() {
   try {
     const raw = localStorage.getItem(VOLUME_KEY);
     if (raw == null) return 1;
     const v = parseFloat(raw);
-    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+    return Number.isFinite(v) ? Math.max(0, Math.min(STRUDEL_MAX_GAIN, v)) : 1;
   } catch { return 1; }
 }
 function saveVolume(v) {
@@ -1150,7 +1153,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   // change Strudel's gain() in code; stacks with it. Persisted so the
   // ride sticks across reloads.
   function setVolume(v) {
-    const clamped = Math.max(0, Math.min(1, Number(v) || 0));
+    const clamped = Math.max(0, Math.min(STRUDEL_MAX_GAIN, Number(v) || 0));
     if (clamped === _strudelVolume) return;
     _strudelVolume = clamped;
     saveVolume(_strudelVolume);

@@ -40,7 +40,10 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
   // Each track exposes a different setter/getter shape; normalise them here so
   // the rendering + metering code below is uniform. `meters` lists the audio.js
   // source ids whose peak/clip feed this channel's meter (rig folds in loops).
-  // `max` is the fader's top (vox output runs 0..2; everything else 0..1).
+  // `max` is the fader's top. 1.0 is nominal (loudness-matched across buses);
+  // strudel/seq go to 1.5 for weak-signal boost, vox output runs 0..2, and
+  // mic/rig stay at unity (they pass reference-trimmed sources). Per-track
+  // limiters catch any clipping the extra headroom introduces.
   const channels = [
     {
       id: 'mic', label: 'mic', max: 1, meters: ['mic'],
@@ -65,8 +68,8 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
       subscribe:  (cb) => looper.onMixChange(cb),
     },
     {
-      id: 'strudel', label: 'strudel', max: 1, meters: ['strudel'],
-      title: 'Strudel live-coding bus',
+      id: 'strudel', label: 'strudel', max: 1.5, meters: ['strudel'],
+      title: 'Strudel live-coding bus (0–1.5×; >1.0 boosts a weak pattern)',
       getLevel:   () => strudel.getVolume(),
       getMuted:   () => strudel.isMuted(),
       getLimiter: () => strudel.getLimiter(),
@@ -76,8 +79,8 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
       subscribe:  (cb) => strudel.onChange(cb),
     },
     {
-      id: 'seq', label: 'seq', max: 1, meters: ['sequencer'],
-      title: 'Pattern sequencer bus',
+      id: 'seq', label: 'seq', max: 1.5, meters: ['sequencer'],
+      title: 'Pattern sequencer bus (0–1.5×; loudness-matched at 1.0, >1.0 boosts)',
       getLevel:   () => sequencer.getVolume(),
       getMuted:   () => sequencer.isMuted(),
       getLimiter: () => sequencer.getLimiter(),
