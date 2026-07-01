@@ -203,6 +203,11 @@ const buildStamp = readBuildStamp();
     .sl-sync-pending { color: var(--amber, #ffc857); }
     .sl-sync-syncing { color: var(--text-muted); }
     .sl-sync-synced  { color: var(--green); }
+    .sl-sync-reconnect { color: var(--amber, #ffc857); }
+    .sl-sync-tappable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+    /* Inline "sync now" button + status used on edit pages. */
+    .sl-sync-inline { display: inline-flex; align-items: center; gap: 0.5rem; }
+    .sl-sync-inline-status { font-size: 0.72rem; }
 
     /* ── Offline-charts bar (setlist view) ── */
     .sl-offline-bar {
@@ -1119,12 +1124,22 @@ const buildStamp = readBuildStamp();
       border: none;
       display: block;
     }
-    /* Flattened chart image: fit to width, pinned to the top — mirrors how the
-       Google viewer laid the page out, so existing annotations stay aligned,
-       but any space around it is our dark backdrop rather than the viewer's. */
+    /* Flattened chart image: fit to width, pinned to the top — but any space
+       around it is our dark backdrop rather than the viewer's. */
     .sl-perform-chart-img.sl-chart-flat {
       height: auto;
       bottom: auto;
+    }
+    /* When the song has annotations, the overlay canvas fills the aspect-locked
+       wrap (aspect = the annotation's authoring ratio). The chart image must
+       fill the SAME box so canvas rect == chart rect == the box the strokes
+       were normalized to — otherwise a natural-aspect (height:auto) image is a
+       different rectangle than the canvas and the strokes drift. This mirrors
+       how .sl-annotation-stage lays out chart + canvas in the annotate/detail
+       views (both inset:0, 100%/100%), which is why those stay aligned. */
+    .sl-perform-chart-wrap.sl-has-annotations .sl-perform-chart-img.sl-chart-flat {
+      height: 100%;
+      bottom: 0;
     }
     .sl-perform-chart-canvas {
       position: absolute;

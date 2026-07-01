@@ -1,13 +1,13 @@
 // All view renderers for the setlist lab.
 
 import * as store from './store.js';
-import { navigate, getLastSongId, setLastSongId } from './app.js';
+import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
 import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createBlankChartDoc } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createBlankChartDoc } from './gdrive-backup.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChartUrl, CHART_CACHED_EVENT } from './chart-cache.js';
 
@@ -120,6 +120,77 @@ function vocalistDot(code, legend) {
   return `<span class="sl-vocalist" data-v="${code}" title="${name}">${code}</span>`;
 }
 
+// ── Shared Google Drive sync (used by Settings, per-page buttons, the pill) ──
+
+function formatGdriveError(e) {
+  const msg = e.message || String(e);
+  if (msg.includes('invalid_client') || msg.includes('no registered origin') || msg.includes('Authorization Error')) {
+    return `OAuth error: add ${location.origin} as an authorized JavaScript origin in your Google Cloud Console → Credentials → OAuth client ID`;
+  }
+  if (msg.includes('popup_closed') || msg.includes('user_cancel')) {
+    return 'Sign-in cancelled.';
+  }
+  return `Error: ${msg}`;
+}
+
+// One implementation for every "sync now" affordance. Runs the safe
+// pull→merge→push cycle, snapshotting local state before any remote import so
+// the sync is reversible, and reports status into an optional element.
+// Returns true on success. `interactive` controls whether an expired token may
+// trigger the OAuth popup (only from a real user gesture).
+async function runManualSync(statusEl, { interactive = true } = {}) {
+  const setStatus = (text, color) => {
+    if (!statusEl) return;
+    statusEl.textContent = text;
+    statusEl.style.color = color || '';
+  };
+  if (isSyncing()) { setStatus('Sync already in progress…'); return false; }
+
+  let client;
+  try {
+    client = await initGdriveBackup({ interactive });
+  } catch (e) {
+    setStatus(formatGdriveError(e), 'var(--pink)');
+    return false;
+  }
+  if (!client) {
+    setStatus(needsReconnect()
+      ? 'Google Drive needs reconnecting — tap the sync pill on the home screen.'
+      : 'Set a Google OAuth Client ID in Settings to enable backup.', 'var(--pink)');
+    return false;
+  }
+
+  setBackupClient(client);
+  setStatus('Syncing…', '');
+  try {
+    await pullMergePushCycle(
+      client,
+      () => store.exportAll(),
+      (merged) => store.importAll(merged),
+      { snapshotFn: () => store.putSnapshot('pre-sync'), historyForce: true },
+    );
+    setStatus(`✓ synced · ${formatLastBackup()}`, 'var(--green)');
+    return true;
+  } catch (e) {
+    setStatus(formatGdriveError(e), 'var(--pink)');
+    return false;
+  }
+}
+
+// A compact "sync now" button + inline status, for edit-page action bars. On
+// success it re-renders the page shortly after so any pulled-in changes show.
+function syncNowButton() {
+  const wrap = el('div', 'sl-sync-inline');
+  const status = el('span', 'sl-hint sl-sync-inline-status');
+  const b = btn('⟲ sync', 'sl-btn-ghost sl-btn-sm', async () => {
+    const ok = await runManualSync(status, { interactive: true });
+    if (ok) setTimeout(() => refresh(), 900);
+  });
+  wrap.appendChild(b);
+  wrap.appendChild(status);
+  return wrap;
+}
+
 // ── Dashboard ──
 
 export async function renderDashboard(root) {
@@ -142,25 +213,49 @@ export async function renderDashboard(root) {
   bar.appendChild(actions);
   root.appendChild(bar);
 
-  // Connectivity / backup pill. Shows 'offline' whenever the device is
-  // offline, and (when Drive backup is on) syncing / unsynced / synced so the
-  // user knows edits are safe. Hidden when online and there's nothing
-  // noteworthy to say. The tooltip carries the last-successful-backup time.
+  // Connectivity / backup pill. Shows 'offline' when the device is offline;
+  // (when Drive backup is on) syncing / unsynced / synced so the user knows
+  // edits are safe; and 'reconnect' when a client is configured but the OAuth
+  // token has lapsed (a silent refresh is impossible — GIS needs a gesture).
+  // Tapping the pill syncs now, or reconnects when needed. Tooltip carries the
+  // last-successful-backup time.
   const pill = el('div', 'sl-sync-pill');
   root.appendChild(pill);
   const gbackup = isGdriveBackupEnabled();
+  const reconnect = needsReconnect();
   const paintPill = (state) => {
     const online = typeof navigator === 'undefined' || navigator.onLine;
     let text = '', cls = '';
     if (!online) { text = '● offline'; cls = 'sl-sync-offline'; }
+    else if (reconnect) { text = '↻ reconnect'; cls = 'sl-sync-reconnect'; }
     else if (!gbackup) { text = ''; }
     else if (state === 'syncing') { text = '⟳ backing up…'; cls = 'sl-sync-syncing'; }
     else if (state === 'pending') { text = '● unsaved changes'; cls = 'sl-sync-pending'; }
     else if (state === 'synced') { text = '✓ backed up'; cls = 'sl-sync-synced'; }
+    else if (gbackup) { text = '✓ backed up'; cls = 'sl-sync-synced'; }
     pill.className = `sl-sync-pill ${cls}`;
+    if (gbackup || reconnect) pill.classList.add('sl-sync-tappable');
     pill.textContent = text;
-    pill.title = gbackup ? `Last backup: ${formatLastBackup()}` : '';
+    pill.title = gbackup ? `Last backup: ${formatLastBackup()} — tap to sync`
+      : reconnect ? 'Tap to reconnect Google Drive' : '';
   };
+  pill.addEventListener('click', async () => {
+    if (isSyncing()) return;
+    if (reconnect) {
+      // User gesture → interactive re-auth is allowed.
+      const ok = await runManualSync(null, { interactive: true });
+      if (ok) refresh();
+      return;
+    }
+    if (gbackup) {
+      pill.textContent = '⟳ backing up…';
+      const ok = await runManualSync(null, { interactive: false });
+      if (ok) refresh(); else paintPill(undefined);
+      return;
+    }
+    // No client configured yet — send them to set one up.
+    navigate('#settings');
+  });
   const unsubPill = onBackupState(paintPill);
   const onOnline = () => paintPill(undefined);
   const onOffline = () => paintPill('offline');
@@ -212,6 +307,9 @@ export async function renderDashboard(root) {
   dataActions.appendChild(btn('import', 'sl-btn-ghost sl-btn-sm', async () => {
     const data = await uploadJson();
     if (!data) return;
+    // Snapshot current state first so a mistaken import is reversible via
+    // Settings → "undo last sync".
+    await store.putSnapshot('pre-import');
     if (data.type === 'setlist') await store.importSetlist(data);
     else if (data.type === 'song') await store.importSong(data);
     else if (data.type === 'sources') await store.importSources(data);
@@ -239,7 +337,10 @@ async function autoBackupFromGdrive() {
   if (!client) return;
   setBackupClient(client);
 
-  await pullMergePushCycle(client, () => store.exportAll(), (merged) => store.importAll(merged));
+  // Snapshot before importing remote data; history write is throttled (not
+  // forced) so opening the app repeatedly doesn't spam Drive with versions.
+  await pullMergePushCycle(client, () => store.exportAll(), (merged) => store.importAll(merged),
+    { snapshotFn: () => store.putSnapshot('pre-sync') });
 
   store.setOnWrite(() => debouncedPush(() => store.exportAll()));
   watchConnectivity();
@@ -445,10 +546,11 @@ export async function renderSetlistEdit(root, setlistId) {
     if (!prev) return;
     sl.sets = prev;
     await store.putSetlist(sl);
-    navigate(`#setlist/${sl.id}/edit`);
+    refresh();
   });
   editActions.appendChild(reorderBtn);
   editActions.appendChild(undoBtn);
+  if (isGdriveBackupEnabled() || needsReconnect()) editActions.appendChild(syncNowButton());
   bar.appendChild(editActions);
   root.classList.remove('sl-reorder-on');
 
@@ -577,7 +679,7 @@ export async function renderSetlistEdit(root, setlistId) {
         pushUndo();
         set.songIds.splice(set.songIds.indexOf(song.id), 1);
         await store.putSetlist(sl);
-        navigate(`#setlist/${sl.id}/edit`);
+        refresh();
       });
       row.appendChild(removeBtn);
       rowContainer.appendChild(row);
@@ -601,7 +703,7 @@ export async function renderSetlistEdit(root, setlistId) {
       pushUndo();
       set.songIds.push(song.id);
       await store.putSetlist(sl);
-      navigate(`#setlist/${sl.id}/edit`);
+      refresh();
     }));
     root.appendChild(section);
   }
@@ -611,7 +713,7 @@ export async function renderSetlistEdit(root, setlistId) {
     pushUndo();
     sl.sets.push({ name: `Set ${sl.sets.length + 1}`, songIds: [] });
     await store.putSetlist(sl);
-    navigate(`#setlist/${sl.id}/edit`);
+    refresh();
   }));
 
   // Danger zone
@@ -815,7 +917,7 @@ export async function renderSongFocus(root, songId, setlistId) {
         if (applied) {
           await store.putSong(song);
           scrapeBtn.textContent = `found ${applied} field(s)!`;
-          setTimeout(() => navigate(`#song/${songId}${setlistId ? '/' + setlistId : ''}`), 1200);
+          setTimeout(() => refresh(), 1200);
         } else {
           scrapeBtn.textContent = 'no new data';
         }
@@ -836,7 +938,7 @@ export async function renderSongFocus(root, songId, setlistId) {
         if (found) {
           await store.putSong(song);
           searchBtn.textContent = 'found it!';
-          setTimeout(() => navigate(`#song/${songId}${setlistId ? '/' + setlistId : ''}`), 900);
+          setTimeout(() => refresh(), 900);
         } else {
           searchBtn.textContent = 'no match found';
           setTimeout(() => { searchBtn.textContent = 'search for chart'; }, 2000);
@@ -855,7 +957,7 @@ export async function renderSongFocus(root, songId, setlistId) {
         song.chartUrl = webViewLink;
         await store.putSong(song);
         window.open(webViewLink, '_blank');
-        navigate(`#song/${songId}${setlistId ? '/' + setlistId : ''}`);
+        refresh();
       } catch (e) {
         createBtn.textContent = 'failed';
         alert(e.message);
@@ -874,6 +976,9 @@ export async function renderSongFocus(root, songId, setlistId) {
     const data = await store.exportSong(songId);
     if (data) downloadJson(data, `song-${song.title.replace(/\s+/g, '-').toLowerCase()}.json`);
   }));
+  // Quick "sync now" to Drive from the song page (whole dataset), shown once a
+  // Drive client is configured.
+  if (isGdriveBackupEnabled() || needsReconnect()) actionBar.appendChild(syncNowButton());
   root.appendChild(actionBar);
 
   // Spotify embed + timecode tracker
@@ -1386,58 +1491,70 @@ export async function renderSettings(root) {
   clientIdInput?.addEventListener('change', () => {
     localStorage.setItem('voidstar.setlist.gdrive.clientId', clientIdInput.value.trim());
   });
-  const gdriveActions = el('div', 'sl-action-bar');
-  function formatGdriveError(e) {
-    const msg = e.message || String(e);
-    if (msg.includes('invalid_client') || msg.includes('no registered origin') || msg.includes('Authorization Error')) {
-      return `OAuth error: add ${location.origin} as an authorized JavaScript origin in your Google Cloud Console → Credentials → OAuth client ID`;
-    }
-    if (msg.includes('popup_closed') || msg.includes('user_cancel')) {
-      return 'Sign-in cancelled.';
-    }
-    return `Error: ${msg}`;
-  }
-
-  gdriveActions.appendChild(btn('back up now', 'sl-btn-primary sl-btn-sm', async () => {
-    try {
-      const gdrive = await initGdriveBackup();
-      if (!gdrive) return;
-      setBackupClient(gdrive);
-      gdriveStatus.textContent = 'Backing up...';
-      gdriveStatus.style.color = '';
-      await pullMergePushCycle(gdrive, () => store.exportAll(), (merged) => store.importAll(merged));
-      gdriveStatus.textContent = `Backed up. Last backup: ${formatLastBackup()}`;
-      gdriveStatus.style.color = 'var(--green)';
-    } catch (e) {
-      gdriveStatus.textContent = formatGdriveError(e);
-      gdriveStatus.style.color = 'var(--pink)';
-    }
-  }));
-  gdriveActions.appendChild(btn('restore from drive', 'sl-btn-ghost sl-btn-sm', async () => {
-    try {
-      const gdrive = await initGdriveBackup();
-      if (!gdrive) return;
-      setBackupClient(gdrive);
-      gdriveStatus.textContent = 'Restoring...';
-      gdriveStatus.style.color = '';
-      const { hadRemote } = await pullMergePushCycle(gdrive, () => store.exportAll(), (merged) => store.importAll(merged));
-      if (hadRemote) {
-        gdriveStatus.textContent = `Restored from Google Drive. Last backup: ${formatLastBackup()}`;
-        gdriveStatus.style.color = 'var(--green)';
-        navigate('#home');
-      } else {
-        gdriveStatus.textContent = 'No data found in Drive yet.';
-        gdriveStatus.style.color = '';
-      }
-    } catch (e) {
-      gdriveStatus.textContent = formatGdriveError(e);
-      gdriveStatus.style.color = 'var(--pink)';
-    }
-  }));
-  gdriveSection.appendChild(gdriveActions);
   const gdriveStatus = el('div', 'sl-hint',
     isGdriveBackupEnabled() ? `Last backup: ${formatLastBackup()}` : '');
+
+  const gdriveActions = el('div', 'sl-action-bar');
+  gdriveActions.appendChild(btn('back up now', 'sl-btn-primary sl-btn-sm', () =>
+    runManualSync(gdriveStatus, { interactive: true })));
+  gdriveActions.appendChild(btn('restore from drive', 'sl-btn-ghost sl-btn-sm', async () => {
+    const ok = await runManualSync(gdriveStatus, { interactive: true });
+    if (ok) setTimeout(() => navigate('#home'), 700);
+  }));
+  gdriveSection.appendChild(gdriveActions);
   gdriveSection.appendChild(gdriveStatus);
+
+  // ── Version safeguards: undo last sync/import, or restore an earlier
+  // Drive version. Every restore snapshots current state first, so it's itself
+  // reversible via "undo last sync".
+  const safetyActions = el('div', 'sl-action-bar');
+  safetyActions.appendChild(btn('undo last sync', 'sl-btn-ghost sl-btn-sm', async () => {
+    const snaps = await store.listSnapshots();
+    if (!snaps.length) {
+      gdriveStatus.textContent = 'No snapshot to undo yet.';
+      gdriveStatus.style.color = '';
+      return;
+    }
+    if (!confirm('Revert to the state saved just before your last sync / restore / import?')) return;
+    await store.restoreSnapshot(snaps[0].ts);
+    gdriveStatus.textContent = 'Reverted to the pre-sync snapshot.';
+    gdriveStatus.style.color = 'var(--green)';
+    setTimeout(() => navigate('#home'), 700);
+  }));
+  const historyList = el('div', 'sl-source-list');
+  safetyActions.appendChild(btn('restore a version…', 'sl-btn-ghost sl-btn-sm', async () => {
+    historyList.textContent = 'Loading versions…';
+    try {
+      const client = await initGdriveBackup({ interactive: true });
+      if (!client) {
+        historyList.textContent = needsReconnect()
+          ? 'Reconnect Google Drive first (tap the sync pill on the home screen).'
+          : 'Set a Google OAuth Client ID first.';
+        return;
+      }
+      setBackupClient(client);
+      const files = await client.listHistory();
+      historyList.innerHTML = '';
+      if (!files.length) { historyList.appendChild(emptyState('No earlier versions saved on Drive yet.')); return; }
+      for (const f of files) {
+        const when = f.createdTime ? new Date(f.createdTime).toLocaleString() : f.name;
+        const row = el('div', 'sl-source-row');
+        row.appendChild(el('span', 'sl-source-url', when));
+        row.appendChild(btn('load', 'sl-btn-sm sl-btn-ghost', async () => {
+          if (!confirm(`Restore the version from ${when}? Your current data is snapshotted first, so you can undo this.`)) return;
+          await store.putSnapshot('pre-version-restore');
+          const data = await client.readHistory(f.id);
+          await store.replaceAll(data);
+          navigate('#home');
+        }));
+        historyList.appendChild(row);
+      }
+    } catch (e) {
+      historyList.textContent = formatGdriveError(e);
+    }
+  }));
+  gdriveSection.appendChild(safetyActions);
+  gdriveSection.appendChild(historyList);
   root.appendChild(gdriveSection);
 
   // ── Offline charts ──
@@ -1917,6 +2034,11 @@ export async function renderPerformMode(root, setlistId, startSongId) {
           (window.innerWidth / Math.max(1, window.innerHeight - 96));
         chartWrap.style.aspectRatio = String(aspect);
         if (data?.strokes?.length) {
+          // Make the chart fill the aspect-locked wrap (see .sl-has-annotations
+          // CSS) so the overlay lines up exactly, matching the annotate/detail
+          // views. The class goes on the shared parent, so it applies whether
+          // the chart image mounts before or after this annotation load.
+          chartWrap.classList.add('sl-has-annotations');
           chartAnnotationCtrl = renderReadonlyAnnotations(chartCanvas, data.strokes);
         }
       });
