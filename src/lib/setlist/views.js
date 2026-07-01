@@ -2034,7 +2034,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       // Offline-cached blob first (renders with no network); live URLs
       // otherwise. Async cache read is guarded against a fast swipe that has
       // already moved us to a different song.
-      getOfflineChartUrl(entry.songId).then(objUrl => {
+      getOfflineChartUrl(entry.songId, song.chartUrl).then(objUrl => {
         if (currentChartWrap !== chartWrap) { if (objUrl) URL.revokeObjectURL(objUrl); return; }
         if (objUrl) {
           currentChartObjectUrl = objUrl;
@@ -2194,7 +2194,7 @@ export async function renderAnnotation(root, songId, setlistId) {
 
   // Offline-cached blob first (also gives a flat image to annotate against,
   // which lines up better than a live Google Doc iframe); live URL otherwise.
-  const cachedChartUrl = await getOfflineChartUrl(songId);
+  const cachedChartUrl = await getOfflineChartUrl(songId, song.chartUrl);
   if (cachedChartUrl) {
     const img = document.createElement('img');
     img.src = cachedChartUrl;

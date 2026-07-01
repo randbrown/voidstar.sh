@@ -41,7 +41,13 @@ export function matchScore(titleA, titleB) {
   const b = normalize(titleB);
   if (!a || !b) return 0;
   if (a === b) return 1;
-  if (a.includes(b) || b.includes(a)) return 0.9;
+  // Substring containment is a strong signal ("Sweet Home" ⊂ "Sweet Home
+  // Alabama"), but only when the contained title is substantial. Guard against
+  // a tiny fragment (e.g. a mis-parsed one-letter "T" from "T-R-O-U-B-L-E"),
+  // which is a substring of nearly every title and would otherwise score 0.9
+  // for almost every song, hijacking their chart match.
+  const shorter = a.length <= b.length ? a : b;
+  if (shorter.length >= 4 && (a.includes(b) || b.includes(a))) return 0.9;
   const maxLen = Math.max(a.length, b.length);
   const dist = levenshtein(a, b);
   return Math.max(0, 1 - dist / maxLen);
@@ -100,7 +106,11 @@ export function findBestMatchWithArtist(songTitle, songArtist, candidates, thres
 export function parseDriveFilename(name) {
   let clean = name.replace(/\.(pdf|docx?|txt|gdoc)$/i, '').trim();
   clean = clean.replace(/^\d+\.\s*/, '');
-  const parts = clean.split(/\s*[-–—]\s*/);
+  // Split "Title - Artist" only on a dash flanked by whitespace. Requiring the
+  // surrounding spaces keeps hyphenated or spelled-out titles intact — e.g.
+  // "T-R-O-U-B-L-E - Travis Tritt" must parse to title "T-R-O-U-B-L-E", not "T"
+  // (a bare /\s*[-–—]\s*/ splits on every internal hyphen).
+  const parts = clean.split(/\s+[-–—]\s+/);
   if (parts.length >= 2) {
     return { title: parts[0].trim(), artist: parts.slice(1).join(' - ').trim() };
   }

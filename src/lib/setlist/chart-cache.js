@@ -132,10 +132,22 @@ export async function getSetlistOfflineStatus(setlist) {
 
 // An object URL for a song's cached chart, or null if not cached. Caller MUST
 // URL.revokeObjectURL() it when done to avoid leaking.
-export async function getOfflineChartUrl(songId) {
+//
+// Pass the song's current chartUrl as `expectedUrl` to guard against a stale
+// blob: the cache is keyed by songId, so if the chart link later changed (e.g.
+// a re-sync corrected a bad match) the old blob would otherwise keep rendering
+// forever. When the cached sourceUrl doesn't match, we drop the stale entry and
+// report a miss so the caller falls back to the live URL.
+export async function getOfflineChartUrl(songId, expectedUrl) {
   try {
     const rec = await store.getChartBlob(songId);
-    if (rec?.blob) return URL.createObjectURL(rec.blob);
+    if (rec?.blob) {
+      if (expectedUrl && rec.sourceUrl && rec.sourceUrl !== expectedUrl) {
+        await store.deleteChartBlob(songId);
+        return null;
+      }
+      return URL.createObjectURL(rec.blob);
+    }
   } catch {}
   return null;
 }
