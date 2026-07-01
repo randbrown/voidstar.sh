@@ -1999,6 +1999,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.25rem 0.7rem 0.45rem;
       font-size: 0.72rem;
     }
+    /* Tuner mode bar — mono / chord / strings + per-mode target pickers. */
+    .rig-tuner-modebar { display: flex; align-items: center; flex-wrap: wrap; gap: 0.3rem 0.5rem; margin-bottom: 0.3rem; }
+    .rig-tuner-modes { display: inline-flex; gap: 2px; }
+    .rig-tuner-mode { padding: 0.05rem 0.45rem; font-size: 0.62rem; line-height: 1.5; text-transform: lowercase; }
+    .rig-tuner-mode.active { color: var(--cyan); border-color: var(--cyan); background: rgba(103,232,249,0.10); }
+    .rig-tuner-target { display: inline-flex; gap: 0.25rem; }
+    .rig-tuner-sel {
+      font-size: 0.66rem; padding: 0.05rem 0.25rem; border-radius: 4px;
+      background: rgba(0,0,0,0.30); color: var(--text); border: 1px solid rgba(255,255,255,0.12);
+    }
     /* Readout text all rides at the note's size so cents / Hz / target are
        legible from across a room (wraps if the panel is narrow). */
     .rig-tuner-readout { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.3rem 0.6rem; }
