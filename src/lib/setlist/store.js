@@ -51,8 +51,6 @@ function openDb() {
   return _dbPromise;
 }
 
-export { openDb as _openDb };
-
 async function tx(storeName, mode) {
   const db = await openDb();
   const t = db.transaction(storeName, mode);
@@ -213,6 +211,13 @@ export const getSetlist = (id) => getOne(SETLISTS, id);
 export const getAllSetlists = () => getAll(SETLISTS);
 export const deleteSetlist = (id) => del(SETLISTS, id);
 
+// ── Annotations (hand-drawn chart markup, keyed by songId) ──
+
+export const putAnnotation = (ann) => put(ANNOTATIONS, { ...ann, updatedAt: Date.now() });
+export const getAnnotation = (songId) => getOne(ANNOTATIONS, songId);
+export const getAllAnnotations = () => getAll(ANNOTATIONS);
+export const deleteAnnotation = (songId) => del(ANNOTATIONS, songId);
+
 // ── Cached chart images (offline) ──
 
 export const putChartBlob = (songId, blob, sourceUrl) =>
@@ -237,17 +242,18 @@ export function mergedSong(song, setlist) {
 // ── Export / Import ──
 
 export async function exportAll() {
-  const [songs, notes, setlists] = await Promise.all([
-    getAllSongs(), getAllNotes(), getAllSetlists(),
+  const [songs, notes, setlists, annotations] = await Promise.all([
+    getAllSongs(), getAllNotes(), getAllSetlists(), getAllAnnotations(),
   ]);
   const sources = getSourcesRaw();
-  return { version: 1, songs, notes, setlists, sources, exportedAt: Date.now() };
+  return { version: 1, songs, notes, setlists, annotations, sources, exportedAt: Date.now() };
 }
 
 export async function importAll(data) {
   if (data.songs) for (const s of data.songs) await put(SONGS, s);
   if (data.notes) for (const n of data.notes) await put(NOTES, n);
   if (data.setlists) for (const sl of data.setlists) await put(SETLISTS, sl);
+  if (data.annotations) for (const a of data.annotations) await put(ANNOTATIONS, a);
   if (data.sources) setSourcesRaw(data.sources);
 }
 
@@ -258,14 +264,16 @@ export async function exportSetlist(setlistId) {
   const songs = (await Promise.all(songIds.map(id => getSong(id)))).filter(Boolean);
   const noteArrays = await Promise.all(songIds.map(id => getNotesForSong(id)));
   const notes = noteArrays.flat();
-  return { version: 1, type: 'setlist', setlist: sl, songs, notes, exportedAt: Date.now() };
+  const annotations = (await Promise.all(songIds.map(id => getAnnotation(id)))).filter(Boolean);
+  return { version: 1, type: 'setlist', setlist: sl, songs, notes, annotations, exportedAt: Date.now() };
 }
 
 export async function exportSong(songId) {
   const song = await getSong(songId);
   if (!song) return null;
   const notes = await getNotesForSong(songId);
-  return { version: 1, type: 'song', song, notes, exportedAt: Date.now() };
+  const annotation = await getAnnotation(songId);
+  return { version: 1, type: 'song', song, notes, annotation: annotation || null, exportedAt: Date.now() };
 }
 
 export async function exportSources() {
@@ -276,11 +284,13 @@ export async function importSetlist(data) {
   if (data.setlist) await put(SETLISTS, data.setlist);
   if (data.songs) for (const s of data.songs) await put(SONGS, s);
   if (data.notes) for (const n of data.notes) await put(NOTES, n);
+  if (data.annotations) for (const a of data.annotations) await put(ANNOTATIONS, a);
 }
 
 export async function importSong(data) {
   if (data.song) await put(SONGS, data.song);
   if (data.notes) for (const n of data.notes) await put(NOTES, n);
+  if (data.annotation) await put(ANNOTATIONS, data.annotation);
 }
 
 export async function importSources(data) {

@@ -5,9 +5,9 @@ import { navigate, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
-import { initGdriveSync, isGdriveSyncEnabled, mergeData, setSyncClient, debouncedPush, watchConnectivity, onSyncState } from './gdrive-sync.js';
+import { initGdriveBackup, isGdriveBackupEnabled, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createBlankChartDoc } from './gdrive-backup.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChartUrl, CHART_CACHED_EVENT } from './chart-cache.js';
 
@@ -142,24 +142,26 @@ export async function renderDashboard(root) {
   bar.appendChild(actions);
   root.appendChild(bar);
 
-  // Connectivity / sync pill. Shows 'offline' whenever the device is offline,
-  // and (when Drive sync is on) syncing / unsynced / synced so the user knows
-  // edits are safe. Hidden when online and there's nothing noteworthy to say.
+  // Connectivity / backup pill. Shows 'offline' whenever the device is
+  // offline, and (when Drive backup is on) syncing / unsynced / synced so the
+  // user knows edits are safe. Hidden when online and there's nothing
+  // noteworthy to say. The tooltip carries the last-successful-backup time.
   const pill = el('div', 'sl-sync-pill');
   root.appendChild(pill);
-  const gsync = isGdriveSyncEnabled();
+  const gbackup = isGdriveBackupEnabled();
   const paintPill = (state) => {
     const online = typeof navigator === 'undefined' || navigator.onLine;
     let text = '', cls = '';
     if (!online) { text = '● offline'; cls = 'sl-sync-offline'; }
-    else if (!gsync) { text = ''; }
-    else if (state === 'syncing') { text = '⟳ syncing…'; cls = 'sl-sync-syncing'; }
-    else if (state === 'pending') { text = '● unsynced changes'; cls = 'sl-sync-pending'; }
-    else if (state === 'synced') { text = '✓ synced'; cls = 'sl-sync-synced'; }
+    else if (!gbackup) { text = ''; }
+    else if (state === 'syncing') { text = '⟳ backing up…'; cls = 'sl-sync-syncing'; }
+    else if (state === 'pending') { text = '● unsaved changes'; cls = 'sl-sync-pending'; }
+    else if (state === 'synced') { text = '✓ backed up'; cls = 'sl-sync-synced'; }
     pill.className = `sl-sync-pill ${cls}`;
     pill.textContent = text;
+    pill.title = gbackup ? `Last backup: ${formatLastBackup()}` : '';
   };
-  const unsubPill = onSyncState(paintPill);
+  const unsubPill = onBackupState(paintPill);
   const onOnline = () => paintPill(undefined);
   const onOffline = () => paintPill('offline');
   window.addEventListener('online', onOnline);
@@ -219,31 +221,25 @@ export async function renderDashboard(root) {
   dataSection.appendChild(dataActions);
   root.appendChild(dataSection);
 
-  // Auto-sync from Google Drive on page load
-  if (isGdriveSyncEnabled()) {
-    autoSyncFromGdrive().catch(e => console.warn('[gdrive] auto-sync:', e.message));
+  // Auto-backup to/from Google Drive on page load
+  if (isGdriveBackupEnabled()) {
+    autoBackupFromGdrive().catch(e => console.warn('[gdrive-backup] auto-backup:', e.message));
   }
 }
 
-let _autoSyncDone = false;
+let _autoBackupDone = false;
 
-async function autoSyncFromGdrive() {
-  if (_autoSyncDone) return;
-  _autoSyncDone = true;
-  // Silent: only sync if we already hold a valid token. If the token has
+async function autoBackupFromGdrive() {
+  if (_autoBackupDone) return;
+  _autoBackupDone = true;
+  // Silent: only back up if we already hold a valid token. If the token has
   // expired, skip rather than popping an OAuth window the browser will block
   // (the user can re-connect from Sources & Sync, which is a real gesture).
-  const client = await initGdriveSync({ interactive: false });
+  const client = await initGdriveBackup({ interactive: false });
   if (!client) return;
-  setSyncClient(client);
+  setBackupClient(client);
 
-  const remote = await client.pull();
-  if (remote) {
-    const local = await store.exportAll();
-    const merged = mergeData(local, remote);
-    await store.importAll(merged);
-    await client.push({ ...merged, version: 1, exportedAt: Date.now() });
-  }
+  await pullMergePushCycle(client, () => store.exportAll(), (merged) => store.importAll(merged));
 
   store.setOnWrite(() => debouncedPush(() => store.exportAll()));
   watchConnectivity();
@@ -829,6 +825,44 @@ export async function renderSongFocus(root, songId, setlistId) {
       setTimeout(() => { scrapeBtn.textContent = 'scrape'; }, 2500);
     });
     actionBar.appendChild(scrapeBtn);
+  } else {
+    // Chart-fallback ladder: search configured Drive folders first (tier 1
+    // personal + tier 2 community, both recursed via searchChartForSong),
+    // and only offer "create chart doc" (tier 3) once that comes up empty.
+    const searchBtn = btn('search for chart', 'sl-btn-ghost sl-btn-sm', async () => {
+      searchBtn.textContent = 'searching...';
+      try {
+        const found = await searchChartForSong(song);
+        if (found) {
+          await store.putSong(song);
+          searchBtn.textContent = 'found it!';
+          setTimeout(() => navigate(`#song/${songId}${setlistId ? '/' + setlistId : ''}`), 900);
+        } else {
+          searchBtn.textContent = 'no match found';
+          setTimeout(() => { searchBtn.textContent = 'search for chart'; }, 2000);
+        }
+      } catch (e) {
+        searchBtn.textContent = 'search failed';
+        setTimeout(() => { searchBtn.textContent = 'search for chart'; }, 2000);
+      }
+    });
+    actionBar.appendChild(searchBtn);
+
+    const createBtn = btn('create chart doc', 'sl-btn-accent sl-btn-sm', async () => {
+      createBtn.textContent = 'creating...';
+      try {
+        const webViewLink = await createBlankChartDoc(song);
+        song.chartUrl = webViewLink;
+        await store.putSong(song);
+        window.open(webViewLink, '_blank');
+        navigate(`#song/${songId}${setlistId ? '/' + setlistId : ''}`);
+      } catch (e) {
+        createBtn.textContent = 'failed';
+        alert(e.message);
+        setTimeout(() => { createBtn.textContent = 'create chart doc'; }, 2000);
+      }
+    });
+    actionBar.appendChild(createBtn);
   }
   if (song.spotifyUri) {
     const spBtn = btn('open in spotify', 'sl-btn-spotify sl-btn-sm', () => {
@@ -1202,47 +1236,63 @@ export async function renderSettings(root) {
   `;
   root.appendChild(workerSection);
 
-  // Google Drive folders
-  const driveSection = el('div', 'sl-section');
-  driveSection.innerHTML = `
-    <div class="sl-section-title">google drive folders</div>
-    <div class="sl-hint" style="margin-bottom:0.5rem">Add Google Drive folder URLs containing Nashville Number charts. Requires the sync worker to be deployed.</div>
-  `;
-  const driveFolderList = el('div', 'sl-source-list');
-  driveSection.appendChild(driveFolderList);
+  // Google Drive folders — personal (direct children only) and
+  // community/shared (recursive subfolder search) are kept as two separate
+  // lists: they have different trust/perf profiles (a recursive walk of a
+  // shared archive you don't own is slower and worth a distinct warning).
+  function buildFolderSection(title, hint, sourceKey) {
+    const section = el('div', 'sl-section');
+    section.innerHTML = `
+      <div class="sl-section-title">${title}</div>
+      <div class="sl-hint" style="margin-bottom:0.5rem">${hint}</div>
+    `;
+    const list = el('div', 'sl-source-list');
+    section.appendChild(list);
 
-  function renderDriveFolders() {
-    driveFolderList.innerHTML = '';
-    for (let i = 0; i < sources.driveFolders.length; i++) {
-      const f = sources.driveFolders[i];
-      const row = el('div', 'sl-source-row');
-      row.innerHTML = `<span class="sl-source-url">${f.url}</span>`;
-      const removeBtn = btn('&times;', 'sl-btn-icon sl-btn-danger', () => {
-        sources.driveFolders.splice(i, 1);
-        setSources(sources);
-        renderDriveFolders();
-      });
-      row.appendChild(removeBtn);
-      driveFolderList.appendChild(row);
+    function renderFolders() {
+      list.innerHTML = '';
+      for (let i = 0; i < sources[sourceKey].length; i++) {
+        const f = sources[sourceKey][i];
+        const row = el('div', 'sl-source-row');
+        row.innerHTML = `<span class="sl-source-url">${f.url}</span>`;
+        const removeBtn = btn('&times;', 'sl-btn-icon sl-btn-danger', () => {
+          sources[sourceKey].splice(i, 1);
+          setSources(sources);
+          renderFolders();
+        });
+        row.appendChild(removeBtn);
+        list.appendChild(row);
+      }
     }
-  }
-  renderDriveFolders();
+    renderFolders();
 
-  const addDriveRow = el('div', 'sl-row');
-  const driveInput = el('input', 'sl-input');
-  driveInput.placeholder = 'https://drive.google.com/drive/folders/...';
-  driveInput.style.flex = '1';
-  addDriveRow.appendChild(driveInput);
-  addDriveRow.appendChild(btn('add', 'sl-btn-primary sl-btn-sm', () => {
-    const url = driveInput.value.trim();
-    if (!url) return;
-    sources.driveFolders.push({ url });
-    setSources(sources);
-    driveInput.value = '';
-    renderDriveFolders();
-  }));
-  driveSection.appendChild(addDriveRow);
-  root.appendChild(driveSection);
+    const addRow = el('div', 'sl-row');
+    const input = el('input', 'sl-input');
+    input.placeholder = 'https://drive.google.com/drive/folders/...';
+    input.style.flex = '1';
+    addRow.appendChild(input);
+    addRow.appendChild(btn('add', 'sl-btn-primary sl-btn-sm', () => {
+      const url = input.value.trim();
+      if (!url) return;
+      sources[sourceKey].push({ url });
+      setSources(sources);
+      input.value = '';
+      renderFolders();
+    }));
+    section.appendChild(addRow);
+    return section;
+  }
+
+  root.appendChild(buildFolderSection(
+    'personal drive folders',
+    'Your own Google Drive folders. Scanned directly (not their subfolders) — for nested archives, use Community Chart Folders below. Requires the sync worker to be deployed.',
+    'driveFolders',
+  ));
+  root.appendChild(buildFolderSection(
+    'community chart folders',
+    'Shared Dropbox/Drive folders in circulation among working musicians (e.g. a bandleader\'s master chart archive). Subfolders are searched recursively, which can be slower and is capped to protect API quotas.',
+    'communityFolders',
+  ));
 
   // Manual chart batch import
   const chartSection = el('div', 'sl-section');
@@ -1319,13 +1369,13 @@ export async function renderSettings(root) {
   syncSection.appendChild(el('div', 'sl-hint', 'Scans all configured Spotify playlists and Drive folders, auto-links matching songs.'));
   root.appendChild(syncSection);
 
-  // Google Drive data sync
+  // Google Drive backup
   const gdriveSection = el('div', 'sl-section');
   const currentClientId = localStorage.getItem('voidstar.setlist.gdrive.clientId') || '';
   gdriveSection.innerHTML = `
-    <div class="sl-section-title">google drive data sync</div>
+    <div class="sl-section-title">google drive backup</div>
     <div class="sl-hint" style="margin-bottom:0.5rem">
-      Store your setlist data, notes, and song markups in Google Drive so they sync across all your devices.
+      Back up your setlist data, notes, chart links, and annotations to Google Drive so you can restore them on any device.
       Requires a Google Cloud OAuth2 client ID with Drive API enabled.
     </div>
     <label class="sl-label">Google OAuth Client ID
@@ -1348,33 +1398,36 @@ export async function renderSettings(root) {
     return `Error: ${msg}`;
   }
 
-  gdriveActions.appendChild(btn('connect google drive', 'sl-btn-primary sl-btn-sm', async () => {
+  gdriveActions.appendChild(btn('back up now', 'sl-btn-primary sl-btn-sm', async () => {
     try {
-      const gdrive = await initGdriveSync();
+      const gdrive = await initGdriveBackup();
       if (!gdrive) return;
-      gdriveStatus.textContent = 'Connected. Syncing...';
+      setBackupClient(gdrive);
+      gdriveStatus.textContent = 'Backing up...';
       gdriveStatus.style.color = '';
-      await gdrive.push(await store.exportAll());
-      gdriveStatus.textContent = 'Synced to Google Drive.';
+      await pullMergePushCycle(gdrive, () => store.exportAll(), (merged) => store.importAll(merged));
+      gdriveStatus.textContent = `Backed up. Last backup: ${formatLastBackup()}`;
       gdriveStatus.style.color = 'var(--green)';
     } catch (e) {
       gdriveStatus.textContent = formatGdriveError(e);
       gdriveStatus.style.color = 'var(--pink)';
     }
   }));
-  gdriveActions.appendChild(btn('pull from drive', 'sl-btn-ghost sl-btn-sm', async () => {
+  gdriveActions.appendChild(btn('restore from drive', 'sl-btn-ghost sl-btn-sm', async () => {
     try {
-      const gdrive = await initGdriveSync();
+      const gdrive = await initGdriveBackup();
       if (!gdrive) return;
-      gdriveStatus.textContent = 'Pulling...';
+      setBackupClient(gdrive);
+      gdriveStatus.textContent = 'Restoring...';
       gdriveStatus.style.color = '';
-      const data = await gdrive.pull();
-      if (data) {
-        await store.importAll(data);
-        gdriveStatus.textContent = 'Imported from Google Drive.';
+      const { hadRemote } = await pullMergePushCycle(gdrive, () => store.exportAll(), (merged) => store.importAll(merged));
+      if (hadRemote) {
+        gdriveStatus.textContent = `Restored from Google Drive. Last backup: ${formatLastBackup()}`;
         gdriveStatus.style.color = 'var(--green)';
+        navigate('#home');
       } else {
-        gdriveStatus.textContent = 'No data found in Drive.';
+        gdriveStatus.textContent = 'No data found in Drive yet.';
+        gdriveStatus.style.color = '';
       }
     } catch (e) {
       gdriveStatus.textContent = formatGdriveError(e);
@@ -1382,7 +1435,8 @@ export async function renderSettings(root) {
     }
   }));
   gdriveSection.appendChild(gdriveActions);
-  const gdriveStatus = el('div', 'sl-hint');
+  const gdriveStatus = el('div', 'sl-hint',
+    isGdriveBackupEnabled() ? `Last backup: ${formatLastBackup()}` : '');
   gdriveSection.appendChild(gdriveStatus);
   root.appendChild(gdriveSection);
 

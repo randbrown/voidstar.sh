@@ -1,9 +1,18 @@
-// Google Drive data sync — stores setlist data in Google Drive app data folder.
+// Google Drive data backup — stores setlist data in the user's Google Drive.
 // Uses Google Identity Services (GIS) for OAuth2 in the browser.
 // Data is stored as a single JSON file in the app-specific folder.
+//
+// Naming note: this module is about *backing up and restoring* app data
+// (songs/notes/setlists/annotations). It intentionally does not use the word
+// "sync" — that term is reserved for the separate chart/Spotify auto-linking
+// feature in sync.js/match.js, which matches an imported setlist against
+// Google Drive charts and a Spotify reference playlist. Keeping the two
+// features' names distinct avoids confusing "back up my data" with "match my
+// songs to charts and tracks".
 
 const CLIENT_ID_KEY = 'voidstar.setlist.gdrive.clientId';
 const TOKEN_KEY = 'voidstar.setlist.gdrive.token';
+const LAST_BACKUP_KEY = 'voidstar.setlist.gdrive.lastBackupAt';
 const FILE_NAME = 'voidstar-setlist-data.json';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
 
@@ -17,8 +26,34 @@ export function setClientId(id) {
   localStorage.setItem(CLIENT_ID_KEY, id);
 }
 
-export function isGdriveSyncEnabled() {
+export function isGdriveBackupEnabled() {
   return !!getClientId() && !!localStorage.getItem(TOKEN_KEY);
+}
+
+export function getLastBackupTime() {
+  const raw = localStorage.getItem(LAST_BACKUP_KEY);
+  return raw ? parseInt(raw, 10) : null;
+}
+
+export function setLastBackupTime(ts) {
+  localStorage.setItem(LAST_BACKUP_KEY, String(ts));
+}
+
+// Short relative-time string for status displays, e.g. "3m ago", "2h ago",
+// "yesterday", or a plain date once it's more than a week old.
+export function formatLastBackup() {
+  const ts = getLastBackupTime();
+  if (!ts) return 'never';
+  const diffMs = Date.now() - ts;
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day === 1) return 'yesterday';
+  if (day < 7) return `${day}d ago`;
+  return new Date(ts).toLocaleDateString();
 }
 
 async function loadGis() {
@@ -55,7 +90,7 @@ async function getAccessToken({ interactive = true } = {}) {
   const existing = getStoredToken();
   if (existing) return existing;
 
-  // Non-interactive callers (e.g. auto-sync on page load) must never trigger
+  // Non-interactive callers (e.g. auto-backup on page load) must never trigger
   // the OAuth popup: browsers block popups not opened from a user gesture,
   // which surfaces as the noisy GSI_LOGGER "Failed to open popup" error.
   if (!interactive) return null;
@@ -136,7 +171,7 @@ async function updateFile(token, fileId, data) {
   return res.json();
 }
 
-export async function initGdriveSync({ interactive = true } = {}) {
+export async function initGdriveBackup({ interactive = true } = {}) {
   const token = await getAccessToken({ interactive });
   if (!token) return null;
 
@@ -157,7 +192,74 @@ export async function initGdriveSync({ interactive = true } = {}) {
   };
 }
 
-// ── Auto-sync: merge by "newer wins" ──
+// ── Tier 3 chart fallback: create a blank chart doc when nothing matched ──
+// Reuses the same drive.file-scoped OAuth token as the data backup above —
+// that scope is exactly right here too, since it only lets the app manage
+// files/folders it creates itself.
+
+const CHARTS_FOLDER_NAME = 'voidstar charts';
+const CHARTS_FOLDER_ID_KEY = 'voidstar.setlist.gdrive.chartsFolderId';
+
+async function findOrCreateChartsFolder(token) {
+  const cached = localStorage.getItem(CHARTS_FOLDER_ID_KEY);
+  if (cached) return cached;
+
+  const params = new URLSearchParams({
+    q: `name='${CHARTS_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    spaces: 'drive',
+    fields: 'files(id,name)',
+    pageSize: '1',
+  });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Drive folder search failed: ${res.status}`);
+  const data = await res.json();
+  let folderId = data.files?.[0]?.id;
+
+  if (!folderId) {
+    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: CHARTS_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+    });
+    if (!createRes.ok) throw new Error(`Drive folder create failed: ${createRes.status}`);
+    folderId = (await createRes.json()).id;
+  }
+  localStorage.setItem(CHARTS_FOLDER_ID_KEY, folderId);
+  return folderId;
+}
+
+// Creates a blank Google Doc for a song with no chart yet, inside a
+// dedicated "voidstar charts" Drive folder, and returns its webViewLink.
+// Deliberately a Doc (not a Drawing): the worker's existing chart-scraping
+// already understands Google Docs' plain-text export, so once the user
+// types/pastes a chart in, "scrape" picks up key/BPM/section data for free.
+// For freeform hand-drawn charts, the in-app annotation canvas already draws
+// on top of any linked document, covering that case without needing Drive
+// Drawing support.
+export async function createBlankChartDoc(song) {
+  const token = await getAccessToken({ interactive: true });
+  if (!token) throw new Error('Google Drive not connected. Set a Client ID and connect in Settings.');
+
+  const folderId = await findOrCreateChartsFolder(token);
+  const name = song.artist ? `${song.title} - ${song.artist}` : song.title;
+
+  const res = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,webViewLink', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      mimeType: 'application/vnd.google-apps.document',
+      parents: [folderId],
+    }),
+  });
+  if (!res.ok) throw new Error(`Drive doc create failed: ${res.status}`);
+  const file = await res.json();
+  return file.webViewLink;
+}
+
+// ── Merge by "newer wins" ──
 
 function mergeById(localArr, remoteArr, keyField = 'id') {
   const map = new Map();
@@ -181,51 +283,71 @@ export function mergeData(local, remote) {
     songs: mergeById(local.songs || [], remote.songs || []),
     notes: mergeById(local.notes || [], remote.notes || []),
     setlists: mergeById(local.setlists || [], remote.setlists || []),
+    annotations: mergeById(local.annotations || [], remote.annotations || [], 'songId'),
     sources: local.sources || remote.sources || {},
   };
 }
 
+// The single code path for all Drive data I/O: pull whatever's in Drive,
+// merge it with local data (newer record per id/songId wins), write the
+// merged result back locally, then push the merged result back to Drive so
+// both sides end up identical. Safe to call with nothing in Drive yet (first
+// backup) or with local data that's ahead, behind, or diverged from Drive —
+// it never blindly overwrites either side. `hadRemote` tells callers whether
+// there was anything in Drive to restore (distinct from `merged` being
+// non-empty, which is true even on a first backup from local-only data).
+export async function pullMergePushCycle(client, exportFn, importFn) {
+  const remote = await client.pull();
+  const local = await exportFn();
+  const merged = remote ? mergeData(local, remote) : local;
+  if (remote) await importFn(merged);
+  await client.push({ ...merged, version: 1, exportedAt: Date.now() });
+  setLastBackupTime(Date.now());
+  return { merged, hadRemote: !!remote };
+}
+
 let _pushTimer = null;
-let _syncClient = null;
+let _backupClient = null;
 let _exportFn = null;
 
-export function setSyncClient(client) { _syncClient = client; }
+export function setBackupClient(client) { _backupClient = client; }
 
-// ── Sync status broadcast (drives the offline/sync pill) ──
+// ── Backup status broadcast (drives the offline/backup pill) ──
 // States: 'idle' | 'syncing' | 'synced' | 'pending' | 'offline'
 const _statusListeners = new Set();
-let _syncState = 'idle';
+let _backupState = 'idle';
 let _pendingPush = false;
 let _connWatched = false;
 
-export function getSyncState() { return _syncState; }
+export function getBackupState() { return _backupState; }
 
-export function onSyncState(fn) {
+export function onBackupState(fn) {
   _statusListeners.add(fn);
-  try { fn(_syncState); } catch {}
+  try { fn(_backupState); } catch {}
   return () => _statusListeners.delete(fn);
 }
 
-function setSyncState(s) {
-  _syncState = s;
+function setBackupState(s) {
+  _backupState = s;
   for (const fn of _statusListeners) { try { fn(s); } catch {} }
 }
 
 async function pushNow() {
-  setSyncState('syncing');
+  setBackupState('syncing');
   try {
-    await _syncClient.push(await _exportFn());
+    await _backupClient.push(await _exportFn());
+    setLastBackupTime(Date.now());
     _pendingPush = false;
-    setSyncState('synced');
+    setBackupState('synced');
   } catch (e) {
     _pendingPush = true;
-    setSyncState('pending');
-    console.warn('[gdrive] push failed:', e.message);
+    setBackupState('pending');
+    console.warn('[gdrive-backup] push failed:', e.message);
   }
 }
 
 export async function debouncedPush(exportFn, delayMs = 3000) {
-  if (!_syncClient) return;
+  if (!_backupClient) return;
   _exportFn = exportFn;
   if (_pushTimer) clearTimeout(_pushTimer);
   _pushTimer = setTimeout(() => {
@@ -233,7 +355,7 @@ export async function debouncedPush(exportFn, delayMs = 3000) {
     // Offline: don't even try — flag it so we flush on reconnect.
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       _pendingPush = true;
-      setSyncState('offline');
+      setBackupState('offline');
       return;
     }
     pushNow();
@@ -245,10 +367,10 @@ export async function debouncedPush(exportFn, delayMs = 3000) {
 export function watchConnectivity() {
   if (_connWatched || typeof window === 'undefined') return;
   _connWatched = true;
-  window.addEventListener('offline', () => setSyncState('offline'));
+  window.addEventListener('offline', () => setBackupState('offline'));
   window.addEventListener('online', () => {
-    if (_pendingPush && _syncClient && _exportFn) pushNow();
-    else setSyncState(_syncClient ? 'synced' : 'idle');
+    if (_pendingPush && _backupClient && _exportFn) pushNow();
+    else setBackupState(_backupClient ? 'synced' : 'idle');
   });
-  if (typeof navigator !== 'undefined' && !navigator.onLine) setSyncState('offline');
+  if (typeof navigator !== 'undefined' && !navigator.onLine) setBackupState('offline');
 }

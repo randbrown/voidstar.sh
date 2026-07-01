@@ -2,32 +2,19 @@
 // Supports pen, highlighter, text, arrow, eraser, and pan (scroll) tools.
 // Persists strokes per-song in IndexedDB via the shared store connection.
 
-import { _openDb } from './store.js';
-
-const ANNOTATIONS_STORE = 'annotations';
+import { getAnnotation, putAnnotation } from './store.js';
 
 export async function loadAnnotation(songId) {
-  const db = await _openDb();
-  const tx = db.transaction(ANNOTATIONS_STORE, 'readonly');
-  const store = tx.objectStore(ANNOTATIONS_STORE);
-  return new Promise((resolve) => {
-    const req = store.get(songId);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => resolve(null);
-  });
+  return getAnnotation(songId);
 }
 
+// Persists via store.js's put() (not a raw transaction) so saving an
+// annotation fires the shared _onWrite hook and queues a Drive backup push,
+// same as editing a song or note.
 async function saveAnnotation(songId, strokes, aspect) {
-  const db = await _openDb();
-  const tx = db.transaction(ANNOTATIONS_STORE, 'readwrite');
-  const store = tx.objectStore(ANNOTATIONS_STORE);
   // Persist the authoring canvas aspect ratio so other views (perform mode)
   // can reproduce the same box shape and keep strokes lined up with the chart.
-  store.put({ songId, strokes, aspect: aspect || null, updatedAt: Date.now() });
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-  });
+  await putAnnotation({ songId, strokes, aspect: aspect || null });
 }
 
 export function drawStrokeOnCanvas(ctx, canvas, stroke) {
