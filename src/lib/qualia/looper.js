@@ -62,6 +62,9 @@ const TUNERMUTE_KEY  = `${NS}.tunerMute`; // mute rig signal while tuner is on
 const TEMPER_KEY     = `${NS}.temperament`;// 'et' | 'custom'
 const CUSTOMCENTS_KEY = `${NS}.customCents`;// custom temperament: int cents[12]
 const REFPITCH_KEY   = `${NS}.refPitch`;   // tuner reference A (Hz)
+const TUNERMODE_KEY  = `${NS}.tunerMode`;  // 'mono' | 'chord' | 'strings'
+const TUNERCHORD_KEY = `${NS}.tunerChord`; // polytuner chord: {root:pc, quality}
+const TUNERSTRINGS_KEY = `${NS}.tunerStrings`; // polytuner string set id
 const CABNAME_KEY    = `${NS}.cabName`;     // loaded cab IR filename (display)
 const CAB_IR_ID      = 'cabIR';            // legacy single-IR misc key (migrated → library)
 const CABLIB_KEY     = `${NS}.cabLib`;      // saved cab IR library index: [{ id, name }]
@@ -113,6 +116,18 @@ function loadCustomCents() {
   try {
     const raw = localStorage.getItem(CUSTOMCENTS_KEY);
     if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) for (let i = 0; i < 12; i++) out[i] = Math.max(-50, Math.min(50, Math.round(+a[i] || 0))); }
+  } catch {}
+  return out;
+}
+// Polytuner chord selection (chord mode) — persisted root pitch-class + quality.
+function loadTunerChord() {
+  const out = { root: 4, quality: 'maj' };   // E major — the pedal-steel home chord
+  try {
+    const raw = localStorage.getItem(TUNERCHORD_KEY);
+    if (raw) { const o = JSON.parse(raw); if (o && typeof o === 'object') {
+      if (Number.isFinite(+o.root)) out.root = ((Math.round(+o.root) % 12) + 12) % 12;
+      if (typeof o.quality === 'string') out.quality = o.quality;
+    } }
   } catch {}
   return out;
 }
@@ -277,6 +292,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     temperament: lsGet(TEMPER_KEY, 'et') === 'custom' ? 'custom' : 'et',
     customCents: loadCustomCents(),
     refPitch: (() => { const v = parseFloat(lsGet(REFPITCH_KEY, '440')); return Number.isFinite(v) ? Math.max(400, Math.min(480, v)) : 440; })(),
+    tunerMode: (() => { const m = lsGet(TUNERMODE_KEY, 'mono'); return (m === 'chord' || m === 'strings' || m === 'chromatic') ? m : 'mono'; })(),
+    tunerChord: loadTunerChord(),           // { root: pitch-class, quality }
+    tunerStrings: lsGet(TUNERSTRINGS_KEY, 'guitar') || 'guitar',
     cabName: lsGet(CABNAME_KEY, '') || '',
     ampName: lsGet(AMPNAME_KEY, '') || '',
     gridDefault: defaultGrid,       // "cycles" each new track starts with
@@ -2032,20 +2050,126 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const TUNER_MIN_HZ = 22;     // reach below G0 (~24.5 Hz)
   const TUNER_INTERVAL_MS = 140;  // note-detection cadence (strobe itself runs every frame)
+  // Weight of each fresh sample in the cents READOUT smoothing (per TUNER_INTERVAL_MS
+  // tick), shared by mono + poly so they read identically. Lower = calmer / slower
+  // to settle. The strobe stripes ignore this — they always animate per frame.
+  const TUNER_READOUT_EMA = 0.25;
   const STROBE_BANDS = 3;      // octave-stacked sensitivity rows (×1, ×2, ×4)
   let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerCentsEl = null;
+  let tunerModeBtns = null, tunerChordCtl = null, tunerStringCtl = null, tunerReadoutEl = null;
   let strobeCanvas = null, strobe2d = null, _strobeWin = null;
   let tunerBuf = null, tunerDec = null, _tunerLastMs = 0;
   let _tunerNoteKey = '', _tunerErrSmooth = 0;
-  // Shared strobe state written by updateTuner (throttled) + read by drawStrobe (per-frame).
+  // Shared strobe state written by updateTuner (throttled) + read by drawStrobe
+  // (per-frame). In poly modes this also carries the mini-tuner aggregate.
   const _strobe = { fRef: 0, voiced: false, inTune: false, near: false, msg: 'play a note' };
+  const _strobeMags = new Float32Array(STROBE_BANDS);
+  const _strobePhs  = new Float32Array(STROBE_BANDS);
+
+  // ── polytuner (chord / strings modes) ──────────────────────────────────────
+  // The strobe is already a bank of clock-anchored I/Q demodulators (mono runs 3
+  // octave bands off ONE detected note). Polyphony needs no polyphonic pitch
+  // detection — just run one demodulator per DECLARED target and stack them as
+  // lanes: each lane freezes when its note is in tune, drifts when sharp/flat,
+  // and fades when its note isn't sounding. Custom temperament falls straight
+  // out — every target frequency already folds in temperOffset(). Per-lane cents
+  // come from the strobe DRIFT RATE (phase advances at 2π·(fIn−fRef)), so no
+  // extra pitch detection is needed even for the readout.
+  const CHORD_QUALITIES = {
+    maj:  { label: 'maj',   iv: [0, 4, 7] },
+    min:  { label: 'min',   iv: [0, 3, 7] },
+    pow:  { label: '5',     iv: [0, 7] },
+    sus4: { label: 'sus4',  iv: [0, 5, 7] },
+    maj7: { label: 'maj7',  iv: [0, 4, 7, 11] },
+    min7: { label: 'min7',  iv: [0, 3, 7, 10] },
+    dom7: { label: '7',     iv: [0, 4, 7, 10] },
+    add9: { label: 'add9',  iv: [0, 4, 7, 14] },
+  };
+  // Common string sets (MIDI notes). Steel E9 follows physical string order
+  // (high→low) and is the pedal-steel home neck; the rest run low→high.
+  const STRING_PRESETS = {
+    guitar:  { label: 'guitar',   midi: [40, 45, 50, 55, 59, 64] },                  // E2 A2 D3 G3 B3 E4
+    openE:   { label: 'open E',   midi: [40, 47, 52, 56, 59, 64] },                  // E2 B2 E3 G#3 B3 E4
+    bass:    { label: 'bass',     midi: [28, 33, 38, 43] },                          // E1 A1 D2 G2
+    steelE9: { label: 'steel E9', midi: [66, 63, 68, 64, 59, 56, 54, 52, 50, 47] },  // F#4 D#4 G#4 E4 B3 G#3 F#3 E3 D3 B2
+  };
+  const CHORD_OCTS = [2, 3, 4, 5];   // octaves scanned to auto-pick each chord tone's register
+  const MAX_LANES  = 12;             // upper bound (steel E9 = 10)
+  const TUNER_LANE_PX = 26;          // lane height (CSS px) in poly modes
+  const _lanes = [];                 // active lane targets (see rebuildLanes)
+  let _lanesDirty = true;            // rebuild on mode / chord / strings / temperament change
+  const _dem = { mag: 0, phase: 0 }; // demod scratch (allocation-free)
+  let _miniKey = null;               // last mini aggregate (throttles mini DOM writes)
+  let _polyDispLastMs = 0;           // throttle for the per-lane cents readout (mono cadence)
+
+  function persistTunerChord() { try { lsSet(TUNERCHORD_KEY, JSON.stringify(model.tunerChord)); } catch {} }
+  function setTunerMode(m) {
+    model.tunerMode = (m === 'chord' || m === 'strings' || m === 'chromatic') ? m : 'mono';
+    lsSet(TUNERMODE_KEY, model.tunerMode);
+    applyTunerMode();
+  }
+  // Short label for the mini-tuner square in each poly mode.
+  function miniLabel() {
+    return model.tunerMode === 'chord' ? NOTE_NAMES[model.tunerChord.root]
+      : model.tunerMode === 'chromatic' ? '12' : '≡';
+  }
+  // Rebuild lanes + size the strobe canvas to the current lane count. Called on
+  // mode switch AND on target-selection change (a new chord/string set can change
+  // the lane count, so the canvas has to grow/shrink with it).
+  function resizeStrobeForLanes() {
+    if (!strobeCanvas) return;
+    if (model.tunerMode === 'mono') { strobeCanvas.style.height = ''; return; }
+    rebuildLanes();
+    strobeCanvas.style.height = Math.max(46, _lanes.length * TUNER_LANE_PX) + 'px';
+  }
+  // Toggle mode-specific chrome + resize the strobe for the lane count.
+  function applyTunerMode() {
+    const m = model.tunerMode;
+    if (tunerModeBtns) for (const k in tunerModeBtns) tunerModeBtns[k].classList.toggle('active', k === m);
+    if (tunerChordCtl)  tunerChordCtl.style.display  = m === 'chord'   ? '' : 'none';
+    if (tunerStringCtl) tunerStringCtl.style.display = m === 'strings' ? '' : 'none';
+    if (tunerReadoutEl) tunerReadoutEl.style.display = m === 'mono'    ? '' : 'none';
+    _lanesDirty = true;
+    resizeStrobeForLanes();
+    _miniKey = null;
+    _strobe.voiced = false; _strobe.inTune = false; _strobe.near = false;
+  }
+
   function buildTunerUI() {
     if (!tunerEl || tunerEl.children.length) return;
-    const row = document.createElement('div'); row.className = 'rig-tuner-readout';
-    tunerNoteEl = document.createElement('span'); tunerNoteEl.className = 'rig-tuner-note'; tunerNoteEl.textContent = '—';
-    tunerCentsEl = document.createElement('span'); tunerCentsEl.className = 'rig-tuner-cents'; tunerCentsEl.textContent = 'play a note';
-    tunerHzEl   = document.createElement('span'); tunerHzEl.className   = 'rig-tuner-hz';
-    tunerTgtEl  = document.createElement('span'); tunerTgtEl.className  = 'rig-tuner-tgt';
+    // Mode bar — segmented mode buttons + per-mode target pickers + tuner mute.
+    const bar = document.createElement('div'); bar.className = 'rig-tuner-modebar';
+    tunerModeBtns = {};
+    const modes = document.createElement('div'); modes.className = 'rig-tuner-modes';
+    const MODE_LABELS = { mono: 'mono', chord: 'chord', strings: 'strings', chromatic: 'chroma' };
+    for (const m of ['mono', 'chord', 'strings', 'chromatic']) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'ctrl-btn rig-tuner-mode'; b.textContent = MODE_LABELS[m];
+      b.title = m === 'mono' ? 'Single-note strobe — detects and tunes whatever you play'
+        : m === 'chord' ? 'Polytuner — strum a chord, tune every chord tone at once (temperament-aware)'
+        : m === 'strings' ? 'Polytuner — one lane per string of the selected tuning'
+        : 'Polytuner — all 12 chromatic notes at once, each targeting its custom temperament offset. Tune every string / pedal / knee-lever stop (steel-friendly).';
+      b.addEventListener('click', () => setTunerMode(m));
+      tunerModeBtns[m] = b; modes.appendChild(b);
+    }
+    // Chord picker (root + quality).
+    tunerChordCtl = document.createElement('div'); tunerChordCtl.className = 'rig-tuner-target';
+    const rootSel = document.createElement('select'); rootSel.className = 'rig-tuner-sel'; rootSel.title = 'Chord root';
+    NOTE_NAMES.forEach((nm, pc) => { const o = document.createElement('option'); o.value = String(pc); o.textContent = nm; rootSel.appendChild(o); });
+    rootSel.value = String(model.tunerChord.root);
+    rootSel.addEventListener('change', () => { model.tunerChord.root = ((parseInt(rootSel.value, 10) || 0) % 12 + 12) % 12; persistTunerChord(); resizeStrobeForLanes(); });
+    const qualSel = document.createElement('select'); qualSel.className = 'rig-tuner-sel'; qualSel.title = 'Chord quality';
+    for (const [k, v] of Object.entries(CHORD_QUALITIES)) { const o = document.createElement('option'); o.value = k; o.textContent = v.label; qualSel.appendChild(o); }
+    qualSel.value = CHORD_QUALITIES[model.tunerChord.quality] ? model.tunerChord.quality : 'maj';
+    qualSel.addEventListener('change', () => { model.tunerChord.quality = qualSel.value; persistTunerChord(); resizeStrobeForLanes(); });
+    tunerChordCtl.append(rootSel, qualSel);
+    // String-set picker.
+    tunerStringCtl = document.createElement('div'); tunerStringCtl.className = 'rig-tuner-target';
+    const strSel = document.createElement('select'); strSel.className = 'rig-tuner-sel'; strSel.title = 'String set / tuning';
+    for (const [k, v] of Object.entries(STRING_PRESETS)) { const o = document.createElement('option'); o.value = k; o.textContent = v.label; strSel.appendChild(o); }
+    strSel.value = STRING_PRESETS[model.tunerStrings] ? model.tunerStrings : 'guitar';
+    strSel.addEventListener('change', () => { model.tunerStrings = strSel.value; lsSet(TUNERSTRINGS_KEY, model.tunerStrings); resizeStrobeForLanes(); });
+    tunerStringCtl.append(strSel);
     _tunerMuteBtn = document.createElement('button');
     _tunerMuteBtn.type = 'button'; _tunerMuteBtn.className = 'ctrl-btn rig-tuner-mute';
     _tunerMuteBtn.addEventListener('click', () => {
@@ -2054,14 +2178,89 @@ export function createLooper({ audio, syncStrudel } = {}) {
       applyTunerMute();
     });
     refreshTunerMuteBtn();
-    row.append(tunerNoteEl, tunerCentsEl, tunerHzEl, tunerTgtEl, _tunerMuteBtn);
+    bar.append(modes, tunerChordCtl, tunerStringCtl, _tunerMuteBtn);
+    // Mono readout (note · cents · Hz · target) — hidden in poly modes.
+    const row = document.createElement('div'); row.className = 'rig-tuner-readout';
+    tunerNoteEl = document.createElement('span'); tunerNoteEl.className = 'rig-tuner-note'; tunerNoteEl.textContent = '—';
+    tunerCentsEl = document.createElement('span'); tunerCentsEl.className = 'rig-tuner-cents'; tunerCentsEl.textContent = 'play a note';
+    tunerHzEl   = document.createElement('span'); tunerHzEl.className   = 'rig-tuner-hz';
+    tunerTgtEl  = document.createElement('span'); tunerTgtEl.className  = 'rig-tuner-tgt';
+    row.append(tunerNoteEl, tunerCentsEl, tunerHzEl, tunerTgtEl);
+    tunerReadoutEl = row;
     strobeCanvas = document.createElement('canvas');
     strobeCanvas.className = 'rig-strobe';
     strobeCanvas.title = 'Strobe tuner — bands freeze when in tune, drift right when sharp / left when flat';
-    tunerEl.append(row, strobeCanvas);
+    tunerEl.append(bar, row, strobeCanvas);
+    applyTunerMode();
   }
   // Target cents offset for a note class under the active temperament.
   function temperOffset(noteClass) { return model.temperament === 'custom' ? (model.customCents[noteClass] | 0) : 0; }
+  // Ideal frequency of a MIDI note under the active reference pitch + temperament.
+  function noteFreq(midi) { return model.refPitch * Math.pow(2, (midi - 69) / 12 + temperOffset(((midi % 12) + 12) % 12) / 1200); }
+  function noteTarget(midi) {
+    const cls = ((midi % 12) + 12) % 12;
+    return { cls, octave: Math.floor(midi / 12) - 1, midi, fRef: noteFreq(midi), label: NOTE_NAMES[cls] + (Math.floor(midi / 12) - 1) };
+  }
+  function makeLane(midi, candidates) {
+    const t = noteTarget(midi);
+    return { cls: t.cls, octave: t.octave, midi: t.midi, fRef: t.fRef, label: t.label, candidates: candidates || null,
+             mag: 0, phase: 0, prevPhase: 0, prevT: -1, prevF: 0, prevVoiced: false, centsSmooth: 0,
+             dispCents: 0, dispVoiced: false, voiced: false, inTune: false, near: false };
+  }
+  // (Re)build the lane list from the current mode + target selection.
+  function rebuildLanes() {
+    _lanes.length = 0;
+    if (model.tunerMode === 'strings') {
+      const preset = STRING_PRESETS[model.tunerStrings] || STRING_PRESETS.guitar;
+      for (const midi of preset.midi) _lanes.push(makeLane(midi, null));
+    } else if (model.tunerMode === 'chromatic') {
+      // All 12 pitch classes, each auto-tracking whichever octave is sounding —
+      // so any string / pedal / knee-lever stop registers on its note's lane,
+      // targeting that note's custom temperament offset. (A note below the scan
+      // range still locks via its octave harmonic, which carries the same cents
+      // error, so low universal strings read correctly.)
+      for (let cls = 0; cls < 12; cls++) {
+        const candidates = CHORD_OCTS.map(oct => cls + 12 * (oct + 1));
+        _lanes.push(makeLane(candidates[1] ?? candidates[0], candidates));
+      }
+    } else if (model.tunerMode === 'chord') {
+      const q = CHORD_QUALITIES[model.tunerChord.quality] || CHORD_QUALITIES.maj;
+      const seen = new Set();
+      for (const iv of q.iv) {
+        const cls = (model.tunerChord.root + iv) % 12;
+        if (seen.has(cls)) continue; seen.add(cls);
+        const candidates = CHORD_OCTS.map(oct => cls + 12 * (oct + 1));
+        _lanes.push(makeLane(candidates[1] ?? candidates[0], candidates));
+      }
+    }
+    if (_lanes.length > MAX_LANES) _lanes.length = MAX_LANES;
+    _lanesDirty = false;
+  }
+  function ensureStrobeWin(n) {
+    if (!_strobeWin || _strobeWin.length !== n) {
+      _strobeWin = new Float32Array(n);
+      for (let i = 0; i < n; i++) _strobeWin[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)); // Hann
+    }
+  }
+  // I/Q demodulate `buf` at `f`, clock-anchored to `t0`. Writes _dem {mag,phase}
+  // and returns it. atan2(-Q,I) makes the phase advance at 2π(fIn−fRef) so SHARP
+  // drifts the stripes right, flat left (Peterson convention); frozen = in tune.
+  function demodIQ(buf, n, win, sr, t0, f) {
+    if (!(f > 0) || f > sr * 0.45) { _dem.mag = 0; _dem.phase = 0; return _dem; }
+    const w = (2 * Math.PI * f) / sr;
+    const cw = Math.cos(w), sw = Math.sin(w);
+    const ang = 2 * Math.PI * ((f * t0) % 1);
+    let cr = Math.cos(ang), si = Math.sin(ang);
+    let I = 0, Q = 0;
+    for (let i = 0; i < n; i++) {
+      const x = buf[i] * win[i];
+      I += x * cr; Q += x * si;
+      const ncr = cr * cw - si * sw; si = si * cw + cr * sw; cr = ncr;
+    }
+    _dem.mag = Math.sqrt(I * I + Q * Q);
+    _dem.phase = Math.atan2(-Q, I);
+    return _dem;
+  }
   // Bounded autocorrelation pitch detector (parabolic-interpolated). Returns Hz
   // or -1 when the signal is too quiet / not periodic.
   function autoCorrelate(buf, sr) {
@@ -2086,11 +2285,26 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!isFinite(shift) || Math.abs(shift) > 1) shift = 0;
     return sr / (best + shift);
   }
-  // Throttled note pick: detect the fundamental, name it, and set the strobe's
-  // target reference frequency (temperament-aware). Updates the text readout.
+  // Push the mini-tuner aggregate (throttled by change so poly's per-frame draw
+  // doesn't thrash the DOM).
+  function setMini(voiced, inTune, label) {
+    const key = `${voiced ? 1 : 0}${inTune ? 1 : 0}${label}`;
+    if (key === _miniKey) return;
+    _miniKey = key;
+    _strobe.voiced = voiced; _strobe.inTune = inTune; _strobe.near = false;
+    _tunerNoteKey = voiced ? label : '';
+    refreshMiniTuner();
+  }
+  // Throttled note pick. Mono: detect the fundamental + drive the text readout.
+  // Poly: re-pick each chord tone's loudest octave (auto-register).
   function updateTuner() {
-    if (!model.tunerOn || !tunerNoteEl) return;
+    if (!model.tunerOn) return;
     const an = looperAudio.getTunerAnalyser?.() || looperAudio.getCaptureAnalyser?.();
+    if (model.tunerMode === 'mono') updateTunerMono(an);
+    else updateTunerPoly(an);
+  }
+  function updateTunerMono(an) {
+    if (!tunerNoteEl) return;
     const clear = (msg) => {
       tunerNoteEl.textContent = '—'; tunerNoteEl.style.color = '';
       if (tunerHzEl) tunerHzEl.textContent = ''; if (tunerTgtEl) tunerTgtEl.textContent = '';
@@ -2120,7 +2334,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     let err = rawCents - target;                           // deviation from the target
     // Smooth within a held note (snap on note change) to calm the readout.
     const key = `${cls}.${octave}`;
-    err = key === _tunerNoteKey ? _tunerErrSmooth * 0.5 + err * 0.5 : err;
+    err = key === _tunerNoteKey ? _tunerErrSmooth * (1 - TUNER_READOUT_EMA) + err * TUNER_READOUT_EMA : err;
     _tunerNoteKey = key; _tunerErrSmooth = err;
     const shown = Math.round(err);
     const inTune = Math.abs(err) <= 3;
@@ -2134,14 +2348,45 @@ export function createLooper({ audio, syncStrudel } = {}) {
     tunerCentsEl.style.color = inTune ? good : (near ? '#fbbf24' : 'var(--pink)');
     // The strobe locks to the note's IDEAL frequency (temperament-aware), so the
     // bands measure the true pitch error continuously, independent of `err`.
-    _strobe.fRef    = model.refPitch * Math.pow(2, (rounded - 69) / 12 + target / 1200);
+    _strobe.fRef    = noteFreq(rounded);
     _strobe.voiced  = true;
     _strobe.inTune  = inTune;
     _strobe.near    = near;
     refreshMiniTuner();
   }
-  // Per-frame strobe: demodulate the live input at each band frequency and paint
-  // the drifting/frozen bands. Allocation-free (reused buffer + lazy Hann window).
+  function updateTunerPoly(an) {
+    if (_lanesDirty) rebuildLanes();
+    if (!an || typeof an.getFloatTimeDomainData !== 'function' || !_lanes.length) {
+      for (const L of _lanes) { L.voiced = false; L.prevVoiced = false; }
+      setMini(false, false, miniLabel());
+      return;
+    }
+    if (model.tunerMode === 'strings') return;   // strings lanes are fixed — no octave pick
+    // Chord mode: follow whichever octave you actually strummed for each tone.
+    const n = an.fftSize;
+    if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
+    an.getFloatTimeDomainData(tunerBuf);
+    ensureStrobeWin(n);
+    const sr = an.context?.sampleRate || 48000;
+    const t0 = an.context?.currentTime || 0;
+    for (const L of _lanes) {
+      if (!L.candidates) continue;
+      let bestMidi = L.midi, bestMag = -1, curMag = 0;
+      for (const midi of L.candidates) {
+        const mag = demodIQ(tunerBuf, n, _strobeWin, sr, t0, noteFreq(midi)).mag;
+        if (midi === L.midi) curMag = mag;
+        if (mag > bestMag) { bestMag = mag; bestMidi = midi; }
+      }
+      // Stickiness: only jump register if the new octave is clearly louder, so a
+      // near-tie doesn't flip the lane frame to frame.
+      if (bestMidi !== L.midi && bestMag > curMag * 1.4) {
+        const t = noteTarget(bestMidi);
+        L.midi = t.midi; L.octave = t.octave; L.fRef = t.fRef; L.label = t.label;
+        L.prevT = -1; L.prevVoiced = false;   // fRef jumped — reset drift tracking
+      }
+    }
+  }
+  // Per-frame strobe painter — mono (3 octave bands) or poly (one lane / target).
   function drawStrobe() {
     const cv = strobeCanvas; if (!cv) return;
     if (!strobe2d) strobe2d = cv.getContext('2d');
@@ -2153,20 +2398,19 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (cv.width !== wantW || cv.height !== wantH) { cv.width = wantW; cv.height = wantH; }
     const W = cv.width, H = cv.height;
     g.clearRect(0, 0, W, H);
-
+    if (model.tunerMode === 'mono') drawStrobeMono(g, W, H, dpr);
+    else drawStrobePoly(g, W, H, dpr);
+  }
+  function drawStrobeMono(g, W, H, dpr) {
     const an = looperAudio.getTunerAnalyser?.() || looperAudio.getCaptureAnalyser?.();
     if (!_strobe.voiced || !an || !(_strobe.fRef > 0) || typeof an.getFloatTimeDomainData !== 'function') {
-      // Idle: faint static bands + a hint.
-      drawStrobeIdle(g, W, H);
+      drawStrobeIdle(g, W, H, STROBE_BANDS);
       return;
     }
     const n = an.fftSize;
     if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
     an.getFloatTimeDomainData(tunerBuf);
-    if (!_strobeWin || _strobeWin.length !== n) {
-      _strobeWin = new Float32Array(n);
-      for (let i = 0; i < n; i++) _strobeWin[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)); // Hann
-    }
+    ensureStrobeWin(n);
     const sr = an.context?.sampleRate || 48000;
     const t0 = (an.context?.currentTime || 0);   // audio-clock anchor → phase continuity
     const bandH = H / STROBE_BANDS;
@@ -2178,22 +2422,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     for (let b = 0; b < STROBE_BANDS; b++) {
       const fb = _strobe.fRef * (1 << b);
       if (fb > sr * 0.45) { mags[b] = 0; phs[b] = 0; continue; }
-      // I/Q correlation at fb via incremental unit-vector rotation.
-      const w = (2 * Math.PI * fb) / sr;
-      const cw = Math.cos(w), sw = Math.sin(w);
-      let ang = 2 * Math.PI * ((fb * t0) % 1);
-      let cr = Math.cos(ang), si = Math.sin(ang);
-      let I = 0, Q = 0;
-      for (let i = 0; i < n; i++) {
-        const x = tunerBuf[i] * _strobeWin[i];
-        I += x * cr; Q += x * si;
-        const ncr = cr * cw - si * sw; si = si * cw + cr * sw; cr = ncr;
-      }
-      mags[b] = Math.sqrt(I * I + Q * Q);
-      // atan2(Q,I) drifts at 2π(fRef−fIn); negate so the phase advances at
-      // 2π(fIn−fRef) — i.e. SHARP drifts the bands right, flat left (Peterson
-      // convention). In tune (fIn==fRef) the phase is constant → bands freeze.
-      phs[b] = Math.atan2(-Q, I);
+      demodIQ(tunerBuf, n, _strobeWin, sr, t0, fb);
+      mags[b] = _dem.mag; phs[b] = _dem.phase;
       if (mags[b] > maxMag) maxMag = mags[b];
     }
     for (let b = 0; b < STROBE_BANDS; b++) {
@@ -2215,15 +2445,112 @@ export function createLooper({ audio, syncStrudel } = {}) {
       g.strokeRect(g.lineWidth, g.lineWidth, W - 2 * g.lineWidth, H - 2 * g.lineWidth);
     }
   }
-  const _strobeMags = new Float32Array(STROBE_BANDS);
-  const _strobePhs  = new Float32Array(STROBE_BANDS);
-  function drawStrobeIdle(g, W, H) {
-    const bandH = H / STROBE_BANDS;
-    const period = Math.max(18, bandH * 0.92);
+  function drawStrobePoly(g, W, H, dpr) {
+    if (_lanesDirty) rebuildLanes();
+    const an = looperAudio.getTunerAnalyser?.() || looperAudio.getCaptureAnalyser?.();
+    if (!_lanes.length || !an || typeof an.getFloatTimeDomainData !== 'function') {
+      drawStrobeIdle(g, W, H, Math.max(1, _lanes.length || STROBE_BANDS));
+      setMini(false, false, miniLabel());
+      return;
+    }
+    const n = an.fftSize;
+    if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
+    an.getFloatTimeDomainData(tunerBuf);
+    ensureStrobeWin(n);
+    // Silence gate — a quiet buffer means "nothing playing", so lanes fade.
+    let energy = 0; for (let i = 0; i < n; i++) energy += tunerBuf[i] * tunerBuf[i];
+    const rms = Math.sqrt(energy / n);
+    const sr = an.context?.sampleRate || 48000;
+    const t0 = an.context?.currentTime || 0;
+    const N = _lanes.length;
+    const laneH = H / N;
+    const period = Math.max(9 * dpr, laneH * 0.7);
+    const stripeL = 34 * dpr, stripeR = W - 42 * dpr;
+    // Refresh the numeric cents readout at the mono tuner's calm cadence (not
+    // per-frame) so the far-right number doesn't jitter — the strobe stripes
+    // still animate every frame. `dispCents` is the shown value; `centsSmooth`
+    // stays per-frame for the freeze/colour state.
+    const dnow = (typeof performance !== 'undefined' ? performance.now() : 0);
+    const dispTick = dnow - _polyDispLastMs >= TUNER_INTERVAL_MS;
+    if (dispTick) _polyDispLastMs = dnow;
+    const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    const labelFont = `${Math.max(9, Math.round(Math.min(laneH * 0.5, 15 * dpr)))}px ${MONO}`;
+    const centsFont = `${Math.max(11, Math.round(Math.min(laneH * 0.72, 20 * dpr)))}px ${MONO}`;
+    let maxMag = 1e-9;
+    for (const L of _lanes) {
+      demodIQ(tunerBuf, n, _strobeWin, sr, t0, L.fRef);
+      L.mag = _dem.mag; L.phase = _dem.phase;
+      if (L.mag > maxMag) maxMag = L.mag;
+    }
+    let anyVoiced = false, allInTune = true;
+    g.textBaseline = 'middle';
+    for (let i = 0; i < N; i++) {
+      const L = _lanes[i];
+      const y = i * laneH;
+      const rel = L.mag / maxMag;
+      const voiced = rms > 0.008 && rel > 0.22;
+      // Per-lane cents from the strobe drift rate: Δphase/Δt (audio clock) is the
+      // Hz error → cents. Skip the frame the target frequency jumped (auto-octave).
+      if (voiced && L.prevVoiced && L.prevF === L.fRef && L.prevT >= 0 && t0 > L.prevT) {
+        let dph = L.phase - L.prevPhase;
+        dph = ((dph + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;   // wrap to (−π,π]
+        const driftHz = dph / (2 * Math.PI * (t0 - L.prevT));
+        let cents = 1200 * Math.log2((L.fRef + driftHz) / L.fRef);
+        if (!isFinite(cents)) cents = 0;
+        L.centsSmooth = L.centsSmooth * 0.6 + Math.max(-99, Math.min(99, cents)) * 0.4;
+      } else if (!voiced) {
+        L.centsSmooth = 0;
+      }
+      L.prevPhase = L.phase; L.prevT = t0; L.prevF = L.fRef; L.prevVoiced = voiced;
+      L.voiced = voiced;
+      const cents = L.centsSmooth;
+      // Slow, mono-style readout: EMA into dispCents only on the throttle tick;
+      // snap when a lane just started sounding (as the mono readout does on a
+      // note change) so it doesn't crawl up from 0.
+      if (dispTick) {
+        L.dispCents = (L.dispVoiced && voiced) ? (L.dispCents * (1 - TUNER_READOUT_EMA) + cents * TUNER_READOUT_EMA) : cents;
+        L.dispVoiced = voiced;
+      }
+      const inTune = voiced && Math.abs(cents) <= 4;
+      const near = voiced && Math.abs(cents) <= 15;
+      L.inTune = inTune; L.near = near;
+      if (voiced) { anyVoiced = true; if (!inTune) allInTune = false; }
+      const col = inTune ? [52, 211, 153] : near ? [251, 191, 36] : voiced ? [167, 139, 250] : [148, 163, 184];
+      const alpha = voiced ? (0.18 + 0.72 * Math.min(1, rel)) : 0.10;
+      const off = ((L.phase / (2 * Math.PI)) % 1 + 1) % 1 * period;
+      const sy = y + laneH * 0.16, sh = laneH * 0.68;
+      g.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${alpha.toFixed(3)})`;
+      for (let x = stripeL - period + off; x < stripeR; x += period) {
+        const xx = Math.max(stripeL, x);
+        const w = Math.min(x + period * 0.5, stripeR) - xx;
+        if (w > 0) g.fillRect(xx, sy, w, sh);
+      }
+      // Note label (left gutter) + cents (right gutter, larger + calmly updated).
+      g.fillStyle = voiced ? `rgba(${col[0]},${col[1]},${col[2]},0.95)` : 'rgba(148,163,184,0.5)';
+      g.textAlign = 'left';
+      g.font = labelFont;
+      g.fillText(L.label, 3 * dpr, y + laneH * 0.5);
+      if (voiced) {
+        g.textAlign = 'right';
+        g.font = centsFont;
+        const c = Math.round(L.dispCents);
+        g.fillText(`${c > 0 ? '+' : ''}${c}`, W - 4 * dpr, y + laneH * 0.5);
+      }
+      if (inTune) {
+        g.strokeStyle = 'rgba(52,211,153,0.7)'; g.lineWidth = Math.max(1, Math.round(dpr));
+        g.strokeRect(stripeL, sy, stripeR - stripeL, sh);
+      }
+    }
+    setMini(anyVoiced, anyVoiced && allInTune, miniLabel());
+  }
+  function drawStrobeIdle(g, W, H, rows) {
+    const r = Math.max(1, rows | 0);
+    const bandH = H / r;
+    const period = Math.max(18, bandH * 0.7);
     g.fillStyle = 'rgba(148,163,184,0.10)';
-    for (let b = 0; b < STROBE_BANDS; b++) {
+    for (let b = 0; b < r; b++) {
       const y = b * bandH;
-      for (let x = 0; x < W; x += period) g.fillRect(x, y + bandH * 0.12, period * 0.5, bandH * 0.76);
+      for (let x = 0; x < W; x += period) g.fillRect(x, y + bandH * 0.16, period * 0.5, bandH * 0.68);
     }
   }
 
@@ -2234,16 +2561,19 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function setTemperament(t) {
     model.temperament = t === 'custom' ? 'custom' : 'et';
     lsSet(TEMPER_KEY, model.temperament);
+    _lanesDirty = true;   // poly lane target freqs are temperament-aware
     refreshTemperUI();
   }
   function setCustomCent(i, v) {
     model.customCents[i] = Math.max(-50, Math.min(50, (v | 0)));
+    _lanesDirty = true;
     persistCustomCents();
   }
   function setRefPitch(v) {
     const f = parseFloat(v);
     if (!Number.isFinite(f)) return;
     model.refPitch = Math.round(Math.max(400, Math.min(480, f)) * 10) / 10;
+    _lanesDirty = true;
     lsSet(REFPITCH_KEY, model.refPitch);
   }
   function refreshTemperUI() {

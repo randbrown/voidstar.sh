@@ -2,8 +2,15 @@
 
 Committed defaults (wired into `DEFAULT_URLS` in `src/lib/qualia/fx/video.js`):
 
-- `waterfall-portrait.mp4` — 720×1280, H.264/AAC, 30 fps, ~7.3 MiB
-- `waterfall-cascade.mp4` — 960×720, H.264/AAC, 30 fps, ~6.1 MiB
+- `waterfall-portrait.mp4` — 720×1280, H.264, **no audio**, 30 fps, ~7.0 MiB
+- `waterfall-cascade.mp4` — 960×720, H.264, **no audio**, 30 fps, ~5.9 MiB
+
+> **Mux decorative clips without an audio track.** A `<video>` that carries an
+> audio track engages the browser's shared audio output the moment it plays —
+> an audible click on the device, *even when the element is muted*. The Video
+> quale plays these as silent visual loops (volume defaults to 0), so an audio
+> track only buys you that click. Strip it: `-map 0:v -c:v copy -an` on an
+> already-encoded clip, or `-an` in the encode recipes below.
 
 Drop `.mp4` (or `.webm`) files here to serve them as same-origin sources for
 the Video quale (`src/lib/qualia/fx/video.js`). Astro copies everything under
@@ -30,10 +37,13 @@ defaults are 720p; you rarely need full 1080p for a glitch-shader source.
 ```sh
 ffmpeg -i input.mp4 \
   -c:v libx264 -crf 26 -preset slow \
-  -c:a aac -b:a 128k \
+  -an \
   -movflags +faststart \
   output.mp4
 ```
+
+`-an` drops the audio (see the click warning above). If a clip's sound is
+genuinely wanted, swap `-an` for `-c:a aac -b:a 128k`.
 
 Bump `-crf` higher (28–30) if a clip is still over 25 MiB. `+faststart` moves
 the moov atom to the front so the browser can start playing before the full

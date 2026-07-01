@@ -53,8 +53,24 @@ function saveExtPacks(list) { setJSON(SEQ_EXTPACKS_KEY, list); }
 // Persisted UI volume — multiplies kit.output while un-muted. Sits
 // alongside the mute toggle as a performance-time mix-ride control.
 // 0.9 default matches createKit()'s default kit.output.gain.
+//
+// The fader runs 0..SEQ_MAX_GAIN: 1.0 is the loudness-matched "nominal"
+// (see SEQ_REF_TRIM), and 1.0..1.5 is boost headroom for a weak pattern.
+// Stacked gains never reach the speakers raw — the kit bus brickwall
+// limiter (ensureKit) catches anything the boost pushes over the ceiling.
+const SEQ_MAX_GAIN = 1.5;
+// Loudness calibration. Drum-machine one-shots are percussive and hit near
+// full-scale, so the sequencer bus reads MUCH hotter than the strudel / rig
+// buses (which pass their quieter natural sources at unity) — the imbalance the
+// fader makes obvious at 1.0. This reference trim pulls the whole kit bus down
+// ~6 dB so fader 1.0 sits at a loudness comparable to the other channels (and
+// the meter, tapped post-trim, reflects that). It's a static bus trim applied
+// on top of the per-kit gain staging (bus 0.6 → out), so it preserves the
+// synth-vs-sample balance set in sequencer-voices.js — this is the one dial to
+// tweak if the seq still feels out of balance against strudel / rig.
+const SEQ_REF_TRIM = 0.5;
 const SEQ_VOLUME_KEY = 'voidstar.qualia.sequencer.volume';
-function loadSeqVolume() { return getNum(SEQ_VOLUME_KEY, 0.9, 0, 1); }
+function loadSeqVolume() { return getNum(SEQ_VOLUME_KEY, 0.9, 0, SEQ_MAX_GAIN); }
 function saveSeqVolume(v) { setRaw(SEQ_VOLUME_KEY, v); }
 
 // Brickwall limiter on the kit bus — on by default. Persisted across reloads.
@@ -580,7 +596,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // it — same shape, but persisted across reloads via localStorage since
   // a mix-ride should survive a tab refresh.
   let _muted = false;
-  let _volume = loadSeqVolume();  // 0..1, applied when un-muted
+  let _volume = loadSeqVolume();  // 0..SEQ_MAX_GAIN fader value; node gets _volume*SEQ_REF_TRIM
   let _seqLimiterOn = loadSeqLimiter();
   let seqLimiter = null;          // brickwall on the kit bus (created in ensureKit)
 
@@ -601,7 +617,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   function getLimiter() { return _seqLimiterOn; }
   function applyMuteToKit() {
     if (!kit?.output?.gain) return;
-    const target = _muted ? 0 : _volume;
+    const target = _muted ? 0 : _volume * SEQ_REF_TRIM;
     try {
       const t = Tone.now();
       kit.output.gain.cancelScheduledValues(t);
@@ -617,7 +633,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     notifyMix();
   }
   function setVolume(v) {
-    const clamped = Math.max(0, Math.min(1, Number(v) || 0));
+    const clamped = Math.max(0, Math.min(SEQ_MAX_GAIN, Number(v) || 0));
     if (clamped === _volume) return;
     _volume = clamped;
     saveSeqVolume(_volume);

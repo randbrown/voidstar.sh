@@ -62,6 +62,13 @@ const PLAYLIST_MIGRATION = 1;
 // migration above. Entries are either same-origin local files under
 // public/videos (always CORS-clean) or CORS-friendly direct-mp4 links — both
 // are readable by the glitch shader's WebGL texture upload.
+//
+// The bundled clips are muxed WITHOUT an audio track on purpose: a <video>
+// that carries an audio track engages the browser's shared audio output the
+// moment it plays — an audible click on the device, even with the element
+// muted (volume=0). These are decorative visual loops, so they're stripped to
+// video-only (ffmpeg -map 0:v -c:v copy -an). Keep any clip added here
+// audio-free unless its sound is genuinely wanted.
 const DEFAULT_URLS = [
   { src: '/videos/waterfall-portrait.mp4', name: 'waterfall · portrait' },
   { src: '/videos/waterfall-cascade.mp4',  name: 'waterfall · cascade' },
