@@ -6,6 +6,11 @@
 #   SPOTIFY_CLIENT_SECRET
 #   GOOGLE_API_KEY
 #
+# Optional — better /web/* chart search (otherwise keyless DuckDuckGo HTML):
+#   GOOGLE_CSE_ID          Programmable Search Engine id (pairs with GOOGLE_API_KEY;
+#                          enable the Custom Search API on the same key)
+#   BRAVE_SEARCH_API_KEY   Brave Search API token
+#
 # Local dev:   npx wrangler dev -c workers/setlist-sync/wrangler.toml
 # Deploy:      npx wrangler deploy -c workers/setlist-sync/wrangler.toml
 

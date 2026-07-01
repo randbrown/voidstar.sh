@@ -90,7 +90,7 @@ instead to keep this distinction intact.
 ## Chart-fallback ladder
 
 When a song has no chart linked yet, `renderSongFocus()` in `views.js` offers
-three tiers, in order:
+four tiers, in order:
 
 1. **Personal Drive folders** — `sources.driveFolders`, direct children only,
    via the worker's `GET /drive/folder/:id`.
@@ -101,17 +101,41 @@ three tiers, in order:
    `MAX_FOLDERS`/`MAX_FILES` in the worker) to protect the Drive API and the
    worker's execution time; a capped walk returns `truncated: true` rather
    than failing, and that surfaces as a warning in sync results.
-3. **Create a blank chart doc** — `createBlankChartDoc()` in
-   `gdrive-backup.js` creates a Google Doc inside a dedicated "voidstar
-   charts" Drive folder (created once, reused after) using the same OAuth
-   token as backup, and opens it for the user to type/paste a chart into.
-   It's a Doc (not a Drawing) so the worker's existing plain-text scraping
-   (`handleDriveFileMeta`) works on it unmodified once filled in; for
-   freeform hand-drawn charts, the in-app annotation canvas already draws on
-   top of any linked document.
+3. **Web search for shared charts** — the worker's `GET /web/chart-search`
+   web-searches for the song's chart in shared collections in the wild (NNS
+   chart repos passed around as Drive/Dropbox links). Search runs through a
+   provider chain (Google Programmable Search if `GOOGLE_CSE_ID` is set →
+   Brave if `BRAVE_SEARCH_API_KEY` is set → keyless DuckDuckGo HTML).
+   Drive hits are verified via the Drive API (reachable with the API key ⇒
+   link-shared ⇒ scrape/offline-cache will work too) and scored on the real
+   filename; shared *folders* surfaced by the search get a bounded recursive
+   walk. A verified candidate scoring ≥ `WEB_AUTO_LINK_SCORE` (0.85) is
+   auto-linked; weaker candidates appear in a picker under the action bar
+   ("open" to preview, "use" to link). Dropbox links can't be verified
+   without OAuth, so they're always picker-only, marked `unverified`.
+4. **Create a chart doc** — no longer a *blank* doc. The button first calls
+   the worker's `GET /web/chart-data`, which finds a community chord sheet
+   (Ultimate Guitar search → tab page's embedded `js-store` JSON), parses
+   sections + chords, and converts them to Nashville numbers (key from the
+   source's tonality, else inferred from the chords; `keyInferred: true`
+   flags the guess). `chart-build.js` then formats a chart in the working
+   NNS-chart layout — key/time/BPM header, title + artist, a number→chord
+   legend, sections with one line of numbers per source line (chord names in
+   parens beneath for verification), repeated sections referenced by name —
+   and `createChartDoc()` in `gdrive-backup.js` uploads it as `text/plain`
+   converted into a Google Doc inside the dedicated "voidstar charts" Drive
+   folder (created once, reused after), using the same OAuth token as
+   backup. When the web turns up nothing, it falls back to a structured
+   fill-in template (same header + section skeleton) rather than a blank
+   page. It's a Doc (not a Drawing) so the worker's existing plain-text
+   scraping (`handleDriveFileMeta`) works on it unmodified — the generated
+   header (`Key:`/`Time:`/`BPM:`/`Capo:`) intentionally matches what
+   `extractFromText` parses; for freeform hand-drawn charts, the in-app
+   annotation canvas already draws on top of any linked document.
 
-Tiers 1+2 are also available per-song via `searchChartForSong()` in
-`sync.js` (the "search for chart" button), not just as the bulk "sync now"
+Tiers 1–3 are available per-song via `searchChartForSong()` in `sync.js`
+(the "search for chart" button, which reports its stage and returns
+`{found, tier, candidates}`); tiers 1+2 also run in the bulk "sync now"
 action in Settings.
 
 ## Annotation alignment invariant
@@ -136,9 +160,13 @@ browser-only app can read Spotify playlists/tracks and list/scrape
 link-shared Drive files without exposing credentials client-side.
 
 Env vars (`wrangler secret put`): `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`,
-`GOOGLE_API_KEY`. Also `ALLOWED_ORIGIN` (plain var in `wrangler.toml`).
+`GOOGLE_API_KEY`. Optional, for better `/web/*` search: `GOOGLE_CSE_ID`
+(Programmable Search Engine id, pairs with `GOOGLE_API_KEY`),
+`BRAVE_SEARCH_API_KEY` — without either, web search falls back to a keyless
+DuckDuckGo HTML scrape. Also `ALLOWED_ORIGIN` (plain var in `wrangler.toml`).
 
 Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `POST /spotify/search-batch`, `GET /drive/folder/:id`,
 `GET /drive/folder/:id/recursive`, `GET /drive/file/:id/meta`,
-`GET /drive/file/:id/image`, `GET /health`.
+`GET /drive/file/:id/image`, `GET /web/chart-search?title=&artist=`,
+`GET /web/chart-data?title=&artist=`, `GET /health`.

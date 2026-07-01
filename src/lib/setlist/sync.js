@@ -1,4 +1,5 @@
-// Sync orchestration — matches songs against Spotify playlists and Google Drive folders.
+// Sync orchestration — matches songs against Spotify playlists and Google Drive
+// folders, and (per-song) against shared chart files found on the open web.
 // Uses the setlist-sync Cloudflare Worker for API access when configured,
 // falls back to client-side matching with manually provided URLs.
 // Cross-references Spotify and Drive data for better disambiguation.
@@ -251,17 +252,72 @@ function applyDriveMatchToSong(song, driveFiles) {
   return true;
 }
 
-// Tier 1 + 2 of the chart-fallback ladder for a single song: search personal
-// and community Drive folders now (rather than waiting for the next bulk
-// "sync now") and link the best match if one clears the threshold. Returns
-// true if a chart was found and linked (caller is responsible for saving the
-// song). Tier 3 (create a blank chart doc) is the caller's fallback when this
-// returns false — see createBlankChartDoc in gdrive-backup.js.
-export async function searchChartForSong(song) {
+// A web-search candidate must clear this to be auto-linked without asking;
+// weaker candidates are returned for the user to pick from instead.
+const WEB_AUTO_LINK_SCORE = 0.85;
+
+function applyWebCandidateToSong(song, c) {
+  song.chartUrl = c.url;
+  if (c.artist && !song.artist) song.artist = c.artist;
+  if (c.inferredKey && !song.key) song.key = c.inferredKey;
+  if (c.inferredBpm && !song.bpm) song.bpm = c.inferredBpm;
+  if (c.inferredCapo && !song.capo) song.capo = c.inferredCapo;
+}
+
+// Tiers 1–3 of the chart-fallback ladder for a single song:
+//   1+2. personal + community Drive folders (same pool as bulk "sync now")
+//   3.   web search via the worker — shared NNS chart collections in the wild
+//        (Drive/Dropbox links). A verified, high-scoring hit is auto-linked;
+//        weaker hits come back as candidates for the caller's picker UI.
+// Returns {found, tier?, candidate?, candidates?}; the caller saves the song
+// when found. Tier 4 (create/draft a chart doc) is the caller's fallback —
+// see createChartDoc in gdrive-backup.js + chart-build.js.
+export async function searchChartForSong(song, onStage) {
   const sources = getSources();
-  if (!sources.workerUrl) return false;
+  if (!sources.workerUrl) return { found: false, candidates: [] };
+
+  onStage?.('drive');
   const driveFiles = await fetchAllDriveFiles(sources);
-  return applyDriveMatchToSong(song, driveFiles);
+  if (applyDriveMatchToSong(song, driveFiles)) return { found: true, tier: 'drive' };
+
+  onStage?.('web');
+  let data = null;
+  try {
+    const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
+    const res = await fetch(`${sources.workerUrl}/web/chart-search?${params}`);
+    if (res.ok) data = await res.json();
+  } catch { /* offline or a worker without the /web routes — just no tier 3 */ }
+
+  const candidates = data?.candidates || [];
+  const top = candidates[0];
+  if (top?.verified && top.score >= WEB_AUTO_LINK_SCORE) {
+    applyWebCandidateToSong(song, top);
+    return { found: true, tier: 'web', candidate: top };
+  }
+  return { found: false, candidates };
+}
+
+// Applies a user-picked web candidate (from searchChartForSong's candidates)
+// onto the song. Caller saves.
+export function linkChartCandidate(song, candidate) {
+  applyWebCandidateToSong(song, candidate);
+}
+
+// Chords + song structure from the web (worker /web/chart-data — Ultimate
+// Guitar scrape converted to Nashville numbers), for drafting a real chart
+// doc. Returns the data object or null when nothing usable was found.
+export async function fetchWebChartData(song) {
+  const sources = getSources();
+  if (!sources.workerUrl) return null;
+  try {
+    const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
+    const res = await fetch(`${sources.workerUrl}/web/chart-data?${params}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.found ? data : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function deepScrapeChart(song) {

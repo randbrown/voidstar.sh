@@ -214,7 +214,7 @@ export async function initGdriveBackup({ interactive = true } = {}) {
   };
 }
 
-// ── Tier 3 chart fallback: create a blank chart doc when nothing matched ──
+// ── Tier 4 chart fallback: create a chart doc when nothing matched ──
 // Reuses the same drive.file-scoped OAuth token as the data backup above —
 // that scope is exactly right here too, since it only lets the app manage
 // files/folders it creates itself.
@@ -252,30 +252,45 @@ async function findOrCreateChartsFolder(token) {
   return folderId;
 }
 
-// Creates a blank Google Doc for a song with no chart yet, inside a
-// dedicated "voidstar charts" Drive folder, and returns its webViewLink.
-// Deliberately a Doc (not a Drawing): the worker's existing chart-scraping
-// already understands Google Docs' plain-text export, so once the user
-// types/pastes a chart in, "scrape" picks up key/BPM/section data for free.
-// For freeform hand-drawn charts, the in-app annotation canvas already draws
-// on top of any linked document, covering that case without needing Drive
-// Drawing support.
-export async function createBlankChartDoc(song) {
+// Creates a Google Doc chart for a song, inside a dedicated "voidstar
+// charts" Drive folder, and returns its webViewLink. `content` is the chart
+// text (drafted from web chord data or a fill-in template — see
+// chart-build.js); uploading it as text/plain with a Google-Doc target
+// mimeType makes Drive convert it into a real Doc. Deliberately a Doc (not a
+// Drawing): the worker's existing chart-scraping already understands Google
+// Docs' plain-text export, so "scrape" picks up key/BPM/section data for
+// free. For freeform hand-drawn charts, the in-app annotation canvas already
+// draws on top of any linked document, covering that case without needing
+// Drive Drawing support.
+export async function createChartDoc(song, content = '') {
   const token = await getAccessToken({ interactive: true });
   if (!token) throw new Error('Google Drive not connected. Set a Client ID and connect in Settings.');
 
   const folderId = await findOrCreateChartsFolder(token);
   const name = song.artist ? `${song.title} - ${song.artist}` : song.title;
+  const metadata = {
+    name,
+    mimeType: 'application/vnd.google-apps.document',
+    parents: [folderId],
+  };
 
-  const res = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,webViewLink', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name,
-      mimeType: 'application/vnd.google-apps.document',
-      parents: [folderId],
-    }),
-  });
+  let res;
+  if (content) {
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', new Blob([content], { type: 'text/plain' }));
+    res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: form,
+    });
+  } else {
+    res = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,webViewLink', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(metadata),
+    });
+  }
   if (!res.ok) throw new Error(`Drive doc create failed: ${res.status}`);
   const file = await res.json();
   return file.webViewLink;
