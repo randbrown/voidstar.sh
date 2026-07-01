@@ -45,8 +45,22 @@ function corsResponse(body, status, request, env, extra = {}) {
 let _spotifyToken = null;
 let _spotifyExpiry = 0;
 
-async function getSpotifyToken(env) {
-  if (_spotifyToken && Date.now() < _spotifyExpiry) return _spotifyToken;
+// An Error that carries an HTTP status so the router returns the *real* status
+// (404, 401, 429, …) instead of collapsing everything to an opaque 500. A 500
+// tells the client "the worker broke"; a 404 correctly says "playlist not
+// accessible" — which the app can then explain instead of just logging a scary
+// Internal Server Error.
+function httpError(status, message) {
+  const e = new Error(message);
+  e.status = status;
+  return e;
+}
+
+async function getSpotifyToken(env, { force = false } = {}) {
+  if (!env.SPOTIFY_CLIENT_ID || !env.SPOTIFY_CLIENT_SECRET) {
+    throw httpError(500, 'SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET not configured in the worker');
+  }
+  if (!force && _spotifyToken && Date.now() < _spotifyExpiry) return _spotifyToken;
   const creds = btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`);
   const res = await fetch('https://accounts.spotify.com/api/token', {
     method: 'POST',
@@ -58,7 +72,9 @@ async function getSpotifyToken(env) {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`Spotify token ${res.status}: ${body}`);
+    // 400/401/403 here means bad client credentials or a suspended/unagreed
+    // Spotify app — not our fault, so surface it as 502 (bad upstream), not 500.
+    throw httpError(502, `Spotify auth failed (${res.status}) — check SPOTIFY_CLIENT_ID/SECRET and that the Spotify app is active. ${body.slice(0, 300)}`);
   }
   const data = await res.json();
   _spotifyToken = data.access_token;
@@ -67,17 +83,28 @@ async function getSpotifyToken(env) {
 }
 
 async function handleSpotifyPlaylist(playlistId, request, env) {
-  const token = await getSpotifyToken(env);
+  let token = await getSpotifyToken(env);
   const tracks = [];
   let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&market=US`;
+  let retriedAuth = false;
 
   while (url) {
-    const res = await fetch(url, {
+    let res = await fetch(url, {
       headers: { 'Authorization': `Bearer ${token}` },
     });
+    // A cached token can go stale between isolate reuse and this request; on a
+    // 401 force a fresh token once and retry before giving up.
+    if (res.status === 401 && !retriedAuth) {
+      retriedAuth = true;
+      token = await getSpotifyToken(env, { force: true });
+      res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`Spotify API ${res.status}: ${body}`);
+      const hint = res.status === 404
+        ? 'playlist not found, or not readable with client credentials (Spotify-owned editorial/algorithmic playlists can no longer be read this way — use a playlist you created)'
+        : `Spotify API ${res.status}`;
+      throw httpError(res.status, `Spotify playlist ${playlistId}: ${hint}. ${body.slice(0, 300)}`);
     }
     const data = await res.json();
     for (const item of (data.items || [])) {
@@ -487,7 +514,7 @@ export default {
 
       return corsResponse(JSON.stringify({ error: 'not found' }), 404, request, env);
     } catch (e) {
-      return corsResponse(JSON.stringify({ error: e.message }), 500, request, env);
+      return corsResponse(JSON.stringify({ error: e.message }), e.status || 500, request, env);
     }
   },
 };

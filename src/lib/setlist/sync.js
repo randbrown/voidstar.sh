@@ -156,11 +156,16 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
   if (workerUrl) {
     const res = await fetch(`${workerUrl}/spotify/playlist/${parsed.id}`);
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      if (res.status === 403 || res.status === 401) {
-        throw new Error('Spotify credentials invalid — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your worker env vars');
+      // The worker reports the real reason (bad credentials, playlist not
+      // accessible, rate-limited) in a JSON {error} body — surface it instead
+      // of a bare status so the sync results explain what actually went wrong.
+      let detail = '';
+      try { detail = (await res.json())?.error || ''; }
+      catch { detail = (await res.text().catch(() => '')) || ''; }
+      if (res.status === 403 || res.status === 401 || res.status === 502) {
+        throw new Error(detail || 'Spotify credentials invalid — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your worker env vars');
       }
-      throw new Error(`Spotify API ${res.status}`);
+      throw new Error(detail || `Spotify API ${res.status}`);
     }
     return await res.json();
   }
