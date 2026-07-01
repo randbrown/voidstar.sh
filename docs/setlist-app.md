@@ -156,7 +156,13 @@ four tiers, in order:
    `createChartDoc()` in `gdrive-backup.js` uploads it as `text/plain`
    converted into a Google Doc inside the dedicated "voidstar charts" Drive
    folder (created once, reused after), using the same OAuth token as
-   backup. When neither AI nor a chord source delivers, it falls back to a
+   backup — and immediately link-shares the doc (anyone-with-link, reader),
+   because the worker reaches chart files with an API key: scrape,
+   thumbnail rasterizing, and offline caching all fail on a private doc
+   (Drive's thumbnail endpoint even answers one with a login page — which,
+   before blob validation in `chart-cache.js` and the content-type check on
+   `/drive/file/:id/image`, could get cached as a permanently broken "chart
+   image"; `getOfflineChartUrl` now self-heals such poisoned entries). When neither AI nor a chord source delivers, it falls back to a
    structured fill-in template — still carrying any derived key/BPM/time —
    rather than a blank page. It's a Doc (not a Drawing) so
    the worker's existing plain-text scraping (`handleDriveFileMeta`) works

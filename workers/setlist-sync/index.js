@@ -395,6 +395,15 @@ async function handleDriveFileImage(fileId, request, env) {
   }
 
   const contentType = upstream.headers.get('Content-Type') || 'image/jpeg';
+  // The thumbnail endpoint answers a private/unshared file with a redirect to
+  // a Google login page — a 200 whose body is HTML. Serving that as the
+  // "image" poisons the client's offline chart cache; refuse it instead.
+  if (!contentType.startsWith('image/')) {
+    return corsResponse(
+      JSON.stringify({ error: `Drive returned ${contentType.split(';')[0]} instead of an image — is the file link-shared?` }),
+      502, request, env,
+    );
+  }
   const body = await upstream.arrayBuffer();
   return new Response(body, {
     status: 200,

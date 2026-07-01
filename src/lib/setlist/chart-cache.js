@@ -60,12 +60,20 @@ export async function cacheChartForSong(song, workerUrl) {
     if (!res.ok) return { songId: song.id, ok: false, reason: `fetch ${res.status}` };
     const blob = await res.blob();
     if (!blob || blob.size === 0) return { songId: song.id, ok: false, reason: 'empty' };
+    // Only cache bytes that can actually render as a chart. An upstream that
+    // slips an HTML error/login page through here would otherwise poison the
+    // cache with a permanently broken "image".
+    if (!isRenderableChartBlob(blob)) return { songId: song.id, ok: false, reason: `not an image (${blob.type || 'unknown type'})` };
     await store.putChartBlob(song.id, blob, song.chartUrl);
     announceCached(song.id);
     return { songId: song.id, ok: true, size: blob.size };
   } catch (e) {
     return { songId: song.id, ok: false, reason: e.message || 'fetch failed' };
   }
+}
+
+function isRenderableChartBlob(blob) {
+  return /^(?:image\/|application\/pdf)/.test(blob?.type || '');
 }
 
 // Download + store a list of songs' charts. onProgress({ done, total, ok,
@@ -143,6 +151,14 @@ export async function getOfflineChartUrl(songId, expectedUrl) {
     const rec = await store.getChartBlob(songId);
     if (rec?.blob) {
       if (expectedUrl && rec.sourceUrl && rec.sourceUrl !== expectedUrl) {
+        await store.deleteChartBlob(songId);
+        return null;
+      }
+      // Self-heal cache entries poisoned before blob validation existed
+      // (e.g. a Google login page cached as the "image" for a private doc):
+      // drop them and report a miss so the caller falls back to the live
+      // iframe/URL rendering.
+      if (!isRenderableChartBlob(rec.blob)) {
         await store.deleteChartBlob(songId);
         return null;
       }

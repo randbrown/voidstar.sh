@@ -304,6 +304,21 @@ export async function createChartDoc(song, content = '') {
   }
   if (!res.ok) throw new Error(`Drive doc create failed: ${res.status}`);
   const file = await res.json();
+
+  // Make the doc link-shared (anyone with the link, read-only). The whole
+  // chart pipeline assumes it: the worker reaches files with an API key —
+  // scraping ("scrape"), thumbnail rasterizing, and offline caching all 404
+  // on a private doc. Worse, Drive's thumbnail endpoint answers a private
+  // fetch with a login page, which used to get cached as the "chart image".
+  // Non-fatal: a doc without this still works via the signed-in iframe view.
+  try {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}/permissions`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'reader', type: 'anyone' }),
+    });
+  } catch {}
+
   return file.webViewLink;
 }
 
