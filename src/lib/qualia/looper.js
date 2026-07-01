@@ -2050,6 +2050,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const TUNER_MIN_HZ = 22;     // reach below G0 (~24.5 Hz)
   const TUNER_INTERVAL_MS = 140;  // note-detection cadence (strobe itself runs every frame)
+  // Weight of each fresh sample in the cents READOUT smoothing (per TUNER_INTERVAL_MS
+  // tick), shared by mono + poly so they read identically. Lower = calmer / slower
+  // to settle. The strobe stripes ignore this — they always animate per frame.
+  const TUNER_READOUT_EMA = 0.25;
   const STROBE_BANDS = 3;      // octave-stacked sensitivity rows (×1, ×2, ×4)
   let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerCentsEl = null;
   let tunerModeBtns = null, tunerChordCtl = null, tunerStringCtl = null, tunerReadoutEl = null;
@@ -2330,7 +2334,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     let err = rawCents - target;                           // deviation from the target
     // Smooth within a held note (snap on note change) to calm the readout.
     const key = `${cls}.${octave}`;
-    err = key === _tunerNoteKey ? _tunerErrSmooth * 0.5 + err * 0.5 : err;
+    err = key === _tunerNoteKey ? _tunerErrSmooth * (1 - TUNER_READOUT_EMA) + err * TUNER_READOUT_EMA : err;
     _tunerNoteKey = key; _tunerErrSmooth = err;
     const shown = Math.round(err);
     const inTune = Math.abs(err) <= 3;
@@ -2504,7 +2508,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       // snap when a lane just started sounding (as the mono readout does on a
       // note change) so it doesn't crawl up from 0.
       if (dispTick) {
-        L.dispCents = (L.dispVoiced && voiced) ? (L.dispCents * 0.5 + cents * 0.5) : cents;
+        L.dispCents = (L.dispVoiced && voiced) ? (L.dispCents * (1 - TUNER_READOUT_EMA) + cents * TUNER_READOUT_EMA) : cents;
         L.dispVoiced = voiced;
       }
       const inTune = voiced && Math.abs(cents) <= 4;
