@@ -191,6 +191,12 @@ schema defaults, gzip + base64url, device-fingerprinted) — the basis for share
 The **DOIO KB16-01** macro pad runs a Keychron-Launcher keymap that sends *plain keystrokes* the
 page already listens for (no custom firmware). Knob encoders are matched by physical `e.code` so
 layout/NumLock can't break them. Hotkeys are suppressed only while a code editor or text field has
-focus — the rig panel's sliders stay live so knobs nudge them. A true-MIDI path also exists
-(CC1→delay, CC2→reverb, CC7→rig master, Chromium only). Full mapping:
-[`docs/doio-kb16-qualia-keymap.md`](doio-kb16-qualia-keymap.md).
+focus — the rig panel's sliders stay live so knobs nudge them. Both the keystroke path and a
+**full MIDI path** (buttons→Note-On, knobs→CC1/2/7, Chromium only) dispatch through one shared
+`padActions` map in `page-init.js`, so they never drift. MIDI matters for lid-shut / screen-off
+gigs: notes reach a backgrounded/occluded window and don't wake a sleeping display, unlike
+keystrokes. `H` (topbar ☾) is an **in-app blackout** — `core.setRenderSuspended` stops the fx
+render to free the GPU while audio keeps playing (a web page can't power down the backlight; sleep
+the real display at the OS level for that). Full mapping:
+[`docs/doio-kb16-qualia-keymap.md`](doio-kb16-qualia-keymap.md); lid-shut / screen-off playbook:
+[`docs/headless-and-screen-off.md`](headless-and-screen-off.md).
