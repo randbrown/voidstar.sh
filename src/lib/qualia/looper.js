@@ -292,7 +292,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     temperament: lsGet(TEMPER_KEY, 'et') === 'custom' ? 'custom' : 'et',
     customCents: loadCustomCents(),
     refPitch: (() => { const v = parseFloat(lsGet(REFPITCH_KEY, '440')); return Number.isFinite(v) ? Math.max(400, Math.min(480, v)) : 440; })(),
-    tunerMode: (() => { const m = lsGet(TUNERMODE_KEY, 'mono'); return (m === 'chord' || m === 'strings') ? m : 'mono'; })(),
+    tunerMode: (() => { const m = lsGet(TUNERMODE_KEY, 'mono'); return (m === 'chord' || m === 'strings' || m === 'chromatic') ? m : 'mono'; })(),
     tunerChord: loadTunerChord(),           // { root: pitch-class, quality }
     tunerStrings: lsGet(TUNERSTRINGS_KEY, 'guitar') || 'guitar',
     cabName: lsGet(CABNAME_KEY, '') || '',
@@ -2099,9 +2099,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   function persistTunerChord() { try { lsSet(TUNERCHORD_KEY, JSON.stringify(model.tunerChord)); } catch {} }
   function setTunerMode(m) {
-    model.tunerMode = (m === 'chord' || m === 'strings') ? m : 'mono';
+    model.tunerMode = (m === 'chord' || m === 'strings' || m === 'chromatic') ? m : 'mono';
     lsSet(TUNERMODE_KEY, model.tunerMode);
     applyTunerMode();
+  }
+  // Short label for the mini-tuner square in each poly mode.
+  function miniLabel() {
+    return model.tunerMode === 'chord' ? NOTE_NAMES[model.tunerChord.root]
+      : model.tunerMode === 'chromatic' ? '12' : '≡';
   }
   // Rebuild lanes + size the strobe canvas to the current lane count. Called on
   // mode switch AND on target-selection change (a new chord/string set can change
@@ -2131,12 +2136,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const bar = document.createElement('div'); bar.className = 'rig-tuner-modebar';
     tunerModeBtns = {};
     const modes = document.createElement('div'); modes.className = 'rig-tuner-modes';
-    for (const m of ['mono', 'chord', 'strings']) {
+    const MODE_LABELS = { mono: 'mono', chord: 'chord', strings: 'strings', chromatic: 'chroma' };
+    for (const m of ['mono', 'chord', 'strings', 'chromatic']) {
       const b = document.createElement('button');
-      b.type = 'button'; b.className = 'ctrl-btn rig-tuner-mode'; b.textContent = m;
+      b.type = 'button'; b.className = 'ctrl-btn rig-tuner-mode'; b.textContent = MODE_LABELS[m];
       b.title = m === 'mono' ? 'Single-note strobe — detects and tunes whatever you play'
         : m === 'chord' ? 'Polytuner — strum a chord, tune every chord tone at once (temperament-aware)'
-        : 'Polytuner — one lane per string of the selected tuning';
+        : m === 'strings' ? 'Polytuner — one lane per string of the selected tuning'
+        : 'Polytuner — all 12 chromatic notes at once, each targeting its custom temperament offset. Tune every string / pedal / knee-lever stop (steel-friendly).';
       b.addEventListener('click', () => setTunerMode(m));
       tunerModeBtns[m] = b; modes.appendChild(b);
     }
@@ -2200,6 +2207,16 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (model.tunerMode === 'strings') {
       const preset = STRING_PRESETS[model.tunerStrings] || STRING_PRESETS.guitar;
       for (const midi of preset.midi) _lanes.push(makeLane(midi, null));
+    } else if (model.tunerMode === 'chromatic') {
+      // All 12 pitch classes, each auto-tracking whichever octave is sounding —
+      // so any string / pedal / knee-lever stop registers on its note's lane,
+      // targeting that note's custom temperament offset. (A note below the scan
+      // range still locks via its octave harmonic, which carries the same cents
+      // error, so low universal strings read correctly.)
+      for (let cls = 0; cls < 12; cls++) {
+        const candidates = CHORD_OCTS.map(oct => cls + 12 * (oct + 1));
+        _lanes.push(makeLane(candidates[1] ?? candidates[0], candidates));
+      }
     } else if (model.tunerMode === 'chord') {
       const q = CHORD_QUALITIES[model.tunerChord.quality] || CHORD_QUALITIES.maj;
       const seen = new Set();
@@ -2335,10 +2352,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (_lanesDirty) rebuildLanes();
     if (!an || typeof an.getFloatTimeDomainData !== 'function' || !_lanes.length) {
       for (const L of _lanes) { L.voiced = false; L.prevVoiced = false; }
-      setMini(false, false, model.tunerMode === 'chord' ? NOTE_NAMES[model.tunerChord.root] : '≡');
+      setMini(false, false, miniLabel());
       return;
     }
-    if (model.tunerMode !== 'chord') return;   // strings lanes are fixed — no octave pick
+    if (model.tunerMode === 'strings') return;   // strings lanes are fixed — no octave pick
     // Chord mode: follow whichever octave you actually strummed for each tone.
     const n = an.fftSize;
     if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
@@ -2427,7 +2444,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const an = looperAudio.getTunerAnalyser?.() || looperAudio.getCaptureAnalyser?.();
     if (!_lanes.length || !an || typeof an.getFloatTimeDomainData !== 'function') {
       drawStrobeIdle(g, W, H, Math.max(1, _lanes.length || STROBE_BANDS));
-      setMini(false, false, model.tunerMode === 'chord' ? NOTE_NAMES[model.tunerChord.root] : '≡');
+      setMini(false, false, miniLabel());
       return;
     }
     const n = an.fftSize;
@@ -2500,7 +2517,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
         g.strokeRect(stripeL, sy, stripeR - stripeL, sh);
       }
     }
-    setMini(anyVoiced, anyVoiced && allInTune, model.tunerMode === 'chord' ? NOTE_NAMES[model.tunerChord.root] : '≡');
+    setMini(anyVoiced, anyVoiced && allInTune, miniLabel());
   }
   function drawStrobeIdle(g, W, H, rows) {
     const r = Math.max(1, rows | 0);
