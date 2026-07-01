@@ -120,6 +120,24 @@ function vocalistDot(code, legend) {
   return `<span class="sl-vocalist" data-v="${code}" title="${name}">${code}</span>`;
 }
 
+// Lock a chart box's aspect-ratio to the chart IMAGE's natural dimensions, so
+// the chart renders at the document's true page aspect (not the annotation's
+// authoring/viewport shape) — no stretch. The chart image and the annotation
+// canvas both fill this box, so strokes stay pinned to the same chart content
+// at any box aspect; only the box's shape changes. naturalWidth/naturalHeight
+// are readable even for the cross-origin Drive thumbnail (only pixel data is
+// tainted). Marks the box so the authoring-aspect fallback won't clobber it.
+function lockAspectToImage(img, box) {
+  const apply = () => {
+    if (img.naturalWidth && img.naturalHeight) {
+      box.style.aspectRatio = String(img.naturalWidth / img.naturalHeight);
+      box.dataset.naturalAspect = '1';
+    }
+  };
+  if (img.complete && img.naturalWidth) apply();
+  else img.addEventListener('load', apply, { once: true });
+}
+
 // ── Shared Google Drive sync (used by Settings, per-page buttons, the pill) ──
 
 function formatGdriveError(e) {
@@ -1981,6 +1999,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
           const img = document.createElement('img');
           img.src = flatImageUrl;
           img.className = 'sl-perform-chart-img sl-chart-flat';
+          lockAspectToImage(img, chartWrap);
           img.addEventListener('error', () => {
             if (img.parentElement !== chartWrap) return;
             img.remove();
@@ -1993,6 +2012,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
               const raw = document.createElement('img');
               raw.src = song.chartUrl;
               raw.className = 'sl-perform-chart-img';
+              lockAspectToImage(raw, chartWrap);
               insertChart(raw);
             }
           }, { once: true });
@@ -2006,6 +2026,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
           const img = document.createElement('img');
           img.src = song.chartUrl;
           img.className = 'sl-perform-chart-img';
+          lockAspectToImage(img, chartWrap);
           insertChart(img);
         }
       }
@@ -2020,6 +2041,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
           const img = document.createElement('img');
           img.src = objUrl;
           img.className = 'sl-perform-chart-img sl-chart-flat';
+          lockAspectToImage(img, chartWrap);
           insertChart(img);
         } else {
           mountRemoteChart();
@@ -2027,12 +2049,13 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       });
 
       loadAnnotation(entry.songId).then(data => {
-        // Reproduce the aspect ratio the strokes were authored at so the
-        // overlay lines up with the chart. Older annotations saved without it
-        // fall back to the current viewport's annotation-box shape.
+        // The chart image's natural aspect (set by lockAspectToImage) is the
+        // source of truth for the box shape. Only fall back to the authoring/
+        // viewport aspect if the image hasn't provided one yet (e.g. an iframe
+        // chart, or before the image has loaded).
         const aspect = data?.aspect ||
           (window.innerWidth / Math.max(1, window.innerHeight - 96));
-        chartWrap.style.aspectRatio = String(aspect);
+        if (!chartWrap.dataset.naturalAspect) chartWrap.style.aspectRatio = String(aspect);
         if (data?.strokes?.length) {
           // Make the chart fill the aspect-locked wrap (see .sl-has-annotations
           // CSS) so the overlay lines up exactly, matching the annotate/detail
@@ -2176,6 +2199,7 @@ export async function renderAnnotation(root, songId, setlistId) {
     const img = document.createElement('img');
     img.src = cachedChartUrl;
     img.className = 'sl-annotation-img';
+    lockAspectToImage(img, stage);
     stage.appendChild(img);
     window.addEventListener('hashchange', () => URL.revokeObjectURL(cachedChartUrl), { once: true });
   } else {
@@ -2190,6 +2214,7 @@ export async function renderAnnotation(root, songId, setlistId) {
       const img = document.createElement('img');
       img.src = song.chartUrl;
       img.className = 'sl-annotation-img';
+      lockAspectToImage(img, stage);
       stage.appendChild(img);
     }
   }
@@ -2207,13 +2232,14 @@ export async function renderAnnotation(root, songId, setlistId) {
 
   requestAnimationFrame(async () => {
     const data = await loadAnnotation(songId);
-    // Reproduce the authoring aspect so the box matches what strokes were drawn
-    // against; fall back to the current available region for brand-new charts.
+    // The chart image's natural aspect (set by lockAspectToImage) is the source
+    // of truth for the box shape. Only fall back to the authoring/viewport
+    // aspect if the image hasn't provided one (iframe chart, or pre-load).
     const aspect = data?.aspect ||
       (canvasWrap.clientHeight
         ? canvasWrap.clientWidth / canvasWrap.clientHeight
         : window.innerWidth / Math.max(1, window.innerHeight - 96));
-    stage.style.aspectRatio = String(aspect);
+    if (!stage.dataset.naturalAspect) stage.style.aspectRatio = String(aspect);
     if (data?.strokes?.length) {
       readonlyCtrl = renderReadonlyAnnotations(canvas, data.strokes);
     }

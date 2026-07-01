@@ -464,12 +464,17 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   });
 
   window.addEventListener('resize', resize, { signal });
+  // Also track the box itself: its aspect-ratio can change without a window
+  // resize (e.g. the chart image loads and re-shapes the stage to its natural
+  // aspect), and the drawing canvas must re-fit so strokes stay aligned.
+  const ro = new ResizeObserver(resize);
+  if (canvas.parentElement) ro.observe(canvas.parentElement);
   resize();
 
   return {
     resize,
     redraw,
-    destroy() { ac.abort(); cancelLongPress(); selMenu.remove(); },
+    destroy() { ac.abort(); ro.disconnect(); cancelLongPress(); selMenu.remove(); },
     getStrokes() { return strokes; },
   };
 }
