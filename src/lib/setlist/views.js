@@ -1496,7 +1496,33 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       if (invertActive) chartWrap.classList.add('sl-chart-inverted');
 
       const embedUrl = buildChartEmbedUrl(song.chartUrl);
-      if (embedUrl) {
+      const flatImageUrl = buildChartImageUrl(song.chartUrl);
+      if (flatImageUrl) {
+        // Prefer a flattened image so the area around the chart is our own dark
+        // backdrop (which doesn't flip to white in invert mode). Top-aligned +
+        // fit-to-width mirrors the viewer's layout, so annotations stay lined
+        // up. If the image endpoint can't serve the file (e.g. a private Drive
+        // file), fall back to the embeddable viewer so the chart still shows.
+        const img = document.createElement('img');
+        img.src = flatImageUrl;
+        img.className = 'sl-perform-chart-img sl-chart-flat';
+        img.addEventListener('error', () => {
+          if (img.parentElement !== chartWrap) return;
+          img.remove();
+          if (embedUrl) {
+            const iframe = document.createElement('iframe');
+            iframe.src = embedUrl;
+            iframe.className = 'sl-perform-chart-iframe';
+            chartWrap.insertBefore(iframe, chartWrap.firstChild);
+          } else {
+            const raw = document.createElement('img');
+            raw.src = song.chartUrl;
+            raw.className = 'sl-perform-chart-img';
+            chartWrap.insertBefore(raw, chartWrap.firstChild);
+          }
+        }, { once: true });
+        chartWrap.appendChild(img);
+      } else if (embedUrl) {
         const iframe = document.createElement('iframe');
         iframe.src = embedUrl;
         iframe.className = 'sl-perform-chart-iframe';
@@ -1700,5 +1726,20 @@ function buildChartEmbedUrl(url) {
   const gfileMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
   if (gfileMatch) return `https://drive.google.com/file/d/${gfileMatch[1]}/preview`;
   if (url.match(/\.(pdf|png|jpg|jpeg|gif|webp)(\?|$)/i)) return url;
+  return null;
+}
+
+// A flat *image* URL for the chart, when one exists — used by perform mode so
+// the chart renders as a bare image on our dark backdrop instead of inside
+// Google's cross-origin viewer (whose surround flips to white in invert mode).
+// Google Drive files rasterize cleanly via the thumbnail endpoint (works for
+// images and single-page PDFs; carries the user's cookies for their own files).
+// Google Docs are left to the iframe path (a doc isn't a chart image). Direct
+// image links are already bare images and keep their existing rendering.
+function buildChartImageUrl(url) {
+  const driveId =
+    url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/)?.[1] ||
+    url.match(/[?&]id=([a-zA-Z0-9_-]+)/)?.[1];
+  if (driveId) return `https://drive.google.com/thumbnail?id=${driveId}&sz=w2000`;
   return null;
 }

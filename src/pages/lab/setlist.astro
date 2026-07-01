@@ -33,12 +33,17 @@ import '../../styles/themes.css';
       min-height: 100dvh;
     }
 
-    /* ── Top bar ── */
+    /* ── Top bar ──
+       Mobile-first (portrait is the primary use case): the back button and the
+       title share the first row so the name gets the full width and can wrap
+       to two lines instead of truncating to "Boots…"; the action buttons drop
+       to their own row below. On wider screens (≥640px, e.g. laptop) it
+       collapses back to a single inline row with an ellipsized title. */
     .sl-topbar {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      padding: 0.75rem 0;
+      gap: 0.4rem 0.5rem;
+      padding: 0.6rem 0;
       border-bottom: 1px solid var(--border);
       margin-bottom: 1rem;
       position: sticky;
@@ -49,19 +54,20 @@ import '../../styles/themes.css';
     }
     .sl-topbar-title {
       font-family: var(--font-mono);
-      font-size: 1.1rem;
+      font-size: 1.15rem;
       font-weight: 600;
       color: var(--text);
-      flex: 1;
+      flex: 1 1 auto;
       min-width: 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
     }
     .sl-actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 0.4rem;
-      margin-left: auto;
+      /* Own row on phones so buttons never crowd out the title. */
+      flex: 1 0 100%;
     }
 
     /* ── Buttons ── */
@@ -995,6 +1001,11 @@ import '../../styles/themes.css';
       border-radius: var(--radius, 6px);
       overflow: hidden;
       border: 1px solid var(--border);
+      /* Our own dark backdrop behind the chart. For a flattened image this is
+         what shows around/below the page — and because it's ours (not Google's
+         cross-origin viewer) it stays dark in invert mode instead of flipping
+         to white, so the area around the doc matches the doc. */
+      background: #000;
     }
     .sl-perform-chart-iframe,
     .sl-perform-chart-img {
@@ -1004,6 +1015,13 @@ import '../../styles/themes.css';
       height: 100%;
       border: none;
       display: block;
+    }
+    /* Flattened chart image: fit to width, pinned to the top — mirrors how the
+       Google viewer laid the page out, so existing annotations stay aligned,
+       but any space around it is our dark backdrop rather than the viewer's. */
+    .sl-perform-chart-img.sl-chart-flat {
+      height: auto;
+      bottom: auto;
     }
     .sl-perform-chart-canvas {
       position: absolute;
@@ -1069,6 +1087,16 @@ import '../../styles/themes.css';
       .sl-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      }
+      /* Laptop: title + actions back on one inline row, ellipsized title. */
+      .sl-topbar-title {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sl-actions {
+        flex: 0 0 auto;
+        margin-left: auto;
       }
     }
   </style>
