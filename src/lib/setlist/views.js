@@ -1661,6 +1661,15 @@ export async function renderAnnotation(root, songId, setlistId) {
   container.appendChild(toolbar);
 
   const canvasWrap = el('div', 'sl-annotation-wrap');
+  // Aspect-locked stage that actually holds the chart + canvas. The canvas
+  // normalizes strokes to its parent's box, so that box must be identical in
+  // both annotate and view modes — otherwise the two toolbars (draw controls
+  // wrap to two rows; view controls fit on one) leave the flex wrap at
+  // different heights and the same normalized stroke lands in a different
+  // pixel spot, shifting annotations off the chart. Locking the stage to a
+  // width-driven aspect ratio (as perform mode does) makes the box stable
+  // regardless of toolbar height.
+  const stage = el('div', 'sl-annotation-stage');
 
   const embedUrl = buildChartEmbedUrl(song.chartUrl);
   if (embedUrl) {
@@ -1668,18 +1677,19 @@ export async function renderAnnotation(root, songId, setlistId) {
     iframe.src = embedUrl;
     iframe.className = 'sl-annotation-iframe';
     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-    canvasWrap.appendChild(iframe);
+    stage.appendChild(iframe);
   } else {
     const img = document.createElement('img');
     img.src = song.chartUrl;
     img.className = 'sl-annotation-img';
-    canvasWrap.appendChild(img);
+    stage.appendChild(img);
   }
 
   const canvas = document.createElement('canvas');
   canvas.className = 'sl-annotation-canvas';
   canvas.style.pointerEvents = 'none';
-  canvasWrap.appendChild(canvas);
+  stage.appendChild(canvas);
+  canvasWrap.appendChild(stage);
   container.appendChild(canvasWrap);
   root.appendChild(container);
 
@@ -1688,6 +1698,13 @@ export async function renderAnnotation(root, songId, setlistId) {
 
   requestAnimationFrame(async () => {
     const data = await loadAnnotation(songId);
+    // Reproduce the authoring aspect so the box matches what strokes were drawn
+    // against; fall back to the current available region for brand-new charts.
+    const aspect = data?.aspect ||
+      (canvasWrap.clientHeight
+        ? canvasWrap.clientWidth / canvasWrap.clientHeight
+        : window.innerWidth / Math.max(1, window.innerHeight - 96));
+    stage.style.aspectRatio = String(aspect);
     if (data?.strokes?.length) {
       readonlyCtrl = renderReadonlyAnnotations(canvas, data.strokes);
     }
