@@ -41,13 +41,19 @@ export function matchScore(titleA, titleB) {
   const b = normalize(titleB);
   if (!a || !b) return 0;
   if (a === b) return 1;
-  // Substring containment is a strong signal ("Sweet Home" ⊂ "Sweet Home
-  // Alabama"), but only when the contained title is substantial. Guard against
-  // a tiny fragment (e.g. a mis-parsed one-letter "T" from "T-R-O-U-B-L-E"),
-  // which is a substring of nearly every title and would otherwise score 0.9
-  // for almost every song, hijacking their chart match.
+  // Substring containment is a strong signal for a partial/extended title
+  // ("Sweet Home" ⊂ "Sweet Home Alabama"), but only when the shorter title is
+  // substantial AND covers a meaningful share of the longer one. Without the
+  // coverage floor, a short generic word that merely sits inside a long,
+  // unrelated title scores 0.9 and hijacks the match — e.g. "Up!" inside
+  // "Ain't Goin Down Til The Sun Comes Up", or a mis-parsed one-letter "T"
+  // from "T-R-O-U-B-L-E" (a substring of nearly every title).
   const shorter = a.length <= b.length ? a : b;
-  if (shorter.length >= 4 && (a.includes(b) || b.includes(a))) return 0.9;
+  const longer = a.length <= b.length ? b : a;
+  if (shorter.length >= 4 && shorter.length / longer.length >= 0.5 &&
+      (a.includes(b) || b.includes(a))) {
+    return 0.9;
+  }
   const maxLen = Math.max(a.length, b.length);
   const dist = levenshtein(a, b);
   return Math.max(0, 1 - dist / maxLen);
