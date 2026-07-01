@@ -421,7 +421,12 @@ function extractFromText(text) {
 function parseDriveFilename(name) {
   let clean = name.replace(/\.(pdf|docx?|txt|gdoc)$/i, '').trim();
   clean = clean.replace(/^\d+\.\s*/, '');
-  const parts = clean.split(/\s*[-–—]\s*/);
+  // Split "Title - Artist" only on a dash flanked by whitespace. Requiring the
+  // surrounding spaces keeps hyphenated or spelled-out titles intact — e.g.
+  // "T-R-O-U-B-L-E - Travis Tritt" must parse to title "T-R-O-U-B-L-E", not "T"
+  // (a bare /\s*[-–—]\s*/ splits on every internal hyphen, and a one-letter
+  // title then fuzzy-matches nearly every song).
+  const parts = clean.split(/\s+[-–—]\s+/);
   if (parts.length >= 2) {
     return { title: parts[0].trim(), artist: parts.slice(1).join(' - ').trim() };
   }
