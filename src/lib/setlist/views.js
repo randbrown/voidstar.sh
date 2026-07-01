@@ -9,7 +9,7 @@ import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBa
 import { findBestMatch as fuzzyMatch } from './match.js';
 import { initGdriveSync, isGdriveSyncEnabled, mergeData, setSyncClient, debouncedPush, watchConnectivity, onSyncState } from './gdrive-sync.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
-import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChartUrl } from './chart-cache.js';
+import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChartUrl, CHART_CACHED_EVENT } from './chart-cache.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -354,6 +354,21 @@ export async function renderSetlistView(root, setlistId) {
     offlineBar.appendChild(dlBtn);
   }
   paintOfflineBar();
+  // Live-refresh the N/M count as background auto-caching (kicked off by perform
+  // mode) lands charts. Throttled to a repaint on the next frame, and torn down
+  // when leaving the setlist view.
+  let offlinePaintQueued = false;
+  const onChartCached = () => {
+    if (offlinePaintQueued) return;
+    offlinePaintQueued = true;
+    requestAnimationFrame(() => { offlinePaintQueued = false; paintOfflineBar(); });
+  };
+  window.addEventListener(CHART_CACHED_EVENT, onChartCached);
+  const offlineBarCleanup = () => {
+    window.removeEventListener(CHART_CACHED_EVENT, onChartCached);
+    window.removeEventListener('hashchange', offlineBarCleanup);
+  };
+  window.addEventListener('hashchange', offlineBarCleanup);
 
   const allNotes = await store.getAllNotes();
   const notesBySong = {};

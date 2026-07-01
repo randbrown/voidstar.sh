@@ -10,6 +10,14 @@
 import * as store from './store.js';
 import { getSources } from './sync.js';
 
+// Broadcast when a chart lands in the cache so open views (e.g. the setlist
+// offline bar) can live-refresh their N/M count as background caching runs.
+export const CHART_CACHED_EVENT = 'setlist:chart-cached';
+function announceCached(songId) {
+  if (typeof window === 'undefined') return;
+  try { window.dispatchEvent(new CustomEvent(CHART_CACHED_EVENT, { detail: { songId } })); } catch {}
+}
+
 // Pull the Drive file id out of the common chart URL shapes:
 //   drive.google.com/file/d/<id>/view · docs.google.com/document/d/<id>/edit
 //   ...?id=<id> · ...open?id=<id>
@@ -53,6 +61,7 @@ export async function cacheChartForSong(song, workerUrl) {
     const blob = await res.blob();
     if (!blob || blob.size === 0) return { songId: song.id, ok: false, reason: 'empty' };
     await store.putChartBlob(song.id, blob, song.chartUrl);
+    announceCached(song.id);
     return { songId: song.id, ok: true, size: blob.size };
   } catch (e) {
     return { songId: song.id, ok: false, reason: e.message || 'fetch failed' };
