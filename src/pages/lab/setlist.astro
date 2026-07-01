@@ -488,6 +488,36 @@ const buildStamp = readBuildStamp();
       flex-wrap: wrap;
     }
 
+    /* Web chart-search candidates (below the action bar) */
+    .sl-chart-candidates {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      margin: 0.25rem 0 0.75rem;
+    }
+    .sl-chart-candidate {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius, 6px);
+      padding: 0.45rem 0.6rem;
+    }
+    .sl-chart-candidate-info { flex: 1; min-width: 0; }
+    .sl-chart-candidate-name {
+      font-size: 0.85rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sl-chart-candidate-meta {
+      font-size: 0.68rem;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+    }
+    a.sl-btn { text-decoration: none; display: inline-flex; align-items: center; }
+
     .sl-spotify-embed {
       margin: 0.75rem 0;
       border-radius: 8px;

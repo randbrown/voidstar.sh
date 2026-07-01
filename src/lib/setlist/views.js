@@ -5,9 +5,10 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchWebChartData } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createBlankChartDoc } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc } from './gdrive-backup.js';
+import { buildChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChartUrl, CHART_CACHED_EVENT } from './chart-cache.js';
 
@@ -825,6 +826,36 @@ function setupDragReorder(container, set, setlist, opts = {}) {
 
 // ── Song Focus ──
 
+// Web-search chart candidates that didn't clear the auto-link threshold:
+// let the user preview each one and pick. Names/URLs come from the open web,
+// so they're set via textContent (the el() helper's innerHTML would XSS).
+function renderChartCandidates(wrap, candidates, song) {
+  wrap.innerHTML = '';
+  wrap.appendChild(el('div', 'sl-section-title', 'possible charts found online'));
+  for (const c of candidates) {
+    const row = el('div', 'sl-chart-candidate');
+    const info = el('div', 'sl-chart-candidate-info');
+    const name = el('div', 'sl-chart-candidate-name');
+    name.textContent = c.name || c.url;
+    info.appendChild(name);
+    const meta = el('div', 'sl-chart-candidate-meta');
+    meta.textContent = `${c.source}${c.verified ? '' : ' · unverified'} · ${Math.round((c.score || 0) * 100)}% match`;
+    info.appendChild(meta);
+    row.appendChild(info);
+    const preview = el('a', 'sl-btn sl-btn-ghost sl-btn-xs', 'open');
+    preview.href = c.url;
+    preview.target = '_blank';
+    preview.rel = 'noopener noreferrer';
+    row.appendChild(preview);
+    row.appendChild(btn('use', 'sl-btn-primary sl-btn-xs', async () => {
+      linkChartCandidate(song, c);
+      await store.putSong(song);
+      refresh();
+    }));
+    wrap.appendChild(row);
+  }
+}
+
 export async function renderSongFocus(root, songId, setlistId) {
   const song = await store.getSong(songId);
   if (!song) { root.appendChild(emptyState('Song not found.')); return; }
@@ -916,6 +947,7 @@ export async function renderSongFocus(root, songId, setlistId) {
 
   // Action buttons
   const actionBar = el('div', 'sl-action-bar');
+  let chartCandidatesWrap = null; // filled by "search for chart" when web hits need a manual pick
   if (song.chartUrl) {
     const inlineChartBtn = btn('chart', 'sl-btn-accent', () => {
       navigate(`#song/${songId}/${setlistId || '_'}/chart`);
@@ -946,40 +978,66 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     actionBar.appendChild(scrapeBtn);
   } else {
-    // Chart-fallback ladder: search configured Drive folders first (tier 1
-    // personal + tier 2 community, both recursed via searchChartForSong),
-    // and only offer "create chart doc" (tier 3) once that comes up empty.
+    // Chart-fallback ladder: tiers 1+2 search personal + community Drive
+    // folders, tier 3 scours the web for shared chart files (all via
+    // searchChartForSong — a confident hit auto-links, weaker hits land in
+    // the candidate picker below the action bar). Tier 4, "create chart
+    // doc", researches the song's chords online and drafts a real number
+    // chart — or a fill-in template when the web comes up empty too.
+    chartCandidatesWrap = el('div', 'sl-chart-candidates');
     const searchBtn = btn('search for chart', 'sl-btn-ghost sl-btn-sm', async () => {
-      searchBtn.textContent = 'searching...';
+      searchBtn.disabled = true;
+      const restore = (label) => {
+        searchBtn.textContent = label;
+        setTimeout(() => {
+          searchBtn.textContent = 'search for chart';
+          searchBtn.disabled = false;
+        }, 2200);
+      };
       try {
-        const found = await searchChartForSong(song);
-        if (found) {
+        const result = await searchChartForSong(song, (stage) => {
+          searchBtn.textContent = stage === 'web' ? 'searching the web...' : 'searching drive...';
+        });
+        if (result.found) {
           await store.putSong(song);
-          searchBtn.textContent = 'found it!';
+          searchBtn.textContent = result.tier === 'web' ? 'found one online!' : 'found it!';
           setTimeout(() => refresh(), 900);
+        } else if (result.candidates?.length) {
+          renderChartCandidates(chartCandidatesWrap, result.candidates, song);
+          restore('no sure match — pick below');
         } else {
-          searchBtn.textContent = 'no match found';
-          setTimeout(() => { searchBtn.textContent = 'search for chart'; }, 2000);
+          restore('no match found');
         }
       } catch (e) {
-        searchBtn.textContent = 'search failed';
-        setTimeout(() => { searchBtn.textContent = 'search for chart'; }, 2000);
+        restore('search failed');
       }
     });
     actionBar.appendChild(searchBtn);
 
     const createBtn = btn('create chart doc', 'sl-btn-accent sl-btn-sm', async () => {
-      createBtn.textContent = 'creating...';
+      createBtn.disabled = true;
+      createBtn.textContent = 'researching song...';
       try {
-        const webViewLink = await createBlankChartDoc(song);
+        const data = await fetchWebChartData(song);
+        createBtn.textContent = data ? 'drafting number chart...' : 'creating template...';
+        const text = data ? buildChartText(song, data) : buildTemplateChartText(song);
+        const webViewLink = await createChartDoc(song, text);
         song.chartUrl = webViewLink;
+        if (data) {
+          if (data.key && !song.key) song.key = data.key;
+          if (data.capo && !song.capo) song.capo = data.capo;
+          if (data.artist && !song.artist) song.artist = data.artist;
+        }
         await store.putSong(song);
         window.open(webViewLink, '_blank');
         refresh();
       } catch (e) {
         createBtn.textContent = 'failed';
         alert(e.message);
-        setTimeout(() => { createBtn.textContent = 'create chart doc'; }, 2000);
+        setTimeout(() => {
+          createBtn.textContent = 'create chart doc';
+          createBtn.disabled = false;
+        }, 2000);
       }
     });
     actionBar.appendChild(createBtn);
@@ -998,6 +1056,7 @@ export async function renderSongFocus(root, songId, setlistId) {
   // Drive client is configured.
   if (isGdriveBackupEnabled() || needsReconnect()) actionBar.appendChild(syncNowButton());
   root.appendChild(actionBar);
+  if (chartCandidatesWrap) root.appendChild(chartCandidatesWrap);
 
   // Spotify embed + timecode tracker
   let currentTimecode = 0;
