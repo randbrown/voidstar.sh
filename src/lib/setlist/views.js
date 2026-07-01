@@ -7,7 +7,7 @@ import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } f
 import { createDictation, isSupported as voiceSupported } from './voice.js';
 import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChartUrl, CHART_CACHED_EVENT } from './chart-cache.js';
@@ -107,6 +107,32 @@ function showUndoToast(msg, onUndo, ms = 6000) {
   // can't linger over unrelated content.
   window.addEventListener('hashchange', dismiss);
   return dismiss;
+}
+
+// Toast with a link action — for opening a freshly created doc when the
+// browser blocked window.open (mobile popup rules: the open fires long after
+// the tap gesture, so it's denied; tapping the toast's link IS a gesture).
+function showLinkToast(msg, href, label = 'open', ms = 20000) {
+  if (_activeToast) _activeToast.remove();
+  const toast = el('div', 'sl-toast');
+  toast.appendChild(el('span', 'sl-toast-msg', msg));
+  let timer = null;
+  const dismiss = () => {
+    if (timer) clearTimeout(timer);
+    window.removeEventListener('hashchange', dismiss);
+    toast.remove();
+    if (_activeToast === toast) _activeToast = null;
+  };
+  const link = el('a', 'sl-btn sl-btn-sm sl-btn-accent', label);
+  link.href = href;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.addEventListener('click', () => setTimeout(dismiss, 300));
+  toast.appendChild(link);
+  document.body.appendChild(toast);
+  _activeToast = toast;
+  timer = setTimeout(dismiss, ms);
+  window.addEventListener('hashchange', dismiss);
 }
 
 function keyBadge(key, origKey) {
@@ -1019,8 +1045,15 @@ export async function renderSongFocus(root, songId, setlistId) {
 
     const createBtn = btn('create chart doc', 'sl-btn-accent sl-btn-sm', async () => {
       createBtn.disabled = true;
-      createBtn.textContent = 'researching song...';
+      createBtn.textContent = 'connecting drive...';
       try {
+        // Drive consent must happen NOW, inside the tap gesture — mobile
+        // browsers block the OAuth popup once the slow research has pushed
+        // us out of the gesture window. The token this caches covers the
+        // doc creation at the end.
+        await ensureDriveAccess();
+
+        createBtn.textContent = 'researching song...';
         // Best-first chart ladder: (1) AI-drafted chart with web grounding
         // (knows form + bar counts), (2) chord-sheet scrape converted to
         // numbers, (3) fill-in template. Audio-analysis metadata fetches in
@@ -1064,11 +1097,14 @@ export async function renderSongFocus(root, songId, setlistId) {
         if (!song.capo && applied.capo) song.capo = applied.capo;
         if (!song.artist && applied.artist) song.artist = applied.artist;
         await store.putSong(song);
-        window.open(webViewLink, '_blank');
+        // window.open this long after the tap gets popup-blocked on mobile —
+        // fall back to a toast whose link the user taps (a real gesture).
+        const win = window.open(webViewLink, '_blank');
+        if (!win) showLinkToast('chart doc created', webViewLink);
         refresh();
       } catch (e) {
         createBtn.textContent = 'failed';
-        alert(e.message);
+        alert(`create chart doc failed: ${e.message}`);
         setTimeout(() => {
           createBtn.textContent = 'create chart doc';
           createBtn.disabled = false;

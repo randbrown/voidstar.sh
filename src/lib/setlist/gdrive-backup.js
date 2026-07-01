@@ -137,6 +137,17 @@ async function getAccessToken({ interactive = true } = {}) {
   });
 }
 
+// Acquire (or refresh) the Drive OAuth token NOW, while still inside a user
+// gesture. Mobile browsers only allow the GIS consent popup in the immediate
+// gesture window — an await-heavy flow that asks for the token after seconds
+// of research gets the popup blocked and dies. Long flows (create chart doc)
+// call this first thing in their tap handler; the cached token (~1h) then
+// covers the actual Drive calls that happen after the slow work.
+export async function ensureDriveAccess() {
+  const token = await getAccessToken({ interactive: true });
+  if (!token) throw new Error('Google Drive not connected. Set a Client ID and connect in Settings.');
+}
+
 async function findDataFile(token) {
   const params = new URLSearchParams({
     q: `name='${FILE_NAME}' and trashed=false`,
