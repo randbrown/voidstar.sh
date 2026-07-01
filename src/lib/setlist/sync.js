@@ -16,6 +16,7 @@ export function getSources() {
   // fields like driveFolders) don't crash callers that read e.g. .length.
   const s = { ...defaultSources(), ...(stored || {}) };
   if (!Array.isArray(s.driveFolders)) s.driveFolders = [];
+  if (!Array.isArray(s.communityFolders)) s.communityFolders = [];
   if (!Array.isArray(s.driveCharts)) s.driveCharts = [];
   if (typeof s.workerUrl !== 'string') s.workerUrl = '';
   return s;
@@ -25,6 +26,7 @@ function defaultSources() {
   return {
     workerUrl: '',
     driveFolders: [],
+    communityFolders: [],
     driveCharts: [],
   };
 }
@@ -88,19 +90,8 @@ async function runSync(songs, playlistUrls, onProgress) {
     }
   }
 
-  // Fetch Drive files
-  const driveFiles = [];
-  for (const folder of sources.driveFolders) {
-    try {
-      const files = await fetchDriveFiles(sources.workerUrl, folder.url);
-      driveFiles.push(...files);
-    } catch (e) {
-      results.drive.errors.push(e.message);
-    }
-  }
-  for (const chart of sources.driveCharts) {
-    if (chart.title) driveFiles.push({ title: chart.title, webViewLink: chart.url });
-  }
+  // Fetch Drive files — personal folders, community/shared folders (recursive), manual links
+  const driveFiles = await fetchAllDriveFiles(sources, results.drive.errors);
 
   // Build a Drive artist lookup: title → artist from Drive filenames
   const driveArtistMap = {};
@@ -142,16 +133,7 @@ async function runSync(songs, playlistUrls, onProgress) {
 
     // Drive matching — cross-reference with Spotify artist
     if (!song.chartUrl && driveFiles.length) {
-      const knownArtist = song.artist || '';
-      const result = knownArtist
-        ? findBestMatchWithArtist(song.title, knownArtist, driveFiles)
-        : findBestMatch(song.title, driveFiles);
-      if (result) {
-        song.chartUrl = result.match.webViewLink;
-        if (result.match.artist && !song.artist) song.artist = result.match.artist;
-        if (result.match.inferredKey && !song.key) song.key = result.match.inferredKey;
-        if (result.match.inferredBpm && !song.bpm) song.bpm = result.match.inferredBpm;
-        if (result.match.inferredCapo && !song.capo) song.capo = result.match.inferredCapo;
+      if (applyDriveMatchToSong(song, driveFiles)) {
         results.drive.matched++;
         updated = true;
       } else {
@@ -203,6 +185,78 @@ async function fetchDriveFiles(workerUrl, folderUrl) {
   const res = await fetch(`${workerUrl}/drive/folder/${m[1]}`);
   if (!res.ok) throw new Error(`Drive API ${res.status}`);
   return await res.json();
+}
+
+// Community/shared chart-repo folders: recursively walks subfolders via the
+// worker's /recursive route, since archives in circulation among musicians
+// are commonly nested (artist/album/etc). Returns {files, truncated}.
+async function fetchDriveFilesRecursive(workerUrl, folderUrl) {
+  if (!workerUrl) return { files: [], truncated: false };
+  const m = folderUrl.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (!m) return { files: [], truncated: false };
+
+  const res = await fetch(`${workerUrl}/drive/folder/${m[1]}/recursive`);
+  if (!res.ok) throw new Error(`Drive API ${res.status}`);
+  return await res.json();
+}
+
+// Gathers chart candidates from every configured source: personal Drive
+// folders (direct children only), community/shared folders (recursive), and
+// manually-linked charts. Shared by the bulk sync and the per-song search.
+async function fetchAllDriveFiles(sources, errors = []) {
+  const driveFiles = [];
+  for (const folder of sources.driveFolders) {
+    try {
+      driveFiles.push(...(await fetchDriveFiles(sources.workerUrl, folder.url)));
+    } catch (e) {
+      errors.push(e.message);
+    }
+  }
+  for (const folder of sources.communityFolders) {
+    try {
+      const { files, truncated } = await fetchDriveFilesRecursive(sources.workerUrl, folder.url);
+      driveFiles.push(...files);
+      if (truncated) {
+        errors.push(`Community folder scan was truncated (too many files/subfolders) — some charts may be missing: ${folder.url}`);
+      }
+    } catch (e) {
+      errors.push(e.message);
+    }
+  }
+  for (const chart of sources.driveCharts) {
+    if (chart.title) driveFiles.push({ title: chart.title, webViewLink: chart.url });
+  }
+  return driveFiles;
+}
+
+// Matches one song against a pool of Drive chart candidates and applies the
+// match's fields onto the song in place. Returns true if a match was applied.
+function applyDriveMatchToSong(song, driveFiles) {
+  if (song.chartUrl || !driveFiles.length) return false;
+  const knownArtist = song.artist || '';
+  const result = knownArtist
+    ? findBestMatchWithArtist(song.title, knownArtist, driveFiles)
+    : findBestMatch(song.title, driveFiles);
+  if (!result) return false;
+  song.chartUrl = result.match.webViewLink;
+  if (result.match.artist && !song.artist) song.artist = result.match.artist;
+  if (result.match.inferredKey && !song.key) song.key = result.match.inferredKey;
+  if (result.match.inferredBpm && !song.bpm) song.bpm = result.match.inferredBpm;
+  if (result.match.inferredCapo && !song.capo) song.capo = result.match.inferredCapo;
+  return true;
+}
+
+// Tier 1 + 2 of the chart-fallback ladder for a single song: search personal
+// and community Drive folders now (rather than waiting for the next bulk
+// "sync now") and link the best match if one clears the threshold. Returns
+// true if a chart was found and linked (caller is responsible for saving the
+// song). Tier 3 (create a blank chart doc) is the caller's fallback when this
+// returns false — see createBlankChartDoc in gdrive-backup.js.
+export async function searchChartForSong(song) {
+  const sources = getSources();
+  if (!sources.workerUrl) return false;
+  const driveFiles = await fetchAllDriveFiles(sources);
+  return applyDriveMatchToSong(song, driveFiles);
 }
 
 export async function deepScrapeChart(song) {

@@ -6,7 +6,9 @@
 //   GET /spotify/playlist/:id       → playlist track list
 //   GET /spotify/search?q=...       → search for a track
 //   GET /spotify/search-batch       → search multiple songs (POST body: {titles:[]})
-//   GET /drive/folder/:id           → folder file list
+//   GET /drive/folder/:id           → folder file list (direct children only)
+//   GET /drive/folder/:id/recursive → folder file list, walking subfolders too
+//                                     (for community/shared chart-repo folders)
 //   GET /drive/file/:id/meta        → scraped chart metadata (key/bpm/etc)
 //   GET /drive/file/:id/image       → chart rendered as image bytes (for
 //                                     offline caching in the browser; CORS
@@ -183,6 +185,69 @@ async function handleDriveFolder(folderId, request, env) {
 
   return corsResponse(JSON.stringify(files), 200, request, env, {
     'Cache-Control': 'public, max-age=300',
+  });
+}
+
+// Recursive folder walk for community/shared chart-repo folders (e.g. a
+// bandleader's master archive, organized artist/album/etc). Uses the same
+// GOOGLE_API_KEY-based access model as handleDriveFolder — works for any
+// link-shared folder, not just ones the caller owns. Capped to protect the
+// Drive API and this worker's execution time; a truncated walk still returns
+// whatever it found so far rather than failing outright.
+const RECURSIVE_MAX_DEPTH = 4;
+const RECURSIVE_MAX_FOLDERS = 200;
+const RECURSIVE_MAX_FILES = 2000;
+
+async function handleDriveFolderRecursive(rootFolderId, request, env) {
+  const apiKey = env.GOOGLE_API_KEY;
+  if (!apiKey) return corsResponse(JSON.stringify({ error: 'GOOGLE_API_KEY not configured' }), 500, request, env);
+
+  const files = [];
+  let foldersVisited = 0;
+  let truncated = false;
+  const queue = [{ id: rootFolderId, depth: 0 }];
+
+  while (queue.length && foldersVisited < RECURSIVE_MAX_FOLDERS && files.length < RECURSIVE_MAX_FILES) {
+    const { id, depth } = queue.shift();
+    foldersVisited++;
+    let pageToken = '';
+    do {
+      const params = new URLSearchParams({
+        q: `'${id}' in parents and trashed = false`,
+        key: apiKey,
+        fields: 'nextPageToken,files(id,name,mimeType,webViewLink,description)',
+        pageSize: '100',
+      });
+      if (pageToken) params.set('pageToken', pageToken);
+
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`);
+      if (!res.ok) { truncated = true; break; }
+
+      const data = await res.json();
+      for (const f of (data.files || [])) {
+        if (f.mimeType === 'application/vnd.google-apps.folder') {
+          if (depth < RECURSIVE_MAX_DEPTH) queue.push({ id: f.id, depth: depth + 1 });
+          continue;
+        }
+        const parsed = parseDriveFilename(f.name);
+        const meta = extractChartMeta(f.name, f.description || '');
+        files.push({
+          title: parsed.title,
+          artist: parsed.artist,
+          webViewLink: f.webViewLink,
+          mimeType: f.mimeType,
+          name: f.name,
+          ...meta,
+        });
+        if (files.length >= RECURSIVE_MAX_FILES) break;
+      }
+      pageToken = data.nextPageToken || '';
+    } while (pageToken && files.length < RECURSIVE_MAX_FILES);
+  }
+  if (queue.length) truncated = true;
+
+  return corsResponse(JSON.stringify({ files, truncated, foldersVisited }), 200, request, env, {
+    'Cache-Control': 'public, max-age=600',
   });
 }
 
@@ -393,6 +458,11 @@ export default {
       const spotifyMatch = url.pathname.match(/^\/spotify\/playlist\/([a-zA-Z0-9]+)$/);
       if (spotifyMatch) {
         return await handleSpotifyPlaylist(spotifyMatch[1], request, env);
+      }
+
+      const driveRecursiveMatch = url.pathname.match(/^\/drive\/folder\/([a-zA-Z0-9_-]+)\/recursive$/);
+      if (driveRecursiveMatch) {
+        return await handleDriveFolderRecursive(driveRecursiveMatch[1], request, env);
       }
 
       const driveMatch = url.pathname.match(/^\/drive\/folder\/([a-zA-Z0-9_-]+)$/);
