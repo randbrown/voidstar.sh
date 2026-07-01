@@ -113,33 +113,52 @@ four tiers, in order:
    auto-linked; weaker candidates appear in a picker under the action bar
    ("open" to preview, "use" to link). Dropbox links can't be verified
    without OAuth, so they're always picker-only, marked `unverified`.
-4. **Create a chart doc** — no longer a *blank* doc. The button runs two
-   worker calls in parallel:
-   - `GET /web/chart-data` finds a community chord sheet — Ultimate Guitar
-     first (its search page + the tab page's embedded `js-store` JSON gives
-     sections, tonality, and capo), then a web-search sweep over any chord
-     site using a **generic extractor** (chord sheets are plain text, usually
-     in a `<pre>`; strip markup, detect chord-only lines and section headers
-     in any style — `[Verse]`, `Chorus:`, `VERSE 2`). No single blocked or
-     redesigned site kills the feature. Chords are converted to Nashville
-     numbers (key from the source's tonality, else inferred from the chords;
-     `keyInferred: true` flags the guess).
+4. **Create a chart doc** — no longer a *blank* doc. The button walks a
+   best-first ladder of worker calls (audio-analysis metadata fetches in
+   parallel and improves whichever tier lands):
+   - `GET /ai/chart` (strongest tier, needs an AI key on the worker) — an
+     LLM with web-search grounding drafts the actual chart the way a session
+     leader would: key, tempo, time, feel, song form, **bar-accurate**
+     sections, split bars, and playing notes. Providers form a chain —
+     Claude (`ANTHROPIC_API_KEY`, `web_search` server tool, default model
+     `claude-opus-4-8`) first, Gemini (`GEMINI_API_KEY`, Google Search
+     grounding, default `gemini-2.5-flash`, free tier at
+     aistudio.google.com/apikey) as fallback — whichever is configured; with
+     both set, a song one can't verify falls through to the other.
+     Hallucination guards, in layers: search grounding, a prompt contract
+     that demands `found:false` over invention, a numeric confidence gate
+     (`AI_MIN_CONFIDENCE`), server-side normalization/clamping of the JSON
+     (`normalizeAiChart`), source URLs + confidence printed in the doc
+     footer, and a verify-by-ear note. Responses cache for 7 days.
+   - `GET /web/chart-data` (fallback) finds a community chord sheet —
+     Ultimate Guitar first (its search page + the tab page's embedded
+     `js-store` JSON gives sections, tonality, and capo), then a web-search
+     sweep over any chord site using a **generic extractor** (chord sheets
+     are plain text, usually in a `<pre>`; strip markup, detect chord-only
+     lines and section headers in any style — `[Verse]`, `Chorus:`,
+     `VERSE 2`). No single blocked or redesigned site kills the feature.
+     Chords are converted to Nashville numbers (key from the source's
+     tonality, else inferred from the chords; `keyInferred: true` flags the
+     guess). Unlike the AI tier this can't know bar counts — one number line
+     per source chord line.
    - `GET /meta/song` derives BPM / key / time signature from music APIs:
      Spotify audio-features when the song has a linked track (only works for
      client-credential apps created before the Nov 2024 deprecation — a 403
      is skipped quietly), keyless Deezer as the BPM fallback.
    `chart-build.js` then formats a chart in the working NNS-chart layout —
-   key/time/BPM header, title + artist, a number→chord legend, sections with
-   one line of numbers per source line (chord names in parens beneath for
-   verification), repeated sections referenced by name. Derived BPM/time
-   fill header gaps; a derived key never overrides the chord source's key
-   (the numbers were computed against it) — a mismatch becomes a "check
-   which is right" note. `createChartDoc()` in `gdrive-backup.js` uploads it
-   as `text/plain` converted into a Google Doc inside the dedicated
-   "voidstar charts" Drive folder (created once, reused after), using the
-   same OAuth token as backup. When no chord source is readable, it falls
-   back to a structured fill-in template — still carrying any derived
-   key/BPM/time — rather than a blank page. It's a Doc (not a Drawing) so
+   key/time/BPM/feel header, title + artist, a number→chord legend, sections
+   (AI tier: one number per bar, four bars per line, via
+   `buildAiChartText`; scrape tier: one line of numbers per source line with
+   chord names in parens beneath, via `buildChartText`), repeated sections
+   referenced by name. Derived BPM/time fill header gaps; a derived key
+   never overrides the chart source's key (the numbers were computed
+   against it) — a mismatch becomes a "check which is right" note.
+   `createChartDoc()` in `gdrive-backup.js` uploads it as `text/plain`
+   converted into a Google Doc inside the dedicated "voidstar charts" Drive
+   folder (created once, reused after), using the same OAuth token as
+   backup. When neither AI nor a chord source delivers, it falls back to a
+   structured fill-in template — still carrying any derived key/BPM/time —
+   rather than a blank page. It's a Doc (not a Drawing) so
    the worker's existing plain-text scraping (`handleDriveFileMeta`) works
    on it unmodified — the generated header (`Key:`/`Time:`/`BPM:`/`Capo:`)
    intentionally matches what `extractFromText` parses; for freeform
@@ -184,11 +203,17 @@ Env vars (`wrangler secret put`): `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`,
 `GOOGLE_API_KEY`. Optional, for better `/web/*` search: `GOOGLE_CSE_ID`
 (Programmable Search Engine id, pairs with `GOOGLE_API_KEY`),
 `BRAVE_SEARCH_API_KEY` — without either, web search falls back to a keyless
-DuckDuckGo HTML scrape. Also `ALLOWED_ORIGIN` (plain var in `wrangler.toml`).
+DuckDuckGo HTML scrape. Optional, for `/ai/chart`: `ANTHROPIC_API_KEY`
+and/or `GEMINI_API_KEY` (+ `ANTHROPIC_MODEL`/`GEMINI_MODEL` overrides).
+Also `ALLOWED_ORIGIN` (plain var in `wrangler.toml`).
+
+The worker imports `@anthropic-ai/sdk`, so run `npm ci` at the repo root
+before `wrangler deploy` (wrangler bundles it from `node_modules`).
 
 Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `POST /spotify/search-batch`, `GET /drive/folder/:id`,
 `GET /drive/folder/:id/recursive`, `GET /drive/file/:id/meta`,
 `GET /drive/file/:id/image`, `GET /web/chart-search?title=&artist=`,
 `GET /web/chart-data?title=&artist=`,
-`GET /meta/song?title=&artist=&spotifyId=`, `GET /health`.
+`GET /meta/song?title=&artist=&spotifyId=`,
+`GET /ai/chart?title=&artist=&key=`, `GET /health`.

@@ -45,7 +45,7 @@ export function chordLegend(key) {
     .join('  ');
 }
 
-function headerLines(song, { key, capo, bpm, time } = {}) {
+function headerLines(song, { key, capo, bpm, time, feel } = {}) {
   const title = (song.title || 'UNTITLED').toUpperCase();
   const artist = song.artist || '';
   const meta = [];
@@ -54,7 +54,9 @@ function headerLines(song, { key, capo, bpm, time } = {}) {
   if (bpm) meta.push(`BPM: ${bpm}`);
   if (capo) meta.push(`Capo: ${capo}`);
 
-  const lines = [meta.join('   '), '', title];
+  const lines = [meta.join('   ')];
+  if (feel) lines.push(`Feel: ${feel}`);
+  lines.push('', title);
   if (artist) lines.push(artist);
   const legend = key ? chordLegend(key) : '';
   if (legend) lines.push('', `(${legend})`);
@@ -114,6 +116,55 @@ export function buildChartText(song, data, extra = {}) {
   }
   lines.push('— numbers are a starting point: check bars, splits, and pushes by ear,');
   lines.push('  then delete the chord-name lines once the numbers are confirmed.');
+  return lines.join('\n');
+}
+
+// Chart drafted by an LLM with web grounding (sync.js fetchAiChart — worker
+// /ai/chart). Unlike the chord-scrape data, this knows actual bar counts, so
+// it renders like a hand chart: one number per bar, four bars per line,
+// section comments in parens, chart-level notes at the bottom. Repeated
+// sections with identical bars are referenced by name instead of restated.
+export function buildAiChartText(song, data, extra = {}) {
+  const key = data.key || song.key || extra.key || '';
+  const lines = headerLines(song, {
+    key,
+    capo: data.capo || song.capo,
+    bpm: data.bpm || song.bpm || extra.bpm,
+    time: data.time || extra.time,
+    feel: data.feel,
+  });
+
+  const seen = new Map(); // bars signature → section name it first appeared under
+  for (const section of data.sections) {
+    const name = section.name.toUpperCase();
+    const comment = section.comment ? `  (${section.comment})` : '';
+    const sig = `${section.bars.join('|')}#${section.comment}`;
+    if (seen.has(sig)) {
+      const firstName = seen.get(sig);
+      lines.push(name === firstName ? `${name}  (repeat)` : `${name}  (same as ${firstName})`);
+      lines.push('');
+      continue;
+    }
+    seen.set(sig, name);
+    lines.push(name + comment);
+    for (let i = 0; i < section.bars.length; i += 4) {
+      lines.push(section.bars.slice(i, i + 4).join('   '));
+    }
+    lines.push('');
+  }
+
+  if (data.notes?.length) {
+    lines.push('NOTES');
+    for (const note of data.notes) lines.push(`- ${note}`);
+    lines.push('');
+  }
+
+  lines.push(`— drafted by ${data.provider === 'claude' ? 'Claude' : 'Gemini'} (${data.model}) with web grounding; confidence ${Math.round((data.confidence || 0) * 100)}%`);
+  if (extra.key && key && !sameKey(extra.key, key)) {
+    lines.push(`— audio analysis hears the recording in ${extra.key}; chart says ${key} — check which is right`);
+  }
+  for (const src of data.sources || []) lines.push(`  ${src}`);
+  lines.push('— verify numbers, bars, and pushes against the recording before the gig.');
   return lines.join('\n');
 }
 

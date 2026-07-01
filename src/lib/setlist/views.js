@@ -5,10 +5,10 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchWebChartData, fetchSongMeta } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc } from './gdrive-backup.js';
-import { buildChartText, buildTemplateChartText } from './chart-build.js';
+import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChartUrl, CHART_CACHED_EVENT } from './chart-cache.js';
 
@@ -1021,27 +1021,48 @@ export async function renderSongFocus(root, songId, setlistId) {
       createBtn.disabled = true;
       createBtn.textContent = 'researching song...';
       try {
-        // Chord research and audio-analysis metadata (BPM/key/time) run in
-        // parallel; either one alone still improves the doc.
-        const [chart, meta] = await Promise.all([fetchWebChartData(song), fetchSongMeta(song)]);
+        // Best-first chart ladder: (1) AI-drafted chart with web grounding
+        // (knows form + bar counts), (2) chord-sheet scrape converted to
+        // numbers, (3) fill-in template. Audio-analysis metadata fetches in
+        // parallel and improves whichever tier lands.
+        const metaPromise = fetchSongMeta(song);
+        const ai = await fetchAiChart(song);
+        const meta = await metaPromise;
         const extra = { key: meta?.key || '', bpm: meta?.bpm || 0, time: meta?.time || '' };
-        if (chart.ok) {
-          createBtn.textContent = 'drafting number chart...';
+
+        let text;
+        const applied = {};
+        if (ai.ok) {
+          createBtn.textContent = 'drafting number chart (AI)...';
+          text = buildAiChartText(song, ai.data, extra);
+          applied.key = ai.data.key;
+          applied.bpm = ai.data.bpm;
+          applied.capo = ai.data.capo;
+          applied.artist = ai.data.artist;
         } else {
-          console.warn('[setlist] chart data unavailable:', chart.reason);
-          createBtn.textContent = chart.reason === 'worker-outdated'
-            ? 'worker outdated — template...'
-            : 'no chords found — template...';
+          if (ai.reason !== 'no-ai-key') console.warn('[setlist] AI chart unavailable:', ai.reason);
+          const chart = await fetchWebChartData(song);
+          if (chart.ok) {
+            createBtn.textContent = 'drafting number chart...';
+            text = buildChartText(song, chart.data, extra);
+            applied.key = chart.data.key;
+            applied.capo = chart.data.capo;
+            applied.artist = chart.data.artist;
+          } else {
+            console.warn('[setlist] chart data unavailable:', chart.reason);
+            createBtn.textContent = chart.reason === 'worker-outdated'
+              ? 'worker outdated — template...'
+              : 'no chords found — template...';
+            text = buildTemplateChartText(song, extra);
+          }
         }
-        const text = chart.ok ? buildChartText(song, chart.data, extra) : buildTemplateChartText(song, extra);
+
         const webViewLink = await createChartDoc(song, text);
         song.chartUrl = webViewLink;
-        if (!song.key) song.key = (chart.ok && chart.data.key) || meta?.key || '';
-        if (!song.bpm && meta?.bpm) song.bpm = meta.bpm;
-        if (chart.ok) {
-          if (chart.data.capo && !song.capo) song.capo = chart.data.capo;
-          if (chart.data.artist && !song.artist) song.artist = chart.data.artist;
-        }
+        if (!song.key) song.key = applied.key || meta?.key || '';
+        if (!song.bpm) song.bpm = applied.bpm || meta?.bpm || 0;
+        if (!song.capo && applied.capo) song.capo = applied.capo;
+        if (!song.artist && applied.artist) song.artist = applied.artist;
         await store.putSong(song);
         window.open(webViewLink, '_blank');
         refresh();

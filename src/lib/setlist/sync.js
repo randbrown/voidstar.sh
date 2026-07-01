@@ -332,6 +332,30 @@ export async function fetchWebChartData(song) {
   }
 }
 
+// A full Nashville-number chart drafted by an LLM with web-search grounding
+// (worker /ai/chart) — the strongest "create chart doc" tier when the worker
+// has an AI key configured. Returns {ok:true, data} with data carrying
+// {key, bpm, time, capo, feel, confidence, sections:[{name, comment,
+// bars:[]}], notes, provider, model, sources}; or {ok:false, reason} —
+// 'no-ai-key' means skip silently to the scrape tier.
+export async function fetchAiChart(song) {
+  const sources = getSources();
+  if (!sources.workerUrl) return { ok: false, reason: 'no worker configured' };
+  try {
+    const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
+    if (song.key) params.set('key', song.key);
+    const res = await fetch(`${sources.workerUrl}/ai/chart?${params}`);
+    if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
+    if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
+    const data = await res.json();
+    if (data?.aiConfigured === false) return { ok: false, reason: 'no-ai-key' };
+    if (!data?.found) return { ok: false, reason: data?.reason || 'AI found nothing' };
+    return { ok: true, data };
+  } catch {
+    return { ok: false, reason: 'network error' };
+  }
+}
+
 // BPM / key / time signature derived from music APIs (worker /meta/song —
 // Spotify audio-features when the song has a linked track, keyless Deezer
 // for BPM otherwise). Returns {bpm?, key?, time?, sources} or null.

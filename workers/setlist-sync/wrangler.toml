@@ -11,6 +11,16 @@
 #                          enable the Custom Search API on the same key)
 #   BRAVE_SEARCH_API_KEY   Brave Search API token
 #
+# Optional — /ai/chart LLM chart drafting (first configured provider wins):
+#   ANTHROPIC_API_KEY      Claude, with web-search grounding
+#   ANTHROPIC_MODEL        plain var; default claude-opus-4-8
+#   GEMINI_API_KEY         Gemini, with Google Search grounding (free tier at
+#                          aistudio.google.com/apikey)
+#   GEMINI_MODEL           plain var; default gemini-2.5-flash
+#
+# The worker imports @anthropic-ai/sdk, so run `npm ci` at the repo root
+# before deploying (wrangler bundles it from node_modules).
+#
 # Local dev:   npx wrangler dev -c workers/setlist-sync/wrangler.toml
 # Deploy:      npx wrangler deploy -c workers/setlist-sync/wrangler.toml
 

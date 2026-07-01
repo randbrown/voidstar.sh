@@ -25,11 +25,22 @@
 //                                   → BPM / key / time signature derived from
 //                                     music APIs (Spotify audio-features,
 //                                     keyless Deezer)
+//   GET /ai/chart?title=&artist=&key=
+//                                   → a full Nashville-number chart drafted by
+//                                     an LLM with web-search grounding (key,
+//                                     tempo, form, bars) — the strongest tier
+//                                     of "create chart doc" when a key is set
 //   GET /health                     → ok
 //
 // Optional env for /web/* search (falls back to keyless DuckDuckGo HTML):
 //   GOOGLE_CSE_ID          — Programmable Search Engine id (reuses GOOGLE_API_KEY)
 //   BRAVE_SEARCH_API_KEY   — Brave Search API subscription token
+//
+// Optional env for /ai/chart (first configured provider wins):
+//   ANTHROPIC_API_KEY      — Claude (+ ANTHROPIC_MODEL, default claude-opus-4-8)
+//   GEMINI_API_KEY         — Gemini (+ GEMINI_MODEL, default gemini-2.5-flash)
+
+import Anthropic from '@anthropic-ai/sdk';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -1270,6 +1281,245 @@ async function deezerBpm(title, artist) {
   return null;
 }
 
+// ══ AI chart drafting ═══════════════════════════════════════════════════════
+// GET /ai/chart — have an LLM with web-search grounding write the actual
+// Nashville-number chart (form, bars, key, tempo, feel), the way a session
+// leader would. This is the strongest "create chart doc" tier: unlike the
+// chord-sheet scrape it knows bar counts and song form, and it can verify
+// against the recording via search. Providers: Claude (ANTHROPIC_API_KEY,
+// web_search server tool) or Gemini (GEMINI_API_KEY, google_search
+// grounding); the prompt, JSON contract, and validation are shared.
+
+const AI_TIMEOUT_MS = 90000;
+const AI_MIN_CONFIDENCE = 0.3;
+
+function buildAiChartPrompt(title, artist, keyHint) {
+  const song = artist ? `"${title}" by ${artist}` : `"${title}"`;
+  const hint = keyHint ? ` The band plays it in ${keyHint} — note that Nashville numbers are key-independent, so chart the recording's form and report the recording's actual key.` : '';
+  return `You are a veteran Nashville session leader writing a Nashville Number System chart for a working country/pop cover band.
+
+Song: ${song}.${hint}
+
+Use web search to verify the song's key, tempo, time signature, form, and chord progression (chart the well-known studio single arrangement). Then write the chart.
+
+Return ONLY a JSON object — no markdown fences, no prose before or after — with exactly this shape:
+{
+  "found": boolean,      // false if you cannot reliably determine this song's real progression — NEVER invent one
+  "confidence": number,  // 0-1: how confident you are the chart matches the recording
+  "title": string,
+  "artist": string,
+  "key": string,         // the recording's key, e.g. "A", "Bb", "F#m"
+  "bpm": number,         // 0 if unknown
+  "time": string,        // "4/4", "3/4", "6/8", ...
+  "capo": number,        // suggested guitar capo, 0 if none
+  "feel": string,        // short groove note, e.g. "trad country two-step", "half-time verses", "" if none
+  "sections": [          // in performance order; list a section again each time it comes back
+    {
+      "name": string,    // "Intro", "Verse 1", "Chorus", "Solo - fiddle", "Bridge", "Turnaround", "Tag", "Outro"...
+      "comment": string, // short playing note ("band in", "x2", "1st time only"), "" if none
+      "bars": [string]   // ONE ENTRY PER BAR of Nashville numbers
+    }
+  ],
+  "notes": [string]      // chart-level notes: modulations ("mod up a whole step to Bb for last chorus"), stops, pushes, ending
+}
+
+Number-chart conventions:
+- Numbers are relative to the key's major scale: in A, A=1 D=4 E=5 F#m=6- G=b7.
+- Minor is "-" ("6-"), accidentals from the major scale are "b"/"#" ("b7", "#4").
+- Extra chord quality goes in parentheses: "5(7)", "4(maj7)", "2-(7)". Slash bass: "1/3". No chord: "NC".
+- One array entry per bar. A split bar (two chords sharing one bar) is one entry with a space: "1 4".
+- Write out every bar ("1","1","1","1" — not "1 x4"); repeat counts belong in the section comment.
+- It is fine to chart the core form without bar-perfect fills, but bar counts per section must match the recording.
+- If the song is too obscure to verify, return {"found": false, "confidence": 0} — accuracy beats completeness.`;
+}
+
+// Lenient JSON extraction: grounded/search-assisted responses can't always be
+// forced into strict JSON mode, so accept fenced blocks or a brace span.
+function extractJsonBlock(text) {
+  if (!text) return null;
+  const candidates = [];
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) candidates.push(fenced[1]);
+  const first = text.indexOf('{');
+  const lastOpen = text.lastIndexOf('{');
+  const last = text.lastIndexOf('}');
+  if (first !== -1 && last > first) candidates.push(text.slice(first, last + 1));
+  if (lastOpen > first && last > lastOpen) candidates.push(text.slice(lastOpen, last + 1));
+  for (const c of candidates) {
+    try { return JSON.parse(c); } catch {}
+  }
+  return null;
+}
+
+// Validate + clamp whatever the model returned into a chart the client can
+// trust: bounded sizes, sane bpm/time/key, no empty sections. null = unusable.
+function normalizeAiChart(raw) {
+  if (!raw || typeof raw !== 'object' || raw.found === false) return null;
+  const clean = (s, max) => (typeof s === 'string' ? s.trim().slice(0, max) : '');
+
+  const sections = (Array.isArray(raw.sections) ? raw.sections : []).slice(0, 24)
+    .map(s => ({
+      name: clean(s?.name, 40) || 'Section',
+      comment: clean(s?.comment, 80),
+      bars: (Array.isArray(s?.bars) ? s.bars : []).slice(0, 64)
+        .map(b => clean(String(b ?? ''), 16)).filter(Boolean),
+    }))
+    .filter(s => s.bars.length);
+  if (!sections.length) return null;
+
+  const bpm = Math.round(Number(raw.bpm)) || 0;
+  const time = /^\d{1,2}\/\d{1,2}$/.test(clean(raw.time, 6)) ? clean(raw.time, 6) : '';
+  let confidence = Number(raw.confidence);
+  if (!Number.isFinite(confidence)) confidence = 0.5;
+
+  return {
+    title: clean(raw.title, 120),
+    artist: clean(raw.artist, 120),
+    key: parseKeyName(clean(raw.key, 6))?.name || '',
+    bpm: bpm >= 30 && bpm <= 300 ? bpm : 0,
+    time,
+    capo: Math.min(11, Math.max(0, Math.round(Number(raw.capo)) || 0)),
+    feel: clean(raw.feel, 80),
+    confidence: Math.min(1, Math.max(0, confidence)),
+    sections,
+    notes: (Array.isArray(raw.notes) ? raw.notes : []).slice(0, 8)
+      .map(n => clean(String(n ?? ''), 200)).filter(Boolean),
+  };
+}
+
+async function aiChartClaude(env, prompt) {
+  const model = env.ANTHROPIC_MODEL || 'claude-opus-4-8';
+  const anthropic = new Anthropic({
+    apiKey: env.ANTHROPIC_API_KEY,
+    maxRetries: 1,
+    timeout: AI_TIMEOUT_MS,
+  });
+
+  let messages = [{ role: 'user', content: prompt }];
+  let response = await anthropic.messages.create({
+    model,
+    max_tokens: 8000,
+    thinking: { type: 'adaptive' },
+    tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 4 }],
+    messages,
+  });
+  // Server-side search runs in a server loop that can pause; resume by
+  // echoing the assistant turn back (no extra user message).
+  for (let i = 0; i < 3 && response.stop_reason === 'pause_turn'; i++) {
+    messages = [...messages, { role: 'assistant', content: response.content }];
+    response = await anthropic.messages.create({
+      model,
+      max_tokens: 8000,
+      thinking: { type: 'adaptive' },
+      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 4 }],
+      messages,
+    });
+  }
+  if (response.stop_reason === 'refusal') {
+    return { provider: 'claude', model, chart: null, reason: 'model declined the request' };
+  }
+
+  const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+  const sources = [];
+  for (const block of response.content) {
+    if (block.type !== 'web_search_tool_result' || !Array.isArray(block.content)) continue;
+    for (const r of block.content) {
+      if (r?.url && !sources.includes(r.url)) sources.push(r.url);
+      if (sources.length >= 3) break;
+    }
+  }
+  return { provider: 'claude', model, chart: normalizeAiChart(extractJsonBlock(text)), sources };
+}
+
+async function aiChartGemini(env, prompt) {
+  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 8192 },
+      }),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Gemini ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const candidate = data.candidates?.[0];
+  const text = (candidate?.content?.parts || []).map(p => p.text || '').join('\n');
+  const sources = [];
+  for (const chunk of candidate?.groundingMetadata?.groundingChunks || []) {
+    if (chunk?.web?.uri && !sources.includes(chunk.web.uri)) sources.push(chunk.web.uri);
+    if (sources.length >= 3) break;
+  }
+  return { provider: 'gemini', model, chart: normalizeAiChart(extractJsonBlock(text)), sources };
+}
+
+async function handleAiChart(request, env) {
+  const url = new URL(request.url);
+  const title = (url.searchParams.get('title') || '').trim();
+  const artist = (url.searchParams.get('artist') || '').trim();
+  const keyHint = (url.searchParams.get('key') || '').trim();
+  if (!title) return corsResponse(JSON.stringify({ error: 'missing title param' }), 400, request, env);
+
+  if (!env.ANTHROPIC_API_KEY && !env.GEMINI_API_KEY) {
+    return corsResponse(JSON.stringify({
+      found: false,
+      aiConfigured: false,
+      reason: 'no AI key configured — set ANTHROPIC_API_KEY or GEMINI_API_KEY on the worker',
+    }), 200, request, env);
+  }
+
+  const prompt = buildAiChartPrompt(title, artist, keyHint);
+
+  // Provider chain, not either/or: with both keys set, Claude drafts first
+  // and Gemini gets a shot when Claude can't verify the song (or errors) —
+  // and vice versa when only Gemini is configured.
+  const providers = [];
+  if (env.ANTHROPIC_API_KEY) providers.push(aiChartClaude);
+  if (env.GEMINI_API_KEY) providers.push(aiChartGemini);
+
+  const reasons = [];
+  for (const provider of providers) {
+    let result;
+    try {
+      result = await provider(env, prompt);
+    } catch (e) {
+      reasons.push(String(e.message || e).slice(0, 200));
+      continue;
+    }
+    if (!result.chart) {
+      reasons.push(`${result.provider}: ${result.reason || 'could not reliably chart this song'}`);
+      continue;
+    }
+    if (result.chart.confidence < AI_MIN_CONFIDENCE) {
+      reasons.push(`${result.provider}: confidence too low (${result.chart.confidence})`);
+      continue;
+    }
+    return corsResponse(JSON.stringify({
+      found: true,
+      source: 'ai',
+      provider: result.provider,
+      model: result.model,
+      sources: result.sources || [],
+      ...result.chart,
+    }), 200, request, env, {
+      'Cache-Control': 'public, max-age=604800',
+    });
+  }
+
+  return corsResponse(JSON.stringify({
+    found: false,
+    reason: reasons.join(' · ') || 'AI could not reliably chart this song',
+  }), 200, request, env);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -1299,6 +1549,10 @@ export default {
 
       if (url.pathname === '/meta/song') {
         return await handleSongMeta(request, env);
+      }
+
+      if (url.pathname === '/ai/chart') {
+        return await handleAiChart(request, env);
       }
 
       if (url.pathname === '/spotify/search-batch' && request.method === 'POST') {
