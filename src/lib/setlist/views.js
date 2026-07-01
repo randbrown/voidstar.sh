@@ -9,7 +9,7 @@ import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBa
 import { findBestMatch as fuzzyMatch } from './match.js';
 import { initGdriveSync, isGdriveSyncEnabled, mergeData, setSyncClient, debouncedPush, watchConnectivity, onSyncState } from './gdrive-sync.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
-import { cacheSetlistCharts, getSetlistOfflineStatus, getOfflineChartUrl } from './chart-cache.js';
+import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChartUrl } from './chart-cache.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -1371,6 +1371,49 @@ export async function renderSettings(root) {
   gdriveSection.appendChild(gdriveStatus);
   root.appendChild(gdriveSection);
 
+  // ── Offline charts ──
+  const offlineSection = el('div', 'sl-section');
+  offlineSection.innerHTML = `
+    <div class="sl-section-title">offline charts</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Cache every song's chart as an image so perform mode works with no signal.
+      Charts also auto-cache the first time you perform a setlist while online.
+      Requires the sync worker to be deployed.
+    </div>
+  `;
+  const offlineStatus = el('div', 'sl-hint');
+  const offlineActions = el('div', 'sl-action-bar');
+  async function refreshOfflineStatus() {
+    const { cached, total } = await getAllChartsOfflineStatus();
+    offlineStatus.textContent = total
+      ? `${cached}/${total} charts cached${cached >= total ? ' — fully offline-ready' : ''}`
+      : 'No charts linked yet.';
+    offlineStatus.style.color = total && cached >= total ? 'var(--green)' : '';
+  }
+  const dlAllBtn = btn('download all charts', 'sl-btn-primary sl-btn-sm', async () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      offlineStatus.textContent = 'Offline — connect to a network first.';
+      offlineStatus.style.color = 'var(--pink)';
+      return;
+    }
+    dlAllBtn.disabled = true;
+    const res = await cacheAllCharts(({ done, total }) => {
+      offlineStatus.textContent = `caching ${done}/${total}…`;
+      offlineStatus.style.color = '';
+    });
+    dlAllBtn.disabled = false;
+    await refreshOfflineStatus();
+    if (res.failed) {
+      offlineStatus.textContent += ` · ${res.failed} couldn't cache (check worker / sharing)`;
+      offlineStatus.style.color = 'var(--pink)';
+    }
+  });
+  offlineActions.appendChild(dlAllBtn);
+  offlineSection.appendChild(offlineActions);
+  offlineSection.appendChild(offlineStatus);
+  root.appendChild(offlineSection);
+  refreshOfflineStatus();
+
   // Export/import sources config
   const configSection = el('div', 'sl-section');
   configSection.innerHTML = '<div class="sl-section-title">config backup</div>';
@@ -1550,6 +1593,13 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   if (!sl) { root.appendChild(emptyState('Setlist not found.')); return; }
 
   root.classList.add('sl-perform');
+
+  // Auto-cache this setlist's charts for offline the first time it's performed
+  // online (e.g. at soundcheck) so they're available later with no signal.
+  // Fire-and-forget, skips charts already cached, and never blocks the view.
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    cacheSetlistCharts(sl, null, { skipCached: true }).catch(() => {});
+  }
 
   // Build flat list of entries: songs + set dividers
   const entries = [];

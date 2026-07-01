@@ -59,13 +59,20 @@ export async function cacheChartForSong(song, workerUrl) {
   }
 }
 
-// Cache every chart in a setlist. onProgress({ done, total, ok, failed }) fires
-// after each song. Returns a summary { total, ok, failed, results }.
-export async function cacheSetlistCharts(setlist, onProgress) {
+// Download + store a list of songs' charts. onProgress({ done, total, ok,
+// failed, last }) fires after each. With skipCached, songs that already have a
+// cached blob are left alone (used for auto-cache and "cache missing only").
+// Returns { total, ok, failed, skipped, results }.
+async function cacheSongs(songs, onProgress, { skipCached = false } = {}) {
   const workerUrl = getSources().workerUrl;
-  const songIds = [...new Set(setlist.sets.flatMap(s => s.songIds))];
-  const songs = (await Promise.all(songIds.map(id => store.getSong(id)))).filter(Boolean);
-  const withCharts = songs.filter(s => s.chartUrl);
+  let withCharts = songs.filter(s => s.chartUrl);
+  let skipped = 0;
+  if (skipCached) {
+    const cachedIds = new Set(await store.getCachedChartIds());
+    const before = withCharts.length;
+    withCharts = withCharts.filter(s => !cachedIds.has(s.id));
+    skipped = before - withCharts.length;
+  }
 
   const results = [];
   let ok = 0, failed = 0;
@@ -73,9 +80,33 @@ export async function cacheSetlistCharts(setlist, onProgress) {
     const r = await cacheChartForSong(withCharts[i], workerUrl);
     results.push(r);
     if (r.ok) ok++; else failed++;
-    onProgress?.({ done: i + 1, total: withCharts.length, ok, failed, last: r });
+    onProgress?.({ done: i + 1, total: withCharts.length, ok, failed, skipped, last: r });
   }
-  return { total: withCharts.length, ok, failed, results };
+  return { total: withCharts.length, ok, failed, skipped, results };
+}
+
+// Cache every chart in a setlist.
+export async function cacheSetlistCharts(setlist, onProgress, opts) {
+  const songIds = [...new Set(setlist.sets.flatMap(s => s.songIds))];
+  const songs = (await Promise.all(songIds.map(id => store.getSong(id)))).filter(Boolean);
+  return cacheSongs(songs, onProgress, opts);
+}
+
+// Cache every chart in the whole library (all songs, regardless of setlist).
+export async function cacheAllCharts(onProgress, opts) {
+  const songs = await store.getAllSongs();
+  return cacheSongs(songs, onProgress, opts);
+}
+
+// Offline status across the entire library: { cached, total } where total =
+// songs that have a chartUrl.
+export async function getAllChartsOfflineStatus() {
+  const songs = await store.getAllSongs();
+  const chartedIds = songs.filter(s => s.chartUrl).map(s => s.id);
+  if (!chartedIds.length) return { cached: 0, total: 0 };
+  const cachedIds = new Set(await store.getCachedChartIds());
+  const cached = chartedIds.filter(id => cachedIds.has(id)).length;
+  return { cached, total: chartedIds.length };
 }
 
 // How many of a setlist's charted songs already have a cached blob.
