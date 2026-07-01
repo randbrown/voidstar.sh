@@ -16,6 +16,15 @@ const LAST_BACKUP_KEY = 'voidstar.setlist.gdrive.lastBackupAt';
 const FILE_NAME = 'voidstar-setlist-data.json';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
 
+// Drive-side version history: rotating timestamped copies in their own folder,
+// so a bad state that already reached Drive can be rolled back from any device.
+const BACKUPS_FOLDER_NAME = 'voidstar backups';
+const BACKUPS_FOLDER_ID_KEY = 'voidstar.setlist.gdrive.backupsFolderId';
+const HISTORY_PREFIX = 'voidstar-setlist-data-'; // + <ISO>.json
+const LAST_HISTORY_KEY = 'voidstar.setlist.gdrive.lastHistoryAt';
+const HISTORY_KEEP = 10;
+const HISTORY_MIN_INTERVAL_MS = 10 * 60 * 1000; // throttle auto (non-forced) writes
+
 let _gisLoaded = false;
 
 function getClientId() {
@@ -27,7 +36,15 @@ export function setClientId(id) {
 }
 
 export function isGdriveBackupEnabled() {
-  return !!getClientId() && !!localStorage.getItem(TOKEN_KEY);
+  return !!getClientId() && !!getStoredToken();
+}
+
+// A client ID is configured but there's no valid (unexpired) token — the user
+// connected before but the token lapsed. Drives the pill's "reconnect" state:
+// a silent re-auth is impossible (GIS needs a gesture), so the UI must invite
+// a tap to reconnect.
+export function needsReconnect() {
+  return !!getClientId() && !getStoredToken();
 }
 
 export function getLastBackupTime() {
@@ -189,6 +206,11 @@ export async function initGdriveBackup({ interactive = true } = {}) {
       if (!existing) return null;
       return readFile(token, existing.id);
     },
+    // Version history (rotating timestamped copies). Methods close over the
+    // token so callers never handle it directly.
+    writeHistory: (data, force = false) => writeHistorySnapshot(token, data, force),
+    listHistory: () => listHistory(token),
+    readHistory: (fileId) => readFile(token, fileId),
   };
 }
 
@@ -259,6 +281,93 @@ export async function createBlankChartDoc(song) {
   return file.webViewLink;
 }
 
+// ── Drive version history ──
+// Same drive.file scope + same folder pattern as the charts folder above.
+
+async function findOrCreateBackupsFolder(token) {
+  const cached = localStorage.getItem(BACKUPS_FOLDER_ID_KEY);
+  if (cached) return cached;
+
+  const params = new URLSearchParams({
+    q: `name='${BACKUPS_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    spaces: 'drive',
+    fields: 'files(id,name)',
+    pageSize: '1',
+  });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Drive folder search failed: ${res.status}`);
+  const data = await res.json();
+  let folderId = data.files?.[0]?.id;
+
+  if (!folderId) {
+    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: BACKUPS_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+    });
+    if (!createRes.ok) throw new Error(`Drive folder create failed: ${createRes.status}`);
+    folderId = (await createRes.json()).id;
+  }
+  localStorage.setItem(BACKUPS_FOLDER_ID_KEY, folderId);
+  return folderId;
+}
+
+// Write a timestamped copy of the dataset into the backups folder, then prune
+// to the newest HISTORY_KEEP. Throttled: skips silently if the last history
+// write was < HISTORY_MIN_INTERVAL_MS ago unless `force` (manual actions).
+async function writeHistorySnapshot(token, data, force = false) {
+  const last = parseInt(localStorage.getItem(LAST_HISTORY_KEY) || '0', 10);
+  if (!force && Date.now() - last < HISTORY_MIN_INTERVAL_MS) return;
+
+  const folderId = await findOrCreateBackupsFolder(token);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const metadata = { name: `${HISTORY_PREFIX}${stamp}.json`, mimeType: 'application/json', parents: [folderId] };
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }));
+
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Drive history write failed: ${res.status}`);
+  localStorage.setItem(LAST_HISTORY_KEY, String(Date.now()));
+  await pruneHistory(token, folderId, HISTORY_KEEP);
+}
+
+async function pruneHistory(token, folderId, keep = HISTORY_KEEP) {
+  const files = await listHistoryFiles(token, folderId); // newest first
+  for (const f of files.slice(keep)) {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+  }
+}
+
+async function listHistoryFiles(token, folderId) {
+  const params = new URLSearchParams({
+    q: `'${folderId}' in parents and name contains '${HISTORY_PREFIX}' and trashed=false`,
+    spaces: 'drive',
+    fields: 'files(id,name,createdTime)',
+    orderBy: 'createdTime desc',
+    pageSize: '50',
+  });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Drive history list failed: ${res.status}`);
+  return (await res.json()).files || [];
+}
+
+async function listHistory(token) {
+  const folderId = await findOrCreateBackupsFolder(token);
+  return listHistoryFiles(token, folderId);
+}
+
 // ── Merge by "newer wins" ──
 
 function mergeById(localArr, remoteArr, keyField = 'id') {
@@ -296,19 +405,43 @@ export function mergeData(local, remote) {
 // it never blindly overwrites either side. `hadRemote` tells callers whether
 // there was anything in Drive to restore (distinct from `merged` being
 // non-empty, which is true even on a first backup from local-only data).
-export async function pullMergePushCycle(client, exportFn, importFn) {
-  const remote = await client.pull();
-  const local = await exportFn();
-  const merged = remote ? mergeData(local, remote) : local;
-  if (remote) await importFn(merged);
-  await client.push({ ...merged, version: 1, exportedAt: Date.now() });
-  setLastBackupTime(Date.now());
-  return { merged, hadRemote: !!remote };
+//
+// opts:
+//   snapshotFn  — called right BEFORE importing merged remote data, so the
+//                 caller can snapshot the true pre-import local state (used
+//                 for "undo last sync"). Only runs when there was remote data.
+//   historyForce — force a Drive version-history write even inside the throttle
+//                 window (manual actions pass true; auto-sync leaves it false).
+export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) {
+  if (_syncing) return { merged: null, hadRemote: false, skipped: true };
+  _syncing = true;
+  try {
+    const remote = await client.pull();
+    const local = await exportFn();
+    const merged = remote ? mergeData(local, remote) : local;
+    if (remote && opts.snapshotFn) await opts.snapshotFn();
+    if (remote) await importFn(merged);
+    await client.push({ ...merged, version: 1, exportedAt: Date.now() });
+    // Version history is best-effort — a failure here must not fail the sync.
+    if (client.writeHistory) {
+      try { await client.writeHistory(merged, !!opts.historyForce); }
+      catch (e) { console.warn('[gdrive-backup] history write failed:', e.message); }
+    }
+    setLastBackupTime(Date.now());
+    return { merged, hadRemote: !!remote };
+  } finally {
+    _syncing = false;
+  }
 }
 
 let _pushTimer = null;
 let _backupClient = null;
 let _exportFn = null;
+let _syncing = false;
+
+// True while any pull/merge/push (manual, auto, or focus) is in flight — every
+// sync entry point checks this to avoid overlapping cycles.
+export function isSyncing() { return _syncing; }
 
 export function setBackupClient(client) { _backupClient = client; }
 
@@ -333,6 +466,10 @@ function setBackupState(s) {
 }
 
 async function pushNow() {
+  // Don't collide with a full pull/merge/push cycle already running; that cycle
+  // pushes the same data, so re-flag as pending and let it settle.
+  if (_syncing) { _pendingPush = true; return; }
+  _syncing = true;
   setBackupState('syncing');
   try {
     await _backupClient.push(await _exportFn());
@@ -343,6 +480,8 @@ async function pushNow() {
     _pendingPush = true;
     setBackupState('pending');
     console.warn('[gdrive-backup] push failed:', e.message);
+  } finally {
+    _syncing = false;
   }
 }
 

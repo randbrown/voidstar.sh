@@ -2,7 +2,7 @@
 // Follows the looper-store.js pattern: lazy singleton, tx() helper, async CRUD.
 
 const DB_NAME = 'voidstar.setlist';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const SONGS = 'songs';
 const NOTES = 'notes';
 const SETLISTS = 'setlists';
@@ -11,6 +11,11 @@ const ANNOTATIONS = 'annotations';
 // Local-only: derivable from the chart URL, so never included in the Google
 // Drive JSON sync (that stays lean, data-only).
 const CHARTS = 'charts';
+// Pre-sync/pre-import safety snapshots of the whole dataset, keyed by
+// timestamp. A rolling buffer (see pruneSnapshots) so a bad restore/sync can
+// be undone. Local-only and derived from the live data, so — like CHARTS —
+// it is NEVER included in exportAll() (would recurse the whole backup file).
+const SNAPSHOTS = 'snapshots';
 
 let _dbPromise = null;
 
@@ -43,6 +48,9 @@ function openDb() {
       }
       if (!db.objectStoreNames.contains(CHARTS)) {
         db.createObjectStore(CHARTS, { keyPath: 'songId' });
+      }
+      if (!db.objectStoreNames.contains(SNAPSHOTS)) {
+        db.createObjectStore(SNAPSHOTS, { keyPath: 'ts' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -111,6 +119,12 @@ async function putSilent(storeName, record) {
 async function delSilent(storeName, id) {
   const { store, done } = await tx(storeName, 'readwrite');
   store.delete(id);
+  await done;
+}
+
+async function clearStore(storeName) {
+  const { store, done } = await tx(storeName, 'readwrite');
+  store.clear();
   await done;
 }
 
@@ -231,6 +245,51 @@ export const getChartBlob = (songId) => getOne(CHARTS, songId);
 export const deleteChartBlob = (songId) => delSilent(CHARTS, songId);
 export const getCachedChartIds = () => getAllKeys(CHARTS);
 
+// ── Safety snapshots (undo a restore/sync) ──
+// A rolling buffer of full-dataset snapshots, taken right before any operation
+// that overwrites local data (a Drive restore/sync or a file import). All
+// writes are SILENT (putSilent/delSilent) so snapshotting never itself
+// schedules a Drive push.
+
+const SNAPSHOT_KEEP = 10;
+
+// Capture the current dataset as a snapshot, then prune to the newest N.
+export async function putSnapshot(label = '') {
+  const ts = Date.now();
+  await putSilent(SNAPSHOTS, { ts, label, data: await exportAll() });
+  await pruneSnapshots(SNAPSHOT_KEEP);
+  return ts;
+}
+
+// Metadata only (ts + label), newest first — avoids loading every full payload
+// just to render a list.
+export async function listSnapshots() {
+  const all = await getAll(SNAPSHOTS);
+  return all
+    .map(({ ts, label }) => ({ ts, label }))
+    .sort((a, b) => b.ts - a.ts);
+}
+
+export const getSnapshot = (ts) => getOne(SNAPSHOTS, ts);
+
+export async function pruneSnapshots(keep = SNAPSHOT_KEEP) {
+  const keys = (await getAllKeys(SNAPSHOTS)).sort((a, b) => a - b); // oldest first
+  for (let i = 0; i < keys.length - keep; i++) {
+    await delSilent(SNAPSHOTS, keys[i]);
+  }
+}
+
+// Restore a snapshot. Snapshots the current state first so the restore is
+// itself reversible, then imports the chosen snapshot (importAll fires the
+// write hook, so the reverted state propagates to Drive on the next push).
+export async function restoreSnapshot(ts) {
+  const snap = await getSnapshot(ts);
+  if (!snap) return false;
+  await putSnapshot('pre-undo');
+  await replaceAll(snap.data);
+  return true;
+}
+
 // ── Merge helper ──
 
 export function mergedSong(song, setlist) {
@@ -242,6 +301,10 @@ export function mergedSong(song, setlist) {
 // ── Export / Import ──
 
 export async function exportAll() {
+  // NOTE: deliberately omits the CHARTS blob cache and the SNAPSHOTS store.
+  // Both are local-only and derived from this data; including SNAPSHOTS in
+  // particular would recurse the whole backup into every snapshot. Keep this
+  // list to the canonical, user-authored stores only.
   const [songs, notes, setlists, annotations] = await Promise.all([
     getAllSongs(), getAllNotes(), getAllSetlists(), getAllAnnotations(),
   ]);
@@ -255,6 +318,18 @@ export async function importAll(data) {
   if (data.setlists) for (const sl of data.setlists) await put(SETLISTS, sl);
   if (data.annotations) for (const a of data.annotations) await put(ANNOTATIONS, a);
   if (data.sources) setSourcesRaw(data.sources);
+}
+
+// Full REPLACE (not a merge): clear the user-data stores, then load `data`.
+// importAll only upserts, so it can't reproduce deletions — a snapshot "undo"
+// or explicit version restore needs this to reproduce an exact prior state.
+// The final put()s fire _onWrite, so the reverted state propagates to Drive.
+export async function replaceAll(data) {
+  await clearStore(SONGS);
+  await clearStore(NOTES);
+  await clearStore(SETLISTS);
+  await clearStore(ANNOTATIONS);
+  await importAll(data);
 }
 
 export async function exportSetlist(setlistId) {
