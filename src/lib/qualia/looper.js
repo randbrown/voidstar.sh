@@ -2096,6 +2096,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   let _lanesDirty = true;            // rebuild on mode / chord / strings / temperament change
   const _dem = { mag: 0, phase: 0 }; // demod scratch (allocation-free)
   let _miniKey = null;               // last mini aggregate (throttles mini DOM writes)
+  let _polyDispLastMs = 0;           // throttle for the per-lane cents readout (mono cadence)
 
   function persistTunerChord() { try { lsSet(TUNERCHORD_KEY, JSON.stringify(model.tunerChord)); } catch {} }
   function setTunerMode(m) {
@@ -2199,7 +2200,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function makeLane(midi, candidates) {
     const t = noteTarget(midi);
     return { cls: t.cls, octave: t.octave, midi: t.midi, fRef: t.fRef, label: t.label, candidates: candidates || null,
-             mag: 0, phase: 0, prevPhase: 0, prevT: -1, prevF: 0, prevVoiced: false, centsSmooth: 0, voiced: false, inTune: false, near: false };
+             mag: 0, phase: 0, prevPhase: 0, prevT: -1, prevF: 0, prevVoiced: false, centsSmooth: 0,
+             dispCents: 0, dispVoiced: false, voiced: false, inTune: false, near: false };
   }
   // (Re)build the lane list from the current mode + target selection.
   function rebuildLanes() {
@@ -2459,7 +2461,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const N = _lanes.length;
     const laneH = H / N;
     const period = Math.max(9 * dpr, laneH * 0.7);
-    const stripeL = 34 * dpr, stripeR = W - 30 * dpr;
+    const stripeL = 34 * dpr, stripeR = W - 42 * dpr;
+    // Refresh the numeric cents readout at the mono tuner's calm cadence (not
+    // per-frame) so the far-right number doesn't jitter — the strobe stripes
+    // still animate every frame. `dispCents` is the shown value; `centsSmooth`
+    // stays per-frame for the freeze/colour state.
+    const dnow = (typeof performance !== 'undefined' ? performance.now() : 0);
+    const dispTick = dnow - _polyDispLastMs >= TUNER_INTERVAL_MS;
+    if (dispTick) _polyDispLastMs = dnow;
+    const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    const labelFont = `${Math.max(9, Math.round(Math.min(laneH * 0.5, 15 * dpr)))}px ${MONO}`;
+    const centsFont = `${Math.max(11, Math.round(Math.min(laneH * 0.72, 20 * dpr)))}px ${MONO}`;
     let maxMag = 1e-9;
     for (const L of _lanes) {
       demodIQ(tunerBuf, n, _strobeWin, sr, t0, L.fRef);
@@ -2468,7 +2480,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     let anyVoiced = false, allInTune = true;
     g.textBaseline = 'middle';
-    g.font = `${Math.max(9, Math.round(Math.min(laneH * 0.5, 15 * dpr)))}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     for (let i = 0; i < N; i++) {
       const L = _lanes[i];
       const y = i * laneH;
@@ -2489,6 +2500,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
       L.prevPhase = L.phase; L.prevT = t0; L.prevF = L.fRef; L.prevVoiced = voiced;
       L.voiced = voiced;
       const cents = L.centsSmooth;
+      // Slow, mono-style readout: EMA into dispCents only on the throttle tick;
+      // snap when a lane just started sounding (as the mono readout does on a
+      // note change) so it doesn't crawl up from 0.
+      if (dispTick) {
+        L.dispCents = (L.dispVoiced && voiced) ? (L.dispCents * 0.5 + cents * 0.5) : cents;
+        L.dispVoiced = voiced;
+      }
       const inTune = voiced && Math.abs(cents) <= 4;
       const near = voiced && Math.abs(cents) <= 15;
       L.inTune = inTune; L.near = near;
@@ -2503,14 +2521,16 @@ export function createLooper({ audio, syncStrudel } = {}) {
         const w = Math.min(x + period * 0.5, stripeR) - xx;
         if (w > 0) g.fillRect(xx, sy, w, sh);
       }
-      // Note label (left gutter) + cents (right gutter).
+      // Note label (left gutter) + cents (right gutter, larger + calmly updated).
       g.fillStyle = voiced ? `rgba(${col[0]},${col[1]},${col[2]},0.95)` : 'rgba(148,163,184,0.5)';
       g.textAlign = 'left';
+      g.font = labelFont;
       g.fillText(L.label, 3 * dpr, y + laneH * 0.5);
       if (voiced) {
         g.textAlign = 'right';
-        const c = Math.round(cents);
-        g.fillText(`${c > 0 ? '+' : ''}${c}`, W - 3 * dpr, y + laneH * 0.5);
+        g.font = centsFont;
+        const c = Math.round(L.dispCents);
+        g.fillText(`${c > 0 ? '+' : ''}${c}`, W - 4 * dpr, y + laneH * 0.5);
       }
       if (inTune) {
         g.strokeStyle = 'rgba(52,211,153,0.7)'; g.lineWidth = Math.max(1, Math.round(dpr));
