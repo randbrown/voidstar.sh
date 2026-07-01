@@ -294,7 +294,14 @@ export async function searchChartForSong(song, onStage) {
     applyWebCandidateToSong(song, top);
     return { found: true, tier: 'web', candidate: top };
   }
-  return { found: false, candidates };
+  // providerDown distinguishes "searched, nothing out there" from "couldn't
+  // search at all" (keyless engine bot-blocked) so the UI can say which.
+  return {
+    found: false,
+    candidates,
+    providerDown: !!data?.providerDown,
+    warnings: data?.warnings || [],
+  };
 }
 
 // Applies a user-picked web candidate (from searchChartForSong's candidates)
@@ -304,17 +311,41 @@ export function linkChartCandidate(song, candidate) {
 }
 
 // Chords + song structure from the web (worker /web/chart-data — Ultimate
-// Guitar scrape converted to Nashville numbers), for drafting a real chart
-// doc. Returns the data object or null when nothing usable was found.
+// Guitar plus a generic sweep of chord sites, converted to Nashville
+// numbers), for drafting a real chart doc. Returns {ok:true, data} or
+// {ok:false, reason} — the reason distinguishes a stale worker deploy
+// ('worker-outdated') from "searched but found nothing" so the UI can say
+// which, instead of silently producing a template.
 export async function fetchWebChartData(song) {
   const sources = getSources();
-  if (!sources.workerUrl) return null;
+  if (!sources.workerUrl) return { ok: false, reason: 'no worker configured' };
   try {
     const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
     const res = await fetch(`${sources.workerUrl}/web/chart-data?${params}`);
-    if (!res.ok) return null;
+    if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
+    if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
     const data = await res.json();
-    return data?.found ? data : null;
+    if (!data?.found) return { ok: false, reason: data?.reason || 'no chord source found' };
+    return { ok: true, data };
+  } catch {
+    return { ok: false, reason: 'network error' };
+  }
+}
+
+// BPM / key / time signature derived from music APIs (worker /meta/song —
+// Spotify audio-features when the song has a linked track, keyless Deezer
+// for BPM otherwise). Returns {bpm?, key?, time?, sources} or null.
+export async function fetchSongMeta(song) {
+  const sources = getSources();
+  if (!sources.workerUrl) return null;
+  const params = new URLSearchParams({ title: song.title || '', artist: song.artist || '' });
+  const sp = song.spotifyUri ? parseSpotifyUrl(song.spotifyUri) : null;
+  if (sp?.type === 'track' && sp.id) params.set('spotifyId', sp.id);
+  try {
+    const res = await fetch(`${sources.workerUrl}/meta/song?${params}`);
+    if (!res.ok) return null;
+    const meta = await res.json();
+    return (meta?.bpm || meta?.key || meta?.time) ? meta : null;
   } catch {
     return null;
   }

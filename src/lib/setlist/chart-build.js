@@ -62,15 +62,27 @@ function headerLines(song, { key, capo, bpm, time } = {}) {
   return lines;
 }
 
+function sameKey(a, b) {
+  const ka = parseKeyName(a);
+  const kb = parseKeyName(b);
+  if (!ka || !kb) return false;
+  return ka.tonicPc === kb.tonicPc && ka.minor === kb.minor;
+}
+
 // Chart draft from web chord data ({key, capo, sections:[{name, lines:[[{chord,nns}]]}]},
-// see the worker's /web/chart-data). Sections that repeat earlier changes are
-// referenced by name instead of restated, the way hand charts do ("·Chorus").
-export function buildChartText(song, data) {
-  const key = data.key || song.key || '';
+// see the worker's /web/chart-data). `extra` carries metadata derived from
+// music APIs (sync.js fetchSongMeta): bpm/time fill gaps outright; a derived
+// recording key never overrides the chord source's key (the numbers were
+// computed against it) — a mismatch becomes a check-me note instead.
+// Sections that repeat earlier changes are referenced by name instead of
+// restated, the way hand charts do ("·Chorus").
+export function buildChartText(song, data, extra = {}) {
+  const key = data.key || song.key || extra.key || '';
   const lines = headerLines(song, {
     key,
     capo: data.capo || song.capo,
-    bpm: song.bpm,
+    bpm: song.bpm || extra.bpm,
+    time: extra.time,
   });
 
   const seen = new Map(); // chord signature → section name it first appeared under
@@ -97,18 +109,30 @@ export function buildChartText(song, data) {
 
   lines.push(`— drafted from ${data.source} (${data.sourceUrl})`);
   if (data.keyInferred) lines.push(`— key of ${key} was inferred from the chords; double-check it`);
+  if (extra.key && key && !sameKey(extra.key, key)) {
+    lines.push(`— audio analysis hears the recording in ${extra.key}; chart is numbered from ${key} — check which is right`);
+  }
   lines.push('— numbers are a starting point: check bars, splits, and pushes by ear,');
   lines.push('  then delete the chord-name lines once the numbers are confirmed.');
   return lines.join('\n');
 }
 
 // Template chart when the web turned up nothing — same header + legend, with
-// the standard section skeleton ready to fill in.
-export function buildTemplateChartText(song) {
-  const lines = headerLines(song, { key: song.key, capo: song.capo, bpm: song.bpm });
+// the standard section skeleton ready to fill in. `extra` (fetchSongMeta)
+// still supplies key/BPM/time here, so even a template opens with the song's
+// real numbers derived from audio analysis.
+export function buildTemplateChartText(song, extra = {}) {
+  const key = song.key || extra.key || '';
+  const lines = headerLines(song, {
+    key,
+    capo: song.capo,
+    bpm: song.bpm || extra.bpm,
+    time: extra.time,
+  });
   for (const name of ['INTRO', 'VERSE 1', 'CHORUS', 'VERSE 2', 'CHORUS', 'SOLO', 'BRIDGE', 'CHORUS', 'OUTRO']) {
     lines.push(name, '', '');
   }
-  lines.push('— no chart or chord source found online; fill in the numbers.');
+  if (!song.key && extra.key) lines.push('— key/BPM from audio analysis of the recording; verify by ear.');
+  lines.push('— no chord source found online; fill in the numbers.');
   return lines.join('\n');
 }

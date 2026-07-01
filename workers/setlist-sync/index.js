@@ -21,6 +21,10 @@
 //                                   → chords + song structure scraped from the
 //                                     web, converted to Nashville numbers (for
 //                                     drafting a chart doc)
+//   GET /meta/song?title=&artist=&spotifyId=
+//                                   → BPM / key / time signature derived from
+//                                     music APIs (Spotify audio-features,
+//                                     keyless Deezer)
 //   GET /health                     → ok
 //
 // Optional env for /web/* search (falls back to keyless DuckDuckGo HTML):
@@ -602,13 +606,17 @@ async function searchBrave(env, query, count) {
 // the whole search request.
 const SCRAPE_TIMEOUT_MS = 10000;
 
+// Unlike the keyed providers, a DuckDuckGo failure is diagnostic gold — a 403
+// here means the keyless fallback is being bot-blocked and the fix is
+// configuring a search key — so it reports {results, error} instead of
+// swallowing the failure.
 async function searchDuckDuckGo(query, count) {
   try {
     const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
       headers: { 'User-Agent': BROWSER_UA, 'Accept': 'text/html' },
       signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
     });
-    if (!res.ok) return [];
+    if (!res.ok) return { results: [], error: `duckduckgo ${res.status}` };
     const html = await res.text();
     const results = [];
     const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
@@ -622,9 +630,9 @@ async function searchDuckDuckGo(query, count) {
       const title = decodeEntities(m[2].replace(/<[^>]*>/g, '')).trim();
       results.push({ title, url: link, snippet: '' });
     }
-    return results;
-  } catch {
-    return [];
+    return { results };
+  } catch (e) {
+    return { results: [], error: `duckduckgo ${e.name === 'TimeoutError' ? 'timeout' : 'unreachable'}` };
   }
 }
 
@@ -635,7 +643,8 @@ async function searchWeb(env, query, count = 10) {
   if (env.BRAVE_SEARCH_API_KEY) {
     try { return { provider: 'brave', results: await searchBrave(env, query, count) }; } catch {}
   }
-  return { provider: 'duckduckgo', results: await searchDuckDuckGo(query, count) };
+  const { results, error } = await searchDuckDuckGo(query, count);
+  return { provider: 'duckduckgo', results, error };
 }
 
 // ── Candidate link extraction ──
@@ -689,10 +698,14 @@ async function handleWebChartSearch(request, env) {
   const dropboxLinks = [];
   const warnings = [];
   let provider = '';
+  let providerError = '';
+  let totalResults = 0;
 
   for (const query of queries) {
-    const { provider: p, results } = await searchWeb(env, query, 10);
+    const { provider: p, results, error } = await searchWeb(env, query, 10);
     provider = provider || p;
+    if (error) providerError = error;
+    totalResults += results.length;
     for (const r of results) {
       const ref = extractDriveRef(r.url);
       if (ref) {
@@ -775,7 +788,14 @@ async function handleWebChartSearch(request, env) {
     .sort((a, b) => (b.verified - a.verified) || (b.score - a.score))
     .slice(0, WEB_CANDIDATE_LIMIT);
 
-  return corsResponse(JSON.stringify({ candidates: ranked, provider, warnings }), 200, request, env, {
+  // Distinguish "searched and found nothing" from "couldn't search at all" —
+  // the client tells the user to configure a search key for the latter.
+  const providerDown = totalResults === 0 && !!providerError;
+  if (providerDown) {
+    warnings.push(`web search unavailable (${providerError}) — set GOOGLE_CSE_ID or BRAVE_SEARCH_API_KEY on the worker for reliable search`);
+  }
+
+  return corsResponse(JSON.stringify({ candidates: ranked, provider, providerDown, warnings }), 200, request, env, {
     'Cache-Control': 'public, max-age=3600',
   });
 }
@@ -785,7 +805,8 @@ async function handleWebChartSearch(request, env) {
 // data-content attribute; both the search page and tab pages use it.
 
 function extractJsStore(html) {
-  const m = html.match(/class="js-store"[^>]*data-content="([^"]+)"/);
+  const m = html.match(/class="js-store"[^>]*data-content="([^"]+)"/)
+    || html.match(/class='js-store'[^>]*data-content='([^']+)'/);
   if (!m) return null;
   try { return JSON.parse(decodeEntities(m[1])); } catch { return null; }
 }
@@ -825,14 +846,6 @@ async function findUgTab(title, artist) {
   }
 }
 
-// Fallback when UG's search page won't cooperate: find a UG chords URL
-// through the general web-search chain instead.
-async function findUgTabViaWeb(env, title, artist) {
-  const { results } = await searchWeb(env, `${title} ${artist} chords site:tabs.ultimate-guitar.com`, 10);
-  const chords = results.find(r => /tabs\.ultimate-guitar\.com\/tab\/.+chords/.test(r.url));
-  return (chords || results.find(r => /tabs\.ultimate-guitar\.com\/tab\//.test(r.url)))?.url || null;
-}
-
 async function fetchUgTab(tabUrl) {
   try {
     const html = await fetchHtml(tabUrl);
@@ -854,10 +867,32 @@ async function fetchUgTab(tabUrl) {
 }
 
 // ── Chord-sheet parsing ──
-// UG content marks chords as [ch]Am7[/ch] and sections as bare [Verse 1]
-// lines; [tab]...[/tab] wraps chord-over-lyric blocks.
+// Two dialects: UG content marks chords as [ch]Am7[/ch] and sections as bare
+// [Verse 1] lines ([tab]...[/tab] wraps chord-over-lyric blocks); generic
+// chord sites are plain text where chord lines sit above lyric lines and
+// section headers come in every style ("Chorus:", "VERSE 2", "[Bridge]").
 
 const CHORD_TOKEN_RE = /^(?:[A-G][b#]?(?:m|maj|min|dim|aug|sus|add|M|\+|°|o)?[0-9]*(?:sus[24]?|add[0-9]+|[b#][0-9]+)*(?:\/[A-G][b#]?)?|N\.?C\.?)$/;
+// Tokens that punctuate chord lines without being chords: bar lines, repeat
+// signs, rhythm dashes/dots, "x2"-style repeat counts.
+const CHORD_SEPARATOR_RE = /^(?:\|+:?|:\|+|%|-+|–|—|\.+|,|\(?[xX]\d+\)?)$/;
+// Unbracketed section headers: "Chorus:", "VERSE 2", "Guitar Solo", "Intro (x2)"
+const SECTION_HEADER_RE = /^((?:(?:guitar|steel|fiddle|piano|lead)\s+)?(?:intro|verse|chorus|pre-?chorus|bridge|outro|solo|interlude|instrumental|tag|coda|turnaround|vamp|ending|refrain|break|hook)(?:\s+\d+)?)\s*[:.\-]?\s*(?:\([^)]*\))?$/i;
+
+// If every token on the line is a chord (or bar-line punctuation), it's a
+// chord line; one lyric word disqualifies it. Chords may be wrapped in
+// parens ("(D)" = optional hit) or carry trailing punctuation.
+function chordLineTokens(line) {
+  const chords = [];
+  for (const raw of line.split(/\s+/).filter(Boolean)) {
+    if (CHORD_SEPARATOR_RE.test(raw)) continue;
+    const t = raw.replace(/^\(/, '').replace(/[),.]+$/, '');
+    if (!t) continue;
+    if (!CHORD_TOKEN_RE.test(t)) return null;
+    chords.push(t);
+  }
+  return chords.length ? chords : null;
+}
 
 function parseChordSheet(content) {
   const text = (content || '').replace(/\r/g, '').replace(/\[\/?tab\]/g, '');
@@ -867,7 +902,8 @@ function parseChordSheet(content) {
 
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
-    const header = line.match(/^\[(?!\/?(?:ch|tab)\b)([^\]]{1,40})\]$/);
+    if (!line) continue;
+    const header = line.match(/^\[(?!\/?(?:ch|tab)\b)([^\]]{1,40})\]$/) || line.match(SECTION_HEADER_RE);
     if (header) {
       current = { name: header[1].trim(), chordLines: [] };
       sections.push(current);
@@ -879,10 +915,7 @@ function parseChordSheet(content) {
       let m;
       while ((m = re.exec(line))) chords.push(m[1].trim());
     } else {
-      // No [ch] markers (rare raw tabs): treat lines made only of chord
-      // tokens as chord lines.
-      const tokens = line.split(/\s+/).filter(Boolean);
-      if (tokens.length && tokens.every(t => CHORD_TOKEN_RE.test(t))) chords = tokens;
+      chords = chordLineTokens(line) || [];
     }
     if (!chords.length) continue;
     if (!current) {
@@ -892,6 +925,56 @@ function parseChordSheet(content) {
     current.chordLines.push(chords);
   }
   return sections.filter(s => s.chordLines.length);
+}
+
+// How chord-sheet-like a parse is; used to pick the best block on a page and
+// to reject pages that merely mention a few chords.
+function chartParseScore(sections) {
+  let chordCount = 0;
+  let lineCount = 0;
+  for (const s of sections) for (const l of s.chordLines) { lineCount++; chordCount += l.length; }
+  const named = sections.filter(s => s.name).length;
+  return { chordCount, lineCount, named, score: chordCount + named * 4 };
+}
+
+// ── Generic chord-page extraction ──
+// Source-agnostic fallback: most chord sites render the sheet as plain text
+// (usually in a <pre>), so stripping markup and running the chord-sheet
+// parser works across sites without per-site scrapers — resilient to any one
+// site blocking us or changing layout.
+
+function htmlToText(html) {
+  return decodeEntities(
+    (html || '')
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(?:p|div|tr|li|h[1-6]|pre|section|table)>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+  );
+}
+
+const GENERIC_MIN_CHORDS = 8;
+const GENERIC_MIN_LINES = 3;
+
+function extractChordSheetFromHtml(html) {
+  const blocks = [];
+  const preRe = /<pre[^>]*>([\s\S]*?)<\/pre>/gi;
+  let m;
+  while ((m = preRe.exec(html))) blocks.push(htmlToText(m[1]));
+  if (!blocks.length) blocks.push(htmlToText(html));
+
+  let best = null;
+  let bestScore = 0;
+  for (const text of blocks) {
+    const sections = parseChordSheet(text);
+    const { score, chordCount, lineCount } = chartParseScore(sections);
+    if (chordCount >= GENERIC_MIN_CHORDS && lineCount >= GENERIC_MIN_LINES && score > bestScore) {
+      bestScore = score;
+      best = sections;
+    }
+  }
+  return best;
 }
 
 // ── Nashville number conversion ──
@@ -993,31 +1076,107 @@ function inferKey(sections) {
   return KEY_NAMES[bestTonic];
 }
 
+// One attempt at reading a UG tab page into chart material. Trusted format,
+// so the acceptance bar is lower than for generic pages.
+async function chartFromUgUrl(tabUrl) {
+  const tab = await fetchUgTab(tabUrl);
+  const sections = tab ? parseChordSheet(tab.content) : [];
+  const { chordCount, lineCount } = chartParseScore(sections);
+  if (chordCount < 4 || lineCount < 1) return null;
+  return {
+    sections,
+    tonality: tab.tonality,
+    capo: tab.capo,
+    songName: tab.songName,
+    artistName: tab.artistName,
+    source: 'ultimate-guitar',
+    sourceUrl: tabUrl,
+  };
+}
+
+async function chartFromGenericUrl(pageUrl) {
+  try {
+    const html = await fetchHtml(pageUrl);
+    if (!html) return null;
+    const sections = extractChordSheetFromHtml(html);
+    if (!sections) return null;
+    return {
+      sections,
+      tonality: '',
+      capo: 0,
+      songName: '',
+      artistName: '',
+      source: new URL(pageUrl).hostname.replace(/^www\./, ''),
+      sourceUrl: pageUrl,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Domains that show up for "<song> chords" queries but never contain a
+// scrapeable chord sheet.
+const NON_CHORD_DOMAINS = /(?:youtube\.com|youtu\.be|facebook\.com|instagram\.com|tiktok\.com|pinterest\.|amazon\.|apple\.com|spotify\.com|reddit\.com|wikipedia\.org|scribd\.com)/;
+const CHART_DATA_PAGE_FETCHES = 4;
+
+function chordSiteRank(u) {
+  if (/ultimate-guitar\.com/.test(u)) return 0;
+  if (/chord|tab/.test(u)) return 1;
+  return 2;
+}
+
 // GET /web/chart-data?title=...&artist=...
 // Fuel for "create chart doc": chords + song structure from the web,
-// converted to Nashville numbers. Returns {found:false} (not an error) when
-// no usable source turns up, so the client can fall back to a template.
+// converted to Nashville numbers. Tries Ultimate Guitar first (richest
+// structure: sections, tonality, capo), then sweeps web-search results for
+// any chord site the generic extractor can read — no single blocked source
+// kills the feature. Returns {found:false, reason, tried} (not an error)
+// when nothing usable turns up, so the client can fall back to a template.
 async function handleWebChartData(request, env) {
   const url = new URL(request.url);
   const title = (url.searchParams.get('title') || '').trim();
   const artist = (url.searchParams.get('artist') || '').trim();
   if (!title) return corsResponse(JSON.stringify({ error: 'missing title param' }), 400, request, env);
 
-  let tabUrl = await findUgTab(title, artist);
-  if (!tabUrl) tabUrl = await findUgTabViaWeb(env, title, artist);
-  if (!tabUrl) {
-    return corsResponse(JSON.stringify({ found: false, reason: 'no chord source found' }), 200, request, env);
+  const tried = [];
+  let result = null;
+  let searchError = '';
+
+  const ugUrl = await findUgTab(title, artist);
+  if (ugUrl) {
+    tried.push(ugUrl);
+    result = await chartFromUgUrl(ugUrl);
   }
 
-  const tab = await fetchUgTab(tabUrl);
-  const sections = tab ? parseChordSheet(tab.content) : [];
-  if (!sections.length) {
-    return corsResponse(JSON.stringify({ found: false, reason: 'chord source unreadable', sourceUrl: tabUrl }), 200, request, env);
+  if (!result) {
+    const { results, error } = await searchWeb(env, artist ? `${title} ${artist} chords` : `${title} chords`, 10);
+    searchError = error || '';
+    const normTitle = normalizeTitle(title);
+    const pages = results
+      .filter(r => !NON_CHORD_DOMAINS.test(r.url))
+      .filter(r => normalizeTitle(r.title).includes(normTitle))
+      .sort((a, b) => chordSiteRank(a.url) - chordSiteRank(b.url))
+      .slice(0, CHART_DATA_PAGE_FETCHES);
+    for (const page of pages) {
+      if (tried.includes(page.url)) continue;
+      tried.push(page.url);
+      result = /ultimate-guitar\.com\/tab\//.test(page.url)
+        ? await chartFromUgUrl(page.url)
+        : await chartFromGenericUrl(page.url);
+      if (result) break;
+    }
   }
 
-  const key = parseKeyName(tab.tonality)?.name || inferKey(sections);
+  if (!result) {
+    const reason = !tried.length && searchError
+      ? `web search unavailable (${searchError}) — set GOOGLE_CSE_ID or BRAVE_SEARCH_API_KEY on the worker`
+      : 'no readable chord source found';
+    return corsResponse(JSON.stringify({ found: false, reason, tried, searchError }), 200, request, env);
+  }
+
+  const key = parseKeyName(result.tonality)?.name || inferKey(result.sections);
   const parsedKey = parseKeyName(key);
-  const nnsSections = sections.map(s => ({
+  const nnsSections = result.sections.map(s => ({
     name: s.name,
     lines: s.chordLines.map(line => line.map(chord => ({
       chord,
@@ -1027,17 +1186,88 @@ async function handleWebChartData(request, env) {
 
   return corsResponse(JSON.stringify({
     found: true,
-    source: 'ultimate-guitar',
-    sourceUrl: tabUrl,
-    title: tab.songName || title,
-    artist: tab.artistName || artist,
+    source: result.source,
+    sourceUrl: result.sourceUrl,
+    tried,
+    title: result.songName || title,
+    artist: result.artistName || artist,
     key,
-    keyInferred: !parseKeyName(tab.tonality),
-    capo: tab.capo || 0,
+    keyInferred: !parseKeyName(result.tonality),
+    capo: result.capo || 0,
     sections: nnsSections,
   }), 200, request, env, {
     'Cache-Control': 'public, max-age=86400',
   });
+}
+
+// GET /meta/song?title=&artist=&spotifyId=
+// Song-level metadata (BPM / key / time signature) from music APIs, for
+// filling chart headers and song fields even when no chord sheet is found.
+// Spotify audio-features carries all three but only works for
+// client-credential apps created before its Nov 2024 deprecation — a 403
+// just skips it. Keyless Deezer is the BPM fallback (its track objects
+// carry bpm, quality varies — 0/absent is treated as no data).
+const SPOTIFY_PITCHES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+
+async function handleSongMeta(request, env) {
+  const url = new URL(request.url);
+  const title = (url.searchParams.get('title') || '').trim();
+  const artist = (url.searchParams.get('artist') || '').trim();
+  const spotifyId = (url.searchParams.get('spotifyId') || '').trim();
+  const meta = { sources: [] };
+
+  if (spotifyId && env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET) {
+    try {
+      const token = await getSpotifyToken(env);
+      const res = await fetch(`https://api.spotify.com/v1/audio-features/${spotifyId}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const f = await res.json();
+        if (f.tempo > 0) meta.bpm = Math.round(f.tempo);
+        if (f.key >= 0 && f.key != null) meta.key = SPOTIFY_PITCHES[f.key] + (f.mode === 0 ? 'm' : '');
+        if (f.time_signature >= 2) meta.time = `${f.time_signature}/4`;
+        meta.sources.push('spotify');
+      }
+    } catch {}
+  }
+
+  if (!meta.bpm && title) {
+    try {
+      const bpm = await deezerBpm(title, artist);
+      if (bpm) {
+        meta.bpm = bpm;
+        meta.sources.push('deezer');
+      }
+    } catch {}
+  }
+
+  return corsResponse(JSON.stringify(meta), 200, request, env, {
+    'Cache-Control': 'public, max-age=86400',
+  });
+}
+
+async function deezerBpm(title, artist) {
+  // Advanced query first (exact-ish field match), plain text as fallback.
+  const queries = [
+    artist ? `track:"${title}" artist:"${artist}"` : `track:"${title}"`,
+    artist ? `${title} ${artist}` : title,
+  ];
+  for (const q of queries) {
+    const res = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=1`, {
+      signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
+    });
+    if (!res.ok) continue;
+    const hit = (await res.json())?.data?.[0];
+    if (!hit?.id) continue;
+    const trackRes = await fetch(`https://api.deezer.com/track/${hit.id}`, {
+      signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
+    });
+    if (!trackRes.ok) continue;
+    const bpm = (await trackRes.json())?.bpm;
+    if (bpm && bpm > 40) return Math.round(bpm);
+  }
+  return null;
 }
 
 export default {
@@ -1065,6 +1295,10 @@ export default {
 
       if (url.pathname === '/web/chart-data') {
         return await handleWebChartData(request, env);
+      }
+
+      if (url.pathname === '/meta/song') {
+        return await handleSongMeta(request, env);
       }
 
       if (url.pathname === '/spotify/search-batch' && request.method === 'POST') {

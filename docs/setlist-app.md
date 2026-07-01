@@ -113,30 +113,51 @@ four tiers, in order:
    auto-linked; weaker candidates appear in a picker under the action bar
    ("open" to preview, "use" to link). Dropbox links can't be verified
    without OAuth, so they're always picker-only, marked `unverified`.
-4. **Create a chart doc** — no longer a *blank* doc. The button first calls
-   the worker's `GET /web/chart-data`, which finds a community chord sheet
-   (Ultimate Guitar search → tab page's embedded `js-store` JSON), parses
-   sections + chords, and converts them to Nashville numbers (key from the
-   source's tonality, else inferred from the chords; `keyInferred: true`
-   flags the guess). `chart-build.js` then formats a chart in the working
-   NNS-chart layout — key/time/BPM header, title + artist, a number→chord
-   legend, sections with one line of numbers per source line (chord names in
-   parens beneath for verification), repeated sections referenced by name —
-   and `createChartDoc()` in `gdrive-backup.js` uploads it as `text/plain`
-   converted into a Google Doc inside the dedicated "voidstar charts" Drive
-   folder (created once, reused after), using the same OAuth token as
-   backup. When the web turns up nothing, it falls back to a structured
-   fill-in template (same header + section skeleton) rather than a blank
-   page. It's a Doc (not a Drawing) so the worker's existing plain-text
-   scraping (`handleDriveFileMeta`) works on it unmodified — the generated
-   header (`Key:`/`Time:`/`BPM:`/`Capo:`) intentionally matches what
-   `extractFromText` parses; for freeform hand-drawn charts, the in-app
-   annotation canvas already draws on top of any linked document.
+4. **Create a chart doc** — no longer a *blank* doc. The button runs two
+   worker calls in parallel:
+   - `GET /web/chart-data` finds a community chord sheet — Ultimate Guitar
+     first (its search page + the tab page's embedded `js-store` JSON gives
+     sections, tonality, and capo), then a web-search sweep over any chord
+     site using a **generic extractor** (chord sheets are plain text, usually
+     in a `<pre>`; strip markup, detect chord-only lines and section headers
+     in any style — `[Verse]`, `Chorus:`, `VERSE 2`). No single blocked or
+     redesigned site kills the feature. Chords are converted to Nashville
+     numbers (key from the source's tonality, else inferred from the chords;
+     `keyInferred: true` flags the guess).
+   - `GET /meta/song` derives BPM / key / time signature from music APIs:
+     Spotify audio-features when the song has a linked track (only works for
+     client-credential apps created before the Nov 2024 deprecation — a 403
+     is skipped quietly), keyless Deezer as the BPM fallback.
+   `chart-build.js` then formats a chart in the working NNS-chart layout —
+   key/time/BPM header, title + artist, a number→chord legend, sections with
+   one line of numbers per source line (chord names in parens beneath for
+   verification), repeated sections referenced by name. Derived BPM/time
+   fill header gaps; a derived key never overrides the chord source's key
+   (the numbers were computed against it) — a mismatch becomes a "check
+   which is right" note. `createChartDoc()` in `gdrive-backup.js` uploads it
+   as `text/plain` converted into a Google Doc inside the dedicated
+   "voidstar charts" Drive folder (created once, reused after), using the
+   same OAuth token as backup. When no chord source is readable, it falls
+   back to a structured fill-in template — still carrying any derived
+   key/BPM/time — rather than a blank page. It's a Doc (not a Drawing) so
+   the worker's existing plain-text scraping (`handleDriveFileMeta`) works
+   on it unmodified — the generated header (`Key:`/`Time:`/`BPM:`/`Capo:`)
+   intentionally matches what `extractFromText` parses; for freeform
+   hand-drawn charts, the in-app annotation canvas already draws on top of
+   any linked document.
 
 Tiers 1–3 are available per-song via `searchChartForSong()` in `sync.js`
 (the "search for chart" button, which reports its stage and returns
-`{found, tier, candidates}`); tiers 1+2 also run in the bulk "sync now"
-action in Settings.
+`{found, tier, candidates, providerDown}`); tiers 1+2 also run in the bulk
+"sync now" action in Settings.
+
+**Diagnosability:** every "found nothing" path says why instead of failing
+silently — a bot-blocked keyless search engine surfaces as `providerDown`
+("web search blocked — add search key" on the button; fix by setting
+`GOOGLE_CSE_ID` or `BRAVE_SEARCH_API_KEY` on the worker), an old worker
+deploy missing the `/web/*` routes shows "worker outdated", and
+`/web/chart-data` responses list the URLs `tried`. The client logs details
+to the console with a `[setlist]` prefix.
 
 ## Annotation alignment invariant
 
@@ -169,4 +190,5 @@ Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `POST /spotify/search-batch`, `GET /drive/folder/:id`,
 `GET /drive/folder/:id/recursive`, `GET /drive/file/:id/meta`,
 `GET /drive/file/:id/image`, `GET /web/chart-search?title=&artist=`,
-`GET /web/chart-data?title=&artist=`, `GET /health`.
+`GET /web/chart-data?title=&artist=`,
+`GET /meta/song?title=&artist=&spotifyId=`, `GET /health`.

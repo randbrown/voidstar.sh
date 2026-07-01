@@ -5,7 +5,7 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchWebChartData } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchWebChartData, fetchSongMeta } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildTemplateChartText } from './chart-build.js';
@@ -1005,6 +1005,9 @@ export async function renderSongFocus(root, songId, setlistId) {
         } else if (result.candidates?.length) {
           renderChartCandidates(chartCandidatesWrap, result.candidates, song);
           restore('no sure match — pick below');
+        } else if (result.providerDown) {
+          if (result.warnings?.length) console.warn('[setlist] chart search:', ...result.warnings);
+          restore('web search blocked — add search key');
         } else {
           restore('no match found');
         }
@@ -1018,15 +1021,26 @@ export async function renderSongFocus(root, songId, setlistId) {
       createBtn.disabled = true;
       createBtn.textContent = 'researching song...';
       try {
-        const data = await fetchWebChartData(song);
-        createBtn.textContent = data ? 'drafting number chart...' : 'creating template...';
-        const text = data ? buildChartText(song, data) : buildTemplateChartText(song);
+        // Chord research and audio-analysis metadata (BPM/key/time) run in
+        // parallel; either one alone still improves the doc.
+        const [chart, meta] = await Promise.all([fetchWebChartData(song), fetchSongMeta(song)]);
+        const extra = { key: meta?.key || '', bpm: meta?.bpm || 0, time: meta?.time || '' };
+        if (chart.ok) {
+          createBtn.textContent = 'drafting number chart...';
+        } else {
+          console.warn('[setlist] chart data unavailable:', chart.reason);
+          createBtn.textContent = chart.reason === 'worker-outdated'
+            ? 'worker outdated — template...'
+            : 'no chords found — template...';
+        }
+        const text = chart.ok ? buildChartText(song, chart.data, extra) : buildTemplateChartText(song, extra);
         const webViewLink = await createChartDoc(song, text);
         song.chartUrl = webViewLink;
-        if (data) {
-          if (data.key && !song.key) song.key = data.key;
-          if (data.capo && !song.capo) song.capo = data.capo;
-          if (data.artist && !song.artist) song.artist = data.artist;
+        if (!song.key) song.key = (chart.ok && chart.data.key) || meta?.key || '';
+        if (!song.bpm && meta?.bpm) song.bpm = meta.bpm;
+        if (chart.ok) {
+          if (chart.data.capo && !song.capo) song.capo = chart.data.capo;
+          if (chart.data.artist && !song.artist) song.artist = chart.data.artist;
         }
         await store.putSong(song);
         window.open(webViewLink, '_blank');
