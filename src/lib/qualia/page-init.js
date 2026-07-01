@@ -172,6 +172,8 @@ export function initQualiaPage() {
   const btnPause   = document.getElementById('btn-pause');
   const btnZen     = document.getElementById('btn-zen');
   const btnFullscreen = document.getElementById('btn-fullscreen');
+  const btnBlackout    = document.getElementById('btn-blackout');
+  const blackoutOverlay = document.getElementById('blackout-overlay');
   const btnRecord  = document.getElementById('btn-record');
   const btnRecordMode = document.getElementById('btn-record-mode');
   const btnCamera  = document.getElementById('btn-camera');
@@ -1999,6 +2001,29 @@ export function initQualiaPage() {
   }
   btnZen.addEventListener('click', () => setZen(!core.isZen()));
   zenHandle.addEventListener('click', () => setZen(false));
+
+  // Blackout — a stage "screen off": black the viewport and suspend the fx
+  // render to free the GPU, while the whole audio engine (rig, looper,
+  // sequencer, Strudel, vox) and the pad/MIDI keep running. Unlike pause
+  // (Space), which brakes the audio transports too, this is purely visual — for
+  // dialing in the rig and walking away with the screen dark. Transient by
+  // design (not persisted): a reload should never come back to a black screen.
+  // NB the browser can't power down the panel backlight; to actually cut the
+  // backlight, sleep the display at the OS level (see docs/doio-… keymap notes).
+  function setBlackout(on) {
+    core.setRenderSuspended(on);
+    blackoutOverlay?.classList.toggle('hidden', !on);
+    btnBlackout?.classList.toggle('active', on);
+    btnBlackout?.setAttribute('aria-pressed', String(on));
+    if (on) {
+      // Replay the wake-hint fade each time we go dark, then settle to full black.
+      const hint = blackoutOverlay?.querySelector('.blackout-hint');
+      if (hint) { hint.style.animation = 'none'; void hint.offsetWidth; hint.style.animation = ''; }
+    }
+  }
+  btnBlackout?.addEventListener('click', () => setBlackout(!core.isRenderSuspended()));
+  // Tap the black overlay to wake the screen back up.
+  blackoutOverlay?.addEventListener('click', () => setBlackout(false));
 
   // Browser fullscreen — hides chrome (URL bar, tabs) via the Fullscreen API.
   // Independent of zen mode (which only hides our in-page topbar/HUD), so the
@@ -4786,6 +4811,61 @@ export function initQualiaPage() {
     Period:         () => looper.nudgeRigLevel?.(+0.05),
     NumpadDecimal:  () => looper.nudgeRigLevel?.(+0.05),
   };
+
+  // ── Shared controller action surface (keystrokes + MIDI) ─────────────────
+  // The DOIO's buttons dispatch through this one map so both input paths drive
+  // identical behavior with no drift: the default Keychron-Launcher keymap
+  // (plain keystrokes, in the switch below) AND a pad reflashed to send MIDI
+  // notes (handler further down). MIDI matters for lid-shut / screen-off use —
+  // note messages reach a backgrounded or occluded window (keystrokes only
+  // reach the focused one) and, unlike HID keystrokes, don't wake a sleeping
+  // macOS display. The note→action numbers are documented in the keymap doc.
+  function qualeStep(dir) {
+    const ids = mesh.ids();
+    if (!ids.length) return;
+    const i = ids.indexOf(core.activeId() || ids[0]);
+    const j = dir < 0 ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
+    runSceneTransition();
+    core.setActive(ids[j]).catch(err => console.error('[qualia] setActive failed:', err));
+  }
+  const padActions = {
+    tuner:        () => document.getElementById('btn-rig-tuner')?.click(),
+    earth:        () => looper.toggleStripStage?.('earth'),
+    metal:        () => looper.toggleStripStage?.('metal'),
+    rigPanel:     () => document.getElementById('btn-looper')?.click(),
+    loopPlayStop: () => document.getElementById(looper.isPlaying?.() ? 'btn-looper-stop' : 'btn-looper-play')?.click(),
+    recStart:     () => { if (!looper.isRecording?.()) document.getElementById('btn-looper-record')?.click(); },
+    recStop:      () => { if (looper.isRecording?.())  document.getElementById('btn-looper-record')?.click(); },
+    grab:         () => document.getElementById('btn-looper-retro')?.click(),
+    camSize:      () => { if (btnCamera.style.display !== 'none') btnCamera.click(); },
+    camNext:      () => {
+      if (camSelect && !camSelect.disabled && camSelect.options.length > 1) {
+        camSelect.selectedIndex = (camSelect.selectedIndex + 1) % camSelect.options.length;
+        camSelect.dispatchEvent(new Event('change'));
+      }
+    },
+    camMirror:    () => { if (btnCamMirror.style.display !== 'none') btnCamMirror.click(); },
+    camRotate:    () => { if (btnCamRotate.style.display !== 'none') btnCamRotate.click(); },
+    qualePrev:    () => qualeStep(-1),
+    qualeNext:    () => qualeStep(+1),
+    phasePrev:    () => phaseShift(-1),
+    phaseNext:    () => phaseShift(+1),
+    delayToggle:  () => looper.toggleStripStage?.('delay'),
+    reverbToggle: () => looper.toggleStripStage?.('reverb'),
+    pause:        () => btnPause.click(),
+    blackout:     () => setBlackout(!core.isRenderSuspended()),
+  };
+  // DOIO 16-key grid (row-major) + the 3 knob-pushes + blackout, as MIDI note
+  // numbers. Reflash the pad to send these Note-On numbers (see the keymap
+  // doc). Knob *turns* stay on CC1/CC2/CC7 (absolute 0–1) in the CC handler.
+  const MIDI_NOTE_ACTIONS = {
+    60: 'tuner',     61: 'earth',       62: 'metal',        63: 'rigPanel',
+    64: 'loopPlayStop', 65: 'recStart',  66: 'recStop',     67: 'grab',
+    68: 'camSize',   69: 'camNext',     70: 'camMirror',    71: 'camRotate',
+    72: 'qualePrev', 73: 'qualeNext',   74: 'phasePrev',    75: 'phaseNext',
+    76: 'pause',     77: 'delayToggle', 78: 'reverbToggle', 79: 'blackout',
+  };
+
   window.addEventListener('keydown', (e) => {
     // Ctrl/Cmd/Alt combos belong to the browser/OS — never let a bare-key hotkey
     // fire on paste, zoom, reload, etc. (Shift IS a hotkey modifier: ⇧V prev fx,
@@ -4819,16 +4899,7 @@ export function initQualiaPage() {
     if (knob) { knob(); e.preventDefault(); return; }
 
     switch (e.key.toLowerCase()) {
-      case 'v': {
-        // V = next fx, Shift+V = previous (quale prev / next).
-        const ids = mesh.ids();
-        if (!ids.length) break;
-        const i = ids.indexOf(core.activeId() || ids[0]);
-        const j = e.shiftKey ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
-        runSceneTransition();
-        core.setActive(ids[j]).catch(err => console.error('[qualia] setActive failed:', err));
-        break;
-      }
+      case 'v': if (e.shiftKey) padActions.qualePrev(); else padActions.qualeNext(); break;   // quale prev / next
       case 'a': btnAudio.click(); break;
       case 's': document.getElementById('btn-strudel').click(); break;
       case 'q': document.getElementById('btn-sequencer').click(); break;
@@ -4840,7 +4911,7 @@ export function initQualiaPage() {
           if (!looper.isOpen()) document.getElementById('btn-looper').click();
           document.getElementById('btn-rig-mini')?.click();
         } else {
-          document.getElementById('btn-looper').click();
+          padActions.rigPanel();
         }
         break;
       case 'p': {
@@ -4850,13 +4921,13 @@ export function initQualiaPage() {
         poseSelect.dispatchEvent(new Event('change'));
         break;
       }
-      case 'c': if (btnCamera.style.display !== 'none') btnCamera.click(); break;
+      case 'c': padActions.camSize(); break;
       case 'r':
         // Shift+R toggles screen recording (R alone is camera-rotate).
         if (e.shiftKey) btnRecord?.click();
-        else if (btnCamRotate.style.display !== 'none') btnCamRotate.click();
+        else padActions.camRotate();
         break;
-      case 'm': if (btnCamMirror.style.display !== 'none') btnCamMirror.click(); break;
+      case 'm': padActions.camMirror(); break;
       case 'j': btnSkel.click(); break;
       case 'f': btnSparks.click(); break;
       case 'g': btnAura.click(); break;
@@ -4878,41 +4949,27 @@ export function initQualiaPage() {
       }
       case 'z': setZen(!core.isZen()); break;
       case 'x': btnFullscreen.click(); break;
-      case ' ': btnPause.click(); e.preventDefault(); break;
+      case 'h': padActions.blackout(); break;   // blackout — screen off, audio keeps playing
+      case ' ': padActions.pause(); e.preventDefault(); break;
 
       // ── Rig / looper performance hotkeys (Megalodon macro-pad friendly) ──
-      case '1': looper.toggleStripStage?.('earth'); break;       // Earth drive on/off
-      case '2': looper.toggleStripStage?.('metal'); break;       // Metal zone on/off
+      case '1': padActions.earth(); break;                       // Earth drive on/off
+      case '2': padActions.metal(); break;                       // Metal zone on/off
       case '3': {                                                 // Start/stop looper recording
         const recBtn = document.getElementById('btn-looper-record');
         if (recBtn) recBtn.click();
         break;
       }
-      case '0': {                                                 // Toggle tuner
-        const tunerBtn = document.getElementById('btn-rig-tuner');
-        if (tunerBtn) tunerBtn.click();
-        break;
-      }
+      case '0': padActions.tuner(); break;                        // Toggle tuner
       // ── DOIO macro-pad: looper transport, knob-push toggles, cam, phase ───
-      case '4':                                                   // Loop play / stop
-        document.getElementById(looper.isPlaying?.() ? 'btn-looper-stop' : 'btn-looper-play')?.click();
-        break;
-      case '5':                                                   // Start recording (idempotent)
-        if (!looper.isRecording?.()) document.getElementById('btn-looper-record')?.click();
-        break;
-      case '6':                                                   // Stop recording (idempotent)
-        if (looper.isRecording?.()) document.getElementById('btn-looper-record')?.click();
-        break;
-      case '7': document.getElementById('btn-looper-retro')?.click(); break;  // Grab (retro-loop)
-      case 'd': looper.toggleStripStage?.('delay');  break;       // Delay on/off (left knob push)
-      case '9': looper.toggleStripStage?.('reverb'); break;       // Reverb on/off (right knob push)
-      case '8':                                                   // Next camera device
-        if (camSelect && !camSelect.disabled && camSelect.options.length > 1) {
-          camSelect.selectedIndex = (camSelect.selectedIndex + 1) % camSelect.options.length;
-          camSelect.dispatchEvent(new Event('change'));
-        }
-        break;
-      case 'i': phaseShift(e.shiftKey ? -1 : +1); break;          // Phase step prev / next
+      case '4': padActions.loopPlayStop(); break;                // Loop play / stop
+      case '5': padActions.recStart(); break;                    // Start recording (idempotent)
+      case '6': padActions.recStop(); break;                     // Stop recording (idempotent)
+      case '7': padActions.grab(); break;                        // Grab (retro-loop)
+      case 'd': padActions.delayToggle();  break;                // Delay on/off (left knob push)
+      case '9': padActions.reverbToggle(); break;                // Reverb on/off (right knob push)
+      case '8': padActions.camNext(); break;                     // Next camera device
+      case 'i': if (e.shiftKey) padActions.phasePrev(); else padActions.phaseNext(); break;   // Phase step prev / next
       // Delay mix: [ / ]    Reverb mix: - / =    Rig master vol: , / .
       case '[': looper.nudgeStripParam?.('delay', 'mix', -0.05); break;
       case ']': looper.nudgeStripParam?.('delay', 'mix', +0.05); break;
@@ -4931,13 +4988,25 @@ export function initQualiaPage() {
     }
   });
 
-  // ── MIDI macro-pad support (Megalodon Triple Knob / generic CC) ──────────
+  // ── MIDI controller support (DOIO reflashed to MIDI / Megalodon / generic) ─
+  // Buttons → Note-On (mapped via MIDI_NOTE_ACTIONS → padActions); knob turns →
+  // CC1/CC2/CC7 (absolute 0–1). Unlike the keystroke path, MIDI reaches a
+  // backgrounded/occluded window and doesn't wake a sleeping display — so a
+  // MIDI-flashed pad drives the full rig with the screen off. Chromium only.
   if (navigator.requestMIDIAccess) {
     navigator.requestMIDIAccess().then((midi) => {
       function onMIDIMessage(e) {
-        const [status, cc, val] = e.data;
-        if ((status & 0xf0) !== 0xb0) return;          // CC messages only
-        const norm = val / 127;
+        const [status, d1, d2] = e.data;
+        const type = status & 0xf0;
+        // Note-On (buttons) — fire the mapped pad action on press. A Note-On
+        // with velocity 0 is the conventional Note-Off, so ignore it; Note-Off
+        // (0x80) is ignored too (buttons act on press, like the keystrokes).
+        if (type === 0x90 && d2 > 0) {
+          padActions[MIDI_NOTE_ACTIONS[d1]]?.();
+          return;
+        }
+        if (type !== 0xb0) return;                     // otherwise, CC only
+        const cc = d1, norm = d2 / 127;
         switch (cc) {
           case 1:  looper.setStripParam?.('delay', 'mix', norm);  break;  // CC1 — delay mix
           case 2:  looper.setStripParam?.('reverb', 'mix', norm); break;  // CC2 — reverb mix
