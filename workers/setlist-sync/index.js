@@ -103,6 +103,8 @@ async function handleSpotifyPlaylist(playlistId, request, env) {
       const body = await res.text().catch(() => '');
       const hint = res.status === 404
         ? 'playlist not found, or not readable with client credentials (Spotify-owned editorial/algorithmic playlists can no longer be read this way — use a playlist you created)'
+        : res.status === 403
+        ? 'playlist not readable with client credentials — make sure it is set to Public (not private/collaborative) and is owned by your account, not a Spotify-owned editorial/algorithmic playlist'
         : `Spotify API ${res.status}`;
       throw httpError(res.status, `Spotify playlist ${playlistId}: ${hint}. ${body.slice(0, 300)}`);
     }
