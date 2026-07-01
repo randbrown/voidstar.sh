@@ -1331,6 +1331,152 @@ export async function renderSettings(root) {
 
 // ── Performance Mode ──
 
+/**
+ * Custom pinch-to-zoom + pan for perform mode.
+ *
+ * Android Chrome disables native pinch-to-zoom whenever the page is in the
+ * Fullscreen API (page-scale is locked to 1), which is exactly the mode a
+ * performer uses on stage. So we drive our own zoom by transforming an inner
+ * layer instead of relying on the browser's page zoom — this works identically
+ * in and out of fullscreen.
+ *
+ * `scrollEl` is the scroll container (`.sl-perform-content`); `layerEl` is the
+ * transformed child (`.sl-perform-zoom`). At scale 1 the layer sits untouched
+ * and the container scrolls natively (keeps momentum for long charts); once the
+ * user pinches past 1× we lock native scroll and pan via the transform.
+ */
+function attachPerformZoom(scrollEl, layerEl) {
+  const MIN = 1, MAX = 5;
+  let scale = 1, tx = 0, ty = 0;
+  // Active gesture bookkeeping.
+  let gStartDist = 0, gStartScale = 1, gStartTx = 0, gStartTy = 0;
+  let gRectLeft = 0, gRectTop = 0;
+  let panStartX = 0, panStartY = 0, panTx = 0, panTy = 0, panning = false;
+  let gFocalX = 0, gFocalY = 0;
+  let lastTap = 0;
+
+  const isZoomed = () => scale > 1.001;
+
+  function apply() {
+    if (isZoomed()) {
+      scrollEl.classList.add('sl-zoomed');
+      layerEl.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    } else {
+      scrollEl.classList.remove('sl-zoomed');
+      layerEl.style.transform = '';
+    }
+  }
+
+  // Keep the scaled layer inside the viewport so you can't lose the content
+  // off-screen; when the layer is smaller than the viewport on an axis it's
+  // pinned to the top-left.
+  function clamp() {
+    const vw = scrollEl.clientWidth, vh = scrollEl.clientHeight;
+    const lw = layerEl.offsetWidth * scale, lh = layerEl.offsetHeight * scale;
+    const minTx = Math.min(0, vw - lw), minTy = Math.min(0, vh - lh);
+    if (tx > 0) tx = 0; else if (tx < minTx) tx = minTx;
+    if (ty > 0) ty = 0; else if (ty < minTy) ty = minTy;
+  }
+
+  function dist(t0, t1) {
+    return Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+  }
+
+  function beginPinch(e) {
+    const rect = scrollEl.getBoundingClientRect();
+    gRectLeft = rect.left; gRectTop = rect.top;
+    gStartDist = dist(e.touches[0], e.touches[1]);
+    gStartScale = scale;
+    // Fold the current native scroll into the transform so the picture doesn't
+    // jump when we take over scrolling.
+    if (scale <= 1.001) { tx = 0; ty = -scrollEl.scrollTop; scrollEl.scrollTop = 0; }
+    gStartTx = tx; gStartTy = ty;
+  }
+
+  function movePinch(e) {
+    const d = dist(e.touches[0], e.touches[1]);
+    if (!gStartDist) return;
+    const s2 = Math.max(MIN, Math.min(MAX, gStartScale * (d / gStartDist)));
+    // Current midpoint in container coords; its travel since gesture start pans
+    // the content, so one formula handles pinch-zoom + two-finger drag together.
+    const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - gRectLeft;
+    const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - gRectTop;
+    // Layer coord under the initial focal — keep it pinned under the fingers.
+    const Lx = (gFocalX - gStartTx) / gStartScale;
+    const Ly = (gFocalY - gStartTy) / gStartScale;
+    scale = s2;
+    tx = midX - s2 * Lx;
+    ty = midY - s2 * Ly;
+    clamp();
+    apply();
+  }
+
+  function onTouchStart(e) {
+    if (e.touches.length === 2) {
+      const rect = scrollEl.getBoundingClientRect();
+      gFocalX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+      gFocalY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+      beginPinch(e);
+      panning = false;
+    } else if (e.touches.length === 1 && isZoomed()) {
+      panning = true;
+      panStartX = e.touches[0].clientX;
+      panStartY = e.touches[0].clientY;
+      panTx = tx; panTy = ty;
+      // Double-tap to reset to fit.
+      const now = e.timeStamp;
+      if (now - lastTap < 300) { reset(); panning = false; }
+      lastTap = now;
+    }
+  }
+
+  function onTouchMove(e) {
+    if (e.touches.length === 2 && gStartDist) {
+      e.preventDefault();
+      movePinch(e);
+    } else if (panning && e.touches.length === 1) {
+      e.preventDefault();
+      tx = panTx + (e.touches[0].clientX - panStartX);
+      ty = panTy + (e.touches[0].clientY - panStartY);
+      clamp();
+      apply();
+    }
+  }
+
+  function onTouchEnd(e) {
+    if (e.touches.length < 2) gStartDist = 0;
+    if (e.touches.length === 0) {
+      panning = false;
+      // Snap out of zoom mode when we've basically returned to 1× and hand the
+      // scroll position back to the native scroller.
+      if (scale <= 1.02) reset();
+    }
+  }
+
+  function reset() {
+    const restoreScroll = -ty;
+    scale = 1; tx = 0; ty = 0; gStartDist = 0; panning = false;
+    apply();
+    if (restoreScroll > 0) scrollEl.scrollTop = restoreScroll;
+  }
+
+  scrollEl.addEventListener('touchstart', onTouchStart, { passive: false });
+  scrollEl.addEventListener('touchmove', onTouchMove, { passive: false });
+  scrollEl.addEventListener('touchend', onTouchEnd, { passive: true });
+  scrollEl.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+  return {
+    isActive: () => isZoomed() || gStartDist > 0 || panning,
+    reset,
+    destroy() {
+      scrollEl.removeEventListener('touchstart', onTouchStart);
+      scrollEl.removeEventListener('touchmove', onTouchMove);
+      scrollEl.removeEventListener('touchend', onTouchEnd);
+      scrollEl.removeEventListener('touchcancel', onTouchEnd);
+    },
+  };
+}
+
 export async function renderPerformMode(root, setlistId, startSongId) {
   const sl = await store.getSetlist(setlistId);
   if (!sl) { root.appendChild(emptyState('Setlist not found.')); return; }
@@ -1370,6 +1516,10 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const progress = el('div', 'sl-perform-progress');
   const counter = el('div', 'sl-perform-counter');
   const content = el('div', 'sl-perform-content');
+  // Inner layer our pinch-to-zoom transforms (see attachPerformZoom). All song
+  // markup goes in here, not directly in `content`.
+  const zoomLayer = el('div', 'sl-perform-zoom');
+  content.appendChild(zoomLayer);
   const exitBtn = btn('&times;', 'sl-btn-icon sl-perform-exit', () => {
     try { document.exitFullscreen?.(); } catch {}
     try { wakeLock?.release(); } catch {}
@@ -1429,6 +1579,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const totalSongs = songEntries.length;
 
   let chartAnnotationCtrl = null;
+  const zoomCtrl = attachPerformZoom(content, zoomLayer);
 
   function getSongIndex() {
     let n = 0;
@@ -1454,6 +1605,9 @@ export async function renderPerformMode(root, setlistId, startSongId) {
     if (chartAnnotationCtrl) { chartAnnotationCtrl.destroy(); chartAnnotationCtrl = null; }
     currentChartWrap = null;
     invertBtn.style.display = 'none';
+    // Every song starts at 1× so a leftover zoom from the previous chart doesn't
+    // carry over.
+    zoomCtrl?.reset();
 
     const entry = entries[idx];
     const songNum = getSongIndex();
@@ -1462,12 +1616,12 @@ export async function renderPerformMode(root, setlistId, startSongId) {
     updateNavState();
 
     if (entry.type === 'divider') {
-      content.innerHTML = `<div class="sl-perform-divider">${entry.name}</div>`;
+      zoomLayer.innerHTML = `<div class="sl-perform-divider">${entry.name}</div>`;
       return;
     }
 
     const { song, notes, vocalist } = entry;
-    content.innerHTML = `
+    zoomLayer.innerHTML = `
       <h1 class="sl-perform-title">${song.title}</h1>
       ${song.artist ? `<div class="sl-perform-artist">${song.artist}</div>` : ''}
       <div class="sl-perform-badges">
@@ -1536,7 +1690,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       const chartCanvas = document.createElement('canvas');
       chartCanvas.className = 'sl-perform-chart-canvas';
       chartWrap.appendChild(chartCanvas);
-      content.appendChild(chartWrap);
+      zoomLayer.appendChild(chartWrap);
 
       loadAnnotation(entry.songId).then(data => {
         // Reproduce the aspect ratio the strokes were authored at so the
@@ -1574,12 +1728,15 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   render();
 
   // Swipe handling
-  let touchStartX = 0, touchStartY = 0;
+  let touchStartX = 0, touchStartY = 0, swipeMulti = false;
   container.addEventListener('touchstart', (e) => {
+    swipeMulti = e.touches.length > 1;
     touchStartX = e.touches[0].clientX;
     touchStartY = e.touches[0].clientY;
   }, { passive: true });
   container.addEventListener('touchend', (e) => {
+    // Don't treat a pinch/pan (or the finger-lift after one) as a nav swipe.
+    if (swipeMulti || e.touches.length > 0 || zoomCtrl.isActive()) return;
     const dx = e.changedTouches[0].clientX - touchStartX;
     const dy = e.changedTouches[0].clientY - touchStartY;
     if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.8) {
@@ -1598,6 +1755,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   // Cleanup on navigation
   const cleanup = () => {
     if (chartAnnotationCtrl) chartAnnotationCtrl.destroy();
+    zoomCtrl.destroy();
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('hashchange', cleanup);
   };

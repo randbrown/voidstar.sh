@@ -586,12 +586,31 @@ import '../../styles/themes.css';
     .sl-perform-content {
       flex: 1;
       overflow-y: auto;
-      padding: 3rem 1.5rem 1.5rem;
-      display: flex;
-      flex-direction: column;
+      overflow-x: hidden;
       color: var(--sl-stage-text);
       -webkit-overflow-scrolling: touch;
+      /* Keep the browser from hijacking a two-finger gesture as a page pinch
+         (native pinch-zoom is disabled inside the Fullscreen API anyway) — we
+         run our own pinch-to-zoom on the zoom layer below. pan-x/pan-y still
+         let long charts scroll natively when unzoomed. */
+      touch-action: pan-x pan-y;
     }
+    /* The zoom layer holds the actual song content and is what our pinch
+       gesture scales/pans via a transform, so zoom works even in fullscreen
+       where the browser locks page-scale. At scale 1 it's a no-op and the
+       content scrolls natively. */
+    .sl-perform-zoom {
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+      box-sizing: border-box;
+      padding: 3rem 1.5rem 1.5rem;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+    /* While actively zoomed, JS locks native scroll so panning stays under our
+       transform (avoids a double-scroll fight). */
+    .sl-perform-content.sl-zoomed { overflow: hidden; }
     .sl-perform-title {
       font-size: clamp(1.8rem, 6vw, 3rem);
       font-weight: 700;
