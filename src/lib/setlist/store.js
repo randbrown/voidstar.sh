@@ -2,11 +2,15 @@
 // Follows the looper-store.js pattern: lazy singleton, tx() helper, async CRUD.
 
 const DB_NAME = 'voidstar.setlist';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const SONGS = 'songs';
 const NOTES = 'notes';
 const SETLISTS = 'setlists';
 const ANNOTATIONS = 'annotations';
+// Cached chart images (Blobs) keyed by songId, for offline perform mode.
+// Local-only: derivable from the chart URL, so never included in the Google
+// Drive JSON sync (that stays lean, data-only).
+const CHARTS = 'charts';
 
 let _dbPromise = null;
 
@@ -36,6 +40,9 @@ function openDb() {
       }
       if (!db.objectStoreNames.contains(ANNOTATIONS)) {
         db.createObjectStore(ANNOTATIONS, { keyPath: 'songId' });
+      }
+      if (!db.objectStoreNames.contains(CHARTS)) {
+        db.createObjectStore(CHARTS, { keyPath: 'songId' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -93,6 +100,31 @@ async function del(storeName, id) {
   store.delete(id);
   await done;
   _onWrite?.();
+}
+
+// Silent variants — write without firing _onWrite (used for the local-only
+// chart image cache, which must not kick off a Google Drive data push).
+async function putSilent(storeName, record) {
+  const { store, done } = await tx(storeName, 'readwrite');
+  store.put(record);
+  await done;
+}
+
+async function delSilent(storeName, id) {
+  const { store, done } = await tx(storeName, 'readwrite');
+  store.delete(id);
+  await done;
+}
+
+async function getAllKeys(storeName) {
+  const { store, done } = await tx(storeName, 'readonly');
+  const keys = await new Promise((res, rej) => {
+    const req = store.getAllKeys();
+    req.onsuccess = () => res(req.result || []);
+    req.onerror = () => rej(req.error);
+  });
+  await done.catch(() => {});
+  return keys;
 }
 
 // ── Songs ──
@@ -180,6 +212,19 @@ export const putSetlist = (sl) => put(SETLISTS, { ...sl, updatedAt: Date.now() }
 export const getSetlist = (id) => getOne(SETLISTS, id);
 export const getAllSetlists = () => getAll(SETLISTS);
 export const deleteSetlist = (id) => del(SETLISTS, id);
+
+// ── Cached chart images (offline) ──
+
+export const putChartBlob = (songId, blob, sourceUrl) =>
+  putSilent(CHARTS, {
+    songId, blob, sourceUrl,
+    mimeType: blob.type || '',
+    size: blob.size || 0,
+    fetchedAt: Date.now(),
+  });
+export const getChartBlob = (songId) => getOne(CHARTS, songId);
+export const deleteChartBlob = (songId) => delSilent(CHARTS, songId);
+export const getCachedChartIds = () => getAllKeys(CHARTS);
 
 // ── Merge helper ──
 

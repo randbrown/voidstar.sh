@@ -187,19 +187,68 @@ export function mergeData(local, remote) {
 
 let _pushTimer = null;
 let _syncClient = null;
+let _exportFn = null;
 
 export function setSyncClient(client) { _syncClient = client; }
 
+// ── Sync status broadcast (drives the offline/sync pill) ──
+// States: 'idle' | 'syncing' | 'synced' | 'pending' | 'offline'
+const _statusListeners = new Set();
+let _syncState = 'idle';
+let _pendingPush = false;
+let _connWatched = false;
+
+export function getSyncState() { return _syncState; }
+
+export function onSyncState(fn) {
+  _statusListeners.add(fn);
+  try { fn(_syncState); } catch {}
+  return () => _statusListeners.delete(fn);
+}
+
+function setSyncState(s) {
+  _syncState = s;
+  for (const fn of _statusListeners) { try { fn(s); } catch {} }
+}
+
+async function pushNow() {
+  setSyncState('syncing');
+  try {
+    await _syncClient.push(await _exportFn());
+    _pendingPush = false;
+    setSyncState('synced');
+  } catch (e) {
+    _pendingPush = true;
+    setSyncState('pending');
+    console.warn('[gdrive] push failed:', e.message);
+  }
+}
+
 export async function debouncedPush(exportFn, delayMs = 3000) {
   if (!_syncClient) return;
+  _exportFn = exportFn;
   if (_pushTimer) clearTimeout(_pushTimer);
-  _pushTimer = setTimeout(async () => {
+  _pushTimer = setTimeout(() => {
     _pushTimer = null;
-    try {
-      const data = await exportFn();
-      await _syncClient.push(data);
-    } catch (e) {
-      console.warn('[gdrive] auto-push failed:', e.message);
+    // Offline: don't even try — flag it so we flush on reconnect.
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      _pendingPush = true;
+      setSyncState('offline');
+      return;
     }
+    pushNow();
   }, delayMs);
+}
+
+// Watch online/offline so edits made offline flush to Drive on reconnect and
+// the pill reflects reality. Safe to call more than once.
+export function watchConnectivity() {
+  if (_connWatched || typeof window === 'undefined') return;
+  _connWatched = true;
+  window.addEventListener('offline', () => setSyncState('offline'));
+  window.addEventListener('online', () => {
+    if (_pendingPush && _syncClient && _exportFn) pushNow();
+    else setSyncState(_syncClient ? 'synced' : 'idle');
+  });
+  if (typeof navigator !== 'undefined' && !navigator.onLine) setSyncState('offline');
 }

@@ -1,8 +1,25 @@
 ---
 // Setlist — live-use and rehearsal setlist manager for pedal steel gigs.
 // Standalone page (no BaseLayout) following the entangle.astro pattern.
+import { execSync } from 'node:child_process';
 import ThemeBoot from '../../components/ThemeBoot.astro';
 import '../../styles/themes.css';
+
+// Build stamp — short commit + commit timestamp + build timestamp.
+// Baked at build time so the deployed page can be verified against the
+// latest commit (avoids "is my browser serving a stale cache?" guesswork).
+// Surfaced two ways here: <meta name="voidstar-build"> in view-source and
+// window.__VOIDSTAR_BUILD__ in the console. Same helper lives in
+// BaseLayout.astro / qualia.astro; setlist is standalone (doesn't wrap
+// BaseLayout) so we recompute here. Git calls fall back to '?' so a
+// non-git build env still works.
+function readBuildStamp() {
+  let commit = '?', commitISO = '?';
+  try { commit    = execSync('git rev-parse --short HEAD').toString().trim(); } catch {}
+  try { commitISO = execSync('git log -1 --format=%cI').toString().trim();   } catch {}
+  return { commit, commitISO, builtAt: new Date().toISOString() };
+}
+const buildStamp = readBuildStamp();
 ---
 <!doctype html>
 <html lang="en">
@@ -12,6 +29,29 @@ import '../../styles/themes.css';
   <ThemeBoot />
   <title>Setlist | voidstar lab</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <!-- Setlist uses its own manifest so installing from this page anchors
+       start_url to /lab/setlist (the default manifest's start_url is /
+       so installs from that page would always boot to home). Installing
+       as an app is what makes the SW-cached shell available offline at a
+       gig with no signal. -->
+  <link rel="manifest" href="/manifest-setlist.webmanifest" />
+  <meta name="theme-color" content="#05050d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="setlist" />
+
+  <!-- Register the PWA service worker (skipped on local dev hosts so
+       Astro's HMR isn't fighting cached assets). This is what caches the
+       app shell + hashed JS so perform mode still boots offline. -->
+  <script is:inline>
+    if ('serviceWorker' in navigator
+        && !/^(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.)/.test(location.hostname)) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
   <style is:global>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -150,6 +190,34 @@ import '../../styles/themes.css';
       margin-bottom: 1rem;
       font-family: var(--font-mono);
     }
+
+    /* ── Sync / connectivity pill (dashboard) ── */
+    .sl-sync-pill {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      margin: -0.4rem 0 0.8rem;
+      letter-spacing: 0.02em;
+    }
+    .sl-sync-pill:empty { display: none; margin: 0; }
+    .sl-sync-offline { color: var(--pink); }
+    .sl-sync-pending { color: var(--amber, #ffc857); }
+    .sl-sync-syncing { color: var(--text-muted); }
+    .sl-sync-synced  { color: var(--green); }
+
+    /* ── Offline-charts bar (setlist view) ── */
+    .sl-offline-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.4rem 0.6rem;
+      margin-bottom: 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+    }
+    .sl-offline-bar:empty { display: none; margin: 0; }
+    .sl-offline-label { color: var(--text-muted); }
+    .sl-offline-label.sl-offline-ready { color: var(--green); }
+    .sl-offline-hint { color: var(--text-muted); opacity: 0.75; }
 
     /* ── Song cards (setlist view) ── */
     .sl-song-card {
@@ -1135,6 +1203,127 @@ import '../../styles/themes.css';
       }
     }
   </style>
+
+  <meta name="voidstar-build" content={`${buildStamp.commit} · committed ${buildStamp.commitISO} · built ${buildStamp.builtAt}`} />
+
+  <!-- Build stamp on window + console — every page can be verified against
+       the latest deploy independent of the debug overlay. -->
+  <script is:inline define:vars={{ build: buildStamp }}>
+    window.__VOIDSTAR_BUILD__ = build;
+    console.log('[voidstar/setlist] build ' + build.commit
+      + ' · committed ' + build.commitISO
+      + ' · built ' + build.builtAt);
+  </script>
+
+  <!-- Mobile diagnostics — same as BaseLayout, but inlined here because
+       /lab/setlist is a standalone page (doesn't wrap BaseLayout). See
+       BaseLayout.astro for full notes; in short: ?debug=1 injects Eruda
+       + shows a "DBG" status badge in the corner so users can confirm
+       the script ran even if the CDN is blocked. ?debug=0 disables. -->
+  <script is:inline>
+    (function () {
+      try {
+        var qs = new URLSearchParams(location.search);
+        var qDebug = qs.get('debug');
+        var KEY = 'voidstar.debug.console';
+        if (qDebug === '0' || qDebug === 'off') {
+          localStorage.removeItem(KEY);
+          console.log('[voidstar] debug console disabled');
+          return;
+        }
+        if (qDebug === '1' || qDebug === 'eruda' || qDebug === 'on') {
+          localStorage.setItem(KEY, 'eruda');
+        }
+        if (localStorage.getItem(KEY) !== 'eruda') return;
+        console.log('[voidstar] debug=eruda — loading overlay…');
+
+        var badge = null;
+        function ensureBadge() {
+          if (badge || !document.body) return badge;
+          badge = document.createElement('div');
+          badge.id = 'voidstar-debug-badge';
+          badge.textContent = 'DBG…';
+          var b = window.__VOIDSTAR_BUILD__ || {};
+          badge.title = 'voidstar build ' + (b.commit || '?')
+            + (b.builtAt ? ' · built ' + b.builtAt : '')
+            + ' — tap to open console; long-press to disable';
+          var s = badge.style;
+          s.position = 'fixed';
+          s.top = 'calc(env(safe-area-inset-top, 0px) + 6px)';
+          s.right = '6px';
+          s.zIndex = '2147483647';
+          s.padding = '2px 6px';
+          s.borderRadius = '4px';
+          s.font = '11px ui-monospace, Menlo, Consolas, monospace';
+          s.background = 'rgba(0,0,0,0.72)';
+          s.color = '#ffc857';
+          s.border = '1px solid #ffc857';
+          s.pointerEvents = 'auto';
+          s.cursor = 'pointer';
+          var pressTimer = null;
+          badge.addEventListener('click', function () {
+            try { window.eruda && window.eruda.show(); } catch (_) {}
+          });
+          badge.addEventListener('touchstart', function () {
+            pressTimer = setTimeout(function () {
+              localStorage.removeItem(KEY);
+              location.reload();
+            }, 1200);
+          });
+          badge.addEventListener('touchend', function () { clearTimeout(pressTimer); });
+          document.body.appendChild(badge);
+          return badge;
+        }
+        function setBadge(text, color) {
+          var b = ensureBadge();
+          if (!b) return;
+          b.textContent = text;
+          b.style.color = color;
+          b.style.borderColor = color;
+        }
+        function bootEruda() {
+          if (!window.eruda) {
+            console.error('[voidstar] eruda failed to load (CDN blocked?). '
+              + 'Try chrome://inspect remote debugging instead.');
+            setBadge('DBG!', '#ff5e7e');
+            return;
+          }
+          try {
+            window.eruda.init();
+            console.log('[voidstar] eruda initialized — tap the gear (or the badge).');
+            setBadge('DBG', '#7cf2a5');
+          } catch (e) {
+            console.error('[voidstar] eruda.init() threw', e);
+            setBadge('DBG!', '#ff5e7e');
+          }
+        }
+        function loadFrom(src, next) {
+          var s = document.createElement('script');
+          s.src = src;
+          s.crossOrigin = 'anonymous';
+          s.onload  = bootEruda;
+          s.onerror = next || function () {
+            console.error('[voidstar] eruda CDN unreachable:', src);
+            setBadge('DBG!', '#ff5e7e');
+          };
+          document.head.appendChild(s);
+        }
+        function start() {
+          ensureBadge();
+          loadFrom('https://cdn.jsdelivr.net/npm/eruda', function () {
+            loadFrom('https://unpkg.com/eruda', null);
+          });
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', start);
+        } else {
+          start();
+        }
+      } catch (e) {
+        try { console.error('[voidstar] debug-script error', e); } catch (_) {}
+      }
+    })();
+  </script>
 </head>
 <body>
   <div id="setlist-root"></div>
