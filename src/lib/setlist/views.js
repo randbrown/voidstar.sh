@@ -2355,13 +2355,13 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   // Appearance toggle sits in the top control strip; nav bar keeps only
   // prev/next. Glyph-only to save strip space — the song page's labeled
   // "◐ dark/light charts" button teaches what the symbol means.
+  // No active-state highlight: the chart itself shows which look is on, and
+  // the accent color read as a distracting "warning" in the control strip.
   const invertBtn = btn('◐', 'sl-btn-ghost sl-btn-sm sl-perform-invert', () => {
     setChartAppearance('perform', chartAppearance('perform') === 'dark' ? 'light' : 'dark');
     if (currentChartWrap) applyChartAppearance(currentChartWrap, 'perform');
-    invertBtn.classList.toggle('sl-btn-active', chartAppearance('perform') === 'dark');
   });
   invertBtn.title = 'Chart look: dark for stage / light like paper';
-  invertBtn.classList.toggle('sl-btn-active', chartAppearance('perform') === 'dark');
   navBar.appendChild(prevBtn);
   navBar.appendChild(navPos);
   navBar.appendChild(nextBtn);
@@ -2445,7 +2445,6 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 
     if (song.chartUrl) {
       invertBtn.style.display = '';
-      invertBtn.classList.toggle('sl-btn-active', chartAppearance('perform') === 'dark');
 
       const chartWrap = el('div', 'sl-perform-chart-wrap');
       currentChartWrap = chartWrap;
