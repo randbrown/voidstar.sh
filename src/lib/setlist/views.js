@@ -7,7 +7,7 @@ import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } f
 import { createDictation, isSupported as voiceSupported } from './voice.js';
 import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta } from './sync.js';
 import { findBestMatch as fuzzyMatch } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
@@ -869,6 +869,73 @@ function setupDragReorder(container, set, setlist, opts = {}) {
 
 // ── Song Focus ──
 
+// Shared by "create chart doc" and "rebuild doc": research the song (AI
+// chart → chord-sheet scrape → template, with audio-analysis metadata in
+// parallel), create the Google Doc, and fill empty song fields from whatever
+// tier landed. Returns the new doc's webViewLink. The caller must have run
+// ensureDriveAccess() inside the originating tap gesture.
+async function researchAndCreateChartDoc(song, setStatus) {
+  const metaPromise = fetchSongMeta(song);
+  const ai = await fetchAiChart(song);
+  const meta = await metaPromise;
+  const extra = { key: meta?.key || '', bpm: meta?.bpm || 0, time: meta?.time || '' };
+
+  let text;
+  const applied = {};
+  if (ai.ok) {
+    setStatus('drafting number chart (AI)...');
+    text = buildAiChartText(song, ai.data, extra);
+    applied.key = ai.data.key;
+    applied.bpm = ai.data.bpm;
+    applied.capo = ai.data.capo;
+    applied.artist = ai.data.artist;
+  } else {
+    if (ai.reason !== 'no-ai-key') console.warn('[setlist] AI chart unavailable:', ai.reason);
+    const chart = await fetchWebChartData(song);
+    if (chart.ok) {
+      setStatus('drafting number chart...');
+      text = buildChartText(song, chart.data, extra);
+      applied.key = chart.data.key;
+      applied.capo = chart.data.capo;
+      applied.artist = chart.data.artist;
+    } else {
+      console.warn('[setlist] chart data unavailable:', chart.reason);
+      setStatus(chart.reason === 'worker-outdated' ? 'worker outdated — template...' : 'no chords found — template...');
+      text = buildTemplateChartText(song, extra);
+    }
+  }
+
+  const webViewLink = await createChartDoc(song, text);
+  song.chartUrl = webViewLink;
+  if (!song.key) song.key = applied.key || meta?.key || '';
+  if (!song.bpm) song.bpm = applied.bpm || meta?.bpm || 0;
+  if (!song.capo && applied.capo) song.capo = applied.capo;
+  if (!song.artist && applied.artist) song.artist = applied.artist;
+  await store.putSong(song);
+  return webViewLink;
+}
+
+// Per-mode chart inversion: perform mode and the regular views each remember
+// their own preference — a dark stage wants a white scan inverted, while the
+// same chart on the song page may read better as-is.
+const DETAIL_INVERT_KEY = 'voidstar.setlist.invertChartDetail';
+
+function detailInvertActive() {
+  return localStorage.getItem(DETAIL_INVERT_KEY) === '1';
+}
+
+function detailInvertButton(stage) {
+  const b = btn('◐ invert', 'sl-btn-ghost sl-btn-xs', () => {
+    const on = !detailInvertActive();
+    localStorage.setItem(DETAIL_INVERT_KEY, on ? '1' : '0');
+    stage.classList.toggle('sl-chart-inverted', on);
+    b.classList.toggle('sl-btn-active', on);
+  });
+  b.title = 'Invert chart colors';
+  if (detailInvertActive()) b.classList.add('sl-btn-active');
+  return b;
+}
+
 // Inline chart display for the song page — the same aspect-locked stage
 // pattern as the annotation editor (chart rect == canvas rect == the
 // stored-aspect box, see docs/setlist-app.md), rendering the cached chart
@@ -877,6 +944,11 @@ function setupDragReorder(container, set, setlist, opts = {}) {
 async function renderInlineChart(container, song, songId) {
   const wrap = el('div', 'sl-focus-chart');
   const stage = el('div', 'sl-annotation-stage');
+  if (detailInvertActive()) stage.classList.add('sl-chart-inverted');
+
+  const tools = el('div', 'sl-chart-tools');
+  tools.appendChild(detailInvertButton(stage));
+  container.appendChild(tools);
 
   const cached = await getOfflineChart(songId, song.chartUrl);
   if (cached?.kind === 'text') {
@@ -1061,6 +1133,36 @@ export async function renderSongFocus(root, songId, setlistId) {
       window.open(song.chartUrl, '_blank');
     });
     actionBar.appendChild(editDocBtn);
+
+    // Scrap the current doc and regenerate from fresh research (same ladder
+    // as "create chart doc"). The old doc is trashed only if this app
+    // created it — drive.file scope can't touch community charts, so those
+    // are merely unlinked.
+    const rebuildBtn = btn('rebuild doc', 'sl-btn-ghost sl-btn-sm', async () => {
+      if (!confirm('Scrap this chart doc and rebuild it from fresh research? A doc generated by this app gets trashed; existing annotations stay but may need redrawing.')) return;
+      rebuildBtn.disabled = true;
+      rebuildBtn.textContent = 'connecting drive...';
+      try {
+        await ensureDriveAccess();
+        const oldUrl = song.chartUrl;
+        rebuildBtn.textContent = 'researching song...';
+        const webViewLink = await researchAndCreateChartDoc(song, (s) => { rebuildBtn.textContent = s; });
+        await store.deleteChartBlob(song.id); // drop the old doc's cached copy
+        trashChartDoc(oldUrl); // fire-and-forget; only touches app-created docs
+        const win = window.open(webViewLink, '_blank');
+        if (!win) showLinkToast('chart doc rebuilt', webViewLink);
+        refresh();
+      } catch (e) {
+        rebuildBtn.textContent = 'failed';
+        alert(`rebuild doc failed: ${e.message}`);
+        setTimeout(() => {
+          rebuildBtn.textContent = 'rebuild doc';
+          rebuildBtn.disabled = false;
+        }, 2000);
+      }
+    });
+    actionBar.appendChild(rebuildBtn);
+
     const scrapeBtn = btn('scrape', 'sl-btn-ghost sl-btn-sm', async () => {
       scrapeBtn.textContent = 'scraping...';
       const updates = await deepScrapeChart(song);
@@ -1136,49 +1238,7 @@ export async function renderSongFocus(root, songId, setlistId) {
         await ensureDriveAccess();
 
         createBtn.textContent = 'researching song...';
-        // Best-first chart ladder: (1) AI-drafted chart with web grounding
-        // (knows form + bar counts), (2) chord-sheet scrape converted to
-        // numbers, (3) fill-in template. Audio-analysis metadata fetches in
-        // parallel and improves whichever tier lands.
-        const metaPromise = fetchSongMeta(song);
-        const ai = await fetchAiChart(song);
-        const meta = await metaPromise;
-        const extra = { key: meta?.key || '', bpm: meta?.bpm || 0, time: meta?.time || '' };
-
-        let text;
-        const applied = {};
-        if (ai.ok) {
-          createBtn.textContent = 'drafting number chart (AI)...';
-          text = buildAiChartText(song, ai.data, extra);
-          applied.key = ai.data.key;
-          applied.bpm = ai.data.bpm;
-          applied.capo = ai.data.capo;
-          applied.artist = ai.data.artist;
-        } else {
-          if (ai.reason !== 'no-ai-key') console.warn('[setlist] AI chart unavailable:', ai.reason);
-          const chart = await fetchWebChartData(song);
-          if (chart.ok) {
-            createBtn.textContent = 'drafting number chart...';
-            text = buildChartText(song, chart.data, extra);
-            applied.key = chart.data.key;
-            applied.capo = chart.data.capo;
-            applied.artist = chart.data.artist;
-          } else {
-            console.warn('[setlist] chart data unavailable:', chart.reason);
-            createBtn.textContent = chart.reason === 'worker-outdated'
-              ? 'worker outdated — template...'
-              : 'no chords found — template...';
-            text = buildTemplateChartText(song, extra);
-          }
-        }
-
-        const webViewLink = await createChartDoc(song, text);
-        song.chartUrl = webViewLink;
-        if (!song.key) song.key = applied.key || meta?.key || '';
-        if (!song.bpm) song.bpm = applied.bpm || meta?.bpm || 0;
-        if (!song.capo && applied.capo) song.capo = applied.capo;
-        if (!song.artist && applied.artist) song.artist = applied.artist;
-        await store.putSong(song);
+        const webViewLink = await researchAndCreateChartDoc(song, (s) => { createBtn.textContent = s; });
         // window.open this long after the tap gets popup-blocked on mobile —
         // fall back to a toast whose link the user taps (a real gesture).
         const win = window.open(webViewLink, '_blank');
@@ -2094,7 +2154,9 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const navPos = el('span', 'sl-song-nav-pos');
   const nextBtn = btn('next &rarr;', 'sl-btn-ghost sl-btn-sm', () => go(1));
   // Invert sits in the top control strip; nav bar keeps only prev/next.
-  const invertBtn = btn('invert', 'sl-btn-ghost sl-btn-sm sl-perform-invert', () => {
+  // Glyph-only to save strip space — the song page's "◐ invert" button
+  // teaches what the symbol means.
+  const invertBtn = btn('◐', 'sl-btn-ghost sl-btn-sm sl-perform-invert', () => {
     invertActive = !invertActive;
     localStorage.setItem('voidstar.setlist.invertChart', invertActive ? '1' : '0');
     if (currentChartWrap) currentChartWrap.classList.toggle('sl-chart-inverted', invertActive);
@@ -2419,6 +2481,8 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
   // width-driven aspect ratio (as perform mode does) makes the box stable
   // regardless of toolbar height.
   const stage = el('div', 'sl-annotation-stage');
+  // The editor follows the regular views' inversion preference.
+  if (detailInvertActive()) stage.classList.add('sl-chart-inverted');
 
   // Offline-cached chart first (flat — text for docs, image otherwise — which
   // scrolls with the canvas and stays aligned); live text export for docs,

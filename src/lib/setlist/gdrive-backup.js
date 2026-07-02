@@ -137,6 +137,25 @@ async function getAccessToken({ interactive = true } = {}) {
   });
 }
 
+// Trash (not hard-delete — recoverable from Drive's trash) a chart doc this
+// app created. drive.file scope only reaches files the app made, so calling
+// this on a community/foreign chart fails silently — exactly right when
+// "rebuild doc" replaces a generated doc but should merely unlink anything
+// else. Fire-and-forget; never blocks or breaks the caller.
+export async function trashChartDoc(chartUrl) {
+  const m = (chartUrl || '').match(/(?:file|document)\/d\/([a-zA-Z0-9_-]+)/);
+  if (!m) return;
+  try {
+    const token = await getAccessToken({ interactive: false });
+    if (!token) return;
+    await fetch(`https://www.googleapis.com/drive/v3/files/${m[1]}`, {
+      method: 'PATCH',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trashed: true }),
+    });
+  } catch {}
+}
+
 // Acquire (or refresh) the Drive OAuth token NOW, while still inside a user
 // gesture. Mobile browsers only allow the GIS consent popup in the immediate
 // gesture window — an await-heavy flow that asks for the token after seconds

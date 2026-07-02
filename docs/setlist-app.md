@@ -171,7 +171,10 @@ four tiers, in order:
    on it unmodified — the generated header (`Key:`/`Time:`/`BPM:`/`Capo:`)
    intentionally matches what `extractFromText` parses; for freeform
    hand-drawn charts, the in-app annotation canvas already draws on top of
-   any linked document.
+   any linked document. The song page's "rebuild doc" button re-runs this
+   same ladder for a song that already has a chart, replacing the link and
+   trashing the old doc when this app created it (`trashChartDoc` —
+   drive.file scope can't touch community charts, so those just unlink).
 
 Tiers 1–3 are available per-song via `searchChartForSong()` in `sync.js`
 (the "search for chart" button, which reports its stage and returns
