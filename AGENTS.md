@@ -34,6 +34,11 @@ There are also three **legacy standalone lab pages** (`/lab/cymatics`, `/lab/spe
 `/lab/pose-particles`) — self-contained early experiments whose patterns were extracted into the
 qualia harness. They still work but are not the instrument; don't add features there.
 
+Separately, `/lab/setlist` is an **active standalone app** (not legacy): a gig setlist / Nashville-
+number-chart / annotation tool with Google Drive backup and a Cloudflare Worker
+(`workers/setlist-sync/`) for Spotify/Drive/web-search/AI chart building. It shares nothing with
+the qualia engine — see [`docs/setlist-app.md`](docs/setlist-app.md) before touching it.
+
 ## Read first — canonical sources of truth
 
 Don't restate these; read the relevant one for your task. This file is the map and the
@@ -49,6 +54,7 @@ non-negotiables; the technical detail lives in the docs below.
 | Sequencer kits + samples shared with Strudel (the `strudel.json` pipeline) | [`docs/samples.md`](docs/samples.md) |
 | Live coding — Strudel REPL, Hydra bridge, the `qualia.setParam` surface | [`docs/livecoding.md`](docs/livecoding.md) |
 | Audience participation + pose — the entanglement mesh and pose pipeline | [`docs/entanglement.md`](docs/entanglement.md) |
+| The setlist app (`/lab/setlist`) — data model, backup vs auto-link, chart-fallback ladder, annotations, its worker | [`docs/setlist-app.md`](docs/setlist-app.md) |
 | Arcade games / playable visualizers | [`plans/arcade-quale-plan.md`](plans/arcade-quale-plan.md) (+ `src/lib/qualia/fx/arcade/`) |
 | Site theming / CSS themes | [`docs/THEMES.md`](docs/THEMES.md) |
 | Known refactors, perf wins, and tech-debt backlog | [`plans/maintenance-backlog.md`](plans/maintenance-backlog.md) |

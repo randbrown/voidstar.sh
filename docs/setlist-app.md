@@ -32,6 +32,34 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 and including `snapshots` would recurse the whole backup into every snapshot.
 Everything else round-trips through backup — including `annotations`.
 
+### Local state outside IndexedDB
+
+Per-device preferences live in web storage and deliberately do **not** ride
+the Drive backup:
+
+| Key | Store | What |
+|---|---|---|
+| `voidstar.setlist.sources` | localStorage | worker URL + personal/community Drive chart-folder ids (Settings → "sources & auto-link") |
+| `voidstar.setlist.gdrive.clientId` | localStorage | Google OAuth client id |
+| `voidstar.setlist.gdrive.token` | localStorage | cached OAuth access token (~1 h) |
+| `voidstar.setlist.gdrive.lastBackupAt` / `.lastHistoryAt` | localStorage | backup + history-rotation throttle timestamps |
+| `voidstar.setlist.gdrive.backupsFolderId` / `.chartsFolderId` | localStorage | cached Drive folder ids ("voidstar backups" / "voidstar charts") |
+| `voidstar.setlist.chartAppearance.detail` / `.perform` | localStorage | per-mode chart look, `'dark'` \| `'light'` (see the chart-appearance section); legacy `voidstar.setlist.invertChartDetail` / `.invertChart` migrate `1`→dark, `0`→light |
+| `voidstar.setlist.noteDraft.<songId>` | sessionStorage | uncommitted note-composer draft (survives focus-driven `refresh()` and app-switching; cleared on save) |
+
+### Practice statuses
+
+`song.statuses` holds zero or more keys from `SONG_STATUSES` (`views.js`):
+`todo` / `needsWork` / `ok` / `goodToGo` / `steelLead`, in that display
+order, abbreviated `todo`/`work`/`ok`/`go`/`steel`, with per-status colors
+keyed by the `data-s` attribute (`--st` rules in `setlist.astro`). They're
+toggled as chips on the song page and rendered as small badges
+(`statusBadges()`) on setlist and library rows — **not** in perform mode.
+The library view has matching filter chips with AND semantics (selecting
+`needsWork` + `steelLead` shows songs carrying both). Toggling goes through
+`store.putSong`, which bumps `updatedAt`, so statuses merge correctly
+through Drive backup.
+
 ## Re-rendering: `refresh()` vs `navigate()`
 
 `navigate(hash)` only sets `location.hash`; the router (`route()`) re-renders
@@ -98,6 +126,23 @@ Drive-backup feature presents as "drive backup" / "backing up" / "backed up"
 presents as "auto-link" ("auto-link now" in Settings, "auto-link" on the
 setlist page, "matching songs…" in the progress overlay). Internal
 identifiers (`sync.js`, `runManualSync`, `sl-sync-*` CSS) keep their names.
+
+### Spotify links: auto-link never overwrites — "relink" fixes a bad match
+
+Auto-link fills `spotifyUri` only when it's empty, so a wrong link (early
+versions fell back to a global title search on playlist-fetch failure,
+which loved karaoke covers) sticks until fixed by hand. The song page's
+"relink spotify" button opens a picker over the *reference playlists'
+actual tracks*: `getReferencePlaylistTracks(setlist)` (`sync.js`) fetches
+every setlist's `spotifyUrl` playlist through the worker and returns
+`{tracks, problems}` — `problems` carries the real reason whenever tracks
+come back empty (no worker URL configured, no playlist URL set on any
+setlist, a share short-link or album URL where a playlist link is needed,
+or the worker's actual Spotify error), because silently saying "no playlist
+tracks" about a playlist the user is looking at in Spotify reads as data
+loss. `renderSpotifyPicker` (`views.js`) ranks rows by title match score,
+has a filter input, caps rendering at 100 rows, and writes titles via
+`textContent` (playlist data is untrusted).
 
 ## Chart-fallback ladder
 
@@ -174,7 +219,7 @@ four tiers, in order:
    (Drive's thumbnail endpoint even answers one with a login page — which,
    before blob validation in `chart-cache.js` and the content-type check on
    `/drive/file/:id/image`, could get cached as a permanently broken "chart
-   image"; `getOfflineChartUrl` now self-heals such poisoned entries). When neither AI nor a chord source delivers, it falls back to a
+   image"; `getOfflineChart` now self-heals such poisoned entries). When neither AI nor a chord source delivers, it falls back to a
    structured fill-in template — still carrying any derived key/BPM/time —
    rather than a blank page. It's a Doc (not a Drawing) so
    the worker's existing plain-text scraping (`handleDriveFileMeta`) works
@@ -220,6 +265,72 @@ when a song has annotations it gets `.sl-has-annotations` (set in
 `renderPerformMode`), whose CSS makes the image fill the box like the canvas.
 If you touch perform-mode chart layout, preserve this: chart rect == canvas
 rect == the `aspect` box, or annotations drift.
+
+Text-chart typography is deterministic on purpose: `.sl-text-chart` metrics
+are container-relative (`cqw`) and the stack pins `'JetBrains Mono'` at
+weight 500 — a weight the site's Google Fonts import actually ships.
+Requesting an unshipped weight would synthesize differently per OS, change
+line wrapping, and move annotations between devices.
+
+## Chart rendering on the song page (and how "appearance" works)
+
+`renderInlineChart()` (song page) and perform mode pick a chart rendering
+in this order:
+
+1. **Offline cache** — `getOfflineChart(songId, song.chartUrl)`
+   (`chart-cache.js`) returns a typed result: `{kind:'text', text}` for
+   Google-Doc charts (cached as plain text), `{kind:'image', url}` (an
+   object URL the caller must revoke) for everything else. Passing the
+   current `chartUrl` invalidates a stale blob after a relink, and
+   unrenderable blobs (HTML login pages cached before validation existed)
+   self-heal by deletion.
+2. **Live text export** — Google-Doc charts fetch
+   `GET /drive/file/:id/text` (`fetchChartText`) and mount flat via
+   `mountTextChart`.
+3. **`mountRemoteChartInto()`** for everything else: the flattened Drive
+   thumbnail image first (aligned and annotatable), the Docs/Drive preview
+   iframe only as a last resort (its internal scroll breaks annotation
+   alignment, and Google may CSP-block the frame entirely on devices not
+   signed in — visible as `frame-ancestors` console errors), and a bare
+   `<img>` for direct image links. It also warms this device's offline
+   cache in the background (`cacheChartForSong`) so any iframe fallback is
+   a first-visit-only experience.
+
+**Chart appearance is a per-mode target look, not an invert toggle.** The
+"◐ dark charts / ◐ light charts" button stores `'dark'` or `'light'`
+separately for the detail and perform views (keys in the state table
+above; default `'dark'`). It's a *target* because the two document types
+start from opposite places: scans/PDFs are natively white, so "dark"
+inverts them (`filter: invert(1) hue-rotate(180deg)`), while generated
+text charts are natively dark, so "light" restyles them to paper
+(`#f4f1e8` background, dark text) with no filter at all. A single shared
+invert switch did opposite things to the two types — don't reintroduce
+one. The CSS classes are `.sl-charts-dark` / `.sl-charts-light` on the
+stage box (rules in `setlist.astro`, applied by `applyChartAppearance` in
+`views.js`). Annotation ink keeps a subtle dark halo (`drop-shadow` on the
+canvases) so strokes stay readable on both light and dark grounds.
+
+## Mobile & gesture rules (learned the hard way)
+
+- **OAuth needs the tap.** GIS token popups are popup-blocked unless
+  requested synchronously inside the user gesture. Any handler that might
+  need Drive access (create doc, rebuild doc, backup) must call
+  `ensureDriveAccess()` *first*, before any `await` — an async hop first
+  means a blocked popup and a silent `error_callback` rejection on
+  Android.
+- **`window.open` after async work is blocked too.** When a long flow ends
+  by opening the new doc, `window.open` can return `null` on mobile;
+  `showLinkToast()` (`views.js`) is the fallback — a toast holding a real
+  `<a>` the user taps.
+- **Typed-but-uncommitted input must survive re-renders.** The app-wide
+  focus pull (`watchFocusSync`) calls `refresh()`, which rebuilds the
+  view — classic Android flow: type half a note, check something in
+  another app, come back to an empty box. The note composer mirrors every
+  keystroke to `sessionStorage` (`noteDraft.<songId>`) and restores it on
+  render; saving clears it.
+- **Swipe-to-navigate lives only in perform mode.** The song page had it
+  and lost it — dragging a text selection in the notes field reads as a
+  swipe. Song-page navigation is the prev/next buttons only.
 
 ## Cloudflare Worker (`workers/setlist-sync/index.js`)
 
