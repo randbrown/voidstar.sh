@@ -17,9 +17,21 @@ async function saveAnnotation(songId, strokes, aspect) {
   await putAnnotation({ songId, strokes, aspect: aspect || null });
 }
 
+// Text-annotation typography is deterministic and width-relative on purpose:
+// stroke coordinates are normalized to the canvas box, so the font must scale
+// with that same box or the text's footprint drifts relative to the chart
+// between devices. The stack is also pinned — a var(--font-mono) inside a
+// canvas font is invalid CSS and gets silently ignored, which is what left
+// text annotations stuck at the canvas default 10px sans-serif regardless of
+// the chosen size.
+const ANN_TEXT_FONT = "'JetBrains Mono', ui-monospace, monospace";
+function annTextFontPx(stroke, canvas) {
+  return (stroke.size * canvas.width) / 200; // size 4 ("Medium") ≈ 2% of width
+}
+
 export function drawStrokeOnCanvas(ctx, canvas, stroke) {
   if (stroke.type === 'text') {
-    ctx.font = `${stroke.size * 4}px var(--font-mono), monospace`;
+    ctx.font = `${annTextFontPx(stroke, canvas)}px ${ANN_TEXT_FONT}`;
     ctx.fillStyle = stroke.color;
     ctx.fillText(stroke.text, stroke.x * canvas.width, stroke.y * canvas.height);
     return;
@@ -109,6 +121,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   let undoStack = [];
   let selectedIndex = -1;
   let selDrag = null;
+  let pendingText = null;
   let longPressTimer = null;
   let longPressStart = null;
   const LONG_PRESS_MS = 500;
@@ -135,16 +148,34 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
         ctx.lineWidth = 1.5;
         ctx.setLineDash([6, 4]);
         ctx.strokeRect(b.x, b.y, b.w, b.h);
+        if (strokes[selectedIndex].type === 'text') {
+          // Resize handle: drag the bottom-right corner to scale the text.
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#4ea1ff';
+          ctx.fillRect(b.x + b.w - 5, b.y + b.h - 5, 10, 10);
+        }
         ctx.restore();
       }
     }
   }
 
+  // Generous touch target around the selection box's bottom-right corner.
+  const HANDLE_HIT_PX = 20;
+  function onResizeHandle(pos) {
+    const s = selectedIndex >= 0 ? strokes[selectedIndex] : null;
+    if (!s || s.type !== 'text') return false;
+    const b = strokeBBox(s);
+    if (!b) return false;
+    const px = pos.x * canvas.width;
+    const py = pos.y * canvas.height;
+    return Math.abs(px - (b.x + b.w)) <= HANDLE_HIT_PX && Math.abs(py - (b.y + b.h)) <= HANDLE_HIT_PX;
+  }
+
   // Bounding box of a stroke in canvas pixels (used for select/hit-test).
   function strokeBBox(stroke) {
     if (stroke.type === 'text') {
-      const fontPx = stroke.size * 4;
-      ctx.font = `${fontPx}px var(--font-mono), monospace`;
+      const fontPx = annTextFontPx(stroke, canvas);
+      ctx.font = `${fontPx}px ${ANN_TEXT_FONT}`;
       const w = ctx.measureText(stroke.text || '').width;
       const x = stroke.x * canvas.width;
       const y = stroke.y * canvas.height;
@@ -222,6 +253,13 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     const pos = getPos(e);
 
     if (tool === 'select') {
+      // The resize handle of an already-selected text element wins over
+      // hit-testing — it sits outside the glyphs, so hitTest alone would
+      // read the grab as a deselect.
+      if (onResizeHandle(pos)) {
+        selDrag = { startPos: pos, orig: cloneStroke(strokes[selectedIndex]), moved: false, resize: true };
+        return;
+      }
       const idx = hitTest(pos);
       selectedIndex = idx;
       selDrag = idx >= 0
@@ -233,11 +271,13 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     }
 
     if (tool === 'text') {
-      const text = prompt('Annotation text:');
-      if (!text) return;
-      strokes.push({ type: 'text', text, x: pos.x, y: pos.y, color, size: lineWidth });
-      undoStack = [];
-      redraw();
+      // Arm only — the prompt opens after the tap ENDS (see endStroke).
+      // Opening a modal inside pointerdown wedges Android Chrome: the dialog
+      // interrupts the touch sequence before pointerup, the canvas keeps its
+      // implicit pointer capture, and every later tap — even on toolbar
+      // buttons — routes back into this handler and re-prompts, with Save
+      // unreachable.
+      pendingText = pos;
       return;
     }
 
@@ -287,12 +327,35 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
       if (!selDrag || selectedIndex < 0) return;
       e.preventDefault();
       const pos = getPos(e);
+      if (selDrag.resize) {
+        // Scale the text around its anchor (baseline-left): size follows the
+        // handle's distance from the anchor relative to where the drag began.
+        const ax = selDrag.orig.x * canvas.width;
+        const ay = selDrag.orig.y * canvas.height;
+        const d0 = Math.hypot(selDrag.startPos.x * canvas.width - ax, selDrag.startPos.y * canvas.height - ay);
+        const d1 = Math.hypot(pos.x * canvas.width - ax, pos.y * canvas.height - ay);
+        if (d0 > 4) {
+          strokes[selectedIndex].size = Math.min(32, Math.max(1, selDrag.orig.size * (d1 / d0)));
+          selDrag.moved = true;
+          redraw();
+          updateSelMenu();
+        }
+        return;
+      }
       const dx = pos.x - selDrag.startPos.x;
       const dy = pos.y - selDrag.startPos.y;
       if (Math.abs(dx) > 0.004 || Math.abs(dy) > 0.004) selDrag.moved = true;
       applyTranslate(strokes[selectedIndex], selDrag.orig, dx, dy);
       redraw();
       updateSelMenu();
+      return;
+    }
+    if (tool === 'text') {
+      // A drag isn't a text tap — disarm so pointerup doesn't prompt.
+      if (pendingText) {
+        const pos = getPos(e);
+        if (Math.hypot(pos.x - pendingText.x, pos.y - pendingText.y) > 0.02) pendingText = null;
+      }
       return;
     }
     if (!currentStroke) return;
@@ -310,6 +373,25 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
 
   function endStroke(e) {
     cancelLongPress();
+    if (tool === 'text') {
+      const at = pendingText;
+      pendingText = null;
+      // Only a real tap-release prompts — pointerleave (finger slid off the
+      // canvas) just disarms.
+      if (!at || e.type !== 'pointerup') return;
+      e.preventDefault();
+      // Let go of the touch's implicit capture and let the gesture fully
+      // finish before the modal opens — see the pointerdown comment.
+      try { canvas.releasePointerCapture(e.pointerId); } catch {}
+      setTimeout(() => {
+        const text = prompt('Annotation text:');
+        if (!text) return;
+        strokes.push({ type: 'text', text, x: at.x, y: at.y, color, size: lineWidth });
+        undoStack = [];
+        redraw();
+      }, 0);
+      return;
+    }
     if (tool === 'select') {
       if (selDrag?.moved) undoStack = [];
       selDrag = null;
@@ -325,10 +407,27 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     redraw();
   }
 
+  // The browser can abort a gesture mid-stroke (notification shade, incoming
+  // modal, palm rejection). Reset without committing — a half-drawn stroke or
+  // an armed text tap must not leak into the next gesture — and put a dragged
+  // selection back where it started.
+  function cancelStroke() {
+    cancelLongPress();
+    pendingText = null;
+    currentStroke = null;
+    if (selDrag && selectedIndex >= 0 && selDrag.orig) {
+      strokes[selectedIndex] = cloneStroke(selDrag.orig);
+    }
+    selDrag = null;
+    redraw();
+    updateSelMenu();
+  }
+
   canvas.addEventListener('pointerdown', startStroke, { signal });
   canvas.addEventListener('pointermove', moveStroke, { signal });
   canvas.addEventListener('pointerup', endStroke, { signal });
   canvas.addEventListener('pointerleave', endStroke, { signal });
+  canvas.addEventListener('pointercancel', cancelStroke, { signal });
   canvas.style.touchAction = 'none';
 
   // Toolbar wiring

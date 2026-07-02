@@ -297,6 +297,16 @@ weight 500 — a weight the site's Google Fonts import actually ships.
 Requesting an unshipped weight would synthesize differently per OS, change
 line wrapping, and move annotations between devices.
 
+The same rule governs **text annotations** (`annotation.js`): the canvas
+font is a pinned stack sized relative to `canvas.width` (`size 4` ≈ 2% of
+the box width), because stroke coordinates are normalized to that box — a
+fixed pixel size would give the text a different normalized footprint on
+every device. (Also: `var(--font-mono)` is invalid inside a canvas font
+string and gets silently ignored — that once left all text annotations at
+the canvas default 10px sans-serif, immune to the size picker.) Selected
+text elements get a bottom-right corner handle for continuous drag-resize;
+`stroke.size` stays the single source of scale and may be fractional.
+
 ## Chart rendering on the song page (and how "appearance" works)
 
 `renderInlineChart()` (song page) and perform mode pick a chart rendering
@@ -379,6 +389,14 @@ not classes). Constraints to preserve:
 - **Swipe-to-navigate lives only in perform mode.** The song page had it
   and lost it — dragging a text selection in the notes field reads as a
   swipe. Song-page navigation is the prev/next buttons only.
+- **Never open a modal inside a pointer gesture.** A `prompt()` fired from
+  `pointerdown` wedges Android Chrome: the dialog interrupts the touch
+  sequence before `pointerup`, the canvas keeps its implicit pointer
+  capture, and every later tap — even on toolbar buttons — routes back into
+  the canvas handler (the text tool re-prompting forever, Save unreachable).
+  The annotation text tool arms on `pointerdown` and prompts in a
+  `setTimeout(0)` after `pointerup` + `releasePointerCapture`; a
+  `pointercancel` listener resets all gesture state without committing.
 
 ## Cloudflare Worker (`workers/setlist-sync/index.js`)
 
