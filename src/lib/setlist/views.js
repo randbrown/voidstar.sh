@@ -852,6 +852,57 @@ function setupDragReorder(container, set, setlist, opts = {}) {
 
 // ── Song Focus ──
 
+// Inline chart display for the song page — the same aspect-locked stage
+// pattern as the annotation editor (chart rect == canvas rect == the
+// stored-aspect box, see docs/setlist-app.md), rendering the cached chart
+// image (or the live embed) with the song's annotations composited
+// read-only on top.
+async function renderInlineChart(container, song, songId) {
+  const wrap = el('div', 'sl-focus-chart');
+  const stage = el('div', 'sl-annotation-stage');
+
+  const cachedChartUrl = await getOfflineChartUrl(songId, song.chartUrl);
+  if (cachedChartUrl) {
+    const img = document.createElement('img');
+    img.src = cachedChartUrl;
+    img.className = 'sl-annotation-img';
+    lockAspectToImage(img, stage);
+    stage.appendChild(img);
+    window.addEventListener('hashchange', () => URL.revokeObjectURL(cachedChartUrl), { once: true });
+  } else {
+    const embedUrl = buildChartEmbedUrl(song.chartUrl);
+    if (embedUrl) {
+      const iframe = document.createElement('iframe');
+      iframe.src = embedUrl;
+      iframe.className = 'sl-annotation-iframe';
+      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+      stage.appendChild(iframe);
+    } else {
+      const img = document.createElement('img');
+      img.src = song.chartUrl;
+      img.className = 'sl-annotation-img';
+      lockAspectToImage(img, stage);
+      stage.appendChild(img);
+    }
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'sl-annotation-canvas';
+  canvas.style.pointerEvents = 'none';
+  stage.appendChild(canvas);
+  wrap.appendChild(stage);
+  container.appendChild(wrap);
+
+  const data = await loadAnnotation(songId);
+  // Natural image aspect wins (set by lockAspectToImage); the stored
+  // authoring aspect covers iframe charts and pre-load.
+  if (data?.aspect && !stage.dataset.naturalAspect) stage.style.aspectRatio = String(data.aspect);
+  if (data?.strokes?.length) {
+    const ctrl = renderReadonlyAnnotations(canvas, data.strokes);
+    window.addEventListener('hashchange', () => ctrl.destroy(), { once: true });
+  }
+}
+
 // Web-search chart candidates that didn't clear the auto-link threshold:
 // let the user preview each one and pick. Names/URLs come from the open web,
 // so they're set via textContent (the el() helper's innerHTML would XSS).
@@ -975,10 +1026,16 @@ export async function renderSongFocus(root, songId, setlistId) {
   const actionBar = el('div', 'sl-action-bar');
   let chartCandidatesWrap = null; // filled by "search for chart" when web hits need a manual pick
   if (song.chartUrl) {
-    const inlineChartBtn = btn('chart', 'sl-btn-accent', () => {
-      navigate(`#song/${songId}/${setlistId || '_'}/chart`);
+    // The chart itself renders inline below (with annotations) — no separate
+    // chart page. "annotate" jumps straight into the full-screen editor.
+    const annotateBtn = btn('annotate', 'sl-btn-accent', () => {
+      navigate(`#song/${songId}/${setlistId || '_'}/annotate`);
     });
-    actionBar.appendChild(inlineChartBtn);
+    actionBar.appendChild(annotateBtn);
+    const editDocBtn = btn('edit doc', 'sl-btn-ghost sl-btn-sm', () => {
+      window.open(song.chartUrl, '_blank');
+    });
+    actionBar.appendChild(editDocBtn);
     const scrapeBtn = btn('scrape', 'sl-btn-ghost sl-btn-sm', async () => {
       scrapeBtn.textContent = 'scraping...';
       const updates = await deepScrapeChart(song);
@@ -1128,6 +1185,9 @@ export async function renderSongFocus(root, songId, setlistId) {
   if (isGdriveBackupEnabled() || needsReconnect()) actionBar.appendChild(syncNowButton());
   root.appendChild(actionBar);
   if (chartCandidatesWrap) root.appendChild(chartCandidatesWrap);
+
+  // Inline chart with annotations — the old read-only chart page, folded in.
+  if (song.chartUrl) await renderInlineChart(root, song, songId);
 
   // Spotify embed + timecode tracker
   let currentTimecode = 0;
@@ -2255,9 +2315,13 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   window.addEventListener('hashchange', cleanup);
 }
 
-// ── Chart View (read-only by default, toggle to annotate) ──
+// ── Annotation editor ──
+// The song page renders the chart (with annotations) inline, so this view's
+// remaining job is full-screen editing: routed with {draw:true} it opens
+// straight in draw mode and "done" saves + returns to the song page. Without
+// the option it still behaves as the old read-only chart page.
 
-export async function renderAnnotation(root, songId, setlistId) {
+export async function renderAnnotation(root, songId, setlistId, { draw = false } = {}) {
   const song = await store.getSong(songId);
   if (!song) { root.appendChild(emptyState('Song not found.')); return; }
   if (!song.chartUrl) { root.appendChild(emptyState('No chart linked to this song.')); return; }
@@ -2370,10 +2434,14 @@ export async function renderAnnotation(root, songId, setlistId) {
         ? canvasWrap.clientWidth / canvasWrap.clientHeight
         : window.innerWidth / Math.max(1, window.innerHeight - 96));
     if (!stage.dataset.naturalAspect) stage.style.aspectRatio = String(aspect);
-    if (data?.strokes?.length) {
+    // Skip the read-only paint when draw mode already owns the canvas
+    // (routed with {draw:true} — the editor loads existing strokes itself).
+    if (data?.strokes?.length && !canvasCtrl) {
       readonlyCtrl = renderReadonlyAnnotations(canvas, data.strokes);
     }
   });
+
+  if (draw) enterAnnotateMode();
 
   function enterAnnotateMode() {
     viewControls.style.display = 'none';
@@ -2389,6 +2457,15 @@ export async function renderAnnotation(root, songId, setlistId) {
     if (saveBtn) saveBtn.click();
 
     if (canvasCtrl) { canvasCtrl.destroy(); canvasCtrl = null; }
+
+    // Came straight from the song page: done = save and go back there —
+    // the inline chart shows the result.
+    if (draw) {
+      await new Promise(r => setTimeout(r, 100));
+      navigate(backHash);
+      return;
+    }
+
     viewControls.style.display = 'flex';
     drawControls.style.display = 'none';
     canvas.style.pointerEvents = 'none';

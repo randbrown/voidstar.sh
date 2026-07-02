@@ -56,8 +56,12 @@ async function route() {
         break;
       case 'song':
         if (id) setLastSongId(id);
-        if (extra2 === 'chart' || extra2 === 'annotate') {
-          await renderAnnotation(_root, id, extra === '_' ? null : extra);
+        if (extra2 === 'annotate') {
+          await renderAnnotation(_root, id, extra === '_' ? null : extra, { draw: true });
+        } else if (extra2 === 'chart') {
+          // Legacy read-only chart page — folded into the song page, which
+          // renders the chart (with annotations) inline.
+          await renderSongFocus(_root, id, extra === '_' ? null : extra);
         } else {
           await renderSongFocus(_root, id, extra);
         }

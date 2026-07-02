@@ -8,7 +8,9 @@ state library.
 - Entry point: `src/pages/lab/setlist.astro`
 - Hash-based router: `src/lib/setlist/app.js` (`#home`, `#library`,
   `#settings`, `#setlist/:id[/edit]`, `#song/:id[/:setlistId][/chart|/annotate]`,
-  `#perform/:id/:songId`)
+  `#perform/:id/:songId`). The song page renders the chart (with read-only
+  annotations) inline; `/annotate` opens the full-screen annotation editor
+  straight in draw mode, and `/chart` is a legacy alias for the song page.
 - Views are built with small DOM-builder helpers (`el()`/`btn()`) in
   `src/lib/setlist/views.js` — no JSX/templates.
 
