@@ -147,6 +147,24 @@ function vocalistDot(code, legend) {
   return `<span class="sl-vocalist" data-v="${code}" title="${name}">${code}</span>`;
 }
 
+// Personal practice/readiness statuses — global per song (not per-setlist),
+// stored as song.statuses (array of keys; absent/empty = all off). Toggled
+// on the song page; setlist rows show the abbreviated badge.
+const SONG_STATUSES = [
+  { key: 'todo', label: 'todo', abbr: 'todo' },
+  { key: 'goodToGo', label: 'good to go', abbr: 'go' },
+  { key: 'needsWork', label: 'needs work', abbr: 'work' },
+  { key: 'steelLead', label: 'steel lead', abbr: 'steel' },
+];
+
+function statusBadges(song) {
+  const active = song?.statuses || [];
+  return SONG_STATUSES
+    .filter(d => active.includes(d.key))
+    .map(d => `<span class="sl-status-badge" data-s="${d.key}" title="${d.label}">${d.abbr}</span>`)
+    .join('');
+}
+
 // Lock a chart box's aspect-ratio to the chart IMAGE's natural dimensions, so
 // the chart renders at the document's true page aspect (not the annotation's
 // authoring/viewport shape) — no stretch. The chart image and the annotation
@@ -557,6 +575,7 @@ export async function renderSetlistView(root, setlistId) {
         <div class="sl-song-card-row">
           <span class="sl-song-num">${i + 1}</span>
           <span class="sl-song-card-title">${merged.title}${merged.artist ? ` <span class="sl-song-card-artist">${merged.artist}</span>` : ''}</span>
+          ${statusBadges(song)}
           ${keyBadge(merged.key, merged._origKey)}
           ${vocalistDot(vocalist, sl.vocalistLegend)}
         </div>
@@ -1067,6 +1086,23 @@ export async function renderSongFocus(root, songId, setlistId) {
     </div>
   `;
   root.appendChild(info);
+
+  // Practice-status toggles — independent on/off chips, saved immediately.
+  const statusRow = el('div', 'sl-status-row');
+  for (const def of SONG_STATUSES) {
+    const chip = btn(def.label, 'sl-status-chip', async () => {
+      const active = new Set(song.statuses || []);
+      if (active.has(def.key)) active.delete(def.key);
+      else active.add(def.key);
+      song.statuses = [...active];
+      await store.putSong(song);
+      chip.classList.toggle('sl-on', active.has(def.key));
+    });
+    chip.dataset.s = def.key;
+    if ((song.statuses || []).includes(def.key)) chip.classList.add('sl-on');
+    statusRow.appendChild(chip);
+  }
+  root.appendChild(statusRow);
 
   // Quick edit metadata
   const editToggle = btn('edit details', 'sl-btn-sm sl-btn-ghost', () => {
