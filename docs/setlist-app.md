@@ -45,6 +45,7 @@ the Drive backup:
 | `voidstar.setlist.gdrive.lastBackupAt` / `.lastHistoryAt` | localStorage | backup + history-rotation throttle timestamps |
 | `voidstar.setlist.gdrive.backupsFolderId` / `.chartsFolderId` | localStorage | cached Drive folder ids ("voidstar backups" / "voidstar charts") |
 | `voidstar.setlist.chartAppearance.detail` / `.perform` | localStorage | per-mode chart look, `'dark'` \| `'light'` (see the chart-appearance section); legacy `voidstar.setlist.invertChartDetail` / `.invertChart` migrate `1`→dark, `0`→light |
+| `voidstar.setlist.chartEnhance` | localStorage | "✦ enhance" auto-levels for cached image charts, `'1'` (default, on) \| `'0'` (see the chart-appearance section) |
 | `voidstar.setlist.spotify.clientId` / `.token` | localStorage | Spotify user login (PKCE): client id + `{accessToken, refreshToken, expiresAt}` (see the Spotify-links section) |
 | `voidstar.setlist.spotify.pkce` | sessionStorage | PKCE verifier + return hash, alive only during the login redirect round-trip |
 | `voidstar.setlist.noteDraft.<songId>` | sessionStorage | uncommitted note-composer draft (survives focus-driven `refresh()` and app-switching; cleared on save) |
@@ -333,6 +334,29 @@ one. The CSS classes are `.sl-charts-dark` / `.sl-charts-light` on the
 stage box (rules in `setlist.astro`, applied by `applyChartAppearance` in
 `views.js`). Annotation ink keeps a subtle dark halo (`drop-shadow` on the
 canvases) so strokes stay readable on both light and dark grounds.
+
+**"✦ enhance" — auto-levels for scanned charts.** The invert filter
+*preserves* a source's contrast, and hand-drawn charts are photos/scans
+(gray pencil, off-white paper, uneven exposure) — so dark mode alone renders
+them gray-on-gray, with quality varying per scan. `chart-enhance.js` fixes
+this before display: a luminance histogram finds the ink point and the
+dominant "ground" lobe (paper — or the background of a native-dark image),
+a levels stretch pins them to true black/white, and a midtone gamma pulls
+faint strokes toward the ink end. It's self-calibrating: a clean chart maps
+to a near-identity curve, so it's safe on by default (one shared
+localStorage key, toggles on the song page's "✦ enhance" button and the
+`✦` glyph in perform's control strip; toggling re-renders — pixels change,
+not classes). Constraints to preserve:
+
+- Enhancement runs only on **cached blobs** (`getOfflineChart`'s
+  `{kind:'image', url, blob}`) — a live `drive.google.com` `<img>` is
+  cross-origin without CORS headers and would taint the canvas. First-visit
+  live renders stay raw until the background cache warm-up lands.
+- `chartDisplayUrl(cached)` (`views.js`) returns **exactly one object URL**
+  (revoking the raw one when enhancement wins), so every mount site keeps
+  its existing single revoke-on-navigate path.
+- Pixel processing keeps dimensions/aspect (a >3000px source downscales
+  proportionally), so the annotation-alignment invariant is untouched.
 
 ## Mobile & gesture rules (learned the hard way)
 

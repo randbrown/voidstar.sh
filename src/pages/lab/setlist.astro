@@ -1320,6 +1320,17 @@ const buildStamp = readBuildStamp();
     }
     .sl-perform-invert:hover { opacity: 0.85; }
     .sl-perform-invert.sl-btn-active { opacity: 1; }
+    /* Enhance (auto-levels) toggle sits just right of the appearance glyph.
+       Same no-accent treatment: the chart itself shows what the toggle did. */
+    .sl-perform-enhance {
+      position: absolute;
+      top: 0.55rem;
+      left: 8.5rem;
+      z-index: 2;
+      opacity: 0.5;
+      font-size: 0.8rem;
+    }
+    .sl-perform-enhance:hover { opacity: 0.85; }
     .sl-btn-active {
       color: var(--accent);
       border-color: var(--accent);

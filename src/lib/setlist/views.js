@@ -11,6 +11,7 @@ import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, set
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
+import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError } from './spotify-auth.js';
 
 function formatTimecode(seconds) {
@@ -1005,6 +1006,33 @@ function chartAppearanceButton(stage, mode) {
   return b;
 }
 
+// The URL a cached image chart should render: the auto-leveled version when
+// the enhance preference is on and processing succeeds, else the raw blob's
+// URL. On success the raw URL is revoked HERE — the caller ends up owning
+// exactly one object URL either way, so the existing revoke-on-navigate
+// paths need no change.
+async function chartDisplayUrl(cached) {
+  if (!chartEnhanceEnabled()) return cached.url;
+  const enhanced = await enhanceChartBlob(cached.blob);
+  if (!enhanced) return cached.url;
+  URL.revokeObjectURL(cached.url);
+  return enhanced;
+}
+
+// "✦ enhance" toggle for scanned image charts — auto-levels faint scans to
+// real ink-on-paper contrast (which the dark look then inverts cleanly).
+// Toggling re-renders the view: unlike the appearance button this changes
+// pixels, not CSS classes, so the chart has to remount.
+function chartEnhanceButton() {
+  const b = btn('✦ enhance', 'sl-btn-ghost sl-btn-xs', () => {
+    setChartEnhanceEnabled(!chartEnhanceEnabled());
+    refresh();
+  });
+  b.classList.toggle('sl-btn-active', chartEnhanceEnabled());
+  b.title = 'Auto-levels for scanned charts: pins paper to white and ink to black, so faint pencil reads on stage';
+  return b;
+}
+
 // Mount the best remote (uncached) rendering of a chart into a stage box:
 // flattened Drive image first (aligned and annotatable — Drive's thumbnail
 // endpoint rides the user's cookies, so it works even for private files),
@@ -1069,12 +1097,17 @@ async function renderInlineChart(container, song, songId) {
   if (cached?.kind === 'text') {
     stage.appendChild(mountTextChart(stage, cached.text));
   } else if (cached) {
+    const url = await chartDisplayUrl(cached);
     const img = document.createElement('img');
-    img.src = cached.url;
+    img.src = url;
     img.className = 'sl-annotation-img';
     lockAspectToImage(img, stage);
     stage.appendChild(img);
-    window.addEventListener('hashchange', () => URL.revokeObjectURL(cached.url), { once: true });
+    window.addEventListener('hashchange', () => URL.revokeObjectURL(url), { once: true });
+    // Enhance only applies to cached image charts (live cross-origin images
+    // taint the canvas; text charts have nothing to level), so the toggle
+    // only appears when it can act.
+    tools.appendChild(chartEnhanceButton());
   } else {
     // No cache: Google-Doc charts render flat from a live text export
     // (annotations can't track an iframe's internal scroll); anything else
@@ -2411,6 +2444,14 @@ export async function renderPerformMode(root, setlistId, startSongId) {
     if (currentChartWrap) applyChartAppearance(currentChartWrap, 'perform');
   });
   invertBtn.title = 'Chart look: dark for stage / light like paper';
+  // Enhance toggle — remounts the chart through the auto-levels path, so it
+  // needs a full render(), not a class flip. Shown only when the current
+  // chart is a cached image (the only kind enhance can process).
+  const enhanceBtn = btn('✦', 'sl-btn-ghost sl-btn-sm sl-perform-enhance', () => {
+    setChartEnhanceEnabled(!chartEnhanceEnabled());
+    render();
+  });
+  enhanceBtn.title = 'Boost faint scans (auto-levels)';
   navBar.appendChild(prevBtn);
   navBar.appendChild(navPos);
   navBar.appendChild(nextBtn);
@@ -2420,6 +2461,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   container.appendChild(fsBtn);
   container.appendChild(detailBtn);
   container.appendChild(invertBtn);
+  container.appendChild(enhanceBtn);
   container.appendChild(counter);
   container.appendChild(content);
   container.appendChild(navBar);
@@ -2456,6 +2498,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
     if (currentChartObjectUrl) { URL.revokeObjectURL(currentChartObjectUrl); currentChartObjectUrl = null; }
     currentChartWrap = null;
     invertBtn.style.display = 'none';
+    enhanceBtn.style.display = 'none';
     // Every song starts at 1× so a leftover zoom from the previous chart doesn't
     // carry over.
     zoomCtrl?.reset();
@@ -2566,12 +2609,16 @@ export async function renderPerformMode(root, setlistId, startSongId) {
         if (cached?.kind === 'text') {
           insertChart(mountTextChart(chartWrap, cached.text));
         } else if (cached) {
-          currentChartObjectUrl = cached.url;
+          const url = await chartDisplayUrl(cached);
+          // Re-check after the enhance pass — a fast swipe may have moved on.
+          if (currentChartWrap !== chartWrap) { URL.revokeObjectURL(url); return; }
+          currentChartObjectUrl = url;
           const img = document.createElement('img');
-          img.src = cached.url;
+          img.src = url;
           img.className = 'sl-perform-chart-img sl-chart-flat';
           lockAspectToImage(img, chartWrap);
           insertChart(img);
+          enhanceBtn.style.display = '';
         } else {
           const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
           if (currentChartWrap !== chartWrap) return;
@@ -2737,12 +2784,16 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
   if (cached?.kind === 'text') {
     stage.appendChild(mountTextChart(stage, cached.text));
   } else if (cached) {
+    // Same auto-leveled rendering as the song page — annotating a faint scan
+    // is exactly when readability matters most. (Toggle lives on the song
+    // page; the editor just follows the preference.)
+    const url = await chartDisplayUrl(cached);
     const img = document.createElement('img');
-    img.src = cached.url;
+    img.src = url;
     img.className = 'sl-annotation-img';
     lockAspectToImage(img, stage);
     stage.appendChild(img);
-    window.addEventListener('hashchange', () => URL.revokeObjectURL(cached.url), { once: true });
+    window.addEventListener('hashchange', () => URL.revokeObjectURL(url), { once: true });
   } else {
     const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
     if (liveText) stage.appendChild(mountTextChart(stage, liveText));

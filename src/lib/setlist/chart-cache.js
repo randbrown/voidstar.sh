@@ -173,9 +173,10 @@ export async function getSetlistOfflineStatus(setlist) {
 }
 
 // A song's cached chart, typed for rendering: {kind:'text', text} for
-// Google-Doc charts cached as plain text, {kind:'image', url} (an object URL
-// the caller MUST URL.revokeObjectURL() when done) for everything else, or
-// null when not cached.
+// Google-Doc charts cached as plain text, {kind:'image', url, blob} (an
+// object URL the caller MUST URL.revokeObjectURL() when done, plus the raw
+// blob so callers can run pixel processing like chart-enhance.js) for
+// everything else, or null when not cached.
 //
 // Pass the song's current chartUrl as `expectedUrl` to guard against a stale
 // blob: the cache is keyed by songId, so if the chart link later changed (e.g.
@@ -201,7 +202,7 @@ export async function getOfflineChart(songId, expectedUrl) {
       if (rec.blob.type.startsWith('text/plain')) {
         return { kind: 'text', text: await rec.blob.text() };
       }
-      return { kind: 'image', url: URL.createObjectURL(rec.blob) };
+      return { kind: 'image', url: URL.createObjectURL(rec.blob), blob: rec.blob };
     }
   } catch {}
   return null;
