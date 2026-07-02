@@ -10,7 +10,7 @@ import { findBestMatch as fuzzyMatch } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
-import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
+import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -976,6 +976,52 @@ function detailInvertButton(stage) {
   return b;
 }
 
+// Mount the best remote (uncached) rendering of a chart into a stage box:
+// flattened Drive image first (aligned and annotatable — Drive's thumbnail
+// endpoint rides the user's cookies, so it works even for private files),
+// the embeddable viewer only as a last resort (its internal scroll can't
+// keep annotations aligned, and Google may CSP-block the frame entirely on
+// devices not signed in), a bare <img> for direct image links. Also warms
+// this device's offline cache in the background so the fallback is a
+// first-visit-only experience.
+function mountRemoteChartInto(stage, song) {
+  const flatImageUrl = buildChartImageUrl(song.chartUrl);
+  const embedUrl = buildChartEmbedUrl(song.chartUrl);
+
+  const mountRawImg = () => {
+    const raw = document.createElement('img');
+    raw.src = song.chartUrl;
+    raw.className = 'sl-annotation-img';
+    lockAspectToImage(raw, stage);
+    stage.appendChild(raw);
+  };
+  const mountIframe = () => {
+    if (!embedUrl) return false;
+    const iframe = document.createElement('iframe');
+    iframe.src = embedUrl;
+    iframe.className = 'sl-annotation-iframe';
+    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+    stage.appendChild(iframe);
+    return true;
+  };
+
+  if (flatImageUrl) {
+    const img = document.createElement('img');
+    img.src = flatImageUrl;
+    img.className = 'sl-annotation-img';
+    lockAspectToImage(img, stage);
+    img.addEventListener('error', () => {
+      if (img.parentElement !== stage) return;
+      img.remove();
+      if (!mountIframe()) mountRawImg();
+    }, { once: true });
+    stage.appendChild(img);
+    cacheChartForSong(song, getSources().workerUrl).catch(() => {});
+  } else if (!mountIframe()) {
+    mountRawImg();
+  }
+}
+
 // Inline chart display for the song page — the same aspect-locked stage
 // pattern as the annotation editor (chart rect == canvas rect == the
 // stored-aspect box, see docs/setlist-app.md), rendering the cached chart
@@ -1003,24 +1049,10 @@ async function renderInlineChart(container, song, songId) {
   } else {
     // No cache: Google-Doc charts render flat from a live text export
     // (annotations can't track an iframe's internal scroll); anything else
-    // falls back to the embed/plain image.
+    // renders the flattened Drive image with the embed as last resort.
     const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
-    const embedUrl = liveText ? null : buildChartEmbedUrl(song.chartUrl);
-    if (liveText) {
-      stage.appendChild(mountTextChart(stage, liveText));
-    } else if (embedUrl) {
-      const iframe = document.createElement('iframe');
-      iframe.src = embedUrl;
-      iframe.className = 'sl-annotation-iframe';
-      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-      stage.appendChild(iframe);
-    } else {
-      const img = document.createElement('img');
-      img.src = song.chartUrl;
-      img.className = 'sl-annotation-img';
-      lockAspectToImage(img, stage);
-      stage.appendChild(img);
-    }
+    if (liveText) stage.appendChild(mountTextChart(stage, liveText));
+    else mountRemoteChartInto(stage, song);
   }
 
   const canvas = document.createElement('canvas');
@@ -2556,22 +2588,8 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
     window.addEventListener('hashchange', () => URL.revokeObjectURL(cached.url), { once: true });
   } else {
     const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
-    const embedUrl = liveText ? null : buildChartEmbedUrl(song.chartUrl);
-    if (liveText) {
-      stage.appendChild(mountTextChart(stage, liveText));
-    } else if (embedUrl) {
-      const iframe = document.createElement('iframe');
-      iframe.src = embedUrl;
-      iframe.className = 'sl-annotation-iframe';
-      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-      stage.appendChild(iframe);
-    } else {
-      const img = document.createElement('img');
-      img.src = song.chartUrl;
-      img.className = 'sl-annotation-img';
-      lockAspectToImage(img, stage);
-      stage.appendChild(img);
-    }
+    if (liveText) stage.appendChild(mountTextChart(stage, liveText));
+    else mountRemoteChartInto(stage, song);
   }
 
   const canvas = document.createElement('canvas');
