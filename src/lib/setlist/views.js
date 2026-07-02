@@ -152,8 +152,9 @@ function vocalistDot(code, legend) {
 // on the song page; setlist rows show the abbreviated badge.
 const SONG_STATUSES = [
   { key: 'todo', label: 'todo', abbr: 'todo' },
-  { key: 'goodToGo', label: 'good to go', abbr: 'go' },
   { key: 'needsWork', label: 'needs work', abbr: 'work' },
+  { key: 'ok', label: 'ok', abbr: 'ok' },
+  { key: 'goodToGo', label: 'good to go', abbr: 'go' },
   { key: 'steelLead', label: 'steel lead', abbr: 'steel' },
 ];
 
