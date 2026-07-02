@@ -1637,38 +1637,10 @@ export async function renderSongFocus(root, songId, setlistId) {
     navBar.appendChild(nextBtn);
     root.appendChild(navBar);
 
-    // Swipe listeners live on the persistent root element, which route() only
-    // clears via innerHTML — that never detaches listeners bound to root itself.
-    // Without explicit teardown they leak into the next view (e.g. the chart
-    // annotation view, where a horizontal pen stroke would fire a song nav).
-    // Tear them down on the next hashchange so they're scoped to this view.
-    const swipeAc = new AbortController();
-    let touchStartX = 0, touchStartY = 0, touchFromField = false;
-    root.addEventListener('touchstart', (e) => {
-      // A drag that starts in a text field (selection handles, cursor moves)
-      // must never count as a song-nav swipe — it would swap the view and
-      // destroy whatever was being typed.
-      touchFromField = !!e.target.closest?.('textarea, input, select, .sl-note-input');
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-    }, { passive: true, signal: swipeAc.signal });
-    root.addEventListener('touchend', (e) => {
-      if (touchFromField) return;
-      const dx = e.changedTouches[0].clientX - touchStartX;
-      const dy = e.changedTouches[0].clientY - touchStartY;
-      if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.8) {
-        if (dx < 0 && currentIdx < flatSongIds.length - 1) {
-          navigate(`#song/${flatSongIds[currentIdx + 1]}/${setlistId}`);
-        } else if (dx > 0 && currentIdx > 0) {
-          navigate(`#song/${flatSongIds[currentIdx - 1]}/${setlistId}`);
-        }
-      }
-    }, { passive: true, signal: swipeAc.signal });
-    const cleanupSwipe = () => {
-      swipeAc.abort();
-      window.removeEventListener('hashchange', cleanupSwipe);
-    };
-    window.addEventListener('hashchange', cleanupSwipe);
+    // No swipe-to-navigate here (perform mode keeps it): the song page is an
+    // editing surface — annotating, typing notes, dragging text-selection
+    // handles — where horizontal drags are routine and a misread swipe swaps
+    // the view mid-edit. The prev/next buttons above are the navigation.
   }
 }
 
