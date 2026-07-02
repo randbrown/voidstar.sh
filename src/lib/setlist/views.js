@@ -1489,11 +1489,18 @@ export async function renderSongFocus(root, songId, setlistId) {
   }
   renderNotes();
 
-  // Add note input
+  // Add note input. The draft survives re-renders (focus-sync refresh, swipe
+  // nav, app-switching to check the track) via sessionStorage — an
+  // uncommitted note must never silently vanish.
+  const draftKey = `voidstar.setlist.noteDraft.${songId}`;
   const noteInput = el('div', 'sl-note-input');
   const textarea = el('textarea', 'sl-textarea sl-textarea-sm');
   textarea.placeholder = 'Add a note...';
   textarea.rows = 2;
+  textarea.value = sessionStorage.getItem(draftKey) || '';
+  textarea.addEventListener('input', () => {
+    try { sessionStorage.setItem(draftKey, textarea.value); } catch {}
+  });
   noteInput.appendChild(textarea);
 
   // Section selector
@@ -1520,7 +1527,7 @@ export async function renderSongFocus(root, songId, setlistId) {
   noteInput.appendChild(sectionRow);
 
   async function addNote(text, source, extras = {}) {
-    if (!text) return;
+    if (!text) return false;
     const note = store.createNote(songId, text, source);
     if (isPlaying || currentTimecode > 0) note.timecode = currentTimecode;
     if (sectionSelect.value) note.section = sectionSelect.value;
@@ -1528,13 +1535,20 @@ export async function renderSongFocus(root, songId, setlistId) {
     await store.putNote(note);
     notes.push(note);
     textarea.value = '';
+    try { sessionStorage.removeItem(draftKey); } catch {}
     renderNotes();
+    // Make the commit unmissable: show the new note card.
+    notesList.lastElementChild?.scrollIntoView({ block: 'nearest' });
+    return true;
   }
 
   const noteBtns = el('div', 'sl-note-btns');
-  noteBtns.appendChild(btn('add note', 'sl-btn-primary sl-btn-sm', () => {
-    addNote(textarea.value.trim(), 'typed');
-  }));
+  const addNoteBtn = btn('add note', 'sl-btn-primary sl-btn-sm', async () => {
+    const ok = await addNote(textarea.value.trim(), 'typed');
+    addNoteBtn.textContent = ok ? '✓ added' : 'type a note first';
+    setTimeout(() => { addNoteBtn.textContent = 'add note'; }, 1200);
+  });
+  noteBtns.appendChild(addNoteBtn);
   noteBtns.appendChild(btn('+ timecode', 'sl-btn-ghost sl-btn-xs', () => {
     const text = textarea.value.trim() || `marker at ${formatTimecode(currentTimecode)}`;
     addNote(text, 'typed');
@@ -1629,12 +1643,17 @@ export async function renderSongFocus(root, songId, setlistId) {
     // annotation view, where a horizontal pen stroke would fire a song nav).
     // Tear them down on the next hashchange so they're scoped to this view.
     const swipeAc = new AbortController();
-    let touchStartX = 0, touchStartY = 0;
+    let touchStartX = 0, touchStartY = 0, touchFromField = false;
     root.addEventListener('touchstart', (e) => {
+      // A drag that starts in a text field (selection handles, cursor moves)
+      // must never count as a song-nav swipe — it would swap the view and
+      // destroy whatever was being typed.
+      touchFromField = !!e.target.closest?.('textarea, input, select, .sl-note-input');
       touchStartX = e.touches[0].clientX;
       touchStartY = e.touches[0].clientY;
     }, { passive: true, signal: swipeAc.signal });
     root.addEventListener('touchend', (e) => {
+      if (touchFromField) return;
       const dx = e.changedTouches[0].clientX - touchStartX;
       const dy = e.changedTouches[0].clientY - touchStartY;
       if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.8) {
