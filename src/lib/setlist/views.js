@@ -958,24 +958,49 @@ async function researchAndCreateChartDoc(song, setStatus) {
   return webViewLink;
 }
 
-// Per-mode chart inversion: perform mode and the regular views each remember
-// their own preference — a dark stage wants a white scan inverted, while the
-// same chart on the song page may read better as-is.
-const DETAIL_INVERT_KEY = 'voidstar.setlist.invertChartDetail';
+// Chart appearance — a per-mode 'dark'/'light' preference (perform and the
+// regular views each remember their own). This is a TARGET look, not a raw
+// invert switch: scans/PDF pages are natively white, so "dark" inverts
+// them; our text charts are natively dark, so "light" restyles them to
+// paper — a shared invert filter would do opposite things to the two
+// document types. Legacy invert prefs migrate (invert-on meant "dark").
+const CHART_APPEARANCE_KEYS = {
+  detail: 'voidstar.setlist.chartAppearance.detail',
+  perform: 'voidstar.setlist.chartAppearance.perform',
+};
+const LEGACY_INVERT_KEYS = {
+  detail: 'voidstar.setlist.invertChartDetail',
+  perform: 'voidstar.setlist.invertChart',
+};
 
-function detailInvertActive() {
-  return localStorage.getItem(DETAIL_INVERT_KEY) === '1';
+function chartAppearance(mode) {
+  const v = localStorage.getItem(CHART_APPEARANCE_KEYS[mode]);
+  if (v === 'dark' || v === 'light') return v;
+  const legacy = localStorage.getItem(LEGACY_INVERT_KEYS[mode]);
+  if (legacy === '1') return 'dark';
+  if (legacy === '0') return 'light';
+  return 'dark';
 }
 
-function detailInvertButton(stage) {
-  const b = btn('◐ invert', 'sl-btn-ghost sl-btn-xs', () => {
-    const on = !detailInvertActive();
-    localStorage.setItem(DETAIL_INVERT_KEY, on ? '1' : '0');
-    stage.classList.toggle('sl-chart-inverted', on);
-    b.classList.toggle('sl-btn-active', on);
+function setChartAppearance(mode, v) {
+  localStorage.setItem(CHART_APPEARANCE_KEYS[mode], v);
+}
+
+function applyChartAppearance(box, mode) {
+  const v = chartAppearance(mode);
+  box.classList.toggle('sl-charts-dark', v === 'dark');
+  box.classList.toggle('sl-charts-light', v === 'light');
+  return v;
+}
+
+function chartAppearanceButton(stage, mode) {
+  const label = () => (chartAppearance(mode) === 'dark' ? '◐ dark charts' : '◐ light charts');
+  const b = btn(label(), 'sl-btn-ghost sl-btn-xs', () => {
+    setChartAppearance(mode, chartAppearance(mode) === 'dark' ? 'light' : 'dark');
+    applyChartAppearance(stage, mode);
+    b.innerHTML = label();
   });
-  b.title = 'Invert chart colors';
-  if (detailInvertActive()) b.classList.add('sl-btn-active');
+  b.title = 'Chart look: dark for stage, light like paper — each document type inverts only when it needs to';
   return b;
 }
 
@@ -1033,10 +1058,10 @@ function mountRemoteChartInto(stage, song) {
 async function renderInlineChart(container, song, songId) {
   const wrap = el('div', 'sl-focus-chart');
   const stage = el('div', 'sl-annotation-stage');
-  if (detailInvertActive()) stage.classList.add('sl-chart-inverted');
+  applyChartAppearance(stage, 'detail');
 
   const tools = el('div', 'sl-chart-tools');
-  tools.appendChild(detailInvertButton(stage));
+  tools.appendChild(chartAppearanceButton(stage, 'detail'));
   container.appendChild(tools);
 
   const cached = await getOfflineChart(songId, song.chartUrl);
@@ -2316,7 +2341,6 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   });
   detailBtn.title = 'Song details';
 
-  let invertActive = localStorage.getItem('voidstar.setlist.invertChart') === '1';
   let currentChartWrap = null;
   // Object URL for the currently-shown cached chart blob, if any. Revoked when
   // we move off the song (in render's reset) and on teardown, so blobs don't
@@ -2328,17 +2352,16 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const prevBtn = btn('&larr; prev', 'sl-btn-ghost sl-btn-sm', () => go(-1));
   const navPos = el('span', 'sl-song-nav-pos');
   const nextBtn = btn('next &rarr;', 'sl-btn-ghost sl-btn-sm', () => go(1));
-  // Invert sits in the top control strip; nav bar keeps only prev/next.
-  // Glyph-only to save strip space — the song page's "◐ invert" button
-  // teaches what the symbol means.
+  // Appearance toggle sits in the top control strip; nav bar keeps only
+  // prev/next. Glyph-only to save strip space — the song page's labeled
+  // "◐ dark/light charts" button teaches what the symbol means.
   const invertBtn = btn('◐', 'sl-btn-ghost sl-btn-sm sl-perform-invert', () => {
-    invertActive = !invertActive;
-    localStorage.setItem('voidstar.setlist.invertChart', invertActive ? '1' : '0');
-    if (currentChartWrap) currentChartWrap.classList.toggle('sl-chart-inverted', invertActive);
-    invertBtn.classList.toggle('sl-btn-active', invertActive);
+    setChartAppearance('perform', chartAppearance('perform') === 'dark' ? 'light' : 'dark');
+    if (currentChartWrap) applyChartAppearance(currentChartWrap, 'perform');
+    invertBtn.classList.toggle('sl-btn-active', chartAppearance('perform') === 'dark');
   });
-  invertBtn.title = 'Invert chart colors for dark stage';
-  if (invertActive) invertBtn.classList.add('sl-btn-active');
+  invertBtn.title = 'Chart look: dark for stage / light like paper';
+  invertBtn.classList.toggle('sl-btn-active', chartAppearance('perform') === 'dark');
   navBar.appendChild(prevBtn);
   navBar.appendChild(navPos);
   navBar.appendChild(nextBtn);
@@ -2422,11 +2445,11 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 
     if (song.chartUrl) {
       invertBtn.style.display = '';
-      invertBtn.classList.toggle('sl-btn-active', invertActive);
+      invertBtn.classList.toggle('sl-btn-active', chartAppearance('perform') === 'dark');
 
       const chartWrap = el('div', 'sl-perform-chart-wrap');
       currentChartWrap = chartWrap;
-      if (invertActive) chartWrap.classList.add('sl-chart-inverted');
+      applyChartAppearance(chartWrap, 'perform');
 
       // Canvas (annotation overlay) is appended first so it stays the last
       // child — i.e. stacked above whatever chart element we insert before it.
@@ -2656,8 +2679,8 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
   // width-driven aspect ratio (as perform mode does) makes the box stable
   // regardless of toolbar height.
   const stage = el('div', 'sl-annotation-stage');
-  // The editor follows the regular views' inversion preference.
-  if (detailInvertActive()) stage.classList.add('sl-chart-inverted');
+  // The editor follows the regular views' appearance preference.
+  applyChartAppearance(stage, 'detail');
 
   // Offline-cached chart first (flat — text for docs, image otherwise — which
   // scrolls with the canvas and stays aligned); live text export for docs,

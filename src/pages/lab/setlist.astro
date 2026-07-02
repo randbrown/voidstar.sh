@@ -1013,19 +1013,24 @@ const buildStamp = readBuildStamp();
     .sl-perform-chart-canvas {
       filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9)) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
     }
-    /* Inversion works per-mode (perform and the regular views each remember
-       their own toggle). White scans flip to dark; dark text charts flip to
-       a light "paper" look. Ink stays un-inverted on text charts so drawn
-       colors read as drawn; on scans it inverts with the chart (as before). */
-    .sl-chart-inverted .sl-annotation-iframe,
-    .sl-chart-inverted .sl-annotation-img,
-    .sl-chart-inverted .sl-annotation-canvas,
-    .sl-chart-inverted .sl-text-chart {
+    /* Chart appearance — the toggle stores a TARGET look ('dark'/'light'),
+       and each document type inverts only when it needs to: scans/PDF pages
+       are natively white, so DARK mode inverts them (their ink canvas
+       inverts along, matching how the strokes were drawn); our flat text
+       charts are natively dark, so LIGHT mode restyles them to paper and
+       their ink never inverts. */
+    .sl-charts-dark .sl-annotation-iframe,
+    .sl-charts-dark .sl-annotation-img,
+    .sl-charts-dark .sl-annotation-canvas {
       filter: invert(1) hue-rotate(180deg);
     }
-    .sl-chart-inverted.sl-text-stage .sl-perform-chart-canvas,
-    .sl-chart-inverted.sl-text-stage .sl-annotation-canvas {
+    .sl-charts-dark.sl-text-stage .sl-annotation-canvas,
+    .sl-charts-dark.sl-text-stage .sl-perform-chart-canvas {
       filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9)) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+    }
+    .sl-charts-light .sl-text-chart {
+      background: #f4f1e8;
+      color: #16181f;
     }
 
     /* Mini toolbar above the song page's inline chart */
@@ -1319,11 +1324,11 @@ const buildStamp = readBuildStamp();
       color: var(--accent);
       border-color: var(--accent);
     }
-    .sl-chart-inverted .sl-perform-chart-iframe,
-    .sl-chart-inverted .sl-perform-chart-img {
+    .sl-charts-dark .sl-perform-chart-iframe,
+    .sl-charts-dark .sl-perform-chart-img {
       filter: invert(1) hue-rotate(180deg);
     }
-    .sl-chart-inverted .sl-perform-chart-canvas {
+    .sl-charts-dark .sl-perform-chart-canvas {
       filter: invert(1) hue-rotate(180deg);
     }
 
