@@ -5,8 +5,8 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta } from './sync.js';
-import { findBestMatch as fuzzyMatch } from './match.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, getReferencePlaylistTracks } from './sync.js';
+import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
@@ -1072,6 +1072,64 @@ async function renderInlineChart(container, song, songId) {
   }
 }
 
+// The setlist's reference-playlist tracks, ranked by title match, for
+// relinking a song's Spotify URL to the RIGHT track (auto-matching can land
+// on a same-titled cover/karaoke cut). Filter box for long playlists; "open"
+// previews the track, "use" links it. Track names come from Spotify — set
+// via textContent, never innerHTML.
+function renderSpotifyPicker(wrap, tracks, song) {
+  wrap.innerHTML = '';
+  wrap.appendChild(el('div', 'sl-section-title', 'pick the right track from the playlist'));
+  const filter = el('input', 'sl-search');
+  filter.type = 'search';
+  filter.placeholder = 'filter tracks...';
+  wrap.appendChild(filter);
+  const list = el('div', 'sl-chart-candidates');
+  wrap.appendChild(list);
+
+  const ranked = tracks
+    .map(t => ({ t, score: matchScore(song.title, t.title) }))
+    .sort((a, b) => b.score - a.score);
+
+  const MAX_ROWS = 100;
+  function renderRows(query) {
+    const lower = (query || '').toLowerCase();
+    list.innerHTML = '';
+    let shown = 0;
+    for (const { t, score } of ranked) {
+      if (lower && !`${t.title} ${t.artist}`.toLowerCase().includes(lower)) continue;
+      if (++shown > MAX_ROWS) {
+        list.appendChild(el('div', 'sl-hint', `…and more — type to filter`));
+        break;
+      }
+      const row = el('div', 'sl-chart-candidate');
+      const info = el('div', 'sl-chart-candidate-info');
+      const name = el('div', 'sl-chart-candidate-name');
+      name.textContent = t.title;
+      info.appendChild(name);
+      const meta = el('div', 'sl-chart-candidate-meta');
+      meta.textContent = `${t.artist}${score >= 0.5 ? ` · ${Math.round(score * 100)}% match` : ''}`;
+      info.appendChild(meta);
+      row.appendChild(info);
+      const open = el('a', 'sl-btn sl-btn-ghost sl-btn-xs', 'open');
+      open.href = t.spotifyUrl;
+      open.target = '_blank';
+      open.rel = 'noopener';
+      row.appendChild(open);
+      row.appendChild(btn('use', 'sl-btn-primary sl-btn-xs', async () => {
+        song.spotifyUri = t.spotifyUrl;
+        if (t.artist && !song.artist) song.artist = t.artist;
+        await store.putSong(song);
+        refresh();
+      }));
+      list.appendChild(row);
+    }
+    if (!shown) list.appendChild(el('div', 'sl-hint', 'no matching tracks'));
+  }
+  filter.addEventListener('input', () => renderRows(filter.value));
+  renderRows('');
+}
+
 // Web-search chart candidates that didn't clear the auto-link threshold:
 // let the user preview each one and pick. Names/URLs come from the open web,
 // so they're set via textContent (the el() helper's innerHTML would XSS).
@@ -1350,6 +1408,30 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     actionBar.appendChild(spBtn);
   }
+  // Relink (or first-link) the Spotify track from the reference playlist —
+  // the antidote to auto-matching landing on a same-titled cover.
+  const spotifyPickerWrap = el('div', 'sl-spotify-picker');
+  const relinkLabel = song.spotifyUri ? 'relink spotify' : 'pick spotify track';
+  const relinkBtn = btn(relinkLabel, 'sl-btn-ghost sl-btn-sm', async () => {
+    relinkBtn.disabled = true;
+    relinkBtn.textContent = 'loading playlist...';
+    try {
+      const tracks = await getReferencePlaylistTracks(setlist);
+      if (tracks.length) {
+        renderSpotifyPicker(spotifyPickerWrap, tracks, song);
+        relinkBtn.textContent = 'pick below';
+      } else {
+        relinkBtn.textContent = 'no playlist tracks';
+      }
+    } catch (e) {
+      relinkBtn.textContent = 'playlist fetch failed';
+    }
+    setTimeout(() => {
+      relinkBtn.textContent = relinkLabel;
+      relinkBtn.disabled = false;
+    }, 2200);
+  });
+  actionBar.appendChild(relinkBtn);
   actionBar.appendChild(btn('⇣', 'sl-btn-icon', async () => {
     const data = await store.exportSong(songId);
     if (data) downloadJson(data, `song-${song.title.replace(/\s+/g, '-').toLowerCase()}.json`);
@@ -1359,6 +1441,7 @@ export async function renderSongFocus(root, songId, setlistId) {
   if (isGdriveBackupEnabled() || needsReconnect()) actionBar.appendChild(syncNowButton());
   root.appendChild(actionBar);
   if (chartCandidatesWrap) root.appendChild(chartCandidatesWrap);
+  root.appendChild(spotifyPickerWrap);
 
   // Inline chart with annotations — the old read-only chart page, folded in.
   if (song.chartUrl) await renderInlineChart(root, song, songId);

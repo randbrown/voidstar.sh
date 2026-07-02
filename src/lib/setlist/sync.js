@@ -402,6 +402,33 @@ export async function deepScrapeChart(song) {
   }
 }
 
+// All reference-playlist tracks relevant to a song — its setlist's playlist
+// when viewing in setlist context, else every setlist's playlist (deduped).
+// Backs the song page's "relink spotify" picker: auto-matching can grab a
+// same-titled cover/karaoke track, and the fix is choosing the real one
+// from the playlist itself.
+export async function getReferencePlaylistTracks(setlist) {
+  const sources = getSources();
+  if (!sources.workerUrl) return [];
+
+  let urls;
+  if (setlist?.spotifyUrl) {
+    urls = [setlist.spotifyUrl];
+  } else {
+    const all = await store.getAllSetlists();
+    urls = [...new Set(all.map(sl => sl.spotifyUrl).filter(Boolean))];
+  }
+
+  const tracks = [];
+  for (const url of urls) {
+    try {
+      tracks.push(...await fetchSpotifyTracks(sources.workerUrl, url));
+    } catch {}
+  }
+  const seen = new Set();
+  return tracks.filter(t => t.spotifyUrl && !seen.has(t.spotifyUrl) && seen.add(t.spotifyUrl));
+}
+
 export function spotifySearchUrl(title, artist) {
   const q = encodeURIComponent(artist ? `${title} ${artist}` : title);
   return `https://open.spotify.com/search/${q}`;
