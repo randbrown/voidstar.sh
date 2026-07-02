@@ -11,6 +11,7 @@ import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, set
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
+import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError } from './spotify-auth.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -1959,6 +1960,54 @@ export async function renderSettings(root) {
   const unlinkedList = el('div', 'sl-source-list');
   spotifySection.appendChild(unlinkedList);
   root.appendChild(spotifySection);
+
+  // Spotify user login (PKCE) — playlist reads run as the signed-in user.
+  // Needed when the worker reports "playlist not readable with client
+  // credentials" (newer Spotify app registrations), and for private or
+  // collaborative playlists, which client credentials can never see.
+  const spotifyAuthSection = el('div', 'sl-section');
+  spotifyAuthSection.innerHTML = `
+    <div class="sl-section-title">spotify account</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Connect your Spotify account so playlist reads run as you — the fix when
+      auto-link/relink says "playlist not readable with client credentials",
+      and the only way to read private or collaborative playlists. Uses the
+      same client id as the worker; no secret is involved. One-time setup: in
+      the Spotify developer dashboard (developer.spotify.com → your app →
+      Settings → Redirect URIs) add exactly:
+      <code>${spotifyRedirectUri()}</code>
+    </div>
+    <label class="sl-label">Spotify Client ID
+      <input class="sl-input" id="sl-spotify-client-id" value="${getSpotifyClientId()}" placeholder="client id from developer.spotify.com">
+    </label>
+  `;
+  const spotifyIdInput = spotifyAuthSection.querySelector('#sl-spotify-client-id');
+  spotifyIdInput?.addEventListener('change', () => setSpotifyClientId(spotifyIdInput.value));
+
+  const spotifyAuthStatus = el('div', 'sl-hint',
+    spotifyLoginError() || (isSpotifyConnected() ? 'Connected — playlists are read as your account.' : 'Not connected.'));
+  if (spotifyLoginError()) spotifyAuthStatus.style.color = 'var(--red, #f66)';
+
+  const spotifyAuthActions = el('div', 'sl-action-bar');
+  if (isSpotifyConnected()) {
+    spotifyAuthActions.appendChild(btn('disconnect spotify', 'sl-btn-ghost sl-btn-sm', () => {
+      disconnectSpotify();
+      refresh();
+    }));
+  } else {
+    spotifyAuthActions.appendChild(btn('connect spotify', 'sl-btn-primary sl-btn-sm', async () => {
+      setSpotifyClientId(spotifyIdInput.value); // commit even without blur
+      try {
+        await beginSpotifyLogin(); // navigates away on success
+      } catch (e) {
+        spotifyAuthStatus.textContent = e.message;
+        spotifyAuthStatus.style.color = 'var(--red, #f66)';
+      }
+    }));
+  }
+  spotifyAuthSection.appendChild(spotifyAuthActions);
+  spotifyAuthSection.appendChild(spotifyAuthStatus);
+  root.appendChild(spotifyAuthSection);
 
   // Global auto-link pass (this is the matching feature, not Drive backup)
   const syncSection = el('div', 'sl-section');

@@ -45,6 +45,8 @@ the Drive backup:
 | `voidstar.setlist.gdrive.lastBackupAt` / `.lastHistoryAt` | localStorage | backup + history-rotation throttle timestamps |
 | `voidstar.setlist.gdrive.backupsFolderId` / `.chartsFolderId` | localStorage | cached Drive folder ids ("voidstar backups" / "voidstar charts") |
 | `voidstar.setlist.chartAppearance.detail` / `.perform` | localStorage | per-mode chart look, `'dark'` \| `'light'` (see the chart-appearance section); legacy `voidstar.setlist.invertChartDetail` / `.invertChart` migrate `1`→dark, `0`→light |
+| `voidstar.setlist.spotify.clientId` / `.token` | localStorage | Spotify user login (PKCE): client id + `{accessToken, refreshToken, expiresAt}` (see the Spotify-links section) |
+| `voidstar.setlist.spotify.pkce` | sessionStorage | PKCE verifier + return hash, alive only during the login redirect round-trip |
 | `voidstar.setlist.noteDraft.<songId>` | sessionStorage | uncommitted note-composer draft (survives focus-driven `refresh()` and app-switching; cleared on save) |
 
 ### Practice statuses
@@ -143,6 +145,28 @@ tracks" about a playlist the user is looking at in Spotify reads as data
 loss. `renderSpotifyPicker` (`views.js`) ranks rows by title match score,
 has a filter input, caps rendering at 100 rows, and writes titles via
 `textContent` (playlist data is untrusted).
+
+**Playlist reads prefer the user's own Spotify session.** The worker's
+client-credentials token gets `403 Forbidden` on playlist reads for newer
+Spotify app registrations (observed in prod), and could never see
+private/collaborative playlists. `src/lib/setlist/spotify-auth.js`
+implements Authorization Code + PKCE entirely in the browser (Spotify's
+token endpoint and Web API are CORS-enabled; no client secret involved —
+the same client id the worker uses goes in Settings → "spotify account").
+Login is a full-page redirect, not a popup, so it needs no mobile gesture
+gymnastics: `beginSpotifyLogin()` navigates to Spotify,
+`completeSpotifyLogin()` (called once in `initSetlistApp` before the first
+route) exchanges the `?code=`, cleans the URL, and restores the saved
+hash. `fetchSpotifyTracks` (`sync.js`) tries the user token first
+(`fetchPlaylistTracksAsUser`, same `{title, artist, spotifyUrl}` shape as
+the worker route) and falls back to the worker; worker 403/404 errors
+append a "connect spotify in Settings" hint when no user session exists.
+Setup gotchas: the redirect URI registered in the Spotify dashboard must
+match **exactly** (Settings shows the computed value to paste), Spotify
+requires HTTPS redirect URIs, and for local dev the loopback exception
+demands the IP literal (`http://127.0.0.1:4321/lab/setlist`) — a
+`localhost` URI is rejected. Search (`/spotify/search*`) still rides the
+worker's client credentials, which work fine for that endpoint.
 
 ## Chart-fallback ladder
 

@@ -2,6 +2,7 @@
 
 import * as store from './store.js';
 import { initGdriveBackup, isSyncing, setBackupClient, pullMergePushCycle } from './gdrive-backup.js';
+import { completeSpotifyLogin } from './spotify-auth.js';
 import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings, renderAnnotation } from './views.js';
 
 let _root = null;
@@ -127,5 +128,9 @@ export function initSetlistApp(root) {
   _root = root;
   window.addEventListener('hashchange', route);
   watchFocusSync();
-  route();
+  // Finish a Spotify login redirect (?code=…) before the first render: it
+  // rewrites the URL back to the saved hash via replaceState, which fires no
+  // hashchange — so route once after it settles. On a normal load this
+  // resolves immediately with null.
+  completeSpotifyLogin().then(() => route());
 }

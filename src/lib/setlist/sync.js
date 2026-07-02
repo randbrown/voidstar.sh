@@ -7,6 +7,7 @@
 import { findBestMatch, findBestMatchWithArtist, parseDriveFilename } from './match.js';
 import * as store from './store.js';
 import { parseSpotifyUrl } from './spotify.js';
+import { getSpotifyUserToken, isSpotifyConnected } from './spotify-auth.js';
 
 const SOURCES_KEY = 'voidstar.setlist.sources';
 
@@ -154,6 +155,21 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
   const parsed = parseSpotifyUrl(playlistUrl);
   if (!parsed || parsed.type !== 'playlist') return [];
 
+  // Prefer the user's own Spotify session when connected (Settings →
+  // "spotify account"): the worker's client-credentials token gets 403 on
+  // playlist reads for newer Spotify app registrations, and can never see
+  // private/collaborative playlists — a user token reads anything the user
+  // can see in Spotify. Falls back to the worker if the user read fails.
+  let userError = null;
+  const userToken = await getSpotifyUserToken();
+  if (userToken) {
+    try {
+      return await fetchPlaylistTracksAsUser(parsed.id, userToken);
+    } catch (e) {
+      userError = e;
+    }
+  }
+
   if (workerUrl) {
     const res = await fetch(`${workerUrl}/spotify/playlist/${parsed.id}`);
     if (!res.ok) {
@@ -163,14 +179,48 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
       let detail = '';
       try { detail = (await res.json())?.error || ''; }
       catch { detail = (await res.text().catch(() => '')) || ''; }
+      // The client-credentials dead end has a client-side fix the worker
+      // can't know about — point at it.
+      const connectHint = (res.status === 403 || res.status === 404) && !isSpotifyConnected()
+        ? ' Fix: connect spotify in Settings — the app then reads playlists as you, which works for private playlists and newer Spotify apps.'
+        : '';
       if (res.status === 403 || res.status === 401 || res.status === 502) {
-        throw new Error(detail || 'Spotify credentials invalid — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your worker env vars');
+        throw new Error((detail || 'Spotify credentials invalid — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your worker env vars') + connectHint);
       }
-      throw new Error(detail || `Spotify API ${res.status}`);
+      throw new Error((detail || `Spotify API ${res.status}`) + connectHint);
     }
     return await res.json();
   }
+  if (userError) throw userError;
   return [];
+}
+
+// Read a playlist's tracks directly from the Spotify Web API with the user's
+// token (the API is CORS-enabled), returning the same {title, artist,
+// spotifyUrl} shape as the worker's /spotify/playlist route.
+async function fetchPlaylistTracksAsUser(playlistId, token) {
+  const tracks = [];
+  const fields = encodeURIComponent('items(track(name,uri,artists(name),external_urls(spotify))),next');
+  let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&fields=${fields}`;
+  while (url) {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Spotify playlist ${playlistId} (read as your account): ${res.status}. ${body.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    for (const item of (data.items || [])) {
+      const t = item.track;
+      if (!t) continue;
+      tracks.push({
+        title: t.name,
+        artist: t.artists?.map(a => a.name).join(', ') || '',
+        spotifyUrl: t.external_urls?.spotify || (t.uri ? `spotify:track:${t.uri.split(':').pop()}` : ''),
+      });
+    }
+    url = data.next || null;
+  }
+  return tracks;
 }
 
 async function batchSearchSpotify(workerUrl, titles) {
