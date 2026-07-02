@@ -940,6 +940,28 @@ const buildStamp = readBuildStamp();
       /* Pre-load fallback; replaced at runtime with the authoring aspect. */
       aspect-ratio: 3 / 4;
     }
+    /* Flat text chart (Google-Doc charts rendered from their plain-text
+       export). In flow — not absolutely positioned — so the box takes the
+       content's full height: the page scrolls chart + annotation canvas
+       together (an iframe's internal scroll would leave the ink behind).
+       All type metrics are container-relative (cqw), so the layout scales
+       uniformly with box width and the box's natural aspect — which
+       annotation strokes are normalized against — matches on every device. */
+    .sl-text-stage { container-type: inline-size; }
+    .sl-text-chart {
+      margin: 0;
+      padding: 3cqw 4cqw;
+      font-family: var(--font-mono);
+      font-size: 2.7cqw;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      color: var(--text);
+      background: var(--surface);
+    }
+    /* Text charts are already dark — don't invert their ink overlay. */
+    .sl-chart-inverted.sl-text-stage .sl-perform-chart-canvas { filter: none; }
+
     .sl-annotation-iframe,
     .sl-annotation-img {
       position: absolute;

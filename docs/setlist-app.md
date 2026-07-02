@@ -24,7 +24,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow), one per song |
-| `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart image for offline perform mode |
+| `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise) |
 | `snapshots` | `ts` | `{ts, label, data}` — rolling safety snapshots of the whole dataset (last 10), taken before a restore/sync/import so it can be undone |
 
 `charts` and `snapshots` are intentionally **local-only** and excluded from
@@ -191,7 +191,14 @@ to the console with a `[setlist]` prefix.
 Annotation strokes are stored normalized (x/y in 0..1) against the authoring
 canvas's `aspect` (width/height). For them to line up, **the rendered chart
 rectangle must equal the canvas rectangle**, and both must equal an
-aspect-locked box whose ratio is that stored `aspect`. The annotate/detail
+aspect-locked box whose ratio is that stored `aspect`. A corollary: the chart
+must be **flat** (an element the page scrolls) — an embedded Docs/Drive
+preview iframe scrolls its content *internally*, which the overlay can't
+follow. That's why Google-Doc charts render from their plain-text export
+(`mountTextChart` in `views.js`, fed by the worker's
+`GET /drive/file/:id/text` or the text-cached blob): an in-flow block whose
+type metrics are container-relative (`cqw`), so the layout scales uniformly
+with box width and the box's natural aspect is device-independent. The annotate/detail
 views achieve this with `.sl-annotation-stage` (chart + canvas both
 `inset:0; 100%/100%` inside a box whose `aspect-ratio` = stored `aspect`).
 Perform mode uses `.sl-perform-chart-wrap` the same way, but its flattened
@@ -221,7 +228,8 @@ before `wrangler deploy` (wrangler bundles it from `node_modules`).
 Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `POST /spotify/search-batch`, `GET /drive/folder/:id`,
 `GET /drive/folder/:id/recursive`, `GET /drive/file/:id/meta`,
-`GET /drive/file/:id/image`, `GET /web/chart-search?title=&artist=`,
+`GET /drive/file/:id/text`, `GET /drive/file/:id/image`,
+`GET /web/chart-search?title=&artist=`,
 `GET /web/chart-data?title=&artist=`,
 `GET /meta/song?title=&artist=&spotifyId=`,
 `GET /ai/chart?title=&artist=&key=`, `GET /health`.

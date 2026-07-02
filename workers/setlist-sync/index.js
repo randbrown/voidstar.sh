@@ -11,6 +11,9 @@
 //   GET /drive/folder/:id/recursive → folder file list, walking subfolders too
 //                                     (for community/shared chart-repo folders)
 //   GET /drive/file/:id/meta        → scraped chart metadata (key/bpm/etc)
+//   GET /drive/file/:id/text        → full plain-text export of a Google Doc
+//                                     chart (rendered flat in the app so
+//                                     annotations scroll with the content)
 //   GET /drive/file/:id/image       → chart rendered as image bytes (for
 //                                     offline caching in the browser; CORS
 //                                     lets the client read + store the blob)
@@ -353,6 +356,36 @@ async function handleDriveFileMeta(fileId, request, env) {
     webViewLink: file.webViewLink,
     textContent: textContent.slice(0, 2000),
   }), 200, request, env);
+}
+
+// Full plain-text export of a Google Doc chart (link-shared, API key). The
+// client renders this as a flat in-flow block instead of embedding the Docs
+// preview iframe: the iframe scrolls its content internally, which the
+// annotation overlay can't follow — flat text scrolls with the page, keeping
+// the ink aligned.
+async function handleDriveFileText(fileId, request, env) {
+  const apiKey = env.GOOGLE_API_KEY;
+  if (!apiKey) return corsResponse(JSON.stringify({ error: 'GOOGLE_API_KEY not configured' }), 500, request, env);
+
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain&key=${apiKey}`
+  );
+  if (!res.ok) {
+    return corsResponse(
+      JSON.stringify({ error: `Drive text export ${res.status} — is the file a link-shared Google Doc?` }),
+      res.status, request, env,
+    );
+  }
+  const text = (await res.text()).replace(/^\uFEFF/, ''); // Docs exports lead with a BOM
+  return new Response(text, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Access-Control-Allow-Origin': corsOrigin(request, env),
+      ...CORS_HEADERS,
+      'Cache-Control': 'public, max-age=300',
+    },
+  });
 }
 
 // Return the chart as raw image bytes with our own CORS headers so the browser
@@ -1595,6 +1628,11 @@ export default {
       const driveFileMatch = url.pathname.match(/^\/drive\/file\/([a-zA-Z0-9_-]+)\/meta$/);
       if (driveFileMatch) {
         return await handleDriveFileMeta(driveFileMatch[1], request, env);
+      }
+
+      const driveTextMatch = url.pathname.match(/^\/drive\/file\/([a-zA-Z0-9_-]+)\/text$/);
+      if (driveTextMatch) {
+        return await handleDriveFileText(driveTextMatch[1], request, env);
       }
 
       return corsResponse(JSON.stringify({ error: 'not found' }), 404, request, env);

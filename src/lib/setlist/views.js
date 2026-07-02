@@ -10,7 +10,7 @@ import { findBestMatch as fuzzyMatch } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
-import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChartUrl, CHART_CACHED_EVENT } from './chart-cache.js';
+import { cacheSetlistCharts, cacheAllCharts, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -163,6 +163,23 @@ function lockAspectToImage(img, box) {
   };
   if (img.complete && img.naturalWidth) apply();
   else img.addEventListener('load', apply, { once: true });
+}
+
+// Mount a text chart (a Google-Doc number chart as plain text) into a chart
+// box as a flat, in-flow block. Flat matters: the Docs preview iframe scrolls
+// its content internally, which the annotation overlay can't follow — a
+// full-height block scrolls with the page, so the ink stays pinned. All type
+// metrics are container-relative (cqw, see .sl-text-chart), so the layout
+// scales uniformly with box width and the box's natural aspect — which
+// annotation strokes are normalized against — is identical on every device.
+function mountTextChart(box, text) {
+  box.classList.add('sl-text-stage');
+  box.style.aspectRatio = 'auto'; // the content's height defines the box
+  box.dataset.naturalAspect = '1'; // don't clobber with stored/viewport aspect
+  const pre = document.createElement('pre');
+  pre.className = 'sl-text-chart';
+  pre.textContent = text;
+  return pre;
 }
 
 // ── Shared Google Drive sync (used by Settings, per-page buttons, the pill) ──
@@ -861,17 +878,25 @@ async function renderInlineChart(container, song, songId) {
   const wrap = el('div', 'sl-focus-chart');
   const stage = el('div', 'sl-annotation-stage');
 
-  const cachedChartUrl = await getOfflineChartUrl(songId, song.chartUrl);
-  if (cachedChartUrl) {
+  const cached = await getOfflineChart(songId, song.chartUrl);
+  if (cached?.kind === 'text') {
+    stage.appendChild(mountTextChart(stage, cached.text));
+  } else if (cached) {
     const img = document.createElement('img');
-    img.src = cachedChartUrl;
+    img.src = cached.url;
     img.className = 'sl-annotation-img';
     lockAspectToImage(img, stage);
     stage.appendChild(img);
-    window.addEventListener('hashchange', () => URL.revokeObjectURL(cachedChartUrl), { once: true });
+    window.addEventListener('hashchange', () => URL.revokeObjectURL(cached.url), { once: true });
   } else {
-    const embedUrl = buildChartEmbedUrl(song.chartUrl);
-    if (embedUrl) {
+    // No cache: Google-Doc charts render flat from a live text export
+    // (annotations can't track an iframe's internal scroll); anything else
+    // falls back to the embed/plain image.
+    const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
+    const embedUrl = liveText ? null : buildChartEmbedUrl(song.chartUrl);
+    if (liveText) {
+      stage.appendChild(mountTextChart(stage, liveText));
+    } else if (embedUrl) {
       const iframe = document.createElement('iframe');
       iframe.src = embedUrl;
       iframe.className = 'sl-annotation-iframe';
@@ -2221,20 +2246,29 @@ export async function renderPerformMode(root, setlistId, startSongId) {
         }
       }
 
-      // Offline-cached blob first (renders with no network); live URLs
-      // otherwise. Async cache read is guarded against a fast swipe that has
-      // already moved us to a different song.
-      getOfflineChartUrl(entry.songId, song.chartUrl).then(objUrl => {
-        if (currentChartWrap !== chartWrap) { if (objUrl) URL.revokeObjectURL(objUrl); return; }
-        if (objUrl) {
-          currentChartObjectUrl = objUrl;
+      // Offline-cached chart first (renders with no network) — text for doc
+      // charts, image otherwise; live text export for uncached docs, then the
+      // remote image/embed. Async reads are guarded against a fast swipe that
+      // has already moved us to a different song.
+      getOfflineChart(entry.songId, song.chartUrl).then(async (cached) => {
+        if (currentChartWrap !== chartWrap) {
+          if (cached?.kind === 'image') URL.revokeObjectURL(cached.url);
+          return;
+        }
+        if (cached?.kind === 'text') {
+          insertChart(mountTextChart(chartWrap, cached.text));
+        } else if (cached) {
+          currentChartObjectUrl = cached.url;
           const img = document.createElement('img');
-          img.src = objUrl;
+          img.src = cached.url;
           img.className = 'sl-perform-chart-img sl-chart-flat';
           lockAspectToImage(img, chartWrap);
           insertChart(img);
         } else {
-          mountRemoteChart();
+          const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
+          if (currentChartWrap !== chartWrap) return;
+          if (liveText) insertChart(mountTextChart(chartWrap, liveText));
+          else mountRemoteChart();
         }
       });
 
@@ -2386,19 +2420,25 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
   // regardless of toolbar height.
   const stage = el('div', 'sl-annotation-stage');
 
-  // Offline-cached blob first (also gives a flat image to annotate against,
-  // which lines up better than a live Google Doc iframe); live URL otherwise.
-  const cachedChartUrl = await getOfflineChartUrl(songId, song.chartUrl);
-  if (cachedChartUrl) {
+  // Offline-cached chart first (flat — text for docs, image otherwise — which
+  // scrolls with the canvas and stays aligned); live text export for docs,
+  // then embed/plain image as last resorts.
+  const cached = await getOfflineChart(songId, song.chartUrl);
+  if (cached?.kind === 'text') {
+    stage.appendChild(mountTextChart(stage, cached.text));
+  } else if (cached) {
     const img = document.createElement('img');
-    img.src = cachedChartUrl;
+    img.src = cached.url;
     img.className = 'sl-annotation-img';
     lockAspectToImage(img, stage);
     stage.appendChild(img);
-    window.addEventListener('hashchange', () => URL.revokeObjectURL(cachedChartUrl), { once: true });
+    window.addEventListener('hashchange', () => URL.revokeObjectURL(cached.url), { once: true });
   } else {
-    const embedUrl = buildChartEmbedUrl(song.chartUrl);
-    if (embedUrl) {
+    const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
+    const embedUrl = liveText ? null : buildChartEmbedUrl(song.chartUrl);
+    if (liveText) {
+      stage.appendChild(mountTextChart(stage, liveText));
+    } else if (embedUrl) {
       const iframe = document.createElement('iframe');
       iframe.src = embedUrl;
       iframe.className = 'sl-annotation-iframe';

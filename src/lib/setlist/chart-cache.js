@@ -36,13 +36,41 @@ function isDirectFile(url) {
   return /\.(png|jpe?g|gif|webp|avif|pdf)(\?|#|$)/i.test(url || '');
 }
 
+// Google-Doc charts cache (and render) as plain TEXT, not as an image: the
+// thumbnail rasterizes only the first page, and the Docs preview iframe
+// scrolls internally so annotations can't stay aligned. Flat text has the
+// full content and scrolls with the page.
+export function isGoogleDocUrl(url) {
+  return /docs\.google\.com\/document\/d\//.test(url || '');
+}
+
 // The URL we fetch to get cacheable bytes for a chart, or null if we can't
-// (no worker configured and not a direct file).
+// (no worker configured and not a direct file). Text for Google Docs, image
+// bytes for everything else.
 export function chartImageFetchUrl(chartUrl, workerUrl) {
   const id = chartFileId(chartUrl);
-  if (id && workerUrl) return `${workerUrl}/drive/file/${id}/image`;
+  if (id && workerUrl) {
+    return isGoogleDocUrl(chartUrl)
+      ? `${workerUrl}/drive/file/${id}/text`
+      : `${workerUrl}/drive/file/${id}/image`;
+  }
   if (isDirectFile(chartUrl)) return chartUrl;
   return null;
+}
+
+// Fetch a Google-Doc chart's full text for live (uncached) rendering.
+// Returns the text or null (not a doc, no worker, fetch failed, empty).
+export async function fetchChartText(chartUrl, workerUrl) {
+  const id = chartFileId(chartUrl);
+  if (!id || !workerUrl || !isGoogleDocUrl(chartUrl)) return null;
+  try {
+    const res = await fetch(`${workerUrl}/drive/file/${id}/text`);
+    if (!res.ok) return null;
+    const text = await res.text();
+    return text.trim() ? text : null;
+  } catch {
+    return null;
+  }
 }
 
 // True when a song has a chart that we could cache given current config.
@@ -73,7 +101,7 @@ export async function cacheChartForSong(song, workerUrl) {
 }
 
 function isRenderableChartBlob(blob) {
-  return /^(?:image\/|application\/pdf)/.test(blob?.type || '');
+  return /^(?:image\/|application\/pdf|text\/plain)/.test(blob?.type || '');
 }
 
 // Download + store a list of songs' charts. onProgress({ done, total, ok,
@@ -138,15 +166,17 @@ export async function getSetlistOfflineStatus(setlist) {
   return { cached, total: chartedIds.length };
 }
 
-// An object URL for a song's cached chart, or null if not cached. Caller MUST
-// URL.revokeObjectURL() it when done to avoid leaking.
+// A song's cached chart, typed for rendering: {kind:'text', text} for
+// Google-Doc charts cached as plain text, {kind:'image', url} (an object URL
+// the caller MUST URL.revokeObjectURL() when done) for everything else, or
+// null when not cached.
 //
 // Pass the song's current chartUrl as `expectedUrl` to guard against a stale
 // blob: the cache is keyed by songId, so if the chart link later changed (e.g.
 // a re-sync corrected a bad match) the old blob would otherwise keep rendering
 // forever. When the cached sourceUrl doesn't match, we drop the stale entry and
 // report a miss so the caller falls back to the live URL.
-export async function getOfflineChartUrl(songId, expectedUrl) {
+export async function getOfflineChart(songId, expectedUrl) {
   try {
     const rec = await store.getChartBlob(songId);
     if (rec?.blob) {
@@ -162,7 +192,10 @@ export async function getOfflineChartUrl(songId, expectedUrl) {
         await store.deleteChartBlob(songId);
         return null;
       }
-      return URL.createObjectURL(rec.blob);
+      if (rec.blob.type.startsWith('text/plain')) {
+        return { kind: 'text', text: await rec.blob.text() };
+      }
+      return { kind: 'image', url: URL.createObjectURL(rec.blob) };
     }
   } catch {}
   return null;
