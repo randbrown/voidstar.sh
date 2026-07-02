@@ -407,9 +407,17 @@ export async function deepScrapeChart(song) {
 // Backs the song page's "relink spotify" picker: auto-matching can grab a
 // same-titled cover/karaoke track, and the fix is choosing the real one
 // from the playlist itself.
+//
+// Returns {tracks, problems}: an empty result must say WHY (no worker, no
+// playlist URL anywhere, a URL that isn't an open.spotify.com/playlist link,
+// or the worker's real Spotify error) — silently reporting "no tracks" for a
+// playlist the user is looking at in Spotify reads as data loss.
 export async function getReferencePlaylistTracks(setlist) {
   const sources = getSources();
-  if (!sources.workerUrl) return [];
+  const problems = [];
+  if (!sources.workerUrl) {
+    return { tracks: [], problems: ['no worker URL configured in Settings'] };
+  }
 
   let urls;
   if (setlist?.spotifyUrl) {
@@ -417,16 +425,29 @@ export async function getReferencePlaylistTracks(setlist) {
   } else {
     const all = await store.getAllSetlists();
     urls = [...new Set(all.map(sl => sl.spotifyUrl).filter(Boolean))];
+    if (!urls.length) {
+      problems.push('no Spotify playlist URL is set on any setlist — add one on the setlist edit page');
+    }
   }
 
   const tracks = [];
   for (const url of urls) {
+    const parsed = parseSpotifyUrl(url);
+    if (!parsed || parsed.type !== 'playlist') {
+      problems.push(`"${url.slice(0, 60)}" isn't a playlist link — paste the full open.spotify.com/playlist/… URL (share short-links and album links don't work)`);
+      continue;
+    }
     try {
       tracks.push(...await fetchSpotifyTracks(sources.workerUrl, url));
-    } catch {}
+    } catch (e) {
+      problems.push(e.message);
+    }
   }
   const seen = new Set();
-  return tracks.filter(t => t.spotifyUrl && !seen.has(t.spotifyUrl) && seen.add(t.spotifyUrl));
+  return {
+    tracks: tracks.filter(t => t.spotifyUrl && !seen.has(t.spotifyUrl) && seen.add(t.spotifyUrl)),
+    problems,
+  };
 }
 
 export function spotifySearchUrl(title, artist) {

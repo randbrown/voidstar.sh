@@ -1419,15 +1419,24 @@ export async function renderSongFocus(root, songId, setlistId) {
     relinkBtn.disabled = true;
     relinkBtn.textContent = 'loading playlist...';
     try {
-      const tracks = await getReferencePlaylistTracks(setlist);
+      const { tracks, problems } = await getReferencePlaylistTracks(setlist);
       if (tracks.length) {
         renderSpotifyPicker(spotifyPickerWrap, tracks, song);
         relinkBtn.textContent = 'pick below';
       } else {
-        relinkBtn.textContent = 'no playlist tracks';
+        // Show the real reason where there's room to read it.
+        spotifyPickerWrap.innerHTML = '';
+        const note = el('div', 'sl-hint');
+        note.textContent = `Couldn't load playlist tracks: ${problems[0] || 'the playlist came back empty'}`;
+        spotifyPickerWrap.appendChild(note);
+        relinkBtn.textContent = 'no tracks — see note';
       }
     } catch (e) {
-      relinkBtn.textContent = 'playlist fetch failed';
+      spotifyPickerWrap.innerHTML = '';
+      const note = el('div', 'sl-hint');
+      note.textContent = `Playlist fetch failed: ${e.message}`;
+      spotifyPickerWrap.appendChild(note);
+      relinkBtn.textContent = 'failed — see note';
     }
     setTimeout(() => {
       relinkBtn.textContent = relinkLabel;
