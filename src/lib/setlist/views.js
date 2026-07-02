@@ -445,6 +445,22 @@ export async function renderLibrary(root) {
   search.placeholder = 'search songs...';
   root.appendChild(search);
 
+  // Practice-status filter — selected chips narrow the list to songs carrying
+  // ALL of them ("steel lead" + "needs work" = steel songs to practice).
+  const statusFilter = new Set();
+  const filterRow = el('div', 'sl-status-row sl-lib-filter');
+  for (const def of SONG_STATUSES) {
+    const chip = btn(def.label, 'sl-status-chip', () => {
+      if (statusFilter.has(def.key)) statusFilter.delete(def.key);
+      else statusFilter.add(def.key);
+      chip.classList.toggle('sl-on', statusFilter.has(def.key));
+      renderList(search.value);
+    });
+    chip.dataset.s = def.key;
+    filterRow.appendChild(chip);
+  }
+  root.appendChild(filterRow);
+
   const listEl = el('div', 'sl-song-list');
   root.appendChild(listEl);
 
@@ -453,9 +469,12 @@ export async function renderLibrary(root) {
 
   function renderList(filter) {
     const lower = (filter || '').toLowerCase();
-    const filtered = lower
+    let filtered = lower
       ? allSongs.filter(s => s.title.toLowerCase().includes(lower) || s.artist.toLowerCase().includes(lower))
       : allSongs;
+    if (statusFilter.size) {
+      filtered = filtered.filter(s => [...statusFilter].every(k => (s.statuses || []).includes(k)));
+    }
     listEl.innerHTML = '';
     if (!filtered.length) {
       listEl.appendChild(emptyState(lower ? 'No matches.' : 'No songs yet.'));
@@ -466,6 +485,7 @@ export async function renderLibrary(root) {
       row.innerHTML = `
         <span class="sl-lib-title">${s.title}</span>
         ${s.artist ? `<span class="sl-lib-artist">${s.artist}</span>` : ''}
+        ${statusBadges(s)}
         ${s.key ? `<span class="sl-key-badge sl-key-sm">${s.key}</span>` : ''}
       `;
       row.addEventListener('click', () => navigate(`#song/${s.id}`));

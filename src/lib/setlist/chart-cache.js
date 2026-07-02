@@ -65,10 +65,16 @@ export async function fetchChartText(chartUrl, workerUrl) {
   if (!id || !workerUrl || !isGoogleDocUrl(chartUrl)) return null;
   try {
     const res = await fetch(`${workerUrl}/drive/file/${id}/text`);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // Loud on purpose: a failure here silently degrades to the iframe
+      // embed, whose internal scroll breaks annotation alignment.
+      console.warn('[setlist] chart text fetch failed:', res.status, '— falling back to embed');
+      return null;
+    }
     const text = await res.text();
     return text.trim() ? text : null;
-  } catch {
+  } catch (e) {
+    console.warn('[setlist] chart text fetch failed:', e.message, '— falling back to embed (worker unreachable or CORS)');
     return null;
   }
 }

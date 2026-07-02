@@ -57,6 +57,16 @@ function corsOrigin(request, env) {
   if (origin === allowed || origin === 'http://localhost:4321' || origin === 'http://localhost:3000') {
     return origin;
   }
+  // Subdomains of the allowed host (e.g. www.) are the same site with a
+  // different Origin string — without this, their fetches fail CORS and the
+  // app silently degrades (e.g. chart text falls back to the iframe embed).
+  try {
+    const o = new URL(origin);
+    const a = new URL(allowed);
+    if (o.protocol === 'https:' && (o.hostname === a.hostname || o.hostname.endsWith(`.${a.hostname}`))) {
+      return origin;
+    }
+  } catch {}
   return allowed;
 }
 

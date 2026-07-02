@@ -990,12 +990,17 @@ const buildStamp = readBuildStamp();
     .sl-text-chart {
       margin: 0;
       /* Tight margins + large bold type: legible from a mic stand. Sized so
-         the widest generated lines (legend, Key/Time/BPM row) still fit. */
+         the widest generated lines (legend, Key/Time/BPM row) still fit.
+         The font is PINNED (not var(--font-mono), which is theme-dependent)
+         and uses a weight the webfont actually ships (300/400/500 — a 600
+         would be synthesized differently per OS): line-wrap points must be
+         identical on every device, or the stage height — which annotation
+         strokes are normalized against — drifts between phone and laptop. */
       padding: 2cqw 2.5cqw;
-      font-family: var(--font-mono);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
       font-size: 3.4cqw;
       line-height: 1.32;
-      font-weight: 600;
+      font-weight: 500;
       white-space: pre-wrap;
       overflow-wrap: break-word;
       color: #f4f6ff;
