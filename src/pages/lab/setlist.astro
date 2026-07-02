@@ -950,17 +950,29 @@ const buildStamp = readBuildStamp();
     .sl-text-stage { container-type: inline-size; }
     .sl-text-chart {
       margin: 0;
-      padding: 3cqw 4cqw;
+      /* Tight margins + large bold type: legible from a mic stand. Sized so
+         the widest generated lines (legend, Key/Time/BPM row) still fit. */
+      padding: 2cqw 2.5cqw;
       font-family: var(--font-mono);
-      font-size: 2.7cqw;
-      line-height: 1.5;
+      font-size: 3.4cqw;
+      line-height: 1.32;
+      font-weight: 600;
       white-space: pre-wrap;
       overflow-wrap: break-word;
-      color: var(--text);
+      color: #f4f6ff;
       background: var(--surface);
     }
-    /* Text charts are already dark — don't invert their ink overlay. */
-    .sl-chart-inverted.sl-text-stage .sl-perform-chart-canvas { filter: none; }
+    /* Annotation ink gets a dark halo so it reads at a glance on white
+       scans and dark text charts alike. */
+    .sl-annotation-canvas,
+    .sl-perform-chart-canvas {
+      filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9)) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+    }
+    /* Text charts are already dark — keep the halo but never invert their
+       ink overlay (the invert exists to flip white docs to dark). */
+    .sl-chart-inverted.sl-text-stage .sl-perform-chart-canvas {
+      filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9)) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+    }
 
     .sl-annotation-iframe,
     .sl-annotation-img {

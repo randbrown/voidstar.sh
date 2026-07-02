@@ -54,12 +54,15 @@ function headerLines(song, { key, capo, bpm, time, feel } = {}) {
   if (bpm) meta.push(`BPM: ${bpm}`);
   if (capo) meta.push(`Capo: ${capo}`);
 
-  const lines = [meta.join('   ')];
-  if (feel) lines.push(`Feel: ${feel}`);
-  lines.push('', title);
+  // Title and artist lead — they're what you scan for when flipping between
+  // songs — then key/tempo/feel and the legend as one compact block. (The
+  // worker's chart scraper reads Key:/BPM: from the first lines either way.)
+  const lines = [title];
   if (artist) lines.push(artist);
+  lines.push('', meta.join('   '));
+  if (feel) lines.push(`Feel: ${feel}`);
   const legend = key ? chordLegend(key) : '';
-  if (legend) lines.push('', `(${legend})`);
+  if (legend) lines.push(`(${legend})`);
   lines.push('');
   return lines;
 }
