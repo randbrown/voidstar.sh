@@ -63,8 +63,10 @@ This codebase intentionally keeps two similarly-named ideas separate:
     locally, then pushes it — so no path can blindly clobber either side. An
     `isSyncing()` flag serializes cycles so manual, auto-push, and focus-pull
     can't overlap.
-  - **Making it intuitive.** A shared `runManualSync()` backs a "sync now"
-    button on the song and setlist-edit pages, plus the Settings buttons. The
+  - **Making it intuitive.** A shared `runManualSync()` backs a "⟲ drive
+    backup" button on the song and setlist-edit pages, plus the Settings
+    buttons. (UI labels deliberately say "backup", never "sync" — see the
+    naming note below.) The
     dashboard status pill is tappable (sync now; or `↻ reconnect` when a
     client is configured but the OAuth token lapsed — a silent refresh is
     impossible, GIS needs a gesture). The app also auto-pulls when it regains
@@ -73,8 +75,8 @@ This codebase intentionally keeps two similarly-named ideas separate:
     hunting for a button.
   - **Reversibility (undo a bad sync/import).** Every operation that overwrites
     local data snapshots the prior state first (`store.putSnapshot`, into the
-    local `snapshots` store) — Settings → "undo last sync" restores the newest
-    snapshot. Snapshot/version restores use `store.replaceAll()` (a full
+    local `snapshots` store) — Settings → "undo last merge/restore" restores
+    the newest snapshot. Snapshot/version restores use `store.replaceAll()` (a full
     replace incl. deletions), *not* the additive `importAll()`. Separately, each
     push also rotates a timestamped copy into a "voidstar backups" Drive folder
     (last 10, throttled to ≤ once / 10 min for auto-syncs; manual actions force
@@ -88,6 +90,14 @@ This codebase intentionally keeps two similarly-named ideas separate:
 If you're adding a feature and reaching for the word "sync," check which of
 these two you mean — and if it's the Drive-backup one, call it Backup/Restore
 instead to keep this distinction intact.
+
+**UI naming rule:** user-facing labels never say a bare "sync". The
+Drive-backup feature presents as "drive backup" / "backing up" / "backed up"
+(dashboard pill, "⟲ drive backup" buttons, Settings' "back up now" /
+"restore from drive" / "undo last merge/restore"); the matching feature
+presents as "auto-link" ("auto-link now" in Settings, "auto-link" on the
+setlist page, "matching songs…" in the progress overlay). Internal
+identifiers (`sync.js`, `runManualSync`, `sl-sync-*` CSS) keep their names.
 
 ## Chart-fallback ladder
 
@@ -179,7 +189,7 @@ four tiers, in order:
 Tiers 1–3 are available per-song via `searchChartForSong()` in `sync.js`
 (the "search for chart" button, which reports its stage and returns
 `{found, tier, candidates, providerDown}`); tiers 1+2 also run in the bulk
-"sync now" action in Settings.
+"auto-link now" action in Settings.
 
 **Diagnosability:** every "found nothing" path says why instead of failing
 silently — a bot-blocked keyless search engine surfaces as `providerDown`

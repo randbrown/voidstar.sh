@@ -225,7 +225,7 @@ async function runManualSync(statusEl, { interactive = true } = {}) {
     statusEl.textContent = text;
     statusEl.style.color = color || '';
   };
-  if (isSyncing()) { setStatus('Sync already in progress…'); return false; }
+  if (isSyncing()) { setStatus('Backup already in progress…'); return false; }
 
   let client;
   try {
@@ -236,13 +236,13 @@ async function runManualSync(statusEl, { interactive = true } = {}) {
   }
   if (!client) {
     setStatus(needsReconnect()
-      ? 'Google Drive needs reconnecting — tap the sync pill on the home screen.'
+      ? 'Google Drive needs reconnecting — tap the backup pill on the home screen.'
       : 'Set a Google OAuth Client ID in Settings to enable backup.', 'var(--pink)');
     return false;
   }
 
   setBackupClient(client);
-  setStatus('Syncing…', '');
+  setStatus('Backing up to Drive…', '');
   try {
     await pullMergePushCycle(
       client,
@@ -250,7 +250,7 @@ async function runManualSync(statusEl, { interactive = true } = {}) {
       (merged) => store.importAll(merged),
       { snapshotFn: () => store.putSnapshot('pre-sync'), historyForce: true },
     );
-    setStatus(`✓ synced · ${formatLastBackup()}`, 'var(--green)');
+    setStatus(`✓ backed up · ${formatLastBackup()}`, 'var(--green)');
     return true;
   } catch (e) {
     setStatus(formatGdriveError(e), 'var(--pink)');
@@ -258,15 +258,16 @@ async function runManualSync(statusEl, { interactive = true } = {}) {
   }
 }
 
-// A compact "sync now" button + inline status, for edit-page action bars. On
-// success it re-renders the page shortly after so any pulled-in changes show.
+// A compact Drive-backup button + inline status, for edit-page action bars.
+// On success it re-renders the page shortly after so pulled-in changes show.
 function syncNowButton() {
   const wrap = el('div', 'sl-sync-inline');
   const status = el('span', 'sl-hint sl-sync-inline-status');
-  const b = btn('⟲ sync', 'sl-btn-ghost sl-btn-sm', async () => {
+  const b = btn('⟲ drive backup', 'sl-btn-ghost sl-btn-sm', async () => {
     const ok = await runManualSync(status, { interactive: true });
     if (ok) setTimeout(() => refresh(), 900);
   });
+  b.title = 'Back up to (and pull the latest from) your Google Drive now';
   wrap.appendChild(b);
   wrap.appendChild(status);
   return wrap;
@@ -317,7 +318,7 @@ export async function renderDashboard(root) {
     pill.className = `sl-sync-pill ${cls}`;
     if (gbackup || reconnect) pill.classList.add('sl-sync-tappable');
     pill.textContent = text;
-    pill.title = gbackup ? `Last backup: ${formatLastBackup()} — tap to sync`
+    pill.title = gbackup ? `Last backup: ${formatLastBackup()} — tap to back up now`
       : reconnect ? 'Tap to reconnect Google Drive' : '';
   };
   pill.addEventListener('click', async () => {
@@ -506,7 +507,9 @@ export async function renderSetlistView(root, setlistId) {
 
   const bar = topBar(sl.name, '#home');
   const actions = el('div', 'sl-actions');
-  actions.appendChild(btn('sync', 'sl-btn-ghost', () => runSetlistSync(root, sl.id)));
+  const autoLinkBtn = btn('auto-link', 'sl-btn-ghost', () => runSetlistSync(root, sl.id));
+  autoLinkBtn.title = 'Match these songs to the Spotify playlist and chart folders';
+  actions.appendChild(autoLinkBtn);
   actions.appendChild(btn('perform', 'sl-btn-accent', () => navigate(`#perform/${sl.id}`)));
   actions.appendChild(btn('edit', 'sl-btn-ghost', () => navigate(`#setlist/${sl.id}/edit`)));
   actions.appendChild(btn('⇣', 'sl-btn-icon', async () => {
@@ -1731,7 +1734,7 @@ export async function renderSongFocus(root, songId, setlistId) {
 
 function showSyncOverlay(root) {
   const overlay = el('div', 'sl-sync-overlay');
-  overlay.innerHTML = '<div class="sl-sync-spinner"></div><div class="sl-sync-status">syncing...</div>';
+  overlay.innerHTML = '<div class="sl-sync-spinner"></div><div class="sl-sync-status">matching songs to Spotify + charts...</div>';
   root.appendChild(overlay);
   return {
     update(msg) { overlay.querySelector('.sl-sync-status').textContent = msg; },
@@ -1783,7 +1786,7 @@ async function runGlobalSync(root) {
 // ── Settings ──
 
 export async function renderSettings(root) {
-  const bar = topBar('sources & sync', '#home');
+  const bar = topBar('sources & auto-link', '#home');
   root.appendChild(bar);
 
   const sources = getSources();
@@ -1846,7 +1849,7 @@ export async function renderSettings(root) {
 
   root.appendChild(buildFolderSection(
     'personal drive folders',
-    'Your own Google Drive folders. Scanned directly (not their subfolders) — for nested archives, use Community Chart Folders below. Requires the sync worker to be deployed.',
+    'Your own Google Drive folders. Scanned directly (not their subfolders) — for nested archives, use Community Chart Folders below. Requires the setlist worker to be deployed.',
     'driveFolders',
   ));
   root.appendChild(buildFolderSection(
@@ -1923,11 +1926,11 @@ export async function renderSettings(root) {
   spotifySection.appendChild(unlinkedList);
   root.appendChild(spotifySection);
 
-  // Global sync
+  // Global auto-link pass (this is the matching feature, not Drive backup)
   const syncSection = el('div', 'sl-section');
-  syncSection.innerHTML = '<div class="sl-section-title">sync all songs</div>';
-  syncSection.appendChild(btn('sync now', 'sl-btn-accent', () => runGlobalSync(root)));
-  syncSection.appendChild(el('div', 'sl-hint', 'Scans all configured Spotify playlists and Drive folders, auto-links matching songs.'));
+  syncSection.innerHTML = '<div class="sl-section-title">auto-link all songs</div>';
+  syncSection.appendChild(btn('auto-link now', 'sl-btn-accent', () => runGlobalSync(root)));
+  syncSection.appendChild(el('div', 'sl-hint', 'Scans your Spotify playlists and chart folders, and fills each song\'s missing Spotify track + chart link. Never overwrites links you already have.'));
   root.appendChild(syncSection);
 
   // Google Drive backup
@@ -1960,20 +1963,20 @@ export async function renderSettings(root) {
   gdriveSection.appendChild(gdriveActions);
   gdriveSection.appendChild(gdriveStatus);
 
-  // ── Version safeguards: undo last sync/import, or restore an earlier
-  // Drive version. Every restore snapshots current state first, so it's itself
-  // reversible via "undo last sync".
+  // ── Version safeguards: undo the last backup merge/restore/import, or
+  // restore an earlier Drive version. Every restore snapshots current state
+  // first, so it's itself reversible via the same undo.
   const safetyActions = el('div', 'sl-action-bar');
-  safetyActions.appendChild(btn('undo last sync', 'sl-btn-ghost sl-btn-sm', async () => {
+  safetyActions.appendChild(btn('undo last merge/restore', 'sl-btn-ghost sl-btn-sm', async () => {
     const snaps = await store.listSnapshots();
     if (!snaps.length) {
       gdriveStatus.textContent = 'No snapshot to undo yet.';
       gdriveStatus.style.color = '';
       return;
     }
-    if (!confirm('Revert to the state saved just before your last sync / restore / import?')) return;
+    if (!confirm('Revert to the state saved just before your last backup merge, restore, or import?')) return;
     await store.restoreSnapshot(snaps[0].ts);
-    gdriveStatus.textContent = 'Reverted to the pre-sync snapshot.';
+    gdriveStatus.textContent = 'Reverted to the previous snapshot.';
     gdriveStatus.style.color = 'var(--green)';
     setTimeout(() => navigate('#home'), 700);
   }));
@@ -1984,7 +1987,7 @@ export async function renderSettings(root) {
       const client = await initGdriveBackup({ interactive: true });
       if (!client) {
         historyList.textContent = needsReconnect()
-          ? 'Reconnect Google Drive first (tap the sync pill on the home screen).'
+          ? 'Reconnect Google Drive first (tap the backup pill on the home screen).'
           : 'Set a Google OAuth Client ID first.';
         return;
       }
