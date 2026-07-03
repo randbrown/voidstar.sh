@@ -229,7 +229,12 @@ hash. `fetchSpotifyTracks` (`sync.js`) tries the user token first
 the worker route) and falls back to the worker; worker 403/404 errors
 append a "connect spotify in Settings" hint when no user session exists.
 Setup gotchas: the redirect URI registered in the Spotify dashboard must
-match **exactly** (Settings shows the computed value to paste), Spotify
+match **exactly** (Settings shows the computed value to paste).
+`spotifyRedirectUri()` normalizes away the trailing slash — the page is
+served at both `/lab/setlist` and `/lab/setlist/`, and deriving the URI
+from the raw pathname made the sent value depend on which form loaded the
+page (Spotify then 400s with "redirect_uri: Not matching configuration").
+Register the no-slash form: `https://voidstar.sh/lab/setlist`. Spotify
 requires HTTPS redirect URIs, and for local dev the loopback exception
 demands the IP literal (`http://127.0.0.1:4321/lab/setlist`) — a
 `localhost` URI is rejected. Search (`/spotify/search*`) still rides the
