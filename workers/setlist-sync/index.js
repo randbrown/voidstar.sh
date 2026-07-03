@@ -25,22 +25,29 @@
 //                                     web, converted to Nashville numbers (for
 //                                     drafting a chart doc)
 //   GET /meta/song?title=&artist=&spotifyId=
-//                                   → BPM / key / time signature derived from
+//                                   → BPM / key / time signature / artist /
+//                                     genre / year / artwork / duration from
 //                                     music APIs (Spotify audio-features,
-//                                     keyless Deezer)
+//                                     keyless Deezer, keyless iTunes)
 //   GET /ai/chart?title=&artist=&key=
 //                                   → a full Nashville-number chart drafted by
 //                                     an LLM with web-search grounding (key,
 //                                     tempo, form, bars) — the strongest tier
 //                                     of "create chart doc" when a key is set
+//   POST /ai/chart-read             → vision model reads key/bpm/capo/key-
+//                                     change notes off a scanned chart image
+//                                     (body: {image: base64, mimeType, title,
+//                                     artist})
 //   GET /health                     → ok
 //
 // Optional env for /web/* search (falls back to keyless DuckDuckGo HTML):
 //   GOOGLE_CSE_ID          — Programmable Search Engine id (reuses GOOGLE_API_KEY)
 //   BRAVE_SEARCH_API_KEY   — Brave Search API subscription token
 //
-// Optional env for /ai/chart (first configured provider wins):
-//   ANTHROPIC_API_KEY      — Claude (+ ANTHROPIC_MODEL, default claude-opus-4-8)
+// Optional env for /ai/chart + /ai/chart-read (first configured provider wins):
+//   ANTHROPIC_API_KEY      — Claude (+ ANTHROPIC_MODEL, default claude-opus-4-8;
+//                            /ai/chart-read uses ANTHROPIC_READ_MODEL, default
+//                            claude-haiku-4-5 — transcription, not drafting)
 //   GEMINI_API_KEY         — Gemini (+ GEMINI_MODEL, default gemini-2.5-flash)
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -1308,9 +1315,54 @@ async function handleSongMeta(request, env) {
     } catch {}
   }
 
+  // iTunes Search (keyless): canonical artist, genre, year, artwork, length.
+  if (title) {
+    try {
+      const it = await itunesMeta(title, artist);
+      if (it) {
+        Object.assign(meta, it);
+        meta.sources.push('itunes');
+      }
+    } catch {}
+  }
+
   return corsResponse(JSON.stringify(meta), 200, request, env, {
     'Cache-Control': 'public, max-age=86400',
   });
+}
+
+const ITUNES_MIN_SCORE = 0.6;
+
+async function itunesMeta(title, artist) {
+  const params = new URLSearchParams({
+    term: artist ? `${title} ${artist}` : title,
+    media: 'music',
+    entity: 'song',
+    limit: '5',
+  });
+  const res = await fetch(`https://itunes.apple.com/search?${params}`, {
+    signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
+  });
+  if (!res.ok) return null;
+  const results = (await res.json())?.results || [];
+  let best = null;
+  let bestScore = 0;
+  for (const r of results) {
+    const score = scoreCandidate(title, artist, r.trackName || '', r.artistName || '');
+    if (score > bestScore) { bestScore = score; best = r; }
+  }
+  if (!best || bestScore < ITUNES_MIN_SCORE) return null;
+  const out = {};
+  if (best.artistName) out.artist = String(best.artistName).slice(0, 120);
+  if (best.primaryGenreName) out.genre = String(best.primaryGenreName).slice(0, 40);
+  const year = parseInt((best.releaseDate || '').slice(0, 4), 10);
+  if (year) out.year = year;
+  if (best.trackTimeMillis) out.durationSec = Math.round(best.trackTimeMillis / 1000);
+  // Apple serves square artwork at any size via the filename; 600px reads
+  // well on the song page. https-only so the client can trust the value.
+  const art = (best.artworkUrl100 || '').replace('100x100', '600x600');
+  if (/^https:\/\//.test(art)) out.artworkUrl = art;
+  return Object.keys(out).length ? out : null;
 }
 
 async function deezerBpm(title, artist) {
@@ -1575,6 +1627,160 @@ async function handleAiChart(request, env) {
   }), 200, request, env);
 }
 
+// ══ AI chart reading (vision) ════════════════════════════════════════════════
+// POST /ai/chart-read {image: base64, mimeType, title?, artist?} — a vision
+// model reads what's actually WRITTEN on a scanned/photographed chart (key,
+// bpm, capo, modulation notes). This covers the one gap text parsing can't:
+// image charts have no text export. Unlike /ai/chart this is transcription,
+// not drafting — no web search, strict read-only prompt, and the cheap model
+// tier is plenty (override with ANTHROPIC_READ_MODEL).
+
+const AI_READ_TIMEOUT_MS = 60000;
+const AI_READ_MAX_BASE64 = 4_000_000; // ~3 MB of image, within model limits
+const AI_READ_MIME_RE = /^image\/(jpeg|png|webp|gif)$/;
+
+function buildChartReadPrompt(title, artist) {
+  const song = title ? ` It should be${artist ? ` "${title}" by ${artist}` : ` "${title}"`}.` : '';
+  return `This image is a musician's chord chart or Nashville Number chart — often a scan or photo of a hand-written page.${song}
+
+Read ONLY what is actually written on the page — do not fill in facts from outside knowledge. Return ONLY a JSON object, no prose:
+{
+  "found": boolean,      // false if this isn't a readable chart
+  "key": string,         // the key written on the chart ("A", "Bb", "F#m"), "" if not written
+  "bpm": number,         // 0 if not written
+  "capo": number,        // 0 if not written
+  "keyChanges": string,  // any modulation note written on the chart ("mod up to A, last chorus"), "" if none
+  "artist": string,      // "" if not written
+  "confidence": number   // 0-1: how legible the page was
+}`;
+}
+
+async function chartReadClaude(env, prompt, image, mimeType) {
+  const model = env.ANTHROPIC_READ_MODEL || 'claude-haiku-4-5-20251001';
+  const anthropic = new Anthropic({
+    apiKey: env.ANTHROPIC_API_KEY,
+    maxRetries: 1,
+    timeout: AI_READ_TIMEOUT_MS,
+  });
+  const response = await anthropic.messages.create({
+    model,
+    max_tokens: 500,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: mimeType, data: image } },
+        { type: 'text', text: prompt },
+      ],
+    }],
+  });
+  const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+  return { provider: 'claude', model, raw: extractJsonBlock(text) };
+}
+
+async function chartReadGemini(env, prompt, image, mimeType) {
+  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            { inline_data: { mime_type: mimeType, data: image } },
+            { text: prompt },
+          ],
+        }],
+        generationConfig: { temperature: 0, maxOutputTokens: 1000 },
+      }),
+      signal: AbortSignal.timeout(AI_READ_TIMEOUT_MS),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Gemini ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('\n');
+  return { provider: 'gemini', model, raw: extractJsonBlock(text) };
+}
+
+// Only fields the model actually read, validated song-field-shaped so the
+// client can fill-empty apply them directly. null = nothing usable.
+function normalizeChartRead(raw) {
+  if (!raw || typeof raw !== 'object' || raw.found === false) return null;
+  const clean = (s, max) => (typeof s === 'string' ? s.trim().slice(0, max) : '');
+  const fields = {};
+  const key = parseKeyName(clean(raw.key, 6))?.name || '';
+  if (key) fields.key = key;
+  const bpm = Math.round(Number(raw.bpm)) || 0;
+  if (bpm >= 30 && bpm <= 300) fields.bpm = bpm;
+  const capo = Math.round(Number(raw.capo)) || 0;
+  if (capo >= 1 && capo <= 11) fields.capo = capo;
+  const keyChanges = clean(raw.keyChanges, 120);
+  if (keyChanges) fields.keyChanges = keyChanges;
+  const artist = clean(raw.artist, 120);
+  if (artist) fields.artist = artist;
+  return Object.keys(fields).length ? fields : null;
+}
+
+async function handleAiChartRead(request, env) {
+  if (!env.ANTHROPIC_API_KEY && !env.GEMINI_API_KEY) {
+    return corsResponse(JSON.stringify({
+      found: false,
+      aiConfigured: false,
+      reason: 'no AI key configured — set ANTHROPIC_API_KEY or GEMINI_API_KEY on the worker',
+    }), 200, request, env);
+  }
+
+  const body = await request.json().catch(() => null);
+  const image = body?.image || '';
+  const mimeType = body?.mimeType || 'image/jpeg';
+  if (!image || image.length > AI_READ_MAX_BASE64 || !AI_READ_MIME_RE.test(mimeType)) {
+    return corsResponse(JSON.stringify({
+      error: 'POST {image: base64 jpeg/png/webp ≤ ~3MB, mimeType, title?, artist?}',
+    }), 400, request, env);
+  }
+
+  const prompt = buildChartReadPrompt(
+    String(body.title || '').slice(0, 200),
+    String(body.artist || '').slice(0, 200),
+  );
+  const providers = [];
+  if (env.ANTHROPIC_API_KEY) providers.push(chartReadClaude);
+  if (env.GEMINI_API_KEY) providers.push(chartReadGemini);
+
+  const reasons = [];
+  for (const provider of providers) {
+    let result;
+    try {
+      result = await provider(env, prompt, image, mimeType);
+    } catch (e) {
+      reasons.push(String(e.message || e).slice(0, 200));
+      continue;
+    }
+    const fields = normalizeChartRead(result.raw);
+    const confidence = Math.min(1, Math.max(0, Number(result.raw?.confidence) || 0));
+    if (!fields || confidence < AI_MIN_CONFIDENCE) {
+      reasons.push(`${result.provider}: ${fields ? `confidence too low (${confidence})` : 'could not read the chart'}`);
+      continue;
+    }
+    return corsResponse(JSON.stringify({
+      found: true,
+      provider: result.provider,
+      model: result.model,
+      confidence,
+      fields,
+    }), 200, request, env);
+  }
+
+  return corsResponse(JSON.stringify({
+    found: false,
+    reason: reasons.join(' · ') || 'could not read the chart',
+  }), 200, request, env);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -1608,6 +1814,10 @@ export default {
 
       if (url.pathname === '/ai/chart') {
         return await handleAiChart(request, env);
+      }
+
+      if (url.pathname === '/ai/chart-read' && request.method === 'POST') {
+        return await handleAiChartRead(request, env);
       }
 
       if (url.pathname === '/spotify/search-batch' && request.method === 'POST') {

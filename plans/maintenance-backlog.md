@@ -172,18 +172,14 @@ key parses from chart text) is already **done** — these are the items still op
 6. **Settings UX (P3).** "restore from drive" and "back up now" run the identical merge cycle —
    keep one and label it honestly ("back up & pull now"). The dashboard button "sources" opens a
    page titled "sources & auto-link" that also holds backup/Spotify/offline — rename to
-   "settings" and move Drive backup to the top. "scrape" (song page) is jargon — "read chart info"
-   says what it does.
+   "settings" and move Drive backup to the top. (✅ "scrape" is now "read chart".)
 7. **Dead code (P3).** `store.getNotesForSongBulk` is unused (and ignores its argument);
    `sources.driveCharts` has a default + sync path but no Settings UI writes it.
 8. **Perf nits (P3).** `renderSetlistView`/`renderPerformMode` `await store.getSong()` per song in
    a loop (fine ≤50 songs, `Promise.all` when it itches); worker `search-batch` searches
    sequentially.
-9. **Value-adds (existing infra makes these cheap).**
-   - **Lyrics:** LRCLIB (lrclib.net) is keyless + CORS-open — fetch by title/artist into
-     `song.lyrics`, optionally synced lines against the song-page timecode timer.
-   - **Scanned-chart OCR:** the AI providers are already wired and multimodal — a worker route that
-     accepts the cached chart image could read key/sections off scans (the one place chart-text key
-     parsing can't reach).
-   - **Metadata:** iTunes Search API (keyless, CORS) for artist/artwork/genre; MusicBrainz for
-     canonical artist names. Deezer BPM is already in.
+9. ✅ **Value-adds** — *done (2026-07):* LRCLIB lyrics (`lyrics.js`, synced lines follow the
+   timecode timer), scanned-chart vision read (worker `POST /ai/chart-read`, wired into the song
+   page's "read chart" button), and iTunes metadata in `/meta/song`
+   (artist/genre/year/artwork/duration, applied by the "fetch info" button). Still open:
+   MusicBrainz as a second canonical-artist source if iTunes misses.

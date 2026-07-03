@@ -480,6 +480,16 @@ const buildStamp = readBuildStamp();
     /* ── Song Focus ── */
     .sl-focus { padding-bottom: 6rem; }
     .sl-focus-info { margin-bottom: 0.75rem; }
+    .sl-focus-art {
+      float: right;
+      width: 72px;
+      height: 72px;
+      border-radius: 8px;
+      object-fit: cover;
+      margin: 0 0 0.4rem 0.6rem;
+      opacity: 0.92;
+      border: 1px solid var(--border);
+    }
     .sl-focus-title {
       font-size: clamp(1.4rem, 5vw, 2rem);
       font-weight: 700;
@@ -651,6 +661,23 @@ const buildStamp = readBuildStamp();
       border-radius: var(--radius, 6px);
       padding: 0.75rem;
       overflow-x: auto;
+    }
+    /* Synced lyrics scroll inside their own box; the active line follows the
+       timecode timer. */
+    .sl-lyrics-synced {
+      position: relative;
+      max-height: 40vh;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+    }
+    .sl-lyrics-line {
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      transition: color 0.2s, background 0.2s;
+    }
+    .sl-lyrics-line.sl-active {
+      color: var(--text);
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
     }
 
     /* ── Empty & Error ── */

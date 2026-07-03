@@ -11,9 +11,13 @@
 #                          enable the Custom Search API on the same key)
 #   BRAVE_SEARCH_API_KEY   Brave Search API token
 #
-# Optional — /ai/chart LLM chart drafting (first configured provider wins):
+# Optional — /ai/chart LLM chart drafting + /ai/chart-read scan reading
+# (first configured provider wins):
 #   ANTHROPIC_API_KEY      Claude, with web-search grounding
-#   ANTHROPIC_MODEL        plain var; default claude-opus-4-8
+#   ANTHROPIC_MODEL        plain var; default claude-opus-4-8 (chart drafting)
+#   ANTHROPIC_READ_MODEL   plain var; default claude-haiku-4-5-20251001
+#                          (/ai/chart-read — reading a scan is transcription,
+#                          the cheap tier is plenty)
 #   GEMINI_API_KEY         Gemini, with Google Search grounding (free tier at
 #                          aistudio.google.com/apikey)
 #   GEMINI_MODEL           plain var; default gemini-2.5-flash

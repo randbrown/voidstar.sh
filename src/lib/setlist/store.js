@@ -154,6 +154,11 @@ export function createSong(title, artist = '') {
     spotifyUri: '',
     chartUrl: '',
     lyrics: '',
+    syncedLyrics: '', // LRC text ("[mm:ss.xx] line") when LRCLIB has it
+    genre: '',
+    year: 0,
+    durationSec: 0,
+    artworkUrl: '',
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };

@@ -5,7 +5,8 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, getReferencePlaylistTracks } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, getReferencePlaylistTracks, readChartImage } from './sync.js';
+import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
@@ -64,6 +65,16 @@ function el(tag, cls, html) {
   if (cls) e.className = cls;
   if (html) e.innerHTML = html;
   return e;
+}
+
+// Minimal HTML escape for interpolating external-source strings (API
+// metadata, lyrics, filenames) into innerHTML templates. The full sweep of
+// existing interpolations is tracked in plans/maintenance-backlog.md §G.1 —
+// use this for any new ones.
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
 }
 
 function btn(label, cls, onclick) {
@@ -1275,7 +1286,8 @@ export async function renderSongFocus(root, songId, setlistId) {
 
   root.classList.add('sl-focus');
 
-  // Main info
+  // Main info. Artwork/genre/year/duration come from "fetch info" (iTunes
+  // via the worker); kept dim/small — key + key changes are the stage info.
   const info = el('div', 'sl-focus-info');
   info.innerHTML = `
     <h1 class="sl-focus-title">${merged.title}</h1>
@@ -1284,8 +1296,19 @@ export async function renderSongFocus(root, songId, setlistId) {
       ${merged.key ? keyBadge(merged.key, merged._origKey) : '<span class="sl-key-badge sl-key-empty">no key</span>'}
       ${keyChangeBadge(merged.keyChanges)}
       ${merged.steelEntry ? `<span class="sl-steel-tag">steel: ${merged.steelEntry}</span>` : ''}
+      ${song.durationSec ? `<span class="sl-badge sl-badge-dim">${formatTimecode(song.durationSec)}</span>` : ''}
+      ${song.genre ? `<span class="sl-badge sl-badge-dim">${esc(song.genre)}</span>` : ''}
+      ${song.year ? `<span class="sl-badge sl-badge-dim">${parseInt(song.year) || ''}</span>` : ''}
     </div>
   `;
+  if (song.artworkUrl && /^https:\/\//.test(song.artworkUrl)) {
+    const art = document.createElement('img');
+    art.className = 'sl-focus-art';
+    art.src = song.artworkUrl;
+    art.alt = '';
+    art.loading = 'lazy';
+    info.insertBefore(art, info.firstChild);
+  }
   root.appendChild(info);
 
   // Practice-status toggles — independent on/off chips, saved immediately.
@@ -1393,30 +1416,44 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     actionBar.appendChild(rebuildBtn);
 
-    const scrapeBtn = btn('scrape', 'sl-btn-ghost sl-btn-sm', async () => {
-      scrapeBtn.textContent = 'scraping...';
-      const updates = await deepScrapeChart(song);
-      if (updates) {
-        let applied = 0;
-        for (const [k, v] of Object.entries(updates)) {
+    // "read chart" (né "scrape"): doc charts scrape their text export via
+    // the worker; scanned/image charts have no text, so a cached image falls
+    // through to the worker's vision route, which reads what's written on
+    // the page (key, bpm, capo, modulation notes).
+    const readBtn = btn('read chart', 'sl-btn-ghost sl-btn-sm', async () => {
+      readBtn.disabled = true;
+      readBtn.textContent = 'reading doc...';
+      const applyEmpty = (updates) => {
+        let n = 0;
+        for (const [k, v] of Object.entries(updates || {})) {
           if (k.startsWith('_')) continue;
           const cur = song[k];
-          const empty = cur === '' || cur === 0 || cur === null || cur === undefined;
-          if (empty) { song[k] = v; applied++; }
+          if (cur === '' || cur === 0 || cur === null || cur === undefined) { song[k] = v; n++; }
         }
-        if (applied) {
-          await store.putSong(song);
-          scrapeBtn.textContent = `found ${applied} field(s)!`;
-          setTimeout(() => refresh(), 1200);
-        } else {
-          scrapeBtn.textContent = 'no new data';
+        return n;
+      };
+      let applied = applyEmpty(await deepScrapeChart(song));
+      if (!song.key) {
+        const cached = await getOfflineChart(songId, song.chartUrl);
+        if (cached?.kind === 'image') {
+          URL.revokeObjectURL(cached.url);
+          readBtn.textContent = 'reading scan (AI)...';
+          const read = await readChartImage(song, cached.blob);
+          if (read.ok) applied += applyEmpty(read.data);
+          else if (read.reason !== 'no-ai-key') console.warn('[setlist] chart image read:', read.reason);
         }
-      } else {
-        scrapeBtn.textContent = 'no data found';
       }
-      setTimeout(() => { scrapeBtn.textContent = 'scrape'; }, 2500);
+      if (applied) {
+        await store.putSong(song);
+        readBtn.textContent = `found ${applied} field(s)!`;
+        setTimeout(() => refresh(), 1200);
+      } else {
+        readBtn.textContent = 'no new data';
+      }
+      setTimeout(() => { readBtn.textContent = 'read chart'; readBtn.disabled = false; }, 2500);
     });
-    actionBar.appendChild(scrapeBtn);
+    readBtn.title = 'Pull key / BPM / key-change notes from the linked chart — scrapes doc text, AI-reads a scanned image';
+    actionBar.appendChild(readBtn);
   } else {
     // Chart-fallback ladder: tiers 1+2 search personal + community Drive
     // folders, tier 3 scours the web for shared chart files (all via
@@ -1485,6 +1522,61 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     actionBar.appendChild(createBtn);
   }
+  // "fetch info" — one button for song metadata + lyrics: /meta/song on the
+  // worker (Spotify audio-features / Deezer BPM / iTunes artist·genre·year·
+  // artwork·length) plus LRCLIB lyrics straight from the browser (keyless,
+  // CORS-open). Fill-empty: never overwrites a field you've set by hand.
+  const infoBtn = btn('fetch info', 'sl-btn-ghost sl-btn-sm', async () => {
+    infoBtn.disabled = true;
+    infoBtn.textContent = 'fetching info...';
+    try {
+      const meta = await fetchSongMeta(song);
+      infoBtn.textContent = 'fetching lyrics...';
+      const lyr = await fetchLyrics(
+        song.title,
+        song.artist || meta?.artist || '',
+        song.durationSec || meta?.durationSec || 0,
+      );
+      const filled = [];
+      const fill = (field, value, label) => {
+        if (!song[field] && value) { song[field] = value; filled.push(label || field); }
+      };
+      if (meta) {
+        fill('artist', meta.artist);
+        fill('key', meta.key);
+        fill('bpm', meta.bpm);
+        fill('genre', meta.genre);
+        fill('year', meta.year);
+        fill('durationSec', meta.durationSec, 'length');
+        fill('artworkUrl', /^https:\/\//.test(meta.artworkUrl || '') ? meta.artworkUrl : '', 'art');
+      }
+      if (lyr) {
+        const hadLyrics = !!song.lyrics;
+        fill('lyrics', lyr.plain);
+        if (!song.syncedLyrics && lyr.synced) {
+          song.syncedLyrics = lyr.synced;
+          // "lyrics" already announces the new-lyrics case; only call out
+          // synced separately when it upgrades lyrics the song already had.
+          if (hadLyrics) filled.push('synced lyrics');
+        }
+      }
+      if (filled.length) {
+        await store.putSong(song);
+        infoBtn.textContent = `+ ${filled.join(', ')}`;
+        setTimeout(() => refresh(), 1400);
+      } else {
+        infoBtn.textContent = 'nothing new';
+        setTimeout(() => { infoBtn.textContent = 'fetch info'; infoBtn.disabled = false; }, 2200);
+      }
+    } catch (e) {
+      console.warn('[setlist] fetch info:', e.message);
+      infoBtn.textContent = 'failed';
+      setTimeout(() => { infoBtn.textContent = 'fetch info'; infoBtn.disabled = false; }, 2200);
+    }
+  });
+  infoBtn.title = 'Fill empty fields from music APIs (artist, key, genre, year, artwork, length) and fetch lyrics from LRCLIB';
+  actionBar.appendChild(infoBtn);
+
   if (song.spotifyUri) {
     const spBtn = btn('open in spotify', 'sl-btn-spotify sl-btn-sm', () => {
       window.open(getSpotifyOpenUrl(song.spotifyUri), '_blank');
@@ -1542,12 +1634,16 @@ export async function renderSongFocus(root, songId, setlistId) {
   let currentTimecode = 0;
   let timecodeInterval = null;
   let isPlaying = false;
+  // Assigned by the synced-lyrics section below; called each timer tick so
+  // the active lyric line follows the timecode.
+  let onTimecodeTick = null;
+  const hasTimecodeTimer = !!(song.spotifyUri && parseSpotifyUrl(song.spotifyUri));
   // A running timer must not survive navigation (it would tick a detached
   // node forever — one leaked interval per song visited during practice).
   window.addEventListener('hashchange', () => {
     if (timecodeInterval) clearInterval(timecodeInterval);
   }, { once: true });
-  if (song.spotifyUri && parseSpotifyUrl(song.spotifyUri)) {
+  if (hasTimecodeTimer) {
     const embedWrap = el('div', 'sl-spotify-embed');
     renderSpotifyEmbed(embedWrap, song.spotifyUri, 152);
     root.appendChild(embedWrap);
@@ -1565,6 +1661,7 @@ export async function renderSongFocus(root, songId, setlistId) {
         timecodeInterval = setInterval(() => {
           currentTimecode++;
           tcDisplay.textContent = formatTimecode(currentTimecode);
+          onTimecodeTick?.(currentTimecode);
         }, 1000);
       }
     });
@@ -1574,6 +1671,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       isPlaying = false;
       tcDisplay.textContent = '0:00';
       tcPlayBtn.textContent = 'start timer';
+      onTimecodeTick?.(0);
     });
     tcRow.appendChild(el('span', 'sl-timecode-label', 'timecode'));
     tcRow.appendChild(tcDisplay);
@@ -1775,10 +1873,44 @@ export async function renderSongFocus(root, songId, setlistId) {
   notesSection.appendChild(noteInput);
   root.appendChild(notesSection);
 
-  // Lyrics
-  if (song.lyrics) {
+  // Lyrics — synced lines (LRC from LRCLIB) follow the timecode timer:
+  // start the timer with the track and the active line highlights and
+  // scrolls into view inside the lyrics box. Plain lyrics render as-is.
+  // Lyrics are external data — textContent only, never innerHTML.
+  if (song.lyrics || song.syncedLyrics) {
     const lyricsSection = el('div', 'sl-section');
-    lyricsSection.innerHTML = `<div class="sl-section-title">lyrics</div><pre class="sl-lyrics">${song.lyrics}</pre>`;
+    lyricsSection.innerHTML = '<div class="sl-section-title">lyrics</div>';
+    const synced = song.syncedLyrics ? parseSyncedLyrics(song.syncedLyrics) : [];
+    if (synced.length) {
+      const wrap = el('div', 'sl-lyrics sl-lyrics-synced');
+      const lineEls = synced.map(({ t, text }) => {
+        const line = el('div', 'sl-lyrics-line');
+        line.textContent = text || '·';
+        wrap.appendChild(line);
+        return { t, line };
+      });
+      lyricsSection.appendChild(wrap);
+      if (hasTimecodeTimer) {
+        lyricsSection.appendChild(el('div', 'sl-hint', 'synced — lines follow the timecode timer'));
+      }
+      let lastActive = -1;
+      onTimecodeTick = (sec) => {
+        let active = -1;
+        for (let i = 0; i < lineEls.length && lineEls[i].t <= sec; i++) active = i;
+        if (active === lastActive) return;
+        if (lastActive >= 0) lineEls[lastActive].line.classList.remove('sl-active');
+        if (active >= 0) {
+          lineEls[active].line.classList.add('sl-active');
+          // Scroll only the lyrics box (it owns its overflow), not the page.
+          wrap.scrollTop = lineEls[active].line.offsetTop - wrap.clientHeight / 2;
+        }
+        lastActive = active;
+      };
+    } else {
+      const pre = el('pre', 'sl-lyrics');
+      pre.textContent = song.lyrics;
+      lyricsSection.appendChild(pre);
+    }
     root.appendChild(lyricsSection);
   }
 

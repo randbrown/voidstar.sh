@@ -406,9 +406,10 @@ export async function fetchAiChart(song) {
   }
 }
 
-// BPM / key / time signature derived from music APIs (worker /meta/song —
-// Spotify audio-features when the song has a linked track, keyless Deezer
-// for BPM otherwise). Returns {bpm?, key?, time?, sources} or null.
+// Song metadata from music APIs (worker /meta/song — Spotify audio-features
+// when the song has a linked track, keyless Deezer for BPM, keyless iTunes
+// for artist/genre/year/artwork/duration). Returns {bpm?, key?, time?,
+// artist?, genre?, year?, artworkUrl?, durationSec?, sources} or null.
 export async function fetchSongMeta(song) {
   const sources = getSources();
   if (!sources.workerUrl) return null;
@@ -419,9 +420,65 @@ export async function fetchSongMeta(song) {
     const res = await fetch(`${sources.workerUrl}/meta/song?${params}`);
     if (!res.ok) return null;
     const meta = await res.json();
-    return (meta?.bpm || meta?.key || meta?.time) ? meta : null;
+    return meta?.sources?.length || meta?.bpm || meta?.key || meta?.time ? meta : null;
   } catch {
     return null;
+  }
+}
+
+// ── AI vision read of a scanned/image chart ──
+// Text scraping can't reach a photo of a hand-written chart; the worker's
+// /ai/chart-read route has a vision model read what's actually written on
+// the page (key, bpm, capo, modulation notes). The blob is downscaled
+// client-side first — vision models cap request sizes, and the chart header
+// doesn't need w2000 pixels.
+const CHART_READ_MAX_DIM = 1600;
+
+async function blobToScaledJpegBase64(blob, maxDim = CHART_READ_MAX_DIM) {
+  const bitmap = await createImageBitmap(blob);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  return { data: dataUrl.slice(dataUrl.indexOf(',') + 1), mimeType: 'image/jpeg' };
+}
+
+// Returns {ok:true, data:{key?, bpm?, capo?, keyChanges?, artist?}} with only
+// the fields the model actually read off the page, or {ok:false, reason} —
+// 'no-ai-key' means skip silently (no key configured on the worker).
+export async function readChartImage(song, blob) {
+  const sources = getSources();
+  if (!sources.workerUrl) return { ok: false, reason: 'no worker configured' };
+  let payload;
+  try {
+    payload = await blobToScaledJpegBase64(blob);
+  } catch (e) {
+    return { ok: false, reason: `image decode failed: ${e.message}` };
+  }
+  try {
+    const res = await fetch(`${sources.workerUrl}/ai/chart-read`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: payload.data,
+        mimeType: payload.mimeType,
+        title: song.title || '',
+        artist: song.artist || '',
+      }),
+    });
+    if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
+    if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
+    const data = await res.json();
+    if (data?.aiConfigured === false) return { ok: false, reason: 'no-ai-key' };
+    if (!data?.found) return { ok: false, reason: data?.reason || 'could not read the chart' };
+    return { ok: true, data: data.fields || {} };
+  } catch {
+    return { ok: false, reason: 'network error' };
   }
 }
 

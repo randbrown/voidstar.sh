@@ -20,7 +20,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, spotifyUri, chartUrl, lyrics, statuses, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and scrape still read/write them) but have **no edit UI** — the song form is key + key changes only |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, spotifyUri, chartUrl, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker) |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow), one per song |
@@ -94,13 +94,43 @@ the song page render (`maybeFillKeyFromChart`, which also patches the "no
 key" badge in place) and when a text chart is offline-cached
 (`cacheChartForSong`, so bulk "download all charts" populates keys
 library-wide). The worker's `extractFromText` keeps matching patterns for
-the "scrape" button. Scanned/image charts have no text to parse — those
-still need scrape-able filenames or manual entry.
+the song page's "read chart" button (formerly "scrape"). Scanned/image
+charts have no text to parse — for those, "read chart" falls through to the
+worker's **vision route** (`POST /ai/chart-read`): the cached chart image is
+downscaled client-side (`readChartImage` in `sync.js`) and a vision model
+transcribes what's actually written on the page — key, BPM, capo, modulation
+notes — with a read-only prompt (no invention), confidence-gated and
+normalized server-side like the drafting route. Reading is transcription,
+not drafting, so it defaults to the cheap model tier
+(`ANTHROPIC_READ_MODEL`, default Haiku).
 
 `song.keyChanges` ("mod up to A, last chorus") renders as a **pulsing amber
 badge right next to the key** (`.sl-keychange-badge`) on the song page,
 setlist rows, and perform mode — a mid-song modulation must grab the eye,
 so never restyle it into a dim secondary badge.
+
+### "fetch info" — metadata + lyrics in one tap
+
+The song page's "fetch info" button fills **empty** fields only (never
+overwrites hand-set values) from two sources:
+
+- **`GET /meta/song`** (worker): BPM/key/time as before, plus keyless
+  **iTunes Search** for canonical artist, genre, release year, track length,
+  and album artwork (600px, https-only). Artwork shows as a small square on
+  the song page (`.sl-focus-art`); genre/year/length are dim badges. Perform
+  mode deliberately shows none of this — key + key changes are the stage
+  info.
+- **LRCLIB** (`lyrics.js`, straight from the browser — lrclib.net is keyless
+  and CORS-open): plain lyrics into `song.lyrics`, LRC synced lyrics into
+  `song.syncedLyrics`. Exact `/api/get` lookup first (title + artist +
+  duration), then `/api/search` ranked with the app's own match scoring
+  (≥ 0.7 to accept). Synced-only tracks derive plain text from the LRC.
+
+Lyrics render via `textContent` only (external data). When `syncedLyrics`
+exists, the lyrics section becomes a scrolling box whose active line
+highlights and centers as the **timecode timer** runs (the `onTimecodeTick`
+hook in `renderSongFocus`) — start the timer with the Spotify embed and the
+lyrics follow.
 
 ## Backup/Restore vs. Sync — these are different features
 
@@ -457,5 +487,8 @@ Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `GET /drive/file/:id/text`, `GET /drive/file/:id/image`,
 `GET /web/chart-search?title=&artist=`,
 `GET /web/chart-data?title=&artist=`,
-`GET /meta/song?title=&artist=&spotifyId=`,
-`GET /ai/chart?title=&artist=&key=`, `GET /health`.
+`GET /meta/song?title=&artist=&spotifyId=` (BPM/key/time + iTunes
+artist/genre/year/artwork/duration),
+`GET /ai/chart?title=&artist=&key=`,
+`POST /ai/chart-read` (vision read of a scanned chart image;
+`ANTHROPIC_READ_MODEL` overrides the default Haiku), `GET /health`.
