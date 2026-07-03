@@ -9,6 +9,7 @@
 
 import * as store from './store.js';
 import { getSources } from './sync.js';
+import { extractKeyFromChartText } from './chart-key.js';
 
 // Broadcast when a chart lands in the cache so open views (e.g. the setlist
 // offline bar) can live-refresh their N/M count as background caching runs.
@@ -99,6 +100,15 @@ export async function cacheChartForSong(song, workerUrl) {
     // cache with a permanently broken "image".
     if (!isRenderableChartBlob(blob)) return { songId: song.id, ok: false, reason: `not an image (${blob.type || 'unknown type'})` };
     await store.putChartBlob(song.id, blob, song.chartUrl);
+    // A text chart's header usually states the key — fill an empty song.key
+    // while the bytes are in hand. This also runs during bulk "download all
+    // charts", so keys populate library-wide in one pass.
+    if (!song.key && blob.type.startsWith('text/plain')) {
+      try {
+        const key = extractKeyFromChartText(await blob.text());
+        if (key) { song.key = key; await store.putSong(song); }
+      } catch {}
+    }
     announceCached(song.id);
     return { songId: song.id, ok: true, size: blob.size };
   } catch (e) {

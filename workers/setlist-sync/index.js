@@ -494,16 +494,19 @@ function extractFromText(text) {
   const lines = text.split('\n').slice(0, 30);
   const header = lines.join('\n');
 
-  // Key in upper left area — Nashville charts often put "Key: A" or just "A" or "G"
+  // Key in the header — "Key: A", "Key of G", "Key - Bb", or the key alone
+  // on its own line (the top corner of a Nashville chart). Normalized to
+  // root + optional "m". Keep in step with the client's chart-key.js.
   const keyPatterns = [
-    /key\s*(?:of\s*)?[:=]\s*([A-G][b#]?(?:m(?:aj|in)?)?)/i,
-    /^([A-G][b#]?(?:m(?:aj|in)?)?)\s*$/m,
-    /^\s*([A-G][b#]?(?:m(?:aj|in)?)?)\s*(?:major|minor)?\s*$/im,
+    /\bkey\s*(?:of\b)?\s*[:=\-–—]?\s*([A-G][b#]?)\s*(m\b|min\b|minor\b|maj\b|major\b)?(?![a-z])/i,
+    /^\s*([A-G][b#]?)\s*(m|min|minor|maj|major)?\s*$/im,
   ];
   for (const re of keyPatterns) {
     const m = header.match(re);
     if (m) {
-      meta.inferredKey = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+      const root = m[1].charAt(0).toUpperCase() + (m[1][1] || '');
+      const minor = /^m(?:in(?:or)?)?$/i.test((m[2] || '').trim());
+      meta.inferredKey = root + (minor ? 'm' : '');
       break;
     }
   }

@@ -167,19 +167,31 @@ export async function ensureDriveAccess() {
   if (!token) throw new Error('Google Drive not connected. Set a Client ID and connect in Settings.');
 }
 
-async function findDataFile(token) {
+// All data files matching FILE_NAME, newest-modified first. Ordered so every
+// device deterministically picks the same (newest) file — an unordered
+// pageSize-1 lookup let two devices bind to different duplicates and each
+// miss the other's edits.
+async function findDataFiles(token) {
   const params = new URLSearchParams({
     q: `name='${FILE_NAME}' and trashed=false`,
     spaces: 'drive',
     fields: 'files(id,name,modifiedTime)',
-    pageSize: '1',
+    orderBy: 'modifiedTime desc',
+    pageSize: '10',
   });
   const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
     headers: { 'Authorization': `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`Drive search failed: ${res.status}`);
-  const data = await res.json();
-  return data.files?.[0] || null;
+  return (await res.json()).files || [];
+}
+
+async function trashFile(token, fileId) {
+  await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+    method: 'PATCH',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trashed: true }),
+  });
 }
 
 async function readFile(token, fileId) {
@@ -224,17 +236,31 @@ export async function initGdriveBackup({ interactive = true } = {}) {
 
   return {
     async push(data) {
-      const existing = await findDataFile(token);
-      if (existing) {
-        await updateFile(token, existing.id, data);
+      const files = await findDataFiles(token);
+      if (files.length) {
+        await updateFile(token, files[0].id, data);
       } else {
         await createFile(token, data);
       }
     },
     async pull() {
-      const existing = await findDataFile(token);
-      if (!existing) return null;
-      return readFile(token, existing.id);
+      const files = await findDataFiles(token);
+      if (!files.length) return null;
+      let data = await readFile(token, files[0].id);
+      // Two devices' first backups can race and create duplicate data files,
+      // splitting the dataset (each device reads/writes "its" copy and never
+      // sees the other's — reads as backup silently dropping records). Heal
+      // it here: merge every duplicate into the newest and trash the extras
+      // so all devices converge on one file.
+      for (const dupe of files.slice(1)) {
+        try {
+          data = mergeData(data, await readFile(token, dupe.id));
+          await trashFile(token, dupe.id);
+        } catch (e) {
+          console.warn('[gdrive-backup] duplicate data file merge failed:', e.message);
+        }
+      }
+      return data;
     },
     // Version history (rotating timestamped copies). Methods close over the
     // token so callers never handle it directly.
@@ -447,13 +473,60 @@ function mergeById(localArr, remoteArr, keyField = 'id') {
   return [...map.values()];
 }
 
+// Config objects (sources, settings) merge by "filled wins": local values
+// win only when actually set; gaps fill from remote. The old
+// `local.sources || remote.sources` treated a fresh device's empty {} as
+// truthy — connecting Drive on a new device clobbered the backed-up sources
+// with nothing, and new devices never inherited the worker URL / folders.
+function mergeConfig(local, remote) {
+  const out = { ...(remote || {}) };
+  for (const [k, v] of Object.entries(local || {})) {
+    const empty = v == null || v === '' || (Array.isArray(v) && v.length === 0);
+    if (!empty || !(k in out)) out[k] = v;
+  }
+  return out;
+}
+
+function configChanged(local = {}, remote = {}) {
+  const merged = mergeConfig(local, remote);
+  const keys = new Set([...Object.keys(merged), ...Object.keys(local)]);
+  for (const k of keys) {
+    if (JSON.stringify(merged[k]) !== JSON.stringify(local[k])) return true;
+  }
+  return false;
+}
+
+// True when merging `remote` into `local` would change local state: remote
+// carries a record local lacks, a newer version of one it has, or config
+// values local is missing. Lets pullMergePushCycle skip the import step (and
+// its write-hook side effects) when a cycle finds nothing new — without this,
+// the auto-push cycle would re-import identical data, fire the write hook,
+// and reschedule itself forever.
+function remoteHasNews(local, remote) {
+  const newer = (l = [], r = [], keyField = 'id') => {
+    const map = new Map(l.map(i => [i[keyField], i]));
+    return r.some(rec => {
+      const cur = map.get(rec[keyField]);
+      if (!cur) return true;
+      return (rec.updatedAt || rec.createdAt || 0) > (cur.updatedAt || cur.createdAt || 0);
+    });
+  };
+  return newer(local.songs, remote.songs)
+    || newer(local.notes, remote.notes)
+    || newer(local.setlists, remote.setlists)
+    || newer(local.annotations, remote.annotations, 'songId')
+    || configChanged(local.sources, remote.sources)
+    || configChanged(local.settings, remote.settings);
+}
+
 export function mergeData(local, remote) {
   return {
     songs: mergeById(local.songs || [], remote.songs || []),
     notes: mergeById(local.notes || [], remote.notes || []),
     setlists: mergeById(local.setlists || [], remote.setlists || []),
     annotations: mergeById(local.annotations || [], remote.annotations || [], 'songId'),
-    sources: local.sources || remote.sources || {},
+    sources: mergeConfig(local.sources, remote.sources),
+    settings: mergeConfig(local.settings, remote.settings),
   };
 }
 
@@ -469,18 +542,23 @@ export function mergeData(local, remote) {
 // opts:
 //   snapshotFn  — called right BEFORE importing merged remote data, so the
 //                 caller can snapshot the true pre-import local state (used
-//                 for "undo last sync"). Only runs when there was remote data.
+//                 for "undo last sync"). Only runs when the remote data will
+//                 actually change local state.
 //   historyForce — force a Drive version-history write even inside the throttle
 //                 window (manual actions pass true; auto-sync leaves it false).
 export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) {
-  if (_syncing) return { merged: null, hadRemote: false, skipped: true };
+  if (_syncing) return { merged: null, hadRemote: false, changed: false, skipped: true };
   _syncing = true;
   try {
     const remote = await client.pull();
     const local = await exportFn();
     const merged = remote ? mergeData(local, remote) : local;
-    if (remote && opts.snapshotFn) await opts.snapshotFn();
-    if (remote) await importFn(merged);
+    // Import (and snapshot) only when remote actually changes something —
+    // re-importing identical data would churn snapshots and re-fire the
+    // write hook (which schedules another auto-push) on every cycle.
+    const changed = remote ? remoteHasNews(local, remote) : false;
+    if (changed && opts.snapshotFn) await opts.snapshotFn();
+    if (changed) await importFn(merged);
     await client.push({ ...merged, version: 1, exportedAt: Date.now() });
     // Version history is best-effort — a failure here must not fail the sync.
     if (client.writeHistory) {
@@ -488,7 +566,7 @@ export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) 
       catch (e) { console.warn('[gdrive-backup] history write failed:', e.message); }
     }
     setLastBackupTime(Date.now());
-    return { merged, hadRemote: !!remote };
+    return { merged, hadRemote: !!remote, changed };
   } finally {
     _syncing = false;
   }
@@ -497,6 +575,7 @@ export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) 
 let _pushTimer = null;
 let _backupClient = null;
 let _exportFn = null;
+let _importFn = null;
 let _syncing = false;
 
 // True while any pull/merge/push (manual, auto, or focus) is in flight — every
@@ -529,25 +608,36 @@ async function pushNow() {
   // Don't collide with a full pull/merge/push cycle already running; that cycle
   // pushes the same data, so re-flag as pending and let it settle.
   if (_syncing) { _pendingPush = true; return; }
-  _syncing = true;
   setBackupState('syncing');
   try {
-    await _backupClient.push(await _exportFn());
-    setLastBackupTime(Date.now());
+    if (_importFn) {
+      // Auto-push runs the same pull→merge→push cycle as every other path: a
+      // blind push would overwrite Drive with this device's dataset and
+      // silently drop whatever another device pushed since our last pull —
+      // the classic two-devices-open "one backup overwrote another".
+      await pullMergePushCycle(_backupClient, _exportFn, _importFn);
+    } else {
+      _syncing = true;
+      try {
+        await _backupClient.push(await _exportFn());
+        setLastBackupTime(Date.now());
+      } finally {
+        _syncing = false;
+      }
+    }
     _pendingPush = false;
     setBackupState('synced');
   } catch (e) {
     _pendingPush = true;
     setBackupState('pending');
     console.warn('[gdrive-backup] push failed:', e.message);
-  } finally {
-    _syncing = false;
   }
 }
 
-export async function debouncedPush(exportFn, delayMs = 3000) {
+export async function debouncedPush(exportFn, importFn, delayMs = 3000) {
   if (!_backupClient) return;
   _exportFn = exportFn;
+  if (importFn) _importFn = importFn;
   if (_pushTimer) clearTimeout(_pushTimer);
   _pushTimer = setTimeout(() => {
     _pushTimer = null;

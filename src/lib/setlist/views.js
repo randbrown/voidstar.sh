@@ -13,6 +13,7 @@ import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from 
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError } from './spotify-auth.js';
+import { extractKeyFromChartText } from './chart-key.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -143,6 +144,14 @@ function keyBadge(key, origKey) {
   return `<span class="sl-key-badge">${label}</span>`;
 }
 
+// Key-change callout. A mid-song modulation is easy to blow on stage, so a
+// filled-in keyChanges renders as a loud pulsing badge right next to the key
+// — never a dim afterthought.
+function keyChangeBadge(keyChanges) {
+  if (!keyChanges) return '';
+  return `<span class="sl-keychange-badge">⚠ ${keyChanges}</span>`;
+}
+
 function vocalistDot(code, legend) {
   if (!code) return '';
   const name = legend?.[code] || code;
@@ -154,9 +163,9 @@ function vocalistDot(code, legend) {
 // on the song page; setlist rows show the abbreviated badge.
 const SONG_STATUSES = [
   { key: 'todo', label: 'todo', abbr: 'todo' },
-  { key: 'needsWork', label: 'needs work', abbr: 'work' },
+  { key: 'needsWork', label: 'work', abbr: 'work' },
   { key: 'ok', label: 'ok', abbr: 'ok' },
-  { key: 'goodToGo', label: 'good to go', abbr: 'go' },
+  { key: 'goodToGo', label: 'good', abbr: 'good' },
   { key: 'steelLead', label: 'steel lead', abbr: 'steel' },
 ];
 
@@ -426,7 +435,7 @@ async function autoBackupFromGdrive() {
   await pullMergePushCycle(client, () => store.exportAll(), (merged) => store.importAll(merged),
     { snapshotFn: () => store.putSnapshot('pre-sync') });
 
-  store.setOnWrite(() => debouncedPush(() => store.exportAll()));
+  store.setOnWrite(() => debouncedPush(() => store.exportAll(), (merged) => store.importAll(merged)));
   watchConnectivity();
 }
 
@@ -474,7 +483,7 @@ export async function renderLibrary(root) {
   function renderList(filter) {
     const lower = (filter || '').toLowerCase();
     let filtered = lower
-      ? allSongs.filter(s => s.title.toLowerCase().includes(lower) || s.artist.toLowerCase().includes(lower))
+      ? allSongs.filter(s => s.title.toLowerCase().includes(lower) || (s.artist || '').toLowerCase().includes(lower))
       : allSongs;
     if (statusFilter.size) {
       filtered = filtered.filter(s => [...statusFilter].every(k => (s.statuses || []).includes(k)));
@@ -603,6 +612,7 @@ export async function renderSetlistView(root, setlistId) {
           <span class="sl-song-card-title">${merged.title}${merged.artist ? ` <span class="sl-song-card-artist">${merged.artist}</span>` : ''}</span>
           ${statusBadges(song)}
           ${keyBadge(merged.key, merged._origKey)}
+          ${keyChangeBadge(merged.keyChanges)}
           ${vocalistDot(vocalist, sl.vocalistLegend)}
         </div>
         ${merged.steelEntry ? `<div class="sl-steel-tag">steel: ${merged.steelEntry}</div>` : ''}
@@ -705,7 +715,7 @@ export async function renderSetlistEdit(root, setlistId) {
     const name = prompt(`Name for "${code.toUpperCase()}":`);
     if (!sl.vocalistLegend) sl.vocalistLegend = {};
     sl.vocalistLegend[code.toUpperCase()] = name || '';
-    store.putSetlist(sl).then(() => renderSetlistEdit(root.parentElement || root, setlistId));
+    store.putSetlist(sl).then(() => refresh());
   });
   vocSection.appendChild(vocGrid);
   vocSection.appendChild(addVoc);
@@ -1079,6 +1089,21 @@ function mountRemoteChartInto(stage, song) {
   }
 }
 
+// Fill an empty song.key from chart text the page just rendered — the key is
+// usually right in the chart header, so a song with a linked doc chart should
+// never sit at "no key". Saves once, then patches the already-rendered "no
+// key" badge in place rather than re-rendering mid-view.
+async function maybeFillKeyFromChart(song, text) {
+  if (song.key || !text) return;
+  const key = extractKeyFromChartText(text);
+  if (!key) return;
+  song.key = key;
+  await store.putSong(song);
+  const empty = document.querySelector('.sl-focus-badges .sl-key-empty');
+  if (empty) empty.outerHTML = keyBadge(key);
+  console.log('[setlist] key parsed from chart header:', key);
+}
+
 // Inline chart display for the song page — the same aspect-locked stage
 // pattern as the annotation editor (chart rect == canvas rect == the
 // stored-aspect box, see docs/setlist-app.md), rendering the cached chart
@@ -1096,6 +1121,7 @@ async function renderInlineChart(container, song, songId) {
   const cached = await getOfflineChart(songId, song.chartUrl);
   if (cached?.kind === 'text') {
     stage.appendChild(mountTextChart(stage, cached.text));
+    maybeFillKeyFromChart(song, cached.text);
   } else if (cached) {
     const url = await chartDisplayUrl(cached);
     const img = document.createElement('img');
@@ -1113,8 +1139,12 @@ async function renderInlineChart(container, song, songId) {
     // (annotations can't track an iframe's internal scroll); anything else
     // renders the flattened Drive image with the embed as last resort.
     const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
-    if (liveText) stage.appendChild(mountTextChart(stage, liveText));
-    else mountRemoteChartInto(stage, song);
+    if (liveText) {
+      stage.appendChild(mountTextChart(stage, liveText));
+      maybeFillKeyFromChart(song, liveText);
+    } else {
+      mountRemoteChartInto(stage, song);
+    }
   }
 
   const canvas = document.createElement('canvas');
@@ -1252,10 +1282,8 @@ export async function renderSongFocus(root, songId, setlistId) {
     ${merged.artist ? `<div class="sl-focus-artist">${merged.artist}</div>` : ''}
     <div class="sl-focus-badges">
       ${merged.key ? keyBadge(merged.key, merged._origKey) : '<span class="sl-key-badge sl-key-empty">no key</span>'}
-      ${merged.capo ? `<span class="sl-badge">capo ${merged.capo}</span>` : ''}
-      ${merged.bpm ? `<span class="sl-badge">${merged.bpm} bpm</span>` : ''}
+      ${keyChangeBadge(merged.keyChanges)}
       ${merged.steelEntry ? `<span class="sl-steel-tag">steel: ${merged.steelEntry}</span>` : ''}
-      ${merged.keyChanges ? `<span class="sl-badge sl-badge-dim">${merged.keyChanges}</span>` : ''}
     </div>
   `;
   root.appendChild(info);
@@ -1290,14 +1318,12 @@ export async function renderSongFocus(root, songId, setlistId) {
     <label class="sl-label">Artist<input class="sl-input" id="sf-artist" value="${song.artist || ''}"></label>
     <div class="sl-row">
       <label class="sl-label sl-flex1">Key<input class="sl-input" id="sf-key" value="${isOverride ? (merged.key || '') : (song.key || '')}" placeholder="e.g. G, Bb, C#m"></label>
-      <label class="sl-label sl-flex1">Capo<input class="sl-input" id="sf-capo" type="number" min="0" max="12" value="${merged.capo || 0}"></label>
-      <label class="sl-label sl-flex1">BPM<input class="sl-input" id="sf-bpm" type="number" min="0" value="${merged.bpm || 0}"></label>
+      <label class="sl-label sl-flex1">Key Changes<input class="sl-input" id="sf-keychanges" value="${song.keyChanges || ''}" placeholder="e.g. mod up to A, last chorus"></label>
     </div>
-    <label class="sl-label">Key Changes<input class="sl-input" id="sf-keychanges" value="${song.keyChanges || ''}" placeholder="e.g. Modulates to A"></label>
     <label class="sl-label">Steel Entry<input class="sl-input" id="sf-steel" value="${isOverride ? (merged.steelEntry || '') : (song.steelEntry || '')}" placeholder="e.g. intro, chorus, verse 2"></label>
     <label class="sl-label">Spotify URL<input class="sl-input" id="sf-spotify" value="${song.spotifyUri || ''}" placeholder="https://open.spotify.com/track/..."></label>
     <label class="sl-label">Chart URL (Google Drive)<input class="sl-input" id="sf-chart" value="${song.chartUrl || ''}" placeholder="https://drive.google.com/..."></label>
-    ${isOverride ? '<div class="sl-hint">Key, capo, and steel entry save as overrides for this setlist. Title, artist, Spotify, and chart save to the base song.</div>' : ''}
+    ${isOverride ? '<div class="sl-hint">Key and steel entry save as overrides for this setlist. Title, artist, key changes, Spotify, and chart save to the base song.</div>' : ''}
   `;
   editForm.addEventListener('change', async () => {
     song.title = document.getElementById('sf-title').value;
@@ -1307,23 +1333,18 @@ export async function renderSongFocus(root, songId, setlistId) {
     song.chartUrl = document.getElementById('sf-chart').value;
 
     const keyVal = document.getElementById('sf-key').value;
-    const capoVal = parseInt(document.getElementById('sf-capo').value) || 0;
-    const bpmVal = parseInt(document.getElementById('sf-bpm').value) || 0;
     const steelVal = document.getElementById('sf-steel').value;
 
     if (isOverride) {
       if (!setlist.songOverrides) setlist.songOverrides = {};
       if (!setlist.songOverrides[song.id]) setlist.songOverrides[song.id] = {};
       setlist.songOverrides[song.id].key = keyVal;
-      setlist.songOverrides[song.id].capo = capoVal;
       setlist.songOverrides[song.id].steelEntry = steelVal;
       await store.putSetlist(setlist);
     } else {
       song.key = keyVal;
-      song.capo = capoVal;
       song.steelEntry = steelVal;
     }
-    song.bpm = bpmVal;
     await store.putSong(song);
   });
   root.appendChild(editForm);
@@ -1521,6 +1542,11 @@ export async function renderSongFocus(root, songId, setlistId) {
   let currentTimecode = 0;
   let timecodeInterval = null;
   let isPlaying = false;
+  // A running timer must not survive navigation (it would tick a detached
+  // node forever — one leaked interval per song visited during practice).
+  window.addEventListener('hashchange', () => {
+    if (timecodeInterval) clearInterval(timecodeInterval);
+  }, { once: true });
   if (song.spotifyUri && parseSpotifyUrl(song.spotifyUri)) {
     const embedWrap = el('div', 'sl-spotify-embed');
     renderSpotifyEmbed(embedWrap, song.spotifyUri, 152);
@@ -2520,8 +2546,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       ${song.artist ? `<div class="sl-perform-artist">${song.artist}</div>` : ''}
       <div class="sl-perform-badges">
         ${song.key ? keyBadge(song.key, song._origKey) : ''}
-        ${song.capo ? `<span class="sl-badge">capo ${song.capo}</span>` : ''}
-        ${song.bpm ? `<span class="sl-badge">${song.bpm} bpm</span>` : ''}
+        ${keyChangeBadge(song.keyChanges)}
         ${vocalist ? vocalistDot(vocalist, sl.vocalistLegend) : ''}
       </div>
       ${song.steelEntry ? `<div class="sl-perform-steel">steel: ${song.steelEntry}</div>` : ''}

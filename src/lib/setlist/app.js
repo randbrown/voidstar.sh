@@ -102,7 +102,7 @@ function watchFocusSync() {
     _lastFocusPull = Date.now();
     setBackupClient(client);
     try {
-      const { hadRemote } = await pullMergePushCycle(
+      const { changed } = await pullMergePushCycle(
         client,
         () => store.exportAll(),
         (merged) => store.importAll(merged),
@@ -110,7 +110,9 @@ function watchFocusSync() {
       );
       // Re-render so pulled changes show — but never yank the view out from
       // under someone mid-typing (would lose an unsaved input/textarea).
-      if (hadRemote) {
+      // `changed` (not just "remote existed") so a no-op pull doesn't rebuild
+      // the view for nothing on every refocus.
+      if (changed) {
         const ae = document.activeElement;
         const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
         if (!typing) refresh();

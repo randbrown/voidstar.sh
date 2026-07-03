@@ -309,7 +309,8 @@ export async function exportAll() {
     getAllSongs(), getAllNotes(), getAllSetlists(), getAllAnnotations(),
   ]);
   const sources = getSourcesRaw();
-  return { version: 1, songs, notes, setlists, annotations, sources, exportedAt: Date.now() };
+  const settings = getSettingsRaw();
+  return { version: 1, songs, notes, setlists, annotations, sources, settings, exportedAt: Date.now() };
 }
 
 export async function importAll(data) {
@@ -318,6 +319,7 @@ export async function importAll(data) {
   if (data.setlists) for (const sl of data.setlists) await put(SETLISTS, sl);
   if (data.annotations) for (const a of data.annotations) await put(ANNOTATIONS, a);
   if (data.sources) setSourcesRaw(data.sources);
+  if (data.settings) applySettingsRaw(data.settings);
 }
 
 // Full REPLACE (not a merge): clear the user-data stores, then load `data`.
@@ -381,12 +383,31 @@ function setSourcesRaw(sources) {
   localStorage.setItem('voidstar.setlist.sources', JSON.stringify(sources));
 }
 
-export async function getNotesForSongBulk(songIds) {
-  const allNotes = await getAllNotes();
-  const map = {};
-  for (const n of allNotes) {
-    if (!map[n.songId]) map[n.songId] = [];
-    map[n.songId].push(n);
+// ── Cross-device settings (identity/config that should follow the user) ──
+// OAuth *client ids* are public identifiers, not secrets, so they ride the
+// Drive backup — a new device inherits them instead of re-entering by hand.
+// Tokens never ride the backup; per-device prefs (chart appearance, enhance)
+// stay local on purpose.
+const SETTINGS_KEYS = {
+  gdriveClientId: 'voidstar.setlist.gdrive.clientId',
+  spotifyClientId: 'voidstar.setlist.spotify.clientId',
+};
+
+function getSettingsRaw() {
+  const out = {};
+  for (const [name, key] of Object.entries(SETTINGS_KEYS)) {
+    const v = localStorage.getItem(key);
+    if (v) out[name] = v;
   }
-  return map;
+  return out;
+}
+
+// Fill-empty apply: a backed-up value never overwrites one this device
+// already has — local stays authoritative, the backup bootstraps blanks.
+function applySettingsRaw(settings) {
+  for (const [name, key] of Object.entries(SETTINGS_KEYS)) {
+    if (settings[name] && !localStorage.getItem(key)) {
+      localStorage.setItem(key, settings[name]);
+    }
+  }
 }
