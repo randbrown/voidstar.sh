@@ -20,7 +20,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, spotifyUri, chartUrl, lyrics, statuses, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, spotifyUri, chartUrl, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker) |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow), one per song |
@@ -34,27 +34,33 @@ Everything else round-trips through backup — including `annotations`.
 
 ### Local state outside IndexedDB
 
-Per-device preferences live in web storage and deliberately do **not** ride
-the Drive backup:
+App state that isn't song/setlist data lives in web storage. **Identity/config
+that should follow the user across devices rides the Drive backup** — the
+payload's `sources` and `settings` sections, merged *fill-empty* (a value the
+device already has always wins; only blanks fill from the backup, so a new
+device bootstraps itself but a fresh install can never clobber the fleet's
+config). Tokens and per-device display prefs never ride it:
 
-| Key | Store | What |
-|---|---|---|
-| `voidstar.setlist.sources` | localStorage | worker URL + personal/community Drive chart-folder ids (Settings → "sources & auto-link") |
-| `voidstar.setlist.gdrive.clientId` | localStorage | Google OAuth client id |
-| `voidstar.setlist.gdrive.token` | localStorage | cached OAuth access token (~1 h) |
-| `voidstar.setlist.gdrive.lastBackupAt` / `.lastHistoryAt` | localStorage | backup + history-rotation throttle timestamps |
-| `voidstar.setlist.gdrive.backupsFolderId` / `.chartsFolderId` | localStorage | cached Drive folder ids ("voidstar backups" / "voidstar charts") |
-| `voidstar.setlist.chartAppearance.detail` / `.perform` | localStorage | per-mode chart look, `'dark'` \| `'light'` (see the chart-appearance section); legacy `voidstar.setlist.invertChartDetail` / `.invertChart` migrate `1`→dark, `0`→light |
-| `voidstar.setlist.chartEnhance` | localStorage | "✦ enhance" auto-levels for cached image charts, `'1'` (default, on) \| `'0'` (see the chart-appearance section) |
-| `voidstar.setlist.spotify.clientId` / `.token` | localStorage | Spotify user login (PKCE): client id + `{accessToken, refreshToken, expiresAt}` (see the Spotify-links section) |
-| `voidstar.setlist.spotify.pkce` | sessionStorage | PKCE verifier + return hash, alive only during the login redirect round-trip |
-| `voidstar.setlist.noteDraft.<songId>` | sessionStorage | uncommitted note-composer draft (survives focus-driven `refresh()` and app-switching; cleared on save) |
+| Key | Store | Backed up? | What |
+|---|---|---|---|
+| `voidstar.setlist.sources` | localStorage | ✓ `sources` | worker URL + personal/community Drive chart-folder ids (Settings → "sources & auto-link") |
+| `voidstar.setlist.gdrive.clientId` | localStorage | ✓ `settings.gdriveClientId` | Google OAuth client id (public identifier, not a secret) |
+| `voidstar.setlist.spotify.clientId` | localStorage | ✓ `settings.spotifyClientId` | Spotify client id — shared by the worker and the PKCE login |
+| `voidstar.setlist.gdrive.token` | localStorage | ✗ | cached OAuth access token (~1 h) |
+| `voidstar.setlist.gdrive.lastBackupAt` / `.lastHistoryAt` | localStorage | ✗ | backup + history-rotation throttle timestamps |
+| `voidstar.setlist.gdrive.backupsFolderId` / `.chartsFolderId` | localStorage | ✗ | cached Drive folder ids ("voidstar backups" / "voidstar charts") |
+| `voidstar.setlist.chartAppearance.detail` / `.perform` | localStorage | ✗ | per-mode chart look, `'dark'` \| `'light'` (see the chart-appearance section); legacy `voidstar.setlist.invertChartDetail` / `.invertChart` migrate `1`→dark, `0`→light |
+| `voidstar.setlist.chartEnhance` | localStorage | ✗ | "✦ enhance" auto-levels for cached image charts, `'1'` (default, on) \| `'0'` (see the chart-appearance section) |
+| `voidstar.setlist.spotify.token` | localStorage | ✗ | Spotify user login (PKCE): `{accessToken, refreshToken, expiresAt}` (see the Spotify-links section) |
+| `voidstar.setlist.spotify.pkce` | sessionStorage | ✗ | PKCE verifier + return hash, alive only during the login redirect round-trip |
+| `voidstar.setlist.noteDraft.<songId>` | sessionStorage | ✗ | uncommitted note-composer draft (survives focus-driven `refresh()` and app-switching; cleared on save) |
 
 ### Practice statuses
 
 `song.statuses` holds zero or more keys from `SONG_STATUSES` (`views.js`):
 `todo` / `needsWork` / `ok` / `goodToGo` / `steelLead`, in that display
-order, abbreviated `todo`/`work`/`ok`/`go`/`steel`, with per-status colors
+order, labeled `todo`/`work`/`ok`/`good`/`steel lead` and badged
+`todo`/`work`/`ok`/`good`/`steel`, with per-status colors
 keyed by the `data-s` attribute (`--st` rules in `setlist.astro`). They're
 toggled as chips on the song page and rendered as small badges
 (`statusBadges()`) on setlist and library rows — **not** in perform mode.
@@ -73,9 +79,58 @@ like add/remove song, reorder-undo, or a per-song scrape/search), call
 `refresh()` (`app.js`) instead — it re-runs `route()` directly. Only use
 `navigate()` when actually going to a *different* hash.
 
-Per-setlist overrides live in `setlist.songOverrides[songId]` (key/capo/steel
-entry only — title, artist, chartUrl, and spotifyUri always live on the base
-song). `store.mergedSong(song, setlist)` applies overrides for display.
+Per-setlist overrides live in `setlist.songOverrides[songId]` (key/steel
+entry only — title, artist, key changes, chartUrl, and spotifyUri always live
+on the base song). `store.mergedSong(song, setlist)` applies overrides for
+display.
+
+### Key: parsed from the chart, and the key-change callout
+
+A song with a linked text chart should never sit at "no key":
+`chart-key.js` (`extractKeyFromChartText`) reads the key out of a chart
+header ("Key: A", "Key of G", or the key alone in the top corner), and an
+empty `song.key` is auto-filled wherever that text is already in hand — on
+the song page render (`maybeFillKeyFromChart`, which also patches the "no
+key" badge in place) and when a text chart is offline-cached
+(`cacheChartForSong`, so bulk "download all charts" populates keys
+library-wide). The worker's `extractFromText` keeps matching patterns for
+the song page's "read chart" button (formerly "scrape"). Scanned/image
+charts have no text to parse — for those, "read chart" falls through to the
+worker's **vision route** (`POST /ai/chart-read`): the cached chart image is
+downscaled client-side (`readChartImage` in `sync.js`) and a vision model
+transcribes what's actually written on the page — key, BPM, capo, modulation
+notes — with a read-only prompt (no invention), confidence-gated and
+normalized server-side like the drafting route. Reading is transcription,
+not drafting, so it defaults to the cheap model tier
+(`ANTHROPIC_READ_MODEL`, default Haiku).
+
+`song.keyChanges` ("mod up to A, last chorus") renders as a **pulsing amber
+badge right next to the key** (`.sl-keychange-badge`) on the song page,
+setlist rows, and perform mode — a mid-song modulation must grab the eye,
+so never restyle it into a dim secondary badge.
+
+### "fetch info" — metadata + lyrics in one tap
+
+The song page's "fetch info" button fills **empty** fields only (never
+overwrites hand-set values) from two sources:
+
+- **`GET /meta/song`** (worker): BPM/key/time as before, plus keyless
+  **iTunes Search** for canonical artist, genre, release year, track length,
+  and album artwork (600px, https-only). Artwork shows as a small square on
+  the song page (`.sl-focus-art`); genre/year/length are dim badges. Perform
+  mode deliberately shows none of this — key + key changes are the stage
+  info.
+- **LRCLIB** (`lyrics.js`, straight from the browser — lrclib.net is keyless
+  and CORS-open): plain lyrics into `song.lyrics`, LRC synced lyrics into
+  `song.syncedLyrics`. Exact `/api/get` lookup first (title + artist +
+  duration), then `/api/search` ranked with the app's own match scoring
+  (≥ 0.7 to accept). Synced-only tracks derive plain text from the LRC.
+
+Lyrics render via `textContent` only (external data). When `syncedLyrics`
+exists, the lyrics section becomes a scrolling box whose active line
+highlights and centers as the **timecode timer** runs (the `onTimecodeTick`
+hook in `renderSongFocus`) — start the timer with the Spotify embed and the
+lyrics follow.
 
 ## Backup/Restore vs. Sync — these are different features
 
@@ -89,11 +144,22 @@ This codebase intentionally keeps two similarly-named ideas separate:
   - Auto-backup: every local write is debounced and pushed automatically
     once connected.
   - Manual: "back up now" / "restore from drive" buttons in Settings.
-  - All paths go through `pullMergePushCycle()`, which always pulls, merges by
-    "newer wins" (`updatedAt`/`createdAt`, per-record), writes the merge back
-    locally, then pushes it — so no path can blindly clobber either side. An
-    `isSyncing()` flag serializes cycles so manual, auto-push, and focus-pull
-    can't overlap.
+  - All paths — **including the debounced auto-push** — go through
+    `pullMergePushCycle()`, which always pulls, merges by "newer wins"
+    (`updatedAt`/`createdAt`, per-record; `sources`/`settings` merge
+    fill-empty), writes the merge back locally, then pushes it — so no path
+    can blindly clobber either side. (The auto-push used to push blind;
+    with two devices open, each push overwrote the other's changes in
+    Drive.) The local import + pre-import snapshot are **skipped when the
+    remote has nothing new** (`remoteHasNews`) — otherwise every cycle
+    would re-import identical data, fire the write hook, and schedule the
+    next push forever. An `isSyncing()` flag serializes cycles so manual,
+    auto-push, and focus-pull can't overlap.
+  - `pull()` self-heals **duplicate data files** (two devices' first backups
+    racing used to split the dataset — each device read/wrote its own copy
+    and "missed" the other's edits): the file list is ordered newest-first
+    so every device picks the same file, and any duplicates are merged in
+    and trashed.
   - **Making it intuitive.** A shared `runManualSync()` backs a "⟲ drive
     backup" button on the song and setlist-edit pages, plus the Settings
     buttons. (UI labels deliberately say "backup", never "sync" — see the
@@ -421,5 +487,8 @@ Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `GET /drive/file/:id/text`, `GET /drive/file/:id/image`,
 `GET /web/chart-search?title=&artist=`,
 `GET /web/chart-data?title=&artist=`,
-`GET /meta/song?title=&artist=&spotifyId=`,
-`GET /ai/chart?title=&artist=&key=`, `GET /health`.
+`GET /meta/song?title=&artist=&spotifyId=` (BPM/key/time + iTunes
+artist/genre/year/artwork/duration),
+`GET /ai/chart?title=&artist=&key=`,
+`POST /ai/chart-read` (vision read of a scanned chart image;
+`ANTHROPIC_READ_MODEL` overrides the default Haiku), `GET /health`.

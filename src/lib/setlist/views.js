@@ -5,7 +5,8 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, getReferencePlaylistTracks } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, getReferencePlaylistTracks, readChartImage } from './sync.js';
+import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
@@ -13,6 +14,7 @@ import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from 
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError } from './spotify-auth.js';
+import { extractKeyFromChartText } from './chart-key.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -63,6 +65,16 @@ function el(tag, cls, html) {
   if (cls) e.className = cls;
   if (html) e.innerHTML = html;
   return e;
+}
+
+// Minimal HTML escape for interpolating external-source strings (API
+// metadata, lyrics, filenames) into innerHTML templates. The full sweep of
+// existing interpolations is tracked in plans/maintenance-backlog.md §G.1 —
+// use this for any new ones.
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
 }
 
 function btn(label, cls, onclick) {
@@ -143,6 +155,14 @@ function keyBadge(key, origKey) {
   return `<span class="sl-key-badge">${label}</span>`;
 }
 
+// Key-change callout. A mid-song modulation is easy to blow on stage, so a
+// filled-in keyChanges renders as a loud pulsing badge right next to the key
+// — never a dim afterthought.
+function keyChangeBadge(keyChanges) {
+  if (!keyChanges) return '';
+  return `<span class="sl-keychange-badge">⚠ ${keyChanges}</span>`;
+}
+
 function vocalistDot(code, legend) {
   if (!code) return '';
   const name = legend?.[code] || code;
@@ -154,9 +174,9 @@ function vocalistDot(code, legend) {
 // on the song page; setlist rows show the abbreviated badge.
 const SONG_STATUSES = [
   { key: 'todo', label: 'todo', abbr: 'todo' },
-  { key: 'needsWork', label: 'needs work', abbr: 'work' },
+  { key: 'needsWork', label: 'work', abbr: 'work' },
   { key: 'ok', label: 'ok', abbr: 'ok' },
-  { key: 'goodToGo', label: 'good to go', abbr: 'go' },
+  { key: 'goodToGo', label: 'good', abbr: 'good' },
   { key: 'steelLead', label: 'steel lead', abbr: 'steel' },
 ];
 
@@ -426,7 +446,7 @@ async function autoBackupFromGdrive() {
   await pullMergePushCycle(client, () => store.exportAll(), (merged) => store.importAll(merged),
     { snapshotFn: () => store.putSnapshot('pre-sync') });
 
-  store.setOnWrite(() => debouncedPush(() => store.exportAll()));
+  store.setOnWrite(() => debouncedPush(() => store.exportAll(), (merged) => store.importAll(merged)));
   watchConnectivity();
 }
 
@@ -474,7 +494,7 @@ export async function renderLibrary(root) {
   function renderList(filter) {
     const lower = (filter || '').toLowerCase();
     let filtered = lower
-      ? allSongs.filter(s => s.title.toLowerCase().includes(lower) || s.artist.toLowerCase().includes(lower))
+      ? allSongs.filter(s => s.title.toLowerCase().includes(lower) || (s.artist || '').toLowerCase().includes(lower))
       : allSongs;
     if (statusFilter.size) {
       filtered = filtered.filter(s => [...statusFilter].every(k => (s.statuses || []).includes(k)));
@@ -603,6 +623,7 @@ export async function renderSetlistView(root, setlistId) {
           <span class="sl-song-card-title">${merged.title}${merged.artist ? ` <span class="sl-song-card-artist">${merged.artist}</span>` : ''}</span>
           ${statusBadges(song)}
           ${keyBadge(merged.key, merged._origKey)}
+          ${keyChangeBadge(merged.keyChanges)}
           ${vocalistDot(vocalist, sl.vocalistLegend)}
         </div>
         ${merged.steelEntry ? `<div class="sl-steel-tag">steel: ${merged.steelEntry}</div>` : ''}
@@ -705,7 +726,7 @@ export async function renderSetlistEdit(root, setlistId) {
     const name = prompt(`Name for "${code.toUpperCase()}":`);
     if (!sl.vocalistLegend) sl.vocalistLegend = {};
     sl.vocalistLegend[code.toUpperCase()] = name || '';
-    store.putSetlist(sl).then(() => renderSetlistEdit(root.parentElement || root, setlistId));
+    store.putSetlist(sl).then(() => refresh());
   });
   vocSection.appendChild(vocGrid);
   vocSection.appendChild(addVoc);
@@ -1079,6 +1100,21 @@ function mountRemoteChartInto(stage, song) {
   }
 }
 
+// Fill an empty song.key from chart text the page just rendered — the key is
+// usually right in the chart header, so a song with a linked doc chart should
+// never sit at "no key". Saves once, then patches the already-rendered "no
+// key" badge in place rather than re-rendering mid-view.
+async function maybeFillKeyFromChart(song, text) {
+  if (song.key || !text) return;
+  const key = extractKeyFromChartText(text);
+  if (!key) return;
+  song.key = key;
+  await store.putSong(song);
+  const empty = document.querySelector('.sl-focus-badges .sl-key-empty');
+  if (empty) empty.outerHTML = keyBadge(key);
+  console.log('[setlist] key parsed from chart header:', key);
+}
+
 // Inline chart display for the song page — the same aspect-locked stage
 // pattern as the annotation editor (chart rect == canvas rect == the
 // stored-aspect box, see docs/setlist-app.md), rendering the cached chart
@@ -1096,6 +1132,7 @@ async function renderInlineChart(container, song, songId) {
   const cached = await getOfflineChart(songId, song.chartUrl);
   if (cached?.kind === 'text') {
     stage.appendChild(mountTextChart(stage, cached.text));
+    maybeFillKeyFromChart(song, cached.text);
   } else if (cached) {
     const url = await chartDisplayUrl(cached);
     const img = document.createElement('img');
@@ -1113,8 +1150,12 @@ async function renderInlineChart(container, song, songId) {
     // (annotations can't track an iframe's internal scroll); anything else
     // renders the flattened Drive image with the embed as last resort.
     const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
-    if (liveText) stage.appendChild(mountTextChart(stage, liveText));
-    else mountRemoteChartInto(stage, song);
+    if (liveText) {
+      stage.appendChild(mountTextChart(stage, liveText));
+      maybeFillKeyFromChart(song, liveText);
+    } else {
+      mountRemoteChartInto(stage, song);
+    }
   }
 
   const canvas = document.createElement('canvas');
@@ -1245,19 +1286,29 @@ export async function renderSongFocus(root, songId, setlistId) {
 
   root.classList.add('sl-focus');
 
-  // Main info
+  // Main info. Artwork/genre/year/duration come from "fetch info" (iTunes
+  // via the worker); kept dim/small — key + key changes are the stage info.
   const info = el('div', 'sl-focus-info');
   info.innerHTML = `
     <h1 class="sl-focus-title">${merged.title}</h1>
     ${merged.artist ? `<div class="sl-focus-artist">${merged.artist}</div>` : ''}
     <div class="sl-focus-badges">
       ${merged.key ? keyBadge(merged.key, merged._origKey) : '<span class="sl-key-badge sl-key-empty">no key</span>'}
-      ${merged.capo ? `<span class="sl-badge">capo ${merged.capo}</span>` : ''}
-      ${merged.bpm ? `<span class="sl-badge">${merged.bpm} bpm</span>` : ''}
+      ${keyChangeBadge(merged.keyChanges)}
       ${merged.steelEntry ? `<span class="sl-steel-tag">steel: ${merged.steelEntry}</span>` : ''}
-      ${merged.keyChanges ? `<span class="sl-badge sl-badge-dim">${merged.keyChanges}</span>` : ''}
+      ${song.durationSec ? `<span class="sl-badge sl-badge-dim">${formatTimecode(song.durationSec)}</span>` : ''}
+      ${song.genre ? `<span class="sl-badge sl-badge-dim">${esc(song.genre)}</span>` : ''}
+      ${song.year ? `<span class="sl-badge sl-badge-dim">${parseInt(song.year) || ''}</span>` : ''}
     </div>
   `;
+  if (song.artworkUrl && /^https:\/\//.test(song.artworkUrl)) {
+    const art = document.createElement('img');
+    art.className = 'sl-focus-art';
+    art.src = song.artworkUrl;
+    art.alt = '';
+    art.loading = 'lazy';
+    info.insertBefore(art, info.firstChild);
+  }
   root.appendChild(info);
 
   // Practice-status toggles — independent on/off chips, saved immediately.
@@ -1290,14 +1341,12 @@ export async function renderSongFocus(root, songId, setlistId) {
     <label class="sl-label">Artist<input class="sl-input" id="sf-artist" value="${song.artist || ''}"></label>
     <div class="sl-row">
       <label class="sl-label sl-flex1">Key<input class="sl-input" id="sf-key" value="${isOverride ? (merged.key || '') : (song.key || '')}" placeholder="e.g. G, Bb, C#m"></label>
-      <label class="sl-label sl-flex1">Capo<input class="sl-input" id="sf-capo" type="number" min="0" max="12" value="${merged.capo || 0}"></label>
-      <label class="sl-label sl-flex1">BPM<input class="sl-input" id="sf-bpm" type="number" min="0" value="${merged.bpm || 0}"></label>
+      <label class="sl-label sl-flex1">Key Changes<input class="sl-input" id="sf-keychanges" value="${song.keyChanges || ''}" placeholder="e.g. mod up to A, last chorus"></label>
     </div>
-    <label class="sl-label">Key Changes<input class="sl-input" id="sf-keychanges" value="${song.keyChanges || ''}" placeholder="e.g. Modulates to A"></label>
     <label class="sl-label">Steel Entry<input class="sl-input" id="sf-steel" value="${isOverride ? (merged.steelEntry || '') : (song.steelEntry || '')}" placeholder="e.g. intro, chorus, verse 2"></label>
     <label class="sl-label">Spotify URL<input class="sl-input" id="sf-spotify" value="${song.spotifyUri || ''}" placeholder="https://open.spotify.com/track/..."></label>
     <label class="sl-label">Chart URL (Google Drive)<input class="sl-input" id="sf-chart" value="${song.chartUrl || ''}" placeholder="https://drive.google.com/..."></label>
-    ${isOverride ? '<div class="sl-hint">Key, capo, and steel entry save as overrides for this setlist. Title, artist, Spotify, and chart save to the base song.</div>' : ''}
+    ${isOverride ? '<div class="sl-hint">Key and steel entry save as overrides for this setlist. Title, artist, key changes, Spotify, and chart save to the base song.</div>' : ''}
   `;
   editForm.addEventListener('change', async () => {
     song.title = document.getElementById('sf-title').value;
@@ -1307,23 +1356,18 @@ export async function renderSongFocus(root, songId, setlistId) {
     song.chartUrl = document.getElementById('sf-chart').value;
 
     const keyVal = document.getElementById('sf-key').value;
-    const capoVal = parseInt(document.getElementById('sf-capo').value) || 0;
-    const bpmVal = parseInt(document.getElementById('sf-bpm').value) || 0;
     const steelVal = document.getElementById('sf-steel').value;
 
     if (isOverride) {
       if (!setlist.songOverrides) setlist.songOverrides = {};
       if (!setlist.songOverrides[song.id]) setlist.songOverrides[song.id] = {};
       setlist.songOverrides[song.id].key = keyVal;
-      setlist.songOverrides[song.id].capo = capoVal;
       setlist.songOverrides[song.id].steelEntry = steelVal;
       await store.putSetlist(setlist);
     } else {
       song.key = keyVal;
-      song.capo = capoVal;
       song.steelEntry = steelVal;
     }
-    song.bpm = bpmVal;
     await store.putSong(song);
   });
   root.appendChild(editForm);
@@ -1372,30 +1416,44 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     actionBar.appendChild(rebuildBtn);
 
-    const scrapeBtn = btn('scrape', 'sl-btn-ghost sl-btn-sm', async () => {
-      scrapeBtn.textContent = 'scraping...';
-      const updates = await deepScrapeChart(song);
-      if (updates) {
-        let applied = 0;
-        for (const [k, v] of Object.entries(updates)) {
+    // "read chart" (né "scrape"): doc charts scrape their text export via
+    // the worker; scanned/image charts have no text, so a cached image falls
+    // through to the worker's vision route, which reads what's written on
+    // the page (key, bpm, capo, modulation notes).
+    const readBtn = btn('read chart', 'sl-btn-ghost sl-btn-sm', async () => {
+      readBtn.disabled = true;
+      readBtn.textContent = 'reading doc...';
+      const applyEmpty = (updates) => {
+        let n = 0;
+        for (const [k, v] of Object.entries(updates || {})) {
           if (k.startsWith('_')) continue;
           const cur = song[k];
-          const empty = cur === '' || cur === 0 || cur === null || cur === undefined;
-          if (empty) { song[k] = v; applied++; }
+          if (cur === '' || cur === 0 || cur === null || cur === undefined) { song[k] = v; n++; }
         }
-        if (applied) {
-          await store.putSong(song);
-          scrapeBtn.textContent = `found ${applied} field(s)!`;
-          setTimeout(() => refresh(), 1200);
-        } else {
-          scrapeBtn.textContent = 'no new data';
+        return n;
+      };
+      let applied = applyEmpty(await deepScrapeChart(song));
+      if (!song.key) {
+        const cached = await getOfflineChart(songId, song.chartUrl);
+        if (cached?.kind === 'image') {
+          URL.revokeObjectURL(cached.url);
+          readBtn.textContent = 'reading scan (AI)...';
+          const read = await readChartImage(song, cached.blob);
+          if (read.ok) applied += applyEmpty(read.data);
+          else if (read.reason !== 'no-ai-key') console.warn('[setlist] chart image read:', read.reason);
         }
-      } else {
-        scrapeBtn.textContent = 'no data found';
       }
-      setTimeout(() => { scrapeBtn.textContent = 'scrape'; }, 2500);
+      if (applied) {
+        await store.putSong(song);
+        readBtn.textContent = `found ${applied} field(s)!`;
+        setTimeout(() => refresh(), 1200);
+      } else {
+        readBtn.textContent = 'no new data';
+      }
+      setTimeout(() => { readBtn.textContent = 'read chart'; readBtn.disabled = false; }, 2500);
     });
-    actionBar.appendChild(scrapeBtn);
+    readBtn.title = 'Pull key / BPM / key-change notes from the linked chart — scrapes doc text, AI-reads a scanned image';
+    actionBar.appendChild(readBtn);
   } else {
     // Chart-fallback ladder: tiers 1+2 search personal + community Drive
     // folders, tier 3 scours the web for shared chart files (all via
@@ -1464,6 +1522,61 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     actionBar.appendChild(createBtn);
   }
+  // "fetch info" — one button for song metadata + lyrics: /meta/song on the
+  // worker (Spotify audio-features / Deezer BPM / iTunes artist·genre·year·
+  // artwork·length) plus LRCLIB lyrics straight from the browser (keyless,
+  // CORS-open). Fill-empty: never overwrites a field you've set by hand.
+  const infoBtn = btn('fetch info', 'sl-btn-ghost sl-btn-sm', async () => {
+    infoBtn.disabled = true;
+    infoBtn.textContent = 'fetching info...';
+    try {
+      const meta = await fetchSongMeta(song);
+      infoBtn.textContent = 'fetching lyrics...';
+      const lyr = await fetchLyrics(
+        song.title,
+        song.artist || meta?.artist || '',
+        song.durationSec || meta?.durationSec || 0,
+      );
+      const filled = [];
+      const fill = (field, value, label) => {
+        if (!song[field] && value) { song[field] = value; filled.push(label || field); }
+      };
+      if (meta) {
+        fill('artist', meta.artist);
+        fill('key', meta.key);
+        fill('bpm', meta.bpm);
+        fill('genre', meta.genre);
+        fill('year', meta.year);
+        fill('durationSec', meta.durationSec, 'length');
+        fill('artworkUrl', /^https:\/\//.test(meta.artworkUrl || '') ? meta.artworkUrl : '', 'art');
+      }
+      if (lyr) {
+        const hadLyrics = !!song.lyrics;
+        fill('lyrics', lyr.plain);
+        if (!song.syncedLyrics && lyr.synced) {
+          song.syncedLyrics = lyr.synced;
+          // "lyrics" already announces the new-lyrics case; only call out
+          // synced separately when it upgrades lyrics the song already had.
+          if (hadLyrics) filled.push('synced lyrics');
+        }
+      }
+      if (filled.length) {
+        await store.putSong(song);
+        infoBtn.textContent = `+ ${filled.join(', ')}`;
+        setTimeout(() => refresh(), 1400);
+      } else {
+        infoBtn.textContent = 'nothing new';
+        setTimeout(() => { infoBtn.textContent = 'fetch info'; infoBtn.disabled = false; }, 2200);
+      }
+    } catch (e) {
+      console.warn('[setlist] fetch info:', e.message);
+      infoBtn.textContent = 'failed';
+      setTimeout(() => { infoBtn.textContent = 'fetch info'; infoBtn.disabled = false; }, 2200);
+    }
+  });
+  infoBtn.title = 'Fill empty fields from music APIs (artist, key, genre, year, artwork, length) and fetch lyrics from LRCLIB';
+  actionBar.appendChild(infoBtn);
+
   if (song.spotifyUri) {
     const spBtn = btn('open in spotify', 'sl-btn-spotify sl-btn-sm', () => {
       window.open(getSpotifyOpenUrl(song.spotifyUri), '_blank');
@@ -1521,7 +1634,16 @@ export async function renderSongFocus(root, songId, setlistId) {
   let currentTimecode = 0;
   let timecodeInterval = null;
   let isPlaying = false;
-  if (song.spotifyUri && parseSpotifyUrl(song.spotifyUri)) {
+  // Assigned by the synced-lyrics section below; called each timer tick so
+  // the active lyric line follows the timecode.
+  let onTimecodeTick = null;
+  const hasTimecodeTimer = !!(song.spotifyUri && parseSpotifyUrl(song.spotifyUri));
+  // A running timer must not survive navigation (it would tick a detached
+  // node forever — one leaked interval per song visited during practice).
+  window.addEventListener('hashchange', () => {
+    if (timecodeInterval) clearInterval(timecodeInterval);
+  }, { once: true });
+  if (hasTimecodeTimer) {
     const embedWrap = el('div', 'sl-spotify-embed');
     renderSpotifyEmbed(embedWrap, song.spotifyUri, 152);
     root.appendChild(embedWrap);
@@ -1539,6 +1661,7 @@ export async function renderSongFocus(root, songId, setlistId) {
         timecodeInterval = setInterval(() => {
           currentTimecode++;
           tcDisplay.textContent = formatTimecode(currentTimecode);
+          onTimecodeTick?.(currentTimecode);
         }, 1000);
       }
     });
@@ -1548,6 +1671,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       isPlaying = false;
       tcDisplay.textContent = '0:00';
       tcPlayBtn.textContent = 'start timer';
+      onTimecodeTick?.(0);
     });
     tcRow.appendChild(el('span', 'sl-timecode-label', 'timecode'));
     tcRow.appendChild(tcDisplay);
@@ -1749,10 +1873,44 @@ export async function renderSongFocus(root, songId, setlistId) {
   notesSection.appendChild(noteInput);
   root.appendChild(notesSection);
 
-  // Lyrics
-  if (song.lyrics) {
+  // Lyrics — synced lines (LRC from LRCLIB) follow the timecode timer:
+  // start the timer with the track and the active line highlights and
+  // scrolls into view inside the lyrics box. Plain lyrics render as-is.
+  // Lyrics are external data — textContent only, never innerHTML.
+  if (song.lyrics || song.syncedLyrics) {
     const lyricsSection = el('div', 'sl-section');
-    lyricsSection.innerHTML = `<div class="sl-section-title">lyrics</div><pre class="sl-lyrics">${song.lyrics}</pre>`;
+    lyricsSection.innerHTML = '<div class="sl-section-title">lyrics</div>';
+    const synced = song.syncedLyrics ? parseSyncedLyrics(song.syncedLyrics) : [];
+    if (synced.length) {
+      const wrap = el('div', 'sl-lyrics sl-lyrics-synced');
+      const lineEls = synced.map(({ t, text }) => {
+        const line = el('div', 'sl-lyrics-line');
+        line.textContent = text || '·';
+        wrap.appendChild(line);
+        return { t, line };
+      });
+      lyricsSection.appendChild(wrap);
+      if (hasTimecodeTimer) {
+        lyricsSection.appendChild(el('div', 'sl-hint', 'synced — lines follow the timecode timer'));
+      }
+      let lastActive = -1;
+      onTimecodeTick = (sec) => {
+        let active = -1;
+        for (let i = 0; i < lineEls.length && lineEls[i].t <= sec; i++) active = i;
+        if (active === lastActive) return;
+        if (lastActive >= 0) lineEls[lastActive].line.classList.remove('sl-active');
+        if (active >= 0) {
+          lineEls[active].line.classList.add('sl-active');
+          // Scroll only the lyrics box (it owns its overflow), not the page.
+          wrap.scrollTop = lineEls[active].line.offsetTop - wrap.clientHeight / 2;
+        }
+        lastActive = active;
+      };
+    } else {
+      const pre = el('pre', 'sl-lyrics');
+      pre.textContent = song.lyrics;
+      lyricsSection.appendChild(pre);
+    }
     root.appendChild(lyricsSection);
   }
 
@@ -2520,8 +2678,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       ${song.artist ? `<div class="sl-perform-artist">${song.artist}</div>` : ''}
       <div class="sl-perform-badges">
         ${song.key ? keyBadge(song.key, song._origKey) : ''}
-        ${song.capo ? `<span class="sl-badge">capo ${song.capo}</span>` : ''}
-        ${song.bpm ? `<span class="sl-badge">${song.bpm} bpm</span>` : ''}
+        ${keyChangeBadge(song.keyChanges)}
         ${vocalist ? vocalistDot(vocalist, sl.vocalistLegend) : ''}
       </div>
       ${song.steelEntry ? `<div class="sl-perform-steel">steel: ${song.steelEntry}</div>` : ''}

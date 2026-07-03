@@ -282,6 +282,23 @@ const buildStamp = readBuildStamp();
       white-space: nowrap;
     }
     .sl-badge-dim { opacity: 0.7; }
+    /* Key-change callout — a mid-song modulation must grab the eye, so it's a
+       solid amber badge with a slow pulse, rendered right next to the key. */
+    .sl-keychange-badge {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      background: #f5a623;
+      color: #0d1020;
+      padding: 0.15rem 0.6rem;
+      border-radius: 999px;
+      white-space: nowrap;
+      animation: sl-keychange-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes sl-keychange-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.55); }
+      50% { box-shadow: 0 0 0 6px rgba(245, 166, 35, 0); }
+    }
     .sl-steel-tag {
       font-family: var(--font-mono);
       font-size: 0.72rem;
@@ -463,6 +480,16 @@ const buildStamp = readBuildStamp();
     /* ── Song Focus ── */
     .sl-focus { padding-bottom: 6rem; }
     .sl-focus-info { margin-bottom: 0.75rem; }
+    .sl-focus-art {
+      float: right;
+      width: 72px;
+      height: 72px;
+      border-radius: 8px;
+      object-fit: cover;
+      margin: 0 0 0.4rem 0.6rem;
+      opacity: 0.92;
+      border: 1px solid var(--border);
+    }
     .sl-focus-title {
       font-size: clamp(1.4rem, 5vw, 2rem);
       font-weight: 700;
@@ -635,6 +662,23 @@ const buildStamp = readBuildStamp();
       padding: 0.75rem;
       overflow-x: auto;
     }
+    /* Synced lyrics scroll inside their own box; the active line follows the
+       timecode timer. */
+    .sl-lyrics-synced {
+      position: relative;
+      max-height: 40vh;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+    }
+    .sl-lyrics-line {
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      transition: color 0.2s, background 0.2s;
+    }
+    .sl-lyrics-line.sl-active {
+      color: var(--text);
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+    }
 
     /* ── Empty & Error ── */
     .sl-empty {
@@ -787,6 +831,10 @@ const buildStamp = readBuildStamp();
     }
     .sl-perform-badges .sl-badge {
       font-size: 0.85rem;
+    }
+    .sl-perform-badges .sl-keychange-badge {
+      font-size: 1rem;
+      padding: 0.25rem 0.75rem;
     }
     .sl-perform-steel {
       font-family: var(--font-mono);

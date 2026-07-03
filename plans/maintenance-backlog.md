@@ -139,3 +139,47 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
   (cut / dissolve / wipe) + `transition-ms` controls in the topbar `auto` popover, persisted in
   settings; also composited into recordings.
 - **Shared offscreen-canvas pool** for the overlay post-FX (each currently keeps its own).
+
+## G. Setlist app (`/lab/setlist`) — review findings (2026-07)
+
+From a focused review of the setlist lab + its worker. The backup-merge hardening from the same
+pass (auto-push now pull-merges, duplicate data files heal, sources/settings merge fill-empty,
+key parses from chart text) is already **done** — these are the items still open:
+
+1. **Escape interpolations in `views.js` templates (security, P1).** Song titles/artists/notes are
+   interpolated into `innerHTML` across the views, and those fields are populated from external
+   sources (Spotify track names, Drive filenames, web-search results). A hostile name is stored
+   XSS, and localStorage holds Drive + Spotify tokens. The pickers already use `textContent`
+   deliberately; the persisted fields need the same treatment — add an `esc()` helper (or DOM
+   builders) at every `${}` that can carry non-local data.
+2. **Worker has no auth (security/cost, P1).** CORS is not access control: anyone who learns the
+   worker URL can call `/ai/chart` (burns `ANTHROPIC_API_KEY`/`GEMINI_API_KEY` per call),
+   `/spotify/search-batch` (100 searches/call), and the Drive/search routes (API-key quota).
+   Add a `WORKER_TOKEN` secret checked on every route, stored client-side in sources (which now
+   rides the Drive backup) and sent as a header. Also: `/ai/chart` sets `Cache-Control` but worker
+   responses aren't edge-cached automatically — use the Cache API so repeat calls are free.
+3. **Reconnect visibility (P2).** The GIS token lives ~1 h and can't refresh without a gesture; the
+   "↻ reconnect" pill only exists on the dashboard, so edits made elsewhere silently stay
+   local-only until the next visit to #home. Surface the reconnect state on the song/setlist pages
+   (the `syncNowButton` status line is the natural spot).
+4. **Merge granularity (P3).** Backup merge is last-write-wins per whole record; simultaneous edits
+   to *different fields* of the same song on two devices lose one side. Acceptable single-user, but
+   `statuses` could union cheaply if it ever bites.
+5. **Direct-linked PDF charts cache but don't render (P3).** `isDirectFile` accepts `.pdf` and the
+   cache stores the PDF blob, but the render path puts it in an `<img>`. Route Drive-id PDFs exist
+   (thumbnail rasterize); direct PDF URLs should either be rejected from cache or rendered via
+   object/iframe.
+6. **Settings UX (P3).** "restore from drive" and "back up now" run the identical merge cycle —
+   keep one and label it honestly ("back up & pull now"). The dashboard button "sources" opens a
+   page titled "sources & auto-link" that also holds backup/Spotify/offline — rename to
+   "settings" and move Drive backup to the top. (✅ "scrape" is now "read chart".)
+7. **Dead code (P3).** `store.getNotesForSongBulk` is unused (and ignores its argument);
+   `sources.driveCharts` has a default + sync path but no Settings UI writes it.
+8. **Perf nits (P3).** `renderSetlistView`/`renderPerformMode` `await store.getSong()` per song in
+   a loop (fine ≤50 songs, `Promise.all` when it itches); worker `search-batch` searches
+   sequentially.
+9. ✅ **Value-adds** — *done (2026-07):* LRCLIB lyrics (`lyrics.js`, synced lines follow the
+   timecode timer), scanned-chart vision read (worker `POST /ai/chart-read`, wired into the song
+   page's "read chart" button), and iTunes metadata in `/meta/song`
+   (artist/genre/year/artwork/duration, applied by the "fetch info" button). Still open:
+   MusicBrainz as a second canonical-artist source if iTunes misses.
