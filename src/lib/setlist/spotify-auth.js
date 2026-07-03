@@ -38,8 +38,16 @@ export function setSpotifyClientId(id) {
 
 // The page itself is the redirect target — computed, not hardcoded, so it
 // matches however this deployment is reached (prod domain, preview, dev).
+// Normalized to NO trailing slash: the page is reachable both ways
+// (/lab/setlist and /lab/setlist/), and Spotify compares redirect URIs
+// character-for-character, so the raw pathname made the sent URI depend on
+// how the page happened to be loaded. One canonical form keeps the value
+// shown in Settings, the authorize request, and the token exchange
+// identical. Coming back, the host's redirect to the slash form keeps the
+// ?code= query intact.
 export function spotifyRedirectUri() {
-  return location.origin + location.pathname;
+  const path = location.pathname.replace(/\/+$/, '');
+  return location.origin + (path || '/');
 }
 
 export function isSpotifyConnected() {
