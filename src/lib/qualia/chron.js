@@ -11,6 +11,10 @@
 //              bigger, longer, red-tinted nudges — in any mode, not just zen
 //   redshift — the τ readout + soft pulses tint blue → white → amber → red
 //              as elapsed/horizon → 1 (only when a horizon is set)
+//   qr       — periodic QR interjection: every `qr.every` minutes chron
+//              fires opts.onQRMark, and the page fades a scan-to-join /
+//              site QR overlay in for `qr.duration` seconds (rendering is
+//              page-init's qr-interject module — chron only keeps time)
 //
 // The stopwatch is wall-clock and starts on the first tick (i.e. with
 // core.start() — the session). It keeps counting through pause: it measures
@@ -39,10 +43,16 @@ export const CHRON_DEFAULTS = {
     warnAt: 0.9,              // fraction of `at` for the early warning
     redshift: true,           // tint τ + pulses by elapsed/horizon
   },
+  qr: {
+    every: 0,                 // minutes between QR interjections (0 = off)
+    duration: 25,             // seconds the QR overlay stays up
+    target: 'auto',           // 'auto' = entangle when the field is open, else the site
+  },
 };
 
-const FORMATS   = ['mm', 'mm:ss', 'hh:mm:ss', 'cycles'];
-const POSITIONS = ['bottom', 'top'];
+const FORMATS    = ['mm', 'mm:ss', 'hh:mm:ss', 'cycles'];
+const POSITIONS  = ['bottom', 'top'];
+const QR_TARGETS = ['auto', 'entangle', 'qualia'];
 
 // Redshift gradient stops — elapsed/horizon 0→1 walks blue → white →
 // amber → red, clamping at the ends. Piecewise RGB lerp, sampled only
@@ -79,14 +89,19 @@ const pad2 = (n) => String(n).padStart(2, '0');
  * @param {() => boolean} opts.isZen  live zen-mode state
  * @param {() => number}  opts.getCps live Strudel cps (cycles/sec) for the
  *                                    'cycles' format integration
+ * @param {(qrCfg: {every:number,duration:number,target:string}) => void} [opts.onQRMark]
+ *                                    fired when a qr.every-minute mark is
+ *                                    crossed (any mode) — the page shows the
+ *                                    QR overlay; chron only keeps time
  */
-export function createChron({ hudEl, pulseEl, isZen = () => false, getCps = () => 0 } = {}) {
+export function createChron({ hudEl, pulseEl, isZen = () => false, getCps = () => 0, onQRMark = null } = {}) {
   const cfg = JSON.parse(JSON.stringify(CHRON_DEFAULTS));
 
   let startMs = null;        // lazy — set on the first tick (session start)
   let lastMs  = null;
   let cycles  = 0;           // ∫ cps dt — the 'cycles' format readout
   let lastPulseIdx = 0;      // which pulseEvery-mark fired last
+  let lastQRIdx = 0;         // which qr.every-mark fired last
   let warnFired = false, horizonFired = false;
   let pulseHideAt = 0;       // performance.now() deadline; 0 = no pulse up
   let lastHudText = null, lastHudTint = null;
@@ -167,6 +182,22 @@ export function createChron({ hudEl, pulseEl, isZen = () => false, getCps = () =
       }
     }
 
+    // QR interjection marks — any mode. Same index-tracking discipline as
+    // the zen pulses: turning the feature on mid-set waits for the NEXT
+    // mark instead of replaying missed ones. The first mark is at
+    // `qr.every` minutes in, not at 0:00 — a set shouldn't open on a QR.
+    const qEvery = cfg.qr.every;
+    if (qEvery > 0) {
+      const qIdx = Math.floor(minutes / qEvery);
+      if (qIdx !== lastQRIdx) {
+        const crossed = qIdx > lastQRIdx;
+        lastQRIdx = qIdx;
+        if (crossed && cfg.enabled && onQRMark) {
+          try { onQRMark({ ...cfg.qr }); } catch {}
+        }
+      }
+    }
+
     // Horizon nudges — any mode, not just zen. If the session is already
     // past the horizon when it crosses (e.g. horizon just lowered), the
     // hard nudge fires alone and swallows the warn.
@@ -185,7 +216,7 @@ export function createChron({ hudEl, pulseEl, isZen = () => false, getCps = () =
   function reset() {
     const now = performance.now();
     startMs = now; lastMs = now;
-    cycles = 0; lastPulseIdx = 0;
+    cycles = 0; lastPulseIdx = 0; lastQRIdx = 0;
     warnFired = false; horizonFired = false;
     lastHudText = null; lastHudTint = null;   // force a HUD repaint
     pulseEl?.classList.remove('visible');
@@ -213,6 +244,12 @@ export function createChron({ hudEl, pulseEl, isZen = () => false, getCps = () =
       if (Number.isFinite(h.at))            cfg.horizon.at       = Math.max(0, h.at);
       if (Number.isFinite(h.warnAt))        cfg.horizon.warnAt   = Math.min(0.99, Math.max(0.1, h.warnAt));
       if (typeof h.redshift === 'boolean')  cfg.horizon.redshift = h.redshift;
+    }
+    if (patch.qr && typeof patch.qr === 'object') {
+      const q = patch.qr;
+      if (Number.isFinite(q.every))     cfg.qr.every    = Math.max(0, q.every);
+      if (Number.isFinite(q.duration))  cfg.qr.duration = Math.min(120, Math.max(5, q.duration));
+      if (QR_TARGETS.includes(q.target)) cfg.qr.target  = q.target;
     }
     if (cfg.horizon.at !== prevHorizonAt) { warnFired = false; horizonFired = false; }
     if (!cfg.horizon.redshift && hudEl) { hudEl.style.color = ''; lastHudTint = null; }

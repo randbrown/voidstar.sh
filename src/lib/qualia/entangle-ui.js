@@ -593,7 +593,13 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
 
     if (code && url) {
       const canvas = modal.querySelector('#entangle-qr');
-      if (canvas) import('./qr.js').then(m => m.renderQR(canvas, url, 300)).catch(err => console.warn('[entangle] qr', err));
+      // Artistic voidstar QR (portal finders + void* chip), theme-aware; fall
+      // back to the plain render if the styled one fails for any reason.
+      if (canvas) {
+        import('./qr.js')
+          .then(m => m.renderArtisticQR(canvas, url, 300).catch(() => m.renderQR(canvas, url, 300)))
+          .catch(err => console.warn('[entangle] qr', err));
+      }
     }
     if (live) updateCrowdSig();
   }
@@ -669,8 +675,10 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
         const u = entangle.isOpen() ? entangle.getJoinUrl() : entangle.getPreparedJoinUrl();
         if (!u) break;
         try {
-          const { qrToDataURL } = await import('./qr.js');
-          const data = await qrToDataURL(u);
+          // Dark-on-white artistic code — max contrast for print/flyer use,
+          // still carrying the portal finders + void* chip.
+          const { artisticQRToDataURL, qrToDataURL } = await import('./qr.js');
+          const data = await artisticQRToDataURL(u).catch(() => qrToDataURL(u));
           const a = document.createElement('a');
           a.href = data;
           a.download = `voidstar-entangle-${(entangle.isOpen() ? entangle.getRoomId() : entangle.getPreparedRoomId()) || 'code'}.png`;
@@ -682,8 +690,9 @@ export function initEntangleUI({ core, mesh, actions = {} }) {
         const u = entangle.isOpen() ? entangle.getJoinUrl() : entangle.getPreparedJoinUrl();
         if (!u) break;
         try {
-          const { qrToDataURL } = await import('./qr.js');
-          openPrintCard(u, await qrToDataURL(u), perf);
+          const { artisticQRToDataURL, qrToDataURL } = await import('./qr.js');
+          const data = await artisticQRToDataURL(u).catch(() => qrToDataURL(u));
+          openPrintCard(u, data, perf);
         } catch (err) { console.warn('[entangle] print card', err); }
         break;
       }

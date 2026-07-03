@@ -53,7 +53,8 @@ touch the render loop.
 | `entangle-ui.js` | `initEntangleUI(...)` — self-mounting host UI: launcher, QR/moderation modal, crowd HUD, the full-screen skeleton overlay, and the hot-path glue `core.onTick(field => entangle.reduceInto(field.crowd, field.reactDt))`. |
 | `entangle-client.js` | `initEntangleClient(root)` — runs on the phone. Renders controls from the host manifest, runs local pose, ships throttled `pose`/`skeleton`/`param`/`vote`/`phase`. Loads none of the viz engine. |
 | `entangle-transport-cf.js` | The transport in use (see below). |
-| `qr.js` | Lazy `qrcode` CDN wrapper (theme-aware on-screen + dark-on-white for print). |
+| `qr.js` | Lazy `qrcode` CDN wrapper (theme-aware on-screen + dark-on-white for print), plus the artistic voidstar renderer (`renderArtisticQR` — portal-ring finders, star-dust modules, `void*` chip at ECL H). |
+| `qr-interject.js` | `initQRInterject(...)` — self-mounting corner QR card. Chron's `qr.every` marks fire it on a schedule (entangle join / site link, resolved at fire time); the chron card has a "show qr now" manual trigger. |
 | `workers/entangle-signal/` | The Cloudflare Worker + Durable Object star relay. |
 
 ### Transport — WebSocket → Cloudflare Worker + Durable Object

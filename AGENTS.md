@@ -24,7 +24,7 @@ the main workstation page `/qualia` (`src/pages/qualia.astro` → wired together
 | **Looper** | Multi-track live-looping pedal, grid-snapped to the Strudel cycle, with retroactive "grab", time-stretch, and IndexedDB persistence | `looper*.js`, `worklets/looper-recorder.js`, `looper-stretch.js` |
 | **Vox** | Channel vocoder (for spoken narration), harmonizer (chord/scale/track modes), formant-preserving voice shifter | `vocoder.js`, `harmonizer.js`, `voice-shifter.js`, `pitch*.js`, `worklets/formant-shift.js`, `vox-presets.js` |
 | **Audio analysis** | Multi-source FFT/RMS/beat engine that produces the per-frame `AudioFrame` driving all visuals; also the mixer + per-track limiters | `audio.js`, `mixer.js`, `limiter.js` |
-| **Visuals (qualia fx)** | 22 swappable visualizer "quales" + an 8-game arcade, on a shared Canvas2D/WebGL2/Three.js harness | `core.js`, `fx/`, `overlay.js`, `modulation.js` |
+| **Visuals (qualia fx)** | 24 swappable visualizer "quales" + an 8-game arcade, on a shared Canvas2D/WebGL2/Three.js harness | `core.js`, `fx/`, `overlay.js`, `modulation.js` |
 | **Pose** | MediaPipe pose tracking, run off the main thread in a worker; landmarks become modulation channels | `pose.js`, `pose-worker.js`, `pose-features.js`, `vision-loader.js`, `video.js` |
 | **Entanglement** | Audience participation — phones join via QR, run their own pose, and feed sandboxed, rate-limited `crowd.*` channels and votes | `entangle*.js`, `workers/entangle-signal/` |
 | **Recording / export** | Canvas+audio capture to MP4 (with SMPTE timecode) or WebM; loop/set export to `.qualem.zip` | `recorder.js`, `mp4-timecode.js`, `wav.js`, `zip.js` |
