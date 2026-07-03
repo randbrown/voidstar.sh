@@ -2838,6 +2838,27 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>redshift</label>
         <button class="qp-toggle active" id="chron-redshift">on</button>
       </div>
+      <div class="qp-section-tag">qr interject</div>
+      <div class="qp-row" data-qp="chron-qr-every" title="Every N minutes, fade a scan-me QR card into the corner — entanglement join or the site link (see target). 0 = off.">
+        <label>qr every<span class="qp-val">off</span></label>
+        <input type="range" min="0" max="30" step="1" value="0">
+      </div>
+      <div class="qp-row" data-qp="chron-qr-length" title="How long the QR card stays up before fading out.">
+        <label>qr length<span class="qp-val">25s</span></label>
+        <input type="range" min="5" max="90" step="5" value="25">
+      </div>
+      <div class="qp-row" data-qp="chron-qr-target" title="What the QR points at. auto = the entanglement join link whenever a code resolves (open field, ?room=, or a saved code), otherwise the site. entangle skips the firing if no code exists.">
+        <label>qr target</label>
+        <select class="qp-select" id="chron-qr-target">
+          <option value="auto" selected>auto</option>
+          <option value="entangle">entangle join</option>
+          <option value="qualia">voidstar.sh/qualia</option>
+        </select>
+      </div>
+      <div class="qp-row" data-qp="chron-qr-now" title="Fire the QR card immediately (or dismiss it if it's up) — same target + length as the schedule.">
+        <label>manual</label>
+        <button class="qp-toggle" id="chron-qr-now">⊛ show qr now</button>
+      </div>
     </div>
   </div>
 

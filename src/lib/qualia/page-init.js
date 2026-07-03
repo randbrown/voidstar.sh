@@ -28,6 +28,7 @@ import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { createChron } from './chron.js';
+import { initQRInterject } from './qr-interject.js';
 import { createRecorder } from './recorder.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import {
@@ -59,6 +60,8 @@ import antireductionism from './fx/antireductionism.js';
 import detector       from './fx/detector.js';
 import ghostMachine   from './fx/ghost-machine.js';
 import ramblinVisioneer from './fx/ramblin-visioneer.js';
+import linerNotes     from './fx/liner-notes.js';
+import blockworld     from './fx/blockworld.js';
 import video          from './fx/video.js';
 import arcade         from './fx/arcade.js';
 
@@ -158,6 +161,8 @@ export function initQualiaPage() {
   mesh.register(detector);
   mesh.register(ghostMachine);
   mesh.register(ramblinVisioneer);
+  mesh.register(linerNotes);
+  mesh.register(blockworld);
   mesh.register(video);
   mesh.register(arcade);
 
@@ -313,6 +318,11 @@ export function initQualiaPage() {
   // soft minute pulses at the screen edge while in zen, warn/horizon nudges
   // in any mode. Driven from core.onFps below — that cadence (~5Hz) keeps
   // firing while paused, so the wall-clock readout never freezes mid-set.
+  // QR interject — the periodic scan-to-join overlay chron can surface.
+  // `entangleEngine` is wired during boot (initEntangleUI below); until then
+  // the overlay resolves the printed performance code / site URL on its own.
+  let entangleEngine = null;
+  const qrInterject = initQRInterject({ getEntangle: () => entangleEngine });
   const chron = createChron({
     hudEl:   chronHudEl,
     pulseEl: chronPulseEl,
@@ -320,6 +330,7 @@ export function initQualiaPage() {
     // Live cps for the 'cycles' format. `strudel` is wired further down;
     // ticks only start after boot() (core.start()), long after it exists.
     getCps:  () => { try { return strudel.getStrudelCps() || 0; } catch { return 0; } },
+    onQRMark: (qrCfg) => { qrInterject.show(qrCfg); },
   });
   core.onFps(() => chron.tick());
 
@@ -1927,6 +1938,16 @@ export function initQualiaPage() {
                  v => v > 0 ? `${Math.round(v)}m` : 'off');
   wireChronRange('chron-warn-at',      c => c.horizon.warnAt,    v => ({ horizon: { warnAt: v } }),
                  v => `${Math.round(v * 100)}%`);
+  // QR interject controls — cadence + dwell + target, plus a manual fire.
+  wireChronRange('chron-qr-every',  c => c.qr.every,    v => ({ qr: { every: v } }),
+                 v => v > 0 ? `${Math.round(v)}m` : 'off');
+  wireChronRange('chron-qr-length', c => c.qr.duration, v => ({ qr: { duration: v } }),
+                 v => `${v}s`);
+  wireChronSelect('chron-qr-target', c => c.qr.target, v => ({ qr: { target: v } }));
+  document.getElementById('chron-qr-now')?.addEventListener('click', () => {
+    if (qrInterject.isVisible()) qrInterject.hide();
+    else qrInterject.show(chron.getConfig().qr);
+  });
   document.getElementById('btn-chron-reset')?.addEventListener('click', (ev) => {
     // Header button — stop the click reaching the qp-head collapse toggle.
     ev.stopPropagation();
@@ -5191,7 +5212,7 @@ export function initQualiaPage() {
     // launcher, QR/moderation modal, and crowd HUD, and registers the
     // core.onTick glue that folds the crowd snapshot into field.crowd. Runs
     // dormant (no network) until the performer opens a room.
-    try { initEntangleUI({ core, mesh, actions: { phaseNext } }); }
+    try { entangleEngine = initEntangleUI({ core, mesh, actions: { phaseNext } }); }
     catch (err) { console.error('[qualia] entangle init failed:', err); }
 
     // Restore audio source. `withMic` (from the "enable mic" overlay button)
