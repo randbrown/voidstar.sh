@@ -442,7 +442,12 @@ async function blobToScaledJpegBase64(blob, maxDim = CHART_READ_MAX_DIM) {
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
-  canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+  const ctx = canvas.getContext('2d');
+  // JPEG has no alpha — transparency composites to black, which turns a
+  // transparent-background PNG scan into black-on-black. Paint paper first.
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close?.();
   const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
   return { data: dataUrl.slice(dataUrl.indexOf(',') + 1), mimeType: 'image/jpeg' };
