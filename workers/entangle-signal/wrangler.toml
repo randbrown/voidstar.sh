@@ -4,6 +4,8 @@
 #              → ws://localhost:8787  (the CF transport auto-targets this on localhost)
 # Deploy:      npx wrangler deploy -c workers/entangle-signal/wrangler.toml
 #              → wss://voidstar-entangle-signal.<your-subdomain>.workers.dev
+#              (auto-deployed on push to main by
+#              .github/workflows/deploy-entangle-signal.yml)
 #
 # For a clean prod URL, add a custom domain/route (e.g. entangle.voidstar.sh) in
 # the Cloudflare dashboard or below, and point SIGNAL_URL in

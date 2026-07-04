@@ -1,0 +1,21 @@
+name: Deploy entangle-signal worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/entangle-signal/**'
+      - '.github/workflows/deploy-entangle-signal.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Self-contained worker (no npm imports, no secrets — just the
+      # ENTANGLE_ROOM Durable Object binding from wrangler.toml).
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: workers/entangle-signal
