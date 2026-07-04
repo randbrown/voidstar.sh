@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'workers/setlist-sync/**'
+      - 'package-lock.json' # the worker bundles @anthropic-ai/sdk from root node_modules
+      - '.github/workflows/deploy-setlist-sync.yml'
   workflow_dispatch:
 
 jobs:
@@ -12,6 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The worker imports @anthropic-ai/sdk, which wrangler bundles from the
+      # repo-root node_modules. Install deps explicitly — previously this
+      # worked only because wrangler-action's `npm i wrangler` side-installed
+      # the whole root package.json.
+      - run: npm ci
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -24,3 +35,27 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      # Optional worker secrets — AI chart drafting/reading and better /web/*
+      # search. Unlike the required block above, an unset repo secret is
+      # SKIPPED rather than pushed as an empty value, so a key set manually
+      # via `wrangler secret put` survives until it's migrated into the
+      # repo's Actions secrets.
+      - name: Push optional worker secrets
+        working-directory: workers/setlist-sync
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+        run: |
+          node -e '
+            const keys = ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_CSE_ID", "BRAVE_SEARCH_API_KEY"];
+            const set = Object.fromEntries(keys.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
+            require("fs").writeFileSync("optional-secrets.json", JSON.stringify(set));
+            console.log("optional secrets set in this repo:", Object.keys(set).join(", ") || "(none)");
+          '
+          if [ "$(node -e 'console.log(Object.keys(require("./optional-secrets.json")).length)')" != "0" ]; then
+            npx wrangler@4 secret bulk optional-secrets.json
+          fi
+          rm optional-secrets.json

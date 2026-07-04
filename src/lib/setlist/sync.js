@@ -21,6 +21,10 @@ export function getSources() {
   if (!Array.isArray(s.communityFolders)) s.communityFolders = [];
   if (!Array.isArray(s.driveCharts)) s.driveCharts = [];
   if (typeof s.workerUrl !== 'string') s.workerUrl = '';
+  // Routes are exact-match on the worker — a trailing slash in the setting
+  // would make every path `//spotify/...` and 404 (which the client reads
+  // as "worker outdated").
+  s.workerUrl = s.workerUrl.trim().replace(/\/+$/, '');
   return s;
 }
 
