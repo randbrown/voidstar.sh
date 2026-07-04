@@ -76,7 +76,7 @@ const CONTENT = {
     h1: 'voidstar.sh',
     rows: [
       { k: 'body', t: 'the whole instrument lives at this address —' },
-      { k: 'body', t: 'open it, play it, break it. what it’s like.' },
+      { k: 'body', t: 'open it, play it, break it. code it.' },
     ],
     qr: true,
   },
