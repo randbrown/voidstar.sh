@@ -96,13 +96,19 @@ key" badge in place) and when a text chart is offline-cached
 library-wide). The worker's `extractFromText` keeps matching patterns for
 the song page's "read chart" button (formerly "scrape"). Scanned/image
 charts have no text to parse — for those, "read chart" falls through to the
-worker's **vision route** (`POST /ai/chart-read`): the cached chart image is
-downscaled client-side (`readChartImage` in `sync.js`) and a vision model
-transcribes what's actually written on the page — key, BPM, capo, modulation
-notes — with a read-only prompt (no invention), confidence-gated and
-normalized server-side like the drafting route. Reading is transcription,
-not drafting, so it defaults to the cheap model tier
-(`ANTHROPIC_READ_MODEL`, default Haiku).
+worker's **vision route** (`POST /ai/chart-read`): the chart image
+(offline-cached, or fetched on demand via `cacheChartForSong` when no
+cache pass has run yet) is downscaled client-side (`readChartImage` in
+`sync.js`, white-filled before JPEG re-encode so transparent PNGs don't
+go black-on-black) and a vision model transcribes what's actually written
+on the page — key, BPM, capo, modulation notes — with a read-only prompt
+(no invention), confidence-gated and normalized server-side like the
+drafting route. Reading is transcription, not drafting, so it defaults to
+the cheap model tier (`ANTHROPIC_READ_MODEL`, default Haiku). Because the
+button is an explicit user action, failures are loud: when nothing was
+pulled *and* something went wrong (no worker URL, no AI key on the worker,
+chart fetch/decode error, low vision confidence), the button alerts the
+collected reasons instead of shrugging "no new data".
 
 `song.keyChanges` ("mod up to A, last chorus") renders as a **pulsing amber
 badge right next to the key** (`.sl-keychange-badge`) on the song page,

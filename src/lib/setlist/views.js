@@ -1417,9 +1417,11 @@ export async function renderSongFocus(root, songId, setlistId) {
     actionBar.appendChild(rebuildBtn);
 
     // "read chart" (né "scrape"): doc charts scrape their text export via
-    // the worker; scanned/image charts have no text, so a cached image falls
+    // the worker; scanned/image charts have no text, so the image falls
     // through to the worker's vision route, which reads what's written on
-    // the page (key, bpm, capo, modulation notes).
+    // the page (key, bpm, capo, modulation notes). Failures must be LOUD:
+    // the user explicitly clicked — "no new data" when the real story is
+    // "no AI key on the worker" reads as a dead button.
     const readBtn = btn('read chart', 'sl-btn-ghost sl-btn-sm', async () => {
       readBtn.disabled = true;
       readBtn.textContent = 'reading doc...';
@@ -1432,21 +1434,43 @@ export async function renderSongFocus(root, songId, setlistId) {
         }
         return n;
       };
+      const problems = [];
+      if (!getSources().workerUrl) problems.push('no worker URL configured in Settings — both the doc scrape and the AI read need it');
       let applied = applyEmpty(await deepScrapeChart(song));
       if (!song.key) {
-        const cached = await getOfflineChart(songId, song.chartUrl);
-        if (cached?.kind === 'image') {
+        // The vision read needs the chart bytes — fetch them on demand
+        // instead of silently skipping when no offline pass has run yet.
+        let cached = await getOfflineChart(songId, song.chartUrl);
+        if (!cached && getSources().workerUrl) {
+          readBtn.textContent = 'fetching chart...';
+          const r = await cacheChartForSong(song, getSources().workerUrl);
+          if (r.ok) cached = await getOfflineChart(songId, song.chartUrl);
+          else problems.push(`couldn't fetch the chart: ${r.reason}`);
+          // Text charts fill song.key from the header inside
+          // cacheChartForSong (already persisted) — count it as a find.
+          if (song.key) applied++;
+        }
+        if (!song.key && cached?.kind === 'image') {
           URL.revokeObjectURL(cached.url);
-          readBtn.textContent = 'reading scan (AI)...';
-          const read = await readChartImage(song, cached.blob);
-          if (read.ok) applied += applyEmpty(read.data);
-          else if (read.reason !== 'no-ai-key') console.warn('[setlist] chart image read:', read.reason);
+          if (cached.blob.type === 'application/pdf') {
+            problems.push('this chart is a PDF — the AI read needs an image; link the scan as an image (or a Drive file, which proxies as one)');
+          } else {
+            readBtn.textContent = 'reading scan (AI)...';
+            const read = await readChartImage(song, cached.blob);
+            if (read.ok) applied += applyEmpty(read.data);
+            else if (read.reason === 'no-ai-key') problems.push('no AI key configured on the worker — set ANTHROPIC_API_KEY or GEMINI_API_KEY to read scanned charts');
+            else problems.push(`AI read failed: ${read.reason}`);
+          }
         }
       }
       if (applied) {
         await store.putSong(song);
         readBtn.textContent = `found ${applied} field(s)!`;
         setTimeout(() => refresh(), 1200);
+      } else if (problems.length) {
+        console.warn('[setlist] read chart:', problems);
+        readBtn.textContent = 'read failed';
+        alert(`read chart couldn't pull anything:\n\n• ${problems.join('\n• ')}`);
       } else {
         readBtn.textContent = 'no new data';
       }
