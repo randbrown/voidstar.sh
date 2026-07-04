@@ -61,7 +61,7 @@ import detector       from './fx/detector.js';
 import ghostMachine   from './fx/ghost-machine.js';
 import ramblinVisioneer from './fx/ramblin-visioneer.js';
 import linerNotes     from './fx/liner-notes.js';
-import blockworld     from './fx/blockworld.js';
+import chaos          from './fx/chaos.js';
 import video          from './fx/video.js';
 import arcade         from './fx/arcade.js';
 
@@ -162,7 +162,7 @@ export function initQualiaPage() {
   mesh.register(ghostMachine);
   mesh.register(ramblinVisioneer);
   mesh.register(linerNotes);
-  mesh.register(blockworld);
+  mesh.register(chaos);
   mesh.register(video);
   mesh.register(arcade);
 
