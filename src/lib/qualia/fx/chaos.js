@@ -449,7 +449,8 @@ export default {
         for (let k = 0; k < 2; k++) poseS.hands[k][2] *= Math.max(0, 1 - dt * 4);
       }
 
-      const ts = params.timeScale;
+      // Base speed runs at 0.5× the slider — chaos reads better slowed down.
+      const ts = params.timeScale * 0.5;
 
       switch (scratch.mode) {
         case 'pendulums': {
