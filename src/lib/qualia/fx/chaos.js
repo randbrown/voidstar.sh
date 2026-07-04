@@ -17,14 +17,21 @@
 //                 points: quiet music holds KAM islands of order, loud
 //                 music raises K and the islands dissolve into chaotic sea.
 //
-// Audio map:
-//   bass        → glow + Lorenz ρ + three-body G breathing + K (kam)
-//   mids        → playhead sweep rate (bifurcation), swarm hue drift
-//   highs.pulse → tip shimmer / dust sparkle
+// Audio map (tuned for ambient/atmospheric, not spazzy — everything below
+// is a slow breath or a soft shimmer, never a hard jump):
+//   bass        → atmosphere wash breathing + glow + scale breathing
+//                 (pendulum fan, lorenz camera, three-body halos), Lorenz ρ,
+//                 three-body G, K (kam), bifurcation dust glow
+//   mids        → atmosphere hue drift + per-mode hue drift (lorenz swarm,
+//                 three-body trails, kam lattice), playhead sweep rate
+//   highs.pulse → tip / tracer / bead / dust shimmer in every mode
 //   beat        → deterministic energy kick (all pendulums get the SAME
 //                 kick, so divergence stays an honest experiment), tracer
 //                 flash, orbit-column flash, kam re-scatter
 //   total       → timeScale modulator (declared, tunable in the panel)
+// The `atmosphere` param scales a palette-tinted background wash that
+// breathes with bass and drifts hue with mids — the always-legible ambient
+// layer; per-mode effects sit on top of it.
 // Pose map (relative, mirror-tolerant — see poseSway toggle):
 //   shoulder roll  → tilts gravity for the pendulum fan
 //   head x / wrist height → Lorenz camera yaw / pitch
@@ -95,13 +102,15 @@ export default {
         { source: 'crowd.energy', mode: 'mul', amount: 0.30 },
       ] },
     { id: 'trails', label: 'trails', type: 'range',
-      min: 0, max: 1, step: 0.02, default: 0.72 },
+      min: 0, max: 1, step: 0.02, default: 0.5 },
     { id: 'glow', label: 'glow', type: 'range',
       min: 0, max: 2, step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.bass', mode: 'add', amount: 0.55 },
         { source: 'crowd.rise', mode: 'add', amount: 0.40 },
       ] },
+    { id: 'atmosphere', label: 'atmosphere', type: 'range',
+      min: 0, max: 1, step: 0.02, default: 0.6 },
     { id: 'kick', label: 'beat kick', type: 'range',
       min: 0, max: 2, step: 0.05, default: 1.0 },
     { id: 'palette', label: 'palette', type: 'select',
@@ -124,7 +133,7 @@ export default {
   },
 
   presets: {
-    default:   { mode: 'pendulums', spread: 1.0, timeScale: 1.0, trails: 0.72, glow: 1.0, kick: 1.0, palette: 'spectral', poseSway: true, hud: true, reactivity: 1.0 },
+    default:   { mode: 'pendulums', spread: 1.0, timeScale: 1.0, trails: 0.5, glow: 1.0, atmosphere: 0.6, kick: 1.0, palette: 'spectral', poseSway: true, hud: true, reactivity: 1.0 },
     butterfly: { mode: 'pendulums', spread: 0.1, trails: 0.9, timeScale: 0.9 },
     strange:   { mode: 'lorenz', palette: 'void', trails: 0.85, timeScale: 1.1 },
     ballet:    { mode: 'threebody', palette: 'plasma', spread: 0.5, trails: 0.9 },
@@ -138,7 +147,7 @@ export default {
     // ── Shared per-frame scratch (render() never reads field) ────────────────
     const scratch = {
       mode: 'pendulums', pal: PALETTES.spectral,
-      glow: 1, trails: 0.72, kick: 1, hudOn: true,
+      glow: 1, trails: 0.5, atmosphere: 0.6, kick: 1, hudOn: true,
       bass: 0, mids: 0, highs: 0, total: 0, beatP: 0, highsP: 0,
       time: 0, dt: 0,
       flash: 0,             // beat flash envelope (all modes)
@@ -394,6 +403,7 @@ export default {
       scratch.pal    = PALETTES[params.palette] || PALETTES.spectral;
       scratch.glow   = params.glow;
       scratch.trails = params.trails;
+      scratch.atmosphere = params.atmosphere ?? 0.6;
       scratch.kick   = params.kick;
       scratch.hudOn  = !!params.hud;
       scratch.bass   = audio.bands.bass;
@@ -691,17 +701,40 @@ export default {
     }
 
     // ── render ───────────────────────────────────────────────────────────────
+    // Ambient atmosphere — a palette-tinted wash that breathes with bass and
+    // drifts hue with mids; the one audio response that's legible in every
+    // mode. Drawn additively every frame, so its alpha is scaled by this
+    // frame's fade: steady-state brightness ≈ drawn/fade, which keeps the
+    // wash constant across the whole trails range instead of blowing out at
+    // long trails. With audio off it still drifts slowly on field.time.
+    function drawAtmosphere(pal, fade) {
+      const atm = scratch.atmosphere;
+      if (atm <= 0.01) return;
+      const t = scratch.time;
+      const hue = palHue(pal, 0.5 + 0.4 * Math.sin(t * 0.05)) + scratch.mids * 30;
+      const m = Math.min(W, H);
+      const cx = W / 2 + Math.sin(t * 0.043) * W * 0.05;
+      const cy = H / 2 + Math.cos(t * 0.031) * H * 0.05;
+      const r = m * (0.55 + 0.06 * Math.sin(t * 0.07) + scratch.bass * 0.22);
+      const a = Math.min(0.5, atm * fade * (0.10 + scratch.bass * 0.26));
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      grad.addColorStop(0, `hsla(${hue},${pal.sat}%,${pal.light}%,${a})`);
+      grad.addColorStop(1, `hsla(${hue},${pal.sat}%,${pal.light}%,0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+    }
+
     function render() {
       ctx.globalCompositeOperation = 'source-over';
+      // Trail persistence: high trails → light fade (long ghosts).
+      const fade = scratch.mode === 'bifurcation'
+        ? 0.55
+        : 0.06 + (1 - scratch.trails) * 0.55;
       if (scratch.clearFrames > 0) {
         scratch.clearFrames--;
         ctx.fillStyle = 'rgb(5,5,13)';
         ctx.fillRect(0, 0, W, H);
       } else {
-        // Trail persistence: high trails → light fade (long ghosts).
-        const fade = scratch.mode === 'bifurcation'
-          ? 0.55
-          : 0.06 + (1 - scratch.trails) * 0.55;
         ctx.fillStyle = `rgba(5,5,13,${fade})`;
         ctx.fillRect(0, 0, W, H);
       }
@@ -712,6 +745,7 @@ export default {
 
       const pal = scratch.pal;
       const glow = scratch.glow;
+      drawAtmosphere(pal, fade);
 
       switch (scratch.mode) {
         case 'pendulums':   renderPendulums(pal, glow); break;
@@ -727,7 +761,10 @@ export default {
 
     function renderPendulums(pal, glow) {
       const cx = W / 2, cy = H * 0.44;
-      const L = Math.min(W, H) * 0.215;      // one arm; tip reaches 2L
+      // Bass breathes the projection scale (±4%) — trails re-project each
+      // frame, so the whole ribbon fan gently swells with the low end
+      // without touching the sim.
+      const L = Math.min(W, H) * 0.215 * (1 + scratch.bass * 0.04);
       prj.cx = cx; prj.cy = cy; prj.S = L;
 
       // Ribbons first (under the hardware).
@@ -751,8 +788,10 @@ export default {
         ctx.fillStyle = `rgba(235,240,255,${0.35 + scratch.flash * 0.3})`;
         ctx.beginPath(); ctx.arc(x1, y1, 2.2 * DPR, 0, TAU); ctx.fill();
         const hue = palHue(pal, i / (NPEND - 1));
-        const r = (3.2 + scratch.flash * 3) * DPR;
-        ctx.fillStyle = `hsla(${hue},${pal.sat}%,${Math.min(90, pal.light + 15)}%,${0.8 * Math.min(1, glow)})`;
+        // Hat/cymbal hits shimmer the tips — a soft sparkle, not a strobe.
+        const r = (3.2 + scratch.flash * 3 + scratch.highsP * 2.2) * DPR;
+        const lt = Math.min(92, pal.light + 15 + scratch.highsP * 10);
+        ctx.fillStyle = `hsla(${hue},${pal.sat}%,${lt}%,${0.8 * Math.min(1, glow)})`;
         ctx.beginPath(); ctx.arc(x2, y2, r, 0, TAU); ctx.fill();
       }
 
@@ -806,14 +845,17 @@ export default {
 
     function renderLorenz(pal, glow) {
       prj.cx = W / 2; prj.cy = H / 2;
-      prj.S = Math.min(W, H) / 62;
+      // Bass leans the camera in (±5%) — the attractor breathes with the
+      // low end the way ρ alone never visibly could.
+      prj.S = (Math.min(W, H) / 62) * (1 + scratch.bass * 0.05);
       prj.cosY = Math.cos(lorYaw); prj.sinY = Math.sin(lorYaw);
       const pitch = -0.42 + (0.5 - poseS.wristY) * 0.6 * poseS.present;
       prj.cosP = Math.cos(pitch); prj.sinP = Math.sin(pitch);
 
       // Swarm — the flow made visible, banded by altitude (z) so the wings
-      // read with depth instead of as flat monochrome dust.
-      const dotA = (0.24 + scratch.total * 0.20) * Math.min(1.5, glow);
+      // read with depth instead of as flat monochrome dust. Hats sprinkle a
+      // brief extra twinkle across the dust.
+      const dotA = (0.24 + scratch.total * 0.20 + scratch.highsP * 0.12) * Math.min(1.5, glow);
       const hueDrift = scratch.mids * 20;
       const dr = 1.3 * DPR;
       for (let band = 0; band < 8; band++) {
@@ -844,7 +886,9 @@ export default {
       const S = Math.min(W, H) * 0.30;
       const cx = W / 2, cy = H / 2;
       prj.cx = cx; prj.cy = cy; prj.S = S;
-      const hues = [palHue(pal, 0), palHue(pal, 0.5), palHue(pal, 1)];
+      // Mids slowly walk the three hues around the palette ramp.
+      const hd = scratch.mids * 18;
+      const hues = [palHue(pal, 0) + hd, palHue(pal, 0.5) + hd, palHue(pal, 1) + hd];
 
       for (let i = 0; i < 3; i++) {
         drawTrail(bTrail[i], bTrailHead[i], bTrailLen[i], TB_TRAIL,
@@ -855,13 +899,14 @@ export default {
         const x = cx + bX[i] * S, y = cy + bY[i] * S;
         const speed = Math.hypot(bVx[i], bVy[i]);
         const r = (4 + Math.min(4, speed * 2.5) + scratch.flash * 3) * DPR;
-        const halo = r * 4.5;
+        // Bass swells each body's halo — three soft suns breathing together.
+        const halo = r * (4.5 + scratch.bass * 1.8);
         const grad = ctx.createRadialGradient(x, y, 0, x, y, halo);
         grad.addColorStop(0, `hsla(${hues[i]},${pal.sat}%,${pal.light + 12}%,${0.55 * Math.min(1.4, glow)})`);
         grad.addColorStop(1, `hsla(${hues[i]},${pal.sat}%,${pal.light}%,0)`);
         ctx.fillStyle = grad;
         ctx.beginPath(); ctx.arc(x, y, halo, 0, TAU); ctx.fill();
-        ctx.fillStyle = `hsla(${hues[i]},${Math.max(30, pal.sat - 20)}%,90%,0.95)`;
+        ctx.fillStyle = `hsla(${hues[i]},${Math.max(30, pal.sat - 20)}%,${90 + scratch.highsP * 6}%,0.95)`;
         ctx.beginPath(); ctx.arc(x, y, r * 0.55, 0, TAU); ctx.fill();
       }
 
@@ -882,10 +927,10 @@ export default {
       const m = bifM;
       const plotW = W - m.l - m.r, plotH = H - m.t - m.b;
 
-      // The accumulated diagram dust (composited additively, shimmering
-      // faintly with the highs).
+      // The accumulated diagram dust — the whole cascade breathes with the
+      // bass and shimmers faintly on hats.
       if (bifCanvas) {
-        ctx.globalAlpha = 0.85 + scratch.highsP * 0.15;
+        ctx.globalAlpha = Math.min(1, 0.70 + scratch.bass * 0.24 + scratch.highsP * 0.08);
         ctx.drawImage(bifCanvas, 0, 0);
         ctx.globalAlpha = 1;
       }
@@ -936,10 +981,13 @@ export default {
       const dr = 1.6 * DPR;
       const bright = Math.min(1.4, glow);
 
-      // Batch by hue band to limit fillStyle churn: 12 bands.
+      // Batch by hue band to limit fillStyle churn: 12 bands. Mids drift the
+      // whole lattice around the ramp; hats add a brief sparkle.
+      const hueDrift = scratch.mids * 22;
+      const dotA = Math.min(1, 0.55 * bright + scratch.highsP * 0.12);
       for (let band = 0; band < 12; band++) {
-        const hue = palHue(pal, band / 11);
-        ctx.fillStyle = `hsla(${hue},${pal.sat}%,${pal.light + 6}%,${0.55 * bright})`;
+        const hue = palHue(pal, band / 11) + hueDrift;
+        ctx.fillStyle = `hsla(${hue},${pal.sat}%,${pal.light + 6}%,${dotA})`;
         for (let i = band; i < KAM_N; i += 12) {
           // Shortest-path lerp on the torus (both axes wrap).
           let dth = kTh1_[i] - kTh0[i];

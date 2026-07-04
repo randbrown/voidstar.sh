@@ -1,6 +1,6 @@
 // Liner Notes — the set's info card, as a quale. Four "transmissions" the
 // performer can park on screen (or let auto-phase / auto-cycle rotate
-// through): what live coding is, the languages qualia speaks, a scan-to-
+// through): what live coding is, the javascript qualia speaks, a scan-to-
 // entangle QR, and the voidstar.sh QR. Typewriter text over a drifting
 // starfield with CRT scanlines; the QR is the artistic voidstar render
 // (portal finders + void* chip) from qr.js.
@@ -19,13 +19,14 @@
 import { scaleAudio } from '../field.js';
 import { getPinnedRoom, readRoomFromQuery, buildJoinUrl } from '../entangle-protocol.js';
 
-const PAGES = ['livecoding', 'languages', 'entangle', 'signal'];
+const PAGES = ['livecoding', 'javascript', 'entangle', 'signal'];
 
 const PALETTES = {
   voidblue: { text: '#e8ecf8', dim: '#8f97b8', accent: '#22d3ee', accent2: '#66f0ff', code: '#9be8ff' },
   violet:   { text: '#e9e6ff', dim: '#9b96c4', accent: '#8b5cf6', accent2: '#f472b6', code: '#c4b5fd' },
   phosphor: { text: '#dcffe8', dim: '#7da58c', accent: '#6ee7a0', accent2: '#a7f3d0', code: '#86efac' },
   amber:    { text: '#fdf3df', dim: '#b3a17c', accent: '#fbbf24', accent2: '#fb923c', code: '#fcd34d' },
+  mono:     { text: '#ffffff', dim: '#8c8c8c', accent: '#ffffff', accent2: '#d6d6d6', code: '#eaeaea' },
 };
 
 // Content rows: k=kind — 'body' | 'code' | 'lang' (name + desc) | 'gap'.
@@ -46,7 +47,7 @@ const CONTENT = {
     ],
     qr: false,
   },
-  languages: {
+  javascript: {
     kicker: '⊛ transmission 02 · the language',
     h1: 'javascript, three ways',
     rows: [
@@ -92,20 +93,20 @@ export default {
 
   params: [
     { id: 'page', label: 'page', type: 'select',
-      options: ['livecoding', 'languages', 'entangle', 'signal'], default: 'livecoding' },
+      options: ['livecoding', 'javascript', 'entangle', 'signal'], default: 'livecoding' },
     { id: 'qrTarget', label: 'qr target', type: 'select',
       options: ['auto', 'entangle', 'qualia', 'custom'], default: 'auto' },
     { id: 'customUrl', label: 'custom url', type: 'text',
       placeholder: 'https://…', default: '' },
     { id: 'footer', label: 'footer', type: 'text',
-      placeholder: 'voidstar.sh — what it’s like', default: '' },
+      placeholder: 'qualia // what it’s like', default: '' },
     { id: 'typeSpeed', label: 'type speed', type: 'range',
-      min: 0.2, max: 4, step: 0.1, default: 1.4,
+      min: 0, max: 2, step: 0.1, default: 1.0,
       modulators: [{ source: 'audio.highs', mode: 'mul', amount: 0.5 }] },
     { id: 'qrSize', label: 'qr size', type: 'range',
       min: 0.30, max: 0.75, step: 0.01, default: 0.48 },
     { id: 'palette', label: 'palette', type: 'select',
-      options: ['voidblue', 'violet', 'phosphor', 'amber'], default: 'voidblue' },
+      options: ['voidblue', 'violet', 'phosphor', 'amber', 'mono'], default: 'voidblue' },
     { id: 'reactivity', label: 'reactivity', type: 'range',
       min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
@@ -115,14 +116,14 @@ export default {
   autoPhase: {
     steps: [
       { page: 'livecoding' },
-      { page: 'languages' },
+      { page: 'javascript' },
       { page: 'entangle' },
       { page: 'signal' },
     ],
   },
 
   presets: {
-    default:       { page: 'livecoding', qrTarget: 'auto', customUrl: '', footer: '', typeSpeed: 1.4, qrSize: 0.48, palette: 'voidblue', reactivity: 1.0 },
+    default:       { page: 'livecoding', qrTarget: 'auto', customUrl: '', footer: '', typeSpeed: 1.0, qrSize: 0.48, palette: 'voidblue', reactivity: 1.0 },
     entangle_card: { page: 'entangle', qrTarget: 'entangle', qrSize: 0.58 },
     site_card:     { page: 'signal', qrTarget: 'qualia', qrSize: 0.58 },
     manifesto:     { page: 'livecoding', typeSpeed: 0.8, palette: 'phosphor' },
@@ -205,7 +206,9 @@ export default {
       if (page !== lastPage) { lastPage = page; typed = 0; }
 
       // Characters per second — typeSpeed is already highs-modulated.
-      typed += field.dt * 26 * Math.max(0.05, params.typeSpeed);
+      // 0 turns the typewriter off entirely: the text just lands, whole.
+      if (params.typeSpeed <= 0) typed = 1e6;
+      else typed += field.dt * 13 * params.typeSpeed;
 
       scratch.time       = field.time;
       scratch.bass       = audio.bands.bass;
@@ -393,7 +396,7 @@ export default {
       ctx.font = mono(24 * fs, 400);
       ctx.fillStyle = pal.dim;
       ctx.globalAlpha = 0.85;
-      ctx.fillText(scratch.footer || 'voidstar.sh — what it’s like', cx, footerY);
+      ctx.fillText(scratch.footer || 'qualia // what it’s like', cx, footerY);
       ctx.globalAlpha = 1;
 
       // ── CRT scanlines, slow vertical roll ────────────────────────────────
