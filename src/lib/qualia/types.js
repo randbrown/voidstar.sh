@@ -57,11 +57,23 @@
  */
 
 /**
+ * @typedef {Object} ClockFrame
+ * @property {boolean} playing  True while Strudel's scheduler is running.
+ * @property {number}  cps      Cycles per second (0 when not playing).
+ * @property {number}  cycle    Audible cycle position as a float (5.3 = 30%
+ *                              into cycle 5). Latency-corrected — matches
+ *                              what the audience HEARS, not the scheduler's
+ *                              lookahead cursor.
+ * @property {number}  phase    cycle mod 1, in [0,1).
+ */
+
+/**
  * @typedef {Object} QualiaField
  * @property {number} dt        Seconds since last frame, clamped.
  * @property {number} time      Seconds since core start.
  * @property {AudioFrame} audio
  * @property {PoseFrame}  pose
+ * @property {ClockFrame} clock Musical clock (all-zero when Strudel is idle).
  * @property {Object<string,number|string|boolean>} params
  *           Per-frame *resolved* param values — base UI values with the
  *           active fx's modulators (audio + pose channels) applied. Read

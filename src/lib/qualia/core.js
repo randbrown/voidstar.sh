@@ -572,6 +572,10 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     lastRenderMs = now;
     frames++;
 
+    // Refresh the musical clock BEFORE fx update so quantized effects (beat
+    // kicks synced to the Strudel grid) read this frame's audible position.
+    refreshClock();
+
     if (activeInst && activeMod) {
       try {
         // Refresh channels + resolve modulated params for this frame.
@@ -640,6 +644,26 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     smBandsPrimed = false;
   }
   function getReactSmoothing() { return reactSmoothAmt; }
+  // ── Musical clock (field.clock) ──────────────────────────────────────────
+  // The page wires a provider that reads Strudel's audible cycle position
+  // ({ pos, cps } or null). Core folds it into field.clock each rendered
+  // frame; fx read field.clock only — never the provider or globals.
+  let clockProvider = null;
+  function setClockProvider(fn) { clockProvider = (typeof fn === 'function') ? fn : null; }
+  function refreshClock() {
+    const c = field.clock;
+    let s = null;
+    if (clockProvider) { try { s = clockProvider(); } catch {} }
+    if (s && typeof s.pos === 'number' && isFinite(s.pos) && s.cps > 0) {
+      c.playing = true;
+      c.cps     = s.cps;
+      c.cycle   = s.pos;
+      c.phase   = s.pos - Math.floor(s.pos);
+    } else {
+      c.playing = false; c.cps = 0; c.cycle = 0; c.phase = 0;
+    }
+  }
+
   function onFps(fn)    { fpsListeners.add(fn); return () => fpsListeners.delete(fn); }
   function onFrame(fn)  { frameListeners.add(fn); return () => frameListeners.delete(fn); }
   function onTick(fn)   { tickListeners.add(fn);  return () => tickListeners.delete(fn); }
@@ -676,6 +700,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     // e.g. toggling the split-screen stage — wouldn't otherwise re-sync the
     // backing buffer. Callers invoke this after such a change.
     refreshSize: () => applyDpr(),
+    setClockProvider,
     setMaxFps,
     getMaxFps,
     setAuxFps,

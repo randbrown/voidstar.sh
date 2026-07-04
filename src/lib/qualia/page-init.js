@@ -3231,6 +3231,17 @@ export function initQualiaPage() {
     },
   });
 
+  // ── Musical clock → field.clock ──────────────────────────────────────────
+  // Feed Strudel's audible cycle position into the field so fx can quantize
+  // effects (e.g. the chaos quale's beat kicks) to the live-set grid.
+  // `globalThis.__qualiaClock` is a debug seam: assign a () => ({pos, cps})
+  // to drive the grid without a running Strudel (tests, external sync rigs).
+  core.setClockProvider(() => {
+    const dbg = globalThis.__qualiaClock;
+    if (typeof dbg === 'function') { try { return dbg(); } catch { return null; } }
+    try { return strudel.getStrudelCyclePos?.() ?? null; } catch { return null; }
+  });
+
   // ── Pattern sequencer (tone.js, second programmable audio source) ────────
   // Bidirectional CPS sync with Strudel. Two delivery paths, tried in
   // order so the toggle works regardless of which Strudel REPL build is

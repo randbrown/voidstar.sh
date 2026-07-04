@@ -27,6 +27,13 @@ export function emptyCrowdSnapshot() {
   return { x: 0, y: 0, energy: 0, spread: 0, rise: 0, sway: 0, count: 0, confidence: 0 };
 }
 
+// Musical clock (Strudel's audible cycle position). All-zero / not playing
+// when Strudel isn't running — fx that quantize to the grid must fall back
+// to audio-transient timing then.
+export function emptyClockFrame() {
+  return { playing: false, cps: 0, cycle: 0, phase: 0 };
+}
+
 /** @returns {import('./types.js').QualiaField} */
 export function makeField() {
   return {
@@ -38,6 +45,7 @@ export function makeField() {
     audio: emptyAudioFrame(),
     pose:  emptyPoseFrame(),
     crowd: emptyCrowdSnapshot(),
+    clock: emptyClockFrame(),
     params: {},
   };
 }

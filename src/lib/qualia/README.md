@@ -100,6 +100,12 @@ field = {
   crowd: {                                 // aggregated audience input (Entanglement)
     x, y, energy, spread, rise, sway, count, confidence,  // all 0 when nobody's connected
   },
+  clock: {                                 // musical clock (Strudel scheduler)
+    playing,   // true while Strudel runs; ALL fields zero when idle
+    cps,       // cycles per second
+    cycle,     // audible cycle position as a float (5.3 = 30% into cycle 5)
+    phase,     // cycle mod 1, in [0,1)
+  },
   params: { /* current values keyed by your param ids */ },
 };
 
@@ -120,6 +126,10 @@ const radius = base + bands.bass * 1.4 + beat.pulse * 0.6 + spike * 1.8;
 ```
 
 Reference: [`fx/neural-field.js`](./fx/neural-field.js) `sSpike[i]` per-soma envelope.
+
+### Quantizing to the musical clock
+
+`field.clock` carries Strudel's **audible** (latency-corrected) cycle position while it plays. An fx can quantize its transients to the grid — latch `audio.beat.active`, fire on the next `floor(clock.cycle * div)` boundary — so percussive effects land musically in a live set. Always fall back to firing on the raw beat when `clock.playing` is false. Reference: [`fx/chaos.js`](./fx/chaos.js) `kickSync` param.
 
 ### Pose coordinates are camera-frame
 

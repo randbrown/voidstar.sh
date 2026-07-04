@@ -104,6 +104,13 @@ export default {
       ] },
     { id: 'kick', label: 'beat kick', type: 'range',
       min: 0, max: 2, step: 0.05, default: 1.0 },
+    // 'audio' fires on the beat detector. '1/4'..'1/1' latch detected beats
+    // and release them on the next Strudel grid boundary (field.clock), so
+    // kicks land musically in a live set. 'grid' strobes every ¼ cycle from
+    // the clock alone. All grid modes fall back to 'audio' while Strudel is
+    // idle. Strudel hook: qualia.setParam('chaos', 'kickSync', '1/4').
+    { id: 'kickSync', label: 'kick sync', type: 'select',
+      options: ['audio', '1/4', '1/2', '1/1', 'grid'], default: 'audio' },
     { id: 'palette', label: 'palette', type: 'select',
       options: ['spectral', 'void', 'plasma', 'phosphor'], default: 'spectral' },
     { id: 'poseSway', label: 'pose sway', type: 'toggle', default: true },
@@ -124,8 +131,9 @@ export default {
   },
 
   presets: {
-    default:   { mode: 'pendulums', spread: 1.0, timeScale: 1.0, trails: 0.72, glow: 1.0, kick: 1.0, palette: 'spectral', poseSway: true, hud: true, reactivity: 1.0 },
+    default:   { mode: 'pendulums', spread: 1.0, timeScale: 1.0, trails: 0.72, glow: 1.0, kick: 1.0, kickSync: 'audio', palette: 'spectral', poseSway: true, hud: true, reactivity: 1.0 },
     butterfly: { mode: 'pendulums', spread: 0.1, trails: 0.9, timeScale: 0.9 },
+    strobe:    { mode: 'pendulums', kickSync: 'grid', kick: 1.4, trails: 0.85 },
     strange:   { mode: 'lorenz', palette: 'void', trails: 0.85, timeScale: 1.1 },
     ballet:    { mode: 'threebody', palette: 'plasma', spread: 0.5, trails: 0.9 },
     cascade:   { mode: 'bifurcation', palette: 'phosphor', timeScale: 0.8 },
@@ -142,10 +150,14 @@ export default {
       bass: 0, mids: 0, highs: 0, total: 0, beatP: 0, highsP: 0,
       time: 0, dt: 0,
       flash: 0,             // beat flash envelope (all modes)
+      kickFire: false,      // resolved kick trigger for this frame
+      synced: false,        // kick sync currently locked to the clock
       clearFrames: 0,       // opaque clears queued after a (re)seed
       hudLines: ['', ''],   // refreshed at ~6 Hz
     };
     let hudAccum = 0;
+    // Kick-sync latch: beats detected between grid boundaries wait here.
+    let kickPending = false, lastGridIdx = -1;
 
     // Smoothed pose features (lerped so a person leaving frame doesn't snap).
     const poseS = { present: 0, roll: 0, headX: 0.5, wristY: 0.5, wristX: 0.5,
@@ -406,8 +418,37 @@ export default {
       scratch.dt     = dt;
 
       const beat = audio.beat.active;
+
+      // ── Kick scheduling (strobe-sync) ────────────────────────────────────
+      // Resolve the beat detector against the musical clock into ONE flag,
+      // `kickFire`, that every mode's kick block consumes. Quantized modes
+      // hold a detected beat until the next grid boundary; 'grid' fires on
+      // every ¼-cycle boundary regardless of the detector.
+      const clock = field.clock;
+      const sync = params.kickSync;
+      const gridDiv = (sync === '1/4' || sync === 'grid') ? 4
+                    : sync === '1/2' ? 2
+                    : sync === '1/1' ? 1 : 0;
+      const synced = gridDiv > 0 && clock.playing;
+      let kickFire = false;
+      if (!synced) {
+        kickFire = beat;
+        kickPending = false; lastGridIdx = -1;
+      } else {
+        if (beat) kickPending = true;
+        const g = Math.floor(clock.cycle * gridDiv);
+        if (g !== lastGridIdx) {
+          const engaging = lastGridIdx === -1;  // first frame after sync engages
+          lastGridIdx = g;
+          if (!engaging && (sync === 'grid' || kickPending)) kickFire = true;
+          kickPending = false;
+        }
+      }
+      scratch.kickFire = kickFire;
+      scratch.synced = synced;
+
       scratch.flash *= Math.pow(0.002, dt);
-      if (beat) scratch.flash = Math.min(1.5, 0.5 + scratch.bass);
+      if (kickFire) scratch.flash = Math.min(1.5, 0.5 + scratch.bass);
 
       if (curMode !== scratch.mode) seedMode(scratch.mode, params.spread);
 
@@ -467,7 +508,7 @@ export default {
 
           // Deterministic beat kick — identical multiplier for every
           // pendulum, so the fan's divergence stays a clean experiment.
-          if (beat && scratch.kick > 0) {
+          if (kickFire && scratch.kick > 0) {
             const m = 1 + 0.06 * scratch.kick * (0.5 + scratch.bass);
             for (let i = 0; i < NPEND; i++) { pW1[i] *= m; pW2[i] *= m; }
           }
@@ -499,7 +540,7 @@ export default {
           lorRho = 28 + scratch.bass * 12;
           lorYaw += dt * (0.10 + scratch.mids * 0.25)
                   + (poseS.headX - 0.5) * dt * 1.6 * poseS.present;
-          if (beat && scratch.kick > 0) scratch.flash = Math.min(1.5, scratch.flash + 0.3);
+          if (kickFire && scratch.kick > 0) scratch.flash = Math.min(1.5, scratch.flash + 0.3);
 
           lorAccum += dt * ts * (1 + scratch.beatP * 0.8 * scratch.kick);
           let steps = Math.min(8, (lorAccum / LOR_H) | 0);
@@ -532,7 +573,7 @@ export default {
         case 'threebody': {
           tbG = 1 + scratch.bass * 0.35;
           tbAge += dt;
-          if (beat && scratch.kick > 0) {
+          if (kickFire && scratch.kick > 0) {
             const m = 1 + 0.035 * scratch.kick;
             for (let i = 0; i < 3; i++) { bVx[i] *= m; bVy[i] *= m; }
           }
@@ -602,7 +643,7 @@ export default {
             kamPhase = kamPhase % 1;
             kamIterate(kamK);
           }
-          if (beat && scratch.kick > 0) {
+          if (kickFire && scratch.kick > 0) {
             // Re-scatter a small fraction — a percussive dust burst.
             const n = (KAM_N * 0.04 * Math.min(2, scratch.kick)) | 0;
             for (let k = 0; k < n; k++) {
@@ -620,6 +661,7 @@ export default {
       hudAccum += dt;
       if (scratch.hudOn && hudAccum > 0.16) {
         hudAccum = 0;
+        const syncTag = synced ? ` · sync ${sync} @ ${clock.cps.toFixed(2)}cps` : '';
         switch (scratch.mode) {
           case 'pendulums':
             scratch.hudLines[0] = `10 double pendulums · Δθ₀ ${params.spread.toFixed(2)}°`;
@@ -642,6 +684,7 @@ export default {
             scratch.hudLines[1] = `K ${kamK.toFixed(2)} ${kamK < 1 ? '· kam islands hold' : '· chaotic sea'}`;
             break;
         }
+        scratch.hudLines[1] += syncTag;
       }
     }
 
