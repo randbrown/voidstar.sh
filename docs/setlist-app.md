@@ -492,6 +492,22 @@ Also `ALLOWED_ORIGIN` (plain var in `wrangler.toml`).
 The worker imports `@anthropic-ai/sdk`, so run `npm ci` at the repo root
 before `wrangler deploy` (wrangler bundles it from `node_modules`).
 
+**Deploys are automated**: `.github/workflows/deploy-setlist-sync.yml`
+runs `wrangler deploy` on every push to `main` that touches
+`workers/setlist-sync/**` (or the lockfile/workflow itself), using the
+`CLOUDFLARE_API_TOKEN` repo Actions secret. It pushes the three required
+worker secrets from same-named repo secrets on every deploy, and the
+optional ones (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_CSE_ID`,
+`BRAVE_SEARCH_API_KEY`) only when set in the repo — an unset optional
+secret is skipped, never overwritten with an empty value. To enable AI
+chart reading/drafting, add one of the AI keys under GitHub → Settings →
+Secrets and variables → Actions and re-run the workflow. Manual
+`npx wrangler deploy -c workers/setlist-sync/wrangler.toml` still works
+for one-offs. The app's Settings "worker URL" must point at the worker
+this workflow deploys (`voidstar-setlist-sync.<subdomain>.workers.dev`) —
+a stale URL to an older, differently-named worker surfaces as
+"worker outdated" on routes added since.
+
 Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `POST /spotify/search-batch`, `GET /drive/folder/:id`,
 `GET /drive/folder/:id/recursive`, `GET /drive/file/:id/meta`,
