@@ -122,12 +122,17 @@ export function randomPattern() {
   // Tempo random across [0.5, 1.0] — chill range with a touch of headroom.
   const cps      = (0.5 + Math.random() * 0.5).toFixed(2);
   const tag      = Math.floor(Math.random() * 0xffff).toString(36);
+  // Bass line: 0 and 4, then two distinct random degrees from 1–6 (no repeats,
+  // so 4 is excluded from the pool).
+  const pool     = [1, 2, 3, 5, 6];
+  const bass3    = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+  const bass4    = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
   return `// @title qualem ${tag}
 // @by voidstar
 setcps(${cps})
 stack(
   s("<bd ~ sd ~>").lpf(sine.range(500, 2000).slow(8)).delay(.2),
-  n("<0 4>/2").scale('${rootNote}1 ${scale}').s("gm_synth_strings_2").lpf(800),
+  n("<0 4 ${bass3} ${bass4}>/4").scale('${rootNote}1 ${scale}').s("gm_synth_strings_2").lpf(800),
 ).room(0.5)`;
 }
 

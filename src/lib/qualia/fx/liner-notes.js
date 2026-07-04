@@ -47,8 +47,8 @@ const CONTENT = {
     qr: false,
   },
   languages: {
-    kicker: '⊛ transmission 02 · the languages',
-    h1: 'qualia speaks three tongues',
+    kicker: '⊛ transmission 02 · the language',
+    h1: 'javascript, three ways',
     rows: [
       { k: 'lang', t: 'strudel', d: 'patterns → sound · TidalCycles, in the browser' },
       { k: 'code', t: 's("bd ~ sd ~").bank("tr909").fast(2)' },
@@ -63,7 +63,7 @@ const CONTENT = {
   },
   entangle: {
     kicker: '⊛ transmission 03 · entanglement',
-    h1: 'bend the field',
+    h1: 'participate live!',
     rows: [
       { k: 'body', t: 'scan to join — your phone becomes a sensor.' },
       { k: 'body', t: 'your motion feeds the visuals. no app, no login.' },
@@ -76,7 +76,7 @@ const CONTENT = {
     h1: 'voidstar.sh',
     rows: [
       { k: 'body', t: 'the whole instrument lives at this address —' },
-      { k: 'body', t: 'open it, play it, break it. code it.' },
+      { k: 'body', t: 'open it. play it. break it. code it.' },
     ],
     qr: true,
   },
@@ -382,11 +382,18 @@ export default {
         }
       }
 
+      // #livecoding tag — every transmission carries it, just above the footer.
+      const footerY = H - Math.max(28 * fs, m * 0.035);
+      ctx.font = mono(24 * fs, 600);
+      ctx.fillStyle = pal.accent;
+      ctx.globalAlpha = 0.9;
+      ctx.fillText('#livecoding', cx, footerY - 34 * fs);
+
       // Footer.
       ctx.font = mono(24 * fs, 400);
       ctx.fillStyle = pal.dim;
       ctx.globalAlpha = 0.85;
-      ctx.fillText(scratch.footer || 'voidstar.sh — what it’s like', cx, H - Math.max(28 * fs, m * 0.035));
+      ctx.fillText(scratch.footer || 'voidstar.sh — what it’s like', cx, footerY);
       ctx.globalAlpha = 1;
 
       // ── CRT scanlines, slow vertical roll ────────────────────────────────
