@@ -107,7 +107,11 @@ in → HPF → Earth(drive) → Metal(drive) → comp → neural amp → cab(IR)
   panel editor (in `looper.js`) draws the composite response on a log-frequency canvas with
   draggable band handles; the curve is queried from prototype `BiquadFilterNode`s in a dormant
   `OfflineAudioContext` via `getFrequencyResponse`, so the display is exactly the browser's own
-  filter math. Paints on demand only — no rAF loop.
+  filter math. A **live pre/post-peq spectrum** (ReaEQ-style — grey fill in, pink line out) draws
+  behind the curve from two analyser taps inside the strip (`getPeqAnalysers`); analysers are pure
+  sinks whose FFT only runs when read. The static curve paints on demand; the spectrum runs a
+  ~30 fps rAF loop gated on the canvas being visible **and** the rig capture open — zero cost with
+  the panel closed.
 - `createRigStrip(ctx, cfg)` → `{ input, output, setParam, setEnabled, setConfig, getConfig,
   setCabBuffer, setAmpModel, dispose }`. `looper-audio.js` instantiates it and hangs the rig master
   limiter/level/mute *outside* the strip.

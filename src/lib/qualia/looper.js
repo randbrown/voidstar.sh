@@ -1663,9 +1663,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
     const canvas = document.createElement('canvas');
     canvas.className = 'rig-peq-canvas';
-    canvas.title = 'Drag a band handle: ←→ frequency, ↑↓ gain (Q for pass/notch bands). Wheel = Q. Double-click a handle to toggle its band; double-click empty space to place the next free band.';
+    canvas.title = 'Drag a band handle: ←→ frequency, ↑↓ gain (Q for pass/notch bands). Wheel = Q. Double-click a handle to toggle its band; double-click empty space to place a new band. Grey spectrum = signal into the peq, pink = after it (live while the rig capture is open).';
 
-    // Band chips + on/type for the selected band.
+    // Band chips (only active bands show, plus the selection) + add/on/type.
     const chips = document.createElement('div');
     chips.className = 'rig-peq-chips';
     const chipEls = [];
@@ -1676,6 +1676,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
       c.addEventListener('click', () => { sel = i; syncCtls(); paint(); });
       chips.append(c); chipEls.push(c);
     }
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button'; addBtn.className = 'ctrl-btn rig-peq-chip rig-peq-add'; addBtn.textContent = '+';
+    addBtn.title = 'Add a band (or double-click empty canvas to place one)';
+    addBtn.addEventListener('click', () => {
+      const bs = bands();
+      const free = bs.findIndex(b => !b.on);
+      if (free < 0) return;
+      bs[free].on = true;
+      sel = free;
+      commit();
+    });
     const onBtn = document.createElement('button');
     onBtn.type = 'button'; onBtn.className = 'ctrl-btn rig-peq-onbtn';
     onBtn.title = 'Enable / disable the selected band';
@@ -1688,7 +1699,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       typeSel.append(o);
     }
     typeSel.addEventListener('change', () => { bands()[sel].type = typeSel.value; commit(); });
-    chips.append(onBtn, typeSel);
+    chips.append(addBtn, onBtn, typeSel);
 
     // Selected-band sliders. freq + Q ride 0..1 log-mapped sliders; the
     // dataset.reset values (updated per selection) keep the global
@@ -1715,9 +1726,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
     function syncCtls() {
       const bs = bands();
       for (let i = 0; i < chipEls.length; i++) {
+        // Dormant bands stay hidden until placed (dbl-click / +) — except the
+        // selection, which lingers dimmed so a just-disabled band can be re-armed.
+        chipEls[i].style.display = (bs[i].on || i === sel) ? '' : 'none';
         chipEls[i].classList.toggle('active', i === sel);
         chipEls[i].classList.toggle('on', !!bs[i].on);
       }
+      addBtn.style.display = bs.some(b => !b.on) ? '' : 'none';
       const b = bs[sel];
       onBtn.textContent = b.on ? 'on' : 'off';
       onBtn.classList.toggle('active', !!b.on);
@@ -1736,6 +1751,23 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
 
     // ── response canvas ──
+    // Live pre/post-peq spectrum overlay (ReaEQ/Pro-Q style). Reused float
+    // buffers; the analyser FFT only runs when read, and only while the rig
+    // capture is open and the canvas is visible.
+    let specBufPre = null, specBufPost = null;
+    const SPEC_TOP_DB = -12, SPEC_BOT_DB = -90;
+    function traceSpectrum(g, analyser, buf, W, H) {
+      analyser.getFloatFrequencyData(buf);
+      const sr = analyser.context.sampleRate || 48000;
+      const bins = analyser.frequencyBinCount;
+      g.beginPath();
+      for (let x = 0; x <= W; x += 2) {
+        const f = peq01toF(x / W);
+        const db = buf[Math.min(bins - 1, Math.round((f / (sr / 2)) * bins))];
+        const y = Math.max(0, Math.min(H, ((SPEC_TOP_DB - db) / (SPEC_TOP_DB - SPEC_BOT_DB)) * H));
+        if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      }
+    }
     function paint() {
       if (!canvas.isConnected) return;
       const cw = canvas.clientWidth, chh = canvas.clientHeight;
@@ -1747,13 +1779,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const css = getComputedStyle(document.documentElement);
       const col = (v, fb) => (css.getPropertyValue(v) || '').trim() || fb;
       const cCyan = col('--cyan', '#22d3ee'), cMuted = col('--muted', '#9b96c4'), cText = col('--text', '#e7e9ff');
+      const cPink = col('--pink', '#ff7ae6');
       const stageOn = !!model.strip.peq.on;
       const midY = H / 2, dbScale = midY / PEQ_DB_VIEW;
       g.clearRect(0, 0, W, H);
 
       // grid: octave-ish verticals + dB horizontals
       g.strokeStyle = 'rgba(155,150,196,0.14)'; g.lineWidth = 1;
-      for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+      const FREQ_GRID = [[50, '50'], [100, '100'], [200, '200'], [500, '500'], [1000, '1k'], [2000, '2k'], [5000, '5k'], [10000, '10k']];
+      for (const [f] of FREQ_GRID) {
         const x = peqFto01(f) * W;
         g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
       }
@@ -1764,10 +1798,29 @@ export function createLooper({ audio, syncStrudel } = {}) {
       g.strokeStyle = 'rgba(155,150,196,0.35)';
       g.beginPath(); g.moveTo(0, midY); g.lineTo(W, midY); g.stroke();
       g.fillStyle = cMuted; g.font = `${Math.round(8 * dpr)}px monospace`; g.globalAlpha = 0.7;
-      g.fillText('100', peqFto01(100) * W + 2 * dpr, H - 3 * dpr);
-      g.fillText('1k',  peqFto01(1000) * W + 2 * dpr, H - 3 * dpr);
-      g.fillText('10k', peqFto01(10000) * W + 2 * dpr, H - 3 * dpr);
+      for (const [f, label] of FREQ_GRID) g.fillText(label, peqFto01(f) * W + 2 * dpr, H - 3 * dpr);
+      g.fillText('+12', 2 * dpr, midY - 12 * dbScale + 8 * dpr);
+      g.fillText('-12', 2 * dpr, midY + 12 * dbScale - 3 * dpr);
       g.globalAlpha = 1;
+
+      // live spectrum behind the curve — pre-peq as a filled area, post-peq as
+      // a line, so cuts/boosts read directly against the incoming signal
+      const taps = looperAudio.getPeqAnalysers?.();
+      if (taps) {
+        const bins = taps.pre.frequencyBinCount;
+        if (!specBufPre || specBufPre.length !== bins) {
+          specBufPre = new Float32Array(bins);
+          specBufPost = new Float32Array(bins);
+        }
+        traceSpectrum(g, taps.pre, specBufPre, W, H);
+        g.lineTo(W, H); g.lineTo(0, H); g.closePath();
+        g.fillStyle = 'rgba(155,150,196,0.16)';
+        g.fill();
+        traceSpectrum(g, taps.post, specBufPost, W, H);
+        g.strokeStyle = cPink; g.lineWidth = 1 * dpr; g.globalAlpha = 0.75;
+        g.stroke();
+        g.globalAlpha = 1;
+      }
 
       // composite response of the enabled bands
       const bs = bands();
@@ -1895,9 +1948,26 @@ export function createLooper({ audio, syncStrudel } = {}) {
       commit();
     }, { passive: false });
 
+    // Spectrum animation loop — runs only while the canvas is laid out
+    // (visible); self-stops when the drawer/panel hides it (clientWidth → 0)
+    // and the ResizeObserver below restarts it. Frames are halved (~30 fps on
+    // a 60 Hz display) and each tick is a cheap no-op unless the rig capture
+    // is open (no analysers → nothing to animate; the static curve stays put).
+    let specRaf = 0, specSkip = false;
+    function specLoop() {
+      specRaf = 0;
+      if (!canvas.isConnected || !canvas.clientWidth) return;
+      specSkip = !specSkip;
+      if (!specSkip && looperAudio.getPeqAnalysers?.()) paint();
+      specRaf = requestAnimationFrame(specLoop);
+    }
+    function startSpecLoop() { if (!specRaf) specRaf = requestAnimationFrame(specLoop); }
+
     // Repaint when the drawer/stage box (re)opens or the panel is resized —
     // the canvas goes 0-width while hidden, so paint() no-ops until then.
-    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => paint()).observe(canvas);
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => { paint(); startSpecLoop(); }).observe(canvas);
+    }
     peqRepaint = paint;
     syncCtls();
     // First paint happens via the ResizeObserver once the canvas lays out.

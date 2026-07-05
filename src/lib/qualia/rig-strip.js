@@ -260,6 +260,16 @@ export function createRigStrip(ctx, cfg) {
     n.type = 'peaking'; n.gain.value = 0;
     peqFilters.push(n);
   }
+  // Spectrum taps for the peq editor: pre = the signal entering the peq,
+  // post = the signal leaving it (what the time fx hear). Analysers are pure
+  // sinks — the FFT only runs when the editor actually reads them, so they're
+  // free while the panel is closed.
+  const peqPreTap  = ctx.createAnalyser();
+  const peqPostTap = ctx.createAnalyser();
+  for (const a of [peqPreTap, peqPostTap]) {
+    a.fftSize = 8192;                 // ~5.9 Hz/bin at 48 kHz — enough for the low octaves
+    a.smoothingTimeConstant = 0.8;    // ReaEQ-ish easing on the display
+  }
 
   // Neural amp — LSTM capture inference in an AudioWorklet, as a dry/wet insert
   // after the EQ (transparent until a model is loaded; never blocks the graph if
@@ -348,6 +358,8 @@ export function createRigStrip(ctx, cfg) {
   eqTail = geqLevel;
   for (const n of peqFilters) { eqTail.connect(n); eqTail = n; }
   eqTail.connect(fxIn);
+  geqLevel.connect(peqPreTap);   // spectrum taps (sinks) for the peq editor
+  eqTail.connect(peqPostTap);
 
   fxIn.connect(dry); dry.connect(sum);
 
@@ -609,6 +621,7 @@ export function createRigStrip(ctx, cfg) {
                      metalPre, metalShaper1, metalStage, metalShaper2,
                      mLow, mMid, mHigh, metalPost, compIn, comp,
                      eqLow, eqMid, eqHigh, ...geqFilters, geqLevel, ...peqFilters,
+                     peqPreTap, peqPostTap,
                      ampIn, ampDrive, ampDry, ampWet, ampSum,
                      cabIn, cabConv, cabDry, cabWet, cabSum,
                      fxIn, dry, sum, delaySend, delayL, delayR, delayFb, merger,
@@ -618,5 +631,7 @@ export function createRigStrip(ctx, cfg) {
     try { neural?.disconnect(); } catch {}
   }
 
-  return { input, output, setParam, setEnabled, setConfig, getConfig, getLatencySeconds, setCabBuffer, setAmpModel, dispose };
+  function getPeqAnalysers() { return { pre: peqPreTap, post: peqPostTap }; }
+
+  return { input, output, setParam, setEnabled, setConfig, getConfig, getLatencySeconds, getPeqAnalysers, setCabBuffer, setAmpModel, dispose };
 }

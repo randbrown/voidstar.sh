@@ -1100,6 +1100,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       _stripConfig[stage] = { ...(_stripConfig[stage] || {}), on: !!on };
       strip?.setEnabled(stage, !!on);
     },
+    // Live pre/post-peq analyser taps for the peq editor's spectrum overlay.
+    // Re-query per frame — the strip (and its taps) are rebuilt on capture open.
+    getPeqAnalysers: () => strip?.getPeqAnalysers?.() || null,
     // Cab / IR loader: decode raw file bytes with the looper's ctx and apply to
     // the strip's convolver (kept across capture reopens). bytes are copied so
     // the caller's ArrayBuffer survives (decodeAudioData detaches its input).
