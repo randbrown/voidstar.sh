@@ -59,10 +59,15 @@ strip and the recordable-mix bus the recorder taps.
 ## limiter.js — clip insurance
 
 `makeLimiter(ctx, on)` → a `DynamicsCompressor` tuned as a hard brickwall (knee 0, ratio 20,
-attack 3 ms, release 100 ms, ceiling −1 dB). `setLimiterEngaged(node, on)` toggles by
+attack 1 ms, release 100 ms, ceiling −1 dB). `setLimiterEngaged(node, on)` toggles by
 **transparency** (ratio 1 / threshold 0), not by reconnecting, so there's no click mid-set. Every
-track uses one. (The vocoder currently reimplements this with a −1.5 dB ceiling — a known
-consolidation item in the backlog.)
+track uses one **except the rig master** — Chromium's `DynamicsCompressor` imposes a fixed ~6 ms
+lookahead pre-delay even when transparent, which is monitoring latency on the live-instrument
+path, so the rig uses `makeSoftLimiter(ctx, on)`: a zero-latency soft-clip `WaveShaper`
+(bit-exact identity below −6 dBFS, tanh ease into the −1 dB ceiling, no oversampling). Trade-off:
+it clips the waveform on true overs (slight aliasing) instead of riding a gain envelope —
+acceptable for clip insurance. (The vocoder currently reimplements the compressor variant with a
+−1.5 dB ceiling — a known consolidation item in the backlog.)
 
 ---
 
@@ -80,7 +85,9 @@ directly.
 
 A native-Web-Audio pedalboard, fixed-order series chain with parallel time-fx sends. Runs in the
 **looper's** native context (worklets can't live in Tone's context). Every stage **bypasses to
-neutral**, so toggling a pedal never re-wires the graph (no clicks).
+neutral**, so toggling a pedal never re-wires the graph (no clicks) — except the **comp**, which
+hard-bypasses (rewired around, under a ~6 ms gain dip): a "transparent" `DynamicsCompressor`
+still delays the signal by its ~6 ms lookahead, and this is the live monitoring path.
 
 ```
 in → HPF → Earth(drive) → Metal(drive) → comp → neural amp → cab(IR) → EQ
@@ -95,7 +102,15 @@ in → HPF → Earth(drive) → Metal(drive) → comp → neural amp → cab(IR)
   limiter/level/mute *outside* the strip.
 - **Watch out:** drive knobs rebuild 2048-float waveshaper curves on every change (GC churn — see
   backlog), output-trim constants assume a reference input level, and `dispose()` hand-lists ~40
-  nodes (drift risk). All four shapers use `oversample:'4x'` — the rig's heaviest native cost.
+  nodes (drift risk). The drive shapers use `oversample:'4x'` **only while enabled** — the rig's
+  heaviest native cost, and the resamplers add ~4 ms of group delay per shaper (why bypass drops
+  to `'none'`).
+- **Latency:** the strip exports `stageLatencySeconds(stage)` and instances expose
+  `getLatencySeconds()` — the stages that add real delay when ON (earth ~4 ms, metal ~8 ms,
+  comp ~6 ms at 48 kHz). Everything else is zero-latency (convolvers have a spec-mandated direct
+  head; the LSTM worklet is causal). `looper-audio.getLatencyInfo()` combines this with
+  `baseLatency`/`outputLatency` + a mic/output sample-rate-mismatch flag (hidden resampler);
+  the rig strip subhead shows it live, and enabling a latency-adding stage pops a transient note.
 
 ---
 
@@ -187,4 +202,6 @@ in `audio.js` and `vocoder.js` — a candidate to move here (backlog).
 - **No allocation / no large-buffer rebuilds on the audio thread or per knob tick.** Quantize and
   cache (see backlog for the existing churn spots).
 - **Toggle by transparency, not reconnection,** to avoid clicks (the limiter and rig pedals model
-  this).
+  this) — *unless* the node delays the signal even when transparent (`DynamicsCompressor`
+  lookahead, oversampled `WaveShaper` group delay). On a live monitoring path, take those out of
+  the graph when off, masked by a short gain dip (the rig comp models this).
