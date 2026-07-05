@@ -151,6 +151,7 @@ export function createSong(title, artist = '') {
     capo: 0,
     keyChanges: '',
     steelEntry: '',
+    steelSummary: '', // AI-drafted steel direction (worker /ai/steel-summary), hand-editable
     spotifyUri: '',
     chartUrl: '',
     lyrics: '',

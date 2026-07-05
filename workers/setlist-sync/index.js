@@ -38,13 +38,20 @@
 //                                     change notes off a scanned chart image
 //                                     (body: {image: base64, mimeType, title,
 //                                     artist})
+//   GET /ai/steel-summary?title=&artist=
+//                                   → a few concise sentences on the steel
+//                                     guitar's role in the song (presence,
+//                                     entrances, style, intensity), drafted by
+//                                     an LLM with web-search grounding — for
+//                                     quick reference while studying/performing
 //   GET /health                     → ok
 //
 // Optional env for /web/* search (falls back to keyless DuckDuckGo HTML):
 //   GOOGLE_CSE_ID          — Programmable Search Engine id (reuses GOOGLE_API_KEY)
 //   BRAVE_SEARCH_API_KEY   — Brave Search API subscription token
 //
-// Optional env for /ai/chart + /ai/chart-read (first configured provider wins):
+// Optional env for /ai/chart + /ai/chart-read + /ai/steel-summary (first
+// configured provider wins):
 //   ANTHROPIC_API_KEY      — Claude (+ ANTHROPIC_MODEL, default claude-opus-4-8;
 //                            /ai/chart-read uses ANTHROPIC_READ_MODEL, default
 //                            claude-haiku-4-5 — transcription, not drafting)
@@ -1494,7 +1501,11 @@ function normalizeAiChart(raw) {
   };
 }
 
-async function aiChartClaude(env, prompt) {
+// Shared search-grounded JSON call, used by /ai/chart and /ai/steel-summary:
+// one prompt in, {provider, model, raw, sources, reason?} out, where `raw` is
+// the lenient-extracted JSON object (null when unusable). Callers apply their
+// own normalization/validation on `raw`.
+async function aiGroundedClaude(env, prompt, { maxTokens = 8000, maxSearches = 4 } = {}) {
   const model = env.ANTHROPIC_MODEL || 'claude-opus-4-8';
   const anthropic = new Anthropic({
     apiKey: env.ANTHROPIC_API_KEY,
@@ -1502,28 +1513,22 @@ async function aiChartClaude(env, prompt) {
     timeout: AI_TIMEOUT_MS,
   });
 
-  let messages = [{ role: 'user', content: prompt }];
-  let response = await anthropic.messages.create({
+  const params = {
     model,
-    max_tokens: 8000,
+    max_tokens: maxTokens,
     thinking: { type: 'adaptive' },
-    tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 4 }],
-    messages,
-  });
+    tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: maxSearches }],
+  };
+  let messages = [{ role: 'user', content: prompt }];
+  let response = await anthropic.messages.create({ ...params, messages });
   // Server-side search runs in a server loop that can pause; resume by
   // echoing the assistant turn back (no extra user message).
   for (let i = 0; i < 3 && response.stop_reason === 'pause_turn'; i++) {
     messages = [...messages, { role: 'assistant', content: response.content }];
-    response = await anthropic.messages.create({
-      model,
-      max_tokens: 8000,
-      thinking: { type: 'adaptive' },
-      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 4 }],
-      messages,
-    });
+    response = await anthropic.messages.create({ ...params, messages });
   }
   if (response.stop_reason === 'refusal') {
-    return { provider: 'claude', model, chart: null, reason: 'model declined the request' };
+    return { provider: 'claude', model, raw: null, reason: 'model declined the request' };
   }
 
   const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
@@ -1535,10 +1540,10 @@ async function aiChartClaude(env, prompt) {
       if (sources.length >= 3) break;
     }
   }
-  return { provider: 'claude', model, chart: normalizeAiChart(extractJsonBlock(text)), sources };
+  return { provider: 'claude', model, raw: extractJsonBlock(text), sources };
 }
 
-async function aiChartGemini(env, prompt) {
+async function aiGroundedGemini(env, prompt, { maxTokens = 8192 } = {}) {
   const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
@@ -1548,7 +1553,7 @@ async function aiChartGemini(env, prompt) {
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         tools: [{ google_search: {} }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 8192 },
+        generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens },
       }),
       signal: AbortSignal.timeout(AI_TIMEOUT_MS),
     },
@@ -1565,7 +1570,7 @@ async function aiChartGemini(env, prompt) {
     if (chunk?.web?.uri && !sources.includes(chunk.web.uri)) sources.push(chunk.web.uri);
     if (sources.length >= 3) break;
   }
-  return { provider: 'gemini', model, chart: normalizeAiChart(extractJsonBlock(text)), sources };
+  return { provider: 'gemini', model, raw: extractJsonBlock(text), sources };
 }
 
 async function handleAiChart(request, env) {
@@ -1589,8 +1594,8 @@ async function handleAiChart(request, env) {
   // and Gemini gets a shot when Claude can't verify the song (or errors) —
   // and vice versa when only Gemini is configured.
   const providers = [];
-  if (env.ANTHROPIC_API_KEY) providers.push(aiChartClaude);
-  if (env.GEMINI_API_KEY) providers.push(aiChartGemini);
+  if (env.ANTHROPIC_API_KEY) providers.push(aiGroundedClaude);
+  if (env.GEMINI_API_KEY) providers.push(aiGroundedGemini);
 
   const reasons = [];
   for (const provider of providers) {
@@ -1601,12 +1606,13 @@ async function handleAiChart(request, env) {
       reasons.push(String(e.message || e).slice(0, 200));
       continue;
     }
-    if (!result.chart) {
+    const chart = normalizeAiChart(result.raw);
+    if (!chart) {
       reasons.push(`${result.provider}: ${result.reason || 'could not reliably chart this song'}`);
       continue;
     }
-    if (result.chart.confidence < AI_MIN_CONFIDENCE) {
-      reasons.push(`${result.provider}: confidence too low (${result.chart.confidence})`);
+    if (chart.confidence < AI_MIN_CONFIDENCE) {
+      reasons.push(`${result.provider}: confidence too low (${chart.confidence})`);
       continue;
     }
     return corsResponse(JSON.stringify({
@@ -1615,7 +1621,7 @@ async function handleAiChart(request, env) {
       provider: result.provider,
       model: result.model,
       sources: result.sources || [],
-      ...result.chart,
+      ...chart,
     }), 200, request, env, {
       'Cache-Control': 'public, max-age=604800',
     });
@@ -1624,6 +1630,99 @@ async function handleAiChart(request, env) {
   return corsResponse(JSON.stringify({
     found: false,
     reason: reasons.join(' · ') || 'AI could not reliably chart this song',
+  }), 200, request, env);
+}
+
+// ══ AI steel summary ═════════════════════════════════════════════════════════
+// GET /ai/steel-summary?title=&artist= — a few concise sentences describing
+// the steel guitar's role in the song: presence, where it enters, style/
+// aesthetic lineage, intensity. Written for a steel player studying the song
+// or glancing at it on stage, so brevity is part of the contract (enforced
+// server-side, not just prompted). "No steel on the recording" is a valid,
+// useful answer — found:false is only for a song the model can't verify.
+
+const STEEL_SUMMARY_MAX_CHARS = 600;
+
+function buildSteelSummaryPrompt(title, artist) {
+  const song = artist ? `"${title}" by ${artist}` : `"${title}"`;
+  return `You are a veteran pedal steel guitarist preparing a bandmate to cover a song. Use web search to verify what the steel guitar actually does on the well-known studio recording of ${song}.
+
+Write a steel-direction summary: 1-3 short sentences, at most ~80 words, in plain concise language a player can absorb in one glance on stage. Cover only what matters most among: presence/intensity (none / sparse / supportive / prominent / wall-to-wall), where it plays (intro, verses, choruses, solo, fills), style/aesthetic (e.g. "classic honky-tonk a la Buddy Emmons", "crying ballad swells", "ambient pad-like swells"), and any signature moment. If the recording has NO steel, say so and note what instrument fills that space (fiddle, B-bender Tele, organ) so a steel player knows what to cover. Do not pad, do not hedge, do not restate the song title.
+
+Return ONLY a JSON object — no markdown fences, no prose before or after — with exactly this shape:
+{
+  "found": boolean,      // false ONLY if you cannot verify this song/recording at all — NEVER invent
+  "confidence": number,  // 0-1: how confident you are this matches the recording
+  "summary": string      // the 1-3 sentence steel direction (or the "no steel — X covers it" note)
+}`;
+}
+
+// Clamp the summary into the quick-glance contract: single paragraph,
+// collapsed whitespace, hard length cap. null = unusable.
+function normalizeSteelSummary(raw) {
+  if (!raw || typeof raw !== 'object' || raw.found === false) return null;
+  const summary = String(raw.summary ?? '').replace(/\s+/g, ' ').trim().slice(0, STEEL_SUMMARY_MAX_CHARS);
+  if (!summary) return null;
+  let confidence = Number(raw.confidence);
+  if (!Number.isFinite(confidence)) confidence = 0.5;
+  return { summary, confidence: Math.min(1, Math.max(0, confidence)) };
+}
+
+async function handleAiSteelSummary(request, env) {
+  const url = new URL(request.url);
+  const title = (url.searchParams.get('title') || '').trim();
+  const artist = (url.searchParams.get('artist') || '').trim();
+  if (!title) return corsResponse(JSON.stringify({ error: 'missing title param' }), 400, request, env);
+
+  if (!env.ANTHROPIC_API_KEY && !env.GEMINI_API_KEY) {
+    return corsResponse(JSON.stringify({
+      found: false,
+      aiConfigured: false,
+      reason: 'no AI key configured — set ANTHROPIC_API_KEY or GEMINI_API_KEY on the worker',
+    }), 200, request, env);
+  }
+
+  const prompt = buildSteelSummaryPrompt(title, artist);
+  const providers = [];
+  if (env.ANTHROPIC_API_KEY) providers.push(aiGroundedClaude);
+  if (env.GEMINI_API_KEY) providers.push(aiGroundedGemini);
+
+  const reasons = [];
+  for (const provider of providers) {
+    let result;
+    try {
+      // Far smaller output than a chart — cap tokens and searches accordingly.
+      // (Not too small: thinking/thought tokens count against the cap on both
+      // providers, and a grounded call spends real reasoning before the JSON.)
+      result = await provider(env, prompt, { maxTokens: 4000, maxSearches: 3 });
+    } catch (e) {
+      reasons.push(String(e.message || e).slice(0, 200));
+      continue;
+    }
+    const norm = normalizeSteelSummary(result.raw);
+    if (!norm) {
+      reasons.push(`${result.provider}: ${result.reason || 'could not verify this song'}`);
+      continue;
+    }
+    if (norm.confidence < AI_MIN_CONFIDENCE) {
+      reasons.push(`${result.provider}: confidence too low (${norm.confidence})`);
+      continue;
+    }
+    return corsResponse(JSON.stringify({
+      found: true,
+      provider: result.provider,
+      model: result.model,
+      sources: result.sources || [],
+      summary: norm.summary,
+      confidence: norm.confidence,
+    }), 200, request, env, {
+      'Cache-Control': 'public, max-age=604800',
+    });
+  }
+
+  return corsResponse(JSON.stringify({
+    found: false,
+    reason: reasons.join(' · ') || 'AI could not verify this song',
   }), 200, request, env);
 }
 
@@ -1818,6 +1917,10 @@ export default {
 
       if (url.pathname === '/ai/chart-read' && request.method === 'POST') {
         return await handleAiChartRead(request, env);
+      }
+
+      if (url.pathname === '/ai/steel-summary') {
+        return await handleAiSteelSummary(request, env);
       }
 
       if (url.pathname === '/spotify/search-batch' && request.method === 'POST') {

@@ -5,7 +5,8 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, deepScrapeChart, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, getReferencePlaylistTracks, readChartImage } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getReferencePlaylistTracks } from './sync.js';
+import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, libraryHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc } from './gdrive-backup.js';
@@ -1309,6 +1310,14 @@ export async function renderSongFocus(root, songId, setlistId) {
     art.loading = 'lazy';
     info.insertBefore(art, info.firstChild);
   }
+  // Steel direction — the AI-drafted (hand-editable) quick summary of what
+  // the steel does in this song, kept with the key/steel-entry stage info.
+  // textContent: AI/external data never goes through innerHTML.
+  if (song.steelSummary) {
+    const ss = el('div', 'sl-steel-summary');
+    ss.textContent = song.steelSummary;
+    info.appendChild(ss);
+  }
   root.appendChild(info);
 
   // Practice-status toggles — independent on/off chips, saved immediately.
@@ -1344,6 +1353,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       <label class="sl-label sl-flex1">Key Changes<input class="sl-input" id="sf-keychanges" value="${song.keyChanges || ''}" placeholder="e.g. mod up to A, last chorus"></label>
     </div>
     <label class="sl-label">Steel Entry<input class="sl-input" id="sf-steel" value="${isOverride ? (merged.steelEntry || '') : (song.steelEntry || '')}" placeholder="e.g. intro, chorus, verse 2"></label>
+    <label class="sl-label">Steel Summary<textarea class="sl-textarea sl-textarea-sm" id="sf-steelsummary" rows="2" placeholder="steel direction — the AI button drafts this, or write your own">${esc(song.steelSummary || '')}</textarea></label>
     <label class="sl-label">Spotify URL<input class="sl-input" id="sf-spotify" value="${song.spotifyUri || ''}" placeholder="https://open.spotify.com/track/..."></label>
     <label class="sl-label">Chart URL (Google Drive)<input class="sl-input" id="sf-chart" value="${song.chartUrl || ''}" placeholder="https://drive.google.com/..."></label>
     ${isOverride ? '<div class="sl-hint">Key and steel entry save as overrides for this setlist. Title, artist, key changes, Spotify, and chart save to the base song.</div>' : ''}
@@ -1352,6 +1362,7 @@ export async function renderSongFocus(root, songId, setlistId) {
     song.title = document.getElementById('sf-title').value;
     song.artist = document.getElementById('sf-artist').value;
     song.keyChanges = document.getElementById('sf-keychanges').value;
+    song.steelSummary = document.getElementById('sf-steelsummary').value.trim();
     song.spotifyUri = document.getElementById('sf-spotify').value;
     song.chartUrl = document.getElementById('sf-chart').value;
 
@@ -1419,50 +1430,18 @@ export async function renderSongFocus(root, songId, setlistId) {
     // "read chart" (né "scrape"): doc charts scrape their text export via
     // the worker; scanned/image charts have no text, so the image falls
     // through to the worker's vision route, which reads what's written on
-    // the page (key, bpm, capo, modulation notes). Failures must be LOUD:
-    // the user explicitly clicked — "no new data" when the real story is
-    // "no AI key on the worker" reads as a dead button.
+    // the page (key, bpm, capo, modulation notes). The ladder itself lives
+    // in bulk.js (readChartFields) — shared with Settings' library-wide
+    // chart re-scan. Failures must be LOUD: the user explicitly clicked —
+    // "no new data" when the real story is "no AI key on the worker" reads
+    // as a dead button.
     const readBtn = btn('read chart', 'sl-btn-ghost sl-btn-sm', async () => {
       readBtn.disabled = true;
       readBtn.textContent = 'reading doc...';
-      const applyEmpty = (updates) => {
-        let n = 0;
-        for (const [k, v] of Object.entries(updates || {})) {
-          if (k.startsWith('_')) continue;
-          const cur = song[k];
-          if (cur === '' || cur === 0 || cur === null || cur === undefined) { song[k] = v; n++; }
-        }
-        return n;
-      };
-      const problems = [];
-      if (!getSources().workerUrl) problems.push('no worker URL configured in Settings — both the doc scrape and the AI read need it');
-      let applied = applyEmpty(await deepScrapeChart(song));
-      if (!song.key) {
-        // The vision read needs the chart bytes — fetch them on demand
-        // instead of silently skipping when no offline pass has run yet.
-        let cached = await getOfflineChart(songId, song.chartUrl);
-        if (!cached && getSources().workerUrl) {
-          readBtn.textContent = 'fetching chart...';
-          const r = await cacheChartForSong(song, getSources().workerUrl);
-          if (r.ok) cached = await getOfflineChart(songId, song.chartUrl);
-          else problems.push(`couldn't fetch the chart: ${r.reason}`);
-          // Text charts fill song.key from the header inside
-          // cacheChartForSong (already persisted) — count it as a find.
-          if (song.key) applied++;
-        }
-        if (!song.key && cached?.kind === 'image') {
-          URL.revokeObjectURL(cached.url);
-          if (cached.blob.type === 'application/pdf') {
-            problems.push('this chart is a PDF — the AI read needs an image; link the scan as an image (or a Drive file, which proxies as one)');
-          } else {
-            readBtn.textContent = 'reading scan (AI)...';
-            const read = await readChartImage(song, cached.blob);
-            if (read.ok) applied += applyEmpty(read.data);
-            else if (read.reason === 'no-ai-key') problems.push('no AI key configured on the worker — set ANTHROPIC_API_KEY or GEMINI_API_KEY to read scanned charts');
-            else problems.push(`AI read failed: ${read.reason}`);
-          }
-        }
-      }
+      const stageLabels = { doc: 'reading doc...', fetch: 'fetching chart...', ai: 'reading scan (AI)...' };
+      const { applied, problems } = await readChartFields(song, (stage) => {
+        readBtn.textContent = stageLabels[stage] || 'reading...';
+      });
       if (applied) {
         await store.putSong(song);
         readBtn.textContent = `found ${applied} field(s)!`;
@@ -1600,6 +1579,37 @@ export async function renderSongFocus(root, songId, setlistId) {
   });
   infoBtn.title = 'Fill empty fields from music APIs (artist, key, genre, year, artwork, length) and fetch lyrics from LRCLIB';
   actionBar.appendChild(infoBtn);
+
+  // "steel summary (AI)" — the steel-player's version of "create chart doc":
+  // a search-grounded LLM writes a few concise sentences on the steel's role
+  // in the recording (presence, entrances, style, intensity). Regenerating
+  // overwrites the previous summary (the tap is the consent); the edit-
+  // details form has a field for hand-tweaking the wording. Failures are
+  // loud, same contract as "read chart".
+  const steelLabel = song.steelSummary ? 'redo steel summary' : 'steel summary (AI)';
+  const steelBtn = btn(steelLabel, 'sl-btn-ghost sl-btn-sm', async () => {
+    steelBtn.disabled = true;
+    steelBtn.textContent = 'researching steel...';
+    const r = await fetchSteelSummary(song);
+    if (r.ok) {
+      song.steelSummary = r.data.summary;
+      await store.putSong(song);
+      steelBtn.textContent = 'done!';
+      setTimeout(() => refresh(), 900);
+    } else {
+      console.warn('[setlist] steel summary:', r.reason);
+      const reasons = {
+        'no-ai-key': 'no AI key configured on the worker — set ANTHROPIC_API_KEY or GEMINI_API_KEY',
+        'worker-outdated': 'worker outdated — redeploy workers/setlist-sync to get /ai/steel-summary',
+        'no worker configured': 'no worker URL configured in Settings',
+      };
+      steelBtn.textContent = 'failed';
+      alert(`steel summary failed: ${reasons[r.reason] || r.reason}`);
+      setTimeout(() => { steelBtn.textContent = steelLabel; steelBtn.disabled = false; }, 2000);
+    }
+  });
+  steelBtn.title = "AI-research the steel guitar's role in this song — presence, entrances, style, intensity";
+  actionBar.appendChild(steelBtn);
 
   if (song.spotifyUri) {
     const spBtn = btn('open in spotify', 'sl-btn-spotify sl-btn-sm', () => {
@@ -2231,6 +2241,136 @@ export async function renderSettings(root) {
   syncSection.appendChild(el('div', 'sl-hint', 'Scans your Spotify playlists and chart folders, and fills each song\'s missing Spotify track + chart link. Never overwrites links you already have.'));
   root.appendChild(syncSection);
 
+  // ── Library helpers: whole-library administrative passes (bulk.js) ──
+  // The song page's per-song buttons ("read chart", "fetch info", "steel
+  // summary"), run across every song that still needs them — so keeping the
+  // library filled in doesn't require opening songs one by one. All passes
+  // are fill-empty; the health check is how you see what's still missing.
+  const helpersSection = el('div', 'sl-section');
+  helpersSection.innerHTML = `
+    <div class="sl-section-title">library helpers</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Bulk passes over the whole song library. They only fill fields that are
+      still empty — nothing you've set by hand gets overwritten. Start with the
+      health check to see what's missing.
+    </div>
+  `;
+  const helperStatus = el('div', 'sl-hint');
+  const helperResults = el('div', 'sl-source-list');
+  const helperActions = el('div', 'sl-action-bar');
+
+  // One pass at a time; per-song progress in the status line; failures land
+  // in a tappable list (open the song, fix it there) instead of vanishing.
+  let helperRunning = false;
+  function renderHelperFailures(failures) {
+    for (const f of failures) {
+      const row = el('div', 'sl-source-row');
+      const label = el('span', 'sl-source-url');
+      label.textContent = `${f.song.title} — ${f.reason}`;
+      row.appendChild(label);
+      row.appendChild(btn('open', 'sl-btn-ghost sl-btn-sm', () => navigate(`#song/${f.song.id}`)));
+      helperResults.appendChild(row);
+    }
+  }
+  function helperButton(label, title, run, summarize) {
+    const b = btn(label, 'sl-btn-ghost sl-btn-sm', async () => {
+      if (helperRunning) return;
+      helperRunning = true;
+      b.disabled = true;
+      helperResults.innerHTML = '';
+      helperStatus.style.color = '';
+      try {
+        const res = await run(({ done, total, updated, title: t }) => {
+          helperStatus.textContent = `${done}/${total} — ${t}${updated ? ` · ${updated} updated` : ''}`;
+        });
+        if (res.aborted) {
+          helperStatus.textContent = `${label}: ${res.aborted}`;
+          helperStatus.style.color = 'var(--pink)';
+        } else {
+          helperStatus.textContent = summarize(res);
+          helperStatus.style.color = res.failures?.length ? 'var(--pink)' : 'var(--green)';
+          renderHelperFailures(res.failures || []);
+        }
+      } catch (e) {
+        helperStatus.textContent = `${label} failed: ${e.message}`;
+        helperStatus.style.color = 'var(--pink)';
+      }
+      helperRunning = false;
+      b.disabled = false;
+    });
+    b.title = title;
+    return b;
+  }
+
+  // Health check — read-only, instant, and the map for the other passes.
+  // Each gap expands into the actual songs, tappable to jump there.
+  helperActions.appendChild(btn('check library health', 'sl-btn-primary sl-btn-sm', async () => {
+    helperResults.innerHTML = '';
+    helperStatus.style.color = '';
+    const h = await libraryHealth();
+    if (!h.total) { helperStatus.textContent = 'No songs yet.'; return; }
+    const gaps = h.checks.filter(c => c.songs.length);
+    if (!gaps.length) {
+      helperStatus.textContent = `${h.total} songs — everything filled in ✓`;
+      helperStatus.style.color = 'var(--green)';
+      return;
+    }
+    helperStatus.textContent = `${h.total} songs — still missing:`;
+    for (const c of gaps) {
+      const row = el('div', 'sl-source-row');
+      row.appendChild(el('span', 'sl-source-url', `${c.label}: <b>${c.songs.length}</b>`));
+      const sub = el('div', 'sl-health-sublist sl-hidden');
+      for (const s of c.songs) {
+        const songRow = el('div', 'sl-health-song');
+        songRow.textContent = s.title + (s.artist ? ` — ${s.artist}` : '');
+        songRow.addEventListener('click', () => navigate(`#song/${s.id}`));
+        sub.appendChild(songRow);
+      }
+      const toggle = btn('list', 'sl-btn-ghost sl-btn-sm', () => {
+        const hidden = sub.classList.toggle('sl-hidden');
+        toggle.textContent = hidden ? 'list' : 'hide';
+      });
+      row.appendChild(toggle);
+      helperResults.appendChild(row);
+      helperResults.appendChild(sub);
+    }
+  }));
+
+  helperActions.appendChild(helperButton(
+    're-scan all charts',
+    'Pull key / BPM / key-change info out of every linked chart — scrapes doc text, AI-reads scanned images for songs still missing a key (the song page\'s "read chart", library-wide)',
+    (onProgress) => scanAllCharts(onProgress),
+    (res) => `Scanned ${res.total} chart${res.total === 1 ? '' : 's'} · ${res.updated} song${res.updated === 1 ? '' : 's'} updated${res.failures.length ? ` · ${res.failures.length} still missing a key:` : ''}`,
+  ));
+
+  helperActions.appendChild(helperButton(
+    'fetch info & lyrics',
+    'Fill missing metadata (artist, key, genre, year, artwork, length) from music APIs and fetch lyrics from LRCLIB, for every song still missing any of it — the song page\'s "fetch info", library-wide',
+    (onProgress) => fetchInfoForAllSongs(onProgress),
+    (res) => `${res.total} song${res.total === 1 ? '' : 's'} needed info · ${res.updated} updated (${res.lyricsFilled} got lyrics) · ${res.skipped} already complete${res.failures.length ? ` · ${res.failures.length} failed:` : ''}`,
+  ));
+
+  helperActions.appendChild(helperButton(
+    'AI steel summaries',
+    'Draft a steel-direction summary for every song that doesn\'t have one yet — a web-search-grounded AI pass, roughly 15-30 seconds per song',
+    async (onProgress) => {
+      const missing = (await store.getAllSongs()).filter(s => !s.steelSummary).length;
+      if (!missing) return { total: 0, updated: 0, failures: [] };
+      if (!confirm(`Draft AI steel summaries for ${missing} song${missing === 1 ? '' : 's'} without one? Takes roughly 15-30 seconds per song — leave the tab open.`)) {
+        return { aborted: 'cancelled' };
+      }
+      return summarizeSteelForAllSongs(onProgress);
+    },
+    (res) => (res.total === 0
+      ? 'Every song already has a steel summary ✓'
+      : `${res.updated} of ${res.total} summaries drafted${res.failures.length ? ` · ${res.failures.length} failed:` : ''}`),
+  ));
+
+  helpersSection.appendChild(helperActions);
+  helpersSection.appendChild(helperStatus);
+  helpersSection.appendChild(helperResults);
+  root.appendChild(helpersSection);
+
   // Google Drive backup
   const gdriveSection = el('div', 'sl-section');
   const currentClientId = localStorage.getItem('voidstar.setlist.gdrive.clientId') || '';
@@ -2706,6 +2846,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
         ${vocalist ? vocalistDot(vocalist, sl.vocalistLegend) : ''}
       </div>
       ${song.steelEntry ? `<div class="sl-perform-steel">steel: ${song.steelEntry}</div>` : ''}
+      ${song.steelSummary ? `<div class="sl-perform-steel-summary">${esc(song.steelSummary)}</div>` : ''}
       ${notes.length ? `<div class="sl-perform-notes">${notes.map(n => {
         const badges = [
           n.timecode != null ? `<span class="sl-tc-badge">${formatTimecode(n.timecode)}</span>` : '',

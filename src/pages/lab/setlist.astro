@@ -507,6 +507,18 @@ const buildStamp = readBuildStamp();
       gap: 0.4rem;
       align-items: center;
     }
+    /* AI-drafted steel direction — quick-reference prose, kept visually in
+       the steel family (cyan) but calm enough to skim past. */
+    .sl-steel-summary {
+      font-size: 0.82rem;
+      line-height: 1.5;
+      color: color-mix(in srgb, var(--cyan) 78%, var(--text));
+      background: color-mix(in srgb, var(--cyan) 7%, transparent);
+      border-left: 2px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+      border-radius: 0 var(--radius, 6px) var(--radius, 6px) 0;
+      padding: 0.45rem 0.7rem;
+      margin-top: 0.6rem;
+    }
 
     .sl-action-bar {
       display: flex;
@@ -843,6 +855,17 @@ const buildStamp = readBuildStamp();
       margin-bottom: 1rem;
       font-weight: 600;
     }
+    .sl-perform-steel-summary {
+      font-size: 0.95rem;
+      line-height: 1.5;
+      color: color-mix(in srgb, var(--cyan) 70%, var(--sl-stage-text));
+      border-left: 2px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+      padding-left: 0.7rem;
+      margin: 0 0 1rem;
+      max-width: 60ch;
+    }
+    /* Tuck the summary up under its "steel:" line when both are present. */
+    .sl-perform-steel + .sl-perform-steel-summary { margin-top: -0.6rem; }
     .sl-perform-notes {
       display: flex;
       flex-direction: column;
@@ -928,6 +951,27 @@ const buildStamp = readBuildStamp();
       border: 1px solid var(--border);
       border-radius: var(--radius, 6px);
       font-size: 0.82rem;
+    }
+    /* Library-health expandable song lists (Settings → library helpers) */
+    .sl-health-sublist {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      margin: 0.1rem 0 0.35rem 0.75rem;
+      padding-left: 0.6rem;
+      border-left: 1px solid var(--border);
+    }
+    .sl-health-song {
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      color: var(--text-muted);
+      padding: 0.2rem 0.3rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .sl-health-song:hover {
+      color: var(--text);
+      background: color-mix(in srgb, var(--surface) 70%, transparent);
     }
     .sl-source-url {
       flex: 1;
