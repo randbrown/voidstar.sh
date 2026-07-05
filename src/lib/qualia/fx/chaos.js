@@ -13,21 +13,25 @@
 //   bifurcation — the logistic-map period-doubling cascade as phosphor
 //                 dust. A playhead scrubs r through the Feigenbaum route
 //                 to chaos, showing the live orbit at that column.
-//   kam         — the Chirikov standard map. Thousands of phase-space
-//                 points: quiet music holds KAM islands of order, loud
-//                 music raises K and the islands dissolve into chaotic sea.
+//   dejong      — the Peter de Jong attractor as slow phosphor dust.
+//                 Thousands of iterates per frame settle onto filigree;
+//                 four incommensurate LFOs walk the coefficients so the
+//                 attractor is forever morphing between shapes. Nothing
+//                 here moves fast — the *shape itself* is what drifts.
 //
 // Audio map (tuned for ambient/atmospheric, not spazzy — everything below
 // is a slow breath or a soft shimmer, never a hard jump):
 //   bass        → atmosphere wash breathing + glow + scale breathing
-//                 (pendulum fan, lorenz camera, three-body halos), Lorenz ρ,
-//                 three-body G, K (kam), bifurcation dust glow
+//                 (pendulum fan, lorenz camera, three-body halos, de jong
+//                 dust), Lorenz ρ, three-body G, de jong morph depth,
+//                 bifurcation dust glow
 //   mids        → atmosphere hue drift + per-mode hue drift (lorenz swarm,
-//                 three-body trails, kam lattice), playhead sweep rate
+//                 three-body trails, de jong dust), playhead sweep rate
 //   highs.pulse → tip / tracer / bead / dust shimmer in every mode
 //   beat        → deterministic energy kick (all pendulums get the SAME
 //                 kick, so divergence stays an honest experiment), tracer
-//                 flash, orbit-column flash, kam re-scatter
+//                 flash, orbit-column flash, a soft push through de jong
+//                 coefficient space (envelope-shaped — glides, never jumps)
 //   total       → timeScale modulator (declared, tunable in the panel)
 // The `atmosphere` param scales a palette-tinted background wash that
 // breathes with bass and drifts hue with mids — the always-legible ambient
@@ -37,11 +41,11 @@
 //   head x / wrist height → Lorenz camera yaw / pitch
 //   wrist x        → scrubs the bifurcation playhead through r
 //   wrists         → ghost masses perturbing the three-body ballet
-//   wrist spread   → extra kick strength K in kam
+//   wrist x / y    → bends the de jong coefficients a & c
 
 import { scaleAudio } from '../field.js';
 
-const MODES = ['pendulums', 'lorenz', 'threebody', 'bifurcation', 'kam'];
+const MODES = ['pendulums', 'lorenz', 'threebody', 'bifurcation', 'dejong'];
 
 // ── Pendulums ────────────────────────────────────────────────────────────────
 const NPEND        = 10;
@@ -67,8 +71,9 @@ const BIF_RMAX     = 4.0;
 const BIF_FEIG     = 3.569945;  // onset of chaos
 const BIF_ORBIT    = 90;        // live-orbit beads at the playhead
 
-// ── Standard map (kam) ──────────────────────────────────────────────────────
-const KAM_N        = 4000;
+// ── De Jong attractor ────────────────────────────────────────────────────────
+const DJ_N         = 6500;      // iterates plotted per frame
+const DJ_BANDS     = 12;        // hue bands (radius-bucketed, counting-sorted)
 const TAU          = Math.PI * 2;
 
 // Palette = hue ramp + white-core accent. hue(t): t∈[0,1] across the family
@@ -128,7 +133,7 @@ export default {
       { mode: 'lorenz',      palette: 'void'     },
       { mode: 'threebody',   palette: 'plasma'   },
       { mode: 'bifurcation', palette: 'phosphor' },
-      { mode: 'kam',         palette: 'void'     },
+      { mode: 'dejong',      palette: 'void'     },
     ],
   },
 
@@ -138,7 +143,7 @@ export default {
     strange:   { mode: 'lorenz', palette: 'void', trails: 0.85, timeScale: 1.1 },
     ballet:    { mode: 'threebody', palette: 'plasma', spread: 0.5, trails: 0.9 },
     cascade:   { mode: 'bifurcation', palette: 'phosphor', timeScale: 0.8 },
-    islands:   { mode: 'kam', palette: 'void', trails: 0.6 },
+    filigree:  { mode: 'dejong', palette: 'void', trails: 0.85, timeScale: 0.8 },
   },
 
   async create(canvas, { ctx }) {
@@ -343,34 +348,64 @@ export default {
       }
     }
 
-    // ── Standard map (kam) state ─────────────────────────────────────────────
-    // Each point iterates (θ, p); rendering lerps from the previous state to
-    // the mapped target so the lattice glides instead of teleporting.
-    const kTh0 = new Float32Array(KAM_N), kP0 = new Float32Array(KAM_N);
-    const kTh1_ = new Float32Array(KAM_N), kP1_ = new Float32Array(KAM_N);
-    const kHueT = new Float32Array(KAM_N);
-    let kamPhase = 1, kamK = 0.8;
+    // ── De Jong state ────────────────────────────────────────────────────────
+    // One orbit point iterates DJ_N times per frame; every iterate is a dust
+    // mote. The dust is a *density*, not a particle system — nothing on
+    // screen travels, only the attractor's shape drifts as the coefficients
+    // walk. Points are radius-bucketed into DJ_BANDS hue bands and counting-
+    // sorted so render() pays 12 fillStyle changes, not 6500.
+    const djPts  = new Float32Array(DJ_N * 2);   // band-sorted xy for render
+    const djRawX = new Float32Array(DJ_N), djRawY = new Float32Array(DJ_N);
+    const djBand = new Uint8Array(DJ_N);
+    const djBandStart = new Int32Array(DJ_BANDS + 1);
+    const djCursor    = new Int32Array(DJ_BANDS);
+    const djGrid = new Uint8Array(32 * 32);      // occupancy probe (richness)
+    let djX = 0.1, djY = 0.1;                    // orbit carries across frames
+    let djPhase = 0;                             // coefficient-LFO clock
+    let djBoost = 1;                             // dead-pocket escape speed
+    let djCells = 0;                             // occupied cells last frame
+    let djA = 0, djB = 0, djC = 0, djD = 0;      // current coefficients (HUD)
 
-    function kamIterate(K) {
-      for (let i = 0; i < KAM_N; i++) {
-        kTh0[i] = kTh1_[i]; kP0[i] = kP1_[i];
-        let p = kP0[i] + K * Math.sin(kTh0[i]);
-        let th = kTh0[i] + p;
-        p  = ((p % TAU) + TAU) % TAU;
-        th = ((th % TAU) + TAU) % TAU;
-        kP1_[i] = p; kTh1_[i] = th;
-      }
+    function djCoeffs(t, depth, wob) {
+      djA = -2.24 + Math.sin(t * 0.063)       * 1.10 * depth
+                  + (poseS.wristX - 0.5) * 0.8 * wob;
+      djB =  0.43 + Math.sin(t * 0.041 + 1.7) * 0.90 * depth;
+      djC = -0.65 + Math.sin(t * 0.055 + 3.1) * 1.00 * depth
+                  + (0.5 - poseS.wristY) * 0.8 * wob;
+      djD = -2.43 + Math.sin(t * 0.047 + 4.6) * 0.90 * depth;
     }
 
-    function seedKam() {
-      for (let i = 0; i < KAM_N; i++) {
-        const th = Math.random() * TAU;
-        const p  = (i / KAM_N) * TAU;      // banded in p so islands keep color
-        kTh0[i] = kTh1_[i] = th;
-        kP0[i] = kP1_[i] = p;
-        kHueT[i] = p / TAU;
+    // How many 32×32 cells does a short probe orbit light up at LFO-clock t?
+    // Fixed points / short cycles hit a handful; a healthy attractor hits
+    // hundreds. The map's range is x,y ∈ [−2,2], so /5.7+0.5 never escapes
+    // the grid.
+    function djProbe(t) {
+      djCoeffs(t, 0.55, 0);
+      djGrid.fill(0);
+      let x = 0.1, y = 0.1, cells = 0;
+      for (let i = 0; i < 400; i++) {
+        const nx = Math.sin(djA * y) - Math.cos(djB * x);
+        y = Math.sin(djC * x) - Math.cos(djD * y);
+        x = nx;
+        const c = (((y / 5.7 + 0.5) * 32) | 0) * 32 + (((x / 5.7 + 0.5) * 32) | 0);
+        if (!djGrid[c]) { djGrid[c] = 1; cells++; }
       }
-      kamPhase = 1;
+      return cells;
+    }
+
+    function seedDejong() {
+      djX = 0.1; djY = 0.1;
+      // Coefficient space has dead pockets where the dust collapses to a
+      // few motes — probe random phases and keep the richest, so entering
+      // the mode never opens on a collapsed orbit.
+      let best = -1;
+      for (let k = 0; k < 24; k++) {
+        const t = Math.random() * 400;
+        const c = djProbe(t);
+        if (c > best) { best = c; djPhase = t; }
+        if (best > 130) break;
+      }
+      djBoost = 1; djCells = 400;
       scratch.clearFrames = 2;
     }
 
@@ -383,7 +418,7 @@ export default {
         case 'lorenz':      seedLorenz(spread);    break;
         case 'threebody':   seedThreeBody(spread); break;
         case 'bifurcation': resetBifurcation();    break;
-        case 'kam':         seedKam();             break;
+        case 'dejong':      seedDejong();          break;
       }
     }
 
@@ -599,29 +634,48 @@ export default {
           break;
         }
 
-        case 'kam': {
-          // K — the kick strength — IS the music. Quiet: islands of order.
-          // Loud: the chaotic sea.
-          // params.spread carries the pose.wristSpread modulator, so wide
-          // arms push K past its audio-driven base. With audio off, K slowly
-          // breathes through the order↔chaos boundary on its own.
-          kamK = 0.55 + scratch.bass * 2.2 + scratch.beatP * 1.2 * scratch.kick
-               + Math.max(0, params.spread - 1) * 0.35
-               + 0.45 * (0.5 + 0.5 * Math.sin(time * 0.11)) * (1 - Math.min(1, scratch.total * 3));
-          kamPhase += dt * (1.4 + ts * 2.2 + scratch.beatP * 3);
-          if (kamPhase >= 1) {
-            kamPhase = kamPhase % 1;
-            kamIterate(kamK);
+        case 'dejong': {
+          // The morph IS the show, so the clock stays slow. Four
+          // incommensurate LFOs walk (a,b,c,d) around a known-pretty home;
+          // bass deepens the excursion a touch, and beats push the walk
+          // forward through an envelope (beatP), so the shape leans into
+          // the music instead of snapping. Wrists bend a & c directly.
+          // djBoost is the dead-pocket escape: when last frame's dust
+          // collapsed (few occupied cells), glide faster along the same
+          // smooth path until shape returns.
+          djPhase += dt * ts * djBoost * (0.55 + scratch.beatP * 0.9 * scratch.kick);
+          djCoeffs(djPhase, 0.55 + scratch.bass * 0.30, poseS.present);
+
+          // Iterate; the orbit carries across frames so the dust never
+          // restarts. Bucket each mote by radius for the hue ramp
+          // (attractor lives inside r ≤ 2√2), and mark the occupancy grid
+          // for the richness guard.
+          djGrid.fill(0);
+          let x = djX, y = djY, cells = 0;
+          for (let i = 0; i < DJ_N; i++) {
+            const nx = Math.sin(djA * y) - Math.cos(djB * x);
+            y = Math.sin(djC * x) - Math.cos(djD * y);
+            x = nx;
+            djRawX[i] = x; djRawY[i] = y;
+            const b = (Math.sqrt(x * x + y * y) * (DJ_BANDS / 2.85)) | 0;
+            djBand[i] = b >= DJ_BANDS ? DJ_BANDS - 1 : b;
+            const c = (((y / 5.7 + 0.5) * 32) | 0) * 32 + (((x / 5.7 + 0.5) * 32) | 0);
+            if (!djGrid[c]) { djGrid[c] = 1; cells++; }
           }
-          if (beat && scratch.kick > 0) {
-            // Re-scatter a small fraction — a percussive dust burst.
-            const n = (KAM_N * 0.04 * Math.min(2, scratch.kick)) | 0;
-            for (let k = 0; k < n; k++) {
-              const i = (Math.random() * KAM_N) | 0;
-              kTh0[i] = kTh1_[i] = Math.random() * TAU;
-              kP0[i] = kP1_[i] = Math.random() * TAU;
-              kHueT[i] = kP1_[i] / TAU;
-            }
+          djX = x; djY = y;
+          djCells = cells;
+          const boostTarget = djCells < 70 ? 9 : 1;
+          djBoost += (boostTarget - djBoost) * Math.min(1, dt * 2.5);
+
+          // Counting sort into contiguous per-band runs.
+          djCursor.fill(0);
+          for (let i = 0; i < DJ_N; i++) djCursor[djBand[i]]++;
+          djBandStart[0] = 0;
+          for (let b = 0; b < DJ_BANDS; b++) djBandStart[b + 1] = djBandStart[b] + djCursor[b];
+          djCursor.set(djBandStart.subarray(0, DJ_BANDS));
+          for (let i = 0; i < DJ_N; i++) {
+            const o = djCursor[djBand[i]]++ * 2;
+            djPts[o] = djRawX[i]; djPts[o + 1] = djRawY[i];
           }
           break;
         }
@@ -648,9 +702,9 @@ export default {
             scratch.hudLines[0] = 'logistic map x→rx(1−x)';
             scratch.hudLines[1] = `r ${bifR.toFixed(4)} · r∞ ${BIF_FEIG}`;
             break;
-          case 'kam':
-            scratch.hudLines[0] = 'chirikov standard map · 4000 orbits';
-            scratch.hudLines[1] = `K ${kamK.toFixed(2)} ${kamK < 1 ? '· kam islands hold' : '· chaotic sea'}`;
+          case 'dejong':
+            scratch.hudLines[0] = 'de jong attractor · x′=sin(a·y)−cos(b·x) · y′=sin(c·x)−cos(d·y)';
+            scratch.hudLines[1] = `a ${djA.toFixed(2)} · b ${djB.toFixed(2)} · c ${djC.toFixed(2)} · d ${djD.toFixed(2)}`;
             break;
         }
       }
@@ -752,7 +806,7 @@ export default {
         case 'lorenz':      renderLorenz(pal, glow);    break;
         case 'threebody':   renderThreeBody(pal, glow); break;
         case 'bifurcation': renderBifurcation(pal, glow); break;
-        case 'kam':         renderKam(pal, glow);       break;
+        case 'dejong':      renderDejong(pal, glow);    break;
       }
 
       drawHud();
@@ -973,49 +1027,29 @@ export default {
       ctx.fillText('x', m.l - 14 * DPR, m.t + 10 * DPR);
     }
 
-    function renderKam(pal, glow) {
-      const mL = W * 0.06, mT = H * 0.09;
-      const plotW = W - mL * 2, plotH = H - mT * 2;
-      const tRaw = kamPhase;
-      const t = tRaw * tRaw * (3 - 2 * tRaw);   // smoothstep glide
-      const dr = 1.6 * DPR;
+    function renderDejong(pal, glow) {
+      const cx = W / 2, cy = H / 2;
+      // Bass breathes the projection scale (±4%) — the same gentle swell as
+      // the pendulum fan. The attractor spans roughly ±2.4 in map space.
+      const S = Math.min(W, H) * 0.235 * (1 + scratch.bass * 0.04);
+      const dr = 1.5 * DPR;
       const bright = Math.min(1.4, glow);
 
-      // Batch by hue band to limit fillStyle churn: 12 bands. Mids drift the
-      // whole lattice around the ramp; hats add a brief sparkle.
-      const hueDrift = scratch.mids * 22;
-      const dotA = Math.min(1, 0.55 * bright + scratch.highsP * 0.12);
-      for (let band = 0; band < 12; band++) {
-        const hue = palHue(pal, band / 11) + hueDrift;
-        ctx.fillStyle = `hsla(${hue},${pal.sat}%,${pal.light + 6}%,${dotA})`;
-        for (let i = band; i < KAM_N; i += 12) {
-          // Shortest-path lerp on the torus (both axes wrap).
-          let dth = kTh1_[i] - kTh0[i];
-          if (dth > Math.PI) dth -= TAU; else if (dth < -Math.PI) dth += TAU;
-          let dp = kP1_[i] - kP0[i];
-          if (dp > Math.PI) dp -= TAU; else if (dp < -Math.PI) dp += TAU;
-          let th = kTh0[i] + dth * t;
-          let p  = kP0[i] + dp * t;
-          th = ((th % TAU) + TAU) % TAU;
-          p  = ((p % TAU) + TAU) % TAU;
-          ctx.fillRect(mL + (th / TAU) * plotW, mT + (1 - p / TAU) * plotH, dr, dr);
+      // Dust motes, batched into contiguous radius→hue bands (counting-
+      // sorted in update). Mids drift the whole ramp; hats add a brief
+      // sparkle; beat flash blooms the density rather than moving anything.
+      const hueDrift = scratch.mids * 24;
+      const dotA = Math.min(0.85,
+        (0.30 + scratch.flash * 0.10 + scratch.highsP * 0.08) * bright);
+      for (let band = 0; band < DJ_BANDS; band++) {
+        const from = djBandStart[band], to = djBandStart[band + 1];
+        if (to <= from) continue;
+        const hue = palHue(pal, band / (DJ_BANDS - 1)) + hueDrift;
+        ctx.fillStyle = `hsla(${hue},${pal.sat}%,${pal.light + 4}%,${dotA})`;
+        for (let i = from; i < to; i++) {
+          ctx.fillRect(cx + djPts[i * 2] * S, cy + djPts[i * 2 + 1] * S, dr, dr);
         }
       }
-
-      // Frame + phase-space axis ticks — the lab-notebook touch.
-      ctx.strokeStyle = 'rgba(150,220,255,0.22)';
-      ctx.lineWidth = 1 * DPR;
-      ctx.strokeRect(mL, mT, plotW, plotH);
-      ctx.font = `${Math.round(10 * DPR)}px ui-monospace, monospace`;
-      ctx.fillStyle = 'rgba(150,220,255,0.34)';
-      ctx.fillText('θ →', mL + plotW - 28 * DPR, mT + plotH + 14 * DPR);
-      ctx.fillText('p', mL - 12 * DPR, mT + 12 * DPR);
-      // K meter along the top edge — watch order dissolve as it fills.
-      const k01 = Math.min(1, kamK / 4);
-      const hue = palHue(pal, k01);
-      ctx.strokeStyle = `hsla(${hue},${pal.sat}%,${pal.light + 8}%,0.6)`;
-      ctx.lineWidth = 2 * DPR;
-      ctx.beginPath(); ctx.moveTo(mL, mT - 6 * DPR); ctx.lineTo(mL + plotW * k01, mT - 6 * DPR); ctx.stroke();
     }
 
     // Initial seed happens on the first update via curMode mismatch.
