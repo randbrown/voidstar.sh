@@ -1953,15 +1953,21 @@ export function initQualiaPage() {
 
   // Walk slider wiring — same pattern as mosh/edge, talks to
   // camWalk.setConfig; the walk reads its config live so changes land on
-  // the next tick.
+  // the next tick. Every row registers a repaint fn so the reset button
+  // can re-sync the whole card from config in one pass.
+  const walkCardSyncFns = [];
   function wireWalkSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
     const row = document.querySelector(`[data-qp="${qpId}"]`);
     if (!row) return;
     const input = row.querySelector('input[type=range]');
     const val   = row.querySelector('.qp-val');
-    const initial = camWalk.getConfig()[key];
-    input.value = String(initial);
-    val.textContent = fmt(initial);
+    const paint = () => {
+      const v = camWalk.getConfig()[key];
+      input.value = String(v);
+      val.textContent = fmt(v);
+    };
+    paint();
+    walkCardSyncFns.push(paint);
     input.addEventListener('input', () => {
       const v = parseFloat(input.value);
       camWalk.setConfig({ [key]: v });
@@ -1987,6 +1993,7 @@ export function initQualiaPage() {
       btn.textContent = walks ? 'walks' : 'pinned';
     };
     paint();
+    walkCardSyncFns.push(paint);
     btn.addEventListener('click', () => {
       camWalk.setConfig({ [key]: camWalk.getConfig()[key] === false });
       paint();
@@ -1996,6 +2003,16 @@ export function initQualiaPage() {
   wireWalkScope('walk-scope-hydra', 'hydra');
   wireWalkScope('walk-scope-pose',  'pose');
   wireWalkScope('walk-scope-post',  'post');
+  // Reset — restore every tunable + layer scope to the module defaults and
+  // repaint the card. On/off state is left alone (matches the fx reset
+  // button's "reset params, not presence" semantics).
+  document.getElementById('btn-walk-reset')?.addEventListener('click', (ev) => {
+    // Header button — stop the click reaching the qp-head collapse toggle.
+    ev.stopPropagation();
+    camWalk.setConfig({ ...CAM_WALK_DEFAULTS });
+    walkCardSyncFns.forEach(fn => fn());
+    settings.save();
+  });
   if (walkCard && typeof stored.walkCollapsed === 'boolean') {
     walkCard.classList.toggle('collapsed', stored.walkCollapsed);
   }

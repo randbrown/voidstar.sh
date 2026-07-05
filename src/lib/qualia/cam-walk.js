@@ -48,7 +48,9 @@ export const CAM_WALK_DEFAULTS = {
   // always walk; these are the artistic choices around them. The page's
   // getLayers callback reads these to assemble the layer list.
   hydra: true,     // Hydra live-coding layer under the fx
-  pose:  true,     // pose canvas: skeleton / sparks / aura / ripples
+  pose:  false,    // pose canvas: skeleton / sparks / aura / ripples —
+                   // pinned by default so the skeleton stays registered to
+                   // the real person while the scene walks behind them
   post:  true,     // glitch-post canvas: ascii / mosh / edge output. NOTE:
                    // pinned post re-reads the RAW (unwalked) fx buffer, so
                    // while a glitch is fully repainting the frame the walk
