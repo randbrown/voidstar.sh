@@ -1501,6 +1501,20 @@ function normalizeAiChart(raw) {
   };
 }
 
+// A thrown provider error, turned into a reason a human can read in a status
+// line. The Anthropic SDK's e.message is the status code plus the raw JSON
+// error body ('400 {"type":"error","error":{...}}') — the sentence that
+// actually explains the failure ("Your credit balance is too low…") sits at
+// e.error.error.message on the parsed body. Surfacing it matters: a bulk pass
+// showing 30 rows of raw JSON reads as a broken app instead of a fixable
+// account/config problem.
+function aiFailureReason(providerName, e) {
+  const apiMessage = e?.error?.error?.message;
+  const msg = String(apiMessage || e?.message || e).slice(0, 180);
+  const status = apiMessage && e?.status ? ` (API ${e.status})` : '';
+  return `${providerName}: ${msg}${status}`;
+}
+
 // Shared search-grounded JSON call, used by /ai/chart and /ai/steel-summary:
 // one prompt in, {provider, model, raw, sources, reason?} out, where `raw` is
 // the lenient-extracted JSON object (null when unusable). Callers apply their
@@ -1560,7 +1574,7 @@ async function aiGroundedGemini(env, prompt, { maxTokens = 8192 } = {}) {
   );
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`Gemini ${res.status}: ${body.slice(0, 200)}`);
+    throw new Error(`API ${res.status}: ${body.slice(0, 200)}`);
   }
   const data = await res.json();
   const candidate = data.candidates?.[0];
@@ -1594,16 +1608,16 @@ async function handleAiChart(request, env) {
   // and Gemini gets a shot when Claude can't verify the song (or errors) —
   // and vice versa when only Gemini is configured.
   const providers = [];
-  if (env.ANTHROPIC_API_KEY) providers.push(aiGroundedClaude);
-  if (env.GEMINI_API_KEY) providers.push(aiGroundedGemini);
+  if (env.ANTHROPIC_API_KEY) providers.push(['claude', aiGroundedClaude]);
+  if (env.GEMINI_API_KEY) providers.push(['gemini', aiGroundedGemini]);
 
   const reasons = [];
-  for (const provider of providers) {
+  for (const [name, provider] of providers) {
     let result;
     try {
       result = await provider(env, prompt);
     } catch (e) {
-      reasons.push(String(e.message || e).slice(0, 200));
+      reasons.push(aiFailureReason(name, e));
       continue;
     }
     const chart = normalizeAiChart(result.raw);
@@ -1684,11 +1698,11 @@ async function handleAiSteelSummary(request, env) {
 
   const prompt = buildSteelSummaryPrompt(title, artist);
   const providers = [];
-  if (env.ANTHROPIC_API_KEY) providers.push(aiGroundedClaude);
-  if (env.GEMINI_API_KEY) providers.push(aiGroundedGemini);
+  if (env.ANTHROPIC_API_KEY) providers.push(['claude', aiGroundedClaude]);
+  if (env.GEMINI_API_KEY) providers.push(['gemini', aiGroundedGemini]);
 
   const reasons = [];
-  for (const provider of providers) {
+  for (const [name, provider] of providers) {
     let result;
     try {
       // Far smaller output than a chart — cap tokens and searches accordingly.
@@ -1696,7 +1710,7 @@ async function handleAiSteelSummary(request, env) {
       // providers, and a grounded call spends real reasoning before the JSON.)
       result = await provider(env, prompt, { maxTokens: 4000, maxSearches: 3 });
     } catch (e) {
-      reasons.push(String(e.message || e).slice(0, 200));
+      reasons.push(aiFailureReason(name, e));
       continue;
     }
     const norm = normalizeSteelSummary(result.raw);
@@ -1798,7 +1812,7 @@ async function chartReadGemini(env, prompt, image, mimeType) {
   );
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`Gemini ${res.status}: ${body.slice(0, 200)}`);
+    throw new Error(`API ${res.status}: ${body.slice(0, 200)}`);
   }
   const data = await res.json();
   const text = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('\n');
@@ -1847,16 +1861,16 @@ async function handleAiChartRead(request, env) {
     String(body.artist || '').slice(0, 200),
   );
   const providers = [];
-  if (env.ANTHROPIC_API_KEY) providers.push(chartReadClaude);
-  if (env.GEMINI_API_KEY) providers.push(chartReadGemini);
+  if (env.ANTHROPIC_API_KEY) providers.push(['claude', chartReadClaude]);
+  if (env.GEMINI_API_KEY) providers.push(['gemini', chartReadGemini]);
 
   const reasons = [];
-  for (const provider of providers) {
+  for (const [name, provider] of providers) {
     let result;
     try {
       result = await provider(env, prompt, image, mimeType);
     } catch (e) {
-      reasons.push(String(e.message || e).slice(0, 200));
+      reasons.push(aiFailureReason(name, e));
       continue;
     }
     const fields = normalizeChartRead(result.raw);

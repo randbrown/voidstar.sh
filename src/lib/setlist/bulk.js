@@ -1,5 +1,5 @@
 // Bulk library helpers — one-tap administrative passes over the whole song
-// library (Settings → "library helpers"), so keeping every song's key,
+// library (Library page → "library tools"), so keeping every song's key,
 // metadata, lyrics, and steel summary filled in doesn't require opening each
 // song by hand. Every pass is FILL-EMPTY: a value the user (or an earlier
 // pass) already set is never overwritten. Passes run sequentially per song —
@@ -162,6 +162,13 @@ export async function summarizeSteelForAllSongs(onProgress) {
   const targets = (await store.getAllSongs()).filter(s => !s.steelSummary);
   let updated = 0;
   const failures = [];
+  // Some config problems only show up as a per-song error (an exhausted API
+  // credit balance is a 400 on every call, not a 'no-ai-key'). When the same
+  // reason repeats back-to-back it isn't about the songs — stop burning
+  // 15-30 s per remaining song and surface the reason once.
+  const SAME_FAILURE_LIMIT = 3;
+  let lastReason = null;
+  let sameReasonRun = 0;
   for (let i = 0; i < targets.length; i++) {
     const song = targets[i];
     const r = await fetchSteelSummary(song);
@@ -169,16 +176,44 @@ export async function summarizeSteelForAllSongs(onProgress) {
       song.steelSummary = r.data.summary;
       await store.putSong(song);
       updated++;
+      lastReason = null;
+      sameReasonRun = 0;
     } else if (r.reason === 'no-ai-key') {
       return { aborted: 'no AI key configured on the worker — set ANTHROPIC_API_KEY or GEMINI_API_KEY', total: targets.length, updated, failures };
     } else if (r.reason === 'worker-outdated') {
       return { aborted: 'worker outdated — redeploy workers/setlist-sync to get /ai/steel-summary', total: targets.length, updated, failures };
     } else {
       failures.push({ song, reason: r.reason });
+      sameReasonRun = r.reason === lastReason ? sameReasonRun + 1 : 1;
+      lastReason = r.reason;
+      if (sameReasonRun >= SAME_FAILURE_LIMIT) {
+        return {
+          aborted: `stopped — ${sameReasonRun} songs in a row failed the same way: ${r.reason}`,
+          total: targets.length, updated, failures,
+        };
+      }
     }
     onProgress?.({ done: i + 1, total: targets.length, updated, title: song.title });
   }
   return { total: targets.length, updated, skipped: 0, failures };
+}
+
+// The health dimensions — one predicate per "is this filled in?" question,
+// shared by the library-wide report and the song page's per-song checkup so
+// the two can never disagree about what "complete" means.
+const HEALTH_CHECKS = [
+  { key: 'noKey', label: 'no key', missing: s => !s.key },
+  { key: 'noChart', label: 'no chart linked', missing: s => !s.chartUrl },
+  { key: 'noLyrics', label: 'no lyrics', missing: s => !s.lyrics },
+  { key: 'noSpotify', label: 'no spotify link', missing: s => !s.spotifyUri },
+  { key: 'noArtist', label: 'no artist', missing: s => !s.artist },
+  { key: 'noSteelSummary', label: 'no steel summary', missing: s => !s.steelSummary },
+];
+
+// Per-song checkup — the library health check, this song only. Returns the
+// labels of everything still missing (empty array = fully filled in).
+export function songHealth(song) {
+  return HEALTH_CHECKS.filter(c => c.missing(song)).map(c => c.label);
 }
 
 // Library health report — what's still missing, per dimension, so "is
@@ -187,16 +222,12 @@ export async function summarizeSteelForAllSongs(onProgress) {
 export async function libraryHealth() {
   const songs = await store.getAllSongs();
   const byTitle = (a, b) => a.title.localeCompare(b.title);
-  const missing = (pred) => songs.filter(pred).sort(byTitle);
   return {
     total: songs.length,
-    checks: [
-      { key: 'noKey', label: 'no key', songs: missing(s => !s.key) },
-      { key: 'noChart', label: 'no chart linked', songs: missing(s => !s.chartUrl) },
-      { key: 'noLyrics', label: 'no lyrics', songs: missing(s => !s.lyrics) },
-      { key: 'noSpotify', label: 'no spotify link', songs: missing(s => !s.spotifyUri) },
-      { key: 'noArtist', label: 'no artist', songs: missing(s => !s.artist) },
-      { key: 'noSteelSummary', label: 'no steel summary', songs: missing(s => !s.steelSummary) },
-    ],
+    checks: HEALTH_CHECKS.map(c => ({
+      key: c.key,
+      label: c.label,
+      songs: songs.filter(c.missing).sort(byTitle),
+    })),
   };
 }
