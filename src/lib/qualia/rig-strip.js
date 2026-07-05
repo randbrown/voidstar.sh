@@ -3,14 +3,20 @@
 // Tone's wrapped context can't host the recorder worklet, and these nodes don't
 // need it). Fixed-order series chain with parallel send-style time fx:
 //
-//   in → HPF → earth → metal → comp → amp → cab → EQ(lo/mid/hi) → ┬→ dry ─────┐
-//                                                         ├→ delay (ping-pong) ┤→ pan → out
-//                                                         └→ reverb (convolver)┘
+//   in → HPF → earth → metal → comp → amp → cab → EQ(lo/mid/hi)
+//      → GEQ(7-band) → PEQ(8-band parametric) → ┬→ dry ─────────┐
+//                                               ├→ delay (p-pong)┤→ pan → out
+//                                               └→ reverb (conv.)┘
 //
-// EQ sits POST amp+cab on purpose: the neural amp captures bake in the amp's own
-// tone stack (the model has no live EQ of its own), so a post-cab EQ is the only
-// place to shape the final amp'd + cab'd tone — it acts as a true output tone
-// control rather than a pre-amp stack.
+// All three EQs sit POST amp+cab on purpose: the neural amp captures bake in
+// the amp's own tone stack (the model has no live EQ of its own), so a post-cab
+// EQ is the only place to shape the final amp'd + cab'd tone — it acts as a
+// true output tone control rather than a pre-amp stack. The three are
+// complementary: eq = broad 3-knob tone, geq = GE-7-style 7-band graphic,
+// peq = ReaEQ-style surgical parametric (per-band type/freq/gain/Q). They're
+// all biquads in series (LTI, so their relative order is inaudible), always in
+// the path, bypassing to bit-transparent neutral (gain 0 peaking) — zero added
+// latency and no graph rewiring on toggle.
 //
 // Every stage BYPASSES to a clean pass-through (neutral params / zero wet), so
 // toggling a stage never re-wires the graph or interrupts audio — with one
@@ -22,12 +28,65 @@
 // floor. The strip is rebuilt whenever the rig capture (re)opens; looper.js
 // owns the persisted config and re-applies it via setConfig().
 
+// ── Graphic EQ (geq) — Boss GE-7 voicing ─────────────────────────────────
+// Seven octave-spaced peaking bands (100 Hz…6.4 kHz, ±15 dB) + an overall
+// level (±15 dB), matching the pedal's sliders. Fixed Q ≈ octave bandwidth so
+// adjacent sliders sum smoothly like the hardware.
+export const GEQ_FREQS = [100, 200, 400, 800, 1600, 3200, 6400];
+const GEQ_Q = 1.7;
+
+// ── Parametric EQ (peq) — ReaEQ-style surgical bands ─────────────────────
+// Eight fully parametric bands, each with its own enable, filter type, freq,
+// gain, and Q. Bands 1–4 default ON at gain 0 (a flat, ready-to-grab curve à la
+// ReaEQ's four starter bands); 5–8 sit dormant at surgical-notch Q for cuts.
+export const PEQ_BAND_COUNT = 8;
+// UI type id → BiquadFilterNode type. (Shelves ignore Q per the Web Audio
+// spec; lopass/hipass interpret Q in dB of corner resonance.)
+export const PEQ_TYPES = {
+  peak:    'peaking',
+  loshelf: 'lowshelf',
+  hishelf: 'highshelf',
+  lopass:  'lowpass',
+  hipass:  'highpass',
+  notch:   'notch',
+};
+export function defaultPeqBands() {
+  return [
+    { on: true,  type: 'loshelf', freq: 120,   gain: 0, q: 0.71 },
+    { on: true,  type: 'peak',    freq: 500,   gain: 0, q: 1.4  },
+    { on: true,  type: 'peak',    freq: 2000,  gain: 0, q: 1.4  },
+    { on: true,  type: 'hishelf', freq: 8000,  gain: 0, q: 0.71 },
+    { on: false, type: 'peak',    freq: 160,   gain: 0, q: 4    },
+    { on: false, type: 'peak',    freq: 1000,  gain: 0, q: 4    },
+    { on: false, type: 'peak',    freq: 4000,  gain: 0, q: 4    },
+    { on: false, type: 'peak',    freq: 12000, gain: 0, q: 4    },
+  ];
+}
+/** Normalize a persisted/foreign bands array to PEQ_BAND_COUNT fresh, clamped
+ *  band objects (never aliases the input or the defaults — safe to mutate). */
+export function sanitizePeqBands(bands) {
+  const defs = defaultPeqBands();
+  const src = Array.isArray(bands) ? bands : [];
+  return defs.map((d, i) => {
+    const b = (src[i] && typeof src[i] === 'object') ? src[i] : {};
+    return {
+      on:   b.on != null ? !!b.on : d.on,
+      type: PEQ_TYPES[b.type] ? b.type : d.type,
+      freq: clamp(b.freq != null ? b.freq : d.freq, 20, 20000),
+      gain: clamp(b.gain != null ? b.gain : d.gain, -24, 24),
+      q:    clamp(b.q != null ? b.q : d.q, 0.1, 36),
+    };
+  });
+}
+
 export const STRIP_DEFAULTS = {
   hpf:    { on: false, freq: 80 },
   earth:  { on: false, drive: 0.35, tone: 0.6, level: 1.0 },
   metal:  { on: false, drive: 0.35, low: 0, mid: 0, midFreq: 600, high: 0, level: 1.0 },
   comp:   { on: false, threshold: -18, ratio: 3, attack: 0.003, release: 0.25 },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
+  geq:    { on: false, b100: 0, b200: 0, b400: 0, b800: 0, b1600: 0, b3200: 0, b6400: 0, level: 0 },
+  peq:    { on: false, bands: defaultPeqBands() },
   amp:    { on: false, gain: 1, mix: 1, level: 1 },
   cab:    { on: false, mix: 1, level: 1 },
   delay:  { on: false, time: 0.3, feedback: 0.35, mix: 0.25 },
@@ -135,6 +194,9 @@ function deepMerge(base, over) {
 
 export function createRigStrip(ctx, cfg) {
   const state = deepMerge(STRIP_DEFAULTS, cfg);
+  // deepMerge is shallow per-stage — re-materialize the peq band array so the
+  // strip never aliases (or mutates) STRIP_DEFAULTS or the caller's config.
+  state.peq.bands = sanitizePeqBands(state.peq.bands);
 
   const input  = ctx.createGain();
   const output = ctx.createGain();
@@ -180,6 +242,24 @@ export function createRigStrip(ctx, cfg) {
   const eqLow  = ctx.createBiquadFilter(); eqLow.type  = 'lowshelf';  eqLow.frequency.value  = 180;
   const eqMid  = ctx.createBiquadFilter(); eqMid.type  = 'peaking';   eqMid.frequency.value  = 1000; eqMid.Q.value = 0.9;
   const eqHigh = ctx.createBiquadFilter(); eqHigh.type = 'highshelf'; eqHigh.frequency.value = 3200;
+
+  // Graphic EQ (geq): 7 fixed peaking bands + output level. Parametric EQ
+  // (peq): 8 configurable bands. Both live permanently in the series chain —
+  // biquads are native and effectively free — and bypass to bit-transparent
+  // neutral (peaking @ gain 0), so toggling never re-wires the graph. IIR
+  // biquads are causal: neither stage adds ANY latency, on or off.
+  const geqFilters = GEQ_FREQS.map((f) => {
+    const n = ctx.createBiquadFilter();
+    n.type = 'peaking'; n.frequency.value = f; n.Q.value = GEQ_Q; n.gain.value = 0;
+    return n;
+  });
+  const geqLevel = ctx.createGain();
+  const peqFilters = [];
+  for (let i = 0; i < PEQ_BAND_COUNT; i++) {
+    const n = ctx.createBiquadFilter();
+    n.type = 'peaking'; n.gain.value = 0;
+    peqFilters.push(n);
+  }
 
   // Neural amp — LSTM capture inference in an AudioWorklet, as a dry/wet insert
   // after the EQ (transparent until a model is loaded; never blocks the graph if
@@ -258,11 +338,16 @@ export function createRigStrip(ctx, cfg) {
   ampSum.connect(cabIn);
   cabIn.connect(cabDry); cabDry.connect(cabSum);
   cabIn.connect(cabConv); cabConv.connect(cabWet); cabWet.connect(cabSum);
-  // Post-cab EQ → time-fx split.
+  // Post-cab EQ → graphic EQ → parametric EQ → time-fx split.
   cabSum.connect(eqLow);
   eqLow.connect(eqMid);
   eqMid.connect(eqHigh);
-  eqHigh.connect(fxIn);
+  let eqTail = eqHigh;
+  for (const n of geqFilters) { eqTail.connect(n); eqTail = n; }
+  eqTail.connect(geqLevel);
+  eqTail = geqLevel;
+  for (const n of peqFilters) { eqTail.connect(n); eqTail = n; }
+  eqTail.connect(fxIn);
 
   fxIn.connect(dry); dry.connect(sum);
 
@@ -398,6 +483,40 @@ export function createRigStrip(ctx, cfg) {
     eqMid.gain.value  = on ? clamp(state.eq.mid,  -15, 15) : 0;
     eqHigh.gain.value = on ? clamp(state.eq.high, -15, 15) : 0;
   }
+  function applyGeq() {
+    const on = state.geq.on;
+    const t = ctx.currentTime;
+    for (let i = 0; i < GEQ_FREQS.length; i++) {
+      const g = on ? clamp(state.geq['b' + GEQ_FREQS[i]], -15, 15) : 0;
+      geqFilters[i].gain.setTargetAtTime(g, t, 0.01);
+    }
+    const lvl = on ? Math.pow(10, clamp(state.geq.level, -15, 15) / 20) : 1;
+    geqLevel.gain.setTargetAtTime(lvl, t, 0.01);
+  }
+  function applyPeq() {
+    // Re-normalize only when the array shape is off (fresh load / foreign
+    // config) — per-knob calls stay allocation-free.
+    if (!Array.isArray(state.peq.bands) || state.peq.bands.length !== PEQ_BAND_COUNT) {
+      state.peq.bands = sanitizePeqBands(state.peq.bands);
+    }
+    const on = state.peq.on;
+    const t = ctx.currentTime;
+    for (let i = 0; i < PEQ_BAND_COUNT; i++) {
+      const node = peqFilters[i];
+      const b = state.peq.bands[i];
+      if (!on || !b || !b.on) {
+        // Bit-transparent neutral: a peaking band at gain 0 is an exact
+        // pass-through, so a disabled band (or stage) costs nothing audible.
+        node.type = 'peaking';
+        node.gain.setTargetAtTime(0, t, 0.01);
+        continue;
+      }
+      node.type = PEQ_TYPES[b.type] || 'peaking';
+      node.frequency.setTargetAtTime(clamp(b.freq, 20, 20000), t, 0.01);
+      node.Q.setTargetAtTime(clamp(b.q, 0.1, 36), t, 0.01);
+      node.gain.setTargetAtTime(clamp(b.gain, -24, 24), t, 0.01);
+    }
+  }
   function applyDelay() {
     const on = state.delay.on;
     const t = clamp(state.delay.time, 0.01, 2);
@@ -440,15 +559,17 @@ export function createRigStrip(ctx, cfg) {
   function applyPan() {
     panner.pan.setTargetAtTime(clamp(state.pan.pan, -1, 1), ctx.currentTime, 0.01);
   }
-  function applyAll() { applyHpf(); applyEarth(); applyMetal(); applyComp(); applyEq(); applyAmp(); applyCab(); applyDelay(); applyReverb(); applyPan(); }
+  function applyAll() { applyHpf(); applyEarth(); applyMetal(); applyComp(); applyEq(); applyGeq(); applyPeq(); applyAmp(); applyCab(); applyDelay(); applyReverb(); applyPan(); }
 
-  const APPLY = { hpf: applyHpf, earth: applyEarth, metal: applyMetal, comp: applyComp, eq: applyEq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
+  const APPLY = { hpf: applyHpf, earth: applyEarth, metal: applyMetal, comp: applyComp, eq: applyEq, geq: applyGeq, peq: applyPeq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
 
   applyAll();
 
   function setParam(stage, param, value) {
     if (!state[stage]) return;
-    state[stage][param] = value;
+    // The peq bands array arrives whole (the panel editor mutates band objects
+    // then re-sends the array) — take a normalized copy, never the caller's ref.
+    state[stage][param] = (stage === 'peq' && param === 'bands') ? sanitizePeqBands(value) : value;
     (APPLY[stage] || applyAll)();
   }
   function setEnabled(stage, on) {
@@ -459,9 +580,14 @@ export function createRigStrip(ctx, cfg) {
   function setConfig(cfg) {
     if (!cfg) return;
     for (const k of Object.keys(state)) if (cfg[k]) Object.assign(state[k], cfg[k]);
+    state.peq.bands = sanitizePeqBands(state.peq.bands);
     applyAll();
   }
-  function getConfig() { return deepMerge(state, null); }
+  function getConfig() {
+    const out = deepMerge(state, null);
+    out.peq.bands = sanitizePeqBands(state.peq.bands);   // fresh copy, no aliasing
+    return out;
+  }
 
   // Estimated latency this strip currently ADDS to the signal path (seconds),
   // from the stages that carry real delay when enabled (drive oversampling,
@@ -482,7 +608,8 @@ export function createRigStrip(ctx, cfg) {
                      earthPre, earthShaper, earthTone, earthPost,
                      metalPre, metalShaper1, metalStage, metalShaper2,
                      mLow, mMid, mHigh, metalPost, compIn, comp,
-                     eqLow, eqMid, eqHigh, ampIn, ampDrive, ampDry, ampWet, ampSum,
+                     eqLow, eqMid, eqHigh, ...geqFilters, geqLevel, ...peqFilters,
+                     ampIn, ampDrive, ampDry, ampWet, ampSum,
                      cabIn, cabConv, cabDry, cabWet, cabSum,
                      fxIn, dry, sum, delaySend, delayL, delayR, delayFb, merger,
                      delayWet, reverbSend, convolver, reverbWet, panner, output]) {

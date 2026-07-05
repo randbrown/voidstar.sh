@@ -18,11 +18,17 @@ multiple tracks (one "armed"), per-track grid/length/volume/mute/fit/stretch, a 
 guitar channel strip, a tuner, and a rig master with limiter. Loops persist to IndexedDB and
 round-trip through `.qualem.zip`.
 
+**Record is additive by default** (like grab): hitting ● while the armed track already holds a take
+lands the new recording in a **fresh track** that becomes the armed one — a still-blank armed track
+is reused, so record never strands an empty lane. The `rec → new` checkbox in the props row
+(persisted at `voidstar.qualia.looper.recordNewTrack`, default on; also part of the qualem config)
+turns this off for the old replace-the-armed-take behavior.
+
 **Module split (clean — preserve it):**
 
 | File | Responsibility |
 |---|---|
-| `looper.js` | Orchestrator: track model, all DOM/UI, persistence, the qualem surface. (~2,765 lines — should shed the strip UI, tuner, and cab/amp library; see backlog.) |
+| `looper.js` | Orchestrator: track model, all DOM/UI (incl. the strip's geq/peq editors), persistence, the qualem surface. (~3,500 lines — should shed the strip UI, tuner, and cab/amp library; see backlog.) |
 | `looper-audio.js` | The capture + playback engine. Owns its **own native `AudioContext`** (worklets reject Tone's wrapped context). Hosts the rig strip and rig master. |
 | `looper-render.js` | Pure canvas waveform renderer, one per track ("takes in lanes" + sweeping playhead), with cached min/max peaks. |
 | `looper-store.js` | Minimal IndexedDB store (`tracks` + `misc`). |

@@ -15,12 +15,12 @@
 //
 // The card sits BELOW the control panels in z-order (z-index 17, under the
 // panel band at 18/19) so an interjection never traps a panel toggle out of
-// reach. It's a light-touch control too: a grip bar drags it, the bottom-right
-// handle resizes it, a × dismisses it, and position/size persist across reloads
-// under the shared panelPos namespace.
+// reach. It's a light-touch control too: a grip bar drags it, any corner or
+// edge resizes it (shared panel-pos.js handles), a × dismisses it, and
+// position/size persist across reloads under the shared panelPos namespace.
 
 import { getPinnedRoom, readRoomFromQuery, buildJoinUrl } from './entangle-protocol.js';
-import { savePanelPos, restorePanelPos } from './panel-pos.js';
+import { savePanelPos, restorePanelPos, attachPanelResize } from './panel-pos.js';
 
 const STYLE_ID = 'qr-interject-style';
 const POS_ID = 'qr-interject';   // panelPos persistence key + `${POS_ID}-grip`
@@ -31,7 +31,7 @@ const CSS = `
   padding:.35rem .9rem .7rem;border-radius:.9rem;
   background:rgba(7,7,16,.82);border:1px solid var(--accent,#8b5cf6);
   box-shadow:0 0 2rem rgba(139,92,246,.35);
-  resize:both;overflow:hidden;
+  overflow:hidden;
   min-width:180px;min-height:180px;max-width:96vw;max-height:96vh;
   opacity:0;transition:opacity .8s ease}
 #qr-interject.visible{opacity:1}
@@ -107,9 +107,10 @@ export function initQRInterject({ getEntangle = () => null, size = 240 } = {}) {
     el.style.right = 'auto'; el.style.bottom = 'auto';
     unpinned = true;
   }
-  // Convert to left/top BEFORE the native resize gesture begins, so dragging the
-  // bottom-right handle grows from a fixed top-left corner and tracks the pointer.
+  // Convert to left/top BEFORE any resize gesture begins, so the anchored-edge
+  // math in the shared corner/edge handles tracks the pointer.
   el.addEventListener('pointerdown', () => unpin(), true);
+  attachPanelResize(POS_ID, el, { onStart: unpin });
 
   closeBtn.addEventListener('click', () => hide());
 
@@ -148,7 +149,7 @@ export function initQRInterject({ getEntangle = () => null, size = 240 } = {}) {
     grip.addEventListener('pointercancel', end);
   }
 
-  // Persist size (and position) when the user resizes via CSS `resize: both`.
+  // Persist size changes not caught by the resize handles' own pointerup.
   // Ignore the content-driven sizing that happens before any user gesture.
   if (typeof ResizeObserver !== 'undefined') {
     let deb = 0;

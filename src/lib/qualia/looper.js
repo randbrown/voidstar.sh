@@ -26,12 +26,12 @@
 // time-stretch is a later pass).
 
 import { createLooperAudio } from './looper-audio.js';
-import { STRIP_DEFAULTS, stageLatencySeconds } from './rig-strip.js';
+import { STRIP_DEFAULTS, stageLatencySeconds, PEQ_BAND_COUNT, PEQ_TYPES, defaultPeqBands, sanitizePeqBands } from './rig-strip.js';
 import { parseAmpModel } from './neural-amp-model.js';
 import { createLooperRenderer } from './looper-render.js';
 import * as loopStore from './looper-store.js';
 import { wirePicker, getStoredDeviceId } from './devices.js';
-import { savePanelPos, restorePanelPos } from './panel-pos.js';
+import { savePanelPos, restorePanelPos, attachPanelResize } from './panel-pos.js';
 import { getRaw as lsGet, setRaw as lsSet, clamp01 } from './prefs.js';
 
 const NS = 'voidstar.qualia.looper';
@@ -41,6 +41,7 @@ const SYNC_KEY       = `${NS}.sync`;
 const GRID_KEY       = `${NS}.grid`;       // default "cycles" (grid) for new tracks
 const OFFSET_KEY     = `${NS}.offsetMs`;
 const IMMEDIATE_KEY  = `${NS}.immediate`;  // "start now" (drop in mid-cycle) vs wait for boundary
+const RECNEW_KEY     = `${NS}.recordNewTrack`; // record lands in a fresh track (default '1') vs replaces the armed take
 const RETRO_KEY      = `${NS}.retroCycles`;// cycles the retro "grab" captures
 const BUFFER_KEY     = `${NS}.buffer`;     // keep the live lookback buffer filling
 const SIGLEVEL_KEY   = `${NS}.signalLevel`;// rig signal monitor/mix level
@@ -99,6 +100,20 @@ const STRIP_SCHEMA = [
   ] },
   { id: 'comp',   name: 'comp',   group: 'util', toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
   { id: 'eq',     name: 'eq',     group: 'util', toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
+  // geq — GE-7-voiced 7-band graphic EQ (surgical-ish fixed bands + level).
+  { id: 'geq',    name: 'geq',    group: 'util', toggle: true,  params: [
+    { id: 'b100',  label: '100',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'b200',  label: '200',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'b400',  label: '400',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'b800',  label: '800',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'b1600', label: '1.6k', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'b3200', label: '3.2k', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'b6400', label: '6.4k', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'level', label: 'lvl',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+  ] },
+  // peq — ReaEQ-style parametric EQ; fully custom editor (canvas + band
+  // controls), so no schema params — see buildPeqEditor().
+  { id: 'peq',    name: 'peq',    group: 'util', toggle: true,  peq: true, params: [] },
   { id: 'amp',    name: 'amp',    group: 'main', toggle: true,  ampLoader: true, params: [{ id: 'gain', label: 'gain', min: 0, max: 4, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'cab',    name: 'cab',    group: 'main', toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'delay',  name: 'delay',  group: 'main', toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
@@ -132,10 +147,14 @@ function loadTunerChord() {
   return out;
 }
 
-// A fresh strip config at unity defaults (all effects off).
+// A fresh strip config at unity defaults (all effects off). The peq bands
+// array is re-materialized (the stage spreads are shallow) so callers can
+// mutate bands without corrupting STRIP_DEFAULTS — which would silently break
+// reset.
 function loadDefaultStrip() {
   const base = {};
   for (const k of Object.keys(STRIP_DEFAULTS)) base[k] = { ...STRIP_DEFAULTS[k] };
+  base.peq.bands = defaultPeqBands();
   return base;
 }
 // Strip config = unity defaults deep-merged with any persisted JSON.
@@ -160,6 +179,7 @@ function loadStripConfig() {
       for (const k of Object.keys(base)) if (o && o[k]) Object.assign(base[k], o[k]);
     }
   } catch {}
+  base.peq.bands = sanitizePeqBands(base.peq.bands);
   return base;
 }
 
@@ -269,6 +289,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const model = {
     syncStrudel: lsGet(SYNC_KEY, '1') !== '0',
     immediate: lsGet(IMMEDIATE_KEY, '0') === '1',   // "start now" vs wait for boundary
+    recordNewTrack: lsGet(RECNEW_KEY, '1') !== '0', // record lands in a fresh track (default) vs replaces the armed take
     cps: 0.5,                       // used when sync is off / Strudel idle
     offsetMs: (() => { const v = parseInt(lsGet(OFFSET_KEY, '0'), 10); return Number.isFinite(v) ? Math.max(-200, Math.min(500, v)) : 0; })(),
     master:   num01(lsGet(MASTER_KEY, '0.9'), 0.9),   // overall looper output
@@ -463,9 +484,22 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // ── transport ──────────────────────────────────────────────────────────
   async function startRecording() {
     if (recording) return;
-    const t = armedTrack();
+    let t = armedTrack();
     if (!t) return;
-    looperAudio.stopVoice(t.id);   // record replaces the armed take
+    // Default (recordNewTrack): record is ADDITIVE, like grab — an armed track
+    // that already holds a take is kept, and the recording lands in a fresh
+    // track that becomes the armed one. A still-blank armed track is reused so
+    // record never strands an empty lane. Turn the "rec → new track" prop off
+    // to get the old replace-the-armed-take behavior.
+    if (model.recordNewTrack && t.buffer) {
+      const fresh = makeTrack();
+      fresh.grid = t.grid;
+      model.tracks.push(fresh);
+      model.armedTrackId = fresh.id;
+      renderTracks();
+      t = fresh;
+    }
+    looperAudio.stopVoice(t.id);   // record replaces the (possibly fresh) armed take
     setStatus('arming…');
     try {
       const res = await looperAudio.startRecording({ grid: t.grid, syncOn: syncOn(), cps: currentCps(), deviceId: model.deviceId });
@@ -898,6 +932,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       master:      model.master,
       sync:        !!model.syncStrudel,
       immediate:   !!model.immediate,
+      recordNewTrack: !!model.recordNewTrack,
       offsetMs:    model.offsetMs,
       gridDefault: model.gridDefault,
       retroCycles: model.retroCycles,
@@ -931,6 +966,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
       model.immediate = cfg.immediate;
       lsSet(IMMEDIATE_KEY, model.immediate ? '1' : '0');
     }
+    if (typeof cfg.recordNewTrack === 'boolean') {
+      model.recordNewTrack = cfg.recordNewTrack;
+      lsSet(RECNEW_KEY, model.recordNewTrack ? '1' : '0');
+    }
     if (typeof cfg.gridDefault === 'number') {
       model.gridDefault = Math.max(1, Math.min(16, cfg.gridDefault | 0));
       lsSet(GRID_KEY, model.gridDefault);
@@ -938,6 +977,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (typeof cfg.retroCycles === 'number') setRetroCycles(cfg.retroCycles);
     if (cfg.strip && typeof cfg.strip === 'object') {
       for (const k of Object.keys(model.strip)) if (cfg.strip[k]) Object.assign(model.strip[k], cfg.strip[k]);
+      model.strip.peq.bands = sanitizePeqBands(model.strip.peq.bands);
       looperAudio.setStripConfig(model.strip);
       lsSet(STRIP_KEY, JSON.stringify(model.strip));
       rebuildStrip();
@@ -1128,12 +1168,27 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const immLabel = document.createElement('span'); immLabel.className = 'seq-prop-label'; immLabel.textContent = 'start now';
     immWrap.append(immCb, immLabel);
 
+    // "rec → new" — record is additive by default (lands in a fresh armed
+    // track, like grab); off = the old replace-the-armed-take behavior.
+    const recNewCb = document.createElement('input');
+    recNewCb.type = 'checkbox'; recNewCb.checked = !!model.recordNewTrack;
+    recNewCb.addEventListener('change', () => {
+      model.recordNewTrack = !!recNewCb.checked;
+      lsSet(RECNEW_KEY, model.recordNewTrack ? '1' : '0');
+    });
+    const recNewWrap = document.createElement('label');
+    recNewWrap.className = 'seq-prop seq-prop-check';
+    recNewWrap.title = 'Record adds a new track: an armed take is kept and the recording lands in a fresh armed track (a blank armed track is reused). Off = record replaces the armed take.';
+    const recNewLabel = document.createElement('span'); recNewLabel.className = 'seq-prop-label'; recNewLabel.textContent = 'rec → new';
+    recNewWrap.append(recNewCb, recNewLabel);
+
     propsEl.append(
       mk('cps', stepper(cpsIn, 'input'), 'Cycles per second when sync is off (Strudel\'s clock drives it when synced).'),
       mk('nudge ms', stepper(nudgeIn, 'change'), 'Slide all loops into the pocket. + pulls a late take earlier to compensate record latency.'),
       mk('retro cyc', stepper(retroIn, 'change'), 'How many cycles the “grab” button captures from the live buffer (snapped to the armed track\'s grid).'),
       syncWrap,
       immWrap,
+      recNewWrap,
     );
     refreshSyncStatus();
   }
@@ -1447,6 +1502,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const tg = box.querySelector('.rig-stage-toggle');
       if (tg) { tg.textContent = on ? 'on' : 'off'; tg.classList.toggle('active', on); }
     }
+    peqRepaint?.();   // the peq curve dims when its stage is bypassed
   }
   // Build one strip-stage box (head + toggle + param controls). `collapsible`
   // off (main row) gives every stage a fixed footprint so positions never shift
@@ -1500,6 +1556,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     if (stage.loader) box.append(buildCabLoader());
     if (stage.ampLoader) box.append(buildAmpLoader());
+    if (stage.peq) box.append(buildPeqEditor());
     return box;
   }
   function buildStripUI() {
@@ -1558,6 +1615,295 @@ export function createLooper({ audio, syncStrudel } = {}) {
     row.append(lab, sl, val);
     return row;
   }
+
+  // ── parametric EQ editor (peq stage) ──────────────────────────────────────
+  // ReaEQ-style surgical EQ: a log-frequency response canvas with draggable
+  // band handles, plus a compact control row for the selected band. Drag a
+  // handle to move freq/gain (freq/Q for the gainless pass/notch types), wheel
+  // to sweep Q, double-click a handle to toggle its band, double-click empty
+  // canvas to place the next free band there. The curve is the browser's own
+  // filter math — prototype BiquadFilterNodes in a dormant OfflineAudioContext
+  // queried via getFrequencyResponse — so what you see is exactly what the rig
+  // strip does. Paints on demand only (never a rAF loop).
+  const PEQ_TYPE_LABELS = { peak: 'peak', loshelf: 'lo shelf', hishelf: 'hi shelf', lopass: 'lo pass', hipass: 'hi pass', notch: 'notch' };
+  const PEQ_GAINLESS = { lopass: true, hipass: true, notch: true };
+  const PEQ_FMIN = 20, PEQ_FMAX = 20000, PEQ_DB_VIEW = 18;
+  const PEQ_QMIN = 0.1, PEQ_QMAX = 36;
+  const peqFto01 = (f) => Math.log(Math.max(PEQ_FMIN, Math.min(PEQ_FMAX, f)) / PEQ_FMIN) / Math.log(PEQ_FMAX / PEQ_FMIN);
+  const peq01toF = (x) => PEQ_FMIN * Math.pow(PEQ_FMAX / PEQ_FMIN, Math.max(0, Math.min(1, x)));
+  const peqQto01 = (q) => Math.log(Math.max(PEQ_QMIN, Math.min(PEQ_QMAX, q)) / PEQ_QMIN) / Math.log(PEQ_QMAX / PEQ_QMIN);
+  const peq01toQ = (x) => PEQ_QMIN * Math.pow(PEQ_QMAX / PEQ_QMIN, Math.max(0, Math.min(1, x)));
+  const fmtHzS = (f) => f >= 1000 ? `${(f / 1000).toFixed(f >= 9950 ? 1 : 2)}k` : `${Math.round(f)}`;
+  let peqRepaint = null;   // live editor's paint(); refreshStripStages calls it on toggles
+
+  // Prototype filters for the response curve — lazy, shared, never rendered.
+  const PEQ_RESP_N = 160;
+  let _peqRespProto = null, _peqRespFreqs = null, _peqRespMag = null, _peqRespPhase = null, _peqRespAcc = null;
+  function ensurePeqResp() {
+    if (_peqRespProto) return true;
+    try {
+      const octx = new OfflineAudioContext(1, 128, 48000);
+      _peqRespProto = Array.from({ length: PEQ_BAND_COUNT }, () => octx.createBiquadFilter());
+      _peqRespFreqs = new Float32Array(PEQ_RESP_N);
+      for (let i = 0; i < PEQ_RESP_N; i++) _peqRespFreqs[i] = peq01toF(i / (PEQ_RESP_N - 1));
+      _peqRespMag = new Float32Array(PEQ_RESP_N);
+      _peqRespPhase = new Float32Array(PEQ_RESP_N);
+      _peqRespAcc = new Float32Array(PEQ_RESP_N);
+    } catch { _peqRespProto = null; return false; }
+    return true;
+  }
+
+  function buildPeqEditor() {
+    const bands = () => model.strip.peq.bands;
+    const PEQ_DEFS = defaultPeqBands();
+    let sel = Math.max(0, bands().findIndex(b => b.on));
+
+    const wrap = document.createElement('div');
+    wrap.className = 'rig-peq';
+
+    const canvas = document.createElement('canvas');
+    canvas.className = 'rig-peq-canvas';
+    canvas.title = 'Drag a band handle: ←→ frequency, ↑↓ gain (Q for pass/notch bands). Wheel = Q. Double-click a handle to toggle its band; double-click empty space to place the next free band.';
+
+    // Band chips + on/type for the selected band.
+    const chips = document.createElement('div');
+    chips.className = 'rig-peq-chips';
+    const chipEls = [];
+    for (let i = 0; i < PEQ_BAND_COUNT; i++) {
+      const c = document.createElement('button');
+      c.type = 'button'; c.className = 'ctrl-btn rig-peq-chip'; c.textContent = String(i + 1);
+      c.title = `Select band ${i + 1}`;
+      c.addEventListener('click', () => { sel = i; syncCtls(); paint(); });
+      chips.append(c); chipEls.push(c);
+    }
+    const onBtn = document.createElement('button');
+    onBtn.type = 'button'; onBtn.className = 'ctrl-btn rig-peq-onbtn';
+    onBtn.title = 'Enable / disable the selected band';
+    onBtn.addEventListener('click', () => { bands()[sel].on = !bands()[sel].on; commit(); });
+    const typeSel = document.createElement('select');
+    typeSel.className = 'rig-lib-select rig-peq-type';
+    typeSel.title = 'Filter type for the selected band';
+    for (const [id, label] of Object.entries(PEQ_TYPE_LABELS)) {
+      const o = document.createElement('option'); o.value = id; o.textContent = label;
+      typeSel.append(o);
+    }
+    typeSel.addEventListener('change', () => { bands()[sel].type = typeSel.value; commit(); });
+    chips.append(onBtn, typeSel);
+
+    // Selected-band sliders. freq + Q ride 0..1 log-mapped sliders; the
+    // dataset.reset values (updated per selection) keep the global
+    // double-click-to-reset behavior honest for the mapped scales.
+    function ctlRow(label, min, max, step, title) {
+      const row = document.createElement('div'); row.className = 'rig-ctl';
+      const lab = document.createElement('span'); lab.className = 'rig-ctl-label'; lab.textContent = label;
+      const sl = document.createElement('input');
+      sl.type = 'range'; sl.min = String(min); sl.max = String(max); sl.step = String(step);
+      if (title) sl.title = title;
+      const val = document.createElement('span'); val.className = 'rig-ctl-val';
+      row.append(lab, sl, val);
+      return { row, sl, val };
+    }
+    const fr = ctlRow('freq', 0, 1, 0.001, 'Band frequency — double-click to reset');
+    const gr = ctlRow('gain', -24, 24, 0.1, 'Band gain (dB) — ignored by pass/notch bands');
+    const qr = ctlRow('Q', 0, 1, 0.001, 'Bandwidth — higher Q is narrower (surgical); shelves ignore Q');
+    fr.sl.addEventListener('input', () => { bands()[sel].freq = Math.round(peq01toF(parseFloat(fr.sl.value))); commit(); });
+    gr.sl.addEventListener('input', () => { bands()[sel].gain = parseFloat(gr.sl.value); commit(); });
+    qr.sl.addEventListener('input', () => { bands()[sel].q = Math.round(peq01toQ(parseFloat(qr.sl.value)) * 100) / 100; commit(); });
+
+    wrap.append(canvas, chips, fr.row, gr.row, qr.row);
+
+    function syncCtls() {
+      const bs = bands();
+      for (let i = 0; i < chipEls.length; i++) {
+        chipEls[i].classList.toggle('active', i === sel);
+        chipEls[i].classList.toggle('on', !!bs[i].on);
+      }
+      const b = bs[sel];
+      onBtn.textContent = b.on ? 'on' : 'off';
+      onBtn.classList.toggle('active', !!b.on);
+      typeSel.value = b.type;
+      fr.sl.value = String(peqFto01(b.freq)); fr.val.textContent = `${fmtHzS(b.freq)}Hz`;
+      gr.sl.value = String(b.gain);           gr.val.textContent = (+b.gain).toFixed(1);
+      qr.sl.value = String(peqQto01(b.q));    qr.val.textContent = (+b.q).toFixed(2);
+      fr.sl.dataset.reset = String(peqFto01(PEQ_DEFS[sel].freq));
+      gr.sl.dataset.reset = '0';
+      qr.sl.dataset.reset = String(peqQto01(PEQ_DEFS[sel].q));
+    }
+    function commit() {
+      stripSet('peq', 'bands', bands());
+      syncCtls();
+      paint();
+    }
+
+    // ── response canvas ──
+    function paint() {
+      if (!canvas.isConnected) return;
+      const cw = canvas.clientWidth, chh = canvas.clientHeight;
+      if (!cw || !chh) return;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const W = Math.round(cw * dpr), H = Math.round(chh * dpr);
+      if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+      const g = canvas.getContext('2d');
+      const css = getComputedStyle(document.documentElement);
+      const col = (v, fb) => (css.getPropertyValue(v) || '').trim() || fb;
+      const cCyan = col('--cyan', '#22d3ee'), cMuted = col('--muted', '#9b96c4'), cText = col('--text', '#e7e9ff');
+      const stageOn = !!model.strip.peq.on;
+      const midY = H / 2, dbScale = midY / PEQ_DB_VIEW;
+      g.clearRect(0, 0, W, H);
+
+      // grid: octave-ish verticals + dB horizontals
+      g.strokeStyle = 'rgba(155,150,196,0.14)'; g.lineWidth = 1;
+      for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+        const x = peqFto01(f) * W;
+        g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
+      }
+      for (const db of [-12, -6, 6, 12]) {
+        const y = midY - db * dbScale;
+        g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+      }
+      g.strokeStyle = 'rgba(155,150,196,0.35)';
+      g.beginPath(); g.moveTo(0, midY); g.lineTo(W, midY); g.stroke();
+      g.fillStyle = cMuted; g.font = `${Math.round(8 * dpr)}px monospace`; g.globalAlpha = 0.7;
+      g.fillText('100', peqFto01(100) * W + 2 * dpr, H - 3 * dpr);
+      g.fillText('1k',  peqFto01(1000) * W + 2 * dpr, H - 3 * dpr);
+      g.fillText('10k', peqFto01(10000) * W + 2 * dpr, H - 3 * dpr);
+      g.globalAlpha = 1;
+
+      // composite response of the enabled bands
+      const bs = bands();
+      if (ensurePeqResp()) {
+        _peqRespAcc.fill(0);
+        let any = false;
+        for (let i = 0; i < PEQ_BAND_COUNT; i++) {
+          const b = bs[i];
+          if (!b || !b.on) continue;
+          const p = _peqRespProto[i];
+          p.type = PEQ_TYPES[b.type] || 'peaking';
+          p.frequency.value = b.freq; p.Q.value = b.q; p.gain.value = b.gain;
+          p.getFrequencyResponse(_peqRespFreqs, _peqRespMag, _peqRespPhase);
+          for (let j = 0; j < PEQ_RESP_N; j++) {
+            _peqRespAcc[j] += 20 * Math.log10(Math.max(_peqRespMag[j], 1e-6));
+          }
+          any = true;
+        }
+        g.strokeStyle = cCyan; g.lineWidth = 1.6 * dpr;
+        g.globalAlpha = stageOn ? 1 : 0.35;
+        g.beginPath();
+        for (let j = 0; j < PEQ_RESP_N; j++) {
+          const x = (j / (PEQ_RESP_N - 1)) * W;
+          const y = Math.max(1, Math.min(H - 1, midY - _peqRespAcc[j] * dbScale));
+          if (j === 0) g.moveTo(x, y); else g.lineTo(x, y);
+        }
+        g.stroke();
+        if (any && stageOn) {   // subtle fill toward 0 dB
+          g.globalAlpha = 0.10;
+          g.lineTo(W, midY); g.lineTo(0, midY); g.closePath();
+          g.fillStyle = cCyan; g.fill();
+        }
+        g.globalAlpha = 1;
+      }
+
+      // band handles
+      for (let i = 0; i < PEQ_BAND_COUNT; i++) {
+        const b = bs[i];
+        if (!b || !b.on) continue;
+        const hx = peqFto01(b.freq) * W;
+        const hy = PEQ_GAINLESS[b.type] ? midY : Math.max(4, Math.min(H - 4, midY - b.gain * dbScale));
+        const r = (i === sel ? 5.5 : 4) * dpr;
+        g.globalAlpha = stageOn ? 1 : 0.4;
+        g.beginPath(); g.arc(hx, hy, r, 0, Math.PI * 2);
+        g.fillStyle = i === sel ? cCyan : 'rgba(155,150,196,0.55)';
+        g.fill();
+        g.fillStyle = cText; g.font = `${Math.round(8 * dpr)}px monospace`;
+        g.fillText(String(i + 1), hx + r + 2 * dpr, hy - r);
+        g.globalAlpha = 1;
+      }
+    }
+
+    // ── canvas interactions ──
+    const hitBand = (ex, ey) => {
+      const rct = canvas.getBoundingClientRect();
+      const x = ex - rct.left, y = ey - rct.top;
+      const midY = rct.height / 2, dbScale = midY / PEQ_DB_VIEW;
+      let best = -1, bestD = 14;   // 14 CSS px grab radius
+      const bs = bands();
+      for (let i = 0; i < PEQ_BAND_COUNT; i++) {
+        const b = bs[i];
+        if (!b || !b.on) continue;
+        const hx = peqFto01(b.freq) * rct.width;
+        const hy = PEQ_GAINLESS[b.type] ? midY : midY - b.gain * dbScale;
+        const d = Math.hypot(x - hx, y - hy);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      return best;
+    };
+    let drag = null;   // { pid, band, y0, q0 }
+    canvas.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      const i = hitBand(e.clientX, e.clientY);
+      if (i >= 0) {
+        sel = i;
+        drag = { pid: e.pointerId, band: i, y0: e.clientY, q0: bands()[i].q };
+        try { canvas.setPointerCapture(e.pointerId); } catch {}
+        syncCtls(); paint();
+      }
+      e.preventDefault();
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.pid) return;
+      const rct = canvas.getBoundingClientRect();
+      const b = bands()[drag.band];
+      b.freq = Math.round(peq01toF((e.clientX - rct.left) / rct.width));
+      if (PEQ_GAINLESS[b.type]) {
+        // vertical drag sweeps Q for the gainless types (narrower = up)
+        b.q = Math.round(Math.max(PEQ_QMIN, Math.min(PEQ_QMAX, drag.q0 * Math.pow(2, (drag.y0 - e.clientY) / 40))) * 100) / 100;
+      } else {
+        const midY = rct.height / 2, dbScale = midY / PEQ_DB_VIEW;
+        const db = (midY - (e.clientY - rct.top)) / dbScale;
+        b.gain = Math.round(Math.max(-PEQ_DB_VIEW, Math.min(PEQ_DB_VIEW, db)) * 10) / 10;
+      }
+      commit();
+    });
+    const dragEnd = (e) => {
+      if (!drag || e.pointerId !== drag.pid) return;
+      drag = null;
+      try { canvas.releasePointerCapture(e.pointerId); } catch {}
+    };
+    canvas.addEventListener('pointerup', dragEnd);
+    canvas.addEventListener('pointercancel', dragEnd);
+    canvas.addEventListener('dblclick', (e) => {
+      const i = hitBand(e.clientX, e.clientY);
+      const bs = bands();
+      if (i >= 0) { bs[i].on = !bs[i].on; sel = i; commit(); return; }
+      const free = bs.findIndex(b => !b.on);
+      if (free < 0) return;
+      const rct = canvas.getBoundingClientRect();
+      const b = bs[free];
+      b.on = true;
+      b.type = 'peak';
+      b.freq = Math.round(peq01toF((e.clientX - rct.left) / rct.width));
+      const midY = rct.height / 2, dbScale = midY / PEQ_DB_VIEW;
+      b.gain = Math.round(Math.max(-PEQ_DB_VIEW, Math.min(PEQ_DB_VIEW, (midY - (e.clientY - rct.top)) / dbScale)) * 10) / 10;
+      sel = free;
+      commit();
+    });
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const b = bands()[sel];
+      if (!b) return;
+      b.q = Math.round(Math.max(PEQ_QMIN, Math.min(PEQ_QMAX, b.q * Math.pow(2, e.deltaY < 0 ? 0.12 : -0.12))) * 100) / 100;
+      commit();
+    }, { passive: false });
+
+    // Repaint when the drawer/stage box (re)opens or the panel is resized —
+    // the canvas goes 0-width while hidden, so paint() no-ops until then.
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => paint()).observe(canvas);
+    peqRepaint = paint;
+    syncCtls();
+    // First paint happens via the ResizeObserver once the canvas lays out.
+    return wrap;
+  }
+
   // ── amp / cab file libraries ───────────────────────────────────────────────
   // A few uploaded IRs / amp captures are kept in IndexedDB (heavy bytes/model)
   // plus a lightweight localStorage index (id + name) so the picker lists them
@@ -1870,7 +2216,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     miniPlayLed = document.createElement('span'); miniPlayLed.className = 'rig-mini-play-led';
     trRow.append(
       miniPlayLed,
-      mkBtn('●', 'Record into the armed track', () => { recording ? stopRecording() : startRecording(); }),
+      mkBtn('●', 'Record (a fresh track by default — see the rec → new prop)', () => { recording ? stopRecording() : startRecording(); }),
       mkBtn('▶', 'Play loop', () => { playAll(); }),
       mkBtn('■', 'Stop', () => { stop(); }),
     );
@@ -2859,7 +3205,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (btnRecord) {
       btnRecord.classList.toggle('recording', recording);
       btnRecord.textContent = recording ? '■' : '●';
-      btnRecord.title = recording ? 'Stop recording' : 'Record into the armed track';
+      btnRecord.title = recording ? 'Stop recording'
+        : (model.recordNewTrack ? 'Record into a new track (armed takes are kept — see the rec → new prop)'
+                                : 'Record into the armed track (replaces its take)');
     }
     if (btnPlay) { btnPlay.classList.toggle('playing', playing); btnPlay.disabled = !any || recording; }
     if (btnStop) btnStop.disabled = !playing;
@@ -2975,7 +3323,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
     header.addEventListener('pointercancel', end);
   })();
 
-  // ResizeObserver — persist position when the user resizes via CSS resize: both.
+  // Any-corner/edge resize handles (mirror makeDraggablePanel): materialize a
+  // still-centered panel on resize-start so the anchored-edge math works.
+  if (panel) {
+    attachPanelResize('looper', panel, { onStart: () => {
+      if (movedByUser) return;
+      const r = panel.getBoundingClientRect();
+      panel.style.transform = 'none';
+      panel.style.left = r.left + 'px';
+      panel.style.top  = r.top + 'px';
+      movedByUser = true;
+    } });
+  }
+
+  // ResizeObserver — persist size changes not caught by the resize handles.
   if (panel && typeof ResizeObserver !== 'undefined') {
     let _rDebounce = 0;
     new ResizeObserver(() => {

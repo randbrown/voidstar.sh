@@ -4674,6 +4674,7 @@ export function initQualiaPage() {
     rig:       { label: 'rig',       keys: ['looper'] },
     fx:        { label: 'params (fx)', keys: ['fx', 'activeFxId'] },
     overlay:   { label: 'overlay',   keys: ['overlay', 'glitch', 'camWalk'] },
+    camWalk:   { label: 'cam walk',  keys: ['camWalk'] },   // walk-card chip; also inside 'overlay'
     audio:     { label: 'audio',     keys: ['audio'] },
     pose:      { label: 'pose',      keys: ['pose'] },
     camera:    { label: 'camera',    keys: ['camera'] },
@@ -4780,6 +4781,7 @@ export function initQualiaPage() {
       { key: 'audio',     head: document.querySelector('#audio-card .qp-head') },
       { key: 'pose',      head: document.querySelector('#pose-card .qp-head') },
       { key: 'camera',    head: document.querySelector('#camera-card .qp-head') },
+      { key: 'camWalk',   head: document.querySelector('#walk-card .qp-head') },
       // `before` the close × so the chip sits just left of it and × stays flush
       // right, consistent across every panel.
       { key: 'sequencer', head: document.getElementById('sequencer-header'), before: document.getElementById('btn-sequencer-close') },
