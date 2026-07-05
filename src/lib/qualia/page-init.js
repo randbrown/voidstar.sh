@@ -323,12 +323,19 @@ export function initQualiaPage() {
   // Ticked at the reactivity cadence (never gated by the viz frame cap) so
   // beat re-aims stay sharp and the drift is smooth at any render fps.
   const camWalk = createCamWalk({
-    getLayers: () => [
-      document.getElementById('hydra-canvas'),
-      core.getCanvas(),
-      document.getElementById('qualia-transition'),
-      overlay.canvas,
-    ],
+    // The fx canvas + transition freeze-frame always walk; hydra, the
+    // glitch-post canvas, and the pose canvas each ride along or stay
+    // pinned per the walk config's layer-scope toggles (walk card).
+    getLayers: () => {
+      const scope = camWalk.getConfig();
+      return [
+        scope.hydra ? document.getElementById('hydra-canvas') : null,
+        core.getCanvas(),
+        document.getElementById('qualia-transition'),
+        scope.post ? overlay.postCanvas : null,
+        scope.pose ? overlay.canvas : null,
+      ];
+    },
     getStageSize: () => {
       const c = core.getCanvas();
       return c && c.width > 0 ? [c.width, c.height] : [window.innerWidth, window.innerHeight];
@@ -1968,6 +1975,27 @@ export function initQualiaPage() {
   wireWalkSlider('walk-punch',   'punch');
   wireWalkSlider('walk-min-gap', 'minGapS', (v) => `${v.toFixed(1)}s`);
   wireWalkSlider('walk-max-gap', 'maxGapS', (v) => `${Math.round(v)}s`);
+  // Layer-scope toggles — which optional layers ride the walk (walks) vs
+  // stay screen-pinned (pinned). Stored inside the walk config so they
+  // persist + travel in qualems with the rest of the walk state.
+  function wireWalkScope(btnId, key) {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    const paint = () => {
+      const walks = camWalk.getConfig()[key] !== false;
+      btn.classList.toggle('active', walks);
+      btn.textContent = walks ? 'walks' : 'pinned';
+    };
+    paint();
+    btn.addEventListener('click', () => {
+      camWalk.setConfig({ [key]: camWalk.getConfig()[key] === false });
+      paint();
+      settings.save();
+    });
+  }
+  wireWalkScope('walk-scope-hydra', 'hydra');
+  wireWalkScope('walk-scope-pose',  'pose');
+  wireWalkScope('walk-scope-post',  'post');
   if (walkCard && typeof stored.walkCollapsed === 'boolean') {
     walkCard.classList.toggle('collapsed', stored.walkCollapsed);
   }
@@ -2310,9 +2338,12 @@ export function initQualiaPage() {
     // Cam walk — mirror the live CSS transform (pan / rotate / zoom about the
     // fx panel centre) around the scene layers, clipped to the fx rect so a
     // walked frame can't spill into the camera half in split mode. The live
-    // view applies the same matrix via CSS, so recordings match.
+    // view applies the same matrix via CSS, so recordings match — including
+    // the per-layer scope toggles (glitch post / pose ride the walk or stay
+    // pinned, exactly as on screen).
     const walkT = camWalk.getTransform();
-    if (walkT) {
+    const walkScope = walkT ? camWalk.getConfig() : null;
+    const beginWalk = () => {
       const r = layout.fxRect;
       const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
       recordCompositeCtx.save();
@@ -2323,9 +2354,12 @@ export function initQualiaPage() {
       recordCompositeCtx.rotate(walkT.rot);
       recordCompositeCtx.scale(walkT.scale, walkT.scale);
       recordCompositeCtx.translate(-cx, -cy);
-    }
-    // fx + overlay into the fx panel rect. preserveDrawingBuffer on the WebGL
-    // contexts lets us drawImage from a webgl2/three canvas mid-frame.
+    };
+    const endWalk = () => recordCompositeCtx.restore();
+    // fx + transition (always walked when the walk is on).
+    // preserveDrawingBuffer on the WebGL contexts lets us drawImage from a
+    // webgl2/three canvas mid-frame.
+    if (walkT) beginWalk();
     drawLayerFitted(fx, layout.fxRect);
     // Scene-transition freeze-frame (when one is running) — drawn over the new
     // fx at its current opacity, matching the live viz→transition→overlay
@@ -2337,8 +2371,21 @@ export function initQualiaPage() {
       drawLayerFitted(transCanvas, layout.fxRect);
       recordCompositeCtx.restore();
     }
-    drawLayerFitted(overlay.canvas, layout.fxRect);
-    if (walkT) recordCompositeCtx.restore();
+    if (walkT) endWalk();
+    // Glitch-post canvas, then pose canvas — same paint order as the live
+    // DOM stack, each inside or outside the walk matrix per its scope.
+    if (overlay.isPostActive?.()) {
+      const walked = walkT && walkScope.post;
+      if (walked) beginWalk();
+      drawLayerFitted(overlay.postCanvas, layout.fxRect);
+      if (walked) endWalk();
+    }
+    {
+      const walked = walkT && walkScope.pose;
+      if (walked) beginWalk();
+      drawLayerFitted(overlay.canvas, layout.fxRect);
+      if (walked) endWalk();
+    }
     // Camera panel (split mode only).
     if (layout.camRect) drawCameraIntoRect(layout.camRect);
   }

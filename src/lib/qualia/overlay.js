@@ -105,6 +105,19 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   // skeleton / sparks / mosh stay pixel-aligned with the fx panel rather
   // than spilling across the camera half. position/size are set in
   // applyDpr() so a stage change re-lays-out the element too.
+  // Post canvas — the ascii/mosh/edge passes render here, UNDER the pose
+  // canvas (same z-index, earlier in DOM order). They live on their own
+  // canvas so the cam walk can transform glitch output and pose overlays
+  // independently (walks vs pinned, see cam-walk.js). display:none while no
+  // post is active keeps the extra compositor layer free in the common case.
+  const postCanvas = document.createElement('canvas');
+  postCanvas.id = 'qualia-overlay-post';
+  postCanvas.style.cssText =
+    'position:fixed;left:0;top:0;width:100vw;height:100vh;display:none;' +
+    'pointer-events:none;z-index:3;';
+  parent.appendChild(postCanvas);
+  const postCtx = postCanvas.getContext('2d');
+
   const canvas = document.createElement('canvas');
   canvas.id = 'qualia-overlay';
   canvas.style.cssText =
@@ -128,6 +141,13 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     // pixel space, so a stage-sized buffer keeps everything registered.
     canvas.width  = Math.max(1, Math.floor(r.width  * dpr));
     canvas.height = Math.max(1, Math.floor(r.height * dpr));
+    // Post canvas tracks the same box + buffer so the two stay registered.
+    postCanvas.style.left   = canvas.style.left;
+    postCanvas.style.top    = canvas.style.top;
+    postCanvas.style.width  = canvas.style.width;
+    postCanvas.style.height = canvas.style.height;
+    postCanvas.width  = canvas.width;
+    postCanvas.height = canvas.height;
     updateAsciiGrid();
   }
   // Initial applyDpr() is deferred to the bottom of createOverlay so that
@@ -482,6 +502,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
 
   function renderAscii() {
+    // Post passes paint the post canvas (walk-scoped separately from pose).
+    const ctx = postCtx;
     const main = getMainCanvas?.();
     if (!main) return;
     const W = canvas.width, H = canvas.height;
@@ -546,6 +568,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     }
   }
   function renderMosh(field) {
+    // Post passes paint the post canvas (walk-scoped separately from pose).
+    const ctx = postCtx;
     const main = getMainCanvas?.();
     if (!main) return;
     const W = canvas.width, H = canvas.height;
@@ -647,6 +671,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     }
   }
   function renderEdge(field) {
+    // Post passes paint the post canvas (walk-scoped separately from pose).
+    const ctx = postCtx;
     const main = getMainCanvas?.();
     if (!main) return;
     const W = canvas.width, H = canvas.height;
@@ -754,21 +780,24 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     updateSparks(dt);
   }
 
+  let postShown = false;
   function render(field) {
     const W = canvas.width, H = canvas.height;
-    if (opts.mosh) {
-      // Mosh / ASCII / edge each fully repaint the overlay; the setOption
-      // mutex guarantees only one is on at a time.
-      renderMosh(field);
-    } else if (opts.ascii) {
-      // ASCII fully covers the viz — render it first, then overlays land
-      // ON TOP of the ASCII text (skeleton + sparks should still be visible).
-      renderAscii();
-    } else if (opts.edge) {
-      renderEdge(field);
-    } else {
-      ctx.clearRect(0, 0, W, H);
+    // Mosh / ASCII / edge each fully repaint the POST canvas (the setOption
+    // mutex guarantees only one is on at a time), which sits under the pose
+    // canvas so skeleton + sparks still land on top. The post canvas is
+    // display:none while no post is active — the extra compositor layer is
+    // free in the common case.
+    const postActive = opts.mosh || opts.ascii || opts.edge;
+    if (postActive !== postShown) {
+      postCanvas.style.display = postActive ? 'block' : 'none';
+      postShown = postActive;
     }
+    if (opts.mosh)       renderMosh(field);
+    else if (opts.ascii) renderAscii();
+    else if (opts.edge)  renderEdge(field);
+
+    ctx.clearRect(0, 0, W, H);
     drawPoseOverlay(field);
     drawSparks();
     drawRipples();
@@ -776,6 +805,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
 
   function dispose() {
     canvas.remove();
+    postCanvas.remove();
     window.removeEventListener('resize', applyDpr);
     window.removeEventListener('orientationchange', applyDpr);
   }
@@ -785,6 +815,9 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
 
   return {
     canvas,
+    postCanvas,
+    /** True while an ascii/mosh/edge pass is rendering (post canvas shown). */
+    isPostActive: () => opts.ascii || opts.mosh || opts.edge,
     tick,
     render,
     setOption,

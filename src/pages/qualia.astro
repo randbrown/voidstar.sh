@@ -2813,6 +2813,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>beat gap max<span class="qp-val"></span></label>
         <input type="range" min="2" max="30" step="1" value="9">
       </div>
+      <div class="qp-row" data-qp="walk-scope-hydra" title="Hydra layer rides the camera walk, or stays pinned to the screen">
+        <label>hydra</label>
+        <button class="qp-toggle active" id="walk-scope-hydra">walks</button>
+      </div>
+      <div class="qp-row" data-qp="walk-scope-pose" title="Pose overlays (skeleton / sparks / aura / ripples) ride the walk, or stay pinned to the real person on screen">
+        <label>pose</label>
+        <button class="qp-toggle active" id="walk-scope-pose">walks</button>
+      </div>
+      <div class="qp-row" data-qp="walk-scope-post" title="Glitch post (ascii / mosh / edge) rides the walk, or stays pinned. Pinned post re-reads the raw scene, so the walk won't show through an active full-frame glitch">
+        <label>glitch post</label>
+        <button class="qp-toggle active" id="walk-scope-post">walks</button>
+      </div>
     </div>
   </div>
 

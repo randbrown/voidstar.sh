@@ -43,6 +43,16 @@ export const CAM_WALK_DEFAULTS = {
   punch:   0.30,   // [0,1] zoom-punch strength on beat re-aims (0 = off)
   minGapS: 2.0,    // gate: at most one beat re-aim per this many seconds
   maxGapS: 9.0,    // gate: at least one re-aim per this many seconds (idle fallback)
+  // Layer scoping — which optional scene layers ride the walk (true) vs stay
+  // pinned to the screen (false). The fx canvas + transition freeze-frame
+  // always walk; these are the artistic choices around them. The page's
+  // getLayers callback reads these to assemble the layer list.
+  hydra: true,     // Hydra live-coding layer under the fx
+  pose:  true,     // pose canvas: skeleton / sparks / aura / ripples
+  post:  true,     // glitch-post canvas: ascii / mosh / edge output. NOTE:
+                   // pinned post re-reads the RAW (unwalked) fx buffer, so
+                   // while a glitch is fully repainting the frame the walk
+                   // won't show through it — a fixed "HUD reading" look.
 };
 
 // Motion constants. Velocities ease toward per-segment targets with this
@@ -294,6 +304,9 @@ export function createCamWalk({ getLayers, getStageSize, getHardKickAt } = {}) {
     if ('punch'  in patch) cfg.punch  = clamp01(patch.punch);
     if ('minGapS' in patch) cfg.minGapS = Math.max(0.5, Math.min(30, Number(patch.minGapS) || CAM_WALK_DEFAULTS.minGapS));
     if ('maxGapS' in patch) cfg.maxGapS = Math.max(1,   Math.min(60, Number(patch.maxGapS) || CAM_WALK_DEFAULTS.maxGapS));
+    if ('hydra' in patch) cfg.hydra = patch.hydra !== false;
+    if ('pose'  in patch) cfg.pose  = patch.pose  !== false;
+    if ('post'  in patch) cfg.post  = patch.post  !== false;
   }
 
   return {
