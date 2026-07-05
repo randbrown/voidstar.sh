@@ -21,7 +21,8 @@ All paths are under `src/lib/qualia/`.
                                   ▼
                           all qualia fx (visuals)
 
- rig (native ctx):  in → HPF → Earth → Metal → comp → neural amp → cab IR → EQ
+ rig (native ctx):  in → HPF → Earth → Metal → comp → neural amp → cab IR
+                       → EQ → GEQ(7-band) → PEQ(8-band parametric)
                        → [dry / ping-pong delay / reverb] → pan → rig master → limiter → out
  vocoder (own ctx): mic → vocoder bank ⨉ carrier → clarity chain → limiter → mute gate → out
 ```
@@ -90,18 +91,32 @@ hard-bypasses (rewired around, under a ~6 ms gain dip): a "transparent" `Dynamic
 still delays the signal by its ~6 ms lookahead, and this is the live monitoring path.
 
 ```
-in → HPF → Earth(drive) → Metal(drive) → comp → neural amp → cab(IR) → EQ
+in → HPF → Earth(drive) → Metal(drive) → comp → neural amp → cab(IR)
+   → EQ(lo/mid/hi) → GEQ(7-band graphic) → PEQ(8-band parametric)
    → [ dry │ ping-pong delay │ reverb ] → pan → output
 ```
 
 - **Earth** = one asymmetric-tanh `WaveShaper` (JFET-voiced) + tone LPF. **Metal** = two cascaded
   shapers + 3-band parametric EQ. **Cab** + **reverb** are `ConvolverNode`s (reverb IR is generated
   decaying noise, rebuilt on decay change). **Delay** is a true ping-pong.
+- **Three post-cab EQs**, coarse → surgical: **eq** (3 fixed shelves/peak, tone knobs), **geq**
+  (Boss GE-7-voiced graphic: 7 octave-spaced peaking bands 100 Hz–6.4 kHz ±15 dB + level), **peq**
+  (ReaEQ-style parametric: 8 bands, each with enable / type peak·shelves·pass·notch / freq / gain /
+  Q). All are plain biquads permanently in the series chain, bypassing to bit-transparent neutral
+  (peaking @ 0 dB) — **zero added latency on or off**, no graph rewiring, negligible CPU. The peq's
+  panel editor (in `looper.js`) draws the composite response on a log-frequency canvas with
+  draggable band handles; the curve is queried from prototype `BiquadFilterNode`s in a dormant
+  `OfflineAudioContext` via `getFrequencyResponse`, so the display is exactly the browser's own
+  filter math. A **live pre/post-peq spectrum** (ReaEQ-style — grey fill in, pink line out) draws
+  behind the curve from two analyser taps inside the strip (`getPeqAnalysers`); analysers are pure
+  sinks whose FFT only runs when read. The static curve paints on demand; the spectrum runs a
+  ~30 fps rAF loop gated on the canvas being visible **and** the rig capture open — zero cost with
+  the panel closed.
 - `createRigStrip(ctx, cfg)` → `{ input, output, setParam, setEnabled, setConfig, getConfig,
   setCabBuffer, setAmpModel, dispose }`. `looper-audio.js` instantiates it and hangs the rig master
   limiter/level/mute *outside* the strip.
 - **Watch out:** drive knobs rebuild 2048-float waveshaper curves on every change (GC churn — see
-  backlog), output-trim constants assume a reference input level, and `dispose()` hand-lists ~40
+  backlog), output-trim constants assume a reference input level, and `dispose()` hand-lists ~55
   nodes (drift risk). The drive shapers use `oversample:'4x'` **only while enabled** — the rig's
   heaviest native cost, and the resamplers add ~4 ms of group delay per shaper (why bypass drops
   to `'none'`).

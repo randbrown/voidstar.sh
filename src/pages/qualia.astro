@@ -1040,7 +1040,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       font-family: var(--font-mono); color: var(--text);
       display: flex; flex-direction: column; overflow: hidden;
       box-shadow: 0 12px 36px rgba(0,0,0,0.45);
-      resize: both;
+      /* resized via panel-pos.js corner/edge handles (any corner), not CSS resize */
     }
     /* Optional frosted backdrop — toggled by the ⬚ button in the header. Default
        off (transparent); enable when the visual behind makes the editor hard to
@@ -1478,7 +1478,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       display: flex; flex-direction: column; overflow: hidden;
       box-shadow: 0 12px 36px rgba(0,0,0,0.45);
       backdrop-filter: blur(8px);
-      resize: both;
+      /* resized via panel-pos.js corner/edge handles (any corner), not CSS resize */
     }
     #sequencer-header {
       display: flex; align-items: center; gap: 0.6rem;
@@ -1531,7 +1531,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       display: flex; flex-direction: column; overflow: hidden;
       box-shadow: 0 12px 36px rgba(0,0,0,0.45);
       backdrop-filter: blur(8px);
-      resize: both;
+      /* resized via panel-pos.js corner/edge handles (any corner), not CSS resize */
     }
     #mixer-header {
       display: flex; align-items: center; gap: 0.6rem;
@@ -1889,7 +1889,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       display: flex; flex-direction: column; overflow: hidden;
       box-shadow: 0 12px 36px rgba(0,0,0,0.45);
       backdrop-filter: blur(8px);
-      resize: both;
+      /* resized via panel-pos.js corner/edge handles (any corner), not CSS resize */
     }
     #looper-header {
       display: flex; align-items: center; gap: 0.5rem;
@@ -1988,7 +1988,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #rig-strip-util-body {
       display: flex; flex-wrap: wrap; gap: 0.4rem;
       padding: 0.45rem 0.6rem 0.5rem;
-      max-height: 220px; overflow-y: auto;
+      /* Tall enough to show the peq editor (canvas + band controls) in full;
+         scrolls when the panel is shorter — resize the panel for more room. */
+      max-height: 470px; overflow-y: auto;
     }
     /* Utility drawer — hpf/comp/eq/pan behind a chevron subhead like the loop. */
     #rig-strip-util { border-top: 1px solid var(--border); }
@@ -2030,8 +2032,28 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-stage.collapsed .rig-ctl,
     .rig-stage.collapsed .rig-drive-model,
     .rig-stage.collapsed .rig-drive-params,
+    .rig-stage.collapsed .rig-peq,
     .rig-stage.collapsed .rig-cab-load { display: none; }
     .rig-stage.collapsed { min-width: 70px; flex: 0 0 auto; }
+
+    /* ── surgical EQs (utility drawer) ─────────────────────────────────────
+       geq gets a wider basis so its 8 sliders don't crush; peq spans the full
+       drawer row — its response canvas needs the width to be surgical. */
+    #rig-strip-util-body .rig-stage[data-stage="geq"]:not(.collapsed) { flex: 1 1 240px; }
+    #rig-strip-util-body .rig-stage[data-stage="peq"]:not(.collapsed) { flex: 1 1 100%; }
+    .rig-peq-canvas {
+      display: block; width: 100%; height: 110px;
+      background: rgba(0,0,0,0.34); border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 5px; touch-action: none; cursor: crosshair;
+    }
+    .rig-stage:not(.on) .rig-peq-canvas { opacity: 0.55; }
+    .rig-peq-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 0.25rem; margin: 0.25rem 0 0.1rem; }
+    .rig-peq-chip { padding: 0.02rem 0.35rem; font-size: 0.56rem; line-height: 1.4; color: var(--muted); }
+    .rig-peq-chip.on { color: var(--text); }
+    .rig-peq-chip.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.12); }
+    .rig-peq-onbtn { padding: 0.02rem 0.4rem; font-size: 0.56rem; line-height: 1.4; min-width: 2.6ch; color: var(--muted); }
+    .rig-peq-onbtn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.12); }
+    .rig-peq-type { flex: 0 1 auto; min-width: 0; font-size: 0.6rem; margin-left: auto; }
     .rig-stage-chev {
       padding: 0; font-size: 0.55rem; line-height: 1;
       min-width: 1.2ch; color: var(--muted); background: none; border: none; cursor: pointer;
@@ -2283,7 +2305,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       display: flex; flex-direction: column; overflow: hidden;
       box-shadow: 0 12px 36px rgba(0,0,0,0.45);
       backdrop-filter: blur(8px);
-      resize: both;
+      /* resized via panel-pos.js corner/edge handles (any corner), not CSS resize */
     }
     #vocoder-header {
       display: flex; align-items: center; gap: 0.6rem;

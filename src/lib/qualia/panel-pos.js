@@ -11,7 +11,7 @@ export function savePanelPos(id, panel) {
   if (!panel) return;
   const data = { left: panel.style.left, top: panel.style.top };
   // Only persist width/height when the user has explicitly resized
-  // (panels use CSS `resize: both` — the browser writes to style.*).
+  // (the corner/edge handles below write to style.*).
   if (panel.style.width)  data.width  = panel.style.width;
   if (panel.style.height) data.height = panel.style.height;
   setJSON(`${NS}.${id}`, data);
@@ -47,6 +47,112 @@ export function restorePanelPos(id, panel) {
 
 export function clearPanelPos(id) {
   removeRaw(`${NS}.${id}`);
+}
+
+// ── any-corner / any-edge resize ────────────────────────────────────────────
+// Panels used to rely on CSS `resize: both`, which only gives the browser's
+// bottom-right grip — awkward when that corner sits off the bottom of the
+// screen. This injects four corner + four edge handles (pointer events, so
+// mouse + touch) that resize from any side, keeping the *opposite* edge
+// anchored. Corner hit targets are deliberately large (14px) so they're easy
+// to grab mid-set.
+const RESIZE_DIRS = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+const RESIZE_CURSORS = {
+  n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize',
+  ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize',
+};
+const CORNER_PX = 14;   // corner handle size (square)
+const EDGE_PX   = 6;    // edge strip thickness
+const VP_PAD    = 4;    // keep this many px of the panel inside the viewport
+
+/**
+ * Attach custom resize handles to a floating panel.
+ *
+ * @param {string} id       persistence id (same one used by savePanelPos)
+ * @param {HTMLElement} panel
+ * @param {{ onStart?: () => void }} [hooks]  onStart fires on the first
+ *        pointerdown of every resize, BEFORE any geometry changes — callers
+ *        use it to materialize a still-centered panel (transform → left/top)
+ *        and flip their movedByUser flag, exactly like drag-start does.
+ */
+export function attachPanelResize(id, panel, hooks = {}) {
+  if (!panel || panel.__vsResize) return;
+  panel.__vsResize = true;
+
+  for (const dir of RESIZE_DIRS) {
+    const h = document.createElement('div');
+    h.className = `panel-resize panel-resize-${dir}`;
+    const s = h.style;
+    s.position = 'absolute';
+    s.zIndex = '40';
+    s.cursor = RESIZE_CURSORS[dir];
+    s.touchAction = 'none';
+    s.background = 'transparent';
+    const corner = dir.length === 2;
+    const px = (corner ? CORNER_PX : EDGE_PX) + 'px';
+    if (dir.includes('n')) s.top = '0'; else if (dir.includes('s')) s.bottom = '0';
+    if (dir.includes('w')) s.left = '0'; else if (dir.includes('e')) s.right = '0';
+    if (corner) { s.width = px; s.height = px; }
+    else if (dir === 'n' || dir === 's') { s.left = CORNER_PX + 'px'; s.right = CORNER_PX + 'px'; s.height = px; }
+    else { s.top = CORNER_PX + 'px'; s.bottom = CORNER_PX + 'px'; s.width = px; }
+
+    let active = null;   // { pid, x0, y0, rect, minW, minH }
+    h.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      hooks.onStart?.();
+      // Belt & braces: if the panel is still centered via transform (no
+      // caller hook materialized it), pin it now so left/top anchors are real.
+      if (!panel.style.left) {
+        const r0 = panel.getBoundingClientRect();
+        panel.style.transform = 'none';
+        panel.style.left = r0.left + 'px';
+        panel.style.top  = r0.top + 'px';
+      }
+      const cs = getComputedStyle(panel);
+      active = {
+        pid: e.pointerId, x0: e.clientX, y0: e.clientY,
+        rect: panel.getBoundingClientRect(),
+        minW: parseFloat(cs.minWidth) || 120,
+        minH: parseFloat(cs.minHeight) || 80,
+      };
+      try { h.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault(); e.stopPropagation();
+    });
+    h.addEventListener('pointermove', (e) => {
+      if (!active || e.pointerId !== active.pid) return;
+      const { rect, minW, minH } = active;
+      const dx = e.clientX - active.x0;
+      const dy = e.clientY - active.y0;
+      if (dir.includes('e')) {
+        const w = Math.min(Math.max(minW, rect.width + dx), window.innerWidth - rect.left - VP_PAD);
+        panel.style.width = w + 'px';
+      } else if (dir.includes('w')) {
+        const w = Math.min(Math.max(minW, rect.width - dx), rect.right - VP_PAD);
+        panel.style.width = w + 'px';
+        // Anchor the RIGHT edge — re-read the rect so any CSS max-* clamp
+        // can't make left drift away from the real rendered width.
+        panel.style.left = (rect.right - panel.getBoundingClientRect().width) + 'px';
+      }
+      if (dir.includes('s')) {
+        const hgt = Math.min(Math.max(minH, rect.height + dy), window.innerHeight - rect.top - VP_PAD);
+        panel.style.height = hgt + 'px';
+      } else if (dir.includes('n')) {
+        const hgt = Math.min(Math.max(minH, rect.height - dy), rect.bottom - VP_PAD);
+        panel.style.height = hgt + 'px';
+        // Anchor the BOTTOM edge (same rationale as the left-edge case).
+        panel.style.top = (rect.bottom - panel.getBoundingClientRect().height) + 'px';
+      }
+    });
+    const end = (e) => {
+      if (!active || e.pointerId !== active.pid) return;
+      active = null;
+      savePanelPos(id, panel);
+      try { h.releasePointerCapture(e.pointerId); } catch {}
+    };
+    h.addEventListener('pointerup', end);
+    h.addEventListener('pointercancel', end);
+    panel.appendChild(h);
+  }
 }
 
 /**
@@ -126,7 +232,23 @@ export function makeDraggablePanel(id, panel) {
     header.addEventListener('pointercancel', end);
   }
 
-  // Persist position/size when the user resizes via CSS `resize: both`.
+  // Any-corner/edge resize handles. On resize-start, materialize a
+  // still-centered panel to concrete left/top (same as drag-start) so the
+  // anchored-edge math works, and mark it user-moved so reposition() stops
+  // re-centering it.
+  if (panel) {
+    attachPanelResize(id, panel, { onStart: () => {
+      if (movedByUser) return;
+      const r = panel.getBoundingClientRect();
+      panel.style.transform = 'none';
+      panel.style.left = r.left + 'px';
+      panel.style.top  = r.top + 'px';
+      movedByUser = true;
+    } });
+  }
+
+  // Persist size changes that don't come from the handles' own pointerup
+  // (e.g. content-driven or script-driven size shifts after a user resize).
   if (panel && typeof ResizeObserver !== 'undefined') {
     let _rDebounce = 0;
     new ResizeObserver(() => {

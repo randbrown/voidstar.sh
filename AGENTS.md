@@ -20,7 +20,7 @@ the main workstation page `/qualia` (`src/pages/qualia.astro` → wired together
 |---|---|---|
 | **Live coding** | Strudel REPL + Hydra visual-synth bridge; pattern code can drive fx params via `globalThis.qualia.setParam` | `strudel-hydra.js`, `strudel-reference.js` |
 | **Sequencer** | Custom Tone.js step/pattern drum machine, cycle-locked to Strudel | `sequencer.js`, `sequencer-voices.js`, `sequencer-patterns.js` |
-| **Guitar rig / pedalboard** | Native-Web-Audio channel strip: HPF → drive → **neural amp model** → cab IR → EQ → comp → delay/reverb → pan, with a tuner | `rig-strip.js`, `neural-amp-model.js`, `worklets/neural-amp.js` |
+| **Guitar rig / pedalboard** | Native-Web-Audio channel strip: HPF → drives → comp → **neural amp model** → cab IR → EQ ×3 (3-band tone · 7-band graphic · 8-band parametric) → delay/reverb → pan, with a tuner | `rig-strip.js`, `neural-amp-model.js`, `worklets/neural-amp.js` |
 | **Looper** | Multi-track live-looping pedal, grid-snapped to the Strudel cycle, with retroactive "grab", time-stretch, and IndexedDB persistence | `looper*.js`, `worklets/looper-recorder.js`, `looper-stretch.js` |
 | **Vox** | Channel vocoder (for spoken narration), harmonizer (chord/scale/track modes), formant-preserving voice shifter | `vocoder.js`, `harmonizer.js`, `voice-shifter.js`, `pitch*.js`, `worklets/formant-shift.js`, `vox-presets.js` |
 | **Audio analysis** | Multi-source FFT/RMS/beat engine that produces the per-frame `AudioFrame` driving all visuals; also the mixer + per-track limiters | `audio.js`, `mixer.js`, `limiter.js` |
