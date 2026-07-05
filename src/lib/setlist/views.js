@@ -6,7 +6,7 @@ import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
 import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getReferencePlaylistTracks } from './sync.js';
-import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, libraryHealth } from './bulk.js';
+import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc } from './gdrive-backup.js';
@@ -314,7 +314,7 @@ export async function renderDashboard(root) {
     navigate(`#setlist/${sl.id}/edit`);
   }));
   actions.appendChild(btn('library', 'sl-btn-ghost', () => navigate('#library')));
-  actions.appendChild(btn('sources', 'sl-btn-ghost', () => navigate('#settings')));
+  actions.appendChild(btn('settings', 'sl-btn-ghost', () => navigate('#settings')));
   bar.appendChild(actions);
   root.appendChild(bar);
 
@@ -437,7 +437,7 @@ async function autoBackupFromGdrive() {
   _autoBackupDone = true;
   // Silent: only back up if we already hold a valid token. If the token has
   // expired, skip rather than popping an OAuth window the browser will block
-  // (the user can re-connect from Sources & Sync, which is a real gesture).
+  // (the user can re-connect from Settings, which is a real gesture).
   const client = await initGdriveBackup({ interactive: false });
   if (!client) return;
   setBackupClient(client);
@@ -486,11 +486,33 @@ export async function renderLibrary(root) {
   }
   root.appendChild(filterRow);
 
+  // Library tools — the whole-library utility passes (health check, bulk
+  // fill-empty passes, auto-link, offline downloads, batch link) live here
+  // with the songs they operate on. Folded away by default so the everyday
+  // search-and-tap list stays lean.
+  const toolsToggle = btn('⚒ library tools', 'sl-btn-ghost sl-btn-sm sl-lib-tools-toggle', () => {
+    const hidden = toolsPanel.classList.toggle('sl-hidden');
+    toolsToggle.textContent = hidden ? '⚒ library tools' : '⚒ hide library tools';
+  });
+  root.appendChild(toolsToggle);
+  const toolsPanel = buildLibraryTools(root, { onSongsChanged: () => reloadSongs() });
+  toolsPanel.classList.add('sl-hidden');
+  root.appendChild(toolsPanel);
+
   const listEl = el('div', 'sl-song-list');
   root.appendChild(listEl);
 
-  const allSongs = await store.getAllSongs();
+  let allSongs = await store.getAllSongs();
   allSongs.sort((a, b) => a.title.localeCompare(b.title));
+
+  // Re-pull the list after a tools pass mutates songs (new keys, artists,
+  // badges) — without rebuilding the whole view, which would wipe the pass's
+  // status line and failure list mid-read.
+  async function reloadSongs() {
+    allSongs = await store.getAllSongs();
+    allSongs.sort((a, b) => a.title.localeCompare(b.title));
+    renderList(search.value);
+  }
 
   function renderList(filter) {
     const lower = (filter || '').toLowerCase();
@@ -520,6 +542,276 @@ export async function renderLibrary(root) {
 
   renderList('');
   search.addEventListener('input', () => renderList(search.value));
+}
+
+// ── Library tools: whole-library utility passes ──
+// Everything here operates on song DATA across the whole library; each tool
+// has a "this song only" counterpart on the song page (read chart / fetch
+// info / steel summary / checkup / cache offline / search for chart / relink
+// spotify). Config — worker URL, folders, accounts, backup — stays in
+// Settings. `root` hosts the auto-link overlay; `onSongsChanged` lets the
+// library list re-pull after a pass fills fields.
+function buildLibraryTools(root, { onSongsChanged } = {}) {
+  const wrap = el('div', 'sl-lib-tools');
+  const songsChanged = () => { try { onSongsChanged?.(); } catch {} };
+
+  // ── Library helpers: whole-library administrative passes (bulk.js) ──
+  // The song page's per-song buttons ("read chart", "fetch info", "steel
+  // summary"), run across every song that still needs them — so keeping the
+  // library filled in doesn't require opening songs one by one. All passes
+  // are fill-empty; the health check is how you see what's still missing.
+  const helpersSection = el('div', 'sl-section');
+  helpersSection.innerHTML = `
+    <div class="sl-section-title">library helpers</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Bulk passes over the whole song library. They only fill fields that are
+      still empty — nothing you've set by hand gets overwritten. Start with the
+      health check to see what's missing.
+    </div>
+  `;
+  const helperStatus = el('div', 'sl-hint');
+  const helperResults = el('div', 'sl-source-list');
+  const helperActions = el('div', 'sl-action-bar');
+
+  // One pass at a time; per-song progress in the status line; failures land
+  // in a tappable list (open the song, fix it there) instead of vanishing.
+  let helperRunning = false;
+  function renderHelperFailures(failures) {
+    for (const f of failures) {
+      const row = el('div', 'sl-source-row');
+      const label = el('span', 'sl-source-url');
+      label.textContent = `${f.song.title} — ${f.reason}`;
+      row.appendChild(label);
+      row.appendChild(btn('open', 'sl-btn-ghost sl-btn-sm', () => navigate(`#song/${f.song.id}`)));
+      helperResults.appendChild(row);
+    }
+  }
+  function helperButton(label, title, run, summarize) {
+    const b = btn(label, 'sl-btn-ghost sl-btn-sm', async () => {
+      if (helperRunning) return;
+      helperRunning = true;
+      b.disabled = true;
+      helperResults.innerHTML = '';
+      helperStatus.style.color = '';
+      try {
+        const res = await run(({ done, total, updated, title: t }) => {
+          helperStatus.textContent = `${done}/${total} — ${t}${updated ? ` · ${updated} updated` : ''}`;
+        });
+        if (res.aborted) {
+          helperStatus.textContent = `${label}: ${res.aborted}`;
+          helperStatus.style.color = 'var(--pink)';
+          renderHelperFailures(res.failures || []);
+        } else {
+          helperStatus.textContent = summarize(res);
+          helperStatus.style.color = res.failures?.length ? 'var(--pink)' : 'var(--green)';
+          renderHelperFailures(res.failures || []);
+        }
+        if (res.updated) songsChanged();
+      } catch (e) {
+        helperStatus.textContent = `${label} failed: ${e.message}`;
+        helperStatus.style.color = 'var(--pink)';
+      }
+      helperRunning = false;
+      b.disabled = false;
+    });
+    b.title = title;
+    return b;
+  }
+
+  // Health check — read-only, instant, and the map for the other passes.
+  // Each gap expands into the actual songs, tappable to jump there.
+  helperActions.appendChild(btn('check library health', 'sl-btn-primary sl-btn-sm', async () => {
+    helperResults.innerHTML = '';
+    helperStatus.style.color = '';
+    const h = await libraryHealth();
+    if (!h.total) { helperStatus.textContent = 'No songs yet.'; return; }
+    const gaps = h.checks.filter(c => c.songs.length);
+    if (!gaps.length) {
+      helperStatus.textContent = `${h.total} songs — everything filled in ✓`;
+      helperStatus.style.color = 'var(--green)';
+      return;
+    }
+    helperStatus.textContent = `${h.total} songs — still missing:`;
+    for (const c of gaps) {
+      const row = el('div', 'sl-source-row');
+      row.appendChild(el('span', 'sl-source-url', `${c.label}: <b>${c.songs.length}</b>`));
+      const sub = el('div', 'sl-health-sublist sl-hidden');
+      for (const s of c.songs) {
+        const songRow = el('div', 'sl-health-song');
+        songRow.textContent = s.title + (s.artist ? ` — ${s.artist}` : '');
+        songRow.addEventListener('click', () => navigate(`#song/${s.id}`));
+        sub.appendChild(songRow);
+      }
+      const toggle = btn('list', 'sl-btn-ghost sl-btn-sm', () => {
+        const hidden = sub.classList.toggle('sl-hidden');
+        toggle.textContent = hidden ? 'list' : 'hide';
+      });
+      row.appendChild(toggle);
+      helperResults.appendChild(row);
+      helperResults.appendChild(sub);
+    }
+  }));
+
+  helperActions.appendChild(helperButton(
+    're-scan all charts',
+    'Pull key / BPM / key-change info out of every linked chart — scrapes doc text, AI-reads scanned images for songs still missing a key (the song page\'s "read chart", library-wide)',
+    (onProgress) => scanAllCharts(onProgress),
+    (res) => `Scanned ${res.total} chart${res.total === 1 ? '' : 's'} · ${res.updated} song${res.updated === 1 ? '' : 's'} updated${res.failures.length ? ` · ${res.failures.length} still missing a key:` : ''}`,
+  ));
+
+  helperActions.appendChild(helperButton(
+    'fetch info & lyrics',
+    'Fill missing metadata (artist, key, genre, year, artwork, length) from music APIs and fetch lyrics from LRCLIB, for every song still missing any of it — the song page\'s "fetch info", library-wide',
+    (onProgress) => fetchInfoForAllSongs(onProgress),
+    (res) => `${res.total} song${res.total === 1 ? '' : 's'} needed info · ${res.updated} updated (${res.lyricsFilled} got lyrics) · ${res.skipped} already complete${res.failures.length ? ` · ${res.failures.length} failed:` : ''}`,
+  ));
+
+  helperActions.appendChild(helperButton(
+    'AI steel summaries',
+    'Draft a steel-direction summary for every song that doesn\'t have one yet — a web-search-grounded AI pass, roughly 15-30 seconds per song',
+    async (onProgress) => {
+      const missing = (await store.getAllSongs()).filter(s => !s.steelSummary).length;
+      if (!missing) return { total: 0, updated: 0, failures: [] };
+      if (!confirm(`Draft AI steel summaries for ${missing} song${missing === 1 ? '' : 's'} without one? Takes roughly 15-30 seconds per song — leave the tab open.`)) {
+        return { aborted: 'cancelled' };
+      }
+      return summarizeSteelForAllSongs(onProgress);
+    },
+    (res) => (res.total === 0
+      ? 'Every song already has a steel summary ✓'
+      : `${res.updated} of ${res.total} summaries drafted${res.failures.length ? ` · ${res.failures.length} failed:` : ''}`),
+  ));
+
+  helpersSection.appendChild(helperActions);
+  helpersSection.appendChild(helperStatus);
+  helpersSection.appendChild(helperResults);
+  wrap.appendChild(helpersSection);
+
+  // Global auto-link pass (this is the matching feature, not Drive backup)
+  const syncSection = el('div', 'sl-section');
+  syncSection.innerHTML = '<div class="sl-section-title">auto-link all songs</div>';
+  syncSection.appendChild(btn('auto-link now', 'sl-btn-accent', async () => {
+    await runGlobalSync(root);
+    songsChanged();
+  }));
+  syncSection.appendChild(el('div', 'sl-hint', 'Scans your Spotify playlists and chart folders, and fills each song\'s missing Spotify track + chart link. Never overwrites links you already have.'));
+  wrap.appendChild(syncSection);
+
+  // ── Offline charts ──
+  const offlineSection = el('div', 'sl-section');
+  offlineSection.innerHTML = `
+    <div class="sl-section-title">offline charts</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Cache every song's chart as an image so perform mode works with no signal.
+      Charts also auto-cache the first time you perform a setlist while online.
+      Requires the sync worker to be deployed.
+    </div>
+  `;
+  const offlineStatus = el('div', 'sl-hint');
+  const offlineActions = el('div', 'sl-action-bar');
+  async function refreshOfflineStatus() {
+    const { cached, total } = await getAllChartsOfflineStatus();
+    offlineStatus.textContent = total
+      ? `${cached}/${total} charts cached${cached >= total ? ' — fully offline-ready' : ''}`
+      : 'No charts linked yet.';
+    offlineStatus.style.color = total && cached >= total ? 'var(--green)' : '';
+  }
+  const dlAllBtn = btn('download all charts', 'sl-btn-primary sl-btn-sm', async () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      offlineStatus.textContent = 'Offline — connect to a network first.';
+      offlineStatus.style.color = 'var(--pink)';
+      return;
+    }
+    dlAllBtn.disabled = true;
+    const res = await cacheAllCharts(({ done, total }) => {
+      offlineStatus.textContent = `caching ${done}/${total}…`;
+      offlineStatus.style.color = '';
+    });
+    dlAllBtn.disabled = false;
+    await refreshOfflineStatus();
+    if (res.failed) {
+      offlineStatus.textContent += ` · ${res.failed} couldn't cache (check worker / sharing)`;
+      offlineStatus.style.color = 'var(--pink)';
+    }
+    // Caching a text chart fills an empty song.key from its header.
+    songsChanged();
+  });
+  offlineActions.appendChild(dlAllBtn);
+  offlineSection.appendChild(offlineActions);
+  offlineSection.appendChild(offlineStatus);
+  wrap.appendChild(offlineSection);
+  refreshOfflineStatus();
+
+  // Manual chart batch import
+  const chartSection = el('div', 'sl-section');
+  chartSection.innerHTML = `
+    <div class="sl-section-title">batch link charts</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Paste chart URLs with song titles, one per line. The app will fuzzy-match against your song library.<br>
+      Format: <code>URL  Song Title - Artist</code> or <code>Song Title  URL</code>
+    </div>
+  `;
+  const chartTextarea = el('textarea', 'sl-textarea');
+  chartTextarea.rows = 6;
+  chartTextarea.placeholder = 'https://docs.google.com/document/d/abc  Two Dozen Roses - Shenandoah\nhttps://drive.google.com/file/d/xyz  Amarillo By Morning';
+  chartSection.appendChild(chartTextarea);
+  chartSection.appendChild(btn('match & link', 'sl-btn-primary', async () => {
+    const text = chartTextarea.value.trim();
+    if (!text) return;
+    const parsed = parseBatchChartUrls(text);
+    if (!parsed.length) { alert('No valid URLs found.'); return; }
+
+    const songs = await store.getAllSongs();
+    let matched = 0;
+    for (const chart of parsed) {
+      if (!chart.title) continue;
+      const candidates = songs.filter(s => !s.chartUrl);
+      const result = fuzzyMatch(chart.title, candidates);
+      if (result) {
+        result.match.chartUrl = chart.url;
+        await store.putSong(result.match);
+        matched++;
+      }
+    }
+    alert(`Linked ${matched} chart${matched !== 1 ? 's' : ''} out of ${parsed.length} entries.`);
+    chartTextarea.value = '';
+    if (matched) songsChanged();
+  }));
+  wrap.appendChild(chartSection);
+
+  // Spotify search links fallback
+  const spotifySection = el('div', 'sl-section');
+  spotifySection.innerHTML = `
+    <div class="sl-section-title">spotify quick-link</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">
+      Songs without a Spotify link get a "search" button that opens Spotify search.
+      With the sync worker deployed, auto-link fills links from your setlist playlists.
+    </div>
+  `;
+  const unlinkedBtn = btn('show unlinked songs', 'sl-btn-ghost', async () => {
+    const songs = await store.getAllSongs();
+    const unlinked = songs.filter(s => !s.spotifyUri);
+    unlinkedList.innerHTML = '';
+    if (!unlinked.length) {
+      unlinkedList.appendChild(emptyState('All songs linked!'));
+      return;
+    }
+    for (const s of unlinked) {
+      const row = el('div', 'sl-source-row');
+      const searchUrl = spotifySearchUrl(s.title, s.artist);
+      row.innerHTML = `
+        <span class="sl-source-url">${s.title}</span>
+        <a href="${searchUrl}" target="_blank" rel="noopener" class="sl-btn sl-btn-spotify sl-btn-sm">search</a>
+      `;
+      unlinkedList.appendChild(row);
+    }
+  });
+  spotifySection.appendChild(unlinkedBtn);
+  const unlinkedList = el('div', 'sl-source-list');
+  spotifySection.appendChild(unlinkedList);
+  wrap.appendChild(spotifySection);
+
+  return wrap;
 }
 
 // ── Setlist View (compact cards) ──
@@ -1457,6 +1749,27 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     readBtn.title = 'Pull key / BPM / key-change notes from the linked chart — scrapes doc text, AI-reads a scanned image';
     actionBar.appendChild(readBtn);
+
+    // "cache offline" — the library's "download all charts", this song only:
+    // pin this chart into the offline cache so perform mode works with no
+    // signal. (Text charts also fill an empty key from the chart header.)
+    const cacheBtn = btn('cache offline', 'sl-btn-ghost sl-btn-sm', async () => {
+      cacheBtn.disabled = true;
+      cacheBtn.textContent = 'caching…';
+      const hadKey = !!song.key;
+      const r = await cacheChartForSong(song, getSources().workerUrl);
+      if (r.ok) {
+        cacheBtn.textContent = '✓ cached offline';
+        // cacheChartForSong persists a key it finds — show it.
+        if (!hadKey && song.key) setTimeout(() => refresh(), 1200);
+      } else {
+        cacheBtn.textContent = 'cache failed';
+        alert(`couldn't cache this chart: ${r.reason}`);
+      }
+      setTimeout(() => { cacheBtn.textContent = 'cache offline'; cacheBtn.disabled = false; }, 2200);
+    });
+    cacheBtn.title = 'Download this chart into the offline cache so perform mode works with no signal';
+    actionBar.appendChild(cacheBtn);
   } else {
     // Chart-fallback ladder: tiers 1+2 search personal + community Drive
     // folders, tier 3 scours the web for shared chart files (all via
@@ -1650,6 +1963,29 @@ export async function renderSongFocus(root, songId, setlistId) {
     }, 2200);
   });
   actionBar.appendChild(relinkBtn);
+  if (!song.spotifyUri) {
+    // No link yet — a raw Spotify search too (the quick-link tool's per-song
+    // "search"), for when the reference playlists don't carry the song.
+    const spSearchBtn = btn('spotify search', 'sl-btn-spotify sl-btn-sm', () => {
+      window.open(spotifySearchUrl(song.title, song.artist), '_blank');
+    });
+    spSearchBtn.title = 'Open a Spotify search for this song in a new tab';
+    actionBar.appendChild(spSearchBtn);
+  }
+
+  // "checkup" — the library health check, this song only: list what's still
+  // missing so the buttons above can fill it.
+  const checkupHint = el('div', 'sl-hint');
+  const checkupBtn = btn('checkup', 'sl-btn-ghost sl-btn-sm', () => {
+    const missing = songHealth(song);
+    checkupHint.textContent = missing.length
+      ? `still missing: ${missing.join(' · ')}`
+      : 'everything filled in ✓';
+    checkupHint.style.color = missing.length ? 'var(--pink)' : 'var(--green)';
+  });
+  checkupBtn.title = 'Check what this song is still missing (key, chart, lyrics, spotify link, artist, steel summary)';
+  actionBar.appendChild(checkupBtn);
+
   actionBar.appendChild(btn('⇣', 'sl-btn-icon', async () => {
     const data = await store.exportSong(songId);
     if (data) downloadJson(data, `song-${song.title.replace(/\s+/g, '-').toLowerCase()}.json`);
@@ -1658,6 +1994,7 @@ export async function renderSongFocus(root, songId, setlistId) {
   // Drive client is configured.
   if (isGdriveBackupEnabled() || needsReconnect()) actionBar.appendChild(syncNowButton());
   root.appendChild(actionBar);
+  root.appendChild(checkupHint);
   if (chartCandidatesWrap) root.appendChild(chartCandidatesWrap);
   root.appendChild(spotifyPickerWrap);
 
@@ -2046,8 +2383,11 @@ async function runGlobalSync(root) {
 // ── Settings ──
 
 export async function renderSettings(root) {
-  const bar = topBar('sources & auto-link', '#home');
+  const bar = topBar('settings', '#home');
   root.appendChild(bar);
+  // Settings is config only: worker URL, chart sources, accounts, backup.
+  // Everything that OPERATES on the songs lives with them on the library page.
+  root.appendChild(el('div', 'sl-hint', 'Library-wide passes (health check, re-scan, fetch info, steel summaries, auto-link, offline downloads) live on the library page under "library tools".'));
 
   const sources = getSources();
 
@@ -2118,74 +2458,6 @@ export async function renderSettings(root) {
     'communityFolders',
   ));
 
-  // Manual chart batch import
-  const chartSection = el('div', 'sl-section');
-  chartSection.innerHTML = `
-    <div class="sl-section-title">batch link charts</div>
-    <div class="sl-hint" style="margin-bottom:0.5rem">
-      Paste chart URLs with song titles, one per line. The app will fuzzy-match against your song library.<br>
-      Format: <code>URL  Song Title - Artist</code> or <code>Song Title  URL</code>
-    </div>
-  `;
-  const chartTextarea = el('textarea', 'sl-textarea');
-  chartTextarea.rows = 6;
-  chartTextarea.placeholder = 'https://docs.google.com/document/d/abc  Two Dozen Roses - Shenandoah\nhttps://drive.google.com/file/d/xyz  Amarillo By Morning';
-  chartSection.appendChild(chartTextarea);
-  chartSection.appendChild(btn('match & link', 'sl-btn-primary', async () => {
-    const text = chartTextarea.value.trim();
-    if (!text) return;
-    const parsed = parseBatchChartUrls(text);
-    if (!parsed.length) { alert('No valid URLs found.'); return; }
-
-    const songs = await store.getAllSongs();
-    let matched = 0;
-    for (const chart of parsed) {
-      if (!chart.title) continue;
-      const candidates = songs.filter(s => !s.chartUrl);
-      const result = fuzzyMatch(chart.title, candidates);
-      if (result) {
-        result.match.chartUrl = chart.url;
-        await store.putSong(result.match);
-        matched++;
-      }
-    }
-    alert(`Linked ${matched} chart${matched !== 1 ? 's' : ''} out of ${parsed.length} entries.`);
-    chartTextarea.value = '';
-  }));
-  root.appendChild(chartSection);
-
-  // Spotify search links fallback
-  const spotifySection = el('div', 'sl-section');
-  spotifySection.innerHTML = `
-    <div class="sl-section-title">spotify quick-link</div>
-    <div class="sl-hint" style="margin-bottom:0.5rem">
-      Songs without a Spotify link get a "search" button that opens Spotify search.
-      With the sync worker deployed, the sync button auto-links from your setlist playlists.
-    </div>
-  `;
-  const unlinkedBtn = btn('show unlinked songs', 'sl-btn-ghost', async () => {
-    const songs = await store.getAllSongs();
-    const unlinked = songs.filter(s => !s.spotifyUri);
-    unlinkedList.innerHTML = '';
-    if (!unlinked.length) {
-      unlinkedList.appendChild(emptyState('All songs linked!'));
-      return;
-    }
-    for (const s of unlinked) {
-      const row = el('div', 'sl-source-row');
-      const searchUrl = spotifySearchUrl(s.title, s.artist);
-      row.innerHTML = `
-        <span class="sl-source-url">${s.title}</span>
-        <a href="${searchUrl}" target="_blank" rel="noopener" class="sl-btn sl-btn-spotify sl-btn-sm">search</a>
-      `;
-      unlinkedList.appendChild(row);
-    }
-  });
-  spotifySection.appendChild(unlinkedBtn);
-  const unlinkedList = el('div', 'sl-source-list');
-  spotifySection.appendChild(unlinkedList);
-  root.appendChild(spotifySection);
-
   // Spotify user login (PKCE) — playlist reads run as the signed-in user.
   // Needed when the worker reports "playlist not readable with client
   // credentials" (newer Spotify app registrations), and for private or
@@ -2233,143 +2505,6 @@ export async function renderSettings(root) {
   spotifyAuthSection.appendChild(spotifyAuthActions);
   spotifyAuthSection.appendChild(spotifyAuthStatus);
   root.appendChild(spotifyAuthSection);
-
-  // Global auto-link pass (this is the matching feature, not Drive backup)
-  const syncSection = el('div', 'sl-section');
-  syncSection.innerHTML = '<div class="sl-section-title">auto-link all songs</div>';
-  syncSection.appendChild(btn('auto-link now', 'sl-btn-accent', () => runGlobalSync(root)));
-  syncSection.appendChild(el('div', 'sl-hint', 'Scans your Spotify playlists and chart folders, and fills each song\'s missing Spotify track + chart link. Never overwrites links you already have.'));
-  root.appendChild(syncSection);
-
-  // ── Library helpers: whole-library administrative passes (bulk.js) ──
-  // The song page's per-song buttons ("read chart", "fetch info", "steel
-  // summary"), run across every song that still needs them — so keeping the
-  // library filled in doesn't require opening songs one by one. All passes
-  // are fill-empty; the health check is how you see what's still missing.
-  const helpersSection = el('div', 'sl-section');
-  helpersSection.innerHTML = `
-    <div class="sl-section-title">library helpers</div>
-    <div class="sl-hint" style="margin-bottom:0.5rem">
-      Bulk passes over the whole song library. They only fill fields that are
-      still empty — nothing you've set by hand gets overwritten. Start with the
-      health check to see what's missing.
-    </div>
-  `;
-  const helperStatus = el('div', 'sl-hint');
-  const helperResults = el('div', 'sl-source-list');
-  const helperActions = el('div', 'sl-action-bar');
-
-  // One pass at a time; per-song progress in the status line; failures land
-  // in a tappable list (open the song, fix it there) instead of vanishing.
-  let helperRunning = false;
-  function renderHelperFailures(failures) {
-    for (const f of failures) {
-      const row = el('div', 'sl-source-row');
-      const label = el('span', 'sl-source-url');
-      label.textContent = `${f.song.title} — ${f.reason}`;
-      row.appendChild(label);
-      row.appendChild(btn('open', 'sl-btn-ghost sl-btn-sm', () => navigate(`#song/${f.song.id}`)));
-      helperResults.appendChild(row);
-    }
-  }
-  function helperButton(label, title, run, summarize) {
-    const b = btn(label, 'sl-btn-ghost sl-btn-sm', async () => {
-      if (helperRunning) return;
-      helperRunning = true;
-      b.disabled = true;
-      helperResults.innerHTML = '';
-      helperStatus.style.color = '';
-      try {
-        const res = await run(({ done, total, updated, title: t }) => {
-          helperStatus.textContent = `${done}/${total} — ${t}${updated ? ` · ${updated} updated` : ''}`;
-        });
-        if (res.aborted) {
-          helperStatus.textContent = `${label}: ${res.aborted}`;
-          helperStatus.style.color = 'var(--pink)';
-        } else {
-          helperStatus.textContent = summarize(res);
-          helperStatus.style.color = res.failures?.length ? 'var(--pink)' : 'var(--green)';
-          renderHelperFailures(res.failures || []);
-        }
-      } catch (e) {
-        helperStatus.textContent = `${label} failed: ${e.message}`;
-        helperStatus.style.color = 'var(--pink)';
-      }
-      helperRunning = false;
-      b.disabled = false;
-    });
-    b.title = title;
-    return b;
-  }
-
-  // Health check — read-only, instant, and the map for the other passes.
-  // Each gap expands into the actual songs, tappable to jump there.
-  helperActions.appendChild(btn('check library health', 'sl-btn-primary sl-btn-sm', async () => {
-    helperResults.innerHTML = '';
-    helperStatus.style.color = '';
-    const h = await libraryHealth();
-    if (!h.total) { helperStatus.textContent = 'No songs yet.'; return; }
-    const gaps = h.checks.filter(c => c.songs.length);
-    if (!gaps.length) {
-      helperStatus.textContent = `${h.total} songs — everything filled in ✓`;
-      helperStatus.style.color = 'var(--green)';
-      return;
-    }
-    helperStatus.textContent = `${h.total} songs — still missing:`;
-    for (const c of gaps) {
-      const row = el('div', 'sl-source-row');
-      row.appendChild(el('span', 'sl-source-url', `${c.label}: <b>${c.songs.length}</b>`));
-      const sub = el('div', 'sl-health-sublist sl-hidden');
-      for (const s of c.songs) {
-        const songRow = el('div', 'sl-health-song');
-        songRow.textContent = s.title + (s.artist ? ` — ${s.artist}` : '');
-        songRow.addEventListener('click', () => navigate(`#song/${s.id}`));
-        sub.appendChild(songRow);
-      }
-      const toggle = btn('list', 'sl-btn-ghost sl-btn-sm', () => {
-        const hidden = sub.classList.toggle('sl-hidden');
-        toggle.textContent = hidden ? 'list' : 'hide';
-      });
-      row.appendChild(toggle);
-      helperResults.appendChild(row);
-      helperResults.appendChild(sub);
-    }
-  }));
-
-  helperActions.appendChild(helperButton(
-    're-scan all charts',
-    'Pull key / BPM / key-change info out of every linked chart — scrapes doc text, AI-reads scanned images for songs still missing a key (the song page\'s "read chart", library-wide)',
-    (onProgress) => scanAllCharts(onProgress),
-    (res) => `Scanned ${res.total} chart${res.total === 1 ? '' : 's'} · ${res.updated} song${res.updated === 1 ? '' : 's'} updated${res.failures.length ? ` · ${res.failures.length} still missing a key:` : ''}`,
-  ));
-
-  helperActions.appendChild(helperButton(
-    'fetch info & lyrics',
-    'Fill missing metadata (artist, key, genre, year, artwork, length) from music APIs and fetch lyrics from LRCLIB, for every song still missing any of it — the song page\'s "fetch info", library-wide',
-    (onProgress) => fetchInfoForAllSongs(onProgress),
-    (res) => `${res.total} song${res.total === 1 ? '' : 's'} needed info · ${res.updated} updated (${res.lyricsFilled} got lyrics) · ${res.skipped} already complete${res.failures.length ? ` · ${res.failures.length} failed:` : ''}`,
-  ));
-
-  helperActions.appendChild(helperButton(
-    'AI steel summaries',
-    'Draft a steel-direction summary for every song that doesn\'t have one yet — a web-search-grounded AI pass, roughly 15-30 seconds per song',
-    async (onProgress) => {
-      const missing = (await store.getAllSongs()).filter(s => !s.steelSummary).length;
-      if (!missing) return { total: 0, updated: 0, failures: [] };
-      if (!confirm(`Draft AI steel summaries for ${missing} song${missing === 1 ? '' : 's'} without one? Takes roughly 15-30 seconds per song — leave the tab open.`)) {
-        return { aborted: 'cancelled' };
-      }
-      return summarizeSteelForAllSongs(onProgress);
-    },
-    (res) => (res.total === 0
-      ? 'Every song already has a steel summary ✓'
-      : `${res.updated} of ${res.total} summaries drafted${res.failures.length ? ` · ${res.failures.length} failed:` : ''}`),
-  ));
-
-  helpersSection.appendChild(helperActions);
-  helpersSection.appendChild(helperStatus);
-  helpersSection.appendChild(helperResults);
-  root.appendChild(helpersSection);
 
   // Google Drive backup
   const gdriveSection = el('div', 'sl-section');
@@ -2453,49 +2588,6 @@ export async function renderSettings(root) {
   gdriveSection.appendChild(safetyActions);
   gdriveSection.appendChild(historyList);
   root.appendChild(gdriveSection);
-
-  // ── Offline charts ──
-  const offlineSection = el('div', 'sl-section');
-  offlineSection.innerHTML = `
-    <div class="sl-section-title">offline charts</div>
-    <div class="sl-hint" style="margin-bottom:0.5rem">
-      Cache every song's chart as an image so perform mode works with no signal.
-      Charts also auto-cache the first time you perform a setlist while online.
-      Requires the sync worker to be deployed.
-    </div>
-  `;
-  const offlineStatus = el('div', 'sl-hint');
-  const offlineActions = el('div', 'sl-action-bar');
-  async function refreshOfflineStatus() {
-    const { cached, total } = await getAllChartsOfflineStatus();
-    offlineStatus.textContent = total
-      ? `${cached}/${total} charts cached${cached >= total ? ' — fully offline-ready' : ''}`
-      : 'No charts linked yet.';
-    offlineStatus.style.color = total && cached >= total ? 'var(--green)' : '';
-  }
-  const dlAllBtn = btn('download all charts', 'sl-btn-primary sl-btn-sm', async () => {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      offlineStatus.textContent = 'Offline — connect to a network first.';
-      offlineStatus.style.color = 'var(--pink)';
-      return;
-    }
-    dlAllBtn.disabled = true;
-    const res = await cacheAllCharts(({ done, total }) => {
-      offlineStatus.textContent = `caching ${done}/${total}…`;
-      offlineStatus.style.color = '';
-    });
-    dlAllBtn.disabled = false;
-    await refreshOfflineStatus();
-    if (res.failed) {
-      offlineStatus.textContent += ` · ${res.failed} couldn't cache (check worker / sharing)`;
-      offlineStatus.style.color = 'var(--pink)';
-    }
-  });
-  offlineActions.appendChild(dlAllBtn);
-  offlineSection.appendChild(offlineActions);
-  offlineSection.appendChild(offlineStatus);
-  root.appendChild(offlineSection);
-  refreshOfflineStatus();
 
   // Export/import sources config
   const configSection = el('div', 'sl-section');

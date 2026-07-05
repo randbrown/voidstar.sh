@@ -43,7 +43,7 @@ config). Tokens and per-device display prefs never ride it:
 
 | Key | Store | Backed up? | What |
 |---|---|---|---|
-| `voidstar.setlist.sources` | localStorage | ✓ `sources` | worker URL + personal/community Drive chart-folder ids (Settings → "sources & auto-link") |
+| `voidstar.setlist.sources` | localStorage | ✓ `sources` | worker URL + personal/community Drive chart-folder ids (Settings) |
 | `voidstar.setlist.gdrive.clientId` | localStorage | ✓ `settings.gdriveClientId` | Google OAuth client id (public identifier, not a secret) |
 | `voidstar.setlist.spotify.clientId` | localStorage | ✓ `settings.spotifyClientId` | Spotify client id — shared by the worker and the PKCE login |
 | `voidstar.setlist.gdrive.token` | localStorage | ✗ | cached OAuth access token (~1 h) |
@@ -157,32 +157,52 @@ song page (`.sl-steel-summary`) and in perform mode
 (`.sl-perform-steel-summary`), always via `textContent`/`esc()` — it's model
 output, never trusted HTML.
 
-### Library helpers — whole-library administrative passes
+### Library tools — whole-library administrative passes
 
-Settings → **"library helpers"** (`src/lib/setlist/bulk.js`) runs the song
+Library page → **"library tools"** (a collapsed panel, `buildLibraryTools` in
+`views.js`; the passes live in `src/lib/setlist/bulk.js`) runs the song
 page's per-song buttons across every song that still needs them, so keeping
-the library filled in doesn't require opening songs one by one. Every pass is
+the library filled in doesn't require opening songs one by one. The rule that
+splits the two pages: Settings holds **config** (worker URL, chart-folder
+sources, Spotify/Google accounts, Drive backup); anything that **operates on
+song data** lives with the songs on the library page — and every library-wide
+tool has a "this song only" counterpart on the song page. Every pass is
 **fill-empty** (hand-set values are never overwritten), runs sequentially with
 per-song progress in a status line, and lists failures as tappable rows that
 open the song:
 
 - **check library health** — read-only report of what's missing per dimension
   (no key / no chart / no lyrics / no Spotify link / no artist / no steel
-  summary), each expandable into the actual songs. Start here.
+  summary), each expandable into the actual songs. Start here. Per-song
+  counterpart: the song page's **"checkup"** button, same dimensions via the
+  shared `songHealth()`/`HEALTH_CHECKS` in `bulk.js`.
 - **re-scan all charts** — `readChartFields()` per charted song: the "read
   chart" ladder (doc-text scrape → cache the chart bytes, which fills keys
   from text-chart headers → AI vision read of a scanned image) extracted from
   the song-page button so both run identical logic. The expensive vision rung
   only fires for songs still missing a key, so re-running the pass on an
-  already-filled library is cheap.
+  already-filled library is cheap. Per-song counterpart: **"read chart"**.
 - **fetch info & lyrics** — "fetch info" library-wide: `/meta/song` metadata
   plus LRCLIB lyrics for every song missing any of it. Lyrics come straight
   from the browser, so this pass works even with no worker configured.
+  Per-song counterpart: **"fetch info"**.
 - **AI steel summaries** — drafts `steelSummary` for every song without one
   (missing-only: at ~15–30 s of grounded LLM per song, regeneration stays on
   the song page). Confirms with a song count before starting; a config
   problem (`no-ai-key`, outdated worker) aborts the pass with one message
-  instead of failing N times.
+  instead of failing N times — and so does any error that repeats on 3
+  consecutive songs (an exhausted API credit balance surfaces as a 400 on
+  every call, not as `no-ai-key`). Per-song counterpart: **"steel summary
+  (AI)"** / "redo steel summary".
+
+The panel also carries the other library-wide actions, each likewise paired
+with a per-song tool: **auto-link now** (↔ "search for chart" + "relink
+spotify"/"pick spotify track"), **download all charts** (↔ "cache offline"),
+**batch link charts** (↔ the edit-details Chart URL field), and **spotify
+quick-link**'s unlinked-songs list (↔ "spotify search" on songs without a
+link). After a pass finishes, the library list re-pulls in place
+(`onSongsChanged`) so new keys/artists/badges show without wiping the pass's
+status line.
 
 ## Backup/Restore vs. Sync — these are different features
 
@@ -244,7 +264,7 @@ instead to keep this distinction intact.
 Drive-backup feature presents as "drive backup" / "backing up" / "backed up"
 (dashboard pill, "⟲ drive backup" buttons, Settings' "back up now" /
 "restore from drive" / "undo last merge/restore"); the matching feature
-presents as "auto-link" ("auto-link now" in Settings, "auto-link" on the
+presents as "auto-link" ("auto-link now" in the library tools, "auto-link" on the
 setlist page, "matching songs…" in the progress overlay). Internal
 identifiers (`sync.js`, `runManualSync`, `sl-sync-*` CSS) keep their names.
 
@@ -382,7 +402,7 @@ four tiers, in order:
 Tiers 1–3 are available per-song via `searchChartForSong()` in `sync.js`
 (the "search for chart" button, which reports its stage and returns
 `{found, tier, candidates, providerDown}`); tiers 1+2 also run in the bulk
-"auto-link now" action in Settings.
+"auto-link now" action in the library tools panel.
 
 **Diagnosability:** every "found nothing" path says why instead of failing
 silently — a bot-blocked keyless search engine surfaces as `providerDown`

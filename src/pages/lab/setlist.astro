@@ -476,6 +476,15 @@ const buildStamp = readBuildStamp();
     .sl-lib-row:hover { background: var(--surface); }
     .sl-lib-title { font-weight: 500; flex: 1; }
     .sl-lib-artist { font-size: 0.82rem; color: var(--text-muted); }
+    /* Library tools — collapsed panel of whole-library passes */
+    .sl-lib-tools-toggle { margin: 0.25rem 0 0.5rem; }
+    .sl-lib-tools {
+      margin-bottom: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--surface) 55%, transparent);
+    }
 
     /* ── Song Focus ── */
     .sl-focus { padding-bottom: 6rem; }
