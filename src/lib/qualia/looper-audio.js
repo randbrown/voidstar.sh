@@ -35,7 +35,7 @@ import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
 import neuralWorkletUrl from './worklets/neural-amp.js?url&no-inline';
 import { createStretchNode } from './looper-stretch.js';
 import { createRigStrip } from './rig-strip.js';
-import { makeLimiter, setLimiterEngaged } from './limiter.js';
+import { makeSoftLimiter, setSoftLimiterEngaged } from './limiter.js';
 
 const MIC_CONSTRAINTS = {
   echoCancellation: false,
@@ -70,6 +70,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let streamDeviceId = '';
   let srcNode = null, recNode = null, sinkGain = null, captureAnalyser = null, tunerAnalyser = null;
   let inputNode = null, monoSplitter = null;
+  let _inputSampleRate = 0;         // capture track rate (0 = unknown) — see clock-match check
   let _channels = 'mono';           // 'mono' (sum to centre) | 'stereo' (pass L/R)
   let usingWorklet = false;
 
@@ -233,6 +234,17 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     const settings = stream.getAudioTracks()[0]?.getSettings() || {};
     streamDeviceId = want || settings.deviceId || '';
 
+    // Clock-match check: when the capture device runs at a different sample
+    // rate than the context (which follows the OUTPUT device), the browser
+    // inserts a hidden resampler on the mic stream — extra latency that no
+    // in-app setting can remove. Surface it (console + getLatencyInfo → rig
+    // panel readout) so the fix — set input & output to the same rate in the
+    // OS audio settings (Audio MIDI Setup on macOS) — is discoverable.
+    _inputSampleRate = Number(settings.sampleRate) || 0;
+    if (_inputSampleRate && Math.abs(_inputSampleRate - ctx.sampleRate) > 1) {
+      console.warn(`[qualia] rig input runs at ${_inputSampleRate} Hz but the audio context (output device) runs at ${ctx.sampleRate} Hz — the browser is resampling the input, adding latency. Set both devices to the same rate in the OS sound settings.`);
+    }
+
     srcNode = ctx.createMediaStreamSource(stream);
 
     // Input channel handling. Everything downstream (strip, recorder, scope,
@@ -385,6 +397,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     srcNode = recNode = sinkGain = sigGain = sigAnalyser = captureAnalyser = tunerAnalyser = null;
     inputNode = monoSplitter = null;
     stream = null; streamOwned = false;
+    _inputSampleRate = 0;
   }
 
   // ── rig master output ──────────────────────────────────────────────────────
@@ -393,11 +406,14 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     rigMaster = ctx.createGain();
     rigMaster.gain.value = effRig();
     rigMaster.__qualiaBypassMute = true;
-    // Brickwall limiter on the combined rig output (live signal + loop bus)
-    // before the speakers — clip insurance so the rig can't push full-scale
-    // into the device-level sum. The rig strip's own compressor shapes tone
-    // upstream; this only catches true overs. Bypassable from the mixer.
-    rigLimiter = makeLimiter(ctx, _rigLimiterOn);
+    // Brickwall on the combined rig output (live signal + loop bus) before the
+    // speakers — clip insurance so the rig can't push full-scale into the
+    // device-level sum. The rig strip's own compressor shapes tone upstream;
+    // this only catches true overs. Bypassable from the mixer. This is the
+    // ZERO-LATENCY soft-clip variant, not the shared DynamicsCompressor
+    // limiter: the live instrument monitor runs through here, and the
+    // compressor version costs ~6 ms of lookahead pre-delay even when idle.
+    rigLimiter = makeSoftLimiter(ctx, _rigLimiterOn);
     rigLimiter.__qualiaBypassMute = true;
     rigMaster.connect(rigLimiter);
     rigLimiter.connect(ctx.destination);
@@ -414,10 +430,29 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   function setRigMuted(on) { _rigMuted = !!on; if (rigMaster) ramp(rigMaster.gain, effRig()); }
   function setRigLevel(v) { _rigLevel = clamp01(v); if (rigMaster && !_rigMuted) ramp(rigMaster.gain, _rigLevel); }
   function primeRig(level, muted) { _rigLevel = clamp01(level); _rigMuted = !!muted; if (rigMaster) ramp(rigMaster.gain, effRig()); }
-  function setRigLimiter(on) { _rigLimiterOn = !!on; setLimiterEngaged(rigLimiter, _rigLimiterOn); }
+  function setRigLimiter(on) { _rigLimiterOn = !!on; setSoftLimiterEngaged(rigLimiter, _rigLimiterOn); }
   function getRigLimiter() { return _rigLimiterOn; }
-  function primeRigLimiter(on) { _rigLimiterOn = !!on; setLimiterEngaged(rigLimiter, _rigLimiterOn); }
+  function primeRigLimiter(on) { _rigLimiterOn = !!on; setSoftLimiterEngaged(rigLimiter, _rigLimiterOn); }
   function getRigMaster() { return { level: _rigLevel, muted: _rigMuted, limiter: _rigLimiterOn }; }
+
+  // ── latency introspection (rig panel readout) ──────────────────────────────
+  // What the browser reports plus what the strip knows it adds. `outputSec` is
+  // live (Chrome updates ctx.outputLatency as the device buffer settles); input
+  // capture buffering is NOT observable from JS, so the true round trip is a
+  // little higher than base+output+graph. `resampled` flags a mic/output
+  // clock mismatch (hidden resampler — fix in OS sound settings).
+  function getLatencyInfo() {
+    if (!ctx) return null;
+    return {
+      baseSec:   ctx.baseLatency || 0,
+      outputSec: ctx.outputLatency || 0,
+      graphSec:  strip ? strip.getLatencySeconds() : 0,
+      sampleRate: ctx.sampleRate,
+      inputSampleRate: _inputSampleRate,
+      resampled: !!(_inputSampleRate && Math.abs(_inputSampleRate - ctx.sampleRate) > 1),
+      live: !!srcNode,
+    };
+  }
 
   // ── rig signal level / mute (channel-strip volume + mute) ──────────────────
   function effSignal() { return _sigMuted ? 0 : _sigLevel; }
@@ -1048,6 +1083,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     ensureCaptureOpen,
     setRigMuted, setRigLevel, primeRig, getRigMaster,
     setRigLimiter, getRigLimiter, primeRigLimiter,
+    getLatencyInfo,
     setSignalLevel, setSignalMuted, getSignal, primeSignal,
     setChannels, getChannels,
     // Channel strip — persisted config lives in looper.js; updates apply to the

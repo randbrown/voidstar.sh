@@ -46,3 +46,45 @@ export function setLimiterEngaged(node, on) {
     }
   } catch {}
 }
+
+// ── Zero-latency variant — soft-clip WaveShaper ─────────────────────────────
+// The DynamicsCompressor limiter above carries Chromium's fixed ~6 ms lookahead
+// pre-delay even when transparent, which is fine for playback-only buses but
+// directly audible as monitoring latency on the rig's live-instrument path. This
+// variant is a memoryless soft clipper: dead-transparent (bit-exact identity)
+// below the -6 dBFS knee, then a tanh ease into the -1 dB ceiling; WaveShaper
+// input beyond the curve domain clamps to the end value, so it is a true
+// brickwall with ZERO added latency. Trade-offs vs the lookahead limiter: no
+// gain-reduction memory (it clips the waveform rather than riding a gain
+// envelope) and no oversampling (that would reintroduce the group delay we're
+// removing), so hard overs alias a little — acceptable for clip *insurance*
+// that only engages on true overs.
+
+const SOFT_KNEE   = 0.5;                                  // -6 dBFS — identity below here
+const SOFT_CEIL   = Math.pow(10, LIMITER_CEILING_DB / 20); // ≈ 0.891 (-1 dBFS asymptote)
+const SOFT_CURVE_N = 4096;
+
+const softClipCurve = (() => {
+  const c = new Float32Array(SOFT_CURVE_N);
+  const span = SOFT_CEIL - SOFT_KNEE;
+  for (let i = 0; i < SOFT_CURVE_N; i++) {
+    const x = (i / (SOFT_CURVE_N - 1)) * 2 - 1;
+    const a = Math.abs(x);
+    c[i] = a <= SOFT_KNEE ? x : Math.sign(x) * (SOFT_KNEE + span * Math.tanh((a - SOFT_KNEE) / span));
+  }
+  return c;
+})();
+
+/** Create a zero-latency soft-clip brickwall in `ctx`, engaged per `on`. */
+export function makeSoftLimiter(ctx, on = true) {
+  const node = ctx.createWaveShaper();   // oversample stays 'none' — see above
+  setSoftLimiterEngaged(node, on);
+  return node;
+}
+
+/** Flip a soft limiter between clip curve (on) and passthrough (off).
+ *  A null curve is the spec-defined identity — a true unclamped passthrough. */
+export function setSoftLimiterEngaged(node, on) {
+  if (!node) return;
+  try { node.curve = on ? softClipCurve : null; } catch {}
+}

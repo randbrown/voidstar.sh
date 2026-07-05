@@ -61,6 +61,16 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
 
 ## C. Realtime performance wins (ranked)
 
+0. ✅ **Rig monitoring latency** — *done:* the fixed graph delay on the live path is gone.
+   Drive shapers oversample `'4x'` only while ON (bypass = `'none'`; the resamplers cost ~4 ms
+   group delay per shaper), the strip comp HARD-bypasses (rewired around under a ~6 ms gain dip —
+   Chromium's `DynamicsCompressor` keeps its ~6 ms lookahead even when "transparent"), and the rig
+   master limiter is now a zero-latency soft-clip `WaveShaper` (`makeSoftLimiter`) instead of the
+   compressor brickwall. The strip subhead shows a live latency readout
+   (`looper-audio.getLatencyInfo()`: output latency + enabled-stage delay + mic/output
+   sample-rate-mismatch warning), and enabling earth/metal/comp pops a transient "+~N ms" note.
+   *Note:* the LSTM/WASM item below is a **throughput** lever, not a latency one — the LSTM is
+   causal and adds no delay.
 1. **Neural amp LSTM worklet (`worklets/neural-amp.js`)** — hottest loop in the app (O(4·H²)
    mul-adds + 4 `exp`/`tanh` per hidden unit per sample). tanh/sigmoid **lookup table** (or the
    tanh-based sigmoid identity to share one call); a WASM/SIMD backend is the bigger lever; add

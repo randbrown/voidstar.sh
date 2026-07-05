@@ -13,9 +13,14 @@
 // control rather than a pre-amp stack.
 //
 // Every stage BYPASSES to a clean pass-through (neutral params / zero wet), so
-// toggling a stage never re-wires the graph or interrupts audio. The strip is
-// rebuilt whenever the rig capture (re)opens; looper.js owns the persisted
-// config and re-applies it via setConfig().
+// toggling a stage never re-wires the graph or interrupts audio — with one
+// deliberate exception: the comp HARD-bypasses (rewired around, under a short
+// gain dip), because a "transparent" DynamicsCompressor still delays the signal
+// by its ~6 ms lookahead. Same reasoning drops the drives' 4x oversampling when
+// they're off (the resamplers add ~4 ms group delay per shaper). A rig with
+// everything off now adds no latency beyond the browser's capture/render/output
+// floor. The strip is rebuilt whenever the rig capture (re)opens; looper.js
+// owns the persisted config and re-applies it via setConfig().
 
 export const STRIP_DEFAULTS = {
   hpf:    { on: false, freq: 80 },
@@ -44,6 +49,31 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number(v) || 0));
 // given rig's input level differs.
 const EARTH_OUT_TRIM = 0.12;   // -18.4 dB
 const METAL_OUT_TRIM = 0.35;   // -9.1 dB
+
+// ── Latency bookkeeping ───────────────────────────────────────────────────
+// Two node types in this chain add REAL signal delay (group delay / lookahead),
+// and both used to sit in the path even when bypassed. They're now taken out of
+// the path when off (oversample dropped / comp hard-bypassed), so a clean rig
+// only pays the browser's capture+render+output floor. These constants estimate
+// what each stage adds when ON, for the UI latency readout + enable-time notes.
+//
+// - Oversampled WaveShaper: the 4x anti-alias resamplers are FIR filters with
+//   ~192 frames of combined group delay in Chromium (two cascaded 2x stages,
+//   ~half a 128-tap kernel per direction per stage). ~4 ms at 48 kHz.
+// - DynamicsCompressor: Chromium runs a fixed ~6 ms lookahead pre-delay, even
+//   when "transparent" (ratio 1 / threshold 0) — hence the hard bypass below.
+const OS4X_LATENCY_FRAMES = 192;
+const COMP_LOOKAHEAD_SEC  = 0.006;
+
+/** Estimated added latency (seconds) for one strip stage when enabled. */
+export function stageLatencySeconds(stage, sampleRate = 48000) {
+  switch (stage) {
+    case 'earth': return OS4X_LATENCY_FRAMES / sampleRate;        // 1 shaper
+    case 'metal': return (2 * OS4X_LATENCY_FRAMES) / sampleRate;  // 2 cascaded shapers
+    case 'comp':  return COMP_LOOKAHEAD_SEC;
+    default:      return 0;
+  }
+}
 
 // Identity shaper curve (pass-through) — used when drive is off.
 const IDENTITY_CURVE = (() => {
@@ -114,23 +144,33 @@ export function createRigStrip(ctx, cfg) {
   hpf.type = 'highpass'; hpf.Q.value = 0.707;
 
   // Earth Drive — single waveshaper (asymmetric JFET curve) + tone LPF + level.
+  // Oversampling is set per-state in applyEarth/applyMetal: '4x' only while the
+  // drive is ON. The 4x resamplers add ~4 ms of real group delay per shaper, so
+  // a bypassed drive must not keep them in the path (bypass keeps the identity
+  // curve, which needs no anti-aliasing anyway).
   const earthPre   = ctx.createGain();
-  const earthShaper = ctx.createWaveShaper(); earthShaper.oversample = '4x';
+  const earthShaper = ctx.createWaveShaper();
   const earthTone  = ctx.createBiquadFilter(); earthTone.type = 'lowpass'; earthTone.Q.value = 0.707;
   const earthPost  = ctx.createGain();
 
   // Metal Zone — cascaded waveshapers (hard symmetric clip) + 3-band parametric
   // EQ (the MT-2's active EQ with sweepable mid) + level.
   const metalPre    = ctx.createGain();
-  const metalShaper1 = ctx.createWaveShaper(); metalShaper1.oversample = '4x';
+  const metalShaper1 = ctx.createWaveShaper();
   const metalStage  = ctx.createGain();
-  const metalShaper2 = ctx.createWaveShaper(); metalShaper2.oversample = '4x';
+  const metalShaper2 = ctx.createWaveShaper();
   const mLow  = ctx.createBiquadFilter(); mLow.type = 'lowshelf';  mLow.frequency.value = 100;
   const mMid  = ctx.createBiquadFilter(); mMid.type = 'peaking';   mMid.frequency.value = 600; mMid.Q.value = 0.7;
   const mHigh = ctx.createBiquadFilter(); mHigh.type = 'highshelf'; mHigh.frequency.value = 3500;
   const metalPost   = ctx.createGain();
 
-  // Compressor
+  // Compressor. Unlike the other stages this one HARD-bypasses (rewired out of
+  // the path, not set transparent): Chromium's DynamicsCompressor imposes its
+  // ~6 ms lookahead pre-delay even at ratio 1 / threshold 0, so "transparent"
+  // still costs monitoring latency. `compIn` is the routing point — it feeds
+  // either comp or ampIn directly — and its gain doubles as the click-masking
+  // dip around the rewire (see routeComp).
+  const compIn = ctx.createGain();
   const comp = ctx.createDynamicsCompressor();
 
   // EQ: low shelf · mid peak · high shelf — now POST amp+cab (output tone stack).
@@ -208,7 +248,8 @@ export function createRigStrip(ctx, cfg) {
   mMid.connect(mHigh);
   mHigh.connect(metalPost);
   // comp → amp (EQ moved downstream of the cab; see chain diagram above).
-  metalPost.connect(comp);
+  // metalPost → compIn → (comp | direct) → ampIn; routeComp() owns the fork.
+  metalPost.connect(compIn);
   comp.connect(ampIn);
   ampIn.connect(ampDry); ampDry.connect(ampSum);
   // Drive only feeds the wet (model) path — the dry blend stays unity so `mix`
@@ -265,11 +306,16 @@ export function createRigStrip(ctx, cfg) {
   }
 
   // ── per-stage apply (bypass = neutral) ──
+  // Oversample only while a drive is ON (its resamplers add real group delay —
+  // see OS4X_LATENCY_FRAMES). Guarded so knob drags (which re-run apply) don't
+  // rebuild the resampler kernels on every tick.
+  const setOversample = (node, want) => { if (node.oversample !== want) node.oversample = want; };
   function applyHpf() {
     hpf.frequency.setTargetAtTime(state.hpf.on ? clamp(state.hpf.freq, 20, 1000) : 10, ctx.currentTime, 0.01);
   }
   function applyEarth() {
     const d = state.earth;
+    setOversample(earthShaper, d.on ? '4x' : 'none');
     if (!d.on) {
       earthShaper.curve = IDENTITY_CURVE;
       earthPre.gain.value = 1; earthPost.gain.value = 1;
@@ -285,6 +331,8 @@ export function createRigStrip(ctx, cfg) {
   }
   function applyMetal() {
     const d = state.metal;
+    setOversample(metalShaper1, d.on ? '4x' : 'none');
+    setOversample(metalShaper2, d.on ? '4x' : 'none');
     mLow.gain.value = 0; mMid.gain.value = 0; mHigh.gain.value = 0;
     if (!d.on) {
       metalShaper1.curve = IDENTITY_CURVE; metalShaper2.curve = IDENTITY_CURVE;
@@ -304,6 +352,35 @@ export function createRigStrip(ctx, cfg) {
     mHigh.gain.value = clamp(d.high, -15, 15);
     metalPost.gain.value = level * METAL_OUT_TRIM;   // makeup, calibrated to ~unity at noon
   }
+  // Route compIn → comp (on) or compIn → ampIn (off). Rewiring the graph live
+  // can click, so the swap happens inside a short gain dip on compIn (~6 ms
+  // down, rewire, ~6 ms up — well under audibility as a gap). The dip also
+  // masks the ~6 ms timeline jump from the comp's lookahead entering/leaving
+  // the path. First call (build time) wires directly, no dip.
+  const COMP_DIP_SEC = 0.006;
+  let compRouted = null;   // null until first route; then boolean
+  function routeComp(useComp) {
+    if (compRouted === useComp) return;
+    if (compRouted === null) {
+      compRouted = useComp;
+      compIn.connect(useComp ? comp : ampIn);
+      return;
+    }
+    compRouted = useComp;
+    const t = ctx.currentTime;
+    compIn.gain.cancelScheduledValues(t);
+    compIn.gain.setValueAtTime(compIn.gain.value, t);
+    compIn.gain.linearRampToValueAtTime(0, t + COMP_DIP_SEC);
+    setTimeout(() => {
+      try { compIn.disconnect(); } catch {}
+      // Re-check state: a fast double-toggle may have re-routed meanwhile.
+      compIn.connect(compRouted ? comp : ampIn);
+      const t2 = ctx.currentTime;
+      compIn.gain.cancelScheduledValues(t2);
+      compIn.gain.setValueAtTime(0, t2);
+      compIn.gain.linearRampToValueAtTime(1, t2 + COMP_DIP_SEC);
+    }, COMP_DIP_SEC * 1000 + 5);
+  }
   function applyComp() {
     const t = ctx.currentTime;
     if (state.comp.on) {
@@ -312,10 +389,8 @@ export function createRigStrip(ctx, cfg) {
       comp.attack.setTargetAtTime(clamp(state.comp.attack, 0, 1), t, 0.01);
       comp.release.setTargetAtTime(clamp(state.comp.release, 0, 1), t, 0.01);
       comp.knee.value = 6;
-    } else {
-      comp.threshold.setTargetAtTime(0, t, 0.01);
-      comp.ratio.setTargetAtTime(1, t, 0.01);   // ratio 1 = no compression
     }
+    routeComp(!!state.comp.on);
   }
   function applyEq() {
     const on = state.eq.on;
@@ -388,11 +463,25 @@ export function createRigStrip(ctx, cfg) {
   }
   function getConfig() { return deepMerge(state, null); }
 
+  // Estimated latency this strip currently ADDS to the signal path (seconds),
+  // from the stages that carry real delay when enabled (drive oversampling,
+  // comp lookahead). Everything else in the chain is zero-latency: convolvers
+  // (spec-mandated direct head), biquads, gains, the LSTM worklet (causal,
+  // sample-by-sample). Feeds the rig panel's latency readout.
+  function getLatencySeconds() {
+    const sr = ctx.sampleRate || 48000;
+    let s = 0;
+    if (state.earth.on) s += stageLatencySeconds('earth', sr);
+    if (state.metal.on) s += stageLatencySeconds('metal', sr);
+    if (state.comp.on)  s += stageLatencySeconds('comp', sr);
+    return s;
+  }
+
   function dispose() {
     for (const n of [input, hpf,
                      earthPre, earthShaper, earthTone, earthPost,
                      metalPre, metalShaper1, metalStage, metalShaper2,
-                     mLow, mMid, mHigh, metalPost, comp,
+                     mLow, mMid, mHigh, metalPost, compIn, comp,
                      eqLow, eqMid, eqHigh, ampIn, ampDrive, ampDry, ampWet, ampSum,
                      cabIn, cabConv, cabDry, cabWet, cabSum,
                      fxIn, dry, sum, delaySend, delayL, delayR, delayFb, merger,
@@ -402,5 +491,5 @@ export function createRigStrip(ctx, cfg) {
     try { neural?.disconnect(); } catch {}
   }
 
-  return { input, output, setParam, setEnabled, setConfig, getConfig, setCabBuffer, setAmpModel, dispose };
+  return { input, output, setParam, setEnabled, setConfig, getConfig, getLatencySeconds, setCabBuffer, setAmpModel, dispose };
 }

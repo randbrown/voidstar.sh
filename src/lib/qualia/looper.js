@@ -26,7 +26,7 @@
 // time-stretch is a later pass).
 
 import { createLooperAudio } from './looper-audio.js';
-import { STRIP_DEFAULTS } from './rig-strip.js';
+import { STRIP_DEFAULTS, stageLatencySeconds } from './rig-strip.js';
 import { parseAmpModel } from './neural-amp-model.js';
 import { createLooperRenderer } from './looper-render.js';
 import * as loopStore from './looper-store.js';
@@ -238,6 +238,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const stripUtilBody = document.getElementById('rig-strip-util-body');
   const btnStripUtil  = document.getElementById('btn-rig-strip-util');
   const btnStripReset = document.getElementById('btn-rig-strip-reset');
+  const latencyEl   = document.getElementById('rig-latency');
   const rigLoopSection = document.getElementById('rig-loop');
   const looperBody  = document.getElementById('looper-body');
   const btnLoop         = document.getElementById('btn-rig-loop');
@@ -1369,6 +1370,69 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshStripStages();
     syncMiniLed(stage, !!on);
     persistStrip();
+    if (on) showLatencyNote(stage);
+    updateLatencyReadout();
+  }
+
+  // ── latency notes + readout ────────────────────────────────────────────────
+  // Three stages carry real signal delay when ON (drive oversampling, comp
+  // lookahead) — everything else in the chain is zero-latency. A transient
+  // note reminds the performer at the moment of enabling one, and the strip
+  // subhead shows a live estimate (browser output path + enabled-stage delay).
+  const LATENCY_NOTE_REASON = {
+    earth: '4× oversampling',
+    metal: '2 shapers, 4× oversampled',
+    comp:  'compressor lookahead',
+  };
+  let _latToastEl = null, _latToastTimer = null;
+  const _latDefaultTitle = latencyEl ? latencyEl.title : null;
+  function showLatencyNote(stage) {
+    const reason = LATENCY_NOTE_REASON[stage];
+    if (!reason || !panel) return;
+    const sr = looperAudio.getLatencyInfo?.()?.sampleRate || 48000;
+    const ms = Math.round(stageLatencySeconds(stage, sr) * 1000);
+    if (!ms) return;
+    if (!_latToastEl) {
+      _latToastEl = document.createElement('div');
+      _latToastEl.className = 'rig-latency-toast';
+      panel.append(_latToastEl);
+    }
+    _latToastEl.textContent = `${stage} adds ~${ms} ms latency (${reason}) — bypassing removes it`;
+    _latToastEl.classList.add('show');
+    if (_latToastTimer) clearTimeout(_latToastTimer);
+    _latToastTimer = setTimeout(() => { _latToastTimer = null; _latToastEl.classList.remove('show'); }, 4000);
+  }
+  function updateLatencyReadout() {
+    if (!latencyEl) return;
+    const info = looperAudio.getLatencyInfo?.();
+    if (!info) { latencyEl.textContent = ''; return; }
+    const ms = (s) => Math.round((s || 0) * 1000);
+    // outputLatency (full path to the device) supersedes baseLatency where the
+    // browser reports it; input capture buffering is invisible to JS, so this
+    // is a floor, not the full round trip.
+    const out = ms(Math.max(info.outputSec, info.baseSec));
+    const fx = ms(info.graphSec);
+    let text = `~${out}ms out` + (fx ? ` +${fx}ms fx` : '');
+    if (info.resampled) {
+      const k = (hz) => `${Math.round(hz / 100) / 10}k`;
+      text += ` · resampling ${k(info.inputSampleRate)}→${k(info.sampleRate)}`;
+      latencyEl.title = `Input device runs at ${info.inputSampleRate} Hz but the output runs at ${info.sampleRate} Hz — the browser is resampling the mic stream, adding latency. Set both to the same rate in the OS sound settings (Audio MIDI Setup on macOS).`;
+    } else if (_latDefaultTitle != null) {
+      latencyEl.title = _latDefaultTitle;
+    }
+    latencyEl.classList.toggle('warn', !!info.resampled);
+    latencyEl.textContent = text;
+  }
+  // Refresh once a second while the strip subpanel is open (outputLatency and
+  // the capture state drift as devices settle / open / close).
+  let _latTimer = null;
+  function refreshLatencyLoop() {
+    if (model.stripOpen && !_latTimer) {
+      updateLatencyReadout();
+      _latTimer = setInterval(updateLatencyReadout, 1000);
+    } else if (!model.stripOpen && _latTimer) {
+      clearInterval(_latTimer); _latTimer = null;
+    }
   }
   function refreshStripStages() {
     if (!stripPanel) return;
@@ -1420,6 +1484,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const tg = document.createElement('button');
       tg.type = 'button'; tg.className = 'ctrl-btn rig-stage-toggle';
       tg.title = `Enable / bypass ${stage.name}`;
+      // Flag the stages that add real signal delay when enabled.
+      const latMs = Math.round(stageLatencySeconds(stage.id) * 1000);
+      if (latMs) tg.title += ` — on adds ~${latMs} ms latency (${LATENCY_NOTE_REASON[stage.id] || 'group delay'})`;
       tg.addEventListener('click', () => stripToggle(stage.id, !model.strip[stage.id].on));
       if (chev) head.append(chev, tg, nameEl); else head.append(tg, nameEl);
     } else {
@@ -1993,6 +2060,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (model.stripOpen) buildStripUI();
     if (stripPanel) stripPanel.style.display = model.stripOpen ? '' : 'none';
     refreshStripBtn();
+    refreshLatencyLoop();
   }
 
   // ── loop section toggle (signal header button) ──────────────────────────────
@@ -2941,6 +3009,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshChannelsBtn();
     // Restore the strip / tuner subpanels if they were left open.
     if (model.stripOpen) { buildStripUI(); if (stripPanel) stripPanel.style.display = ''; }
+    refreshLatencyLoop();
     if (model.tunerOn) {
       buildTunerUI();
       buildTemperamentUI();
@@ -3056,7 +3125,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     nudgeRigLevel(delta) { setRigLevel(clamp01((model.rigLevel ?? 1) + delta)); },
     getRig: () => ({ level: model.rigLevel, muted: model.rigMuted, limiter: model.rigLimiter }),
     onMixChange,
-    dispose: () => { hideCtxMenu(); stopScope(); looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
+    dispose: () => { hideCtxMenu(); stopScope(); if (_latTimer) { clearInterval(_latTimer); _latTimer = null; } looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
 
     // ── Hotkey / MIDI helpers ──────────────────────────────────────────────
     toggleStripStage(stageId) {
