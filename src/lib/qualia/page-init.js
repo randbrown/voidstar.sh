@@ -333,6 +333,11 @@ export function initQualiaPage() {
       const c = core.getCanvas();
       return c && c.width > 0 ? [c.width, c.height] : [window.innerWidth, window.innerHeight];
     },
+    // Shared hard-kick detector timestamp (declared with the detector far
+    // below; only read at tick time, well after init). The hardest kicks
+    // re-aim all three walk axes at once; regular beats rotate through
+    // them one at a time.
+    getHardKickAt: () => lastHardKickAt,
   });
   core.onTick((field) => camWalk.tick(field));
 

@@ -2789,23 +2789,23 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span>▾</span>
     </div>
     <div class="qp-body">
-      <div class="qp-row" data-qp="walk-drift" title="Pan speed + how far the camera wanders from centre">
+      <div class="qp-row" data-qp="walk-drift" title="Pan speed + wander range — at max the camera roams ±60% of the stage">
         <label>drift<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.35">
       </div>
-      <div class="qp-row" data-qp="walk-zoom" title="Zoom travel depth (0 = no zoom axis)">
+      <div class="qp-row" data-qp="walk-zoom" title="Zoom travel depth, exponential — at max it dives up to 20× (0 = no zoom axis)">
         <label>zoom<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.40">
       </div>
-      <div class="qp-row" data-qp="walk-rotate" title="Rotation range + speed (0 = no rotation axis)">
+      <div class="qp-row" data-qp="walk-rotate" title="Spin speed ceiling — unbounded angle: the frame can roll upside down or past 360° between re-aims (0 = no rotation axis)">
         <label>rotate<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.35">
       </div>
-      <div class="qp-row" data-qp="walk-punch" title="Quick zoom punch on each beat re-aim (0 = off)">
+      <div class="qp-row" data-qp="walk-punch" title="Quick zoom punch on beat re-aims — full strength on the hardest kicks (0 = off)">
         <label>punch<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.30">
       </div>
-      <div class="qp-row" data-qp="walk-min-gap" title="Beat gate — at most one re-aim per this many seconds">
+      <div class="qp-row" data-qp="walk-min-gap" title="Beat gate — at most one re-aim per this many seconds. Each hit re-aims one axis (round-robin, sometimes two); the hardest kicks re-aim all three">
         <label>beat gap min<span class="qp-val"></span></label>
         <input type="range" min="0.5" max="15" step="0.5" value="2">
       </div>

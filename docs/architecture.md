@@ -106,11 +106,15 @@ lost-context bug. WebGL2 contexts are created with `preserveDrawingBuffer: true`
 post-FX (ASCII/mosh/edge) can read pixels back from any fx.
 
 **Cam walk** (`cam-walk.js`) is a top-level virtual-camera drift over the whole scene stack (Hydra +
-fx canvas + transition freeze-frame + overlay — never the camera panel or UI): slow random pan +
-zoom + rotation that re-aims on gated hard beats, applied as a compositor-only CSS transform (zero
-pixel cost) with an auto cover-zoom so edges never show. The recorder composite mirrors the same
-matrix so recordings match the live view. Toggled by the topbar `walk` button (hotkey `U`), tuned
-in the walk card, persisted in settings and qualems.
+fx canvas + transition freeze-frame + overlay — never the camera panel or UI): random pan (up to
+±60% of the stage), exponential zoom (up to 20×), and unbounded rotation (a spin velocity, so the
+frame can roll upside down or past 360° between re-aims). Each gated hard beat re-aims ONE axis
+round-robin (sometimes two); the very hardest kicks (the shared hard-kick detector) re-aim all
+three with a zoom punch, and an idle fallback keeps it wandering without audio. Applied as a
+compositor-only CSS transform (zero pixel cost) with an auto cover-zoom computed from the actual
+angle/offset so edges never show. The recorder composite mirrors the same matrix so recordings
+match the live view. Toggled by the topbar `walk` button (post ▾ group, hotkey `U`), tuned in the
+walk card, persisted in settings and qualems.
 
 ---
 
