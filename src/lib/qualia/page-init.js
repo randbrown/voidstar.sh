@@ -8,6 +8,7 @@ import { initEntangleUI } from './entangle-ui.js';
 import { createAudio }   from './audio.js';
 import { createPose }    from './pose.js';
 import { createOverlay } from './overlay.js';
+import { createCamWalk, CAM_WALK_DEFAULTS } from './cam-walk.js';
 import { decay } from './field.js';
 import { wirePicker, getStoredDeviceId, storeDeviceId } from './devices.js';
 import {
@@ -193,6 +194,7 @@ export function initQualiaPage() {
   const btnAscii   = document.getElementById('btn-ascii');
   const btnMosh    = document.getElementById('btn-mosh');
   const btnEdge    = document.getElementById('btn-edge');
+  const btnWalk    = document.getElementById('btn-walk');
   const btnPhase   = document.getElementById('btn-phase');
   const phaseStyleSelect = document.getElementById('phase-style');
   const btnCycle   = document.getElementById('btn-cycle');
@@ -313,6 +315,27 @@ export function initQualiaPage() {
     overlay.render(field);
   });
 
+  // Cam walk — top-level camera drift (pan / zoom / rotate) over the whole
+  // scene stack: Hydra + fx canvas + transition freeze-frame + overlay walk
+  // together; the camera panel, pose pipeline, and UI above are untouched.
+  // Layers are looked up fresh each tick because the fx canvas is recreated
+  // on every quale switch and the Hydra / transition canvases are lazy.
+  // Ticked at the reactivity cadence (never gated by the viz frame cap) so
+  // beat re-aims stay sharp and the drift is smooth at any render fps.
+  const camWalk = createCamWalk({
+    getLayers: () => [
+      document.getElementById('hydra-canvas'),
+      core.getCanvas(),
+      document.getElementById('qualia-transition'),
+      overlay.canvas,
+    ],
+    getStageSize: () => {
+      const c = core.getCanvas();
+      return c && c.width > 0 ? [c.width, c.height] : [window.innerWidth, window.innerHeight];
+    },
+  });
+  core.onTick((field) => camWalk.tick(field));
+
   // ── Chron — session stopwatch (τ) ─────────────────────────────────────────
   // HUD readout in the topbar (auto-hidden in zen with the rest of the bar),
   // soft minute pulses at the screen edge while in zen, warn/horizon nudges
@@ -355,6 +378,8 @@ export function initQualiaPage() {
     glitchModes:    { ...glitchModes },
     moshConfig:     overlay.getMoshConfig(),
     edgeConfig:     overlay.getEdgeConfig(),
+    camWalkOn,
+    camWalkConfig:  camWalk.getConfig(),
     autoPhaseSeconds,
     autoPhaseStyle,
     autoPhaseBeatSync,
@@ -376,6 +401,7 @@ export function initQualiaPage() {
     paramsCollapsed: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
     moshCollapsed:  document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
     edgeCollapsed:  document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
+    walkCollapsed:  document.getElementById('walk-card')?.classList.contains('collapsed') ?? true,
     cameraCollapsed: cameraCard?.classList.contains('collapsed') ?? true,
     qualemCollapsed: document.getElementById('qualem-card')?.classList.contains('collapsed') ?? true,
     cameraZoom:     lastZoomValue,
@@ -456,6 +482,13 @@ export function initQualiaPage() {
   for (const g of GLITCH_KEYS) overlay.setOption(g, glitchModes[g] === 'on');
   // Per-glitch blip auto-clear timestamps (epoch ms; 0 = inactive).
   const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0 };
+
+  // Cam walk — restore tunables + on/off from settings. setEnabled(true)
+  // starts the drift immediately; the walk itself only advances once
+  // core.start() begins ticking.
+  let camWalkOn = stored.camWalkOn === true;
+  if (stored.camWalkConfig) camWalk.setConfig(stored.camWalkConfig);
+  camWalk.setEnabled(camWalkOn);
 
   // Audio mode. The button cycles through four real-world states:
   //   off → mic (mic only) → mix (strudel + seq, no mic) → all (everything)
@@ -1882,6 +1915,58 @@ export function initQualiaPage() {
   }
   syncPostBtns();
 
+  // ── Cam walk: button + tunables card ────────────────────────────────────
+  // Simple on/off (no blip/flip — the walk carries its own beat response:
+  // it re-aims on gated hard beats while on). Card shows while on, like the
+  // mosh/edge cards.
+  const walkCard = document.getElementById('walk-card');
+  function refreshWalkBtn() {
+    if (!btnWalk) return;
+    btnWalk.textContent = `walk ${camWalkOn ? 'on' : 'off'}`;
+    btnWalk.classList.toggle('active', camWalkOn);
+  }
+  function syncWalkCard() {
+    if (walkCard) walkCard.style.display = camWalkOn ? '' : 'none';
+  }
+  function setCamWalkOn(on) {
+    camWalkOn = !!on;
+    camWalk.setEnabled(camWalkOn);
+    refreshWalkBtn();
+    syncWalkCard();
+    settings.save();
+  }
+  btnWalk?.addEventListener('click', () => setCamWalkOn(!camWalkOn));
+  refreshWalkBtn();
+  syncWalkCard();
+
+  // Walk slider wiring — same pattern as mosh/edge, talks to
+  // camWalk.setConfig; the walk reads its config live so changes land on
+  // the next tick.
+  function wireWalkSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
+    const row = document.querySelector(`[data-qp="${qpId}"]`);
+    if (!row) return;
+    const input = row.querySelector('input[type=range]');
+    const val   = row.querySelector('.qp-val');
+    const initial = camWalk.getConfig()[key];
+    input.value = String(initial);
+    val.textContent = fmt(initial);
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      camWalk.setConfig({ [key]: v });
+      val.textContent = fmt(v);
+      settings.save();
+    });
+  }
+  wireWalkSlider('walk-drift',   'drift');
+  wireWalkSlider('walk-zoom',    'zoom');
+  wireWalkSlider('walk-rotate',  'rotate');
+  wireWalkSlider('walk-punch',   'punch');
+  wireWalkSlider('walk-min-gap', 'minGapS', (v) => `${v.toFixed(1)}s`);
+  wireWalkSlider('walk-max-gap', 'maxGapS', (v) => `${Math.round(v)}s`);
+  if (walkCard && typeof stored.walkCollapsed === 'boolean') {
+    walkCard.classList.toggle('collapsed', stored.walkCollapsed);
+  }
+
   // ── Chron card wiring ────────────────────────────────────────────────────
   // Every control writes through chron.setConfig (which deep-merges + clamps)
   // and persists via the settings store. The chron instance itself is created
@@ -2217,6 +2302,23 @@ export function initQualiaPage() {
     // Black base so any letterbox bars are opaque black, not undefined colour.
     recordCompositeCtx.fillStyle = '#000';
     recordCompositeCtx.fillRect(0, 0, W, H);
+    // Cam walk — mirror the live CSS transform (pan / rotate / zoom about the
+    // fx panel centre) around the scene layers, clipped to the fx rect so a
+    // walked frame can't spill into the camera half in split mode. The live
+    // view applies the same matrix via CSS, so recordings match.
+    const walkT = camWalk.getTransform();
+    if (walkT) {
+      const r = layout.fxRect;
+      const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      recordCompositeCtx.save();
+      recordCompositeCtx.beginPath();
+      recordCompositeCtx.rect(r.x, r.y, r.w, r.h);
+      recordCompositeCtx.clip();
+      recordCompositeCtx.translate(cx + walkT.x * r.w, cy + walkT.y * r.h);
+      recordCompositeCtx.rotate(walkT.rot);
+      recordCompositeCtx.scale(walkT.scale, walkT.scale);
+      recordCompositeCtx.translate(-cx, -cy);
+    }
     // fx + overlay into the fx panel rect. preserveDrawingBuffer on the WebGL
     // contexts lets us drawImage from a webgl2/three canvas mid-frame.
     drawLayerFitted(fx, layout.fxRect);
@@ -2231,6 +2333,7 @@ export function initQualiaPage() {
       recordCompositeCtx.restore();
     }
     drawLayerFitted(overlay.canvas, layout.fxRect);
+    if (walkT) recordCompositeCtx.restore();
     // Camera panel (split mode only).
     if (layout.camRect) drawCameraIntoRect(layout.camRect);
   }
@@ -4029,6 +4132,7 @@ export function initQualiaPage() {
         edge:     overlay.getEdgeConfig(),
       },
       glitch: { ...glitchModes },
+      camWalk: { on: camWalkOn, config: camWalk.getConfig() },
       auto: {
         phaseSeconds:  autoPhaseSeconds,
         phaseStyle:    autoPhaseStyle,
@@ -4051,6 +4155,7 @@ export function initQualiaPage() {
         params: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
         mosh:   document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
         edge:   document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
+        walk:   document.getElementById('walk-card')?.classList.contains('collapsed') ?? true,
         camera: cameraCard?.classList.contains('collapsed') ?? true,
         qualem: document.getElementById('qualem-card')?.classList.contains('collapsed') ?? true,
         chron:  chronCard?.classList.contains('collapsed') ?? true,
@@ -4188,6 +4293,13 @@ export function initQualiaPage() {
       syncPostBtns();
     }
 
+    // 7b. Cam walk — tunables first so a recalled "on" starts with the
+    // recalled feel. setCamWalkOn repaints the button + card visibility.
+    if (q.camWalk && typeof q.camWalk === 'object') {
+      if (q.camWalk.config) camWalk.setConfig(q.camWalk.config);
+      if (typeof q.camWalk.on === 'boolean') setCamWalkOn(q.camWalk.on);
+    }
+
     // 8. Auto-phase / cycle
     if (q.auto) {
       if (typeof q.auto.phaseStyle === 'string') {
@@ -4245,7 +4357,8 @@ export function initQualiaPage() {
       const cardMap = {
         audio: 'audio-card', pose: 'pose-card', diag: 'diag-card',
         params: 'fx-card', mosh: 'mosh-card', edge: 'edge-card',
-        camera: 'camera-card', qualem: 'qualem-card', chron: 'chron-card',
+        walk: 'walk-card', camera: 'camera-card', qualem: 'qualem-card',
+        chron: 'chron-card',
       };
       for (const [key, id] of Object.entries(cardMap)) {
         const el = document.getElementById(id);
@@ -4343,6 +4456,7 @@ export function initQualiaPage() {
       pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, numPoses: 1 },
       overlay: { skeleton: true, sparks: true, aura: true, ripples: true },
       glitch:  { ascii: 'off', mosh: 'off', edge: 'off' },
+      camWalk: { on: false, config: { ...CAM_WALK_DEFAULTS } },
       auto:    { phaseSeconds: 0, phaseStyle: 'sequential', phaseBeatSync: false,
                  cycleSeconds: 0, cycleStyle: 'sequential', cycleBeatSync: false },
       camera:  { rotation: 0, mirror: true, zoom: 1.0, videoOffset: { dx: 0, dy: 0 }, sizeIdx: 0 },
@@ -4490,7 +4604,7 @@ export function initQualiaPage() {
   const QUALEM_SECTIONS = {
     rig:       { label: 'rig',       keys: ['looper'] },
     fx:        { label: 'params (fx)', keys: ['fx', 'activeFxId'] },
-    overlay:   { label: 'overlay',   keys: ['overlay', 'glitch'] },
+    overlay:   { label: 'overlay',   keys: ['overlay', 'glitch', 'camWalk'] },
     audio:     { label: 'audio',     keys: ['audio'] },
     pose:      { label: 'pose',      keys: ['pose'] },
     camera:    { label: 'camera',    keys: ['camera'] },
@@ -4956,6 +5070,7 @@ export function initQualiaPage() {
       case 't': btnAscii.click(); break;
       case 'k': btnMosh.click(); break;
       case 'e': btnEdge.click(); break;
+      case 'u': btnWalk?.click(); break;   // cam walk on/off
       // Phase/cycle are now <select> dropdowns; L/N still advance the dwell
       // (off → … → off) so the keyboard muscle-memory survives the switch.
       case 'l': {

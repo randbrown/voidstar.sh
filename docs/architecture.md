@@ -105,6 +105,13 @@ all `three` quales — quales must not dispose it (see `three-host.js`). This fi
 lost-context bug. WebGL2 contexts are created with `preserveDrawingBuffer: true` so the overlay's
 post-FX (ASCII/mosh/edge) can read pixels back from any fx.
 
+**Cam walk** (`cam-walk.js`) is a top-level virtual-camera drift over the whole scene stack (Hydra +
+fx canvas + transition freeze-frame + overlay — never the camera panel or UI): slow random pan +
+zoom + rotation that re-aims on gated hard beats, applied as a compositor-only CSS transform (zero
+pixel cost) with an auto cover-zoom so edges never show. The recorder composite mirrors the same
+matrix so recordings match the live view. Toggled by the topbar `walk` button (hotkey `U`), tuned
+in the walk card, persisted in settings and qualems.
+
 ---
 
 ## 5. Why audio runs in multiple AudioContexts
