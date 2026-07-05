@@ -1,22 +1,35 @@
 // Rig channel strip — a native Web Audio signal chain for the rig's live
 // instrument signal. Runs in the looper's OWN AudioContext (native nodes only —
 // Tone's wrapped context can't host the recorder worklet, and these nodes don't
-// need it). Fixed-order series chain with parallel send-style time fx:
+// need it). Fixed-order series chain, laid out like a physical pedalboard:
 //
-//   in → HPF → earth → metal → comp → amp → cab → EQ(lo/mid/hi)
-//      → GEQ(7-band) → PEQ(8-band parametric) → ┬→ dry ─────────┐
-//                                               ├→ delay (p-pong)┤→ pan → out
-//                                               └→ reverb (conv.)┘
+//   in → GEQ(7-band) → comp → earth → metal → amp → EQ(lo/mid/hi) → cab
+//      → HPF → delay (p-pong) → reverb (conv.) → PEQ(8-band) → pan → out
 //
-// All three EQs sit POST amp+cab on purpose: the neural amp captures bake in
-// the amp's own tone stack (the model has no live EQ of its own), so a post-cab
-// EQ is the only place to shape the final amp'd + cab'd tone — it acts as a
-// true output tone control rather than a pre-amp stack. The three are
-// complementary: eq = broad 3-knob tone, geq = GE-7-style 7-band graphic,
-// peq = ReaEQ-style surgical parametric (per-band type/freq/gain/Q). They're
-// all biquads in series (LTI, so their relative order is inaudible), always in
-// the path, bypassing to bit-transparent neutral (gain 0 peaking) — zero added
-// latency and no graph rewiring on toggle.
+// The three EQs are deliberately SPREAD along the chain, one job each:
+// - geq (GE-7-style graphic) sits at the FRONT, shaping the instrument before
+//   the comp and drives — pre-drive EQ changes what the distortion chews on.
+// - eq (broad 3-knob tone) sits BETWEEN amp and cab, like an FX-loop tone
+//   stack: the neural amp captures bake in the amp's own tone stack, so this
+//   shapes the amp'd tone before the speaker rolls it off.
+// - peq (ReaEQ-style surgical parametric) sits at the OUTPUT, after the time
+//   fx — the place to notch ringing / feedback / room resonances on the full
+//   wet signal actually leaving the rig.
+// Nonlinear stages (drives, amp) and the cab sit between them, so their
+// positions are genuinely audible — this is not the old adjacent-series
+// arrangement where relative EQ order was inaudible.
+//
+// The HPF sits POST-cab: its job is de-woofing the cab'd tone (low buildup /
+// proximity mud), not protecting the drives — and it keeps that mud out of the
+// delay/reverb wash. Delay feeds reverb IN SERIES (not parallel sends), so the
+// echoes get reverberated too: repeats and dry share the same room, and the
+// two mixes ride together naturally. Comp sits up front as an instrument
+// compressor (clarity / attack / bringing up low notes into the drives);
+// output limiting deliberately stays at the mixer (see limiter.js) — a second
+// in-strip limiter would double-process and add lookahead latency here.
+// All EQ stages live permanently in the path, bypassing to bit-transparent
+// neutral (gain 0 peaking) — zero added latency and no graph rewiring on
+// toggle.
 //
 // Every stage BYPASSES to a clean pass-through (neutral params / zero wet), so
 // toggling a stage never re-wires the graph or interrupts audio — with one
@@ -79,18 +92,18 @@ export function sanitizePeqBands(bands) {
   });
 }
 
-export const STRIP_DEFAULTS = {
-  hpf:    { on: false, freq: 80 },
+export const STRIP_DEFAULTS = {   // listed in chain order
+  geq:    { on: false, b100: 0, b200: 0, b400: 0, b800: 0, b1600: 0, b3200: 0, b6400: 0, level: 0 },
+  comp:   { on: false, threshold: -18, ratio: 3, attack: 0.003, release: 0.25 },
   earth:  { on: false, drive: 0.35, tone: 0.6, level: 1.0 },
   metal:  { on: false, drive: 0.35, low: 0, mid: 0, midFreq: 600, high: 0, level: 1.0 },
-  comp:   { on: false, threshold: -18, ratio: 3, attack: 0.003, release: 0.25 },
-  eq:     { on: false, low: 0, mid: 0, high: 0 },
-  geq:    { on: false, b100: 0, b200: 0, b400: 0, b800: 0, b1600: 0, b3200: 0, b6400: 0, level: 0 },
-  peq:    { on: false, bands: defaultPeqBands() },
   amp:    { on: false, gain: 1, mix: 1, level: 1 },
+  eq:     { on: false, low: 0, mid: 0, high: 0 },
   cab:    { on: false, mix: 1, level: 1 },
+  hpf:    { on: false, freq: 80 },
   delay:  { on: false, time: 0.3, feedback: 0.35, mix: 0.25 },
   reverb: { on: false, decay: 2.0, mix: 0.25 },
+  peq:    { on: false, bands: defaultPeqBands() },
   pan:    { pan: 0 },
 };
 
@@ -201,7 +214,7 @@ export function createRigStrip(ctx, cfg) {
   const input  = ctx.createGain();
   const output = ctx.createGain();
 
-  // HPF
+  // HPF — post-cab: attenuates cab woof / low buildup before the time fx.
   const hpf = ctx.createBiquadFilter();
   hpf.type = 'highpass'; hpf.Q.value = 0.707;
 
@@ -226,28 +239,31 @@ export function createRigStrip(ctx, cfg) {
   const mHigh = ctx.createBiquadFilter(); mHigh.type = 'highshelf'; mHigh.frequency.value = 3500;
   const metalPost   = ctx.createGain();
 
-  // Compressor. Unlike the other stages this one HARD-bypasses (rewired out of
+  // Compressor — up front (post-geq, pre-drives) as an instrument compressor:
+  // evens picking dynamics, brings up low notes / attack into the drives.
+  // Unlike the other stages this one HARD-bypasses (rewired out of
   // the path, not set transparent): Chromium's DynamicsCompressor imposes its
   // ~6 ms lookahead pre-delay even at ratio 1 / threshold 0, so "transparent"
   // still costs monitoring latency. `compIn` is the routing point — it feeds
-  // either comp or ampIn directly — and its gain doubles as the click-masking
+  // either comp or earthPre directly — and its gain doubles as the click-masking
   // dip around the rewire (see routeComp).
   const compIn = ctx.createGain();
   const comp = ctx.createDynamicsCompressor();
 
-  // EQ: low shelf · mid peak · high shelf — now POST amp+cab (output tone stack).
-  // The "hi" shelf corners at 3.2 kHz, the presence/treble band where guitar +
-  // pedal-steel brightness lives; sitting after the cab it shapes the final mic'd
-  // tone directly (a boost here adds audible air rather than feeding the amp).
+  // EQ: low shelf · mid peak · high shelf — BETWEEN amp and cab, an FX-loop
+  // tone stack on the amp'd signal. The "hi" shelf corners at 3.2 kHz, the
+  // presence/treble band where guitar + pedal-steel brightness lives.
   const eqLow  = ctx.createBiquadFilter(); eqLow.type  = 'lowshelf';  eqLow.frequency.value  = 180;
   const eqMid  = ctx.createBiquadFilter(); eqMid.type  = 'peaking';   eqMid.frequency.value  = 1000; eqMid.Q.value = 0.9;
   const eqHigh = ctx.createBiquadFilter(); eqHigh.type = 'highshelf'; eqHigh.frequency.value = 3200;
 
-  // Graphic EQ (geq): 7 fixed peaking bands + output level. Parametric EQ
-  // (peq): 8 configurable bands. Both live permanently in the series chain —
-  // biquads are native and effectively free — and bypass to bit-transparent
-  // neutral (peaking @ gain 0), so toggling never re-wires the graph. IIR
-  // biquads are causal: neither stage adds ANY latency, on or off.
+  // Graphic EQ (geq): 7 fixed peaking bands + level — the FRONT of the chain,
+  // shaping the raw instrument before comp and drives. Parametric EQ (peq):
+  // 8 configurable bands — the OUTPUT end, after the time fx. Both live
+  // permanently in the series chain — biquads are native and effectively
+  // free — and bypass to bit-transparent neutral (peaking @ gain 0), so
+  // toggling never re-wires the graph. IIR biquads are causal: neither stage
+  // adds ANY latency, on or off.
   const geqFilters = GEQ_FREQS.map((f) => {
     const n = ctx.createBiquadFilter();
     n.type = 'peaking'; n.frequency.value = f; n.Q.value = GEQ_Q; n.gain.value = 0;
@@ -260,10 +276,10 @@ export function createRigStrip(ctx, cfg) {
     n.type = 'peaking'; n.gain.value = 0;
     peqFilters.push(n);
   }
-  // Spectrum taps for the peq editor: pre = the signal entering the peq,
-  // post = the signal leaving it (what the time fx hear). Analysers are pure
-  // sinks — the FFT only runs when the editor actually reads them, so they're
-  // free while the panel is closed.
+  // Spectrum taps for the peq editor: pre = the signal entering the peq (the
+  // full post-reverb wet mix), post = the signal leaving it (what actually
+  // reaches pan → out). Analysers are pure sinks — the FFT only runs when the
+  // editor actually reads them, so they're free while the panel is closed.
   const peqPreTap  = ctx.createAnalyser();
   const peqPostTap = ctx.createAnalyser();
   for (const a of [peqPreTap, peqPostTap]) {
@@ -272,8 +288,8 @@ export function createRigStrip(ctx, cfg) {
   }
 
   // Neural amp — LSTM capture inference in an AudioWorklet, as a dry/wet insert
-  // after the EQ (transparent until a model is loaded; never blocks the graph if
-  // the worklet isn't available). amp → cab is the natural order.
+  // after the drives (transparent until a model is loaded; never blocks the
+  // graph if the worklet isn't available). amp → eq → cab is the natural order.
   const ampIn  = ctx.createGain();
   const ampDrive = ctx.createGain();   // input drive INTO the model — how hard you
                                        // hit the (nonlinear) capture, like a real
@@ -289,9 +305,9 @@ export function createRigStrip(ctx, cfg) {
     });
   } catch { neural = null; }
 
-  // Cab / IR loader — convolution insert after the amp (dry/wet so bypass = dry,
-  // and it's transparent until an IR is loaded). Sits before the time fx so
-  // delay / reverb sit on the cab'd tone.
+  // Cab / IR loader — convolution insert after amp + tone-stack eq (dry/wet so
+  // bypass = dry, and it's transparent until an IR is loaded). Sits before the
+  // time fx so delay / reverb sit on the cab'd tone.
   const cabIn  = ctx.createGain();
   const cabConv = ctx.createConvolver();
   const cabDry = ctx.createGain();
@@ -299,22 +315,25 @@ export function createRigStrip(ctx, cfg) {
   const cabSum = ctx.createGain();
   let cabBuf = null;
 
-  // Time-fx split: post-cab fans to dry + delay send + reverb send, summed pre-pan.
-  const fxIn = ctx.createGain();
-  const dry  = ctx.createGain();
-  const sum  = ctx.createGain();
+  // Time fx — two SERIES inserts (each dry + wet, wet gain = mix), delay first:
+  // the delay's output (dry + repeats) feeds the reverb, so echoes get
+  // reverberated too — repeats and dry share the same room, like a pedalboard.
 
-  // Stereo ping-pong delay: send → delayL → [L], delayL → delayR → [R],
-  // delayR → feedback → delayL.
-  const delaySend = ctx.createGain();
+  // Stereo ping-pong delay insert: in → delayL → [L], delayL → delayR → [R],
+  // delayR → feedback → delayL; merged wet sums with the dry pass-through.
+  const delayIn   = ctx.createGain();
+  const delayDry  = ctx.createGain();
+  const delaySum  = ctx.createGain();
   const delayL    = ctx.createDelay(5.0);
   const delayR    = ctx.createDelay(5.0);
   const delayFb   = ctx.createGain();
   const merger    = ctx.createChannelMerger(2);
   const delayWet  = ctx.createGain();
 
-  // Convolution reverb (generated decaying-noise IR).
-  const reverbSend = ctx.createGain();
+  // Convolution reverb insert (generated decaying-noise IR).
+  const reverbIn  = ctx.createGain();
+  const reverbDry = ctx.createGain();
+  const reverbSum = ctx.createGain();
   const convolver  = ctx.createConvolver();
   const reverbWet  = ctx.createGain();
 
@@ -322,9 +341,15 @@ export function createRigStrip(ctx, cfg) {
   const panner = ctx.createStereoPanner();
 
   // ── wire the graph ──
-  input.connect(hpf);
-  // Earth stage: HPF → earthPre → shaper → tone LPF → earthPost
-  hpf.connect(earthPre);
+  // Front-of-chain graphic EQ: input → 7 peaking bands → level trim.
+  let geqTail = input;
+  for (const n of geqFilters) { geqTail.connect(n); geqTail = n; }
+  geqTail.connect(geqLevel);
+  // Comp fork: geqLevel → compIn → (comp | direct) → earthPre; routeComp()
+  // owns the fork.
+  geqLevel.connect(compIn);
+  comp.connect(earthPre);
+  // Earth stage: earthPre → shaper → tone LPF → earthPost
   earthPre.connect(earthShaper);
   earthShaper.connect(earthTone);
   earthTone.connect(earthPost);
@@ -337,51 +362,48 @@ export function createRigStrip(ctx, cfg) {
   mLow.connect(mMid);
   mMid.connect(mHigh);
   mHigh.connect(metalPost);
-  // comp → amp (EQ moved downstream of the cab; see chain diagram above).
-  // metalPost → compIn → (comp | direct) → ampIn; routeComp() owns the fork.
-  metalPost.connect(compIn);
-  comp.connect(ampIn);
+  metalPost.connect(ampIn);
   ampIn.connect(ampDry); ampDry.connect(ampSum);
   // Drive only feeds the wet (model) path — the dry blend stays unity so `mix`
   // crossfades cleanly and bypass is exactly the input.
   if (neural) { ampIn.connect(ampDrive); ampDrive.connect(neural); neural.connect(ampWet); ampWet.connect(ampSum); }
-  ampSum.connect(cabIn);
-  cabIn.connect(cabDry); cabDry.connect(cabSum);
-  cabIn.connect(cabConv); cabConv.connect(cabWet); cabWet.connect(cabSum);
-  // Post-cab EQ → graphic EQ → parametric EQ → time-fx split.
-  cabSum.connect(eqLow);
+  // Tone-stack EQ between amp and cab.
+  ampSum.connect(eqLow);
   eqLow.connect(eqMid);
   eqMid.connect(eqHigh);
-  let eqTail = eqHigh;
-  for (const n of geqFilters) { eqTail.connect(n); eqTail = n; }
-  eqTail.connect(geqLevel);
-  eqTail = geqLevel;
-  for (const n of peqFilters) { eqTail.connect(n); eqTail = n; }
-  eqTail.connect(fxIn);
-  geqLevel.connect(peqPreTap);   // spectrum taps (sinks) for the peq editor
-  eqTail.connect(peqPostTap);
-
-  fxIn.connect(dry); dry.connect(sum);
-
-  fxIn.connect(delaySend);
-  delaySend.connect(delayL);
+  eqHigh.connect(cabIn);
+  cabIn.connect(cabDry); cabDry.connect(cabSum);
+  cabIn.connect(cabConv); cabConv.connect(cabWet); cabWet.connect(cabSum);
+  // Post-cab HPF → time fx in series: delay insert, then reverb insert.
+  cabSum.connect(hpf);
+  hpf.connect(delayIn);
+  delayIn.connect(delayDry); delayDry.connect(delaySum);
+  delayIn.connect(delayL);
   delayL.connect(merger, 0, 0);
   delayL.connect(delayR);
   delayR.connect(merger, 0, 1);
   delayR.connect(delayFb);
   delayFb.connect(delayL);
   merger.connect(delayWet);
-  delayWet.connect(sum);
+  delayWet.connect(delaySum);
 
-  fxIn.connect(reverbSend);
-  reverbSend.connect(convolver);
+  delaySum.connect(reverbIn);
+  reverbIn.connect(reverbDry); reverbDry.connect(reverbSum);
+  reverbIn.connect(convolver);
   convolver.connect(reverbWet);
-  reverbWet.connect(sum);
+  reverbWet.connect(reverbSum);
 
-  sum.connect(panner);
+  // Output surgical EQ: reverbSum → 8 parametric bands → pan → out.
+  let peqTail = reverbSum;
+  for (const n of peqFilters) { peqTail.connect(n); peqTail = n; }
+  peqTail.connect(panner);
+  reverbSum.connect(peqPreTap);   // spectrum taps (sinks) for the peq editor
+  peqTail.connect(peqPostTap);
+
   panner.connect(output);
 
-  dry.gain.value = 1;
+  delayDry.gain.value = 1;
+  reverbDry.gain.value = 1;
 
   // ── IR generation (debounced rebuild when decay changes) ──
   let irDecay = -1;
@@ -449,7 +471,7 @@ export function createRigStrip(ctx, cfg) {
     mHigh.gain.value = clamp(d.high, -15, 15);
     metalPost.gain.value = level * METAL_OUT_TRIM;   // makeup, calibrated to ~unity at noon
   }
-  // Route compIn → comp (on) or compIn → ampIn (off). Rewiring the graph live
+  // Route compIn → comp (on) or compIn → earthPre (off). Rewiring the graph live
   // can click, so the swap happens inside a short gain dip on compIn (~6 ms
   // down, rewire, ~6 ms up — well under audibility as a gap). The dip also
   // masks the ~6 ms timeline jump from the comp's lookahead entering/leaving
@@ -460,7 +482,7 @@ export function createRigStrip(ctx, cfg) {
     if (compRouted === useComp) return;
     if (compRouted === null) {
       compRouted = useComp;
-      compIn.connect(useComp ? comp : ampIn);
+      compIn.connect(useComp ? comp : earthPre);
       return;
     }
     compRouted = useComp;
@@ -471,7 +493,7 @@ export function createRigStrip(ctx, cfg) {
     setTimeout(() => {
       try { compIn.disconnect(); } catch {}
       // Re-check state: a fast double-toggle may have re-routed meanwhile.
-      compIn.connect(compRouted ? comp : ampIn);
+      compIn.connect(compRouted ? comp : earthPre);
       const t2 = ctx.currentTime;
       compIn.gain.cancelScheduledValues(t2);
       compIn.gain.setValueAtTime(0, t2);
@@ -571,7 +593,7 @@ export function createRigStrip(ctx, cfg) {
   function applyPan() {
     panner.pan.setTargetAtTime(clamp(state.pan.pan, -1, 1), ctx.currentTime, 0.01);
   }
-  function applyAll() { applyHpf(); applyEarth(); applyMetal(); applyComp(); applyEq(); applyGeq(); applyPeq(); applyAmp(); applyCab(); applyDelay(); applyReverb(); applyPan(); }
+  function applyAll() { applyGeq(); applyComp(); applyEarth(); applyMetal(); applyAmp(); applyEq(); applyCab(); applyHpf(); applyDelay(); applyReverb(); applyPeq(); applyPan(); }
 
   const APPLY = { hpf: applyHpf, earth: applyEarth, metal: applyMetal, comp: applyComp, eq: applyEq, geq: applyGeq, peq: applyPeq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
 
@@ -616,16 +638,17 @@ export function createRigStrip(ctx, cfg) {
   }
 
   function dispose() {
-    for (const n of [input, hpf,
+    for (const n of [input, ...geqFilters, geqLevel, compIn, comp,
                      earthPre, earthShaper, earthTone, earthPost,
                      metalPre, metalShaper1, metalStage, metalShaper2,
-                     mLow, mMid, mHigh, metalPost, compIn, comp,
-                     eqLow, eqMid, eqHigh, ...geqFilters, geqLevel, ...peqFilters,
-                     peqPreTap, peqPostTap,
+                     mLow, mMid, mHigh, metalPost,
                      ampIn, ampDrive, ampDry, ampWet, ampSum,
-                     cabIn, cabConv, cabDry, cabWet, cabSum,
-                     fxIn, dry, sum, delaySend, delayL, delayR, delayFb, merger,
-                     delayWet, reverbSend, convolver, reverbWet, panner, output]) {
+                     eqLow, eqMid, eqHigh,
+                     cabIn, cabConv, cabDry, cabWet, cabSum, hpf,
+                     delayIn, delayDry, delayL, delayR, delayFb, merger,
+                     delayWet, delaySum,
+                     reverbIn, reverbDry, convolver, reverbWet, reverbSum,
+                     ...peqFilters, peqPreTap, peqPostTap, panner, output]) {
       try { n.disconnect(); } catch {}
     }
     try { neural?.disconnect(); } catch {}
