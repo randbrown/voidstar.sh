@@ -410,6 +410,28 @@ export async function fetchAiChart(song) {
   }
 }
 
+// A concise steel-guitar direction summary drafted by an LLM with web-search
+// grounding (worker /ai/steel-summary): presence, entrances, style lineage,
+// intensity — a few sentences for quick reference while studying/performing.
+// Returns {ok:true, data:{summary, confidence, provider, model, sources}} or
+// {ok:false, reason} — 'no-ai-key' means the worker has no AI key configured.
+export async function fetchSteelSummary(song) {
+  const sources = getSources();
+  if (!sources.workerUrl) return { ok: false, reason: 'no worker configured' };
+  try {
+    const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
+    const res = await fetch(`${sources.workerUrl}/ai/steel-summary?${params}`);
+    if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
+    if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
+    const data = await res.json();
+    if (data?.aiConfigured === false) return { ok: false, reason: 'no-ai-key' };
+    if (!data?.found || !data?.summary) return { ok: false, reason: data?.reason || 'AI could not verify this song' };
+    return { ok: true, data };
+  } catch {
+    return { ok: false, reason: 'network error' };
+  }
+}
+
 // Song metadata from music APIs (worker /meta/song — Spotify audio-features
 // when the song has a linked track, keyless Deezer for BPM, keyless iTunes
 // for artist/genre/year/artwork/duration). Returns {bpm?, key?, time?,

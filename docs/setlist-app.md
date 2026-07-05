@@ -20,7 +20,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, spotifyUri, chartUrl, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker) |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, chartUrl, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow), one per song |
@@ -137,6 +137,52 @@ exists, the lyrics section becomes a scrolling box whose active line
 highlights and centers as the **timecode timer** runs (the `onTimecodeTick`
 hook in `renderSongFocus`) — start the timer with the Spotify embed and the
 lyrics follow.
+
+### "steel summary (AI)" — the steel direction for a song
+
+`song.steelSummary` is a few concise sentences on what the steel guitar does
+in the recording — presence/intensity, where it enters, style lineage ("heavy
+honky-tonk a la Buddy Emmons"), signature moments — for quick reference while
+studying and on stage. The song page's "steel summary (AI)" button calls the
+worker's **`GET /ai/steel-summary`** (same provider chain, grounding, and
+hallucination guards as `/ai/chart`: web search, `found:false` over invention,
+`AI_MIN_CONFIDENCE` gate, server-side length clamp, 7-day response cache).
+"No steel on the recording — fiddle covers that space" is a *valid, useful*
+answer; `found:false` is only for a song the model can't verify at all.
+Regenerating overwrites the previous summary (the tap is the consent), and the
+edit-details form has a Steel Summary textarea for hand-tweaking the wording —
+hand edits are just the field's value, so nothing distinguishes them from AI
+text afterward. The summary renders as a cyan quick-reference block on the
+song page (`.sl-steel-summary`) and in perform mode
+(`.sl-perform-steel-summary`), always via `textContent`/`esc()` — it's model
+output, never trusted HTML.
+
+### Library helpers — whole-library administrative passes
+
+Settings → **"library helpers"** (`src/lib/setlist/bulk.js`) runs the song
+page's per-song buttons across every song that still needs them, so keeping
+the library filled in doesn't require opening songs one by one. Every pass is
+**fill-empty** (hand-set values are never overwritten), runs sequentially with
+per-song progress in a status line, and lists failures as tappable rows that
+open the song:
+
+- **check library health** — read-only report of what's missing per dimension
+  (no key / no chart / no lyrics / no Spotify link / no artist / no steel
+  summary), each expandable into the actual songs. Start here.
+- **re-scan all charts** — `readChartFields()` per charted song: the "read
+  chart" ladder (doc-text scrape → cache the chart bytes, which fills keys
+  from text-chart headers → AI vision read of a scanned image) extracted from
+  the song-page button so both run identical logic. The expensive vision rung
+  only fires for songs still missing a key, so re-running the pass on an
+  already-filled library is cheap.
+- **fetch info & lyrics** — "fetch info" library-wide: `/meta/song` metadata
+  plus LRCLIB lyrics for every song missing any of it. Lyrics come straight
+  from the browser, so this pass works even with no worker configured.
+- **AI steel summaries** — drafts `steelSummary` for every song without one
+  (missing-only: at ~15–30 s of grounded LLM per song, regeneration stays on
+  the song page). Confirms with a song count before starting; a config
+  problem (`no-ai-key`, outdated worker) aborts the pass with one message
+  instead of failing N times.
 
 ## Backup/Restore vs. Sync — these are different features
 
@@ -518,4 +564,6 @@ Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 artist/genre/year/artwork/duration),
 `GET /ai/chart?title=&artist=&key=`,
 `POST /ai/chart-read` (vision read of a scanned chart image;
-`ANTHROPIC_READ_MODEL` overrides the default Haiku), `GET /health`.
+`ANTHROPIC_READ_MODEL` overrides the default Haiku),
+`GET /ai/steel-summary?title=&artist=` (concise steel-direction summary,
+same provider chain and guards as `/ai/chart`), `GET /health`.
