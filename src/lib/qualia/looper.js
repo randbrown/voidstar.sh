@@ -77,30 +77,16 @@ const AMPCUR_KEY     = `${NS}.ampCur`;      // misc id of the currently-loaded a
 const LIB_MAX        = 24;                  // cap on saved files per library
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
-// Channel strip UI schema — stages + params (the audio side lives in
-// rig-strip.js; STRIP_DEFAULTS supplies initial values). `group` controls only
-// the UI placement (the audio graph order is fixed in rig-strip.js): 'main'
-// stages live in the always-visible row a performer reaches for live (earth,
-// metal, amp, cab, delay, reverb); 'util' stages (hpf, comp, eq, pan) tuck into
-// a collapsible "utility" drawer so they're out of the way until needed.
+// Channel strip UI schema — stages + params, listed in audio-chain order (the
+// audio side lives in rig-strip.js; STRIP_DEFAULTS supplies initial values).
+// `group`/`cluster` control only UI placement (the audio graph order is fixed
+// in rig-strip.js): 'main' stages live in the always-visible clustered row a
+// performer reaches for live — drive (earth · metal) · tone (amp · eq · cab) ·
+// space (delay · reverb) — and 'util' stages (geq, comp, hpf, peq, pan) tuck
+// into a collapsible "utility" drawer so they're out of the way until needed.
 const STRIP_SCHEMA = [
-  { id: 'hpf',    name: 'hpf',    group: 'util', toggle: true,  params: [{ id: 'freq', label: 'freq', min: 20, max: 400, step: 1, fmt: v => `${v|0}Hz` }] },
-  { id: 'earth',  name: 'earth',  group: 'main', toggle: true,  params: [
-    { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
-    { id: 'tone', label: 'tone', min: 0, max: 1, step: 0.01 },
-    { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
-  ] },
-  { id: 'metal',  name: 'metal',  group: 'main', toggle: true,  params: [
-    { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
-    { id: 'low', label: 'low', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
-    { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
-    { id: 'midFreq', label: 'mFq', min: 200, max: 5000, step: 10, fmt: v => `${v|0}Hz` },
-    { id: 'high', label: 'high', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
-    { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
-  ] },
-  { id: 'comp',   name: 'comp',   group: 'util', toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
-  { id: 'eq',     name: 'eq',     group: 'util', toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
-  // geq — GE-7-voiced 7-band graphic EQ (surgical-ish fixed bands + level).
+  // geq — GE-7-voiced 7-band graphic EQ (front of chain: shapes the raw
+  // instrument before comp + drives).
   { id: 'geq',    name: 'geq',    group: 'util', toggle: true,  params: [
     { id: 'b100',  label: '100',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
     { id: 'b200',  label: '200',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
@@ -111,14 +97,40 @@ const STRIP_SCHEMA = [
     { id: 'b6400', label: '6.4k', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
     { id: 'level', label: 'lvl',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
   ] },
-  // peq — ReaEQ-style parametric EQ; fully custom editor (canvas + band
-  // controls), so no schema params — see buildPeqEditor().
+  { id: 'comp',   name: 'comp',   group: 'util', toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
+  { id: 'earth',  name: 'earth',  group: 'main', cluster: 'drive', toggle: true,  params: [
+    { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
+    { id: 'tone', label: 'tone', min: 0, max: 1, step: 0.01 },
+    { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
+  ] },
+  { id: 'metal',  name: 'metal',  group: 'main', cluster: 'drive', toggle: true,  params: [
+    { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
+    { id: 'low', label: 'low', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'midFreq', label: 'mFq', min: 200, max: 5000, step: 10, fmt: v => `${v|0}Hz` },
+    { id: 'high', label: 'high', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
+    { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
+  ] },
+  { id: 'amp',    name: 'amp',    group: 'main', cluster: 'tone', toggle: true,  ampLoader: true, params: [{ id: 'gain', label: 'gain', min: 0, max: 4, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
+  { id: 'eq',     name: 'eq',     group: 'main', cluster: 'tone', toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
+  { id: 'cab',    name: 'cab',    group: 'main', cluster: 'tone', toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
+  { id: 'hpf',    name: 'hpf',    group: 'util', toggle: true,  params: [{ id: 'freq', label: 'freq', min: 20, max: 400, step: 1, fmt: v => `${v|0}Hz` }] },
+  { id: 'delay',  name: 'delay',  group: 'main', cluster: 'space', toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
+  { id: 'reverb', name: 'reverb', group: 'main', cluster: 'space', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
+  // peq — ReaEQ-style parametric EQ (output end: surgical fixes on the full
+  // wet signal); fully custom editor (canvas + band controls), so no schema
+  // params — see buildPeqEditor().
   { id: 'peq',    name: 'peq',    group: 'util', toggle: true,  peq: true, params: [] },
-  { id: 'amp',    name: 'amp',    group: 'main', toggle: true,  ampLoader: true, params: [{ id: 'gain', label: 'gain', min: 0, max: 4, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
-  { id: 'cab',    name: 'cab',    group: 'main', toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
-  { id: 'delay',  name: 'delay',  group: 'main', toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
-  { id: 'reverb', name: 'reverb', group: 'main', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
   { id: 'pan',    name: 'pan',    group: 'util', toggle: false, params: [{ id: 'pan', label: 'pan', min: -1, max: 1, step: 0.02, fmt: v => v == 0 ? 'C' : (v < 0 ? `L${Math.round(-v*100)}` : `R${Math.round(v*100)}`) }] },
+];
+
+// The main row's three fixed zones, in signal-chain order. Each zone keeps its
+// stages side by side at every panel width (zones wrap as whole flex units),
+// so amp·eq·cab and delay·reverb never split across rows.
+const STRIP_CLUSTERS = [
+  { id: 'drive', label: 'drive', title: 'Drive pedals — earth (JFET soft clip) into metal (high-gain)' },
+  { id: 'tone',  label: 'tone',  title: 'Tone shaping — neural amp → tone-stack EQ → cab IR' },
+  { id: 'space', label: 'space', title: 'Time effects — delay feeds reverb, so the echoes share the room' },
 ];
 
 
@@ -1561,12 +1573,22 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function buildStripUI() {
     if (!stripBody || stripBody.children.length) return;
-    // Main group → fixed always-visible grid; util group → collapsible drawer.
-    // Schema order already yields the desired sub-orders (earth·metal·amp·cab·
-    // delay·reverb / hpf·comp·eq·pan), so a simple group filter is enough.
-    for (const stage of STRIP_SCHEMA) {
-      if (stage.group === 'util') continue;
-      stripBody.append(buildStripStage(stage, { collapsible: false }));
+    // Main group → three fixed zones (drive · tone · space) in signal-chain
+    // order, each a captioned tinted box whose stages sit in a fixed grid;
+    // util group → collapsible drawer, in schema (chain) order.
+    for (const cl of STRIP_CLUSTERS) {
+      const zone = document.createElement('div');
+      zone.className = 'rig-cluster'; zone.dataset.cluster = cl.id;
+      const cap = document.createElement('div');
+      cap.className = 'rig-cluster-cap'; cap.textContent = cl.label;
+      if (cl.title) cap.title = cl.title;
+      const grid = document.createElement('div'); grid.className = 'rig-cluster-grid';
+      for (const stage of STRIP_SCHEMA) {
+        if (stage.group !== 'main' || stage.cluster !== cl.id) continue;
+        grid.append(buildStripStage(stage, { collapsible: false }));
+      }
+      zone.append(cap, grid);
+      stripBody.append(zone);
     }
     if (stripUtilBody) {
       for (const stage of STRIP_SCHEMA) {

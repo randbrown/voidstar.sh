@@ -21,9 +21,9 @@ All paths are under `src/lib/qualia/`.
                                   ▼
                           all qualia fx (visuals)
 
- rig (native ctx):  in → HPF → Earth → Metal → comp → neural amp → cab IR
-                       → EQ → GEQ(7-band) → PEQ(8-band parametric)
-                       → [dry / ping-pong delay / reverb] → pan → rig master → limiter → out
+ rig (native ctx):  in → GEQ(7-band) → comp → Earth → Metal → neural amp → EQ → cab IR
+                       → HPF → ping-pong delay → reverb → PEQ(8-band parametric)
+                       → pan → rig master → limiter → out
  vocoder (own ctx): mic → vocoder bank ⨉ carrier → clarity chain → limiter → mute gate → out
 ```
 
@@ -84,26 +84,34 @@ directly.
 
 ## rig-strip.js — the guitar/pedal-steel pedalboard
 
-A native-Web-Audio pedalboard, fixed-order series chain with parallel time-fx sends. Runs in the
-**looper's** native context (worklets can't live in Tone's context). Every stage **bypasses to
+A native-Web-Audio pedalboard, fixed-order series chain laid out like a physical board. Runs in
+the **looper's** native context (worklets can't live in Tone's context). Every stage **bypasses to
 neutral**, so toggling a pedal never re-wires the graph (no clicks) — except the **comp**, which
 hard-bypasses (rewired around, under a ~6 ms gain dip): a "transparent" `DynamicsCompressor`
 still delays the signal by its ~6 ms lookahead, and this is the live monitoring path.
 
 ```
-in → HPF → Earth(drive) → Metal(drive) → comp → neural amp → cab(IR)
-   → EQ(lo/mid/hi) → GEQ(7-band graphic) → PEQ(8-band parametric)
-   → [ dry │ ping-pong delay │ reverb ] → pan → output
+in → GEQ(7-band graphic) → comp → Earth(drive) → Metal(drive)
+   → neural amp → EQ(lo/mid/hi) → cab(IR) → HPF
+   → ping-pong delay → reverb → PEQ(8-band parametric) → pan → output
 ```
 
 - **Earth** = one asymmetric-tanh `WaveShaper` (JFET-voiced) + tone LPF. **Metal** = two cascaded
   shapers + 3-band parametric EQ. **Cab** + **reverb** are `ConvolverNode`s (reverb IR is generated
-  decaying noise, rebuilt on decay change). **Delay** is a true ping-pong.
-- **Three post-cab EQs**, coarse → surgical: **eq** (3 fixed shelves/peak, tone knobs), **geq**
-  (Boss GE-7-voiced graphic: 7 octave-spaced peaking bands 100 Hz–6.4 kHz ±15 dB + level), **peq**
-  (ReaEQ-style parametric: 8 bands, each with enable / type peak·shelves·pass·notch / freq / gain /
-  Q). All are plain biquads permanently in the series chain, bypassing to bit-transparent neutral
-  (peaking @ 0 dB) — **zero added latency on or off**, no graph rewiring, negligible CPU. The peq's
+  decaying noise, rebuilt on decay change). **Delay** is a true ping-pong. The two time fx run
+  **in series** — the delay's output (dry + repeats) feeds the reverb, so echoes get reverberated
+  and share the dry signal's room. **Comp** sits up front as an instrument compressor (clarity /
+  attack into the drives); output limiting stays at the rig master (`limiter.js`), never in the
+  strip. The **HPF** is post-cab: it de-woofs the cab'd tone and keeps low mud out of the wash.
+- **Three EQs spread along the chain**, one job each: **geq** at the front, shaping the raw
+  instrument before comp + drives (Boss GE-7-voiced graphic: 7 octave-spaced peaking bands
+  100 Hz–6.4 kHz ±15 dB + level); **eq** between amp and cab, an FX-loop tone stack on the amp'd
+  signal (3 fixed shelves/peak, tone knobs); **peq** at the output after the time fx, for surgical
+  fixes on the full wet signal (ReaEQ-style parametric: 8 bands, each with enable / type
+  peak·shelves·pass·notch / freq / gain / Q). Nonlinear stages sit between them, so their
+  positions are audible. All are plain biquads permanently in the series chain, bypassing to
+  bit-transparent neutral (peaking @ 0 dB) — **zero added latency on or off**, no graph rewiring,
+  negligible CPU. The peq's
   panel editor (in `looper.js`) draws the composite response on a log-frequency canvas with
   draggable band handles; the curve is queried from prototype `BiquadFilterNode`s in a dormant
   `OfflineAudioContext` via `getFrequencyResponse`, so the display is exactly the browser's own
