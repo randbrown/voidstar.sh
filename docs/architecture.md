@@ -105,6 +105,21 @@ all `three` quales — quales must not dispose it (see `three-host.js`). This fi
 lost-context bug. WebGL2 contexts are created with `preserveDrawingBuffer: true` so the overlay's
 post-FX (ASCII/mosh/edge) can read pixels back from any fx.
 
+**Cam walk** (`cam-walk.js`) is a top-level virtual-camera drift over the whole scene stack (Hydra +
+fx canvas + transition freeze-frame + overlay — never the camera panel or UI): random pan (up to
+±60% of the stage), exponential zoom (up to 20×), and unbounded rotation (a spin velocity, so the
+frame can roll upside down or past 360° between re-aims). Each gated hard beat re-aims ONE axis
+round-robin (sometimes two); the very hardest kicks (the shared hard-kick detector) re-aim all
+three with a zoom punch, and an idle fallback keeps it wandering without audio. Applied as a
+compositor-only CSS transform (zero pixel cost) with an auto cover-zoom computed from the actual
+angle/offset so edges never show. Per-layer scope toggles choose whether Hydra, the pose overlays,
+and the glitch post ride the walk or stay screen-pinned (the ascii/mosh/edge passes render to their
+own `postCanvas` under the pose canvas — display:none when idle — precisely so they can be scoped
+independently; a pinned post re-reads the raw fx buffer, so an active full-frame glitch hides the
+walk — a deliberate "fixed HUD" look). The recorder composite mirrors the same matrix and scoping
+so recordings match the live view. Toggled by the topbar `walk` button (post ▾ group, hotkey `U`),
+tuned in the walk card, persisted in settings and qualems.
+
 ---
 
 ## 5. Why audio runs in multiple AudioContexts

@@ -180,6 +180,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #hydra-canvas {
       position: fixed; inset: 0; width: 100%; height: 100%; display: block;
       z-index: 1; pointer-events: none;
+      /* Cam-walk pivots every scene layer around the fx stage centre. Hydra
+         spans the full viewport even in split mode, so pin its transform
+         origin to the viz rect's centre (defaults = viewport centre). */
+      transform-origin:
+        calc(var(--viz-left, 0px) + var(--viz-w, 100vw) / 2)
+        calc(var(--viz-top, 0px) + var(--viz-h, 100dvh) / 2);
     }
     /* Canvases that QualiaCore creates inside #qualia-host inherit fullscreen
        fixed positioning. mix-blend-mode:screen lets near-black fill reveal
@@ -434,6 +440,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-pause                { min-width: 6ch;  } /* "paused" */
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
+    #btn-walk                 { min-width: 9ch;  } /* "walk off" */
     #btn-record-mode          { min-width: 2.25ch; } /* ▾ caret (capture menu) */
 
     /* Topbar group popovers — each `.qg-group` owns a trigger button + a
@@ -2504,6 +2511,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn" id="btn-ascii" title="ASCII post (T) — off / on / blip / flip">ascii</button>
         <button class="ctrl-btn" id="btn-mosh"  title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
         <button class="ctrl-btn" id="btn-edge"  title="Edge-detect post (E) — off / on / blip / flip">edge</button>
+        <button class="ctrl-btn" id="btn-walk"  title="Cam walk (U) — slow pan / zoom / rotate camera drift over the scene, re-aims on hard beats">walk</button>
       </div>
     </div>
 
@@ -2789,6 +2797,55 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
   </div>
 
+  <!-- Cam-walk card — tunables for the top-level camera drift (cam-walk.js).
+       Shown while the walk is on, like the mosh/edge cards. -->
+  <div id="walk-card" class="qp-card collapsed" style="display:none">
+    <div class="qp-head" data-toggle="walk-card">
+      <span class="qp-title">cam walk</span>
+      <span class="qp-spacer"></span>
+      <button class="qp-toggle" id="btn-walk-reset" title="Reset cam-walk tunables + layer scopes to defaults">reset</button>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-row" data-qp="walk-drift" title="Pan speed + wander range — at max the camera roams ±60% of the stage">
+        <label>drift<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0.35">
+      </div>
+      <div class="qp-row" data-qp="walk-zoom" title="Zoom travel depth, exponential — at max it dives up to 20× (0 = no zoom axis)">
+        <label>zoom<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0.40">
+      </div>
+      <div class="qp-row" data-qp="walk-rotate" title="Spin speed ceiling — unbounded angle: the frame can roll upside down or past 360° between re-aims (0 = no rotation axis)">
+        <label>rotate<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0.35">
+      </div>
+      <div class="qp-row" data-qp="walk-punch" title="Quick zoom punch on beat re-aims — full strength on the hardest kicks (0 = off)">
+        <label>punch<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0.30">
+      </div>
+      <div class="qp-row" data-qp="walk-min-gap" title="Beat gate — at most one re-aim per this many seconds. Each hit re-aims one axis (round-robin, sometimes two); the hardest kicks re-aim all three">
+        <label>beat gap min<span class="qp-val"></span></label>
+        <input type="range" min="0.5" max="15" step="0.5" value="2">
+      </div>
+      <div class="qp-row" data-qp="walk-max-gap" title="Idle fallback — at least one re-aim per this many seconds, beats or not">
+        <label>beat gap max<span class="qp-val"></span></label>
+        <input type="range" min="2" max="30" step="1" value="9">
+      </div>
+      <div class="qp-row" data-qp="walk-scope-hydra" title="Hydra layer rides the camera walk, or stays pinned to the screen">
+        <label>hydra</label>
+        <button class="qp-toggle active" id="walk-scope-hydra">walks</button>
+      </div>
+      <div class="qp-row" data-qp="walk-scope-pose" title="Pose overlays (skeleton / sparks / aura / ripples) ride the walk, or stay pinned to the real person on screen">
+        <label>pose</label>
+        <button class="qp-toggle" id="walk-scope-pose">pinned</button>
+      </div>
+      <div class="qp-row" data-qp="walk-scope-post" title="Glitch post (ascii / mosh / edge) rides the walk, or stays pinned. Pinned post re-reads the raw scene, so the walk won't show through an active full-frame glitch">
+        <label>glitch post</label>
+        <button class="qp-toggle active" id="walk-scope-post">walks</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Chron card — the session stopwatch's config surface. The stopwatch
        itself lives in src/lib/qualia/chron.js; the τ readout sits in the
        topbar and the pulses render into #chron-pulse. -->
@@ -2987,6 +3044,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <button class="qp-tab" data-card="camera-card" role="tab">camera</button>
   <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
   <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
+  <button class="qp-tab" data-card="walk-card"   role="tab">walk</button>
   <button class="qp-tab" data-card="chron-card"  role="tab">chron</button>
   <button class="qp-tab" data-card="diag-card"   role="tab">diag</button>
 </div>
