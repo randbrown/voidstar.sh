@@ -1269,6 +1269,20 @@ export function initQualiaPage() {
     settings.save();
   });
 
+  // Camera reclaimed by the OS/another app and pose.js's keep-alive gave up
+  // (see recoverCamera) — pose.stopCamera() already ran, so just sync the
+  // controls so they don't keep claiming the camera is on.
+  window.addEventListener('qualia:camera-lost', () => {
+    if (poseSelect.value === 'off') return;
+    poseSelect.value = 'off';
+    camSelect.style.display = 'none';
+    posesSelect.style.display = 'none';
+    syncPoseCardVisibility();
+    syncCameraCardVisibility();
+    refreshGroupActiveDots();
+    settings.save();
+  });
+
   // ── Cam size cycle ────────────────────────────────────────────────────────
   const CAM_SIZES = ['small', 'large', 'full', 'hidden'];
   function setCamSize(idx) {
