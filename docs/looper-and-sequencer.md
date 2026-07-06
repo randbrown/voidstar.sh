@@ -102,7 +102,12 @@ Two **unrelated** pipelines (see architecture §7 for the full rationale):
 ### Screen recorder (`recorder.js`)
 MediaRecorder over a composited fx+overlay canvas + the recordable audio mix.
 - **Backends:** `viewport` (default — composites in-page, no screen-share dialog) and `tab`
-  (`getDisplayMedia`, captures the whole tab including panels).
+  (`getDisplayMedia`, captures the whole tab including panels). Mobile browsers (Chrome Android,
+  iOS Safari, Samsung Internet) have no working `getDisplayMedia` and no web API to launch the OS
+  screen recorder, so there the tab menu item is repurposed as a **sys rec** helper: it enters
+  fullscreen (hides browser chrome) and toasts instructions to start the system screen recorder —
+  the only panel-inclusive capture path on phones. Stored/imported `captureMode: 'tab'` is coerced
+  back to `viewport` on those devices.
 - **Codec:** MP4 (H.264+AAC) preferred, with an explicitly-ordered candidate list (high profiles
   first — Chrome Android falsely reports Baseline support then throws `EncodingError` on big
   canvases). A per-device `voidstar.recorder.skipMp4` flag falls back to WebM permanently on

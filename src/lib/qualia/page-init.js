@@ -434,12 +434,22 @@ export function initQualiaPage() {
     splitRatio = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, stored.splitRatio));
   }
 
+  // Tab capture needs getDisplayMedia, which mobile browsers don't have —
+  // Chrome Android exposed it briefly (72–88) but every call failed with
+  // NotAllowedError, and today it's absent there, on iOS Safari, and on
+  // Samsung Internet. There's also no web API to launch the OS screen
+  // recorder. So on these devices the "tab" menu item is repurposed into a
+  // system-recorder helper (see the capture-menu wiring): it preps the page
+  // (fullscreen, so the recording has no browser chrome) and tells the user
+  // to start the OS screen recorder, which is the only thing that CAN
+  // capture panels + menus + cam there.
+  const tabCaptureSupported = !!navigator.mediaDevices?.getDisplayMedia;
   // Recorder capture mode — restored from settings, cycled by the
   // btn-record-mode button below. 'viewport' uses the composite canvas
   // (clean fx + overlay output, no screen-share dialog); 'tab' uses
   // getDisplayMedia({preferCurrentTab: true}) to capture the whole tab
   // including strudel REPL + sequencer panels + any open HUD cards.
-  let captureMode = (stored.captureMode === 'tab') ? 'tab' : 'viewport';
+  let captureMode = (stored.captureMode === 'tab' && tabCaptureSupported) ? 'tab' : 'viewport';
   // Auto-save (default on): qfx recordings save with a default filename and
   // no save-dialog (which on macOS leaves fullscreen). Off = choose location.
   let autoSaveRec = stored.recAutoSave !== false;
@@ -2449,6 +2459,20 @@ export function initQualiaPage() {
   // keeps the active menu item, the trigger tooltip, and the rec button
   // tooltip in sync with captureMode.
   const captureMenuItems = document.querySelectorAll('.qg-group[data-group="capture"] .qg-menuitem[data-capture]');
+  // No tab capture on this browser (mobile) → the "tab" item becomes the
+  // system-recorder helper. Relabel it up front; behavior swaps in the
+  // click wiring below.
+  if (!tabCaptureSupported) {
+    const tabItem = document.querySelector('.qg-group[data-group="capture"] .qg-menuitem[data-capture="tab"]');
+    if (tabItem) {
+      tabItem.textContent = 'sys rec';
+      tabItem.setAttribute('role', 'menuitem');   // an action, not a mode radio
+      tabItem.title = 'System-recorder helper — this browser can\'t capture the tab from the page. '
+        + 'Tap to go fullscreen (hides the browser chrome), then start your OS screen recorder '
+        + '(Android: swipe down twice → Screen record → allow device audio + mic). '
+        + 'That captures everything: fx, panels, menus, cam.';
+    }
+  }
   const btnRecAutoSave = document.getElementById('btn-rec-autosave');
   const btnRecAutoFs = document.getElementById('btn-rec-autofs');
   const btnRecAutoZen = document.getElementById('btn-rec-autozen');
@@ -2480,7 +2504,9 @@ export function initQualiaPage() {
       btnRecAutoSave.textContent = autoSaveRec ? 'auto-save ✓' : 'auto-save';
     }
     if (btnRecordMode) {
-      btnRecordMode.title = captureMode === 'tab'
+      btnRecordMode.title = !tabCaptureSupported
+        ? 'Capture mode: qfx — composites the fx + overlay + camera. This browser has no tab capture; for a recording that includes the panels + menus, tap "sys rec" to prep the OS screen recorder.'
+        : captureMode === 'tab'
         ? 'Capture mode: full tab — share-picker captures the whole tab incl. panels. NOTE: many browsers/GPUs capture the WebGL visuals as a frozen still via tab capture, and the file may not open in macOS Preview. For panel-inclusive performance capture, use OBS or macOS ⌘⇧5 instead. Audio comes from the in-page mix bus.'
         : 'Capture mode: qfx (recommended) — composites the fx + overlay + camera, no share dialog, opens in Preview. Does not include the HUD panels (use OBS / ⌘⇧5 for those).';
     }
@@ -2490,6 +2516,16 @@ export function initQualiaPage() {
   captureMenuItems.forEach(item => {
     item.addEventListener('click', () => {
       if (recorder.isRecording()) return;   // locked during a take
+      if (item.dataset.capture === 'tab' && !tabCaptureSupported) {
+        // System-recorder helper: nothing to capture from the page here.
+        // Prep the stage (fullscreen hides the URL bar so the OS recording
+        // is clean) and point the user at the system screen recorder.
+        // No zen — the whole point is recording the panels + UI.
+        closeAllGroupsExcept(null);
+        setFullscreen(true);
+        showSysRecHint();
+        return;
+      }
       captureMode = item.dataset.capture === 'tab' ? 'tab' : 'viewport';
       refreshRecordModeBtn();
       closeAllGroupsExcept(null);            // dismiss the popover after picking
@@ -2563,6 +2599,24 @@ export function initQualiaPage() {
     try { await recorder.start(); }
     catch (err) { console.warn('[recorder] auto-record failed:', err); }
     finally { recOverride = null; }
+  }
+
+  // "sys rec" helper hint (mobile-only path — shown after the helper item
+  // enters fullscreen). Rides the rec toast in its "ready" style; the long
+  // timeout gives the user time to swipe down and find the recorder tile
+  // without the hint vanishing mid-hunt. Any rec-button press replaces it.
+  function showSysRecHint() {
+    const msg = 'fullscreen on — start the system screen recorder (swipe down twice → Screen record → device audio + mic) to capture panels + UI + cam';
+    if (!recToast || !recToastText) { alert(msg); return; }
+    recToast.style.display = 'flex';
+    recToast.classList.remove('rec-active');
+    recToast.classList.add('rec-ready');
+    recToastText.textContent = msg;
+    if (recToastActions) recToastActions.style.display = 'none';
+    setTimeout(() => {
+      // Don't clobber a real recording toast that appeared in the meantime.
+      if (recToastText?.textContent === msg) hideRecToast();
+    }, 15000);
   }
 
   function hideRecToast() {
@@ -4493,7 +4547,9 @@ export function initQualiaPage() {
       }
       if (mi.chron && typeof chron.setConfig === 'function') { try { chron.setConfig(mi.chron); } catch {} }
       if (mi.recorder && typeof mi.recorder === 'object') {
-        if (mi.recorder.captureMode === 'tab' || mi.recorder.captureMode === 'viewport') captureMode = mi.recorder.captureMode;
+        // 'tab' only sticks where tab capture exists — a qualem exported on
+        // desktop shouldn't wedge a phone into the dead getDisplayMedia path.
+        if (mi.recorder.captureMode === 'viewport' || (mi.recorder.captureMode === 'tab' && tabCaptureSupported)) captureMode = mi.recorder.captureMode;
         if (typeof mi.recorder.autoSave === 'boolean')       autoSaveRec = mi.recorder.autoSave;
         if (typeof mi.recorder.autoFullscreen === 'boolean') autoFullscreenRec = mi.recorder.autoFullscreen;
         if (typeof mi.recorder.autoZen === 'boolean')        autoZenRec = mi.recorder.autoZen;
