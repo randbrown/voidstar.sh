@@ -32,10 +32,11 @@
 //
 // Branding: the void* glyph on the curved face can be replaced by a custom
 // logo (URL or uploaded image, re-inked white so any art gets the same
-// extruded-light treatment), and an optional caption band below the mark
-// carries a billing/title line ("with alison swafford") baked with its glow
-// and breathing with rms/snare. The page can also suppress the mark while
-// the fullscreen voidstar_logo quale is active — no double branding.
+// extruded-light treatment), and an optional caption tucked just under the
+// outer orbit ring carries a billing/title line ("with alison swafford", up
+// to 3 lines via "\n" or "|") baked with its glow and breathing with
+// rms/snare. The page can also suppress the mark while the fullscreen
+// voidstar_logo quale is active — no double branding.
 
 import {
   compileProgram, makeFullscreenTri, FULLSCREEN_VERT,
@@ -71,7 +72,13 @@ const NUM_RINGS  = 3;
 const NUM_RAYS   = 6;
 const SPEC_BINS  = 96;    // spectrum-ring texture width
 const DRAG_SLOP  = 5;     // px before a pointerdown becomes a drag
-const CAPTION_FRAC = 0.16; // canvas fraction the caption band adds below the mark
+// Caption band geometry — the caption renders INSIDE the square canvas as a
+// bottom strip tucked right under the outer orbit ring (drawn after the edge
+// feather so it stays bright over the darkened rim). Per-line height + the
+// bottom inset, in canvas-vUv units; up to 3 lines stack upward from there.
+const CAPTION_LINE_H = 0.115;
+const CAPTION_Y0     = 0.025;
+const CAPTION_MAX_LINES = 3;
 
 // The mark variant of the voidstar-logo shader. Differences from the quale:
 // no cosmic background (black base for the screen blend), no pose parallax,
@@ -94,7 +101,7 @@ uniform int   uPalette;
 uniform float uGlowAmt;
 uniform float uOpacity;
 uniform float uSpectrumAmt;
-uniform float uCaptionFrac;   // bottom canvas fraction holding the caption band
+uniform vec2  uCaption;       // caption band: x = bottom inset, y = height (0 = none)
 uniform vec2  uLogoHalf;      // sphere-glyph half-extents (JS-side; custom images reshape it)
 
 uniform sampler2D uLogoTex;
@@ -221,26 +228,8 @@ vec3 spectrumColor(float f, float amp) {
 void main() {
   Pal pal = getPalette(uPalette);
 
-  // ── Caption band — the bottom uCaptionFrac strip is the billing/title
-  // line, baked (glow included) into uCaptionTex; per-frame it just
-  // breathes with rms and flicks with the snare, like the mark's halo.
-  if (uCaptionFrac > 0.001 && vUv.y < uCaptionFrac) {
-    vec2  cUv = vec2(vUv.x, vUv.y / uCaptionFrac);
-    float ink = texture(uCaptionTex, cUv).r;
-    vec3 cc = mix(pal.logo, pal.voidEdge, 0.35) * ink
-            * (0.70 + uRms * 0.35 + uMids.y * 0.25);
-    cc = pow(cc, vec3(0.92));
-    cc *= (0.70 + uGlowAmt * 0.60) * uOpacity;
-    outColor = vec4(cc, 1.0);
-    return;
-  }
-
-  // Scene coords — the square region above the caption band. The scene
-  // region's pixel box is square by construction (layout sizes the canvas
-  // as W × W·(1+frac)), so the aspect term lands at ~1; kept exact anyway.
-  vec2 sUv = vec2(vUv.x, (vUv.y - uCaptionFrac) / max(1.0 - uCaptionFrac, 1e-3));
-  vec2 p = (sUv - 0.5) * 2.0;
-  p.x *= uResolution.x / max(uResolution.y * (1.0 - uCaptionFrac), 1.0);
+  vec2 p = (vUv - 0.5) * 2.0;
+  p.x *= uResolution.x / max(uResolution.y, 1.0);
 
   vec3 col = vec3(0.0);
 
@@ -484,6 +473,18 @@ void main() {
   // ── Outer feather + tone. The radial fade guarantees the square canvas
   // never shows a hard edge, whatever the sheath/rays/shockwave are doing.
   col *= 1.0 - smoothstep(0.86, 0.99, r);
+
+  // ── Caption — the billing/title line(s), baked (glow included) into
+  // uCaptionTex. Added AFTER the feather so the text stays bright over the
+  // darkened rim, snug under the outer orbit ring; per-frame it just
+  // breathes with rms and flicks with the snare, like the mark's halo.
+  if (uCaption.y > 0.001 && vUv.y > uCaption.x && vUv.y < uCaption.x + uCaption.y) {
+    vec2  cUv = vec2(vUv.x, (vUv.y - uCaption.x) / uCaption.y);
+    float ink = texture(uCaptionTex, cUv).r;
+    col += mix(pal.logo, pal.voidEdge, 0.35) * ink
+         * (0.70 + uRms * 0.35 + uMids.y * 0.25);
+  }
+
   col = pow(col, vec3(0.92));
   col *= (0.70 + uGlowAmt * 0.60) * uOpacity;
 
@@ -638,22 +639,29 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     return true;
   }
 
-  /** The caption band's canvas-height fraction (0 when there's no caption). */
-  function captionFrac() {
-    return cfg.caption.trim() ? CAPTION_FRAC : 0;
+  /** Caption split into display lines. Both a typed "\n" escape and a "|"
+   *  break lines (the card field is a single-line input). Max 3 lines. */
+  function captionLines() {
+    return cfg.caption.replace(/\\n/g, '\n').split(/[\n|]/)
+      .map(s => s.trim()).filter(Boolean).slice(0, CAPTION_MAX_LINES);
   }
 
+  /** vUv height of the caption band for the current text (0 = none). */
+  let captionBandH = 0;
+
   // ── Caption bake — text + its glow rendered once into a texture; the
-  // shader only modulates brightness per frame. Font auto-shrinks to fit.
+  // shader only modulates brightness per frame. Font auto-shrinks so the
+  // longest line fits; lines stack top-to-bottom.
   function bakeCaption() {
-    const text = cfg.caption.trim();
-    if (!text) {
+    const lines = captionLines();
+    captionBandH = CAPTION_LINE_H * lines.length;
+    if (!lines.length) {
       gl.bindTexture(gl.TEXTURE_2D, captionTex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([0]));
       gl.bindTexture(gl.TEXTURE_2D, null);
       return;
     }
-    const W = 2048, H = 256;
+    const W = 2048, LINE_PX = 192, H = LINE_PX * lines.length;
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
     const ctx = c.getContext('2d');
@@ -662,19 +670,22 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     const font = (px) => `600 ${px}px "JetBrains Mono", "Cascadia Code", "Fira Code", "Source Code Pro", "Ubuntu Mono", "Menlo", "Consolas", monospace`;
     let fs = 150;
     ctx.font = font(fs);
-    const w0 = ctx.measureText(text).width;
-    if (w0 > W * 0.92) { fs = Math.max(28, Math.floor(fs * (W * 0.92) / w0)); ctx.font = font(fs); }
+    const wMax = Math.max(...lines.map(t => ctx.measureText(t).width));
+    if (wMax > W * 0.92) { fs = Math.max(28, Math.floor(fs * (W * 0.92) / wMax)); ctx.font = font(fs); }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#fff';
     // Bake the glow into the texture: two soft shadow passes, then crisp ink.
-    ctx.shadowColor = '#fff';
-    ctx.shadowBlur = 26;
-    ctx.fillText(text, W / 2, H / 2);
-    ctx.shadowBlur = 12;
-    ctx.fillText(text, W / 2, H / 2);
-    ctx.shadowBlur = 0;
-    ctx.fillText(text, W / 2, H / 2);
+    for (let i = 0; i < lines.length; i++) {
+      const y = (i + 0.5) * LINE_PX;
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 26;
+      ctx.fillText(lines[i], W / 2, y);
+      ctx.shadowBlur = 12;
+      ctx.fillText(lines[i], W / 2, y);
+      ctx.shadowBlur = 0;
+      ctx.fillText(lines[i], W / 2, y);
+    }
     gl.bindTexture(gl.TEXTURE_2D, captionTex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
@@ -768,8 +779,7 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
   function layout(force = false) {
     if (!canvas) return;
     const stage = getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-    const capF = captionFrac();
-    const posKey = `${cfg.position}|${cfg.x.toFixed(4)}|${cfg.y.toFixed(4)}|${cfg.size}|${cfg.centerSize}|${capF}`;
+    const posKey = `${cfg.position}|${cfg.x.toFixed(4)}|${cfg.y.toFixed(4)}|${cfg.size}|${cfg.centerSize}`;
     if (!force &&
         stage.left === lastStage.left && stage.top === lastStage.top &&
         stage.width === lastStage.width && stage.height === lastStage.height &&
@@ -778,33 +788,31 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     lastPosKey = posKey;
 
     const s = markSize();
-    const hs = Math.round(s * (1 + capF));   // CSS height incl. caption band
     let x, y;   // stage-relative CSS px of the top-left corner
     switch (cfg.position) {
       case 'tl':     x = MARGIN; y = MARGIN; break;
       case 'tr':     x = stage.width - s - MARGIN; y = MARGIN; break;
-      case 'bl':     x = MARGIN; y = stage.height - hs - MARGIN; break;
-      case 'center': x = (stage.width - s) / 2; y = (stage.height - hs) / 2; break;
+      case 'bl':     x = MARGIN; y = stage.height - s - MARGIN; break;
+      case 'center': x = (stage.width - s) / 2; y = (stage.height - s) / 2; break;
       case 'custom':
         x = cfg.x * stage.width - s / 2;
-        y = cfg.y * stage.height - hs / 2;
+        y = cfg.y * stage.height - s / 2;
         break;
       case 'br':
-      default:       x = stage.width - s - MARGIN; y = stage.height - hs - MARGIN; break;
+      default:       x = stage.width - s - MARGIN; y = stage.height - s - MARGIN; break;
     }
-    x = Math.max(0, Math.min(stage.width  - s,  x));
-    y = Math.max(0, Math.min(stage.height - hs, y));
-    cssRect = { x, y, w: s, h: hs };
+    x = Math.max(0, Math.min(stage.width  - s, x));
+    y = Math.max(0, Math.min(stage.height - s, y));
+    cssRect = { x, y, w: s, h: s };
     canvas.style.left   = `${stage.left + x}px`;
     canvas.style.top    = `${stage.top + y}px`;
     canvas.style.width  = `${s}px`;
-    canvas.style.height = `${hs}px`;
+    canvas.style.height = `${s}px`;
 
     const dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
-    const bw = Math.min(Math.round(s * dpr), BACKING_CAP);
-    const bh = Math.round(bw * (1 + capF));
-    if (canvas.width !== bw || canvas.height !== bh) {
-      canvas.width = bw; canvas.height = bh;
+    const bpx = Math.min(Math.round(s * dpr), BACKING_CAP);
+    if (canvas.width !== bpx || canvas.height !== bpx) {
+      canvas.width = bpx; canvas.height = bpx;
     }
   }
 
@@ -969,7 +977,7 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     gl.uniform1f(U('uGlowAmt'),         cfg.glow);
     gl.uniform1f(U('uOpacity'),         cfg.opacity);
     gl.uniform1f(U('uSpectrumAmt'),     cfg.spectrum);
-    gl.uniform1f(U('uCaptionFrac'),     captionFrac());
+    gl.uniform2f(U('uCaption'),         CAPTION_Y0, captionBandH);
     gl.uniform2f(U('uLogoHalf'),        logoHalfPX, logoHalfPY);
 
     gl.uniform3fv(U('uRingU[0]'),     ringU);
