@@ -811,6 +811,13 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       font-family: var(--font-mono); font-size: 0.7rem;
       padding: 0.1rem 0.4rem;
     }
+    .qp-text {
+      background: var(--surface-glass-2); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text);
+      font-family: var(--font-mono); font-size: 0.7rem;
+      padding: 0.1rem 0.4rem; flex: 1; min-width: 0;
+    }
+    .qp-text::placeholder { color: var(--muted); }
     .qp-section-tag {
       color: var(--muted); font-size: 0.65rem; letter-spacing: 0.06em;
       border-top: 1px dashed var(--border);
@@ -2963,6 +2970,24 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="logo-scope-walk" title="In 'center' mode the mark rides the cam walk with the scene (its smaller pan reads as foreground parallax), or stays pinned. Corner placements are always pinned">
         <label>cam walk</label>
         <button class="qp-toggle active" id="logo-scope-walk">walks</button>
+      </div>
+      <div class="qp-row" data-qp="logo-hide-quale" title="Auto-hide the mark while the fullscreen Voidstar Logo quale is active (manual, auto-cycle or auto-phase) — no double branding">
+        <label>hide on logo fx</label>
+        <button class="qp-toggle active" id="logo-hide-on-quale">on</button>
+      </div>
+      <div class="qp-section-tag">branding</div>
+      <div class="qp-row" data-qp="logo-caption" title="Secondary billing/title line under the mark — e.g. 'with alison swafford'. Baked with its own glow; breathes with the music. Blank = none">
+        <label>caption</label>
+        <input type="text" class="qp-text" id="logo-caption" maxlength="80" placeholder="e.g. with alison swafford">
+      </div>
+      <div class="qp-row" data-qp="logo-image" title="Replace the void* glyph with your own logo — image URL (needs CORS) or upload below. The art is re-inked white and lit on the curved face; transparent or dark-background PNGs work best (light-background art auto-inverts). Blank = void*">
+        <label>image url</label>
+        <input type="text" class="qp-text" id="logo-image-url" placeholder="https://… (blank = void*)">
+      </div>
+      <div class="qp-row" data-qp="logo-image-file" title="…or upload an image file — downscaled and stored locally with your settings">
+        <label>image file</label>
+        <button class="qp-toggle" id="logo-image-upload">upload…</button>
+        <input type="file" id="logo-image-file" accept="image/*" style="display:none">
       </div>
     </div>
   </div>

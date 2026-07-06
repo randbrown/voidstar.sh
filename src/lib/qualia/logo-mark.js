@@ -29,6 +29,13 @@
 // of the scene. Because the walk's translate % is relative to each element's
 // own size, the (smaller) mark pans less than the full-viewport layers — a
 // deliberate foreground-parallax read rather than a bug.
+//
+// Branding: the void* glyph on the curved face can be replaced by a custom
+// logo (URL or uploaded image, re-inked white so any art gets the same
+// extruded-light treatment), and an optional caption band below the mark
+// carries a billing/title line ("with alison swafford") baked with its glow
+// and breathing with rms/snare. The page can also suppress the mark while
+// the fullscreen voidstar_logo quale is active — no double branding.
 
 import {
   compileProgram, makeFullscreenTri, FULLSCREEN_VERT,
@@ -50,6 +57,9 @@ export const LOGO_MARK_DEFAULTS = {
   flow: 1.0,           // [0,3] motion-speed multiplier (swirl / orbits / spin)
   palette: 'platinum', // silver | voidblue | platinum | inferno
   walk: true,          // 'center' mode rides the cam walk (corners stay pinned)
+  hideOnLogoQuale: true, // auto-hide while the voidstar_logo quale is active
+  image: '',           // custom logo (URL or data: URL) replacing the void* glyph
+  caption: '',         // billing/title line under the mark ('' = none)
 };
 
 const PALETTES   = ['silver', 'voidblue', 'platinum', 'inferno'];
@@ -61,6 +71,7 @@ const NUM_RINGS  = 3;
 const NUM_RAYS   = 6;
 const SPEC_BINS  = 96;    // spectrum-ring texture width
 const DRAG_SLOP  = 5;     // px before a pointerdown becomes a drag
+const CAPTION_FRAC = 0.16; // canvas fraction the caption band adds below the mark
 
 // The mark variant of the voidstar-logo shader. Differences from the quale:
 // no cosmic background (black base for the screen blend), no pose parallax,
@@ -83,10 +94,13 @@ uniform int   uPalette;
 uniform float uGlowAmt;
 uniform float uOpacity;
 uniform float uSpectrumAmt;
+uniform float uCaptionFrac;   // bottom canvas fraction holding the caption band
+uniform vec2  uLogoHalf;      // sphere-glyph half-extents (JS-side; custom images reshape it)
 
 uniform sampler2D uLogoTex;
 uniform sampler2D uStarTex;
 uniform sampler2D uSpecTex;
+uniform sampler2D uCaptionTex;
 uniform float     uStarRotC;
 uniform float     uStarRotS;
 uniform float     uStarCenterX;
@@ -205,13 +219,29 @@ vec3 spectrumColor(float f, float amp) {
 }
 
 void main() {
-  vec2  res    = uResolution;
-  float aspect = res.x / max(res.y, 1.0);
-
-  vec2 p = (vUv - 0.5) * 2.0;
-  p.x *= aspect;
-
   Pal pal = getPalette(uPalette);
+
+  // ── Caption band — the bottom uCaptionFrac strip is the billing/title
+  // line, baked (glow included) into uCaptionTex; per-frame it just
+  // breathes with rms and flicks with the snare, like the mark's halo.
+  if (uCaptionFrac > 0.001 && vUv.y < uCaptionFrac) {
+    vec2  cUv = vec2(vUv.x, vUv.y / uCaptionFrac);
+    float ink = texture(uCaptionTex, cUv).r;
+    vec3 cc = mix(pal.logo, pal.voidEdge, 0.35) * ink
+            * (0.70 + uRms * 0.35 + uMids.y * 0.25);
+    cc = pow(cc, vec3(0.92));
+    cc *= (0.70 + uGlowAmt * 0.60) * uOpacity;
+    outColor = vec4(cc, 1.0);
+    return;
+  }
+
+  // Scene coords — the square region above the caption band. The scene
+  // region's pixel box is square by construction (layout sizes the canvas
+  // as W × W·(1+frac)), so the aspect term lands at ~1; kept exact anyway.
+  vec2 sUv = vec2(vUv.x, (vUv.y - uCaptionFrac) / max(1.0 - uCaptionFrac, 1e-3));
+  vec2 p = (sUv - 0.5) * 2.0;
+  p.x *= uResolution.x / max(uResolution.y * (1.0 - uCaptionFrac), 1.0);
+
   vec3 col = vec3(0.0);
 
   float r     = length(p);
@@ -400,8 +430,9 @@ void main() {
   if (onSphere > 0.5) {
     float zSph    = sqrt(max(sphereR * sphereR - dot(p, p), 1e-4));
     vec2  ang     = vec2(atan(p.x, zSph), atan(p.y, zSph));
-    vec2  logoHalfP   = vec2(min(0.55, sphereR * 0.94), min(0.16, sphereR * 0.30));
-    vec2  logoHalfAng = vec2(asin(logoHalfP.x / sphereR), asin(logoHalfP.y / sphereR));
+    vec2  logoHalfP   = uLogoHalf;
+    vec2  logoHalfAng = vec2(asin(clamp(logoHalfP.x / sphereR, 0.0, 0.99)),
+                             asin(clamp(logoHalfP.y / sphereR, 0.0, 0.99)));
     vec2  logoUV      = ang / logoHalfAng * 0.5 + 0.5;
 
     float maskC = comboSample(logoUV, p);
@@ -493,8 +524,14 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
 
   // GL state — built lazily on first enable so an off mark costs nothing.
   let canvas = null, gl = null, prog = null, vao = null, U = null;
-  let logoTex = null, starTex = null, specTex = null;
+  let logoTex = null, starTex = null, specTex = null, captionTex = null;
   let built = false, buildFailed = false;
+  // Suppression — the page hides the mark while the fullscreen voidstar_logo
+  // quale is active (double branding); independent of the enabled state.
+  let suppressed = false;
+  // Custom logo image (cfg.image): loaded + re-inked white on demand.
+  let customTex = null, customAspect = 0;
+  let imageDirty = false, captionDirty = false;
 
   // Fixed look constants (the quale exposes these as params; the mark keeps
   // its schema small and bakes the canonical "default preset" look).
@@ -575,6 +612,16 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.bindTexture(gl.TEXTURE_2D, null);
+      // 1×1 black placeholder so uCaptionTex always has a complete texture
+      // bound even before (or without) a caption bake.
+      captionTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, captionTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([0]));
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindTexture(gl.TEXTURE_2D, null);
     } catch (e) {
       console.warn('[qualia] logo mark unavailable:', e);
       buildFailed = true;
@@ -584,7 +631,130 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     }
     wireDrag();
     built = true;
+    // Restored configs may already carry an image / caption — bake on the
+    // first frame after build.
+    imageDirty = !!cfg.image;
+    captionDirty = !!cfg.caption.trim();
     return true;
+  }
+
+  /** The caption band's canvas-height fraction (0 when there's no caption). */
+  function captionFrac() {
+    return cfg.caption.trim() ? CAPTION_FRAC : 0;
+  }
+
+  // ── Caption bake — text + its glow rendered once into a texture; the
+  // shader only modulates brightness per frame. Font auto-shrinks to fit.
+  function bakeCaption() {
+    const text = cfg.caption.trim();
+    if (!text) {
+      gl.bindTexture(gl.TEXTURE_2D, captionTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([0]));
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      return;
+    }
+    const W = 2048, H = 256;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const font = (px) => `600 ${px}px "JetBrains Mono", "Cascadia Code", "Fira Code", "Source Code Pro", "Ubuntu Mono", "Menlo", "Consolas", monospace`;
+    let fs = 150;
+    ctx.font = font(fs);
+    const w0 = ctx.measureText(text).width;
+    if (w0 > W * 0.92) { fs = Math.max(28, Math.floor(fs * (W * 0.92) / w0)); ctx.font = font(fs); }
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    // Bake the glow into the texture: two soft shadow passes, then crisp ink.
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 26;
+    ctx.fillText(text, W / 2, H / 2);
+    ctx.shadowBlur = 12;
+    ctx.fillText(text, W / 2, H / 2);
+    ctx.shadowBlur = 0;
+    ctx.fillText(text, W / 2, H / 2);
+    gl.bindTexture(gl.TEXTURE_2D, captionTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  // ── Custom logo image — replaces the void* glyph on the curved face.
+  // The art is re-inked WHITE (alpha × luminance, auto-inverting dark-ink-
+  // on-light images detected from the border) so any logo gets the same
+  // extruded-light treatment as the void* type. CORS-tainted URLs fail
+  // safely back to void* with a console warning.
+  function loadCustomImage(url) {
+    if (!url) {
+      if (customTex) { gl.deleteTexture(customTex); customTex = null; }
+      customAspect = 0;
+      return;
+    }
+    const img = new Image();
+    if (!/^data:/.test(url)) img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      if (url !== cfg.image || !built) return;   // stale load
+      bakeCustomTex(img);
+    };
+    img.onerror = () => {
+      if (url === cfg.image) console.warn('[qualia] logo mark: image failed to load:', url.slice(0, 120));
+    };
+    img.src = url;
+  }
+  function bakeCustomTex(img) {
+    const maxW = 1024, maxH = 512;
+    let w = img.naturalWidth || 1, h = img.naturalHeight || 1;
+    const sc = Math.min(maxW / w, maxH / h, 1);
+    w = Math.max(1, Math.round(w * sc));
+    h = Math.max(1, Math.round(h * sc));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, w, h);
+    let d;
+    try { d = ctx.getImageData(0, 0, w, h); }
+    catch (e) { console.warn('[qualia] logo mark: image is CORS-tainted, keeping void*:', e?.message || e); return; }
+    const px = d.data;
+    // Border sample decides ink polarity: an opaque, light border means a
+    // dark-ink-on-light logo → invert so the art (not the paper) is the ink.
+    let borderLum = 0, borderA = 0, n = 0;
+    const step = Math.max(1, w >> 5);
+    for (let x = 0; x < w; x += step) {
+      for (const y of [0, h - 1]) {
+        const i = (y * w + x) * 4;
+        borderLum += Math.max(px[i], px[i + 1], px[i + 2]);
+        borderA   += px[i + 3];
+        n++;
+      }
+    }
+    const invert = (borderA / n > 250) && (borderLum / n > 128);
+    for (let i = 0; i < px.length; i += 4) {
+      const lum = Math.max(px[i], px[i + 1], px[i + 2]) / 255;
+      const a   = px[i + 3] / 255;
+      const ink = Math.max(0, Math.min(1, a * (invert ? 1 - lum : lum)));
+      const v = (ink * 255) | 0;
+      px[i] = px[i + 1] = px[i + 2] = v;
+      px[i + 3] = 255;
+    }
+    ctx.putImageData(d, 0, 0);
+    if (!customTex) {
+      customTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, customTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, customTex);
+    }
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    customAspect = h / w;
   }
 
   function markSize() {
@@ -598,7 +768,8 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
   function layout(force = false) {
     if (!canvas) return;
     const stage = getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-    const posKey = `${cfg.position}|${cfg.x.toFixed(4)}|${cfg.y.toFixed(4)}|${cfg.size}|${cfg.centerSize}`;
+    const capF = captionFrac();
+    const posKey = `${cfg.position}|${cfg.x.toFixed(4)}|${cfg.y.toFixed(4)}|${cfg.size}|${cfg.centerSize}|${capF}`;
     if (!force &&
         stage.left === lastStage.left && stage.top === lastStage.top &&
         stage.width === lastStage.width && stage.height === lastStage.height &&
@@ -607,31 +778,33 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     lastPosKey = posKey;
 
     const s = markSize();
+    const hs = Math.round(s * (1 + capF));   // CSS height incl. caption band
     let x, y;   // stage-relative CSS px of the top-left corner
     switch (cfg.position) {
       case 'tl':     x = MARGIN; y = MARGIN; break;
       case 'tr':     x = stage.width - s - MARGIN; y = MARGIN; break;
-      case 'bl':     x = MARGIN; y = stage.height - s - MARGIN; break;
-      case 'center': x = (stage.width - s) / 2; y = (stage.height - s) / 2; break;
+      case 'bl':     x = MARGIN; y = stage.height - hs - MARGIN; break;
+      case 'center': x = (stage.width - s) / 2; y = (stage.height - hs) / 2; break;
       case 'custom':
         x = cfg.x * stage.width - s / 2;
-        y = cfg.y * stage.height - s / 2;
+        y = cfg.y * stage.height - hs / 2;
         break;
       case 'br':
-      default:       x = stage.width - s - MARGIN; y = stage.height - s - MARGIN; break;
+      default:       x = stage.width - s - MARGIN; y = stage.height - hs - MARGIN; break;
     }
-    x = Math.max(0, Math.min(stage.width  - s, x));
-    y = Math.max(0, Math.min(stage.height - s, y));
-    cssRect = { x, y, w: s, h: s };
+    x = Math.max(0, Math.min(stage.width  - s,  x));
+    y = Math.max(0, Math.min(stage.height - hs, y));
+    cssRect = { x, y, w: s, h: hs };
     canvas.style.left   = `${stage.left + x}px`;
     canvas.style.top    = `${stage.top + y}px`;
     canvas.style.width  = `${s}px`;
-    canvas.style.height = `${s}px`;
+    canvas.style.height = `${hs}px`;
 
     const dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
-    const bpx = Math.min(Math.round(s * dpr), BACKING_CAP);
-    if (canvas.width !== bpx || canvas.height !== bpx) {
-      canvas.width = bpx; canvas.height = bpx;
+    const bw = Math.min(Math.round(s * dpr), BACKING_CAP);
+    const bh = Math.round(bw * (1 + capF));
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw; canvas.height = bh;
     }
   }
 
@@ -711,7 +884,10 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
 
   /** Advance + render one frame. Driven from core.onFrame; no-op when off. */
   function frame(field) {
-    if (!enabled || !built) return;
+    if (!enabled || suppressed || !built) return;
+    // Deferred bakes — config may change while disabled or before build.
+    if (imageDirty)   { imageDirty = false;   loadCustomImage(cfg.image); }
+    if (captionDirty) { captionDirty = false; bakeCaption(); }
     layout();   // cheap compare; catches split/fullscreen/resize changes
     if (canvas.width <= 0) return;
 
@@ -760,14 +936,19 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
 
     if (cfg.spectrum > 0.001) updateSpectrum(audio.spectrum, dt);
 
-    // * sprite geometry (static — tracks the param radius, not the breath).
+    // Glyph geometry (static — tracks the param radius, not the breath).
+    // A custom image reshapes the sphere band to its own aspect and drops
+    // the spinning * (that's part of the void* type, not the user's brand).
     const sphereR = Math.max(VOID_RADIUS * 2.10, 0.30);
     const logoHalfPX = Math.min(0.55, sphereR * 0.94);
-    const logoHalfPY = Math.min(0.16, sphereR * 0.30);
+    let   logoHalfPY = Math.min(0.16, sphereR * 0.30);
+    if (customTex) {
+      logoHalfPY = Math.max(0.06, Math.min(0.30, logoHalfPX * customAspect));
+    }
     const logoHalfAngX = Math.asin(logoHalfPX / sphereR);
     const starAngX = 0.40 * logoHalfAngX;
     const starCenterX = sphereR * Math.sin(starAngX);
-    const starHalf = 0.55 * logoHalfPY;
+    const starHalf = customTex ? 0 : 0.55 * Math.min(0.16, sphereR * 0.30);
 
     // ── Draw ──
     const W = canvas.width, H = canvas.height;
@@ -788,6 +969,8 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     gl.uniform1f(U('uGlowAmt'),         cfg.glow);
     gl.uniform1f(U('uOpacity'),         cfg.opacity);
     gl.uniform1f(U('uSpectrumAmt'),     cfg.spectrum);
+    gl.uniform1f(U('uCaptionFrac'),     captionFrac());
+    gl.uniform2f(U('uLogoHalf'),        logoHalfPX, logoHalfPY);
 
     gl.uniform3fv(U('uRingU[0]'),     ringU);
     gl.uniform3fv(U('uRingV[0]'),     ringV);
@@ -801,7 +984,7 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     gl.uniform2f(U('uStarHalfP'),   starHalf, starHalf);
 
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, logoTex);
+    gl.bindTexture(gl.TEXTURE_2D, customTex || logoTex);
     gl.uniform1i(U('uLogoTex'), 0);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, starTex);
@@ -809,6 +992,9 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, specTex);
     gl.uniform1i(U('uSpecTex'), 2);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, captionTex);
+    gl.uniform1i(U('uCaptionTex'), 3);
 
     uploadAudioUniforms(gl, U, audio);
 
@@ -816,13 +1002,26 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     gl.bindVertexArray(null);
   }
 
+  function syncDisplay() {
+    if (canvas) canvas.style.display = (enabled && !suppressed) ? 'block' : 'none';
+  }
+
   function setEnabled(on) {
     on = !!on;
     if (on === enabled) return;
     if (on && !build()) return;   // GL unavailable → stay off
     enabled = on;
-    canvas.style.display = enabled ? 'block' : 'none';
+    syncDisplay();
     if (enabled) layout(true);
+  }
+
+  /** Page-driven hide (e.g. while the fullscreen voidstar_logo quale is
+   *  active) — orthogonal to the user's on/off, costs nothing while set. */
+  function setSuppressed(v) {
+    v = !!v;
+    if (v === suppressed) return;
+    suppressed = v;
+    syncDisplay();
   }
 
   function setConfig(patch) {
@@ -839,6 +1038,15 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     if ('flow'       in patch) cfg.flow       = Math.max(0, Math.min(3, Number(patch.flow) ?? 1));
     if ('palette'    in patch && PALETTES.includes(patch.palette)) cfg.palette = patch.palette;
     if ('walk'       in patch) cfg.walk = patch.walk !== false;
+    if ('hideOnLogoQuale' in patch) cfg.hideOnLogoQuale = patch.hideOnLogoQuale !== false;
+    if ('image' in patch && typeof patch.image === 'string' && patch.image !== cfg.image) {
+      cfg.image = patch.image;
+      imageDirty = true;
+    }
+    if ('caption' in patch && typeof patch.caption === 'string' && patch.caption !== cfg.caption) {
+      cfg.caption = patch.caption;
+      captionDirty = true;
+    }
     if (enabled) layout();
   }
 
@@ -846,13 +1054,14 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     frame,
     setEnabled,
     isEnabled: () => enabled,
+    setSuppressed,
     setConfig,
     getConfig: () => ({ ...cfg }),
     /** The mark canvas (null until first enable) — for cam-walk layering. */
     getCanvas: () => canvas,
     /** True when the mark should ride the cam walk (large centered mode). */
-    walksWithCam: () => enabled && cfg.position === 'center' && cfg.walk !== false,
+    walksWithCam: () => enabled && !suppressed && cfg.position === 'center' && cfg.walk !== false,
     /** Stage-relative CSS-px rect, for the recorder composite. */
-    getStageRelRect: () => (enabled && built ? { ...cssRect } : null),
+    getStageRelRect: () => (enabled && built && !suppressed ? { ...cssRect } : null),
   };
 }

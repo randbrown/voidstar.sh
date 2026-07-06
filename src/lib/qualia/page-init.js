@@ -302,6 +302,9 @@ export function initQualiaPage() {
       // dwell clock so the new fx gets the full autoCycleSeconds window.
       autoCycleStartMs = performance.now();
       refreshCycleBtn();
+      // The watermark bows out while the fullscreen voidstar_logo quale is
+      // up (any switch path: manual, auto-cycle, qualem recall).
+      syncLogoSuppression();
       settings.save();
     },
   });
@@ -365,6 +368,14 @@ export function initQualiaPage() {
   /** Repaint fns for the logo card rows — populated by the card wiring far
    *  below; also fired when a drag commits a custom position. */
   const logoCardSyncFns = [];
+  /** Hide the watermark while the fullscreen voidstar_logo quale is active
+   *  (unless the user turned that behavior off in the logo card). */
+  function syncLogoSuppression() {
+    logoMark.setSuppressed(
+      core.activeId() === 'voidstar_logo' &&
+      logoMark.getConfig().hideOnLogoQuale !== false
+    );
+  }
 
   // ── Chron — session stopwatch (τ) ─────────────────────────────────────────
   // HUD readout in the topbar (auto-hidden in zen with the rest of the bar),
@@ -2151,9 +2162,92 @@ export function initQualiaPage() {
       });
     }
   }
+  // Auto-hide while the voidstar_logo quale is up.
+  {
+    const btn = document.getElementById('logo-hide-on-quale');
+    if (btn) {
+      const paint = () => {
+        const on = logoMark.getConfig().hideOnLogoQuale !== false;
+        btn.classList.toggle('active', on);
+        btn.textContent = on ? 'on' : 'off';
+      };
+      paint();
+      logoCardSyncFns.push(paint);
+      btn.addEventListener('click', () => {
+        logoMark.setConfig({ hideOnLogoQuale: logoMark.getConfig().hideOnLogoQuale === false });
+        syncLogoSuppression();
+        paint();
+        settings.save();
+      });
+    }
+  }
+  // Caption — the billing/title line under the mark.
+  {
+    const input = document.getElementById('logo-caption');
+    if (input) {
+      const paint = () => { input.value = logoMark.getConfig().caption; };
+      paint();
+      logoCardSyncFns.push(paint);
+      input.addEventListener('input', () => {
+        logoMark.setConfig({ caption: input.value });
+        settings.save();
+      });
+    }
+  }
+  // Custom logo image — URL field + local-file upload. An uploaded file is
+  // downscaled and stored as a data: URL inside the config (so it persists
+  // with settings and travels in qualems); the URL field then shows a
+  // placeholder rather than the multi-KB blob.
+  {
+    const urlInput = document.getElementById('logo-image-url');
+    if (urlInput) {
+      const paint = () => {
+        const v = logoMark.getConfig().image;
+        const uploaded = v.startsWith('data:');
+        urlInput.value = uploaded ? '' : v;
+        urlInput.placeholder = uploaded
+          ? 'uploaded image — type a URL or blank + enter to clear'
+          : 'https://… (blank = void*)';
+      };
+      paint();
+      logoCardSyncFns.push(paint);
+      urlInput.addEventListener('change', () => {
+        logoMark.setConfig({ image: urlInput.value.trim() });
+        logoCardSyncFns.forEach(fn => fn());
+        settings.save();
+      });
+    }
+    const fileBtn = document.getElementById('logo-image-upload');
+    const fileInput = document.getElementById('logo-image-file');
+    fileBtn?.addEventListener('click', () => fileInput?.click());
+    fileInput?.addEventListener('change', () => {
+      const f = fileInput.files?.[0];
+      fileInput.value = '';
+      if (!f) return;
+      const img = new Image();
+      const objUrl = URL.createObjectURL(f);
+      img.onload = () => {
+        URL.revokeObjectURL(objUrl);
+        // Downscale before storing — keeps the settings blob small and is
+        // all the resolution the sphere face can use anyway.
+        const maxW = 1024, maxH = 512;
+        const sc = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+        const c = document.createElement('canvas');
+        c.width  = Math.max(1, Math.round(img.naturalWidth * sc));
+        c.height = Math.max(1, Math.round(img.naturalHeight * sc));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        logoMark.setConfig({ image: c.toDataURL('image/png') });
+        logoCardSyncFns.forEach(fn => fn());
+        settings.save();
+      };
+      img.onerror = () => { URL.revokeObjectURL(objUrl); console.warn('[qualia] logo mark: could not read image file'); };
+      img.src = objUrl;
+    });
+  }
   document.getElementById('btn-logo-reset')?.addEventListener('click', (ev) => {
     ev.stopPropagation();
     logoMark.setConfig({ ...LOGO_MARK_DEFAULTS });
+    syncLogoSuppression();
     logoCardSyncFns.forEach(fn => fn());
     settings.save();
   });
@@ -4589,6 +4683,7 @@ export function initQualiaPage() {
     if (q.logoMark && typeof q.logoMark === 'object') {
       if (q.logoMark.config) logoMark.setConfig(q.logoMark.config);
       if (typeof q.logoMark.on === 'boolean') setLogoOn(q.logoMark.on);
+      syncLogoSuppression();
       logoCardSyncFns.forEach(fn => fn());
     }
 
