@@ -9,6 +9,7 @@ import { createAudio }   from './audio.js';
 import { createPose }    from './pose.js';
 import { createOverlay } from './overlay.js';
 import { createCamWalk, CAM_WALK_DEFAULTS } from './cam-walk.js';
+import { createLogoMark, LOGO_MARK_DEFAULTS } from './logo-mark.js';
 import { decay } from './field.js';
 import { wirePicker, getStoredDeviceId, storeDeviceId } from './devices.js';
 import {
@@ -195,6 +196,7 @@ export function initQualiaPage() {
   const btnMosh    = document.getElementById('btn-mosh');
   const btnEdge    = document.getElementById('btn-edge');
   const btnWalk    = document.getElementById('btn-walk');
+  const btnLogo    = document.getElementById('btn-logo');
   const btnPhase   = document.getElementById('btn-phase');
   const phaseStyleSelect = document.getElementById('phase-style');
   const btnCycle   = document.getElementById('btn-cycle');
@@ -334,6 +336,9 @@ export function initQualiaPage() {
         document.getElementById('qualia-transition'),
         scope.post ? overlay.postCanvas : null,
         scope.pose ? overlay.canvas : null,
+        // Logo mark rides the walk only in its large centered mode (its own
+        // walk toggle); corner watermarks stay pinned above the scene.
+        logoMark.walksWithCam() ? logoMark.getCanvas() : null,
       ];
     },
     getStageSize: () => {
@@ -347,6 +352,19 @@ export function initQualiaPage() {
     getHardKickAt: () => lastHardKickAt,
   });
   core.onTick((field) => camWalk.tick(field));
+
+  // Logo mark — the persistent void* watermark layer (logo-mark.js): a tiny
+  // live rendition of the voidstar-logo quale floating above the whole scene
+  // stack. Registered on onFrame AFTER the overlay listener so it paints in
+  // the same gated visual cadence; it no-ops (zero cost) while disabled.
+  const logoMark = createLogoMark({
+    getStageRect: () => getStageRect(),
+    onConfigChange: () => { settings.save(); logoCardSyncFns.forEach(fn => fn()); },
+  });
+  core.onFrame((field) => logoMark.frame(field));
+  /** Repaint fns for the logo card rows — populated by the card wiring far
+   *  below; also fired when a drag commits a custom position. */
+  const logoCardSyncFns = [];
 
   // ── Chron — session stopwatch (τ) ─────────────────────────────────────────
   // HUD readout in the topbar (auto-hidden in zen with the rest of the bar),
@@ -392,6 +410,8 @@ export function initQualiaPage() {
     edgeConfig:     overlay.getEdgeConfig(),
     camWalkOn,
     camWalkConfig:  camWalk.getConfig(),
+    logoOn,
+    logoConfig:     logoMark.getConfig(),
     autoPhaseSeconds,
     autoPhaseStyle,
     autoPhaseBeatSync,
@@ -414,6 +434,7 @@ export function initQualiaPage() {
     moshCollapsed:  document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
     edgeCollapsed:  document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
     walkCollapsed:  document.getElementById('walk-card')?.classList.contains('collapsed') ?? true,
+    logoCollapsed:  document.getElementById('logo-card')?.classList.contains('collapsed') ?? true,
     cameraCollapsed: cameraCard?.classList.contains('collapsed') ?? true,
     qualemCollapsed: document.getElementById('qualem-card')?.classList.contains('collapsed') ?? true,
     cameraZoom:     lastZoomValue,
@@ -511,6 +532,12 @@ export function initQualiaPage() {
   let camWalkOn = stored.camWalkOn === true;
   if (stored.camWalkConfig) camWalk.setConfig(stored.camWalkConfig);
   camWalk.setEnabled(camWalkOn);
+
+  // Logo mark — restore tunables + on/off (default OFF; the GL layer is only
+  // built on first enable).
+  let logoOn = stored.logoOn === true;
+  if (stored.logoConfig) logoMark.setConfig(stored.logoConfig);
+  logoMark.setEnabled(logoOn);
 
   // Audio mode. The button cycles through four real-world states:
   //   off → mic (mic only) → mix (strudel + seq, no mic) → all (everything)
@@ -1690,7 +1717,7 @@ export function initQualiaPage() {
     // canvas" — only the start position decides.
     const el = document.elementFromPoint(x, y);
     if (!el) return false;
-    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #sequencer-panel, #video, #zen-handle, #status-overlay, #cam-splitter, .qg-popover');
+    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #sequencer-panel, #video, #zen-handle, #status-overlay, #cam-splitter, #qualia-logo-mark, .qg-popover');
   }
 
   function onCanvasPointerDown(ev) {
@@ -2039,6 +2066,99 @@ export function initQualiaPage() {
   });
   if (walkCard && typeof stored.walkCollapsed === 'boolean') {
     walkCard.classList.toggle('collapsed', stored.walkCollapsed);
+  }
+
+  // ── Logo mark: button + tunables card ────────────────────────────────────
+  // Same on/off + card pattern as the walk. The card also repaints from a
+  // drag (custom position) via logoCardSyncFns, so the position select shows
+  // 'custom' the moment the user drops the mark somewhere by hand.
+  const logoCard = document.getElementById('logo-card');
+  function refreshLogoBtn() {
+    if (!btnLogo) return;
+    btnLogo.textContent = `logo ${logoOn ? 'on' : 'off'}`;
+    btnLogo.classList.toggle('active', logoOn);
+  }
+  function syncLogoCard() {
+    if (logoCard) logoCard.style.display = logoOn ? '' : 'none';
+  }
+  function setLogoOn(on) {
+    logoOn = !!on;
+    logoMark.setEnabled(logoOn);
+    // GL context unavailable → the layer refuses to enable; reflect reality.
+    logoOn = logoMark.isEnabled();
+    refreshLogoBtn();
+    syncLogoCard();
+    settings.save();
+  }
+  btnLogo?.addEventListener('click', () => setLogoOn(!logoOn));
+  refreshLogoBtn();
+  syncLogoCard();
+
+  function wireLogoSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
+    const row = document.querySelector(`[data-qp="${qpId}"]`);
+    if (!row) return;
+    const input = row.querySelector('input[type=range]');
+    const val   = row.querySelector('.qp-val');
+    const paint = () => {
+      const v = logoMark.getConfig()[key];
+      input.value = String(v);
+      val.textContent = fmt(v);
+    };
+    paint();
+    logoCardSyncFns.push(paint);
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      logoMark.setConfig({ [key]: v });
+      val.textContent = fmt(v);
+      settings.save();
+    });
+  }
+  function wireLogoSelect(selId, key) {
+    const sel = document.getElementById(selId);
+    if (!sel) return;
+    const paint = () => { sel.value = logoMark.getConfig()[key]; };
+    paint();
+    logoCardSyncFns.push(paint);
+    sel.addEventListener('change', () => {
+      logoMark.setConfig({ [key]: sel.value });
+      settings.save();
+    });
+  }
+  wireLogoSelect('logo-position', 'position');
+  wireLogoSelect('logo-palette',  'palette');
+  wireLogoSlider('logo-size',        'size',       (v) => `${Math.round(v)}px`);
+  wireLogoSlider('logo-center-size', 'centerSize', (v) => `${Math.round(v)}px`);
+  wireLogoSlider('logo-opacity',     'opacity');
+  wireLogoSlider('logo-glow',        'glow');
+  wireLogoSlider('logo-reactivity',  'reactivity');
+  wireLogoSlider('logo-spectrum',    'spectrum');
+  wireLogoSlider('logo-flow',        'flow');
+  // Center-mode walk scope — rides the cam walk vs stays screen-pinned.
+  {
+    const btn = document.getElementById('logo-scope-walk');
+    if (btn) {
+      const paint = () => {
+        const walks = logoMark.getConfig().walk !== false;
+        btn.classList.toggle('active', walks);
+        btn.textContent = walks ? 'walks' : 'pinned';
+      };
+      paint();
+      logoCardSyncFns.push(paint);
+      btn.addEventListener('click', () => {
+        logoMark.setConfig({ walk: logoMark.getConfig().walk === false });
+        paint();
+        settings.save();
+      });
+    }
+  }
+  document.getElementById('btn-logo-reset')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    logoMark.setConfig({ ...LOGO_MARK_DEFAULTS });
+    logoCardSyncFns.forEach(fn => fn());
+    settings.save();
+  });
+  if (logoCard && typeof stored.logoCollapsed === 'boolean') {
+    logoCard.classList.toggle('collapsed', stored.logoCollapsed);
   }
 
   // ── Chron card wiring ────────────────────────────────────────────────────
@@ -2426,6 +2546,31 @@ export function initQualiaPage() {
       if (walked) beginWalk();
       drawLayerFitted(overlay.canvas, layout.fxRect);
       if (walked) endWalk();
+    }
+    // Logo mark — topmost scene layer, mirrored with the same 'screen'
+    // composite its CSS blend uses so recordings match the live view. Its
+    // stage-relative CSS rect maps into the fx rect's device pixels; the
+    // large centered mode rides the walk matrix like the live layer does.
+    {
+      const logoRect = logoMark.getStageRelRect();
+      const logoCanvas = logoMark.getCanvas();
+      if (logoRect && logoCanvas) {
+        const stage = getStageRect();
+        const fxr = layout.fxRect;
+        const sx = fxr.w / Math.max(1, stage.width);
+        const sy = fxr.h / Math.max(1, stage.height);
+        const walked = walkT && logoMark.walksWithCam();
+        if (walked) beginWalk();
+        recordCompositeCtx.save();
+        recordCompositeCtx.globalCompositeOperation = 'screen';
+        try {
+          recordCompositeCtx.drawImage(logoCanvas,
+            fxr.x + logoRect.x * sx, fxr.y + logoRect.y * sy,
+            logoRect.w * sx, logoRect.h * sy);
+        } catch {}
+        recordCompositeCtx.restore();
+        if (walked) endWalk();
+      }
     }
     // Camera panel (split mode only).
     if (layout.camRect) drawCameraIntoRect(layout.camRect);
@@ -4270,6 +4415,7 @@ export function initQualiaPage() {
       },
       glitch: { ...glitchModes },
       camWalk: { on: camWalkOn, config: camWalk.getConfig() },
+      logoMark: { on: logoOn, config: logoMark.getConfig() },
       auto: {
         phaseSeconds:  autoPhaseSeconds,
         phaseStyle:    autoPhaseStyle,
@@ -4293,6 +4439,7 @@ export function initQualiaPage() {
         mosh:   document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
         edge:   document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
         walk:   document.getElementById('walk-card')?.classList.contains('collapsed') ?? true,
+        logo:   document.getElementById('logo-card')?.classList.contains('collapsed') ?? true,
         camera: cameraCard?.classList.contains('collapsed') ?? true,
         qualem: document.getElementById('qualem-card')?.classList.contains('collapsed') ?? true,
         chron:  chronCard?.classList.contains('collapsed') ?? true,
@@ -4437,6 +4584,14 @@ export function initQualiaPage() {
       if (typeof q.camWalk.on === 'boolean') setCamWalkOn(q.camWalk.on);
     }
 
+    // 7c. Logo mark — same shape as the walk. Config first, then on/off;
+    // the card repaints from config via logoCardSyncFns.
+    if (q.logoMark && typeof q.logoMark === 'object') {
+      if (q.logoMark.config) logoMark.setConfig(q.logoMark.config);
+      if (typeof q.logoMark.on === 'boolean') setLogoOn(q.logoMark.on);
+      logoCardSyncFns.forEach(fn => fn());
+    }
+
     // 8. Auto-phase / cycle
     if (q.auto) {
       if (typeof q.auto.phaseStyle === 'string') {
@@ -4494,8 +4649,8 @@ export function initQualiaPage() {
       const cardMap = {
         audio: 'audio-card', pose: 'pose-card', diag: 'diag-card',
         params: 'fx-card', mosh: 'mosh-card', edge: 'edge-card',
-        walk: 'walk-card', camera: 'camera-card', qualem: 'qualem-card',
-        chron: 'chron-card',
+        walk: 'walk-card', logo: 'logo-card', camera: 'camera-card',
+        qualem: 'qualem-card', chron: 'chron-card',
       };
       for (const [key, id] of Object.entries(cardMap)) {
         const el = document.getElementById(id);

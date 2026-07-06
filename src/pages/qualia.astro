@@ -446,6 +446,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
     #btn-walk                 { min-width: 9ch;  } /* "walk off" */
+    #btn-logo                 { min-width: 9ch;  } /* "logo off" */
     #btn-record-mode          { min-width: 2.25ch; } /* ▾ caret (capture menu) */
 
     /* Topbar group popovers — each `.qg-group` owns a trigger button + a
@@ -2566,6 +2567,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn" id="btn-mosh"  title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
         <button class="ctrl-btn" id="btn-edge"  title="Edge-detect post (E) — off / on / blip / flip">edge</button>
         <button class="ctrl-btn" id="btn-walk"  title="Cam walk (U) — slow pan / zoom / rotate camera drift over the scene, re-aims on hard beats">walk</button>
+        <button class="ctrl-btn" id="btn-logo"  title="void* logo mark — small live-animated watermark above the whole scene stack. Corner-anchored, drag to place; 'center' mode makes a large emblem that can ride the cam walk">logo</button>
       </div>
     </div>
 
@@ -2900,6 +2902,71 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
   </div>
 
+  <!-- Logo mark card — tunables for the void* watermark layer (logo-mark.js).
+       Shown while the mark is on, like the mosh/edge/walk cards. -->
+  <div id="logo-card" class="qp-card collapsed" style="display:none">
+    <div class="qp-head" data-toggle="logo-card">
+      <span class="qp-title">logo mark</span>
+      <span class="qp-spacer"></span>
+      <button class="qp-toggle" id="btn-logo-reset" title="Reset logo-mark tunables to defaults (placement included)">reset</button>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-row" data-qp="logo-pos" title="Anchor — any corner, large 'center' emblem, or 'custom' (set automatically when you drag the mark)">
+        <label>position</label>
+        <select class="qp-select" id="logo-position">
+          <option value="tl">top left</option>
+          <option value="tr">top right</option>
+          <option value="bl">bottom left</option>
+          <option value="br" selected>bottom right</option>
+          <option value="center">center</option>
+          <option value="custom">custom</option>
+        </select>
+      </div>
+      <div class="qp-row" data-qp="logo-size" title="Mark size in corner / custom placement">
+        <label>size<span class="qp-val"></span></label>
+        <input type="range" min="80" max="800" step="10" value="220">
+      </div>
+      <div class="qp-row" data-qp="logo-center-size" title="Mark size in 'center' mode — the large walkable emblem">
+        <label>center size<span class="qp-val"></span></label>
+        <input type="range" min="160" max="1200" step="20" value="520">
+      </div>
+      <div class="qp-row" data-qp="logo-opacity" title="Brightness under the screen blend — reads as watermark opacity">
+        <label>opacity<span class="qp-val"></span></label>
+        <input type="range" min="0.05" max="1" step="0.01" value="0.85">
+      </div>
+      <div class="qp-row" data-qp="logo-glow" title="Aura + halo gain — the subtle rms/beat pulse-glow around the mark">
+        <label>glow<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0.5">
+      </div>
+      <div class="qp-row" data-qp="logo-reactivity" title="Scales every audio response (breath, rays, shockwave, electron boosts). 0 = pure idle drift">
+        <label>reactivity<span class="qp-val"></span></label>
+        <input type="range" min="0" max="2" step="0.05" value="1">
+      </div>
+      <div class="qp-row" data-qp="logo-spectrum" title="Polar frequency-spectrum ring around the mark, coloured bass→highs (violet→cyan). 0 = off (skips all spectrum work)">
+        <label>spectrum<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0">
+      </div>
+      <div class="qp-row" data-qp="logo-flow" title="Motion speed — sheath swirl, electron orbits, * spin">
+        <label>motion<span class="qp-val"></span></label>
+        <input type="range" min="0" max="3" step="0.05" value="1">
+      </div>
+      <div class="qp-row" data-qp="logo-palette" title="Colour family — the voidstar-logo quale's palettes">
+        <label>palette</label>
+        <select class="qp-select" id="logo-palette">
+          <option value="silver">silver</option>
+          <option value="voidblue">voidblue</option>
+          <option value="platinum" selected>platinum</option>
+          <option value="inferno">inferno</option>
+        </select>
+      </div>
+      <div class="qp-row" data-qp="logo-scope-walk" title="In 'center' mode the mark rides the cam walk with the scene (its smaller pan reads as foreground parallax), or stays pinned. Corner placements are always pinned">
+        <label>cam walk</label>
+        <button class="qp-toggle active" id="logo-scope-walk">walks</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Chron card — the session stopwatch's config surface. The stopwatch
        itself lives in src/lib/qualia/chron.js; the τ readout sits in the
        topbar and the pulses render into #chron-pulse. -->
@@ -3099,6 +3166,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
   <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
   <button class="qp-tab" data-card="walk-card"   role="tab">walk</button>
+  <button class="qp-tab" data-card="logo-card"   role="tab">logo</button>
   <button class="qp-tab" data-card="chron-card"  role="tab">chron</button>
   <button class="qp-tab" data-card="diag-card"   role="tab">diag</button>
 </div>
