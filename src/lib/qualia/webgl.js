@@ -73,6 +73,48 @@ export function makeUniformGetter(gl, prog) {
 }
 
 /**
+ * Bake a single text into a black-background canvas → GL texture (red channel
+ * holds the white text mask in the shader). Shared by the voidstar-logo quale
+ * and the logo-mark watermark layer, which sample the same `void` / `*`
+ * sprites. With `centerInk` the actual ink box is measured and re-centred so
+ * glyphs that ride high in their em box (notably `*`) spin in place when the
+ * texture is rotated instead of orbiting the canvas centre.
+ */
+export function bakeTextTex(gl, text, w, h, fontSize, centerInk = false) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#fff';
+  ctx.font = `700 ${fontSize}px "JetBrains Mono", "Cascadia Code", "Fira Code", "Source Code Pro", "Ubuntu Mono", "Menlo", "Consolas", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let dx = 0, dy = 4;
+  if (centerInk) {
+    const m  = ctx.measureText(text);
+    const aL = m.actualBoundingBoxLeft    || 0;
+    const aR = m.actualBoundingBoxRight   || 0;
+    const aA = m.actualBoundingBoxAscent  || 0;
+    const aD = m.actualBoundingBoxDescent || 0;
+    dx = (aL - aR) / 2;
+    dy = (aA - aD) / 2;
+  }
+  ctx.fillText(text, w / 2 + dx, h / 2 + dy);
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  return t;
+}
+
+/**
  * Push the standard QualiaField audio uniforms into a program. Plugins can
  * call this for the "free" audio-reactivity bundle and add their own custom
  * uniforms on top.
