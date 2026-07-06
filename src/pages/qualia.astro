@@ -1452,14 +1452,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       #strudel-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       #sequencer-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       .sp-tag, .sp-status { display: none; }
-      /* Panel headers: at phone widths the play/stop/live/gain/close run
-         won't fit beside the name field on one line, so the trailing
-         controls used to clip against the panel's overflow:hidden (the
-         "live" badge lost its right border in the screenshot). Let the
-         header wrap and let the name field give up width first, so the
+      /* Panel headers: at phone widths the play/stop/live/gain run won't
+         fit beside the name field on one line, so the trailing controls
+         used to clip against the panel's overflow:hidden (the "live"
+         badge lost its right border in the screenshot). Let the header
+         wrap and let the name field give up width first, so the
          transport cluster stays whole and only spills to a second line
-         when there's genuinely no room. */
-      #sequencer-header, #strudel-header, #vocoder-header {
+         when there's genuinely no room. The × close is not part of this
+         flow — it's pinned to the corner (see the panel-close rule). */
+      #sequencer-header, #strudel-header, #vocoder-header, #looper-header {
         flex-wrap: wrap; gap: 0.4rem; padding: 0.4rem 0.6rem;
       }
       .seq-name-input { flex: 1 1 5ch; min-width: 4ch; max-width: none; }
@@ -1547,9 +1548,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       cursor: grab; user-select: none; touch-action: none;
     }
     #mixer-header.dragging { cursor: grabbing; }
-    /* The mixer header has no status spacer, so push its × to the far right for
-       consistency with the other panels (whose .sp-status / spacer does it). */
-    #btn-mixer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; margin-left: auto; }
+    #btn-mixer-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
     #mixer-body {
       display: flex; flex-direction: column; gap: 0.4rem;
       padding: 0.6rem 0.75rem; overflow: auto;
@@ -2353,6 +2352,22 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-vocoder-play, #btn-vocoder-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
     #btn-vocoder-play.playing { color: var(--pink); border-color: var(--pink); }
     #btn-vocoder-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+
+    /* Panel close (×) — pinned to the header's top-right corner, OUT of the
+       flex flow. When a header wraps on a phone the trailing controls used to
+       carry × onto the second row right next to ■ stop — one fat finger from
+       killing the panel instead of the pattern. Absolute-pinning keeps × in
+       the corner however the rest wraps; the extra right padding reserves its
+       column so wrapped rows never slide underneath it. (Must sit after every
+       #*-header rule: their `padding:` shorthands would win otherwise.) */
+    #strudel-header, #sequencer-header, #mixer-header, #looper-header,
+    #vocoder-header {
+      position: relative; padding-right: 2.75rem;
+    }
+    #btn-strudel-close, #btn-sequencer-close, #btn-mixer-close,
+    #btn-looper-close, #btn-vocoder-close {
+      position: absolute; top: 0.4rem; right: 0.6rem;
+    }
     #vocoder-body {
       flex: 1; min-height: 0; overflow: auto;
       padding: 0.6rem 0.7rem;

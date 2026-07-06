@@ -251,8 +251,10 @@ import '../../styles/themes.css';
       resize: both;
     }
     #strudel-header {
-      display: flex; align-items: center; gap: 0.75rem;
-      padding: 0.45rem 0.75rem;
+      display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem;
+      /* Extra right padding reserves the corner for the pinned × close. */
+      padding: 0.45rem 2.75rem 0.45rem 0.75rem;
+      position: relative;
       background: var(--surface-glass); backdrop-filter: blur(var(--panel-blur));
       border-bottom: 1px solid var(--border);
       font-size: 0.75rem;
@@ -267,7 +269,12 @@ import '../../styles/themes.css';
     .sp-status.live { color: var(--pink); }
     #btn-strudel-play, #btn-strudel-stop { padding: 0.1rem 0.55rem; font-size: 0.85rem; line-height: 1; }
     #btn-strudel-play.playing { color: var(--pink); border-color: var(--pink); }
-    #btn-strudel-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    /* × pins to the top-right corner, out of the flex flow, so a wrapped
+       header can never park it next to ■ stop (see qualia's panel-close rule). */
+    #btn-strudel-close {
+      padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1;
+      position: absolute; top: 0.4rem; right: 0.6rem;
+    }
     #strudel-mount {
       flex: 1; min-height: 0; overflow: auto;
       background: transparent;
