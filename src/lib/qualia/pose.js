@@ -261,7 +261,15 @@ export function createPose() {
   }
 
   async function startCamera({ deviceId, video, facing } = {}) {
-    if (!hasLandmarker()) await buildLandmarker();
+    // Pose inference is best-effort: if the landmarker can't build (e.g. the
+    // MediaPipe CDN is unreachable at an offline gig), the camera preview
+    // must still open — the detect loop just idles until a landmarker
+    // exists. This also keeps recoverCamera() able to reopen a reclaimed
+    // camera while inference is down.
+    if (!hasLandmarker()) {
+      try { await buildLandmarker(); }
+      catch (err) { console.warn('[qualia] pose landmarker unavailable — camera continues without pose:', err); }
+    }
 
     videoEl = video;
     // facing wins over deviceId when both are provided (used by flipFacing
@@ -343,9 +351,15 @@ export function createPose() {
         }
       });
     }
+    // Bind the track BEFORE flipping detectSource / starting the detect
+    // loop — startDetectLoop()'s first tick runs synchronously, and the
+    // keep-alive watchdog would otherwise see detectSource === 'camera'
+    // with no live track and re-enter startCamera (double getUserMedia).
+    activeTrack = stream.getVideoTracks()[0] || null;
+    watchTrack(activeTrack);
+    recoverFails = 0;
     detectSource = 'camera';
     if (!detectLoopStarted) startDetectLoop();
-    activeTrack = stream.getVideoTracks()[0] || null;
     const settings = activeTrack?.getSettings?.() || {};
     activeDeviceId = settings.deviceId || null;
     if (settings.facingMode === 'user' || settings.facingMode === 'environment') {
@@ -446,6 +460,85 @@ export function createPose() {
     }
   }
 
+  // ── Camera keep-alive ─────────────────────────────────────────────────────
+  // Mobile browsers (Android Chrome especially) pause the <video> element,
+  // mute the MediaStreamTrack, or end it outright when the tab is
+  // backgrounded, the screen locks, or another app claims the camera — and
+  // nothing resumes it on return. A video element with no decoded frame
+  // paints TRANSPARENT (not black), so the preview degrades to a ghost
+  // border while the app still believes the camera is on. These hooks
+  // re-kick play() / re-open the stream whenever that happens.
+  let recovering = false;      // reentry guard across the async attempt
+  let lastRecoverMs = -1e9;    // rate limit — at most one attempt per 2s
+  let recoverFails = 0;        // consecutive failures before giving up
+
+  function trackAlive() {
+    return !!(activeTrack && activeTrack.readyState === 'live');
+  }
+
+  async function recoverCamera(reason) {
+    // Only act while a camera session is (believed) active. detectSource is
+    // null during stopCamera()/flipFacing() teardown and the initial
+    // startCamera(), so recovery can never race a deliberate (re)start.
+    if (detectSource !== 'camera' || !videoEl) return;
+    // While hidden the browser is entitled to keep us paused; retry lands
+    // via the visibilitychange/pageshow hooks + the detect-loop watchdog.
+    if (document.visibilityState === 'hidden') return;
+    const now = performance.now();
+    if (recovering || now - lastRecoverMs < 2000) return;
+    recovering = true;
+    lastRecoverMs = now;
+    try {
+      if (trackAlive()) {
+        // Stream is fine — the element just stopped painting/playing.
+        // play() resolves as a no-op when already playing.
+        await videoEl.play();
+        recoverFails = 0;
+        return;
+      }
+      // Track died (OS/another app reclaimed the lens). Re-open the same
+      // device; startCamera's constraint ladder falls back gracefully if
+      // that exact deviceId is gone.
+      console.warn(`[qualia] camera track lost (${reason}) — reopening`);
+      await startCamera({ deviceId: activeDeviceId || undefined, video: videoEl });
+    } catch (err) {
+      recoverFails++;
+      console.warn(`[qualia] camera recovery failed (attempt ${recoverFails}):`, err);
+      if (recoverFails >= 3 && detectSource === 'camera') {
+        // Genuinely gone (e.g. camera held by another app). Tear down so
+        // the preview doesn't sit as an invisible ghost frame, and tell the
+        // UI so the controls stop claiming the camera is on.
+        stopCamera();
+        try { window.dispatchEvent(new CustomEvent('qualia:camera-lost', { detail: { reason } })); } catch {}
+      }
+    } finally {
+      recovering = false;
+    }
+  }
+
+  function watchTrack(track) {
+    if (!track) return;
+    // Note: our own track.stop() (stopCamera/flipFacing) does NOT fire
+    // 'ended' — per spec it only fires when the source ends the track — so
+    // this only catches the OS/browser reclaiming the camera under us.
+    track.addEventListener('ended', () => recoverCamera('track ended'));
+    // Backgrounding often just mutes the track (frames stop flowing). When
+    // frames resume the element sometimes stays stalled on Android — a
+    // play() kick unsticks the decoder. Harmless if already playing.
+    track.addEventListener('unmute', () => { videoEl?.play().catch(() => {}); });
+  }
+
+  if (typeof document !== 'undefined') {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      recoverFails = 0;   // fresh retry budget per foreground return
+      recoverCamera('page visible');
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    // bfcache restore skips visibilitychange on some browsers.
+    window.addEventListener('pageshow', onVisible);
+  }
+
   /** Start running PoseLandmarker against an arbitrary canvas (for "viz" mode). */
   async function startCanvasDetection(canvas) {
     if (!hasLandmarker()) await buildLandmarker();
@@ -527,6 +620,12 @@ export function createPose() {
     detectLoopStarted = true;
     (function detectLoop() {
       requestAnimationFrame(detectLoop);
+      // Camera keep-alive watchdog — catches stalls that fire no event at
+      // all (decoder surface dropped, silent pause). Cheap flag checks per
+      // tick; recoverCamera rate-limits the actual work to one attempt/2s.
+      if (detectSource === 'camera' && videoEl && (videoEl.paused || !trackAlive())) {
+        recoverCamera(videoEl.paused ? 'preview paused' : 'track dead');
+      }
       if (!hasLandmarker()) return;
       // Throttle gate — cheap to spin the rAF, expensive to call
       // detectForVideo. Skip ticks that come faster than the interval.

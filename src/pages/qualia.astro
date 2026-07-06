@@ -300,6 +300,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
          strip in the bottom-right. Preview modes (small/large) are
          fully opaque; only size-full fades down (it's a backdrop). */
       opacity: 1; z-index: 17;
+      /* Black backing: a <video> with no decoded frame paints TRANSPARENT,
+         so a stalled camera used to degrade to an invisible ghost border
+         over the fx canvas. With a backing it reads as an obvious dead
+         black card while pose.js's keep-alive recovers the stream. */
+      background: #000;
       transform: scaleX(-1);
       transition: opacity 0.2s, width 0.3s;
       /* Touch handlers (tap / double-tap / long-press / drag) live in
