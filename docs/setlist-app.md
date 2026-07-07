@@ -619,6 +619,16 @@ not classes). Constraints to preserve:
 - **Swipe-to-navigate lives only in perform mode.** The song page had it
   and lost it — dragging a text selection in the notes field reads as a
   swipe. Song-page navigation is the prev/next buttons only.
+- **One finger draws, two fingers scroll.** The annotation canvas spans the
+  whole chart with `touch-action: none`, so with a drawing tool active no
+  single-finger touch can ever scroll a long document. `annotation.js`
+  tracks active pointers: a second finger landing cancels the first
+  finger's half-drawn stroke (it was scroll intent, not ink) and pans the
+  `.sl-annotation-wrap` scroll viewport by the gesture's centroid delta;
+  the gesture stays a scroll until every finger lifts. The 🖐 pan tool
+  remains for one-finger momentum scrolling, and the wrap sets
+  `overscroll-behavior: contain` so a scroll ending at the top edge can't
+  chain into Android Chrome's pull-to-refresh and reload away unsaved ink.
 - **Never open a modal inside a pointer gesture.** A `prompt()` fired from
   `pointerdown` wedges Android Chrome: the dialog interrupts the touch
   sequence before `pointerup`, the canvas keeps its implicit pointer

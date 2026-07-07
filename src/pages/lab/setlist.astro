@@ -1078,6 +1078,9 @@ const buildStamp = readBuildStamp();
          than the visible region the chart (and its annotations, which live in
          the same stage) scroll together, staying aligned. */
       overflow: auto;
+      /* A scroll ending at the top edge must not chain into Android Chrome's
+         pull-to-refresh — a reload mid-annotation eats unsaved ink. */
+      overscroll-behavior: contain;
     }
     /* Aspect-locked drawing surface. Width-driven height (aspect-ratio set at
        runtime to the annotation's authoring ratio) keeps the canvas coordinate

@@ -150,6 +150,30 @@ function showLinkToast(msg, href, label = 'open', ms = 20000) {
   window.addEventListener('hashchange', dismiss);
 }
 
+// One-shot hint when entering the annotation editor on a touch device: the
+// two-finger scroll gesture is invisible UI, so it gets said out loud once
+// per session. Desktop (fine pointer) scrolls with the wheel and needs no
+// coaching.
+function showAnnotateScrollHint(ms = 5000) {
+  if (!window.matchMedia?.('(pointer: coarse)')?.matches) return;
+  try {
+    if (sessionStorage.getItem('sl-ann-scroll-hint')) return;
+    sessionStorage.setItem('sl-ann-scroll-hint', '1');
+  } catch { /* private mode: hint just shows each time */ }
+  if (_activeToast) _activeToast.remove();
+  const toast = el('div', 'sl-toast');
+  toast.appendChild(el('span', 'sl-toast-msg', 'scroll with two fingers while annotating'));
+  const dismiss = () => {
+    window.removeEventListener('hashchange', dismiss);
+    toast.remove();
+    if (_activeToast === toast) _activeToast = null;
+  };
+  document.body.appendChild(toast);
+  _activeToast = toast;
+  setTimeout(dismiss, ms);
+  window.addEventListener('hashchange', dismiss);
+}
+
 function keyBadge(key, origKey) {
   if (!key) return '';
   const label = origKey && origKey !== key ? `${key} <span class="sl-orig">(orig ${origKey})</span>` : key;
@@ -3199,7 +3223,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
   const drawControls = el('div', 'sl-ann-controls');
   drawControls.style.cssText = 'display:none;align-items:center;gap:0.35rem;flex-wrap:wrap';
   drawControls.innerHTML = `
-    <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="pan" title="Scroll chart">🖐</button>
+    <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="pan" title="Scroll chart (two fingers also scroll with any tool)">🖐</button>
     <span class="sl-ann-sep"></span>
     <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="pen" title="Pen">✎</button>
     <button class="sl-btn sl-btn-sm sl-ann-tool" data-tool="highlighter" title="Highlighter">▮</button>
@@ -3298,6 +3322,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
     canvas.style.cursor = 'crosshair';
     if (readonlyCtrl) { readonlyCtrl.destroy(); readonlyCtrl = null; }
     canvasCtrl = initAnnotationCanvas(canvas, songId, drawControls);
+    showAnnotateScrollHint();
   }
 
   async function exitAnnotateMode() {
