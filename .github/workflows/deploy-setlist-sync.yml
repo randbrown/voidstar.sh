@@ -45,12 +45,13 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
         run: |
           node -e '
-            const keys = ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_CSE_ID", "BRAVE_SEARCH_API_KEY"];
+            const keys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_CSE_ID", "BRAVE_SEARCH_API_KEY"];
             const set = Object.fromEntries(keys.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
             require("fs").writeFileSync("optional-secrets.json", JSON.stringify(set));
             console.log("optional secrets set in this repo:", Object.keys(set).join(", ") || "(none)");

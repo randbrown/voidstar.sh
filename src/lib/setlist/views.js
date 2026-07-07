@@ -9,7 +9,7 @@ import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBa
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc, archiveChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
@@ -1233,9 +1233,12 @@ function setupDragReorder(container, set, setlist, opts = {}) {
 // parallel), create the Google Doc, and fill empty song fields from whatever
 // tier landed. Returns the new doc's webViewLink. The caller must have run
 // ensureDriveAccess() inside the originating tap gesture.
-async function researchAndCreateChartDoc(song, setStatus) {
+async function researchAndCreateChartDoc(song, setStatus, { retry = false } = {}) {
   const metaPromise = fetchSongMeta(song);
-  const ai = await fetchAiChart(song);
+  // retry (set by "rebuild doc"): bust the worker's 7-day AI-chart cache and
+  // research harder — a rebuild that replays the cached chart would hand
+  // back the exact doc the user just scrapped.
+  const ai = await fetchAiChart(song, { retry });
   const meta = await metaPromise;
   const extra = { key: meta?.key || '', bpm: meta?.bpm || 0, time: meta?.time || '' };
 
@@ -1602,12 +1605,67 @@ export async function renderSongFocus(root, songId, setlistId) {
     art.loading = 'lazy';
     info.insertBefore(art, info.firstChild);
   }
+  // One steel-summary regen path, shared by the action-bar button and the
+  // summary block's controls. `fresh` busts the worker's 7-day response
+  // cache (an explicit redo must actually re-run, not replay the cached
+  // answer); `retry` additionally marks the previous summary WRONG so the
+  // model researches deeper before answering.
+  const regenSteelSummary = async (b, opts = {}) => {
+    const prevLabel = b.textContent;
+    b.disabled = true;
+    b.textContent = opts.retry ? 'digging deeper...' : 'researching steel...';
+    const r = await fetchSteelSummary(song, opts);
+    if (r.ok) {
+      song.steelSummary = r.data.summary;
+      await store.putSong(song);
+      b.textContent = 'done!';
+      setTimeout(() => refresh(), 900);
+    } else {
+      console.warn('[setlist] steel summary:', r.reason);
+      const reasons = {
+        'no-ai-key': 'no AI key configured on the worker — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY',
+        'worker-outdated': 'worker outdated — redeploy workers/setlist-sync to get /ai/steel-summary',
+        'no worker configured': 'no worker URL configured in Settings',
+      };
+      b.textContent = 'failed';
+      alert(`steel summary failed: ${reasons[r.reason] || r.reason}`);
+      setTimeout(() => { b.textContent = prevLabel; b.disabled = false; }, 2000);
+    }
+  };
+
   // Steel direction — the AI-drafted (hand-editable) quick summary of what
   // the steel does in this song, kept with the key/steel-entry stage info.
   // textContent: AI/external data never goes through innerHTML.
+  // The summary is an AI claim about a recording, so it can be wrong — the
+  // verdict controls live right on the block: fix the wording by hand,
+  // re-roll it, re-roll with deeper research, or delete it.
   if (song.steelSummary) {
     const ss = el('div', 'sl-steel-summary');
-    ss.textContent = song.steelSummary;
+    const ssText = el('div', 'sl-steel-summary-text');
+    ssText.textContent = song.steelSummary;
+    ss.appendChild(ssText);
+    const ssActions = el('div', 'sl-steel-summary-actions');
+    ssActions.appendChild(btn('✎ edit', 'sl-btn-ghost sl-btn-xs', () => {
+      editForm.classList.remove('sl-hidden');
+      const ta = document.getElementById('sf-steelsummary');
+      ta?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      ta?.focus();
+    }));
+    const redoB = btn('↻ redo', 'sl-btn-ghost sl-btn-xs', () => regenSteelSummary(redoB, { fresh: true }));
+    ssActions.appendChild(redoB);
+    const wrongB = btn('✗ wrong — retry', 'sl-btn-ghost sl-btn-xs', () => regenSteelSummary(wrongB, { retry: true }));
+    wrongB.title = 'Mark this summary inaccurate and regenerate with deeper research';
+    ssActions.appendChild(wrongB);
+    ssActions.appendChild(btn('delete', 'sl-btn-ghost sl-btn-xs', async () => {
+      if (!confirm('Delete this steel summary? The deletion carries to your other devices on the next backup.')) return;
+      // The tombstone stops the fill-empty backup merge from "helpfully"
+      // restoring the deleted summary from another device's older copy.
+      store.markCleared(song, 'steelSummary');
+      song.steelSummary = '';
+      await store.putSong(song);
+      refresh();
+    }));
+    ss.appendChild(ssActions);
     info.appendChild(ss);
   }
   root.appendChild(info);
@@ -1651,12 +1709,19 @@ export async function renderSongFocus(root, songId, setlistId) {
     ${isOverride ? '<div class="sl-hint">Key and steel entry save as overrides for this setlist. Title, artist, key changes, Spotify, and chart save to the base song.</div>' : ''}
   `;
   editForm.addEventListener('change', async () => {
+    // Emptying a field here is an explicit delete — tombstone it, or the
+    // fill-empty backup merge restores the old value from another device's
+    // older copy on the next cycle.
+    const clearedByForm = (field, next) => {
+      if (song[field] && !(next || '').trim()) store.markCleared(song, field);
+      return next;
+    };
     song.title = document.getElementById('sf-title').value;
-    song.artist = document.getElementById('sf-artist').value;
-    song.keyChanges = document.getElementById('sf-keychanges').value;
-    song.steelSummary = document.getElementById('sf-steelsummary').value.trim();
-    song.spotifyUri = document.getElementById('sf-spotify').value;
-    song.chartUrl = document.getElementById('sf-chart').value;
+    song.artist = clearedByForm('artist', document.getElementById('sf-artist').value);
+    song.keyChanges = clearedByForm('keyChanges', document.getElementById('sf-keychanges').value);
+    song.steelSummary = clearedByForm('steelSummary', document.getElementById('sf-steelsummary').value.trim());
+    song.spotifyUri = clearedByForm('spotifyUri', document.getElementById('sf-spotify').value);
+    song.chartUrl = clearedByForm('chartUrl', document.getElementById('sf-chart').value);
 
     const keyVal = document.getElementById('sf-key').value;
     const steelVal = document.getElementById('sf-steel').value;
@@ -1668,8 +1733,8 @@ export async function renderSongFocus(root, songId, setlistId) {
       setlist.songOverrides[song.id].steelEntry = steelVal;
       await store.putSetlist(setlist);
     } else {
-      song.key = keyVal;
-      song.steelEntry = steelVal;
+      song.key = clearedByForm('key', keyVal);
+      song.steelEntry = clearedByForm('steelEntry', steelVal);
     }
     await store.putSong(song);
   });
@@ -1690,21 +1755,28 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     actionBar.appendChild(editDocBtn);
 
-    // Scrap the current doc and regenerate from fresh research (same ladder
-    // as "create chart doc"). The old doc is trashed only if this app
-    // created it — drive.file scope can't touch community charts, so those
-    // are merely unlinked.
+    // Regenerate the doc from fresh research (same ladder as "create chart
+    // doc") and relink the song. The OLD doc is never discarded silently:
+    // the user chooses trash (recoverable from Drive's trash for ~30 days)
+    // or keep (renamed "(replaced <date>)" in the charts folder). Either
+    // way only app-created docs are touched — drive.file scope can't reach
+    // community charts, so those are merely unlinked.
     const rebuildBtn = btn('rebuild doc', 'sl-btn-ghost sl-btn-sm', async () => {
-      if (!confirm('Scrap this chart doc and rebuild it from fresh research? A doc generated by this app gets trashed; existing annotations stay but may need redrawing.')) return;
+      if (!confirm('Rebuild this chart doc from fresh research? The song relinks to the new doc; existing annotations stay but may need redrawing.')) return;
+      const trashOld = confirm(
+        'And the old doc itself?\n\nOK — move it to the Drive trash (recoverable for ~30 days)\nCancel — keep it in Drive, renamed "(replaced)"'
+      );
       rebuildBtn.disabled = true;
       rebuildBtn.textContent = 'connecting drive...';
       try {
         await ensureDriveAccess();
         const oldUrl = song.chartUrl;
         rebuildBtn.textContent = 'researching song...';
-        const webViewLink = await researchAndCreateChartDoc(song, (s) => { rebuildBtn.textContent = s; });
+        const webViewLink = await researchAndCreateChartDoc(song, (s) => { rebuildBtn.textContent = s; }, { retry: true });
         await store.deleteChartBlob(song.id); // drop the old doc's cached copy
-        trashChartDoc(oldUrl); // fire-and-forget; only touches app-created docs
+        // Fire-and-forget; both only touch app-created docs.
+        if (trashOld) trashChartDoc(oldUrl);
+        else archiveChartDoc(oldUrl);
         const win = window.open(webViewLink, '_blank');
         if (!win) showLinkToast('chart doc rebuilt', webViewLink);
         refresh();
@@ -1900,27 +1972,11 @@ export async function renderSongFocus(root, songId, setlistId) {
   // details form has a field for hand-tweaking the wording. Failures are
   // loud, same contract as "read chart".
   const steelLabel = song.steelSummary ? 'redo steel summary' : 'steel summary (AI)';
-  const steelBtn = btn(steelLabel, 'sl-btn-ghost sl-btn-sm', async () => {
-    steelBtn.disabled = true;
-    steelBtn.textContent = 'researching steel...';
-    const r = await fetchSteelSummary(song);
-    if (r.ok) {
-      song.steelSummary = r.data.summary;
-      await store.putSong(song);
-      steelBtn.textContent = 'done!';
-      setTimeout(() => refresh(), 900);
-    } else {
-      console.warn('[setlist] steel summary:', r.reason);
-      const reasons = {
-        'no-ai-key': 'no AI key configured on the worker — set ANTHROPIC_API_KEY or GEMINI_API_KEY',
-        'worker-outdated': 'worker outdated — redeploy workers/setlist-sync to get /ai/steel-summary',
-        'no worker configured': 'no worker URL configured in Settings',
-      };
-      steelBtn.textContent = 'failed';
-      alert(`steel summary failed: ${reasons[r.reason] || r.reason}`);
-      setTimeout(() => { steelBtn.textContent = steelLabel; steelBtn.disabled = false; }, 2000);
-    }
-  });
+  // A redo busts the response cache (fresh:true) — replaying the cached
+  // summary would make the button look broken; a first draft may still use
+  // the cache.
+  const steelBtn = btn(steelLabel, 'sl-btn-ghost sl-btn-sm', () =>
+    regenSteelSummary(steelBtn, { fresh: !!song.steelSummary }));
   steelBtn.title = "AI-research the steel guitar's role in this song — presence, entrances, style, intensity";
   actionBar.appendChild(steelBtn);
 

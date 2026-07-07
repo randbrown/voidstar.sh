@@ -61,7 +61,7 @@ export async function readChartFields(song, onStage) {
         onStage?.('ai');
         const read = await readChartImage(song, cached.blob);
         if (read.ok) applied += applyEmptyFields(song, read.data);
-        else if (read.reason === 'no-ai-key') problems.push('no AI key configured on the worker — set ANTHROPIC_API_KEY or GEMINI_API_KEY to read scanned charts');
+        else if (read.reason === 'no-ai-key') problems.push('no AI key configured on the worker — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY to read scanned charts');
         else problems.push(`AI read failed: ${read.reason}`);
       }
     }
@@ -179,7 +179,7 @@ export async function summarizeSteelForAllSongs(onProgress) {
       lastReason = null;
       sameReasonRun = 0;
     } else if (r.reason === 'no-ai-key') {
-      return { aborted: 'no AI key configured on the worker — set ANTHROPIC_API_KEY or GEMINI_API_KEY', total: targets.length, updated, failures };
+      return { aborted: 'no AI key configured on the worker — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY', total: targets.length, updated, failures };
     } else if (r.reason === 'worker-outdated') {
       return { aborted: 'worker outdated — redeploy workers/setlist-sync to get /ai/steel-summary', total: targets.length, updated, failures };
     } else {

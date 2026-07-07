@@ -392,12 +392,20 @@ export async function fetchWebChartData(song) {
 // {key, bpm, time, capo, feel, confidence, sections:[{name, comment,
 // bars:[]}], notes, provider, model, sources}; or {ok:false, reason} —
 // 'no-ai-key' means skip silently to the scrape tier.
-export async function fetchAiChart(song) {
+// opts.retry: the user judged a previous result wrong (or is explicitly
+// rebuilding) — busts the 7-day response cache (fresh `t` param = fresh cache
+// key) and tells the worker to research harder; without it, a "redo" within
+// the cache window would just replay the same wrong answer.
+export async function fetchAiChart(song, { retry = false } = {}) {
   const sources = getSources();
   if (!sources.workerUrl) return { ok: false, reason: 'no worker configured' };
   try {
     const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
     if (song.key) params.set('key', song.key);
+    if (retry) {
+      params.set('retry', '1');
+      params.set('t', String(Date.now()));
+    }
     const res = await fetch(`${sources.workerUrl}/ai/chart?${params}`);
     if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
     if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
@@ -415,11 +423,17 @@ export async function fetchAiChart(song) {
 // intensity — a few sentences for quick reference while studying/performing.
 // Returns {ok:true, data:{summary, confidence, provider, model, sources}} or
 // {ok:false, reason} — 'no-ai-key' means the worker has no AI key configured.
-export async function fetchSteelSummary(song) {
+// opts.fresh busts the 7-day response cache (a regen must actually re-run,
+// not replay the cached answer); opts.retry additionally tells the worker
+// the previous summary was marked WRONG, so it researches harder. The bulk
+// missing-only pass passes neither and keeps the cache's cost savings.
+export async function fetchSteelSummary(song, { fresh = false, retry = false } = {}) {
   const sources = getSources();
   if (!sources.workerUrl) return { ok: false, reason: 'no worker configured' };
   try {
     const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
+    if (retry) params.set('retry', '1');
+    if (fresh || retry) params.set('t', String(Date.now()));
     const res = await fetch(`${sources.workerUrl}/ai/steel-summary?${params}`);
     if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
     if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
