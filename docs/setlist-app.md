@@ -20,7 +20,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, chartUrl, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, chartUrl, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow), one per song |
@@ -157,6 +157,20 @@ song page (`.sl-steel-summary`) and in perform mode
 (`.sl-perform-steel-summary`), always via `textContent`/`esc()` — it's model
 output, never trusted HTML.
 
+The summary is an AI **claim about a recording, so it can be wrong** — the
+song page's block carries its own verdict controls
+(`.sl-steel-summary-actions`): **✎ edit** (opens the edit form at the
+textarea), **↻ redo** (regenerate — passes `fresh` to `fetchSteelSummary`,
+which cache-busts the worker's 7-day response cache; a redo that replays the
+cached answer looks like a dead button), **✗ wrong — retry** (passes
+`retry`, which also tells the worker the previous summary was judged
+inaccurate: the prompt demands deeper research and cross-checking, with a
+bigger search budget, and the response is `no-store`), and **delete**
+(confirms, then clears the field *and* writes a `clearedFields` tombstone so
+the backup merge propagates the deletion instead of resurrecting the summary
+from another device). The bulk missing-only pass passes neither flag and
+keeps the cache's cost savings.
+
 ### Library tools — whole-library administrative passes
 
 Library page → **"library tools"** (a collapsed panel, `buildLibraryTools` in
@@ -217,16 +231,31 @@ This codebase intentionally keeps two similarly-named ideas separate:
     once connected.
   - Manual: "back up now" / "restore from drive" buttons in Settings.
   - All paths — **including the debounced auto-push** — go through
-    `pullMergePushCycle()`, which always pulls, merges by "newer wins"
-    (`updatedAt`/`createdAt`, per-record; `sources`/`settings` merge
-    fill-empty), writes the merge back locally, then pushes it — so no path
-    can blindly clobber either side. (The auto-push used to push blind;
-    with two devices open, each push overwrote the other's changes in
-    Drive.) The local import + pre-import snapshot are **skipped when the
-    remote has nothing new** (`remoteHasNews`) — otherwise every cycle
-    would re-import identical data, fire the write hook, and schedule the
-    next push forever. An `isSyncing()` flag serializes cycles so manual,
-    auto-push, and focus-pull can't overlap.
+    `pullMergePushCycle()`, which always pulls, merges, writes the merge
+    back locally, then pushes it — so no path can blindly clobber either
+    side. (The auto-push used to push blind; with two devices open, each
+    push overwrote the other's changes in Drive.) The local import +
+    pre-import snapshot are **skipped when the merge wouldn't change local
+    state** (`mergeChangesLocal`, compared on the merged result) —
+    otherwise every cycle would re-import identical data, fire the write
+    hook, and schedule the next push forever. An `isSyncing()` flag
+    serializes cycles so manual, auto-push, and focus-pull can't overlap.
+  - **Merge semantics: newer wins per record, but a blank never beats
+    content.** Records merge by `updatedAt`/`createdAt` (`mergeRecord` in
+    `store.js`), and for songs/setlists the winner's **empty content
+    fields fill from the loser** (`SONG_FILL_FIELDS` /
+    `SETLIST_FILL_FIELDS`). Pure record-level newer-wins used to lose
+    data across devices: a stale copy of a song that later got any small
+    touch (a status toggle bumps `updatedAt`) replaced the whole record
+    and wiped the steel summary / lyrics / chart link only the other
+    device had. The exception is an **explicit delete**: the summary
+    delete button and the edit form (emptying a previously-filled field)
+    write a `clearedFields[field]` timestamp tombstone, and the fill only
+    resurrects content *written after* the delete. `statuses` is
+    deliberately not fill-protected (toggling one off is a routine
+    intentional clear). The same merge-aware upsert backs
+    `store.importAll` (and the setlist/song file imports), so importing a
+    stale export file can't regress newer local records either.
   - `pull()` self-heals **duplicate data files** (two devices' first backups
     racing used to split the dataset — each device read/wrote its own copy
     and "missed" the other's edits): the file list is ordered newest-first
@@ -344,17 +373,24 @@ four tiers, in order:
    - `GET /ai/chart` (strongest tier, needs an AI key on the worker) — an
      LLM with web-search grounding drafts the actual chart the way a session
      leader would: key, tempo, time, feel, song form, **bar-accurate**
-     sections, split bars, and playing notes. Providers form a chain —
-     Claude (`ANTHROPIC_API_KEY`, `web_search` server tool, default model
-     `claude-opus-4-8`) first, Gemini (`GEMINI_API_KEY`, Google Search
-     grounding, default `gemini-2.5-flash`, free tier at
-     aistudio.google.com/apikey) as fallback — whichever is configured; with
-     both set, a song one can't verify falls through to the other.
-     Hallucination guards, in layers: search grounding, a prompt contract
-     that demands `found:false` over invention, a numeric confidence gate
-     (`AI_MIN_CONFIDENCE`), server-side normalization/clamping of the JSON
-     (`normalizeAiChart`), source URLs + confidence printed in the doc
-     footer, and a verify-by-ear note. Responses cache for 7 days.
+     sections, split bars, and playing notes. Providers form a failover
+     chain — Claude (`ANTHROPIC_API_KEY`, `web_search` server tool, default
+     model `claude-opus-4-8`), then OpenAI (`OPENAI_API_KEY`, Responses API
+     `web_search` tool, default `gpt-5-mini`), then Gemini
+     (`GEMINI_API_KEY`, Google Search grounding, default `gemini-2.5-flash`,
+     free tier at aistudio.google.com/apikey) — whichever are configured. A
+     provider that **errors** (rate limit, exhausted credits) or can't
+     verify the song falls through to the next; when all fail, the `reason`
+     lists each provider's actual failure plus which providers were skipped
+     for having no key, so "why didn't it fail over?" is answerable from
+     the client. Hallucination guards, in layers: search grounding, a
+     prompt contract that demands `found:false` over invention, a numeric
+     confidence gate (`AI_MIN_CONFIDENCE`), server-side
+     normalization/clamping of the JSON (`normalizeAiChart`), source URLs +
+     confidence printed in the doc footer, and a verify-by-ear note.
+     Responses cache for 7 days; `retry=1` (sent by "rebuild doc" and the
+     mark-wrong flows) cache-busts, tells the model the previous answer was
+     judged inaccurate, raises the search budget, and returns `no-store`.
    - `GET /web/chart-data` (fallback) finds a community chord sheet —
      Ultimate Guitar first (its search page + the tab page's embedded
      `js-store` JSON gives sections, tonality, and capo), then a web-search
@@ -395,9 +431,14 @@ four tiers, in order:
    intentionally matches what `extractFromText` parses; for freeform
    hand-drawn charts, the in-app annotation canvas already draws on top of
    any linked document. The song page's "rebuild doc" button re-runs this
-   same ladder for a song that already has a chart, replacing the link and
-   trashing the old doc when this app created it (`trashChartDoc` —
-   drive.file scope can't touch community charts, so those just unlink).
+   same ladder for a song that already has a chart (with `retry=1`, so the
+   AI tier re-researches instead of replaying its 7-day cache) and replaces
+   the link — but **never discards the old doc without an explicit choice**:
+   the user picks trash (`trashChartDoc` — Drive's trash, recoverable for
+   ~30 days, never a hard delete) or keep (`archiveChartDoc`, which renames
+   it "(replaced <date>)" so it doesn't shadow the new doc in the charts
+   folder). Both only touch app-created docs — drive.file scope can't reach
+   community charts, so those just unlink.
 
 Tiers 1–3 are available per-song via `searchChartForSong()` in `sync.js`
 (the "search for chart" button, which reports its stage and returns
@@ -551,8 +592,11 @@ Env vars (`wrangler secret put`): `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`,
 `GOOGLE_API_KEY`. Optional, for better `/web/*` search: `GOOGLE_CSE_ID`
 (Programmable Search Engine id, pairs with `GOOGLE_API_KEY`),
 `BRAVE_SEARCH_API_KEY` — without either, web search falls back to a keyless
-DuckDuckGo HTML scrape. Optional, for `/ai/chart`: `ANTHROPIC_API_KEY`
-and/or `GEMINI_API_KEY` (+ `ANTHROPIC_MODEL`/`GEMINI_MODEL` overrides).
+DuckDuckGo HTML scrape. Optional, for the `/ai/*` routes: any of
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (+
+`ANTHROPIC_MODEL`/`OPENAI_MODEL`/`GEMINI_MODEL` overrides) — they form the
+Claude → OpenAI → Gemini failover chain, so setting more than one keeps AI
+features alive when one account hits its usage limit.
 Also `ALLOWED_ORIGIN` (plain var in `wrangler.toml`).
 
 The worker imports `@anthropic-ai/sdk`, so run `npm ci` at the repo root
@@ -563,9 +607,9 @@ runs `wrangler deploy` on every push to `main` that touches
 `workers/setlist-sync/**` (or the lockfile/workflow itself), using the
 `CLOUDFLARE_API_TOKEN` repo Actions secret. It pushes the three required
 worker secrets from same-named repo secrets on every deploy, and the
-optional ones (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_CSE_ID`,
-`BRAVE_SEARCH_API_KEY`) only when set in the repo — an unset optional
-secret is skipped, never overwritten with an empty value. To enable AI
+optional ones (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`GOOGLE_CSE_ID`, `BRAVE_SEARCH_API_KEY`) only when set in the repo — an
+unset optional secret is skipped, never overwritten with an empty value. To enable AI
 chart reading/drafting, add one of the AI keys under GitHub → Settings →
 Secrets and variables → Actions and re-run the workflow. Manual
 `npx wrangler deploy -c workers/setlist-sync/wrangler.toml` still works
@@ -582,8 +626,10 @@ Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `GET /web/chart-data?title=&artist=`,
 `GET /meta/song?title=&artist=&spotifyId=` (BPM/key/time + iTunes
 artist/genre/year/artwork/duration),
-`GET /ai/chart?title=&artist=&key=`,
+`GET /ai/chart?title=&artist=&key=[&retry=1]`,
 `POST /ai/chart-read` (vision read of a scanned chart image;
 `ANTHROPIC_READ_MODEL` overrides the default Haiku),
-`GET /ai/steel-summary?title=&artist=` (concise steel-direction summary,
-same provider chain and guards as `/ai/chart`), `GET /health`.
+`GET /ai/steel-summary?title=&artist=[&retry=1]` (concise steel-direction
+summary, same provider chain and guards as `/ai/chart`; `retry=1` on both
+`/ai/*` GET routes = "previous answer was wrong, research harder, don't
+cache"), `GET /health`.

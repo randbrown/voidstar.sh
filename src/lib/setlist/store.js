@@ -296,7 +296,65 @@ export async function restoreSnapshot(ts) {
   return true;
 }
 
-// ── Merge helper ──
+// ── Merge helpers ──
+
+// Song fields where a blank must NEVER silently beat real content when two
+// devices' copies merge (Drive backup, file import). These carry expensive
+// generated/hand-entered content — an AI steel summary, scraped lyrics, a
+// chart link — that a stale-but-later-touched copy of the song used to wipe
+// wholesale under pure "newer record wins". Excluded on purpose: `title`
+// (never blank) and `statuses` (toggled off intentionally all the time).
+export const SONG_FILL_FIELDS = [
+  'artist', 'key', 'bpm', 'capo', 'keyChanges', 'steelEntry', 'steelSummary',
+  'spotifyUri', 'chartUrl', 'lyrics', 'syncedLyrics',
+  'genre', 'year', 'durationSec', 'artworkUrl',
+];
+export const SETLIST_FILL_FIELDS = ['gigDate', 'venue', 'spotifyUrl'];
+
+function isEmptyValue(v) {
+  return v == null || v === '' || v === 0 || (Array.isArray(v) && v.length === 0);
+}
+
+// Record an explicit field deletion so the merge can tell "the user deleted
+// this" apart from "this copy never had it". Without the tombstone, fill-empty
+// merging would resurrect a deleted value from any other device's older copy —
+// with it, the delete wins against content written BEFORE the delete, while
+// content written after still comes through.
+export function markCleared(record, field) {
+  record.clearedFields = { ...(record.clearedFields || {}), [field]: Date.now() };
+}
+
+// Merge two copies of the same record: the newer (by updatedAt/createdAt)
+// wins, but when `fillFields` is given, a blank in the winner never erases
+// content the loser still carries — unless a clearedFields tombstone says the
+// blank was an explicit, more recent delete. Tombstones from both copies are
+// unioned so a delete keeps winning on every device it reaches.
+export function mergeRecord(a, b, fillFields = null) {
+  if (!a) return b;
+  if (!b) return a;
+  const ts = (r) => r.updatedAt || r.createdAt || 0;
+  const [newer, older] = ts(b) > ts(a) ? [b, a] : [a, b];
+  if (!fillFields) return newer;
+
+  let out = newer;
+  const olderTs = ts(older);
+  for (const f of fillFields) {
+    if (!isEmptyValue(newer[f]) || isEmptyValue(older[f])) continue;
+    const clearedAt = Math.max(newer.clearedFields?.[f] || 0, older.clearedFields?.[f] || 0);
+    if (clearedAt >= olderTs) continue; // deleted after that content was last saved
+    if (out === newer) out = { ...newer };
+    out[f] = older[f];
+  }
+  const cleared = { ...(older.clearedFields || {}) };
+  for (const [f, t] of Object.entries(newer.clearedFields || {})) {
+    cleared[f] = Math.max(cleared[f] || 0, t);
+  }
+  if (Object.keys(cleared).length) {
+    if (out === newer) out = { ...newer };
+    out.clearedFields = cleared;
+  }
+  return out;
+}
 
 export function mergedSong(song, setlist) {
   if (!setlist?.songOverrides?.[song.id]) return song;
@@ -319,11 +377,16 @@ export async function exportAll() {
   return { version: 1, songs, notes, setlists, annotations, sources, settings, exportedAt: Date.now() };
 }
 
+// Additive import — upserts records without deleting anything. Every put is
+// MERGE-AWARE (newer copy wins, blanks fill from the older copy): importing a
+// stale export file, or a Drive merge racing a local edit, must never regress
+// a record this device already has a newer/richer copy of. Timestamps are
+// preserved (plain put, not putSong) so merges stay stable across devices.
 export async function importAll(data) {
-  if (data.songs) for (const s of data.songs) await put(SONGS, s);
-  if (data.notes) for (const n of data.notes) await put(NOTES, n);
-  if (data.setlists) for (const sl of data.setlists) await put(SETLISTS, sl);
-  if (data.annotations) for (const a of data.annotations) await put(ANNOTATIONS, a);
+  if (data.songs) for (const s of data.songs) await put(SONGS, mergeRecord(await getOne(SONGS, s.id), s, SONG_FILL_FIELDS));
+  if (data.notes) for (const n of data.notes) await put(NOTES, mergeRecord(await getOne(NOTES, n.id), n));
+  if (data.setlists) for (const sl of data.setlists) await put(SETLISTS, mergeRecord(await getOne(SETLISTS, sl.id), sl, SETLIST_FILL_FIELDS));
+  if (data.annotations) for (const a of data.annotations) await put(ANNOTATIONS, mergeRecord(await getOne(ANNOTATIONS, a.songId), a));
   if (data.sources) setSourcesRaw(data.sources);
   if (data.settings) applySettingsRaw(data.settings);
 }
@@ -364,16 +427,20 @@ export async function exportSources() {
 }
 
 export async function importSetlist(data) {
-  if (data.setlist) await put(SETLISTS, data.setlist);
-  if (data.songs) for (const s of data.songs) await put(SONGS, s);
-  if (data.notes) for (const n of data.notes) await put(NOTES, n);
-  if (data.annotations) for (const a of data.annotations) await put(ANNOTATIONS, a);
+  await importAll({
+    setlists: data.setlist ? [data.setlist] : undefined,
+    songs: data.songs,
+    notes: data.notes,
+    annotations: data.annotations,
+  });
 }
 
 export async function importSong(data) {
-  if (data.song) await put(SONGS, data.song);
-  if (data.notes) for (const n of data.notes) await put(NOTES, n);
-  if (data.annotation) await put(ANNOTATIONS, data.annotation);
+  await importAll({
+    songs: data.song ? [data.song] : undefined,
+    notes: data.notes,
+    annotations: data.annotation ? [data.annotation] : undefined,
+  });
 }
 
 export async function importSources(data) {

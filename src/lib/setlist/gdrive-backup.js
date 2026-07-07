@@ -10,6 +10,8 @@
 // features' names distinct avoids confusing "back up my data" with "match my
 // songs to charts and tracks".
 
+import { mergeRecord, SONG_FILL_FIELDS, SETLIST_FILL_FIELDS } from './store.js';
+
 const CLIENT_ID_KEY = 'voidstar.setlist.gdrive.clientId';
 const TOKEN_KEY = 'voidstar.setlist.gdrive.token';
 const LAST_BACKUP_KEY = 'voidstar.setlist.gdrive.lastBackupAt';
@@ -137,11 +139,13 @@ async function getAccessToken({ interactive = true } = {}) {
   });
 }
 
-// Trash (not hard-delete — recoverable from Drive's trash) a chart doc this
-// app created. drive.file scope only reaches files the app made, so calling
-// this on a community/foreign chart fails silently — exactly right when
-// "rebuild doc" replaces a generated doc but should merely unlink anything
-// else. Fire-and-forget; never blocks or breaks the caller.
+// Trash (not hard-delete — recoverable from Drive's trash for ~30 days) a
+// chart doc this app created. drive.file scope only reaches files the app
+// made, so calling this on a community/foreign chart fails silently —
+// exactly right when "rebuild doc" replaces a generated doc but should
+// merely unlink anything else. Fire-and-forget; never blocks or breaks the
+// caller. Only ever called after the user explicitly opted into trashing —
+// the app never discards a chart doc on its own.
 export async function trashChartDoc(chartUrl) {
   const m = (chartUrl || '').match(/(?:file|document)\/d\/([a-zA-Z0-9_-]+)/);
   if (!m) return;
@@ -152,6 +156,32 @@ export async function trashChartDoc(chartUrl) {
       method: 'PATCH',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ trashed: true }),
+    });
+  } catch {}
+}
+
+// The keep-it alternative to trashChartDoc: when a rebuild replaces a doc
+// the user chose to keep, rename the old one with a "(replaced <date>)"
+// suffix so it doesn't sit in the charts folder as an identically-named
+// twin of the new doc. Same access model and fire-and-forget contract as
+// trashChartDoc.
+export async function archiveChartDoc(chartUrl) {
+  const m = (chartUrl || '').match(/(?:file|document)\/d\/([a-zA-Z0-9_-]+)/);
+  if (!m) return;
+  try {
+    const token = await getAccessToken({ interactive: false });
+    if (!token) return;
+    const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${m[1]}?fields=name`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!metaRes.ok) return;
+    const { name } = await metaRes.json();
+    if (!name || /\(replaced \d{4}-\d{2}-\d{2}\)$/.test(name)) return;
+    const stamp = new Date().toISOString().slice(0, 10);
+    await fetch(`https://www.googleapis.com/drive/v3/files/${m[1]}`, {
+      method: 'PATCH',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `${name} (replaced ${stamp})` }),
     });
   } catch {}
 }
@@ -206,7 +236,9 @@ async function createFile(token, data) {
   const metadata = { name: FILE_NAME, mimeType: 'application/json' };
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }));
+  // Always name the media part: a bare Blob in FormData uploads as
+  // filename="blob", and Drive can surface that instead of the metadata name.
+  form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }), FILE_NAME);
 
   const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
     method: 'POST',
@@ -334,7 +366,10 @@ export async function createChartDoc(song, content = '') {
   if (content) {
     const form = new FormData();
     form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-    form.append('file', new Blob([content], { type: 'text/plain' }));
+    // The filename matters: a bare Blob uploads as filename="blob", and the
+    // Docs conversion has been seen titling the new doc from it — the doc
+    // then opens as "blob" instead of "Title - Artist".
+    form.append('file', new Blob([content], { type: 'text/plain' }), name);
     res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` },
@@ -412,7 +447,7 @@ async function writeHistorySnapshot(token, data, force = false) {
   const metadata = { name: `${HISTORY_PREFIX}${stamp}.json`, mimeType: 'application/json', parents: [folderId] };
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }));
+  form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }), metadata.name);
 
   const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
     method: 'POST',
@@ -454,21 +489,22 @@ async function listHistory(token) {
   return listHistoryFiles(token, folderId);
 }
 
-// ── Merge by "newer wins" ──
+// ── Merge by "newer wins" — with field-level fill for content records ──
+// Record-level "newer wins" alone LOSES DATA across devices: a stale copy of
+// a song that later gets any small touch (a status toggle) carries the newer
+// updatedAt and used to replace the whole record, wiping the steel summary /
+// lyrics / chart link that only the other device's copy had. mergeRecord
+// (store.js) keeps newer-wins for conflicts but never lets a blank field
+// erase content — except when a clearedFields tombstone marks the blank as
+// an explicit, more recent delete.
 
-function mergeById(localArr, remoteArr, keyField = 'id') {
+function mergeById(localArr, remoteArr, keyField = 'id', fillFields = null) {
   const map = new Map();
   for (const item of localArr) map.set(item[keyField], item);
   for (const remote of remoteArr) {
     const key = remote[keyField];
     const local = map.get(key);
-    if (!local) {
-      map.set(key, remote);
-    } else {
-      const localTs = local.updatedAt || local.createdAt || 0;
-      const remoteTs = remote.updatedAt || remote.createdAt || 0;
-      if (remoteTs > localTs) map.set(key, remote);
-    }
+    map.set(key, local ? mergeRecord(local, remote, fillFields) : remote);
   }
   return [...map.values()];
 }
@@ -496,34 +532,39 @@ function configChanged(local = {}, remote = {}) {
   return false;
 }
 
-// True when merging `remote` into `local` would change local state: remote
-// carries a record local lacks, a newer version of one it has, or config
-// values local is missing. Lets pullMergePushCycle skip the import step (and
-// its write-hook side effects) when a cycle finds nothing new — without this,
-// the auto-push cycle would re-import identical data, fire the write hook,
-// and reschedule itself forever.
-function remoteHasNews(local, remote) {
-  const newer = (l = [], r = [], keyField = 'id') => {
-    const map = new Map(l.map(i => [i[keyField], i]));
-    return r.some(rec => {
-      const cur = map.get(rec[keyField]);
-      if (!cur) return true;
-      return (rec.updatedAt || rec.createdAt || 0) > (cur.updatedAt || cur.createdAt || 0);
-    });
-  };
-  return newer(local.songs, remote.songs)
-    || newer(local.notes, remote.notes)
-    || newer(local.setlists, remote.setlists)
-    || newer(local.annotations, remote.annotations, 'songId')
-    || configChanged(local.sources, remote.sources)
-    || configChanged(local.settings, remote.settings);
+// True when the merge would actually change local state — remote carries a
+// record local lacks, a newer version of one, or content that field-fills
+// into a local blank. Compared on the MERGED result (not raw timestamps —
+// field-fill can enrich a local record that is itself the newer one). Lets
+// pullMergePushCycle skip the import step (and its write-hook side effects)
+// when a cycle finds nothing new — without this, the auto-push cycle would
+// re-import identical data, fire the write hook, and reschedule itself
+// forever. Records local wins untouched keep their object identity through
+// mergeById, so the stringify compare short-circuits on `cur === rec`.
+function recordsChanged(localArr = [], mergedArr = [], keyField = 'id') {
+  if (localArr.length !== mergedArr.length) return true;
+  const map = new Map(localArr.map(i => [i[keyField], i]));
+  return mergedArr.some(rec => {
+    const cur = map.get(rec[keyField]);
+    if (cur === rec) return false;
+    return !cur || JSON.stringify(cur) !== JSON.stringify(rec);
+  });
+}
+
+function mergeChangesLocal(local, merged) {
+  return recordsChanged(local.songs, merged.songs)
+    || recordsChanged(local.notes, merged.notes)
+    || recordsChanged(local.setlists, merged.setlists)
+    || recordsChanged(local.annotations, merged.annotations, 'songId')
+    || configChanged(local.sources, merged.sources)
+    || configChanged(local.settings, merged.settings);
 }
 
 export function mergeData(local, remote) {
   return {
-    songs: mergeById(local.songs || [], remote.songs || []),
+    songs: mergeById(local.songs || [], remote.songs || [], 'id', SONG_FILL_FIELDS),
     notes: mergeById(local.notes || [], remote.notes || []),
-    setlists: mergeById(local.setlists || [], remote.setlists || []),
+    setlists: mergeById(local.setlists || [], remote.setlists || [], 'id', SETLIST_FILL_FIELDS),
     annotations: mergeById(local.annotations || [], remote.annotations || [], 'songId'),
     sources: mergeConfig(local.sources, remote.sources),
     settings: mergeConfig(local.settings, remote.settings),
@@ -556,7 +597,7 @@ export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) 
     // Import (and snapshot) only when remote actually changes something —
     // re-importing identical data would churn snapshots and re-fire the
     // write hook (which schedules another auto-push) on every cycle.
-    const changed = remote ? remoteHasNews(local, remote) : false;
+    const changed = remote ? mergeChangesLocal(local, merged) : false;
     if (changed && opts.snapshotFn) await opts.snapshotFn();
     if (changed) await importFn(merged);
     await client.push({ ...merged, version: 1, exportedAt: Date.now() });

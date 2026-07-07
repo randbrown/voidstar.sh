@@ -50,11 +50,18 @@
 //   GOOGLE_CSE_ID          — Programmable Search Engine id (reuses GOOGLE_API_KEY)
 //   BRAVE_SEARCH_API_KEY   — Brave Search API subscription token
 //
-// Optional env for /ai/chart + /ai/chart-read + /ai/steel-summary (first
-// configured provider wins):
+// Optional env for /ai/chart + /ai/chart-read + /ai/steel-summary. Providers
+// form a FAILOVER CHAIN (Claude → OpenAI → Gemini): every configured provider
+// gets a shot when the one before it errors (rate limit, exhausted credits)
+// or can't verify the song — set more than one key for resilience. When all
+// of them fail, the response's `reason` lists each provider's actual failure
+// AND which providers were skipped for having no key, so "why didn't it fail
+// over?" is answerable from the client.
 //   ANTHROPIC_API_KEY      — Claude (+ ANTHROPIC_MODEL, default claude-opus-4-8;
 //                            /ai/chart-read uses ANTHROPIC_READ_MODEL, default
 //                            claude-haiku-4-5 — transcription, not drafting)
+//   OPENAI_API_KEY         — OpenAI (+ OPENAI_MODEL, default gpt-5-mini;
+//                            Responses API with the web_search tool)
 //   GEMINI_API_KEY         — Gemini (+ GEMINI_MODEL, default gemini-2.5-flash)
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -1587,35 +1594,110 @@ async function aiGroundedGemini(env, prompt, { maxTokens = 8192 } = {}) {
   return { provider: 'gemini', model, raw: extractJsonBlock(text), sources };
 }
 
+// OpenAI via the Responses API with the built-in web_search tool. Reasoning
+// models reject a temperature param, so none is sent; text and url citations
+// are dug out of the `output` item list defensively (shape varies by model).
+async function aiGroundedOpenAI(env, prompt, { maxTokens = 8000 } = {}) {
+  const model = env.OPENAI_MODEL || 'gpt-5-mini';
+  const res = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      input: prompt,
+      tools: [{ type: 'web_search' }],
+      max_output_tokens: maxTokens,
+    }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    // Mirror the Anthropic SDK's error shape so aiFailureReason can surface
+    // the API's own sentence ("insufficient_quota…") instead of raw JSON.
+    let apiMessage = '';
+    try { apiMessage = JSON.parse(body)?.error?.message || ''; } catch {}
+    const e = new Error(apiMessage || `API ${res.status}: ${body.slice(0, 200)}`);
+    e.status = res.status;
+    throw e;
+  }
+  const data = await res.json();
+  let text = '';
+  const sources = [];
+  for (const item of data.output || []) {
+    if (item.type !== 'message' || !Array.isArray(item.content)) continue;
+    for (const part of item.content) {
+      if (part.type !== 'output_text') continue;
+      text += (text ? '\n' : '') + (part.text || '');
+      for (const a of part.annotations || []) {
+        if (a?.type === 'url_citation' && a.url && !sources.includes(a.url) && sources.length < 3) {
+          sources.push(a.url);
+        }
+      }
+    }
+  }
+  return { provider: 'openai', model, raw: extractJsonBlock(text), sources };
+}
+
+// The failover chain shared by the /ai/* routes: every provider with a key,
+// in order — plus the names of the ones skipped for having no key, so a
+// total failure can say "openai: not configured" instead of leaving the user
+// wondering why nothing failed over.
+function groundedProviders(env, impls) {
+  const all = [
+    ['claude', 'ANTHROPIC_API_KEY'],
+    ['openai', 'OPENAI_API_KEY'],
+    ['gemini', 'GEMINI_API_KEY'],
+  ];
+  const providers = [];
+  const skipped = [];
+  for (const [name, keyVar] of all) {
+    if (!impls[name]) continue;
+    if (env[keyVar]) providers.push([name, impls[name]]);
+    else skipped.push(`${name}: not configured (${keyVar})`);
+  }
+  return { providers, skipped };
+}
+
+const NO_AI_KEY_REASON = 'no AI key configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY on the worker';
+
+// The user marked the previous answer wrong — spent on a retry, the model
+// should re-research instead of re-emitting its first take.
+const RETRY_PROMPT_NOTE = `
+
+IMPORTANT: a previous AI attempt at this was reviewed by the musician and marked INACCURATE. Do not repeat a plausible first take — search more thoroughly (live/officially released versions, isolated reviews, songbook/tab sources), cross-check at least two independent sources, and prefer "found": false over guessing.`;
+
 async function handleAiChart(request, env) {
   const url = new URL(request.url);
   const title = (url.searchParams.get('title') || '').trim();
   const artist = (url.searchParams.get('artist') || '').trim();
   const keyHint = (url.searchParams.get('key') || '').trim();
+  // retry=1: the user marked a previous chart wrong (or is explicitly
+  // rebuilding) — research harder and never let this response be cached.
+  const retry = url.searchParams.get('retry') === '1';
   if (!title) return corsResponse(JSON.stringify({ error: 'missing title param' }), 400, request, env);
 
-  if (!env.ANTHROPIC_API_KEY && !env.GEMINI_API_KEY) {
+  const { providers, skipped } = groundedProviders(env, {
+    claude: aiGroundedClaude, openai: aiGroundedOpenAI, gemini: aiGroundedGemini,
+  });
+  if (!providers.length) {
     return corsResponse(JSON.stringify({
       found: false,
       aiConfigured: false,
-      reason: 'no AI key configured — set ANTHROPIC_API_KEY or GEMINI_API_KEY on the worker',
+      reason: NO_AI_KEY_REASON,
     }), 200, request, env);
   }
 
-  const prompt = buildAiChartPrompt(title, artist, keyHint);
-
-  // Provider chain, not either/or: with both keys set, Claude drafts first
-  // and Gemini gets a shot when Claude can't verify the song (or errors) —
-  // and vice versa when only Gemini is configured.
-  const providers = [];
-  if (env.ANTHROPIC_API_KEY) providers.push(['claude', aiGroundedClaude]);
-  if (env.GEMINI_API_KEY) providers.push(['gemini', aiGroundedGemini]);
+  let prompt = buildAiChartPrompt(title, artist, keyHint);
+  if (retry) prompt += RETRY_PROMPT_NOTE;
 
   const reasons = [];
   for (const [name, provider] of providers) {
     let result;
     try {
-      result = await provider(env, prompt);
+      result = await provider(env, prompt, retry ? { maxSearches: 8 } : {});
     } catch (e) {
       reasons.push(aiFailureReason(name, e));
       continue;
@@ -1637,13 +1719,13 @@ async function handleAiChart(request, env) {
       sources: result.sources || [],
       ...chart,
     }), 200, request, env, {
-      'Cache-Control': 'public, max-age=604800',
+      'Cache-Control': retry ? 'no-store' : 'public, max-age=604800',
     });
   }
 
   return corsResponse(JSON.stringify({
     found: false,
-    reason: reasons.join(' · ') || 'AI could not reliably chart this song',
+    reason: [...reasons, ...skipped].join(' · ') || 'AI could not reliably chart this song',
   }), 200, request, env);
 }
 
@@ -1686,20 +1768,24 @@ async function handleAiSteelSummary(request, env) {
   const url = new URL(request.url);
   const title = (url.searchParams.get('title') || '').trim();
   const artist = (url.searchParams.get('artist') || '').trim();
+  // retry=1: the user marked the previous summary wrong — research harder
+  // (more searches, bigger reasoning budget) and never cache the result.
+  const retry = url.searchParams.get('retry') === '1';
   if (!title) return corsResponse(JSON.stringify({ error: 'missing title param' }), 400, request, env);
 
-  if (!env.ANTHROPIC_API_KEY && !env.GEMINI_API_KEY) {
+  const { providers, skipped } = groundedProviders(env, {
+    claude: aiGroundedClaude, openai: aiGroundedOpenAI, gemini: aiGroundedGemini,
+  });
+  if (!providers.length) {
     return corsResponse(JSON.stringify({
       found: false,
       aiConfigured: false,
-      reason: 'no AI key configured — set ANTHROPIC_API_KEY or GEMINI_API_KEY on the worker',
+      reason: NO_AI_KEY_REASON,
     }), 200, request, env);
   }
 
-  const prompt = buildSteelSummaryPrompt(title, artist);
-  const providers = [];
-  if (env.ANTHROPIC_API_KEY) providers.push(['claude', aiGroundedClaude]);
-  if (env.GEMINI_API_KEY) providers.push(['gemini', aiGroundedGemini]);
+  let prompt = buildSteelSummaryPrompt(title, artist);
+  if (retry) prompt += RETRY_PROMPT_NOTE;
 
   const reasons = [];
   for (const [name, provider] of providers) {
@@ -1708,7 +1794,9 @@ async function handleAiSteelSummary(request, env) {
       // Far smaller output than a chart — cap tokens and searches accordingly.
       // (Not too small: thinking/thought tokens count against the cap on both
       // providers, and a grounded call spends real reasoning before the JSON.)
-      result = await provider(env, prompt, { maxTokens: 4000, maxSearches: 3 });
+      result = await provider(env, prompt, retry
+        ? { maxTokens: 6000, maxSearches: 6 }
+        : { maxTokens: 4000, maxSearches: 3 });
     } catch (e) {
       reasons.push(aiFailureReason(name, e));
       continue;
@@ -1730,13 +1818,13 @@ async function handleAiSteelSummary(request, env) {
       summary: norm.summary,
       confidence: norm.confidence,
     }), 200, request, env, {
-      'Cache-Control': 'public, max-age=604800',
+      'Cache-Control': retry ? 'no-store' : 'public, max-age=604800',
     });
   }
 
   return corsResponse(JSON.stringify({
     found: false,
-    reason: reasons.join(' · ') || 'AI could not verify this song',
+    reason: [...reasons, ...skipped].join(' · ') || 'AI could not verify this song',
   }), 200, request, env);
 }
 
@@ -1790,6 +1878,46 @@ async function chartReadClaude(env, prompt, image, mimeType) {
   return { provider: 'claude', model, raw: extractJsonBlock(text) };
 }
 
+async function chartReadOpenAI(env, prompt, image, mimeType) {
+  const model = env.OPENAI_MODEL || 'gpt-5-mini';
+  const res = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_image', image_url: `data:${mimeType};base64,${image}` },
+          { type: 'input_text', text: prompt },
+        ],
+      }],
+      max_output_tokens: 1000,
+    }),
+    signal: AbortSignal.timeout(AI_READ_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    let apiMessage = '';
+    try { apiMessage = JSON.parse(body)?.error?.message || ''; } catch {}
+    const e = new Error(apiMessage || `API ${res.status}: ${body.slice(0, 200)}`);
+    e.status = res.status;
+    throw e;
+  }
+  const data = await res.json();
+  let text = '';
+  for (const item of data.output || []) {
+    if (item.type !== 'message' || !Array.isArray(item.content)) continue;
+    for (const part of item.content) {
+      if (part.type === 'output_text') text += (text ? '\n' : '') + (part.text || '');
+    }
+  }
+  return { provider: 'openai', model, raw: extractJsonBlock(text) };
+}
+
 async function chartReadGemini(env, prompt, image, mimeType) {
   const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
   const res = await fetch(
@@ -1839,11 +1967,14 @@ function normalizeChartRead(raw) {
 }
 
 async function handleAiChartRead(request, env) {
-  if (!env.ANTHROPIC_API_KEY && !env.GEMINI_API_KEY) {
+  const { providers, skipped } = groundedProviders(env, {
+    claude: chartReadClaude, openai: chartReadOpenAI, gemini: chartReadGemini,
+  });
+  if (!providers.length) {
     return corsResponse(JSON.stringify({
       found: false,
       aiConfigured: false,
-      reason: 'no AI key configured — set ANTHROPIC_API_KEY or GEMINI_API_KEY on the worker',
+      reason: NO_AI_KEY_REASON,
     }), 200, request, env);
   }
 
@@ -1860,9 +1991,6 @@ async function handleAiChartRead(request, env) {
     String(body.title || '').slice(0, 200),
     String(body.artist || '').slice(0, 200),
   );
-  const providers = [];
-  if (env.ANTHROPIC_API_KEY) providers.push(['claude', chartReadClaude]);
-  if (env.GEMINI_API_KEY) providers.push(['gemini', chartReadGemini]);
 
   const reasons = [];
   for (const [name, provider] of providers) {
@@ -1890,7 +2018,7 @@ async function handleAiChartRead(request, env) {
 
   return corsResponse(JSON.stringify({
     found: false,
-    reason: reasons.join(' · ') || 'could not read the chart',
+    reason: [...reasons, ...skipped].join(' · ') || 'could not read the chart',
   }), 200, request, env);
 }
 
