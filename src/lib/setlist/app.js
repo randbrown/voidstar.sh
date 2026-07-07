@@ -1,7 +1,7 @@
 // Setlist app controller — hash-based routing and view dispatch.
 
 import * as store from './store.js';
-import { initGdriveBackup, isSyncing, setBackupClient, pullMergePushCycle } from './gdrive-backup.js';
+import { initGdriveBackup, isSyncing, setBackupClient, pullMergePushIfStale, debouncedPush, watchConnectivity } from './gdrive-backup.js';
 import { completeSpotifyLogin } from './spotify-auth.js';
 import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings, renderAnnotation } from './views.js';
 
@@ -79,11 +79,15 @@ async function route() {
   }
 }
 
-// ── Auto-pull when the app is re-opened / refocused ──
+// ── Auto-pull on page load and whenever the app is re-opened / refocused ──
 // The key cross-device case: you edited on your PC, then open the app on your
-// phone — it should show the latest without hunting for a button. Registered
-// once, app-wide, so returning on ANY page pulls. Silent-only (never pops
-// OAuth on focus — GIS needs a real gesture, so an expired token just skips).
+// phone — it should start from the latest backup, never a stale local copy,
+// without hunting for a button. Registered once, app-wide, so a fresh load or
+// a return on ANY page pulls. Silent-only (never pops OAuth — GIS needs a
+// real gesture, so an expired token just skips). Cheap when nothing moved:
+// pullMergePushIfStale answers "did Drive change since this device's last
+// cycle?" with one metadata request and only then pays for the full
+// download-merge-push.
 let _focusWatched = false;
 let _lastFocusPull = 0;
 const FOCUS_PULL_MIN_MS = 30_000;
@@ -102,7 +106,7 @@ function watchFocusSync() {
     _lastFocusPull = Date.now();
     setBackupClient(client);
     try {
-      const { changed } = await pullMergePushCycle(
+      const { changed } = await pullMergePushIfStale(
         client,
         () => store.exportAll(),
         (merged) => store.importAll(merged),
@@ -124,11 +128,23 @@ function watchFocusSync() {
 
   document.addEventListener('visibilitychange', onReturn);
   window.addEventListener('focus', onReturn);
+  // Pull on the initial load too — a fresh tab/session must start from the
+  // latest backup no matter which hash it lands on (this used to happen only
+  // on the dashboard). If the tab opened in the background, the
+  // visibilitychange listener covers it when it first becomes visible.
+  onReturn();
 }
 
 export function initSetlistApp(root) {
   _root = root;
   window.addEventListener('hashchange', route);
+  // Auto-push every local write to Drive (debounced; a no-op until a backup
+  // client exists). Wired here — not in any view — so edits made on a fresh
+  // load straight into a song/setlist page back up without ever visiting the
+  // dashboard, and so the persisted dirty flag is maintained from the very
+  // first write.
+  store.setOnWrite(() => debouncedPush(() => store.exportAll(), (merged) => store.importAll(merged)));
+  watchConnectivity();
   watchFocusSync();
   // Finish a Spotify login redirect (?code=…) before the first render: it
   // rewrites the URL back to the saved hash via replaceState, which fires no

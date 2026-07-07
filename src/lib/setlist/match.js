@@ -93,12 +93,21 @@ export function findBestMatchWithArtist(songTitle, songArtist, candidates, thres
   for (const c of candidates) {
     const titleScore = matchScore(songTitle, c.title);
     if (titleScore < threshold) continue;
-    let artistBonus = 0;
+    // Artist agreement adjusts the score in BOTH directions: a matching
+    // artist boosts near-title matches, and a clearly different artist sinks
+    // the candidate below the acceptance bar — "Bye Bye Bye" (*NSYNC) must
+    // never auto-link a song the user has down as Jo Dee Messina's "Bye-Bye",
+    // however well the titles overlap. The penalty only blocks auto-linking
+    // (matching is fill-empty everywhere); it can't unlink anything.
+    let artistAdj = 0;
     if (songArtist && c.artist) {
       const artistScore = matchScore(songArtist, c.artist);
-      if (artistScore >= 0.7) artistBonus = 0.15 * artistScore;
+      if (artistScore >= 0.7) artistAdj = 0.15 * artistScore;
+      else if (artistScore < 0.4) artistAdj = -0.35;
     }
-    scored.push({ match: c, score: titleScore + artistBonus });
+    const score = titleScore + artistAdj;
+    if (score < threshold) continue;
+    scored.push({ match: c, score });
   }
   if (!scored.length) return null;
   scored.sort((a, b) => b.score - a.score);

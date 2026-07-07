@@ -6,10 +6,10 @@ import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
 import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getReferencePlaylistTracks } from './sync.js';
-import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, libraryHealth, songHealth } from './bulk.js';
+import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, debouncedPush, watchConnectivity, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc, archiveChartDoc } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc, archiveChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
@@ -423,32 +423,9 @@ export async function renderDashboard(root) {
   }));
   dataSection.appendChild(dataActions);
   root.appendChild(dataSection);
-
-  // Auto-backup to/from Google Drive on page load
-  if (isGdriveBackupEnabled()) {
-    autoBackupFromGdrive().catch(e => console.warn('[gdrive-backup] auto-backup:', e.message));
-  }
-}
-
-let _autoBackupDone = false;
-
-async function autoBackupFromGdrive() {
-  if (_autoBackupDone) return;
-  _autoBackupDone = true;
-  // Silent: only back up if we already hold a valid token. If the token has
-  // expired, skip rather than popping an OAuth window the browser will block
-  // (the user can re-connect from Settings, which is a real gesture).
-  const client = await initGdriveBackup({ interactive: false });
-  if (!client) return;
-  setBackupClient(client);
-
-  // Snapshot before importing remote data; history write is throttled (not
-  // forced) so opening the app repeatedly doesn't spam Drive with versions.
-  await pullMergePushCycle(client, () => store.exportAll(), (merged) => store.importAll(merged),
-    { snapshotFn: () => store.putSnapshot('pre-sync') });
-
-  store.setOnWrite(() => debouncedPush(() => store.exportAll(), (merged) => store.importAll(merged)));
-  watchConnectivity();
+  // (The load-time Drive pull + auto-push write hook used to be wired here,
+  // dashboard-only — they now live in initSetlistApp/watchFocusSync in
+  // app.js, so a fresh load on ANY hash starts from the latest backup.)
 }
 
 // ── Song Library ──
@@ -680,6 +657,20 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
     (res) => (res.total === 0
       ? 'Every song already has a steel summary ✓'
       : `${res.updated} of ${res.total} summaries drafted${res.failures.length ? ` · ${res.failures.length} failed:` : ''}`),
+  ));
+
+  helperActions.appendChild(helperButton(
+    'verify spotify links',
+    'Check every linked song\'s Spotify track against its setlist playlist: links already in the playlist pass, links pointing elsewhere re-link to the playlist\'s same-title track (when unambiguous), the rest get flagged — the song page\'s "relink spotify", library-wide',
+    async (onProgress) => {
+      if (!confirm('Verify each song\'s Spotify link against its setlist playlist? A link that isn\'t in the playlist gets re-linked to the playlist\'s same-title track when there\'s exactly one; ambiguous ones are only flagged.')) {
+        return { aborted: 'cancelled' };
+      }
+      return verifySpotifyLinks(onProgress);
+    },
+    (res) => (res.total === 0
+      ? 'No linked songs appear in a setlist with a playlist URL.'
+      : `${res.total} link${res.total === 1 ? '' : 's'} checked · ${res.ok} match the playlist · ${res.updated} re-linked${res.failures.length ? ` · ${res.failures.length} need a manual pick:` : ''}`),
   ));
 
   helpersSection.appendChild(helperActions);

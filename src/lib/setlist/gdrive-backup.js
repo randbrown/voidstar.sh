@@ -27,6 +27,27 @@ const LAST_HISTORY_KEY = 'voidstar.setlist.gdrive.lastHistoryAt';
 const HISTORY_KEEP = 10;
 const HISTORY_MIN_INTERVAL_MS = 10 * 60 * 1000; // throttle auto (non-forced) writes
 
+// ── Freshness bookkeeping ──
+// The Drive data file's modifiedTime as of this device's last completed
+// cycle. The automatic pulls (page load, refocus) compare a cheap files.list
+// against it and skip the full download-merge-push when nothing moved.
+const REMOTE_MODIFIED_KEY = 'voidstar.setlist.gdrive.remoteModifiedTime';
+// Set the moment a local write schedules a push, cleared when a cycle
+// confirms Drive has caught up. Persisted (not in-memory) because the classic
+// loss case is closing the tab inside the 3 s push debounce — the next load
+// must know Drive is still behind, or the freshness skip would strand the
+// edit locally forever.
+const DIRTY_KEY = 'voidstar.setlist.gdrive.dirtyAt';
+
+function getLastRemoteModified() { return localStorage.getItem(REMOTE_MODIFIED_KEY) || ''; }
+function setLastRemoteModified(t) { if (t) localStorage.setItem(REMOTE_MODIFIED_KEY, t); }
+function markLocalDirty() { try { localStorage.setItem(DIRTY_KEY, String(Date.now())); } catch {} }
+function getDirtyStamp() { return localStorage.getItem(DIRTY_KEY) || ''; }
+export function isLocalDirty() { return !!getDirtyStamp(); }
+// Compare-and-clear: a write that lands DURING a cycle bumps the stamp and
+// must stay dirty for the next cycle — its data may have missed the export.
+function clearDirtyIf(stamp) { if (getDirtyStamp() === stamp) localStorage.removeItem(DIRTY_KEY); }
+
 let _gisLoaded = false;
 
 function getClientId() {
@@ -240,7 +261,9 @@ async function createFile(token, data) {
   // filename="blob", and Drive can surface that instead of the metadata name.
   form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }), FILE_NAME);
 
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+  // fields=modifiedTime so the caller can record the file's new stamp for
+  // the freshness check without a second metadata request.
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${token}` },
     body: form,
@@ -250,7 +273,7 @@ async function createFile(token, data) {
 }
 
 async function updateFile(token, fileId, data) {
-  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,modifiedTime`, {
     method: 'PATCH',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -267,18 +290,23 @@ export async function initGdriveBackup({ interactive = true } = {}) {
   if (!token) return null;
 
   return {
+    // Resolves to the written file's modifiedTime (the freshness stamp).
     async push(data) {
       const files = await findDataFiles(token);
-      if (files.length) {
-        await updateFile(token, files[0].id, data);
-      } else {
-        await createFile(token, data);
-      }
+      const file = files.length
+        ? await updateFile(token, files[0].id, data)
+        : await createFile(token, data);
+      return file?.modifiedTime || '';
     },
+    // Resolves to {data, modifiedTime, healed} or null when Drive is empty.
+    // `healed` = duplicate data files were merged in (their content lives
+    // only in `data` until a push writes it back — the cycle must not skip
+    // the push in that case).
     async pull() {
       const files = await findDataFiles(token);
       if (!files.length) return null;
       let data = await readFile(token, files[0].id);
+      let healed = false;
       // Two devices' first backups can race and create duplicate data files,
       // splitting the dataset (each device reads/writes "its" copy and never
       // sees the other's — reads as backup silently dropping records). Heal
@@ -288,11 +316,20 @@ export async function initGdriveBackup({ interactive = true } = {}) {
         try {
           data = mergeData(data, await readFile(token, dupe.id));
           await trashFile(token, dupe.id);
+          healed = true;
         } catch (e) {
           console.warn('[gdrive-backup] duplicate data file merge failed:', e.message);
         }
       }
-      return data;
+      return { data, modifiedTime: files[0].modifiedTime || '', healed };
+    },
+    // One metadata request: enough for "did Drive change since I last
+    // looked?" without downloading the file. `multiple` = unhealed
+    // duplicates exist, so a full cycle is needed regardless.
+    async peek() {
+      const files = await findDataFiles(token);
+      if (!files.length) return null;
+      return { modifiedTime: files[0].modifiedTime || '', multiple: files.length > 1 };
     },
     // Version history (rotating timestamped copies). Methods close over the
     // token so callers never handle it directly.
@@ -591,7 +628,9 @@ export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) 
   if (_syncing) return { merged: null, hadRemote: false, changed: false, skipped: true };
   _syncing = true;
   try {
-    const remote = await client.pull();
+    const dirtyStamp = getDirtyStamp();
+    const pulled = await client.pull();
+    const remote = pulled ? pulled.data : null;
     const local = await exportFn();
     const merged = remote ? mergeData(local, remote) : local;
     // Import (and snapshot) only when remote actually changes something —
@@ -600,17 +639,47 @@ export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) 
     const changed = remote ? mergeChangesLocal(local, merged) : false;
     if (changed && opts.snapshotFn) await opts.snapshotFn();
     if (changed) await importFn(merged);
-    await client.push({ ...merged, version: 1, exportedAt: Date.now() });
-    // Version history is best-effort — a failure here must not fail the sync.
-    if (client.writeHistory) {
-      try { await client.writeHistory(merged, !!opts.historyForce); }
-      catch (e) { console.warn('[gdrive-backup] history write failed:', e.message); }
+    // Push only when Drive doesn't already hold exactly this data. Pushing
+    // identical bytes just bumps the remote modifiedTime — which every other
+    // device's freshness check reads as "new remote data", making them all
+    // re-download for nothing (and each other's pushes ping-pong forever).
+    const pushNeeded = !remote || pulled.healed || mergeChangesLocal(remote, merged);
+    let remoteModified = pulled ? pulled.modifiedTime : '';
+    if (pushNeeded) {
+      remoteModified = await client.push({ ...merged, version: 1, exportedAt: Date.now() });
+      // Version history is best-effort — a failure here must not fail the sync.
+      if (client.writeHistory) {
+        try { await client.writeHistory(merged, !!opts.historyForce); }
+        catch (e) { console.warn('[gdrive-backup] history write failed:', e.message); }
+      }
     }
+    setLastRemoteModified(remoteModified);
+    clearDirtyIf(dirtyStamp);
     setLastBackupTime(Date.now());
-    return { merged, hadRemote: !!remote, changed };
+    return { merged, hadRemote: !!remote, changed, pushed: pushNeeded };
   } finally {
     _syncing = false;
   }
+}
+
+// The cheap gate in front of the full cycle, for the AUTOMATIC pulls (page
+// load, refocus): one files.list metadata request answers "did the Drive copy
+// change since this device last completed a cycle?" — only a yes (or local
+// edits Drive hasn't seen yet) pays for the full download-merge-push. Manual
+// buttons never come through here; they stay an unconditional full cycle.
+export async function pullMergePushIfStale(client, exportFn, importFn, opts = {}) {
+  if (!isLocalDirty()) {
+    try {
+      const info = await client.peek();
+      if (info && !info.multiple && info.modifiedTime && info.modifiedTime === getLastRemoteModified()) {
+        setLastBackupTime(Date.now()); // verified current — the pill may say so
+        return { merged: null, hadRemote: true, changed: false, fresh: true };
+      }
+    } catch (e) {
+      console.warn('[gdrive-backup] freshness check failed, running a full cycle:', e.message);
+    }
+  }
+  return pullMergePushCycle(client, exportFn, importFn, opts);
 }
 
 let _pushTimer = null;
@@ -660,7 +729,9 @@ async function pushNow() {
     } else {
       _syncing = true;
       try {
-        await _backupClient.push(await _exportFn());
+        const dirtyStamp = getDirtyStamp();
+        setLastRemoteModified(await _backupClient.push(await _exportFn()));
+        clearDirtyIf(dirtyStamp);
         setLastBackupTime(Date.now());
       } finally {
         _syncing = false;
@@ -676,6 +747,11 @@ async function pushNow() {
 }
 
 export async function debouncedPush(exportFn, importFn, delayMs = 3000) {
+  // Record "local is ahead of Drive" BEFORE the debounce timer (and even with
+  // no backup client yet): if the tab closes inside the delay, the next load
+  // sees the dirty flag and runs a full push cycle instead of skipping on
+  // "remote unchanged".
+  markLocalDirty();
   if (!_backupClient) return;
   _exportFn = exportFn;
   if (importFn) _importFn = importFn;
