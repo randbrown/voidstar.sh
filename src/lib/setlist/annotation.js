@@ -126,6 +126,17 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   let longPressStart = null;
   const LONG_PRESS_MS = 500;
 
+  // ── Two-finger scroll (mobile) ──
+  // The canvas spans the whole chart with touch-action:none, so with a
+  // drawing tool active no single-finger touch can ever scroll a long
+  // document. Standard mobile annotation UX applies: one finger inks, a
+  // second finger means "scroll" — any half-drawn ink from the first finger
+  // is discarded and the gesture pans the scroll viewport until every
+  // finger lifts. The 🖐 pan tool stays for one-finger (momentum) scrolling.
+  const scroller = canvas.closest('.sl-annotation-wrap');
+  const activePointers = new Map();
+  let panGesture = false;
+
   function resize() {
     const wrap = canvas.parentElement;
     if (!wrap) return;
@@ -248,6 +259,16 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   }
 
   function startStroke(e) {
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!panGesture && activePointers.size >= 2) {
+      // Second finger down = scroll intent. The first finger's partial
+      // stroke (or armed text tap / selection drag) is rolled back, not
+      // committed — it was the start of this scroll, not ink.
+      panGesture = true;
+      cancelStroke();
+      return;
+    }
+    if (panGesture) return;
     if (tool === 'pan') return;
     e.preventDefault();
     const pos = getPos(e);
@@ -323,6 +344,24 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   }
 
   function moveStroke(e) {
+    // Keep every tracked finger's last position current, so the moment a
+    // second finger lands the scroll deltas start from here (no jump).
+    const tracked = activePointers.get(e.pointerId);
+    if (tracked) {
+      const dx = e.clientX - tracked.x;
+      const dy = e.clientY - tracked.y;
+      tracked.x = e.clientX;
+      tracked.y = e.clientY;
+      if (panGesture) {
+        // Each finger contributes its share of the centroid's movement, so
+        // two fingers moving together scroll at finger speed.
+        if (scroller) {
+          scroller.scrollTop -= dy / activePointers.size;
+          scroller.scrollLeft -= dx / activePointers.size;
+        }
+        return;
+      }
+    }
     if (tool === 'select') {
       if (!selDrag || selectedIndex < 0) return;
       e.preventDefault();
@@ -372,6 +411,13 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   }
 
   function endStroke(e) {
+    activePointers.delete(e.pointerId);
+    if (panGesture) {
+      // The gesture stays a scroll until every finger lifts — a lingering
+      // finger must not turn back into ink mid-drag.
+      if (activePointers.size === 0) panGesture = false;
+      return;
+    }
     cancelLongPress();
     if (tool === 'text') {
       const at = pendingText;
@@ -410,8 +456,13 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   // The browser can abort a gesture mid-stroke (notification shade, incoming
   // modal, palm rejection). Reset without committing — a half-drawn stroke or
   // an armed text tap must not leak into the next gesture — and put a dragged
-  // selection back where it started.
-  function cancelStroke() {
+  // selection back where it started. Also called (without an event) when a
+  // second finger turns the gesture into a scroll.
+  function cancelStroke(e) {
+    if (e) {
+      activePointers.delete(e.pointerId);
+      if (activePointers.size === 0) panGesture = false;
+    }
     cancelLongPress();
     pendingText = null;
     currentStroke = null;
