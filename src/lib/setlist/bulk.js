@@ -8,7 +8,10 @@
 // This module is a leaf: views.js calls it; nothing here renders UI.
 
 import * as store from './store.js';
-import { getSources, deepScrapeChart, readChartImage, fetchSongMeta, fetchSteelSummary } from './sync.js';
+import { getSources, deepScrapeChart, readChartImage, fetchSongMeta, fetchSteelSummary, fetchPlaylistTracks } from './sync.js';
+import { matchScore } from './match.js';
+import { parseSpotifyUrl } from './spotify.js';
+import { isSpotifyConnected } from './spotify-auth.js';
 import { fetchLyrics } from './lyrics.js';
 import { cacheChartForSong, getOfflineChart } from './chart-cache.js';
 
@@ -196,6 +199,89 @@ export async function summarizeSteelForAllSongs(onProgress) {
     onProgress?.({ done: i + 1, total: targets.length, updated, title: song.title });
   }
   return { total: targets.length, updated, skipped: 0, failures };
+}
+
+// Verify every linked song's Spotify track against its setlists' reference
+// playlists, re-linking the ones that point somewhere else. Auto-link is
+// fill-empty by design, so a bad link (the retired global-search fallback
+// loved karaoke covers and same-titled hits) sticks forever unless something
+// explicitly checks it. The playlist is authoritative: a linked track that IS
+// in the playlist passes; one that isn't gets re-linked when the playlist
+// holds exactly one clear same-title track (artist must not disagree when
+// both are known); anything ambiguous is flagged for the song page's "relink
+// spotify" picker — this pass never guesses. Songs that appear in no
+// playlist-carrying setlist aren't checked at all.
+export async function verifySpotifyLinks(onProgress) {
+  if (!getSources().workerUrl && !isSpotifyConnected()) {
+    return { aborted: 'needs a worker URL or a connected Spotify account (Settings) to read playlists' };
+  }
+  const setlists = (await store.getAllSetlists())
+    .filter(sl => parseSpotifyUrl(sl.spotifyUrl || '')?.type === 'playlist');
+  if (!setlists.length) {
+    return { aborted: 'no Spotify playlist URL set on any setlist — add one on the setlist edit page' };
+  }
+
+  const tracksByUrl = new Map();
+  const problems = [];
+  for (const url of new Set(setlists.map(sl => sl.spotifyUrl))) {
+    try { tracksByUrl.set(url, await fetchPlaylistTracks(url)); }
+    catch (e) { problems.push(e.message); }
+  }
+  if (![...tracksByUrl.values()].some(t => t.length)) {
+    return { aborted: `couldn't read any reference playlist${problems.length ? ` — ${problems[0]}` : ''}` };
+  }
+
+  // songId → tracks of the playlists whose setlists contain it
+  const poolBySong = new Map();
+  for (const sl of setlists) {
+    const tracks = tracksByUrl.get(sl.spotifyUrl) || [];
+    if (!tracks.length) continue;
+    for (const set of sl.sets) {
+      for (const id of set.songIds) {
+        if (!poolBySong.has(id)) poolBySong.set(id, []);
+        poolBySong.get(id).push(...tracks);
+      }
+    }
+  }
+
+  const trackId = (t) => parseSpotifyUrl(t.spotifyUrl || '')?.id || null;
+  const songs = (await store.getAllSongs()).filter(s => s.spotifyUri && poolBySong.has(s.id));
+  let updated = 0;
+  let ok = 0;
+  const failures = [];
+  for (let i = 0; i < songs.length; i++) {
+    const song = songs[i];
+    const pool = poolBySong.get(song.id);
+    const linkedId = parseSpotifyUrl(song.spotifyUri)?.id;
+    if (linkedId && pool.some(t => trackId(t) === linkedId)) {
+      ok++;
+    } else {
+      const exact = pool.filter(t => matchScore(song.title, t.title) === 1);
+      const compatible = exact.filter(t =>
+        !song.artist || !t.artist || matchScore(song.artist, t.artist) >= 0.4);
+      let candidates = [...new Map(compatible.map(t => [trackId(t), t])).values()];
+      if (candidates.length > 1 && song.artist) {
+        // Same title on several tracks — an artist-confirmed one disambiguates.
+        const confirmed = candidates.filter(t => matchScore(song.artist, t.artist || '') >= 0.7);
+        if (confirmed.length === 1) candidates = confirmed;
+      }
+      if (candidates.length === 1) {
+        song.spotifyUri = candidates[0].spotifyUrl;
+        if (candidates[0].artist && !song.artist) song.artist = candidates[0].artist;
+        await store.putSong(song);
+        updated++;
+      } else {
+        failures.push({
+          song,
+          reason: candidates.length > 1
+            ? 'several playlist tracks share this title — pick one with "relink spotify"'
+            : 'linked track isn\'t in the setlist playlist, which has no same-title track — check it with "relink spotify"',
+        });
+      }
+    }
+    onProgress?.({ done: i + 1, total: songs.length, updated, title: song.title });
+  }
+  return { total: songs.length, updated, ok, failures };
 }
 
 // The health dimensions — one predicate per "is this filled in?" question,

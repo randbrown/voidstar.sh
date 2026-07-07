@@ -48,6 +48,8 @@ config). Tokens and per-device display prefs never ride it:
 | `voidstar.setlist.spotify.clientId` | localStorage | ✓ `settings.spotifyClientId` | Spotify client id — shared by the worker and the PKCE login |
 | `voidstar.setlist.gdrive.token` | localStorage | ✗ | cached OAuth access token (~1 h) |
 | `voidstar.setlist.gdrive.lastBackupAt` / `.lastHistoryAt` | localStorage | ✗ | backup + history-rotation throttle timestamps |
+| `voidstar.setlist.gdrive.remoteModifiedTime` | localStorage | ✗ | the Drive data file's `modifiedTime` as of this device's last completed cycle — the load/refocus freshness check compares one cheap `files.list` against it and skips the full pull when nothing moved |
+| `voidstar.setlist.gdrive.dirtyAt` | localStorage | ✗ | "local is ahead of Drive": set the instant a write schedules the debounced push, cleared when a cycle confirms Drive caught up — persisted so closing the tab inside the 3 s debounce can't strand an edit locally (the freshness skip is bypassed while it's set) |
 | `voidstar.setlist.gdrive.backupsFolderId` / `.chartsFolderId` | localStorage | ✗ | cached Drive folder ids ("voidstar backups" / "voidstar charts") |
 | `voidstar.setlist.chartAppearance.detail` / `.perform` | localStorage | ✗ | per-mode chart look, `'dark'` \| `'light'` (see the chart-appearance section); legacy `voidstar.setlist.invertChartDetail` / `.invertChart` migrate `1`→dark, `0`→light |
 | `voidstar.setlist.chartEnhance` | localStorage | ✗ | "✦ enhance" auto-levels for cached image charts, `'1'` (default, on) \| `'0'` (see the chart-appearance section) |
@@ -208,6 +210,11 @@ open the song:
   consecutive songs (an exhausted API credit balance surfaces as a 400 on
   every call, not as `no-ai-key`). Per-song counterpart: **"steel summary
   (AI)"** / "redo steel summary".
+- **verify spotify links** — checks every linked song's Spotify track
+  against its setlists' reference playlists and repairs the ones pointing
+  elsewhere (see the Spotify-links section for the exact rules; this is the
+  one pass that may *overwrite* a filled field, which is its whole point —
+  it confirms before running). Per-song counterpart: **"relink spotify"**.
 
 The panel also carries the other library-wide actions, each likewise paired
 with a per-song tool: **auto-link now** (↔ "search for chart" + "relink
@@ -267,10 +274,25 @@ This codebase intentionally keeps two similarly-named ideas separate:
     naming note below.) The
     dashboard status pill is tappable (sync now; or `↻ reconnect` when a
     client is configured but the OAuth token lapsed — a silent refresh is
-    impossible, GIS needs a gesture). The app also auto-pulls when it regains
-    focus/visibility (`watchFocusSync()` in `app.js`, silent-only, debounced
-    30 s, app-wide) so opening it on another device shows the latest without
-    hunting for a button.
+    impossible, GIS needs a gesture). The app also auto-pulls **on every
+    fresh page load and whenever it regains focus/visibility**
+    (`watchFocusSync()` in `app.js`, silent-only, debounced 30 s, app-wide,
+    any hash — the load-time pull used to run only when the app opened on
+    the dashboard) so opening it on another device always starts from the
+    latest backup, never a stale local copy.
+  - **Freshness is checked cheaply, so the automatic pulls cost almost
+    nothing.** The load/refocus path goes through `pullMergePushIfStale()`:
+    one Drive `files.list` metadata request compares the data file's
+    `modifiedTime` against the stamp recorded at this device's last completed
+    cycle, and only a mismatch (or a locally-dirty flag — see the state
+    table) pays for the full pull→merge→push. Two supporting rules keep the
+    stamps meaningful: the cycle **skips the push when Drive already holds
+    exactly the merged data** (pushing identical bytes would bump
+    `modifiedTime` and make every other device re-download for nothing), and
+    every local write persists a **dirty flag** before the 3 s push debounce
+    so an edit made just before the tab closes still gets pushed by the next
+    load's cycle instead of being skipped as "remote unchanged". Manual
+    buttons never take the shortcut — they always run the full cycle.
   - **Reversibility (undo a bad sync/import).** Every operation that overwrites
     local data snapshots the prior state first (`store.putSnapshot`, into the
     local `snapshots` store) — Settings → "undo last merge/restore" restores
@@ -297,11 +319,35 @@ presents as "auto-link" ("auto-link now" in the library tools, "auto-link" on th
 setlist page, "matching songs…" in the progress overlay). Internal
 identifiers (`sync.js`, `runManualSync`, `sl-sync-*` CSS) keep their names.
 
-### Spotify links: auto-link never overwrites — "relink" fixes a bad match
+### Spotify links: playlist-only matching — auto-link never overwrites
 
-Auto-link fills `spotifyUri` only when it's empty, so a wrong link (early
-versions fell back to a global title search on playlist-fetch failure,
-which loved karaoke covers) sticks until fixed by hand. The song page's
+**Matching is playlist-only, and playlist scope is per song.** Auto-link
+matches a song against the playlists of the setlists it actually appears in
+(threshold 0.7, `findBestMatch`/`findBestMatchWithArtist` in `match.js`);
+other setlists' playlists are only a near-exact-title fallback
+(`CROSS_PLAYLIST_MIN_SCORE` 0.95 in `sync.js`), because a 0.9-scoring
+containment match from an unrelated playlist is exactly how "Bye-Bye"
+(Jo Dee Messina) used to grab "Bye Bye Bye" (*NSYNC). A clear **artist
+mismatch sinks a candidate below the acceptance bar** (the `artistAdj`
+penalty in `findBestMatchWithArtist`) instead of merely earning no bonus.
+There is deliberately **no fallback to a global Spotify search** — an early
+version searched by title when the playlist fetch failed, and the most
+popular same-titled track (karaoke covers included) read as data
+corruption. When a playlist can't be read, its songs stay unlinked and the
+sync results say why; the song page's "spotify search" button (opens
+Spotify search in a tab) is the explicit manual escape hatch for songs not
+on any reference playlist.
+
+Auto-link fills `spotifyUri` only when it's empty, so a wrong link sticks
+until something explicitly checks it. Two fixes exist: the song page's
+"relink spotify", and the library tools' **"verify spotify links"** pass
+(`verifySpotifyLinks` in `bulk.js`) — for every linked song that appears in
+a playlist-carrying setlist, a link that's already in the playlist passes;
+a link pointing elsewhere is re-linked to the playlist's same-title track
+when there's exactly one whose artist doesn't disagree; anything ambiguous
+is flagged as a tappable row for a manual pick. The pass never guesses.
+
+The song page's
 "relink spotify" button opens a picker over the *reference playlists'
 actual tracks*: `getReferencePlaylistTracks(setlist)` (`sync.js`) fetches
 every setlist's `spotifyUrl` playlist through the worker and returns

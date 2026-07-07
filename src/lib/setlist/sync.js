@@ -47,18 +47,42 @@ export async function syncSetlist(setlistId, onProgress) {
 
   const allSongIds = sl.sets.flatMap(s => s.songIds);
   const songs = (await Promise.all(allSongIds.map(id => store.getSong(id)))).filter(Boolean);
-
-  return runSync(songs, sl.spotifyUrl ? [sl.spotifyUrl] : [], onProgress);
+  const urls = sl.spotifyUrl ? [sl.spotifyUrl] : [];
+  return runSync(songs, { perSong: new Map(songs.map(s => [s.id, urls])), all: urls }, onProgress);
 }
 
 export async function syncAll(onProgress) {
   const songs = await store.getAllSongs();
   const setlists = await store.getAllSetlists();
-  const playlistUrls = setlists.map(sl => sl.spotifyUrl).filter(Boolean);
-  return runSync(songs, playlistUrls, onProgress);
+  // Per-song playlist scoping: a song is matched against the playlists of the
+  // setlists it actually appears in — those are authoritative for that song.
+  // Other setlists' playlists are only a near-exact-title fallback (see
+  // CROSS_PLAYLIST_MIN_SCORE in runSync).
+  const perSong = new Map();
+  const all = [];
+  for (const sl of setlists) {
+    if (!sl.spotifyUrl) continue;
+    if (!all.includes(sl.spotifyUrl)) all.push(sl.spotifyUrl);
+    for (const set of sl.sets) {
+      for (const id of set.songIds) {
+        const urls = perSong.get(id) || [];
+        if (!urls.includes(sl.spotifyUrl)) urls.push(sl.spotifyUrl);
+        perSong.set(id, urls);
+      }
+    }
+  }
+  return runSync(songs, { perSong, all }, onProgress);
 }
 
-async function runSync(songs, playlistUrls, onProgress) {
+// A cross-playlist match (a playlist from a setlist the song is NOT in) has
+// weak provenance, so it must be near-exact on the title. 0.9-scoring
+// containment matches are exactly how "Bye-Bye" (Jo Dee Messina) used to
+// grab "Bye Bye Bye" (*NSYNC) out of an unrelated playlist.
+const CROSS_PLAYLIST_MIN_SCORE = 0.95;
+
+// `playlists` is {perSong: Map<songId, url[]>, all: url[]} — each song's own
+// setlists' playlists, plus the full pool.
+async function runSync(songs, playlists, onProgress) {
   const sources = getSources();
   const results = {
     spotify: { matched: 0, skipped: 0, errors: [] },
@@ -67,34 +91,26 @@ async function runSync(songs, playlistUrls, onProgress) {
     done: 0,
   };
 
-  // Fetch Spotify tracks from playlists
-  let spotifyTracks = [];
-  let playlistFailed = false;
-  const uniqueUrls = [...new Set(playlistUrls)];
-  for (const url of uniqueUrls) {
+  // Fetch each reference playlist once. Spotify matching is PLAYLIST-ONLY:
+  // when a playlist can't be read, its songs stay unlinked and the error says
+  // why. (An old fallback ran a global title-only Spotify search here — which
+  // loved to link the most popular same-titled track, karaoke covers and all,
+  // and read as data corruption. The song page's "spotify search" button is
+  // the explicit, manual escape hatch for songs not on any reference
+  // playlist.)
+  const tracksByUrl = new Map();
+  for (const url of playlists.all) {
     try {
-      const tracks = await fetchSpotifyTracks(sources.workerUrl, url);
-      spotifyTracks.push(...tracks);
+      tracksByUrl.set(url, await fetchSpotifyTracks(sources.workerUrl, url));
     } catch (e) {
-      playlistFailed = true;
       results.spotify.errors.push(e.message);
     }
   }
-
-  // If playlist fetch failed, use batch search instead
-  const useSearch = playlistFailed && sources.workerUrl && spotifyTracks.length === 0;
-  let searchResults = {};
-  if (useSearch) {
-    const unlinked = songs.filter(s => !s.spotifyUri).map(s => s.title);
-    if (unlinked.length) {
-      try {
-        searchResults = await batchSearchSpotify(sources.workerUrl, unlinked);
-        results.spotify.errors = [];
-      } catch (e) {
-        results.spotify.errors.push(`Search: ${e.message}`);
-      }
-    }
-  }
+  const dedupeTracks = (tracks) => {
+    const seen = new Set();
+    return tracks.filter(t => t.spotifyUrl && !seen.has(t.spotifyUrl) && seen.add(t.spotifyUrl));
+  };
+  const allTracks = dedupeTracks([...tracksByUrl.values()].flat());
 
   // Fetch Drive files — personal folders, community/shared folders (recursive), manual links
   const driveFiles = await fetchAllDriveFiles(sources, results.drive.errors);
@@ -107,32 +123,32 @@ async function runSync(songs, playlistUrls, onProgress) {
     }
   }
 
+  const matchTracks = (song, artist, tracks, threshold) => {
+    if (!tracks.length) return null;
+    return artist
+      ? findBestMatchWithArtist(song.title, artist, tracks, threshold)
+      : findBestMatch(song.title, tracks, threshold);
+  };
+
   for (const song of songs) {
     let updated = false;
 
-    // Spotify matching — cross-reference with Drive artist when available
-    if (!song.spotifyUri) {
+    // Spotify matching — the song's own setlist playlists first, at the
+    // normal bar; the cross-playlist pool only on a near-exact title.
+    // Cross-reference with Drive artist when available.
+    if (!song.spotifyUri && allTracks.length) {
       const knownArtist = song.artist || driveArtistMap[song.title.toLowerCase().trim()] || '';
-
-      if (spotifyTracks.length) {
-        const result = knownArtist
-          ? findBestMatchWithArtist(song.title, knownArtist, spotifyTracks)
-          : findBestMatch(song.title, spotifyTracks);
-        if (result) {
-          song.spotifyUri = result.match.spotifyUrl;
-          if (result.match.artist && !song.artist) song.artist = result.match.artist;
-          results.spotify.matched++;
-          updated = true;
-        } else {
-          results.spotify.skipped++;
-        }
-      } else if (searchResults[song.title]) {
-        const match = searchResults[song.title];
-        song.spotifyUri = match.spotifyUrl;
-        if (match.artist && !song.artist) song.artist = match.artist;
+      const ownTracks = dedupeTracks(
+        (playlists.perSong.get(song.id) || []).flatMap(u => tracksByUrl.get(u) || []));
+      const result = matchTracks(song, knownArtist, ownTracks, 0.7)
+        || matchTracks(song, knownArtist,
+          allTracks.length > ownTracks.length ? allTracks : [], CROSS_PLAYLIST_MIN_SCORE);
+      if (result) {
+        song.spotifyUri = result.match.spotifyUrl;
+        if (result.match.artist && !song.artist) song.artist = result.match.artist;
         results.spotify.matched++;
         updated = true;
-      } else if (useSearch) {
+      } else {
         results.spotify.skipped++;
       }
     }
@@ -227,14 +243,11 @@ async function fetchPlaylistTracksAsUser(playlistId, token) {
   return tracks;
 }
 
-async function batchSearchSpotify(workerUrl, titles) {
-  const res = await fetch(`${workerUrl}/spotify/search-batch`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ titles }),
-  });
-  if (!res.ok) throw new Error(`Search API ${res.status}`);
-  return await res.json();
+// One reference playlist's tracks, via the same user-token-first transport
+// as auto-link — for callers outside this module (the library tools' "verify
+// spotify links" pass) that need tracks scoped per setlist, not pooled.
+export async function fetchPlaylistTracks(playlistUrl) {
+  return fetchSpotifyTracks(getSources().workerUrl, playlistUrl);
 }
 
 async function fetchDriveFiles(workerUrl, folderUrl) {
