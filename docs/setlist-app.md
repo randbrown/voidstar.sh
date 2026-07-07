@@ -204,10 +204,13 @@ open the song:
   (missing-only: at ~15–30 s of grounded LLM per song, regeneration stays on
   the song page). Confirms with a song count before starting; a config
   problem (`no-ai-key`, outdated worker) aborts the pass with one message
-  instead of failing N times — and so does any error that repeats on 3
-  consecutive songs (an exhausted API credit balance surfaces as a 400 on
-  every call, not as `no-ai-key`). Per-song counterpart: **"steel summary
-  (AI)"** / "redo steel summary".
+  instead of failing N times. Exhausted credits do too: when every configured
+  provider fails on credits/quota the worker answers `billing: true` (an
+  exhausted API credit balance surfaces as a 400 on every call, not as
+  `no-ai-key`) and the pass stops after the **first** song. Any other error
+  that repeats on 3 consecutive songs also aborts — the fallback for a worker
+  too old to send the flag. Per-song counterpart: **"steel summary (AI)"** /
+  "redo steel summary".
 
 The panel also carries the other library-wide actions, each likewise paired
 with a per-song tool: **auto-link now** (↔ "search for chart" + "relink
@@ -383,7 +386,16 @@ four tiers, in order:
      verify the song falls through to the next; when all fail, the `reason`
      lists each provider's actual failure plus which providers were skipped
      for having no key, so "why didn't it fail over?" is answerable from
-     the client. Hallucination guards, in layers: search grounding, a
+     the client. Provider HTTP failures are rethrown in the Anthropic SDK's
+     error shape (`throwApiFailure`), so the `reason` carries each API's own
+     sentence ("Your credit balance is too low…", "You exceeded your current
+     quota…") instead of a truncated raw JSON body. And when **every**
+     configured provider failed on credits/quota (`isBillingError`: 402/429,
+     or a message naming credit balance/quota/billing), the `found:false`
+     response adds **`billing: true`** — the failure is account-level, so
+     bulk callers stop after one song instead of paying the whole chain per
+     song. All three `/ai/*` routes share this contract. Hallucination
+     guards, in layers: search grounding, a
      prompt contract that demands `found:false` over invention, a numeric
      confidence gate (`AI_MIN_CONFIDENCE`), server-side
      normalization/clamping of the JSON (`normalizeAiChart`), source URLs +

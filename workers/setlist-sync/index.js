@@ -1522,6 +1522,35 @@ function aiFailureReason(providerName, e) {
   return `${providerName}: ${msg}${status}`;
 }
 
+// Gemini and OpenAI are called over raw fetch; their non-ok responses come
+// through here so the thrown error carries the shape the Anthropic SDK
+// produces (status + parsed body on e.error). Both APIs put the sentence
+// that explains the failure at body.error.message, so aiFailureReason reads
+// all three providers identically — instead of two of them showing a
+// truncated raw-JSON body. Non-JSON bodies (gateway HTML) keep the raw slice.
+async function throwApiFailure(res) {
+  const body = await res.text().catch(() => '');
+  const e = new Error(`API ${res.status}: ${body.slice(0, 200)}`);
+  e.status = res.status;
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed?.error?.message) e.error = parsed;
+  } catch {}
+  throw e;
+}
+
+// The "out of credits" class of provider failure — account-level, never
+// song-level: an exhausted Anthropic credit balance (a 400 whose message
+// names the credit balance), OpenAI insufficient_quota / Gemini
+// exceeded-quota (both 429), or a 402 from anywhere. When EVERY configured
+// provider fails this way, the /ai/* routes flag it with billing:true so a
+// bulk pass can stop after one song instead of paying the whole provider
+// chain per remaining song.
+function isBillingError(e) {
+  if (e?.status === 402 || e?.status === 429) return true;
+  return /credit balance|quota|billing/i.test(String(e?.error?.error?.message || e?.message || ''));
+}
+
 // Shared search-grounded JSON call, used by /ai/chart and /ai/steel-summary:
 // one prompt in, {provider, model, raw, sources, reason?} out, where `raw` is
 // the lenient-extracted JSON object (null when unusable). Callers apply their
@@ -1579,10 +1608,7 @@ async function aiGroundedGemini(env, prompt, { maxTokens = 8192 } = {}) {
       signal: AbortSignal.timeout(AI_TIMEOUT_MS),
     },
   );
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`API ${res.status}: ${body.slice(0, 200)}`);
-  }
+  if (!res.ok) await throwApiFailure(res);
   const data = await res.json();
   const candidate = data.candidates?.[0];
   const text = (candidate?.content?.parts || []).map(p => p.text || '').join('\n');
@@ -1613,16 +1639,7 @@ async function aiGroundedOpenAI(env, prompt, { maxTokens = 8000 } = {}) {
     }),
     signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    // Mirror the Anthropic SDK's error shape so aiFailureReason can surface
-    // the API's own sentence ("insufficient_quota…") instead of raw JSON.
-    let apiMessage = '';
-    try { apiMessage = JSON.parse(body)?.error?.message || ''; } catch {}
-    const e = new Error(apiMessage || `API ${res.status}: ${body.slice(0, 200)}`);
-    e.status = res.status;
-    throw e;
-  }
+  if (!res.ok) await throwApiFailure(res);
   const data = await res.json();
   let text = '';
   const sources = [];
@@ -1694,14 +1711,17 @@ async function handleAiChart(request, env) {
   if (retry) prompt += RETRY_PROMPT_NOTE;
 
   const reasons = [];
+  let billing = true; // stays true only while every provider fails the billing way
   for (const [name, provider] of providers) {
     let result;
     try {
       result = await provider(env, prompt, retry ? { maxSearches: 8 } : {});
     } catch (e) {
       reasons.push(aiFailureReason(name, e));
+      if (!isBillingError(e)) billing = false;
       continue;
     }
+    billing = false; // this provider answered — any failure now is about the song
     const chart = normalizeAiChart(result.raw);
     if (!chart) {
       reasons.push(`${result.provider}: ${result.reason || 'could not reliably chart this song'}`);
@@ -1725,6 +1745,7 @@ async function handleAiChart(request, env) {
 
   return corsResponse(JSON.stringify({
     found: false,
+    ...(billing ? { billing: true } : {}),
     reason: [...reasons, ...skipped].join(' · ') || 'AI could not reliably chart this song',
   }), 200, request, env);
 }
@@ -1788,6 +1809,7 @@ async function handleAiSteelSummary(request, env) {
   if (retry) prompt += RETRY_PROMPT_NOTE;
 
   const reasons = [];
+  let billing = true; // stays true only while every provider fails the billing way
   for (const [name, provider] of providers) {
     let result;
     try {
@@ -1799,8 +1821,10 @@ async function handleAiSteelSummary(request, env) {
         : { maxTokens: 4000, maxSearches: 3 });
     } catch (e) {
       reasons.push(aiFailureReason(name, e));
+      if (!isBillingError(e)) billing = false;
       continue;
     }
+    billing = false; // this provider answered — any failure now is about the song
     const norm = normalizeSteelSummary(result.raw);
     if (!norm) {
       reasons.push(`${result.provider}: ${result.reason || 'could not verify this song'}`);
@@ -1824,6 +1848,7 @@ async function handleAiSteelSummary(request, env) {
 
   return corsResponse(JSON.stringify({
     found: false,
+    ...(billing ? { billing: true } : {}),
     reason: [...reasons, ...skipped].join(' · ') || 'AI could not verify this song',
   }), 200, request, env);
 }
@@ -1899,14 +1924,7 @@ async function chartReadOpenAI(env, prompt, image, mimeType) {
     }),
     signal: AbortSignal.timeout(AI_READ_TIMEOUT_MS),
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    let apiMessage = '';
-    try { apiMessage = JSON.parse(body)?.error?.message || ''; } catch {}
-    const e = new Error(apiMessage || `API ${res.status}: ${body.slice(0, 200)}`);
-    e.status = res.status;
-    throw e;
-  }
+  if (!res.ok) await throwApiFailure(res);
   const data = await res.json();
   let text = '';
   for (const item of data.output || []) {
@@ -1938,10 +1956,7 @@ async function chartReadGemini(env, prompt, image, mimeType) {
       signal: AbortSignal.timeout(AI_READ_TIMEOUT_MS),
     },
   );
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`API ${res.status}: ${body.slice(0, 200)}`);
-  }
+  if (!res.ok) await throwApiFailure(res);
   const data = await res.json();
   const text = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('\n');
   return { provider: 'gemini', model, raw: extractJsonBlock(text) };
@@ -1993,14 +2008,17 @@ async function handleAiChartRead(request, env) {
   );
 
   const reasons = [];
+  let billing = true; // stays true only while every provider fails the billing way
   for (const [name, provider] of providers) {
     let result;
     try {
       result = await provider(env, prompt, image, mimeType);
     } catch (e) {
       reasons.push(aiFailureReason(name, e));
+      if (!isBillingError(e)) billing = false;
       continue;
     }
+    billing = false; // this provider answered — any failure now is about the song
     const fields = normalizeChartRead(result.raw);
     const confidence = Math.min(1, Math.max(0, Number(result.raw?.confidence) || 0));
     if (!fields || confidence < AI_MIN_CONFIDENCE) {
@@ -2018,6 +2036,7 @@ async function handleAiChartRead(request, env) {
 
   return corsResponse(JSON.stringify({
     found: false,
+    ...(billing ? { billing: true } : {}),
     reason: [...reasons, ...skipped].join(' · ') || 'could not read the chart',
   }), 200, request, env);
 }

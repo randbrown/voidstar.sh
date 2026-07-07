@@ -422,7 +422,9 @@ export async function fetchAiChart(song, { retry = false } = {}) {
 // grounding (worker /ai/steel-summary): presence, entrances, style lineage,
 // intensity — a few sentences for quick reference while studying/performing.
 // Returns {ok:true, data:{summary, confidence, provider, model, sources}} or
-// {ok:false, reason} — 'no-ai-key' means the worker has no AI key configured.
+// {ok:false, reason} — 'no-ai-key' means the worker has no AI key configured,
+// and billing:true means every configured provider failed on credits/quota
+// (account-level, so bulk callers can stop instead of retrying per song).
 // opts.fresh busts the 7-day response cache (a regen must actually re-run,
 // not replay the cached answer); opts.retry additionally tells the worker
 // the previous summary was marked WRONG, so it researches harder. The bulk
@@ -439,7 +441,9 @@ export async function fetchSteelSummary(song, { fresh = false, retry = false } =
     if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
     const data = await res.json();
     if (data?.aiConfigured === false) return { ok: false, reason: 'no-ai-key' };
-    if (!data?.found || !data?.summary) return { ok: false, reason: data?.reason || 'AI could not verify this song' };
+    if (!data?.found || !data?.summary) {
+      return { ok: false, reason: data?.reason || 'AI could not verify this song', billing: data?.billing === true };
+    }
     return { ok: true, data };
   } catch {
     return { ok: false, reason: 'network error' };

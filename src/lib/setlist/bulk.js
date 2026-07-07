@@ -162,10 +162,12 @@ export async function summarizeSteelForAllSongs(onProgress) {
   const targets = (await store.getAllSongs()).filter(s => !s.steelSummary);
   let updated = 0;
   const failures = [];
-  // Some config problems only show up as a per-song error (an exhausted API
-  // credit balance is a 400 on every call, not a 'no-ai-key'). When the same
-  // reason repeats back-to-back it isn't about the songs — stop burning
-  // 15-30 s per remaining song and surface the reason once.
+  // Some config problems only show up as a per-song error. The worker flags
+  // the clearest case itself — billing:true when every configured provider
+  // failed on credits/quota — and that aborts after ONE song. The same-reason
+  // run below is the general fallback (and covers a worker too old to send
+  // the flag): when the same reason repeats back-to-back it isn't about the
+  // songs — stop burning 15-30 s per remaining song and surface it once.
   const SAME_FAILURE_LIMIT = 3;
   let lastReason = null;
   let sameReasonRun = 0;
@@ -184,6 +186,12 @@ export async function summarizeSteelForAllSongs(onProgress) {
       return { aborted: 'worker outdated — redeploy workers/setlist-sync to get /ai/steel-summary', total: targets.length, updated, failures };
     } else {
       failures.push({ song, reason: r.reason });
+      if (r.billing) {
+        return {
+          aborted: `stopped — every AI provider is out of credits/quota, so the remaining songs would fail too: ${r.reason}`,
+          total: targets.length, updated, failures,
+        };
+      }
       sameReasonRun = r.reason === lastReason ? sameReasonRun + 1 : 1;
       lastReason = r.reason;
       if (sameReasonRun >= SAME_FAILURE_LIMIT) {
