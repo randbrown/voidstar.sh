@@ -2129,36 +2129,45 @@ export async function renderSongFocus(root, songId, setlistId) {
   // Relink (or first-link) the Spotify track from the reference playlist —
   // the antidote to auto-matching landing on a same-titled cover.
   const spotifyPickerWrap = el('div', 'sl-spotify-picker');
-  const relinkLabel = song.spotifyUri ? 'relink spotify' : 'pick spotify track';
-  const relinkBtn = btn(relinkLabel, 'sl-btn-ghost sl-btn-sm', async () => {
-    relinkBtn.disabled = true;
-    relinkBtn.textContent = 'loading playlist...';
+  const loadSpotifyPicker = async (button, label, opts) => {
+    button.disabled = true;
+    button.textContent = 'loading playlist...';
     try {
-      const { tracks, problems } = await getReferencePlaylistTracks(setlist);
+      const { tracks, problems } = await getReferencePlaylistTracks(setlist, opts);
       if (tracks.length) {
         renderSpotifyPicker(spotifyPickerWrap, tracks, song);
-        relinkBtn.textContent = 'pick below';
+        button.textContent = 'pick below';
       } else {
         // Show the real reason where there's room to read it.
         spotifyPickerWrap.innerHTML = '';
         const note = el('div', 'sl-hint');
         note.textContent = `Couldn't load playlist tracks: ${problems[0] || 'the playlist came back empty'}`;
         spotifyPickerWrap.appendChild(note);
-        relinkBtn.textContent = 'no tracks — see note';
+        button.textContent = 'no tracks — see note';
       }
     } catch (e) {
       spotifyPickerWrap.innerHTML = '';
       const note = el('div', 'sl-hint');
       note.textContent = `Playlist fetch failed: ${e.message}`;
       spotifyPickerWrap.appendChild(note);
-      relinkBtn.textContent = 'failed — see note';
+      button.textContent = 'failed — see note';
     }
     setTimeout(() => {
-      relinkBtn.textContent = relinkLabel;
-      relinkBtn.disabled = false;
+      button.textContent = label;
+      button.disabled = false;
     }, 2200);
-  });
+  };
+  const relinkLabel = song.spotifyUri ? 'relink spotify' : 'pick spotify track';
+  const relinkBtn = btn(relinkLabel, 'sl-btn-ghost sl-btn-sm', () =>
+    loadSpotifyPicker(relinkBtn, relinkLabel, {}));
   actionBar.appendChild(relinkBtn);
+  // Same picker, fed by scraping the public playlist page instead of the
+  // API — the way in when Spotify's owner-only rule blocks every API read
+  // of a bandmate's public playlist.
+  const scrapeBtn = btn('scrape playlist', 'sl-btn-ghost sl-btn-sm', () =>
+    loadSpotifyPicker(scrapeBtn, 'scrape playlist', { forceScrape: true }));
+  scrapeBtn.title = "Read the setlist's reference playlist from its public open.spotify.com page (no API) — works for public playlists your account doesn't own, e.g. a bandmate's";
+  actionBar.appendChild(scrapeBtn);
   if (!song.spotifyUri) {
     // No link yet — a raw Spotify search too (the quick-link tool's per-song
     // "search"), for when the reference playlists don't carry the song.
@@ -2680,11 +2689,13 @@ export async function renderSettings(root) {
     <div class="sl-section-title">spotify account</div>
     <div class="sl-hint" style="margin-bottom:0.5rem">
       Connect your Spotify account so playlist reads run as you — since
-      Spotify's Feb 2026 API change this is the only way the app can read
+      Spotify's Feb 2026 API change this is the only API path that can read
       playlist contents, and it only works for playlists your account owns
-      or collaborates on (public/private no longer matters; for a
-      bandmate's playlist, ask them for a collaborator invite or copy the
-      tracks into a playlist you own). Uses the
+      or collaborates on (public/private no longer matters). For someone
+      else's PUBLIC playlist (e.g. a bandmate's), the app falls back to
+      scraping the playlist's public open.spotify.com page — no account
+      needed; the song page also has an explicit "scrape playlist" button.
+      Uses the
       same client id as the worker; no secret is involved. One-time setup: in
       the Spotify developer dashboard (developer.spotify.com → your app →
       Settings → Redirect URIs) add exactly:

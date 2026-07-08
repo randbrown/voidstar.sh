@@ -4,7 +4,12 @@
 // for shared chart files / chord data when the user's own folders come up dry.
 //
 // Routes:
-//   GET /spotify/playlist/:id       → playlist track list
+//   GET /spotify/playlist/:id       → playlist track list (Web API)
+//   GET /spotify/playlist/:id/scrape → playlist track list scraped from the
+//                                     public open.spotify.com page — the
+//                                     escape hatch for public playlists the
+//                                     API's owner-only rule (Feb 2026) makes
+//                                     unreadable, e.g. a bandmate's playlist
 //   GET /spotify/search?q=...       → search for a track
 //   GET /spotify/search-batch       → search multiple songs (POST body: {titles:[]})
 //   GET /media/bandcamp?url=...     → track list scraped from a Bandcamp band/
@@ -211,6 +216,135 @@ async function handleSpotifyPlaylist(playlistId, request, env) {
   }
 
   return corsResponse(JSON.stringify(tracks), 200, request, env, {
+    'Cache-Control': 'public, max-age=300',
+  });
+}
+
+// ── Spotify playlist scrape (no API) ──
+// The API's owner-only rule (above) leaves public playlists owned by someone
+// else — a bandleader's reference playlist being the canonical case —
+// unreadable by ANY token this app can hold. But the public open.spotify.com
+// pages still render those playlists for anonymous visitors, track list
+// included, embedded as JSON in the HTML — the same access model as the
+// Bandcamp/SoundCloud/Ultimate Guitar scraping elsewhere in this worker.
+// Spotify reshuffles these page internals without notice, so extraction is a
+// deep scan of every JSON blob in the page for arrays of track-shaped
+// objects, not a fixed path into one known structure.
+
+function spotifyTrackIdFromUri(uri) {
+  const m = /spotify:track:([a-zA-Z0-9]+)/.exec(typeof uri === 'string' ? uri : '');
+  return m ? m[1] : null;
+}
+
+// One element of a candidate track list → {title, artist, spotifyUrl}, or
+// null when it doesn't look like a track. Tolerates the shapes seen across
+// Spotify page generations: the embed player's trackList ({uri, title,
+// subtitle}), API-style wrappers ({track:{…}} / {item:{…}} with name +
+// artists[]), and the web player's GraphQL entities (artists.items[].profile).
+function scrapedSpotifyTrack(o) {
+  if (!o || typeof o !== 'object') return null;
+  const t = (o.track && typeof o.track === 'object') ? o.track
+    : (o.item && typeof o.item === 'object') ? o.item
+    : o;
+  const id = spotifyTrackIdFromUri(t.uri) || spotifyTrackIdFromUri(t.trackUri);
+  const title = (typeof t.title === 'string' && t.title) || (typeof t.name === 'string' && t.name) || '';
+  if (!id || !title) return null;
+  let artist = '';
+  if (typeof t.subtitle === 'string') {
+    artist = t.subtitle;
+  } else if (Array.isArray(t.artists)) {
+    artist = t.artists.map((a) => a?.name || a?.profile?.name || '').filter(Boolean).join(', ');
+  } else if (Array.isArray(t.artists?.items)) {
+    artist = t.artists.items.map((a) => a?.profile?.name || a?.name || '').filter(Boolean).join(', ');
+  }
+  return { title, artist, spotifyUrl: `https://open.spotify.com/track/${id}` };
+}
+
+// Collect every array in the JSON tree where at least half the elements
+// parse as tracks (the half bar keeps a mixed feed of entities from being
+// mistaken for the track list). The caller takes the longest hit.
+function deepFindTrackLists(node, out, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 20) return;
+  if (Array.isArray(node)) {
+    const tracks = node.map(scrapedSpotifyTrack).filter(Boolean);
+    if (tracks.length && tracks.length * 2 >= node.length) out.push(tracks);
+    for (const el of node) deepFindTrackLists(el, out, depth + 1);
+    return;
+  }
+  for (const v of Object.values(node)) deepFindTrackLists(v, out, depth + 1);
+}
+
+// Every parseable JSON blob in the page's <script> tags: plain JSON
+// (__NEXT_DATA__ and friends), the legacy percent-encoded "resource" blob,
+// and base64-wrapped JSON — each guarded, since most scripts are just code.
+function extractJsonBlobs(html) {
+  const blobs = [];
+  const re = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const text = m[1].trim();
+    if (!text) continue;
+    if (text[0] === '{' || text[0] === '[') {
+      try { blobs.push(JSON.parse(text)); continue; } catch {}
+    }
+    if (/^%7B/i.test(text)) {
+      try { blobs.push(JSON.parse(decodeURIComponent(text))); continue; } catch {}
+    }
+    if (text.length > 200 && /^[A-Za-z0-9+/=\s]+$/.test(text)) {
+      try { blobs.push(JSON.parse(atob(text.replace(/\s+/g, '')))); continue; } catch {}
+    }
+  }
+  return blobs;
+}
+
+// The playlist's advertised size, when the page carries one — lets the
+// response say "scraped 30 of 87" instead of silently passing off a
+// truncated embed list as the whole playlist.
+function scrapedTrackTotal(html) {
+  const m = html.match(/"(?:trackCount|totalTrackCount|numTracks)"\s*:\s*(\d+)/)
+    || html.match(/music:song_count"?\s+content="(\d+)"/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+// GET /spotify/playlist/:id/scrape → {tracks, total, truncated, source}
+// The embed page is tried first (historically the richest anonymous render),
+// then the full playlist page. Only PUBLIC playlists are visible this way.
+async function handleSpotifyPlaylistScrape(playlistId, request, env) {
+  const pages = [
+    { source: 'embed', url: `https://open.spotify.com/embed/playlist/${playlistId}` },
+    { source: 'page', url: `https://open.spotify.com/playlist/${playlistId}` },
+  ];
+  let best = { tracks: [], total: 0, source: '' };
+  const failures = [];
+
+  for (const page of pages) {
+    const html = await fetchHtml(page.url);
+    if (!html) { failures.push(`could not fetch ${page.url}`); continue; }
+    const lists = [];
+    for (const blob of extractJsonBlobs(html)) deepFindTrackLists(blob, lists);
+    const longest = lists.sort((a, b) => b.length - a.length)[0] || [];
+    // Dedupe by track URL — re-listed JSON blobs repeat the same list, and
+    // the client dedupes on this key anyway.
+    const seen = new Set();
+    const tracks = longest.filter((t) => !seen.has(t.spotifyUrl) && seen.add(t.spotifyUrl));
+    const total = scrapedTrackTotal(html);
+    if (tracks.length > best.tracks.length) {
+      best = { tracks, total: Math.max(total, tracks.length), source: page.source };
+    }
+    // The page already yielded the whole playlist — no need to hit the next.
+    if (best.tracks.length && best.total <= best.tracks.length) break;
+  }
+
+  if (!best.tracks.length) {
+    throw httpError(404,
+      `no tracks found on the public playlist page for ${playlistId} — scraping only works for PUBLIC playlists, or Spotify changed the page markup${failures.length ? ` (${failures.join('; ')})` : ''}`);
+  }
+  return corsResponse(JSON.stringify({
+    tracks: best.tracks,
+    total: best.total,
+    truncated: best.total > best.tracks.length,
+    source: best.source,
+  }), 200, request, env, {
     'Cache-Control': 'public, max-age=300',
   });
 }
@@ -2312,6 +2446,11 @@ export default {
 
       if (url.pathname === '/spotify/search') {
         return await handleSpotifySearch(request, env);
+      }
+
+      const spotifyScrapeMatch = url.pathname.match(/^\/spotify\/playlist\/([a-zA-Z0-9]+)\/scrape$/);
+      if (spotifyScrapeMatch) {
+        return await handleSpotifyPlaylistScrape(spotifyScrapeMatch[1], request, env);
       }
 
       const spotifyMatch = url.pathname.match(/^\/spotify\/playlist\/([a-zA-Z0-9]+)$/);
