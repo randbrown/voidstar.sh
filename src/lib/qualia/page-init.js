@@ -92,12 +92,14 @@ const AUTO_CYCLE_STYLES = ['sequential', 'random'];
 //   wipe     — the outgoing look is erased left-to-right to reveal the incoming
 const TRANSITION_STYLES  = ['cut', 'dissolve', 'wipe'];
 const TRANSITION_MS_OPTS = [300, 600, 1200, 1800, 2500];    // ms
-// "Glitch" post-process modes (shared by ascii / mosh / edge). The button
-// cycles through these:
+// "Glitch" post-process modes (shared by ascii / mosh / edge / stitch). The
+// button cycles through these:
 //   off:  glitch disabled (always)
 //   on:   glitch enabled (always)
 //   blip: brief flash on hard kicks, auto-clears after BLIP_DURATION_MS
 //   flip: toggles glitch state on each hard kick (persists between hits)
+// When several glitches are in blip/flip mode, hard kicks rotate through
+// them round-robin — two blips alternate, three cycle, etc.
 // Glitches are independent of the auto-phase styles — whatever mode you set
 // here stays put while phases/palettes rotate.
 // Audio source modes. The button cycles through these:
@@ -5701,11 +5703,18 @@ export function initQualiaPage() {
 
   // ── Glitch reactive trigger ──────────────────────────────────────────────
   // Subscribes to the shared hard-kick detector above. When at least one of
-  // the glitches is in 'blip' / 'flip' mode, every fresh hard-kick picks one
-  // of those glitches at random and triggers it (the overlay's own ascii /
-  // mosh / edge mutex enforces only one visible glitch at a time, so picking
-  // one cleanly avoids last-iteration-wins flicker).
+  // the glitches is in 'blip' / 'flip' mode, every fresh hard-kick advances a
+  // round-robin over that set and triggers the next one — two blips
+  // alternate, three cycle, and so on (the overlay's own post-pass mutex
+  // enforces only one visible glitch at a time, so triggering one cleanly
+  // avoids last-iteration-wins flicker). The cursor tracks the last WINNER's
+  // name rather than an index so mode changes between kicks can't skip or
+  // double-fire an entry. A flip winner still toggles: with a single flip
+  // glitch kicks alternate it on/off (the original behaviour); with several,
+  // the mutex has already hidden the previous one, so the toggle always
+  // lands "on" and the visible glitch rotates through the set.
   let glitchLastConsumedHardKickAt = 0;
+  let glitchLastWinner = null;
   // onTick (full rAF rate): consume hard-kicks and auto-clear blip windows
   // promptly regardless of the viz frame cap; overlay.setOption just flips a
   // flag, the visible change lands on the next rendered frame.
@@ -5719,7 +5728,10 @@ export function initQualiaPage() {
     const now = performance.now();
     if (lastHardKickAt > glitchLastConsumedHardKickAt) {
       glitchLastConsumedHardKickAt = lastHardKickAt;
-      const winner = reactive[(Math.random() * reactive.length) | 0];
+      // indexOf is -1 when the last winner left the set (mode changed) or on
+      // the first kick — either way the rotation restarts at entry 0.
+      const winner = reactive[(reactive.indexOf(glitchLastWinner) + 1) % reactive.length];
+      glitchLastWinner = winner;
       if (glitchModes[winner] === 'blip') {
         overlay.setOption(winner, true);
         blipExpiresAt[winner] = now + BLIP_DURATION_MS;
