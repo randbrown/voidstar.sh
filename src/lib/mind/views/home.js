@@ -43,16 +43,14 @@ export async function renderHome(root) {
   const scope = folderId ? store.folderScope(folders, folderId) : null;
   const inScope = (fid) => !scope || scope.has(fid || '');
 
+  // Header stays light — primary navigation lives in the dock (position
+  // configurable in settings). Header keeps identity + sync + daily note.
   const head = el('div', 'mn-apphead');
   head.appendChild(el('span', 'mn-wordmark', 'mind'));
   const actions = el('div', 'mn-head-actions');
-  actions.appendChild(btn('+ note', 'mn-btn-primary mn-btn-new', async () => {
-    const note = store.createNote({ folderId, title: await store.uniqueAutoTitle() });
-    await store.putNoteRaw(note);
-    navigate(`#note/${note.id}`);
-  }));
-  actions.appendChild(btn('tasks', '', () => navigate('#tasks')));
-  actions.appendChild(btn('&#9881;', 'mn-btn-icon', () => navigate('#settings')));
+  const todayBtn = btn('today', '', () => openDailyNote(folderId));
+  todayBtn.title = 'open (or create) today’s daily note';
+  actions.appendChild(todayBtn);
   head.appendChild(actions);
   root.appendChild(head);
 
@@ -101,10 +99,14 @@ export async function renderHome(root) {
   controls.appendChild(sortSel);
   root.appendChild(controls);
 
-  // Filter chips: attachment kinds + tags.
+  // Filter chips: attachment kinds + tags (+ new-from-template when any
+  // note is tagged #template).
   const chips = el('div', 'mn-chips');
   const kindChips = [['', 'all'], ['image', 'images'], ['audio', 'audio'], ['pdf', 'pdfs']];
   const tags = await allTags();
+  if (tags.includes('template')) {
+    chips.appendChild(btn('&#65291; from template', 'mn-chip mn-folder-chip', () => pickTemplate(folderId)));
+  }
   const drawChips = () => {
     chips.innerHTML = '';
     for (const [kind, label] of kindChips) {
@@ -187,6 +189,63 @@ export async function renderHome(root) {
   });
 
   await renderList();
+}
+
+// ── Daily note: one per calendar day, found by meta.daily, reused if it
+// exists (any folder), created in the current folder otherwise. ──
+
+function todayKey() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+async function openDailyNote(folderId) {
+  const key = todayKey();
+  const all = await store.getAllNotes();
+  let note = all.find(n => n.meta?.daily === key);
+  if (!note) {
+    note = store.createNote({
+      folderId,
+      title: `${key} daily`,
+      autoTitle: false,
+      meta: { daily: key },
+    });
+    await store.putNoteRaw(note);
+  }
+  navigate(`#note/${note.id}`);
+}
+
+// ── New from template: any note tagged #template is a template; a copy
+// drops the tag and gets a fresh sortable auto-title. ──
+
+async function pickTemplate(folderId) {
+  const all = await store.getAllNotes();
+  const templates = all.filter(n => (n.tags || []).includes('template'))
+    .sort((a, b) => a.title.localeCompare(b.title));
+  if (!templates.length) return;
+
+  const overlay = el('div', 'mn-modal-overlay');
+  const box = el('div', 'mn-modal');
+  box.appendChild(el('div', 'mn-modal-title', 'new note from template'));
+  const list = el('div', 'mn-linklist');
+  for (const t of templates) {
+    list.appendChild(btn(esc(t.title), 'mn-btn-ghost mn-linkrow', async () => {
+      overlay.remove();
+      const note = store.createNote({
+        folderId,
+        title: await store.uniqueAutoTitle(),
+        body: t.body,
+        tags: (t.tags || []).filter(x => x !== 'template'),
+      });
+      await store.putNoteRaw(note);
+      navigate(`#note/${note.id}`);
+    }));
+  }
+  box.appendChild(list);
+  overlay.appendChild(box);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 
 // ── Folder bar ──

@@ -6,6 +6,15 @@
   "scope": "/lab/mind",
   "display": "standalone",
   "orientation": "any",
+  "share_target": {
+    "action": "/lab/mind",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
   "background_color": "#05050d",
   "theme_color": "#05050d",
   "icons": [

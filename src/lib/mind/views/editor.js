@@ -160,14 +160,15 @@ export async function renderEditor(root, noteId) {
   }
 
   async function handleFiles(files) {
-    let anyImage = false;
+    let anyOcrable = false;
     for (const file of files) {
       const att = await addAttachmentFromBlob(note.id, file, file.name);
-      if (att.kind === 'image') { editor.insertImage(att.id, att.name || 'image'); anyImage = true; }
+      if (att.kind === 'image') editor.insertImage(att.id, att.name || 'image');
+      if (att.ocrStatus === 'pending') anyOcrable = true;
     }
     scheduleSave();
     await drawAttachments();
-    if (anyImage) processPendingOcr(); // background — text becomes searchable when done
+    if (anyOcrable) processPendingOcr(); // background — text becomes searchable when done
     pushPendingAttachments(); // no-op until Drive is connected
   }
 
@@ -366,10 +367,40 @@ export async function renderEditor(root, noteId) {
       chip.appendChild(audio);
       if (a.durationSec) chip.appendChild(el('span', 'mn-attach-label', formatDuration(a.durationSec)));
       if (a.transcript) {
-        const t = el('span', 'mn-attach-label mn-dim', '&#128172;');
-        t.title = a.transcript.slice(0, 400);
-        chip.appendChild(t);
+        const ins = btn('&#128172; insert', 'mn-btn-ghost', () => {
+          editor.insertText(a.transcript.endsWith(' ') ? a.transcript : a.transcript + ' ');
+          scheduleSave();
+        });
+        ins.title = a.transcript.slice(0, 400);
+        chip.appendChild(ins);
       }
+      // On-device Whisper: transcribe (or redo) from the kept audio.
+      const wBtn = btn(a.transcript ? 're-transcribe' : 'transcribe', 'mn-btn-ghost', async () => {
+        wBtn.disabled = true;
+        try {
+          const { transcribeBlob, whisperSupported } = await import('../whisper.js');
+          if (!whisperSupported()) throw new Error('not supported in this browser');
+          const blob = await store.getBlob(a.id);
+          if (!blob) throw new Error('audio not on this device');
+          const text = await transcribeBlob(blob, (s) => { wBtn.textContent = s; });
+          const fresh = await store.getAttachment(a.id);
+          await store.patchAttachment(fresh, { transcript: text, transcriptSource: 'whisper' });
+          await drawAttachments();
+        } catch (e) {
+          wBtn.textContent = 'failed';
+          wBtn.title = e.message;
+          setTimeout(() => { wBtn.textContent = 're-transcribe'; wBtn.disabled = false; }, 2000);
+        }
+      });
+      wBtn.title = 'transcribe on-device with Whisper (~40 MB model, first use only)';
+      chip.appendChild(wBtn);
+    } else if (a.kind === 'pdf') {
+      const open = btn(`&#128196; ${esc(a.name || 'pdf')}`, 'mn-btn-ghost', () =>
+        navigate(`#note/${note.id}/annotate/${a.id}`));
+      open.title = 'view & annotate pdf';
+      chip.appendChild(open);
+      if (a.ocrStatus === 'pending') chip.appendChild(el('span', 'mn-attach-label mn-dim', 'text…'));
+      chip.appendChild(el('span', 'mn-dim', formatSize(a.size)));
     } else {
       chip.appendChild(el('span', 'mn-attach-label',
         `&#128206; ${esc(a.name || a.kind)} <span class="mn-dim">${formatSize(a.size)}</span>`));

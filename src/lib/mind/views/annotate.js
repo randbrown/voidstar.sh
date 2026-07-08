@@ -11,29 +11,72 @@ import { el, esc, btn } from '../ui.js';
 // palette must look identical on every device/theme.
 const PALETTE = ['#ff5e7e', '#4ea1ff', '#7cf2a5', '#ffc65e', '#ffffff', '#111111'];
 
-export async function renderAnnotate(root, noteId, attId) {
+export async function renderAnnotate(root, noteId, attId, startPage = 0) {
   const att = await store.getAttachment(attId);
   if (!att || att.deletedAt) {
     root.appendChild(el('div', 'mn-error', 'attachment not found'));
     return;
   }
-  const url = await getObjectUrl(att.id);
-  if (!url) {
-    root.appendChild(el('div', 'mn-error', 'image data not on this device'));
-    return;
+
+  // PDFs annotate one rasterized page at a time (strokes keyed attId:page).
+  const isPdf = att.kind === 'pdf';
+  let pageCount = 1;
+  let page = startPage;
+  let pageInfo = null; // {url, width, height} for the current pdf page
+  let url = null;
+
+  if (isPdf) {
+    const blob = await store.getBlob(att.id);
+    if (!blob) {
+      root.appendChild(el('div', 'mn-error', 'pdf data not on this device'));
+      return;
+    }
+    const pdf = await import('../pdf.js');
+    pageCount = await pdf.pdfPageCount(blob);
+    page = Math.min(Math.max(0, page), pageCount - 1);
+    pageInfo = await pdf.getPdfPageUrl(att.id, blob, page + 1);
+    url = pageInfo.url;
+  } else {
+    url = await getObjectUrl(att.id);
+    if (!url) {
+      root.appendChild(el('div', 'mn-error', 'image data not on this device'));
+      return;
+    }
   }
 
   const bar = el('div', 'mn-topbar');
   bar.appendChild(btn('&larr;', 'mn-btn-icon', () => navigate(`#note/${noteId}`)));
-  bar.appendChild(el('span', 'mn-topbar-title', esc(att.name || 'annotate')));
+  bar.appendChild(el('span', 'mn-topbar-title',
+    esc(att.name || 'annotate') + (isPdf ? ` <span class="mn-dim">p${page + 1}/${pageCount}</span>` : '')));
   const actions = el('div', 'mn-actions');
+
+  if (isPdf && pageCount > 1) {
+    const goPage = async (p) => {
+      if (p < 0 || p >= pageCount) return;
+      await ctl.flush();
+      ctl.destroy();
+      root._mnCleanup = null;
+      root.innerHTML = '';
+      await renderAnnotate(root, noteId, attId, p);
+    };
+    const prev = btn('&larr; pg', '', () => goPage(page - 1));
+    const next = btn('pg &rarr;', '', () => goPage(page + 1));
+    prev.disabled = page === 0;
+    next.disabled = page === pageCount - 1;
+    actions.appendChild(prev);
+    actions.appendChild(next);
+  }
+
   const flattenBtn = btn('flatten &rarr; copy', '', async () => {
     // Bake strokes into a NEW image attachment on the same note; the
-    // original and its editable strokes stay untouched.
+    // original and its editable strokes stay untouched. For PDFs the
+    // current rasterized page is the base.
     flattenBtn.disabled = true;
     try {
-      const blob = await store.getBlob(att.id);
-      const bmp = await createImageBitmap(blob);
+      const base = isPdf
+        ? await (await fetch(url)).blob()
+        : await store.getBlob(att.id);
+      const bmp = await createImageBitmap(base);
       const out = await renderAnnotatedImageBlob(bmp, ctl.getStrokes());
       bmp.close();
       await addAttachmentFromBlob(noteId, out, `${store.fileStamp()}-annotated.png`);
@@ -94,7 +137,9 @@ export async function renderAnnotate(root, noteId, attId) {
   // ── Stage: image + drawing canvas ──
   const wrap = el('div', 'mn-annotation-wrap');
   const stage = el('div', 'mn-annotation-stage');
-  if (att.width && att.height) stage.style.aspectRatio = `${att.width} / ${att.height}`;
+  const w = isPdf ? pageInfo.width : att.width;
+  const h = isPdf ? pageInfo.height : att.height;
+  if (w && h) stage.style.aspectRatio = `${w} / ${h}`;
   const img = el('img', 'mn-annotation-img');
   img.src = url;
   img.alt = att.name || '';
@@ -105,13 +150,13 @@ export async function renderAnnotate(root, noteId, attId) {
   root.appendChild(wrap);
 
   // If dims weren't probed (old records), fix the aspect once the image loads.
-  if (!att.width || !att.height) {
+  if (!w || !h) {
     img.addEventListener('load', () => {
       stage.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
       ctl.resize();
     }, { once: true });
   }
 
-  const ctl = initAnnotationCanvas(canvas, att.id, toolbar, { page: 0 });
+  const ctl = initAnnotationCanvas(canvas, att.id, toolbar, { page });
   root._mnCleanup = () => ctl.destroy();
 }

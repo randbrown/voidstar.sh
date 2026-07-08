@@ -68,9 +68,9 @@ export async function processPendingOcr() {
           queue = queue.slice(1);
           continue;
         }
-        const worker = await getWorker();
-        const { data } = await worker.recognize(blob);
-        const text = (data?.text || '').trim();
+        const text = att.kind === 'pdf'
+          ? await extractPdfTextOrOcr(blob)
+          : await ocrImageBlob(blob);
         const fresh = await store.getAttachment(att.id);
         if (fresh && !fresh.deletedAt) {
           await store.patchAttachment(fresh, { ocrText: text, ocrStatus: 'done' });
@@ -87,6 +87,30 @@ export async function processPendingOcr() {
     _draining = false;
     _onProgress?.(null);
   }
+}
+
+async function ocrImageBlob(blob) {
+  const worker = await getWorker();
+  const { data } = await worker.recognize(blob);
+  return (data?.text || '').trim();
+}
+
+// PDFs: a real text layer beats OCR (exact + instant), so read it first;
+// only a scanned PDF (no text layer) pays for rasterize + tesseract, capped
+// at OCR_MAX_PAGES so a huge scan can't wedge a phone.
+async function extractPdfTextOrOcr(blob) {
+  const { extractPdfText, rasterizePdfPage, pdfPageCount, OCR_MAX_PAGES } = await import('./pdf.js');
+  const text = await extractPdfText(blob).catch(() => '');
+  // Any real text layer wins; scanned PDFs yield nothing but whitespace.
+  if (/\w/.test(text)) return text;
+
+  const pages = Math.min(await pdfPageCount(blob), OCR_MAX_PAGES);
+  const parts = [];
+  for (let i = 1; i <= pages; i++) {
+    const { blob: png } = await rasterizePdfPage(blob, i);
+    parts.push(await ocrImageBlob(png));
+  }
+  return parts.join('\n').trim();
 }
 
 // Re-queue a failed/skipped attachment (e.g. user retry from the UI).

@@ -412,7 +412,9 @@ export function createAttachment(noteId, { kind, name, mimeType, size }, partial
     height: 0,
     durationSec: 0,
     ocrText: '',
-    ocrStatus: kind === 'image' ? 'pending' : 'skipped',
+    // Images AND pdfs queue for text extraction (pdfs try their real text
+    // layer first, then OCR — see ocr.js).
+    ocrStatus: (kind === 'image' || kind === 'pdf') ? 'pending' : 'skipped',
     transcript: '',
     transcriptSource: '',
     driveFileId: '',

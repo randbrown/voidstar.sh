@@ -3,11 +3,29 @@
 
 import * as store from '../store.js';
 import { buildExportZip, downloadBlob, stamp } from '../export.js';
-import { navigate, refresh } from '../app.js';
+import { navigate, refresh, getDockPos, setDockPos, DOCK_POSITIONS } from '../app.js';
 import { el, esc, btn, topBar, confirmBox, timeAgo } from '../ui.js';
 
 export async function renderSettings(root) {
   root.appendChild(topBar('settings', '#home'));
+
+  // ── UI ──
+  const uiCard = el('div', 'mn-card');
+  uiCard.appendChild(el('div', 'mn-card-title', 'interface'));
+  uiCard.appendChild(el('div', 'mn-note-meta', 'menu position (this device only):'));
+  const posRow = el('div', 'mn-actions');
+  const drawPos = () => {
+    posRow.innerHTML = '';
+    for (const p of DOCK_POSITIONS) {
+      posRow.appendChild(btn(p, getDockPos() === p ? 'mn-btn-primary' : '', () => {
+        setDockPos(p);
+        drawPos();
+      }));
+    }
+  };
+  drawPos();
+  uiCard.appendChild(posRow);
+  root.appendChild(uiCard);
 
   // ── Data ──
   const dataCard = el('div', 'mn-card');

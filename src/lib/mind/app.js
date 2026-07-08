@@ -23,6 +23,81 @@ export function navigate(hash) {
   location.hash = hash;
 }
 
+// ── Dock: the app's main menu, placeable top/bottom/left/right ──
+// Position is a per-device preference (localStorage, never synced).
+const DOCK_POS_KEY = 'voidstar.mind.dockPos';
+export const DOCK_POSITIONS = ['top', 'bottom', 'left', 'right'];
+
+export function getDockPos() {
+  const p = localStorage.getItem(DOCK_POS_KEY);
+  return DOCK_POSITIONS.includes(p) ? p : 'bottom';
+}
+
+export function setDockPos(pos) {
+  if (!DOCK_POSITIONS.includes(pos)) return;
+  localStorage.setItem(DOCK_POS_KEY, pos);
+  document.body.dataset.mnDock = pos;
+}
+
+let _dock = null;
+
+function renderDock() {
+  if (_dock) return;
+  _dock = document.createElement('nav');
+  _dock.className = 'mn-dock';
+  const items = [
+    ['home', '&#8962;', 'notes', () => navigate('#home')],
+    ['new', '&#65291;', 'new note', async () => {
+      const { currentFolderId } = await import('./views/home.js');
+      const note = store.createNote({ folderId: currentFolderId(), title: await store.uniqueAutoTitle() });
+      await store.putNoteRaw(note);
+      navigate(`#note/${note.id}`);
+    }],
+    ['tasks', '&#9745;', 'tasks', () => navigate('#tasks')],
+    ['settings', '&#9881;', 'settings', () => navigate('#settings')],
+  ];
+  for (const [key, icon, label, onClick] of items) {
+    const b = document.createElement('button');
+    b.className = `mn-dock-btn ${key === 'new' ? 'mn-dock-primary' : ''}`;
+    b.dataset.dock = key;
+    b.innerHTML = `<span class="mn-dock-icon">${icon}</span><span class="mn-dock-label">${label}</span>`;
+    b.addEventListener('click', onClick);
+    _dock.appendChild(b);
+  }
+  document.body.appendChild(_dock);
+  document.body.dataset.mnDock = getDockPos();
+}
+
+function updateDockActive(view) {
+  if (!_dock) return;
+  const active = view === 'trash' ? 'settings' : view === 'note' ? 'home' : view;
+  _dock.querySelectorAll('.mn-dock-btn').forEach(b => {
+    b.classList.toggle('mn-dock-on', b.dataset.dock === active);
+  });
+}
+
+// ── PWA share target (GET): /lab/mind?title=…&text=…&url=… → new note ──
+async function handleShareTarget() {
+  const params = new URLSearchParams(location.search);
+  const title = params.get('title') || '';
+  const text = params.get('text') || '';
+  const url = params.get('url') || '';
+  if (!title && !text && !url) return false;
+
+  const body = [text, url].filter(Boolean).join('\n\n');
+  const { currentFolderId } = await import('./views/home.js');
+  const note = store.createNote({
+    folderId: currentFolderId(),
+    title: title || await store.uniqueAutoTitle(),
+    autoTitle: !title,
+    body,
+  });
+  await store.putNoteRaw(note);
+  // Strip the share params so a reload doesn't re-create the note.
+  history.replaceState(null, '', location.pathname + `#note/${note.id}`);
+  return true;
+}
+
 // Re-render the current route in place — navigate() to the current hash
 // fires no hashchange, so views that mutate data call refresh() instead.
 export function refresh() {
@@ -61,6 +136,7 @@ async function route() {
     _root.innerHTML = `<div class="mn-error">Error: ${e.message}</div>`;
     console.error('[mind]', e);
   }
+  updateDockActive(view);
 }
 
 // ── Auto-pull on load and refocus (setlist pattern) ──
@@ -144,5 +220,10 @@ export function initMindApp(root) {
   // (matters most on iOS Safari). Fire-and-forget; denial is fine.
   try { navigator.storage?.persist?.().catch(() => {}); } catch {}
 
-  route();
+  renderDock();
+
+  // A share-target launch creates the note first, then routes into it.
+  handleShareTarget()
+    .catch((e) => console.warn('[mind] share target:', e.message))
+    .finally(() => route());
 }

@@ -63,6 +63,80 @@ const buildStamp = readBuildStamp();
       min-height: 100dvh;
     }
 
+    /* ── Dock (main menu) — position set by body[data-mn-dock] ── */
+    .mn-dock {
+      position: fixed;
+      z-index: 60;
+      display: flex;
+      gap: 0.3rem;
+      padding: 0.4rem;
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      border: 1px solid var(--border-2);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-radius: 999px;
+    }
+    .mn-dock-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.1rem;
+      min-width: 3.4rem;
+      min-height: 2.9rem;
+      padding: 0.3rem 0.6rem;
+      border: none;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      cursor: pointer;
+    }
+    .mn-dock-btn:hover { color: var(--text); background: var(--surface-2); }
+    .mn-dock-icon { font-size: 1.15rem; line-height: 1; }
+    .mn-dock-label { font-size: 0.58rem; letter-spacing: 0.05em; }
+    .mn-dock-on { color: var(--accent); }
+    .mn-dock-primary {
+      background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+      color: var(--text);
+    }
+    .mn-dock-primary:hover { background: color-mix(in srgb, var(--accent) 34%, var(--surface)); }
+
+    body[data-mn-dock="bottom"] .mn-dock {
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: calc(env(safe-area-inset-bottom) + 0.6rem);
+      flex-direction: row;
+    }
+    body[data-mn-dock="top"] .mn-dock {
+      left: 50%;
+      transform: translateX(-50%);
+      top: calc(env(safe-area-inset-top) + 0.5rem);
+      flex-direction: row;
+    }
+    body[data-mn-dock="left"] .mn-dock {
+      top: 50%;
+      transform: translateY(-50%);
+      left: calc(env(safe-area-inset-left) + 0.5rem);
+      flex-direction: column;
+      border-radius: 1.6rem;
+    }
+    body[data-mn-dock="right"] .mn-dock {
+      top: 50%;
+      transform: translateY(-50%);
+      right: calc(env(safe-area-inset-right) + 0.5rem);
+      flex-direction: column;
+      border-radius: 1.6rem;
+    }
+    /* Keep content clear of the dock. Sticky headers shift below a top dock. */
+    body[data-mn-dock="bottom"] .mind-root { padding-bottom: 7rem; }
+    body[data-mn-dock="top"] .mind-root { padding-top: 4.4rem; }
+    body[data-mn-dock="top"] .mn-apphead,
+    body[data-mn-dock="top"] .mn-topbar { top: 4.2rem; }
+    body[data-mn-dock="top"] .mn-ann-toolbar { top: 7.4rem; }
+    body[data-mn-dock="left"] .mind-root { padding-left: 4.6rem; }
+    body[data-mn-dock="right"] .mind-root { padding-right: 4.6rem; }
+
     /* ── App header ── */
     .mn-apphead {
       display: flex;

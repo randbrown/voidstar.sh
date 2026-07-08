@@ -54,8 +54,27 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   rename-proof). Backlinks are computed by scan (`backlinksTo`).
 - localStorage namespace `voidstar.mind.*`.
 
-## Not built yet (planned P4)
+## P4 additions
 
-PDF rasterize/annotate/OCR (pdfjs-dist), Whisper WASM re-transcribe of kept
-audio (attachments already store `transcript`/`transcriptSource`), Android PWA
-share-target, note templates / daily note.
+- **Dock**: the main menu (notes / new note / tasks / settings) is a floating
+  dock placeable top/bottom/left/right — a per-device preference
+  (`voidstar.mind.dockPos`, default bottom), set in settings. `app.js`
+  renders it; `body[data-mn-dock]` drives the CSS.
+- **PDF** (`pdf.js`): pdfjs-dist **legacy build** (the modern build needs
+  bleeding-edge JS like `Map.getOrInsertComputed`), dynamically imported.
+  PDFs annotate one rasterized page at a time (strokes keyed `attId:page`,
+  pager in the annotate top bar). Text extraction reads the real text layer
+  first; only scanned PDFs pay for rasterize+tesseract (capped
+  `OCR_MAX_PAGES`).
+- **Whisper** (`whisper.js`): on-device re-transcribe of kept audio —
+  transformers.js from CDN at first use, `whisper-tiny.en` q8 (~40 MB,
+  browser-cached). Buttons on every audio chip: transcribe/re-transcribe +
+  insert-into-note. `transcriptSource` becomes `'whisper'`.
+- **Share target**: `manifest-mind.webmanifest` registers a GET
+  `share_target`; `app.js` turns `?title/text/url` into a new note on launch
+  (Android "share to mind" once installed). Shared *files* are not handled
+  (would need a SW POST handler).
+- **Daily note**: "today" button on home — one note per calendar day, found
+  by `meta.daily = 'YYYY-MM-DD'`, created in the current folder.
+- **Templates**: tag any note `#template`; "＋ from template" (chips row)
+  copies its body/tags into a fresh note.
