@@ -13,6 +13,8 @@
 
 import { lmToCanvas } from './video.js';
 import { readKnobs, onThemeChange } from './theme.js';
+import { createMoshPost } from './post-mosh.js';
+import { createStitchPost } from './post-stitch.js';
 
 // ─── Pose visuals ───────────────────────────────────────────────────────────
 
@@ -164,11 +166,12 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     ascii:    false,
     mosh:     false,
     edge:     false,
+    stitch:   false,
   };
-  // ASCII / data-mosh / edge-detect each fully repaint the overlay before
-  // sparks + skeleton land on top, so they're mutually exclusive — enabling
-  // one disables the others automatically.
-  const POST_KEYS = ['ascii', 'mosh', 'edge'];
+  // ASCII / data-mosh / edge-detect / stitch each fully repaint the overlay
+  // before sparks + skeleton land on top, so they're mutually exclusive —
+  // enabling one disables the others automatically.
+  const POST_KEYS = ['ascii', 'mosh', 'edge', 'stitch'];
   function setOption(key, val) {
     if (!(key in opts)) return;
     opts[key] = !!val;
@@ -178,14 +181,17 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
   function getOption(key) { return opts[key]; }
 
-  // Data-mosh tunables. Defaults aim for a pleasant smear with periodic
-  // block glitches; the page exposes these as sliders in a mosh-card.
+  // Data-mosh tunables. The pass itself lives in post-mosh.js (WebGL2
+  // motion-vector melt); the page exposes these as sliders in a mosh-card.
   const moshConfig = {
-    intensity:  0.85,   // global scaler — multiplies smear, glitch, split
-    blockSize:  32,     // px on a side; controls glitch granularity
-    smear:      0.55,   // 0..1 — how much of last frame leaks into this one
-    glitchRate: 0.30,   // base rate of block-displacement events per frame
-    colorSplit: 4,      // px offset for the cheap RGB split ghosts
+    intensity:  0.85,   // global scaler — multiplies melt, glitch, split
+    blockSize:  32,     // macroblock size, display px
+    smear:      0.55,   // 0..1 — melt: how hard motion drags stale pixels
+    glitchRate: 0.30,   // beat-burst block teleports (P-frame confetti)
+    colorSplit: 4,      // px offset for the RGB split ghosts
+    heal:       0.30,   // 0..1 — how fast still regions re-resolve
+    cycle:      8,      // seconds between auto I-frame refreshes (0 = never)
+    colorful:   0.65,   // rainbow residue in hard-dragged regions
   };
   function setMoshConfig(partial) {
     for (const [k, v] of Object.entries(partial || {})) {
@@ -193,6 +199,25 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     }
   }
   function getMoshConfig() { return { ...moshConfig }; }
+
+  // Stitch tunables — quantized tile mosaic + word pills (post-stitch.js).
+  // palette/words are strings, everything else numeric.
+  const stitchConfig = {
+    cellSize: 22,          // cell size, device px
+    palette:  'tatreez',   // 'tatreez' | 'theme' | 'mono'
+    stitch:   0.35,        // cross-stitch "×" texture amount
+    focus:    0.6,         // pose-bbox cell subdivision amount
+    wordRate: 0.8,         // word-pill spawn rate scaler (0 = off)
+    words: "what it's like, qualia, voidstar, entangle, signal, noise, bloom, static, ghost, no input",
+  };
+  function setStitchConfig(partial) {
+    for (const [k, v] of Object.entries(partial || {})) {
+      if (!(k in stitchConfig)) continue;
+      const wantString = k === 'palette' || k === 'words';
+      if (wantString ? typeof v === 'string' : typeof v === 'number') stitchConfig[k] = v;
+    }
+  }
+  function getStitchConfig() { return { ...stitchConfig }; }
 
   // Edge-detect post-process tunables. The look is white edges on black —
   // a Sobel filter on the active fx canvas's luminance. `intensity` scales
@@ -546,99 +571,27 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
 
   // ── Data-mosh post-process ───────────────────────────────────────────────
-  // Persistent offscreen buffer that the active fx canvas is "smeared" into
-  // each frame. The look comes from three layered tricks:
-  //   1. Self-feedback at a sub-pixel drift — pixels leak forward into the
-  //      next frame in a slowly-rotating direction (motion-vector residue).
-  //   2. Block-displacement glitches — every frame we may shuffle a few
-  //      blockSize×blockSize tiles around inside the buffer; on beats the
-  //      count spikes for a full P-frame-style breakup.
-  //   3. Cheap RGB split — additive blits of the same buffer at ±X px to
-  //      fake chromatic-aberration ghosting cheaply (no per-channel passes).
-  let moshBuf = null, moshCtx = null;
-  function ensureMoshBuf() {
-    const W = canvas.width, H = canvas.height;
-    if (!moshBuf) {
-      moshBuf = document.createElement('canvas');
-      moshCtx = moshBuf.getContext('2d');
-    }
-    if (moshBuf.width !== W || moshBuf.height !== H) {
-      moshBuf.width  = W;
-      moshBuf.height = H;
-    }
-  }
+  // WebGL2 motion-vector melt (see post-mosh.js): per-macroblock motion
+  // estimation between consecutive fx frames advects a persistent buffer,
+  // so movement drags stale pixels around exactly like I-frame-removed
+  // video. Created lazily on first use so sessions that never enable mosh
+  // pay nothing.
+  let moshPost = null;
   function renderMosh(field) {
-    // Post passes paint the post canvas (walk-scoped separately from pose).
-    const ctx = postCtx;
     const main = getMainCanvas?.();
     if (!main) return;
-    const W = canvas.width, H = canvas.height;
-    ensureMoshBuf();
-    const audio = field.audio;
-    const audioOn = !!audio.spectrum;
-    const k = moshConfig.intensity;
+    if (!moshPost) moshPost = createMoshPost();
+    moshPost.render(postCtx, main, canvas.width, canvas.height, field, moshConfig);
+  }
 
-    // 1. Smear-feedback: copy moshBuf onto itself with a tiny drift, faded.
-    //    The drift direction rotates slowly (sin/cos of time) so the smear
-    //    has a sense of motion rather than just pumping symmetrically.
-    const t   = performance.now() * 0.0008;
-    const driftMag = 1 + Math.floor(k * 2.5);
-    const dx  = Math.round(Math.sin(t) * driftMag);
-    const dy  = Math.round(Math.cos(t * 0.9) * driftMag);
-    const smearAmt = Math.min(0.95, moshConfig.smear * k * (0.7 + (audioOn ? audio.bands.bass * 0.3 : 0.15)));
-    moshCtx.globalAlpha = smearAmt;
-    moshCtx.globalCompositeOperation = 'source-over';
-    moshCtx.drawImage(moshBuf, dx, dy);
-
-    // 2. Stamp the new fx frame on top with reduced opacity so the smear
-    //    survives. Source dimensions fall back to canvas dims because the
-    //    main backing-buffer may be a different size from the overlay's.
-    const stampAlpha = 1 - smearAmt * 0.55;
-    moshCtx.globalAlpha = stampAlpha;
-    try {
-      moshCtx.drawImage(main, 0, 0, W, H);
-    } catch {
-      // Some WebGL contexts may need preserveDrawingBuffer; if we can't
-      // sample, just show the smeared buffer alone.
-    }
-
-    // 3. Block-displacement glitches. Beat-driven burst on top of the
-    //    base rate so kicks make the canvas pop apart for a frame.
-    let burst = moshConfig.glitchRate * k * 6;
-    if (audioOn && audio.beat.active) burst += moshConfig.glitchRate * k * 24;
-    if (audioOn && audio.mids.active) burst += moshConfig.glitchRate * k * 8;
-    const numBlocks = Math.floor(burst);
-    if (numBlocks > 0) {
-      const bs = Math.max(4, Math.round(moshConfig.blockSize));
-      const maxOff = bs * (2 + k * 3);
-      moshCtx.globalAlpha = 1;
-      for (let i = 0; i < numBlocks; i++) {
-        const sx = Math.floor(Math.random() * Math.max(1, W - bs));
-        const sy = Math.floor(Math.random() * Math.max(1, H - bs));
-        const dxBlk = Math.max(0, Math.min(W - bs, sx + ((Math.random() - 0.5) * maxOff) | 0));
-        const dyBlk = Math.max(0, Math.min(H - bs, sy + ((Math.random() - 0.5) * maxOff) | 0));
-        moshCtx.drawImage(moshBuf, sx, sy, bs, bs, dxBlk, dyBlk, bs, bs);
-      }
-    }
-
-    // 4. Blit the moshed buffer to the overlay (background pass).
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
-    ctx.drawImage(moshBuf, 0, 0);
-
-    // 5. RGB-split ghosts via additive offset blits. Audio modulates the
-    //    split distance so beats widen the chromatic aberration.
-    if (moshConfig.colorSplit > 0.5) {
-      const cs = moshConfig.colorSplit * k;
-      const splitWiden = audioOn ? audio.beat.pulse * cs * 1.2 : 0;
-      const off = Math.round(cs + splitWiden);
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = 0.30;
-      ctx.drawImage(moshBuf,  off, 0);
-      ctx.drawImage(moshBuf, -off, 0);
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-    }
+  // ── Stitch post-process ──────────────────────────────────────────────────
+  // Palette-quantized tile mosaic + word pills (see post-stitch.js).
+  let stitchPost = null;
+  function renderStitch(field) {
+    const main = getMainCanvas?.();
+    if (!main) return;
+    if (!stitchPost) stitchPost = createStitchPost();
+    stitchPost.render(postCtx, main, canvas.width, canvas.height, field, stitchConfig);
   }
 
   // ── Edge-detect post-process ─────────────────────────────────────────────
@@ -788,14 +741,15 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     // canvas so skeleton + sparks still land on top. The post canvas is
     // display:none while no post is active — the extra compositor layer is
     // free in the common case.
-    const postActive = opts.mosh || opts.ascii || opts.edge;
+    const postActive = opts.mosh || opts.ascii || opts.edge || opts.stitch;
     if (postActive !== postShown) {
       postCanvas.style.display = postActive ? 'block' : 'none';
       postShown = postActive;
     }
-    if (opts.mosh)       renderMosh(field);
-    else if (opts.ascii) renderAscii();
-    else if (opts.edge)  renderEdge(field);
+    if (opts.mosh)        renderMosh(field);
+    else if (opts.ascii)  renderAscii();
+    else if (opts.edge)   renderEdge(field);
+    else if (opts.stitch) renderStitch(field);
 
     ctx.clearRect(0, 0, W, H);
     drawPoseOverlay(field);
@@ -806,6 +760,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   function dispose() {
     canvas.remove();
     postCanvas.remove();
+    moshPost?.dispose();   moshPost = null;
+    stitchPost?.dispose(); stitchPost = null;
     window.removeEventListener('resize', applyDpr);
     window.removeEventListener('orientationchange', applyDpr);
   }
@@ -816,8 +772,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   return {
     canvas,
     postCanvas,
-    /** True while an ascii/mosh/edge pass is rendering (post canvas shown). */
-    isPostActive: () => opts.ascii || opts.mosh || opts.edge,
+    /** True while an ascii/mosh/edge/stitch pass is rendering (post canvas shown). */
+    isPostActive: () => opts.ascii || opts.mosh || opts.edge || opts.stitch,
     tick,
     render,
     setOption,
@@ -826,6 +782,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     getMoshConfig,
     setEdgeConfig,
     getEdgeConfig,
+    setStitchConfig,
+    getStitchConfig,
     setDprCap(v) { dprCap = Math.max(0.5, v); applyDpr(); },
     // Re-read the stage rect and re-size — called by the page when the
     // split-screen layout changes (the window 'resize' listener handles the

@@ -445,6 +445,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-pause                { min-width: 6ch;  } /* "paused" */
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
+    #btn-stitch               { min-width: 11ch; } /* "stitch blip" */
     #btn-walk                 { min-width: 9ch;  } /* "walk off" */
     #btn-logo                 { min-width: 9ch;  } /* "logo off" */
     #btn-record-mode          { min-width: 2.25ch; } /* ▾ caret (capture menu) */
@@ -768,6 +769,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        buildParamPanel) — Astro's per-component CSS scoping doesn't reach
        JS-created elements without the `data-astro-cid-…` attribute. */
     .qp-val { color: var(--cyan); min-width: 5ch; text-align: right; }
+    .qp-row input[type=text] {
+      width: 160px; background: none; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text); font-family: var(--font-mono);
+      font-size: 0.68rem; padding: 0.15rem 0.4rem;
+    }
+    .qp-row input[type=text]:focus { outline: none; border-color: var(--accent); }
     .qp-row input[type=range] {
       width: 130px; accent-color: var(--accent); cursor: pointer;
       /* Bigger hit target for touch — the native track stays slim but the
@@ -2588,6 +2595,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn" id="btn-ascii" title="ASCII post (T) — off / on / blip / flip">ascii</button>
         <button class="ctrl-btn" id="btn-mosh"  title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
         <button class="ctrl-btn" id="btn-edge"  title="Edge-detect post (E) — off / on / blip / flip">edge</button>
+        <button class="ctrl-btn" id="btn-stitch" title="Stitch post (Y) — quantized tile mosaic + word pills — off / on / blip / flip">stitch</button>
         <button class="ctrl-btn" id="btn-walk"  title="Cam walk (U) — slow pan / zoom / rotate camera drift over the scene, re-aims on hard beats">walk</button>
         <button class="ctrl-btn" id="btn-logo"  title="void* logo mark — small live-animated watermark above the whole scene stack. Corner-anchored, drag to place; 'center' mode makes a large emblem that can ride the cam walk">logo</button>
       </div>
@@ -2676,6 +2684,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <span><kbd>T</kbd> ascii</span>
   <span><kbd>K</kbd> mosh</span>
   <span><kbd>E</kbd> edge</span>
+  <span><kbd>Y</kbd> stitch</span>
   <span><kbd>B</kbd> ripples</span>
   <span><kbd>J</kbd> skeleton</span>
   <span><kbd>F</kbd> sparks</span>
@@ -2830,13 +2839,25 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>intensity<span class="qp-val"></span></label>
         <input type="range" min="0" max="1.5" step="0.05" value="0.85">
       </div>
-      <div class="qp-row" data-qp="mosh-smear">
-        <label>smear<span class="qp-val"></span></label>
+      <div class="qp-row" data-qp="mosh-smear" title="How hard motion drags stale pixels — the melt itself">
+        <label>melt<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.55">
       </div>
-      <div class="qp-row" data-qp="mosh-glitch">
+      <div class="qp-row" data-qp="mosh-heal" title="How fast still regions re-resolve toward the live frame (0 = eternal rot)">
+        <label>heal<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.02" value="0.30">
+      </div>
+      <div class="qp-row" data-qp="mosh-cycle" title="Seconds between clean I-frame refreshes — the melt builds, snaps clean, builds again (0 = never)">
+        <label>keyframe cycle<span class="qp-val"></span></label>
+        <input type="range" min="0" max="30" step="0.5" value="8">
+      </div>
+      <div class="qp-row" data-qp="mosh-glitch" title="Beat-burst macroblock teleports (P-frame confetti)">
         <label>glitch rate<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.30">
+      </div>
+      <div class="qp-row" data-qp="mosh-colorful" title="Rainbow residue — posterize + hue-rotate hard-dragged blocks">
+        <label>colorful<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.02" value="0.65">
       </div>
       <div class="qp-row" data-qp="mosh-block">
         <label>block size<span class="qp-val"></span></label>
@@ -2845,6 +2866,40 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="mosh-split">
         <label>color split<span class="qp-val"></span></label>
         <input type="range" min="0" max="20" step="1" value="4">
+      </div>
+    </div>
+  </div>
+
+  <div id="stitch-card" class="qp-card collapsed" style="display:none">
+    <div class="qp-head" data-toggle="stitch-card">
+      <span class="qp-title">stitch</span>
+      <span class="qp-spacer"></span>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-row" data-qp="stitch-cell">
+        <label>cell size<span class="qp-val"></span></label>
+        <input type="range" min="10" max="48" step="2" value="22">
+      </div>
+      <div class="qp-row" data-qp="stitch-palette" title="Yarn palette — tatreez reds / active theme accents / monochrome">
+        <label>palette</label>
+        <button class="qp-toggle" id="stitch-palette">tatreez</button>
+      </div>
+      <div class="qp-row" data-qp="stitch-amount" title="Cross-stitch × texture over the tiles">
+        <label>cross-stitch<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.05" value="0.35">
+      </div>
+      <div class="qp-row" data-qp="stitch-focus" title="Cells inside the tracked person's bbox subdivide 2×2 — the figure renders finer than the background">
+        <label>pose focus<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.05" value="0.6">
+      </div>
+      <div class="qp-row" data-qp="stitch-wordrate" title="Word-pill spawn rate — pills burst on beats (0 = off)">
+        <label>word rate<span class="qp-val"></span></label>
+        <input type="range" min="0" max="2" step="0.05" value="0.8">
+      </div>
+      <div class="qp-row" data-qp="stitch-words" title="Comma-separated words for the pill scatter">
+        <label>words</label>
+        <input type="text" id="stitch-words" spellcheck="false">
       </div>
     </div>
   </div>
@@ -3205,6 +3260,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <button class="qp-tab" data-card="camera-card" role="tab">camera</button>
   <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
   <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
+  <button class="qp-tab" data-card="stitch-card" role="tab">stitch</button>
   <button class="qp-tab" data-card="walk-card"   role="tab">walk</button>
   <button class="qp-tab" data-card="logo-card"   role="tab">logo</button>
   <button class="qp-tab" data-card="chron-card"  role="tab">chron</button>
@@ -3251,7 +3307,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>V</kbd><kbd>⇧V</kbd></span><span class="ctrl-lbl">fx next / prev</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>L</kbd><kbd>N</kbd></span><span class="ctrl-lbl">phase / cycle period</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>I</kbd><kbd>⇧I</kbd></span><span class="ctrl-lbl">phase step next / prev</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>T</kbd><kbd>K</kbd><kbd>E</kbd></span><span class="ctrl-lbl">ascii / mosh / edge</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>T</kbd><kbd>K</kbd><kbd>E</kbd><kbd>Y</kbd></span><span class="ctrl-lbl">ascii / mosh / edge / stitch</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>B</kbd></span><span class="ctrl-lbl">ripples</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>J</kbd><kbd>F</kbd><kbd>G</kbd></span><span class="ctrl-lbl">skeleton / sparks / aura</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>P</kbd></span><span class="ctrl-lbl">pose source</span></div>
