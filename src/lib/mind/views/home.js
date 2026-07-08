@@ -8,6 +8,12 @@
 import * as store from '../store.js';
 import { query, allTags } from '../search.js';
 import { markdownToText } from '../editor/markdown.js';
+import { setTaskDoneEverywhere } from '../tasks-sync.js';
+import {
+  hasClientId, needsReconnect, onSyncState, initGdriveSync, setSyncClient,
+  ensureDriveAccess, pullMergePushCycle,
+} from '../gdrive-sync.js';
+import { pushPendingAttachments } from '../attachments-drive.js';
 import { navigate, refresh } from '../app.js';
 import { el, esc, btn, emptyState, timeAgo, textPrompt, confirmBox } from '../ui.js';
 
@@ -49,6 +55,31 @@ export async function renderHome(root) {
   actions.appendChild(btn('&#9881;', 'mn-btn-icon', () => navigate('#settings')));
   head.appendChild(actions);
   root.appendChild(head);
+
+  // Sync status pill (only once Drive is configured). Tapping it when a
+  // reconnect is needed re-auths inside the tap's gesture window.
+  if (hasClientId()) {
+    const pill = el('button', 'mn-sync-pill');
+    const setPill = (state) => {
+      const s = needsReconnect() ? 'reconnect' : state;
+      pill.dataset.state = s;
+      pill.textContent = { idle: 'drive ·', syncing: 'syncing…', synced: 'synced ✓', pending: 'push pending', offline: 'offline', reconnect: 'reconnect drive' }[s] || s;
+    };
+    onSyncState(setPill);
+    pill.addEventListener('click', async () => {
+      try {
+        await ensureDriveAccess();
+        const client = await initGdriveSync({ interactive: true });
+        setSyncClient(client);
+        await pullMergePushCycle(client,
+          () => store.exportAll(), (m) => store.importAll(m),
+          { snapshotFn: () => store.putSnapshot('pre-sync') });
+        pushPendingAttachments();
+        refresh();
+      } catch (e) { alert(`sync failed: ${e.message}`); }
+    });
+    actions.insertBefore(pill, actions.firstChild);
+  }
 
   // ── Folder bar: breadcrumb + subfolder chips + manage ──
   root.appendChild(folderBar(folders, folderId));
@@ -262,7 +293,7 @@ function taskHitRow(task, dimmed) {
   cb.checked = task.done;
   cb.addEventListener('click', (e) => e.stopPropagation());
   cb.addEventListener('change', async () => {
-    await store.setTaskDone(task, cb.checked);
+    await setTaskDoneEverywhere(task, cb.checked);
     refresh();
   });
   row.appendChild(cb);
@@ -361,7 +392,7 @@ function todoRow(task, redraw, folderLabel = '', dimmed = false) {
   cb.type = 'checkbox';
   cb.checked = task.done;
   cb.addEventListener('change', async () => {
-    await store.setTaskDone(task, cb.checked);
+    await setTaskDoneEverywhere(task, cb.checked);
     redraw();
   });
   row.appendChild(cb);

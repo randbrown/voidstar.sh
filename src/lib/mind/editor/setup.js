@@ -176,6 +176,17 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, placehol
       task_item: (node, v, getPos) => new TaskItemView(node, v, getPos),
       image: (node) => new ImageView(node),
     },
+    // Note links (#note/<id>) navigate on plain click; external links need
+    // Ctrl/Cmd-click so ordinary editing around them stays possible.
+    handleClick(v, pos, event) {
+      const link = v.state.doc.resolve(pos).marks()
+        .find(m => m.type === schema.marks.link);
+      if (!link) return false;
+      const href = link.attrs.href || '';
+      if (href.startsWith('#note/')) { location.hash = href; return true; }
+      if (event.ctrlKey || event.metaKey) { window.open(href, '_blank', 'noopener'); return true; }
+      return false;
+    },
     dispatchTransaction(tr) {
       const newState = view.state.apply(tr);
       view.updateState(newState);
@@ -194,6 +205,10 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, placehol
     insertText(text) {
       const tr = view.state.tr.insertText(text).scrollIntoView();
       view.dispatch(tr);
+    },
+    insertLink(label, href) {
+      const node = schema.text(label, [schema.marks.link.create({ href })]);
+      view.dispatch(view.state.tr.replaceSelectionWith(node, false).scrollIntoView());
     },
     focus: () => view.focus(),
     destroy: () => view.destroy(),

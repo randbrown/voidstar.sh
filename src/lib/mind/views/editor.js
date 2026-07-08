@@ -6,6 +6,9 @@ import { createEditor } from '../editor/setup.js';
 import { firstLine } from '../editor/markdown.js';
 import { addAttachmentFromBlob, getObjectUrl, formatSize, formatDuration } from '../attachments.js';
 import { createVoiceCapture, recordingSupported, getStoredMicId, storeMicId } from '../voice-capture.js';
+import { ensureTaskIds, syncNoteTasks, backlinksTo } from '../tasks-sync.js';
+import { pushPendingAttachments } from '../attachments-drive.js';
+import { query } from '../search.js';
 import { isSupported as speechSupported } from '../voice.js';
 import { applySink } from '../audio-out.js';
 import { processPendingOcr } from '../ocr.js';
@@ -56,8 +59,9 @@ export async function renderEditor(root, noteId) {
     confirmBox('Move this note to trash?', async () => {
       flushPending();
       await store.trashNote(note);
-      // Tombstone its attachments too so their blobs eventually purge.
+      // Tombstone its attachments and note-sourced tasks too.
       for (const a of await store.getAttachmentsForNote(note.id)) await store.trashAttachment(a);
+      for (const t of await store.getTasksForNote(note.id)) await store.trashTask(t);
       navigate('#home');
     });
   });
@@ -134,9 +138,13 @@ export async function renderEditor(root, noteId) {
   let editor = null;
 
   async function save(patch = {}) {
+    // Stamp any new checkboxes with stable ids first, so the serialized body
+    // carries the markers and the task records key off them.
+    if (editor) ensureTaskIds(editor.view);
     const body = editor ? editor.getMarkdown() : note.body;
     note = { ...note, ...patch, body };
     await store.putNote(note);
+    await syncNoteTasks(note);
   }
 
   function scheduleSave() {
@@ -160,6 +168,7 @@ export async function renderEditor(root, noteId) {
     scheduleSave();
     await drawAttachments();
     if (anyImage) processPendingOcr(); // background — text becomes searchable when done
+    pushPendingAttachments(); // no-op until Drive is connected
   }
 
   editor = createEditor(mount, {
@@ -232,6 +241,7 @@ export async function renderEditor(root, noteId) {
           durationSec: Math.round(durationSec),
         });
         await drawAttachments();
+        pushPendingAttachments();
       }
       if (speechFailed && keepAudio.cb.checked && audioBlob) {
         liveLine.textContent = 'transcript unavailable — audio kept (re-transcribe coming later)';
@@ -265,10 +275,53 @@ export async function renderEditor(root, noteId) {
   const micBtn = btn('&#127908;', 'mn-btn-icon', () => {
     const open = voiceBar.style.display !== 'none';
     voiceBar.style.display = open ? 'none' : 'flex';
-    if (!open) micSel.dispatchEvent(new Event('mn-open')); // no-op hook
   });
   micBtn.title = 'voice note';
   actions.insertBefore(micBtn, pinBtn);
+
+  // Link-to-note picker: search-as-you-type over all notes, insert a
+  // [title](#note/id) link at the cursor. Id-based, so renames never break it.
+  const linkBtn = btn('&#128279;', 'mn-btn-icon', () => {
+    const overlay = el('div', 'mn-modal-overlay');
+    const box = el('div', 'mn-modal');
+    box.appendChild(el('div', 'mn-modal-title', 'link to note'));
+    const input = el('input', 'mn-input');
+    input.type = 'search';
+    input.placeholder = 'search notes…';
+    box.appendChild(input);
+    const list = el('div', 'mn-linklist');
+    box.appendChild(list);
+    overlay.appendChild(box);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+
+    let seq = 0;
+    const draw = async () => {
+      const mySeq = ++seq;
+      const hits = (await query(input.value.trim(), { type: 'note' }))
+        .filter(h => h.id !== note.id)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 12);
+      if (mySeq !== seq) return;
+      list.innerHTML = '';
+      for (const h of hits) {
+        const row = btn(esc(h.title), 'mn-btn-ghost mn-linkrow', () => {
+          overlay.remove();
+          editor.insertLink(h.title, `#note/${h.id}`);
+          scheduleSave();
+          editor.focus();
+        });
+        list.appendChild(row);
+      }
+      if (!hits.length) list.appendChild(el('div', 'mn-dim', 'no matches'));
+    };
+    input.addEventListener('input', draw);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+    draw();
+    input.focus();
+  });
+  linkBtn.title = 'link to another note';
+  actions.insertBefore(linkBtn, pinBtn);
 
   // ── Attachment strip ──
   const strip = el('div', 'mn-attach-strip');
@@ -332,6 +385,18 @@ export async function renderEditor(root, noteId) {
   }
 
   await drawAttachments();
+
+  // ── Backlinks panel: notes that link here ──
+  const backs = await backlinksTo(note.id);
+  if (backs.length) {
+    const panel = el('div', 'mn-backlinks');
+    panel.appendChild(el('div', 'mn-section-label', `linked from (${backs.length})`));
+    for (const b of backs) {
+      const row = btn(esc(b.title), 'mn-btn-ghost mn-linkrow', () => navigate(`#note/${b.id}`));
+      panel.appendChild(row);
+    }
+    root.appendChild(panel);
+  }
 
   // Flush the pending autosave when the route changes or the tab hides —
   // a kill mid-edit must not lose the last keystrokes.

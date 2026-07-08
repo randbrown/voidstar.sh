@@ -2,6 +2,7 @@
 // window and an archive drawer per list.
 
 import * as store from '../store.js';
+import { setTaskDoneEverywhere } from '../tasks-sync.js';
 import { navigate, refresh } from '../app.js';
 import { el, esc, btn, topBar, emptyState, textPrompt, confirmBox, timeAgo } from '../ui.js';
 
@@ -113,7 +114,7 @@ function taskRow(task) {
   cb.type = 'checkbox';
   cb.checked = task.done;
   cb.addEventListener('change', async () => {
-    await store.setTaskDone(task, cb.checked);
+    await setTaskDoneEverywhere(task, cb.checked);
     refresh();
   });
   row.appendChild(cb);

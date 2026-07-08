@@ -115,11 +115,71 @@ export async function renderSettings(root) {
   }
   root.appendChild(ocrCard);
 
-  // ── Sync (stub until the Drive phase lands) ──
+  // ── Google Drive sync ──
+  const gd = await import('../gdrive-sync.js');
+  const { pushPendingAttachments } = await import('../attachments-drive.js');
   const syncCard = el('div', 'mn-card');
   syncCard.appendChild(el('div', 'mn-card-title', 'google drive sync'));
   syncCard.appendChild(el('div', 'mn-note-meta',
-    'cross-device sync via your own Google Drive is coming next. everything stays local until then — use export/import to move data meanwhile.'));
+    'syncs through YOUR Google Drive using your own OAuth client id (drive.file scope — the app can only touch files it creates). data file + attachments folder + rotating history live at your Drive root.'));
+
+  const cidRow = el('div', 'mn-actions');
+  const cidInput = el('input', 'mn-input');
+  cidInput.type = 'text';
+  cidInput.placeholder = 'OAuth client id (…apps.googleusercontent.com)';
+  cidInput.style.flex = '1 1 16rem';
+  cidInput.value = localStorage.getItem('voidstar.mind.gdrive.clientId') || '';
+  cidRow.appendChild(cidInput);
+  cidRow.appendChild(btn('save', '', () => {
+    gd.setClientId(cidInput.value.trim());
+    refresh();
+  }));
+  syncCard.appendChild(cidRow);
+
+  const devRow = el('div', 'mn-actions');
+  const devInput = el('input', 'mn-input');
+  devInput.type = 'text';
+  devInput.placeholder = 'device name (for conflict copies)';
+  devInput.value = gd.getDeviceName();
+  devInput.addEventListener('change', () => gd.setDeviceName(devInput.value.trim()));
+  devRow.appendChild(devInput);
+  syncCard.appendChild(devRow);
+
+  const statusLine = el('div', 'mn-note-meta');
+  const drawStatus = () => {
+    const state = gd.hasClientId()
+      ? (gd.needsReconnect() ? 'configured — reconnect needed' : (gd.isSyncEnabled() ? 'connected' : 'not connected'))
+      : 'no client id set';
+    statusLine.innerHTML = `status: ${state} · last sync: ${gd.formatLastBackup()}`;
+  };
+  drawStatus();
+  syncCard.appendChild(statusLine);
+
+  const actRow = el('div', 'mn-actions');
+  actRow.appendChild(btn('connect &amp; sync now', 'mn-btn-primary', async (e) => {
+    e.target.disabled = true;
+    try {
+      await gd.ensureDriveAccess();
+      const client = await gd.initGdriveSync({ interactive: true });
+      gd.setSyncClient(client);
+      await store.putSnapshot('pre-sync');
+      const res = await gd.pullMergePushCycle(client,
+        () => store.exportAll(), (m) => store.importAll(m), { historyForce: true });
+      await pushPendingAttachments();
+      alert(res.conflicts
+        ? `synced — ${res.conflicts} conflicted cop${res.conflicts === 1 ? 'y' : 'ies'} created (amber badge in the list)`
+        : 'synced.');
+      refresh();
+    } catch (err) {
+      alert(`sync failed: ${err.message}`);
+    } finally { e.target.disabled = false; }
+  }));
+  actRow.appendChild(btn('disconnect', '', () => {
+    gd.disconnect();
+    gd.setSyncClient(null);
+    drawStatus();
+  }));
+  syncCard.appendChild(actRow);
   root.appendChild(syncCard);
 
   const about = el('div', 'mn-note-meta mn-dim');

@@ -469,6 +469,28 @@ const buildStamp = readBuildStamp();
       background: var(--void);
     }
 
+    /* ── Sync pill ── */
+    .mn-sync-pill {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      padding: 0.3rem 0.6rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-dim);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .mn-sync-pill[data-state="synced"] { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+    .mn-sync-pill[data-state="syncing"] { color: var(--cyan); }
+    .mn-sync-pill[data-state="pending"], .mn-sync-pill[data-state="offline"] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
+    .mn-sync-pill[data-state="reconnect"] { color: var(--pink); border-color: color-mix(in srgb, var(--pink) 40%, var(--border)); }
+
+    /* ── Backlinks / link picker ── */
+    .mn-backlinks { margin-bottom: 1rem; }
+    .mn-linklist { display: flex; flex-direction: column; gap: 0.15rem; max-height: 40dvh; overflow-y: auto; }
+    .mn-linkrow { justify-content: flex-start; text-align: left; width: 100%; overflow-wrap: anywhere; white-space: normal; }
+
     /* ── Voice bar ── */
     .mn-voicebar {
       display: flex;

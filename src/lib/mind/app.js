@@ -5,6 +5,11 @@ import * as store from './store.js';
 import { invalidateIndex } from './search.js';
 import { revokeObjectUrls } from './attachments.js';
 import { processPendingOcr } from './ocr.js';
+import {
+  initGdriveSync, isSyncing, setSyncClient, pullMergePushIfStale,
+  debouncedPush, watchConnectivity, hasClientId,
+} from './gdrive-sync.js';
+import { pushPendingAttachments, wireLazyBlobFetch } from './attachments-drive.js';
 import { renderHome } from './views/home.js';
 import { renderEditor } from './views/editor.js';
 import { renderAnnotate } from './views/annotate.js';
@@ -58,13 +63,65 @@ async function route() {
   }
 }
 
+// ── Auto-pull on load and refocus (setlist pattern) ──
+// Opening the app on any device starts from the latest Drive copy — silent
+// only (GIS needs a gesture for a fresh token; an expired one just skips
+// and the settings/pill path reconnects).
+let _focusWatched = false;
+let _lastFocusPull = 0;
+const FOCUS_PULL_MIN_MS = 30_000;
+
+function watchFocusSync() {
+  if (_focusWatched || typeof window === 'undefined') return;
+  _focusWatched = true;
+
+  const onReturn = async () => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    if (!hasClientId() || isSyncing()) return;
+    if (Date.now() - _lastFocusPull < FOCUS_PULL_MIN_MS) return;
+
+    const client = await initGdriveSync({ interactive: false }).catch(() => null);
+    if (!client) return;
+    _lastFocusPull = Date.now();
+    setSyncClient(client);
+    try {
+      const { changed } = await pullMergePushIfStale(
+        client,
+        () => store.exportAll(),
+        (merged) => store.importAll(merged),
+        { snapshotFn: () => store.putSnapshot('pre-sync') },
+      );
+      pushPendingAttachments();
+      if (changed) {
+        invalidateIndex();
+        processPendingOcr();
+        const ae = document.activeElement;
+        const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
+        if (!typing) refresh();
+      }
+    } catch (e) {
+      console.warn('[mind-sync] focus pull:', e.message);
+    }
+  };
+
+  document.addEventListener('visibilitychange', onReturn);
+  window.addEventListener('focus', onReturn);
+  onReturn();
+}
+
 export function initMindApp(root) {
   _root = root;
   window.addEventListener('hashchange', route);
 
-  // Every write invalidates the search index. (P3 adds the debounced Drive
-  // push here, same hook.)
-  store.setOnWrite(() => invalidateIndex());
+  // Every write invalidates the search index and (when Drive is connected)
+  // schedules a debounced merge-push.
+  store.setOnWrite(() => {
+    invalidateIndex();
+    debouncedPush(() => store.exportAll(), (merged) => store.importAll(merged));
+  });
+  wireLazyBlobFetch();
+  watchConnectivity();
+  watchFocusSync();
 
   // Housekeeping: default TODO list, expired-tombstone purge, and the 24h
   // completed-task roll-off (at boot + hourly while the tab lives).

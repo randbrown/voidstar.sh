@@ -425,9 +425,11 @@ export function createAttachment(noteId, { kind, name, mimeType, size }, partial
 
 export const putAttachment = (att) => put(ATTACHMENTS, { ...att, updatedAt: Date.now() });
 export const putAttachmentRaw = (att) => put(ATTACHMENTS, att);
-// Metadata-only tweak (OCR result, drive id) — must not look like a user edit
-// to the merge, but should still ride the next push. Bump nothing.
-export const patchAttachment = (att, patch) => put(ATTACHMENTS, { ...att, ...patch });
+// Metadata enrichment (OCR result, transcript, drive id). Bumps updatedAt so
+// the enriched copy deterministically wins the cross-device merge — and the
+// ATTACHMENT_FILL_FIELDS below make sure a plain-newer copy without the
+// enrichment can never blank it back out.
+export const patchAttachment = (att, patch) => put(ATTACHMENTS, { ...att, ...patch, updatedAt: Date.now() });
 export const getAttachment = (id) => getOne(ATTACHMENTS, id);
 export const getAllAttachmentsRaw = () => getAll(ATTACHMENTS);
 export const getAllAttachments = async () => live(await getAll(ATTACHMENTS));
@@ -499,6 +501,12 @@ export async function restoreSnapshot(ts) {
 // device copies merge. `body` is deliberately EXCLUDED: concurrent body edits
 // are resolved by the sync layer as conflict copies, never by field-filling.
 export const NOTE_FILL_FIELDS = ['tags', 'meta', 'sourceDevice', 'folderId'];
+// Attachment fields carrying expensive derived content (OCR, transcripts) or
+// upload state — a copy that lacks them must never erase them in a merge.
+export const ATTACHMENT_FILL_FIELDS = [
+  'ocrText', 'transcript', 'transcriptSource', 'driveFileId',
+  'width', 'height', 'durationSec', 'name',
+];
 
 function isEmptyValue(v) {
   if (v == null || v === '' || v === 0) return true;
@@ -580,7 +588,7 @@ export async function importAll(data) {
   if (data.folders) for (const f of data.folders) await put(FOLDERS, mergeRecord(await getOne(FOLDERS, f.id), f));
   if (data.tasks) for (const t of data.tasks) await put(TASKS, mergeRecord(await getOne(TASKS, t.id), t));
   if (data.tasklists) for (const tl of data.tasklists) await put(TASKLISTS, mergeRecord(await getOne(TASKLISTS, tl.id), tl));
-  if (data.attachments) for (const a of data.attachments) await put(ATTACHMENTS, mergeRecord(await getOne(ATTACHMENTS, a.id), a));
+  if (data.attachments) for (const a of data.attachments) await put(ATTACHMENTS, mergeRecord(await getOne(ATTACHMENTS, a.id), a, ATTACHMENT_FILL_FIELDS));
   if (data.annotations) for (const an of data.annotations) await put(ANNOTATIONS, mergeRecord(await getOne(ANNOTATIONS, an.key), an));
   if (data.settings) applySettingsRaw(data.settings);
 }

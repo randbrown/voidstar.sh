@@ -95,9 +95,15 @@ export async function addAttachmentFromBlob(noteId, blob, name = '') {
 // wholesale on route change so long sessions don't leak every image viewed.
 const _urlCache = new Map();
 
+// Fallback fetch for blobs not on this device (wired by attachments-drive.js
+// to lazy-download from Drive) — injected to avoid a circular import.
+let _blobFetcher = null;
+export function setBlobFetcher(fn) { _blobFetcher = fn; }
+
 export async function getObjectUrl(attachmentId) {
   if (_urlCache.has(attachmentId)) return _urlCache.get(attachmentId);
-  const blob = await store.getBlob(attachmentId);
+  let blob = await store.getBlob(attachmentId);
+  if (!blob && _blobFetcher) blob = await _blobFetcher(attachmentId);
   if (!blob) return null;
   const url = URL.createObjectURL(blob);
   _urlCache.set(attachmentId, url);
