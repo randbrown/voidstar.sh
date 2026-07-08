@@ -103,7 +103,16 @@ is discoverable in the UI (a pill with a live meter) and targetable from Strudel
 **Three.js ownership:** the `WebGLRenderer` is created once per canvas by core and **shared** across
 all `three` quales — quales must not dispose it (see `three-host.js`). This fixed a real
 lost-context bug. WebGL2 contexts are created with `preserveDrawingBuffer: true` so the overlay's
-post-FX (ASCII/mosh/edge) can read pixels back from any fx.
+post-FX (ASCII/mosh/edge/stitch) can read pixels back from any fx.
+
+**Overlay post passes** (`overlay.js` + `post-mosh.js` / `post-stitch.js`): four mutually-exclusive
+full-frame glitches over the active fx — ASCII, data-mosh, edge-detect, stitch. Data-mosh is a real
+motion-vector melt (WebGL2, offscreen ≤960px sim): per-macroblock motion estimation between
+consecutive frames advects a persistent buffer (I-frame-removal emulation), still regions heal,
+a `cycle` timer lands periodic clean keyframes, beats fire block-teleport bursts + rainbow residue;
+falls back to a Canvas2D smear without WebGL2. Stitch is a palette-quantized tile mosaic (tatreez /
+theme / mono palettes) with a cross-stitch texture, pose-bbox cell subdivision, and beat-spawned
+word pills from a user-editable list.
 
 **Cam walk** (`cam-walk.js`) is a top-level virtual-camera drift over the whole scene stack (Hydra +
 fx canvas + transition freeze-frame + overlay — never the camera panel or UI): random pan (up to
@@ -113,7 +122,7 @@ round-robin (sometimes two); the very hardest kicks (the shared hard-kick detect
 three with a zoom punch, and an idle fallback keeps it wandering without audio. Applied as a
 compositor-only CSS transform (zero pixel cost) with an auto cover-zoom computed from the actual
 angle/offset so edges never show. Per-layer scope toggles choose whether Hydra, the pose overlays,
-and the glitch post ride the walk or stay screen-pinned (the ascii/mosh/edge passes render to their
+and the glitch post ride the walk or stay screen-pinned (the ascii/mosh/edge/stitch passes render to their
 own `postCanvas` under the pose canvas — display:none when idle — precisely so they can be scoped
 independently; a pinned post re-reads the raw fx buffer, so an active full-frame glitch hides the
 walk — a deliberate "fixed HUD" look). The recorder composite mirrors the same matrix and scoping
