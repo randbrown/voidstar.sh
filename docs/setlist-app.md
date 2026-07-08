@@ -228,6 +228,42 @@ link). After a pass finishes, the library list re-pulls in place
 (`onSongsChanged`) so new keys/artists/badges show without wiping the pass's
 status line.
 
+## Importing a pasted setlist (`import.js`)
+
+The setlist-edit page's "Import Songs" textarea accepts freeform text-message
+setlists. `parseTextList(text, {defaultArtist})` is deliberately **local and
+rule-based** — no model call, works offline, deterministic:
+
+- **Header lines.** The first one or two non-empty lines become setlist
+  metadata instead of songs when they carry a positive signal: a date in any
+  common shape (`6/14`, `12/31/26`, `2026-06-14`, `June 14`), a venue-ish
+  word (bar/hall/brewery/…, or `setlist`/`gig`/`show`/`live at`), or an `@`
+  ("nightjar @ the odditorium"). Two weaker corroborations also promote a
+  signal-less first line: a blank line setting it off from the songs, or a
+  date-dominant second line (`Moose Lodge` ⏎ `June 14`). A first line with
+  none of that is just a song, so a bare song list loses nothing. Parsed
+  metadata **fills empty setlist fields only** (venue ← header name when no
+  separate venue was found, gigDate) and the import alert reports what was
+  applied.
+- **Track numbers** are stripped only when the paste is *mostly* a numbered
+  list (≥ 60% of lines, min 2) — per-line stripping used to eat the 9 off an
+  unnumbered "9 To 5".
+- **Per-song artist/cover**: `Title (Artist cover)`, `(cover of Artist)`,
+  `(by Artist)`, a bare 1–4-word parenthetical that isn't a performance note
+  (`(acoustic)`, `(x2)`, `(capo 2)`… stay in the title), or a spaced-dash
+  `Title - Artist`. A bare `(cover)` marks the song a cover with no artist.
+- **Default artist** (input above the textarea, remembered in
+  `voidstar.setlist.importArtist`): applied to every song with no explicit
+  artist that isn't marked as a cover — pasting an originals set means typing
+  the band name once. Existing library songs get it fill-empty only.
+- The trailing single capital letter is still the **vocalist code**
+  (per-setlist override), parsed before artist extraction.
+
+Next to the import button, **"set artist on all songs…"** bulk-fills an
+artist across every song already in the setlist — fill-empty like every
+other bulk pass (songs that have an artist are skipped and counted in the
+report).
+
 ## Backup/Restore vs. Sync — these are different features
 
 This codebase intentionally keeps two similarly-named ideas separate:
