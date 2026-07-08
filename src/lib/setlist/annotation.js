@@ -26,7 +26,21 @@ async function saveAnnotation(songId, strokes, aspect) {
 // the chosen size.
 const ANN_TEXT_FONT = "'JetBrains Mono', ui-monospace, monospace";
 function annTextFontPx(stroke, canvas) {
-  return (stroke.size * canvas.width) / 200; // size 4 ("Medium") ≈ 2% of width
+  return (stroke.size * canvas.width) / 200; // stored size in width/200 units
+}
+
+// The Fine/Medium/Thick select doubles as pen width and text size, but a
+// 4-unit pen line and a 4-unit font live at very different scales: as a font,
+// "Medium" rendered ≈2% of chart width — dwarfed by the chart's own
+// 3.4%-of-width body type and illegible on a phone. New text strokes map the
+// shared widths up so Medium lands ≈7% of width (twice the chart body text —
+// the band hand-written stage notes actually occupy), Fine sits near body
+// size, and Thick matches a big scrawled key-change callout. The mapped value
+// is stored per stroke, so text authored before this mapping keeps the size
+// it was drawn at.
+const TEXT_SIZE_BY_WIDTH = { 2: 8, 4: 14, 8: 22 };
+function textSizeForWidth(w) {
+  return TEXT_SIZE_BY_WIDTH[w] || Math.round(w * 3.5);
 }
 
 export function drawStrokeOnCanvas(ctx, canvas, stroke) {
@@ -109,15 +123,18 @@ export function renderReadonlyAnnotations(canvas, strokes) {
   return { redraw, destroy: () => ro.disconnect() };
 }
 
-export function initAnnotationCanvas(canvas, songId, toolbar) {
+export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = false } = {}) {
   const ctx = canvas.getContext('2d');
   const ac = new AbortController();
   const { signal } = ac;
   let strokes = [];
   let currentStroke = null;
   let tool = 'pen';
-  let color = '#ff5e7e';
-  let lineWidth = 4;
+  // The toolbar's controls are the source of truth for the starting color
+  // and size — scratch-chart mode presets a dark paper ink there, and this
+  // keeps the drawn stroke honest to what the pickers show.
+  let color = toolbar.querySelector('.sl-ann-color')?.value || '#ff5e7e';
+  let lineWidth = parseInt(toolbar.querySelector('.sl-ann-size')?.value) || 4;
   let undoStack = [];
   let selectedIndex = -1;
   let selDrag = null;
@@ -374,7 +391,9 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
         const d0 = Math.hypot(selDrag.startPos.x * canvas.width - ax, selDrag.startPos.y * canvas.height - ay);
         const d1 = Math.hypot(pos.x * canvas.width - ax, pos.y * canvas.height - ay);
         if (d0 > 4) {
-          strokes[selectedIndex].size = Math.min(32, Math.max(1, selDrag.orig.size * (d1 / d0)));
+          // Cap at 24% of chart width — room for a huge scrawled key change
+          // (the mapped "Thick" is 11%) without an accidental screen-filler.
+          strokes[selectedIndex].size = Math.min(48, Math.max(1, selDrag.orig.size * (d1 / d0)));
           selDrag.moved = true;
           redraw();
           updateSelMenu();
@@ -432,7 +451,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
       setTimeout(() => {
         const text = prompt('Annotation text:');
         if (!text) return;
-        strokes.push({ type: 'text', text, x: at.x, y: at.y, color, size: lineWidth });
+        strokes.push({ type: 'text', text, x: at.x, y: at.y, color, size: textSizeForWidth(lineWidth) });
         undoStack = [];
         redraw();
       }, 0);
@@ -516,7 +535,12 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
   if (sizeSelect) sizeSelect.addEventListener('change', (e) => {
     lineWidth = parseInt(e.target.value);
     if (tool === 'select' && selectedIndex >= 0) {
-      strokes[selectedIndex].size = lineWidth;
+      // Text sizes live on the mapped-up scale (see textSizeForWidth) —
+      // assigning the raw pen width here would shrink a selected text
+      // stroke back to the old illegible default.
+      strokes[selectedIndex].size = strokes[selectedIndex].type === 'text'
+        ? textSizeForWidth(lineWidth)
+        : lineWidth;
       undoStack = [];
       redraw();
       updateSelMenu();
@@ -606,7 +630,12 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     }
   }, { signal });
 
-  loadAnnotation(songId).then(data => {
+  // startBlank: an explicit from-scratch chart over a song that already has
+  // chart-aligned annotations begins empty — loading them onto the blank
+  // page would show fragments normalized against a different box shape.
+  // (Saving still writes this song's single annotation record; the caller
+  // confirms that overwrite before routing here.)
+  if (!startBlank) loadAnnotation(songId).then(data => {
     if (data?.strokes) {
       strokes = data.strokes;
       redraw();
@@ -626,5 +655,41 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     redraw,
     destroy() { ac.abort(); ro.disconnect(); cancelLongPress(); selMenu.remove(); },
     getStrokes() { return strokes; },
+    // Rescale every stroke's normalized y by `f`. Used when the scratch
+    // page grows taller ("+ page"): y is normalized to box height, so a
+    // taller box would stretch existing ink downward unless y compresses
+    // by oldHeight/newHeight. x (and text size, which is width-relative)
+    // are untouched — width doesn't change.
+    scaleStrokeYs(f) {
+      clearSelection();
+      for (const s of strokes) {
+        if (s.type === 'text') s.y *= f;
+        else if (s.points) for (const p of s.points) p.y *= f;
+      }
+      undoStack = []; // popped strokes would carry the old normalization
+      redraw();
+    },
   };
+}
+
+// Render strokes onto an offscreen paper page and return a PNG Blob — the
+// scratch-chart export. WYSIWYG with the authoring surface: same paper
+// color, same stroke math. Text sizes are width-relative and follow the
+// export width on their own; pen/highlighter/arrow widths are absolute
+// canvas pixels, so they scale by exportWidth/sourceWidth to keep the
+// authored ink weight.
+export function renderStrokesToPngBlob(strokes, { aspect, sourceWidth, width = 1700, background = '#f4f1e8' }) {
+  const c = document.createElement('canvas');
+  c.width = width;
+  c.height = Math.max(1, Math.round(width / (aspect || 8.5 / 11)));
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, c.width, c.height);
+  const k = sourceWidth ? width / sourceWidth : 1;
+  for (const s of strokes) {
+    drawStrokeOnCanvas(ctx, c, s.type === 'text' ? s : { ...s, size: s.size * k });
+  }
+  return new Promise((resolve, reject) => {
+    c.toBlob(b => (b ? resolve(b) : reject(new Error('PNG export failed'))), 'image/png');
+  });
 }

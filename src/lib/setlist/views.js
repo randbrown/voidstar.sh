@@ -9,9 +9,9 @@ import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBa
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, ensureDriveAccess, trashChartDoc, archiveChartDoc } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
-import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations } from './annotation.js';
+import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError } from './spotify-auth.js';
@@ -1486,6 +1486,25 @@ async function renderInlineChart(container, song, songId) {
   }
 }
 
+// Scratch-chart WIP preview for the song page: a chartless song with saved
+// ink still shows what's been drawn (paper page + read-only strokes), so a
+// hand-drawn chart in progress isn't invisible outside the editor.
+async function renderInlineScratch(container, songId) {
+  const data = await loadAnnotation(songId);
+  if (!data?.strokes?.length) return;
+  const wrap = el('div', 'sl-focus-chart');
+  const stage = el('div', 'sl-annotation-stage sl-scratch-stage');
+  stage.style.aspectRatio = String(data.aspect || SCRATCH_PAGE_ASPECT);
+  const canvas = document.createElement('canvas');
+  canvas.className = 'sl-annotation-canvas';
+  canvas.style.pointerEvents = 'none';
+  stage.appendChild(canvas);
+  wrap.appendChild(stage);
+  container.appendChild(wrap);
+  const ctrl = renderReadonlyAnnotations(canvas, data.strokes);
+  window.addEventListener('hashchange', () => ctrl.destroy(), { once: true });
+}
+
 // The setlist's reference-playlist tracks, ranked by title match, for
 // relinking a song's Spotify URL to the RIGHT track (auto-matching can land
 // on a same-titled cover/karaoke cut). Filter box for long playlists; "open"
@@ -1857,6 +1876,18 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     cacheBtn.title = 'Download this chart into the offline cache so perform mode works with no signal';
     actionBar.appendChild(cacheBtn);
+
+    // From-scratch redo even though a doc is linked: a blank paper page in
+    // the annotation editor. Warn first — the song has ONE annotation layer,
+    // so saving scratch ink replaces the current chart's annotations.
+    const scratchBtn = btn('scratch chart', 'sl-btn-ghost sl-btn-sm', async () => {
+      const existing = await loadAnnotation(songId);
+      if (existing?.strokes?.length &&
+          !confirm('Draw a new chart from a blank page?\n\nThe song keeps its current chart doc until you export and link the new one — but saving the scratch page replaces the annotations drawn on the current chart.')) return;
+      navigate(`#song/${songId}/${setlistId || '_'}/annotate/scratch`);
+    });
+    scratchBtn.title = 'Draw a brand-new chart on a blank page, then export it to Drive';
+    actionBar.appendChild(scratchBtn);
   } else {
     // Chart-fallback ladder: tiers 1+2 search personal + community Drive
     // folders, tier 3 scours the web for shared chart files (all via
@@ -1924,6 +1955,15 @@ export async function renderSongFocus(root, songId, setlistId) {
       }
     });
     actionBar.appendChild(createBtn);
+
+    // Tier 5, by hand: originals (or anything research can't find) get a
+    // blank paper page in the annotation editor — draw/type the chart, then
+    // "make doc" exports it to Drive and links it here.
+    const drawBtn = btn('draw chart', 'sl-btn-ghost sl-btn-sm', () => {
+      navigate(`#song/${songId}/${setlistId || '_'}/annotate`);
+    });
+    drawBtn.title = 'Draw or type the chart yourself on a blank page — export it to Drive when ready';
+    actionBar.appendChild(drawBtn);
   }
   // "fetch info" — one button for song metadata + lyrics: /meta/song on the
   // worker (Spotify audio-features / Deezer BPM / iTunes artist·genre·year·
@@ -2071,6 +2111,8 @@ export async function renderSongFocus(root, songId, setlistId) {
 
   // Inline chart with annotations — the old read-only chart page, folded in.
   if (song.chartUrl) await renderInlineChart(root, song, songId);
+  // No chart, but scratch ink saved: show the drawn page.
+  else await renderInlineScratch(root, songId);
 
   // Spotify embed + timecode tracker
   let currentTimecode = 0;
@@ -3194,11 +3236,25 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 // remaining job is full-screen editing: routed with {draw:true} it opens
 // straight in draw mode and "done" saves + returns to the song page. Without
 // the option it still behaves as the old read-only chart page.
+//
+// Scratch mode (no chart linked, or routed .../annotate/scratch): instead of
+// a chart the stage is a blank paper page — draw/type the chart itself, then
+// "make doc" renders it to a PNG in Drive's charts folder and offers to link
+// it as the song's chart (clearing the ink, which now lives in the doc).
 
-export async function renderAnnotation(root, songId, setlistId, { draw = false } = {}) {
+// US-letter portrait; the scratch page is destined for a printable doc.
+const SCRATCH_PAGE_ASPECT = 8.5 / 11;
+
+export async function renderAnnotation(root, songId, setlistId, { draw = false, scratch = false } = {}) {
   const song = await store.getSong(songId);
   if (!song) { root.appendChild(emptyState('Song not found.')); return; }
-  if (!song.chartUrl) { root.appendChild(emptyState('No chart linked to this song.')); return; }
+  // No linked chart = scratch mode implicitly: the editor is how a chartless
+  // (e.g. original) song gets a chart drawn from nothing.
+  const isScratch = scratch || !song.chartUrl;
+  // An explicit scratch redo over a linked chart starts with a blank page —
+  // the song-page button confirms first, since saving replaces that chart's
+  // annotations (one annotation layer per song).
+  const startBlank = scratch && !!song.chartUrl;
 
   root.classList.add('sl-perform');
   const container = el('div', 'sl-annotation-container');
@@ -3213,7 +3269,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
   // View controls (visible in read-only mode)
   const viewControls = el('div', 'sl-ann-controls');
   viewControls.style.cssText = 'display:flex;align-items:center;gap:0.35rem;flex:1;justify-content:flex-end';
-  viewControls.appendChild(btn('edit chart', 'sl-btn-ghost sl-btn-sm', () => {
+  if (song.chartUrl) viewControls.appendChild(btn('edit chart', 'sl-btn-ghost sl-btn-sm', () => {
     window.open(song.chartUrl, '_blank');
   }));
   viewControls.appendChild(btn('annotate', 'sl-btn-sm sl-btn-primary', () => enterAnnotateMode()));
@@ -3243,6 +3299,22 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
     <button class="sl-btn sl-btn-sm sl-btn-ghost" id="sl-ann-clear" title="Clear all">Clear</button>
     <button class="sl-btn sl-btn-sm sl-btn-primary" id="sl-ann-save">Save</button>
   `;
+  // Scratch-only controls: grow the page, and export the drawing as a real
+  // chart doc. Created before doneBtn so "done" stays last in the row.
+  let addPageBtn = null;
+  let makeDocBtn = null;
+  if (isScratch) {
+    // On paper, dark ink is the chart itself — not markup — so it's the
+    // sane default (initAnnotationCanvas reads its start color from here).
+    const colorInput = drawControls.querySelector('.sl-ann-color');
+    if (colorInput) colorInput.value = '#16181f';
+    addPageBtn = btn('+ page', 'sl-btn-ghost sl-btn-sm', () => addScratchPage());
+    addPageBtn.title = 'Extend the page — existing ink keeps its place and size';
+    makeDocBtn = btn('make doc', 'sl-btn-accent sl-btn-sm', () => makeDocFromScratch());
+    makeDocBtn.title = 'Render this page to a chart image in your Drive charts folder';
+    drawControls.appendChild(addPageBtn);
+    drawControls.appendChild(makeDocBtn);
+  }
   const doneBtn = btn('done', 'sl-btn-ghost sl-btn-sm', () => exitAnnotateMode());
   drawControls.appendChild(doneBtn);
   toolbar.appendChild(drawControls);
@@ -3259,30 +3331,36 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
   // width-driven aspect ratio (as perform mode does) makes the box stable
   // regardless of toolbar height.
   const stage = el('div', 'sl-annotation-stage');
-  // The editor follows the regular views' appearance preference.
-  applyChartAppearance(stage, 'detail');
-
-  // Offline-cached chart first (flat — text for docs, image otherwise — which
-  // scrolls with the canvas and stays aligned); live text export for docs,
-  // then embed/plain image as last resorts.
-  const cached = await getOfflineChart(songId, song.chartUrl);
-  if (cached?.kind === 'text') {
-    stage.appendChild(mountTextChart(stage, cached.text));
-  } else if (cached) {
-    // Same auto-leveled rendering as the song page — annotating a faint scan
-    // is exactly when readability matters most. (Toggle lives on the song
-    // page; the editor just follows the preference.)
-    const url = await chartDisplayUrl(cached);
-    const img = document.createElement('img');
-    img.src = url;
-    img.className = 'sl-annotation-img';
-    lockAspectToImage(img, stage);
-    stage.appendChild(img);
-    window.addEventListener('hashchange', () => URL.revokeObjectURL(url), { once: true });
+  if (isScratch) {
+    // Blank paper page — no chart to mount, no appearance inversion: the
+    // stage is WYSIWYG with the PNG the export renders.
+    stage.classList.add('sl-scratch-stage');
   } else {
-    const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
-    if (liveText) stage.appendChild(mountTextChart(stage, liveText));
-    else mountRemoteChartInto(stage, song);
+    // The editor follows the regular views' appearance preference.
+    applyChartAppearance(stage, 'detail');
+
+    // Offline-cached chart first (flat — text for docs, image otherwise —
+    // which scrolls with the canvas and stays aligned); live text export for
+    // docs, then embed/plain image as last resorts.
+    const cached = await getOfflineChart(songId, song.chartUrl);
+    if (cached?.kind === 'text') {
+      stage.appendChild(mountTextChart(stage, cached.text));
+    } else if (cached) {
+      // Same auto-leveled rendering as the song page — annotating a faint
+      // scan is exactly when readability matters most. (Toggle lives on the
+      // song page; the editor just follows the preference.)
+      const url = await chartDisplayUrl(cached);
+      const img = document.createElement('img');
+      img.src = url;
+      img.className = 'sl-annotation-img';
+      lockAspectToImage(img, stage);
+      stage.appendChild(img);
+      window.addEventListener('hashchange', () => URL.revokeObjectURL(url), { once: true });
+    } else {
+      const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
+      if (liveText) stage.appendChild(mountTextChart(stage, liveText));
+      else mountRemoteChartInto(stage, song);
+    }
   }
 
   const canvas = document.createElement('canvas');
@@ -3295,9 +3373,22 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
 
   let readonlyCtrl = null;
   let canvasCtrl = null;
+  // Live page shape of the scratch stage; "+ page" derives the page count
+  // from it, so a saved multi-page scratch resumes correctly.
+  let scratchAspect = SCRATCH_PAGE_ASPECT;
+  if (isScratch) stage.style.aspectRatio = String(scratchAspect);
 
   requestAnimationFrame(async () => {
     const data = await loadAnnotation(songId);
+    if (isScratch) {
+      // Resume the saved page shape (e.g. a multi-page scratch WIP) — except
+      // for an explicit blank redo, which ignores the old chart's record.
+      if (!startBlank && data?.aspect) {
+        scratchAspect = data.aspect;
+        stage.style.aspectRatio = String(scratchAspect);
+      }
+      return;
+    }
     // The chart image's natural aspect (set by lockAspectToImage) is the source
     // of truth for the box shape. Only fall back to the authoring/viewport
     // aspect if the image hasn't provided one (iframe chart, or pre-load).
@@ -3321,8 +3412,68 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false }
     canvas.style.pointerEvents = '';
     canvas.style.cursor = 'crosshair';
     if (readonlyCtrl) { readonlyCtrl.destroy(); readonlyCtrl = null; }
-    canvasCtrl = initAnnotationCanvas(canvas, songId, drawControls);
+    canvasCtrl = initAnnotationCanvas(canvas, songId, drawControls, { startBlank });
     showAnnotateScrollHint();
+  }
+
+  // Extend the scratch page by one letter-page of height. Existing ink keeps
+  // its on-page position and size: y is normalized to box height, so it
+  // compresses by oldHeight/newHeight as the box grows.
+  function addScratchPage() {
+    const pages = Math.max(1, Math.round(SCRATCH_PAGE_ASPECT / scratchAspect));
+    const newAspect = SCRATCH_PAGE_ASPECT / (pages + 1);
+    canvasCtrl?.scaleStrokeYs(newAspect / scratchAspect);
+    scratchAspect = newAspect;
+    stage.style.aspectRatio = String(newAspect);
+  }
+
+  // Render the scratch page to a PNG chart in Drive, then let the user pick:
+  // link it as the song's chart (clearing the in-app ink — it's printed into
+  // the doc now) or keep it as an export with the drawing still editable.
+  async function makeDocFromScratch() {
+    const strokes = canvasCtrl?.getStrokes() || [];
+    if (!strokes.length) { alert('Nothing drawn yet — the page is empty.'); return; }
+    makeDocBtn.disabled = true;
+    makeDocBtn.textContent = 'connecting drive...';
+    const reset = () => {
+      makeDocBtn.textContent = 'make doc';
+      makeDocBtn.disabled = false;
+    };
+    try {
+      // OAuth consent must fire NOW, inside the tap gesture — the popup is
+      // blocked once rendering/uploading pushes us out of the gesture window.
+      await ensureDriveAccess();
+      // Persist the ink before anything slow or fallible: the drawing must
+      // survive a failed upload or a killed tab either way.
+      drawControls.querySelector('#sl-ann-save')?.click();
+      makeDocBtn.textContent = 'rendering page...';
+      const blob = await renderStrokesToPngBlob(strokes, {
+        aspect: canvas.height ? canvas.width / canvas.height : scratchAspect,
+        sourceWidth: canvas.width,
+      });
+      makeDocBtn.textContent = 'uploading...';
+      const webViewLink = await createChartImageFile(song, blob);
+      const setPrimary = confirm(
+        "Chart doc created in Drive.\n\nOK — set it as this song's chart and clear the in-app drawing (it's printed into the doc now)\nCancel — keep it as a Drive export only; the drawing stays editable here"
+      );
+      if (setPrimary) {
+        song.chartUrl = webViewLink;
+        await store.putSong(song);
+        // The PNG bytes are already in hand — prime the offline cache
+        // directly instead of a worker round-trip.
+        await store.putChartBlob(songId, blob, webViewLink);
+        await store.deleteAnnotation(songId);
+        if (canvasCtrl) { canvasCtrl.destroy(); canvasCtrl = null; }
+        showLinkToast('chart linked to this song', webViewLink);
+        navigate(backHash);
+        return;
+      }
+      showLinkToast('chart exported to Drive', webViewLink);
+      reset();
+    } catch (e) {
+      alert(`make doc failed: ${e.message}`);
+      reset();
+    }
   }
 
   async function exitAnnotateMode() {

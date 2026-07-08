@@ -7,10 +7,13 @@ state library.
 
 - Entry point: `src/pages/lab/setlist.astro`
 - Hash-based router: `src/lib/setlist/app.js` (`#home`, `#library`,
-  `#settings`, `#setlist/:id[/edit]`, `#song/:id[/:setlistId][/chart|/annotate]`,
+  `#settings`, `#setlist/:id[/edit]`,
+  `#song/:id[/:setlistId][/chart|/annotate[/scratch]]`,
   `#perform/:id/:songId`). The song page renders the chart (with read-only
   annotations) inline; `/annotate` opens the full-screen annotation editor
-  straight in draw mode, and `/chart` is a legacy alias for the song page.
+  straight in draw mode (a blank scratch page when no chart is linked —
+  `/annotate/scratch` forces that even with one), and `/chart` is a legacy
+  alias for the song page.
 - Views are built with small DOM-builder helpers (`el()`/`btn()`) in
   `src/lib/setlist/views.js` — no JSX/templates.
 
@@ -491,6 +494,31 @@ Tiers 1–3 are available per-song via `searchChartForSong()` in `sync.js`
 `{found, tier, candidates, providerDown}`); tiers 1+2 also run in the bulk
 "auto-link now" action in the library tools panel.
 
+**Tier 5, by hand — scratch charts.** For originals (or anything research
+can't find), "draw chart" on a chartless song opens the annotation editor
+in **scratch mode**: instead of a chart, the stage is a blank paper page
+(`.sl-scratch-stage`, US-letter aspect, dark default ink) drawn/typed with
+the normal annotation tools. A chartless song's `/annotate` route enters
+scratch mode implicitly; `/annotate/scratch` forces it even with a doc
+linked ("scratch chart" on the song page — confirmed first, since a song
+has ONE annotation layer and saving the scratch page replaces the linked
+chart's annotations). "+ page" grows the page a letter-height at a time
+(existing ink's normalized `y` is rescaled by oldHeight/newHeight so
+nothing stretches). "make doc" renders the page to a PNG
+(`renderStrokesToPngBlob` in `annotation.js` — WYSIWYG paper background;
+text sizes are width-relative and follow the export width by themselves,
+pen/arrow widths scale by exportWidth/authoringWidth), uploads it into the
+same "voidstar charts" folder (`createChartImageFile`, link-shared like
+`createChartDoc`), then offers: **link it as the song's chart and clear
+the ink** (the PNG blob also primes the offline cache directly, and the
+song's annotation record is deleted — the drawing now lives in the doc,
+which rides the normal scanned-image pipeline and can be annotated afresh
+on top), or **keep it as a Drive export** with the drawing still editable.
+Deliberately a PNG, not a Docs conversion: the content is ink. A scratch
+WIP that hasn't been exported yet still shows on the song page via
+`renderInlineScratch` (read-only paper preview); perform mode only shows
+charts, so exporting+linking is what makes a scratch chart stage-ready.
+
 **Diagnosability:** every "found nothing" path says why instead of failing
 silently — a bot-blocked keyless search engine surfaces as `providerDown`
 ("web search blocked — add search key" on the button; fix by setting
@@ -528,14 +556,19 @@ Requesting an unshipped weight would synthesize differently per OS, change
 line wrapping, and move annotations between devices.
 
 The same rule governs **text annotations** (`annotation.js`): the canvas
-font is a pinned stack sized relative to `canvas.width` (`size 4` ≈ 2% of
-the box width), because stroke coordinates are normalized to that box — a
-fixed pixel size would give the text a different normalized footprint on
-every device. (Also: `var(--font-mono)` is invalid inside a canvas font
-string and gets silently ignored — that once left all text annotations at
-the canvas default 10px sans-serif, immune to the size picker.) Selected
-text elements get a bottom-right corner handle for continuous drag-resize;
-`stroke.size` stays the single source of scale and may be fractional.
+font is a pinned stack sized relative to `canvas.width` (a stroke's `size`
+is in width/200 units), because stroke coordinates are normalized to that
+box — a fixed pixel size would give the text a different normalized
+footprint on every device. New text strokes map the shared Fine/Medium/Thick
+pen widths up through `textSizeForWidth` (2/4/8 → 8/14/22, i.e. 4%/7%/11%
+of chart width): as raw pen widths the font came out ≈2% of width,
+illegible next to the chart's own 3.4%-of-width body type. The mapped value
+is stored per stroke, so pre-mapping annotations render at their authored
+size. (Also: `var(--font-mono)` is invalid inside a canvas font string and
+gets silently ignored — that once left all text annotations at the canvas
+default 10px sans-serif, immune to the size picker.) Selected text elements
+get a bottom-right corner handle for continuous drag-resize; `stroke.size`
+stays the single source of scale and may be fractional.
 
 ## Chart rendering on the song page (and how "appearance" works)
 

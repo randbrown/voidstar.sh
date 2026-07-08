@@ -439,6 +439,47 @@ export async function createChartDoc(song, content = '') {
   return file.webViewLink;
 }
 
+// PNG sibling of createChartDoc, for scratch-drawn charts: uploads the
+// rendered page image into the same "voidstar charts" folder and returns
+// its webViewLink. Deliberately an image, not a Docs conversion — the
+// content is ink, and a Drive image rides the exact pipeline scanned
+// charts already use (thumbnail render, offline cache, enhance, invert,
+// and fresh annotations on top).
+export async function createChartImageFile(song, blob) {
+  const token = await getAccessToken({ interactive: true });
+  if (!token) throw new Error('Google Drive not connected. Set a Client ID and connect in Settings.');
+
+  const folderId = await findOrCreateChartsFolder(token);
+  const base = song.artist ? `${song.title} - ${song.artist}` : song.title;
+  const name = `${base} (chart).png`;
+  const metadata = { name, parents: [folderId] };
+
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  // Name the media part — a bare Blob uploads as filename="blob" (see
+  // createChartDoc) and Drive can surface that as the file's name.
+  form.append('file', blob, name);
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Drive image upload failed: ${res.status}`);
+  const file = await res.json();
+
+  // Link-share like createChartDoc: the worker's thumbnail/caching paths
+  // need it. Non-fatal — the owner's signed-in view still works without.
+  try {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}/permissions`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'reader', type: 'anyone' }),
+    });
+  } catch {}
+
+  return file.webViewLink;
+}
+
 // ── Drive version history ──
 // Same drive.file scope + same folder pattern as the charts folder above.
 

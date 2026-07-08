@@ -1169,6 +1169,14 @@ const buildStamp = readBuildStamp();
       height: 100%;
       cursor: crosshair;
     }
+    /* Scratch chart: a blank paper page for drawing a chart from nothing
+       (no doc linked, or an explicit from-scratch redo). Kept WYSIWYG with
+       the PNG the "make doc" export renders — same paper color, and no
+       chart-appearance inversion ever applies to it. */
+    .sl-scratch-stage {
+      background: #f4f1e8;
+      border: 1px solid var(--border);
+    }
     .sl-ann-selmenu {
       position: absolute;
       z-index: 5;
