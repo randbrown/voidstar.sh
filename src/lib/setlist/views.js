@@ -2671,16 +2671,20 @@ export async function renderSettings(root) {
   ));
 
   // Spotify user login (PKCE) — playlist reads run as the signed-in user.
-  // Needed when the worker reports "playlist not readable with client
-  // credentials" (newer Spotify app registrations), and for private or
-  // collaborative playlists, which client credentials can never see.
+  // Since Spotify's Feb 2026 API change this is the ONLY way a development-
+  // mode app can read playlist contents at all (client credentials get
+  // metadata only), and even a user token is owner-only: Spotify returns a
+  // playlist's items just to an account that owns or collaborates on it.
   const spotifyAuthSection = el('div', 'sl-section');
   spotifyAuthSection.innerHTML = `
     <div class="sl-section-title">spotify account</div>
     <div class="sl-hint" style="margin-bottom:0.5rem">
-      Connect your Spotify account so playlist reads run as you — the fix when
-      auto-link/relink says "playlist not readable with client credentials",
-      and the only way to read private or collaborative playlists. Uses the
+      Connect your Spotify account so playlist reads run as you — since
+      Spotify's Feb 2026 API change this is the only way the app can read
+      playlist contents, and it only works for playlists your account owns
+      or collaborates on (public/private no longer matters; for a
+      bandmate's playlist, ask them for a collaborator invite or copy the
+      tracks into a playlist you own). Uses the
       same client id as the worker; no secret is involved. One-time setup: in
       the Spotify developer dashboard (developer.spotify.com → your app →
       Settings → Redirect URIs) add exactly:

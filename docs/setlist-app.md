@@ -423,10 +423,21 @@ loss. `renderSpotifyPicker` (`views.js`) ranks rows by title match score,
 has a filter input, caps rendering at 100 rows, and writes titles via
 `textContent` (playlist data is untrusted).
 
-**Playlist reads prefer the user's own Spotify session.** The worker's
-client-credentials token gets `403 Forbidden` on playlist reads for newer
-Spotify app registrations (observed in prod), and could never see
-private/collaborative playlists. `src/lib/setlist/spotify-auth.js`
+**Playlist reads prefer the user's own Spotify session — since Spotify's
+February 2026 Web API migration, it's the only path that works.** That
+migration (enforced 2026-03-09 for existing apps) renamed the
+playlist-contents endpoint `GET /v1/playlists/{id}/tracks` →
+`…/items` (the old path 403s for every development-mode app, no matter the
+token type or the playlist being public), renamed each element's `track`
+field to `item`, and made contents **owner-only**: Spotify returns a
+playlist's items only to a user token whose account owns or collaborates
+on the playlist — a client-credentials token (no user) gets metadata with
+no items at all. Both `fetchPlaylistTracksAsUser` (`sync.js`) and the
+worker's `/spotify/playlist/:id` route call `/items` and parse
+`item.item || item.track` (the latter for extended-quota apps, which kept
+the old shape); a 200 whose first page has no `items` array is the
+"metadata only" non-owner answer and raises an explanatory error instead
+of reading as an empty playlist. `src/lib/setlist/spotify-auth.js`
 implements Authorization Code + PKCE entirely in the browser (Spotify's
 token endpoint and Web API are CORS-enabled; no client secret involved —
 the same client id the worker uses goes in Settings → "spotify account").
@@ -440,8 +451,8 @@ the worker route) and falls back to the worker; worker 403/404 errors
 append a "connect spotify in Settings" hint when no user session exists —
 and when a session DOES exist but its read failed, the error includes that
 failure too ("Reading it as your connected Spotify account also failed:
-…"), because swallowing it used to leave only the worker's "make sure it
-is set to Public" text: a dead end for a playlist that already is public.
+…"), because the user-token error carries the actionable half (e.g. the
+owner-only rule) and swallowing it used to leave a dead-end message.
 Settings also live-checks the session on render (`checkSpotifyConnection`
 → `GET /v1/me`) and shows "Connected as <name>" or the actual rejection —
 a token can be present yet revoked (e.g. the account was removed from a
@@ -457,7 +468,9 @@ Register the no-slash form: `https://voidstar.sh/lab/setlist`. Spotify
 requires HTTPS redirect URIs, and for local dev the loopback exception
 demands the IP literal (`http://127.0.0.1:4321/lab/setlist`) — a
 `localhost` URI is rejected. Search (`/spotify/search*`) still rides the
-worker's client credentials, which work fine for that endpoint.
+worker's client credentials, which the Feb 2026 migration left working
+for that endpoint (dev-mode search is capped at 10 results per request;
+the worker asks for 1).
 
 ## Chart-fallback ladder
 
