@@ -7,6 +7,13 @@
 //   GET /spotify/playlist/:id       → playlist track list
 //   GET /spotify/search?q=...       → search for a track
 //   GET /spotify/search-batch       → search multiple songs (POST body: {titles:[]})
+//   GET /media/bandcamp?url=...     → track list scraped from a Bandcamp band/
+//                                     album/track page (title, artist, page
+//                                     url, EmbeddedPlayer url) — Bandcamp has
+//                                     no open API, but pages embed their data
+//   GET /media/soundcloud?url=...   → track list from a SoundCloud profile or
+//                                     /sets/ playlist (page hydration JSON +
+//                                     api-v2 with the site's own client_id)
 //   GET /drive/folder/:id           → folder file list (direct children only)
 //   GET /drive/folder/:id/recursive → folder file list, walking subfolders too
 //                                     (for community/shared chart-repo folders)
@@ -233,6 +240,219 @@ async function handleSpotifySearchBatch(request, env) {
   return corsResponse(JSON.stringify(results), 200, request, env, {
     'Cache-Control': 'public, max-age=300',
   });
+}
+
+// ── Bandcamp + SoundCloud reference sources ──
+// Neither service has a usable public API (Bandcamp's is invite-only and
+// long closed; SoundCloud stopped issuing API keys years ago), but both
+// embed their track data in the page markup — same approach as the Ultimate
+// Guitar js-store scraping below. Both routes return the same shape:
+// {tracks: [{title, artist, url, embedUrl}], truncated} — `url` is the
+// human page, `embedUrl` goes straight into an <iframe> player.
+
+// Bandcamp pages carry a data-tralbum attribute of HTML-escaped JSON with
+// the artist, track list, and the numeric ids the EmbeddedPlayer needs.
+function extractTralbum(html) {
+  const m = html.match(/data-tralbum="([^"]+)"/);
+  if (!m) return null;
+  try { return JSON.parse(decodeEntities(m[1])); } catch { return null; }
+}
+
+function bandcampEmbedUrl(albumId, trackId) {
+  const parts = [];
+  if (albumId) parts.push(`album=${albumId}`);
+  if (trackId) parts.push(`track=${trackId}`);
+  if (!parts.length) return '';
+  return `https://bandcamp.com/EmbeddedPlayer/${parts.join('/')}/size=small/bgcol=333333/linkcol=0f91ff/transparent=true/`;
+}
+
+function tracksFromTralbum(tralbum, origin) {
+  const artist = tralbum.artist || '';
+  const isAlbum = tralbum.current?.type === 'album';
+  // On an album page current.id is the album id; on a standalone track page
+  // it's the track id (album_id points at the parent album when there is one).
+  const albumId = isAlbum ? tralbum.current?.id : tralbum.current?.album_id || null;
+  const out = [];
+  for (const t of tralbum.trackinfo || []) {
+    if (!t.title) continue;
+    const trackId = t.track_id || t.id;
+    out.push({
+      title: t.title,
+      artist,
+      url: t.title_link ? new URL(t.title_link, origin).href : origin,
+      embedUrl: trackId ? bandcampEmbedUrl(albumId, trackId) : '',
+    });
+  }
+  return out;
+}
+
+// How many discography releases a band-page scan will open. A cap, not a
+// paging scheme — past it the response says truncated:true so the client can
+// warn instead of silently missing songs.
+const BC_MAX_RELEASES = 12;
+
+// GET /media/bandcamp?url=<band page | /music | /album/… | /track/…>
+async function handleMediaBandcamp(request, env) {
+  const reqUrl = new URL(request.url);
+  const pageUrl = (reqUrl.searchParams.get('url') || '').trim();
+  let u = null;
+  try { u = new URL(pageUrl); } catch {}
+  if (!u || !/(^|\.)bandcamp\.com$/i.test(u.hostname) || u.hostname === 'bandcamp.com') {
+    throw httpError(400, 'url must be a band\'s bandcamp.com page (e.g. https://yourband.bandcamp.com/music, or an /album/ or /track/ link)');
+  }
+  const origin = `${u.protocol}//${u.hostname}`;
+
+  // Album / track page: one fetch, the tralbum JSON has everything.
+  if (/^\/(album|track)\//.test(u.pathname)) {
+    const html = await fetchHtml(u.href);
+    if (!html) throw httpError(502, `could not fetch ${u.href}`);
+    const tralbum = extractTralbum(html);
+    if (!tralbum) throw httpError(404, `no track data on ${u.href} — check the release is public`);
+    return corsResponse(JSON.stringify({ tracks: tracksFromTralbum(tralbum, origin), truncated: false }),
+      200, request, env, { 'Cache-Control': 'public, max-age=3600' });
+  }
+
+  // Band page: walk the discography grid, then read each release.
+  const musicHtml = await fetchHtml(`${origin}/music`) || await fetchHtml(origin);
+  if (!musicHtml) throw httpError(502, `could not fetch ${origin}/music`);
+  const paths = [...new Set(
+    [...musicHtml.matchAll(/href="(?:https?:\/\/[^"/]+)?(\/(?:album|track)\/[^"?#]+)/g)].map((m) => m[1])
+  )];
+  const releases = paths.slice(0, BC_MAX_RELEASES);
+  const perRelease = await Promise.all(releases.map(async (p) => {
+    const html = await fetchHtml(origin + p);
+    const tralbum = html && extractTralbum(html);
+    return tralbum ? tracksFromTralbum(tralbum, origin) : [];
+  }));
+  const seen = new Set();
+  const tracks = perRelease.flat().filter((t) => t.url && !seen.has(t.url) && seen.add(t.url));
+  if (!tracks.length) throw httpError(404, `no tracks found at ${origin} — check the page is public and has releases`);
+  return corsResponse(JSON.stringify({ tracks, truncated: paths.length > releases.length }),
+    200, request, env, { 'Cache-Control': 'public, max-age=3600' });
+}
+
+// SoundCloud pages hydrate their state into window.__sc_hydration; playlists
+// past the first handful of tracks and profile track lists load through
+// api-v2, which needs the anonymous client_id SoundCloud ships inside its own
+// JS bundles — extracted once and cached for the isolate's lifetime.
+let _scClientId = null;
+
+async function getSoundcloudClientId(force = false) {
+  if (_scClientId && !force) return _scClientId;
+  const html = await fetchHtml('https://soundcloud.com/');
+  if (!html) return null;
+  const scripts = [...html.matchAll(/<script[^>]+src="(https:\/\/a-v2\.sndcdn\.com\/assets\/[^"]+\.js)"/g)]
+    .map((m) => m[1]);
+  // The id usually lives in one of the last bundles — search from the end.
+  for (const src of scripts.reverse().slice(0, 8)) {
+    const js = await fetchHtml(src);
+    const m = js && js.match(/client_id\s*[:=]\s*"([A-Za-z0-9]{16,})"/);
+    if (m) { _scClientId = m[1]; return _scClientId; }
+  }
+  return null;
+}
+
+function extractScHydration(html) {
+  const m = html.match(/window\.__sc_hydration\s*=\s*(\[.*?\]);\s*<\/script>/s);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+function scTrack(t) {
+  return {
+    title: t.title || '',
+    artist: t.user?.username || '',
+    url: t.permalink_url || '',
+    embedUrl: t.permalink_url
+      ? `https://w.soundcloud.com/player/?url=${encodeURIComponent(t.permalink_url)}`
+      : '',
+  };
+}
+
+async function scApi(path, clientId) {
+  const sep = path.includes('?') ? '&' : '?';
+  const res = await fetch(`https://api-v2.soundcloud.com${path}${sep}client_id=${clientId}`, {
+    headers: { 'User-Agent': BROWSER_UA },
+  });
+  return res;
+}
+
+const SC_MAX_TRACKS = 300;
+
+// GET /media/soundcloud?url=<profile | profile/tracks | /sets/ playlist | track>
+async function handleMediaSoundcloud(request, env) {
+  const reqUrl = new URL(request.url);
+  const pageUrl = (reqUrl.searchParams.get('url') || '').trim();
+  let u = null;
+  try { u = new URL(pageUrl); } catch {}
+  if (!u || !/(^|\.)soundcloud\.com$/i.test(u.hostname)) {
+    throw httpError(400, 'url must be a soundcloud.com page (a profile, or a /sets/… playlist link)');
+  }
+
+  const html = await fetchHtml(u.href); // follows on.soundcloud.com share redirects
+  if (!html) throw httpError(502, `could not fetch ${u.href}`);
+  const hydration = extractScHydration(html) || [];
+  const byKind = (kind) => hydration.find((h) => h?.hydratable === kind)?.data;
+
+  const sound = byKind('sound');
+  if (sound?.title) {
+    return corsResponse(JSON.stringify({ tracks: [scTrack(sound)], truncated: false }),
+      200, request, env, { 'Cache-Control': 'public, max-age=3600' });
+  }
+
+  const playlist = byKind('playlist');
+  if (playlist) {
+    // Only the first few tracks hydrate with full data; the rest are {id}
+    // stubs resolved through api-v2 in batches.
+    const full = (playlist.tracks || []).filter((t) => t.title);
+    const stubs = (playlist.tracks || []).filter((t) => !t.title && t.id).map((t) => t.id);
+    let truncated = false;
+    if (stubs.length) {
+      const clientId = await getSoundcloudClientId();
+      if (!clientId) {
+        truncated = true;
+      } else {
+        for (let i = 0; i < stubs.length && full.length < SC_MAX_TRACKS; i += 50) {
+          const res = await scApi(`/tracks?ids=${stubs.slice(i, i + 50).join(',')}`, clientId);
+          if (!res.ok) { truncated = true; break; }
+          full.push(...await res.json());
+        }
+        if (full.length >= SC_MAX_TRACKS && stubs.length + (playlist.tracks || []).length > SC_MAX_TRACKS) truncated = true;
+      }
+    }
+    const tracks = full.map(scTrack).filter((t) => t.title && t.url);
+    if (!tracks.length) throw httpError(404, `no readable tracks in that SoundCloud playlist — check it is public`);
+    return corsResponse(JSON.stringify({ tracks, truncated }),
+      200, request, env, { 'Cache-Control': 'public, max-age=3600' });
+  }
+
+  const user = byKind('user');
+  if (user?.id) {
+    let clientId = await getSoundcloudClientId();
+    if (!clientId) throw httpError(502, 'could not derive a SoundCloud client id (their site layout may have changed)');
+    const collected = [];
+    let next = `/users/${user.id}/tracks?limit=100&linked_partitioning=1`;
+    let truncated = false;
+    while (next && collected.length < SC_MAX_TRACKS) {
+      let res = await scApi(next, clientId);
+      if (res.status === 401 || res.status === 403) {
+        // Cached client_id went stale — SoundCloud rotates them. One refetch.
+        clientId = await getSoundcloudClientId(true);
+        if (clientId) res = await scApi(next, clientId);
+      }
+      if (!res.ok) throw httpError(502, `SoundCloud API ${res.status} listing ${u.hostname}${u.pathname} tracks`);
+      const data = await res.json();
+      collected.push(...(data.collection || []));
+      next = data.next_href ? data.next_href.replace('https://api-v2.soundcloud.com', '') : null;
+    }
+    if (next) truncated = true;
+    const tracks = collected.map(scTrack).filter((t) => t.title && t.url);
+    if (!tracks.length) throw httpError(404, `no public tracks on that SoundCloud profile`);
+    return corsResponse(JSON.stringify({ tracks, truncated }),
+      200, request, env, { 'Cache-Control': 'public, max-age=3600' });
+  }
+
+  throw httpError(404, 'no tracks found at that SoundCloud URL — use a profile or /sets/… playlist link');
 }
 
 async function handleDriveFolder(folderId, request, env) {
@@ -2076,6 +2296,14 @@ export default {
       const spotifyMatch = url.pathname.match(/^\/spotify\/playlist\/([a-zA-Z0-9]+)$/);
       if (spotifyMatch) {
         return await handleSpotifyPlaylist(spotifyMatch[1], request, env);
+      }
+
+      if (url.pathname === '/media/bandcamp') {
+        return await handleMediaBandcamp(request, env);
+      }
+
+      if (url.pathname === '/media/soundcloud') {
+        return await handleMediaSoundcloud(request, env);
       }
 
       const driveRecursiveMatch = url.pathname.match(/^\/drive\/folder\/([a-zA-Z0-9_-]+)\/recursive$/);

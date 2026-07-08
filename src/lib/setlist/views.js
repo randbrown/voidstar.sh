@@ -5,7 +5,8 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getReferencePlaylistTracks } from './sync.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getReferencePlaylistTracks, resolveBandcampEmbed } from './sync.js';
+import { renderBandcampEmbed, renderSoundcloudEmbed } from './media.js';
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
@@ -14,7 +15,7 @@ import { buildChartText, buildAiChartText, buildTemplateChartText } from './char
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
-import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError } from './spotify-auth.js';
+import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError, checkSpotifyConnection } from './spotify-auth.js';
 import { extractKeyFromChartText } from './chart-key.js';
 
 function formatTimecode(seconds) {
@@ -713,7 +714,7 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
     await runGlobalSync(root);
     songsChanged();
   }));
-  syncSection.appendChild(el('div', 'sl-hint', 'Scans your Spotify playlists and chart folders, and fills each song\'s missing Spotify track + chart link. Never overwrites links you already have.'));
+  syncSection.appendChild(el('div', 'sl-hint', 'Scans your setlists\' Spotify playlists, Bandcamp/SoundCloud pages, and chart folders, and fills each song\'s missing streaming + chart links. Never overwrites links you already have.'));
   wrap.appendChild(syncSection);
 
   // ── Offline charts ──
@@ -1003,6 +1004,9 @@ export async function renderSetlistEdit(root, setlistId) {
     <label class="sl-label">Venue<input class="sl-input" id="sl-venue" value="${sl.venue || ''}"></label>
     <label class="sl-label">Date<input class="sl-input" id="sl-date" type="date" value="${sl.gigDate || ''}"></label>
     <label class="sl-label">Spotify Playlist URL<input class="sl-input" id="sl-spotify" value="${sl.spotifyUrl || ''}" placeholder="https://open.spotify.com/playlist/..."></label>
+    <label class="sl-label">Bandcamp URL<input class="sl-input" id="sl-bandcamp" value="${sl.bandcampUrl || ''}" placeholder="https://yourband.bandcamp.com/music"></label>
+    <label class="sl-label">SoundCloud URL<input class="sl-input" id="sl-soundcloud" value="${sl.soundcloudUrl || ''}" placeholder="https://soundcloud.com/yourband"></label>
+    <div class="sl-hint">Reference links for auto-link: songs on this setlist match against the playlist's / band page's tracks. Bandcamp takes a band page, /music, or an album link; SoundCloud a profile or /sets/ playlist.</div>
   `;
   root.appendChild(form);
 
@@ -1011,6 +1015,8 @@ export async function renderSetlistEdit(root, setlistId) {
     sl.venue = document.getElementById('sl-venue').value;
     sl.gigDate = document.getElementById('sl-date').value;
     sl.spotifyUrl = document.getElementById('sl-spotify').value;
+    sl.bandcampUrl = document.getElementById('sl-bandcamp').value;
+    sl.soundcloudUrl = document.getElementById('sl-soundcloud').value;
     await store.putSetlist(sl);
   };
   form.addEventListener('change', save);
@@ -1796,6 +1802,8 @@ export async function renderSongFocus(root, songId, setlistId) {
     <label class="sl-label">Steel Entry<input class="sl-input" id="sf-steel" value="${isOverride ? (merged.steelEntry || '') : (song.steelEntry || '')}" placeholder="e.g. intro, chorus, verse 2"></label>
     <label class="sl-label">Steel Summary<textarea class="sl-textarea sl-textarea-sm" id="sf-steelsummary" rows="2" placeholder="steel direction — the AI button drafts this, or write your own">${esc(song.steelSummary || '')}</textarea></label>
     <label class="sl-label">Spotify URL<input class="sl-input" id="sf-spotify" value="${song.spotifyUri || ''}" placeholder="https://open.spotify.com/track/..."></label>
+    <label class="sl-label">Bandcamp URL<input class="sl-input" id="sf-bandcamp" value="${song.bandcampUrl || ''}" placeholder="https://yourband.bandcamp.com/track/..."></label>
+    <label class="sl-label">SoundCloud URL<input class="sl-input" id="sf-soundcloud" value="${song.soundcloudUrl || ''}" placeholder="https://soundcloud.com/yourband/track"></label>
     <label class="sl-label">Chart URL (Google Drive)<input class="sl-input" id="sf-chart" value="${song.chartUrl || ''}" placeholder="https://drive.google.com/..."></label>
     ${isOverride ? '<div class="sl-hint">Key and steel entry save as overrides for this setlist. Title, artist, key changes, Spotify, and chart save to the base song.</div>' : ''}
   `;
@@ -1812,6 +1820,16 @@ export async function renderSongFocus(root, songId, setlistId) {
     song.keyChanges = clearedByForm('keyChanges', document.getElementById('sf-keychanges').value);
     song.steelSummary = clearedByForm('steelSummary', document.getElementById('sf-steelsummary').value.trim());
     song.spotifyUri = clearedByForm('spotifyUri', document.getElementById('sf-spotify').value);
+    const nextBandcamp = document.getElementById('sf-bandcamp').value;
+    if ((nextBandcamp || '').trim() !== (song.bandcampUrl || '')) {
+      // The stored embed-player URL belongs to the OLD link — drop it (with
+      // a tombstone, so the backup merge doesn't resurrect it) and let the
+      // song page re-resolve the new one.
+      if (song.bandcampEmbedUrl) store.markCleared(song, 'bandcampEmbedUrl');
+      song.bandcampEmbedUrl = '';
+    }
+    song.bandcampUrl = clearedByForm('bandcampUrl', nextBandcamp);
+    song.soundcloudUrl = clearedByForm('soundcloudUrl', document.getElementById('sf-soundcloud').value);
     song.chartUrl = clearedByForm('chartUrl', document.getElementById('sf-chart').value);
 
     const keyVal = document.getElementById('sf-key').value;
@@ -2098,6 +2116,16 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     actionBar.appendChild(spBtn);
   }
+  if (song.bandcampUrl) {
+    actionBar.appendChild(btn('open in bandcamp', 'sl-btn-ghost sl-btn-sm', () => {
+      window.open(song.bandcampUrl, '_blank');
+    }));
+  }
+  if (song.soundcloudUrl) {
+    actionBar.appendChild(btn('open in soundcloud', 'sl-btn-ghost sl-btn-sm', () => {
+      window.open(song.soundcloudUrl, '_blank');
+    }));
+  }
   // Relink (or first-link) the Spotify track from the reference playlist —
   // the antidote to auto-matching landing on a same-titled cover.
   const spotifyPickerWrap = el('div', 'sl-spotify-picker');
@@ -2151,7 +2179,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       : 'everything filled in ✓';
     checkupHint.style.color = missing.length ? 'var(--pink)' : 'var(--green)';
   });
-  checkupBtn.title = 'Check what this song is still missing (key, chart, lyrics, spotify link, artist, steel summary)';
+  checkupBtn.title = 'Check what this song is still missing (key, chart, lyrics, listen link, artist, steel summary)';
   actionBar.appendChild(checkupBtn);
 
   actionBar.appendChild(btn('⇣', 'sl-btn-icon', async () => {
@@ -2171,14 +2199,16 @@ export async function renderSongFocus(root, songId, setlistId) {
   // No chart, but scratch ink saved: show the drawn page.
   else await renderInlineScratch(root, songId);
 
-  // Spotify embed + timecode tracker
+  // Listening embed (Spotify, else Bandcamp, else SoundCloud) + timecode
+  // tracker
   let currentTimecode = 0;
   let timecodeInterval = null;
   let isPlaying = false;
   // Assigned by the synced-lyrics section below; called each timer tick so
   // the active lyric line follows the timecode.
   let onTimecodeTick = null;
-  const hasTimecodeTimer = !!(song.spotifyUri && parseSpotifyUrl(song.spotifyUri));
+  const spotifyEmbeddable = !!(song.spotifyUri && parseSpotifyUrl(song.spotifyUri));
+  const hasTimecodeTimer = spotifyEmbeddable || !!song.bandcampUrl || !!song.soundcloudUrl;
   // A running timer must not survive navigation (it would tick a detached
   // node forever — one leaked interval per song visited during practice).
   window.addEventListener('hashchange', () => {
@@ -2186,7 +2216,16 @@ export async function renderSongFocus(root, songId, setlistId) {
   }, { once: true });
   if (hasTimecodeTimer) {
     const embedWrap = el('div', 'sl-spotify-embed');
-    renderSpotifyEmbed(embedWrap, song.spotifyUri, 152);
+    if (spotifyEmbeddable) {
+      renderSpotifyEmbed(embedWrap, song.spotifyUri, 152);
+    } else if (song.bandcampUrl) {
+      // A hand-pasted link has no stored embed-player URL yet — resolve it
+      // through the worker in the background and save the answer so the
+      // lookup runs once per song, not per visit.
+      renderBandcampEmbed(embedWrap, song, resolveBandcampEmbed, (s) => store.putSong(s));
+    } else {
+      renderSoundcloudEmbed(embedWrap, song.soundcloudUrl);
+    }
     root.appendChild(embedWrap);
 
     const tcRow = el('div', 'sl-timecode-row');
@@ -2501,17 +2540,20 @@ export async function renderSongFocus(root, songId, setlistId) {
 
 function showSyncOverlay(root) {
   const overlay = el('div', 'sl-sync-overlay');
-  overlay.innerHTML = '<div class="sl-sync-spinner"></div><div class="sl-sync-status">matching songs to Spotify + charts...</div>';
+  overlay.innerHTML = '<div class="sl-sync-spinner"></div><div class="sl-sync-status">matching songs to streaming links + charts...</div>';
   root.appendChild(overlay);
   return {
     update(msg) { overlay.querySelector('.sl-sync-status').textContent = msg; },
     done(results) {
-      const sm = results.spotify.matched;
-      const dm = results.drive.matched;
-      const errs = [...results.spotify.errors, ...results.drive.errors];
-      let msg = '';
-      if (sm || dm) msg += `Linked: ${sm ? sm + ' Spotify' : ''}${sm && dm ? ', ' : ''}${dm ? dm + ' chart' : ''}.`;
-      else msg += 'No new matches found.';
+      const parts = [];
+      const errs = [];
+      for (const [key, label] of [['spotify', 'Spotify'], ['bandcamp', 'Bandcamp'], ['soundcloud', 'SoundCloud'], ['drive', 'chart']]) {
+        const r = results[key];
+        if (!r) continue;
+        if (r.matched) parts.push(`${r.matched} ${label}`);
+        errs.push(...r.errors);
+      }
+      let msg = parts.length ? `Linked: ${parts.join(', ')}.` : 'No new matches found.';
       if (errs.length) msg += ` Errors: ${errs.join('; ')}`;
       overlay.innerHTML = `<div class="sl-sync-result">${msg}</div>`;
       overlay.addEventListener('click', () => overlay.remove());
@@ -2565,7 +2607,7 @@ export async function renderSettings(root) {
   const workerSection = el('div', 'sl-section');
   workerSection.innerHTML = `
     <div class="sl-section-title">sync worker url</div>
-    <div class="sl-hint" style="margin-bottom:0.5rem">Optional. Deploy the setlist-sync Cloudflare Worker to enable auto-linking from Spotify playlists and Google Drive folders.</div>
+    <div class="sl-hint" style="margin-bottom:0.5rem">Optional. Deploy the setlist-sync Cloudflare Worker to enable auto-linking from Spotify playlists, Bandcamp/SoundCloud pages, and Google Drive folders.</div>
     <input class="sl-input" id="sl-worker-url" value="${sources.workerUrl || ''}" placeholder="https://voidstar-setlist-sync.YOUR.workers.dev">
   `;
   root.appendChild(workerSection);
@@ -2652,8 +2694,20 @@ export async function renderSettings(root) {
   spotifyIdInput?.addEventListener('change', () => setSpotifyClientId(spotifyIdInput.value));
 
   const spotifyAuthStatus = el('div', 'sl-hint',
-    spotifyLoginError() || (isSpotifyConnected() ? 'Connected — playlists are read as your account.' : 'Not connected.'));
+    spotifyLoginError() || (isSpotifyConnected() ? 'Connected — checking the session…' : 'Not connected.'));
   if (spotifyLoginError()) spotifyAuthStatus.style.color = 'var(--red, #f66)';
+  // "Connected" from a stored token can lie (revoked access, a dev-mode app
+  // the account was removed from) — prove it against the live API so a broken
+  // session shows up HERE, not as a cryptic auto-link failure later.
+  if (!spotifyLoginError() && isSpotifyConnected()) {
+    checkSpotifyConnection().then(({ ok, name, reason }) => {
+      if (!spotifyAuthStatus.isConnected) return;
+      spotifyAuthStatus.textContent = ok
+        ? `Connected${name ? ` as ${name}` : ''} — playlists are read as your account.`
+        : `Connected, but the session is broken: ${reason}.`;
+      if (!ok) spotifyAuthStatus.style.color = 'var(--red, #f66)';
+    });
+  }
 
   const spotifyAuthActions = el('div', 'sl-action-bar');
   if (isSpotifyConnected()) {

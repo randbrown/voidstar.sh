@@ -306,10 +306,11 @@ export async function restoreSnapshot(ts) {
 // (never blank) and `statuses` (toggled off intentionally all the time).
 export const SONG_FILL_FIELDS = [
   'artist', 'key', 'bpm', 'capo', 'keyChanges', 'steelEntry', 'steelSummary',
-  'spotifyUri', 'chartUrl', 'lyrics', 'syncedLyrics',
+  'spotifyUri', 'bandcampUrl', 'bandcampEmbedUrl', 'soundcloudUrl',
+  'chartUrl', 'lyrics', 'syncedLyrics',
   'genre', 'year', 'durationSec', 'artworkUrl',
 ];
-export const SETLIST_FILL_FIELDS = ['gigDate', 'venue', 'spotifyUrl'];
+export const SETLIST_FILL_FIELDS = ['gigDate', 'venue', 'spotifyUrl', 'bandcampUrl', 'soundcloudUrl'];
 
 function isEmptyValue(v) {
   return v == null || v === '' || v === 0 || (Array.isArray(v) && v.length === 0);
