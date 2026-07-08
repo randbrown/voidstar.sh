@@ -123,15 +123,18 @@ export function renderReadonlyAnnotations(canvas, strokes) {
   return { redraw, destroy: () => ro.disconnect() };
 }
 
-export function initAnnotationCanvas(canvas, songId, toolbar) {
+export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = false } = {}) {
   const ctx = canvas.getContext('2d');
   const ac = new AbortController();
   const { signal } = ac;
   let strokes = [];
   let currentStroke = null;
   let tool = 'pen';
-  let color = '#ff5e7e';
-  let lineWidth = 4;
+  // The toolbar's controls are the source of truth for the starting color
+  // and size — scratch-chart mode presets a dark paper ink there, and this
+  // keeps the drawn stroke honest to what the pickers show.
+  let color = toolbar.querySelector('.sl-ann-color')?.value || '#ff5e7e';
+  let lineWidth = parseInt(toolbar.querySelector('.sl-ann-size')?.value) || 4;
   let undoStack = [];
   let selectedIndex = -1;
   let selDrag = null;
@@ -627,7 +630,12 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     }
   }, { signal });
 
-  loadAnnotation(songId).then(data => {
+  // startBlank: an explicit from-scratch chart over a song that already has
+  // chart-aligned annotations begins empty — loading them onto the blank
+  // page would show fragments normalized against a different box shape.
+  // (Saving still writes this song's single annotation record; the caller
+  // confirms that overwrite before routing here.)
+  if (!startBlank) loadAnnotation(songId).then(data => {
     if (data?.strokes) {
       strokes = data.strokes;
       redraw();
@@ -647,5 +655,41 @@ export function initAnnotationCanvas(canvas, songId, toolbar) {
     redraw,
     destroy() { ac.abort(); ro.disconnect(); cancelLongPress(); selMenu.remove(); },
     getStrokes() { return strokes; },
+    // Rescale every stroke's normalized y by `f`. Used when the scratch
+    // page grows taller ("+ page"): y is normalized to box height, so a
+    // taller box would stretch existing ink downward unless y compresses
+    // by oldHeight/newHeight. x (and text size, which is width-relative)
+    // are untouched — width doesn't change.
+    scaleStrokeYs(f) {
+      clearSelection();
+      for (const s of strokes) {
+        if (s.type === 'text') s.y *= f;
+        else if (s.points) for (const p of s.points) p.y *= f;
+      }
+      undoStack = []; // popped strokes would carry the old normalization
+      redraw();
+    },
   };
+}
+
+// Render strokes onto an offscreen paper page and return a PNG Blob — the
+// scratch-chart export. WYSIWYG with the authoring surface: same paper
+// color, same stroke math. Text sizes are width-relative and follow the
+// export width on their own; pen/highlighter/arrow widths are absolute
+// canvas pixels, so they scale by exportWidth/sourceWidth to keep the
+// authored ink weight.
+export function renderStrokesToPngBlob(strokes, { aspect, sourceWidth, width = 1700, background = '#f4f1e8' }) {
+  const c = document.createElement('canvas');
+  c.width = width;
+  c.height = Math.max(1, Math.round(width / (aspect || 8.5 / 11)));
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, c.width, c.height);
+  const k = sourceWidth ? width / sourceWidth : 1;
+  for (const s of strokes) {
+    drawStrokeOnCanvas(ctx, c, s.type === 'text' ? s : { ...s, size: s.size * k });
+  }
+  return new Promise((resolve, reject) => {
+    c.toBlob(b => (b ? resolve(b) : reject(new Error('PNG export failed'))), 'image/png');
+  });
 }

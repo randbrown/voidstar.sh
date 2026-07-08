@@ -27,12 +27,12 @@ function parseHash() {
   const h = (location.hash || '#').slice(1);
   const parts = h.split('/').filter(Boolean);
   const view = parts[0] || 'home';
-  return { view, parts, id: parts[1] || null, extra: parts[2] || null, extra2: parts[3] || null };
+  return { view, parts, id: parts[1] || null, extra: parts[2] || null, extra2: parts[3] || null, extra3: parts[4] || null };
 }
 
 async function route() {
   if (!_root) return;
-  const { view, id, extra, extra2 } = parseHash();
+  const { view, id, extra, extra2, extra3 } = parseHash();
 
   _root.innerHTML = '';
   _root.className = 'setlist-root';
@@ -58,7 +58,10 @@ async function route() {
       case 'song':
         if (id) setLastSongId(id);
         if (extra2 === 'annotate') {
-          await renderAnnotation(_root, id, extra === '_' ? null : extra, { draw: true });
+          // /annotate/scratch = explicit blank-page chart authoring even
+          // when a doc is linked; plain /annotate on a chartless song
+          // falls into scratch mode on its own (see renderAnnotation).
+          await renderAnnotation(_root, id, extra === '_' ? null : extra, { draw: true, scratch: extra3 === 'scratch' });
         } else if (extra2 === 'chart') {
           // Legacy read-only chart page — folded into the song page, which
           // renders the chart (with annotations) inline.
