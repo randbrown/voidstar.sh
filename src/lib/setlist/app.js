@@ -61,7 +61,13 @@ async function route() {
           // /annotate/scratch = explicit blank-page chart authoring even
           // when a doc is linked; plain /annotate on a chartless song
           // falls into scratch mode on its own (see renderAnnotation).
-          await renderAnnotation(_root, id, extra === '_' ? null : extra, { draw: true, scratch: extra3 === 'scratch' });
+          // /annotate/alt:<altId> = annotate one of the song's alternate
+          // charts (its own layer, keyed store.altChartKey(songId, altId)).
+          await renderAnnotation(_root, id, extra === '_' ? null : extra, {
+            draw: true,
+            scratch: extra3 === 'scratch',
+            altId: extra3?.startsWith('alt:') ? extra3.slice(4) : null,
+          });
         } else if (extra2 === 'chart') {
           // Legacy read-only chart page — folded into the song page, which
           // renders the chart (with annotations) inline.

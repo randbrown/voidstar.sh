@@ -13,7 +13,7 @@ import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
-import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
+import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError, checkSpotifyConnection } from './spotify-auth.js';
 import { extractKeyFromChartText } from './chart-key.js';
@@ -1428,6 +1428,22 @@ function chartEnhanceButton() {
   return b;
 }
 
+// A song's alternate charts (song.altCharts) — always an array. The field is
+// lazy: old records simply don't have it.
+function altChartsOf(song) {
+  return Array.isArray(song?.altCharts) ? song.altCharts : [];
+}
+
+// The chart to render somewhere: which URL, which cache/annotation key, and
+// whether it's the song's primary (primary-only side effects like key
+// auto-fill hang off this). Alternates key their cache blob and annotation
+// layer by store.altChartKey(songId, altId).
+function chartRef(song, alt = null) {
+  return alt
+    ? { url: alt.url, key: store.altChartKey(song.id, alt.id), isPrimary: false }
+    : { url: song.chartUrl, key: song.id, isPrimary: true };
+}
+
 // Mount the best remote (uncached) rendering of a chart into a stage box:
 // flattened Drive image first (aligned and annotatable — Drive's thumbnail
 // endpoint rides the user's cookies, so it works even for private files),
@@ -1436,13 +1452,14 @@ function chartEnhanceButton() {
 // devices not signed in), a bare <img> for direct image links. Also warms
 // this device's offline cache in the background so the fallback is a
 // first-visit-only experience.
-function mountRemoteChartInto(stage, song) {
-  const flatImageUrl = buildChartImageUrl(song.chartUrl);
-  const embedUrl = buildChartEmbedUrl(song.chartUrl);
+function mountRemoteChartInto(stage, song, chart = null) {
+  const c = chart || chartRef(song);
+  const flatImageUrl = buildChartImageUrl(c.url);
+  const embedUrl = buildChartEmbedUrl(c.url);
 
   const mountRawImg = () => {
     const raw = document.createElement('img');
-    raw.src = song.chartUrl;
+    raw.src = c.url;
     raw.className = 'sl-annotation-img';
     lockAspectToImage(raw, stage);
     stage.appendChild(raw);
@@ -1468,7 +1485,10 @@ function mountRemoteChartInto(stage, song) {
       if (!mountIframe()) mountRawImg();
     }, { once: true });
     stage.appendChild(img);
-    cacheChartForSong(song, getSources().workerUrl).catch(() => {});
+    // Warm the offline cache: the primary path also auto-fills song.key from
+    // text charts; alternates must not (different arrangement, different key).
+    if (c.isPrimary) cacheChartForSong(song, getSources().workerUrl).catch(() => {});
+    else cacheChartByUrl(c.key, c.url, getSources().workerUrl).catch(() => {});
   } else if (!mountIframe()) {
     mountRawImg();
   }
@@ -1492,9 +1512,10 @@ async function maybeFillKeyFromChart(song, text) {
 // Inline chart display for the song page — the same aspect-locked stage
 // pattern as the annotation editor (chart rect == canvas rect == the
 // stored-aspect box, see docs/setlist-app.md), rendering the cached chart
-// image (or the live embed) with the song's annotations composited
-// read-only on top.
-async function renderInlineChart(container, song, songId) {
+// image (or the live embed) with that chart's annotations composited
+// read-only on top. `chart` is a chartRef() — the primary or an alternate;
+// key auto-fill (and the cache warm-up's key side effect) is primary-only.
+async function renderInlineChart(container, song, chart) {
   const wrap = el('div', 'sl-focus-chart');
   const stage = el('div', 'sl-annotation-stage');
   applyChartAppearance(stage, 'detail');
@@ -1503,10 +1524,10 @@ async function renderInlineChart(container, song, songId) {
   tools.appendChild(chartAppearanceButton(stage, 'detail'));
   container.appendChild(tools);
 
-  const cached = await getOfflineChart(songId, song.chartUrl);
+  const cached = await getOfflineChart(chart.key, chart.url);
   if (cached?.kind === 'text') {
     stage.appendChild(mountTextChart(stage, cached.text));
-    maybeFillKeyFromChart(song, cached.text);
+    if (chart.isPrimary) maybeFillKeyFromChart(song, cached.text);
   } else if (cached) {
     const url = await chartDisplayUrl(cached);
     const img = document.createElement('img');
@@ -1523,12 +1544,13 @@ async function renderInlineChart(container, song, songId) {
     // No cache: Google-Doc charts render flat from a live text export
     // (annotations can't track an iframe's internal scroll); anything else
     // renders the flattened Drive image with the embed as last resort.
-    const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
+    const liveText = await fetchChartText(chart.url, getSources().workerUrl);
     if (liveText) {
       stage.appendChild(mountTextChart(stage, liveText));
-      maybeFillKeyFromChart(song, liveText);
+      if (chart.isPrimary) maybeFillKeyFromChart(song, liveText);
+      else cacheChartByUrl(chart.key, chart.url, getSources().workerUrl).catch(() => {});
     } else {
-      mountRemoteChartInto(stage, song);
+      mountRemoteChartInto(stage, song, chart);
     }
   }
 
@@ -1539,7 +1561,7 @@ async function renderInlineChart(container, song, songId) {
   wrap.appendChild(stage);
   container.appendChild(wrap);
 
-  const data = await loadAnnotation(songId);
+  const data = await loadAnnotation(chart.key);
   // Natural image aspect wins (set by lockAspectToImage); the stored
   // authoring aspect covers iframe charts and pre-load.
   if (data?.aspect && !stage.dataset.naturalAspect) stage.style.aspectRatio = String(data.aspect);
@@ -1629,9 +1651,15 @@ function renderSpotifyPicker(wrap, tracks, song) {
 // Web-search chart candidates that didn't clear the auto-link threshold:
 // let the user preview each one and pick. Names/URLs come from the open web,
 // so they're set via textContent (the el() helper's innerHTML would XSS).
-function renderChartCandidates(wrap, candidates, song) {
+//
+// alternate mode (the "find alt chart" flow on a song that already has a
+// primary): "use" becomes "add alt" (append to song.altCharts, primary
+// untouched) plus "make primary" (the old primary is demoted to an alternate
+// — never silently discarded — and its annotation layer + cached blob move
+// with it).
+function renderChartCandidates(wrap, candidates, song, { alternate = false } = {}) {
   wrap.innerHTML = '';
-  wrap.appendChild(el('div', 'sl-section-title', 'possible charts found online'));
+  wrap.appendChild(el('div', 'sl-section-title', alternate ? 'possible alternate charts' : 'possible charts found online'));
   for (const c of candidates) {
     const row = el('div', 'sl-chart-candidate');
     const info = el('div', 'sl-chart-candidate-info');
@@ -1647,13 +1675,164 @@ function renderChartCandidates(wrap, candidates, song) {
     preview.target = '_blank';
     preview.rel = 'noopener noreferrer';
     row.appendChild(preview);
-    row.appendChild(btn('use', 'sl-btn-primary sl-btn-xs', async () => {
-      linkChartCandidate(song, c);
-      await store.putSong(song);
-      refresh();
-    }));
+    if (alternate) {
+      const addBtn = btn('add alt', 'sl-btn-primary sl-btn-xs', async () => {
+        const dupe = c.url === song.chartUrl || altChartsOf(song).some(a => a.url === c.url);
+        if (dupe) { addBtn.textContent = 'already linked'; addBtn.disabled = true; return; }
+        song.altCharts = [...altChartsOf(song), {
+          id: crypto.randomUUID(),
+          url: c.url,
+          label: String(c.name || '').slice(0, 60) || `alt ${altChartsOf(song).length + 1}`,
+          addedAt: Date.now(),
+        }];
+        await store.putSong(song);
+        refresh();
+      });
+      row.appendChild(addBtn);
+      row.appendChild(btn('make primary', 'sl-btn-ghost sl-btn-xs', async () => {
+        if (!confirm('Replace the primary chart? The current chart is kept as an alternate, and its annotations move with it.')) return;
+        await demotePrimaryToAlt(song);
+        linkChartCandidate(song, c); // fill-empty key/bpm/capo side effects
+        await store.putSong(song);
+        refresh();
+      }));
+    } else {
+      row.appendChild(btn('use', 'sl-btn-primary sl-btn-xs', async () => {
+        linkChartCandidate(song, c);
+        await store.putSong(song);
+        refresh();
+      }));
+    }
     wrap.appendChild(row);
   }
+}
+
+// Demote the song's current primary chart into a new alternate entry, moving
+// its annotation layer and cached blob to the alternate's composite key.
+// Leaves song.chartUrl untouched-but-stale — the caller relinks it and saves.
+async function demotePrimaryToAlt(song) {
+  if (!song.chartUrl) return null;
+  const alt = { id: crypto.randomUUID(), url: song.chartUrl, label: 'previous chart', addedAt: Date.now() };
+  song.altCharts = [...altChartsOf(song), alt];
+  const altKey = store.altChartKey(song.id, alt.id);
+  const [ann, blob] = await Promise.all([store.getAnnotation(song.id), store.getChartBlob(song.id)]);
+  if (ann) {
+    await store.putAnnotation({ ...ann, songId: altKey });
+    await store.deleteAnnotation(song.id);
+  }
+  if (blob?.blob) await store.putChartBlob(altKey, blob.blob, alt.url);
+  await store.deleteChartBlob(song.id);
+  return alt;
+}
+
+// Swap an alternate into the primary slot (and the primary into the alternate
+// slot). Annotation layers and cached blobs follow their charts — the keyPath
+// is the record's songId, so "moving" a layer is a put under the other key.
+async function swapPrimaryWithAlt(song, alt) {
+  const altKey = store.altChartKey(song.id, alt.id);
+  const [pAnn, aAnn] = await Promise.all([store.getAnnotation(song.id), store.getAnnotation(altKey)]);
+  const [pBlob, aBlob] = await Promise.all([store.getChartBlob(song.id), store.getChartBlob(altKey)]);
+  const oldPrimaryUrl = song.chartUrl;
+  song.chartUrl = alt.url;
+  alt.url = oldPrimaryUrl;
+  song.altCharts = altChartsOf(song).map(a => (a.id === alt.id ? alt : a));
+  if (aAnn) await store.putAnnotation({ ...aAnn, songId: song.id });
+  else await store.deleteAnnotation(song.id);
+  if (pAnn) await store.putAnnotation({ ...pAnn, songId: altKey });
+  else await store.deleteAnnotation(altKey);
+  // Blob bytes are already in hand — swap them under the other keys with
+  // corrected sourceUrls (getOfflineChart's stale-check would self-heal a
+  // miss here anyway, at the cost of a refetch).
+  if (aBlob?.blob) await store.putChartBlob(song.id, aBlob.blob, song.chartUrl);
+  else await store.deleteChartBlob(song.id);
+  if (pBlob?.blob) await store.putChartBlob(altKey, pBlob.blob, alt.url);
+  else await store.deleteChartBlob(altKey);
+  await store.putSong(song);
+}
+
+// Which chart tab the song page shows: sessionStorage (like noteDraft) so the
+// selection survives the focus-sync refresh() and a mid-practice reload, but
+// doesn't follow the user across devices. Absent = the primary chart.
+const chartTabStorageKey = (songId) => `voidstar.setlist.chartTab.${songId}`;
+
+function selectedAltChart(song) {
+  try {
+    const id = sessionStorage.getItem(chartTabStorageKey(song.id));
+    return altChartsOf(song).find(a => a.id === id) || null;
+  } catch { return null; }
+}
+
+function setSelectedChartTab(songId, altId) {
+  try {
+    if (altId) sessionStorage.setItem(chartTabStorageKey(songId), altId);
+    else sessionStorage.removeItem(chartTabStorageKey(songId));
+  } catch {}
+}
+
+// Chip row for switching between the primary chart and the alternates.
+// Labels default from Drive filenames / web candidate names — untrusted, so
+// they're set via textContent, never through el()/btn()'s innerHTML.
+function buildChartTabs(song, selAlt) {
+  const tabs = el('div', 'sl-chart-tabs');
+  const chip = (label, altId) => {
+    const active = (altId || '') === (selAlt?.id || '');
+    const c = btn('', 'sl-chart-tab' + (active ? ' sl-chart-tab-active' : ''), () => {
+      if (active) return;
+      setSelectedChartTab(song.id, altId);
+      refresh();
+    });
+    c.textContent = label;
+    tabs.appendChild(c);
+  };
+  chip('primary', null);
+  altChartsOf(song).forEach((a, i) => chip(a.label || `alt ${i + 1}`, a.id));
+  return tabs;
+}
+
+// Action strip for the currently selected ALTERNATE chart (the primary's
+// actions live in the main action bar and stay primary-only).
+function buildAltActionsRow(song, alt, setlistId) {
+  const row = el('div', 'sl-alt-chart-actions');
+  row.appendChild(btn('annotate', 'sl-btn-accent sl-btn-xs', () => {
+    navigate(`#song/${song.id}/${setlistId || '_'}/annotate/alt:${alt.id}`);
+  }));
+  row.appendChild(btn('open doc', 'sl-btn-ghost sl-btn-xs', () => {
+    window.open(alt.url, '_blank');
+  }));
+  row.appendChild(btn('rename', 'sl-btn-ghost sl-btn-xs', async () => {
+    const label = prompt('Label for this chart:', alt.label || '');
+    if (label == null) return;
+    alt.label = label.trim().slice(0, 60);
+    song.altCharts = altChartsOf(song).map(a => (a.id === alt.id ? alt : a));
+    await store.putSong(song);
+    refresh();
+  }));
+  const cacheBtn = btn('cache offline', 'sl-btn-ghost sl-btn-xs', async () => {
+    cacheBtn.disabled = true;
+    cacheBtn.textContent = 'caching…';
+    const r = await cacheChartByUrl(store.altChartKey(song.id, alt.id), alt.url, getSources().workerUrl);
+    cacheBtn.textContent = r.ok ? '✓ cached offline' : 'cache failed';
+    if (!r.ok) alert(`couldn't cache this chart: ${r.reason}`);
+    setTimeout(() => { cacheBtn.textContent = 'cache offline'; cacheBtn.disabled = false; }, 2200);
+  });
+  row.appendChild(cacheBtn);
+  row.appendChild(btn('make primary', 'sl-btn-ghost sl-btn-xs', async () => {
+    if (!confirm('Make this the primary chart? The current primary becomes an alternate; each chart keeps its own annotations.')) return;
+    await swapPrimaryWithAlt(song, alt);
+    setSelectedChartTab(song.id, null); // the chart being viewed is now the primary tab
+    refresh();
+  }));
+  row.appendChild(btn('remove', 'sl-btn-danger sl-btn-xs', async () => {
+    if (!confirm(`Remove this alternate chart${alt.label ? ` ("${alt.label}")` : ''}? Its annotations are deleted too. The doc itself stays in Drive.`)) return;
+    const altKey = store.altChartKey(song.id, alt.id);
+    song.altCharts = altChartsOf(song).filter(a => a.id !== alt.id);
+    await store.putSong(song);
+    await store.deleteAnnotation(altKey);
+    await store.deleteChartBlob(altKey);
+    setSelectedChartTab(song.id, null);
+    refresh();
+  }));
+  return row;
 }
 
 export async function renderSongFocus(root, songId, setlistId) {
@@ -1963,6 +2142,40 @@ export async function renderSongFocus(root, songId, setlistId) {
     });
     scratchBtn.title = 'Draw a brand-new chart on a blank page, then export it to Drive';
     actionBar.appendChild(scratchBtn);
+
+    // "find alt chart" — the same Drive + web search as the chartless
+    // "search for chart", collect-only: nothing auto-links (a confident web
+    // hit must not overwrite the primary), every hit lands in the picker
+    // with "add alt" / "make primary".
+    chartCandidatesWrap = el('div', 'sl-chart-candidates');
+    const altSearchBtn = btn('find alt chart', 'sl-btn-ghost sl-btn-sm', async () => {
+      altSearchBtn.disabled = true;
+      const restore = (label) => {
+        altSearchBtn.textContent = label;
+        setTimeout(() => {
+          altSearchBtn.textContent = 'find alt chart';
+          altSearchBtn.disabled = false;
+        }, 2200);
+      };
+      try {
+        const result = await searchChartForSong(song, (stage) => {
+          altSearchBtn.textContent = stage === 'web' ? 'searching the web...' : 'searching drive...';
+        }, { collectOnly: true });
+        if (result.candidates?.length) {
+          renderChartCandidates(chartCandidatesWrap, result.candidates, song, { alternate: true });
+          restore('pick below');
+        } else if (result.providerDown) {
+          if (result.warnings?.length) console.warn('[setlist] alt chart search:', ...result.warnings);
+          restore('web search blocked — add search key');
+        } else {
+          restore('no match found');
+        }
+      } catch (e) {
+        restore('search failed');
+      }
+    });
+    altSearchBtn.title = 'Search your Drive folders and the web for another chart of this song, and link it as an alternate';
+    actionBar.appendChild(altSearchBtn);
   } else {
     // Chart-fallback ladder: tiers 1+2 search personal + community Drive
     // folders, tier 3 scours the web for shared chart files (all via
@@ -2204,7 +2417,16 @@ export async function renderSongFocus(root, songId, setlistId) {
   root.appendChild(spotifyPickerWrap);
 
   // Inline chart with annotations — the old read-only chart page, folded in.
-  if (song.chartUrl) await renderInlineChart(root, song, songId);
+  // With alternates linked, a chip row switches which chart (and which
+  // annotation layer) renders; the primary stays the default.
+  if (song.chartUrl) {
+    const selAlt = selectedAltChart(song);
+    if (altChartsOf(song).length) {
+      root.appendChild(buildChartTabs(song, selAlt));
+      if (selAlt) root.appendChild(buildAltActionsRow(song, selAlt, setlistId));
+    }
+    await renderInlineChart(root, song, chartRef(song, selAlt));
+  }
   // No chart, but scratch ink saved: show the drawn page.
   else await renderInlineScratch(root, songId);
 
@@ -2510,7 +2732,11 @@ export async function renderSongFocus(root, songId, setlistId) {
       if (!confirm(`Delete "${song.title}" and all its notes?`)) return;
       const songNotes = await store.getNotesForSong(songId);
       for (const n of songNotes) await store.deleteNote(n.id);
-      await store.deleteChartBlob(songId).catch(() => {});
+      // Every cached blob and annotation layer — primary AND alternates
+      // (composite `${songId}::` keys). Annotations used to be skipped here
+      // entirely, orphaning a record in IDB and in every Drive backup.
+      await store.deleteChartBlobsForSong(songId).catch(() => {});
+      await store.deleteAnnotationsForSong(songId).catch(() => {});
       await store.deleteSong(songId);
       navigate('#library');
     }));
@@ -3371,21 +3597,29 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 // US-letter portrait; the scratch page is destined for a printable doc.
 const SCRATCH_PAGE_ASPECT = 8.5 / 11;
 
-export async function renderAnnotation(root, songId, setlistId, { draw = false, scratch = false } = {}) {
+export async function renderAnnotation(root, songId, setlistId, { draw = false, scratch = false, altId = null } = {}) {
   const song = await store.getSong(songId);
   if (!song) { root.appendChild(emptyState('Song not found.')); return; }
+  const backHash = setlistId ? `#song/${songId}/${setlistId}` : `#song/${songId}`;
+  // Annotating an ALTERNATE chart: same editor, but the chart URL and the
+  // annotation layer come from the alternate (layer keyed
+  // store.altChartKey). A stale alt link (removed on another device) bails
+  // back to the song page instead of silently annotating the primary.
+  const alt = altId ? altChartsOf(song).find(a => a.id === altId) : null;
+  if (altId && !alt) { navigate(backHash); return; }
+  const chartUrl = alt ? alt.url : song.chartUrl;
+  const annKey = alt ? store.altChartKey(songId, alt.id) : songId;
   // No linked chart = scratch mode implicitly: the editor is how a chartless
-  // (e.g. original) song gets a chart drawn from nothing.
-  const isScratch = scratch || !song.chartUrl;
+  // (e.g. original) song gets a chart drawn from nothing. (An alternate
+  // always has a URL, so alt-annotate never enters scratch.)
+  const isScratch = scratch || !chartUrl;
   // An explicit scratch redo over a linked chart starts with a blank page —
   // the song-page button confirms first, since saving replaces that chart's
-  // annotations (one annotation layer per song).
+  // annotations (the primary chart has one annotation layer).
   const startBlank = scratch && !!song.chartUrl;
 
   root.classList.add('sl-perform');
   const container = el('div', 'sl-annotation-container');
-
-  const backHash = setlistId ? `#song/${songId}/${setlistId}` : `#song/${songId}`;
   const toolbar = el('div', 'sl-annotation-toolbar');
 
   const backBtn = btn('&larr;', 'sl-btn-icon', () => navigate(backHash));
@@ -3395,8 +3629,8 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
   // View controls (visible in read-only mode)
   const viewControls = el('div', 'sl-ann-controls');
   viewControls.style.cssText = 'display:flex;align-items:center;gap:0.35rem;flex:1;justify-content:flex-end';
-  if (song.chartUrl) viewControls.appendChild(btn('edit chart', 'sl-btn-ghost sl-btn-sm', () => {
-    window.open(song.chartUrl, '_blank');
+  if (chartUrl) viewControls.appendChild(btn('edit chart', 'sl-btn-ghost sl-btn-sm', () => {
+    window.open(chartUrl, '_blank');
   }));
   viewControls.appendChild(btn('annotate', 'sl-btn-sm sl-btn-primary', () => enterAnnotateMode()));
   toolbar.appendChild(viewControls);
@@ -3468,7 +3702,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     // Offline-cached chart first (flat — text for docs, image otherwise —
     // which scrolls with the canvas and stays aligned); live text export for
     // docs, then embed/plain image as last resorts.
-    const cached = await getOfflineChart(songId, song.chartUrl);
+    const cached = await getOfflineChart(annKey, chartUrl);
     if (cached?.kind === 'text') {
       stage.appendChild(mountTextChart(stage, cached.text));
     } else if (cached) {
@@ -3483,9 +3717,9 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
       stage.appendChild(img);
       window.addEventListener('hashchange', () => URL.revokeObjectURL(url), { once: true });
     } else {
-      const liveText = await fetchChartText(song.chartUrl, getSources().workerUrl);
+      const liveText = await fetchChartText(chartUrl, getSources().workerUrl);
       if (liveText) stage.appendChild(mountTextChart(stage, liveText));
-      else mountRemoteChartInto(stage, song);
+      else mountRemoteChartInto(stage, song, alt ? chartRef(song, alt) : null);
     }
   }
 
@@ -3505,7 +3739,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
   if (isScratch) stage.style.aspectRatio = String(scratchAspect);
 
   requestAnimationFrame(async () => {
-    const data = await loadAnnotation(songId);
+    const data = await loadAnnotation(annKey);
     if (isScratch) {
       // Resume the saved page shape (e.g. a multi-page scratch WIP) — except
       // for an explicit blank redo, which ignores the old chart's record.
@@ -3538,7 +3772,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     canvas.style.pointerEvents = '';
     canvas.style.cursor = 'crosshair';
     if (readonlyCtrl) { readonlyCtrl.destroy(); readonlyCtrl = null; }
-    canvasCtrl = initAnnotationCanvas(canvas, songId, drawControls, { startBlank });
+    canvasCtrl = initAnnotationCanvas(canvas, annKey, drawControls, { startBlank });
     showAnnotateScrollHint();
   }
 
@@ -3622,7 +3856,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     canvas.style.cursor = '';
 
     await new Promise(r => setTimeout(r, 100));
-    const data = await loadAnnotation(songId);
+    const data = await loadAnnotation(annKey);
     if (data?.strokes?.length) {
       readonlyCtrl = renderReadonlyAnnotations(canvas, data.strokes);
     }

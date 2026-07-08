@@ -232,11 +232,33 @@ export const getAllSetlists = () => getAll(SETLISTS);
 export const deleteSetlist = (id) => del(SETLISTS, id);
 
 // ── Annotations (hand-drawn chart markup, keyed by songId) ──
+// A song's PRIMARY chart keeps the bare songId key; each alternate chart
+// (song.altCharts) keys its own annotation record — and its offline blob in
+// CHARTS — by the composite `${songId}::${altId}`. Both stores' keyPath is a
+// plain string, so this needs no schema migration, and composite records ride
+// the Drive backup like any other annotation (mergeData merges by key).
+
+export const altChartKey = (songId, altId) => `${songId}::${altId}`;
 
 export const putAnnotation = (ann) => put(ANNOTATIONS, { ...ann, updatedAt: Date.now() });
 export const getAnnotation = (songId) => getOne(ANNOTATIONS, songId);
 export const getAllAnnotations = () => getAll(ANNOTATIONS);
 export const deleteAnnotation = (songId) => del(ANNOTATIONS, songId);
+
+// All annotation records belonging to a song: the primary (key === songId)
+// plus every alternate chart's layer (key starts `${songId}::`).
+export async function getAnnotationsForSong(songId) {
+  const keys = await getAllKeys(ANNOTATIONS);
+  const mine = keys.filter(k => k === songId || String(k).startsWith(songId + '::'));
+  return (await Promise.all(mine.map(k => getOne(ANNOTATIONS, k)))).filter(Boolean);
+}
+
+export async function deleteAnnotationsForSong(songId) {
+  const keys = await getAllKeys(ANNOTATIONS);
+  for (const k of keys) {
+    if (k === songId || String(k).startsWith(songId + '::')) await del(ANNOTATIONS, k);
+  }
+}
 
 // ── Cached chart images (offline) ──
 
@@ -250,6 +272,15 @@ export const putChartBlob = (songId, blob, sourceUrl) =>
 export const getChartBlob = (songId) => getOne(CHARTS, songId);
 export const deleteChartBlob = (songId) => delSilent(CHARTS, songId);
 export const getCachedChartIds = () => getAllKeys(CHARTS);
+
+// Drop a song's every cached chart blob: the primary (key === songId) and all
+// alternates (`${songId}::${altId}`). Silent — this cache is local-only.
+export async function deleteChartBlobsForSong(songId) {
+  const keys = await getAllKeys(CHARTS);
+  for (const k of keys) {
+    if (k === songId || String(k).startsWith(songId + '::')) await delSilent(CHARTS, k);
+  }
+}
 
 // ── Safety snapshots (undo a restore/sync) ──
 // A rolling buffer of full-dataset snapshots, taken right before any operation
@@ -307,7 +338,7 @@ export async function restoreSnapshot(ts) {
 export const SONG_FILL_FIELDS = [
   'artist', 'key', 'bpm', 'capo', 'keyChanges', 'steelEntry', 'steelSummary',
   'spotifyUri', 'bandcampUrl', 'bandcampEmbedUrl', 'soundcloudUrl',
-  'chartUrl', 'lyrics', 'syncedLyrics',
+  'chartUrl', 'altCharts', 'lyrics', 'syncedLyrics',
   'genre', 'year', 'durationSec', 'artworkUrl',
 ];
 export const SETLIST_FILL_FIELDS = ['gigDate', 'venue', 'spotifyUrl', 'bandcampUrl', 'soundcloudUrl'];
@@ -411,7 +442,9 @@ export async function exportSetlist(setlistId) {
   const songs = (await Promise.all(songIds.map(id => getSong(id)))).filter(Boolean);
   const noteArrays = await Promise.all(songIds.map(id => getNotesForSong(id)));
   const notes = noteArrays.flat();
-  const annotations = (await Promise.all(songIds.map(id => getAnnotation(id)))).filter(Boolean);
+  // getAnnotationsForSong (not getAnnotation): alternate charts' layers live
+  // under composite keys and would silently vanish from the export otherwise.
+  const annotations = (await Promise.all(songIds.map(id => getAnnotationsForSong(id)))).flat();
   return { version: 1, type: 'setlist', setlist: sl, songs, notes, annotations, exportedAt: Date.now() };
 }
 
@@ -419,8 +452,11 @@ export async function exportSong(songId) {
   const song = await getSong(songId);
   if (!song) return null;
   const notes = await getNotesForSong(songId);
-  const annotation = await getAnnotation(songId);
-  return { version: 1, type: 'song', song, notes, annotation: annotation || null, exportedAt: Date.now() };
+  // The singular `annotation` stays for old clients' importSong; `annotations`
+  // additionally carries the alternate charts' composite-key layers.
+  const annotations = await getAnnotationsForSong(songId);
+  const annotation = annotations.find(a => a.songId === songId) || null;
+  return { version: 1, type: 'song', song, notes, annotation, annotations, exportedAt: Date.now() };
 }
 
 export async function exportSources() {
@@ -440,7 +476,9 @@ export async function importSong(data) {
   await importAll({
     songs: data.song ? [data.song] : undefined,
     notes: data.notes,
-    annotations: data.annotation ? [data.annotation] : undefined,
+    // Newer exports carry the full array (incl. alternate charts' layers);
+    // fall back to the legacy singular field for old export files.
+    annotations: data.annotations || (data.annotation ? [data.annotation] : undefined),
   });
 }
 
