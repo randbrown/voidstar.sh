@@ -424,7 +424,7 @@ has a filter input, caps rendering at 100 rows, and writes titles via
 `textContent` (playlist data is untrusted).
 
 **Playlist reads prefer the user's own Spotify session — since Spotify's
-February 2026 Web API migration, it's the only path that works.** That
+February 2026 Web API migration, it's the only API path that works.** That
 migration (enforced 2026-03-09 for existing apps) renamed the
 playlist-contents endpoint `GET /v1/playlists/{id}/tracks` →
 `…/items` (the old path 403s for every development-mode app, no matter the
@@ -453,6 +453,31 @@ and when a session DOES exist but its read failed, the error includes that
 failure too ("Reading it as your connected Spotify account also failed:
 …"), because the user-token error carries the actionable half (e.g. the
 owner-only rule) and swallowing it used to leave a dead-end message.
+
+**Public-page scrape — the escape hatch for playlists the API won't
+serve.** The owner-only rule leaves a public playlist owned by someone
+else (the bandmate's-reference-playlist case) unreadable by ANY token this
+app can hold, but the public `open.spotify.com` pages still render it for
+anonymous visitors, track list included. The worker's
+`GET /spotify/playlist/:id/scrape` fetches the embed page
+(`open.spotify.com/embed/playlist/:id`, historically the richest anonymous
+render) then the full playlist page, harvests every JSON blob in the HTML
+(plain `<script>` JSON, the legacy percent-encoded `resource` blob,
+base64-wrapped JSON), and deep-scans for arrays of track-shaped objects
+(`scrapedSpotifyTrack` tolerates embed `{uri, title, subtitle}`, API-style
+`{track:{…}}`/`{item:{…}}`, and web-player GraphQL shapes) rather than
+trusting one fixed path — Spotify reshuffles page internals without
+notice, same defensive posture as the Bandcamp/SoundCloud/UG scrapers. The
+response carries `{tracks, total, truncated, source}`; `total` comes from a
+`trackCount`-style field or `music:song_count` meta so a partial render is
+reported instead of passing as the whole playlist. Client side,
+`fetchSpotifyTracks` calls the scrape automatically as a last resort when
+both API reads fail (so bulk auto-link recovers on its own, with a note in
+the sync warnings), and the song page has an explicit "scrape playlist"
+button (`{forceScrape: true}` → `getReferencePlaylistTracks`) that skips
+the doomed API attempts and feeds the same relink picker. Scraping only
+sees PUBLIC playlists — a private one fails both paths, and the API errors
+remain the explanation shown.
 Settings also live-checks the session on render (`checkSpotifyConnection`
 → `GET /v1/me`) and shows "Connected as <name>" or the actual rejection —
 a token can be present yet revoked (e.g. the account was removed from a

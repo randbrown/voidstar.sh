@@ -125,7 +125,7 @@ async function runSync(songs, refs, onProgress) {
     for (const url of refs[svc.key].all) {
       try {
         tracksByUrl.set(url, svc.key === 'spotify'
-          ? await fetchSpotifyTracks(sources.workerUrl, url)
+          ? await fetchSpotifyTracks(sources.workerUrl, url, { warnings: r.errors })
           : await fetchMediaTracks(sources.workerUrl, svc.key, url, r.errors));
       } catch (e) {
         r.errors.push(e.message);
@@ -243,9 +243,44 @@ export async function resolveBandcampEmbed(trackUrl) {
   }
 }
 
-async function fetchSpotifyTracks(workerUrl, playlistUrl) {
+// Scrape transport: the worker reads the public open.spotify.com playlist
+// page instead of the Web API — the only route left for a PUBLIC playlist
+// someone else owns (e.g. a bandmate's), which the API's Feb 2026 owner-only
+// rule blocks for every token this app can hold. Returns {tracks, total,
+// truncated, source}; throws with the worker's real reason.
+async function scrapeSpotifyPlaylist(workerUrl, playlistId) {
+  if (!workerUrl) {
+    throw new Error('scraping the playlist needs the sync worker — set the worker URL in Settings');
+  }
+  const res = await fetch(`${workerUrl}/spotify/playlist/${playlistId}/scrape`);
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json())?.error || ''; } catch {}
+    // The router's own 404 body is exactly {"error":"not found"} — that's a
+    // worker deployed before this route existed, not a missing playlist.
+    if (res.status === 404 && (!detail || detail === 'not found')) {
+      throw new Error('worker outdated — redeploy the setlist-sync worker to enable playlist scraping');
+    }
+    throw new Error(detail || `playlist scrape failed (${res.status})`);
+  }
+  return await res.json();
+}
+
+// `warnings` collects non-fatal notes (scrape fallback engaged, scraped list
+// truncated) — callers pass their sync-results errors array so these surface
+// next to real failures instead of vanishing. `forceScrape` skips the API
+// entirely (the song page's explicit "scrape playlist" button).
+async function fetchSpotifyTracks(workerUrl, playlistUrl, { forceScrape = false, warnings = [] } = {}) {
   const parsed = parseSpotifyUrl(playlistUrl);
   if (!parsed || parsed.type !== 'playlist') return [];
+
+  if (forceScrape) {
+    const scraped = await scrapeSpotifyPlaylist(workerUrl, parsed.id);
+    if (scraped.truncated) {
+      warnings.push(`scraped ${scraped.tracks.length} of ${scraped.total} tracks from the public playlist page — the page didn't render the rest`);
+    }
+    return scraped.tracks || [];
+  }
 
   // Prefer the user's own Spotify session when connected (Settings →
   // "spotify account"): since Spotify's Feb 2026 API change, playlist
@@ -279,18 +314,36 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
       let detail = '';
       try { detail = (await res.json())?.error || ''; }
       catch { detail = (await res.text().catch(() => '')) || ''; }
+
+      // Every API path refused — scrape the public playlist page as a last
+      // resort before failing. This is what keeps auto-link working for a
+      // public playlist owned by someone else (the API's owner-only dead
+      // end); a private playlist won't scrape either, and then the API
+      // errors below are still the story that explains why.
+      let scrapeNote = '';
+      try {
+        const scraped = await scrapeSpotifyPlaylist(workerUrl, parsed.id);
+        if (scraped.tracks?.length) {
+          warnings.push(`playlist read by scraping its public page (Spotify's API refused every read)${scraped.truncated ? ` — got ${scraped.tracks.length} of ${scraped.total} tracks` : ''}`);
+          return scraped.tracks;
+        }
+      } catch (scrapeErr) {
+        scrapeNote = ` Scraping the public page also failed: ${scrapeErr.message}.`;
+      }
+
       // The client-credentials dead end has a client-side fix the worker
       // can't know about — point at it. And when the user IS connected, the
       // user-token failure is the actionable half of the story: since
-      // Spotify's Feb 2026 change the user token is the ONLY path that can
-      // read playlist contents for development-mode apps, so its error (e.g.
-      // "owner-only") is the one worth acting on, not the worker's.
+      // Spotify's Feb 2026 change the user token is the ONLY API path that
+      // can read playlist contents for development-mode apps, so its error
+      // (e.g. "owner-only") is the one worth acting on, not the worker's.
       let hint = '';
       if (userError) {
         hint = ` Reading it as your connected Spotify account also failed: ${userError.message}. If the playlist is yours, try "disconnect spotify" then reconnect in Settings.`;
       } else if ((res.status === 403 || res.status === 404) && !isSpotifyConnected()) {
         hint = ' Fix: connect spotify in Settings — since Spotify\'s Feb 2026 API change that is the only way a development-mode app can read playlist contents, and the playlist must be owned by (or collaborative with) your account.';
       }
+      hint += scrapeNote;
       if (res.status === 403 || res.status === 401 || res.status === 502) {
         throw new Error((detail || 'Spotify credentials invalid — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your worker env vars') + hint);
       }
@@ -349,8 +402,8 @@ async function fetchPlaylistTracksAsUser(playlistId, token) {
 // One reference playlist's tracks, via the same user-token-first transport
 // as auto-link — for callers outside this module (the library tools' "verify
 // spotify links" pass) that need tracks scoped per setlist, not pooled.
-export async function fetchPlaylistTracks(playlistUrl) {
-  return fetchSpotifyTracks(getSources().workerUrl, playlistUrl);
+export async function fetchPlaylistTracks(playlistUrl, opts = {}) {
+  return fetchSpotifyTracks(getSources().workerUrl, playlistUrl, opts);
 }
 
 async function fetchDriveFiles(workerUrl, folderUrl) {
@@ -680,7 +733,10 @@ export async function deepScrapeChart(song) {
 // playlist URL anywhere, a URL that isn't an open.spotify.com/playlist link,
 // or the worker's real Spotify error) — silently reporting "no tracks" for a
 // playlist the user is looking at in Spotify reads as data loss.
-export async function getReferencePlaylistTracks(setlist) {
+// opts.forceScrape reads via the public-page scrape only (the song page's
+// "scrape playlist" button) — no API attempts, so it works for a public
+// playlist someone else owns and fails fast with the scrape's own reason.
+export async function getReferencePlaylistTracks(setlist, opts = {}) {
   const sources = getSources();
   const problems = [];
   if (!sources.workerUrl) {
@@ -706,7 +762,7 @@ export async function getReferencePlaylistTracks(setlist) {
       continue;
     }
     try {
-      tracks.push(...await fetchSpotifyTracks(sources.workerUrl, url));
+      tracks.push(...await fetchSpotifyTracks(sources.workerUrl, url, { ...opts, warnings: problems }));
     } catch (e) {
       problems.push(e.message);
     }
