@@ -88,6 +88,33 @@ export async function renderSettings(root) {
   }
   root.appendChild(snapCard);
 
+  // ── Audio devices ──
+  const { wireSpeakerPicker, sinkSelectable } = await import('../audio-out.js');
+  const audioCard = el('div', 'mn-card');
+  audioCard.appendChild(el('div', 'mn-card-title', 'audio'));
+  audioCard.appendChild(el('div', 'mn-note-meta',
+    'mic is picked in the note editor’s voice bar. speaker below routes voice-note playback (useful with a bluetooth music rig connected).'));
+  const spkSel = el('select', 'mn-select');
+  await wireSpeakerPicker(spkSel);
+  if (!sinkSelectable()) {
+    audioCard.appendChild(el('div', 'mn-note-meta mn-dim', 'speaker selection is not supported in this browser (Safari/iOS use the system output).'));
+  } else {
+    audioCard.appendChild(spkSel);
+  }
+  root.appendChild(audioCard);
+
+  // ── OCR status ──
+  const { processPendingOcr } = await import('../ocr.js');
+  const pendingOcr = (await store.getPendingOcrAttachments?.() ?? []).length;
+  const ocrCard = el('div', 'mn-card');
+  ocrCard.appendChild(el('div', 'mn-card-title', 'image text (ocr)'));
+  ocrCard.appendChild(el('div', 'mn-note-meta',
+    `images are text-recognized in the background so screenshots become searchable. ${pendingOcr ? `${pendingOcr} pending.` : 'queue is clear.'}`));
+  if (pendingOcr) {
+    ocrCard.appendChild(btn('process now', '', () => { processPendingOcr(); refresh(); }));
+  }
+  root.appendChild(ocrCard);
+
   // ── Sync (stub until the Drive phase lands) ──
   const syncCard = el('div', 'mn-card');
   syncCard.appendChild(el('div', 'mn-card-title', 'google drive sync'));

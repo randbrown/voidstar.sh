@@ -5,8 +5,16 @@ import * as store from '../store.js';
 import { createEditor } from '../editor/setup.js';
 import { firstLine } from '../editor/markdown.js';
 import { addAttachmentFromBlob, getObjectUrl, formatSize, formatDuration } from '../attachments.js';
+import { createVoiceCapture, recordingSupported, getStoredMicId, storeMicId } from '../voice-capture.js';
+import { isSupported as speechSupported } from '../voice.js';
+import { applySink } from '../audio-out.js';
+import { processPendingOcr } from '../ocr.js';
+import { wirePicker } from '../../qualia/devices.js';
 import { navigate, refresh } from '../app.js';
 import { el, esc, btn, topBar, textPrompt, confirmBox, timeAgo } from '../ui.js';
+
+const KEEP_AUDIO_KEY = 'voidstar.mind.voice.keepAudio';
+const KEEP_TEXT_KEY = 'voidstar.mind.voice.keepTranscript';
 
 const AUTOSAVE_MS = 800;
 
@@ -144,12 +152,14 @@ export async function renderEditor(root, noteId) {
   }
 
   async function handleFiles(files) {
+    let anyImage = false;
     for (const file of files) {
       const att = await addAttachmentFromBlob(note.id, file, file.name);
-      if (att.kind === 'image') editor.insertImage(att.id, att.name || 'image');
+      if (att.kind === 'image') { editor.insertImage(att.id, att.name || 'image'); anyImage = true; }
     }
     scheduleSave();
     await drawAttachments();
+    if (anyImage) processPendingOcr(); // background — text becomes searchable when done
   }
 
   editor = createEditor(mount, {
@@ -158,6 +168,107 @@ export async function renderEditor(root, noteId) {
     onFiles: handleFiles,
     placeholder: 'write…',
   });
+
+  // ── Voice capture bar ──
+  // Live dictation (Web Speech) + optional original-audio keep (MediaRecorder)
+  // on the same mic. Toggle prefs persist across sessions.
+  let capture = null;
+  let recording = false;
+
+  const voiceBar = el('div', 'mn-voicebar');
+  voiceBar.style.display = 'none';
+
+  const micSel = el('select', 'mn-select mn-mic-sel');
+  wirePicker({
+    select: micSel,
+    kind: 'audioinput',
+    persist: false, // mind owns its own storage key
+    alwaysShow: true,
+    getCurrentId: () => getStoredMicId(),
+    onChoose: async (id) => { storeMicId(id); return id; },
+  }).populate();
+  voiceBar.appendChild(micSel);
+
+  const mkToggle = (key, label, dflt) => {
+    const lab = el('label', 'mn-voice-toggle');
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = (localStorage.getItem(key) ?? (dflt ? '1' : '0')) === '1';
+    cb.addEventListener('change', () => localStorage.setItem(key, cb.checked ? '1' : '0'));
+    lab.appendChild(cb);
+    lab.appendChild(el('span', '', label));
+    return { lab, cb };
+  };
+  const keepAudio = mkToggle(KEEP_AUDIO_KEY, 'keep audio', true);
+  const keepText = mkToggle(KEEP_TEXT_KEY, 'insert transcript', true);
+  voiceBar.appendChild(keepAudio.lab);
+  voiceBar.appendChild(keepText.lab);
+
+  const recBtn = btn('&#9679; record', 'mn-btn-primary mn-rec-btn', () => toggleRecord());
+  voiceBar.appendChild(recBtn);
+  const liveLine = el('div', 'mn-voice-live');
+  voiceBar.appendChild(liveLine);
+
+  async function toggleRecord() {
+    if (recording) {
+      recBtn.disabled = true;
+      const { audioBlob, transcript, durationSec, speechFailed } = await capture.stop();
+      recording = false;
+      recBtn.disabled = false;
+      recBtn.innerHTML = '&#9679; record';
+      recBtn.classList.remove('mn-recording');
+      liveLine.textContent = '';
+
+      if (keepText.cb.checked && transcript) {
+        editor.insertText((transcript.endsWith(' ') ? transcript : transcript + ' '));
+        scheduleSave();
+      }
+      if (keepAudio.cb.checked && audioBlob) {
+        const att = await addAttachmentFromBlob(note.id, audioBlob, `${store.fileStamp()}-voice`);
+        const fresh = await store.getAttachment(att.id);
+        await store.patchAttachment(fresh, {
+          transcript: transcript || '',
+          transcriptSource: transcript ? 'webspeech' : '',
+          durationSec: Math.round(durationSec),
+        });
+        await drawAttachments();
+      }
+      if (speechFailed && keepAudio.cb.checked && audioBlob) {
+        liveLine.textContent = 'transcript unavailable — audio kept (re-transcribe coming later)';
+      } else if (speechFailed && !audioBlob) {
+        liveLine.textContent = 'voice capture failed — check mic permissions';
+      }
+      return;
+    }
+
+    capture = createVoiceCapture({
+      record: keepAudio.cb.checked && recordingSupported(),
+      transcribe: speechSupported(),
+      onInterim: (t) => { liveLine.textContent = t; },
+      onFinal: () => {},
+      onError: () => {},
+    });
+    try {
+      await capture.start();
+      recording = true;
+      recBtn.innerHTML = '&#9632; stop';
+      recBtn.classList.add('mn-recording');
+      liveLine.textContent = speechSupported() ? 'listening…' : 'recording (no live transcript on this browser)';
+    } catch (e) {
+      liveLine.textContent = `mic error: ${e.message}`;
+    }
+  }
+
+  root.appendChild(voiceBar);
+
+  // Mic toggle lives in the topbar so voice capture is one tap from anywhere.
+  const micBtn = btn('&#127908;', 'mn-btn-icon', () => {
+    const open = voiceBar.style.display !== 'none';
+    voiceBar.style.display = open ? 'none' : 'flex';
+    if (!open) micSel.dispatchEvent(new Event('mn-open')); // no-op hook
+  });
+  micBtn.title = 'voice note';
+  actions.insertBefore(micBtn, pinBtn);
 
   // ── Attachment strip ──
   const strip = el('div', 'mn-attach-strip');
@@ -187,14 +298,25 @@ export async function renderEditor(root, noteId) {
       const url = await getObjectUrl(a.id);
       if (url) img.src = url;
       img.alt = a.name || 'image';
+      img.title = 'annotate';
+      // Tap a thumbnail → the annotation canvas (quick-annotate on the go).
+      img.style.cursor = 'pointer';
+      img.addEventListener('click', () => navigate(`#note/${note.id}/annotate/${a.id}`));
       chip.appendChild(img);
+      if (a.ocrStatus === 'pending') chip.appendChild(el('span', 'mn-attach-label mn-dim', 'ocr…'));
     } else if (a.kind === 'audio') {
       const audio = el('audio');
       audio.controls = true;
       const url = await getObjectUrl(a.id);
       if (url) audio.src = url;
+      applySink(audio); // route playback to the chosen speaker
       chip.appendChild(audio);
       if (a.durationSec) chip.appendChild(el('span', 'mn-attach-label', formatDuration(a.durationSec)));
+      if (a.transcript) {
+        const t = el('span', 'mn-attach-label mn-dim', '&#128172;');
+        t.title = a.transcript.slice(0, 400);
+        chip.appendChild(t);
+      }
     } else {
       chip.appendChild(el('span', 'mn-attach-label',
         `&#128206; ${esc(a.name || a.kind)} <span class="mn-dim">${formatSize(a.size)}</span>`));
@@ -215,8 +337,10 @@ export async function renderEditor(root, noteId) {
   // a kill mid-edit must not lose the last keystrokes.
   const onHide = () => { if (document.visibilityState === 'hidden') flushPending(); };
   document.addEventListener('visibilitychange', onHide);
-  root._mnCleanup = () => {
+  root._mnCleanup = async () => {
     document.removeEventListener('visibilitychange', onHide);
+    // Never leave the mic open across a route change.
+    if (recording && capture) { try { await capture.stop(); } catch {} }
     flushPending();
     editor?.destroy();
   };

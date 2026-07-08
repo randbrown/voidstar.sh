@@ -469,6 +469,91 @@ const buildStamp = readBuildStamp();
       background: var(--void);
     }
 
+    /* ── Voice bar ── */
+    .mn-voicebar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--surface);
+      border: 1px solid color-mix(in srgb, var(--pink) 30%, var(--border));
+      border-radius: var(--radius-lg, 10px);
+      padding: 0.6rem 0.8rem;
+      margin-bottom: 0.8rem;
+    }
+    .mn-mic-sel { max-width: 12rem; }
+    .mn-voice-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .mn-rec-btn { min-width: 6.5rem; }
+    .mn-recording {
+      background: color-mix(in srgb, var(--pink) 30%, var(--surface)) !important;
+      border-color: var(--pink) !important;
+      animation: mn-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes mn-pulse { 50% { opacity: 0.65; } }
+    .mn-voice-live {
+      flex: 1 0 100%;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      min-height: 1.1rem;
+      font-style: italic;
+    }
+
+    /* ── Annotation ── */
+    .mn-ann-toolbar {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      margin-bottom: 0.6rem;
+      position: sticky;
+      top: 3.4rem;
+      background: var(--void);
+      z-index: 9;
+      padding-bottom: 0.3rem;
+    }
+    .mn-ann-row { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+    .mn-btn-xs { padding: 0.35rem 0.55rem; min-height: 2.1rem; font-size: 0.8rem; }
+    .mn-ann-swatch {
+      width: 1.6rem;
+      height: 1.6rem;
+      border-radius: 999px;
+      border: 2px solid var(--border-2);
+      cursor: pointer;
+      padding: 0;
+    }
+    .mn-ann-swatch:hover { transform: scale(1.12); }
+    .mn-ann-color { width: 2.2rem; height: 1.9rem; padding: 0; border: 1px solid var(--border); border-radius: var(--radius, 6px); background: var(--surface); cursor: pointer; }
+    .mn-ann-size { min-height: 2.1rem; padding: 0.25rem 0.4rem; font-size: 0.8rem; }
+    .mn-annotation-wrap {
+      overflow: auto;
+      max-height: 78dvh;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg, 10px);
+      background: var(--void-2, var(--void));
+    }
+    .mn-annotation-stage { position: relative; width: 100%; }
+    .mn-annotation-img { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+    .mn-annotation-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .mn-ann-selmenu {
+      position: absolute;
+      display: flex;
+      gap: 0.25rem;
+      background: var(--surface);
+      border: 1px solid var(--border-2);
+      border-radius: var(--radius, 6px);
+      padding: 0.2rem;
+      z-index: 5;
+    }
+
     /* ── Modal ── */
     .mn-modal-overlay {
       position: fixed;

@@ -4,8 +4,10 @@
 import * as store from './store.js';
 import { invalidateIndex } from './search.js';
 import { revokeObjectUrls } from './attachments.js';
+import { processPendingOcr } from './ocr.js';
 import { renderHome } from './views/home.js';
 import { renderEditor } from './views/editor.js';
+import { renderAnnotate } from './views/annotate.js';
 import { renderTasks } from './views/tasks.js';
 import { renderTrash } from './views/trash.js';
 import { renderSettings } from './views/settings.js';
@@ -41,7 +43,10 @@ async function route() {
   try {
     switch (view) {
       case 'home': await renderHome(_root); break;
-      case 'note': await renderEditor(_root, id, { annotate: extra === 'annotate' ? extra2 : null }); break;
+      case 'note':
+        if (extra === 'annotate' && extra2) await renderAnnotate(_root, id, extra2);
+        else await renderEditor(_root, id);
+        break;
       case 'tasks': await renderTasks(_root, id); break;
       case 'trash': await renderTrash(_root); break;
       case 'settings': await renderSettings(_root); break;
@@ -72,6 +77,8 @@ export function initMindApp(root) {
       await store.ensureDefaultTasklist();
       await store.purgeExpiredTombstones();
       await housekeeping();
+      // Drain any images still waiting on OCR (e.g. tab closed mid-queue).
+      processPendingOcr();
     } catch (e) { console.warn('[mind] init housekeeping:', e.message); }
   })();
   setInterval(housekeeping, 3600_000);

@@ -58,6 +58,15 @@ export class ImageView {
     this.dom = document.createElement('img');
     this.dom.className = 'mn-editor-img';
     this.dom.alt = node.attrs.alt || '';
+    this.dom.title = 'double-click to annotate';
+    // Double-click (or double-tap) an inline image → annotation canvas.
+    // Single click stays with ProseMirror for node selection.
+    this.dom.addEventListener('dblclick', () => {
+      const src = this.node.attrs.src || '';
+      const m = /^mn-attach:\/\/(.+)$/.exec(src);
+      const noteMatch = /^#note\/([^/]+)/.exec(location.hash || '');
+      if (m && noteMatch) location.hash = `#note/${noteMatch[1]}/annotate/${m[1]}`;
+    });
     this._resolve(node.attrs.src);
   }
 
