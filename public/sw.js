@@ -5,9 +5,11 @@
 //     on every visit when online; offline they get the last-seen version of
 //     the page they're loading (or the homepage as ultimate fallback).
 //   - Same-origin static assets (JS, CSS, images, manifest, icons): stale-
-//     while-revalidate. The cache returns instantly; a background fetch
-//     freshens it for next load. Astro hashes its `_astro/*.js` filenames,
-//     so cache hits are always content-correct.
+//     while-revalidate — except content-hashed `/_astro/*` files, which are
+//     immutable and served cache-first with no revalidation fetch. Only
+//     `res.ok` responses are ever cached, and a miss + network failure
+//     answers with `Response.error()` so the request fails cleanly (the
+//     page-side StyleGuard can then recover with a one-shot reload).
 //   - Cross-origin requests (Strudel CDN, MediaPipe models, fonts.gstatic):
 //     pass through completely — let the browser HTTP cache handle them.
 //     Caching opaque cross-origin responses fills storage with junk and
@@ -18,7 +20,7 @@
 // purge-old-caches on the next page load. clients.claim() makes the new
 // SW take over immediately so users don't need a hard reload.
 
-const SW_VERSION = 'v7';
+const SW_VERSION = 'v8';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
@@ -79,8 +81,12 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          // Only cache good responses — a transient 5xx/404 must not
+          // poison the offline fallback for this route.
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          }
           return res;
         })
         .catch(() =>
@@ -90,9 +96,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything else (assets) → stale-while-revalidate.
+  // Everything else (assets). Astro content-hashes /_astro/* filenames, so
+  // a cache hit there is immutable — serve it without a revalidation fetch.
+  // Other assets (manifest, icons, sw-adjacent files) stay stale-while-
+  // revalidate. On a miss + network failure, answer with an explicit
+  // network-error Response instead of resolving to undefined (which
+  // rejects respondWith and logs a TypeError on top of the failed load).
+  const immutable = url.pathname.startsWith('/_astro/');
   event.respondWith(
     caches.match(req).then((cached) => {
+      if (cached && immutable) return cached;
       const fetchPromise = fetch(req)
         .then((res) => {
           if (res && res.ok) {
@@ -101,7 +114,7 @@ self.addEventListener('fetch', (event) => {
           }
           return res;
         })
-        .catch(() => cached);
+        .catch(() => cached || Response.error());
       return cached || fetchPromise;
     })
   );
