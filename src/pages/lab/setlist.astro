@@ -3,6 +3,7 @@
 // Standalone page (no BaseLayout) following the entangle.astro pattern.
 import { execSync } from 'node:child_process';
 import ThemeBoot from '../../components/ThemeBoot.astro';
+import StyleGuard from '../../components/StyleGuard.astro';
 import '../../styles/themes.css';
 
 // Build stamp — short commit + commit timestamp + build timestamp.
@@ -52,6 +53,7 @@ const buildStamp = readBuildStamp();
       });
     }
   </script>
+  <StyleGuard />
   <style is:global>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {

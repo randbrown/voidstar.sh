@@ -4,6 +4,7 @@ import '../styles/global.css';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 import ThemeBoot from '../components/ThemeBoot.astro';
+import StyleGuard from '../components/StyleGuard.astro';
 
 interface Props {
   title: string;
@@ -85,6 +86,7 @@ const siteTitle = title === 'voidstar' ? 'voidstar' : `${title} | voidstar`;
       });
     }
   </script>
+  <StyleGuard />
 
   <!-- Mobile diagnostics: ?debug=1 (or ?debug=eruda) injects the Eruda
        in-page DevTools overlay so phones can see console errors without

@@ -4,6 +4,7 @@
 // one new file in src/lib/qualia/fx/<name>.js plus a register() call below.
 import { execSync } from 'node:child_process';
 import ThemeBoot from '../components/ThemeBoot.astro';
+import StyleGuard from '../components/StyleGuard.astro';
 import '../styles/themes.css';
 
 // Build stamp — short commit + commit timestamp + build timestamp.
@@ -63,6 +64,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       });
     }
   </script>
+  <StyleGuard />
 
   <!-- Mobile diagnostics — same as BaseLayout, but inlined here because
        /qualia is a standalone page (doesn't wrap BaseLayout). See
