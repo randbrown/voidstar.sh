@@ -160,7 +160,7 @@ async function getSpotifyToken(env, { force = false } = {}) {
 // point at the client-side fix (connect Spotify in Settings). The route
 // stays for extended-quota deployments, where the old behavior survives.
 const SPOTIFY_CC_DEAD_END =
-  'Spotify\'s Feb 2026 API change stopped returning playlist contents to server (client-credentials) tokens for development-mode apps — connect Spotify in the app\'s Settings so playlist reads run as your account, and use a playlist your account owns or collaborates on';
+  'Spotify\'s Feb 2026 API change stopped returning playlist contents to server (client-credentials) tokens for development-mode apps — connect Spotify in the app\'s Settings so playlist reads run as your account, and use a playlist that account owns or collaborates on (for someone else\'s playlist: get a collaborator invite from the owner, or copy the tracks into your own playlist)';
 
 async function handleSpotifyPlaylist(playlistId, request, env) {
   let token = await getSpotifyToken(env);

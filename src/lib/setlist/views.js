@@ -2682,7 +2682,9 @@ export async function renderSettings(root) {
       Connect your Spotify account so playlist reads run as you — since
       Spotify's Feb 2026 API change this is the only way the app can read
       playlist contents, and it only works for playlists your account owns
-      or collaborates on (public/private no longer matters). Uses the
+      or collaborates on (public/private no longer matters; for a
+      bandmate's playlist, ask them for a collaborator invite or copy the
+      tracks into a playlist you own). Uses the
       same client id as the worker; no secret is involved. One-time setup: in
       the Spotify developer dashboard (developer.spotify.com → your app →
       Settings → Redirect URIs) add exactly:

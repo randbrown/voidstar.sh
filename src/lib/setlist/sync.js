@@ -314,7 +314,7 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
 // who owns or collaborates on it; anyone else gets metadata with no items.
 async function fetchPlaylistTracksAsUser(playlistId, token) {
   const tracks = [];
-  const OWNER_ONLY_HINT = 'since Spotify\'s Feb 2026 API change, a development-mode app can only read the contents of playlists your account owns or collaborates on — check the playlist is in your library as owner (public/private no longer matters)';
+  const OWNER_ONLY_HINT = 'since Spotify\'s Feb 2026 API change, a development-mode app can only read the contents of playlists your account owns or collaborates on (public/private no longer matters) — for someone else\'s playlist, ask the owner for a collaborator invite, or copy its tracks into a playlist you own';
   const fields = encodeURIComponent('items(item(name,uri,artists(name),external_urls(spotify))),next');
   let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=100&fields=${fields}`;
   let firstPage = true;
