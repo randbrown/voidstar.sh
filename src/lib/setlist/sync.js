@@ -41,37 +41,56 @@ export function setSources(sources) {
   localStorage.setItem(SOURCES_KEY, JSON.stringify(sources));
 }
 
+// The streaming services a setlist can carry a reference link for. Spotify
+// takes a playlist URL; Bandcamp takes a band page (or /music, /album/…) —
+// the whole point is bands like nightjar whose catalog lives there, not on
+// Spotify; SoundCloud takes a profile or /sets/ playlist. Auto-link matches
+// song titles against each service's track list independently and fills that
+// service's song field, so one song can carry links on several services.
+const MEDIA_SERVICES = [
+  { key: 'spotify', label: 'Spotify', setlistField: 'spotifyUrl', songField: 'spotifyUri' },
+  { key: 'bandcamp', label: 'Bandcamp', setlistField: 'bandcampUrl', songField: 'bandcampUrl' },
+  { key: 'soundcloud', label: 'SoundCloud', setlistField: 'soundcloudUrl', songField: 'soundcloudUrl' },
+];
+
+// {service → {perSong: Map<songId, url[]>, all: url[]}} — each song's own
+// setlists' reference URLs, plus the full pool (per-song scoping: a song is
+// matched against the references of the setlists it actually appears in;
+// the rest of the pool is only a near-exact-title fallback).
+function buildServiceRefs(setlists) {
+  const refs = {};
+  for (const svc of MEDIA_SERVICES) refs[svc.key] = { perSong: new Map(), all: [] };
+  for (const sl of setlists) {
+    for (const svc of MEDIA_SERVICES) {
+      const url = sl[svc.setlistField];
+      if (!url) continue;
+      const r = refs[svc.key];
+      if (!r.all.includes(url)) r.all.push(url);
+      for (const set of sl.sets) {
+        for (const id of set.songIds) {
+          const urls = r.perSong.get(id) || [];
+          if (!urls.includes(url)) urls.push(url);
+          r.perSong.set(id, urls);
+        }
+      }
+    }
+  }
+  return refs;
+}
+
 export async function syncSetlist(setlistId, onProgress) {
   const sl = await store.getSetlist(setlistId);
   if (!sl) throw new Error('Setlist not found');
 
   const allSongIds = sl.sets.flatMap(s => s.songIds);
   const songs = (await Promise.all(allSongIds.map(id => store.getSong(id)))).filter(Boolean);
-  const urls = sl.spotifyUrl ? [sl.spotifyUrl] : [];
-  return runSync(songs, { perSong: new Map(songs.map(s => [s.id, urls])), all: urls }, onProgress);
+  return runSync(songs, buildServiceRefs([sl]), onProgress);
 }
 
 export async function syncAll(onProgress) {
   const songs = await store.getAllSongs();
   const setlists = await store.getAllSetlists();
-  // Per-song playlist scoping: a song is matched against the playlists of the
-  // setlists it actually appears in — those are authoritative for that song.
-  // Other setlists' playlists are only a near-exact-title fallback (see
-  // CROSS_PLAYLIST_MIN_SCORE in runSync).
-  const perSong = new Map();
-  const all = [];
-  for (const sl of setlists) {
-    if (!sl.spotifyUrl) continue;
-    if (!all.includes(sl.spotifyUrl)) all.push(sl.spotifyUrl);
-    for (const set of sl.sets) {
-      for (const id of set.songIds) {
-        const urls = perSong.get(id) || [];
-        if (!urls.includes(sl.spotifyUrl)) urls.push(sl.spotifyUrl);
-        perSong.set(id, urls);
-      }
-    }
-  }
-  return runSync(songs, { perSong, all }, onProgress);
+  return runSync(songs, buildServiceRefs(setlists), onProgress);
 }
 
 // A cross-playlist match (a playlist from a setlist the song is NOT in) has
@@ -80,37 +99,40 @@ export async function syncAll(onProgress) {
 // grab "Bye Bye Bye" (*NSYNC) out of an unrelated playlist.
 const CROSS_PLAYLIST_MIN_SCORE = 0.95;
 
-// `playlists` is {perSong: Map<songId, url[]>, all: url[]} — each song's own
-// setlists' playlists, plus the full pool.
-async function runSync(songs, playlists, onProgress) {
+// `refs` is buildServiceRefs' shape: {service → {perSong, all}}.
+async function runSync(songs, refs, onProgress) {
   const sources = getSources();
-  const results = {
-    spotify: { matched: 0, skipped: 0, errors: [] },
-    drive: { matched: 0, skipped: 0, errors: [] },
-    total: songs.length,
-    done: 0,
-  };
+  const results = { total: songs.length, done: 0, drive: { matched: 0, skipped: 0, errors: [] } };
+  for (const svc of MEDIA_SERVICES) results[svc.key] = { matched: 0, skipped: 0, errors: [] };
 
-  // Fetch each reference playlist once. Spotify matching is PLAYLIST-ONLY:
-  // when a playlist can't be read, its songs stay unlinked and the error says
-  // why. (An old fallback ran a global title-only Spotify search here — which
-  // loved to link the most popular same-titled track, karaoke covers and all,
-  // and read as data corruption. The song page's "spotify search" button is
-  // the explicit, manual escape hatch for songs not on any reference
-  // playlist.)
-  const tracksByUrl = new Map();
-  for (const url of playlists.all) {
-    try {
-      tracksByUrl.set(url, await fetchSpotifyTracks(sources.workerUrl, url));
-    } catch (e) {
-      results.spotify.errors.push(e.message);
-    }
-  }
+  // Matching is REFERENCE-ONLY for every service: when a playlist/page can't
+  // be read, its songs stay unlinked and the error says why. (An old fallback
+  // ran a global title-only Spotify search here — which loved to link the
+  // most popular same-titled track, karaoke covers and all, and read as data
+  // corruption. The song page's "spotify search" button is the explicit,
+  // manual escape hatch for songs not on any reference playlist.)
+  const trackLink = (t) => t.spotifyUrl || t.url || '';
   const dedupeTracks = (tracks) => {
     const seen = new Set();
-    return tracks.filter(t => t.spotifyUrl && !seen.has(t.spotifyUrl) && seen.add(t.spotifyUrl));
+    return tracks.filter(t => trackLink(t) && !seen.has(trackLink(t)) && seen.add(trackLink(t)));
   };
-  const allTracks = dedupeTracks([...tracksByUrl.values()].flat());
+
+  // Fetch each service's reference URLs once.
+  const pools = {};
+  for (const svc of MEDIA_SERVICES) {
+    const r = results[svc.key];
+    const tracksByUrl = new Map();
+    for (const url of refs[svc.key].all) {
+      try {
+        tracksByUrl.set(url, svc.key === 'spotify'
+          ? await fetchSpotifyTracks(sources.workerUrl, url)
+          : await fetchMediaTracks(sources.workerUrl, svc.key, url, r.errors));
+      } catch (e) {
+        r.errors.push(e.message);
+      }
+    }
+    pools[svc.key] = { tracksByUrl, allTracks: dedupeTracks([...tracksByUrl.values()].flat()) };
+  }
 
   // Fetch Drive files — personal folders, community/shared folders (recursive), manual links
   const driveFiles = await fetchAllDriveFiles(sources, results.drive.errors);
@@ -133,23 +155,31 @@ async function runSync(songs, playlists, onProgress) {
   for (const song of songs) {
     let updated = false;
 
-    // Spotify matching — the song's own setlist playlists first, at the
-    // normal bar; the cross-playlist pool only on a near-exact title.
+    // Per service: the song's own setlist references first, at the normal
+    // bar; the cross-reference pool only on a near-exact title.
     // Cross-reference with Drive artist when available.
-    if (!song.spotifyUri && allTracks.length) {
+    for (const svc of MEDIA_SERVICES) {
+      const { tracksByUrl, allTracks } = pools[svc.key];
+      if (song[svc.songField] || !allTracks.length) continue;
       const knownArtist = song.artist || driveArtistMap[song.title.toLowerCase().trim()] || '';
       const ownTracks = dedupeTracks(
-        (playlists.perSong.get(song.id) || []).flatMap(u => tracksByUrl.get(u) || []));
+        (refs[svc.key].perSong.get(song.id) || []).flatMap(u => tracksByUrl.get(u) || []));
       const result = matchTracks(song, knownArtist, ownTracks, 0.7)
         || matchTracks(song, knownArtist,
           allTracks.length > ownTracks.length ? allTracks : [], CROSS_PLAYLIST_MIN_SCORE);
       if (result) {
-        song.spotifyUri = result.match.spotifyUrl;
+        song[svc.songField] = trackLink(result.match);
+        // The worker resolves Bandcamp's embed-player ids during the same
+        // scrape — store the ready embed URL so the song page never has to
+        // re-scrape for it.
+        if (svc.key === 'bandcamp' && result.match.embedUrl && !song.bandcampEmbedUrl) {
+          song.bandcampEmbedUrl = result.match.embedUrl;
+        }
         if (result.match.artist && !song.artist) song.artist = result.match.artist;
-        results.spotify.matched++;
+        results[svc.key].matched++;
         updated = true;
       } else {
-        results.spotify.skipped++;
+        results[svc.key].skipped++;
       }
     }
 
@@ -171,6 +201,48 @@ async function runSync(songs, playlists, onProgress) {
   return results;
 }
 
+// Track list for a Bandcamp/SoundCloud reference URL, via the worker's
+// /media/:service routes (neither service is readable from the browser —
+// no API, no CORS). Returns [{title, artist, url, embedUrl}]; a capped scan
+// lands in `warnings` rather than failing.
+async function fetchMediaTracks(workerUrl, service, refUrl, warnings = []) {
+  if (!workerUrl) {
+    throw new Error(`the ${service} reference link needs the sync worker — set the worker URL in Settings`);
+  }
+  const res = await fetch(`${workerUrl}/media/${service}?url=${encodeURIComponent(refUrl)}`);
+  let detail = '';
+  if (!res.ok) {
+    try { detail = (await res.json())?.error || ''; } catch {}
+    // The router's own 404 body is exactly {"error":"not found"} — that's a
+    // worker deployed before these routes existed, not a missing page.
+    if (res.status === 404 && (!detail || detail === 'not found')) {
+      throw new Error(`worker outdated — redeploy the setlist-sync worker to enable ${service} auto-link`);
+    }
+    throw new Error(detail || `${service} fetch failed (${res.status})`);
+  }
+  const data = await res.json();
+  if (data?.truncated) {
+    warnings.push(`${service} scan of ${refUrl} was capped — some tracks may be missing`);
+  }
+  return data?.tracks || [];
+}
+
+// The EmbeddedPlayer URL for a hand-pasted Bandcamp track link (auto-linked
+// songs already carry one). Returns null when the worker isn't configured or
+// the page doesn't resolve — the caller falls back to a plain link.
+export async function resolveBandcampEmbed(trackUrl) {
+  const sources = getSources();
+  if (!sources.workerUrl) return null;
+  try {
+    const tracks = await fetchMediaTracks(sources.workerUrl, 'bandcamp', trackUrl);
+    const norm = (u) => (u || '').replace(/\/+$/, '').toLowerCase();
+    const hit = tracks.find(t => norm(t.url) === norm(trackUrl)) || (tracks.length === 1 ? tracks[0] : null);
+    return hit?.embedUrl || null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchSpotifyTracks(workerUrl, playlistUrl) {
   const parsed = parseSpotifyUrl(playlistUrl);
   if (!parsed || parsed.type !== 'playlist') return [];
@@ -187,7 +259,14 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
       return await fetchPlaylistTracksAsUser(parsed.id, userToken);
     } catch (e) {
       userError = e;
+      console.warn('[setlist] spotify user-token playlist read failed, falling back to worker:', e.message);
     }
+  } else if (isSpotifyConnected()) {
+    // readToken() has a record but getSpotifyUserToken() couldn't mint a
+    // token from it (refresh failed on a network error). Without this, the
+    // fallback's client-credentials error is the ONLY thing the user sees —
+    // and it wrongly implies connecting wouldn't help.
+    userError = new Error('the saved Spotify session could not refresh (network hiccup or revoked access)');
   }
 
   if (workerUrl) {
@@ -200,14 +279,20 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
       try { detail = (await res.json())?.error || ''; }
       catch { detail = (await res.text().catch(() => '')) || ''; }
       // The client-credentials dead end has a client-side fix the worker
-      // can't know about — point at it.
-      const connectHint = (res.status === 403 || res.status === 404) && !isSpotifyConnected()
-        ? ' Fix: connect spotify in Settings — the app then reads playlists as you, which works for private playlists and newer Spotify apps.'
-        : '';
-      if (res.status === 403 || res.status === 401 || res.status === 502) {
-        throw new Error((detail || 'Spotify credentials invalid — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your worker env vars') + connectHint);
+      // can't know about — point at it. And when the user IS connected, the
+      // user-token failure is the actionable half of the story: swallowing it
+      // used to leave only the worker's "make sure it is set to Public" text,
+      // a dead end for a playlist that already is public.
+      let hint = '';
+      if (userError) {
+        hint = ` Reading it as your connected Spotify account also failed: ${userError.message}. Try "disconnect spotify" then reconnect in Settings.`;
+      } else if ((res.status === 403 || res.status === 404) && !isSpotifyConnected()) {
+        hint = ' Fix: connect spotify in Settings — the app then reads playlists as you, which works for private playlists and newer Spotify apps.';
       }
-      throw new Error((detail || `Spotify API ${res.status}`) + connectHint);
+      if (res.status === 403 || res.status === 401 || res.status === 502) {
+        throw new Error((detail || 'Spotify credentials invalid — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your worker env vars') + hint);
+      }
+      throw new Error((detail || `Spotify API ${res.status}`) + hint);
     }
     return await res.json();
   }

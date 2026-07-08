@@ -164,6 +164,36 @@ export async function completeSpotifyLogin() {
   }
 }
 
+// Prove the connected session actually works by asking Spotify who it is —
+// "Connected" based on a stored token alone can lie (revoked app access, a
+// dev-mode app the user was removed from). Returns {ok:true, name} or
+// {ok:false, reason}; never throws. Settings shows the result so a broken
+// session is visible BEFORE an auto-link run fails on it.
+export async function checkSpotifyConnection() {
+  if (!readToken()) return { ok: false, reason: 'not connected' };
+  const token = await getSpotifyUserToken();
+  if (!token) {
+    return { ok: false, reason: 'the saved session could not refresh — disconnect and reconnect' };
+  }
+  try {
+    const res = await fetch('https://api.spotify.com/v1/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json())?.error?.message || ''; } catch {}
+      return {
+        ok: false,
+        reason: `Spotify rejected the session (${res.status}${detail ? `: ${detail}` : ''}) — disconnect and reconnect; if it persists, check that this Spotify account is added under User Management in the app's dashboard (developer.spotify.com), which development-mode apps require`,
+      };
+    }
+    const me = await res.json();
+    return { ok: true, name: me.display_name || me.id || '' };
+  } catch {
+    return { ok: true, name: '' }; // offline — not a verdict on the session
+  }
+}
+
 // Serialize concurrent refreshes (several playlist fetches can race at once).
 let _refreshing = null;
 

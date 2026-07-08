@@ -23,9 +23,9 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, chartUrl, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
-| `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` |
+| `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist) |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow), one per song |
 | `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise) |
 | `snapshots` | `ts` | `{ts, label, data}` — rolling safety snapshots of the whole dataset (last 10), taken before a restore/sync/import so it can be undone |
@@ -358,6 +358,30 @@ presents as "auto-link" ("auto-link now" in the library tools, "auto-link" on th
 setlist page, "matching songs…" in the progress overlay). Internal
 identifiers (`sync.js`, `runManualSync`, `sl-sync-*` CSS) keep their names.
 
+### Streaming links: reference-only matching — auto-link never overwrites
+
+Songs carry up to three independent listening links — `spotifyUri`,
+`bandcampUrl`, `soundcloudUrl` — filled by auto-link from the matching
+reference URL on the song's setlists (`setlist.spotifyUrl` /
+`.bandcampUrl` / `.soundcloudUrl`). Bandcamp and SoundCloud exist because a
+band's catalog often lives there and not on Spotify (nightjar being the
+motivating case); the same fuzzy matcher, per-song scoping, and
+cross-reference rules below apply to all three services. Neither Bandcamp
+nor SoundCloud has an open API, so the worker scrapes what the pages
+themselves embed: Bandcamp's `data-tralbum` JSON (`GET /media/bandcamp` —
+a band page walks the `/music` discography grid, capped at 12 releases,
+`truncated:true` past the cap) and SoundCloud's `window.__sc_hydration`
+plus api-v2 with the site's own anonymous `client_id` scraped from its JS
+bundles (`GET /media/soundcloud`). The Bandcamp scrape also returns each
+track's `EmbeddedPlayer` URL (the numeric ids only exist in page markup) —
+auto-link stores it in `song.bandcampEmbedUrl` so the song page can embed
+the player without re-scraping; a hand-pasted Bandcamp link resolves it
+lazily via `resolveBandcampEmbed` (plain link offline). SoundCloud's widget
+takes the raw track URL, no lookup needed (`media.js`). The song page
+embeds the first available player (Spotify → Bandcamp → SoundCloud), and
+any of them arms the timecode timer for synced lyrics. The health check's
+"no listen link" dimension counts any of the three.
+
 ### Spotify links: playlist-only matching — auto-link never overwrites
 
 **Matching is playlist-only, and playlist scope is per song.** Auto-link
@@ -413,7 +437,16 @@ route) exchanges the `?code=`, cleans the URL, and restores the saved
 hash. `fetchSpotifyTracks` (`sync.js`) tries the user token first
 (`fetchPlaylistTracksAsUser`, same `{title, artist, spotifyUrl}` shape as
 the worker route) and falls back to the worker; worker 403/404 errors
-append a "connect spotify in Settings" hint when no user session exists.
+append a "connect spotify in Settings" hint when no user session exists —
+and when a session DOES exist but its read failed, the error includes that
+failure too ("Reading it as your connected Spotify account also failed:
+…"), because swallowing it used to leave only the worker's "make sure it
+is set to Public" text: a dead end for a playlist that already is public.
+Settings also live-checks the session on render (`checkSpotifyConnection`
+→ `GET /v1/me`) and shows "Connected as <name>" or the actual rejection —
+a token can be present yet revoked (e.g. the account was removed from a
+development-mode app's User Management), and that must surface in
+Settings, not as a cryptic auto-link failure later.
 Setup gotchas: the redirect URI registered in the Spotify dashboard must
 match **exactly** (Settings shows the computed value to paste).
 `spotifyRedirectUri()` normalizes away the trailing slash — the page is
@@ -744,7 +777,11 @@ a stale URL to an older, differently-named worker surfaces as
 "worker outdated" on routes added since.
 
 Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
-`POST /spotify/search-batch`, `GET /drive/folder/:id`,
+`POST /spotify/search-batch`,
+`GET /media/bandcamp?url=` / `GET /media/soundcloud?url=` (track lists
+scraped from Bandcamp/SoundCloud pages for auto-link —
+`{tracks:[{title, artist, url, embedUrl}], truncated}`),
+`GET /drive/folder/:id`,
 `GET /drive/folder/:id/recursive`, `GET /drive/file/:id/meta`,
 `GET /drive/file/:id/text`, `GET /drive/file/:id/image`,
 `GET /web/chart-search?title=&artist=`,

@@ -291,7 +291,9 @@ const HEALTH_CHECKS = [
   { key: 'noKey', label: 'no key', missing: s => !s.key },
   { key: 'noChart', label: 'no chart linked', missing: s => !s.chartUrl },
   { key: 'noLyrics', label: 'no lyrics', missing: s => !s.lyrics },
-  { key: 'noSpotify', label: 'no spotify link', missing: s => !s.spotifyUri },
+  // Any streaming link counts — a Bandcamp-only original (no Spotify
+  // release anywhere) must not read as "missing" forever.
+  { key: 'noSpotify', label: 'no listen link', missing: s => !s.spotifyUri && !s.bandcampUrl && !s.soundcloudUrl },
   { key: 'noArtist', label: 'no artist', missing: s => !s.artist },
   { key: 'noSteelSummary', label: 'no steel summary', missing: s => !s.steelSummary },
 ];
