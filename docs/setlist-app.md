@@ -528,14 +528,19 @@ Requesting an unshipped weight would synthesize differently per OS, change
 line wrapping, and move annotations between devices.
 
 The same rule governs **text annotations** (`annotation.js`): the canvas
-font is a pinned stack sized relative to `canvas.width` (`size 4` ≈ 2% of
-the box width), because stroke coordinates are normalized to that box — a
-fixed pixel size would give the text a different normalized footprint on
-every device. (Also: `var(--font-mono)` is invalid inside a canvas font
-string and gets silently ignored — that once left all text annotations at
-the canvas default 10px sans-serif, immune to the size picker.) Selected
-text elements get a bottom-right corner handle for continuous drag-resize;
-`stroke.size` stays the single source of scale and may be fractional.
+font is a pinned stack sized relative to `canvas.width` (a stroke's `size`
+is in width/200 units), because stroke coordinates are normalized to that
+box — a fixed pixel size would give the text a different normalized
+footprint on every device. New text strokes map the shared Fine/Medium/Thick
+pen widths up through `textSizeForWidth` (2/4/8 → 8/14/22, i.e. 4%/7%/11%
+of chart width): as raw pen widths the font came out ≈2% of width,
+illegible next to the chart's own 3.4%-of-width body type. The mapped value
+is stored per stroke, so pre-mapping annotations render at their authored
+size. (Also: `var(--font-mono)` is invalid inside a canvas font string and
+gets silently ignored — that once left all text annotations at the canvas
+default 10px sans-serif, immune to the size picker.) Selected text elements
+get a bottom-right corner handle for continuous drag-resize; `stroke.size`
+stays the single source of scale and may be fractional.
 
 ## Chart rendering on the song page (and how "appearance" works)
 
