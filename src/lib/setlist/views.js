@@ -194,6 +194,10 @@ function vocalistDot(code, legend) {
   return `<span class="sl-vocalist" data-v="${code}" title="${name}">${code}</span>`;
 }
 
+// Last default-artist used by setlist import / bulk assign — remembered so
+// pasting the next originals set doesn't mean retyping the band name.
+const IMPORT_ARTIST_KEY = 'voidstar.setlist.importArtist';
+
 // Personal practice/readiness statuses — global per song (not per-setlist),
 // stored as song.statuses (array of keys; absent/empty = all off). Toggled
 // on the song page; setlist rows show the abbreviated badge.
@@ -1050,17 +1054,28 @@ export async function renderSetlistEdit(root, setlistId) {
   // Import section
   const importSection = el('div', 'sl-section');
   importSection.innerHTML = '<div class="sl-section-title">Import Songs</div>';
+  const artistLabel = el('label', 'sl-label',
+    'Default artist <span class="sl-dim">(applied to songs with no artist named — covers stay unattributed)</span>');
+  const artistInput = el('input', 'sl-input');
+  artistInput.placeholder = 'e.g. your band name — optional';
+  artistInput.value = localStorage.getItem(IMPORT_ARTIST_KEY) || '';
+  artistLabel.appendChild(artistInput);
+  importSection.appendChild(artistLabel);
   const textarea = el('textarea', 'sl-textarea');
-  textarea.placeholder = 'Paste setlist text here...\n\nSet 1:\n1  Song Title  C\n2  Another Song  S\n\nSet 2:\n1  Third Song  H';
+  textarea.placeholder = 'Paste setlist text here...\n\nThe Grey Eagle 6/14\nSet 1:\n1  Song Title  C\n2  Crazy (Patsy Cline cover)\n3  Another Song  S';
   textarea.rows = 8;
   importSection.appendChild(textarea);
   importSection.appendChild(btn('import', 'sl-btn-primary', async () => {
     const text = textarea.value.trim();
     if (!text) return;
-    const parsed = parseTextList(text);
+    const defaultArtist = artistInput.value.trim();
+    if (defaultArtist) localStorage.setItem(IMPORT_ARTIST_KEY, defaultArtist);
+    else localStorage.removeItem(IMPORT_ARTIST_KEY);
+    const parsed = parseTextList(text, { defaultArtist });
     if (!parsed.sets.length) { alert('No songs found.'); return; }
 
     let importedCount = 0;
+    let artistCount = 0;
     const newSets = [];
 
     for (const pSet of parsed.sets) {
@@ -1068,8 +1083,13 @@ export async function renderSetlistEdit(root, setlistId) {
       for (const ps of pSet.songs) {
         let song = await store.findSongByTitle(ps.title);
         if (!song) {
-          song = store.createSong(ps.title);
+          song = store.createSong(ps.title, ps.artist);
           await store.putSong(song);
+          if (ps.artist) artistCount++;
+        } else if (ps.artist && !song.artist) {
+          song.artist = ps.artist;
+          await store.putSong(song);
+          artistCount++;
         }
         songIds.push(song.id);
         if (ps.vocalist) {
@@ -1084,10 +1104,47 @@ export async function renderSetlistEdit(root, setlistId) {
 
     pushUndo();
     sl.sets = newSets;
+    const metaNotes = [];
+    const m = parsed.meta || {};
+    if (!sl.venue && (m.venue || m.name)) {
+      sl.venue = m.venue || m.name;
+      metaNotes.push(`venue "${sl.venue}"`);
+    }
+    if (!sl.gigDate && m.gigDate) {
+      sl.gigDate = m.gigDate;
+      metaNotes.push(`date ${m.gigDate}`);
+    }
     await store.putSetlist(sl);
     textarea.value = '';
-    alert(`Imported ${importedCount} songs across ${newSets.length} set(s).`);
+    let msg = `Imported ${importedCount} songs across ${newSets.length} set(s).`;
+    if (artistCount) msg += `\nArtist filled on ${artistCount} song(s).`;
+    if (metaNotes.length) msg += `\nFrom the header line: ${metaNotes.join(', ')}.`;
+    alert(msg);
     navigate(`#setlist/${sl.id}`);
+  }));
+  importSection.appendChild(btn('set artist on all songs…', 'sl-btn-ghost sl-btn-sm', async () => {
+    const suggested = artistInput.value.trim() || localStorage.getItem(IMPORT_ARTIST_KEY) || '';
+    const name = prompt('Artist for every song in this setlist (only fills songs with no artist):', suggested);
+    if (!name || !name.trim()) return;
+    const artist = name.trim();
+    localStorage.setItem(IMPORT_ARTIST_KEY, artist);
+    let setCount = 0;
+    let skipped = 0;
+    const seen = new Set();
+    for (const set of sl.sets) {
+      for (const id of set.songIds) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const song = await store.getSong(id);
+        if (!song) continue;
+        if (song.artist) { skipped++; continue; }
+        song.artist = artist;
+        await store.putSong(song);
+        setCount++;
+      }
+    }
+    alert(`Artist "${artist}" set on ${setCount} song(s); ${skipped} already had one and were left alone.`);
+    refresh();
   }));
   root.appendChild(importSection);
 
