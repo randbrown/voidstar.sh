@@ -248,10 +248,11 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
   if (!parsed || parsed.type !== 'playlist') return [];
 
   // Prefer the user's own Spotify session when connected (Settings →
-  // "spotify account"): the worker's client-credentials token gets 403 on
-  // playlist reads for newer Spotify app registrations, and can never see
-  // private/collaborative playlists — a user token reads anything the user
-  // can see in Spotify. Falls back to the worker if the user read fails.
+  // "spotify account"): since Spotify's Feb 2026 API change, playlist
+  // contents are only returned to a USER token whose account owns or
+  // collaborates on the playlist — the worker's client-credentials token
+  // (no user) gets nothing for development-mode apps. Falls back to the
+  // worker anyway if the user read fails (extended-quota deployments).
   let userError = null;
   const userToken = await getSpotifyUserToken();
   if (userToken) {
@@ -280,14 +281,15 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
       catch { detail = (await res.text().catch(() => '')) || ''; }
       // The client-credentials dead end has a client-side fix the worker
       // can't know about — point at it. And when the user IS connected, the
-      // user-token failure is the actionable half of the story: swallowing it
-      // used to leave only the worker's "make sure it is set to Public" text,
-      // a dead end for a playlist that already is public.
+      // user-token failure is the actionable half of the story: since
+      // Spotify's Feb 2026 change the user token is the ONLY path that can
+      // read playlist contents for development-mode apps, so its error (e.g.
+      // "owner-only") is the one worth acting on, not the worker's.
       let hint = '';
       if (userError) {
-        hint = ` Reading it as your connected Spotify account also failed: ${userError.message}. Try "disconnect spotify" then reconnect in Settings.`;
+        hint = ` Reading it as your connected Spotify account also failed: ${userError.message}. If the playlist is yours, try "disconnect spotify" then reconnect in Settings.`;
       } else if ((res.status === 403 || res.status === 404) && !isSpotifyConnected()) {
-        hint = ' Fix: connect spotify in Settings — the app then reads playlists as you, which works for private playlists and newer Spotify apps.';
+        hint = ' Fix: connect spotify in Settings — since Spotify\'s Feb 2026 API change that is the only way a development-mode app can read playlist contents, and the playlist must be owned by (or collaborative with) your account.';
       }
       if (res.status === 403 || res.status === 401 || res.status === 502) {
         throw new Error((detail || 'Spotify credentials invalid — check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in your worker env vars') + hint);
@@ -303,19 +305,35 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl) {
 // Read a playlist's tracks directly from the Spotify Web API with the user's
 // token (the API is CORS-enabled), returning the same {title, artist,
 // spotifyUrl} shape as the worker's /spotify/playlist route.
+//
+// Uses the /items endpoint from Spotify's February 2026 Web API migration:
+// the old …/tracks endpoint 403s for every development-mode app since
+// 2026-03-09 (no matter the token or the playlist being public), and each
+// element's `track` field is now named `item`. Same migration also made
+// contents owner-only — Spotify returns a playlist's items only to a user
+// who owns or collaborates on it; anyone else gets metadata with no items.
 async function fetchPlaylistTracksAsUser(playlistId, token) {
   const tracks = [];
-  const fields = encodeURIComponent('items(track(name,uri,artists(name),external_urls(spotify))),next');
-  let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&fields=${fields}`;
+  const OWNER_ONLY_HINT = 'since Spotify\'s Feb 2026 API change, a development-mode app can only read the contents of playlists your account owns or collaborates on — check the playlist is in your library as owner (public/private no longer matters)';
+  const fields = encodeURIComponent('items(item(name,uri,artists(name),external_urls(spotify))),next');
+  let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=100&fields=${fields}`;
+  let firstPage = true;
   while (url) {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`Spotify playlist ${playlistId} (read as your account): ${res.status}. ${body.slice(0, 200)}`);
+      const hint = res.status === 403 ? ` — ${OWNER_ONLY_HINT}` : '';
+      throw new Error(`Spotify playlist ${playlistId} (read as your account): ${res.status}${hint}. ${body.slice(0, 200)}`);
     }
     const data = await res.json();
+    // 200 with the items field absent is the "metadata only" answer a
+    // non-owner gets — surface why rather than reporting an empty playlist.
+    if (firstPage && !Array.isArray(data.items)) {
+      throw new Error(`Spotify playlist ${playlistId} (read as your account): Spotify withheld the playlist's contents — ${OWNER_ONLY_HINT}`);
+    }
+    firstPage = false;
     for (const item of (data.items || [])) {
-      const t = item.track;
+      const t = item.item || item.track; // `track` is the pre-Feb-2026 shape (extended-quota apps)
       if (!t) continue;
       tracks.push({
         title: t.name,

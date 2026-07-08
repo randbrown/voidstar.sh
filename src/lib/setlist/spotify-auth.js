@@ -2,8 +2,9 @@
 // playlists AS THE SIGNED-IN USER, straight from the browser (Spotify's Web
 // API and token endpoint both allow CORS). This exists because playlist
 // reads with the worker's client-credentials token return 403 Forbidden for
-// newer Spotify app registrations (and always did for private/collaborative
-// playlists) — a user token reads anything the user can see in Spotify.
+// development-mode apps — and since Spotify's Feb 2026 API migration a user
+// token is the only path that gets playlist contents at all, and only for
+// playlists the signed-in account owns or collaborates on.
 //
 // PKCE keeps this browser-only: no client secret is involved, so the same
 // client id the worker uses is safe in localStorage. The redirect URI must

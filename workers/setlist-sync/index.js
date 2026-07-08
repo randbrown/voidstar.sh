@@ -150,11 +150,24 @@ async function getSpotifyToken(env, { force = false } = {}) {
   return _spotifyToken;
 }
 
+// Spotify's February 2026 Web API migration renamed the playlist-contents
+// endpoint (…/tracks → …/items, each element's `track` field → `item`) — the
+// old endpoint returns 403 for every development-mode app since 2026-03-09,
+// regardless of token type or the playlist being public. Worse for THIS
+// route: contents are now only returned when the requesting USER owns or
+// collaborates on the playlist, and a client-credentials token has no user —
+// so this read is expected to fail for dev-mode apps, and its error must
+// point at the client-side fix (connect Spotify in Settings). The route
+// stays for extended-quota deployments, where the old behavior survives.
+const SPOTIFY_CC_DEAD_END =
+  'Spotify\'s Feb 2026 API change stopped returning playlist contents to server (client-credentials) tokens for development-mode apps — connect Spotify in the app\'s Settings so playlist reads run as your account, and use a playlist your account owns or collaborates on';
+
 async function handleSpotifyPlaylist(playlistId, request, env) {
   let token = await getSpotifyToken(env);
   const tracks = [];
-  let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&market=US`;
+  let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=100&market=US`;
   let retriedAuth = false;
+  let firstPage = true;
 
   while (url) {
     let res = await fetch(url, {
@@ -170,15 +183,23 @@ async function handleSpotifyPlaylist(playlistId, request, env) {
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       const hint = res.status === 404
-        ? 'playlist not found, or not readable with client credentials (Spotify-owned editorial/algorithmic playlists can no longer be read this way — use a playlist you created)'
+        ? 'playlist not found (check the link; Spotify-owned editorial/algorithmic playlists are not readable by apps at all)'
         : res.status === 403
-        ? 'playlist not readable with client credentials — make sure it is set to Public (not private/collaborative) and is owned by your account, not a Spotify-owned editorial/algorithmic playlist'
+        ? SPOTIFY_CC_DEAD_END
         : `Spotify API ${res.status}`;
       throw httpError(res.status, `Spotify playlist ${playlistId}: ${hint}. ${body.slice(0, 300)}`);
     }
     const data = await res.json();
+    // A 200 with no items array is the post-Feb-2026 "metadata only" answer
+    // for a caller that isn't the owner/collaborator — for client credentials
+    // that's every playlist. Returning [] here would read as an empty
+    // playlist (i.e. data loss); fail loudly with the actionable fix instead.
+    if (firstPage && !Array.isArray(data.items)) {
+      throw httpError(403, `Spotify playlist ${playlistId}: Spotify withheld the playlist's contents — ${SPOTIFY_CC_DEAD_END}`);
+    }
+    firstPage = false;
     for (const item of (data.items || [])) {
-      const t = item.track;
+      const t = item.item || item.track; // `track` is the pre-Feb-2026 shape (extended-quota apps)
       if (!t) continue;
       tracks.push({
         title: t.name,
