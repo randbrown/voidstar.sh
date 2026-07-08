@@ -1153,6 +1153,40 @@ const buildStamp = readBuildStamp();
       margin: 0.5rem 0 0.25rem;
     }
 
+    /* Chart switcher (song page): primary + alternate chart chips */
+    .sl-chart-tabs {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin: 0.75rem 0 0.25rem;
+    }
+    .sl-chart-tab {
+      font-size: 0.72rem;
+      padding: 0.18rem 0.65rem;
+      border-radius: 999px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      max-width: 14rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sl-chart-tab-active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--void);
+      font-weight: 600;
+    }
+
+    /* Action strip for the selected alternate chart */
+    .sl-alt-chart-actions {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+      margin: 0.25rem 0;
+    }
+
     .sl-annotation-iframe,
     .sl-annotation-img {
       position: absolute;

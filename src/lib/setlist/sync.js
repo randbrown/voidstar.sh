@@ -4,7 +4,7 @@
 // falls back to client-side matching with manually provided URLs.
 // Cross-references Spotify and Drive data for better disambiguation.
 
-import { findBestMatch, findBestMatchWithArtist, parseDriveFilename } from './match.js';
+import { findBestMatch, findBestMatchWithArtist, matchScore, parseDriveFilename } from './match.js';
 import * as store from './store.js';
 import { parseSpotifyUrl } from './spotify.js';
 import { getSpotifyUserToken, isSpotifyConnected } from './spotify-auth.js';
@@ -495,13 +495,28 @@ function applyWebCandidateToSong(song, c) {
 // Returns {found, tier?, candidate?, candidates?}; the caller saves the song
 // when found. Tier 4 (create/draft a chart doc) is the caller's fallback —
 // see createChartDoc in gdrive-backup.js + chart-build.js.
-export async function searchChartForSong(song, onStage) {
+//
+// opts.collectOnly: never touch the song — return every plausible candidate
+// (Drive folders included) for a manual pick. This is the "find alt chart"
+// path for songs that ALREADY have a primary: without it, a high-scoring web
+// hit would silently overwrite song.chartUrl, and the Drive tiers would be
+// skipped entirely (applyDriveMatchToSong refuses charted songs).
+export async function searchChartForSong(song, onStage, { collectOnly = false } = {}) {
   const sources = getSources();
   if (!sources.workerUrl) return { found: false, candidates: [] };
 
   onStage?.('drive');
   const driveFiles = await fetchAllDriveFiles(sources);
-  if (applyDriveMatchToSong(song, driveFiles)) return { found: true, tier: 'drive' };
+  let driveCandidates = [];
+  if (collectOnly) {
+    driveCandidates = driveFiles
+      .map(f => ({ name: f.title, url: f.webViewLink, source: 'drive', verified: true, score: matchScore(song.title, f.title) }))
+      .filter(c => c.url && c.score >= 0.5)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+  } else if (applyDriveMatchToSong(song, driveFiles)) {
+    return { found: true, tier: 'drive' };
+  }
 
   onStage?.('web');
   let data = null;
@@ -513,7 +528,7 @@ export async function searchChartForSong(song, onStage) {
 
   const candidates = data?.candidates || [];
   const top = candidates[0];
-  if (top?.verified && top.score >= WEB_AUTO_LINK_SCORE) {
+  if (!collectOnly && top?.verified && top.score >= WEB_AUTO_LINK_SCORE) {
     applyWebCandidateToSong(song, top);
     return { found: true, tier: 'web', candidate: top };
   }
@@ -521,7 +536,7 @@ export async function searchChartForSong(song, onStage) {
   // search at all" (keyless engine bot-blocked) so the UI can say which.
   return {
     found: false,
-    candidates,
+    candidates: [...driveCandidates, ...candidates],
     providerDown: !!data?.providerDown,
     warnings: data?.warnings || [],
   };

@@ -85,35 +85,47 @@ export function isChartCacheable(song, workerUrl) {
   return !!(song?.chartUrl && chartImageFetchUrl(song.chartUrl, workerUrl));
 }
 
-// Download + store one song's chart. Returns { songId, ok, reason }.
-export async function cacheChartForSong(song, workerUrl) {
-  if (!song?.chartUrl) return { songId: song?.id, ok: false, reason: 'no chart' };
-  const url = chartImageFetchUrl(song.chartUrl, workerUrl);
-  if (!url) return { songId: song.id, ok: false, reason: 'needs worker' };
+// Download + store arbitrary chart bytes under an arbitrary cache key — used
+// for alternate charts, keyed `${songId}::${altId}` (store.altChartKey). No
+// song mutation and NO key auto-fill: an alternate may be a different
+// arrangement in a different key/capo, and filling song.key from it would
+// poison the primary's data. Returns { ok, blob?, size?, reason? }.
+export async function cacheChartByUrl(cacheKey, chartUrl, workerUrl) {
+  const url = chartImageFetchUrl(chartUrl, workerUrl);
+  if (!url) return { ok: false, reason: 'needs worker' };
   try {
     const res = await fetch(url);
-    if (!res.ok) return { songId: song.id, ok: false, reason: `fetch ${res.status}` };
+    if (!res.ok) return { ok: false, reason: `fetch ${res.status}` };
     const blob = await res.blob();
-    if (!blob || blob.size === 0) return { songId: song.id, ok: false, reason: 'empty' };
+    if (!blob || blob.size === 0) return { ok: false, reason: 'empty' };
     // Only cache bytes that can actually render as a chart. An upstream that
     // slips an HTML error/login page through here would otherwise poison the
     // cache with a permanently broken "image".
-    if (!isRenderableChartBlob(blob)) return { songId: song.id, ok: false, reason: `not an image (${blob.type || 'unknown type'})` };
-    await store.putChartBlob(song.id, blob, song.chartUrl);
-    // A text chart's header usually states the key — fill an empty song.key
-    // while the bytes are in hand. This also runs during bulk "download all
-    // charts", so keys populate library-wide in one pass.
-    if (!song.key && blob.type.startsWith('text/plain')) {
-      try {
-        const key = extractKeyFromChartText(await blob.text());
-        if (key) { song.key = key; await store.putSong(song); }
-      } catch {}
-    }
-    announceCached(song.id);
-    return { songId: song.id, ok: true, size: blob.size };
+    if (!isRenderableChartBlob(blob)) return { ok: false, reason: `not an image (${blob.type || 'unknown type'})` };
+    await store.putChartBlob(cacheKey, blob, chartUrl);
+    announceCached(cacheKey);
+    return { ok: true, blob, size: blob.size };
   } catch (e) {
-    return { songId: song.id, ok: false, reason: e.message || 'fetch failed' };
+    return { ok: false, reason: e.message || 'fetch failed' };
   }
+}
+
+// Download + store one song's PRIMARY chart. Returns { songId, ok, reason }.
+export async function cacheChartForSong(song, workerUrl) {
+  if (!song?.chartUrl) return { songId: song?.id, ok: false, reason: 'no chart' };
+  const r = await cacheChartByUrl(song.id, song.chartUrl, workerUrl);
+  if (!r.ok) return { songId: song.id, ok: false, reason: r.reason };
+  // A text chart's header usually states the key — fill an empty song.key
+  // while the bytes are in hand. This also runs during bulk "download all
+  // charts", so keys populate library-wide in one pass. Primary-only: the
+  // URL-keyed path above deliberately skips this.
+  if (!song.key && r.blob.type.startsWith('text/plain')) {
+    try {
+      const key = extractKeyFromChartText(await r.blob.text());
+      if (key) { song.key = key; await store.putSong(song); }
+    } catch {}
+  }
+  return { songId: song.id, ok: true, size: r.size };
 }
 
 function isRenderableChartBlob(blob) {

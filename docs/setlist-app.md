@@ -23,11 +23,11 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist) |
-| `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow), one per song |
-| `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise) |
+| `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
+| `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise). Same key scheme as `annotations`: bare `songId` = primary, `` `${songId}::${altId}` `` = alternate |
 | `snapshots` | `ts` | `{ts, label, data}` — rolling safety snapshots of the whole dataset (last 10), taken before a restore/sync/import so it can be undone |
 
 `charts` and `snapshots` are intentionally **local-only** and excluded from
@@ -59,6 +59,7 @@ config). Tokens and per-device display prefs never ride it:
 | `voidstar.setlist.spotify.token` | localStorage | ✗ | Spotify user login (PKCE): `{accessToken, refreshToken, expiresAt}` (see the Spotify-links section) |
 | `voidstar.setlist.spotify.pkce` | sessionStorage | ✗ | PKCE verifier + return hash, alive only during the login redirect round-trip |
 | `voidstar.setlist.noteDraft.<songId>` | sessionStorage | ✗ | uncommitted note-composer draft (survives focus-driven `refresh()` and app-switching; cleared on save) |
+| `voidstar.setlist.chartTab.<songId>` | sessionStorage | ✗ | which chart the song page shows: an `altCharts` entry id, absent = the primary (survives focus-driven `refresh()`; per-device on purpose) |
 
 ### Practice statuses
 
@@ -634,6 +635,56 @@ deploy missing the `/web/*` routes shows "worker outdated", and
 `/web/chart-data` responses list the URLs `tried`. The client logs details
 to the console with a `[setlist]` prefix.
 
+## Multiple charts per song — primary + alternates
+
+A song can carry more than one chart (different arrangements, NNS vs. lyric
+sheet, a bandmate's copy). `song.chartUrl` remains the **primary** and is the
+only chart the single-chart machinery ever touches — perform mode, key
+auto-fill (`maybeFillKeyFromChart`, `cacheChartForSong`'s header parse),
+"read chart", health checks, bulk offline counts, "rebuild doc", and scratch
+export are all primary-only by design. **Alternates** live in
+`song.altCharts: [{id, url, label, addedAt}]` (lazy field; protected by
+`SONG_FILL_FIELDS` like `chartUrl`) and are a song-page feature:
+
+- **Adding:** the charted song page's **"find alt chart"** button runs the
+  same Drive + web search as "search for chart" but *collect-only*
+  (`searchChartForSong(song, cb, {collectOnly: true})` in `sync.js`): the
+  Drive folder tiers return ranked candidates instead of auto-applying
+  (`applyDriveMatchToSong` refuses charted songs anyway), and the ≥ 0.85 web
+  auto-link is bypassed — a confident hit must not silently overwrite the
+  primary. Every candidate lands in the picker with **"add alt"** (append,
+  label defaulted from the file/candidate name) and **"make primary"**
+  (demotes the current primary to an alternate — never discards it — moving
+  its annotation layer and cached blob to the alternate's composite key,
+  then links the candidate via `linkChartCandidate`).
+- **Switching:** with alternates present the song page shows a chip row
+  (`.sl-chart-tabs`); the selection lives in sessionStorage
+  (`chartTab.<songId>`, see the state table). The selected alternate gets an
+  action strip: annotate / open doc / rename / cache offline / make primary
+  (`swapPrimaryWithAlt` — URLs, annotation layers, and cached blobs all
+  swap) / remove (deletes the alternate's annotation + blob records; the
+  Drive doc itself is untouched).
+- **Per-chart annotations:** every chart has its own full annotation layer.
+  Alternates key theirs (and their offline blobs) by
+  `store.altChartKey(songId, altId)` = `` `${songId}::${altId}` `` in the
+  existing `annotations`/`charts` stores — no DB migration, and composite
+  records ride the Drive backup automatically (the merge is key-generic).
+  The editor route is `#song/:id/:setlistId/annotate/alt:<altId>` (the same
+  `extra3` slot `scratch` uses); a stale alt id bails back to the song page.
+  Alt-annotate never enters scratch mode (an alternate always has a URL).
+- **Offline:** alternates warm the cache lazily when viewed, plus a per-alt
+  "cache offline" button (`cacheChartByUrl` — deliberately **no key
+  auto-fill**: an alternate may be a different arrangement in a different
+  key, and filling `song.key` from it would poison the primary's data).
+  Bulk "download all charts" and the offline N/M counts deliberately ignore
+  alternates (they count real song ids only).
+- **Old clients** ignore `altCharts` and the composite-key records safely.
+  Known accepted edge: an old client whose newer song copy predates the
+  alternates can transiently drop `altCharts` on that device — the next
+  merge against a new client fill-restores it. Removing an alternate doesn't
+  tombstone its annotation record, so a harmless orphan can linger in Drive
+  backups (annotation deletion has never propagated through the merge).
+
 ## Annotation alignment invariant
 
 Annotation strokes are stored normalized (x/y in 0..1) against the authoring
@@ -680,7 +731,9 @@ stays the single source of scale and may be fractional.
 ## Chart rendering on the song page (and how "appearance" works)
 
 `renderInlineChart()` (song page) and perform mode pick a chart rendering
-in this order:
+in this order (the song page renders whichever chart the chip row selects —
+primary or an alternate, each with its own annotation layer and cache key;
+perform mode always renders the primary):
 
 1. **Offline cache** — `getOfflineChart(songId, song.chartUrl)`
    (`chart-cache.js`) returns a typed result: `{kind:'text', text}` for
