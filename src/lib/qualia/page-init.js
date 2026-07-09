@@ -982,13 +982,24 @@ export function initQualiaPage() {
       const row = t.closest('.qp-row, .rig-ctl');
       if (row) input = row.querySelector('input[type="range"]');
     }
-    if (!input) return;
-    const reset = input.dataset.reset ?? input.defaultValue;
-    if (reset == null || reset === '') return;
-    ev.preventDefault();                       // suppress text-selection on the value/label
-    if (input.value === String(reset)) return; // already at default — nothing to do
-    input.value = String(reset);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    if (input) {
+      const reset = input.dataset.reset ?? input.defaultValue;
+      if (reset == null || reset === '') return;
+      ev.preventDefault();                       // suppress text-selection on the value/label
+      if (input.value === String(reset)) return; // already at default — nothing to do
+      input.value = String(reset);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+    // Not a slider → double-click on the empty visualizer background toggles
+    // zen mode. This is the desktop twin of the mobile double-tap-canvas
+    // gesture; both give a one-move way in and out of the chrome-free view.
+    // Ignore double-clicks that land on any HUD surface or interactive control
+    // so it can't fire while the user is working a panel. (pointInUiZone is a
+    // hoisted function declaration further down.)
+    if (pointInUiZone(ev.clientX, ev.clientY)) return;
+    if (t.closest('button, a, select, input, textarea, label, .ctrl-btn, .qp-toggle, [role="button"], [role="menu"], [role="dialog"]')) return;
+    setZen(!core.isZen());
   });
 
   // ── Bottom-left panel tab bar (mobile only) ──────────────────────────────
@@ -1268,6 +1279,17 @@ export function initQualiaPage() {
     await pose.setZoom(v);
     settings.save();
   });
+  // Snap mirror to the active lens: front (selfie / 'user') cameras read most
+  // naturally mirrored — you move left, the preview moves left — while a rear
+  // ('environment') camera must NOT be mirrored or any text/scene comes out
+  // backwards. So every facing change re-derives mirror from the lens. The M
+  // key / mirror button still let the performer override for the current lens
+  // afterwards; the override just lasts until the next flip.
+  function applyMirrorForFacing() {
+    const front = pose.getFacingMode() !== 'environment';
+    if (getMirror() !== front) setMirror(front);
+    btnCamMirror.classList.toggle('active', getMirror());
+  }
   // Flip front/back. Drops the persisted deviceId on purpose — the OS
   // picks whichever lens matches the requested side.
   async function flipCameraFacing() {
@@ -1277,6 +1299,8 @@ export function initQualiaPage() {
       if (id) storeDeviceId('cam', id);
       camPicker.populate(id);
       refreshCameraCard();
+      // Auto-mirror to match the lens we just switched to (front → on, rear → off).
+      applyMirrorForFacing();
       // Reapply persisted zoom to the new track (it has its own capabilities).
       // refreshCameraCard already clamps + re-applies; nothing else needed.
       settings.save();
@@ -1560,6 +1584,14 @@ export function initQualiaPage() {
   let didLongPress = false;
   let dragStartOffset = null;
   let longPressT = null;
+  // Two-finger pinch ON the preview → hardware zoom (mirrors the canvas pinch,
+  // but the canvas handler deliberately ignores #video, so the preview needs
+  // its own). Active pointers on the video element, tracked by pointerId.
+  const videoPointers = new Map();
+  let videoPinching = false;
+  let videoPinchInitDist = 0;
+  let videoPinchInitZoom = 1;
+  let videoPinchMin = 1, videoPinchMax = 1;
 
   function applyVideoOffset() {
     if (!videoEl.classList.contains('visible')) return;
@@ -1607,12 +1639,39 @@ export function initQualiaPage() {
 
   function onPointerDown(ev) {
     if (!videoEl.classList.contains('visible')) return;
+    try { videoEl.setPointerCapture?.(ev.pointerId); } catch {}
+    videoPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+    // Second finger down → this is a pinch, not a tap/drag. Tear down any
+    // single-finger gesture-in-progress and arm pinch-zoom (only when the lens
+    // exposes hardware zoom; otherwise it silently no-ops, same as the canvas
+    // pinch on iOS Safari / non-zoomable USB cams).
+    if (videoPointers.size === 2) {
+      if (longPressT)  { clearTimeout(longPressT);  longPressT  = null; }
+      if (pendingTapT) { clearTimeout(pendingTapT); pendingTapT = null; }
+      videoEl.classList.remove('dragging');
+      didDrag = false;
+      pressStartT = 0;            // disarm the single-finger tap classifier
+      const pts = [...videoPointers.values()];
+      videoPinchInitDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const caps = pose.getZoomCaps?.();
+      if (caps && caps.max > caps.min) {
+        videoPinching = true;
+        videoPinchInitZoom = lastZoomValue;
+        videoPinchMin = caps.min;
+        videoPinchMax = caps.max;
+      } else {
+        videoPinching = false;
+      }
+      return;
+    }
+
+    // Single finger → tap / drag / long-press flow.
     pressStartT = performance.now();
     pressStartX = ev.clientX; pressStartY = ev.clientY;
     didDrag = false;
     didLongPress = false;
     dragStartOffset = { dx: videoOffset.dx, dy: videoOffset.dy };
-    videoEl.setPointerCapture?.(ev.pointerId);
     // In size-full the pip covers the whole viewport. Tapping should still
     // cycle out of full (the user wants to escape) but drag + long-press
     // are disabled — repositioning a fullscreen element is meaningless and
@@ -1634,6 +1693,23 @@ export function initQualiaPage() {
   }
 
   function onPointerMove(ev) {
+    const vp = videoPointers.get(ev.pointerId);
+    if (vp) { vp.x = ev.clientX; vp.y = ev.clientY; }
+
+    // Pinch branch — two fingers on the preview drive hardware zoom.
+    if (videoPointers.size === 2) {
+      if (!videoPinching) return;
+      const pts = [...videoPointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (Math.abs(dist - videoPinchInitDist) > PINCH_MIN_MOVE_PX) {
+        const ratio = dist / Math.max(videoPinchInitDist, 1);
+        const target = Math.max(videoPinchMin, Math.min(videoPinchMax, videoPinchInitZoom * ratio));
+        applyPinchZoom(target); // shared with the canvas pinch (throttled, updates the slider)
+      }
+      return;
+    }
+
+    // Single-finger drag.
     if (!pressStartT) return;
     const dx = ev.clientX - pressStartX;
     const dy = ev.clientY - pressStartY;
@@ -1651,7 +1727,20 @@ export function initQualiaPage() {
     }
   }
 
-  function onPointerUp() {
+  function onPointerUp(ev) {
+    const wasPinch = videoPinching;
+    if (ev) videoPointers.delete(ev.pointerId);
+    // A pinch finger lifted — persist the zoom once we drop below two fingers,
+    // and swallow the leftover finger so its own lift can't fire a stray tap.
+    if (wasPinch) {
+      if (videoPointers.size < 2) {
+        videoPinching = false;
+        pose.setZoom(lastZoomValue);
+        settings.save();
+      }
+      pressStartT = 0;
+      return;
+    }
     if (!pressStartT) return;
     if (longPressT) { clearTimeout(longPressT); longPressT = null; }
     const elapsed = performance.now() - pressStartT;
@@ -1680,7 +1769,13 @@ export function initQualiaPage() {
     }
   }
 
-  function onPointerCancel() {
+  function onPointerCancel(ev) {
+    if (ev) videoPointers.delete(ev.pointerId);
+    if (videoPinching && videoPointers.size < 2) {
+      videoPinching = false;
+      pose.setZoom(lastZoomValue);
+      settings.save();
+    }
     if (longPressT) { clearTimeout(longPressT); longPressT = null; }
     pressStartT = 0;
     if (didDrag) {
@@ -1702,11 +1797,13 @@ export function initQualiaPage() {
   }
 
   // ── Canvas-level touch gestures ──────────────────────────────────────────
-  // Three gestures, all on the empty canvas area (we ignore touches inside
-  // any UI surface):
+  // Gestures on the empty canvas area (we ignore touches inside any UI
+  // surface):
   //   - vertical swipe       → cycle to next / prev quale
   //   - two-finger tap       → toggle pause
   //   - pinch                → drive camera zoom (when hardware caps allow)
+  //   - double-tap           → toggle zen mode (chrome on/off)
+  //   - long-press           → open the quick-action menu at the touch point
   //
   // Single-finger horizontal motion is reserved for the future. Pointer
   // capture is on the body so a swipe that crosses onto the topbar still
@@ -1727,6 +1824,9 @@ export function initQualiaPage() {
   let canvasGestureStartT = 0;
   let canvasGestureMaxFingers = 0;
   let canvasGestureDidPinch = false;
+  let canvasLongPressT = null;      // single-finger hold → quick-action menu
+  let canvasLongPressFired = false; // hold opened the menu → swallow the tap
+  let canvasLastTapT = 0;           // double-tap the canvas → toggle zen
 
   function pointInUiZone(x, y) {
     // Pull the element under the touch and check if it lives inside any of
@@ -1735,7 +1835,7 @@ export function initQualiaPage() {
     // canvas" — only the start position decides.
     const el = document.elementFromPoint(x, y);
     if (!el) return false;
-    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #sequencer-panel, #video, #zen-handle, #status-overlay, #cam-splitter, #qualia-logo-mark, .qg-popover');
+    return !!el.closest('#topbar, #panel-stack, #panel-tabs, #strudel-panel, #sequencer-panel, #video, #zen-handle, #status-overlay, #cam-splitter, #qualia-logo-mark, #quick-menu, .qg-popover');
   }
 
   function onCanvasPointerDown(ev) {
@@ -1750,8 +1850,21 @@ export function initQualiaPage() {
     if (canvasPointers.size === 1) {
       canvasGestureStartT = performance.now();
       canvasGestureDidPinch = false;
+      canvasLongPressFired = false;
+      // Arm the long-press → quick-menu. Cancelled by a drag (onCanvasPointerMove),
+      // a second finger, or an early lift. Fires only if one finger is still down.
+      const lx = ev.clientX, ly = ev.clientY;
+      if (canvasLongPressT) clearTimeout(canvasLongPressT);
+      canvasLongPressT = setTimeout(() => {
+        canvasLongPressT = null;
+        if (canvasPointers.size !== 1) return;
+        canvasLongPressFired = true;
+        openQuickMenu(lx, ly);
+      }, LONG_PRESS_MS);
     }
     if (canvasPointers.size === 2) {
+      // A second finger is a pinch, not a long-press — disarm the hold timer.
+      if (canvasLongPressT) { clearTimeout(canvasLongPressT); canvasLongPressT = null; }
       // Initialize pinch baseline. We only run pinch-zoom when the camera
       // track exposes hardware zoom — capability check is cheap and means
       // the gesture silently no-ops on iOS Safari / non-zoomable USB cams.
@@ -1772,6 +1885,11 @@ export function initQualiaPage() {
     const p = canvasPointers.get(ev.pointerId);
     if (!p) return;
     p.x = ev.clientX; p.y = ev.clientY;
+    // A moving finger is a swipe/drag, not a hold — cancel the pending long-press.
+    if (canvasLongPressT && canvasPointers.size === 1 &&
+        Math.hypot(p.x - p.x0, p.y - p.y0) > LONG_PRESS_MOVE) {
+      clearTimeout(canvasLongPressT); canvasLongPressT = null;
+    }
     if (canvasPointers.size === 2 && pinchInitialZoom > 0) {
       const [a, b] = [...canvasPointers.values()];
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
@@ -1812,10 +1930,13 @@ export function initQualiaPage() {
     const p = canvasPointers.get(ev.pointerId);
     if (!p) return;
     canvasPointers.delete(ev.pointerId);
+    if (canvasLongPressT) { clearTimeout(canvasLongPressT); canvasLongPressT = null; }
     // All fingers up: final classification.
     if (canvasPointers.size === 0) {
       const elapsed = performance.now() - canvasGestureStartT;
-      if (canvasGestureDidPinch) {
+      if (canvasLongPressFired) {
+        // The hold already opened the quick menu — consume this gesture whole.
+      } else if (canvasGestureDidPinch) {
         // Persist the pinched zoom on lift; per-frame applyPinchZoom already
         // sent intermediate values to the track.
         pose.setZoom(lastZoomValue);
@@ -1841,10 +1962,22 @@ export function initQualiaPage() {
             runSceneTransition();
             core.setActive(nextId).catch(err => console.error('[qualia] swipe setActive failed:', err));
           }
+        } else if (Math.abs(dx) + Math.abs(dy) < TAP_MAX_MOVE_PX) {
+          // A stationary single-finger tap. Two within the tap window toggle
+          // zen — the mobile twin of the desktop double-click-to-zen gesture.
+          const now = performance.now();
+          if (now - canvasLastTapT < TAP_TIMEOUT_MS) {
+            canvasLastTapT = 0;
+            hapticPulse(15);
+            setZen(!core.isZen());
+          } else {
+            canvasLastTapT = now;
+          }
         }
       }
       canvasGestureMaxFingers = 0;
       canvasGestureDidPinch = false;
+      canvasLongPressFired = false;
     }
   }
 
@@ -1852,6 +1985,105 @@ export function initQualiaPage() {
   document.body.addEventListener('pointermove',   onCanvasPointerMove);
   document.body.addEventListener('pointerup',     onCanvasPointerUp);
   document.body.addEventListener('pointercancel', onCanvasPointerUp);
+
+  // ── Quick-action menu ────────────────────────────────────────────────────
+  // Summoned by the canvas long-press (touch) or a right-click (desktop) at
+  // the gesture point. A floating pad of the controls a performer reaches for
+  // mid-set when the keyboard is out of reach. Each item just proxies an
+  // existing control's click, so behaviour stays identical to the topbar.
+  const quickMenu = document.getElementById('quick-menu');
+  let quickMenuOpen = false;
+
+  function stepFx(step) {
+    const ids = mesh.ids();
+    if (ids.length < 2) return;
+    const cur = core.activeId();
+    const i = ids.indexOf(cur || ids[0]);
+    const nextId = ids[(i + step + ids.length) % ids.length];
+    runSceneTransition();
+    core.setActive(nextId).catch(err => console.error('[qualia] quick-menu setActive failed:', err));
+  }
+
+  function quickMenuAction(action) {
+    switch (action) {
+      case 'zen':        setZen(!core.isZen()); break;
+      case 'pause':      btnPause.click(); break;
+      case 'fullscreen': document.getElementById('btn-fullscreen')?.click(); break;
+      case 'blackout':   document.getElementById('btn-blackout')?.click(); break;
+      case 'record':     document.getElementById('btn-record')?.click(); break;
+      case 'strudel':    document.getElementById('btn-strudel')?.click(); break;
+      case 'fx-prev':    stepFx(-1); break;
+      case 'fx-next':    stepFx(1); break;
+      case 'camera':
+        // Bring the camera back: turn it on if off, otherwise cycle its size
+        // (which un-hides a preview that was cycled to 'hidden' — the one state
+        // a plain tap can't escape, since a hidden preview isn't interactive).
+        if (poseSelect.value === 'off') {
+          poseSelect.value = 'camera';
+          poseSelect.dispatchEvent(new Event('change'));
+        } else {
+          btnCamera.click();
+        }
+        break;
+    }
+  }
+
+  function openQuickMenu(x, y) {
+    if (!quickMenu) return;
+    quickMenuOpen = true;
+    quickMenu.classList.remove('hidden');
+    quickMenu.setAttribute('aria-hidden', 'false');
+    // Un-hidden first so getBoundingClientRect reports real dimensions; the
+    // browser paints once after this handler, so setting left/top synchronously
+    // here means the first paint already lands the menu at the clamped point.
+    const rect = quickMenu.getBoundingClientRect();
+    const pad = 8;
+    const left = Math.max(pad, Math.min(window.innerWidth  - rect.width  - pad, x - rect.width  / 2));
+    const top  = Math.max(pad, Math.min(window.innerHeight - rect.height - pad, y - rect.height / 2));
+    quickMenu.style.left = `${left}px`;
+    quickMenu.style.top  = `${top}px`;
+    hapticPulse(20);
+  }
+
+  function closeQuickMenu() {
+    if (!quickMenu || !quickMenuOpen) return;
+    quickMenuOpen = false;
+    quickMenu.classList.add('hidden');
+    quickMenu.setAttribute('aria-hidden', 'true');
+  }
+
+  quickMenu?.addEventListener('click', (ev) => {
+    const item = ev.target.closest('.qm-item');
+    if (!item) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    closeQuickMenu();
+    quickMenuAction(item.dataset.action);
+  });
+
+  // Dismiss on any pointer that lands outside the open menu, and swallow that
+  // pointer so it can't also start a canvas gesture. Capture phase so we run
+  // before the body-level canvas handlers.
+  document.addEventListener('pointerdown', (ev) => {
+    if (!quickMenuOpen) return;
+    if (ev.target.closest?.('#quick-menu')) return;
+    closeQuickMenu();
+    ev.stopPropagation();
+  }, true);
+
+  // Desktop: right-click the empty visualizer background → quick menu. Real UI,
+  // text fields, and modal context menus are left to the native menu.
+  document.addEventListener('contextmenu', (ev) => {
+    if (ev.target.closest?.('#quick-menu')) { ev.preventDefault(); return; }
+    if (pointInUiZone(ev.clientX, ev.clientY)) return;
+    if (ev.target.closest?.('button, a, select, input, textarea, label, .ctrl-btn, .qp-toggle, [contenteditable], [role="dialog"], [role="menu"]')) return;
+    ev.preventDefault();
+    openQuickMenu(ev.clientX, ev.clientY);
+  });
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && quickMenuOpen) { closeQuickMenu(); }
+  });
 
   // Light haptic on every toggle button tap. Delegated, capture phase so we
   // fire even when the click handler stops propagation. Filtered to .ctrl-btn
