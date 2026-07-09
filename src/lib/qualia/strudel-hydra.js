@@ -29,9 +29,58 @@ const STRUDEL_SCRIPT = `https://unpkg.com/@strudel/repl@${STRUDEL_VERSION}`;
 let _strudelLoadingP = null;
 let _strudelConnectPatched = false;
 let _strudelEvalPatched = false;
+let _fetchRetryPatched = false;
+
+// Strudel's prebake fetches its default sample banks (piano, Dirt-Samples,
+// tidal-drum-machines, mridangam, …) from raw.githubusercontent.com with a
+// bare `fetch(url).then(r => r.json())` — no res.ok check, no retry. GitHub
+// raw serves 404/429 as plain text ("404: Not Found"), so on a flaky venue /
+// phone network (or a rate-limited shared IP) that surfaces as
+// `SyntaxError: Unexpected non-whitespace character after JSON at position 3`
+// and the bank is silently missing for the whole set. Rather than fork
+// prebake, retry at the fetch layer: GETs for `.json` on that host get a few
+// extra attempts with backoff before the failure is allowed through. The
+// sequencer's one-click GitHub pack loader resolves to the same host, so it
+// rides the same retries. Scoped tight (host + .json + GET) so no other
+// traffic changes behavior; like the connect patch, it is global and never
+// torn down.
+function installManifestFetchRetry() {
+  if (_fetchRetryPatched || typeof globalThis.fetch !== 'function') return;
+  _fetchRetryPatched = true;
+  const origFetch = globalThis.fetch.bind(globalThis);
+  const RETRY_DELAYS_MS = [500, 1500, 3500];
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const isRetryableManifest = (input, init) => {
+    try {
+      const method = (init?.method || (input instanceof Request && input.method) || 'GET');
+      if (String(method).toUpperCase() !== 'GET') return false;
+      const url = new URL(typeof input === 'string' ? input : input.url ?? input);
+      return url.hostname === 'raw.githubusercontent.com' && url.pathname.endsWith('.json');
+    } catch { return false; }
+  };
+  globalThis.fetch = async function qualiaFetchWithManifestRetry(input, init) {
+    if (!isRetryableManifest(input, init)) return origFetch(input, init);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await origFetch(input, init);
+        // 404 included deliberately: GitHub raw 404s transiently during CDN
+        // propagation/rate-limiting; a genuinely missing manifest just pays
+        // ~5s before the same error surfaces.
+        const retryable = res.status === 404 || res.status === 408 || res.status === 429 || res.status >= 500;
+        if (!retryable || attempt >= RETRY_DELAYS_MS.length) return res;
+        console.warn(`[qualia] manifest fetch ${res.status}, retrying (${attempt + 1}/${RETRY_DELAYS_MS.length}):`, String(input));
+      } catch (e) {
+        if (attempt >= RETRY_DELAYS_MS.length) throw e;
+        console.warn(`[qualia] manifest fetch failed, retrying (${attempt + 1}/${RETRY_DELAYS_MS.length}):`, String(input), e);
+      }
+      await sleep(RETRY_DELAYS_MS[attempt]);
+    }
+  };
+}
 
 function loadStrudelScript() {
   if (_strudelLoadingP) return _strudelLoadingP;
+  installManifestFetchRetry();
   _strudelLoadingP = new Promise((resolve, reject) => {
     if (customElements.get('strudel-editor')) { resolve(); return; }
     const s = document.createElement('script');
@@ -557,7 +606,20 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     const ed = getEditor();
     if (!ed || typeof ed.updateSettings !== 'function') return false;
     try {
+      // StrudelMirror.updateSettings() reconfigures EVERY known extension
+      // from the object passed — omitted keys are applied as `undefined`,
+      // which warns "theme undefined has no settings.." on each apply and
+      // silently turns off extensions whose default is on (bracket closing).
+      // Start from the component's persisted settings so omitted keys keep
+      // their real values. fontSize/fontFamily stay out: updateSettings would
+      // write them as inline styles on the editor root, overriding the app's
+      // own --strudel-font-size sizing (slider + auto-fit).
+      const base = { ...(editorEl?.settings || {}) };
+      delete base.fontSize;
+      delete base.fontFamily;
       ed.updateSettings({
+        ...base,
+        theme: base.theme || 'strudelTheme',
         isPatternHighlightingEnabled: !_editorPerfMode,
         isFlashEnabled: !_editorPerfMode,
         isLineNumbersDisplayed: _lineNumbers,

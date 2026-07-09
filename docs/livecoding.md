@@ -65,11 +65,17 @@ The current CPS is surfaced to the timer HUD (`chron.js`) and the sequencer.
 
 `strudel-hydra.js` is the most fragile module in the tree:
 
-- **Strudel is loaded from CDN unpinned `@latest`** — a version-drift hazard; much of the code is
-  fallback paths fighting it. **Pinning the Strudel version is the highest-value fix here.**
-- **No disposal path at all** — the connect-patch, document/window listeners, two ResizeObservers,
-  the ~8 s auto-save interval, the tap-poll interval, and the audio nodes all leak for the page
-  lifetime. Module-global mutable state would clash if instantiated twice.
+- **Strudel is loaded from CDN, pinned** (`STRUDEL_VERSION` in `strudel-hydra.js`) — bump it
+  deliberately and re-test a set; much of the code is fallback paths against version drift.
+- **Global `fetch` patch for sample manifests** — Strudel's prebake fetches its default banks from
+  `raw.githubusercontent.com` with no `res.ok` check or retry, and GitHub raw serves 404/429 as
+  plain text, so a venue-network blip used to surface as
+  `SyntaxError: Unexpected non-whitespace character after JSON at position 3` with the bank silently
+  missing for the whole set. `installManifestFetchRetry()` wraps `globalThis.fetch` to retry `.json`
+  GETs on that host with backoff. Like the connect patch, it's global and never torn down.
+- **No disposal path at all** — the connect-patch, the manifest-fetch patch, document/window
+  listeners, two ResizeObservers, the ~8 s auto-save interval, the tap-poll interval, and the audio
+  nodes all leak for the page lifetime. Module-global mutable state would clash if instantiated twice.
 - **`perFrame` is misnamed/miswired:** `strudel.perFrame` (the Hydra `a.fft` refresh) is wired on
   `core.onFps` (~5 Hz), so `a.fft`-driven Hydra visuals update at ~5 fps despite the name. Either
   rename it or rewire to `onFrame`/`onTick`.
