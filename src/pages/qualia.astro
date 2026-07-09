@@ -561,6 +561,40 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     @keyframes zen-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
+    /* Quick-action menu — summoned by a long-press on the canvas (or a
+       right-click on desktop) at the gesture point. Built for phone use, where
+       the keyboard shortcuts aren't reachable: a floating pad of the
+       most-reached-for controls, each button just proxying an existing
+       control. z90 floats it above the topbar (20) and every settings modal
+       (30/31) but below the recording save prompt (99) and blackout (200).
+       Positioned in JS; hidden until summoned. */
+    #quick-menu {
+      position: fixed; z-index: 90;
+      display: grid; grid-template-columns: repeat(3, minmax(84px, 1fr)); gap: 0.4rem;
+      padding: 0.5rem;
+      background: rgba(8, 10, 18, 0.92);
+      border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: 0 12px 44px rgba(0,0,0,0.6);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      max-width: min(90vw, 340px);
+      animation: qm-in 0.12s ease-out;
+    }
+    #quick-menu.hidden { display: none; }
+    @keyframes qm-in { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: scale(1); } }
+    .qm-item {
+      min-height: 50px;
+      display: flex; align-items: center; justify-content: center;
+      padding: 0.5rem 0.55rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font-family: var(--font-mono); font-size: 0.8rem;
+      cursor: pointer; transition: border-color 0.12s, color 0.12s, background 0.12s;
+      touch-action: manipulation; user-select: none; text-align: center;
+    }
+    .qm-item:hover, .qm-item:active {
+      color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.08);
+    }
+
     /* Chron pulse — fades in/out purely via the opacity transition (chron.js
        just toggles .visible). z19 floats it above the panel stack (15), tab
        bar (16), video preview (17) and splitter (18) but under the topbar
@@ -794,6 +828,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.1rem 0.55rem; cursor: pointer; transition: all 0.15s;
     }
     .qp-toggle.active { border-color: var(--pink); color: var(--pink); }
+    /* Anchor styled as a toggle chip (diag "source" link). */
+    a.diag-source-link { text-decoration: none; display: inline-block; }
+    a.diag-source-link:hover { border-color: var(--cyan); color: var(--cyan); }
     /* Per-panel save/load chips injected into panel headers + the qualem picker row.
        Collapsed to a single ⇅ glyph; clicking it opens a little dropdown menu with
        the save (⤓) / load (⤒) actions, so the header stays tidy until you need it. */
@@ -1027,6 +1064,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .ctrls-grid { display: flex; flex-direction: column; gap: 0.26rem; padding-top: 0.2rem; }
     .ctrl-row { display: flex; align-items: baseline; gap: 0.6rem; }
     .ctrl-keys { display: inline-flex; gap: 0.18rem; flex: 0 0 auto; }
+    .ctrl-keys kbd { white-space: nowrap; }
     .ctrl-row .ctrl-keys { min-width: 4.2rem; }
     .ctrl-lbl { color: var(--muted); }
     .ctrls-grid.knobs {
@@ -1115,14 +1153,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .sp-tab:hover  { color: var(--accent); }
     .sp-tab.active { color: var(--cyan); border-color: var(--border); background: rgba(34,211,238,0.06); }
-    /* Editor view-option toggle (line numbers). Right-aligned in the tab bar;
-       styled like a tab but not one — the tab handler only binds .sp-tab. */
+    /* Editor view-option toggles (autocomplete + line numbers). Right-aligned
+       in the tab bar; styled like a tab but not one — the tab handler only
+       binds .sp-tab. Only the FIRST .sp-opt takes the auto margin so the whole
+       cluster is pushed right as a unit; without the reset below, a second
+       auto-margin would split the free space and strand the first toggle
+       floating in the middle of the row (the reported autocomplete bug). */
     .sp-opt {
       margin-left: auto;
       background: none; border: 1px solid transparent; border-radius: 4px;
       color: var(--muted); font-family: var(--font-mono); font-size: 0.72rem;
       padding: 0.18rem 0.5rem; cursor: pointer; transition: all 0.15s;
     }
+    .sp-opt + .sp-opt { margin-left: 0; }
     .sp-opt:hover  { color: var(--accent); }
     .sp-opt.active { color: var(--cyan); border-color: var(--border); background: rgba(34,211,238,0.06); }
 
@@ -2648,12 +2691,29 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
 
     <button class="ctrl-btn" id="btn-pause" title="Pause (Space)">pause</button>
-    <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="ctrl-btn">source ↗</a>
   </div>
 </div>
 
 <div id="zen-handle" title="Exit zen mode (Z)">
   <span class="zen-icon">✦</span>
+</div>
+
+<!-- Quick-action menu — long-press the canvas (or right-click on desktop) to
+     summon a floating pad of the most-reached-for controls at the gesture
+     point. Meant for phone use where the hotkeys aren't reachable; every
+     button proxies an existing control so behaviour stays identical (and the
+     "camera" item brings a hidden preview back). Positioned + toggled by
+     page-init.js. Tap an action / tap outside / Esc to dismiss. -->
+<div id="quick-menu" class="hidden" role="menu" aria-label="Quick actions" aria-hidden="true">
+  <button class="qm-item" data-action="zen"        role="menuitem">zen</button>
+  <button class="qm-item" data-action="pause"      role="menuitem">pause</button>
+  <button class="qm-item" data-action="fullscreen" role="menuitem">fullscreen</button>
+  <button class="qm-item" data-action="camera"     role="menuitem">camera</button>
+  <button class="qm-item" data-action="blackout"   role="menuitem">screen off</button>
+  <button class="qm-item" data-action="record"     role="menuitem">rec</button>
+  <button class="qm-item" data-action="fx-prev"    role="menuitem">◄ fx</button>
+  <button class="qm-item" data-action="fx-next"    role="menuitem">fx ►</button>
+  <button class="qm-item" data-action="strudel"    role="menuitem">strudel</button>
 </div>
 
 <!-- Chron pulse — the τ nudge chron.js fades in at the bottom (or top) of
@@ -2731,6 +2791,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row diag-row">
         <span class="diag-label">stuck state?</span>
         <button class="qp-toggle" id="btn-reset-all" title="Clear all qualia settings + service-worker caches and reload">reset all</button>
+      </div>
+      <!-- Source link — tucked in here (out of the topbar) so a stray tap on the
+           main control row can't navigate off the instrument mid-set. -->
+      <div class="qp-row diag-row">
+        <span class="diag-label">source</span>
+        <a href="https://github.com/randbrown" target="_blank" rel="noopener" class="qp-toggle diag-source-link">github ↗</a>
       </div>
     </div>
   </div>
@@ -3320,6 +3386,20 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>Z</kbd><kbd>X</kbd></span><span class="ctrl-lbl">zen / fullscreen</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>H</kbd></span><span class="ctrl-lbl">blackout — screen off, audio keeps playing</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>Space</kbd></span><span class="ctrl-lbl">pause</span></div>
+    </div>
+
+    <div class="ctrls-sec">touch <span class="ctrls-tag">on the visualizer — no keyboard needed</span></div>
+    <div class="ctrls-grid">
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>swipe ↑↓</kbd></span><span class="ctrl-lbl">next / prev fx</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>double-tap</kbd></span><span class="ctrl-lbl">zen mode on / off</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>long-press</kbd></span><span class="ctrl-lbl">quick-action menu (right-click on desktop)</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>2-finger tap</kbd></span><span class="ctrl-lbl">pause</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>pinch</kbd></span><span class="ctrl-lbl">camera zoom (canvas or on the preview)</span></div>
+    </div>
+    <div class="ctrls-grid">
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>tap cam</kbd></span><span class="ctrl-lbl">cycle preview size (small · large · full · hidden)</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>2-tap cam</kbd></span><span class="ctrl-lbl">flip front / back — front auto-mirrors</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>hold cam</kbd></span><span class="ctrl-lbl">choose camera · drag to reposition</span></div>
     </div>
 
     <div class="ctrls-sec">rig · looper <span class="ctrls-tag">keys</span></div>
