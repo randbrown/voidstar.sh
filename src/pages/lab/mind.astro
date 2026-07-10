@@ -307,6 +307,7 @@ const buildStamp = readBuildStamp();
     }
     .mn-chip-x { opacity: 0.6; margin-left: 0.2rem; cursor: pointer; }
     .mn-chip-x:hover { opacity: 1; }
+    .mn-tags-toggle { border-style: dashed; }
 
     /* ── Cards ── */
     .mn-card {
@@ -785,6 +786,15 @@ const buildStamp = readBuildStamp();
       .mn-head-actions .mn-btn { padding: 0.5rem 0.6rem; font-size: 0.8rem; }
       .mn-controls { flex-wrap: wrap; }
       .mn-search { flex-basis: 100%; }
+      /* Reclaim vertical space up top so search results clear the on-screen
+         keyboard. Every rem trimmed here is a result row that stays visible. */
+      .mind-root { padding-bottom: 5.5rem; }
+      .mn-apphead { padding: 0.5rem 0 0.4rem; margin-bottom: 0.5rem; }
+      .mn-wordmark { font-size: 1.05rem; }
+      .mn-folderbar { margin-bottom: 0.45rem; }
+      .mn-crumbs { margin-bottom: 0.3rem; }
+      .mn-controls { margin-bottom: 0.4rem; }
+      .mn-chips { margin-bottom: 0.55rem; }
     }
   </style>
 </head>
