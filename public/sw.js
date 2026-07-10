@@ -34,9 +34,17 @@
 //     now retry once with a cache-busting query — a fresh edge key that dodges
 //     the poisoned entry and fetches the real bytes — and cache the result
 //     under the canonical key so later loads never need the retry.
+// v11: force a cache purge after an app-shell change. A deploy that only
+//     touches app code (new content-hashed `/_astro/*` chunks, new inline page
+//     CSS) leaves this file byte-identical, so the browser never re-installs the
+//     SW and `activate` never runs — field clients stay pinned to the previous
+//     `voidstar-vN` cache and render a stale/blank shell (a fresh incognito
+//     profile, which bypasses the SW on first load, is unaffected). Bumping the
+//     version changes the SW body, which re-triggers install → activate → purge
+//     → clients.claim(). Bump this on any deploy that ships an app-shell change.
 // Bumping the version also purges the old cache on every client so no one stays
 // pinned to a stale app-shell.
-const SW_VERSION = 'v10';
+const SW_VERSION = 'v11';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
