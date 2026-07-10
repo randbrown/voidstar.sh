@@ -1401,7 +1401,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     btnToggle.textContent = live ? 'seq ●' : 'seq';
     if (status) {
       if (live)       status.textContent = 'audio: live';
-      else if (open)  status.textContent = isPlaying ? 'starting…' : 'click ▶ to play';
+      else if (open)  status.textContent = isPlaying ? 'starting…' : '';
     }
   }
 

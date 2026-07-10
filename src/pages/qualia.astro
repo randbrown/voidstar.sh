@@ -3520,7 +3520,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="sequencer-header">
     <span class="sp-title">seq</span>
     <input type="text" id="sequencer-name" class="seq-name-input" placeholder="pattern name" />
-    <span class="sp-status" id="sequencer-status">click ▶ to play</span>
+    <span class="sp-status" id="sequencer-status"></span>
     <button class="ctrl-btn" id="btn-sequencer-play"  title="Play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-sequencer-stop"  title="Stop">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-sequencer-mute" title="Mute sequencer audio (transport keeps running so sync stays locked)">live</button>
@@ -3659,7 +3659,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 <div id="vocoder-panel" style="display:none">
   <div id="vocoder-header">
     <span class="sp-title">vox <span class="sp-tag">// vocal fx</span></span>
-    <span class="sp-status" id="vocoder-status">click ▶ to start</span>
+    <span class="sp-status" id="vocoder-status"></span>
     <button class="ctrl-btn" id="btn-vocoder-play"  title="Open the mic">▶</button>
     <button class="ctrl-btn" id="btn-vocoder-stop"  title="Close the mic">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-vocoder-mute" title="Mute output (mic stays open)">live</button>
