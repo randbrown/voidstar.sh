@@ -524,12 +524,15 @@
   --glow-strength: 0;                /* flat print — no bloom */
   --panel-blur:  0px;
   --tex-grain:   0.05;               /* faint paper tooth (existing overlay) */
-  --viz-bg:        #f2e9d8;          /* printed on paper */
+  /* The live canvas is a deep-ink stage the prints sit on (the page --void
+     stays paper) — a paper canvas washed the quale out, since most fx draw
+     bright-on-dark. Panels/site remain paper; only the canvas clear is ink. */
+  --viz-bg:        #14111a;          /* deep soy-ink stage */
   --viz-hue-base:  205;              /* sea blue … */
   --viz-hue-spread: 128;             /* … through indigo to fluorescent pink */
-  --viz-sat:       80;
-  --viz-light:     46;               /* inks read dark on paper */
-  --viz-glow:      0.12;
+  --viz-sat:       82;
+  --viz-light:     56;               /* bright spot-inks pop on the dark canvas */
+  --viz-glow:      0.2;
   --code-filter:   sepia(0.5) hue-rotate(300deg) saturate(1.2) contrast(1.02);
 }
 
@@ -1317,8 +1320,11 @@ body::before {
   box-shadow: 4px 4px 0 color-mix(in srgb, var(--accent) 22%, transparent) !important;
 }
 [data-theme="risograph"] .qp-card > .qp-head {
-  background: var(--text) !important;
-  color: var(--void) !important;
+  /* a printed masthead: a second paper stock ruled off by a fluor-pink spot
+     ink, ink type — lighter than the old solid-ink slab */
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  border-bottom: 2px solid var(--accent) !important;
   border-radius: 0 !important;
   padding: 0.22rem 0.5rem !important;
   letter-spacing: 0.06em;
@@ -1326,8 +1332,8 @@ body::before {
   font-weight: 600;
 }
 [data-theme="risograph"] .qp-card > .qp-head .qp-title,
-[data-theme="risograph"] .qp-card > .qp-head span { color: var(--void) !important; }
-[data-theme="risograph"] .qp-head .qp-title::before { content: "⊕ "; color: var(--void); opacity: 0.7; }
+[data-theme="risograph"] .qp-card > .qp-head span { color: var(--text) !important; }
+[data-theme="risograph"] .qp-head .qp-title::before { content: "⊕ "; color: var(--accent); opacity: 0.9; }
 /* Lighten the hardcoded-dark popovers/overlays (fixed rgba fills, not tokens)
    so they don't read as dark slabs on paper. */
 [data-theme="risograph"] #quick-menu,
@@ -1342,6 +1348,28 @@ body::before {
    invert it to a soy-ink print with a fluorescent-pink mis-registration ghost. */
 [data-theme="risograph"] .hero-logo {
   filter: invert(1) contrast(1.05) drop-shadow(3px 3px 0 rgba(200, 21, 106, 0.45)) !important;
+}
+/* The full-viewport fx canvas composites with mix-blend-mode:screen, so it
+   needs a DARK backdrop to reveal the quale — a paper body screens it to white.
+   Darken only the live-stage pages (qualia + the labs, identified by their
+   fx-canvas host); the marketing site and every panel stay paper. The prints
+   then sit on a dark ink stage. */
+[data-theme="risograph"] body:has(#qualia-host),
+[data-theme="risograph"] body:has(#canvas) {
+  background: #14111a !important;
+}
+/* HUD text that sits directly on the dark stage (not in a paper panel) → light
+   ink so it reads; panel text stays dark. Keycaps become printed paper chips
+   with an ink border, legible on both the stage and inside panels. */
+[data-theme="risograph"] #hints { color: color-mix(in srgb, var(--void) 90%, var(--accent)) !important; }
+[data-theme="risograph"] #chron-pulse:not(.warn):not(.horizon) {
+  color: color-mix(in srgb, var(--void) 80%, transparent) !important;
+}
+[data-theme="risograph"] kbd {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--text) !important;
+  border-radius: 0 !important;
 }
 
 /* ============================================================================
@@ -1716,9 +1744,20 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
 }
 [data-theme="glissando"] .qp-mod-pill {
   border-radius: 4px !important;
-  background: linear-gradient(180deg,
-    color-mix(in srgb, var(--surface-2) 72%, #fff 28%), var(--surface-2)) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 1px 2px rgba(0, 0, 0, 0.45) !important;
+  /* dark walnut woodgrain: a lit-ridge→shadow gradient with faint lengthwise
+     grain streaks — the wood body under the metal pedals, kept low-contrast so
+     it reads as material, not noise */
+  background:
+    repeating-linear-gradient(180deg,
+      rgba(0, 0, 0, 0.22) 0 1px,
+      transparent 1px 3px,
+      rgba(122, 90, 56, 0.14) 3px 4px,
+      transparent 4px 7px),
+    linear-gradient(180deg, #34261a, #1b130c) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(214, 190, 150, 0.10),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 1px 2px rgba(0, 0, 0, 0.5) !important;
 }
 
 /* ── Risograph — printed rule w/ registration offset / punched-mark thumb ──
