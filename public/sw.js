@@ -7,9 +7,11 @@
 //   - Same-origin static assets (JS, CSS, images, manifest, icons): stale-
 //     while-revalidate — except content-hashed `/_astro/*` files, which are
 //     immutable and served cache-first with no revalidation fetch. Only
-//     `res.ok` responses are ever cached, and a miss + network failure
-//     answers with `Response.error()` so the request fails cleanly (the
-//     page-side StyleGuard can then recover with a one-shot reload).
+//     `res.ok` responses are ever cached. A miss + network failure OR a non-ok
+//     response (404/redirect — whose body is HTML) answers with a cached copy
+//     or `Response.error()`, never the HTML body, so a subresource request
+//     fails cleanly as a script error (which the page can recover from with a
+//     one-shot reload) instead of a text/html-typed module load failure.
 //   - Cross-origin requests (Strudel CDN, MediaPipe models, fonts.gstatic):
 //     pass through completely — let the browser HTTP cache handle them.
 //     Caching opaque cross-origin responses fills storage with junk and
@@ -20,7 +22,12 @@
 // purge-old-caches on the next page load. clients.claim() makes the new
 // SW take over immediately so users don't need a hard reload.
 
-const SW_VERSION = 'v8';
+// v9: harden the asset path so a non-ok subresource response (a 404/redirect
+// whose body is HTML) is never handed back to a module/style request — that
+// surfaced as "Failed to load module script: … MIME type of text/html" after a
+// deploy. Bumping the version also purges the old cache on every client so no
+// one stays pinned to a stale app-shell.
+const SW_VERSION = 'v9';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
@@ -99,9 +106,21 @@ self.addEventListener('fetch', (event) => {
   // Everything else (assets). Astro content-hashes /_astro/* filenames, so
   // a cache hit there is immutable — serve it without a revalidation fetch.
   // Other assets (manifest, icons, sw-adjacent files) stay stale-while-
-  // revalidate. On a miss + network failure, answer with an explicit
-  // network-error Response instead of resolving to undefined (which
-  // rejects respondWith and logs a TypeError on top of the failed load).
+  // revalidate.
+  //
+  // Two failure modes must never reach the page as content:
+  //   - network failure (offline / DNS): the .catch below answers with a
+  //     cached copy or an explicit network-error Response, not `undefined`
+  //     (which would reject respondWith and log a TypeError on the failed load).
+  //   - a NON-OK response (404/redirect): on Cloudflare Pages a 404 body is the
+  //     site's HTML error page. Handing that back for a `/_astro/*.js` request
+  //     makes the browser reject the module with "expected a JavaScript module
+  //     but the server responded with a MIME type of text/html" — the reported
+  //     prod error, seen when a client requests a hashed chunk the edge is
+  //     momentarily 404ing (deploy propagation) or an old SW mis-serves. Treat
+  //     a non-ok subresource response the same as a failure: prefer any cached
+  //     copy, else fail cleanly so the load errors as a script error (which the
+  //     page can recover from with a reload) rather than a bogus HTML document.
   const immutable = url.pathname.startsWith('/_astro/');
   event.respondWith(
     caches.match(req).then((cached) => {
@@ -111,8 +130,9 @@ self.addEventListener('fetch', (event) => {
           if (res && res.ok) {
             const copy = res.clone();
             caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+            return res;
           }
-          return res;
+          return cached || Response.error();
         })
         .catch(() => cached || Response.error());
       return cached || fetchPromise;
