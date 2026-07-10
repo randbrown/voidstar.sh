@@ -304,21 +304,6 @@ function loadFontSize() {
 }
 function saveFontSize(px) { try { localStorage.setItem(FONT_KEY, String(px)); } catch {} }
 
-// Auto-fit: size the editor text to the content instead of a fixed px — a
-// blank/short pattern zooms in to fill the panel, a longer one shrinks so the
-// longest line never wraps and every line stays visible, down to the slider's
-// size where it locks and the editor scrolls. Default ON (first visit opts in;
-// the `fit` toggle then persists an explicit 0/1). The stored fontSize above
-// doubles as the auto-fit floor.
-const FONT_AUTO_KEY = 'voidstar.qualia.strudel.fontAuto';
-function loadFontAuto() {
-  try {
-    const v = localStorage.getItem(FONT_AUTO_KEY);
-    return v === null ? true : v === '1';
-  } catch { return true; }
-}
-function saveFontAuto(on) { try { localStorage.setItem(FONT_AUTO_KEY, on ? '1' : '0'); } catch {} }
-
 const BLUR_KEY = 'voidstar.qualia.strudel.blur';
 function loadBlur() {
   try { return localStorage.getItem(BLUR_KEY) === '1'; } catch { return false; }
@@ -359,7 +344,6 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const btnMute    = document.getElementById('btn-strudel-mute');
   const elGain     = document.getElementById('strudel-gain');
   const elFont     = document.getElementById('strudel-font-size');
-  const btnFontAuto = document.getElementById('btn-strudel-fontauto');
   const btnNewline = document.getElementById('btn-strudel-newline');
   const btnLines   = document.getElementById('btn-strudel-lines');
   const btnAuto    = document.getElementById('btn-strudel-autocomplete');
@@ -428,8 +412,6 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       // Editor font size (mirrors the header slider; double-click it to reset).
       setStrudelFontSize: (px) => setFontSize(px),
       getStrudelFontSize: () => getFontSize(),
-      setStrudelFontAuto: (on) => setFontAuto(on),
-      getStrudelFontAuto: () => getFontAuto(),
     };
   }
 
@@ -613,7 +595,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       // Start from the component's persisted settings so omitted keys keep
       // their real values. fontSize/fontFamily stay out: updateSettings would
       // write them as inline styles on the editor root, overriding the app's
-      // own --strudel-font-size sizing (slider + auto-fit).
+      // own --strudel-font-size sizing (the header slider).
       const base = { ...(editorEl?.settings || {}) };
       delete base.fontSize;
       delete base.fontFamily;
@@ -661,7 +643,6 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     saveLineNumbers(_lineNumbers);
     applyEditorSettings();
     refreshLinesBtn();
-    recomputeAutoFont();   // the gutter just changed the width available to code
     return _lineNumbers;
   }
   function getLineNumbers() { return _lineNumbers; }
@@ -670,110 +651,21 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     btnLines.addEventListener('click', () => setLineNumbers(!_lineNumbers));
   }
 
-  // Editor font size — a CSS var on :root drives the #strudel-mount font-size
-  // rule (CM6 line-height is em-relative, so the gutter scales with it).
-  // With auto-fit on, the applied size is content-driven (computeFitFontPx)
-  // and `_fontSize` (the slider) acts as the floor; with it off, `_fontSize`
-  // is the fixed size, exactly as before.
-  let _fontAuto = loadFontAuto();
-  let _autoFontPx = 0;   // last computed fit; 0 = not yet computed
-  function effectiveFontPx() { return (_fontAuto && _autoFontPx) ? _autoFontPx : _fontSize; }
+  // Editor font size — a manual setting. A CSS var on :root drives the
+  // #strudel-mount font-size rule (CM6 line-height is em-relative, so the
+  // gutter scales with it). Driven by the header slider; double-click resets.
   function applyFontSize() {
-    try { document.documentElement.style.setProperty('--strudel-font-size', effectiveFontPx() + 'px'); } catch {}
+    try { document.documentElement.style.setProperty('--strudel-font-size', _fontSize + 'px'); } catch {}
   }
   function setFontSize(px) {
     const n = Math.round(Number(px));
     _fontSize = Number.isFinite(n) ? Math.max(FONT_MIN, Math.min(FONT_MAX, n)) : FONT_DEFAULT;
     saveFontSize(_fontSize);
     applyFontSize();
-    recomputeAutoFont();   // the floor moved — refit against it
     return _fontSize;
   }
   function getFontSize() { return _fontSize; }
   applyFontSize();   // apply the persisted size on init
-
-  // ── Auto-fit ──────────────────────────────────────────────────────────
-  // Largest font px at which the longest line fits the mount's width AND
-  // every line fits its height — i.e. no wrap, no scroll — clamped to
-  // [_fontSize, FONT_MAX]. Below the floor the editor scrolls instead.
-  const AUTO_LINE_H = 1.4;              // CM6 default content line-height
-  const AUTO_PAD_W = 18, AUTO_PAD_H = 12; // cm-line/content padding + scrollbar slack
-  let _monoAdvance = 0;                 // char advance per font px, measured once
-  function measureMonoAdvance() {
-    if (_monoAdvance) return _monoAdvance;
-    let fam = null;
-    try {
-      const root = editorEl?.shadowRoot || editorEl;
-      const cm = root?.querySelector?.('.cm-content');
-      if (cm) fam = getComputedStyle(cm).fontFamily || null;
-    } catch {}
-    try {
-      const ctx = document.createElement('canvas').getContext('2d');
-      ctx.font = `100px ${fam || 'monospace'}`;
-      const adv = ctx.measureText('0000000000').width / 1000;
-      // Cache only once the real editor font was measurable — the generic
-      // 'monospace' answer can differ from the mounted editor's face.
-      if (fam) _monoAdvance = adv;
-      return adv;
-    } catch { return 0.6; }
-  }
-  function computeFitFontPx() {
-    const w = (mount?.clientWidth  ?? 0) - AUTO_PAD_W;
-    const h = (mount?.clientHeight ?? 0) - AUTO_PAD_H;
-    if (w <= 0 || h <= 0) return 0;   // hidden / not laid out yet
-    // Trailing blank lines don't count — an empty buffer (or one the user
-    // just Enter-ed past the end of) should still read as "near blank".
-    const lines = (readEditorCode() ?? loadCurrent() ?? '').replace(/[\s\n]+$/, '').split('\n');
-    const rows = Math.max(1, lines.length);
-    let cols = 1;
-    for (const l of lines) if (l.length > cols) cols = l.length;
-    const gutterCh = _lineNumbers ? String(rows).length + 2 : 0;
-    const pxW = w / ((cols + gutterCh) * measureMonoAdvance());
-    const pxH = h / (rows * AUTO_LINE_H);
-    return Math.max(_fontSize, Math.min(FONT_MAX, Math.floor(Math.min(pxW, pxH))));
-  }
-  function recomputeAutoFont() {
-    if (!_fontAuto) return;
-    const px = computeFitFontPx();
-    if (px && px !== _autoFontPx) { _autoFontPx = px; applyFontSize(); }
-  }
-  function refreshFontAutoBtn() {
-    if (!btnFontAuto) return;
-    btnFontAuto.classList.toggle('active', _fontAuto);
-    btnFontAuto.setAttribute('aria-pressed', _fontAuto ? 'true' : 'false');
-  }
-  function setFontAuto(on) {
-    _fontAuto = !!on;
-    saveFontAuto(_fontAuto);
-    _autoFontPx = 0;         // stale fit from the previous stint doesn't apply
-    recomputeAutoFont();     // no-op when turning off / while hidden
-    applyFontSize();         // falls back to the manual size until a fit lands
-    refreshFontAutoBtn();
-    return _fontAuto;
-  }
-  function getFontAuto() { return _fontAuto; }
-  refreshFontAutoBtn();
-  if (btnFontAuto) btnFontAuto.addEventListener('click', () => setFontAuto(!_fontAuto));
-  // Refit whenever the mount's box changes — panel resize/drag handles, panel
-  // open (display:none → flex fires the observer with the new size), viewport
-  // rotation. Content changes are caught by the poll below.
-  if (mount && typeof ResizeObserver !== 'undefined') {
-    try { new ResizeObserver(() => recomputeAutoFont()).observe(mount); } catch {}
-  }
-  // Content watch — same cheap read the 8s auto-save uses, but fast enough
-  // (350ms) that the size tracks typing. `ed.editor.code` is a string the
-  // editor already maintains, so this is a read + compare, no DOM scrape on
-  // current Strudel builds.
-  let _lastFitCode = null;
-  setInterval(() => {
-    if (!_fontAuto || !mounted) return;
-    if (panel?.style.display === 'none') return;
-    const code = readEditorCode();
-    if (code != null && code !== _lastFitCode) {
-      _lastFitCode = code;
-      recomputeAutoFont();
-    }
-  }, 350);
 
   // Built-in autocomplete + hover docs toggle — same settings call, same
   // persistence pattern as line numbers. The ⌨ button in the tab bar drives
