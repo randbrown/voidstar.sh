@@ -542,6 +542,117 @@
   --code-filter:   sepia(0.5) hue-rotate(300deg) saturate(1.2) contrast(1.02);
 }
 
+/* ---- Patchbay (a ritualized modular patch panel — routing made visible) --- *
+   A high-end studio patchbay + engraved diagrams: near-black rack, graphite
+   panels, crisp instrument white, an acid-chartreuse signal lead with clearly
+   separated CV-blue / mod-magenta / route-green / clock-amber signal colours.
+   Leans on Qualia's real modulation UI — mod pills read as patch jacks, the
+   per-channel meter as a lit socket ring. §9.                                 */
+[data-theme="patchbay"] {
+  --void:        #0c0d0e;            /* near-black rack interior */
+  --void-2:      #131416;
+  --surface:     #191b1e;            /* graphite engraved panel */
+  --surface-2:   #22262a;
+  --border:      #33383d;
+  --border-2:    #4e555c;
+  --text:        #eef1f3;            /* crisp instrument white */
+  --text-muted:  #9aa3ab;
+  --text-dim:    #5c646b;
+  --accent:      #c3ee3f;            /* high-visibility signal chartreuse (lead) */
+  --accent-glow: rgba(195, 238, 63, 0.28);
+  --cyan:        #3aa0ff;            /* control-voltage blue */
+  --cyan-glow:   rgba(58, 160, 255, 0.28);
+  --pink:        #ff4fd0;            /* modulation magenta */
+  --pink-glow:   rgba(255, 79, 208, 0.28);
+  --green:       #3ade7a;            /* active route green */
+  --amber:       #ffb02e;            /* clock / gate amber */
+  --radius:      3px;
+  --radius-lg:   5px;
+  --glow-strength: 0.7;
+  --panel-blur:  7px;
+  --viz-bg:        #0e0f11;          /* deep graphite */
+  --viz-hue-base:  40;               /* clock-amber … */
+  --viz-hue-spread: 275;             /* … chartreuse, route-green, CV-blue, mod-magenta */
+  --viz-sat:       68;
+  --viz-light:     52;
+  --viz-glow:      0.55;             /* low-moderate, concentrated at active nodes */
+  --code-filter:   saturate(1.25) contrast(1.04) brightness(1.04);
+}
+
+/* ---- Ruliad (a live observer slice through an evolving computation) ------- *
+   A multiway causal graph / branching simulation, rendered as clean physics
+   viz: navy-black causal space, translucent observer slices, electric-indigo
+   lead with convergent-cyan, divergent-magenta, stable-green, event-gold.
+   Sliders read as world lines (realized history vs possible future). Calmer
+   and bluer than voidstar's neon violet; restrained glow. §10.               */
+[data-theme="ruliad"] {
+  --void:        #070a16;            /* deep causal-space navy-black */
+  --void-2:      #0c1020;
+  --surface:     #111629;            /* translucent observer slice */
+  --surface-2:   #191f38;
+  --border:      #2a3358;
+  --border-2:    #43508a;
+  --text:        #e6e9f5;            /* pale computational white */
+  --text-muted:  #98a0c4;
+  --text-dim:    #5a6088;
+  --accent:      #6f63ff;            /* electric indigo / causal violet (lead) */
+  --accent-glow: rgba(111, 99, 255, 0.30);
+  --cyan:        #38c6f0;            /* convergent path */
+  --cyan-glow:   rgba(56, 198, 240, 0.26);
+  --pink:        #f45cc0;            /* divergent branch */
+  --pink-glow:   rgba(244, 92, 192, 0.26);
+  --green:       #54d98a;            /* stable state */
+  --amber:       #ffc24a;            /* active event / rule application */
+  --radius:      4px;
+  --radius-lg:   7px;
+  --glow-strength: 0.7;
+  --panel-blur:  12px;
+  --viz-bg:        #060912;          /* dark blue-black */
+  --viz-hue-base:  45;               /* event-gold … */
+  --viz-hue-spread: 285;             /* … stable-green, convergent-cyan, indigo, divergent-magenta */
+  --viz-sat:       60;               /* moderate */
+  --viz-light:     56;
+  --viz-glow:      0.6;              /* restrained */
+  --code-filter:   saturate(1.2) hue-rotate(8deg) brightness(1.03);
+}
+
+/* ---- Darkroom (an optical bench for exposing / transforming live images) -- *
+   A contemporary darkroom / optical bench: optical black, smoked photographic
+   gray, projection white, a controlled safelight-red lead with cyan+magenta
+   separation, focus-green, exposure-amber. Aperture/registration controls,
+   film-edge indexing. High registration clarity; no grain (kept deliberately
+   clean). §11.                                                               */
+[data-theme="darkroom"] {
+  --void:        #080809;            /* optical black */
+  --void-2:      #0e0e10;
+  --surface:     #151517;            /* dark photographic gray / smoked glass */
+  --surface-2:   #1e1e21;
+  --border:      #33343a;
+  --border-2:    #4c4d55;
+  --text:        #f0f1f4;            /* projection white */
+  --text-muted:  #9b9ca6;
+  --text-dim:    #5c5d66;
+  --accent:      #d8443e;            /* controlled safelight red (lead) */
+  --accent-glow: rgba(216, 68, 62, 0.26);
+  --cyan:        #35c9d6;            /* cyan separation / registration */
+  --cyan-glow:   rgba(53, 201, 214, 0.24);
+  --pink:        #e15ac0;            /* magenta separation */
+  --pink-glow:   rgba(225, 90, 192, 0.24);
+  --green:       #57c98a;            /* optical tracking / focus confirmation */
+  --amber:       #f0a83a;            /* exposure / lamp warmth */
+  --radius:      2px;
+  --radius-lg:   4px;
+  --glow-strength: 0.75;
+  --panel-blur:  9px;
+  --viz-bg:        #070708;          /* optical black */
+  --viz-hue-base:  180;              /* cyan separation … */
+  --viz-hue-spread: 160;             /* … through magenta separation into safelight red */
+  --viz-sat:       60;
+  --viz-light:     60;               /* medium-high for registration clarity */
+  --viz-glow:      0.5;              /* localized around exposure states */
+  --code-filter:   saturate(1.2) contrast(1.05) brightness(1.05);
+}
+
 /* ============================================================================
    Texture overlays — scanlines (phosphor) and film grain (tape).
    A fixed, pointer-events:none layer over the page; opacity driven by the
@@ -1446,6 +1557,196 @@ body::before {
   border-radius: 0 !important;
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+   Patchbay — an engraved graphite rack. Controls are rack keys with fine
+   uppercase engraved labels; the active state lights a route-green pilot LED
+   and seats the key. Panels are engraved rack panels held by corner screws;
+   headers carry a socket pilot mark. Studio patch panel, not a Eurorack clone.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="patchbay"] .btn,
+[data-theme="patchbay"] .ctrl-btn,
+[data-theme="patchbay"] .qp-toggle,
+[data-theme="patchbay"] .qp-preset,
+[data-theme="patchbay"] .qp-tab,
+[data-theme="patchbay"] .start-btn {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 92%, #fff 8%), var(--surface-2)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 3px !important;
+  color: var(--text) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.5) !important;
+  transition: box-shadow 0.15s, color 0.15s, border-color 0.15s;
+}
+[data-theme="patchbay"] .ctrl-btn:hover,
+[data-theme="patchbay"] .qp-toggle:hover,
+[data-theme="patchbay"] .qp-preset:hover,
+[data-theme="patchbay"] .qp-tab:hover,
+[data-theme="patchbay"] .btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 7px var(--accent-glow) !important;
+}
+[data-theme="patchbay"] .ctrl-btn.active,
+[data-theme="patchbay"] .ctrl-btn.active-audio,
+[data-theme="patchbay"] .qp-toggle.active,
+[data-theme="patchbay"] .qp-preset.active,
+[data-theme="patchbay"] .qp-tab.active {
+  /* the route goes live — a green pilot LED lights and the key seats */
+  color: var(--green) !important;
+  border-color: color-mix(in srgb, var(--green) 60%, var(--border)) !important;
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.6),
+    0 0 9px color-mix(in srgb, var(--green) 50%, transparent) !important;
+}
+[data-theme="patchbay"] .qp-card,
+[data-theme="patchbay"] #topbar,
+[data-theme="patchbay"] #audio-panel,
+[data-theme="patchbay"] .qp-tabs,
+[data-theme="patchbay"] .post-card,
+[data-theme="patchbay"] .video-card,
+[data-theme="patchbay"] #cycle-mgr {
+  background:
+    radial-gradient(circle at 6px 6px, rgba(0, 0, 0, 0.55) 1.6px, transparent 2.4px),
+    radial-gradient(circle at calc(100% - 6px) 6px, rgba(0, 0, 0, 0.55) 1.6px, transparent 2.4px),
+    radial-gradient(circle at 6px calc(100% - 6px), rgba(0, 0, 0, 0.55) 1.6px, transparent 2.4px),
+    radial-gradient(circle at calc(100% - 6px) calc(100% - 6px), rgba(0, 0, 0, 0.55) 1.6px, transparent 2.4px),
+    linear-gradient(180deg, color-mix(in srgb, #fff 4%, var(--surface-glass)), var(--surface-glass)) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+}
+[data-theme="patchbay"] .qp-card > .qp-head {
+  border-bottom: 1px solid var(--border) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.66rem;
+  padding-bottom: 0.26rem !important;
+}
+[data-theme="patchbay"] .qp-head .qp-title::before { content: "⊙ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Ruliad — an observer slice through a branching computation. Controls are
+   translucent observer-slice keys; the active state resolves a branch to
+   definite (solid indigo, others recede). Panels are stacked slices; each
+   header carries a branching vein and a fork mark. Restrained, calm, precise.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="ruliad"] .btn,
+[data-theme="ruliad"] .ctrl-btn,
+[data-theme="ruliad"] .qp-toggle,
+[data-theme="ruliad"] .qp-preset,
+[data-theme="ruliad"] .qp-tab,
+[data-theme="ruliad"] .start-btn {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface)) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent) !important;
+  border-radius: 3px !important;
+  color: var(--text-muted) !important;
+  box-shadow: none !important;
+  transition: background 0.25s, color 0.25s, border-color 0.25s, box-shadow 0.25s;
+}
+[data-theme="ruliad"] .ctrl-btn:hover,
+[data-theme="ruliad"] .qp-toggle:hover,
+[data-theme="ruliad"] .qp-preset:hover,
+[data-theme="ruliad"] .qp-tab:hover,
+[data-theme="ruliad"] .btn:hover {
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent) !important;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface)) !important;
+}
+[data-theme="ruliad"] .ctrl-btn.active,
+[data-theme="ruliad"] .ctrl-btn.active-audio,
+[data-theme="ruliad"] .qp-toggle.active,
+[data-theme="ruliad"] .qp-preset.active,
+[data-theme="ruliad"] .qp-tab.active {
+  /* the branch becomes definite */
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface)) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 10px var(--accent-glow), inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent) !important;
+}
+[data-theme="ruliad"] .qp-card,
+[data-theme="ruliad"] #topbar,
+[data-theme="ruliad"] #audio-panel,
+[data-theme="ruliad"] .qp-tabs,
+[data-theme="ruliad"] .post-card,
+[data-theme="ruliad"] .video-card,
+[data-theme="ruliad"] #cycle-mgr {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 8%, var(--surface-glass)), var(--surface-glass)) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 20%, transparent),
+    0 6px 22px rgba(0, 0, 0, 0.5) !important;
+}
+[data-theme="ruliad"] .qp-card > .qp-head {
+  border-bottom: 1px solid transparent !important;
+  border-image: linear-gradient(90deg,
+    var(--accent), color-mix(in srgb, var(--cyan) 50%, transparent), transparent) 1 !important;
+  padding-bottom: 0.26rem !important;
+}
+[data-theme="ruliad"] .qp-head .qp-title::before { content: "⋔ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Darkroom — an optical bench in the dark. Controls are smoked-glass stages;
+   the active state is a sharp registration lock (a crisp safelight-red outline
+   snaps in — the only light leak). Panels are optical stages; headers are film
+   edges (sprocket-dashed) under a registration mark. Clean, no grain.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="darkroom"] .btn,
+[data-theme="darkroom"] .ctrl-btn,
+[data-theme="darkroom"] .qp-toggle,
+[data-theme="darkroom"] .qp-preset,
+[data-theme="darkroom"] .qp-tab,
+[data-theme="darkroom"] .start-btn {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, #fff 4%, var(--surface-2)), var(--surface-2)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 2px !important;
+  color: var(--text-muted) !important;
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.4) !important;
+  transition: box-shadow 0.2s, color 0.2s, border-color 0.2s;
+}
+[data-theme="darkroom"] .ctrl-btn:hover,
+[data-theme="darkroom"] .qp-toggle:hover,
+[data-theme="darkroom"] .qp-preset:hover,
+[data-theme="darkroom"] .qp-tab:hover,
+[data-theme="darkroom"] .btn:hover {
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border)) !important;
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.4), 0 0 8px color-mix(in srgb, var(--accent) 30%, transparent) !important;
+}
+[data-theme="darkroom"] .ctrl-btn.active,
+[data-theme="darkroom"] .ctrl-btn.active-audio,
+[data-theme="darkroom"] .qp-toggle.active,
+[data-theme="darkroom"] .qp-preset.active,
+[data-theme="darkroom"] .qp-tab.active {
+  /* registration lock — a sharp safelight outline snaps in */
+  color: #fff !important;
+  border-color: var(--accent) !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent),
+    0 0 10px color-mix(in srgb, var(--accent) 40%, transparent) !important;
+}
+[data-theme="darkroom"] .qp-card,
+[data-theme="darkroom"] #topbar,
+[data-theme="darkroom"] #audio-panel,
+[data-theme="darkroom"] .qp-tabs,
+[data-theme="darkroom"] .post-card,
+[data-theme="darkroom"] .video-card,
+[data-theme="darkroom"] #cycle-mgr {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, #fff 3%, var(--surface-glass)), var(--surface-glass)) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03), 0 6px 22px rgba(0, 0, 0, 0.55) !important;
+}
+[data-theme="darkroom"] .qp-card > .qp-head {
+  border-bottom: 1px dashed color-mix(in srgb, var(--text) 25%, transparent) !important;   /* film-edge indexing */
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+  padding-bottom: 0.26rem !important;
+}
+[data-theme="darkroom"] .qp-head .qp-title::before { content: "⊹ "; color: var(--accent); }
+
 /* ============================================================================
    GENERATED CONTROLS — the JS-built qualia utility controls.
    ----------------------------------------------------------------------------
@@ -1894,6 +2195,86 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
 }
 [data-theme="risograph"] .qp-mod-name {
   color: var(--text) !important; text-transform: uppercase; letter-spacing: 0.06em;
+}
+
+/* ── Patchbay — a recessed attenuator channel / precision fader cap / jacks ──
+   Track is a sunken attenuator channel; thumb is a precision fader cap with a
+   chartreuse indicator edge; pills are patch jacks (a socket hole on the right,
+   the per-channel border/meter reading as the lit socket collar). */
+[data-theme="patchbay"] {
+  --ctl-slider-track: color-mix(in srgb, #000 55%, var(--surface));
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 2px;
+  --ctl-slider-track-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb: linear-gradient(180deg, #464d54, #262b30 60%, #1a1e22);
+  --ctl-slider-thumb-w: 10px;
+  --ctl-slider-thumb-h: 18px;
+  --ctl-slider-thumb-radius: 2px;
+  --ctl-slider-thumb-border: 1px solid #121518;
+  --ctl-slider-thumb-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -2px 0 color-mix(in srgb, var(--accent) 60%, transparent),
+    0 1px 3px rgba(0, 0, 0, 0.7);
+}
+[data-theme="patchbay"] .qp-mod-pill {
+  border-radius: 6px !important;
+  background:
+    radial-gradient(circle at 88% 50%, rgba(0, 0, 0, 0.6) 3px, transparent 4.2px),
+    linear-gradient(180deg, var(--surface-2), var(--surface)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), inset 0 0 0 1px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* ── Ruliad — a world line: realized history vs possible future / branch nodes
+   The unfilled track is a faint possible future; the fill is realized history;
+   the thumb is the current causal state (a bright node); pills are branch/rule
+   tokens. */
+[data-theme="ruliad"] {
+  --ctl-slider-track: color-mix(in srgb, var(--text) 12%, transparent);
+  --ctl-slider-track-h: 2px;
+  --ctl-slider-track-radius: 999px;
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb:
+    radial-gradient(circle at 50% 50%, #fff, var(--accent) 55%,
+      color-mix(in srgb, var(--accent) 60%, #060912) 100%);
+  --ctl-slider-thumb-w: 12px;
+  --ctl-slider-thumb-h: 12px;
+  --ctl-slider-thumb-radius: 50%;
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 0 8px var(--accent-glow), 0 0 3px rgba(255, 255, 255, 0.8);
+}
+[data-theme="ruliad"] .qp-mod-pill {
+  border-radius: 3px 9px 3px 9px !important;     /* a branch / rule token */
+  background: linear-gradient(120deg,
+    color-mix(in srgb, var(--accent) 10%, var(--surface-glass-2)), var(--surface-glass-2)) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+
+/* ── Darkroom — an exposure scale / aperture-ring marker / lens-stage pills ──
+   Track is a black→gray exposure scale, filled in exposure amber; the thumb is
+   an aperture ring (safelight rim, open centre); pills are smoked-glass lens
+   stages (per-channel border = the loaded separation filter). */
+[data-theme="darkroom"] {
+  --ctl-slider-track: linear-gradient(90deg, #0a0a0b, #3a3a40);
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 1px;
+  --ctl-slider-track-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --ctl-slider-fill: var(--amber);
+  --ctl-slider-thumb:
+    radial-gradient(circle,
+      transparent 0 26%, var(--text) 30% 42%,
+      color-mix(in srgb, var(--accent) 70%, transparent) 46% 54%, transparent 58%);
+  --ctl-slider-thumb-w: 16px;
+  --ctl-slider-thumb-h: 16px;
+  --ctl-slider-thumb-radius: 50%;
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+[data-theme="darkroom"] .qp-mod-pill {
+  border-radius: 2px !important;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, #fff 5%, var(--surface-2)), var(--surface)) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), inset 0 0 8px rgba(0, 0, 0, 0.5) !important;
 }
 
 /* ============================================================================
