@@ -453,6 +453,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
     #btn-stitch               { min-width: 11ch; } /* "stitch blip" */
+    #btn-negative             { min-width: 13ch; } /* "negative blip" */
     #btn-walk                 { min-width: 9ch;  } /* "walk off" */
     #btn-logo                 { min-width: 9ch;  } /* "logo off" */
     #btn-record-mode          { min-width: 2.25ch; } /* ▾ caret (capture menu) */
@@ -2661,6 +2662,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn" id="btn-mosh"  title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
         <button class="ctrl-btn" id="btn-edge"  title="Edge-detect post (E) — off / on / blip / flip">edge</button>
         <button class="ctrl-btn" id="btn-stitch" title="Stitch post (Y) — quantized tile mosaic + word pills — off / on / blip / flip">stitch</button>
+        <button class="ctrl-btn" id="btn-negative" title="Negative post (⇧N) — lightbox negative: the whole scene inverted to dark marks on a soft light field — off / on / blip / flip">negative</button>
         <button class="ctrl-btn" id="btn-walk"  title="Cam walk (U) — slow pan / zoom / rotate camera drift over the scene, re-aims on hard beats">walk</button>
         <button class="ctrl-btn" id="btn-logo"  title="void* logo mark — small live-animated watermark above the whole scene stack. Corner-anchored, drag to place; 'center' mode makes a large emblem that can ride the cam walk">logo</button>
       </div>
@@ -2767,6 +2769,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <span><kbd>K</kbd> mosh</span>
   <span><kbd>E</kbd> edge</span>
   <span><kbd>Y</kbd> stitch</span>
+  <span><kbd>⇧N</kbd> negative</span>
   <span><kbd>B</kbd> ripples</span>
   <span><kbd>J</kbd> skeleton</span>
   <span><kbd>F</kbd> sparks</span>
