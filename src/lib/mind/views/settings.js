@@ -4,6 +4,7 @@
 import * as store from '../store.js';
 import { buildExportZip, buildNotesMarkdownDoc, downloadBlob, stamp } from '../export.js';
 import { openImportDocModal } from './import-doc-modal.js';
+import { openImportEnexModal } from './import-enex-modal.js';
 import { navigate, refresh, getDockPos, setDockPos, DOCK_POSITIONS } from '../app.js';
 import { el, esc, btn, topBar, confirmBox, timeAgo } from '../ui.js';
 import { initThemeControl } from '../../qualia/theme.js';
@@ -97,6 +98,7 @@ export async function renderSettings(root) {
   row.appendChild(importInput);
   row.appendChild(btn('import .json', '', () => importInput.click()));
   row.appendChild(btn('import document…', '', () => openImportDocModal()));
+  row.appendChild(btn('import Evernote (.enex)…', '', () => openImportEnexModal()));
   row.appendChild(btn('trash', '', () => navigate('#trash')));
   dataCard.appendChild(row);
   root.appendChild(dataCard);

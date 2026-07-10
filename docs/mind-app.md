@@ -169,8 +169,22 @@ Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
   `<!-- mind date=… tags=… daily id=… -->` comment + body. It **round-trips**:
   re-importing recognizes its own header and comment markers (so `##` inside a
   note body never over-splits, and `id=` upserts the same note). `includeComment:false` gives a clean human doc (no exact round-trip).
+- **`import Evernote (.enex)…`** (`enex.js` pure core + `enex-import.js` browser
+  commit + `views/import-enex-modal.js`) — bulk-import Evernote exports. `enex.js`
+  is dependency-free and node-testable: a lenient XML parser, `md5Hex` (so each
+  `<resource>`'s bytes hash to the MD5 that inline `<en-media hash=…>` references
+  — the correct media→attachment mapping), `parseEvernoteTime`, and a pragmatic
+  `enmlToMarkdown` (headings, lists, bold/italic/strike/code, links,
+  `en-todo`→`- [ ]/[x]`, `en-media`→image with a `mn-attach://ENEXHASH:<md5>`
+  sentinel; unknown markup degrades to text). `commitEnexImport` snapshots
+  (`pre-enex-import`), creates notes via `putNoteRaw` (Evernote created/updated
+  preserved), turns each resource into an attachment (`addAttachmentFromBlob`;
+  images resolve their sentinel to the real id, others become chips, all queue
+  OCR), and runs **chunked with a progress readout** so a decade-scale import
+  stays responsive. Fidelity is best-effort (text-first); import notebooks one
+  `.enex` at a time if a single one is very large.
 - Pure parser/exporter functions are covered by `scripts/check-import-doc.mjs`
-  (`node scripts/check-import-doc.mjs`).
+  and `scripts/check-mind-enex.mjs` (`npm run check`).
 
 ## Google sign-in (app-owned client id)
 
