@@ -651,7 +651,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: white; font-family: var(--font-mono); font-size: 0.875rem;
       cursor: pointer; transition: all 0.2s;
     }
-    .start-btn:hover { background: #7c3aed; box-shadow: 0 0 20px rgba(139,92,246,0.5); }
+    .start-btn:hover { background: color-mix(in srgb, var(--accent) 30%, var(--surface-2)); box-shadow: 0 0 20px var(--accent-glow); }
     .start-btn.alt {
       background: transparent; border: 1px solid var(--border);
       color: var(--muted); margin-top: 0;

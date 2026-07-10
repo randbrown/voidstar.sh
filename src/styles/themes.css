@@ -15,16 +15,17 @@
 
 /* ---- Voidstar (default) --------------------------------------------------- */
 :root {
-  /* surfaces & text */
-  --void:        #05050d;
-  --void-2:      #0a0a1a;
-  --surface:     #0f0f24;
-  --surface-2:   #17173a;
-  --border:      #252550;
-  --border-2:    #3a3a78;
-  --text:        #dde1f0;
-  --text-muted:  #7878a8;
-  --text-dim:    #4a4a70;
+  /* surfaces & text — an optical lab: true-black void, blue-black instrument
+     surfaces, phosphor-white text, calm cool-gray secondary */
+  --void:        #010104;
+  --void-2:      #05060e;
+  --surface:     #0a0e18;
+  --surface-2:   #111726;
+  --border:      #1e2740;
+  --border-2:    #33406b;
+  --text:        #e8f1f6;
+  --text-muted:  #7c88a0;
+  --text-dim:    #434d63;
   --muted:       var(--text-muted);   /* alias used by the lab HUDs */
 
   /* translucent HUD ("glass") surfaces — auto-derived from --void so every
@@ -33,46 +34,53 @@
   --surface-glass-2: color-mix(in srgb, var(--void-2) 70%, transparent);
   --hud-border:      color-mix(in srgb, var(--border-2) 55%, transparent);
 
-  /* accents + their glows */
-  --accent:      #8b5cf6;
-  --accent-glow: rgba(139, 92, 246, 0.35);
-  --cyan:        #22d3ee;
-  --cyan-glow:   rgba(34, 211, 238, 0.3);
-  --pink:        #f472b6;
-  --pink-glow:   rgba(244, 114, 182, 0.3);
-  --green:       #4ade80;
-  --amber:       #fbbf24;             /* used by cymatics HUD */
+  /* accents + their glows — a spectral-cyan lead with neural magenta, ghost
+     green, accretion gold, and a signal blue; all five stay separable on the
+     canvas (pose skeletons / spectrum bands) */
+  --accent:      #38d8ff;             /* spectral cyan — the memorable lead */
+  --accent-glow: rgba(56, 216, 255, 0.30);
+  --cyan:        #6c8cff;             /* signal blue */
+  --cyan-glow:   rgba(108, 140, 255, 0.28);
+  --pink:        #d45cff;             /* neural magenta */
+  --pink-glow:   rgba(212, 92, 255, 0.28);
+  --green:       #5cffb0;             /* ghost green */
+  --amber:       #ffb347;             /* accretion gold / plasma warmth */
 
   /* typography */
   --font-sans:   'Space Grotesk', system-ui, sans-serif;
   --font-mono:   'JetBrains Mono', ui-monospace, monospace;
   --font-ui:     var(--font-sans);   /* chrome font; some themes swap it */
 
-  /* chrome feel */
-  --radius:      6px;
-  --radius-lg:   12px;
-  --glow-strength: 1;                 /* multiplier gating CSS bloom (0 = flat) */
-  --panel-blur:  10px;                /* backdrop-filter amount for HUD panels */
+  /* chrome feel — precise optical instrumentation: small radii, moderate
+     (not constant) bloom */
+  --radius:      5px;
+  --radius-lg:   10px;
+  --glow-strength: 0.8;               /* multiplier gating CSS bloom (0 = flat) */
+  --panel-blur:  9px;                 /* backdrop-filter amount for HUD panels */
 
   /* texture overlays (opacity, 0 = off) */
   --tex-scanline: 0;
   --tex-grain:    0;
 
-  /* canvas knobs — read by JS (src/lib/qualia/theme.js) to skin the visuals */
-  --viz-bg:        #05050d;           /* canvas clear color */
-  --viz-hue-base:  250;               /* base hue (deg) */
-  --viz-hue-spread: 90;               /* hue range (deg) */
-  --viz-sat:       85;                /* base saturation (%) */
-  --viz-light:     55;                /* base lightness (%) */
-  --viz-glow:      1;                 /* canvas bloom / shadowBlur multiplier */
+  /* canvas knobs — read by JS (src/lib/qualia/theme.js) to skin the visuals.
+     A deep, quiet field with a broad-but-controlled spectral arc (cyan →
+     signal blue → violet → magenta), moderate glow rather than constant bloom */
+  --viz-bg:        #010104;           /* canvas clear color */
+  --viz-hue-base:  185;               /* base hue (deg) — spectral cyan */
+  --viz-hue-spread: 155;              /* hue range (deg) — controlled arc into magenta */
+  --viz-sat:       78;                /* base saturation (%) */
+  --viz-light:     58;                /* base lightness (%) */
+  --viz-glow:      0.9;               /* canvas bloom / shadowBlur multiplier */
   --viz-mono:      0;                 /* 1 = render monochrome (phosphor) */
 
   /* Retint filter for embedded code editors / widgets (the Strudel REPL's
      syntax colors live inside its shadow-DOM CodeMirror theme, so a CSS
      filter is the reliable way to pull them into the theme's family).
      sepia() collapses hues to a warm monochrome, hue-rotate() steers it,
-     and luminance differences keep syntax highlighting readable. */
-  --code-filter:   none;
+     and luminance differences keep syntax highlighting readable. The baseline
+     pulls the editor slightly toward cool spectral cyan / pale violet without
+     crushing syntax differentiation. */
+  --code-filter:   sepia(0.2) hue-rotate(180deg) saturate(1.4) brightness(1.06);
 
   /* ---- Advanced chrome tokens ---------------------------------------------
      A second tier of design tokens for the *generated* utility controls
@@ -857,9 +865,12 @@ body::before {
 }
 
 /* ────────────────────────────────────────────────────────────────────────
-   Voidstar — luminous deep-space chrome: glowing pill controls and panels
-   lit from a thin accent "horizon" along their top edge. The signature look,
-   pushed from neutral-dark to unmistakably voidstar.
+   Voidstar — dark optical instrumentation at the boundary between signal and
+   void. Precise rectilinear keys instead of glowing pills; each panel carries
+   a thin clipped alignment mark at its top-left rather than a full glowing
+   horizon; a reticle marks every header. Restrained bloom, slow settling,
+   quiet during inactivity — the identity emerges from geometry and optical
+   behaviour, not decorative stars.
    ──────────────────────────────────────────────────────────────────────── */
 [data-theme="voidstar"] .btn,
 [data-theme="voidstar"] .ctrl-btn,
@@ -867,31 +878,38 @@ body::before {
 [data-theme="voidstar"] .qp-preset,
 [data-theme="voidstar"] .qp-tab,
 [data-theme="voidstar"] .start-btn {
-  border-radius: 999px !important;
-  transition: box-shadow 0.25s, border-color 0.25s, color 0.25s, transform 0.25s;
+  border-radius: var(--radius) !important;        /* precise keys, not pills */
+  border-color: var(--border) !important;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 [data-theme="voidstar"] .ctrl-btn:hover,
 [data-theme="voidstar"] .qp-toggle:hover,
 [data-theme="voidstar"] .qp-preset:hover,
-[data-theme="voidstar"] .qp-tab:hover {
-  box-shadow: 0 0 14px var(--accent-glow);
-  transform: translateY(-1px);
+[data-theme="voidstar"] .qp-tab:hover,
+[data-theme="voidstar"] .btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border)) !important;
+  box-shadow: 0 0 10px var(--accent-glow) !important;      /* a brief, restrained lensing */
+}
+[data-theme="voidstar"] .start-btn:hover {
+  background: color-mix(in srgb, var(--accent) 26%, var(--surface-2)) !important;
+  box-shadow: 0 0 16px var(--accent-glow) !important;
 }
 [data-theme="voidstar"] .qp-card,
 [data-theme="voidstar"] #topbar,
 [data-theme="voidstar"] #audio-panel,
 [data-theme="voidstar"] .qp-tabs,
 [data-theme="voidstar"] .post-card,
-[data-theme="voidstar"] .video-card {
+[data-theme="voidstar"] .video-card,
+[data-theme="voidstar"] #cycle-mgr {
+  /* a clipped alignment mark — a short spectral tick at the top-left edge only,
+     not a glowing horizon across the whole panel */
   background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--accent) 9%, var(--surface-glass)),
-      var(--surface-glass)) !important;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--accent) 45%, transparent),
-    0 8px 30px rgba(0, 0, 0, 0.45) !important;
+    linear-gradient(90deg, var(--accent) 0 24px, transparent 24px) top left / 100% 1px no-repeat,
+    var(--surface-glass) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5) !important;
 }
-[data-theme="voidstar"] .qp-head .qp-title::before { content: "✦ "; color: var(--accent); }
+[data-theme="voidstar"] .qp-head .qp-title::before { content: "◎ "; color: var(--accent); }
 
 /* ────────────────────────────────────────────────────────────────────────
    Phosphor (+ amber) — a real text-mode terminal. Controls become bracketed
@@ -1895,20 +1913,29 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
    is left intact wherever possible so the modulator's source stays legible.
    ========================================================================== */
 
-/* ── Voidstar — neon waveform rail / glowing signal capsules ─────────────── */
+/* ── Voidstar — a thin signal rail (near-invisible inactive) with an optical
+   centre thumb / compact signal-source capsules. The fill is a coherent
+   spectral light line; the thumb is a black optical aperture ringed in cyan;
+   focus is a clear lensing contour rather than a blur. */
 [data-theme="voidstar"] {
-  --ctl-slider-track:
-    repeating-linear-gradient(90deg,
-      color-mix(in srgb, var(--accent) 45%, transparent) 0 2px,
-      color-mix(in srgb, var(--cyan) 30%, transparent) 2px 7px);
-  --ctl-slider-thumb: var(--accent);
+  --ctl-slider-track: color-mix(in srgb, var(--text) 8%, transparent);
+  --ctl-slider-track-h: 2px;
+  --ctl-slider-track-radius: 999px;
+  --ctl-slider-track-shadow: none;
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb:
+    radial-gradient(circle at 50% 50%, #000 0 38%, var(--accent) 42% 56%, transparent 60%);
+  --ctl-slider-thumb-w: 14px;
+  --ctl-slider-thumb-h: 14px;
+  --ctl-slider-thumb-radius: 50%;
   --ctl-slider-thumb-border: 0;
-  --ctl-slider-thumb-shadow: 0 0 9px var(--accent-glow);
+  --ctl-slider-thumb-shadow: 0 0 8px var(--accent-glow);
+  --ctl-focus-ring: 0 0 0 1px var(--void), 0 0 0 3px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 [data-theme="voidstar"] .qp-mod-pill {
-  border-radius: 999px !important;
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface-glass-2)) !important;
-  box-shadow: inset 0 0 9px color-mix(in srgb, var(--accent) 14%, transparent) !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-glass-2)) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent) !important;
 }
 
 /* ── Phosphor (+ amber) — terminal progress bar / status cells ───────────── */

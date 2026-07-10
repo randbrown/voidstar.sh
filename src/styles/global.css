@@ -152,7 +152,7 @@ img, video { max-width: 100%; display: block; }
   border-color: var(--accent);
 }
 .btn-primary:hover {
-  background: #7c3aed;
+  background: color-mix(in srgb, var(--accent) 82%, #000);
   color: white;
   box-shadow: 0 0 20px var(--accent-glow);
   transform: translateY(-1px);
