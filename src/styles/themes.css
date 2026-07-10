@@ -478,6 +478,7 @@
   --radius-lg:   10px;
   --glow-strength: 0.6;
   --panel-blur:  8px;
+  --tex-grain:   0.04;               /* faint lacquer/wood tooth over the whole rig */
   --viz-bg:        #0a0806;
   --viz-hue-base:  40;               /* tube gold (bass) … */
   --viz-hue-spread: 158;             /* … up through pilot-green to harmonic cyan */
@@ -1249,9 +1250,21 @@ body::before {
 [data-theme="glissando"] .post-card,
 [data-theme="glissando"] .video-card,
 [data-theme="glissando"] #cycle-mgr {
-  background: linear-gradient(180deg,
-    color-mix(in srgb, var(--accent) 6%, var(--surface-glass)),
-    var(--surface-glass)) !important;
+  /* lacquered walnut body: a warm figure wash + faint lengthwise grain over the
+     translucent base, so the panels read as wood the controls are mounted on
+     (kept partial so the stage still breathes through) */
+  background:
+    repeating-linear-gradient(91deg,
+      rgba(0, 0, 0, 0.05) 0 1px,
+      transparent 1px 6px,
+      rgba(150, 110, 66, 0.045) 6px 7px,
+      transparent 7px 13px),
+    linear-gradient(176deg,
+      color-mix(in srgb, #2a1d12 26%, transparent),
+      transparent 55%),
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 6%, var(--surface-glass)),
+      var(--surface-glass)) !important;
   border: 1px solid var(--border) !important;
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, var(--accent) 40%, rgba(255, 255, 255, 0.12)),
