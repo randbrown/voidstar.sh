@@ -21,7 +21,7 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 | Voice | `voice.js`, `voice-capture.js`, `audio-out.js` | Web Speech dictation (continuous, restart loop, final dedupe) + MediaRecorder on the same mic; keep-audio / insert-transcript toggles; record-only fallback on contention. Mic picker reuses `qualia/devices.js`; speaker via `setSinkId` (hidden on Safari). |
 | OCR | `ocr.js` | tesseract.js lazy-loaded from CDN on first image; serial idle queue over `ocrStatus='pending'`; text stored on the attachment (searchable, rides sync so other devices never re-OCR). |
 | Annotation | `annotation.js`, `views/annotate.js` | Forked from `setlist/annotation.js`: pen (with stylus pressure), highlighter, arrow, rect, ellipse, text, eraser, select, pan; shared palette/size scale; two-finger scroll; autosaves; flatten-to-copy export. Keyed `attachmentId[:page]` (page reserved for PDFs). |
-| Drive sync | `gdrive-sync.js`, `attachments-drive.js` | Forked from `setlist/gdrive-backup.js` (GIS auth, drive.file scope, **app-owned OAuth client id** — "Sign in with Google", with a user override in Settings → advanced; see the sign-in note below — pull→merge→push cycle, peek freshness gate, persisted dirty flag, duplicate-file healing, rotating 10-copy history). Additions: **conflict copies** and **attachment binaries** (below). |
+| Drive sync | `gdrive-sync.js`, `shard.js`, `attachments-drive.js` | GIS auth, drive.file scope, **app-owned OAuth client id** ("Sign in with Google", user override in Settings → advanced). **Incremental sharded sync**: `shard.js` (pure bucketing/hash/merge core, tested by `scripts/check-mind-shard.mjs`) + a `gdrive-sync.js` client that pushes/pulls only changed shards. Also: peek freshness gate, persisted dirty flag, **conflict copies**, **attachment binaries** (below), and duplicate-file/folder healing (below). |
 | Import/export | `import-doc.js`, `dates.js`, `export.js`, `views/import-doc-modal.js`, `gdrive-picker.js` | Whole-document import (split into notes) + single-doc markdown export + JSON/zip. See the import/export section below. |
 
 ## Sync model
@@ -29,21 +29,67 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 - Everything lives under **one top-level `voidstar_mind/` folder** in My Drive
   (created/discovered via `getRootFolderId`; `drive.file` scope, so the app only
   sees files it made). Inside it:
-  - One JSON data file (`voidstar-mind-data.json`): notes, folders, tasks,
-    tasklists, attachment *metadata*, annotations, settings.
+  - `index.json` — the small, global part: `folders`, `tasklists`, `settings`,
+    plus `schema` + shard count `N`.
+  - `shards/shard-000.json … shard-(N-1).json` — the parts that scale: `notes`,
+    `tasks`, attachment *metadata*, `annotations`, bucketed by
+    `bucket(key) = fnv1a(key) % N` (N=64; notes/tasks/attachments by `id`,
+    annotations by `key`). **Empty buckets are never materialized.**
   - `attachments/` — attachment binaries (below).
-  - `backups/` — rotating timestamped history copies.
+  - `backups/` — consolidated restore points, now written only on a manual/forced
+    sync (Drive keeps native per-file revisions on each shard for the rest).
+- **Sharded sync** (`shard.js` pure core + `gdrive-sync.js` client) — an edit
+  re-uploads one small shard, not the whole corpus:
+  - `push` re-hashes only the shards a write actually touched (see dirty-tracking
+    below), comparing each shard's *canonical* JSON hash (key- and array-sorted,
+    so two devices agree byte-for-byte) to the last-known-remote hash and
+    uploading only the divergent ones; each file's `{id, mtime, hash}` is
+    persisted the instant its own upload succeeds.
+  - `pull` downloads only shards whose `modifiedTime` advanced past our stamp and
+    returns a **partial** remote; the cycle merges **full local ⋈ partial remote**
+    (unchanged buckets are already fully local, so this is equivalent to a full
+    merge — and keeps the conflict-copy dedup corpus complete), imports only the
+    delta, then `commit()`s the pulled stamps *after* the import (crash-safe).
+  - `peek` compares shard/index/monolith `modifiedTime`s in one listing.
+  - Per-device state lives in `voidstar.mind.gdrive.shardState`
+    (`{ files: { name → {id,mtime,hash} }, foldStamp }`).
+  - **Dirty-shard tracking**: the store write hook passes `{store,key}` to
+    `markShardDirty`, which records the touched bucket(s) (or `index`, or `all`
+    for a blanket write like a tombstone purge / snapshot restore) in
+    `voidstar.mind.gdrive.dirtyShards`. `push` drains that set and re-hashes only
+    those buckets — so a one-note edit hashes one shard, not the whole corpus.
+    First run on this version (absent key) defaults to `all` (a one-time full
+    re-hash); the set is requeued on a failed push so nothing is lost.
 - Attachment *binaries* are individual files in the `attachments/` subfolder,
   uploaded serially (pending = `driveFileId:''`, so queue state survives tab
   death and rides the JSON); other devices lazy-download on first render
   (`setBlobFetcher` in `attachments.js`).
-- **Consolidation migration** (`migrateToRootFolder`, one-time, flag-guarded):
-  the earlier layout scattered three items at the Drive root (loose
-  `voidstar-mind-data.json` + `voidstar mind attachments/` +
-  `voidstar mind backups/`). On the first sync after upgrade the data file is
-  re-parented into `voidstar_mind/` and the two legacy folders are moved in and
-  renamed to `attachments/` / `backups/` (re-parenting works under `drive.file`
-  since the app owns them). Fresh installs just create everything nested.
+- **Migration** — two one-time, guarded steps that lose no data:
+  - *Consolidation* (`migrateToRootFolder`): the earliest layout scattered a loose
+    `voidstar-mind-data.json` + `voidstar mind attachments/` + `voidstar mind
+    backups/` at the Drive root; they're re-parented into `voidstar_mind/` and the
+    folders renamed `attachments/` / `backups/`.
+  - *Monolith → shards* (dual-**read**, never dual-write): while the single
+    `voidstar-mind-data.json` still exists, `readMonolithIfAdvanced` folds it into
+    local each time an old-code device advances it; the next `push` writes the
+    sharded layout. The monolith is left **frozen** as a pre-migration backup
+    (retired manually/by TTL later), so a device still on old code stays visible.
+    Fresh installs just create `index.json` + `shards/` directly.
+- **Duplicate-file/folder healing**: `pull()` dedups duplicate `index.json` /
+  `shard-NNN.json` files by name (merge records → keep one → trash the rest), and
+  `getShardsFolderId` folds duplicate `shards/` folders into the oldest — the
+  same convergence story as the root-folder heal below.
+- **Duplicate root-folder healing** (`getRootFolderId` + `mergeFolderInto`):
+  the sync cycle and the attachment-upload queue run under separate locks, so a
+  cold id cache let both create their own top-level `voidstar_mind/` (one ended
+  up with the data file, the other with `attachments/` + `backups/`). Now folder
+  resolution is serialized per cache key by an in-flight promise, and a cold
+  `getRootFolderId` lists ALL `voidstar_mind` folders: >1 → keep the oldest
+  (deterministic, so devices converge) and fold the rest in (children
+  re-parented, same-named subfolders merged, empties trashed — recoverable).
+  `healRootFoldersOnce` forces this one merge pass on existing split installs
+  (whose warm cache would otherwise never re-scan). Duplicate *data files* that
+  land side by side are still healed by `pull()` (merge + trash).
 - Merge: per-record newer-wins with fill-fields (blank never erases content;
   `ATTACHMENT_FILL_FIELDS` protects OCR text/transcripts/driveFileId).
   Tombstones propagate deletes; latest timestamp wins.
@@ -56,6 +102,14 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 - Auto-sync: pull on load/refocus (`watchFocusSync`, silent, 30 s throttle,
   peek-gated), debounced push 3 s after any write, offline flush on reconnect,
   status pill on the home header.
+- **Local snapshots** (`putSnapshot`, IDB, restore in Settings → data) are full
+  copies, so the frequent auto `'pre-sync'` one is **size-gated**
+  (`SNAPSHOT_MAX_NOTES`): above it, undo-last-sync is unavailable, but explicit
+  `'pre-import'` / `'pre-doc-import'` snapshots are always kept.
+- **Accepted v1 limits**: no cross-shard atomicity (a partial push can transiently
+  expose a note before its folder/attachment shard lands — self-heals next cycle;
+  the UI already tolerates it). The pure core is covered by
+  `node scripts/check-mind-shard.mjs` (`npm run check`).
 
 ## Conventions
 
@@ -122,8 +176,22 @@ Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
   `<!-- mind date=… tags=… daily id=… -->` comment + body. It **round-trips**:
   re-importing recognizes its own header and comment markers (so `##` inside a
   note body never over-splits, and `id=` upserts the same note). `includeComment:false` gives a clean human doc (no exact round-trip).
+- **`import Evernote (.enex)…`** (`enex.js` pure core + `enex-import.js` browser
+  commit + `views/import-enex-modal.js`) — bulk-import Evernote exports. `enex.js`
+  is dependency-free and node-testable: a lenient XML parser, `md5Hex` (so each
+  `<resource>`'s bytes hash to the MD5 that inline `<en-media hash=…>` references
+  — the correct media→attachment mapping), `parseEvernoteTime`, and a pragmatic
+  `enmlToMarkdown` (headings, lists, bold/italic/strike/code, links,
+  `en-todo`→`- [ ]/[x]`, `en-media`→image with a `mn-attach://ENEXHASH:<md5>`
+  sentinel; unknown markup degrades to text). `commitEnexImport` snapshots
+  (`pre-enex-import`), creates notes via `putNoteRaw` (Evernote created/updated
+  preserved), turns each resource into an attachment (`addAttachmentFromBlob`;
+  images resolve their sentinel to the real id, others become chips, all queue
+  OCR), and runs **chunked with a progress readout** so a decade-scale import
+  stays responsive. Fidelity is best-effort (text-first); import notebooks one
+  `.enex` at a time if a single one is very large.
 - Pure parser/exporter functions are covered by `scripts/check-import-doc.mjs`
-  (`node scripts/check-import-doc.mjs`).
+  and `scripts/check-mind-enex.mjs` (`npm run check`).
 
 ## Google sign-in (app-owned client id)
 

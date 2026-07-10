@@ -130,14 +130,14 @@ async function put(storeName, record) {
   const { store, done } = await tx(storeName, 'readwrite');
   store.put(record);
   await done;
-  _onWrite?.();
+  _onWrite?.({ store: storeName, key: record?.id ?? record?.key });
 }
 
 async function del(storeName, id) {
   const { store, done } = await tx(storeName, 'readwrite');
   store.delete(id);
   await done;
-  _onWrite?.();
+  _onWrite?.({ store: storeName, key: id });
 }
 
 // Silent variants — write without firing _onWrite (local-only stores: blob
@@ -465,8 +465,15 @@ export const deleteAnnotation = (key) => del(ANNOTATIONS, key);
 // ── Safety snapshots (undo a restore/sync) — setlist pattern verbatim ──
 
 const SNAPSHOT_KEEP = 10;
+// Each snapshot is a FULL copy of the dataset in IndexedDB; 10 of them at a
+// decade-of-notes scale would blow the browser's storage quota. Above this note
+// count the frequent AUTO snapshot ('pre-sync', taken on every changed sync) is
+// skipped — undo-last-sync is then unavailable, but the rare EXPLICIT snapshots
+// ('pre-import', 'pre-doc-import', 'pre-undo') are always kept.
+const SNAPSHOT_MAX_NOTES = 2000;
 
 export async function putSnapshot(label = '') {
+  if (label === 'pre-sync' && (await getAllKeys(NOTES)).length > SNAPSHOT_MAX_NOTES) return null;
   const ts = Date.now();
   await putSilent(SNAPSHOTS, { ts, label, data: await exportAll() });
   await pruneSnapshots(SNAPSHOT_KEEP);
@@ -604,19 +611,28 @@ export async function replaceAll(data) {
   await clearStore(ATTACHMENTS);
   await clearStore(ANNOTATIONS);
   await importAll(data);
+  // clearStore fires no hook, so records that a restore REMOVED aren't tracked
+  // per-shard; a blanket write hook forces a full re-hash so their shards shrink.
+  _onWrite?.();
 }
 
-// Hard-delete tombstones past TTL, plus their local blobs. Runs at init.
+// Hard-delete tombstones past TTL, plus their local blobs. Runs at init. Uses
+// silent deletes (no per-record push storm); fires the write hook ONCE at the
+// end if anything was purged, so the now-smaller shards get pushed promptly
+// instead of waiting for the next unrelated edit.
 export async function purgeExpiredTombstones() {
   const cutoff = Date.now() - TRASH_TTL_MS;
   const expired = (recs) => recs.filter(r => r.deletedAt && r.deletedAt < cutoff);
-  for (const n of expired(await getAll(NOTES))) await delSilent(NOTES, n.id);
-  for (const f of expired(await getAll(FOLDERS))) await delSilent(FOLDERS, f.id);
-  for (const t of expired(await getAll(TASKS))) await delSilent(TASKS, t.id);
+  let purged = 0;
+  for (const n of expired(await getAll(NOTES))) { await delSilent(NOTES, n.id); purged++; }
+  for (const f of expired(await getAll(FOLDERS))) { await delSilent(FOLDERS, f.id); purged++; }
+  for (const t of expired(await getAll(TASKS))) { await delSilent(TASKS, t.id); purged++; }
   for (const a of expired(await getAll(ATTACHMENTS))) {
     await delSilent(ATTACHMENTS, a.id);
     await deleteBlob(a.id);
+    purged++;
   }
+  if (purged) _onWrite?.();
 }
 
 // ── Cross-device settings (public identifiers only — never tokens) ──
