@@ -21,7 +21,7 @@ const KEEP_TEXT_KEY = 'voidstar.mind.voice.keepTranscript';
 
 const AUTOSAVE_MS = 800;
 
-export async function renderEditor(root, noteId) {
+export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   let note = await store.getNote(noteId);
   if (!note || note.deletedAt) {
     root.appendChild(topBar('note not found', '#home'));
@@ -172,12 +172,58 @@ export async function renderEditor(root, noteId) {
     pushPendingAttachments(); // no-op until Drive is connected
   }
 
+  // Set when a search highlight is active — auto-cleared on the first edit.
+  // detachSearchKey only unbinds the Esc listener (used on route teardown, which
+  // must NOT touch location.hash — the next view may carry its own ?q=).
+  let clearSearchHighlight = null;
+  let detachSearchKey = null;
+
   editor = createEditor(mount, {
     markdown: note.body,
-    onChange: scheduleSave,
+    onChange: () => { scheduleSave(); if (clearSearchHighlight) clearSearchHighlight(); },
     onFiles: handleFiles,
     placeholder: 'write…',
   });
+
+  // ── Search-match highlighting (opened from a search result with ?q=) ──
+  // Highlight every match, scroll to the first, and float a small matches bar
+  // (prev/next + ✕). Dismiss via the ✕, Esc, or the first edit; dismissing also
+  // strips ?q= so a refresh / back-forward doesn't re-highlight.
+  if (highlight) {
+    const count = editor.setHighlight(highlight);
+    if (count) {
+      editor.scrollToFirstMatch();
+      let cur = 0;
+
+      const bar = el('div', 'mn-matchbar');
+      const label = el('span', 'mn-matchbar-count');
+      const drawLabel = () => { label.textContent = `${cur + 1} / ${count}`; };
+      const go = (dir) => { cur = editor.scrollToMatch(cur + dir); drawLabel(); };
+      drawLabel();
+      bar.appendChild(el('span', 'mn-matchbar-icon', '&#128269;'));
+      bar.appendChild(label);
+      const prev = btn('&#8593;', 'mn-btn-icon', () => go(-1)); prev.title = 'previous match';
+      const next = btn('&#8595;', 'mn-btn-icon', () => go(1)); next.title = 'next match';
+      const close = btn('&times;', 'mn-btn-icon', () => clearSearchHighlight?.());
+      close.title = 'clear highlights (Esc)';
+      if (count > 1) { bar.appendChild(prev); bar.appendChild(next); }
+      bar.appendChild(close);
+      root.appendChild(bar);
+
+      const onKey = (e) => { if (e.key === 'Escape') clearSearchHighlight?.(); };
+      document.addEventListener('keydown', onKey);
+      detachSearchKey = () => { document.removeEventListener('keydown', onKey); detachSearchKey = null; };
+
+      clearSearchHighlight = () => {
+        clearSearchHighlight = null;
+        editor.clearHighlight();
+        bar.remove();
+        detachSearchKey?.();
+        const base = location.hash.split('?')[0];
+        if (location.hash !== base) history.replaceState(null, '', location.pathname + base);
+      };
+    }
+  }
 
   // ── Voice capture bar ──
   // Live dictation (Web Speech) + optional original-audio keep (MediaRecorder)
@@ -435,6 +481,7 @@ export async function renderEditor(root, noteId) {
   document.addEventListener('visibilitychange', onHide);
   root._mnCleanup = async () => {
     document.removeEventListener('visibilitychange', onHide);
+    detachSearchKey?.(); // drop the Esc listener without touching the URL
     // Never leave the mic open across a route change.
     if (recording && capture) { try { await capture.stop(); } catch {} }
     flushPending();

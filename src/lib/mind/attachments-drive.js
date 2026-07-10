@@ -1,6 +1,6 @@
 // Attachment binary sync: metadata rides the main JSON file (gdrive-sync);
-// the bytes live as individual files in the "voidstar mind attachments"
-// Drive folder. Upload is a serial queue keyed off driveFileId === '' in
+// the bytes live as individual files in the "attachments" subfolder of the
+// voidstar_mind Drive folder. Upload is a serial queue keyed off driveFileId === '' in
 // the metadata (queue state therefore survives tab death and syncs); other
 // devices lazy-download a blob the first time they render the attachment.
 

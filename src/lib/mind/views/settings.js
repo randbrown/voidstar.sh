@@ -6,6 +6,7 @@ import { buildExportZip, buildNotesMarkdownDoc, downloadBlob, stamp } from '../e
 import { openImportDocModal } from './import-doc-modal.js';
 import { navigate, refresh, getDockPos, setDockPos, DOCK_POSITIONS } from '../app.js';
 import { el, esc, btn, topBar, confirmBox, timeAgo } from '../ui.js';
+import { initThemeControl } from '../../qualia/theme.js';
 
 export async function renderSettings(root) {
   root.appendChild(topBar('settings', '#home'));
@@ -26,6 +27,13 @@ export async function renderSettings(root) {
   };
   drawPos();
   uiCard.appendChild(posRow);
+
+  // Theme picker — shared with the rest of the site (persists to voidstar.theme,
+  // recolors live via themes.css custom props). Per-browser, not synced.
+  uiCard.appendChild(el('div', 'mn-note-meta', 'theme:'));
+  const themeSel = el('select', 'mn-select');
+  initThemeControl(themeSel);
+  uiCard.appendChild(themeSel);
   root.appendChild(uiCard);
 
   // ── Data ──
@@ -148,7 +156,7 @@ export async function renderSettings(root) {
   const syncCard = el('div', 'mn-card');
   syncCard.appendChild(el('div', 'mn-card-title', 'google drive sync'));
   syncCard.appendChild(el('div', 'mn-note-meta',
-    'sync your notes across devices through YOUR Google Drive (drive.file scope — the app only touches files it creates). data file + attachments folder + rotating history live at your Drive root.'));
+    'sync your notes across devices through YOUR Google Drive (drive.file scope — the app only touches files it creates). everything lives inside a single “voidstar_mind” folder (data file + attachments + rotating history).'));
 
   const statusLine = el('div', 'mn-note-meta');
   const drawStatus = () => {

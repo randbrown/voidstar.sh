@@ -105,14 +105,17 @@ export function refresh() {
 }
 
 function parseHash() {
-  const h = (location.hash || '#').slice(1);
-  const parts = h.split('/').filter(Boolean);
-  return { view: parts[0] || 'home', id: parts[1] || null, extra: parts[2] || null, extra2: parts[3] || null };
+  const raw = (location.hash || '#').slice(1);
+  const qIdx = raw.indexOf('?');
+  const path = qIdx === -1 ? raw : raw.slice(0, qIdx);
+  const params = qIdx === -1 ? {} : Object.fromEntries(new URLSearchParams(raw.slice(qIdx + 1)));
+  const parts = path.split('/').filter(Boolean);
+  return { view: parts[0] || 'home', id: parts[1] || null, extra: parts[2] || null, extra2: parts[3] || null, params };
 }
 
 async function route() {
   if (!_root) return;
-  const { view, id, extra, extra2 } = parseHash();
+  const { view, id, extra, extra2, params } = parseHash();
 
   // Views hang teardown work (autosave flush, editor destroy) here.
   if (_root._mnCleanup) { try { await _root._mnCleanup(); } catch {} _root._mnCleanup = null; }
@@ -125,7 +128,7 @@ async function route() {
       case 'home': await renderHome(_root); break;
       case 'note':
         if (extra === 'annotate' && extra2) await renderAnnotate(_root, id, extra2);
-        else await renderEditor(_root, id);
+        else await renderEditor(_root, id, { highlight: params?.q || '' });
         break;
       case 'tasks': await renderTasks(_root, id); break;
       case 'trash': await renderTrash(_root); break;
