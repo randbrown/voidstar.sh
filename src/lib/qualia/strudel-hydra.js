@@ -1356,7 +1356,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     }
     mountEditor();
     if (status && !audio.hasSource('strudel')) {
-      status.textContent = 'click ▶ in editor to start';
+      status.textContent = '';
     }
     ensureTapPolling();
   }
