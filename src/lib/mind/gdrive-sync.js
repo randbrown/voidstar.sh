@@ -11,19 +11,29 @@
 // this app creates), app-owned OAuth client ID by default (user override
 // possible), token cached ~1h.
 
-import { mergeRecord, NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS } from './store.js';
+import { NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS } from './store.js';
 import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
+import {
+  splitIntoShards, emptyShard, hashShard, hashIndex, shardName, parseShardName,
+  mergeById, mergeShardData, mergeIndexData, computeDelta, isEmptyDelta,
+  DEFAULT_SHARD_COUNT, SCHEMA_VERSION,
+} from './shard.js';
+
+// Full-dataset merge lives in shard.js now; re-exported for any external caller.
+export { mergeData } from './shard.js';
 
 const NS = 'voidstar.mind.gdrive';
 const CLIENT_ID_KEY = `${NS}.clientId`;
 const TOKEN_KEY = `${NS}.token`;
 const LAST_BACKUP_KEY = `${NS}.lastBackupAt`;
 const DEVICE_NAME_KEY = `${NS}.deviceName`;
+// Legacy single-file layout (pre-sharding). Still READ during migration and
+// while an old-code device keeps writing it, but never written by this version.
 const FILE_NAME = 'voidstar-mind-data.json';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
 
 // Everything lives under ONE top-level folder in My Drive (voidstar_mind),
-// with the data file + attachments/ + backups/ subfolders inside it.
+// with index.json + shards/ + attachments/ + backups/ inside it.
 const ROOT_FOLDER_NAME = 'voidstar_mind';
 const ROOT_FOLDER_ID_KEY = `${NS}.rootFolderId`;
 // Set once the legacy scattered layout has been re-homed under the root folder.
@@ -45,21 +55,47 @@ const LAST_HISTORY_KEY = `${NS}.lastHistoryAt`;
 const HISTORY_KEEP = 10;
 const HISTORY_MIN_INTERVAL_MS = 10 * 60 * 1000;
 
+// ── Sharded layout: index.json (global) + shards/shard-NNN.json (bucketed) ──
+const SHARDS_FOLDER_NAME = 'shards';
+const SHARDS_FOLDER_ID_KEY = `${NS}.shardsFolderId`;
+const INDEX_FILE_NAME = 'index.json';
+// Per-file remote state: { files: { "<name>": {id, mtime, hash} }, foldStamp }.
+// `hash` = the content we KNOW is on remote for that file (so a pure pull never
+// triggers a redundant re-upload); `foldStamp` = the legacy monolith's last
+// folded modifiedTime. Persisted so an interrupted cycle recovers correctly.
+const SHARD_STATE_KEY = `${NS}.shardState`;
+const EMPTY_SHARD_HASH = hashShard(emptyShard());
+
 // ── Freshness bookkeeping (see setlist fork for the full rationale) ──
-const REMOTE_MODIFIED_KEY = `${NS}.remoteModifiedTime`;
 const DIRTY_KEY = `${NS}.dirtyAt`;
 // Stamp of this device's last COMPLETED cycle — the conflict detector's
 // baseline: edits on both sides newer than this = a real concurrent fork.
 const LAST_CYCLE_KEY = `${NS}.lastCycleAt`;
 
-function getLastRemoteModified() { return localStorage.getItem(REMOTE_MODIFIED_KEY) || ''; }
-function setLastRemoteModified(t) { if (t) localStorage.setItem(REMOTE_MODIFIED_KEY, t); }
 function markLocalDirty() { try { localStorage.setItem(DIRTY_KEY, String(Date.now())); } catch {} }
 function getDirtyStamp() { return localStorage.getItem(DIRTY_KEY) || ''; }
 export function isLocalDirty() { return !!getDirtyStamp(); }
 function clearDirtyIf(stamp) { if (getDirtyStamp() === stamp) localStorage.removeItem(DIRTY_KEY); }
 export function getLastCycleAt() { return parseInt(localStorage.getItem(LAST_CYCLE_KEY) || '0', 10); }
 function setLastCycleAt(ts) { localStorage.setItem(LAST_CYCLE_KEY, String(ts)); }
+
+// ── Per-file remote state (shard/index modifiedTime + content hash) ──
+function getShardState() {
+  try { const s = JSON.parse(localStorage.getItem(SHARD_STATE_KEY)); if (s && s.files) return s; } catch {}
+  return { files: {}, foldStamp: '' };
+}
+function saveShardState(state) { try { localStorage.setItem(SHARD_STATE_KEY, JSON.stringify(state)); } catch {} }
+// Merge one file's {id,mtime,hash} in-place and persist immediately (crash-safe:
+// a stamp is only ever written AFTER the corresponding upload/import succeeded).
+function setFileState(name, entry) {
+  const s = getShardState();
+  s.files[name] = { ...s.files[name], ...entry };
+  saveShardState(s);
+}
+function clearFileHash(name) {
+  const s = getShardState();
+  if (s.files[name]) { delete s.files[name].hash; saveShardState(s); }
+}
 
 let _gisLoaded = false;
 
@@ -238,29 +274,291 @@ async function readJsonFile(token, fileId) {
   return res.json();
 }
 
-async function createFile(token, data) {
-  const root = await getRootFolderId(token);
-  const metadata = { name: FILE_NAME, mimeType: 'application/json', parents: [root] };
+// Create (multipart) or update (media) a JSON file, returning {id,modifiedTime}.
+// One helper for index.json and every shard.
+async function uploadJsonFile(token, { name, parentId, fileId, data }) {
+  if (fileId) {
+    const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,modifiedTime`, {
+      method: 'PATCH',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`Drive file update failed: ${res.status}`);
+    return res.json();
+  }
+  const metadata = { name, mimeType: 'application/json', parents: [parentId] };
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }), FILE_NAME);
+  form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }), name);
   const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${token}` },
     body: form,
   });
-  if (!res.ok) throw new Error(`Drive create failed: ${res.status}`);
+  if (!res.ok) throw new Error(`Drive file create failed: ${res.status}`);
   return res.json();
 }
 
-async function updateFile(token, fileId, data) {
-  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,modifiedTime`, {
-    method: 'PATCH',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
+// {id,name,modifiedTime} for every non-trashed child of a folder, paginated.
+async function listFolderFiles(token, folderId) {
+  const out = [];
+  let pageToken = '';
+  do {
+    const params = new URLSearchParams({
+      q: `'${folderId}' in parents and trashed=false`,
+      spaces: 'drive',
+      fields: 'nextPageToken,files(id,name,modifiedTime)',
+      pageSize: '1000',
+    });
+    if (pageToken) params.set('pageToken', pageToken);
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Drive list failed: ${res.status}`);
+    const json = await res.json();
+    out.push(...(json.files || []));
+    pageToken = json.nextPageToken || '';
+  } while (pageToken);
+  return out;
+}
+
+// index.json file(s) directly under the root folder (newest first; normally 0–1).
+async function findIndexFiles(token) {
+  const root = await getRootFolderId(token);
+  const params = new URLSearchParams({
+    q: `name='${INDEX_FILE_NAME}' and '${root}' in parents and trashed=false`,
+    spaces: 'drive',
+    fields: 'files(id,name,modifiedTime)',
+    orderBy: 'modifiedTime desc',
+    pageSize: '10',
   });
-  if (!res.ok) throw new Error(`Drive update failed: ${res.status}`);
-  return res.json();
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Drive index search failed: ${res.status}`);
+  return (await res.json()).files || [];
+}
+
+// Union duplicate shard-file contents by record (newer wins, NO conflict copies —
+// this is data-file healing, not a device fork).
+function unionShardObjects(list) {
+  let acc = emptyShard();
+  for (const s of list) {
+    if (!s) continue;
+    acc = {
+      notes: mergeById(acc.notes, s.notes || [], 'id', NOTE_FILL_FIELDS),
+      tasks: mergeById(acc.tasks, s.tasks || []),
+      attachments: mergeById(acc.attachments, s.attachments || [], 'id', ATTACHMENT_FILL_FIELDS),
+      annotations: mergeById(acc.annotations, s.annotations || [], 'key'),
+    };
+  }
+  return acc;
+}
+
+const SHARD_COLLS = ['notes', 'tasks', 'attachments', 'annotations'];
+
+// The shards/ subfolder, self-healing like the root folder: if two devices'
+// cold-cache first pushes created two shards/ folders, fold the stragglers into
+// the oldest (their shard files reparent in, and pullSharded's dup-name heal
+// then merges any now-colliding shard-NNN.json). Deterministic survivor so
+// devices converge.
+async function getShardsFolderId(token) {
+  const cached = localStorage.getItem(SHARDS_FOLDER_ID_KEY);
+  if (cached) return cached;
+  const rootId = await getRootFolderId(token);
+  const found = await searchFolders(token, SHARDS_FOLDER_NAME, { parentId: rootId, pageSize: 100, orderBy: 'createdTime' });
+  if (!found.length) return findOrCreateFolder(token, SHARDS_FOLDER_NAME, SHARDS_FOLDER_ID_KEY, rootId);
+  const sorted = [...found].sort((a, b) =>
+    (a.createdTime || '').localeCompare(b.createdTime || '') || a.id.localeCompare(b.id));
+  const keep = sorted[0].id;
+  for (const dup of sorted.slice(1)) {
+    try { await mergeFolderInto(token, dup.id, keep); }
+    catch (e) { console.warn('[mind-sync] duplicate shards folder heal deferred:', e.message); }
+  }
+  localStorage.setItem(SHARDS_FOLDER_ID_KEY, keep);
+  return keep;
+}
+
+// ── Sharded push / pull / peek (the client's Drive I/O) ──
+
+// Split the dataset into index.json + shards; upload only the files whose content
+// hash changed since we last saw them on remote. Persist each file's {id,mtime,
+// hash} the instant its own upload succeeds, so a crash mid-push at worst causes
+// a redundant re-upload next cycle — never a missed one.
+async function pushSharded(token, dataset) {
+  const rootId = await getRootFolderId(token);
+  const shardsFolderId = await getShardsFolderId(token);
+  const { index, shards } = splitIntoShards(dataset, DEFAULT_SHARD_COUNT);
+  const uploaded = [];
+
+  const idxHash = hashIndex(index);
+  if (getShardState().files[INDEX_FILE_NAME]?.hash !== idxHash) {
+    const cur = getShardState().files[INDEX_FILE_NAME];
+    const res = await uploadJsonFile(token, { name: INDEX_FILE_NAME, parentId: rootId, fileId: cur?.id, data: index });
+    setFileState(INDEX_FILE_NAME, { id: res.id, mtime: res.modifiedTime || '', hash: idxHash });
+    uploaded.push(INDEX_FILE_NAME);
+  }
+
+  const wantNames = new Set();
+  for (const [b, shard] of shards) {
+    const name = shardName(b);
+    wantNames.add(name);
+    const h = hashShard(shard);
+    const cur = getShardState().files[name];
+    if (cur?.hash !== h) {
+      const res = await uploadJsonFile(token, { name, parentId: shardsFolderId, fileId: cur?.id, data: shard });
+      setFileState(name, { id: res.id, mtime: res.modifiedTime || '', hash: h });
+      uploaded.push(name);
+    }
+  }
+
+  // A shard we track that now holds NO records → write explicit empty content to
+  // its stable file id (never trash+recreate — that churns modifiedTime and can
+  // re-trigger duplicate healing).
+  for (const [name, entry] of Object.entries(getShardState().files)) {
+    if (name === INDEX_FILE_NAME || wantNames.has(name) || parseShardName(name) === null) continue;
+    if (entry.hash === EMPTY_SHARD_HASH) continue;
+    const res = await uploadJsonFile(token, { name, parentId: shardsFolderId, fileId: entry.id, data: emptyShard() });
+    setFileState(name, { id: res.id, mtime: res.modifiedTime || '', hash: EMPTY_SHARD_HASH });
+    uploaded.push(name);
+  }
+
+  return { indexModifiedTime: getShardState().files[INDEX_FILE_NAME]?.mtime || '', uploaded };
+}
+
+// Download only the shards whose remote modifiedTime advanced past what we last
+// committed; return their records as a PARTIAL remote for the orchestrator to
+// merge against FULL local. Never writes IDB and never persists its own stamps —
+// it returns commit() for the cycle to call AFTER a successful import (so an
+// interrupted cycle re-pulls rather than skipping). It DOES heal duplicate
+// index/shard files (merge + trash), like the old monolith duplicate healing.
+async function pullSharded(token) {
+  const rootId = await getRootFolderId(token);
+  const shardsFolderId = await getShardsFolderId(token);
+  let healed = false;
+
+  // index.json (+ dup-name heal).
+  let indexFiles = await findIndexFiles(token);
+  if (indexFiles.length > 1) {
+    const parsed = [];
+    for (const f of indexFiles) { try { parsed.push(await readJsonFile(token, f.id)); } catch {} }
+    let mergedCollections = { folders: [], tasklists: [], settings: {} };
+    for (const p of parsed) mergedCollections = mergeIndexData(mergedCollections, p).merged;
+    const mergedIndex = { schema: SCHEMA_VERSION, shardCount: DEFAULT_SHARD_COUNT, ...mergedCollections };
+    const keep = indexFiles[0];
+    await uploadJsonFile(token, { name: INDEX_FILE_NAME, parentId: rootId, fileId: keep.id, data: mergedIndex });
+    for (const f of indexFiles.slice(1)) await trashFile(token, f.id).catch(() => {});
+    clearFileHash(INDEX_FILE_NAME);
+    healed = true;
+    indexFiles = await findIndexFiles(token);
+  }
+  const indexRec = indexFiles[0] || null;
+
+  // shard files (+ dup-name heal).
+  let shardFiles = (await listFolderFiles(token, shardsFolderId)).filter(f => parseShardName(f.name) !== null);
+  const byName = new Map();
+  for (const f of shardFiles) {
+    if (!byName.has(f.name)) byName.set(f.name, []);
+    byName.get(f.name).push(f);
+  }
+  for (const [name, files] of byName) {
+    if (files.length <= 1) continue;
+    files.sort((a, b) => (b.modifiedTime || '').localeCompare(a.modifiedTime || ''));
+    const parsed = [];
+    for (const f of files) { try { parsed.push(await readJsonFile(token, f.id)); } catch {} }
+    const merged = unionShardObjects(parsed);
+    await uploadJsonFile(token, { name, parentId: shardsFolderId, fileId: files[0].id, data: merged });
+    for (const f of files.slice(1)) await trashFile(token, f.id).catch(() => {});
+    clearFileHash(name);
+    healed = true;
+  }
+  if (healed) shardFiles = (await listFolderFiles(token, shardsFolderId)).filter(f => parseShardName(f.name) !== null);
+
+  if (!indexRec && !shardFiles.length) return null; // nothing sharded on Drive yet
+
+  const state = getShardState();
+  const pendingStamps = {};
+  const remotePartial = { notes: [], tasks: [], attachments: [], annotations: [] };
+  const changedBuckets = new Set();
+
+  let index = null;
+  if (indexRec) {
+    const known = state.files[INDEX_FILE_NAME];
+    if (!known || (indexRec.modifiedTime || '') > (known.mtime || '')) {
+      const data = await readJsonFile(token, indexRec.id);
+      index = { folders: data.folders || [], tasklists: data.tasklists || [], settings: data.settings || {} };
+      pendingStamps[INDEX_FILE_NAME] = { id: indexRec.id, mtime: indexRec.modifiedTime || '', hash: hashIndex(data) };
+    } else if (!known.id) {
+      pendingStamps[INDEX_FILE_NAME] = { ...known, id: indexRec.id };
+    }
+  }
+
+  for (const f of shardFiles) {
+    const b = parseShardName(f.name);
+    const known = state.files[f.name];
+    if (!known || (f.modifiedTime || '') > (known.mtime || '')) {
+      const data = await readJsonFile(token, f.id);
+      for (const coll of SHARD_COLLS) if (data[coll]) remotePartial[coll].push(...data[coll]);
+      changedBuckets.add(b);
+      pendingStamps[f.name] = { id: f.id, mtime: f.modifiedTime || '', hash: hashShard(data) };
+    } else if (!known.id) {
+      pendingStamps[f.name] = { ...known, id: f.id };
+    }
+  }
+
+  const commit = () => {
+    const s = getShardState();
+    for (const [name, entry] of Object.entries(pendingStamps)) s.files[name] = { ...s.files[name], ...entry };
+    saveShardState(s);
+  };
+
+  return { remotePartial, changedBuckets, index, pendingStamps, commit, healed };
+}
+
+// Cheap freshness gate for the automatic (focus) path: list shard + index +
+// legacy-monolith modifiedTimes and answer "did anything move since our last
+// completed cycle?" without downloading. `multiple` = a duplicate file name
+// exists (forces a healing cycle regardless).
+async function peekSharded(token) {
+  const shardsFolderId = await getShardsFolderId(token);
+  const [shardFilesRaw, indexFiles, monoFiles] = await Promise.all([
+    listFolderFiles(token, shardsFolderId),
+    findIndexFiles(token),
+    findDataFiles(token),
+  ]);
+  const state = getShardState();
+
+  // An old-code device still writing the legacy monolith → must fold it.
+  if (monoFiles.length && (monoFiles[0].modifiedTime || '') > (state.foldStamp || '')) {
+    return { fresh: false, multiple: false };
+  }
+
+  const files = [...indexFiles, ...shardFilesRaw.filter(f => parseShardName(f.name) !== null)];
+  if (!files.length) return monoFiles.length ? { fresh: false, multiple: false } : null;
+
+  const nameCount = new Map();
+  for (const f of files) nameCount.set(f.name, (nameCount.get(f.name) || 0) + 1);
+  const multiple = [...nameCount.values()].some(c => c > 1);
+
+  let advanced = false;
+  for (const f of files) {
+    if ((f.modifiedTime || '') > (state.files[f.name]?.mtime || '')) { advanced = true; break; }
+  }
+  return { fresh: !advanced && !multiple, multiple };
+}
+
+// Fold a legacy monolith into local when an old-code device has advanced it past
+// our last fold. Returns {data, commit} — commit stamps foldStamp only AFTER the
+// caller imports (crash-safe: the frozen migration copy is never skipped on a
+// failed import).
+async function readMonolithIfAdvanced(token) {
+  const files = await findDataFiles(token);
+  if (!files.length) return null;
+  const f = files[0]; // newest
+  if ((f.modifiedTime || '') <= (getShardState().foldStamp || '')) return null;
+  const data = await readJsonFile(token, f.id);
+  const commit = () => { const s = getShardState(); s.foldStamp = f.modifiedTime || ''; saveShardState(s); };
+  return { data, commit };
 }
 
 // Concurrent resolvers must not each create a folder. The sync cycle and the
@@ -503,36 +801,11 @@ export async function initGdriveSync({ interactive = true } = {}) {
   await healRootFoldersOnce(token);
 
   return {
-    async push(data) {
-      const files = await findDataFiles(token);
-      const file = files.length
-        ? await updateFile(token, files[0].id, data)
-        : await createFile(token, data);
-      return file?.modifiedTime || '';
-    },
-    // {data, modifiedTime, healed} or null. Duplicate data files (two devices'
-    // first pushes racing) are merged and trashed so all devices converge.
-    async pull() {
-      const files = await findDataFiles(token);
-      if (!files.length) return null;
-      let data = await readJsonFile(token, files[0].id);
-      let healed = false;
-      for (const dupe of files.slice(1)) {
-        try {
-          data = mergeData(data, await readJsonFile(token, dupe.id)).merged;
-          await trashFile(token, dupe.id);
-          healed = true;
-        } catch (e) {
-          console.warn('[mind-sync] duplicate data file merge failed:', e.message);
-        }
-      }
-      return { data, modifiedTime: files[0].modifiedTime || '', healed };
-    },
-    async peek() {
-      const files = await findDataFiles(token);
-      if (!files.length) return null;
-      return { modifiedTime: files[0].modifiedTime || '', multiple: files.length > 1 };
-    },
+    // Sharded Drive I/O — only changed shards move. See pushSharded/pullSharded.
+    push: (dataset) => pushSharded(token, dataset),
+    pull: () => pullSharded(token),
+    peek: () => peekSharded(token),
+    readMonolithIfAdvanced: () => readMonolithIfAdvanced(token),
 
     // ── Attachment binaries ──
     async uploadAttachment(att, blob) {
@@ -619,150 +892,89 @@ async function listHistory(token) {
   return listHistoryFiles(token, folderId);
 }
 
-// ── Merge ──
-
-function mergeById(localArr, remoteArr, keyField = 'id', fillFields = null) {
-  const map = new Map();
-  for (const item of localArr) map.set(item[keyField], item);
-  for (const remote of remoteArr) {
-    const key = remote[keyField];
-    const local = map.get(key);
-    map.set(key, local ? mergeRecord(local, remote, fillFields) : remote);
-  }
-  return [...map.values()];
-}
-
-function mergeConfig(local, remote) {
-  const out = { ...(remote || {}) };
-  for (const [k, v] of Object.entries(local || {})) {
-    const empty = v == null || v === '' || (Array.isArray(v) && v.length === 0);
-    if (!empty || !(k in out)) out[k] = v;
-  }
-  return out;
-}
-
-function configChanged(local = {}, remote = {}) {
-  const merged = mergeConfig(local, remote);
-  const keys = new Set([...Object.keys(merged), ...Object.keys(local)]);
-  for (const k of keys) {
-    if (JSON.stringify(merged[k]) !== JSON.stringify(local[k])) return true;
-  }
-  return false;
-}
-
-function recordsChanged(localArr = [], mergedArr = [], keyField = 'id') {
-  if (localArr.length !== mergedArr.length) return true;
-  const map = new Map(localArr.map(i => [i[keyField], i]));
-  return mergedArr.some(rec => {
-    const cur = map.get(rec[keyField]);
-    if (cur === rec) return false;
-    return !cur || JSON.stringify(cur) !== JSON.stringify(rec);
-  });
-}
-
-function mergeChangesLocal(local, merged) {
-  return recordsChanged(local.notes, merged.notes)
-    || recordsChanged(local.folders, merged.folders)
-    || recordsChanged(local.tasks, merged.tasks)
-    || recordsChanged(local.tasklists, merged.tasklists)
-    || recordsChanged(local.attachments, merged.attachments)
-    || recordsChanged(local.annotations, merged.annotations, 'key')
-    || configChanged(local.settings, merged.settings);
-}
-
-// Notes merge with conflict copies. A note edited on BOTH sides since this
-// device's last completed cycle, with different bodies, resolves LWW — and
-// the losing body is preserved as a new "Conflicted copy of …" note. First
-// sync (no cycle stamp) is plain LWW+fill: a missing baseline must not spam
-// copies for every note.
-function mergeNotes(localArr, remoteArr, lastCycleAt) {
-  const copies = [];
-  const map = new Map(localArr.map(n => [n.id, n]));
-  const existing = [...localArr, ...remoteArr];
-
-  for (const remote of remoteArr) {
-    const local = map.get(remote.id);
-    if (!local) { map.set(remote.id, remote); continue; }
-
-    const concurrent = lastCycleAt
-      && !local.deletedAt && !remote.deletedAt
-      && local.updatedAt !== remote.updatedAt
-      && local.updatedAt > lastCycleAt && remote.updatedAt > lastCycleAt
-      && (local.body || '') !== (remote.body || '');
-
-    const merged = mergeRecord(local, remote, NOTE_FILL_FIELDS);
-    map.set(remote.id, merged);
-
-    if (concurrent) {
-      const loser = merged.updatedAt === local.updatedAt ? remote : local;
-      const loserIsLocal = loser === local;
-      // Both devices detect the same fork — don't mint a second copy if one
-      // with this exact body already exists (arrived via the remote side).
-      const dupe = existing.some(n => n.conflictOf === remote.id && (n.body || '') === (loser.body || ''))
-        || copies.some(n => n.conflictOf === remote.id && (n.body || '') === (loser.body || ''));
-      if (!dupe) {
-        const when = new Date(loser.updatedAt).toISOString().slice(0, 16).replace('T', ' ');
-        copies.push({
-          ...loser,
-          id: crypto.randomUUID(),
-          title: `Conflicted copy of ${loser.title} (${loserIsLocal ? getDeviceName() : 'another device'}, ${when})`,
-          autoTitle: false,
-          conflictOf: remote.id,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-      }
-    }
-  }
-  return { merged: [...map.values(), ...copies], conflicts: copies.length };
-}
-
-export function mergeData(local, remote) {
-  const lastCycleAt = getLastCycleAt();
-  const notes = mergeNotes(local.notes || [], remote.notes || [], lastCycleAt);
-  return {
-    merged: {
-      notes: notes.merged,
-      folders: mergeById(local.folders || [], remote.folders || []),
-      tasks: mergeById(local.tasks || [], remote.tasks || []),
-      tasklists: mergeById(local.tasklists || [], remote.tasklists || []),
-      attachments: mergeById(local.attachments || [], remote.attachments || [], 'id', ATTACHMENT_FILL_FIELDS),
-      annotations: mergeById(local.annotations || [], remote.annotations || [], 'key'),
-      settings: mergeConfig(local.settings, remote.settings),
-    },
-    conflicts: notes.conflicts,
-  };
-}
-
-// ── The single pull→merge→push code path ──
+// ── The single pull→merge→push code path (sharded) ──
+//
+// The merge itself lives in shard.js (rules unchanged). This orchestrator:
+//   1. folds a still-advancing legacy monolith into local (old-code devices),
+//   2. pulls only the shards that changed on Drive (a PARTIAL remote),
+//   3. merges FULL local ⋈ partial remote (keeps conflict-copy dedup correct),
+//   4. imports only the delta locally, then
+//   5. pushes only the shards whose content hash diverged.
 
 export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) {
   if (_syncing) return { merged: null, hadRemote: false, changed: false, skipped: true };
   _syncing = true;
   try {
     const dirtyStamp = getDirtyStamp();
-    const pulled = await client.pull();
-    const remote = pulled ? pulled.data : null;
-    const local = await exportFn();
-    const result = remote ? mergeData(local, remote) : { merged: local, conflicts: 0 };
-    const merged = result.merged;
-    const changed = remote ? mergeChangesLocal(local, merged) : false;
-    if (changed && opts.snapshotFn) await opts.snapshotFn();
-    if (changed) await importFn(merged);
-    const pushNeeded = !remote || pulled.healed || mergeChangesLocal(remote, merged);
-    let remoteModified = pulled ? pulled.modifiedTime : '';
-    if (pushNeeded) {
-      remoteModified = await client.push({ ...merged, version: 1, app: 'mind', exportedAt: Date.now() });
-      if (client.writeHistory) {
-        try { await client.writeHistory(merged, !!opts.historyForce); }
-        catch (e) { console.warn('[mind-sync] history write failed:', e.message); }
-      }
+
+    // (1) Dual-read the legacy monolith BEFORE pulling shards, so its records are
+    // in local when we export. commit() stamps foldStamp only after the import.
+    let foldedMonolith = false;
+    if (client.readMonolithIfAdvanced) {
+      try {
+        const mono = await client.readMonolithIfAdvanced();
+        if (mono) { await importFn(mono.data); mono.commit(); foldedMonolith = true; }
+      } catch (e) { console.warn('[mind-sync] monolith fold failed:', e.message); }
     }
-    setLastRemoteModified(remoteModified);
+
+    // (2) Pull changed shards; (3) merge against full local.
+    const pulled = await client.pull();
+    const localFull = await exportFn();
+
+    let mergedFull = localFull;
+    let delta = null;
+    let conflicts = 0;
+    if (pulled) {
+      const mergeOpts = {
+        lastCycleAt: getLastCycleAt(),
+        deviceName: getDeviceName(),
+        idgen: () => crypto.randomUUID(),
+        now: () => Date.now(),
+      };
+      const sm = mergeShardData(localFull, pulled.remotePartial, mergeOpts);
+      conflicts = sm.conflicts;
+      let { folders, tasklists, settings } = localFull;
+      if (pulled.index) {
+        ({ folders, tasklists, settings } = mergeIndexData(
+          { folders: localFull.folders, tasklists: localFull.tasklists, settings: localFull.settings },
+          pulled.index,
+        ).merged);
+      }
+      mergedFull = {
+        notes: sm.merged.notes,
+        folders,
+        tasks: sm.merged.tasks,
+        tasklists,
+        attachments: sm.merged.attachments,
+        annotations: sm.merged.annotations,
+        settings,
+      };
+      delta = computeDelta(localFull, mergedFull);
+    }
+
+    // (4) Import only what changed; snapshot first (size-gated inside putSnapshot).
+    const importedDelta = delta && !isEmptyDelta(delta);
+    if (importedDelta) {
+      if (opts.snapshotFn) await opts.snapshotFn();
+      await importFn(delta);
+    }
+    if (pulled) pulled.commit(); // stamp pulled shards only AFTER the import
+
+    // (5) Push only the shards whose content hash diverged.
+    const { uploaded } = await client.push(mergedFull);
+
+    // History is now a manual/forced consolidated restore point only (Drive keeps
+    // native per-file revisions on each shard for the automatic path).
+    if (opts.historyForce && client.writeHistory) {
+      try { await client.writeHistory(mergedFull, true); }
+      catch (e) { console.warn('[mind-sync] history write failed:', e.message); }
+    }
+
     clearDirtyIf(dirtyStamp);
     setLastBackupTime(Date.now());
     setLastCycleAt(Date.now());
-    return { merged, hadRemote: !!remote, changed, pushed: pushNeeded, conflicts: result.conflicts };
+    const changed = importedDelta || foldedMonolith;
+    return { merged: mergedFull, hadRemote: !!pulled, changed, pushed: uploaded.length > 0, conflicts };
   } finally {
     _syncing = false;
   }
@@ -772,7 +984,7 @@ export async function pullMergePushIfStale(client, exportFn, importFn, opts = {}
   if (!isLocalDirty()) {
     try {
       const info = await client.peek();
-      if (info && !info.multiple && info.modifiedTime && info.modifiedTime === getLastRemoteModified()) {
+      if (info && info.fresh) {
         setLastBackupTime(Date.now());
         return { merged: null, hadRemote: true, changed: false, fresh: true };
       }
