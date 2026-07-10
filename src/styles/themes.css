@@ -661,6 +661,50 @@
   --code-filter:   saturate(1.2) contrast(1.05) brightness(1.05);
 }
 
+/* ---- Lightroom (darkroom's daylight sibling — a lit light-table) ---------- *
+   A contact-print viewing station in daylight: soft photographic light-gray
+   surfaces (not stark white), graphite ink, a controlled safelight-red lead
+   with cyan+magenta separation, focus-green, exposure-amber — all darkened so
+   they read on light AND as small text. A LIGHT theme: opaque light panels and
+   an INVERTED canvas (dark marks on a soft light field — a lightbox negative),
+   handled in the scoped skin below.                                          */
+[data-theme="lightroom"] {
+  --void:        #e9ebee;            /* soft photographic light-gray (not white) */
+  --void-2:      #e0e3e7;
+  --surface:     #f5f6f8;            /* bright viewing panel */
+  --surface-2:   #e4e7ea;
+  --border:      #c3c8ce;
+  --border-2:    #a7aeb6;
+  --text:        #161a1f;            /* graphite ink */
+  --text-muted:  #54606b;
+  --text-dim:    #8a949e;
+  /* opaque light panels — a light theme over a light stage */
+  --surface-glass:   #f2f3f6;
+  --surface-glass-2: #e7eaee;
+  --hud-border:      #c3c8ce;
+  --accent:      #bb2a25;            /* controlled safelight red (lead) */
+  --accent-glow: rgba(187, 42, 37, 0.22);
+  --cyan:        #0d7280;            /* cyan separation */
+  --cyan-glow:   rgba(13, 114, 128, 0.20);
+  --pink:        #a02f84;            /* magenta separation */
+  --pink-glow:   rgba(160, 47, 132, 0.20);
+  --green:       #1e7249;            /* optical tracking / focus green */
+  --amber:       #9c6410;            /* exposure / lamp warmth */
+  --radius:      2px;
+  --radius-lg:   4px;
+  --glow-strength: 0.35;
+  --panel-blur:  6px;
+  /* fx render on dark internally (viz-bg dark); the scoped skin inverts the
+     canvas + multiplies it onto the light stage → dark marks on soft light */
+  --viz-bg:        #0a0b0d;
+  --viz-hue-base:  180;              /* cyan separation … */
+  --viz-hue-spread: 160;             /* … through magenta separation into safelight red */
+  --viz-sat:       62;
+  --viz-light:     55;
+  --viz-glow:      0.4;              /* low — no bloom on the light table */
+  --code-filter:   saturate(1.15) contrast(1.05) brightness(1.02);
+}
+
 /* ============================================================================
    Texture overlays — scanlines (phosphor) and film grain (tape).
    A fixed, pointer-events:none layer over the page; opacity driven by the
@@ -1765,6 +1809,98 @@ body::before {
 }
 [data-theme="darkroom"] .qp-head .qp-title::before { content: "⊹ "; color: var(--accent); }
 
+/* ────────────────────────────────────────────────────────────────────────
+   Lightroom — darkroom in daylight. Light photographic panels with graphite
+   ink; the active state is the same sharp safelight-red registration lock.
+   Panels are light optical stages with film-edge (sprocket-dashed) headers.
+   The canvas is INVERTED to dark marks on a soft light field (a lightbox
+   negative) and multiplied onto a light-gray stage; the hero wordmark and the
+   hardcoded-dark popovers are lightened so nothing reads as a dark slab.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="lightroom"] .btn,
+[data-theme="lightroom"] .ctrl-btn,
+[data-theme="lightroom"] .qp-toggle,
+[data-theme="lightroom"] .qp-preset,
+[data-theme="lightroom"] .qp-tab,
+[data-theme="lightroom"] .start-btn {
+  background: linear-gradient(180deg, var(--surface), var(--surface-2)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 2px !important;
+  color: var(--text-muted) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+  transition: box-shadow 0.2s, color 0.2s, border-color 0.2s;
+}
+[data-theme="lightroom"] .ctrl-btn:hover,
+[data-theme="lightroom"] .qp-toggle:hover,
+[data-theme="lightroom"] .qp-preset:hover,
+[data-theme="lightroom"] .qp-tab:hover,
+[data-theme="lightroom"] .btn:hover {
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+}
+[data-theme="lightroom"] .ctrl-btn.active,
+[data-theme="lightroom"] .ctrl-btn.active-audio,
+[data-theme="lightroom"] .qp-toggle.active,
+[data-theme="lightroom"] .qp-preset.active,
+[data-theme="lightroom"] .qp-tab.active {
+  /* registration lock */
+  color: var(--accent) !important;
+  border-color: var(--accent) !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent),
+    0 0 8px color-mix(in srgb, var(--accent) 30%, transparent) !important;
+}
+[data-theme="lightroom"] .qp-card,
+[data-theme="lightroom"] #topbar,
+[data-theme="lightroom"] #audio-panel,
+[data-theme="lightroom"] .qp-tabs,
+[data-theme="lightroom"] .post-card,
+[data-theme="lightroom"] .video-card,
+[data-theme="lightroom"] #cycle-mgr {
+  background: var(--surface-glass) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 4px 16px rgba(20, 24, 30, 0.12) !important;
+}
+[data-theme="lightroom"] .qp-card > .qp-head {
+  border-bottom: 1px dashed color-mix(in srgb, var(--text) 30%, transparent) !important;   /* film-edge indexing */
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+  padding-bottom: 0.26rem !important;
+}
+[data-theme="lightroom"] .qp-head .qp-title::before { content: "⊹ "; color: var(--accent); }
+/* The hero wordmark is a light glow-on-dark asset — invert to graphite on the
+   light page. */
+[data-theme="lightroom"] .hero-logo { filter: invert(1) contrast(1.08) brightness(1.12) !important; }
+/* Lighten the hardcoded-dark popovers/overlays so they don't read as dark
+   slabs on the light table. */
+[data-theme="lightroom"] #quick-menu,
+[data-theme="lightroom"] .panel-io-actions {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 8px 24px rgba(20, 24, 30, 0.18) !important;
+}
+[data-theme="lightroom"] #status-overlay { background: color-mix(in srgb, var(--void) 92%, transparent) !important; }
+[data-theme="lightroom"] #status-overlay .status-title { color: var(--text) !important; }
+[data-theme="lightroom"] kbd {
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}
+/* The light stage + inverted canvas: the fx render bright-on-dark internally,
+   so invert them to dark marks on a soft light field and MULTIPLY onto the
+   light-gray stage (the base rule sets screen, which would wash to white). */
+[data-theme="lightroom"] body:has(#qualia-host),
+[data-theme="lightroom"] body:has(#canvas) {
+  background: #e6e8eb !important;
+}
+[data-theme="lightroom"] #qualia-host > canvas,
+[data-theme="lightroom"] #canvas {
+  filter: invert(1) hue-rotate(180deg) !important;
+  mix-blend-mode: multiply !important;
+}
+
 /* ============================================================================
    GENERATED CONTROLS — the JS-built qualia utility controls.
    ----------------------------------------------------------------------------
@@ -2303,6 +2439,39 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
     color-mix(in srgb, #fff 5%, var(--surface-2)), var(--surface)) !important;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), inset 0 0 8px rgba(0, 0, 0, 0.5) !important;
 }
+
+/* ── Lightroom — a light exposure scale / dark aperture-ring marker on light /
+   light lens-stage pills. Mirrors darkroom on the light table: the thumb is a
+   graphite aperture ring with a safelight rim; the source colour rides the
+   theme-aware meter. */
+[data-theme="lightroom"] {
+  --ctl-slider-track: linear-gradient(90deg, #cfd3d8, #9aa0a7);
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 1px;
+  --ctl-slider-track-shadow: inset 0 0 0 1px rgba(20, 24, 30, 0.08);
+  --ctl-slider-fill: var(--amber);
+  --ctl-slider-thumb:
+    radial-gradient(circle,
+      transparent 0 26%, var(--text) 30% 42%,
+      color-mix(in srgb, var(--accent) 70%, transparent) 46% 54%, transparent 58%);
+  --ctl-slider-thumb-w: 16px;
+  --ctl-slider-thumb-h: 16px;
+  --ctl-slider-thumb-radius: 50%;
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 1px 3px rgba(20, 24, 30, 0.3);
+  --ctl-meter-bg: rgba(20, 24, 30, 0.10);
+  --ctl-focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  --ctl-scrollbar-track: var(--void-2);
+  --ctl-scrollbar-thumb: color-mix(in srgb, var(--text) 30%, var(--void));
+}
+[data-theme="lightroom"] .qp-mod-pill {
+  border-radius: 2px !important;
+  background: linear-gradient(180deg, var(--surface), var(--surface-2)) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+  color: var(--text) !important;
+}
+[data-theme="lightroom"] .qp-mod-name { color: var(--text) !important; }
 
 /* ============================================================================
    Reduced motion — honour prefers-reduced-motion.
