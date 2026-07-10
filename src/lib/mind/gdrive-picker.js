@@ -105,3 +105,60 @@ export async function importFromDrive() {
   const text = await fetchDriveDocText(file);
   return { text, name: file.name };
 }
+
+// Multi-select picker for Evernote .enex exports. No mime filter — .enex uploads
+// to Drive with inconsistent types (octet-stream / xml) — so all files are
+// shown and the user selects their export(s). Resolves with an array of
+// { id, name, mimeType } or null on cancel. MUST be called from a user gesture.
+export async function pickDriveEnex() {
+  if (!hasPickerKey()) throw new Error('Drive Picker is not configured.');
+  await ensureDriveAccess();
+  const token = await getDriveToken({ interactive: true });
+  if (!token) throw new Error('Google Drive not connected.');
+  await loadPickerApi();
+
+  return new Promise((resolve, reject) => {
+    try {
+      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(false);
+      const builder = new google.picker.PickerBuilder()
+        .setOAuthToken(token)
+        .setDeveloperKey(GOOGLE_PICKER_API_KEY)
+        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+        .addView(view)
+        .setCallback((data) => {
+          const action = data[google.picker.Response.ACTION];
+          if (action === google.picker.Action.PICKED) {
+            const docs = data[google.picker.Response.DOCUMENTS] || [];
+            resolve(docs.map((d) => ({
+              id: d[google.picker.Document.ID],
+              name: d[google.picker.Document.NAME],
+              mimeType: d[google.picker.Document.MIME_TYPE],
+            })));
+          } else if (action === google.picker.Action.CANCEL) {
+            resolve(null);
+          }
+        });
+      const appId = googleAppId();
+      if (appId) builder.setAppId(appId);
+      builder.build().setVisible(true);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// Download the picked files' raw text (a .enex is UTF-8 XML → the alt=media
+// branch of fetchDriveDocText). Returns [{ name, text }]; failures are skipped
+// with a warning rather than aborting the whole batch.
+export async function importEnexFromDrive() {
+  const files = await pickDriveEnex();
+  if (!files || !files.length) return null;
+  const out = [];
+  for (const f of files) {
+    try { out.push({ name: f.name, text: await fetchDriveDocText(f) }); }
+    catch (e) { console.warn('[enex] Drive fetch failed:', f.name, e.message); }
+  }
+  return out;
+}

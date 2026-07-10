@@ -6,6 +6,7 @@ import { el, esc, btn, confirmBox } from '../ui.js';
 import * as store from '../store.js';
 import { navigate } from '../app.js';
 import { parseEnexFiles, commitEnexImport } from '../enex-import.js';
+import { pickerAvailable } from '../gdrive-picker.js';
 
 const PREVIEW_CAP = 100;
 
@@ -39,6 +40,21 @@ export async function openImportEnexModal() {
   const srcRow = el('div', 'mn-actions');
   srcRow.appendChild(fileInput);
   srcRow.appendChild(btn('choose .enex file(s)…', 'mn-btn-ghost', () => fileInput.click()));
+  if (pickerAvailable()) {
+    const pickBtn = btn('pick from Drive…', 'mn-btn-ghost', async () => {
+      pickBtn.disabled = true;
+      const prev = pickBtn.textContent;
+      pickBtn.textContent = 'opening Drive…';
+      try {
+        const { importEnexFromDrive } = await import('../gdrive-picker.js');
+        const texts = await importEnexFromDrive();
+        if (texts && texts.length) ingest(texts);
+      } catch (e) {
+        alert(`Drive import failed: ${e.message}`);
+      } finally { pickBtn.disabled = false; pickBtn.textContent = prev; }
+    });
+    srcRow.appendChild(pickBtn);
+  }
   box.appendChild(srcRow);
 
   // ── Folder + tag options ──
@@ -84,17 +100,20 @@ export async function openImportEnexModal() {
     fileInput.value = '';
     if (!files.length) return;
     summary.textContent = 'reading…';
-    list.innerHTML = '';
-    importBtn.disabled = true;
     try {
-      const texts = await Promise.all(files.map(async (f) => ({ name: f.name, text: await f.text() })));
-      parsed = parseEnexFiles(texts);
+      ingest(await Promise.all(files.map(async (f) => ({ name: f.name, text: await f.text() }))));
     } catch (e) {
       summary.textContent = `read failed: ${e.message}`;
-      return;
     }
-    renderSummary();
   });
+
+  // Turn [{name,text}] from a file input or the Drive picker into a preview.
+  function ingest(texts) {
+    list.innerHTML = '';
+    importBtn.disabled = true;
+    parsed = parseEnexFiles(texts);
+    renderSummary();
+  }
 
   function renderSummary() {
     const { stats, warnings, notes } = parsed;
