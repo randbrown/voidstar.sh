@@ -414,39 +414,41 @@
   --code-filter:   sepia(1) hue-rotate(185deg) saturate(2);
 }
 
-/* ---- Gardens (Cindy Lynn's Gardens — stained-glass botany / chemistry) ---- *
-   Greenhouse at dusk: moss/soil green-black, iris violet accent, dewdrop
-   jade, lily pink, chlorophyll green, daylily gold. Rounded, organic, softly
-   luminous. docs/agent-reference.md §5 — botanical, not floral clipart.       */
+/* ---- Gardens (Cindy Lynn's Gardens — a nocturnal stained-glass greenhouse) - *
+   Redesign: a dark greenhouse of handmade glass and bioluminescent growth —
+   midnight blue-green void, iridescent stained-glass TEAL lead, dew aqua,
+   orchid glass, living fern, sunlit leaded gold. Vein/stem controls, backlit
+   glass panes, verdigris trellises. Living, nocturnal, luminous — not the old
+   green-with-violet console, not `glass`'s leaded jewel grid. §6.             */
 [data-theme="gardens"] {
-  --void:        #060d08;
-  --void-2:      #0a140c;
-  --surface:     #0d180f;
-  --surface-2:   #142114;
-  --border:      #28422a;
-  --border-2:    #3f6b40;
-  --text:        #e4f0dc;
-  --text-muted:  #8fb08a;
-  --text-dim:    #587a55;
-  --accent:      #a06ee8;            /* iris violet */
-  --accent-glow: rgba(160, 110, 232, 0.3);
-  --cyan:        #62d9c4;            /* dewdrop jade */
-  --cyan-glow:   rgba(98, 217, 196, 0.28);
-  --pink:        #f08fb4;            /* lily pink */
-  --pink-glow:   rgba(240, 143, 180, 0.28);
-  --green:       #86d94e;            /* chlorophyll */
-  --amber:       #f5b942;            /* daylily gold */
-  --radius:      10px;
-  --radius-lg:   14px;
-  --glow-strength: 0.8;
-  --panel-blur:  10px;
-  --viz-bg:        #060d08;
-  --viz-hue-base:  100;              /* leaf green… */
-  --viz-hue-spread: 60;              /* …to jade; florals come via the accents */
-  --viz-sat:       65;
-  --viz-light:     55;
-  --viz-glow:      0.9;
-  --code-filter:   sepia(1) hue-rotate(55deg) saturate(1.8);
+  --void:        #050c0d;            /* midnight greenhouse blue-black */
+  --void-2:      #081414;
+  --surface:     #0b1719;            /* smoked leaf-glass */
+  --surface-2:   #10201f;
+  --border:      #234040;            /* weathered verdigris trellis */
+  --border-2:    #3a6660;
+  --text:        #e8f0e0;            /* warm moonlit ivory */
+  --text-muted:  #8fb0a2;
+  --text-dim:    #557067;
+  --accent:      #22cbb0;            /* iridescent stained-glass teal (lead) */
+  --accent-glow: rgba(34, 203, 176, 0.32);
+  --cyan:        #79e2ee;            /* dew-lit aqua */
+  --cyan-glow:   rgba(121, 226, 238, 0.28);
+  --pink:        #dc6bcf;            /* orchid / bougainvillea glass */
+  --pink-glow:   rgba(220, 107, 207, 0.28);
+  --green:       #74d64f;            /* living fern / chlorophyll light */
+  --amber:       #eeb63f;            /* sunlit leaded-glass gold */
+  --radius:      9px;
+  --radius-lg:   13px;
+  --glow-strength: 0.85;
+  --panel-blur:  11px;
+  --viz-bg:        #040a0b;          /* extremely dark blue-green */
+  --viz-hue-base:  48;               /* sunlit gold … */
+  --viz-hue-spread: 172;             /* … through fern green into dew aqua */
+  --viz-sat:       66;
+  --viz-light:     54;               /* controlled — growth stays glassy, not candy */
+  --viz-glow:      0.95;
+  --code-filter:   sepia(0.85) hue-rotate(100deg) saturate(1.6);
 }
 
 /* ---- Glissando (a pedal steel as a control surface — harmonic / sustained) - *
@@ -1146,9 +1148,12 @@ body::before {
 [data-theme="visioneer"] .qp-head .qp-title::before { content: "◉ "; color: var(--accent); }
 
 /* ────────────────────────────────────────────────────────────────────────
-   Gardens — greenhouse at dusk. Soft luminous pill controls with a dewdrop
-   highlight and a chlorophyll glow; panels glow gently from a low light with
-   a faint canopy gradient; headers carry a small bloom.
+   Gardens — a nocturnal greenhouse of stained glass and bioluminescent growth.
+   Controls are dim leaf-glass panes set in weathered came; hover glimmers, and
+   the active state BACKLIGHTS the pane (teal→gold light behind it, label goes
+   dark) — a pane becoming lit. Panels are smoked glass held in verdigris
+   trellises under a low canopy glow; each header grows a teal→fern vein
+   underline beneath a hedera-leaf mark. Botanical structure, not floral clipart.
    ──────────────────────────────────────────────────────────────────────── */
 [data-theme="gardens"] .btn,
 [data-theme="gardens"] .ctrl-btn,
@@ -1157,25 +1162,44 @@ body::before {
 [data-theme="gardens"] .qp-tab,
 [data-theme="gardens"] .start-btn {
   background:
-    radial-gradient(120% 140% at 30% 0%, rgba(255, 255, 255, 0.18), transparent 45%),
-    color-mix(in srgb, var(--green) 12%, var(--surface)) !important;
-  border: 1px solid color-mix(in srgb, var(--green) 32%, transparent) !important;
-  border-radius: 999px !important;
-  color: var(--text) !important;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--green) 30%, transparent) !important;
+    linear-gradient(150deg,
+      color-mix(in srgb, var(--accent) 12%, var(--surface)),
+      color-mix(in srgb, var(--green) 9%, var(--surface))) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, #04100e) !important;
+  border-radius: 4px 11px 4px 11px !important;   /* a leaf pane */
+  color: color-mix(in srgb, var(--text) 82%, transparent) !important;
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.4) !important;
+  transition: box-shadow 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 [data-theme="gardens"] .ctrl-btn:hover,
 [data-theme="gardens"] .qp-toggle:hover,
 [data-theme="gardens"] .qp-preset:hover,
 [data-theme="gardens"] .qp-tab:hover,
+[data-theme="gardens"] .btn:hover {
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent) !important;
+  box-shadow:
+    inset 0 0 10px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 0 12px var(--accent-glow) !important;
+}
 [data-theme="gardens"] .ctrl-btn.active,
 [data-theme="gardens"] .ctrl-btn.active-audio,
 [data-theme="gardens"] .qp-toggle.active,
 [data-theme="gardens"] .qp-preset.active,
 [data-theme="gardens"] .qp-tab.active {
-  border-color: var(--green) !important;
-  box-shadow: 0 0 16px color-mix(in srgb, var(--green) 45%, transparent) !important;
-  color: var(--green) !important;
+  /* the pane lights — bioluminescent glass, backlit teal→gold */
+  background:
+    radial-gradient(130% 120% at 30% -10%,
+      color-mix(in srgb, var(--amber) 40%, transparent),
+      color-mix(in srgb, var(--accent) 30%, transparent) 45%, transparent 72%),
+    linear-gradient(150deg,
+      color-mix(in srgb, var(--accent) 26%, #04100e),
+      color-mix(in srgb, var(--green) 20%, #04100e)) !important;
+  color: #05130f !important;
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent) !important;
+  box-shadow:
+    inset 0 0 12px rgba(255, 255, 255, 0.25),
+    0 0 16px var(--accent-glow) !important;
 }
 [data-theme="gardens"] .qp-card,
 [data-theme="gardens"] #topbar,
@@ -1185,15 +1209,21 @@ body::before {
 [data-theme="gardens"] .video-card,
 [data-theme="gardens"] #cycle-mgr {
   background:
-    radial-gradient(140% 100% at 50% -10%,
-      color-mix(in srgb, var(--green) 14%, transparent), transparent 65%),
+    radial-gradient(150% 110% at 50% -15%,
+      color-mix(in srgb, var(--accent) 12%, transparent), transparent 62%),
     var(--surface-glass) !important;
-  border: 1px solid color-mix(in srgb, var(--green) 22%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--border-2) 60%, transparent) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 0 26px color-mix(in srgb, var(--green) 22%, transparent) !important;
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 18%, transparent),
+    0 0 24px color-mix(in srgb, var(--accent) 16%, transparent) !important;
 }
-[data-theme="gardens"] .qp-head .qp-title::before { content: "❀ "; color: var(--pink); }
+[data-theme="gardens"] .qp-card > .qp-head {
+  border-bottom: 1px solid transparent !important;
+  border-image: linear-gradient(90deg,
+    var(--accent), color-mix(in srgb, var(--green) 60%, transparent), transparent) 1 !important;
+  padding-bottom: 0.28rem !important;
+}
+[data-theme="gardens"] .qp-head .qp-title::before { content: "❧ "; color: var(--accent); }
 
 /* ────────────────────────────────────────────────────────────────────────
    Glissando — polished pedal-steel hardware. Controls are brushed-metal
@@ -1709,26 +1739,41 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
   box-shadow: 0 0 8px var(--accent-glow) !important;
 }
 
-/* ── Gardens — stem/vine with dew-drop thumb / seed labels ───────────────── */
+/* ── Gardens — a lit stem/vein rail w/ a dew-drop bead / seed-capsule pills ──
+   The track is a thin lit stem; the fill is light travelling it; the thumb is
+   an iridescent glass dew drop; pills are asymmetric seed capsules / leaf
+   nodes. Meter reads as an illuminated vein via the per-channel fill. */
 [data-theme="gardens"] {
-  --ctl-slider-track: color-mix(in srgb, var(--green) 30%, var(--surface));
-  --ctl-slider-track-h: 4px;
+  --ctl-slider-track:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--accent) 24%, var(--surface)),
+      color-mix(in srgb, var(--green) 26%, var(--surface)));
+  --ctl-slider-track-h: 3px;
   --ctl-slider-track-radius: 999px;
-  --ctl-slider-fill: var(--green);
+  --ctl-slider-track-shadow: 0 0 6px color-mix(in srgb, var(--accent) 25%, transparent);
+  --ctl-slider-fill: var(--accent);
   --ctl-slider-thumb:
-    radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.9),
-      color-mix(in srgb, var(--cyan) 70%, var(--green)) 70%);
-  --ctl-slider-thumb-w: 14px;
-  --ctl-slider-thumb-h: 14px;
-  --ctl-slider-thumb-border: 1px solid color-mix(in srgb, var(--green) 50%, transparent);
-  --ctl-slider-thumb-shadow: 0 0 8px color-mix(in srgb, var(--green) 40%, transparent);
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.95),
+      color-mix(in srgb, var(--accent) 78%, var(--cyan)) 60%,
+      color-mix(in srgb, var(--accent) 62%, #04100e) 100%);
+  --ctl-slider-thumb-w: 13px;
+  --ctl-slider-thumb-h: 13px;
+  --ctl-slider-thumb-radius: 52% 48% 50% 50%;    /* a dew drop, not a perfect circle */
+  --ctl-slider-thumb-border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  --ctl-slider-thumb-shadow:
+    0 0 9px color-mix(in srgb, var(--accent) 45%, transparent),
+    inset 0 0 3px rgba(255, 255, 255, 0.55);
 }
 [data-theme="gardens"] .qp-mod-pill {
-  border-radius: 10px !important;
+  border-radius: 9px 3px 9px 3px !important;     /* seed capsule / leaf node */
   background:
-    radial-gradient(120% 140% at 30% 0%, rgba(255, 255, 255, 0.08), transparent 50%),
-    color-mix(in srgb, var(--green) 8%, var(--surface-glass-2)) !important;
-  box-shadow: 0 0 8px color-mix(in srgb, var(--green) 20%, transparent) !important;
+    radial-gradient(130% 150% at 26% 0%, rgba(255, 255, 255, 0.10), transparent 52%),
+    linear-gradient(160deg,
+      color-mix(in srgb, var(--accent) 10%, var(--surface-glass-2)),
+      color-mix(in srgb, var(--green) 8%, var(--surface-glass-2))) !important;
+  box-shadow:
+    0 0 9px color-mix(in srgb, var(--accent) 20%, transparent),
+    inset 0 0 6px color-mix(in srgb, var(--green) 9%, transparent) !important;
 }
 
 /* ── Glissando — polished steel string rail / brushed pedal-changer pills ──
