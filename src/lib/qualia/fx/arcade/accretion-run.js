@@ -145,12 +145,19 @@ export default function create(eng) {
   // of pre-clearing the lane the instant traffic appears.
   //
   // REACT (0..1, near→horizon-spawn) gates how close a car must be before it
-  // counts as a threat: at 0.42 the car is already in the near half of the road
-  // when the swerve starts. MARGIN is how far clear of the threat we aim, kept
-  // comfortably above the 0.30 collision radius so the late-but-snappy move
-  // still clears in time — even boosted, and even after the autonomy blend
-  // shrinks the offset. Returns the desired steer [-1,1].
-  const REACT = 0.42, MARGIN = 0.46;
+  // counts as a threat: at 0.52 the swerve starts around mid-screen — a touch
+  // sooner than a pure last-second dart, but still late enough to read as a
+  // human reacting rather than pre-clearing the lane.
+  //
+  // THREAT_X and MARGIN are sized to the CARS' RENDERED SPRITES, not to a bare
+  // point-mass. Two cars side-by-side at the same depth only stop overlapping
+  // once their centres are ~0.57 apart in road-space (player sprite half-width
+  // ≈0.31 + NPC half-width ≈0.26 in `o.x`/`laneX` units). So THREAT_X (~0.58)
+  // treats any car inside sprite-touching range as worth reacting to, and
+  // MARGIN (~0.68) aims the swerve past that touch distance for a visible gap
+  // (the extra also gives hysteresis and survives the autonomy-blend shrink /
+  // high-speed lag while staying clear of the 0.30 collision radius).
+  const REACT = 0.52, THREAT_X = 0.58, MARGIN = 0.68;
   function autopilot(dt, audio, poseEnergy) {
     // Cruise line: a gentle wander around centre. Low amplitude on purpose, so
     // the car hovers near the middle with organic drift rather than roaming.
@@ -158,12 +165,12 @@ export default function create(eng) {
     const cruise = Math.sin(wanderP) * (0.16 + poseEnergy * 0.12)
                  + Math.sin(wanderP * 0.37 + 1.3) * 0.08;
 
-    // Most urgent close car that actually threatens our current line.
+    // Most urgent close car whose sprite would clip ours on the current line.
     let threat = null, threatUrg = -1;
     for (let k = 0; k < debris.length; k++) {
       const o = debris[k];
       if (o.hit || o.d < -0.05 || o.d > REACT) continue;    // ignore passed + far cars
-      if (Math.abs(o.x - laneX) > MARGIN) continue;         // already clear of it → hold the line
+      if (Math.abs(o.x - laneX) > THREAT_X) continue;       // already clear of it → hold the line
       const urg = 1 - o.d / REACT;                          // 0 at the zone edge → 1 right on top of us
       if (urg > threatUrg) { threatUrg = urg; threat = o; }
     }
@@ -177,6 +184,14 @@ export default function create(eng) {
       const side = (laneX >= threat.x) ? 1 : -1;
       let target = threat.x + side * MARGIN;
       if (Math.abs(target) > 0.95) target = threat.x - side * MARGIN;
+      // If a SECOND close car sits near that escape lane, we can't clear both by
+      // swerving — thread the midpoint gap between them (the safest line the
+      // road allows) instead of darting into the other car.
+      for (let k = 0; k < debris.length; k++) {
+        const o = debris[k];
+        if (o === threat || o.hit || o.d < -0.05 || o.d > REACT) continue;
+        if (Math.abs(o.x - target) < THREAT_X) { target = (threat.x + o.x) * 0.5; break; }
+      }
       target = Math.max(-0.95, Math.min(0.95, target));
       // Commit hard, sharpening as the car bears down, so a last-moment threat
       // gets a decisive yank rather than a lazy drift.
