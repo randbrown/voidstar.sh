@@ -6,9 +6,14 @@ attribute on `<html>` reskins the **whole site and the labs together** — chrom
 performer can pick a distinct identity, and so new themes are mostly a
 copy-paste-and-tune exercise.
 
-This document is the map for adding/editing themes. If you're a design agent:
-read "Quick start" then "Token reference," edit `src/styles/themes.css`, and
-verify with the checklist at the end.
+This document is the **mechanical** map for adding/editing themes — the token
+system, wiring, and build checklist. If you're a design agent deciding *what* to
+make and *how to make it good*, start with the design/UX brief in
+[`theming-guide.md`](theming-guide.md) (philosophy, palette taste, UI
+perspective, and the per-agent template for building a batch of themes), then
+come back here for the wiring. In short: read "Quick start" then "Token
+reference," edit `src/styles/themes.css`, and verify with the checklist at the
+end.
 
 ---
 

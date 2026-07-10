@@ -1071,6 +1071,19 @@ export function initQualiaPage() {
     const h = topbarEl.getBoundingClientRect().height;
     if (h > 0) document.documentElement.style.setProperty('--topbar-h', `${h}px`);
   };
+  // Publish the width of the pinned blackout/fullscreen/zen trio so the title
+  // row can reserve exactly that much space on its right (see the
+  // #topbar-titlerow padding-right calc). The trio is absolutely positioned in
+  // the corner, so it doesn't reserve its own flow space; a fixed reserve used
+  // to guess wrong and let the trio overlap the rec button on wide-font themes
+  // (VT323 phosphor/amber, win95). Re-measured whenever it resizes — including
+  // when a theme swap or a late webfont load changes the glyph widths.
+  const pinnedEl = document.getElementById('topbar-corner-pinned');
+  const setPinVar = () => {
+    if (!pinnedEl) return;
+    const w = pinnedEl.getBoundingClientRect().width;
+    if (w > 0) document.documentElement.style.setProperty('--topbar-pin-w', `${w}px`);
+  };
   const setTabsVar = () => {
     if (!panelTabs) return;
     // getBoundingClientRect returns 0 while the bar is display:none on
@@ -1082,11 +1095,13 @@ export function initQualiaPage() {
   };
   setTopbarVar();
   setTabsVar();
+  setPinVar();
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(setTopbarVar).observe(topbarEl);
     if (panelTabs) new ResizeObserver(setTabsVar).observe(panelTabs);
+    if (pinnedEl) new ResizeObserver(setPinVar).observe(pinnedEl);
   } else {
-    window.addEventListener('resize', () => { setTopbarVar(); setTabsVar(); });
+    window.addEventListener('resize', () => { setTopbarVar(); setTabsVar(); setPinVar(); });
   }
   // Media-query change (rotating the phone, resizing a touch laptop) flips
   // the display:none toggle on the tab bar — ResizeObserver doesn't fire
