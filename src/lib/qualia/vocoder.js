@@ -389,7 +389,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     btnToggle.textContent = active ? 'vox ●' : 'vox';
     if (status) {
       if (active)    status.textContent = muted ? 'live · muted' : 'live';
-      else if (open) status.textContent = 'click ▶ to start';
+      else if (open) status.textContent = '';
     }
   }
   function refreshMuteBtn() {

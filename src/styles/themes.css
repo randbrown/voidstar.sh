@@ -15,16 +15,17 @@
 
 /* ---- Voidstar (default) --------------------------------------------------- */
 :root {
-  /* surfaces & text */
-  --void:        #05050d;
-  --void-2:      #0a0a1a;
-  --surface:     #0f0f24;
-  --surface-2:   #17173a;
-  --border:      #252550;
-  --border-2:    #3a3a78;
-  --text:        #dde1f0;
-  --text-muted:  #7878a8;
-  --text-dim:    #4a4a70;
+  /* surfaces & text — an optical lab: true-black void, blue-black instrument
+     surfaces, phosphor-white text, calm cool-gray secondary */
+  --void:        #010104;
+  --void-2:      #05060e;
+  --surface:     #0a0e18;
+  --surface-2:   #111726;
+  --border:      #1e2740;
+  --border-2:    #33406b;
+  --text:        #e8f1f6;
+  --text-muted:  #7c88a0;
+  --text-dim:    #434d63;
   --muted:       var(--text-muted);   /* alias used by the lab HUDs */
 
   /* translucent HUD ("glass") surfaces — auto-derived from --void so every
@@ -33,46 +34,53 @@
   --surface-glass-2: color-mix(in srgb, var(--void-2) 70%, transparent);
   --hud-border:      color-mix(in srgb, var(--border-2) 55%, transparent);
 
-  /* accents + their glows */
-  --accent:      #8b5cf6;
-  --accent-glow: rgba(139, 92, 246, 0.35);
-  --cyan:        #22d3ee;
-  --cyan-glow:   rgba(34, 211, 238, 0.3);
-  --pink:        #f472b6;
-  --pink-glow:   rgba(244, 114, 182, 0.3);
-  --green:       #4ade80;
-  --amber:       #fbbf24;             /* used by cymatics HUD */
+  /* accents + their glows — a spectral-cyan lead with neural magenta, ghost
+     green, accretion gold, and a signal blue; all five stay separable on the
+     canvas (pose skeletons / spectrum bands) */
+  --accent:      #38d8ff;             /* spectral cyan — the memorable lead */
+  --accent-glow: rgba(56, 216, 255, 0.30);
+  --cyan:        #6c8cff;             /* signal blue */
+  --cyan-glow:   rgba(108, 140, 255, 0.28);
+  --pink:        #d45cff;             /* neural magenta */
+  --pink-glow:   rgba(212, 92, 255, 0.28);
+  --green:       #5cffb0;             /* ghost green */
+  --amber:       #ffb347;             /* accretion gold / plasma warmth */
 
   /* typography */
   --font-sans:   'Space Grotesk', system-ui, sans-serif;
   --font-mono:   'JetBrains Mono', ui-monospace, monospace;
   --font-ui:     var(--font-sans);   /* chrome font; some themes swap it */
 
-  /* chrome feel */
-  --radius:      6px;
-  --radius-lg:   12px;
-  --glow-strength: 1;                 /* multiplier gating CSS bloom (0 = flat) */
-  --panel-blur:  10px;                /* backdrop-filter amount for HUD panels */
+  /* chrome feel — precise optical instrumentation: small radii, moderate
+     (not constant) bloom */
+  --radius:      5px;
+  --radius-lg:   10px;
+  --glow-strength: 0.8;               /* multiplier gating CSS bloom (0 = flat) */
+  --panel-blur:  9px;                 /* backdrop-filter amount for HUD panels */
 
   /* texture overlays (opacity, 0 = off) */
   --tex-scanline: 0;
   --tex-grain:    0;
 
-  /* canvas knobs — read by JS (src/lib/qualia/theme.js) to skin the visuals */
-  --viz-bg:        #05050d;           /* canvas clear color */
-  --viz-hue-base:  250;               /* base hue (deg) */
-  --viz-hue-spread: 90;               /* hue range (deg) */
-  --viz-sat:       85;                /* base saturation (%) */
-  --viz-light:     55;                /* base lightness (%) */
-  --viz-glow:      1;                 /* canvas bloom / shadowBlur multiplier */
+  /* canvas knobs — read by JS (src/lib/qualia/theme.js) to skin the visuals.
+     A deep, quiet field with a broad-but-controlled spectral arc (cyan →
+     signal blue → violet → magenta), moderate glow rather than constant bloom */
+  --viz-bg:        #010104;           /* canvas clear color */
+  --viz-hue-base:  185;               /* base hue (deg) — spectral cyan */
+  --viz-hue-spread: 155;              /* hue range (deg) — controlled arc into magenta */
+  --viz-sat:       78;                /* base saturation (%) */
+  --viz-light:     58;                /* base lightness (%) */
+  --viz-glow:      0.9;               /* canvas bloom / shadowBlur multiplier */
   --viz-mono:      0;                 /* 1 = render monochrome (phosphor) */
 
   /* Retint filter for embedded code editors / widgets (the Strudel REPL's
      syntax colors live inside its shadow-DOM CodeMirror theme, so a CSS
      filter is the reliable way to pull them into the theme's family).
      sepia() collapses hues to a warm monochrome, hue-rotate() steers it,
-     and luminance differences keep syntax highlighting readable. */
-  --code-filter:   none;
+     and luminance differences keep syntax highlighting readable. The baseline
+     pulls the editor slightly toward cool spectral cyan / pale violet without
+     crushing syntax differentiation. */
+  --code-filter:   sepia(0.2) hue-rotate(180deg) saturate(1.4) brightness(1.06);
 
   /* ---- Advanced chrome tokens ---------------------------------------------
      A second tier of design tokens for the *generated* utility controls
@@ -378,75 +386,323 @@
   --code-filter:   sepia(1) hue-rotate(-55deg) saturate(2.4);
 }
 
-/* ---- Ramblin' Visioneer (cosmic Sasquatch on the night road — RV3) -------- *
-   Twilight indigo highway; Sasquatch-eye glow blue as the accent, evil-eye
-   turquoise, psychedelic flower magenta, pine green, campfire amber. A touch
-   of grain for the handmade folk-art feel. docs/agent-reference.md §3/§4.     */
+/* ---- Ramblin' Visioneer (a handmade cosmic field instrument / road case) --- *
+   Redesign: the wandering cosmic naturalist's road case — painted case black
+   and dark wood, aged-brass fasteners, field-note cream labels, stained-glass
+   talismans, faded maps. Electric cosmic-blue eyes lead; sunset signal, jade
+   talisman, brass lantern support. Stitched framing, brass corners, map
+   contours, compass-wheel controls. Weathered, exploratory, not the old
+   psychedelic-twilight console, not `gardens`. §7.                            */
 [data-theme="visioneer"] {
-  --void:        #100a1c;
-  --void-2:      #161026;
-  --surface:     #1a1230;
-  --surface-2:   #241a40;
-  --border:      #362a58;
-  --border-2:    #544487;
-  --text:        #e8e4f5;
-  --text-muted:  #9a8fc0;
-  --text-dim:    #5e5588;
-  --accent:      #4f8ff7;            /* glowing Sasquatch eyes */
-  --accent-glow: rgba(79, 143, 247, 0.35);
-  --cyan:        #37c8e8;            /* evil-eye turquoise */
-  --cyan-glow:   rgba(55, 200, 232, 0.3);
-  --pink:        #e561b8;            /* psychedelic garden magenta */
-  --pink-glow:   rgba(229, 97, 184, 0.3);
-  --green:       #5fbf6e;            /* pine / trailside green */
-  --amber:       #f5a623;            /* campfire / porch light */
-  --radius:      8px;
-  --radius-lg:   12px;
-  --glow-strength: 1.1;
-  --panel-blur:  10px;
-  --tex-grain:   0.05;
-  --viz-bg:        #100a1c;
-  --viz-hue-base:  215;              /* eye-glow blue… */
-  --viz-hue-spread: 140;             /* …drifting to magenta back-roads */
-  --viz-sat:       80;
-  --viz-light:     58;
-  --viz-glow:      1.15;
-  --code-filter:   sepia(1) hue-rotate(185deg) saturate(2);
+  --void:        #0c0b17;            /* faded cosmic night fabric */
+  --void-2:      #12111f;
+  --surface:     #17141f;            /* painted road-case black / dark wood */
+  --surface-2:   #201b2b;            /* weathered navy */
+  --border:      #38324a;            /* worn case edge */
+  --border-2:    #7d6746;            /* aged brass fastener */
+  --text:        #efe6d0;            /* field-note cream */
+  --text-muted:  #b0a488;
+  --text-dim:    #726a54;
+  --accent:      #5090f8;            /* electric cosmic blue (the eyes) */
+  --accent-glow: rgba(80, 144, 248, 0.35);
+  --cyan:        #46c8e8;            /* stained-glass sky */
+  --cyan-glow:   rgba(70, 200, 232, 0.3);
+  --pink:        #ee5fa0;            /* psychedelic sunset signal */
+  --pink-glow:   rgba(238, 95, 160, 0.3);
+  --green:       #3ec095;            /* jade / talisman glow */
+  --amber:       #e0a340;            /* aged brass / lantern light */
+  --radius:      6px;
+  --radius-lg:   10px;
+  --glow-strength: 1.0;
+  --panel-blur:  9px;
+  --tex-grain:   0.06;               /* worn field-fabric tooth */
+  --viz-bg:        #0a0916;          /* night-road blue-black */
+  --viz-hue-base:  205;              /* celestial blue … */
+  --viz-hue-spread: 150;             /* … through indigo to sunset magenta */
+  --viz-sat:       66;               /* moderate */
+  --viz-light:     56;               /* slightly warm */
+  --viz-glow:      1.0;              /* moderate, localized */
+  --code-filter:   sepia(0.3) hue-rotate(180deg) saturate(1.5) brightness(1.06);
 }
 
-/* ---- Gardens (Cindy Lynn's Gardens — stained-glass botany / chemistry) ---- *
-   Greenhouse at dusk: moss/soil green-black, iris violet accent, dewdrop
-   jade, lily pink, chlorophyll green, daylily gold. Rounded, organic, softly
-   luminous. docs/agent-reference.md §5 — botanical, not floral clipart.       */
+/* ---- Gardens (Cindy Lynn's Gardens — a nocturnal stained-glass greenhouse) - *
+   Redesign: a dark greenhouse of handmade glass and bioluminescent growth —
+   midnight blue-green void, iridescent stained-glass TEAL lead, dew aqua,
+   orchid glass, living fern, sunlit leaded gold. Vein/stem controls, backlit
+   glass panes, verdigris trellises. Living, nocturnal, luminous — not the old
+   green-with-violet console, not `glass`'s leaded jewel grid. §6.             */
 [data-theme="gardens"] {
-  --void:        #060d08;
-  --void-2:      #0a140c;
-  --surface:     #0d180f;
-  --surface-2:   #142114;
-  --border:      #28422a;
-  --border-2:    #3f6b40;
-  --text:        #e4f0dc;
-  --text-muted:  #8fb08a;
-  --text-dim:    #587a55;
-  --accent:      #a06ee8;            /* iris violet */
-  --accent-glow: rgba(160, 110, 232, 0.3);
-  --cyan:        #62d9c4;            /* dewdrop jade */
-  --cyan-glow:   rgba(98, 217, 196, 0.28);
-  --pink:        #f08fb4;            /* lily pink */
-  --pink-glow:   rgba(240, 143, 180, 0.28);
-  --green:       #86d94e;            /* chlorophyll */
-  --amber:       #f5b942;            /* daylily gold */
-  --radius:      10px;
-  --radius-lg:   14px;
-  --glow-strength: 0.8;
-  --panel-blur:  10px;
-  --viz-bg:        #060d08;
-  --viz-hue-base:  100;              /* leaf green… */
-  --viz-hue-spread: 60;              /* …to jade; florals come via the accents */
-  --viz-sat:       65;
+  --void:        #050c0d;            /* midnight greenhouse blue-black */
+  --void-2:      #081414;
+  --surface:     #0b1719;            /* smoked leaf-glass */
+  --surface-2:   #10201f;
+  --border:      #234040;            /* weathered verdigris trellis */
+  --border-2:    #3a6660;
+  --text:        #e8f0e0;            /* warm moonlit ivory */
+  --text-muted:  #8fb0a2;
+  --text-dim:    #557067;
+  --accent:      #22cbb0;            /* iridescent stained-glass teal (lead) */
+  --accent-glow: rgba(34, 203, 176, 0.32);
+  --cyan:        #79e2ee;            /* dew-lit aqua */
+  --cyan-glow:   rgba(121, 226, 238, 0.28);
+  --pink:        #dc6bcf;            /* orchid / bougainvillea glass */
+  --pink-glow:   rgba(220, 107, 207, 0.28);
+  --green:       #74d64f;            /* living fern / chlorophyll light */
+  --amber:       #eeb63f;            /* sunlit leaded-glass gold */
+  --radius:      9px;
+  --radius-lg:   13px;
+  --glow-strength: 0.85;
+  --panel-blur:  11px;
+  --viz-bg:        #040a0b;          /* extremely dark blue-green */
+  --viz-hue-base:  48;               /* sunlit gold … */
+  --viz-hue-spread: 172;             /* … through fern green into dew aqua */
+  --viz-sat:       66;
+  --viz-light:     54;               /* controlled — growth stays glassy, not candy */
+  --viz-glow:      0.95;
+  --code-filter:   sepia(0.85) hue-rotate(100deg) saturate(1.6);
+}
+
+/* ---- Glissando (a pedal steel as a control surface — harmonic / sustained) - *
+   A custom pedal steel + studio instrument: polished steel rails, lacquered
+   walnut, pearloid markers, black amplifier cloth, warm pilot lamps. Cool
+   polished-steel blue leads; tube amber + a green pilot lamp warm it. Low
+   glow, horizontal instrument rhythm. The dark/metal half of the Stage-2
+   prototype pair (its opposite is the light/paper risograph below).
+   Additive theme: sets tokens only; skin + control identity are scoped below.  */
+[data-theme="glissando"] {
+  --void:        #0a0806;            /* black amp cloth / deep lacquer */
+  --void-2:      #100c09;
+  --surface:     #171310;            /* smoked walnut */
+  --surface-2:   #221b15;            /* near-black steel body */
+  --border:      #3a3128;            /* aged metal edge */
+  --border-2:    #5f5142;            /* brushed brass rim */
+  --text:        #ece5d6;            /* pearloid ivory */
+  --text-muted:  #a89d88;
+  --text-dim:    #6e6555;
+  --accent:      #6f9fca;            /* cool polished-steel blue (the lead) */
+  --accent-glow: rgba(111, 159, 202, 0.30);
+  --cyan:        #8fd6e2;            /* high harmonic shimmer */
+  --cyan-glow:   rgba(143, 214, 226, 0.26);
+  --pink:        #cf8b72;            /* faint copper / rose reflection */
+  --pink-glow:   rgba(207, 139, 114, 0.24);
+  --green:       #72c58a;            /* amplifier pilot lamp */
+  --amber:       #e6a84c;            /* tube / stage-lamp warmth */
+  --radius:      7px;
+  --radius-lg:   10px;
+  --glow-strength: 0.6;
+  --panel-blur:  8px;
+  --tex-grain:   0.04;               /* faint lacquer/wood tooth over the whole rig */
+  --viz-bg:        #0a0806;
+  --viz-hue-base:  40;               /* tube gold (bass) … */
+  --viz-hue-spread: 158;             /* … up through pilot-green to harmonic cyan */
+  --viz-sat:       50;
   --viz-light:     55;
-  --viz-glow:      0.9;
-  --code-filter:   sepia(1) hue-rotate(55deg) saturate(1.8);
+  --viz-glow:      0.7;
+  --code-filter:   sepia(0.7) hue-rotate(172deg) saturate(1.15) brightness(1.04);
+}
+
+/* ---- Risograph (spot-ink print — daytime editorial / zine) ---------------- *
+   A live instrument printed in imperfect overlapping spot inks on warm
+   uncoated paper: fluorescent pink (lead), sea-blue, riso-red, moss, sunflower
+   — soy-black type. Flat graphic panels, hard printed shadows, near-zero glow,
+   a faint paper grain (via the existing --tex-grain overlay; no new
+   architecture). A LIGHT theme — the hard case — so surfaces are opaque paper
+   and the inks are saturated-but-dark so they read on paper AND as small text.
+   The light/paper half of the Stage-2 prototype pair (opposite of glissando).  */
+[data-theme="risograph"] {
+  --void:        #f2e9d8;            /* warm uncoated paper (page) */
+  --void-2:      #e9dec9;
+  --surface:     #faf4e8;            /* bright paper stock */
+  --surface-2:   #efe4d0;            /* a second paper stock */
+  --border:      #cbbfa6;            /* paper edge / trim */
+  --border-2:    #a89a7d;
+  --text:        #1b1720;            /* soy-black / dark indigo ink */
+  --text-muted:  #5c5446;
+  --text-dim:    #857b64;
+  /* Opaque paper panels (this is a light theme over a paper canvas — a
+     translucent panel would muddy against the print). */
+  --surface-glass:   #f6f0e3;
+  --surface-glass-2: #eee4d2;
+  --hud-border:      #cbbfa6;
+  --accent:      #c8156a;            /* fluorescent riso pink (lead) */
+  --accent-glow: rgba(200, 21, 106, 0.22);
+  --cyan:        #1d60b4;            /* sea-blue spot ink */
+  --cyan-glow:   rgba(29, 96, 180, 0.20);
+  --pink:        #cc2b40;            /* riso red / fluor coral */
+  --pink-glow:   rgba(204, 43, 64, 0.20);
+  --green:       #178049;            /* moss / teal overprint */
+  --amber:       #c96a12;            /* sunflower / orange spot ink */
+  --font-ui:     'Space Grotesk', system-ui, sans-serif;  /* editorial grotesk */
+  --radius:      0;                  /* hard-edged print */
+  --radius-lg:   0;
+  --glow-strength: 0;                /* flat print — no bloom */
+  --panel-blur:  0px;
+  --tex-grain:   0.05;               /* faint paper tooth (existing overlay) */
+  /* The live canvas is a deep-ink stage the prints sit on (the page --void
+     stays paper) — a paper canvas washed the quale out, since most fx draw
+     bright-on-dark. Panels/site remain paper; only the canvas clear is ink. */
+  --viz-bg:        #14111a;          /* deep soy-ink stage */
+  --viz-hue-base:  205;              /* sea blue … */
+  --viz-hue-spread: 128;             /* … through indigo to fluorescent pink */
+  --viz-sat:       82;
+  --viz-light:     56;               /* bright spot-inks pop on the dark canvas */
+  --viz-glow:      0.2;
+  --code-filter:   sepia(0.5) hue-rotate(300deg) saturate(1.2) contrast(1.02);
+}
+
+/* ---- Patchbay (a ritualized modular patch panel — routing made visible) --- *
+   A high-end studio patchbay + engraved diagrams: near-black rack, graphite
+   panels, crisp instrument white, an acid-chartreuse signal lead with clearly
+   separated CV-blue / mod-magenta / route-green / clock-amber signal colours.
+   Leans on Qualia's real modulation UI — mod pills read as patch jacks, the
+   per-channel meter as a lit socket ring. §9.                                 */
+[data-theme="patchbay"] {
+  --void:        #0c0d0e;            /* near-black rack interior */
+  --void-2:      #131416;
+  --surface:     #191b1e;            /* graphite engraved panel */
+  --surface-2:   #22262a;
+  --border:      #33383d;
+  --border-2:    #4e555c;
+  --text:        #eef1f3;            /* crisp instrument white */
+  --text-muted:  #9aa3ab;
+  --text-dim:    #5c646b;
+  --accent:      #c3ee3f;            /* high-visibility signal chartreuse (lead) */
+  --accent-glow: rgba(195, 238, 63, 0.28);
+  --cyan:        #3aa0ff;            /* control-voltage blue */
+  --cyan-glow:   rgba(58, 160, 255, 0.28);
+  --pink:        #ff4fd0;            /* modulation magenta */
+  --pink-glow:   rgba(255, 79, 208, 0.28);
+  --green:       #3ade7a;            /* active route green */
+  --amber:       #ffb02e;            /* clock / gate amber */
+  --radius:      3px;
+  --radius-lg:   5px;
+  --glow-strength: 0.7;
+  --panel-blur:  7px;
+  --viz-bg:        #0e0f11;          /* deep graphite */
+  --viz-hue-base:  40;               /* clock-amber … */
+  --viz-hue-spread: 275;             /* … chartreuse, route-green, CV-blue, mod-magenta */
+  --viz-sat:       68;
+  --viz-light:     52;
+  --viz-glow:      0.55;             /* low-moderate, concentrated at active nodes */
+  --code-filter:   saturate(1.25) contrast(1.04) brightness(1.04);
+}
+
+/* ---- Ruliad (a live observer slice through an evolving computation) ------- *
+   A multiway causal graph / branching simulation, rendered as clean physics
+   viz: navy-black causal space, translucent observer slices, electric-indigo
+   lead with convergent-cyan, divergent-magenta, stable-green, event-gold.
+   Sliders read as world lines (realized history vs possible future). Calmer
+   and bluer than voidstar's neon violet; restrained glow. §10.               */
+[data-theme="ruliad"] {
+  --void:        #070a16;            /* deep causal-space navy-black */
+  --void-2:      #0c1020;
+  --surface:     #111629;            /* translucent observer slice */
+  --surface-2:   #191f38;
+  --border:      #2a3358;
+  --border-2:    #43508a;
+  --text:        #e6e9f5;            /* pale computational white */
+  --text-muted:  #98a0c4;
+  --text-dim:    #5a6088;
+  --accent:      #6f63ff;            /* electric indigo / causal violet (lead) */
+  --accent-glow: rgba(111, 99, 255, 0.30);
+  --cyan:        #38c6f0;            /* convergent path */
+  --cyan-glow:   rgba(56, 198, 240, 0.26);
+  --pink:        #f45cc0;            /* divergent branch */
+  --pink-glow:   rgba(244, 92, 192, 0.26);
+  --green:       #54d98a;            /* stable state */
+  --amber:       #ffc24a;            /* active event / rule application */
+  --radius:      4px;
+  --radius-lg:   7px;
+  --glow-strength: 0.7;
+  --panel-blur:  12px;
+  --viz-bg:        #060912;          /* dark blue-black */
+  --viz-hue-base:  45;               /* event-gold … */
+  --viz-hue-spread: 285;             /* … stable-green, convergent-cyan, indigo, divergent-magenta */
+  --viz-sat:       60;               /* moderate */
+  --viz-light:     56;
+  --viz-glow:      0.6;              /* restrained */
+  --code-filter:   saturate(1.2) hue-rotate(8deg) brightness(1.03);
+}
+
+/* ---- Darkroom (an optical bench for exposing / transforming live images) -- *
+   A contemporary darkroom / optical bench: optical black, smoked photographic
+   gray, projection white, a controlled safelight-red lead with cyan+magenta
+   separation, focus-green, exposure-amber. Aperture/registration controls,
+   film-edge indexing. High registration clarity; no grain (kept deliberately
+   clean). §11.                                                               */
+[data-theme="darkroom"] {
+  --void:        #080809;            /* optical black */
+  --void-2:      #0e0e10;
+  --surface:     #151517;            /* dark photographic gray / smoked glass */
+  --surface-2:   #1e1e21;
+  --border:      #33343a;
+  --border-2:    #4c4d55;
+  --text:        #f0f1f4;            /* projection white */
+  --text-muted:  #9b9ca6;
+  --text-dim:    #5c5d66;
+  --accent:      #d8443e;            /* controlled safelight red (lead) */
+  --accent-glow: rgba(216, 68, 62, 0.26);
+  --cyan:        #35c9d6;            /* cyan separation / registration */
+  --cyan-glow:   rgba(53, 201, 214, 0.24);
+  --pink:        #e15ac0;            /* magenta separation */
+  --pink-glow:   rgba(225, 90, 192, 0.24);
+  --green:       #57c98a;            /* optical tracking / focus confirmation */
+  --amber:       #f0a83a;            /* exposure / lamp warmth */
+  --radius:      2px;
+  --radius-lg:   4px;
+  --glow-strength: 0.75;
+  --panel-blur:  9px;
+  --viz-bg:        #070708;          /* optical black */
+  --viz-hue-base:  180;              /* cyan separation … */
+  --viz-hue-spread: 160;             /* … through magenta separation into safelight red */
+  --viz-sat:       60;
+  --viz-light:     60;               /* medium-high for registration clarity */
+  --viz-glow:      0.5;              /* localized around exposure states */
+  --code-filter:   saturate(1.2) contrast(1.05) brightness(1.05);
+}
+
+/* ---- Lightroom (darkroom's daylight sibling — a lit light-table) ---------- *
+   A contact-print viewing station in daylight: soft photographic light-gray
+   surfaces (not stark white), graphite ink, a controlled safelight-red lead
+   with cyan+magenta separation, focus-green, exposure-amber — all darkened so
+   they read on light AND as small text. A LIGHT theme: opaque light panels and
+   an INVERTED canvas (dark marks on a soft light field — a lightbox negative),
+   handled in the scoped skin below.                                          */
+[data-theme="lightroom"] {
+  --void:        #e9ebee;            /* soft photographic light-gray (not white) */
+  --void-2:      #e0e3e7;
+  --surface:     #f5f6f8;            /* bright viewing panel */
+  --surface-2:   #e4e7ea;
+  --border:      #c3c8ce;
+  --border-2:    #a7aeb6;
+  --text:        #161a1f;            /* graphite ink */
+  --text-muted:  #54606b;
+  --text-dim:    #8a949e;
+  /* opaque light panels — a light theme over a light stage */
+  --surface-glass:   #f2f3f6;
+  --surface-glass-2: #e7eaee;
+  --hud-border:      #c3c8ce;
+  --accent:      #bb2a25;            /* controlled safelight red (lead) */
+  --accent-glow: rgba(187, 42, 37, 0.22);
+  --cyan:        #0d7280;            /* cyan separation */
+  --cyan-glow:   rgba(13, 114, 128, 0.20);
+  --pink:        #a02f84;            /* magenta separation */
+  --pink-glow:   rgba(160, 47, 132, 0.20);
+  --green:       #1e7249;            /* optical tracking / focus green */
+  --amber:       #9c6410;            /* exposure / lamp warmth */
+  --radius:      2px;
+  --radius-lg:   4px;
+  --glow-strength: 0.35;
+  --panel-blur:  6px;
+  /* fx render on dark internally (viz-bg dark); the scoped skin inverts the
+     canvas + multiplies it onto the light stage → dark marks on soft light */
+  --viz-bg:        #0a0b0d;
+  --viz-hue-base:  180;              /* cyan separation … */
+  --viz-hue-spread: 160;             /* … through magenta separation into safelight red */
+  --viz-sat:       62;
+  --viz-light:     55;
+  --viz-glow:      0.4;              /* low — no bloom on the light table */
+  --code-filter:   saturate(1.15) contrast(1.05) brightness(1.02);
 }
 
 /* ============================================================================
@@ -653,9 +909,12 @@ body::before {
 }
 
 /* ────────────────────────────────────────────────────────────────────────
-   Voidstar — luminous deep-space chrome: glowing pill controls and panels
-   lit from a thin accent "horizon" along their top edge. The signature look,
-   pushed from neutral-dark to unmistakably voidstar.
+   Voidstar — dark optical instrumentation at the boundary between signal and
+   void. Precise rectilinear keys instead of glowing pills; each panel carries
+   a thin clipped alignment mark at its top-left rather than a full glowing
+   horizon; a reticle marks every header. Restrained bloom, slow settling,
+   quiet during inactivity — the identity emerges from geometry and optical
+   behaviour, not decorative stars.
    ──────────────────────────────────────────────────────────────────────── */
 [data-theme="voidstar"] .btn,
 [data-theme="voidstar"] .ctrl-btn,
@@ -663,31 +922,38 @@ body::before {
 [data-theme="voidstar"] .qp-preset,
 [data-theme="voidstar"] .qp-tab,
 [data-theme="voidstar"] .start-btn {
-  border-radius: 999px !important;
-  transition: box-shadow 0.25s, border-color 0.25s, color 0.25s, transform 0.25s;
+  border-radius: var(--radius) !important;        /* precise keys, not pills */
+  border-color: var(--border) !important;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 [data-theme="voidstar"] .ctrl-btn:hover,
 [data-theme="voidstar"] .qp-toggle:hover,
 [data-theme="voidstar"] .qp-preset:hover,
-[data-theme="voidstar"] .qp-tab:hover {
-  box-shadow: 0 0 14px var(--accent-glow);
-  transform: translateY(-1px);
+[data-theme="voidstar"] .qp-tab:hover,
+[data-theme="voidstar"] .btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border)) !important;
+  box-shadow: 0 0 10px var(--accent-glow) !important;      /* a brief, restrained lensing */
+}
+[data-theme="voidstar"] .start-btn:hover {
+  background: color-mix(in srgb, var(--accent) 26%, var(--surface-2)) !important;
+  box-shadow: 0 0 16px var(--accent-glow) !important;
 }
 [data-theme="voidstar"] .qp-card,
 [data-theme="voidstar"] #topbar,
 [data-theme="voidstar"] #audio-panel,
 [data-theme="voidstar"] .qp-tabs,
 [data-theme="voidstar"] .post-card,
-[data-theme="voidstar"] .video-card {
+[data-theme="voidstar"] .video-card,
+[data-theme="voidstar"] #cycle-mgr {
+  /* a clipped alignment mark — a short spectral tick at the top-left edge only,
+     not a glowing horizon across the whole panel */
   background:
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--accent) 9%, var(--surface-glass)),
-      var(--surface-glass)) !important;
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--accent) 45%, transparent),
-    0 8px 30px rgba(0, 0, 0, 0.45) !important;
+    linear-gradient(90deg, var(--accent) 0 24px, transparent 24px) top left / 100% 1px no-repeat,
+    var(--surface-glass) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5) !important;
 }
-[data-theme="voidstar"] .qp-head .qp-title::before { content: "✦ "; color: var(--accent); }
+[data-theme="voidstar"] .qp-head .qp-title::before { content: "◎ "; color: var(--accent); }
 
 /* ────────────────────────────────────────────────────────────────────────
    Phosphor (+ amber) — a real text-mode terminal. Controls become bracketed
@@ -1007,9 +1273,12 @@ body::before {
 [data-theme="glass"] .qp-card > .qp-head .qp-title { color: #fff !important; }
 
 /* ────────────────────────────────────────────────────────────────────────
-   Visioneer — psychedelic folk-art twilight. Controls are organically rounded
-   with a glowing eye-blue→magenta→turquoise gradient rim; panels are starlit
-   twilight cards. Handmade, luminous, a little uncanny.
+   Visioneer — a handmade cosmic field instrument in a road case. Controls are
+   rugged case keys with a brass edge; the active state is an expedition STAMP
+   (seated, brass-inked, cosmic-blue glow). Panels are road-case compartments:
+   a stitched dashed seam inset from the edge, aged-brass corner fasteners, and
+   faint map contours drifting from a corner. Headers are catalogued field
+   labels ruled off in brass, marked by the Visioneer's eye. Weathered, not neon.
    ──────────────────────────────────────────────────────────────────────── */
 [data-theme="visioneer"] .btn,
 [data-theme="visioneer"] .ctrl-btn,
@@ -1017,25 +1286,37 @@ body::before {
 [data-theme="visioneer"] .qp-preset,
 [data-theme="visioneer"] .qp-tab,
 [data-theme="visioneer"] .start-btn {
-  background:
-    linear-gradient(var(--surface), var(--surface)) padding-box,
-    linear-gradient(135deg, var(--accent), var(--pink), var(--cyan)) border-box !important;
-  border: 1px solid transparent !important;
-  border-radius: 11px !important;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 90%, #000 10%), var(--surface)) !important;
+  border: 1px solid var(--border-2) !important;      /* brass edge */
+  border-radius: 5px !important;
   color: var(--text) !important;
-  box-shadow: 0 0 10px var(--accent-glow) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.5) !important;
+  transition: box-shadow 0.2s, color 0.2s, border-color 0.2s;
 }
 [data-theme="visioneer"] .ctrl-btn:hover,
 [data-theme="visioneer"] .qp-toggle:hover,
 [data-theme="visioneer"] .qp-preset:hover,
 [data-theme="visioneer"] .qp-tab:hover,
+[data-theme="visioneer"] .btn:hover {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 12px var(--accent-glow) !important;
+  color: var(--cyan) !important;
+}
 [data-theme="visioneer"] .ctrl-btn.active,
 [data-theme="visioneer"] .ctrl-btn.active-audio,
 [data-theme="visioneer"] .qp-toggle.active,
 [data-theme="visioneer"] .qp-preset.active,
 [data-theme="visioneer"] .qp-tab.active {
-  box-shadow: 0 0 18px var(--pink-glow), 0 0 8px var(--cyan-glow) !important;
-  color: var(--cyan) !important;
+  /* catalogued — an expedition stamp seats into the case, inked in brass */
+  background: color-mix(in srgb, var(--accent) 20%, var(--surface)) !important;
+  color: var(--amber) !important;
+  border-color: var(--amber) !important;
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.5),
+    0 0 10px var(--accent-glow) !important;
 }
 [data-theme="visioneer"] .qp-card,
 [data-theme="visioneer"] #topbar,
@@ -1044,23 +1325,39 @@ body::before {
 [data-theme="visioneer"] .post-card,
 [data-theme="visioneer"] .video-card,
 [data-theme="visioneer"] #cycle-mgr {
-  background-image:
-    radial-gradient(1px 1px at 18% 24%, rgba(255, 255, 255, 0.5), transparent),
-    radial-gradient(1px 1px at 72% 38%, rgba(255, 255, 255, 0.35), transparent),
-    radial-gradient(1px 1px at 44% 78%, rgba(255, 255, 255, 0.3), transparent),
-    radial-gradient(1px 1px at 88% 66%, rgba(255, 255, 255, 0.4), transparent),
+  background:
+    /* aged-brass corner fasteners */
+    radial-gradient(circle at 7px 7px, color-mix(in srgb, var(--amber) 85%, transparent) 1.3px, transparent 2.2px),
+    radial-gradient(circle at calc(100% - 7px) 7px, color-mix(in srgb, var(--amber) 85%, transparent) 1.3px, transparent 2.2px),
+    radial-gradient(circle at 7px calc(100% - 7px), color-mix(in srgb, var(--amber) 85%, transparent) 1.3px, transparent 2.2px),
+    radial-gradient(circle at calc(100% - 7px) calc(100% - 7px), color-mix(in srgb, var(--amber) 85%, transparent) 1.3px, transparent 2.2px),
+    /* faint map contours drifting from a corner */
+    repeating-radial-gradient(circle at 116% -12%,
+      transparent 0 20px, color-mix(in srgb, var(--amber) 7%, transparent) 20px 21px, transparent 21px 42px),
     linear-gradient(170deg,
-      color-mix(in srgb, var(--accent) 12%, var(--surface-glass)),
-      color-mix(in srgb, var(--pink) 8%, var(--surface-glass))) !important;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent) !important;
-  box-shadow: 0 0 24px var(--accent-glow) !important;
+      color-mix(in srgb, var(--accent) 8%, var(--surface-glass)),
+      color-mix(in srgb, var(--surface-2) 55%, var(--surface-glass))) !important;
+  border: 1px solid var(--border) !important;
+  outline: 1px dashed color-mix(in srgb, var(--border-2) 45%, transparent) !important;   /* stitched seam */
+  outline-offset: -4px !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--border-2) 20%, transparent),
+    0 0 22px color-mix(in srgb, var(--accent) 14%, transparent) !important;
+}
+[data-theme="visioneer"] .qp-card > .qp-head {
+  border-bottom: 1px solid color-mix(in srgb, var(--border-2) 65%, transparent) !important;   /* brass rule */
+  padding-bottom: 0.26rem !important;
+  letter-spacing: 0.05em;
 }
 [data-theme="visioneer"] .qp-head .qp-title::before { content: "◉ "; color: var(--accent); }
 
 /* ────────────────────────────────────────────────────────────────────────
-   Gardens — greenhouse at dusk. Soft luminous pill controls with a dewdrop
-   highlight and a chlorophyll glow; panels glow gently from a low light with
-   a faint canopy gradient; headers carry a small bloom.
+   Gardens — a nocturnal greenhouse of stained glass and bioluminescent growth.
+   Controls are dim leaf-glass panes set in weathered came; hover glimmers, and
+   the active state BACKLIGHTS the pane (teal→gold light behind it, label goes
+   dark) — a pane becoming lit. Panels are smoked glass held in verdigris
+   trellises under a low canopy glow; each header grows a teal→fern vein
+   underline beneath a hedera-leaf mark. Botanical structure, not floral clipart.
    ──────────────────────────────────────────────────────────────────────── */
 [data-theme="gardens"] .btn,
 [data-theme="gardens"] .ctrl-btn,
@@ -1069,25 +1366,44 @@ body::before {
 [data-theme="gardens"] .qp-tab,
 [data-theme="gardens"] .start-btn {
   background:
-    radial-gradient(120% 140% at 30% 0%, rgba(255, 255, 255, 0.18), transparent 45%),
-    color-mix(in srgb, var(--green) 12%, var(--surface)) !important;
-  border: 1px solid color-mix(in srgb, var(--green) 32%, transparent) !important;
-  border-radius: 999px !important;
-  color: var(--text) !important;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--green) 30%, transparent) !important;
+    linear-gradient(150deg,
+      color-mix(in srgb, var(--accent) 12%, var(--surface)),
+      color-mix(in srgb, var(--green) 9%, var(--surface))) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, #04100e) !important;
+  border-radius: 4px 11px 4px 11px !important;   /* a leaf pane */
+  color: color-mix(in srgb, var(--text) 82%, transparent) !important;
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.4) !important;
+  transition: box-shadow 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 [data-theme="gardens"] .ctrl-btn:hover,
 [data-theme="gardens"] .qp-toggle:hover,
 [data-theme="gardens"] .qp-preset:hover,
 [data-theme="gardens"] .qp-tab:hover,
+[data-theme="gardens"] .btn:hover {
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent) !important;
+  box-shadow:
+    inset 0 0 10px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 0 12px var(--accent-glow) !important;
+}
 [data-theme="gardens"] .ctrl-btn.active,
 [data-theme="gardens"] .ctrl-btn.active-audio,
 [data-theme="gardens"] .qp-toggle.active,
 [data-theme="gardens"] .qp-preset.active,
 [data-theme="gardens"] .qp-tab.active {
-  border-color: var(--green) !important;
-  box-shadow: 0 0 16px color-mix(in srgb, var(--green) 45%, transparent) !important;
-  color: var(--green) !important;
+  /* the pane lights — bioluminescent glass, backlit teal→gold */
+  background:
+    radial-gradient(130% 120% at 30% -10%,
+      color-mix(in srgb, var(--amber) 40%, transparent),
+      color-mix(in srgb, var(--accent) 30%, transparent) 45%, transparent 72%),
+    linear-gradient(150deg,
+      color-mix(in srgb, var(--accent) 26%, #04100e),
+      color-mix(in srgb, var(--green) 20%, #04100e)) !important;
+  color: #05130f !important;
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent) !important;
+  box-shadow:
+    inset 0 0 12px rgba(255, 255, 255, 0.25),
+    0 0 16px var(--accent-glow) !important;
 }
 [data-theme="gardens"] .qp-card,
 [data-theme="gardens"] #topbar,
@@ -1097,15 +1413,493 @@ body::before {
 [data-theme="gardens"] .video-card,
 [data-theme="gardens"] #cycle-mgr {
   background:
-    radial-gradient(140% 100% at 50% -10%,
-      color-mix(in srgb, var(--green) 14%, transparent), transparent 65%),
+    radial-gradient(150% 110% at 50% -15%,
+      color-mix(in srgb, var(--accent) 12%, transparent), transparent 62%),
     var(--surface-glass) !important;
-  border: 1px solid color-mix(in srgb, var(--green) 22%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--border-2) 60%, transparent) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 0 26px color-mix(in srgb, var(--green) 22%, transparent) !important;
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 18%, transparent),
+    0 0 24px color-mix(in srgb, var(--accent) 16%, transparent) !important;
 }
-[data-theme="gardens"] .qp-head .qp-title::before { content: "❀ "; color: var(--pink); }
+[data-theme="gardens"] .qp-card > .qp-head {
+  border-bottom: 1px solid transparent !important;
+  border-image: linear-gradient(90deg,
+    var(--accent), color-mix(in srgb, var(--green) 60%, transparent), transparent) 1 !important;
+  padding-bottom: 0.28rem !important;
+}
+[data-theme="gardens"] .qp-head .qp-title::before { content: "❧ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Glissando — polished pedal-steel hardware. Controls are brushed-metal
+   pedal keys with a pearloid top highlight; the active state lights a warm
+   pilot lamp (amber wash + a seated inset). Panels are lacquered wood/steel
+   lit by a bright steel hairline along the top edge; each header carries a
+   pearloid fret-inlay marker over a thin steel rule. Horizontal, low-glow.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="glissando"] .btn,
+[data-theme="glissando"] .ctrl-btn,
+[data-theme="glissando"] .qp-toggle,
+[data-theme="glissando"] .qp-preset,
+[data-theme="glissando"] .qp-tab,
+[data-theme="glissando"] .start-btn {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 74%, #fff 26%),
+    var(--surface-2) 55%,
+    color-mix(in srgb, var(--surface-2) 80%, #000 20%)) !important;
+  border: 1px solid var(--border-2) !important;
+  border-radius: 6px !important;
+  color: var(--text) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.4),
+    0 1px 2px rgba(0, 0, 0, 0.5) !important;
+  transition: box-shadow 0.25s, color 0.25s, border-color 0.25s;
+}
+[data-theme="glissando"] .ctrl-btn:hover,
+[data-theme="glissando"] .qp-toggle:hover,
+[data-theme="glissando"] .qp-preset:hover,
+[data-theme="glissando"] .qp-tab:hover,
+[data-theme="glissando"] .btn:hover {
+  border-color: var(--accent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 0 10px var(--accent-glow) !important;
+}
+[data-theme="glissando"] .ctrl-btn.active,
+[data-theme="glissando"] .ctrl-btn.active-audio,
+[data-theme="glissando"] .qp-toggle.active,
+[data-theme="glissando"] .qp-preset.active,
+[data-theme="glissando"] .qp-tab.active {
+  /* the pilot lamp lights: warm amber label + glow, seated into its housing */
+  color: var(--amber) !important;
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--border-2)) !important;
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.5),
+    0 0 12px color-mix(in srgb, var(--amber) 45%, transparent) !important;
+}
+[data-theme="glissando"] .qp-card,
+[data-theme="glissando"] #topbar,
+[data-theme="glissando"] #audio-panel,
+[data-theme="glissando"] .qp-tabs,
+[data-theme="glissando"] .post-card,
+[data-theme="glissando"] .video-card,
+[data-theme="glissando"] #cycle-mgr {
+  /* lacquered walnut body: a warm figure wash + faint lengthwise grain over the
+     translucent base, so the panels read as wood the controls are mounted on
+     (kept partial so the stage still breathes through) */
+  background:
+    repeating-linear-gradient(91deg,
+      rgba(0, 0, 0, 0.05) 0 1px,
+      transparent 1px 6px,
+      rgba(150, 110, 66, 0.045) 6px 7px,
+      transparent 7px 13px),
+    linear-gradient(176deg,
+      color-mix(in srgb, #2a1d12 26%, transparent),
+      transparent 55%),
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 6%, var(--surface-glass)),
+      var(--surface-glass)) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 40%, rgba(255, 255, 255, 0.12)),
+    0 6px 20px rgba(0, 0, 0, 0.45) !important;
+}
+[data-theme="glissando"] .qp-card > .qp-head {
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent) !important;
+  padding-bottom: 0.28rem !important;
+  letter-spacing: 0.04em;
+}
+[data-theme="glissando"] .qp-head .qp-title::before { content: "◈ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Risograph — spot-ink print. Controls are flat printed keys: hard ink
+   borders, no soft shadow, a hard mis-registered offset shadow in a second
+   ink. Active = the two inks "align": the key fills with the lead ink, the
+   label flips to paper, and the offset snaps to zero. Panels are flat paper
+   cards with hard printed shadows; headers are solid ink bars with paper
+   type and a registration mark. Near-zero glow; faint grain via --tex-grain.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="risograph"] .btn,
+[data-theme="risograph"] .ctrl-btn,
+[data-theme="risograph"] .qp-toggle,
+[data-theme="risograph"] .qp-preset,
+[data-theme="risograph"] .qp-tab,
+[data-theme="risograph"] .start-btn {
+  background: var(--surface) !important;
+  border: 2px solid var(--text) !important;
+  border-radius: 0 !important;
+  color: var(--text) !important;
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--accent) 78%, transparent) !important;
+  transition: box-shadow 0.12s, transform 0.12s, background 0.12s, color 0.12s;
+}
+[data-theme="risograph"] .ctrl-btn:hover,
+[data-theme="risograph"] .qp-toggle:hover,
+[data-theme="risograph"] .qp-preset:hover,
+[data-theme="risograph"] .qp-tab:hover,
+[data-theme="risograph"] .btn:hover,
+[data-theme="risograph"] .start-btn:hover {
+  /* the second ink slips further out of registration */
+  box-shadow: 3px 3px 0 color-mix(in srgb, var(--cyan) 80%, transparent) !important;
+  transform: translate(-1px, -1px);
+}
+[data-theme="risograph"] .ctrl-btn.active,
+[data-theme="risograph"] .ctrl-btn.active-audio,
+[data-theme="risograph"] .qp-toggle.active,
+[data-theme="risograph"] .qp-preset.active,
+[data-theme="risograph"] .qp-tab.active {
+  /* two inks align — solid ink fill, paper label, registration to zero */
+  background: var(--accent) !important;
+  color: var(--void) !important;
+  border-color: var(--text) !important;
+  box-shadow: none !important;
+  transform: translate(1px, 1px);
+}
+[data-theme="risograph"] .qp-card,
+[data-theme="risograph"] #topbar,
+[data-theme="risograph"] #audio-panel,
+[data-theme="risograph"] .qp-tabs,
+[data-theme="risograph"] .post-card,
+[data-theme="risograph"] .video-card,
+[data-theme="risograph"] #cycle-mgr {
+  background: var(--surface) !important;
+  border: 2px solid var(--text) !important;
+  border-radius: 0 !important;
+  box-shadow: 4px 4px 0 color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+[data-theme="risograph"] .qp-card > .qp-head {
+  /* a printed masthead: a second paper stock ruled off by a fluor-pink spot
+     ink, ink type — lighter than the old solid-ink slab */
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  border-bottom: 2px solid var(--accent) !important;
+  border-radius: 0 !important;
+  padding: 0.22rem 0.5rem !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+[data-theme="risograph"] .qp-card > .qp-head .qp-title,
+[data-theme="risograph"] .qp-card > .qp-head span { color: var(--text) !important; }
+[data-theme="risograph"] .qp-head .qp-title::before { content: "⊕ "; color: var(--accent); opacity: 0.9; }
+/* Lighten the hardcoded-dark popovers/overlays (fixed rgba fills, not tokens)
+   so they don't read as dark slabs on paper. */
+[data-theme="risograph"] #quick-menu,
+[data-theme="risograph"] .panel-io-actions {
+  background: var(--surface) !important;
+  border: 2px solid var(--text) !important;
+  box-shadow: 4px 4px 0 color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+[data-theme="risograph"] #status-overlay { background: color-mix(in srgb, var(--void) 93%, transparent) !important; }
+[data-theme="risograph"] #status-overlay .status-title { color: var(--text) !important; }
+/* The hero wordmark PNG is a light glow-on-dark asset that washes out on paper;
+   invert it to a soy-ink print with a fluorescent-pink mis-registration ghost. */
+[data-theme="risograph"] .hero-logo {
+  filter: invert(1) contrast(1.05) drop-shadow(3px 3px 0 rgba(200, 21, 106, 0.45)) !important;
+}
+/* The full-viewport fx canvas composites with mix-blend-mode:screen, so it
+   needs a DARK backdrop to reveal the quale — a paper body screens it to white.
+   Darken only the live-stage pages (qualia + the labs, identified by their
+   fx-canvas host); the marketing site and every panel stay paper. The prints
+   then sit on a dark ink stage. */
+[data-theme="risograph"] body:has(#qualia-host),
+[data-theme="risograph"] body:has(#canvas) {
+  background: #14111a !important;
+}
+/* HUD text that sits directly on the dark stage (not in a paper panel) → light
+   ink so it reads; panel text stays dark. Keycaps become printed paper chips
+   with an ink border, legible on both the stage and inside panels. */
+[data-theme="risograph"] #hints { color: color-mix(in srgb, var(--void) 90%, var(--accent)) !important; }
+[data-theme="risograph"] #chron-pulse:not(.warn):not(.horizon) {
+  color: color-mix(in srgb, var(--void) 80%, transparent) !important;
+}
+[data-theme="risograph"] kbd {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--text) !important;
+  border-radius: 0 !important;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Patchbay — an engraved graphite rack. Controls are rack keys with fine
+   uppercase engraved labels; the active state lights a route-green pilot LED
+   and seats the key. Panels are engraved rack panels held by corner screws;
+   headers carry a socket pilot mark. Studio patch panel, not a Eurorack clone.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="patchbay"] .btn,
+[data-theme="patchbay"] .ctrl-btn,
+[data-theme="patchbay"] .qp-toggle,
+[data-theme="patchbay"] .qp-preset,
+[data-theme="patchbay"] .qp-tab,
+[data-theme="patchbay"] .start-btn {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 92%, #fff 8%), var(--surface-2)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 3px !important;
+  color: var(--text) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.5) !important;
+  transition: box-shadow 0.15s, color 0.15s, border-color 0.15s;
+}
+[data-theme="patchbay"] .ctrl-btn:hover,
+[data-theme="patchbay"] .qp-toggle:hover,
+[data-theme="patchbay"] .qp-preset:hover,
+[data-theme="patchbay"] .qp-tab:hover,
+[data-theme="patchbay"] .btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 7px var(--accent-glow) !important;
+}
+[data-theme="patchbay"] .ctrl-btn.active,
+[data-theme="patchbay"] .ctrl-btn.active-audio,
+[data-theme="patchbay"] .qp-toggle.active,
+[data-theme="patchbay"] .qp-preset.active,
+[data-theme="patchbay"] .qp-tab.active {
+  /* the route goes live — a green pilot LED lights and the key seats */
+  color: var(--green) !important;
+  border-color: color-mix(in srgb, var(--green) 60%, var(--border)) !important;
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.6),
+    0 0 9px color-mix(in srgb, var(--green) 50%, transparent) !important;
+}
+[data-theme="patchbay"] .qp-card,
+[data-theme="patchbay"] #topbar,
+[data-theme="patchbay"] #audio-panel,
+[data-theme="patchbay"] .qp-tabs,
+[data-theme="patchbay"] .post-card,
+[data-theme="patchbay"] .video-card,
+[data-theme="patchbay"] #cycle-mgr {
+  background:
+    radial-gradient(circle at 6px 6px, rgba(0, 0, 0, 0.55) 1.6px, transparent 2.4px),
+    radial-gradient(circle at calc(100% - 6px) 6px, rgba(0, 0, 0, 0.55) 1.6px, transparent 2.4px),
+    radial-gradient(circle at 6px calc(100% - 6px), rgba(0, 0, 0, 0.55) 1.6px, transparent 2.4px),
+    radial-gradient(circle at calc(100% - 6px) calc(100% - 6px), rgba(0, 0, 0, 0.55) 1.6px, transparent 2.4px),
+    linear-gradient(180deg, color-mix(in srgb, #fff 4%, var(--surface-glass)), var(--surface-glass)) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+}
+[data-theme="patchbay"] .qp-card > .qp-head {
+  border-bottom: 1px solid var(--border) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.66rem;
+  padding-bottom: 0.26rem !important;
+}
+[data-theme="patchbay"] .qp-head .qp-title::before { content: "⊙ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Ruliad — an observer slice through a branching computation. Controls are
+   translucent observer-slice keys; the active state resolves a branch to
+   definite (solid indigo, others recede). Panels are stacked slices; each
+   header carries a branching vein and a fork mark. Restrained, calm, precise.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="ruliad"] .btn,
+[data-theme="ruliad"] .ctrl-btn,
+[data-theme="ruliad"] .qp-toggle,
+[data-theme="ruliad"] .qp-preset,
+[data-theme="ruliad"] .qp-tab,
+[data-theme="ruliad"] .start-btn {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface)) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent) !important;
+  border-radius: 3px !important;
+  color: var(--text-muted) !important;
+  box-shadow: none !important;
+  transition: background 0.25s, color 0.25s, border-color 0.25s, box-shadow 0.25s;
+}
+[data-theme="ruliad"] .ctrl-btn:hover,
+[data-theme="ruliad"] .qp-toggle:hover,
+[data-theme="ruliad"] .qp-preset:hover,
+[data-theme="ruliad"] .qp-tab:hover,
+[data-theme="ruliad"] .btn:hover {
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent) !important;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface)) !important;
+}
+[data-theme="ruliad"] .ctrl-btn.active,
+[data-theme="ruliad"] .ctrl-btn.active-audio,
+[data-theme="ruliad"] .qp-toggle.active,
+[data-theme="ruliad"] .qp-preset.active,
+[data-theme="ruliad"] .qp-tab.active {
+  /* the branch becomes definite */
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface)) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 10px var(--accent-glow), inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent) !important;
+}
+[data-theme="ruliad"] .qp-card,
+[data-theme="ruliad"] #topbar,
+[data-theme="ruliad"] #audio-panel,
+[data-theme="ruliad"] .qp-tabs,
+[data-theme="ruliad"] .post-card,
+[data-theme="ruliad"] .video-card,
+[data-theme="ruliad"] #cycle-mgr {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 8%, var(--surface-glass)), var(--surface-glass)) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 20%, transparent),
+    0 6px 22px rgba(0, 0, 0, 0.5) !important;
+}
+[data-theme="ruliad"] .qp-card > .qp-head {
+  border-bottom: 1px solid transparent !important;
+  border-image: linear-gradient(90deg,
+    var(--accent), color-mix(in srgb, var(--cyan) 50%, transparent), transparent) 1 !important;
+  padding-bottom: 0.26rem !important;
+}
+[data-theme="ruliad"] .qp-head .qp-title::before { content: "⋔ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Darkroom — an optical bench in the dark. Controls are smoked-glass stages;
+   the active state is a sharp registration lock (a crisp safelight-red outline
+   snaps in — the only light leak). Panels are optical stages; headers are film
+   edges (sprocket-dashed) under a registration mark. Clean, no grain.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="darkroom"] .btn,
+[data-theme="darkroom"] .ctrl-btn,
+[data-theme="darkroom"] .qp-toggle,
+[data-theme="darkroom"] .qp-preset,
+[data-theme="darkroom"] .qp-tab,
+[data-theme="darkroom"] .start-btn {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, #fff 4%, var(--surface-2)), var(--surface-2)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 2px !important;
+  color: var(--text-muted) !important;
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.4) !important;
+  transition: box-shadow 0.2s, color 0.2s, border-color 0.2s;
+}
+[data-theme="darkroom"] .ctrl-btn:hover,
+[data-theme="darkroom"] .qp-toggle:hover,
+[data-theme="darkroom"] .qp-preset:hover,
+[data-theme="darkroom"] .qp-tab:hover,
+[data-theme="darkroom"] .btn:hover {
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border)) !important;
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.4), 0 0 8px color-mix(in srgb, var(--accent) 30%, transparent) !important;
+}
+[data-theme="darkroom"] .ctrl-btn.active,
+[data-theme="darkroom"] .ctrl-btn.active-audio,
+[data-theme="darkroom"] .qp-toggle.active,
+[data-theme="darkroom"] .qp-preset.active,
+[data-theme="darkroom"] .qp-tab.active {
+  /* registration lock — a sharp safelight outline snaps in */
+  color: #fff !important;
+  border-color: var(--accent) !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent),
+    0 0 10px color-mix(in srgb, var(--accent) 40%, transparent) !important;
+}
+[data-theme="darkroom"] .qp-card,
+[data-theme="darkroom"] #topbar,
+[data-theme="darkroom"] #audio-panel,
+[data-theme="darkroom"] .qp-tabs,
+[data-theme="darkroom"] .post-card,
+[data-theme="darkroom"] .video-card,
+[data-theme="darkroom"] #cycle-mgr {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, #fff 3%, var(--surface-glass)), var(--surface-glass)) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03), 0 6px 22px rgba(0, 0, 0, 0.55) !important;
+}
+[data-theme="darkroom"] .qp-card > .qp-head {
+  border-bottom: 1px dashed color-mix(in srgb, var(--text) 25%, transparent) !important;   /* film-edge indexing */
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+  padding-bottom: 0.26rem !important;
+}
+[data-theme="darkroom"] .qp-head .qp-title::before { content: "⊹ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Lightroom — darkroom in daylight. Light photographic panels with graphite
+   ink; the active state is the same sharp safelight-red registration lock.
+   Panels are light optical stages with film-edge (sprocket-dashed) headers.
+   The canvas is INVERTED to dark marks on a soft light field (a lightbox
+   negative) and multiplied onto a light-gray stage; the hero wordmark and the
+   hardcoded-dark popovers are lightened so nothing reads as a dark slab.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="lightroom"] .btn,
+[data-theme="lightroom"] .ctrl-btn,
+[data-theme="lightroom"] .qp-toggle,
+[data-theme="lightroom"] .qp-preset,
+[data-theme="lightroom"] .qp-tab,
+[data-theme="lightroom"] .start-btn {
+  background: linear-gradient(180deg, var(--surface), var(--surface-2)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 2px !important;
+  color: var(--text-muted) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+  transition: box-shadow 0.2s, color 0.2s, border-color 0.2s;
+}
+[data-theme="lightroom"] .ctrl-btn:hover,
+[data-theme="lightroom"] .qp-toggle:hover,
+[data-theme="lightroom"] .qp-preset:hover,
+[data-theme="lightroom"] .qp-tab:hover,
+[data-theme="lightroom"] .btn:hover {
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+}
+[data-theme="lightroom"] .ctrl-btn.active,
+[data-theme="lightroom"] .ctrl-btn.active-audio,
+[data-theme="lightroom"] .qp-toggle.active,
+[data-theme="lightroom"] .qp-preset.active,
+[data-theme="lightroom"] .qp-tab.active {
+  /* registration lock */
+  color: var(--accent) !important;
+  border-color: var(--accent) !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent),
+    0 0 8px color-mix(in srgb, var(--accent) 30%, transparent) !important;
+}
+[data-theme="lightroom"] .qp-card,
+[data-theme="lightroom"] #topbar,
+[data-theme="lightroom"] #audio-panel,
+[data-theme="lightroom"] .qp-tabs,
+[data-theme="lightroom"] .post-card,
+[data-theme="lightroom"] .video-card,
+[data-theme="lightroom"] #cycle-mgr {
+  background: var(--surface-glass) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 4px 16px rgba(20, 24, 30, 0.12) !important;
+}
+[data-theme="lightroom"] .qp-card > .qp-head {
+  border-bottom: 1px dashed color-mix(in srgb, var(--text) 30%, transparent) !important;   /* film-edge indexing */
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+  padding-bottom: 0.26rem !important;
+}
+[data-theme="lightroom"] .qp-head .qp-title::before { content: "⊹ "; color: var(--accent); }
+/* The hero wordmark is a light glow-on-dark asset — invert to graphite on the
+   light page. */
+[data-theme="lightroom"] .hero-logo { filter: invert(1) contrast(1.08) brightness(1.12) !important; }
+/* Lighten the hardcoded-dark popovers/overlays so they don't read as dark
+   slabs on the light table. */
+[data-theme="lightroom"] #quick-menu,
+[data-theme="lightroom"] .panel-io-actions {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 8px 24px rgba(20, 24, 30, 0.18) !important;
+}
+[data-theme="lightroom"] #status-overlay { background: color-mix(in srgb, var(--void) 92%, transparent) !important; }
+[data-theme="lightroom"] #status-overlay .status-title { color: var(--text) !important; }
+[data-theme="lightroom"] kbd {
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}
+/* The light stage + inverted canvas: the fx render bright-on-dark internally,
+   so invert them to dark marks on a soft light field and MULTIPLY onto the
+   light-gray stage (the base rule sets screen, which would wash to white). */
+[data-theme="lightroom"] body:has(#qualia-host),
+[data-theme="lightroom"] body:has(#canvas) {
+  background: #e6e8eb !important;
+}
+[data-theme="lightroom"] #qualia-host > canvas,
+[data-theme="lightroom"] #canvas {
+  filter: invert(1) hue-rotate(180deg) !important;
+  mix-blend-mode: multiply !important;
+}
 
 /* ============================================================================
    GENERATED CONTROLS — the JS-built qualia utility controls.
@@ -1255,20 +2049,29 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
    is left intact wherever possible so the modulator's source stays legible.
    ========================================================================== */
 
-/* ── Voidstar — neon waveform rail / glowing signal capsules ─────────────── */
+/* ── Voidstar — a thin signal rail (near-invisible inactive) with an optical
+   centre thumb / compact signal-source capsules. The fill is a coherent
+   spectral light line; the thumb is a black optical aperture ringed in cyan;
+   focus is a clear lensing contour rather than a blur. */
 [data-theme="voidstar"] {
-  --ctl-slider-track:
-    repeating-linear-gradient(90deg,
-      color-mix(in srgb, var(--accent) 45%, transparent) 0 2px,
-      color-mix(in srgb, var(--cyan) 30%, transparent) 2px 7px);
-  --ctl-slider-thumb: var(--accent);
+  --ctl-slider-track: color-mix(in srgb, var(--text) 8%, transparent);
+  --ctl-slider-track-h: 2px;
+  --ctl-slider-track-radius: 999px;
+  --ctl-slider-track-shadow: none;
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb:
+    radial-gradient(circle at 50% 50%, #000 0 38%, var(--accent) 42% 56%, transparent 60%);
+  --ctl-slider-thumb-w: 14px;
+  --ctl-slider-thumb-h: 14px;
+  --ctl-slider-thumb-radius: 50%;
   --ctl-slider-thumb-border: 0;
-  --ctl-slider-thumb-shadow: 0 0 9px var(--accent-glow);
+  --ctl-slider-thumb-shadow: 0 0 8px var(--accent-glow);
+  --ctl-focus-ring: 0 0 0 1px var(--void), 0 0 0 3px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 [data-theme="voidstar"] .qp-mod-pill {
-  border-radius: 999px !important;
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface-glass-2)) !important;
-  box-shadow: inset 0 0 9px color-mix(in srgb, var(--accent) 14%, transparent) !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-glass-2)) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent) !important;
 }
 
 /* ── Phosphor (+ amber) — terminal progress bar / status cells ───────────── */
@@ -1410,48 +2213,265 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
   box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6) !important;
 }
 
-/* ── Visioneer — road-line / horizon rail / trail markers ────────────────── */
+/* ── Visioneer — an instrument-scale route line / brass compass-wheel thumb /
+   specimen-tag pills. The track is a route ruled with fine brass tick marks;
+   the thumb is a brass field-recorder wheel; pills are luggage/specimen tags
+   edged in brass (source colour stays in the meter). */
 [data-theme="visioneer"] {
   --ctl-slider-track:
-    repeating-linear-gradient(90deg, var(--amber) 0 8px, transparent 8px 18px),
-    color-mix(in srgb, var(--surface-2) 78%, #000);
+    repeating-linear-gradient(90deg,
+      color-mix(in srgb, var(--amber) 55%, transparent) 0 1px,
+      transparent 1px 7px),
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--surface-2) 70%, #000),
+      color-mix(in srgb, var(--surface-2) 55%, #000));
   --ctl-slider-track-h: 5px;
   --ctl-slider-track-radius: 2px;
+  --ctl-slider-track-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.55);
   --ctl-slider-fill: var(--accent);
-  --ctl-slider-thumb: var(--accent);
-  --ctl-slider-thumb-border: 0;
-  --ctl-slider-thumb-shadow: 0 0 10px var(--accent-glow), 0 0 4px var(--cyan-glow);
+  --ctl-slider-thumb:
+    radial-gradient(circle at 38% 32%, #f4e2b0, var(--amber) 46%, #6e5323 100%);
+  --ctl-slider-thumb-w: 15px;
+  --ctl-slider-thumb-h: 15px;
+  --ctl-slider-thumb-radius: 50%;
+  --ctl-slider-thumb-border: 1px solid #3a2c12;
+  --ctl-slider-thumb-shadow: 0 0 8px var(--accent-glow), inset 0 1px 1px rgba(255, 255, 255, 0.4);
 }
 [data-theme="visioneer"] .qp-mod-pill {
-  border-radius: 9px !important;
-  background:
-    linear-gradient(var(--surface), var(--surface)) padding-box,
-    linear-gradient(135deg, var(--accent), var(--pink), var(--cyan)) border-box !important;
-  border: 1px solid transparent !important;
-  box-shadow: 0 0 8px var(--accent-glow) !important;
+  border-radius: 3px 3px 3px 10px !important;    /* a specimen / luggage tag */
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 90%, #000), var(--surface)) !important;
+  border: 1px solid color-mix(in srgb, var(--border-2) 55%, transparent) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 2px rgba(0, 0, 0, 0.4) !important;
 }
 
-/* ── Gardens — stem/vine with dew-drop thumb / seed labels ───────────────── */
+/* ── Gardens — a lit stem/vein rail w/ a dew-drop bead / seed-capsule pills ──
+   The track is a thin lit stem; the fill is light travelling it; the thumb is
+   an iridescent glass dew drop; pills are asymmetric seed capsules / leaf
+   nodes. Meter reads as an illuminated vein via the per-channel fill. */
 [data-theme="gardens"] {
-  --ctl-slider-track: color-mix(in srgb, var(--green) 30%, var(--surface));
-  --ctl-slider-track-h: 4px;
+  --ctl-slider-track:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--accent) 24%, var(--surface)),
+      color-mix(in srgb, var(--green) 26%, var(--surface)));
+  --ctl-slider-track-h: 3px;
   --ctl-slider-track-radius: 999px;
-  --ctl-slider-fill: var(--green);
+  --ctl-slider-track-shadow: 0 0 6px color-mix(in srgb, var(--accent) 25%, transparent);
+  --ctl-slider-fill: var(--accent);
   --ctl-slider-thumb:
-    radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.9),
-      color-mix(in srgb, var(--cyan) 70%, var(--green)) 70%);
-  --ctl-slider-thumb-w: 14px;
-  --ctl-slider-thumb-h: 14px;
-  --ctl-slider-thumb-border: 1px solid color-mix(in srgb, var(--green) 50%, transparent);
-  --ctl-slider-thumb-shadow: 0 0 8px color-mix(in srgb, var(--green) 40%, transparent);
+    radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.95),
+      color-mix(in srgb, var(--accent) 78%, var(--cyan)) 60%,
+      color-mix(in srgb, var(--accent) 62%, #04100e) 100%);
+  --ctl-slider-thumb-w: 13px;
+  --ctl-slider-thumb-h: 13px;
+  --ctl-slider-thumb-radius: 52% 48% 50% 50%;    /* a dew drop, not a perfect circle */
+  --ctl-slider-thumb-border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  --ctl-slider-thumb-shadow:
+    0 0 9px color-mix(in srgb, var(--accent) 45%, transparent),
+    inset 0 0 3px rgba(255, 255, 255, 0.55);
 }
 [data-theme="gardens"] .qp-mod-pill {
-  border-radius: 10px !important;
+  border-radius: 9px 3px 9px 3px !important;     /* seed capsule / leaf node */
   background:
-    radial-gradient(120% 140% at 30% 0%, rgba(255, 255, 255, 0.08), transparent 50%),
-    color-mix(in srgb, var(--green) 8%, var(--surface-glass-2)) !important;
-  box-shadow: 0 0 8px color-mix(in srgb, var(--green) 20%, transparent) !important;
+    radial-gradient(130% 150% at 26% 0%, rgba(255, 255, 255, 0.10), transparent 52%),
+    linear-gradient(160deg,
+      color-mix(in srgb, var(--accent) 10%, var(--surface-glass-2)),
+      color-mix(in srgb, var(--green) 8%, var(--surface-glass-2))) !important;
+  box-shadow:
+    0 0 9px color-mix(in srgb, var(--accent) 20%, transparent),
+    inset 0 0 6px color-mix(in srgb, var(--green) 9%, transparent) !important;
 }
+
+/* ── Glissando — polished steel string rail / brushed pedal-changer pills ──
+   Track = a round steel rail (metallic cross-section) lit by a thin accent
+   excitation; fill = harmonic excitation running the string; thumb = the
+   chrome tone bar (a wide short pearloid-steel capsule). Pills = brushed
+   metal linkages; the per-channel border/meter colour is left untouched so
+   the modulator source stays legible on the dark walnut. */
+[data-theme="glissando"] {
+  --ctl-slider-track:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--text) 55%, transparent),
+      color-mix(in srgb, #9fb4c4 60%, var(--surface)) 45%,
+      color-mix(in srgb, #000 45%, var(--surface)));
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 999px;
+  --ctl-slider-track-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.5), 0 0 4px var(--accent-glow);
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb: linear-gradient(180deg, #f4f7fa, #b9c9d6 42%, #6f8494 62%, #33414c);
+  --ctl-slider-thumb-w: 18px;
+  --ctl-slider-thumb-h: 11px;
+  --ctl-slider-thumb-radius: 5px;
+  --ctl-slider-thumb-border: 1px solid #2a343c;
+  --ctl-slider-thumb-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 1px 3px rgba(0, 0, 0, 0.6), 0 0 6px var(--accent-glow);
+}
+[data-theme="glissando"] .qp-mod-pill {
+  border-radius: 4px !important;
+  /* dark walnut woodgrain: a lit-ridge→shadow gradient with faint lengthwise
+     grain streaks — the wood body under the metal pedals, kept low-contrast so
+     it reads as material, not noise */
+  background:
+    repeating-linear-gradient(180deg,
+      rgba(0, 0, 0, 0.22) 0 1px,
+      transparent 1px 3px,
+      rgba(122, 90, 56, 0.14) 3px 4px,
+      transparent 4px 7px),
+    linear-gradient(180deg, #34261a, #1b130c) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(214, 190, 150, 0.10),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 1px 2px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* ── Risograph — printed rule w/ registration offset / punched-mark thumb ──
+   Track = a soy-black printed rule with a second ink slipped out of
+   registration (the offset shadow); thumb = a punched square registration
+   tab, hard-edged, with the same mis-registration; meter = a halftone dot
+   screen. Pills = flat overprinted paper labels (ink border, hard offset);
+   the source colour rides the theme-aware meter (blue/red/pink). */
+[data-theme="risograph"] {
+  --ctl-slider-track: var(--text);
+  --ctl-slider-track-h: 3px;
+  --ctl-slider-track-radius: 0;
+  --ctl-slider-track-shadow: 1.5px 1.5px 0 color-mix(in srgb, var(--cyan) 70%, transparent);
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb: var(--accent);
+  --ctl-slider-thumb-w: 13px;
+  --ctl-slider-thumb-h: 13px;
+  --ctl-slider-thumb-radius: 0;
+  --ctl-slider-thumb-border: 2px solid var(--text);
+  --ctl-slider-thumb-shadow: 1.5px 1.5px 0 color-mix(in srgb, var(--cyan) 75%, transparent);
+  --ctl-meter-bg:
+    radial-gradient(circle, color-mix(in srgb, var(--text) 30%, transparent) 0.8px, transparent 1.1px) 0 0 / 4px 4px,
+    var(--surface-2);
+  --ctl-focus-ring: 0 0 0 2px var(--cyan);
+  --ctl-scrollbar-track: var(--void-2);
+  --ctl-scrollbar-thumb: color-mix(in srgb, var(--text) 55%, var(--void));
+}
+[data-theme="risograph"] .qp-mod-pill {
+  border-radius: 0 !important;
+  background: var(--surface) !important;
+  border: 2px solid var(--text) !important;
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--accent) 25%, transparent) !important;
+  color: var(--text) !important;
+}
+[data-theme="risograph"] .qp-mod-name {
+  color: var(--text) !important; text-transform: uppercase; letter-spacing: 0.06em;
+}
+
+/* ── Patchbay — a recessed attenuator channel / precision fader cap / jacks ──
+   Track is a sunken attenuator channel; thumb is a precision fader cap with a
+   chartreuse indicator edge; pills are patch jacks (a socket hole on the right,
+   the per-channel border/meter reading as the lit socket collar). */
+[data-theme="patchbay"] {
+  --ctl-slider-track: color-mix(in srgb, #000 55%, var(--surface));
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 2px;
+  --ctl-slider-track-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb: linear-gradient(180deg, #464d54, #262b30 60%, #1a1e22);
+  --ctl-slider-thumb-w: 10px;
+  --ctl-slider-thumb-h: 18px;
+  --ctl-slider-thumb-radius: 2px;
+  --ctl-slider-thumb-border: 1px solid #121518;
+  --ctl-slider-thumb-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -2px 0 color-mix(in srgb, var(--accent) 60%, transparent),
+    0 1px 3px rgba(0, 0, 0, 0.7);
+}
+[data-theme="patchbay"] .qp-mod-pill {
+  border-radius: 6px !important;
+  background:
+    radial-gradient(circle at 88% 50%, rgba(0, 0, 0, 0.6) 3px, transparent 4.2px),
+    linear-gradient(180deg, var(--surface-2), var(--surface)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), inset 0 0 0 1px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* ── Ruliad — a world line: realized history vs possible future / branch nodes
+   The unfilled track is a faint possible future; the fill is realized history;
+   the thumb is the current causal state (a bright node); pills are branch/rule
+   tokens. */
+[data-theme="ruliad"] {
+  --ctl-slider-track: color-mix(in srgb, var(--text) 12%, transparent);
+  --ctl-slider-track-h: 2px;
+  --ctl-slider-track-radius: 999px;
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb:
+    radial-gradient(circle at 50% 50%, #fff, var(--accent) 55%,
+      color-mix(in srgb, var(--accent) 60%, #060912) 100%);
+  --ctl-slider-thumb-w: 12px;
+  --ctl-slider-thumb-h: 12px;
+  --ctl-slider-thumb-radius: 50%;
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 0 8px var(--accent-glow), 0 0 3px rgba(255, 255, 255, 0.8);
+}
+[data-theme="ruliad"] .qp-mod-pill {
+  border-radius: 3px 9px 3px 9px !important;     /* a branch / rule token */
+  background: linear-gradient(120deg,
+    color-mix(in srgb, var(--accent) 10%, var(--surface-glass-2)), var(--surface-glass-2)) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+
+/* ── Darkroom — an exposure scale / aperture-ring marker / lens-stage pills ──
+   Track is a black→gray exposure scale, filled in exposure amber; the thumb is
+   an aperture ring (safelight rim, open centre); pills are smoked-glass lens
+   stages (per-channel border = the loaded separation filter). */
+[data-theme="darkroom"] {
+  --ctl-slider-track: linear-gradient(90deg, #0a0a0b, #3a3a40);
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 1px;
+  --ctl-slider-track-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --ctl-slider-fill: var(--amber);
+  --ctl-slider-thumb:
+    radial-gradient(circle,
+      transparent 0 26%, var(--text) 30% 42%,
+      color-mix(in srgb, var(--accent) 70%, transparent) 46% 54%, transparent 58%);
+  --ctl-slider-thumb-w: 16px;
+  --ctl-slider-thumb-h: 16px;
+  --ctl-slider-thumb-radius: 50%;
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+[data-theme="darkroom"] .qp-mod-pill {
+  border-radius: 2px !important;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, #fff 5%, var(--surface-2)), var(--surface)) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), inset 0 0 8px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* ── Lightroom — a light exposure scale / dark aperture-ring marker on light /
+   light lens-stage pills. Mirrors darkroom on the light table: the thumb is a
+   graphite aperture ring with a safelight rim; the source colour rides the
+   theme-aware meter. */
+[data-theme="lightroom"] {
+  --ctl-slider-track: linear-gradient(90deg, #cfd3d8, #9aa0a7);
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 1px;
+  --ctl-slider-track-shadow: inset 0 0 0 1px rgba(20, 24, 30, 0.08);
+  --ctl-slider-fill: var(--amber);
+  --ctl-slider-thumb:
+    radial-gradient(circle,
+      transparent 0 26%, var(--text) 30% 42%,
+      color-mix(in srgb, var(--accent) 70%, transparent) 46% 54%, transparent 58%);
+  --ctl-slider-thumb-w: 16px;
+  --ctl-slider-thumb-h: 16px;
+  --ctl-slider-thumb-radius: 50%;
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 1px 3px rgba(20, 24, 30, 0.3);
+  --ctl-meter-bg: rgba(20, 24, 30, 0.10);
+  --ctl-focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  --ctl-scrollbar-track: var(--void-2);
+  --ctl-scrollbar-thumb: color-mix(in srgb, var(--text) 30%, var(--void));
+}
+[data-theme="lightroom"] .qp-mod-pill {
+  border-radius: 2px !important;
+  background: linear-gradient(180deg, var(--surface), var(--surface-2)) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+  color: var(--text) !important;
+}
+[data-theme="lightroom"] .qp-mod-name { color: var(--text) !important; }
 
 /* ============================================================================
    Reduced motion — honour prefers-reduced-motion.

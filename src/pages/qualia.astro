@@ -453,6 +453,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
     #btn-stitch               { min-width: 11ch; } /* "stitch blip" */
+    #btn-negative             { min-width: 13ch; } /* "negative blip" */
     #btn-walk                 { min-width: 9ch;  } /* "walk off" */
     #btn-logo                 { min-width: 9ch;  } /* "logo off" */
     #btn-record-mode          { min-width: 2.25ch; } /* ▾ caret (capture menu) */
@@ -651,7 +652,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: white; font-family: var(--font-mono); font-size: 0.875rem;
       cursor: pointer; transition: all 0.2s;
     }
-    .start-btn:hover { background: #7c3aed; box-shadow: 0 0 20px rgba(139,92,246,0.5); }
+    .start-btn:hover { background: color-mix(in srgb, var(--accent) 30%, var(--surface-2)); box-shadow: 0 0 20px var(--accent-glow); }
     .start-btn.alt {
       background: transparent; border: 1px solid var(--border);
       color: var(--muted); margin-top: 0;
@@ -2661,6 +2662,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn" id="btn-mosh"  title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
         <button class="ctrl-btn" id="btn-edge"  title="Edge-detect post (E) — off / on / blip / flip">edge</button>
         <button class="ctrl-btn" id="btn-stitch" title="Stitch post (Y) — quantized tile mosaic + word pills — off / on / blip / flip">stitch</button>
+        <button class="ctrl-btn" id="btn-negative" title="Negative post (⇧N) — lightbox negative: the whole scene inverted to dark marks on a soft light field — off / on / blip / flip">negative</button>
         <button class="ctrl-btn" id="btn-walk"  title="Cam walk (U) — slow pan / zoom / rotate camera drift over the scene, re-aims on hard beats">walk</button>
         <button class="ctrl-btn" id="btn-logo"  title="void* logo mark — small live-animated watermark above the whole scene stack. Corner-anchored, drag to place; 'center' mode makes a large emblem that can ride the cam walk">logo</button>
       </div>
@@ -2767,6 +2769,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <span><kbd>K</kbd> mosh</span>
   <span><kbd>E</kbd> edge</span>
   <span><kbd>Y</kbd> stitch</span>
+  <span><kbd>⇧N</kbd> negative</span>
   <span><kbd>B</kbd> ripples</span>
   <span><kbd>J</kbd> skeleton</span>
   <span><kbd>F</kbd> sparks</span>
@@ -3461,7 +3464,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="strudel-header">
     <span class="sp-title">strudel</span>
     <span class="sp-err" id="strudel-error" style="display:none" title="" role="alert"></span>
-    <span class="sp-status" id="strudel-status">click ▶ in editor to start</span>
+    <span class="sp-status" id="strudel-status"></span>
     <button class="ctrl-btn" id="btn-strudel-play"    title="Evaluate / play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-strudel-mute" title="Mute Strudel audio (transport keeps running so sync stays locked)">live</button>
@@ -3517,7 +3520,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="sequencer-header">
     <span class="sp-title">seq</span>
     <input type="text" id="sequencer-name" class="seq-name-input" placeholder="pattern name" />
-    <span class="sp-status" id="sequencer-status">click ▶ to play</span>
+    <span class="sp-status" id="sequencer-status"></span>
     <button class="ctrl-btn" id="btn-sequencer-play"  title="Play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-sequencer-stop"  title="Stop">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-sequencer-mute" title="Mute sequencer audio (transport keeps running so sync stays locked)">live</button>
@@ -3656,7 +3659,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 <div id="vocoder-panel" style="display:none">
   <div id="vocoder-header">
     <span class="sp-title">vox <span class="sp-tag">// vocal fx</span></span>
-    <span class="sp-status" id="vocoder-status">click ▶ to start</span>
+    <span class="sp-status" id="vocoder-status"></span>
     <button class="ctrl-btn" id="btn-vocoder-play"  title="Open the mic">▶</button>
     <button class="ctrl-btn" id="btn-vocoder-stop"  title="Close the mic">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-vocoder-mute" title="Mute output (mic stays open)">live</button>

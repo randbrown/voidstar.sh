@@ -121,7 +121,7 @@ const TRANSITION_MS_OPTS = [300, 600, 1200, 1800, 2500];    // ms
 // load — see the audioMode restore block below.
 const AUDIO_MODES   = ['off', 'mic', 'mix', 'all'];
 const GLITCH_MODES  = ['off', 'on', 'blip', 'flip'];
-const GLITCH_KEYS   = ['ascii', 'mosh', 'edge', 'stitch'];
+const GLITCH_KEYS   = ['ascii', 'mosh', 'edge', 'stitch', 'negative'];
 const BLIP_DURATION_MS = 280;
 // Hard-kick detector — tuned for "occasional flare on sub hits", not every
 // kick or snare. Multiple gates must all pass for a fire:
@@ -198,6 +198,7 @@ export function initQualiaPage() {
   const btnMosh    = document.getElementById('btn-mosh');
   const btnEdge    = document.getElementById('btn-edge');
   const btnStitch  = document.getElementById('btn-stitch');
+  const btnNegative = document.getElementById('btn-negative');
   const btnWalk    = document.getElementById('btn-walk');
   const btnLogo    = document.getElementById('btn-logo');
   const btnPhase   = document.getElementById('btn-phase');
@@ -519,7 +520,7 @@ export function initQualiaPage() {
   // legacy stored.asciiMode / stored.moshOn / stored.edgeOn shape into the
   // unified glitchModes object so users coming from an earlier build keep
   // their toggles.
-  const glitchModes = { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off' };
+  const glitchModes = { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off', negative: 'off' };
   if (stored.glitchModes && typeof stored.glitchModes === 'object') {
     for (const g of GLITCH_KEYS) {
       const m = stored.glitchModes[g];
@@ -540,7 +541,7 @@ export function initQualiaPage() {
   // iteration order ends up rendering — fine, since only one renders anyway.
   for (const g of GLITCH_KEYS) overlay.setOption(g, glitchModes[g] === 'on');
   // Per-glitch blip auto-clear timestamps (epoch ms; 0 = inactive).
-  const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0, stitch: 0 };
+  const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0, stitch: 0, negative: 0 };
 
   // Cam walk — restore tunables + on/off from settings. setEnabled(true)
   // starts the drift immediately; the walk itself only advances once
@@ -2147,7 +2148,7 @@ export function initQualiaPage() {
   // styles — whatever mode is set here stays put while phases/palettes
   // rotate. Buttons cycle modes on click; the active class is bound to the
   // MODE so a glitch in 'on' always reads as active.
-  const btnByGlitch = { ascii: btnAscii, mosh: btnMosh, edge: btnEdge, stitch: btnStitch };
+  const btnByGlitch = { ascii: btnAscii, mosh: btnMosh, edge: btnEdge, stitch: btnStitch, negative: btnNegative };
   function refreshGlitchBtn(glitch) {
     const btn = btnByGlitch[glitch];
     if (!btn) return;
@@ -2178,6 +2179,7 @@ export function initQualiaPage() {
   btnMosh.addEventListener('click',  () => cycleGlitchMode('mosh'));
   btnEdge.addEventListener('click',  () => cycleGlitchMode('edge'));
   btnStitch?.addEventListener('click', () => cycleGlitchMode('stitch'));
+  btnNegative?.addEventListener('click', () => cycleGlitchMode('negative'));
 
   // Sync each glitch button + its associated tunable card with current
   // state. Tunable cards are shown when the glitch is in any non-'off'
@@ -5785,6 +5787,10 @@ export function initQualiaPage() {
         break;
       }
       case 'n': {
+        // Shift+N cycles the negative post (N alone advances the auto-cycle
+        // dwell — every single letter is already a pad key, so the post rides
+        // the shift modifier).
+        if (e.shiftKey) { btnNegative?.click(); break; }
         const i = CYCLE_PERIODS.indexOf(autoCycleSeconds);
         setCyclePeriod(CYCLE_PERIODS[(i + 1) % CYCLE_PERIODS.length]);
         break;

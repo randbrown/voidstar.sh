@@ -167,11 +167,12 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     mosh:     false,
     edge:     false,
     stitch:   false,
+    negative: false,
   };
-  // ASCII / data-mosh / edge-detect / stitch each fully repaint the overlay
-  // before sparks + skeleton land on top, so they're mutually exclusive —
-  // enabling one disables the others automatically.
-  const POST_KEYS = ['ascii', 'mosh', 'edge', 'stitch'];
+  // ASCII / data-mosh / edge-detect / stitch / negative each fully repaint the
+  // overlay before sparks + skeleton land on top, so they're mutually
+  // exclusive — enabling one disables the others automatically.
+  const POST_KEYS = ['ascii', 'mosh', 'edge', 'stitch', 'negative'];
   function setOption(key, val) {
     if (!(key in opts)) return;
     opts[key] = !!val;
@@ -236,6 +237,34 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     }
   }
   function getEdgeConfig() { return { ...edgeConfig }; }
+
+  // Negative post — a live "lightbox negative" of the whole scene: the frame
+  // is inverted so bright marks on dark become dark marks on a soft light
+  // field (invert flips lightness; hue-rotate 180 brings hues back, so colours
+  // read true rather than complementary). Works on any theme — the post canvas
+  // fully replaces the view like the other posts. A light field is laid down
+  // first so any transparent regions of the fx canvas read as the lightbox
+  // surface instead of letting the raw scene bleed through.
+  const NEGATIVE_FIELD = '#e9ebee';
+  function renderNegative() {
+    const ctx = postCtx;
+    const main = getMainCanvas?.();
+    if (!main) return;
+    const W = canvas.width, H = canvas.height;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.filter = 'none';
+    ctx.fillStyle = NEGATIVE_FIELD;
+    ctx.fillRect(0, 0, W, H);
+    ctx.filter = 'invert(1) hue-rotate(180deg)';
+    try {
+      ctx.drawImage(main, 0, 0, W, H);
+    } catch {
+      ctx.filter = 'none';
+      return;
+    }
+    ctx.filter = 'none';
+  }
 
   // ── Sparks ring buffer ────────────────────────────────────────────────────
   const MAX_SPARKS = 2400;
@@ -741,15 +770,16 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     // canvas so skeleton + sparks still land on top. The post canvas is
     // display:none while no post is active — the extra compositor layer is
     // free in the common case.
-    const postActive = opts.mosh || opts.ascii || opts.edge || opts.stitch;
+    const postActive = opts.mosh || opts.ascii || opts.edge || opts.stitch || opts.negative;
     if (postActive !== postShown) {
       postCanvas.style.display = postActive ? 'block' : 'none';
       postShown = postActive;
     }
-    if (opts.mosh)        renderMosh(field);
-    else if (opts.ascii)  renderAscii();
-    else if (opts.edge)   renderEdge(field);
-    else if (opts.stitch) renderStitch(field);
+    if (opts.mosh)          renderMosh(field);
+    else if (opts.ascii)    renderAscii();
+    else if (opts.edge)     renderEdge(field);
+    else if (opts.stitch)   renderStitch(field);
+    else if (opts.negative) renderNegative();
 
     ctx.clearRect(0, 0, W, H);
     drawPoseOverlay(field);
@@ -772,8 +802,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   return {
     canvas,
     postCanvas,
-    /** True while an ascii/mosh/edge/stitch pass is rendering (post canvas shown). */
-    isPostActive: () => opts.ascii || opts.mosh || opts.edge || opts.stitch,
+    /** True while an ascii/mosh/edge/stitch/negative pass is rendering (post canvas shown). */
+    isPostActive: () => opts.ascii || opts.mosh || opts.edge || opts.stitch || opts.negative,
     tick,
     render,
     setOption,
