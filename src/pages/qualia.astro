@@ -3446,8 +3446,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-strudel-mute" title="Mute Strudel audio (transport keeps running so sync stays locked)">live</button>
     <input type="range" class="panel-gain-slider" id="strudel-gain" min="0" max="1.5" step="0.01" value="1" title="Output level (0–1.5×; 1.0 = nominal, above 1.0 boosts a weak pattern). Stacks with Strudel's own gain() — use this to ride the mix without editing the pattern. The track limiter catches clipping." />
-    <button class="ctrl-btn" id="btn-strudel-fontauto" title="Auto-fit editor text — a short pattern zooms in to fill the panel, a longer one shrinks to keep every line unwrapped and visible. At the slider's size it stops shrinking and scrolls instead." aria-pressed="true">fit</button>
-    <input type="range" class="panel-gain-slider panel-font-slider" id="strudel-font-size" min="11" max="64" step="1" value="14" title="Editor font size — with auto-fit on this is the minimum (fit never shrinks below it; the editor scrolls instead), with it off the fixed size. Double-click to reset" />
+    <input type="range" class="panel-gain-slider panel-font-slider" id="strudel-font-size" min="11" max="64" step="1" value="14" title="Editor font size. Double-click to reset" />
     <button class="ctrl-btn" id="btn-strudel-newline" title="Insert newline at cursor (Android touch keyboards drop the Enter event)">↵</button>
     <button class="ctrl-btn" id="btn-strudel-blur"    title="Toggle a frosted backdrop behind the editor (helps legibility over a busy visual)" aria-pressed="false">⬚</button>
     <button class="ctrl-btn" id="btn-strudel-close"   title="Close (S)">×</button>
