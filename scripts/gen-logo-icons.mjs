@@ -8,6 +8,10 @@
 //                               default /favicon.ico fetch
 //   public/voidstar-mark.png  — the emblem on TRANSPARENT bg (natural aspect),
 //                               for the translucent-glass topbar nav logo
+//   public/icon-192.png       — PWA / apple-touch icon (dark tile)
+//   public/icon-512.png       — PWA icon (dark tile)
+//   public/icon-maskable-512  — PWA maskable icon (emblem kept inside the
+//                               central safe zone; dark bg bleeds to the edge)
 //
 // The source in src/assets/art/logos_alpha/ is already emblem-on-transparent
 // (the "_alpha" set), so we only trim + place it — no background keying.
@@ -67,3 +71,11 @@ console.log('wrote public/favicon.ico');
 
 await writeFile('public/voidstar-mark.png', await transparentMark(256));
 console.log('wrote public/voidstar-mark.png');
+
+// PWA icons — regular icons match the favicon's dark-tile treatment; the
+// maskable variant keeps the emblem inside the central safe zone (~0.58) so
+// an OS mask (circle/squircle) never clips it, with the dark bg full-bleed.
+await writeFile('public/icon-192.png', await darkTile(192, 0.82));
+await writeFile('public/icon-512.png', await darkTile(512, 0.82));
+await writeFile('public/icon-maskable-512.png', await darkTile(512, 0.58));
+console.log('wrote public/icon-192.png, public/icon-512.png, public/icon-maskable-512.png');
