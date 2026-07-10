@@ -205,27 +205,23 @@ void main() {
 const PALETTES   = ['voidcyan', 'ultraviolet', 'lava', 'toxic'];
 const STEP_OPTS  = ['32', '48', '64', '96'];
 
-// Internal render scale — anomaly is fragment-bound, so we paint the
-// raymarch into a downscaled offscreen target and upscale to the canvas.
-// 0.5 = quartered fragment work. Values above ~0.7 don't measurably hurt
-// the visual character; below ~0.4 the gradient/rim starts looking soft.
-const INTERNAL_SCALE = 0.5;
-
-// Tiny blit pass — samples the offscreen target with linear filtering and
-// writes to the canvas. Uses the same fullscreen-tri vertex.
-const BLIT_FRAG = /* glsl */`#version 300 es
-precision highp float;
-in  vec2 vUv;
-out vec4 outColor;
-uniform sampler2D uSrc;
-void main() { outColor = texture(uSrc, vUv); }
-`;
+// Anomaly used to paint the raymarch into a half-res (0.5×) offscreen target
+// and linear-upscale it to the canvas — cheap, but the upscale softened the
+// iridescent rim and left the shell edges chunky/aliased. It now raymarches
+// straight to the canvas at full backing resolution (one pass, like
+// singularity-lens), so every edge is crisp. To keep the extra fragment cost
+// bounded on hi-DPI displays, the quale caps its own DPR below (`maxDpr`);
+// the `March steps` param remains the perf valve if a weak GPU needs relief.
 
 /** @type {import('../types.js').QFXModule} */
 export default {
   id: 'anomaly',
   name: 'Anomaly',
   contextType: 'webgl2',
+  // Fragment-bound raymarcher: render crisp at up to 1.25× device pixels
+  // rather than the global 1.5× cap, trading a little supersampling for the
+  // full-resolution quality bump (still far sharper than the old 0.5× path).
+  maxDpr: 1.25,
 
   params: [
     { id: 'warp',       label: 'Warp',         type: 'range', min: 0, max: 2, step: 0.02, default: 0.7,
@@ -267,49 +263,11 @@ export default {
   },
 
   create(canvas, { gl }) {
-    const prog     = compileProgram(gl, FULLSCREEN_VERT, FRAG);
-    const blitProg = compileProgram(gl, FULLSCREEN_VERT, BLIT_FRAG);
-    const vao      = makeFullscreenTri(gl);
-    const U        = makeUniformGetter(gl, prog);
-    const UB       = makeUniformGetter(gl, blitProg);
-
-    // Offscreen render target. Storage is allocated up front (1x1 placeholder)
-    // and resized lazily — Adreno/Mali drivers on Android latch FBO
-    // completeness at first attach, so attaching a storage-less texture
-    // leaves the FBO permanently incomplete even after storage shows up
-    // (pass 1 silently no-ops → blit samples all zero → empty background).
-    const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-
-    const fbo = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const prog = compileProgram(gl, FULLSCREEN_VERT, FRAG);
+    const vao  = makeFullscreenTri(gl);
+    const U    = makeUniformGetter(gl, prog);
 
     let W = canvas.width, H = canvas.height;
-    // Internal (FBO) dimensions — fragment work happens at this resolution.
-    let Wf = Math.max(1, Math.floor(W * INTERNAL_SCALE));
-    let Hf = Math.max(1, Math.floor(H * INTERNAL_SCALE));
-    let texAllocatedW = 1, texAllocatedH = 1;
-
-    function reallocateTexture() {
-      if (Wf === texAllocatedW && Hf === texAllocatedH) return;
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, Wf, Hf, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      gl.bindTexture(gl.TEXTURE_2D, null);
-      // Re-attach after resize — some mobile drivers cache the previous
-      // attachment dimensions in the FBO completeness state.
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      texAllocatedW = Wf; texAllocatedH = Hf;
-    }
 
     let lookX = 0, lookY = 0;             // smoothed pose-biased look direction
 
@@ -348,16 +306,14 @@ export default {
     }
 
     function render() {
-      reallocateTexture();
-
-      // ── Pass 1: raymarch into the half-res FBO ──────────────────────
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-      gl.viewport(0, 0, Wf, Hf);
+      // Single pass: raymarch straight to the canvas at full backing
+      // resolution (no downscaled FBO, no upscale blur).
+      gl.viewport(0, 0, W, H);
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.useProgram(prog);
       gl.bindVertexArray(vao);
-      gl.uniform2f(U('uResolution'), Wf, Hf);
+      gl.uniform2f(U('uResolution'), W, H);
       gl.uniform1f(U('uTime'),       scratch.time);
       gl.uniform1f(U('uWarp'),       scratch.warp);
       gl.uniform1f(U('uGlow'),       scratch.glow);
@@ -367,35 +323,16 @@ export default {
       gl.uniform2f(U('uLook'),       lookX, lookY);
       if (audioRef) uploadAudioUniforms(gl, U, audioRef);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-      // ── Pass 2: linear-filtered upscale to the canvas ───────────────
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, W, H);
-      gl.clearColor(0, 0, 0, 1);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.useProgram(blitProg);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.uniform1i(UB('uSrc'), 0);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-      gl.bindTexture(gl.TEXTURE_2D, null);
       gl.bindVertexArray(null);
     }
 
     return {
-      resize(w, h /*, dpr */) {
-        W = w; H = h;
-        Wf = Math.max(1, Math.floor(W * INTERNAL_SCALE));
-        Hf = Math.max(1, Math.floor(H * INTERNAL_SCALE));
-      },
+      resize(w, h /*, dpr */) { W = w; H = h; },
       update,
       render,
       dispose() {
         gl.deleteProgram(prog);
-        gl.deleteProgram(blitProg);
         gl.deleteVertexArray(vao);
-        gl.deleteTexture(tex);
-        gl.deleteFramebuffer(fbo);
       },
     };
   },

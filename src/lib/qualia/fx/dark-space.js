@@ -1,11 +1,10 @@
 // Dark Space — void-cosmology visualizer. Five modes paint different
 // faces of the dark universe:
 //   - cosmic_web   Galaxies clustered along filaments wrapping dark voids,
-//                  with an in-frame galaxy-count label and the occasional
-//                  shooting-star streak. (Sachs–Wolfe void-shape inspired.)
+//                  with the occasional shooting-star streak. (Sachs–Wolfe
+//                  void-shape inspired.)
 //   - voids        Closer look at a few prominent voids — circle/ellipse
-//                  outlines + labels (MILKYWAY, LOCAL VOID, …).
-//                  (VoidFinder-style boundary callouts.)
+//                  boundary outlines. (VoidFinder-style boundary callouts.)
 //   - dark_matter  Scribbly thin filamentous flow-field lines on a dim
 //                  teal field — the "ghost web" of dark matter halos.
 //   - dark_energy  Central column of stretched galaxies with vertical
@@ -43,7 +42,7 @@ const TAU = PI * 2;
 //   galaxy   small point light
 //   filament thin connecting strand
 //   wall     wall/cluster glow
-//   accent   labels + special marks
+//   accent   named-void boundary rings + special marks
 const PALETTES = {
   voidblue: { bg: [4, 6, 12],   galaxy: [220, 232, 245], filament: [120, 165, 200], wall: [70, 110, 150], accent: [200, 220, 240] },
   mono:     { bg: [6, 8, 10],   galaxy: [235, 240, 245], filament: [150, 170, 185], wall: [90, 105, 120], accent: [220, 230, 240] },
@@ -91,7 +90,6 @@ export default {
       ] },
     { id: 'palette',           label: 'palette',     type: 'select',
       options: ['voidblue', 'mono', 'violet', 'inferno'], default: 'voidblue' },
-    { id: 'showLabels',        label: 'labels',      type: 'toggle', default: false },
     { id: 'poseBind',          label: 'pose bind',   type: 'toggle', default: true },
     { id: 'reactivity',        label: 'reactivity',  type: 'range', min: 0,   max: 2.0, step: 0.05, default: 1.0 },
   ],
@@ -109,9 +107,9 @@ export default {
   },
 
   presets: {
-    default:    { mode: 'cosmic_web', density: 1.0, voidSize: 1.0, expansion: 1.0, filamentBrightness: 1.0, twinkle: 1.0, palette: 'voidblue', showLabels: false, poseBind: true, reactivity: 1.0 },
+    default:    { mode: 'cosmic_web', density: 1.0, voidSize: 1.0, expansion: 1.0, filamentBrightness: 1.0, twinkle: 1.0, palette: 'voidblue', poseBind: true, reactivity: 1.0 },
     cosmic:     { mode: 'cosmic_web', density: 1.3, voidSize: 0.9, filamentBrightness: 1.2, palette: 'voidblue' },
-    voids:      { mode: 'voids',      voidSize: 1.2, density: 1.1, showLabels: true, palette: 'voidblue' },
+    voids:      { mode: 'voids',      voidSize: 1.2, density: 1.1, palette: 'voidblue' },
     darkMatter: { mode: 'dark_matter', density: 1.4, filamentBrightness: 1.4, palette: 'mono' },
     darkEnergy: { mode: 'dark_energy', expansion: 1.6, filamentBrightness: 1.0, palette: 'voidblue' },
     voidGrowth: { mode: 'void_growth', voidSize: 1.0, expansion: 1.4, palette: 'voidblue' },
@@ -217,11 +215,6 @@ export default {
     let cx = 0.5, cy = 0.5;
     let proximity = 0;
 
-    // Stored galaxy count for the cosmic_web HUD label. Recomputed every
-    // ~250ms so the number doesn't strobe with twinkle.
-    let lastCountAt = -1;
-    let visibleCount = 0;
-
     // Per-frame scratch (rendered exclusively from this — render() never
     // reads field directly).
     const scratch = {
@@ -232,7 +225,6 @@ export default {
       density: 1, voidSize: 1, expansion: 1,
       filamentBri: 1, twinkle: 1,
       pal: PALETTES.voidblue,
-      showLabels: true,
       poseBind: true,
       headOffsetX: 0, headOffsetY: 0,
     };
@@ -259,7 +251,6 @@ export default {
       scratch.filamentBri = params.filamentBrightness;
       scratch.twinkle  = params.twinkle;
       scratch.pal      = PALETTES[params.palette] || PALETTES.voidblue;
-      scratch.showLabels = !!params.showLabels;
       scratch.poseBind = !!params.poseBind;
 
       // ── Pose-driven centre drift ────────────────────────────────────────
@@ -348,35 +339,6 @@ export default {
         // from the seed radius rather than wherever the param drift left it.
         const target = 0.05;
         growR += (target - growR) * Math.min(1, dt * 0.4);
-      }
-
-      // Cheap visible-count for the cosmic_web HUD chip. Every ~250ms,
-      // sample a stride of the galaxy array against the live void mask
-      // and extrapolate. Avoids a full pass per frame; the digit stability
-      // matches the reference image more than rapid scrolling would.
-      if (scratch.mode === 'cosmic_web' && (time - lastCountAt) > 0.25) {
-        lastCountAt = time;
-        const breath = scratch.voidSize;
-        let count = 0;
-        const step = 11;                         // sample every 11th galaxy
-        const N = Math.min(MAX_GALAXIES, (MAX_GALAXIES * scratch.density) | 0);
-        for (let i = 0; i < N; i += step) {
-          const x = gx[i], y = gy[i];
-          let inside = 0;
-          for (let v = 0; v < NUM_VOIDS; v++) {
-            const ddx = x - vx[v], ddy = y - vy[v];
-            const d2 = ddx * ddx + ddy * ddy;
-            const r = vr[v] * breath;
-            if (d2 < r * r) { inside = 1; break; }
-          }
-          if (!inside) count++;
-        }
-        // Extrapolate sparsely-sampled count back to galaxy-population scale.
-        // A small hash-jitter on the stable count keeps the digit alive
-        // without making it strobe.
-        const extrapolated = (count * step) | 0;
-        const jitter = ((Math.sin(time * 0.7) + 1) * 7.5) | 0;
-        visibleCount = extrapolated + jitter;
       }
     }
 
@@ -538,32 +500,13 @@ export default {
         ctx.fill();
       }
 
-      // Galaxy-count chip.
-      if (scratch.showLabels) {
-        ctx.globalCompositeOperation = 'source-over';
-        const txt = visibleCount.toLocaleString();
-        const fontPx = Math.max(11, Math.min(W, H) * 0.018);
-        ctx.font = `${fontPx}px 'JetBrains Mono', ui-monospace, monospace`;
-        const padX = fontPx * 0.9, padY = fontPx * 0.55;
-        const tw = ctx.measureText(txt).width;
-        const bx = (W - tw) * 0.5 - padX;
-        const by = H * 0.86;
-        const bw = tw + padX * 2;
-        const bh = fontPx + padY * 2;
-        ctx.strokeStyle = rgba(pal.accent, 0.85);
-        ctx.lineWidth = 1;
-        ctx.strokeRect(bx, by, bw, bh);
-        ctx.fillStyle = rgba(pal.accent, 0.95);
-        ctx.textBaseline = 'top';
-        ctx.fillText(txt, bx + padX, by + padY * 0.85);
-      }
       ctx.globalCompositeOperation = 'source-over';
     }
 
     function renderVoids() {
       // Same galaxy field as cosmic_web, but with explicit void boundary
-      // strokes + labels for two named voids (MILKYWAY at v=0, LOCAL VOID
-      // at v=1). Mirrors the reference image's annotation aesthetic.
+      // strokes: two prominent voids (v=0, v=1) get solid accent rings, the
+      // rest faint dashed strokes so the tessellation reads.
       clearBg();
       const pal = scratch.pal;
       const time = scratch.time;
@@ -594,26 +537,24 @@ export default {
         ctx.fill();
       }
 
-      // Void boundary rings — solid stroke for two named voids (the ones
-      // that get labels), faint dashed strokes for the rest so the user
-      // sees the underlying tessellation.
+      // Void boundary rings — solid accent stroke for two prominent voids,
+      // faint dashed strokes for the rest so the underlying tessellation
+      // reads.
       ctx.globalCompositeOperation = 'source-over';
-      const namedVoids = [
-        { idx: 0, label: 'MILKYWAY',   ratio: [1.0, 1.0] },
-        { idx: 1, label: 'LOCAL VOID', ratio: [1.7, 1.0] },
+      const prominentVoids = [
+        { idx: 0, ratio: [1.0, 1.0] },
+        { idx: 1, ratio: [1.7, 1.0] },       // slightly elliptical (oval void)
       ];
       for (let v = 0; v < NUM_VOIDS; v++) {
         const r = effectiveVoidR(v);
-        const named = namedVoids.find(n => n.idx === v);
+        const prominent = prominentVoids.find(n => n.idx === v);
         const [cx0, cy0] = transformXY(vx[v], vy[v]);
         const rad = r * Math.min(W, H);
         ctx.beginPath();
-        if (named) {
-          // Slightly elliptical for the LOCAL VOID — the reference image
-          // shows it as an oval rather than a perfect circle.
+        if (prominent) {
           ctx.ellipse(cx0, cy0,
-                      rad * named.ratio[0],
-                      rad * named.ratio[1],
+                      rad * prominent.ratio[0],
+                      rad * prominent.ratio[1],
                       0, 0, TAU);
           ctx.strokeStyle = rgba(pal.accent, 0.85);
           ctx.lineWidth   = 1.1;
@@ -623,22 +564,6 @@ export default {
           ctx.lineWidth   = 0.9;
         }
         ctx.stroke();
-      }
-      // Labels last — pinned inside the named void, centered.
-      if (scratch.showLabels) {
-        ctx.fillStyle = rgba(pal.accent, 0.92);
-        const fontPx = Math.max(10, Math.min(W, H) * 0.014);
-        ctx.font = `${fontPx}px 'JetBrains Mono', ui-monospace, monospace`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        for (const n of namedVoids) {
-          const [lx, ly] = transformXY(vx[n.idx], vy[n.idx]);
-          // Stroke a small outline behind text for legibility against
-          // bright galaxies bleeding through screen blend.
-          ctx.fillText(n.label, lx, ly);
-        }
-        ctx.textAlign = 'start';
-        ctx.textBaseline = 'alphabetic';
       }
     }
 
@@ -697,25 +622,6 @@ export default {
         ctx.stroke();
       }
 
-      // Optional label.
-      if (scratch.showLabels) {
-        ctx.globalCompositeOperation = 'source-over';
-        const fontPx = Math.max(11, Math.min(W, H) * 0.018);
-        ctx.font = `${fontPx}px 'JetBrains Mono', ui-monospace, monospace`;
-        const txt = 'DARK MATTER';
-        const tw = ctx.measureText(txt).width;
-        const padX = fontPx * 0.9, padY = fontPx * 0.45;
-        const bx = (W - tw) * 0.5 - padX;
-        const by = H * 0.88;
-        const bw = tw + padX * 2;
-        const bh = fontPx + padY * 2;
-        ctx.strokeStyle = rgba(pal.accent, 0.85);
-        ctx.lineWidth = 1;
-        ctx.strokeRect(bx, by, bw, bh);
-        ctx.fillStyle = rgba(pal.accent, 0.95);
-        ctx.textBaseline = 'top';
-        ctx.fillText(txt, bx + padX, by + padY * 0.85);
-      }
       ctx.globalCompositeOperation = 'source-over';
     }
 

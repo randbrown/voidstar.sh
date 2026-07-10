@@ -83,7 +83,15 @@ const AUTO_PHASE_STYLES = ['sequential', 'palettes', 'random'];
 // auto-phase — the two can run together (a single qfx phases through its
 // modes, then cycle picks the next quale and the new one starts phasing).
 const CYCLE_PERIODS = [0, 5, 15, 30, 45];       // seconds
-const AUTO_CYCLE_STYLES = ['sequential', 'random'];
+// 'progressive' ramps the dwell from the chosen period (the slow start, e.g.
+// 30s) down to PROGRESSIVE_END_SEC (~5s) across a configurable set length, so
+// the show accelerates as it builds. The period dropdown is still the on/off +
+// the starting dwell; sequential/random pick the NEXT quale each swap.
+const AUTO_CYCLE_STYLES = ['sequential', 'random', 'progressive'];
+// Set-length options (minutes) for the progressive ramp, and the fast dwell it
+// converges to. After the set length elapses the cadence just holds at the end.
+const CYCLE_SET_MINUTES = [10, 20, 30, 45, 60, 90];
+const PROGRESSIVE_END_SEC = 5;
 // Scene transitions: how a switch between two looks is bridged. Applies to
 // EVERY scene change — auto-phase steps, auto-cycle swaps, manual quale
 // switches, swipes, and qualem recalls — via core.beginTransition().
@@ -433,6 +441,7 @@ export function initQualiaPage() {
     autoPhaseBeatSync,
     autoCycleSeconds,
     autoCycleStyle,
+    autoCycleSetMin,
     autoCycleBeatSync,
     transitionStyle,
     transitionMs,
@@ -3642,6 +3651,30 @@ export function initQualiaPage() {
   let autoCycleSeconds = CYCLE_PERIODS.includes(_cycleSecRaw) ? _cycleSecRaw : 0;
   let autoCycleStyle = AUTO_CYCLE_STYLES.includes(_cycleStyleRaw) ? _cycleStyleRaw : 'sequential';
   let autoCycleBeatSync = !!stored.autoCycleBeatSync;
+  // Progressive-ramp state: the set length (minutes) the dwell accelerates
+  // across, plus the wall-clock anchor for "when the set started". The anchor is
+  // (re)armed whenever progressive is engaged or its inputs change, so tweaking
+  // the start dwell / set length restarts the ramp cleanly.
+  let autoCycleSetMin = CYCLE_SET_MINUTES.includes(stored.autoCycleSetMin) ? stored.autoCycleSetMin : 45;
+  let progressiveStartMs = performance.now();
+  const cycleSetSelect = document.getElementById('cycle-set-len');
+  const armProgressive = () => { progressiveStartMs = performance.now(); };
+
+  // Effective cycle dwell (s) for the current tick. sequential/random use the
+  // chosen period verbatim; 'progressive' eases from the chosen period (the slow
+  // start) down to PROGRESSIVE_END_SEC over the set length, then holds there.
+  function progressiveDwell() {
+    const startD = autoCycleSeconds;                    // chosen period = slow start
+    if (startD <= PROGRESSIVE_END_SEC) return startD;   // already at/below the fast floor
+    const setS = Math.max(1, autoCycleSetMin * 60);
+    const f = Math.min(1, Math.max(0, (performance.now() - progressiveStartMs) / 1000 / setS));
+    // Ease-in (f²) so the cadence lingers slow early and accelerates into the
+    // back half of the set — it "builds" rather than ramping flat.
+    return startD + (PROGRESSIVE_END_SEC - startD) * (f * f);
+  }
+  function effectiveCycleSeconds() {
+    return autoCycleStyle === 'progressive' ? progressiveDwell() : autoCycleSeconds;
+  }
 
   // — Scene transitions —
   // One style/length pair, shared by every scene change. `runSceneTransition`
@@ -3681,9 +3714,13 @@ export function initQualiaPage() {
     btnCycle.value = String(autoCycleSeconds);
     btnCycle.classList.toggle('active', autoCycleSeconds > 0);
     if (autoCycleSeconds > 0) {
+      const dwell = effectiveCycleSeconds();
       const elapsed = (performance.now() - autoCycleStartMs) / 1000;
-      const remaining = Math.max(0, Math.ceil(autoCycleSeconds - elapsed));
-      btnCycle.title = `Cycle between qualia (N) — next in ${remaining}s${autoCycleBeatSync ? ' · ♪ beat-sync armed' : ''}`;
+      const remaining = Math.max(0, Math.ceil(dwell - elapsed));
+      const prog = autoCycleStyle === 'progressive'
+        ? ` · progressive ~${Math.round(dwell)}s→${PROGRESSIVE_END_SEC}s over ${autoCycleSetMin}min`
+        : '';
+      btnCycle.title = `Cycle between qualia (N) — next in ${remaining}s${prog}${autoCycleBeatSync ? ' · ♪ beat-sync armed' : ''}`;
     } else {
       btnCycle.title = 'Cycle between qualia (N) — off';
     }
@@ -3732,6 +3769,8 @@ export function initQualiaPage() {
     if (autoCycleSeconds <= 0) { refreshCycleBtn(); return; }
     const now = performance.now();
     const elapsed = (now - autoCycleStartMs) / 1000;
+    // Progressive style ramps this each tick; sequential/random it's constant.
+    const dwell = effectiveCycleSeconds();
     refreshCycleBtn();
     // Hold off if a phase step just fired so the two don't stack into one jump.
     if (autoGuardActive(now)) return;
@@ -3740,17 +3779,17 @@ export function initQualiaPage() {
       // silence-fallback ceiling. Between floor and ceiling, fire on the
       // next beat that arrives AFTER the floor timestamp (not just any
       // unconsumed beat — beats during the cooldown shouldn't count).
-      if (elapsed >= autoCycleSeconds * 2) {
+      if (elapsed >= dwell * 2) {
         cycleNext();
         return;
       }
-      if (elapsed >= autoCycleSeconds) {
-        const floorMs = autoCycleStartMs + autoCycleSeconds * 1000;
+      if (elapsed >= dwell) {
+        const floorMs = autoCycleStartMs + dwell * 1000;
         if (lastBeatAt > floorMs) cycleNext();
       }
       return;
     }
-    if (elapsed >= autoCycleSeconds) {
+    if (elapsed >= dwell) {
       // Don't reset autoCycleStartMs here — onFxChange does it after the
       // switch lands, so the dwell clock starts when the new fx is live.
       cycleNext();
@@ -3762,6 +3801,7 @@ export function initQualiaPage() {
     autoCycleSeconds = seconds;
     if (seconds > 0) {
       autoCycleStartMs = performance.now();
+      armProgressive();                 // re-arm the ramp: new start dwell → fresh set clock
       autoCycleTickT = setInterval(tickCycle, 250);
     }
     btnCycle.classList.toggle('active', autoCycleSeconds > 0);
@@ -3774,9 +3814,21 @@ export function initQualiaPage() {
     setCyclePeriod(CYCLE_PERIODS.includes(sec) ? sec : 0);
   });
   cycleStyleSelect.addEventListener('change', () => {
-    autoCycleStyle = cycleStyleSelect.value;
+    autoCycleStyle = AUTO_CYCLE_STYLES.includes(cycleStyleSelect.value) ? cycleStyleSelect.value : 'sequential';
+    armProgressive();                   // engaging/leaving progressive restarts the ramp
+    refreshCycleBtn();
     settings.save();
   });
+  if (cycleSetSelect) {
+    cycleSetSelect.value = String(autoCycleSetMin);
+    cycleSetSelect.addEventListener('change', () => {
+      const m = parseInt(cycleSetSelect.value, 10);
+      autoCycleSetMin = CYCLE_SET_MINUTES.includes(m) ? m : 45;
+      armProgressive();                 // changing the set length restarts the ramp
+      refreshCycleBtn();
+      settings.save();
+    });
+  }
 
   // ── Beat-sync toggles ────────────────────────────────────────────────────
   // Both cycle and phase use the same trigger source: rising edge of
@@ -4824,6 +4876,7 @@ export function initQualiaPage() {
         phaseBeatSync: autoPhaseBeatSync,
         cycleSeconds:  autoCycleSeconds,
         cycleStyle:    autoCycleStyle,
+        cycleSetMin:   autoCycleSetMin,
         cycleBeatSync: autoCycleBeatSync,
       },
       camera: {
@@ -5011,8 +5064,12 @@ export function initQualiaPage() {
         if (phaseStyleSelect) phaseStyleSelect.value = autoPhaseStyle;
       }
       if (typeof q.auto.cycleStyle === 'string') {
-        autoCycleStyle = q.auto.cycleStyle;
+        autoCycleStyle = AUTO_CYCLE_STYLES.includes(q.auto.cycleStyle) ? q.auto.cycleStyle : 'sequential';
         if (cycleStyleSelect) cycleStyleSelect.value = autoCycleStyle;
+      }
+      if (CYCLE_SET_MINUTES.includes(q.auto.cycleSetMin)) {
+        autoCycleSetMin = q.auto.cycleSetMin;
+        if (cycleSetSelect) cycleSetSelect.value = String(autoCycleSetMin);
       }
       if (typeof q.auto.phaseBeatSync === 'boolean') autoPhaseBeatSync = q.auto.phaseBeatSync;
       if (typeof q.auto.cycleBeatSync === 'boolean') autoCycleBeatSync = q.auto.cycleBeatSync;
@@ -5022,7 +5079,7 @@ export function initQualiaPage() {
       }
       if (typeof q.auto.cycleSeconds === 'number') {
         autoCycleSeconds = q.auto.cycleSeconds;
-        setCyclePeriod(autoCycleSeconds);
+        setCyclePeriod(autoCycleSeconds);   // also re-arms the progressive ramp
       }
     }
 
@@ -5163,7 +5220,7 @@ export function initQualiaPage() {
       glitch:  { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off' },
       camWalk: { on: false, config: { ...CAM_WALK_DEFAULTS } },
       auto:    { phaseSeconds: 0, phaseStyle: 'sequential', phaseBeatSync: false,
-                 cycleSeconds: 0, cycleStyle: 'sequential', cycleBeatSync: false },
+                 cycleSeconds: 0, cycleStyle: 'sequential', cycleSetMin: 45, cycleBeatSync: false },
       camera:  { rotation: 0, mirror: true, zoom: 1.0, videoOffset: { dx: 0, dy: 0 }, sizeIdx: 0 },
       cyclePool: { excluded: [] },
       phasePool: { excluded: {} },

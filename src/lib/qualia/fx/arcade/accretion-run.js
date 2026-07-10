@@ -9,11 +9,13 @@
 // enemyIntensity knob spawn debris and push the speed. Per-row perspective is
 // the classic Outrun technique (cheap at the cabinet's tiny virtual height).
 //
-// Autonomy: the car drives itself. An internal autopilot reads the debris
-// field and steers to thread the nearest hazard, easing back to centre with a
-// slow musical wander when the lane is clear; the player signal is blended in
-// as a nudge (weight = 1-autonomy). At performer autonomy (~0.7) it weaves and
-// rarely crashes with zero input; at crowd autonomy it tracks the room tightly.
+// Autonomy: the car drives itself, but like a person rather than a solver. It
+// holds a relaxed line near the CENTRE of the road (a slow musical wander for
+// life, small enough that it lingers mid-screen), and only breaks from it to
+// dodge a car that is close AND lined up with where it's driving — a late,
+// decisive swerve at the last responsible moment, then it eases back to centre.
+// The player signal is blended in as a nudge (weight = 1-autonomy). At crowd
+// autonomy it tracks the room tightly.
 
 const MAX_DEBRIS = 2;    // very sparse — at most 2 cars, which also guarantees a
                         // clear lane always exists (≤2 blocked intervals < road).
@@ -135,48 +137,51 @@ export default function create(eng) {
   function centerAt(p, vw) { return vw * 0.5 + curve * (1 - p) * (1 - p) * vw * 0.7; }
   function halfAt(p, vw)   { return vw * 0.03 + p * p * vw * 0.46; }
 
-  // ── Autopilot — a PERFECT, planned dodge ─────────────────────────────────────
-  // Not merely reactive: a potential-field planner. It samples candidate lanes
-  // across the road and scores each by its clearance from EVERY approaching car
-  // (weighted by how soon the car arrives — imminent cars dominate). It commits
-  // to the clearest lane with a margin (0.45) well beyond the collision radius
-  // (0.30), and with ~2s of lead time before any car reaches the near band. For
-  // the sparse traffic field this threads a guaranteed-clear path: in expert
-  // mode (pure autopilot) it never collides. Returns the desired steer [-1,1].
-  const NC = 23, MARGIN = 0.48;
+  // ── Autopilot — a human-style late dodge ─────────────────────────────────────
+  // The car cruises a relaxed line near the middle of the road and only swerves
+  // when a car is BOTH close (inside the reaction zone) AND lined up with where
+  // it's driving. Distant cars, and cars already off to the side, are ignored —
+  // so it sits mid-screen and reacts late, the way a real driver does, instead
+  // of pre-clearing the lane the instant traffic appears.
+  //
+  // REACT (0..1, near→horizon-spawn) gates how close a car must be before it
+  // counts as a threat: at 0.42 the car is already in the near half of the road
+  // when the swerve starts. MARGIN is how far clear of the threat we aim, kept
+  // comfortably above the 0.30 collision radius so the late-but-snappy move
+  // still clears in time — even boosted, and even after the autonomy blend
+  // shrinks the offset. Returns the desired steer [-1,1].
+  const REACT = 0.42, MARGIN = 0.46;
   function autopilot(dt, audio, poseEnergy) {
-    wanderP += dt * (0.35 + audio.bands.total * 0.25 + poseEnergy * 0.7);
-    const wander = Math.sin(wanderP) * (0.40 + poseEnergy * 0.2) + Math.sin(wanderP * 0.37 + 1.3) * 0.18;
+    // Cruise line: a gentle wander around centre. Low amplitude on purpose, so
+    // the car hovers near the middle with organic drift rather than roaming.
+    wanderP += dt * (0.28 + audio.bands.total * 0.20 + poseEnergy * 0.5);
+    const cruise = Math.sin(wanderP) * (0.16 + poseEnergy * 0.12)
+                 + Math.sin(wanderP * 0.37 + 1.3) * 0.08;
 
-    // React across the FULL depth range (a car the instant it spawns at d=1) so
-    // the planner gets maximum lead time — far cars barely pull (urgency→0), but
-    // it pre-positions early, which is what makes it collision-free even fast.
-    let anyNear = false;
+    // Most urgent close car that actually threatens our current line.
+    let threat = null, threatUrg = -1;
     for (let k = 0; k < debris.length; k++) {
       const o = debris[k];
-      if (!o.hit && o.d >= -0.05) { anyNear = true; break; }
+      if (o.hit || o.d < -0.05 || o.d > REACT) continue;    // ignore passed + far cars
+      if (Math.abs(o.x - laneX) > MARGIN) continue;         // already clear of it → hold the line
+      const urg = 1 - o.d / REACT;                          // 0 at the zone edge → 1 right on top of us
+      if (urg > threatUrg) { threatUrg = urg; threat = o; }
     }
 
-    let best = 0, bestScore = -1e9;
-    for (let i = 0; i < NC; i++) {
-      const cand = -0.92 + (1.84 * i) / (NC - 1);
-      // mild centring preference + hysteresis (stay near the current choice) so
-      // the planner commits to a lane instead of flip-flopping mid-transition.
-      let score = -Math.abs(cand) * 0.10 - Math.abs(cand - aiX) * 0.12;
-      for (let k = 0; k < debris.length; k++) {
-        const o = debris[k];
-        if (o.hit || o.d < -0.05) continue;
-        const gap = Math.abs(cand - o.x);
-        if (gap < MARGIN) {
-          const urgency = 1 - Math.min(1, o.d);           // 1 imminent → 0 just-spawned
-          score -= (MARGIN - gap) * (2 + urgency * 38);   // steep penalty near imminent cars
-        }
-      }
-      if (score > bestScore) { bestScore = score; best = cand; }
+    if (!threat) {
+      // Coast back toward the cruising line — gentle, no snapping.
+      aiX += (cruise - aiX) * Math.min(1, dt * 1.6);
+    } else {
+      // Swerve to the side of the car we're already on (never cross its path);
+      // if that would run us off the road, take the other side instead.
+      const side = (laneX >= threat.x) ? 1 : -1;
+      let target = threat.x + side * MARGIN;
+      if (Math.abs(target) > 0.95) target = threat.x - side * MARGIN;
+      target = Math.max(-0.95, Math.min(0.95, target));
+      // Commit hard, sharpening as the car bears down, so a last-moment threat
+      // gets a decisive yank rather than a lazy drift.
+      aiX += (target - aiX) * Math.min(1, dt * (5 + threatUrg * 8));
     }
-    // Road clear → drift with the musical wander; cars present → commit to the
-    // chosen safe lane.
-    aiX = anyNear ? best : (best * 0.3 + wander);
     aiX = Math.max(-0.95, Math.min(0.95, aiX));
     return aiX;
   }
