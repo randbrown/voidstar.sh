@@ -379,7 +379,7 @@ export const DEFAULT_TASKLIST_ID = 'default-todo';
 export async function ensureDefaultTasklist() {
   const existing = await getTasklist(DEFAULT_TASKLIST_ID);
   if (existing) return existing;
-  const tl = createTasklist('TODO', { id: DEFAULT_TASKLIST_ID, isDefault: true });
+  const tl = createTasklist('todo', { id: DEFAULT_TASKLIST_ID, isDefault: true });
   await putTasklistRaw(tl);
   return tl;
 }
@@ -392,7 +392,7 @@ export async function ensureFolderTasklist(folderId) {
   const id = `todo-${folderId}`;
   const existing = await getTasklist(id);
   if (existing && !existing.deletedAt) return existing;
-  const tl = createTasklist('TODO', { id, folderId, isDefault: true });
+  const tl = createTasklist('todo', { id, folderId, isDefault: true });
   await putTasklistRaw(tl);
   return tl;
 }

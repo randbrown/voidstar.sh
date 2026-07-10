@@ -22,10 +22,21 @@ const DEVICE_NAME_KEY = `${NS}.deviceName`;
 const FILE_NAME = 'voidstar-mind-data.json';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
 
-const BACKUPS_FOLDER_NAME = 'voidstar mind backups';
+// Everything lives under ONE top-level folder in My Drive (voidstar_mind),
+// with the data file + attachments/ + backups/ subfolders inside it.
+const ROOT_FOLDER_NAME = 'voidstar_mind';
+const ROOT_FOLDER_ID_KEY = `${NS}.rootFolderId`;
+// Set once the legacy scattered layout has been re-homed under the root folder.
+const CONSOLIDATED_KEY = `${NS}.consolidated`;
+
+const BACKUPS_FOLDER_NAME = 'backups';
 const BACKUPS_FOLDER_ID_KEY = `${NS}.backupsFolderId`;
-const ATTACH_FOLDER_NAME = 'voidstar mind attachments';
+const ATTACH_FOLDER_NAME = 'attachments';
 const ATTACH_FOLDER_ID_KEY = `${NS}.attachFolderId`;
+// Pre-consolidation root-level object names, migrated into the root folder on
+// first sync (the data file was a loose root file; these two were root folders).
+const LEGACY_ATTACH_FOLDER_NAME = 'voidstar mind attachments';
+const LEGACY_BACKUPS_FOLDER_NAME = 'voidstar mind backups';
 const HISTORY_PREFIX = 'voidstar-mind-data-'; // + <ISO>.json
 const LAST_HISTORY_KEY = `${NS}.lastHistoryAt`;
 const HISTORY_KEEP = 10;
@@ -175,10 +186,29 @@ export async function getDriveToken({ interactive = true } = {}) {
 // ── Drive REST helpers ──
 
 async function findDataFiles(token) {
+  const root = await getRootFolderId(token);
+  const params = new URLSearchParams({
+    q: `name='${FILE_NAME}' and '${root}' in parents and trashed=false`,
+    spaces: 'drive',
+    fields: 'files(id,name,modifiedTime)',
+    orderBy: 'modifiedTime desc',
+    pageSize: '10',
+  });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Drive search failed: ${res.status}`);
+  return (await res.json()).files || [];
+}
+
+// Data files by name ANYWHERE in Drive (any parent) — used only by the one-time
+// migration to find the legacy loose root file before it's moved under the root
+// folder. Includes `parents` so re-parenting knows what to remove.
+async function findDataFilesAnywhere(token) {
   const params = new URLSearchParams({
     q: `name='${FILE_NAME}' and trashed=false`,
     spaces: 'drive',
-    fields: 'files(id,name,modifiedTime)',
+    fields: 'files(id,name,parents,modifiedTime)',
     orderBy: 'modifiedTime desc',
     pageSize: '10',
   });
@@ -206,7 +236,8 @@ async function readJsonFile(token, fileId) {
 }
 
 async function createFile(token, data) {
-  const metadata = { name: FILE_NAME, mimeType: 'application/json' };
+  const root = await getRootFolderId(token);
+  const metadata = { name: FILE_NAME, mimeType: 'application/json', parents: [root] };
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
   form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }), FILE_NAME);
@@ -229,11 +260,16 @@ async function updateFile(token, fileId, data) {
   return res.json();
 }
 
-async function findOrCreateFolder(token, name, cacheKey) {
+// Find (or create) a folder by name, optionally scoped to / created inside a
+// parent folder. `parentId` omitted → Drive root (used for the top-level
+// voidstar_mind folder itself).
+async function findOrCreateFolder(token, name, cacheKey, parentId = '') {
   const cached = localStorage.getItem(cacheKey);
   if (cached) return cached;
+  const q = [`name='${name}'`, `mimeType='application/vnd.google-apps.folder'`, 'trashed=false'];
+  if (parentId) q.push(`'${parentId}' in parents`);
   const params = new URLSearchParams({
-    q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    q: q.join(' and '),
     spaces: 'drive',
     fields: 'files(id,name)',
     pageSize: '1',
@@ -244,10 +280,12 @@ async function findOrCreateFolder(token, name, cacheKey) {
   if (!res.ok) throw new Error(`Drive folder search failed: ${res.status}`);
   let folderId = (await res.json()).files?.[0]?.id;
   if (!folderId) {
+    const body = { name, mimeType: 'application/vnd.google-apps.folder' };
+    if (parentId) body.parents = [parentId];
     const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' }),
+      body: JSON.stringify(body),
     });
     if (!createRes.ok) throw new Error(`Drive folder create failed: ${createRes.status}`);
     folderId = (await createRes.json()).id;
@@ -256,9 +294,92 @@ async function findOrCreateFolder(token, name, cacheKey) {
   return folderId;
 }
 
+// The single top-level folder that holds everything (data file + subfolders).
+async function getRootFolderId(token) {
+  return findOrCreateFolder(token, ROOT_FOLDER_NAME, ROOT_FOLDER_ID_KEY);
+}
+
+// One-time migration to the single-folder layout: move the legacy loose data
+// file and the two legacy root folders under voidstar_mind (renaming the
+// subfolders to attachments/ and backups/). Idempotent, guarded by a flag;
+// works under drive.file because the app created every one of these files.
+async function migrateToRootFolder(token) {
+  if (localStorage.getItem(CONSOLIDATED_KEY)) return;
+  try {
+    const root = await getRootFolderId(token);
+
+    // Move any root-level data file(s) into the folder.
+    for (const f of await findDataFilesAnywhere(token)) {
+      if (!(f.parents || []).includes(root)) await reparentInto(token, f.id, root);
+    }
+
+    // Re-home + rename the legacy subfolders if they still exist at root.
+    const legacyAttach = await findFolderByName(token, LEGACY_ATTACH_FOLDER_NAME, root);
+    if (legacyAttach) {
+      await reparentInto(token, legacyAttach, root, { name: ATTACH_FOLDER_NAME });
+      localStorage.setItem(ATTACH_FOLDER_ID_KEY, legacyAttach);
+    }
+    const legacyBackups = await findFolderByName(token, LEGACY_BACKUPS_FOLDER_NAME, root);
+    if (legacyBackups) {
+      await reparentInto(token, legacyBackups, root, { name: BACKUPS_FOLDER_NAME });
+      localStorage.setItem(BACKUPS_FOLDER_ID_KEY, legacyBackups);
+    }
+
+    localStorage.setItem(CONSOLIDATED_KEY, String(Date.now()));
+  } catch (e) {
+    // Leave the flag unset so the next init retries. Normal ops still work:
+    // fresh installs simply create everything under the root folder.
+    console.warn('[mind-sync] folder consolidation deferred:', e.message);
+  }
+}
+
+// A folder by exact name, excluding one id (the root folder itself, so we never
+// match it). Returns the id or ''.
+async function findFolderByName(token, name, excludeId = '') {
+  const params = new URLSearchParams({
+    q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    spaces: 'drive',
+    fields: 'files(id,name)',
+    pageSize: '5',
+  });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) return '';
+  const hit = ((await res.json()).files || []).find(f => f.id !== excludeId);
+  return hit ? hit.id : '';
+}
+
+// Re-parent a file/folder into `parentId` (removing its current parents), with
+// an optional metadata patch (e.g. rename). No-op if already correctly placed.
+async function reparentInto(token, fileId, parentId, patch = {}) {
+  let parents = [];
+  try {
+    const meta = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (meta.ok) parents = (await meta.json()).parents || [];
+  } catch {}
+  const alreadyThere = parents.length === 1 && parents[0] === parentId;
+  if (alreadyThere && !Object.keys(patch).length) return;
+  const qs = new URLSearchParams({ addParents: parentId, fields: 'id' });
+  const removeParents = parents.filter(p => p !== parentId).join(',');
+  if (removeParents) qs.set('removeParents', removeParents);
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?${qs}`, {
+    method: 'PATCH',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Drive re-parent failed: ${res.status}`);
+}
+
 export async function initGdriveSync({ interactive = true } = {}) {
   const token = await getAccessToken({ interactive });
   if (!token) return null;
+
+  // Move any legacy scattered files under the single voidstar_mind folder
+  // before the first pull/push so scoped discovery is valid (one-time, guarded).
+  await migrateToRootFolder(token);
 
   return {
     async push(data) {
@@ -294,7 +415,7 @@ export async function initGdriveSync({ interactive = true } = {}) {
 
     // ── Attachment binaries ──
     async uploadAttachment(att, blob) {
-      const folderId = await findOrCreateFolder(token, ATTACH_FOLDER_NAME, ATTACH_FOLDER_ID_KEY);
+      const folderId = await findOrCreateFolder(token, ATTACH_FOLDER_NAME, ATTACH_FOLDER_ID_KEY, await getRootFolderId(token));
       const name = `${att.id}-${att.name || att.kind}`;
       const metadata = { name, parents: [folderId] };
       const form = new FormData();
@@ -330,7 +451,7 @@ async function writeHistorySnapshot(token, data, force = false) {
   const last = parseInt(localStorage.getItem(LAST_HISTORY_KEY) || '0', 10);
   if (!force && Date.now() - last < HISTORY_MIN_INTERVAL_MS) return;
 
-  const folderId = await findOrCreateFolder(token, BACKUPS_FOLDER_NAME, BACKUPS_FOLDER_ID_KEY);
+  const folderId = await findOrCreateFolder(token, BACKUPS_FOLDER_NAME, BACKUPS_FOLDER_ID_KEY, await getRootFolderId(token));
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const metadata = { name: `${HISTORY_PREFIX}${stamp}.json`, mimeType: 'application/json', parents: [folderId] };
   const form = new FormData();
@@ -373,7 +494,7 @@ async function listHistoryFiles(token, folderId) {
 }
 
 async function listHistory(token) {
-  const folderId = await findOrCreateFolder(token, BACKUPS_FOLDER_NAME, BACKUPS_FOLDER_ID_KEY);
+  const folderId = await findOrCreateFolder(token, BACKUPS_FOLDER_NAME, BACKUPS_FOLDER_ID_KEY, await getRootFolderId(token));
   return listHistoryFiles(token, folderId);
 }
 

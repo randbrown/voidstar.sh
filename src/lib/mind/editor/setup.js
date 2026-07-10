@@ -1,7 +1,7 @@
 // mind editor assembly — EditorView factory with input rules, keymap,
 // history, placeholder, and paste/drop file capture.
 
-import { EditorState, Plugin, PluginKey } from 'prosemirror-state';
+import { EditorState, Plugin, PluginKey, TextSelection } from 'prosemirror-state';
 import { EditorView, Decoration, DecorationSet } from 'prosemirror-view';
 import { keymap } from 'prosemirror-keymap';
 import { history, undo, redo } from 'prosemirror-history';
@@ -19,6 +19,7 @@ import { gapCursor } from 'prosemirror-gapcursor';
 import { schema } from './schema.js';
 import { parseMarkdown, serializeMarkdown } from './markdown.js';
 import { TaskItemView, ImageView } from './nodeviews.js';
+import { tokenize, matchRanges } from '../search-highlight.js';
 
 function buildInputRules() {
   const rules = [...smartQuotes, ellipsis, emDash];
@@ -131,6 +132,56 @@ function placeholderPlugin(text) {
   });
 }
 
+// ── Search-match highlighting (opened from a search result) ──
+// A live decoration layer over the text matched by the search tokens. Set via
+// a transaction meta ({ tokens }); recomputes as the doc changes so highlights
+// stay aligned until explicitly cleared.
+const searchKey = new PluginKey('mn-search');
+
+function computeMatches(doc, tokens) {
+  const matches = [];
+  if (tokens && tokens.length) {
+    doc.descendants((node, pos) => {
+      if (!node.isText) return;
+      for (const [s, e] of matchRanges(node.text || '', tokens)) {
+        matches.push({ from: pos + s, to: pos + e });
+      }
+    });
+  }
+  return matches;
+}
+
+function searchDeco(doc, matches) {
+  if (!matches.length) return DecorationSet.empty;
+  return DecorationSet.create(doc,
+    matches.map(m => Decoration.inline(m.from, m.to, { class: 'mn-search-hit' })));
+}
+
+function searchHighlightPlugin() {
+  return new Plugin({
+    key: searchKey,
+    state: {
+      init() { return { tokens: [], matches: [], deco: DecorationSet.empty }; },
+      apply(tr, prev) {
+        const meta = tr.getMeta(searchKey);
+        if (meta) {
+          const tokens = meta.tokens || [];
+          const matches = computeMatches(tr.doc, tokens);
+          return { tokens, matches, deco: searchDeco(tr.doc, matches) };
+        }
+        if (tr.docChanged && prev.tokens.length) {
+          const matches = computeMatches(tr.doc, prev.tokens);
+          return { tokens: prev.tokens, matches, deco: searchDeco(tr.doc, matches) };
+        }
+        return prev;
+      },
+    },
+    props: {
+      decorations(state) { return searchKey.getState(state).deco; },
+    },
+  });
+}
+
 function fileCapturePlugin(onFiles) {
   return new Plugin({
     props: {
@@ -166,6 +217,7 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, placehol
       dropCursor(),
       gapCursor(),
       placeholderPlugin(placeholder),
+      searchHighlightPlugin(),
       fileCapturePlugin((files, view) => onFiles?.(files, view)),
     ],
   });
@@ -209,6 +261,35 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, placehol
     insertLink(label, href) {
       const node = schema.text(label, [schema.marks.link.create({ href })]);
       view.dispatch(view.state.tr.replaceSelectionWith(node, false).scrollIntoView());
+    },
+    // ── Search-match highlighting ──
+    setHighlight(query) {
+      const tokens = tokenize(query);
+      view.dispatch(view.state.tr.setMeta(searchKey, { tokens }));
+      return searchKey.getState(view.state).matches.length;
+    },
+    clearHighlight() {
+      view.dispatch(view.state.tr.setMeta(searchKey, { tokens: [] }));
+    },
+    matchCount() {
+      return searchKey.getState(view.state).matches.length;
+    },
+    // Scroll match #index into view (wraps; collapsed caret, never a range, so
+    // a following keystroke inserts rather than replacing the matched text).
+    scrollToMatch(index) {
+      const { matches } = searchKey.getState(view.state);
+      if (!matches.length) return -1;
+      const i = ((index % matches.length) + matches.length) % matches.length;
+      const pos = matches[i].from;
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos, pos)).scrollIntoView());
+      return i;
+    },
+    scrollToFirstMatch() {
+      const { matches } = searchKey.getState(view.state);
+      if (!matches.length) return -1;
+      const pos = matches[0].from;
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos, pos)).scrollIntoView());
+      return 0;
     },
     focus: () => view.focus(),
     destroy: () => view.destroy(),

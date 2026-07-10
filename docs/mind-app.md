@@ -26,12 +26,24 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 
 ## Sync model
 
-- One JSON data file (`voidstar-mind-data.json`) at Drive root: notes, folders,
-  tasks, tasklists, attachment *metadata*, annotations, settings.
-- Attachment *binaries* are individual files in `voidstar mind attachments/`,
+- Everything lives under **one top-level `voidstar_mind/` folder** in My Drive
+  (created/discovered via `getRootFolderId`; `drive.file` scope, so the app only
+  sees files it made). Inside it:
+  - One JSON data file (`voidstar-mind-data.json`): notes, folders, tasks,
+    tasklists, attachment *metadata*, annotations, settings.
+  - `attachments/` — attachment binaries (below).
+  - `backups/` — rotating timestamped history copies.
+- Attachment *binaries* are individual files in the `attachments/` subfolder,
   uploaded serially (pending = `driveFileId:''`, so queue state survives tab
   death and rides the JSON); other devices lazy-download on first render
   (`setBlobFetcher` in `attachments.js`).
+- **Consolidation migration** (`migrateToRootFolder`, one-time, flag-guarded):
+  the earlier layout scattered three items at the Drive root (loose
+  `voidstar-mind-data.json` + `voidstar mind attachments/` +
+  `voidstar mind backups/`). On the first sync after upgrade the data file is
+  re-parented into `voidstar_mind/` and the two legacy folders are moved in and
+  renamed to `attachments/` / `backups/` (re-parenting works under `drive.file`
+  since the app owns them). Fresh installs just create everything nested.
 - Merge: per-record newer-wins with fill-fields (blank never erases content;
   `ATTACHMENT_FILL_FIELDS` protects OCR text/transcripts/driveFileId).
   Tombstones propagate deletes; latest timestamp wins.

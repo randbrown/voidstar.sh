@@ -8,6 +8,7 @@
 import * as store from '../store.js';
 import { query, allTags } from '../search.js';
 import { markdownToText } from '../editor/markdown.js';
+import { tokenize, markText, snippetHighlighted } from '../search-highlight.js';
 import { setTaskDoneEverywhere } from '../tasks-sync.js';
 import {
   hasClientId, needsReconnect, onSyncState, initGdriveSync, setSyncClient,
@@ -317,21 +318,29 @@ function folderBar(folders, folderId) {
   return bar;
 }
 
+// Deep-link into a note, carrying the active search query so the editor can
+// highlight matches + scroll to the first one.
+function noteHash(id) {
+  return `#note/${id}${_q ? `?q=${encodeURIComponent(_q)}` : ''}`;
+}
+
 function noteCard(entry, folders, dimmed) {
   const n = entry.note;
+  const tokens = _q ? tokenize(_q) : [];
   const card = el('div', `mn-card mn-notecard ${dimmed ? 'mn-dimcard' : ''}`);
-  card.addEventListener('click', () => navigate(`#note/${n.id}`));
+  card.addEventListener('click', () => navigate(noteHash(n.id)));
 
   const row = el('div', 'mn-card-titlerow');
   if (n.pinned) row.appendChild(el('span', 'mn-pin-dot', '&#9733;'));
   if (n.conflictOf) row.appendChild(el('span', 'mn-conflict-badge', 'conflict'));
-  row.appendChild(el('span', 'mn-card-title', esc(n.title)));
+  row.appendChild(el('span', 'mn-card-title', markText(n.title, tokens)));
   row.appendChild(el('span', 'mn-card-time', timeAgo(n.updatedAt)));
   card.appendChild(row);
 
   const body = markdownToText(n.body);
-  const snippet = body.split('\n').filter(l => l.trim() && l.trim() !== n.title.trim()).join(' · ').slice(0, 160);
-  if (snippet) card.appendChild(el('div', 'mn-card-snippet', esc(snippet)));
+  const flat = body.split('\n').filter(l => l.trim() && l.trim() !== n.title.trim()).join(' · ');
+  const snippet = snippetHighlighted(flat, tokens, { max: 160 });
+  if (snippet) card.appendChild(el('div', 'mn-card-snippet', snippet));
 
   const metaBits = [];
   const path = n.folderId ? store.folderPath(folders, n.folderId) : '';
@@ -346,6 +355,7 @@ function noteCard(entry, folders, dimmed) {
 }
 
 function taskHitRow(task, dimmed) {
+  const tokens = _q ? tokenize(_q) : [];
   const row = el('div', `mn-card mn-taskhit ${dimmed ? 'mn-dimcard' : ''}`);
   const cb = el('input');
   cb.type = 'checkbox';
@@ -356,9 +366,9 @@ function taskHitRow(task, dimmed) {
     refresh();
   });
   row.appendChild(cb);
-  row.appendChild(el('span', `mn-task-text ${task.done ? 'mn-struck' : ''}`, esc(task.text)));
+  row.appendChild(el('span', `mn-task-text ${task.done ? 'mn-struck' : ''}`, markText(task.text, tokens)));
   row.addEventListener('click', () => {
-    navigate(task.sourceNoteId ? `#note/${task.sourceNoteId}` : `#tasks/${task.listId}`);
+    navigate(task.sourceNoteId ? noteHash(task.sourceNoteId) : `#tasks/${task.listId}`);
   });
   return row;
 }
@@ -392,7 +402,7 @@ async function renderTodoCard(wrap, folders, folderId, scope) {
   const folderName = folderId ? (folders.find(f => f.id === folderId)?.name || '') : '';
   const head = el('div', 'mn-todo-head');
   head.appendChild(el('span', 'mn-pin-dot', '&#9733;'));
-  head.appendChild(el('span', 'mn-card-title', `TODO${folderName ? ` · ${esc(folderName)}` : ''}`));
+  head.appendChild(el('span', 'mn-card-title', `todo${folderName ? ` · ${esc(folderName)}` : ''}`));
   head.appendChild(el('span', 'mn-todo-count', openCount ? `${openCount} open` : 'clear'));
   head.appendChild(el('span', 'mn-todo-chevron', expanded ? '&#9662;' : '&#9656;'));
   head.addEventListener('click', () => {
