@@ -1,8 +1,9 @@
-// Settings — export/import, snapshots, storage info. Drive sync arrives in
-// a later phase; the section is stubbed so the layout is stable.
+// Settings — export/import (incl. document import + single-doc markdown export),
+// snapshots, storage info, audio, OCR, and Google Drive sign-in + sync.
 
 import * as store from '../store.js';
-import { buildExportZip, downloadBlob, stamp } from '../export.js';
+import { buildExportZip, buildNotesMarkdownDoc, downloadBlob, stamp } from '../export.js';
+import { openImportDocModal } from './import-doc-modal.js';
 import { navigate, refresh, getDockPos, setDockPos, DOCK_POSITIONS } from '../app.js';
 import { el, esc, btn, topBar, confirmBox, timeAgo } from '../ui.js';
 
@@ -58,6 +59,13 @@ export async function renderSettings(root) {
     downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
       `mind-data-${stamp()}.json`);
   }));
+  row.appendChild(btn('export .md (doc)', '', async (e) => {
+    e.target.disabled = true;
+    try {
+      const md = await buildNotesMarkdownDoc();
+      downloadBlob(new Blob([md], { type: 'text/markdown' }), `mind-doc-${stamp()}.md`);
+    } finally { e.target.disabled = false; }
+  }));
 
   const importInput = el('input');
   importInput.type = 'file';
@@ -80,6 +88,7 @@ export async function renderSettings(root) {
   });
   row.appendChild(importInput);
   row.appendChild(btn('import .json', '', () => importInput.click()));
+  row.appendChild(btn('import document…', '', () => openImportDocModal()));
   row.appendChild(btn('trash', '', () => navigate('#trash')));
   dataCard.appendChild(row);
   root.appendChild(dataCard);
@@ -139,42 +148,25 @@ export async function renderSettings(root) {
   const syncCard = el('div', 'mn-card');
   syncCard.appendChild(el('div', 'mn-card-title', 'google drive sync'));
   syncCard.appendChild(el('div', 'mn-note-meta',
-    'syncs through YOUR Google Drive using your own OAuth client id (drive.file scope — the app can only touch files it creates). data file + attachments folder + rotating history live at your Drive root.'));
-
-  const cidRow = el('div', 'mn-actions');
-  const cidInput = el('input', 'mn-input');
-  cidInput.type = 'text';
-  cidInput.placeholder = 'OAuth client id (…apps.googleusercontent.com)';
-  cidInput.style.flex = '1 1 16rem';
-  cidInput.value = localStorage.getItem('voidstar.mind.gdrive.clientId') || '';
-  cidRow.appendChild(cidInput);
-  cidRow.appendChild(btn('save', '', () => {
-    gd.setClientId(cidInput.value.trim());
-    refresh();
-  }));
-  syncCard.appendChild(cidRow);
-
-  const devRow = el('div', 'mn-actions');
-  const devInput = el('input', 'mn-input');
-  devInput.type = 'text';
-  devInput.placeholder = 'device name (for conflict copies)';
-  devInput.value = gd.getDeviceName();
-  devInput.addEventListener('change', () => gd.setDeviceName(devInput.value.trim()));
-  devRow.appendChild(devInput);
-  syncCard.appendChild(devRow);
+    'sync your notes across devices through YOUR Google Drive (drive.file scope — the app only touches files it creates). data file + attachments folder + rotating history live at your Drive root.'));
 
   const statusLine = el('div', 'mn-note-meta');
   const drawStatus = () => {
     const state = gd.hasClientId()
-      ? (gd.needsReconnect() ? 'configured — reconnect needed' : (gd.isSyncEnabled() ? 'connected' : 'not connected'))
-      : 'no client id set';
-    statusLine.innerHTML = `status: ${state} · last sync: ${gd.formatLastBackup()}`;
+      ? (gd.needsReconnect() ? 'signed out — reconnect' : (gd.isSyncEnabled() ? 'connected' : 'not connected'))
+      : 'sign-in not configured';
+    const via = !gd.usingAppClientId() && gd.getClientIdOverride() ? ' · own client id' : '';
+    statusLine.innerHTML = `status: ${state}${via} · last sync: ${gd.formatLastBackup()}`;
   };
   drawStatus();
   syncCard.appendChild(statusLine);
 
   const actRow = el('div', 'mn-actions');
-  actRow.appendChild(btn('connect &amp; sync now', 'mn-btn-primary', async (e) => {
+  actRow.appendChild(btn('sign in with Google &amp; sync', 'mn-btn-primary', async (e) => {
+    if (!gd.hasClientId()) {
+      alert('Google sign-in isn’t configured on this deployment. Set your own OAuth client id under “advanced” below.');
+      return;
+    }
     e.target.disabled = true;
     try {
       await gd.ensureDriveAccess();
@@ -198,6 +190,35 @@ export async function renderSettings(root) {
     drawStatus();
   }));
   syncCard.appendChild(actRow);
+
+  const devRow = el('div', 'mn-actions');
+  const devInput = el('input', 'mn-input');
+  devInput.type = 'text';
+  devInput.placeholder = 'device name (for conflict copies)';
+  devInput.value = gd.getDeviceName();
+  devInput.addEventListener('change', () => gd.setDeviceName(devInput.value.trim()));
+  devRow.appendChild(devInput);
+  syncCard.appendChild(devRow);
+
+  // Advanced: override the app-owned OAuth client id with your own (self-host).
+  const adv = el('details', 'mn-advanced');
+  adv.appendChild(el('summary', '', 'advanced: use your own OAuth client id'));
+  adv.appendChild(el('div', 'mn-note-meta',
+    'optional. leave empty to use this site’s sign-in. a self-hosted copy can set its own Google Cloud OAuth client id here.'));
+  const cidRow = el('div', 'mn-actions');
+  const cidInput = el('input', 'mn-input');
+  cidInput.type = 'text';
+  cidInput.placeholder = 'OAuth client id (…apps.googleusercontent.com)';
+  cidInput.style.flex = '1 1 16rem';
+  cidInput.value = gd.getClientIdOverride();
+  cidRow.appendChild(cidInput);
+  cidRow.appendChild(btn('save', '', () => {
+    gd.setClientId(cidInput.value.trim());
+    refresh();
+  }));
+  adv.appendChild(cidRow);
+  syncCard.appendChild(adv);
+
   root.appendChild(syncCard);
 
   const about = el('div', 'mn-note-meta mn-dim');

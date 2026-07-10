@@ -10,7 +10,7 @@ import { renderBandcampEmbed, renderSoundcloudEmbed } from './media.js';
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
@@ -2973,23 +2973,16 @@ export async function renderSettings(root) {
 
   // Google Drive backup
   const gdriveSection = el('div', 'sl-section');
-  const currentClientId = localStorage.getItem('voidstar.setlist.gdrive.clientId') || '';
   gdriveSection.innerHTML = `
     <div class="sl-section-title">google drive backup</div>
     <div class="sl-hint" style="margin-bottom:0.5rem">
       Back up your setlist data, notes, chart links, and annotations to Google Drive so you can restore them on any device.
-      Requires a Google Cloud OAuth2 client ID with Drive API enabled.
+      Sign in with your Google account (drive.file scope — the app only touches files it creates).
     </div>
-    <label class="sl-label">Google OAuth Client ID
-      <input class="sl-input" id="sl-gdrive-client-id" value="${currentClientId}" placeholder="xxxx.apps.googleusercontent.com">
-    </label>
   `;
-  const clientIdInput = gdriveSection.querySelector('#sl-gdrive-client-id');
-  clientIdInput?.addEventListener('change', () => {
-    localStorage.setItem('voidstar.setlist.gdrive.clientId', clientIdInput.value.trim());
-  });
   const gdriveStatus = el('div', 'sl-hint',
-    isGdriveBackupEnabled() ? `Last backup: ${formatLastBackup()}` : '');
+    isGdriveBackupEnabled() ? `Last backup: ${formatLastBackup()}`
+      : (hasClientId() ? '' : 'Sign-in isn’t configured on this deployment — set your own OAuth client ID under “advanced”.'));
 
   const gdriveActions = el('div', 'sl-action-bar');
   gdriveActions.appendChild(btn('back up now', 'sl-btn-primary sl-btn-sm', () =>
@@ -3000,6 +2993,23 @@ export async function renderSettings(root) {
   }));
   gdriveSection.appendChild(gdriveActions);
   gdriveSection.appendChild(gdriveStatus);
+
+  // Advanced: override the app-owned OAuth client id with your own (self-host).
+  const gdriveAdv = el('details', 'sl-advanced');
+  gdriveAdv.style.marginTop = '0.5rem';
+  const gdriveAdvSummary = el('summary', 'sl-hint');
+  gdriveAdvSummary.textContent = 'advanced: use your own OAuth client id';
+  gdriveAdvSummary.style.cursor = 'pointer';
+  gdriveAdv.appendChild(gdriveAdvSummary);
+  const advLabel = el('label', 'sl-label');
+  advLabel.textContent = 'Google OAuth Client ID';
+  const advInput = el('input', 'sl-input');
+  advInput.placeholder = 'xxxx.apps.googleusercontent.com';
+  advInput.value = getClientIdOverride();
+  advInput.addEventListener('change', () => setClientId(advInput.value.trim()));
+  advLabel.appendChild(advInput);
+  gdriveAdv.appendChild(advLabel);
+  gdriveSection.appendChild(gdriveAdv);
 
   // ── Version safeguards: undo the last backup merge/restore/import, or
   // restore an earlier Drive version. Every restore snapshots current state

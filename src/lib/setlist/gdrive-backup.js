@@ -11,6 +11,7 @@
 // songs to charts and tracks".
 
 import { mergeRecord, SONG_FILL_FIELDS, SETLIST_FILL_FIELDS } from './store.js';
+import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
 
 const CLIENT_ID_KEY = 'voidstar.setlist.gdrive.clientId';
 const TOKEN_KEY = 'voidstar.setlist.gdrive.token';
@@ -50,13 +51,26 @@ function clearDirtyIf(stamp) { if (getDirtyStamp() === stamp) localStorage.remov
 
 let _gisLoaded = false;
 
+// Prefer a user-entered override (advanced / self-host); otherwise the
+// app-owned client id, so "Sign in with Google" works with zero setup.
 function getClientId() {
+  return localStorage.getItem(CLIENT_ID_KEY) || GOOGLE_CLIENT_ID;
+}
+
+export function getClientIdOverride() {
   return localStorage.getItem(CLIENT_ID_KEY) || '';
 }
 
-export function setClientId(id) {
-  localStorage.setItem(CLIENT_ID_KEY, id);
+export function usingAppClientId() {
+  return !localStorage.getItem(CLIENT_ID_KEY) && !!GOOGLE_CLIENT_ID;
 }
+
+export function setClientId(id) {
+  if (id) localStorage.setItem(CLIENT_ID_KEY, id);
+  else localStorage.removeItem(CLIENT_ID_KEY); // clearing falls back to the app default
+}
+
+export function hasClientId() { return !!getClientId(); }
 
 export function isGdriveBackupEnabled() {
   return !!getClientId() && !!getStoredToken();

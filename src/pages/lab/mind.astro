@@ -678,6 +678,73 @@ const buildStamp = readBuildStamp();
     .mn-modal .mn-input { width: 100%; }
     .mn-modal-row { display: flex; justify-content: flex-end; gap: 0.4rem; }
 
+    /* ── Import-document modal ── */
+    .mn-modal-wide { width: min(42rem, 100%); max-height: 82dvh; overflow-y: auto; }
+    .mn-doc-paste {
+      width: 100%;
+      min-height: 6rem;
+      max-height: 14rem;
+      resize: vertical;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      line-height: 1.4;
+    }
+    .mn-import-opts { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+    .mn-import-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      cursor: pointer;
+    }
+    .mn-import-summary { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-dim); }
+    .mn-import-warn { color: var(--amber); margin-top: 0.2rem; }
+    .mn-import-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      max-height: 38dvh;
+      overflow-y: auto;
+      border: 1px solid var(--border-2);
+      border-radius: var(--radius, 6px);
+      padding: 0.4rem;
+    }
+    .mn-import-row { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.25rem 0.1rem; }
+    .mn-import-row input[type="checkbox"] { margin-top: 0.2rem; flex: 0 0 auto; }
+    .mn-import-rowmain { min-width: 0; flex: 1 1 auto; }
+    .mn-import-rowtitle { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+    .mn-import-rowname { font-size: 0.85rem; overflow-wrap: anywhere; }
+    .mn-import-rowsnippet {
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .mn-date-badge {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      color: var(--cyan);
+      border: 1px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+      border-radius: 999px;
+      padding: 0.05rem 0.4rem;
+    }
+    .mn-date-badge-daily { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 50%, transparent); }
+    .mn-import-badge {
+      font-family: var(--font-mono);
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-dim);
+      border: 1px solid var(--border-2);
+      border-radius: 999px;
+      padding: 0.05rem 0.4rem;
+    }
+    .mn-import-badge-dup { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
+    .mn-advanced summary { cursor: pointer; font-size: 0.78rem; color: var(--text-dim); font-family: var(--font-mono); }
+    .mn-advanced[open] summary { margin-bottom: 0.4rem; }
+
     @media (max-width: 480px) {
       .mn-head-actions .mn-btn { padding: 0.5rem 0.6rem; font-size: 0.8rem; }
       .mn-controls { flex-wrap: wrap; }

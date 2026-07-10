@@ -8,9 +8,11 @@
 //     binaries lazy-fetch per device — see attachments-drive.js)
 //
 // Auth = Google Identity Services token client, drive.file scope (only files
-// this app creates), user-supplied OAuth client ID, token cached ~1h.
+// this app creates), app-owned OAuth client ID by default (user override
+// possible), token cached ~1h.
 
 import { mergeRecord, NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS } from './store.js';
+import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
 
 const NS = 'voidstar.mind.gdrive';
 const CLIENT_ID_KEY = `${NS}.clientId`;
@@ -47,8 +49,15 @@ function setLastCycleAt(ts) { localStorage.setItem(LAST_CYCLE_KEY, String(ts)); 
 
 let _gisLoaded = false;
 
-function getClientId() { return localStorage.getItem(CLIENT_ID_KEY) || ''; }
-export function setClientId(id) { localStorage.setItem(CLIENT_ID_KEY, id); }
+// Prefer a user-entered override (advanced / self-host); otherwise the
+// app-owned client id, so "Sign in with Google" works with zero setup.
+function getClientId() { return localStorage.getItem(CLIENT_ID_KEY) || GOOGLE_CLIENT_ID; }
+export function getClientIdOverride() { return localStorage.getItem(CLIENT_ID_KEY) || ''; }
+export function usingAppClientId() { return !localStorage.getItem(CLIENT_ID_KEY) && !!GOOGLE_CLIENT_ID; }
+export function setClientId(id) {
+  if (id) localStorage.setItem(CLIENT_ID_KEY, id);
+  else localStorage.removeItem(CLIENT_ID_KEY); // clearing falls back to the app default
+}
 export function hasClientId() { return !!getClientId(); }
 
 export function getDeviceName() {
@@ -155,6 +164,12 @@ async function getAccessToken({ interactive = true } = {}) {
 export async function ensureDriveAccess() {
   const token = await getAccessToken({ interactive: true });
   if (!token) throw new Error('Google Drive not connected.');
+}
+
+// The current Drive access token (for callers like the Drive Picker that need
+// to authorize their own requests). Same gesture rules as ensureDriveAccess.
+export async function getDriveToken({ interactive = true } = {}) {
+  return getAccessToken({ interactive });
 }
 
 // ── Drive REST helpers ──

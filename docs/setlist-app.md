@@ -47,7 +47,7 @@ config). Tokens and per-device display prefs never ride it:
 | Key | Store | Backed up? | What |
 |---|---|---|---|
 | `voidstar.setlist.sources` | localStorage | ✓ `sources` | worker URL + personal/community Drive chart-folder ids (Settings) |
-| `voidstar.setlist.gdrive.clientId` | localStorage | ✓ `settings.gdriveClientId` | Google OAuth client id (public identifier, not a secret) |
+| `voidstar.setlist.gdrive.clientId` | localStorage | ✓ `settings.gdriveClientId` | Google OAuth client id — now an **optional override** (Settings → advanced): sign-in defaults to the app-owned client id (`src/lib/qualia/google-config.js`, `PUBLIC_GOOGLE_CLIENT_ID`); this key only overrides it for a self-host. Public identifier, not a secret |
 | `voidstar.setlist.spotify.clientId` | localStorage | ✓ `settings.spotifyClientId` | Spotify client id — shared by the worker and the PKCE login |
 | `voidstar.setlist.gdrive.token` | localStorage | ✗ | cached OAuth access token (~1 h) |
 | `voidstar.setlist.gdrive.lastBackupAt` / `.lastHistoryAt` | localStorage | ✗ | backup + history-rotation throttle timestamps |
@@ -274,6 +274,9 @@ This codebase intentionally keeps two similarly-named ideas separate:
   local dataset to/from the user's own Google Drive (OAuth via Google
   Identity Services, `drive.file` scope). This is about **not losing your
   data** and having it available across devices (Android/Mac/Windows).
+  Auth uses an **app-owned OAuth client id** ("Sign in with Google";
+  `src/lib/qualia/google-config.js`), with the Settings → advanced client-id
+  field as an optional self-host override — mirrors the mind app's change.
   - Auto-backup: every local write is debounced and pushed automatically
     once connected.
   - Manual: "back up now" / "restore from drive" buttons in Settings.

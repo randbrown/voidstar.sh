@@ -34,6 +34,68 @@ export async function buildExportZip() {
   return zipStore(files);
 }
 
+// ── Single-document markdown export ──
+// One readable .md where each note is a heading with its date + tags inline,
+// round-trip-parseable by import-doc.js. Mirrors the notes/*.md tree above but
+// concatenated into a single file with metadata comments for lossless re-import.
+
+export const DOC_HEADING_LEVEL = 2; // '##' — matches the import default
+
+function isoDay(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// One note as a doc block: heading with a human-visible date, a lossless
+// `<!-- mind … -->` metadata comment (parsed back by import-doc.js), then body.
+export function noteToDocBlock(note, opts = {}) {
+  const { headingLevel = DOC_HEADING_LEVEL, includeComment = true, includeIds = true } = opts;
+  const iso = isoDay(note.createdAt);
+  const hashes = '#'.repeat(Math.min(6, Math.max(1, headingLevel)));
+  const parts = [`${hashes} ${note.title || 'untitled'}${iso ? ` — ${iso}` : ''}`];
+  if (includeComment) {
+    const bits = [];
+    if (iso) bits.push(`date=${iso}`);
+    if (note.tags?.length) bits.push(`tags=${note.tags.join(',')}`);
+    if (note.meta?.daily) bits.push(`daily=${note.meta.daily}`);
+    if (includeIds && note.id) bits.push(`id=${note.id}`);
+    if (bits.length) parts.push(`<!-- mind ${bits.join(' ')} -->`);
+  }
+  parts.push('');
+  parts.push((note.body || '').trim());
+  return `${parts.join('\n').trimEnd()}\n`;
+}
+
+// Pure builder (node-testable): an array of notes → the single-doc string.
+export function buildDocFromNotes(notes, opts = {}) {
+  const { order = 'newest-first', includeComment = true } = opts;
+  const live = notes.filter((n) => !n.deletedAt);
+  live.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); // newest first
+  if (order === 'oldest-first') live.reverse();
+  const header = includeComment
+    ? `<!-- mind-export v=1 order=${order} count=${live.length} -->\n# mind notes — ${isoDay(Date.now())}\n\n`
+    : `# mind notes — ${isoDay(Date.now())}\n\n`;
+  return header + live.map((n) => noteToDocBlock(n, opts)).join('\n');
+}
+
+// Store-backed export, optionally scoped to a folder (incl. subfolders) or tag.
+export async function buildNotesMarkdownDoc(opts = {}) {
+  const { folderId = '', tag = '' } = opts;
+  let notes = await store.getAllNotes();
+  if (folderId) {
+    const folders = await store.getAllFolders();
+    const scope = store.folderScope(folders, folderId);
+    notes = notes.filter((n) => scope.has(n.folderId));
+  }
+  if (tag) {
+    const t = tag.replace(/^#/, '').trim().toLowerCase();
+    notes = notes.filter((n) => (n.tags || []).includes(t));
+  }
+  return buildDocFromNotes(notes, opts);
+}
+
 function guessExt(mime) {
   const map = {
     'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif',
