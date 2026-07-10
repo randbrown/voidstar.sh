@@ -7,7 +7,7 @@ import { revokeObjectUrls } from './attachments.js';
 import { processPendingOcr } from './ocr.js';
 import {
   initGdriveSync, isSyncing, setSyncClient, pullMergePushIfStale,
-  debouncedPush, watchConnectivity, hasClientId,
+  debouncedPush, watchConnectivity, hasClientId, markShardDirty,
 } from './gdrive-sync.js';
 import { pushPendingAttachments, wireLazyBlobFetch } from './attachments-drive.js';
 import { renderHome } from './views/home.js';
@@ -194,8 +194,9 @@ export function initMindApp(root) {
 
   // Every write invalidates the search index and (when Drive is connected)
   // schedules a debounced merge-push.
-  store.setOnWrite(() => {
+  store.setOnWrite((info) => {
     invalidateIndex();
+    markShardDirty(info); // record which shard changed so push re-hashes only it
     debouncedPush(() => store.exportAll(), (merged) => store.importAll(merged));
   });
   wireLazyBlobFetch();

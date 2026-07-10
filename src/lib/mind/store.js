@@ -130,14 +130,14 @@ async function put(storeName, record) {
   const { store, done } = await tx(storeName, 'readwrite');
   store.put(record);
   await done;
-  _onWrite?.();
+  _onWrite?.({ store: storeName, key: record?.id ?? record?.key });
 }
 
 async function del(storeName, id) {
   const { store, done } = await tx(storeName, 'readwrite');
   store.delete(id);
   await done;
-  _onWrite?.();
+  _onWrite?.({ store: storeName, key: id });
 }
 
 // Silent variants — write without firing _onWrite (local-only stores: blob
@@ -611,6 +611,9 @@ export async function replaceAll(data) {
   await clearStore(ATTACHMENTS);
   await clearStore(ANNOTATIONS);
   await importAll(data);
+  // clearStore fires no hook, so records that a restore REMOVED aren't tracked
+  // per-shard; a blanket write hook forces a full re-hash so their shards shrink.
+  _onWrite?.();
 }
 
 // Hard-delete tombstones past TTL, plus their local blobs. Runs at init. Uses

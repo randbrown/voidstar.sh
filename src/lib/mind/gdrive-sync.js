@@ -16,7 +16,7 @@ import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
 import {
   splitIntoShards, emptyShard, hashShard, hashIndex, shardName, parseShardName,
   mergeById, mergeShardData, mergeIndexData, computeDelta, isEmptyDelta,
-  DEFAULT_SHARD_COUNT, SCHEMA_VERSION,
+  DEFAULT_SHARD_COUNT, SCHEMA_VERSION, bucket,
 } from './shard.js';
 
 // Full-dataset merge lives in shard.js now; re-exported for any external caller.
@@ -64,7 +64,11 @@ const INDEX_FILE_NAME = 'index.json';
 // triggers a redundant re-upload); `foldStamp` = the legacy monolith's last
 // folded modifiedTime. Persisted so an interrupted cycle recovers correctly.
 const SHARD_STATE_KEY = `${NS}.shardState`;
-const EMPTY_SHARD_HASH = hashShard(emptyShard());
+// Which shard files changed locally since the last push, so push re-hashes only
+// those instead of the whole dataset: { all, buckets:[…], index }. `all` (or an
+// absent key = first run on this version) means "re-hash everything", the safe
+// default. Persisted so an interrupted session's pending shards survive.
+const DIRTY_SHARDS_KEY = `${NS}.dirtyShards`;
 
 // ── Freshness bookkeeping (see setlist fork for the full rationale) ──
 const DIRTY_KEY = `${NS}.dirtyAt`;
@@ -97,6 +101,54 @@ function clearFileHash(name) {
   if (s.files[name]) { delete s.files[name].hash; saveShardState(s); }
 }
 
+// ── Dirty-shard tracking (which shards to re-hash on the next push) ──
+const SHARD_STORES = new Set(['notes', 'tasks', 'attachments', 'annotations']);
+const INDEX_STORES = new Set(['folders', 'tasklists']);
+
+function getDirtyShards() {
+  try {
+    const d = JSON.parse(localStorage.getItem(DIRTY_SHARDS_KEY));
+    if (d && Array.isArray(d.buckets)) return { all: !!d.all, buckets: d.buckets, index: !!d.index };
+  } catch {}
+  return { all: true, buckets: [], index: true }; // uninitialized → hash everything once
+}
+function saveDirtyShards(d) {
+  try { localStorage.setItem(DIRTY_SHARDS_KEY, JSON.stringify(d)); } catch {}
+}
+
+// Called from the store write hook (via app.js) for every mutation. A write with
+// no key (blanket: tombstone purge, snapshot restore) marks ALL — the safe
+// superset. Blobs/snapshots never reach here (silent writes fire no hook).
+export function markShardDirty(info) {
+  const d = getDirtyShards();
+  if (!info || info.key == null) { d.all = true; saveDirtyShards(d); return; }
+  if (SHARD_STORES.has(info.store)) {
+    const b = bucket(info.key, DEFAULT_SHARD_COUNT);
+    if (!d.buckets.includes(b)) { d.buckets.push(b); saveDirtyShards(d); }
+  } else if (INDEX_STORES.has(info.store)) {
+    if (!d.index) { d.index = true; saveDirtyShards(d); }
+  }
+}
+export function markIndexDirty() {
+  const d = getDirtyShards();
+  if (!d.index) { d.index = true; saveDirtyShards(d); }
+}
+
+// Read-and-clear the set for a push; requeue (union) on failure so nothing is
+// lost. Writes that land DURING a push repopulate the freshly-cleared set and
+// so survive to the next push.
+function drainDirtyShards() {
+  const d = getDirtyShards();
+  saveDirtyShards({ all: false, buckets: [], index: false });
+  return d;
+}
+function requeueDirtyShards(snap) {
+  const d = getDirtyShards();
+  const buckets = new Set(d.buckets);
+  for (const b of snap.buckets) buckets.add(b);
+  saveDirtyShards({ all: d.all || snap.all, buckets: [...buckets], index: d.index || snap.index });
+}
+
 let _gisLoaded = false;
 
 // Prefer a user-entered override (advanced / self-host); otherwise the
@@ -107,6 +159,7 @@ export function usingAppClientId() { return !localStorage.getItem(CLIENT_ID_KEY)
 export function setClientId(id) {
   if (id) localStorage.setItem(CLIENT_ID_KEY, id);
   else localStorage.removeItem(CLIENT_ID_KEY); // clearing falls back to the app default
+  markIndexDirty(); // the id override rides settings → index.json
 }
 export function hasClientId() { return !!getClientId(); }
 
@@ -390,37 +443,50 @@ async function pushSharded(token, dataset) {
   const shardsFolderId = await getShardsFolderId(token);
   const { index, shards } = splitIntoShards(dataset, DEFAULT_SHARD_COUNT);
   const uploaded = [];
+  const dirty = drainDirtyShards();
 
-  const idxHash = hashIndex(index);
-  if (getShardState().files[INDEX_FILE_NAME]?.hash !== idxHash) {
-    const cur = getShardState().files[INDEX_FILE_NAME];
-    const res = await uploadJsonFile(token, { name: INDEX_FILE_NAME, parentId: rootId, fileId: cur?.id, data: index });
-    setFileState(INDEX_FILE_NAME, { id: res.id, mtime: res.modifiedTime || '', hash: idxHash });
-    uploaded.push(INDEX_FILE_NAME);
-  }
-
-  const wantNames = new Set();
-  for (const [b, shard] of shards) {
-    const name = shardName(b);
-    wantNames.add(name);
-    const h = hashShard(shard);
-    const cur = getShardState().files[name];
-    if (cur?.hash !== h) {
-      const res = await uploadJsonFile(token, { name, parentId: shardsFolderId, fileId: cur?.id, data: shard });
-      setFileState(name, { id: res.id, mtime: res.modifiedTime || '', hash: h });
-      uploaded.push(name);
+  try {
+    // index.json — only when folders/tasklists/settings may have changed.
+    if (dirty.all || dirty.index) {
+      const idxHash = hashIndex(index);
+      const cur = getShardState().files[INDEX_FILE_NAME];
+      if (cur?.hash !== idxHash) {
+        const res = await uploadJsonFile(token, { name: INDEX_FILE_NAME, parentId: rootId, fileId: cur?.id, data: index });
+        setFileState(INDEX_FILE_NAME, { id: res.id, mtime: res.modifiedTime || '', hash: idxHash });
+        uploaded.push(INDEX_FILE_NAME);
+      }
     }
-  }
 
-  // A shard we track that now holds NO records → write explicit empty content to
-  // its stable file id (never trash+recreate — that churns modifiedTime and can
-  // re-trigger duplicate healing).
-  for (const [name, entry] of Object.entries(getShardState().files)) {
-    if (name === INDEX_FILE_NAME || wantNames.has(name) || parseShardName(name) === null) continue;
-    if (entry.hash === EMPTY_SHARD_HASH) continue;
-    const res = await uploadJsonFile(token, { name, parentId: shardsFolderId, fileId: entry.id, data: emptyShard() });
-    setFileState(name, { id: res.id, mtime: res.modifiedTime || '', hash: EMPTY_SHARD_HASH });
-    uploaded.push(name);
+    // Which buckets to (re)hash. `all` (first push / after a blanket write) →
+    // every populated bucket plus any tracked shard that may have emptied;
+    // otherwise just the buckets marked dirty since the last push. A bucket
+    // emptied by deletes is present in `dirty.buckets` but not in `shards`, so it
+    // falls back to explicit empty content (stable id, no trash+recreate).
+    let buckets;
+    if (dirty.all) {
+      buckets = new Set(shards.keys());
+      for (const name of Object.keys(getShardState().files)) {
+        const b = parseShardName(name);
+        if (b != null) buckets.add(b);
+      }
+    } else {
+      buckets = new Set(dirty.buckets);
+    }
+
+    for (const b of buckets) {
+      const name = shardName(b);
+      const shard = shards.get(b) || emptyShard();
+      const h = hashShard(shard);
+      const cur = getShardState().files[name];
+      if (cur?.hash !== h) {
+        const res = await uploadJsonFile(token, { name, parentId: shardsFolderId, fileId: cur?.id, data: shard });
+        setFileState(name, { id: res.id, mtime: res.modifiedTime || '', hash: h });
+        uploaded.push(name);
+      }
+    }
+  } catch (e) {
+    requeueDirtyShards(dirty); // retry these shards next cycle (uploaded ones no-op via hash)
+    throw e;
   }
 
   return { indexModifiedTime: getShardState().files[INDEX_FILE_NAME]?.mtime || '', uploaded };

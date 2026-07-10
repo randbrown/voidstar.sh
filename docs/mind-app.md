@@ -40,10 +40,11 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
     sync (Drive keeps native per-file revisions on each shard for the rest).
 - **Sharded sync** (`shard.js` pure core + `gdrive-sync.js` client) — an edit
   re-uploads one small shard, not the whole corpus:
-  - `push` splits the dataset, hashes each shard's *canonical* JSON (key- and
-    array-sorted, so two devices agree byte-for-byte), and uploads only files
-    whose hash diverged from the last-known-remote hash; each file's
-    `{id, mtime, hash}` is persisted the instant its own upload succeeds.
+  - `push` re-hashes only the shards a write actually touched (see dirty-tracking
+    below), comparing each shard's *canonical* JSON hash (key- and array-sorted,
+    so two devices agree byte-for-byte) to the last-known-remote hash and
+    uploading only the divergent ones; each file's `{id, mtime, hash}` is
+    persisted the instant its own upload succeeds.
   - `pull` downloads only shards whose `modifiedTime` advanced past our stamp and
     returns a **partial** remote; the cycle merges **full local ⋈ partial remote**
     (unchanged buckets are already fully local, so this is equivalent to a full
@@ -52,6 +53,13 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   - `peek` compares shard/index/monolith `modifiedTime`s in one listing.
   - Per-device state lives in `voidstar.mind.gdrive.shardState`
     (`{ files: { name → {id,mtime,hash} }, foldStamp }`).
+  - **Dirty-shard tracking**: the store write hook passes `{store,key}` to
+    `markShardDirty`, which records the touched bucket(s) (or `index`, or `all`
+    for a blanket write like a tombstone purge / snapshot restore) in
+    `voidstar.mind.gdrive.dirtyShards`. `push` drains that set and re-hashes only
+    those buckets — so a one-note edit hashes one shard, not the whole corpus.
+    First run on this version (absent key) defaults to `all` (a one-time full
+    re-hash); the set is requeued on a failed push so nothing is lost.
 - Attachment *binaries* are individual files in the `attachments/` subfolder,
   uploaded serially (pending = `driveFileId:''`, so queue state survives tab
   death and rides the JSON); other devices lazy-download on first render
@@ -100,9 +108,8 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   `'pre-import'` / `'pre-doc-import'` snapshots are always kept.
 - **Accepted v1 limits**: no cross-shard atomicity (a partial push can transiently
   expose a note before its folder/attachment shard lands — self-heals next cycle;
-  the UI already tolerates it); `push` hashes all shards each time (O(total) CPU,
-  bounded — write-hook dirty-tracking is a later optimization). The pure core is
-  covered by `node scripts/check-mind-shard.mjs` (`npm run check`).
+  the UI already tolerates it). The pure core is covered by
+  `node scripts/check-mind-shard.mjs` (`npm run check`).
 
 ## Conventions
 
