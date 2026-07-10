@@ -402,8 +402,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 
     .back-link { color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 0.35rem; }
     .back-link:hover { color: var(--accent); }
-    .brand-logo { display: block; width: 22px; height: 22px; transition: filter 0.15s ease, transform 0.15s ease; }
-    .back-link:hover .brand-logo { filter: drop-shadow(0 0 5px var(--accent)); transform: rotate(-8deg); }
+    .brand-logo { display: block; height: 24px; width: auto; transition: filter 0.15s ease, transform 0.15s ease; }
+    .back-link:hover .brand-logo { filter: brightness(1.2) drop-shadow(0 0 6px var(--accent)); transform: scale(1.06); }
     .experiment-title { color: var(--text); font-weight: 500; }
     .experiment-tag   { color: var(--accent); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     #fps     { color: var(--muted); min-width: 5ch; }
@@ -2541,13 +2541,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="topbar-titlerow">
     <div id="topbar-left">
       <a href="/" class="back-link" title="Back to voidstar.sh" aria-label="voidstar home">
-        <!-- voidstar logo mark: void circle + star glyph (mirrors favicon.svg) -->
-        <svg class="brand-logo" viewBox="0 0 32 32" width="22" height="22" fill="none" aria-hidden="true">
-          <circle cx="16" cy="16" r="14" fill="#05050d" stroke="#8b5cf6" stroke-width="1.5"/>
-          <path d="M16 6 L17.2 13.8 L24 12 L18.5 17 L22 24 L16 19.5 L10 24 L13.5 17 L8 12 L14.8 13.8 Z"
-                fill="#8b5cf6" opacity="0.9"/>
-          <circle cx="16" cy="16" r="14" fill="none" stroke="#22d3ee" stroke-width="0.5" opacity="0.4"/>
-        </svg>
+        <!-- voidstar cosmos-atom emblem (built by scripts/gen-logo-icons.mjs) -->
+        <img class="brand-logo" src="/voidstar-mark.png" alt="voidstar" width="38" height="24" />
       </a>
       <span class="experiment-title">qualia</span>
       <span class="experiment-tag">#livecoding station</span>
@@ -2689,12 +2684,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="30">cycle 30s</option>
           <option value="45">cycle 45s</option>
         </select>
-        <select id="cycle-style" class="ctrl-btn" title="Auto-cycle style — sequential: next quale in order · random: any other quale · progressive: start at the chosen dwell and gradually speed up to ~5s over the set">
+        <select id="cycle-style" class="ctrl-btn" title="Auto-cycle style — sequential: next quale in order · random: any other quale · progressive: start at the chosen dwell and gradually speed up to ~5s across the set (τ). The set length is your chron horizon if set, else the length dropdown; reset τ restarts it.">
           <option value="sequential">sequential</option>
           <option value="random">random</option>
           <option value="progressive">progressive</option>
         </select>
-        <select id="cycle-set-len" class="ctrl-btn" title="Set length for 'progressive' cycle — the dwell ramps from the chosen start down to ~5s across this span, then holds">
+        <select id="cycle-set-len" class="ctrl-btn" title="Fallback set length for 'progressive' cycle — used only when no chron horizon is set (the horizon is the canonical set length). The dwell ramps from the chosen start down to ~5s across the set (τ), then holds. Reset τ restarts it.">
           <option value="10">set 10min</option>
           <option value="20">set 20min</option>
           <option value="30">set 30min</option>

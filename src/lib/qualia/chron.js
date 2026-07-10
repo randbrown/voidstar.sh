@@ -264,6 +264,9 @@ export function createChron({ hudEl, pulseEl, isZen = () => false, getCps = () =
     setConfig,
     getConfig: () => JSON.parse(JSON.stringify(cfg)),
     getElapsedSec: () => (startMs == null ? 0 : (performance.now() - startMs) / 1000),
+    /** The hard set-limit in minutes (0 = none). Other systems (e.g. the
+     *  progressive auto-cycle ramp) read this as the canonical "set length". */
+    getHorizonMin: () => cfg.horizon.at,
     getCycles: () => cycles,
   };
 }
