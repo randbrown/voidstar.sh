@@ -378,40 +378,43 @@
   --code-filter:   sepia(1) hue-rotate(-55deg) saturate(2.4);
 }
 
-/* ---- Ramblin' Visioneer (cosmic Sasquatch on the night road — RV3) -------- *
-   Twilight indigo highway; Sasquatch-eye glow blue as the accent, evil-eye
-   turquoise, psychedelic flower magenta, pine green, campfire amber. A touch
-   of grain for the handmade folk-art feel. docs/agent-reference.md §3/§4.     */
+/* ---- Ramblin' Visioneer (a handmade cosmic field instrument / road case) --- *
+   Redesign: the wandering cosmic naturalist's road case — painted case black
+   and dark wood, aged-brass fasteners, field-note cream labels, stained-glass
+   talismans, faded maps. Electric cosmic-blue eyes lead; sunset signal, jade
+   talisman, brass lantern support. Stitched framing, brass corners, map
+   contours, compass-wheel controls. Weathered, exploratory, not the old
+   psychedelic-twilight console, not `gardens`. §7.                            */
 [data-theme="visioneer"] {
-  --void:        #100a1c;
-  --void-2:      #161026;
-  --surface:     #1a1230;
-  --surface-2:   #241a40;
-  --border:      #362a58;
-  --border-2:    #544487;
-  --text:        #e8e4f5;
-  --text-muted:  #9a8fc0;
-  --text-dim:    #5e5588;
-  --accent:      #4f8ff7;            /* glowing Sasquatch eyes */
-  --accent-glow: rgba(79, 143, 247, 0.35);
-  --cyan:        #37c8e8;            /* evil-eye turquoise */
-  --cyan-glow:   rgba(55, 200, 232, 0.3);
-  --pink:        #e561b8;            /* psychedelic garden magenta */
-  --pink-glow:   rgba(229, 97, 184, 0.3);
-  --green:       #5fbf6e;            /* pine / trailside green */
-  --amber:       #f5a623;            /* campfire / porch light */
-  --radius:      8px;
-  --radius-lg:   12px;
-  --glow-strength: 1.1;
-  --panel-blur:  10px;
-  --tex-grain:   0.05;
-  --viz-bg:        #100a1c;
-  --viz-hue-base:  215;              /* eye-glow blue… */
-  --viz-hue-spread: 140;             /* …drifting to magenta back-roads */
-  --viz-sat:       80;
-  --viz-light:     58;
-  --viz-glow:      1.15;
-  --code-filter:   sepia(1) hue-rotate(185deg) saturate(2);
+  --void:        #0c0b17;            /* faded cosmic night fabric */
+  --void-2:      #12111f;
+  --surface:     #17141f;            /* painted road-case black / dark wood */
+  --surface-2:   #201b2b;            /* weathered navy */
+  --border:      #38324a;            /* worn case edge */
+  --border-2:    #7d6746;            /* aged brass fastener */
+  --text:        #efe6d0;            /* field-note cream */
+  --text-muted:  #b0a488;
+  --text-dim:    #726a54;
+  --accent:      #5090f8;            /* electric cosmic blue (the eyes) */
+  --accent-glow: rgba(80, 144, 248, 0.35);
+  --cyan:        #46c8e8;            /* stained-glass sky */
+  --cyan-glow:   rgba(70, 200, 232, 0.3);
+  --pink:        #ee5fa0;            /* psychedelic sunset signal */
+  --pink-glow:   rgba(238, 95, 160, 0.3);
+  --green:       #3ec095;            /* jade / talisman glow */
+  --amber:       #e0a340;            /* aged brass / lantern light */
+  --radius:      6px;
+  --radius-lg:   10px;
+  --glow-strength: 1.0;
+  --panel-blur:  9px;
+  --tex-grain:   0.06;               /* worn field-fabric tooth */
+  --viz-bg:        #0a0916;          /* night-road blue-black */
+  --viz-hue-base:  205;              /* celestial blue … */
+  --viz-hue-spread: 150;             /* … through indigo to sunset magenta */
+  --viz-sat:       66;               /* moderate */
+  --viz-light:     56;               /* slightly warm */
+  --viz-glow:      1.0;              /* moderate, localized */
+  --code-filter:   sepia(0.3) hue-rotate(180deg) saturate(1.5) brightness(1.06);
 }
 
 /* ---- Gardens (Cindy Lynn's Gardens — a nocturnal stained-glass greenhouse) - *
@@ -1097,9 +1100,12 @@ body::before {
 [data-theme="glass"] .qp-card > .qp-head .qp-title { color: #fff !important; }
 
 /* ────────────────────────────────────────────────────────────────────────
-   Visioneer — psychedelic folk-art twilight. Controls are organically rounded
-   with a glowing eye-blue→magenta→turquoise gradient rim; panels are starlit
-   twilight cards. Handmade, luminous, a little uncanny.
+   Visioneer — a handmade cosmic field instrument in a road case. Controls are
+   rugged case keys with a brass edge; the active state is an expedition STAMP
+   (seated, brass-inked, cosmic-blue glow). Panels are road-case compartments:
+   a stitched dashed seam inset from the edge, aged-brass corner fasteners, and
+   faint map contours drifting from a corner. Headers are catalogued field
+   labels ruled off in brass, marked by the Visioneer's eye. Weathered, not neon.
    ──────────────────────────────────────────────────────────────────────── */
 [data-theme="visioneer"] .btn,
 [data-theme="visioneer"] .ctrl-btn,
@@ -1107,25 +1113,37 @@ body::before {
 [data-theme="visioneer"] .qp-preset,
 [data-theme="visioneer"] .qp-tab,
 [data-theme="visioneer"] .start-btn {
-  background:
-    linear-gradient(var(--surface), var(--surface)) padding-box,
-    linear-gradient(135deg, var(--accent), var(--pink), var(--cyan)) border-box !important;
-  border: 1px solid transparent !important;
-  border-radius: 11px !important;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 90%, #000 10%), var(--surface)) !important;
+  border: 1px solid var(--border-2) !important;      /* brass edge */
+  border-radius: 5px !important;
   color: var(--text) !important;
-  box-shadow: 0 0 10px var(--accent-glow) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.5) !important;
+  transition: box-shadow 0.2s, color 0.2s, border-color 0.2s;
 }
 [data-theme="visioneer"] .ctrl-btn:hover,
 [data-theme="visioneer"] .qp-toggle:hover,
 [data-theme="visioneer"] .qp-preset:hover,
 [data-theme="visioneer"] .qp-tab:hover,
+[data-theme="visioneer"] .btn:hover {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 12px var(--accent-glow) !important;
+  color: var(--cyan) !important;
+}
 [data-theme="visioneer"] .ctrl-btn.active,
 [data-theme="visioneer"] .ctrl-btn.active-audio,
 [data-theme="visioneer"] .qp-toggle.active,
 [data-theme="visioneer"] .qp-preset.active,
 [data-theme="visioneer"] .qp-tab.active {
-  box-shadow: 0 0 18px var(--pink-glow), 0 0 8px var(--cyan-glow) !important;
-  color: var(--cyan) !important;
+  /* catalogued — an expedition stamp seats into the case, inked in brass */
+  background: color-mix(in srgb, var(--accent) 20%, var(--surface)) !important;
+  color: var(--amber) !important;
+  border-color: var(--amber) !important;
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.5),
+    0 0 10px var(--accent-glow) !important;
 }
 [data-theme="visioneer"] .qp-card,
 [data-theme="visioneer"] #topbar,
@@ -1134,16 +1152,29 @@ body::before {
 [data-theme="visioneer"] .post-card,
 [data-theme="visioneer"] .video-card,
 [data-theme="visioneer"] #cycle-mgr {
-  background-image:
-    radial-gradient(1px 1px at 18% 24%, rgba(255, 255, 255, 0.5), transparent),
-    radial-gradient(1px 1px at 72% 38%, rgba(255, 255, 255, 0.35), transparent),
-    radial-gradient(1px 1px at 44% 78%, rgba(255, 255, 255, 0.3), transparent),
-    radial-gradient(1px 1px at 88% 66%, rgba(255, 255, 255, 0.4), transparent),
+  background:
+    /* aged-brass corner fasteners */
+    radial-gradient(circle at 7px 7px, color-mix(in srgb, var(--amber) 85%, transparent) 1.3px, transparent 2.2px),
+    radial-gradient(circle at calc(100% - 7px) 7px, color-mix(in srgb, var(--amber) 85%, transparent) 1.3px, transparent 2.2px),
+    radial-gradient(circle at 7px calc(100% - 7px), color-mix(in srgb, var(--amber) 85%, transparent) 1.3px, transparent 2.2px),
+    radial-gradient(circle at calc(100% - 7px) calc(100% - 7px), color-mix(in srgb, var(--amber) 85%, transparent) 1.3px, transparent 2.2px),
+    /* faint map contours drifting from a corner */
+    repeating-radial-gradient(circle at 116% -12%,
+      transparent 0 20px, color-mix(in srgb, var(--amber) 7%, transparent) 20px 21px, transparent 21px 42px),
     linear-gradient(170deg,
-      color-mix(in srgb, var(--accent) 12%, var(--surface-glass)),
-      color-mix(in srgb, var(--pink) 8%, var(--surface-glass))) !important;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent) !important;
-  box-shadow: 0 0 24px var(--accent-glow) !important;
+      color-mix(in srgb, var(--accent) 8%, var(--surface-glass)),
+      color-mix(in srgb, var(--surface-2) 55%, var(--surface-glass))) !important;
+  border: 1px solid var(--border) !important;
+  outline: 1px dashed color-mix(in srgb, var(--border-2) 45%, transparent) !important;   /* stitched seam */
+  outline-offset: -4px !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--border-2) 20%, transparent),
+    0 0 22px color-mix(in srgb, var(--accent) 14%, transparent) !important;
+}
+[data-theme="visioneer"] .qp-card > .qp-head {
+  border-bottom: 1px solid color-mix(in srgb, var(--border-2) 65%, transparent) !important;   /* brass rule */
+  padding-bottom: 0.26rem !important;
+  letter-spacing: 0.05em;
 }
 [data-theme="visioneer"] .qp-head .qp-title::before { content: "◉ "; color: var(--accent); }
 
@@ -1718,25 +1749,36 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
   box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6) !important;
 }
 
-/* ── Visioneer — road-line / horizon rail / trail markers ────────────────── */
+/* ── Visioneer — an instrument-scale route line / brass compass-wheel thumb /
+   specimen-tag pills. The track is a route ruled with fine brass tick marks;
+   the thumb is a brass field-recorder wheel; pills are luggage/specimen tags
+   edged in brass (source colour stays in the meter). */
 [data-theme="visioneer"] {
   --ctl-slider-track:
-    repeating-linear-gradient(90deg, var(--amber) 0 8px, transparent 8px 18px),
-    color-mix(in srgb, var(--surface-2) 78%, #000);
+    repeating-linear-gradient(90deg,
+      color-mix(in srgb, var(--amber) 55%, transparent) 0 1px,
+      transparent 1px 7px),
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--surface-2) 70%, #000),
+      color-mix(in srgb, var(--surface-2) 55%, #000));
   --ctl-slider-track-h: 5px;
   --ctl-slider-track-radius: 2px;
+  --ctl-slider-track-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.55);
   --ctl-slider-fill: var(--accent);
-  --ctl-slider-thumb: var(--accent);
-  --ctl-slider-thumb-border: 0;
-  --ctl-slider-thumb-shadow: 0 0 10px var(--accent-glow), 0 0 4px var(--cyan-glow);
+  --ctl-slider-thumb:
+    radial-gradient(circle at 38% 32%, #f4e2b0, var(--amber) 46%, #6e5323 100%);
+  --ctl-slider-thumb-w: 15px;
+  --ctl-slider-thumb-h: 15px;
+  --ctl-slider-thumb-radius: 50%;
+  --ctl-slider-thumb-border: 1px solid #3a2c12;
+  --ctl-slider-thumb-shadow: 0 0 8px var(--accent-glow), inset 0 1px 1px rgba(255, 255, 255, 0.4);
 }
 [data-theme="visioneer"] .qp-mod-pill {
-  border-radius: 9px !important;
-  background:
-    linear-gradient(var(--surface), var(--surface)) padding-box,
-    linear-gradient(135deg, var(--accent), var(--pink), var(--cyan)) border-box !important;
-  border: 1px solid transparent !important;
-  box-shadow: 0 0 8px var(--accent-glow) !important;
+  border-radius: 3px 3px 3px 10px !important;    /* a specimen / luggage tag */
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 90%, #000), var(--surface)) !important;
+  border: 1px solid color-mix(in srgb, var(--border-2) 55%, transparent) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 2px rgba(0, 0, 0, 0.4) !important;
 }
 
 /* ── Gardens — a lit stem/vein rail w/ a dew-drop bead / seed-capsule pills ──
