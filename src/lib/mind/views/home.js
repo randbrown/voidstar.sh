@@ -21,6 +21,7 @@ import { el, esc, btn, emptyState, timeAgo, textPrompt, confirmBox } from '../ui
 const SORT_KEY = 'voidstar.mind.sort';
 const TODO_OPEN_KEY = 'voidstar.mind.todoExpanded';
 const FOLDER_KEY = 'voidstar.mind.folder';
+const TAGS_OPEN_KEY = 'voidstar.mind.tagsExpanded';
 
 let _q = ''; // search text survives re-renders within the session
 let _filter = { kind: '', tag: '' };
@@ -101,15 +102,17 @@ export async function renderHome(root) {
   root.appendChild(controls);
 
   // Filter chips: attachment kinds + tags (+ new-from-template when any
-  // note is tagged #template).
+  // note is tagged #template). Tags collapse behind a toggle — on a phone the
+  // full tag list can be several rows tall, pushing results under the keyboard.
   const chips = el('div', 'mn-chips');
   const kindChips = [['', 'all'], ['image', 'images'], ['audio', 'audio'], ['pdf', 'pdfs']];
   const tags = await allTags();
-  if (tags.includes('template')) {
-    chips.appendChild(btn('&#65291; from template', 'mn-chip mn-folder-chip', () => pickTemplate(folderId)));
-  }
+  let tagsOpen = localStorage.getItem(TAGS_OPEN_KEY) === '1';
   const drawChips = () => {
     chips.innerHTML = '';
+    if (tags.includes('template')) {
+      chips.appendChild(btn('&#65291; from template', 'mn-chip mn-folder-chip', () => pickTemplate(folderId)));
+    }
     for (const [kind, label] of kindChips) {
       const c = btn(label, `mn-chip ${(!_filter.tag && _filter.kind === kind) ? 'mn-chip-on' : ''}`, () => {
         _filter = { kind, tag: '' };
@@ -117,12 +120,26 @@ export async function renderHome(root) {
       });
       chips.appendChild(c);
     }
-    for (const t of tags) {
-      const c = btn(`#${esc(t)}`, `mn-chip ${_filter.tag === t ? 'mn-chip-on' : ''}`, () => {
-        _filter = _filter.tag === t ? { kind: '', tag: '' } : { kind: '', tag: t };
-        drawChips(); renderList();
-      });
-      chips.appendChild(c);
+    if (tags.length) {
+      chips.appendChild(btn(
+        `#tags ${tagsOpen ? '&#9662;' : '&#9656;'}`,
+        `mn-chip mn-tags-toggle ${_filter.tag ? 'mn-chip-on' : ''}`,
+        () => {
+          tagsOpen = !tagsOpen;
+          localStorage.setItem(TAGS_OPEN_KEY, tagsOpen ? '1' : '0');
+          drawChips();
+        },
+      ));
+      // When collapsed, keep the active tag visible so the current filter is
+      // never hidden and can still be cleared with a tap.
+      const shown = tagsOpen ? tags : (_filter.tag ? [_filter.tag] : []);
+      for (const t of shown) {
+        const c = btn(`#${esc(t)}`, `mn-chip ${_filter.tag === t ? 'mn-chip-on' : ''}`, () => {
+          _filter = _filter.tag === t ? { kind: '', tag: '' } : { kind: '', tag: t };
+          drawChips(); renderList();
+        });
+        chips.appendChild(c);
+      }
     }
   };
   drawChips();
@@ -139,6 +156,9 @@ export async function renderHome(root) {
 
   let _renderSeq = 0;
   async function renderList() {
+    // While searching, the pinned TODO card just pushes results down under the
+    // keyboard — hide it so the first hits land right below the search box.
+    todoWrap.hidden = !!_q;
     const seq = ++_renderSeq;
     const results = await query(_q, {
       kind: _filter.kind || undefined,
