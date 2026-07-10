@@ -372,10 +372,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #topbar-titlerow {
       display: flex; align-items: center; gap: 1rem;
       justify-content: space-between;
-      /* Reserve the top-right corner for the pinned fullscreen + zen pair
-         (positioned absolutely below) so neither the title nor the wrapped
-         control cluster can slide underneath it. */
-      padding-right: 6.5rem;
+      /* Reserve the top-right corner for the pinned blackout + fullscreen + zen
+         trio (positioned absolutely below) so neither the title nor the control
+         cluster (…mix / rec) can slide underneath it. The reserve is the trio's
+         *measured* width (published live as --topbar-pin-w by page-init.js) plus
+         a gap — not a fixed guess, because that width changes with the theme's
+         font (VT323/win95 render "zen" wider) and a hardcoded reserve let the
+         trio overlap the rec button on those themes. The 5rem fallback keeps the
+         original 6.5rem gutter for the first paint before the measure runs. */
+      padding-right: calc(var(--topbar-pin-w, 5rem) + 1.5rem);
     }
     #topbar-left  {
       display: flex; align-items: center; gap: 0.7rem;
@@ -1140,7 +1145,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-strudel-play.playing { color: var(--pink); border-color: var(--pink); }
     #btn-strudel-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
     #strudel-tabs {
-      display: flex; gap: 0.25rem;
+      display: flex; align-items: center; gap: 0.25rem;
+      flex-wrap: wrap; row-gap: 0.35rem;
       padding: 0.3rem 0.6rem;
       border-bottom: 1px solid var(--border);
       background: rgba(0,0,0,0.25);
@@ -1153,21 +1159,25 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .sp-tab:hover  { color: var(--accent); }
     .sp-tab.active { color: var(--cyan); border-color: var(--border); background: rgba(34,211,238,0.06); }
-    /* Editor view-option toggles (autocomplete + line numbers). Right-aligned
-       in the tab bar; styled like a tab but not one — the tab handler only
-       binds .sp-tab. Only the FIRST .sp-opt takes the auto margin so the whole
-       cluster is pushed right as a unit; without the reset below, a second
-       auto-margin would split the free space and strand the first toggle
-       floating in the middle of the row (the reported autocomplete bug). */
-    .sp-opt {
+    /* Editor view-options cluster — font-size slider + autocomplete + line-number
+       toggles, grouped together (they're all editor *view* settings, distinct
+       from the header's transport/mix controls) and pushed to the right end of
+       the tab bar as one unit. Wrapping them in a flex box with margin-left:auto
+       is what pins the whole cluster right; earlier each .sp-opt carried its own
+       auto margin, which stranded the first toggle mid-row (the autocomplete bug). */
+    .sp-opts {
       margin-left: auto;
+      display: inline-flex; align-items: center; gap: 0.4rem;
+    }
+    .sp-opt {
       background: none; border: 1px solid transparent; border-radius: 4px;
       color: var(--muted); font-family: var(--font-mono); font-size: 0.72rem;
       padding: 0.18rem 0.5rem; cursor: pointer; transition: all 0.15s;
     }
-    .sp-opt + .sp-opt { margin-left: 0; }
     .sp-opt:hover  { color: var(--accent); }
     .sp-opt.active { color: var(--cyan); border-color: var(--border); background: rgba(34,211,238,0.06); }
+    /* The font-size rail is narrower in the tab bar than a header gain slider. */
+    .sp-opts .panel-font-slider { width: 60px; min-width: 48px; }
 
     #strudel-patterns {
       flex: 1; min-height: 0; overflow: auto;
@@ -1685,6 +1695,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* Font-size slider — same compact footprint as the gain slider, muted accent
        so the two read apart at a glance. */
     .panel-font-slider { accent-color: var(--muted); }
+    /* Inline micro-label for a header/option slider. The two rails used to sit
+       side-by-side in the header, unlabeled and easy to confuse; the font rail
+       now lives in the tab bar (an editor view-option) and each rail carries a
+       tiny text tag ("vol" / "Aa") so it reads at a glance without hovering. */
+    .panel-slider-wrap { display: inline-flex; align-items: center; gap: 0.3rem; }
+    .panel-slider-lbl {
+      color: var(--muted); font-family: var(--font-mono);
+      font-size: 0.62rem; letter-spacing: 0.04em; line-height: 1;
+      user-select: none; white-space: nowrap; flex: none;
+    }
     #sequencer-tabs {
       display: flex; gap: 0.25rem;
       padding: 0.3rem 0.6rem;
@@ -3445,8 +3465,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="btn-strudel-play"    title="Evaluate / play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-strudel-mute" title="Mute Strudel audio (transport keeps running so sync stays locked)">live</button>
-    <input type="range" class="panel-gain-slider" id="strudel-gain" min="0" max="1.5" step="0.01" value="1" title="Output level (0–1.5×; 1.0 = nominal, above 1.0 boosts a weak pattern). Stacks with Strudel's own gain() — use this to ride the mix without editing the pattern. The track limiter catches clipping." />
-    <input type="range" class="panel-gain-slider panel-font-slider" id="strudel-font-size" min="11" max="64" step="1" value="14" title="Editor font size. Double-click to reset" />
+    <span class="panel-slider-wrap" title="Output level (0–1.5×; 1.0 = nominal, above 1.0 boosts a weak pattern). Stacks with Strudel's own gain() — use this to ride the mix without editing the pattern. The track limiter catches clipping.">
+      <span class="panel-slider-lbl" aria-hidden="true">vol</span>
+      <input type="range" class="panel-gain-slider" id="strudel-gain" min="0" max="1.5" step="0.01" value="1" aria-label="Strudel output level" />
+    </span>
     <button class="ctrl-btn" id="btn-strudel-newline" title="Insert newline at cursor (Android touch keyboards drop the Enter event)">↵</button>
     <button class="ctrl-btn" id="btn-strudel-blur"    title="Toggle a frosted backdrop behind the editor (helps legibility over a busy visual)" aria-pressed="false">⬚</button>
     <button class="ctrl-btn" id="btn-strudel-close"   title="Close (S)">×</button>
@@ -3456,8 +3478,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="sp-tab"        data-tab="patterns">patterns</button>
     <button class="sp-tab"        data-tab="funcs"  title="Searchable Strudel function reference — copy snippets">funcs</button>
     <button class="sp-tab"        data-tab="sounds" title="Browse loaded samples & sounds — audition & copy">sounds</button>
-    <button class="sp-opt" id="btn-strudel-autocomplete" title="Toggle autocomplete + hover docs (Strudel's built-in intellisense)" aria-pressed="true">⌨</button>
-    <button class="sp-opt" id="btn-strudel-lines" title="Toggle line numbers" aria-pressed="false">#</button>
+    <div class="sp-opts">
+      <span class="panel-slider-wrap sp-font-wrap" title="Editor font size. Double-click to reset">
+        <span class="panel-slider-lbl" aria-hidden="true">Aa</span>
+        <input type="range" class="panel-gain-slider panel-font-slider" id="strudel-font-size" min="11" max="64" step="1" value="14" aria-label="Editor font size" />
+      </span>
+      <button class="sp-opt" id="btn-strudel-autocomplete" title="Toggle autocomplete + hover docs (Strudel's built-in intellisense)" aria-pressed="true">⌨</button>
+      <button class="sp-opt" id="btn-strudel-lines" title="Toggle line numbers" aria-pressed="false">#</button>
+    </div>
   </div>
   <div id="strudel-mount"></div>
   <div id="strudel-patterns" style="display:none">

@@ -62,7 +62,8 @@ non-negotiables; the technical detail lives in the docs below.
 | The setlist app (`/lab/setlist`) — data model, backup vs auto-link, chart-fallback ladder, annotations, its worker | [`docs/setlist-app.md`](docs/setlist-app.md) |
 | The mind app (`/lab/mind`) — notes store, editor, tasks-in-notes, folders, capture, Drive sync | [`docs/mind-app.md`](docs/mind-app.md) |
 | Arcade games / playable visualizers | [`plans/arcade-quale-plan.md`](plans/arcade-quale-plan.md) (+ `src/lib/qualia/fx/arcade/`) |
-| Site theming / CSS themes | [`docs/THEMES.md`](docs/THEMES.md) |
+| Site theming / CSS themes — the token system, wiring, build checklist | [`docs/THEMES.md`](docs/THEMES.md) |
+| **Designing** a custom theme (the design/UX brief + per-agent template) | [`docs/theming-guide.md`](docs/theming-guide.md) |
 | Known refactors, perf wins, and tech-debt backlog | [`plans/maintenance-backlog.md`](plans/maintenance-backlog.md) |
 
 > The two `plans/*-plan.md` files are **point-in-time design/build logs**, not current-state
