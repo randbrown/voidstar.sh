@@ -21,7 +21,8 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 | Voice | `voice.js`, `voice-capture.js`, `audio-out.js` | Web Speech dictation (continuous, restart loop, final dedupe) + MediaRecorder on the same mic; keep-audio / insert-transcript toggles; record-only fallback on contention. Mic picker reuses `qualia/devices.js`; speaker via `setSinkId` (hidden on Safari). |
 | OCR | `ocr.js` | tesseract.js lazy-loaded from CDN on first image; serial idle queue over `ocrStatus='pending'`; text stored on the attachment (searchable, rides sync so other devices never re-OCR). |
 | Annotation | `annotation.js`, `views/annotate.js` | Forked from `setlist/annotation.js`: pen (with stylus pressure), highlighter, arrow, rect, ellipse, text, eraser, select, pan; shared palette/size scale; two-finger scroll; autosaves; flatten-to-copy export. Keyed `attachmentId[:page]` (page reserved for PDFs). |
-| Drive sync | `gdrive-sync.js`, `attachments-drive.js` | Forked from `setlist/gdrive-backup.js` (GIS auth, drive.file scope, user's own OAuth client id, pull→merge→push cycle, peek freshness gate, persisted dirty flag, duplicate-file healing, rotating 10-copy history). Additions: **conflict copies** and **attachment binaries** (below). |
+| Drive sync | `gdrive-sync.js`, `attachments-drive.js` | Forked from `setlist/gdrive-backup.js` (GIS auth, drive.file scope, **app-owned OAuth client id** — "Sign in with Google", with a user override in Settings → advanced; see the sign-in note below — pull→merge→push cycle, peek freshness gate, persisted dirty flag, duplicate-file healing, rotating 10-copy history). Additions: **conflict copies** and **attachment binaries** (below). |
+| Import/export | `import-doc.js`, `dates.js`, `export.js`, `views/import-doc-modal.js`, `gdrive-picker.js` | Whole-document import (split into notes) + single-doc markdown export + JSON/zip. See the import/export section below. |
 
 ## Sync model
 
@@ -78,3 +79,49 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   by `meta.daily = 'YYYY-MM-DD'`, created in the current folder.
 - **Templates**: tag any note `#template`; "＋ from template" (chips row)
   copies its body/tags into a fresh note.
+
+## Import / export
+
+Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
+`export.js` `buildExportZip`), Settings → data offers document-level I/O:
+
+- **`import document…`** (`views/import-doc-modal.js`) — split ONE document
+  (a Google-Docs export, an Obsidian-style `.md`, freeform daily-notes text)
+  into individual notes. Source: paste, upload (`.md`/`.txt`), or **pick from
+  Drive** (`gdrive-picker.js`, shown only when a Picker key is configured).
+  Best source: Google Docs → File → Download → **Markdown (.md)** (keeps date
+  headings as `#`/`##`).
+  - `parseDocIntoNotes(text, opts)` (`import-doc.js`, pure/deterministic) splits
+    on markdown headings (auto-picking the level that carries the most dates) or,
+    for plain text, on **date-dominant lines** (a date + ≤2 other words, so a
+    `6/14` mid-sentence never splits). Dates parse via `dates.js` `extractDate`
+    (ported from `setlist/import.js`). Timestamps descend strictly in document
+    order (dated sections anchored to their day at local noon, dateless ones
+    stepping down 1 min), so a newest-at-top doc lands newest-first in the list.
+  - A header that is **essentially just a date** becomes a **daily note**
+    (`meta.daily`), deduped within the batch and against existing dailies
+    (a collision demotes it to a plain dated note rather than shadowing "today").
+  - The modal previews the N would-be notes (title · date badge · dup badge ·
+    snippet), lets you pick folder/tag/heading options, and `commitDocImport`
+    snapshots (`pre-doc-import`, undoable in Settings → snapshots) before
+    creating notes with `putNoteRaw` (parsed timestamps preserved).
+- **`export .md (doc)`** (`export.js` `buildNotesMarkdownDoc`) — one readable
+  markdown file, each note a `## <title> — <date>` heading + a lossless
+  `<!-- mind date=… tags=… daily id=… -->` comment + body. It **round-trips**:
+  re-importing recognizes its own header and comment markers (so `##` inside a
+  note body never over-splits, and `id=` upserts the same note). `includeComment:false` gives a clean human doc (no exact round-trip).
+- Pure parser/exporter functions are covered by `scripts/check-import-doc.mjs`
+  (`node scripts/check-import-doc.mjs`).
+
+## Google sign-in (app-owned client id)
+
+Drive uses an **app-owned** OAuth client id (`src/lib/qualia/google-config.js`,
+from `PUBLIC_GOOGLE_CLIENT_ID`), so the user just taps **"Sign in with Google"**
+— no client-id entry. `getClientId()` prefers a user override
+(`voidstar.mind.gdrive.clientId`, Settings → advanced, still rides the backup)
+and otherwise uses the app id; empty app id (e.g. a build without the env var)
+falls back to requiring the override, so the flow is unchanged for self-hosts.
+The Drive **Picker** additionally needs `PUBLIC_GOOGLE_PICKER_API_KEY`
+(origin/referrer-restricted); without it the "pick from Drive" button is hidden.
+Both keys are public identifiers protected by Cloud-console restrictions, not
+secrecy. The same change is mirrored in `setlist/gdrive-backup.js`.
