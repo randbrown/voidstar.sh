@@ -11,18 +11,9 @@
 // gaussian-style with camera distance, so adjacent layers crossfade and far
 // layers short-circuit early in the fragment shader.
 //
-// Lyric streaming: a CanvasTexture-backed Sprite renders the active line at
-// the active stratum's depth. Style ('concrete' | 'shatter' | 'fieldlines' |
-// 'orbital') drives a per-frame transform applied to the sprite. Texture
-// uploads happen only on line change.
-//
-// TTS: speechSynthesis.speak() per advancing line, cancel-on-advance to keep
-// the queue from piling up. A `uTtsAmp` envelope drives stratum bloom even
-// when tab-audio routing isn't available.
-//
 // Modulation map (declarative):
 //   audio.bass         → stratum bloom + Earth cloud density
-//   audio.beatPulse    → flock cohesion pulse + lyric flash + travel speed
+//   audio.beatPulse    → flock cohesion pulse + travel speed
 //   audio.mids         → molecular bond glow
 //   audio.highs        → Planck chromatic noise + star twinkle
 //   audio.rms          → Higgs grid amplitude
@@ -37,7 +28,6 @@ import {
 } from 'three';
 import { applyAudioUniforms, disposeObject3D } from '../three-host.js';
 import { scaleAudio } from '../field.js';
-import { BUILTIN_LYRICS } from './antireductionism-lyrics.js';
 import {
   generateCosmicWeb, generateGalaxy, generateSolar, generateEarth,
   generateFlock, generateBird, generateCell, generateMolecule,
@@ -78,9 +68,6 @@ const PALETTE_TINTS = {
   inferno: [1.00, 0.30, 0.20],
 };
 const MODES = ['travel', 'focus', 'hybrid', 'shuffle', 'pose'];
-const STYLES = ['auto', 'concrete', 'shatter', 'fieldlines', 'orbital'];
-const ADVANCE_MODES = ['tempo', 'beat', 'bass', 'manual'];
-const TTS_MODES = ['off', 'speak', 'speak+react'];
 
 // Each stratum sits at z = -i * STRATUM_SPACING. Camera looks down -z.
 const STRATUM_SPACING = 28;
@@ -99,7 +86,6 @@ const COMMON_DECL = /* glsl */`
   uniform vec2  uMids;
   uniform vec2  uHighs;
   uniform float uRms;
-  uniform float uTtsAmp;
 `;
 
 // Generic point shader — used by every stratum that draws a Points cloud
@@ -147,7 +133,7 @@ const POINT_FRAG = /* glsl */`
     if (r2 > 0.25) discard;
     float falloff = exp(-r2 * 14.0);
     vec3 col = uTint * (0.45 + vBright * 0.85);
-    col *= 1.0 + uBands.x * 0.45 + uBeat.y * 0.30 + uTtsAmp * 0.40;
+    col *= 1.0 + uBands.x * 0.45 + uBeat.y * 0.30;
     gl_FragColor = vec4(col * falloff, falloff * uOpacity * 0.92);
   }
 `;
@@ -197,7 +183,7 @@ const GALAXY_FRAG = /* glsl */`
     } else {
       col = mix(uTint * 0.30, uTint * 1.30, vColor);
     }
-    col *= 1.0 + uBeat.y * 0.40 + uTtsAmp * 0.30;
+    col *= 1.0 + uBeat.y * 0.40;
     gl_FragColor = vec4(col * fade, fade * uOpacity * 0.85);
   }
 `;
@@ -228,7 +214,7 @@ const HIGGS_FRAG = /* glsl */`
   varying float vH;
   void main() {
     if (uOpacity < 0.005) discard;
-    float bri = 0.45 + vH * 0.6 + uBands.x * 0.4 + uTtsAmp * 0.5;
+    float bri = 0.45 + vH * 0.6 + uBands.x * 0.4;
     vec3 col = uTint * bri;
     gl_FragColor = vec4(col, uOpacity * 0.85);
   }
@@ -251,7 +237,7 @@ const BIRD_FRAG = /* glsl */`
   ${COMMON_DECL}
   void main() {
     if (uOpacity < 0.005) discard;
-    vec3 col = uTint * (0.65 + uBands.x * 0.35 + uTtsAmp * 0.25);
+    vec3 col = uTint * (0.65 + uBands.x * 0.35);
     gl_FragColor = vec4(col, uOpacity * 0.92);
   }
 `;
@@ -276,50 +262,37 @@ export default {
     { id: 'gridLines',     label: 'grid',         type: 'toggle', default: true },
     { id: 'showLegend',    label: 'legend',       type: 'toggle', default: false },
     { id: 'reactivity',    label: 'reactivity',   type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
-    { id: 'lyrics',        label: 'lyrics',       type: 'select', options: ['off', 'builtin'], default: 'off' },
-    { id: 'lyricsStyle',   label: 'lyric style',  type: 'select', options: STYLES, default: 'auto' },
-    { id: 'lyricsAdvance', label: 'lyric advance',type: 'select', options: ADVANCE_MODES, default: 'tempo' },
-    { id: 'lyricsTempo',   label: 'sec / line',   type: 'range', min: 1, max: 12, step: 0.5, default: 4 },
-    { id: 'lyricsOpacity', label: 'lyric opacity',type: 'range', min: 0, max: 1, step: 0.02, default: 0.85,
-      modulators: [
-        { source: 'audio.beatPulse', mode: 'add', amount: 0.10 },
-      ] },
-    { id: 'lyricsTTS',     label: 'TTS',          type: 'select', options: TTS_MODES, default: 'off' },
-    { id: 'ttsRate',       label: 'voice rate',   type: 'range', min: 0.5, max: 2, step: 0.05, default: 0.95 },
-    { id: 'ttsPitch',      label: 'voice pitch',  type: 'range', min: 0.3, max: 2, step: 0.05, default: 0.85 },
   ],
 
-  // Auto-phase walks every stratum + flips lyric style per step. The 13
-  // steps line up with the song's arc — outer void → cosmic → … → Planck →
-  // sub-Planck void.
+  // Auto-phase walks every stratum. The 13 steps line up with the song's
+  // arc — outer void → cosmic → … → Planck → sub-Planck void.
   autoPhase: {
     steps: [
-      { mode: 'focus', focusStratum: 'beyond',   lyricsStyle: 'concrete' },
-      { mode: 'focus', focusStratum: 'cosmic',   lyricsStyle: 'concrete' },
-      { mode: 'focus', focusStratum: 'galaxy',   lyricsStyle: 'fieldlines' },
-      { mode: 'focus', focusStratum: 'solar',    lyricsStyle: 'orbital' },
-      { mode: 'focus', focusStratum: 'earth',    lyricsStyle: 'concrete' },
-      { mode: 'focus', focusStratum: 'flock',    lyricsStyle: 'fieldlines' },
-      { mode: 'focus', focusStratum: 'bird',     lyricsStyle: 'concrete' },
-      { mode: 'focus', focusStratum: 'cell',     lyricsStyle: 'orbital' },
-      { mode: 'focus', focusStratum: 'molecule', lyricsStyle: 'concrete' },
-      { mode: 'focus', focusStratum: 'atom',     lyricsStyle: 'orbital' },
-      { mode: 'focus', focusStratum: 'higgs',    lyricsStyle: 'fieldlines' },
-      { mode: 'focus', focusStratum: 'planck',   lyricsStyle: 'shatter' },
-      { mode: 'focus', focusStratum: 'beneath',  lyricsStyle: 'shatter' },
+      { mode: 'focus', focusStratum: 'beyond'   },
+      { mode: 'focus', focusStratum: 'cosmic'   },
+      { mode: 'focus', focusStratum: 'galaxy'   },
+      { mode: 'focus', focusStratum: 'solar'    },
+      { mode: 'focus', focusStratum: 'earth'    },
+      { mode: 'focus', focusStratum: 'flock'    },
+      { mode: 'focus', focusStratum: 'bird'     },
+      { mode: 'focus', focusStratum: 'cell'     },
+      { mode: 'focus', focusStratum: 'molecule' },
+      { mode: 'focus', focusStratum: 'atom'     },
+      { mode: 'focus', focusStratum: 'higgs'    },
+      { mode: 'focus', focusStratum: 'planck'   },
+      { mode: 'focus', focusStratum: 'beneath'  },
     ],
   },
 
   presets: {
-    default:   { mode: 'hybrid',  focusStratum: 'cosmic', travelSpeed: 0.6, dwellSec: 5, particleScale: 'medium', palette: 'auto',    gridLines: true,  showLegend: false, reactivity: 1.0, lyrics: 'off', lyricsStyle: 'auto', lyricsAdvance: 'tempo', lyricsTempo: 4, lyricsOpacity: 0.85, lyricsTTS: 'off', ttsRate: 0.95, ttsPitch: 0.85 },
-    journey:   { mode: 'travel',  travelSpeed: 0.4, lyricsAdvance: 'tempo', lyricsTempo: 5, palette: 'auto' },
-    breakdown: { mode: 'shuffle', travelSpeed: 0.0, palette: 'inferno', lyricsStyle: 'shatter', lyricsAdvance: 'beat' },
-    cosmic:    { mode: 'focus',   focusStratum: 'cosmic',   palette: 'cool',    lyricsStyle: 'concrete' },
-    flock:     { mode: 'focus',   focusStratum: 'flock',    palette: 'mono',    lyricsStyle: 'fieldlines' },
-    atom:      { mode: 'focus',   focusStratum: 'atom',     palette: 'cool',    lyricsStyle: 'orbital' },
-    foam:      { mode: 'focus',   focusStratum: 'planck',   palette: 'inferno', lyricsStyle: 'shatter' },
-    silence:   { mode: 'focus',   focusStratum: 'beneath',  palette: 'mono',    lyrics: 'off', gridLines: false },
-    speak:     { mode: 'hybrid',  lyricsTTS: 'speak+react', ttsRate: 0.92, ttsPitch: 0.78 },
+    default:   { mode: 'hybrid',  focusStratum: 'cosmic', travelSpeed: 0.6, dwellSec: 5, particleScale: 'medium', palette: 'auto',    gridLines: true,  showLegend: false, reactivity: 1.0 },
+    journey:   { mode: 'travel',  travelSpeed: 0.4, palette: 'auto' },
+    breakdown: { mode: 'shuffle', travelSpeed: 0.0, palette: 'inferno' },
+    cosmic:    { mode: 'focus',   focusStratum: 'cosmic',   palette: 'cool'    },
+    flock:     { mode: 'focus',   focusStratum: 'flock',    palette: 'mono'    },
+    atom:      { mode: 'focus',   focusStratum: 'atom',     palette: 'cool'    },
+    foam:      { mode: 'focus',   focusStratum: 'planck',   palette: 'inferno' },
+    silence:   { mode: 'focus',   focusStratum: 'beneath',  palette: 'mono',    gridLines: false },
   },
 
   create(canvas, { renderer }) {
@@ -386,81 +359,6 @@ export default {
       hudTexture.needsUpdate = true;
     }
 
-    // ── Lyric overlay sprite ──────────────────────────────────────────────
-    let lyricCanvas = null, lyricCtx = null, lyricTexture = null, lyricSprite = null;
-    function ensureLyricSprite() {
-      if (lyricSprite) return;
-      lyricCanvas = document.createElement('canvas');
-      lyricCanvas.width = 1024;
-      lyricCanvas.height = 256;
-      lyricCtx = lyricCanvas.getContext('2d');
-      lyricTexture = new CanvasTexture(lyricCanvas);
-      lyricTexture.needsUpdate = true;
-      const mat = new SpriteMaterial({ map: lyricTexture, transparent: true, depthWrite: false });
-      lyricSprite = new Sprite(mat);
-      // Sized in update(); start hidden.
-      lyricSprite.scale.set(0, 0, 1);
-      scene.add(lyricSprite);
-    }
-    function paintLyricLine(text) {
-      if (!lyricCtx) return;
-      const W = lyricCanvas.width, H = lyricCanvas.height;
-      lyricCtx.clearRect(0, 0, W, H);
-      // Soft glow under the text.
-      lyricCtx.shadowColor = 'rgba(255,255,255,0.55)';
-      lyricCtx.shadowBlur = 22;
-      lyricCtx.fillStyle = 'rgba(255,255,255,0.95)';
-      lyricCtx.font = "bold 96px 'Inter', system-ui, -apple-system, sans-serif";
-      lyricCtx.textBaseline = 'middle';
-      lyricCtx.textAlign = 'center';
-      // Auto-shrink for long lines so they always fit.
-      let fontPx = 96;
-      while (fontPx > 28) {
-        lyricCtx.font = `bold ${fontPx}px 'Inter', system-ui, -apple-system, sans-serif`;
-        if (lyricCtx.measureText(text).width <= W - 80) break;
-        fontPx -= 6;
-      }
-      lyricCtx.fillText(text, W / 2, H / 2);
-      lyricCtx.shadowBlur = 0;
-      lyricTexture.needsUpdate = true;
-    }
-
-    // ── TTS manager ───────────────────────────────────────────────────────
-    // Single utterance at a time; cancel the queue on every advance so it
-    // can't pile up faster than the synth can read. Visibility-change
-    // listener pauses narration when the page is hidden (avoid talking
-    // into the void). uTtsAmp envelope decays per-frame from 1.0 on
-    // utterance start so visuals can react even when audio routing is
-    // unavailable.
-    const ttsState = { ampEnv: 0, supported: false, lastUtterance: null };
-    const ttsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
-    ttsState.supported = ttsSupported;
-    function speakLine(text, params) {
-      if (!ttsState.supported) return;
-      try {
-        window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text);
-        u.rate = params.ttsRate;
-        u.pitch = params.ttsPitch;
-        u.volume = 0.75;
-        ttsState.lastUtterance = u;
-        window.speechSynthesis.speak(u);
-        ttsState.ampEnv = 1.0;     // visual reactivity envelope
-      } catch { /* speech api flakes silently on some browsers */ }
-    }
-    function cancelTts() {
-      if (!ttsState.supported) return;
-      try { window.speechSynthesis.cancel(); } catch {}
-      ttsState.ampEnv = 0;
-    }
-    let visibilityHandler = null;
-    if (ttsSupported && typeof document !== 'undefined') {
-      visibilityHandler = () => {
-        if (document.hidden) cancelTts();
-      };
-      document.addEventListener('visibilitychange', visibilityHandler);
-    }
-
     // ── Stratum builders ──────────────────────────────────────────────────
     // Each stratum entry: { id, group, materials[], uniforms, points/mesh }.
     // We construct all 12 at create() time; particleScale changes rebuild
@@ -479,7 +377,6 @@ export default {
         uMids:       { value: new Vector2() },
         uHighs:      { value: new Vector2() },
         uRms:        { value: 0 },
-        uTtsAmp:     { value: 0 },
       };
     }
 
@@ -669,7 +566,7 @@ export default {
           ${COMMON_DECL}
           void main() {
             if (uOpacity < 0.005) discard;
-            vec3 col = uTint * (0.55 + uMids.y * 0.45 + uTtsAmp * 0.30);
+            vec3 col = uTint * (0.55 + uMids.y * 0.45);
             gl_FragColor = vec4(col, uOpacity * 0.85);
           }
         `,
@@ -821,16 +718,7 @@ export default {
     let lastShuffleAt = -10;
     let dwellAccum = 0;
     let dwellTargetIdx = 0;
-
-    // Lyric stream state.
-    let lyricList = BUILTIN_LYRICS;
-    let lyricIdx = -1;
-    let lyricSinceAdvance = 0;
-    let lyricSpawnT = 0;
-    let lastBeatGate = false;
-    let lastBassGate = false;
     let activeStratumIdx = 0;
-    let activeStyle = 'concrete';
 
     // Camera state — orbit around active stratum.
     let azimuth = 0, elevation = 0.10;
@@ -853,18 +741,6 @@ export default {
     function stratumIdToIdx(id) {
       for (let i = 0; i < STRATA.length; i++) if (STRATA[i].id === id) return i;
       return 0;
-    }
-
-    function advanceLyric(force = false) {
-      if (lyricList.length === 0) return;
-      if (lyricIdx < 0) lyricIdx = 0;
-      else lyricIdx = (lyricIdx + 1) % lyricList.length;
-      lyricSinceAdvance = 0;
-      lyricSpawnT = performance.now() * 0.001;
-      const line = lyricList[lyricIdx];
-      paintLyricLine(line.text);
-      activeStyle = line.style;
-      void force;
     }
 
     function setActivePalette(palette) {
@@ -963,7 +839,6 @@ export default {
       }
 
       ensureGrid(!!params.gridLines);
-      ensureLyricSprite();
       ensureHudCanvas();
 
       setActivePalette(params.palette);
@@ -1044,7 +919,6 @@ export default {
         const opacity = Math.exp(-(dz * dz) / (FALLOFF * FALLOFF));
         s.uniforms.uOpacity.value = opacity;
         s.uniforms.uTime.value = time;
-        s.uniforms.uTtsAmp.value = ttsState.ampEnv;
         if (opacity > bestOp) { bestOp = opacity; bestIdx = i; }
       }
       activeStratumIdx = bestIdx;
@@ -1094,106 +968,6 @@ export default {
         }
       }
 
-      // ── Lyric advance ──────────────────────────────────────────────────
-      if (params.lyrics === 'off') {
-        if (lyricSprite) lyricSprite.visible = false;
-      } else {
-        if (lyricSprite) lyricSprite.visible = true;
-        if (lyricIdx < 0) advanceLyric(true);
-        lyricSinceAdvance += dt;
-        const adv = params.lyricsAdvance;
-        let advance = false;
-        if (adv === 'tempo') {
-          if (lyricSinceAdvance >= params.lyricsTempo) advance = true;
-        } else if (adv === 'beat') {
-          if (audio.beat.active && !lastBeatGate && lyricSinceAdvance > 0.4) advance = true;
-        } else if (adv === 'bass') {
-          // Rising-edge over a moderate threshold.
-          const bg = audio.bands.bass > 0.55;
-          if (bg && !lastBassGate && lyricSinceAdvance > 0.6) advance = true;
-          lastBassGate = bg;
-        }
-        lastBeatGate = audio.beat.active;
-        if (advance) {
-          advanceLyric();
-          if (params.lyricsTTS !== 'off') {
-            speakLine(lyricList[lyricIdx].text, params);
-          }
-        }
-        // Resolve effective style: 'auto' uses the per-line tag.
-        const styleParam = params.lyricsStyle === 'auto'
-          ? activeStyle
-          : params.lyricsStyle;
-        // Position lyric sprite at the active stratum's z, then apply per-
-        // style transform. The base position lives "in front of" the stratum
-        // so it's readable even mid-cloud.
-        if (lyricSprite && lyricIdx >= 0) {
-          const line = lyricList[lyricIdx];
-          const targetIdx = stratumIdToIdx(line.scale);
-          const targetZ = stratumZ(targetIdx) + VIEW_OFFSET * 0.35;
-          // Base scale: matches the field width at that depth so the line
-          // reads about 60% of frame width.
-          const baseW = 18, baseH = 4.5;
-          const tLife = (performance.now() * 0.001) - lyricSpawnT;
-          let x = 0, y = 4, z = targetZ;
-          let sx = baseW, sy = baseH;
-          let alpha = 1;
-          // Fade-in at line start, fade-out near advance time.
-          const lifeFrac = lyricSinceAdvance / Math.max(0.5, params.lyricsTempo);
-          alpha *= Math.min(1, lyricSinceAdvance / 0.35);
-          if (params.lyricsAdvance === 'tempo') {
-            alpha *= Math.min(1, (1 - lifeFrac) / 0.25);
-          }
-          switch (styleParam) {
-            case 'shatter': {
-              // Scale balloons + alpha falls — feels like the word disintegrates.
-              const t = Math.min(1, tLife * 0.6);
-              sx = baseW * (1 + t * 1.5);
-              sy = baseH * (1 + t * 1.5);
-              alpha *= 1 - t * 0.8;
-              break;
-            }
-            case 'fieldlines': {
-              // Slide along a sinusoid across the frame.
-              x = Math.sin(tLife * 0.7) * 6;
-              y = 3 + Math.cos(tLife * 0.5) * 1.5;
-              break;
-            }
-            case 'orbital': {
-              // Orbit a small circle around the stratum centre.
-              const angle = tLife * 0.9;
-              x = Math.cos(angle) * 5.0;
-              y = 3 + Math.sin(angle) * 2.5;
-              break;
-            }
-            case 'concrete':
-            default: {
-              // Stable position; gentle sway only.
-              x = Math.sin(tLife * 0.4) * 0.8;
-              y = 4;
-              break;
-            }
-          }
-          lyricSprite.position.set(x, y, z);
-          lyricSprite.scale.set(sx, sy, 1);
-          if (lyricSprite.material) {
-            lyricSprite.material.opacity = Math.max(0, Math.min(1, alpha * params.lyricsOpacity));
-          }
-        }
-      }
-      // TTS amp envelope decays exponentially regardless of source.
-      if (ttsState.ampEnv > 0) {
-        ttsState.ampEnv *= Math.pow(0.5, dt / 0.6);   // 0.6s half-life
-        if (ttsState.ampEnv < 1e-3) ttsState.ampEnv = 0;
-      }
-      // Even without true audio routing, keep the env alive while the
-      // synth is mid-utterance so the visualiser breathes with it.
-      if (params.lyricsTTS === 'speak+react'
-          && ttsState.supported
-          && window.speechSynthesis.speaking) {
-        ttsState.ampEnv = Math.max(ttsState.ampEnv, 0.55);
-      }
-
       // ── HUD ribbon: repaint only when the active stratum changes ──────
       legendOn = !!params.showLegend;
       if (legendOn && activeStratumIdx !== lastHudActive) {
@@ -1238,14 +1012,9 @@ export default {
     }
 
     function dispose() {
-      cancelTts();
-      if (visibilityHandler && typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', visibilityHandler);
-      }
       // Tear down our scene graph; renderer is core-owned.
       disposeObject3D(scene);
       disposeObject3D(hudScene);
-      if (lyricTexture) lyricTexture.dispose();
       if (hudTexture) hudTexture.dispose();
       stratumMap.clear();
     }
