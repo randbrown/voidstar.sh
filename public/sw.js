@@ -10,8 +10,10 @@
 //     `res.ok` responses are ever cached. A miss + network failure OR a non-ok
 //     response (404/redirect — whose body is HTML) answers with a cached copy
 //     or `Response.error()`, never the HTML body, so a subresource request
-//     fails cleanly as a script error (which the page can recover from with a
-//     one-shot reload) instead of a text/html-typed module load failure.
+//     fails cleanly as a script error instead of a text/html-typed module load
+//     failure. For a hashed `/_astro/*` file, a non-ok response also triggers a
+//     one-shot cache-busting retry that self-heals a poisoned edge cache (see
+//     `retryOnce`) — so a pinned cross-deploy 404 no longer needs a manual purge.
 //   - Cross-origin requests (Strudel CDN, MediaPipe models, fonts.gstatic):
 //     pass through completely — let the browser HTTP cache handle them.
 //     Caching opaque cross-origin responses fills storage with junk and
@@ -23,11 +25,18 @@
 // SW take over immediately so users don't need a hard reload.
 
 // v9: harden the asset path so a non-ok subresource response (a 404/redirect
-// whose body is HTML) is never handed back to a module/style request — that
-// surfaced as "Failed to load module script: … MIME type of text/html" after a
-// deploy. Bumping the version also purges the old cache on every client so no
-// one stays pinned to a stale app-shell.
-const SW_VERSION = 'v9';
+//     whose body is HTML) is never handed back to a module/style request — that
+//     surfaced as "Failed to load module script: … MIME type of text/html".
+// v10: self-heal a poisoned edge cache. A transient cross-deploy 404 for a
+//     hashed `/_astro/*` file can get pinned in Cloudflare's CDN under the
+//     `immutable, max-age=1y` header, so the canonical URL keeps serving that
+//     404 to everyone until a manual purge. On a non-ok `/_astro/*` response we
+//     now retry once with a cache-busting query — a fresh edge key that dodges
+//     the poisoned entry and fetches the real bytes — and cache the result
+//     under the canonical key so later loads never need the retry.
+// Bumping the version also purges the old cache on every client so no one stays
+// pinned to a stale app-shell.
+const SW_VERSION = 'v10';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
@@ -116,24 +125,39 @@ self.addEventListener('fetch', (event) => {
   //     site's HTML error page. Handing that back for a `/_astro/*.js` request
   //     makes the browser reject the module with "expected a JavaScript module
   //     but the server responded with a MIME type of text/html" — the reported
-  //     prod error, seen when a client requests a hashed chunk the edge is
-  //     momentarily 404ing (deploy propagation) or an old SW mis-serves. Treat
-  //     a non-ok subresource response the same as a failure: prefer any cached
-  //     copy, else fail cleanly so the load errors as a script error (which the
-  //     page can recover from with a reload) rather than a bogus HTML document.
+  //     prod error. For a content-hashed `/_astro/*` file, a non-ok response is
+  //     almost always a poisoned edge cache (a transient cross-deploy 404 pinned
+  //     under the `immutable` header), so we retry once with a cache-busting
+  //     query (`retryOnce` below) before giving up. For anything else, treat a
+  //     non-ok response as a failure: prefer any cached copy, else fail cleanly
+  //     so the load errors as a script error (recoverable with a reload) rather
+  //     than a bogus HTML document.
   const immutable = url.pathname.startsWith('/_astro/');
+
+  // Persist a good response under the ORIGINAL request key (no cache-buster) so
+  // later loads are served from the SW cache and never need the retry again.
+  const store = (res) => {
+    const copy = res.clone();
+    caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+    return res;
+  };
+
+  // A hashed /_astro/* file is immutable, so a cache-busting query returns the
+  // identical bytes from a fresh edge key — this is what dodges a poisoned 404.
+  const retryOnce = (cached) => {
+    if (!immutable) return cached || Response.error();
+    const bust = new URL(req.url);
+    bust.searchParams.set('swcb', Date.now().toString(36));
+    return fetch(bust.href, { cache: 'reload' })
+      .then((r2) => (r2 && r2.ok ? store(r2) : (cached || Response.error())))
+      .catch(() => cached || Response.error());
+  };
+
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached && immutable) return cached;
       const fetchPromise = fetch(req)
-        .then((res) => {
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-            return res;
-          }
-          return cached || Response.error();
-        })
+        .then((res) => (res && res.ok ? store(res) : retryOnce(cached)))
         .catch(() => cached || Response.error());
       return cached || fetchPromise;
     })
