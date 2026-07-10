@@ -34,9 +34,18 @@
 //     now retry once with a cache-busting query — a fresh edge key that dodges
 //     the poisoned entry and fetches the real bytes — and cache the result
 //     under the canonical key so later loads never need the retry.
+// v11: purge poisoned caches after the unstyled-prod incident. `/_astro/*.css`
+//     is served cache-first (immutable), so a bad cached stylesheet — or a
+//     stale cache left behind when an app-shell change didn't touch this file —
+//     serves a broken/unstyled page indefinitely without revalidating. Bumping
+//     the version re-triggers install → activate → purge-old-caches →
+//     clients.claim() on every client's next load, clearing the poisoned cache.
+//     (Paired with build.inlineStylesheets:'always', which stops CSS from being
+//     a separately-fetched asset that can fail on its own in the first place.)
+//     Bump this on any deploy that changes the app shell.
 // Bumping the version also purges the old cache on every client so no one stays
 // pinned to a stale app-shell.
-const SW_VERSION = 'v10';
+const SW_VERSION = 'v11';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
