@@ -449,6 +449,90 @@
   --code-filter:   sepia(1) hue-rotate(55deg) saturate(1.8);
 }
 
+/* ---- Glissando (a pedal steel as a control surface — harmonic / sustained) - *
+   A custom pedal steel + studio instrument: polished steel rails, lacquered
+   walnut, pearloid markers, black amplifier cloth, warm pilot lamps. Cool
+   polished-steel blue leads; tube amber + a green pilot lamp warm it. Low
+   glow, horizontal instrument rhythm. The dark/metal half of the Stage-2
+   prototype pair (its opposite is the light/paper risograph below).
+   Additive theme: sets tokens only; skin + control identity are scoped below.  */
+[data-theme="glissando"] {
+  --void:        #0a0806;            /* black amp cloth / deep lacquer */
+  --void-2:      #100c09;
+  --surface:     #171310;            /* smoked walnut */
+  --surface-2:   #221b15;            /* near-black steel body */
+  --border:      #3a3128;            /* aged metal edge */
+  --border-2:    #5f5142;            /* brushed brass rim */
+  --text:        #ece5d6;            /* pearloid ivory */
+  --text-muted:  #a89d88;
+  --text-dim:    #6e6555;
+  --accent:      #6f9fca;            /* cool polished-steel blue (the lead) */
+  --accent-glow: rgba(111, 159, 202, 0.30);
+  --cyan:        #8fd6e2;            /* high harmonic shimmer */
+  --cyan-glow:   rgba(143, 214, 226, 0.26);
+  --pink:        #cf8b72;            /* faint copper / rose reflection */
+  --pink-glow:   rgba(207, 139, 114, 0.24);
+  --green:       #72c58a;            /* amplifier pilot lamp */
+  --amber:       #e6a84c;            /* tube / stage-lamp warmth */
+  --radius:      7px;
+  --radius-lg:   10px;
+  --glow-strength: 0.6;
+  --panel-blur:  8px;
+  --viz-bg:        #0a0806;
+  --viz-hue-base:  40;               /* tube gold (bass) … */
+  --viz-hue-spread: 158;             /* … up through pilot-green to harmonic cyan */
+  --viz-sat:       50;
+  --viz-light:     55;
+  --viz-glow:      0.7;
+  --code-filter:   sepia(0.7) hue-rotate(172deg) saturate(1.15) brightness(1.04);
+}
+
+/* ---- Risograph (spot-ink print — daytime editorial / zine) ---------------- *
+   A live instrument printed in imperfect overlapping spot inks on warm
+   uncoated paper: fluorescent pink (lead), sea-blue, riso-red, moss, sunflower
+   — soy-black type. Flat graphic panels, hard printed shadows, near-zero glow,
+   a faint paper grain (via the existing --tex-grain overlay; no new
+   architecture). A LIGHT theme — the hard case — so surfaces are opaque paper
+   and the inks are saturated-but-dark so they read on paper AND as small text.
+   The light/paper half of the Stage-2 prototype pair (opposite of glissando).  */
+[data-theme="risograph"] {
+  --void:        #f2e9d8;            /* warm uncoated paper (page) */
+  --void-2:      #e9dec9;
+  --surface:     #faf4e8;            /* bright paper stock */
+  --surface-2:   #efe4d0;            /* a second paper stock */
+  --border:      #cbbfa6;            /* paper edge / trim */
+  --border-2:    #a89a7d;
+  --text:        #1b1720;            /* soy-black / dark indigo ink */
+  --text-muted:  #5c5446;
+  --text-dim:    #857b64;
+  /* Opaque paper panels (this is a light theme over a paper canvas — a
+     translucent panel would muddy against the print). */
+  --surface-glass:   #f6f0e3;
+  --surface-glass-2: #eee4d2;
+  --hud-border:      #cbbfa6;
+  --accent:      #c8156a;            /* fluorescent riso pink (lead) */
+  --accent-glow: rgba(200, 21, 106, 0.22);
+  --cyan:        #1d60b4;            /* sea-blue spot ink */
+  --cyan-glow:   rgba(29, 96, 180, 0.20);
+  --pink:        #cc2b40;            /* riso red / fluor coral */
+  --pink-glow:   rgba(204, 43, 64, 0.20);
+  --green:       #178049;            /* moss / teal overprint */
+  --amber:       #c96a12;            /* sunflower / orange spot ink */
+  --font-ui:     'Space Grotesk', system-ui, sans-serif;  /* editorial grotesk */
+  --radius:      0;                  /* hard-edged print */
+  --radius-lg:   0;
+  --glow-strength: 0;                /* flat print — no bloom */
+  --panel-blur:  0px;
+  --tex-grain:   0.05;               /* faint paper tooth (existing overlay) */
+  --viz-bg:        #f2e9d8;          /* printed on paper */
+  --viz-hue-base:  205;              /* sea blue … */
+  --viz-hue-spread: 128;             /* … through indigo to fluorescent pink */
+  --viz-sat:       80;
+  --viz-light:     46;               /* inks read dark on paper */
+  --viz-glow:      0.12;
+  --code-filter:   sepia(0.5) hue-rotate(300deg) saturate(1.2) contrast(1.02);
+}
+
 /* ============================================================================
    Texture overlays — scanlines (phosphor) and film grain (tape).
    A fixed, pointer-events:none layer over the page; opacity driven by the
@@ -1107,6 +1191,159 @@ body::before {
 }
 [data-theme="gardens"] .qp-head .qp-title::before { content: "❀ "; color: var(--pink); }
 
+/* ────────────────────────────────────────────────────────────────────────
+   Glissando — polished pedal-steel hardware. Controls are brushed-metal
+   pedal keys with a pearloid top highlight; the active state lights a warm
+   pilot lamp (amber wash + a seated inset). Panels are lacquered wood/steel
+   lit by a bright steel hairline along the top edge; each header carries a
+   pearloid fret-inlay marker over a thin steel rule. Horizontal, low-glow.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="glissando"] .btn,
+[data-theme="glissando"] .ctrl-btn,
+[data-theme="glissando"] .qp-toggle,
+[data-theme="glissando"] .qp-preset,
+[data-theme="glissando"] .qp-tab,
+[data-theme="glissando"] .start-btn {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 74%, #fff 26%),
+    var(--surface-2) 55%,
+    color-mix(in srgb, var(--surface-2) 80%, #000 20%)) !important;
+  border: 1px solid var(--border-2) !important;
+  border-radius: 6px !important;
+  color: var(--text) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.4),
+    0 1px 2px rgba(0, 0, 0, 0.5) !important;
+  transition: box-shadow 0.25s, color 0.25s, border-color 0.25s;
+}
+[data-theme="glissando"] .ctrl-btn:hover,
+[data-theme="glissando"] .qp-toggle:hover,
+[data-theme="glissando"] .qp-preset:hover,
+[data-theme="glissando"] .qp-tab:hover,
+[data-theme="glissando"] .btn:hover {
+  border-color: var(--accent) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 0 10px var(--accent-glow) !important;
+}
+[data-theme="glissando"] .ctrl-btn.active,
+[data-theme="glissando"] .ctrl-btn.active-audio,
+[data-theme="glissando"] .qp-toggle.active,
+[data-theme="glissando"] .qp-preset.active,
+[data-theme="glissando"] .qp-tab.active {
+  /* the pilot lamp lights: warm amber label + glow, seated into its housing */
+  color: var(--amber) !important;
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--border-2)) !important;
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.5),
+    0 0 12px color-mix(in srgb, var(--amber) 45%, transparent) !important;
+}
+[data-theme="glissando"] .qp-card,
+[data-theme="glissando"] #topbar,
+[data-theme="glissando"] #audio-panel,
+[data-theme="glissando"] .qp-tabs,
+[data-theme="glissando"] .post-card,
+[data-theme="glissando"] .video-card,
+[data-theme="glissando"] #cycle-mgr {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 6%, var(--surface-glass)),
+    var(--surface-glass)) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 40%, rgba(255, 255, 255, 0.12)),
+    0 6px 20px rgba(0, 0, 0, 0.45) !important;
+}
+[data-theme="glissando"] .qp-card > .qp-head {
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent) !important;
+  padding-bottom: 0.28rem !important;
+  letter-spacing: 0.04em;
+}
+[data-theme="glissando"] .qp-head .qp-title::before { content: "◈ "; color: var(--accent); }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Risograph — spot-ink print. Controls are flat printed keys: hard ink
+   borders, no soft shadow, a hard mis-registered offset shadow in a second
+   ink. Active = the two inks "align": the key fills with the lead ink, the
+   label flips to paper, and the offset snaps to zero. Panels are flat paper
+   cards with hard printed shadows; headers are solid ink bars with paper
+   type and a registration mark. Near-zero glow; faint grain via --tex-grain.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="risograph"] .btn,
+[data-theme="risograph"] .ctrl-btn,
+[data-theme="risograph"] .qp-toggle,
+[data-theme="risograph"] .qp-preset,
+[data-theme="risograph"] .qp-tab,
+[data-theme="risograph"] .start-btn {
+  background: var(--surface) !important;
+  border: 2px solid var(--text) !important;
+  border-radius: 0 !important;
+  color: var(--text) !important;
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--accent) 78%, transparent) !important;
+  transition: box-shadow 0.12s, transform 0.12s, background 0.12s, color 0.12s;
+}
+[data-theme="risograph"] .ctrl-btn:hover,
+[data-theme="risograph"] .qp-toggle:hover,
+[data-theme="risograph"] .qp-preset:hover,
+[data-theme="risograph"] .qp-tab:hover,
+[data-theme="risograph"] .btn:hover,
+[data-theme="risograph"] .start-btn:hover {
+  /* the second ink slips further out of registration */
+  box-shadow: 3px 3px 0 color-mix(in srgb, var(--cyan) 80%, transparent) !important;
+  transform: translate(-1px, -1px);
+}
+[data-theme="risograph"] .ctrl-btn.active,
+[data-theme="risograph"] .ctrl-btn.active-audio,
+[data-theme="risograph"] .qp-toggle.active,
+[data-theme="risograph"] .qp-preset.active,
+[data-theme="risograph"] .qp-tab.active {
+  /* two inks align — solid ink fill, paper label, registration to zero */
+  background: var(--accent) !important;
+  color: var(--void) !important;
+  border-color: var(--text) !important;
+  box-shadow: none !important;
+  transform: translate(1px, 1px);
+}
+[data-theme="risograph"] .qp-card,
+[data-theme="risograph"] #topbar,
+[data-theme="risograph"] #audio-panel,
+[data-theme="risograph"] .qp-tabs,
+[data-theme="risograph"] .post-card,
+[data-theme="risograph"] .video-card,
+[data-theme="risograph"] #cycle-mgr {
+  background: var(--surface) !important;
+  border: 2px solid var(--text) !important;
+  border-radius: 0 !important;
+  box-shadow: 4px 4px 0 color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+[data-theme="risograph"] .qp-card > .qp-head {
+  background: var(--text) !important;
+  color: var(--void) !important;
+  border-radius: 0 !important;
+  padding: 0.22rem 0.5rem !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+[data-theme="risograph"] .qp-card > .qp-head .qp-title,
+[data-theme="risograph"] .qp-card > .qp-head span { color: var(--void) !important; }
+[data-theme="risograph"] .qp-head .qp-title::before { content: "⊕ "; color: var(--void); opacity: 0.7; }
+/* Lighten the hardcoded-dark popovers/overlays (fixed rgba fills, not tokens)
+   so they don't read as dark slabs on paper. */
+[data-theme="risograph"] #quick-menu,
+[data-theme="risograph"] .panel-io-actions {
+  background: var(--surface) !important;
+  border: 2px solid var(--text) !important;
+  box-shadow: 4px 4px 0 color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+[data-theme="risograph"] #status-overlay { background: color-mix(in srgb, var(--void) 93%, transparent) !important; }
+[data-theme="risograph"] #status-overlay .status-title { color: var(--text) !important; }
+/* The hero wordmark PNG is a light glow-on-dark asset that washes out on paper;
+   invert it to a soy-ink print with a fluorescent-pink mis-registration ghost. */
+[data-theme="risograph"] .hero-logo {
+  filter: invert(1) contrast(1.05) drop-shadow(3px 3px 0 rgba(200, 21, 106, 0.45)) !important;
+}
+
 /* ============================================================================
    GENERATED CONTROLS — the JS-built qualia utility controls.
    ----------------------------------------------------------------------------
@@ -1451,6 +1688,73 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
     radial-gradient(120% 140% at 30% 0%, rgba(255, 255, 255, 0.08), transparent 50%),
     color-mix(in srgb, var(--green) 8%, var(--surface-glass-2)) !important;
   box-shadow: 0 0 8px color-mix(in srgb, var(--green) 20%, transparent) !important;
+}
+
+/* ── Glissando — polished steel string rail / brushed pedal-changer pills ──
+   Track = a round steel rail (metallic cross-section) lit by a thin accent
+   excitation; fill = harmonic excitation running the string; thumb = the
+   chrome tone bar (a wide short pearloid-steel capsule). Pills = brushed
+   metal linkages; the per-channel border/meter colour is left untouched so
+   the modulator source stays legible on the dark walnut. */
+[data-theme="glissando"] {
+  --ctl-slider-track:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--text) 55%, transparent),
+      color-mix(in srgb, #9fb4c4 60%, var(--surface)) 45%,
+      color-mix(in srgb, #000 45%, var(--surface)));
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 999px;
+  --ctl-slider-track-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.5), 0 0 4px var(--accent-glow);
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb: linear-gradient(180deg, #f4f7fa, #b9c9d6 42%, #6f8494 62%, #33414c);
+  --ctl-slider-thumb-w: 18px;
+  --ctl-slider-thumb-h: 11px;
+  --ctl-slider-thumb-radius: 5px;
+  --ctl-slider-thumb-border: 1px solid #2a343c;
+  --ctl-slider-thumb-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 1px 3px rgba(0, 0, 0, 0.6), 0 0 6px var(--accent-glow);
+}
+[data-theme="glissando"] .qp-mod-pill {
+  border-radius: 4px !important;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-2) 72%, #fff 28%), var(--surface-2)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 1px 2px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* ── Risograph — printed rule w/ registration offset / punched-mark thumb ──
+   Track = a soy-black printed rule with a second ink slipped out of
+   registration (the offset shadow); thumb = a punched square registration
+   tab, hard-edged, with the same mis-registration; meter = a halftone dot
+   screen. Pills = flat overprinted paper labels (ink border, hard offset);
+   the source colour rides the theme-aware meter (blue/red/pink). */
+[data-theme="risograph"] {
+  --ctl-slider-track: var(--text);
+  --ctl-slider-track-h: 3px;
+  --ctl-slider-track-radius: 0;
+  --ctl-slider-track-shadow: 1.5px 1.5px 0 color-mix(in srgb, var(--cyan) 70%, transparent);
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb: var(--accent);
+  --ctl-slider-thumb-w: 13px;
+  --ctl-slider-thumb-h: 13px;
+  --ctl-slider-thumb-radius: 0;
+  --ctl-slider-thumb-border: 2px solid var(--text);
+  --ctl-slider-thumb-shadow: 1.5px 1.5px 0 color-mix(in srgb, var(--cyan) 75%, transparent);
+  --ctl-meter-bg:
+    radial-gradient(circle, color-mix(in srgb, var(--text) 30%, transparent) 0.8px, transparent 1.1px) 0 0 / 4px 4px,
+    var(--surface-2);
+  --ctl-focus-ring: 0 0 0 2px var(--cyan);
+  --ctl-scrollbar-track: var(--void-2);
+  --ctl-scrollbar-thumb: color-mix(in srgb, var(--text) 55%, var(--void));
+}
+[data-theme="risograph"] .qp-mod-pill {
+  border-radius: 0 !important;
+  background: var(--surface) !important;
+  border: 2px solid var(--text) !important;
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--accent) 25%, transparent) !important;
+  color: var(--text) !important;
+}
+[data-theme="risograph"] .qp-mod-name {
+  color: var(--text) !important; text-transform: uppercase; letter-spacing: 0.06em;
 }
 
 /* ============================================================================

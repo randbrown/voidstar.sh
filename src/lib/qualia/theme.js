@@ -24,6 +24,8 @@ export const THEMES = [
   { id: 'glass',          label: 'glass ◆' },
   { id: 'visioneer',      label: 'visioneer ◉' },
   { id: 'gardens',        label: 'gardens ❀' },
+  { id: 'glissando',      label: 'glissando ◈' },
+  { id: 'risograph',      label: 'risograph ⊕' },
 ];
 
 // Renamed theme ids → their current id. Keeps a saved preference (and any old
