@@ -28,6 +28,9 @@ const ROOT_FOLDER_NAME = 'voidstar_mind';
 const ROOT_FOLDER_ID_KEY = `${NS}.rootFolderId`;
 // Set once the legacy scattered layout has been re-homed under the root folder.
 const CONSOLIDATED_KEY = `${NS}.consolidated`;
+// Set once this device has folded any duplicate top-level voidstar_mind
+// folders into one (one-time forced heal — see healRootFoldersOnce).
+const ROOT_HEALED_KEY = `${NS}.rootHealed`;
 
 const BACKUPS_FOLDER_NAME = 'backups';
 const BACKUPS_FOLDER_ID_KEY = `${NS}.backupsFolderId`;
@@ -260,43 +263,141 @@ async function updateFile(token, fileId, data) {
   return res.json();
 }
 
-// Find (or create) a folder by name, optionally scoped to / created inside a
-// parent folder. `parentId` omitted → Drive root (used for the top-level
-// voidstar_mind folder itself).
-async function findOrCreateFolder(token, name, cacheKey, parentId = '') {
-  const cached = localStorage.getItem(cacheKey);
-  if (cached) return cached;
-  const q = [`name='${name}'`, `mimeType='application/vnd.google-apps.folder'`, 'trashed=false'];
+// Concurrent resolvers must not each create a folder. The sync cycle and the
+// attachment-upload queue run under SEPARATE locks (_syncing vs _uploading),
+// so with a cold id cache both can call getRootFolderId / findOrCreateFolder
+// at once — each searches, finds nothing, and creates its own folder. That is
+// exactly how two top-level voidstar_mind folders appear (one ends up with the
+// data file, the other with attachments/ + backups/). An in-flight promise per
+// cache key collapses same-tab racers onto ONE resolution; the localStorage id
+// then caches the winner for everyone.
+const _folderInflight = new Map();
+
+async function searchFolders(token, name, { parentId = '', pageSize = 1, orderBy = '' } = {}) {
+  const q = [`name='${name.replace(/'/g, "\\'")}'`, `mimeType='application/vnd.google-apps.folder'`, 'trashed=false'];
   if (parentId) q.push(`'${parentId}' in parents`);
   const params = new URLSearchParams({
     q: q.join(' and '),
     spaces: 'drive',
-    fields: 'files(id,name)',
-    pageSize: '1',
+    fields: 'files(id,name,createdTime)',
+    pageSize: String(pageSize),
   });
+  if (orderBy) params.set('orderBy', orderBy);
   const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
     headers: { 'Authorization': `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`Drive folder search failed: ${res.status}`);
-  let folderId = (await res.json()).files?.[0]?.id;
-  if (!folderId) {
-    const body = { name, mimeType: 'application/vnd.google-apps.folder' };
-    if (parentId) body.parents = [parentId];
-    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!createRes.ok) throw new Error(`Drive folder create failed: ${createRes.status}`);
-    folderId = (await createRes.json()).id;
-  }
-  localStorage.setItem(cacheKey, folderId);
-  return folderId;
+  return (await res.json()).files || [];
+}
+
+async function createDriveFolder(token, name, parentId = '') {
+  const body = { name, mimeType: 'application/vnd.google-apps.folder' };
+  if (parentId) body.parents = [parentId];
+  const res = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Drive folder create failed: ${res.status}`);
+  return (await res.json()).id;
+}
+
+// Find (or create) a subfolder by name inside `parentId`. Serialized per cache
+// key by the in-flight map above so two racing callers share one folder.
+async function findOrCreateFolder(token, name, cacheKey, parentId = '') {
+  const cached = localStorage.getItem(cacheKey);
+  if (cached) return cached;
+  if (_folderInflight.has(cacheKey)) return _folderInflight.get(cacheKey);
+  const p = (async () => {
+    const found = await searchFolders(token, name, { parentId, pageSize: 1 });
+    const folderId = found[0]?.id || await createDriveFolder(token, name, parentId);
+    localStorage.setItem(cacheKey, folderId);
+    return folderId;
+  })();
+  _folderInflight.set(cacheKey, p);
+  try { return await p; }
+  finally { _folderInflight.delete(cacheKey); }
 }
 
 // The single top-level folder that holds everything (data file + subfolders).
+// If duplicates already exist (a past race, or two devices' cold-cache first
+// syncs), resolve to the OLDEST and fold every straggler's contents into it so
+// the app converges on one folder. Deterministic canonical (oldest createdTime,
+// id tiebreak) so two devices healing at once pick the same survivor.
 async function getRootFolderId(token) {
-  return findOrCreateFolder(token, ROOT_FOLDER_NAME, ROOT_FOLDER_ID_KEY);
+  const cached = localStorage.getItem(ROOT_FOLDER_ID_KEY);
+  if (cached) return cached;
+  if (_folderInflight.has(ROOT_FOLDER_ID_KEY)) return _folderInflight.get(ROOT_FOLDER_ID_KEY);
+  const p = (async () => {
+    const found = await searchFolders(token, ROOT_FOLDER_NAME, { pageSize: 100, orderBy: 'createdTime' });
+    let rootId;
+    if (!found.length) {
+      rootId = await createDriveFolder(token, ROOT_FOLDER_NAME);
+    } else {
+      const sorted = [...found].sort((a, b) =>
+        (a.createdTime || '').localeCompare(b.createdTime || '') || a.id.localeCompare(b.id));
+      rootId = sorted[0].id;
+      if (sorted.length > 1) {
+        for (const dup of sorted.slice(1)) {
+          try { await mergeFolderInto(token, dup.id, rootId); }
+          catch (e) { console.warn('[mind-sync] duplicate root folder heal deferred:', e.message); }
+        }
+        // A subfolder id we cached may have lived in (or been merged away from)
+        // a duplicate root — drop the caches so they re-resolve under the survivor.
+        localStorage.removeItem(ATTACH_FOLDER_ID_KEY);
+        localStorage.removeItem(BACKUPS_FOLDER_ID_KEY);
+      }
+    }
+    localStorage.setItem(ROOT_FOLDER_ID_KEY, rootId);
+    return rootId;
+  })();
+  _folderInflight.set(ROOT_FOLDER_ID_KEY, p);
+  try { return await p; }
+  finally { _folderInflight.delete(ROOT_FOLDER_ID_KEY); }
+}
+
+// Every non-trashed child of a folder ({id,name,mimeType}), paginated — an
+// attachments/ folder can hold thousands of files (esp. after a bulk import).
+async function listChildren(token, parentId) {
+  const out = [];
+  let pageToken = '';
+  do {
+    const params = new URLSearchParams({
+      q: `'${parentId}' in parents and trashed=false`,
+      spaces: 'drive',
+      fields: 'nextPageToken,files(id,name,mimeType)',
+      pageSize: '1000',
+    });
+    if (pageToken) params.set('pageToken', pageToken);
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Drive child list failed: ${res.status}`);
+    const json = await res.json();
+    out.push(...(json.files || []));
+    pageToken = json.nextPageToken || '';
+  } while (pageToken);
+  return out;
+}
+
+// Move every child of `srcId` into `destId`, merging same-named subfolders (so
+// we never leave two attachments/ or two backups/ behind), then trash the
+// emptied source. Recoverable — files are trashed, not deleted — and works
+// under drive.file because the app created all of these. Duplicate DATA FILES
+// that land side by side are healed later by pull() (merge + trash).
+async function mergeFolderInto(token, srcId, destId, depth = 0) {
+  if (srcId === destId || depth > 4) return;
+  const isFolder = (c) => c.mimeType === 'application/vnd.google-apps.folder';
+  const [srcChildren, destChildren] = await Promise.all([
+    listChildren(token, srcId), listChildren(token, destId),
+  ]);
+  const destFolderByName = new Map(destChildren.filter(isFolder).map(c => [c.name, c.id]));
+  for (const child of srcChildren) {
+    const twin = isFolder(child) ? destFolderByName.get(child.name) : null;
+    if (twin) await mergeFolderInto(token, child.id, twin, depth + 1); // trashes child.id
+    else await reparentInto(token, child.id, destId);
+  }
+  await trashFile(token, srcId);
 }
 
 // One-time migration to the single-folder layout: move the legacy loose data
@@ -330,6 +431,24 @@ async function migrateToRootFolder(token) {
     // Leave the flag unset so the next init retries. Normal ops still work:
     // fresh installs simply create everything under the root folder.
     console.warn('[mind-sync] folder consolidation deferred:', e.message);
+  }
+}
+
+// Consolidate any pre-existing duplicate top-level folders exactly once per
+// device. getRootFolderId only heals when its id cache is COLD, but an already
+// affected install has a warm cache pointing at one of the twins — so it would
+// keep using that twin and never merge. Force a single fresh resolution
+// (dropping the cache) to fold the duplicates together, then flag it done so we
+// don't pay the wider scan on every init. Idempotent and best-effort: a
+// deferral just retries next launch.
+async function healRootFoldersOnce(token) {
+  if (localStorage.getItem(ROOT_HEALED_KEY)) return;
+  try {
+    localStorage.removeItem(ROOT_FOLDER_ID_KEY);
+    await getRootFolderId(token); // re-scans, merges twins, re-caches the survivor
+    localStorage.setItem(ROOT_HEALED_KEY, String(Date.now()));
+  } catch (e) {
+    console.warn('[mind-sync] duplicate root folder heal deferred:', e.message);
   }
 }
 
@@ -380,6 +499,8 @@ export async function initGdriveSync({ interactive = true } = {}) {
   // Move any legacy scattered files under the single voidstar_mind folder
   // before the first pull/push so scoped discovery is valid (one-time, guarded).
   await migrateToRootFolder(token);
+  // Fold any duplicate top-level voidstar_mind folders into one (one-time).
+  await healRootFoldersOnce(token);
 
   return {
     async push(data) {

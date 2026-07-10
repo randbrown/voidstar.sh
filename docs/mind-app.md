@@ -21,7 +21,7 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 | Voice | `voice.js`, `voice-capture.js`, `audio-out.js` | Web Speech dictation (continuous, restart loop, final dedupe) + MediaRecorder on the same mic; keep-audio / insert-transcript toggles; record-only fallback on contention. Mic picker reuses `qualia/devices.js`; speaker via `setSinkId` (hidden on Safari). |
 | OCR | `ocr.js` | tesseract.js lazy-loaded from CDN on first image; serial idle queue over `ocrStatus='pending'`; text stored on the attachment (searchable, rides sync so other devices never re-OCR). |
 | Annotation | `annotation.js`, `views/annotate.js` | Forked from `setlist/annotation.js`: pen (with stylus pressure), highlighter, arrow, rect, ellipse, text, eraser, select, pan; shared palette/size scale; two-finger scroll; autosaves; flatten-to-copy export. Keyed `attachmentId[:page]` (page reserved for PDFs). |
-| Drive sync | `gdrive-sync.js`, `attachments-drive.js` | Forked from `setlist/gdrive-backup.js` (GIS auth, drive.file scope, **app-owned OAuth client id** — "Sign in with Google", with a user override in Settings → advanced; see the sign-in note below — pull→merge→push cycle, peek freshness gate, persisted dirty flag, duplicate-file healing, rotating 10-copy history). Additions: **conflict copies** and **attachment binaries** (below). |
+| Drive sync | `gdrive-sync.js`, `attachments-drive.js` | Forked from `setlist/gdrive-backup.js` (GIS auth, drive.file scope, **app-owned OAuth client id** — "Sign in with Google", with a user override in Settings → advanced; see the sign-in note below — pull→merge→push cycle, peek freshness gate, persisted dirty flag, duplicate-file healing, rotating 10-copy history). Additions: **conflict copies**, **attachment binaries** (below), and **duplicate root-folder healing** (below). |
 | Import/export | `import-doc.js`, `dates.js`, `export.js`, `views/import-doc-modal.js`, `gdrive-picker.js` | Whole-document import (split into notes) + single-doc markdown export + JSON/zip. See the import/export section below. |
 
 ## Sync model
@@ -44,6 +44,17 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   re-parented into `voidstar_mind/` and the two legacy folders are moved in and
   renamed to `attachments/` / `backups/` (re-parenting works under `drive.file`
   since the app owns them). Fresh installs just create everything nested.
+- **Duplicate root-folder healing** (`getRootFolderId` + `mergeFolderInto`):
+  the sync cycle and the attachment-upload queue run under separate locks, so a
+  cold id cache let both create their own top-level `voidstar_mind/` (one ended
+  up with the data file, the other with `attachments/` + `backups/`). Now folder
+  resolution is serialized per cache key by an in-flight promise, and a cold
+  `getRootFolderId` lists ALL `voidstar_mind` folders: >1 → keep the oldest
+  (deterministic, so devices converge) and fold the rest in (children
+  re-parented, same-named subfolders merged, empties trashed — recoverable).
+  `healRootFoldersOnce` forces this one merge pass on existing split installs
+  (whose warm cache would otherwise never re-scan). Duplicate *data files* that
+  land side by side are still healed by `pull()` (merge + trash).
 - Merge: per-record newer-wins with fill-fields (blank never erases content;
   `ATTACHMENT_FILL_FIELDS` protects OCR text/transcripts/driveFileId).
   Tombstones propagate deletes; latest timestamp wins.
