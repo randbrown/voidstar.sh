@@ -4,6 +4,8 @@
 import * as store from '../store.js';
 import { setTaskDoneEverywhere } from '../tasks-sync.js';
 import { navigate, refresh } from '../app.js';
+import { parseCapture } from '../capture.js';
+import { armReminder, reminderSheet, reminderBadge } from '../reminders.js';
 import { el, esc, btn, topBar, emptyState, textPrompt, confirmBox, timeAgo } from '../ui.js';
 
 export async function renderTasks(root, focusListId = null) {
@@ -77,9 +79,14 @@ async function listCard(tl, tasks, folders) {
   input.placeholder = 'add a task…';
   input.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
-    const text = input.value.trim();
-    if (!text) return;
-    await store.putTaskRaw(store.createTask(tl.id, text));
+    const raw = input.value.trim();
+    if (!raw) return;
+    const { text, remindAt } = parseCapture(raw);
+    const task = store.createTask(tl.id, text || raw, {
+      remindAt, remindStatus: remindAt ? 'scheduled' : '',
+    });
+    await store.putTaskRaw(task);
+    if (remindAt) await armReminder(task); // Enter is the permission gesture
     refresh();
   });
   addRow.appendChild(input);
@@ -131,6 +138,14 @@ function taskRow(task) {
     });
   });
   row.appendChild(text);
+
+  const badge = reminderBadge(task);
+  if (badge) row.appendChild(badge);
+
+  const bell = btn(task.remindAt || task.remindPlace ? '&#128276;' : '&#128368;',
+    'mn-btn-ghost mn-task-bell', () => reminderSheet(task, refresh));
+  bell.title = 'set a reminder';
+  row.appendChild(bell);
 
   if (task.sourceNoteId) {
     const link = btn('&#8599;', 'mn-btn-ghost mn-task-notelink', () => navigate(`#note/${task.sourceNoteId}`));

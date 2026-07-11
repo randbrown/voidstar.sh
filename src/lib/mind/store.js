@@ -315,6 +315,17 @@ export function createTask(listId, text, partial = {}) {
     createdAt: now,
     updatedAt: now,
     deletedAt: 0,
+    // Reminders (Phase A, client-only). remindAt = epoch ms (0 = none);
+    // remindPlace = { lat, lng, radius, label } | null; remindStatus =
+    // '' | 'scheduled' | 'notified' | 'snoozed' | 'dismissed'; snoozedUntil =
+    // epoch ms. All protected by TASK_FILL_FIELDS so a stale device can't
+    // silently erase them (see below). NOTE for note-sourced tasks
+    // (sourceNoteId set): the reminder lives on the record only — it does not
+    // round-trip into the note markdown, so tasks-sync must never blank it.
+    remindAt: 0,
+    remindPlace: null,
+    remindStatus: '',
+    snoozedUntil: 0,
     ...partial,
   };
 }
@@ -510,6 +521,11 @@ export async function restoreSnapshot(ts) {
 // device copies merge. `body` is deliberately EXCLUDED: concurrent body edits
 // are resolved by the sync layer as conflict copies, never by field-filling.
 export const NOTE_FILL_FIELDS = ['tags', 'meta', 'sourceDevice', 'folderId'];
+// Task reminder fields — a plain-newer copy lacking them (e.g. a stale device
+// that just ticked a checkbox) must never erase a reminder set elsewhere.
+// Deliberately clearing a reminder calls markCleared() so the tombstone beats
+// the fill.
+export const TASK_FILL_FIELDS = ['remindAt', 'remindPlace', 'remindStatus', 'snoozedUntil'];
 // Attachment fields carrying expensive derived content (OCR, transcripts) or
 // upload state — a copy that lacks them must never erase them in a merge.
 export const ATTACHMENT_FILL_FIELDS = [
@@ -595,7 +611,7 @@ export async function exportAll() {
 export async function importAll(data) {
   if (data.notes) for (const n of data.notes) await put(NOTES, mergeRecord(await getOne(NOTES, n.id), n, NOTE_FILL_FIELDS));
   if (data.folders) for (const f of data.folders) await put(FOLDERS, mergeRecord(await getOne(FOLDERS, f.id), f));
-  if (data.tasks) for (const t of data.tasks) await put(TASKS, mergeRecord(await getOne(TASKS, t.id), t));
+  if (data.tasks) for (const t of data.tasks) await put(TASKS, mergeRecord(await getOne(TASKS, t.id), t, TASK_FILL_FIELDS));
   if (data.tasklists) for (const tl of data.tasklists) await put(TASKLISTS, mergeRecord(await getOne(TASKLISTS, tl.id), tl));
   if (data.attachments) for (const a of data.attachments) await put(ATTACHMENTS, mergeRecord(await getOne(ATTACHMENTS, a.id), a, ATTACHMENT_FILL_FIELDS));
   if (data.annotations) for (const an of data.annotations) await put(ANNOTATIONS, mergeRecord(await getOne(ANNOTATIONS, an.key), an));

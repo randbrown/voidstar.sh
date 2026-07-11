@@ -43,9 +43,14 @@
 //     (Paired with build.inlineStylesheets:'always', which stops CSS from being
 //     a separately-fetched asset that can fail on its own in the first place.)
 //     Bump this on any deploy that changes the app shell.
+// v12: add mind reminder notifications. `notificationclick` deep-links into the
+//     mind task (`/lab/mind#task/<id>`), focusing an existing tab if one is open
+//     and otherwise opening a new window; Done/Snooze action buttons post a
+//     message back to the client so it can update the task. (App-shell change →
+//     version bumped per the rule above.)
 // Bumping the version also purges the old cache on every client so no one stays
 // pinned to a stale app-shell.
-const SW_VERSION = 'v11';
+const SW_VERSION = 'v12';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
@@ -88,6 +93,42 @@ self.addEventListener('activate', (event) => {
       Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
+});
+
+// ── mind reminder notifications ──
+// A tapped reminder deep-links into its task; a tapped Done/Snooze action posts
+// a message to an open mind client (which updates the task) and, for the plain
+// tap, focuses/opens the mind window at the task's hash. Notification `data`
+// carries `{ taskId, listId, url }` (set in src/lib/mind/reminders.js).
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const data = event.notification.data || {};
+  const url = data.url || '/lab/mind';
+  const action = event.action; // 'done' | 'snooze' | '' (body tap)
+
+  event.waitUntil((async () => {
+    const clientsArr = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const mindClient = clientsArr.find((c) => c.url.includes('/lab/mind'));
+
+    if (action === 'done' || action === 'snooze') {
+      // Let an open client mutate the task; if none is open, open the task so
+      // the user can act manually (the action is best-effort).
+      if (mindClient) {
+        mindClient.postMessage({ type: 'mind-reminder-action', action, taskId: data.taskId });
+        return mindClient.focus();
+      }
+      return self.clients.openWindow(url);
+    }
+
+    // Plain tap → focus an existing mind tab and navigate it, else open one.
+    if (mindClient) {
+      try { await mindClient.focus(); } catch {}
+      if ('navigate' in mindClient) { try { return await mindClient.navigate(url); } catch {} }
+      mindClient.postMessage({ type: 'mind-navigate', url });
+      return;
+    }
+    return self.clients.openWindow(url);
+  })());
 });
 
 self.addEventListener('fetch', (event) => {

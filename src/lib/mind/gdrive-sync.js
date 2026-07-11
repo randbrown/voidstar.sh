@@ -11,7 +11,7 @@
 // this app creates), app-owned OAuth client ID by default (user override
 // possible), token cached ~1h.
 
-import { NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS } from './store.js';
+import { NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS, TASK_FILL_FIELDS } from './store.js';
 import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
 import {
   splitIntoShards, emptyShard, hashShard, hashIndex, shardName, parseShardName,
@@ -400,7 +400,7 @@ function unionShardObjects(list) {
     if (!s) continue;
     acc = {
       notes: mergeById(acc.notes, s.notes || [], 'id', NOTE_FILL_FIELDS),
-      tasks: mergeById(acc.tasks, s.tasks || []),
+      tasks: mergeById(acc.tasks, s.tasks || [], 'id', TASK_FILL_FIELDS),
       attachments: mergeById(acc.attachments, s.attachments || [], 'id', ATTACHMENT_FILL_FIELDS),
       annotations: mergeById(acc.annotations, s.annotations || [], 'key'),
     };

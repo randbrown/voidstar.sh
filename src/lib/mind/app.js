@@ -16,6 +16,8 @@ import { renderAnnotate } from './views/annotate.js';
 import { renderTasks } from './views/tasks.js';
 import { renderTrash } from './views/trash.js';
 import { renderSettings } from './views/settings.js';
+import { renderCapture } from './views/capture.js';
+import { initReminderScheduler } from './reminders.js';
 
 let _root = null;
 
@@ -131,6 +133,15 @@ async function route() {
         else await renderEditor(_root, id, { highlight: params?.q || '' });
         break;
       case 'tasks': await renderTasks(_root, id); break;
+      // Notification / reminder deep-link: `#task/<id>` → its list, focused.
+      case 'task': {
+        const t = id ? await store.getTask(id) : null;
+        if (t && !t.deletedAt) await renderTasks(_root, t.listId);
+        else await renderTasks(_root);
+        break;
+      }
+      // Installed-PWA app-shortcut target: `#capture/voice/note|task`.
+      case 'capture': await renderCapture(_root, id, extra); break;
       case 'trash': await renderTrash(_root); break;
       case 'settings': await renderSettings(_root); break;
       default: await renderHome(_root);
@@ -202,6 +213,10 @@ export function initMindApp(root) {
   wireLazyBlobFetch();
   watchConnectivity();
   watchFocusSync();
+  // Local reminder scheduler: fires due time/place reminders while the app is
+  // open or the installed PWA is running (no backend). Safe no-op where
+  // Notifications are unavailable.
+  initReminderScheduler(() => refresh());
 
   // Housekeeping: default TODO list, expired-tombstone purge, and the 24h
   // completed-task roll-off (at boot + hourly while the tab lives).

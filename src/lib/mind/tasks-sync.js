@@ -54,6 +54,12 @@ export function parseNoteTasks(body) {
 // Reconcile task records against the note body. Note-sourced tasks use the
 // marker as their record id, so two devices materializing the same body
 // converge on the same records instead of forking.
+//
+// Reminder fields (remindAt/remindPlace/…) live on the record only — the note
+// markdown carries just `- [ ] text <!--t:id-->`, so a reminder does NOT
+// round-trip through the body. The update path below spreads `...rec`, so a
+// re-parse of the body preserves any reminder already set on the record; only a
+// checkbox that was removed from the note trashes its record.
 export async function syncNoteTasks(note) {
   const items = parseNoteTasks(note.body);
   const byId = new Map(items.map(i => [i.taskId, i]));
