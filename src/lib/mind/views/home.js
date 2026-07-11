@@ -10,6 +10,8 @@ import { query, allTags } from '../search.js';
 import { markdownToText } from '../editor/markdown.js';
 import { tokenize, markText, snippetHighlighted } from '../search-highlight.js';
 import { setTaskDoneEverywhere } from '../tasks-sync.js';
+import { parseCapture } from '../capture.js';
+import { armReminder, reminderSheet, reminderBadge } from '../reminders.js';
 import {
   hasClientId, needsReconnect, onSyncState, initGdriveSync, setSyncClient,
   ensureDriveAccess, pullMergePushCycle,
@@ -587,10 +589,15 @@ async function renderTodoCard(wrap, folders, folderId, scope) {
     input.placeholder = folderName ? `add a task in ${folderName}…` : 'add a task…';
     input.addEventListener('keydown', async (e) => {
       if (e.key !== 'Enter') return;
-      const text = input.value.trim();
-      if (!text) return;
+      const raw = input.value.trim();
+      if (!raw) return;
+      const { text, remindAt } = parseCapture(raw);
       const tl = await store.ensureFolderTasklist(folderId);
-      await store.putTaskRaw(store.createTask(tl.id, text));
+      const task = store.createTask(tl.id, text || raw, {
+        remindAt, remindStatus: remindAt ? 'scheduled' : '',
+      });
+      await store.putTaskRaw(task);
+      if (remindAt) await armReminder(task); // Enter is the permission gesture
       redraw();
     });
     addRow.appendChild(input);
@@ -627,6 +634,12 @@ function todoRow(task, redraw, folderLabel = '', dimmed = false) {
   row.appendChild(cb);
   row.appendChild(el('span', `mn-task-text ${task.done ? 'mn-struck' : ''}`, esc(task.text)));
   if (folderLabel) row.appendChild(el('span', 'mn-minifolder', `&#128193; ${esc(folderLabel)}`));
+  const badge = reminderBadge(task);
+  if (badge) row.appendChild(badge);
+  const bell = btn(task.remindAt || task.remindPlace ? '&#128276;' : '&#128368;',
+    'mn-btn-ghost mn-task-bell', (e) => { e.stopPropagation(); reminderSheet(task, redraw); });
+  bell.title = 'set a reminder';
+  row.appendChild(bell);
   if (task.sourceNoteId) {
     const link = btn('&#8599;', 'mn-btn-ghost mn-task-notelink', (e) => {
       e.stopPropagation();

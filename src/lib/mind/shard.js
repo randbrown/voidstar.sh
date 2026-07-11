@@ -12,7 +12,7 @@
 // SAME as before — this module only relocates and parameterizes them so the
 // client and the test can share one implementation.
 
-import { mergeRecord, NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS } from './store.js';
+import { mergeRecord, NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS, TASK_FILL_FIELDS } from './store.js';
 
 export const SCHEMA_VERSION = 2;
 export const DEFAULT_SHARD_COUNT = 64;
@@ -266,7 +266,7 @@ export function mergeData(local, remote, opts = {}) {
     merged: {
       notes: notes.merged,
       folders: mergeById(local.folders || [], remote.folders || []),
-      tasks: mergeById(local.tasks || [], remote.tasks || []),
+      tasks: mergeById(local.tasks || [], remote.tasks || [], 'id', TASK_FILL_FIELDS),
       tasklists: mergeById(local.tasklists || [], remote.tasklists || []),
       attachments: mergeById(local.attachments || [], remote.attachments || [], 'id', ATTACHMENT_FILL_FIELDS),
       annotations: mergeById(local.annotations || [], remote.annotations || [], 'key'),
@@ -286,7 +286,7 @@ export function mergeShardData(localFull, remotePartial, opts = {}) {
   return {
     merged: {
       notes: notes.merged,
-      tasks: mergeById(localFull.tasks || [], remotePartial.tasks || []),
+      tasks: mergeById(localFull.tasks || [], remotePartial.tasks || [], 'id', TASK_FILL_FIELDS),
       attachments: mergeById(localFull.attachments || [], remotePartial.attachments || [], 'id', ATTACHMENT_FILL_FIELDS),
       annotations: mergeById(localFull.annotations || [], remotePartial.annotations || [], 'key'),
     },

@@ -146,6 +146,44 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 - **Templates**: tag any note `#template`; "＋ from template" (chips row)
   copies its body/tags into a fresh note.
 
+## Reminders & hands-free capture (Phase A — client-only)
+
+- **Task reminder fields** (`store.js` `createTask`): `remindAt` (epoch ms, 0 =
+  none), `remindPlace` (`{lat,lng,radius,label}` | null), `remindStatus`
+  (`''|scheduled|notified|snoozed|dismissed`), `snoozedUntil`. They ride the
+  normal task shard sync; **`TASK_FILL_FIELDS`** protects them in `mergeRecord`
+  so a stale device (e.g. one that just ticks a checkbox) can't blank a reminder
+  set elsewhere — clearing is an explicit `markCleared` tombstone. For
+  note-sourced tasks the reminder lives on the record only (it does not
+  round-trip into the note markdown); `tasks-sync.js` preserves it on re-parse.
+- **"When" parsing** (`dates.js` `parseWhen` + `capture.js` `parseCapture`):
+  turns "pick up prescription after 5pm" / "call Jay after 6pm tonight" / "buy
+  milk tomorrow 9am" / "in 2 hours" / "next monday" into `{ text, remindAt }`.
+  Pure, `now`-injectable, covered by `scripts/check-mind-capture.mjs`
+  (`npm run check`). Wired into both the voice capture and the typed task
+  quick-adds (home + tasks views).
+- **Hands-free voice capture**: `manifest-mind.webmanifest` `shortcuts` add
+  "voice todo" / "voice note" launchers → hash routes `#capture/voice/task|note`
+  (`views/capture.js`) that auto-start the existing Web Speech dictation
+  (`voice.js`) and commit a task (with parsed reminder) or note on stop.
+  (Google shut down third-party Assistant actions and there is no server, so a
+  true "Hey Google, add note X" isn't possible from a PWA — this app-shortcut is
+  the one-gesture equivalent.)
+- **Local scheduler** (`reminders.js`): a 60s scan (mirrors the housekeeping
+  cadence) fires due `remindAt`/`snoozedUntil` reminders via
+  `registration.showNotification`, and a foreground `watchPosition` geofence
+  fires `remindPlace` reminders while the app is open. `sw.js` (v12) gains a
+  `notificationclick` handler that deep-links to `#task/<id>` and relays
+  Done/Snooze actions to an open client. Permission is requested only inside the
+  gesture that arms a reminder. **Bell button + badge** on every task row
+  (`reminderSheet` / `reminderBadge`) set a date/time or a place.
+- **Accepted Phase-A limits** (see `plans/voidstar-mind-lab-feature-*.md`):
+  nothing fires while the app is fully closed (that needs Web Push + a Worker —
+  Phase B roadmap), two open devices can each fire once, and closed-app
+  **location** triggers are impossible on web (need an OS automation — Phase C).
+  iOS needs an installed PWA (16.4+) for notifications; the app degrades
+  gracefully where `Notification` is unavailable (reminder still stored/synced).
+
 ## Import / export
 
 Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
