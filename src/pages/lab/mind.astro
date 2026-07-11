@@ -800,6 +800,53 @@ const buildStamp = readBuildStamp();
 </head>
 <body>
   <div id="mind-root" data-boot-root></div>
+  <!-- Boot error surface: if the app bundle fails to parse/evaluate/mount, the
+       page is otherwise a silent black screen (no console on mobile). This
+       classic (non-module) script runs before the deferred module below, so its
+       listeners are live when the module evaluates. It paints any uncaught
+       error — plus the userAgent — into the root so the failure is legible on
+       the device. A successful boot overwrites the root, so a premature
+       "didn't start" notice self-clears. -->
+  <script is:inline>
+    (function () {
+      var last = null;
+      function paint(title, detail) {
+        var root = document.getElementById('mind-root');
+        if (!root || root.children.length) return; // app mounted (or already shown)
+        var box = document.createElement('pre');
+        box.style.cssText = 'white-space:pre-wrap;word-break:break-word;margin:0;padding:16px;min-height:100vh;font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;color:#ff8a8a;background:#0b0b12';
+        box.textContent = 'mind failed to start.\n\n' + title + '\n' + (detail || '') +
+          '\n\n— reload to retry —\n\n' + navigator.userAgent;
+        root.appendChild(box);
+      }
+      window.addEventListener('error', function (e) {
+        if (e && e.message) {
+          // A real JS exception (parse/eval/throw). Deterministic — a reload
+          // won't fix it, so surface it now instead of leaving a black screen.
+          var where = e.filename ? '\n' + e.filename + ':' + e.lineno + ':' + e.colno : '';
+          last = e.message + where;
+          paint(e.message, where + (e.error && e.error.stack ? '\n\n' + e.error.stack : ''));
+        } else if (e && e.target && (e.target.src || e.target.href)) {
+          // A resource (chunk) failed to load — likely transient/cache. Record
+          // it but let StyleGuard's boot-guard try its clear-caches reload first.
+          last = 'failed to load ' + (e.target.src || e.target.href);
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e && e.reason;
+        last = 'unhandledrejection: ' + ((r && (r.stack || r.message)) || r);
+        paint('unhandledrejection', (r && (r.stack || r.message)) || String(r));
+      });
+      // Last resort: if the app still hasn't mounted well after load — and after
+      // the boot-guard has had its one reload (~3.5s) to clear a poisoned cache —
+      // report that it never rendered, with the last error seen if any.
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          paint(last || 'app did not mount (no error captured)', last ? '' : 'the bundle loaded but never rendered');
+        }, 6000);
+      });
+    })();
+  </script>
   <script>
     import { initMindApp } from '../../lib/mind/app.js';
     initMindApp(document.getElementById('mind-root'));
