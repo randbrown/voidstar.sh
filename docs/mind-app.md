@@ -19,7 +19,7 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 | Folders | in `store.js` + `views/home.js` | Surrogate-keyed hierarchy (`{id, name, parentId}`); notes/tasklists carry `folderId`. Soft filter: out-of-scope content renders dimmed ("elsewhere"), never hidden. Per-folder TODO lists are lazy with deterministic ids (`todo-<folderId>`) so devices converge. |
 | Search | `search.js` | In-memory index over title/body/OCR text/transcripts/tags + task text; token AND-match + kind/tag filters behind `query(q, filters)`. Rebuilt lazily after writes. |
 | Voice | `voice.js`, `voice-capture.js`, `audio-out.js` | Web Speech dictation (continuous, restart loop, final dedupe) + MediaRecorder on the same mic; keep-audio / insert-transcript toggles; record-only fallback on contention. Mic picker reuses `qualia/devices.js`; speaker via `setSinkId` (hidden on Safari). |
-| OCR | `ocr.js` | tesseract.js lazy-loaded from CDN on first image; serial idle queue over `ocrStatus='pending'`; text stored on the attachment (searchable, rides sync so other devices never re-OCR). |
+| OCR | `ocr.js` | tesseract.js lazy-loaded from CDN on first image; serial idle queue over `ocrStatus='pending'`; text stored on the attachment (searchable, rides sync so other devices never re-OCR). Settings → *images & text recognition* is a status panel: counts (recognized / queued-here / **awaiting-download** / failed), live drain progress, process-now + retry-failed — so a large "N pending" that's really waiting on binaries to sync down from Drive isn't a mystery (`ocrStatusReport`/`retryFailedOcr`). |
 | Annotation | `annotation.js`, `views/annotate.js` | Forked from `setlist/annotation.js`: pen (with stylus pressure), highlighter, arrow, rect, ellipse, text, eraser, select, pan; shared palette/size scale; two-finger scroll; autosaves; flatten-to-copy export. Keyed `attachmentId[:page]` (page reserved for PDFs). |
 | Drive sync | `gdrive-sync.js`, `shard.js`, `attachments-drive.js` | GIS auth, drive.file scope, **app-owned OAuth client id** ("Sign in with Google", user override in Settings → advanced). **Incremental sharded sync**: `shard.js` (pure bucketing/hash/merge core, tested by `scripts/check-mind-shard.mjs`) + a `gdrive-sync.js` client that pushes/pulls only changed shards. Also: peek freshness gate, persisted dirty flag, **conflict copies**, **attachment binaries** (below), and duplicate-file/folder healing (below). |
 | Import/export | `import-doc.js`, `dates.js`, `export.js`, `views/import-doc-modal.js`, `gdrive-picker.js` | Whole-document import (split into notes) + single-doc markdown export + JSON/zip. See the import/export section below. |
@@ -107,7 +107,12 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   last-write-wins, and the losing body is preserved as a new
   `Conflicted copy of <title> (<device>, <time>)` note (`conflictOf` set,
   amber badge, deduped so both devices don't mint twins). First-ever sync is
-  plain LWW — no baseline, no copy spam.
+  plain LWW — no baseline, no copy spam. Tapping the badge (or Settings → data →
+  "resolve conflicts") opens the **merge tool** (`merge.js` pure LCS diff, tested
+  by `scripts/check-mind-merge.mjs`, + `views/conflict-modal.js`): a hunk-by-hunk
+  diff of the live note vs the copy with per-change *keep current / use copy /
+  keep both* choices, which writes the merged body back to the live note and
+  trashes the copy. An orphaned copy (base deleted) can be kept as its own note.
 - Auto-sync: pull on load/refocus (`watchFocusSync`, silent, 30 s throttle,
   peek-gated), debounced push 3 s after any write, offline flush on reconnect,
   status pill on the home header.
@@ -207,10 +212,18 @@ Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
   - `parseDocIntoNotes(text, opts)` (`import-doc.js`, pure/deterministic) splits
     on markdown headings (auto-picking the level that carries the most dates) or,
     for plain text, on **date-dominant lines** (a date + ≤2 other words, so a
-    `6/14` mid-sentence never splits). Dates parse via `dates.js` `extractDate`
-    (ported from `setlist/import.js`). Timestamps descend strictly in document
-    order (dated sections anchored to their day at local noon, dateless ones
-    stepping down 1 min), so a newest-at-top doc lands newest-first in the list.
+    `6/14` mid-sentence never splits). A date line only splits when it's set off
+    by a **blank line above** (or opens the doc), so a date embedded in a
+    paragraph/table row is never a false boundary. `mode:'single'` ("split: none
+    (one note)" in the modal) imports the whole document as a single note.
+    Dates parse via `dates.js` `extractDate` (ported from `setlist/import.js`);
+    it accepts `M/D`, `M-D`, `M.D` with an optional `/·.·-` year (`6/14`, `6-14`,
+    `6/14/26`, `6-14-2026`) and, with `rejectTimeSignatures` (which import
+    passes), skips a bare slash `N/D` whose denominator is a power of two so a
+    musical **time signature** (`4/4`, `6/8`, `12/8`) never mints a spurious
+    date. Timestamps descend strictly in document order (dated sections anchored
+    to their day at local noon, dateless ones stepping down 1 min), so a
+    newest-at-top doc lands newest-first in the list.
   - A header that is **essentially just a date** becomes a **daily note**
     (`meta.daily`), deduped within the batch and against existing dailies
     (a collision demotes it to a plain dated note rather than shadowing "today").

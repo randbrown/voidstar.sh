@@ -494,7 +494,17 @@ function noteCard(entry, folders, dimmed, selCtx = null) {
     card.addEventListener('click', () => navigate(noteHash(n.id)));
   }
   if (n.pinned) row.appendChild(el('span', 'mn-pin-dot', '&#9733;'));
-  if (n.conflictOf) row.appendChild(el('span', 'mn-conflict-badge', 'conflict'));
+  if (n.conflictOf) {
+    // The badge opens the merge tool instead of the note, so a fork can be
+    // reconciled without leaving the list.
+    const cBadge = btn('conflict', 'mn-conflict-badge', async (e) => {
+      e.stopPropagation();
+      const { openConflictModal } = await import('./conflict-modal.js');
+      openConflictModal(n.id);
+    });
+    cBadge.title = 'review & merge this conflicted copy';
+    row.appendChild(cBadge);
+  }
   row.appendChild(el('span', 'mn-card-title', markText(n.title, tokens)));
   row.appendChild(el('span', 'mn-card-time', timeAgo(n.updatedAt)));
   card.appendChild(row);

@@ -70,7 +70,7 @@ export async function openImportDocModal() {
   const opts = el('div', 'mn-import-opts');
 
   const modeSel = el('select', 'mn-select');
-  for (const [v, l] of [['auto', 'split: auto'], ['headings', 'split: headings'], ['dates', 'split: date lines']]) {
+  for (const [v, l] of [['auto', 'split: auto'], ['headings', 'split: headings'], ['dates', 'split: date lines'], ['single', 'split: none (one note)']]) {
     const o = el('option'); o.value = v; o.textContent = l; modeSel.appendChild(o);
   }
   const levelSel = el('select', 'mn-select');
@@ -108,7 +108,7 @@ export async function openImportDocModal() {
   opts.append(modeSel, levelSel, folderSel, newFolderInput, tagInput, preambleWrap, dailyWrap);
   box.appendChild(opts);
 
-  const levelVisibility = () => { levelSel.style.display = modeSel.value === 'dates' ? 'none' : ''; };
+  const levelVisibility = () => { levelSel.style.display = (modeSel.value === 'dates' || modeSel.value === 'single') ? 'none' : ''; };
   levelVisibility();
   for (const ctrl of [modeSel, levelSel, preambleCb, dailyCb]) {
     ctrl.addEventListener('change', () => { levelVisibility(); schedule(); });
@@ -157,7 +157,7 @@ export async function openImportDocModal() {
 
     const { stats, mode, headingLevel, warnings } = parsed;
     const modeLabel = mode === 'headings' ? `headings${headingLevel ? `(${'#'.repeat(headingLevel)})` : ''}`
-      : mode === 'export' ? 'mind export' : 'date lines';
+      : mode === 'export' ? 'mind export' : mode === 'single' ? 'one note (no split)' : 'date lines';
     summary.innerHTML = `<b>${stats.total}</b> note${stats.total === 1 ? '' : 's'} · ${stats.dated} dated · ${stats.dateless} dateless · ${esc(modeLabel)}`;
     for (const w of warnings) summary.innerHTML += `<div class="mn-import-warn">⚠ ${esc(w)}</div>`;
 

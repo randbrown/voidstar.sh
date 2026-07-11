@@ -102,6 +102,20 @@ export async function renderSettings(root) {
   row.appendChild(btn('import Evernote (.enex)…', '', () => openImportEnexModal()));
   row.appendChild(btn('trash', '', () => navigate('#trash')));
   dataCard.appendChild(row);
+
+  // Conflict copies (concurrent edits synced from two devices) get a resolve
+  // shortcut — the same hunk-by-hunk merge tool reachable from a note's badge.
+  const conflictCount = notes.filter((n) => !n.deletedAt && n.conflictOf).length;
+  if (conflictCount) {
+    const cRow = el('div', 'mn-actions');
+    cRow.appendChild(el('div', 'mn-note-meta',
+      `${conflictCount} conflicted cop${conflictCount === 1 ? 'y' : 'ies'} from concurrent edits on another device.`));
+    cRow.appendChild(btn(`resolve conflicts (${conflictCount})`, 'mn-btn-primary', async () => {
+      const { openConflictModal } = await import('./conflict-modal.js');
+      openConflictModal();
+    }));
+    dataCard.appendChild(cRow);
+  }
   root.appendChild(dataCard);
 
   // ── Snapshots ──
@@ -141,16 +155,57 @@ export async function renderSettings(root) {
   }
   root.appendChild(audioCard);
 
-  // ── OCR status ──
-  const { processPendingOcr } = await import('../ocr.js');
-  const pendingOcr = (await store.getPendingOcrAttachments?.() ?? []).length;
+  // ── Images & text recognition (OCR) status panel ──
+  // A dedicated readout so a large "N pending" is never a mystery: it breaks
+  // the queue into recognized / queued-here / awaiting-download / failed, shows
+  // live progress while the background worker drains, and offers retry.
+  const ocr = await import('../ocr.js');
+  const rep = await ocr.ocrStatusReport();
+  const c = rep.counts;
   const ocrCard = el('div', 'mn-card');
-  ocrCard.appendChild(el('div', 'mn-card-title', 'image text (ocr)'));
+  ocrCard.appendChild(el('div', 'mn-card-title', 'images & text recognition'));
   ocrCard.appendChild(el('div', 'mn-note-meta',
-    `images are text-recognized in the background so screenshots become searchable. ${pendingOcr ? `${pendingOcr} pending.` : 'queue is clear.'}`));
-  if (pendingOcr) {
-    ocrCard.appendChild(btn('process now', '', () => { processPendingOcr(); refresh(); }));
+    'images and PDFs are text-recognized in the background so screenshots become searchable.'));
+
+  const statLine = el('div', 'mn-ocr-stats');
+  const chip = (label, val, cls = '') => el('span', `mn-ocr-stat ${cls}`, `<b>${val}</b> ${esc(label)}`);
+  statLine.append(
+    chip('images', c.total),
+    chip('recognized', c.done, 'mn-ocr-ok'),
+    chip('queued here', c.ready, c.ready ? 'mn-ocr-work' : ''),
+  );
+  if (c.waiting) statLine.append(chip('awaiting download', c.waiting, 'mn-ocr-wait'));
+  if (c.failed) statLine.append(chip('failed', c.failed, 'mn-ocr-fail'));
+  ocrCard.appendChild(statLine);
+
+  // Live progress — updates in place while the worker recognizes images.
+  const progLine = el('div', 'mn-note-meta mn-ocr-progress');
+  const setProg = (p) => {
+    progLine.textContent = (p && p.remaining)
+      ? `recognizing… ${p.remaining} left${p.current ? ` · ${p.current}` : ''}`
+      : '';
+  };
+  if (rep.draining) setProg({ remaining: c.ready, current: rep.current });
+  ocr.onOcrProgress(setProg);
+  ocrCard.appendChild(progLine);
+
+  // The usual cause of a stuck "N pending": the binaries live on another device
+  // and haven't synced down yet — nothing local OCR can do until they arrive.
+  if (c.waiting) {
+    ocrCard.appendChild(el('div', 'mn-note-meta mn-dim',
+      `${c.waiting} image${c.waiting === 1 ? '' : 's'} still live on another device — they’re recognized here once their files download from Drive (open the notes, or run a sync).`));
   }
+  if (c.total && c.ready === 0 && c.waiting === 0 && c.pending === 0 && c.failed === 0) {
+    ocrCard.appendChild(el('div', 'mn-note-meta mn-dim', 'queue is clear.'));
+  }
+  if (rep.lastError) {
+    ocrCard.appendChild(el('div', 'mn-note-meta mn-dim', `last error: ${esc(rep.lastError)}`));
+  }
+
+  const ocrRow = el('div', 'mn-actions');
+  if (c.ready) ocrRow.appendChild(btn('process now', '', () => { ocr.processPendingOcr(); setProg({ remaining: c.ready }); }));
+  if (c.failed) ocrRow.appendChild(btn(`retry failed (${c.failed})`, 'mn-btn-ghost', async () => { await ocr.retryFailedOcr(); refresh(); }));
+  if (ocrRow.childNodes.length) ocrCard.appendChild(ocrRow);
   root.appendChild(ocrCard);
 
   // ── Google Drive sync ──
