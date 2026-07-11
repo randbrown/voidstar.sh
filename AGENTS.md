@@ -59,6 +59,7 @@ non-negotiables; the technical detail lives in the docs below.
 | Sequencer kits + samples shared with Strudel (the `strudel.json` pipeline) | [`docs/samples.md`](docs/samples.md) |
 | Live coding — Strudel REPL, Hydra bridge, the `qualia.setParam` surface | [`docs/livecoding.md`](docs/livecoding.md) |
 | Audience participation + pose — the entanglement mesh and pose pipeline | [`docs/entanglement.md`](docs/entanglement.md) |
+| Qualia Google Drive sync — login, the `voidstar_qualia` folder tree, per-component subfolders, the qualem-card + video-quale UI | [`docs/qualia-drive-sync.md`](docs/qualia-drive-sync.md) |
 | The setlist app (`/lab/setlist`) — data model, backup vs auto-link, chart-fallback ladder, annotations, its worker | [`docs/setlist-app.md`](docs/setlist-app.md) |
 | The mind app (`/lab/mind`) — notes store, editor, tasks-in-notes, folders, capture, Drive sync | [`docs/mind-app.md`](docs/mind-app.md) |
 | Arcade games / playable visualizers | [`plans/arcade-quale-plan.md`](plans/arcade-quale-plan.md) (+ `src/lib/qualia/fx/arcade/`) |

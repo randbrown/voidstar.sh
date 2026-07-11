@@ -45,6 +45,7 @@ import {
 import { scaleAudio, ema } from '../field.js';
 import { getVideoEl, getMirror, getRotation } from '../video.js';
 import { wirePicker, getStoredDeviceId } from '../devices.js';
+import * as gdrive from '../gdrive.js';
 
 
 const PLAYLIST_KEY = 'voidstar.qualia.fx.video.playlist';
@@ -603,6 +604,15 @@ export default {
       }
       return out;
     };
+    // Bridge for the Drive browser (qualem card): let it drop a clip fetched
+    // from voidstar_qualia/video straight into this quale's playlist. Only
+    // present while the video fx is active; cleared on dispose.
+    globalThis.__qualiaVideoAddBlob = async (name, blob) => {
+      if (!(blob instanceof Blob)) return;
+      const file = new File([blob], name || 'clip', { type: blob.type || 'video/mp4' });
+      const src  = URL.createObjectURL(file);
+      addEntry({ kind: 'file', src, name: name || 'clip', file });
+    };
     // True while the active source is the live camera — we then sample the
     // shared element from video.js instead of our own vidA/vidB, and skip
     // every lifecycle write that would belong to the camera's real owner.
@@ -792,6 +802,62 @@ export default {
       'The camera source glitches the live feed (turn the camera on via the ' +
       'topbar pose-source).';
     panel.appendChild(hint);
+
+    // ── Google Drive: save the uploaded clips to (or load them from)
+    // voidstar_qualia/video, so dropped files survive across machines/reloads
+    // (localStorage can't persist a File). Buttons are inert until the user
+    // has connected Drive from the qualem card.
+    const driveRow = document.createElement('div');
+    driveRow.style.cssText = 'display: flex; gap: 0.3rem; align-items: center; flex-wrap: wrap;';
+    const driveSaveBtn = document.createElement('button');
+    driveSaveBtn.type = 'button'; driveSaveBtn.className = 'qp-toggle';
+    driveSaveBtn.textContent = '⤓ clips → drive';
+    driveSaveBtn.title = 'Upload the uploaded clips (files) to your Google Drive (voidstar_qualia/video)';
+    const driveLoadBtn = document.createElement('button');
+    driveLoadBtn.type = 'button'; driveLoadBtn.className = 'qp-toggle';
+    driveLoadBtn.textContent = '⤒ drive clips';
+    driveLoadBtn.title = 'Add clips saved in your Google Drive (voidstar_qualia/video) to this playlist';
+    const driveStat = document.createElement('span');
+    driveStat.style.cssText = 'font-size: 0.58rem; color: var(--muted);';
+    driveRow.append(driveSaveBtn, driveLoadBtn, driveStat);
+    panel.appendChild(driveRow);
+
+    driveSaveBtn.addEventListener('click', async () => {
+      const files = playlist.filter(e => e.kind === 'file');
+      if (!files.length) { driveStat.textContent = 'no uploaded clips to save'; return; }
+      // Acquire the token inside the gesture before the (awaited) blob reads.
+      try { await gdrive.ensureAccess(); }
+      catch (e) { driveStat.textContent = 'connect Drive first (qualem card)'; return; }
+      let n = 0;
+      for (const e of files) {
+        driveStat.textContent = `uploading ${++n}/${files.length}…`;
+        try {
+          let blob = e.file instanceof Blob ? e.file : null;
+          if (!blob && typeof e.src === 'string' && e.src.startsWith('blob:')) blob = await (await fetch(e.src)).blob();
+          if (!blob) continue;
+          await gdrive.saveBlob('video', gdrive.safeName(e.name, 'clip'), blob, blob.type || 'video/mp4');
+        } catch (err) { console.warn('[qualia] video clip upload failed:', err); }
+      }
+      driveStat.textContent = `saved ${files.length} clip(s) ✓`;
+    });
+    driveLoadBtn.addEventListener('click', async () => {
+      driveStat.textContent = 'loading…';
+      let files;
+      try { files = await gdrive.listFiles('video'); }
+      catch (e) { driveStat.textContent = 'connect Drive first (qualem card)'; return; }
+      if (!files.length) { driveStat.textContent = 'no clips in Drive'; return; }
+      let added = 0;
+      for (const f of files) {
+        if (playlist.some(e => e.kind === 'file' && e.name === f.name)) continue;
+        try {
+          const blob = await gdrive.readBlob(f.id);
+          const file = new File([blob], f.name, { type: blob.type || 'video/mp4' });
+          addEntry({ kind: 'file', src: URL.createObjectURL(file), name: f.name, file });
+          added++;
+        } catch (err) { console.warn('[qualia] video clip download failed:', err); }
+      }
+      driveStat.textContent = added ? `added ${added} clip(s)` : 'already have all Drive clips';
+    });
 
     paramsContainer?.appendChild(panel);
 
@@ -1290,6 +1356,7 @@ export default {
       dispose() {
         disposed = true;
         if (globalThis.__qualiaVideoFiles) { try { delete globalThis.__qualiaVideoFiles; } catch { globalThis.__qualiaVideoFiles = null; } }
+        if (globalThis.__qualiaVideoAddBlob) { try { delete globalThis.__qualiaVideoAddBlob; } catch { globalThis.__qualiaVideoAddBlob = null; } }
         closeAltCamera();
         try { altCamVideoEl.remove(); } catch {}
         try { activeVid.pause(); } catch {}

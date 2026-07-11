@@ -17,6 +17,7 @@ import {
   loadFxParams, saveFxParams, loadFxModWeights, saveFxModWeights,
 } from './presets.js';
 import * as qualem from './qualem.js';
+import * as gdrive from './gdrive.js';
 import { zipStore, unzip } from './zip.js';
 import { encodeWav, decodeWav } from './wav.js';
 import { parseMetadata as parseStrudelMeta, setMetadata as setStrudelMeta } from './patterns.js';
@@ -5544,12 +5545,12 @@ export function initQualiaPage() {
   }
 
   // ── .qualem.zip bundle (qualem JSON + loop WAVs + cab/amp + video) ──────────
-  async function exportBundle() {
-    let q, assets;
-    try {
-      q = captureQualem({ full: true });
-      assets = (typeof looper.collectAssets === 'function') ? await looper.collectAssets() : { loops: [], cabs: [], amps: [] };
-    } catch (e) { console.error('[qualia] bundle capture failed:', e); alert('Export failed: ' + (e?.message || e)); return; }
+  // Build the bundle as an in-memory { blob, name } — shared by the file
+  // download (exportBundle) and the Drive upload (below), so both pack the
+  // identical payload.
+  async function buildBundle() {
+    const q = captureQualem({ full: true });
+    const assets = (typeof looper.collectAssets === 'function') ? await looper.collectAssets() : { loops: [], cabs: [], amps: [] };
     const files = [{ name: 'qualem.json', data: JSON.stringify(q, null, 2) }];
     const manifest = { schema: 1, loops: [], cabs: [], amps: [], video: [] };
     let li = 0;
@@ -5568,8 +5569,6 @@ export function initQualiaPage() {
       files.push({ name: fn, data: JSON.stringify(a.model) });
       manifest.amps.push({ id: a.id, name: a.name, file: fn });
     }
-    // Video-quale clips — only if the active video fx exposes its in-memory File
-    // blobs (dropped files aren't otherwise persisted). Best-effort.
     try {
       const vids = (typeof globalThis.__qualiaVideoFiles === 'function') ? (await globalThis.__qualiaVideoFiles()) : null;
       for (const v of (vids || [])) {
@@ -5580,9 +5579,13 @@ export function initQualiaPage() {
       }
     } catch (e) { console.warn('[qualia] video bundling skipped:', e); }
     files.push({ name: 'assets.json', data: JSON.stringify(manifest) });
+    return { blob: zipStore(files), name: `${safeFile(q.name)}.qualem.zip`, q };
+  }
+  async function exportBundle() {
     try {
-      downloadBlob(zipStore(files), `${safeFile(q.name)}.qualem.zip`);
-    } catch (e) { console.error('[qualia] zip failed:', e); alert('Export failed: ' + (e?.message || e)); }
+      const { blob, name } = await buildBundle();
+      downloadBlob(blob, name);
+    } catch (e) { console.error('[qualia] bundle export failed:', e); alert('Export failed: ' + (e?.message || e)); }
   }
   async function importBundle(file) {
     if (!file) return;
@@ -5625,6 +5628,210 @@ export function initQualiaPage() {
     qualemZipInput.value = '';
     if (f) await importBundle(f);
   });
+
+  // ── Google Drive sync ──────────────────────────────────────────────────────
+  // Log in with Google Drive and push/pull the whole qualia world under a
+  // `voidstar_qualia` folder (each sub-component in its own subfolder). See
+  // src/lib/qualia/gdrive.js for the auth + folder mechanics; this block just
+  // wires the qualem-card UI to it (full qualems, per-panel sections, .zip
+  // bundles, and — via the browse modal + a video-fx bridge — clip files).
+  (function wireDrive() {
+    const driveRow    = document.getElementById('qualem-drive-row');
+    if (!driveRow) return;
+    const connectBtn  = document.getElementById('btn-qualem-drive-connect');
+    const driveSaveBtn= document.getElementById('btn-qualem-drive-save');
+    const driveBundleBtn = document.getElementById('btn-qualem-drive-bundle');
+    const browseBtn   = document.getElementById('btn-qualem-drive-browse');
+    const signoutBtn  = document.getElementById('btn-qualem-drive-signout');
+    const statusEl    = document.getElementById('qualem-drive-status');
+    const sectionDriveBtn = document.getElementById('btn-qualem-section-drive');
+
+    const modal       = document.getElementById('qualem-drive');
+    const backdrop    = document.getElementById('qualem-drive-backdrop');
+    const foldersEl   = document.getElementById('qualem-drive-folders');
+    const dListEl     = document.getElementById('qualem-drive-list');
+    const modalStat   = document.getElementById('qualem-drive-modal-status');
+
+    const STATE_LABEL = { idle: 'not connected', connecting: 'connecting…', connected: 'connected', busy: 'working…', error: 'error' };
+
+    function reflectDrive(state) {
+      const connected = gdrive.isConnected();
+      if (statusEl) {
+        statusEl.dataset.state = state;
+        statusEl.textContent = connected || state === 'connecting' || state === 'busy'
+          ? (STATE_LABEL[state] || '')
+          : (gdrive.needsReconnect() ? 'token expired' : '');
+      }
+      if (connectBtn) {
+        connectBtn.style.display = connected ? 'none' : '';
+        connectBtn.textContent = gdrive.needsReconnect() ? 'reconnect drive' : 'connect drive';
+      }
+      for (const b of [driveSaveBtn, driveBundleBtn, browseBtn, signoutBtn]) {
+        if (b) b.style.display = connected ? '' : 'none';
+      }
+      if (sectionDriveBtn) sectionDriveBtn.style.display = connected ? '' : 'none';
+    }
+    gdrive.onState(reflectDrive);
+
+    connectBtn?.addEventListener('click', async () => {
+      try { await gdrive.ensureAccess(); }
+      catch (e) { console.warn('[qualia] drive connect failed:', e); alert('Drive connect failed: ' + (e?.message || e)); }
+    });
+    signoutBtn?.addEventListener('click', () => { gdrive.signOut(); });
+
+    // Save the current live state as a full qualem into voidstar_qualia/qualems.
+    // captureQualem is synchronous, so gdrive.saveJson (whose first await is the
+    // in-gesture token request) still opens the OAuth popup inside the click.
+    driveSaveBtn?.addEventListener('click', async () => {
+      const q = captureQualem({});
+      const name = gdrive.safeName(q.name, 'qualem') + '.qualem.json';
+      if (statusEl) statusEl.textContent = 'saving…';
+      try { await gdrive.saveJson('qualems', name, q); if (statusEl) statusEl.textContent = 'saved ✓'; }
+      catch (e) { console.error('[qualia] drive qualem save failed:', e); alert('Save to Drive failed: ' + (e?.message || e)); }
+    });
+
+    // Upload a full .qualem.zip bundle. buildBundle() awaits (looper assets,
+    // video files) BEFORE any upload, so the token must be acquired FIRST,
+    // inside the gesture — otherwise the popup is blocked on mobile.
+    driveBundleBtn?.addEventListener('click', async () => {
+      try { await gdrive.ensureAccess(); }
+      catch (e) { alert('Drive connect failed: ' + (e?.message || e)); return; }
+      if (statusEl) statusEl.textContent = 'bundling…';
+      try {
+        const { blob, name } = await buildBundle();
+        if (statusEl) statusEl.textContent = 'uploading…';
+        await gdrive.saveBlob('bundles', gdrive.safeName(name, 'bundle.qualem.zip'), blob, 'application/zip');
+        if (statusEl) statusEl.textContent = 'saved ✓';
+      } catch (e) { console.error('[qualia] drive bundle save failed:', e); alert('Bundle upload failed: ' + (e?.message || e)); }
+    });
+
+    // Save just one panel's section into its own Drive subfolder.
+    sectionDriveBtn?.addEventListener('click', async () => {
+      const key = document.getElementById('qualem-section')?.value;
+      const sec = key && QUALEM_SECTIONS[key];
+      if (!sec) return;
+      const full = captureQualem({});
+      const part = pickQualemSection(full, sec.keys);
+      part.name = `${full.name} · ${key}`;
+      const name = `${safeFile(full.name)}.${key}.qualem.json`;
+      if (statusEl) statusEl.textContent = 'saving…';
+      try { await gdrive.saveJson(key, name, part); if (statusEl) statusEl.textContent = 'saved ✓'; }
+      catch (e) { console.error('[qualia] drive section save failed:', e); alert('Save to Drive failed: ' + (e?.message || e)); }
+    });
+
+    // ── Browse modal ──────────────────────────────────────────────────────
+    let _driveFolders = {};   // { sub: count }
+    let _driveSel = 'qualems';
+
+    function closeDrive() {
+      if (modal) modal.style.display = 'none';
+      if (backdrop) backdrop.style.display = 'none';
+    }
+    document.getElementById('qualem-drive-close')?.addEventListener('click', closeDrive);
+    backdrop?.addEventListener('click', closeDrive);
+
+    async function openDrive() {
+      if (!modal) return;
+      backdrop.style.display = '';
+      modal.style.display = '';
+      if (modalStat) modalStat.textContent = 'loading…';
+      dListEl.innerHTML = '';
+      foldersEl.innerHTML = '';
+      try {
+        _driveFolders = await gdrive.listPopulatedSubfolders();
+      } catch (e) {
+        if (modalStat) modalStat.textContent = 'failed: ' + (e?.message || e);
+        return;
+      }
+      const names = Object.keys(_driveFolders);
+      if (!names.length) {
+        if (modalStat) modalStat.textContent = 'nothing saved to Drive yet — use "save to drive" first.';
+        return;
+      }
+      if (!_driveFolders[_driveSel]) _driveSel = names[0];
+      renderFolderChips(names);
+      await renderFolderFiles(_driveSel);
+    }
+    document.getElementById('qualem-drive-refresh')?.addEventListener('click', () => openDrive());
+    browseBtn?.addEventListener('click', openDrive);
+
+    function renderFolderChips(names) {
+      foldersEl.innerHTML = '';
+      for (const n of names) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'qualem-drive-folder' + (n === _driveSel ? ' active' : '');
+        chip.textContent = `${n} (${_driveFolders[n]})`;
+        chip.addEventListener('click', async () => { _driveSel = n; renderFolderChips(names); await renderFolderFiles(n); });
+        foldersEl.appendChild(chip);
+      }
+    }
+
+    async function renderFolderFiles(sub) {
+      dListEl.innerHTML = '';
+      if (modalStat) modalStat.textContent = 'loading…';
+      let files;
+      try { files = await gdrive.listFiles(sub); }
+      catch (e) { if (modalStat) modalStat.textContent = 'failed: ' + (e?.message || e); return; }
+      if (modalStat) modalStat.textContent = files.length ? '' : '— empty —';
+      for (const f of files) {
+        const row = document.createElement('div');
+        row.className = 'qualem-drive-item';
+        const nm = document.createElement('span');
+        nm.className = 'qd-name';
+        nm.textContent = f.name;
+        nm.title = f.name;
+        row.appendChild(nm);
+        const loadBtn = document.createElement('button');
+        loadBtn.type = 'button'; loadBtn.className = 'ctrl-btn';
+        loadBtn.textContent = 'load';
+        loadBtn.addEventListener('click', () => loadDriveFile(sub, f));
+        row.appendChild(loadBtn);
+        dListEl.appendChild(row);
+      }
+    }
+
+    async function loadDriveFile(sub, f) {
+      if (modalStat) modalStat.textContent = `loading ${f.name}…`;
+      try {
+        if (sub === 'bundles') {
+          const blob = await gdrive.readBlob(f.id);
+          closeDrive();
+          await importBundle(new File([blob], f.name, { type: 'application/zip' }));
+          return;
+        }
+        if (sub === 'video') {
+          const blob = await gdrive.readBlob(f.id);
+          if (typeof globalThis.__qualiaVideoAddBlob === 'function') {
+            await globalThis.__qualiaVideoAddBlob(f.name, blob);
+            if (modalStat) modalStat.textContent = `added ${f.name} to the video quale`;
+          } else {
+            if (modalStat) modalStat.textContent = 'switch to the Video quale first, then load the clip';
+          }
+          return;
+        }
+        const q = await gdrive.readJson(f.id);
+        if (sub === 'qualems') {
+          const entry = qualem.addToList(q, q.name);
+          renderQualemList();
+          await applyQualem(entry);
+          if (modalStat) modalStat.textContent = `loaded ${f.name}`;
+        } else if (QUALEM_SECTIONS[sub]) {
+          await applyQualem(pickQualemSection(q, QUALEM_SECTIONS[sub].keys));
+          if (modalStat) modalStat.textContent = `applied ${sub} section`;
+        } else {
+          // Unknown subfolder — treat as a whole/partial qualem.
+          await applyQualem(q);
+          if (modalStat) modalStat.textContent = `applied ${f.name}`;
+        }
+      } catch (e) {
+        console.error('[qualia] drive load failed:', e);
+        if (modalStat) modalStat.textContent = 'load failed: ' + (e?.message || e);
+      }
+    }
+
+    reflectDrive(gdrive.getState());
+  })();
 
   // ── Share popover ────────────────────────────────────────────────────────
   async function openShare(q) {
