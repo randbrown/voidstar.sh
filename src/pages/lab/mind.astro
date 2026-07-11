@@ -800,16 +800,15 @@ const buildStamp = readBuildStamp();
 </head>
 <body>
   <div id="mind-root" data-boot-root></div>
-  <!-- Boot error surface: if the app bundle fails to parse/evaluate/mount, the
-       page is otherwise a silent black screen (no console on mobile). This
-       classic (non-module) script runs before the deferred module below, so its
-       listeners are live when the module evaluates. It paints any uncaught
-       error — plus the userAgent — into the root so the failure is legible on
-       the device. A successful boot overwrites the root, so a premature
-       "didn't start" notice self-clears. -->
+  <!-- Boot guard: recover a boot that failed to load, and — if that fails —
+       surface the error on-device instead of a silent black screen (there's no
+       console on mobile). This classic (non-module) script runs before the
+       deferred boot module below, so its listeners are live when the module
+       loads/evaluates. A successful boot overwrites the root, so any notice
+       self-clears. -->
   <script is:inline>
     (function () {
-      var last = null;
+      var last = null, retried = false;
       function paint(title, detail) {
         var root = document.getElementById('mind-root');
         if (!root || root.children.length) return; // app mounted (or already shown)
@@ -826,10 +825,23 @@ const buildStamp = readBuildStamp();
           var where = e.filename ? '\n' + e.filename + ':' + e.lineno + ':' + e.colno : '';
           last = e.message + where;
           paint(e.message, where + (e.error && e.error.stack ? '\n\n' + e.error.stack : ''));
-        } else if (e && e.target && (e.target.src || e.target.href)) {
-          // A resource (chunk) failed to load — likely transient/cache. Record
-          // it but let StyleGuard's boot-guard try its clear-caches reload first.
-          last = 'failed to load ' + (e.target.src || e.target.href);
+        } else if (e && e.target && e.target.tagName === 'SCRIPT' && e.target.src) {
+          // The boot module chunk failed to load. A hashed /_astro/* file can
+          // get a 404 pinned in the edge cache (immutable, max-age=1y); the
+          // service worker's retryOnce dodges it, but the FIRST load has no SW
+          // in the path yet and hits the poisoned URL raw. Retry once with a
+          // cache-busting query — a fresh edge key that fetches the real bytes —
+          // and re-run the module (the app bundles into this single boot chunk,
+          // so no deeper relative imports are left un-busted).
+          var src = e.target.src;
+          last = 'failed to load ' + src;
+          if (!retried && src.indexOf('/_astro/') !== -1) {
+            retried = true;
+            var s = document.createElement('script');
+            s.type = 'module';
+            s.src = src + (src.indexOf('?') < 0 ? '?' : '&') + 'cb=' + Date.now();
+            document.head.appendChild(s);
+          }
         }
       }, true);
       window.addEventListener('unhandledrejection', function (e) {
@@ -837,9 +849,9 @@ const buildStamp = readBuildStamp();
         last = 'unhandledrejection: ' + ((r && (r.stack || r.message)) || r);
         paint('unhandledrejection', (r && (r.stack || r.message)) || String(r));
       });
-      // Last resort: if the app still hasn't mounted well after load — and after
-      // the boot-guard has had its one reload (~3.5s) to clear a poisoned cache —
-      // report that it never rendered, with the last error seen if any.
+      // Last resort: if the app still hasn't mounted well after load — past the
+      // cache-bust retry and StyleGuard's one reload (~3.5s) — report that it
+      // never rendered, with the last error seen if any.
       window.addEventListener('load', function () {
         setTimeout(function () {
           paint(last || 'app did not mount (no error captured)', last ? '' : 'the bundle loaded but never rendered');
