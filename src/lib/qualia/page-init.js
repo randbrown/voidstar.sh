@@ -5673,6 +5673,28 @@ export function initQualiaPage() {
     }
     gdrive.onState(reflectDrive);
 
+    // Diagnostics: a read-only troubleshooter injected into the Drive modal so a
+    // performer can inspect Drive/sync state on demand. Nothing here writes to
+    // Drive or runs on its own — safe to open mid-session. Lazy-mounted.
+    if (modal && !document.getElementById('qualem-drive-diag')) {
+      const diag = document.createElement('details');
+      diag.id = 'qualem-drive-diag';
+      diag.style.marginTop = '0.75rem';
+      const sum = document.createElement('summary');
+      sum.textContent = 'diagnostics';
+      sum.style.cursor = 'pointer';
+      diag.appendChild(sum);
+      const diagBody = document.createElement('div');
+      diag.appendChild(diagBody);
+      diag.addEventListener('toggle', async () => {
+        if (!diag.open || diag._mounted) return;
+        diag._mounted = true;
+        const { mountDiagPanel } = await import('./gdrive-diag.js');
+        mountDiagPanel(diagBody, (live) => gdrive.gatherDiagnostics({ live }));
+      });
+      modal.appendChild(diag);
+    }
+
     connectBtn?.addEventListener('click', async () => {
       try { await gdrive.ensureAccess(); }
       catch (e) { console.warn('[qualia] drive connect failed:', e); alert('Drive connect failed: ' + (e?.message || e)); }

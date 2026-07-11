@@ -230,6 +230,20 @@ export async function renderSettings(root) {
   adv.appendChild(cidRow);
   syncCard.appendChild(adv);
 
+  // Diagnostics: a read-only troubleshooter for sync/Drive issues. Lazy-mounted
+  // the first time it's opened so settings stays cheap to render.
+  const diag = el('details', 'mn-advanced');
+  diag.appendChild(el('summary', '', 'diagnostics (sync troubleshooting)'));
+  const diagBody = el('div', '');
+  diag.appendChild(diagBody);
+  diag.addEventListener('toggle', async () => {
+    if (!diag.open || diag._mounted) return;
+    diag._mounted = true;
+    const { mountDiagPanel } = await import('../../qualia/gdrive-diag.js');
+    mountDiagPanel(diagBody, (live) => gd.gatherDiagnostics({ live }));
+  });
+  syncCard.appendChild(diag);
+
   root.appendChild(syncCard);
 
   const about = el('div', 'mn-note-meta mn-dim');

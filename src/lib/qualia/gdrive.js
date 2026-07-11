@@ -23,6 +23,7 @@
 // other Drive files stay private and invisible to us.
 
 import { GOOGLE_CLIENT_ID } from './google-config.js';
+import { tokenRow } from './gdrive-diag.js';
 
 const NS               = 'voidstar.qualia.gdrive';
 const CLIENT_ID_KEY    = `${NS}.clientId`;
@@ -392,4 +393,51 @@ export async function trashFile(fileId) {
 // Sanitize a display name into a safe Drive filename fragment.
 export function safeName(s, fallback = 'file') {
   return (String(s || '').replace(/[^\w.-]+/g, '_').slice(0, 80) || fallback);
+}
+
+// ── Diagnostics ─────────────────────────────────────────────────────────────
+// Read-only troubleshooter for the qualia admin/util screen. `live` adds a
+// silent token + a non-creating root-folder listing so "can I reach Drive?" is
+// answered without any automatic sync — nothing here writes or pops up UI, so
+// it's safe to run mid-session.
+export async function gatherDiagnostics({ live = false } = {}) {
+  const report = {
+    app: 'qualia',
+    generatedAt: new Date().toISOString(),
+    sections: [
+      { title: 'Identity', rows: [
+        ['sign-in configured', hasClientId() ? 'yes' : 'NO — not configured on this deployment'],
+        ['client id', usingAppClientId() ? 'app-owned' : (getClientIdOverride() ? 'your override' : 'none')],
+      ] },
+      { title: 'Auth', rows: [
+        ['access token', tokenRow(TOKEN_KEY)],
+        ['connected', isConnected() ? 'yes' : 'no'],
+        ['needs reconnect', needsReconnect() ? 'YES — Save/Load will prompt sign-in' : 'no'],
+        ['pill state', getState()],
+        ['network', (typeof navigator !== 'undefined' && !navigator.onLine) ? 'OFFLINE' : 'online'],
+      ] },
+    ],
+  };
+
+  if (live) {
+    const rows = [];
+    try {
+      const token = await getAccessToken({ interactive: false });
+      if (!token) {
+        rows.push(['result', 'FAIL — no token; silent renew failed. Use Save/Load to sign in.']);
+      } else {
+        rows.push(['silent token', 'ok']);
+        const roots = await driveList(token, {
+          q: `name='${ROOT_FOLDER_NAME}' and mimeType='${FOLDER_MIME}' and 'root' in parents and trashed=false`,
+          spaces: 'drive', fields: 'files(id,name)', pageSize: '5',
+        });
+        rows.push(['drive reachable', 'yes']);
+        rows.push(['voidstar_qualia folder', roots.length ? `found${roots.length > 1 ? ` (${roots.length} — duplicates!)` : ''}` : 'not created yet']);
+      }
+    } catch (e) {
+      rows.push(['result', `FAIL — ${e && e.message ? e.message : e}`]);
+    }
+    report.sections.push({ title: 'Live check', rows });
+  }
+  return report;
 }

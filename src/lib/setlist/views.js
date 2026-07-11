@@ -10,7 +10,7 @@ import { renderBandcampEmbed, renderSoundcloudEmbed } from './media.js';
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
@@ -3049,6 +3049,24 @@ export async function renderSettings(root) {
   advLabel.appendChild(advInput);
   gdriveAdv.appendChild(advLabel);
   gdriveSection.appendChild(gdriveAdv);
+
+  // Diagnostics: a read-only troubleshooter for backup/Drive issues. Lazy-mounted
+  // the first time it's opened.
+  const gdriveDiag = el('details', 'sl-advanced');
+  gdriveDiag.style.marginTop = '0.5rem';
+  const gdriveDiagSummary = el('summary', 'sl-hint');
+  gdriveDiagSummary.textContent = 'diagnostics (backup troubleshooting)';
+  gdriveDiagSummary.style.cursor = 'pointer';
+  gdriveDiag.appendChild(gdriveDiagSummary);
+  const gdriveDiagBody = el('div', '');
+  gdriveDiag.appendChild(gdriveDiagBody);
+  gdriveDiag.addEventListener('toggle', async () => {
+    if (!gdriveDiag.open || gdriveDiag._mounted) return;
+    gdriveDiag._mounted = true;
+    const { mountDiagPanel } = await import('../qualia/gdrive-diag.js');
+    mountDiagPanel(gdriveDiagBody, (live) => gatherDiagnostics({ live }));
+  });
+  gdriveSection.appendChild(gdriveDiag);
 
   // ── Version safeguards: undo the last backup merge/restore/import, or
   // restore an earlier Drive version. Every restore snapshots current state

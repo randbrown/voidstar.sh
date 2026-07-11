@@ -12,6 +12,7 @@
 
 import { mergeRecord, SONG_FILL_FIELDS, SETLIST_FILL_FIELDS } from './store.js';
 import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
+import { tokenRow } from '../qualia/gdrive-diag.js';
 
 const CLIENT_ID_KEY = 'voidstar.setlist.gdrive.clientId';
 const TOKEN_KEY = 'voidstar.setlist.gdrive.token';
@@ -110,6 +111,55 @@ export function formatLastBackup() {
   if (day === 1) return 'yesterday';
   if (day < 7) return `${day}d ago`;
   return new Date(ts).toLocaleDateString();
+}
+
+// Read-only diagnostics for the settings troubleshooter. `live` adds a real
+// Drive round-trip (silent token + peek) so "can this device reach Drive right
+// now?" is answered without any of the merge/import side effects of a backup.
+export async function gatherDiagnostics({ live = false } = {}) {
+  const report = {
+    app: 'setlist',
+    generatedAt: new Date().toISOString(),
+    sections: [
+      { title: 'Identity', rows: [
+        ['sign-in configured', hasClientId() ? 'yes' : 'NO — not configured on this deployment'],
+        ['client id', usingAppClientId() ? 'app-owned' : (getClientIdOverride() ? 'your override' : 'none')],
+      ] },
+      { title: 'Auth', rows: [
+        ['access token', tokenRow(TOKEN_KEY)],
+        ['needs reconnect', needsReconnect() ? 'YES — tap the sync pill to reconnect' : 'no'],
+        ['backup enabled', isGdriveBackupEnabled() ? 'yes' : 'no'],
+      ] },
+      { title: 'Sync', rows: [
+        ['state', getBackupState()],
+        ['syncing now', isSyncing() ? 'yes' : 'no'],
+        ['network', (typeof navigator !== 'undefined' && !navigator.onLine) ? 'OFFLINE' : 'online'],
+        ['last backup', formatLastBackup()],
+        ['local edits unpushed', isLocalDirty() ? 'YES' : 'no'],
+        ['last remote modifiedTime', getLastRemoteModified() || '(none)'],
+      ] },
+    ],
+  };
+
+  if (live) {
+    const rows = [];
+    try {
+      const token = await getAccessToken({ interactive: false });
+      if (!token) {
+        rows.push(['result', 'FAIL — no token; silent renew failed. Reconnect via the sync pill.']);
+      } else {
+        rows.push(['silent token', 'ok']);
+        const client = await initGdriveBackup({ interactive: false });
+        const peek = await client.peek();
+        rows.push(['drive reachable', 'yes']);
+        rows.push(['remote data file', peek ? JSON.stringify(peek) : 'none yet (empty Drive for this identity)']);
+      }
+    } catch (e) {
+      rows.push(['result', `FAIL — ${e && e.message ? e.message : e}`]);
+    }
+    report.sections.push({ title: 'Live check', rows });
+  }
+  return report;
 }
 
 async function loadGis() {
