@@ -2,6 +2,7 @@
   "name": "setlist · voidstar",
   "short_name": "setlist",
   "description": "Live-use and rehearsal setlist manager for pedal steel gigs — charts, notes, keys, and annotations that work offline on stage.",
+  "id": "/lab/setlist",
   "start_url": "/lab/setlist",
   "scope": "/lab/setlist",
   "display": "standalone",
@@ -10,19 +11,19 @@
   "theme_color": "#05050d",
   "icons": [
     {
-      "src": "/icon-192.png",
+      "src": "/icon-setlist-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/icon-setlist-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-maskable-512.png",
+      "src": "/icon-setlist-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

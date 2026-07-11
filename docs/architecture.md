@@ -64,6 +64,16 @@ a CDN is unavailable. Bundled npm deps are deliberately few: `astro`, `three`, `
 - **`/lab/qualia`** — a permanent meta-refresh **redirect to `/qualia`** (promoted out of the lab).
 - Marketing/content: `/`, `/about`, `/videos`, `/posts/*`, `/lab`.
 
+**Installable apps (PWAs).** `/qualia`, `/lab/setlist`, and `/lab/mind` are each meant to install
+as their **own** standalone desktop/home-screen app. Each ships a dedicated manifest
+(`public/manifest-<app>.webmanifest`) with a unique `id`, a **narrow `scope`** (`/qualia`,
+`/lab/setlist`, `/lab/mind`) so an install owns only its own routes, and its own color-coded icon
+set (`public/icon-<app>-*.png`, built by `scripts/gen-app-icons.mjs`: violet qualia · amber setlist
+· teal mind). The root `public/manifest.webmanifest` (`id`/`scope` `/`) is the whole-site app. Keep
+each lab's scope narrow — a broad `/` scope makes one install swallow the entire site into a single
+window, which is exactly the "it's all one app" bug this split fixed. The service worker
+(`/sw.js`, origin-wide) is shared across all of them.
+
 `page-init.js` (~5,100 lines) is the imperative integration layer that assembles `core` + `mesh` +
 `audio` + `pose` + the panels + the keymap/MIDI handlers + export/import. It is the largest single
 file and the primary structural refactor target (see `plans/maintenance-backlog.md`).

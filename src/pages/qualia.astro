@@ -32,10 +32,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <ThemeBoot />
   <title>Qualia | voidstar</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <link rel="apple-touch-icon" href="/icon-192.png" />
-  <!-- Qualia uses its own manifest so installing from this page anchors
-       start_url to /qualia (the default manifest's start_url is /
-       so installs from that page would always boot to home). -->
+  <link rel="apple-touch-icon" href="/icon-qualia-192.png" />
+  <!-- Qualia uses its own manifest with a distinct id + a scope of /qualia so
+       it installs as its own standalone app (separate from setlist/mind and the
+       whole-site manifest), anchored to /qualia. A broad scope of / would make
+       this install swallow the entire site into one window; keep it narrow. -->
   <link rel="manifest" href="/manifest-qualia.webmanifest" />
   <meta name="theme-color" content="#05050d" />
   <meta name="apple-mobile-web-app-capable" content="yes" />

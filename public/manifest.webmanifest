@@ -2,6 +2,7 @@
   "name": "voidstar",
   "short_name": "voidstar",
   "description": "voidstar — art, code, and the space between. Audio-reactive visualizers and lab experiments.",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
