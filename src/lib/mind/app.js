@@ -3,13 +3,13 @@
 
 import * as store from './store.js';
 import { invalidateIndex } from './search.js';
-import { revokeObjectUrls } from './attachments.js';
+import { revokeObjectUrls, retryMissingImages } from './attachments.js';
 import { processPendingOcr } from './ocr.js';
 import {
   initGdriveSync, isSyncing, setSyncClient, pullMergePushIfStale,
   debouncedPush, watchConnectivity, hasClientId, markShardDirty,
 } from './gdrive-sync.js';
-import { pushPendingAttachments, wireLazyBlobFetch } from './attachments-drive.js';
+import { pushPendingAttachments, wireLazyBlobFetch, wireImageRetry } from './attachments-drive.js';
 import { renderHome } from './views/home.js';
 import { renderEditor } from './views/editor.js';
 import { renderAnnotate } from './views/annotate.js';
@@ -171,6 +171,10 @@ function watchFocusSync() {
         { snapshotFn: () => store.putSnapshot('pre-sync') },
       );
       pushPendingAttachments();
+      // A focus pull can land an attachment's driveFileId (or reconnect Drive)
+      // without changing anything the current view re-renders — nudge any
+      // "unavailable" images to re-fetch their now-reachable binary.
+      retryMissingImages();
       if (changed) {
         invalidateIndex();
         processPendingOcr();
@@ -200,6 +204,7 @@ export function initMindApp(root) {
     debouncedPush(() => store.exportAll(), (merged) => store.importAll(merged));
   });
   wireLazyBlobFetch();
+  wireImageRetry();
   watchConnectivity();
   watchFocusSync();
 

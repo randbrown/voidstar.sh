@@ -26,6 +26,10 @@ const TAGS_OPEN_KEY = 'voidstar.mind.tagsExpanded';
 let _q = ''; // search text survives re-renders within the session
 let _filter = { kind: '', tag: '' };
 
+// Bulk-select state (survives in-session re-renders; cleared after an action).
+let _selectMode = false;
+const _selected = new Set();
+
 export function currentFolderId() {
   return localStorage.getItem(FOLDER_KEY) || '';
 }
@@ -150,9 +154,91 @@ export async function renderHome(root) {
   root.appendChild(todoWrap);
   await renderTodoCard(todoWrap, folders, folderId, scope);
 
-  // ── Notes list ──
+  // ── Bulk-select bar + notes list ──
+  // The select bar lets you tick several notes and move them to a folder or
+  // trash them in one go (the folder chips only move ONE note at a time, and
+  // deleting a folder never deletes its notes). Non-destructive by default:
+  // "delete" trashes (30-day restore); "move" bumps updatedAt so the folder
+  // change wins the sync merge on every device.
+  let _lastHere = []; // in-scope note ids from the latest render (for "select all")
+  const selWrap = el('div');
+  root.appendChild(selWrap);
+
   const listWrap = el('div', 'mn-notelist');
   root.appendChild(listWrap);
+
+  const selCtx = {
+    get mode() { return _selectMode; },
+    selected: _selected,
+    toggle(id, on) {
+      if (on) _selected.add(id); else _selected.delete(id);
+      renderSelBar();
+    },
+  };
+
+  function exitSelect() {
+    _selectMode = false;
+    _selected.clear();
+    renderSelBar();
+    renderList();
+  }
+
+  async function moveSelectedTo(folderId) {
+    const ids = [..._selected];
+    for (const id of ids) {
+      const note = await store.getNote(id);
+      if (note && !note.deletedAt) await store.putNote({ ...note, folderId });
+    }
+    _selectMode = false;
+    _selected.clear();
+    refresh(); // rebuilds the whole view out of select mode
+  }
+
+  function deleteSelected() {
+    const ids = [..._selected];
+    if (!ids.length) return;
+    confirmBox(`Delete ${ids.length} note${ids.length === 1 ? '' : 's'}? They go to Trash (restorable for 30 days).`, async () => {
+      for (const id of ids) {
+        const note = await store.getNote(id);
+        if (note && !note.deletedAt) await store.trashNote(note);
+      }
+      _selectMode = false;
+      _selected.clear();
+      refresh();
+    });
+  }
+
+  function renderSelBar() {
+    selWrap.innerHTML = '';
+    const bar = el('div', 'mn-selbar');
+    if (!_selectMode) {
+      bar.appendChild(btn('&#9745; select', 'mn-chip mn-selbtn', () => {
+        _selectMode = true;
+        renderSelBar();
+        renderList();
+      }));
+      selWrap.appendChild(bar);
+      return;
+    }
+    const n = _selected.size;
+    bar.classList.add('mn-selbar-on');
+    bar.appendChild(el('span', 'mn-selbar-count', n ? `${n} selected` : 'select notes'));
+    const allHere = _lastHere.length && _lastHere.every(id => _selected.has(id));
+    bar.appendChild(btn(allHere ? 'clear' : 'all here', 'mn-chip', () => {
+      if (allHere) for (const id of _lastHere) _selected.delete(id);
+      else for (const id of _lastHere) _selected.add(id);
+      renderSelBar();
+      renderList();
+    }));
+    const moveBtn = btn('move&hellip;', 'mn-chip mn-folder-chip', () => pickMoveFolder(folders, folderId, moveSelectedTo));
+    const delBtn = btn('delete', 'mn-chip mn-chip-danger', deleteSelected);
+    moveBtn.disabled = delBtn.disabled = !n;
+    bar.appendChild(moveBtn);
+    bar.appendChild(delBtn);
+    bar.appendChild(btn('done', 'mn-chip', exitSelect));
+    selWrap.appendChild(bar);
+  }
+  renderSelBar();
 
   let _renderSeq = 0;
   async function renderList() {
@@ -178,6 +264,8 @@ export async function renderHome(root) {
     };
     const here = notes.filter(n => inScope(n.folderId)).sort(cmp);
     const elsewhere = scope ? notes.filter(n => !inScope(n.folderId)).sort(cmp) : [];
+    _lastHere = here.map(e => e.note.id);
+    if (_selectMode) renderSelBar(); // "all here" reflects the current list
 
     listWrap.innerHTML = '';
 
@@ -194,11 +282,11 @@ export async function renderHome(root) {
       return;
     }
 
-    for (const entry of here) listWrap.appendChild(noteCard(entry, folders, false));
+    for (const entry of here) listWrap.appendChild(noteCard(entry, folders, false, selCtx));
 
     if (elsewhere.length) {
       listWrap.appendChild(el('div', 'mn-section-label', `elsewhere (${elsewhere.length})`));
-      for (const entry of elsewhere) listWrap.appendChild(noteCard(entry, folders, true));
+      for (const entry of elsewhere) listWrap.appendChild(noteCard(entry, folders, true, selCtx));
     }
   }
 
@@ -338,19 +426,71 @@ function folderBar(folders, folderId) {
   return bar;
 }
 
+// Folder picker for bulk-move: "(root)" + every folder by full path. The
+// folder you're currently viewing is hinted "· here" but still selectable —
+// a mixed selection (e.g. at root) may want to land notes right where the hint
+// is. onPick(folderId) runs on choose.
+function pickMoveFolder(folders, currentFolderId, onPick) {
+  const overlay = el('div', 'mn-modal-overlay');
+  const box = el('div', 'mn-modal');
+  box.appendChild(el('div', 'mn-modal-title', 'move to folder'));
+  const list = el('div', 'mn-linklist');
+
+  const opt = (id, label) => {
+    const here = id === (currentFolderId || '');
+    const b = btn(label, `mn-btn-ghost mn-linkrow ${here ? 'mn-linkrow-here' : ''}`, () => { overlay.remove(); onPick(id); });
+    list.appendChild(b);
+  };
+  opt('', '&#128193; (root)');
+  for (const { f } of folders
+    .map(f => ({ f, path: store.folderPath(folders, f.id) }))
+    .sort((a, b) => a.path.localeCompare(b.path))) {
+    opt(f.id, `&#128193; ${esc(store.folderPath(folders, f.id))}`);
+  }
+
+  box.appendChild(list);
+  const rowEl = el('div', 'mn-modal-row');
+  rowEl.appendChild(btn('cancel', '', () => overlay.remove()));
+  box.appendChild(rowEl);
+  overlay.appendChild(box);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
 // Deep-link into a note, carrying the active search query so the editor can
 // highlight matches + scroll to the first one.
 function noteHash(id) {
   return `#note/${id}${_q ? `?q=${encodeURIComponent(_q)}` : ''}`;
 }
 
-function noteCard(entry, folders, dimmed) {
+function noteCard(entry, folders, dimmed, selCtx = null) {
   const n = entry.note;
   const tokens = _q ? tokenize(_q) : [];
-  const card = el('div', `mn-card mn-notecard ${dimmed ? 'mn-dimcard' : ''}`);
-  card.addEventListener('click', () => navigate(noteHash(n.id)));
+  const selecting = selCtx?.mode;
+  const chosen = selecting && selCtx.selected.has(n.id);
+  const card = el('div', `mn-card mn-notecard ${dimmed ? 'mn-dimcard' : ''} ${chosen ? 'mn-selected' : ''}`);
 
   const row = el('div', 'mn-card-titlerow');
+  if (selecting) {
+    const cb = el('input', 'mn-select-cb');
+    cb.type = 'checkbox';
+    cb.checked = chosen;
+    // The whole card toggles selection; stop the checkbox's own click from
+    // double-firing through the card handler.
+    cb.addEventListener('click', (e) => e.stopPropagation());
+    cb.addEventListener('change', () => {
+      card.classList.toggle('mn-selected', cb.checked);
+      selCtx.toggle(n.id, cb.checked);
+    });
+    card.addEventListener('click', () => {
+      cb.checked = !cb.checked;
+      card.classList.toggle('mn-selected', cb.checked);
+      selCtx.toggle(n.id, cb.checked);
+    });
+    row.appendChild(cb);
+  } else {
+    card.addEventListener('click', () => navigate(noteHash(n.id)));
+  }
   if (n.pinned) row.appendChild(el('span', 'mn-pin-dot', '&#9733;'));
   if (n.conflictOf) row.appendChild(el('span', 'mn-conflict-badge', 'conflict'));
   row.appendChild(el('span', 'mn-card-title', markText(n.title, tokens)));

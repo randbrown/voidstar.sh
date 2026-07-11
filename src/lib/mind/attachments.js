@@ -113,6 +113,23 @@ export async function getObjectUrl(attachmentId) {
 export function revokeObjectUrls() {
   for (const url of _urlCache.values()) URL.revokeObjectURL(url);
   _urlCache.clear();
+  // Route change tears down the editor (and its image nodeviews); drop any
+  // still-registered retries so we never poke a detached <img>.
+  _missingImages.clear();
+}
+
+// ── Missing-image retry registry ──
+// An image nodeview whose blob isn't on this device yet registers here; when
+// Drive (re)connects or a sync lands, retryMissingImages() re-resolves them so
+// a note left open fills in its pictures without a manual back-out-and-reopen.
+const _missingImages = new Set();
+export function registerMissingImage(view) { _missingImages.add(view); }
+export function unregisterMissingImage(view) { _missingImages.delete(view); }
+export function retryMissingImages() {
+  if (!_missingImages.size) return;
+  const views = [..._missingImages];
+  _missingImages.clear(); // a view still missing after retry() re-registers itself
+  for (const v of views) { try { v.retry(); } catch {} }
 }
 
 // Trash an attachment: tombstone the record (propagates via sync); the local

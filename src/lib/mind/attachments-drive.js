@@ -5,8 +5,8 @@
 // devices lazy-download a blob the first time they render the attachment.
 
 import * as store from './store.js';
-import { getSyncClient } from './gdrive-sync.js';
-import { setBlobFetcher } from './attachments.js';
+import { getSyncClient, onSyncState } from './gdrive-sync.js';
+import { setBlobFetcher, retryMissingImages } from './attachments.js';
 import { processPendingOcr } from './ocr.js';
 
 let _uploading = false;
@@ -42,6 +42,14 @@ export async function pushPendingAttachments() {
   } finally {
     _uploading = false;
   }
+}
+
+// Re-resolve any images stuck on "unavailable on this device" whenever a push
+// cycle completes (their binary may have just become fetchable) or the tab
+// comes back online — so a note left open fills in without a manual reopen.
+export function wireImageRetry() {
+  onSyncState((s) => { if (s === 'synced') retryMissingImages(); });
+  if (typeof window !== 'undefined') window.addEventListener('online', retryMissingImages);
 }
 
 // Wire the lazy-download path: attachments.getObjectUrl calls this when a
