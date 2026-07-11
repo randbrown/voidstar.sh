@@ -64,6 +64,15 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   uploaded serially (pending = `driveFileId:''`, so queue state survives tab
   death and rides the JSON); other devices lazy-download on first render
   (`setBlobFetcher` in `attachments.js`).
+- **Dead inline-image self-heal** (`attach-heal.js`, pure, tested by
+  `scripts/check-mind-attach-heal.mjs`): a note whose body `mn-attach://<id>`
+  points at a *trashed/duplicated* attachment still renders on the device that
+  made the edit (the trashed blob outlives the tombstone locally) but shows
+  "image unavailable" everywhere else. On note open, `healBodyAttachmentRefs`
+  repoints such a dead reference to the note's live same-image survivor (matched
+  by name+kind, or a sole spare live image — never an ambiguous guess) and the
+  corrected body syncs out. Trashing an attachment via the chip `×` now also
+  strips its inline image (`editor.removeImage`) so no new dead refs are minted.
 - **Migration** — two one-time, guarded steps that lose no data:
   - *Consolidation* (`migrateToRootFolder`): the earliest layout scattered a loose
     `voidstar-mind-data.json` + `voidstar mind attachments/` + `voidstar mind
