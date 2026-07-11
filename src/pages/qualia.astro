@@ -1356,6 +1356,64 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--muted); font-size: 0.65rem; line-height: 1.3;
     }
 
+    /* Drive connection status pill in the qualem card's drive row. */
+    .qualem-drive-status {
+      font-size: 0.62rem; color: var(--muted); letter-spacing: 0.04em;
+      align-self: center;
+    }
+    .qualem-drive-status[data-state="connected"] { color: var(--green); }
+    .qualem-drive-status[data-state="busy"],
+    .qualem-drive-status[data-state="connecting"] { color: var(--accent); }
+    .qualem-drive-status[data-state="error"] { color: var(--pink); }
+
+    /* Drive browser modal — reuses the share dialog's floating-panel look. */
+    #qualem-drive-backdrop {
+      position: fixed; inset: 0; z-index: 99;
+      background: rgba(0,0,0,0.5); backdrop-filter: blur(2px);
+    }
+    #qualem-drive {
+      position: fixed; z-index: 100; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(94vw, 560px); max-height: 84vh;
+      background: rgba(10,10,26,0.95);
+      border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font-family: var(--font-mono);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+      display: flex; flex-direction: column;
+    }
+    #qualem-drive-head {
+      display: flex; align-items: center; gap: 0.4rem;
+      padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border);
+    }
+    #qualem-drive-body {
+      padding: 0.7rem; display: flex; flex-direction: column; gap: 0.5rem;
+      overflow: hidden;
+    }
+    .qualem-drive-folders {
+      display: flex; flex-wrap: wrap; gap: 0.3rem;
+    }
+    .qualem-drive-folder {
+      background: rgba(0,0,0,0.35); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--muted);
+      font-family: var(--font-mono); font-size: 0.64rem;
+      padding: 0.15rem 0.45rem; cursor: pointer;
+    }
+    .qualem-drive-folder.active { color: var(--cyan); border-color: var(--cyan); }
+    .qualem-drive-list {
+      display: flex; flex-direction: column; gap: 0.2rem;
+      overflow-y: auto; max-height: 52vh;
+    }
+    .qualem-drive-item {
+      display: flex; align-items: center; gap: 0.4rem;
+      font-size: 0.68rem; padding: 0.25rem 0.35rem; border-radius: 4px;
+      background: rgba(0,0,0,0.25);
+    }
+    .qualem-drive-item .qd-name {
+      flex: 1; min-width: 0; white-space: nowrap; overflow: hidden;
+      text-overflow: ellipsis; font-family: var(--font-mono);
+    }
+    #qualem-drive-modal-status { font-size: 0.64rem; color: var(--muted); min-height: 1em; }
+
     /* Recording status pill. Two roles depending on which class is set:
        - .rec-active: visible during recording, but COMPACT and pinned
          bottom-center with pointer-events:none so it never obstructs
@@ -3292,6 +3350,17 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn" id="btn-qualem-bundle"        title="Export a .qualem.zip — the qualem JSON plus loop WAVs, cab IRs, amp captures, and video clips (portable across machines)">export .zip</button>
         <button class="ctrl-btn" id="btn-qualem-bundle-import" title="Import a .qualem.zip bundle (installs its loops / cab IRs / amp captures, then loads it)">import .zip</button>
       </div>
+      <!-- Google Drive — log in and sync qualems, sections, bundles, and
+           video clips to the user's own Drive under a `voidstar_qualia`
+           folder (each sub-component in its own subfolder). -->
+      <div class="sp-pat-toolbar" id="qualem-drive-row">
+        <button class="ctrl-btn" id="btn-qualem-drive-connect" title="Log in with Google Drive to sync your qualia world">connect drive</button>
+        <button class="ctrl-btn" id="btn-qualem-drive-save"   title="Save the current state as a qualem into your Drive (voidstar_qualia/qualems)" style="display:none">save to drive</button>
+        <button class="ctrl-btn" id="btn-qualem-drive-bundle" title="Upload a .qualem.zip bundle (loops, cabs, amps, video) to your Drive" style="display:none">bundle → drive</button>
+        <button class="ctrl-btn" id="btn-qualem-drive-browse" title="Browse and load your qualems, sections, bundles, and clips from Drive" style="display:none">browse drive</button>
+        <button class="ctrl-btn" id="btn-qualem-drive-signout" title="Disconnect Google Drive" style="display:none">sign out</button>
+        <span id="qualem-drive-status" class="qualem-drive-status" title="Google Drive connection status"></span>
+      </div>
       <!-- Panel I/O — save or load just ONE panel's settings to/from a file.
            Loading ignores everything outside the chosen panel. -->
       <div class="qualem-panelio">
@@ -3299,6 +3368,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <select id="qualem-section" class="rig-lib-select" title="Which panel's settings to save / load on its own"></select>
         <button class="ctrl-btn" id="btn-qualem-section-save" title="Save just this panel's settings to a .qualem.json file">save</button>
         <button class="ctrl-btn" id="btn-qualem-section-load" title="Load just this panel's settings from any .qualem file (ignores the rest)">load</button>
+        <button class="ctrl-btn" id="btn-qualem-section-drive" title="Save just this panel's settings into its own Drive subfolder" style="display:none">→ drive</button>
       </div>
       <div id="qualem-list" class="sp-pat-list"></div>
       <input type="file" id="qualem-file-input" accept=".json,application/json" style="display:none" />
@@ -3329,6 +3399,24 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       Anyone opening this link gets the same experience loaded automatically.
       QR-code display + GitHub Gist sync are coming in a follow-up.
     </div>
+  </div>
+</div>
+
+<!-- Drive browser: lists the sub-component folders under `voidstar_qualia`
+     and the files inside the selected one, each loadable back into the live
+     state. Reuses the share popover's floating-dialog styling. -->
+<div id="qualem-drive-backdrop" style="display:none"></div>
+<div id="qualem-drive" role="dialog" aria-modal="true" aria-labelledby="qualem-drive-title" style="display:none">
+  <div id="qualem-drive-head">
+    <span class="qualem-share-title" id="qualem-drive-title">google drive</span>
+    <span class="qualem-share-spacer"></span>
+    <button class="ctrl-btn" id="qualem-drive-refresh" title="Reload the file list">↻</button>
+    <button class="ctrl-btn" id="qualem-drive-close" title="Close">×</button>
+  </div>
+  <div id="qualem-drive-body">
+    <div class="qualem-drive-folders" id="qualem-drive-folders"></div>
+    <div class="qualem-drive-list" id="qualem-drive-list"></div>
+    <div class="qualem-drive-status" id="qualem-drive-modal-status"></div>
   </div>
 </div>
 

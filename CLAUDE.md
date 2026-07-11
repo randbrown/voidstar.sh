@@ -12,6 +12,7 @@ Quick map of the canonical docs:
 - Sequencer kits & samples shared with Strudel → [`docs/samples.md`](docs/samples.md)
 - Live coding (Strudel + Hydra) → [`docs/livecoding.md`](docs/livecoding.md)
 - Audience entanglement & pose → [`docs/entanglement.md`](docs/entanglement.md)
+- Qualia Google Drive sync (login, `voidstar_qualia` folder, per-component subfolders) → [`docs/qualia-drive-sync.md`](docs/qualia-drive-sync.md)
 - Setlist app: data model, Drive backup/restore, chart-fallback tiers → [`docs/setlist-app.md`](docs/setlist-app.md)
 - Mind app (notes/second-brain): store, editor, tasks-in-notes, Drive sync → [`docs/mind-app.md`](docs/mind-app.md)
 - DOIO controller keymap (keystrokes + MIDI) → [`docs/doio-kb16-qualia-keymap.md`](docs/doio-kb16-qualia-keymap.md)
