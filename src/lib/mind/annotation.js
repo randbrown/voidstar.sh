@@ -147,6 +147,22 @@ export function renderReadonlyAnnotations(canvas, strokes) {
   return { redraw, destroy: () => ro.disconnect() };
 }
 
+// Overlay saved annotations for `attachmentId` on top of an image already
+// rendered inside `wrapEl` (which must be position:relative and tightly wrap
+// the <img>). Adds a non-interactive canvas that tracks the wrap's size, so
+// markup shows wherever the image is shown — the note body, attachment strip,
+// etc. — not only in the annotate view. Returns null when there are no strokes
+// (nothing appended), else { canvas, redraw, destroy }.
+export async function mountAnnotationOverlay(wrapEl, attachmentId, page = 0) {
+  const data = await loadAnnotation(attachmentId, page);
+  if (!data?.strokes?.length) return null;
+  const canvas = document.createElement('canvas');
+  canvas.className = 'mn-ann-overlay';
+  wrapEl.appendChild(canvas);
+  const ctl = renderReadonlyAnnotations(canvas, data.strokes);
+  return { canvas, redraw: ctl.redraw, destroy() { ctl.destroy(); canvas.remove(); } };
+}
+
 export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, onSaved = null } = {}) {
   const ctx = canvas.getContext('2d');
   const ac = new AbortController();

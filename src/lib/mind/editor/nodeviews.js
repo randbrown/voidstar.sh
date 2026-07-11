@@ -55,10 +55,18 @@ export class TaskItemView {
 export class ImageView {
   constructor(node) {
     this.node = node;
-    this.dom = document.createElement('img');
-    this.dom.className = 'mn-editor-img';
-    this.dom.alt = node.attrs.alt || '';
-    this.dom.title = 'double-click to annotate';
+    this.overlay = null;
+
+    // A positioned wrapper so a saved-annotation canvas can sit over the image.
+    this.dom = document.createElement('span');
+    this.dom.className = 'mn-editor-img-wrap';
+
+    this.img = document.createElement('img');
+    this.img.className = 'mn-editor-img';
+    this.img.alt = node.attrs.alt || '';
+    this.img.title = 'double-click to annotate';
+    this.dom.appendChild(this.img);
+
     // Double-click (or double-tap) an inline image → annotation canvas.
     // Single click stays with ProseMirror for node selection.
     this.dom.addEventListener('dblclick', () => {
@@ -71,29 +79,51 @@ export class ImageView {
   }
 
   async _resolve(src) {
+    this._clearOverlay();
     if (src?.startsWith('mn-attach://')) {
-      this.dom.classList.add('mn-img-loading');
-      const url = await getObjectUrl(src.slice('mn-attach://'.length));
-      this.dom.classList.remove('mn-img-loading');
+      const attId = src.slice('mn-attach://'.length);
+      this.img.classList.add('mn-img-loading');
+      const url = await getObjectUrl(attId);
+      this.img.classList.remove('mn-img-loading');
       if (url) {
-        this.dom.src = url;
-        this.dom.classList.remove('mn-img-missing');
+        this.img.src = url;
+        this.img.classList.remove('mn-img-missing');
         unregisterMissingImage(this);
+        this._mountOverlay(attId);
       } else {
         // Binary not on this device yet — mark missing and wait for a sync to
         // (re)connect Drive, at which point retryMissingImages() re-resolves us.
-        this.dom.classList.add('mn-img-missing');
+        this.img.classList.add('mn-img-missing');
         registerMissingImage(this);
       }
     } else {
-      this.dom.src = src || '';
+      this.img.src = src || '';
     }
+  }
+
+  // Draw saved annotation strokes over the image so markup is visible in the
+  // note body, not only in the annotate view. Waits for the image box.
+  async _mountOverlay(attId) {
+    try {
+      const { mountAnnotationOverlay } = await import('../annotation.js');
+      const mount = async () => {
+        if (this.node.attrs.src !== `mn-attach://${attId}`) return; // src changed while loading
+        const o = await mountAnnotationOverlay(this.dom, attId);
+        if (o) { this._clearOverlay(); this.overlay = o; }
+      };
+      if (this.img.complete && this.img.naturalWidth) mount();
+      else this.img.addEventListener('load', mount, { once: true });
+    } catch { /* overlay is best-effort */ }
+  }
+
+  _clearOverlay() {
+    if (this.overlay) { this.overlay.destroy(); this.overlay = null; }
   }
 
   // Called by retryMissingImages() after Drive (re)connects. No-op unless we're
   // still showing the "unavailable" state, so a settled image never re-fetches.
   retry() {
-    if (this.dom.classList.contains('mn-img-missing')) this._resolve(this.node.attrs.src);
+    if (this.img.classList.contains('mn-img-missing')) this._resolve(this.node.attrs.src);
   }
 
   update(node) {
@@ -104,5 +134,5 @@ export class ImageView {
   }
 
   ignoreMutation() { return true; }
-  destroy() { unregisterMissingImage(this); }
+  destroy() { this._clearOverlay(); unregisterMissingImage(this); }
 }

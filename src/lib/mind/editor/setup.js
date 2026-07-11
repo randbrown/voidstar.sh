@@ -4,7 +4,7 @@
 import { EditorState, Plugin, PluginKey, TextSelection } from 'prosemirror-state';
 import { EditorView, Decoration, DecorationSet } from 'prosemirror-view';
 import { keymap } from 'prosemirror-keymap';
-import { history, undo, redo } from 'prosemirror-history';
+import { history, undo, redo, undoDepth, redoDepth } from 'prosemirror-history';
 import {
   baseKeymap, chainCommands, toggleMark, exitCode,
   newlineInCode, createParagraphNear, liftEmptyBlock, splitBlock,
@@ -261,6 +261,19 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, placehol
     insertLink(label, href) {
       const node = schema.text(label, [schema.marks.link.create({ href })]);
       view.dispatch(view.state.tr.replaceSelectionWith(node, false).scrollIntoView());
+    },
+    // ── Undo / redo (surfaced as toolbar buttons; keymap still bound too) ──
+    undo() { undo(view.state, view.dispatch); view.focus(); },
+    redo() { redo(view.state, view.dispatch); view.focus(); },
+    canUndo: () => undoDepth(view.state) > 0,
+    canRedo: () => redoDepth(view.state) > 0,
+    // Replace the whole document from a markdown string, as one undoable step
+    // (used by "discard changes" to restore the note's opened-body).
+    setMarkdown(md) {
+      const doc = parseMarkdown(md);
+      const { tr } = view.state;
+      tr.replaceWith(0, view.state.doc.content.size, doc.content).scrollIntoView();
+      view.dispatch(tr);
     },
     // ── Search-match highlighting ──
     setHighlight(query) {
