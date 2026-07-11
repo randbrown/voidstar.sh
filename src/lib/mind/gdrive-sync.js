@@ -13,6 +13,7 @@
 
 import { NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS, TASK_FILL_FIELDS } from './store.js';
 import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
+import { tokenRow } from '../qualia/gdrive-diag.js';
 import {
   splitIntoShards, emptyShard, hashShard, hashIndex, shardName, parseShardName,
   mergeById, mergeShardData, mergeIndexData, computeDelta, isEmptyDelta,
@@ -201,6 +202,61 @@ export function formatLastBackup() {
   return new Date(ts).toLocaleDateString();
 }
 
+// Read-only diagnostics for the settings troubleshooter. `live` adds a real
+// Drive round-trip (silent token + peek) so "can this device reach Drive right
+// now?" is answered without any of the merge/import side effects of a sync.
+export async function gatherDiagnostics({ live = false } = {}) {
+  let shardFiles = 0, foldStamp = '', dirtyShards = '0';
+  try { const s = JSON.parse(localStorage.getItem(SHARD_STATE_KEY)); if (s) { shardFiles = Object.keys(s.files || {}).length; foldStamp = s.foldStamp || ''; } } catch {}
+  try { const d = JSON.parse(localStorage.getItem(DIRTY_SHARDS_KEY)); if (d) dirtyShards = Array.isArray(d) ? String(d.length) : String(d); } catch {}
+
+  const report = {
+    app: 'mind',
+    generatedAt: new Date().toISOString(),
+    sections: [
+      { title: 'Identity', rows: [
+        ['sign-in configured', hasClientId() ? 'yes' : 'NO — not configured on this deployment'],
+        ['client id', usingAppClientId() ? 'app-owned' : (getClientIdOverride() ? 'your override' : 'none')],
+        ['device name', getDeviceName()],
+      ] },
+      { title: 'Auth', rows: [
+        ['access token', tokenRow(TOKEN_KEY)],
+        ['needs reconnect', needsReconnect() ? 'YES — tap “sign in with Google”' : 'no'],
+      ] },
+      { title: 'Sync', rows: [
+        ['state', getSyncState()],
+        ['syncing now', isSyncing() ? 'yes' : 'no'],
+        ['network', (typeof navigator !== 'undefined' && !navigator.onLine) ? 'OFFLINE' : 'online'],
+        ['last sync', formatLastBackup()],
+        ['local edits unpushed', isLocalDirty() ? 'YES' : 'no'],
+        ['dirty shards queued', dirtyShards],
+        ['known remote shard files', String(shardFiles)],
+        ['last fold stamp', foldStamp || '(none)'],
+      ] },
+    ],
+  };
+
+  if (live) {
+    const rows = [];
+    try {
+      const token = await getAccessToken({ interactive: false });
+      if (!token) {
+        rows.push(['result', 'FAIL — no token; silent renew failed. Tap “sign in with Google”.']);
+      } else {
+        rows.push(['silent token', 'ok']);
+        const client = await initGdriveSync({ interactive: false });
+        const peek = await client.peek();
+        rows.push(['drive reachable', 'yes']);
+        rows.push(['remote peek', peek ? JSON.stringify(peek) : 'no data files yet (empty Drive for this identity)']);
+      }
+    } catch (e) {
+      rows.push(['result', `FAIL — ${e && e.message ? e.message : e}`]);
+    }
+    report.sections.push({ title: 'Live check', rows });
+  }
+  return report;
+}
+
 async function loadGis() {
   if (_gisLoaded) return;
   if (document.querySelector('script[src*="accounts.google.com/gsi/client"]')) {
@@ -231,22 +287,17 @@ function storeToken(token, expiresIn) {
   }));
 }
 
-async function getAccessToken({ interactive = true } = {}) {
-  const existing = getStoredToken();
-  if (existing) return existing;
-  // Non-interactive callers must never trigger the OAuth popup (blocked
-  // outside a user gesture).
-  if (!interactive) return null;
-
-  const clientId = getClientId();
-  if (!clientId) throw new Error('Google Drive client ID not configured — set it in settings.');
-
-  await loadGis();
-
+// One token request. The `prompt` decides the UX: `'none'` renews silently
+// through a hidden iframe (no popup, no gesture) and errors if interaction is
+// required; `''` renews silently when it can and otherwise shows the
+// consent/account chooser. A fresh client per call keeps concurrent requests
+// from racing over a shared callback.
+function requestTokenOnce(clientId, prompt = '') {
   return new Promise((resolve, reject) => {
     const client = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: SCOPES,
+      prompt,
       callback: (response) => {
         if (response.error) {
           reject(new Error(response.error_description || response.error));
@@ -261,6 +312,35 @@ async function getAccessToken({ interactive = true } = {}) {
     });
     client.requestAccessToken();
   });
+}
+
+async function getAccessToken({ interactive = true } = {}) {
+  const existing = getStoredToken();
+  if (existing) return existing;
+
+  const clientId = getClientId();
+  if (!clientId) {
+    if (!interactive) return null;
+    throw new Error('Google Drive client ID not configured — set it in settings.');
+  }
+
+  await loadGis();
+
+  // Background caller (app load / focus sync): renew SILENTLY. With a live
+  // Google session and a prior grant this returns a fresh token through a
+  // hidden iframe with zero UI — so a lapsed 1h access token no longer forces a
+  // manual "reconnect" on every open. If it can't renew silently (no session,
+  // consent revoked, third-party cookies blocked) we stay quiet and let the
+  // status pill fall to "reconnect".
+  if (!interactive) {
+    try { return await requestTokenOnce(clientId, 'none'); }
+    catch { return null; }
+  }
+
+  // Interactive (inside the user's gesture): silent when possible, otherwise the
+  // real consent/account chooser — a single call, so the gesture is never lost
+  // across an await.
+  return requestTokenOnce(clientId, '');
 }
 
 // Acquire the token NOW, inside a user gesture (mobile popup rules).

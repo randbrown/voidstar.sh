@@ -254,6 +254,23 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, placehol
       const tr = view.state.tr.replaceSelectionWith(node).scrollIntoView();
       view.dispatch(tr);
     },
+    // Remove every inline image node pointing at this attachment — called when
+    // an attachment is trashed so the body never keeps a dead mn-attach ref.
+    // Returns true if anything was removed.
+    removeImage(attachmentId) {
+      const src = `mn-attach://${attachmentId}`;
+      const spans = [];
+      view.state.doc.descendants((node, pos) => {
+        if (node.type === schema.nodes.image && node.attrs.src === src) {
+          spans.push({ from: pos, to: pos + node.nodeSize });
+        }
+      });
+      if (!spans.length) return false;
+      let tr = view.state.tr;
+      for (const s of spans.reverse()) tr = tr.delete(s.from, s.to); // last→first keeps positions valid
+      view.dispatch(tr);
+      return true;
+    },
     insertText(text) {
       const tr = view.state.tr.insertText(text).scrollIntoView();
       view.dispatch(tr);

@@ -23,6 +23,7 @@
 // other Drive files stay private and invisible to us.
 
 import { GOOGLE_CLIENT_ID } from './google-config.js';
+import { tokenRow } from './gdrive-diag.js';
 
 const NS               = 'voidstar.qualia.gdrive';
 const CLIENT_ID_KEY    = `${NS}.clientId`;
@@ -75,8 +76,10 @@ function storeToken(token, expiresIn) {
 
 /** Connected = a client id is configured AND we hold a live (unexpired) token. */
 export function isConnected() { return !!getClientId() && !!getStoredToken(); }
-/** Connected before but the token lapsed — the UI invites a tap to reconnect
- *  (a silent GIS refresh is impossible; it needs a user gesture). Gated on
+/** Connected before but the token lapsed. Non-interactive callers first attempt
+ *  a SILENT renewal (see getAccessToken), so this only stays true when a silent
+ *  grant isn't possible (no Google session, consent revoked, or third-party
+ *  cookies blocked) — at which point the UI invites a tap to reconnect. Gated on
  *  having actually connected once, so a first-time visitor (who "has" the
  *  app-owned client id but never signed in) reads as "not connected", not
  *  "token expired". */
@@ -116,21 +119,16 @@ async function loadGis() {
   });
 }
 
-async function getAccessToken({ interactive = true } = {}) {
-  const existing = getStoredToken();
-  if (existing) return existing;
-  // Non-interactive callers (auto-checks) must never trip the OAuth popup —
-  // browsers block popups outside a user gesture (noisy GSI_LOGGER errors).
-  if (!interactive) return null;
-
-  const clientId = getClientId();
-  if (!clientId) throw new Error('Google Drive client ID not configured.');
-  await loadGis();
-
+// One token request. `'none'` renews silently through a hidden iframe (no popup,
+// no gesture) and errors if interaction is required; `''` renews silently when
+// it can and otherwise shows the consent/account chooser. A fresh client per
+// call keeps concurrent requests from racing over a shared callback.
+function requestTokenOnce(clientId, prompt = '') {
   return new Promise((resolve, reject) => {
     const client = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: SCOPES,
+      prompt,
       callback: (response) => {
         if (response.error) { reject(new Error(response.error_description || response.error)); return; }
         storeToken(response.access_token, parseInt(response.expires_in) || 3600);
@@ -140,6 +138,30 @@ async function getAccessToken({ interactive = true } = {}) {
     });
     client.requestAccessToken();
   });
+}
+
+async function getAccessToken({ interactive = true } = {}) {
+  const existing = getStoredToken();
+  if (existing) return existing;
+
+  const clientId = getClientId();
+  if (!clientId) {
+    if (!interactive) return null;
+    throw new Error('Google Drive client ID not configured.');
+  }
+  await loadGis();
+
+  // Background caller (e.g. a non-interactive listFiles): renew SILENTLY, never
+  // any UI — so nothing pops up or errors on screen mid-performance. A failed
+  // silent grant just returns null and the manual save/load prompts a reconnect.
+  if (!interactive) {
+    try { return await requestTokenOnce(clientId, 'none'); }
+    catch { return null; }
+  }
+
+  // Interactive (inside the user's save/load gesture): silent when possible,
+  // otherwise the consent/account chooser — one call keeps the gesture valid.
+  return requestTokenOnce(clientId, '');
 }
 
 // Acquire (or refresh) the Drive token NOW, while still inside the user
@@ -371,4 +393,51 @@ export async function trashFile(fileId) {
 // Sanitize a display name into a safe Drive filename fragment.
 export function safeName(s, fallback = 'file') {
   return (String(s || '').replace(/[^\w.-]+/g, '_').slice(0, 80) || fallback);
+}
+
+// ── Diagnostics ─────────────────────────────────────────────────────────────
+// Read-only troubleshooter for the qualia admin/util screen. `live` adds a
+// silent token + a non-creating root-folder listing so "can I reach Drive?" is
+// answered without any automatic sync — nothing here writes or pops up UI, so
+// it's safe to run mid-session.
+export async function gatherDiagnostics({ live = false } = {}) {
+  const report = {
+    app: 'qualia',
+    generatedAt: new Date().toISOString(),
+    sections: [
+      { title: 'Identity', rows: [
+        ['sign-in configured', hasClientId() ? 'yes' : 'NO — not configured on this deployment'],
+        ['client id', usingAppClientId() ? 'app-owned' : (getClientIdOverride() ? 'your override' : 'none')],
+      ] },
+      { title: 'Auth', rows: [
+        ['access token', tokenRow(TOKEN_KEY)],
+        ['connected', isConnected() ? 'yes' : 'no'],
+        ['needs reconnect', needsReconnect() ? 'YES — Save/Load will prompt sign-in' : 'no'],
+        ['pill state', getState()],
+        ['network', (typeof navigator !== 'undefined' && !navigator.onLine) ? 'OFFLINE' : 'online'],
+      ] },
+    ],
+  };
+
+  if (live) {
+    const rows = [];
+    try {
+      const token = await getAccessToken({ interactive: false });
+      if (!token) {
+        rows.push(['result', 'FAIL — no token; silent renew failed. Use Save/Load to sign in.']);
+      } else {
+        rows.push(['silent token', 'ok']);
+        const roots = await driveList(token, {
+          q: `name='${ROOT_FOLDER_NAME}' and mimeType='${FOLDER_MIME}' and 'root' in parents and trashed=false`,
+          spaces: 'drive', fields: 'files(id,name)', pageSize: '5',
+        });
+        rows.push(['drive reachable', 'yes']);
+        rows.push(['voidstar_qualia folder', roots.length ? `found${roots.length > 1 ? ` (${roots.length} — duplicates!)` : ''}` : 'not created yet']);
+      }
+    } catch (e) {
+      rows.push(['result', `FAIL — ${e && e.message ? e.message : e}`]);
+    }
+    report.sections.push({ title: 'Live check', rows });
+  }
+  return report;
 }

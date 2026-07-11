@@ -4,6 +4,7 @@
 import * as store from '../store.js';
 import { createEditor } from '../editor/setup.js';
 import { firstLine } from '../editor/markdown.js';
+import { healBodyAttachmentRefs } from '../attach-heal.js';
 import { addAttachmentFromBlob, getObjectUrl, formatSize, formatDuration } from '../attachments.js';
 import { createVoiceCapture, recordingSupported, getStoredMicId, storeMicId } from '../voice-capture.js';
 import { ensureTaskIds, syncNoteTasks, backlinksTo } from '../tasks-sync.js';
@@ -27,6 +28,20 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     root.appendChild(topBar('note not found', '#home'));
     return;
   }
+
+  // Self-heal dead inline image references before the editor binds to the body.
+  // A trashed/duplicate attachment can leave the body pointing at bytes that
+  // only exist on the origin device (its blob outlives the tombstone locally),
+  // so the picture shows here but dies on every other device. Repoint to the
+  // live survivor of the same image; the corrected body then syncs everywhere.
+  try {
+    const noteAtts = (await store.getAllAttachmentsRaw()).filter((a) => a.noteId === note.id);
+    const healed = healBodyAttachmentRefs(note.body, noteAtts);
+    if (healed.changed) {
+      note = { ...note, body: healed.body };
+      await store.putNote(note);
+    }
+  } catch (e) { console.warn('[mind] attach-heal:', e.message); }
 
   // ── Top bar ──
   const titleSpan = el('span', 'mn-topbar-title mn-title-clickable', esc(note.title));
@@ -454,6 +469,9 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     const rm = btn('&times;', 'mn-attach-x', () => {
       confirmBox('Remove this attachment?', async () => {
         await store.trashAttachment(a);
+        // Drop its inline image from the body too, else the reference goes dead
+        // (renders here off the lingering local blob, "unavailable" elsewhere).
+        if (editor?.removeImage(a.id)) scheduleSave();
         await drawAttachments();
       });
     });

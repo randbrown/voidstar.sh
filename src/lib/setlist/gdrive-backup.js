@@ -12,6 +12,7 @@
 
 import { mergeRecord, SONG_FILL_FIELDS, SETLIST_FILL_FIELDS } from './store.js';
 import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
+import { tokenRow } from '../qualia/gdrive-diag.js';
 
 const CLIENT_ID_KEY = 'voidstar.setlist.gdrive.clientId';
 const TOKEN_KEY = 'voidstar.setlist.gdrive.token';
@@ -76,10 +77,12 @@ export function isGdriveBackupEnabled() {
   return !!getClientId() && !!getStoredToken();
 }
 
-// A client ID is configured but there's no valid (unexpired) token — the user
-// connected before but the token lapsed. Drives the pill's "reconnect" state:
-// a silent re-auth is impossible (GIS needs a gesture), so the UI must invite
-// a tap to reconnect.
+// A client ID is configured but there's no valid (unexpired) token. The
+// background sync path (page load / refocus) first attempts a SILENT renewal
+// (see getAccessToken), so this only stays true — and drives the pill's
+// "reconnect" state — when a silent grant genuinely isn't possible (no Google
+// session, consent revoked, or third-party cookies blocked), at which point the
+// UI invites a tap to reconnect.
 export function needsReconnect() {
   return !!getClientId() && !getStoredToken();
 }
@@ -108,6 +111,55 @@ export function formatLastBackup() {
   if (day === 1) return 'yesterday';
   if (day < 7) return `${day}d ago`;
   return new Date(ts).toLocaleDateString();
+}
+
+// Read-only diagnostics for the settings troubleshooter. `live` adds a real
+// Drive round-trip (silent token + peek) so "can this device reach Drive right
+// now?" is answered without any of the merge/import side effects of a backup.
+export async function gatherDiagnostics({ live = false } = {}) {
+  const report = {
+    app: 'setlist',
+    generatedAt: new Date().toISOString(),
+    sections: [
+      { title: 'Identity', rows: [
+        ['sign-in configured', hasClientId() ? 'yes' : 'NO — not configured on this deployment'],
+        ['client id', usingAppClientId() ? 'app-owned' : (getClientIdOverride() ? 'your override' : 'none')],
+      ] },
+      { title: 'Auth', rows: [
+        ['access token', tokenRow(TOKEN_KEY)],
+        ['needs reconnect', needsReconnect() ? 'YES — tap the sync pill to reconnect' : 'no'],
+        ['backup enabled', isGdriveBackupEnabled() ? 'yes' : 'no'],
+      ] },
+      { title: 'Sync', rows: [
+        ['state', getBackupState()],
+        ['syncing now', isSyncing() ? 'yes' : 'no'],
+        ['network', (typeof navigator !== 'undefined' && !navigator.onLine) ? 'OFFLINE' : 'online'],
+        ['last backup', formatLastBackup()],
+        ['local edits unpushed', isLocalDirty() ? 'YES' : 'no'],
+        ['last remote modifiedTime', getLastRemoteModified() || '(none)'],
+      ] },
+    ],
+  };
+
+  if (live) {
+    const rows = [];
+    try {
+      const token = await getAccessToken({ interactive: false });
+      if (!token) {
+        rows.push(['result', 'FAIL — no token; silent renew failed. Reconnect via the sync pill.']);
+      } else {
+        rows.push(['silent token', 'ok']);
+        const client = await initGdriveBackup({ interactive: false });
+        const peek = await client.peek();
+        rows.push(['drive reachable', 'yes']);
+        rows.push(['remote data file', peek ? JSON.stringify(peek) : 'none yet (empty Drive for this identity)']);
+      }
+    } catch (e) {
+      rows.push(['result', `FAIL — ${e && e.message ? e.message : e}`]);
+    }
+    report.sections.push({ title: 'Live check', rows });
+  }
+  return report;
 }
 
 async function loadGis() {
@@ -140,24 +192,17 @@ function storeToken(token, expiresIn) {
   }));
 }
 
-async function getAccessToken({ interactive = true } = {}) {
-  const existing = getStoredToken();
-  if (existing) return existing;
-
-  // Non-interactive callers (e.g. auto-backup on page load) must never trigger
-  // the OAuth popup: browsers block popups not opened from a user gesture,
-  // which surfaces as the noisy GSI_LOGGER "Failed to open popup" error.
-  if (!interactive) return null;
-
-  const clientId = getClientId();
-  if (!clientId) throw new Error('Google Drive client ID not configured. Set it in Sources & Sync settings.');
-
-  await loadGis();
-
+// One token request. The `prompt` decides the UX: `'none'` renews silently
+// through a hidden iframe (no popup, no gesture) and errors if interaction is
+// required; `''` renews silently when it can and otherwise shows the
+// consent/account chooser. A fresh client per call keeps concurrent requests
+// from racing over a shared callback.
+function requestTokenOnce(clientId, prompt = '') {
   return new Promise((resolve, reject) => {
     const client = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: SCOPES,
+      prompt,
       callback: (response) => {
         if (response.error) {
           reject(new Error(response.error_description || response.error));
@@ -172,6 +217,34 @@ async function getAccessToken({ interactive = true } = {}) {
     });
     client.requestAccessToken();
   });
+}
+
+async function getAccessToken({ interactive = true } = {}) {
+  const existing = getStoredToken();
+  if (existing) return existing;
+
+  const clientId = getClientId();
+  if (!clientId) {
+    if (!interactive) return null;
+    throw new Error('Google Drive client ID not configured. Set it in Sources & Sync settings.');
+  }
+
+  await loadGis();
+
+  // Background caller (auto-backup on page load / refocus): renew SILENTLY.
+  // With a live Google session and a prior grant this returns a fresh token
+  // through a hidden iframe with zero UI — so a lapsed 1h token no longer forces
+  // a manual "reconnect" on every open. If a silent grant isn't possible we stay
+  // quiet (no popup, no GSI_LOGGER noise) and let the pill fall to "reconnect".
+  if (!interactive) {
+    try { return await requestTokenOnce(clientId, 'none'); }
+    catch { return null; }
+  }
+
+  // Interactive (inside the user's gesture): silent when possible, otherwise the
+  // real consent/account chooser — a single call, so the gesture is never lost
+  // across an await.
+  return requestTokenOnce(clientId, '');
 }
 
 // Trash (not hard-delete — recoverable from Drive's trash for ~30 days) a
