@@ -14,10 +14,44 @@ const TESSERACT_SRC = 'https://cdn.jsdelivr.net/npm/tesseract.js@6/dist/tesserac
 let _tesseractPromise = null;
 let _workerPromise = null;
 let _draining = false;
+let _current = '';
+let _lastError = '';
 let _onProgress = null;
 
 // Optional UI hook: fn({remaining, current}) or fn(null) when idle.
 export function onOcrProgress(fn) { _onProgress = fn; }
+
+// Live drain state for the status panel (no queue kick).
+export function ocrRunState() { return { draining: _draining, current: _current, lastError: _lastError }; }
+
+// A snapshot of the OCR queue for the status panel: counts by state, plus how
+// many "pending" items are only waiting on their image binary to arrive from
+// Drive (nothing this device can do until a sync/lazy-fetch lands them — which
+// is the usual reason a big "N pending" number sits still).
+export async function ocrStatusReport() {
+  const atts = await store.getAllAttachments();
+  const ocrable = atts.filter((a) => a.kind === 'image' || a.kind === 'pdf');
+  const counts = { total: ocrable.length, pending: 0, done: 0, failed: 0, skipped: 0, waiting: 0, ready: 0 };
+  const blobIds = new Set(await store.getBlobIds());
+  for (const a of ocrable) {
+    const st = a.ocrStatus || 'pending';
+    if (st === 'done' || st === 'failed' || st === 'skipped') counts[st]++;
+    else {
+      counts.pending++;
+      if (blobIds.has(a.id)) counts.ready++; else counts.waiting++;
+    }
+  }
+  return { counts, ...ocrRunState() };
+}
+
+// Re-queue every failed attachment (user "retry failed" action), then kick.
+export async function retryFailedOcr() {
+  const atts = await store.getAllAttachments();
+  const failed = atts.filter((a) => a.ocrStatus === 'failed');
+  for (const a of failed) await store.patchAttachment(a, { ocrStatus: 'pending' });
+  if (failed.length) processPendingOcr();
+  return failed.length;
+}
 
 function loadTesseract() {
   if (_tesseractPromise) return _tesseractPromise;
@@ -58,6 +92,7 @@ export async function processPendingOcr() {
     let queue = pending;
     while (queue.length) {
       const att = queue[0];
+      _current = att.name || '';
       _onProgress?.({ remaining: queue.length, current: att.name });
       await idle();
       try {
@@ -77,6 +112,7 @@ export async function processPendingOcr() {
           invalidateIndex();
         }
       } catch (e) {
+        _lastError = e.message || String(e);
         console.warn('[mind] ocr failed:', att.id, e.message);
         const fresh = await store.getAttachment(att.id);
         if (fresh) await store.patchAttachment(fresh, { ocrStatus: 'failed' });
@@ -85,6 +121,7 @@ export async function processPendingOcr() {
     }
   } finally {
     _draining = false;
+    _current = '';
     _onProgress?.(null);
   }
 }

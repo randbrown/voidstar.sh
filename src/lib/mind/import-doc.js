@@ -10,6 +10,11 @@
 import * as store from './store.js';
 import { extractDate } from './dates.js';
 
+// Document import treats a bare "4/4" as a musical time signature, not a date,
+// so a chord chart or setlist never mints spurious dated notes.
+const DATE_OPTS = { rejectTimeSignatures: true };
+const findDate = (s) => extractDate(s, undefined, DATE_OPTS);
+
 const GAP = 60_000; // 1-minute step between same-day / dateless sections
 const HEADING_RE = /^(#{1,6})\s+(\S.*?)\s*#*\s*$/;
 const EXPORT_META_RE = /^<!--\s*mind\s+(.*?)\s*-->\s*$/;
@@ -44,7 +49,7 @@ function isDateLine(line) {
   const t = line.trim();
   if (!t || t.length > 60) return false;
   if (t.split(/\s+/).length > 6) return false;
-  const d = extractDate(t);
+  const d = findDate(t);
   if (!d) return false;
   const rest = remainderAfterDate(t, d);
   return (rest ? rest.split(/\s+/).filter(Boolean).length : 0) <= 2;
@@ -60,7 +65,7 @@ function chooseHeadingLevel(headings, override) {
   let bestDated = -1;
   for (let lvl = 1; lvl <= 6; lvl++) {
     if (!present.has(lvl)) continue;
-    const dated = headings.filter((h) => h.level === lvl && extractDate(h.text)).length;
+    const dated = headings.filter((h) => h.level === lvl && findDate(h.text)).length;
     if (dated > bestDated) { bestDated = dated; best = lvl; } // strict → ties keep shallower
   }
   return best;
@@ -144,9 +149,13 @@ export function parseDocIntoNotes(text, opts = {}) {
     if (m) headings.push({ index: i, level: m[1].length, text: m[2].trim() });
   }
   let mode = opts.mode && opts.mode !== 'auto' ? opts.mode : (headings.length >= 2 ? 'headings' : 'dates');
-  if (exportDoc) mode = 'export';
+  // 'single' (no-split) is an explicit user choice — it wins even over our own
+  // export format, so "import as one note" always yields exactly one note.
+  if (exportDoc && mode !== 'single') mode = 'export';
 
   // ── boundary detection ──
+  // 'single' leaves boundaries empty on purpose: the whole document (minus any
+  // export header stripped above) becomes one note.
   let chosenLevel = null;
   const boundaries = []; // {index, headerText, level}
   if (mode === 'export') {
@@ -171,34 +180,44 @@ export function parseDocIntoNotes(text, opts = {}) {
   }
   if (mode === 'dates') {
     chosenLevel = null;
+    // A bare date only splits when it's set off by a blank line above (or opens
+    // the document) — so a date written mid-paragraph, or a table/list row that
+    // happens to start with one, is never mistaken for a day boundary.
     for (let i = 0; i < lines.length; i++) {
-      if (isDateLine(lines[i])) boundaries.push({ index: i, headerText: lines[i].trim(), level: 0 });
+      const blankAbove = i === 0 || !lines[i - 1].trim();
+      if (blankAbove && isDateLine(lines[i])) boundaries.push({ index: i, headerText: lines[i].trim(), level: 0 });
     }
   }
 
   // ── assemble raw sections (document order) ──
   const raw = [];
-  const preambleEnd = boundaries.length ? boundaries[0].index : lines.length;
-  const preambleText = lines.slice(0, preambleEnd).join('\n').trim();
   let hasPreamble = false;
-  if (preambleText) {
-    if (boundaries.length && keepPreamble) {
-      raw.push({ headerRaw: '', level: 0, bodyLines: lines.slice(0, preambleEnd) });
-      hasPreamble = true;
-    } else if (!boundaries.length) {
-      // No boundaries at all — import the whole doc as a single note.
-      raw.push({ headerRaw: '', level: 0, bodyLines: lines });
-      warnings.push('No headings or dates found — importing as a single note.');
+  if (mode === 'single') {
+    // No-split: the entire document is one note (only meaningful when there's
+    // something to import).
+    if (lines.join('\n').trim()) raw.push({ headerRaw: '', level: 0, bodyLines: lines });
+  } else {
+    const preambleEnd = boundaries.length ? boundaries[0].index : lines.length;
+    const preambleText = lines.slice(0, preambleEnd).join('\n').trim();
+    if (preambleText) {
+      if (boundaries.length && keepPreamble) {
+        raw.push({ headerRaw: '', level: 0, bodyLines: lines.slice(0, preambleEnd) });
+        hasPreamble = true;
+      } else if (!boundaries.length) {
+        // No boundaries at all — import the whole doc as a single note.
+        raw.push({ headerRaw: '', level: 0, bodyLines: lines });
+        warnings.push('No headings or dates found — importing as a single note.');
+      }
     }
-  }
-  for (let b = 0; b < boundaries.length; b++) {
-    const cur = boundaries[b];
-    const end = b + 1 < boundaries.length ? boundaries[b + 1].index : lines.length;
-    raw.push({
-      headerRaw: cur.headerText,
-      level: cur.level,
-      bodyLines: lines.slice(cur.index + 1, end),
-    });
+    for (let b = 0; b < boundaries.length; b++) {
+      const cur = boundaries[b];
+      const end = b + 1 < boundaries.length ? boundaries[b + 1].index : lines.length;
+      raw.push({
+        headerRaw: cur.headerText,
+        level: cur.level,
+        bodyLines: lines.slice(cur.index + 1, end),
+      });
+    }
   }
 
   // ── derive per-section fields ──
@@ -221,7 +240,7 @@ export function parseDocIntoNotes(text, opts = {}) {
     }
 
     const header = r.headerRaw;
-    const d = header ? extractDate(header) : null;
+    const d = header ? findDate(header) : null;
     let dateIso = metaOverride?.date || (d ? d.iso : '');
 
     // Title: full cleaned header, minus a trailing " — <iso>" written by export.

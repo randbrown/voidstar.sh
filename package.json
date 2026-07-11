@@ -10,7 +10,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "check": "node scripts/check-import-doc.mjs && node scripts/check-mind-shard.mjs && node scripts/check-mind-enex.mjs && node scripts/check-mind-capture.mjs && node scripts/check-mind-attach-heal.mjs",
+    "check": "node scripts/check-import-doc.mjs && node scripts/check-mind-shard.mjs && node scripts/check-mind-enex.mjs && node scripts/check-mind-capture.mjs && node scripts/check-mind-attach-heal.mjs && node scripts/check-mind-merge.mjs",
     "gen:samples": "node scripts/gen-samples.mjs",
     "gen:samples:v0": "node scripts/gen-samples-voidstar0.mjs",
     "gen:samples:real": "node scripts/gen-real-manifests.mjs",

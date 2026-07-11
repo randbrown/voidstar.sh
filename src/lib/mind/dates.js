@@ -17,20 +17,43 @@ export function toIso(y, mo, d) {
   return `${y}-${pad2(mo)}-${pad2(d)}`;
 }
 
+// Musical time-signature denominators (note values are powers of two). A bare
+// "N/D" with such a denominator and a small numerator reads as a time signature
+// (4/4, 6/8, 12/8, 7/8, 2/2…), NOT a date — so document import can be told to
+// skip them. Only slash-form, year-less tokens are ambiguous: an explicit year
+// or a dash separator is always a date.
+const TS_DENOMS = new Set([1, 2, 4, 8, 16, 32]);
+export function looksLikeTimeSignature(n, d) {
+  return TS_DENOMS.has(d) && n >= 1 && n <= 32;
+}
+
 // Find a date anywhere in the line. Returns {iso, index, length} or null.
 // A missing year assumes the current year; two-digit years assume 20xx.
-export function extractDate(str, nowYear = new Date().getFullYear()) {
+//
+// Numeric shapes accepted: 2026-06-14 (ISO), and M/D · M.D · M-D with an
+// optional /·.·- year (6/14, 6-14, 6/14/26, 6-14-2026, 6.14.26). `opts`:
+//   rejectTimeSignatures — skip a bare slash "N/D" that looks like a musical
+//   time signature (used by the document importer so a 4/4 in a chord chart
+//   never mints a spurious date). Dashes and year-bearing tokens are unaffected.
+export function extractDate(str, nowYear = new Date().getFullYear(), opts = {}) {
+  const { rejectTimeSignatures = false } = opts;
   let m = str.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
   if (m) {
     const iso = toIso(+m[1], +m[2], +m[3]);
     if (iso) return { iso, index: m.index, length: m[0].length };
   }
-  m = str.match(/\b(\d{1,2})[/.](\d{1,2})(?:[/.](\d{2,4}))?\b/) ||
-      str.match(/\b(\d{1,2})-(\d{1,2})-(\d{2,4})\b/);
-  if (m) {
-    const y = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : nowYear;
-    const iso = toIso(y, +m[1], +m[2]);
-    if (iso) return { iso, index: m.index, length: m[0].length };
+  // Scan every numeric M/D(/Y) or M-D(-Y) token so a leading time signature
+  // ("4/4 …") can be skipped without hiding a real date later in the line. The
+  // \2 backreference keeps the separator consistent across the token.
+  const NUM_RE = /\b(\d{1,2})([/.-])(\d{1,2})(?:\2(\d{2,4}))?\b/g;
+  let nm;
+  while ((nm = NUM_RE.exec(str))) {
+    const [, mo, sep, day, yr] = nm;
+    const hasYear = yr != null;
+    if (rejectTimeSignatures && !hasYear && sep === '/' && looksLikeTimeSignature(+mo, +day)) continue;
+    const y = yr ? (yr.length === 2 ? 2000 + +yr : +yr) : nowYear;
+    const iso = toIso(y, +mo, +day);
+    if (iso) return { iso, index: nm.index, length: nm[0].length };
   }
   m = str.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/i);
   if (m) {

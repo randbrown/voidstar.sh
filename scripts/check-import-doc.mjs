@@ -6,6 +6,7 @@
 
 import { parseDocIntoNotes, fingerprintNote, markDuplicates } from '../src/lib/mind/import-doc.js';
 import { buildDocFromNotes } from '../src/lib/mind/export.js';
+import { extractDate } from '../src/lib/mind/dates.js';
 
 const YEAR = new Date().getFullYear();
 const NOW = Date.parse('2026-08-01T00:00:00'); // fixed anchor for descent checks
@@ -141,6 +142,83 @@ section('(g) duplicate detection');
   check('id match → upsert, not skip', sections[1].upsertId === 'aaaa1111' && sections[1].skip === false);
   check('daily collision clears isDaily', sections[2].isDaily === false && sections[2].dailyCollision === true);
   check('fingerprint stable', fingerprintNote({ title: 'A B', body: 'x' }) === fingerprintNote({ title: ' a  b ', body: ' x ' }));
+}
+
+// ── (h) single mode: whole document → one note, no split ──
+section('(h) split: none (single note)');
+{
+  const doc = [
+    '## 2026-07-08',
+    'first day',
+    '## 2026-07-07',
+    'second day',
+  ].join('\n');
+  const { sections, mode } = parseDocIntoNotes(doc, { now: NOW, mode: 'single' });
+  check('mode = single', mode === 'single', mode);
+  check('1 section', sections.length === 1, String(sections.length));
+  check('body keeps every heading inline', sections[0].body.includes('## 2026-07-08') && sections[0].body.includes('## 2026-07-07'));
+  check('title from first line', sections[0].title === '2026-07-08', sections[0].title);
+  // An export doc forced to single collapses to one note too.
+  const exp = buildDocFromNotes([
+    { id: 'z1', title: 'A', body: 'aaa', tags: [], meta: {}, createdAt: Date.parse('2026-07-08T09:00:00'), deletedAt: 0 },
+    { id: 'z2', title: 'B', body: 'bbb', tags: [], meta: {}, createdAt: Date.parse('2026-07-07T09:00:00'), deletedAt: 0 },
+  ], {});
+  const one = parseDocIntoNotes(exp, { now: NOW, mode: 'single' });
+  check('export forced to single → 1 note', one.sections.length === 1, String(one.sections.length));
+}
+
+// ── (i) date lines only split under a blank line ──
+section('(i) blank-line-above split rule');
+{
+  const doc = [
+    '6/14',            // line 0: opens the doc → splits
+    'first entry',
+    'notes continue',
+    '6/13',            // no blank line above → NOT a boundary
+    'still first entry body',
+    '',
+    '6/12',            // blank line above → splits
+    'third entry',
+  ].join('\n');
+  const { sections } = parseDocIntoNotes(doc, { now: NOW, mode: 'dates' });
+  check('2 sections (mid-run 6/13 did not split)', sections.length === 2, String(sections.length));
+  check('6/13 stays in the first body', sections[0].body.includes('6/13') && sections[0].body.includes('still first entry body'));
+  check('6/12 split (blank line above)', sections[1].dateIso === `${YEAR}-06-12`, sections[1].dateIso);
+}
+
+// ── (j) musical time signatures never split / mint dates ──
+section('(j) time-signature guard');
+{
+  const doc = [
+    '4/4',            // time signature, not a date
+    'practiced the intro riff',
+    '',
+    '6/8',            // time signature (June 8 would be valid, but denom is power-of-two)
+    'switched to compound feel',
+    '',
+    '6/14',           // real date (day 14 is no time-sig denominator)
+    'journal entry',
+  ].join('\n');
+  const { sections } = parseDocIntoNotes(doc, { now: NOW, mode: 'dates' });
+  check('only the real date splits', sections.length === 2, String(sections.length));
+  check('preamble holds the time-signature lines', sections[0].body.includes('4/4') && sections[0].body.includes('6/8'));
+  check('6/14 recognized as the date', sections[1].dateIso === `${YEAR}-06-14`, sections[1].dateIso);
+  // extractDate opt: bare power-of-two slash rejected, dash / year-bearing kept.
+  check('extractDate rejects 4/4 as time sig', extractDate('4/4', YEAR, { rejectTimeSignatures: true }) === null);
+  check('extractDate keeps 6/14', extractDate('6/14', YEAR, { rejectTimeSignatures: true })?.iso === `${YEAR}-06-14`);
+  check('extractDate keeps 4-4 (dash, no year)', extractDate('4-4', YEAR, { rejectTimeSignatures: true })?.iso === `${YEAR}-04-04`);
+  check('extractDate keeps 6/8/26 (year present)', extractDate('6/8/26', YEAR, { rejectTimeSignatures: true })?.iso === '2026-06-08');
+  check('default (no opt) still treats 4/4 as a date', extractDate('4/4', YEAR)?.iso === `${YEAR}-04-04`);
+}
+
+// ── (k) dash dates without a year ──
+section('(k) dash date, no year');
+{
+  const doc = ['6-14', 'dashed date entry', '', '6-13', 'earlier'].join('\n');
+  const { sections, mode } = parseDocIntoNotes(doc, { now: NOW, mode: 'dates' });
+  check('mode = dates', mode === 'dates', mode);
+  check('2 dashed-date sections', sections.length === 2, String(sections.length));
+  check('6-14 → this year', sections[0].dateIso === `${YEAR}-06-14`, sections[0].dateIso);
 }
 
 console.log(`\n${failed ? `FAILED (${failed})` : 'ALL PASSED'}`);
