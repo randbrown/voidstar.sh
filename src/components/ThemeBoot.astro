@@ -14,8 +14,23 @@ const LEGACY = LEGACY_THEME_IDS;
 <script is:inline define:vars={{ OK, LEGACY }}>
   (function () {
     try {
-      var KEY = 'voidstar.theme';
+      var BASE = 'voidstar.theme';
+      // Per-app theme memory: qualia / setlist / mind each install as their own
+      // PWA and keep their own theme under a scoped key. Mirror of themeScope()
+      // in theme.js — must run inline (before any module) to avoid a flash.
+      var p = location.pathname;
+      var scope = (p === '/qualia' || p.indexOf('/qualia/') === 0) ? 'qualia'
+                : (p.indexOf('/lab/setlist') === 0) ? 'setlist'
+                : (p.indexOf('/lab/mind') === 0) ? 'mind' : '';
+      var KEY = scope ? BASE + '.' + scope : BASE;
       var t = localStorage.getItem(KEY);
+      // First visit to a scoped app after this shipped: inherit the site-wide
+      // theme once and fork it (write under the app's own key) so the app keeps
+      // that look and later site/other-app changes don't follow it.
+      if (t == null && scope) {
+        var inherited = localStorage.getItem(BASE);
+        if (inherited != null) { t = inherited; try { localStorage.setItem(KEY, t); } catch (e3) {} }
+      }
       // Heal a renamed id (e.g. stained-glass → glass) so the saved theme
       // survives the rename, and rewrite storage to the current id.
       if (t && LEGACY[t]) { t = LEGACY[t]; try { localStorage.setItem(KEY, t); } catch (e2) {} }

@@ -179,7 +179,14 @@ cycleTheme(1 /* or -1 */);      // next/prev (Y / shift+Y in labs)
 initThemeControl(selectEl);     // populate + wire a <select>
 onThemeChange(cb);              // run cb whenever the theme changes
 ```
-- Storage key: `voidstar.theme`. Event: `voidstar:themechange`. Default: `voidstar`.
+- Storage key: **per-app**. The three installable apps (qualia · setlist · mind)
+  each install as their own PWA and remember their own theme, so the active theme
+  persists under a path-scoped key: `voidstar.theme.qualia`, `voidstar.theme.setlist`,
+  `voidstar.theme.mind` — everything else (marketing site + legacy labs) uses the
+  base `voidstar.theme`. The mapping is `themeScope()` / `themeStorageKey()` in
+  `theme.js`, mirrored inline in `ThemeBoot.astro` (which also does a one-time
+  "inherit the site theme, then fork" migration the first time a scoped app boots).
+  Event: `voidstar:themechange`. Default: `voidstar`.
 
 Canvas knob reader (cached; invalidated on theme change — **never call
 `getComputedStyle` per frame**, call `readKnobs()` once and on `themechange`):

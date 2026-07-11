@@ -13,6 +13,30 @@
 
 export const STORAGE_KEY = 'voidstar.theme';
 
+// The three installable lab apps (qualia / setlist / mind) each install as their
+// own PWA and should remember their OWN theme — even though they share one
+// origin, and therefore one localStorage. So the active theme is persisted under
+// a per-app key derived from the path (the same scoping the PWA manifests use).
+// The marketing site and the legacy labs share the base key.
+//   /qualia*      → voidstar.theme.qualia
+//   /lab/setlist* → voidstar.theme.setlist
+//   /lab/mind*    → voidstar.theme.mind
+//   (anything else) → voidstar.theme
+// NOTE: ThemeBoot.astro duplicates this mapping inline — it must run before any
+// module loads to avoid a flash of the wrong theme — so keep the two in sync.
+export function themeScope(path) {
+  const p = path || (typeof location !== 'undefined' ? location.pathname : '');
+  if (p === '/qualia' || p.startsWith('/qualia/')) return 'qualia';
+  if (p.startsWith('/lab/setlist')) return 'setlist';
+  if (p.startsWith('/lab/mind')) return 'mind';
+  return '';
+}
+
+export function themeStorageKey(path) {
+  const scope = themeScope(path);
+  return scope ? `${STORAGE_KEY}.${scope}` : STORAGE_KEY;
+}
+
 export const THEMES = [
   { id: 'voidstar',       label: 'voidstar ✦' },
   { id: 'phosphor',       label: 'phosphor ▒' },
@@ -58,7 +82,7 @@ export function setTheme(id) {
   const mapped = canonicalId(id);
   const theme = IDS.includes(mapped) ? mapped : DEFAULT;
   document.documentElement.setAttribute('data-theme', theme);
-  try { localStorage.setItem(STORAGE_KEY, theme); } catch (_) {}
+  try { localStorage.setItem(themeStorageKey(), theme); } catch (_) {}
   invalidate();
   // Keep the PWA/browser chrome color in sync with the void.
   try {

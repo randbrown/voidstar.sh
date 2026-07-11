@@ -29,8 +29,9 @@ export async function renderSettings(root) {
   drawPos();
   uiCard.appendChild(posRow);
 
-  // Theme picker — shared with the rest of the site (persists to voidstar.theme,
-  // recolors live via themes.css custom props). Per-browser, not synced.
+  // Theme picker — mind installs as its own PWA and remembers its own theme
+  // (persists to voidstar.theme.mind; see themeStorageKey() in qualia/theme.js),
+  // recolors live via themes.css custom props. Per-browser, not synced.
   uiCard.appendChild(el('div', 'mn-note-meta', 'theme:'));
   const themeSel = el('select', 'mn-select');
   initThemeControl(themeSel);
