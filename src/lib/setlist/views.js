@@ -10,7 +10,7 @@ import { renderBandcampEmbed, renderSoundcloudEmbed } from './media.js';
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
@@ -297,12 +297,22 @@ async function runManualSync(statusEl, { interactive = true } = {}) {
   setBackupClient(client);
   setStatus('Backing up to Drive…', '');
   try {
-    await pullMergePushCycle(
+    const res = await pullMergePushCycle(
       client,
       () => store.exportAll(),
       (merged) => store.importAll(merged),
       { snapshotFn: () => store.putSnapshot('pre-sync'), historyForce: true },
     );
+    if (res && res.emptyNoBackup) {
+      // Nothing in Drive for this identity and nothing local to save — almost
+      // always a Google account / OAuth client id mismatch (drive.file can't
+      // see files another identity created). Say so instead of "✓ backed up".
+      setStatus(usingAppClientId()
+        ? 'No backup found for this account, and nothing local to back up. If you expected your setlists, they’re likely under your own OAuth client id — add it under “advanced” below, then restore.'
+        : 'No backup found for this account/client id, and nothing local to back up. Check you’re signed in with the same Google account and client id you originally backed up with.',
+        'var(--pink)');
+      return false;
+    }
     setStatus(`✓ backed up · ${formatLastBackup()}`, 'var(--green)');
     return true;
   } catch (e) {
@@ -3006,6 +3016,22 @@ export async function renderSettings(root) {
   }));
   gdriveSection.appendChild(gdriveActions);
   gdriveSection.appendChild(gdriveStatus);
+
+  // Which sign-in identity is active. drive.file only sees files the *current*
+  // OAuth client id created, so a mismatch here is exactly why "my backups
+  // vanished" happens — the app-owned default vs. a personal client id from
+  // before that default existed. Surface it so the cause is visible, not a
+  // mystery, and point at the recovery path.
+  const override = getClientIdOverride();
+  const idHint = el('div', 'sl-hint');
+  idHint.style.marginTop = '0.35rem';
+  idHint.style.opacity = '0.75';
+  if (override) {
+    idHint.textContent = `Signing in with your own OAuth client id (project ${override.split('-')[0]}).`;
+  } else if (usingAppClientId()) {
+    idHint.textContent = 'Signing in with the built-in voidstar client id. If your old backups don’t appear, they were likely made under your own OAuth client id — add it under “advanced” below.';
+  }
+  if (idHint.textContent) gdriveSection.appendChild(idHint);
 
   // Advanced: override the app-owned OAuth client id with your own (self-host).
   const gdriveAdv = el('details', 'sl-advanced');
