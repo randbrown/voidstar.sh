@@ -9,6 +9,7 @@ import { addAttachmentFromBlob, getObjectUrl, formatSize, formatDuration } from 
 import { createVoiceCapture, recordingSupported, getStoredMicId, storeMicId } from '../voice-capture.js';
 import { ensureTaskIds, syncNoteTasks, backlinksTo } from '../tasks-sync.js';
 import { pushPendingAttachments } from '../attachments-drive.js';
+import { mountAnnotationOverlay } from '../annotation.js';
 import { query } from '../search.js';
 import { isSupported as speechSupported } from '../voice.js';
 import { applySink } from '../audio-out.js';
@@ -146,11 +147,21 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   root.appendChild(tagRow);
 
   // ── Body editor with autosave ──
+  // The body as it was when this note was opened — the target of "discard
+  // changes" (exit without keeping the edits made this session).
+  const openBody = note.body;
+
   const mount = el('div', 'mn-editor-mount');
   root.appendChild(mount);
 
   let saveTimer = 0;
   let editor = null;
+
+  function syncHistoryButtons() {
+    if (!editor) return;
+    undoBtn.disabled = !editor.canUndo();
+    redoBtn.disabled = !editor.canRedo();
+  }
 
   async function save(patch = {}) {
     // Stamp any new checkboxes with stable ids first, so the serialized body
@@ -195,10 +206,35 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
 
   editor = createEditor(mount, {
     markdown: note.body,
-    onChange: () => { scheduleSave(); if (clearSearchHighlight) clearSearchHighlight(); },
+    onChange: () => { scheduleSave(); syncHistoryButtons(); if (clearSearchHighlight) clearSearchHighlight(); },
     onFiles: handleFiles,
     placeholder: 'write…',
   });
+
+  // ── Editor action bar: undo / redo / discard-changes ──
+  // Autosave means work is never silently lost, but a phone has no easy
+  // Ctrl-Z — so surface undo/redo as buttons, plus a "discard" that restores
+  // the note to how it was when opened (the "exit without saving" escape).
+  const edToolbar = el('div', 'mn-editor-toolbar');
+  const undoBtn = btn('&#8630;', 'mn-btn-icon mn-ed-histbtn', () => { editor.undo(); syncHistoryButtons(); });
+  undoBtn.title = 'undo (Ctrl+Z)';
+  const redoBtn = btn('&#8631;', 'mn-btn-icon mn-ed-histbtn', () => { editor.redo(); syncHistoryButtons(); });
+  redoBtn.title = 'redo (Ctrl+Shift+Z)';
+  edToolbar.appendChild(undoBtn);
+  edToolbar.appendChild(redoBtn);
+  edToolbar.appendChild(el('span', 'mn-editor-toolbar-spacer'));
+  const discardBtn = btn('&#8617; discard', 'mn-btn-ghost mn-ed-discard', () => {
+    if (editor.getMarkdown() === openBody) { navigate('#home'); return; }
+    confirmBox('Discard the changes made to this note since you opened it, and exit?', async () => {
+      editor.setMarkdown(openBody);
+      await save();          // persist the restored body before leaving
+      navigate('#home');
+    });
+  });
+  discardBtn.title = 'restore the note to how it was when you opened it';
+  edToolbar.appendChild(discardBtn);
+  root.insertBefore(edToolbar, mount);
+  syncHistoryButtons();
 
   // ── Search-match highlighting (opened from a search result with ?q=) ──
   // Highlight every match, scroll to the first, and float a small matches bar
@@ -409,6 +445,7 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   async function attachmentChip(a) {
     const chip = el('div', 'mn-attach');
     if (a.kind === 'image') {
+      const thumbWrap = el('div', 'mn-attach-thumbwrap');
       const img = el('img', 'mn-attach-thumb');
       const url = await getObjectUrl(a.id);
       if (url) img.src = url;
@@ -417,7 +454,14 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
       // Tap a thumbnail → the annotation canvas (quick-annotate on the go).
       img.style.cursor = 'pointer';
       img.addEventListener('click', () => navigate(`#note/${note.id}/annotate/${a.id}`));
-      chip.appendChild(img);
+      thumbWrap.appendChild(img);
+      // Show saved annotations right on the thumbnail too.
+      if (url) {
+        const mountThumb = () => mountAnnotationOverlay(thumbWrap, a.id).catch(() => {});
+        if (img.complete && img.naturalWidth) mountThumb();
+        else img.addEventListener('load', mountThumb, { once: true });
+      }
+      chip.appendChild(thumbWrap);
       if (a.ocrStatus === 'pending') chip.appendChild(el('span', 'mn-attach-label mn-dim', 'ocr…'));
     } else if (a.kind === 'audio') {
       const audio = el('audio');

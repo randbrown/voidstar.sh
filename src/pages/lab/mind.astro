@@ -519,12 +519,43 @@ const buildStamp = readBuildStamp();
       padding: 1rem;
       overflow-wrap: anywhere;
     }
+    .mn-capture-status {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--amber);
+      min-height: 1.1rem;
+    }
     .mn-capture-hint { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-dim); }
-    .mn-capture-actions { display: flex; gap: 0.5rem; justify-content: center; }
-    .mn-capture-done { min-width: 8rem; }
+    .mn-capture-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; }
+    .mn-capture-done { min-width: 6rem; }
+    .mn-capture-mic.mn-recording {
+      border-color: color-mix(in srgb, var(--pink) 60%, var(--border));
+      background: color-mix(in srgb, var(--pink) 22%, var(--surface));
+      animation: mn-recpulse 1.4s ease-in-out infinite;
+    }
+    @keyframes mn-recpulse {
+      50% { border-color: color-mix(in srgb, var(--pink) 90%, var(--border)); }
+    }
 
     /* ── Tag row (editor) ── */
     .mn-tagrow { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; }
+
+    /* ── Editor action bar (undo / redo / discard) ── */
+    .mn-editor-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      margin-bottom: 0.4rem;
+    }
+    .mn-editor-toolbar-spacer { flex: 1 1 auto; }
+    .mn-ed-histbtn { font-size: 1.05rem; line-height: 1; }
+    .mn-btn:disabled, .mn-btn[disabled] {
+      opacity: 0.35;
+      cursor: default;
+      pointer-events: none;
+    }
+    .mn-ed-discard { color: var(--text-dim); }
+    .mn-ed-discard:hover { color: var(--pink); background: var(--surface); }
 
     /* ── Editor ── */
     .mn-editor-mount {
@@ -603,12 +634,28 @@ const buildStamp = readBuildStamp();
     li.mn-task-item .mn-task-body { flex: 1 1 auto; min-width: 0; }
     li.mn-task-done .mn-task-body { text-decoration: line-through; color: var(--text-dim); }
 
+    .mn-editor-img-wrap {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+      margin: 0.3em 0;
+      line-height: 0;
+    }
     .mn-editor-img {
       max-width: 100%;
       border-radius: var(--radius, 6px);
       border: 1px solid var(--border);
       display: block;
-      margin: 0.3em 0;
+      margin: 0;
+    }
+    /* Saved-annotation overlay drawn on top of an image (note body, thumbnails) */
+    .mn-ann-overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      border-radius: var(--radius, 6px);
     }
     .mn-img-loading { min-height: 4rem; min-width: 8rem; background: var(--void-2, var(--void)); }
     .mn-img-missing::after { content: ' (image unavailable on this device)'; color: var(--text-dim); }
@@ -639,6 +686,7 @@ const buildStamp = readBuildStamp();
       border-radius: var(--radius, 6px);
       padding: 0.3rem;
     }
+    .mn-attach-thumbwrap { position: relative; display: inline-block; line-height: 0; }
     .mn-attach-thumb { height: 4.2rem; width: auto; max-width: 8rem; object-fit: cover; border-radius: 4px; display: block; }
     .mn-attach audio { height: 2.2rem; max-width: 14rem; }
     .mn-attach-label { font-family: var(--font-mono); font-size: 0.78rem; padding: 0.2rem 0.3rem; }
