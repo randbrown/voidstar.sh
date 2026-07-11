@@ -1,7 +1,7 @@
 // NodeViews for the mind editor: interactive task checkboxes and
 // IDB-backed images (mn-attach:// srcs resolve to blob object URLs).
 
-import { getObjectUrl } from '../attachments.js';
+import { getObjectUrl, registerMissingImage, unregisterMissingImage } from '../attachments.js';
 
 export class TaskItemView {
   constructor(node, view, getPos) {
@@ -75,11 +75,25 @@ export class ImageView {
       this.dom.classList.add('mn-img-loading');
       const url = await getObjectUrl(src.slice('mn-attach://'.length));
       this.dom.classList.remove('mn-img-loading');
-      if (url) this.dom.src = url;
-      else this.dom.classList.add('mn-img-missing');
+      if (url) {
+        this.dom.src = url;
+        this.dom.classList.remove('mn-img-missing');
+        unregisterMissingImage(this);
+      } else {
+        // Binary not on this device yet — mark missing and wait for a sync to
+        // (re)connect Drive, at which point retryMissingImages() re-resolves us.
+        this.dom.classList.add('mn-img-missing');
+        registerMissingImage(this);
+      }
     } else {
       this.dom.src = src || '';
     }
+  }
+
+  // Called by retryMissingImages() after Drive (re)connects. No-op unless we're
+  // still showing the "unavailable" state, so a settled image never re-fetches.
+  retry() {
+    if (this.dom.classList.contains('mn-img-missing')) this._resolve(this.node.attrs.src);
   }
 
   update(node) {
@@ -90,4 +104,5 @@ export class ImageView {
   }
 
   ignoreMutation() { return true; }
+  destroy() { unregisterMissingImage(this); }
 }
