@@ -17,6 +17,7 @@ import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl,
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError, checkSpotifyConnection } from './spotify-auth.js';
 import { extractKeyFromChartText } from './chart-key.js';
+import { initThemeControl } from '../qualia/theme.js';
 
 function formatTimecode(seconds) {
   if (seconds == null) return '';
@@ -2837,6 +2838,18 @@ export async function renderSettings(root) {
   root.appendChild(el('div', 'sl-hint', 'Library-wide passes (health check, re-scan, fetch info, steel summaries, auto-link, offline downloads) live on the library page under "library tools".'));
 
   const sources = getSources();
+
+  // Theme — setlist installs as its own PWA and remembers its own theme
+  // (persisted per-app; see themeStorageKey() in qualia/theme.js). Per-browser,
+  // not synced.
+  const themeSection = el('div', 'sl-section');
+  themeSection.appendChild(el('div', 'sl-section-title', 'theme'));
+  themeSection.appendChild(el('div', 'sl-hint', 'This setlist app remembers its own theme, separate from the site and the other apps.'));
+  const themeSel = el('select', 'sl-input');
+  themeSel.style.marginTop = '0.5rem';
+  initThemeControl(themeSel);
+  themeSection.appendChild(themeSel);
+  root.appendChild(themeSection);
 
   // Worker URL
   const workerSection = el('div', 'sl-section');
