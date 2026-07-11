@@ -231,22 +231,17 @@ function storeToken(token, expiresIn) {
   }));
 }
 
-async function getAccessToken({ interactive = true } = {}) {
-  const existing = getStoredToken();
-  if (existing) return existing;
-  // Non-interactive callers must never trigger the OAuth popup (blocked
-  // outside a user gesture).
-  if (!interactive) return null;
-
-  const clientId = getClientId();
-  if (!clientId) throw new Error('Google Drive client ID not configured — set it in settings.');
-
-  await loadGis();
-
+// One token request. The `prompt` decides the UX: `'none'` renews silently
+// through a hidden iframe (no popup, no gesture) and errors if interaction is
+// required; `''` renews silently when it can and otherwise shows the
+// consent/account chooser. A fresh client per call keeps concurrent requests
+// from racing over a shared callback.
+function requestTokenOnce(clientId, prompt = '') {
   return new Promise((resolve, reject) => {
     const client = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: SCOPES,
+      prompt,
       callback: (response) => {
         if (response.error) {
           reject(new Error(response.error_description || response.error));
@@ -261,6 +256,35 @@ async function getAccessToken({ interactive = true } = {}) {
     });
     client.requestAccessToken();
   });
+}
+
+async function getAccessToken({ interactive = true } = {}) {
+  const existing = getStoredToken();
+  if (existing) return existing;
+
+  const clientId = getClientId();
+  if (!clientId) {
+    if (!interactive) return null;
+    throw new Error('Google Drive client ID not configured — set it in settings.');
+  }
+
+  await loadGis();
+
+  // Background caller (app load / focus sync): renew SILENTLY. With a live
+  // Google session and a prior grant this returns a fresh token through a
+  // hidden iframe with zero UI — so a lapsed 1h access token no longer forces a
+  // manual "reconnect" on every open. If it can't renew silently (no session,
+  // consent revoked, third-party cookies blocked) we stay quiet and let the
+  // status pill fall to "reconnect".
+  if (!interactive) {
+    try { return await requestTokenOnce(clientId, 'none'); }
+    catch { return null; }
+  }
+
+  // Interactive (inside the user's gesture): silent when possible, otherwise the
+  // real consent/account chooser — a single call, so the gesture is never lost
+  // across an await.
+  return requestTokenOnce(clientId, '');
 }
 
 // Acquire the token NOW, inside a user gesture (mobile popup rules).
