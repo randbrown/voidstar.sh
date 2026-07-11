@@ -1,14 +1,17 @@
 ---
-// Style guard — self-heal for the "HTML loaded but hashed assets didn't"
-// failure mode: a flaky connection mid-load, a poisoned service-worker
-// cache, or a deploy-edge skew can leave the page as bare unstyled HTML
-// (native buttons, serif text, every popover expanded). Astro hashes
-// /_astro/* filenames, so a broken load never fixes itself without a
-// reload — bad news mid-performance.
+// Style guard — self-heal for the "HTML loaded but the app didn't" failure
+// modes: a flaky connection mid-load, a poisoned service-worker cache, or a
+// deploy-edge skew can leave the page half-loaded. Astro hashes /_astro/*
+// filenames, so a broken load never fixes itself without a reload — bad news
+// mid-performance. Two symptoms, one recovery:
+//   1. Broken styles — a stylesheet <link> finished without a usable sheet, so
+//      the page is bare unstyled HTML (native buttons, serif text).
+//   2. Failed boot — a client-mounted app root ([data-boot-root]) never got
+//      populated because its JS bundle failed to load/run, so the page is a
+//      blank/black shell. The CSS check can't see this (styles load fine).
 //
-// After load, if any stylesheet <link> finished without a usable sheet,
-// clear the service-worker registrations + caches and reload ONCE
-// (sessionStorage-guarded so a genuinely broken deploy doesn't loop, and
+// On either symptom, clear the service-worker registrations + caches and reload
+// ONCE (sessionStorage-guarded so a genuinely broken deploy doesn't loop, and
 // skipped entirely while offline so the offline fallback cache survives).
 ---
 <script is:inline>
@@ -29,9 +32,20 @@
       }
       return false;
     }
-    function recover() {
+    function bootBroken() {
+      // SPA pages mark their client-mounted root with data-boot-root. A healthy
+      // boot always paints children into it; an empty root after load means the
+      // JS bundle never ran (blank/black screen). Checked later than styles
+      // because mounting is async (IndexedDB, dynamic imports).
+      var roots = document.querySelectorAll('[data-boot-root]');
+      for (var i = 0; i < roots.length; i++) {
+        if (roots[i].children.length === 0) return true;
+      }
+      return false;
+    }
+    function recover(broken) {
       if (navigator.onLine === false) return;   // offline: cached shell is all we have
-      if (!styleBroken()) return;
+      if (!broken()) return;
       var KEY = 'voidstar.styleguard.reloaded';
       try {
         if (sessionStorage.getItem(KEY)) return;
@@ -52,7 +66,15 @@
       } catch (e) { /* still reload below */ }
       Promise.all(work).catch(function () {}).then(function () { location.reload(); });
     }
-    if (document.readyState === 'complete') setTimeout(recover, 400);
-    else window.addEventListener('load', function () { setTimeout(recover, 400); });
+    function schedule(fn, delay) {
+      if (document.readyState === 'complete') setTimeout(fn, delay);
+      else window.addEventListener('load', function () { setTimeout(fn, delay); });
+    }
+    // Styles resolve at load time — check them promptly.
+    schedule(function () { recover(styleBroken); }, 400);
+    // A client-mounted app boots asynchronously, so give it room before deciding
+    // the bundle never ran. Same one-shot guard, so at most one reload total
+    // even when both checks would otherwise fire.
+    schedule(function () { recover(function () { return styleBroken() || bootBroken(); }); }, 3500);
   })();
 </script>
