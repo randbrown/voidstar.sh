@@ -663,6 +663,15 @@ export function mergeData(local, remote) {
   };
 }
 
+// No songs/setlists/notes/annotations — an empty library. Config (sources/
+// settings) alone doesn't count: a backup file worth creating holds actual
+// setlist data, not just a worker URL. Gates the "don't mint an empty first
+// backup" rule in pullMergePushCycle.
+function isEmptyDataset(d) {
+  return !((d.songs && d.songs.length) || (d.setlists && d.setlists.length)
+    || (d.notes && d.notes.length) || (d.annotations && d.annotations.length));
+}
+
 // The single code path for all Drive data I/O: pull whatever's in Drive,
 // merge it with local data (newer record per id/songId wins), write the
 // merged result back locally, then push the merged result back to Drive so
@@ -694,6 +703,19 @@ export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) 
     const changed = remote ? mergeChangesLocal(local, merged) : false;
     if (changed && opts.snapshotFn) await opts.snapshotFn();
     if (changed) await importFn(merged);
+    // Never mint a brand-new *empty* backup file. If Drive holds no data file
+    // for the signed-in identity AND local has no songs/setlists/notes/
+    // annotations, creating one would (a) read as "backed up just now" over an
+    // empty set, and (b) — the real trap — mask the actual cause: this identity
+    // (Google account + OAuth client id) isn't the one that holds the data.
+    // drive.file only ever sees files the *current* identity created, so a
+    // mismatched account/client id looks exactly like an empty Drive. Leave
+    // Drive untouched, don't bump the "last backup" stamp, and tell the caller
+    // nothing was there — so the UI can point at the identity instead of
+    // silently reporting a fresh empty backup.
+    if (!remote && isEmptyDataset(merged)) {
+      return { merged, hadRemote: false, changed: false, pushed: false, emptyNoBackup: true };
+    }
     // Push only when Drive doesn't already hold exactly this data. Pushing
     // identical bytes just bumps the remote modifiedTime — which every other
     // device's freshness check reads as "new remote data", making them all
