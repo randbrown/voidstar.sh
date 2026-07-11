@@ -75,8 +75,10 @@ function storeToken(token, expiresIn) {
 
 /** Connected = a client id is configured AND we hold a live (unexpired) token. */
 export function isConnected() { return !!getClientId() && !!getStoredToken(); }
-/** Connected before but the token lapsed — the UI invites a tap to reconnect
- *  (a silent GIS refresh is impossible; it needs a user gesture). Gated on
+/** Connected before but the token lapsed. Non-interactive callers first attempt
+ *  a SILENT renewal (see getAccessToken), so this only stays true when a silent
+ *  grant isn't possible (no Google session, consent revoked, or third-party
+ *  cookies blocked) — at which point the UI invites a tap to reconnect. Gated on
  *  having actually connected once, so a first-time visitor (who "has" the
  *  app-owned client id but never signed in) reads as "not connected", not
  *  "token expired". */
@@ -116,21 +118,16 @@ async function loadGis() {
   });
 }
 
-async function getAccessToken({ interactive = true } = {}) {
-  const existing = getStoredToken();
-  if (existing) return existing;
-  // Non-interactive callers (auto-checks) must never trip the OAuth popup —
-  // browsers block popups outside a user gesture (noisy GSI_LOGGER errors).
-  if (!interactive) return null;
-
-  const clientId = getClientId();
-  if (!clientId) throw new Error('Google Drive client ID not configured.');
-  await loadGis();
-
+// One token request. `'none'` renews silently through a hidden iframe (no popup,
+// no gesture) and errors if interaction is required; `''` renews silently when
+// it can and otherwise shows the consent/account chooser. A fresh client per
+// call keeps concurrent requests from racing over a shared callback.
+function requestTokenOnce(clientId, prompt = '') {
   return new Promise((resolve, reject) => {
     const client = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: SCOPES,
+      prompt,
       callback: (response) => {
         if (response.error) { reject(new Error(response.error_description || response.error)); return; }
         storeToken(response.access_token, parseInt(response.expires_in) || 3600);
@@ -140,6 +137,30 @@ async function getAccessToken({ interactive = true } = {}) {
     });
     client.requestAccessToken();
   });
+}
+
+async function getAccessToken({ interactive = true } = {}) {
+  const existing = getStoredToken();
+  if (existing) return existing;
+
+  const clientId = getClientId();
+  if (!clientId) {
+    if (!interactive) return null;
+    throw new Error('Google Drive client ID not configured.');
+  }
+  await loadGis();
+
+  // Background caller (e.g. a non-interactive listFiles): renew SILENTLY, never
+  // any UI — so nothing pops up or errors on screen mid-performance. A failed
+  // silent grant just returns null and the manual save/load prompts a reconnect.
+  if (!interactive) {
+    try { return await requestTokenOnce(clientId, 'none'); }
+    catch { return null; }
+  }
+
+  // Interactive (inside the user's save/load gesture): silent when possible,
+  // otherwise the consent/account chooser — one call keeps the gesture valid.
+  return requestTokenOnce(clientId, '');
 }
 
 // Acquire (or refresh) the Drive token NOW, while still inside the user
