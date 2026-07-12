@@ -42,6 +42,19 @@ varispeed, or stretch node for fit + preserve-pitch) → loop master → rig mas
 destination, with the analyser adopted into `audio.js` as `'looper'`. Sync uses only **relative**
 durations `(boundary − pos)/cps`, so it's portable across the two AudioContexts.
 
+**Loop-seam crossfade.** Grid-snapped IN/OUT land mid-waveform, so a raw wrap is an amplitude step
+(a click every pass). `playVoice` bakes an 8 ms equal-power crossfade at the region tail into the
+audio immediately *before* the loop start (real recorded continuity from the take's pre-roll; a
+micro fade-out/in when there's none), holds it for the voice's lifetime, and restores the pristine
+samples on stop — so persisted PCM stays exact and a re-lock re-bakes at the new nudge position.
+The stretch path applies the same crossfade to its region copies.
+
+**Freeze / infinite sustain** (`frz` button next to strip/tune, hotkey `;`, `padActions.freeze`):
+grabs the newest ~1 s from the recorder ring (post-strip, so the pad carries the amp/cab/verb that
+were on), loops it with a 25 % equal-power seam, and plays it into the rig master — the ambient
+pedal-steel drone move. Tap to release (fade-out); re-tap while frozen re-captures for an evolving
+drone. Needs the capture ring, so the button opens capture if the signal fader is up.
+
 **Loaded via `?url&no-inline`** so Vite doesn't inline the worklet as a data URL that `addModule()`
 can't reliably load.
 

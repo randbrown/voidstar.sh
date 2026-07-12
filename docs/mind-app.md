@@ -204,6 +204,22 @@ only when the mind app next runs on that device.
   by `meta.daily = 'YYYY-MM-DD'`, created in the current folder.
 - **Templates**: tag any note `#template`; "＋ from template" (chips row)
   copies its body/tags into a fresh note.
+- **Command palette** (`palette.js`): Ctrl/Cmd-K anywhere — fuzzy jump to any
+  note or task (over the search index) plus actions (new note, today's daily,
+  tasks, voice capture, settings, trash). Arrows/Enter/Esc; capture-phase
+  binding so an editor keymap can't claim Ctrl-K.
+- **Wikilink trigger**: typing `[[` in the editor opens the link-to-note
+  picker at the cursor (the brackets are deleted first); Enter inserts the top
+  hit as an id-based `[title](#note/id)` link. Same picker as the 🔗 button.
+- **Per-note version history**: ⏱ in the editor (Drive-connected only) walks
+  the note's shard **Drive revisions** newest→oldest and lists the distinct
+  past bodies (`listNoteVersions` in `gdrive-sync.js`) — view inline, or
+  restore, which just sets the editor to that text (one undo step, autosaves
+  through rebase-on-save). Bounded by Drive's ~30-day revision retention;
+  local snapshots + conflict copies cover the rest.
+- **Quick-snooze**: a one-tap "😴 10m" appears on a task row whose reminder is
+  due/overdue (`snoozeTask` re-arms `snoozedUntil`/`remindAt`, clears the
+  local fired mark, rides sync).
 
 ## Reminders & hands-free capture (Phase A — client-only)
 

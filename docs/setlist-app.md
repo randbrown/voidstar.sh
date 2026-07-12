@@ -356,6 +356,13 @@ This codebase intentionally keeps two similarly-named ideas separate:
     the restored state *wins* the next pull-merge-push instead of being
     newer-wins-reverted by the copies still in Drive (which is what used to
     happen: "undo last merge" only held until the next auto-push).
+  - **Trash view (`#trash`, Settings → version safeguards → 🗑 trash).**
+    Deletion tombstones snapshot the deleted record + a display label, so a
+    deleted song/setlist/note is restorable for the tombstone's 180-day TTL
+    — on any synced device (the merge preserves the snapshot). Restore
+    re-inserts the record with a fresh `updatedAt` (authoritative) and drops
+    the tombstone; "empty trash" forgets the stored payloads while keeping
+    the bare tombstones so the deletes still propagate.
   - `pull()` self-heals **duplicate data files** (two devices' first backups
     racing used to split the dataset — each device read/wrote its own copy
     and "missed" the other's edits): the file list is ordered newest-first
