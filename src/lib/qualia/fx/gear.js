@@ -169,6 +169,7 @@ export default {
     let rig = null;
     let rigKey = '';
     let pal = PALETTES.neon;
+    let LC = null;   // active layout config (set in buildRig)
     let staticLayer = null, staticCtx = null;
     // Glow sprites: one per palette LED color, plus a sparkle star.
     let sprites = [];
@@ -277,20 +278,29 @@ export default {
       const jack = (x, y) => { rig.jacks.push({ x, y }); };
       const pick = (arr) => arr[(rnd() * arr.length) | 0];
 
+      // Layout personalities:
+      //   wall    — a dense museum wall of gear: many short rows, narrow
+      //             modules, a real mix of euro + 19" racks, moderate patching.
+      //   modular — one huge patched synth: few tall rows, ALL eurorack, wide
+      //             modules with big knobs and dense jack fields, heavy cabling.
+      //   rack    — 19" outboard studio: mostly full-width rack units.
+      const layout = params.layout;
+      LC = layout === 'modular'
+        ? { euroBias: 1.0,  modW: [12, 22], knobScale: 1.5, jackSpacing: 2.6, rowBase: 3.0, rowDens: 1.7, cableMul: 1.7 }
+        : layout === 'rack'
+        ? { euroBias: 0.14, modW: [8, 16],  knobScale: 1.0, jackSpacing: 3.4, rowBase: 4.4, rowDens: 2.2, cableMul: 0.7 }
+        : { euroBias: 0.5,  modW: [5, 9],   knobScale: 0.85, jackSpacing: 3.6, rowBase: 5.6, rowDens: 3.2, cableMul: 0.95 };
+
       // Row split. Density scales row count; each row is euro or 19" rack.
-      const nRows = Math.max(3, Math.min(9,
-        Math.round((4.6 + params.density * 2.8) * (H >= W ? 1.15 : 0.85))));
+      const nRows = Math.max(3, Math.min(11,
+        Math.round((LC.rowBase + params.density * LC.rowDens) * (H >= W ? 1.15 : 0.9))));
       const railH = Math.max(3, u * 0.9);
       const rowH = H / nRows;
-
-      const euroBias = params.layout === 'modular' ? 0.86
-                     : params.layout === 'rack'    ? 0.16
-                     :                               0.55;
 
       for (let r = 0; r < nRows; r++) {
         const y = r * rowH;
         const h = rowH - railH;
-        if (rnd() < euroBias) buildEuroRow(y, h, rnd, led, knob, jack, pick);
+        if (rnd() < LC.euroBias) buildEuroRow(y, h, rnd, led, knob, jack, pick);
         else buildRackRow(y, h, rnd, led, knob, jack, pick, params);
       }
 
@@ -304,9 +314,10 @@ export default {
     // A eurorack row: narrow modules, dense jacks, matrices and mini seqs.
     function buildEuroRow(y, h, rnd, led, knob, jack, pick) {
       const u = rig.u;
+      const ks = LC.knobScale;
       let x = 0;
       while (x < W - u * 4) {
-        const mw = Math.min(W - x, u * (7 + rnd() * 15));
+        const mw = Math.min(W - x, u * (LC.modW[0] + rnd() * LC.modW[1]));
         const tone = 0.85 + rnd() * 0.5;
         rig.plates.push({ x, y, w: mw, h, tone, euro: true });
         rig.screws.push({ x: x + u * 0.8, y: y + u * 0.8, rot: rnd() * Math.PI });
@@ -333,7 +344,7 @@ export default {
             n, band: (rnd() * 4) | 0, horiz: false, grn: false, frac: rnd(),
             lvl: 0, peak: 0, peakAge: 0, g: 0.85 + rnd() * 0.5,
           });
-          knob(inner.x + inner.w * 0.68, inner.y + inner.h * 0.22, u * (1.4 + rnd()), (rnd() * pal.leds.length) | 0, (rnd() * 3) | 0);
+          knob(inner.x + inner.w * 0.68, inner.y + inner.h * 0.22, u * (1.4 + rnd()) * ks, (rnd() * pal.leds.length) | 0, (rnd() * 3) | 0);
         } else {
           // Knob stack.
           const rows = Math.max(1, Math.min(3, (inner.h / (u * 6)) | 0));
@@ -342,7 +353,7 @@ export default {
             const perRow = inner.w > u * 10 ? 2 : 1;
             for (let kc = 0; kc < perRow; kc++) {
               const kx = inner.x + inner.w * ((kc + 0.5) / perRow);
-              knob(kx, ky, u * (1.3 + rnd() * 1.3), (rnd() * pal.leds.length) | 0, (rnd() * 3) | 0);
+              knob(kx, ky, u * (1.3 + rnd() * 1.3) * ks, (rnd() * pal.leds.length) | 0, (rnd() * 3) | 0);
             }
           }
           // Activity LEDs beside knobs.
@@ -354,9 +365,10 @@ export default {
           }
         }
 
-        // Jack field along the module bottom — the patch bay.
+        // Jack field along the module bottom — the patch bay. Modular
+        // layouts pack tighter (more jacks ⇒ more cabling opportunity).
         const jy = y + h - u * 1.9;
-        const nj = Math.max(2, Math.min(6, (mw / (u * 3.2)) | 0));
+        const nj = Math.max(2, Math.min(8, (mw / (u * LC.jackSpacing)) | 0));
         for (let i = 0; i < nj; i++) {
           jack(x + mw * ((i + 0.5) / nj), jy);
         }
@@ -474,7 +486,7 @@ export default {
     function buildCables(params, rnd) {
       const jacks = rig.jacks;
       if (jacks.length < 4 || params.cables <= 0) return;
-      const want = Math.min(MAX_CABLES, Math.round(jacks.length * 0.30 * params.cables));
+      const want = Math.min(MAX_CABLES, Math.round(jacks.length * 0.30 * params.cables * LC.cableMul));
       const u = rig.u;
       let attempts = 0;
       while (rig.cables.length < want && attempts++ < want * 12) {
@@ -876,37 +888,39 @@ export default {
 
       ctx.globalCompositeOperation = 'lighter';
 
-      // Ambient room washes — a warm floor glow pumping with bass and a
-      // cooler ceiling tint on total energy.
-      const [hFloor, hCeil] = pal.wash;
-      const aFloor = (0.05 + lv[0] * 0.16) * glow;
-      if (aFloor > 0.01) {
-        const gr = ctx.createRadialGradient(W * 0.5, H * 1.05, 0, W * 0.5, H * 1.05, H * 0.9);
-        gr.addColorStop(0, `hsla(${hFloor},85%,55%,${aFloor})`);
-        gr.addColorStop(1, `hsla(${hFloor},85%,55%,0)`);
-        ctx.fillStyle = gr;
-        ctx.fillRect(0, 0, W, H);
-      }
-      const aCeil = (0.03 + lv[3] * 0.10) * glow;
-      if (aCeil > 0.01) {
-        const gr = ctx.createRadialGradient(W * 0.5, -H * 0.1, 0, W * 0.5, -H * 0.1, H * 0.8);
-        gr.addColorStop(0, `hsla(${hCeil},80%,60%,${aCeil})`);
-        gr.addColorStop(1, `hsla(${hCeil},80%,60%,0)`);
+      // Faint ambient floor tint only — just enough that the deep background
+      // isn't dead black. Deliberately NOT tied to `glow`: the glow slider is
+      // for per-element bloom (knobs / LEDs / cables), not a room wash.
+      const [hFloor] = pal.wash;
+      const aFloor = 0.018 + lv[0] * 0.045;
+      if (aFloor > 0.005) {
+        const gr = ctx.createRadialGradient(W * 0.5, H * 1.08, 0, W * 0.5, H * 1.08, H * 0.85);
+        gr.addColorStop(0, `hsla(${hFloor},80%,52%,${aFloor})`);
+        gr.addColorStop(1, `hsla(${hFloor},80%,52%,0)`);
         ctx.fillStyle = gr;
         ctx.fillRect(0, 0, W, H);
       }
 
-      // Cable glow — each patched line carries its band's energy.
+      // Cable glow — each patched line individually blooms + pulses with the
+      // band it carries. Two soft bloom passes (wide, dim) under a bright
+      // beam core, so a live cable reads as a glowing tube, not a flat line.
       ctx.lineCap = 'round';
       for (const c of rig.cables) {
         const e = lv[c.band];
-        const a = e * 0.42 * glow;
+        const pulse = scratch.beatPulse * (c.band === 0 || c.band === 3 ? 0.35 : 0.15);
+        const a = Math.min(1, (e * 0.55 + pulse) * glow);
         if (a < 0.02) continue;
-        ctx.strokeStyle = `hsla(${c.hue},95%,62%,${a})`;
-        ctx.lineWidth = c.lw + 4;
+        // Wide outer bloom.
+        ctx.strokeStyle = `hsla(${c.hue},95%,58%,${a * 0.35})`;
+        ctx.lineWidth = c.lw + 10 + e * 8;
         strokeCable(ctx, c);
-        ctx.strokeStyle = `hsla(${c.hue},95%,80%,${a * 0.9})`;
-        ctx.lineWidth = Math.max(1.2, c.lw * 0.45);
+        // Mid glow.
+        ctx.strokeStyle = `hsla(${c.hue},98%,64%,${a * 0.7})`;
+        ctx.lineWidth = c.lw + 3;
+        strokeCable(ctx, c);
+        // Bright beam core.
+        ctx.strokeStyle = `hsla(${c.hue},100%,86%,${a})`;
+        ctx.lineWidth = Math.max(1.2, c.lw * 0.4);
         strokeCable(ctx, c);
       }
 
@@ -949,18 +963,29 @@ export default {
           default:
             b = 0.12 + lv[l.band] * 0.88;
         }
-        b *= glow;
-        if (b < 0.03) continue;
+        const bg = Math.min(1.4, b * glow);
+        if (bg < 0.03) continue;
         const spr = sprites[l.ci];
-        ctx.globalAlpha = Math.min(1, b);
+        // Square emitter core (LED body) — crisp lit rectangle.
         if (l.sq) {
           const c = pal.leds[l.ci];
-          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, b) * 0.8})`;
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, bg) * 0.85})`;
           ctx.fillRect(l.x - l.s * 0.3, l.y - l.s * 0.22, l.s * 0.6, l.s * 0.44);
         }
-        ctx.drawImage(spr, l.x - l.s / 2, l.y - l.s / 2, l.s, l.s);
+        // Individual bloom: brighter LEDs throw a proportionally bigger,
+        // stronger halo so each one visibly blooms/pulses on its own.
+        const bloomS = l.s * (0.85 + bg * 1.4);
+        ctx.globalAlpha = Math.min(1, bg * 0.9);
+        ctx.drawImage(spr, l.x - bloomS / 2, l.y - bloomS / 2, bloomS, bloomS);
+        // Hot LEDs get a hard white-hot centre kick.
+        if (bg > 0.7) {
+          const hs = l.s * 0.5;
+          ctx.globalAlpha = Math.min(1, (bg - 0.7) * 2);
+          ctx.drawImage(spr, l.x - hs / 2, l.y - hs / 2, hs, hs);
+        }
         // Sparkle filter on the hottest LEDs.
-        if (sparkOn && b > 0.72 && sparkles < MAX_SPARKLES) {
+        if (sparkOn && bg > 0.72 && sparkles < MAX_SPARKLES) {
           const n = Math.sin(i * 91.7 + Math.floor(t * 2.3) * 517.3) * 24634.63;
           const h = n - Math.floor(n);
           if (h < scratch.sparkle * 0.7) {
@@ -969,7 +994,7 @@ export default {
             ctx.save();
             ctx.translate(l.x, l.y);
             ctx.rotate(h * 6.28 + t * 0.3);
-            ctx.globalAlpha = Math.min(1, b) * (0.45 + scratch.sparkle * 0.5);
+            ctx.globalAlpha = Math.min(1, bg) * (0.45 + scratch.sparkle * 0.5);
             ctx.drawImage(sparkSprite, -ss / 2, -ss / 2, ss, ss);
             ctx.restore();
           }
@@ -977,13 +1002,23 @@ export default {
       }
       ctx.globalAlpha = 1;
 
-      // Knob rings + indicators.
+      // Knob rings + indicators + individual bloom.
       for (const k of rig.knobs) {
         const e = lv[k.band];
         const c = pal.leds[k.ci];
         const a0 = -Math.PI * 0.75 - Math.PI / 2;
         const lit = 0.08 + e * 0.92;
-        ctx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${(0.18 + e * 0.72) * glow})`;
+        // Per-knob bloom halo — the knob's collar glows in its band colour,
+        // pumping with that band and flashing a touch on the beat.
+        const bloom = (e * 0.85 + scratch.beatPulse * 0.12) * glow;
+        if (bloom > 0.05) {
+          const spr = sprites[k.ci];
+          const s = k.r * (3.0 + bloom * 2.8);
+          ctx.globalAlpha = Math.min(0.85, bloom * 0.6);
+          ctx.drawImage(spr, k.x - s / 2, k.y - s / 2, s, s);
+          ctx.globalAlpha = 1;
+        }
+        ctx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, (0.22 + e * 0.85) * glow)})`;
         ctx.lineWidth = Math.max(1.5, k.r * 0.22);
         ctx.beginPath();
         ctx.arc(k.x, k.y, k.r * 1.25, a0, a0 + lit * Math.PI * 1.5);
@@ -1149,9 +1184,10 @@ export default {
         ctx.restore();
       }
 
-      // Kick flash — the whole wall breathes on a hit.
+      // Kick flash — a very faint full-wall breath on a hard hit. Kept
+      // subtle; the punch now lives in the per-element blooms above.
       if (scratch.beatPulse > 0.05) {
-        ctx.fillStyle = `hsla(${hFloor},70%,60%,${scratch.beatPulse * 0.05 * glow})`;
+        ctx.fillStyle = `hsla(${hFloor},70%,60%,${scratch.beatPulse * 0.02})`;
         ctx.fillRect(0, 0, W, H);
       }
       ctx.globalCompositeOperation = 'source-over';
