@@ -184,6 +184,56 @@ export function setDeviceName(n) { if (n) localStorage.setItem(DEVICE_NAME_KEY, 
 
 export function isSyncEnabled() { return !!getClientId() && !!getStoredToken(); }
 export function needsReconnect() { return !!getClientId() && !getStoredToken() && localStorage.getItem(EVER_KEY) === '1'; }
+export function isConnected() { return !!getClientId() && !!getStoredToken(); }
+
+// ── Per-note version history ────────────────────────────────────────────────
+// Drive keeps native revisions on every shard file — every push that touched
+// a note's bucket left a snapshot. This walks the note's shard revisions
+// newest→oldest, pulls the note out of each, and returns the DISTINCT bodies
+// with their times: a per-note timeline for free, no new storage. Revisions
+// live ~30 days on Drive (or per its retention rules) — enough to undo a bad
+// week, not an archive.
+//
+// `onProgress(done, total)` lets the modal show a scan progress; `limit` caps
+// how many revisions are downloaded (each is one small shard fetch).
+export async function listNoteVersions(noteId, { limit = 20, onProgress } = {}) {
+  const token = await getAccessToken({ interactive: true });
+  if (!token) throw new Error('connect Google Drive first');
+  const name = shardName(bucket(noteId, DEFAULT_SHARD_COUNT));
+  const fileId = getShardState().files[name]?.id;
+  if (!fileId) throw new Error('this note has not synced to Drive yet');
+
+  const listRes = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/revisions?fields=revisions(id,modifiedTime)&pageSize=200`,
+    { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!listRes.ok) throw new Error(`Drive revisions failed: ${listRes.status}`);
+  const revisions = ((await listRes.json()).revisions || [])
+    .sort((a, b) => (b.modifiedTime || '').localeCompare(a.modifiedTime || ''))
+    .slice(0, limit);
+
+  const versions = [];
+  let lastBody = null;
+  for (let i = 0; i < revisions.length; i++) {
+    onProgress?.(i, revisions.length);
+    const rev = revisions[i];
+    let shard = null;
+    try {
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${rev.id}?alt=media`,
+        { headers: { 'Authorization': `Bearer ${token}` } });
+      if (!res.ok) continue;   // a purged/unreadable revision — skip, keep walking
+      shard = await res.json();
+    } catch { continue; }
+    const rec = (shard?.notes || []).find(n => n.id === noteId);
+    if (!rec) continue;                                  // note not in this bucket yet
+    const body = rec.body || '';
+    if (body === lastBody) continue;                     // unchanged since the next-newer revision
+    lastBody = body;
+    versions.push({ revisionId: rev.id, modifiedTime: rev.modifiedTime, title: rec.title || '', body });
+  }
+  onProgress?.(revisions.length, revisions.length);
+  return versions;
+}
 export function disconnect() { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(EVER_KEY); }
 
 export function getLastBackupTime() {

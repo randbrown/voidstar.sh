@@ -16,6 +16,7 @@ import { applySink } from '../audio-out.js';
 import { processPendingOcr } from '../ocr.js';
 import { wirePicker } from '../../qualia/devices.js';
 import { navigate, refresh } from '../app.js';
+import { listNoteVersions, isConnected as driveConnected } from '../gdrive-sync.js';
 import { el, esc, btn, topBar, textPrompt, confirmBox, timeAgo } from '../ui.js';
 
 const KEEP_AUDIO_KEY = 'voidstar.mind.voice.keepAudio';
@@ -514,6 +515,69 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   const linkBtn = btn('&#128279;', 'mn-btn-icon', openLinkPicker);
   linkBtn.title = 'link to another note (or type [[ in the note)';
   actions.insertBefore(linkBtn, pinBtn);
+
+  // ── Per-note version history (Drive shard revisions) ──
+  // Every push that touched this note's shard left a Drive revision; the
+  // modal walks them newest→oldest and lists the DISTINCT past bodies.
+  // Restore just sets the editor to the old text (one undo step, autosaves
+  // through the normal rebase-on-save path) — nothing destructive.
+  if (driveConnected()) {
+    const histBtn = btn('&#9201;', 'mn-btn-icon', () => {
+      const overlay = el('div', 'mn-modal-overlay');
+      const box = el('div', 'mn-modal mn-modal-wide');
+      box.appendChild(el('div', 'mn-modal-title', 'version history (from Drive revisions)'));
+      const status = el('div', 'mn-dim', 'scanning revisions…');
+      box.appendChild(status);
+      const list = el('div', 'mn-linklist');
+      box.appendChild(list);
+      overlay.appendChild(box);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+
+      listNoteVersions(note.id, {
+        onProgress: (done, total) => { status.textContent = `scanning revisions… ${done}/${total}`; },
+      }).then((versions) => {
+        const current = editor ? editor.getMarkdown() : note.body;
+        status.textContent = versions.length
+          ? 'distinct past versions of this note — restore sets the editor to that text (undoable):'
+          : 'no past versions on Drive yet (revisions appear after syncs that changed this note).';
+        for (const v of versions) {
+          const row = el('div', 'mn-history-row');
+          const when = v.modifiedTime ? new Date(v.modifiedTime).toLocaleString() : '?';
+          const isCurrent = (v.body || '') === (current || '');
+          const head = el('div', 'mn-history-head');
+          head.appendChild(el('span', 'mn-history-when', `${esc(when)}${isCurrent ? ' <span class="mn-dim">(current)</span>' : ''}`));
+          const snippet = el('div', 'mn-history-snippet');
+          snippet.textContent = (v.body || '').slice(0, 120) || '(empty)';
+          const rowActions = el('div', 'mn-history-actions');
+          const viewBtn = btn('view', 'mn-btn-ghost mn-btn-sm', () => {
+            let pre = row.querySelector('pre');
+            if (pre) { pre.remove(); return; }
+            pre = el('pre', 'mn-history-body');
+            pre.textContent = v.body || '(empty)';
+            row.appendChild(pre);
+          });
+          rowActions.appendChild(viewBtn);
+          if (!isCurrent) {
+            rowActions.appendChild(btn('restore', 'mn-btn-ghost mn-btn-sm', () => {
+              confirmBox('Set the note to this version? (Undo with Ctrl-Z / the undo button.)', () => {
+                overlay.remove();
+                editor.setMarkdown(v.body || '');
+                scheduleSave();
+                editor.focus();
+              });
+            }));
+          }
+          head.appendChild(rowActions);
+          row.appendChild(head);
+          row.appendChild(snippet);
+          list.appendChild(row);
+        }
+      }).catch((e) => { status.textContent = `history unavailable: ${e.message}`; });
+    });
+    histBtn.title = 'version history — past versions of this note from Drive revisions';
+    actions.insertBefore(histBtn, pinBtn);
+  }
 
   // ── Attachment strip ──
   const strip = el('div', 'mn-attach-strip');
