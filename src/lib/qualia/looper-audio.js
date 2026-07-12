@@ -383,7 +383,13 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { srcNode?.disconnect(); } catch {}
     try { monoSplitter?.disconnect(); } catch {}
     try { inputNode?.disconnect(); } catch {}
-    if (recNode) { try { recNode.disconnect(); } catch {}; if ('onaudioprocess' in recNode) recNode.onaudioprocess = null; }
+    if (recNode) {
+      // End the worklet processor (returns false) so its ~15 MB ring GCs;
+      // ScriptProcessor fallback just clears its callback.
+      try { recNode.port?.postMessage({ cmd: 'dispose' }); } catch {}
+      try { recNode.disconnect(); } catch {}
+      if ('onaudioprocess' in recNode) recNode.onaudioprocess = null;
+    }
     try { sinkGain?.disconnect(); } catch {}
     try { sigGain?.disconnect(); } catch {}
     try { sigAnalyser?.disconnect(); } catch {}

@@ -214,7 +214,10 @@ class FormantShiftProcessor extends AudioWorkletProcessor {
       // synthesis phase, and build the complex spectrum.
       fr.fill(0); fi.fill(0);
       for (let k = 0; k < BINS; k++) {
-        sumPhase[k] += 2 * Math.PI * HOP * synFreq[k] / FFT_SIZE;
+        // Wrap the accumulator every hop. cos/sin are periodic so the wrap is
+        // exact, but an unbounded float32 sum (~10^4/s at high bins) loses ULP
+        // precision after tens of minutes and rots the harmonies mid-set.
+        sumPhase[k] = wrapPhase(sumPhase[k] + 2 * Math.PI * HOP * synFreq[k] / FFT_SIZE);
         if (synMag[k] <= 0) continue;
         const amp = synMag[k] * this.envAt(k / this.formantRatio);
         const ph = sumPhase[k];

@@ -18,9 +18,12 @@
 //   → { type:'close' }                     dispose
 //   ← { type:'error', error }              build/load failed (main falls back)
 
-const VISION_BUNDLE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs';
-const VISION_WASM   = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
-const POSE_MODEL    = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
+// Pinned — see the note in vision-loader.js. Keep VISION_VERSION in sync with
+// that file, and the model version ('1') pinned instead of 'latest'.
+const VISION_VERSION = '0.10.35';
+const VISION_BUNDLE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/vision_bundle.mjs`;
+const VISION_WASM   = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`;
+const POSE_MODEL    = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
 
 let PoseLandmarkerCls = null;
 let fileset = null;

@@ -17,7 +17,7 @@
 
 import { makeField } from './field.js';
 import { buildParamPanel } from './ui.js';
-import { loadFxParams, saveFxParams, loadFxModWeights, saveFxModWeights } from './presets.js';
+import { loadFxParams, saveFxParams, saveFxParamsDebounced, flushFxParams, loadFxModWeights, saveFxModWeights } from './presets.js';
 import { computeChannels, resolveParams, makeChannelSnapshot, modWeightKey } from './modulation.js';
 // Three.js — used by 'three' contextType quales. Static + named imports:
 // the Three quale modules also static-import Three, so a dynamic import
@@ -163,6 +163,10 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   let canvas = null;
   /** @type {'canvas2d'|'webgl2'|'three'|null} */
   let canvasType = null;
+  // Consecutive per-frame fx errors — throttles the console spam a persistently
+  // broken fx would otherwise emit at render rate. Reset on a clean frame/swap.
+  let fxErrorStreak = 0;
+  const FX_ERROR_LOG_LIMIT = 8;
   /** Single Three.js renderer reused across all 'three' quales — Three's
    *  WebGLRenderer owns the canvas's GL context exclusively, and disposing
    *  one then constructing another on the same canvas leaves the second in
@@ -201,6 +205,15 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
         try { threeRenderer.forceContextLoss(); } catch {}
         try { threeRenderer.dispose(); } catch {}
         threeRenderer = null;
+      } else if (canvasType === 'webgl2') {
+        // A raw WebGL2 canvas leaks its context otherwise — the browser caps
+        // live contexts (~16) and evicts the OLDEST, which mid-set could be
+        // Hydra's or the mosh post's, blacking out a layer. Explicitly release
+        // it. (getContext returns the existing context; the ext force-loses it.)
+        try {
+          const gl = canvas.getContext('webgl2');
+          gl?.getExtension('WEBGL_lose_context')?.loseContext();
+        } catch {}
       }
       canvas.remove();
     }
@@ -239,17 +252,30 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   const ro = new ResizeObserver(applyDpr);
   ro.observe(host);
   window.addEventListener('orientationchange', applyDpr);
+  // Flush the debounced fx-param write if the tab is hidden/closed mid-debounce
+  // (a lid-shut gig or an app switch must not strand the last knob move).
+  const flushOnHide = () => { if (document.visibilityState === 'hidden') flushFxParams(); };
+  document.addEventListener('visibilitychange', flushOnHide);
+  window.addEventListener('pagehide', flushFxParams);
 
   async function setActive(fxId) {
     const mod = mesh.get(fxId);
     if (!mod) throw new Error(`unknown fx: ${fxId}`);
 
-    // Tear down any existing instance + UI.
+    // Persist any debounced param write for the outgoing fx before we swap.
+    flushFxParams();
+
+    // Tear down any existing instance + UI. Null activeMod up front: from here
+    // until create() succeeds there is no coherent active fx, and leaving the
+    // OLD id live would let setParam(oldId, …) write into the NEW fx's panel if
+    // create() throws mid-swap (activeId() must not report a disposed fx).
     if (activeInst) {
       try { activeInst.dispose(); } catch (e) { console.warn('[qualia] dispose failed:', e); }
       activeInst = null;
     }
     if (activePanel) { activePanel.destroy(); activePanel = null; }
+    activeMod = null;
+    fxErrorStreak = 0;
 
     // (Re)create canvas of the right type.
     const c = ensureCanvas(mod.contextType);
@@ -340,7 +366,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
       onChange: (id, value) => {
         baseParams[id] = value;
         field.params[id] = value;
-        saveFxParams(mod.id, activePanel.values());
+        saveFxParamsDebounced(mod.id, activePanel.values());
       },
     });
     baseParams = activePanel.values();
@@ -368,7 +394,8 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     activePanel.setValue(paramId, value);
     baseParams[paramId] = value;
     field.params[paramId] = value;
-    saveFxParams(fxId, activePanel.values());
+    // Debounced: this is the hot Strudel/MIDI path (see saveFxParamsDebounced).
+    saveFxParamsDebounced(fxId, activePanel.values());
     return true;
   }
 
@@ -580,8 +607,14 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
         resolveParams(field.params, baseParams, activeMod.params, field.channels, modWeights);
         activeInst.update(field);
         activeInst.render();
+        fxErrorStreak = 0;
       } catch (e) {
-        console.error('[qualia] fx error:', e);
+        // A broken fx must not crash the loop, but it also must not spam the
+        // console at render rate for the rest of the set. Log the first few,
+        // then go quiet; the frozen viz is the visible symptom on stage.
+        if (fxErrorStreak < FX_ERROR_LOG_LIMIT) console.error('[qualia] fx error:', e);
+        else if (fxErrorStreak === FX_ERROR_LOG_LIMIT) console.error('[qualia] fx error persists — silencing further logs for this fx');
+        fxErrorStreak++;
       }
     }
 

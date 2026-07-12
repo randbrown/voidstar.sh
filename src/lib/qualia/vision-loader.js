@@ -9,8 +9,13 @@
 // through this loader. The promise is memoized so concurrent first-time
 // callers all await the same in-flight request.
 
-const VISION_BUNDLE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs';
-const VISION_WASM   = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
+// Pin the CDN version — a live set must not break because jsdelivr served a
+// new @mediapipe/tasks-vision mid-tour (same policy as STRUDEL_VERSION in
+// strudel-hydra.js). Bump deliberately and re-verify pose on device.
+// Keep in sync with the copy in pose-worker.js (a Worker can't import this).
+const VISION_VERSION = '0.10.35';
+const VISION_BUNDLE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/vision_bundle.mjs`;
+const VISION_WASM   = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`;
 
 let _promise = null;
 

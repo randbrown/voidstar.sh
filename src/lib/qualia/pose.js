@@ -12,7 +12,9 @@
 import { emptyPoseFrame } from './field.js';
 import { loadVision } from './vision-loader.js';
 
-const POSE_MODEL  = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
+// Model version pinned ('1', not 'latest') so an upstream reissue can't change
+// pose behavior between soundcheck and the set. Mirrors pose-worker.js.
+const POSE_MODEL  = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
 
 // MediaPipe landmark indices we care about. The full list is in MP docs;
 // these are the ones the named PoseFrame exposes.
@@ -166,21 +168,12 @@ export function createPose() {
       if (!detectSource || detectSource !== msg.source) return;
       const t = msg.t;
       const fresh = msg.landmarks ?? [];
-      if (msg.source === 'camera') {
-        smoothLandmarks(fresh);
-        if (fresh.length > 0) lastDetectMs = t;
-        rebuildPeople(t);
-      } else { // 'canvas'
-        if (fresh.length > 0) {
-          smoothLandmarks(fresh);
-          lastDetectMs = t;
-          rebuildPeople(t);
-        } else if (lingerMs > 0 && t - lastDetectMs > lingerMs) {
-          smoothed = [];
-          frame.people = [];
-          frame.timestamp = t;
-        }
-      }
+      // Linger for BOTH sources: a single empty detection (a hand over the
+      // lens, occlusion behind the steel) must not snap the skeleton/aura off
+      // — hold the last pose until lingerMs elapses. The camera branch used to
+      // smoothLandmarks([]) unconditionally, which reset smoothed and blanked
+      // pose-driven fx on any dropped frame (against the "never snap" rule).
+      applyPoseResult(fresh, t);
     }
   }
   function disableWorker() {
@@ -258,6 +251,22 @@ export function createPose() {
   function rebuildPeople(timestamp) {
     frame.people = smoothed.map(shapePerson);
     frame.timestamp = timestamp;
+  }
+
+  // Fold a detection result (from the worker or the main-thread landmarker)
+  // into the smoothed pose, with a linger grace so a single dropped/empty
+  // frame never snaps pose-driven fx off. Shared by both detect paths.
+  function applyPoseResult(fresh, t) {
+    if (fresh.length > 0) {
+      smoothLandmarks(fresh);
+      lastDetectMs = t;
+      rebuildPeople(t);
+    } else if (lingerMs > 0 && t - lastDetectMs > lingerMs) {
+      smoothed = [];
+      frame.people = [];
+      frame.timestamp = t;
+    }
+    // Within the linger window on an empty frame: hold the last pose.
   }
 
   async function startCamera({ deviceId, video, facing } = {}) {
@@ -598,27 +607,18 @@ export function createPose() {
     try {
       const result = landmarker.detectForVideo(source, t);
       const fresh = result.landmarks ?? [];
-      if (detectSource === 'camera') {
-        smoothLandmarks(fresh);
-        if (fresh.length > 0) lastDetectMs = t;
-        rebuildPeople(t);
-      } else {
-        if (fresh.length > 0) {
-          smoothLandmarks(fresh);
-          lastDetectMs = t;
-          rebuildPeople(t);
-        } else if (lingerMs > 0 && t - lastDetectMs > lingerMs) {
-          smoothed = [];
-          frame.people = [];
-          frame.timestamp = t;
-        }
-      }
+      applyPoseResult(fresh, t); // linger for both sources — see the worker path
     } catch { /* swallow timestamp regressions */ }
   }
 
   function startDetectLoop() {
     detectLoopStarted = true;
     (function detectLoop() {
+      // Park the loop when detection stops (camera + canvas both off) instead
+      // of spinning an rAF for the life of the page — it kept mobile devices
+      // from idling after stopCamera. startCamera/startCanvas restart it via
+      // the `if (!detectLoopStarted)` guard.
+      if (!detectSource) { detectLoopStarted = false; return; }
       requestAnimationFrame(detectLoop);
       // Camera keep-alive watchdog — catches stalls that fire no event at
       // all (decoder surface dropped, silent pause). Cheap flag checks per
