@@ -674,6 +674,22 @@ function mergeById(localArr, remoteArr, keyField = 'id', fillFields = null) {
   return [...map.values()];
 }
 
+const recTs = (r) => r.updatedAt || r.createdAt || 0;
+
+// Union both sides' deletion tombstones, newest deletedAt per key. Local
+// objects keep their identity when they win (or tie) so recordsChanged's
+// `cur === rec` short-circuit still works.
+function mergeDeletions(localDel = [], remoteDel = []) {
+  const map = new Map();
+  for (const d of localDel) if (d && d.key) map.set(d.key, d);
+  for (const d of remoteDel) {
+    if (!d || !d.key) continue;
+    const cur = map.get(d.key);
+    if (!cur || (cur.deletedAt || 0) < (d.deletedAt || 0)) map.set(d.key, d);
+  }
+  return map;
+}
+
 // Config objects (sources, settings) merge by "filled wins": local values
 // win only when actually set; gaps fill from remote. The old
 // `local.sources || remote.sources` treated a fresh device's empty {} as
@@ -721,12 +737,13 @@ function mergeChangesLocal(local, merged) {
     || recordsChanged(local.notes, merged.notes)
     || recordsChanged(local.setlists, merged.setlists)
     || recordsChanged(local.annotations, merged.annotations, 'songId')
+    || recordsChanged(local.deletions || [], merged.deletions || [], 'key')
     || configChanged(local.sources, merged.sources)
     || configChanged(local.settings, merged.settings);
 }
 
 export function mergeData(local, remote) {
-  return {
+  const merged = {
     songs: mergeById(local.songs || [], remote.songs || [], 'id', SONG_FILL_FIELDS),
     notes: mergeById(local.notes || [], remote.notes || []),
     setlists: mergeById(local.setlists || [], remote.setlists || [], 'id', SETLIST_FILL_FIELDS),
@@ -734,6 +751,25 @@ export function mergeData(local, remote) {
     sources: mergeConfig(local.sources, remote.sources),
     settings: mergeConfig(local.settings, remote.settings),
   };
+  // Deletion tombstones: a record whose tombstone is at least as new as its
+  // last edit is dead — drop it from the merged arrays so a delete on one
+  // device (or one this device made itself, with the record still in the
+  // Drive file) can't be resurrected by the additive record merge above. A
+  // record EDITED after its deletion beats the tombstone, which is then
+  // retired so it can't shadow the record on a later cycle.
+  const delMap = mergeDeletions(local.deletions, remote.deletions);
+  const applyTombstones = (arr, storeName, keyField = 'id') => arr.filter(rec => {
+    const d = delMap.get(`${storeName}:${rec[keyField]}`);
+    if (!d) return true;
+    if (recTs(rec) > (d.deletedAt || 0)) { delMap.delete(d.key); return true; }
+    return false;
+  });
+  merged.songs = applyTombstones(merged.songs, 'songs');
+  merged.notes = applyTombstones(merged.notes, 'notes');
+  merged.setlists = applyTombstones(merged.setlists, 'setlists');
+  merged.annotations = applyTombstones(merged.annotations, 'annotations', 'songId');
+  merged.deletions = [...delMap.values()];
+  return merged;
 }
 
 // No songs/setlists/notes/annotations — an empty library. Config (sources/

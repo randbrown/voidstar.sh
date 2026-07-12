@@ -167,6 +167,9 @@ export function initSetlistApp(root) {
       if (!typing) refresh();
     },
   })).catch((e) => console.warn('[todo-bridge]', e));
+  // Deletion tombstones only need to outlive every device's next sync —
+  // prune the expired ones once per boot (best-effort, off the critical path).
+  store.purgeExpiredDeletions().catch(() => {});
   // Finish a Spotify login redirect (?code=…) before the first render: it
   // rewrites the URL back to the saved hash via replaceState, which fires no
   // hashchange — so route once after it settles. On a normal load this

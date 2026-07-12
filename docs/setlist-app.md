@@ -19,7 +19,7 @@ state library.
 
 ## Data model
 
-IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 4:
+IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 5:
 
 | Store | Key | Shape |
 |---|---|---|
@@ -29,6 +29,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
 | `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise). Same key scheme as `annotations`: bare `songId` = primary, `` `${songId}::${altId}` `` = alternate |
 | `snapshots` | `ts` | `{ts, label, data}` — rolling safety snapshots of the whole dataset (last 10), taken before a restore/sync/import so it can be undone |
+| `deletions` | `key` (`${store}:${id}`) | `{key, store, id, deletedAt}` — record-level deletion tombstones; ride `exportAll()` so deletes propagate through the backup merge instead of resurrecting (180-day TTL, see the merge section) |
 
 `charts` and `snapshots` are intentionally **local-only** and excluded from
 `exportAll()` (the Drive backup payload): `charts` is derivable from `chartUrl`,
@@ -336,6 +337,25 @@ This codebase intentionally keeps two similarly-named ideas separate:
     intentional clear). The same merge-aware upsert backs
     `store.importAll` (and the setlist/song file imports), so importing a
     stale export file can't regress newer local records either.
+  - **Record deletions carry tombstones.** Deleting a song/setlist/note/
+    annotation writes a `{store, id, deletedAt}` tombstone into the local
+    `deletions` store (same IDB transaction as the delete) and the ledger
+    rides `exportAll()`. `mergeData` drops any record whose tombstone is at
+    least as new as its last edit — so a delete survives the pull-merge-push
+    cycle instead of being resurrected out of the Drive file by the additive
+    record merge (which used to happen even single-device: delete → auto-push
+    → pull re-added it). A record *edited after* its deletion beats the
+    tombstone, which is then retired everywhere. Tombstones TTL out after
+    180 days (`purgeExpiredDeletions`, run each boot); a device offline
+    longer than that can still resurrect — same accepted limit as the mind
+    app's tombstones. Covered by `scripts/check-setlist-merge.mjs`
+    (`npm run check`).
+  - **Restores are authoritative.** `replaceAll` (snapshot undo, Drive
+    version restore) bumps every restored record's `updatedAt` to the
+    restore time and mints tombstones for records the restore removes — so
+    the restored state *wins* the next pull-merge-push instead of being
+    newer-wins-reverted by the copies still in Drive (which is what used to
+    happen: "undo last merge" only held until the next auto-push).
   - `pull()` self-heals **duplicate data files** (two devices' first backups
     racing used to split the dataset — each device read/wrote its own copy
     and "missed" the other's edits): the file list is ordered newest-first

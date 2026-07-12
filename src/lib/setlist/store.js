@@ -2,11 +2,18 @@
 // Follows the looper-store.js pattern: lazy singleton, tx() helper, async CRUD.
 
 const DB_NAME = 'voidstar.setlist';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const SONGS = 'songs';
 const NOTES = 'notes';
 const SETLISTS = 'setlists';
 const ANNOTATIONS = 'annotations';
+// Record-level deletion tombstones ({key: `${store}:${id}`, store, id,
+// deletedAt}). exportAll() includes them, so a delete survives the Drive
+// pull-merge-push cycle instead of being resurrected by the additive record
+// merge (the backup file still holds the record; without a tombstone the
+// merge re-adds it — even on a single device). TTL-purged (see
+// purgeExpiredDeletions); a device offline longer than the TTL can still
+// resurrect, the same accepted limit as the mind app's tombstones.
 // Cached chart images (Blobs) keyed by songId, for offline perform mode.
 // Local-only: derivable from the chart URL, so never included in the Google
 // Drive JSON sync (that stays lean, data-only).
@@ -16,6 +23,12 @@ const CHARTS = 'charts';
 // be undone. Local-only and derived from the live data, so — like CHARTS —
 // it is NEVER included in exportAll() (would recurse the whole backup file).
 const SNAPSHOTS = 'snapshots';
+const DELETIONS = 'deletions';
+
+// The stores whose records ride the Drive backup — the only stores deletion
+// tombstones may name. importAll() whitelists against this so a malformed (or
+// hostile) backup payload can't direct deletes at CHARTS/SNAPSHOTS.
+const SYNCED_STORES = [SONGS, NOTES, SETLISTS, ANNOTATIONS];
 
 let _dbPromise = null;
 
@@ -51,6 +64,9 @@ function openDb() {
       }
       if (!db.objectStoreNames.contains(SNAPSHOTS)) {
         db.createObjectStore(SNAPSHOTS, { keyPath: 'ts' });
+      }
+      if (!db.objectStoreNames.contains(DELETIONS)) {
+        db.createObjectStore(DELETIONS, { keyPath: 'key' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -106,6 +122,40 @@ async function del(storeName, id) {
   store.delete(id);
   await done;
   _onWrite?.();
+}
+
+// Delete a synced record AND write its deletion tombstone in one transaction,
+// so a crash between the two can't leave a deleted record with no tombstone
+// (which the next backup merge would resurrect).
+export const deletionKey = (storeName, id) => `${storeName}:${id}`;
+
+async function delWithTombstone(storeName, id) {
+  const db = await openDb();
+  const t = db.transaction([storeName, DELETIONS], 'readwrite');
+  const done = new Promise((res, rej) => {
+    t.oncomplete = () => res();
+    t.onabort = t.onerror = () => rej(t.error);
+  });
+  t.objectStore(storeName).delete(id);
+  t.objectStore(DELETIONS).put({
+    key: deletionKey(storeName, id), store: storeName, id, deletedAt: Date.now(),
+  });
+  await done;
+  _onWrite?.();
+}
+
+export const getAllDeletions = () => getAll(DELETIONS);
+
+// Tombstones only need to outlive every device's next sync; 180 days is
+// generous for a personal tool. Called once per app boot (app.js).
+const DELETION_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+
+export async function purgeExpiredDeletions(ttlMs = DELETION_TTL_MS) {
+  const cutoff = Date.now() - ttlMs;
+  const all = await getAll(DELETIONS);
+  for (const d of all) {
+    if ((d.deletedAt || 0) < cutoff) await delSilent(DELETIONS, d.key);
+  }
 }
 
 // Silent variants — write without firing _onWrite (used for the local-only
@@ -168,7 +218,7 @@ export function createSong(title, artist = '') {
 export const putSong = (song) => put(SONGS, { ...song, updatedAt: Date.now() });
 export const getSong = (id) => getOne(SONGS, id);
 export const getAllSongs = () => getAll(SONGS);
-export const deleteSong = (id) => del(SONGS, id);
+export const deleteSong = (id) => delWithTombstone(SONGS, id);
 
 export async function findSongByTitle(title) {
   const all = await getAllSongs();
@@ -190,7 +240,7 @@ export function createNote(songId, text, source = 'typed') {
 }
 
 export const putNote = (note) => put(NOTES, { ...note, updatedAt: Date.now() });
-export const deleteNote = (id) => del(NOTES, id);
+export const deleteNote = (id) => delWithTombstone(NOTES, id);
 
 export async function getNotesForSong(songId) {
   const { store, done } = await tx(NOTES, 'readonly');
@@ -229,7 +279,7 @@ export function createSetlist(name) {
 export const putSetlist = (sl) => put(SETLISTS, { ...sl, updatedAt: Date.now() });
 export const getSetlist = (id) => getOne(SETLISTS, id);
 export const getAllSetlists = () => getAll(SETLISTS);
-export const deleteSetlist = (id) => del(SETLISTS, id);
+export const deleteSetlist = (id) => delWithTombstone(SETLISTS, id);
 
 // ── Annotations (hand-drawn chart markup, keyed by songId) ──
 // A song's PRIMARY chart keeps the bare songId key; each alternate chart
@@ -243,7 +293,7 @@ export const altChartKey = (songId, altId) => `${songId}::${altId}`;
 export const putAnnotation = (ann) => put(ANNOTATIONS, { ...ann, updatedAt: Date.now() });
 export const getAnnotation = (songId) => getOne(ANNOTATIONS, songId);
 export const getAllAnnotations = () => getAll(ANNOTATIONS);
-export const deleteAnnotation = (songId) => del(ANNOTATIONS, songId);
+export const deleteAnnotation = (songId) => delWithTombstone(ANNOTATIONS, songId);
 
 // All annotation records belonging to a song: the primary (key === songId)
 // plus every alternate chart's layer (key starts `${songId}::`).
@@ -256,7 +306,7 @@ export async function getAnnotationsForSong(songId) {
 export async function deleteAnnotationsForSong(songId) {
   const keys = await getAllKeys(ANNOTATIONS);
   for (const k of keys) {
-    if (k === songId || String(k).startsWith(songId + '::')) await del(ANNOTATIONS, k);
+    if (k === songId || String(k).startsWith(songId + '::')) await delWithTombstone(ANNOTATIONS, k);
   }
 }
 
@@ -400,39 +450,123 @@ export async function exportAll() {
   // NOTE: deliberately omits the CHARTS blob cache and the SNAPSHOTS store.
   // Both are local-only and derived from this data; including SNAPSHOTS in
   // particular would recurse the whole backup into every snapshot. Keep this
-  // list to the canonical, user-authored stores only.
-  const [songs, notes, setlists, annotations] = await Promise.all([
-    getAllSongs(), getAllNotes(), getAllSetlists(), getAllAnnotations(),
+  // list to the canonical, user-authored stores only. DELETIONS rides along
+  // so deletes propagate through the backup merge instead of resurrecting.
+  const [songs, notes, setlists, annotations, deletions] = await Promise.all([
+    getAllSongs(), getAllNotes(), getAllSetlists(), getAllAnnotations(), getAllDeletions(),
   ]);
   const sources = getSourcesRaw();
   const settings = getSettingsRaw();
-  return { version: 1, songs, notes, setlists, annotations, sources, settings, exportedAt: Date.now() };
+  return { version: 1, songs, notes, setlists, annotations, deletions, sources, settings, exportedAt: Date.now() };
 }
 
-// Additive import — upserts records without deleting anything. Every put is
-// MERGE-AWARE (newer copy wins, blanks fill from the older copy): importing a
-// stale export file, or a Drive merge racing a local edit, must never regress
-// a record this device already has a newer/richer copy of. Timestamps are
-// preserved (plain put, not putSong) so merges stay stable across devices.
+// Additive import — upserts records without deleting anything, EXCEPT where a
+// deletion tombstone says a record was explicitly deleted more recently than
+// it was last edited. Every put is MERGE-AWARE (newer copy wins, blanks fill
+// from the older copy): importing a stale export file, or a Drive merge racing
+// a local edit, must never regress a record this device already has a
+// newer/richer copy of. Timestamps are preserved (plain put, not putSong) so
+// merges stay stable across devices.
 export async function importAll(data) {
   if (data.songs) for (const s of data.songs) await put(SONGS, mergeRecord(await getOne(SONGS, s.id), s, SONG_FILL_FIELDS));
   if (data.notes) for (const n of data.notes) await put(NOTES, mergeRecord(await getOne(NOTES, n.id), n));
   if (data.setlists) for (const sl of data.setlists) await put(SETLISTS, mergeRecord(await getOne(SETLISTS, sl.id), sl, SETLIST_FILL_FIELDS));
   if (data.annotations) for (const a of data.annotations) await put(ANNOTATIONS, mergeRecord(await getOne(ANNOTATIONS, a.songId), a));
+  await applyDeletions(data);
   if (data.sources) setSourcesRaw(data.sources);
   if (data.settings) applySettingsRaw(data.settings);
+}
+
+// Apply deletion tombstones from a merged/imported payload: adopt each
+// tombstone locally (max deletedAt wins) and remove the local record when the
+// tombstone is at least as new as the record's last edit. Store names are
+// whitelisted so a malformed payload can't name CHARTS/SNAPSHOTS. All writes
+// are silent — the surrounding import/cycle owns write-hook side effects.
+async function applyDeletions(data) {
+  const deletions = Array.isArray(data.deletions) ? data.deletions : [];
+  for (const d of deletions) {
+    if (!d || !SYNCED_STORES.includes(d.store) || d.id == null || !d.deletedAt) continue;
+    const key = deletionKey(d.store, d.id);
+    const existing = await getOne(DELETIONS, key);
+    if (!existing || (existing.deletedAt || 0) < d.deletedAt) {
+      await putSilent(DELETIONS, { key, store: d.store, id: d.id, deletedAt: d.deletedAt });
+    }
+    const rec = await getOne(d.store, d.id);
+    if (rec && (rec.updatedAt || rec.createdAt || 0) <= d.deletedAt) {
+      await delSilent(d.store, d.id);
+    }
+  }
+  // Retire local tombstones beaten by a newer incoming record (a record
+  // re-edited after its deletion wins — the merge drops the tombstone from
+  // its output, and this keeps the local ledger in step so the stale
+  // tombstone doesn't flag every future cycle as "changed").
+  const byStore = {
+    [SONGS]: [data.songs, 'id'],
+    [NOTES]: [data.notes, 'id'],
+    [SETLISTS]: [data.setlists, 'id'],
+    [ANNOTATIONS]: [data.annotations, 'songId'],
+  };
+  for (const t of await getAll(DELETIONS)) {
+    const [arr, keyField] = byStore[t.store] || [];
+    if (!Array.isArray(arr)) continue;
+    const rec = arr.find(r => r[keyField] === t.id);
+    if (rec && (rec.updatedAt || rec.createdAt || 0) > (t.deletedAt || 0)) {
+      await delSilent(DELETIONS, t.key);
+    }
+  }
 }
 
 // Full REPLACE (not a merge): clear the user-data stores, then load `data`.
 // importAll only upserts, so it can't reproduce deletions — a snapshot "undo"
 // or explicit version restore needs this to reproduce an exact prior state.
-// The final put()s fire _onWrite, so the reverted state propagates to Drive.
+//
+// A restore is AUTHORITATIVE: the user explicitly chose this state, so it must
+// also win against the newer copies Drive still holds (otherwise the next
+// pull-merge-push newer-wins the just-undone data straight back and the
+// restore silently reverts within seconds). Two mechanisms enforce that:
+//   - every restored record's updatedAt is bumped to the restore time, so it
+//     beats Drive's copies under newer-wins on every device;
+//   - records that exist now but not in `data` get deletion tombstones, so
+//     the restore's deletions propagate instead of resurrecting; tombstones
+//     for ids the restore brings back are dropped, so the merge can't
+//     immediately re-kill them.
+// The trailing _onWrite schedules the push that makes Drive match.
 export async function replaceAll(data) {
-  await clearStore(SONGS);
-  await clearStore(NOTES);
-  await clearStore(SETLISTS);
-  await clearStore(ANNOTATIONS);
-  await importAll(data);
+  const stamp = Date.now();
+  const perStore = [
+    [SONGS, data.songs || [], 'id'],
+    [NOTES, data.notes || [], 'id'],
+    [SETLISTS, data.setlists || [], 'id'],
+    [ANNOTATIONS, data.annotations || [], 'songId'],
+  ];
+  for (const [storeName, records, keyField] of perStore) {
+    const restoredIds = new Set(records.map(r => r[keyField]));
+    for (const id of await getAllKeys(storeName)) {
+      if (!restoredIds.has(id)) {
+        await putSilent(DELETIONS, { key: deletionKey(storeName, id), store: storeName, id, deletedAt: stamp });
+      }
+    }
+    for (const id of restoredIds) await delSilent(DELETIONS, deletionKey(storeName, id));
+    await clearStore(storeName);
+    for (const r of records) await putSilent(storeName, { ...r, updatedAt: stamp });
+  }
+  // Adopt the snapshot's own tombstones only for ids the restore doesn't
+  // bring back — a restored record must never carry a contradicting tombstone.
+  if (Array.isArray(data.deletions)) {
+    const restored = new Set(perStore.flatMap(([s, recs, kf]) => recs.map(r => deletionKey(s, r[kf]))));
+    for (const d of data.deletions) {
+      if (!d || !SYNCED_STORES.includes(d.store) || d.id == null || !d.deletedAt) continue;
+      const key = deletionKey(d.store, d.id);
+      if (restored.has(key)) continue;
+      const existing = await getOne(DELETIONS, key);
+      if (!existing || (existing.deletedAt || 0) < d.deletedAt) {
+        await putSilent(DELETIONS, { key, store: d.store, id: d.id, deletedAt: d.deletedAt });
+      }
+    }
+  }
+  if (data.sources) setSourcesRaw(data.sources);
+  if (data.settings) applySettingsRaw(data.settings);
+  _onWrite?.();
 }
 
 export async function exportSetlist(setlistId) {
