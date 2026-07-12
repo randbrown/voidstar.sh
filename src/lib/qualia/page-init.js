@@ -3037,8 +3037,32 @@ export function initQualiaPage() {
     // Camera panel (split mode only).
     if (layout.camRect) drawCameraIntoRect(layout.camRect);
   }
+  // The composite loop now has TWO consumers — the recorder and the output
+  // window — so it's reference-counted: the per-frame drawImage cost only
+  // runs while at least one of them is active, and one releasing doesn't
+  // starve the other. Only the RECORDER locks dimensions (the encoder needs
+  // stable input); the output window tracks the live layout.
+  let recordCompositeRefs = 0;
+  function acquireComposite() {
+    recordCompositeRefs++;
+    if (recordCompositeRefs === 1) {
+      recordCompositeUpdate();
+      // Subscribe to the rAF loop. core.onFrame fires AFTER fx render AND
+      // after the existing overlay frame listener, because listeners run
+      // in insertion order and overlay was registered earlier in setup. By
+      // the time our callback runs, both fx and overlay are painted into
+      // their respective canvases for the current frame.
+      recordCompositeFrameOff = core.onFrame(recordCompositeUpdate);
+    }
+  }
+  function releaseComposite() {
+    recordCompositeRefs = Math.max(0, recordCompositeRefs - 1);
+    if (recordCompositeRefs === 0 && recordCompositeFrameOff) {
+      recordCompositeFrameOff();
+      recordCompositeFrameOff = null;
+    }
+  }
   function recordCompositeBegin() {
-    if (recordCompositeFrameOff) return;
     // Paint one frame at the current layout so the canvas has content for
     // captureStream's first sample AND the dimensions/layout are stamped
     // before we lock them.
@@ -3049,18 +3073,64 @@ export function initQualiaPage() {
     // buttons), but the recorded canvas stays the same size so the encoder
     // doesn't choke; the source is letterboxed into the frozen rects instead.
     recordCompositeLocked = true;
-    // Subscribe to the rAF loop. core.onFrame fires AFTER fx render AND
-    // after the existing overlay frame listener, because listeners run
-    // in insertion order and overlay was registered earlier in setup. By
-    // the time our callback runs, both fx and overlay are painted into
-    // their respective canvases for the current frame.
-    recordCompositeFrameOff = core.onFrame(recordCompositeUpdate);
+    acquireComposite();
   }
   function recordCompositeEnd() {
-    if (recordCompositeFrameOff) recordCompositeFrameOff();
-    recordCompositeFrameOff = null;
+    releaseComposite();
     recordCompositeLocked = false;
   }
+
+  // ── Output window (projector / OBS feed) ──────────────────────────────────
+  // A chrome-free popup mirroring the recorder's clean composite (fx +
+  // overlay + cam-walk + transitions, no HUD) via canvas.captureStream — the
+  // VJ "media-server output" pattern: the projector/OBS captures the popup
+  // while the laptop screen keeps the topbar and panels. Compositor-fed video,
+  // so the popup costs one captureStream track, not a second render.
+  let outputWin = null, outputStream = null, outputWatch = null, outputHoldsRef = false;
+  const btnOutput = document.getElementById('btn-output');
+  function closeOutputWindow() {
+    if (outputWatch) { clearInterval(outputWatch); outputWatch = null; }
+    try { outputStream?.getTracks().forEach(t => t.stop()); } catch {}
+    outputStream = null;
+    try { if (outputWin && !outputWin.closed) outputWin.close(); } catch {}
+    outputWin = null;
+    if (outputHoldsRef) { outputHoldsRef = false; releaseComposite(); }
+    btnOutput?.classList.remove('active');
+  }
+  function toggleOutputWindow() {
+    if (outputWin && !outputWin.closed) { closeOutputWindow(); return; }
+    // window.open must run synchronously in the tap gesture or it's blocked.
+    const w = window.open('', 'qualia-output', 'popup=yes,width=960,height=540');
+    if (!w) { console.warn('[qualia] output window blocked by the browser'); return; }
+    outputWin = w;
+    acquireComposite();
+    outputHoldsRef = true;
+    try {
+      outputStream = recordCompositeCanvas.captureStream(30);
+      w.document.write(
+        '<!doctype html><title>qualia output</title>' +
+        '<style>html,body{margin:0;height:100%;background:#000;overflow:hidden;cursor:none}' +
+        'video{width:100%;height:100%;object-fit:contain;display:block}</style>' +
+        '<video autoplay muted playsinline></video>');
+      w.document.close();
+      const v = w.document.querySelector('video');
+      v.srcObject = outputStream;
+      // Double-click the output for fullscreen on the projector.
+      v.addEventListener('dblclick', () => {
+        try { w.document.fullscreenElement ? w.document.exitFullscreen() : v.requestFullscreen(); } catch {}
+      });
+    } catch (e) {
+      console.warn('[qualia] output window failed:', e);
+      closeOutputWindow();
+      return;
+    }
+    btnOutput?.classList.add('active');
+    // No close event crosses windows reliably — poll, and fold the tent when
+    // the popup goes away (or this page unloads).
+    outputWatch = setInterval(() => { if (!outputWin || outputWin.closed) closeOutputWindow(); }, 1000);
+  }
+  btnOutput?.addEventListener('click', toggleOutputWindow);
+  window.addEventListener('pagehide', () => { try { closeOutputWindow(); } catch {} });
 
   function refreshRecToastBackend(recording, backend, sink) {
     if (!recording) return '';
