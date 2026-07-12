@@ -286,14 +286,15 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   voiceBar.style.display = 'none';
 
   const micSel = el('select', 'mn-select mn-mic-sel');
-  wirePicker({
+  const micPicker = wirePicker({
     select: micSel,
     kind: 'audioinput',
     persist: false, // mind owns its own storage key
     alwaysShow: true,
     getCurrentId: () => getStoredMicId(),
-    onChoose: async (id) => { storeMicId(id); return id; },
-  }).populate();
+    onChoose: async (id) => { storeMicId(id); if (recording) await restartForNewMic(); return id; },
+  });
+  micPicker.populate();
   voiceBar.appendChild(micSel);
 
   const mkToggle = (key, label, dflt) => {
@@ -317,38 +318,44 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   voiceBar.appendChild(liveLine);
 
   async function toggleRecord() {
-    if (recording) {
-      recBtn.disabled = true;
-      const { audioBlob, transcript, durationSec, speechFailed } = await capture.stop();
-      recording = false;
-      recBtn.disabled = false;
-      recBtn.innerHTML = '&#9679; record';
-      recBtn.classList.remove('mn-recording');
-      liveLine.textContent = '';
+    if (recording) await finishRecording();
+    else await startRecording();
+  }
 
-      if (keepText.cb.checked && transcript) {
-        editor.insertText((transcript.endsWith(' ') ? transcript : transcript + ' '));
-        scheduleSave();
-      }
-      if (keepAudio.cb.checked && audioBlob) {
-        const att = await addAttachmentFromBlob(note.id, audioBlob, `${store.fileStamp()}-voice`);
-        const fresh = await store.getAttachment(att.id);
-        await store.patchAttachment(fresh, {
-          transcript: transcript || '',
-          transcriptSource: transcript ? 'webspeech' : '',
-          durationSec: Math.round(durationSec),
-        });
-        await drawAttachments();
-        pushPendingAttachments();
-      }
-      if (speechFailed && keepAudio.cb.checked && audioBlob) {
-        liveLine.textContent = 'transcript unavailable — audio kept (re-transcribe coming later)';
-      } else if (speechFailed && !audioBlob) {
-        liveLine.textContent = 'voice capture failed — check mic permissions';
-      }
-      return;
+  // Stop the current session and persist it: insert the transcript and/or keep
+  // the audio as an attachment, per the toggles.
+  async function finishRecording() {
+    recBtn.disabled = true;
+    const { audioBlob, transcript, durationSec, speechFailed } = await capture.stop();
+    recording = false;
+    recBtn.disabled = false;
+    recBtn.innerHTML = '&#9679; record';
+    recBtn.classList.remove('mn-recording');
+    liveLine.textContent = '';
+
+    if (keepText.cb.checked && transcript) {
+      editor.insertText((transcript.endsWith(' ') ? transcript : transcript + ' '));
+      scheduleSave();
     }
+    if (keepAudio.cb.checked && audioBlob) {
+      const att = await addAttachmentFromBlob(note.id, audioBlob, `${store.fileStamp()}-voice`);
+      const fresh = await store.getAttachment(att.id);
+      await store.patchAttachment(fresh, {
+        transcript: transcript || '',
+        transcriptSource: transcript ? 'webspeech' : '',
+        durationSec: Math.round(durationSec),
+      });
+      await drawAttachments();
+      pushPendingAttachments();
+    }
+    if (speechFailed && keepAudio.cb.checked && audioBlob) {
+      liveLine.textContent = 'transcript unavailable — audio kept (re-transcribe coming later)';
+    } else if (speechFailed && !audioBlob) {
+      liveLine.textContent = 'voice capture failed — check mic permissions';
+    }
+  }
 
+  async function startRecording() {
     capture = createVoiceCapture({
       record: keepAudio.cb.checked && recordingSupported(),
       transcribe: speechSupported(),
@@ -362,9 +369,20 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
       recBtn.innerHTML = '&#9632; stop';
       recBtn.classList.add('mn-recording');
       liveLine.textContent = speechSupported() ? 'listening…' : 'recording (no live transcript on this browser)';
+      // Permission granted → real device labels available; refresh the picker.
+      micPicker.populate(getStoredMicId() || undefined);
     } catch (e) {
       liveLine.textContent = `mic error: ${e.message}`;
     }
+  }
+
+  // Switch the live recording to a newly-picked mic. Commit the segment
+  // captured so far (transcript inserted, audio kept) so nothing is lost, then
+  // start a fresh session on the new device.
+  async function restartForNewMic() {
+    if (!recording || !capture) return;
+    try { await finishRecording(); } catch {}
+    await startRecording();
   }
 
   root.appendChild(voiceBar);
