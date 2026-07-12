@@ -36,6 +36,14 @@ import neuralWorkletUrl from './worklets/neural-amp.js?url&no-inline';
 import { createStretchNode } from './looper-stretch.js';
 import { createRigStrip } from './rig-strip.js';
 import { makeSoftLimiter, setSoftLimiterEngaged } from './limiter.js';
+import { autoCorrelate } from './pitch.js';
+
+// Reused analysis window for the input-pitch reader (allocation-free hot path).
+// A ~43 ms window at 48 k still resolves down to ~70 Hz (two periods fit), and
+// is a quarter the cost of the tuner's full 8192 buffer — plenty for a
+// modulation channel that's smoothed downstream.
+const PITCH_WINDOW = 2048;
+let _pitchBuf = new Float32Array(PITCH_WINDOW);
 
 const MIC_CONSTRAINTS = {
   echoCancellation: false,
@@ -1141,6 +1149,18 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     },
     getCaptureAnalyser: () => captureAnalyser,
     getTunerAnalyser: () => tunerAnalyser,
+    // Current monophonic pitch of the clean (pre-strip) input, in Hz, or -1
+    // when the rig isn't capturing / the signal is unvoiced or too quiet. Reads
+    // the tuner analyser's newest window and autocorrelates it — allocation-
+    // free. Callers (the pitch-channel glue) throttle this; it never runs on
+    // the audio thread.
+    getInputPitchHz() {
+      if (!tunerAnalyser) return -1;
+      const n = Math.min(PITCH_WINDOW, tunerAnalyser.fftSize);
+      const buf = n === PITCH_WINDOW ? _pitchBuf : (_pitchBuf = new Float32Array(n));
+      try { tunerAnalyser.getFloatTimeDomainData(buf); } catch { return -1; }
+      return autoCorrelate(buf, ctx?.sampleRate || 48000, 60, 1200);
+    },
     // Full rig output (signal + loops, post master) — for the output scope.
     getOutputAnalyser: () => outputAnalyser,
     playVoice, stopVoice, stopAll, removeTrack, removeAll,

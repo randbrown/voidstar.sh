@@ -621,6 +621,46 @@ export function initQualiaPage() {
     core.setActive(fxSelect.value).catch(err => console.error('[qualia] setActive failed:', err));
   });
 
+  // ── Per-quale fps memory + picker badge ───────────────────────────────────
+  // Remember how each quale actually performed on THIS device+display and show
+  // it in the picker, so "which quale is safe on this venue's laptop+projector"
+  // is UI, not memory. A rolling median-ish EMA per quale id, sampled only
+  // after a short warmup (shader compile / first-frame allocation is not
+  // representative). Options gain a dim "· <fps>" suffix, and a "⚠" when a
+  // quale has historically dropped below 30 fps here.
+  const FXFPS_KEY = 'voidstar.qualia.fxfps';
+  let _fxFps = {};
+  try { _fxFps = JSON.parse(localStorage.getItem(FXFPS_KEY)) || {}; } catch {}
+  let _fxFpsSaveT = 0;
+  function annotateFxOptions() {
+    for (const opt of fxSelect.options) {
+      const mod = mesh.get(opt.value);
+      const base = mod?.name || opt.value;
+      const fps = _fxFps[opt.value];
+      opt.textContent = fps ? `${fps < 30 ? '⚠ ' : ''}${base} · ${Math.round(fps)}` : base;
+    }
+  }
+  // Re-label right before the dropdown opens so the numbers are current.
+  fxSelect.addEventListener('mousedown', annotateFxOptions);
+  fxSelect.addEventListener('focus', annotateFxOptions);
+  annotateFxOptions();
+  let _fxActiveId = null, _fxActiveSince = 0;
+  core.onFps((fps) => {
+    const id = core.activeId?.();
+    if (!id || !fps) return;
+    const t = performance.now();
+    // Skip the first ~2.5 s after a swap — warmup fps (shader compile /
+    // first-frame allocation) isn't representative of steady state.
+    if (id !== _fxActiveId) { _fxActiveId = id; _fxActiveSince = t; return; }
+    if (t - _fxActiveSince < 2500) return;
+    const prev = _fxFps[id] || fps;
+    _fxFps[id] = prev + (fps - prev) * 0.05;   // slow EMA → a stable median-ish
+    if (t - _fxFpsSaveT > 4000) {
+      _fxFpsSaveT = t;
+      try { localStorage.setItem(FXFPS_KEY, JSON.stringify(_fxFps)); } catch {}
+    }
+  });
+
   // ── Audio panel ───────────────────────────────────────────────────────────
   const audioPanel = buildAudioPanel({
     root: audioCard,
@@ -4228,6 +4268,51 @@ export function initQualiaPage() {
   // *reads* the clock — it doesn't drive Strudel transport — so the existing
   // seqSyncStrudel adapter is reused as-is.
   const looper = createLooper({ audio, syncStrudel: seqSyncStrudel });
+
+  // ── Pitch → modulation channels (audio.pitch / audio.pitchClass) ──────────
+  // Detect the clean guitar/steel pitch off the rig tuner and expose it as
+  // modulation channels, so any fx knob can track WHAT NOTE is being played
+  // (map audio.pitchClass → hue for an instantly musical, note-locked look).
+  // Realtime-safe: gated on the rig actually capturing, throttled to ~20 Hz
+  // (pitch doesn't move fast, and detection is O(n·lag)), allocation-free, and
+  // try/catch-guarded on the onTick hot path. When silent/unvoiced the last
+  // note is HELD (pitchClass) so hue doesn't strobe, and pitchConf falls to 0
+  // so a quale can fade on gaps. Values are 0 with no rig — identity for any
+  // modulator, exactly like the crowd channels.
+  const PITCH_MIN_HZ = 60, PITCH_MAX_HZ = 1200;
+  const PITCH_LOG_MIN = Math.log2(PITCH_MIN_HZ), PITCH_LOG_SPAN = Math.log2(PITCH_MAX_HZ) - PITCH_LOG_MIN;
+  const PITCH_INTERVAL_MS = 50;   // ~20 Hz detection
+  let _pitchLastMs = 0, _pitchClassEma = 0, _pitchEma = 0, _pitchConfEma = 0, _pitchClassInit = false;
+  core.onTick((field) => {
+    const now = field.time * 1000;
+    if (now - _pitchLastMs < PITCH_INTERVAL_MS) {
+      // Between detections: keep decaying confidence so a note release fades.
+      _pitchConfEma *= 0.9;
+      field.audio.pitchConf = _pitchConfEma;
+      return;
+    }
+    _pitchLastMs = now;
+    let hz = -1;
+    try { hz = looper.getInputPitchHz(); } catch {}
+    if (hz > 0) {
+      const cls = ((Math.log2(hz) % 1) + 1) % 1;            // 0..1 within the octave
+      const norm = Math.max(0, Math.min(1, (Math.log2(hz) - PITCH_LOG_MIN) / PITCH_LOG_SPAN));
+      // Circular EMA on pitch class so wrapping (B→C) takes the short way round.
+      if (!_pitchClassInit) { _pitchClassEma = cls; _pitchClassInit = true; }
+      else {
+        let d = cls - _pitchClassEma;
+        if (d > 0.5) d -= 1; else if (d < -0.5) d += 1;
+        _pitchClassEma = ((_pitchClassEma + d * 0.35) % 1 + 1) % 1;
+      }
+      _pitchEma += (norm - _pitchEma) * 0.35;
+      _pitchConfEma += (1 - _pitchConfEma) * 0.5;
+    } else {
+      _pitchConfEma *= 0.8;   // unvoiced: hold the note, fade confidence
+    }
+    field.audio.pitch = _pitchEma;
+    field.audio.pitchClass = _pitchClassEma;
+    field.audio.pitchConf = _pitchConfEma;
+  });
 
   // ── Editor-open viz throttle ──────────────────────────────────────────────
   // While the Strudel or sequencer editor panel is visible the user is likely

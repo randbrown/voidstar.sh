@@ -10,6 +10,15 @@ export function emptyAudioFrame() {
     mids:  { active: false, pulse: 0 },
     highs: { active: false, pulse: 0 },
     rms:   0,
+    // Monophonic pitch of the guitar/steel input (rig tuner), for the
+    // audio.pitch / audio.pitchClass modulation channels. `pitch` is a
+    // normalized log-frequency across the useful range (0..1); `pitchClass`
+    // wraps the octave (0..1, i.e. hue-by-note); `pitchConf` is 0 when
+    // unvoiced/silent (the last note is held so hue doesn't strobe). Written
+    // by the pitch-channel glue in page-init only when the rig is capturing.
+    pitch: 0,
+    pitchClass: 0,
+    pitchConf: 0,
     spectrum: null,
     waveform: null,
   };

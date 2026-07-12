@@ -3569,6 +3569,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     hasBeenOpened: () => _everOpened,
     isPlaying: () => looperAudio.anyPlaying(),
     isRecording: () => recording,
+    // Clean input pitch in Hz (−1 = none) for the audio.pitch* channels.
+    getInputPitchHz: () => looperAudio.getInputPitchHz(),
     play: playAll, stop,
     perFrame,
     getConfig, setConfig,
