@@ -77,6 +77,27 @@ export function readRoomFromQuery(search = location.search) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+// Per-room HOST KEY. Authenticates the performer's device as the room's host
+// to the signaling Worker (trust-on-first-use): only a socket presenting this
+// key gets host privileges (drive the projection / broadcast to all phones).
+// It lives ONLY here on the host's device — it is never put in the QR/join
+// URL, so a phone that scans the QR can only join as a participant. High
+// entropy so it can't be guessed. Stored as a { roomId: key } map so a host
+// that hops rooms keeps each room's key.
+const HOST_KEYS_KEY = 'voidstar.entangle.hostKeys';
+export function getOrCreateHostKey(roomId) {
+  if (!roomId) return '';
+  let map = {};
+  try { map = JSON.parse(localStorage.getItem(HOST_KEYS_KEY)) || {}; } catch {}
+  if (!map[roomId]) {
+    const a = new Uint8Array(24);
+    (globalThis.crypto || crypto).getRandomValues(a);
+    map[roomId] = Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
+    try { localStorage.setItem(HOST_KEYS_KEY, JSON.stringify(map)); } catch {}
+  }
+  return map[roomId];
+}
+
 /** Get the pinned room from localStorage (if any). */
 export function getPinnedRoom() {
   try { return localStorage.getItem(PINNED_ROOM_KEY) || null; } catch { return null; }

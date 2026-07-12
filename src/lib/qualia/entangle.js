@@ -20,7 +20,7 @@
 // NOT a drop-in fallback as-is; it would need updating before it could be swapped
 // back in.)
 import { createTransport } from './entangle-transport-cf.js';
-import { T, MODES, APP_ID, resolveRoomId, buildJoinUrl, clampToSpec, manifestParam, getPinnedRoom, pinRoom, unpinRoom, readRoomFromQuery, makeRoomId, normalizeRoomSlug } from './entangle-protocol.js';
+import { T, MODES, APP_ID, resolveRoomId, buildJoinUrl, clampToSpec, manifestParam, getPinnedRoom, pinRoom, unpinRoom, readRoomFromQuery, makeRoomId, normalizeRoomSlug, getOrCreateHostKey } from './entangle-protocol.js';
 import { unpackFeatures, unpackSkeleton } from './pose-features.js';
 
 const STALE_MS    = 9000;   // prune a peer we haven't heard from in this long
@@ -362,7 +362,9 @@ export function createEntangle({ core, mesh, actions = {} }) {
         }
       }
     }
-    transport = await createTransport({ appId: APP_ID, room: roomId, role: 'host' });
+    // Host key authenticates this device as the room's host to the signaling
+    // Worker; it stays on this device and never rides the QR/join URL.
+    transport = await createTransport({ appId: APP_ID, room: roomId, role: 'host', key: getOrCreateHostKey(roomId) });
     transport.on(T.HELLO, (d, id) => { try { onHello(d, id); } catch (e) { console.error(e); } });
     transport.on(T.POSE,  (d, id) => { try { onPose(d, id);  } catch (e) { console.error(e); } });
     transport.on(T.SKELETON, (d, id) => { try { onSkeleton(d, id); } catch (e) { console.error(e); } });
