@@ -67,6 +67,7 @@ import linerNotes     from './fx/liner-notes.js';
 import chaos          from './fx/chaos.js';
 import video          from './fx/video.js';
 import arcade         from './fx/arcade.js';
+import gear           from './fx/gear.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -178,6 +179,7 @@ export function initQualiaPage() {
   mesh.register(chaos);
   mesh.register(video);
   mesh.register(arcade);
+  mesh.register(gear);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
