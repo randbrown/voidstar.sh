@@ -656,6 +656,14 @@ function todoRow(task, redraw, folderLabel = '', dimmed = false) {
       navigate(`#note/${task.sourceNoteId}`);
     });
     row.appendChild(link);
+  } else if (task.sourceUrl) {
+    // External task (e.g. setlist todo bridge) — cross-page location change.
+    const link = btn('&#8599;', 'mn-btn-ghost mn-task-notelink', (e) => {
+      e.stopPropagation();
+      location.href = task.sourceUrl;
+    });
+    link.title = 'open in setlist';
+    row.appendChild(link);
   }
   return row;
 }

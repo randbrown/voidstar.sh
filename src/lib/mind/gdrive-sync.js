@@ -77,7 +77,7 @@ const DIRTY_KEY = `${NS}.dirtyAt`;
 // baseline: edits on both sides newer than this = a real concurrent fork.
 const LAST_CYCLE_KEY = `${NS}.lastCycleAt`;
 
-function markLocalDirty() { try { localStorage.setItem(DIRTY_KEY, String(Date.now())); } catch {} }
+export function markLocalDirty() { try { localStorage.setItem(DIRTY_KEY, String(Date.now())); } catch {} }
 function getDirtyStamp() { return localStorage.getItem(DIRTY_KEY) || ''; }
 export function isLocalDirty() { return !!getDirtyStamp(); }
 function clearDirtyIf(stamp) { if (getDirtyStamp() === stamp) localStorage.removeItem(DIRTY_KEY); }

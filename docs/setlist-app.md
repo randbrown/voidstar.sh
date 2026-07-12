@@ -75,6 +75,36 @@ The library view has matching filter chips with AND semantics (selecting
 `store.putSong`, which bumps `updatedAt`, so statuses merge correctly
 through Drive backup.
 
+### todo ↔ mind tasks bridge
+
+The `todo` chip (only that one) mirrors into a real task in the mind app,
+two-way: chip on ⇒ task `sl:<songId>` appears in mind's `external-setlist`
+tasklist (named "setlist", created lazily); completing or trashing that task
+in mind clears the chip on the next reconcile; re-toggling the chip reopens
+the task. Same-origin, direct IndexedDB — no queue, no shared Drive file.
+
+- **Modules**: `todo-sync-core.js` (pure decision table, node-tested by
+  `scripts/check-tasks-bridge.mjs`) + `mind-todo.js` (glue; the only setlist
+  module that imports mind code) + `mind/external-tasks.js` (mind's write
+  surface — see the external-writer contract in `docs/mind-app.md`).
+- **Tie-breaker**: `song.todoStatusAt` (epoch ms), stamped on every todo-chip
+  change. Like `statuses` itself it is deliberately **not** in
+  `SONG_FILL_FIELDS`, so it always travels with the record under LWW merge.
+  Reconciliation compares it against the task's `completedAt` / `deletedAt` /
+  `updatedAt` — a pure function of the two synced records, no per-device
+  state, so every device picks the same direction (no ping-pong). Records
+  missing the stamp (pre-bridge) converge to *cleared*.
+- **Task text** (`practice: <title>`) is bridge-owned: title edits re-canonicalize
+  it on reconcile, and mind-side text edits get overwritten.
+- **Reconcile triggers**: setlist boot, tab refocus (10 s min interval),
+  after a Drive pull that changed records, and inline after a chip toggle or
+  song delete (hard delete ⇒ task is tombstoned). All entry points are
+  fire-and-forget behind try/catch — the bridge can never break setlist.
+- **Cross-device latency**: the task reaches Drive only when the mind app
+  next runs on that device (the bridge marks mind's dirty-shard flags but
+  never drives mind's Drive client); same-device mind sees it instantly via
+  the shared IndexedDB.
+
 ## Re-rendering: `refresh()` vs `navigate()`
 
 `navigate(hash)` only sets `location.hash`; the router (`route()`) re-renders

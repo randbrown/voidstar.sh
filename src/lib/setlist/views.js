@@ -1965,8 +1965,15 @@ export async function renderSongFocus(root, songId, setlistId) {
       if (active.has(def.key)) active.delete(def.key);
       else active.add(def.key);
       song.statuses = [...active];
+      // todoStatusAt is the mind-bridge tie-breaker: it must move on every
+      // todo-chip change so a task completed in mind can't out-timestamp a
+      // deliberate re-toggle (see todo-sync-core.js).
+      if (def.key === 'todo') song.todoStatusAt = Date.now();
       await store.putSong(song);
       chip.classList.toggle('sl-on', active.has(def.key));
+      if (def.key === 'todo') {
+        import('./mind-todo.js').then((m) => m.onTodoToggled(song)).catch((e) => console.warn('[todo-bridge]', e));
+      }
     });
     chip.dataset.s = def.key;
     if ((song.statuses || []).includes(def.key)) chip.classList.add('sl-on');
@@ -2749,6 +2756,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       await store.deleteChartBlobsForSong(songId).catch(() => {});
       await store.deleteAnnotationsForSong(songId).catch(() => {});
       await store.deleteSong(songId);
+      import('./mind-todo.js').then((m) => m.onSongDeleted(songId)).catch((e) => console.warn('[todo-bridge]', e));
       navigate('#library');
     }));
     root.appendChild(danger);

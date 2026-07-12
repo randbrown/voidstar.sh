@@ -151,6 +151,12 @@ function taskRow(task) {
     const link = btn('&#8599;', 'mn-btn-ghost mn-task-notelink', () => navigate(`#note/${task.sourceNoteId}`));
     link.title = 'open source note';
     row.appendChild(link);
+  } else if (task.sourceUrl) {
+    // External task (e.g. setlist todo bridge) — cross-page, so a real
+    // location change rather than navigate()'s in-app hash routing.
+    const link = btn('&#8599;', 'mn-btn-ghost mn-task-notelink', () => { location.href = task.sourceUrl; });
+    link.title = 'open in setlist';
+    row.appendChild(link);
   }
 
   const del = btn('&times;', 'mn-btn-ghost mn-task-x', async () => {

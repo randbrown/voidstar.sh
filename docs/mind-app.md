@@ -135,6 +135,32 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   rename-proof). Backlinks are computed by scan (`backlinksTo`).
 - localStorage namespace `voidstar.mind.*`.
 
+## External tasks (setlist todo bridge)
+
+Other same-origin apps can own tasks in mind. Today that's the setlist app:
+its `todo` practice-status chip mirrors to task id `sl:<songId>` in the
+deterministic tasklist `external-setlist` (named "setlist"), with a
+`sourceUrl` field (`/lab/setlist#song/<id>`) that task rows render as an
+`↗ open in setlist` link (the non-note sibling of `sourceNoteId`). Completing
+or trashing such a task is picked up by setlist's reconciler and clears the
+chip; the reverse flows too (see `docs/setlist-app.md` for the decision
+table). `tasks-sync.js` never touches these tasks (it only reconciles
+`sourceNoteId` tasks), and quick-added tasks without the `sl:` prefix in that
+list are left alone by the bridge.
+
+**External-writer contract** (`external-tasks.js` — the only sanctioned write
+surface): mind's sharded Drive push uploads **only dirty-flagged shards**
+(`pushSharded` drains `voidstar.mind.gdrive.dirtyShards`), and
+`pullMergePushIfStale` skips the whole cycle unless `…gdrive.dirtyAt` is set.
+Those flags are normally maintained by the store write hook wired in
+`initMindApp` — which is NOT active on other apps' pages. Any module writing
+mind's store from outside the mind app must therefore call
+`markShardDirty(info)` + `markLocalDirty()` (`gdrive-sync.js`) after every
+write, or the change sits in IndexedDB forever and silently never reaches
+Drive. Never register `store.setOnWrite` from an external page — it would
+clobber mind's own hook. Corollary: an externally written task reaches Drive
+only when the mind app next runs on that device.
+
 ## P4 additions
 
 - **Dock**: the main menu (notes / new note / tasks / settings) is a floating
