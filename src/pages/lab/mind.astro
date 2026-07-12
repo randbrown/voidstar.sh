@@ -533,6 +533,7 @@ const buildStamp = readBuildStamp();
       min-height: 1.1rem;
     }
     .mn-capture-hint { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-dim); }
+    .mn-capture-microw { display: flex; justify-content: center; }
     .mn-capture-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; }
     .mn-capture-done { min-width: 6rem; }
     .mn-capture-mic.mn-recording {
@@ -908,6 +909,18 @@ const buildStamp = readBuildStamp();
       padding: 0.05rem 0.4rem;
     }
     .mn-import-badge-dup { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
+    .mn-import-badge-newer { color: var(--pink); border-color: color-mix(in srgb, var(--pink) 50%, transparent); }
+    .mn-import-batchbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem 0.7rem;
+      margin: 0.1rem 0 0.2rem;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid var(--border-2);
+      border-radius: var(--radius, 6px);
+    }
+    .mn-import-batchinfo { font-family: var(--font-mono); font-size: 0.75rem; color: var(--cyan); }
     .mn-advanced summary { cursor: pointer; font-size: 0.78rem; color: var(--text-dim); font-family: var(--font-mono); }
     .mn-advanced[open] summary { margin-bottom: 0.4rem; }
 

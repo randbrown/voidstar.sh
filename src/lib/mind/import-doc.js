@@ -301,39 +301,170 @@ export function parseDocIntoNotes(text, opts = {}) {
   };
 }
 
+/**
+ * Split MULTIPLE documents into a single combined preview list of would-be
+ * notes. Each document is split independently with the same options — so the
+ * split setting (`mode`/`headingLevel`/…) is honored per-document — or, with
+ * `opts.combine`, the whole batch is imported as ONE note (split mode ignored).
+ *
+ * Pure & deterministic given `opts.now`, so it's unit-testable without a DOM.
+ *
+ * @param {Array<{name?:string, text:string}>} docs
+ * @param {object} [opts]  same shape as parseDocIntoNotes, plus:
+ *   combine: boolean — merge the entire batch into a single note
+ * @returns {{sections:Array, mode:string, stats:object, warnings:string[], combine:boolean}}
+ */
+export function parseBatchIntoNotes(docs, opts = {}) {
+  const list = (docs || []).filter((d) => d && String(d.text || '').trim());
+  const { combine = false, now = Date.now() } = opts;
+
+  if (combine) {
+    // Whole batch → one note: concatenate every document, then force single mode
+    // (a blank line between docs so their content doesn't run together).
+    const merged = list.map((d) => String(d.text || '').trim()).join('\n\n');
+    const p = parseDocIntoNotes(merged, { ...opts, mode: 'single', now });
+    const mtime = list.reduce((m, d) => Math.max(m, Number(d.modifiedMs) || 0), 0);
+    for (const s of p.sections) s.srcModified = mtime;
+    return {
+      sections: p.sections,
+      mode: 'combine',
+      stats: { total: p.sections.length, dated: p.stats.dated, dateless: p.stats.dateless, docs: list.length },
+      warnings: p.warnings,
+      combine: true,
+    };
+  }
+
+  // Per-document split, concatenated. A descending `now` cursor keeps each
+  // document's dateless sections stacked below the previous document's, so the
+  // combined list stays in a stable, non-overlapping newest-first order.
+  const sections = [];
+  const warnings = [];
+  let cursor = now;
+  for (const d of list) {
+    const p = parseDocIntoNotes(d.text, { ...opts, now: cursor });
+    for (const w of p.warnings) warnings.push(d.name ? `${d.name}: ${w}` : w);
+    // Stamp the Drive file's real last-edit time onto every section from this
+    // doc so re-import matching can tell whether the mind copy is newer.
+    const mtime = Number(d.modifiedMs) || 0;
+    for (const s of p.sections) { s.srcModified = mtime; sections.push(s); }
+    if (p.sections.length) cursor = Math.min(...p.sections.map((s) => s.createdAt)) - GAP;
+    else cursor -= GAP;
+  }
+
+  // Cross-document daily dedupe: the same calendar day appearing as a pure-date
+  // header in two different docs must not mint two daily notes for one date
+  // (`meta.daily` is meant to be unique) — the first claims it, the rest demote.
+  const seenDaily = new Set();
+  for (const s of sections) {
+    if (!s.isDaily) continue;
+    if (seenDaily.has(s.dateIso)) s.isDaily = false;
+    else seenDaily.add(s.dateIso);
+  }
+
+  const dated = sections.filter((s) => s.dateIso).length;
+  return {
+    sections,
+    mode: 'batch',
+    stats: { total: sections.length, dated, dateless: sections.length - dated, docs: list.length },
+    warnings,
+    combine: false,
+  };
+}
+
 // Cheap content fingerprint for duplicate detection on re-import.
 export function fingerprintNote({ title = '', body = '' }) {
   const norm = (s) => String(s).toLowerCase().replace(/\s+/g, ' ').trim();
   return `${norm(title)}\n${norm(body)}`;
 }
 
-// Annotate sections in place: `.upsertId` when an id round-trips to an existing
-// note (→ update it), `.dup` + pre-checked `.skip` on a content match, and
-// `.dailyCollision` (with isDaily cleared) when the daily key is already taken.
-export function markDuplicates(sections, existingNotes) {
+// Filesystem-style identity: a note's "path" is its (folder, title). Re-importing
+// the same document should refresh the note at that path, not spawn a twin.
+const normTitle = (t) => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
+const pathKey = (folderId, title) => `${folderId ?? ''} ${normTitle(title)}`;
+
+// A section's "document time" for newer-than comparison: the source file's real
+// last-edit time when known, else the date parsed from its header (noon).
+function docTimeOf(s) {
+  if (s.srcModified) return s.srcModified;
+  return s.dateIso ? Date.parse(`${s.dateIso}T12:00:00`) : 0;
+}
+
+/**
+ * Annotate sections in place with duplicate/upsert state:
+ *  - `.upsertId` — update an existing note instead of inserting. Set on an `id`
+ *    round-trip (mind's own export) and, when `opts.matchByTitle`, on a
+ *    filesystem-style match: same daily date, else same title within the target
+ *    folder (`opts.folderId`). `.dup.kind` is `'id' | 'content' | 'path'`.
+ *  - `.skip` (pre-checked) — a byte-identical note already exists (no-op), or a
+ *    path match whose existing note looks NEWER than the import (`.newerExists`,
+ *    left unchecked so fresher local edits aren't silently overwritten).
+ *  - `.dailyCollision` (isDaily cleared) — a *different* note already owns this
+ *    daily date and we're not upserting it.
+ *
+ * @param {Array} sections
+ * @param {Array} existingNotes
+ * @param {{matchByTitle?:boolean, folderId?:string}} [opts]
+ *   matchByTitle — enable path/daily upsert (default off → legacy behavior).
+ *   folderId — the import's target folder id; `undefined` disables title matching
+ *   (e.g. a brand-new folder that can't hold matches yet). Daily matching is
+ *   folder-independent (a daily note is unique per calendar day).
+ */
+export function markDuplicates(sections, existingNotes, opts = {}) {
+  const { matchByTitle = false, folderId } = opts;
   const live = (existingNotes || []).filter((n) => !n.deletedAt);
   const byId = new Map(live.map((n) => [n.id, n]));
   const byPrint = new Map();
   const dailyDates = new Set();
+  const dailyByDate = new Map();
+  const byPath = new Map();
+  const newer = (a, b) => (a.updatedAt || 0) >= (b?.updatedAt || 0); // keep freshest on collision
   for (const n of live) {
     byPrint.set(fingerprintNote({ title: n.title, body: n.body }), n);
-    if (n.meta?.daily) dailyDates.add(n.meta.daily);
+    if (n.meta?.daily) {
+      dailyDates.add(n.meta.daily);
+      if (newer(n, dailyByDate.get(n.meta.daily))) dailyByDate.set(n.meta.daily, n);
+    }
+    const pk = pathKey(n.folderId, n.title);
+    if (newer(n, byPath.get(pk))) byPath.set(pk, n);
   }
+
   for (const s of sections) {
     s.upsertId = '';
     s.dup = null;
     s.skip = false;
     s.dailyCollision = false;
+    s.newerExists = false;
+
+    // 1. explicit id round-trip (mind's own export) → update in place.
     if (s.id && byId.has(s.id)) {
       s.upsertId = s.id;
       s.dup = { id: s.id, title: byId.get(s.id).title, kind: 'id' };
-      continue; // an id match is an update, not a skip
+      continue;
     }
+    // 2. byte-identical note already exists → skip (importing would be a no-op).
     const hit = byPrint.get(fingerprintNote(s));
     if (hit) {
       s.dup = { id: hit.id, title: hit.title, kind: 'content' };
       s.skip = true;
+      continue;
     }
+    // 3. filesystem identity (opt-in): refresh the note at this (folder, title),
+    //    or the daily note for this date, rather than inserting a duplicate.
+    if (matchByTitle) {
+      let match = null;
+      if (s.isDaily && s.dateIso) match = dailyByDate.get(s.dateIso) || null;
+      if (!match && folderId !== undefined) match = byPath.get(pathKey(folderId, s.title)) || null;
+      if (match) {
+        s.upsertId = match.id;
+        const docT = docTimeOf(s);
+        s.newerExists = docT > 0 && (match.updatedAt || 0) > docT;
+        s.dup = { id: match.id, title: match.title, kind: 'path', newer: s.newerExists };
+        s.skip = s.newerExists; // update by default; if mind is newer, leave unchecked
+        continue;
+      }
+    }
+    // 4. no upsert target, but a different note already owns this daily date →
+    //    demote to a plain dated note so it doesn't shadow the real daily.
     if (s.isDaily && dailyDates.has(s.dateIso)) {
       s.isDaily = false;
       s.dailyCollision = true;
@@ -378,13 +509,17 @@ export async function commitDocImport(sections, opts = {}) {
     if (s.upsertId) {
       const existing = await store.getNote(s.upsertId);
       if (existing) {
+        // When the source file's real edit time is known, make it authoritative
+        // so a repeat import converges (note.updatedAt == doc time → not "newer"
+        // next time); otherwise keep the newer-wins timestamp.
+        const stamp = s.srcModified || Math.max(existing.updatedAt || 0, s.updatedAt);
         await store.putNoteRaw({
           ...existing,
           title: s.title,
           body: s.body,
           tags: tags.length ? tags : existing.tags,
           meta: { ...existing.meta, ...meta },
-          updatedAt: Math.max(existing.updatedAt || 0, s.updatedAt),
+          updatedAt: stamp,
         });
         created++;
         continue;
@@ -399,7 +534,7 @@ export async function commitDocImport(sections, opts = {}) {
       tags,
       meta,
       createdAt: s.createdAt,
-      updatedAt: s.updatedAt,
+      updatedAt: s.srcModified || s.updatedAt,
     });
     await store.putNoteRaw(note);
     created++;

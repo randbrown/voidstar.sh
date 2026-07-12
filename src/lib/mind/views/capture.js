@@ -16,8 +16,9 @@
 import * as store from '../store.js';
 import { navigate, refresh } from '../app.js';
 import { currentFolderId } from './home.js';
-import { createVoiceCapture, recordingSupported } from '../voice-capture.js';
+import { createVoiceCapture, recordingSupported, getStoredMicId, storeMicId } from '../voice-capture.js';
 import { isSupported as speechSupported } from '../voice.js';
+import { wirePicker } from '../../qualia/devices.js';
 import { addAttachmentFromBlob } from '../attachments.js';
 import { pushPendingAttachments } from '../attachments-drive.js';
 import { parseCapture } from '../capture.js';
@@ -52,6 +53,14 @@ export async function renderCapture(root, mode, target) {
     isTask ? 'speak a task — e.g. “pick up prescription after 5pm”' : 'speak your note');
   wrap.appendChild(hint);
 
+  // Inline mic picker — pick the input right here rather than navigating to
+  // settings. Shown only when there's more than one mic (nothing to choose
+  // otherwise); switching mid-recording restarts on the new device.
+  const micSel = el('select', 'mn-select mn-mic-sel');
+  const micRow = el('div', 'mn-capture-microw');
+  micRow.appendChild(micSel);
+  wrap.appendChild(micRow);
+
   // Mic toggle (tap-to-talk / stop) sits alongside done/cancel so a blocked
   // auto-start is always one tap from recovery.
   const micBtn = btn('&#127908; talk', 'mn-btn-primary mn-capture-mic');
@@ -70,6 +79,7 @@ export async function renderCapture(root, mode, target) {
   let done = false;
   let capture = null;
   let speechFailed = false;
+  let micPicker = null;
 
   const paint = () => {
     const shown = (finalText + ' ' + interim).trim();
@@ -105,6 +115,9 @@ export async function renderCapture(root, mode, target) {
       micBtn.innerHTML = '&#9209; stop';
       micBtn.classList.add('mn-recording');
       paint();
+      // Permission is granted now, so device labels are available — refresh the
+      // picker so real mic names (and any second mic) show up.
+      micPicker?.populate(getStoredMicId() || undefined);
     } catch (e) {
       recording = false;
       capture = null;
@@ -132,6 +145,26 @@ export async function renderCapture(root, mode, target) {
     if (recording) { await stopCapture(); paint(); }
     else { await startCapture(); }
   });
+
+  // Restart capture on the freshly-picked device (accumulated transcript is
+  // kept in view state; only the tiny pre-switch audio segment is dropped).
+  async function restartForNewMic() {
+    if (!recording || !capture) return;
+    try { await capture.stop(); } catch {}
+    capture = null;
+    recording = false;
+    micBtn.classList.remove('mn-recording');
+    await startCapture();
+  }
+
+  micPicker = wirePicker({
+    select: micSel,
+    kind: 'audioinput',
+    persist: false, // mind owns its own storage key (voidstar.mind.micId)
+    getCurrentId: () => getStoredMicId(),
+    onChoose: async (id) => { storeMicId(id); await restartForNewMic(); return id; },
+  });
+  micPicker.populate(getStoredMicId() || undefined);
 
   async function commit() {
     if (done) return;

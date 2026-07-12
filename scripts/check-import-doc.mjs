@@ -4,7 +4,7 @@
 // Covers: heading split, level auto-detect, plain-text date-lines, preamble,
 // dateless 1-minute descent, and the export → import round-trip.
 
-import { parseDocIntoNotes, fingerprintNote, markDuplicates } from '../src/lib/mind/import-doc.js';
+import { parseDocIntoNotes, parseBatchIntoNotes, fingerprintNote, markDuplicates } from '../src/lib/mind/import-doc.js';
 import { buildDocFromNotes } from '../src/lib/mind/export.js';
 import { extractDate } from '../src/lib/mind/dates.js';
 
@@ -219,6 +219,77 @@ section('(k) dash date, no year');
   check('mode = dates', mode === 'dates', mode);
   check('2 dashed-date sections', sections.length === 2, String(sections.length));
   check('6-14 → this year', sections[0].dateIso === `${YEAR}-06-14`, sections[0].dateIso);
+}
+
+// ── (l) batch: each doc split per settings, concatenated, cross-doc daily dedupe ──
+section('(l) batch split across documents');
+{
+  const docA = ['## 2026-07-08', 'entry A8', '## 2026-07-07', 'entry A7'].join('\n');
+  const docB = ['## 2026-07-08', 'entry B8 (same day, other doc)', '## 2026-07-06', 'entry B6'].join('\n');
+  const { sections, mode, stats } = parseBatchIntoNotes(
+    [{ name: 'A.md', text: docA }, { name: 'B.md', text: docB }],
+    { now: NOW });
+  check('mode = batch', mode === 'batch', mode);
+  check('stats.docs = 2', stats.docs === 2, String(stats.docs));
+  check('4 sections total (2 per doc)', sections.length === 4, String(sections.length));
+  check('all strictly descending across docs',
+    sections.every((s, i) => i === 0 || sections[i - 1].createdAt > s.createdAt),
+    sections.map((s) => s.createdAt).join(','));
+  // 2026-07-08 appears as a pure-date daily in BOTH docs → only the first claims it.
+  const day8 = sections.filter((s) => s.dateIso === '2026-07-08');
+  check('same daily date across docs deduped', day8.length === 2 && day8[0].isDaily === true && day8[1].isDaily === false,
+    day8.map((s) => s.isDaily).join(','));
+}
+
+// ── (m) batch combine: whole batch → exactly one note ──
+section('(m) batch combine into one note');
+{
+  const docA = ['## 2026-07-08', 'alpha'].join('\n');
+  const docB = ['## 2026-07-07', 'beta'].join('\n');
+  const { sections, mode, combine } = parseBatchIntoNotes(
+    [{ name: 'A.md', text: docA }, { name: 'B.md', text: docB }],
+    { now: NOW, combine: true });
+  check('mode = combine', mode === 'combine', mode);
+  check('combine flag set', combine === true);
+  check('exactly one note', sections.length === 1, String(sections.length));
+  check('both documents present in the single body',
+    sections[0].body.includes('alpha') && sections[0].body.includes('beta'));
+  // Empty/whitespace docs are dropped, not turned into blank notes.
+  const only = parseBatchIntoNotes([{ text: '   ' }, { name: 'real', text: '# hi\nbody' }], { now: NOW });
+  check('blank docs skipped', only.stats.docs === 1, String(only.stats.docs));
+}
+
+// ── (n) markDuplicates: filesystem-style upsert by (folder, title) + newer flag ──
+section('(n) path upsert + newer detection');
+{
+  const OLD = Date.parse('2026-06-01T00:00:00');
+  const NEW = Date.parse('2026-07-01T00:00:00');
+  const existing = [
+    { id: 'p1', title: 'Weekly plan', body: 'old body', tags: [], meta: {}, folderId: 'work', updatedAt: OLD, deletedAt: 0 },
+    { id: 'p2', title: 'Fresh note', body: 'local edits', tags: [], meta: {}, folderId: 'work', updatedAt: NEW, deletedAt: 0 },
+    { id: 'p3', title: 'Weekly plan', body: 'other folder', tags: [], meta: {}, folderId: 'home', updatedAt: OLD, deletedAt: 0 },
+  ];
+  // Section titled "Weekly plan" imported into 'work' with a newer source time → update p1.
+  const sections = [
+    { title: 'Weekly plan', body: 'new body', dateIso: '', isDaily: false, tags: [], id: '', srcModified: NEW },
+    { title: 'Fresh note', body: 'stale import', dateIso: '', isDaily: false, tags: [], id: '', srcModified: OLD },
+    { title: 'Brand new', body: 'x', dateIso: '', isDaily: false, tags: [], id: '', srcModified: NEW },
+  ];
+  markDuplicates(sections, existing, { matchByTitle: true, folderId: 'work' });
+  check('title+folder match → upsert p1 (not p3 in other folder)', sections[0].upsertId === 'p1', sections[0].upsertId);
+  check('newer source → not flagged, stays checked', sections[0].newerExists === false && sections[0].skip === false);
+  check('local note newer than import → flagged + unchecked', sections[1].upsertId === 'p2' && sections[1].newerExists === true && sections[1].skip === true);
+  check('unmatched title → new note', sections[2].upsertId === '' && sections[2].dup === null);
+
+  // matchByTitle off → legacy behavior, no path upsert.
+  const legacy = [{ title: 'Weekly plan', body: 'new body', dateIso: '', isDaily: false, tags: [], id: '', srcModified: NEW }];
+  markDuplicates(legacy, existing);
+  check('no title matching without opts', legacy[0].upsertId === '' && legacy[0].dup === null);
+
+  // A brand-new target folder (folderId undefined) disables title matching.
+  const newFolder = [{ title: 'Weekly plan', body: 'new body', dateIso: '', isDaily: false, tags: [], id: '', srcModified: NEW }];
+  markDuplicates(newFolder, existing, { matchByTitle: true, folderId: undefined });
+  check('undefined target folder → no title match', newFolder[0].upsertId === '');
 }
 
 console.log(`\n${failed ? `FAILED (${failed})` : 'ALL PASSED'}`);

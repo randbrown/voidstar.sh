@@ -18,7 +18,7 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 | Tasks-in-notes | `tasks-sync.js` | Note body is canonical for note-sourced tasks; records (id = the `<!--t:id-->` marker) are a materialized index reconciled on save. Checking from a list view rewrites the body line first (`setTaskDoneEverywhere`). Completed tasks strike through for 24 h, then archive (`rollOffCompletedTasks`). |
 | Folders | in `store.js` + `views/home.js` | Surrogate-keyed hierarchy (`{id, name, parentId}`); notes/tasklists carry `folderId`. Soft filter: out-of-scope content renders dimmed ("elsewhere"), never hidden. Per-folder TODO lists are lazy with deterministic ids (`todo-<folderId>`) so devices converge. |
 | Search | `search.js` | In-memory index over title/body/OCR text/transcripts/tags + task text; token AND-match + kind/tag filters behind `query(q, filters)`. Rebuilt lazily after writes. |
-| Voice | `voice.js`, `voice-capture.js`, `audio-out.js` | Web Speech dictation (continuous, restart loop, final dedupe) + MediaRecorder on the same mic; keep-audio / insert-transcript toggles; record-only fallback on contention. Mic picker reuses `qualia/devices.js`; speaker via `setSinkId` (hidden on Safari). |
+| Voice | `voice.js`, `voice-capture.js`, `audio-out.js` | Web Speech dictation (continuous, restart loop, final dedupe) + MediaRecorder on the same mic; keep-audio / insert-transcript toggles; record-only fallback on contention. An **inline mic picker** (`qualia/devices.js` `wirePicker`) sits on **every** voice-recorder surface — the in-note voice bar (`editor.js`) and the hands-free capture view (`capture.js`) — so the input is chosen in place, never via settings; it persists to `voidstar.mind.micId`, refreshes device labels once permission is granted, shows only when >1 mic exists (the capture view; the voice bar always shows), and **switching mid-recording restarts on the new device** (the editor commits the in-progress segment first so nothing is lost). Speaker via `setSinkId` (hidden on Safari). |
 | OCR | `ocr.js` | tesseract.js lazy-loaded from CDN on first image; serial idle queue over `ocrStatus='pending'`; text stored on the attachment (searchable, rides sync so other devices never re-OCR). Settings → *images & text recognition* is a status panel: counts (recognized / queued-here / **awaiting-download** / failed), live drain progress, process-now + retry-failed — so a large "N pending" that's really waiting on binaries to sync down from Drive isn't a mystery (`ocrStatusReport`/`retryFailedOcr`). |
 | Annotation | `annotation.js`, `views/annotate.js` | Forked from `setlist/annotation.js`: pen (with stylus pressure), highlighter, arrow, rect, ellipse, text, eraser, select, pan; shared palette/size scale; two-finger scroll; autosaves; flatten-to-copy export. Keyed `attachmentId[:page]` (page reserved for PDFs). |
 | Drive sync | `gdrive-sync.js`, `shard.js`, `attachments-drive.js` | GIS auth, drive.file scope, **app-owned OAuth client id** ("Sign in with Google", user override in Settings → advanced). **Incremental sharded sync**: `shard.js` (pure bucketing/hash/merge core, tested by `scripts/check-mind-shard.mjs`) + a `gdrive-sync.js` client that pushes/pulls only changed shards. Also: peek freshness gate, persisted dirty flag, **conflict copies**, **attachment binaries** (below), and duplicate-file/folder healing (below). |
@@ -203,12 +203,21 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
 `export.js` `buildExportZip`), Settings → data offers document-level I/O:
 
-- **`import document…`** (`views/import-doc-modal.js`) — split ONE document
+- **`import document…`** (`views/import-doc-modal.js`) — split a document
   (a Google-Docs export, an Obsidian-style `.md`, freeform daily-notes text)
-  into individual notes. Source: paste, upload (`.md`/`.txt`), or **pick from
-  Drive** (`gdrive-picker.js`, shown only when a Picker key is configured).
-  Best source: Google Docs → File → Download → **Markdown (.md)** (keeps date
-  headings as `#`/`##`).
+  into individual notes. Source: paste, upload (`.md`/`.txt`), **pick from
+  Drive**, or **pick multiple from Drive** (`gdrive-picker.js`, shown only when a
+  Picker key is configured; the Picker opens in **list/details** view). Best
+  source: Google Docs → File → Download → **Markdown (.md)** (keeps date headings
+  as `#`/`##`).
+  - **Batch import** (`parseBatchIntoNotes`, pure): "pick multiple from Drive…"
+    loads several docs at once. Each is split **independently with the current
+    split settings** and the results concatenated (a descending timestamp cursor
+    keeps them in a stable newest-first order across docs; the daily key is deduped
+    across the whole batch). A **"combine whole batch into one note"** toggle
+    instead merges every doc into a single note (split settings bypassed). The
+    batch bar shows the loaded-doc count and a *clear* button; "pick from Drive…"
+    or typing/uploading reverts to single-source.
   - `parseDocIntoNotes(text, opts)` (`import-doc.js`, pure/deterministic) splits
     on markdown headings (auto-picking the level that carries the most dates) or,
     for plain text, on **date-dominant lines** (a date + ≤2 other words, so a
@@ -227,10 +236,25 @@ Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
   - A header that is **essentially just a date** becomes a **daily note**
     (`meta.daily`), deduped within the batch and against existing dailies
     (a collision demotes it to a plain dated note rather than shadowing "today").
-  - The modal previews the N would-be notes (title · date badge · dup badge ·
-    snippet), lets you pick folder/tag/heading options, and `commitDocImport`
-    snapshots (`pre-doc-import`, undoable in Settings → snapshots) before
-    creating notes with `putNoteRaw` (parsed timestamps preserved).
+  - **Filesystem-style upsert** (`markDuplicates`, opt-in via *update matching
+    notes*, on by default): a note's identity is its **(folder, title)** — or its
+    daily date. On import, a section matching an existing note's path **updates it
+    in place** (keeps id/backlinks/attachments) instead of inserting a twin, so
+    re-importing the same Doc *refreshes* rather than piling up. Match tiers, in
+    order: mind-export `id=` round-trip → byte-identical (skip) → path/daily
+    upsert → new. **Newer-detection**: when the source is Drive, the file's real
+    last-edit time (`LAST_EDITED_UTC` from the Picker, `srcModified` on each
+    section) is compared to the matched note's `updatedAt`; if the **mind copy is
+    newer**, the row is flagged amber-pink ("mind is newer") and left **unchecked**
+    so fresher local edits aren't clobbered (a per-row checkbox still lets you
+    force it). `commitDocImport` stamps the Drive edit time as the note's
+    `updatedAt` so repeat imports converge. (Reverse sync is detect-and-warn only;
+    writing back into the original Doc is out of scope.)
+  - The modal previews the N would-be notes (title · date badge · update/dup badge
+    · "mind is newer" badge · snippet), lets you pick folder/tag/heading options,
+    and `commitDocImport` snapshots (`pre-doc-import`, undoable in Settings →
+    snapshots) before creating/updating notes with `putNoteRaw` (parsed timestamps
+    preserved).
 - **`export .md (doc)`** (`export.js` `buildNotesMarkdownDoc`) — one readable
   markdown file, each note a `## <title> — <date>` heading + a lossless
   `<!-- mind date=… tags=… daily id=… -->` comment + body. It **round-trips**:
