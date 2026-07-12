@@ -129,6 +129,9 @@ function watchFocusSync() {
         const ae = document.activeElement;
         const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
         if (!typing) refresh();
+        // Chips pulled from Drive may have moved — fold them into mind tasks
+        // now instead of waiting for the next refocus sweep.
+        import('./mind-todo.js').then((m) => m.reconcileAndNotify()).catch(() => {});
       }
     } catch (e) {
       console.warn('[gdrive-backup] focus pull:', e.message);
@@ -155,6 +158,15 @@ export function initSetlistApp(root) {
   store.setOnWrite(() => debouncedPush(() => store.exportAll(), (merged) => store.importAll(merged)));
   watchConnectivity();
   watchFocusSync();
+  // Two-way todo bridge with the mind app — dynamic import keeps mind's
+  // store out of setlist's initial chunk, and boot never awaits it.
+  import('./mind-todo.js').then((m) => m.initTodoBridge({
+    onChanged: () => {
+      const ae = document.activeElement;
+      const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
+      if (!typing) refresh();
+    },
+  })).catch((e) => console.warn('[todo-bridge]', e));
   // Finish a Spotify login redirect (?code=…) before the first render: it
   // rewrites the URL back to the saved hash via replaceState, which fires no
   // hashchange — so route once after it settles. On a normal load this
