@@ -15,7 +15,7 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 |---|---|---|
 | Store | `store.js` | Raw IndexedDB, forked from `setlist/store.js`. Stores: notes, folders, tasks, tasklists, attachments (metadata), blobs (local-only binaries), annotations, snapshots. Soft-delete tombstones everywhere (`deletedAt`, 30-day TTL) so deletions propagate through sync. `setOnWrite` hook drives search invalidation + debounced Drive push. |
 | Editor | `editor/{schema,markdown,nodeviews,setup}.js` | ProseMirror with a markdown-constrained schema. **The note body markdown string is canonical**; the editor is a surface. Custom nodes: `task_item` (interactive checkbox, stable id), `image` (`mn-attach://<id>` resolves from IDB). Round-trips via `prosemirror-markdown` + a doc-walk that lifts `- [ ] text <!--t:id-->` into task items. |
-| Tasks-in-notes | `tasks-sync.js` | Note body is canonical for note-sourced tasks; records (id = the `<!--t:id-->` marker) are a materialized index reconciled on save. Checking from a list view rewrites the body line first (`setTaskDoneEverywhere`). Completed tasks strike through for 24 h, then archive (`rollOffCompletedTasks`). |
+| Tasks-in-notes | `tasks-sync.js` | Note body is canonical for note-sourced tasks; records (id = the `<!--t:id-->` marker) are a materialized index reconciled on save. Checking from a list view rewrites the body line first (`setTaskDoneEverywhere`); editing its text does the same (`setTaskTextEverywhere`) — a record-only edit would revert on the note's next re-parse. `ensureTaskIds` re-stamps a copy/pasted checkbox (duplicate within the doc, or an id belonging to another note) so two lines never share one record. Completed tasks strike through for 24 h, then archive (`rollOffCompletedTasks`). |
 | Folders | in `store.js` + `views/home.js` | Surrogate-keyed hierarchy (`{id, name, parentId}`); notes/tasklists carry `folderId`. Soft filter: out-of-scope content renders dimmed ("elsewhere"), never hidden. Per-folder TODO lists are lazy with deterministic ids (`todo-<folderId>`) so devices converge. |
 | Search | `search.js` | In-memory index over title/body/OCR text/transcripts/tags + task text; token AND-match + kind/tag filters behind `query(q, filters)`. Rebuilt lazily after writes. |
 | Voice | `voice.js`, `voice-capture.js`, `audio-out.js` | Web Speech dictation (continuous, restart loop, final dedupe) + MediaRecorder on the same mic; keep-audio / insert-transcript toggles; record-only fallback on contention. An **inline mic picker** (`qualia/devices.js` `wirePicker`) sits on **every** voice-recorder surface — the in-note voice bar (`editor.js`) and the hands-free capture view (`capture.js`) — so the input is chosen in place, never via settings; it persists to `voidstar.mind.micId`, refreshes device labels once permission is granted, shows only when >1 mic exists (the capture view; the voice bar always shows), and **switching mid-recording restarts on the new device** (the editor commits the in-progress segment first so nothing is lost). Speaker via `setSinkId` (hidden on Safari). |
@@ -101,7 +101,21 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   land side by side are still healed by `pull()` (merge + trash).
 - Merge: per-record newer-wins with fill-fields (blank never erases content;
   `ATTACHMENT_FILL_FIELDS` protects OCR text/transcripts/driveFileId).
-  Tombstones propagate deletes; latest timestamp wins.
+  Tombstones propagate deletes; latest timestamp wins. **Clearing a
+  fill-field to empty needs a `clearedFields` tombstone** or the merge
+  refills it from an older copy: moving a note to root (`folderId:''` —
+  editor folder picker, bulk move, `deleteFolderAndReparent`) and removing
+  a note's last tag all `markCleared` the field, mirroring the task-reminder
+  pattern.
+- **Editor rebase-on-save**: the open editor holds a snapshot, and a
+  background sync (focus pull, auto-push cycle) imports remote changes
+  straight into IDB underneath it. Every `save()` re-reads the record: if it
+  advanced past this session's last write, the newer metadata is adopted
+  wholesale; a remote *body* change is adopted outright when nothing was
+  typed since (the editor content is refreshed via `setMarkdown`), and
+  otherwise preserved as a "Conflicted copy" note before the session body
+  wins LWW — so a stale editor can never silently overwrite another
+  device's edit.
 - **Conflict copies**: a note edited on both sides since this device's last
   completed cycle (`lastCycleAt` stamp) with differing bodies resolves
   last-write-wins, and the losing body is preserved as a new
@@ -115,7 +129,12 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   trashes the copy. An orphaned copy (base deleted) can be kept as its own note.
 - Auto-sync: pull on load/refocus (`watchFocusSync`, silent, 30 s throttle,
   peek-gated), debounced push 3 s after any write, offline flush on reconnect,
-  status pill on the home header.
+  status pill on the home header. The debounced push cycle also passes the
+  size-gated `pre-sync` snapshotFn (so "undo last sync" covers merges that
+  arrive via auto-push, not just focus pulls), re-arms itself when an edit
+  landed mid-cycle, and `pull` skips (and retries next cycle, un-stamped)
+  any individual shard/index file that fails to parse instead of letting one
+  corrupted file brick every future cycle.
 - **Local snapshots** (`putSnapshot`, IDB, restore in Settings → data) are full
   copies, so the frequent auto `'pre-sync'` one is **size-gated**
   (`SNAPSHOT_MAX_NOTES`): above it, undo-last-sync is unavailable, but explicit

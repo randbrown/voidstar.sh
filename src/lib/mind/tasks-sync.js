@@ -16,20 +16,31 @@ import { schema } from './editor/schema.js';
 
 export function newTaskMarkerId() {
   // 8 chars base36 — plenty within one account's notes.
-  return Array.from(crypto.getRandomValues(new Uint8Array(6)))
+  return Array.from(crypto.getRandomValues(new Uint8Array(8)))
     .map(b => (b % 36).toString(36)).join('').slice(0, 8);
 }
 
 // Walk the editor doc and give every task_item a stable id before
 // serializing. Dispatches one no-history transaction when needed.
-export function ensureTaskIds(view) {
+//
+// A copy/pasted checkbox carries its source's id — duplicated within this doc
+// (`seen`) or pasted in from another note (`foreignIds`, ids whose record
+// belongs to a different sourceNoteId). Either way the repeat gets a fresh id;
+// without this, two lines share one record and every save flips its
+// sourceNoteId/listId back and forth, destroying reminder fields.
+export function ensureTaskIds(view, foreignIds = null) {
   const { doc, tr } = view.state;
   let changed = false;
+  const seen = new Set();
   doc.descendants((node, pos) => {
-    if (node.type === schema.nodes.task_item && !node.attrs.taskId) {
-      tr.setNodeMarkup(pos, null, { ...node.attrs, taskId: newTaskMarkerId() });
+    if (node.type !== schema.nodes.task_item) return;
+    let id = node.attrs.taskId;
+    if (!id || seen.has(id) || (foreignIds && foreignIds.has(id))) {
+      id = newTaskMarkerId();
+      tr.setNodeMarkup(pos, null, { ...node.attrs, taskId: id });
       changed = true;
     }
+    seen.add(id);
   });
   if (changed) {
     tr.setMeta('addToHistory', false);
@@ -113,6 +124,29 @@ export async function setTaskDoneEverywhere(task, done) {
     }
   }
   await store.setTaskDone(task, done);
+}
+
+// Edit a task's text wherever it lives — same single-writer rule as the done
+// toggle: for note-sourced tasks the body line is rewritten FIRST (the body
+// is canonical, so a record-only edit would silently revert on the note's
+// next open/save re-parse), then the record follows.
+export async function setTaskTextEverywhere(task, text) {
+  if (task.sourceNoteId) {
+    const note = await store.getNote(task.sourceNoteId);
+    if (note && !note.deletedAt) {
+      const lines = (note.body || '').split('\n');
+      const marker = `<!--t:${task.id}-->`;
+      let hit = false;
+      for (let i = 0; i < lines.length; i++) {
+        if (!lines[i].includes(marker)) continue;
+        const m = /^(\s*[-*+]\s+\[[ xX]\]\s+).*?(\s*<!--t:[A-Za-z0-9_-]+-->\s*)$/.exec(lines[i]);
+        if (m) { lines[i] = m[1] + text + m[2]; hit = true; }
+        break;
+      }
+      if (hit) await store.putNote({ ...note, body: lines.join('\n') });
+    }
+  }
+  await store.putTask({ ...task, text });
 }
 
 // Notes that link to `noteId` via markdown links (#note/<id>) — the

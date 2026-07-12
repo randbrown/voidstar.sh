@@ -73,7 +73,7 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
 
   const delBtn = btn('&#128465;', 'mn-btn-icon mn-btn-danger', () => {
     confirmBox('Move this note to trash?', async () => {
-      flushPending();
+      await flushPending();
       await store.trashNote(note);
       // Tombstone its attachments and note-sourced tasks too.
       for (const a of await store.getAttachmentsForNote(note.id)) await store.trashAttachment(a);
@@ -110,8 +110,12 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   }
   folderSel.value = note.folderId || '';
   folderSel.addEventListener('change', async () => {
-    note = { ...note, folderId: folderSel.value };
-    await save({ folderId: folderSel.value });
+    const patch = { folderId: folderSel.value };
+    // Moving to root blanks a fill-field — tombstone it or the sync merge
+    // refills the old folder from another device's copy and the move reverts.
+    if (!folderSel.value) patch.clearedFields = { ...(note.clearedFields || {}), folderId: Date.now() };
+    note = { ...note, ...patch };
+    await save(patch);
   });
   metaRow.appendChild(folderSel);
   root.appendChild(metaRow);
@@ -123,8 +127,13 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     for (const t of note.tags || []) {
       const chip = el('span', 'mn-chip mn-chip-on', `#${esc(t)} <span class="mn-chip-x">&times;</span>`);
       chip.querySelector('.mn-chip-x').addEventListener('click', async () => {
-        note = { ...note, tags: note.tags.filter(x => x !== t) };
-        await save({ tags: note.tags });
+        const tags = note.tags.filter(x => x !== t);
+        const patch = { tags };
+        // Removing the last tag blanks a fill-field — tombstone it so the
+        // sync merge can't resurrect the tag from an older copy.
+        if (!tags.length) patch.clearedFields = { ...(note.clearedFields || {}), tags: Date.now() };
+        note = { ...note, ...patch };
+        await save(patch);
         drawTags();
       });
       tagRow.appendChild(chip);
@@ -163,13 +172,65 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     redoBtn.disabled = !editor.canRedo();
   }
 
+  // The record's updatedAt as of this session's last load/write. A background
+  // sync (focus pull, auto-push cycle) imports remote changes straight into
+  // IDB while this editor holds its own snapshot — every save() rebases on
+  // the live record so a stale snapshot can never silently overwrite an edit
+  // that arrived from another device.
+  let lastKnownUpdatedAt = note.updatedAt;
+
+  // Task-marker ids that belong to OTHER notes — a checkbox pasted in from
+  // one of them must be re-stamped, not steal the source's record (see
+  // ensureTaskIds). Computed once per mount; cheap at task-store scale.
+  const foreignTaskIds = new Set(
+    (await store.getAllTasks())
+      .filter(t => t.sourceNoteId && t.sourceNoteId !== note.id)
+      .map(t => t.id),
+  );
+
   async function save(patch = {}) {
     // Stamp any new checkboxes with stable ids first, so the serialized body
     // carries the markers and the task records key off them.
-    if (editor) ensureTaskIds(editor.view);
-    const body = editor ? editor.getMarkdown() : note.body;
-    note = { ...note, ...patch, body };
-    await store.putNote(note);
+    if (editor) ensureTaskIds(editor.view, foreignTaskIds);
+    let body = editor ? editor.getMarkdown() : note.body;
+
+    // Rebase: if the stored record advanced past what this session last
+    // wrote, another device's edit landed via sync while the note was open.
+    const current = await store.getNote(note.id);
+    if (current && !current.deletedAt && current.updatedAt > lastKnownUpdatedAt) {
+      const remoteBody = current.body || '';
+      const sessionBase = note.body || '';
+      if (remoteBody !== sessionBase) {
+        if (editor && body === sessionBase) {
+          // Nothing typed since the import — adopt the remote body outright.
+          editor.setMarkdown(remoteBody);
+          body = remoteBody;
+        } else if (remoteBody !== body) {
+          // Genuine fork: this save wins LWW, so preserve the incoming body
+          // as a conflict copy (same shape the sync merge mints) instead of
+          // silently discarding another device's edit.
+          const when = new Date(current.updatedAt).toISOString().slice(0, 16).replace('T', ' ');
+          const ts = Date.now();
+          await store.putNoteRaw({
+            ...current,
+            id: crypto.randomUUID(),
+            title: `Conflicted copy of ${current.title} (another device, ${when})`,
+            autoTitle: false,
+            conflictOf: current.id,
+            createdAt: ts,
+            updatedAt: ts,
+          });
+        }
+      }
+      // Adopt the newer metadata (title/tags/folder/pin/…) except fields this
+      // save explicitly patches — the session snapshot must not clobber them.
+      note = { ...current };
+    }
+
+    const stamp = Date.now();
+    note = { ...note, ...patch, body, updatedAt: stamp };
+    await store.putNoteRaw(note);
+    lastKnownUpdatedAt = stamp;
     await syncNoteTasks(note);
   }
 
@@ -178,11 +239,14 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     saveTimer = setTimeout(() => save().catch(e => console.warn('[mind] autosave:', e.message)), AUTOSAVE_MS);
   }
 
+  // Returns the in-flight save so callers that must order against it (trash,
+  // route cleanup) can await — an unawaited flush racing a trashNote used to
+  // be able to resurrect the note.
   function flushPending() {
-    if (!saveTimer) return;
+    if (!saveTimer) return Promise.resolve();
     clearTimeout(saveTimer);
     saveTimer = 0;
-    save().catch(() => {});
+    return save().catch(() => {});
   }
 
   async function handleFiles(files) {
@@ -564,7 +628,7 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     detachSearchKey?.(); // drop the Esc listener without touching the URL
     // Never leave the mic open across a route change.
     if (recording && capture) { try { await capture.stop(); } catch {} }
-    flushPending();
+    await flushPending();
     editor?.destroy();
   };
 

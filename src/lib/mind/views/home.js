@@ -189,7 +189,14 @@ export async function renderHome(root) {
     const ids = [..._selected];
     for (const id of ids) {
       const note = await store.getNote(id);
-      if (note && !note.deletedAt) await store.putNote({ ...note, folderId });
+      if (note && !note.deletedAt) {
+        const moved = { ...note, folderId };
+        // Moving to root sets folderId '' — a fill-field blank that the sync
+        // merge would refill from any older copy without a cleared tombstone
+        // (the move would silently revert after a two-device cycle).
+        if (!folderId) store.markCleared(moved, 'folderId');
+        await store.putNote(moved);
+      }
     }
     _selectMode = false;
     _selected.clear();

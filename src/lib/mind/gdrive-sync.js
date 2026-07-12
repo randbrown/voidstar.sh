@@ -11,7 +11,7 @@
 // this app creates), app-owned OAuth client ID by default (user override
 // possible), token cached ~1h.
 
-import { NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS, TASK_FILL_FIELDS } from './store.js';
+import { NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS, TASK_FILL_FIELDS, putSnapshot } from './store.js';
 import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
 import { tokenRow } from '../qualia/gdrive-diag.js';
 import {
@@ -627,13 +627,24 @@ async function pullSharded(token) {
   const remotePartial = { notes: [], tasks: [], attachments: [], annotations: [] };
   const changedBuckets = new Set();
 
+  // One unreadable file must not brick every future cycle: skip it (warn),
+  // and — crucially — don't stamp it, so it's retried next cycle. Local data
+  // is never at risk (the merge is full-local ⋈ partial-remote; a skipped
+  // shard just means its bucket keeps the local copy this cycle).
+  let corrupt = 0;
+
   let index = null;
   if (indexRec) {
     const known = state.files[INDEX_FILE_NAME];
     if (!known || (indexRec.modifiedTime || '') > (known.mtime || '')) {
-      const data = await readJsonFile(token, indexRec.id);
-      index = { folders: data.folders || [], tasklists: data.tasklists || [], settings: data.settings || {} };
-      pendingStamps[INDEX_FILE_NAME] = { id: indexRec.id, mtime: indexRec.modifiedTime || '', hash: hashIndex(data) };
+      try {
+        const data = await readJsonFile(token, indexRec.id);
+        index = { folders: data.folders || [], tasklists: data.tasklists || [], settings: data.settings || {} };
+        pendingStamps[INDEX_FILE_NAME] = { id: indexRec.id, mtime: indexRec.modifiedTime || '', hash: hashIndex(data) };
+      } catch (e) {
+        corrupt++;
+        console.warn(`[mind-sync] skipping unreadable ${INDEX_FILE_NAME}:`, e.message);
+      }
     } else if (!known.id) {
       pendingStamps[INDEX_FILE_NAME] = { ...known, id: indexRec.id };
     }
@@ -643,7 +654,13 @@ async function pullSharded(token) {
     const b = parseShardName(f.name);
     const known = state.files[f.name];
     if (!known || (f.modifiedTime || '') > (known.mtime || '')) {
-      const data = await readJsonFile(token, f.id);
+      let data;
+      try { data = await readJsonFile(token, f.id); }
+      catch (e) {
+        corrupt++;
+        console.warn(`[mind-sync] skipping unreadable ${f.name}:`, e.message);
+        continue;
+      }
       for (const coll of SHARD_COLLS) if (data[coll]) remotePartial[coll].push(...data[coll]);
       changedBuckets.add(b);
       pendingStamps[f.name] = { id: f.id, mtime: f.modifiedTime || '', hash: hashShard(data) };
@@ -651,6 +668,7 @@ async function pullSharded(token) {
       pendingStamps[f.name] = { ...known, id: f.id };
     }
   }
+  if (corrupt) console.warn(`[mind-sync] ${corrupt} unreadable file(s) skipped this cycle; will retry`);
 
   const commit = () => {
     const s = getShardState();
@@ -1175,9 +1193,17 @@ async function pushNow() {
   if (_syncing) { _pendingPush = true; return; }
   setSyncState('syncing');
   try {
-    await pullMergePushCycle(_syncClient, _exportFn, _importFn);
+    // The auto-push cycle pulls and imports remote deltas too — snapshot
+    // before a changing import (the cycle only calls snapshotFn when the
+    // delta actually lands, and putSnapshot is size-gated), so "undo last
+    // sync" also covers merges that arrive via the debounced push path.
+    await pullMergePushCycle(_syncClient, _exportFn, _importFn, {
+      snapshotFn: () => putSnapshot('pre-sync'),
+    });
+    const rearm = _pendingPush; // an edit landed mid-cycle and may have missed the export
     _pendingPush = false;
     setSyncState('synced');
+    if (rearm && _exportFn) debouncedPush(_exportFn, _importFn);
   } catch (e) {
     _pendingPush = true;
     setSyncState('pending');

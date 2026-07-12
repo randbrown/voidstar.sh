@@ -2,7 +2,7 @@
 // window and an archive drawer per list.
 
 import * as store from '../store.js';
-import { setTaskDoneEverywhere } from '../tasks-sync.js';
+import { setTaskDoneEverywhere, setTaskTextEverywhere } from '../tasks-sync.js';
 import { navigate, refresh } from '../app.js';
 import { parseCapture } from '../capture.js';
 import { armReminder, reminderSheet, reminderBadge } from '../reminders.js';
@@ -132,7 +132,9 @@ function taskRow(task) {
       title: 'edit task', value: task.text,
       onOk: async (v) => {
         if (!v) return;
-        await store.putTask({ ...task, text: v });
+        // Note-sourced tasks rewrite the canonical body line too — a
+        // record-only edit reverts on the note's next open/save re-parse.
+        await setTaskTextEverywhere(task, v);
         refresh();
       },
     });

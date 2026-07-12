@@ -147,7 +147,12 @@ async function route() {
       default: await renderHome(_root);
     }
   } catch (e) {
-    _root.innerHTML = `<div class="mn-error">Error: ${e.message}</div>`;
+    // textContent, not innerHTML — error strings can quote note/import content.
+    _root.innerHTML = '';
+    const errBox = document.createElement('div');
+    errBox.className = 'mn-error';
+    errBox.textContent = `Error: ${e.message}`;
+    _root.appendChild(errBox);
     console.error('[mind]', e);
   }
   updateDockActive(view);

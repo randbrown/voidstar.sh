@@ -236,6 +236,10 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, placehol
       if (!link) return false;
       const href = link.attrs.href || '';
       if (href.startsWith('#note/')) { location.hash = href; return true; }
+      // Whitelist the protocols we open: a pasted-HTML link mark can carry a
+      // javascript:/data: href in-session (markdown-it drops it on the next
+      // reload, but it must not be clickable before then).
+      if (!/^(https?:|mailto:)/i.test(href)) return false;
       if (event.ctrlKey || event.metaKey) { window.open(href, '_blank', 'noopener'); return true; }
       return false;
     },
