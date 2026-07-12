@@ -80,6 +80,11 @@ export async function renderCapture(root, mode, target) {
   let capture = null;
   let speechFailed = false;
   let micPicker = null;
+  // Result (audioBlob + transcript) from the most recent stop, kept until
+  // "done" commits it. Without this, tapping stop before done would throw the
+  // recording away, and a session with no live Web Speech transcript (the
+  // Android-standalone case) would commit nothing.
+  let lastResult = null;
 
   const paint = () => {
     const shown = (finalText + ' ' + interim).trim();
@@ -90,6 +95,7 @@ export async function renderCapture(root, mode, target) {
   async function startCapture() {
     if (recording || done) return;
     speechFailed = false;
+    lastResult = null; // a fresh session supersedes any prior stopped take
     setStatus('');
     capture = createVoiceCapture({
       record: canRecord,
@@ -142,8 +148,17 @@ export async function renderCapture(root, mode, target) {
   }
 
   micBtn.addEventListener('click', async () => {
-    if (recording) { await stopCapture(); paint(); }
-    else { await startCapture(); }
+    if (recording) {
+      // Keep the take so a later "done" can commit it — do NOT discard the
+      // return value here, or the recording is lost.
+      lastResult = await stopCapture();
+      paint();
+      if (!(finalText + interim).trim() && lastResult?.audioBlob) {
+        setStatus('recorded — tap “done” to transcribe & save');
+      } else if ((finalText + interim).trim()) {
+        setStatus('tap “done” to save');
+      }
+    } else { await startCapture(); }
   });
 
   // Restart capture on the freshly-picked device (accumulated transcript is
@@ -168,7 +183,10 @@ export async function renderCapture(root, mode, target) {
 
   async function commit() {
     if (done) return;
-    const result = recording ? await stopCapture() : null;
+    // If still recording, stop now and use that take; otherwise use the take
+    // retained from a prior mic-stop (so stopping before "done" doesn't throw
+    // the audio away).
+    const result = recording ? await stopCapture() : lastResult;
 
     const liveTranscript = (finalText + ' ' + interim).trim();
     let text = liveTranscript || (result?.transcript || '').trim();
