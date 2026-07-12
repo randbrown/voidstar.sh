@@ -3,7 +3,7 @@
 // Opened from Settings → data → "import document…".
 
 import { el, esc, btn, confirmBox } from '../ui.js';
-import { parseDocIntoNotes, markDuplicates, commitDocImport } from '../import-doc.js';
+import { parseDocIntoNotes, parseBatchIntoNotes, markDuplicates, commitDocImport } from '../import-doc.js';
 import { pickerAvailable } from '../gdrive-picker.js';
 import * as store from '../store.js';
 import { navigate } from '../app.js';
@@ -31,6 +31,13 @@ export async function openImportDocModal() {
   box.appendChild(el('div', 'mn-note-meta',
     'split one document into notes. dated section headers become each note’s date. best source: Google Docs → File → Download → Markdown (.md).'));
 
+  // Batch state: docs picked via "pick multiple from Drive…" ([{name,text,
+  // modifiedMs}]). When set, the preview comes from the batch, not the textarea.
+  let batchDocs = null;
+  // Real last-edit time (epoch ms) of the current single-source doc when it came
+  // from Drive (0 = unknown, e.g. paste/upload) — drives newer-than detection.
+  let srcModified = 0;
+
   // ── Source ──
   const paste = el('textarea', 'mn-input mn-doc-paste');
   paste.placeholder = 'paste your document here, or choose a file / pick from Drive below…';
@@ -42,7 +49,7 @@ export async function openImportDocModal() {
   fileInput.style.display = 'none';
   fileInput.addEventListener('change', async () => {
     const f = fileInput.files?.[0];
-    if (f) { paste.value = await f.text(); schedule(); }
+    if (f) { clearBatch(false); srcModified = f.lastModified || 0; paste.value = await f.text(); schedule(); }
     fileInput.value = '';
   });
 
@@ -57,14 +64,57 @@ export async function openImportDocModal() {
       try {
         const { importFromDrive } = await import('../gdrive-picker.js');
         const res = await importFromDrive();
-        if (res) { paste.value = res.text; schedule(); }
+        if (res) { clearBatch(false); srcModified = res.modifiedMs || 0; paste.value = res.text; schedule(); }
       } catch (e) {
         alert(`Drive import failed: ${e.message}`);
       } finally { pickBtn.disabled = false; pickBtn.textContent = prev; }
     });
     srcRow.appendChild(pickBtn);
+
+    const batchBtn = btn('pick multiple from Drive…', 'mn-btn-ghost', async () => {
+      batchBtn.disabled = true;
+      const prev = batchBtn.textContent;
+      batchBtn.textContent = 'opening Drive…';
+      try {
+        const { importDocsFromDrive } = await import('../gdrive-picker.js');
+        const docs = await importDocsFromDrive();
+        if (docs && docs.length) { batchDocs = docs; paste.value = ''; syncBatchBar(); schedule(); }
+      } catch (e) {
+        alert(`Drive import failed: ${e.message}`);
+      } finally { batchBtn.disabled = false; batchBtn.textContent = prev; }
+    });
+    srcRow.appendChild(batchBtn);
   }
   box.appendChild(srcRow);
+
+  // ── Batch bar (shown only once multiple Drive docs are loaded) ──
+  const batchBar = el('div', 'mn-import-batchbar');
+  batchBar.style.display = 'none';
+  const batchInfo = el('span', 'mn-import-batchinfo');
+  const combineWrap = el('label', 'mn-import-check');
+  const combineCb = el('input'); combineCb.type = 'checkbox';
+  combineWrap.appendChild(combineCb);
+  combineWrap.appendChild(document.createTextNode(' combine whole batch into one note'));
+  const clearBatchBtn = btn('clear', 'mn-btn-ghost', () => { clearBatch(true); });
+  batchBar.append(batchInfo, combineWrap, clearBatchBtn);
+  box.appendChild(batchBar);
+
+  // Reflect the current batch in the UI: show the bar + hide the textarea while a
+  // batch is loaded, restore the textarea otherwise.
+  function syncBatchBar() {
+    const on = !!(batchDocs && batchDocs.length);
+    batchBar.style.display = on ? '' : 'none';
+    paste.style.display = on ? 'none' : '';
+    if (on) batchInfo.textContent = `${batchDocs.length} document${batchDocs.length === 1 ? '' : 's'} loaded from Drive`;
+  }
+
+  // Drop the loaded batch and return to single-source mode.
+  function clearBatch(rerender) {
+    batchDocs = null;
+    combineCb.checked = false;
+    syncBatchBar();
+    if (rerender) { levelVisibility(); schedule(); }
+  }
 
   // ── Options ──
   const opts = el('div', 'mn-import-opts');
@@ -91,6 +141,7 @@ export async function openImportDocModal() {
   newFolderInput.style.display = 'none';
   folderSel.addEventListener('change', () => {
     newFolderInput.style.display = folderSel.value === '__new__' ? '' : 'none';
+    schedule(); // target folder changes which existing notes a title can match
   });
 
   const tagInput = el('input', 'mn-input');
@@ -105,12 +156,27 @@ export async function openImportDocModal() {
   const dailyCb = el('input'); dailyCb.type = 'checkbox'; dailyCb.checked = true;
   dailyWrap.appendChild(dailyCb); dailyWrap.appendChild(document.createTextNode(' date-only → daily note'));
 
-  opts.append(modeSel, levelSel, folderSel, newFolderInput, tagInput, preambleWrap, dailyWrap);
+  // Filesystem-style upsert: a note with the same title in the target folder (or
+  // the same daily date) is refreshed in place instead of duplicated, so
+  // re-importing the same Doc updates rather than piles up.
+  const upsertWrap = el('label', 'mn-import-check');
+  const upsertCb = el('input'); upsertCb.type = 'checkbox'; upsertCb.checked = true;
+  upsertWrap.appendChild(upsertCb); upsertWrap.appendChild(document.createTextNode(' update matching notes'));
+
+  opts.append(modeSel, levelSel, folderSel, newFolderInput, tagInput, preambleWrap, dailyWrap, upsertWrap);
   box.appendChild(opts);
 
-  const levelVisibility = () => { levelSel.style.display = (modeSel.value === 'dates' || modeSel.value === 'single') ? 'none' : ''; };
+  // When the whole batch is being merged into one note, the per-document split
+  // controls don't apply — grey them out so it's clear they're bypassed.
+  const combineActive = () => !!(batchDocs && batchDocs.length && combineCb.checked);
+  const levelVisibility = () => {
+    const merged = combineActive();
+    modeSel.disabled = merged;
+    levelSel.disabled = merged;
+    levelSel.style.display = (modeSel.value === 'dates' || modeSel.value === 'single') ? 'none' : '';
+  };
   levelVisibility();
-  for (const ctrl of [modeSel, levelSel, preambleCb, dailyCb]) {
+  for (const ctrl of [modeSel, levelSel, preambleCb, dailyCb, combineCb, upsertCb]) {
     ctrl.addEventListener('change', () => { levelVisibility(); schedule(); });
   }
 
@@ -137,29 +203,58 @@ export async function openImportDocModal() {
     };
   }
 
+  // Target folder id for title matching. A brand-new folder (or none chosen)
+  // holds no existing notes, so `undefined` disables title matching there.
+  function matchFolderId() {
+    return folderSel.value === '__new__' ? undefined : folderSel.value;
+  }
+
   function updateCount() {
     const n = parsed.sections.filter((s) => !s.skip).length;
-    importBtn.textContent = n ? `import ${n} note${n === 1 ? '' : 's'}` : 'import';
+    const upd = parsed.sections.filter((s) => !s.skip && s.upsertId).length;
+    const label = upd && upd < n ? `import ${n} (${upd} update${upd === 1 ? '' : 's'})`
+      : upd && upd === n ? `update ${n} note${n === 1 ? '' : 's'}`
+      : n ? `import ${n} note${n === 1 ? '' : 's'}` : 'import';
+    importBtn.textContent = label;
     importBtn.disabled = n === 0;
   }
 
+  // Build `parsed` from whichever source is active (a loaded Drive batch, else
+  // the textarea), then annotate duplicate/upsert state against existing notes.
+  function computeParsed() {
+    if (batchDocs && batchDocs.length) {
+      return parseBatchIntoNotes(batchDocs, { ...currentOpts(), combine: combineCb.checked });
+    }
+    if (!paste.value.trim()) return null;
+    const p = parseDocIntoNotes(paste.value, currentOpts());
+    if (srcModified) for (const s of p.sections) s.srcModified = srcModified;
+    return p;
+  }
+
   function render() {
-    const text = paste.value;
-    if (!text.trim()) {
+    const p = computeParsed();
+    if (!p) {
       parsed = { sections: [], stats: { total: 0 }, warnings: [] };
       summary.textContent = 'paste or choose a document above.';
       list.innerHTML = '';
       updateCount();
       return;
     }
-    parsed = parseDocIntoNotes(text, currentOpts());
-    markDuplicates(parsed.sections, notes);
+    parsed = p;
+    markDuplicates(parsed.sections, notes, { matchByTitle: upsertCb.checked, folderId: matchFolderId() });
 
     const { stats, mode, headingLevel, warnings } = parsed;
-    const modeLabel = mode === 'headings' ? `headings${headingLevel ? `(${'#'.repeat(headingLevel)})` : ''}`
+    const modeLabel = mode === 'combine' ? 'one note (whole batch)'
+      : mode === 'batch' ? 'split per settings'
+      : mode === 'headings' ? `headings${headingLevel ? `(${'#'.repeat(headingLevel)})` : ''}`
       : mode === 'export' ? 'mind export' : mode === 'single' ? 'one note (no split)' : 'date lines';
-    summary.innerHTML = `<b>${stats.total}</b> note${stats.total === 1 ? '' : 's'} · ${stats.dated} dated · ${stats.dateless} dateless · ${esc(modeLabel)}`;
+    const updates = parsed.sections.filter((s) => s.upsertId).length;
+    const newerN = parsed.sections.filter((s) => s.newerExists).length;
+    const docHead = batchDocs && batchDocs.length ? `<b>${batchDocs.length}</b> doc${batchDocs.length === 1 ? '' : 's'} → ` : '';
+    summary.innerHTML = `${docHead}<b>${stats.total}</b> note${stats.total === 1 ? '' : 's'} · ${stats.dated} dated · ${stats.dateless} dateless`
+      + `${updates ? ` · <b>${updates}</b> update${updates === 1 ? '' : 's'}` : ''} · ${esc(modeLabel)}`;
     for (const w of warnings) summary.innerHTML += `<div class="mn-import-warn">⚠ ${esc(w)}</div>`;
+    if (newerN) summary.innerHTML += `<div class="mn-import-warn">⚠ ${newerN} note${newerN === 1 ? '' : 's'} in mind look newer than the import — left unchecked so fresher edits aren’t overwritten.</div>`;
 
     list.innerHTML = '';
     parsed.sections.slice(0, PREVIEW_CAP).forEach((s) => {
@@ -170,7 +265,11 @@ export async function openImportDocModal() {
       const titleLine = el('div', 'mn-import-rowtitle');
       titleLine.appendChild(el('span', 'mn-import-rowname', esc(s.title)));
       if (s.dateIso) titleLine.appendChild(el('span', `mn-date-badge${s.isDaily ? ' mn-date-badge-daily' : ''}`, esc(s.dateIso)));
-      if (s.dup) titleLine.appendChild(el('span', 'mn-import-badge mn-import-badge-dup', s.dup.kind === 'id' ? 'update' : 'duplicate'));
+      if (s.dup) {
+        const isUpdate = s.dup.kind === 'id' || s.dup.kind === 'path';
+        titleLine.appendChild(el('span', 'mn-import-badge mn-import-badge-dup', isUpdate ? 'update' : 'duplicate'));
+      }
+      if (s.newerExists) titleLine.appendChild(el('span', 'mn-import-badge mn-import-badge-newer', 'mind is newer'));
       if (s.dailyCollision) titleLine.appendChild(el('span', 'mn-import-badge', 'daily exists'));
       main.appendChild(titleLine);
       const snip = snippet(s.body);
@@ -186,14 +285,19 @@ export async function openImportDocModal() {
 
   let _t = 0;
   function schedule() { clearTimeout(_t); _t = setTimeout(render, 200); }
-  paste.addEventListener('input', schedule);
+  paste.addEventListener('input', () => { srcModified = 0; schedule(); }); // manual edit ⇒ Drive mtime no longer applies
   tagInput.addEventListener('input', () => {}); // tag doesn't affect preview
-  folderSel.addEventListener('change', () => {});
 
   async function doImport() {
-    const toCreate = parsed.sections.filter((s) => !s.skip).length;
+    const active = parsed.sections.filter((s) => !s.skip);
+    const toCreate = active.length;
     if (!toCreate) return;
-    confirmBox(`Create ${toCreate} note${toCreate === 1 ? '' : 's'}? A safety snapshot is taken first (undo in Settings → snapshots).`, async () => {
+    const updates = active.filter((s) => s.upsertId).length;
+    const news = toCreate - updates;
+    const verb = updates && !news ? `Update ${updates} note${updates === 1 ? '' : 's'}`
+      : updates ? `Import ${news} new + update ${updates} note${updates === 1 ? '' : 's'}`
+      : `Create ${toCreate} note${toCreate === 1 ? '' : 's'}`;
+    confirmBox(`${verb}? A safety snapshot is taken first (undo in Settings → snapshots).`, async () => {
       importBtn.disabled = true;
       try {
         const res = await commitDocImport(parsed.sections, {

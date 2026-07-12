@@ -47,6 +47,7 @@ export async function pickDriveDoc() {
     try {
       const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
         .setIncludeFolders(false)
+        .setMode(google.picker.DocsViewMode.LIST)
         .setMimeTypes(`${GOOGLE_DOC_MIME},text/plain,text/markdown`);
       const builder = new google.picker.PickerBuilder()
         .setOAuthToken(token)
@@ -60,6 +61,7 @@ export async function pickDriveDoc() {
               id: doc[google.picker.Document.ID],
               name: doc[google.picker.Document.NAME],
               mimeType: doc[google.picker.Document.MIME_TYPE],
+              modifiedMs: Number(doc[google.picker.Document.LAST_EDITED_UTC]) || 0,
             });
           } else if (action === google.picker.Action.CANCEL) {
             resolve(null);
@@ -103,7 +105,65 @@ export async function importFromDrive() {
   const file = await pickDriveDoc();
   if (!file) return null;
   const text = await fetchDriveDocText(file);
-  return { text, name: file.name };
+  return { text, name: file.name, modifiedMs: file.modifiedMs };
+}
+
+// Multi-select variant of pickDriveDoc for batch import: same Docs/text/markdown
+// filter, MULTISELECT enabled. Resolves with an array of { id, name, mimeType }
+// or null on cancel. MUST be called from within a user gesture.
+export async function pickDriveDocs() {
+  if (!hasPickerKey()) throw new Error('Drive Picker is not configured.');
+  await ensureDriveAccess();
+  const token = await getDriveToken({ interactive: true });
+  if (!token) throw new Error('Google Drive not connected.');
+  await loadPickerApi();
+
+  return new Promise((resolve, reject) => {
+    try {
+      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setIncludeFolders(false)
+        .setMode(google.picker.DocsViewMode.LIST)
+        .setMimeTypes(`${GOOGLE_DOC_MIME},text/plain,text/markdown`);
+      const builder = new google.picker.PickerBuilder()
+        .setOAuthToken(token)
+        .setDeveloperKey(GOOGLE_PICKER_API_KEY)
+        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+        .addView(view)
+        .setCallback((data) => {
+          const action = data[google.picker.Response.ACTION];
+          if (action === google.picker.Action.PICKED) {
+            const docs = data[google.picker.Response.DOCUMENTS] || [];
+            resolve(docs.map((d) => ({
+              id: d[google.picker.Document.ID],
+              name: d[google.picker.Document.NAME],
+              mimeType: d[google.picker.Document.MIME_TYPE],
+              modifiedMs: Number(d[google.picker.Document.LAST_EDITED_UTC]) || 0,
+            })));
+          } else if (action === google.picker.Action.CANCEL) {
+            resolve(null);
+          }
+        });
+      const appId = googleAppId();
+      if (appId) builder.setAppId(appId);
+      builder.build().setVisible(true);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// Batch convenience: pick several docs + fetch each one's text. Returns
+// [{ name, text, modifiedMs }] (a failed fetch is skipped with a warning, never
+// aborting the whole batch), or null on cancel.
+export async function importDocsFromDrive() {
+  const files = await pickDriveDocs();
+  if (!files || !files.length) return null;
+  const out = [];
+  for (const f of files) {
+    try { out.push({ name: f.name, text: await fetchDriveDocText(f), modifiedMs: f.modifiedMs }); }
+    catch (e) { console.warn('[import-doc] Drive fetch failed:', f.name, e.message); }
+  }
+  return out;
 }
 
 // Multi-select picker for Evernote .enex exports. No mime filter — .enex uploads
@@ -121,7 +181,8 @@ export async function pickDriveEnex() {
     try {
       const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
         .setIncludeFolders(true)
-        .setSelectFolderEnabled(false);
+        .setSelectFolderEnabled(false)
+        .setMode(google.picker.DocsViewMode.LIST);
       const builder = new google.picker.PickerBuilder()
         .setOAuthToken(token)
         .setDeveloperKey(GOOGLE_PICKER_API_KEY)

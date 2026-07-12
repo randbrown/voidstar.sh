@@ -203,12 +203,21 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
 `export.js` `buildExportZip`), Settings → data offers document-level I/O:
 
-- **`import document…`** (`views/import-doc-modal.js`) — split ONE document
+- **`import document…`** (`views/import-doc-modal.js`) — split a document
   (a Google-Docs export, an Obsidian-style `.md`, freeform daily-notes text)
-  into individual notes. Source: paste, upload (`.md`/`.txt`), or **pick from
-  Drive** (`gdrive-picker.js`, shown only when a Picker key is configured).
-  Best source: Google Docs → File → Download → **Markdown (.md)** (keeps date
-  headings as `#`/`##`).
+  into individual notes. Source: paste, upload (`.md`/`.txt`), **pick from
+  Drive**, or **pick multiple from Drive** (`gdrive-picker.js`, shown only when a
+  Picker key is configured; the Picker opens in **list/details** view). Best
+  source: Google Docs → File → Download → **Markdown (.md)** (keeps date headings
+  as `#`/`##`).
+  - **Batch import** (`parseBatchIntoNotes`, pure): "pick multiple from Drive…"
+    loads several docs at once. Each is split **independently with the current
+    split settings** and the results concatenated (a descending timestamp cursor
+    keeps them in a stable newest-first order across docs; the daily key is deduped
+    across the whole batch). A **"combine whole batch into one note"** toggle
+    instead merges every doc into a single note (split settings bypassed). The
+    batch bar shows the loaded-doc count and a *clear* button; "pick from Drive…"
+    or typing/uploading reverts to single-source.
   - `parseDocIntoNotes(text, opts)` (`import-doc.js`, pure/deterministic) splits
     on markdown headings (auto-picking the level that carries the most dates) or,
     for plain text, on **date-dominant lines** (a date + ≤2 other words, so a
@@ -227,10 +236,25 @@ Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
   - A header that is **essentially just a date** becomes a **daily note**
     (`meta.daily`), deduped within the batch and against existing dailies
     (a collision demotes it to a plain dated note rather than shadowing "today").
-  - The modal previews the N would-be notes (title · date badge · dup badge ·
-    snippet), lets you pick folder/tag/heading options, and `commitDocImport`
-    snapshots (`pre-doc-import`, undoable in Settings → snapshots) before
-    creating notes with `putNoteRaw` (parsed timestamps preserved).
+  - **Filesystem-style upsert** (`markDuplicates`, opt-in via *update matching
+    notes*, on by default): a note's identity is its **(folder, title)** — or its
+    daily date. On import, a section matching an existing note's path **updates it
+    in place** (keeps id/backlinks/attachments) instead of inserting a twin, so
+    re-importing the same Doc *refreshes* rather than piling up. Match tiers, in
+    order: mind-export `id=` round-trip → byte-identical (skip) → path/daily
+    upsert → new. **Newer-detection**: when the source is Drive, the file's real
+    last-edit time (`LAST_EDITED_UTC` from the Picker, `srcModified` on each
+    section) is compared to the matched note's `updatedAt`; if the **mind copy is
+    newer**, the row is flagged amber-pink ("mind is newer") and left **unchecked**
+    so fresher local edits aren't clobbered (a per-row checkbox still lets you
+    force it). `commitDocImport` stamps the Drive edit time as the note's
+    `updatedAt` so repeat imports converge. (Reverse sync is detect-and-warn only;
+    writing back into the original Doc is out of scope.)
+  - The modal previews the N would-be notes (title · date badge · update/dup badge
+    · "mind is newer" badge · snippet), lets you pick folder/tag/heading options,
+    and `commitDocImport` snapshots (`pre-doc-import`, undoable in Settings →
+    snapshots) before creating/updating notes with `putNoteRaw` (parsed timestamps
+    preserved).
 - **`export .md (doc)`** (`export.js` `buildNotesMarkdownDoc`) — one readable
   markdown file, each note a `## <title> — <date>` heading + a lossless
   `<!-- mind date=… tags=… daily id=… -->` comment + body. It **round-trips**:
