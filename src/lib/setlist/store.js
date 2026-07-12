@@ -126,10 +126,24 @@ async function del(storeName, id) {
 
 // Delete a synced record AND write its deletion tombstone in one transaction,
 // so a crash between the two can't leave a deleted record with no tombstone
-// (which the next backup merge would resurrect).
+// (which the next backup merge would resurrect). The tombstone also snapshots
+// the deleted record + a display label, which powers the Trash view: a delete
+// is undoable until the tombstone TTLs out. (Songs/setlists are tiny JSON, so
+// carrying the record for 180 days is negligible.)
 export const deletionKey = (storeName, id) => `${storeName}:${id}`;
 
+// One-line human label for a deleted record, for the Trash list.
+function deletionLabel(storeName, rec) {
+  if (!rec) return '(unknown)';
+  if (storeName === SONGS) return rec.title || '(untitled song)';
+  if (storeName === SETLISTS) return rec.name || '(untitled setlist)';
+  if (storeName === NOTES) return (rec.text || '').slice(0, 60) || '(empty note)';
+  if (storeName === ANNOTATIONS) return `annotation (${rec.strokes?.length || 0} strokes)`;
+  return String(rec.id ?? '');
+}
+
 async function delWithTombstone(storeName, id) {
+  const rec = await getOne(storeName, id);
   const db = await openDb();
   const t = db.transaction([storeName, DELETIONS], 'readwrite');
   const done = new Promise((res, rej) => {
@@ -139,12 +153,33 @@ async function delWithTombstone(storeName, id) {
   t.objectStore(storeName).delete(id);
   t.objectStore(DELETIONS).put({
     key: deletionKey(storeName, id), store: storeName, id, deletedAt: Date.now(),
+    record: rec || null, label: deletionLabel(storeName, rec), kind: storeName,
   });
   await done;
   _onWrite?.();
 }
 
 export const getAllDeletions = () => getAll(DELETIONS);
+
+// Restore a deleted record from its tombstone: re-put the snapshotted record
+// with a fresh updatedAt (so it beats the tombstone under newer-wins across
+// devices) and remove the tombstone (so the next merge can't immediately
+// re-kill it). Mirrors the authoritative-restore logic in replaceAll.
+export async function restoreDeletion(key) {
+  const t = await getOne(DELETIONS, key);
+  if (!t || !t.record || !SYNCED_STORES.includes(t.store)) return false;
+  await put(t.store, { ...t.record, updatedAt: Date.now() });
+  await delSilent(DELETIONS, key);
+  return true;
+}
+
+// Purge a single tombstone's stored record payload (frees space) while KEEPING
+// the tombstone itself, so the delete still propagates. Used by "empty trash".
+export async function forgetDeletion(key) {
+  const t = await getOne(DELETIONS, key);
+  if (!t) return;
+  await putSilent(DELETIONS, { key: t.key, store: t.store, id: t.id, deletedAt: t.deletedAt });
+}
 
 // Tombstones only need to outlive every device's next sync; 180 days is
 // generous for a personal tool. Called once per app boot (app.js).
@@ -489,7 +524,13 @@ async function applyDeletions(data) {
     const key = deletionKey(d.store, d.id);
     const existing = await getOne(DELETIONS, key);
     if (!existing || (existing.deletedAt || 0) < d.deletedAt) {
-      await putSilent(DELETIONS, { key, store: d.store, id: d.id, deletedAt: d.deletedAt });
+      // Preserve the record snapshot + label if the incoming tombstone carries
+      // one (so deleted items are restorable from Trash on every device), or
+      // fall back to what we already had.
+      const tomb = { key, store: d.store, id: d.id, deletedAt: d.deletedAt };
+      if (d.record) { tomb.record = d.record; tomb.label = d.label; tomb.kind = d.kind || d.store; }
+      else if (existing?.record) { tomb.record = existing.record; tomb.label = existing.label; tomb.kind = existing.kind; }
+      await putSilent(DELETIONS, tomb);
     }
     const rec = await getOne(d.store, d.id);
     if (rec && (rec.updatedAt || rec.createdAt || 0) <= d.deletedAt) {

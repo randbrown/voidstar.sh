@@ -3134,6 +3134,7 @@ export async function renderSettings(root) {
       historyList.textContent = formatGdriveError(e);
     }
   }));
+  safetyActions.appendChild(btn('🗑 trash', 'sl-btn-ghost sl-btn-sm', () => navigate('#trash')));
   gdriveSection.appendChild(safetyActions);
   gdriveSection.appendChild(historyList);
   root.appendChild(gdriveSection);
@@ -3164,6 +3165,65 @@ export async function renderSettings(root) {
   };
   document.getElementById('sl-worker-url').addEventListener('change', saveWorker);
   document.getElementById('sl-worker-token').addEventListener('change', saveWorker);
+}
+
+// ── Trash — recover recently deleted songs / setlists / notes ──
+// Backed by the deletion tombstones (store.js): each carries a snapshot of the
+// deleted record, so a delete is undoable until the tombstone TTLs out
+// (180 days). Restoring re-inserts the record and drops the tombstone; the
+// backup merge treats the restored record as authoritative.
+export async function renderTrash(root) {
+  const bar = topBar('trash', '#settings');
+  root.appendChild(bar);
+
+  const hint = el('div', 'sl-hint');
+  hint.style.margin = '0.5rem 0 0.75rem';
+  hint.textContent = 'Deleted songs, setlists, and notes — recoverable for 180 days, then permanently removed. Restoring brings the item back on every synced device.';
+  root.appendChild(hint);
+
+  const list = el('div', 'sl-source-list');
+  root.appendChild(list);
+
+  const KIND_LABEL = { songs: 'song', setlists: 'setlist', notes: 'note', annotations: 'annotation' };
+
+  async function paint() {
+    list.innerHTML = '';
+    // Only tombstones that still carry a restorable record snapshot, newest first.
+    const items = (await store.getAllDeletions())
+      .filter(d => d.record)
+      .sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
+    if (!items.length) { list.appendChild(emptyState('Trash is empty.')); return; }
+
+    const empty = el('div', 'sl-action-bar');
+    empty.style.marginBottom = '0.5rem';
+    empty.appendChild(btn(`empty trash (${items.length})`, 'sl-btn-ghost sl-btn-sm', async () => {
+      if (!confirm(`Permanently forget ${items.length} deleted item${items.length === 1 ? '' : 's'}? The deletions still sync, but they can no longer be restored.`)) return;
+      for (const d of items) await store.forgetDeletion(d.key);
+      paint();
+    }));
+    list.appendChild(empty);
+
+    for (const d of items) {
+      const row = el('div', 'sl-source-row');
+      const when = d.deletedAt ? new Date(d.deletedAt).toLocaleString() : '';
+      const meta = el('div');
+      meta.style.flex = '1';
+      meta.style.minWidth = '0';
+      const title = el('div', 'sl-source-url');
+      title.textContent = d.label || '(unknown)';
+      const sub = el('div', 'sl-hint');
+      sub.textContent = `${KIND_LABEL[d.kind] || d.kind} · deleted ${when}`;
+      meta.appendChild(title);
+      meta.appendChild(sub);
+      row.appendChild(meta);
+      row.appendChild(btn('restore', 'sl-btn-sm sl-btn-accent', async () => {
+        await store.restoreDeletion(d.key);
+        paint();
+      }));
+      list.appendChild(row);
+    }
+  }
+  await paint();
 }
 
 // ── Performance Mode ──
@@ -3435,6 +3495,29 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const songEntries = entries.filter(e => e.type === 'song');
   const totalSongs = songEntries.length;
 
+  // ── Set timer + pacing HUD ──
+  // Elapsed set time, with an optional target = sum of the songs' known
+  // durations (from "fetch info" / iTunes). Tap to reset (the real downbeat is
+  // usually a beat after you open perform mode). Turns amber when you pass the
+  // target so you can see at a glance that the set is running long.
+  const targetSec = songEntries.reduce((n, e) => n + (e.song.durationSec || 0), 0);
+  const knownDur = songEntries.filter(e => e.song.durationSec > 0).length;
+  let setStartMs = Date.now();
+  const setTimer = el('div', 'sl-perform-settimer');
+  setTimer.title = 'Elapsed set time — tap to reset to 0:00';
+  setTimer.addEventListener('click', () => { setStartMs = Date.now(); updateSetTimer(); });
+  function updateSetTimer() {
+    const elapsed = Math.floor((Date.now() - setStartMs) / 1000);
+    const showTarget = knownDur >= Math.ceil(totalSongs / 2) && targetSec > 0; // enough coverage to be meaningful
+    setTimer.textContent = showTarget
+      ? `${formatTimecode(elapsed)} / ${formatTimecode(targetSec)}`
+      : formatTimecode(elapsed);
+    setTimer.classList.toggle('sl-settimer-over', showTarget && elapsed > targetSec);
+  }
+  updateSetTimer();
+  const setTimerInterval = setInterval(updateSetTimer, 1000);
+  container.appendChild(setTimer);
+
   let chartAnnotationCtrl = null;
   const zoomCtrl = attachPerformZoom(content, zoomLayer);
 
@@ -3662,6 +3745,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const cleanup = () => {
     if (chartAnnotationCtrl) chartAnnotationCtrl.destroy();
     if (currentChartObjectUrl) { URL.revokeObjectURL(currentChartObjectUrl); currentChartObjectUrl = null; }
+    clearInterval(setTimerInterval);
     zoomCtrl.destroy();
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('hashchange', cleanup);

@@ -3,7 +3,7 @@
 import * as store from './store.js';
 import { initGdriveBackup, isSyncing, setBackupClient, pullMergePushIfStale, debouncedPush, watchConnectivity } from './gdrive-backup.js';
 import { completeSpotifyLogin } from './spotify-auth.js';
-import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings, renderAnnotation } from './views.js';
+import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings, renderAnnotation, renderTrash } from './views.js';
 
 let _root = null;
 let _lastSongId = null;
@@ -47,6 +47,9 @@ async function route() {
         break;
       case 'settings':
         await renderSettings(_root);
+        break;
+      case 'trash':
+        await renderTrash(_root);
         break;
       case 'setlist':
         if (extra === 'edit') {
