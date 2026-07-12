@@ -230,6 +230,26 @@ function fmtWhen(ts) {
 }
 
 // Returns a small badge element for a task's reminder, or null if none.
+// True when a task's time reminder is due/overdue and not yet handled — the
+// state a quick "snooze" acts on.
+export function isReminderDue(task) {
+  return !!task.remindAt && !task.done && task.remindStatus !== 'snoozed'
+    && task.remindAt <= Date.now();
+}
+
+// Defer a task's time reminder by `ms` (default 10 min). Re-arms it: the scan
+// loop treats `snoozedUntil` as the new due time and clears the fired mark, so
+// it fires again. Rides sync like any task field.
+export async function snoozeTask(task, ms = SNOOZE_MS) {
+  const until = Date.now() + ms;
+  await store.putTask({ ...task, snoozedUntil: until, remindAt: until, remindStatus: 'snoozed' });
+  // Drop any local "already fired" mark so the re-armed reminder can fire.
+  try {
+    const fired = JSON.parse(localStorage.getItem(FIRED_KEY) || '[]').filter(id => id !== task.id);
+    localStorage.setItem(FIRED_KEY, JSON.stringify(fired));
+  } catch {}
+}
+
 export function reminderBadge(task) {
   if (task.remindPlace) {
     return el('span', 'mn-remind-badge', `&#128205; ${esc(task.remindPlace.label || 'place')}`);

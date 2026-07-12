@@ -494,6 +494,7 @@ const buildStamp = readBuildStamp();
       border-color: color-mix(in srgb, var(--pink) 55%, transparent);
     }
     .mn-task-bell { font-size: 0.95rem; padding: 0.3rem 0.45rem; }
+    .mn-task-snooze { font-size: 0.72rem; padding: 0.25rem 0.4rem; white-space: nowrap; color: var(--text-muted); }
     .mn-remind-label {
       font-family: var(--font-mono);
       font-size: 0.72rem;
@@ -847,6 +848,44 @@ const buildStamp = readBuildStamp();
     .mn-modal-title { font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-muted); }
     .mn-modal .mn-input { width: 100%; }
     .mn-modal-row { display: flex; justify-content: flex-end; gap: 0.4rem; }
+
+    /* ── Command palette / quick-switcher (Ctrl-K) ── */
+    .mn-palette-overlay { padding: 12dvh 1rem 0; align-items: flex-start; }
+    .mn-palette {
+      background: var(--surface);
+      border: 1px solid var(--border-2);
+      border-radius: var(--radius-lg, 10px);
+      width: min(34rem, 100%);
+      max-height: 66dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 12px 40px color-mix(in srgb, var(--void) 60%, transparent);
+    }
+    .mn-palette-input {
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--border-2);
+      color: var(--text);
+      font-size: 1rem;
+      padding: 0.85rem 1rem;
+      outline: none;
+      width: 100%;
+    }
+    .mn-palette-list { overflow-y: auto; padding: 0.3rem; }
+    .mn-palette-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.5rem 0.6rem;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .mn-palette-sel { background: color-mix(in srgb, var(--accent, #7c9cff) 18%, transparent); }
+    .mn-palette-icon { width: 1.3rem; text-align: center; flex-shrink: 0; }
+    .mn-palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mn-palette-sub { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); flex-shrink: 0; }
+    .mn-palette-empty { padding: 0.9rem 1rem; color: var(--text-dim); font-size: 0.9rem; }
 
     /* ── Import-document modal ── */
     .mn-modal-wide { width: min(42rem, 100%); max-height: 82dvh; overflow-y: auto; }
