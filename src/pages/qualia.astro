@@ -2098,6 +2098,23 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-looper-retro:disabled { opacity: 0.4; cursor: default; }
     .rig-collapse { padding: 0.02rem 0.35rem; font-size: 0.7rem; line-height: 1; }
     #btn-rig-strip, #btn-rig-tuner, #btn-rig-loop, #btn-rig-freeze { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
+    #btn-rig-freeze-cfg { padding: 0.1rem 0.25rem; font-size: 0.6rem; line-height: 1; }
+    .rig-freeze-cfg {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+      padding: 0.3rem 0.2rem 0.1rem;
+    }
+    .rig-frz-lbl {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-size: 0.62rem;
+      color: var(--text-dim, #8890a0);
+      font-family: var(--font-mono);
+    }
+    .rig-frz-lbl input[type=range] { width: 5.5rem; }
     #btn-rig-strip.active, #btn-rig-tuner.active, #btn-rig-loop.active, #btn-rig-freeze.active {
       color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10);
     }
@@ -3702,7 +3719,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
       <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — EQ, comp, drives, amp, cab, delay → reverb, pan on the rig signal">strip</button>
       <button class="ctrl-btn" id="btn-rig-tuner" title="Strobe tuner — Peterson-style strobe reading the raw rig input (pre-distortion); bands freeze when in tune">tune</button>
-      <button class="ctrl-btn" id="btn-rig-freeze" title="Freeze — sustain the last moment of the processed signal as an endless pad (tap again to release; re-tap while frozen to re-capture)">frz</button>
+      <button class="ctrl-btn" id="btn-rig-freeze" title="Freeze (;) — sustain the last moment of the processed signal as an endless pad; tap again to release (fades out over the release time). Settings + re-grab under the ▾.">frz</button>
+      <button class="ctrl-btn rig-collapse" id="btn-rig-freeze-cfg" title="Freeze settings — pad level, grain length, release fade, and re-grab (capture a fresh pad while frozen)">▾</button>
       <button class="ctrl-btn" id="btn-rig-loop" title="Looper — record, layer, and loop your signal">loop</button>
       <span id="rig-scope-gain-wrap" class="rig-scope-gain-wrap"></span>
       <span class="sp-status" id="rig-signal-status"></span>
@@ -3719,6 +3737,31 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <div id="rig-tuner" class="rig-tuner" style="display:none"></div>
     <div id="rig-temper" class="rig-temper" style="display:none"></div>
+    <!-- FREEZE settings — expandable via the ▾ next to frz. -->
+    <div id="rig-freeze-cfg" class="rig-freeze-cfg" style="display:none">
+      <span class="sp-subtitle">freeze</span>
+      <label class="rig-frz-lbl">level
+        <input type="range" id="freeze-level" min="0" max="1" step="0.01" title="Pad level — live, adjusts the sounding pad too">
+      </label>
+      <label class="rig-frz-lbl">grain
+        <select id="freeze-grain" class="ctrl-btn" title="Loop length grabbed from your last moment of playing — longer = more texture/movement in the pad">
+          <option value="0.5">0.5s</option>
+          <option value="1">1s</option>
+          <option value="2">2s</option>
+          <option value="4">4s</option>
+        </select>
+      </label>
+      <label class="rig-frz-lbl">release
+        <select id="freeze-release" class="ctrl-btn" title="Fade-out when you release the freeze — long = musical decay into silence">
+          <option value="0.3">0.3s</option>
+          <option value="1">1s</option>
+          <option value="2">2s</option>
+          <option value="4">4s</option>
+          <option value="8">8s</option>
+        </select>
+      </label>
+      <button class="ctrl-btn" id="btn-freeze-regrab" title="Capture a fresh pad from what you just played — replaces the current pad with a short crossover (works while frozen; starts a freeze if not)">re-grab</button>
+    </div>
   </section>
 
   <!-- STRIP subpanel — the rig channel strip (collapsible). -->

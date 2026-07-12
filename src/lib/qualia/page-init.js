@@ -3125,6 +3125,25 @@ export function initQualiaPage() {
       return;
     }
     btnOutput?.classList.add('active');
+    // Keep the pipeline alive when THIS window is occluded: fullscreening the
+    // popup over the main window (same display) makes Chrome mark this page
+    // hidden and halt its rAF — freezing the fx render and the stream. The
+    // popup is visible by definition, so its rAF drives core.pump() whenever
+    // we're hidden (also covers minimized / other-tab). No-ops while this
+    // window is visible, so there's never double-driving.
+    const drive = () => {
+      if (!outputWin || outputWin.closed) return;
+      try {
+        if (document.hidden) {
+          core.pump();
+          // Hidden pages can also throttle automatic canvas capture — push a
+          // frame into the stream explicitly after each pumped composite.
+          outputStream?.getVideoTracks?.()[0]?.requestFrame?.();
+        }
+      } catch {}
+      try { outputWin.requestAnimationFrame(drive); } catch {}
+    };
+    try { outputWin.requestAnimationFrame(drive); } catch {}
     // No close event crosses windows reliably — poll, and fold the tent when
     // the popup goes away (or this page unloads).
     outputWatch = setInterval(() => { if (!outputWin || outputWin.closed) closeOutputWindow(); }, 1000);

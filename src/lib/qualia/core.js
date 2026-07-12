@@ -519,6 +519,17 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   // dt is clamped so a long pause + resume (or a low cap) can't fast-forward.
   function frame(now) {
     requestAnimationFrame(frame);
+    frameBody(now);
+  }
+
+  // One loop iteration, callable from an EXTERNAL driver too: when this window
+  // is occluded (e.g. the projector/OBS output popup fullscreened over it),
+  // Chrome marks the page hidden and halts its rAF — freezing the visuals and
+  // the output stream. The output window's own rAF (it's visible by
+  // definition) calls pump() to keep the pipeline ticking. The monotonic-`now`
+  // guard dedupes the handover frames where both drivers fire.
+  function frameBody(now) {
+    if (now <= lastMs) return;
     const dtRaw = (now - lastMs) / 1000;
     const dt = Math.min(dtRaw, 0.05);
     lastMs = now;
@@ -720,6 +731,10 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     onFrame,
     onTick,
     onCanvas,
+    /** Drive one loop iteration from an external (visible) window while this
+     *  one is occluded — see frameBody. Safe to call at any rate; the internal
+     *  gates dedupe. */
+    pump: () => frameBody(performance.now()),
     getCanvas: () => canvas,
     getActiveContextType: () => canvasType,
     getBaseParams: () => ({ ...baseParams }),

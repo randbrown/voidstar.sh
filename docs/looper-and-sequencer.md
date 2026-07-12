@@ -50,10 +50,15 @@ samples on stop — so persisted PCM stays exact and a re-lock re-bakes at the n
 The stretch path applies the same crossfade to its region copies.
 
 **Freeze / infinite sustain** (`frz` button next to strip/tune, hotkey `;`, `padActions.freeze`):
-grabs the newest ~1 s from the recorder ring (post-strip, so the pad carries the amp/cab/verb that
-were on), loops it with a 25 % equal-power seam, and plays it into the rig master — the ambient
-pedal-steel drone move. Tap to release (fade-out); re-tap while frozen re-captures for an evolving
-drone. Needs the capture ring, so the button opens capture if the signal fader is up.
+grabs the newest moment from the recorder ring (post-strip, so the pad carries the amp/cab/verb
+that were on), loops it with a 25 % equal-power seam, and plays it into the rig master — the
+ambient pedal-steel drone move. The pedal button is a plain **on/off**: tap to freeze, tap again
+to release (exponential fade over the *release* setting). The **▾ settings row** next to it holds
+*level* (live — adjusts the sounding pad), *grain* (loop length grabbed, 0.5–4 s; applies on the
+next grab), *release* (0.3–8 s, default 2 s), and **re-grab** — the explicit "capture a fresh pad
+while frozen" action (short crossover, evolving drone). Settings persist
+(`voidstar.qualia.looper.freeze`). Needs the capture ring, so starting opens capture if the
+signal fader is up.
 
 **Loaded via `?url&no-inline`** so Vite doesn't inline the worklet as a data URL that `addModule()`
 can't reliably load.

@@ -447,27 +447,45 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // signal (the recorder ring taps the strip output, so the pad carries the
   // amp/cab/verb that were on) and loop it as an endless pad under whatever is
   // played next. A long equal-power seam (25% of the grain) makes the pad
-  // smooth rather than obviously looped; re-triggering while frozen replaces
-  // the grain (evolving drone). Output rides rigMaster → soft limiter, so it
-  // obeys the rig level/mute and can't clip the sum.
-  const FREEZE_GRAB_SEC = 1.6;     // ring slice requested (grain + seam + margin)
-  const FREEZE_GRAIN_SEC = 1.0;    // loop length
-  const FREEZE_LEVEL = 0.8;        // pad sits just under the live signal
+  // smooth rather than obviously looped. Output rides rigMaster → soft
+  // limiter, so it obeys the rig level/mute and can't clip the sum.
+  //
+  // Config (looper.js persists it + owns the settings UI):
+  //   level      pad gain (0..1) — live-ramped if changed while frozen
+  //   grainSec   loop length; longer = more texture/movement in the pad
+  //   releaseSec fade-out when released — long release = musical decay
+  let _freezeCfg = { level: 0.8, grainSec: 1.0, releaseSec: 2.0 };
   let _freeze = null;              // { source, gain }
 
   function isFrozen() { return !!_freeze; }
 
-  function freezeStop({ fadeSec = 0.35 } = {}) {
+  function getFreezeConfig() { return { ..._freezeCfg }; }
+  function setFreezeConfig(partial = {}) {
+    const c = { ..._freezeCfg, ...partial };
+    c.level = clamp01(Number(c.level) || 0);
+    c.grainSec = Math.max(0.25, Math.min(4, Number(c.grainSec) || 1));
+    c.releaseSec = Math.max(0.05, Math.min(12, Number(c.releaseSec) || 2));
+    _freezeCfg = c;
+    // Live level: adjust an already-sounding pad.
+    if (_freeze && ctx) {
+      try { ramp(_freeze.gain.gain, c.level); } catch {}
+    }
+  }
+
+  function freezeStop({ fadeSec } = {}) {
     const f = _freeze;
     if (!f) return;
     _freeze = null;
+    const fade = fadeSec != null ? fadeSec : _freezeCfg.releaseSec;
     try {
       const t = ctx.currentTime;
       f.gain.gain.cancelScheduledValues(t);
       f.gain.gain.setValueAtTime(f.gain.gain.value, t);
-      f.gain.gain.linearRampToValueAtTime(0, t + fadeSec);
-      f.source.stop(t + fadeSec + 0.05);
-      setTimeout(() => { try { f.source.disconnect(); f.gain.disconnect(); } catch {} }, (fadeSec + 0.2) * 1000);
+      // setTargetAtTime decays exponentially (more natural than linear for a
+      // pad); stop well past ~5 time constants, when it's inaudible.
+      f.gain.gain.setTargetAtTime(0, t, fade / 3);
+      f.source.stop(t + fade * 2 + 0.1);
+      setTimeout(() => { try { f.source.disconnect(); f.gain.disconnect(); } catch {} }, (fade * 2 + 0.3) * 1000);
     } catch {}
   }
 
@@ -475,18 +493,20 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     if (!usingWorklet || !recNode || !srcNode) return false;   // needs the ring (capture open)
     await ensureContext();
     ensureRigMaster();
-    // Grab the newest slice of the ring (same plumbing as retro-grab).
+    const grainSec = _freezeCfg.grainSec;
+    // Grab the grain + enough pre-roll for the seam + margin.
+    const grabSec = Math.min(RING_SECONDS - 0.5, grainSec * 1.5 + 0.3);
     const id = `f${(_grabSeq++).toString(36)}`;
     const resp = await new Promise((resolve) => {
       _pendingGrabs.set(id, resolve);
-      try { recNode.port.postMessage({ cmd: 'grab', seconds: FREEZE_GRAB_SEC, id }); }
+      try { recNode.port.postMessage({ cmd: 'grab', seconds: grabSec, id }); }
       catch { _pendingGrabs.delete(id); resolve(null); }
       setTimeout(() => { if (_pendingGrabs.has(id)) { _pendingGrabs.delete(id); resolve(null); } }, 600);
     });
     if (!resp || !resp.chans || !resp.chans.length || !resp.frames) return false;
 
     const sr = resp.sampleRate || ctx.sampleRate;
-    const grain = Math.min(Math.round(FREEZE_GRAIN_SEC * sr), resp.frames);
+    const grain = Math.min(Math.round(grainSec * sr), resp.frames);
     const nSeam = grain >> 2;                       // 25% seam → pad, not loop
     if (grain < sr * 0.2) return false;             // too little audio to freeze
     const start = resp.frames - grain;              // newest `grain` frames
@@ -509,7 +529,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       if (!hasPre) for (let i = 0; i < 64 && i < grain; i++) d[i] *= i / 64; // de-click head
     }
 
-    freezeStop({ fadeSec: 0.2 });                  // replace an existing pad
+    freezeStop({ fadeSec: 0.2 });                  // re-grab: quick crossover, not the long release
     const gain = ctx.createGain();
     gain.gain.value = 0;
     gain.connect(rigMaster);
@@ -519,7 +539,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     source.connect(gain);
     const t = ctx.currentTime;
     source.start(t);
-    gain.gain.linearRampToValueAtTime(FREEZE_LEVEL, t + 0.08);
+    gain.gain.linearRampToValueAtTime(_freezeCfg.level, t + 0.08);
     _freeze = { source, gain };
     return true;
   }
@@ -1329,7 +1349,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     getCaptureAnalyser: () => captureAnalyser,
     getTunerAnalyser: () => tunerAnalyser,
     // Freeze / infinite-sustain pad (see freezeStart above).
-    toggleFreeze, isFrozen, freezeStart, freezeStop,
+    toggleFreeze, isFrozen, freezeStart, freezeStop, getFreezeConfig, setFreezeConfig,
     // Current monophonic pitch of the clean (pre-strip) input, in Hz, or -1
     // when the rig isn't capturing / the signal is unvoiced or too quiet. Reads
     // the tuner analyser's newest window and autocorrelates it — allocation-
