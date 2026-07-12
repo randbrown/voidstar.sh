@@ -26,6 +26,10 @@ export { mergeData } from './shard.js';
 const NS = 'voidstar.mind.gdrive';
 const CLIENT_ID_KEY = `${NS}.clientId`;
 const TOKEN_KEY = `${NS}.token`;
+// Set once the user completes a Drive connection — the app-owned client id
+// makes getClientId() always truthy, so without this a first-time visitor who
+// never signed in would read as "reconnect" rather than "sign in".
+const EVER_KEY = `${NS}.everConnected`;
 const LAST_BACKUP_KEY = `${NS}.lastBackupAt`;
 const DEVICE_NAME_KEY = `${NS}.deviceName`;
 // Legacy single-file layout (pre-sharding). Still READ during migration and
@@ -150,7 +154,7 @@ function requeueDirtyShards(snap) {
   saveDirtyShards({ all: d.all || snap.all, buckets: [...buckets], index: d.index || snap.index });
 }
 
-let _gisLoaded = false;
+let _gisPromise = null;
 
 // Prefer a user-entered override (advanced / self-host); otherwise the
 // app-owned client id, so "Sign in with Google" works with zero setup.
@@ -179,8 +183,8 @@ export function getDeviceName() {
 export function setDeviceName(n) { if (n) localStorage.setItem(DEVICE_NAME_KEY, n); }
 
 export function isSyncEnabled() { return !!getClientId() && !!getStoredToken(); }
-export function needsReconnect() { return !!getClientId() && !getStoredToken(); }
-export function disconnect() { localStorage.removeItem(TOKEN_KEY); }
+export function needsReconnect() { return !!getClientId() && !getStoredToken() && localStorage.getItem(EVER_KEY) === '1'; }
+export function disconnect() { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(EVER_KEY); }
 
 export function getLastBackupTime() {
   const raw = localStorage.getItem(LAST_BACKUP_KEY);
@@ -257,19 +261,32 @@ export async function gatherDiagnostics({ live = false } = {}) {
   return report;
 }
 
-async function loadGis() {
-  if (_gisLoaded) return;
-  if (document.querySelector('script[src*="accounts.google.com/gsi/client"]')) {
-    _gisLoaded = true;
-    return;
-  }
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
+function gisReady() {
+  return typeof google !== 'undefined' && !!(google.accounts && google.accounts.oauth2);
+}
+// Memoize the load PROMISE, not a "tag exists" flag: a racing second caller
+// that saw the just-appended <script> before it ran would proceed and hit
+// `google is not defined`. Resolve only on the script's real load (or when the
+// global is already present); a failed load clears the memo so a retry works.
+function loadGis() {
+  if (gisReady()) return Promise.resolve();
+  if (_gisPromise) return _gisPromise;
+  _gisPromise = new Promise((resolve, reject) => {
+    const fail = () => { _gisPromise = null; reject(new Error('Failed to load Google Identity Services')); };
+    let script = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
+    if (script) {
+      if (gisReady()) return resolve();
+      script.addEventListener('load', () => resolve(), { once: true });
+      script.addEventListener('error', fail, { once: true });
+      return;
+    }
+    script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
-    script.onload = () => { _gisLoaded = true; resolve(); };
-    script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+    script.onload = () => resolve();
+    script.onerror = fail;
     document.head.appendChild(script);
   });
+  return _gisPromise;
 }
 
 function getStoredToken() {
@@ -285,6 +302,7 @@ function storeToken(token, expiresIn) {
     token,
     expiresAt: Date.now() + (expiresIn - 60) * 1000,
   }));
+  try { localStorage.setItem(EVER_KEY, '1'); } catch {}
 }
 
 // One token request. The `prompt` decides the UX: `'none'` renews silently

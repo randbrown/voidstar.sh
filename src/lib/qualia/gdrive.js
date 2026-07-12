@@ -103,20 +103,33 @@ function setState(s) {
 }
 
 // ── Google Identity Services loader ────────────────────────────────────────
-let _gisLoaded = false;
-async function loadGis() {
-  if (_gisLoaded) return;
-  if (document.querySelector('script[src*="accounts.google.com/gsi/client"]')) {
-    _gisLoaded = true;
-    return;
-  }
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
+let _gisPromise = null;
+function gisReady() {
+  return typeof google !== 'undefined' && !!(google.accounts && google.accounts.oauth2);
+}
+// Memoize the load PROMISE, not a "tag exists" flag: a racing second caller
+// that saw the just-appended <script> before it ran would proceed and hit
+// `google is not defined`. Resolve only on the script's real load (or when the
+// global is already present); a failed load clears the memo so a retry works.
+function loadGis() {
+  if (gisReady()) return Promise.resolve();
+  if (_gisPromise) return _gisPromise;
+  _gisPromise = new Promise((resolve, reject) => {
+    const fail = () => { _gisPromise = null; reject(new Error('Failed to load Google Identity Services')); };
+    let script = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
+    if (script) {
+      if (gisReady()) return resolve();
+      script.addEventListener('load', () => resolve(), { once: true });
+      script.addEventListener('error', fail, { once: true });
+      return;
+    }
+    script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
-    script.onload = () => { _gisLoaded = true; resolve(); };
-    script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+    script.onload = () => resolve();
+    script.onerror = fail;
     document.head.appendChild(script);
   });
+  return _gisPromise;
 }
 
 // One token request. `'none'` renews silently through a hidden iframe (no popup,

@@ -16,6 +16,10 @@ import { tokenRow } from '../qualia/gdrive-diag.js';
 
 const CLIENT_ID_KEY = 'voidstar.setlist.gdrive.clientId';
 const TOKEN_KEY = 'voidstar.setlist.gdrive.token';
+// Set once the user has actually completed a Drive connection. Since the
+// app-owned client id makes getClientId() always truthy, needsReconnect() would
+// otherwise read "reconnect" for a first-time visitor who never signed in.
+const EVER_KEY = 'voidstar.setlist.gdrive.everConnected';
 const LAST_BACKUP_KEY = 'voidstar.setlist.gdrive.lastBackupAt';
 const FILE_NAME = 'voidstar-setlist-data.json';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
@@ -50,7 +54,7 @@ export function isLocalDirty() { return !!getDirtyStamp(); }
 // must stay dirty for the next cycle — its data may have missed the export.
 function clearDirtyIf(stamp) { if (getDirtyStamp() === stamp) localStorage.removeItem(DIRTY_KEY); }
 
-let _gisLoaded = false;
+let _gisPromise = null;
 
 // Prefer a user-entered override (advanced / self-host); otherwise the
 // app-owned client id, so "Sign in with Google" works with zero setup.
@@ -84,7 +88,7 @@ export function isGdriveBackupEnabled() {
 // session, consent revoked, or third-party cookies blocked), at which point the
 // UI invites a tap to reconnect.
 export function needsReconnect() {
-  return !!getClientId() && !getStoredToken();
+  return !!getClientId() && !getStoredToken() && localStorage.getItem(EVER_KEY) === '1';
 }
 
 export function getLastBackupTime() {
@@ -162,19 +166,32 @@ export async function gatherDiagnostics({ live = false } = {}) {
   return report;
 }
 
-async function loadGis() {
-  if (_gisLoaded) return;
-  if (document.querySelector('script[src*="accounts.google.com/gsi/client"]')) {
-    _gisLoaded = true;
-    return;
-  }
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
+function gisReady() {
+  return typeof google !== 'undefined' && !!(google.accounts && google.accounts.oauth2);
+}
+// Memoize the load PROMISE, not a "tag exists" flag: a racing second caller
+// that saw the just-appended <script> before it ran would proceed and hit
+// `google is not defined`. Resolve only on the script's real load (or when the
+// global is already present); a failed load clears the memo so a retry works.
+function loadGis() {
+  if (gisReady()) return Promise.resolve();
+  if (_gisPromise) return _gisPromise;
+  _gisPromise = new Promise((resolve, reject) => {
+    const fail = () => { _gisPromise = null; reject(new Error('Failed to load Google Identity Services')); };
+    let script = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
+    if (script) {
+      if (gisReady()) return resolve();
+      script.addEventListener('load', () => resolve(), { once: true });
+      script.addEventListener('error', fail, { once: true });
+      return;
+    }
+    script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
-    script.onload = () => { _gisLoaded = true; resolve(); };
-    script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+    script.onload = () => resolve();
+    script.onerror = fail;
     document.head.appendChild(script);
   });
+  return _gisPromise;
 }
 
 function getStoredToken() {
@@ -190,6 +207,7 @@ function storeToken(token, expiresIn) {
     token,
     expiresAt: Date.now() + (expiresIn - 60) * 1000,
   }));
+  try { localStorage.setItem(EVER_KEY, '1'); } catch {}
 }
 
 // One token request. The `prompt` decides the UX: `'none'` renews silently
