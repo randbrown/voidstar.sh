@@ -80,9 +80,51 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Token',
   'Access-Control-Max-Age': '86400',
 };
+
+// Optional shared-secret gate. Set the WORKER_TOKEN secret
+// (`wrangler secret put WORKER_TOKEN`) and the client sends it as the
+// X-Worker-Token header (Settings → sync worker → access token, which rides
+// the Drive backup so every device shares it). When the secret is unset the
+// worker stays open — backward-compatible for existing self-hosts — so a
+// deploy that wants protection must opt in by setting it. Constant-time-ish
+// compare to avoid leaking length/prefix via timing.
+function tokenOk(request, env) {
+  if (!env.WORKER_TOKEN) return true; // not configured → open (opt-in security)
+  const got = request.headers.get('X-Worker-Token') || '';
+  const want = env.WORKER_TOKEN;
+  if (got.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
+  return diff === 0;
+}
+
+// Best-effort per-IP rate limit. Workers isolates are ephemeral and per-colo,
+// so this is not a hard global limit — it's a cheap throttle that blunts a
+// single client hammering the expensive AI/search/Drive routes (the real cost
+// risk) without any external state. A determined attacker across many IPs/colos
+// isn't stopped by this; the token gate above is the real access control.
+const RATE_BUCKET = new Map(); // ip → { count, resetAt }
+const RATE_LIMIT = 60;         // requests
+const RATE_WINDOW_MS = 60_000; // per minute
+
+function rateLimited(request, now) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  let b = RATE_BUCKET.get(ip);
+  if (!b || now >= b.resetAt) {
+    b = { count: 0, resetAt: now + RATE_WINDOW_MS };
+    RATE_BUCKET.set(ip, b);
+  }
+  b.count++;
+  // Opportunistically evict stale buckets so the Map can't grow unbounded
+  // across a long-lived isolate.
+  if (RATE_BUCKET.size > 5000) {
+    for (const [k, v] of RATE_BUCKET) if (now >= v.resetAt) RATE_BUCKET.delete(k);
+  }
+  return b.count > RATE_LIMIT;
+}
 
 function corsOrigin(request, env) {
   const origin = request.headers.get('Origin') || '';
@@ -2413,6 +2455,15 @@ export default {
 
     if (url.pathname === '/' || url.pathname === '/health') {
       return new Response('setlist-sync: ok', { status: 200 });
+    }
+
+    // Access control + throttle apply to every real route (not / or /health).
+    if (!tokenOk(request, env)) {
+      return corsResponse(JSON.stringify({ error: 'unauthorized' }), 401, request, env);
+    }
+    if (rateLimited(request, Date.now())) {
+      return corsResponse(JSON.stringify({ error: 'rate limited' }), 429, request, env,
+        { 'Retry-After': '60' });
     }
 
     try {

@@ -47,7 +47,7 @@ config). Tokens and per-device display prefs never ride it:
 
 | Key | Store | Backed up? | What |
 |---|---|---|---|
-| `voidstar.setlist.sources` | localStorage | ✓ `sources` | worker URL + personal/community Drive chart-folder ids (Settings) |
+| `voidstar.setlist.sources` | localStorage | ✓ `sources` | worker URL + optional worker access token + personal/community Drive chart-folder ids (Settings) |
 | `voidstar.setlist.gdrive.clientId` | localStorage | ✓ `settings.gdriveClientId` | Google OAuth client id — now an **optional override** (Settings → advanced): sign-in defaults to the app-owned client id (`src/lib/qualia/google-config.js`, `PUBLIC_GOOGLE_CLIENT_ID`); this key only overrides it for a self-host. Public identifier, not a secret |
 | `voidstar.setlist.spotify.clientId` | localStorage | ✓ `settings.spotifyClientId` | Spotify client id — shared by the worker and the PKCE login |
 | `voidstar.setlist.gdrive.token` | localStorage | ✗ | cached OAuth access token (~1 h) |
@@ -939,3 +939,15 @@ artist/genre/year/artwork/duration),
 summary, same provider chain and guards as `/ai/chart`; `retry=1` on both
 `/ai/*` GET routes = "previous answer was wrong, research harder, don't
 cache"), `GET /health`.
+
+**Access control.** CORS is not access control (a non-browser client ignores
+it), so a public worker's AI/Spotify/Drive quota is spendable by anyone who
+learns the URL. Set a `WORKER_TOKEN` secret (`wrangler secret put
+WORKER_TOKEN`) and the same value in the app (Settings → sync worker → access
+token, which rides the Drive backup to every device): every route except `/`
+and `/health` then requires a matching `X-Worker-Token` header (constant-time
+compare) and returns `401` otherwise. When the secret is unset the worker
+stays open for back-compat, so protection is opt-in. A best-effort per-IP
+token bucket (60 req/min, in-memory, per-colo) also throttles a single client
+hammering the expensive routes — it's a cost blunt, not a hard global limit;
+the token is the real gate.
