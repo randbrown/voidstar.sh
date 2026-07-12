@@ -446,6 +446,7 @@ export function initQualiaPage() {
     autoCycleBeatSync,
     transitionStyle,
     transitionMs,
+    quantizeScene,
     numPoses:       pose.getNumPoses(),
     poseSmoothing:  poseSmoothingValue,
     reactSmoothing: reactSmoothingValue,
@@ -617,8 +618,11 @@ export function initQualiaPage() {
     fxSelect.appendChild(opt);
   }
   fxSelect.addEventListener('change', () => {
-    runSceneTransition();
-    core.setActive(fxSelect.value).catch(err => console.error('[qualia] setActive failed:', err));
+    const nextId = fxSelect.value;
+    quantizedSceneChange(() => {
+      runSceneTransition();
+      core.setActive(nextId).catch(err => console.error('[qualia] setActive failed:', err));
+    });
   });
 
   // ── Per-quale fps memory + picker badge ───────────────────────────────────
@@ -2025,8 +2029,10 @@ export function initQualiaPage() {
             const i = ids.indexOf(cur || ids[0]);
             const step = dy < 0 ? 1 : -1;
             const nextId = ids[(i + step + ids.length) % ids.length];
-            runSceneTransition();
-            core.setActive(nextId).catch(err => console.error('[qualia] swipe setActive failed:', err));
+            quantizedSceneChange(() => {
+              runSceneTransition();
+              core.setActive(nextId).catch(err => console.error('[qualia] swipe setActive failed:', err));
+            });
           }
         } else if (Math.abs(dx) + Math.abs(dy) < TAP_MAX_MOVE_PX) {
           // A stationary single-finger tap. Two within the tap window toggle
@@ -2066,8 +2072,10 @@ export function initQualiaPage() {
     const cur = core.activeId();
     const i = ids.indexOf(cur || ids[0]);
     const nextId = ids[(i + step + ids.length) % ids.length];
-    runSceneTransition();
-    core.setActive(nextId).catch(err => console.error('[qualia] quick-menu setActive failed:', err));
+    quantizedSceneChange(() => {
+      runSceneTransition();
+      core.setActive(nextId).catch(err => console.error('[qualia] quick-menu setActive failed:', err));
+    });
   }
 
   function quickMenuAction(action) {
@@ -3560,6 +3568,11 @@ export function initQualiaPage() {
   function phaseNext() {
     const steps = getActivePhaseSteps();
     if (!steps || !steps.length) return;
+    quantizedSceneChange(() => phaseNextNow());
+  }
+  function phaseNextNow() {
+    const steps = getActivePhaseSteps();
+    if (!steps || !steps.length) return;
     lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-cycle
     runSceneTransition();                        // freeze the old look before the step lands
     const fxId = core.activeId();
@@ -3617,11 +3630,13 @@ export function initQualiaPage() {
     const excluded = fxId ? loadPhaseExcludedFor(fxId) : new Set();
     const incl = phaseIncludedIndices(steps, excluded).map(i => steps[i]);
     if (!incl.length) return;
-    lastAutoTransitionMs = performance.now();   // arm the auto-cycle cross-guard
-    runSceneTransition();                        // freeze the old look before the step lands
-    autoPhaseStepCount += dir;
-    const idx = ((autoPhaseStepCount % incl.length) + incl.length) % incl.length;
-    applyPhaseStep(incl[idx]);
+    quantizedSceneChange(() => {
+      lastAutoTransitionMs = performance.now();   // arm the auto-cycle cross-guard
+      runSceneTransition();                        // freeze the old look before the step lands
+      autoPhaseStepCount += dir;
+      const idx = ((autoPhaseStepCount % incl.length) + incl.length) % incl.length;
+      applyPhaseStep(incl[idx]);
+    });
   }
 
   function tickPhase() {
@@ -3741,6 +3756,30 @@ export function initQualiaPage() {
     if (transitionStyle === 'cut') return;
     core.beginTransition({ style: transitionStyle, durationMs: transitionMs });
   }
+
+  // — Cycle-quantized scene changes —
+  // With quantize on and Strudel playing, every scene change (quale switch,
+  // phase step — manual or auto) waits for the next cycle boundary so the
+  // visual change lands ON the downbeat. Newest intent wins: a second change
+  // requested while one is pending replaces it (you always get the last thing
+  // you asked for, once, on the beat). Falls through to immediate when
+  // Strudel isn't playing (no clock) or the boundary is absurdly far out.
+  let quantizeScene = stored.quantizeScene === 'cycle' ? 'cycle' : 'off';
+  let _quantTimer = null;
+  function quantizedSceneChange(apply) {
+    if (_quantTimer) { clearTimeout(_quantTimer); _quantTimer = null; }
+    let secs = null;
+    if (quantizeScene === 'cycle') {
+      try { secs = strudel.getSecondsUntilNextStrudelBoundary?.(); } catch {}
+    }
+    if (secs == null || secs <= 0.06 || secs > 8) { apply(); return; }
+    // Fire ~20 ms early so the swap (which includes async fx create) lands on
+    // the beat rather than just after it.
+    _quantTimer = setTimeout(() => {
+      _quantTimer = null;
+      try { apply(); } catch (e) { console.error('[qualia] quantized scene change failed:', e); }
+    }, Math.max(0, secs * 1000 - 20));
+  }
   if (transStyleSelect) {
     transStyleSelect.value = transitionStyle;
     transStyleSelect.addEventListener('change', () => {
@@ -3753,6 +3792,14 @@ export function initQualiaPage() {
     transMsSelect.addEventListener('change', () => {
       const v = parseInt(transMsSelect.value, 10);
       transitionMs = TRANSITION_MS_OPTS.includes(v) ? v : 600;
+      settings.save();
+    });
+  }
+  const transQuantSelect = document.getElementById('transition-quant');
+  if (transQuantSelect) {
+    transQuantSelect.value = quantizeScene;
+    transQuantSelect.addEventListener('change', () => {
+      quantizeScene = transQuantSelect.value === 'cycle' ? 'cycle' : 'off';
       settings.save();
     });
   }
@@ -3811,9 +3858,11 @@ export function initQualiaPage() {
       nextId = ids[i];
     }
     if (!nextId || nextId === cur) return;
-    lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-phase
-    runSceneTransition();                        // freeze the old quale before the swap
-    core.setActive(nextId).catch(err => console.error('[qualia] cycle setActive failed:', err));
+    quantizedSceneChange(() => {
+      lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-phase
+      runSceneTransition();                        // freeze the old quale before the swap
+      core.setActive(nextId).catch(err => console.error('[qualia] cycle setActive failed:', err));
+    });
   }
 
   // Beat-sync only counts when there's an actual audio source. With audio
@@ -6051,8 +6100,10 @@ export function initQualiaPage() {
     if (!ids.length) return;
     const i = ids.indexOf(core.activeId() || ids[0]);
     const j = dir < 0 ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
-    runSceneTransition();
-    core.setActive(ids[j]).catch(err => console.error('[qualia] setActive failed:', err));
+    quantizedSceneChange(() => {
+      runSceneTransition();
+      core.setActive(ids[j]).catch(err => console.error('[qualia] setActive failed:', err));
+    });
   }
   const padActions = {
     tuner:        () => document.getElementById('btn-rig-tuner')?.click(),

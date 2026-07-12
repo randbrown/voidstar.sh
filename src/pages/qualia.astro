@@ -2784,6 +2784,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="1800">1.8s</option>
           <option value="2500">2.5s</option>
         </select>
+        <select id="transition-quant" class="ctrl-btn" title="Quantize scene changes to the Strudel clock — every quale switch / phase step waits for the next cycle boundary so the visual change lands on the downbeat (free when Strudel isn't playing)">
+          <option value="off">free</option>
+          <option value="cycle">♩ cycle</option>
+        </select>
         <button class="ctrl-btn" id="btn-cycle-manage" title="Pick which quales the auto-cycle rotates through, and which phases the auto-phase rotates through">manage</button>
       </div>
     </div>
