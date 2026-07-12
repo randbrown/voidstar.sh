@@ -21,8 +21,17 @@ import { parseMarkdown, serializeMarkdown } from './markdown.js';
 import { TaskItemView, ImageView } from './nodeviews.js';
 import { tokenize, matchRanges } from '../search-highlight.js';
 
-function buildInputRules() {
+function buildInputRules(opts = {}) {
   const rules = [...smartQuotes, ellipsis, emDash];
+  // "[[": wikilink trigger — delete the brackets and open the note picker at
+  // the cursor (views/editor.js supplies onWikiLink → its link-to-note modal),
+  // so linking never leaves the keyboard.
+  if (opts.onWikiLink) {
+    rules.push(new InputRule(/\[\[$/, (state, match, start, end) => {
+      setTimeout(() => { try { opts.onWikiLink(); } catch {} }, 0);
+      return state.tr.delete(start, end);
+    }));
+  }
   rules.push(wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote));
   rules.push(wrappingInputRule(
     /^(\d+)\.\s$/, schema.nodes.ordered_list,
@@ -207,11 +216,11 @@ function fileCapturePlugin(onFiles) {
 // insertText, destroy }. `onChange` fires on every doc change (caller
 // debounces the actual save); `onFiles(files, view)` receives pasted/dropped
 // files so the view layer can create attachments and insert image nodes.
-export function createEditor(mount, { markdown = '', onChange, onFiles, placeholder = 'write…' } = {}) {
+export function createEditor(mount, { markdown = '', onChange, onFiles, onWikiLink, placeholder = 'write…' } = {}) {
   const state = EditorState.create({
     doc: parseMarkdown(markdown),
     plugins: [
-      buildInputRules(),
+      buildInputRules({ onWikiLink }),
       buildKeymap(),
       history(),
       dropCursor(),

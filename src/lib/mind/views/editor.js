@@ -272,6 +272,7 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     markdown: note.body,
     onChange: () => { scheduleSave(); syncHistoryButtons(); if (clearSearchHighlight) clearSearchHighlight(); },
     onFiles: handleFiles,
+    onWikiLink: () => openLinkPicker(),   // "[[": keyboard wikilink trigger
     placeholder: 'write…',
   });
 
@@ -461,13 +462,16 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
 
   // Link-to-note picker: search-as-you-type over all notes, insert a
   // [title](#note/id) link at the cursor. Id-based, so renames never break it.
-  const linkBtn = btn('&#128279;', 'mn-btn-icon', () => {
+  // Opened by the 🔗 button OR by typing "[[" in the editor (the wikilink
+  // input rule — see editor/setup.js), so linking never leaves the keyboard:
+  // [[, type to filter, Enter takes the top hit, Esc cancels.
+  function openLinkPicker() {
     const overlay = el('div', 'mn-modal-overlay');
     const box = el('div', 'mn-modal');
     box.appendChild(el('div', 'mn-modal-title', 'link to note'));
     const input = el('input', 'mn-input');
     input.type = 'search';
-    input.placeholder = 'search notes…';
+    input.placeholder = 'search notes… (Enter = top hit)';
     box.appendChild(input);
     const list = el('div', 'mn-linklist');
     box.appendChild(list);
@@ -475,7 +479,15 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
 
+    const pick = (h) => {
+      overlay.remove();
+      editor.insertLink(h.title, `#note/${h.id}`);
+      scheduleSave();
+      editor.focus();
+    };
+
     let seq = 0;
+    let topHit = null;
     const draw = async () => {
       const mySeq = ++seq;
       const hits = (await query(input.value.trim(), { type: 'note' }))
@@ -483,24 +495,24 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, 12);
       if (mySeq !== seq) return;
+      topHit = hits[0] || null;
       list.innerHTML = '';
       for (const h of hits) {
-        const row = btn(esc(h.title), 'mn-btn-ghost mn-linkrow', () => {
-          overlay.remove();
-          editor.insertLink(h.title, `#note/${h.id}`);
-          scheduleSave();
-          editor.focus();
-        });
+        const row = btn(esc(h.title), 'mn-btn-ghost mn-linkrow', () => pick(h));
         list.appendChild(row);
       }
       if (!hits.length) list.appendChild(el('div', 'mn-dim', 'no matches'));
     };
     input.addEventListener('input', draw);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { overlay.remove(); editor?.focus(); }
+      else if (e.key === 'Enter' && topHit) { e.preventDefault(); pick(topHit); }
+    });
     draw();
     input.focus();
-  });
-  linkBtn.title = 'link to another note';
+  }
+  const linkBtn = btn('&#128279;', 'mn-btn-icon', openLinkPicker);
+  linkBtn.title = 'link to another note (or type [[ in the note)';
   actions.insertBefore(linkBtn, pinBtn);
 
   // ── Attachment strip ──
