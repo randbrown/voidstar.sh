@@ -2097,8 +2097,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-looper-retro { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
     #btn-looper-retro:disabled { opacity: 0.4; cursor: default; }
     .rig-collapse { padding: 0.02rem 0.35rem; font-size: 0.7rem; line-height: 1; }
-    #btn-rig-strip, #btn-rig-tuner, #btn-rig-loop { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
-    #btn-rig-strip.active, #btn-rig-tuner.active, #btn-rig-loop.active {
+    #btn-rig-strip, #btn-rig-tuner, #btn-rig-loop, #btn-rig-freeze { padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1; }
+    #btn-rig-strip.active, #btn-rig-tuner.active, #btn-rig-loop.active, #btn-rig-freeze.active {
       color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10);
     }
 
@@ -3696,6 +3696,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
       <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — EQ, comp, drives, amp, cab, delay → reverb, pan on the rig signal">strip</button>
       <button class="ctrl-btn" id="btn-rig-tuner" title="Strobe tuner — Peterson-style strobe reading the raw rig input (pre-distortion); bands freeze when in tune">tune</button>
+      <button class="ctrl-btn" id="btn-rig-freeze" title="Freeze — sustain the last moment of the processed signal as an endless pad (tap again to release; re-tap while frozen to re-capture)">frz</button>
       <button class="ctrl-btn" id="btn-rig-loop" title="Looper — record, layer, and loop your signal">loop</button>
       <span id="rig-scope-gain-wrap" class="rig-scope-gain-wrap"></span>
       <span class="sp-status" id="rig-signal-status"></span>

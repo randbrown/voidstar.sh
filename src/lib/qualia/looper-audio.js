@@ -441,6 +441,94 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     rigMaster.connect(outputAnalyser);
   }
   function effRig() { return _rigMuted ? 0 : _rigLevel; }
+
+  // ── Freeze / infinite sustain ───────────────────────────────────────────────
+  // The ambient pedal-steel drone move: grab the last moment of the PROCESSED
+  // signal (the recorder ring taps the strip output, so the pad carries the
+  // amp/cab/verb that were on) and loop it as an endless pad under whatever is
+  // played next. A long equal-power seam (25% of the grain) makes the pad
+  // smooth rather than obviously looped; re-triggering while frozen replaces
+  // the grain (evolving drone). Output rides rigMaster → soft limiter, so it
+  // obeys the rig level/mute and can't clip the sum.
+  const FREEZE_GRAB_SEC = 1.6;     // ring slice requested (grain + seam + margin)
+  const FREEZE_GRAIN_SEC = 1.0;    // loop length
+  const FREEZE_LEVEL = 0.8;        // pad sits just under the live signal
+  let _freeze = null;              // { source, gain }
+
+  function isFrozen() { return !!_freeze; }
+
+  function freezeStop({ fadeSec = 0.35 } = {}) {
+    const f = _freeze;
+    if (!f) return;
+    _freeze = null;
+    try {
+      const t = ctx.currentTime;
+      f.gain.gain.cancelScheduledValues(t);
+      f.gain.gain.setValueAtTime(f.gain.gain.value, t);
+      f.gain.gain.linearRampToValueAtTime(0, t + fadeSec);
+      f.source.stop(t + fadeSec + 0.05);
+      setTimeout(() => { try { f.source.disconnect(); f.gain.disconnect(); } catch {} }, (fadeSec + 0.2) * 1000);
+    } catch {}
+  }
+
+  async function freezeStart() {
+    if (!usingWorklet || !recNode || !srcNode) return false;   // needs the ring (capture open)
+    await ensureContext();
+    ensureRigMaster();
+    // Grab the newest slice of the ring (same plumbing as retro-grab).
+    const id = `f${(_grabSeq++).toString(36)}`;
+    const resp = await new Promise((resolve) => {
+      _pendingGrabs.set(id, resolve);
+      try { recNode.port.postMessage({ cmd: 'grab', seconds: FREEZE_GRAB_SEC, id }); }
+      catch { _pendingGrabs.delete(id); resolve(null); }
+      setTimeout(() => { if (_pendingGrabs.has(id)) { _pendingGrabs.delete(id); resolve(null); } }, 600);
+    });
+    if (!resp || !resp.chans || !resp.chans.length || !resp.frames) return false;
+
+    const sr = resp.sampleRate || ctx.sampleRate;
+    const grain = Math.min(Math.round(FREEZE_GRAIN_SEC * sr), resp.frames);
+    const nSeam = grain >> 2;                       // 25% seam → pad, not loop
+    if (grain < sr * 0.2) return false;             // too little audio to freeze
+    const start = resp.frames - grain;              // newest `grain` frames
+    const buf = ctx.createBuffer(resp.chans.length, grain, sr);
+    for (let ch = 0; ch < resp.chans.length; ch++) {
+      const src = resp.chans[ch];
+      const d = buf.getChannelData(ch);
+      d.set(src.subarray(start, start + grain));
+      // Seam: crossfade the tail into the audio preceding the grain (real
+      // recorded continuity when the ring has it, else fade against the head).
+      const hasPre = start >= nSeam;
+      for (let i = 0; i < nSeam; i++) {
+        const t = (i + 1) / nSeam;
+        const gOut = Math.cos(t * Math.PI / 2);
+        const gIn = Math.sin(t * Math.PI / 2);
+        d[grain - nSeam + i] = hasPre
+          ? d[grain - nSeam + i] * gOut + src[start - nSeam + i] * gIn
+          : d[grain - nSeam + i] * gOut + d[i] * gIn;
+      }
+      if (!hasPre) for (let i = 0; i < 64 && i < grain; i++) d[i] *= i / 64; // de-click head
+    }
+
+    freezeStop({ fadeSec: 0.2 });                  // replace an existing pad
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    gain.connect(rigMaster);
+    const source = ctx.createBufferSource();
+    source.buffer = buf;
+    source.loop = true;
+    source.connect(gain);
+    const t = ctx.currentTime;
+    source.start(t);
+    gain.gain.linearRampToValueAtTime(FREEZE_LEVEL, t + 0.08);
+    _freeze = { source, gain };
+    return true;
+  }
+
+  async function toggleFreeze() {
+    if (_freeze) { freezeStop(); return false; }
+    return freezeStart();
+  }
+
   function setRigMuted(on) { _rigMuted = !!on; if (rigMaster) ramp(rigMaster.gain, effRig()); }
   function setRigLevel(v) { _rigLevel = clamp01(v); if (rigMaster && !_rigMuted) ramp(rigMaster.gain, _rigLevel); }
   function primeRig(level, muted) { _rigLevel = clamp01(level); _rigMuted = !!muted; if (rigMaster) ramp(rigMaster.gain, effRig()); }
@@ -889,6 +977,80 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return node;
   }
 
+  // ── Loop-seam crossfade ────────────────────────────────────────────────────
+  // A loop region whose IN/OUT are grid boundaries lands mid-waveform, so the
+  // wrap (last sample → first sample) is an amplitude step — an audible click
+  // every pass, which on sustained ambient material is a metronome of clicks.
+  // Fix: equal-power crossfade the region's TAIL into the audio immediately
+  // BEFORE the region start (the ring/recording has pre-roll), so at the wrap
+  // the signal is genuinely continuous (B[s-1]→B[s] as recorded). With no
+  // pre-roll, fall back to a micro fade-out(tail)+fade-in(head) — a tiny dip,
+  // never a click.
+  const SEAM_FADE_SEC = 0.008;
+
+  // Bake the seam into the track's buffer IN PLACE, before source.start()
+  // acquires the content. Returns an undo record (restored by stopVoice) so
+  // the stored PCM/waveform stays pristine and re-locks re-bake at the new
+  // nudge-shifted position.
+  function bakeSeam(buffer, startFrame, loopFrames, sr) {
+    const n = Math.min(Math.round(SEAM_FADE_SEC * sr), loopFrames >> 1);
+    if (n < 8) return null;
+    const tailAt = startFrame + loopFrames - n;
+    const hasPre = startFrame >= n;
+    const nch = buffer.numberOfChannels;
+    const saved = { tailAt, n, tails: [], heads: hasPre ? null : [] };
+    for (let ch = 0; ch < nch; ch++) {
+      const d = buffer.getChannelData(ch);
+      saved.tails.push(d.slice(tailAt, tailAt + n));
+      if (!hasPre) saved.heads.push(d.slice(startFrame, startFrame + n));
+      for (let i = 0; i < n; i++) {
+        const t = (i + 1) / n;
+        const gOut = Math.cos(t * Math.PI / 2);
+        if (hasPre) {
+          d[tailAt + i] = d[tailAt + i] * gOut + d[startFrame - n + i] * Math.sin(t * Math.PI / 2);
+        } else {
+          d[tailAt + i] *= gOut;                       // tail → 0…
+          d[startFrame + i] *= Math.sin((i / n) * Math.PI / 2); // …head from 0
+        }
+      }
+    }
+    saved.startFrame = startFrame;
+    return saved;
+  }
+
+  function unbakeSeam(buffer, bake) {
+    if (!bake) return;
+    try {
+      for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+        const d = buffer.getChannelData(ch);
+        d.set(bake.tails[ch], bake.tailAt);
+        if (bake.heads) d.set(bake.heads[ch], bake.startFrame);
+      }
+    } catch {}
+  }
+
+  // Same crossfade applied to freshly-sliced region copies (the stretch path
+  // owns its copies, so no undo needed). `preSlices` = per-channel arrays of
+  // the n samples before the region start, or null.
+  function xfadeRegionCopies(regions, preSlices, sr) {
+    const len = regions[0]?.length || 0;
+    const n = Math.min(Math.round(SEAM_FADE_SEC * sr), len >> 1);
+    if (n < 8) return;
+    for (let ch = 0; ch < regions.length; ch++) {
+      const d = regions[ch];
+      const pre = preSlices ? preSlices[ch] : null;
+      for (let i = 0; i < n; i++) {
+        const t = (i + 1) / n;
+        const gOut = Math.cos(t * Math.PI / 2);
+        if (pre) d[len - n + i] = d[len - n + i] * gOut + pre[i] * Math.sin(t * Math.PI / 2);
+        else {
+          d[len - n + i] *= gOut;
+          d[i] *= Math.sin((i / n) * Math.PI / 2);
+        }
+      }
+    }
+  }
+
   // Start (or restart) one track's loop voice. Other voices keep playing — only
   // the voice for this track.id is replaced, so re-locking one loop to a new
   // boundary (length / nudge change) doesn't disturb the rest.
@@ -933,6 +1095,13 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       if (node) {
         const regions = [];
         for (let ch = 0; ch < nch; ch++) regions.push(track.buffer.getChannelData(ch).slice(startFrame, startFrame + track.regionFrames));
+        // Seam crossfade on the copies (see bakeSeam) so the stretch loop
+        // doesn't click every wrap.
+        const nPre = Math.min(Math.round(SEAM_FADE_SEC * sr), track.regionFrames >> 1);
+        const preSlices = startFrame >= nPre && nPre >= 8
+          ? Array.from({ length: nch }, (_, ch) => track.buffer.getChannelData(ch).slice(startFrame - nPre, startFrame))
+          : null;
+        xfadeRegionCopies(regions, preSlices, sr);
         try {
           node.dropBuffers();
           await node.addBuffers(regions);
@@ -949,6 +1118,14 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
     // Varispeed path (default): a looping BufferSource (pitch shifts with rate).
     // Stereo buffers play natively; `offset` drops in at the current phase.
+    // Seam-bake BEFORE start() and keep it for the voice's lifetime (restored
+    // in stopVoice): whether the engine snapshots the buffer at start() or
+    // keeps referencing it live (implementations differ), the playing loop has
+    // the crossfade either way. A persist/export while the voice plays
+    // captures the 8 ms seam — which loops cleanly in a DAW too; stopped
+    // tracks persist pristine. A re-lock (stop→play) re-bakes at the new
+    // nudge-shifted position.
+    const seam = bakeSeam(track.buffer, startFrame, loopFrames, sr);
     const { when, phase } = plan();
     const source = ctx.createBufferSource();
     source.buffer = track.buffer;
@@ -958,7 +1135,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     source.playbackRate.value = rate;
     source.connect(c.gain);
     source.start(when, (startFrame + phase * loopFrames) / sr);
-    voices.set(track.id, { kind: 'buffer', source, playStartAbs: when - phase * playLoopDur, playLoopDur });
+    voices.set(track.id, { kind: 'buffer', source, playStartAbs: when - phase * playLoopDur, playLoopDur, seam, buffer: track.buffer });
     ensureAdopted();
     return true;
   }
@@ -969,6 +1146,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     if (v.kind === 'buffer' && v.source) {
       try { v.source.stop(); } catch {}
       try { v.source.disconnect(); } catch {}
+      if (v.seam) unbakeSeam(v.buffer, v.seam);
     } else if (v.kind === 'stretch') {
       // Keep the cached stretch node; just stop processing.
       try { chans.get(id)?.stretch?.stop(); } catch {}
@@ -1066,6 +1244,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   function dispose() {
+    freezeStop({ fadeSec: 0.05 });
     for (const resolve of _pendingGrabs.values()) { try { resolve(null); } catch {} }
     _pendingGrabs.clear();
     removeAll();
@@ -1149,6 +1328,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     },
     getCaptureAnalyser: () => captureAnalyser,
     getTunerAnalyser: () => tunerAnalyser,
+    // Freeze / infinite-sustain pad (see freezeStart above).
+    toggleFreeze, isFrozen, freezeStart, freezeStop,
     // Current monophonic pitch of the clean (pre-strip) input, in Hz, or -1
     // when the rig isn't capturing / the signal is unvoiced or too quiet. Reads
     // the tuner analyser's newest window and autocorrelates it — allocation-

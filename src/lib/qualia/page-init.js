@@ -6078,6 +6078,7 @@ export function initQualiaPage() {
     phaseNext:    () => phaseShift(+1),
     delayToggle:  () => looper.toggleStripStage?.('delay'),
     reverbToggle: () => looper.toggleStripStage?.('reverb'),
+    freeze:       () => document.getElementById('btn-rig-freeze')?.click(),
     pause:        () => btnPause.click(),
     blackout:     () => setBlackout(!core.isRenderSuspended()),
   };
@@ -6203,6 +6204,7 @@ export function initQualiaPage() {
       case '8': padActions.camNext(); break;                     // Next camera device
       case 'i': if (e.shiftKey) padActions.phasePrev(); else padActions.phaseNext(); break;   // Phase step prev / next
       // Delay mix: [ / ]    Reverb mix: - / =    Rig master vol: , / .
+      case ';': padActions.freeze(); break;                      // Freeze / infinite-sustain pad
       case '[': looper.nudgeStripParam?.('delay', 'mix', -0.05); break;
       case ']': looper.nudgeStripParam?.('delay', 'mix', +0.05); break;
       case '-': looper.nudgeStripParam?.('reverb', 'mix', -0.05); break;

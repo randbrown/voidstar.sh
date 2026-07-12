@@ -265,6 +265,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnScopeCollapse = document.getElementById('btn-rig-scope-collapse');
   const btnStrip    = document.getElementById('btn-rig-strip');
   const btnTuner    = document.getElementById('btn-rig-tuner');
+  const btnFreeze   = document.getElementById('btn-rig-freeze');
   const stripPanel  = document.getElementById('rig-strip');
   const stripBody   = document.getElementById('rig-strip-body');
   const stripUtilBody = document.getElementById('rig-strip-util-body');
@@ -3166,6 +3167,25 @@ export function createLooper({ audio, syncStrudel } = {}) {
     syncScopeLoop();
   }
 
+  // ── Freeze / infinite sustain ──────────────────────────────────────────────
+  // One tap sustains the last moment of the processed signal as an endless pad
+  // (looper-audio.freezeStart); tap again to release. Re-tapping while frozen
+  // re-captures — an evolving drone. Needs the capture ring, so the first tap
+  // also opens capture if the signal fader is up.
+  async function toggleFreeze() {
+    if (looperAudio.isFrozen()) {
+      looperAudio.freezeStop();
+      refreshFreezeBtn();
+      setStatus('freeze released');
+      return;
+    }
+    try { await looperAudio.ensureCaptureOpen(model.deviceId); } catch {}
+    const ok = await looperAudio.freezeStart();
+    refreshFreezeBtn();
+    setStatus(ok ? 'frozen — tap frz to release' : 'freeze needs the input open (raise the signal fader)');
+  }
+  function refreshFreezeBtn() { if (btnFreeze) btnFreeze.classList.toggle('active', looperAudio.isFrozen()); }
+
   // ── refreshers ───────────────────────────────────────────────────────────
   function refreshTrackRow(track) {
     const el = rowEls.get(track.id);
@@ -3510,6 +3530,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnLoopCollapse) btnLoopCollapse.addEventListener('click', () => { toggleLoopCollapse(); });
   if (btnScopeCollapse) btnScopeCollapse.addEventListener('click', () => { toggleScopesCollapse(); });
   if (btnTuner)  btnTuner.addEventListener('click', () => { toggleTuner(); });
+  if (btnFreeze) btnFreeze.addEventListener('click', () => { toggleFreeze(); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
   if (btnStop)   btnStop.addEventListener('click', () => { stop(); });
   if (btnMute)   btnMute.addEventListener('click', () => { setMuted(!_muted); });
@@ -3571,6 +3592,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     isRecording: () => recording,
     // Clean input pitch in Hz (−1 = none) for the audio.pitch* channels.
     getInputPitchHz: () => looperAudio.getInputPitchHz(),
+    // Freeze / infinite-sustain pad — for the panel button, hotkeys, and MIDI.
+    toggleFreeze,
+    isFrozen: () => looperAudio.isFrozen(),
     play: playAll, stop,
     perFrame,
     getConfig, setConfig,
