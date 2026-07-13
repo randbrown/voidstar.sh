@@ -87,13 +87,25 @@ float bedBand(float x) {
 // Emission ramps. x is normalized temperature in [0,1]; channels deliberately
 // exceed 1.0 at the top — the exponential tone map in the composite rolls
 // them off toward white (the blackbody "hotter → whiter" read).
+//
+// blackbody vs ember is a deliberate contrast: blackbody runs the full
+// physical sweep (cherry → yellow → white) while ember is a smolder — deep
+// crimson into saturated amber that NEVER bleaches to white. hotCore() is
+// the per-palette core color for the same reason: a shared white core would
+// erase the distinction right where the eye lands.
 const PALETTE = /* glsl */`
 vec3 firePal(int idx, float x) {
   x = clamp(x, 0.0, 1.0);
   if (idx == 1) return vec3(0.95 * pow(x, 1.50), 0.85 * pow(x, 2.60), 1.55 * pow(x, 0.80)); // voidfire
   if (idx == 2) return vec3(1.35 * pow(x, 2.80), 1.30 * pow(x, 1.50), 1.50 * pow(x, 0.75)); // cryo
-  if (idx == 3) return vec3(1.75 * pow(x, 0.50), 0.95 * pow(x, 2.10), 0.30 * pow(x, 4.00)); // ember
-  return            vec3(1.65 * pow(x, 0.65), 1.45 * pow(x, 1.90), 1.30 * pow(x, 3.80));    // blackbody
+  if (idx == 3) return vec3(1.55 * pow(x, 0.48), 0.72 * pow(x, 2.60), 0.18 * pow(x, 5.00)); // ember
+  return            vec3(1.65 * pow(x, 0.62), 1.50 * pow(x, 1.55), 1.30 * pow(x, 3.60));    // blackbody
+}
+vec3 hotCore(int idx) {
+  if (idx == 1) return vec3(0.75, 0.85, 1.00);  // voidfire — electric cyan-white
+  if (idx == 2) return vec3(0.80, 0.92, 1.00);  // cryo — icy white
+  if (idx == 3) return vec3(0.95, 0.52, 0.12);  // ember — molten amber, stays saturated
+  return            vec3(0.90, 0.85, 0.80);     // blackbody — warm white
 }
 `;
 
@@ -361,7 +373,7 @@ void main() {
   T = max(T + (T - Tb) * 1.1 * uSharp, 0.0);
 
   vec3 col = firePal(uPalette, T / 1.5) * smoothstep(0.03, 0.11, T);
-  col += vec3(0.90, 0.85, 0.80) * smoothstep(1.30, 1.95, T);   // hottest core → white
+  col += hotCore(uPalette) * smoothstep(1.30, 1.95, T);        // hottest core
   col *= exp(-smoke * 0.55 * vec3(1.0, 1.08, 1.2));            // soot absorption, warms the veil
   col += vec3(0.09, 0.09, 0.13) * smoke * 0.16 * uSmokeVis;    // faint lit-soot scatter
 
@@ -472,7 +484,12 @@ export default {
     { id: 'embers',     label: 'embers',     type: 'range', min: 0, max: 2, step: 0.01, default: 1.0 },
     // 0 = the soft/diffusive look (plain advection, no unsharp), 1 = full
     // MacCormack + unsharp + fine warp. Blends all three legs together.
-    { id: 'sharpness',  label: 'sharpness',  type: 'range', min: 0, max: 1, step: 0.01, default: 0.65 },
+    // The modulator resolves crisper as the mix gets loud, dissolves soft
+    // in the ambient valleys.
+    { id: 'sharpness',  label: 'sharpness',  type: 'range', min: 0, max: 1, step: 0.01, default: 0.65,
+      modulators: [
+        { source: 'audio.total', mode: 'mul', amount: 0.30 },
+      ] },
     { id: 'palette',    label: 'palette',    type: 'select', options: PALETTES, default: 'blackbody' },
     { id: 'reactivity',     label: 'reactivity',      type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
     { id: 'poseReactivity', label: 'pose reactivity', type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
