@@ -6228,6 +6228,8 @@ export function initQualiaPage() {
     freezePop:    () => looper.freezePop?.(),
     freezeRegrab: () => looper.freezeRegrab?.(),
     freezeClear:  () => looper.freezeClear?.(),
+    strudelPlayStop: () => document.getElementById(strudel.isPlaying?.() ? 'btn-strudel-stop' : 'btn-strudel-play')?.click(),
+    voxMute:      () => document.getElementById('btn-vocoder-mute')?.click(),
     pause:        () => btnPause.click(),
     blackout:     () => setBlackout(!core.isRenderSuspended()),
   };
@@ -6277,9 +6279,17 @@ export function initQualiaPage() {
     switch (e.key.toLowerCase()) {
       case 'v': if (e.shiftKey) padActions.qualePrev(); else padActions.qualeNext(); break;   // quale prev / next
       case 'a': btnAudio.click(); break;
-      case 's': document.getElementById('btn-strudel').click(); break;
+      case 's':
+        // ⇧S = play / pause the pattern (transport); S alone = show/hide panel.
+        if (e.shiftKey) padActions.strudelPlayStop();
+        else document.getElementById('btn-strudel').click();
+        break;
       case 'q': document.getElementById('btn-sequencer').click(); break;
-      case 'w': document.getElementById('btn-vocoder').click(); break;
+      case 'w':
+        // ⇧W = mute / unmute the vox output; W alone = show/hide panel.
+        if (e.shiftKey) padActions.voxMute();
+        else document.getElementById('btn-vocoder').click();
+        break;
       case 'o':
         // O = show/hide the rig panel. Shift+O = switch it between mini
         // (pedalboard) and full, opening it first if it's closed.
