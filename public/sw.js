@@ -4,7 +4,13 @@
 //   - HTML pages: network-first with cache fallback. Users see fresh content
 //     on every visit when online; offline they get the last-seen version of
 //     the page they're loading (or the homepage as ultimate fallback).
-//   - Same-origin static assets (JS, CSS, images, manifest, icons): stale-
+//   - Web app manifests (`*.webmanifest`): network-first with cache fallback,
+//     same as HTML. The browser re-reads the manifest for PWA install/update
+//     checks; a stale-while-revalidate copy could hand those checks an
+//     out-of-date app identity (old icons/id) right after a deploy, making
+//     Chrome rewrite the installed app's OS shortcuts — which broke Windows
+//     taskbar pins for mind after the per-app manifest split.
+//   - Same-origin static assets (JS, CSS, images, icons): stale-
 //     while-revalidate — except content-hashed `/_astro/*` files, which are
 //     immutable and served cache-first with no revalidation fetch. Only
 //     `res.ok` responses are ever cached. A miss + network failure OR a non-ok
@@ -48,9 +54,16 @@
 //     and otherwise opening a new window; Done/Snooze action buttons post a
 //     message back to the client so it can update the task. (App-shell change →
 //     version bumped per the rule above.)
+// v13: serve `*.webmanifest` network-first (was stale-while-revalidate). The
+//     manifest is the app's identity for PWA install/update checks; serving a
+//     stale copy right after a manifest-changing deploy makes the browser see
+//     flip-flopping icons/id and rewrite the installed app's OS shortcuts,
+//     which orphaned Windows taskbar pins for mind. Fresh-first means those
+//     checks always read the deployed identity; the cached copy remains as an
+//     offline fallback. (App-shell change → version bumped per the rule above.)
 // Bumping the version also purges the old cache on every client so no one stays
 // pinned to a stale app-shell.
-const SW_VERSION = 'v12';
+const SW_VERSION = 'v13';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
@@ -140,10 +153,14 @@ self.addEventListener('fetch', (event) => {
   // default network behaviour (no caching here, no proxying).
   if (url.origin !== self.location.origin) return;
 
-  // HTML pages → network-first with cache fallback.
+  // HTML pages and web app manifests → network-first with cache fallback.
+  // Manifests must be fresh-first: the browser's PWA install/update checks
+  // read them, and a stale copy after a deploy changes the app's identity
+  // (icons/id) out from under the installed app — see the v13 note above.
   const accept = req.headers.get('accept') || '';
   const isHtml = req.mode === 'navigate' || accept.includes('text/html');
-  if (isHtml) {
+  const isManifest = url.pathname.endsWith('.webmanifest');
+  if (isHtml || isManifest) {
     event.respondWith(
       fetch(req)
         .then((res) => {
@@ -156,7 +173,9 @@ self.addEventListener('fetch', (event) => {
           return res;
         })
         .catch(() =>
-          caches.match(req).then((c) => c || caches.match('/'))
+          // The homepage fallback is for page navigations only — handing its
+          // HTML body to a manifest request would be worse than failing.
+          caches.match(req).then((c) => c || (isHtml ? caches.match('/') : Response.error()))
         )
     );
     return;
@@ -164,8 +183,7 @@ self.addEventListener('fetch', (event) => {
 
   // Everything else (assets). Astro content-hashes /_astro/* filenames, so
   // a cache hit there is immutable — serve it without a revalidation fetch.
-  // Other assets (manifest, icons, sw-adjacent files) stay stale-while-
-  // revalidate.
+  // Other assets (icons, sw-adjacent files) stay stale-while-revalidate.
   //
   // Two failure modes must never reach the page as content:
   //   - network failure (offline / DNS): the .catch below answers with a
