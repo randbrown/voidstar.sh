@@ -26,8 +26,27 @@ crowding one board:
 
 Switch layers with the **top-left / top-right keys** — they send QMK layer jumps
 (`TO(1)` = audio, `TO(2)` = video, `TO(0)` = home), which flip the pad *locally*
-and send nothing to qualia. Tip: give each layer its own **Backlight** color so
-you always know which one you're on.
+and send nothing to qualia.
+
+**Layer colors** (in the app's `?` legend the layers are swatched cyan / amber /
+pink for perform / audio / video). These colors are *not* in the keymap file —
+the Launcher's Backlight is a single **global** effect (per-key / zone, but not
+per-layer), and the exported keymap JSON carries no lighting data. True
+"LEDs recolor when I switch layers" needs a custom **QMK firmware** flash, e.g.:
+
+```c
+// keymap.c — recolor the whole board per active layer
+layer_state_t layer_state_set_user(layer_state_t state) {
+    switch (get_highest_layer(state)) {
+        case 1: rgb_matrix_sethsv_noeeprom(HSV_GOLD);    break; // AUDIO
+        case 2: rgb_matrix_sethsv_noeeprom(HSV_MAGENTA); break; // VIDEO
+        default: rgb_matrix_sethsv_noeeprom(HSV_CYAN);   break; // PERFORM
+    }
+    return state;
+}
+```
+
+That's a compile-and-flash (QMK toolchain), not a Launcher Import.
 
 ### Layer 0 — PERFORM
 | | col 1 | col 2 | col 3 | col 4 |

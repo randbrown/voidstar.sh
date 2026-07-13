@@ -1098,6 +1098,41 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       .ctrl-row .ctrl-keys { min-width: 3.2rem; }
     }
 
+    /* DOIO KB16 three-layer pad map (visual) inside the controls modal. Each
+       layer is the physical 4×4 grid; the swatch colour matches the layer's
+       backlight in doio-kb16-qualia-keymap.json. */
+    .doio-layer { margin-top: 0.5rem; }
+    .doio-layer-head {
+      display: flex; align-items: center; gap: 0.4rem;
+      color: var(--text); font-size: 0.6rem; letter-spacing: 0.06em;
+      text-transform: uppercase; margin-bottom: 0.3rem;
+    }
+    .doio-swatch {
+      width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto;
+      background: var(--sw, var(--cyan)); box-shadow: 0 0 7px var(--sw, var(--cyan));
+    }
+    .doio-layer-head .doio-sub { color: var(--muted); text-transform: none; letter-spacing: 0.01em; }
+    .doio-pad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; }
+    .doio-key {
+      display: flex; flex-direction: column; justify-content: center; gap: 1px;
+      min-height: 2.2rem; padding: 3px 5px;
+      border: 1px solid var(--border); border-radius: 4px;
+      background: rgba(45, 45, 80, 0.3);
+      font-size: 0.55rem; line-height: 1.12; color: var(--muted);
+    }
+    .doio-key .dk-key { color: var(--text); font-size: 0.62rem; }
+    .doio-key.nav {
+      align-items: center; justify-content: center;
+      background: rgba(34, 211, 211, 0.12); border-color: var(--cyan);
+      color: var(--cyan); font-size: 0.62rem; letter-spacing: 0.02em;
+    }
+    .doio-key.frz { border-color: color-mix(in srgb, var(--pink) 45%, var(--border)); }
+    .doio-knobs {
+      display: flex; flex-wrap: wrap; gap: 0.2rem 0.7rem;
+      margin-top: 5px; font-size: 0.56rem; color: var(--muted);
+    }
+    .doio-knobs b { color: var(--text); font-weight: 600; }
+
     /* Strudel panel — same layout as cymatics so the embed feels familiar. */
     #strudel-panel {
       position: fixed; left: 50%; top: 4.5rem;
@@ -3571,6 +3606,77 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>,</kbd><kbd>.</kbd></span><span class="ctrl-lbl">big — rig master vol · push <kbd>Space</kbd> pause</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>[</kbd><kbd>]</kbd></span><span class="ctrl-lbl">left — delay mix · push <kbd>D</kbd> delay on/off</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>-</kbd><kbd>=</kbd></span><span class="ctrl-lbl">right — reverb mix · push <kbd>9</kbd> reverb on/off</span></div>
+    </div>
+
+    <div class="ctrls-sec">DOIO pad <span class="ctrls-tag">3 layers — switch at the top corners</span></div>
+
+    <div class="doio-layer">
+      <div class="doio-layer-head"><span class="doio-swatch" style="--sw:#22d3d3"></span>Layer 0 · Perform <span class="doio-sub">— base / live</span></div>
+      <div class="doio-pad">
+        <div class="doio-key nav">→ AUDIO</div>
+        <div class="doio-key nav">→ VIDEO</div>
+        <div class="doio-key"><span>strudel</span><span class="dk-key">⇧S</span></div>
+        <div class="doio-key"><span>zen</span><span class="dk-key">Z</span></div>
+        <div class="doio-key"><span>tuner</span><span class="dk-key">0</span></div>
+        <div class="doio-key"><span>earth</span><span class="dk-key">1</span></div>
+        <div class="doio-key"><span>metal</span><span class="dk-key">2</span></div>
+        <div class="doio-key"><span>vox mute</span><span class="dk-key">⇧W</span></div>
+        <div class="doio-key frz"><span>freeze</span><span class="dk-key">;</span></div>
+        <div class="doio-key frz"><span>pop</span><span class="dk-key">'</span></div>
+        <div class="doio-key frz"><span>re-grab</span><span class="dk-key">\</span></div>
+        <div class="doio-key frz"><span>clear</span><span class="dk-key">⌫</span></div>
+        <div class="doio-key"><span>quale ◀</span><span class="dk-key">⇧V</span></div>
+        <div class="doio-key"><span>quale ▶</span><span class="dk-key">V</span></div>
+        <div class="doio-key"><span>phase ◀</span><span class="dk-key">⇧I</span></div>
+        <div class="doio-key"><span>phase ▶</span><span class="dk-key">I</span></div>
+      </div>
+      <div class="doio-knobs"><span><b>big</b> vol · push pause</span><span><b>L</b> delay mix · push <b>D</b></span><span><b>R</b> reverb mix · push <b>9</b></span></div>
+    </div>
+
+    <div class="doio-layer">
+      <div class="doio-layer-head"><span class="doio-swatch" style="--sw:#f5b342"></span>Layer 1 · Audio <span class="doio-sub">— freeze + looper</span></div>
+      <div class="doio-pad">
+        <div class="doio-key nav">→ HOME</div>
+        <div class="doio-key nav">→ VIDEO</div>
+        <div class="doio-key"><span>strudel</span><span class="dk-key">⇧S</span></div>
+        <div class="doio-key"><span>zen</span><span class="dk-key">Z</span></div>
+        <div class="doio-key"><span>tuner</span><span class="dk-key">0</span></div>
+        <div class="doio-key"><span>earth</span><span class="dk-key">1</span></div>
+        <div class="doio-key"><span>metal</span><span class="dk-key">2</span></div>
+        <div class="doio-key"><span>vox mute</span><span class="dk-key">⇧W</span></div>
+        <div class="doio-key frz"><span>freeze</span><span class="dk-key">;</span></div>
+        <div class="doio-key frz"><span>pop</span><span class="dk-key">'</span></div>
+        <div class="doio-key frz"><span>re-grab</span><span class="dk-key">\</span></div>
+        <div class="doio-key frz"><span>clear</span><span class="dk-key">⌫</span></div>
+        <div class="doio-key"><span>loop ⏯</span><span class="dk-key">4</span></div>
+        <div class="doio-key"><span>rec ▶</span><span class="dk-key">5</span></div>
+        <div class="doio-key"><span>rec ■</span><span class="dk-key">6</span></div>
+        <div class="doio-key"><span>grab</span><span class="dk-key">7</span></div>
+      </div>
+      <div class="doio-knobs"><span><b>big</b> vol · push pause</span><span><b>L</b> delay mix · push <b>D</b></span><span><b>R</b> reverb mix · push <b>9</b></span></div>
+    </div>
+
+    <div class="doio-layer">
+      <div class="doio-layer-head"><span class="doio-swatch" style="--sw:#ff4da6"></span>Layer 2 · Video <span class="doio-sub">— fx + cameras</span></div>
+      <div class="doio-pad">
+        <div class="doio-key nav">→ HOME</div>
+        <div class="doio-key nav">→ AUDIO</div>
+        <div class="doio-key"><span>pose</span><span class="dk-key">P</span></div>
+        <div class="doio-key"><span>walk</span><span class="dk-key">U</span></div>
+        <div class="doio-key"><span>skeleton</span><span class="dk-key">J</span></div>
+        <div class="doio-key"><span>sparks</span><span class="dk-key">F</span></div>
+        <div class="doio-key"><span>aura</span><span class="dk-key">G</span></div>
+        <div class="doio-key"><span>ripples</span><span class="dk-key">B</span></div>
+        <div class="doio-key"><span>cam size</span><span class="dk-key">C</span></div>
+        <div class="doio-key"><span>next cam</span><span class="dk-key">8</span></div>
+        <div class="doio-key"><span>mirror</span><span class="dk-key">M</span></div>
+        <div class="doio-key"><span>rotate</span><span class="dk-key">R</span></div>
+        <div class="doio-key"><span>quale ◀</span><span class="dk-key">⇧V</span></div>
+        <div class="doio-key"><span>quale ▶</span><span class="dk-key">V</span></div>
+        <div class="doio-key"><span>phase ◀</span><span class="dk-key">⇧I</span></div>
+        <div class="doio-key"><span>phase ▶</span><span class="dk-key">I</span></div>
+      </div>
+      <div class="doio-knobs"><span><b>big</b> vol · push pause</span><span><b>L</b> delay mix · push <b>H</b> blackout</span><span><b>R</b> reverb mix · push <b>X</b> full</span></div>
     </div>
 
     <div class="ctrls-note">
