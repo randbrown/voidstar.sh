@@ -92,7 +92,10 @@ function topBar(title, backHash) {
     const back = btn('&larr;', 'sl-btn-icon', () => navigate(backHash));
     bar.appendChild(back);
   }
-  const t = el('span', 'sl-topbar-title', title);
+  // textContent, not el()'s innerHTML — titles carry song/setlist names,
+  // which come from Spotify/Drive/web-search and could otherwise inject.
+  const t = el('span', 'sl-topbar-title');
+  t.textContent = title;
   bar.appendChild(t);
   return bar;
 }
@@ -176,9 +179,11 @@ function showAnnotateScrollHint(ms = 5000) {
   window.addEventListener('hashchange', dismiss);
 }
 
+// key comes from chart parsing / the AI vision read; keyChanges can also be
+// AI-transcribed off a scanned chart image — external data, always esc()'d.
 function keyBadge(key, origKey) {
   if (!key) return '';
-  const label = origKey && origKey !== key ? `${key} <span class="sl-orig">(orig ${origKey})</span>` : key;
+  const label = origKey && origKey !== key ? `${esc(key)} <span class="sl-orig">(orig ${esc(origKey)})</span>` : esc(key);
   return `<span class="sl-key-badge">${label}</span>`;
 }
 
@@ -187,13 +192,13 @@ function keyBadge(key, origKey) {
 // — never a dim afterthought.
 function keyChangeBadge(keyChanges) {
   if (!keyChanges) return '';
-  return `<span class="sl-keychange-badge">⚠ ${keyChanges}</span>`;
+  return `<span class="sl-keychange-badge">⚠ ${esc(keyChanges)}</span>`;
 }
 
 function vocalistDot(code, legend) {
   if (!code) return '';
   const name = legend?.[code] || code;
-  return `<span class="sl-vocalist" data-v="${code}" title="${name}">${code}</span>`;
+  return `<span class="sl-vocalist" data-v="${esc(code)}" title="${esc(name)}">${esc(code)}</span>`;
 }
 
 // Last default-artist used by setlist import / bulk assign — remembered so
@@ -427,10 +432,10 @@ export async function renderDashboard(root) {
       const songCount = sl.sets.reduce((n, s) => n + s.songIds.length, 0);
       const card = el('div', 'sl-setlist-card');
       card.innerHTML = `
-        <div class="sl-setlist-card-title">${sl.name}</div>
+        <div class="sl-setlist-card-title">${esc(sl.name)}</div>
         <div class="sl-setlist-card-meta">
-          ${sl.venue ? `<span>${sl.venue}</span>` : ''}
-          ${sl.gigDate ? `<span>${sl.gigDate}</span>` : ''}
+          ${sl.venue ? `<span>${esc(sl.venue)}</span>` : ''}
+          ${sl.gigDate ? `<span>${esc(sl.gigDate)}</span>` : ''}
           <span>${songCount} song${songCount !== 1 ? 's' : ''}</span>
           <span>${sl.sets.length} set${sl.sets.length !== 1 ? 's' : ''}</span>
         </div>
@@ -547,10 +552,10 @@ export async function renderLibrary(root) {
     for (const s of filtered) {
       const row = el('div', 'sl-lib-row');
       row.innerHTML = `
-        <span class="sl-lib-title">${s.title}</span>
-        ${s.artist ? `<span class="sl-lib-artist">${s.artist}</span>` : ''}
+        <span class="sl-lib-title">${esc(s.title)}</span>
+        ${s.artist ? `<span class="sl-lib-artist">${esc(s.artist)}</span>` : ''}
         ${statusBadges(s)}
-        ${s.key ? `<span class="sl-key-badge sl-key-sm">${s.key}</span>` : ''}
+        ${s.key ? `<span class="sl-key-badge sl-key-sm">${esc(s.key)}</span>` : ''}
       `;
       row.addEventListener('click', () => navigate(`#song/${s.id}`));
       listEl.appendChild(row);
@@ -831,8 +836,8 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
       const row = el('div', 'sl-source-row');
       const searchUrl = spotifySearchUrl(s.title, s.artist);
       row.innerHTML = `
-        <span class="sl-source-url">${s.title}</span>
-        <a href="${searchUrl}" target="_blank" rel="noopener" class="sl-btn sl-btn-spotify sl-btn-sm">search</a>
+        <span class="sl-source-url">${esc(s.title)}</span>
+        <a href="${esc(searchUrl)}" target="_blank" rel="noopener" class="sl-btn sl-btn-spotify sl-btn-sm">search</a>
       `;
       unlinkedList.appendChild(row);
     }
@@ -866,7 +871,7 @@ export async function renderSetlistView(root, setlistId) {
   root.appendChild(bar);
 
   if (sl.venue || sl.gigDate) {
-    const meta = el('div', 'sl-setlist-meta', `${sl.venue || ''} ${sl.gigDate ? '&middot; ' + sl.gigDate : ''}`);
+    const meta = el('div', 'sl-setlist-meta', `${esc(sl.venue || '')} ${sl.gigDate ? '&middot; ' + esc(sl.gigDate) : ''}`);
     root.appendChild(meta);
   }
 
@@ -944,14 +949,14 @@ export async function renderSetlistView(root, setlistId) {
       card.innerHTML = `
         <div class="sl-song-card-row">
           <span class="sl-song-num">${i + 1}</span>
-          <span class="sl-song-card-title">${merged.title}${merged.artist ? ` <span class="sl-song-card-artist">${merged.artist}</span>` : ''}</span>
+          <span class="sl-song-card-title">${esc(merged.title)}${merged.artist ? ` <span class="sl-song-card-artist">${esc(merged.artist)}</span>` : ''}</span>
           ${statusBadges(song)}
           ${keyBadge(merged.key, merged._origKey)}
           ${keyChangeBadge(merged.keyChanges)}
           ${vocalistDot(vocalist, sl.vocalistLegend)}
         </div>
-        ${merged.steelEntry ? `<div class="sl-steel-tag">steel: ${merged.steelEntry}</div>` : ''}
-        ${lastNote ? `<div class="sl-note-preview">${lastNote.length > 60 ? lastNote.slice(0, 60) + '...' : lastNote}</div>` : ''}
+        ${merged.steelEntry ? `<div class="sl-steel-tag">steel: ${esc(merged.steelEntry)}</div>` : ''}
+        ${lastNote ? `<div class="sl-note-preview">${esc(lastNote.length > 60 ? lastNote.slice(0, 60) + '...' : lastNote)}</div>` : ''}
       `;
       card.addEventListener('click', () => navigate(`#song/${song.id}/${setlistId}`));
       root.appendChild(card);
@@ -1011,12 +1016,12 @@ export async function renderSetlistEdit(root, setlistId) {
 
   const form = el('div', 'sl-edit-form');
   form.innerHTML = `
-    <label class="sl-label">Name<input class="sl-input" id="sl-name" value="${sl.name}"></label>
-    <label class="sl-label">Venue<input class="sl-input" id="sl-venue" value="${sl.venue || ''}"></label>
-    <label class="sl-label">Date<input class="sl-input" id="sl-date" type="date" value="${sl.gigDate || ''}"></label>
-    <label class="sl-label">Spotify Playlist URL<input class="sl-input" id="sl-spotify" value="${sl.spotifyUrl || ''}" placeholder="https://open.spotify.com/playlist/..."></label>
-    <label class="sl-label">Bandcamp URL<input class="sl-input" id="sl-bandcamp" value="${sl.bandcampUrl || ''}" placeholder="https://yourband.bandcamp.com/music"></label>
-    <label class="sl-label">SoundCloud URL<input class="sl-input" id="sl-soundcloud" value="${sl.soundcloudUrl || ''}" placeholder="https://soundcloud.com/yourband"></label>
+    <label class="sl-label">Name<input class="sl-input" id="sl-name" value="${esc(sl.name)}"></label>
+    <label class="sl-label">Venue<input class="sl-input" id="sl-venue" value="${esc(sl.venue || '')}"></label>
+    <label class="sl-label">Date<input class="sl-input" id="sl-date" type="date" value="${esc(sl.gigDate || '')}"></label>
+    <label class="sl-label">Spotify Playlist URL<input class="sl-input" id="sl-spotify" value="${esc(sl.spotifyUrl || '')}" placeholder="https://open.spotify.com/playlist/..."></label>
+    <label class="sl-label">Bandcamp URL<input class="sl-input" id="sl-bandcamp" value="${esc(sl.bandcampUrl || '')}" placeholder="https://yourband.bandcamp.com/music"></label>
+    <label class="sl-label">SoundCloud URL<input class="sl-input" id="sl-soundcloud" value="${esc(sl.soundcloudUrl || '')}" placeholder="https://soundcloud.com/yourband"></label>
     <div class="sl-hint">Reference links for auto-link: songs on this setlist match against the playlist's / band page's tracks. Bandcamp takes a band page, /music, or an album link; SoundCloud a profile or /sets/ playlist.</div>
   `;
   root.appendChild(form);
@@ -1045,8 +1050,8 @@ export async function renderSetlistEdit(root, setlistId) {
   }
   for (const code of allCodes) {
     const row = el('div', 'sl-voc-row');
-    row.innerHTML = `<span class="sl-vocalist" data-v="${code}">${code}</span>
-      <input class="sl-input sl-input-sm" data-vcode="${code}" value="${sl.vocalistLegend?.[code] || ''}" placeholder="name">`;
+    row.innerHTML = `<span class="sl-vocalist" data-v="${esc(code)}">${esc(code)}</span>
+      <input class="sl-input sl-input-sm" data-vcode="${esc(code)}" value="${esc(sl.vocalistLegend?.[code] || '')}" placeholder="name">`;
     vocGrid.appendChild(row);
   }
   const addVoc = btn('+ code', 'sl-btn-sm', () => {
@@ -1178,7 +1183,7 @@ export async function renderSetlistEdit(root, setlistId) {
       if (!song) continue;
       const row = el('div', 'sl-edit-row');
       row.dataset.songId = song.id;
-      row.innerHTML = `<span class="sl-drag-handle" title="Drag to reorder">⠿</span><span class="sl-song-num">${i + 1}</span><span>${song.title}</span>`;
+      row.innerHTML = `<span class="sl-drag-handle" title="Drag to reorder">⠿</span><span class="sl-song-num">${i + 1}</span><span>${esc(song.title)}</span>`;
       const songLink = btn('▸', 'sl-btn-icon sl-edit-song-link', (e) => {
         e.stopPropagation();
         navigate(`#song/${song.id}/${sl.id}`);
@@ -1873,12 +1878,12 @@ export async function renderSongFocus(root, songId, setlistId) {
   // via the worker); kept dim/small — key + key changes are the stage info.
   const info = el('div', 'sl-focus-info');
   info.innerHTML = `
-    <h1 class="sl-focus-title">${merged.title}</h1>
-    ${merged.artist ? `<div class="sl-focus-artist">${merged.artist}</div>` : ''}
+    <h1 class="sl-focus-title">${esc(merged.title)}</h1>
+    ${merged.artist ? `<div class="sl-focus-artist">${esc(merged.artist)}</div>` : ''}
     <div class="sl-focus-badges">
       ${merged.key ? keyBadge(merged.key, merged._origKey) : '<span class="sl-key-badge sl-key-empty">no key</span>'}
       ${keyChangeBadge(merged.keyChanges)}
-      ${merged.steelEntry ? `<span class="sl-steel-tag">steel: ${merged.steelEntry}</span>` : ''}
+      ${merged.steelEntry ? `<span class="sl-steel-tag">steel: ${esc(merged.steelEntry)}</span>` : ''}
       ${song.durationSec ? `<span class="sl-badge sl-badge-dim">${formatTimecode(song.durationSec)}</span>` : ''}
       ${song.genre ? `<span class="sl-badge sl-badge-dim">${esc(song.genre)}</span>` : ''}
       ${song.year ? `<span class="sl-badge sl-badge-dim">${parseInt(song.year) || ''}</span>` : ''}
@@ -1990,18 +1995,18 @@ export async function renderSongFocus(root, songId, setlistId) {
   const editForm = el('div', 'sl-edit-form sl-hidden');
   const isOverride = !!setlist;
   editForm.innerHTML = `
-    <label class="sl-label">Title<input class="sl-input" id="sf-title" value="${song.title}"></label>
-    <label class="sl-label">Artist<input class="sl-input" id="sf-artist" value="${song.artist || ''}"></label>
+    <label class="sl-label">Title<input class="sl-input" id="sf-title" value="${esc(song.title)}"></label>
+    <label class="sl-label">Artist<input class="sl-input" id="sf-artist" value="${esc(song.artist || '')}"></label>
     <div class="sl-row">
-      <label class="sl-label sl-flex1">Key<input class="sl-input" id="sf-key" value="${isOverride ? (merged.key || '') : (song.key || '')}" placeholder="e.g. G, Bb, C#m"></label>
-      <label class="sl-label sl-flex1">Key Changes<input class="sl-input" id="sf-keychanges" value="${song.keyChanges || ''}" placeholder="e.g. mod up to A, last chorus"></label>
+      <label class="sl-label sl-flex1">Key<input class="sl-input" id="sf-key" value="${esc(isOverride ? (merged.key || '') : (song.key || ''))}" placeholder="e.g. G, Bb, C#m"></label>
+      <label class="sl-label sl-flex1">Key Changes<input class="sl-input" id="sf-keychanges" value="${esc(song.keyChanges || '')}" placeholder="e.g. mod up to A, last chorus"></label>
     </div>
-    <label class="sl-label">Steel Entry<input class="sl-input" id="sf-steel" value="${isOverride ? (merged.steelEntry || '') : (song.steelEntry || '')}" placeholder="e.g. intro, chorus, verse 2"></label>
+    <label class="sl-label">Steel Entry<input class="sl-input" id="sf-steel" value="${esc(isOverride ? (merged.steelEntry || '') : (song.steelEntry || ''))}" placeholder="e.g. intro, chorus, verse 2"></label>
     <label class="sl-label">Steel Summary<textarea class="sl-textarea sl-textarea-sm" id="sf-steelsummary" rows="2" placeholder="steel direction — the AI button drafts this, or write your own">${esc(song.steelSummary || '')}</textarea></label>
-    <label class="sl-label">Spotify URL<input class="sl-input" id="sf-spotify" value="${song.spotifyUri || ''}" placeholder="https://open.spotify.com/track/..."></label>
-    <label class="sl-label">Bandcamp URL<input class="sl-input" id="sf-bandcamp" value="${song.bandcampUrl || ''}" placeholder="https://yourband.bandcamp.com/track/..."></label>
-    <label class="sl-label">SoundCloud URL<input class="sl-input" id="sf-soundcloud" value="${song.soundcloudUrl || ''}" placeholder="https://soundcloud.com/yourband/track"></label>
-    <label class="sl-label">Chart URL (Google Drive)<input class="sl-input" id="sf-chart" value="${song.chartUrl || ''}" placeholder="https://drive.google.com/..."></label>
+    <label class="sl-label">Spotify URL<input class="sl-input" id="sf-spotify" value="${esc(song.spotifyUri || '')}" placeholder="https://open.spotify.com/track/..."></label>
+    <label class="sl-label">Bandcamp URL<input class="sl-input" id="sf-bandcamp" value="${esc(song.bandcampUrl || '')}" placeholder="https://yourband.bandcamp.com/track/..."></label>
+    <label class="sl-label">SoundCloud URL<input class="sl-input" id="sf-soundcloud" value="${esc(song.soundcloudUrl || '')}" placeholder="https://soundcloud.com/yourband/track"></label>
+    <label class="sl-label">Chart URL (Google Drive)<input class="sl-input" id="sf-chart" value="${esc(song.chartUrl || '')}" placeholder="https://drive.google.com/..."></label>
     ${isOverride ? '<div class="sl-hint">Key and steel entry save as overrides for this setlist. Title, artist, key changes, Spotify, and chart save to the base song.</div>' : ''}
   `;
   editForm.addEventListener('change', async () => {
@@ -2548,10 +2553,10 @@ export async function renderSongFocus(root, songId, setlistId) {
       const date = new Date(n.createdAt);
       const ts = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const tcBadge = n.timecode != null ? `<span class="sl-tc-badge" title="Click to edit timecode">${formatTimecode(n.timecode)}</span>` : '';
-      const sectionBadge = n.section ? `<span class="sl-section-badge">${n.section}</span>` : '';
-      const steelBadge = n.steelType ? `<span class="sl-steel-note-badge">${n.steelType}</span>` : '';
+      const sectionBadge = n.section ? `<span class="sl-section-badge">${esc(n.section)}</span>` : '';
+      const steelBadge = n.steelType ? `<span class="sl-steel-note-badge">${esc(n.steelType)}</span>` : '';
       nEl.innerHTML = `
-        <div class="sl-note-text">${n.text}</div>
+        <div class="sl-note-text">${esc(n.text)}</div>
         <div class="sl-note-meta">
           <span>${ts}</span>
           ${tcBadge}
@@ -2874,7 +2879,11 @@ export async function renderSettings(root) {
   workerSection.innerHTML = `
     <div class="sl-section-title">sync worker url</div>
     <div class="sl-hint" style="margin-bottom:0.5rem">Optional. Deploy the setlist-sync Cloudflare Worker to enable auto-linking from Spotify playlists, Bandcamp/SoundCloud pages, and Google Drive folders.</div>
-    <input class="sl-input" id="sl-worker-url" value="${sources.workerUrl || ''}" placeholder="https://voidstar-setlist-sync.YOUR.workers.dev">
+    <input class="sl-input" id="sl-worker-url" value="${esc(sources.workerUrl || '')}" placeholder="https://voidstar-setlist-sync.YOUR.workers.dev">
+    <label class="sl-label" style="margin-top:0.5rem">Access token (optional)
+      <input class="sl-input" id="sl-worker-token" value="${esc(sources.workerToken || '')}" placeholder="matches the worker's WORKER_TOKEN secret">
+    </label>
+    <div class="sl-hint">Set this only if your worker has a <code>WORKER_TOKEN</code> secret. It stops strangers who learn the URL from spending your Spotify/AI/Drive quota. Rides the Drive backup, so it syncs to your other devices.</div>
   `;
   root.appendChild(workerSection);
 
@@ -2896,7 +2905,7 @@ export async function renderSettings(root) {
       for (let i = 0; i < sources[sourceKey].length; i++) {
         const f = sources[sourceKey][i];
         const row = el('div', 'sl-source-row');
-        row.innerHTML = `<span class="sl-source-url">${f.url}</span>`;
+        row.innerHTML = `<span class="sl-source-url">${esc(f.url)}</span>`;
         const removeBtn = btn('&times;', 'sl-btn-icon sl-btn-danger', () => {
           sources[sourceKey].splice(i, 1);
           setSources(sources);
@@ -2959,7 +2968,7 @@ export async function renderSettings(root) {
       <code>${spotifyRedirectUri()}</code>
     </div>
     <label class="sl-label">Spotify Client ID
-      <input class="sl-input" id="sl-spotify-client-id" value="${getSpotifyClientId()}" placeholder="client id from developer.spotify.com">
+      <input class="sl-input" id="sl-spotify-client-id" value="${esc(getSpotifyClientId())}" placeholder="client id from developer.spotify.com">
     </label>
   `;
   const spotifyIdInput = spotifyAuthSection.querySelector('#sl-spotify-client-id');
@@ -3125,6 +3134,7 @@ export async function renderSettings(root) {
       historyList.textContent = formatGdriveError(e);
     }
   }));
+  safetyActions.appendChild(btn('🗑 trash', 'sl-btn-ghost sl-btn-sm', () => navigate('#trash')));
   gdriveSection.appendChild(safetyActions);
   gdriveSection.appendChild(historyList);
   root.appendChild(gdriveSection);
@@ -3150,9 +3160,70 @@ export async function renderSettings(root) {
   // Save on change
   const saveWorker = () => {
     sources.workerUrl = document.getElementById('sl-worker-url').value.trim().replace(/\/+$/, '');
+    sources.workerToken = document.getElementById('sl-worker-token').value.trim();
     setSources(sources);
   };
   document.getElementById('sl-worker-url').addEventListener('change', saveWorker);
+  document.getElementById('sl-worker-token').addEventListener('change', saveWorker);
+}
+
+// ── Trash — recover recently deleted songs / setlists / notes ──
+// Backed by the deletion tombstones (store.js): each carries a snapshot of the
+// deleted record, so a delete is undoable until the tombstone TTLs out
+// (180 days). Restoring re-inserts the record and drops the tombstone; the
+// backup merge treats the restored record as authoritative.
+export async function renderTrash(root) {
+  const bar = topBar('trash', '#settings');
+  root.appendChild(bar);
+
+  const hint = el('div', 'sl-hint');
+  hint.style.margin = '0.5rem 0 0.75rem';
+  hint.textContent = 'Deleted songs, setlists, and notes — recoverable for 180 days, then permanently removed. Restoring brings the item back on every synced device.';
+  root.appendChild(hint);
+
+  const list = el('div', 'sl-source-list');
+  root.appendChild(list);
+
+  const KIND_LABEL = { songs: 'song', setlists: 'setlist', notes: 'note', annotations: 'annotation' };
+
+  async function paint() {
+    list.innerHTML = '';
+    // Only tombstones that still carry a restorable record snapshot, newest first.
+    const items = (await store.getAllDeletions())
+      .filter(d => d.record)
+      .sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
+    if (!items.length) { list.appendChild(emptyState('Trash is empty.')); return; }
+
+    const empty = el('div', 'sl-action-bar');
+    empty.style.marginBottom = '0.5rem';
+    empty.appendChild(btn(`empty trash (${items.length})`, 'sl-btn-ghost sl-btn-sm', async () => {
+      if (!confirm(`Permanently forget ${items.length} deleted item${items.length === 1 ? '' : 's'}? The deletions still sync, but they can no longer be restored.`)) return;
+      for (const d of items) await store.forgetDeletion(d.key);
+      paint();
+    }));
+    list.appendChild(empty);
+
+    for (const d of items) {
+      const row = el('div', 'sl-source-row');
+      const when = d.deletedAt ? new Date(d.deletedAt).toLocaleString() : '';
+      const meta = el('div');
+      meta.style.flex = '1';
+      meta.style.minWidth = '0';
+      const title = el('div', 'sl-source-url');
+      title.textContent = d.label || '(unknown)';
+      const sub = el('div', 'sl-hint');
+      sub.textContent = `${KIND_LABEL[d.kind] || d.kind} · deleted ${when}`;
+      meta.appendChild(title);
+      meta.appendChild(sub);
+      row.appendChild(meta);
+      row.appendChild(btn('restore', 'sl-btn-sm sl-btn-accent', async () => {
+        await store.restoreDeletion(d.key);
+        paint();
+      }));
+      list.appendChild(row);
+    }
+  }
+  await paint();
 }
 
 // ── Performance Mode ──
@@ -3424,6 +3495,29 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const songEntries = entries.filter(e => e.type === 'song');
   const totalSongs = songEntries.length;
 
+  // ── Set timer + pacing HUD ──
+  // Elapsed set time, with an optional target = sum of the songs' known
+  // durations (from "fetch info" / iTunes). Tap to reset (the real downbeat is
+  // usually a beat after you open perform mode). Turns amber when you pass the
+  // target so you can see at a glance that the set is running long.
+  const targetSec = songEntries.reduce((n, e) => n + (e.song.durationSec || 0), 0);
+  const knownDur = songEntries.filter(e => e.song.durationSec > 0).length;
+  let setStartMs = Date.now();
+  const setTimer = el('div', 'sl-perform-settimer');
+  setTimer.title = 'Elapsed set time — tap to reset to 0:00';
+  setTimer.addEventListener('click', () => { setStartMs = Date.now(); updateSetTimer(); });
+  function updateSetTimer() {
+    const elapsed = Math.floor((Date.now() - setStartMs) / 1000);
+    const showTarget = knownDur >= Math.ceil(totalSongs / 2) && targetSec > 0; // enough coverage to be meaningful
+    setTimer.textContent = showTarget
+      ? `${formatTimecode(elapsed)} / ${formatTimecode(targetSec)}`
+      : formatTimecode(elapsed);
+    setTimer.classList.toggle('sl-settimer-over', showTarget && elapsed > targetSec);
+  }
+  updateSetTimer();
+  const setTimerInterval = setInterval(updateSetTimer, 1000);
+  container.appendChild(setTimer);
+
   let chartAnnotationCtrl = null;
   const zoomCtrl = attachPerformZoom(content, zoomLayer);
 
@@ -3470,22 +3564,22 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 
     const { song, notes, vocalist } = entry;
     zoomLayer.innerHTML = `
-      <h1 class="sl-perform-title">${song.title}</h1>
-      ${song.artist ? `<div class="sl-perform-artist">${song.artist}</div>` : ''}
+      <h1 class="sl-perform-title">${esc(song.title)}</h1>
+      ${song.artist ? `<div class="sl-perform-artist">${esc(song.artist)}</div>` : ''}
       <div class="sl-perform-badges">
         ${song.key ? keyBadge(song.key, song._origKey) : ''}
         ${keyChangeBadge(song.keyChanges)}
         ${vocalist ? vocalistDot(vocalist, sl.vocalistLegend) : ''}
       </div>
-      ${song.steelEntry ? `<div class="sl-perform-steel">steel: ${song.steelEntry}</div>` : ''}
+      ${song.steelEntry ? `<div class="sl-perform-steel">steel: ${esc(song.steelEntry)}</div>` : ''}
       ${song.steelSummary ? `<div class="sl-perform-steel-summary">${esc(song.steelSummary)}</div>` : ''}
       ${notes.length ? `<div class="sl-perform-notes">${notes.map(n => {
         const badges = [
           n.timecode != null ? `<span class="sl-tc-badge">${formatTimecode(n.timecode)}</span>` : '',
-          n.section ? `<span class="sl-section-badge">${n.section}</span>` : '',
-          n.steelType ? `<span class="sl-steel-note-badge">${n.steelType}</span>` : '',
+          n.section ? `<span class="sl-section-badge">${esc(n.section)}</span>` : '',
+          n.steelType ? `<span class="sl-steel-note-badge">${esc(n.steelType)}</span>` : '',
         ].filter(Boolean).join(' ');
-        return `<div class="sl-perform-note">${badges ? badges + ' ' : ''}${n.text}</div>`;
+        return `<div class="sl-perform-note">${badges ? badges + ' ' : ''}${esc(n.text)}</div>`;
       }).join('')}</div>` : ''}
     `;
 
@@ -3651,6 +3745,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
   const cleanup = () => {
     if (chartAnnotationCtrl) chartAnnotationCtrl.destroy();
     if (currentChartObjectUrl) { URL.revokeObjectURL(currentChartObjectUrl); currentChartObjectUrl = null; }
+    clearInterval(setTimerInterval);
     zoomCtrl.destroy();
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('hashchange', cleanup);

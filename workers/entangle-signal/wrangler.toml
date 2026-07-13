@@ -16,6 +16,12 @@ main = "index.js"
 compatibility_date = "2025-05-01"
 workers_dev = true
 
+[vars]
+# Comma-separated Origins allowed to open sockets (WebSockets bypass CORS, so
+# this is the gate). Localhost is always allowed for `wrangler dev`. Set this
+# to your own host for a self-host/custom-domain deploy.
+ALLOWED_ORIGINS = "https://voidstar.sh"
+
 [[durable_objects.bindings]]
 name = "ENTANGLE_ROOM"
 class_name = "EntangleRoom"

@@ -18,6 +18,7 @@ import { renderTrash } from './views/trash.js';
 import { renderSettings } from './views/settings.js';
 import { renderCapture } from './views/capture.js';
 import { initReminderScheduler } from './reminders.js';
+import { wireCommandPalette } from './palette.js';
 
 let _root = null;
 
@@ -147,7 +148,12 @@ async function route() {
       default: await renderHome(_root);
     }
   } catch (e) {
-    _root.innerHTML = `<div class="mn-error">Error: ${e.message}</div>`;
+    // textContent, not innerHTML — error strings can quote note/import content.
+    _root.innerHTML = '';
+    const errBox = document.createElement('div');
+    errBox.className = 'mn-error';
+    errBox.textContent = `Error: ${e.message}`;
+    _root.appendChild(errBox);
     console.error('[mind]', e);
   }
   updateDockActive(view);
@@ -206,6 +212,7 @@ function watchFocusSync() {
 export function initMindApp(root) {
   _root = root;
   window.addEventListener('hashchange', route);
+  wireCommandPalette(); // Ctrl/Cmd-K quick switcher
 
   // Every write invalidates the search index and (when Drive is connected)
   // schedules a debounced merge-push.

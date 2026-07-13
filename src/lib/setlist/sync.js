@@ -21,20 +21,32 @@ export function getSources() {
   if (!Array.isArray(s.communityFolders)) s.communityFolders = [];
   if (!Array.isArray(s.driveCharts)) s.driveCharts = [];
   if (typeof s.workerUrl !== 'string') s.workerUrl = '';
+  if (typeof s.workerToken !== 'string') s.workerToken = '';
   // Routes are exact-match on the worker — a trailing slash in the setting
   // would make every path `//spotify/...` and 404 (which the client reads
   // as "worker outdated").
   s.workerUrl = s.workerUrl.trim().replace(/\/+$/, '');
+  s.workerToken = s.workerToken.trim();
   return s;
 }
 
 function defaultSources() {
   return {
     workerUrl: '',
+    workerToken: '',
     driveFolders: [],
     communityFolders: [],
     driveCharts: [],
   };
+}
+
+// Headers for a worker request. When the user has set an access token (Settings
+// → sync worker; rides the Drive backup so every device shares it), it's sent
+// as X-Worker-Token so a token-gated worker accepts the call. Merges any extra
+// headers a POST already needs (e.g. Content-Type).
+export function workerHeaders(extra = {}) {
+  const token = getSources().workerToken;
+  return token ? { ...extra, 'X-Worker-Token': token } : { ...extra };
 }
 
 export function setSources(sources) {
@@ -209,7 +221,7 @@ async function fetchMediaTracks(workerUrl, service, refUrl, warnings = []) {
   if (!workerUrl) {
     throw new Error(`the ${service} reference link needs the sync worker — set the worker URL in Settings`);
   }
-  const res = await fetch(`${workerUrl}/media/${service}?url=${encodeURIComponent(refUrl)}`);
+  const res = await fetch(`${workerUrl}/media/${service}?url=${encodeURIComponent(refUrl)}`, { headers: workerHeaders() });
   let detail = '';
   if (!res.ok) {
     try { detail = (await res.json())?.error || ''; } catch {}
@@ -252,7 +264,7 @@ async function scrapeSpotifyPlaylist(workerUrl, playlistId) {
   if (!workerUrl) {
     throw new Error('scraping the playlist needs the sync worker — set the worker URL in Settings');
   }
-  const res = await fetch(`${workerUrl}/spotify/playlist/${playlistId}/scrape`);
+  const res = await fetch(`${workerUrl}/spotify/playlist/${playlistId}/scrape`, { headers: workerHeaders() });
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json())?.error || ''; } catch {}
@@ -306,7 +318,7 @@ async function fetchSpotifyTracks(workerUrl, playlistUrl, { forceScrape = false,
   }
 
   if (workerUrl) {
-    const res = await fetch(`${workerUrl}/spotify/playlist/${parsed.id}`);
+    const res = await fetch(`${workerUrl}/spotify/playlist/${parsed.id}`, { headers: workerHeaders() });
     if (!res.ok) {
       // The worker reports the real reason (bad credentials, playlist not
       // accessible, rate-limited) in a JSON {error} body — surface it instead
@@ -411,7 +423,7 @@ async function fetchDriveFiles(workerUrl, folderUrl) {
   const m = folderUrl.match(/folders\/([a-zA-Z0-9_-]+)/);
   if (!m) return [];
 
-  const res = await fetch(`${workerUrl}/drive/folder/${m[1]}`);
+  const res = await fetch(`${workerUrl}/drive/folder/${m[1]}`, { headers: workerHeaders() });
   if (!res.ok) throw new Error(`Drive API ${res.status}`);
   return await res.json();
 }
@@ -424,7 +436,7 @@ async function fetchDriveFilesRecursive(workerUrl, folderUrl) {
   const m = folderUrl.match(/folders\/([a-zA-Z0-9_-]+)/);
   if (!m) return { files: [], truncated: false };
 
-  const res = await fetch(`${workerUrl}/drive/folder/${m[1]}/recursive`);
+  const res = await fetch(`${workerUrl}/drive/folder/${m[1]}/recursive`, { headers: workerHeaders() });
   if (!res.ok) throw new Error(`Drive API ${res.status}`);
   return await res.json();
 }
@@ -522,7 +534,7 @@ export async function searchChartForSong(song, onStage, { collectOnly = false } 
   let data = null;
   try {
     const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
-    const res = await fetch(`${sources.workerUrl}/web/chart-search?${params}`);
+    const res = await fetch(`${sources.workerUrl}/web/chart-search?${params}`, { headers: workerHeaders() });
     if (res.ok) data = await res.json();
   } catch { /* offline or a worker without the /web routes — just no tier 3 */ }
 
@@ -559,7 +571,7 @@ export async function fetchWebChartData(song) {
   if (!sources.workerUrl) return { ok: false, reason: 'no worker configured' };
   try {
     const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
-    const res = await fetch(`${sources.workerUrl}/web/chart-data?${params}`);
+    const res = await fetch(`${sources.workerUrl}/web/chart-data?${params}`, { headers: workerHeaders() });
     if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
     if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
     const data = await res.json();
@@ -590,7 +602,7 @@ export async function fetchAiChart(song, { retry = false } = {}) {
       params.set('retry', '1');
       params.set('t', String(Date.now()));
     }
-    const res = await fetch(`${sources.workerUrl}/ai/chart?${params}`);
+    const res = await fetch(`${sources.workerUrl}/ai/chart?${params}`, { headers: workerHeaders() });
     if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
     if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
     const data = await res.json();
@@ -618,7 +630,7 @@ export async function fetchSteelSummary(song, { fresh = false, retry = false } =
     const params = new URLSearchParams({ title: song.title, artist: song.artist || '' });
     if (retry) params.set('retry', '1');
     if (fresh || retry) params.set('t', String(Date.now()));
-    const res = await fetch(`${sources.workerUrl}/ai/steel-summary?${params}`);
+    const res = await fetch(`${sources.workerUrl}/ai/steel-summary?${params}`, { headers: workerHeaders() });
     if (res.status === 404) return { ok: false, reason: 'worker-outdated' };
     if (!res.ok) return { ok: false, reason: `worker error ${res.status}` };
     const data = await res.json();
@@ -641,7 +653,7 @@ export async function fetchSongMeta(song) {
   const sp = song.spotifyUri ? parseSpotifyUrl(song.spotifyUri) : null;
   if (sp?.type === 'track' && sp.id) params.set('spotifyId', sp.id);
   try {
-    const res = await fetch(`${sources.workerUrl}/meta/song?${params}`);
+    const res = await fetch(`${sources.workerUrl}/meta/song?${params}`, { headers: workerHeaders() });
     if (!res.ok) return null;
     const meta = await res.json();
     return meta?.sources?.length || meta?.bpm || meta?.key || meta?.time ? meta : null;
@@ -692,7 +704,7 @@ export async function readChartImage(song, blob) {
   try {
     const res = await fetch(`${sources.workerUrl}/ai/chart-read`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: workerHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         image: payload.data,
         mimeType: payload.mimeType,
@@ -719,7 +731,7 @@ export async function deepScrapeChart(song) {
   if (!fileMatch) return null;
 
   try {
-    const res = await fetch(`${sources.workerUrl}/drive/file/${fileMatch[1]}/meta`);
+    const res = await fetch(`${sources.workerUrl}/drive/file/${fileMatch[1]}/meta`, { headers: workerHeaders() });
     if (!res.ok) return null;
     const meta = await res.json();
 

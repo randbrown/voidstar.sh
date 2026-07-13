@@ -11,7 +11,10 @@
    Canvas visuals read the `--viz-*` knobs via JS (src/lib/qualia/theme.js).
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=VT323&display=swap');
+/* Fonts are loaded via a <link rel="stylesheet"> in each page <head>, not an
+   @import here: this CSS is inlined into the HTML (inlineStylesheets:'always'),
+   and an @import inside inlined CSS is render-blocking and invisible to the
+   preload scanner. A <link> in the head fetches in parallel with parsing. */
 
 /* ---- Voidstar (default) --------------------------------------------------- */
 :root {

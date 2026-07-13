@@ -8,8 +8,15 @@
 // Direct same-origin / CORS-friendly image or PDF URLs are fetched straight.
 
 import * as store from './store.js';
-import { getSources } from './sync.js';
+import { getSources, workerHeaders } from './sync.js';
 import { extractKeyFromChartText } from './chart-key.js';
+
+// The token header, but ONLY when the fetch target is our own worker — a chart
+// URL can also be a direct third-party file (Dropbox/Drive link), and we must
+// never leak the worker token to an arbitrary host.
+function headersForUrl(url, workerUrl) {
+  return (workerUrl && url.startsWith(workerUrl)) ? workerHeaders() : undefined;
+}
 
 // Broadcast when a chart lands in the cache so open views (e.g. the setlist
 // offline bar) can live-refresh their N/M count as background caching runs.
@@ -65,7 +72,7 @@ export async function fetchChartText(chartUrl, workerUrl) {
   const id = chartFileId(chartUrl);
   if (!id || !workerUrl || !isGoogleDocUrl(chartUrl)) return null;
   try {
-    const res = await fetch(`${workerUrl}/drive/file/${id}/text`);
+    const res = await fetch(`${workerUrl}/drive/file/${id}/text`, { headers: workerHeaders() });
     if (!res.ok) {
       // Loud on purpose: a failure here silently degrades to the iframe
       // embed, whose internal scroll breaks annotation alignment.
@@ -94,7 +101,7 @@ export async function cacheChartByUrl(cacheKey, chartUrl, workerUrl) {
   const url = chartImageFetchUrl(chartUrl, workerUrl);
   if (!url) return { ok: false, reason: 'needs worker' };
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: headersForUrl(url, workerUrl) });
     if (!res.ok) return { ok: false, reason: `fetch ${res.status}` };
     const blob = await res.blob();
     if (!blob || blob.size === 0) return { ok: false, reason: 'empty' };

@@ -38,11 +38,16 @@ class LooperRecorderProcessor extends AudioWorkletProcessor {
     this.writeHead = 0;          // next write index (circular)
     this.framesWritten = 0;      // total frames ever written (monotonic)
     this.lastBlockTime = 0;      // ctx time at the start of the latest quantum
+    this.disposed = false;
     this.port.onmessage = (e) => {
       const d = e.data; const cmd = d && d.cmd;
       if (cmd === 'start') { this.armed = true; this.sendStart = true; }
       else if (cmd === 'stop') this.armed = false;
       else if (cmd === 'grab') this.grab(d.seconds, d.id);
+      // Tear down: releases the ~15 MB ring so a disconnected recorder node can
+      // be GC'd. Capture is reopened on every device/mono-stereo/fader change,
+      // so without this a long set leaks a live processor + ring each time.
+      else if (cmd === 'dispose') { this.disposed = true; this.ring = null; }
     };
   }
 
@@ -57,6 +62,7 @@ class LooperRecorderProcessor extends AudioWorkletProcessor {
   }
 
   process(inputs) {
+    if (this.disposed) return false;   // ends the processor so it + its ring GC
     const input = inputs[0];
     const ch0 = input && input[0];
     if (ch0 && ch0.length) {

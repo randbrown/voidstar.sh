@@ -16,6 +16,10 @@ import { tokenRow } from '../qualia/gdrive-diag.js';
 
 const CLIENT_ID_KEY = 'voidstar.setlist.gdrive.clientId';
 const TOKEN_KEY = 'voidstar.setlist.gdrive.token';
+// Set once the user has actually completed a Drive connection. Since the
+// app-owned client id makes getClientId() always truthy, needsReconnect() would
+// otherwise read "reconnect" for a first-time visitor who never signed in.
+const EVER_KEY = 'voidstar.setlist.gdrive.everConnected';
 const LAST_BACKUP_KEY = 'voidstar.setlist.gdrive.lastBackupAt';
 const FILE_NAME = 'voidstar-setlist-data.json';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
@@ -50,7 +54,7 @@ export function isLocalDirty() { return !!getDirtyStamp(); }
 // must stay dirty for the next cycle — its data may have missed the export.
 function clearDirtyIf(stamp) { if (getDirtyStamp() === stamp) localStorage.removeItem(DIRTY_KEY); }
 
-let _gisLoaded = false;
+let _gisPromise = null;
 
 // Prefer a user-entered override (advanced / self-host); otherwise the
 // app-owned client id, so "Sign in with Google" works with zero setup.
@@ -84,7 +88,7 @@ export function isGdriveBackupEnabled() {
 // session, consent revoked, or third-party cookies blocked), at which point the
 // UI invites a tap to reconnect.
 export function needsReconnect() {
-  return !!getClientId() && !getStoredToken();
+  return !!getClientId() && !getStoredToken() && localStorage.getItem(EVER_KEY) === '1';
 }
 
 export function getLastBackupTime() {
@@ -162,19 +166,32 @@ export async function gatherDiagnostics({ live = false } = {}) {
   return report;
 }
 
-async function loadGis() {
-  if (_gisLoaded) return;
-  if (document.querySelector('script[src*="accounts.google.com/gsi/client"]')) {
-    _gisLoaded = true;
-    return;
-  }
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
+function gisReady() {
+  return typeof google !== 'undefined' && !!(google.accounts && google.accounts.oauth2);
+}
+// Memoize the load PROMISE, not a "tag exists" flag: a racing second caller
+// that saw the just-appended <script> before it ran would proceed and hit
+// `google is not defined`. Resolve only on the script's real load (or when the
+// global is already present); a failed load clears the memo so a retry works.
+function loadGis() {
+  if (gisReady()) return Promise.resolve();
+  if (_gisPromise) return _gisPromise;
+  _gisPromise = new Promise((resolve, reject) => {
+    const fail = () => { _gisPromise = null; reject(new Error('Failed to load Google Identity Services')); };
+    let script = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
+    if (script) {
+      if (gisReady()) return resolve();
+      script.addEventListener('load', () => resolve(), { once: true });
+      script.addEventListener('error', fail, { once: true });
+      return;
+    }
+    script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
-    script.onload = () => { _gisLoaded = true; resolve(); };
-    script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+    script.onload = () => resolve();
+    script.onerror = fail;
     document.head.appendChild(script);
   });
+  return _gisPromise;
 }
 
 function getStoredToken() {
@@ -190,6 +207,7 @@ function storeToken(token, expiresIn) {
     token,
     expiresAt: Date.now() + (expiresIn - 60) * 1000,
   }));
+  try { localStorage.setItem(EVER_KEY, '1'); } catch {}
 }
 
 // One token request. The `prompt` decides the UX: `'none'` renews silently
@@ -674,6 +692,22 @@ function mergeById(localArr, remoteArr, keyField = 'id', fillFields = null) {
   return [...map.values()];
 }
 
+const recTs = (r) => r.updatedAt || r.createdAt || 0;
+
+// Union both sides' deletion tombstones, newest deletedAt per key. Local
+// objects keep their identity when they win (or tie) so recordsChanged's
+// `cur === rec` short-circuit still works.
+function mergeDeletions(localDel = [], remoteDel = []) {
+  const map = new Map();
+  for (const d of localDel) if (d && d.key) map.set(d.key, d);
+  for (const d of remoteDel) {
+    if (!d || !d.key) continue;
+    const cur = map.get(d.key);
+    if (!cur || (cur.deletedAt || 0) < (d.deletedAt || 0)) map.set(d.key, d);
+  }
+  return map;
+}
+
 // Config objects (sources, settings) merge by "filled wins": local values
 // win only when actually set; gaps fill from remote. The old
 // `local.sources || remote.sources` treated a fresh device's empty {} as
@@ -721,12 +755,13 @@ function mergeChangesLocal(local, merged) {
     || recordsChanged(local.notes, merged.notes)
     || recordsChanged(local.setlists, merged.setlists)
     || recordsChanged(local.annotations, merged.annotations, 'songId')
+    || recordsChanged(local.deletions || [], merged.deletions || [], 'key')
     || configChanged(local.sources, merged.sources)
     || configChanged(local.settings, merged.settings);
 }
 
 export function mergeData(local, remote) {
-  return {
+  const merged = {
     songs: mergeById(local.songs || [], remote.songs || [], 'id', SONG_FILL_FIELDS),
     notes: mergeById(local.notes || [], remote.notes || []),
     setlists: mergeById(local.setlists || [], remote.setlists || [], 'id', SETLIST_FILL_FIELDS),
@@ -734,6 +769,25 @@ export function mergeData(local, remote) {
     sources: mergeConfig(local.sources, remote.sources),
     settings: mergeConfig(local.settings, remote.settings),
   };
+  // Deletion tombstones: a record whose tombstone is at least as new as its
+  // last edit is dead — drop it from the merged arrays so a delete on one
+  // device (or one this device made itself, with the record still in the
+  // Drive file) can't be resurrected by the additive record merge above. A
+  // record EDITED after its deletion beats the tombstone, which is then
+  // retired so it can't shadow the record on a later cycle.
+  const delMap = mergeDeletions(local.deletions, remote.deletions);
+  const applyTombstones = (arr, storeName, keyField = 'id') => arr.filter(rec => {
+    const d = delMap.get(`${storeName}:${rec[keyField]}`);
+    if (!d) return true;
+    if (recTs(rec) > (d.deletedAt || 0)) { delMap.delete(d.key); return true; }
+    return false;
+  });
+  merged.songs = applyTombstones(merged.songs, 'songs');
+  merged.notes = applyTombstones(merged.notes, 'notes');
+  merged.setlists = applyTombstones(merged.setlists, 'setlists');
+  merged.annotations = applyTombstones(merged.annotations, 'annotations', 'songId');
+  merged.deletions = [...delMap.values()];
+  return merged;
 }
 
 // No songs/setlists/notes/annotations — an empty library. Config (sources/

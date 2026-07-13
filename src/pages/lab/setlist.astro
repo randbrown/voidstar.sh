@@ -31,6 +31,9 @@ const buildStamp = readBuildStamp();
   <title>Setlist | voidstar lab</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="apple-touch-icon" href="/icon-setlist-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&family=VT323&display=swap" />
   <!-- Setlist uses its own manifest so installing from this page anchors
        start_url to /lab/setlist (the default manifest's start_url is /
        so installs from that page would always boot to home). Installing
@@ -801,6 +804,26 @@ const buildStamp = readBuildStamp();
       color: var(--text-dim);
       z-index: 2;
     }
+    /* Set timer / pacing — centered at the top, tabular so it doesn't jitter. */
+    .sl-perform-settimer {
+      position: absolute;
+      top: 0.6rem;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+      font-size: 0.85rem;
+      letter-spacing: 0.02em;
+      color: var(--text-dim);
+      opacity: 0.7;
+      cursor: pointer;
+      user-select: none;
+      z-index: 2;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+    }
+    .sl-perform-settimer:hover { opacity: 1; }
+    .sl-perform-settimer.sl-settimer-over { color: var(--amber, #e6a23c); opacity: 1; }
     .sl-perform-exit {
       position: absolute;
       top: 0.5rem;

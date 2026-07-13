@@ -35,9 +35,11 @@ function makeId(len = 16) {
  * @param {string} opts.appId
  * @param {string} opts.room
  * @param {'host'|'participant'} [opts.role]  routing role (default participant)
+ * @param {string} [opts.key]  host key — authenticates a `host` role to the
+ *   signaling Worker (ignored for participants). Never sent by the phone page.
  * @returns {Promise<object>} the transport interface
  */
-export async function createTransport({ appId, room, role = 'participant' }) {
+export async function createTransport({ appId, room, role = 'participant', key = '' }) {
   const selfId = makeId();
   const recvs = new Map();          // topic → Set<fn>
   const peerCbs = new Set();
@@ -47,7 +49,8 @@ export async function createTransport({ appId, room, role = 'participant' }) {
   let ws = null, closed = false, retry = 0;
 
   const url = () =>
-    `${SIGNAL_URL}/r/${encodeURIComponent(appId)}/${encodeURIComponent(room)}?id=${selfId}&role=${role}`;
+    `${SIGNAL_URL}/r/${encodeURIComponent(appId)}/${encodeURIComponent(room)}?id=${selfId}&role=${role}` +
+    (role === 'host' && key ? `&key=${encodeURIComponent(key)}` : '');
 
   const emitPeer  = (id) => { for (const fn of peerCbs)  { try { fn(id); } catch (e) { console.error('[entangle] peer', e); } } };
   const emitLeave = (id) => { for (const fn of leaveCbs) { try { fn(id); } catch (e) { console.error('[entangle] leave', e); } } };

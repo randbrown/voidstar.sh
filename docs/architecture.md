@@ -104,7 +104,10 @@ fps, time, audio, pose, crowd, params, channels }`. Plugins read state **only** 
 — never globals — which is what makes them swappable and live-codeable.
 
 **Modulation** (`modulation.js`) is the system's best abstraction: named scalar *channels* derived
-from the field — `audio.*` (8), `pose.*` (8), `crowd.*` (8, the audience), `time.*` (6 LFOs with
+from the field — `audio.*` (11, incl. `audio.pitch` / `audio.pitchClass` / `audio.pitchConf` —
+the rig tuner's clean monophonic pitch, so `audio.pitchClass`→hue makes a quale track *what note*
+the steel is playing; 0 when the rig isn't capturing), `pose.*` (8), `crowd.*` (8, the audience),
+`time.*` (6 LFOs with
 incommensurate periods so auto-pilot visuals don't visibly loop). An fx declares `modulators` on a
 numeric param; `resolveParams` bakes `base ⊕ source*amount` into `field.params` each frame, scaled
 by the fx's `reactivity` / `poseReactivity` masters and the user's per-modulator weight. The result

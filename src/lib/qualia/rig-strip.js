@@ -436,7 +436,10 @@ export function createRigStrip(ctx, cfg) {
     const d = state.earth;
     setOversample(earthShaper, d.on ? '4x' : 'none');
     if (!d.on) {
-      earthShaper.curve = IDENTITY_CURVE;
+      // curve = null is the spec's true bypass. IDENTITY_CURVE clamps its input
+      // to [-1,1], so an "off" drive would still hard-clip hot signals at
+      // 0 dBFS (the pre-drive geq/level stages can exceed unity).
+      earthShaper.curve = null;
       earthPre.gain.value = 1; earthPost.gain.value = 1;
       earthTone.frequency.value = 20000;
       return;
@@ -454,7 +457,9 @@ export function createRigStrip(ctx, cfg) {
     setOversample(metalShaper2, d.on ? '4x' : 'none');
     mLow.gain.value = 0; mMid.gain.value = 0; mHigh.gain.value = 0;
     if (!d.on) {
-      metalShaper1.curve = IDENTITY_CURVE; metalShaper2.curve = IDENTITY_CURVE;
+      // curve = null (true bypass) — see applyEarth; IDENTITY_CURVE clamps at
+      // 0 dBFS and would clip a hot input through an "off" stage.
+      metalShaper1.curve = null; metalShaper2.curve = null;
       metalPre.gain.value = 1; metalStage.gain.value = 1; metalPost.gain.value = 1;
       return;
     }
@@ -651,6 +656,10 @@ export function createRigStrip(ctx, cfg) {
                      ...peqFilters, peqPreTap, peqPostTap, panner, output]) {
       try { n.disconnect(); } catch {}
     }
+    // Tell the neural-amp worklet to end its processor (returns false) so its
+    // weight buffers GC instead of running for the AudioContext's lifetime —
+    // the strip is rebuilt on every capture reopen.
+    try { neural?.port?.postMessage({ cmd: 'dispose' }); } catch {}
     try { neural?.disconnect(); } catch {}
   }
 

@@ -94,6 +94,14 @@ export function decodeWav(input) {
       let v;
       if (isFloat && fmt.bits === 32) v = dv.getFloat32(p, true);
       else if (fmt.bits === 16)       v = dv.getInt16(p, true) / 32768;
+      else if (fmt.bits === 24) {
+        // 24-bit little-endian signed — the most common DAW export depth, and
+        // DataView has no getInt24. Assemble 3 bytes, sign-extend the top bit.
+        const b0 = dv.getUint8(p), b1 = dv.getUint8(p + 1), b2 = dv.getUint8(p + 2);
+        let i = b0 | (b1 << 8) | (b2 << 16);
+        if (i & 0x800000) i |= ~0xffffff;           // sign-extend to 32 bits
+        v = i / 8388608;
+      }
       else if (fmt.bits === 32)       v = dv.getInt32(p, true) / 2147483648;
       else if (fmt.bits === 8)        v = (dv.getUint8(p) - 128) / 128;
       else                            v = 0;

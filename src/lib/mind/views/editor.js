@@ -16,6 +16,7 @@ import { applySink } from '../audio-out.js';
 import { processPendingOcr } from '../ocr.js';
 import { wirePicker } from '../../qualia/devices.js';
 import { navigate, refresh } from '../app.js';
+import { listNoteVersions, isConnected as driveConnected } from '../gdrive-sync.js';
 import { el, esc, btn, topBar, textPrompt, confirmBox, timeAgo } from '../ui.js';
 
 const KEEP_AUDIO_KEY = 'voidstar.mind.voice.keepAudio';
@@ -73,7 +74,7 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
 
   const delBtn = btn('&#128465;', 'mn-btn-icon mn-btn-danger', () => {
     confirmBox('Move this note to trash?', async () => {
-      flushPending();
+      await flushPending();
       await store.trashNote(note);
       // Tombstone its attachments and note-sourced tasks too.
       for (const a of await store.getAttachmentsForNote(note.id)) await store.trashAttachment(a);
@@ -110,8 +111,12 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   }
   folderSel.value = note.folderId || '';
   folderSel.addEventListener('change', async () => {
-    note = { ...note, folderId: folderSel.value };
-    await save({ folderId: folderSel.value });
+    const patch = { folderId: folderSel.value };
+    // Moving to root blanks a fill-field — tombstone it or the sync merge
+    // refills the old folder from another device's copy and the move reverts.
+    if (!folderSel.value) patch.clearedFields = { ...(note.clearedFields || {}), folderId: Date.now() };
+    note = { ...note, ...patch };
+    await save(patch);
   });
   metaRow.appendChild(folderSel);
   root.appendChild(metaRow);
@@ -123,8 +128,13 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     for (const t of note.tags || []) {
       const chip = el('span', 'mn-chip mn-chip-on', `#${esc(t)} <span class="mn-chip-x">&times;</span>`);
       chip.querySelector('.mn-chip-x').addEventListener('click', async () => {
-        note = { ...note, tags: note.tags.filter(x => x !== t) };
-        await save({ tags: note.tags });
+        const tags = note.tags.filter(x => x !== t);
+        const patch = { tags };
+        // Removing the last tag blanks a fill-field — tombstone it so the
+        // sync merge can't resurrect the tag from an older copy.
+        if (!tags.length) patch.clearedFields = { ...(note.clearedFields || {}), tags: Date.now() };
+        note = { ...note, ...patch };
+        await save(patch);
         drawTags();
       });
       tagRow.appendChild(chip);
@@ -163,13 +173,65 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     redoBtn.disabled = !editor.canRedo();
   }
 
+  // The record's updatedAt as of this session's last load/write. A background
+  // sync (focus pull, auto-push cycle) imports remote changes straight into
+  // IDB while this editor holds its own snapshot — every save() rebases on
+  // the live record so a stale snapshot can never silently overwrite an edit
+  // that arrived from another device.
+  let lastKnownUpdatedAt = note.updatedAt;
+
+  // Task-marker ids that belong to OTHER notes — a checkbox pasted in from
+  // one of them must be re-stamped, not steal the source's record (see
+  // ensureTaskIds). Computed once per mount; cheap at task-store scale.
+  const foreignTaskIds = new Set(
+    (await store.getAllTasks())
+      .filter(t => t.sourceNoteId && t.sourceNoteId !== note.id)
+      .map(t => t.id),
+  );
+
   async function save(patch = {}) {
     // Stamp any new checkboxes with stable ids first, so the serialized body
     // carries the markers and the task records key off them.
-    if (editor) ensureTaskIds(editor.view);
-    const body = editor ? editor.getMarkdown() : note.body;
-    note = { ...note, ...patch, body };
-    await store.putNote(note);
+    if (editor) ensureTaskIds(editor.view, foreignTaskIds);
+    let body = editor ? editor.getMarkdown() : note.body;
+
+    // Rebase: if the stored record advanced past what this session last
+    // wrote, another device's edit landed via sync while the note was open.
+    const current = await store.getNote(note.id);
+    if (current && !current.deletedAt && current.updatedAt > lastKnownUpdatedAt) {
+      const remoteBody = current.body || '';
+      const sessionBase = note.body || '';
+      if (remoteBody !== sessionBase) {
+        if (editor && body === sessionBase) {
+          // Nothing typed since the import — adopt the remote body outright.
+          editor.setMarkdown(remoteBody);
+          body = remoteBody;
+        } else if (remoteBody !== body) {
+          // Genuine fork: this save wins LWW, so preserve the incoming body
+          // as a conflict copy (same shape the sync merge mints) instead of
+          // silently discarding another device's edit.
+          const when = new Date(current.updatedAt).toISOString().slice(0, 16).replace('T', ' ');
+          const ts = Date.now();
+          await store.putNoteRaw({
+            ...current,
+            id: crypto.randomUUID(),
+            title: `Conflicted copy of ${current.title} (another device, ${when})`,
+            autoTitle: false,
+            conflictOf: current.id,
+            createdAt: ts,
+            updatedAt: ts,
+          });
+        }
+      }
+      // Adopt the newer metadata (title/tags/folder/pin/…) except fields this
+      // save explicitly patches — the session snapshot must not clobber them.
+      note = { ...current };
+    }
+
+    const stamp = Date.now();
+    note = { ...note, ...patch, body, updatedAt: stamp };
+    await store.putNoteRaw(note);
+    lastKnownUpdatedAt = stamp;
     await syncNoteTasks(note);
   }
 
@@ -178,11 +240,14 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     saveTimer = setTimeout(() => save().catch(e => console.warn('[mind] autosave:', e.message)), AUTOSAVE_MS);
   }
 
+  // Returns the in-flight save so callers that must order against it (trash,
+  // route cleanup) can await — an unawaited flush racing a trashNote used to
+  // be able to resurrect the note.
   function flushPending() {
-    if (!saveTimer) return;
+    if (!saveTimer) return Promise.resolve();
     clearTimeout(saveTimer);
     saveTimer = 0;
-    save().catch(() => {});
+    return save().catch(() => {});
   }
 
   async function handleFiles(files) {
@@ -208,6 +273,7 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     markdown: note.body,
     onChange: () => { scheduleSave(); syncHistoryButtons(); if (clearSearchHighlight) clearSearchHighlight(); },
     onFiles: handleFiles,
+    onWikiLink: () => openLinkPicker(),   // "[[": keyboard wikilink trigger
     placeholder: 'write…',
   });
 
@@ -397,13 +463,16 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
 
   // Link-to-note picker: search-as-you-type over all notes, insert a
   // [title](#note/id) link at the cursor. Id-based, so renames never break it.
-  const linkBtn = btn('&#128279;', 'mn-btn-icon', () => {
+  // Opened by the 🔗 button OR by typing "[[" in the editor (the wikilink
+  // input rule — see editor/setup.js), so linking never leaves the keyboard:
+  // [[, type to filter, Enter takes the top hit, Esc cancels.
+  function openLinkPicker() {
     const overlay = el('div', 'mn-modal-overlay');
     const box = el('div', 'mn-modal');
     box.appendChild(el('div', 'mn-modal-title', 'link to note'));
     const input = el('input', 'mn-input');
     input.type = 'search';
-    input.placeholder = 'search notes…';
+    input.placeholder = 'search notes… (Enter = top hit)';
     box.appendChild(input);
     const list = el('div', 'mn-linklist');
     box.appendChild(list);
@@ -411,7 +480,15 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
 
+    const pick = (h) => {
+      overlay.remove();
+      editor.insertLink(h.title, `#note/${h.id}`);
+      scheduleSave();
+      editor.focus();
+    };
+
     let seq = 0;
+    let topHit = null;
     const draw = async () => {
       const mySeq = ++seq;
       const hits = (await query(input.value.trim(), { type: 'note' }))
@@ -419,25 +496,88 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, 12);
       if (mySeq !== seq) return;
+      topHit = hits[0] || null;
       list.innerHTML = '';
       for (const h of hits) {
-        const row = btn(esc(h.title), 'mn-btn-ghost mn-linkrow', () => {
-          overlay.remove();
-          editor.insertLink(h.title, `#note/${h.id}`);
-          scheduleSave();
-          editor.focus();
-        });
+        const row = btn(esc(h.title), 'mn-btn-ghost mn-linkrow', () => pick(h));
         list.appendChild(row);
       }
       if (!hits.length) list.appendChild(el('div', 'mn-dim', 'no matches'));
     };
     input.addEventListener('input', draw);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { overlay.remove(); editor?.focus(); }
+      else if (e.key === 'Enter' && topHit) { e.preventDefault(); pick(topHit); }
+    });
     draw();
     input.focus();
-  });
-  linkBtn.title = 'link to another note';
+  }
+  const linkBtn = btn('&#128279;', 'mn-btn-icon', openLinkPicker);
+  linkBtn.title = 'link to another note (or type [[ in the note)';
   actions.insertBefore(linkBtn, pinBtn);
+
+  // ── Per-note version history (Drive shard revisions) ──
+  // Every push that touched this note's shard left a Drive revision; the
+  // modal walks them newest→oldest and lists the DISTINCT past bodies.
+  // Restore just sets the editor to the old text (one undo step, autosaves
+  // through the normal rebase-on-save path) — nothing destructive.
+  if (driveConnected()) {
+    const histBtn = btn('&#9201;', 'mn-btn-icon', () => {
+      const overlay = el('div', 'mn-modal-overlay');
+      const box = el('div', 'mn-modal mn-modal-wide');
+      box.appendChild(el('div', 'mn-modal-title', 'version history (from Drive revisions)'));
+      const status = el('div', 'mn-dim', 'scanning revisions…');
+      box.appendChild(status);
+      const list = el('div', 'mn-linklist');
+      box.appendChild(list);
+      overlay.appendChild(box);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+
+      listNoteVersions(note.id, {
+        onProgress: (done, total) => { status.textContent = `scanning revisions… ${done}/${total}`; },
+      }).then((versions) => {
+        const current = editor ? editor.getMarkdown() : note.body;
+        status.textContent = versions.length
+          ? 'distinct past versions of this note — restore sets the editor to that text (undoable):'
+          : 'no past versions on Drive yet (revisions appear after syncs that changed this note).';
+        for (const v of versions) {
+          const row = el('div', 'mn-history-row');
+          const when = v.modifiedTime ? new Date(v.modifiedTime).toLocaleString() : '?';
+          const isCurrent = (v.body || '') === (current || '');
+          const head = el('div', 'mn-history-head');
+          head.appendChild(el('span', 'mn-history-when', `${esc(when)}${isCurrent ? ' <span class="mn-dim">(current)</span>' : ''}`));
+          const snippet = el('div', 'mn-history-snippet');
+          snippet.textContent = (v.body || '').slice(0, 120) || '(empty)';
+          const rowActions = el('div', 'mn-history-actions');
+          const viewBtn = btn('view', 'mn-btn-ghost mn-btn-sm', () => {
+            let pre = row.querySelector('pre');
+            if (pre) { pre.remove(); return; }
+            pre = el('pre', 'mn-history-body');
+            pre.textContent = v.body || '(empty)';
+            row.appendChild(pre);
+          });
+          rowActions.appendChild(viewBtn);
+          if (!isCurrent) {
+            rowActions.appendChild(btn('restore', 'mn-btn-ghost mn-btn-sm', () => {
+              confirmBox('Set the note to this version? (Undo with Ctrl-Z / the undo button.)', () => {
+                overlay.remove();
+                editor.setMarkdown(v.body || '');
+                scheduleSave();
+                editor.focus();
+              });
+            }));
+          }
+          head.appendChild(rowActions);
+          row.appendChild(head);
+          row.appendChild(snippet);
+          list.appendChild(row);
+        }
+      }).catch((e) => { status.textContent = `history unavailable: ${e.message}`; });
+    });
+    histBtn.title = 'version history — past versions of this note from Drive revisions';
+    actions.insertBefore(histBtn, pinBtn);
+  }
 
   // ── Attachment strip ──
   const strip = el('div', 'mn-attach-strip');
@@ -564,7 +704,7 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     detachSearchKey?.(); // drop the Esc listener without touching the URL
     // Never leave the mic open across a route change.
     if (recording && capture) { try { await capture.stop(); } catch {} }
-    flushPending();
+    await flushPending();
     editor?.destroy();
   };
 

@@ -20,6 +20,7 @@ class NeuralAmpProcessor extends AudioWorkletProcessor {
     super();
     this.ready = false;
     this.bypass = false;
+    this.disposed = false;
     this.H = 0;
     this.Wih = this.Whh = this.b = this.Wd = null;
     this.bd = 0;
@@ -29,6 +30,11 @@ class NeuralAmpProcessor extends AudioWorkletProcessor {
       if (d.cmd === 'load') this.load(d.model);
       else if (d.cmd === 'bypass') this.bypass = !!d.on;
       else if (d.cmd === 'clear') this.ready = false;
+      // Let the node be torn down: returning false from process() ends the
+      // processor so it (and its weight buffers) can be GC'd. Without this a
+      // disconnected node keeps running for the life of the AudioContext —
+      // and the strip is rebuilt on every capture open, so they pile up.
+      else if (d.cmd === 'dispose') this.disposed = true;
     };
   }
 
@@ -49,6 +55,7 @@ class NeuralAmpProcessor extends AudioWorkletProcessor {
   }
 
   process(inputs, outputs) {
+    if (this.disposed) return false;   // ends the processor so it can be GC'd
     const out = outputs[0];
     if (!out || !out[0]) return true;
     const o0 = out[0];
@@ -68,7 +75,8 @@ class NeuralAmpProcessor extends AudioWorkletProcessor {
     const N = i0.length;
 
     for (let n = 0; n < N; n++) {
-      const x = stereo ? (i0[n] + stereo[n]) * 0.5 : i0[n];   // downmix to mono
+      let xin = stereo ? (i0[n] + stereo[n]) * 0.5 : i0[n];   // downmix to mono
+      const x = (xin * 0 === 0) ? xin : 0;                    // finite guard on input
       // gate pre-activations: Wih·x + b + Whh·h
       for (let r = 0; r < H4; r++) {
         let s = Wih[r] * x + b[r];
@@ -88,7 +96,15 @@ class NeuralAmpProcessor extends AudioWorkletProcessor {
         h[j] = hj;
         y += Wd[j] * hj;
       }
-      o0[n] = y;
+      // A single non-finite value (bad sample or a NaN weight) would otherwise
+      // latch into h/c and output NaN until a model reload. Reset the recurrent
+      // state and pass the dry sample so the amp self-heals in one block.
+      if (y * 0 === 0) {
+        o0[n] = y;
+      } else {
+        h.fill(0); c.fill(0);
+        o0[n] = x;
+      }
     }
     for (let ch = 1; ch < out.length; ch++) out[ch].set(o0);
     return true;

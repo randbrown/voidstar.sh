@@ -1,0 +1,25 @@
+name: CI
+
+# Cloudflare Pages auto-builds and deploys main on push, with no gate — a
+# broken build or a failing pure-core test (npm run check) would otherwise only
+# surface at deploy time. This runs the same build + test locally on every push
+# and PR so a regression is caught before it ships.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build

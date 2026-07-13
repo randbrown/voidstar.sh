@@ -265,7 +265,14 @@ export async function deleteFolderAndReparent(folder) {
     if (f.parentId === folder.id) await putFolder({ ...f, parentId: folder.parentId });
   }
   for (const n of notes) {
-    if (n.folderId === folder.id) await putNote({ ...n, folderId: folder.parentId });
+    if (n.folderId === folder.id) {
+      const moved = { ...n, folderId: folder.parentId };
+      // Reparenting to root blanks a fill-field — without the cleared
+      // tombstone the sync merge refills the deleted folder's id from an
+      // older copy and the note points at a tombstoned folder forever.
+      if (!folder.parentId) markCleared(moved, 'folderId');
+      await putNote(moved);
+    }
   }
   for (const l of lists) {
     if (l.folderId === folder.id) await putTasklist({ ...l, folderId: folder.parentId });

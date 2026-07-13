@@ -1,0 +1,5 @@
+# voidstar.sh
+User-agent: *
+Allow: /
+
+Sitemap: https://voidstar.sh/sitemap-index.xml

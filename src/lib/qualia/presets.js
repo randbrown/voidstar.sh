@@ -48,6 +48,30 @@ export function saveFxParams(fxId, params) {
   try { localStorage.setItem(fxParamsKey(fxId), JSON.stringify(params)); } catch {}
 }
 
+// Debounced param save for the HOT path. `core.setParam` (the Strudel/MIDI
+// live-coding hook) and every panel `input` event used to do a synchronous
+// JSON.stringify + localStorage.setItem PER call — a CC knob ride or a pattern
+// driving qualia.setParam (~50–100 msg/s) landed a blocking storage write per
+// message on the main thread, exactly the jank that starves the Strudel
+// cyclist. Coalesce to one write ~250 ms after the last change; flush on fx
+// swap / page hide so nothing is lost.
+let _fxSaveTimer = null;
+let _fxSavePending = null; // { fxId, params } — latest only
+export function saveFxParamsDebounced(fxId, params) {
+  _fxSavePending = { fxId, params };
+  if (_fxSaveTimer) return;
+  _fxSaveTimer = setTimeout(() => {
+    _fxSaveTimer = null;
+    const p = _fxSavePending; _fxSavePending = null;
+    if (p) saveFxParams(p.fxId, p.params);
+  }, 250);
+}
+export function flushFxParams() {
+  if (_fxSaveTimer) { clearTimeout(_fxSaveTimer); _fxSaveTimer = null; }
+  const p = _fxSavePending; _fxSavePending = null;
+  if (p) saveFxParams(p.fxId, p.params);
+}
+
 // Per-fx modulator weights. Flat dict keyed by `${paramId}.${modIdx}` so
 // merging persisted overrides with current spec is trivial — extra/missing
 // keys (e.g. fx schema changed since last save) are tolerated.

@@ -19,7 +19,7 @@ state library.
 
 ## Data model
 
-IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 4:
+IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 5:
 
 | Store | Key | Shape |
 |---|---|---|
@@ -29,6 +29,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
 | `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise). Same key scheme as `annotations`: bare `songId` = primary, `` `${songId}::${altId}` `` = alternate |
 | `snapshots` | `ts` | `{ts, label, data}` — rolling safety snapshots of the whole dataset (last 10), taken before a restore/sync/import so it can be undone |
+| `deletions` | `key` (`${store}:${id}`) | `{key, store, id, deletedAt}` — record-level deletion tombstones; ride `exportAll()` so deletes propagate through the backup merge instead of resurrecting (180-day TTL, see the merge section) |
 
 `charts` and `snapshots` are intentionally **local-only** and excluded from
 `exportAll()` (the Drive backup payload): `charts` is derivable from `chartUrl`,
@@ -46,7 +47,7 @@ config). Tokens and per-device display prefs never ride it:
 
 | Key | Store | Backed up? | What |
 |---|---|---|---|
-| `voidstar.setlist.sources` | localStorage | ✓ `sources` | worker URL + personal/community Drive chart-folder ids (Settings) |
+| `voidstar.setlist.sources` | localStorage | ✓ `sources` | worker URL + optional worker access token + personal/community Drive chart-folder ids (Settings) |
 | `voidstar.setlist.gdrive.clientId` | localStorage | ✓ `settings.gdriveClientId` | Google OAuth client id — now an **optional override** (Settings → advanced): sign-in defaults to the app-owned client id (`src/lib/qualia/google-config.js`, `PUBLIC_GOOGLE_CLIENT_ID`); this key only overrides it for a self-host. Public identifier, not a secret |
 | `voidstar.setlist.spotify.clientId` | localStorage | ✓ `settings.spotifyClientId` | Spotify client id — shared by the worker and the PKCE login |
 | `voidstar.setlist.gdrive.token` | localStorage | ✗ | cached OAuth access token (~1 h) |
@@ -336,6 +337,32 @@ This codebase intentionally keeps two similarly-named ideas separate:
     intentional clear). The same merge-aware upsert backs
     `store.importAll` (and the setlist/song file imports), so importing a
     stale export file can't regress newer local records either.
+  - **Record deletions carry tombstones.** Deleting a song/setlist/note/
+    annotation writes a `{store, id, deletedAt}` tombstone into the local
+    `deletions` store (same IDB transaction as the delete) and the ledger
+    rides `exportAll()`. `mergeData` drops any record whose tombstone is at
+    least as new as its last edit — so a delete survives the pull-merge-push
+    cycle instead of being resurrected out of the Drive file by the additive
+    record merge (which used to happen even single-device: delete → auto-push
+    → pull re-added it). A record *edited after* its deletion beats the
+    tombstone, which is then retired everywhere. Tombstones TTL out after
+    180 days (`purgeExpiredDeletions`, run each boot); a device offline
+    longer than that can still resurrect — same accepted limit as the mind
+    app's tombstones. Covered by `scripts/check-setlist-merge.mjs`
+    (`npm run check`).
+  - **Restores are authoritative.** `replaceAll` (snapshot undo, Drive
+    version restore) bumps every restored record's `updatedAt` to the
+    restore time and mints tombstones for records the restore removes — so
+    the restored state *wins* the next pull-merge-push instead of being
+    newer-wins-reverted by the copies still in Drive (which is what used to
+    happen: "undo last merge" only held until the next auto-push).
+  - **Trash view (`#trash`, Settings → version safeguards → 🗑 trash).**
+    Deletion tombstones snapshot the deleted record + a display label, so a
+    deleted song/setlist/note is restorable for the tombstone's 180-day TTL
+    — on any synced device (the merge preserves the snapshot). Restore
+    re-inserts the record with a fresh `updatedAt` (authoritative) and drops
+    the tombstone; "empty trash" forgets the stored payloads while keeping
+    the bare tombstones so the deletes still propagate.
   - `pull()` self-heals **duplicate data files** (two devices' first backups
     racing used to split the dataset — each device read/wrote its own copy
     and "missed" the other's edits): the file list is ordered newest-first
@@ -919,3 +946,15 @@ artist/genre/year/artwork/duration),
 summary, same provider chain and guards as `/ai/chart`; `retry=1` on both
 `/ai/*` GET routes = "previous answer was wrong, research harder, don't
 cache"), `GET /health`.
+
+**Access control.** CORS is not access control (a non-browser client ignores
+it), so a public worker's AI/Spotify/Drive quota is spendable by anyone who
+learns the URL. Set a `WORKER_TOKEN` secret (`wrangler secret put
+WORKER_TOKEN`) and the same value in the app (Settings → sync worker → access
+token, which rides the Drive backup to every device): every route except `/`
+and `/health` then requires a matching `X-Worker-Token` header (constant-time
+compare) and returns `401` otherwise. When the secret is unset the worker
+stays open for back-compat, so protection is opt-in. A best-effort per-IP
+token bucket (60 req/min, in-memory, per-colo) also throttles a single client
+hammering the expensive routes — it's a cost blunt, not a hard global limit;
+the token is the real gate.

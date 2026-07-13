@@ -11,7 +11,7 @@
 // this app creates), app-owned OAuth client ID by default (user override
 // possible), token cached ~1h.
 
-import { NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS, TASK_FILL_FIELDS } from './store.js';
+import { NOTE_FILL_FIELDS, ATTACHMENT_FILL_FIELDS, TASK_FILL_FIELDS, putSnapshot } from './store.js';
 import { GOOGLE_CLIENT_ID } from '../qualia/google-config.js';
 import { tokenRow } from '../qualia/gdrive-diag.js';
 import {
@@ -26,6 +26,10 @@ export { mergeData } from './shard.js';
 const NS = 'voidstar.mind.gdrive';
 const CLIENT_ID_KEY = `${NS}.clientId`;
 const TOKEN_KEY = `${NS}.token`;
+// Set once the user completes a Drive connection — the app-owned client id
+// makes getClientId() always truthy, so without this a first-time visitor who
+// never signed in would read as "reconnect" rather than "sign in".
+const EVER_KEY = `${NS}.everConnected`;
 const LAST_BACKUP_KEY = `${NS}.lastBackupAt`;
 const DEVICE_NAME_KEY = `${NS}.deviceName`;
 // Legacy single-file layout (pre-sharding). Still READ during migration and
@@ -150,7 +154,7 @@ function requeueDirtyShards(snap) {
   saveDirtyShards({ all: d.all || snap.all, buckets: [...buckets], index: d.index || snap.index });
 }
 
-let _gisLoaded = false;
+let _gisPromise = null;
 
 // Prefer a user-entered override (advanced / self-host); otherwise the
 // app-owned client id, so "Sign in with Google" works with zero setup.
@@ -179,8 +183,58 @@ export function getDeviceName() {
 export function setDeviceName(n) { if (n) localStorage.setItem(DEVICE_NAME_KEY, n); }
 
 export function isSyncEnabled() { return !!getClientId() && !!getStoredToken(); }
-export function needsReconnect() { return !!getClientId() && !getStoredToken(); }
-export function disconnect() { localStorage.removeItem(TOKEN_KEY); }
+export function needsReconnect() { return !!getClientId() && !getStoredToken() && localStorage.getItem(EVER_KEY) === '1'; }
+export function isConnected() { return !!getClientId() && !!getStoredToken(); }
+
+// ── Per-note version history ────────────────────────────────────────────────
+// Drive keeps native revisions on every shard file — every push that touched
+// a note's bucket left a snapshot. This walks the note's shard revisions
+// newest→oldest, pulls the note out of each, and returns the DISTINCT bodies
+// with their times: a per-note timeline for free, no new storage. Revisions
+// live ~30 days on Drive (or per its retention rules) — enough to undo a bad
+// week, not an archive.
+//
+// `onProgress(done, total)` lets the modal show a scan progress; `limit` caps
+// how many revisions are downloaded (each is one small shard fetch).
+export async function listNoteVersions(noteId, { limit = 20, onProgress } = {}) {
+  const token = await getAccessToken({ interactive: true });
+  if (!token) throw new Error('connect Google Drive first');
+  const name = shardName(bucket(noteId, DEFAULT_SHARD_COUNT));
+  const fileId = getShardState().files[name]?.id;
+  if (!fileId) throw new Error('this note has not synced to Drive yet');
+
+  const listRes = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/revisions?fields=revisions(id,modifiedTime)&pageSize=200`,
+    { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!listRes.ok) throw new Error(`Drive revisions failed: ${listRes.status}`);
+  const revisions = ((await listRes.json()).revisions || [])
+    .sort((a, b) => (b.modifiedTime || '').localeCompare(a.modifiedTime || ''))
+    .slice(0, limit);
+
+  const versions = [];
+  let lastBody = null;
+  for (let i = 0; i < revisions.length; i++) {
+    onProgress?.(i, revisions.length);
+    const rev = revisions[i];
+    let shard = null;
+    try {
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${rev.id}?alt=media`,
+        { headers: { 'Authorization': `Bearer ${token}` } });
+      if (!res.ok) continue;   // a purged/unreadable revision — skip, keep walking
+      shard = await res.json();
+    } catch { continue; }
+    const rec = (shard?.notes || []).find(n => n.id === noteId);
+    if (!rec) continue;                                  // note not in this bucket yet
+    const body = rec.body || '';
+    if (body === lastBody) continue;                     // unchanged since the next-newer revision
+    lastBody = body;
+    versions.push({ revisionId: rev.id, modifiedTime: rev.modifiedTime, title: rec.title || '', body });
+  }
+  onProgress?.(revisions.length, revisions.length);
+  return versions;
+}
+export function disconnect() { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(EVER_KEY); }
 
 export function getLastBackupTime() {
   const raw = localStorage.getItem(LAST_BACKUP_KEY);
@@ -257,19 +311,32 @@ export async function gatherDiagnostics({ live = false } = {}) {
   return report;
 }
 
-async function loadGis() {
-  if (_gisLoaded) return;
-  if (document.querySelector('script[src*="accounts.google.com/gsi/client"]')) {
-    _gisLoaded = true;
-    return;
-  }
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
+function gisReady() {
+  return typeof google !== 'undefined' && !!(google.accounts && google.accounts.oauth2);
+}
+// Memoize the load PROMISE, not a "tag exists" flag: a racing second caller
+// that saw the just-appended <script> before it ran would proceed and hit
+// `google is not defined`. Resolve only on the script's real load (or when the
+// global is already present); a failed load clears the memo so a retry works.
+function loadGis() {
+  if (gisReady()) return Promise.resolve();
+  if (_gisPromise) return _gisPromise;
+  _gisPromise = new Promise((resolve, reject) => {
+    const fail = () => { _gisPromise = null; reject(new Error('Failed to load Google Identity Services')); };
+    let script = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
+    if (script) {
+      if (gisReady()) return resolve();
+      script.addEventListener('load', () => resolve(), { once: true });
+      script.addEventListener('error', fail, { once: true });
+      return;
+    }
+    script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
-    script.onload = () => { _gisLoaded = true; resolve(); };
-    script.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+    script.onload = () => resolve();
+    script.onerror = fail;
     document.head.appendChild(script);
   });
+  return _gisPromise;
 }
 
 function getStoredToken() {
@@ -285,6 +352,7 @@ function storeToken(token, expiresIn) {
     token,
     expiresAt: Date.now() + (expiresIn - 60) * 1000,
   }));
+  try { localStorage.setItem(EVER_KEY, '1'); } catch {}
 }
 
 // One token request. The `prompt` decides the UX: `'none'` renews silently
@@ -627,13 +695,24 @@ async function pullSharded(token) {
   const remotePartial = { notes: [], tasks: [], attachments: [], annotations: [] };
   const changedBuckets = new Set();
 
+  // One unreadable file must not brick every future cycle: skip it (warn),
+  // and — crucially — don't stamp it, so it's retried next cycle. Local data
+  // is never at risk (the merge is full-local ⋈ partial-remote; a skipped
+  // shard just means its bucket keeps the local copy this cycle).
+  let corrupt = 0;
+
   let index = null;
   if (indexRec) {
     const known = state.files[INDEX_FILE_NAME];
     if (!known || (indexRec.modifiedTime || '') > (known.mtime || '')) {
-      const data = await readJsonFile(token, indexRec.id);
-      index = { folders: data.folders || [], tasklists: data.tasklists || [], settings: data.settings || {} };
-      pendingStamps[INDEX_FILE_NAME] = { id: indexRec.id, mtime: indexRec.modifiedTime || '', hash: hashIndex(data) };
+      try {
+        const data = await readJsonFile(token, indexRec.id);
+        index = { folders: data.folders || [], tasklists: data.tasklists || [], settings: data.settings || {} };
+        pendingStamps[INDEX_FILE_NAME] = { id: indexRec.id, mtime: indexRec.modifiedTime || '', hash: hashIndex(data) };
+      } catch (e) {
+        corrupt++;
+        console.warn(`[mind-sync] skipping unreadable ${INDEX_FILE_NAME}:`, e.message);
+      }
     } else if (!known.id) {
       pendingStamps[INDEX_FILE_NAME] = { ...known, id: indexRec.id };
     }
@@ -643,7 +722,13 @@ async function pullSharded(token) {
     const b = parseShardName(f.name);
     const known = state.files[f.name];
     if (!known || (f.modifiedTime || '') > (known.mtime || '')) {
-      const data = await readJsonFile(token, f.id);
+      let data;
+      try { data = await readJsonFile(token, f.id); }
+      catch (e) {
+        corrupt++;
+        console.warn(`[mind-sync] skipping unreadable ${f.name}:`, e.message);
+        continue;
+      }
       for (const coll of SHARD_COLLS) if (data[coll]) remotePartial[coll].push(...data[coll]);
       changedBuckets.add(b);
       pendingStamps[f.name] = { id: f.id, mtime: f.modifiedTime || '', hash: hashShard(data) };
@@ -651,6 +736,7 @@ async function pullSharded(token) {
       pendingStamps[f.name] = { ...known, id: f.id };
     }
   }
+  if (corrupt) console.warn(`[mind-sync] ${corrupt} unreadable file(s) skipped this cycle; will retry`);
 
   const commit = () => {
     const s = getShardState();
@@ -1175,9 +1261,17 @@ async function pushNow() {
   if (_syncing) { _pendingPush = true; return; }
   setSyncState('syncing');
   try {
-    await pullMergePushCycle(_syncClient, _exportFn, _importFn);
+    // The auto-push cycle pulls and imports remote deltas too — snapshot
+    // before a changing import (the cycle only calls snapshotFn when the
+    // delta actually lands, and putSnapshot is size-gated), so "undo last
+    // sync" also covers merges that arrive via the debounced push path.
+    await pullMergePushCycle(_syncClient, _exportFn, _importFn, {
+      snapshotFn: () => putSnapshot('pre-sync'),
+    });
+    const rearm = _pendingPush; // an edit landed mid-cycle and may have missed the export
     _pendingPush = false;
     setSyncState('synced');
+    if (rearm && _exportFn) debouncedPush(_exportFn, _importFn);
   } catch (e) {
     _pendingPush = true;
     setSyncState('pending');

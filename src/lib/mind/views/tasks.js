@@ -2,10 +2,10 @@
 // window and an archive drawer per list.
 
 import * as store from '../store.js';
-import { setTaskDoneEverywhere } from '../tasks-sync.js';
+import { setTaskDoneEverywhere, setTaskTextEverywhere } from '../tasks-sync.js';
 import { navigate, refresh } from '../app.js';
 import { parseCapture } from '../capture.js';
-import { armReminder, reminderSheet, reminderBadge } from '../reminders.js';
+import { armReminder, reminderSheet, reminderBadge, isReminderDue, snoozeTask } from '../reminders.js';
 import { el, esc, btn, topBar, emptyState, textPrompt, confirmBox, timeAgo } from '../ui.js';
 
 export async function renderTasks(root, focusListId = null) {
@@ -132,7 +132,9 @@ function taskRow(task) {
       title: 'edit task', value: task.text,
       onOk: async (v) => {
         if (!v) return;
-        await store.putTask({ ...task, text: v });
+        // Note-sourced tasks rewrite the canonical body line too — a
+        // record-only edit reverts on the note's next open/save re-parse.
+        await setTaskTextEverywhere(task, v);
         refresh();
       },
     });
@@ -141,6 +143,17 @@ function taskRow(task) {
 
   const badge = reminderBadge(task);
   if (badge) row.appendChild(badge);
+
+  // Quick-snooze — one tap to defer a due/overdue reminder by 10 min, without
+  // opening the reminder sheet. Only shown when the reminder is actually due.
+  if (isReminderDue(task)) {
+    const snooze = btn('&#128564; 10m', 'mn-btn-ghost mn-task-snooze', async () => {
+      await snoozeTask(task);
+      refresh();
+    });
+    snooze.title = 'snooze 10 minutes';
+    row.appendChild(snooze);
+  }
 
   const bell = btn(task.remindAt || task.remindPlace ? '&#128276;' : '&#128368;',
     'mn-btn-ghost mn-task-bell', () => reminderSheet(task, refresh));

@@ -78,11 +78,28 @@ modulates against `crowd.*` simply sees 0 during a solo set.
 
 Host-side ingress is solid: every param passes `clampToSpec` against the manifest, votes are checked
 against the registry, pose is a fixed-length float array, **nothing is ever `eval`'d**, and per-peer
-throttles + `MAX_PEERS` apply. **But the Worker/DO does no validation, rate-limiting, size-capping,
-or auth** — it blindly relays arbitrary JSON, and `role`/`target` are client-claimed. Unguessable
-room IDs mitigate discovery (custom slugs are guessable). Hardening the relay (per-socket token
-bucket, message-size cap, drop unknown topics) is a tracked backlog item. For an intimate art piece
-this is low-stakes; revisit before any larger/public deployment.
+throttles + `MAX_PEERS` apply.
+
+**Relay hardening (worker side).** The DO is now defended at the edge — it's on a public
+`workers.dev` URL, so anyone who learns the room could otherwise drive or flood it:
+
+- **Origin allowlist** on the WebSocket upgrade (`ALLOWED_ORIGINS`, comma-separated; localhost
+  always allowed for dev). WebSockets bypass CORS, so this is the only thing stopping a third-party
+  page from opening sockets into a room.
+- **Host key (trust-on-first-use per room).** `role=host` is no longer a free claim: the host
+  presents a high-entropy per-room key (`getOrCreateHostKey`, persisted on the performer's device,
+  **never in the QR/join URL**). The first host to present a key registers it in DO storage; a later
+  `host` claim without the matching key is silently **downgraded to participant**. So a phone that
+  scans the QR can only ever join as audience and can't hijack the projection.
+- **Same-role eviction only** — a reconnect with an existing id can't close a socket of the *other*
+  role, so a participant can't knock the host offline by reusing its id.
+- **Targeting boundary** — a participant may only `target` a host; a host may target anyone.
+- **Per-message size cap** (16 KB) + **per-socket token bucket** (best-effort, in-memory) + **topic
+  allowlist** (unknown topics dropped).
+
+Unguessable room IDs still gate discovery (custom slugs are guessable, so the host key is what
+actually protects a slug-named room). This remains an intimate-art-piece design, but it's now safe
+to run on the public relay.
 
 ### Known issues (see `plans/maintenance-backlog.md`)
 

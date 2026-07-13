@@ -17,6 +17,19 @@
 # etc.) are unaffected — these headers only cover voidstar.sh's own
 # files. Their cache behavior is dictated by their own headers.
 
+# Security headers (all paths). Deliberately minimal — a full CSP would break
+# the CDN-loaded Strudel/Hydra/MediaPipe imports and the inline boot scripts,
+# so we only set frame-ancestors (clickjacking) plus the cheap hardening
+# headers. NO COOP/COEP: nothing uses SharedArrayBuffer, and cross-origin
+# isolation would break those same CDN imports. The setlist/mind apps hold
+# Google Drive OAuth tokens in localStorage, so framing protection matters.
+/*
+  X-Frame-Options: SAMEORIGIN
+  Content-Security-Policy: frame-ancestors 'self'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), microphone=(self), geolocation=(self), midi=(self), interest-cohort=()
+
 /*.html
   Cache-Control: public, max-age=0, must-revalidate
 

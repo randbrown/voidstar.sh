@@ -58,6 +58,7 @@ const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
 const STRIPUTIL_KEY  = `${NS}.stripUtilOpen`; // utility drawer (hpf/comp/eq/pan) expanded
 const LOOPOPEN_KEY     = `${NS}.loopOpen`;      // loop section visible
 const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
+const FREEZE_KEY     = `${NS}.freeze`;     // freeze pad settings {level,grainSec,releaseSec}
 const TUNER_KEY      = `${NS}.tuner`;      // tuner enabled
 const TUNERMUTE_KEY  = `${NS}.tunerMute`; // mute rig signal while tuner is on
 const TEMPER_KEY     = `${NS}.temperament`;// 'et' | 'custom'
@@ -265,6 +266,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnScopeCollapse = document.getElementById('btn-rig-scope-collapse');
   const btnStrip    = document.getElementById('btn-rig-strip');
   const btnTuner    = document.getElementById('btn-rig-tuner');
+  const btnFreeze   = document.getElementById('btn-rig-freeze');
+  const btnFreezeCfg = document.getElementById('btn-rig-freeze-cfg');
+  const freezeCfgEl = document.getElementById('rig-freeze-cfg');
+  const freezeLevelEl = document.getElementById('freeze-level');
+  const freezeGrainEl = document.getElementById('freeze-grain');
+  const freezeReleaseEl = document.getElementById('freeze-release');
+  const btnFreezePop = document.getElementById('btn-freeze-pop');
+  const btnFreezeRegrab = document.getElementById('btn-freeze-regrab');
+  const btnFreezeClear = document.getElementById('btn-freeze-clear');
   const stripPanel  = document.getElementById('rig-strip');
   const stripBody   = document.getElementById('rig-strip-body');
   const stripUtilBody = document.getElementById('rig-strip-util-body');
@@ -342,6 +352,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   let _everOpened = false;
 
   const looperAudio = createLooperAudio({ audio, syncStrudel });
+  // Freeze pad settings — persisted; applied before any freeze can start.
+  try { looperAudio.setFreezeConfig(JSON.parse(lsGet(FREEZE_KEY, 'null')) || {}); } catch {}
   looperAudio.setMaster(model.master);
   looperAudio.setOffsetMs(model.offsetMs);
   looperAudio.primeRig(model.rigLevel, model.rigMuted);             // rig master output level + mute
@@ -3166,6 +3178,94 @@ export function createLooper({ audio, syncStrudel } = {}) {
     syncScopeLoop();
   }
 
+  // ── Freeze / infinite-sustain STACK (Frippertronics) ──────────────────────
+  // The `frz` pedal (button / `;`) GRABS the last moment of the processed
+  // signal and LAYERS it onto a stack — tap again to layer another pad over
+  // the last. `pop` (`'`) removes the top layer with a release fade; re-grab
+  // (`\`) replaces the top with a fresh grab; clear releases the whole stack.
+  // The engine sums all pads through a constant-RMS bus + soft limiter so the
+  // stack holds a steady loudness and never clips (looper-audio). Needs the
+  // capture ring, so a grab opens capture if the signal fader is up.
+  async function freezePush() {
+    try { await looperAudio.ensureCaptureOpen(); } catch {}
+    const ok = await looperAudio.freezePush();
+    refreshFreezeBtn();
+    setStatus(ok ? `frozen · ${looperAudio.freezeDepth()} layer${looperAudio.freezeDepth() === 1 ? '' : 's'}`
+                 : 'freeze needs the input open (raise the signal fader)');
+  }
+  function freezePop() {
+    if (!looperAudio.isFrozen()) return;
+    looperAudio.freezePop();
+    refreshFreezeBtn();
+    const n = looperAudio.freezeDepth();
+    setStatus(n ? `popped · ${n} layer${n === 1 ? '' : 's'} left` : 'freeze cleared');
+  }
+  async function freezeRegrab() {
+    if (!looperAudio.isFrozen()) { await freezePush(); return; }
+    try { await looperAudio.ensureCaptureOpen(); } catch {}
+    await looperAudio.freezeRegrab();
+    refreshFreezeBtn();
+    setStatus(`re-grabbed top · ${looperAudio.freezeDepth()} layer${looperAudio.freezeDepth() === 1 ? '' : 's'}`);
+  }
+  function freezeClear() {
+    if (!looperAudio.isFrozen()) return;
+    looperAudio.freezeStop();
+    refreshFreezeBtn();
+    setStatus(`freeze cleared — fading ${looperAudio.getFreezeConfig().releaseSec}s`);
+  }
+  // `toggleFreeze` is the pedal button / `;` / MIDI action: it LAYERS a grab.
+  const toggleFreeze = freezePush;
+
+  function refreshFreezeBtn() {
+    const n = looperAudio.freezeDepth();
+    if (btnFreeze) {
+      btnFreeze.classList.toggle('active', n > 0);
+      btnFreeze.textContent = n > 1 ? `frz${n}` : 'frz';   // depth badge
+    }
+    if (btnFreezePop) btnFreezePop.disabled = n === 0;
+  }
+
+  // Freeze settings row (▾): level / grain / release (persisted) + pop / re-grab / clear.
+  function saveFreezeCfg() {
+    try { lsSet(FREEZE_KEY, JSON.stringify(looperAudio.getFreezeConfig())); } catch {}
+  }
+  function initFreezeCfgUI() {
+    if (!freezeCfgEl) return;
+    const cfg = looperAudio.getFreezeConfig();
+    if (freezeLevelEl) freezeLevelEl.value = String(cfg.level);
+    const snap = (el, v) => {
+      if (!el) return;
+      let best = el.options[0]?.value;
+      for (const o of el.options) if (Math.abs(parseFloat(o.value) - v) < Math.abs(parseFloat(best) - v)) best = o.value;
+      el.value = best;
+    };
+    snap(freezeGrainEl, cfg.grainSec);
+    snap(freezeReleaseEl, cfg.releaseSec);
+    freezeLevelEl?.addEventListener('input', () => {
+      looperAudio.setFreezeConfig({ level: parseFloat(freezeLevelEl.value) });
+      saveFreezeCfg();
+    });
+    freezeGrainEl?.addEventListener('change', () => {
+      looperAudio.setFreezeConfig({ grainSec: parseFloat(freezeGrainEl.value) });
+      saveFreezeCfg();
+      setStatus('grain applies on the next grab');
+    });
+    freezeReleaseEl?.addEventListener('change', () => {
+      looperAudio.setFreezeConfig({ releaseSec: parseFloat(freezeReleaseEl.value) });
+      saveFreezeCfg();
+    });
+    btnFreezePop?.addEventListener('click', () => { freezePop(); });
+    btnFreezeRegrab?.addEventListener('click', () => { freezeRegrab(); });
+    btnFreezeClear?.addEventListener('click', () => { freezeClear(); });
+    btnFreezeCfg?.addEventListener('click', () => {
+      const open = freezeCfgEl.style.display === 'none';
+      freezeCfgEl.style.display = open ? '' : 'none';
+      btnFreezeCfg.textContent = open ? '▴' : '▾';
+    });
+    refreshFreezeBtn();
+  }
+  initFreezeCfgUI();
+
   // ── refreshers ───────────────────────────────────────────────────────────
   function refreshTrackRow(track) {
     const el = rowEls.get(track.id);
@@ -3510,6 +3610,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnLoopCollapse) btnLoopCollapse.addEventListener('click', () => { toggleLoopCollapse(); });
   if (btnScopeCollapse) btnScopeCollapse.addEventListener('click', () => { toggleScopesCollapse(); });
   if (btnTuner)  btnTuner.addEventListener('click', () => { toggleTuner(); });
+  if (btnFreeze) btnFreeze.addEventListener('click', () => { toggleFreeze(); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
   if (btnStop)   btnStop.addEventListener('click', () => { stop(); });
   if (btnMute)   btnMute.addEventListener('click', () => { setMuted(!_muted); });
@@ -3569,6 +3670,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
     hasBeenOpened: () => _everOpened,
     isPlaying: () => looperAudio.anyPlaying(),
     isRecording: () => recording,
+    // Clean input pitch in Hz (−1 = none) for the audio.pitch* channels.
+    getInputPitchHz: () => looperAudio.getInputPitchHz(),
+    // Freeze / infinite-sustain STACK — for the panel buttons, hotkeys, MIDI.
+    toggleFreeze,                                  // = grab / push a layer
+    freezePush, freezePop, freezeRegrab, freezeClear,
+    isFrozen: () => looperAudio.isFrozen(),
+    freezeDepth: () => looperAudio.freezeDepth(),
     play: playAll, stop,
     perFrame,
     getConfig, setConfig,

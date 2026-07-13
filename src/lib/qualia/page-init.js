@@ -448,6 +448,7 @@ export function initQualiaPage() {
     autoCycleBeatSync,
     transitionStyle,
     transitionMs,
+    quantizeScene,
     numPoses:       pose.getNumPoses(),
     poseSmoothing:  poseSmoothingValue,
     reactSmoothing: reactSmoothingValue,
@@ -619,8 +620,51 @@ export function initQualiaPage() {
     fxSelect.appendChild(opt);
   }
   fxSelect.addEventListener('change', () => {
-    runSceneTransition();
-    core.setActive(fxSelect.value).catch(err => console.error('[qualia] setActive failed:', err));
+    const nextId = fxSelect.value;
+    quantizedSceneChange(() => {
+      runSceneTransition();
+      core.setActive(nextId).catch(err => console.error('[qualia] setActive failed:', err));
+    });
+  });
+
+  // ── Per-quale fps memory + picker badge ───────────────────────────────────
+  // Remember how each quale actually performed on THIS device+display and show
+  // it in the picker, so "which quale is safe on this venue's laptop+projector"
+  // is UI, not memory. A rolling median-ish EMA per quale id, sampled only
+  // after a short warmup (shader compile / first-frame allocation is not
+  // representative). Options gain a dim "· <fps>" suffix, and a "⚠" when a
+  // quale has historically dropped below 30 fps here.
+  const FXFPS_KEY = 'voidstar.qualia.fxfps';
+  let _fxFps = {};
+  try { _fxFps = JSON.parse(localStorage.getItem(FXFPS_KEY)) || {}; } catch {}
+  let _fxFpsSaveT = 0;
+  function annotateFxOptions() {
+    for (const opt of fxSelect.options) {
+      const mod = mesh.get(opt.value);
+      const base = mod?.name || opt.value;
+      const fps = _fxFps[opt.value];
+      opt.textContent = fps ? `${fps < 30 ? '⚠ ' : ''}${base} · ${Math.round(fps)}` : base;
+    }
+  }
+  // Re-label right before the dropdown opens so the numbers are current.
+  fxSelect.addEventListener('mousedown', annotateFxOptions);
+  fxSelect.addEventListener('focus', annotateFxOptions);
+  annotateFxOptions();
+  let _fxActiveId = null, _fxActiveSince = 0;
+  core.onFps((fps) => {
+    const id = core.activeId?.();
+    if (!id || !fps) return;
+    const t = performance.now();
+    // Skip the first ~2.5 s after a swap — warmup fps (shader compile /
+    // first-frame allocation) isn't representative of steady state.
+    if (id !== _fxActiveId) { _fxActiveId = id; _fxActiveSince = t; return; }
+    if (t - _fxActiveSince < 2500) return;
+    const prev = _fxFps[id] || fps;
+    _fxFps[id] = prev + (fps - prev) * 0.05;   // slow EMA → a stable median-ish
+    if (t - _fxFpsSaveT > 4000) {
+      _fxFpsSaveT = t;
+      try { localStorage.setItem(FXFPS_KEY, JSON.stringify(_fxFps)); } catch {}
+    }
   });
 
   // ── Audio panel ───────────────────────────────────────────────────────────
@@ -1987,8 +2031,10 @@ export function initQualiaPage() {
             const i = ids.indexOf(cur || ids[0]);
             const step = dy < 0 ? 1 : -1;
             const nextId = ids[(i + step + ids.length) % ids.length];
-            runSceneTransition();
-            core.setActive(nextId).catch(err => console.error('[qualia] swipe setActive failed:', err));
+            quantizedSceneChange(() => {
+              runSceneTransition();
+              core.setActive(nextId).catch(err => console.error('[qualia] swipe setActive failed:', err));
+            });
           }
         } else if (Math.abs(dx) + Math.abs(dy) < TAP_MAX_MOVE_PX) {
           // A stationary single-finger tap. Two within the tap window toggle
@@ -2028,8 +2074,10 @@ export function initQualiaPage() {
     const cur = core.activeId();
     const i = ids.indexOf(cur || ids[0]);
     const nextId = ids[(i + step + ids.length) % ids.length];
-    runSceneTransition();
-    core.setActive(nextId).catch(err => console.error('[qualia] quick-menu setActive failed:', err));
+    quantizedSceneChange(() => {
+      runSceneTransition();
+      core.setActive(nextId).catch(err => console.error('[qualia] quick-menu setActive failed:', err));
+    });
   }
 
   function quickMenuAction(action) {
@@ -2991,8 +3039,32 @@ export function initQualiaPage() {
     // Camera panel (split mode only).
     if (layout.camRect) drawCameraIntoRect(layout.camRect);
   }
+  // The composite loop now has TWO consumers — the recorder and the output
+  // window — so it's reference-counted: the per-frame drawImage cost only
+  // runs while at least one of them is active, and one releasing doesn't
+  // starve the other. Only the RECORDER locks dimensions (the encoder needs
+  // stable input); the output window tracks the live layout.
+  let recordCompositeRefs = 0;
+  function acquireComposite() {
+    recordCompositeRefs++;
+    if (recordCompositeRefs === 1) {
+      recordCompositeUpdate();
+      // Subscribe to the rAF loop. core.onFrame fires AFTER fx render AND
+      // after the existing overlay frame listener, because listeners run
+      // in insertion order and overlay was registered earlier in setup. By
+      // the time our callback runs, both fx and overlay are painted into
+      // their respective canvases for the current frame.
+      recordCompositeFrameOff = core.onFrame(recordCompositeUpdate);
+    }
+  }
+  function releaseComposite() {
+    recordCompositeRefs = Math.max(0, recordCompositeRefs - 1);
+    if (recordCompositeRefs === 0 && recordCompositeFrameOff) {
+      recordCompositeFrameOff();
+      recordCompositeFrameOff = null;
+    }
+  }
   function recordCompositeBegin() {
-    if (recordCompositeFrameOff) return;
     // Paint one frame at the current layout so the canvas has content for
     // captureStream's first sample AND the dimensions/layout are stamped
     // before we lock them.
@@ -3003,18 +3075,83 @@ export function initQualiaPage() {
     // buttons), but the recorded canvas stays the same size so the encoder
     // doesn't choke; the source is letterboxed into the frozen rects instead.
     recordCompositeLocked = true;
-    // Subscribe to the rAF loop. core.onFrame fires AFTER fx render AND
-    // after the existing overlay frame listener, because listeners run
-    // in insertion order and overlay was registered earlier in setup. By
-    // the time our callback runs, both fx and overlay are painted into
-    // their respective canvases for the current frame.
-    recordCompositeFrameOff = core.onFrame(recordCompositeUpdate);
+    acquireComposite();
   }
   function recordCompositeEnd() {
-    if (recordCompositeFrameOff) recordCompositeFrameOff();
-    recordCompositeFrameOff = null;
+    releaseComposite();
     recordCompositeLocked = false;
   }
+
+  // ── Output window (projector / OBS feed) ──────────────────────────────────
+  // A chrome-free popup mirroring the recorder's clean composite (fx +
+  // overlay + cam-walk + transitions, no HUD) via canvas.captureStream — the
+  // VJ "media-server output" pattern: the projector/OBS captures the popup
+  // while the laptop screen keeps the topbar and panels. Compositor-fed video,
+  // so the popup costs one captureStream track, not a second render.
+  let outputWin = null, outputStream = null, outputWatch = null, outputHoldsRef = false;
+  const btnOutput = document.getElementById('btn-output');
+  function closeOutputWindow() {
+    if (outputWatch) { clearInterval(outputWatch); outputWatch = null; }
+    try { outputStream?.getTracks().forEach(t => t.stop()); } catch {}
+    outputStream = null;
+    try { if (outputWin && !outputWin.closed) outputWin.close(); } catch {}
+    outputWin = null;
+    if (outputHoldsRef) { outputHoldsRef = false; releaseComposite(); }
+    btnOutput?.classList.remove('active');
+  }
+  function toggleOutputWindow() {
+    if (outputWin && !outputWin.closed) { closeOutputWindow(); return; }
+    // window.open must run synchronously in the tap gesture or it's blocked.
+    const w = window.open('', 'qualia-output', 'popup=yes,width=960,height=540');
+    if (!w) { console.warn('[qualia] output window blocked by the browser'); return; }
+    outputWin = w;
+    acquireComposite();
+    outputHoldsRef = true;
+    try {
+      outputStream = recordCompositeCanvas.captureStream(30);
+      w.document.write(
+        '<!doctype html><title>qualia output</title>' +
+        '<style>html,body{margin:0;height:100%;background:#000;overflow:hidden;cursor:none}' +
+        'video{width:100%;height:100%;object-fit:contain;display:block}</style>' +
+        '<video autoplay muted playsinline></video>');
+      w.document.close();
+      const v = w.document.querySelector('video');
+      v.srcObject = outputStream;
+      // Double-click the output for fullscreen on the projector.
+      v.addEventListener('dblclick', () => {
+        try { w.document.fullscreenElement ? w.document.exitFullscreen() : v.requestFullscreen(); } catch {}
+      });
+    } catch (e) {
+      console.warn('[qualia] output window failed:', e);
+      closeOutputWindow();
+      return;
+    }
+    btnOutput?.classList.add('active');
+    // Keep the pipeline alive when THIS window is occluded: fullscreening the
+    // popup over the main window (same display) makes Chrome mark this page
+    // hidden and halt its rAF — freezing the fx render and the stream. The
+    // popup is visible by definition, so its rAF drives core.pump() whenever
+    // we're hidden (also covers minimized / other-tab). No-ops while this
+    // window is visible, so there's never double-driving.
+    const drive = () => {
+      if (!outputWin || outputWin.closed) return;
+      try {
+        if (document.hidden) {
+          core.pump();
+          // Hidden pages can also throttle automatic canvas capture — push a
+          // frame into the stream explicitly after each pumped composite.
+          outputStream?.getVideoTracks?.()[0]?.requestFrame?.();
+        }
+      } catch {}
+      try { outputWin.requestAnimationFrame(drive); } catch {}
+    };
+    try { outputWin.requestAnimationFrame(drive); } catch {}
+    // No close event crosses windows reliably — poll, and fold the tent when
+    // the popup goes away (or this page unloads).
+    outputWatch = setInterval(() => { if (!outputWin || outputWin.closed) closeOutputWindow(); }, 1000);
+  }
+  btnOutput?.addEventListener('click', toggleOutputWindow);
+  window.addEventListener('pagehide', () => { try { closeOutputWindow(); } catch {} });
 
   function refreshRecToastBackend(recording, backend, sink) {
     if (!recording) return '';
@@ -3522,6 +3659,11 @@ export function initQualiaPage() {
   function phaseNext() {
     const steps = getActivePhaseSteps();
     if (!steps || !steps.length) return;
+    quantizedSceneChange(() => phaseNextNow());
+  }
+  function phaseNextNow() {
+    const steps = getActivePhaseSteps();
+    if (!steps || !steps.length) return;
     lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-cycle
     runSceneTransition();                        // freeze the old look before the step lands
     const fxId = core.activeId();
@@ -3579,11 +3721,13 @@ export function initQualiaPage() {
     const excluded = fxId ? loadPhaseExcludedFor(fxId) : new Set();
     const incl = phaseIncludedIndices(steps, excluded).map(i => steps[i]);
     if (!incl.length) return;
-    lastAutoTransitionMs = performance.now();   // arm the auto-cycle cross-guard
-    runSceneTransition();                        // freeze the old look before the step lands
-    autoPhaseStepCount += dir;
-    const idx = ((autoPhaseStepCount % incl.length) + incl.length) % incl.length;
-    applyPhaseStep(incl[idx]);
+    quantizedSceneChange(() => {
+      lastAutoTransitionMs = performance.now();   // arm the auto-cycle cross-guard
+      runSceneTransition();                        // freeze the old look before the step lands
+      autoPhaseStepCount += dir;
+      const idx = ((autoPhaseStepCount % incl.length) + incl.length) % incl.length;
+      applyPhaseStep(incl[idx]);
+    });
   }
 
   function tickPhase() {
@@ -3703,6 +3847,30 @@ export function initQualiaPage() {
     if (transitionStyle === 'cut') return;
     core.beginTransition({ style: transitionStyle, durationMs: transitionMs });
   }
+
+  // — Cycle-quantized scene changes —
+  // With quantize on and Strudel playing, every scene change (quale switch,
+  // phase step — manual or auto) waits for the next cycle boundary so the
+  // visual change lands ON the downbeat. Newest intent wins: a second change
+  // requested while one is pending replaces it (you always get the last thing
+  // you asked for, once, on the beat). Falls through to immediate when
+  // Strudel isn't playing (no clock) or the boundary is absurdly far out.
+  let quantizeScene = stored.quantizeScene === 'cycle' ? 'cycle' : 'off';
+  let _quantTimer = null;
+  function quantizedSceneChange(apply) {
+    if (_quantTimer) { clearTimeout(_quantTimer); _quantTimer = null; }
+    let secs = null;
+    if (quantizeScene === 'cycle') {
+      try { secs = strudel.getSecondsUntilNextStrudelBoundary?.(); } catch {}
+    }
+    if (secs == null || secs <= 0.06 || secs > 8) { apply(); return; }
+    // Fire ~20 ms early so the swap (which includes async fx create) lands on
+    // the beat rather than just after it.
+    _quantTimer = setTimeout(() => {
+      _quantTimer = null;
+      try { apply(); } catch (e) { console.error('[qualia] quantized scene change failed:', e); }
+    }, Math.max(0, secs * 1000 - 20));
+  }
   if (transStyleSelect) {
     transStyleSelect.value = transitionStyle;
     transStyleSelect.addEventListener('change', () => {
@@ -3715,6 +3883,14 @@ export function initQualiaPage() {
     transMsSelect.addEventListener('change', () => {
       const v = parseInt(transMsSelect.value, 10);
       transitionMs = TRANSITION_MS_OPTS.includes(v) ? v : 600;
+      settings.save();
+    });
+  }
+  const transQuantSelect = document.getElementById('transition-quant');
+  if (transQuantSelect) {
+    transQuantSelect.value = quantizeScene;
+    transQuantSelect.addEventListener('change', () => {
+      quantizeScene = transQuantSelect.value === 'cycle' ? 'cycle' : 'off';
       settings.save();
     });
   }
@@ -3773,9 +3949,11 @@ export function initQualiaPage() {
       nextId = ids[i];
     }
     if (!nextId || nextId === cur) return;
-    lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-phase
-    runSceneTransition();                        // freeze the old quale before the swap
-    core.setActive(nextId).catch(err => console.error('[qualia] cycle setActive failed:', err));
+    quantizedSceneChange(() => {
+      lastAutoTransitionMs = performance.now();   // arm the cross-guard for auto-phase
+      runSceneTransition();                        // freeze the old quale before the swap
+      core.setActive(nextId).catch(err => console.error('[qualia] cycle setActive failed:', err));
+    });
   }
 
   // Beat-sync only counts when there's an actual audio source. With audio
@@ -4230,6 +4408,51 @@ export function initQualiaPage() {
   // *reads* the clock — it doesn't drive Strudel transport — so the existing
   // seqSyncStrudel adapter is reused as-is.
   const looper = createLooper({ audio, syncStrudel: seqSyncStrudel });
+
+  // ── Pitch → modulation channels (audio.pitch / audio.pitchClass) ──────────
+  // Detect the clean guitar/steel pitch off the rig tuner and expose it as
+  // modulation channels, so any fx knob can track WHAT NOTE is being played
+  // (map audio.pitchClass → hue for an instantly musical, note-locked look).
+  // Realtime-safe: gated on the rig actually capturing, throttled to ~20 Hz
+  // (pitch doesn't move fast, and detection is O(n·lag)), allocation-free, and
+  // try/catch-guarded on the onTick hot path. When silent/unvoiced the last
+  // note is HELD (pitchClass) so hue doesn't strobe, and pitchConf falls to 0
+  // so a quale can fade on gaps. Values are 0 with no rig — identity for any
+  // modulator, exactly like the crowd channels.
+  const PITCH_MIN_HZ = 60, PITCH_MAX_HZ = 1200;
+  const PITCH_LOG_MIN = Math.log2(PITCH_MIN_HZ), PITCH_LOG_SPAN = Math.log2(PITCH_MAX_HZ) - PITCH_LOG_MIN;
+  const PITCH_INTERVAL_MS = 50;   // ~20 Hz detection
+  let _pitchLastMs = 0, _pitchClassEma = 0, _pitchEma = 0, _pitchConfEma = 0, _pitchClassInit = false;
+  core.onTick((field) => {
+    const now = field.time * 1000;
+    if (now - _pitchLastMs < PITCH_INTERVAL_MS) {
+      // Between detections: keep decaying confidence so a note release fades.
+      _pitchConfEma *= 0.9;
+      field.audio.pitchConf = _pitchConfEma;
+      return;
+    }
+    _pitchLastMs = now;
+    let hz = -1;
+    try { hz = looper.getInputPitchHz(); } catch {}
+    if (hz > 0) {
+      const cls = ((Math.log2(hz) % 1) + 1) % 1;            // 0..1 within the octave
+      const norm = Math.max(0, Math.min(1, (Math.log2(hz) - PITCH_LOG_MIN) / PITCH_LOG_SPAN));
+      // Circular EMA on pitch class so wrapping (B→C) takes the short way round.
+      if (!_pitchClassInit) { _pitchClassEma = cls; _pitchClassInit = true; }
+      else {
+        let d = cls - _pitchClassEma;
+        if (d > 0.5) d -= 1; else if (d < -0.5) d += 1;
+        _pitchClassEma = ((_pitchClassEma + d * 0.35) % 1 + 1) % 1;
+      }
+      _pitchEma += (norm - _pitchEma) * 0.35;
+      _pitchConfEma += (1 - _pitchConfEma) * 0.5;
+    } else {
+      _pitchConfEma *= 0.8;   // unvoiced: hold the note, fade confidence
+    }
+    field.audio.pitch = _pitchEma;
+    field.audio.pitchClass = _pitchClassEma;
+    field.audio.pitchConf = _pitchConfEma;
+  });
 
   // ── Editor-open viz throttle ──────────────────────────────────────────────
   // While the Strudel or sequencer editor panel is visible the user is likely
@@ -5968,8 +6191,10 @@ export function initQualiaPage() {
     if (!ids.length) return;
     const i = ids.indexOf(core.activeId() || ids[0]);
     const j = dir < 0 ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
-    runSceneTransition();
-    core.setActive(ids[j]).catch(err => console.error('[qualia] setActive failed:', err));
+    quantizedSceneChange(() => {
+      runSceneTransition();
+      core.setActive(ids[j]).catch(err => console.error('[qualia] setActive failed:', err));
+    });
   }
   const padActions = {
     tuner:        () => document.getElementById('btn-rig-tuner')?.click(),
@@ -5995,6 +6220,9 @@ export function initQualiaPage() {
     phaseNext:    () => phaseShift(+1),
     delayToggle:  () => looper.toggleStripStage?.('delay'),
     reverbToggle: () => looper.toggleStripStage?.('reverb'),
+    freeze:       () => document.getElementById('btn-rig-freeze')?.click(),   // grab / layer
+    freezePop:    () => looper.freezePop?.(),
+    freezeRegrab: () => looper.freezeRegrab?.(),
     pause:        () => btnPause.click(),
     blackout:     () => setBlackout(!core.isRenderSuspended()),
   };
@@ -6120,6 +6348,9 @@ export function initQualiaPage() {
       case '8': padActions.camNext(); break;                     // Next camera device
       case 'i': if (e.shiftKey) padActions.phasePrev(); else padActions.phaseNext(); break;   // Phase step prev / next
       // Delay mix: [ / ]    Reverb mix: - / =    Rig master vol: , / .
+      case ';': padActions.freeze(); break;                      // Freeze — grab / layer a pad
+      case "'": padActions.freezePop(); break;                   // Freeze — pop the top layer
+      case '\\': padActions.freezeRegrab(); break;               // Freeze — re-grab the top layer
       case '[': looper.nudgeStripParam?.('delay', 'mix', -0.05); break;
       case ']': looper.nudgeStripParam?.('delay', 'mix', +0.05); break;
       case '-': looper.nudgeStripParam?.('reverb', 'mix', -0.05); break;

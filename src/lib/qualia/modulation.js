@@ -54,6 +54,14 @@ const AUDIO_CHANNELS = {
   'audio.beatPulse':  a => a.beat.pulse,
   'audio.midsPulse':  a => a.mids.pulse,
   'audio.highsPulse': a => a.highs.pulse,
+  // Pitch of the guitar/steel input (rig tuner). pitchClass wraps the octave
+  // (0..1) — map it to hue and the visuals track WHAT NOTE you're playing;
+  // pitch is normalized log-frequency (low→high); pitchConf is 0 when
+  // silent/unvoiced so a quale can hold or fade on note gaps. 0 when the rig
+  // isn't capturing (identity for any modulator, like the crowd channels).
+  'audio.pitch':      a => a.pitch,
+  'audio.pitchClass': a => a.pitchClass,
+  'audio.pitchConf':  a => a.pitchConf,
 };
 
 // ── Pose channels (single-person; person 0 only) ───────────────────────

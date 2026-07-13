@@ -149,6 +149,12 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
   (cut / dissolve / wipe) + `transition-ms` controls in the topbar `auto` popover, persisted in
   settings; also composited into recordings.
 - **Shared offscreen-canvas pool** for the overlay post-FX (each currently keeps its own).
+- ✅ **Apps-review value-adds (2026-07):** `audio.pitch`/`audio.pitchClass`/`audio.pitchConf`
+  modulation channels (rig-tuner pitch → any knob; hue-by-note); per-quale fps badge in the fx
+  picker; **cycle-quantized scene changes** (`♩ cycle` in the auto popover — quale/phase changes
+  land on the Strudel downbeat); **projector/OBS output window** (⧉ in the capture group,
+  captureStream of the clean composite); loop-seam crossfades; **freeze/infinite-sustain pedal**
+  (`frz` / `;`). See `docs/looper-and-sequencer.md` + `docs/architecture.md`.
 
 ## G. Setlist app (`/lab/setlist`) — review findings (2026-07)
 
@@ -193,3 +199,14 @@ key parses from chart text) is already **done** — these are the items still op
    page's "read chart" button), and iTunes metadata in `/meta/song`
    (artist/genre/year/artwork/duration, applied by the "fetch info" button). Still open:
    MusicBrainz as a second canonical-artist source if iTunes misses.
+10. ✅ **Value-adds, second pass** — *done (2026-07, apps-review follow-up):* deletion
+   tombstones + authoritative restore + **Trash view** (`#trash`); perform-mode **set timer /
+   pacing HUD** (elapsed vs summed `durationSec`, amber when over); worker `WORKER_TOKEN` gate +
+   per-IP throttle; the `views.js` esc() sweep (G1) and reconnect false-positive fix.
+11. **Capo-aware chord display** (deliberate FUTURE DEV, deferred by choice 2026-07): render the
+   "played shape" chord names for a given capo alongside the Nashville numbers, so a guitarist
+   reads shapes at a glance. `song.capo` is already in the model (chart-doc headers and
+   "read chart" write it; no edit UI since the form slimmed to key + key changes). Would need:
+   a capo edit affordance again, a number→shape mapping per key/capo, and a display toggle on
+   the song page + perform mode. Parked, not rejected — revisit when a real charts-with-capo
+   set makes it concrete.

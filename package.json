@@ -10,7 +10,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "check": "node scripts/check-import-doc.mjs && node scripts/check-mind-shard.mjs && node scripts/check-mind-enex.mjs && node scripts/check-mind-capture.mjs && node scripts/check-mind-attach-heal.mjs && node scripts/check-mind-merge.mjs && node scripts/check-tasks-bridge.mjs",
+    "check": "node scripts/check-import-doc.mjs && node scripts/check-mind-shard.mjs && node scripts/check-mind-enex.mjs && node scripts/check-mind-capture.mjs && node scripts/check-mind-attach-heal.mjs && node scripts/check-mind-merge.mjs && node scripts/check-tasks-bridge.mjs && node scripts/check-setlist-merge.mjs",
     "gen:samples": "node scripts/gen-samples.mjs",
     "gen:samples:v0": "node scripts/gen-samples-voidstar0.mjs",
     "gen:samples:real": "node scripts/gen-real-manifests.mjs",
@@ -40,5 +40,8 @@
     "signalsmith-stretch": "^1.3.2",
     "three": "^0.165.0",
     "tone": "^15.1.22"
+  },
+  "devDependencies": {
+    "sharp": "^0.35.3"
   }
 }

@@ -3,7 +3,7 @@
 import * as store from './store.js';
 import { initGdriveBackup, isSyncing, setBackupClient, pullMergePushIfStale, debouncedPush, watchConnectivity } from './gdrive-backup.js';
 import { completeSpotifyLogin } from './spotify-auth.js';
-import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings, renderAnnotation } from './views.js';
+import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings, renderAnnotation, renderTrash } from './views.js';
 
 let _root = null;
 let _lastSongId = null;
@@ -47,6 +47,9 @@ async function route() {
         break;
       case 'settings':
         await renderSettings(_root);
+        break;
+      case 'trash':
+        await renderTrash(_root);
         break;
       case 'setlist':
         if (extra === 'edit') {
@@ -167,6 +170,9 @@ export function initSetlistApp(root) {
       if (!typing) refresh();
     },
   })).catch((e) => console.warn('[todo-bridge]', e));
+  // Deletion tombstones only need to outlive every device's next sync —
+  // prune the expired ones once per boot (best-effort, off the critical path).
+  store.purgeExpiredDeletions().catch(() => {});
   // Finish a Spotify login redirect (?code=…) before the first render: it
   // rewrites the URL back to the saved hash via replaceState, which fires no
   // hashchange — so route once after it settles. On a normal load this
