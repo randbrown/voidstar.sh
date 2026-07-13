@@ -49,16 +49,24 @@ micro fade-out/in when there's none), holds it for the voice's lifetime, and res
 samples on stop — so persisted PCM stays exact and a re-lock re-bakes at the new nudge position.
 The stretch path applies the same crossfade to its region copies.
 
-**Freeze / infinite sustain** (`frz` button next to strip/tune, hotkey `;`, `padActions.freeze`):
-grabs the newest moment from the recorder ring (post-strip, so the pad carries the amp/cab/verb
-that were on), loops it with a 25 % equal-power seam, and plays it into the rig master — the
-ambient pedal-steel drone move. The pedal button is a plain **on/off**: tap to freeze, tap again
-to release (exponential fade over the *release* setting). The **▾ settings row** next to it holds
-*level* (live — adjusts the sounding pad), *grain* (loop length grabbed, 0.5–4 s; applies on the
-next grab), *release* (0.3–8 s, default 2 s), and **re-grab** — the explicit "capture a fresh pad
-while frozen" action (short crossover, evolving drone). Settings persist
-(`voidstar.qualia.looper.freeze`). Needs the capture ring, so starting opens capture if the
-signal fader is up.
+**Freeze / infinite-sustain STACK** (`frz` button next to strip/tune, hotkey `;`,
+`padActions.freeze`): grabs the newest moment from the recorder ring (post-strip, so a pad carries
+the amp/cab/verb that were on), loops it with a 25 % equal-power seam, and **layers** it onto a
+stack — the Frippertronics move. Each `frz` tap **pushes another pad** over the last; `'` (button
+*pop*) removes the top with a release fade; `\` (button *re-grab*) replaces the top with a fresh
+grab; *clear* releases the whole stack. The `frz` button shows the depth (`frz²`, `frz³`…).
+
+**Constant-loudness bus.** All pads sum through one gain node scaled `level / √N` — incoherent
+layers add ~√N in RMS, so the total loudness stays roughly steady as you stack (pop and the
+remaining layers swell back up) — then a zero-latency **soft-clip limiter** on the bus catches
+coherent overshoot so a deep stack can never clip the rig sum (`makeSoftLimiter`, always engaged
+on the freeze bus). Graph: `pad.source → pad.gain (fade) → freezeBus (level/√N) → freezeLimiter →
+rigMaster`.
+
+The **▾ settings row** holds *level* (live, whole stack), *grain* (loop length grabbed, 0.5–4 s;
+applies on the next grab), *release* (0.3–8 s, default 2 s), plus *pop* / *re-grab* / *clear*.
+Settings persist (`voidstar.qualia.looper.freeze`). Needs the capture ring, so a grab opens
+capture if the signal fader is up.
 
 **Loaded via `?url&no-inline`** so Vite doesn't inline the worklet as a data URL that `addModule()`
 can't reliably load.

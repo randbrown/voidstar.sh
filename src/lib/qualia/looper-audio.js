@@ -451,13 +451,46 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // limiter, so it obeys the rig level/mute and can't clip the sum.
   //
   // Config (looper.js persists it + owns the settings UI):
-  //   level      pad gain (0..1) — live-ramped if changed while frozen
+  //   level      master freeze-bus gain (0..1) — live-ramped
   //   grainSec   loop length; longer = more texture/movement in the pad
-  //   releaseSec fade-out when released — long release = musical decay
+  //   releaseSec fade-out when a layer is popped / all released
   let _freezeCfg = { level: 0.8, grainSec: 1.0, releaseSec: 2.0 };
-  let _freeze = null;              // { source, gain }
 
-  function isFrozen() { return !!_freeze; }
+  // ── Freeze STACK (Frippertronics-style layering) ──
+  // Each grab pushes a looping pad onto the stack; pop removes the top. All
+  // pads sum through ONE bus whose gain is `level / sqrt(N)` — incoherent
+  // layers add ~sqrt(N) in RMS, so this keeps total loudness roughly constant
+  // as you stack (fewer layers ⇒ each louder, more ⇒ each quieter). A
+  // zero-latency soft-clip limiter on the bus catches coherent overshoot so a
+  // stack can never clip the rig sum. Graph:
+  //   pad.source → pad.gain (per-pad fade) → freezeBus (level/√N) →
+  //   freezeLimiter (soft clip) → rigMaster
+  let _freezeStack = [];           // [{ source, gain }] — index 0 oldest, last = top
+  let _freezeBus = null, _freezeLimiter = null;
+
+  function ensureFreezeBus() {
+    if (_freezeBus) return;
+    ensureRigMaster();
+    _freezeBus = ctx.createGain();
+    _freezeBus.gain.value = 0;
+    _freezeBus.__qualiaBypassMute = true;
+    _freezeLimiter = makeSoftLimiter(ctx, true);   // always engaged on the freeze bus
+    _freezeLimiter.__qualiaBypassMute = true;
+    _freezeBus.connect(_freezeLimiter);
+    _freezeLimiter.connect(rigMaster);
+  }
+
+  function isFrozen() { return _freezeStack.length > 0; }
+  function freezeDepth() { return _freezeStack.length; }
+
+  // Constant-RMS bus gain for the current layer count.
+  function freezeBusTarget() {
+    const n = _freezeStack.length;
+    return n > 0 ? _freezeCfg.level / Math.sqrt(n) : 0;
+  }
+  function applyFreezeBusGain() {
+    if (_freezeBus) ramp(_freezeBus.gain, freezeBusTarget());
+  }
 
   function getFreezeConfig() { return { ..._freezeCfg }; }
   function setFreezeConfig(partial = {}) {
@@ -466,35 +499,15 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     c.grainSec = Math.max(0.25, Math.min(4, Number(c.grainSec) || 1));
     c.releaseSec = Math.max(0.05, Math.min(12, Number(c.releaseSec) || 2));
     _freezeCfg = c;
-    // Live level: adjust an already-sounding pad.
-    if (_freeze && ctx) {
-      try { ramp(_freeze.gain.gain, c.level); } catch {}
-    }
+    applyFreezeBusGain();   // live level applies to the whole stack at once
   }
 
-  function freezeStop({ fadeSec } = {}) {
-    const f = _freeze;
-    if (!f) return;
-    _freeze = null;
-    const fade = fadeSec != null ? fadeSec : _freezeCfg.releaseSec;
-    try {
-      const t = ctx.currentTime;
-      f.gain.gain.cancelScheduledValues(t);
-      f.gain.gain.setValueAtTime(f.gain.gain.value, t);
-      // setTargetAtTime decays exponentially (more natural than linear for a
-      // pad); stop well past ~5 time constants, when it's inaudible.
-      f.gain.gain.setTargetAtTime(0, t, fade / 3);
-      f.source.stop(t + fade * 2 + 0.1);
-      setTimeout(() => { try { f.source.disconnect(); f.gain.disconnect(); } catch {} }, (fade * 2 + 0.3) * 1000);
-    } catch {}
-  }
-
-  async function freezeStart() {
+  // Grab a fresh looping pad from the ring and push it on the stack.
+  async function freezePush() {
     if (!usingWorklet || !recNode || !srcNode) return false;   // needs the ring (capture open)
     await ensureContext();
-    ensureRigMaster();
+    ensureFreezeBus();
     const grainSec = _freezeCfg.grainSec;
-    // Grab the grain + enough pre-roll for the seam + margin.
     const grabSec = Math.min(RING_SECONDS - 0.5, grainSec * 1.5 + 0.3);
     const id = `f${(_grabSeq++).toString(36)}`;
     const resp = await new Promise((resolve) => {
@@ -515,8 +528,6 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       const src = resp.chans[ch];
       const d = buf.getChannelData(ch);
       d.set(src.subarray(start, start + grain));
-      // Seam: crossfade the tail into the audio preceding the grain (real
-      // recorded continuity when the ring has it, else fade against the head).
       const hasPre = start >= nSeam;
       for (let i = 0; i < nSeam; i++) {
         const t = (i + 1) / nSeam;
@@ -529,24 +540,57 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       if (!hasPre) for (let i = 0; i < 64 && i < grain; i++) d[i] *= i / 64; // de-click head
     }
 
-    freezeStop({ fadeSec: 0.2 });                  // re-grab: quick crossover, not the long release
     const gain = ctx.createGain();
     gain.gain.value = 0;
-    gain.connect(rigMaster);
+    gain.connect(_freezeBus);
     const source = ctx.createBufferSource();
     source.buffer = buf;
     source.loop = true;
     source.connect(gain);
     const t = ctx.currentTime;
     source.start(t);
-    gain.gain.linearRampToValueAtTime(_freezeCfg.level, t + 0.08);
-    _freeze = { source, gain };
+    gain.gain.linearRampToValueAtTime(1, t + 0.08);   // per-pad fade-in; steady at 1
+    _freezeStack.push({ source, gain });
+    applyFreezeBusGain();                             // re-scale the whole stack for the new N
     return true;
   }
 
+  // Remove one layer from the top (most recent) with a release fade.
+  function freezePop({ fadeSec } = {}) {
+    const f = _freezeStack.pop();
+    if (!f) return false;
+    const fade = fadeSec != null ? fadeSec : _freezeCfg.releaseSec;
+    applyFreezeBusGain();                             // remaining layers swell to hold RMS
+    try {
+      const t = ctx.currentTime;
+      f.gain.gain.cancelScheduledValues(t);
+      f.gain.gain.setValueAtTime(f.gain.gain.value, t);
+      f.gain.gain.setTargetAtTime(0, t, fade / 3);   // exponential decay
+      f.source.stop(t + fade * 2 + 0.1);
+      setTimeout(() => { try { f.source.disconnect(); f.gain.disconnect(); } catch {} }, (fade * 2 + 0.3) * 1000);
+    } catch {}
+    return true;
+  }
+
+  // Replace the top layer with a fresh grab (quick crossover, not a new layer).
+  async function freezeRegrab() {
+    if (_freezeStack.length) freezePop({ fadeSec: 0.2 });
+    return freezePush();
+  }
+
+  // Release everything (dispose / "clear"). Each layer fades on the release.
+  function freezeStop({ fadeSec } = {}) {
+    if (!_freezeStack.length) return;
+    const n = _freezeStack.length;
+    for (let i = 0; i < n; i++) freezePop({ fadeSec });
+  }
+
+  // Back-compat aliases (page-init hotkey / MIDI still call these).
+  async function freezeStart() { return freezePush(); }
   async function toggleFreeze() {
-    if (_freeze) { freezeStop(); return false; }
-    return freezeStart();
+    // The pedal button/hotkey LAYERS a grab (the stack is the model); pop/clear
+    // are the separate controls. Kept async so callers can await.
+    return freezePush();
   }
 
   function setRigMuted(on) { _rigMuted = !!on; if (rigMaster) ramp(rigMaster.gain, effRig()); }
@@ -1264,7 +1308,12 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   function dispose() {
-    freezeStop({ fadeSec: 0.05 });
+    // Stop every pad hard + tear down the freeze bus.
+    for (const f of _freezeStack) { try { f.source.stop(); } catch {} try { f.source.disconnect(); f.gain.disconnect(); } catch {} }
+    _freezeStack = [];
+    try { _freezeBus?.disconnect(); } catch {}
+    try { _freezeLimiter?.disconnect(); } catch {}
+    _freezeBus = _freezeLimiter = null;
     for (const resolve of _pendingGrabs.values()) { try { resolve(null); } catch {} }
     _pendingGrabs.clear();
     removeAll();
@@ -1348,8 +1397,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     },
     getCaptureAnalyser: () => captureAnalyser,
     getTunerAnalyser: () => tunerAnalyser,
-    // Freeze / infinite-sustain pad (see freezeStart above).
+    // Freeze / infinite-sustain STACK (see freezePush above).
     toggleFreeze, isFrozen, freezeStart, freezeStop, getFreezeConfig, setFreezeConfig,
+    freezePush, freezePop, freezeRegrab, freezeDepth,
     // Current monophonic pitch of the clean (pre-strip) input, in Hz, or -1
     // when the rig isn't capturing / the signal is unvoiced or too quiet. Reads
     // the tuner analyser's newest window and autocorrelates it — allocation-
