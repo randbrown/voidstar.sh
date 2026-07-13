@@ -100,11 +100,14 @@ vec3 firePal(int idx, float x) {
 // MacCormack correction with the standard min/max limiter: the corrected
 // value is clamped to the range of the four source texels bracketing the
 // back-traced point, so second-order accuracy can't ring into overshoots.
+// `amt` fades the correction — 0 is plain (diffusive, soft) semi-Lagrangian,
+// 1 is full MacCormack — one leg of the user-facing sharpness dial.
 const MACCORMACK = /* glsl */`
 vec4 mcCorrect(highp sampler2D orig, highp sampler2D fwd, highp sampler2D back,
-               vec2 uv, vec2 coord, vec2 texel) {
-  vec4 v0 = texture(orig, uv);
+               vec2 uv, vec2 coord, vec2 texel, float amt) {
   vec4 v1 = texture(fwd,  uv);
+  if (amt <= 0.0) return v1;
+  vec4 v0 = texture(orig, uv);
   vec4 v2 = texture(back, uv);
   vec4 c  = v1 + 0.5 * (v0 - v2);
   vec2 st   = coord / texel - 0.5;
@@ -115,7 +118,7 @@ vec4 mcCorrect(highp sampler2D orig, highp sampler2D fwd, highp sampler2D back,
   vec4 s11 = texture(orig, base + texel);
   vec4 lo = min(min(s00, s10), min(s01, s11));
   vec4 hi = max(max(s00, s10), max(s01, s11));
-  return clamp(c, lo, hi);
+  return mix(v1, clamp(c, lo, hi), amt);
 }
 `;
 
@@ -142,10 +145,11 @@ uniform highp sampler2D uBack;
 uniform vec2  uSimTexel;
 uniform float uDt;
 uniform float uDiss;
+uniform float uSharp;
 void main() {
   vec2 v0 = texture(uOrig, vUv).xy;
   vec2 coord = vUv - uDt * v0 * uSimTexel;
-  vec4 c = mcCorrect(uOrig, uFwd, uBack, vUv, coord, uSimTexel);
+  vec4 c = mcCorrect(uOrig, uFwd, uBack, vUv, coord, uSimTexel, uSharp);
   outColor = vec4(c.xy * uDiss, 0.0, 1.0);
 }
 `;
@@ -285,10 +289,11 @@ uniform float uHeat;
 uniform float uSmokeGain;
 uniform float uCool;
 uniform float uSmokeFade;
+uniform float uSharp;
 void main() {
   vec2 vel = texture(uVel, vUv).xy;
   vec2 coord = vUv - uDt * vel * uSimTexel;
-  vec4 c = mcCorrect(uOrig, uFwd, uBack, vUv, coord, uDyeTexel);
+  vec4 c = mcCorrect(uOrig, uFwd, uBack, vUv, coord, uDyeTexel, uSharp);
   float T = c.x, fuel = c.y, smoke = c.z;
 
   float ignite = smoothstep(0.15, 0.35, T);
@@ -330,6 +335,7 @@ uniform float uTime;
 uniform float uShimmer;
 uniform float uSmokeVis;
 uniform float uIntensity;
+uniform float uSharp;
 uniform int   uPalette;
 void main() {
   vec4 base = texture(uThermo, vUv);
@@ -340,18 +346,19 @@ void main() {
     fbm(vUv * vec2(6.0, 9.0) + vec2(7.31, -uTime * 1.8))
   ) - 0.5;
   float fine = fbm(vUv * vec2(15.0, 22.0) + vec2(3.17, -uTime * 3.4)) - 0.5;
-  warp += 0.35 * vec2(fine, -fine);
+  warp += 0.35 * uSharp * vec2(fine, -fine);
   vec2 uv = vUv + warp * wAmp;
   vec4 th = texture(uThermo, uv);
   float T = th.x, smoke = th.z;
 
   // Unsharp mask on temperature — recovers edge contrast lost to the
-  // bilinear upscale so the tongues read crisp at 1080p.
+  // bilinear upscale so the tongues read crisp at 1080p. Fades out with the
+  // sharpness dial (the other legs are the MacCormack correction + fine warp).
   float Tb = ( texture(uThermo, uv + vec2(uDyeTexel.x, 0.0)).x
              + texture(uThermo, uv - vec2(uDyeTexel.x, 0.0)).x
              + texture(uThermo, uv + vec2(0.0, uDyeTexel.y)).x
              + texture(uThermo, uv - vec2(0.0, uDyeTexel.y)).x ) * 0.25;
-  T = max(T + (T - Tb) * 1.1, 0.0);
+  T = max(T + (T - Tb) * 1.1 * uSharp, 0.0);
 
   vec3 col = firePal(uPalette, T / 1.5) * smoothstep(0.03, 0.11, T);
   col += vec3(0.90, 0.85, 0.80) * smoothstep(1.30, 1.95, T);   // hottest core → white
@@ -463,6 +470,9 @@ export default {
       ] },
     { id: 'smoke',      label: 'smoke',      type: 'range', min: 0, max: 2, step: 0.01, default: 1.0 },
     { id: 'embers',     label: 'embers',     type: 'range', min: 0, max: 2, step: 0.01, default: 1.0 },
+    // 0 = the soft/diffusive look (plain advection, no unsharp), 1 = full
+    // MacCormack + unsharp + fine warp. Blends all three legs together.
+    { id: 'sharpness',  label: 'sharpness',  type: 'range', min: 0, max: 1, step: 0.01, default: 0.65 },
     { id: 'palette',    label: 'palette',    type: 'select', options: PALETTES, default: 'blackbody' },
     { id: 'reactivity',     label: 'reactivity',      type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
     { id: 'poseReactivity', label: 'pose reactivity', type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
@@ -470,18 +480,18 @@ export default {
 
   autoPhase: {
     steps: [
-      { palette: 'blackbody', intensity: 1.0,  height: 1.0,  turbulence: 1.0,  smoke: 1.0, embers: 1.0, wind: 0.0 },
-      { palette: 'ember',     intensity: 0.7,  height: 0.8,  turbulence: 0.75, smoke: 1.4, embers: 1.4, wind: 0.0 },
-      { palette: 'voidfire',  intensity: 1.2,  height: 1.15, turbulence: 1.3,  smoke: 0.8, embers: 0.8, wind: 0.0 },
-      { palette: 'cryo',      intensity: 0.9,  height: 1.05, turbulence: 1.1,  smoke: 0.9, embers: 1.0, wind: 0.25 },
+      { palette: 'blackbody', intensity: 1.0,  height: 1.0,  turbulence: 1.0,  smoke: 1.0, embers: 1.0, sharpness: 0.65, wind: 0.0 },
+      { palette: 'ember',     intensity: 0.7,  height: 0.8,  turbulence: 0.75, smoke: 1.4, embers: 1.4, sharpness: 0.45, wind: 0.0 },
+      { palette: 'voidfire',  intensity: 1.2,  height: 1.15, turbulence: 1.3,  smoke: 0.8, embers: 0.8, sharpness: 0.85, wind: 0.0 },
+      { palette: 'cryo',      intensity: 0.9,  height: 1.05, turbulence: 1.1,  smoke: 0.9, embers: 1.0, sharpness: 0.70, wind: 0.25 },
     ],
   },
 
   presets: {
-    default:  { intensity: 1.0,  height: 1.0,  turbulence: 1.0,  wind: 0.0, smoke: 1.0, embers: 1.0, palette: 'blackbody', reactivity: 1.0, poseReactivity: 1.0 },
-    campfire: { intensity: 0.65, height: 0.8,  turbulence: 0.75, wind: 0.0, smoke: 1.3, embers: 1.3, palette: 'ember' },
-    inferno:  { intensity: 1.6,  height: 1.35, turbulence: 1.5,  wind: 0.0, smoke: 0.7, embers: 1.5, palette: 'blackbody' },
-    voidfire: { intensity: 1.1,  height: 1.1,  turbulence: 1.25, wind: 0.0, smoke: 0.9, embers: 0.8, palette: 'voidfire' },
+    default:  { intensity: 1.0,  height: 1.0,  turbulence: 1.0,  wind: 0.0, smoke: 1.0, embers: 1.0, sharpness: 0.65, palette: 'blackbody', reactivity: 1.0, poseReactivity: 1.0 },
+    campfire: { intensity: 0.65, height: 0.8,  turbulence: 0.75, wind: 0.0, smoke: 1.3, embers: 1.3, sharpness: 0.45, palette: 'ember' },
+    inferno:  { intensity: 1.6,  height: 1.35, turbulence: 1.5,  wind: 0.0, smoke: 0.7, embers: 1.5, sharpness: 0.85, palette: 'blackbody' },
+    voidfire: { intensity: 1.1,  height: 1.1,  turbulence: 1.25, wind: 0.0, smoke: 0.9, embers: 0.8, sharpness: 0.80, palette: 'voidfire' },
   },
 
   create(canvas, { gl }) {
@@ -675,7 +685,7 @@ export default {
     // ── Per-frame scratch (update fills, render reads — never field) ──────
     const scratch = {
       dt: 1 / 60, time: 0,
-      intensity: 1, height: 1, turb: 1, wind: 0, smoke: 1,
+      intensity: 1, height: 1, turb: 1, wind: 0, smoke: 1, sharp: 0.65,
       palette: 0, kick: 0, shimmer: 0,
     };
 
@@ -689,6 +699,7 @@ export default {
       scratch.turb      = p.turbulence;
       scratch.wind      = p.wind;
       scratch.smoke     = p.smoke;
+      scratch.sharp     = p.sharpness ?? 0.65;
       scratch.palette   = Math.max(0, PALETTES.indexOf(p.palette));
       scratch.kick      = audio.beat.pulse;
       scratch.shimmer   = audio.highs.pulse;
@@ -737,6 +748,7 @@ export default {
       gl.uniform2f(pCorrVel.U('uSimTexel'), tx, ty);
       gl.uniform1f(pCorrVel.U('uDt'), dt);
       gl.uniform1f(pCorrVel.U('uDiss'), Math.exp(-0.35 * dt));
+      gl.uniform1f(pCorrVel.U('uSharp'), scratch.sharp);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       vel.swap();
 
@@ -854,6 +866,7 @@ export default {
       gl.uniform1f(pThermo.U('uSmokeGain'), 0.45 * scratch.smoke);
       gl.uniform1f(pThermo.U('uCool'), 2.7 / Math.max(0.35, Math.pow(scratch.height, 0.7)));
       gl.uniform1f(pThermo.U('uSmokeFade'), 0.7);
+      gl.uniform1f(pThermo.U('uSharp'), scratch.sharp);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       thermo.swap();
     }
@@ -897,6 +910,7 @@ export default {
         gl.uniform2f(pRender.U('uDyeTexel'), 1 / DW, 1 / DH);
         gl.uniform1f(pRender.U('uShimmer'),  scratch.shimmer);
         gl.uniform1f(pRender.U('uSmokeVis'), scratch.smoke);
+        gl.uniform1f(pRender.U('uSharp'),    scratch.sharp);
       } else {
         gl.uniform1f(pRender.U('uHeight'), scratch.height);
         gl.uniform1f(pRender.U('uTurb'),   scratch.turb);
