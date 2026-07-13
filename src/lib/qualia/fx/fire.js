@@ -24,6 +24,9 @@
 // Inline (non-param):
 //   beat.pulse   → vertical impulse burst at the bed (percussive lick)
 //   highs.pulse  → ember spawn bursts + composite detail-warp shimmer
+//   spectrum     → 'spectral' palette: the bed becomes a log-scaled FFT
+//                  analyzer (bass left → highs right) and each tongue
+//                  carries its bin's flame-test color up through the fluid
 //   wrist motion → momentum splats stirring the velocity field (the
 //                  performer literally waves the flames around; scaled by
 //                  poseReactivity, thresholded so tracking jitter is inert)
@@ -105,7 +108,20 @@ vec3 hotCore(int idx) {
   if (idx == 1) return vec3(0.75, 0.85, 1.00);  // voidfire — electric cyan-white
   if (idx == 2) return vec3(0.80, 0.92, 1.00);  // cryo — icy white
   if (idx == 3) return vec3(0.95, 0.52, 0.12);  // ember — molten amber, stays saturated
-  return            vec3(0.90, 0.85, 0.80);     // blackbody — warm white
+  return            vec3(0.90, 0.85, 0.80);     // blackbody / spectral — warm white
+}
+// Flame-test chemistry ramp for the spectral palette: hue h is the
+// frequency-bin position [0,1] a parcel of fuel was ignited at (bass → highs),
+// riding the thermo texture's spare channel. Lithium crimson → sodium gold →
+// copper emerald → cyan → potassium violet.
+vec3 spectralChroma(float h) {
+  h = clamp(h, 0.0, 1.0);
+  vec3 c = mix(vec3(1.00, 0.14, 0.05), vec3(1.00, 0.62, 0.10), smoothstep(0.00, 0.25, h));
+  c = mix(c, vec3(1.00, 0.90, 0.25), smoothstep(0.25, 0.45, h));
+  c = mix(c, vec3(0.25, 0.95, 0.45), smoothstep(0.45, 0.65, h));
+  c = mix(c, vec3(0.15, 0.70, 1.00), smoothstep(0.65, 0.85, h));
+  c = mix(c, vec3(0.60, 0.32, 1.00), smoothstep(0.85, 1.00, h));
+  return c;
 }
 `;
 
@@ -291,6 +307,7 @@ uniform highp sampler2D uOrig;
 uniform highp sampler2D uFwd;
 uniform highp sampler2D uBack;
 uniform highp sampler2D uVel;
+uniform highp sampler2D uSpec;   // 1D log-binned FFT, R8
 uniform vec2  uSimTexel;
 uniform vec2  uDyeTexel;
 uniform float uDt;
@@ -302,11 +319,12 @@ uniform float uSmokeGain;
 uniform float uCool;
 uniform float uSmokeFade;
 uniform float uSharp;
+uniform float uSpecMix;          // 0 = normal bed, 1 = spectrum-driven bed
 void main() {
   vec2 vel = texture(uVel, vUv).xy;
   vec2 coord = vUv - uDt * vel * uSimTexel;
   vec4 c = mcCorrect(uOrig, uFwd, uBack, vUv, coord, uDyeTexel, uSharp);
-  float T = c.x, fuel = c.y, smoke = c.z;
+  float T = c.x, fuel = c.y, smoke = c.z, hue = c.w;
 
   float ignite = smoothstep(0.15, 0.35, T);
   float burn = min(fuel * uBurn * uDt * ignite, fuel);
@@ -327,12 +345,24 @@ void main() {
   float flick = fbm(vec2(vUv.x * 11.0, uTime * 2.6));
   flick = 0.20 + 0.80 * smoothstep(0.40, 0.88, flick);
   flick *= 0.80 + 0.40 * noise(vec2(vUv.x * 23.0, uTime * 7.0));
+  // Spectral bed: the band's x-axis becomes a log-scaled spectrum analyzer —
+  // each column of fire is fed by its frequency bin (squared for contrast).
+  // The flicker-shaped floor keeps a ~30% campfire alive through silence so
+  // the eruption on the downbeat has something to erupt FROM. New fuel is
+  // stamped with the bin position so the tongue CARRIES its frequency's
+  // color up through the advection.
+  float u = clamp((vUv.x - 0.30) / 0.40, 0.0, 1.0);
+  float spec = texture(uSpec, vec2(u, 0.5)).r;
+  float specDrive = 0.30 * flick + 1.55 * spec * spec * (0.6 + 0.4 * flick);
+  flick = mix(flick, specDrive, uSpecMix);
   float bed = smoothstep(0.04, 0.0, vUv.y);
   float src = uIntensity * band * flick * bed;
-  fuel = max(fuel, src * 0.80);
+  float newFuel = src * 0.80;
+  hue  = mix(hue, u, uSpecMix * step(fuel, newFuel));
+  fuel = max(fuel, newFuel);
   T    = max(T,    src * 1.00);
 
-  outColor = vec4(T, fuel, smoke, 1.0);
+  outColor = vec4(T, fuel, smoke, hue);
 }
 `;
 
@@ -372,7 +402,11 @@ void main() {
              + texture(uThermo, uv - vec2(0.0, uDyeTexel.y)).x ) * 0.25;
   T = max(T + (T - Tb) * 1.1 * uSharp, 0.0);
 
-  vec3 col = firePal(uPalette, T / 1.5) * smoothstep(0.03, 0.11, T);
+  float xn = clamp(T / 1.5, 0.0, 1.0);
+  vec3 body = (uPalette == 4)
+    ? spectralChroma(th.w) * 1.55 * pow(xn, 0.9)   // hue dye carries the bin color
+    : firePal(uPalette, xn);
+  vec3 col = body * smoothstep(0.03, 0.11, T);
   col += hotCore(uPalette) * smoothstep(1.30, 1.95, T);        // hottest core
   col *= exp(-smoke * 0.55 * vec3(1.0, 1.08, 1.2));            // soot absorption, warms the veil
   col += vec3(0.09, 0.09, 0.13) * smoke * 0.16 * uSmokeVis;    // faint lit-soot scatter
@@ -449,7 +483,8 @@ void main() {
 const SIM_H     = 160;   // velocity / pressure grid rows
 const DYE_SCALE = 3;     // thermo grid runs finer for crisper tongues
 const JACOBI_ITERS = 22;
-const PALETTES = ['blackbody', 'voidfire', 'cryo', 'ember'];
+const PALETTES = ['blackbody', 'voidfire', 'cryo', 'ember', 'spectral'];
+const SPEC_W   = 96;     // log-binned FFT columns across the bed
 
 const MAX_EMBERS = 160;
 const EMBER_STRIDE = 5;  // x, y, size, heat, alpha
@@ -509,6 +544,7 @@ export default {
     campfire: { intensity: 0.65, height: 0.8,  turbulence: 0.75, wind: 0.0, smoke: 1.3, embers: 1.3, sharpness: 0.45, palette: 'ember' },
     inferno:  { intensity: 1.6,  height: 1.35, turbulence: 1.5,  wind: 0.0, smoke: 0.7, embers: 1.5, sharpness: 0.85, palette: 'blackbody' },
     voidfire: { intensity: 1.1,  height: 1.1,  turbulence: 1.25, wind: 0.0, smoke: 0.9, embers: 0.8, sharpness: 0.80, palette: 'voidfire' },
+    spectral: { intensity: 1.1,  height: 1.0,  turbulence: 1.1,  wind: 0.0, smoke: 0.8, embers: 1.0, sharpness: 0.75, palette: 'spectral' },
   },
 
   create(canvas, { gl }) {
@@ -621,6 +657,40 @@ export default {
     gl.bufferData(gl.ARRAY_BUFFER, vboData.byteLength, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
+    // ── Spectral bed (1D FFT texture) ─────────────────────────────────────
+    // The raw analyser spectrum is linear in frequency; resample it into
+    // SPEC_W log-spaced columns (max within each bin — peaks read better
+    // than means) with fast-attack / slow-release smoothing, analyzer-style.
+    const specEma   = new Float32Array(SPEC_W);
+    const specBytes = new Uint8Array(SPEC_W);
+    let specDirty = false;
+    const specTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, specTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, SPEC_W, 1, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+
+    function resampleSpectrum(spectrum, dt, react) {
+      const n  = spectrum.length;
+      const lo = 2, hi = Math.max(lo + SPEC_W, Math.floor(n * 0.7));
+      const ratio = Math.log(hi / lo);
+      const kUp = Math.min(1, dt * 28), kDn = Math.min(1, dt * 6);
+      for (let i = 0; i < SPEC_W; i++) {
+        const b0 = Math.floor(lo * Math.exp(ratio * i / SPEC_W));
+        const b1 = Math.max(b0 + 1, Math.ceil(lo * Math.exp(ratio * (i + 1) / SPEC_W)));
+        let m = 0;
+        for (let b = b0; b < b1 && b < n; b++) { const v = spectrum[b]; if (v > m) m = v; }
+        const v = Math.min(1, (m / 255) * react);
+        const cur = specEma[i];
+        specEma[i] = cur + (v - cur) * (v > cur ? kUp : kDn);
+        specBytes[i] = (specEma[i] * 255) | 0;
+      }
+      specDirty = true;
+    }
+
     function spawnEmber(t) {
       for (let i = 0; i < MAX_EMBERS; i++) {
         if (emLife[i] > 0) continue;
@@ -703,7 +773,7 @@ export default {
     const scratch = {
       dt: 1 / 60, time: 0,
       intensity: 1, height: 1, turb: 1, wind: 0, smoke: 1, sharp: 0.65,
-      palette: 0, kick: 0, shimmer: 0,
+      palette: 0, kick: 0, shimmer: 0, specMix: 0,
     };
 
     function update(field) {
@@ -720,6 +790,15 @@ export default {
       scratch.palette   = Math.max(0, PALETTES.indexOf(p.palette));
       scratch.kick      = audio.beat.pulse;
       scratch.shimmer   = audio.highs.pulse;
+
+      // Spectral bed drive — fades in/out over ~0.3s on palette switch or
+      // when the spectrum appears/disappears, so the bed never pops.
+      const wantSpec = scratch.palette === 4 && !!field.audio.spectrum;
+      if (wantSpec) {
+        resampleSpectrum(field.audio.spectrum, scratch.dt,
+                         p.reactivity == null ? 1 : p.reactivity);
+      }
+      scratch.specMix += ((wantSpec ? 1 : 0) - scratch.specMix) * Math.min(1, scratch.dt * 4);
 
       // Embers: gentle ambient trickle, bursts on highs (hats/cymbals) and a
       // smaller kick pop, all scaled by the bed intensity + embers knob.
@@ -869,10 +948,13 @@ export default {
       bindTex(1, dyeTmpA.tex);
       bindTex(2, dyeTmpB.tex);
       bindTex(3, vel.read.tex);
+      bindTex(4, specTex);
       gl.uniform1i(pThermo.U('uOrig'), 0);
       gl.uniform1i(pThermo.U('uFwd'), 1);
       gl.uniform1i(pThermo.U('uBack'), 2);
       gl.uniform1i(pThermo.U('uVel'), 3);
+      gl.uniform1i(pThermo.U('uSpec'), 4);
+      gl.uniform1f(pThermo.U('uSpecMix'), scratch.specMix);
       gl.uniform2f(pThermo.U('uSimTexel'), tx, ty);
       gl.uniform2f(pThermo.U('uDyeTexel'), 1 / DW, 1 / DH);
       gl.uniform1f(pThermo.U('uDt'), dt);
@@ -914,6 +996,12 @@ export default {
       gl.disable(gl.BLEND);
       gl.bindVertexArray(vao);
 
+      if (specDirty) {
+        gl.bindTexture(gl.TEXTURE_2D, specTex);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, SPEC_W, 1, gl.RED, gl.UNSIGNED_BYTE, specBytes);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        specDirty = false;
+      }
       if (simOk) runSim();
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -958,6 +1046,7 @@ export default {
         freeTarget(curl); freeTarget(div);
         freeTarget(velTmpA); freeTarget(velTmpB); freeTarget(dyeTmpA); freeTarget(dyeTmpB);
         gl.deleteBuffer(emberVbo);
+        gl.deleteTexture(specTex);
         gl.deleteProgram(pRender.prog);
         gl.deleteProgram(pEmber.prog);
         if (sim) for (const k in sim) gl.deleteProgram(sim[k].prog);
