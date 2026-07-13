@@ -6,10 +6,10 @@ import { invalidateIndex } from './search.js';
 import { revokeObjectUrls, retryMissingImages } from './attachments.js';
 import { processPendingOcr } from './ocr.js';
 import {
-  initGdriveSync, isSyncing, setSyncClient, pullMergePushIfStale,
-  debouncedPush, watchConnectivity, hasClientId, markShardDirty,
+  debouncedPush, watchConnectivity, markShardDirty, needsReconnect, onSyncState,
 } from './gdrive-sync.js';
-import { pushPendingAttachments, wireLazyBlobFetch, wireImageRetry } from './attachments-drive.js';
+import { startSyncScheduler } from './sync-scheduler.js';
+import { pushPendingAttachments, attachmentUploadsPending, wireLazyBlobFetch, wireImageRetry } from './attachments-drive.js';
 import { renderHome } from './views/home.js';
 import { renderEditor } from './views/editor.js';
 import { renderAnnotate } from './views/annotate.js';
@@ -65,8 +65,16 @@ function renderDock() {
     b.dataset.dock = key;
     b.innerHTML = `<span class="mn-dock-icon">${icon}</span><span class="mn-dock-label">${label}</span>`;
     b.addEventListener('click', onClick);
+    if (key === 'home') {
+      const dot = document.createElement('span');
+      dot.className = 'mn-dock-dot';
+      b.appendChild(dot);
+    }
     _dock.appendChild(b);
   }
+  // Surface a stuck sync from ANY view (the pill itself lives on the home
+  // header): a colored dot on the dock's home button when sync needs a tap.
+  onSyncState((s) => { _dock.dataset.mnSync = needsReconnect() ? 'reconnect' : s; });
   document.body.appendChild(_dock);
   document.body.dataset.mnDock = getDockPos();
 }
@@ -159,56 +167,6 @@ async function route() {
   updateDockActive(view);
 }
 
-// ── Auto-pull on load and refocus (setlist pattern) ──
-// Opening the app on any device starts from the latest Drive copy — silent
-// only (GIS needs a gesture for a fresh token; an expired one just skips
-// and the settings/pill path reconnects).
-let _focusWatched = false;
-let _lastFocusPull = 0;
-const FOCUS_PULL_MIN_MS = 30_000;
-
-function watchFocusSync() {
-  if (_focusWatched || typeof window === 'undefined') return;
-  _focusWatched = true;
-
-  const onReturn = async () => {
-    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-    if (!hasClientId() || isSyncing()) return;
-    if (Date.now() - _lastFocusPull < FOCUS_PULL_MIN_MS) return;
-
-    const client = await initGdriveSync({ interactive: false }).catch(() => null);
-    if (!client) return;
-    _lastFocusPull = Date.now();
-    setSyncClient(client);
-    try {
-      const { changed } = await pullMergePushIfStale(
-        client,
-        () => store.exportAll(),
-        (merged) => store.importAll(merged),
-        { snapshotFn: () => store.putSnapshot('pre-sync') },
-      );
-      pushPendingAttachments();
-      // A focus pull can land an attachment's driveFileId (or reconnect Drive)
-      // without changing anything the current view re-renders — nudge any
-      // "unavailable" images to re-fetch their now-reachable binary.
-      retryMissingImages();
-      if (changed) {
-        invalidateIndex();
-        processPendingOcr();
-        const ae = document.activeElement;
-        const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
-        if (!typing) refresh();
-      }
-    } catch (e) {
-      console.warn('[mind-sync] focus pull:', e.message);
-    }
-  };
-
-  document.addEventListener('visibilitychange', onReturn);
-  window.addEventListener('focus', onReturn);
-  onReturn();
-}
-
 export function initMindApp(root) {
   _root = root;
   window.addEventListener('hashchange', route);
@@ -224,7 +182,37 @@ export function initMindApp(root) {
   wireLazyBlobFetch();
   wireImageRetry();
   watchConnectivity();
-  watchFocusSync();
+  // All automatic sync (load / focus / heartbeat / write / online / gesture
+  // token renewal) funnels through the scheduler; it reuses the peek gate,
+  // dirty flags, merge/conflict machinery and the typing guard below.
+  let firstCycle = true;
+  startSyncScheduler({
+    exportFn: () => store.exportAll(),
+    importFn: (merged) => store.importAll(merged),
+    snapshotFn: () => store.putSnapshot('pre-sync'),
+    afterCycle: async (res) => {
+      // Drain the attachment queue when data moved, when a prior run broke on
+      // an upload error, and once per session (a queue left over from a tab
+      // that died mid-upload) — not on every quiet heartbeat, which would scan
+      // the whole attachment store every 25-90s for nothing.
+      const drainAttachments = firstCycle || res.changed || res.pushed || attachmentUploadsPending();
+      firstCycle = false;
+      if (drainAttachments) {
+        pushPendingAttachments();
+        // A cycle can land an attachment's driveFileId (or reconnect Drive)
+        // without changing anything the current view re-renders — nudge any
+        // "unavailable" images to re-fetch their now-reachable binary.
+        retryMissingImages();
+      }
+      if (res.changed) {
+        invalidateIndex();
+        processPendingOcr();
+        const ae = document.activeElement;
+        const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
+        if (!typing) refresh();
+      }
+    },
+  });
   // Local reminder scheduler: fires due time/place reminders while the app is
   // open or the installed PWA is running (no backend). Safe no-op where
   // Notifications are unavailable.

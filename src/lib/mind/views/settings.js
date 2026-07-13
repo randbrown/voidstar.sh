@@ -228,7 +228,7 @@ export async function renderSettings(root) {
   syncCard.appendChild(statusLine);
 
   const actRow = el('div', 'mn-actions');
-  actRow.appendChild(btn('sign in with Google &amp; sync', 'mn-btn-primary', async (e) => {
+  const signInBtn = btn('sign in with Google &amp; sync', 'mn-btn-primary', async (e) => {
     if (!gd.hasClientId()) {
       alert('Google sign-in isn’t configured on this deployment. Set your own OAuth client id under “advanced” below.');
       return;
@@ -240,16 +240,20 @@ export async function renderSettings(root) {
       gd.setSyncClient(client);
       await store.putSnapshot('pre-sync');
       const res = await gd.pullMergePushCycle(client,
-        () => store.exportAll(), (m) => store.importAll(m), { historyForce: true });
+        () => store.exportAll(), (m) => store.importAll(m), { historyForce: true, trigger: 'manual' });
       await pushPendingAttachments();
-      alert(res.conflicts
-        ? `synced — ${res.conflicts} conflicted cop${res.conflicts === 1 ? 'y' : 'ies'} created (amber badge in the list)`
-        : 'synced.');
+      alert(res.skipped
+        ? 'another sync is already running — it will finish on its own.'
+        : res.conflicts
+          ? `synced — ${res.conflicts} conflicted cop${res.conflicts === 1 ? 'y' : 'ies'} created (amber badge in the list)`
+          : 'synced.');
       refresh();
     } catch (err) {
       alert(`sync failed: ${err.message}`);
     } finally { e.target.disabled = false; }
-  }));
+  });
+  signInBtn.dataset.mnAuth = '1'; // gesture-renewal must not consume this tap's popup allowance
+  actRow.appendChild(signInBtn);
   actRow.appendChild(btn('disconnect', '', () => {
     gd.disconnect();
     gd.setSyncClient(null);

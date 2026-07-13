@@ -5,11 +5,17 @@
 // devices lazy-download a blob the first time they render the attachment.
 
 import * as store from './store.js';
-import { getSyncClient, onSyncState } from './gdrive-sync.js';
+import { getSyncClient, onSyncState, logSyncEvent } from './gdrive-sync.js';
 import { setBlobFetcher, retryMissingImages } from './attachments.js';
 import { processPendingOcr } from './ocr.js';
 
 let _uploading = false;
+let _retryPending = false;
+
+// True when the last run broke on an upload error — the scheduler's afterCycle
+// uses this to re-invoke the queue on quiet heartbeats instead of scanning the
+// whole attachment store every tick.
+export function attachmentUploadsPending() { return _retryPending; }
 
 // Upload every local blob whose attachment has no driveFileId yet, and trash
 // the Drive file of any tombstoned attachment that still has one. Serial on
@@ -18,6 +24,7 @@ export async function pushPendingAttachments() {
   const client = getSyncClient();
   if (_uploading || !client) return;
   _uploading = true;
+  _retryPending = false;
   try {
     const atts = await store.getAllAttachmentsRaw();
     for (const att of atts) {
@@ -36,7 +43,9 @@ export async function pushPendingAttachments() {
         if (fresh) await store.patchAttachment(fresh, { driveFileId: fileId });
       } catch (e) {
         console.warn('[mind-sync] attachment upload failed:', att.id, e.message);
-        break; // likely offline/token — retry on the next cycle
+        logSyncEvent('attach', 'error', `${att.id}: ${e.message}`);
+        _retryPending = true;
+        break; // likely offline/token — the scheduler's next cycle re-invokes us
       }
     }
   } finally {

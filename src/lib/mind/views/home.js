@@ -66,10 +66,11 @@ export async function renderHome(root) {
   // reconnect is needed re-auths inside the tap's gesture window.
   if (hasClientId()) {
     const pill = el('button', 'mn-sync-pill');
+    pill.dataset.mnAuth = '1'; // gesture-renewal skips taps here (it does its own interactive auth)
     const setPill = (state) => {
       const s = needsReconnect() ? 'reconnect' : state;
       pill.dataset.state = s;
-      pill.textContent = { idle: 'drive ·', syncing: 'syncing…', synced: 'synced ✓', pending: 'push pending', offline: 'offline', reconnect: 'reconnect drive' }[s] || s;
+      pill.textContent = { idle: 'drive ·', syncing: 'syncing…', synced: 'synced ✓', pending: 'push pending', offline: 'offline', reconnect: 'reconnect drive', error: 'sync retrying…' }[s] || s;
     };
     onSyncState(setPill);
     pill.addEventListener('click', async () => {
@@ -79,7 +80,7 @@ export async function renderHome(root) {
         setSyncClient(client);
         await pullMergePushCycle(client,
           () => store.exportAll(), (m) => store.importAll(m),
-          { snapshotFn: () => store.putSnapshot('pre-sync') });
+          { snapshotFn: () => store.putSnapshot('pre-sync'), trigger: 'manual' });
         pushPendingAttachments();
         refresh();
       } catch (e) { alert(`sync failed: ${e.message}`); }

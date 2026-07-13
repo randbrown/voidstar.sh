@@ -21,7 +21,8 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 | Voice | `voice.js`, `voice-capture.js`, `audio-out.js` | Web Speech dictation (continuous, restart loop, final dedupe) + MediaRecorder on the same mic; keep-audio / insert-transcript toggles; record-only fallback on contention. An **inline mic picker** (`qualia/devices.js` `wirePicker`) sits on **every** voice-recorder surface — the in-note voice bar (`editor.js`) and the hands-free capture view (`capture.js`) — so the input is chosen in place, never via settings; it persists to `voidstar.mind.micId`, refreshes device labels once permission is granted, shows only when >1 mic exists (the capture view; the voice bar always shows), and **switching mid-recording restarts on the new device** (the editor commits the in-progress segment first so nothing is lost). Speaker via `setSinkId` (hidden on Safari). |
 | OCR | `ocr.js` | tesseract.js lazy-loaded from CDN on first image; serial idle queue over `ocrStatus='pending'`; text stored on the attachment (searchable, rides sync so other devices never re-OCR). Settings → *images & text recognition* is a status panel: counts (recognized / queued-here / **awaiting-download** / failed), live drain progress, process-now + retry-failed — so a large "N pending" that's really waiting on binaries to sync down from Drive isn't a mystery (`ocrStatusReport`/`retryFailedOcr`). |
 | Annotation | `annotation.js`, `views/annotate.js` | Forked from `setlist/annotation.js`: pen (with stylus pressure), highlighter, arrow, rect, ellipse, text, eraser, select, pan; shared palette/size scale; two-finger scroll; autosaves; flatten-to-copy export. Keyed `attachmentId[:page]` (page reserved for PDFs). |
-| Drive sync | `gdrive-sync.js`, `shard.js`, `attachments-drive.js` | GIS auth, drive.file scope, **app-owned OAuth client id** ("Sign in with Google", user override in Settings → advanced). **Incremental sharded sync**: `shard.js` (pure bucketing/hash/merge core, tested by `scripts/check-mind-shard.mjs`) + a `gdrive-sync.js` client that pushes/pulls only changed shards. Also: peek freshness gate, persisted dirty flag, **conflict copies**, **attachment binaries** (below), and duplicate-file/folder healing (below). |
+| Drive sync | `gdrive-sync.js`, `shard.js`, `attachments-drive.js` | GIS auth, drive.file scope, **app-owned OAuth client id** ("Sign in with Google", user override in Settings → advanced). **Incremental sharded sync**: `shard.js` (pure bucketing/hash/merge core, tested by `scripts/check-mind-shard.mjs`) + a `gdrive-sync.js` client that pushes/pulls only changed shards — every Drive call resolves its token **per request** (`driveFetch`, one 401→renew→retry), never a token captured at client creation. Also: peek freshness gate, persisted dirty flag, **conflict copies**, **attachment binaries** (below), duplicate-file/folder healing (below), and a **sync event log** ring buffer (Settings → diagnostics). |
+| Sync scheduler | `sync-scheduler.js`, `sync-cadence.js` | The single owner of **when** to sync: a visibility-gated jittered heartbeat (25 s while data moves, 90 s idle) plus immediate pokes on load/visible/focus/online/write/token-renewal, failure backoff (30 s→5 min), and gesture-scoped token renewal. Cadence math is pure (`sync-cadence.js`, tested by `scripts/check-mind-sync-cadence.mjs`). |
 | Import/export | `import-doc.js`, `dates.js`, `export.js`, `views/import-doc-modal.js`, `gdrive-picker.js` | Whole-document import (split into notes) + single-doc markdown export + JSON/zip. See the import/export section below. |
 
 ## Sync model
@@ -127,14 +128,26 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   diff of the live note vs the copy with per-change *keep current / use copy /
   keep both* choices, which writes the merged body back to the live note and
   trashes the copy. An orphaned copy (base deleted) can be kept as its own note.
-- Auto-sync: pull on load/refocus (`watchFocusSync`, silent, 30 s throttle,
-  peek-gated), debounced push 3 s after any write, offline flush on reconnect,
-  status pill on the home header. The debounced push cycle also passes the
-  size-gated `pre-sync` snapshotFn (so "undo last sync" covers merges that
-  arrive via auto-push, not just focus pulls), re-arms itself when an edit
-  landed mid-cycle, and `pull` skips (and retries next cycle, un-stamped)
-  any individual shard/index file that fails to parse instead of letting one
-  corrupted file brick every future cycle.
+- Auto-sync: **everything funnels through the sync scheduler**
+  (`sync-scheduler.js`) — a visibility-gated heartbeat (jittered 25 s while
+  data has moved recently, 90 s idle; pure cadence math in `sync-cadence.js`)
+  plus immediate pokes on load / visible / focus / online / token-renewal, the
+  debounced 3 s write push (routed through the scheduler via `setWritePoker`
+  so it can establish a client, retry, and log), and a best-effort flush of a
+  pending write when the page hides. Failed cycles retry on a 30 s→5 min
+  backoff (auth dead-ends don't grow it — they latch the `reconnect` state
+  instead); user-ish pokes cut through the backoff. Every cycle passes the
+  size-gated `pre-sync` snapshotFn (so "undo last sync" covers merges however
+  they arrive), a mid-cycle edit re-arms another cycle, and `pull` skips (and
+  retries next cycle, un-stamped) any individual shard/index file that fails
+  to parse instead of letting one corrupted file brick every future cycle.
+  Status: the home-header pill now reflects **all** paths (scheduler cycles
+  emit `syncing/synced/error/reconnect`, not just the push path), and a dot on
+  the dock's home button surfaces reconnect/error/pending from any view. Every
+  trigger/outcome/error lands in a localStorage ring buffer shown in Settings
+  → diagnostics ("recent sync activity"). Two open devices converge within
+  one heartbeat tick (~25–90 s, seconds after a refocus); a closed device
+  converges on next launch — there is deliberately no server/push relay.
 - **Local snapshots** (`putSnapshot`, IDB, restore in Settings → data) are full
   copies, so the frequent auto `'pre-sync'` one is **size-gated**
   (`SNAPSHOT_MAX_NOTES`): above it, undo-last-sync is unavailable, but explicit
@@ -351,16 +364,24 @@ The Drive **Picker** additionally needs `PUBLIC_GOOGLE_PICKER_API_KEY`
 Both keys are public identifiers protected by Cloud-console restrictions, not
 secrecy. The same change is mirrored in `setlist/gdrive-backup.js`.
 
-**Silent token renewal.** GIS issues ~1h access tokens with no browser refresh
-token, so the background sync path (`getAccessToken({interactive:false})`) renews
-via `requestAccessToken({prompt:'none'})` — a hidden-iframe grant with no popup
-or gesture — whenever the Google session + prior consent still exist. Only a
-genuinely impossible silent grant (signed out, consent revoked, third-party
-cookies blocked) falls through to the "reconnect" pill; the interactive path uses
-`prompt:''` (silent when it can, consent when it must, in one gesture). Mirrored
-in `setlist/gdrive-backup.js` and `qualia/gdrive.js` (qualia stays manual/
-gesture-only — the silent path just spares its Save/Load taps a re-consent and
-never surfaces UI mid-performance).
+**Token renewal.** GIS issues ~1h access tokens with no browser refresh token,
+and — contrary to what this doc used to claim — `requestAccessToken({prompt:
+'none'})` is **always a popup** under the hood (the GIS token client has no
+iframe path), so a gestureless background renewal is popup-blocked in most
+browsers. mind therefore renews in three layers (`gdrive-sync.js`):
+per-request token resolution with one 401→renew→retry (`driveFetch` — no
+method ever closes over a token string, so sessions outliving the ~1h token
+keep syncing); a **gesture-scoped renewal** (`armGestureRenewal` — once the
+token lapses, the user's next tap/keypress anywhere runs the `prompt:'none'`
+grant inside the activation window, usually a sub-second popup flash, then
+re-kicks sync); and a throttled background attempt (works where the user
+granted the site popup permission; failures are throttled 5 min and latch the
+`reconnect` pill state). Only a genuinely impossible silent grant (signed out
+of Google, consent revoked) leaves the pink "reconnect drive" pill / dock dot,
+and one tap on it re-auths interactively (`prompt:''` — silent when it can,
+consent when it must, in one gesture). `setlist/gdrive-backup.js` and
+`qualia/gdrive.js` still use the old popup-blind silent path — porting mind's
+pattern is on the maintenance backlog.
 
 **Sync diagnostics.** Each app's Drive settings has a read-only *diagnostics*
 troubleshooter (Settings → google drive sync → *diagnostics*; qualia: inside the
