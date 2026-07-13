@@ -203,9 +203,8 @@ export async function listNoteVersions(noteId, { limit = 20, onProgress } = {}) 
   const fileId = getShardState().files[name]?.id;
   if (!fileId) throw new Error('this note has not synced to Drive yet');
 
-  const listRes = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}/revisions?fields=revisions(id,modifiedTime)&pageSize=200`,
-    { headers: { 'Authorization': `Bearer ${token}` } });
+  const listRes = await driveFetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/revisions?fields=revisions(id,modifiedTime)&pageSize=200`);
   if (!listRes.ok) throw new Error(`Drive revisions failed: ${listRes.status}`);
   const revisions = ((await listRes.json()).revisions || [])
     .sort((a, b) => (b.modifiedTime || '').localeCompare(a.modifiedTime || ''))
@@ -218,9 +217,8 @@ export async function listNoteVersions(noteId, { limit = 20, onProgress } = {}) 
     const rev = revisions[i];
     let shard = null;
     try {
-      const res = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${rev.id}?alt=media`,
-        { headers: { 'Authorization': `Bearer ${token}` } });
+      const res = await driveFetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${rev.id}?alt=media`);
       if (!res.ok) continue;   // a purged/unreadable revision — skip, keep walking
       shard = await res.json();
     } catch { continue; }
@@ -234,7 +232,11 @@ export async function listNoteVersions(noteId, { limit = 20, onProgress } = {}) 
   onProgress?.(revisions.length, revisions.length);
   return versions;
 }
-export function disconnect() { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(EVER_KEY); }
+export function disconnect() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(EVER_KEY);
+  setSyncState('idle'); // a lingering 'reconnect'/'error' would nag after a deliberate sign-out
+}
 
 export function getLastBackupTime() {
   const raw = localStorage.getItem(LAST_BACKUP_KEY);
@@ -255,6 +257,43 @@ export function formatLastBackup() {
   if (day < 7) return `${day}d ago`;
   return new Date(ts).toLocaleDateString();
 }
+
+// ── Sync event log ──
+// A small localStorage ring buffer of recent sync activity — every trigger,
+// what it decided, and why it failed — surfaced in Settings → diagnostics so
+// "this device didn't sync" is answerable without a console. Consecutive
+// identical quiet outcomes (heartbeat → fresh) coalesce into one row with a
+// count, so interesting entries aren't pushed out by the steady state.
+const SYNC_LOG_KEY = `${NS}.syncLog`;
+const SYNC_LOG_MAX = 50;
+
+export function logSyncEvent(trigger, outcome, detail = '') {
+  try {
+    let log = JSON.parse(localStorage.getItem(SYNC_LOG_KEY) || '[]');
+    if (!Array.isArray(log)) log = []; // self-heal a corrupt value
+    const top = log[0];
+    const d = detail ? String(detail).slice(0, 200) : '';
+    if (top && top.trigger === trigger && top.outcome === outcome && !d && !top.detail) {
+      top.ts = Date.now();
+      top.n = (top.n || 1) + 1;
+    } else {
+      log.unshift({ ts: Date.now(), trigger, outcome, ...(d ? { detail: d } : {}) });
+    }
+    localStorage.setItem(SYNC_LOG_KEY, JSON.stringify(log.slice(0, SYNC_LOG_MAX)));
+  } catch {}
+}
+
+export function getSyncLog() {
+  try {
+    const log = JSON.parse(localStorage.getItem(SYNC_LOG_KEY) || '[]');
+    return Array.isArray(log) ? log : [];
+  } catch { return []; }
+}
+
+// The scheduler registers a rows-provider so diagnostics can show its state
+// (next heartbeat, failures, last outcome) without a circular import.
+let _schedDiagProvider = null;
+export function setSchedulerDiag(fn) { _schedDiagProvider = fn; }
 
 // Read-only diagnostics for the settings troubleshooter. `live` adds a real
 // Drive round-trip (silent token + peek) so "can this device reach Drive right
@@ -290,12 +329,28 @@ export async function gatherDiagnostics({ live = false } = {}) {
     ],
   };
 
+  if (_schedDiagProvider) {
+    try { report.sections.push({ title: 'Scheduler', rows: _schedDiagProvider() }); } catch {}
+  }
+  const log = getSyncLog().slice(0, 20);
+  if (log.length) {
+    report.sections.push({
+      title: 'Recent sync activity',
+      rows: log.map(e => [
+        new Date(e.ts).toLocaleTimeString(),
+        `${e.trigger} → ${e.outcome}${e.n > 1 ? ` ×${e.n}` : ''}${e.detail ? ` — ${e.detail}` : ''}`,
+      ]),
+    });
+  }
+
   if (live) {
     const rows = [];
     try {
-      const token = await getAccessToken({ interactive: false });
+      // force: bypass the renewal-failure throttle — this is an explicit
+      // button press, so report a REAL attempt, not a stale stamp.
+      const token = await getAccessToken({ interactive: false, force: true });
       if (!token) {
-        rows.push(['result', 'FAIL — no token; silent renew failed. Tap “sign in with Google”.']);
+        rows.push(['result', 'FAIL — silent renew failed (needs a live Google session; renewal popups can be blocked). Tap “sign in with Google”.']);
       } else {
         rows.push(['silent token', 'ok']);
         const client = await initGdriveSync({ interactive: false });
@@ -347,12 +402,28 @@ function getStoredToken() {
   return null;
 }
 
+// Renewal-failure throttles. GIS "silent" renewal (prompt:'none') is really a
+// POPUP under the hood (there is no iframe path in the token client), so a
+// background attempt without transient user activation is popup-blocked in
+// most browsers. Two stamps because the failure modes differ:
+//   _renewFailedBgAt   — a gestureless attempt failed (usually popup-blocked);
+//                        gates only further BACKGROUND attempts. A gesture
+//                        attempt can still succeed where this one failed.
+//   _renewFailedRealAt — an attempt WITH a gesture failed (signed out of
+//                        Google, consent revoked); gates every silent attempt,
+//                        or each tap would flash a doomed popup.
+let _renewFailedBgAt = 0;
+let _renewFailedRealAt = 0;
+const RENEW_RETRY_MS = 5 * 60_000;
+
 function storeToken(token, expiresIn) {
   localStorage.setItem(TOKEN_KEY, JSON.stringify({
     token,
     expiresAt: Date.now() + (expiresIn - 60) * 1000,
   }));
   try { localStorage.setItem(EVER_KEY, '1'); } catch {}
+  _renewFailedBgAt = 0;
+  _renewFailedRealAt = 0;
 }
 
 // One token request. The `prompt` decides the UX: `'none'` renews silently
@@ -382,7 +453,35 @@ function requestTokenOnce(clientId, prompt = '') {
   });
 }
 
-async function getAccessToken({ interactive = true } = {}) {
+// Single-flight silent renewal: concurrent driveFetch callers (peekSharded's
+// Promise.all trio, a lazy attachment download overlapping a cycle, the 401
+// retry) collapse onto ONE prompt:'none' attempt — otherwise each would open
+// its own GIS popup flow, and a losing sibling could stamp a failure throttle
+// right after a winner stored a fresh token. `gesture` marks an attempt made
+// with real user activation: its failure is definitive (no Google session /
+// consent revoked), not just a blocked popup.
+let _renewInflight = null;
+function renewSilentlyOnce(clientId, { gesture = false } = {}) {
+  if (_renewInflight) return _renewInflight;
+  _renewInflight = (async () => {
+    try {
+      await loadGis();
+      return await requestTokenOnce(clientId, 'none');
+    } catch {
+      const t = getStoredToken(); // another path may have landed a token meanwhile
+      if (t) return t;
+      if (gesture) _renewFailedRealAt = Date.now();
+      else _renewFailedBgAt = Date.now();
+      if (needsReconnect()) setSyncState('reconnect');
+      return null;
+    } finally {
+      _renewInflight = null;
+    }
+  })();
+  return _renewInflight;
+}
+
+async function getAccessToken({ interactive = true, force = false } = {}) {
   const existing = getStoredToken();
   if (existing) return existing;
 
@@ -392,24 +491,70 @@ async function getAccessToken({ interactive = true } = {}) {
     throw new Error('Google Drive client ID not configured — set it in settings.');
   }
 
-  await loadGis();
-
-  // Background caller (app load / focus sync): renew SILENTLY. With a live
-  // Google session and a prior grant this returns a fresh token through a
-  // hidden iframe with zero UI — so a lapsed 1h access token no longer forces a
-  // manual "reconnect" on every open. If it can't renew silently (no session,
-  // consent revoked, third-party cookies blocked) we stay quiet and let the
-  // status pill fall to "reconnect".
+  // Background caller (scheduler cycle / driveFetch): attempt a prompt:'none'
+  // renew, knowing it is a popup and will usually be blocked outside a gesture
+  // — it still succeeds where the user granted the site popup permission, and
+  // armGestureRenewal covers everyone else on their next real tap. Never
+  // attempted for a user who never connected (no doomed popups for non-Drive
+  // users), and throttled after failure so polling can't spam attempts.
+  // `force` (diagnostics' live check — an explicit button press) bypasses the
+  // throttle so the report reflects a real attempt, not a stale stamp.
   if (!interactive) {
-    try { return await requestTokenOnce(clientId, 'none'); }
-    catch { return null; }
+    if (localStorage.getItem(EVER_KEY) !== '1') return null;
+    if (_renewInflight) return _renewInflight;
+    const now = Date.now();
+    if (!force && (now - _renewFailedBgAt < RENEW_RETRY_MS || now - _renewFailedRealAt < RENEW_RETRY_MS)) return null;
+    return renewSilentlyOnce(clientId);
   }
 
-  // Interactive (inside the user's gesture): silent when possible, otherwise the
-  // real consent/account chooser — a single call, so the gesture is never lost
-  // across an await.
+  // Interactive (inside the user's gesture): if a silent renewal is already in
+  // flight (e.g. the gesture-renewal listener fired on this very tap), join it
+  // rather than racing a second popup out of the same gesture; only fall
+  // through to the real consent/account chooser when it yields nothing.
+  await loadGis();
+  if (_renewInflight) {
+    const t = await _renewInflight.catch(() => null);
+    if (t) return t;
+  }
   return requestTokenOnce(clientId, '');
 }
+
+// Load the GIS script ahead of need so a gesture-time renewal can call
+// requestAccessToken synchronously inside the activation window. Skipped for
+// a visitor who never connected Drive — nothing to renew, no Google fetch.
+export function preloadGis() {
+  if (localStorage.getItem(EVER_KEY) !== '1') return;
+  loadGis().catch(() => {});
+}
+
+// Renew the lapsed token inside the user's NEXT real gesture. The GIS token
+// client always opens a popup — even for prompt:'none' — and browsers block
+// popups without transient user activation, which is why a load-time "silent"
+// renew mostly fails. A capture-phase pointerdown/keydown listener calls
+// requestTokenOnce synchronously in the gesture (no await first — GIS is
+// preloaded), so once the ~1h token lapses, the user's first tap anywhere
+// renews it with at most a brief popup flash, and `onRenewed` re-kicks sync.
+export function armGestureRenewal(onRenewed) {
+  if (_gestureArmed || typeof document === 'undefined') return;
+  _gestureArmed = true;
+  const maybeRenew = (ev) => {
+    if (_renewInflight || getStoredToken()) return;
+    // Never steal the gesture from a control that does its own interactive
+    // auth (the sync pill, settings sign-in) — a silent popup here would
+    // consume the popup allowance and get the real consent popup blocked.
+    if (ev?.target instanceof Element && ev.target.closest('[data-mn-auth]')) return;
+    if (localStorage.getItem(EVER_KEY) !== '1') return;
+    if (Date.now() - _renewFailedRealAt < RENEW_RETRY_MS) return;
+    if (!gisReady()) { loadGis().catch(() => {}); return; } // warm it for the next tap
+    // Synchronous into requestTokenOnce (via renewSilentlyOnce) — no await
+    // before the popup, so it opens inside this gesture's activation window.
+    renewSilentlyOnce(getClientId(), { gesture: true })
+      .then((t) => { if (t) onRenewed?.(); });
+  };
+  document.addEventListener('pointerdown', maybeRenew, { capture: true, passive: true });
+  document.addEventListener('keydown', maybeRenew, { capture: true, passive: true });
+}
+let _gestureArmed = false;
 
 // Acquire the token NOW, inside a user gesture (mobile popup rules).
 export async function ensureDriveAccess() {
@@ -424,9 +569,39 @@ export async function getDriveToken({ interactive = true } = {}) {
 }
 
 // ── Drive REST helpers ──
+//
+// Every Drive call goes through driveFetch, which resolves a fresh-enough
+// token PER REQUEST (the old pattern captured one ~1h token string at client
+// creation, so any session outliving it 401'd forever) and retries exactly
+// once on 401 after clearing the dead token. When no token is obtainable it
+// throws a typed error (`e.reconnect`) so the scheduler can show 'reconnect'
+// instead of burning the failure backoff.
 
-async function findDataFiles(token) {
-  const root = await getRootFolderId(token);
+export class ReconnectError extends Error {
+  constructor(msg) { super(msg); this.name = 'ReconnectError'; this.reconnect = true; }
+}
+
+async function driveFetch(url, opts = {}) {
+  let token = await getAccessToken({ interactive: false });
+  if (!token) throw new ReconnectError('Google Drive session expired — reconnect');
+  const doFetch = (t) => fetch(url, { ...opts, headers: { ...(opts.headers || {}), 'Authorization': `Bearer ${t}` } });
+  let res = await doFetch(token);
+  if (res.status === 401) {
+    // Compare-and-clear: only drop the stored token if it's still the one that
+    // just 401'd — a concurrent renewal may have stored a fresh one meanwhile.
+    try {
+      const stored = JSON.parse(localStorage.getItem(TOKEN_KEY));
+      if (!stored || stored.token === token) localStorage.removeItem(TOKEN_KEY);
+    } catch { localStorage.removeItem(TOKEN_KEY); }
+    token = await getAccessToken({ interactive: false });
+    if (!token) throw new ReconnectError('Google Drive session expired — reconnect');
+    res = await doFetch(token);
+  }
+  return res;
+}
+
+async function findDataFiles() {
+  const root = await getRootFolderId();
   const params = new URLSearchParams({
     q: `name='${FILE_NAME}' and '${root}' in parents and trashed=false`,
     spaces: 'drive',
@@ -434,9 +609,7 @@ async function findDataFiles(token) {
     orderBy: 'modifiedTime desc',
     pageSize: '10',
   });
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  });
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
   if (!res.ok) throw new Error(`Drive search failed: ${res.status}`);
   return (await res.json()).files || [];
 }
@@ -444,7 +617,7 @@ async function findDataFiles(token) {
 // Data files by name ANYWHERE in Drive (any parent) — used only by the one-time
 // migration to find the legacy loose root file before it's moved under the root
 // folder. Includes `parents` so re-parenting knows what to remove.
-async function findDataFilesAnywhere(token) {
+async function findDataFilesAnywhere() {
   const params = new URLSearchParams({
     q: `name='${FILE_NAME}' and trashed=false`,
     spaces: 'drive',
@@ -452,36 +625,32 @@ async function findDataFilesAnywhere(token) {
     orderBy: 'modifiedTime desc',
     pageSize: '10',
   });
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  });
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
   if (!res.ok) throw new Error(`Drive search failed: ${res.status}`);
   return (await res.json()).files || [];
 }
 
-async function trashFile(token, fileId) {
-  await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+async function trashFile(fileId) {
+  await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
     method: 'PATCH',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ trashed: true }),
   });
 }
 
-async function readJsonFile(token, fileId) {
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  });
+async function readJsonFile(fileId) {
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
   if (!res.ok) throw new Error(`Drive read failed: ${res.status}`);
   return res.json();
 }
 
 // Create (multipart) or update (media) a JSON file, returning {id,modifiedTime}.
 // One helper for index.json and every shard.
-async function uploadJsonFile(token, { name, parentId, fileId, data }) {
+async function uploadJsonFile({ name, parentId, fileId, data }) {
   if (fileId) {
-    const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,modifiedTime`, {
+    const res = await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,modifiedTime`, {
       method: 'PATCH',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error(`Drive file update failed: ${res.status}`);
@@ -491,9 +660,8 @@ async function uploadJsonFile(token, { name, parentId, fileId, data }) {
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
   form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }), name);
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime', {
+  const res = await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime', {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}` },
     body: form,
   });
   if (!res.ok) throw new Error(`Drive file create failed: ${res.status}`);
@@ -501,7 +669,7 @@ async function uploadJsonFile(token, { name, parentId, fileId, data }) {
 }
 
 // {id,name,modifiedTime} for every non-trashed child of a folder, paginated.
-async function listFolderFiles(token, folderId) {
+async function listFolderFiles(folderId) {
   const out = [];
   let pageToken = '';
   do {
@@ -512,9 +680,7 @@ async function listFolderFiles(token, folderId) {
       pageSize: '1000',
     });
     if (pageToken) params.set('pageToken', pageToken);
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
     if (!res.ok) throw new Error(`Drive list failed: ${res.status}`);
     const json = await res.json();
     out.push(...(json.files || []));
@@ -524,8 +690,8 @@ async function listFolderFiles(token, folderId) {
 }
 
 // index.json file(s) directly under the root folder (newest first; normally 0–1).
-async function findIndexFiles(token) {
-  const root = await getRootFolderId(token);
+async function findIndexFiles() {
+  const root = await getRootFolderId();
   const params = new URLSearchParams({
     q: `name='${INDEX_FILE_NAME}' and '${root}' in parents and trashed=false`,
     spaces: 'drive',
@@ -533,9 +699,7 @@ async function findIndexFiles(token) {
     orderBy: 'modifiedTime desc',
     pageSize: '10',
   });
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  });
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
   if (!res.ok) throw new Error(`Drive index search failed: ${res.status}`);
   return (await res.json()).files || [];
 }
@@ -563,17 +727,17 @@ const SHARD_COLLS = ['notes', 'tasks', 'attachments', 'annotations'];
 // the oldest (their shard files reparent in, and pullSharded's dup-name heal
 // then merges any now-colliding shard-NNN.json). Deterministic survivor so
 // devices converge.
-async function getShardsFolderId(token) {
+async function getShardsFolderId() {
   const cached = localStorage.getItem(SHARDS_FOLDER_ID_KEY);
   if (cached) return cached;
-  const rootId = await getRootFolderId(token);
-  const found = await searchFolders(token, SHARDS_FOLDER_NAME, { parentId: rootId, pageSize: 100, orderBy: 'createdTime' });
-  if (!found.length) return findOrCreateFolder(token, SHARDS_FOLDER_NAME, SHARDS_FOLDER_ID_KEY, rootId);
+  const rootId = await getRootFolderId();
+  const found = await searchFolders(SHARDS_FOLDER_NAME, { parentId: rootId, pageSize: 100, orderBy: 'createdTime' });
+  if (!found.length) return findOrCreateFolder(SHARDS_FOLDER_NAME, SHARDS_FOLDER_ID_KEY, rootId);
   const sorted = [...found].sort((a, b) =>
     (a.createdTime || '').localeCompare(b.createdTime || '') || a.id.localeCompare(b.id));
   const keep = sorted[0].id;
   for (const dup of sorted.slice(1)) {
-    try { await mergeFolderInto(token, dup.id, keep); }
+    try { await mergeFolderInto(dup.id, keep); }
     catch (e) { console.warn('[mind-sync] duplicate shards folder heal deferred:', e.message); }
   }
   localStorage.setItem(SHARDS_FOLDER_ID_KEY, keep);
@@ -586,9 +750,9 @@ async function getShardsFolderId(token) {
 // hash changed since we last saw them on remote. Persist each file's {id,mtime,
 // hash} the instant its own upload succeeds, so a crash mid-push at worst causes
 // a redundant re-upload next cycle — never a missed one.
-async function pushSharded(token, dataset) {
-  const rootId = await getRootFolderId(token);
-  const shardsFolderId = await getShardsFolderId(token);
+async function pushSharded(dataset) {
+  const rootId = await getRootFolderId();
+  const shardsFolderId = await getShardsFolderId();
   const { index, shards } = splitIntoShards(dataset, DEFAULT_SHARD_COUNT);
   const uploaded = [];
   const dirty = drainDirtyShards();
@@ -599,7 +763,7 @@ async function pushSharded(token, dataset) {
       const idxHash = hashIndex(index);
       const cur = getShardState().files[INDEX_FILE_NAME];
       if (cur?.hash !== idxHash) {
-        const res = await uploadJsonFile(token, { name: INDEX_FILE_NAME, parentId: rootId, fileId: cur?.id, data: index });
+        const res = await uploadJsonFile({ name: INDEX_FILE_NAME, parentId: rootId, fileId: cur?.id, data: index });
         setFileState(INDEX_FILE_NAME, { id: res.id, mtime: res.modifiedTime || '', hash: idxHash });
         uploaded.push(INDEX_FILE_NAME);
       }
@@ -627,7 +791,7 @@ async function pushSharded(token, dataset) {
       const h = hashShard(shard);
       const cur = getShardState().files[name];
       if (cur?.hash !== h) {
-        const res = await uploadJsonFile(token, { name, parentId: shardsFolderId, fileId: cur?.id, data: shard });
+        const res = await uploadJsonFile({ name, parentId: shardsFolderId, fileId: cur?.id, data: shard });
         setFileState(name, { id: res.id, mtime: res.modifiedTime || '', hash: h });
         uploaded.push(name);
       }
@@ -646,30 +810,30 @@ async function pushSharded(token, dataset) {
 // it returns commit() for the cycle to call AFTER a successful import (so an
 // interrupted cycle re-pulls rather than skipping). It DOES heal duplicate
 // index/shard files (merge + trash), like the old monolith duplicate healing.
-async function pullSharded(token) {
-  const rootId = await getRootFolderId(token);
-  const shardsFolderId = await getShardsFolderId(token);
+async function pullSharded() {
+  const rootId = await getRootFolderId();
+  const shardsFolderId = await getShardsFolderId();
   let healed = false;
 
   // index.json (+ dup-name heal).
-  let indexFiles = await findIndexFiles(token);
+  let indexFiles = await findIndexFiles();
   if (indexFiles.length > 1) {
     const parsed = [];
-    for (const f of indexFiles) { try { parsed.push(await readJsonFile(token, f.id)); } catch {} }
+    for (const f of indexFiles) { try { parsed.push(await readJsonFile(f.id)); } catch {} }
     let mergedCollections = { folders: [], tasklists: [], settings: {} };
     for (const p of parsed) mergedCollections = mergeIndexData(mergedCollections, p).merged;
     const mergedIndex = { schema: SCHEMA_VERSION, shardCount: DEFAULT_SHARD_COUNT, ...mergedCollections };
     const keep = indexFiles[0];
-    await uploadJsonFile(token, { name: INDEX_FILE_NAME, parentId: rootId, fileId: keep.id, data: mergedIndex });
-    for (const f of indexFiles.slice(1)) await trashFile(token, f.id).catch(() => {});
+    await uploadJsonFile({ name: INDEX_FILE_NAME, parentId: rootId, fileId: keep.id, data: mergedIndex });
+    for (const f of indexFiles.slice(1)) await trashFile(f.id).catch(() => {});
     clearFileHash(INDEX_FILE_NAME);
     healed = true;
-    indexFiles = await findIndexFiles(token);
+    indexFiles = await findIndexFiles();
   }
   const indexRec = indexFiles[0] || null;
 
   // shard files (+ dup-name heal).
-  let shardFiles = (await listFolderFiles(token, shardsFolderId)).filter(f => parseShardName(f.name) !== null);
+  let shardFiles = (await listFolderFiles(shardsFolderId)).filter(f => parseShardName(f.name) !== null);
   const byName = new Map();
   for (const f of shardFiles) {
     if (!byName.has(f.name)) byName.set(f.name, []);
@@ -679,14 +843,14 @@ async function pullSharded(token) {
     if (files.length <= 1) continue;
     files.sort((a, b) => (b.modifiedTime || '').localeCompare(a.modifiedTime || ''));
     const parsed = [];
-    for (const f of files) { try { parsed.push(await readJsonFile(token, f.id)); } catch {} }
+    for (const f of files) { try { parsed.push(await readJsonFile(f.id)); } catch {} }
     const merged = unionShardObjects(parsed);
-    await uploadJsonFile(token, { name, parentId: shardsFolderId, fileId: files[0].id, data: merged });
-    for (const f of files.slice(1)) await trashFile(token, f.id).catch(() => {});
+    await uploadJsonFile({ name, parentId: shardsFolderId, fileId: files[0].id, data: merged });
+    for (const f of files.slice(1)) await trashFile(f.id).catch(() => {});
     clearFileHash(name);
     healed = true;
   }
-  if (healed) shardFiles = (await listFolderFiles(token, shardsFolderId)).filter(f => parseShardName(f.name) !== null);
+  if (healed) shardFiles = (await listFolderFiles(shardsFolderId)).filter(f => parseShardName(f.name) !== null);
 
   if (!indexRec && !shardFiles.length) return null; // nothing sharded on Drive yet
 
@@ -706,7 +870,7 @@ async function pullSharded(token) {
     const known = state.files[INDEX_FILE_NAME];
     if (!known || (indexRec.modifiedTime || '') > (known.mtime || '')) {
       try {
-        const data = await readJsonFile(token, indexRec.id);
+        const data = await readJsonFile(indexRec.id);
         index = { folders: data.folders || [], tasklists: data.tasklists || [], settings: data.settings || {} };
         pendingStamps[INDEX_FILE_NAME] = { id: indexRec.id, mtime: indexRec.modifiedTime || '', hash: hashIndex(data) };
       } catch (e) {
@@ -723,7 +887,7 @@ async function pullSharded(token) {
     const known = state.files[f.name];
     if (!known || (f.modifiedTime || '') > (known.mtime || '')) {
       let data;
-      try { data = await readJsonFile(token, f.id); }
+      try { data = await readJsonFile(f.id); }
       catch (e) {
         corrupt++;
         console.warn(`[mind-sync] skipping unreadable ${f.name}:`, e.message);
@@ -751,12 +915,12 @@ async function pullSharded(token) {
 // legacy-monolith modifiedTimes and answer "did anything move since our last
 // completed cycle?" without downloading. `multiple` = a duplicate file name
 // exists (forces a healing cycle regardless).
-async function peekSharded(token) {
-  const shardsFolderId = await getShardsFolderId(token);
+async function peekSharded() {
+  const shardsFolderId = await getShardsFolderId();
   const [shardFilesRaw, indexFiles, monoFiles] = await Promise.all([
-    listFolderFiles(token, shardsFolderId),
-    findIndexFiles(token),
-    findDataFiles(token),
+    listFolderFiles(shardsFolderId),
+    findIndexFiles(),
+    findDataFiles(),
   ]);
   const state = getShardState();
 
@@ -783,12 +947,12 @@ async function peekSharded(token) {
 // our last fold. Returns {data, commit} — commit stamps foldStamp only AFTER the
 // caller imports (crash-safe: the frozen migration copy is never skipped on a
 // failed import).
-async function readMonolithIfAdvanced(token) {
-  const files = await findDataFiles(token);
+async function readMonolithIfAdvanced() {
+  const files = await findDataFiles();
   if (!files.length) return null;
   const f = files[0]; // newest
   if ((f.modifiedTime || '') <= (getShardState().foldStamp || '')) return null;
-  const data = await readJsonFile(token, f.id);
+  const data = await readJsonFile(f.id);
   const commit = () => { const s = getShardState(); s.foldStamp = f.modifiedTime || ''; saveShardState(s); };
   return { data, commit };
 }
@@ -803,7 +967,7 @@ async function readMonolithIfAdvanced(token) {
 // then caches the winner for everyone.
 const _folderInflight = new Map();
 
-async function searchFolders(token, name, { parentId = '', pageSize = 1, orderBy = '' } = {}) {
+async function searchFolders(name, { parentId = '', pageSize = 1, orderBy = '' } = {}) {
   const q = [`name='${name.replace(/'/g, "\\'")}'`, `mimeType='application/vnd.google-apps.folder'`, 'trashed=false'];
   if (parentId) q.push(`'${parentId}' in parents`);
   const params = new URLSearchParams({
@@ -813,19 +977,17 @@ async function searchFolders(token, name, { parentId = '', pageSize = 1, orderBy
     pageSize: String(pageSize),
   });
   if (orderBy) params.set('orderBy', orderBy);
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  });
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
   if (!res.ok) throw new Error(`Drive folder search failed: ${res.status}`);
   return (await res.json()).files || [];
 }
 
-async function createDriveFolder(token, name, parentId = '') {
+async function createDriveFolder(name, parentId = '') {
   const body = { name, mimeType: 'application/vnd.google-apps.folder' };
   if (parentId) body.parents = [parentId];
-  const res = await fetch('https://www.googleapis.com/drive/v3/files', {
+  const res = await driveFetch('https://www.googleapis.com/drive/v3/files', {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Drive folder create failed: ${res.status}`);
@@ -834,13 +996,13 @@ async function createDriveFolder(token, name, parentId = '') {
 
 // Find (or create) a subfolder by name inside `parentId`. Serialized per cache
 // key by the in-flight map above so two racing callers share one folder.
-async function findOrCreateFolder(token, name, cacheKey, parentId = '') {
+async function findOrCreateFolder(name, cacheKey, parentId = '') {
   const cached = localStorage.getItem(cacheKey);
   if (cached) return cached;
   if (_folderInflight.has(cacheKey)) return _folderInflight.get(cacheKey);
   const p = (async () => {
-    const found = await searchFolders(token, name, { parentId, pageSize: 1 });
-    const folderId = found[0]?.id || await createDriveFolder(token, name, parentId);
+    const found = await searchFolders(name, { parentId, pageSize: 1 });
+    const folderId = found[0]?.id || await createDriveFolder(name, parentId);
     localStorage.setItem(cacheKey, folderId);
     return folderId;
   })();
@@ -854,22 +1016,22 @@ async function findOrCreateFolder(token, name, cacheKey, parentId = '') {
 // syncs), resolve to the OLDEST and fold every straggler's contents into it so
 // the app converges on one folder. Deterministic canonical (oldest createdTime,
 // id tiebreak) so two devices healing at once pick the same survivor.
-async function getRootFolderId(token) {
+async function getRootFolderId() {
   const cached = localStorage.getItem(ROOT_FOLDER_ID_KEY);
   if (cached) return cached;
   if (_folderInflight.has(ROOT_FOLDER_ID_KEY)) return _folderInflight.get(ROOT_FOLDER_ID_KEY);
   const p = (async () => {
-    const found = await searchFolders(token, ROOT_FOLDER_NAME, { pageSize: 100, orderBy: 'createdTime' });
+    const found = await searchFolders(ROOT_FOLDER_NAME, { pageSize: 100, orderBy: 'createdTime' });
     let rootId;
     if (!found.length) {
-      rootId = await createDriveFolder(token, ROOT_FOLDER_NAME);
+      rootId = await createDriveFolder(ROOT_FOLDER_NAME);
     } else {
       const sorted = [...found].sort((a, b) =>
         (a.createdTime || '').localeCompare(b.createdTime || '') || a.id.localeCompare(b.id));
       rootId = sorted[0].id;
       if (sorted.length > 1) {
         for (const dup of sorted.slice(1)) {
-          try { await mergeFolderInto(token, dup.id, rootId); }
+          try { await mergeFolderInto(dup.id, rootId); }
           catch (e) { console.warn('[mind-sync] duplicate root folder heal deferred:', e.message); }
         }
         // A subfolder id we cached may have lived in (or been merged away from)
@@ -888,7 +1050,7 @@ async function getRootFolderId(token) {
 
 // Every non-trashed child of a folder ({id,name,mimeType}), paginated — an
 // attachments/ folder can hold thousands of files (esp. after a bulk import).
-async function listChildren(token, parentId) {
+async function listChildren(parentId) {
   const out = [];
   let pageToken = '';
   do {
@@ -899,9 +1061,7 @@ async function listChildren(token, parentId) {
       pageSize: '1000',
     });
     if (pageToken) params.set('pageToken', pageToken);
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
     if (!res.ok) throw new Error(`Drive child list failed: ${res.status}`);
     const json = await res.json();
     out.push(...(json.files || []));
@@ -915,44 +1075,44 @@ async function listChildren(token, parentId) {
 // emptied source. Recoverable — files are trashed, not deleted — and works
 // under drive.file because the app created all of these. Duplicate DATA FILES
 // that land side by side are healed later by pull() (merge + trash).
-async function mergeFolderInto(token, srcId, destId, depth = 0) {
+async function mergeFolderInto(srcId, destId, depth = 0) {
   if (srcId === destId || depth > 4) return;
   const isFolder = (c) => c.mimeType === 'application/vnd.google-apps.folder';
   const [srcChildren, destChildren] = await Promise.all([
-    listChildren(token, srcId), listChildren(token, destId),
+    listChildren(srcId), listChildren(destId),
   ]);
   const destFolderByName = new Map(destChildren.filter(isFolder).map(c => [c.name, c.id]));
   for (const child of srcChildren) {
     const twin = isFolder(child) ? destFolderByName.get(child.name) : null;
-    if (twin) await mergeFolderInto(token, child.id, twin, depth + 1); // trashes child.id
-    else await reparentInto(token, child.id, destId);
+    if (twin) await mergeFolderInto(child.id, twin, depth + 1); // trashes child.id
+    else await reparentInto(child.id, destId);
   }
-  await trashFile(token, srcId);
+  await trashFile(srcId);
 }
 
 // One-time migration to the single-folder layout: move the legacy loose data
 // file and the two legacy root folders under voidstar_mind (renaming the
 // subfolders to attachments/ and backups/). Idempotent, guarded by a flag;
 // works under drive.file because the app created every one of these files.
-async function migrateToRootFolder(token) {
+async function migrateToRootFolder() {
   if (localStorage.getItem(CONSOLIDATED_KEY)) return;
   try {
-    const root = await getRootFolderId(token);
+    const root = await getRootFolderId();
 
     // Move any root-level data file(s) into the folder.
-    for (const f of await findDataFilesAnywhere(token)) {
-      if (!(f.parents || []).includes(root)) await reparentInto(token, f.id, root);
+    for (const f of await findDataFilesAnywhere()) {
+      if (!(f.parents || []).includes(root)) await reparentInto(f.id, root);
     }
 
     // Re-home + rename the legacy subfolders if they still exist at root.
-    const legacyAttach = await findFolderByName(token, LEGACY_ATTACH_FOLDER_NAME, root);
+    const legacyAttach = await findFolderByName(LEGACY_ATTACH_FOLDER_NAME, root);
     if (legacyAttach) {
-      await reparentInto(token, legacyAttach, root, { name: ATTACH_FOLDER_NAME });
+      await reparentInto(legacyAttach, root, { name: ATTACH_FOLDER_NAME });
       localStorage.setItem(ATTACH_FOLDER_ID_KEY, legacyAttach);
     }
-    const legacyBackups = await findFolderByName(token, LEGACY_BACKUPS_FOLDER_NAME, root);
+    const legacyBackups = await findFolderByName(LEGACY_BACKUPS_FOLDER_NAME, root);
     if (legacyBackups) {
-      await reparentInto(token, legacyBackups, root, { name: BACKUPS_FOLDER_NAME });
+      await reparentInto(legacyBackups, root, { name: BACKUPS_FOLDER_NAME });
       localStorage.setItem(BACKUPS_FOLDER_ID_KEY, legacyBackups);
     }
 
@@ -971,11 +1131,11 @@ async function migrateToRootFolder(token) {
 // (dropping the cache) to fold the duplicates together, then flag it done so we
 // don't pay the wider scan on every init. Idempotent and best-effort: a
 // deferral just retries next launch.
-async function healRootFoldersOnce(token) {
+async function healRootFoldersOnce() {
   if (localStorage.getItem(ROOT_HEALED_KEY)) return;
   try {
     localStorage.removeItem(ROOT_FOLDER_ID_KEY);
-    await getRootFolderId(token); // re-scans, merges twins, re-caches the survivor
+    await getRootFolderId(); // re-scans, merges twins, re-caches the survivor
     localStorage.setItem(ROOT_HEALED_KEY, String(Date.now()));
   } catch (e) {
     console.warn('[mind-sync] duplicate root folder heal deferred:', e.message);
@@ -984,16 +1144,14 @@ async function healRootFoldersOnce(token) {
 
 // A folder by exact name, excluding one id (the root folder itself, so we never
 // match it). Returns the id or ''.
-async function findFolderByName(token, name, excludeId = '') {
+async function findFolderByName(name, excludeId = '') {
   const params = new URLSearchParams({
     q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     spaces: 'drive',
     fields: 'files(id,name)',
     pageSize: '5',
   });
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  });
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
   if (!res.ok) return '';
   const hit = ((await res.json()).files || []).find(f => f.id !== excludeId);
   return hit ? hit.id : '';
@@ -1001,12 +1159,10 @@ async function findFolderByName(token, name, excludeId = '') {
 
 // Re-parent a file/folder into `parentId` (removing its current parents), with
 // an optional metadata patch (e.g. rename). No-op if already correctly placed.
-async function reparentInto(token, fileId, parentId, patch = {}) {
+async function reparentInto(fileId, parentId, patch = {}) {
   let parents = [];
   try {
-    const meta = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
+    const meta = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`);
     if (meta.ok) parents = (await meta.json()).parents || [];
   } catch {}
   const alreadyThere = parents.length === 1 && parents[0] === parentId;
@@ -1014,97 +1170,93 @@ async function reparentInto(token, fileId, parentId, patch = {}) {
   const qs = new URLSearchParams({ addParents: parentId, fields: 'id' });
   const removeParents = parents.filter(p => p !== parentId).join(',');
   if (removeParents) qs.set('removeParents', removeParents);
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?${qs}`, {
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?${qs}`, {
     method: 'PATCH',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Drive re-parent failed: ${res.status}`);
 }
 
 export async function initGdriveSync({ interactive = true } = {}) {
+  // Gate on a token so a client is only handed out when Drive is reachable —
+  // but do NOT capture it: every client method resolves its own token per
+  // request via driveFetch, so a client outliving the ~1h token keeps working.
   const token = await getAccessToken({ interactive });
   if (!token) return null;
 
   // Move any legacy scattered files under the single voidstar_mind folder
   // before the first pull/push so scoped discovery is valid (one-time, guarded).
-  await migrateToRootFolder(token);
+  await migrateToRootFolder();
   // Fold any duplicate top-level voidstar_mind folders into one (one-time).
-  await healRootFoldersOnce(token);
+  await healRootFoldersOnce();
 
   return {
     // Sharded Drive I/O — only changed shards move. See pushSharded/pullSharded.
-    push: (dataset) => pushSharded(token, dataset),
-    pull: () => pullSharded(token),
-    peek: () => peekSharded(token),
-    readMonolithIfAdvanced: () => readMonolithIfAdvanced(token),
+    push: (dataset) => pushSharded(dataset),
+    pull: () => pullSharded(),
+    peek: () => peekSharded(),
+    readMonolithIfAdvanced: () => readMonolithIfAdvanced(),
 
     // ── Attachment binaries ──
     async uploadAttachment(att, blob) {
-      const folderId = await findOrCreateFolder(token, ATTACH_FOLDER_NAME, ATTACH_FOLDER_ID_KEY, await getRootFolderId(token));
+      const folderId = await findOrCreateFolder(ATTACH_FOLDER_NAME, ATTACH_FOLDER_ID_KEY, await getRootFolderId());
       const name = `${att.id}-${att.name || att.kind}`;
       const metadata = { name, parents: [folderId] };
       const form = new FormData();
       form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
       form.append('file', blob, name);
-      const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+      const res = await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
         body: form,
       });
       if (!res.ok) throw new Error(`Drive attachment upload failed: ${res.status}`);
       return (await res.json()).id;
     },
     async downloadAttachment(fileId) {
-      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
+      const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
       if (!res.ok) throw new Error(`Drive attachment download failed: ${res.status}`);
       return res.blob();
     },
-    trashAttachmentFile: (fileId) => trashFile(token, fileId).catch(() => {}),
+    trashAttachmentFile: (fileId) => trashFile(fileId).catch(() => {}),
 
     // Version history (rotating timestamped JSON copies).
-    writeHistory: (data, force = false) => writeHistorySnapshot(token, data, force),
-    listHistory: () => listHistory(token),
-    readHistory: (fileId) => readJsonFile(token, fileId),
+    writeHistory: (data, force = false) => writeHistorySnapshot(data, force),
+    listHistory: () => listHistory(),
+    readHistory: (fileId) => readJsonFile(fileId),
   };
 }
 
 // ── Drive version history ──
 
-async function writeHistorySnapshot(token, data, force = false) {
+async function writeHistorySnapshot(data, force = false) {
   const last = parseInt(localStorage.getItem(LAST_HISTORY_KEY) || '0', 10);
   if (!force && Date.now() - last < HISTORY_MIN_INTERVAL_MS) return;
 
-  const folderId = await findOrCreateFolder(token, BACKUPS_FOLDER_NAME, BACKUPS_FOLDER_ID_KEY, await getRootFolderId(token));
+  const folderId = await findOrCreateFolder(BACKUPS_FOLDER_NAME, BACKUPS_FOLDER_ID_KEY, await getRootFolderId());
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const metadata = { name: `${HISTORY_PREFIX}${stamp}.json`, mimeType: 'application/json', parents: [folderId] };
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
   form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }), metadata.name);
 
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+  const res = await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}` },
     body: form,
   });
   if (!res.ok) throw new Error(`Drive history write failed: ${res.status}`);
   localStorage.setItem(LAST_HISTORY_KEY, String(Date.now()));
-  await pruneHistory(token, folderId, HISTORY_KEEP);
+  await pruneHistory(folderId, HISTORY_KEEP);
 }
 
-async function pruneHistory(token, folderId, keep = HISTORY_KEEP) {
-  const files = await listHistoryFiles(token, folderId);
+async function pruneHistory(folderId, keep = HISTORY_KEEP) {
+  const files = await listHistoryFiles(folderId);
   for (const f of files.slice(keep)) {
-    await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
+    await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}`, { method: 'DELETE' });
   }
 }
 
-async function listHistoryFiles(token, folderId) {
+async function listHistoryFiles(folderId) {
   const params = new URLSearchParams({
     q: `'${folderId}' in parents and name contains '${HISTORY_PREFIX}' and trashed=false`,
     spaces: 'drive',
@@ -1112,16 +1264,14 @@ async function listHistoryFiles(token, folderId) {
     orderBy: 'createdTime desc',
     pageSize: '50',
   });
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  });
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
   if (!res.ok) throw new Error(`Drive history list failed: ${res.status}`);
   return (await res.json()).files || [];
 }
 
-async function listHistory(token) {
-  const folderId = await findOrCreateFolder(token, BACKUPS_FOLDER_NAME, BACKUPS_FOLDER_ID_KEY, await getRootFolderId(token));
-  return listHistoryFiles(token, folderId);
+async function listHistory() {
+  const folderId = await findOrCreateFolder(BACKUPS_FOLDER_NAME, BACKUPS_FOLDER_ID_KEY, await getRootFolderId());
+  return listHistoryFiles(folderId);
 }
 
 // ── The single pull→merge→push code path (sharded) ──
@@ -1136,6 +1286,11 @@ async function listHistory(token) {
 export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) {
   if (_syncing) return { merged: null, hadRemote: false, changed: false, skipped: true };
   _syncing = true;
+  const trigger = opts.trigger || 'sync';
+  // The cycle owns its own state emissions (syncing/synced/error/reconnect/
+  // offline), so the pill is truthful for EVERY caller — scheduler, manual
+  // pill tap, settings — not just the legacy push path.
+  setSyncState('syncing');
   try {
     const dirtyStamp = getDirtyStamp();
 
@@ -1206,7 +1361,19 @@ export async function pullMergePushCycle(client, exportFn, importFn, opts = {}) 
     setLastBackupTime(Date.now());
     setLastCycleAt(Date.now());
     const changed = importedDelta || foldedMonolith;
+    logSyncEvent(trigger, changed ? 'pulled' : uploaded.length ? 'pushed' : 'clean',
+      [uploaded.length ? `${uploaded.length} file(s) up` : '', conflicts ? `${conflicts} conflict(s)` : '']
+        .filter(Boolean).join(', '));
+    setSyncState('synced');
     return { merged: mergedFull, hadRemote: !!pulled, changed, pushed: uploaded.length > 0, conflicts };
+  } catch (e) {
+    const offline = typeof navigator !== 'undefined' && !navigator.onLine;
+    if (e && e.reconnect) setSyncState('reconnect'); // caller logs reconnects
+    else {
+      logSyncEvent(trigger, 'error', e && e.message);
+      setSyncState(offline ? 'offline' : 'error');
+    }
+    throw e;
   } finally {
     _syncing = false;
   }
@@ -1218,9 +1385,12 @@ export async function pullMergePushIfStale(client, exportFn, importFn, opts = {}
       const info = await client.peek();
       if (info && info.fresh) {
         setLastBackupTime(Date.now());
+        logSyncEvent(opts.trigger || 'sync', 'fresh');
+        setSyncState('synced'); // we just proved local == remote
         return { merged: null, hadRemote: true, changed: false, fresh: true };
       }
     } catch (e) {
+      if (e && e.reconnect) throw e; // no token — a full cycle is equally doomed
       console.warn('[mind-sync] freshness check failed, running a full cycle:', e.message);
     }
   }
@@ -1240,7 +1410,12 @@ export function setSyncClient(client) { _syncClient = client; }
 export function getSyncClient() { return _syncClient; }
 
 const _statusListeners = new Set();
-let _syncState = 'idle'; // 'idle' | 'syncing' | 'synced' | 'pending' | 'offline'
+// 'idle' | 'syncing' | 'synced' | 'pending' | 'offline' | 'reconnect' | 'error'
+// 'reconnect' = no token obtainable without an interactive tap; 'error' = the
+// last cycle failed and the scheduler is retrying with backoff. Emitted by the
+// push path here AND by the sync scheduler's cycles, so pull-only sessions get
+// a live pill too (they used to show a frozen state forever).
+let _syncState = 'idle';
 let _pendingPush = false;
 let _connWatched = false;
 
@@ -1252,7 +1427,7 @@ export function onSyncState(fn) {
   return () => _statusListeners.delete(fn);
 }
 
-function setSyncState(s) {
+export function setSyncState(s) {
   _syncState = s;
   for (const fn of _statusListeners) { try { fn(s); } catch {} }
 }
@@ -1267,6 +1442,7 @@ async function pushNow() {
     // sync" also covers merges that arrive via the debounced push path.
     await pullMergePushCycle(_syncClient, _exportFn, _importFn, {
       snapshotFn: () => putSnapshot('pre-sync'),
+      trigger: 'write',
     });
     const rearm = _pendingPush; // an edit landed mid-cycle and may have missed the export
     _pendingPush = false;
@@ -1279,14 +1455,23 @@ async function pushNow() {
   }
 }
 
+// The scheduler routes write-triggered cycles through itself (retry/backoff/
+// client re-init/log). When registered, the debounce timer pokes it instead of
+// calling pushNow directly — and the "no client yet" case is no longer a
+// silent no-op, because the scheduler can establish the client.
+let _writePoker = null;
+export function setWritePoker(fn) { _writePoker = fn; }
+
 export function debouncedPush(exportFn, importFn, delayMs = 3000) {
   markLocalDirty();
-  if (!_syncClient) return;
   _exportFn = exportFn;
   if (importFn) _importFn = importFn;
   if (_pushTimer) clearTimeout(_pushTimer);
   _pushTimer = setTimeout(() => {
     _pushTimer = null;
+    if (_writePoker) { _writePoker('write'); return; }
+    // Legacy fallback (no scheduler wired): the old direct-push behavior.
+    if (!_syncClient) return;
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       _pendingPush = true;
       setSyncState('offline');
@@ -1296,13 +1481,28 @@ export function debouncedPush(exportFn, importFn, delayMs = 3000) {
   }, delayMs);
 }
 
+// Fire a pending debounced push immediately (page hiding/unloading) —
+// best-effort: the browser may still kill the tab mid-cycle, in which case
+// the persisted dirty flag finishes the job on the next launch.
+export function flushDebouncedPush() {
+  if (!_pushTimer) return;
+  clearTimeout(_pushTimer);
+  _pushTimer = null;
+  if (_writePoker) { _writePoker('flush'); return; }
+  if (_syncClient && (typeof navigator === 'undefined' || navigator.onLine)) pushNow();
+}
+
 export function watchConnectivity() {
   if (_connWatched || typeof window === 'undefined') return;
   _connWatched = true;
   window.addEventListener('offline', () => setSyncState('offline'));
   window.addEventListener('online', () => {
+    // With the scheduler wired, connectivity returning runs a FULL cycle (the
+    // old handler only pushed, never pulled, and could claim 'synced' without
+    // a single Drive round-trip after an offline boot).
+    if (_writePoker) { _writePoker('online'); return; }
     if (_pendingPush && _syncClient && _exportFn) pushNow();
-    else setSyncState(_syncClient ? 'synced' : 'idle');
+    else setSyncState('idle');
   });
   if (typeof navigator !== 'undefined' && !navigator.onLine) setSyncState('offline');
 }

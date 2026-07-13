@@ -118,6 +118,21 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
 5. ✅ **`entangle.js`** — *done:* `modes.skeleton` now initialized to `false` explicitly.
 6. **`looper-audio.js stopRecording`** uses `setTimeout` to wait for the OUT boundary — fragile
    under tab-throttling; the worklet has sample-accurate timing it could use.
+7. **Port mind's Drive token-lifecycle fixes to setlist + qualia (P2).** The mind sync automation
+   pass (2026-07) established ground truth: GIS `requestAccessToken({prompt:'none'})` is **always a
+   popup** (no iframe path in the token client), so a gestureless "silent renew" is popup-blocked in
+   most browsers — and capturing one ~1h token at client init 401s forever in long sessions.
+   `setlist/gdrive-backup.js` and `qualia/gdrive.js` still do both (their docs repeat the
+   hidden-iframe claim). Port mind's pattern: per-request `driveFetch` with one 401→renew→retry +
+   gesture-scoped renewal (`armGestureRenewal`) + throttled background attempts. Mind's fix also
+   supersedes setlist finding G3 (reconnect visibility) as the model to copy.
+8. **mind: `changes.list` freshness peek (P3).** The scheduler heartbeat peeks via three
+   `files.list` calls; Drive's `changes.list` with a persisted `startPageToken` (supported under
+   `drive.file`; the cursor never expires) would make it one cheap request and detect attachment
+   binaries too. Quota is a non-issue at current cadence (~2-7 req/min/device vs 12k/min/user) —
+   do it if the cadence ever tightens or the corpus grows shards. A `changes.watch` webhook +
+   Web Push relay (true realtime pings + closed-app wake on Android) would need a small Worker
+   (patterned on `workers/setlist-sync` + `workers/entangle-signal`); park until polling feels slow.
 
 ## E. Documentation drifts (most fixed in this pass — keep them fixed)
 

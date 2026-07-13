@@ -82,6 +82,7 @@ const buildStamp = readBuildStamp();
       border-radius: 999px;
     }
     .mn-dock-btn {
+      position: relative;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -97,6 +98,22 @@ const buildStamp = readBuildStamp();
       font-family: var(--font-mono);
       cursor: pointer;
     }
+    /* Sync-attention dot on the home button — visible from every view, since
+       the status pill itself only lives on the home header. */
+    .mn-dock-dot {
+      position: absolute;
+      top: 0.25rem;
+      right: 0.45rem;
+      width: 0.45rem;
+      height: 0.45rem;
+      border-radius: 50%;
+      display: none;
+      pointer-events: none;
+    }
+    .mn-dock[data-mn-sync="reconnect"] .mn-dock-dot { display: block; background: var(--pink); }
+    .mn-dock[data-mn-sync="error"] .mn-dock-dot,
+    .mn-dock[data-mn-sync="pending"] .mn-dock-dot { display: block; background: var(--amber); }
+    .mn-dock[data-mn-sync="offline"] .mn-dock-dot { display: block; background: var(--text-muted); }
     .mn-dock-btn:hover { color: var(--text); background: var(--surface-2); }
     .mn-dock-icon { font-size: 1.15rem; line-height: 1; }
     .mn-dock-label { font-size: 0.58rem; letter-spacing: 0.05em; }
@@ -732,6 +749,7 @@ const buildStamp = readBuildStamp();
     .mn-sync-pill[data-state="syncing"] { color: var(--cyan); }
     .mn-sync-pill[data-state="pending"], .mn-sync-pill[data-state="offline"] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
     .mn-sync-pill[data-state="reconnect"] { color: var(--pink); border-color: color-mix(in srgb, var(--pink) 40%, var(--border)); }
+    .mn-sync-pill[data-state="error"] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
 
     /* ── Backlinks / link picker ── */
     .mn-backlinks { margin-bottom: 1rem; }
