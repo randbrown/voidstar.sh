@@ -3563,7 +3563,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>4</kbd></span><span class="ctrl-lbl">loop play / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>5</kbd><kbd>6</kbd></span><span class="ctrl-lbl">record start / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>7</kbd></span><span class="ctrl-lbl">grab (retro-loop)</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>;</kbd><kbd>'</kbd><kbd>\</kbd></span><span class="ctrl-lbl">freeze — grab/layer · pop · re-grab top</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>;</kbd><kbd>'</kbd><kbd>\</kbd><kbd>⌫</kbd></span><span class="ctrl-lbl">freeze — grab/layer · pop · re-grab top · clear stack</span></div>
     </div>
 
     <div class="ctrls-sec">knobs <span class="ctrls-tag">DOIO encoders — turn · push</span></div>
@@ -3722,7 +3722,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
       <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — EQ, comp, drives, amp, cab, delay → reverb, pan on the rig signal">strip</button>
       <button class="ctrl-btn" id="btn-rig-tuner" title="Strobe tuner — Peterson-style strobe reading the raw rig input (pre-distortion); bands freeze when in tune">tune</button>
-      <button class="ctrl-btn" id="btn-rig-freeze" title="Freeze (;) — grab the last moment of the processed signal as an endless pad, LAYERING a new pad each tap (Frippertronics stack). Pop a layer with ' · re-grab top with \ · settings + clear under the ▾. Layers auto-level (constant-RMS bus + limiter).">frz</button>
+      <button class="ctrl-btn" id="btn-rig-freeze" title="Freeze (;) — grab the last moment of the processed signal as an endless pad, LAYERING a new pad each tap (Frippertronics stack). Pop a layer with ' · re-grab top with \ · clear the stack with ⌫ · settings under the ▾. Layers auto-level (constant-RMS bus + limiter).">frz</button>
       <button class="ctrl-btn rig-collapse" id="btn-rig-freeze-cfg" title="Freeze settings + stack controls — level, grain, release, pop / re-grab / clear">▾</button>
       <button class="ctrl-btn" id="btn-rig-loop" title="Looper — record, layer, and loop your signal">loop</button>
       <span id="rig-scope-gain-wrap" class="rig-scope-gain-wrap"></span>
@@ -3766,7 +3766,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span class="rig-frz-sep">stack</span>
       <button class="ctrl-btn" id="btn-freeze-pop" title="Pop (') — remove the top layer with a release fade; the remaining layers swell to hold the loudness">pop</button>
       <button class="ctrl-btn" id="btn-freeze-regrab" title="Re-grab (\) — replace the TOP layer with a fresh grab (short crossover), without adding a layer">re-grab</button>
-      <button class="ctrl-btn" id="btn-freeze-clear" title="Clear — release the whole stack (each layer fades over the release time)">clear</button>
+      <button class="ctrl-btn" id="btn-freeze-clear" title="Clear (⌫) — release the whole stack (each layer fades over the release time)">clear</button>
     </div>
   </section>
 
