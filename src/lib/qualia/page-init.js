@@ -2730,6 +2730,9 @@ export function initQualiaPage() {
       try { if (_pauseAudioState.strudel) strudel.stopPlayback?.(); } catch (e) { console.warn('[qualia] pause strudel stop failed:', e); }
       try { if (_pauseAudioState.seq)     sequencer.stop?.();       } catch (e) { console.warn('[qualia] pause seq stop failed:', e); }
       try { if (_pauseAudioState.looper)  looper.stop?.();          } catch (e) { console.warn('[qualia] pause looper stop failed:', e); }
+      // The freeze drone is an independent bus, not a loop voice — brake it too
+      // so pause silences the whole rig (it resumes in phase on unpause).
+      try { looper.setFreezePaused?.(true); } catch (e) { console.warn('[qualia] pause freeze failed:', e); }
       try { if (vocoder?.isActive?.())    vocoder.setMuted?.(true); } catch (e) { console.warn('[qualia] pause vocoder mute failed:', e); }
     } else if (!on && _pauseAudioState) {
       const s = _pauseAudioState;
@@ -2742,6 +2745,7 @@ export function initQualiaPage() {
       try { if (s.strudel) strudel.play?.(); } catch (e) { console.warn('[qualia] resume strudel failed:', e); }
       try { if (s.seq)     sequencer.play?.(); } catch (e) { console.warn('[qualia] resume seq failed:', e); }
       try { if (s.looper)  looper.play?.(); } catch (e) { console.warn('[qualia] resume looper failed:', e); }
+      try { looper.setFreezePaused?.(false); } catch (e) { console.warn('[qualia] resume freeze failed:', e); }
       try { vocoder?.setMuted?.(s.vocoderMuted); } catch (e) { console.warn('[qualia] resume vocoder unmute failed:', e); }
     }
     btnPause.classList.toggle('active', on);

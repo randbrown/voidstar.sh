@@ -3677,6 +3677,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     freezePush, freezePop, freezeRegrab, freezeClear,
     isFrozen: () => looperAudio.isFrozen(),
     freezeDepth: () => looperAudio.freezeDepth(),
+    // Pause gate for the freeze drone — page-init's pause brakes it with the
+    // loops/transports, then restores it (stack intact) on resume.
+    setFreezePaused: (on) => looperAudio.setFreezePaused(on),
     play: playAll, stop,
     perFrame,
     getConfig, setConfig,
