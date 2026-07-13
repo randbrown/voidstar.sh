@@ -12,23 +12,96 @@ listens for them. Open the in-app legend any time with `?` (or click the hints
 strip, bottom-right). For lid-shut / screen-off control there's also a **MIDI
 mode** (reflash the pad) — see [MIDI mode](#midi-mode-full-control-surface) below.
 
-## Layout
+## Three layers
 
-| Keys (left → right) | Action | Sends |
-|---|---|---|
-| **Row 1** | tuner · earth drive · metal zone · rig panel show/hide | `0` `1` `2` `O` |
-| **Row 2** | loop play-stop · rec start · rec stop · grab (retro-loop) | `4` `5` `6` `7` |
-| **Row 3** | cam size · next camera · mirror · rotate | `C` `8` `M` `R` |
-| **Row 4** | quale prev · quale next · phase prev · phase next | `⇧V` `V` `⇧I` `I` |
+The pad is organized into three layers so every qualia control fits without
+crowding one board:
 
-| Knob | Turn | Push |
-|---|---|---|
-| **Big** | volume (`,` / `.`) | pause (`Space`) |
-| **Left small** | delay mix (`[` / `]`) | delay on/off (`D`) |
-| **Right small** | reverb mix (`-` / `=`) | reverb on/off (`9`) |
+- **Layer 0 — PERFORM:** the live-reflex essentials (freeze, quale/phase moves,
+  drives, transport-lite). Self-sufficient for a normal song.
+- **Layer 1 — AUDIO:** the detailed audio surface (freeze + full looper transport
+  + rig drives).
+- **Layer 2 — VIDEO:** the detailed video surface (all fx toggles + cameras +
+  pose/walk).
+
+Switch layers with the **top-left / top-right keys** — they send QMK layer jumps
+(`TO(1)` = audio, `TO(2)` = video, `TO(0)` = home), which flip the pad *locally*
+and send nothing to qualia.
+
+**Layer colors** (in the app's `?` legend the layers are swatched cyan / amber /
+pink for perform / audio / video). These colors are *not* in the keymap file —
+the Launcher's Backlight is a single **global** effect (per-key / zone, but not
+per-layer), and the exported keymap JSON carries no lighting data. True
+"LEDs recolor when I switch layers" needs a custom **QMK firmware** flash, e.g.:
+
+```c
+// keymap.c — recolor the whole board per active layer
+layer_state_t layer_state_set_user(layer_state_t state) {
+    switch (get_highest_layer(state)) {
+        case 1: rgb_matrix_sethsv_noeeprom(HSV_GOLD);    break; // AUDIO
+        case 2: rgb_matrix_sethsv_noeeprom(HSV_MAGENTA); break; // VIDEO
+        default: rgb_matrix_sethsv_noeeprom(HSV_CYAN);   break; // PERFORM
+    }
+    return state;
+}
+```
+
+That's a compile-and-flash (QMK toolchain), not a Launcher Import.
+
+### Layer 0 — PERFORM
+| | col 1 | col 2 | col 3 | col 4 |
+|---|---|---|---|---|
+| **row 1** | → AUDIO layer | → VIDEO layer | strudel play/stop `⇧S` | zen `Z` |
+| **row 2** | tuner `0` | earth drive `1` | metal zone `2` | vox mute/live `⇧W` |
+| **row 3** | freeze grab `;` | pop `'` | re-grab `\` | clear `⌫` |
+| **row 4** | quale ◀ `⇧V` | quale ▶ `V` | phase ◀ `⇧I` | phase ▶ `I` |
+
+### Layer 1 — AUDIO
+| | col 1 | col 2 | col 3 | col 4 |
+|---|---|---|---|---|
+| **row 1** | → HOME (L0) | → VIDEO layer | strudel play/stop `⇧S` | zen `Z` |
+| **row 2** | tuner `0` | earth drive `1` | metal zone `2` | vox mute/live `⇧W` |
+| **row 3** | freeze grab `;` | pop `'` | re-grab `\` | clear `⌫` |
+| **row 4** | loop play/stop `4` | rec start `5` | rec stop `6` | grab (retro) `7` |
+
+### Layer 2 — VIDEO
+| | col 1 | col 2 | col 3 | col 4 |
+|---|---|---|---|---|
+| **row 1** | → HOME (L0) | → AUDIO layer | pose `P` | cam walk `U` |
+| **row 2** | skeleton `J` | sparks `F` | aura `G` | ripples `B` |
+| **row 3** | cam size `C` | next camera `8` | mirror `M` | rotate `R` |
+| **row 4** | quale ◀ `⇧V` | quale ▶ `V` | phase ◀ `⇧I` | phase ▶ `I` |
+
+### Knobs
+**Turns are global** (one map shared by every layer):
+
+| Knob | Turn |
+|---|---|
+| **Big** | rig master volume (`,` / `.`) |
+| **Left small** | delay mix (`[` / `]`) |
+| **Right small** | reverb mix (`-` / `=`) |
+
+**Pushes are per-layer:**
+
+| Knob push | L0 PERFORM | L1 AUDIO | L2 VIDEO |
+|---|---|---|---|
+| **Big** | pause (`Space`) | pause | pause |
+| **Left small** | delay on/off (`D`) | delay on/off (`D`) | blackout (`H`) |
+| **Right small** | reverb on/off (`9`) | reverb on/off (`9`) | fullscreen (`X`) |
+
+> **Layer-2 knob scrub (quale / phase):** the exported keymap carries a *single
+> global* encoder map, so per-layer knob **turns** can't be baked into the import.
+> If your Launcher build exposes per-layer encoders, set Layer 2's left knob to
+> `⇧V`/`V` (quale ◀▶) and right knob to `⇧I`/`I` (phase ◀▶) in the knob editor.
+> Otherwise the turns stay delay-mix / reverb-mix / volume on all three layers —
+> still useful, just not the scrub.
 
 ## Notes
 
+- **Freeze** is on Layers 0 **and** 1 so the live grab (`;`) is always a tap away,
+  while pop / re-grab / clear ride the audio layer. `⌫` clears the whole stack.
+- **`⇧S` / `⇧W`** act on the *transport / mute* (strudel play-stop, vox mute) —
+  the un-shifted `S` / `W` still open those panels on a full keyboard.
 - **Volume** = the rig master fader — your pedal-steel signal + loops (the
   mixer's "Rig master"); MIDI CC7 drives the same. Turns nudge ±0.05 per detent.
 - **Left / right small knobs:** the launcher renders these as encoder 0 (left)
@@ -46,13 +119,12 @@ mode** (reflash the pad) — see [MIDI mode](#midi-mode-full-control-surface) be
   display. See [MIDI mode](#midi-mode-full-control-surface) below. Keystrokes and
   MIDI dispatch through the same action map in `page-init.js`, so they always
   behave identically.
-- **Screen off (blackout):** `H` (topbar ☾) blacks the viewport and suspends the
-  visual render to free the GPU — **the audio engine, looper, sequencer and the
-  pad keep running**; tap the dark screen or press `H` again to wake. The 16-key
-  pad is fully mapped above, so bind `H` to a freed slot if you want it on the
-  pad. Note this is an *in-app* blackout: a web page can't power down the panel
-  backlight. For a real backlight-off, sleep the display at the OS level
-  (macOS: `Ctrl`+`Shift`+`Power`, or bind `pmset displaysleepnow` via
+- **Screen off (blackout):** `H` (topbar ☾, or the Layer-2 left-knob push) blacks
+  the viewport and suspends the visual render to free the GPU — **the audio
+  engine, looper, sequencer and the pad keep running**; tap the dark screen or
+  press `H` again to wake. Note this is an *in-app* blackout: a web page can't
+  power down the panel backlight. For a real backlight-off, sleep the display at
+  the OS level (macOS: `Ctrl`+`Shift`+`Power`, or bind `pmset displaysleepnow` via
   Hammerspoon) and keep the Mac awake (`caffeinate -i`, or "prevent sleep when
   display is off"). Heads-up: HID keystrokes wake a sleeping Mac display, so the
   pad's *keys* re-light it — the true-MIDI knobs (CC1/2/7) don't.
@@ -63,6 +135,10 @@ The default keymap sends keystrokes, which only reach the **focused** window.
 For lid-shut / screen-off gigs, reflash the pad to send **MIDI** instead: Note-On
 messages reach a backgrounded or occluded tab, and (unlike HID keystrokes) don't
 wake a sleeping macOS display. qualia listens on **any channel** (Chromium only).
+
+MIDI mode maps the **PERFORM-layer** action set (`MIDI_NOTE_ACTIONS` in
+`page-init.js`); the freeze stack, `⇧S`/`⇧W` transport, and the per-layer video
+banks are keystroke-only for now.
 
 **Buttons → Note-On** (velocity > 0 = press; qualia ignores note-off / velocity 0):
 
@@ -101,4 +177,6 @@ there if your firmware sends a different base note. Encoders must send
 
 The export carries an `"MD5"` integrity field computed as
 `md5(JSON.stringify(keymap))`. If you hand-edit the matrix, recompute it or the
-launcher may reject the file.
+launcher may reject the file. Keycodes are stored as raw QMK quantum-keycode
+integers (basic keys, `LSFT(kc) = 0x200 | kc`, and layer jumps `TO(n) = 0x5200 |
+n`); the three-layer file was generated from that mapping.

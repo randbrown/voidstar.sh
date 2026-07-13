@@ -467,6 +467,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   //   freezeLimiter (soft clip) → rigMaster
   let _freezeStack = [];           // [{ source, gain }] — index 0 oldest, last = top
   let _freezeBus = null, _freezeLimiter = null;
+  let _freezePaused = false;       // pause gate — holds the whole bus silent (see setFreezePaused)
 
   function ensureFreezeBus() {
     if (_freezeBus) return;
@@ -483,13 +484,26 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   function isFrozen() { return _freezeStack.length > 0; }
   function freezeDepth() { return _freezeStack.length; }
 
-  // Constant-RMS bus gain for the current layer count.
+  // Constant-RMS bus gain for the current layer count. The pause gate holds the
+  // whole bus silent (the pads keep looping in phase, so unpause resumes the
+  // drone seamlessly). The overall rig mute is handled downstream by rigMaster.
   function freezeBusTarget() {
+    if (_freezePaused) return 0;
     const n = _freezeStack.length;
     return n > 0 ? _freezeCfg.level / Math.sqrt(n) : 0;
   }
   function applyFreezeBusGain() {
     if (_freezeBus) ramp(_freezeBus.gain, freezeBusTarget());
+  }
+
+  // Pause gate for the freeze bus — brakes the infinite-sustain drone alongside
+  // the loops/transports when the set is paused, then restores it (stack intact)
+  // on resume. Distinct from the rig mute, which silences the freeze downstream
+  // via rigMaster; this lets the spacebar "tap brake on everything" reach the
+  // freeze pad too.
+  function setFreezePaused(on) {
+    _freezePaused = !!on;
+    applyFreezeBusGain();
   }
 
   function getFreezeConfig() { return { ..._freezeCfg }; }
@@ -1399,7 +1413,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     getTunerAnalyser: () => tunerAnalyser,
     // Freeze / infinite-sustain STACK (see freezePush above).
     toggleFreeze, isFrozen, freezeStart, freezeStop, getFreezeConfig, setFreezeConfig,
-    freezePush, freezePop, freezeRegrab, freezeDepth,
+    freezePush, freezePop, freezeRegrab, freezeDepth, setFreezePaused,
     // Current monophonic pitch of the clean (pre-strip) input, in Hz, or -1
     // when the rig isn't capturing / the signal is unvoiced or too quiet. Reads
     // the tuner analyser's newest window and autocorrelates it — allocation-

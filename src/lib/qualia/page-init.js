@@ -2734,6 +2734,9 @@ export function initQualiaPage() {
       try { if (_pauseAudioState.strudel) strudel.stopPlayback?.(); } catch (e) { console.warn('[qualia] pause strudel stop failed:', e); }
       try { if (_pauseAudioState.seq)     sequencer.stop?.();       } catch (e) { console.warn('[qualia] pause seq stop failed:', e); }
       try { if (_pauseAudioState.looper)  looper.stop?.();          } catch (e) { console.warn('[qualia] pause looper stop failed:', e); }
+      // The freeze drone is an independent bus, not a loop voice — brake it too
+      // so pause silences the whole rig (it resumes in phase on unpause).
+      try { looper.setFreezePaused?.(true); } catch (e) { console.warn('[qualia] pause freeze failed:', e); }
       try { if (vocoder?.isActive?.())    vocoder.setMuted?.(true); } catch (e) { console.warn('[qualia] pause vocoder mute failed:', e); }
     } else if (!on && _pauseAudioState) {
       const s = _pauseAudioState;
@@ -2746,6 +2749,7 @@ export function initQualiaPage() {
       try { if (s.strudel) strudel.play?.(); } catch (e) { console.warn('[qualia] resume strudel failed:', e); }
       try { if (s.seq)     sequencer.play?.(); } catch (e) { console.warn('[qualia] resume seq failed:', e); }
       try { if (s.looper)  looper.play?.(); } catch (e) { console.warn('[qualia] resume looper failed:', e); }
+      try { looper.setFreezePaused?.(false); } catch (e) { console.warn('[qualia] resume freeze failed:', e); }
       try { vocoder?.setMuted?.(s.vocoderMuted); } catch (e) { console.warn('[qualia] resume vocoder unmute failed:', e); }
     }
     btnPause.classList.toggle('active', on);
@@ -6227,6 +6231,9 @@ export function initQualiaPage() {
     freeze:       () => document.getElementById('btn-rig-freeze')?.click(),   // grab / layer
     freezePop:    () => looper.freezePop?.(),
     freezeRegrab: () => looper.freezeRegrab?.(),
+    freezeClear:  () => looper.freezeClear?.(),
+    strudelPlayStop: () => document.getElementById(strudel.isPlaying?.() ? 'btn-strudel-stop' : 'btn-strudel-play')?.click(),
+    voxMute:      () => document.getElementById('btn-vocoder-mute')?.click(),
     pause:        () => btnPause.click(),
     blackout:     () => setBlackout(!core.isRenderSuspended()),
   };
@@ -6276,9 +6283,17 @@ export function initQualiaPage() {
     switch (e.key.toLowerCase()) {
       case 'v': if (e.shiftKey) padActions.qualePrev(); else padActions.qualeNext(); break;   // quale prev / next
       case 'a': btnAudio.click(); break;
-      case 's': document.getElementById('btn-strudel').click(); break;
+      case 's':
+        // ⇧S = play / pause the pattern (transport); S alone = show/hide panel.
+        if (e.shiftKey) padActions.strudelPlayStop();
+        else document.getElementById('btn-strudel').click();
+        break;
       case 'q': document.getElementById('btn-sequencer').click(); break;
-      case 'w': document.getElementById('btn-vocoder').click(); break;
+      case 'w':
+        // ⇧W = mute / unmute the vox output; W alone = show/hide panel.
+        if (e.shiftKey) padActions.voxMute();
+        else document.getElementById('btn-vocoder').click();
+        break;
       case 'o':
         // O = show/hide the rig panel. Shift+O = switch it between mini
         // (pedalboard) and full, opening it first if it's closed.
@@ -6355,6 +6370,7 @@ export function initQualiaPage() {
       case ';': padActions.freeze(); break;                      // Freeze — grab / layer a pad
       case "'": padActions.freezePop(); break;                   // Freeze — pop the top layer
       case '\\': padActions.freezeRegrab(); break;               // Freeze — re-grab the top layer
+      case 'backspace': padActions.freezeClear(); e.preventDefault(); break;   // Freeze — clear the whole stack
       case '[': looper.nudgeStripParam?.('delay', 'mix', -0.05); break;
       case ']': looper.nudgeStripParam?.('delay', 'mix', +0.05); break;
       case '-': looper.nudgeStripParam?.('reverb', 'mix', -0.05); break;
