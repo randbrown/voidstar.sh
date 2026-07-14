@@ -374,14 +374,34 @@ method ever closes over a token string, so sessions outliving the ~1h token
 keep syncing); a **gesture-scoped renewal** (`armGestureRenewal` — once the
 token lapses, the user's next tap/keypress anywhere runs the `prompt:'none'`
 grant inside the activation window, usually a sub-second popup flash, then
-re-kicks sync); and a throttled background attempt (works where the user
-granted the site popup permission; failures are throttled 5 min and latch the
-`reconnect` pill state). Only a genuinely impossible silent grant (signed out
-of Google, consent revoked) leaves the pink "reconnect drive" pill / dock dot,
-and one tap on it re-auths interactively (`prompt:''` — silent when it can,
-consent when it must, in one gesture). `setlist/gdrive-backup.js` and
-`qualia/gdrive.js` still use the old popup-blind silent path — porting mind's
-pattern is on the maintenance backlog.
+re-kicks sync); and a throttled background attempt (works where popups from
+the window are allowed — notably the **installed desktop app**; failures are
+throttled 5 min and latch the `reconnect` pill state). Two hard-won details:
+
+- **Every token request carries a stored account `hint`** (the connected
+  account's email, captured from Drive `about` after each grant, cleared on
+  sign-out). Without it, a browser profile signed into several Google
+  accounts fails EVERY silent renewal with `account_selection_required` —
+  interactive auth works, silent auth never does, and the app lands back on
+  "reconnect drive" an hour after each sign-in.
+- **Renewal failures are classified by `e.code`.** A popup that never opened
+  (`popup_failed_to_open`) retries on the 5-minute throttle — a gesture
+  attempt can still succeed where a blocked background one failed. But when
+  the popup opened and **Google itself denied the silent grant**
+  (`interaction_required` & co.), timer retries are doomed — and on the
+  installed desktop app each retry is a *visible* popup flash — so a denial
+  latches a 60-minute throttle on ALL silent attempts (`_renewDeniedAt`).
+  Interactive sign-in (the pill) is the recovery path and resets every stamp.
+
+Only a genuinely impossible silent grant (signed out of Google, consent
+revoked, ambiguous account) leaves the pink "reconnect drive" pill / dock
+dot, and one tap on it re-auths interactively (`prompt:''` — silent when it
+can, consent when it must, in one gesture). Renewal failures land in the sync
+event log with their OAuth code, and diagnostics shows the stored hint + the
+last failure reason. setlist ported the renewal machinery into
+`gdrive-backup.js` (2026-07-13) but not yet the hint/denial layers;
+`qualia/gdrive.js` still uses the old popup-blind silent path — both are on
+the maintenance backlog.
 
 **Sync diagnostics.** Each app's Drive settings has a read-only *diagnostics*
 troubleshooter (Settings → google drive sync → *diagnostics*; qualia: inside the

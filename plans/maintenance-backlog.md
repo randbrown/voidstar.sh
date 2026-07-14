@@ -122,10 +122,14 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
    pass (2026-07) established ground truth: GIS `requestAccessToken({prompt:'none'})` is **always a
    popup** (no iframe path in the token client), so a gestureless "silent renew" is popup-blocked in
    most browsers — and capturing one ~1h token at client init 401s forever in long sessions.
-   `setlist/gdrive-backup.js` and `qualia/gdrive.js` still do both (their docs repeat the
-   hidden-iframe claim). Port mind's pattern: per-request `driveFetch` with one 401→renew→retry +
-   gesture-scoped renewal (`armGestureRenewal`) + throttled background attempts. Mind's fix also
-   supersedes setlist finding G3 (reconnect visibility) as the model to copy.
+   Setlist ported the renewal machinery (single-flight + throttles + `armGestureRenewal`, 2026-07-13);
+   `qualia/gdrive.js` still does none of it (its docs repeat the hidden-iframe claim). Still to port
+   to BOTH from mind's 2026-07-14 pass: the stored **account `hint`** on every token request (a
+   multi-account profile fails every `prompt:'none'` renewal with `account_selection_required`
+   without it) and the **denial latch** (`_renewDeniedAt` — when Google answers
+   `interaction_required` & co., stop timer retries for 60 min instead of flashing a doomed popup
+   every 5 min on the installed desktop app). Mind's fix also supersedes setlist finding G3
+   (reconnect visibility) as the model to copy.
 8. **mind: `changes.list` freshness peek (P3).** The scheduler heartbeat peeks via three
    `files.list` calls; Drive's `changes.list` with a persisted `startPageToken` (supported under
    `drive.file`; the cursor never expires) would make it one cheap request and detect attachment

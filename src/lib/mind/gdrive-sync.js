@@ -30,6 +30,11 @@ const TOKEN_KEY = `${NS}.token`;
 // makes getClientId() always truthy, so without this a first-time visitor who
 // never signed in would read as "reconnect" rather than "sign in".
 const EVER_KEY = `${NS}.everConnected`;
+// The connected Google account's email, captured from Drive `about` after each
+// sign-in and passed back as `hint` on every token request. Without it, a
+// browser profile signed into SEVERAL Google accounts fails every prompt:'none'
+// renewal with "account selection required" — the hourly reconnect treadmill.
+const HINT_KEY = `${NS}.accountEmail`;
 const LAST_BACKUP_KEY = `${NS}.lastBackupAt`;
 const DEVICE_NAME_KEY = `${NS}.deviceName`;
 // Legacy single-file layout (pre-sharding). Still READ during migration and
@@ -235,6 +240,7 @@ export async function listNoteVersions(noteId, { limit = 20, onProgress } = {}) 
 export function disconnect() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(EVER_KEY);
+  localStorage.removeItem(HINT_KEY); // next sign-in shows the account chooser again
   setSyncState('idle'); // a lingering 'reconnect'/'error' would nag after a deliberate sign-out
 }
 
@@ -273,7 +279,7 @@ export function logSyncEvent(trigger, outcome, detail = '') {
     if (!Array.isArray(log)) log = []; // self-heal a corrupt value
     const top = log[0];
     const d = detail ? String(detail).slice(0, 200) : '';
-    if (top && top.trigger === trigger && top.outcome === outcome && !d && !top.detail) {
+    if (top && top.trigger === trigger && top.outcome === outcome && (top.detail || '') === d) {
       top.ts = Date.now();
       top.n = (top.n || 1) + 1;
     } else {
@@ -299,9 +305,12 @@ export function setSchedulerDiag(fn) { _schedDiagProvider = fn; }
 // Drive round-trip (silent token + peek) so "can this device reach Drive right
 // now?" is answered without any of the merge/import side effects of a sync.
 export async function gatherDiagnostics({ live = false } = {}) {
-  let shardFiles = 0, foldStamp = '', dirtyShards = '0';
+  let shardFiles = 0, foldStamp = '';
   try { const s = JSON.parse(localStorage.getItem(SHARD_STATE_KEY)); if (s) { shardFiles = Object.keys(s.files || {}).length; foldStamp = s.foldStamp || ''; } } catch {}
-  try { const d = JSON.parse(localStorage.getItem(DIRTY_SHARDS_KEY)); if (d) dirtyShards = Array.isArray(d) ? String(d.length) : String(d); } catch {}
+  const dirty = getDirtyShards();
+  const dirtyShards = dirty.all ? 'all (full re-hash queued)'
+    : [dirty.index ? 'index' : null, dirty.buckets.length ? `${dirty.buckets.length} shard(s)` : null]
+      .filter(Boolean).join(' + ') || 'none';
 
   const report = {
     app: 'mind',
@@ -314,6 +323,8 @@ export async function gatherDiagnostics({ live = false } = {}) {
       ] },
       { title: 'Auth', rows: [
         ['access token', tokenRow(TOKEN_KEY)],
+        ['account hint', localStorage.getItem(HINT_KEY) || '(none — captured on next sign-in)'],
+        ['last silent renew failure', _lastRenewError || '(none this session)'],
         ['needs reconnect', needsReconnect() ? 'YES — tap “sign in with Google”' : 'no'],
       ] },
       { title: 'Sync', rows: [
@@ -405,16 +416,34 @@ function getStoredToken() {
 // Renewal-failure throttles. GIS "silent" renewal (prompt:'none') is really a
 // POPUP under the hood (there is no iframe path in the token client), so a
 // background attempt without transient user activation is popup-blocked in
-// most browsers. Two stamps because the failure modes differ:
+// most browsers. Three stamps because the failure modes differ:
 //   _renewFailedBgAt   — a gestureless attempt failed (usually popup-blocked);
 //                        gates only further BACKGROUND attempts. A gesture
 //                        attempt can still succeed where this one failed.
-//   _renewFailedRealAt — an attempt WITH a gesture failed (signed out of
-//                        Google, consent revoked); gates every silent attempt,
-//                        or each tap would flash a doomed popup.
+//   _renewFailedRealAt — an attempt WITH a gesture failed; gates every silent
+//                        attempt, or each tap would flash a doomed popup.
+//   _renewDeniedAt     — the popup OPENED and Google itself answered "no
+//                        silent grant possible" (no/ambiguous session, consent
+//                        gone). Timer retries cannot succeed — and on the
+//                        installed desktop app, where popups from the app
+//                        window are NOT blocked, each retry is a visible popup
+//                        flash. Latches a much longer throttle on ALL silent
+//                        attempts; the reconnect pill (interactive auth) is
+//                        the recovery path.
 let _renewFailedBgAt = 0;
 let _renewFailedRealAt = 0;
+let _renewDeniedAt = 0;
+let _lastRenewError = ''; // shown in diagnostics — renewSilentlyOnce would otherwise swallow it
 const RENEW_RETRY_MS = 5 * 60_000;
+const RENEW_DENIED_RETRY_MS = 60 * 60_000;
+
+// OAuth codes Google returns when the prompt:'none' popup opened but a silent
+// grant is impossible without interaction (vs. popup_failed_to_open etc.,
+// where the attempt never reached Google and a gesture retry can still work).
+const DENIED_CODES = new Set([
+  'interaction_required', 'login_required', 'consent_required',
+  'account_selection_required', 'immediate_failed', 'access_denied',
+]);
 
 function storeToken(token, expiresIn) {
   localStorage.setItem(TOKEN_KEY, JSON.stringify({
@@ -424,29 +453,55 @@ function storeToken(token, expiresIn) {
   try { localStorage.setItem(EVER_KEY, '1'); } catch {}
   _renewFailedBgAt = 0;
   _renewFailedRealAt = 0;
+  _renewDeniedAt = 0;
+  _lastRenewError = '';
 }
 
-// One token request. The `prompt` decides the UX: `'none'` renews silently
-// through a hidden iframe (no popup, no gesture) and errors if interaction is
-// required; `''` renews silently when it can and otherwise shows the
-// consent/account chooser. A fresh client per call keeps concurrent requests
-// from racing over a shared callback.
+// Remember WHICH Google account granted access (one tiny `about` call — the
+// drive.file scope covers it, fire-and-forget). See HINT_KEY: passing it back
+// as `hint` pins later renewals to the account that holds the consent, so a
+// multi-session profile stops failing every silent renewal. Re-captured on
+// each token grant so sign-out → sign-in with another account updates it.
+function captureAccountHint(token) {
+  fetch('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)', {
+    headers: { 'Authorization': `Bearer ${token}` },
+  }).then((r) => (r.ok ? r.json() : null)).then((data) => {
+    const email = data?.user?.emailAddress;
+    // EVER_KEY guard: a sign-out racing this response must stay signed out.
+    if (email && localStorage.getItem(EVER_KEY) === '1') localStorage.setItem(HINT_KEY, email);
+  }).catch(() => {});
+}
+
+// One token request. The `prompt` decides the UX: `'none'` completes without
+// consent UI and errors if interaction is required (it still rides a popup —
+// see the throttle notes above); `''` auto-grants when it can and otherwise
+// shows the consent/account chooser. A fresh client per call keeps concurrent
+// requests from racing over a shared callback. Rejections carry `e.code` (the
+// OAuth error or the GIS popup failure type) so callers can tell "denied by
+// Google" from "popup never opened".
 function requestTokenOnce(clientId, prompt = '') {
   return new Promise((resolve, reject) => {
+    const hint = localStorage.getItem(HINT_KEY) || '';
     const client = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: SCOPES,
       prompt,
+      ...(hint ? { hint } : {}),
       callback: (response) => {
         if (response.error) {
-          reject(new Error(response.error_description || response.error));
+          const e = new Error(response.error_description || response.error);
+          e.code = response.error; // interaction_required, access_denied, …
+          reject(e);
           return;
         }
         storeToken(response.access_token, parseInt(response.expires_in) || 3600);
+        captureAccountHint(response.access_token);
         resolve(response.access_token);
       },
       error_callback: (err) => {
-        reject(new Error(err.message || err.type || 'Authorization Error'));
+        const e = new Error(err.message || err.type || 'Authorization Error');
+        e.code = err.type; // popup_failed_to_open, popup_closed, unknown
+        reject(e);
       },
     });
     client.requestAccessToken();
@@ -467,11 +522,15 @@ function renewSilentlyOnce(clientId, { gesture = false } = {}) {
     try {
       await loadGis();
       return await requestTokenOnce(clientId, 'none');
-    } catch {
+    } catch (e) {
       const t = getStoredToken(); // another path may have landed a token meanwhile
       if (t) return t;
       if (gesture) _renewFailedRealAt = Date.now();
       else _renewFailedBgAt = Date.now();
+      if (e && DENIED_CODES.has(e.code)) _renewDeniedAt = Date.now();
+      _lastRenewError = !e ? 'unknown'
+        : (e.code && e.code !== e.message ? `${e.code} — ${e.message}` : (e.message || 'unknown'));
+      logSyncEvent('renew', gesture ? 'failed (in gesture)' : 'failed (background)', _lastRenewError);
       if (needsReconnect()) setSyncState('reconnect');
       return null;
     } finally {
@@ -503,7 +562,8 @@ async function getAccessToken({ interactive = true, force = false } = {}) {
     if (localStorage.getItem(EVER_KEY) !== '1') return null;
     if (_renewInflight) return _renewInflight;
     const now = Date.now();
-    if (!force && (now - _renewFailedBgAt < RENEW_RETRY_MS || now - _renewFailedRealAt < RENEW_RETRY_MS)) return null;
+    if (!force && (now - _renewFailedBgAt < RENEW_RETRY_MS || now - _renewFailedRealAt < RENEW_RETRY_MS
+      || now - _renewDeniedAt < RENEW_DENIED_RETRY_MS)) return null;
     return renewSilentlyOnce(clientId);
   }
 
@@ -545,6 +605,7 @@ export function armGestureRenewal(onRenewed) {
     if (ev?.target instanceof Element && ev.target.closest('[data-mn-auth]')) return;
     if (localStorage.getItem(EVER_KEY) !== '1') return;
     if (Date.now() - _renewFailedRealAt < RENEW_RETRY_MS) return;
+    if (Date.now() - _renewDeniedAt < RENEW_DENIED_RETRY_MS) return; // denied by Google — a gesture retry is just as doomed
     if (!gisReady()) { loadGis().catch(() => {}); return; } // warm it for the next tap
     // Synchronous into requestTokenOnce (via renewSilentlyOnce) — no await
     // before the popup, so it opens inside this gesture's activation window.
