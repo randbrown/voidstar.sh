@@ -373,13 +373,27 @@ This codebase intentionally keeps two similarly-named ideas separate:
     buttons. (UI labels deliberately say "backup", never "sync" — see the
     naming note below.) The
     dashboard status pill is tappable (sync now; or `↻ reconnect` when a
-    client is configured but the OAuth token lapsed — a silent refresh is
-    impossible, GIS needs a gesture). The app also auto-pulls **on every
-    fresh page load and whenever it regains focus/visibility**
-    (`watchFocusSync()` in `app.js`, silent-only, debounced 30 s, app-wide,
-    any hash — the load-time pull used to run only when the app opened on
-    the dashboard) so opening it on another device always starts from the
+    client is configured but the OAuth token lapsed and no renewal has
+    landed yet). The app also auto-pulls **on every fresh page load and
+    whenever it regains focus/visibility** (`watchFocusSync()` in `app.js`,
+    silent-only, throttled to one **attempt** per 30 s, app-wide, any hash —
+    the load-time pull used to run only when the app opened on the
+    dashboard) so opening it on another device always starts from the
     latest backup, never a stale local copy.
+  - **Token renewal is popup-bound** (the GIS token client has no iframe
+    path — even `prompt:'none'` rides a popup window), so the backup module
+    uses the same renewal machinery the mind app landed on: a single-flight
+    `prompt:'none'` attempt with 5-minute failure throttles, plus
+    `armGestureRenewal()` — a capture-phase pointerdown/keydown listener
+    that renews the lapsed token synchronously inside the user's next real
+    tap, then re-kicks the auto-pull. Controls that run their own
+    interactive auth carry `data-sl-auth` so the gesture renewal never
+    spends their tap's popup allowance. The focus pull arms its throttle
+    *before* the token work and is in-flight-guarded: a failing renewal
+    popup's open/close bounces focus back to the app window, and arming
+    only on success used to turn that into an endless sign-in popup loop
+    on the installed desktop app (where popups from the app window aren't
+    blocked).
   - **Freshness is checked cheaply, so the automatic pulls cost almost
     nothing.** The load/refocus path goes through `pullMergePushIfStale()`:
     one Drive `files.list` metadata request compares the data file's
@@ -858,7 +872,17 @@ not classes). Constraints to preserve:
   need Drive access (create doc, rebuild doc, backup) must call
   `ensureDriveAccess()` *first*, before any `await` — an async hop first
   means a blocked popup and a silent `error_callback` rejection on
-  Android.
+  Android. Mark such controls with `data-sl-auth` so the app-wide
+  gesture-renewal listener (`armGestureRenewal`) leaves their tap's popup
+  allowance alone.
+- **Background renewals must be throttled and single-flight.** Even
+  `prompt:'none'` opens a popup (no iframe path in the GIS token client).
+  Where popups are *allowed* — the installed desktop app window — an
+  unthrottled retry loop becomes a visible popup blitz: the popup's
+  open/close bounces focus back to the window, refires the focus pull,
+  and spawns the next popup. Throttle attempts (not successes) and
+  collapse concurrent callers onto one in-flight renewal
+  (`renewSilentlyOnce` in `gdrive-backup.js`).
 - **`window.open` after async work is blocked too.** When a long flow ends
   by opening the new doc, `window.open` can return `null` on mobile;
   `showLinkToast()` (`views.js`) is the fallback — a toast holding a real

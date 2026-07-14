@@ -1,7 +1,7 @@
 // Setlist app controller — hash-based routing and view dispatch.
 
 import * as store from './store.js';
-import { initGdriveBackup, isSyncing, setBackupClient, pullMergePushIfStale, debouncedPush, watchConnectivity } from './gdrive-backup.js';
+import { initGdriveBackup, isSyncing, setBackupClient, pullMergePushIfStale, debouncedPush, watchConnectivity, armGestureRenewal, preloadGis } from './gdrive-backup.js';
 import { completeSpotifyLogin } from './spotify-auth.js';
 import { renderDashboard, renderLibrary, renderSetlistView, renderSetlistEdit, renderSongFocus, renderPerformMode, renderSettings, renderAnnotation, renderTrash } from './views.js';
 
@@ -95,13 +95,15 @@ async function route() {
 // The key cross-device case: you edited on your PC, then open the app on your
 // phone — it should start from the latest backup, never a stale local copy,
 // without hunting for a button. Registered once, app-wide, so a fresh load or
-// a return on ANY page pulls. Silent-only (never pops OAuth — GIS needs a
-// real gesture, so an expired token just skips). Cheap when nothing moved:
+// a return on ANY page pulls. Silent-only (never shows consent UI; a token
+// that can't be renewed in the background just skips, and armGestureRenewal
+// picks it up on the next real tap). Cheap when nothing moved:
 // pullMergePushIfStale answers "did Drive change since this device's last
 // cycle?" with one metadata request and only then pays for the full
 // download-merge-push.
 let _focusWatched = false;
 let _lastFocusPull = 0;
+let _focusPullInflight = false;
 const FOCUS_PULL_MIN_MS = 30_000;
 
 function watchFocusSync() {
@@ -110,14 +112,21 @@ function watchFocusSync() {
 
   const onReturn = async () => {
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-    if (isSyncing()) return;
+    if (isSyncing() || _focusPullInflight) return;
     if (Date.now() - _lastFocusPull < FOCUS_PULL_MIN_MS) return;
-
-    const client = await initGdriveBackup({ interactive: false });
-    if (!client) return; // no valid token — reconnect happens via the pill
+    // Throttle ATTEMPTS, not successes — armed before the token work, and
+    // in-flight-guarded above (load fires visibilitychange AND focus nearly
+    // together). The token renewal can open a GIS popup whose open/close
+    // bounces focus back to this window and re-fires this handler; arming
+    // the throttle only after a successful init (the old shape) turned every
+    // failing renewal into an endless sign-in popup loop on the installed
+    // desktop app, where popups from the app window aren't blocked.
     _lastFocusPull = Date.now();
-    setBackupClient(client);
+    _focusPullInflight = true;
     try {
+      const client = await initGdriveBackup({ interactive: false });
+      if (!client) return; // no silent token — armGestureRenewal reconnects on the next real tap
+      setBackupClient(client);
       const { changed } = await pullMergePushIfStale(
         client,
         () => store.exportAll(),
@@ -138,11 +147,19 @@ function watchFocusSync() {
       }
     } catch (e) {
       console.warn('[gdrive-backup] focus pull:', e.message);
+    } finally {
+      _focusPullInflight = false;
     }
   };
 
   document.addEventListener('visibilitychange', onReturn);
   window.addEventListener('focus', onReturn);
+  // Once the ~1h token lapses, the load/refocus renewal above mostly can't
+  // succeed (GIS renewal is popup-bound and needs user activation) — so renew
+  // inside the user's next real tap/keypress instead, then pull right away
+  // (throttle reset: the fresh token should be used now, not 30 s later).
+  armGestureRenewal(() => { _lastFocusPull = 0; onReturn(); });
+  preloadGis();
   // Pull on the initial load too — a fresh tab/session must start from the
   // latest backup no matter which hash it lands on (this used to happen only
   // on the dashboard). If the tab opened in the background, the

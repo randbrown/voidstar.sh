@@ -82,10 +82,11 @@ export function isGdriveBackupEnabled() {
 }
 
 // A client ID is configured but there's no valid (unexpired) token. The
-// background sync path (page load / refocus) first attempts a SILENT renewal
-// (see getAccessToken), so this only stays true — and drives the pill's
+// background sync path (page load / refocus) attempts a prompt:'none' renewal
+// and armGestureRenewal retries inside the user's next real tap (see
+// getAccessToken), so this only stays true — and drives the pill's
 // "reconnect" state — when a silent grant genuinely isn't possible (no Google
-// session, consent revoked, or third-party cookies blocked), at which point the
+// session, consent revoked, or the renewal popup blocked), at which point the
 // UI invites a tap to reconnect.
 export function needsReconnect() {
   return !!getClientId() && !getStoredToken() && localStorage.getItem(EVER_KEY) === '1';
@@ -148,9 +149,11 @@ export async function gatherDiagnostics({ live = false } = {}) {
   if (live) {
     const rows = [];
     try {
-      const token = await getAccessToken({ interactive: false });
+      // force: bypass the renewal-failure throttle — this is an explicit
+      // button press, so report a REAL attempt, not a stale stamp.
+      const token = await getAccessToken({ interactive: false, force: true });
       if (!token) {
-        rows.push(['result', 'FAIL — no token; silent renew failed. Reconnect via the sync pill.']);
+        rows.push(['result', 'FAIL — silent renew failed (needs a live Google session; renewal popups can be blocked). Reconnect via the sync pill.']);
       } else {
         rows.push(['silent token', 'ok']);
         const client = await initGdriveBackup({ interactive: false });
@@ -202,19 +205,40 @@ function getStoredToken() {
   return null;
 }
 
+// Renewal-failure throttles (same machinery as the mind app's gdrive-sync).
+// GIS "silent" renewal (prompt:'none') is really a POPUP under the hood — the
+// token client has no iframe path — so a background attempt without transient
+// user activation is popup-blocked in most browsers. And where popups ARE
+// allowed (the installed desktop app window), an unthrottled attempt is worse:
+// the popup flashes open, fails, closes, and its closing refocuses the app
+// window — which used to re-fire the focus pull and spawn the next popup, an
+// endless sign-in popup blitz on launch. Two stamps because the failure modes
+// differ:
+//   _renewFailedBgAt   — a gestureless attempt failed (usually popup-blocked);
+//                        gates only further BACKGROUND attempts. A gesture
+//                        attempt can still succeed where this one failed.
+//   _renewFailedRealAt — an attempt WITH a gesture failed (signed out of
+//                        Google, consent revoked); gates every silent attempt,
+//                        or each tap would flash a doomed popup.
+let _renewFailedBgAt = 0;
+let _renewFailedRealAt = 0;
+const RENEW_RETRY_MS = 5 * 60_000;
+
 function storeToken(token, expiresIn) {
   localStorage.setItem(TOKEN_KEY, JSON.stringify({
     token,
     expiresAt: Date.now() + (expiresIn - 60) * 1000,
   }));
   try { localStorage.setItem(EVER_KEY, '1'); } catch {}
+  _renewFailedBgAt = 0;
+  _renewFailedRealAt = 0;
 }
 
-// One token request. The `prompt` decides the UX: `'none'` renews silently
-// through a hidden iframe (no popup, no gesture) and errors if interaction is
-// required; `''` renews silently when it can and otherwise shows the
-// consent/account chooser. A fresh client per call keeps concurrent requests
-// from racing over a shared callback.
+// One token request. The `prompt` decides the UX: `'none'` completes without
+// showing consent UI and errors if interaction is required (it still rides a
+// popup window — see above); `''` auto-grants when it can and otherwise shows
+// the consent/account chooser. A fresh client per call keeps concurrent
+// requests from racing over a shared callback.
 function requestTokenOnce(clientId, prompt = '') {
   return new Promise((resolve, reject) => {
     const client = google.accounts.oauth2.initTokenClient({
@@ -237,7 +261,34 @@ function requestTokenOnce(clientId, prompt = '') {
   });
 }
 
-async function getAccessToken({ interactive = true } = {}) {
+// Single-flight silent renewal: concurrent callers (the load-time pull racing
+// the visibilitychange/focus one, a background chart-doc trash overlapping a
+// cycle) collapse onto ONE prompt:'none' attempt — otherwise each would open
+// its own GIS popup flow, and a losing sibling could stamp a failure throttle
+// right after a winner stored a fresh token. `gesture` marks an attempt made
+// with real user activation: its failure is definitive (no Google session /
+// consent revoked), not just a blocked popup.
+let _renewInflight = null;
+function renewSilentlyOnce(clientId, { gesture = false } = {}) {
+  if (_renewInflight) return _renewInflight;
+  _renewInflight = (async () => {
+    try {
+      await loadGis();
+      return await requestTokenOnce(clientId, 'none');
+    } catch {
+      const t = getStoredToken(); // another path may have landed a token meanwhile
+      if (t) return t;
+      if (gesture) _renewFailedRealAt = Date.now();
+      else _renewFailedBgAt = Date.now();
+      return null;
+    } finally {
+      _renewInflight = null;
+    }
+  })();
+  return _renewInflight;
+}
+
+async function getAccessToken({ interactive = true, force = false } = {}) {
   const existing = getStoredToken();
   if (existing) return existing;
 
@@ -247,22 +298,73 @@ async function getAccessToken({ interactive = true } = {}) {
     throw new Error('Google Drive client ID not configured. Set it in Sources & Sync settings.');
   }
 
-  await loadGis();
-
-  // Background caller (auto-backup on page load / refocus): renew SILENTLY.
-  // With a live Google session and a prior grant this returns a fresh token
-  // through a hidden iframe with zero UI — so a lapsed 1h token no longer forces
-  // a manual "reconnect" on every open. If a silent grant isn't possible we stay
-  // quiet (no popup, no GSI_LOGGER noise) and let the pill fall to "reconnect".
+  // Background caller (auto-backup on page load / refocus, chart-doc
+  // trash/archive): attempt a prompt:'none' renew, knowing it is a popup and
+  // will usually be blocked outside a gesture — it still succeeds where the
+  // browser allows it (installed-app window, granted popup permission), and
+  // armGestureRenewal covers everyone else on their next real tap. Never
+  // attempted for a user who never connected (no doomed popups for non-Drive
+  // users), and throttled after failure so the focus churn of a failing popup
+  // can't spawn the next attempt. `force` (diagnostics' live check — an
+  // explicit button press) bypasses the throttle so the report reflects a
+  // real attempt, not a stale stamp.
   if (!interactive) {
-    try { return await requestTokenOnce(clientId, 'none'); }
-    catch { return null; }
+    if (localStorage.getItem(EVER_KEY) !== '1') return null;
+    if (_renewInflight) return _renewInflight;
+    const now = Date.now();
+    if (!force && (now - _renewFailedBgAt < RENEW_RETRY_MS || now - _renewFailedRealAt < RENEW_RETRY_MS)) return null;
+    return renewSilentlyOnce(clientId);
   }
 
-  // Interactive (inside the user's gesture): silent when possible, otherwise the
-  // real consent/account chooser — a single call, so the gesture is never lost
-  // across an await.
+  // Interactive (inside the user's gesture): if a silent renewal is already in
+  // flight (e.g. the gesture-renewal listener fired on this very tap), join it
+  // rather than racing a second popup out of the same gesture; only fall
+  // through to the real consent/account chooser when it yields nothing.
+  await loadGis();
+  if (_renewInflight) {
+    const t = await _renewInflight.catch(() => null);
+    if (t) return t;
+  }
   return requestTokenOnce(clientId, '');
+}
+
+// Load the GIS script ahead of need so a gesture-time renewal can call
+// requestAccessToken synchronously inside the activation window. Skipped for
+// a visitor who never connected Drive — nothing to renew, no Google fetch.
+export function preloadGis() {
+  if (localStorage.getItem(EVER_KEY) !== '1') return;
+  loadGis().catch(() => {});
+}
+
+// Renew the lapsed token inside the user's NEXT real gesture (the pattern the
+// mind app landed on). The GIS token client always opens a popup — even for
+// prompt:'none' — and browsers block popups without transient user activation,
+// which is why a load-time "silent" renew mostly fails. A capture-phase
+// pointerdown/keydown listener calls requestTokenOnce synchronously in the
+// gesture (no await first — GIS is preloaded), so once the ~1h token lapses,
+// the user's first tap anywhere renews it with at most a brief popup flash,
+// and `onRenewed` re-kicks the auto-pull.
+let _gestureArmed = false;
+export function armGestureRenewal(onRenewed) {
+  if (_gestureArmed || typeof document === 'undefined') return;
+  _gestureArmed = true;
+  const maybeRenew = (ev) => {
+    if (_renewInflight || getStoredToken()) return;
+    // Never steal the gesture from a control that does its own interactive
+    // auth (the sync pill, backup/restore buttons, chart-doc buttons) — a
+    // silent popup here would consume the popup allowance and get the real
+    // consent popup blocked.
+    if (ev?.target instanceof Element && ev.target.closest('[data-sl-auth]')) return;
+    if (localStorage.getItem(EVER_KEY) !== '1') return;
+    if (Date.now() - _renewFailedRealAt < RENEW_RETRY_MS) return;
+    if (!gisReady()) { loadGis().catch(() => {}); return; } // warm it for the next tap
+    // Synchronous into requestTokenOnce (via renewSilentlyOnce) — no await
+    // before the popup, so it opens inside this gesture's activation window.
+    renewSilentlyOnce(getClientId(), { gesture: true })
+      .then((t) => { if (t) onRenewed?.(); });
+  };
+  document.addEventListener('pointerdown', maybeRenew, { capture: true, passive: true });
+  document.addEventListener('keydown', maybeRenew, { capture: true, passive: true });
 }
 
 // Trash (not hard-delete — recoverable from Drive's trash for ~30 days) a

@@ -269,6 +269,9 @@ function formatGdriveError(e) {
   if (msg.includes('popup_closed') || msg.includes('user_cancel')) {
     return 'Sign-in cancelled.';
   }
+  if (msg.includes('popup_failed_to_open') || msg.includes('popup_blocked')) {
+    return 'The Google sign-in popup was blocked — allow popups for this site (or try the button again).';
+  }
   return `Error: ${msg}`;
 }
 
@@ -336,6 +339,7 @@ function syncNowButton() {
     if (ok) setTimeout(() => refresh(), 900);
   });
   b.title = 'Back up to (and pull the latest from) your Google Drive now';
+  b.dataset.slAuth = '1'; // does its own interactive auth — gesture renewal must not steal the tap
   wrap.appendChild(b);
   wrap.appendChild(status);
   return wrap;
@@ -370,6 +374,7 @@ export async function renderDashboard(root) {
   // Tapping the pill syncs now, or reconnects when needed. Tooltip carries the
   // last-successful-backup time.
   const pill = el('div', 'sl-sync-pill');
+  pill.dataset.slAuth = '1'; // reconnect tap runs interactive auth — gesture renewal must not steal it
   root.appendChild(pill);
   const gbackup = isGdriveBackupEnabled();
   const reconnect = needsReconnect();
@@ -2100,6 +2105,7 @@ export async function renderSongFocus(root, songId, setlistId) {
         }, 2000);
       }
     });
+    rebuildBtn.dataset.slAuth = '1'; // ensureDriveAccess in the tap — gesture renewal must not steal it
     actionBar.appendChild(rebuildBtn);
 
     // "read chart" (né "scrape"): doc charts scrape their text export via
@@ -2265,6 +2271,7 @@ export async function renderSongFocus(root, songId, setlistId) {
         }, 2000);
       }
     });
+    createBtn.dataset.slAuth = '1'; // ensureDriveAccess in the tap — gesture renewal must not steal it
     actionBar.appendChild(createBtn);
 
     // Tier 5, by hand: originals (or anything research can't find) get a
@@ -3025,12 +3032,18 @@ export async function renderSettings(root) {
       : (hasClientId() ? '' : 'Sign-in isn’t configured on this deployment — set your own OAuth client ID under “advanced”.'));
 
   const gdriveActions = el('div', 'sl-action-bar');
-  gdriveActions.appendChild(btn('back up now', 'sl-btn-primary sl-btn-sm', () =>
-    runManualSync(gdriveStatus, { interactive: true })));
-  gdriveActions.appendChild(btn('restore from drive', 'sl-btn-ghost sl-btn-sm', async () => {
+  // data-sl-auth: these run their own interactive auth inside the tap — the
+  // gesture-renewal listener must not spend the popup allowance first.
+  const backupNowBtn = btn('back up now', 'sl-btn-primary sl-btn-sm', () =>
+    runManualSync(gdriveStatus, { interactive: true }));
+  backupNowBtn.dataset.slAuth = '1';
+  gdriveActions.appendChild(backupNowBtn);
+  const restoreBtn = btn('restore from drive', 'sl-btn-ghost sl-btn-sm', async () => {
     const ok = await runManualSync(gdriveStatus, { interactive: true });
     if (ok) setTimeout(() => navigate('#home'), 700);
-  }));
+  });
+  restoreBtn.dataset.slAuth = '1';
+  gdriveActions.appendChild(restoreBtn);
   gdriveSection.appendChild(gdriveActions);
   gdriveSection.appendChild(gdriveStatus);
 
@@ -3103,7 +3116,7 @@ export async function renderSettings(root) {
     setTimeout(() => navigate('#home'), 700);
   }));
   const historyList = el('div', 'sl-source-list');
-  safetyActions.appendChild(btn('restore a version…', 'sl-btn-ghost sl-btn-sm', async () => {
+  const restoreVersionBtn = btn('restore a version…', 'sl-btn-ghost sl-btn-sm', async () => {
     historyList.textContent = 'Loading versions…';
     try {
       const client = await initGdriveBackup({ interactive: true });
@@ -3133,7 +3146,9 @@ export async function renderSettings(root) {
     } catch (e) {
       historyList.textContent = formatGdriveError(e);
     }
-  }));
+  });
+  restoreVersionBtn.dataset.slAuth = '1'; // interactive auth in the tap — see backupNowBtn
+  safetyActions.appendChild(restoreVersionBtn);
   safetyActions.appendChild(btn('🗑 trash', 'sl-btn-ghost sl-btn-sm', () => navigate('#trash')));
   gdriveSection.appendChild(safetyActions);
   gdriveSection.appendChild(historyList);
@@ -3842,6 +3857,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     addPageBtn.title = 'Extend the page — existing ink keeps its place and size';
     makeDocBtn = btn('make doc', 'sl-btn-accent sl-btn-sm', () => makeDocFromScratch());
     makeDocBtn.title = 'Render this page to a chart image in your Drive charts folder';
+    makeDocBtn.dataset.slAuth = '1'; // ensureDriveAccess in the tap — gesture renewal must not steal it
     drawControls.appendChild(addPageBtn);
     drawControls.appendChild(makeDocBtn);
   }
