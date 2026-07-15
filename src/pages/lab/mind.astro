@@ -392,6 +392,11 @@ const buildStamp = readBuildStamp();
       border-radius: 3px;
       box-shadow: 0 0 0 1px color-mix(in srgb, var(--cyan) 32%, transparent);
     }
+    /* The match the ↑/↓ navigation is on — hotter than its siblings. */
+    .mn-search-hit.mn-search-cur {
+      background: color-mix(in srgb, var(--amber) 40%, transparent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 55%, transparent);
+    }
     /* Floating matches bar in the editor (count · prev/next · clear). */
     .mn-matchbar {
       position: fixed;

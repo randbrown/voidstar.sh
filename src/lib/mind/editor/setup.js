@@ -160,27 +160,31 @@ function computeMatches(doc, tokens) {
   return matches;
 }
 
-function searchDeco(doc, matches) {
+function searchDeco(doc, matches, active) {
   if (!matches.length) return DecorationSet.empty;
   return DecorationSet.create(doc,
-    matches.map(m => Decoration.inline(m.from, m.to, { class: 'mn-search-hit' })));
+    matches.map((m, i) => Decoration.inline(m.from, m.to,
+      { class: i === active ? 'mn-search-hit mn-search-cur' : 'mn-search-hit' })));
 }
 
 function searchHighlightPlugin() {
   return new Plugin({
     key: searchKey,
     state: {
-      init() { return { tokens: [], matches: [], deco: DecorationSet.empty }; },
+      init() { return { tokens: [], matches: [], active: -1, deco: DecorationSet.empty }; },
       apply(tr, prev) {
         const meta = tr.getMeta(searchKey);
-        if (meta) {
+        if (meta && 'tokens' in meta) {
           const tokens = meta.tokens || [];
           const matches = computeMatches(tr.doc, tokens);
-          return { tokens, matches, deco: searchDeco(tr.doc, matches) };
+          return { tokens, matches, active: -1, deco: searchDeco(tr.doc, matches, -1) };
+        }
+        if (meta && meta.active != null) {
+          return { ...prev, active: meta.active, deco: searchDeco(tr.doc, prev.matches, meta.active) };
         }
         if (tr.docChanged && prev.tokens.length) {
           const matches = computeMatches(tr.doc, prev.tokens);
-          return { tokens: prev.tokens, matches, deco: searchDeco(tr.doc, matches) };
+          return { tokens: prev.tokens, matches, active: -1, deco: searchDeco(tr.doc, matches, -1) };
         }
         return prev;
       },
@@ -189,6 +193,33 @@ function searchHighlightPlugin() {
       decorations(state) { return searchKey.getState(state).deco; },
     },
   });
+}
+
+// Bring a doc position into view without relying on the DOM selection.
+// tr.scrollIntoView() is silently dropped by prosemirror-view whenever the
+// browser selection lives outside the editor (scrollToSelection bails) — which
+// is exactly the state after opening a note from a search hit or clicking the
+// floating match bar's buttons, since neither focuses the editor. Measure the
+// match's client rect and scroll the container directly instead.
+function scrollMatchIntoView(view, pos) {
+  let coords;
+  try { coords = view.coordsAtPos(pos); } catch { return; }
+  // Nearest scrollable ancestor; the mind page scrolls the document itself.
+  let scroller = null;
+  for (let el = view.dom.parentElement; el; el = el.parentElement) {
+    const { overflowY } = getComputedStyle(el);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+      scroller = el;
+      break;
+    }
+  }
+  const box = scroller ? scroller.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+  // Clear of the sticky topbar + floating match bar above and the dock below.
+  const pad = 90;
+  if (coords.top >= box.top + pad && coords.bottom <= box.bottom - pad) return; // already in view
+  const delta = coords.top - (box.top + (box.bottom - box.top) / 2);
+  if (scroller) scroller.scrollTop += delta;
+  else window.scrollBy(0, delta);
 }
 
 function fileCapturePlugin(onFiles) {
@@ -317,22 +348,20 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, onWikiLi
     matchCount() {
       return searchKey.getState(view.state).matches.length;
     },
-    // Scroll match #index into view (wraps; collapsed caret, never a range, so
-    // a following keystroke inserts rather than replacing the matched text).
+    // Scroll match #index into view and mark it current (wraps; collapsed
+    // caret, never a range, so a following keystroke inserts rather than
+    // replacing the matched text). Works with the editor unfocused — the
+    // match bar drives this without ever touching the editor.
     scrollToMatch(index) {
       const { matches } = searchKey.getState(view.state);
       if (!matches.length) return -1;
       const i = ((index % matches.length) + matches.length) % matches.length;
       const pos = matches[i].from;
-      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos, pos)).scrollIntoView());
+      view.dispatch(view.state.tr
+        .setSelection(TextSelection.create(view.state.doc, pos, pos))
+        .setMeta(searchKey, { active: i }));
+      scrollMatchIntoView(view, pos);
       return i;
-    },
-    scrollToFirstMatch() {
-      const { matches } = searchKey.getState(view.state);
-      if (!matches.length) return -1;
-      const pos = matches[0].from;
-      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos, pos)).scrollIntoView());
-      return 0;
     },
     focus: () => view.focus(),
     destroy: () => view.destroy(),
