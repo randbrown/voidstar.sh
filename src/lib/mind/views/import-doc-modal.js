@@ -10,6 +10,13 @@ import { navigate } from '../app.js';
 
 const PREVIEW_CAP = 100;
 
+// Local calendar day of an epoch-ms stamp, for the preview date badge.
+function isoDay(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 // One-line plain-text snippet of a note body (no prosemirror dependency).
 function snippet(body) {
   const s = String(body || '')
@@ -32,11 +39,16 @@ export async function openImportDocModal() {
     'split one document into notes. dated section headers become each note’s date. best source: Google Docs → File → Download → Markdown (.md).'));
 
   // Batch state: docs picked via "pick multiple from Drive…" ([{name,text,
-  // modifiedMs}]). When set, the preview comes from the batch, not the textarea.
+  // modifiedMs,createdMs}]). When set, the preview comes from the batch, not
+  // the textarea.
   let batchDocs = null;
-  // Real last-edit time (epoch ms) of the current single-source doc when it came
-  // from Drive (0 = unknown, e.g. paste/upload) — drives newer-than detection.
+  // Real metadata of the current single-source doc when it came from Drive or a
+  // file upload (0/'' = unknown, e.g. paste): last-edit time drives newer-than
+  // detection + the note's updatedAt, created time a whole-doc note's
+  // createdAt, and the filename titles a whole-doc note.
   let srcModified = 0;
+  let srcCreated = 0;
+  let srcName = '';
 
   // ── Source ──
   const paste = el('textarea', 'mn-input mn-doc-paste');
@@ -49,7 +61,14 @@ export async function openImportDocModal() {
   fileInput.style.display = 'none';
   fileInput.addEventListener('change', async () => {
     const f = fileInput.files?.[0];
-    if (f) { clearBatch(false); srcModified = f.lastModified || 0; paste.value = await f.text(); schedule(); }
+    if (f) {
+      clearBatch(false);
+      srcModified = f.lastModified || 0;
+      srcCreated = 0; // browsers don't expose a file's creation time
+      srcName = f.name || '';
+      paste.value = await f.text();
+      schedule();
+    }
     fileInput.value = '';
   });
 
@@ -64,7 +83,14 @@ export async function openImportDocModal() {
       try {
         const { importFromDrive } = await import('../gdrive-picker.js');
         const res = await importFromDrive();
-        if (res) { clearBatch(false); srcModified = res.modifiedMs || 0; paste.value = res.text; schedule(); }
+        if (res) {
+          clearBatch(false);
+          srcModified = res.modifiedMs || 0;
+          srcCreated = res.createdMs || 0;
+          srcName = res.name || '';
+          paste.value = res.text;
+          schedule();
+        }
       } catch (e) {
         alert(`Drive import failed: ${e.message}`);
       } finally { pickBtn.disabled = false; pickBtn.textContent = prev; }
@@ -226,8 +252,11 @@ export async function openImportDocModal() {
       return parseBatchIntoNotes(batchDocs, { ...currentOpts(), combine: combineCb.checked });
     }
     if (!paste.value.trim()) return null;
-    const p = parseDocIntoNotes(paste.value, currentOpts());
-    if (srcModified) for (const s of p.sections) s.srcModified = srcModified;
+    const p = parseDocIntoNotes(paste.value, { ...currentOpts(), sourceName: srcName });
+    for (const s of p.sections) {
+      if (srcModified) s.srcModified = srcModified;
+      if (srcCreated) s.srcCreated = srcCreated;
+    }
     return p;
   }
 
@@ -265,6 +294,7 @@ export async function openImportDocModal() {
       const titleLine = el('div', 'mn-import-rowtitle');
       titleLine.appendChild(el('span', 'mn-import-rowname', esc(s.title)));
       if (s.dateIso) titleLine.appendChild(el('span', `mn-date-badge${s.isDaily ? ' mn-date-badge-daily' : ''}`, esc(s.dateIso)));
+      else if (s.wholeDoc && s.srcCreated) titleLine.appendChild(el('span', 'mn-date-badge', esc(isoDay(s.srcCreated)))); // the createdAt it will adopt
       if (s.dup) {
         const isUpdate = s.dup.kind === 'id' || s.dup.kind === 'path';
         titleLine.appendChild(el('span', 'mn-import-badge mn-import-badge-dup', isUpdate ? 'update' : 'duplicate'));
@@ -285,7 +315,7 @@ export async function openImportDocModal() {
 
   let _t = 0;
   function schedule() { clearTimeout(_t); _t = setTimeout(render, 200); }
-  paste.addEventListener('input', () => { srcModified = 0; schedule(); }); // manual edit ⇒ Drive mtime no longer applies
+  paste.addEventListener('input', () => { srcModified = 0; srcCreated = 0; srcName = ''; schedule(); }); // manual edit ⇒ source metadata no longer applies
   tagInput.addEventListener('input', () => {}); // tag doesn't affect preview
 
   async function doImport() {

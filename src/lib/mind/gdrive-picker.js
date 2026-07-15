@@ -76,6 +76,29 @@ export async function pickDriveDoc() {
   });
 }
 
+// Fetch the picked file's real Drive timestamps. The Picker only surfaces the
+// last-edited time (LAST_EDITED_UTC); createdTime needs a files.get — which
+// works because picking granted this app drive.file access to the file.
+// Best-effort: any failure falls back to the Picker's own modified stamp.
+export async function fetchDriveDocTimes(file) {
+  try {
+    const token = await getDriveToken({ interactive: false }) || await getDriveToken({ interactive: true });
+    if (!token) throw new Error('Google Drive not connected.');
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${file.id}?fields=createdTime,modifiedTime`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Drive metadata failed: ${res.status}`);
+    const meta = await res.json();
+    return {
+      createdMs: Date.parse(meta.createdTime) || 0,
+      modifiedMs: Date.parse(meta.modifiedTime) || Number(file.modifiedMs) || 0,
+    };
+  } catch (e) {
+    console.warn('[import-doc] Drive metadata fetch failed:', file.name, e.message);
+    return { createdMs: 0, modifiedMs: Number(file.modifiedMs) || 0 };
+  }
+}
+
 // Fetch the picked file's text. A Google Doc is exported to markdown (headings
 // become `#`, ideal for the splitter), falling back to plain text; a real text
 // file downloads directly.
@@ -100,12 +123,13 @@ export async function fetchDriveDocText(file) {
   return res.text();
 }
 
-// One-call convenience: pick + fetch. Returns { text, name } or null (cancel).
+// One-call convenience: pick + fetch text + real timestamps. Returns
+// { text, name, modifiedMs, createdMs } or null (cancel).
 export async function importFromDrive() {
   const file = await pickDriveDoc();
   if (!file) return null;
-  const text = await fetchDriveDocText(file);
-  return { text, name: file.name, modifiedMs: file.modifiedMs };
+  const [text, times] = await Promise.all([fetchDriveDocText(file), fetchDriveDocTimes(file)]);
+  return { text, name: file.name, modifiedMs: times.modifiedMs, createdMs: times.createdMs };
 }
 
 // Multi-select variant of pickDriveDoc for batch import: same Docs/text/markdown
@@ -152,16 +176,18 @@ export async function pickDriveDocs() {
   });
 }
 
-// Batch convenience: pick several docs + fetch each one's text. Returns
-// [{ name, text, modifiedMs }] (a failed fetch is skipped with a warning, never
-// aborting the whole batch), or null on cancel.
+// Batch convenience: pick several docs + fetch each one's text and timestamps.
+// Returns [{ name, text, modifiedMs, createdMs }] (a failed fetch is skipped
+// with a warning, never aborting the whole batch), or null on cancel.
 export async function importDocsFromDrive() {
   const files = await pickDriveDocs();
   if (!files || !files.length) return null;
   const out = [];
   for (const f of files) {
-    try { out.push({ name: f.name, text: await fetchDriveDocText(f), modifiedMs: f.modifiedMs }); }
-    catch (e) { console.warn('[import-doc] Drive fetch failed:', f.name, e.message); }
+    try {
+      const [text, times] = await Promise.all([fetchDriveDocText(f), fetchDriveDocTimes(f)]);
+      out.push({ name: f.name, text, modifiedMs: times.modifiedMs, createdMs: times.createdMs });
+    } catch (e) { console.warn('[import-doc] Drive fetch failed:', f.name, e.message); }
   }
   return out;
 }

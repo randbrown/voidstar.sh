@@ -4,7 +4,7 @@
 // Covers: heading split, level auto-detect, plain-text date-lines, preamble,
 // dateless 1-minute descent, and the export → import round-trip.
 
-import { parseDocIntoNotes, parseBatchIntoNotes, fingerprintNote, markDuplicates } from '../src/lib/mind/import-doc.js';
+import { parseDocIntoNotes, parseBatchIntoNotes, fingerprintNote, markDuplicates, titleFromFileName } from '../src/lib/mind/import-doc.js';
 import { buildDocFromNotes } from '../src/lib/mind/export.js';
 import { extractDate } from '../src/lib/mind/dates.js';
 
@@ -290,6 +290,62 @@ section('(n) path upsert + newer detection');
   const newFolder = [{ title: 'Weekly plan', body: 'new body', dateIso: '', isDaily: false, tags: [], id: '', srcModified: NEW }];
   markDuplicates(newFolder, existing, { matchByTitle: true, folderId: undefined });
   check('undefined target folder → no title match', newFolder[0].upsertId === '');
+}
+
+// ── (o) filename titles whole-doc imports; split sections keep header titles ──
+section('(o) sourceName → whole-doc note title');
+{
+  check('extension stripped', titleFromFileName('Practice Log.md') === 'Practice Log', titleFromFileName('Practice Log.md'));
+  check('Doc name (no extension) kept', titleFromFileName('Untitled document') === 'Untitled document');
+  check('non-text extension untouched', titleFromFileName('archive.tar.gz') === 'archive.tar.gz');
+  check('empty name → empty', titleFromFileName('') === '');
+
+  const prose = 'first line of prose\nmore text, no headings or dates';
+  const named = parseDocIntoNotes(prose, { now: NOW, sourceName: 'Practice Log.md' });
+  check('no-boundary whole doc titled by filename', named.sections[0].title === 'Practice Log', named.sections[0].title);
+  check('whole-doc flag exposed', named.sections[0].wholeDoc === true);
+  const unnamed = parseDocIntoNotes(prose, { now: NOW });
+  check('no sourceName → first line still titles', unnamed.sections[0].title === 'first line of prose', unnamed.sections[0].title);
+
+  const dated = ['## 2026-07-08', 'x', '## 2026-07-07', 'y'].join('\n');
+  const single = parseDocIntoNotes(dated, { now: NOW, mode: 'single', sourceName: 'Journal' });
+  check('single mode titled by filename', single.sections[0].title === 'Journal', single.sections[0].title);
+
+  const split = parseDocIntoNotes(['intro text', '', ...dated.split('\n')].join('\n'), { now: NOW, sourceName: 'Journal.md' });
+  check('split sections keep header titles', split.sections.some((s) => s.title === '2026-07-08'),
+    split.sections.map((s) => s.title).join(','));
+  check('preamble keeps first-line title (not filename)', split.sections[0].title === 'intro text', split.sections[0].title);
+  check('split sections not whole-doc', split.sections.every((s) => s.wholeDoc === false));
+}
+
+// ── (p) batch: per-doc filename titles + source timestamps stamped ──
+section('(p) batch sourceName + srcCreated/srcModified');
+{
+  const C = Date.parse('2024-03-01T10:00:00');
+  const M = Date.parse('2026-06-01T10:00:00');
+  const { sections } = parseBatchIntoNotes(
+    [{ name: 'Old idea.md', text: 'just one line of prose', modifiedMs: M, createdMs: C }],
+    { now: NOW });
+  check('batch whole-doc titled by its filename', sections[0].title === 'Old idea', sections[0].title);
+  check('srcModified stamped', sections[0].srcModified === M, String(sections[0].srcModified));
+  check('srcCreated stamped', sections[0].srcCreated === C, String(sections[0].srcCreated));
+
+  // Combine: modified = latest doc, created = earliest; multi-doc has no single
+  // filename (falls back to first line), a one-doc batch keeps its name.
+  const combo = parseBatchIntoNotes([
+    { name: 'A.md', text: 'alpha', modifiedMs: 500, createdMs: 200 },
+    { name: 'B.md', text: 'beta', modifiedMs: 900, createdMs: 100 },
+  ], { now: NOW, combine: true });
+  check('combine: modified = latest', combo.sections[0].srcModified === 900, String(combo.sections[0].srcModified));
+  check('combine: created = earliest', combo.sections[0].srcCreated === 100, String(combo.sections[0].srcCreated));
+  check('combine multi-doc falls back to first line', combo.sections[0].title === 'alpha', combo.sections[0].title);
+  const solo = parseBatchIntoNotes([{ name: 'Solo.md', text: 'hello world', modifiedMs: 2, createdMs: 1 }],
+    { now: NOW, combine: true });
+  check('combine of one doc titled by filename', solo.sections[0].title === 'Solo', solo.sections[0].title);
+
+  // Missing metadata degrades to 0 (unknown), never NaN.
+  const bare = parseBatchIntoNotes([{ name: 'X', text: 'y' }], { now: NOW });
+  check('missing times → 0', bare.sections[0].srcModified === 0 && bare.sections[0].srcCreated === 0);
 }
 
 console.log(`\n${failed ? `FAILED (${failed})` : 'ALL PASSED'}`);
