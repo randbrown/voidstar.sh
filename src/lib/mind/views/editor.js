@@ -309,8 +309,7 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   if (highlight) {
     const count = editor.setHighlight(highlight);
     if (count) {
-      editor.scrollToFirstMatch();
-      let cur = 0;
+      let cur = editor.scrollToMatch(0); // jump straight to the first match
 
       const bar = el('div', 'mn-matchbar');
       const label = el('span', 'mn-matchbar-count');
