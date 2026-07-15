@@ -292,6 +292,17 @@ Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
     instead merges every doc into a single note (split settings bypassed). The
     batch bar shows the loaded-doc count and a *clear* button; "pick from Drive…"
     or typing/uploading reverts to single-source.
+  - **Filename titles & source timestamps**: a document that becomes exactly ONE
+    note (split: none, or no headings/dates found) is titled by its **filename**
+    (text extension stripped) instead of its first body line. Drive sources also
+    fetch the file's real `createdTime`/`modifiedTime` (`fetchDriveDocTimes`, a
+    `files.get` on the picked file — the pick grants `drive.file` access): the
+    note's `updatedAt` adopts the modified time and a dateless whole-doc note's
+    `createdAt` adopts the created time, so bulk-imported historical docs line up
+    chronologically instead of clustering at import time. A parsed section date
+    still wins as the creation anchor, and dateless SPLIT sections keep their
+    descending-cursor stamps (a shared file time would tie them and lose document
+    order). Every committed note is stamped `meta.importedAt` for provenance.
   - `parseDocIntoNotes(text, opts)` (`import-doc.js`, pure/deterministic) splits
     on markdown headings (auto-picking the level that carries the most dates) or,
     for plain text, on **date-dominant lines** (a date + ≤2 other words, so a
@@ -317,7 +328,7 @@ Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
     re-importing the same Doc *refreshes* rather than piling up. Match tiers, in
     order: mind-export `id=` round-trip → byte-identical (skip) → path/daily
     upsert → new. **Newer-detection**: when the source is Drive, the file's real
-    last-edit time (`LAST_EDITED_UTC` from the Picker, `srcModified` on each
+    last-edit time (`modifiedTime` via `fetchDriveDocTimes`, `srcModified` on each
     section) is compared to the matched note's `updatedAt`; if the **mind copy is
     newer**, the row is flagged amber-pink ("mind is newer") and left **unchecked**
     so fresher local edits aren't clobbered (a per-row checkbox still lets you

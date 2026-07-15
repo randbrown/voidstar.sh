@@ -35,6 +35,12 @@ function firstLineOf(text) {
   return '';
 }
 
+// Source filename → note title: strip a trailing text-file extension (Google
+// Docs have no extension; .md/.txt uploads do). Empty when no name is known.
+export function titleFromFileName(name) {
+  return String(name || '').replace(/\.(md|markdown|txt|text)$/i, '').trim().slice(0, 120);
+}
+
 // The text remaining once the matched date and surrounding separators are
 // removed — used to judge whether a line/header is "essentially just a date".
 function remainderAfterDate(text, d) {
@@ -110,6 +116,9 @@ function stripDateSuffix(title, iso) {
  *   keepPreamble: boolean (default true) — content before the first boundary
  *   markDailies: boolean (default true) — date-only sections become daily notes
  *   order: 'newest-first'|'oldest-first' (how the DOC is ordered; default newest)
+ *   sourceName: string — the source file's name; when the whole document becomes
+ *     one note (single mode / no boundaries found) it titles that note instead
+ *     of the first body line, so a Drive import matches its filename
  *   now: number (default Date.now())
  * @returns {{sections:Array, mode:string, headingLevel:number|null, stats:object, warnings:string[]}}
  */
@@ -121,6 +130,7 @@ export function parseDocIntoNotes(text, opts = {}) {
     now = Date.now(),
   } = opts;
   const headingOverride = opts.headingLevel || 'auto';
+  const sourceTitle = titleFromFileName(opts.sourceName);
   const warnings = [];
 
   let lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
@@ -195,7 +205,7 @@ export function parseDocIntoNotes(text, opts = {}) {
   if (mode === 'single') {
     // No-split: the entire document is one note (only meaningful when there's
     // something to import).
-    if (lines.join('\n').trim()) raw.push({ headerRaw: '', level: 0, bodyLines: lines });
+    if (lines.join('\n').trim()) raw.push({ headerRaw: '', level: 0, bodyLines: lines, wholeDoc: true });
   } else {
     const preambleEnd = boundaries.length ? boundaries[0].index : lines.length;
     const preambleText = lines.slice(0, preambleEnd).join('\n').trim();
@@ -205,7 +215,7 @@ export function parseDocIntoNotes(text, opts = {}) {
         hasPreamble = true;
       } else if (!boundaries.length) {
         // No boundaries at all — import the whole doc as a single note.
-        raw.push({ headerRaw: '', level: 0, bodyLines: lines });
+        raw.push({ headerRaw: '', level: 0, bodyLines: lines, wholeDoc: true });
         warnings.push('No headings or dates found — importing as a single note.');
       }
     }
@@ -244,7 +254,11 @@ export function parseDocIntoNotes(text, opts = {}) {
     let dateIso = metaOverride?.date || (d ? d.iso : '');
 
     // Title: full cleaned header, minus a trailing " — <iso>" written by export.
-    let title = header ? stripDateSuffix(header, dateIso) : firstLineOf(bodyLines.join('\n'));
+    // A whole-document note prefers the source filename (the user named the
+    // file; its first line is just whatever the content happens to open with).
+    let title = header ? stripDateSuffix(header, dateIso)
+      : (r.wholeDoc && sourceTitle) ? sourceTitle
+      : firstLineOf(bodyLines.join('\n'));
     if (!title) title = dateIso || 'untitled';
 
     // Daily: header is essentially just a date (or the export said so).
@@ -270,6 +284,7 @@ export function parseDocIntoNotes(text, opts = {}) {
       tags,
       headerRaw: header,
       level: r.level,
+      wholeDoc: !!r.wholeDoc,
       id: metaOverride?.id || '',
       createdAt: 0,
       updatedAt: 0,
@@ -309,7 +324,7 @@ export function parseDocIntoNotes(text, opts = {}) {
  *
  * Pure & deterministic given `opts.now`, so it's unit-testable without a DOM.
  *
- * @param {Array<{name?:string, text:string}>} docs
+ * @param {Array<{name?:string, text:string, modifiedMs?:number, createdMs?:number}>} docs
  * @param {object} [opts]  same shape as parseDocIntoNotes, plus:
  *   combine: boolean — merge the entire batch into a single note
  * @returns {{sections:Array, mode:string, stats:object, warnings:string[], combine:boolean}}
@@ -320,11 +335,20 @@ export function parseBatchIntoNotes(docs, opts = {}) {
 
   if (combine) {
     // Whole batch → one note: concatenate every document, then force single mode
-    // (a blank line between docs so their content doesn't run together).
+    // (a blank line between docs so their content doesn't run together). The
+    // note spans the batch: modified = latest doc, created = earliest; a
+    // one-doc batch keeps that doc's filename as the title.
     const merged = list.map((d) => String(d.text || '').trim()).join('\n\n');
-    const p = parseDocIntoNotes(merged, { ...opts, mode: 'single', now });
+    const p = parseDocIntoNotes(merged, {
+      ...opts, mode: 'single', now,
+      sourceName: list.length === 1 ? list[0].name : '',
+    });
     const mtime = list.reduce((m, d) => Math.max(m, Number(d.modifiedMs) || 0), 0);
-    for (const s of p.sections) s.srcModified = mtime;
+    const ctime = list.reduce((m, d) => {
+      const c = Number(d.createdMs) || 0;
+      return c && (!m || c < m) ? c : m;
+    }, 0);
+    for (const s of p.sections) { s.srcModified = mtime; s.srcCreated = ctime; }
     return {
       sections: p.sections,
       mode: 'combine',
@@ -341,12 +365,14 @@ export function parseBatchIntoNotes(docs, opts = {}) {
   const warnings = [];
   let cursor = now;
   for (const d of list) {
-    const p = parseDocIntoNotes(d.text, { ...opts, now: cursor });
+    const p = parseDocIntoNotes(d.text, { ...opts, now: cursor, sourceName: d.name || '' });
     for (const w of p.warnings) warnings.push(d.name ? `${d.name}: ${w}` : w);
-    // Stamp the Drive file's real last-edit time onto every section from this
-    // doc so re-import matching can tell whether the mind copy is newer.
+    // Stamp the Drive file's real timestamps onto every section from this doc:
+    // srcModified drives re-import "mind is newer" matching (and the note's
+    // updatedAt), srcCreated becomes a whole-doc note's createdAt on commit.
     const mtime = Number(d.modifiedMs) || 0;
-    for (const s of p.sections) { s.srcModified = mtime; sections.push(s); }
+    const ctime = Number(d.createdMs) || 0;
+    for (const s of p.sections) { s.srcModified = mtime; s.srcCreated = ctime; sections.push(s); }
     if (p.sections.length) cursor = Math.min(...p.sections.map((s) => s.createdAt)) - GAP;
     else cursor -= GAP;
   }
@@ -474,7 +500,10 @@ export function markDuplicates(sections, existingNotes, opts = {}) {
 
 /**
  * Snapshot, then create (or upsert) notes for the selected sections. Preserves
- * each section's parsed createdAt/updatedAt via putNoteRaw.
+ * each section's parsed createdAt/updatedAt via putNoteRaw; when the source
+ * file's real Drive timestamps are known they win (srcModified → updatedAt,
+ * srcCreated → a dateless whole-doc note's createdAt). Every committed note is
+ * stamped meta.importedAt for provenance.
  *
  * @returns {Promise<{created:number, folderId:string, snapshotTs:number}>}
  */
@@ -493,6 +522,7 @@ export async function commitDocImport(sections, opts = {}) {
   }
 
   const extraTag = tag ? tag.replace(/^#/, '').trim().toLowerCase() : '';
+  const importedAt = Date.now(); // provenance stamp — when this import ran
   let created = 0;
 
   for (const s of sections) {
@@ -504,7 +534,7 @@ export async function commitDocImport(sections, opts = {}) {
       if (tt && !tags.includes(tt)) tags.push(tt);
     }
     if (extraTag && !tags.includes(extraTag)) tags.push(extraTag);
-    const meta = s.isDaily && s.dateIso ? { daily: s.dateIso } : {};
+    const meta = { ...(s.isDaily && s.dateIso ? { daily: s.dateIso } : {}), importedAt };
 
     if (s.upsertId) {
       const existing = await store.getNote(s.upsertId);
@@ -526,6 +556,12 @@ export async function commitDocImport(sections, opts = {}) {
       }
     }
 
+    // createdAt: a parsed section date is the best creation anchor; a whole-doc
+    // note without one adopts the source file's real createdTime (Drive), so
+    // historical docs line up chronologically instead of clustering at import
+    // time. Dateless SPLIT sections keep their descending-cursor stamps — the
+    // shared file createdTime would tie them all and lose the document order.
+    const createdAt = (!s.dateIso && s.wholeDoc && s.srcCreated) ? s.srcCreated : s.createdAt;
     const note = store.createNote({
       title: s.title,
       autoTitle: false,
@@ -533,7 +569,7 @@ export async function commitDocImport(sections, opts = {}) {
       folderId: targetFolder,
       tags,
       meta,
-      createdAt: s.createdAt,
+      createdAt,
       updatedAt: s.srcModified || s.updatedAt,
     });
     await store.putNoteRaw(note);
