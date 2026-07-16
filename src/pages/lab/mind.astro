@@ -872,6 +872,23 @@ const buildStamp = readBuildStamp();
     .mn-modal .mn-input { width: 100%; }
     .mn-modal-row { display: flex; justify-content: flex-end; gap: 0.4rem; }
 
+    /* ── New-sketch paper chooser ── */
+    .mn-sketch-papers { display: flex; gap: 0.6rem; justify-content: center; }
+    .mn-sketch-paper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.6rem 1rem;
+    }
+    .mn-sketch-swatch {
+      display: block;
+      width: 3.2rem;
+      height: 4.2rem; /* portrait, like the page it makes */
+      border-radius: 4px;
+      border: 1px solid var(--border-2);
+    }
+
     /* ── Command palette / quick-switcher (Ctrl-K) ── */
     .mn-palette-overlay { padding: 12dvh 1rem 0; align-items: flex-start; }
     .mn-palette {

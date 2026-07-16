@@ -17,6 +17,7 @@ import {
   ensureDriveAccess, pullMergePushCycle,
 } from '../gdrive-sync.js';
 import { pushPendingAttachments } from '../attachments-drive.js';
+import { startSketchNote } from '../sketch.js';
 import { navigate, refresh } from '../app.js';
 import { el, esc, btn, emptyState, timeAgo, textPrompt, confirmBox } from '../ui.js';
 
@@ -59,6 +60,9 @@ export async function renderHome(root) {
   const todayBtn = btn('today', '', () => openDailyNote(folderId));
   todayBtn.title = 'open (or create) today’s daily note';
   actions.appendChild(todayBtn);
+  const sketchBtn = btn('&#9998; sketch', '', () => startSketchNote(folderId));
+  sketchBtn.title = 'start drawing on a blank page (new note in this folder)';
+  actions.appendChild(sketchBtn);
   head.appendChild(actions);
   root.appendChild(head);
 
