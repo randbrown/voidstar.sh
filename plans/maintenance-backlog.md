@@ -168,6 +168,24 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
   (cut / dissolve / wipe) + `transition-ms` controls in the topbar `auto` popover, persisted in
   settings; also composited into recordings.
 - **Shared offscreen-canvas pool** for the overlay post-FX (each currently keeps its own).
+- **Icon-shaped overlay sparks (Iconism tie-in, 2026-07).** The Iconism quale
+  (`fx/iconism.js`) renders the Emmons fret-marker atoms and Sho-Bud card suits as its own
+  scene, but the original ask included icons riding **on top of other quales** — and the
+  overlay already composites above every fx at z:3, with beat-driven sparks emitted from pose
+  joints (`overlay.js` `emitSpark`/`drawSparks`, the `F` toggle). Plan:
+  1. Extract Iconism's one-time sprite bakes (`bakeAtom`/`bakeSuit`, the Emmons/Sho-Bud
+     palettes, the suit `Path2D` construction) into a shared module (e.g. `icon-sprites.js`)
+     consumed by both `fx/iconism.js` and `overlay.js`.
+  2. Add a `spark style` select to the overlay: `dots` (today's `arc()` renderer) | `emmons` |
+     `shobud`. For sprite styles, blit the baked sprite (rotate + scale per spark) instead of
+     the arc, colored from the icon palettes rather than the person-palette hue.
+  3. Sparks live in parallel `Float32Array`s — add `sang`/`sspin` arrays (angle, spin) filled
+     at emit time; zero cost for the `dots` style.
+  4. Icons want *dozens on screen, not thousands*: when a sprite style is active, cut the
+     emission rates hard (≈ 1/20), raise per-spark size, and lengthen life so the shapes read.
+     `MAX_SPARKS` (2400) stays — the pool is shared and mostly idle in sprite mode.
+  This gets "atoms/suits over any quale" with no new canvas, no second fx layer, and no
+  per-frame allocation — the sprite blit path is exactly what Iconism already ships.
 - ✅ **Apps-review value-adds (2026-07):** `audio.pitch`/`audio.pitchClass`/`audio.pitchConf`
   modulation channels (rig-tuner pitch → any knob; hue-by-note); per-quale fps badge in the fx
   picker; **cycle-quantized scene changes** (`♩ cycle` in the auto popover — quale/phase changes
