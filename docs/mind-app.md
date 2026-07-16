@@ -125,10 +125,16 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   amber badge, deduped so both devices don't mint twins). First-ever sync is
   plain LWW — no baseline, no copy spam. Tapping the badge (or Settings → data →
   "resolve conflicts") opens the **merge tool** (`merge.js` pure LCS diff, tested
-  by `scripts/check-mind-merge.mjs`, + `views/conflict-modal.js`): a hunk-by-hunk
-  diff of the live note vs the copy with per-change *keep current / use copy /
-  keep both* choices, which writes the merged body back to the live note and
-  trashes the copy. An orphaned copy (base deleted) can be kept as its own note.
+  by `scripts/check-mind-merge.mjs`, + `views/conflict-modal.js`): a legend names
+  the two sides (*current* = this device's live note, *copy* = the other version,
+  with its device/time), then a hunk-by-hunk diff with a plain-English summary
+  per hunk ("the copy has 1 blank line extra here") and per-change choices —
+  *keep current / use copy / keep both*, worded as add/remove/keep when one side
+  is empty — which writes the merged body back to the live note and trashes the
+  copy. Blank lines render as a visible `(blank line)` placeholder; identical or
+  whitespace-only forks get an amber callout (identical ones drop the merge
+  button — discarding the copy is the resolution). An orphaned copy (base
+  deleted) can be kept as its own note.
 - Auto-sync: **everything funnels through the sync scheduler**
   (`sync-scheduler.js`) — a visibility-gated heartbeat (jittered 25 s while
   data has moved recently, 90 s idle; pure cadence math in `sync-cadence.js`)
