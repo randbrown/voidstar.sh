@@ -1066,6 +1066,20 @@ const buildStamp = readBuildStamp();
     .mn-diff-toggle { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.2rem; }
     .mn-diff-choice { font-size: 0.68rem; min-height: 0; padding: 0.2rem 0.5rem; border: 1px solid var(--border); }
     .mn-diff-choice-on { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 18%, var(--surface)); color: var(--text); }
+    .mn-diff-summary { font-size: 0.72rem; color: var(--text-dim); padding-bottom: 0.15rem; }
+    .mn-diff-blankline { font-style: italic; opacity: 0.55; }
+    .mn-conflict-legend { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.55rem 0; font-size: 0.75rem; color: var(--text-dim); }
+    .mn-conflict-legend-row { display: flex; gap: 0.45rem; align-items: baseline; }
+    .mn-conflict-chip { flex: none; font-family: var(--font-mono); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.08em; padding: 0.1rem 0.45rem; border-radius: 3px; color: var(--text); }
+    .mn-conflict-banner {
+      border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+      background: color-mix(in srgb, var(--amber) 8%, transparent);
+      border-radius: var(--radius, 6px);
+      padding: 0.45rem 0.6rem;
+      font-size: 0.78rem;
+      margin: 0.5rem 0;
+    }
+    .mn-conflict-hint { font-size: 0.72rem; color: var(--text-dim); margin: 0.45rem 0 0.1rem; }
     .mn-conflict-picklist { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.5rem 0; }
     .mn-conflict-pickrow { justify-content: flex-start; text-align: left; }
 

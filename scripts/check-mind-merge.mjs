@@ -1,10 +1,11 @@
 // Smoke tests for the mind conflict merge core (pure diff/merge, no IndexedDB):
 //   node scripts/check-mind-merge.mjs
 //
-// Covers: identical bodies, pure add/delete, mixed change blocks, and the
-// per-hunk base/copy/both choices that applyMerge stitches back together.
+// Covers: identical bodies, pure add/delete, mixed change blocks, the
+// per-hunk base/copy/both choices that applyMerge stitches back together, and
+// the plain-English hunk descriptions the merge UI shows.
 
-import { diffLines, diffBlocks, applyMerge, bodiesDiffer } from '../src/lib/mind/merge.js';
+import { diffLines, diffBlocks, applyMerge, bodiesDiffer, blockIsInvisible, describeChange } from '../src/lib/mind/merge.js';
 
 let failed = 0;
 function check(name, cond, detail = '') {
@@ -79,6 +80,32 @@ section('(f) function selector');
   const copy = 'a\nYOURS\nz';
   const blocks = diffBlocks(base, copy);
   check('function selector picks copy', applyMerge(blocks, () => 'copy') === copy);
+}
+
+// ── (g) invisible (blank-line / whitespace-only) changes ──
+section('(g) invisible changes');
+{
+  // The copy adds one blank line — the case that reads as "identical?" in the UI.
+  const blank = diffBlocks('a\nb', 'a\n\nb').find((x) => x.type === 'change');
+  check('blank-line add is invisible', blockIsInvisible(blank) === true);
+  check('blank-line add described', describeChange(blank) === 'the copy has 1 blank line extra here',
+    describeChange(blank));
+  const ws = diffBlocks('a  b', 'a b').find((x) => x.type === 'change');
+  check('whitespace-only edit is invisible', blockIsInvisible(ws) === true);
+  check('whitespace edit described', describeChange(ws) === 'these lines differ only in blank lines or spacing — the visible text is the same');
+  const real = diffBlocks('a\nx\nb', 'a\ny\nb').find((x) => x.type === 'change');
+  check('real edit is visible', blockIsInvisible(real) === false);
+  check('real edit described', describeChange(real) === 'this line differs between the two versions');
+}
+
+// ── (h) plain-English add/remove descriptions ──
+section('(h) change descriptions');
+{
+  const add = diffBlocks('a\nb', 'a\nb\nc\nd').find((x) => x.type === 'change');
+  check('copy-only lines described', describeChange(add) === 'the copy has 2 lines extra here', describeChange(add));
+  check('text add is visible', blockIsInvisible(add) === false);
+  const del = diffBlocks('a\nx\nb', 'a\nb').find((x) => x.type === 'change');
+  check('missing line described', describeChange(del) === 'the copy is missing 1 line here', describeChange(del));
 }
 
 console.log(`\n${failed ? `FAILED (${failed})` : 'ALL PASSED'}`);
