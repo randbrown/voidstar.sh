@@ -2764,6 +2764,13 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         </select>
         <button class="ctrl-btn active" id="btn-skeleton" title="Skeleton overlay (J)">skeleton</button>
         <button class="ctrl-btn active" id="btn-sparks"   title="Beat sparks (F)">sparks</button>
+        <!-- Spark shape — classic dots, or the voidstar inlay icons (Emmons
+             atoms / Sho-Bud suits) riding on top of whatever quale is live. -->
+        <select id="spark-style-select" class="ctrl-btn" title="Spark shape — dots / Emmons atoms / Sho-Bud card suits">
+          <option value="dots" selected>dot sparks</option>
+          <option value="emmons">atom sparks</option>
+          <option value="shobud">suit sparks</option>
+        </select>
         <button class="ctrl-btn active" id="btn-aura"     title="Resonance aura (G)">aura</button>
       </div>
     </div>

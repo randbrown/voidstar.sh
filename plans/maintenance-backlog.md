@@ -168,6 +168,15 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
   (cut / dissolve / wipe) + `transition-ms` controls in the topbar `auto` popover, persisted in
   settings; also composited into recordings.
 - **Shared offscreen-canvas pool** for the overlay post-FX (each currently keeps its own).
+- ✅ **Icon-shaped overlay sparks (Iconism tie-in, 2026-07).** *Done:* the Iconism sprite
+  bakes (Emmons atoms / Sho-Bud suits, palettes, suit `Path2D` construction) now live in the
+  shared `icon-sprites.js`, consumed by both `fx/iconism.js` and `overlay.js`. The overlay
+  gained a `spark shape` select in the pose popover (`dots` | `emmons` | `shobud`, persisted
+  in settings + qualems): sprite styles blit the baked icons (per-spark angle/spin in new
+  `sang`/`sspin` arrays — zero cost for `dots`) instead of the `arc()` dot, with emission cut
+  ~10× (continuous ~40×), icon-scale sizes, and longer lives so the shapes read — dozens on
+  screen, not thousands. Atoms/suits now ride on top of ANY active quale via the existing z:3
+  overlay canvas, no new layer, no per-frame allocation. Sprites bake lazily on first use.
 - ✅ **Apps-review value-adds (2026-07):** `audio.pitch`/`audio.pitchClass`/`audio.pitchConf`
   modulation channels (rig-tuner pitch → any knob; hue-by-note); per-quale fps badge in the fx
   picker; **cycle-quantized scene changes** (`♩ cycle` in the auto popover — quale/phase changes

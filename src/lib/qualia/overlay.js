@@ -15,6 +15,10 @@ import { lmToCanvas } from './video.js';
 import { readKnobs, onThemeChange } from './theme.js';
 import { createMoshPost } from './post-mosh.js';
 import { createStitchPost } from './post-stitch.js';
+import {
+  EMMONS_COLORS, SHOBUD_RED, SHOBUD_INK, SUITS, SPR, SHAPE_R,
+  bakeAtomSprite, bakeSuitSprite,
+} from './icon-sprites.js';
 
 // ─── Pose visuals ───────────────────────────────────────────────────────────
 
@@ -182,6 +186,34 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
   function getOption(key) { return opts[key]; }
 
+  // ── Spark style — dots (classic) or inlay-icon sprites ────────────────────
+  // 'emmons' / 'shobud' swap the arc()-dot renderer for the shared inlay
+  // sprites (icon-sprites.js), so the atoms/suits ride on top of ANY active
+  // quale via this overlay. Sprites are baked lazily on first use; the
+  // emission tuning below (fewer, bigger, longer-lived) lives in
+  // emitFromJoints so the pool + renderer stay allocation-free.
+  const SPARK_STYLES = ['dots', 'emmons', 'shobud'];
+  let sparkStyle = 'dots';
+  let iconSprites = null;   // { emmons: canvas[4], shobud: canvas[4] }
+  function ensureIconSprites() {
+    if (iconSprites) return;
+    iconSprites = {
+      // Atoms bake WITH electrons — sparks spin the whole sprite instead of
+      // animating electrons live (that's the Iconism quale's job).
+      emmons: EMMONS_COLORS.map(c => bakeAtomSprite(c, true)),
+      // Classic red hearts/diamonds + white clubs/spades: black ink would
+      // vanish over dark quales, and the overlay sits above everything.
+      shobud: SUITS.map(s => bakeSuitSprite(
+        s, s === 'heart' || s === 'diamond' ? SHOBUD_RED : SHOBUD_INK.white, false)),
+    };
+  }
+  function setSparkStyle(style) {
+    if (!SPARK_STYLES.includes(style)) return;
+    sparkStyle = style;
+    if (style !== 'dots') ensureIconSprites();
+  }
+  function getSparkStyle() { return sparkStyle; }
+
   // Data-mosh tunables. The pass itself lives in post-mosh.js (WebGL2
   // motion-vector melt); the page exposes these as sliders in a mosh-card.
   const moshConfig = {
@@ -276,6 +308,11 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   const slife = new Float32Array(MAX_SPARKS);
   const shue  = new Float32Array(MAX_SPARKS);
   const ssize = new Float32Array(MAX_SPARKS);
+  // Sprite-style extras: rotation angle, spin rate, icon index (0-3).
+  // Zero cost in 'dots' mode — filled at emit, only read by the blit path.
+  const sang  = new Float32Array(MAX_SPARKS);
+  const sspin = new Float32Array(MAX_SPARKS);
+  const sicon = new Uint8Array(MAX_SPARKS);
   let sparkCursor = 0;
 
   function emitSpark(x, y, hue, speed, size, life) {
@@ -288,6 +325,9 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     svy[i] = Math.sin(a) * s - speed * 0.25;
     sage[i] = 0; slife[i] = life;
     shue[i] = hue; ssize[i] = size;
+    sang[i] = Math.random() * Math.PI * 2;
+    sspin[i] = (0.6 + Math.random() * 1.8) * (Math.random() < 0.5 ? -1 : 1);
+    sicon[i] = (Math.random() * 4) | 0;
   }
 
   function updateSparks(dt) {
@@ -298,10 +338,32 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       svy[i] = svy[i] * 0.965 + 0.04;
       spx[i] += svx[i];
       spy[i] += svy[i];
+      sang[i] += sspin[i] * dt;
     }
   }
 
   function drawSparks() {
+    if (sparkStyle !== 'dots' && iconSprites) {
+      // Inlay-icon sparks: blit the pre-baked sprite with per-spark
+      // rotation + scale. ssize holds the icon radius (set at emit time);
+      // source-over keeps the baked palette true instead of additive-washing.
+      const sprites = iconSprites[sparkStyle] || iconSprites.emmons;
+      for (let i = 0; i < MAX_SPARKS; i++) {
+        const life = slife[i];
+        if (sage[i] >= life) continue;
+        const t = sage[i] / life;
+        const r = ssize[i] * (1 - t * 0.25);
+        const ds = (r / SHAPE_R) * SPR;
+        ctx.globalAlpha = Math.min(t / 0.08, 1) * (1 - t) * 0.95;
+        ctx.save();
+        ctx.translate(spx[i], spy[i]);
+        ctx.rotate(sang[i]);
+        ctx.drawImage(sprites[sicon[i]], -ds / 2, -ds / 2, ds, ds);
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
     ctx.globalCompositeOperation = 'lighter';
     for (let i = 0; i < MAX_SPARKS; i++) {
       const life = slife[i];
@@ -325,6 +387,19 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const audioOn = !!audio.spectrum;
     if (!audioOn) return;
 
+    // Icon sparks (emmons/shobud): dozens on screen, not thousands — cut
+    // counts ~10× (continuous emission harder still), size up to inlay
+    // scale, slow the burst velocity, and lengthen life so the shapes read.
+    // Dot sparks keep the classic tuning (all multipliers 1).
+    const icon = sparkStyle !== 'dots';
+    const minDim = Math.min(W, H);
+    const nMul = icon ? 0.10 : 1;
+    const cMul = icon ? 0.025 : 1;
+    const vMul = icon ? 0.55 : 1;
+    const lMul = icon ? 1.9 : 1;
+    const iconSize = () => minDim * (0.016 + Math.random() * 0.022);
+    const probRound = (x) => { const f = Math.floor(x); return f + (Math.random() < x - f ? 1 : 0); };
+
     // Bass beat — body core burst.
     if (audio.beat.active) {
       for (let p = 0; p < field.pose.people.length; p++) {
@@ -335,10 +410,12 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
           const lm = lms[idx];
           if (!lm || lm.visibility < 0.4) continue;
           const [x, y] = lmToCanvas(lm.x, lm.y, W, H);
-          const burst = 4 + Math.floor(audio.bands.bass * 10);
+          const burst = probRound((4 + Math.floor(audio.bands.bass * 10)) * nMul);
           for (let k = 0; k < burst; k++) {
             const hue = (Math.random() < 0.5 ? hueA : hueB) + (Math.random() - 0.5) * 30;
-            emitSpark(x, y, hue, 4 + audio.bands.bass * 5, 1.4 + Math.random() * 1.5, 0.7 + Math.random() * 0.9);
+            emitSpark(x, y, hue, (4 + audio.bands.bass * 5) * vMul,
+              icon ? iconSize() : 1.4 + Math.random() * 1.5,
+              (0.7 + Math.random() * 0.9) * lMul);
           }
         }
       }
@@ -353,20 +430,21 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
           const lm = lms[idx];
           if (!lm || lm.visibility < 0.35) continue;
           const [x, y] = lmToCanvas(lm.x, lm.y, W, H);
-          const burst = 3 + Math.floor(audio.bands.highs * 10) + Math.floor(audio.highs.pulse * 2);
+          const burst = probRound(
+            (3 + Math.floor(audio.bands.highs * 10) + Math.floor(audio.highs.pulse * 2)) * nMul);
           for (let k = 0; k < burst; k++) {
             const hue = (Math.random() < 0.5 ? hueA : hueB) + 30 + (Math.random() - 0.5) * 50;
             emitSpark(x, y, hue,
-              2.5 + audio.bands.highs * 4 + audio.highs.pulse * 1.2,
-              1.1 + Math.random() * 1.2,
-              0.55 + Math.random() * 0.7);
+              (2.5 + audio.bands.highs * 4 + audio.highs.pulse * 1.2) * vMul,
+              icon ? iconSize() : 1.1 + Math.random() * 1.2,
+              (0.55 + Math.random() * 0.7) * lMul);
           }
         }
       }
     }
     // Continuous highs-driven sparks from wrists (main) + head (lighter).
-    const rate = audio.bands.highs * 170;
-    if (rate > 0.5) {
+    const rate = audio.bands.highs * 170 * cMul;
+    if (rate > 0.5 * cMul) {
       const perSec = rate * field.dt;
       const CONT_EMIT = [[15, 1.0], [16, 1.0], [0, 0.35]];
       for (let p = 0; p < field.pose.people.length; p++) {
@@ -385,9 +463,9 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
           for (let k = 0; k < n; k++) {
             const hue = (Math.random() < 0.5 ? hueA : hueB) + (Math.random() - 0.5) * 40;
             emitSpark(x, y, hue,
-              2.0 + audio.bands.highs * 3.5,
-              1.1 + Math.random() * 1.3,
-              0.7 + Math.random() * 0.9);
+              (2.0 + audio.bands.highs * 3.5) * vMul,
+              icon ? iconSize() : 1.1 + Math.random() * 1.3,
+              (0.7 + Math.random() * 0.9) * lMul);
           }
         }
       }
@@ -808,6 +886,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     render,
     setOption,
     getOption,
+    setSparkStyle,
+    getSparkStyle,
     setMoshConfig,
     getMoshConfig,
     setEdgeConfig,

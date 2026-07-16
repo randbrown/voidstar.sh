@@ -70,6 +70,7 @@ import arcade         from './fx/arcade.js';
 import gear           from './fx/gear.js';
 import fire           from './fx/fire.js';
 import wake           from './fx/wake.js';
+import iconism        from './fx/iconism.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -184,6 +185,7 @@ export function initQualiaPage() {
   mesh.register(gear);
   mesh.register(fire);
   mesh.register(wake);
+  mesh.register(iconism);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
@@ -433,6 +435,7 @@ export function initQualiaPage() {
     mirrorMode:     getMirror(),
     showOverlay:    overlay.getOption('skeleton'),
     sparksOn:       overlay.getOption('sparks'),
+    sparkStyle:     overlay.getSparkStyle(),
     auraOn:         overlay.getOption('aura'),
     ripplesOn:      overlay.getOption('ripples'),
     glitchModes:    { ...glitchModes },
@@ -531,6 +534,7 @@ export function initQualiaPage() {
   // ── Restore overlay toggles from settings ────────────────────────────────
   if (typeof stored.showOverlay === 'boolean') overlay.setOption('skeleton', stored.showOverlay);
   if (typeof stored.sparksOn    === 'boolean') overlay.setOption('sparks',   stored.sparksOn);
+  if (typeof stored.sparkStyle  === 'string')  overlay.setSparkStyle(stored.sparkStyle);
   if (typeof stored.auraOn      === 'boolean') overlay.setOption('aura',     stored.auraOn);
   if (typeof stored.ripplesOn   === 'boolean') overlay.setOption('ripples',  stored.ripplesOn);
   // Glitch modes (per-button mode for ascii / mosh / edge). Migrate any
@@ -2205,6 +2209,18 @@ export function initQualiaPage() {
   wireOverlayToggle(btnSparks,  'sparks');
   wireOverlayToggle(btnAura,    'aura');
   wireOverlayToggle(btnRipples, 'ripples');
+
+  // Spark shape — dots (classic) or the inlay icons (Emmons atoms /
+  // Sho-Bud suits from icon-sprites.js) riding above the active quale.
+  const sparkStyleSel = document.getElementById('spark-style-select');
+  if (sparkStyleSel) {
+    sparkStyleSel.value = overlay.getSparkStyle();
+    sparkStyleSel.addEventListener('change', () => {
+      overlay.setSparkStyle(sparkStyleSel.value);
+      sparkStyleSel.value = overlay.getSparkStyle();   // snap back if rejected
+      settings.save();
+    });
+  }
 
   // ── Glitches: ascii / mosh / edge share the same multi-state semantics ──
   // (off / on / blip / flip). blip + flip react to hard kicks (see the
@@ -5106,13 +5122,14 @@ export function initQualiaPage() {
         numPoses:   pose.getNumPoses(),
       },
       overlay: {
-        skeleton: overlay.getOption('skeleton'),
-        sparks:   overlay.getOption('sparks'),
-        aura:     overlay.getOption('aura'),
-        ripples:  overlay.getOption('ripples'),
-        mosh:     overlay.getMoshConfig(),
-        edge:     overlay.getEdgeConfig(),
-        stitch:   overlay.getStitchConfig(),
+        skeleton:   overlay.getOption('skeleton'),
+        sparks:     overlay.getOption('sparks'),
+        sparkStyle: overlay.getSparkStyle(),
+        aura:       overlay.getOption('aura'),
+        ripples:    overlay.getOption('ripples'),
+        mosh:       overlay.getMoshConfig(),
+        edge:       overlay.getEdgeConfig(),
+        stitch:     overlay.getStitchConfig(),
       },
       glitch: { ...glitchModes },
       camWalk: { on: camWalkOn, config: camWalk.getConfig() },
@@ -5256,6 +5273,10 @@ export function initQualiaPage() {
       const overlayKeys = ['skeleton', 'sparks', 'aura', 'ripples'];
       for (const k of overlayKeys) {
         if (typeof q.overlay[k] === 'boolean') overlay.setOption(k, q.overlay[k]);
+      }
+      if (typeof q.overlay.sparkStyle === 'string') {
+        overlay.setSparkStyle(q.overlay.sparkStyle);
+        if (sparkStyleSel) sparkStyleSel.value = overlay.getSparkStyle();
       }
       if (q.overlay.mosh) overlay.setMoshConfig(q.overlay.mosh);
       if (q.overlay.edge) overlay.setEdgeConfig(q.overlay.edge);
@@ -5463,7 +5484,7 @@ export function initQualiaPage() {
       activeFxId:    mesh.ids()[0],
       audio:   { mode: 'off', tunables: AUDIO_PRESETS.default },
       pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, numPoses: 1 },
-      overlay: { skeleton: true, sparks: true, aura: true, ripples: true },
+      overlay: { skeleton: true, sparks: true, sparkStyle: 'dots', aura: true, ripples: true },
       glitch:  { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off' },
       camWalk: { on: false, config: { ...CAM_WALK_DEFAULTS } },
       auto:    { phaseSeconds: 0, phaseStyle: 'sequential', phaseBeatSync: false,
