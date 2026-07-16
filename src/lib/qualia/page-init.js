@@ -70,6 +70,7 @@ import arcade         from './fx/arcade.js';
 import gear           from './fx/gear.js';
 import fire           from './fx/fire.js';
 import wake           from './fx/wake.js';
+import iconism        from './fx/iconism.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -184,6 +185,7 @@ export function initQualiaPage() {
   mesh.register(gear);
   mesh.register(fire);
   mesh.register(wake);
+  mesh.register(iconism);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
