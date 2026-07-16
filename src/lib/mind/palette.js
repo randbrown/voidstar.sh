@@ -5,6 +5,7 @@
 
 import { query } from './search.js';
 import { navigate } from './app.js';
+import { startSketchNote } from './sketch.js';
 import * as store from './store.js';
 import { el, esc } from './ui.js';
 
@@ -36,6 +37,7 @@ async function newNote() {
 // Static commands, shown when they match the typed query (or when it's empty).
 const COMMANDS = [
   { icon: '📝', label: 'New note', keywords: 'new note create', run: newNote },
+  { icon: '✏️', label: 'New sketch', keywords: 'new sketch draw drawing doodle canvas whiteboard', run: () => startSketchNote() },
   { icon: '📅', label: "Today's daily note", keywords: 'today daily journal', run: openDailyNote },
   { icon: '✅', label: 'Tasks', keywords: 'tasks todo', run: () => navigate('#tasks') },
   { icon: '🎙', label: 'Voice capture', keywords: 'voice capture dictate record', run: () => navigate('#capture/voice/note') },

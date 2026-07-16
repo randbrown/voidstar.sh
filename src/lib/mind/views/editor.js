@@ -10,6 +10,7 @@ import { createVoiceCapture, recordingSupported, getStoredMicId, storeMicId } fr
 import { ensureTaskIds, syncNoteTasks, backlinksTo } from '../tasks-sync.js';
 import { pushPendingAttachments } from '../attachments-drive.js';
 import { mountAnnotationOverlay } from '../annotation.js';
+import { pickSketchPaper, createSketchAttachment } from '../sketch.js';
 import { query } from '../search.js';
 import { isSupported as speechSupported } from '../voice.js';
 import { applySink } from '../audio-out.js';
@@ -597,6 +598,19 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     const atts = await store.getAttachmentsForNote(note.id);
     for (const a of atts) strip.appendChild(await attachmentChip(a));
     strip.appendChild(btn('+ attach', 'mn-btn-ghost', () => fileInput.click()));
+    // Blank-page drawing: a generated paper attachment opened straight in the
+    // annotation canvas (route change flushes the pending body autosave).
+    const sketchBtn = btn('&#9998; sketch', 'mn-btn-ghost', () => {
+      pickSketchPaper(async (paper) => {
+        const att = await createSketchAttachment(note.id, paper);
+        editor.insertImage(att.id, att.name || 'sketch');
+        scheduleSave();
+        pushPendingAttachments(); // no-op until Drive is connected
+        navigate(`#note/${note.id}/annotate/${att.id}`);
+      });
+    });
+    sketchBtn.title = 'draw on a blank page (pen, shapes, text)';
+    strip.appendChild(sketchBtn);
   }
 
   async function attachmentChip(a) {
