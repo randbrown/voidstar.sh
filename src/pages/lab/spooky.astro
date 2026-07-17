@@ -26,6 +26,28 @@ import '../../styles/themes.css';
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" />
+  <!-- Spooky installs as its OWN standalone app (fullscreen display) — the
+       qualia PWA's scope is /qualia, so this page can never open inside it;
+       "Add to Home screen" here gives it its own icon + chromeless window.
+       The room + control token are persisted on first QR scan, so the
+       installed app reconnects without the URL fragment. -->
+  <link rel="manifest" href="/manifest-spooky.webmanifest" />
+  <meta name="theme-color" content="#05050d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="spooky" />
+  <link rel="apple-touch-icon" href="/icon-spooky-192.png" />
+
+  <!-- Register the PWA service worker (skipped on local dev hosts so Astro's
+       HMR isn't fighting cached assets) — caches the shell for install. -->
+  <script is:inline>
+    if ('serviceWorker' in navigator
+        && !/^(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.)/.test(location.hostname)) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
   {/* is:global is LOAD-BEARING: the pad UI is built dynamically by
       spooky-client.js, and Astro's default scoped styles only match elements
       born in this template — scoped, every .sp-* button renders unstyled. */}
@@ -164,6 +186,16 @@ import '../../styles/themes.css';
       color: #041016; border-color: var(--cyan);
       box-shadow: 0 0 26px color-mix(in srgb, var(--cyan) 70%, transparent); }
     .sp-drum.muted { opacity: .35; }
+
+    /* Fullscreen toggle — browser-tab mode only; the installed app IS
+       fullscreen, so hide it there. */
+    .sp-fs { position: fixed; top: calc(.55rem + env(safe-area-inset-top)); right: .7rem;
+      z-index: 11; width: 2.9rem; height: 2.9rem; border-radius: 50%;
+      font: inherit; font-size: 1.15rem; cursor: pointer; color: var(--cyan);
+      background: rgba(18,15,36,.8); border: 1px solid color-mix(in srgb, var(--cyan) 40%, var(--border));
+      box-shadow: 0 0 12px color-mix(in srgb, var(--cyan) 18%, transparent); }
+    .sp-fs:active { transform: scale(.94); }
+    @media (display-mode: fullscreen), (display-mode: standalone) { .sp-fs { display: none; } }
 
     .sp-empty, .sp-note { color: var(--muted); font-size: .78rem; font-style: italic;
       text-align: center; padding: .6rem .3rem; line-height: 1.5; }

@@ -19,18 +19,44 @@ import { createTransport } from './entangle-transport-cf.js';
 import { SYNC_APP_ID, ST, readControlFromHash } from './sync-protocol.js';
 
 const SLIDER_DEBOUNCE_MS = 40;
+// Pairing memory — the room + control token from the last scanned QR. This is
+// what lets spooky run as an INSTALLED app: a home-screen launch starts at the
+// bare /lab/spooky (no URL fragment), and reconnects from here. A newly
+// scanned QR always overwrites it (fresh room = rotated token).
+const CREDS_KEY = 'voidstar.spooky.creds';
 
 const buzz = (ms = 8) => { try { navigator.vibrate?.(ms); } catch {} };
 
 export async function initSpookyClient(root) {
-  const { room, key } = readControlFromHash();
+  let { room, key } = readControlFromHash();
+  if (room && key) {
+    try { localStorage.setItem(CREDS_KEY, JSON.stringify({ room, key })); } catch {}
+  } else {
+    try {
+      const c = JSON.parse(localStorage.getItem(CREDS_KEY));
+      if (c?.room && c?.key) ({ room, key } = c);
+    } catch {}
+  }
   const statusEl = root.querySelector('[data-status]');
   const tabsEl = root.querySelector('[data-tabs]');
   const bodyEl = root.querySelector('[data-body]');
   const setStatus = (msg, kind = '') => { if (statusEl) { statusEl.textContent = msg; statusEl.dataset.kind = kind; } };
 
+  // Browser-tab fullscreen toggle. Hidden when running as the installed app
+  // (display-mode fullscreen/standalone) — there's no chrome to shed there.
+  const fsBtn = document.createElement('button');
+  fsBtn.className = 'sp-fs';
+  fsBtn.title = 'fullscreen';
+  fsBtn.textContent = '⛶';
+  fsBtn.addEventListener('click', () => {
+    buzz();
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+  });
+  document.body.appendChild(fsBtn);
+
   if (!room || !key) {
-    setStatus('This link is missing the room or control token — re-scan the spooky QR from the sync panel.', 'err');
+    setStatus('No room / control token yet — scan the spooky QR from the rig’s ⌁ sync panel. (Once paired, this page remembers the room.)', 'err');
     return;
   }
 

@@ -98,6 +98,14 @@ quantize the hit into the pattern at the nearest cell, via `sequencer.tapHit`), 
 Feedback: the leader broadcasts a 1 Hz `cstate` snapshot (transport lit-states, freeze
 depth, active quale, pad voices, cps) so the phone reflects reality.
 
+**Install it.** Spooky is its own PWA (`public/manifest-spooky.webmanifest`, `display:
+fullscreen`, cyan ⌁ icon) — scan the QR once, then "Add to Home screen". The room +
+control token persist in `localStorage` (`voidstar.spooky.creds`) on every scan, so the
+installed app launches straight into the last-paired room with no URL fragment; a fresh
+QR re-pairs. In a browser tab there's a ⛶ fullscreen toggle instead (hidden when the
+page runs as the installed app). Note the qualia PWA's scope is `/qualia`, so spooky can
+never open *inside* that install — its own app is the intended path.
+
 ---
 
 ## A/V feed (one rig renders the combined show)
