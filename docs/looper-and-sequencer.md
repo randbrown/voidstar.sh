@@ -127,13 +127,27 @@ Two **unrelated** pipelines (see architecture §7 for the full rationale):
 
 ### Screen recorder (`recorder.js`)
 MediaRecorder over a composited fx+overlay canvas + the recordable audio mix.
-- **Backends:** `viewport` (default — composites in-page, no screen-share dialog) and `tab`
-  (`getDisplayMedia`, captures the whole tab including panels). Mobile browsers (Chrome Android,
+- **Backends:** `viewport` (default — composites in-page, no screen-share dialog), `tab`
+  (`getDisplayMedia`, captures the whole tab including panels), and `tab-ext` (same full-tab
+  pixels via a `chrome.tabCapture` stream ID minted by the companion extension in
+  `extras/capture-extension`). Mobile browsers (Chrome Android,
   iOS Safari, Samsung Internet) have no working `getDisplayMedia` and no web API to launch the OS
   screen recorder, so there the tab menu item is repurposed as a **sys rec** helper: it enters
   fullscreen (hides browser chrome) and toasts instructions to start the system screen recorder —
   the only panel-inclusive capture path on phones. Stored/imported `captureMode: 'tab'` is coerced
   back to `viewport` on those devices.
+- **The "Sharing this tab" banner:** Chrome pins it over the page for every `getDisplayMedia`
+  tab capture — fullscreen included, in tabs and installed-PWA windows alike — and no flag/policy
+  hides it. It's browser chrome, so it never lands in the saved file; it only pollutes what a live
+  audience sees. `tab-ext` exists for exactly this: the extension path's only indicator is the
+  tab-strip badge. Trigger is the extension hotkey/icon (the tabCapture API requires user
+  invocation, so the in-page rec button can stop, but never start, these takes). See
+  `extras/capture-extension/README.md` for install + use.
+- **Window Controls Overlay:** the qualia manifest declares
+  `display_override: ["window-controls-overlay"]`, so the installed PWA can collapse its OS title
+  bar (chevron in the title bar; Chrome remembers) — the topbar then becomes the de-facto title
+  bar (drag region + `titlebar-area-*` padding in `qualia.astro`), reclaiming a strip of vertical
+  space during performances.
 - **Codec:** MP4 (H.264+AAC) preferred, with an explicitly-ordered candidate list (high profiles
   first — Chrome Android falsely reports Baseline support then throws `EncodingError` on big
   canvases). A per-device `voidstar.recorder.skipMp4` flag falls back to WebM permanently on

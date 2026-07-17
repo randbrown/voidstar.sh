@@ -6,6 +6,7 @@
   "start_url": "/qualia",
   "scope": "/qualia",
   "display": "standalone",
+  "display_override": ["window-controls-overlay"],
   "orientation": "any",
   "background_color": "#05050d",
   "theme_color": "#05050d",

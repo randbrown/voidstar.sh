@@ -370,6 +370,29 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       transition: transform 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease;
     }
     #topbar.zen { transform: translateY(-110%); opacity: 0; pointer-events: none; }
+    /* Installed-PWA Window Controls Overlay: once the user collapses the OS
+       title bar (chevron in the PWA title bar — Chrome remembers the choice),
+       the page extends into the title-bar band and the topbar becomes the
+       de-facto title bar. Pad clear of the overlaid window controls (macOS
+       traffic lights sit left, so titlebar-area-x > 0; Windows caption
+       buttons sit right, shrinking titlebar-area-width) and let the topbar's
+       dead space drag the window. Inert everywhere else — outside the
+       overlay display-mode this media query never matches, and the env()
+       fallbacks make both paddings collapse to their base value. */
+    @media (display-mode: window-controls-overlay) {
+      #topbar {
+        padding-left:  calc(0.9rem + env(titlebar-area-x, 0px));
+        padding-right: calc(0.9rem + (100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+        app-region: drag;
+        -webkit-app-region: drag;
+      }
+      /* Interactive elements opt back out of window-dragging. Every control
+         in the topbar (incl. the qg-menu popovers) is a button/select/input. */
+      #topbar button, #topbar select, #topbar input, #topbar a, #topbar label {
+        app-region: no-drag;
+        -webkit-app-region: no-drag;
+      }
+    }
     /* Title row: experiment label on the left, strudel + zen on the right.
        Shared horizontal flex row (siblings, not absolute overlay) so the
        boxes can't overlap — each takes its natural space. */
