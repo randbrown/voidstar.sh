@@ -328,6 +328,12 @@ const buildStamp = readBuildStamp();
     .mn-chip-x { opacity: 0.6; margin-left: 0.2rem; cursor: pointer; }
     .mn-chip-x:hover { opacity: 1; }
     .mn-tags-toggle { border-style: dashed; }
+    .mn-ongoing-chip {
+      background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+      border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+      color: var(--text);
+    }
+    .mn-ongoing-chip:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
     .mn-chip:disabled { opacity: 0.4; cursor: default; }
     .mn-chip:disabled:hover { border-color: var(--border); color: var(--text-muted); }
 
@@ -871,6 +877,26 @@ const buildStamp = readBuildStamp();
     .mn-modal-title { font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-muted); }
     .mn-modal .mn-input { width: 100%; }
     .mn-modal-row { display: flex; justify-content: flex-end; gap: 0.4rem; }
+
+    /* ── Quick-add sheet (capture into an ongoing note) ── */
+    .mn-quickadd-text {
+      width: 100%;
+      min-height: 7rem;
+      resize: vertical;
+      line-height: 1.45;
+      font-family: inherit;
+    }
+    .mn-quickadd-opts { display: flex; align-items: center; flex-wrap: wrap; gap: 0.8rem; }
+    .mn-quickadd-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      white-space: nowrap;
+    }
 
     /* ── New-sketch paper chooser ── */
     .mn-sketch-papers { display: flex; gap: 0.6rem; justify-content: center; }

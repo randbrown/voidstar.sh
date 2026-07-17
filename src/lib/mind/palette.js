@@ -6,6 +6,8 @@
 import { query } from './search.js';
 import { navigate } from './app.js';
 import { startSketchNote } from './sketch.js';
+import { listOngoingNotes } from './ongoing-actions.js';
+import { openQuickAdd } from './views/quick-add.js';
 import * as store from './store.js';
 import { el, esc } from './ui.js';
 
@@ -67,6 +69,20 @@ export function openPalette() {
   let sel = 0;
   let runId = 0;    // guards out-of-order async results
 
+  // Ongoing notes (#ongoing) surface as "Add to: <title>" actions — the
+  // keyboard path to quick-capture into a long-running note. Loaded async;
+  // update() re-runs when they land.
+  let ongoingCmds = [];
+  listOngoingNotes().then((notes) => {
+    ongoingCmds = notes.map(n => ({
+      icon: '➕',
+      label: `Add to: ${n.title}`,
+      keywords: `add append insert ongoing ${n.title.toLowerCase()}`,
+      run: () => openQuickAdd(n.id),
+    }));
+    if (_open) update();
+  }).catch(() => {});
+
   function close() {
     _open = false;
     overlay.remove();
@@ -103,7 +119,7 @@ export function openPalette() {
     const q = input.value.trim();
     const id = ++runId;
     const ql = q.toLowerCase();
-    const cmds = COMMANDS
+    const cmds = [...COMMANDS, ...ongoingCmds]
       .filter(c => !ql || c.label.toLowerCase().includes(ql) || c.keywords.includes(ql))
       .map(c => ({ icon: c.icon, label: c.label, sub: 'action', run: c.run }));
 
