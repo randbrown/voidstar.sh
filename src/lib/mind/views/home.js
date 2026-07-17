@@ -11,6 +11,7 @@ import { markdownToText } from '../editor/markdown.js';
 import { tokenize, markText, snippetHighlighted } from '../search-highlight.js';
 import { setTaskDoneEverywhere } from '../tasks-sync.js';
 import { parseCapture } from '../capture.js';
+import { isOngoing } from '../ongoing.js';
 import { listOngoingNotes } from '../ongoing-actions.js';
 import { openQuickAdd } from './quick-add.js';
 import { armReminder, reminderSheet, reminderBadge } from '../reminders.js';
@@ -516,6 +517,16 @@ function noteCard(entry, folders, dimmed, selCtx = null) {
     card.addEventListener('click', () => navigate(noteHash(n.id)));
   }
   if (n.pinned) row.appendChild(el('span', 'mn-pin-dot', '&#9733;'));
+  if (isOngoing(n)) {
+    // The badge marks a long-running note AND is its per-card quick-add (the
+    // chips row caps at 6, so this is the capture path for the rest).
+    const oBadge = btn('&#8734;', 'mn-ongoing-badge', (e) => {
+      e.stopPropagation();
+      openQuickAdd(n.id);
+    });
+    oBadge.title = 'ongoing note — tap to add to it';
+    row.appendChild(oBadge);
+  }
   if (n.conflictOf) {
     // The badge opens the merge tool instead of the note, so a fork can be
     // reconciled without leaving the list.
