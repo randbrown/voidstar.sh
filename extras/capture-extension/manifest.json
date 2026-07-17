@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "qualia capture",
+  "version": "1.0.0",
+  "description": "Banner-free full-tab recording for the voidstar qualia lab. Toggle with the toolbar icon or keyboard shortcut; the qualia page records and saves the take through its normal pipeline.",
+  "permissions": ["tabCapture"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "qualia capture — toggle banner-free recording" },
+  "commands": {
+    "toggle-capture": {
+      "suggested_key": { "default": "Ctrl+Shift+9", "mac": "Command+Shift+9" },
+      "description": "Start/stop a banner-free qualia tab recording"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://voidstar.sh/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

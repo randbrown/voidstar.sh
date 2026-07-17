@@ -296,7 +296,7 @@ async function openSink(filename, { skipFsa = false } = {}) {
 
 /**
  * @param {{
- *   onStateChange?: (s: { recording: boolean, backend: ''|'composite'|'tab', sink: ''|'fsa'|'opfs'|'memory' }) => void,
+ *   onStateChange?: (s: { recording: boolean, backend: ''|'composite'|'tab'|'tab-ext', sink: ''|'fsa'|'opfs'|'memory' }) => void,
  *   onReadyToSave?: (info: { filename: string, autoSaved: boolean, save: (() => Promise<void>)|null, failed: boolean, size: number }) => void,
  *   onError?: (err: Error) => void,
  *   getCanvas?: () => HTMLCanvasElement|null,
@@ -306,7 +306,7 @@ async function openSink(filename, { skipFsa = false } = {}) {
  *   onCaptureEnd?: () => void,
  * }} opts
  *
- * Two capture modes:
+ * Three capture modes:
  *   - 'viewport' (default): captures a composite canvas the page maintains,
  *     containing fx + overlay layers. Zero per-frame DOM work, no
  *     screen-share dialog, clean viewport-only output. Uses FSA / OPFS
@@ -317,6 +317,14 @@ async function openSink(filename, { skipFsa = false } = {}) {
  *     for audio (tab-audio capture would miss the mic). FSA is unavailable
  *     after getDisplayMedia consumed the user activation, so the file
  *     streams to OPFS and downloads via anchor.click() at stop.
+ *     Caveat: Chrome pins a "Sharing this tab" banner over the page for
+ *     the whole take — fullscreen included — visible to a live audience.
+ *   - 'tab-ext' (via start({extStreamId})): same full-tab pixels, but the
+ *     video track comes from a chrome.tabCapture stream ID minted by the
+ *     companion extension (extras/capture-extension) — no share picker
+ *     and NO "Sharing this tab" banner; the only indicator is on the tab
+ *     strip. The extension hotkey/icon is the trigger (the page can't
+ *     invoke it), so there's no user activation for FSA → OPFS sink.
  *
  * For viewport mode, `getCanvas` returns the composite canvas and
  * `onCaptureStart` / `onCaptureEnd` let the page gate its per-frame
@@ -334,7 +342,7 @@ export function createRecorder(opts = {}) {
   // embedded SMPTE start timecode + the moov creation_time.
   let startedAtWall = null;
   let mimeType = '';
-  /** @type {''|'composite'} */
+  /** @type {''|'composite'|'tab'|'tab-ext'} */
   let backend = '';
   /** @type {Awaited<ReturnType<typeof openSink>>|null} */
   let sink = null;
@@ -630,12 +638,17 @@ export function createRecorder(opts = {}) {
     // the top of the page while recording is rendered by the Chrome
     // browser itself as a privacy indicator — there is no page-JS option
     // to suppress it (see crbug.com / Chrome DevTools "Privacy-preserving
-    // screen sharing controls"). The only way to hide it during recording
-    // is the user pressing F11 to enter fullscreen before recording —
-    // browser chrome (including the indicator bar) is then hidden until
-    // they Esc back out. We could nudge users toward that in the UI, but
-    // we don't force it because some users actually want the bar visible
-    // as a "still recording" reminder.
+    // screen sharing controls"). Current Chrome (verified July 2026) pins
+    // the bar over the page even in fullscreen — both in a regular tab
+    // and in an installed-PWA window (where the title bar stays pinned
+    // too) — so there is NO in-browser state that hides it during a
+    // getDisplayMedia tab capture. An earlier note here claimed F11
+    // fullscreen hid it; Chrome removed that behavior. The banner is
+    // browser chrome, so it never appears IN the recorded file — it only
+    // pollutes what a live audience sees. For banner-free full-tab takes
+    // use the companion chrome.tabCapture extension (extras/
+    // capture-extension → the 'tab-ext' backend below), whose only
+    // indicator lives in the tab strip, or capture externally via OBS.
     const tabStream = await navigator.mediaDevices.getDisplayMedia({
       video: { displaySurface: 'browser', frameRate: 60 },
       preferCurrentTab:    true,
@@ -666,14 +679,51 @@ export function createRecorder(opts = {}) {
     return s;
   }
 
-  async function start() {
+  async function buildExtTabStream(streamId) {
+    // Consume a chrome.tabCapture stream ID minted by the companion
+    // extension. getUserMedia with the legacy `mandatory` chromeMediaSource
+    // constraints is the documented consumption path for
+    // tabCapture.getMediaStreamId — the modern constraint dictionary has no
+    // equivalent. The streamId itself is the authorization, so no user
+    // activation or picker is involved (and no "Sharing this tab" banner —
+    // this API path only marks the tab strip). Chrome sizes the capture to
+    // the tab by default; the maxima just keep a retina canvas from being
+    // clamped below native resolution.
+    const raw = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: {
+          chromeMediaSource:   'tab',
+          chromeMediaSourceId: streamId,
+          maxWidth:     4096,
+          maxHeight:    2304,
+          maxFrameRate: 60,
+        },
+      },
+    });
+    const videoTrack = raw.getVideoTracks()[0];
+    if (!videoTrack) {
+      try { raw.getTracks().forEach(t => t.stop()); } catch {}
+      throw new Error('Extension tab capture returned no video track');
+    }
+    // Capture can be revoked from Chrome's tab-strip indicator; flush the
+    // file instead of hanging inactive, same as the getDisplayMedia path.
+    videoTrack.addEventListener('ended', () => stop());
+
+    const s = new MediaStream();
+    s.addTrack(videoTrack);
+    attachMixBusAudio(s);
+    return s;
+  }
+
+  async function start(overrides = {}) {
     if (recorder) return;
     if (typeof MediaRecorder === 'undefined') {
       throw new Error('MediaRecorder not supported in this browser');
     }
     sweepStaleOpfs().catch(() => {});
 
-    const mode = opts.getCaptureMode?.() ?? 'viewport';
+    const mode = overrides.extStreamId ? 'tab-ext' : (opts.getCaptureMode?.() ?? 'viewport');
 
     // Pick mime + filename first so the file picker can suggest a name.
     // pickMime() is synchronous — it doesn't consume user activation, so
@@ -698,7 +748,25 @@ export function createRecorder(opts = {}) {
     const autoSave = opts.getAutoSave?.() ?? true;
 
     let s;
-    if (mode === 'tab') {
+    if (mode === 'tab-ext') {
+      // Extension-minted tabCapture stream — no picker, no banner. The
+      // trigger was the extension hotkey/icon, not a page gesture, so
+      // there's no transient activation for showSaveFilePicker: stream to
+      // OPFS and anchor-download at stop, like tab mode.
+      s = await buildExtTabStream(overrides.extStreamId);
+      try {
+        sink = await openSink(filename, { skipFsa: true });
+      } catch (err) {
+        try { s.getTracks().forEach(t => t.stop()); } catch {}
+        for (const t of attachedAudio) { try { t.stop(); } catch {} }
+        attachedAudio = [];
+        throw err;
+      }
+      backend = 'tab-ext';
+      // Same rationale as tab mode: skip the QuickTime-hostile timecode
+      // remux; the in-place duration fix still applies.
+      skipTimecode = true;
+    } else if (mode === 'tab') {
       // Tab capture FIRST — consumes activation. We then open an OPFS
       // (or memory) sink which doesn't need a fresh activation.
       try {

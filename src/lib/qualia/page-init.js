@@ -3182,6 +3182,7 @@ export function initQualiaPage() {
     if (!recording) return '';
     const capLabel  = backend === 'composite' ? 'qfx'
                     : backend === 'tab'       ? 'full tab'
+                    : backend === 'tab-ext'   ? 'full tab · ext'
                     : 'unknown';
     const sinkLabel = sink === 'fsa'    ? 'saving to chosen file'
                     : sink === 'opfs'   ? 'streaming to device storage'
@@ -3213,6 +3214,11 @@ export function initQualiaPage() {
   const btnRecAutoSave = document.getElementById('btn-rec-autosave');
   const btnRecAutoFs = document.getElementById('btn-rec-autofs');
   const btnRecAutoZen = document.getElementById('btn-rec-autozen');
+  // True once the companion chrome.tabCapture extension announces itself
+  // (extras/capture-extension). Its takes have no share picker and no
+  // "Sharing this tab" banner; declared here (not at the bridge below) so
+  // refreshRecordModeBtn can read it on its first call without a TDZ trip.
+  let capExtAvailable = false;
   // Idle rec-button tooltip, reflecting the independent one-button modifiers
   // that apply on a qfx take (auto-⛶ → fullscreen, auto-zen → HUD hidden).
   // Single source of truth so refreshRecordModeBtn + onStateChange agree.
@@ -3241,11 +3247,18 @@ export function initQualiaPage() {
       btnRecAutoSave.textContent = autoSaveRec ? 'auto-save ✓' : 'auto-save';
     }
     if (btnRecordMode) {
+      // The companion extension (extras/capture-extension) is the banner-free
+      // route to a full-tab take — Chrome pins the "Sharing this tab" banner
+      // over getDisplayMedia captures even in fullscreen, so plain tab mode
+      // always shows it to the audience.
+      const extHint = capExtAvailable
+        ? ' Companion capture extension detected: press its shortcut (chrome://extensions/shortcuts) to toggle a banner-free full-tab take.'
+        : '';
       btnRecordMode.title = !tabCaptureSupported
         ? 'Capture mode: qfx — composites the fx + overlay + camera. This browser has no tab capture; for a recording that includes the panels + menus, tap "sys rec" to prep the OS screen recorder.'
         : captureMode === 'tab'
-        ? 'Capture mode: full tab — share-picker captures the whole tab incl. panels. NOTE: many browsers/GPUs capture the WebGL visuals as a frozen still via tab capture, and the file may not open in macOS Preview. For panel-inclusive performance capture, use OBS or macOS ⌘⇧5 instead. Audio comes from the in-page mix bus.'
-        : 'Capture mode: qfx (recommended) — composites the fx + overlay + camera, no share dialog, opens in Preview. Does not include the HUD panels (use OBS / ⌘⇧5 for those).';
+        ? 'Capture mode: full tab — share-picker captures the whole tab incl. panels. NOTE: Chrome pins a "Sharing this tab" banner over the page for the whole take (fullscreen included; it is not in the saved file). Some browsers/GPUs capture the WebGL visuals as a frozen still, and the file may not open in macOS Preview. For banner-free panel-inclusive capture use the companion extension (extras/capture-extension) or OBS / ⌘⇧5. Audio comes from the in-page mix bus.' + extHint
+        : 'Capture mode: qfx (recommended) — composites the fx + overlay + camera, no share dialog, opens in Preview. Does not include the HUD panels (use the capture extension / OBS / ⌘⇧5 for those).' + extHint;
     }
     if (btnRecord) btnRecord.title = recBtnTitle();
   }
@@ -3556,6 +3569,52 @@ export function initQualiaPage() {
     pendingFilename = '';
     hideRecToast();
   });
+
+  // ── Companion capture extension bridge (extras/capture-extension) ────────
+  // The unpacked chrome.tabCapture extension is the only way to record the
+  // full tab (HUD + panels + strudel) WITHOUT Chrome's "Sharing this tab"
+  // banner — current Chrome pins that banner over the page even in
+  // fullscreen, in tabs and installed-PWA windows alike, so every
+  // getDisplayMedia tab take shows it to a live audience. The extension
+  // mints a tabCapture stream ID (that API path only marks the tab strip)
+  // and its content script posts it here; we hand it to the recorder as
+  // the 'tab-ext' backend. The trigger is the extension's toolbar icon or
+  // keyboard shortcut — the tabCapture API requires the extension to be
+  // user-invoked, so the in-page rec button cannot start this path.
+  window.addEventListener('message', (e) => {
+    if (e.source !== window) return;
+    const d = e.data;
+    if (!d || d.source !== 'qualia-capture-ext') return;
+    if (d.type === 'hello') {
+      if (!capExtAvailable) {
+        capExtAvailable = true;
+        console.log('[recorder] companion capture extension detected — banner-free full-tab takes available');
+        refreshRecordModeBtn();
+      }
+      return;
+    }
+    if (d.type === 'toggle') {
+      // Extension hotkey is a pure toggle: stop a running take (whatever
+      // backend started it), otherwise start a banner-free tab-ext take.
+      if (recorder.isRecording()) { recorder.stop(); return; }
+      if (pendingSave) { pendingSave = null; pendingFilename = ''; hideRecToast(); }
+      recorder.start({ extStreamId: d.streamId }).catch(err => {
+        console.error('[recorder] extension capture failed:', err?.name, err?.message, err);
+        if (recToast && recToastText) {
+          recToast.style.display = 'flex';
+          recToast.classList.remove('rec-active');
+          recToast.classList.add('rec-ready');
+          recToastText.textContent = `extension capture failed: ${err?.message || err}`;
+          if (recToastActions) recToastActions.style.display = 'none';
+          setTimeout(hideRecToast, 8000);
+        }
+      });
+    }
+  });
+  // Handshake: the content script announces at document_idle, which can fire
+  // before this listener attaches — ping so it announces again. Both sides
+  // tolerate either ordering.
+  try { window.postMessage({ source: 'qualia-page', type: 'capture-ext-ping' }, window.location.origin); } catch {}
 
   // ── Reset fx params ───────────────────────────────────────────────────────
   fxResetBtn.addEventListener('click', () => core.applyFxPreset('default'));
