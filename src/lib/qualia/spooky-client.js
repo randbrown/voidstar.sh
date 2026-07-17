@@ -127,13 +127,18 @@ export async function initSpookyClient(root) {
     if (opts.lit) b.dataset.lit = opts.lit;   // reflect() keys off this
     return b;
   }
-  function sliderRow(label, id, min, max, step, start) {
+  function sliderRow(label, id, min, max, step, start, fmt = (v) => (+v).toFixed(2)) {
     const wrap = el('div', 'sp-slider');
-    const lab = el('label', null, label);
+    const labRow = el('div', 'sp-slabel');
+    const val = el('span', 'sp-sval', fmt(start));
+    labRow.append(el('span', null, label), val);
     const input = document.createElement('input');
     input.type = 'range'; input.min = min; input.max = max; input.step = step; input.value = start;
-    input.addEventListener('input', () => slide(id, parseFloat(input.value)));
-    wrap.append(lab, input);
+    input.addEventListener('input', () => {
+      val.textContent = fmt(input.value);
+      slide(id, parseFloat(input.value));
+    });
+    wrap.append(labRow, input);
     return wrap;
   }
   function grid(cols, ...children) {
@@ -161,37 +166,39 @@ export async function initSpookyClient(root) {
     if (tab === 'rig') {
       bodyEl.append(
         el('h3', 'sp-h', 'freeze stack'),
-        grid(4,
-          padBtn('❄ frz', 'freeze', { lit: 'freeze' }),
-          padBtn('pop', 'freezePop'),
-          padBtn('re-grab', 'freezeRegrab'),
-          padBtn('clear', 'freezeClear', { cls: 'warn' })),
+        grid(2,
+          padBtn('❄ frz', 'freeze', { lit: 'freeze', sub: 'grab + layer' }),
+          padBtn('pop', 'freezePop', { sub: 'release top' })),
+        grid(2,
+          padBtn('re-grab', 'freezeRegrab', { sub: 'replace top' }),
+          padBtn('clear', 'freezeClear', { cls: 'warn', sub: 'drop stack' })),
         el('h3', 'sp-h', 'drives & strip'),
         grid(3,
-          padBtn('earth', 'earth'),
-          padBtn('metal', 'metal'),
-          padBtn('tuner', 'tuner'),
-          padBtn('delay', 'delayToggle'),
-          padBtn('reverb', 'reverbToggle'),
-          padBtn('⏸ pause', 'pause', { cls: 'warn' })),
-        el('h3', 'sp-h', 'levels (absolute — like MIDI CC)'),
+          padBtn('earth', 'earth', { sub: 'drive' }),
+          padBtn('metal', 'metal', { sub: 'zone' }),
+          padBtn('tuner', 'tuner', { sub: 'toggle' }),
+          padBtn('delay', 'delayToggle', { sub: 'on / off' }),
+          padBtn('reverb', 'reverbToggle', { sub: 'on / off' }),
+          padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio' })),
+        el('h3', 'sp-h', 'levels'),
         sliderRow('rig master', 'rig.level', 0, 1.5, 0.01, 1),
         sliderRow('delay mix', 'delay.mix', 0, 1, 0.01, 0.3),
         sliderRow('reverb mix', 'reverb.mix', 0, 1, 0.01, 0.3),
+        el('div', 'sp-note', 'sliders send absolute values — like MIDI CC knobs'),
       );
     } else if (tab === 'loop') {
       bodyEl.append(
         el('h3', 'sp-h', 'looper transport'),
         grid(2,
-          padBtn('▶■ loop', 'loopPlayStop', { lit: 'loop' }),
-          padBtn('⧉ grab', 'grab')),
+          padBtn('▶ ■ loop', 'loopPlayStop', { lit: 'loop', sub: 'play / stop' }),
+          padBtn('⧉ grab', 'grab', { sub: 'retro-loop' })),
         grid(2,
-          padBtn('⏺ rec start', 'recStart', { lit: 'rec' }),
-          padBtn('⏹ rec stop', 'recStop')),
+          padBtn('⏺ rec', 'recStart', { lit: 'rec', sub: 'start' }),
+          padBtn('⏹ rec', 'recStop', { sub: 'stop' })),
         el('h3', 'sp-h', 'vox / transport'),
         grid(2,
-          padBtn('vox mute', 'voxMute'),
-          padBtn('⏸ pause', 'pause', { cls: 'warn' })),
+          padBtn('vox', 'voxMute', { sub: 'mute / live' }),
+          padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio' })),
       );
     } else if (tab === 'seq') {
       const cpsWrap = el('div', 'sp-cps');
@@ -233,8 +240,8 @@ export async function initSpookyClient(root) {
       bodyEl.append(
         el('h3', 'sp-h', 'transport'),
         grid(2,
-          padBtn('strudel ▶■', 'strudelPlayStop', { lit: 'strudel' }),
-          padBtn('seq ▶■', 'seqPlayStop', { lit: 'seq' })),
+          padBtn('strudel', 'strudelPlayStop', { lit: 'strudel', sub: 'play / stop' }),
+          padBtn('seq', 'seqPlayStop', { lit: 'seq', sub: 'play / stop' })),
         el('h3', 'sp-h', 'tempo'),
         cpsWrap, cpsSlider,
         el('h3', 'sp-h', 'drum pads'),
@@ -250,15 +257,15 @@ export async function initSpookyClient(root) {
         el('div', 'sp-quale-name', state.quale || '—'),
         el('h3', 'sp-h', 'navigate'),
         grid(2,
-          padBtn('◀ quale', 'qualePrev'),
-          padBtn('quale ▶', 'qualeNext'),
-          padBtn('◀ phase', 'phasePrev'),
-          padBtn('phase ▶', 'phaseNext')),
+          padBtn('◀ quale', 'qualePrev', { sub: 'previous visual' }),
+          padBtn('quale ▶', 'qualeNext', { sub: 'next visual' }),
+          padBtn('◀ phase', 'phasePrev', { sub: 'step back' }),
+          padBtn('phase ▶', 'phaseNext', { sub: 'step forward' })),
         el('h3', 'sp-h', 'stage'),
         grid(3,
-          padBtn('cam ▶', 'camNext'),
-          padBtn('⏸ pause', 'pause', { cls: 'warn' }),
-          padBtn('☾ blackout', 'blackout', { cls: 'warn' })),
+          padBtn('cam ▶', 'camNext', { sub: 'next device' }),
+          padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio' }),
+          padBtn('☾ dark', 'blackout', { cls: 'warn', sub: 'blackout' })),
       );
     }
     reflect();
@@ -278,7 +285,10 @@ export async function initSpookyClient(root) {
       b.classList.toggle('lit', !!on);
       if (kind === 'freeze') {
         const d = state.freezeDepth | 0;
-        b.textContent = d > 1 ? `❄ frz${'²³⁴⁵⁶⁷⁸⁹'[Math.min(d, 9) - 2] || `×${d}`}` : '❄ frz';
+        const label = d > 1 ? `❄ frz${'²³⁴⁵⁶⁷⁸⁹'[Math.min(d, 9) - 2] || `×${d}`}` : '❄ frz';
+        // Pads with a sub-label keep it — only the main span changes.
+        const main = b.querySelector('.sp-pad-main');
+        if (main) main.textContent = label; else b.textContent = label;
       }
     }
     const cpsVal = bodyEl.querySelector('.sp-cps-val');

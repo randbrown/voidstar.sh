@@ -25,7 +25,8 @@ All paths under `src/lib/qualia/` unless noted.
 |---|---|
 | `sync-protocol.js` | Wire contract: topics, room/token/key helpers, action + slider allowlists, the clock math (`projectLeaderPos`, `csyncSample`, `estimateOffset`). **The security gate.** |
 | `sync.js` | `createSync(deps)` — headless engine. Leader: beacon + csync pong + controller ingress. Follower: offset estimation + the lock loop. |
-| `sync-ui.js` | `initSyncUI(deps)` — self-mounting topbar launcher (`⌁ sync`) + modal (role, room, QRs, status, trim). |
+| `sync-ui.js` | `initSyncUI(deps)` — self-mounting topbar launcher (`⌁ sync`) + modal (role, room, QRs, status, trim, A/V controls). |
+| `sync-av.js` | `createSyncAV(deps)` — the WebRTC A/V feed layer: follower publishes fx canvas + recordable mix; leader composites feeds (pip/split/full/blend) and adopts remote audio as source `'remote'`. |
 | `spooky-client.js` + `src/pages/lab/spooky.astro` | The phone controller page. Loads no viz engine. |
 | `workers/entangle-signal/` | Same relay as entanglement; the sync topics are in its allowlist. **Redeploy the Worker when topics change.** |
 
@@ -99,11 +100,38 @@ depth, active quale, pad voices, cps) so the phone reflects reality.
 
 ---
 
+## A/V feed (one rig renders the combined show)
+
+The stretch layer (`sync-av.js`): a **follower** can publish its fx canvas
+(`canvas.captureStream(30)`, track swapped via `core.onCanvas` on quale switches) and/or
+its **recordable audio mix** (`audio.getRecordableStream()` — the same everything-bus the
+screen recorder uses) to the leader over a direct **WebRTC** peer connection. Only
+SDP/ICE signaling rides the relay (`rtc` topic, targeted); the media goes rig-to-rig —
+on one LAN that's a host-candidate direct path (STUN fallback, deliberately no TURN).
+
+Leader-side compositing is **CSS-only** (cam-walk philosophy — zero pixel cost): a
+`#qsync-feeds` layer above the fx canvas with modes **off / pip / split / full / blend**
+(`blend` = `mix-blend-mode: screen`, the same composite the Hydra layer uses). Remote
+audio runs through a WebAudio bus with a volume fader and its analyser is **adopted into
+`audio.js` as `'remote'`** — so a follower's audio drives the leader's visuals and lands
+in the leader's recordings exactly like every local source.
+
+Use it for **single-point recording / streaming / projection**, not for musical
+monitoring: Opus + jitter buffer lands ~40–100 ms late (constant, but late). The cycle
+lock above is what keeps performers tight; the wire is for capture.
+
 ## Caveats & sharp edges
 
 - **Worker deploy**: the new topics (`clock`, `csync`, `fhello`, `chello`, `cwelc`,
-  `ctl`, `cstate`, `sbye`) must be in the deployed Worker's `KNOWN_TOPICS` — redeploy
-  `workers/entangle-signal` or every sync message is silently dropped.
+  `ctl`, `cstate`, `sbye`, `rtc`) must be in the deployed Worker's `KNOWN_TOPICS` —
+  redeploy `workers/entangle-signal` or every sync message is silently dropped.
+- The A/V feed carries the follower's **fx canvas only** (no Hydra layer, no DOM
+  overlays), and the leader's viewport recorder doesn't composite the feed `<video>`
+  elements — remote *audio* records, feed *video* is view-only. Compositing feeds into
+  the recorder canvas is the natural next step.
+- No TURN server: if the two rigs can't reach each other directly (cellular hotspots,
+  AP client isolation), the feed won't connect — the clock sync still works (it's
+  relay-carried). Venue wifi with client isolation is the classic trap.
 - The follower's soft-PLL routes through the (possibly wrapped) `scheduler.setCps`, so a
   follower with sequencer-sync armed re-schedules its Tone loop on each micro-correction.
   Harmless in testing but worth knowing; a raw-setCps path is a candidate refinement.

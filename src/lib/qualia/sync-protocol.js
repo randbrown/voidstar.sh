@@ -35,6 +35,9 @@ export const ST = {
   CTL:    'ctl',     // controller → leader: {k, a?|s?/v?|hit?/g?/w?} action/slider/tap
   CSTATE: 'cstate',  // leader → all: controller state snapshot (small JSON)
   SBYE:   'sbye',    // any → counterpart: leaving (best-effort)
+  RTC:    'rtc',     // A/V signaling: follower → leader {t:'offer'|'ice', …},
+                     // leader → (targeted) follower {t:'answer'|'ice', …}.
+                     // Media itself is peer-to-peer (sync-av.js), not relayed.
 };
 
 // ── Controller ACTION allowlist ─────────────────────────────────────────────

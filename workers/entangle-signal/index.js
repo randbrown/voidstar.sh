@@ -44,6 +44,7 @@ const KNOWN_TOPICS = new Set([
   // src/lib/qualia/sync-protocol.js). Same hub-and-spoke routing:
   // leader connects as role=host, followers/controllers as participants.
   'clock', 'csync', 'fhello', 'chello', 'cwelc', 'ctl', 'cstate', 'sbye',
+  'rtc',   // WebRTC SDP/ICE signaling for the sync A/V feed (media is P2P)
 ]);
 
 const MAX_MSG_BYTES = 16 * 1024;   // one pose/skeleton frame is well under this

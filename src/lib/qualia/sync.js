@@ -25,6 +25,7 @@
 // actually aligns is what leaves the speakers.
 
 import { createTransport } from './entangle-transport-cf.js';
+import { createSyncAV } from './sync-av.js';
 import {
   SYNC_APP_ID, ST, CTL_ACTIONS, clampCtlSlider, clampCtlTap,
   getOrCreateLeaderKey, getOrCreateControlToken,
@@ -72,14 +73,25 @@ export function createSync(deps = {}) {
   const status = {
     role: 'off', room: null, peers: 0, followers: 0, controllers: 0,
     offsetMs: null, rttMs: null, errMs: null, locked: false, playing: false,
+    av: null,
   };
   function pushStatus(patch) {
     Object.assign(status, patch);
     status.peers = transport ? transport.peers().length : 0;
     status.followers = followers.size;
     status.controllers = controllers.size;
+    status.av = av ? av.getStatus() : null;
     try { onStatus({ ...status }); } catch {}
   }
+
+  // ── A/V feed layer (optional — page-init passes the canvas/mix hooks) ────
+  // Media is peer-to-peer; only SDP/ICE rides the relay. sendRtc closes over
+  // the live `transport` so it follows role changes automatically.
+  const av = deps.av ? createSyncAV({
+    ...deps.av,
+    sendRtc: (d, target) => { try { transport?.send(ST.RTC, d, target); } catch {} },
+    onStatus: () => pushStatus({}),
+  }) : null;
 
   function every(ms, fn) { const id = setInterval(fn, ms); timers.push(id); return id; }
   function later(ms, fn) { const id = setTimeout(fn, ms); timers.push(id); return id; }
@@ -160,11 +172,14 @@ export function createSync(deps = {}) {
     transport = await createTransport({
       appId: SYNC_APP_ID, room, role: 'host', key: getOrCreateLeaderKey(room),
     });
+    av?.setRole('leader');
     transport.onPeer(() => { later(120, sendBeacon); pushStatus({}); });
     transport.onLeave((id) => {
       followers.delete(id); controllers.delete(id); ctlBuckets.delete(id);
+      av?.dropPeer(id);
       pushStatus({});
     });
+    unsubs.push(transport.on(ST.RTC, (d, from) => av?.handleRtc(d, from)));
     unsubs.push(transport.on(ST.CSYNC, (data, from) => {
       // NTP pong — reply instantly, targeted. t2 (receive) and t3 (send) are
       // the same read; sub-ms apart in practice.
@@ -266,14 +281,18 @@ export function createSync(deps = {}) {
     roomId = room;
     samples = []; estimate = null; beacon = null; slewing = false;
     transport = await createTransport({ appId: SYNC_APP_ID, room, role: 'participant' });
+    av?.setRole('follower');
     const hello = () => { try { transport.send(ST.FHELLO, { }); } catch {} };
     transport.onPeer(() => {
       hello();
-      // Fresh leader (or reconnect) → re-measure the offset from scratch.
+      // Fresh leader (or reconnect) → re-measure the offset from scratch,
+      // and re-offer the A/V feed if it's armed.
       samples = [];
       for (let i = 0; i < PING_BURST; i++) later(i * PING_BURST_MS, ping);
+      av?.onLeaderSeen();
       pushStatus({});
     });
+    unsubs.push(transport.on(ST.RTC, (d, from) => av?.handleRtc(d, from)));
     transport.onLeave(() => { pushStatus({}); });
     unsubs.push(transport.on(ST.CSYNC, (data) => {
       if (!data || typeof data.t1 !== 'number' || typeof data.t2 !== 'number' || typeof data.t3 !== 'number') return;
@@ -296,6 +315,7 @@ export function createSync(deps = {}) {
 
   // ── Shared ────────────────────────────────────────────────────────────────
   function stop() {
+    av?.stop();
     for (const id of timers) { clearTimeout(id); clearInterval(id); }
     timers = [];
     if (beaconSoonTimer) { clearTimeout(beaconSoonTimer); beaconSoonTimer = null; }
@@ -328,5 +348,7 @@ export function createSync(deps = {}) {
     getTrimMs: () => trimMs,
     setFollowTransport: (on) => { followTransport = !!on; },
     getFollowTransport: () => followTransport,
+    /** The A/V feed layer (null when page-init passed no av hooks). */
+    getAV: () => av,
   };
 }

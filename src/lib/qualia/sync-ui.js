@@ -16,6 +16,7 @@
 // leader hands a second rig.
 
 import { createSync } from './sync.js';
+import { AV_MODES } from './sync-av.js';
 import {
   makeSyncRoomId, normalizeSyncRoomSlug,
   getPinnedSyncRoom, pinSyncRoom, unpinSyncRoom,
@@ -26,6 +27,7 @@ import {
 const ROLE_KEY = 'voidstar.sync.role';
 const TRIM_KEY = 'voidstar.sync.trimMs';
 const FOLLOW_KEY = 'voidstar.sync.followTransport';
+const AV_KEY = 'voidstar.sync.av';
 
 const STYLE_ID = 'qsync-style';
 const CSS = `
@@ -80,12 +82,36 @@ function getNum(key, dflt) {
 
 export function initSyncUI(deps) {
   // ── Engine ────────────────────────────────────────────────────────────────
+  const avPrefs = (() => {
+    try { return JSON.parse(localStorage.getItem(AV_KEY)) || {}; } catch { return {}; }
+  })();
+  const saveAvPrefs = () => {
+    const av = sync.getAV?.();
+    if (!av) return;
+    try {
+      localStorage.setItem(AV_KEY, JSON.stringify({
+        mode: av.getViewMode(), volume: av.getVolume(),
+        sendVideo: av.getSendVideo(), sendAudio: av.getSendAudio(),
+      }));
+    } catch {}
+  };
+
   const sync = createSync({
     ...deps,
+    av: deps.av ? { ...deps.av, viewMode: avPrefs.mode, volume: avPrefs.volume } : undefined,
     trimMs: getNum(TRIM_KEY, 0),
     followTransport: (() => { try { return localStorage.getItem(FOLLOW_KEY) !== '0'; } catch { return true; } })(),
     onStatus: (s) => reflectStatus(s),
   });
+  // Re-arm persisted send toggles (publish itself waits for a follower role +
+  // a visible leader — see sync-av onLeaderSeen).
+  {
+    const av = sync.getAV?.();
+    if (av) {
+      if (avPrefs.sendVideo) av.setSendVideo(true);
+      if (avPrefs.sendAudio) av.setSendAudio(true);
+    }
+  }
 
   // ── Style + launcher ─────────────────────────────────────────────────────
   if (!document.getElementById(STYLE_ID)) {
@@ -150,6 +176,15 @@ export function initSyncUI(deps) {
       lock.dataset.on = s.locked ? '1' : '0';
       lock.textContent = s.role !== 'follower' ? '' :
         (s.locked ? '⌁ locked to the leader' : (s.errMs == null ? '… measuring' : '… converging'));
+    }
+    if (s.av) {
+      set('[data-qs-avfeeds]', `· ${s.av.feeds} live`);
+      const sendEl = q('[data-qs-avsend]');
+      if (sendEl) {
+        sendEl.textContent = (!s.av.sending.video && !s.av.sending.audio)
+          ? 'off' : s.av.sending.state;
+        sendEl.style.color = s.av.sending.state === 'live' ? 'var(--cyan,#22d3ee)' : '';
+      }
     }
   }
 
@@ -223,6 +258,32 @@ export function initSyncUI(deps) {
         <div class="qsync-lock" data-qs-lock data-on="0"></div>
       </div>` : ''}
 
+      ${role === 'leader' && sync.getAV?.() ? `
+      <div class="qsync-sect">
+        <h3>Remote feeds <span data-qs-avfeeds style="text-transform:none;color:var(--muted,#888)"></span></h3>
+        <div class="qsync-roles" style="flex-wrap:wrap">
+          ${AV_MODES.map(m => `<button class="qsync-chip ${sync.getAV().getViewMode() === m ? 'on' : ''}" data-avmode="${m}">${m}</button>`).join('')}
+        </div>
+        <div class="qsync-row" style="margin-top:.6rem">
+          <span style="font-size:.78rem;color:var(--muted,#888)">feed volume</span>
+        </div>
+        <input type="range" class="qsync-trim" data-qs-avvol min="0" max="1.5" step="0.01" value="${sync.getAV().getVolume()}">
+        <div class="qsync-note">A follower rig can send its fx canvas + audio mix here (rig-to-rig
+        WebRTC, media never touches the relay). <b>blend</b> = screen-composite, the Hydra look.
+        Remote audio drives visuals and lands in recordings; feed video is view-only for now.</div>
+      </div>` : ''}
+
+      ${role === 'follower' && sync.getAV?.() ? `
+      <div class="qsync-sect">
+        <h3>A/V feed → leader <span style="text-transform:none;color:var(--muted,#888)">· <span data-qs-avsend>off</span></span></h3>
+        <label class="qsync-check"><input type="checkbox" data-qs-avvideo ${sync.getAV().getSendVideo() ? 'checked' : ''}>
+          send video (this rig's fx canvas)</label>
+        <label class="qsync-check" style="margin-top:.4rem"><input type="checkbox" data-qs-avaudio ${sync.getAV().getSendAudio() ? 'checked' : ''}>
+          send audio (recordable mix)</label>
+        <div class="qsync-note">For one-point recording / streaming on the leader. Wire audio lands
+        ~40–100 ms late — keep performance audio local per rig; the cycle lock is what keeps you tight.</div>
+      </div>` : ''}
+
       ${role === 'follower' ? `
       <div class="qsync-sect">
         <h3>Follower tuning</h3>
@@ -259,6 +320,26 @@ export function initSyncUI(deps) {
     modal.querySelector('[data-qs-follow]')?.addEventListener('change', (e) => {
       sync.setFollowTransport(e.currentTarget.checked);
       try { localStorage.setItem(FOLLOW_KEY, e.currentTarget.checked ? '1' : '0'); } catch {}
+    });
+    modal.querySelectorAll('[data-avmode]').forEach(b =>
+      b.addEventListener('click', () => {
+        sync.getAV?.()?.setViewMode(b.dataset.avmode);
+        saveAvPrefs();
+        modal.querySelectorAll('[data-avmode]').forEach(x =>
+          x.classList.toggle('on', x.dataset.avmode === b.dataset.avmode));
+      }));
+    const avVol = modal.querySelector('[data-qs-avvol]');
+    avVol?.addEventListener('input', () => {
+      sync.getAV?.()?.setVolume(+avVol.value);
+      saveAvPrefs();
+    });
+    modal.querySelector('[data-qs-avvideo]')?.addEventListener('change', (e) => {
+      sync.getAV?.()?.setSendVideo(e.currentTarget.checked);
+      saveAvPrefs();
+    });
+    modal.querySelector('[data-qs-avaudio]')?.addEventListener('change', (e) => {
+      sync.getAV?.()?.setSendAudio(e.currentTarget.checked);
+      saveAvPrefs();
     });
     const trim = modal.querySelector('[data-qs-trim]');
     trim?.addEventListener('input', () => {

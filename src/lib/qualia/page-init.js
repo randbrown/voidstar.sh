@@ -6646,6 +6646,17 @@ export function initQualiaPage() {
           play:        () => strudel.play?.(),
           stop:        () => strudel.stop?.(),
         },
+        // A/V feed hooks (stretch layer): follower publishes the fx canvas +
+        // the recordable mix; a receiving leader adopts the remote audio as
+        // source 'remote' so it drives visuals and lands in recordings.
+        av: {
+          getCanvas:      () => core.getCanvas?.(),
+          onCanvas:       (fn) => core.onCanvas?.(fn),
+          getMixStream:   () => audio.getRecordableStream?.(),
+          resumeMix:      () => audio.resumeRecordableMix?.(),
+          adoptAnalyser:  (ctx, an) => audio.adoptAnalyser?.(ctx, an, 'remote'),
+          releaseAdopted: () => audio.releaseAdopted?.('remote'),
+        },
         actions: {
           ...padActions,
           seqPlayStop: () => { sequencer.isPlaying?.() ? sequencer.stop() : sequencer.play(); },
