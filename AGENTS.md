@@ -27,6 +27,7 @@ the main workstation page `/qualia` (`src/pages/qualia.astro` → wired together
 | **Visuals (qualia fx)** | 24 swappable visualizer "quales" + an 8-game arcade, on a shared Canvas2D/WebGL2/Three.js harness | `core.js`, `fx/`, `overlay.js`, `modulation.js` |
 | **Pose** | MediaPipe pose tracking, run off the main thread in a worker; landmarks become modulation channels | `pose.js`, `pose-worker.js`, `pose-features.js`, `vision-loader.js`, `video.js` |
 | **Entanglement** | Audience participation — phones join via QR, run their own pose, and feed sandboxed, rate-limited `crowd.*` channels and votes | `entangle*.js`, `workers/entangle-signal/` |
+| **Playback sync + spooky** | Cross-device cycle/CPS lock (leader/follower over the relay — no audio on the wire) + the phone remote-controller pad | `sync*.js`, `spooky-client.js`, `workers/entangle-signal/` |
 | **Recording / export** | Canvas+audio capture to MP4 (with SMPTE timecode) or WebM; loop/set export to `.qualem.zip` | `recorder.js`, `mp4-timecode.js`, `wav.js`, `zip.js` |
 | **Control surface** | DOIO KB16-01 macro pad (sends keystrokes) + true MIDI CC; maps physical knobs/keys to qualia functions | `docs/doio-kb16-qualia-keymap.md`, handlers in `page-init.js` |
 
@@ -59,6 +60,7 @@ non-negotiables; the technical detail lives in the docs below.
 | Sequencer kits + samples shared with Strudel (the `strudel.json` pipeline) | [`docs/samples.md`](docs/samples.md) |
 | Live coding — Strudel REPL, Hydra bridge, the `qualia.setParam` surface | [`docs/livecoding.md`](docs/livecoding.md) |
 | Audience participation + pose — the entanglement mesh and pose pipeline | [`docs/entanglement.md`](docs/entanglement.md) |
+| Cross-device playback sync (cycles/CPS) + the spooky phone controller | [`docs/playback-sync.md`](docs/playback-sync.md) |
 | Qualia Google Drive sync — login, the `voidstar_qualia` folder tree, per-component subfolders, the qualem-card + video-quale UI | [`docs/qualia-drive-sync.md`](docs/qualia-drive-sync.md) |
 | The setlist app (`/lab/setlist`) — data model, backup vs auto-link, chart-fallback ladder, annotations, its worker | [`docs/setlist-app.md`](docs/setlist-app.md) |
 | The mind app (`/lab/mind`) — notes store, editor, tasks-in-notes, folders, capture, Drive sync | [`docs/mind-app.md`](docs/mind-app.md) |

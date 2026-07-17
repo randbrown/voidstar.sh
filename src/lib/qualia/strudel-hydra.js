@@ -1022,6 +1022,89 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     const pos = (now - _strudelEpoch) * _strudelEpochCps;
     return { pos, cps: _strudelEpochCps };
   }
+  // ── Cross-device clock surface (playback sync — sync.js) ─────────────────
+  // Everything above is local-AudioContext-relative; these three calls are the
+  // seam the LAN/room sync engine drives. Same defensive posture as the rest
+  // of the scheduler probing: works on both cyclist variants, degrades to
+  // no-op/false instead of throwing when the CDN build drifts.
+
+  /** One-shot snapshot for the sync beacon / follower correction loop:
+   *  { playing, cps, pos, outSec }. `pos` is the absolute AUDIBLE cycle float
+   *  (null when stopped / unreadable); `outSec` is this device's output
+   *  latency (DAC path), which does NOT cancel across devices the way
+   *  scheduler latency does — the sync engine subtracts it on both ends. */
+  function getClockState() {
+    const info = getStrudelAudibleCyclePos();
+    const ctx = getAudioCtxSafe();
+    let outSec = 0;
+    try { outSec = ctx?.outputLatency ?? ctx?.baseLatency ?? 0; } catch {}
+    return {
+      playing: !!isPlayingFlag,
+      cps: readSchedulerCps(),
+      pos: info ? info.pos : null,
+      outSec: (typeof outSec === 'number' && outSec >= 0 && outSec < 1) ? outSec : 0,
+    };
+  }
+
+  /** Set the scheduler cps immediately (undebounced). Goes through the
+   *  possibly-wrapped scheduler.setCps so the sequencer-follow + epoch
+   *  reanchor side effects fire exactly like a local tempo change. */
+  function setStrudelCps(v) {
+    const cps = +v;
+    if (!(cps > 0)) return false;
+    try {
+      const s = getScheduler();
+      if (s && typeof s.setCps === 'function') { s.setCps(cps); return true; }
+    } catch {}
+    try {
+      if (typeof globalThis.setcps === 'function') { reanchorEpoch(cps); globalThis.setcps(cps); return true; }
+    } catch {}
+    return false;
+  }
+
+  /** Hard-jump the AUDIBLE cycle position to `targetPos` (absolute cycles,
+   *  float) as of "now". Used by the sync follower for the initial lock /
+   *  large-error recovery; small errors are slewed via setCps instead.
+   *  Returns false when no jump path exists (caller falls back to slew). */
+  function setStrudelCyclePos(targetPos) {
+    if (typeof targetPos !== 'number' || !Number.isFinite(targetPos)) return false;
+    const s = getScheduler();
+    const ctx = getAudioCtxSafe();
+    const now = ctx?.currentTime;
+    if (!s || typeof now !== 'number') return false;
+    const cps = readSchedulerCps();
+    const latency = readSchedulerLatency();
+    // The scheduling CURSOR runs `latency` seconds ahead of audible — to make
+    // the audible position equal targetPos now, the cursor must sit ahead.
+    const cursorPos = targetPos + latency * cps;
+    let jumped = false;
+    // Preferred: the scheduler's own setCycle (present on both variants in
+    // current builds; neocyclist forwards it to the clock worker).
+    try {
+      if (typeof s.setCycle === 'function') { s.setCycle(cursorPos); jumped = true; }
+    } catch {}
+    // h3 cyclist fallback: rewrite the (anchorCycle, anchorSec) pair the
+    // scheduling formula hangs off (same fields probeStrudelState reads).
+    if (!jumped) {
+      try {
+        if (typeof s.seconds_at_cps_change === 'number' &&
+            typeof s.num_cycles_at_cps_change === 'number') {
+          s.seconds_at_cps_change = now;
+          s.num_cycles_at_cps_change = cursorPos;
+          jumped = true;
+        }
+      } catch {}
+    }
+    if (jumped) {
+      // Keep Probe B + the freshness gate consistent with the new position so
+      // boundary probes don't briefly report the pre-jump grid.
+      _strudelEpochCps = cps;
+      _strudelEpoch = now - targetPos / cps;
+      _playAnchorCtxTime = Math.min(_playAnchorCtxTime, now);
+    }
+    return jumped;
+  }
+
   function emitPlayState(playing) {
     if (_suppressPlayStateChange) return;
     try { onPlayStateChange?.(!!playing); } catch {}
@@ -1639,6 +1722,11 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     /** Strudel's live cps (cycles/sec). The sequencer adopts this on realign
      *  so both clocks share a tempo — phase-lock needs matching rates. */
     getStrudelCps: () => readSchedulerCps(),
+    /** Cross-device clock surface for the playback-sync engine (sync.js):
+     *  beacon snapshot + immediate cps set + hard cycle jump. */
+    getClockState,
+    setCps: setStrudelCps,
+    setCyclePos: setStrudelCyclePos,
     /** Cyclist lookahead (seconds). Higher = fewer dropouts under main-thread
      *  load, slightly more play→sound delay. Re-run seq realign after change. */
     setStrudelLatency,

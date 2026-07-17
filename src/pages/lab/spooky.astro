@@ -1,0 +1,120 @@
+---
+// Spooky — the performer's phone controller for the qualia rig.
+//
+// "Spooky action at a distance": scan the private QR from the qualia sync
+// panel (⌁ sync → leader) and this page becomes a wireless DOIO — pads,
+// sliders and drum taps that dispatch through the same action map as the
+// macro-pad's keystrokes and MIDI notes. Deliberately lightweight: no viz
+// engine, just spooky-client.js over the entangle-signal relay.
+//
+// The join link carries the room + CONTROL TOKEN in the URL fragment — it
+// authenticates this phone to drive the rig, so the QR is for the performer's
+// own pocket, never the projector.
+import { Image } from 'astro:assets';
+import logo from '../../assets/art/logos_alpha/voidstar_logo_cosmos_atom_0.png';
+import ThemeBoot from '../../components/ThemeBoot.astro';
+import '../../styles/themes.css';
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <ThemeBoot />
+  <title>Spooky | voidstar</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { min-height: 100%; background:
+      radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent) 22%, var(--void)) 0%, var(--void) 60%);
+      color: var(--text); overscroll-behavior: none; }
+    body { font-family: var(--font-mono);
+      padding: max(.8rem, env(safe-area-inset-top)) max(.8rem, env(safe-area-inset-right))
+               calc(4.2rem + env(safe-area-inset-bottom)) max(.8rem, env(safe-area-inset-left));
+      max-width: 30rem; margin: 0 auto; -webkit-user-select: none; user-select: none;
+      touch-action: manipulation; }
+    header { text-align: center; margin: .6rem 0 .8rem; }
+    header h1 { font-size: 1.25rem; letter-spacing: .14em; font-weight: 600;
+      background: linear-gradient(90deg, var(--cyan), var(--accent), var(--pink));
+      -webkit-background-clip: text; background-clip: text; color: transparent; }
+    header p { color: var(--muted); font-size: .74rem; margin-top: .25rem; }
+    .brand { display: inline-flex; align-items: center; gap: .5rem; text-decoration: none;
+      color: var(--muted); margin-bottom: .4rem; }
+    .brand-logo { width: 1.9rem; height: 1.9rem; display: block;
+      filter: drop-shadow(0 0 .45rem var(--accent)); }
+    .brand-tag b { color: var(--text); font-weight: 600; }
+    [data-status] { text-align: center; padding: .5rem .7rem; border-radius: .5rem;
+      background: rgba(12,10,28,.7); border: 1px solid var(--border); font-size: .8rem; margin-bottom: .8rem; }
+    [data-status][data-kind="ok"]  { border-color: var(--cyan); color: var(--cyan); }
+    [data-status][data-kind="err"] { border-color: var(--pink); color: var(--pink); }
+
+    /* Tab bar — fixed to the bottom, thumb territory. */
+    [data-tabs] { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+      display: flex; gap: .35rem; justify-content: center;
+      padding: .5rem .6rem calc(.5rem + env(safe-area-inset-bottom));
+      background: color-mix(in srgb, var(--void) 88%, transparent);
+      backdrop-filter: blur(8px); border-top: 1px solid var(--border); }
+    .sp-tab { flex: 1; max-width: 7.5rem; padding: .65rem .3rem; font: inherit; font-size: .82rem;
+      cursor: pointer; border-radius: .55rem; background: #120f24; color: var(--muted);
+      border: 1px solid var(--border); }
+    .sp-tab.on { color: var(--cyan); border-color: var(--cyan); background: #15132a; }
+
+    .sp-h { font-size: .68rem; text-transform: uppercase; letter-spacing: .1em;
+      color: #b9b3e6; margin: .9rem 0 .45rem; font-weight: 600; }
+    .sp-grid { display: grid; gap: .45rem; margin-bottom: .45rem; }
+    .sp-pad { min-height: 3.4rem; padding: .5rem .35rem; font: inherit; font-size: .88rem;
+      cursor: pointer; border-radius: .6rem; background: #15132a; color: var(--text);
+      border: 1px solid var(--accent); transition: transform .05s, background .12s;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem; }
+    .sp-pad:active { transform: scale(.96); background: #1d1a38; }
+    .sp-pad.lit { background: var(--pink); border-color: var(--pink); color: #15021a; font-weight: 600; }
+    .sp-pad.warn { border-color: var(--amber, #fbbf24); }
+    .sp-pad-sub { font-size: .62rem; color: var(--muted); }
+    .sp-slider { display: flex; flex-direction: column; gap: .25rem; margin-bottom: .7rem; }
+    .sp-slider label { font-size: .78rem; color: #cfcaf0; }
+    input[type=range] { width: 100%; height: 32px; accent-color: var(--cyan); }
+    .sp-cps { display: flex; justify-content: space-between; align-items: baseline; font-size: .85rem; }
+    .sp-cps-val { color: var(--cyan); font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+    .sp-write { width: 100%; margin-bottom: .55rem; border-style: dashed; }
+    .sp-write.armed { background: var(--pink); border-color: var(--pink); border-style: solid;
+      color: #15021a; font-weight: 600; }
+    .sp-drums { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+    .sp-drum { aspect-ratio: 1.25; font: inherit; font-size: .82rem; cursor: pointer;
+      border-radius: .7rem; background: #120f24; color: var(--text);
+      border: 1px solid var(--border); word-break: break-all; padding: .3rem;
+      transition: background .08s; touch-action: manipulation; }
+    .sp-drum.hit { background: var(--cyan); color: #041016; border-color: var(--cyan); }
+    .sp-drum.muted { opacity: .4; }
+    .sp-empty, .sp-note { color: var(--muted); font-size: .74rem; font-style: italic;
+      text-align: center; padding: .6rem .3rem; }
+    .sp-quale-name { text-align: center; font-size: 1.05rem; color: var(--cyan);
+      padding: .4rem; border: 1px solid var(--border); border-radius: .55rem;
+      background: rgba(12,10,28,.55); }
+    footer { text-align: center; color: var(--muted); font-size: .68rem; margin-top: 1.4rem; opacity: .7; }
+  </style>
+</head>
+<body>
+  <main id="spooky-root">
+    <header>
+      <a class="brand" href="/qualia" target="_blank" rel="noopener" title="Open qualia in a new tab">
+        <Image src={logo} alt="voidstar" width={76} height={76} class="brand-logo" />
+        <span class="brand-tag"><b>qualia</b> // remote</span>
+      </a>
+      <h1>⌁ SPOOKY</h1>
+      <p>action at a distance — this phone drives the rig</p>
+    </header>
+    <div data-status>Reaching across the void…</div>
+    <div data-body></div>
+    <nav data-tabs aria-label="controller tabs"></nav>
+    <footer>voidstar.sh — entangled control, no audio leaves the rig</footer>
+  </main>
+
+  <script>
+    import { initSpookyClient } from '../../lib/qualia/spooky-client.js';
+    initSpookyClient(document.getElementById('spooky-root'));
+  </script>
+</body>
+</html>

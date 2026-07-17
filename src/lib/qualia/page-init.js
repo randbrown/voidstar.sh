@@ -32,6 +32,7 @@ import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { createChron } from './chron.js';
 import { initQRInterject } from './qr-interject.js';
+import { initSyncUI } from './sync-ui.js';
 import { createRecorder } from './recorder.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import {
@@ -4261,6 +4262,9 @@ export function initQualiaPage() {
   // we close over a holder that gets populated after construction —
   // by the time Strudel actually fires play, the holder is set.
   let _sequencerRef = null;
+  // Forward holder for the playback-sync engine (initSyncUI, wired during
+  // boot) — the strudel cps-wraps and transport callback nudge its beacon.
+  let _syncRef = null;
   // Sync between strudel and sequencer is held off until BOTH panels have
   // been opened at least once this page session. On a fresh page load,
   // playing strudel before the user has ever seen the sequencer (or vice
@@ -4277,6 +4281,8 @@ export function initQualiaPage() {
     setParam: (fxId, paramId, value) => core.setParam(fxId, paramId, value),
     scopeCanvas: document.getElementById('test-canvas'),
     onPlayStateChange: (playing) => {
+      // A leader's play/stop should reach followers within a beacon tick.
+      try { _syncRef?.notifyTransport?.(); } catch {}
       const seq = _sequencerRef;
       if (!seq?.isSyncOn?.()) return;
       if (!bothPanelsOpened()) return;
@@ -4594,6 +4600,7 @@ export function initQualiaPage() {
         if (bothPanelsOpened()) {
           try { sequencer.applyCpsFromStrudel(+v); } catch {}
         }
+        try { _syncRef?.notifyCpsChanged?.(); } catch {}
         return orig.call(this, v);
       };
       _strudelGlobalWrapped = true;
@@ -4609,6 +4616,7 @@ export function initQualiaPage() {
             if (bothPanelsOpened()) {
               try { sequencer.applyCpsFromStrudel(+v); } catch {}
             }
+            try { _syncRef?.notifyCpsChanged?.(); } catch {}
             return orig(v);
           };
           sched.__qualiaWrapped = true;
@@ -6624,6 +6632,61 @@ export function initQualiaPage() {
     // dormant (no network) until the performer opens a room.
     try { entangleEngine = initEntangleUI({ core, mesh, actions: { phaseNext } }); }
     catch (err) { console.error('[qualia] entangle init failed:', err); }
+
+    // Playback sync + spooky controller. Self-mounts its topbar launcher and
+    // modal; dormant (no network) until the performer picks a role. The
+    // controller's actions dispatch through the SAME padActions map as the
+    // DOIO keystrokes and MIDI notes — three input paths, one behavior.
+    try {
+      _syncRef = initSyncUI({
+        clock: {
+          get:         () => strudel.getClockState?.(),
+          setCps:      (v) => strudel.setCps?.(v),
+          setCyclePos: (p) => strudel.setCyclePos?.(p),
+          play:        () => strudel.play?.(),
+          stop:        () => strudel.stop?.(),
+        },
+        actions: {
+          ...padActions,
+          seqPlayStop: () => { sequencer.isPlaying?.() ? sequencer.stop() : sequencer.play(); },
+        },
+        applySlider: (id, v) => {
+          switch (id) {
+            case 'rig.level':  looper.setRigLevel?.(v); break;
+            case 'delay.mix':  looper.setStripParam?.('delay', 'mix', v); break;
+            case 'reverb.mix': looper.setStripParam?.('reverb', 'mix', v); break;
+            case 'seq.volume': sequencer.setVolume?.(v); break;
+            case 'cps':
+              // Global tempo: Strudel first (the clock), sequencer mirrored
+              // directly (fromStrudel skips its debounce-echo back).
+              strudel.setCps?.(v);
+              try { sequencer.setCps?.(v, { fromStrudel: true }); } catch {}
+              break;
+          }
+        },
+        seqTap: (voice, gain, write) => {
+          try { sequencer.tapHit?.(voice, { gain, write }); } catch {}
+        },
+        getCtlState: () => {
+          let model = null;
+          try { model = sequencer.patterns?.getCurrent?.() || null; } catch {}
+          const activeId = core.activeId?.() || null;
+          let qualeName = activeId || '';
+          try { qualeName = mesh.list().find(m => m.id === activeId)?.name || qualeName; } catch {}
+          return {
+            cps: strudel.getStrudelCps?.() ?? null,
+            strudelPlaying: !!strudel.isPlaying?.(),
+            seqPlaying: !!sequencer.isPlaying?.(),
+            loopPlaying: !!looper.isPlaying?.(),
+            recording: !!looper.isRecording?.(),
+            freezeDepth: looper.freezeDepth?.() ?? 0,
+            quale: qualeName,
+            voices: sequencer.getVoices?.() || [],
+            grid: model ? { beats: model.beats, steps: model.steps, cycles: model.cycles } : null,
+          };
+        },
+      });
+    } catch (err) { console.error('[qualia] sync init failed:', err); }
 
     // Restore audio source. `withMic` (from the "enable mic" overlay button)
     // forces audio mode to 'all' even if the persisted mode is 'off' — the
