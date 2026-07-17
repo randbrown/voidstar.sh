@@ -50,6 +50,7 @@ import neuralField     from './fx/neural-field.js';
 import gargantuaVoid   from './fx/gargantua-void.js';
 import voidstarLogo    from './fx/voidstar-logo.js';
 import fractal         from './fx/fractal.js';
+import maths           from './fx/maths.js';
 import spectrum        from './fx/spectrum.js';
 import vintageAnalog   from './fx/vintage-analog.js';
 import synthwave       from './fx/synthwave.js';
@@ -166,6 +167,7 @@ export function initQualiaPage() {
   mesh.register(voidstarLogo);
   mesh.register(neuralField);
   mesh.register(fractal);
+  mesh.register(maths);
   mesh.register(vintageAnalog);
   mesh.register(synthwave);
   mesh.register(telemetry);
