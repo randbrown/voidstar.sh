@@ -1,0 +1,32 @@
+{
+  "name": "spooky · voidstar",
+  "short_name": "spooky",
+  "description": "Action at a distance — the qualia rig's wireless phone controller: rig drives, freeze stack, looper transport, live drum pads, quale navigation.",
+  "id": "/lab/spooky",
+  "start_url": "/lab/spooky",
+  "scope": "/lab/spooky",
+  "display": "fullscreen",
+  "orientation": "portrait",
+  "background_color": "#05050d",
+  "theme_color": "#05050d",
+  "icons": [
+    {
+      "src": "/icon-spooky-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-spooky-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-spooky-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

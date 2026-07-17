@@ -265,7 +265,11 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       try { Tone.getTransport().clear(loopId); } catch {}
       loopId = null;
     }
+    _lastTickAbs = null;
   }
+  // Live-tap quantization anchor — audio time + cell index of the most recent
+  // scheduled tick (written in the scheduleRepeat callback, read by tapHit).
+  let _lastTickAbs = null, _lastTickCell = 0;
 
   // Convert an absolute rawContext audio time to Tone transport time. Uses
   // the transport-zero captured at start() so it stays exact in the
@@ -358,6 +362,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       // Read model live each tick so cell toggles, mute changes, and gain
       // tweaks land in the next hit without a play/stop dance.
       const m = model;
+      // Anchor for live tap quantization (tapHit): the exact audio time of
+      // this cell tick. Two scalar writes — safe on the scheduling thread.
+      _lastTickAbs = time;
+      _lastTickCell = cellIdx;
       // Indexed loop, not for…of: this runs on Tone's audio-scheduling thread,
       // and for…of allocates an iterator object per tick.
       const pads = m.pads;
@@ -1706,6 +1714,42 @@ export function createSequencer({ audio, syncStrudel } = {}) {
 
   if (wasOpenLastSession) open();
 
+  // ── Live drum-pad taps (spooky controller / any remote surface) ─────────
+  // Audition-trigger a voice NOW, and optionally WRITE the hit into the
+  // pattern at the nearest cell to the audible moment — the classic drum
+  // machine "live record" move, quantized to the grid the pattern already
+  // plays on. Write only lands while the transport runs (there's no playhead
+  // to quantize against otherwise) and only on a pad the pattern has.
+  async function triggerVoice(voice, gain = 1) {
+    if (typeof voice !== 'string' || !voice) return false;
+    try { await Tone.start(); } catch { return false; }
+    ensureKit();
+    ensureAnalyserAdopted();
+    try { kit?.trigger(voice, Tone.now(), Math.max(0, Math.min(1.5, +gain || 1))); } catch { return false; }
+    return true;
+  }
+  async function tapHit(voice, opts = {}) {
+    const pad = model.pads.find(p => p.voice === voice) || null;
+    const played = await triggerVoice(voice, opts.gain ?? pad?.gain ?? 1);
+    if (!played || !opts.write || !isPlaying || !pad || _lastTickAbs == null) {
+      return { played, wrote: false };
+    }
+    const dur = cellDuration();
+    const cells = totalCells();
+    const nowAbs = Tone.getContext().rawContext.currentTime;
+    // Nearest cell to the audible now, anchored on the last scheduled tick.
+    const cellFloat = _lastTickCell + (nowAbs - _lastTickAbs) / dur;
+    const cell = ((Math.round(cellFloat) % cells) + cells) % cells;
+    if (!pad.hits[cell]) {
+      pad.hits[cell] = 1;
+      model.updatedAt = Date.now();
+      const el = colCells[cell]?.[model.pads.indexOf(pad)];
+      if (el) el.classList.add('on');
+      persistSoon();
+    }
+    return { played: true, wrote: true, cell };
+  }
+
   // ── Public API ─────────────────────────────────────────────────────────
   function perFrame() {
     // Drain the latest scheduled step from the audio thread to the DOM.
@@ -1756,6 +1800,10 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     applyCpsFromStrudel,
     resync,
     perFrame,
+    // Remote-surface hooks (spooky controller): audition + live tap-record.
+    triggerVoice,
+    tapHit,
+    getVoices: () => model.pads.map(p => ({ voice: p.voice, mute: !!p.mute })),
     patterns: {
       list:     loadList,
       add:      saveCurrentToList,

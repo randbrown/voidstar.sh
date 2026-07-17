@@ -27,6 +27,10 @@ const APPS = [
   { id: 'qualia', accent: '#8b5cf6', letter: 'Q' },
   { id: 'setlist', accent: '#f59e0b', letter: 'S' },
   { id: 'mind', accent: '#14b8a6', letter: 'M' },
+  // Spooky (the phone controller) leads with its ⌁ brand glyph — cyan, like
+  // the sync/controller accent throughout the qualia UI.
+  // scale compensates ⌁ being small in DejaVu's em box vs a capital letter.
+  { id: 'spooky', accent: '#22d3ee', letter: '⌁', scale: 1.9 },
 ];
 
 // Mix a hex color toward white (amt 0..1) — used for the letter's top highlight.
@@ -49,10 +53,10 @@ async function emblemDataUri() {
 
 // One full icon face as an SVG: dark tile + radial accent wash + optional ring
 // + emblem tick (top) + glowing monogram letter (center).
-function faceSvg(size, { accent, letter }, emblemUri, { ring, letterFrac, letterCY, emblemFrac, emblemCY }) {
+function faceSvg(size, { accent, letter, scale = 1 }, emblemUri, { ring, letterFrac, letterCY, emblemFrac, emblemCY }) {
   const r = size / 2;
   const light = lighten(accent, 0.55);
-  const fontSize = size * letterFrac;
+  const fontSize = size * letterFrac * scale;
   const baseline = size * letterCY + fontSize * 0.35; // vertically center the cap-height glyph
   const box = size * emblemFrac;
   const ex = (size - box) / 2;
