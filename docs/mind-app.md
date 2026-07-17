@@ -226,9 +226,11 @@ only when the mind app next runs on that device.
   copies its body/tags into a fresh note.
 - **Ongoing notes** (`ongoing.js` pure core + `ongoing-actions.js` +
   `views/quick-add.js`, tested by `scripts/check-mind-ongoing.mjs`): tag any
-  long-running note `#ongoing` (lyric ideas, a quotes log) and it grows two
-  one-tap capture surfaces — a "＋ \<title\>" chip on home and an
-  "Add to: \<title\>" palette action — both opening a **quick-add sheet**
+  long-running note `#ongoing` (lyric ideas, a quotes log) and it grows three
+  one-tap capture surfaces — a "＋ \<title\>" chip on home (capped at 6), an
+  "Add to: \<title\>" palette action, and an **∞ badge on its note card**
+  (marks it in the list and taps straight into capture, covering notes past
+  the chip cap) — all opening a **quick-add sheet**
   (textarea, Ctrl+Enter commits, "add & open" jumps into the full note).
   Per-note prefs ride `meta.ongoing` (fill-field-protected): insert at
   **top or end** (default top) and an optional **date stamp**

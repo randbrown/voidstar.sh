@@ -432,6 +432,23 @@ const buildStamp = readBuildStamp();
       color: var(--cyan);
     }
     .mn-pin-dot { color: var(--amber); font-size: 0.85rem; }
+    .mn-ongoing-badge {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      line-height: 1;
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+      border-radius: 999px;
+      padding: 0.1rem 0.45rem;
+      min-height: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .mn-ongoing-badge:hover {
+      background: color-mix(in srgb, var(--accent) 22%, transparent);
+      border-color: var(--accent);
+    }
     .mn-conflict-badge {
       font-family: var(--font-mono);
       font-size: 0.65rem;
