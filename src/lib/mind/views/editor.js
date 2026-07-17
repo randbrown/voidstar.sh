@@ -12,6 +12,7 @@ import { pushPendingAttachments } from '../attachments-drive.js';
 import { mountAnnotationOverlay } from '../annotation.js';
 import { pickSketchPaper, createSketchAttachment } from '../sketch.js';
 import { query } from '../search.js';
+import { listOngoingNotes, fileNoteInto } from '../ongoing-actions.js';
 import { isSupported as speechSupported } from '../voice.js';
 import { applySink } from '../audio-out.js';
 import { processPendingOcr } from '../ocr.js';
@@ -290,6 +291,11 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   edToolbar.appendChild(undoBtn);
   edToolbar.appendChild(redoBtn);
   edToolbar.appendChild(el('span', 'mn-editor-toolbar-spacer'));
+  // Capture-then-file: append this note's content to another note (ongoing
+  // notes offered first), move its attachments/tasks along, trash this note.
+  const mergeBtn = btn('&#8618; merge into&hellip;', 'mn-btn-ghost mn-ed-merge', () => openMergePicker());
+  mergeBtn.title = 'append this note’s content to another note, then trash this one';
+  edToolbar.appendChild(mergeBtn);
   const discardBtn = btn('&#8617; discard', 'mn-btn-ghost mn-ed-discard', () => {
     if (editor.getMarkdown() === openBody) { navigate('#home'); return; }
     confirmBox('Discard the changes made to this note since you opened it, and exit?', async () => {
@@ -515,6 +521,76 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   const linkBtn = btn('&#128279;', 'mn-btn-icon', openLinkPicker);
   linkBtn.title = 'link to another note (or type [[ in the note)';
   actions.insertBefore(linkBtn, pinBtn);
+
+  // Merge-into picker: choose the note this one's content gets filed into.
+  // Empty query lists ongoing (#ongoing) notes — the usual targets — and
+  // falls back to recent notes; typing searches everything. The pending
+  // autosave is flushed BEFORE filing so the merged text is what's on screen,
+  // and nothing re-arms a save afterwards (a post-trash save would resurrect
+  // the note — same ordering rule as the delete button).
+  function openMergePicker() {
+    const overlay = el('div', 'mn-modal-overlay');
+    const box = el('div', 'mn-modal');
+    box.appendChild(el('div', 'mn-modal-title', 'merge into note'));
+    const input = el('input', 'mn-input');
+    input.type = 'search';
+    input.placeholder = 'search notes… (Enter = top hit)';
+    box.appendChild(input);
+    const list = el('div', 'mn-linklist');
+    box.appendChild(list);
+    overlay.appendChild(box);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+
+    const pick = (h) => {
+      overlay.remove();
+      confirmBox(`Add this note's content to "${h.title}" and move this note to trash? (restorable for 30 days)`, async () => {
+        try {
+          await flushPending();
+          await fileNoteInto(note.id, h.id);
+          navigate(`#note/${h.id}`);
+        } catch (e) { alert(`merge failed: ${e.message}`); }
+      });
+    };
+
+    let seq = 0;
+    let topHit = null;
+    const draw = async () => {
+      const mySeq = ++seq;
+      const q = input.value.trim();
+      let hits;
+      if (!q) {
+        const ongoing = (await listOngoingNotes()).filter(n => n.id !== note.id);
+        hits = ongoing.length
+          ? ongoing.slice(0, 12).map(n => ({ id: n.id, title: n.title, ongoing: true }))
+          : (await query('', { type: 'note' }))
+            .filter(h => h.id !== note.id)
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+            .slice(0, 12);
+      } else {
+        hits = (await query(q, { type: 'note' }))
+          .filter(h => h.id !== note.id)
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .slice(0, 12);
+      }
+      if (mySeq !== seq) return;
+      topHit = hits[0] || null;
+      list.innerHTML = '';
+      for (const h of hits) {
+        const row = btn(`${esc(h.title)}${h.ongoing ? ' <span class="mn-dim">#ongoing</span>' : ''}`,
+          'mn-btn-ghost mn-linkrow', () => pick(h));
+        list.appendChild(row);
+      }
+      if (!hits.length) list.appendChild(el('div', 'mn-dim', 'no matches'));
+    };
+    input.addEventListener('input', draw);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') overlay.remove();
+      else if (e.key === 'Enter' && topHit) { e.preventDefault(); pick(topHit); }
+    });
+    draw();
+    input.focus();
+  }
 
   // ── Per-note version history (Drive shard revisions) ──
   // Every push that touched this note's shard left a Drive revision; the

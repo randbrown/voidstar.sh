@@ -224,6 +224,28 @@ only when the mind app next runs on that device.
   by `meta.daily = 'YYYY-MM-DD'`, created in the current folder.
 - **Templates**: tag any note `#template`; "＋ from template" (chips row)
   copies its body/tags into a fresh note.
+- **Ongoing notes** (`ongoing.js` pure core + `ongoing-actions.js` +
+  `views/quick-add.js`, tested by `scripts/check-mind-ongoing.mjs`): tag any
+  long-running note `#ongoing` (lyric ideas, a quotes log) and it grows two
+  one-tap capture surfaces — a "＋ \<title\>" chip on home and an
+  "Add to: \<title\>" palette action — both opening a **quick-add sheet**
+  (textarea, Ctrl+Enter commits, "add & open" jumps into the full note).
+  Per-note prefs ride `meta.ongoing` (fill-field-protected): insert at
+  **top or end** (default top) and an optional **date stamp**
+  (`**YYYY-MM-DD** — ` inline for one-liners, its own line above multi-line
+  entries). Commits are **capture-then-file**: the text lands as its own note
+  FIRST (durable instantly), then `fileNoteInto` appends it to the target —
+  re-reading the target right before the write (the quick-capture sibling of
+  editor rebase-on-save), moving attachments + note-sourced task records
+  along (records re-pointed BEFORE the body lands so the target's next save
+  reconciles instead of re-stamping them as foreign), and trashing the
+  emptied fragment (30-day restore). If filing throws, the capture survives
+  as a regular note. The same machinery backs **"↪ merge into…"** in the
+  editor toolbar: file ANY note's content into another (ongoing notes offered
+  first; a hand-set title rides along as the first line, an auto-title is
+  dropped; the stamp date, when the target wants one, is the fragment's
+  *creation* time — when the idea was captured, not when it was filed).
+  Untag `#ongoing` to drop a note from the capture surfaces at any point.
 - **Command palette** (`palette.js`): Ctrl/Cmd-K anywhere — fuzzy jump to any
   note or task (over the search index) plus actions (new note, today's daily,
   tasks, voice capture, settings, trash). Arrows/Enter/Esc; capture-phase

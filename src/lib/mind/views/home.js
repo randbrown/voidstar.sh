@@ -11,6 +11,8 @@ import { markdownToText } from '../editor/markdown.js';
 import { tokenize, markText, snippetHighlighted } from '../search-highlight.js';
 import { setTaskDoneEverywhere } from '../tasks-sync.js';
 import { parseCapture } from '../capture.js';
+import { listOngoingNotes } from '../ongoing-actions.js';
+import { openQuickAdd } from './quick-add.js';
 import { armReminder, reminderSheet, reminderBadge } from '../reminders.js';
 import {
   hasClientId, needsReconnect, onSyncState, initGdriveSync, setSyncClient,
@@ -118,9 +120,17 @@ export async function renderHome(root) {
   const chips = el('div', 'mn-chips');
   const kindChips = [['', 'all'], ['image', 'images'], ['audio', 'audio'], ['pdf', 'pdfs']];
   const tags = await allTags();
+  // One-tap capture into each ongoing note (#ongoing tag) — most recently
+  // touched first, capped so a long list can't crowd out the filter chips.
+  const ongoing = (await listOngoingNotes()).slice(0, 6);
   let tagsOpen = localStorage.getItem(TAGS_OPEN_KEY) === '1';
   const drawChips = () => {
     chips.innerHTML = '';
+    for (const n of ongoing) {
+      const c = btn(`&#65291; ${esc(n.title)}`, 'mn-chip mn-ongoing-chip', () => openQuickAdd(n.id));
+      c.title = `add to "${n.title}" (ongoing note)`;
+      chips.appendChild(c);
+    }
     if (tags.includes('template')) {
       chips.appendChild(btn('&#65291; from template', 'mn-chip mn-folder-chip', () => pickTemplate(folderId)));
     }
