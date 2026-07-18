@@ -9,8 +9,10 @@
 //   RIG   — freeze stack, drives, strip toggles, rig/delay/reverb sliders
 //   LOOP  — looper transport + grab, vox mute, pause
 //   SEQ   — strudel/sequencer transport, tempo, live drum pads (tap to play;
-//           arm ⏺ write to also quantize the hit into the pattern grid)
-//   QUALE — visual navigation: quale/phase steps, camera, blackout
+//           arm ⏺ write to also quantize the hit into the pattern grid),
+//           undo/redo/clear over the pattern edits
+//   QUALE — visual navigation: quale/phase steps, auto-cycle/phase/walk
+//           toggles, the set clock (τ + reset), camera, blackout
 //
 // Everything is best-effort: a dropped leader or rejected token must never
 // hard-crash the page.
@@ -43,7 +45,18 @@ export async function initTetherClient(root) {
   const statusEl = root.querySelector('[data-status]');
   const tabsEl = root.querySelector('[data-tabs]');
   const bodyEl = root.querySelector('[data-body]');
-  const setStatus = (msg, kind = '') => { if (statusEl) { statusEl.textContent = msg; statusEl.dataset.kind = kind; } };
+  // The pill is a fixed one-liner ("livecoding station transceiver …") — the
+  // full text also lands in title for the rare viewport that ellipsizes it.
+  const setStatus = (msg, kind = '') => {
+    if (statusEl) { statusEl.textContent = msg; statusEl.title = msg; statusEl.dataset.kind = kind; }
+  };
+  // Longer guidance goes UNDER the pill, not in it (the pill never wraps).
+  // Pre-connection only — the first render() wipes bodyEl.
+  const setHint = (msg) => {
+    if (!bodyEl) return;
+    bodyEl.innerHTML = '';
+    if (msg) bodyEl.append(el('div', 'sp-note', msg));
+  };
 
   // Browser-tab fullscreen toggle. Hidden when running as the installed app
   // (display-mode fullscreen/standalone) — there's no chrome to shed there.
@@ -59,17 +72,19 @@ export async function initTetherClient(root) {
   document.body.appendChild(fsBtn);
 
   if (!room || !key) {
-    setStatus('No room / control token yet — scan the tether QR from the rig’s ⌁ sync panel. (Once paired, this page remembers the room.)', 'err');
+    setStatus('livecoding station transceiver (unlinked)', 'err');
+    setHint('no room / control token yet — scan the tether QR from the rig’s ⌁ sync panel; once paired, this page remembers the room');
     return;
   }
 
-  setStatus('Establishing link…');
+  setStatus('livecoding station transceiver (linking…)');
   let transport;
   try {
     transport = await createTransport({ appId: SYNC_APP_ID, room, role: 'participant' });
   } catch (err) {
     console.error('[tether] transport failed', err);
-    setStatus('Could not connect. Check your network and reload.', 'err');
+    setStatus('livecoding station transceiver (offline)', 'err');
+    setHint('could not connect — check your network and reload');
     return;
   }
 
@@ -77,12 +92,15 @@ export async function initTetherClient(root) {
   let welcomed = false, denied = false;
   const hello = () => { if (denied) return; try { transport.send(ST.CHELLO, { k: key }); } catch {} };
   const connectTimer = setTimeout(() => {
-    if (!welcomed && !denied) setStatus("Couldn't reach the leader — is the sync room open? Reload to retry.", 'err');
+    if (!welcomed && !denied) {
+      setStatus('livecoding station transceiver (no leader)', 'err');
+      setHint('couldn’t reach the leader — is the sync room open on the rig? reload to retry');
+    }
   }, 20000);
   // Re-announce on EVERY peer (re)appearance — a leader page reload wipes its
   // authenticated-controllers set, and only a fresh chello re-authorizes us.
   transport.onPeer(() => hello());
-  transport.onLeave(() => { if (welcomed) setStatus('Leader vanished — waiting for it to return…', 'err'); });
+  transport.onLeave(() => { if (welcomed) setStatus('livecoding station transceiver (link lost)', 'err'); });
   hello();
 
   transport.on(ST.CWELC, (m) => {
@@ -90,16 +108,17 @@ export async function initTetherClient(root) {
     if (!m.ok) {
       denied = true;
       clearTimeout(connectTimer);
-      setStatus('Control token rejected — grab a fresh QR from the sync panel.', 'err');
+      setStatus('livecoding station transceiver (link denied)', 'err');
+      setHint('control token rejected — grab a fresh tether QR from the rig’s ⌁ sync panel');
       return;
     }
     if (!welcomed) {
       welcomed = true;
       clearTimeout(connectTimer);
-      setStatus('⌁ tethered — link live', 'ok');
+      setStatus('livecoding station transceiver link active', 'ok');
       render();
     } else {
-      setStatus('⌁ tethered — link live', 'ok');
+      setStatus('livecoding station transceiver link active', 'ok');
     }
   });
 
@@ -108,6 +127,8 @@ export async function initTetherClient(root) {
     cps: null, strudelPlaying: false, seqPlaying: false, loopPlaying: false,
     recording: false, freezeDepth: 0, quale: '', voices: [], grid: null,
     tapUndoDepth: 0, tapRedoDepth: 0,
+    walkOn: false, autoCycleOn: false, autoPhaseOn: false,
+    tau: null, horizonMin: 0,
   };
   transport.on(ST.CSTATE, (s) => {
     if (!s || typeof s !== 'object') return;
@@ -164,6 +185,15 @@ export async function initTetherClient(root) {
     if (opts.lit) b.dataset.lit = opts.lit;   // reflect() keys off this
     return b;
   }
+  // Double-tap (or double-click) detector — `dblclick` is unreliable on some
+  // mobile browsers, and two quick pointerdowns cover mouse + touch alike.
+  function onDoubleTap(target, fn, windowMs = 350) {
+    let last = 0;
+    target.addEventListener('pointerdown', () => {
+      const now = performance.now();
+      if (now - last < windowMs) { last = 0; fn(); } else last = now;
+    });
+  }
   function sliderRow(label, id, min, max, step, start, fmt = (v) => (+v).toFixed(2)) {
     const wrap = el('div', 'sp-slider');
     const labRow = el('div', 'sp-slabel');
@@ -174,6 +204,13 @@ export async function initTetherClient(root) {
     input.addEventListener('input', () => {
       val.textContent = fmt(input.value);
       slide(id, parseFloat(input.value));
+    });
+    // Double-tap snaps back to the default (`start`) — like a DAW fader.
+    onDoubleTap(input, () => {
+      input.value = String(start);
+      val.textContent = fmt(start);
+      slide(id, +start);
+      buzz(10);
     });
     wrap.append(labRow, input);
     return wrap;
@@ -221,7 +258,7 @@ export async function initTetherClient(root) {
         sliderRow('rig master', 'rig.level', 0, 1.5, 0.01, 1),
         sliderRow('delay mix', 'delay.mix', 0, 1, 0.01, 0.3),
         sliderRow('reverb mix', 'reverb.mix', 0, 1, 0.01, 0.3),
-        el('div', 'sp-note', 'sliders send absolute values — like MIDI CC knobs'),
+        el('div', 'sp-note', 'sliders send absolute values, like MIDI CC knobs — double-tap one to reset it'),
       );
     } else if (tab === 'loop') {
       bodyEl.append(
@@ -249,6 +286,13 @@ export async function initTetherClient(root) {
         const v = bodyEl.querySelector('.sp-cps-val');
         if (v) v.textContent = (+cpsSlider.value).toFixed(2);
       });
+      onDoubleTap(cpsSlider, () => {
+        cpsSlider.value = '0.5';
+        slide('cps', 0.5);
+        const v = bodyEl.querySelector('.sp-cps-val');
+        if (v) v.textContent = '0.50';
+        buzz(10);
+      });
 
       const writeBtn = el('button', 'sp-pad sp-write', '⏺ write taps into pattern');
       writeBtn.classList.toggle('armed', writeArmed);
@@ -258,11 +302,12 @@ export async function initTetherClient(root) {
         buzz(15);
       });
 
-      // Undo / redo for written taps — reflect() greys them out from the
-      // host-reported history depths; taps here adjust the local guess so the
-      // buttons react before the next cstate snapshot arrives.
-      const undoBtn = padBtn('↶ undo', 'seqUndo', { sub: 'last written tap' });
-      const redoBtn = padBtn('redo ↷', 'seqRedo', { sub: 're-write tap' });
+      // Undo / redo / clear for the pattern — reflect() greys undo/redo out
+      // from the host-reported history depths; taps here adjust the local
+      // guess so the buttons react before the next cstate snapshot arrives.
+      const undoBtn = padBtn('↶ undo', 'seqUndo', { sub: 'last edit' });
+      const redoBtn = padBtn('redo ↷', 'seqRedo', { sub: 're-apply' });
+      const clearBtn = padBtn('✕ clear', 'seqClear', { cls: 'warn', sub: 'wipe pattern' });
       undoBtn.dataset.hist = 'undo';
       redoBtn.dataset.hist = 'redo';
       undoBtn.addEventListener('click', () => {
@@ -270,6 +315,11 @@ export async function initTetherClient(root) {
       });
       redoBtn.addEventListener('click', () => {
         if (state.tapRedoDepth > 0) { state.tapRedoDepth -= 1; state.tapUndoDepth += 1; reflect(); }
+      });
+      clearBtn.addEventListener('click', () => {
+        // A wipe is one undoable edit (the host no-ops on an empty grid and
+        // the next snapshot corrects the guess).
+        state.tapUndoDepth += 1; state.tapRedoDepth = 0; reflect();
       });
 
       const padsGrid = el('div', 'sp-drums');
@@ -297,13 +347,26 @@ export async function initTetherClient(root) {
         cpsWrap, cpsSlider,
         el('h3', 'sp-h', 'drum pads'),
         writeBtn,
-        grid(2, undoBtn, redoBtn),
+        grid(3, undoBtn, redoBtn, clearBtn),
         padsGrid,
         el('div', 'sp-note', writeArmed
           ? 'taps sound AND land on the nearest grid cell while the sequencer plays'
           : 'taps just sound — arm ⏺ write to record them into the pattern'),
       );
     } else if (tab === 'quale') {
+      // Automation toggles reflect host state (lit) — flip the local guess on
+      // tap so they respond before the next cstate snapshot.
+      const autoToggle = (label, action, lit, key, sub) => {
+        const b = padBtn(label, action, { lit, sub });
+        b.addEventListener('click', () => { state[key] = !state[key]; reflect(); });
+        return b;
+      };
+      // τ — the set clock. Snapshot-fed (1 Hz), close enough for pacing a set.
+      const tauRow = el('div', 'sp-cps');
+      tauRow.append(el('span', 'sp-cps-label', 'set clock'), el('b', 'sp-tau', '—'));
+      const tauReset = padBtn('↺ reset τ', 'chronReset', { cls: 'warn', sub: 'restart set clock' });
+      tauReset.addEventListener('click', () => { state.tau = 0; reflect(); });
+
       bodyEl.append(
         el('h3', 'sp-h', 'now showing'),
         el('div', 'sp-quale-name', state.quale || '—'),
@@ -313,6 +376,14 @@ export async function initTetherClient(root) {
           padBtn('quale ▶', 'qualeNext', { sub: 'next visual' }),
           padBtn('◀ phase', 'phasePrev', { sub: 'step back' }),
           padBtn('phase ▶', 'phaseNext', { sub: 'step forward' })),
+        el('h3', 'sp-h', 'auto'),
+        grid(3,
+          autoToggle('cycle', 'cycleAuto', 'cycleAuto', 'autoCycleOn', 'auto quale'),
+          autoToggle('phase', 'phaseAuto', 'phaseAuto', 'autoPhaseOn', 'auto phase'),
+          autoToggle('walk', 'walk', 'walk', 'walkOn', 'cam drift')),
+        el('h3', 'sp-h', 'set clock'),
+        tauRow,
+        grid(1, tauReset),
         el('h3', 'sp-h', 'stage'),
         grid(3,
           padBtn('cam ▶', 'camNext', { sub: 'next device' }),
@@ -329,10 +400,13 @@ export async function initTetherClient(root) {
     for (const b of bodyEl.querySelectorAll('[data-lit]')) {
       const kind = b.dataset.lit;
       const on = kind === 'strudel' ? state.strudelPlaying
-        : kind === 'seq'    ? state.seqPlaying
-        : kind === 'loop'   ? state.loopPlaying
-        : kind === 'rec'    ? state.recording
-        : kind === 'freeze' ? state.freezeDepth > 0
+        : kind === 'seq'       ? state.seqPlaying
+        : kind === 'loop'      ? state.loopPlaying
+        : kind === 'rec'       ? state.recording
+        : kind === 'freeze'    ? state.freezeDepth > 0
+        : kind === 'walk'      ? state.walkOn
+        : kind === 'cycleAuto' ? state.autoCycleOn
+        : kind === 'phaseAuto' ? state.autoPhaseOn
         : false;
       b.classList.toggle('lit', !!on);
       if (kind === 'freeze') {
@@ -345,6 +419,17 @@ export async function initTetherClient(root) {
     }
     for (const b of bodyEl.querySelectorAll('[data-hist]')) {
       b.disabled = b.dataset.hist === 'undo' ? !(state.tapUndoDepth > 0) : !(state.tapRedoDepth > 0);
+    }
+    const tauEl = bodyEl.querySelector('.sp-tau');
+    if (tauEl) {
+      const s = state.tau;
+      const fmt = (sec) => {
+        const m = Math.floor(sec / 60);
+        return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`
+          : m > 0 ? `${m}m` : `${Math.floor(sec)}s`;
+      };
+      tauEl.textContent = (s == null) ? 'τ —'
+        : `τ ${fmt(s)}${state.horizonMin > 0 ? ` / ${state.horizonMin}m` : ''}`;
     }
     const cpsVal = bodyEl.querySelector('.sp-cps-val');
     if (cpsVal && state.cps) cpsVal.textContent = (+state.cps).toFixed(2);

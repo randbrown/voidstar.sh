@@ -52,12 +52,14 @@ export const CTL_ACTIONS = new Set([
   'freeze', 'freezePop', 'freezeRegrab', 'freezeClear',
   // looper transport
   'loopPlayStop', 'recStart', 'recStop', 'grab',
-  // strudel + sequencer transport, tap-write history
-  'strudelPlayStop', 'seqPlayStop', 'seqUndo', 'seqRedo',
+  // strudel + sequencer transport, tap-write history, pattern wipe
+  'strudelPlayStop', 'seqPlayStop', 'seqUndo', 'seqRedo', 'seqClear',
   // vox + global transport
   'voxMute', 'pause', 'blackout',
   // quale / phase navigation + camera
   'qualePrev', 'qualeNext', 'phasePrev', 'phaseNext', 'camNext',
+  // stage automation toggles + set clock
+  'walk', 'cycleAuto', 'phaseAuto', 'chronReset',
 ]);
 
 // ── Controller SLIDER allowlist ─────────────────────────────────────────────

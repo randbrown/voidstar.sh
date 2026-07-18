@@ -90,15 +90,20 @@ allowlisted (`CTL_ACTIONS`, `CTL_SLIDERS` + clamps in `sync-protocol.js`), rate-
 per peer, and never eval'd — same posture as entangle ingress.
 
 Tabs: **rig** (freeze stack, drives, strip toggles, rig/delay/reverb sliders — absolute,
-like MIDI CC), **loop** (looper transport + grab, vox mute), **seq** (strudel/seq
-transport, tempo slider, **live drum pads** — tap to sound a voice; arm *write* to also
-quantize the hit into the pattern at the nearest cell, via `sequencer.tapHit`; **undo /
-redo** pads walk the tap-write history via `sequencer.tapUndo`/`tapRedo` — entries are
-stamped with the pattern id, so loading another pattern retires them safely), **quale**
-(quale/phase steps, camera, pause, blackout).
+like MIDI CC; double-tap a slider to reset it), **loop** (looper transport + grab, vox
+mute), **seq** (strudel/seq transport, tempo slider, **live drum pads** — tap to sound a
+voice; arm *write* to also quantize the hit into the pattern at the nearest cell, via
+`sequencer.tapHit`; **undo / redo / clear** pads edit the pattern via
+`sequencer.tapUndo`/`tapRedo`/`clearPattern` — history entries are stamped with the
+pattern id, so loading another pattern retires them safely, and a clear is itself one
+undoable entry), **quale** (quale/phase steps, **auto toggles** — auto-cycle, auto-phase,
+cam walk — the **set clock** τ readout + reset, camera, pause, blackout).
 
 Feedback: the leader broadcasts a 1 Hz `cstate` snapshot (transport lit-states, freeze
-depth, active quale, pad voices, cps, tap-history depths) so the phone reflects reality.
+depth, active quale, pad voices, cps, tap-history depths, auto/walk toggle states, and
+the chron clock `tau`/`horizonMin` behind the τ readout) so the phone reflects reality.
+The link-status pill is a fixed one-liner ("livecoding station transceiver link
+active" / "(unlinked)" / "(link lost)" …); longer guidance renders under it.
 
 **Install it.** Tether is its own PWA (`public/manifest-tether.webmanifest`, `display:
 fullscreen`, cyan ⌁ icon) — scan the QR once, then "Add to Home screen". The room +

@@ -451,9 +451,11 @@ export function initQualiaPage() {
     logoOn,
     logoConfig:     logoMark.getConfig(),
     autoPhaseSeconds,
+    autoPhasePeriodSec,
     autoPhaseStyle,
     autoPhaseBeatSync,
     autoCycleSeconds,
+    autoCyclePeriodSec,
     autoCycleStyle,
     autoCycleSetMin,
     autoCycleBeatSync,
@@ -3623,10 +3625,11 @@ export function initQualiaPage() {
   fxResetBtn.addEventListener('click', () => core.applyFxPreset('default'));
 
   // ── Auto-phase + Auto-cycle ───────────────────────────────────────────────
-  // Two independent automation tracks, each a multi-state button (like the
-  // camera mode button). Click advances through the period array; the last
-  // step wraps back to off. Tooltip lists the cycle so the muscle-memory is
-  // discoverable.
+  // Two independent automation tracks, each an on/off TOGGLE plus its own
+  // dwell <select>. The dwell is remembered intent that persists separately
+  // from the on/off state, so flipping auto off and back on resumes the same
+  // period without re-picking it (the old design folded "off" into the period
+  // dropdown, which forgot the dwell on every off).
   //   - phase: walks modes/presets WITHIN the active qfx (palettes, modes)
   //     per the active style (sequential / palettes / random — see phaseNext).
   //     Each QFXModule may declare `autoPhase: { steps: [...] }`. If the
@@ -3643,7 +3646,10 @@ export function initQualiaPage() {
   //                      fxAutoCycle/fxAutoStyle (cross-fx bool)
   //   v2 (recent rename): autoPhase/autoPhaseStyle (within) +
   //                      autoCycle/autoCycleStyle (cross, still bool)
-  // v3 (this change) persists numeric periods. Detect v1 via the unique
+  // v3 (numeric periods, 0 = off) persists autoPhaseSeconds/autoCycleSeconds.
+  // v4 (on/off split) adds autoPhasePeriodSec/autoCyclePeriodSec — the dwell
+  // intent that survives toggling off (the *Seconds keys stay the effective
+  // value, so v3 states restore unchanged). Detect v1 via the unique
   // `fxAutoCycle` key; otherwise read v2/v3 keys with bool→default-period
   // fallback so any truthy historical state lights up at a sensible default.
   const _isV1Shape = 'fxAutoCycle' in stored;
@@ -3666,6 +3672,10 @@ export function initQualiaPage() {
   // design means we never need a separate startPhase/stopPhase split — the
   // setPhasePeriod helper handles every transition.
   let autoPhaseSeconds = PHASE_PERIODS.includes(_phaseSecRaw) ? _phaseSecRaw : 0;
+  // Remembered dwell intent (never 0): what the toggle turns back ON to.
+  let autoPhasePeriodSec = (PHASE_PERIODS.includes(stored.autoPhasePeriodSec) && stored.autoPhasePeriodSec > 0)
+    ? stored.autoPhasePeriodSec
+    : (autoPhaseSeconds > 0 ? autoPhaseSeconds : 10);
   // Old style values (chapters / alternate / hold) are no longer valid and
   // fall through to the default — see AUTO_PHASE_STYLES.
   let autoPhaseStyle = AUTO_PHASE_STYLES.includes(_phaseStyleRaw) ? _phaseStyleRaw : 'sequential';
@@ -3685,9 +3695,6 @@ export function initQualiaPage() {
   const autoGuardActive = (now) => (now - lastAutoTransitionMs) < AUTO_TRANSITION_GUARD_MS;
 
   phaseStyleSelect.value = autoPhaseStyle;
-  // Tooltip lists the cycle so muscle-memory builds; users see "off → 5 →
-  // 10 → 15" without poking the button to find the upper bound.
-  btnPhase.title = 'Phase modes within active quale (L) — off / 5s / 10s / 15s';
 
   function getActivePhaseSteps() {
     const mod = mesh.get(core.activeId());
@@ -3696,20 +3703,19 @@ export function initQualiaPage() {
 
   function refreshPhaseBtn() {
     const supported = !!getActivePhaseSteps();
-    // The dropdown always reflects the user's chosen dwell — selecting a value
-    // (or "off") is one tap regardless of whether the active quale can act on
-    // it. Period "stickiness" means a pick while on a non-supporting quale
-    // still adjusts the intent and resumes when cycle hits a supporting one.
-    btnPhase.value = String(autoPhaseSeconds);
+    // The toggle face shows on/off; the dwell lives on its own <select>.
+    // Period "stickiness" means toggling on while on a non-supporting quale
+    // still arms the intent and resumes when cycle hits a supporting one.
+    btnPhase.textContent = autoPhaseSeconds > 0 ? 'phase on' : 'phase off';
     btnPhase.classList.toggle('active', autoPhaseSeconds > 0);
     if (!supported) {
       btnPhase.title = autoPhaseSeconds > 0
         ? `phase set to ${autoPhaseSeconds}s — active quale has no phases; resumes on next supporting qfx`
-        : 'active quale has no phases — pick a dwell to arm it for the next supporting qfx';
+        : 'active quale has no phases — toggling on arms it for the next supporting qfx';
       return;
     }
     // Beat-sync is shown on the separate ♪ phase button; the live countdown
-    // moves to the tooltip (a <select>'s face shows the chosen dwell).
+    // moves to the tooltip.
     if (autoPhaseSeconds > 0) {
       const elapsed = (performance.now() - autoPhaseStartMs) / 1000;
       const remaining = Math.max(0, Math.ceil(autoPhaseSeconds - elapsed));
@@ -3864,20 +3870,34 @@ export function initQualiaPage() {
     }
   }
 
-  // Single source of truth for user-driven period changes. Updates intent,
-  // re-syncs the timer, refreshes the button, persists.
+  // Single source of truth for effective-period changes (0 = off). A positive
+  // period also refreshes the remembered dwell intent + its picker, so every
+  // caller (toggle, picker, hotkey, code API, tether) keeps them in sync.
   function setPhasePeriod(seconds) {
     autoPhaseSeconds = seconds;
+    if (seconds > 0) {
+      autoPhasePeriodSec = seconds;
+      if (phaseSecsSelect) phaseSecsSelect.value = String(seconds);
+    }
     syncPhaseTimer();
     btnPhase.classList.toggle('active', autoPhaseSeconds > 0);
     refreshPhaseBtn();
     settings.save();
   }
+  const togglePhaseAuto = () => setPhasePeriod(autoPhaseSeconds > 0 ? 0 : autoPhasePeriodSec);
 
-  btnPhase.addEventListener('change', () => {
-    const sec = parseInt(btnPhase.value, 10);
-    setPhasePeriod(PHASE_PERIODS.includes(sec) ? sec : 0);
-  });
+  btnPhase.addEventListener('click', togglePhaseAuto);
+  const phaseSecsSelect = document.getElementById('phase-secs');
+  if (phaseSecsSelect) {
+    phaseSecsSelect.value = String(autoPhasePeriodSec);
+    phaseSecsSelect.addEventListener('change', () => {
+      const sec = parseInt(phaseSecsSelect.value, 10);
+      if (!PHASE_PERIODS.includes(sec) || sec <= 0) return;
+      autoPhasePeriodSec = sec;
+      // Live-adjust a running timer; while off, just remember the intent.
+      if (autoPhaseSeconds > 0) setPhasePeriod(sec); else settings.save();
+    });
+  }
   phaseStyleSelect.addEventListener('change', () => {
     autoPhaseStyle = phaseStyleSelect.value;
     autoPhaseStepCount = 0;   // explicit style change starts the new style fresh
@@ -3886,6 +3906,10 @@ export function initQualiaPage() {
 
   // — Auto-cycle (cross-fx) —
   let autoCycleSeconds = CYCLE_PERIODS.includes(_cycleSecRaw) ? _cycleSecRaw : 0;
+  // Remembered dwell intent (never 0): what the toggle turns back ON to.
+  let autoCyclePeriodSec = (CYCLE_PERIODS.includes(stored.autoCyclePeriodSec) && stored.autoCyclePeriodSec > 0)
+    ? stored.autoCyclePeriodSec
+    : (autoCycleSeconds > 0 ? autoCycleSeconds : 30);
   let autoCycleStyle = AUTO_CYCLE_STYLES.includes(_cycleStyleRaw) ? _cycleStyleRaw : 'sequential';
   let autoCycleBeatSync = !!stored.autoCycleBeatSync;
   // Progressive-ramp state. The ramp is a pure function of the CHRON clock —
@@ -3984,13 +4008,13 @@ export function initQualiaPage() {
   let autoCycleStartMs = 0;
   let autoCycleTickT = null;
   cycleStyleSelect.value = autoCycleStyle;
-  btnCycle.title = 'Cycle between qualia (N) — off / 5s / 15s / 30s / 45s';
 
   function refreshCycleBtn() {
     if (!btnCycle) return;
-    // The dropdown face shows the chosen dwell (or "off"); beat-sync lives on
-    // the separate ♪ cycle button and the live countdown moves to the tooltip.
-    btnCycle.value = String(autoCycleSeconds);
+    // The toggle face shows on/off; the dwell lives on its own <select>.
+    // Beat-sync lives on the separate ♪ cycle button and the live countdown
+    // moves to the tooltip.
+    btnCycle.textContent = autoCycleSeconds > 0 ? 'cycle on' : 'cycle off';
     btnCycle.classList.toggle('active', autoCycleSeconds > 0);
     if (autoCycleSeconds > 0) {
       const dwell = effectiveCycleSeconds();
@@ -4080,10 +4104,14 @@ export function initQualiaPage() {
     }
   }
 
+  // Effective-period setter (0 = off) — mirror of setPhasePeriod: a positive
+  // period also refreshes the remembered dwell intent + its picker.
   function setCyclePeriod(seconds) {
     if (autoCycleTickT) { clearInterval(autoCycleTickT); autoCycleTickT = null; }
     autoCycleSeconds = seconds;
     if (seconds > 0) {
+      autoCyclePeriodSec = seconds;
+      if (cycleSecsSelect) cycleSecsSelect.value = String(seconds);
       autoCycleStartMs = performance.now();
       autoCycleTickT = setInterval(tickCycle, 250);
     }
@@ -4091,11 +4119,20 @@ export function initQualiaPage() {
     refreshCycleBtn();
     settings.save();
   }
+  const toggleCycleAuto = () => setCyclePeriod(autoCycleSeconds > 0 ? 0 : autoCyclePeriodSec);
 
-  btnCycle.addEventListener('change', () => {
-    const sec = parseInt(btnCycle.value, 10);
-    setCyclePeriod(CYCLE_PERIODS.includes(sec) ? sec : 0);
-  });
+  btnCycle.addEventListener('click', toggleCycleAuto);
+  const cycleSecsSelect = document.getElementById('cycle-secs');
+  if (cycleSecsSelect) {
+    cycleSecsSelect.value = String(autoCyclePeriodSec);
+    cycleSecsSelect.addEventListener('change', () => {
+      const sec = parseInt(cycleSecsSelect.value, 10);
+      if (!CYCLE_PERIODS.includes(sec) || sec <= 0) return;
+      autoCyclePeriodSec = sec;
+      // Live-adjust a running timer; while off, just remember the intent.
+      if (autoCycleSeconds > 0) setCyclePeriod(sec); else settings.save();
+    });
+  }
   cycleStyleSelect.addEventListener('change', () => {
     autoCycleStyle = AUTO_CYCLE_STYLES.includes(cycleStyleSelect.value) ? cycleStyleSelect.value : 'sequential';
     refreshCycleBtn();
@@ -6522,20 +6559,15 @@ export function initQualiaPage() {
       case 'e': btnEdge.click(); break;
       case 'y': btnStitch?.click(); break;
       case 'u': btnWalk?.click(); break;   // cam walk on/off
-      // Phase/cycle are now <select> dropdowns; L/N still advance the dwell
-      // (off → … → off) so the keyboard muscle-memory survives the switch.
-      case 'l': {
-        const i = PHASE_PERIODS.indexOf(autoPhaseSeconds);
-        setPhasePeriod(PHASE_PERIODS[(i + 1) % PHASE_PERIODS.length]);
-        break;
-      }
+      // Phase/cycle are on/off toggles (the dwell keeps its own picker), so
+      // L/N flip the auto mode without touching the remembered period.
+      case 'l': togglePhaseAuto(); break;
       case 'n': {
-        // Shift+N cycles the negative post (N alone advances the auto-cycle
-        // dwell — every single letter is already a pad key, so the post rides
-        // the shift modifier).
+        // Shift+N cycles the negative post (N alone toggles the auto-cycle —
+        // every single letter is already a pad key, so the post rides the
+        // shift modifier).
         if (e.shiftKey) { btnNegative?.click(); break; }
-        const i = CYCLE_PERIODS.indexOf(autoCycleSeconds);
-        setCyclePeriod(CYCLE_PERIODS[(i + 1) % CYCLE_PERIODS.length]);
+        toggleCycleAuto();
         break;
       }
       case 'z': setZen(!core.isZen()); break;
@@ -6829,6 +6861,12 @@ export function initQualiaPage() {
           // Tap-write history — undo/redo over hits the remote recorded live.
           seqUndo: () => { try { sequencer.tapUndo?.(); } catch {} },
           seqRedo: () => { try { sequencer.tapRedo?.(); } catch {} },
+          seqClear: () => { try { sequencer.clearPattern?.(); } catch {} },
+          // Stage automation toggles + the set clock, for the tether remote.
+          walk: () => btnWalk?.click(),
+          cycleAuto: toggleCycleAuto,
+          phaseAuto: togglePhaseAuto,
+          chronReset: () => { chron.reset(); refreshCycleBtn(); },   // ramp reads τ live — same as the card's reset button
         },
         applySlider: (id, v) => {
           switch (id) {
@@ -6867,6 +6905,12 @@ export function initQualiaPage() {
             grid: model ? { beats: model.beats, steps: model.steps, cycles: model.cycles } : null,
             tapUndoDepth: tapHist.undo,
             tapRedoDepth: tapHist.redo,
+            walkOn: !!camWalkOn,
+            autoCycleOn: autoCycleSeconds > 0,
+            autoPhaseOn: autoPhaseSeconds > 0,
+            // Set clock (τ) — whole seconds are plenty for a stage readout.
+            tau: Math.floor(chron.getElapsedSec?.() || 0),
+            horizonMin: chron.getHorizonMin?.() || 0,
           };
         },
       });

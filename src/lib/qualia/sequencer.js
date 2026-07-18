@@ -1722,23 +1722,45 @@ export function createSequencer({ audio, syncStrudel } = {}) {
   // to quantize against otherwise) and only on a pad the pattern has.
   //
   // Tap-write history: every landed write is one undo entry (redo restores
-  // it). A live-recorded tap is easy to land a cell off the intended beat, so
-  // the remote gets a one-tap "that wasn't it" escape. Entries are stamped
-  // with the model id + validated at pop time, so swapping or resizing the
-  // pattern silently retires stale entries instead of editing the wrong grid.
+  // it), and a remote pattern wipe is one 'clear' entry holding the full hits
+  // snapshot. A live-recorded tap is easy to land a cell off the intended
+  // beat, so the remote gets a one-tap "that wasn't it" escape. Entries are
+  // stamped with the model id + validated at pop time, so swapping or
+  // resizing the pattern silently retires stale entries instead of editing
+  // the wrong grid.
   const TAP_HISTORY_MAX = 128;
   const tapUndoStack = [], tapRedoStack = [];
-  function tapEntryValid(e) {
-    return !!e && e.modelId === model.id && e.cell < totalCells()
-      && model.pads.some(p => p.voice === e.voice);
+  function pushTapEntry(e) {
+    tapUndoStack.push(e);
+    if (tapUndoStack.length > TAP_HISTORY_MAX) tapUndoStack.shift();
+    tapRedoStack.length = 0;   // a fresh edit forks history — redo dies
   }
-  function applyTapEntry(e, on) {
+  function tapEntryValid(e) {
+    if (!e || e.modelId !== model.id) return false;
+    if (e.t === 'clear') {
+      return model.pads.some(p => (e.hits[p.voice] || []).length === p.hits.length);
+    }
+    return e.cell < totalCells() && model.pads.some(p => p.voice === e.voice);
+  }
+  // forward=true re-applies the edit (redo); forward=false reverts it (undo).
+  function applyTapEntry(e, forward) {
+    if (e.t === 'clear') {
+      for (const pad of model.pads) {
+        const saved = e.hits[pad.voice];
+        if (forward) pad.hits.fill(0);
+        else if (saved && saved.length === pad.hits.length) pad.hits = saved.slice();
+      }
+      model.updatedAt = Date.now();
+      renderMatrix();
+      persistSoon();
+      return;
+    }
     const pad = model.pads.find(p => p.voice === e.voice);
     if (!pad) return;
-    pad.hits[e.cell] = on ? 1 : 0;
+    pad.hits[e.cell] = forward ? 1 : 0;
     model.updatedAt = Date.now();
     const el = colCells[e.cell]?.[model.pads.indexOf(pad)];
-    if (el) el.classList.toggle('on', !!on);
+    if (el) el.classList.toggle('on', forward);
     persistSoon();
   }
   function tapUndo() {
@@ -1765,6 +1787,23 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     undo: tapUndoStack.filter(tapEntryValid).length,
     redo: tapRedoStack.filter(tapEntryValid).length,
   });
+  // Wipe every hit in the current pattern (remote "clear" pad) — one undoable
+  // history entry. No-ops on an already-empty grid so undo depth stays honest.
+  function clearPattern() {
+    const snapshot = {};
+    let hadHits = false;
+    for (const pad of model.pads) {
+      if (pad.hits.some(Boolean)) hadHits = true;
+      snapshot[pad.voice] = pad.hits.slice();
+    }
+    if (!hadHits) return false;
+    for (const pad of model.pads) pad.hits.fill(0);
+    model.updatedAt = Date.now();
+    renderMatrix();
+    persistSoon();
+    pushTapEntry({ t: 'clear', modelId: model.id, hits: snapshot });
+    return true;
+  }
   async function triggerVoice(voice, gain = 1) {
     if (typeof voice !== 'string' || !voice) return false;
     try { await Tone.start(); } catch { return false; }
@@ -1791,9 +1830,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       const el = colCells[cell]?.[model.pads.indexOf(pad)];
       if (el) el.classList.add('on');
       persistSoon();
-      tapUndoStack.push({ modelId: model.id, voice: pad.voice, cell });
-      if (tapUndoStack.length > TAP_HISTORY_MAX) tapUndoStack.shift();
-      tapRedoStack.length = 0;   // a fresh write forks history — redo dies
+      pushTapEntry({ t: 'tap', modelId: model.id, voice: pad.voice, cell });
     }
     return { played: true, wrote: true, cell };
   }
@@ -1855,6 +1892,7 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     tapUndo,
     tapRedo,
     tapHistoryDepths,
+    clearPattern,
     getVoices: () => model.pads.map(p => ({ voice: p.voice, mute: !!p.mute })),
     patterns: {
       list:     loadList,

@@ -164,6 +164,9 @@ qualia.strudel.volume(1.2); qualia.strudel.mute(true); qualia.strudel.limiter(tr
 
 qualia.seq.play(); qualia.seq.cps(0.5); qualia.seq.kit("metal")
 qualia.seq.genre("metal"); qualia.seq.source("sig"); qualia.seq.random()
+qualia.seq.clear()                 // wipe the pattern (one undoable edit)
+qualia.seq.undo(); qualia.seq.redo()   // tap-write / clear history
+qualia.seq.pattern()               // current pattern model (snapshot)
 
 qualia.looper.play(); qualia.looper.record(); qualia.looper.grab()
 qualia.looper.freeze(); qualia.looper.freezePop(); qualia.looper.freezeClear()

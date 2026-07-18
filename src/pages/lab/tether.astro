@@ -70,21 +70,26 @@ import '../../styles/themes.css';
       max-width: 32rem; margin: 0 auto; -webkit-user-select: none; user-select: none;
       touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 
-    header { text-align: center; margin: .4rem 0 .8rem; }
-    header h1 { font-size: 1.6rem; letter-spacing: .22em; font-weight: 700;
+    /* Compact header — the page is a stage tool, so the top strip stays lean:
+       brand line + title, then straight into the status pill. */
+    header { text-align: center; margin: .2rem 0 .55rem; }
+    header h1 { font-size: 1.4rem; letter-spacing: .22em; font-weight: 700;
       background: linear-gradient(90deg, var(--cyan), var(--accent), var(--pink));
       -webkit-background-clip: text; background-clip: text; color: transparent;
       filter: drop-shadow(0 0 14px color-mix(in srgb, var(--cyan) 45%, transparent)); }
-    header p { color: var(--muted); font-size: .78rem; margin-top: .3rem; letter-spacing: .04em; }
     .brand { display: inline-flex; align-items: center; gap: .5rem; text-decoration: none;
-      color: var(--muted); margin-bottom: .3rem; }
-    .brand-logo { width: 2rem; height: 2rem; display: block;
+      color: var(--muted); margin-bottom: .2rem; }
+    .brand-logo { width: 1.7rem; height: 1.7rem; display: block;
       filter: drop-shadow(0 0 .5rem var(--accent)); }
     .brand-tag b { color: var(--text); font-weight: 600; }
 
-    [data-status] { text-align: center; padding: .55rem .8rem; border-radius: 999px;
+    /* The link-status pill is a strict one-liner ("livecoding station
+       transceiver …") — nowrap + ellipsis; the client mirrors the full text
+       into title for the rare viewport that clips it. */
+    [data-status] { text-align: center; padding: .5rem .8rem; border-radius: 999px;
       background: rgba(12,10,28,.72); border: 1px solid var(--border);
-      font-size: .82rem; margin-bottom: .9rem; letter-spacing: .02em; }
+      font-size: .74rem; margin-bottom: .7rem; letter-spacing: .02em;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     [data-status][data-kind="ok"]  { border-color: color-mix(in srgb, var(--cyan) 60%, transparent);
       color: var(--cyan); box-shadow: 0 0 16px color-mix(in srgb, var(--cyan) 22%, transparent),
       inset 0 0 12px color-mix(in srgb, var(--cyan) 10%, transparent); }
@@ -165,7 +170,9 @@ import '../../styles/themes.css';
       box-shadow: 0 0 14px color-mix(in srgb, var(--cyan) 60%, transparent); }
 
     .sp-cps { display: flex; justify-content: space-between; align-items: baseline; font-size: .95rem; }
-    .sp-cps-val { color: var(--cyan); font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums;
+    /* .sp-tau (the τ set-clock readout) shares the big-numeral look but keeps
+       its own hook — reflect() must never mistake it for the cps readout. */
+    .sp-cps-val, .sp-tau { color: var(--cyan); font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums;
       text-shadow: 0 0 14px color-mix(in srgb, var(--cyan) 50%, transparent); }
 
     .sp-write { width: 100%; margin-bottom: .6rem; min-height: 3.6rem; border-style: dashed; }
@@ -217,9 +224,8 @@ import '../../styles/themes.css';
         <span class="brand-tag"><b>qualia</b> // remote</span>
       </a>
       <h1>⌁ TETHER</h1>
-      <p>wireless link to the rig — remote control in your pocket</p>
     </header>
-    <div data-status>Establishing link…</div>
+    <div data-status>livecoding station transceiver (unlinked)</div>
     <div data-body></div>
     <nav data-tabs aria-label="controller tabs"></nav>
     <footer>voidstar.sh — control rides the relay, no audio leaves the rig</footer>
