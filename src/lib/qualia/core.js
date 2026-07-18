@@ -215,6 +215,16 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
           gl?.getExtension('WEBGL_lose_context')?.loseContext();
         } catch {}
       }
+      // Release the backing store NOW, not when GC gets around to it. A
+      // detached canvas keeps its full-resolution buffer (tens of MB at phone
+      // DPR, GPU-backed) alive until collection, and Android Chrome collects
+      // detached canvases lazily enough that a pattern lane switching quales
+      // across context types every few cycles piles them up and OOMs the
+      // renderer ("Aw, Snap!") minutes into a set. Resizing to 1×1 frees the
+      // buffer synchronously; the transition freeze-frame already copied its
+      // pixels out (beginTransition runs before setActive), so nothing reads
+      // this canvas again.
+      try { canvas.width = 1; canvas.height = 1; } catch {}
       canvas.remove();
     }
     const c = document.createElement('canvas');
