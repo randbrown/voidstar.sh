@@ -504,6 +504,15 @@ function tryRegisterStrudelBindings(api) {
     g[name] = f;
   };
 
+  // A control chained onto an enclosing stack — stack(...).room(.5) — unions
+  // every hap value into a control object, tucking a lane's plain value under
+  // the `value` key ({value: 'chaos', room: .5}). Unwrap it so lanes see what
+  // the user actually wrote; the raw hap stays available to qcall/qtrig fns.
+  const laneValue = (hap) => {
+    const v = hap?.value;
+    return (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+  };
+
   // A silent control lane: fires `apply` per hap at its audible time and
   // produces no sound (dominant onTrigger) — stack it next to audio patterns.
   const lane = (pat, apply) =>
@@ -511,36 +520,36 @@ function tryRegisterStrudelBindings(api) {
 
   // Switch the active quale per event: quale("<chladni fractal>").slow(8)
   define('quale', (pat) =>
-    lane(pat, (hap) => api.quale(String(hap.value))));
+    lane(pat, (hap) => api.quale(String(laneValue(hap)))));
 
   // Drive an active-quale param from a pattern: qset("hue", sine.segment(16))
   // (continuous signals need .segment(n) to become discrete events).
   define('qset', (name, pat) =>
-    lane(pat, (hap) => api.set(String(name), hap.value)));
+    lane(pat, (hap) => api.set(String(name), laneValue(hap))));
 
   // Apply factory/user presets by name per event: qpreset("<default punchy>")
   define('qpreset', (pat) =>
-    lane(pat, (hap) => api.preset(String(hap.value))));
+    lane(pat, (hap) => api.preset(String(laneValue(hap)))));
 
   // Step the active quale's phase per event; value is the direction (±1).
   // qphase("1").slow(4) → a phase step every 4th cycle.
   define('qphase', (pat) =>
-    lane(pat, (hap) => api.phase(Number(hap.value) || 1)));
+    lane(pat, (hap) => api.phase(Number(laneValue(hap)) || 1)));
 
   // Glitch mode rides a pattern: qglitch("mosh", "<off on off flip>")
   define('qglitch', (name, pat) =>
-    lane(pat, (hap) => api.glitch(String(name), String(hap.value))));
+    lane(pat, (hap) => api.glitch(String(name), String(laneValue(hap)))));
 
   // Generic escape hatch: qcall(v => qualia.blackout(v > 0), "0 1")
   define('qcall', (fn, pat) =>
-    lane(pat, (hap) => { try { fn(hap.value, hap); } catch (e) { console.warn('[qualia] qcall:', e); } }));
+    lane(pat, (hap) => { try { fn(laneValue(hap), hap); } catch (e) { console.warn('[qualia] qcall:', e); } }));
 
   // Non-dominant sibling of qcall — the pattern KEEPS sounding and the
   // callback rides along: s("bd*4").qtrig(() => qualia.phase())
   define('qtrig', (fn, pat) =>
     g.reify(pat).onTrigger(
       (...args) => atAudibleTime(args, (hap) => {
-        try { fn(hap.value, hap); } catch (e) { console.warn('[qualia] qtrig:', e); }
+        try { fn(laneValue(hap), hap); } catch (e) { console.warn('[qualia] qtrig:', e); }
       }),
       false));
 
