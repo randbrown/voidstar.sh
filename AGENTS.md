@@ -59,6 +59,7 @@ non-negotiables; the technical detail lives in the docs below.
 | The looper, the sequencer, and the recording/export pipeline | [`docs/looper-and-sequencer.md`](docs/looper-and-sequencer.md) |
 | Sequencer kits + samples shared with Strudel (the `strudel.json` pipeline) | [`docs/samples.md`](docs/samples.md) |
 | Live coding — Strudel REPL, Hydra bridge, the `qualia.setParam` surface | [`docs/livecoding.md`](docs/livecoding.md) |
+| The qualia code API — `globalThis.qualia` + the `quale`/`qset`/… Strudel functions | [`docs/qualia-code-api.md`](docs/qualia-code-api.md) |
 | Audience participation + pose — the entanglement mesh and pose pipeline | [`docs/entanglement.md`](docs/entanglement.md) |
 | Cross-device playback sync (cycles/CPS) + the spooky phone controller | [`docs/playback-sync.md`](docs/playback-sync.md) |
 | Qualia Google Drive sync — login, the `voidstar_qualia` folder tree, per-component subfolders, the qualem-card + video-quale UI | [`docs/qualia-drive-sync.md`](docs/qualia-drive-sync.md) |
