@@ -40,7 +40,7 @@
 const KNOWN_TOPICS = new Set([
   'hello', 'manifest', 'pose', 'skeleton', 'param', 'vote',
   'phase', 'phaseprog', 'values', 'bye', 'kick',
-  // Playback sync + spooky controller (SYNC_APP_ID rooms — see
+  // Playback sync + tether remote (SYNC_APP_ID rooms — see
   // src/lib/qualia/sync-protocol.js). Same hub-and-spoke routing:
   // leader connects as role=host, followers/controllers as participants.
   'clock', 'csync', 'fhello', 'chello', 'cwelc', 'ctl', 'cstate', 'sbye',

@@ -21,7 +21,7 @@ workers_dev = true
 # this is the gate). Localhost is always allowed for `wrangler dev`. Set this
 # to your own host for a self-host/custom-domain deploy. The pages.dev entry
 # admits Cloudflare Pages BRANCH PREVIEWS too (subdomains of an allowed https
-# host pass the check), so /qualia + /lab/spooky work on preview deploys.
+# host pass the check), so /qualia + /lab/tether work on preview deploys.
 ALLOWED_ORIGINS = "https://voidstar.sh,https://voidstar-sh.pages.dev"
 
 [[durable_objects.bindings]]

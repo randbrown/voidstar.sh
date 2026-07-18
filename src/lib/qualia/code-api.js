@@ -368,6 +368,13 @@ export function installCodeApi(deps) {
       genre:   gs(() => sequencer.getGenreId(),  (id) => sequencer.setGenre(id)),
       source:  gs(() => sequencer.getSourceId(), (id) => sequencer.setSource(id)),
       random:  () => safe(() => sequencer.patterns.random()),
+      /** Current pattern model (read-only snapshot use — don't mutate live). */
+      pattern: () => safe(() => sequencer.patterns.getCurrent()),
+      /** Wipe every hit (one undoable edit — same path as the tether pad). */
+      clear:   () => !!safe(() => sequencer.clearPattern(), false),
+      /** Undo / redo over tap-writes + clears (tether's ↶/↷ pads). */
+      undo:    () => !!safe(() => sequencer.tapUndo(), false),
+      redo:    () => !!safe(() => sequencer.tapRedo(), false),
     },
 
     // — looper + rig —

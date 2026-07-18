@@ -1,0 +1,239 @@
+---
+// Tether — the performer's phone remote control for the qualia rig.
+//
+// Scan the private QR from the qualia sync panel (⌁ sync → leader) and this
+// page becomes a wireless DOIO — pads, sliders and drum taps that dispatch
+// through the same action map as the macro-pad's keystrokes and MIDI notes.
+// Deliberately lightweight: no viz engine, just tether-client.js as a thin
+// RC transceiver over the entangle-signal relay.
+//
+// The join link carries the room + CONTROL TOKEN in the URL fragment — it
+// authenticates this phone to drive the rig, so the QR is for the performer's
+// own pocket, never the projector. (/lab/spooky, the old name, redirects here.)
+import { Image } from 'astro:assets';
+import logo from '../../assets/art/logos_alpha/voidstar_logo_cosmos_atom_0.png';
+import ThemeBoot from '../../components/ThemeBoot.astro';
+import '../../styles/themes.css';
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <ThemeBoot />
+  <title>Tether | voidstar</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" />
+  <!-- Tether installs as its OWN standalone app (fullscreen display) — the
+       qualia PWA's scope is /qualia, so this page can never open inside it;
+       "Add to Home screen" here gives it its own icon + chromeless window.
+       The room + control token are persisted on first QR scan, so the
+       installed app reconnects without the URL fragment. -->
+  <link rel="manifest" href="/manifest-tether.webmanifest" />
+  <meta name="theme-color" content="#05050d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="tether" />
+  <link rel="apple-touch-icon" href="/icon-tether-192.png" />
+
+  <!-- Register the PWA service worker (skipped on local dev hosts so Astro's
+       HMR isn't fighting cached assets) — caches the shell for install. -->
+  <script is:inline>
+    if ('serviceWorker' in navigator
+        && !/^(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.)/.test(location.hostname)) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
+  {/* is:global is LOAD-BEARING: the pad UI is built dynamically by
+      tether-client.js, and Astro's default scoped styles only match elements
+      born in this template — scoped, every .sp-* button renders unstyled. */}
+  <style is:global>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { min-height: 100%; color: var(--text); overscroll-behavior: none;
+      background:
+        radial-gradient(140% 70% at 50% -12%, color-mix(in srgb, var(--accent) 26%, transparent) 0%, transparent 55%),
+        radial-gradient(90% 50% at 105% 100%, color-mix(in srgb, var(--cyan) 10%, transparent) 0%, transparent 60%),
+        var(--void); }
+    /* Faint holo-grid over the void — the futuristic floor. */
+    body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background:
+        repeating-linear-gradient(0deg,  color-mix(in srgb, var(--cyan) 5%, transparent) 0 1px, transparent 1px 44px),
+        repeating-linear-gradient(90deg, color-mix(in srgb, var(--cyan) 4%, transparent) 0 1px, transparent 1px 44px);
+      mask-image: radial-gradient(120% 90% at 50% 0%, rgba(0,0,0,.5), transparent 75%); }
+    body { font-family: var(--font-mono); font-size: 17px;
+      padding: max(.9rem, env(safe-area-inset-top)) max(.9rem, env(safe-area-inset-right))
+               calc(5.6rem + env(safe-area-inset-bottom)) max(.9rem, env(safe-area-inset-left));
+      max-width: 32rem; margin: 0 auto; -webkit-user-select: none; user-select: none;
+      touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+
+    /* Compact header — the page is a stage tool, so the top strip stays lean:
+       brand line + title, then straight into the status pill. */
+    header { text-align: center; margin: .2rem 0 .55rem; }
+    header h1 { font-size: 1.4rem; letter-spacing: .22em; font-weight: 700;
+      background: linear-gradient(90deg, var(--cyan), var(--accent), var(--pink));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      filter: drop-shadow(0 0 14px color-mix(in srgb, var(--cyan) 45%, transparent)); }
+    .brand { display: inline-flex; align-items: center; gap: .5rem; text-decoration: none;
+      color: var(--muted); margin-bottom: .2rem; }
+    .brand-logo { width: 1.7rem; height: 1.7rem; display: block;
+      filter: drop-shadow(0 0 .5rem var(--accent)); }
+    .brand-tag b { color: var(--text); font-weight: 600; }
+
+    /* The link-status pill is a strict one-liner ("livecoding station
+       transceiver …") — nowrap + ellipsis; the client mirrors the full text
+       into title for the rare viewport that clips it. */
+    [data-status] { text-align: center; padding: .5rem .8rem; border-radius: 999px;
+      background: rgba(12,10,28,.72); border: 1px solid var(--border);
+      font-size: .74rem; margin-bottom: .7rem; letter-spacing: .02em;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    [data-status][data-kind="ok"]  { border-color: color-mix(in srgb, var(--cyan) 60%, transparent);
+      color: var(--cyan); box-shadow: 0 0 16px color-mix(in srgb, var(--cyan) 22%, transparent),
+      inset 0 0 12px color-mix(in srgb, var(--cyan) 10%, transparent); }
+    [data-status][data-kind="err"] { border-color: var(--pink); color: var(--pink); }
+
+    /* ── Bottom tab bar — big thumb targets, neon active state ── */
+    [data-tabs] { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+      display: grid; grid-template-columns: repeat(4, minmax(0, 8.5rem));
+      gap: .45rem; justify-content: center;
+      padding: .55rem .7rem calc(.6rem + env(safe-area-inset-bottom));
+      background: color-mix(in srgb, var(--void) 86%, transparent);
+      backdrop-filter: blur(12px); border-top: 1px solid var(--border); }
+    .sp-tab { position: relative; min-height: 3.5rem; padding: .5rem .2rem; font: inherit;
+      font-size: 1rem; font-weight: 600; letter-spacing: .05em; cursor: pointer;
+      border-radius: .8rem; background: rgba(18,15,36,.85); color: var(--muted);
+      border: 1px solid var(--border); transition: color .15s, border-color .15s; }
+    .sp-tab.on { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 65%, transparent);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--cyan) 14%, transparent), rgba(18,15,36,.9));
+      box-shadow: 0 0 18px color-mix(in srgb, var(--cyan) 25%, transparent),
+        inset 0 1px 0 color-mix(in srgb, var(--cyan) 40%, transparent); }
+    .sp-tab.on::after { content: ''; position: absolute; left: 22%; right: 22%; top: -1px;
+      height: 2px; border-radius: 2px; background: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan); }
+
+    /* ── Section headers — label + neon hairline ── */
+    .sp-h { display: flex; align-items: center; gap: .7rem;
+      font-size: .8rem; text-transform: uppercase; letter-spacing: .16em;
+      color: color-mix(in srgb, var(--cyan) 75%, var(--text)); margin: 1.15rem 0 .6rem; font-weight: 700; }
+    .sp-h::after { content: ''; flex: 1; height: 1px;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--cyan) 45%, transparent), transparent); }
+
+    /* ── Pads — the primary controls: big, chamfered, glowing ── */
+    .sp-grid { display: grid; gap: .55rem; margin-bottom: .55rem; }
+    .sp-pad { position: relative; min-height: 4.6rem; padding: .55rem .4rem; font: inherit;
+      font-size: 1.06rem; font-weight: 650; letter-spacing: .03em; cursor: pointer;
+      color: var(--text); border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+      background: linear-gradient(165deg, color-mix(in srgb, var(--accent) 16%, transparent), rgba(13,11,29,.92) 55%);
+      border-radius: .85rem;
+      clip-path: polygon(0 0, calc(100% - .8rem) 0, 100% .8rem, 100% 100%, .8rem 100%, 0 calc(100% - .8rem));
+      transition: transform .05s, box-shadow .15s, background .12s;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .2rem;
+      text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent); }
+    .sp-pad:active { transform: scale(.955);
+      background: linear-gradient(165deg, color-mix(in srgb, var(--cyan) 22%, transparent), rgba(20,17,40,.95) 60%); }
+    .sp-pad.lit { color: #15021a; font-weight: 750; text-shadow: none;
+      border-color: var(--pink);
+      background: linear-gradient(165deg, var(--pink), color-mix(in srgb, var(--pink) 70%, #400a38));
+      box-shadow: 0 0 22px color-mix(in srgb, var(--pink) 45%, transparent); }
+    .sp-pad.warn { border-color: color-mix(in srgb, var(--amber, #fbbf24) 70%, transparent);
+      background: linear-gradient(165deg, color-mix(in srgb, var(--amber, #fbbf24) 12%, transparent), rgba(13,11,29,.92) 55%);
+      text-shadow: 0 0 12px color-mix(in srgb, var(--amber, #fbbf24) 30%, transparent); }
+    .sp-pad-sub { font-size: .66rem; font-weight: 400; color: var(--muted); letter-spacing: .08em;
+      text-transform: uppercase; text-shadow: none; }
+    /* Undo/redo pads grey out when the host reports an empty history. */
+    .sp-pad:disabled { opacity: .35; cursor: default; }
+
+    /* ── Sliders — fat tracks, glowing thumbs, live value chip ── */
+    .sp-slider { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .95rem; }
+    .sp-slider .sp-slabel { display: flex; justify-content: space-between; align-items: baseline;
+      font-size: .92rem; color: #cfcaf0; letter-spacing: .03em; }
+    .sp-sval { color: var(--cyan); font-variant-numeric: tabular-nums; font-weight: 650;
+      font-size: 1rem; min-width: 3.2ch; text-align: right;
+      text-shadow: 0 0 10px color-mix(in srgb, var(--cyan) 45%, transparent); }
+    input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 44px;
+      background: transparent; cursor: pointer; }
+    input[type=range]::-webkit-slider-runnable-track { height: 8px; border-radius: 4px;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--cyan) 45%, transparent), color-mix(in srgb, var(--accent) 40%, transparent));
+      border: 1px solid color-mix(in srgb, var(--cyan) 25%, var(--border)); }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 30px; height: 30px;
+      margin-top: -12px; border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #eafcff, var(--cyan) 55%, #0b3b46);
+      border: 2px solid var(--cyan);
+      box-shadow: 0 0 14px color-mix(in srgb, var(--cyan) 60%, transparent); }
+    input[type=range]::-moz-range-track { height: 8px; border-radius: 4px;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--cyan) 45%, transparent), color-mix(in srgb, var(--accent) 40%, transparent)); }
+    input[type=range]::-moz-range-thumb { width: 28px; height: 28px; border-radius: 50%;
+      background: var(--cyan); border: 2px solid var(--cyan);
+      box-shadow: 0 0 14px color-mix(in srgb, var(--cyan) 60%, transparent); }
+
+    .sp-cps { display: flex; justify-content: space-between; align-items: baseline; font-size: .95rem; }
+    /* .sp-tau (the τ set-clock readout) shares the big-numeral look but keeps
+       its own hook — reflect() must never mistake it for the cps readout. */
+    .sp-cps-val, .sp-tau { color: var(--cyan); font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums;
+      text-shadow: 0 0 14px color-mix(in srgb, var(--cyan) 50%, transparent); }
+
+    .sp-write { width: 100%; margin-bottom: .6rem; min-height: 3.6rem; border-style: dashed; }
+    .sp-write.armed { border-style: solid; color: #15021a; font-weight: 750; text-shadow: none;
+      border-color: var(--pink);
+      background: linear-gradient(165deg, var(--pink), color-mix(in srgb, var(--pink) 70%, #400a38));
+      box-shadow: 0 0 22px color-mix(in srgb, var(--pink) 50%, transparent);
+      animation: sp-arm 1.6s ease-in-out infinite; }
+    @keyframes sp-arm { 50% { box-shadow: 0 0 34px color-mix(in srgb, var(--pink) 75%, transparent); } }
+
+    /* ── Drum pads — the biggest targets on the page ── */
+    .sp-drums { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; }
+    .sp-drum { aspect-ratio: 1.15; font: inherit; font-size: .95rem; font-weight: 650;
+      letter-spacing: .02em; cursor: pointer; border-radius: 1rem;
+      background: radial-gradient(120% 120% at 50% 20%, color-mix(in srgb, var(--cyan) 10%, transparent), rgba(16,13,32,.95) 60%);
+      color: var(--text); border: 1px solid color-mix(in srgb, var(--cyan) 30%, var(--border));
+      box-shadow: inset 0 1px 0 color-mix(in srgb, var(--cyan) 18%, transparent);
+      word-break: break-all; padding: .35rem; transition: background .08s; touch-action: manipulation; }
+    .sp-drum.hit { background: radial-gradient(circle at 50% 40%, #eafcff, var(--cyan) 65%);
+      color: #041016; border-color: var(--cyan);
+      box-shadow: 0 0 26px color-mix(in srgb, var(--cyan) 70%, transparent); }
+    .sp-drum.muted { opacity: .35; }
+
+    /* Fullscreen toggle — browser-tab mode only; the installed app IS
+       fullscreen, so hide it there. */
+    .sp-fs { position: fixed; top: calc(.55rem + env(safe-area-inset-top)); right: .7rem;
+      z-index: 11; width: 2.9rem; height: 2.9rem; border-radius: 50%;
+      font: inherit; font-size: 1.15rem; cursor: pointer; color: var(--cyan);
+      background: rgba(18,15,36,.8); border: 1px solid color-mix(in srgb, var(--cyan) 40%, var(--border));
+      box-shadow: 0 0 12px color-mix(in srgb, var(--cyan) 18%, transparent); }
+    .sp-fs:active { transform: scale(.94); }
+    @media (display-mode: fullscreen), (display-mode: standalone) { .sp-fs { display: none; } }
+
+    .sp-empty, .sp-note { color: var(--muted); font-size: .78rem; font-style: italic;
+      text-align: center; padding: .6rem .3rem; line-height: 1.5; }
+    .sp-quale-name { text-align: center; font-size: 1.35rem; font-weight: 650; color: var(--cyan);
+      padding: .75rem .5rem; border: 1px solid color-mix(in srgb, var(--cyan) 40%, var(--border));
+      border-radius: .8rem; background: rgba(12,10,28,.6);
+      box-shadow: inset 0 0 22px color-mix(in srgb, var(--cyan) 8%, transparent);
+      text-shadow: 0 0 16px color-mix(in srgb, var(--cyan) 50%, transparent); }
+    footer { text-align: center; color: var(--muted); font-size: .68rem; margin-top: 1.6rem; opacity: .65; }
+  </style>
+</head>
+<body>
+  <main id="tether-root">
+    <header>
+      <a class="brand" href="/qualia" target="_blank" rel="noopener" title="Open qualia in a new tab">
+        <Image src={logo} alt="voidstar" width={76} height={76} class="brand-logo" />
+        <span class="brand-tag"><b>qualia</b> // remote</span>
+      </a>
+      <h1>⌁ TETHER</h1>
+    </header>
+    <div data-status>livecoding station transceiver (unlinked)</div>
+    <div data-body></div>
+    <nav data-tabs aria-label="controller tabs"></nav>
+    <footer>voidstar.sh — control rides the relay, no audio leaves the rig</footer>
+  </main>
+
+  <script>
+    import { initTetherClient } from '../../lib/qualia/tether-client.js';
+    initTetherClient(document.getElementById('tether-root'));
+  </script>
+</body>
+</html>
