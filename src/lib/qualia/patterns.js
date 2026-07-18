@@ -164,7 +164,13 @@ export function randomPattern() {
   const bass3    = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
   const bass4    = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
   const [quale1, quale2] = pickN(QUALE_IDS, 2);
-  const qualeCycles      = pick([4, 8]);
+  // Scene-change cadence matters for perf, not just taste: every quale swap
+  // tears down + rebuilds the fx instance (often a fresh canvas/GL context +
+  // shader compiles — a main-thread stall the Strudel cyclist feels), and
+  // every phase step snapshots the fullscreen canvas for the transition.
+  // 16/32 cycles ≈ the 15–45s dwell auto-cycle was tuned for; the earlier
+  // 4/8-cycle strobe starved the cyclist into "skip query: too late".
+  const qualeCycles      = pick([16, 32]);
   const nugget = pick(API_NUGGETS)();
   return `// @title qualem ${tag}
 // @by voidstar
@@ -175,7 +181,7 @@ stack(
 
   // silent qualia lanes — visuals driven from the pattern (funcs tab: "qualia")
   quale("<${quale1} ${quale2}>").slow(${qualeCycles}),  // swap quale every ${qualeCycles} cycles
-  qphase("1").slow(2),  // step the quale's phase every 2nd cycle
+  qphase("1").slow(8),  // step the quale's phase every 8th cycle
   ${nugget}
 ).room(0.5)`;
 }
