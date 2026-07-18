@@ -217,6 +217,14 @@ toggles, `mixer.*`) all still exist unchanged.
 - **Trusted-performer surface.** Like `setParam` before it, values are clamped
   by the receiving engines but not validated here; nothing is reachable
   remotely.
+- **`qualia.*` calls are imperative, not patterns.** Dropping
+  `qualia.nextQuale()` straight into `stack(...)` runs it once at eval time
+  and hands its *return value* (an id string, or null) to `stack` — the null
+  kills the whole pattern's query loop, and `.slow()` on it throws. To fire
+  an API call rhythmically, wrap it in a lane:
+  `qcall(() => qualia.nextQuale(), "1").slow(16)`. Only the seven registered
+  functions (`quale`/`qset`/`qpreset`/`qphase`/`qglitch`/`qcall`/`qtrig`)
+  belong in `stack(...)`.
 - **Controls chained on the enclosing stack are fine.** `stack(...).room(.5)`
   unions every hap value into a control object, tucking a lane's plain value
   under the `value` key — lanes unwrap that before applying, so
