@@ -214,6 +214,10 @@ toggles, `mixer.*`) all still exist unchanged.
 - **Trusted-performer surface.** Like `setParam` before it, values are clamped
   by the receiving engines but not validated here; nothing is reachable
   remotely.
+- **Controls chained on the enclosing stack are fine.** `stack(...).room(.5)`
+  unions every hap value into a control object, tucking a lane's plain value
+  under the `value` key — lanes unwrap that before applying, so
+  `quale("<chaos wake>")` still sees `chaos`, not `[object Object]`.
 - **Silent lanes are dominant `onTrigger` patterns.** Stopping the pattern
   stops the lane; there is no state to clean up. `qtrig` is the only
   non-dominant (audio-keeping) binding.
