@@ -71,6 +71,34 @@ export async function initTetherClient(root) {
   });
   document.body.appendChild(fsBtn);
 
+  // "Install app" chip — Chrome fires beforeinstallprompt only in a browser
+  // tab when the app isn't installed yet, so the chip is the one-tap path to
+  // the home-screen install (manifest-tether.webmanifest — tether is its own
+  // PWA). The installed app never sees the event, so the chip never shows
+  // there; iOS Safari has no such event and keeps its manual share-sheet path.
+  let installEvt = null;
+  const installBtn = document.createElement('button');
+  installBtn.className = 'sp-install';
+  installBtn.textContent = '⤓ install app';
+  installBtn.style.display = 'none';
+  installBtn.addEventListener('click', () => {
+    buzz();
+    const evt = installEvt;
+    installEvt = null;
+    installBtn.style.display = 'none';
+    try { evt?.prompt?.(); } catch {}
+  });
+  document.body.appendChild(installBtn);
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();   // suppress Chrome's mini-infobar; the chip owns the moment
+    installEvt = e;
+    installBtn.style.display = '';
+  });
+  window.addEventListener('appinstalled', () => {
+    installEvt = null;
+    installBtn.style.display = 'none';
+  });
+
   if (!room || !key) {
     setStatus('livecoding station transceiver (unlinked)', 'err');
     setHint('no room / control token yet — scan the tether QR from the rig’s ⌁ sync panel; once paired, this page remembers the room');
@@ -128,6 +156,8 @@ export async function initTetherClient(root) {
     recording: false, freezeDepth: 0, quale: '', voices: [], grid: null,
     tapUndoDepth: 0, tapRedoDepth: 0,
     walkOn: false, autoCycleOn: false, autoPhaseOn: false,
+    earthOn: false, metalOn: false, delayOn: false, reverbOn: false,
+    tunerOn: false, paused: false, voxMuted: false, blackoutOn: false,
     tau: null, horizonMin: 0,
   };
   transport.on(ST.CSTATE, (s) => {
@@ -183,35 +213,55 @@ export async function initTetherClient(root) {
     if (opts.sub) { b.textContent = ''; b.append(el('span', 'sp-pad-main', label), el('span', 'sp-pad-sub', opts.sub)); }
     b.addEventListener('click', () => act(action));
     if (opts.lit) b.dataset.lit = opts.lit;   // reflect() keys off this
+    // Optimistic toggle — flip the local guess so the pad lights on tap; the
+    // host's cstate echo (~120 ms) corrects any miss.
+    if (opts.flip) b.addEventListener('click', () => { state[opts.flip] = !state[opts.flip]; reflect(); });
     return b;
   }
-  // Double-tap (or double-click) detector — `dblclick` is unreliable on some
-  // mobile browsers, and two quick pointerdowns cover mouse + touch alike.
-  function onDoubleTap(target, fn, windowMs = 350) {
-    let last = 0;
-    target.addEventListener('pointerdown', () => {
-      const now = performance.now();
-      if (now - last < windowMs) { last = 0; fn(); } else last = now;
+  // Hold-to-reset chip — press and hold ~0.4 s to snap a slider back to its
+  // default; the fill sweep is the confirmation, lifting early cancels.
+  // Replaced the old double-tap: a deliberate hold on a separate target can't
+  // be grazed mid-set the way a tap on the slider itself could.
+  const HOLD_RESET_MS = 400;
+  function holdReset(title, onReset) {
+    const b = el('button', 'sp-reset', '↺');
+    b.title = title;
+    let t = null;
+    const cancel = () => { clearTimeout(t); t = null; b.classList.remove('holding'); };
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      // Capture so a drifting finger keeps the hold (pointerup still cancels).
+      try { b.setPointerCapture(e.pointerId); } catch {}
+      b.classList.add('holding');
+      t = setTimeout(() => {
+        t = null;
+        b.classList.remove('holding');
+        onReset();
+        buzz(20);
+      }, HOLD_RESET_MS);
     });
+    b.addEventListener('pointerup', cancel);
+    b.addEventListener('pointercancel', cancel);
+    return b;
   }
   function sliderRow(label, id, min, max, step, start, fmt = (v) => (+v).toFixed(2)) {
     const wrap = el('div', 'sp-slider');
     const labRow = el('div', 'sp-slabel');
     const val = el('span', 'sp-sval', fmt(start));
-    labRow.append(el('span', null, label), val);
     const input = document.createElement('input');
     input.type = 'range'; input.min = min; input.max = max; input.step = step; input.value = start;
     input.addEventListener('input', () => {
       val.textContent = fmt(input.value);
       slide(id, parseFloat(input.value));
     });
-    // Double-tap snaps back to the default (`start`) — like a DAW fader.
-    onDoubleTap(input, () => {
+    const reset = holdReset(`hold to reset ${label}`, () => {
       input.value = String(start);
       val.textContent = fmt(start);
       slide(id, +start);
-      buzz(10);
     });
+    const right = el('span', 'sp-srow-right');
+    right.append(reset, val);
+    labRow.append(el('span', null, label), right);
     wrap.append(labRow, input);
     return wrap;
   }
@@ -248,17 +298,17 @@ export async function initTetherClient(root) {
           padBtn('clear', 'freezeClear', { cls: 'warn', sub: 'drop stack' })),
         el('h3', 'sp-h', 'drives & strip'),
         grid(3,
-          padBtn('earth', 'earth', { sub: 'drive' }),
-          padBtn('metal', 'metal', { sub: 'zone' }),
-          padBtn('tuner', 'tuner', { sub: 'toggle' }),
-          padBtn('delay', 'delayToggle', { sub: 'on / off' }),
-          padBtn('reverb', 'reverbToggle', { sub: 'on / off' }),
-          padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio' })),
+          padBtn('earth', 'earth', { sub: 'drive', lit: 'earth', flip: 'earthOn' }),
+          padBtn('metal', 'metal', { sub: 'zone', lit: 'metal', flip: 'metalOn' }),
+          padBtn('tuner', 'tuner', { sub: 'toggle', lit: 'tuner', flip: 'tunerOn' }),
+          padBtn('delay', 'delayToggle', { sub: 'on / off', lit: 'delay', flip: 'delayOn' }),
+          padBtn('reverb', 'reverbToggle', { sub: 'on / off', lit: 'reverb', flip: 'reverbOn' }),
+          padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio', lit: 'pause', flip: 'paused' })),
         el('h3', 'sp-h', 'levels'),
         sliderRow('rig master', 'rig.level', 0, 1.5, 0.01, 1),
         sliderRow('delay mix', 'delay.mix', 0, 1, 0.01, 0.3),
         sliderRow('reverb mix', 'reverb.mix', 0, 1, 0.01, 0.3),
-        el('div', 'sp-note', 'sliders send absolute values, like MIDI CC knobs — double-tap one to reset it'),
+        el('div', 'sp-note', 'sliders send absolute values, like MIDI CC knobs — hold a ↺ to snap one back to default'),
       );
     } else if (tab === 'loop') {
       bodyEl.append(
@@ -271,12 +321,10 @@ export async function initTetherClient(root) {
           padBtn('⏹ rec', 'recStop', { sub: 'stop' })),
         el('h3', 'sp-h', 'vox / transport'),
         grid(2,
-          padBtn('vox', 'voxMute', { sub: 'mute / live' }),
-          padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio' })),
+          padBtn('vox', 'voxMute', { sub: 'mute / live', lit: 'vox', flip: 'voxMuted' }),
+          padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio', lit: 'pause', flip: 'paused' })),
       );
     } else if (tab === 'seq') {
-      const cpsWrap = el('div', 'sp-cps');
-      cpsWrap.append(el('span', 'sp-cps-label', 'cps'), el('b', 'sp-cps-val', '—'));
       const cpsSlider = document.createElement('input');
       cpsSlider.type = 'range'; cpsSlider.min = '0.2'; cpsSlider.max = '2'; cpsSlider.step = '0.01';
       cpsSlider.value = String(state.cps || 0.5);
@@ -286,13 +334,17 @@ export async function initTetherClient(root) {
         const v = bodyEl.querySelector('.sp-cps-val');
         if (v) v.textContent = (+cpsSlider.value).toFixed(2);
       });
-      onDoubleTap(cpsSlider, () => {
-        cpsSlider.value = '0.5';
-        slide('cps', 0.5);
-        const v = bodyEl.querySelector('.sp-cps-val');
-        if (v) v.textContent = '0.50';
-        buzz(10);
-      });
+      const cpsWrap = el('div', 'sp-cps');
+      const cpsRight = el('span', 'sp-srow-right');
+      cpsRight.append(
+        holdReset('hold to reset tempo', () => {
+          cpsSlider.value = '0.5';
+          slide('cps', 0.5);
+          const v = bodyEl.querySelector('.sp-cps-val');
+          if (v) v.textContent = '0.50';
+        }),
+        el('b', 'sp-cps-val', '—'));
+      cpsWrap.append(el('span', 'sp-cps-label', 'cps'), cpsRight);
 
       const writeBtn = el('button', 'sp-pad sp-write', '⏺ write taps into pattern');
       writeBtn.classList.toggle('armed', writeArmed);
@@ -354,13 +406,6 @@ export async function initTetherClient(root) {
           : 'taps just sound — arm ⏺ write to record them into the pattern'),
       );
     } else if (tab === 'quale') {
-      // Automation toggles reflect host state (lit) — flip the local guess on
-      // tap so they respond before the next cstate snapshot.
-      const autoToggle = (label, action, lit, key, sub) => {
-        const b = padBtn(label, action, { lit, sub });
-        b.addEventListener('click', () => { state[key] = !state[key]; reflect(); });
-        return b;
-      };
       // τ — the set clock. Snapshot-fed (1 Hz), close enough for pacing a set.
       const tauRow = el('div', 'sp-cps');
       tauRow.append(el('span', 'sp-cps-label', 'set clock'), el('b', 'sp-tau', '—'));
@@ -378,17 +423,17 @@ export async function initTetherClient(root) {
           padBtn('phase ▶', 'phaseNext', { sub: 'step forward' })),
         el('h3', 'sp-h', 'auto'),
         grid(3,
-          autoToggle('cycle', 'cycleAuto', 'cycleAuto', 'autoCycleOn', 'auto quale'),
-          autoToggle('phase', 'phaseAuto', 'phaseAuto', 'autoPhaseOn', 'auto phase'),
-          autoToggle('walk', 'walk', 'walk', 'walkOn', 'cam drift')),
+          padBtn('cycle', 'cycleAuto', { lit: 'cycleAuto', flip: 'autoCycleOn', sub: 'auto quale' }),
+          padBtn('phase', 'phaseAuto', { lit: 'phaseAuto', flip: 'autoPhaseOn', sub: 'auto phase' }),
+          padBtn('walk', 'walk', { lit: 'walk', flip: 'walkOn', sub: 'cam drift' })),
         el('h3', 'sp-h', 'set clock'),
         tauRow,
         grid(1, tauReset),
         el('h3', 'sp-h', 'stage'),
         grid(3,
           padBtn('cam ▶', 'camNext', { sub: 'next device' }),
-          padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio' }),
-          padBtn('☾ dark', 'blackout', { cls: 'warn', sub: 'blackout' })),
+          padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio', lit: 'pause', flip: 'paused' }),
+          padBtn('☾ dark', 'blackout', { cls: 'warn', sub: 'blackout', lit: 'blackout', flip: 'blackoutOn' })),
       );
     }
     reflect();
@@ -407,6 +452,14 @@ export async function initTetherClient(root) {
         : kind === 'walk'      ? state.walkOn
         : kind === 'cycleAuto' ? state.autoCycleOn
         : kind === 'phaseAuto' ? state.autoPhaseOn
+        : kind === 'earth'     ? state.earthOn
+        : kind === 'metal'     ? state.metalOn
+        : kind === 'tuner'     ? state.tunerOn
+        : kind === 'delay'     ? state.delayOn
+        : kind === 'reverb'    ? state.reverbOn
+        : kind === 'pause'     ? state.paused
+        : kind === 'vox'       ? state.voxMuted
+        : kind === 'blackout'  ? state.blackoutOn
         : false;
       b.classList.toggle('lit', !!on);
       if (kind === 'freeze') {
