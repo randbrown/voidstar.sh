@@ -1,4 +1,4 @@
-// Playback sync — cross-device cycle/CPS lock + spooky controller ingress.
+// Playback sync — cross-device cycle/CPS lock + tether remote ingress.
 //
 // createSync(deps) is a headless engine (no DOM — sync-ui.js owns that) with
 // three jobs, all riding one relay room (SYNC_APP_ID, workers/entangle-signal):

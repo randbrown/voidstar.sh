@@ -27,10 +27,10 @@ const APPS = [
   { id: 'qualia', accent: '#8b5cf6', letter: 'Q' },
   { id: 'setlist', accent: '#f59e0b', letter: 'S' },
   { id: 'mind', accent: '#14b8a6', letter: 'M' },
-  // Spooky (the phone controller) leads with its ⌁ brand glyph — cyan, like
-  // the sync/controller accent throughout the qualia UI.
+  // Tether (the phone remote) leads with its ⌁ brand glyph — cyan, like
+  // the sync/remote accent throughout the qualia UI.
   // scale compensates ⌁ being small in DejaVu's em box vs a capital letter.
-  { id: 'spooky', accent: '#22d3ee', letter: '⌁', scale: 1.9 },
+  { id: 'tether', accent: '#22d3ee', letter: '⌁', scale: 1.9 },
 ];
 
 // Mix a hex color toward white (amt 0..1) — used for the letter's top highlight.

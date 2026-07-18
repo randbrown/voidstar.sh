@@ -64,13 +64,14 @@ a CDN is unavailable. Bundled npm deps are deliberately few: `astro`, `three`, `
 - **`/lab/qualia`** — a permanent meta-refresh **redirect to `/qualia`** (promoted out of the lab).
 - Marketing/content: `/`, `/about`, `/videos`, `/posts/*`, `/lab`.
 
-**Installable apps (PWAs).** `/qualia`, `/lab/setlist`, `/lab/mind`, and `/lab/spooky` are each
+**Installable apps (PWAs).** `/qualia`, `/lab/setlist`, `/lab/mind`, and `/lab/tether` are each
 meant to install as their **own** standalone desktop/home-screen app. Each ships a dedicated
 manifest (`public/manifest-<app>.webmanifest`) with a unique `id`, a **narrow `scope`**
-(`/qualia`, `/lab/setlist`, `/lab/mind`, `/lab/spooky`) so an install owns only its own routes,
+(`/qualia`, `/lab/setlist`, `/lab/mind`, `/lab/tether`) so an install owns only its own routes,
 and its own color-coded icon set (`public/icon-<app>-*.png`, built by
-`scripts/gen-app-icons.mjs`: violet qualia · amber setlist · teal mind · cyan spooky). Spooky
-installs `display: fullscreen` (it's a stage controller) and persists its room + control token
+`scripts/gen-app-icons.mjs`: violet qualia · amber setlist · teal mind · cyan tether). Tether
+(formerly "spooky" — `/lab/spooky` now redirects) installs `display: fullscreen` (it's a stage
+remote) and persists its room + control token
 from the last scanned QR so a home-screen launch reconnects without the URL fragment. The root `public/manifest.webmanifest` (`id`/`scope` `/`) is the whole-site app. Keep
 each lab's scope narrow — a broad `/` scope makes one install swallow the entire site into a single
 window, which is exactly the "it's all one app" bug this split fixed. The service worker

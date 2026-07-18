@@ -13,7 +13,7 @@ Quick map of the canonical docs:
 - Live coding (Strudel + Hydra) → [`docs/livecoding.md`](docs/livecoding.md)
 - Qualia code API (`globalThis.qualia` + `quale`/`qset`/… pattern funcs) → [`docs/qualia-code-api.md`](docs/qualia-code-api.md)
 - Audience entanglement & pose → [`docs/entanglement.md`](docs/entanglement.md)
-- Cross-device playback sync (cycles/CPS) & spooky phone controller → [`docs/playback-sync.md`](docs/playback-sync.md)
+- Cross-device playback sync (cycles/CPS) & tether phone remote → [`docs/playback-sync.md`](docs/playback-sync.md)
 - Qualia Google Drive sync (login, `voidstar_qualia` folder, per-component subfolders) → [`docs/qualia-drive-sync.md`](docs/qualia-drive-sync.md)
 - Setlist app: data model, Drive backup/restore, chart-fallback tiers → [`docs/setlist-app.md`](docs/setlist-app.md)
 - Mind app (notes/second-brain): store, editor, tasks-in-notes, Drive sync → [`docs/mind-app.md`](docs/mind-app.md)

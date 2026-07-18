@@ -6,7 +6,7 @@ effects (overlay layers, glitch posts, logo, camera walk), phase/cycle
 automation, camera + pose, audience entanglement, and the audio engines
 (mixer, Strudel transport, sequencer, looper/rig, vox). It exists so a set can
 be *coded* — from the Strudel editor, the browser console, or anything else
-with page access (MIDI handlers, the spooky controller).
+with page access (MIDI handlers, the tether remote).
 
 The same reference is searchable in the Strudel panel's **funcs** tab (search
 "qualia"), and `qualia.help('cam')` prints it filtered to the console.

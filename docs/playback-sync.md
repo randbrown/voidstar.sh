@@ -1,8 +1,8 @@
-# Playback sync & the spooky controller
+# Playback sync & the tether remote
 
 Two stage features sharing one relay room: **playback sync** (lock cycles + CPS across
-devices — no audio crosses the wire) and **spooky** (the performer's phone as a wireless
-control pad). Read [`architecture.md`](architecture.md) §5 and
+devices — no audio crosses the wire) and **tether** (the performer's phone as a wireless
+remote control). Read [`architecture.md`](architecture.md) §5 and
 [`livecoding.md`](livecoding.md) ("Cycle clock / sync") first — both features hang off the
 same Strudel cycle clock the sequencer and looper already phase-lock to.
 
@@ -18,7 +18,7 @@ All paths under `src/lib/qualia/` unless noted.
   *follower* (audio to the board), the laptop *leads* and renders video. Since the
   sequencer and looper phase-lock to the local Strudel grid, syncing Strudel syncs
   everything.
-- **Spooky** — no second rig at all: the phone joins as a *controller* and drives the
+- **Tether** — no second rig at all: the phone joins as a *controller* and drives the
   leader's rig remotely (the DOIO action surface + live drum pads).
 
 | File | Responsibility |
@@ -27,7 +27,7 @@ All paths under `src/lib/qualia/` unless noted.
 | `sync.js` | `createSync(deps)` — headless engine. Leader: beacon + csync pong + controller ingress. Follower: offset estimation + the lock loop. |
 | `sync-ui.js` | `initSyncUI(deps)` — self-mounting topbar launcher (`⌁ sync`) + modal (role, room, QRs, status, trim, A/V controls). |
 | `sync-av.js` | `createSyncAV(deps)` — the WebRTC A/V feed layer: follower publishes fx canvas + recordable mix; leader composites feeds (pip/split/full/blend) and adopts remote audio as source `'remote'`. |
-| `spooky-client.js` + `src/pages/lab/spooky.astro` | The phone controller page. Loads no viz engine. |
+| `tether-client.js` + `src/pages/lab/tether.astro` | The phone remote page. Loads no viz engine. (`/lab/spooky`, the old name, is a hash-preserving redirect stub.) |
 | `workers/entangle-signal/` | Same relay as entanglement; the sync topics are in its allowlist. **Redeploy the Worker when topics change.** |
 
 The transport is the existing Cloudflare DO star relay (`entangle-transport-cf.js`) in a
@@ -73,18 +73,18 @@ play/stop (`follow transport`, default on); it still needs its own pattern in th
 to make sound.
 
 Join paths: the sync modal pins a room; a second rig opens the **follower link**
-(`/qualia?syncroom=<room>` — auto-joins on load), the phone scans the **spooky QR**.
+(`/qualia?syncroom=<room>` — auto-joins on load), the phone scans the **tether QR**.
 
 ---
 
-## Spooky (remote controller)
+## Tether (remote control)
 
-"Spooky action at a distance." `/lab/spooky#r=<room>&k=<token>` — the fragment carries
-the **control token**, minted per room on the leader, checked on every message. The QR is
-for the performer's own phone: **don't project it** (the follower link is the shareable,
-listen-only one). Rotate the token by minting a fresh room.
+The phone-to-rig link (formerly "spooky"). `/lab/tether#r=<room>&k=<token>` — the
+fragment carries the **control token**, minted per room on the leader, checked on every
+message. The QR is for the performer's own phone: **don't project it** (the follower link
+is the shareable, listen-only one). Rotate the token by minting a fresh room.
 
-Controller actions dispatch through the **same `padActions` map** as the DOIO keystrokes
+Remote actions dispatch through the **same `padActions` map** as the DOIO keystrokes
 and MIDI notes (`page-init.js`) — three input paths, one behavior, no drift. Ingress is
 allowlisted (`CTL_ACTIONS`, `CTL_SLIDERS` + clamps in `sync-protocol.js`), rate-limited
 per peer, and never eval'd — same posture as entangle ingress.
@@ -92,19 +92,23 @@ per peer, and never eval'd — same posture as entangle ingress.
 Tabs: **rig** (freeze stack, drives, strip toggles, rig/delay/reverb sliders — absolute,
 like MIDI CC), **loop** (looper transport + grab, vox mute), **seq** (strudel/seq
 transport, tempo slider, **live drum pads** — tap to sound a voice; arm *write* to also
-quantize the hit into the pattern at the nearest cell, via `sequencer.tapHit`), **quale**
+quantize the hit into the pattern at the nearest cell, via `sequencer.tapHit`; **undo /
+redo** pads walk the tap-write history via `sequencer.tapUndo`/`tapRedo` — entries are
+stamped with the pattern id, so loading another pattern retires them safely), **quale**
 (quale/phase steps, camera, pause, blackout).
 
 Feedback: the leader broadcasts a 1 Hz `cstate` snapshot (transport lit-states, freeze
-depth, active quale, pad voices, cps) so the phone reflects reality.
+depth, active quale, pad voices, cps, tap-history depths) so the phone reflects reality.
 
-**Install it.** Spooky is its own PWA (`public/manifest-spooky.webmanifest`, `display:
+**Install it.** Tether is its own PWA (`public/manifest-tether.webmanifest`, `display:
 fullscreen`, cyan ⌁ icon) — scan the QR once, then "Add to Home screen". The room +
-control token persist in `localStorage` (`voidstar.spooky.creds`) on every scan, so the
-installed app launches straight into the last-paired room with no URL fragment; a fresh
-QR re-pairs. In a browser tab there's a ⛶ fullscreen toggle instead (hidden when the
-page runs as the installed app). Note the qualia PWA's scope is `/qualia`, so spooky can
-never open *inside* that install — its own app is the intended path.
+control token persist in `localStorage` (`voidstar.tether.creds`, with a read-fallback
+to the pre-rename `voidstar.spooky.creds`) on every scan, so the installed app launches
+straight into the last-paired room with no URL fragment; a fresh QR re-pairs. In a
+browser tab there's a ⛶ fullscreen toggle instead (hidden when the page runs as the
+installed app). Note the qualia PWA's scope is `/qualia`, so tether can never open
+*inside* that install — its own app is the intended path. Old installs and QRs pointing
+at `/lab/spooky` land on a client-side redirect that carries the URL fragment across.
 
 ---
 
@@ -147,7 +151,7 @@ lock above is what keeps performers tight; the wire is for capture.
   version-pinned like everything else in `strudel-hydra.js` — re-test after a
   `STRUDEL_VERSION` bump; if the jump path breaks, the engine falls back to slew-only
   (slower initial lock, still correct).
-- Controller sliders are **send-only absolute** (the host doesn't yet expose strip-param
+- Remote sliders are **send-only absolute** (the host doesn't yet expose strip-param
   getters) — touching one jumps the host value, exactly like an absolute MIDI CC knob.
 - Latency on drum-pad taps is real (relay round trip ~30–100 ms). Tap-to-sound feels
   near-instant; tap-to-*write* quantizes to the nearest cell, which absorbs it for

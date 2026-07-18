@@ -3,8 +3,8 @@
 // entangle-ui pattern: self-mounting, zero page-init DOM edits.
 //
 // The modal covers both stage roles:
-//   LEADER   — pins/mints the sync room, shows the private SPOOKY QR (the
-//              phone controller join — carries the control token, so it's for
+//   LEADER   — pins/mints the sync room, shows the private TETHER QR (the
+//              phone remote join — carries the control token, so it's for
 //              the performer's own phone, never the crowd projection), the
 //              follower join link, and live peer counts.
 //   FOLLOWER — joins a leader's room, shows offset/RTT/phase-error and the
@@ -122,7 +122,7 @@ export function initSyncUI(deps) {
   const launch = document.createElement('button');
   launch.id = 'qsync-launch';
   launch.className = 'ctrl-btn';
-  launch.title = 'Playback sync — lock cycles/CPS across devices + spooky controller';
+  launch.title = 'Playback sync — lock cycles/CPS across devices + tether remote';
   launch.innerHTML = '<span id="qsync-dot"></span>⌁ sync';
   const topbarRight = document.getElementById('topbar-right');
   if (topbarRight) topbarRight.appendChild(launch);
@@ -212,7 +212,7 @@ export function initSyncUI(deps) {
     modal.innerHTML = `
       <button class="qsync-x" title="close">×</button>
       <h2>⌁ PLAYBACK SYNC</h2>
-      <div class="qsync-sub">spooky action at a distance — cycles &amp; CPS locked across devices; audio stays local</div>
+      <div class="qsync-sub">entangled clocks — cycles &amp; CPS locked across devices; audio stays local</div>
 
       <div class="qsync-sect">
         <h3>Role</h3>
@@ -235,7 +235,7 @@ export function initSyncUI(deps) {
 
       ${role === 'leader' ? `
       <div class="qsync-sect">
-        <h3>Spooky controller <span style="text-transform:none">(your phone)</span></h3>
+        <h3>⌁ Tether <span style="text-transform:none">(remote control — your phone)</span></h3>
         <div class="qsync-qr"><canvas id="qsync-qr" width="300" height="300"></canvas></div>
         <div class="qsync-row">
           <button data-act="copyctl">copy controller link</button>

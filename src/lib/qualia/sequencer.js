@@ -1714,12 +1714,57 @@ export function createSequencer({ audio, syncStrudel } = {}) {
 
   if (wasOpenLastSession) open();
 
-  // ── Live drum-pad taps (spooky controller / any remote surface) ─────────
+  // ── Live drum-pad taps (tether remote / any remote surface) ─────────────
   // Audition-trigger a voice NOW, and optionally WRITE the hit into the
   // pattern at the nearest cell to the audible moment — the classic drum
   // machine "live record" move, quantized to the grid the pattern already
   // plays on. Write only lands while the transport runs (there's no playhead
   // to quantize against otherwise) and only on a pad the pattern has.
+  //
+  // Tap-write history: every landed write is one undo entry (redo restores
+  // it). A live-recorded tap is easy to land a cell off the intended beat, so
+  // the remote gets a one-tap "that wasn't it" escape. Entries are stamped
+  // with the model id + validated at pop time, so swapping or resizing the
+  // pattern silently retires stale entries instead of editing the wrong grid.
+  const TAP_HISTORY_MAX = 128;
+  const tapUndoStack = [], tapRedoStack = [];
+  function tapEntryValid(e) {
+    return !!e && e.modelId === model.id && e.cell < totalCells()
+      && model.pads.some(p => p.voice === e.voice);
+  }
+  function applyTapEntry(e, on) {
+    const pad = model.pads.find(p => p.voice === e.voice);
+    if (!pad) return;
+    pad.hits[e.cell] = on ? 1 : 0;
+    model.updatedAt = Date.now();
+    const el = colCells[e.cell]?.[model.pads.indexOf(pad)];
+    if (el) el.classList.toggle('on', !!on);
+    persistSoon();
+  }
+  function tapUndo() {
+    while (tapUndoStack.length) {
+      const e = tapUndoStack.pop();
+      if (!tapEntryValid(e)) continue;
+      applyTapEntry(e, false);
+      tapRedoStack.push(e);
+      return true;
+    }
+    return false;
+  }
+  function tapRedo() {
+    while (tapRedoStack.length) {
+      const e = tapRedoStack.pop();
+      if (!tapEntryValid(e)) continue;
+      applyTapEntry(e, true);
+      tapUndoStack.push(e);
+      return true;
+    }
+    return false;
+  }
+  const tapHistoryDepths = () => ({
+    undo: tapUndoStack.filter(tapEntryValid).length,
+    redo: tapRedoStack.filter(tapEntryValid).length,
+  });
   async function triggerVoice(voice, gain = 1) {
     if (typeof voice !== 'string' || !voice) return false;
     try { await Tone.start(); } catch { return false; }
@@ -1746,6 +1791,9 @@ export function createSequencer({ audio, syncStrudel } = {}) {
       const el = colCells[cell]?.[model.pads.indexOf(pad)];
       if (el) el.classList.add('on');
       persistSoon();
+      tapUndoStack.push({ modelId: model.id, voice: pad.voice, cell });
+      if (tapUndoStack.length > TAP_HISTORY_MAX) tapUndoStack.shift();
+      tapRedoStack.length = 0;   // a fresh write forks history — redo dies
     }
     return { played: true, wrote: true, cell };
   }
@@ -1800,9 +1848,13 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     applyCpsFromStrudel,
     resync,
     perFrame,
-    // Remote-surface hooks (spooky controller): audition + live tap-record.
+    // Remote-surface hooks (tether remote): audition + live tap-record,
+    // with undo/redo over the written taps.
     triggerVoice,
     tapHit,
+    tapUndo,
+    tapRedo,
+    tapHistoryDepths,
     getVoices: () => model.pads.map(p => ({ voice: p.voice, mute: !!p.mute })),
     patterns: {
       list:     loadList,

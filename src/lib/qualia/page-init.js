@@ -6799,9 +6799,9 @@ export function initQualiaPage() {
     try { entangleEngine = initEntangleUI({ core, mesh, actions: { phaseNext } }); }
     catch (err) { console.error('[qualia] entangle init failed:', err); }
 
-    // Playback sync + spooky controller. Self-mounts its topbar launcher and
+    // Playback sync + tether remote. Self-mounts its topbar launcher and
     // modal; dormant (no network) until the performer picks a role. The
-    // controller's actions dispatch through the SAME padActions map as the
+    // remote's actions dispatch through the SAME padActions map as the
     // DOIO keystrokes and MIDI notes — three input paths, one behavior.
     try {
       _syncRef = initSyncUI({
@@ -6826,6 +6826,9 @@ export function initQualiaPage() {
         actions: {
           ...padActions,
           seqPlayStop: () => { sequencer.isPlaying?.() ? sequencer.stop() : sequencer.play(); },
+          // Tap-write history — undo/redo over hits the remote recorded live.
+          seqUndo: () => { try { sequencer.tapUndo?.(); } catch {} },
+          seqRedo: () => { try { sequencer.tapRedo?.(); } catch {} },
         },
         applySlider: (id, v) => {
           switch (id) {
@@ -6850,6 +6853,8 @@ export function initQualiaPage() {
           const activeId = core.activeId?.() || null;
           let qualeName = activeId || '';
           try { qualeName = mesh.list().find(m => m.id === activeId)?.name || qualeName; } catch {}
+          let tapHist = { undo: 0, redo: 0 };
+          try { tapHist = sequencer.tapHistoryDepths?.() || tapHist; } catch {}
           return {
             cps: strudel.getStrudelCps?.() ?? null,
             strudelPlaying: !!strudel.isPlaying?.(),
@@ -6860,6 +6865,8 @@ export function initQualiaPage() {
             quale: qualeName,
             voices: sequencer.getVoices?.() || [],
             grid: model ? { beats: model.beats, steps: model.steps, cycles: model.cycles } : null,
+            tapUndoDepth: tapHist.undo,
+            tapRedoDepth: tapHist.redo,
           };
         },
       });

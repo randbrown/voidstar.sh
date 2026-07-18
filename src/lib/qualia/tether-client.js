@@ -1,10 +1,10 @@
-// Spooky — the phone controller client. Runs on /lab/spooky (the performer's
-// own phone; the join QR carries the room + control token in the URL
-// fragment). Loads NONE of the viz engine — like the entangle client, it's a
-// thin control surface over the relay.
+// Tether — the phone remote-control client. Runs on /lab/tether (the
+// performer's own phone; the join QR carries the room + control token in the
+// URL fragment). Loads NONE of the viz engine — like the entangle client,
+// it's a thin RC transceiver over the relay.
 //
 // The pad mirrors the DOIO KB16 keymap's action surface (same action ids —
-// one shared dispatch map on the host, so keystrokes / MIDI / spooky never
+// one shared dispatch map on the host, so keystrokes / MIDI / tether never
 // drift), organized into thumb-sized tabs:
 //   RIG   — freeze stack, drives, strip toggles, rig/delay/reverb sliders
 //   LOOP  — looper transport + grab, vox mute, pause
@@ -20,20 +20,23 @@ import { SYNC_APP_ID, ST, readControlFromHash } from './sync-protocol.js';
 
 const SLIDER_DEBOUNCE_MS = 40;
 // Pairing memory — the room + control token from the last scanned QR. This is
-// what lets spooky run as an INSTALLED app: a home-screen launch starts at the
-// bare /lab/spooky (no URL fragment), and reconnects from here. A newly
+// what lets tether run as an INSTALLED app: a home-screen launch starts at the
+// bare /lab/tether (no URL fragment), and reconnects from here. A newly
 // scanned QR always overwrites it (fresh room = rotated token).
-const CREDS_KEY = 'voidstar.spooky.creds';
+const CREDS_KEY = 'voidstar.tether.creds';
+// Pre-rename pairing memory — phones paired while the page was still called
+// "spooky" keep their room without a re-scan.
+const LEGACY_CREDS_KEY = 'voidstar.spooky.creds';
 
 const buzz = (ms = 8) => { try { navigator.vibrate?.(ms); } catch {} };
 
-export async function initSpookyClient(root) {
+export async function initTetherClient(root) {
   let { room, key } = readControlFromHash();
   if (room && key) {
     try { localStorage.setItem(CREDS_KEY, JSON.stringify({ room, key })); } catch {}
   } else {
     try {
-      const c = JSON.parse(localStorage.getItem(CREDS_KEY));
+      const c = JSON.parse(localStorage.getItem(CREDS_KEY) || localStorage.getItem(LEGACY_CREDS_KEY));
       if (c?.room && c?.key) ({ room, key } = c);
     } catch {}
   }
@@ -56,16 +59,16 @@ export async function initSpookyClient(root) {
   document.body.appendChild(fsBtn);
 
   if (!room || !key) {
-    setStatus('No room / control token yet — scan the spooky QR from the rig’s ⌁ sync panel. (Once paired, this page remembers the room.)', 'err');
+    setStatus('No room / control token yet — scan the tether QR from the rig’s ⌁ sync panel. (Once paired, this page remembers the room.)', 'err');
     return;
   }
 
-  setStatus('Reaching across the void…');
+  setStatus('Establishing link…');
   let transport;
   try {
     transport = await createTransport({ appId: SYNC_APP_ID, room, role: 'participant' });
   } catch (err) {
-    console.error('[spooky] transport failed', err);
+    console.error('[tether] transport failed', err);
     setStatus('Could not connect. Check your network and reload.', 'err');
     return;
   }
@@ -93,10 +96,10 @@ export async function initSpookyClient(root) {
     if (!welcomed) {
       welcomed = true;
       clearTimeout(connectTimer);
-      setStatus('⌁ spooky action engaged', 'ok');
+      setStatus('⌁ tethered — link live', 'ok');
       render();
     } else {
-      setStatus('⌁ spooky action engaged', 'ok');
+      setStatus('⌁ tethered — link live', 'ok');
     }
   });
 
@@ -104,6 +107,7 @@ export async function initSpookyClient(root) {
   let state = {
     cps: null, strudelPlaying: false, seqPlaying: false, loopPlaying: false,
     recording: false, freezeDepth: 0, quale: '', voices: [], grid: null,
+    tapUndoDepth: 0, tapRedoDepth: 0,
   };
   transport.on(ST.CSTATE, (s) => {
     if (!s || typeof s !== 'object') return;
@@ -128,6 +132,13 @@ export async function initSpookyClient(root) {
   const tap = (voice) => {
     buzz(12);
     try { transport.send(ST.CTL, { k: key, hit: voice, w: writeArmed ? 1 : 0 }); } catch {}
+    // Optimistic history depth — a written tap is undoable (and clears redo)
+    // the moment it lands; the next cstate snapshot corrects any miss.
+    if (writeArmed && state.seqPlaying) {
+      state.tapUndoDepth += 1;
+      state.tapRedoDepth = 0;
+      reflect();
+    }
   };
 
   // ── UI ────────────────────────────────────────────────────────────────────
@@ -247,6 +258,20 @@ export async function initSpookyClient(root) {
         buzz(15);
       });
 
+      // Undo / redo for written taps — reflect() greys them out from the
+      // host-reported history depths; taps here adjust the local guess so the
+      // buttons react before the next cstate snapshot arrives.
+      const undoBtn = padBtn('↶ undo', 'seqUndo', { sub: 'last written tap' });
+      const redoBtn = padBtn('redo ↷', 'seqRedo', { sub: 're-write tap' });
+      undoBtn.dataset.hist = 'undo';
+      redoBtn.dataset.hist = 'redo';
+      undoBtn.addEventListener('click', () => {
+        if (state.tapUndoDepth > 0) { state.tapUndoDepth -= 1; state.tapRedoDepth += 1; reflect(); }
+      });
+      redoBtn.addEventListener('click', () => {
+        if (state.tapRedoDepth > 0) { state.tapRedoDepth -= 1; state.tapUndoDepth += 1; reflect(); }
+      });
+
       const padsGrid = el('div', 'sp-drums');
       const voices = state.voices || [];
       if (!voices.length) {
@@ -272,6 +297,7 @@ export async function initSpookyClient(root) {
         cpsWrap, cpsSlider,
         el('h3', 'sp-h', 'drum pads'),
         writeBtn,
+        grid(2, undoBtn, redoBtn),
         padsGrid,
         el('div', 'sp-note', writeArmed
           ? 'taps sound AND land on the nearest grid cell while the sequencer plays'
@@ -316,6 +342,9 @@ export async function initSpookyClient(root) {
         const main = b.querySelector('.sp-pad-main');
         if (main) main.textContent = label; else b.textContent = label;
       }
+    }
+    for (const b of bodyEl.querySelectorAll('[data-hist]')) {
+      b.disabled = b.dataset.hist === 'undo' ? !(state.tapUndoDepth > 0) : !(state.tapRedoDepth > 0);
     }
     const cpsVal = bodyEl.querySelector('.sp-cps-val');
     if (cpsVal && state.cps) cpsVal.textContent = (+state.cps).toFixed(2);

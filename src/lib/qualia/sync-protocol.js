@@ -1,6 +1,6 @@
-// Playback sync + spooky controller — the wire contract shared by the leader
+// Playback sync + tether controller — the wire contract shared by the leader
 // (sync.js on the host rig), follower rigs (sync.js in follower mode) and the
-// phone controller (spooky-client.js). No DOM, no transport: constants,
+// phone remote (tether-client.js). No DOM, no transport: constants,
 // message shapes, and the ingress validators that keep remote control safe.
 //
 // Rides the SAME Cloudflare DO relay as entanglement (workers/entangle-signal)
@@ -15,7 +15,7 @@
 // Security model, mirroring entangle-protocol.js:
 //   • The leader key (relay TOFU host key) lives only on the leader device.
 //   • The CONTROL TOKEN gates who may DRIVE the rig. It's minted per room on
-//     the leader, embedded ONLY in the spooky QR / link the performer scans
+//     the leader, embedded ONLY in the tether QR / link the performer scans
 //     themself (URL fragment — never sent to the server), and checked on every
 //     ctl/chello message. A follower or audience phone without it can listen
 //     to the clock but can't touch the rig.
@@ -23,7 +23,7 @@
 //     below and clamped before it reaches the engine. Nothing is eval'd.
 
 export const SYNC_APP_ID = 'voidstar-sync-v1';
-export const CONTROLLER_PATH = '/lab/spooky';   // phone controller page route
+export const CONTROLLER_PATH = '/lab/tether';   // phone remote page route (né /lab/spooky)
 
 // Relay topics (keep ≤ 12 chars — same constraint as entangle topics).
 export const ST = {
@@ -42,7 +42,7 @@ export const ST = {
 
 // ── Controller ACTION allowlist ─────────────────────────────────────────────
 // Mirrors the DOIO pad's action surface (padActions in page-init.js) — one
-// shared dispatch map, three input paths (keystrokes, MIDI, spooky), no drift.
+// shared dispatch map, three input paths (keystrokes, MIDI, tether), no drift.
 // Every id here must exist in the actions map handed to createSync; unknown or
 // un-listed ids are dropped at ingress.
 export const CTL_ACTIONS = new Set([
@@ -52,8 +52,8 @@ export const CTL_ACTIONS = new Set([
   'freeze', 'freezePop', 'freezeRegrab', 'freezeClear',
   // looper transport
   'loopPlayStop', 'recStart', 'recStop', 'grab',
-  // strudel + sequencer transport
-  'strudelPlayStop', 'seqPlayStop',
+  // strudel + sequencer transport, tap-write history
+  'strudelPlayStop', 'seqPlayStop', 'seqUndo', 'seqRedo',
   // vox + global transport
   'voxMute', 'pause', 'blackout',
   // quale / phase navigation + camera
@@ -147,14 +147,14 @@ export function getOrCreateLeaderKey(roomId) {
 }
 
 /** Per-room CONTROL TOKEN — the shareable "may drive the rig" credential. It
- *  IS put in the spooky QR/link (URL fragment only, so it never hits the
+ *  IS put in the tether QR/link (URL fragment only, so it never hits the
  *  server), because the performer shows that QR to their own phone, not the
  *  crowd. Rotate by unpinning the room (fresh room = fresh token). */
 export function getOrCreateControlToken(roomId) {
   return getOrCreateMapped(CTL_TOKENS_KEY, roomId, 16);
 }
 
-/** Build the spooky controller URL the private QR encodes. */
+/** Build the tether remote URL the private QR encodes. */
 export function buildControllerUrl(roomId, token, origin = location.origin) {
   return `${origin}${CONTROLLER_PATH}#r=${encodeURIComponent(roomId)}&k=${encodeURIComponent(token)}`;
 }
