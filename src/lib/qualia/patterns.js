@@ -110,11 +110,47 @@ export function clonePattern(id) {
 // register, so we dropped them entirely. Variation now lives in root note,
 // scale, and tempo; the rhythmic + timbral shape stays consistent so the
 // generated patterns all sit in the same sonic neighborhood.
+//
+// Every generated pattern also carries a small dose of the qualia code API
+// (docs/qualia-code-api.md): a `quale()` lane swapping between two random
+// quales, a `qphase()` lane stepping the phase, plus two nuggets drawn at
+// random from a pool of other `q*` examples. A few nuggets per roll — not
+// the whole API — so after a handful of loads the user has seen most of the
+// surface by example without any single pattern overwhelming them.
 const ROOTS  = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 const SCALES = ['minor', 'major', 'dorian', 'mixolydian', 'lydian',
                 'phrygian', 'harmonic minor', 'pentatonic'];
 
+// Quales that read well unattended — camera/video need a source, and the
+// logo/roadbook ones are set-dressing rather than a main act.
+const QUALE_IDS = ['chladni', 'fractal', 'galaxy', 'singularity_lens',
+                   'gargantua_void', 'neural_field', 'synthwave',
+                   'atomic_orbital', 'dark_space', 'anomaly', 'chaos',
+                   'fire', 'wake', 'spectrum', 'maths', 'telemetry',
+                   'detector', 'ghost_machine', 'gear'];
+const GLITCH_POSTS = ['ascii', 'mosh', 'edge', 'stitch', 'negative'];
+// Overlays that don't need a tracked pose (skeleton would render nothing).
+const OVERLAYS = ['sparks', 'aura', 'ripples'];
+
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function pickN(arr, n) {
+  const pool = [...arr];
+  const out  = [];
+  while (out.length < n && pool.length) {
+    out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return out;
+}
+
+// One-liner API examples ("nuggets") — each roll includes two distinct ones.
+// Everything here is safe against any active quale: `reactivity` exists on
+// nearly every quale, glitch posts / overlays / camera walk are top-level.
+const API_NUGGETS = [
+  () => `qset("reactivity", sine.range(0.5, 2).segment(8)),  // ride a param from a signal`,
+  () => `qglitch("${pick(GLITCH_POSTS)}", "<off off off ${pick(['on', 'blip', 'flip'])}>"),  // glitch post, one cycle in four`,
+  () => `qcall(v => qualia.cam.walk(v > 0), "<0 1>").slow(8),  // camera-walk drift on/off`,
+  () => `qcall(v => qualia.overlay("${pick(OVERLAYS)}", v > 0), "<1 0>").slow(4),  // overlay layer on/off`,
+];
 
 export function randomPattern() {
   const rootNote = pick(ROOTS);
@@ -127,12 +163,21 @@ export function randomPattern() {
   const pool     = [1, 2, 3, 5, 6];
   const bass3    = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
   const bass4    = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+  const [quale1, quale2] = pickN(QUALE_IDS, 2);
+  const qualeCycles      = pick([4, 8]);
+  const [nugget1, nugget2] = pickN(API_NUGGETS, 2).map(fn => fn());
   return `// @title qualem ${tag}
 // @by voidstar
 setcps(${cps})
 stack(
   s("<bd ~ sd ~>").lpf(sine.range(500, 2000).slow(8)).delay(.2),
   n("<0 4 ${bass3} ${bass4}>/4").scale('${rootNote}1 ${scale}').s("gm_synth_strings_2").lpf(800),
+
+  // silent qualia lanes — visuals driven from the pattern (funcs tab: "qualia")
+  quale("<${quale1} ${quale2}>").slow(${qualeCycles}),  // swap quale every ${qualeCycles} cycles
+  qphase("1").slow(2),  // step the quale's phase every 2nd cycle
+  ${nugget1}
+  ${nugget2}
 ).room(0.5)`;
 }
 
