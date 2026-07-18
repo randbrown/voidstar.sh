@@ -113,9 +113,9 @@ export function clonePattern(id) {
 //
 // Every generated pattern also carries a small dose of the qualia code API
 // (docs/qualia-code-api.md): a `quale()` lane swapping between two random
-// quales, a `qphase()` lane stepping the phase, plus two nuggets drawn at
-// random from a pool of other `q*` examples. A few nuggets per roll — not
-// the whole API — so after a handful of loads the user has seen most of the
+// quales, a `qphase()` lane stepping the phase, plus one nugget drawn at
+// random from a pool of other `q*` examples. A nugget per roll — not the
+// whole API — so after a handful of loads the user has seen most of the
 // surface by example without any single pattern overwhelming them.
 const ROOTS  = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 const SCALES = ['minor', 'major', 'dorian', 'mixolydian', 'lydian',
@@ -142,7 +142,7 @@ function pickN(arr, n) {
   return out;
 }
 
-// One-liner API examples ("nuggets") — each roll includes two distinct ones.
+// One-liner API examples ("nuggets") — each roll includes one of them.
 // Everything here is safe against any active quale: `reactivity` exists on
 // nearly every quale, glitch posts / overlays / camera walk are top-level.
 const API_NUGGETS = [
@@ -165,7 +165,7 @@ export function randomPattern() {
   const bass4    = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
   const [quale1, quale2] = pickN(QUALE_IDS, 2);
   const qualeCycles      = pick([4, 8]);
-  const [nugget1, nugget2] = pickN(API_NUGGETS, 2).map(fn => fn());
+  const nugget = pick(API_NUGGETS)();
   return `// @title qualem ${tag}
 // @by voidstar
 setcps(${cps})
@@ -176,8 +176,7 @@ stack(
   // silent qualia lanes — visuals driven from the pattern (funcs tab: "qualia")
   quale("<${quale1} ${quale2}>").slow(${qualeCycles}),  // swap quale every ${qualeCycles} cycles
   qphase("1").slow(2),  // step the quale's phase every 2nd cycle
-  ${nugget1}
-  ${nugget2}
+  ${nugget}
 ).room(0.5)`;
 }
 
