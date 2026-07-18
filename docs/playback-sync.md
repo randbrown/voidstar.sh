@@ -90,7 +90,9 @@ allowlisted (`CTL_ACTIONS`, `CTL_SLIDERS` + clamps in `sync-protocol.js`), rate-
 per peer, and never eval'd — same posture as entangle ingress.
 
 Tabs: **rig** (freeze stack, drives, strip toggles, rig/delay/reverb sliders — absolute,
-like MIDI CC; double-tap a slider to reset it), **loop** (looper transport + grab, vox
+like MIDI CC; press-and-hold a slider's ↺ chip ~0.4 s to snap it back to default — the
+chip sits in the label row, off the track, so a reset can't graze the fader, and the
+fill sweep confirms the hold), **loop** (looper transport + grab, vox
 mute), **seq** (strudel/seq transport, tempo slider, **live drum pads** — tap to sound a
 voice; arm *write* to also quantize the hit into the pattern at the nearest cell, via
 `sequencer.tapHit`; **undo / redo / clear** pads edit the pattern via
@@ -100,13 +102,20 @@ undoable entry), **quale** (quale/phase steps, **auto toggles** — auto-cycle, 
 cam walk — the **set clock** τ readout + reset, camera, pause, blackout).
 
 Feedback: the leader broadcasts a 1 Hz `cstate` snapshot (transport lit-states, freeze
-depth, active quale, pad voices, cps, tap-history depths, auto/walk toggle states, and
-the chron clock `tau`/`horizonMin` behind the τ readout) so the phone reflects reality.
+depth, strip toggles — earth/metal/delay/reverb/tuner — pause, vox mute, blackout,
+active quale, pad voices, cps, tap-history depths, auto/walk toggle states, and the
+chron clock `tau`/`horizonMin` behind the τ readout) so the phone reflects reality;
+every on/off pad on the remote is stateful (lit from the snapshot, flipped
+optimistically on tap). A remote action also triggers a coalesced ~120 ms `cstate`
+echo from the leader, so lit pads track taps at tap speed, not at the 1 Hz cadence.
 The link-status pill is a fixed one-liner ("livecoding station transceiver link
 active" / "(unlinked)" / "(link lost)" …); longer guidance renders under it.
 
 **Install it.** Tether is its own PWA (`public/manifest-tether.webmanifest`, `display:
-fullscreen`, cyan ⌁ icon) — scan the QR once, then "Add to Home screen". The room +
+fullscreen`, cyan ⌁ icon) — scan the QR once, then "Add to Home screen"; in Chrome an
+**⤓ install app** chip appears top-left (from `beforeinstallprompt`) for a one-tap
+install, and the tether shell is in the service worker's precache so an installed
+launch survives flaky venue wifi. The room +
 control token persist in `localStorage` (`voidstar.tether.creds`, with a read-fallback
 to the pre-rename `voidstar.spooky.creds`) on every scan, so the installed app launches
 straight into the last-paired room with no URL fragment; a fresh QR re-pairs. In a

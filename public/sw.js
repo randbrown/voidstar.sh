@@ -61,9 +61,13 @@
 //     which orphaned Windows taskbar pins for mind. Fresh-first means those
 //     checks always read the deployed identity; the cached copy remains as an
 //     offline fallback. (App-shell change → version bumped per the rule above.)
+// v14: precache the tether remote's app shell (/lab/tether + its manifest and
+//     icons). Tether was installable but had no precache entry, so a
+//     first-launch on flaky venue wifi could open to a network error instead
+//     of the cached remote. (App-shell change → version bumped per the rule.)
 // Bumping the version also purges the old cache on every client so no one stays
 // pinned to a stale app-shell.
-const SW_VERSION = 'v13';
+const SW_VERSION = 'v14';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
@@ -73,15 +77,20 @@ const PRECACHE = [
   '/',
   '/lab/setlist',
   '/lab/mind',
+  '/lab/tether',
   '/manifest.webmanifest',
   '/manifest-qualia.webmanifest',
   '/manifest-setlist.webmanifest',
   '/manifest-mind.webmanifest',
+  '/manifest-tether.webmanifest',
   '/favicon.svg',
   '/favicon.ico',
   '/icon-192.png',
   '/icon-512.png',
   '/icon-maskable-512.png',
+  '/icon-tether-192.png',
+  '/icon-tether-512.png',
+  '/icon-tether-maskable-512.png',
 ];
 
 self.addEventListener('install', (event) => {

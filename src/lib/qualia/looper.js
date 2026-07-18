@@ -3697,6 +3697,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const on = !model.strip[stageId].on;
       stripToggle(stageId, on);
     },
+    // Read-side of the toggles above — the tether remote's cstate snapshot
+    // lights its earth/metal/delay/reverb/tuner pads from these.
+    isStripStageOn: (stageId) => !!model.strip[stageId]?.on,
+    isTunerOn: () => !!model.tunerOn,
     setStripParam(stageId, paramId, value) {
       if (!model.strip[stageId]) return;
       stripSet(stageId, paramId, value);

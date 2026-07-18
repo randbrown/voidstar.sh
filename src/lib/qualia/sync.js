@@ -135,13 +135,26 @@ export function createSync(deps = {}) {
     return true;
   }
 
+  // A controller action just mutated host state — echo a fresh cstate quickly
+  // (coalesced) so the phone's lit pads track taps at tap speed instead of the
+  // 1 Hz snapshot cadence. Sliders deliberately don't echo: nothing lit hangs
+  // off them, and an echo mid-drag would fight the controller's finger.
+  let ctlEchoTimer = null;
+  function ctlStateSoon() {
+    if (role !== 'leader' || ctlEchoTimer) return;
+    ctlEchoTimer = setTimeout(() => {
+      ctlEchoTimer = null;
+      if (controllers.size) sendCtlState();
+    }, 120);
+  }
+
   function handleCtl(msg, from) {
     if (!msg || msg.k !== ctlToken || !controllers.has(from)) return;
     if (!ctlAllow(from)) return;
     try {
       if (typeof msg.a === 'string') {
         // Momentary action — the DOIO surface, one more input path.
-        if (CTL_ACTIONS.has(msg.a)) deps.actions?.[msg.a]?.();
+        if (CTL_ACTIONS.has(msg.a)) { deps.actions?.[msg.a]?.(); ctlStateSoon(); }
         return;
       }
       if (typeof msg.s === 'string') {
@@ -151,7 +164,7 @@ export function createSync(deps = {}) {
       }
       if (typeof msg.hit === 'string') {
         const tap = clampCtlTap(msg);
-        if (tap) deps.seqTap?.(tap.voice, tap.gain, tap.write);
+        if (tap) { deps.seqTap?.(tap.voice, tap.gain, tap.write); ctlStateSoon(); }
       }
     } catch (e) { console.warn('[sync] ctl dispatch failed:', e); }
   }
@@ -319,6 +332,7 @@ export function createSync(deps = {}) {
     for (const id of timers) { clearTimeout(id); clearInterval(id); }
     timers = [];
     if (beaconSoonTimer) { clearTimeout(beaconSoonTimer); beaconSoonTimer = null; }
+    if (ctlEchoTimer) { clearTimeout(ctlEchoTimer); ctlEchoTimer = null; }
     for (const un of unsubs) { try { un(); } catch {} }
     unsubs = [];
     if (transport) {
