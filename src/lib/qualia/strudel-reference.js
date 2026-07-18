@@ -8,6 +8,7 @@
 // this panel is the browseable, searchable companion.
 
 import functions from '../../data/strudel-functions.json';
+import qualiaFunctions from '../../data/qualia-functions.json';
 
 /** Category display order in the panel. Unknown categories sort after these. */
 export const CATEGORY_ORDER = [
@@ -24,9 +25,20 @@ export const CATEGORY_ORDER = [
   'signals',
   'tempo',
   'control',
+  'qualia',
+  'qualia visuals',
+  'qualia camera+pose',
+  'qualia audio',
+  'qualia system',
 ];
 
-export const STRUDEL_FUNCTIONS = functions;
+/** The qualia code API reference alone (drives `qualia.help()` too). */
+export const QUALIA_FUNCTIONS = qualiaFunctions;
+
+// One searchable pool: Strudel's curated subset + the qualia code API, so
+// the funcs tab answers "how do I drive the visuals" the same way it
+// answers "what does euclid do".
+export const STRUDEL_FUNCTIONS = [...functions, ...qualiaFunctions];
 
 /**
  * Loose substring match across name / doc / signature / category.

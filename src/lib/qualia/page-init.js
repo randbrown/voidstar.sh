@@ -23,6 +23,7 @@ import { encodeWav, decodeWav } from './wav.js';
 import { parseMetadata as parseStrudelMeta, setMetadata as setStrudelMeta } from './patterns.js';
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
+import { installCodeApi } from './code-api.js';
 import { filterFunctions, groupByCategory, STRUDEL_FUNCTIONS } from './strudel-reference.js';
 import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
@@ -6327,6 +6328,110 @@ export function initQualiaPage() {
     pause:        () => btnPause.click(),
     blackout:     () => setBlackout(!core.isRenderSuspended()),
   };
+
+  // ── Global code API (globalThis.qualia + Strudel pattern functions) ───────
+  // The full live-coding control surface — quales, params, top-level fx,
+  // camera/pose, entanglement, audio engines. code-api.js merges onto the
+  // object strudel-hydra created and registers quale()/qset()/… into Strudel
+  // once its globals appear. The `page` helpers below reuse the SAME code
+  // paths as the UI controls (select handlers, preset buttons, sliders) so
+  // code-driven changes keep the chrome in sync and persist identically.
+  installCodeApi({
+    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer,
+    pose, overlay, camWalk, logoMark,
+    page: {
+      applySceneChange: (fn) => quantizedSceneChange(() => { runSceneTransition(); fn(); }),
+      qualeStep,
+      phaseShift,
+      setPhasePeriod,
+      getPhasePeriod: () => autoPhaseSeconds,
+      setPhaseStyle: (s) => {
+        if (!AUTO_PHASE_STYLES.includes(s)) return;
+        autoPhaseStyle = s;
+        autoPhaseStepCount = 0;   // style change starts fresh, same as the select
+        if (phaseStyleSelect) phaseStyleSelect.value = s;
+        settings.save();
+      },
+      getPhaseStyle: () => autoPhaseStyle,
+      setCyclePeriod,
+      getCyclePeriod: () => autoCycleSeconds,
+      setCycleStyle: (s) => {
+        if (!AUTO_CYCLE_STYLES.includes(s)) return;
+        autoCycleStyle = s;
+        if (cycleStyleSelect) cycleStyleSelect.value = s;
+        refreshCycleBtn();
+        settings.save();
+      },
+      getCycleStyle: () => autoCycleStyle,
+      setTransition: (style, ms) => {
+        if (style !== undefined && TRANSITION_STYLES.includes(style)) {
+          transitionStyle = style;
+          if (transStyleSelect) transStyleSelect.value = style;
+        }
+        if (ms !== undefined && Number.isFinite(+ms) && +ms > 0) {
+          transitionMs = Math.round(+ms);
+          // The select only lists the stock durations; a custom ms still works,
+          // the dropdown face just won't show it.
+          if (transMsSelect && TRANSITION_MS_OPTS.includes(transitionMs)) {
+            transMsSelect.value = String(transitionMs);
+          }
+        }
+        if (style !== undefined || ms !== undefined) settings.save();
+        return { style: transitionStyle, ms: transitionMs };
+      },
+      setQuantize: (mode) => {
+        if (mode !== undefined) {
+          quantizeScene = mode === 'cycle' ? 'cycle' : 'off';
+          const sel = document.getElementById('transition-quant');
+          if (sel) sel.value = quantizeScene;
+          settings.save();
+        }
+        return quantizeScene;
+      },
+      setGlitchMode,
+      getGlitchModes: () => ({ ...glitchModes }),
+      setBlackout,
+      setZen,
+      setPaused,
+      setFullscreen,
+      setCamWalkOn,
+      setLogoOn,
+      setAudioMode: (m) => setAudioMode(m).catch(err => console.warn('[qualia] code api setAudioMode:', err)),
+      getAudioMode: () => audioMode,
+      setAudioTunables: (t) => {
+        audio.setTunables(t);
+        audioPanel.setTunables(t);
+        audioPanel.setActivePreset(null);
+        settings.save();
+      },
+      applyAudioPreset: (name) => {
+        const p = AUDIO_PRESETS[name];
+        if (!p) { console.warn(`[qualia] unknown audio preset "${name}"`); return false; }
+        audio.setTunables(p);
+        audioPanel.setTunables(p);
+        audioPanel.setActivePreset(name);
+        settings.save();
+        return true;
+      },
+      setPoseSmoothing: (v) => {
+        poseSmoothingValue = Math.max(0, Math.min(1, Number(v) || 0));
+        pose.setSmoothing(poseSmoothingValue);
+        if (smoothInput) smoothInput.value = String(poseSmoothingValue);
+        if (smoothVal) smoothVal.textContent = `${Math.round(poseSmoothingValue * 100)}%`;
+        settings.save();
+      },
+      setPoseSource: (v) => {
+        if (!poseSelect || poseSelect.value === v) return;
+        poseSelect.value = v;
+        poseSelect.dispatchEvent(new Event('change'));
+      },
+      getPoseSource: () => poseSelect?.value ?? 'off',
+      captureQualem,
+      applyQualem,
+      refreshQualemList: () => renderQualemList(),
+      getEntangle: () => entangleEngine,
+    },
+  });
   // DOIO 16-key grid (row-major) + the 3 knob-pushes + blackout, as MIDI note
   // numbers. Reflash the pad to send these Note-On numbers (see the keymap
   // doc). Knob *turns* stay on CC1/CC2/CC7 (absolute 0–1) in the CC handler.

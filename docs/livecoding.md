@@ -40,9 +40,15 @@ Strudel patterns drive the visuals.
 
 ## The live-code → fx bridge
 
-`globalThis.qualia.setParam(fxId, paramId, value)` → `core.setParam(...)`. This is the public
-surface for driving visuals from a Strudel pattern. Param ids are the fx's `params[].id` (also the
-localStorage keys), so they're a small stable public API — choose them like one.
+`globalThis.qualia` is the full code-side control surface — quales, params/presets, glitches,
+camera/pose, entanglement, and the audio engines — plus Strudel-registered pattern functions
+(`quale`, `qset`, `qpreset`, `qphase`, `qglitch`, `qcall`, `.qtrig`). The complete reference is
+[`qualia-code-api.md`](qualia-code-api.md) (module: `code-api.js`, installed by `page-init.js`);
+the same docs are searchable in the panel's funcs tab and via `qualia.help()`.
+
+The original hook, `qualia.setParam(fxId, paramId, value)` → `core.setParam(...)`, is unchanged.
+Param ids are the fx's `params[].id` (also the localStorage keys), so they're a small stable
+public API — choose them like one.
 
 Because modulation resolves audio/pose/crowd into `field.params` each frame, a pattern that targets
 a modulated param gets the audio-reactive curve for free. (See [`README.md`](../src/lib/qualia/README.md)

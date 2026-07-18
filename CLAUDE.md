@@ -11,6 +11,7 @@ Quick map of the canonical docs:
 - Looper, sequencer & recording → [`docs/looper-and-sequencer.md`](docs/looper-and-sequencer.md)
 - Sequencer kits & samples shared with Strudel → [`docs/samples.md`](docs/samples.md)
 - Live coding (Strudel + Hydra) → [`docs/livecoding.md`](docs/livecoding.md)
+- Qualia code API (`globalThis.qualia` + `quale`/`qset`/… pattern funcs) → [`docs/qualia-code-api.md`](docs/qualia-code-api.md)
 - Audience entanglement & pose → [`docs/entanglement.md`](docs/entanglement.md)
 - Cross-device playback sync (cycles/CPS) & spooky phone controller → [`docs/playback-sync.md`](docs/playback-sync.md)
 - Qualia Google Drive sync (login, `voidstar_qualia` folder, per-component subfolders) → [`docs/qualia-drive-sync.md`](docs/qualia-drive-sync.md)
