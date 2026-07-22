@@ -15,6 +15,10 @@
 // is wired separately (page-init) off audio.onClipChange so it works panel-shut.
 
 import { makeDraggablePanel } from './panel-pos.js';
+import { RIG_LEVEL_MAX } from './limiter.js';
+
+// Full-scale span of the GR bar — 12 dB of reduction pins it.
+const GR_FULL_DB = 12;
 
 const OPEN_KEY = 'voidstar.qualia.mixer.open';
 
@@ -57,8 +61,8 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
       subscribe:  (cb) => audio.onInputChange(cb),
     },
     {
-      id: 'rig', label: 'rig', max: 1, meters: ['rig', 'looper'],
-      title: 'Rig master — live pedal-steel signal + loops',
+      id: 'rig', label: 'rig', max: RIG_LEVEL_MAX, meters: ['rig', 'looper'],
+      title: `Rig master — live pedal-steel signal + loops (0–${RIG_LEVEL_MAX}×; >1.0 boosts into the limiter)`,
       getLevel:   () => looper.getRig().level,
       getMuted:   () => looper.getRig().muted,
       getLimiter: () => looper.getRig().limiter,
@@ -66,6 +70,11 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
       setMuted:   (on) => looper.setRigMuted(on),
       setLimiter: (on) => looper.setRigLimiter(on),
       subscribe:  (cb) => looper.onMixChange(cb),
+      // Boost (>1.0×) force-engages the limiter (looper.js owns the rule);
+      // reflect the lock here so the lim button reads as unclickable.
+      getLimForced: () => looper.getRig().level > 1,
+      // Live GR in dB — drives the amber reduction bar in this channel's meter.
+      getReduction: () => looper.getRigReductionDb?.() ?? 0,
     },
     {
       id: 'strudel', label: 'strudel', max: 1.5, meters: ['strudel'],
@@ -121,12 +130,28 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
     fill.className = 'mx-meter-fill';
     meter.appendChild(fill);
 
+    // Gain-reduction bar (channels that report it): a thin amber bar growing
+    // right-to-left along the top of the peak meter — how hard this track's
+    // limiter is working right now (full width = GR_FULL_DB).
+    let grFill = null;
+    if (ch.getReduction) {
+      grFill = document.createElement('span');
+      grFill.className = 'mx-gr-fill';
+      meter.appendChild(grFill);
+      meter.title = `peak level · top amber bar = limiter gain reduction (full ≈ ${GR_FULL_DB} dB)`;
+    }
+
     const fader = document.createElement('input');
     fader.type = 'range';
     fader.className = 'mx-fader';
     fader.min = '0'; fader.max = String(ch.max); fader.step = '0.01';
     fader.setAttribute('aria-label', `${ch.label} level`);
     fader.addEventListener('input', () => ch.setLevel(+fader.value));
+    if (ch.max > 1) {
+      // Tint the over-unity span of the track so boost reads at a glance.
+      fader.classList.add('boost');
+      fader.style.setProperty('--mx-unity', `${(100 / ch.max).toFixed(1)}%`);
+    }
 
     const mute = document.createElement('button');
     mute.className = 'ctrl-btn panel-mute-btn mx-mute';
@@ -146,8 +171,9 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
     body.appendChild(row);
 
     // Cache the live elements on the channel for the sync + meter loops.
-    ch.el = { row, fader, fill, mute, lim, clip };
+    ch.el = { row, fader, fill, mute, lim, clip, grFill };
     ch.disp = 0;   // smoothed meter level (fast attack, slow decay)
+    ch.gr   = 0;   // smoothed gain reduction (dB), same envelope shape
 
     // Two-way sync: when the track's own panel changes the value, mirror it
     // here. Subscribed once at init (cheap; DOM is hidden when closed).
@@ -168,6 +194,13 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
     const limOn = ch.getLimiter();
     lim.classList.toggle('active', limOn);
     lim.textContent = limOn ? 'lim' : 'lim✕';
+    if (ch.getLimForced) {
+      const forced = limOn && ch.getLimForced();
+      lim.classList.toggle('forced', forced);
+      lim.title = forced
+        ? 'Brickwall limiter — forced on while the level sits above 1.0× (boost drives the limiter).'
+        : 'Brickwall limiter — clip insurance on this track. On by default.';
+    }
   }
 
   // ── Meter loop (only while open) ──────────────────────────────────────────
@@ -189,6 +222,15 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
       ch.el.fill.style.width = pct.toFixed(1) + '%';
       ch.el.fill.style.background = meterColor(ch.disp);
       ch.el.clip.classList.toggle('lit', clipping);
+      if (ch.el.grFill) {
+        // Same fast-attack/slow-decay envelope, in dB of reduction.
+        const gr = ch.getReduction();
+        ch.gr = gr > ch.gr ? gr : ch.gr * 0.9;
+        ch.el.grFill.style.width = ch.gr > 0.05
+          ? (Math.min(1, ch.gr / GR_FULL_DB) * 100).toFixed(1) + '%' : '0%';
+        // Glow the lim button while it's actually reducing.
+        ch.el.lim.classList.toggle('working', ch.gr > 0.3);
+      }
     }
   }
   function startMeters() { if (!raf) raf = requestAnimationFrame(meterFrame); }

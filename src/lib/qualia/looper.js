@@ -33,6 +33,7 @@ import * as loopStore from './looper-store.js';
 import { wirePicker, getStoredDeviceId } from './devices.js';
 import { savePanelPos, restorePanelPos, attachPanelResize } from './panel-pos.js';
 import { getRaw as lsGet, setRaw as lsSet, clamp01 } from './prefs.js';
+import { RIG_LEVEL_MAX } from './limiter.js';
 
 const NS = 'voidstar.qualia.looper';
 const PANEL_OPEN_KEY = `${NS}.panelOpen`;
@@ -145,6 +146,10 @@ const STRIP_CLUSTERS = [
 
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
+// Rig master runs past unity into boost territory — clamped to RIG_LEVEL_MAX
+// (limiter.js), not 1.
+const clampRig = (v) => Math.max(0, Math.min(RIG_LEVEL_MAX, Number(v) || 0));
+const numRig = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(RIG_LEVEL_MAX, v)) : dflt; };
 // clamp01, lsGet (getRaw), lsSet (setRaw) now come from ./prefs.js — see imports.
 
 // Custom temperament = 12 integer cent offsets (C..B), persisted as JSON.
@@ -327,7 +332,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     retroCycles: (() => { const v = parseInt(lsGet(RETRO_KEY, '4'), 10); return Number.isFinite(v) ? Math.max(1, Math.min(64, v)) : 4; })(),
     bufferOn: lsGet(BUFFER_KEY, '0') === '1',          // live lookback running
     rigMuted: lsGet(RIG_MUTE_KEY, '0') === '1',         // rig master mute
-    rigLevel: num01(lsGet(RIG_LEVEL_KEY, '1'), 1.0),   // rig master output level
+    rigLevel: numRig(lsGet(RIG_LEVEL_KEY, '1'), 1.0),  // rig master output level (0..RIG_LEVEL_MAX)
     rigLimiter: lsGet(RIG_LIMITER_KEY, '1') !== '0',   // rig master brickwall limiter (on by default)
     signalLevel: num01(lsGet(SIGLEVEL_KEY, '0'), 0),   // rig signal monitor/mix level
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
@@ -365,6 +370,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   try { looperAudio.setFreezeConfig(JSON.parse(lsGet(FREEZE_KEY, 'null')) || {}); } catch {}
   looperAudio.setMaster(model.master);
   looperAudio.setOffsetMs(model.offsetMs);
+  if (model.rigLevel > 1) model.rigLimiter = true;   // boosted ⇒ limiter forced on (see setRigLevel)
   looperAudio.primeRig(model.rigLevel, model.rigMuted);             // rig master output level + mute
   looperAudio.primeRigLimiter(model.rigLimiter);                    // rig master brickwall limiter
   looperAudio.primeSignal(model.signalLevel, model.signalMuted);   // value-only; capture opens on a gesture
@@ -891,15 +897,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
     notifyMix();
   }
   function setRigLevel(v) {
-    model.rigLevel = clamp01(v);
+    model.rigLevel = clampRig(v);
     lsSet(RIG_LEVEL_KEY, model.rigLevel);
     looperAudio.setRigLevel(model.rigLevel);
+    // Boost territory (>1.0×) force-engages the brickwall: over-unity gain
+    // must never reach the DAC unclipped. setRigLimiter refuses to disengage
+    // while boosted, so the two rules can't fight.
+    if (model.rigLevel > 1 && !model.rigLimiter) setRigLimiter(true);
     if (rigMasterGain && rigMasterGain.value !== String(model.rigLevel)) rigMasterGain.value = String(model.rigLevel);
     syncMiniKnob('master', 'level', model.rigLevel);
     refreshLooperBtn();
     notifyMix();
   }
   function setRigLimiter(on) {
+    if (!on && model.rigLevel > 1) on = true;   // forced while boosted — see setRigLevel
     model.rigLimiter = !!on;
     lsSet(RIG_LIMITER_KEY, model.rigLimiter ? '1' : '0');
     looperAudio.setRigLimiter(model.rigLimiter);
@@ -2339,7 +2350,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // Master pedal (right) — rig level + mute LED (lit = live).
     const master = buildMiniPedal({
       stage: 'master', param: 'level', label: 'rig',
-      min: 0, max: 1, step: 0.05, def: 1, fmt: v => (+v).toFixed(2),
+      min: 0, max: RIG_LEVEL_MAX, step: 0.05, def: 1, fmt: v => (+v).toFixed(2),
       get: () => model.rigLevel, set: (v) => setRigLevel(v),
       toggle: () => setRigMuted(!model.rigMuted),
     });
@@ -3695,8 +3706,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     collectAssets, installAssets,
     // ── Mixer surface — rig master (= rig signal + loops) ──────────────────
     setRigLevel, setRigMuted, setRigLimiter,
-    nudgeRigLevel(delta) { setRigLevel(clamp01((model.rigLevel ?? 1) + delta)); },
+    nudgeRigLevel(delta) { setRigLevel((model.rigLevel ?? 1) + delta); },
     getRig: () => ({ level: model.rigLevel, muted: model.rigMuted, limiter: model.rigLimiter }),
+    // Live limiter gain reduction (dB) — feeds the mixer's rig GR meter.
+    getRigReductionDb: () => looperAudio.getRigReductionDb?.() ?? 0,
     onMixChange,
     dispose: () => { hideCtxMenu(); stopScope(); if (_latTimer) { clearInterval(_latTimer); _latTimer = null; } looperAudio.dispose(); for (const r of renderers.values()) r.dispose(); renderers.clear(); },
 

@@ -35,7 +35,7 @@ import recorderWorkletUrl from './worklets/looper-recorder.js?url&no-inline';
 import neuralWorkletUrl from './worklets/neural-amp.js?url&no-inline';
 import { createStretchNode } from './looper-stretch.js';
 import { createRigStrip } from './rig-strip.js';
-import { makeSoftLimiter, setSoftLimiterEngaged } from './limiter.js';
+import { makeSoftLimiter, setSoftLimiterEngaged, softLimiterReductionDb, RIG_LEVEL_MAX } from './limiter.js';
 import { autoCorrelate } from './pitch.js';
 
 // Reused analysis window for the input-pitch reader (allocation-free hot path).
@@ -599,13 +599,32 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     return freezePush();
   }
 
+  // Rig level runs past unity into boost (see RIG_LEVEL_MAX in limiter.js);
+  // looper.js owns the force-the-limiter-on-while-boosted rule.
+  const clampRig = (v) => Math.max(0, Math.min(RIG_LEVEL_MAX, Number(v) || 0));
   function setRigMuted(on) { _rigMuted = !!on; if (rigMaster) ramp(rigMaster.gain, effRig()); }
-  function setRigLevel(v) { _rigLevel = clamp01(v); if (rigMaster && !_rigMuted) ramp(rigMaster.gain, _rigLevel); }
-  function primeRig(level, muted) { _rigLevel = clamp01(level); _rigMuted = !!muted; if (rigMaster) ramp(rigMaster.gain, effRig()); }
+  function setRigLevel(v) { _rigLevel = clampRig(v); if (rigMaster && !_rigMuted) ramp(rigMaster.gain, _rigLevel); }
+  function primeRig(level, muted) { _rigLevel = clampRig(level); _rigMuted = !!muted; if (rigMaster) ramp(rigMaster.gain, effRig()); }
   function setRigLimiter(on) { _rigLimiterOn = !!on; setSoftLimiterEngaged(rigLimiter, _rigLimiterOn); }
   function getRigLimiter() { return _rigLimiterOn; }
   function primeRigLimiter(on) { _rigLimiterOn = !!on; setSoftLimiterEngaged(rigLimiter, _rigLimiterOn); }
   function getRigMaster() { return { level: _rigLevel, muted: _rigMuted, limiter: _rigLimiterOn }; }
+
+  // Limiter gain-reduction readout (mixer GR meter). The soft clipper is
+  // memoryless, so GR is a pure function of the pre-limiter peak — and
+  // outputAnalyser already taps exactly that point (rigMaster: post-fader,
+  // PRE-limiter). Float time-domain data is unclamped, so boosted peaks
+  // above 0 dBFS read true. Reused buffer; polled per frame by the mixer
+  // only while its panel is open.
+  let _grBuf = null;
+  function getRigReductionDb() {
+    if (!_rigLimiterOn || _rigMuted || !outputAnalyser) return 0;
+    if (!_grBuf || _grBuf.length !== outputAnalyser.fftSize) _grBuf = new Float32Array(outputAnalyser.fftSize);
+    outputAnalyser.getFloatTimeDomainData(_grBuf);
+    let p = 0;
+    for (let i = 0; i < _grBuf.length; i++) { const a = _grBuf[i] < 0 ? -_grBuf[i] : _grBuf[i]; if (a > p) p = a; }
+    return softLimiterReductionDb(p);
+  }
 
   // ── latency introspection (rig panel readout) ──────────────────────────────
   // What the browser reports plus what the strip knows it adds. `outputSec` is
@@ -1350,7 +1369,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     startBuffer, stopBuffer, grabRetro,
     ensureCaptureOpen,
     setRigMuted, setRigLevel, primeRig, getRigMaster,
-    setRigLimiter, getRigLimiter, primeRigLimiter,
+    setRigLimiter, getRigLimiter, primeRigLimiter, getRigReductionDb,
     getLatencyInfo,
     setSignalLevel, setSignalMuted, getSignal, primeSignal,
     setChannels, getChannels,
