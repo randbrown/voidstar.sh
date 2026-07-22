@@ -55,9 +55,15 @@ const RIG_LIMITER_KEY = `${NS}.rigLimiter`; // rig master brickwall limiter (sig
 const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo'
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const MINI_KEY       = `${NS}.mini`;       // rig panel mini (pedalboard) mode
-const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel visible
-const STRIPCOLLAPSE_KEY = `${NS}.stripCollapsed`; // strip section body collapsed (chevron)
-const STRIPUTIL_KEY  = `${NS}.stripUtilOpen`; // utility drawer (hpf/comp/eq/pan) expanded
+const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip sections visible (drive/tone/space/utility)
+const STRIPCOLLAPSE_KEY = `${NS}.stripCollapsed`; // legacy whole-strip collapse — seeds the per-zone defaults
+// Per-zone collapse — drive / tone / space each persist their own state.
+const ZONECOLLAPSE_KEYS = {
+  drive: `${NS}.driveCollapsed`,
+  tone:  `${NS}.toneCollapsed`,
+  space: `${NS}.spaceCollapsed`,
+};
+const STRIPUTIL_KEY  = `${NS}.stripUtilOpen`; // utility section (geq/comp/hpf/peq/pan) expanded
 const LOOPOPEN_KEY     = `${NS}.loopOpen`;      // loop section visible
 const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
 const FREEZE_KEY     = `${NS}.freeze`;     // freeze pad settings {level,grainSec,releaseSec}
@@ -83,10 +89,10 @@ const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the 
 // Channel strip UI schema — stages + params, listed in audio-chain order (the
 // audio side lives in rig-strip.js; STRIP_DEFAULTS supplies initial values).
 // `group`/`cluster` control only UI placement (the audio graph order is fixed
-// in rig-strip.js): 'main' stages live in the always-visible clustered row a
-// performer reaches for live — drive (earth · metal) · tone (amp · eq · cab) ·
-// space (delay · reverb) — and 'util' stages (geq, comp, hpf, peq, pan) tuck
-// into a collapsible "utility" drawer so they're out of the way until needed.
+// in rig-strip.js): 'main' stages land in the zone section named by `cluster`
+// — drive (earth · metal · gate) · tone (amp · eq · cab) · space (delay ·
+// reverb) — and 'util' stages (geq, comp, hpf, peq, pan) go to the "utility"
+// section so they're out of the way until needed.
 const STRIP_SCHEMA = [
   // geq — GE-7-voiced 7-band graphic EQ (front of chain: shapes the raw
   // instrument before comp + drives).
@@ -136,14 +142,9 @@ const STRIP_SCHEMA = [
   { id: 'pan',    name: 'pan',    group: 'util', toggle: false, params: [{ id: 'pan', label: 'pan', min: -1, max: 1, step: 0.02, fmt: v => v == 0 ? 'C' : (v < 0 ? `L${Math.round(-v*100)}` : `R${Math.round(v*100)}`) }] },
 ];
 
-// The main row's three fixed zones, in signal-chain order. Each zone keeps its
-// stages side by side at every panel width (zones wrap as whole flex units),
-// so amp·eq·cab and delay·reverb never split across rows.
-const STRIP_CLUSTERS = [
-  { id: 'drive', label: 'drive', title: 'Drive pedals — earth (JFET soft clip) into metal (high-gain), with the noise gate that tames their hiss' },
-  { id: 'tone',  label: 'tone',  title: 'Tone shaping — neural amp → tone-stack EQ → cab IR' },
-  { id: 'space', label: 'space', title: 'Time effects — delay feeds reverb, so the echoes share the room' },
-];
+// The three main-stage zones (`cluster` in the schema) are each a top-level
+// collapsible section in the markup: #rig-drive / #rig-tone / #rig-space,
+// with #rig-util alongside for the util group.
 
 
 const num01 = (raw, dflt) => { const v = parseFloat(raw); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt; };
@@ -290,9 +291,24 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnFreezePop = document.getElementById('btn-freeze-pop');
   const btnFreezeRegrab = document.getElementById('btn-freeze-regrab');
   const btnFreezeClear = document.getElementById('btn-freeze-clear');
-  const stripPanel  = document.getElementById('rig-strip');
-  const btnStripCollapse = document.getElementById('btn-rig-strip-collapse');
-  const stripBody   = document.getElementById('rig-strip-body');
+  const rigSectionsEl = document.getElementById('rig-sections');
+  // The strip's four top-level sections (drive/tone/space zones + utility).
+  const zoneSections = {
+    drive: document.getElementById('rig-drive'),
+    tone:  document.getElementById('rig-tone'),
+    space: document.getElementById('rig-space'),
+    util:  document.getElementById('rig-util'),
+  };
+  const zoneBodies = {
+    drive: document.getElementById('rig-drive-body'),
+    tone:  document.getElementById('rig-tone-body'),
+    space: document.getElementById('rig-space-body'),
+  };
+  const zoneChevrons = {
+    drive: document.getElementById('btn-rig-drive-collapse'),
+    tone:  document.getElementById('btn-rig-tone-collapse'),
+    space: document.getElementById('btn-rig-space-collapse'),
+  };
   const stripUtilBody = document.getElementById('rig-strip-util-body');
   const btnStripUtil  = document.getElementById('btn-rig-strip-util');
   const btnStripReset = document.getElementById('btn-rig-strip-reset');
@@ -344,8 +360,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
     strip: loadStripConfig(),                          // channel strip config
     mini: lsGet(MINI_KEY, '0') === '1',                // pedalboard (mini) mode
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
-    stripCollapsed: lsGet(STRIPCOLLAPSE_KEY, '0') === '1',  // strip body collapsed (chevron)
-    stripUtilOpen: lsGet(STRIPUTIL_KEY, '0') === '1',  // utility drawer (default tucked away)
+    // Per-zone collapse (drive/tone/space) — seeded from the legacy whole-strip
+    // key so an old "strip collapsed" pref carries over to all three.
+    zoneCollapsed: (() => {
+      const legacy = lsGet(STRIPCOLLAPSE_KEY, '0');
+      const o = {};
+      for (const z of Object.keys(ZONECOLLAPSE_KEYS)) o[z] = lsGet(ZONECOLLAPSE_KEYS[z], legacy) === '1';
+      return o;
+    })(),
+    stripUtilOpen: lsGet(STRIPUTIL_KEY, '0') === '1',  // utility section (default tucked away)
     loopOpen: lsGet(LOOPOPEN_KEY, '1') !== '0',              // loop section visible
     loopCollapsed: lsGet(LOOPCOLLAPSE_KEY, '0') === '1',
     tunerOn: lsGet(TUNER_KEY, '0') === '1',
@@ -1430,6 +1453,23 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (btn) { btn.textContent = collapsed ? '▸' : '▾'; btn.classList.toggle('collapsed', collapsed); }
   }
 
+  // Auto-fit the panel height to its content. Runs on every section
+  // show/hide/collapse toggle, so a freshly-expanded section is on screen at
+  // once — no hunting for it below the fold. Clamped to the viewport below
+  // the panel's top; when even the fitted height can't hold everything, the
+  // #rig-sections column still scrolls and the toggled section is brought
+  // into view. A manual drag-resize is honoured until the next toggle re-fits.
+  function autosizeRig(showEl) {
+    if (!panel || panel.style.display === 'none' || model.mini) return;
+    const top = panel.getBoundingClientRect().top;
+    panel.style.height = 'auto';
+    panel.style.minHeight = '0';
+    const need = panel.getBoundingClientRect().height;   // natural content height
+    const max = Math.max(160, window.innerHeight - top - 8);
+    panel.style.height = `${Math.ceil(Math.min(need, max))}px`;
+    if (showEl) requestAnimationFrame(() => showEl.scrollIntoView({ block: 'nearest' }));
+  }
+
   // Signal section (scopes + tuner + temper + freeze cfg). The scope rAF
   // keeps running while collapsed so the dB readout in the always-visible
   // subhead stays live; re-size on expand since a hidden canvas has zero
@@ -1444,19 +1484,21 @@ export function createLooper({ audio, syncStrudel } = {}) {
     model.scopesOpen = !model.scopesOpen;
     lsSet(SCOPESOPEN_KEY, model.scopesOpen ? '1' : '0');
     applyScopesCollapse();
+    autosizeRig(model.scopesOpen ? rigSignalEl : null);
   }
   // A feature toggle inside a collapsed signal body (tune, frz ▾) would
   // otherwise appear to do nothing — expand the section so it shows.
   function expandSignalSection() { if (!model.scopesOpen) toggleScopesCollapse(); }
 
-  // Strip section body (stages + utility drawer).
-  function applyStripCollapse() {
-    applySectionCollapse(stripPanel, btnStripCollapse, !!model.stripCollapsed);
+  // Strip zone sections (drive / tone / space) — each collapses independently.
+  function applyZoneCollapse(zone) {
+    applySectionCollapse(zoneSections[zone], zoneChevrons[zone], !!model.zoneCollapsed[zone]);
   }
-  function toggleStripCollapse() {
-    model.stripCollapsed = !model.stripCollapsed;
-    lsSet(STRIPCOLLAPSE_KEY, model.stripCollapsed ? '1' : '0');
-    applyStripCollapse();
+  function toggleZoneCollapse(zone) {
+    model.zoneCollapsed[zone] = !model.zoneCollapsed[zone];
+    lsSet(ZONECOLLAPSE_KEYS[zone], model.zoneCollapsed[zone] ? '1' : '0');
+    applyZoneCollapse(zone);
+    autosizeRig(model.zoneCollapsed[zone] ? null : zoneSections[zone]);
   }
 
   // ── channel strip UI ──────────────────────────────────────────────────────
@@ -1479,8 +1521,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // slider's own `input` handler also routes through stripSet, but writing the
   // same value back is idempotent.
   function syncStripCtl(stage, param, v) {
-    if (!stripPanel) return;
-    const sl = stripPanel.querySelector(`.rig-ctl input[data-stage="${stage}"][data-param="${param}"]`);
+    if (!rigSectionsEl) return;
+    const sl = rigSectionsEl.querySelector(`.rig-ctl input[data-stage="${stage}"][data-param="${param}"]`);
     if (!sl) return;
     sl.value = String(v);
     const valEl = sl.parentElement?.querySelector('.rig-ctl-val');
@@ -1561,12 +1603,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
   }
   function refreshStripStages() {
-    if (!stripPanel) return;
+    if (!rigSectionsEl) return;
     for (const stage of STRIP_SCHEMA) {
       if (!stage.toggle) continue;
-      // Query the whole strip panel so stages in either group (main row or the
-      // utility drawer) get their on/off state synced.
-      const box = stripPanel.querySelector(`.rig-stage[data-stage="${stage.id}"]`);
+      // Query the whole section column so stages in every group (zone
+      // sections or utility) get their on/off state synced.
+      const box = rigSectionsEl.querySelector(`.rig-stage[data-stage="${stage.id}"]`);
       if (!box) continue;
       const on = !!model.strip[stage.id].on;
       box.classList.toggle('on', on);
@@ -1631,47 +1673,26 @@ export function createLooper({ audio, syncStrudel } = {}) {
     return box;
   }
   function buildStripUI() {
-    if (!stripBody || stripBody.children.length) return;
-    // Main group → three fixed zones (drive · tone · space) in signal-chain
-    // order, each a captioned tinted box whose stages sit in a fixed grid;
-    // util group → collapsible drawer, in schema (chain) order.
-    for (const cl of STRIP_CLUSTERS) {
-      const zone = document.createElement('div');
-      zone.className = 'rig-cluster'; zone.dataset.cluster = cl.id;
-      const cap = document.createElement('div');
-      cap.className = 'rig-cluster-cap'; cap.textContent = cl.label;
-      if (cl.title) cap.title = cl.title;
-      const grid = document.createElement('div'); grid.className = 'rig-cluster-grid';
-      for (const stage of STRIP_SCHEMA) {
-        if (stage.group !== 'main' || stage.cluster !== cl.id) continue;
-        grid.append(buildStripStage(stage, { collapsible: false }));
-      }
-      zone.append(cap, grid);
-      stripBody.append(zone);
+    if (!zoneBodies.drive || zoneBodies.drive.children.length) return;
+    // Main stages land in their zone's section body (drive / tone / space, in
+    // schema = chain order); util stages go to the utility section after its
+    // static input-mode box.
+    for (const stage of STRIP_SCHEMA) {
+      if (stage.group === 'util') stripUtilBody?.append(buildStripStage(stage, { collapsible: true }));
+      else zoneBodies[stage.cluster]?.append(buildStripStage(stage, { collapsible: false }));
     }
-    if (stripUtilBody) {
-      for (const stage of STRIP_SCHEMA) {
-        if (stage.group !== 'util') continue;
-        stripUtilBody.append(buildStripStage(stage, { collapsible: true }));
-      }
-    }
-    applyStripUtil();
     refreshStripStages();
   }
+  // Utility section — same .collapsed mechanism as every other section (the
+  // key keeps its historical "open" polarity).
   function applyStripUtil() {
-    // Mirror the loop/signal subpanels: a .rig-collapse chevron drives the body
-    // show/hide, so utility + loop collapse the same way.
-    const open = !!model.stripUtilOpen;
-    if (stripUtilBody) stripUtilBody.style.display = open ? '' : 'none';
-    if (btnStripUtil) {
-      btnStripUtil.textContent = open ? '▾' : '▸';
-      btnStripUtil.classList.toggle('collapsed', !open);
-    }
+    applySectionCollapse(zoneSections.util, btnStripUtil, !model.stripUtilOpen);
   }
   function toggleStripUtil() {
     model.stripUtilOpen = !model.stripUtilOpen;
     lsSet(STRIPUTIL_KEY, model.stripUtilOpen ? '1' : '0');
     applyStripUtil();
+    autosizeRig(model.stripUtilOpen ? zoneSections.util : null);
   }
   // One labelled slider bound to model.strip[stageId][p.id].
   function buildCtl(stageId, p) {
@@ -2567,18 +2588,26 @@ export function createLooper({ audio, syncStrudel } = {}) {
     await restoreFromStore({ force: true });
     if (!model.tracks.length) { const t = makeTrack(); model.tracks.push(t); model.armedTrackId = t.id; renderTracks(); }
   }
-  function rebuildStrip() { if (stripBody) { stripBody.innerHTML = ''; if (stripUtilBody) stripUtilBody.innerHTML = ''; cabSelEl = null; ampSelEl = null; buildStripUI(); } }
+  function rebuildStrip() {
+    if (!zoneBodies.drive) return;
+    for (const body of Object.values(zoneBodies)) body.innerHTML = '';
+    // Only the built stages — the static input-mode box stays.
+    stripUtilBody?.querySelectorAll('.rig-stage[data-stage]').forEach(n => n.remove());
+    cabSelEl = null; ampSelEl = null;
+    buildStripUI();
+  }
   function refreshStripBtn() { if (btnStrip) btnStrip.classList.toggle('active', !!model.stripOpen); }
+  function applyStripOpen() {
+    for (const sec of Object.values(zoneSections)) if (sec) sec.style.display = model.stripOpen ? '' : 'none';
+  }
   function toggleStrip(on) {
     model.stripOpen = on == null ? !model.stripOpen : !!on;
     lsSet(STRIPOPEN_KEY, model.stripOpen ? '1' : '0');
     if (model.stripOpen) buildStripUI();
-    if (stripPanel) stripPanel.style.display = model.stripOpen ? '' : 'none';
-    // Opening the strip while its body is chevron-collapsed would show only
-    // a bare subhead — surprising from the signal bar's `strip` button.
-    if (model.stripOpen && model.stripCollapsed) toggleStripCollapse();
+    applyStripOpen();
     refreshStripBtn();
     refreshLatencyLoop();
+    autosizeRig(model.stripOpen ? zoneSections.drive : null);
   }
 
   // ── loop section toggle (signal header button) ──────────────────────────────
@@ -2588,35 +2617,23 @@ export function createLooper({ audio, syncStrudel } = {}) {
     lsSet(LOOPOPEN_KEY, model.loopOpen ? '1' : '0');
     if (rigLoopSection) rigLoopSection.style.display = model.loopOpen ? '' : 'none';
     refreshLoopBtn();
+    autosizeRig(model.loopOpen ? rigLoopSection : null);
   }
 
   // ── collapsible looper ─────────────────────────────────────────────────────
-  // Hide the props + tracks (keeping the transport bar) and shrink the window to
-  // fit, so the rig can run as a live amp/fx rig without the looper taking room.
-  let _loopExpandedH = null;
+  // Hide the props + tracks (keeping the transport bar), so the rig can run as
+  // a live amp/fx rig without the looper taking room; autosizeRig re-fits the
+  // window either way.
   function applyLoopCollapse() {
-    const c = !!model.loopCollapsed;
     // Shared .collapsed mechanism (CSS hides props + tracks, keeps the
     // transport subhead, and drops the section's flex-grow).
-    applySectionCollapse(rigLoopSection, btnLoopCollapse, c);
-    if (panel) {
-      if (c) {
-        const h = panel.getBoundingClientRect().height;
-        if (h > 0) _loopExpandedH = h;
-        panel.style.height = 'auto';
-        panel.style.minHeight = '0';
-      } else if (panel.style.height === 'auto') {
-        // Only restore when coming back from a collapsed state — leave a
-        // user-resized height untouched otherwise.
-        panel.style.height = _loopExpandedH ? `${_loopExpandedH}px` : '';
-        panel.style.minHeight = '';
-      }
-    }
+    applySectionCollapse(rigLoopSection, btnLoopCollapse, !!model.loopCollapsed);
   }
   function toggleLoopCollapse() {
     model.loopCollapsed = !model.loopCollapsed;
     lsSet(LOOPCOLLAPSE_KEY, model.loopCollapsed ? '1' : '0');
     applyLoopCollapse();
+    autosizeRig(model.loopCollapsed ? null : rigLoopSection);
   }
 
   // ── virtual strobe tuner ───────────────────────────────────────────────────
@@ -3408,7 +3425,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function updateBufferReadout() {
     const info = looperAudio.getBufferInfo?.() || { capable: false, seconds: 0, capSeconds: 40 };
     if (bufferBtn && looperAudio.isBuffering() && info.capable) {
-      bufferBtn.textContent = `buffer ● ${Math.floor(info.seconds)}s`;
+      bufferBtn.textContent = `buf ● ${Math.floor(info.seconds)}s`;
     }
     if (btnRetro && info.capable) {
       const cps = currentCps() || 0.5;
@@ -3487,7 +3504,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!bufferBtn) return;
     const on = looperAudio.isBuffering();
     bufferBtn.classList.toggle('active', on);
-    bufferBtn.textContent = on ? 'buffer ●' : 'buffer';
+    bufferBtn.textContent = on ? 'buf ●' : 'buf';
     bufferBtn.title = on
       ? 'Live buffer on — last 40s captured; use “grab” to retro-loop. Click to stop.'
       : 'Live buffer — continuously capture the last 40s so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).';
@@ -3636,7 +3653,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshBufferBtn();
     refreshChannelsBtn();
     // Restore the strip / tuner subpanels if they were left open.
-    if (model.stripOpen) { buildStripUI(); if (stripPanel) stripPanel.style.display = ''; }
+    if (model.stripOpen) buildStripUI();
+    applyStripOpen();
+    for (const z of Object.keys(ZONECOLLAPSE_KEYS)) applyZoneCollapse(z);
+    applyStripUtil();
     refreshLatencyLoop();
     if (model.tunerOn) {
       buildTunerUI();
@@ -3650,7 +3670,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshLoopBtn();
     if (rigLoopSection) rigLoopSection.style.display = model.loopOpen ? '' : 'none';
     applyLoopCollapse();
-    applyStripCollapse();
     startScope();
     applyScopesCollapse();
     refreshLooperBtn();
@@ -3685,7 +3704,18 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnLoop) btnLoop.addEventListener('click', () => { toggleLoop(); });
   if (btnLoopCollapse) btnLoopCollapse.addEventListener('click', () => { toggleLoopCollapse(); });
   if (btnScopeCollapse) btnScopeCollapse.addEventListener('click', () => { toggleScopesCollapse(); });
-  if (btnStripCollapse) btnStripCollapse.addEventListener('click', () => { toggleStripCollapse(); });
+  for (const z of Object.keys(zoneChevrons)) zoneChevrons[z]?.addEventListener('click', () => toggleZoneCollapse(z));
+  // The section NAME is a click target too — a bigger tap target than the
+  // chevron alone (buttons inside the subheads keep their own handlers).
+  const wireSubtitleToggle = (sectionEl, fn) => {
+    sectionEl?.querySelector(':scope > .rig-subhead > .sp-subtitle')?.addEventListener('click', fn);
+  };
+  wireSubtitleToggle(rigSignalEl, toggleScopesCollapse);
+  wireSubtitleToggle(zoneSections.drive, () => toggleZoneCollapse('drive'));
+  wireSubtitleToggle(zoneSections.tone,  () => toggleZoneCollapse('tone'));
+  wireSubtitleToggle(zoneSections.space, () => toggleZoneCollapse('space'));
+  wireSubtitleToggle(zoneSections.util,  toggleStripUtil);
+  wireSubtitleToggle(rigLoopSection, toggleLoopCollapse);
   if (btnTuner)  btnTuner.addEventListener('click', () => { toggleTuner(); });
   if (btnFreeze) btnFreeze.addEventListener('click', () => { toggleFreeze(); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });

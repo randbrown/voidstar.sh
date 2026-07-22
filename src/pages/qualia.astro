@@ -2138,18 +2138,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #looper-header .ctrl-btn { cursor: pointer; }
     .rig-head-spacer { flex: 1; }
 
-    /* Rig subpanels — signal · strip · loop stack inside ONE scroll column.
-       Overflow scrolls the whole stack (no nested scroll traps hiding
-       delay/reverb below a fold) and each section's subhead sticks to the
-       column top while its body scrolls past, so every section's controls
-       stay reachable at any panel size. */
+    /* Rig subpanels — signal · drive · tone · space · utility · loop stack
+       inside ONE scroll column. Overflow scrolls the whole stack (no nested
+       scroll traps hiding delay/reverb below a fold) and each section's
+       subhead sticks to the column top while its body scrolls past, so every
+       section's controls stay reachable at any panel size. */
     #rig-sections {
       flex: 1; min-height: 0;
       display: flex; flex-direction: column;
       overflow-y: auto;
     }
     .rig-subpanel { display: flex; flex-direction: column; min-height: 0; flex: 0 0 auto; }
-    #rig-signal { border-bottom: 1px solid var(--border); }
+    .rig-subpanel + .rig-subpanel { border-top: 1px solid var(--border); }
     #rig-loop   { flex: 1 0 auto; }         /* fill leftover height when short */
     #rig-loop.collapsed { flex: 0 0 auto; }
     .rig-subhead {
@@ -2158,13 +2158,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       background: rgba(0,0,0,0.20);
       font-size: 0.72rem;
     }
-    /* Only DIRECT section subheads stick (the strip's nested utility subhead
-       stays in flow, so two stickies never fight for the same top edge). */
+    /* Every section subhead sticks; as the column scrolls, each new section's
+       subhead pushes the previous one off the same top edge (accordion-style). */
     .rig-subpanel > .rig-subhead {
       position: sticky; top: 0; z-index: 6;
       background: var(--surface-glass, rgba(10,10,26,0.92));
       backdrop-filter: blur(8px);
     }
+    /* The section NAME is a click target too — same toggle as the chevron. */
+    .rig-subhead .sp-subtitle { cursor: pointer; user-select: none; }
     /* One collapse mechanism for every section: the subhead chevron toggles
        .collapsed on the section and everything below the subhead hides —
        signal (scopes/tuner/freeze), strip (stages + utility), loop
@@ -2230,15 +2232,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10);
     }
 
-    /* Channel strip. The MAIN row is three fixed ZONES in signal-chain order —
-       drive (earth·metal) · tone (amp·eq·cab) · space (delay·reverb) — each a
-       captioned, zone-tinted box with an internal fixed grid. Zones wrap as
-       whole flex units, so a zone's stages stay side by side at every panel
-       width (amp·eq·cab and delay·reverb never split across rows), and nothing
-       reflows as stages toggle — muscle memory holds mid-set.
-       The utility drawer stays a modular wrapped flex row. */
-    #rig-strip { position: relative; }
-    /* Latency readout — strip subhead, right side. Warns pink on a mic/output
+    /* Channel strip — four top-level sections in signal-chain order:
+       drive (earth·metal·gate) · tone (amp·eq·cab) · space (delay·reverb) ·
+       utility (geq·comp·hpf·peq·pan + input mode). Each is a .rig-subpanel
+       with its own sticky subhead, collapsing independently. --zone carries
+       the tint: drive = amber (heat), tone = cyan (the rig's accent),
+       space = violet (wash). */
+    .rig-subpanel[data-zone='drive'] { --zone: var(--amber); }
+    .rig-subpanel[data-zone='tone']  { --zone: var(--cyan); }
+    .rig-subpanel[data-zone='space'] { --zone: var(--accent); }
+    .rig-subpanel[data-zone] > .rig-subhead .sp-subtitle {
+      color: color-mix(in srgb, var(--zone) 65%, var(--muted));
+    }
+    /* Latency readout — utility subhead, right side. Warns pink on a mic/output
        sample-rate mismatch (hidden browser resampler). */
     #rig-latency { color: var(--muted); font-size: 0.64rem; font-variant-numeric: tabular-nums; }
     #rig-latency.warn { color: var(--pink); }
@@ -2255,39 +2261,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       opacity: 0; transition: opacity 0.25s ease;
     }
     .rig-latency-toast.show { opacity: 1; }
-    #rig-strip-body {
-      display: flex; flex-wrap: wrap; gap: 0.45rem;
-      padding: 0.45rem 0.6rem;
-      /* No inner max-height/scroll: the strip sizes naturally and any
-         overflow scrolls the whole #rig-sections column, so delay/reverb
-         can never hide below an invisible nested fold. */
+    /* Zone bodies — an adaptive grid: stages keep a workable width (~210px
+       min) and sit side by side whenever they fit, wrapping as the panel
+       narrows. Stage ORDER never changes — muscle memory holds mid-set. */
+    .rig-zone-body {
+      display: grid; gap: 0.4rem;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
       align-items: stretch;
-    }
-    /* Zones — flex bases sized so a zone only shares a row when every stage
-       keeps a workable width (~150px); grow is proportional to stage count.
-       --zone carries the tint: drive = amber (heat), tone = cyan (the rig's
-       accent), space = violet (wash). */
-    .rig-cluster {
-      border: 1px solid color-mix(in srgb, var(--zone, var(--border)) 30%, var(--border));
-      border-radius: 8px;
+      padding: 0.45rem 0.6rem;
       background: color-mix(in srgb, var(--zone, transparent) 4%, transparent);
-      padding: 0.28rem 0.4rem 0.4rem;
-      min-width: 0;
     }
-    .rig-cluster[data-cluster='drive'] { --zone: var(--amber);  flex: 2 1 300px; }
-    .rig-cluster[data-cluster='tone']  { --zone: var(--cyan);   flex: 3 1 460px; }
-    .rig-cluster[data-cluster='space'] { --zone: var(--accent); flex: 2 1 300px; }
-    .rig-cluster-cap {
-      font-size: 0.56rem; letter-spacing: 0.14em; text-transform: lowercase;
-      color: color-mix(in srgb, var(--zone) 70%, var(--muted));
-      margin: 0 0 0.22rem 0.1rem;
-    }
-    .rig-cluster-grid { display: grid; gap: 0.4rem; align-items: stretch; }
-    .rig-cluster[data-cluster='drive'] .rig-cluster-grid,
-    .rig-cluster[data-cluster='space'] .rig-cluster-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .rig-cluster[data-cluster='tone']  .rig-cluster-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     /* An engaged stage glows in its zone's colour (utility stages stay cyan). */
-    .rig-cluster .rig-stage.on {
+    .rig-zone-body .rig-stage.on {
       border-color: color-mix(in srgb, var(--zone) 65%, var(--border));
       background: color-mix(in srgb, var(--zone) 7%, transparent);
     }
@@ -2298,8 +2283,6 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
          scrolls when the panel is shorter — resize the panel for more room. */
       max-height: 470px; overflow-y: auto;
     }
-    /* Utility drawer — hpf/comp/eq/pan behind a chevron subhead like the loop. */
-    #rig-strip-util { border-top: 1px solid var(--border); }
     .rig-util-hint { color: var(--muted); font-size: 0.6rem; opacity: 0.6; letter-spacing: 0.04em; }
     .rig-stage {
       border: 1px solid var(--border); border-radius: 6px;
@@ -3914,8 +3897,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span class="sp-subtitle">signal</span>
       <select id="looper-input" class="seq-name-input looper-input-select" title="Input device" style="display:none"></select>
       <span id="rig-input-controls" class="rig-input-controls"></span>
-      <button class="ctrl-btn" id="btn-rig-channels" title="Input: mono (sum to centre, then full stereo treatment) or stereo (pass L/R)">mono</button>
-      <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buffer</button>
+      <button class="ctrl-btn" id="btn-rig-buffer" title="Live buffer — continuously capture the last 40s of your signal so you can retroactively grab a loop of what you just played (pre-fader; works with monitor at 0).">buf</button>
       <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — EQ, comp, drives, amp, cab, delay → reverb, pan on the rig signal">strip</button>
       <button class="ctrl-btn" id="btn-rig-tuner" title="Strobe tuner — Peterson-style strobe reading the raw rig input (pre-distortion); bands freeze when in tune">tune</button>
       <button class="ctrl-btn" id="btn-rig-freeze" title="Freeze (;) — grab the last moment of the processed signal as an endless pad, LAYERING a new pad each tap (Frippertronics stack). Pop a layer with ' · re-grab top with \ · clear the stack with ⌫ · settings under the ▾. Layers auto-level (constant-RMS bus + limiter).">frz</button>
@@ -3966,27 +3948,56 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
   </section>
 
-  <!-- STRIP subpanel — the rig channel strip (collapsible). -->
-  <section id="rig-strip" class="rig-subpanel" style="display:none">
+  <!-- STRIP subpanels — the channel strip as four top-level collapsible
+       sections in signal-chain order: drive (earth · metal · gate) · tone
+       (amp · eq · cab) · space (delay · reverb) · utility (geq · comp · hpf ·
+       peq · pan + input mode + strip housekeeping). The signal bar's `strip`
+       button shows/hides all four together; each section's chevron (or name)
+       collapses just that section, persisted independently. -->
+  <section id="rig-drive" class="rig-subpanel" data-zone="drive" style="display:none">
     <div class="rig-subhead">
-      <button class="ctrl-btn rig-collapse" id="btn-rig-strip-collapse" title="Collapse / expand the strip stages">▾</button>
-      <span class="sp-subtitle">strip</span>
+      <button class="ctrl-btn rig-collapse" id="btn-rig-drive-collapse" title="Collapse / expand the drive pedals — earth (JFET soft clip) into metal (high-gain), with the noise gate that tames their hiss">▾</button>
+      <span class="sp-subtitle">drive</span>
+      <span class="rig-util-hint">earth · metal · gate</span>
+    </div>
+    <div id="rig-drive-body" class="rig-zone-body"></div>
+  </section>
+  <section id="rig-tone" class="rig-subpanel" data-zone="tone" style="display:none">
+    <div class="rig-subhead">
+      <button class="ctrl-btn rig-collapse" id="btn-rig-tone-collapse" title="Collapse / expand tone shaping — neural amp → tone-stack EQ → cab IR">▾</button>
+      <span class="sp-subtitle">tone</span>
+      <span class="rig-util-hint">amp · eq · cab</span>
+    </div>
+    <div id="rig-tone-body" class="rig-zone-body"></div>
+  </section>
+  <section id="rig-space" class="rig-subpanel" data-zone="space" style="display:none">
+    <div class="rig-subhead">
+      <button class="ctrl-btn rig-collapse" id="btn-rig-space-collapse" title="Collapse / expand the time effects — delay feeds reverb, so the echoes share the room">▾</button>
+      <span class="sp-subtitle">space</span>
+      <span class="rig-util-hint">delay · reverb</span>
+    </div>
+    <div id="rig-space-body" class="rig-zone-body"></div>
+  </section>
+  <section id="rig-util" class="rig-subpanel" style="display:none">
+    <div class="rig-subhead">
+      <button class="ctrl-btn rig-collapse" id="btn-rig-strip-util" title="Collapse / expand the utility stages (geq · comp · HPF · peq · pan) + input mode">▸</button>
+      <span class="sp-subtitle">utility</span>
+      <span class="rig-util-hint">geq · comp · hpf · peq · pan</span>
       <span class="rig-head-spacer"></span>
       <span class="sp-status" id="rig-latency" title="Estimated monitoring latency: browser output path + what enabled strip stages add (drive oversampling, comp lookahead). Input capture buffering isn't reported by the browser, so the true round trip is slightly higher."></span>
       <button class="ctrl-btn" id="btn-rig-strip-reset" title="Reset all strip effects to off / unity defaults">reset</button>
     </div>
-    <!-- Main row — three zones in signal-chain order, the stages reached for
-         live: drive (earth · metal) · tone (amp · eq · cab) · space (delay · reverb). -->
-    <div id="rig-strip-body"></div>
-    <!-- Utility drawer — geq · comp · hpf · peq · pan (chain order), tucked away
-         until needed. Same chevron + subtitle subhead as the loop / signal subpanels. -->
-    <div id="rig-strip-util">
-      <div class="rig-subhead">
-        <button class="ctrl-btn rig-collapse" id="btn-rig-strip-util" title="Collapse / expand the utility stages (geq · comp · HPF · peq · pan)">▸</button>
-        <span class="sp-subtitle">utility</span>
-        <span class="rig-util-hint">geq · comp · hpf · peq · pan</span>
+    <div id="rig-strip-util-body">
+      <!-- Input channel mode — housekeeping, not a per-set control, so it
+           lives here. Static (rebuildStrip only clears built [data-stage]
+           boxes), styled as an always-active stage like pan. -->
+      <div class="rig-stage on" id="rig-util-input">
+        <div class="rig-stage-head rig-stage-head-fixed"><span class="rig-stage-name">input</span></div>
+        <div class="rig-ctl">
+          <span class="rig-ctl-label">chan</span>
+          <button class="ctrl-btn" id="btn-rig-channels" title="Input: mono (sum to centre, then full stereo treatment) or stereo (pass L/R)">mono</button>
+        </div>
       </div>
-      <div id="rig-strip-util-body" style="display:none"></div>
     </div>
   </section>
 
