@@ -111,7 +111,6 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
   // persisted config and primes it via setStripConfig().
   let strip = null, _stripConfig = null, _cabBuffer = null, _ampModel = null;
-  let recMerge = null;   // mono-sum of strip.output feeding the recorder in mono mode
 
   // ── recording state ──
   let recording = false;
@@ -260,8 +259,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     //   mono   → sum L+R to one channel, so a single-input instrument is
     //            centred and gets full stereo treatment from the strip's pan /
     //            ping-pong delay / stereo reverb (the panner up-mixes mono to
-    //            both channels). Also records mono.
+    //            both channels).
     //   stereo → pass both channels straight through.
+    // Either way this is an INPUT mode only — recording always taps the
+    // strip's stereo output (see recTap below).
     if (_channels === 'stereo') {
       inputNode = ctx.createGain();
       srcNode.connect(inputNode);
@@ -322,23 +323,16 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     inputNode.connect(tunerAnalyser);
 
     // Recorder source — the strip OUTPUT, so the captured loop carries whatever
-    // effects were on. In mono mode, sum the strip's stereo output back to one
-    // channel (the loop stays mono, just effected); stereo keeps both channels.
-    let recTap;
-    if (_channels === 'stereo') {
-      recTap = strip.output;
-    } else {
-      recMerge = ctx.createGain();
-      recMerge.channelCount = 1;
-      recMerge.channelCountMode = 'explicit';
-      recMerge.channelInterpretation = 'speakers';
-      strip.output.connect(recMerge);
-      recTap = recMerge;
-    }
+    // effects were on — ALWAYS in stereo. Mono mode used to sum this back to
+    // one channel, which flattened the strip's ping-pong delay / pan / stereo
+    // reverb out of every recorded loop (and every WAV / qualem export). The
+    // strip output is post-StereoPanner, so it's 2-channel regardless of the
+    // input mode; the mono/stereo toggle now governs input routing only.
+    const recTap = strip.output;
 
-    // Channel count for the ScriptProcessor fallback: forced to 1 in mono mode,
-    // else the native input count. The worklet adopts it via 'max' channelCount.
-    const inCh = _channels === 'stereo' ? Math.max(1, Math.min(2, settings.channelCount || 2)) : 1;
+    // Channel count for the ScriptProcessor fallback — the strip output is
+    // post-panner, so always 2. The worklet adopts it via 'max' channelCount.
+    const inCh = 2;
 
     const ready = await workletReady;
     if (ready) {
@@ -403,8 +397,6 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     try { sigAnalyser?.disconnect(); } catch {}
     try { captureAnalyser?.disconnect(); } catch {}
     try { tunerAnalyser?.disconnect(); } catch {}
-    try { recMerge?.disconnect(); } catch {}
-    recMerge = null;
     try { strip?.dispose(); } catch {}
     strip = null;
     if (stream && streamOwned) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }

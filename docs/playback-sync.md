@@ -111,6 +111,16 @@ echo from the leader, so lit pads track taps at tap speed, not at the 1 Hz caden
 The link-status pill is a fixed one-liner ("livecoding station transceiver link
 active" / "(unlinked)" / "(link lost)" …); longer guidance renders under it.
 
+The status row also carries the **⏻ hold chip** — the pocket lock. Tap it to
+*deactivate* the whole pad: the three send helpers (`act`/`slide`/`tap`) go
+inert (no relay traffic at all) and the body + tabs dim behind
+`pointer-events: none`. Re-arming takes a deliberate ~0.4 s press-and-hold
+(the same fill-sweep idiom as the slider ↺ chips) — locking is instant,
+unlocking can't happen by pocket graze. The lock is not persisted; a fresh
+launch always starts live. The page also holds a **screen wake lock**
+(re-requested on every return to visible), so the phone doesn't dim or sleep
+mid-set while it's the active remote.
+
 **Install it.** Tether is its own PWA (`public/manifest-tether.webmanifest`, `display:
 fullscreen`, cyan ⌁ icon) — scan the QR once, then "Add to Home screen"; in Chrome an
 **⤓ install app** chip appears top-left (from `beforeinstallprompt`) for a one-tap

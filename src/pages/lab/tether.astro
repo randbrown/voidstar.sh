@@ -86,14 +86,40 @@ import '../../styles/themes.css';
     /* The link-status pill is a strict one-liner ("livecoding station
        transceiver …") — nowrap + ellipsis; the client mirrors the full text
        into title for the rare viewport that clips it. */
-    [data-status] { text-align: center; padding: .5rem .8rem; border-radius: 999px;
+    .sp-statusrow { display: flex; gap: .45rem; align-items: stretch; margin-bottom: .7rem; }
+    [data-status] { flex: 1; min-width: 0; text-align: center; padding: .5rem .8rem;
+      border-radius: 999px;
       background: rgba(12,10,28,.72); border: 1px solid var(--border);
-      font-size: .74rem; margin-bottom: .7rem; letter-spacing: .02em;
+      font-size: .74rem; letter-spacing: .02em;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     [data-status][data-kind="ok"]  { border-color: color-mix(in srgb, var(--cyan) 60%, transparent);
       color: var(--cyan); box-shadow: 0 0 16px color-mix(in srgb, var(--cyan) 22%, transparent),
       inset 0 0 12px color-mix(in srgb, var(--cyan) 10%, transparent); }
     [data-status][data-kind="err"] { border-color: var(--pink); color: var(--pink); }
+
+    /* ⏻ hold chip — lives in the status row. Tap = deactivate the whole pad
+       (pocket lock: nothing sends, everything dims); press-and-hold ~0.4 s
+       (same fill-sweep idiom as the slider ↺ chips) = re-arm. Re-arming is
+       deliberately harder than locking — a pocket can't hold steady. */
+    .sp-hold { flex: none; padding: 0 .85rem; border-radius: 999px; font: inherit;
+      font-size: .74rem; font-weight: 650; letter-spacing: .04em; cursor: pointer;
+      color: var(--cyan); background: rgba(12,10,28,.72);
+      border: 1px solid color-mix(in srgb, var(--cyan) 40%, var(--border));
+      white-space: nowrap; touch-action: none; }
+    .sp-hold.off { color: var(--amber, #fbbf24);
+      border-color: color-mix(in srgb, var(--amber, #fbbf24) 70%, transparent);
+      animation: sp-held 1.8s ease-in-out infinite; }
+    .sp-hold.holding { animation: sp-hold-fill .4s linear forwards; }
+    @keyframes sp-held {
+      50% { box-shadow: 0 0 14px color-mix(in srgb, var(--amber, #fbbf24) 35%, transparent); } }
+    .sp-holdnote { color: var(--amber, #fbbf24); font-size: .72rem; text-align: center;
+      letter-spacing: .03em; padding: 0 0 .5rem; }
+    /* Deactivated: every control surface dims and stops receiving input; the
+       ⏻ chip stays the only live target. (tether-client.js also gates the
+       send helpers, so this is defense in depth, not the only lock.) */
+    #tether-root.deactivated [data-body],
+    #tether-root.deactivated [data-tabs] {
+      opacity: .35; pointer-events: none; filter: saturate(.35); }
 
     /* ── Bottom tab bar — big thumb targets, neon active state ── */
     [data-tabs] { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
@@ -252,7 +278,11 @@ import '../../styles/themes.css';
       </a>
       <h1>⌁ TETHER</h1>
     </header>
-    <div data-status>livecoding station transceiver (unlinked)</div>
+    <div class="sp-statusrow">
+      <div data-status>livecoding station transceiver (unlinked)</div>
+      <button data-hold class="sp-hold" title="tap to deactivate the pad">⏻ live</button>
+    </div>
+    <div class="sp-holdnote" data-holdnote hidden>pad deactivated — taps are ignored; hold ⏻ to re-arm</div>
     <div data-body></div>
     <nav data-tabs aria-label="controller tabs"></nav>
     <footer>voidstar.sh — control rides the relay, no audio leaves the rig</footer>

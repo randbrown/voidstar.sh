@@ -116,6 +116,15 @@ const STRIP_SCHEMA = [
   { id: 'eq',     name: 'eq',     group: 'main', cluster: 'tone', toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
   { id: 'cab',    name: 'cab',    group: 'main', cluster: 'tone', toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'hpf',    name: 'hpf',    group: 'util', toggle: true,  params: [{ id: 'freq', label: 'freq', min: 20, max: 400, step: 1, fmt: v => `${v|0}Hz` }] },
+  // gate — noise gate for the drives' hiss: a VCA after the post-cab HPF,
+  // keyed by an envelope follower on the CLEAN strip input (post-distortion
+  // detection can't tell hiss from signal), so closing never chops the
+  // delay/reverb tails. Lives in the drive cluster on screen — it's the
+  // earth/metal companion — though its audio position is post-cab.
+  { id: 'gate',   name: 'gate',   group: 'main', cluster: 'drive', toggle: true, params: [
+    { id: 'thresh',  label: 'thr', min: 0, max: 1, step: 0.01 },
+    { id: 'release', label: 'rel', min: 0, max: 1, step: 0.01 },
+  ] },
   { id: 'delay',  name: 'delay',  group: 'main', cluster: 'space', toggle: true,  params: [{ id: 'time', label: 'time', min: 0.02, max: 1.2, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'feedback', label: 'fb', min: 0, max: 0.95, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
   { id: 'reverb', name: 'reverb', group: 'main', cluster: 'space', toggle: true,  params: [{ id: 'decay', label: 'dec', min: 0.1, max: 6, step: 0.1, fmt: v => `${(+v).toFixed(1)}s` }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }] },
   // peq — ReaEQ-style parametric EQ (output end: surgical fixes on the full
@@ -129,7 +138,7 @@ const STRIP_SCHEMA = [
 // stages side by side at every panel width (zones wrap as whole flex units),
 // so amp·eq·cab and delay·reverb never split across rows.
 const STRIP_CLUSTERS = [
-  { id: 'drive', label: 'drive', title: 'Drive pedals — earth (JFET soft clip) into metal (high-gain)' },
+  { id: 'drive', label: 'drive', title: 'Drive pedals — earth (JFET soft clip) into metal (high-gain), with the noise gate that tames their hiss' },
   { id: 'tone',  label: 'tone',  title: 'Tone shaping — neural amp → tone-stack EQ → cab IR' },
   { id: 'space', label: 'space', title: 'Time effects — delay feeds reverb, so the echoes share the room' },
 ];

@@ -4,7 +4,7 @@
 // need it). Fixed-order series chain, laid out like a physical pedalboard:
 //
 //   in → GEQ(7-band) → comp → earth → metal → amp → EQ(lo/mid/hi) → cab
-//      → HPF → delay (p-pong) → reverb (conv.) → PEQ(8-band) → pan → out
+//      → HPF → gate → delay (p-pong) → reverb (conv.) → PEQ(8-band) → pan → out
 //
 // The three EQs are deliberately SPREAD along the chain, one job each:
 // - geq (GE-7-style graphic) sits at the FRONT, shaping the instrument before
@@ -101,6 +101,7 @@ export const STRIP_DEFAULTS = {   // listed in chain order
   eq:     { on: false, low: 0, mid: 0, high: 0 },
   cab:    { on: false, mix: 1, level: 1 },
   hpf:    { on: false, freq: 80 },
+  gate:   { on: false, thresh: 0.15, release: 0.35 },
   delay:  { on: false, time: 0.3, feedback: 0.35, mix: 0.25 },
   reverb: { on: false, decay: 2.0, mix: 0.25 },
   peq:    { on: false, bands: defaultPeqBands() },
@@ -153,6 +154,38 @@ const IDENTITY_CURVE = (() => {
   for (let i = 0; i < n; i++) c[i] = (i / (n - 1)) * 2 - 1;
   return c;
 })();
+
+// ── Noise gate curves ─────────────────────────────────────────────────────
+// The gate is the vocoder's carrier-gate topology ported to the rig: a
+// sidechain envelope (rectify + LPF on the CLEAN strip input) runs through a
+// WaveShaper whose transfer curve maps level → 0..1, and that signal drives
+// the gate VCA's gain AudioParam directly. Detection must be pre-drive: after
+// two cascaded clippers, hiss and signal sit at nearly the same level, so a
+// post-distortion detector can't tell them apart.
+const GATE_RECT_CURVE = (() => {   // |x| — full-wave rectifier for the envelope
+  const n = 1025, c = new Float32Array(n);
+  for (let i = 0; i < n; i++) c[i] = Math.abs((i / (n - 1)) * 2 - 1);
+  return c;
+})();
+const GATE_OPEN_CURVE = new Float32Array([1, 1]);   // bypass: VCA pinned at unity
+// Envelope level → gain, soft-knee smoothstep (an expander, not a chattery
+// hard gate). `t` is the knob (0..1); thresh is squared for fine resolution
+// down where noise floors live. 4097 points ≈ .0005 input steps — enough to
+// keep the knee smooth even at low thresholds.
+function makeGateCurve(t, len = 4097) {
+  const c = new Float32Array(len);
+  if (t <= 0) { c.fill(1); return c; }
+  const thresh = t * t * 0.3;
+  const knee = Math.max(0.004, thresh * 0.75);
+  const lo = thresh - knee, hi = thresh + knee;
+  for (let i = 0; i < len; i++) {
+    const x = (i / (len - 1)) * 2 - 1;   // input domain −1..1; envelope is ≥0
+    if      (x <= lo) c[i] = 0;
+    else if (x >= hi) c[i] = 1;
+    else { const u = (x - lo) / (hi - lo); c[i] = u * u * (3 - 2 * u); } // smoothstep
+  }
+  return c;
+}
 
 // Soft-clip (tanh) curve, normalised so the peak stays ~unity. `amount` 0..1.
 function makeDriveCurve(amount) {
@@ -217,6 +250,22 @@ export function createRigStrip(ctx, cfg) {
   // HPF — post-cab: attenuates cab woof / low buildup before the time fx.
   const hpf = ctx.createBiquadFilter();
   hpf.type = 'highpass'; hpf.Q.value = 0.707;
+
+  // Noise gate — a VCA between the HPF and the time fx, so it silences every
+  // upstream hiss source (comp, earth, metal, amp-capture idle noise) but a
+  // closing gate never chops delay/reverb tails. Keyed from the clean strip
+  // input (see GATE_RECT_CURVE note); the post-shaper smoother turns curve
+  // swaps (toggle / threshold drags) into ~10 ms fades instead of steps.
+  // All native biquads/gains — zero added latency on the signal path.
+  const gateVca = ctx.createGain(); gateVca.gain.value = 0;   // control signal supplies the gain
+  const gateKeyHpf = ctx.createBiquadFilter();
+  gateKeyHpf.type = 'highpass'; gateKeyHpf.frequency.value = 90; gateKeyHpf.Q.value = 0.707;
+  const gateRect = ctx.createWaveShaper(); gateRect.curve = GATE_RECT_CURVE;
+  const gateLpf = ctx.createBiquadFilter();
+  gateLpf.type = 'lowpass'; gateLpf.frequency.value = 17; gateLpf.Q.value = 0.707;
+  const gateShaper = ctx.createWaveShaper(); gateShaper.curve = GATE_OPEN_CURVE;
+  const gateSmooth = ctx.createBiquadFilter();
+  gateSmooth.type = 'lowpass'; gateSmooth.frequency.value = 30; gateSmooth.Q.value = 0.707;
 
   // Earth Drive — single waveshaper (asymmetric JFET curve) + tone LPF + level.
   // Oversampling is set per-state in applyEarth/applyMetal: '4x' only while the
@@ -374,9 +423,21 @@ export function createRigStrip(ctx, cfg) {
   eqHigh.connect(cabIn);
   cabIn.connect(cabDry); cabDry.connect(cabSum);
   cabIn.connect(cabConv); cabConv.connect(cabWet); cabWet.connect(cabSum);
-  // Post-cab HPF → time fx in series: delay insert, then reverb insert.
+  // Post-cab HPF → noise gate VCA → time fx in series: delay insert, then
+  // reverb insert. Gate sidechain: clean input → key HPF (drops rumble/hum
+  // that would false-open it) → rectify → envelope LPF → threshold curve →
+  // smoother → the VCA's gain param. The sidechain is always connected; the
+  // stage toggles by curve swap (GATE_OPEN_CURVE pins the VCA at unity), so
+  // bypass never re-wires the graph.
   cabSum.connect(hpf);
-  hpf.connect(delayIn);
+  hpf.connect(gateVca);
+  gateVca.connect(delayIn);
+  input.connect(gateKeyHpf);
+  gateKeyHpf.connect(gateRect);
+  gateRect.connect(gateLpf);
+  gateLpf.connect(gateShaper);
+  gateShaper.connect(gateSmooth);
+  gateSmooth.connect(gateVca.gain);
   delayIn.connect(delayDry); delayDry.connect(delaySum);
   delayIn.connect(delayL);
   delayL.connect(merger, 0, 0);
@@ -556,6 +617,24 @@ export function createRigStrip(ctx, cfg) {
       node.gain.setTargetAtTime(clamp(b.gain, -24, 24), t, 0.01);
     }
   }
+  // Curve cache — knob drags re-run apply per tick; only rebuild the 4097-float
+  // curve when the threshold actually changed. −1 means the open (bypass)
+  // curve is loaded.
+  let gateCurveThresh = -1;
+  function applyGate() {
+    const d = state.gate;
+    // Release knob → envelope LPF corner, 30 Hz (snappy) down to 6 Hz (slow
+    // swells). One symmetric filter smooths attack and release alike — the
+    // slow end trades a softened pick attack for chatter-free decays.
+    gateLpf.frequency.setTargetAtTime(
+      30 * Math.pow(0.2, clamp(d.release, 0, 1)), ctx.currentTime, 0.02);
+    if (!d.on) {
+      if (gateCurveThresh !== -1) { gateShaper.curve = GATE_OPEN_CURVE; gateCurveThresh = -1; }
+      return;
+    }
+    const t = clamp(d.thresh, 0, 1);
+    if (t !== gateCurveThresh) { gateShaper.curve = makeGateCurve(t); gateCurveThresh = t; }
+  }
   function applyDelay() {
     const on = state.delay.on;
     const t = clamp(state.delay.time, 0.01, 2);
@@ -598,9 +677,9 @@ export function createRigStrip(ctx, cfg) {
   function applyPan() {
     panner.pan.setTargetAtTime(clamp(state.pan.pan, -1, 1), ctx.currentTime, 0.01);
   }
-  function applyAll() { applyGeq(); applyComp(); applyEarth(); applyMetal(); applyAmp(); applyEq(); applyCab(); applyHpf(); applyDelay(); applyReverb(); applyPeq(); applyPan(); }
+  function applyAll() { applyGeq(); applyComp(); applyEarth(); applyMetal(); applyAmp(); applyEq(); applyCab(); applyHpf(); applyGate(); applyDelay(); applyReverb(); applyPeq(); applyPan(); }
 
-  const APPLY = { hpf: applyHpf, earth: applyEarth, metal: applyMetal, comp: applyComp, eq: applyEq, geq: applyGeq, peq: applyPeq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
+  const APPLY = { hpf: applyHpf, gate: applyGate, earth: applyEarth, metal: applyMetal, comp: applyComp, eq: applyEq, geq: applyGeq, peq: applyPeq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
 
   applyAll();
 
@@ -650,6 +729,7 @@ export function createRigStrip(ctx, cfg) {
                      ampIn, ampDrive, ampDry, ampWet, ampSum,
                      eqLow, eqMid, eqHigh,
                      cabIn, cabConv, cabDry, cabWet, cabSum, hpf,
+                     gateVca, gateKeyHpf, gateRect, gateLpf, gateShaper, gateSmooth,
                      delayIn, delayDry, delayL, delayR, delayFb, merger,
                      delayWet, delaySum,
                      reverbIn, reverbDry, convolver, reverbWet, reverbSum,
