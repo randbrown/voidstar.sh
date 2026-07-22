@@ -48,7 +48,7 @@ stack(
 
 | Function | Semantics |
 |---|---|
-| `quale(pat)` | Switch the active quale per event (fuzzy id/name). Honors transition style + cycle quantize. |
+| `quale(pat)` | Switch the active quale per event (fuzzy id/name). Honors transition style + cycle quantize. `"null"` selects the null quale (blank fx layer). |
 | `qset(paramId, pat)` | Set an **active-quale** param per event. Continuous signals need `.segment(n)`. |
 | `qpreset(pat)` | Apply factory/user presets by name per event. |
 | `qphase(pat)` | Step the quale's phase per event (value = direction ±1). |
@@ -73,7 +73,19 @@ qualia.quales()                    // [{id, name}] in dropdown order
 qualia.quale()                     // active id
 qualia.quale("singularity")        // switch (fuzzy match, transition + quantize)
 qualia.nextQuale(); qualia.prevQuale(); qualia.randomQuale()
+qualia.nullQuale()                 // blank the fx layer (the "null" quale)
+qualia.quale(null)                 // same — JS null resolves to the null quale
+```
 
+The **null quale** (id `null`) is the blank default: it vacates the fx layer
+while Hydra (below) and the overlay (above) keep running — unlike
+`qualia.blackout(true)`, which darkens the whole stage. It's what shows on a
+fresh boot until a quale is specified, and automatic pickers (auto-cycle,
+`randomQuale()`, the audience vote) never land on it — only explicit
+selection does, e.g. `quale("<null chladni>")` for a breathing gap between
+visuals.
+
+```js
 qualia.params()                    // active quale's param specs
 qualia.set("thickness", 0.7)       // set one param on the active quale
 qualia.set({ palette: "cyan", speed: 2 })
