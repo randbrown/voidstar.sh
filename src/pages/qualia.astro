@@ -538,8 +538,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       background: var(--surface-glass); backdrop-filter: blur(10px);
       border: 1px solid var(--border); border-radius: 8px;
       box-shadow: 0 12px 28px rgba(0,0,0,0.45);
-      min-width: max-content;
+      /* width (not min-width): max-content is the PREFERRED size, so
+         max-width actually caps it and the flex row wraps. min-width let
+         wide popovers (post / auto) force their single-row width past the
+         viewport edge, leaving controls unreachable. */
+      width: max-content;
       max-width: min(92vw, 520px);
+      /* Fallback height cap; page-init.js overrides with the real space
+         below the trigger (a wrapped topbar makes this calc wrong). */
       max-height: calc(100dvh - var(--topbar-h, 4.5rem) - 1rem);
       overflow: auto;
     }
@@ -561,6 +567,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         left:   max(0.5rem, env(safe-area-inset-left));
         right:  max(0.5rem, env(safe-area-inset-right));
         bottom: auto;
+        width: auto;      /* let left+right size the drawer (width: max-content would over-constrain) */
         min-width: 0;
         max-width: none;
         max-height: calc(100dvh - var(--topbar-h, 4.5rem) - var(--tabs-h, 2.4rem) - 1.5rem);
@@ -1772,6 +1779,26 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--muted); border-color: var(--border);
     }
     .mx-lim.active { color: var(--cyan); border-color: var(--cyan); }
+    /* Actively reducing right now (mixer meter loop) — amber overrides the
+       engaged cyan so a working limiter is visible across the room. */
+    .mx-lim.active.working { color: #f5b342; border-color: #f5b342; }
+    /* Forced on while the channel is boosted above unity — not clickable off. */
+    .mx-lim.forced { cursor: not-allowed; opacity: 0.8; }
+    /* Gain-reduction bar: thin amber strip along the meter's top edge,
+       anchored right, growing leftward as the limiter clamps harder. */
+    .mx-gr-fill {
+      position: absolute; right: 0; top: 0; height: 3px;
+      width: 0%; background: #f5b342;
+      transition: width 0.06s linear;
+    }
+    /* Boost-capable faders (max > 1): tint the over-unity span of the track.
+       --mx-unity (set per channel in mixer.js) marks where 1.0 sits. */
+    .mx-fader.boost {
+      background: linear-gradient(to right,
+        transparent var(--mx-unity, 100%),
+        rgba(236, 72, 153, 0.18) var(--mx-unity, 100%));
+      border-radius: 4px;
+    }
     .mx-clip {
       flex: none; width: 9px; height: 9px; border-radius: 50%;
       background: rgba(255,255,255,0.12);
@@ -2111,16 +2138,39 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #looper-header .ctrl-btn { cursor: pointer; }
     .rig-head-spacer { flex: 1; }
 
-    /* Rig subpanels — "signal" stacks above "loop"; loop takes the slack. */
-    .rig-subpanel { display: flex; flex-direction: column; min-height: 0; }
-    #rig-signal { flex: 0 0 auto; border-bottom: 1px solid var(--border); }
-    #rig-loop   { flex: 1 1 auto; }
+    /* Rig subpanels — signal · strip · loop stack inside ONE scroll column.
+       Overflow scrolls the whole stack (no nested scroll traps hiding
+       delay/reverb below a fold) and each section's subhead sticks to the
+       column top while its body scrolls past, so every section's controls
+       stay reachable at any panel size. */
+    #rig-sections {
+      flex: 1; min-height: 0;
+      display: flex; flex-direction: column;
+      overflow-y: auto;
+    }
+    .rig-subpanel { display: flex; flex-direction: column; min-height: 0; flex: 0 0 auto; }
+    #rig-signal { border-bottom: 1px solid var(--border); }
+    #rig-loop   { flex: 1 0 auto; }         /* fill leftover height when short */
+    #rig-loop.collapsed { flex: 0 0 auto; }
     .rig-subhead {
       display: flex; align-items: center; gap: 0.45rem;
       padding: 0.35rem 0.7rem;
       background: rgba(0,0,0,0.20);
       font-size: 0.72rem;
     }
+    /* Only DIRECT section subheads stick (the strip's nested utility subhead
+       stays in flow, so two stickies never fight for the same top edge). */
+    .rig-subpanel > .rig-subhead {
+      position: sticky; top: 0; z-index: 6;
+      background: var(--surface-glass, rgba(10,10,26,0.92));
+      backdrop-filter: blur(8px);
+    }
+    /* One collapse mechanism for every section: the subhead chevron toggles
+       .collapsed on the section and everything below the subhead hides —
+       signal (scopes/tuner/freeze), strip (stages + utility), loop
+       (props/tracks). !important beats the inline display toggles the
+       per-feature buttons (tune / frz ▾ / util ▸) leave on those nodes. */
+    .rig-subpanel.collapsed > :not(.rig-subhead) { display: none !important; }
     .sp-subtitle {
       color: var(--muted); font-size: 0.7rem;
       letter-spacing: 0.06em; text-transform: lowercase;
@@ -2208,7 +2258,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #rig-strip-body {
       display: flex; flex-wrap: wrap; gap: 0.45rem;
       padding: 0.45rem 0.6rem;
-      max-height: 420px; overflow-y: auto;
+      /* No inner max-height/scroll: the strip sizes naturally and any
+         overflow scrolls the whole #rig-sections column, so delay/reverb
+         can never hide below an invisible nested fold. */
       align-items: stretch;
     }
     /* Zones — flex bases sized so a zone only shares a row when every stage
@@ -2351,9 +2403,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* In mini mode the signal / strip / loop subpanels + the header master fader
        are hidden; #rig-mini takes over with LED + one knob per effect. */
     #btn-rig-mini.active { border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.08); }
-    #looper-panel.mini #rig-signal,
-    #looper-panel.mini #rig-strip,
-    #looper-panel.mini #rig-loop { display: none !important; }
+    #looper-panel.mini #rig-sections { display: none !important; }
     #looper-panel.mini #rig-master-gain,
     #looper-panel.mini #btn-rig-master-mute { display: none; }
     #looper-panel.mini { height: auto !important; min-height: 0 !important; width: auto; }
@@ -2476,7 +2526,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #looper-body {
       flex: 1; min-height: 0;
       padding: 0.3rem;
-      overflow-y: auto;
+      /* Tracks scroll with the #rig-sections column, not a nested area. */
     }
     #looper-tracks { display: flex; flex-direction: column; gap: 0.2rem; }
     .looper-track {
@@ -3836,7 +3886,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <span class="sp-title">rig</span>
     <span class="sp-tag">// live station</span>
     <button class="ctrl-btn panel-mute-btn" id="btn-rig-master-mute" title="Mute all rig output (signal + loops)">live</button>
-    <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="1" step="0.01" value="1" title="Rig master output level" />
+    <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="2" step="0.01" value="1" title="Rig master output level (1.0 = unity; above 1.0 boosts into the limiter)" />
     <span class="rig-head-spacer"></span>
     <button class="ctrl-btn rig-mini-toggle active" id="btn-rig-mini" aria-pressed="true" title="Full rig view — click to condense to the pedalboard (⇧O)">▤</button>
     <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
@@ -3846,6 +3896,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        the signal / strip / loop subpanels when on: LED + one knob per effect,
        a tap-to-expand strobe tuner, and compact looper transport. -->
   <div id="rig-mini" style="display:none"></div>
+
+  <!-- All three subpanels stack inside ONE scroll column (#rig-sections) with
+       sticky subheads, so every section header stays reachable and nothing
+       hides below a nested scroll area. Each subhead's leading chevron
+       collapses that section's body — one consistent mechanism. -->
+  <div id="rig-sections">
 
   <!-- SIGNAL subpanel — the live instrument source: device, level/mute, scope. -->
   <section id="rig-signal" class="rig-subpanel">
@@ -3909,6 +3965,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <!-- STRIP subpanel — the rig channel strip (collapsible). -->
   <section id="rig-strip" class="rig-subpanel" style="display:none">
     <div class="rig-subhead">
+      <button class="ctrl-btn rig-collapse" id="btn-rig-strip-collapse" title="Collapse / expand the strip stages">▾</button>
       <span class="sp-subtitle">strip</span>
       <span class="rig-head-spacer"></span>
       <span class="sp-status" id="rig-latency" title="Estimated monitoring latency: browser output path + what enabled strip stages add (drive oversampling, comp lookahead). Input capture buffering isn't reported by the browser, so the true round trip is slightly higher."></span>
@@ -3950,6 +4007,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div id="looper-tracks"></div>
     </div>
   </section>
+
+  </div><!-- /#rig-sections -->
 </div>
 
 <!-- Vocoder panel — mic-driven channel vocoder for live narration. Sibling

@@ -70,6 +70,14 @@ it clips the waveform on true overs (slight aliasing) instead of riding a gain e
 acceptable for clip insurance. (The vocoder currently reimplements the compressor variant with a
 −1.5 dB ceiling — a known consolidation item in the backlog.)
 
+The rig master fader runs past unity into **boost** (`RIG_LEVEL_MAX`, 0–2× ≈ +6 dB of makeup for
+playing along with hotter sources); boost is safe because it drives the soft limiter (gain into a
+brickwall = loudness maximizer), and `looper.js` **force-engages** the rig limiter whenever the
+level sits above 1.0 (`setRigLimiter` refuses to disengage while boosted). Because the soft
+clipper is memoryless, its gain reduction is exact math on the pre-limiter peak:
+`softLimiterReductionDb(peak)` + the rig's pre-limiter `outputAnalyser` feed
+`looper-audio.getRigReductionDb()`, which drives the mixer's rig GR bar.
+
 ---
 
 ## mixer.js — the channel surface
@@ -78,7 +86,11 @@ acceptable for clip insurance. (The vocoder currently reimplements the compresso
 meters for 5 channels (mic, rig, strudel, seq, vox). Each channel adapter normalizes the owning
 subsystem's setter/getter shape and reads meters from `audio.getLevels()` while open. It re-plumbs
 no audio. The "rig" channel drives the looper (which owns the rig master), not the rig strip
-directly.
+directly. Boost-capable faders (max > 1) tint their over-unity span; the rig channel additionally
+shows a thin amber **gain-reduction bar** along the top of its peak meter (via
+`looper.getRigReductionDb()`, full width ≈ 12 dB), glows its `lim` button while the limiter is
+actively reducing, and locks the button on while the fader sits above 1.0 (the force-engage rule
+in `looper.js`).
 
 ---
 

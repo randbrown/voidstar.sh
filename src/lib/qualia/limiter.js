@@ -18,6 +18,14 @@
 
 export const LIMITER_CEILING_DB = -1.0;   // ceiling when engaged — just under 0 dBFS
 
+// Rig master fader ceiling. 1.0 is nominal (reference-trimmed source); the
+// span above it is BOOST — up to +6 dB of makeup so the rig can hold its own
+// against hotter tracks (strudel/seq buses, music playing from another app).
+// Boost is only safe because it drives the soft limiter below (gain into a
+// brickwall = a loudness maximizer), so looper.js force-engages the rig
+// limiter whenever the level sits above 1.0.
+export const RIG_LEVEL_MAX = 2;
+
 /** Create a brickwall limiter in `ctx`, engaged per the optional `on` flag. */
 export function makeLimiter(ctx, on = true) {
   const node = ctx.createDynamicsCompressor();
@@ -87,4 +95,18 @@ export function makeSoftLimiter(ctx, on = true) {
 export function setSoftLimiterEngaged(node, on) {
   if (!node) return;
   try { node.curve = on ? softClipCurve : null; } catch {}
+}
+
+/** dB of gain reduction the soft-clip curve applies at linear peak `peak`.
+ *  Exact math, not measurement: the clipper is memoryless, so reduction is a
+ *  pure function of the instantaneous input level — feed it the peak of a
+ *  pre-limiter analyser window and you get the GR meter reading for free.
+ *  Input beyond the curve domain (|x| > 1) clamps to the curve's end value
+ *  (WaveShaper spec), so reduction keeps growing with the input level. */
+export function softLimiterReductionDb(peak) {
+  const p = Math.abs(Number(peak) || 0);
+  if (p <= SOFT_KNEE) return 0;
+  const span = SOFT_CEIL - SOFT_KNEE;
+  const out = SOFT_KNEE + span * Math.tanh((Math.min(p, 1) - SOFT_KNEE) / span);
+  return 20 * Math.log10(p / out);
 }

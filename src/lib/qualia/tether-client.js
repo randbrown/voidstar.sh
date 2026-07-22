@@ -360,7 +360,9 @@ export async function initTetherClient(root) {
           padBtn('reverb', 'reverbToggle', { sub: 'on / off', lit: 'reverb', flip: 'reverbOn' }),
           padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio', lit: 'pause', flip: 'paused' })),
         el('h3', 'sp-h', 'levels'),
-        sliderRow('rig master', 'rig.level', 0, 1.5, 0.01, 1),
+        // 0–2 matches the rig's real range (RIG_LEVEL_MAX): >1.0 is boost into
+        // the rig limiter, which the leader force-engages while boosted.
+        sliderRow('rig master', 'rig.level', 0, 2, 0.01, 1),
         sliderRow('delay mix', 'delay.mix', 0, 1, 0.01, 0.3),
         sliderRow('reverb mix', 'reverb.mix', 0, 1, 0.01, 0.3),
         el('div', 'sp-note', 'sliders send absolute values, like MIDI CC knobs — hold a ↺ to snap one back to default'),
