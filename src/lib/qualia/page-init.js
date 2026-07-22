@@ -45,6 +45,7 @@ import {
   stepLabel as phaseStepLabel,
 } from './phase-pool.js';
 import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror } from './video.js';
+import nullQuale       from './fx/null.js';
 import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
 import neuralField     from './fx/neural-field.js';
@@ -160,7 +161,9 @@ export function initQualiaPage() {
   // ── Registry ──────────────────────────────────────────────────────────────
   const mesh = createMesh();
   // Registration order drives the fx-select dropdown order AND the new-user
-  // default (mesh.ids()[0] — see initialFx in boot). Spectrum leads on both.
+  // default (mesh.ids()[0] — see initialFx in boot). Null leads both: the
+  // blank quale is what shows when nothing else has been specified.
+  mesh.register(nullQuale);
   mesh.register(spectrum);
   mesh.register(chladni);
   mesh.register(singularityLens);
@@ -4037,7 +4040,9 @@ export function initQualiaPage() {
     if (ids.length < 2) return;
     const excluded = loadCycleExcluded();
     const totalN   = ids.length;
-    const inPool   = (id) => isInCycle(excluded, id, totalN);
+    // autoPick:false quales (null) never enter the automatic rotation —
+    // a blank screen should only ever be an explicit choice.
+    const inPool   = (id) => mesh.get(id)?.autoPick !== false && isInCycle(excluded, id, totalN);
     const cur = core.activeId();
     let nextId;
     if (autoCycleStyle === 'random') {
@@ -4207,6 +4212,9 @@ export function initQualiaPage() {
     const excluded = loadCycleExcluded();
     const curId = core.activeId();
     for (const mod of mesh.list()) {
+      // autoPick:false quales are hard-excluded from the rotation, so a
+      // checkbox for them would lie — don't list them.
+      if (mod.autoPick === false) continue;
       const row = document.createElement('label');
       row.className = 'cycle-mgr-row' + (mod.id === curId ? ' active' : '');
       const cb = document.createElement('input');

@@ -128,12 +128,17 @@ export function installCodeApi(deps) {
     // — quales —
     /** List registered quales as [{id, name}] in dropdown order. */
     quales: () => mesh.list().map(m => ({ id: m.id, name: m.name })),
-    /** Active quale id; pass an id/name (fuzzy) to switch. */
-    quale: (q) => (q === undefined ? core.activeId() : setQuale(q)),
+    /** Active quale id; pass an id/name (fuzzy) to switch. `null` → the null quale. */
+    quale: (q) => (q === undefined ? core.activeId() : setQuale(q === null ? 'null' : q)),
     nextQuale: () => { page.qualeStep(+1); return core.activeId(); },
     prevQuale: () => { page.qualeStep(-1); return core.activeId(); },
+    /** Blank the fx layer (switch to the null quale). Hydra + overlay stay live. */
+    nullQuale: () => setQuale('null'),
     randomQuale: () => {
-      const ids = mesh.ids().filter(id => id !== core.activeId());
+      // autoPick:false quales (null) don't come up on a random roll.
+      const ids = mesh.list()
+        .filter(m => m.autoPick !== false && m.id !== core.activeId())
+        .map(m => m.id);
       return ids.length ? setQuale(ids[(Math.random() * ids.length) | 0]) : core.activeId();
     },
 

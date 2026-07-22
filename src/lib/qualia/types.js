@@ -171,6 +171,12 @@
  *           of the global DPR cap (default 1.5). Heavy fragment shaders
  *           (e.g. raymarchers) can declare 1.0 to halve fragment work on
  *           high-DPI screens. Lower wins.
+ * @property {boolean} [autoPick]
+ *           Set false to opt out of every AUTOMATIC picker — auto-cycle,
+ *           randomQuale(), the audience vote ballot. Explicit selection
+ *           (dropdown, quale(), next/prev) still reaches it. Default true.
+ *           The `null` quale uses this so a blank screen never lands by
+ *           surprise mid-set.
  * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any, paramsContainer?:HTMLElement, applyPreset?:(name:string) => boolean }) => Promise<QFXInstance>|QFXInstance} create
  *           `paramsContainer` is the same DOM node the auto-generated param
  *           panel renders into. Quales with extra UI (file pickers, playlist

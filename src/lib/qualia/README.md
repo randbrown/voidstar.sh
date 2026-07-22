@@ -63,6 +63,10 @@ That's it. UI controls are generated from `params`. Persistence is automatic. Th
 - **`autoPhase: { steps: [...] }`** — declares the topbar `phase` button's behaviour (one partial
   param dict applied per interval). Omit it and the button reads "phase n/a".
 - **`maxDpr`** — per-quale DPR cap on top of the global 1.5× (heavy raymarchers declare `1.0`).
+- **`autoPick: false`** — opts the quale out of every *automatic* picker (auto-cycle,
+  `randomQuale()`, the audience vote ballot); explicit selection (dropdown, `quale()`,
+  next/prev) still reaches it. The [`null`](./fx/null.js) quale — the blank default that
+  leads registration — declares this so a dark screen never lands by surprise mid-set.
 - **`crowd.*` modulation channels** — when entanglement is open, `field.crowd` (audience input) is
   exposed as modulator sources (`crowd.energy`, `crowd.rise`, …) exactly like `audio.*`/`pose.*`.
   All-zero when no one is connected. See `modulation.js`.

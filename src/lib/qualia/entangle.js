@@ -105,7 +105,9 @@ export function createEntangle({ core, mesh, actions = {} }) {
     }
     return {
       activeFx: activeFx(),
-      fxList: modes.vote ? mesh.list().map(m => ({ id: m.id, name: m.name || m.id })) : [],
+      // autoPick:false quales (null) stay off the ballot — the crowd
+      // shouldn't be able to vote the screen blank.
+      fxList: modes.vote ? mesh.list().filter(m => m.autoPick !== false).map(m => ({ id: m.id, name: m.name || m.id })) : [],
       // Only advertise `phase` when the host actually supplied a phaseNext.
       modes: { ...modes, phase: modes.phase && phaseAvailable },
       // Does the active quale map crowd.* → field? Lets the phone tell the
@@ -202,7 +204,8 @@ export function createEntangle({ core, mesh, actions = {} }) {
     const now = performance.now();
     if (now - p.tVote < VOTE_MIN_MS) return;
     p.tVote = now;
-    if (!mesh.get(data.fxId)) return;             // unknown fx → ignore
+    const mod = mesh.get(data.fxId);
+    if (!mod || mod.autoPick === false) return;   // unknown / off-ballot fx → ignore
     p.vote = data.fxId;
     fire('tally', tally());
   }
