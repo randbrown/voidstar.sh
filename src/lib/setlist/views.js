@@ -10,6 +10,7 @@ import { renderBandcampEmbed, renderSoundcloudEmbed } from './media.js';
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
+import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
@@ -1042,6 +1043,126 @@ export async function renderSetlistEdit(root, setlistId) {
   };
   form.addEventListener('change', save);
 
+  // Scrape playlist — re-read the Spotify reference playlist above and apply
+  // what changed to this setlist: new tracks inserted in place, tracks gone
+  // from the playlist offered for removal (originals never on it stay put),
+  // the playlist's order applied within each set, and artist / spotify link
+  // filled on matched songs (fill-empty, like every matching pass).
+  const scrapeSection = el('div', 'sl-section');
+  scrapeSection.innerHTML = '<div class="sl-section-title">Scrape Playlist</div>';
+  const scrapeStatus = el('div', 'sl-hint');
+  const scrapePlaylistBtn = btn('scrape playlist → update setlist', 'sl-btn-ghost', async () => {
+    const url = document.getElementById('sl-spotify').value.trim();
+    if (!url) { alert('Set the Spotify Playlist URL above first — scrape reads that playlist.'); return; }
+    await save(); // pick up a just-pasted URL before reading it
+    scrapePlaylistBtn.disabled = true;
+    scrapeStatus.textContent = 'reading playlist…';
+    try {
+      const { tracks, problems } = await getReferencePlaylistTracks(sl, {});
+      if (!tracks.length) {
+        scrapeStatus.textContent = `couldn't read the playlist: ${problems[0] || 'it came back empty'}`;
+        return;
+      }
+      // A partial scrape must not read as "the tail was deleted" — skip
+      // removal detection when the page didn't render the whole playlist.
+      const truncated = problems.some((p) => /scraped \d+ of \d+ tracks/.test(p));
+
+      const ids = [...new Set(sl.sets.flatMap((s) => s.songIds))];
+      const songs = (await Promise.all(ids.map((id) => store.getSong(id)))).filter(Boolean);
+      const songById = new Map(songs.map((s) => [s.id, s]));
+      const diff = diffPlaylistAgainstSets(tracks, sl.sets, songs);
+
+      // Fill-empty updates on matched songs (counted now, written on apply).
+      const fills = diff.matches.filter((m) =>
+        (!songById.get(m.songId).artist && m.track.artist) ||
+        (!songById.get(m.songId).spotifyUri && m.track.spotifyUrl));
+
+      // Order delta, isolated from inserts/removals.
+      const reordered = applyPlaylistToSets(sl.sets, diff.matches, []);
+      const orderChanged = JSON.stringify(reordered.map((s) => s.songIds)) !==
+        JSON.stringify(sl.sets.map((s) => s.songIds));
+
+      const removalCandidates = truncated ? [] : diff.unmatchedSongIds;
+      if (!diff.newTracks.length && !orderChanged && !fills.length && !removalCandidates.length) {
+        scrapeStatus.textContent = 'setlist already matches the playlist ✓';
+        return;
+      }
+
+      const nameOf = (id) => songById.get(id)?.title || id;
+      const listSome = (titles) =>
+        titles.slice(0, 8).join(', ') + (titles.length > 8 ? `, +${titles.length - 8} more` : '');
+      const lines = [];
+      if (diff.newTracks.length) lines.push(`• add ${diff.newTracks.length} new song(s): ${listSome(diff.newTracks.map((t) => t.track.title))}`);
+      if (orderChanged) lines.push('• re-order songs to match the playlist');
+      if (fills.length) lines.push(`• fill artist / spotify link on ${fills.length} matched song(s) (empty fields only)`);
+      if (removalCandidates.length) lines.push(`• ${removalCandidates.length} song(s) aren't on the playlist: ${listSome(removalCandidates.map(nameOf))} — you'll choose whether to remove them next`);
+      if (!confirm(`Apply the playlist to this setlist?\n\n${lines.join('\n')}`)) {
+        scrapeStatus.textContent = 'cancelled — nothing changed';
+        return;
+      }
+      let removeIds = [];
+      if (removalCandidates.length) {
+        removeIds = confirm(`Remove the ${removalCandidates.length} song(s) not on the playlist?\n\n${listSome(removalCandidates.map(nameOf))}\n\nOK removes them from this setlist (they stay in the library); Cancel keeps them here.`)
+          ? removalCandidates : [];
+      }
+
+      scrapeStatus.textContent = 'applying…';
+      pushUndo();
+      // New tracks: reuse an exact-titled library song, else create one; the
+      // track's artist/spotify link ride along fill-empty like auto-link.
+      const inserts = [];
+      let created = 0;
+      for (const nt of diff.newTracks) {
+        let song = await store.findSongByTitle(nt.track.title);
+        if (!song) {
+          song = store.createSong(nt.track.title, nt.track.artist || '');
+          if (nt.track.spotifyUrl) song.spotifyUri = nt.track.spotifyUrl;
+          await store.putSong(song);
+          created++;
+        } else {
+          let changed = false;
+          if (!song.artist && nt.track.artist) { song.artist = nt.track.artist; changed = true; }
+          if (!song.spotifyUri && nt.track.spotifyUrl) { song.spotifyUri = nt.track.spotifyUrl; changed = true; }
+          if (changed) await store.putSong(song);
+        }
+        inserts.push({ songId: song.id, trackIndex: nt.trackIndex });
+      }
+      let artistFilled = 0;
+      let linkFilled = 0;
+      for (const m of diff.matches) {
+        const song = songById.get(m.songId);
+        let changed = false;
+        if (!song.artist && m.track.artist) { song.artist = m.track.artist; changed = true; artistFilled++; }
+        if (!song.spotifyUri && m.track.spotifyUrl) { song.spotifyUri = m.track.spotifyUrl; changed = true; linkFilled++; }
+        if (changed) await store.putSong(song);
+      }
+      sl.sets = applyPlaylistToSets(sl.sets, diff.matches, inserts, removeIds);
+      await store.putSetlist(sl);
+
+      const report = [];
+      if (inserts.length) report.push(`added ${inserts.length} song(s)${created ? ` (${created} new to the library)` : ''}`);
+      if (removeIds.length) report.push(`removed ${removeIds.length} (still in the library)`);
+      if (orderChanged) report.push('order updated to match the playlist');
+      if (artistFilled || linkFilled) report.push(`filled ${artistFilled} artist(s), ${linkFilled} spotify link(s)`);
+      if (!report.length) report.push('nothing needed changing');
+      const warn = problems.length ? `\n\nNotes:\n${problems.map((p) => `• ${p}`).join('\n')}` : '';
+      alert(`Playlist applied: ${report.join('; ')}.${warn}`);
+      refresh();
+    } catch (e) {
+      console.error('[setlist] scrape playlist failed:', e);
+      scrapeStatus.textContent = `scrape failed: ${e.message}`;
+    } finally {
+      scrapePlaylistBtn.disabled = false;
+    }
+  });
+  scrapePlaylistBtn.title = 'Re-read the Spotify reference playlist and apply its adds / removals / order to this setlist. Removals are confirmed separately; ↶ undo restores the previous sets.';
+  scrapeSection.appendChild(scrapePlaylistBtn);
+  scrapeSection.appendChild(scrapeStatus);
+  const scrapeHint = el('div', 'sl-hint');
+  scrapeHint.textContent = 'Re-reads the reference playlist and applies what changed: new tracks are added in place, tracks no longer on it are offered for removal, the playlist\'s order is applied within each set, and artist / spotify links fill in on matched songs (empty fields only — hand-set values are never touched).';
+  scrapeSection.appendChild(scrapeHint);
+  root.appendChild(scrapeSection);
+
   // Vocalist legend
   const vocSection = el('div', 'sl-section');
   vocSection.innerHTML = '<div class="sl-section-title">Vocalist Legend</div>';
@@ -1092,6 +1213,15 @@ export async function renderSetlistEdit(root, setlistId) {
   textarea.placeholder = 'Paste setlist text here...\n\nThe Grey Eagle 6/14\nSet 1:\n1  Song Title  C\n2  Crazy (Patsy Cline cover)\n3  Another Song  S';
   textarea.rows = 8;
   importSection.appendChild(textarea);
+  // Additive by default: importing a paste adds what's new instead of wiping
+  // the sets — the checkbox opts into the old replace-everything behavior.
+  const replaceLabel = el('label', 'sl-import-mode');
+  const replaceCheck = el('input');
+  replaceCheck.type = 'checkbox';
+  replaceLabel.appendChild(replaceCheck);
+  replaceLabel.appendChild(document.createTextNode(
+    ' replace current sets (unchecked: pasted songs are added, ones already here stay put)'));
+  importSection.appendChild(replaceLabel);
   importSection.appendChild(btn('import', 'sl-btn-primary', async () => {
     const text = textarea.value.trim();
     if (!text) return;
@@ -1100,11 +1230,13 @@ export async function renderSetlistEdit(root, setlistId) {
     else localStorage.removeItem(IMPORT_ARTIST_KEY);
     const parsed = parseTextList(text, { defaultArtist });
     if (!parsed.sets.length) { alert('No songs found.'); return; }
+    const replaceMode = replaceCheck.checked;
 
-    let importedCount = 0;
     let artistCount = 0;
-    const newSets = [];
+    const resolvedSets = [];
 
+    // Resolve every pasted song to a library song (creating as needed) and
+    // apply vocalist overrides — identical in both modes.
     for (const pSet of parsed.sets) {
       const songIds = [];
       for (const ps of pSet.songs) {
@@ -1124,13 +1256,34 @@ export async function renderSetlistEdit(root, setlistId) {
           if (!sl.songOverrides[song.id]) sl.songOverrides[song.id] = {};
           sl.songOverrides[song.id].vocalist = ps.vocalist;
         }
-        importedCount++;
       }
-      newSets.push({ name: pSet.name, songIds });
+      resolvedSets.push({ name: pSet.name, songIds });
     }
 
     pushUndo();
-    sl.sets = newSets;
+    let addedCount = 0;
+    let alreadyCount = 0;
+    if (replaceMode) {
+      sl.sets = resolvedSets;
+      addedCount = resolvedSets.reduce((n, s) => n + s.songIds.length, 0);
+    } else {
+      // Additive: paste's Nth set feeds the setlist's Nth set (extra sets are
+      // appended); a song already anywhere on the setlist stays where it is.
+      const existing = new Set(sl.sets.flatMap((s) => s.songIds));
+      resolvedSets.forEach((rs, i) => {
+        let target = sl.sets[i];
+        if (!target) {
+          target = { name: rs.name, songIds: [] };
+          sl.sets.push(target);
+        }
+        for (const id of rs.songIds) {
+          if (existing.has(id)) { alreadyCount++; continue; }
+          existing.add(id);
+          target.songIds.push(id);
+          addedCount++;
+        }
+      });
+    }
     const metaNotes = [];
     const m = parsed.meta || {};
     if (!sl.venue && (m.venue || m.name)) {
@@ -1143,7 +1296,10 @@ export async function renderSetlistEdit(root, setlistId) {
     }
     await store.putSetlist(sl);
     textarea.value = '';
-    let msg = `Imported ${importedCount} songs across ${newSets.length} set(s).`;
+    let msg = replaceMode
+      ? `Imported ${addedCount} songs across ${sl.sets.length} set(s) (replaced the previous sets).`
+      : `Added ${addedCount} song(s).`;
+    if (alreadyCount) msg += `\n${alreadyCount} already on the setlist were left where they are.`;
     if (artistCount) msg += `\nArtist filled on ${artistCount} song(s).`;
     if (metaNotes.length) msg += `\nFrom the header line: ${metaNotes.join(', ')}.`;
     alert(msg);

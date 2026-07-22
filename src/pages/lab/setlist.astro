@@ -408,6 +408,17 @@ const buildStamp = readBuildStamp();
     .sl-textarea::placeholder { color: var(--text-dim); }
     .sl-textarea-sm { min-height: 3rem; }
 
+    .sl-import-mode {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      margin: 0.5rem 0;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      cursor: pointer;
+    }
+    .sl-import-mode input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+
     .sl-row { display: flex; gap: 0.5rem; }
     .sl-flex1 { flex: 1; }
     .sl-hint {

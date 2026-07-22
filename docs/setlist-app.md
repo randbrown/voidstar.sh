@@ -290,11 +290,58 @@ rule-based** — no model call, works offline, deterministic:
   the band name once. Existing library songs get it fill-empty only.
 - The trailing single capital letter is still the **vocalist code**
   (per-setlist override), parsed before artist extraction.
+- **Additive by default.** Importing adds the paste's songs to the existing
+  sets (paste's Nth set → setlist's Nth set, extra sets appended; a song
+  already anywhere on the setlist stays where it is and is counted in the
+  report, so re-importing an updated text just adds what's new). The
+  **"replace current sets" checkbox** opts into the old wipe-and-replace
+  behavior. Both modes push the edit page's undo stack first, and vocalist
+  codes apply either way.
 
 Next to the import button, **"set artist on all songs…"** bulk-fills an
 artist across every song already in the setlist — fill-empty like every
 other bulk pass (songs that have an artist are skipped and counted in the
 report).
+
+## Scrape playlist → update setlist (`playlist-diff.js`)
+
+The setlist-edit page's **"Scrape Playlist"** section treats the setlist's
+Spotify reference playlist as the source of truth and applies what changed
+to the sets — the counterpart to the song page's per-song "scrape playlist"
+relink button, but for the whole setlist's membership and order. The button
+reads the playlist via `getReferencePlaylistTracks` (user session → worker
+API → public-page scrape fallback, same ladder and error reporting as
+auto-link), diffs it against the sets, previews the changes in a confirm,
+then applies:
+
+- **Matching** is two-pass in `diffPlaylistAgainstSets`
+  (`src/lib/setlist/playlist-diff.js`, pure data-in/data-out — node-tested
+  by `scripts/check-setlist-playlist-diff.mjs` via `npm run check`): exact
+  Spotify track-id first (a retitled-but-linked song must not read as
+  deleted + added), then the same fuzzy title/artist matcher auto-link uses
+  (`match.js`, threshold 0.7, artist mismatch sinks a candidate). Each track
+  claims at most one setlist song.
+- **Inserts** — playlist tracks not on the setlist are added right after the
+  song of their nearest preceding playlist neighbor (consecutive new tracks
+  chain in playlist order; no placed neighbor → top of the first set). New
+  songs reuse an exact-titled library song when one exists, else are created
+  with the track's artist + spotify link.
+- **Removals** — setlist songs not matched by any track are offered in a
+  **separate confirm** (never silent: an original that was never on Spotify
+  looks identical to a deleted track, so the performer decides). Removed
+  songs stay in the library. When the playlist was read by a **truncated**
+  page scrape, removal detection is skipped entirely — a half-rendered page
+  must not read as "the tail was deleted".
+- **Re-ordering** — within each set, matched songs re-sort into playlist
+  order; unmatched songs hold their exact positions, and set boundaries are
+  never crossed (a playlist is one flat list — which set a song is in stays
+  the performer's call).
+- **Updates** — matched songs get artist / `spotifyUri` filled from the
+  track, empty fields only, per the auto-link-never-overwrites rule.
+
+The apply pushes the edit page's **↶ undo** stack first (sets membership and
+order restore; created songs stay in the library, same as import undo), and
+every failure path lands its real reason in the section's status line.
 
 ## Backup/Restore vs. Sync — these are different features
 
