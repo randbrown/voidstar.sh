@@ -22,7 +22,7 @@ All paths are under `src/lib/qualia/`.
                           all qualia fx (visuals)
 
  rig (native ctx):  in → GEQ(7-band) → comp → Earth → Metal → neural amp → EQ → cab IR
-                       → HPF → ping-pong delay → reverb → PEQ(8-band parametric)
+                       → HPF → noise gate → ping-pong delay → reverb → PEQ(8-band parametric)
                        → pan → rig master → limiter → out
  vocoder (own ctx): mic → vocoder bank ⨉ carrier → clarity chain → limiter → mute gate → out
 ```
@@ -92,7 +92,7 @@ still delays the signal by its ~6 ms lookahead, and this is the live monitoring 
 
 ```
 in → GEQ(7-band graphic) → comp → Earth(drive) → Metal(drive)
-   → neural amp → EQ(lo/mid/hi) → cab(IR) → HPF
+   → neural amp → EQ(lo/mid/hi) → cab(IR) → HPF → gate
    → ping-pong delay → reverb → PEQ(8-band parametric) → pan → output
 ```
 
@@ -103,6 +103,16 @@ in → GEQ(7-band graphic) → comp → Earth(drive) → Metal(drive)
   and share the dry signal's room. **Comp** sits up front as an instrument compressor (clarity /
   attack into the drives); output limiting stays at the rig master (`limiter.js`), never in the
   strip. The **HPF** is post-cab: it de-woofs the cab'd tone and keeps low mud out of the wash.
+- **Gate** = the noise gate for the drives' hiss (the vocoder's carrier-gate topology ported to
+  the rig): a VCA between the HPF and the time fx, driven directly on its gain `AudioParam` by a
+  sidechain envelope — rectify + LPF on the **clean strip input** (post-distortion detection can't
+  tell hiss from signal: after two cascaded clippers they sit at nearly the same level) — mapped
+  through a soft-knee smoothstep WaveShaper curve (an expander, not a chattery hard gate). Placed
+  post-cab it silences every upstream hiss source (comp, drives, amp-capture idle noise) while a
+  closing gate never chops the delay/reverb tails. All native biquads/gains: zero added latency,
+  toggles by curve swap (unity curve = bypass), no graph rewiring. `thresh` squares the knob for
+  fine low-end resolution; `release` sweeps the envelope LPF 30 → 6 Hz (one symmetric filter — the
+  slow end trades softened pick attack for chatter-free decays).
 - **Three EQs spread along the chain**, one job each: **geq** at the front, shaping the raw
   instrument before comp + drives (Boss GE-7-voiced graphic: 7 octave-spaced peaking bands
   100 Hz–6.4 kHz ±15 dB + level); **eq** between amp and cab, an FX-loop tone stack on the amp'd

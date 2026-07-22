@@ -36,7 +36,11 @@ turns this off for the old replace-the-armed-take behavior.
 | `worklets/looper-recorder.js` | The audio-thread processor: armed real-time capture (posts 128-frame quanta) **and** the always-on ~40 s ring for retro grabs (slice posted only on `{cmd:'grab'}`, so lookback is free until used). |
 
 **Data flow.** Record: mic → strip → recorder worklet → per-channel `Float32` chunks on the main
-thread → on stop, sliced to the grid-snapped region with 0.5 s headroom → `AudioBuffer`. Playback:
+thread → on stop, sliced to the grid-snapped region with 0.5 s headroom → `AudioBuffer`. The
+recorder taps the strip **output** (post-StereoPanner), so takes — and retro grabs from the ring —
+are **always stereo**, carrying the strip's ping-pong delay / pan / stereo reverb; the rig
+mono/stereo toggle is an *input*-routing mode only (mono = sum a single-input instrument to
+centre). Playback:
 per-track channel (gain + optional stretch node) + transient voice (looping `BufferSource` for
 varispeed, or stretch node for fit + preserve-pitch) → loop master → rig master → limiter →
 destination, with the analyser adopted into `audio.js` as `'looper'`. Sync uses only **relative**

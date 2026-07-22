@@ -21,6 +21,12 @@ import { createTransport } from './entangle-transport-cf.js';
 import { SYNC_APP_ID, ST, readControlFromHash } from './sync-protocol.js';
 
 const SLIDER_DEBOUNCE_MS = 40;
+// Press-and-hold duration for the deliberate-confirmation chips (slider ↺
+// resets, the ⏻ re-arm). Module scope, NOT inside initTetherClient: the ⏻
+// chip is wired before the no-creds early return, so a function-scoped const
+// after that return would never initialize on an unlinked launch (TDZ throw
+// on the first tap).
+const HOLD_RESET_MS = 400;
 // Pairing memory — the room + control token from the last scanned QR. This is
 // what lets tether run as an INSTALLED app: a home-screen launch starts at the
 // bare /lab/tether (no URL fragment), and reconnects from here. A newly
@@ -57,6 +63,51 @@ export async function initTetherClient(root) {
     bodyEl.innerHTML = '';
     if (msg) bodyEl.append(el('div', 'sp-note', msg));
   };
+
+  // ── Screen wake lock — a stage remote must not dim mid-set ────────────────
+  // The OS releases the lock whenever the page hides; re-request on every
+  // return to visible. Best-effort everywhere (iOS < 16.4 has no API).
+  const holdAwake = async () => {
+    try { await navigator.wakeLock?.request('screen'); } catch {}
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') holdAwake();
+  });
+  holdAwake();
+
+  // ── ⏻ deactivate ("pocket lock") ──────────────────────────────────────────
+  // Tap the chip in the status row to deactivate the whole pad: the send
+  // helpers go inert and the UI dims (CSS also kills pointer events, so
+  // nothing even flashes). Re-arming takes a deliberate ~0.4 s hold — same
+  // fill-sweep idiom as the slider ↺ chips — because a pocket can tap but
+  // can't hold steady. Not persisted: a fresh launch always starts live.
+  let padsLive = true;
+  const holdBtn = root.querySelector('[data-hold]');
+  const holdNote = root.querySelector('[data-holdnote]');
+  const setPadsLive = (on) => {
+    padsLive = on;
+    root.classList.toggle('deactivated', !on);
+    if (holdBtn) {
+      holdBtn.textContent = on ? '⏻ live' : '⏻ held';
+      holdBtn.title = on ? 'tap to deactivate the pad' : 'hold to re-arm';
+      holdBtn.classList.toggle('off', !on);
+    }
+    if (holdNote) holdNote.hidden = on;
+    buzz(on ? 20 : 10);
+  };
+  if (holdBtn) {
+    let armT = null;
+    const cancelArm = () => { clearTimeout(armT); armT = null; holdBtn.classList.remove('holding'); };
+    holdBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (padsLive) { setPadsLive(false); return; }   // locking is instant
+      try { holdBtn.setPointerCapture(e.pointerId); } catch {}
+      holdBtn.classList.add('holding');
+      armT = setTimeout(() => { cancelArm(); setPadsLive(true); }, HOLD_RESET_MS);
+    });
+    holdBtn.addEventListener('pointerup', cancelArm);
+    holdBtn.addEventListener('pointercancel', cancelArm);
+  }
 
   // Browser-tab fullscreen toggle. Hidden when running as the installed app
   // (display-mode fullscreen/standalone) — there's no chrome to shed there.
@@ -174,13 +225,17 @@ export async function initTetherClient(root) {
   window.addEventListener('pagehide', () => { try { transport.send(ST.SBYE, 1); } catch {} });
 
   // ── Send helpers ──────────────────────────────────────────────────────────
-  const act = (a) => { buzz(); try { transport.send(ST.CTL, { k: key, a }); } catch {} };
+  // Every outbound control rides one of these three, so the ⏻ deactivate
+  // guard here locks the entire pad at the source (no relay traffic).
+  const act = (a) => { if (!padsLive) return; buzz(); try { transport.send(ST.CTL, { k: key, a }); } catch {} };
   const sliderTimers = new Map();
   const slide = (s, v) => {
+    if (!padsLive) return;
     clearTimeout(sliderTimers.get(s));
     sliderTimers.set(s, setTimeout(() => { try { transport.send(ST.CTL, { k: key, s, v }); } catch {} }, SLIDER_DEBOUNCE_MS));
   };
   const tap = (voice) => {
+    if (!padsLive) return;
     buzz(12);
     try { transport.send(ST.CTL, { k: key, hit: voice, w: writeArmed ? 1 : 0 }); } catch {}
     // Optimistic history depth — a written tap is undoable (and clears redo)
@@ -218,11 +273,11 @@ export async function initTetherClient(root) {
     if (opts.flip) b.addEventListener('click', () => { state[opts.flip] = !state[opts.flip]; reflect(); });
     return b;
   }
-  // Hold-to-reset chip — press and hold ~0.4 s to snap a slider back to its
-  // default; the fill sweep is the confirmation, lifting early cancels.
-  // Replaced the old double-tap: a deliberate hold on a separate target can't
-  // be grazed mid-set the way a tap on the slider itself could.
-  const HOLD_RESET_MS = 400;
+  // Hold-to-reset chip — press and hold ~0.4 s (HOLD_RESET_MS) to snap a
+  // slider back to its default; the fill sweep is the confirmation, lifting
+  // early cancels. Replaced the old double-tap: a deliberate hold on a
+  // separate target can't be grazed mid-set the way a tap on the slider
+  // itself could.
   function holdReset(title, onReset) {
     const b = el('button', 'sp-reset', '↺');
     b.title = title;
