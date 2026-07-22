@@ -2271,6 +2271,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const miniKnobs = new Map();   // `${stage}:${param}` -> { knob, valEl, min, max, fmt }
   const miniLeds  = new Map();   // stage ('master' | effect id) -> led element
   let miniTunerSq = null, miniTunerMount = null, miniPlayLed = null, _miniBuilt = false;
+  let miniFreezeBtn = null, miniFreezePop = null;   // refreshFreezeBtn mirrors depth here
 
   function stripParamSpec(stage, param) {
     return STRIP_SCHEMA.find(s => s.id === stage)?.params?.find(p => p.id === param);
@@ -2374,6 +2375,22 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const trCap = document.createElement('span'); trCap.className = 'rig-mini-cap'; trCap.textContent = 'loop';
     tr.append(trRow, trCap);
 
+    // Freeze stack — the same four pad actions as the full panel's frz button
+    // + its ▾ row, through the same handlers, so the depth badge and
+    // pop-disable mirror every input path (button, `;'\⌫` keys, MIDI, tether).
+    const fz = document.createElement('div'); fz.className = 'rig-mini-transport';
+    const fzRow = document.createElement('div'); fzRow.className = 'rig-mini-tr-row';
+    miniFreezeBtn = mkBtn('frz', 'Freeze (;) — grab the last moment of the processed signal as an endless pad, LAYERING a new pad each tap (Frippertronics stack)', () => { freezePush(); });
+    miniFreezePop = mkBtn('pop', "Pop (') — remove the top layer with a release fade; the remaining layers swell to hold the loudness", () => { freezePop(); });
+    fzRow.append(
+      miniFreezeBtn,
+      miniFreezePop,
+      mkBtn('↻', 'Re-grab (\\) — replace the TOP layer with a fresh grab (short crossover), without adding a layer', () => { freezeRegrab(); }),
+      mkBtn('✕', 'Clear (⌫) — release the whole stack (each layer fades over the release time)', () => { freezeClear(); }),
+    );
+    const fzCap = document.createElement('span'); fzCap.className = 'rig-mini-cap'; fzCap.textContent = 'freeze';
+    fz.append(fzRow, fzCap);
+
     // Master pedal (right) — rig level + mute LED (lit = live).
     const master = buildMiniPedal({
       stage: 'master', param: 'level', label: 'rig',
@@ -2382,8 +2399,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
       toggle: () => setRigMuted(!model.rigMuted),
     });
 
-    // Order: tuner · effects · looper · master (master ends on the far right).
-    row.append(tune, makeSep(), effects, makeSep(), tr, makeSep(), master);
+    // Order: tuner · effects · freeze · looper · master (master far right).
+    row.append(tune, makeSep(), effects, makeSep(), fz, makeSep(), tr, makeSep(), master);
 
     miniTunerMount = document.createElement('div'); miniTunerMount.id = 'rig-mini-tuner-mount';
     miniEl.append(row, miniTunerMount);
@@ -2414,6 +2431,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     refreshMiniTransport();
     refreshMiniTuner();
+    refreshFreezeBtn();
   }
   function refreshMiniTransport() {
     if (!miniPlayLed) return;
@@ -3273,6 +3291,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
       btnFreeze.textContent = n > 1 ? `frz${n}` : 'frz';   // depth badge
     }
     if (btnFreezePop) btnFreezePop.disabled = n === 0;
+    // Mini-mode mirror (null until the pedalboard view is first built).
+    if (miniFreezeBtn) {
+      miniFreezeBtn.classList.toggle('active', n > 0);
+      miniFreezeBtn.textContent = n > 1 ? `frz${n}` : 'frz';
+    }
+    if (miniFreezePop) miniFreezePop.disabled = n === 0;
   }
 
   // Freeze settings row (▾): level / grain / release (persisted) + pop / re-grab / clear.
