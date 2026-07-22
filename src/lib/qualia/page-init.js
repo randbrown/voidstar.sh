@@ -929,16 +929,32 @@ export function initQualiaPage() {
       }
     });
   }
+  // Same query as the CSS mobile-drawer variant — in drawer mode the popover
+  // is fully positioned/sized by CSS and must not get an inline max-height.
+  const POPOVER_DRAWER_MQ = window.matchMedia('(max-width: 768px), (pointer: coarse)');
   function repositionPopover(group) {
     const pop = group.querySelector('.qg-popover');
     if (!pop) return;
     pop.classList.remove('right-aligned');
+    pop.style.maxHeight = '';
     // After a frame so getBoundingClientRect reflects the displayed size.
     requestAnimationFrame(() => {
       const r = pop.getBoundingClientRect();
       if (r.right > window.innerWidth - 4) pop.classList.add('right-aligned');
+      // Clamp height to the REAL space below the trigger. The CSS fallback
+      // assumes a one-row topbar (--topbar-h), so with a wrapped topbar (or
+      // any low-sitting trigger) the popover's bottom ran past the viewport —
+      // those controls were unreachable even by scrolling, since the scroll
+      // area itself extended off screen.
+      if (!POPOVER_DRAWER_MQ.matches) {
+        pop.style.maxHeight = Math.max(120, window.innerHeight - r.top - 8) + 'px';
+      }
     });
   }
+  // Keep an open popover on screen through window resizes / topbar rewraps.
+  window.addEventListener('resize', () => {
+    document.querySelectorAll('.qg-group.open').forEach(g => repositionPopover(g));
+  });
   // Topbar groups whose drawer mirrors a bottom-stack card. Opening the
   // popover also expands the matching card (and accordion-collapses the
   // others on mobile); opening a tab from #panel-tabs reciprocally opens

@@ -55,7 +55,8 @@ const RIG_LIMITER_KEY = `${NS}.rigLimiter`; // rig master brickwall limiter (sig
 const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo'
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const MINI_KEY       = `${NS}.mini`;       // rig panel mini (pedalboard) mode
-const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel expanded
+const STRIPOPEN_KEY  = `${NS}.stripOpen`;  // strip subpanel visible
+const STRIPCOLLAPSE_KEY = `${NS}.stripCollapsed`; // strip section body collapsed (chevron)
 const STRIPUTIL_KEY  = `${NS}.stripUtilOpen`; // utility drawer (hpf/comp/eq/pan) expanded
 const LOOPOPEN_KEY     = `${NS}.loopOpen`;      // loop section visible
 const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
@@ -290,6 +291,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnFreezeRegrab = document.getElementById('btn-freeze-regrab');
   const btnFreezeClear = document.getElementById('btn-freeze-clear');
   const stripPanel  = document.getElementById('rig-strip');
+  const btnStripCollapse = document.getElementById('btn-rig-strip-collapse');
   const stripBody   = document.getElementById('rig-strip-body');
   const stripUtilBody = document.getElementById('rig-strip-util-body');
   const btnStripUtil  = document.getElementById('btn-rig-strip-util');
@@ -342,6 +344,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     strip: loadStripConfig(),                          // channel strip config
     mini: lsGet(MINI_KEY, '0') === '1',                // pedalboard (mini) mode
     stripOpen: lsGet(STRIPOPEN_KEY, '0') === '1',
+    stripCollapsed: lsGet(STRIPCOLLAPSE_KEY, '0') === '1',  // strip body collapsed (chevron)
     stripUtilOpen: lsGet(STRIPUTIL_KEY, '0') === '1',  // utility drawer (default tucked away)
     loopOpen: lsGet(LOOPOPEN_KEY, '1') !== '0',              // loop section visible
     loopCollapsed: lsGet(LOOPCOLLAPSE_KEY, '0') === '1',
@@ -1417,19 +1420,43 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (scopeCanvas) ro.observe(scopeCanvas);
     if (scopeOutCanvas) ro.observe(scopeOutCanvas);
   }
-  // Collapse / expand the in + out scopes together (the scope rAF keeps running
-  // so the dB readout in the always-visible subhead stays live; we just hide the
-  // canvases). Re-size on expand since a hidden canvas has zero client width.
+  // One consistent section-collapse mechanism (signal / strip / loop): each
+  // subhead's leading chevron toggles .collapsed on its <section>, CSS hides
+  // everything below the subhead, and the chevron mirrors ▾/▸. Per-feature
+  // toggles (tune / frz ▾ / util ▸) keep governing their own nodes inside an
+  // expanded body.
+  function applySectionCollapse(sectionEl, btn, collapsed) {
+    if (sectionEl) sectionEl.classList.toggle('collapsed', collapsed);
+    if (btn) { btn.textContent = collapsed ? '▸' : '▾'; btn.classList.toggle('collapsed', collapsed); }
+  }
+
+  // Signal section (scopes + tuner + temper + freeze cfg). The scope rAF
+  // keeps running while collapsed so the dB readout in the always-visible
+  // subhead stays live; re-size on expand since a hidden canvas has zero
+  // client width. (Key kept as `scopesOpen` — the scopes were this body's
+  // main content before the whole section collapsed as one.)
   function applyScopesCollapse() {
-    const open = model.scopesOpen !== false;
-    if (scopesWrap) scopesWrap.style.display = open ? '' : 'none';
-    if (btnScopeCollapse) { btnScopeCollapse.textContent = open ? '▾' : '▸'; btnScopeCollapse.classList.toggle('collapsed', !open); }
+    const open = !!model.scopesOpen;
+    applySectionCollapse(rigSignalEl, btnScopeCollapse, !open);
     if (open && scopeRAF) sizeScope();
   }
   function toggleScopesCollapse() {
     model.scopesOpen = !model.scopesOpen;
     lsSet(SCOPESOPEN_KEY, model.scopesOpen ? '1' : '0');
     applyScopesCollapse();
+  }
+  // A feature toggle inside a collapsed signal body (tune, frz ▾) would
+  // otherwise appear to do nothing — expand the section so it shows.
+  function expandSignalSection() { if (!model.scopesOpen) toggleScopesCollapse(); }
+
+  // Strip section body (stages + utility drawer).
+  function applyStripCollapse() {
+    applySectionCollapse(stripPanel, btnStripCollapse, !!model.stripCollapsed);
+  }
+  function toggleStripCollapse() {
+    model.stripCollapsed = !model.stripCollapsed;
+    lsSet(STRIPCOLLAPSE_KEY, model.stripCollapsed ? '1' : '0');
+    applyStripCollapse();
   }
 
   // ── channel strip UI ──────────────────────────────────────────────────────
@@ -2529,6 +2556,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     lsSet(STRIPOPEN_KEY, model.stripOpen ? '1' : '0');
     if (model.stripOpen) buildStripUI();
     if (stripPanel) stripPanel.style.display = model.stripOpen ? '' : 'none';
+    // Opening the strip while its body is chevron-collapsed would show only
+    // a bare subhead — surprising from the signal bar's `strip` button.
+    if (model.stripOpen && model.stripCollapsed) toggleStripCollapse();
     refreshStripBtn();
     refreshLatencyLoop();
   }
@@ -2548,10 +2578,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   let _loopExpandedH = null;
   function applyLoopCollapse() {
     const c = !!model.loopCollapsed;
-    if (looperBody) looperBody.style.display = c ? 'none' : '';
-    if (propsEl) propsEl.style.display = c ? 'none' : '';
-    if (rigLoopSection) rigLoopSection.style.flex = c ? '0 0 auto' : '';
-    if (btnLoopCollapse) { btnLoopCollapse.textContent = c ? '▸' : '▾'; btnLoopCollapse.classList.toggle('collapsed', c); }
+    // Shared .collapsed mechanism (CSS hides props + tracks, keeps the
+    // transport subhead, and drops the section's flex-grow).
+    applySectionCollapse(rigLoopSection, btnLoopCollapse, c);
     if (panel) {
       if (c) {
         const h = panel.getBoundingClientRect().height;
@@ -3186,6 +3215,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // In mini mode the temperament editor stays tucked away; show it only in full.
     if (temperEl) temperEl.style.display = (model.tunerOn && !model.mini) ? '' : 'none';
     if (model.tunerOn) {
+      expandSignalSection();   // a collapsed signal body would hide the tuner
       buildTunerUI();
       buildTemperamentUI();
       looperAudio.ensureCaptureOpen(model.deviceId).then(refreshLooperBtn).catch(() => {});
@@ -3281,6 +3311,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const open = freezeCfgEl.style.display === 'none';
       freezeCfgEl.style.display = open ? '' : 'none';
       btnFreezeCfg.textContent = open ? '▴' : '▾';
+      if (open) expandSignalSection();   // collapsed signal body would hide it
     });
     refreshFreezeBtn();
   }
@@ -3595,6 +3626,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshLoopBtn();
     if (rigLoopSection) rigLoopSection.style.display = model.loopOpen ? '' : 'none';
     applyLoopCollapse();
+    applyStripCollapse();
     startScope();
     applyScopesCollapse();
     refreshLooperBtn();
@@ -3629,6 +3661,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnLoop) btnLoop.addEventListener('click', () => { toggleLoop(); });
   if (btnLoopCollapse) btnLoopCollapse.addEventListener('click', () => { toggleLoopCollapse(); });
   if (btnScopeCollapse) btnScopeCollapse.addEventListener('click', () => { toggleScopesCollapse(); });
+  if (btnStripCollapse) btnStripCollapse.addEventListener('click', () => { toggleStripCollapse(); });
   if (btnTuner)  btnTuner.addEventListener('click', () => { toggleTuner(); });
   if (btnFreeze) btnFreeze.addEventListener('click', () => { toggleFreeze(); });
   if (btnPlay)   btnPlay.addEventListener('click', () => { playAll(); });
