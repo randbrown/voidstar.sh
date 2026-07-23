@@ -80,16 +80,33 @@ export function pickSketchPaper(onPick) {
   document.body.appendChild(overlay);
 }
 
-// Start-from-nothing flow (home header, command palette): create a fresh note
-// in `folderId` with the sketch inline in its body, then drop straight into
-// the drawing canvas. The annotate view's back/done buttons land on the note.
+// Fresh note in `folderId` with the sketch inline in its body. Returns the
+// note + attachment so callers decide how to route into the annotate view.
+async function createSketchNote(folderId, paperColor) {
+  const note = store.createNote({ folderId, title: await store.uniqueAutoTitle() });
+  const att = await createSketchAttachment(note.id, paperColor);
+  note.body = `![${att.name}](mn-attach://${att.id})\n`;
+  await store.putNoteRaw(note);
+  pushPendingAttachments(); // no-op until Drive is connected
+  return { note, att };
+}
+
+// Start-from-nothing flow (home header, command palette): pick a paper, then
+// drop straight into the drawing canvas. The annotate view's back/done
+// buttons land on the note.
 export function startSketchNote(folderId = '') {
   pickSketchPaper(async (paper) => {
-    const note = store.createNote({ folderId, title: await store.uniqueAutoTitle() });
-    const att = await createSketchAttachment(note.id, paper);
-    note.body = `![${att.name}](mn-attach://${att.id})\n`;
-    await store.putNoteRaw(note);
-    pushPendingAttachments(); // no-op until Drive is connected
+    const { note, att } = await createSketchNote(folderId, paper);
     navigate(`#note/${note.id}/annotate/${att.id}`);
   });
+}
+
+// Deep-link flow (`#capture/sketch` — the S Pen-removal / app-shortcut
+// target): skip the paper chooser (last-used paper, dark default) so an
+// external launch lands pen-on-canvas with zero taps. Routing is the
+// caller's job (app.js replaces the hash so back/reload can't mint twins).
+export async function startSketchNoteQuick(folderId = '') {
+  const last = localStorage.getItem(PAPER_KEY);
+  const paper = SKETCH_PAPERS.find(p => p.id === last) || SKETCH_PAPERS[0];
+  return createSketchNote(folderId, paper.color);
 }
