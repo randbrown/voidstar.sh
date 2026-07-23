@@ -939,7 +939,10 @@ not classes). Constraints to preserve:
   view — classic Android flow: type half a note, check something in
   another app, come back to an empty box. The note composer mirrors every
   keystroke to `sessionStorage` (`noteDraft.<songId>`) and restores it on
-  render; saving clears it.
+  render; saving clears it. The same guard covers ink: `refresh()` is
+  skipped while `uiBusyEditing()` (`app.js`) is true — mid-typing, or the
+  annotation editor in draw mode (its canvas carries `data-drawing`),
+  whose unsaved strokes live only in that canvas.
 - **Swipe-to-navigate lives only in perform mode.** The song page had it
   and lost it — dragging a text selection in the notes field reads as a
   swipe. Song-page navigation is the prev/next buttons only.
@@ -952,7 +955,27 @@ not classes). Constraints to preserve:
   the gesture stays a scroll until every finger lifts. The 🖐 pan tool
   remains for one-finger momentum scrolling, and the wrap sets
   `overscroll-behavior: contain` so a scroll ending at the top edge can't
-  chain into Android Chrome's pull-to-refresh and reload away unsaved ink.
+  chain into Android Chrome's pull-to-refresh and reload away unsaved ink
+  (the page's `html, body` additionally set `overscroll-behavior: none` —
+  the app never wants pull-to-refresh or the browser's swipe-back history
+  gesture).
+- **An edge swipe while inking must not eat unsaved strokes.** Drawing in
+  a chart's margins is easily read by the browser/OS as the back gesture,
+  which pops the hash route and used to tear the editor down with all
+  unsaved ink. `annotation.js` tracks a dirty flag (every committed
+  mutation sets it, save clears it; exposed as `isDirty()`/`save()` on the
+  controller) and `renderAnnotation` layers three defenses: entering draw
+  mode pushes a same-hash **history guard entry**, so a back gesture pops
+  the guard instead of the route — with unsaved ink it auto-saves, re-arms
+  the guard, and toasts ("swipe back again to leave"); with nothing
+  unsaved it's honored as a real exit. Any other teardown (hashchange
+  while drawing) auto-saves dirty ink on the way out, and `beforeunload`
+  warns + best-effort-saves on reload/close.
+- **Pen color is remembered.** The color picker defaults to the last-used
+  ink (`voidstar.setlist.annColor`; scratch mode has its own
+  `…annColorScratch` memory, falling back to near-black — on paper, dark
+  ink is the chart, not markup), so a performer who always marks charts in
+  one color isn't re-picking it on every song.
 - **Never open a modal inside a pointer gesture.** A `prompt()` fired from
   `pointerdown` wedges Android Chrome: the dialog interrupts the touch
   sequence before `pointerup`, the canvas keeps its implicit pointer

@@ -65,6 +65,13 @@ const buildStamp = readBuildStamp();
       color: var(--text);
       font-family: var(--font-sans);
       -webkit-tap-highlight-color: transparent;
+      /* This is an app, not a document: overscroll at the page edges must
+         not chain into the browser's pull-to-refresh or swipe-back history
+         gesture — either one mid-annotation (or mid-set) throws the view
+         away with any unsaved ink. The OS-level edge back gesture can't be
+         blocked from a page; the annotation editor guards that case itself
+         (history guard + dirty-ink auto-save in renderAnnotation). */
+      overscroll-behavior: none;
     }
     body {
       padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);

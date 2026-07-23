@@ -156,6 +156,22 @@ function showLinkToast(msg, href, label = 'open', ms = 20000) {
   window.addEventListener('hashchange', dismiss);
 }
 
+// Plain transient toast — a passive status line with no action button.
+function showToast(msg, ms = 5000) {
+  if (_activeToast) _activeToast.remove();
+  const toast = el('div', 'sl-toast');
+  toast.appendChild(el('span', 'sl-toast-msg', msg));
+  const dismiss = () => {
+    window.removeEventListener('hashchange', dismiss);
+    toast.remove();
+    if (_activeToast === toast) _activeToast = null;
+  };
+  document.body.appendChild(toast);
+  _activeToast = toast;
+  setTimeout(dismiss, ms);
+  window.addEventListener('hashchange', dismiss);
+}
+
 // One-shot hint when entering the annotation editor on a touch device: the
 // two-finger scroll gesture is invisible UI, so it gets said out loud once
 // per session. Desktop (fine pointer) scrolls with the wheel and needs no
@@ -166,18 +182,7 @@ function showAnnotateScrollHint(ms = 5000) {
     if (sessionStorage.getItem('sl-ann-scroll-hint')) return;
     sessionStorage.setItem('sl-ann-scroll-hint', '1');
   } catch { /* private mode: hint just shows each time */ }
-  if (_activeToast) _activeToast.remove();
-  const toast = el('div', 'sl-toast');
-  toast.appendChild(el('span', 'sl-toast-msg', 'scroll with two fingers while annotating'));
-  const dismiss = () => {
-    window.removeEventListener('hashchange', dismiss);
-    toast.remove();
-    if (_activeToast === toast) _activeToast = null;
-  };
-  document.body.appendChild(toast);
-  _activeToast = toast;
-  setTimeout(dismiss, ms);
-  window.addEventListener('hashchange', dismiss);
+  showToast('scroll with two fingers while annotating', ms);
 }
 
 // key comes from chart parsing / the AI vision read; keyChanges can also be
@@ -205,6 +210,14 @@ function vocalistDot(code, legend) {
 // Last default-artist used by setlist import / bulk assign — remembered so
 // pasting the next originals set doesn't mean retyping the band name.
 const IMPORT_ARTIST_KEY = 'voidstar.setlist.importArtist';
+
+// Last-used annotation pen color — restored as the picker's default so a
+// performer who always marks charts in one ink isn't re-picking it per song.
+// Scratch mode remembers separately: page ink (dark on paper) and chart
+// markup (bright over a scan) are different habits, and one overwriting the
+// other would leave the wrong default in both places.
+const ANN_COLOR_KEY = 'voidstar.setlist.annColor';
+const ANN_COLOR_SCRATCH_KEY = 'voidstar.setlist.annColorScratch';
 
 // Personal practice/readiness statuses — global per song (not per-setlist),
 // stored as song.statuses (array of keys; absent/empty = all off). Toggled
@@ -4000,15 +4013,28 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     <button class="sl-btn sl-btn-sm sl-btn-ghost" id="sl-ann-clear" title="Clear all">Clear</button>
     <button class="sl-btn sl-btn-sm sl-btn-primary" id="sl-ann-save">Save</button>
   `;
+  // Pen color: restore the last-used ink as the default and remember every
+  // pick (initAnnotationCanvas reads its start color from this input).
+  // Scratch has its own memory + fallback: on paper, dark ink is the chart
+  // itself — not markup — so absent a remembered pick it starts near-black.
+  {
+    const colorInput = drawControls.querySelector('.sl-ann-color');
+    const colorKey = isScratch ? ANN_COLOR_SCRATCH_KEY : ANN_COLOR_KEY;
+    let saved = null;
+    try { saved = localStorage.getItem(colorKey); } catch {}
+    if (colorInput) {
+      if (/^#[0-9a-f]{6}$/i.test(saved || '')) colorInput.value = saved;
+      else if (isScratch) colorInput.value = '#16181f';
+      colorInput.addEventListener('input', () => {
+        try { localStorage.setItem(colorKey, colorInput.value); } catch {}
+      });
+    }
+  }
   // Scratch-only controls: grow the page, and export the drawing as a real
   // chart doc. Created before doneBtn so "done" stays last in the row.
   let addPageBtn = null;
   let makeDocBtn = null;
   if (isScratch) {
-    // On paper, dark ink is the chart itself — not markup — so it's the
-    // sane default (initAnnotationCanvas reads its start color from here).
-    const colorInput = drawControls.querySelector('.sl-ann-color');
-    if (colorInput) colorInput.value = '#16181f';
     addPageBtn = btn('+ page', 'sl-btn-ghost sl-btn-sm', () => addScratchPage());
     addPageBtn.title = 'Extend the page — existing ink keeps its place and size';
     makeDocBtn = btn('make doc', 'sl-btn-accent sl-btn-sm', () => makeDocFromScratch());
@@ -4106,6 +4132,50 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     }
   });
 
+  // ── Accidental-navigation protection ──
+  // Inking near the screen edge is easily read by the browser/OS as the
+  // back gesture (page overscroll-behavior can't block the system-level
+  // one), and a back mid-annotation used to tear the editor down and eat
+  // every unsaved stroke. Two layers:
+  //  1. Entering draw mode pushes a same-hash guard entry, so the first
+  //     back gesture pops the guard instead of leaving the route. With
+  //     unsaved ink that pop saves it and re-arms the guard (the swipe was
+  //     almost certainly the pen, not an exit); with nothing unsaved it's
+  //     honored as a real exit.
+  //  2. Any other teardown path (hashchange while drawing, tab close /
+  //     pull-to-refresh reload) auto-saves dirty ink on the way out.
+  const myHash = location.hash;
+  function onPopState() {
+    // Hash changed = a real navigation — route() owns it (teardown below
+    // still rescues dirty ink). Same hash = our guard entry was popped.
+    if (location.hash !== myHash) return;
+    if (canvasCtrl?.isDirty()) {
+      canvasCtrl.save();
+      history.pushState(null, '', location.href);
+      showToast('ink saved — swipe back again to leave');
+    } else {
+      navigate(backHash);
+    }
+  }
+  function onBeforeUnload(e) {
+    if (!canvasCtrl?.isDirty()) return;
+    canvasCtrl.save(); // best-effort — the write races the unload
+    e.preventDefault();
+    e.returnValue = '';
+  }
+  const teardown = () => {
+    window.removeEventListener('popstate', onPopState);
+    window.removeEventListener('beforeunload', onBeforeUnload);
+    if (canvasCtrl) {
+      if (canvasCtrl.isDirty()) canvasCtrl.save();
+      canvasCtrl.destroy();
+      canvasCtrl = null;
+    }
+  };
+  window.addEventListener('popstate', onPopState);
+  window.addEventListener('beforeunload', onBeforeUnload);
+  window.addEventListener('hashchange', teardown, { once: true });
+
   if (draw) enterAnnotateMode();
 
   function enterAnnotateMode() {
@@ -4115,6 +4185,12 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     canvas.style.cursor = 'crosshair';
     if (readonlyCtrl) { readonlyCtrl.destroy(); readonlyCtrl = null; }
     canvasCtrl = initAnnotationCanvas(canvas, annKey, drawControls, { startBlank });
+    // Unsaved ink lives only in this canvas — the flag tells app.js's
+    // focus-sync refresh() to leave the view alone, same as a mid-typing
+    // input (see uiBusyEditing).
+    canvas.dataset.drawing = '1';
+    // Arm the back-gesture guard (see onPopState above).
+    history.pushState(null, '', location.href);
     showAnnotateScrollHint();
   }
 
@@ -4182,6 +4258,7 @@ export async function renderAnnotation(root, songId, setlistId, { draw = false, 
     const saveBtn = drawControls.querySelector('#sl-ann-save');
     if (saveBtn) saveBtn.click();
 
+    delete canvas.dataset.drawing;
     if (canvasCtrl) { canvasCtrl.destroy(); canvasCtrl = null; }
 
     // Came straight from the song page: done = save and go back there —
