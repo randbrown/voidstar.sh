@@ -102,10 +102,9 @@ export function setLastBackupTime(ts) {
 }
 
 // Short relative-time string for status displays, e.g. "3m ago", "2h ago",
-// "yesterday", or a plain date once it's more than a week old.
-export function formatLastBackup() {
-  const ts = getLastBackupTime();
-  if (!ts) return 'never';
+// "yesterday", or a plain date once it's more than a week old. Also used by
+// the per-record "updated" stamps in views.js.
+export function formatRelativeTime(ts) {
   const diffMs = Date.now() - ts;
   const min = Math.floor(diffMs / 60000);
   if (min < 1) return 'just now';
@@ -116,6 +115,11 @@ export function formatLastBackup() {
   if (day === 1) return 'yesterday';
   if (day < 7) return `${day}d ago`;
   return new Date(ts).toLocaleDateString();
+}
+
+export function formatLastBackup() {
+  const ts = getLastBackupTime();
+  return ts ? formatRelativeTime(ts) : 'never';
 }
 
 // Read-only diagnostics for the settings troubleshooter. `live` adds a real

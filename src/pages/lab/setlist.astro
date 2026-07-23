@@ -221,6 +221,18 @@ const buildStamp = readBuildStamp();
     .sl-sync-inline { display: inline-flex; align-items: center; gap: 0.5rem; }
     .sl-sync-inline-status { font-size: 0.72rem; }
 
+    /* Per-record "updated Xm ago" stamps (setlist cards / view / edit, song
+       page). The span inherits its context's styling; only the edit page's
+       standalone line needs its own. */
+    .sl-updated-stamp { white-space: nowrap; }
+    .sl-updated-line {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin: -0.4rem 0 0.8rem;
+    }
+    .sl-updated-line:empty { display: none; margin: 0; }
+
     /* ── Offline-charts bar (setlist view) ── */
     .sl-offline-bar {
       display: flex;

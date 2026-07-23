@@ -11,7 +11,7 @@ import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelFor
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
 import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js';
-import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics } from './gdrive-backup.js';
+import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, formatRelativeTime, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
 import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, renderStrokesToPngBlob } from './annotation.js';
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
@@ -85,6 +85,15 @@ function btn(label, cls, onclick) {
   const b = el('button', `sl-btn ${cls || ''}`, label);
   b.addEventListener('click', onclick);
   return b;
+}
+
+// Per-record "updated <rel> ago" stamp (setlist cards, setlist view/edit,
+// song page) — comparing it for the same record across two devices is the
+// at-a-glance check for a backup that hasn't propagated. Tooltip carries the
+// exact local save time. Deliberately absent from perform mode.
+function updatedStamp(ts, cls = '') {
+  if (!ts) return '';
+  return `<span class="sl-updated-stamp ${cls}" title="saved ${esc(new Date(ts).toLocaleString())}">updated ${esc(formatRelativeTime(ts))}</span>`;
 }
 
 function topBar(title, backHash) {
@@ -457,6 +466,7 @@ export async function renderDashboard(root) {
           ${sl.gigDate ? `<span>${esc(sl.gigDate)}</span>` : ''}
           <span>${songCount} song${songCount !== 1 ? 's' : ''}</span>
           <span>${sl.sets.length} set${sl.sets.length !== 1 ? 's' : ''}</span>
+          ${updatedStamp(sl.updatedAt)}
         </div>
       `;
       card.addEventListener('click', () => navigate(`#setlist/${sl.id}`));
@@ -889,9 +899,12 @@ export async function renderSetlistView(root, setlistId) {
   bar.appendChild(actions);
   root.appendChild(bar);
 
-  if (sl.venue || sl.gigDate) {
-    const meta = el('div', 'sl-setlist-meta', `${esc(sl.venue || '')} ${sl.gigDate ? '&middot; ' + esc(sl.gigDate) : ''}`);
-    root.appendChild(meta);
+  const metaParts = [];
+  if (sl.venue) metaParts.push(esc(sl.venue));
+  if (sl.gigDate) metaParts.push(esc(sl.gigDate));
+  if (sl.updatedAt) metaParts.push(updatedStamp(sl.updatedAt));
+  if (metaParts.length) {
+    root.appendChild(el('div', 'sl-setlist-meta', metaParts.join(' &middot; ')));
   }
 
   // Offline readiness — cache every chart so perform mode works with no signal
@@ -1033,6 +1046,18 @@ export async function renderSetlistEdit(root, setlistId) {
   root.appendChild(bar);
   updateUndoBtn();
 
+  // "updated" line — relative + exact save time (the edit page is where
+  // you'd compare two devices when a change didn't seem to arrive), repainted
+  // on every autosave so it tracks the save that just happened.
+  const updatedLine = el('div', 'sl-updated-line');
+  const paintUpdated = (ts) => {
+    updatedLine.innerHTML = ts
+      ? `updated ${esc(formatRelativeTime(ts))} &middot; ${esc(new Date(ts).toLocaleString())}`
+      : '';
+  };
+  paintUpdated(sl.updatedAt);
+  root.appendChild(updatedLine);
+
   const form = el('div', 'sl-edit-form');
   form.innerHTML = `
     <label class="sl-label">Name<input class="sl-input" id="sl-name" value="${esc(sl.name)}"></label>
@@ -1053,6 +1078,7 @@ export async function renderSetlistEdit(root, setlistId) {
     sl.bandcampUrl = document.getElementById('sl-bandcamp').value;
     sl.soundcloudUrl = document.getElementById('sl-soundcloud').value;
     await store.putSetlist(sl);
+    paintUpdated(Date.now());
   };
   form.addEventListener('change', save);
 
@@ -2061,6 +2087,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       ${song.durationSec ? `<span class="sl-badge sl-badge-dim">${formatTimecode(song.durationSec)}</span>` : ''}
       ${song.genre ? `<span class="sl-badge sl-badge-dim">${esc(song.genre)}</span>` : ''}
       ${song.year ? `<span class="sl-badge sl-badge-dim">${parseInt(song.year) || ''}</span>` : ''}
+      ${updatedStamp(song.updatedAt, 'sl-badge sl-badge-dim')}
     </div>
   `;
   if (song.artworkUrl && /^https:\/\//.test(song.artworkUrl)) {
@@ -2136,6 +2163,16 @@ export async function renderSongFocus(root, songId, setlistId) {
   }
   root.appendChild(info);
 
+  // Saves that don't re-render the page (status chips, the edit form's
+  // autosave) move the stamp in place so it never shows a stale time right
+  // after an edit.
+  const songStampEl = info.querySelector('.sl-updated-stamp');
+  const touchSongStamp = () => {
+    if (!songStampEl) return;
+    songStampEl.textContent = 'updated just now';
+    songStampEl.title = `saved ${new Date().toLocaleString()}`;
+  };
+
   // Practice-status toggles — independent on/off chips, saved immediately.
   const statusRow = el('div', 'sl-status-row');
   for (const def of SONG_STATUSES) {
@@ -2149,6 +2186,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       // deliberate re-toggle (see todo-sync-core.js).
       if (def.key === 'todo') song.todoStatusAt = Date.now();
       await store.putSong(song);
+      touchSongStamp();
       chip.classList.toggle('sl-on', active.has(def.key));
       if (def.key === 'todo') {
         import('./mind-todo.js').then((m) => m.onTodoToggled(song)).catch((e) => console.warn('[todo-bridge]', e));
@@ -2222,6 +2260,7 @@ export async function renderSongFocus(root, songId, setlistId) {
       song.steelEntry = clearedByForm('steelEntry', steelVal);
     }
     await store.putSong(song);
+    touchSongStamp();
   });
   root.appendChild(editForm);
 
