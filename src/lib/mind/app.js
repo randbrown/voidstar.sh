@@ -149,8 +149,23 @@ async function route() {
         else await renderTasks(_root);
         break;
       }
-      // Installed-PWA app-shortcut target: `#capture/voice/note|task`.
-      case 'capture': await renderCapture(_root, id, extra); break;
+      // Installed-PWA app-shortcut targets: `#capture/voice/note|task`, and
+      // `#capture/sketch` (S Pen-removal / automation deep link) — fresh note
+      // straight onto the drawing canvas, no paper chooser. The hash is
+      // replaced immediately so back/reload can't mint a second sketch.
+      case 'capture': {
+        if (id === 'sketch') {
+          const { startSketchNoteQuick } = await import('./sketch.js');
+          const { currentFolderId } = await import('./views/home.js');
+          const { note, att } = await startSketchNoteQuick(currentFolderId());
+          history.replaceState(null, '', location.pathname + `#note/${note.id}/annotate/${att.id}`);
+          await renderAnnotate(_root, note.id, att.id);
+          updateDockActive('note');
+          return;
+        }
+        await renderCapture(_root, id, extra);
+        break;
+      }
       case 'trash': await renderTrash(_root); break;
       case 'settings': await renderSettings(_root); break;
       default: await renderHome(_root);

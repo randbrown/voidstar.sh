@@ -30,6 +30,13 @@
       "description": "Dictate a new note hands-free",
       "url": "/lab/mind#capture/voice/note",
       "icons": [{ "src": "/icon-mind-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "new sketch",
+      "short_name": "sketch",
+      "description": "Blank page, straight into pen drawing",
+      "url": "/lab/mind#capture/sketch",
+      "icons": [{ "src": "/icon-mind-192.png", "sizes": "192x192", "type": "image/png" }]
     }
   ],
   "background_color": "#05050d",
