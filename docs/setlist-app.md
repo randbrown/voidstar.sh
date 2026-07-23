@@ -427,6 +427,15 @@ This codebase intentionally keeps two similarly-named ideas separate:
     the load-time pull used to run only when the app opened on the
     dashboard) so opening it on another device always starts from the
     latest backup, never a stale local copy.
+  - **Per-record "updated" stamps.** Dashboard setlist cards, the setlist
+    view meta line, the setlist edit page, and the song page's badge row
+    each show the record's `updatedAt` as a relative stamp
+    (`updatedStamp()` in `views.js`, buckets shared with the backup pill
+    via `formatRelativeTime`; exact local save time in the tooltip, and
+    printed inline on the edit page). Comparing the stamp for the same
+    record across two devices is the at-a-glance check for a backup that
+    hasn't propagated. Deliberately absent from perform mode — the stage
+    view stays clean.
   - **Token renewal is popup-bound** (the GIS token client has no iframe
     path — even `prompt:'none'` rides a popup window), so the backup module
     uses the same renewal machinery the mind app landed on: a single-flight
