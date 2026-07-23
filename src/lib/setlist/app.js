@@ -101,6 +101,16 @@ async function route() {
 // pullMergePushIfStale answers "did Drive change since this device's last
 // cycle?" with one metadata request and only then pays for the full
 // download-merge-push.
+// True while the user is mid-edit somewhere a refresh() would destroy
+// unsaved state: typing in an input/textarea/contenteditable, or drawing in
+// the annotation editor (unsaved ink lives only in the canvas — the editor
+// marks it with data-drawing while draw mode is active).
+function uiBusyEditing() {
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return true;
+  return !!document.querySelector('.sl-annotation-canvas[data-drawing]');
+}
+
 let _focusWatched = false;
 let _lastFocusPull = 0;
 let _focusPullInflight = false;
@@ -134,13 +144,12 @@ function watchFocusSync() {
         { snapshotFn: () => store.putSnapshot('pre-sync') },
       );
       // Re-render so pulled changes show — but never yank the view out from
-      // under someone mid-typing (would lose an unsaved input/textarea).
+      // under someone mid-edit (would lose an unsaved input/textarea or the
+      // annotation editor's undrawn-to-disk ink).
       // `changed` (not just "remote existed") so a no-op pull doesn't rebuild
       // the view for nothing on every refocus.
       if (changed) {
-        const ae = document.activeElement;
-        const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
-        if (!typing) refresh();
+        if (!uiBusyEditing()) refresh();
         // Chips pulled from Drive may have moved — fold them into mind tasks
         // now instead of waiting for the next refocus sweep.
         import('./mind-todo.js').then((m) => m.reconcileAndNotify()).catch(() => {});
@@ -182,9 +191,7 @@ export function initSetlistApp(root) {
   // store out of setlist's initial chunk, and boot never awaits it.
   import('./mind-todo.js').then((m) => m.initTodoBridge({
     onChanged: () => {
-      const ae = document.activeElement;
-      const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
-      if (!typing) refresh();
+      if (!uiBusyEditing()) refresh();
     },
   })).catch((e) => console.warn('[todo-bridge]', e));
   // Deletion tombstones only need to outlive every device's next sync —

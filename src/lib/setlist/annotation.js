@@ -136,6 +136,10 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   let color = toolbar.querySelector('.sl-ann-color')?.value || '#ff5e7e';
   let lineWidth = parseInt(toolbar.querySelector('.sl-ann-size')?.value) || 4;
   let undoStack = [];
+  // Unsaved-changes flag: set by every committed mutation, cleared by save.
+  // The view layer reads it (isDirty) to auto-save when the editor is left
+  // by an accidental back gesture / navigation instead of the Save button.
+  let dirty = false;
   let selectedIndex = -1;
   let selDrag = null;
   let pendingText = null;
@@ -321,6 +325,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
 
     if (tool === 'eraser') {
       const threshold = 0.03;
+      const before = strokes.length;
       strokes = strokes.filter(s => {
         if (s.type === 'text') {
           return Math.abs(s.x - pos.x) > threshold || Math.abs(s.y - pos.y) > threshold;
@@ -330,7 +335,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
           Math.abs(p.x - pos.x) < threshold && Math.abs(p.y - pos.y) < threshold
         );
       });
-      undoStack = [];
+      if (strokes.length !== before) { undoStack = []; dirty = true; }
       redraw();
       return;
     }
@@ -453,12 +458,13 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
         if (!text) return;
         strokes.push({ type: 'text', text, x: at.x, y: at.y, color, size: textSizeForWidth(lineWidth) });
         undoStack = [];
+        dirty = true;
         redraw();
       }, 0);
       return;
     }
     if (tool === 'select') {
-      if (selDrag?.moved) undoStack = [];
+      if (selDrag?.moved) { undoStack = []; dirty = true; }
       selDrag = null;
       return;
     }
@@ -467,6 +473,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     if (currentStroke.points.length >= 2) {
       strokes.push(currentStroke);
       undoStack = [];
+      dirty = true;
     }
     currentStroke = null;
     redraw();
@@ -527,6 +534,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     if (tool === 'select' && selectedIndex >= 0) {
       strokes[selectedIndex].color = color;
       undoStack = [];
+      dirty = true;
       redraw();
     }
   }, { signal });
@@ -542,6 +550,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
         ? textSizeForWidth(lineWidth)
         : lineWidth;
       undoStack = [];
+      dirty = true;
       redraw();
       updateSelMenu();
     }
@@ -589,6 +598,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
       s.text = text;
     }
     undoStack = [];
+    dirty = true;
     redraw();
     updateSelMenu();
   }, { signal });
@@ -599,6 +609,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     selectedIndex = -1;
     selDrag = null;
     undoStack = [];
+    dirty = true;
     redraw();
     updateSelMenu();
   }, { signal });
@@ -608,6 +619,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
   toolbar.querySelector('#sl-ann-undo')?.addEventListener('click', () => {
     if (strokes.length) {
       undoStack.push(strokes.pop());
+      dirty = true;
       redraw();
     }
   }, { signal });
@@ -616,13 +628,21 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     if (strokes.length && confirm('Clear all annotations?')) {
       undoStack = [...strokes];
       strokes = [];
+      dirty = true;
       redraw();
     }
   }, { signal });
 
-  toolbar.querySelector('#sl-ann-save')?.addEventListener('click', async () => {
+  // Shared by the Save button and the view layer's auto-save (accidental
+  // back gesture / navigation with unsaved ink — see renderAnnotation).
+  async function persist() {
     const aspect = canvas.height ? canvas.width / canvas.height : null;
     await saveAnnotation(songId, strokes, aspect);
+    dirty = false;
+  }
+
+  toolbar.querySelector('#sl-ann-save')?.addEventListener('click', async () => {
+    await persist();
     const saveBtn = toolbar.querySelector('#sl-ann-save');
     if (saveBtn) {
       saveBtn.textContent = 'Saved!';
@@ -655,6 +675,8 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
     redraw,
     destroy() { ac.abort(); ro.disconnect(); cancelLongPress(); selMenu.remove(); },
     getStrokes() { return strokes; },
+    isDirty() { return dirty; },
+    save: persist,
     // Rescale every stroke's normalized y by `f`. Used when the scratch
     // page grows taller ("+ page"): y is normalized to box height, so a
     // taller box would stretch existing ink downward unless y compresses
@@ -667,6 +689,7 @@ export function initAnnotationCanvas(canvas, songId, toolbar, { startBlank = fal
         else if (s.points) for (const p of s.points) p.y *= f;
       }
       undoStack = []; // popped strokes would carry the old normalization
+      dirty = true;
       redraw();
     },
   };
