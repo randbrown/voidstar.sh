@@ -175,6 +175,10 @@ export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, 
   let undoStack = [];
   let selectedIndex = -1;
   let selDrag = null;
+  // Drawing tool a long-press hijacked into select mode (null when the user
+  // picked select from the toolbar themselves). Handed back when the
+  // selection session ends — see endSelectSession.
+  let selReturnTool = null;
   let pendingText = null;
   let longPressTimer = null;
   let longPressStart = null;
@@ -288,6 +292,17 @@ export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, 
     redraw();
   }
 
+  // A long-press flips the active drawing tool into select mode without the
+  // user ever touching the toolbar (see startStroke). When that selection
+  // session ends — delete, the × button, or a tap on empty canvas — hand the
+  // original tool back. Without this the editor is silently left in select
+  // mode, where taps only hit-test and nothing draws.
+  function endSelectSession() {
+    const back = selReturnTool;
+    selReturnTool = null;
+    if (back && tool === 'select') setTool(back);
+  }
+
   function cancelLongPress() {
     if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
   }
@@ -321,6 +336,17 @@ export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, 
   }
 
   function startStroke(e) {
+    // A new primary pointer means every finger has lifted, so anything still
+    // tracked is a stray whose pointerup/pointercancel the browser never
+    // delivered (mobile Chrome drops a captured touch stream without either
+    // when a native dialog opens mid-gesture). Trusting strays bricks the
+    // editor: the map never empties, every later touch counts as a second
+    // finger, and panGesture latches on forever. Reset instead — see
+    // setlist/annotation.js.
+    if (e.isPrimary) {
+      activePointers.clear();
+      panGesture = false;
+    }
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (!panGesture && activePointers.size >= 2) {
       panGesture = true;
@@ -389,6 +415,7 @@ export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, 
       const idx = hitTest(pos);
       if (idx < 0) return;
       currentStroke = null;
+      selReturnTool = tool;
       setTool('select');
       selectedIndex = idx;
       selDrag = { startPos: pos, orig: cloneStroke(strokes[idx]), moved: false };
@@ -490,6 +517,9 @@ export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, 
     if (tool === 'select') {
       if (selDrag?.moved) { undoStack = []; markDirty(); }
       selDrag = null;
+      // A tap that landed on empty canvas (deselect) closes a long-press
+      // selection session — give the hijacked drawing tool back.
+      if (selectedIndex < 0) endSelectSession();
       return;
     }
     if (!currentStroke) return;
@@ -541,7 +571,9 @@ export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, 
     if (name !== 'select') clearSelection();
   }
   toolbar.querySelectorAll('.mn-ann-tool').forEach(b => {
-    b.addEventListener('click', () => setTool(b.dataset.tool), { signal });
+    // An explicit toolbar pick is the user's own choice — it must stick, not
+    // get overridden by a pending long-press-session restore.
+    b.addEventListener('click', () => { selReturnTool = null; setTool(b.dataset.tool); }, { signal });
   });
   toolbar.querySelector('[data-tool="pen"]')?.classList.add('mn-btn-primary');
 
@@ -602,7 +634,14 @@ export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, 
     selMenu.style.display = 'flex';
     const maxLeft = Math.max(2, canvas.width - selMenu.offsetWidth - 2);
     selMenu.style.left = Math.min(Math.max(2, b.x), maxLeft) + 'px';
-    selMenu.style.top = Math.max(2, b.y - selMenu.offsetHeight - 6) + 'px';
+    // Above the selection; flip below when the element sits too close to the
+    // top — clamping would park the menu on top of the element (and the
+    // finger that just tapped it), begging for accidental delete taps.
+    const yAbove = b.y - selMenu.offsetHeight - 6;
+    const top = yAbove >= 2
+      ? yAbove
+      : Math.min(b.y + b.h + 6, canvas.height - selMenu.offsetHeight - 2);
+    selMenu.style.top = Math.max(2, top) + 'px';
   }
 
   selEditBtn.addEventListener('click', () => {
@@ -621,6 +660,8 @@ export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, 
     redraw();
     updateSelMenu();
     markDirty();
+    // Emptying the text deleted the element — that ends the session.
+    if (selectedIndex < 0) endSelectSession();
   }, { signal });
 
   selDelBtn.addEventListener('click', () => {
@@ -632,9 +673,10 @@ export function initAnnotationCanvas(canvas, attachmentId, toolbar, { page = 0, 
     redraw();
     updateSelMenu();
     markDirty();
+    endSelectSession();
   }, { signal });
 
-  selCloseBtn.addEventListener('click', () => clearSelection(), { signal });
+  selCloseBtn.addEventListener('click', () => { clearSelection(); endSelectSession(); }, { signal });
 
   toolbar.querySelector('#mn-ann-undo')?.addEventListener('click', () => {
     if (strokes.length) {
