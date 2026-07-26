@@ -28,7 +28,7 @@ the main workstation page `/qualia` (`src/pages/qualia.astro` → wired together
 | **Pose** | MediaPipe pose tracking, run off the main thread in a worker; landmarks become modulation channels | `pose.js`, `pose-worker.js`, `pose-features.js`, `vision-loader.js`, `video.js` |
 | **Entanglement** | Audience participation — phones join via QR, run their own pose, and feed sandboxed, rate-limited `crowd.*` channels and votes | `entangle*.js`, `workers/entangle-signal/` |
 | **Playback sync + tether** | Cross-device cycle/CPS lock (leader/follower over the relay — no audio on the wire) + the phone remote-control pad | `sync*.js`, `tether-client.js`, `workers/entangle-signal/` |
-| **Recording / export** | Canvas+audio capture to MP4 (with SMPTE timecode) or WebM; loop/set export to `.qualem.zip` | `recorder.js`, `mp4-timecode.js`, `wav.js`, `zip.js` |
+| **Recording / export** | Canvas+audio capture to MP4 (with SMPTE timecode) or WebM; an OBS Studio remote for full-HUD performance capture; loop/set export to `.qualem.zip` | `recorder.js`, `obs.js`, `mp4-timecode.js`, `wav.js`, `zip.js` |
 | **Control surface** | DOIO KB16-01 macro pad (sends keystrokes) + true MIDI CC; maps physical knobs/keys to qualia functions | `docs/doio-kb16-qualia-keymap.md`, handlers in `page-init.js` |
 
 There are also three **legacy standalone lab pages** (`/lab/cymatics`, `/lab/spectrum-pose`,

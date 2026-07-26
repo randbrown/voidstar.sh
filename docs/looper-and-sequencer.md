@@ -132,9 +132,10 @@ Two **unrelated** pipelines (see architecture §7 for the full rationale):
 ### Screen recorder (`recorder.js`)
 MediaRecorder over a composited fx+overlay canvas + the recordable audio mix.
 - **Backends:** `viewport` (default — composites in-page, no screen-share dialog), `tab`
-  (`getDisplayMedia`, captures the whole tab including panels), and `tab-ext` (same full-tab
+  (`getDisplayMedia`, captures the whole tab including panels), `tab-ext` (same full-tab
   pixels via a `chrome.tabCapture` stream ID minted by the companion extension in
-  `extras/capture-extension`). Mobile browsers (Chrome Android,
+  `extras/capture-extension`), and `obs` (see below — not a capture backend at all).
+  Mobile browsers (Chrome Android,
   iOS Safari, Samsung Internet) have no working `getDisplayMedia` and no web API to launch the OS
   screen recorder, so there the tab menu item is repurposed as a **sys rec** helper: it enters
   fullscreen (hides browser chrome) and toasts instructions to start the system screen recorder —
@@ -167,6 +168,48 @@ MediaRecorder over a composited fx+overlay canvas + the recordable audio mix.
   `README.md` (preserves the `tmcd` track and `creation_time`).
 - Backlog: `addTimecodeTrack` does a full second copy of the (multi-GB) file via `concat` — pass
   subarray views to `new Blob([...])`.
+
+### OBS capture mode (`obs.js`)
+The `obs` item in the rec menu is **not a capture backend** — it captures nothing and touches
+neither the composite canvas nor MediaRecorder. It is a remote control for OBS Studio over
+[obs-websocket 5.x](https://github.com/obsproject/obs-websocket), and OBS does the recording.
+
+It exists because **qualia is meant to be recorded in its entirety.** For a live-coding set the
+strudel REPL, the panels, the QR interject popups and the theme *are* the show, not chrome around
+it — which is exactly what `viewport` structurally cannot capture (it composites fx + overlay only)
+and what `tab` can only capture with Chrome's "Sharing this tab" banner pinned over the page. So
+`obs` is the primary mode for a performance capture, and `viewport` is the fallback for when the
+clean fx output is what you want.
+
+- **Transport.** `ws://127.0.0.1:4455` by default. An insecure `ws://` to a *loopback* host is not
+  mixed-content-blocked from an https page (loopback counts as potentially trustworthy) — verified
+  on Chromium 141 from a non-loopback https origin. Auth is obs-websocket's challenge/response
+  (`base64(sha256(base64(sha256(pw+salt)) + challenge))`) via WebCrypto. Only the `Outputs` event
+  category is subscribed, which is what carries `RecordStateChanged`.
+- **What the rec button does:** connect if needed → optional `SetCurrentProgramScene` → optional
+  `SetVideoSettings` matching OBS's canvas to `screen.{width,height} × devicePixelRatio` (clamped
+  to OBS's 4096 cap) → `StartRecord`. The button label, timer and toast are driven from OBS's own
+  `RecordStateChanged`, and `GetRecordStatus` syncs on connect so attaching to an
+  already-recording OBS doesn't show "stopped".
+- **Modifiers:** `auto-⛶` applies (a fullscreen window makes a clean display capture, and hides no
+  panels). `auto-zen` and `auto-save` read **n/a** and are ignored — zen hides the HUD, which is the
+  reason to use this mode at all, and OBS owns its own output file.
+- **Scene setup lives in OBS**, deliberately: *Display Capture* of the screen the app is
+  fullscreened on is the most faithful (it catches native `<select>` dropdowns and OS menus that
+  window capture can miss); *Window Capture* of the installed PWA window when you want the app
+  without the rest of the desktop. Audio comes from OBS's per-app capture (Windows *Application
+  Audio Capture*; macOS 13+ *macOS Screen Capture* app audio; Linux PipeWire) or a virtual device —
+  the in-page mix bus is not involved.
+- **Failure is a toast, never an `alert()`** — a modal you must dismiss mid-set is worse than a
+  failed take. There is no way to launch OBS from a page, so "OBS isn't running with its WebSocket
+  server enabled" is the message. Selecting the mode (and opening `obs…`) warms the connection so
+  that surfaces before showtime rather than on the first rec press.
+- Config (address / password / scene / match-resolution) persists under `voidstar.qualia.obs.config`
+  and is machine-local — it deliberately does **not** travel in a qualem, though `captureMode: 'obs'`
+  does.
+- **Watch item:** Chrome 141+ ships the Local Network Access permission prompt for
+  public-origin → loopback requests. WebSockets aren't covered yet but are on the roadmap, so expect
+  a one-time "voidstar.sh wants to access your local network" grant at some point.
 
 ### Set/loop export (`zip.js` + `wav.js`)
 - `zip.js` — dependency-free **store-only ZIP** (CRC32 + local/central/EOCD), bundles `.qualem.zip`:
