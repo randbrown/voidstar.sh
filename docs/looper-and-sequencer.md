@@ -186,11 +186,22 @@ clean fx output is what you want.
   on Chromium 141 from a non-loopback https origin. Auth is obs-websocket's challenge/response
   (`base64(sha256(base64(sha256(pw+salt)) + challenge))`) via WebCrypto. Only the `Outputs` event
   category is subscribed, which is what carries `RecordStateChanged`.
-- **What the rec button does:** connect if needed → optional `SetCurrentProgramScene` → optional
-  `SetVideoSettings` matching OBS's canvas to `screen.{width,height} × devicePixelRatio` (clamped
-  to OBS's 4096 cap) → `StartRecord`. The button label, timer and toast are driven from OBS's own
+- **What the rec button does:** connect if needed → optional `SetCurrentProgramScene` →
+  `StartRecord`. **Nothing that reconfigures OBS runs at showtime** — see the canvas warning
+  below for why that rule exists. The button label, timer and toast are driven from OBS's own
   `RecordStateChanged`, and `GetRecordStatus` syncs on connect so attaching to an
   already-recording OBS doesn't show "stopped".
+- ⚠️ **`SetVideoSettings` crashes OBS.** It makes OBS run `obs_reset_video()`, tearing down and
+  rebuilding the whole video pipeline; driven from the WebSocket (a pooled request thread, not the
+  UI thread) it's a known upstream crasher, notably on macOS —
+  [obsproject/obs-studio#10946](https://github.com/obsproject/obs-studio/issues/10946). The first
+  version of this mode applied it on every rec press to match the canvas to the display, and it
+  took OBS down (`SIGABRT` on the pooled thread, main thread parked in
+  `obs_wait_for_destroy_queue`). It is now a manual `match ⚠` button in the `obs…` dialog that
+  confirms first, no-ops when the size already matches, and refuses while any output
+  (record / stream / virtual cam) is live. The legacy `matchResolution` / `fps` config keys are
+  **dropped on load** so an old profile can't reintroduce the crash. Setting the canvas by hand in
+  *OBS → Settings → Video* remains the safe route.
 - **Modifiers:** `auto-⛶` applies (a fullscreen window makes a clean display capture, and hides no
   panels). `auto-zen` and `auto-save` read **n/a** and are ignored — zen hides the HUD, which is the
   reason to use this mode at all, and OBS owns its own output file.
@@ -204,7 +215,7 @@ clean fx output is what you want.
   failed take. There is no way to launch OBS from a page, so "OBS isn't running with its WebSocket
   server enabled" is the message. Selecting the mode (and opening `obs…`) warms the connection so
   that surfaces before showtime rather than on the first rec press.
-- Config (address / password / scene / match-resolution) persists under `voidstar.qualia.obs.config`
+- Config (address / password / scene) persists under `voidstar.qualia.obs.config`
   and is machine-local — it deliberately does **not** travel in a qualem, though `captureMode: 'obs'`
   does.
 - **Watch item:** Chrome 141+ ships the Local Network Access permission prompt for
