@@ -3735,6 +3735,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
 
   // Repaint topbar/state when audio.js flips the looper / rig source on/off.
   audio?.onChange?.(() => refreshLooperBtn());
+  // …and when the rig's own liveness changes. The capture graph can exist while
+  // its AudioContext is still suspended (auto-boot restores the panel before the
+  // page has any user activation — see audio-unlock.js), so "live" only flips
+  // once the context is genuinely rendering. Without this the topbar would
+  // freeze on whatever it painted at boot.
+  looperAudio.onLiveChange?.(() => { refreshLooperBtn(); refreshInputMuteBtn(); });
   syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
 
   // Seed with one empty armed track (Phase 5 restores persisted tracks here).

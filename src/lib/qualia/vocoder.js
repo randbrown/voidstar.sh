@@ -43,6 +43,7 @@
 
 import { getStoredDeviceId, wirePicker, openMicStream } from './devices.js';
 import { autoCorrelate } from './pitch.js';
+import { registerContext, resumeContext } from './audio-unlock.js';
 import { createVoiceShifter } from './voice-shifter.js';
 import { VOX_PRESETS } from './vox-presets.js';
 import { makeDraggablePanel } from './panel-pos.js';
@@ -414,7 +415,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   // ── Audio graph ────────────────────────────────────────────────────────
   function ensureContext() {
     if (ctx) return ctx;
-    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctx = registerContext(new (window.AudioContext || window.webkitAudioContext)());
     return ctx;
   }
 
@@ -1057,9 +1058,10 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
       return false;
     }
     ensureContext();
-    if (ctx.state === 'suspended') {
-      try { await ctx.resume(); } catch {}
-    }
+    // Bounded (see audio-unlock.js) — start() usually runs under a gesture, but
+    // preset/qualem restores can call it without one, and a pending resume
+    // would otherwise strand the graph build below.
+    await resumeContext(ctx);
     try { buildGraph(); }
     catch (err) {
       console.warn('[qualia] vocoder buildGraph failed:', err);

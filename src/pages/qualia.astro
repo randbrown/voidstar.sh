@@ -1425,6 +1425,48 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--muted); font-size: 0.65rem; line-height: 1.3;
     }
 
+    /* OBS settings dialog — reuses the share dialog's floating-panel look. */
+    #obs-cfg-backdrop {
+      position: fixed; inset: 0; z-index: 99;
+      background: rgba(0,0,0,0.5); backdrop-filter: blur(2px);
+    }
+    #obs-cfg {
+      position: fixed; z-index: 100; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(92vw, 480px);
+      background: rgba(10,10,26,0.95);
+      border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font-family: var(--font-mono);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+      display: flex; flex-direction: column;
+    }
+    #obs-cfg-head {
+      display: flex; align-items: center; gap: 0.4rem;
+      padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border);
+    }
+    #obs-cfg-body { padding: 0.7rem; display: flex; flex-direction: column; gap: 0.5rem; }
+    .obs-cfg-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.68rem; color: var(--muted);
+    }
+    .obs-cfg-row > span:first-child { flex: 0 0 5.5rem; }
+    .obs-cfg-row input[type="text"],
+    .obs-cfg-row input[type="password"],
+    .obs-cfg-row select {
+      flex: 1; min-width: 0;
+      background: rgba(0,0,0,0.4); color: var(--cyan);
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 0.3rem 0.4rem;
+      font-family: var(--font-mono); font-size: 0.68rem;
+    }
+    .obs-cfg-check { gap: 0.4rem; }
+    .obs-cfg-check > span { flex: 1; }
+    #obs-cfg-actions { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+    .obs-cfg-dot { font-size: 0.7rem; color: var(--muted); }
+    .obs-cfg-dot[data-state="on"]      { color: var(--green); }
+    .obs-cfg-dot[data-state="busy"]    { color: var(--accent); }
+    .obs-cfg-dot[data-state="error"]   { color: var(--pink); }
+
     /* Drive connection status pill in the qualem card's drive row. */
     .qualem-drive-status {
       font-size: 0.62rem; color: var(--muted); letter-spacing: 0.04em;
@@ -2741,6 +2783,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <div class="qg-popover qg-menu" role="menu">
           <button type="button" class="ctrl-btn qg-menuitem" data-capture="viewport" role="menuitemradio">qfx</button>
           <button type="button" class="ctrl-btn qg-menuitem" data-capture="tab" role="menuitemradio">tab</button>
+          <button type="button" class="ctrl-btn qg-menuitem" data-capture="obs" role="menuitemradio"
+                  title="Capture mode: OBS — the rec button drives OBS Studio over its WebSocket instead of recording in-page. OBS captures the whole app window (or the display it's fullscreened on), so the take includes the topbar, panels, strudel REPL, QR popups and theme — qualia as the audience sees it. Needs OBS running with Tools → WebSocket Server Settings → Enable.">obs</button>
+          <div class="qg-menu-sep" role="separator"></div>
+          <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-obs-setup" role="menuitem"
+                  title="OBS connection settings — address, password, scene, and whether to match OBS's canvas to this display.">obs…</button>
           <div class="qg-menu-sep" role="separator"></div>
           <button type="button" class="ctrl-btn qg-menuitem" id="btn-rec-autofs" role="menuitemcheckbox" aria-checked="false"
                   title="Auto fullscreen: the rec button enters fullscreen first and captures qfx at full-screen resolution (auto-saved, opens in Preview, no nag). Esc exits fullscreen; the take keeps going. qfx only.">auto-⛶</button>
@@ -3529,6 +3576,54 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div class="qualem-share-hint">
       Anyone opening this link gets the same experience loaded automatically.
       QR-code display + GitHub Gist sync are coming in a follow-up.
+    </div>
+  </div>
+</div>
+
+<!-- OBS connection settings. The `obs` capture mode drives OBS Studio over its
+     WebSocket instead of recording in-page, so the take can include the HUD,
+     panels, strudel REPL and QR popups — the parts of qualia that ARE the show
+     and that the in-page composite structurally can't capture. Reuses the share
+     dialog's floating-panel styling. -->
+<div id="obs-cfg-backdrop" style="display:none"></div>
+<div id="obs-cfg" role="dialog" aria-modal="true" aria-labelledby="obs-cfg-title" style="display:none">
+  <div id="obs-cfg-head">
+    <span class="qualem-share-title" id="obs-cfg-title">obs</span>
+    <span class="qualem-share-spacer"></span>
+    <span class="obs-cfg-dot" id="obs-cfg-dot" data-state="off" title="Connection state">●</span>
+    <button class="ctrl-btn" id="obs-cfg-close" title="Close">×</button>
+  </div>
+  <div id="obs-cfg-body">
+    <label class="obs-cfg-row">
+      <span>address</span>
+      <input type="text" id="obs-cfg-url" spellcheck="false" autocomplete="off" placeholder="ws://127.0.0.1:4455" />
+    </label>
+    <label class="obs-cfg-row">
+      <span>password</span>
+      <input type="password" id="obs-cfg-pass" spellcheck="false" autocomplete="off"
+             placeholder="(from Tools → WebSocket Server Settings)" />
+    </label>
+    <label class="obs-cfg-row">
+      <span>scene</span>
+      <select id="obs-cfg-scene" title="Switch to this scene before recording. Leave on “(leave alone)” to record whatever scene is already live."></select>
+    </label>
+    <label class="obs-cfg-row obs-cfg-check">
+      <input type="checkbox" id="obs-cfg-match" />
+      <span id="obs-cfg-match-label">match OBS canvas to this display</span>
+    </label>
+    <div id="obs-cfg-actions">
+      <button class="ctrl-btn" id="obs-cfg-connect" title="Connect to OBS and load its scene list">connect</button>
+      <button class="ctrl-btn" id="obs-cfg-disconnect" title="Drop the connection">disconnect</button>
+      <span class="qualem-share-status" id="obs-cfg-status"></span>
+    </div>
+    <div class="qualem-share-hint">
+      OBS must be running with <b>Tools → WebSocket Server Settings → Enable WebSocket server</b>.
+      Build the scene once in OBS — <i>Display Capture</i> of the screen this app is fullscreened on is
+      the most faithful (it catches native dropdowns and OS menus that window capture can miss);
+      <i>Window Capture</i> of the installed PWA window works when you want the app without the rest
+      of the desktop. For audio, add OBS's per-app audio source (Windows: <i>Application Audio
+      Capture</i>; macOS 13+: the <i>macOS Screen Capture</i> source's app audio) pointed at this app,
+      or route the rig through a virtual device.
     </div>
   </div>
 </div>

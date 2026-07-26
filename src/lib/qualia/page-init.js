@@ -35,6 +35,7 @@ import { createChron } from './chron.js';
 import { initQRInterject } from './qr-interject.js';
 import { initSyncUI } from './sync-ui.js';
 import { createRecorder } from './recorder.js';
+import { createObsClient, loadObsConfig, saveObsConfig, displayPixelSize } from './obs.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import {
   loadExcludedFor as loadPhaseExcludedFor,
@@ -516,7 +517,14 @@ export function initQualiaPage() {
   // (clean fx + overlay output, no screen-share dialog); 'tab' uses
   // getDisplayMedia({preferCurrentTab: true}) to capture the whole tab
   // including strudel REPL + sequencer panels + any open HUD cards.
-  let captureMode = (stored.captureMode === 'tab' && tabCaptureSupported) ? 'tab' : 'viewport';
+  // 'obs' hands the rec button to OBS Studio over its WebSocket — the only
+  // mode whose take includes the HUD, panels, strudel REPL and QR popups,
+  // which for a live-coding set are the show rather than chrome around it.
+  // It captures nothing itself, so it's available on every browser that has
+  // WebSocket + WebCrypto (i.e. any secure context).
+  let captureMode = stored.captureMode === 'obs' ? 'obs'
+                  : (stored.captureMode === 'tab' && tabCaptureSupported) ? 'tab'
+                  : 'viewport';
   // Auto-save (default on): qfx recordings save with a default filename and
   // no save-dialog (which on macOS leaves fullscreen). Off = choose location.
   let autoSaveRec = stored.recAutoSave !== false;
@@ -3220,6 +3228,190 @@ export function initQualiaPage() {
   // popover wiring; the menu items below set the mode. refreshRecordModeBtn
   // keeps the active menu item, the trigger tooltip, and the rec button
   // tooltip in sync with captureMode.
+  // ── OBS capture mode ─────────────────────────────────────────────────────
+  // In 'obs' mode the rec button stops being a recorder and becomes a remote:
+  // it drives OBS Studio, which captures the app's own OS window (or the
+  // display it's fullscreened on). That's the only route that records qualia
+  // in its entirety — topbar, panels, strudel REPL, QR interjects, theme —
+  // because the in-page composite is fx+overlay by construction and tab
+  // capture wears Chrome's "Sharing this tab" banner.
+  //
+  // Nothing here touches the composite canvas, the MediaRecorder, or the
+  // save/OPFS plumbing; OBS owns the file. The only state we keep is enough
+  // to drive the button label + timer off OBS's own RecordStateChanged.
+  let obsCfg = loadObsConfig();
+  let obsRecStartedAt = 0;
+  const obsClient = createObsClient({
+    onState: (s) => {
+      refreshObsDialog(s);
+      if (captureMode !== 'obs') return;
+      if (s.recording && !obsRecStartedAt) obsRecStartedAt = performance.now();
+      if (!s.recording) obsRecStartedAt = 0;
+      refreshObsRecUi(s);
+    },
+  });
+
+  function obsRecording() { return captureMode === 'obs' && obsClient.isRecording(); }
+
+  function refreshObsRecUi(s) {
+    if (btnRecord) {
+      btnRecord.classList.toggle('active-audio', !!s.recording);
+      if (!s.recording) {
+        btnRecord.textContent = 'rec';
+        btnRecord.title = recBtnTitle();
+      }
+    }
+    if (btnRecordMode) btnRecordMode.disabled = !!s.recording;
+    if (s.recording) {
+      showRecToastActive('obs', 'obs');
+    } else if (s.outputPath) {
+      // OBS wrote the file itself — there's nothing for us to save, so this is
+      // purely "here's where it went".
+      const name = String(s.outputPath).split(/[\\/]/).pop() || s.outputPath;
+      showRecToastReady(name, true, null);
+    } else if (recToast?.classList.contains('rec-active')) {
+      // Only clear the live-recording pill. A blanket hide here would wipe an
+      // error toast we'd just put up: a failed connect emits its state change
+      // (not recording) and then the socket's `close` emits another, both
+      // arriving after the catch block has shown the reason.
+      hideRecToast();
+    }
+  }
+
+  // Connect (if needed), apply the configured scene/resolution, and start.
+  // Kept separate from the button handler so a failure can report the real
+  // reason instead of a generic recording error.
+  async function obsStartRecording() {
+    if (!obsClient.isConnected()) {
+      await obsClient.connect(obsCfg);
+      await obsClient.syncRecordState();
+      obsClient.refreshScenes();
+    }
+    if (obsClient.isRecording()) return;   // OBS was already rolling
+    if (obsCfg.scene) { try { await obsClient.setScene(obsCfg.scene); } catch (e) { console.warn('[obs] scene switch failed:', e); } }
+    if (obsCfg.matchResolution) {
+      try { await obsClient.matchResolution(obsCfg.fps); }
+      catch (e) { console.warn('[obs] could not match resolution:', e); }
+    }
+    await obsClient.startRecord();
+  }
+  async function obsStopRecording() {
+    if (!obsClient.isConnected()) return;
+    await obsClient.stopRecord();
+  }
+
+  // ── OBS settings dialog ──────────────────────────────────────────────────
+  const obsDlg        = document.getElementById('obs-cfg');
+  const obsDlgBackdrop= document.getElementById('obs-cfg-backdrop');
+  const obsDlgClose   = document.getElementById('obs-cfg-close');
+  const obsDlgUrl     = document.getElementById('obs-cfg-url');
+  const obsDlgPass    = document.getElementById('obs-cfg-pass');
+  const obsDlgScene   = document.getElementById('obs-cfg-scene');
+  const obsDlgMatch   = document.getElementById('obs-cfg-match');
+  const obsDlgMatchLbl= document.getElementById('obs-cfg-match-label');
+  const obsDlgConnect = document.getElementById('obs-cfg-connect');
+  const obsDlgDisc    = document.getElementById('obs-cfg-disconnect');
+  const obsDlgStatus  = document.getElementById('obs-cfg-status');
+  const obsDlgDot     = document.getElementById('obs-cfg-dot');
+  const btnRecObsSetup = document.getElementById('btn-rec-obs-setup');
+
+  function refreshObsDialog(s) {
+    if (!obsDlg) return;
+    const st = s || obsClient.getState();
+    if (obsDlgDot) {
+      obsDlgDot.dataset.state = st.connected ? 'on' : st.connecting ? 'busy' : st.error ? 'error' : 'off';
+      obsDlgDot.title = st.connected ? `connected${st.obsVersion ? ` · obs-websocket ${st.obsVersion}` : ''}`
+                      : st.connecting ? 'connecting…' : (st.error || 'not connected');
+    }
+    if (obsDlgStatus) {
+      obsDlgStatus.textContent = st.connecting ? 'connecting…'
+        : st.connected ? (st.recording ? 'connected · recording' : 'connected')
+        : st.error || '';
+    }
+    // Repopulate the scene picker, preserving the stored choice even when it
+    // isn't in the list yet (not connected, or the scene was renamed).
+    if (obsDlgScene && obsDlg.style.display !== 'none') {
+      const want = obsCfg.scene;
+      const names = st.scenes || [];
+      const signature = `|${names.join('|')}|${want}`;
+      if (obsDlgScene.dataset.sig !== signature) {
+        obsDlgScene.dataset.sig = signature;
+        obsDlgScene.innerHTML = '';
+        const none = document.createElement('option');
+        none.value = ''; none.textContent = '(leave alone)';
+        obsDlgScene.appendChild(none);
+        const all = names.includes(want) || !want ? names : [want, ...names];
+        for (const n of all) {
+          const o = document.createElement('option');
+          o.value = n; o.textContent = n;
+          obsDlgScene.appendChild(o);
+        }
+        obsDlgScene.value = want;
+      }
+    }
+  }
+
+  function openObsDialog() {
+    if (!obsDlg) return;
+    obsCfg = loadObsConfig();
+    if (obsDlgUrl)  obsDlgUrl.value = obsCfg.url;
+    if (obsDlgPass) obsDlgPass.value = obsCfg.password;
+    if (obsDlgMatch) obsDlgMatch.checked = obsCfg.matchResolution;
+    if (obsDlgMatchLbl) {
+      const d = displayPixelSize();
+      obsDlgMatchLbl.textContent = `match OBS canvas to this display (${d.width}×${d.height})`
+        + (d.clamped ? ` — clamped from ${d.rawWidth}×${d.rawHeight}, OBS caps at 4096` : '');
+    }
+    if (obsDlgScene) obsDlgScene.dataset.sig = '';   // force a repopulate
+    obsDlg.style.display = '';
+    if (obsDlgBackdrop) obsDlgBackdrop.style.display = '';
+    refreshObsDialog();
+    // Connecting on open is what makes the scene picker useful, and it's the
+    // cheapest place to surface "OBS isn't running" — long before showtime.
+    if (!obsClient.isConnected()) {
+      obsClient.connect(obsCfg)
+        .then(() => { obsClient.syncRecordState(); return obsClient.refreshScenes(); })
+        .then(() => refreshObsDialog())
+        .catch(() => refreshObsDialog());
+    } else {
+      obsClient.refreshScenes().then(() => refreshObsDialog());
+    }
+  }
+  function closeObsDialog() {
+    if (obsDlg) obsDlg.style.display = 'none';
+    if (obsDlgBackdrop) obsDlgBackdrop.style.display = 'none';
+  }
+  function persistObsCfg() {
+    obsCfg = {
+      ...obsCfg,
+      url:  (obsDlgUrl?.value || '').trim() || loadObsConfig().url,
+      password: obsDlgPass?.value || '',
+      scene: obsDlgScene?.value || '',
+      matchResolution: !!obsDlgMatch?.checked,
+    };
+    saveObsConfig(obsCfg);
+    refreshRecordModeBtn();
+  }
+  btnRecObsSetup?.addEventListener('click', () => { closeAllGroupsExcept(null); openObsDialog(); });
+  obsDlgClose?.addEventListener('click', closeObsDialog);
+  obsDlgBackdrop?.addEventListener('click', closeObsDialog);
+  obsDlgUrl?.addEventListener('change', persistObsCfg);
+  obsDlgPass?.addEventListener('change', persistObsCfg);
+  obsDlgScene?.addEventListener('change', persistObsCfg);
+  obsDlgMatch?.addEventListener('change', persistObsCfg);
+  obsDlgConnect?.addEventListener('click', () => {
+    persistObsCfg();
+    obsClient.disconnect();
+    obsClient.connect(obsCfg)
+      .then(() => { obsClient.syncRecordState(); return obsClient.refreshScenes(); })
+      .then(() => refreshObsDialog())
+      .catch(() => refreshObsDialog());
+  });
+  obsDlgDisc?.addEventListener('click', () => { obsClient.disconnect(); refreshObsDialog(); });
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && obsDlg && obsDlg.style.display !== 'none') closeObsDialog();
+  });
+
   const captureMenuItems = document.querySelectorAll('.qg-group[data-group="capture"] .qg-menuitem[data-capture]');
   // No tab capture on this browser (mobile) → the "tab" item becomes the
   // system-recorder helper. Relabel it up front; behavior swaps in the
@@ -3238,6 +3430,10 @@ export function initQualiaPage() {
   const btnRecAutoSave = document.getElementById('btn-rec-autosave');
   const btnRecAutoFs = document.getElementById('btn-rec-autofs');
   const btnRecAutoZen = document.getElementById('btn-rec-autozen');
+  // Stash the authored tooltips — obs mode swaps in an "n/a here" explanation
+  // for the two modifiers it doesn't use, and has to be able to put the real
+  // one back when the user switches away.
+  for (const b of [btnRecAutoSave, btnRecAutoZen]) if (b) b.dataset.baseTitle = b.title;
   // True once the companion chrome.tabCapture extension announces itself
   // (extras/capture-extension). Its takes have no share picker and no
   // "Sharing this tab" banner; declared here (not at the bridge below) so
@@ -3247,6 +3443,14 @@ export function initQualiaPage() {
   // that apply on a qfx take (auto-⛶ → fullscreen, auto-zen → HUD hidden).
   // Single source of truth so refreshRecordModeBtn + onStateChange agree.
   function recBtnTitle() {
+    if (captureMode === 'obs') {
+      // auto-zen is deliberately NOT offered here: the HUD is the reason to
+      // use OBS at all. auto-⛶ still applies — fullscreen removes the window
+      // frame from a display capture without hiding a single panel.
+      const fs = autoFullscreenRec ? 'fullscreen ' : '';
+      const conn = obsClient.isConnected() ? '' : ' — will connect on press';
+      return `Record ${fs}via OBS (Shift+R)${conn}`;
+    }
     const qfx = captureMode !== 'tab';
     const fs  = autoFullscreenRec && qfx ? 'fullscreen ' : '';
     const zen = autoZenRec && qfx ? 'zen ' : '';
@@ -3261,14 +3465,29 @@ export function initQualiaPage() {
       btnRecAutoFs.textContent = autoFullscreenRec ? 'auto-⛶ ✓' : 'auto-⛶';
     }
     if (btnRecAutoZen) {
-      btnRecAutoZen.classList.toggle('active', autoZenRec);
-      btnRecAutoZen.setAttribute('aria-checked', autoZenRec ? 'true' : 'false');
-      btnRecAutoZen.textContent = autoZenRec ? 'auto-zen ✓' : 'auto-zen';
+      // Meaningless in obs mode — zen hides the HUD, which is the whole reason
+      // to be recording through OBS. Dim it rather than let it silently
+      // sabotage a take.
+      const zenNA = captureMode === 'obs';
+      btnRecAutoZen.classList.toggle('active', autoZenRec && !zenNA);
+      btnRecAutoZen.setAttribute('aria-checked', autoZenRec && !zenNA ? 'true' : 'false');
+      btnRecAutoZen.textContent = zenNA ? 'auto-zen n/a' : autoZenRec ? 'auto-zen ✓' : 'auto-zen';
+      btnRecAutoZen.style.opacity = zenNA ? '0.45' : '';
+      btnRecAutoZen.title = zenNA
+        ? 'Not used in OBS mode — zen hides the HUD, and capturing the HUD is the point of recording through OBS.'
+        : btnRecAutoZen.dataset.baseTitle || btnRecAutoZen.title;
     }
     if (btnRecAutoSave) {
-      btnRecAutoSave.classList.toggle('active', autoSaveRec);
-      btnRecAutoSave.setAttribute('aria-checked', autoSaveRec ? 'true' : 'false');
-      btnRecAutoSave.textContent = autoSaveRec ? 'auto-save ✓' : 'auto-save';
+      // OBS owns its own output file + path, so there is nothing for the
+      // in-page save plumbing to do.
+      const saveNA = captureMode === 'obs';
+      btnRecAutoSave.classList.toggle('active', autoSaveRec && !saveNA);
+      btnRecAutoSave.setAttribute('aria-checked', autoSaveRec && !saveNA ? 'true' : 'false');
+      btnRecAutoSave.textContent = saveNA ? 'auto-save n/a' : autoSaveRec ? 'auto-save ✓' : 'auto-save';
+      btnRecAutoSave.style.opacity = saveNA ? '0.45' : '';
+      btnRecAutoSave.title = saveNA
+        ? 'Not used in OBS mode — OBS writes the file to its own recording path.'
+        : btnRecAutoSave.dataset.baseTitle || btnRecAutoSave.title;
     }
     if (btnRecordMode) {
       // The companion extension (extras/capture-extension) is the banner-free
@@ -3278,7 +3497,9 @@ export function initQualiaPage() {
       const extHint = capExtAvailable
         ? ' Companion capture extension detected: press its shortcut (chrome://extensions/shortcuts) to toggle a banner-free full-tab take.'
         : '';
-      btnRecordMode.title = !tabCaptureSupported
+      btnRecordMode.title = captureMode === 'obs'
+        ? 'Capture mode: OBS — the rec button starts/stops OBS Studio over its WebSocket. OBS captures the whole window (or the display this is fullscreened on), so the take includes the topbar, panels, strudel REPL, QR popups and theme. Needs OBS running with its WebSocket server enabled; configure the connection under "obs…".'
+        : !tabCaptureSupported
         ? 'Capture mode: qfx — composites the fx + overlay + camera. This browser has no tab capture; for a recording that includes the panels + menus, tap "sys rec" to prep the OS screen recorder.'
         : captureMode === 'tab'
         ? 'Capture mode: full tab — share-picker captures the whole tab incl. panels. NOTE: Chrome pins a "Sharing this tab" banner over the page for the whole take (fullscreen included; it is not in the saved file). Some browsers/GPUs capture the WebGL visuals as a frozen still, and the file may not open in macOS Preview. For banner-free panel-inclusive capture use the companion extension (extras/capture-extension) or OBS / ⌘⇧5. Audio comes from the in-page mix bus.' + extHint
@@ -3300,7 +3521,16 @@ export function initQualiaPage() {
         showSysRecHint();
         return;
       }
-      captureMode = item.dataset.capture === 'tab' ? 'tab' : 'viewport';
+      const want = item.dataset.capture;
+      captureMode = want === 'tab' ? 'tab' : want === 'obs' ? 'obs' : 'viewport';
+      // Warm the connection on selection so "OBS isn't running" surfaces here
+      // rather than on the first rec press mid-set.
+      if (captureMode === 'obs' && !obsClient.isConnected()) {
+        obsClient.connect(obsCfg)
+          .then(() => { obsClient.syncRecordState(); return obsClient.refreshScenes(); })
+          .catch((e) => console.warn('[obs]', e.message || e))
+          .finally(refreshRecordModeBtn);
+      }
       refreshRecordModeBtn();
       closeAllGroupsExcept(null);            // dismiss the popover after picking
       settings.save();
@@ -3400,6 +3630,19 @@ export function initQualiaPage() {
     if (recToastActions) recToastActions.style.display = 'none';
   }
 
+  // Transient error pill, reusing the "ready" styling. Used by the recorder's
+  // onError and by the OBS remote, whose failures ("OBS isn't running") are
+  // information rather than something to alert() over mid-set.
+  function showRecToastError(msg, ms = 9000) {
+    if (!recToast || !recToastText) { console.warn('[recorder]', msg); return; }
+    recToast.style.display = 'flex';
+    recToast.classList.remove('rec-active');
+    recToast.classList.add('rec-ready');
+    recToastText.textContent = msg;
+    if (recToastActions) recToastActions.style.display = 'none';
+    setTimeout(() => { if (recToastText.textContent === msg) hideRecToast(); }, ms);
+  }
+
   function showRecToastActive(backend, sink) {
     // Active pill: compact timer only, bottom-center, click-through. The
     // rec button itself is the primary indicator (color + text); the
@@ -3446,7 +3689,11 @@ export function initQualiaPage() {
   const recorder = createRecorder({
     getCanvas:           () => recordCompositeCanvas,
     getRecordableStream: () => audio.getRecordableStream?.(),
-    getCaptureMode:      () => recOverride?.mode ?? captureMode,
+    // 'obs' never reaches the recorder (the button short-circuits to the OBS
+    // remote), but the companion-extension bridge can start a take while
+    // captureMode is 'obs' — fall back to the composite rather than hand the
+    // recorder a mode it doesn't know.
+    getCaptureMode:      () => { const m = recOverride?.mode ?? captureMode; return m === 'obs' ? 'viewport' : m; },
     getAutoSave:         () => recOverride?.autoSave ?? autoSaveRec,
     resumeAudio:         () => audio.resumeRecordableMix?.(),
     onCaptureStart:      recordCompositeBegin,
@@ -3537,6 +3784,27 @@ export function initQualiaPage() {
         hideRecToast();
       }
       try {
+        if (captureMode === 'obs') {
+          // OBS mode: the button is a remote, not a recorder. Errors here are
+          // connection problems and the message is the useful part — show it
+          // in the toast rather than an alert that interrupts a set.
+          if (obsClient.isRecording()) {
+            console.log('[obs] stopping');
+            await obsStopRecording();
+          } else {
+            console.log('[obs] starting…');
+            // auto-⛶ applies (a fullscreen window makes for a clean display
+            // capture) but auto-zen never does — see refreshRecordModeBtn.
+            if (autoFullscreenRec && !isFullscreen()) {
+              setFullscreen(true);
+              await awaitEvent(document, 'fullscreenchange', 800);
+              await awaitEvent(window, 'resize', 800);
+              try { core.refreshSize?.(); } catch {}
+            }
+            await obsStartRecording();
+          }
+          return;
+        }
         if (recorder.isRecording()) {
           console.log('[recorder] stopping');
           recorder.stop();
@@ -3554,6 +3822,13 @@ export function initQualiaPage() {
       } catch (err) {
         console.error('[recorder] click failed:', err?.name, err?.message, err);
         if (err?.name === 'NotAllowedError' || err?.name === 'AbortError') return;
+        if (captureMode === 'obs') {
+          // Never alert() mid-set — a modal you have to dismiss is worse than
+          // a failed take. The message already names the likely fix.
+          showRecToastError(err?.message || String(err));
+          refreshRecordModeBtn();
+          return;
+        }
         alert(`Screen recording failed: ${err?.message || err}`);
       }
     });
@@ -3562,8 +3837,12 @@ export function initQualiaPage() {
     // running. Pill text stays just "mm:ss" — keeping it small enough
     // to not obstruct anything when pinned bottom-center.
     setInterval(() => {
-      if (!recorder.isRecording()) return;
-      const sec = Math.floor((performance.now() - recorder.getStartedAt()) / 1000);
+      // In obs mode the take belongs to OBS, so the clock runs from the
+      // RecordStateChanged that told us it started.
+      const obsOn = obsRecording();
+      if (!recorder.isRecording() && !obsOn) return;
+      const startedAt = obsOn ? (obsRecStartedAt || performance.now()) : recorder.getStartedAt();
+      const sec = Math.floor((performance.now() - startedAt) / 1000);
       const mm = Math.floor(sec / 60).toString().padStart(2, '0');
       const ss = (sec % 60).toString().padStart(2, '0');
       btnRecord.textContent = `rec ● ${mm}:${ss}`;
@@ -5585,7 +5864,10 @@ export function initQualiaPage() {
       if (mi.recorder && typeof mi.recorder === 'object') {
         // 'tab' only sticks where tab capture exists — a qualem exported on
         // desktop shouldn't wedge a phone into the dead getDisplayMedia path.
-        if (mi.recorder.captureMode === 'viewport' || (mi.recorder.captureMode === 'tab' && tabCaptureSupported)) captureMode = mi.recorder.captureMode;
+        // 'obs' travels fine — it needs no platform capability beyond a
+        // WebSocket, and the connection settings stay machine-local.
+        if (mi.recorder.captureMode === 'viewport' || mi.recorder.captureMode === 'obs'
+            || (mi.recorder.captureMode === 'tab' && tabCaptureSupported)) captureMode = mi.recorder.captureMode;
         if (typeof mi.recorder.autoSave === 'boolean')       autoSaveRec = mi.recorder.autoSave;
         if (typeof mi.recorder.autoFullscreen === 'boolean') autoFullscreenRec = mi.recorder.autoFullscreen;
         if (typeof mi.recorder.autoZen === 'boolean')        autoZenRec = mi.recorder.autoZen;

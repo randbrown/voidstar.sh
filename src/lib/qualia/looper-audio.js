@@ -37,6 +37,7 @@ import { createStretchNode } from './looper-stretch.js';
 import { createRigStrip } from './rig-strip.js';
 import { makeSoftLimiter, setSoftLimiterEngaged, softLimiterReductionDb, RIG_LEVEL_MAX } from './limiter.js';
 import { autoCorrelate } from './pitch.js';
+import { registerContext, resumeContext } from './audio-unlock.js';
 
 // Reused analysis window for the input-pitch reader (allocation-free hot path).
 // A ~43 ms window at 48 k still resolves down to ~70 Hz (two periods fit), and
@@ -152,9 +153,40 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
 
   const frameZeroAbs = () => (firstChunkAbs != null ? firstChunkAbs : armEstimateAbs);
 
+  // ── context liveness ───────────────────────────────────────────────────────
+  // "Live" means the capture graph exists AND its context is actually
+  // rendering. Those came apart on the auto-boot path: the rig panel restores
+  // itself during page-init (no user gesture yet), so the context is created
+  // suspended and every downstream readout claimed the rig was up while nothing
+  // was flowing. See audio-unlock.js for the full autoplay-policy story.
+  const liveListeners = new Set();
+  let _warnedSuspended = false;
+  function isCtxRunning() { return ctx?.state === 'running'; }
+  function isLive() { return !!srcNode && isCtxRunning(); }
+  function notifyLive() { for (const fn of liveListeners) { try { fn(isLive()); } catch {} } }
+  function onLiveChange(fn) { liveListeners.add(fn); return () => liveListeners.delete(fn); }
+  // Best-effort nudge from a user gesture (mute, fader, tuner, pedal). Cheap
+  // no-op when already running; the point is that every performer reflex that
+  // used to "fix" a dead rig now genuinely does, instead of coincidentally.
+  function nudgeResume() {
+    if (ctx && ctx.state === 'suspended') resumeContext(ctx).then(notifyLive).catch(() => {});
+  }
+
   async function ensureContext() {
-    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
-    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+    if (!ctx) {
+      ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+      registerContext(ctx);
+      try { ctx.addEventListener?.('statechange', notifyLive); } catch {}
+    }
+    // Deliberately NOT `await ctx.resume()`: with no user activation Chrome
+    // leaves that promise pending indefinitely, which used to stall the whole
+    // capture-open path (and startRecording, and freeze) until some later
+    // click released it. Race it, then build the graph regardless — the
+    // shared unlock watch resumes the context on the first real gesture.
+    if (!(await resumeContext(ctx)) && !_warnedSuspended) {
+      _warnedSuspended = true;
+      console.warn('[qualia] rig AudioContext is suspended (no user gesture yet) — the capture graph will be built now and start rendering on the first click/keypress.');
+    }
     if (!workletReady) {
       if (ctx.audioWorklet && typeof ctx.audioWorklet.addModule === 'function') {
         workletReady = ctx.audioWorklet.addModule(recorderWorkletUrl)
@@ -377,6 +409,26 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     }
     // The ring starts filling now (worklet path only — the SP fallback has no ring).
     _ringStartT = usingWorklet ? ctx.currentTime : null;
+
+    // Device-loss recovery. An interface that sleeps, gets unplugged, or is
+    // stolen by another app ends the track — but `srcNode` stays non-null, so
+    // every later ensureCapture() short-circuits and the rig is dead until the
+    // performer thinks to close and reopen the panel. Reopen ourselves instead
+    // (mid-record we leave it alone: tearing the graph down would truncate the
+    // take, and openCapture's stale-device ladder can't help a gone device).
+    const liveTrack = stream.getAudioTracks()[0];
+    if (liveTrack) {
+      liveTrack.addEventListener('ended', () => {
+        if (stream?.getAudioTracks()[0] !== liveTrack) return;   // already replaced
+        console.warn('[qualia] rig input track ended (device lost) — reopening capture');
+        notifyLive();
+        if (recording || !wantCapture()) return;
+        // Force a rebuild: ensureCapture() would early-return on the stale srcNode.
+        teardownCapture();
+        ensureCapture(streamDeviceId).catch((e) => console.warn('[qualia] rig capture reopen failed:', e));
+      });
+    }
+    notifyLive();
   }
 
   function teardownCapture() {
@@ -404,6 +456,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     inputNode = monoSplitter = null;
     stream = null; streamOwned = false;
     _inputSampleRate = 0;
+    notifyLive();
   }
 
   // ── rig master output ──────────────────────────────────────────────────────
@@ -602,8 +655,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Rig level runs past unity into boost (see RIG_LEVEL_MAX in limiter.js);
   // looper.js owns the force-the-limiter-on-while-boosted rule.
   const clampRig = (v) => Math.max(0, Math.min(RIG_LEVEL_MAX, Number(v) || 0));
-  function setRigMuted(on) { _rigMuted = !!on; if (rigMaster) ramp(rigMaster.gain, effRig()); }
-  function setRigLevel(v) { _rigLevel = clampRig(v); if (rigMaster && !_rigMuted) ramp(rigMaster.gain, _rigLevel); }
+  function setRigMuted(on) { _rigMuted = !!on; nudgeResume(); if (rigMaster) ramp(rigMaster.gain, effRig()); }
+  function setRigLevel(v) { _rigLevel = clampRig(v); nudgeResume(); if (rigMaster && !_rigMuted) ramp(rigMaster.gain, _rigLevel); }
   function primeRig(level, muted) { _rigLevel = clampRig(level); _rigMuted = !!muted; if (rigMaster) ramp(rigMaster.gain, effRig()); }
   function setRigLimiter(on) { _rigLimiterOn = !!on; setSoftLimiterEngaged(rigLimiter, _rigLimiterOn); }
   function getRigLimiter() { return _rigLimiterOn; }
@@ -641,7 +694,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       sampleRate: ctx.sampleRate,
       inputSampleRate: _inputSampleRate,
       resampled: !!(_inputSampleRate && Math.abs(_inputSampleRate - ctx.sampleRate) > 1),
-      live: !!srcNode,
+      live: isLive(),
+      suspended: !isCtxRunning(),
     };
   }
 
@@ -665,14 +719,16 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   async function setSignalLevel(v, deviceId) {
     _sigLevel = clamp01(v);
     if (_sigLevel > 0 && !srcNode) { try { await ensureCaptureOpen(deviceId); } catch (e) { console.warn('[qualia] rig signal capture failed:', e); } }
+    else nudgeResume();   // capture already built — the fader move is our activation
     if (sigGain) ramp(sigGain.gain, effSignal());
     maybeCloseCapture();
   }
   function setSignalMuted(on) {
     _sigMuted = !!on;
+    nudgeResume();
     if (sigGain) ramp(sigGain.gain, effSignal());
   }
-  function getSignal() { return { level: _sigLevel, muted: _sigMuted, live: !!srcNode }; }
+  function getSignal() { return { level: _sigLevel, muted: _sigMuted, live: isLive() }; }
   function getChannels() { return _channels; }
   // Switch mono/stereo input. Reopens the capture (cheap; loops keep playing) so
   // the input routing rebuilds — unless mid-record, where it applies next open.
@@ -1372,6 +1428,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     setRigLimiter, getRigLimiter, primeRigLimiter, getRigReductionDb,
     getLatencyInfo,
     setSignalLevel, setSignalMuted, getSignal, primeSignal,
+    // Fires whenever the rig's live-ness changes — capture open/teardown, the
+    // context resuming after the first user gesture, or the input device
+    // dropping out. The panel/topbar subscribe so they stop reporting a rig
+    // that isn't actually rendering.
+    onLiveChange, isLive,
     setChannels, getChannels,
     // Channel strip — persisted config lives in looper.js; updates apply to the
     // live strip when capture is open and are remembered for the next open.

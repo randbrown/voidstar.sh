@@ -20,6 +20,7 @@
 import { emptyAudioFrame, ema } from './field.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
 import { openMicStream } from './devices.js';
+import { registerContext, resumeContext } from './audio-unlock.js';
 
 const MIC_CONSTRAINTS = {
   echoCancellation: false,
@@ -347,7 +348,7 @@ export function createAudio() {
 
   function ensureRecordableMix() {
     if (!recMixCtx) {
-      recMixCtx  = new (window.AudioContext || window.webkitAudioContext)();
+      recMixCtx  = registerContext(new (window.AudioContext || window.webkitAudioContext)());
       recMixDest = recMixCtx.createMediaStreamDestination();
     }
     if (recMixCtx.state === 'suspended') recMixCtx.resume().catch(() => {});
@@ -423,9 +424,12 @@ export function createAudio() {
   async function resumeRecordableMix() {
     ensureRecordableMix();
     const ps = [];
-    if (recMixCtx?.state === 'suspended') ps.push(recMixCtx.resume().catch(() => {}));
+    // Bounded resumes (see audio-unlock.js): record-start is a user gesture so
+    // these normally settle instantly, but a hung resume must never stall the
+    // recorder's start path.
+    if (recMixCtx) ps.push(resumeContext(recMixCtx));
     const m = sources.get('mic');
-    if (m?.ctx?.state === 'suspended') ps.push(m.ctx.resume().catch(() => {}));
+    if (m?.ctx) ps.push(resumeContext(m.ctx));
     await Promise.all(ps);
   }
 
@@ -436,13 +440,16 @@ export function createAudio() {
     // unplugged since last session), the shared ladder falls back to the
     // browser default so a returning user isn't blocked by a missing device.
     const stream = await openMicStream(deviceId, MIC_CONSTRAINTS);
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = registerContext(new (window.AudioContext || window.webkitAudioContext)());
     // Awaiting getUserMedia above expires the user-gesture activation, so on
     // some platforms (notably macOS Chrome) the new context starts 'suspended'.
     // A realtime MediaStream still feeds the analyser while suspended — so the
     // visualizers react — but a suspended context won't drive its destination,
-    // which silently kills mic monitoring. Resume it so output flows.
-    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
+    // which silently kills mic monitoring. Resume it so output flows — bounded,
+    // because with no activation at all (auto-boot) Chrome leaves the resume
+    // promise pending forever and this whole start() would never return.
+    // audio-unlock.js retries it on the first real gesture.
+    await resumeContext(ctx);
     const analyser = ctx.createAnalyser();
     // Smaller FFT → less internal latency; lower smoothingTimeConstant
     // makes the analyser itself respond more quickly so beat transients
