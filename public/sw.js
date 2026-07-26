@@ -67,7 +67,19 @@
 //     of the cached remote. (App-shell change → version bumped per the rule.)
 // Bumping the version also purges the old cache on every client so no one stays
 // pinned to a stale app-shell.
-const SW_VERSION = 'v14';
+// v15: catch-up bump. The OBS capture-mode work (#219, #220, #221) changed the
+//     app shell — `src/pages/qualia.astro` gained the obs menu item, the obs…
+//     dialog and its styles — across three deploys without touching this file,
+//     so the "bump on any app-shell change" rule above was missed each time.
+//     That left every client pinned to the v14 cache with no install → activate
+//     → purge-old-caches → clients.claim() cycle to clear a poisoned entry, and
+//     prod surfaced the familiar "Failed to load module script: … MIME type of
+//     text/html" for a hashed `/_astro/*` script. Bumping re-triggers that cycle
+//     on every client's next load. NOTE: this only heals clients the SW actually
+//     controls — a page served over http:// has no service worker at all
+//     (secure-context only), and a 404 pinned in Cloudflare's edge cache under
+//     the `immutable, max-age=1y` header still needs a dashboard purge.
+const SW_VERSION = 'v15';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
