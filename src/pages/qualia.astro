@@ -1461,6 +1461,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .obs-cfg-canvas { flex: 1; color: var(--cyan); font-size: 0.66rem; }
     .obs-cfg-canvas[data-match="no"] { color: var(--accent); }
+    /* Fit diagnosis — aligned monospace rows + advisory lines beneath. */
+    .obs-cfg-fitrow { align-items: flex-start; }
+    .obs-cfg-fitrow > span:first-child { padding-top: 0.15rem; }
+    .obs-cfg-fit {
+      flex: 1; min-width: 0;
+      display: flex; flex-direction: column; gap: 0.1rem;
+      font-size: 0.62rem; line-height: 1.5; color: var(--muted);
+      white-space: pre-wrap;
+    }
+    .obs-cfg-fit .m { color: var(--cyan); }
+    .obs-cfg-fit .warn { color: var(--accent); }
+    .obs-cfg-fit .good { color: var(--green); }
     #obs-cfg-actions { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
     .obs-cfg-dot { font-size: 0.7rem; color: var(--muted); }
     .obs-cfg-dot[data-state="on"]      { color: var(--green); }
@@ -3612,6 +3624,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span class="obs-cfg-canvas" id="obs-cfg-canvas">—</span>
       <button class="ctrl-btn" id="obs-cfg-match"
               title="Set OBS's canvas + output size to this display's pixel size. Setup-time only — this makes OBS rebuild its whole video pipeline and has been seen to crash it (obsproject/obs-studio#10946), so it refuses while OBS is recording/streaming, and does nothing if the size already matches. Setting it by hand in OBS → Settings → Video is the safe route.">match ⚠</button>
+    </div>
+    <div class="obs-cfg-row obs-cfg-fitrow">
+      <span>fit</span>
+      <div class="obs-cfg-fit" id="obs-cfg-fit"
+           title="How this window, this display and OBS's canvas relate — i.e. where the wasted space in your OBS preview is coming from, and which capture Method avoids it."></div>
     </div>
     <div id="obs-cfg-actions">
       <button class="ctrl-btn" id="obs-cfg-connect" title="Connect to OBS and load its scene list">connect</button>

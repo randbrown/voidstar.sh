@@ -35,7 +35,8 @@ import { createChron } from './chron.js';
 import { initQRInterject } from './qr-interject.js';
 import { initSyncUI } from './sync-ui.js';
 import { createRecorder } from './recorder.js';
-import { createObsClient, loadObsConfig, saveObsConfig, displayPixelSize } from './obs.js';
+import { createObsClient, loadObsConfig, saveObsConfig, displayPixelSize,
+         fitReport, aspectLabel } from './obs.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import {
   loadExcludedFor as loadPhaseExcludedFor,
@@ -3309,6 +3310,7 @@ export function initQualiaPage() {
   const obsDlgScene   = document.getElementById('obs-cfg-scene');
   const obsDlgMatch   = document.getElementById('obs-cfg-match');
   const obsDlgCanvas  = document.getElementById('obs-cfg-canvas');
+  const obsDlgFit     = document.getElementById('obs-cfg-fit');
   const obsDlgConnect = document.getElementById('obs-cfg-connect');
   const obsDlgDisc    = document.getElementById('obs-cfg-disconnect');
   const obsDlgStatus  = document.getElementById('obs-cfg-status');
@@ -3363,6 +3365,8 @@ export function initQualiaPage() {
       obsDlgCanvas.dataset.match = '';
       obsDlgCanvas.textContent = `this display ${want}`
         + (d.clamped ? ` (clamped from ${d.rawWidth}×${d.rawHeight}; OBS caps at 4096)` : '');
+      _obsCanvasSize = null;
+      renderObsFit();
       return;
     }
     try {
@@ -3374,11 +3378,71 @@ export function initQualiaPage() {
       obsDlgCanvas.textContent = matches
         ? `${have} — matches this display`
         : `OBS ${have} · this display ${want}`;
+      // The fit diagnosis is framed against OBS's BASE canvas — that's what
+      // sources are composited into and what "Fit to screen" fits to. The
+      // output size only rescales the finished frame.
+      _obsCanvasSize = { width: v.baseWidth, height: v.baseHeight };
     } catch {
       obsDlgCanvas.dataset.match = '';
       obsDlgCanvas.textContent = `this display ${want}`;
+      _obsCanvasSize = null;
     }
+    renderObsFit();
   }
+
+  // ── fit diagnosis ────────────────────────────────────────────────────────
+  // Answers "why is there black around my capture?" from the browser side,
+  // which is where the answer actually lives: macOS Screen Capture in
+  // Application mode hands OBS a DISPLAY-sized frame with only this app's
+  // windows in it, so a windowed app arrives pre-padded with black and Fit to
+  // screen faithfully scales the padding up too. Nothing in OBS shows you that;
+  // everything needed to see it is in here.
+  let _obsCanvasSize = null;   // last GetVideoSettings result, or null
+  function renderObsFit() {
+    if (!obsDlgFit) return;
+    const r = fitReport(_obsCanvasSize);
+    const rows = [];
+    const px = (s) => `${s.width}×${s.height}`;
+    const pad = (s) => s.padEnd(8, ' ');
+
+    rows.push([`${pad('display')}<span class="m">${px(r.display)}</span> (${aspectLabel(r.display.width, r.display.height)})`, '']);
+    rows.push([`${pad('window')}<span class="m">${px(r.window)}</span> — `
+      + (r.fills ? '<span class="good">fills the display</span>'
+                 : `<span class="warn">covers ${Math.round(r.coverage * 100)}% of it</span>`), '']);
+    if (r.canvas) {
+      rows.push([`${pad('canvas')}<span class="m">${px(r.canvas)}</span> (${aspectLabel(r.canvas.width, r.canvas.height)})`, '']);
+    } else {
+      rows.push([`${pad('canvas')}—  (connect to read OBS's canvas)`, '']);
+    }
+
+    // The advisory half: what each capture Method would actually produce.
+    if (!r.fills) {
+      rows.push(['<span class="warn">→ app/display capture pads this window with black. '
+        + 'Fullscreen (X) to fill, or set the source Method to Window.</span>', '']);
+    }
+    if (r.canvas) {
+      const say = (label, f) => {
+        if (!f) return null;
+        if (f.barsX <= 1 && f.barsY <= 1) return `<span class="good">→ ${label}: fills the canvas exactly</span>`;
+        const which = f.barsX > f.barsY
+          ? `~${f.barsX}px bars left + right`
+          : `~${f.barsY}px bars top + bottom`;
+        return `→ ${label}: <span class="warn">${which}</span>`;
+      };
+      // "app" covers Application AND Display capture — both frame the display.
+      const a = say('app/display capture', r.appFit);
+      const w = say('window capture', r.windowFit);
+      if (a) rows.push([a, '']);
+      if (w && !r.fills) rows.push([w, '']);   // identical to `a` once fullscreen
+    }
+    obsDlgFit.innerHTML = rows.map(([html]) => `<div>${html}</div>`).join('');
+  }
+
+  // The window can be resized or fullscreened while the dialog is open —
+  // recompute so the numbers track instead of going stale mid-setup.
+  const obsFitWatch = () => { if (obsDlg && obsDlg.style.display !== 'none') renderObsFit(); };
+  window.addEventListener('resize', obsFitWatch);
+  document.addEventListener('fullscreenchange', obsFitWatch);
 
   function openObsDialog() {
     if (!obsDlg) return;

@@ -105,6 +105,79 @@ export function displayPixelSize() {
   };
 }
 
+/** This window's captured pixel size. `outerWidth/Height` (not inner) because
+ *  an OS window capture grabs the whole window frame, title bar included. */
+export function windowPixelSize() {
+  const dpr = window.devicePixelRatio || 1;
+  return {
+    width:  Math.max(1, Math.round((window.outerWidth  || window.innerWidth)  * dpr)),
+    height: Math.max(1, Math.round((window.outerHeight || window.innerHeight) * dpr)),
+  };
+}
+
+// Aspect ratios reduce to nonsense on real panel sizes (1728:1117 is
+// technically correct and useless), so snap to a recognisable ratio when we're
+// within 2% of one and fall back to a decimal otherwise.
+const NAMED_ASPECTS = [[16, 9], [16, 10], [4, 3], [3, 2], [21, 9], [1, 1], [9, 16], [9, 19.5]];
+export function aspectLabel(w, h) {
+  if (!w || !h) return '';
+  const r = w / h;
+  let best = null, bestErr = Infinity;
+  for (const [x, y] of NAMED_ASPECTS) {
+    const err = Math.abs(r - x / y) / (x / y);
+    if (err < bestErr) { bestErr = err; best = [x, y]; }
+  }
+  return bestErr <= 0.02 ? `${best[0]}:${best[1]}` : `${r.toFixed(2)}:1`;
+}
+
+/**
+ * What OBS's "Fit to screen" will do with a source of `src` pixels inside a
+ * `canvas`: it scales to fit, preserving aspect, so any aspect mismatch comes
+ * back as bars. Returns the bar thickness in canvas pixels per side —
+ * `barsX` > 0 is pillarboxing, `barsY` > 0 is letterboxing.
+ */
+export function fitBars(src, canvas) {
+  if (!src?.width || !src?.height || !canvas?.width || !canvas?.height) return null;
+  const scale = Math.min(canvas.width / src.width, canvas.height / src.height);
+  return {
+    scale,
+    barsX: Math.round((canvas.width  - src.width  * scale) / 2),
+    barsY: Math.round((canvas.height - src.height * scale) / 2),
+  };
+}
+
+/**
+ * Everything needed to explain the wasted space in an OBS preview, computed
+ * from the browser side alone (plus OBS's canvas when we're connected).
+ *
+ * The case this exists for: macOS Screen Capture in **Application** mode hands
+ * OBS a DISPLAY-sized frame with only this app's windows drawn into it and
+ * black everywhere else. Fit to screen then faithfully fits the black too, so
+ * the preview looks broken while every transform is behaving correctly. The
+ * fix is upstream of OBS — cover the display (fullscreen) or capture the window
+ * instead — and none of that is visible from inside OBS, but all of it is
+ * visible from in here.
+ */
+export function fitReport(canvas) {
+  const display = displayPixelSize();
+  const win = windowPixelSize();
+  const displayRaw = { width: display.rawWidth, height: display.rawHeight };
+  // Area coverage, not min(w,h) — a window can be full-width and half-height.
+  const coverage = (win.width * win.height) / (displayRaw.width * displayRaw.height);
+  const fills = win.width >= displayRaw.width * 0.995 && win.height >= displayRaw.height * 0.995;
+  return {
+    display: displayRaw,
+    window: win,
+    canvas: canvas || null,
+    coverage: Math.max(0, Math.min(1, coverage)),
+    fills,
+    // How each capture Method would land in the canvas. "app" covers both
+    // Application and Display capture — both produce a display-sized frame.
+    appFit:    canvas ? fitBars(displayRaw, canvas) : null,
+    windowFit: canvas ? fitBars(win, canvas) : null,
+  };
+}
+
 /**
  * @param {object} opts
  * @param {(state) => void} opts.onState  called on every connection/record
