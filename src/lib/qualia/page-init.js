@@ -3289,10 +3289,10 @@ export function initQualiaPage() {
     }
     if (obsClient.isRecording()) return;   // OBS was already rolling
     if (obsCfg.scene) { try { await obsClient.setScene(obsCfg.scene); } catch (e) { console.warn('[obs] scene switch failed:', e); } }
-    if (obsCfg.matchResolution) {
-      try { await obsClient.matchResolution(obsCfg.fps); }
-      catch (e) { console.warn('[obs] could not match resolution:', e); }
-    }
+    // Nothing that reconfigures OBS runs here. The canvas-size match used to,
+    // and SetVideoSettings crashed OBS outright (obs_reset_video from a pooled
+    // request thread — obsproject/obs-studio#10946). Showtime is for StartRecord
+    // and nothing else; canvas setup lives behind a button in the obs… dialog.
     await obsClient.startRecord();
   }
   async function obsStopRecording() {
@@ -3308,7 +3308,7 @@ export function initQualiaPage() {
   const obsDlgPass    = document.getElementById('obs-cfg-pass');
   const obsDlgScene   = document.getElementById('obs-cfg-scene');
   const obsDlgMatch   = document.getElementById('obs-cfg-match');
-  const obsDlgMatchLbl= document.getElementById('obs-cfg-match-label');
+  const obsDlgCanvas  = document.getElementById('obs-cfg-canvas');
   const obsDlgConnect = document.getElementById('obs-cfg-connect');
   const obsDlgDisc    = document.getElementById('obs-cfg-disconnect');
   const obsDlgStatus  = document.getElementById('obs-cfg-status');
@@ -3351,30 +3351,54 @@ export function initQualiaPage() {
     }
   }
 
+  // Canvas readout: OBS's current base size vs this display's pixel size, so
+  // the mismatch (if any) is visible without pressing anything. Purely a
+  // GetVideoSettings read — nothing here reconfigures OBS.
+  async function refreshObsCanvas(note) {
+    if (!obsDlgCanvas) return;
+    const d = displayPixelSize();
+    const want = `${d.width}×${d.height}`;
+    if (note) { obsDlgCanvas.textContent = note; return; }
+    if (!obsClient.isConnected()) {
+      obsDlgCanvas.dataset.match = '';
+      obsDlgCanvas.textContent = `this display ${want}`
+        + (d.clamped ? ` (clamped from ${d.rawWidth}×${d.rawHeight}; OBS caps at 4096)` : '');
+      return;
+    }
+    try {
+      const v = await obsClient.getVideoSettings();
+      const have = `${v.baseWidth}×${v.baseHeight}`;
+      const matches = v.baseWidth === d.width && v.baseHeight === d.height
+                   && v.outputWidth === d.width && v.outputHeight === d.height;
+      obsDlgCanvas.dataset.match = matches ? 'yes' : 'no';
+      obsDlgCanvas.textContent = matches
+        ? `${have} — matches this display`
+        : `OBS ${have} · this display ${want}`;
+    } catch {
+      obsDlgCanvas.dataset.match = '';
+      obsDlgCanvas.textContent = `this display ${want}`;
+    }
+  }
+
   function openObsDialog() {
     if (!obsDlg) return;
     obsCfg = loadObsConfig();
     if (obsDlgUrl)  obsDlgUrl.value = obsCfg.url;
     if (obsDlgPass) obsDlgPass.value = obsCfg.password;
-    if (obsDlgMatch) obsDlgMatch.checked = obsCfg.matchResolution;
-    if (obsDlgMatchLbl) {
-      const d = displayPixelSize();
-      obsDlgMatchLbl.textContent = `match OBS canvas to this display (${d.width}×${d.height})`
-        + (d.clamped ? ` — clamped from ${d.rawWidth}×${d.rawHeight}, OBS caps at 4096` : '');
-    }
     if (obsDlgScene) obsDlgScene.dataset.sig = '';   // force a repopulate
     obsDlg.style.display = '';
     if (obsDlgBackdrop) obsDlgBackdrop.style.display = '';
     refreshObsDialog();
+    refreshObsCanvas();
     // Connecting on open is what makes the scene picker useful, and it's the
     // cheapest place to surface "OBS isn't running" — long before showtime.
     if (!obsClient.isConnected()) {
       obsClient.connect(obsCfg)
         .then(() => { obsClient.syncRecordState(); return obsClient.refreshScenes(); })
-        .then(() => refreshObsDialog())
+        .then(() => { refreshObsDialog(); refreshObsCanvas(); })
         .catch(() => refreshObsDialog());
     } else {
-      obsClient.refreshScenes().then(() => refreshObsDialog());
+      obsClient.refreshScenes().then(() => { refreshObsDialog(); refreshObsCanvas(); });
     }
   }
   function closeObsDialog() {
@@ -3387,7 +3411,6 @@ export function initQualiaPage() {
       url:  (obsDlgUrl?.value || '').trim() || loadObsConfig().url,
       password: obsDlgPass?.value || '',
       scene: obsDlgScene?.value || '',
-      matchResolution: !!obsDlgMatch?.checked,
     };
     saveObsConfig(obsCfg);
     refreshRecordModeBtn();
@@ -3398,13 +3421,39 @@ export function initQualiaPage() {
   obsDlgUrl?.addEventListener('change', persistObsCfg);
   obsDlgPass?.addEventListener('change', persistObsCfg);
   obsDlgScene?.addEventListener('change', persistObsCfg);
-  obsDlgMatch?.addEventListener('change', persistObsCfg);
+  // The one request in this whole module that reconfigures OBS. It lives behind
+  // an explicit press, with a confirm, because it rebuilds OBS's video pipeline
+  // and has been observed to crash OBS outright — see obs.js matchResolution.
+  obsDlgMatch?.addEventListener('click', async () => {
+    if (!obsClient.isConnected()) { refreshObsCanvas('not connected'); return; }
+    const d = displayPixelSize();
+    const ok = confirm(
+      `Set OBS's canvas to ${d.width}×${d.height}?\n\n`
+      + 'This makes OBS rebuild its entire video pipeline, which has been seen to crash OBS '
+      + '(obsproject/obs-studio#10946). Setting it by hand in OBS → Settings → Video is safer.\n\n'
+      + 'Only do this now, never mid-set.');
+    if (!ok) return;
+    obsDlgMatch.disabled = true;
+    refreshObsCanvas('applying…');
+    try {
+      const r = await obsClient.matchResolution();
+      if (r.applied) refreshObsCanvas(`set to ${r.target.width}×${r.target.height}`);
+      else refreshObsCanvas(r.reason || 'no change');
+      setTimeout(() => refreshObsCanvas(), 2500);
+    } catch (e) {
+      // A crash on the OBS side shows up here as the socket dying mid-request.
+      refreshObsCanvas(`failed: ${e?.message || e}`);
+    } finally {
+      obsDlgMatch.disabled = false;
+      refreshObsDialog();
+    }
+  });
   obsDlgConnect?.addEventListener('click', () => {
     persistObsCfg();
     obsClient.disconnect();
     obsClient.connect(obsCfg)
       .then(() => { obsClient.syncRecordState(); return obsClient.refreshScenes(); })
-      .then(() => refreshObsDialog())
+      .then(() => { refreshObsDialog(); refreshObsCanvas(); })
       .catch(() => refreshObsDialog());
   });
   obsDlgDisc?.addEventListener('click', () => { obsClient.disconnect(); refreshObsDialog(); });

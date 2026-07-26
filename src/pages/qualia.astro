@@ -1459,8 +1459,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       padding: 0.3rem 0.4rem;
       font-family: var(--font-mono); font-size: 0.68rem;
     }
-    .obs-cfg-check { gap: 0.4rem; }
-    .obs-cfg-check > span { flex: 1; }
+    .obs-cfg-canvas { flex: 1; color: var(--cyan); font-size: 0.66rem; }
+    .obs-cfg-canvas[data-match="no"] { color: var(--accent); }
     #obs-cfg-actions { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
     .obs-cfg-dot { font-size: 0.7rem; color: var(--muted); }
     .obs-cfg-dot[data-state="on"]      { color: var(--green); }
@@ -3607,10 +3607,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span>scene</span>
       <select id="obs-cfg-scene" title="Switch to this scene before recording. Leave on “(leave alone)” to record whatever scene is already live."></select>
     </label>
-    <label class="obs-cfg-row obs-cfg-check">
-      <input type="checkbox" id="obs-cfg-match" />
-      <span id="obs-cfg-match-label">match OBS canvas to this display</span>
-    </label>
+    <div class="obs-cfg-row">
+      <span>canvas</span>
+      <span class="obs-cfg-canvas" id="obs-cfg-canvas">—</span>
+      <button class="ctrl-btn" id="obs-cfg-match"
+              title="Set OBS's canvas + output size to this display's pixel size. Setup-time only — this makes OBS rebuild its whole video pipeline and has been seen to crash it (obsproject/obs-studio#10946), so it refuses while OBS is recording/streaming, and does nothing if the size already matches. Setting it by hand in OBS → Settings → Video is the safe route.">match ⚠</button>
+    </div>
     <div id="obs-cfg-actions">
       <button class="ctrl-btn" id="obs-cfg-connect" title="Connect to OBS and load its scene list">connect</button>
       <button class="ctrl-btn" id="obs-cfg-disconnect" title="Drop the connection">disconnect</button>
@@ -3624,6 +3626,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       of the desktop. For audio, add OBS's per-app audio source (Windows: <i>Application Audio
       Capture</i>; macOS 13+: the <i>macOS Screen Capture</i> source's app audio) pointed at this app,
       or route the rig through a virtual device.
+      <br /><br />
+      Recording only ever sends <b>StartRecord</b> / <b>StopRecord</b> (plus the scene switch above) —
+      nothing that reconfigures OBS runs at showtime. <b>match ⚠</b> is the one exception and it is a
+      setup-time button on purpose: changing the canvas over the WebSocket rebuilds OBS's entire
+      video pipeline and can take OBS down with it. Prefer <i>OBS → Settings → Video</i>.
     </div>
   </div>
 </div>

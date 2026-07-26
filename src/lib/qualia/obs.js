@@ -50,12 +50,9 @@ export const OBS_DEFAULTS = {
   url:      'ws://127.0.0.1:4455',
   password: '',
   scene:    '',          // '' = leave OBS on whatever scene is live
-  // Push this display's true pixel size into OBS's canvas before recording, so
-  // a fullscreen take is pixel-exact instead of scaled. Off by default: it
-  // mutates the user's OBS project settings, which is not a thing to do
-  // uninvited.
-  matchResolution: false,
-  fps: 0,                // 0 = leave OBS's fps alone
+  // NOTE: there is deliberately no "match the canvas at record time" setting.
+  // See the SetVideoSettings warning on matchResolution() below — that request
+  // crashes OBS, so it is a manual setup-time action only.
 };
 
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch { return d; } }
@@ -68,8 +65,12 @@ export function loadObsConfig() {
   cfg.url = String(cfg.url || OBS_DEFAULTS.url);
   cfg.password = String(cfg.password || '');
   cfg.scene = String(cfg.scene || '');
-  cfg.matchResolution = !!cfg.matchResolution;
-  cfg.fps = Math.max(0, Math.min(240, Number(cfg.fps) || 0));
+  // `matchResolution` / `fps` were persisted by the first version, which applied
+  // them on every rec press. That crashed OBS (see matchResolution below), so
+  // they're dropped on load rather than migrated — an old profile must not be
+  // able to reintroduce the crash.
+  delete cfg.matchResolution;
+  delete cfg.fps;
   return cfg;
 }
 export function saveObsConfig(cfg) {
@@ -294,16 +295,65 @@ export function createObsClient({ onState } = {}) {
     return recording;
   }
 
-  /** Push this display's pixel size (and optionally fps) into OBS's canvas. */
-  async function matchResolution(fps) {
-    const d = displayPixelSize();
-    const body = {
-      baseWidth: d.width, baseHeight: d.height,
-      outputWidth: d.width, outputHeight: d.height,
-    };
-    if (fps > 0) { body.fpsNumerator = Math.round(fps); body.fpsDenominator = 1; }
-    await request('SetVideoSettings', body);
-    return d;
+  async function getVideoSettings() {
+    return request('GetVideoSettings');
+  }
+
+  /** True if OBS has ANY output running (record / stream / virtual cam).
+   *  `obs_reset_video` refuses to run — or takes the pipeline apart underneath
+   *  a live output — while one is active, so this gates the canvas change. A
+   *  request that isn't available is treated as "not active" rather than
+   *  blocking the whole check. */
+  async function outputsActive() {
+    const probes = [
+      ['GetRecordStatus',     'recording'],
+      ['GetStreamStatus',     'streaming'],
+      ['GetVirtualCamStatus', 'running the virtual camera'],
+    ];
+    const active = [];
+    for (const [req, label] of probes) {
+      try { if ((await request(req)).outputActive) active.push(label); }
+      catch {}
+    }
+    return active;
+  }
+
+  /**
+   * Set OBS's canvas + output size to this display's pixel size.
+   *
+   * ⚠️  DANGEROUS, and deliberately never called automatically. SetVideoSettings
+   * makes OBS run `obs_reset_video()`, which tears down and rebuilds the entire
+   * video pipeline — every source, the compositor, the encoders. Driven from the
+   * WebSocket (a pooled request thread rather than the UI thread) this is a
+   * known upstream crasher, notably on macOS: obsproject/obs-studio#10946. It
+   * took OBS down mid-session here, with the main thread parked in
+   * `obs_wait_for_destroy_queue` and the abort on the pooled thread.
+   *
+   * So: this is a manual, setup-time action behind an explicit button, it
+   * refuses while any output is live, and it no-ops when the canvas already
+   * matches (which is the common case, and sending it anyway was pure risk for
+   * zero gain). The genuinely safe route is still OBS's own Settings → Video.
+   *
+   * @returns {{applied: boolean, reason?: string, current?: object, target: object}}
+   */
+  async function matchResolution() {
+    const target = displayPixelSize();
+    let current = null;
+    try { current = await getVideoSettings(); } catch {}
+    if (current
+        && current.baseWidth === target.width && current.baseHeight === target.height
+        && current.outputWidth === target.width && current.outputHeight === target.height) {
+      return { applied: false, reason: 'already matches', current, target };
+    }
+    const active = await outputsActive();
+    if (active.length) {
+      return { applied: false, reason: `OBS is ${active.join(' + ')} — stop it first`, current, target };
+    }
+    await request('SetVideoSettings', {
+      baseWidth: target.width, baseHeight: target.height,
+      outputWidth: target.width, outputHeight: target.height,
+    }, { timeoutMs: 15000 });   // a video reset is slow; don't call it a timeout
+    return { applied: true, current, target };
   }
 
   async function setScene(sceneName) {
@@ -320,7 +370,8 @@ export function createObsClient({ onState } = {}) {
 
   return {
     connect, disconnect, request,
-    refreshScenes, syncRecordState, matchResolution, setScene,
+    refreshScenes, syncRecordState, setScene,
+    getVideoSettings, outputsActive, matchResolution,
     startRecord, stopRecord,
     getState: state,
     isConnected: () => connected,
