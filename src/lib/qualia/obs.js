@@ -50,10 +50,39 @@ export const OBS_DEFAULTS = {
   url:      'ws://127.0.0.1:4455',
   password: '',
   scene:    '',          // '' = leave OBS on whatever scene is live
+  // Press each capture source's "Restart Capture" before StartRecord. On by
+  // default because the failure it fixes is silent and total — see
+  // restartCaptures() below.
+  restartCapture:  true,
+  restartSettleMs: 700,
   // NOTE: there is deliberately no "match the canvas at record time" setting.
   // See the SetVideoSettings warning on matchResolution() below — that request
   // crashes OBS, so it is a manual setup-time action only.
 };
+
+// Button-property ids that mean "restart this capture" on the sources we care
+// about. obs-websocket has no request that ENUMERATES a source's properties, so
+// pressing one means guessing its id and reading the failure — hence a list,
+// tried in order, first success wins. `reactivate_capture` is the macOS SCK
+// sources (macOS Screen Capture / macOS Application Audio Capture, the pair
+// this whole feature exists for); the rest are the other spellings the same
+// idea ships under.
+//
+// Deliberately NOT here: `activate` (dshow's button is a Deactivate/Activate
+// TOGGLE — pressing it on a live device turns the device OFF) and
+// `refreshnocache` (a browser-source reload, which would blow away REPL state
+// rather than restart a capture).
+const RESTART_BUTTON_PROPS = ['reactivate_capture', 'restart_capture', 'reactivate', 'restart'];
+
+// Which inputs are worth restarting. Every OS's capture sources carry `capture`
+// or `input` in their kind — screen_capture, sck_audio_capture, monitor_capture,
+// window_capture, game_capture, wasapi_*_capture, coreaudio_*_capture,
+// pulse_*_capture, dshow_input, av_capture_input, xshm_input, v4l2_input,
+// pipewire-*-capture-source. Nothing else matches, which is the point: the
+// settings-nudge fallback below re-runs a source's update handler, and that is
+// a no-op on a text/image/color source but would restart a media source's
+// playback and reload a browser source.
+const CAPTURE_KIND_RE = /capture|input/i;
 
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch { return d; } }
 function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch {} }
@@ -65,6 +94,8 @@ export function loadObsConfig() {
   cfg.url = String(cfg.url || OBS_DEFAULTS.url);
   cfg.password = String(cfg.password || '');
   cfg.scene = String(cfg.scene || '');
+  cfg.restartCapture = cfg.restartCapture !== false;
+  cfg.restartSettleMs = Math.max(0, Math.min(5000, Number(cfg.restartSettleMs) || 0));
   // `matchResolution` / `fps` were persisted by the first version, which applied
   // them on every rec press. That crashed OBS (see matchResolution below), so
   // they're dropped on load rather than migrated — an old profile must not be
@@ -434,6 +465,99 @@ export function createObsClient({ onState } = {}) {
     await request('SetCurrentProgramScene', { sceneName });
   }
 
+  /** Name of the scene OBS is actually programming right now. 5.x answers with
+   *  `currentProgramSceneName`; 5.5+ also sends `sceneName`. */
+  async function currentScene() {
+    const r = await request('GetCurrentProgramScene');
+    return r.sceneName || r.currentProgramSceneName || '';
+  }
+
+  /**
+   * Flatten a scene to the inputs it actually renders, descending through
+   * groups and nested scenes (a group is not a scene, so GetSceneItemList
+   * refuses it and GetGroupSceneItemList is the one that answers). `seen`
+   * dedupes a source used in several places and also breaks a scene cycle.
+   */
+  async function sceneInputs(sceneName, seen = new Set(), depth = 0) {
+    if (!sceneName || depth > 3) return [];
+    let items = null;
+    for (const req of ['GetSceneItemList', 'GetGroupSceneItemList']) {
+      try { items = (await request(req, { sceneName })).sceneItems || []; break; }
+      catch { /* try the other shape */ }
+    }
+    if (!items) return [];
+    const out = [];
+    for (const it of items) {
+      const name = it.sourceName;
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      if (it.isGroup || it.sourceType === 'OBS_SOURCE_TYPE_SCENE') {
+        out.push(...await sceneInputs(name, seen, depth + 1));
+        continue;
+      }
+      out.push({ name, kind: it.inputKind || '' });
+    }
+    return out;
+  }
+
+  /** Restart one input's capture. Two tiers, cheapest and most faithful first. */
+  async function restartInput(name) {
+    for (const propertyName of RESTART_BUTTON_PROPS) {
+      try {
+        // Exactly what clicking the button in Properties does — obs-websocket
+        // builds the source's obs_properties_t and fires the callback.
+        await request('PressInputPropertiesButton', { inputName: name, propertyName },
+                      { timeoutMs: 10000 });
+        return { method: propertyName };
+      } catch { /* wrong id for this source kind — try the next */ }
+    }
+    // No restart button on this kind: re-apply the settings it already has.
+    // obs_source_update runs unconditionally, and a capture source's update
+    // handler tears its stream down and builds it again — the same restart by
+    // another road. `overlay: true` merges, so nothing is reset to a default.
+    const s = await request('GetInputSettings', { inputName: name });
+    await request('SetInputSettings',
+                  { inputName: name, inputSettings: s.inputSettings || {}, overlay: true },
+                  { timeoutMs: 10000 });
+    return { method: 'settings' };
+  }
+
+  /**
+   * Press "Restart Capture" on every capture source in a scene, then wait for
+   * them to hand over frames again.
+   *
+   * WHY, and why this one is safe to run at showtime when matchResolution()
+   * emphatically isn't: macOS ScreenCaptureKit sources routinely come back from
+   * a display sleep, a Space switch, or a permission re-grant *alive but dead* —
+   * the source is active, OBS shows no error, and the capture is black and/or
+   * silent. The only cure is the source's own Restart Capture button, which had
+   * to be pressed by hand on the video source AND the audio source before every
+   * take. Unlike SetVideoSettings this touches ONE source at a time and never
+   * calls obs_reset_video, so there's no pipeline teardown to race.
+   *
+   * Fail-soft by construction: every input is independent, a failure is
+   * recorded and stepped over, and the caller starts the recording either way.
+   * A take with a black first second beats no take.
+   *
+   * @returns {{scene, results: Array<{name, kind, method?, error?}>, restarted, failed}}
+   */
+  async function restartCaptures({ scene = '', settleMs = 0 } = {}) {
+    const sceneName = scene || await currentScene();
+    const inputs = (await sceneInputs(sceneName)).filter(i => CAPTURE_KIND_RE.test(i.kind));
+    const results = [];
+    // Sequential on purpose: re-arming two SCK streams at once is how you get
+    // one of them back black, which is the bug we're here to fix.
+    for (const input of inputs) {
+      try { results.push({ ...input, ...(await restartInput(input.name)) }); }
+      catch (e) { results.push({ ...input, error: e?.message || String(e) }); }
+    }
+    const restarted = results.filter(r => !r.error).length;
+    // A restarted SCK stream needs a beat before it emits its first frame.
+    // Starting the recording inside that gap is the black-first-second case.
+    if (restarted && settleMs > 0) await new Promise(r => setTimeout(r, settleMs));
+    return { scene: sceneName, results, restarted, failed: results.length - restarted };
+  }
+
   async function startRecord() { await request('StartRecord'); }
   async function stopRecord()  {
     const r = await request('StopRecord').catch((e) => { throw e; });
@@ -443,8 +567,9 @@ export function createObsClient({ onState } = {}) {
 
   return {
     connect, disconnect, request,
-    refreshScenes, syncRecordState, setScene,
+    refreshScenes, syncRecordState, setScene, currentScene,
     getVideoSettings, outputsActive, matchResolution,
+    sceneInputs, restartCaptures,
     startRecord, stopRecord,
     getState: state,
     isConnected: () => connected,

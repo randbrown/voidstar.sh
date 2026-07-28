@@ -3290,11 +3290,59 @@ export function initQualiaPage() {
     }
     if (obsClient.isRecording()) return;   // OBS was already rolling
     if (obsCfg.scene) { try { await obsClient.setScene(obsCfg.scene); } catch (e) { console.warn('[obs] scene switch failed:', e); } }
-    // Nothing that reconfigures OBS runs here. The canvas-size match used to,
+    // Restart the scene's captures. This runs AFTER the scene switch on
+    // purpose: a source only captures while it's active, so restarting one
+    // that's about to be activated would just be re-arming the wrong thing.
+    // It's the one showtime action that touches OBS's sources, and it is not
+    // a walk-back of the rule below — see restartCaptures() in obs.js for why
+    // a per-source restart is nothing like a video-pipeline reset.
+    if (obsCfg.restartCapture !== false) await obsRestartCaptures({ atShowtime: true });
+    // Nothing that RECONFIGURES OBS runs here. The canvas-size match used to,
     // and SetVideoSettings crashed OBS outright (obs_reset_video from a pooled
     // request thread — obsproject/obs-studio#10946). Showtime is for StartRecord
     // and nothing else; canvas setup lives behind a button in the obs… dialog.
     await obsClient.startRecord();
+  }
+
+  // Press "Restart Capture" on the scene's capture sources. Shared by the rec
+  // button (atShowtime) and the dialog's manual button, so both report the same
+  // thing the same way.
+  //
+  // Never throws: this is a best-effort nudge in front of a take, and a take
+  // that starts with a black first second still beats one that never starts
+  // because a source restart 404'd.
+  let obsRestartNote = '';
+  async function obsRestartCaptures({ atShowtime = false } = {}) {
+    const t0 = performance.now();
+    // The restart + settle is a visible pause between the press and the red
+    // button, so say what's happening. The active pill overwrites this the
+    // moment OBS reports RecordStateChanged.
+    if (atShowtime) showRecToastError('restarting obs captures…', 6000);
+    try {
+      const r = await obsClient.restartCaptures({
+        scene: obsCfg.scene,
+        // Only worth waiting out when we're about to hit record — a manual
+        // press from the dialog wants its answer back immediately.
+        settleMs: atShowtime ? obsCfg.restartSettleMs : 0,
+      });
+      const ms = Math.round(performance.now() - t0);
+      console.log('[obs] restarted captures in', `${ms}ms`, r);
+      if (!r.results.length) {
+        obsRestartNote = `no capture sources in “${r.scene || '?'}”`;
+      } else {
+        obsRestartNote = `${r.restarted}/${r.results.length} restarted`
+          + (r.failed ? ` · ${r.failed} failed` : '')
+          + ` · ${ms}ms`;
+      }
+      for (const f of r.results.filter(x => x.error)) console.warn('[obs] restart failed:', f.name, f.error);
+      return r;
+    } catch (e) {
+      obsRestartNote = `failed: ${e?.message || e}`;
+      console.warn('[obs] capture restart failed:', e);
+      return null;
+    } finally {
+      refreshObsRestartRow();
+    }
   }
   async function obsStopRecording() {
     if (!obsClient.isConnected()) return;
@@ -3311,6 +3359,9 @@ export function initQualiaPage() {
   const obsDlgMatch   = document.getElementById('obs-cfg-match');
   const obsDlgCanvas  = document.getElementById('obs-cfg-canvas');
   const obsDlgFit     = document.getElementById('obs-cfg-fit');
+  const obsDlgRestart = document.getElementById('obs-cfg-restart');
+  const obsDlgRestartNow = document.getElementById('obs-cfg-restart-now');
+  const obsDlgRestartSt  = document.getElementById('obs-cfg-restart-status');
   const obsDlgConnect = document.getElementById('obs-cfg-connect');
   const obsDlgDisc    = document.getElementById('obs-cfg-disconnect');
   const obsDlgStatus  = document.getElementById('obs-cfg-status');
@@ -3351,6 +3402,16 @@ export function initQualiaPage() {
         obsDlgScene.value = want;
       }
     }
+  }
+
+  function refreshObsRestartRow() {
+    if (obsDlgRestart) {
+      const on = obsCfg.restartCapture !== false;
+      obsDlgRestart.classList.toggle('active', on);
+      obsDlgRestart.setAttribute('aria-pressed', on ? 'true' : 'false');
+      obsDlgRestart.textContent = on ? 'auto ✓' : 'auto';
+    }
+    if (obsDlgRestartSt) obsDlgRestartSt.textContent = obsRestartNote;
   }
 
   // Canvas readout: OBS's current base size vs this display's pixel size, so
@@ -3454,6 +3515,7 @@ export function initQualiaPage() {
     if (obsDlgBackdrop) obsDlgBackdrop.style.display = '';
     refreshObsDialog();
     refreshObsCanvas();
+    refreshObsRestartRow();
     // Connecting on open is what makes the scene picker useful, and it's the
     // cheapest place to surface "OBS isn't running" — long before showtime.
     if (!obsClient.isConnected()) {
@@ -3485,6 +3547,21 @@ export function initQualiaPage() {
   obsDlgUrl?.addEventListener('change', persistObsCfg);
   obsDlgPass?.addEventListener('change', persistObsCfg);
   obsDlgScene?.addEventListener('change', persistObsCfg);
+  obsDlgRestart?.addEventListener('click', () => {
+    obsCfg = { ...obsCfg, restartCapture: obsCfg.restartCapture === false };
+    saveObsConfig(obsCfg);
+    refreshObsRestartRow();
+  });
+  // The manual press — same code path the rec button takes, so "does this fix
+  // my black screen?" can be answered before the set rather than during it.
+  obsDlgRestartNow?.addEventListener('click', async () => {
+    if (!obsClient.isConnected()) { obsRestartNote = 'not connected'; refreshObsRestartRow(); return; }
+    obsDlgRestartNow.disabled = true;
+    obsRestartNote = 'restarting…';
+    refreshObsRestartRow();
+    try { await obsRestartCaptures(); }
+    finally { obsDlgRestartNow.disabled = false; }
+  });
   // The one request in this whole module that reconfigures OBS. It lives behind
   // an explicit press, with a confirm, because it rebuilds OBS's video pipeline
   // and has been observed to crash OBS outright — see obs.js matchResolution.

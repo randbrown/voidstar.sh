@@ -187,10 +187,34 @@ clean fx output is what you want.
   (`base64(sha256(base64(sha256(pw+salt)) + challenge))`) via WebCrypto. Only the `Outputs` event
   category is subscribed, which is what carries `RecordStateChanged`.
 - **What the rec button does:** connect if needed → optional `SetCurrentProgramScene` →
-  `StartRecord`. **Nothing that reconfigures OBS runs at showtime** — see the canvas warning
-  below for why that rule exists. The button label, timer and toast are driven from OBS's own
-  `RecordStateChanged`, and `GetRecordStatus` syncs on connect so attaching to an
-  already-recording OBS doesn't show "stopped".
+  restart the scene's captures (below) → `StartRecord`. **Nothing that *reconfigures* OBS runs at
+  showtime** — see the canvas warning below for why that rule exists. The button label, timer and
+  toast are driven from OBS's own `RecordStateChanged`, and `GetRecordStatus` syncs on connect so
+  attaching to an already-recording OBS doesn't show "stopped".
+- **Auto "Restart Capture"** (`restartCaptures`, on by default). macOS ScreenCaptureKit sources come
+  back from a display sleep, a Space switch or a permission re-grant *alive but dead* — the source is
+  active, OBS reports no error, and the take is black and/or silent. The only cure is the source's own
+  **Restart Capture** button, which had to be pressed by hand on the video source *and* the audio
+  source before every take. So the rec button now does it: flatten the target scene to its inputs
+  (descending through groups and nested scenes), keep the capture kinds (`/capture|input/i` — which is
+  every screen/window/game/av/audio capture on every OS, and nothing else), and for each one
+  `PressInputPropertiesButton` with the candidate ids `reactivate_capture`, `restart_capture`,
+  `reactivate`, `restart` until one takes. obs-websocket has **no request that enumerates a source's
+  properties**, so pressing a button means guessing its id and reading the failure — hence the list.
+  Kinds with no such button fall back to `GetInputSettings` → `SetInputSettings` with `overlay: true`
+  (identical values, but `obs_source_update` runs regardless and a capture source's update handler
+  rebuilds its stream). Then a `restartSettleMs` (default 700 ms) wait, because a freshly re-armed SCK
+  stream needs a beat before its first frame — starting the recording inside that gap is the
+  black-first-second case. Deliberately **not** in the candidate list: `activate` (dshow's is a
+  Deactivate/Activate *toggle* — pressing it on a live device turns it off) and `refreshnocache` (a
+  browser-source reload, which would blow away REPL state). Restarts run **sequentially** (re-arming
+  two SCK streams at once is how one comes back black), fail per-input without stopping the others,
+  and never block `StartRecord` — a take with a black first second still beats no take. This is the
+  one showtime action that touches OBS's sources and it is *not* a walk-back of the rule above: it
+  touches one source at a time and never calls `obs_reset_video`, so there's no pipeline teardown to
+  race. Toggle + a `restart now` button (same code path, so you can prove it before the set) live in
+  the `obs…` dialog; covered by `scripts/check-obs-restart.mjs`, which drives the real client against
+  a fake obs-websocket server.
 - ⚠️ **`SetVideoSettings` crashes OBS.** It makes OBS run `obs_reset_video()`, tearing down and
   rebuilding the whole video pipeline; driven from the WebSocket (a pooled request thread, not the
   UI thread) it's a known upstream crasher, notably on macOS —
@@ -215,7 +239,7 @@ clean fx output is what you want.
   failed take. There is no way to launch OBS from a page, so "OBS isn't running with its WebSocket
   server enabled" is the message. Selecting the mode (and opening `obs…`) warms the connection so
   that surfaces before showtime rather than on the first rec press.
-- Config (address / password / scene) persists under `voidstar.qualia.obs.config`
+- Config (address / password / scene / `restartCapture` / `restartSettleMs`) persists under `voidstar.qualia.obs.config`
   and is machine-local — it deliberately does **not** travel in a qualem, though `captureMode: 'obs'`
   does.
 - **Watch item:** Chrome 141+ ships the Local Network Access permission prompt for
