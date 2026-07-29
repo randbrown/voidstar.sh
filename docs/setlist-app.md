@@ -23,7 +23,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use. `altLinks` (`[{id, url, label, service, embedUrl?, addedAt}]`, lazy) is the same idea for **listening links** — the other recordings of the song (live cut, alternate release, a YouTube version); the three primary link fields stay what auto-link fills and what everything else reads (see the multiple-links section). `spotifyGuess` / `spotifyGuessAt` (lazy) flag a **preliminary** Spotify link accepted from a global search rather than matched from a playlist — see the best-guess section |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist) |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
@@ -61,6 +61,7 @@ config). Tokens and per-device display prefs never ride it:
 | `voidstar.setlist.spotify.pkce` | sessionStorage | ✗ | PKCE verifier + return hash, alive only during the login redirect round-trip |
 | `voidstar.setlist.noteDraft.<songId>` | sessionStorage | ✗ | uncommitted note-composer draft (survives focus-driven `refresh()` and app-switching; cleared on save) |
 | `voidstar.setlist.chartTab.<songId>` | sessionStorage | ✗ | which chart the song page shows: an `altCharts` entry id, absent = the primary (survives focus-driven `refresh()`; per-device on purpose) |
+| `voidstar.setlist.linkTab.<songId>` | sessionStorage | ✗ | which listening link the song page plays: `spotify`/`bandcamp`/`soundcloud` for a primary, `alt:<id>` for an `altLinks` entry; absent = the first available (same per-device rationale as `chartTab`) |
 
 ### Practice statuses
 
@@ -250,13 +251,18 @@ open the song:
   elsewhere (see the Spotify-links section for the exact rules; this is the
   one pass that may *overwrite* a filled field, which is its whole point —
   it confirms before running). Per-song counterpart: **"relink spotify"**.
+- **best-guess all unlinked** (in the spotify quick-link section) — links
+  every song without a Spotify link to the top hit of a real Spotify search,
+  as a **preliminary** link (see the best-guess section for the acceptance
+  bar and what "preliminary" buys). Per-song counterpart: **"spotify best
+  guess"** / the quick-link list's per-row "best guess".
 
 The panel also carries the other library-wide actions, each likewise paired
 with a per-song tool: **auto-link now** (↔ "search for chart" + "relink
 spotify"/"pick spotify track"), **download all charts** (↔ "cache offline"),
 **batch link charts** (↔ the edit-details Chart URL field), and **spotify
-quick-link**'s unlinked-songs list (↔ "spotify search" on songs without a
-link). After a pass finishes, the library list re-pulls in place
+quick-link**'s unlinked-songs list (↔ "spotify search" / "spotify best guess"
+on songs without a link). After a pass finishes, the library list re-pulls in place
 (`onSongsChanged`) so new keys/artists/badges show without wiping the pass's
 status line.
 
@@ -509,9 +515,11 @@ auto-link stores it in `song.bandcampEmbedUrl` so the song page can embed
 the player without re-scraping; a hand-pasted Bandcamp link resolves it
 lazily via `resolveBandcampEmbed` (plain link offline). SoundCloud's widget
 takes the raw track URL, no lookup needed (`media.js`). The song page
-embeds the first available player (Spotify → Bandcamp → SoundCloud), and
-any of them arms the timecode timer for synced lyrics. The health check's
-"no listen link" dimension counts any of the three.
+embeds the first available player (Spotify → Bandcamp → SoundCloud) — and
+with more than one link (including `altLinks`, see the multiple-links
+section) a chip row switches between them — while any of them arms the
+timecode timer for synced lyrics. The health check's "no listen link"
+dimension counts any of the three primaries.
 
 ### Spotify links: playlist-only matching — auto-link never overwrites
 
@@ -532,7 +540,48 @@ sync results say why; the song page's "spotify search" button (opens
 Spotify search in a tab) is the explicit manual escape hatch for songs not
 on any reference playlist.
 
-Auto-link fills `spotifyUri` only when it's empty, so a wrong link sticks
+### Best guess — a preliminary link from a global search
+
+The playlist-only rule leaves every song no reference playlist carries
+permanently unlinked, and "open Spotify search in a tab" was the only way
+out. The **best-guess** flow closes that gap without reopening the
+data-corruption hole that the retired global-search auto-fill was: a global
+search result may reach a song, but **only through an explicit tap, and only
+marked as a guess**.
+
+- **Where.** Library tools → spotify quick-link: each unlinked song's row has
+  a **"best guess"** button (search, then cycle the results inline — title,
+  artist, album, year, and title-match % — and "link it"), and
+  **"best-guess all unlinked"** runs the same thing library-wide
+  (`bestGuessSpotifyLinks` in `bulk.js`). The song page's counterpart is
+  **"spotify best guess"**, which feeds the results into the same picker the
+  playlist relink uses (`renderSpotifyPicker(..., {preliminary: true})`).
+- **The search itself** is `searchSpotifyTracks` (`sync.js`): the user's own
+  Spotify session first (more results, no worker needed), else the worker's
+  `GET /spotify/search?q=…&limit=N`, which the Feb 2026 migration left
+  working for client credentials (dev-mode apps cap at 10 results). An old
+  worker's single-track response shape is still accepted as one guess.
+- **Preliminary means preliminary.** Accepting writes `spotifyGuess: true`
+  (`store.markSpotifyGuess`). The song page shows an amber notice over the
+  player — **keep ✓** / **clear** — and the quick-link section's **"review
+  preliminary links"** lists every guessed song with listen/keep/clear. The
+  flag also tells the matching machinery the link is replaceable: auto-link
+  treats a guessed `spotifyUri` as *unfilled* (a guess must never block a
+  real playlist match forever), and "verify spotify links" clears the flag
+  when the playlist confirms the track and re-links when it doesn't.
+  Anything that ties a song to a track the user actually looked at — the
+  playlist picker, a hand-typed URL in the edit form, "keep ✓" — clears it.
+- **The bulk pass never links blind.** A global search always returns
+  *something*, so `bestGuessSpotifyLinks` only accepts a top hit whose title
+  scores ≥ `GUESS_MIN_TITLE_SCORE` (0.7) with no artist disagreement
+  (`scoreSpotifyGuess`, the same "a clear artist mismatch sinks it" rule the
+  playlist matcher uses); everything else is listed as a tappable row with
+  what the guess *was*, so an unfindable original doesn't get linked to a
+  stranger's track. Per-song accepting is unguarded on purpose — the human
+  is looking at the result.
+
+Auto-link fills `spotifyUri` only when it's empty (or holds a guess), so a
+wrong confirmed link sticks
 until something explicitly checks it. Two fixes exist: the song page's
 "relink spotify", and the library tools' **"verify spotify links"** pass
 (`verifySpotifyLinks` in `bulk.js`) — for every linked song that appears in
@@ -814,6 +863,46 @@ export are all primary-only by design. **Alternates** live in
   merge against a new client fill-restores it. Removing an alternate doesn't
   tombstone its annotation record, so a harmless orphan can linger in Drive
   backups (annotation deletion has never propagated through the merge).
+
+## Multiple listening links per song — primaries + `altLinks`
+
+One song is often several recordings: the studio cut and the live version,
+the single and the album take, someone else's version worth studying for a
+steel part. The three **primary** fields (`spotifyUri`, `bandcampUrl`,
+`soundcloudUrl`) keep their exact meaning — what auto-link fills, what
+"verify spotify links" checks, what the health check counts — and everything
+extra lives in `song.altLinks: [{id, url, label, service, embedUrl?,
+addedAt}]` (lazy field, fill-protected in `SONG_FILL_FIELDS`, ignored safely
+by old clients). Helpers live in `media.js` (`linkService`, `altLinksOf`,
+`makeAltLink`, `songHasLink`, `LINK_PRIMARY_FIELD`).
+
+- **Adding:** the song page's **"+ listen link"** button takes a pasted
+  Spotify / Bandcamp / SoundCloud / YouTube URL. It fills the service's
+  **empty primary slot** when there is one (that *is* "the song's Spotify
+  link") and otherwise appends an alternate with a label you're prompted for.
+  The relink picker also grows a **"+ alt"** button on each playlist track
+  once the song already has a Spotify link — a second track from the same
+  playlist is usually the other release, not a correction.
+- **Switching:** with more than one link, a chip row (`.sl-link-tabs`) sits
+  over the player — every primary plus every alternate, in that order — and
+  the player follows the selection, which lives in sessionStorage
+  (`linkTab.<songId>`, see the state table). With a single link the chips
+  stay hidden and the page is exactly the old single-embed song page.
+- **Per-alternate actions** (`.sl-alt-chart-actions`, shared styling with the
+  chart alternates): open · rename · **make primary** (only for the three
+  services with a primary slot — the old primary is demoted to an alternate,
+  never discarded, and a promoted Spotify link is a confirmed one) · remove.
+- **Embeds:** Spotify and SoundCloud embed from the URL alone; Bandcamp needs
+  the EmbeddedPlayer URL that only exists in page markup, so an alternate
+  resolves it lazily through the worker and stores it on its own entry
+  (`embedUrl`) — same once-per-link rule the primary uses with
+  `song.bandcampEmbedUrl`. YouTube (alternates only — no primary slot, no
+  auto-link matching) embeds via the no-cookie player. Anything else renders
+  as a plain link. Any selected link arms the timecode timer, so synced
+  lyrics follow whichever recording is playing.
+- **Deliberately unchanged:** perform mode, auto-link, playlist diffing, and
+  the health check all read the primaries only — alternates are a reference
+  shelf, not a second source of truth.
 
 ## Annotation alignment invariant
 

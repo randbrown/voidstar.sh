@@ -1234,6 +1234,77 @@ const buildStamp = readBuildStamp();
       font-weight: 600;
     }
 
+    /* Listen-link switcher (song page): primary + alternate recordings.
+       Same chip language as the chart tabs — one row, one tap per version. */
+    .sl-link-tabs {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin: 0.75rem 0 0.25rem;
+    }
+    .sl-link-tab {
+      font-size: 0.72rem;
+      padding: 0.18rem 0.65rem;
+      border-radius: 999px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      max-width: 14rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sl-link-tab-active {
+      background: var(--green);
+      border-color: var(--green);
+      color: var(--void);
+      font-weight: 600;
+    }
+
+    /* "This Spotify link is a best guess" — a preliminary link must never
+       read as a confirmed one, so it announces itself over the player. */
+    .sl-guess-notice {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin: 0.75rem 0 0.25rem;
+      padding: 0.4rem 0.6rem;
+      border: 1px dashed var(--amber, #e0a33e);
+      border-radius: var(--radius, 6px);
+      background: color-mix(in srgb, var(--amber, #e0a33e) 8%, transparent);
+    }
+    .sl-guess-notice-text {
+      flex: 1;
+      min-width: 12rem;
+      font-size: 0.78rem;
+      color: var(--amber, #e0a33e);
+    }
+
+    /* Library tools → spotify quick-link: the search result under a song row */
+    .sl-guess-panel {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin: -0.15rem 0 0.15rem 0.75rem;
+      padding: 0.35rem 0.6rem;
+      border-left: 1px solid var(--border);
+    }
+    .sl-guess-info {
+      flex: 1;
+      min-width: 12rem;
+      font-family: var(--font-mono);
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      overflow-wrap: anywhere;
+    }
+    .sl-guess-actions {
+      display: flex;
+      gap: 0.3rem;
+      flex-wrap: wrap;
+    }
+
     /* Action strip for the selected alternate chart */
     .sl-alt-chart-actions {
       display: flex;

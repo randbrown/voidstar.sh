@@ -10,7 +10,8 @@
 //                                     escape hatch for public playlists the
 //                                     API's owner-only rule (Feb 2026) makes
 //                                     unreadable, e.g. a bandmate's playlist
-//   GET /spotify/search?q=...       → search for a track
+//   GET /spotify/search?q=...       → search for a track (add &limit=N for the
+//                                     {tracks:[…]} list shape, best guess first)
 //   GET /spotify/search-batch       → search multiple songs (POST body: {titles:[]})
 //   GET /media/bandcamp?url=...     → track list scraped from a Bandcamp band/
 //                                     album/track page (title, artist, page
@@ -391,33 +392,53 @@ async function handleSpotifyPlaylistScrape(playlistId, request, env) {
   });
 }
 
-async function searchSpotifyTrack(token, query) {
+// Search results, best-first. Development-mode apps are capped at 10 results
+// per request, so the limit is clamped there. Album/year/length ride along —
+// the client's "best guess" picker shows them so a live cut or a karaoke
+// re-record is recognizable before it gets linked.
+async function searchSpotifyTracks(token, query, limit = 1) {
   const params = new URLSearchParams({
     q: query,
     type: 'track',
-    limit: '1',
+    limit: String(Math.min(Math.max(limit, 1), 10)),
     market: 'US',
   });
   const res = await fetch(`https://api.spotify.com/v1/search?${params}`, {
     headers: { 'Authorization': `Bearer ${token}` },
   });
-  if (!res.ok) return null;
+  if (!res.ok) return [];
   const data = await res.json();
-  const t = data.tracks?.items?.[0];
-  if (!t) return null;
-  return {
+  return (data.tracks?.items || []).map(t => ({
     title: t.name,
     artist: t.artists?.map(a => a.name).join(', ') || '',
     spotifyUrl: t.external_urls?.spotify || '',
-  };
+    album: t.album?.name || '',
+    year: Number(String(t.album?.release_date || '').slice(0, 4)) || 0,
+    durationSec: t.duration_ms ? Math.round(t.duration_ms / 1000) : 0,
+  })).filter(t => t.spotifyUrl);
 }
 
+async function searchSpotifyTrack(token, query) {
+  const [best] = await searchSpotifyTracks(token, query, 1);
+  return best || null;
+}
+
+// Without `limit`, the legacy single-track (or 404) shape — old clients still
+// read it. With `limit`, the list shape {tracks:[…]} that backs the library's
+// Spotify best-guess picker.
 async function handleSpotifySearch(request, env) {
   const url = new URL(request.url);
   const q = url.searchParams.get('q');
   if (!q) return corsResponse(JSON.stringify({ error: 'missing q param' }), 400, request, env);
 
   const token = await getSpotifyToken(env);
+  const limitParam = url.searchParams.get('limit');
+  if (limitParam) {
+    const tracks = await searchSpotifyTracks(token, q, Number(limitParam) || 1);
+    return corsResponse(JSON.stringify({ tracks }), 200, request, env, {
+      'Cache-Control': 'public, max-age=300',
+    });
+  }
   const result = await searchSpotifyTrack(token, q);
   return corsResponse(JSON.stringify(result), result ? 200 : 404, request, env);
 }

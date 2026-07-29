@@ -172,7 +172,14 @@ async function runSync(songs, refs, onProgress) {
     // Cross-reference with Drive artist when available.
     for (const svc of MEDIA_SERVICES) {
       const { tracksByUrl, allTracks } = pools[svc.key];
-      if (song[svc.songField] || !allTracks.length) continue;
+      // A PRELIMINARY Spotify link (accepted from a global search in the
+      // quick-link tool) counts as unfilled here: the playlist is the
+      // authority, and a guess that blocked auto-link forever would be worse
+      // than no link at all.
+      const linked = svc.key === 'spotify'
+        ? (song.spotifyUri && !song.spotifyGuess)
+        : song[svc.songField];
+      if (linked || !allTracks.length) continue;
       const knownArtist = song.artist || driveArtistMap[song.title.toLowerCase().trim()] || '';
       const ownTracks = dedupeTracks(
         (refs[svc.key].perSong.get(song.id) || []).flatMap(u => tracksByUrl.get(u) || []));
@@ -181,6 +188,8 @@ async function runSync(songs, refs, onProgress) {
           allTracks.length > ownTracks.length ? allTracks : [], CROSS_PLAYLIST_MIN_SCORE);
       if (result) {
         song[svc.songField] = trackLink(result.match);
+        // Matched against a reference playlist — no longer a guess.
+        if (svc.key === 'spotify') song.spotifyGuess = false;
         // The worker resolves Bandcamp's embed-player ids during the same
         // scrape — store the ready embed URL so the song page never has to
         // re-scrape for it.
@@ -804,6 +813,111 @@ export async function getReferencePlaylistTracks(setlist, opts = {}) {
 export function spotifySearchUrl(title, artist) {
   const q = encodeURIComponent(artist ? `${title} ${artist}` : title);
   return `https://open.spotify.com/search/${q}`;
+}
+
+// ── Global Spotify search — the "best guess" path ──
+//
+// Auto-link is deliberately playlist-only (a global title search loves
+// karaoke covers and same-titled hits — see the matching notes above), so
+// nothing here is ever applied automatically. These results only reach a
+// song through an explicit tap in the library's spotify quick-link tool, and
+// what they write is marked PRELIMINARY (`song.spotifyGuess`) — a link the
+// performer can see is a guess, that auto-link/verify are still free to
+// replace with a real playlist match.
+//
+// Reads prefer the user's own session (more results, and no worker needed)
+// and fall back to the worker's client-credentials search, which Spotify's
+// Feb 2026 migration left working for /v1/search. Returns {tracks, problems}
+// with the same "an empty result must say why" contract as the playlist
+// reads.
+export async function searchSpotifyTracks(title, artist = '', { limit = 5 } = {}) {
+  const q = [title, artist].filter(Boolean).join(' ').trim();
+  if (!q) return { tracks: [], problems: ['this song has no title to search for'] };
+  const n = Math.min(Math.max(limit, 1), 10); // dev-mode apps cap search at 10
+  const problems = [];
+
+  const userToken = await getSpotifyUserToken();
+  if (userToken) {
+    try {
+      const params = new URLSearchParams({ q, type: 'track', limit: String(n), market: 'US' });
+      const res = await fetch(`https://api.spotify.com/v1/search?${params}`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const tracks = (data.tracks?.items || []).map(spotifySearchTrack).filter(t => t.spotifyUrl);
+        if (tracks.length) return { tracks, problems };
+        problems.push('Spotify found no track by that name (searched as your connected account)');
+      } else {
+        problems.push(`Spotify search as your connected account failed (${res.status})`);
+      }
+    } catch (e) {
+      problems.push(`Spotify search as your connected account failed: ${e.message}`);
+    }
+  }
+
+  const { workerUrl } = getSources();
+  if (!workerUrl) {
+    if (!problems.length) {
+      problems.push('searching needs either a connected Spotify account or the sync worker URL (both in Settings)');
+    }
+    return { tracks: [], problems };
+  }
+  try {
+    const res = await fetch(`${workerUrl}/spotify/search?q=${encodeURIComponent(q)}&limit=${n}`, {
+      headers: workerHeaders(),
+    });
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json())?.error || ''; } catch {}
+      // 404 with the legacy shape means "no track matched", not a bad route.
+      problems.push(res.status === 404
+        ? (detail && detail !== 'not found' ? detail : 'Spotify found no track by that name')
+        : (detail || `Spotify search failed (${res.status})`));
+      return { tracks: [], problems };
+    }
+    const data = await res.json();
+    // A worker deployed before the &limit= list shape answers with a single
+    // track object — still a usable best guess.
+    const tracks = Array.isArray(data?.tracks) ? data.tracks : (data?.spotifyUrl ? [data] : []);
+    if (!tracks.length) problems.push('Spotify found no track by that name');
+    return { tracks, problems };
+  } catch (e) {
+    problems.push(`Spotify search failed: ${e.message}`);
+    return { tracks: [], problems };
+  }
+}
+
+function spotifySearchTrack(t) {
+  return {
+    title: t.name || '',
+    artist: t.artists?.map(a => a.name).join(', ') || '',
+    spotifyUrl: t.external_urls?.spotify || (t.uri ? `spotify:track:${t.uri.split(':').pop()}` : ''),
+    album: t.album?.name || '',
+    year: Number(String(t.album?.release_date || '').slice(0, 4)) || 0,
+    durationSec: t.duration_ms ? Math.round(t.duration_ms / 1000) : 0,
+  };
+}
+
+// How much a search result looks like the song it was searched for. The
+// picker shows this so "first result" isn't taken on faith, and the bulk pass
+// uses it as its acceptance bar: a global search always returns SOMETHING,
+// so an unguarded "first result" pass would link every unfindable original to
+// an unrelated track.
+export const GUESS_MIN_TITLE_SCORE = 0.7;
+
+export function scoreSpotifyGuess(song, track) {
+  const title = matchScore(song.title || '', track.title || '');
+  const artist = song.artist && track.artist ? matchScore(song.artist, track.artist) : null;
+  // A clear artist disagreement sinks a candidate outright (same rule the
+  // playlist matcher uses) — "Bye-Bye" by Jo Dee Messina must not accept
+  // *NSYNC's "Bye Bye Bye".
+  return { title, artist, conflict: artist !== null && artist < 0.4 };
+}
+
+export function isConfidentGuess(song, track) {
+  const s = scoreSpotifyGuess(song, track);
+  return s.title >= GUESS_MIN_TITLE_SCORE && !s.conflict;
 }
 
 export function parseBatchChartUrls(text) {
