@@ -472,6 +472,7 @@ export function initQualiaPage() {
     reactSmoothing: reactSmoothingValue,
     poseThresh:     pose.getThresholds(),
     poseLingerMs:   pose.getLingerMs(),
+    poseScale:      pose.getScale(),
     poseFps:        pose.getDetectFps(),
     vizFps:         core.getMaxFps(),
     audioCollapsed: audioCard.classList.contains('collapsed'),
@@ -790,6 +791,27 @@ export function initQualiaPage() {
       const v = parseInt(input.value, 10);
       val.textContent = `${v}ms`;
       pose.setLingerMs(v);
+      settings.save();
+    });
+  }
+
+  // ── Pose scale — resize the tracked skeleton about the centre of the screen.
+  // A close camera puts the body outside the frame; this pulls the whole figure
+  // back into the composition without touching the lens. Double-click resets to
+  // 1.00× via the delegated slider handler (markup `value="1"`).
+  const poseScaleRow = document.querySelector('[data-qp="pose-scale"]');
+  const poseScaleInput = poseScaleRow?.querySelector('input[type=range]') || null;
+  const poseScaleVal   = poseScaleRow?.querySelector('.qp-val') || null;
+  function paintPoseScale() {
+    if (poseScaleInput) poseScaleInput.value = String(pose.getScale());
+    if (poseScaleVal) poseScaleVal.textContent = `${pose.getScale().toFixed(2)}×`;
+  }
+  if (poseScaleRow) {
+    if (typeof stored.poseScale === 'number') pose.setScale(stored.poseScale);
+    paintPoseScale();
+    poseScaleInput.addEventListener('input', () => {
+      pose.setScale(parseFloat(poseScaleInput.value));
+      if (poseScaleVal) poseScaleVal.textContent = `${pose.getScale().toFixed(2)}×`;
       settings.save();
     });
   }
@@ -5719,6 +5741,7 @@ export function initQualiaPage() {
         smoothing:  poseSmoothingValue,
         thresholds: pose.getThresholds(),
         lingerMs:   pose.getLingerMs(),
+        scale:      pose.getScale(),
         numPoses:   pose.getNumPoses(),
       },
       overlay: {
@@ -5858,6 +5881,11 @@ export function initQualiaPage() {
         try { await pose.setThresholds(q.pose.thresholds); } catch {}
       }
       if (typeof q.pose.lingerMs === 'number') pose.setLingerMs(q.pose.lingerMs);
+      // Older qualems predate the scale param — treat a missing value as 1 so
+      // recalling one always lands on a known scale instead of inheriting
+      // whatever the last scene happened to leave behind.
+      pose.setScale(typeof q.pose.scale === 'number' ? q.pose.scale : 1);
+      paintPoseScale();
       if (typeof q.pose.numPoses === 'number') {
         try { await pose.setNumPoses(q.pose.numPoses); } catch {}
         if (posesSelect) posesSelect.value = String(q.pose.numPoses);
@@ -6086,7 +6114,7 @@ export function initQualiaPage() {
       sparse:        true,
       activeFxId:    mesh.ids()[0],
       audio:   { mode: 'off', tunables: AUDIO_PRESETS.default },
-      pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, numPoses: 1 },
+      pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, scale: 1, numPoses: 1 },
       overlay: { skeleton: true, sparks: true, sparkStyle: 'dots', aura: true, ripples: true },
       glitch:  { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off' },
       camWalk: { on: false, config: { ...CAM_WALK_DEFAULTS } },
@@ -6951,6 +6979,11 @@ export function initQualiaPage() {
         pose.setSmoothing(poseSmoothingValue);
         if (smoothInput) smoothInput.value = String(poseSmoothingValue);
         if (smoothVal) smoothVal.textContent = `${Math.round(poseSmoothingValue * 100)}%`;
+        settings.save();
+      },
+      setPoseScale: (v) => {
+        pose.setScale(v);
+        paintPoseScale();
         settings.save();
       },
       setPoseSource: (v) => {

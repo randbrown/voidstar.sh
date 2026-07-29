@@ -75,6 +75,7 @@ const REFPITCH_KEY   = `${NS}.refPitch`;   // tuner reference A (Hz)
 const TUNERMODE_KEY  = `${NS}.tunerMode`;  // 'mono' | 'chord' | 'strings'
 const TUNERCHORD_KEY = `${NS}.tunerChord`; // polytuner chord: {root:pc, quality}
 const TUNERSTRINGS_KEY = `${NS}.tunerStrings`; // polytuner string set id
+const TUNERRANGE_KEY = `${NS}.tunerRange`; // mono detection range: 'steel'|'gtr'|'bass'|'wide'
 const CABNAME_KEY    = `${NS}.cabName`;     // loaded cab IR filename (display)
 const CAB_IR_ID      = 'cabIR';            // legacy single-IR misc key (migrated → library)
 const CABLIB_KEY     = `${NS}.cabLib`;      // saved cab IR library index: [{ id, name }]
@@ -379,6 +380,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     tunerMode: (() => { const m = lsGet(TUNERMODE_KEY, 'mono'); return (m === 'chord' || m === 'strings' || m === 'chromatic') ? m : 'mono'; })(),
     tunerChord: loadTunerChord(),           // { root: pitch-class, quality }
     tunerStrings: lsGet(TUNERSTRINGS_KEY, 'guitar') || 'guitar',
+    tunerRange: lsGet(TUNERRANGE_KEY, 'steel') || 'steel',   // mono detection window
     cabName: lsGet(CABNAME_KEY, '') || '',
     ampName: lsGet(AMPNAME_KEY, '') || '',
     gridDefault: defaultGrid,       // "cycles" each new track starts with
@@ -2650,8 +2652,29 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // Pitch *detection* (autocorrelation, throttled) only picks WHICH note to lock
   // the strobe to. Three octave-stacked bands give coarse→fine sensitivity.
   const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  const TUNER_MIN_HZ = 22;     // reach below G0 (~24.5 Hz)
+  // Detection range presets (mono mode). Bounding the autocorrelation search to
+  // the instrument in your hands is the single biggest win for HIGH notes: an
+  // unbounded search down to 22 Hz lets a sympathetically-ringing low string (or
+  // a sub-harmonic of the note you actually plucked) win the correlation peak,
+  // so a thin plain string like the pedal steel's 1st/3rd never gets a look in.
+  // A tight range also lets the detector skip the ×2 decimation the wide search
+  // needs, which is what buys real resolution up top — see detectorGeometry().
+  // Each range carries ~a semitone of slack past its nominal end notes so a
+  // badly-out string still lands.
+  const TUNER_RANGES = {
+    steel: { label: 'steel', lo: 98,  hi: 940 },   // G#2 … A5 — the pedal-steel window
+    gtr:   { label: 'gtr',   lo: 78,  hi: 1400 },  // E2 … E6 — guitar (capo/harmonics headroom)
+    bass:  { label: 'bass',  lo: 29,  hi: 420 },   // B0 … G#4
+    wide:  { label: 'wide',  lo: 22,  hi: 1200 },  // anything (pre-range behaviour)
+  };
   const TUNER_INTERVAL_MS = 140;  // note-detection cadence (strobe itself runs every frame)
+  // Hold the last detected note this long after detection drops out. A plucked
+  // string falls under the clarity bar long before it stops being tunable, and
+  // the strobe reads pitch from PHASE (it never needed the detector) — without
+  // the hold the readout flickers back to "play a note" mid-decay.
+  const TUNER_HOLD_MS = 1200;
+  const TUNER_RMS_FLOOR = 0.004;  // ≈ −48 dBFS: below this it's room noise, not a note
+  const TUNER_CLARITY = 0.5;      // min NSDF peak to call a period (level-independent)
   // Weight of each fresh sample in the cents READOUT smoothing (per TUNER_INTERVAL_MS
   // tick), shared by mono + poly so they read identically. Lower = calmer / slower
   // to settle. The strobe stripes ignore this — they always animate per frame.
@@ -2659,9 +2682,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const STROBE_BANDS = 3;      // octave-stacked sensitivity rows (×1, ×2, ×4)
   let tunerNoteEl = null, tunerHzEl = null, tunerTgtEl = null, tunerCentsEl = null;
   let tunerModeBtns = null, tunerChordCtl = null, tunerStringCtl = null, tunerReadoutEl = null;
-  let strobeCanvas = null, strobe2d = null, _strobeWin = null;
+  let tunerRangeCtl = null;
+  let strobeCanvas = null, strobe2d = null;
   let tunerBuf = null, tunerDec = null, _tunerLastMs = 0;
-  let _tunerNoteKey = '', _tunerErrSmooth = 0;
+  let _tunerNoteKey = '', _tunerErrSmooth = 0, _tunerGoodMs = 0;
   // Shared strobe state written by updateTuner (throttled) + read by drawStrobe
   // (per-frame). In poly modes this also carries the mini-tuner aggregate.
   const _strobe = { fRef: 0, voiced: false, inTune: false, near: false, msg: 'play a note' };
@@ -2731,6 +2755,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (tunerChordCtl)  tunerChordCtl.style.display  = m === 'chord'   ? '' : 'none';
     if (tunerStringCtl) tunerStringCtl.style.display = m === 'strings' ? '' : 'none';
     if (tunerReadoutEl) tunerReadoutEl.style.display = m === 'mono'    ? '' : 'none';
+    // The range only bounds pitch DETECTION, which only mono does — the poly
+    // modes demodulate declared targets and never search for a note.
+    if (tunerRangeCtl)  tunerRangeCtl.style.display  = m === 'mono'    ? '' : 'none';
     _lanesDirty = true;
     resizeStrobeForLanes();
     _miniKey = null;
@@ -2772,6 +2799,22 @@ export function createLooper({ audio, syncStrudel } = {}) {
     strSel.value = STRING_PRESETS[model.tunerStrings] ? model.tunerStrings : 'guitar';
     strSel.addEventListener('change', () => { model.tunerStrings = strSel.value; lsSet(TUNERSTRINGS_KEY, model.tunerStrings); resizeStrobeForLanes(); });
     tunerStringCtl.append(strSel);
+    // Mono detection range — the narrower the window, the harder it is for a
+    // ringing low string to steal the peak from the thin high one you plucked.
+    tunerRangeCtl = document.createElement('div'); tunerRangeCtl.className = 'rig-tuner-target';
+    const rngSel = document.createElement('select'); rngSel.className = 'rig-tuner-sel';
+    rngSel.title = 'Detection range — bound the note search to the instrument in your hands. '
+      + 'steel: G#2–A5 (pedal steel) · gtr: E2–E6 · bass: B0–G#4 · wide: everything. '
+      + 'Narrower = high notes register far more readily and read to the cent.';
+    for (const [k, v] of Object.entries(TUNER_RANGES)) { const o = document.createElement('option'); o.value = k; o.textContent = v.label; rngSel.appendChild(o); }
+    rngSel.value = TUNER_RANGES[model.tunerRange] ? model.tunerRange : 'steel';
+    rngSel.addEventListener('change', () => {
+      model.tunerRange = rngSel.value;
+      lsSet(TUNERRANGE_KEY, model.tunerRange);
+      _det.key = '';                                   // force a geometry rebuild
+      _tunerNoteKey = ''; _tunerGoodMs = 0;            // drop the held note
+    });
+    tunerRangeCtl.append(rngSel);
     _tunerMuteBtn = document.createElement('button');
     _tunerMuteBtn.type = 'button'; _tunerMuteBtn.className = 'ctrl-btn rig-tuner-mute';
     _tunerMuteBtn.addEventListener('click', () => {
@@ -2780,7 +2823,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       applyTunerMute();
     });
     refreshTunerMuteBtn();
-    bar.append(modes, tunerChordCtl, tunerStringCtl, _tunerMuteBtn);
+    bar.append(modes, tunerChordCtl, tunerStringCtl, tunerRangeCtl, _tunerMuteBtn);
     // Mono readout (note · cents · Hz · target) — hidden in poly modes.
     const row = document.createElement('div'); row.className = 'rig-tuner-readout';
     tunerNoteEl = document.createElement('span'); tunerNoteEl.className = 'rig-tuner-note'; tunerNoteEl.textContent = '—';
@@ -2807,7 +2850,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const t = noteTarget(midi);
     return { cls: t.cls, octave: t.octave, midi: t.midi, fRef: t.fRef, label: t.label, candidates: candidates || null,
              mag: 0, phase: 0, prevPhase: 0, prevT: -1, prevF: 0, prevVoiced: false, centsSmooth: 0,
-             dispCents: 0, dispVoiced: false, voiced: false, inTune: false, near: false };
+             dispCents: 0, dispVoiced: false, dispAmb: false, ambiguous: false, coarseHz: 0,
+             voiced: false, inTune: false, near: false };
   }
   // (Re)build the lane list from the current mode + target selection.
   function rebuildLanes() {
@@ -2838,54 +2882,215 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (_lanes.length > MAX_LANES) _lanes.length = MAX_LANES;
     _lanesDirty = false;
   }
-  function ensureStrobeWin(n) {
-    if (!_strobeWin || _strobeWin.length !== n) {
-      _strobeWin = new Float32Array(n);
-      for (let i = 0; i < n; i++) _strobeWin[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)); // Hann
+  // Hann windows keyed by length. Demod lengths are quantized to powers of two
+  // (see demodLen) so this holds ~3 entries for a given range.
+  const _winCache = new Map();
+  function hannWin(n) {
+    let w = _winCache.get(n);
+    if (!w) {
+      w = new Float32Array(n);
+      for (let i = 0; i < n; i++) w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1));
+      if (_winCache.size > 8) _winCache.clear();   // sample-rate/analyser change — start over
+      _winCache.set(n, w);
     }
+    return w;
   }
-  // I/Q demodulate `buf` at `f`, clock-anchored to `t0`. Writes _dem {mag,phase}
-  // and returns it. atan2(-Q,I) makes the phase advance at 2π(fIn−fRef) so SHARP
-  // drifts the stripes right, flat left (Peterson convention); frozen = in tune.
-  function demodIQ(buf, n, win, sr, t0, f) {
-    if (!(f > 0) || f > sr * 0.45) { _dem.mag = 0; _dem.phase = 0; return _dem; }
+  // How many samples to demodulate at `f`: a constant number of PERIODS, so
+  // every target gets the same capture width in CENTS. A fixed full-buffer
+  // window is ±160¢ wide at B2 but only ±53¢ at F#4 — which is exactly why the
+  // high steel strings fell out of the polytuner the moment they drifted half a
+  // semitone, while the low ones held on. Quantized to a power of two to keep
+  // the window cache tiny; a shorter window is also cheaper AND fresher (less
+  // of the previous note's ring).
+  const DEMOD_PERIODS = 40;
+  // Main-lobe half-width of that window, in cents (2/T Hz ÷ f, in cents — the
+  // f cancels, which is the whole point). Past this a lane is reading sidelobe.
+  const CAPTURE_CENTS = Math.round(1200 * Math.log2(1 + 2 / DEMOD_PERIODS));
+  function demodLen(f, sr, cap) {
+    if (!(f > 0)) return cap;
+    const p = Math.round(Math.log2((DEMOD_PERIODS * sr) / f));
+    return Math.min(cap, Math.max(1024, 2 ** Math.max(0, Math.min(20, p))));
+  }
+  // I/Q demodulate `len` samples of `buf` starting at `start`, at frequency `f`,
+  // clock-anchored to `t0`. Writes _dem {mag,phase} and returns it. atan2(-Q,I)
+  // makes the phase advance at 2π(fIn−fRef) so SHARP drifts the stripes right,
+  // flat left (Peterson convention); frozen = in tune. The window START is a
+  // fixed number of samples behind `t0`, so the anchor carries a constant phase
+  // offset per target — drift (the thing we measure) is untouched.
+  function demodIQ(buf, start, len, win, sr, t0, f) {
+    if (!(f > 0) || f > sr * 0.45) { _dem.mag = 0; _dem.phase = 0; _dem.amp = 0; return _dem; }
     const w = (2 * Math.PI * f) / sr;
     const cw = Math.cos(w), sw = Math.sin(w);
     const ang = 2 * Math.PI * ((f * t0) % 1);
     let cr = Math.cos(ang), si = Math.sin(ang);
     let I = 0, Q = 0;
-    for (let i = 0; i < n; i++) {
-      const x = buf[i] * win[i];
+    for (let i = 0; i < len; i++) {
+      const x = buf[start + i] * win[i];
       I += x * cr; Q += x * si;
       const ncr = cr * cw - si * sw; si = si * cw + cr * sw; cr = ncr;
     }
     _dem.mag = Math.sqrt(I * I + Q * Q);
     _dem.phase = Math.atan2(-Q, I);
+    // Peak amplitude of a sinusoid at f (Σ hann = len/2 ⇒ |I+jQ| ≈ A·len/4).
+    // Normalising here is what lets lanes with DIFFERENT window lengths — and
+    // the octave candidates in chord mode — be compared to each other at all.
+    _dem.amp = (4 * _dem.mag) / len;
     return _dem;
   }
-  // Bounded autocorrelation pitch detector (parabolic-interpolated). Returns Hz
-  // or -1 when the signal is too quiet / not periodic.
-  function autoCorrelate(buf, sr) {
-    const SIZE = buf.length;
-    let energy = 0;
-    for (let i = 0; i < SIZE; i++) energy += buf[i] * buf[i];
-    if (Math.sqrt(energy / SIZE) < 0.01) return -1;
-    const minLag = Math.max(2, Math.floor(sr / 1200));
-    const maxLag = Math.min(SIZE - 1, Math.floor(sr / TUNER_MIN_HZ));
-    const corr = new Float32Array(maxLag + 2);
+  // Demod the NEWEST samples of the analyser buffer at `f`, with the window
+  // length picked for `f`. A plucked note lives at the END of the buffer.
+  function demodAt(buf, n, sr, t0, f) {
+    const len = demodLen(f, sr, n);
+    return demodIQ(buf, n - len, len, hannWin(len), sr, t0, f);
+  }
+  // Wrap-free coarse pitch error for a target, in Hz: sweep the demod amplitude
+  // across the capture window and parabolically interpolate the peak. Only good
+  // to a few cents — the phase drift is the precise measurement — but it has no
+  // 2π ambiguity, which is exactly what's needed to tell a small error from a
+  // large one that wrapped. Runs on the calm readout tick, not per frame.
+  const COARSE_HALF = 5;                               // probes either side of fRef
+  const _coarseAmps = new Float32Array(COARSE_HALF * 2 + 1);
+  function coarseErrHz(buf, n, sr, t0, fRef, len, a0) {
+    const w = hannWin(len), start = n - len;
+    const step = (fRef * (2 ** (CAPTURE_CENTS / 1200) - 1)) / COARSE_HALF;
+    const amps = _coarseAmps;
+    amps[COARSE_HALF] = a0;
+    let best = 0, bestA = a0;
+    for (let k = -COARSE_HALF; k <= COARSE_HALF; k++) {
+      if (k === 0) continue;
+      const a = demodIQ(buf, start, len, w, sr, t0, fRef + k * step).amp;
+      amps[k + COARSE_HALF] = a;
+      if (a > bestA) { bestA = a; best = k; }
+    }
+    const i = best + COARSE_HALF;
+    const y0 = i > 0 ? amps[i - 1] : 0, y1 = amps[i], y2 = i < amps.length - 1 ? amps[i + 1] : 0;
+    const d = y0 + y2 - 2 * y1;
+    let frac = d ? (0.5 * (y0 - y2)) / d : 0;
+    if (!Number.isFinite(frac) || Math.abs(frac) > 1) frac = 0;
+    return (best + frac) * step;
+  }
+  // ── mono pitch detection ───────────────────────────────────────────────────
+  // Normalised-square-difference (McLeod NSDF) autocorrelation over the active
+  // range, then a fractional-lag refinement. Three things here exist for the
+  // high notes specifically:
+  //
+  //  1. The lag search is bounded by the RANGE, so a ringing low string can't
+  //     out-correlate the thin high one you just plucked.
+  //  2. Decimation is derived from the range instead of being a fixed ×2. At the
+  //     top of the steel's range one whole lag step at 24 kHz is ~63¢ — a note
+  //     can't even be identified reliably, let alone read to ±3¢. A range that
+  //     tops out under ~1.5 kHz runs at full rate.
+  //  3. The peak is NORMALISED (per-lag energy, from prefix sums), so the
+  //     confidence test is about periodicity, not level — a quiet high string
+  //     clears the same bar as a loud low one.
+  const _det = { key: '', dec: 1, sr: 0, win: 0, minLag: 0, maxLag: 0 };
+  const DET_BUDGET = 6e6;      // lag-loop multiply-adds per detection tick
+  const DET_PERIODS = 6;       // window length, in periods of the LOWEST note
+  function tunerRange() { return TUNER_RANGES[model.tunerRange] || TUNER_RANGES.steel; }
+  function detectorGeometry(sr, n) {
+    const key = `${sr}|${n}|${model.tunerRange}`;
+    if (_det.key === key) return _det;
+    const r = tunerRange();
+    // Start from the resolution the top of the range needs (≥32 samples per
+    // period at fMax ⇒ ≤54¢ per lag step before interpolation), then decimate
+    // further only if the lag loop would blow the per-tick budget — which only
+    // a very low fMin ('wide', 'bass') actually does.
+    let dec = Math.max(1, Math.floor(sr / (32 * r.hi)));
+    let sd = 0, minLag = 0, maxLag = 0, win = 0;
+    for (;;) {
+      sd = sr / dec;
+      const avail = Math.floor(n / dec);
+      minLag = Math.max(2, Math.floor(sd / r.hi));
+      maxLag = Math.min(avail - 1, Math.ceil(sd / r.lo));
+      win = Math.min(avail, Math.max(2048, maxLag * DET_PERIODS));
+      if (dec >= 8 || win * Math.max(1, maxLag - minLag) <= DET_BUDGET) break;
+      dec++;
+    }
+    _det.key = key; _det.dec = dec; _det.sr = sd;
+    _det.win = win; _det.minLag = minLag; _det.maxLag = maxLag;
+    return _det;
+  }
+  let _tunerSq = null, _tunerCorr = null;
+  /** @returns {number} detected fundamental in Hz, or -1 (quiet / aperiodic). */
+  function detectPitch(buf, n, sampleRate) {
+    const geo = detectorGeometry(sampleRate, n);
+    const { dec, sr, win, minLag, maxLag } = geo;
+    if (maxLag <= minLag + 1 || win <= maxLag) return -1;
+    if (!tunerDec || tunerDec.length !== win) {
+      tunerDec = new Float32Array(win);
+      _tunerSq  = new Float64Array(win + 1);
+    }
+    if (!_tunerCorr || _tunerCorr.length < maxLag + 2) _tunerCorr = new Float32Array(maxLag + 2);
+    const corr = _tunerCorr;
+    // Decimate the NEWEST win×dec samples (mean of each group = a gentle
+    // low-pass). A plucked string decays, so the freshest audio is the note in
+    // your hand, not the one before it.
+    const off = Math.max(0, n - win * dec);
+    let ms = 0;
+    for (let i = 0; i < win; i++) {
+      let s = 0;
+      const base = off + i * dec;
+      for (let k = 0; k < dec; k++) s += buf[base + k];
+      s /= dec;
+      tunerDec[i] = s;
+      ms += s * s;
+      _tunerSq[i + 1] = _tunerSq[i] + s * s;
+    }
+    if (Math.sqrt(ms / win) < TUNER_RMS_FLOOR) return -1;
+    corr[minLag - 1] = 0; corr[maxLag + 1] = 0;
     let best = -1, bestVal = 0;
     for (let lag = minLag; lag <= maxLag; lag++) {
-      let c = 0;
-      for (let i = 0; i < SIZE - lag; i++) c += buf[i] * buf[i + lag];
+      const m = win - lag;
+      let r = 0;
+      for (let i = 0; i < m; i++) r += tunerDec[i] * tunerDec[i + lag];
+      // NSDF denominator: energy of BOTH overlapping halves, straight off the
+      // prefix sums — level- and decay-independent.
+      const e = _tunerSq[m] + (_tunerSq[lag + m] - _tunerSq[lag]);
+      const c = e > 1e-12 ? (2 * r) / e : 0;
       corr[lag] = c;
       if (c > bestVal) { bestVal = c; best = lag; }
     }
-    if (best <= 0 || bestVal < energy * 0.01) return -1;
-    const x1 = corr[best - 1] || 0, x2 = corr[best], x3 = corr[best + 1] || 0;
+    if (best < 0 || bestVal < TUNER_CLARITY) return -1;
+    // Octave guard: take the FIRST solid local maximum (shortest lag = highest
+    // pitch) within 90% of the global best, rather than a sub-octave peak that
+    // edges it out — the classic autocorrelation octave-down error, and the
+    // reason a high string used to read as the low one droning under it.
+    const thresh = bestVal * 0.9;
+    for (let lag = minLag + 1; lag < best; lag++) {
+      if (corr[lag] >= thresh && corr[lag] >= corr[lag - 1] && corr[lag] >= corr[lag + 1]) { best = lag; break; }
+    }
+    // Parabolic seed, then a fine fractional-lag search. Interpolating three
+    // integer lags isn't enough up top (a whole step is ~32¢ at A5 even at full
+    // rate), and the ±3¢ "in tune" latch has to be reachable there.
+    const x1 = corr[best - 1], x2 = corr[best], x3 = corr[best + 1];
     const denom = x1 + x3 - 2 * x2;
     let shift = denom ? 0.5 * (x1 - x3) / denom : 0;
-    if (!isFinite(shift) || Math.abs(shift) > 1) shift = 0;
-    return sr / (best + shift);
+    if (!Number.isFinite(shift) || Math.abs(shift) > 1) shift = 0;
+    return sr / refineLag(tunerDec, win, best + shift);
+  }
+  // Fractional-lag refinement: re-score the normalised correlation on a fine
+  // grid around `lag0`, reading the delayed copy with linear interpolation.
+  // ~0.6¢ resolution at the top of the steel range, ~0.1¢ at the bottom.
+  function refineLag(x, win, lag0) {
+    const STEP = 0.02, SPAN = 0.5;
+    let bestLag = lag0, bestVal = -Infinity;
+    for (let L = lag0 - SPAN; L <= lag0 + SPAN + 1e-9; L += STEP) {
+      const li = Math.floor(L);
+      if (li < 2) continue;
+      const m = win - li - 1;
+      if (m <= 0) break;
+      const fr = L - li;
+      let r = 0, e1 = 0, e2 = 0;
+      for (let i = 0; i < m; i++) {
+        const a = x[i];
+        const b = x[i + li] + (x[i + li + 1] - x[i + li]) * fr;
+        r += a * b; e1 += a * a; e2 += b * b;
+      }
+      const e = e1 + e2;
+      const c = e > 1e-12 ? (2 * r) / e : 0;
+      if (c > bestVal) { bestVal = c; bestLag = L; }
+    }
+    return bestLag;
   }
   // Push the mini-tuner aggregate (throttled by change so poly's per-frame draw
   // doesn't thrash the DOM).
@@ -2911,7 +3116,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       tunerNoteEl.textContent = '—'; tunerNoteEl.style.color = '';
       if (tunerHzEl) tunerHzEl.textContent = ''; if (tunerTgtEl) tunerTgtEl.textContent = '';
       tunerCentsEl.textContent = msg; tunerCentsEl.style.color = '';
-      _tunerNoteKey = '';
+      _tunerNoteKey = ''; _tunerGoodMs = 0;
       _strobe.voiced = false; _strobe.inTune = false; _strobe.near = false; _strobe.msg = msg;
       refreshMiniTuner();
     };
@@ -2919,14 +3124,17 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const n = an.fftSize;
     if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
     an.getFloatTimeDomainData(tunerBuf);
-    // Decimate ×2 (average pairs) — cheaper autocorrelation and a gentle
-    // low-pass that steadies low-note detection.
-    const m = n >> 1;
-    if (!tunerDec || tunerDec.length !== m) tunerDec = new Float32Array(m);
-    for (let i = 0; i < m; i++) tunerDec[i] = (tunerBuf[2 * i] + tunerBuf[2 * i + 1]) * 0.5;
-    const sr = (an.context?.sampleRate || 48000) / 2;
-    const f = autoCorrelate(tunerDec, sr);
-    if (f <= 0) { clear('play a note'); return; }
+    const f = detectPitch(tunerBuf, n, an.context?.sampleRate || 48000);
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    if (f <= 0) {
+      // Note-hold — keep the last note (and the strobe locked to it) while a
+      // plucked string decays past the clarity bar. The strobe reads pitch from
+      // phase, so it stays live and accurate through the whole hold.
+      if (_strobe.voiced && _strobe.fRef > 0 && now - _tunerGoodMs < TUNER_HOLD_MS) return;
+      clear('play a note');
+      return;
+    }
+    _tunerGoodMs = now;
     const midi = 69 + 12 * Math.log2(f / model.refPitch);
     const rounded = Math.round(midi);
     const cls = ((rounded % 12) + 12) % 12;
@@ -2968,14 +3176,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const n = an.fftSize;
     if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
     an.getFloatTimeDomainData(tunerBuf);
-    ensureStrobeWin(n);
     const sr = an.context?.sampleRate || 48000;
     const t0 = an.context?.currentTime || 0;
     for (const L of _lanes) {
       if (!L.candidates) continue;
+      // Compare AMPLITUDES, not raw magnitudes — each octave demodulates over a
+      // different window length, so the raw magnitudes aren't commensurable.
       let bestMidi = L.midi, bestMag = -1, curMag = 0;
       for (const midi of L.candidates) {
-        const mag = demodIQ(tunerBuf, n, _strobeWin, sr, t0, noteFreq(midi)).mag;
+        const mag = demodAt(tunerBuf, n, sr, t0, noteFreq(midi)).amp;
         if (midi === L.midi) curMag = mag;
         if (mag > bestMag) { bestMag = mag; bestMidi = midi; }
       }
@@ -3012,7 +3221,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const n = an.fftSize;
     if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
     an.getFloatTimeDomainData(tunerBuf);
-    ensureStrobeWin(n);
     const sr = an.context?.sampleRate || 48000;
     const t0 = (an.context?.currentTime || 0);   // audio-clock anchor → phase continuity
     const bandH = H / STROBE_BANDS;
@@ -3024,8 +3232,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
     for (let b = 0; b < STROBE_BANDS; b++) {
       const fb = _strobe.fRef * (1 << b);
       if (fb > sr * 0.45) { mags[b] = 0; phs[b] = 0; continue; }
-      demodIQ(tunerBuf, n, _strobeWin, sr, t0, fb);
-      mags[b] = _dem.mag; phs[b] = _dem.phase;
+      // Amplitude (not raw magnitude): each band picks its own window length, so
+      // only the normalised value can drive the cross-band opacity below. The
+      // ×2/×4 bands are the FINE indicators — on a fixed full-length window they
+      // sat only ±6¢ wide at the top of the steel's range and simply went dark.
+      demodAt(tunerBuf, n, sr, t0, fb);
+      mags[b] = _dem.amp; phs[b] = _dem.phase;
       if (mags[b] > maxMag) maxMag = mags[b];
     }
     for (let b = 0; b < STROBE_BANDS; b++) {
@@ -3058,7 +3270,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const n = an.fftSize;
     if (!tunerBuf || tunerBuf.length !== n) tunerBuf = new Float32Array(n);
     an.getFloatTimeDomainData(tunerBuf);
-    ensureStrobeWin(n);
     // Silence gate — a quiet buffer means "nothing playing", so lanes fade.
     let energy = 0; for (let i = 0; i < n; i++) energy += tunerBuf[i] * tunerBuf[i];
     const rms = Math.sqrt(energy / n);
@@ -3080,8 +3291,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const centsFont = `${Math.max(11, Math.round(Math.min(laneH * 0.72, 20 * dpr)))}px ${MONO}`;
     let maxMag = 1e-9;
     for (const L of _lanes) {
-      demodIQ(tunerBuf, n, _strobeWin, sr, t0, L.fRef);
-      L.mag = _dem.mag; L.phase = _dem.phase;
+      demodAt(tunerBuf, n, sr, t0, L.fRef);
+      L.mag = _dem.amp; L.phase = _dem.phase;   // amp: lanes use different window lengths
       if (L.mag > maxMag) maxMag = L.mag;
     }
     let anyVoiced = false, allInTune = true;
@@ -3090,18 +3301,43 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const L = _lanes[i];
       const y = i * laneH;
       const rel = L.mag / maxMag;
-      const voiced = rms > 0.008 && rel > 0.22;
+      // Voiced gate. The old test was purely RELATIVE to the loudest lane
+      // (rel > 0.22), which is backwards on a pedal steel: the plain high
+      // strings (E9 1st + 3rd) put out far less than the wound low ones, so a
+      // freshly-plucked high string sat under a low string still ringing from
+      // two bars ago and its lane never lit. Now a lane must clear an ABSOLUTE
+      // amplitude floor as well, but only a much lower relative share — a quiet
+      // string registers on its own merits, while broadband noise (which spreads
+      // across every lane at once, never concentrating in one) still can't.
+      const voiced = rms > TUNER_RMS_FLOOR && L.mag > 0.0015 && rel > 0.08;
       // Per-lane cents from the strobe drift rate: Δphase/Δt (audio clock) is the
       // Hz error → cents. Skip the frame the target frequency jumped (auto-octave).
+      // Δφ across frames is precise but only unambiguous below π per FRAME, and
+      // a lane now stays lit far past that up top (its window is sized in
+      // periods, not samples). Past the wrap a badly-out string reads as a small
+      // error of the WRONG sign — a false green, the one failure a tuner must
+      // never have. So each lane also carries a wrap-free coarse error, taken on
+      // the calm readout tick, and the drift is unwrapped toward it. Cheap: a
+      // handful of extra demods 7×/sec, not per frame.
+      if (dispTick) L.coarseHz = voiced ? coarseErrHz(tunerBuf, n, sr, t0, L.fRef, demodLen(L.fRef, sr, n), L.mag) : 0;
       if (voiced && L.prevVoiced && L.prevF === L.fRef && L.prevT >= 0 && t0 > L.prevT) {
+        const dt = t0 - L.prevT;
         let dph = L.phase - L.prevPhase;
         dph = ((dph + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;   // wrap to (−π,π]
-        const driftHz = dph / (2 * Math.PI * (t0 - L.prevT));
+        const expect = 2 * Math.PI * L.coarseHz * dt;
+        let dw = dph - expect;
+        dw = ((dw + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+        const driftHz = (expect + dw) / (2 * Math.PI * dt);
         let cents = 1200 * Math.log2((L.fRef + driftHz) / L.fRef);
         if (!isFinite(cents)) cents = 0;
-        L.centsSmooth = L.centsSmooth * 0.6 + Math.max(-99, Math.min(99, cents)) * 0.4;
+        // Outside the demod's capture width the lane is reading sidelobe, not
+        // the note — say "far out" rather than print a number we don't have.
+        const amb = Math.abs(1200 * Math.log2((L.fRef + L.coarseHz) / L.fRef)) > CAPTURE_CENTS;
+        L.ambiguous = amb;
+        L.centsSmooth = amb ? 99 : (L.centsSmooth * 0.6 + Math.max(-99, Math.min(99, cents)) * 0.4);
       } else if (!voiced) {
         L.centsSmooth = 0;
+        L.ambiguous = false;
       }
       L.prevPhase = L.phase; L.prevT = t0; L.prevF = L.fRef; L.prevVoiced = voiced;
       L.voiced = voiced;
@@ -3110,8 +3346,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
       // snap when a lane just started sounding (as the mono readout does on a
       // note change) so it doesn't crawl up from 0.
       if (dispTick) {
-        L.dispCents = (L.dispVoiced && voiced) ? (L.dispCents * (1 - TUNER_READOUT_EMA) + cents * TUNER_READOUT_EMA) : cents;
-        L.dispVoiced = voiced;
+        const cont = L.dispVoiced && voiced && !L.dispAmb && !L.ambiguous;   // snap in/out of "far out"
+        L.dispCents = cont ? (L.dispCents * (1 - TUNER_READOUT_EMA) + cents * TUNER_READOUT_EMA) : cents;
+        L.dispVoiced = voiced; L.dispAmb = L.ambiguous;
       }
       const inTune = voiced && Math.abs(cents) <= 4;
       const near = voiced && Math.abs(cents) <= 15;
@@ -3136,7 +3373,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
         g.textAlign = 'right';
         g.font = centsFont;
         const c = Math.round(L.dispCents);
-        g.fillText(`${c > 0 ? '+' : ''}${c}`, W - 4 * dpr, y + laneH * 0.5);
+        g.fillText(L.dispAmb ? '··' : `${c > 0 ? '+' : ''}${c}`, W - 4 * dpr, y + laneH * 0.5);
       }
       if (inTune) {
         g.strokeStyle = 'rgba(52,211,153,0.7)'; g.lineWidth = Math.max(1, Math.round(dpr));

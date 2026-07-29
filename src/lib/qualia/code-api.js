@@ -298,6 +298,8 @@ export function installCodeApi(deps) {
       poses:      gs(() => pose.getNumPoses(),   (n) => pose.setNumPoses(n | 0)),
       thresholds: gsConfig(() => pose.getThresholds(), (t) => pose.setThresholds(t)),
       linger:     gs(() => pose.getLingerMs(),   (ms) => pose.setLingerMs(+ms)),
+      /** Skeleton size about the screen centre — 1 = raw landmarks. */
+      scale:      gs(() => pose.getScale(),      (v) => page.setPoseScale(+v)),
       fps:        gs(() => pose.getDetectFps(),  (v) => pose.setDetectFps(+v)),
       /** Number of people currently tracked. */
       people: () => core.field.pose.people.length,

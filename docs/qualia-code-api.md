@@ -145,6 +145,7 @@ qualia.pose.smoothing(0.7)
 qualia.pose.poses(2)               // tracked people 1..6
 qualia.pose.thresholds({ detect: 0.1 })
 qualia.pose.linger(1200)           // ms a vanished pose lingers
+qualia.pose.scale(0.7)             // skeleton size about the screen centre (1 = raw)
 qualia.pose.fps(15)                // inference throttle
 qualia.pose.people()               // currently tracked count
 ```
