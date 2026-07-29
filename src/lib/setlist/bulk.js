@@ -8,7 +8,7 @@
 // This module is a leaf: views.js calls it; nothing here renders UI.
 
 import * as store from './store.js';
-import { getSources, deepScrapeChart, readChartImage, fetchSongMeta, fetchSteelSummary, fetchPlaylistTracks } from './sync.js';
+import { getSources, deepScrapeChart, readChartImage, fetchSongMeta, fetchSteelSummary, fetchPlaylistTracks, searchSpotifyTracks, scoreSpotifyGuess, isConfidentGuess, GUESS_MIN_TITLE_SCORE } from './sync.js';
 import { matchScore } from './match.js';
 import { parseSpotifyUrl } from './spotify.js';
 import { isSpotifyConnected } from './spotify-auth.js';
@@ -255,6 +255,12 @@ export async function verifySpotifyLinks(onProgress) {
     const linkedId = parseSpotifyUrl(song.spotifyUri)?.id;
     if (linkedId && pool.some(t => trackId(t) === linkedId)) {
       ok++;
+      // The playlist just confirmed a preliminary (best-guess) link — it's a
+      // real match now, so drop the "guess" verdict.
+      if (song.spotifyGuess) {
+        store.confirmSpotifyLink(song);
+        await store.putSong(song);
+      }
     } else {
       const exact = pool.filter(t => matchScore(song.title, t.title) === 1);
       const compatible = exact.filter(t =>
@@ -267,6 +273,7 @@ export async function verifySpotifyLinks(onProgress) {
       }
       if (candidates.length === 1) {
         song.spotifyUri = candidates[0].spotifyUrl;
+        store.confirmSpotifyLink(song); // came from the playlist — not a guess
         if (candidates[0].artist && !song.artist) song.artist = candidates[0].artist;
         await store.putSong(song);
         updated++;
@@ -282,6 +289,65 @@ export async function verifySpotifyLinks(onProgress) {
     onProgress?.({ done: i + 1, total: songs.length, updated, title: song.title });
   }
   return { total: songs.length, updated, ok, failures };
+}
+
+// Accept Spotify's best guess (the first search result) as a PRELIMINARY link
+// for every song that has none — the library-wide version of the quick-link
+// tool's per-song "best guess". This is the one pass that writes data from a
+// global Spotify search, so two rules keep it honest: every link it writes is
+// flagged `spotifyGuess` (badged on the song page, replaceable by auto-link
+// and "verify spotify links"), and a first result that doesn't clear the
+// title bar — or whose artist disagrees — is skipped and listed instead of
+// linked. A search always returns SOMETHING; an unguarded pass would link
+// every unfindable original to a stranger's track.
+export async function bestGuessSpotifyLinks(onProgress) {
+  const targets = (await store.getAllSongs()).filter(s => !s.spotifyUri);
+  let updated = 0;
+  const failures = [];
+  const SAME_FAILURE_LIMIT = 3;
+  let lastReason = null;
+  let sameReasonRun = 0;
+  for (let i = 0; i < targets.length; i++) {
+    const song = targets[i];
+    let reason = null;
+    try {
+      const { tracks, problems } = await searchSpotifyTracks(song.title, song.artist || '', { limit: 5 });
+      const best = tracks[0];
+      if (!best) {
+        reason = problems[0] || 'Spotify found no track by that name';
+      } else if (!isConfidentGuess(song, best)) {
+        const s = scoreSpotifyGuess(song, best);
+        reason = s.conflict
+          ? `best guess is "${best.title}" by ${best.artist} — different artist, so it wasn't linked`
+          : `best guess is "${best.title}" by ${best.artist || 'unknown'} (${Math.round(s.title * 100)}% title match, under ${Math.round(GUESS_MIN_TITLE_SCORE * 100)}%)`;
+      } else {
+        store.markSpotifyGuess(song, best.spotifyUrl);
+        if (best.artist && !song.artist) song.artist = best.artist;
+        await store.putSong(song);
+        updated++;
+      }
+    } catch (e) {
+      reason = e.message || 'search failed';
+    }
+    if (reason) {
+      failures.push({ song, reason });
+      // A config problem (no worker + no session, revoked token) fails the
+      // same way on every song — say it once instead of N times.
+      sameReasonRun = reason === lastReason ? sameReasonRun + 1 : 1;
+      lastReason = reason;
+      if (sameReasonRun >= SAME_FAILURE_LIMIT && /failed|needs|Settings/i.test(reason)) {
+        return {
+          aborted: `stopped — ${sameReasonRun} songs in a row failed the same way: ${reason}`,
+          total: targets.length, updated, failures,
+        };
+      }
+    } else {
+      lastReason = null;
+      sameReasonRun = 0;
+    }
+    onProgress?.({ done: i + 1, total: targets.length, updated, title: song.title });
+  }
+  return { total: targets.length, updated, failures };
 }
 
 // The health dimensions — one predicate per "is this filled in?" question,

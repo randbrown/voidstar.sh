@@ -250,6 +250,26 @@ export function createSong(title, artist = '') {
   };
 }
 
+// A Spotify link accepted from a GLOBAL search (the library's "best guess"
+// tool) is preliminary: right often enough to be worth one tap, wrong often
+// enough that it must never look confirmed. The flag drives the song page's
+// "guess" badge, and it tells auto-link / "verify spotify links" they may
+// replace the link with a real reference-playlist match. Anything that ties a
+// song to a track the user actually looked at — the playlist picker, a
+// hand-pasted URL, the confirm button — clears it.
+export function markSpotifyGuess(song, url) {
+  song.spotifyUri = url;
+  song.spotifyGuess = true;
+  song.spotifyGuessAt = Date.now();
+  return song;
+}
+
+export function confirmSpotifyLink(song) {
+  song.spotifyGuess = false;
+  song.spotifyGuessAt = 0;
+  return song;
+}
+
 export const putSong = (song) => put(SONGS, { ...song, updatedAt: Date.now() });
 export const getSong = (id) => getOne(SONGS, id);
 export const getAllSongs = () => getAll(SONGS);
@@ -419,10 +439,12 @@ export async function restoreSnapshot(ts) {
 // generated/hand-entered content — an AI steel summary, scraped lyrics, a
 // chart link — that a stale-but-later-touched copy of the song used to wipe
 // wholesale under pure "newer record wins". Excluded on purpose: `title`
-// (never blank) and `statuses` (toggled off intentionally all the time).
+// (never blank), `statuses` (toggled off intentionally all the time), and
+// `spotifyGuess` (a verdict on the link, not content — it must be able to go
+// false, and it travels with whichever copy of the record wins).
 export const SONG_FILL_FIELDS = [
   'artist', 'key', 'bpm', 'capo', 'keyChanges', 'steelEntry', 'steelSummary',
-  'spotifyUri', 'bandcampUrl', 'bandcampEmbedUrl', 'soundcloudUrl',
+  'spotifyUri', 'bandcampUrl', 'bandcampEmbedUrl', 'soundcloudUrl', 'altLinks',
   'chartUrl', 'altCharts', 'lyrics', 'syncedLyrics',
   'genre', 'year', 'durationSec', 'artworkUrl',
 ];

@@ -6,6 +6,8 @@
 // hand-pasted link gets resolved lazily on the song page via
 // resolveBandcampEmbed (sync.js), falling back to a plain link offline.
 
+import { parseSpotifyUrl } from './spotify.js';
+
 const BANDCAMP_EMBED_HOST = 'https://bandcamp.com/EmbeddedPlayer/';
 
 export function isBandcampUrl(url) {
@@ -14,6 +16,77 @@ export function isBandcampUrl(url) {
 
 export function isSoundcloudUrl(url) {
   return /^https?:\/\/([a-z-]+\.)?soundcloud\.com\//i.test(url || '');
+}
+
+// ── Extra listen links (song.altLinks) ──
+//
+// A song has one primary link per service (spotifyUri / bandcampUrl /
+// soundcloudUrl — what auto-link fills and what the song page embeds by
+// default). `song.altLinks` holds every OTHER recording of the same song the
+// performer wants at hand: the live cut, the single vs. the album version, a
+// different artist's version to steal a steel part from, a YouTube video.
+// Shape: [{id, url, label, service, embedUrl?, addedAt}] — lazy (usually
+// absent), fill-protected like altCharts.
+
+// Which service a pasted URL belongs to. 'spotify' | 'bandcamp' |
+// 'soundcloud' | 'youtube' | 'other' — only the first three have a primary
+// slot on the song, so only those can be promoted.
+export function linkService(url) {
+  const u = (url || '').trim();
+  if (/^spotify:track:/i.test(u) || /^https?:\/\/open\.spotify\.com\//i.test(u)) return 'spotify';
+  if (isBandcampUrl(u)) return 'bandcamp';
+  if (isSoundcloudUrl(u)) return 'soundcloud';
+  if (/^https?:\/\/([a-z0-9-]+\.)*(youtube\.com|youtu\.be)\//i.test(u)) return 'youtube';
+  return 'other';
+}
+
+export const LINK_SERVICE_LABELS = {
+  spotify: 'spotify',
+  bandcamp: 'bandcamp',
+  soundcloud: 'soundcloud',
+  youtube: 'youtube',
+  other: 'link',
+};
+
+// The song field a service's PRIMARY link lives in, or null for services with
+// no primary slot (they can only ever be alternates).
+export const LINK_PRIMARY_FIELD = {
+  spotify: 'spotifyUri',
+  bandcamp: 'bandcampUrl',
+  soundcloud: 'soundcloudUrl',
+};
+
+// Always an array — the field is lazy, so old records and fresh songs have no
+// `altLinks` at all.
+export function altLinksOf(song) {
+  return Array.isArray(song?.altLinks) ? song.altLinks : [];
+}
+
+export function makeAltLink(url, label = '') {
+  const service = linkService(url);
+  return {
+    id: crypto.randomUUID(),
+    url: url.trim(),
+    label: (label || '').trim().slice(0, 60),
+    service,
+    addedAt: Date.now(),
+  };
+}
+
+// Is this URL already on the song (as a primary or an alternate)? Keeps the
+// pickers from stacking the same track twice. Spotify links compare by track
+// id — the same track travels as both `spotify:track:…` and an
+// open.spotify.com URL.
+export function songHasLink(song, url) {
+  const norm = (u) => {
+    const id = parseSpotifyUrl(u || '');
+    if (id?.type === 'track') return `spotify:${id.id}`;
+    return (u || '').trim().replace(/\?.*$/, '').replace(/\/+$/, '').toLowerCase();
+  };
+  const target = norm(url);
+  if (!target) return false;
+  return [song.spotifyUri, song.bandcampUrl, song.soundcloudUrl, ...altLinksOf(song).map(l => l.url)]
+    .some(u => norm(u) === target);
 }
 
 export function soundcloudEmbedUrl(trackUrl) {
@@ -50,6 +123,21 @@ function mountEmbedFrame(container, src, height, openUrl, openLabel) {
     link.style.cssText = 'display:block;text-align:center;font-size:0.75rem;color:var(--text-dim);margin-top:0.25rem;text-decoration:none;';
     container.appendChild(link);
   }
+}
+
+// YouTube exists here only as an ALTERNATE listen link (no primary slot, no
+// auto-link matching): live versions and lesson videos live there, and the
+// no-cookie player embeds them with nothing to resolve.
+export function youtubeEmbedUrl(url) {
+  const u = (url || '').trim();
+  const m = u.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{6,})/);
+  return m ? `https://www.youtube-nocookie.com/embed/${m[1]}` : null;
+}
+
+export function renderYoutubeEmbed(container, url) {
+  const src = youtubeEmbedUrl(url);
+  if (!src) return;
+  mountEmbedFrame(container, src, 180, url, 'open in youtube');
 }
 
 export function renderSoundcloudEmbed(container, trackUrl) {

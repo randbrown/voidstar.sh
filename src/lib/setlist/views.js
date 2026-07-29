@@ -5,9 +5,9 @@ import { navigate, refresh, getLastSongId, setLastSongId } from './app.js';
 import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
-import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getReferencePlaylistTracks, resolveBandcampEmbed } from './sync.js';
-import { renderBandcampEmbed, renderSoundcloudEmbed } from './media.js';
-import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, libraryHealth, songHealth } from './bulk.js';
+import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getReferencePlaylistTracks, resolveBandcampEmbed, searchSpotifyTracks, scoreSpotifyGuess } from './sync.js';
+import { renderBandcampEmbed, renderSoundcloudEmbed, renderYoutubeEmbed, altLinksOf, makeAltLink, linkService, songHasLink, LINK_SERVICE_LABELS, LINK_PRIMARY_FIELD } from './media.js';
+import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, bestGuessSpotifyLinks, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
 import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js';
@@ -844,16 +844,102 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
   }));
   wrap.appendChild(chartSection);
 
-  // Spotify search links fallback
+  // ── Spotify quick-link ──
+  // The manual escape hatch from the playlist-only matching rule, for songs no
+  // reference playlist carries. Each unlinked song offers "search" (opens
+  // Spotify) and "best guess" — a real Spotify search whose top hit can be
+  // accepted with one tap. Anything accepted here is PRELIMINARY
+  // (store.markSpotifyGuess): badged on the song page, and auto-link /
+  // "verify spotify links" are free to replace it with a real playlist match.
   const spotifySection = el('div', 'sl-section');
   spotifySection.innerHTML = `
     <div class="sl-section-title">spotify quick-link</div>
     <div class="sl-hint" style="margin-bottom:0.5rem">
-      Songs without a Spotify link get a "search" button that opens Spotify search.
-      With the sync worker deployed, auto-link fills links from your setlist playlists.
+      For songs no setlist playlist carries. "search" opens Spotify;
+      <b>best guess</b> searches Spotify here and links its top hit as a
+      <b>preliminary</b> link — flagged as a guess on the song page, and
+      replaced automatically if auto-link or "verify spotify links" later finds
+      the song in a real playlist.
     </div>
   `;
-  const unlinkedBtn = btn('show unlinked songs', 'sl-btn-ghost', async () => {
+  const spotifyActions = el('div', 'sl-action-bar');
+  const spotifyStatus = el('div', 'sl-hint');
+  const unlinkedList = el('div', 'sl-source-list');
+
+  // One song's search results, cycled one at a time under its row: Spotify's
+  // first hit IS the best guess, but album/year/match% are shown so it can be
+  // recognized (a live cut, a karaoke re-record) before it's accepted, and
+  // "next" walks the rest. Track text is untrusted — textContent only.
+  function attachGuessPicker(row, song, onLinked) {
+    const panel = el('div', 'sl-guess-panel');
+    const info = el('div', 'sl-guess-info');
+    const actions = el('div', 'sl-guess-actions');
+    panel.appendChild(info);
+    panel.appendChild(actions);
+
+    let tracks = [];
+    let idx = 0;
+    const openLink = el('a', 'sl-btn sl-btn-ghost sl-btn-xs', 'open');
+    openLink.target = '_blank';
+    openLink.rel = 'noopener';
+    const useBtn = btn('link it', 'sl-btn-spotify sl-btn-xs', async () => {
+      const t = tracks[idx];
+      if (!t) return;
+      store.markSpotifyGuess(song, t.spotifyUrl);
+      if (t.artist && !song.artist) song.artist = t.artist;
+      await store.putSong(song);
+      panel.innerHTML = '';
+      const done = el('div', 'sl-guess-info');
+      done.textContent = `linked (preliminary): ${t.title}${t.artist ? ` — ${t.artist}` : ''}`;
+      done.style.color = 'var(--green)';
+      panel.appendChild(done);
+      onLinked?.();
+    });
+    const nextBtn = btn('next', 'sl-btn-ghost sl-btn-xs', () => {
+      idx = (idx + 1) % tracks.length;
+      paint();
+    });
+    actions.appendChild(openLink);
+    actions.appendChild(useBtn);
+    actions.appendChild(nextBtn);
+
+    function paint() {
+      const t = tracks[idx];
+      const s = scoreSpotifyGuess(song, t);
+      const bits = [t.artist || 'unknown artist'];
+      if (t.album && t.album !== t.title) bits.push(t.album);
+      if (t.year) bits.push(String(t.year));
+      bits.push(`${Math.round(s.title * 100)}% title match`);
+      if (s.conflict) bits.push('⚠ different artist');
+      info.textContent = `${idx + 1}/${tracks.length} · ${t.title} — ${bits.join(' · ')}`;
+      info.style.color = s.conflict ? 'var(--pink)' : '';
+      openLink.href = t.spotifyUrl;
+      nextBtn.classList.toggle('sl-hidden', tracks.length < 2);
+    }
+
+    return async function run(button) {
+      if (tracks.length) { panel.classList.toggle('sl-hidden'); return; }
+      button.disabled = true;
+      button.textContent = 'searching…';
+      const { tracks: found, problems } = await searchSpotifyTracks(song.title, song.artist || '', { limit: 5 });
+      button.textContent = 'best guess';
+      button.disabled = false;
+      row.after(panel);
+      if (!found.length) {
+        panel.innerHTML = '';
+        const note = el('div', 'sl-guess-info');
+        note.textContent = problems[0] || 'Spotify found no track by that name';
+        note.style.color = 'var(--pink)';
+        panel.appendChild(note);
+        return;
+      }
+      tracks = found;
+      idx = 0;
+      paint();
+    };
+  }
+
+  async function renderUnlinked() {
     const songs = await store.getAllSongs();
     const unlinked = songs.filter(s => !s.spotifyUri);
     unlinkedList.innerHTML = '';
@@ -863,16 +949,111 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
     }
     for (const s of unlinked) {
       const row = el('div', 'sl-source-row');
-      const searchUrl = spotifySearchUrl(s.title, s.artist);
-      row.innerHTML = `
-        <span class="sl-source-url">${esc(s.title)}</span>
-        <a href="${esc(searchUrl)}" target="_blank" rel="noopener" class="sl-btn sl-btn-spotify sl-btn-sm">search</a>
-      `;
+      const label = el('span', 'sl-source-url');
+      label.textContent = s.title + (s.artist ? ` — ${s.artist}` : '');
+      row.appendChild(label);
+      const guessBtn = btn('best guess', 'sl-btn-ghost sl-btn-sm', () => {});
+      const runGuess = attachGuessPicker(row, s, songsChanged);
+      guessBtn.addEventListener('click', () => runGuess(guessBtn));
+      guessBtn.title = 'Search Spotify and link its best match as a preliminary (guess) link';
+      row.appendChild(guessBtn);
+      const searchLink = el('a', 'sl-btn sl-btn-spotify sl-btn-sm', 'search');
+      searchLink.href = spotifySearchUrl(s.title, s.artist);
+      searchLink.target = '_blank';
+      searchLink.rel = 'noopener';
+      row.appendChild(searchLink);
       unlinkedList.appendChild(row);
     }
+  }
+
+  spotifyActions.appendChild(btn('show unlinked songs', 'sl-btn-ghost sl-btn-sm', async () => {
+    spotifyStatus.textContent = '';
+    await renderUnlinked();
+  }));
+
+  // The whole-library version of "best guess": every unlinked song gets
+  // Spotify's top hit as a preliminary link — skipping (and listing) the ones
+  // whose top hit doesn't actually look like the song.
+  const guessAllBtn = btn('best-guess all unlinked', 'sl-btn-ghost sl-btn-sm', async () => {
+    const unlinked = (await store.getAllSongs()).filter(s => !s.spotifyUri).length;
+    if (!unlinked) {
+      spotifyStatus.textContent = 'Every song already has a Spotify link ✓';
+      spotifyStatus.style.color = 'var(--green)';
+      return;
+    }
+    if (!confirm(`Link ${unlinked} unlinked song${unlinked === 1 ? '' : 's'} to Spotify's best guess? Each link is marked preliminary — check them on the song pages, or with "verify spotify links" once they're on a setlist playlist.`)) return;
+    guessAllBtn.disabled = true;
+    unlinkedList.innerHTML = '';
+    spotifyStatus.style.color = '';
+    try {
+      const res = await bestGuessSpotifyLinks(({ done, total, updated, title }) => {
+        spotifyStatus.textContent = `${done}/${total} — ${title}${updated ? ` · ${updated} linked` : ''}`;
+      });
+      spotifyStatus.textContent = res.aborted
+        ? `best-guess: ${res.aborted}`
+        : `${res.updated} of ${res.total} linked as preliminary${res.failures.length ? ` · ${res.failures.length} left alone:` : ''}`;
+      spotifyStatus.style.color = res.aborted || res.failures.length ? 'var(--pink)' : 'var(--green)';
+      for (const f of res.failures) {
+        const row = el('div', 'sl-source-row');
+        const label = el('span', 'sl-source-url');
+        label.textContent = `${f.song.title} — ${f.reason}`;
+        row.appendChild(label);
+        row.appendChild(btn('open', 'sl-btn-ghost sl-btn-sm', () => navigate(`#song/${f.song.id}`)));
+        unlinkedList.appendChild(row);
+      }
+      if (res.updated) songsChanged();
+    } catch (e) {
+      spotifyStatus.textContent = `best-guess failed: ${e.message}`;
+      spotifyStatus.style.color = 'var(--pink)';
+    }
+    guessAllBtn.disabled = false;
   });
-  spotifySection.appendChild(unlinkedBtn);
-  const unlinkedList = el('div', 'sl-source-list');
+  guessAllBtn.title = 'Search Spotify for every song without a link and accept the top hit as a preliminary link';
+  spotifyActions.appendChild(guessAllBtn);
+
+  // Where accepted guesses go to be reviewed — the counterpart to the song
+  // page's guess badge, library-wide.
+  spotifyActions.appendChild(btn('review preliminary links', 'sl-btn-ghost sl-btn-sm', async () => {
+    const guessed = (await store.getAllSongs()).filter(s => s.spotifyUri && s.spotifyGuess);
+    unlinkedList.innerHTML = '';
+    if (!guessed.length) {
+      spotifyStatus.textContent = 'No preliminary links — every Spotify link is confirmed ✓';
+      spotifyStatus.style.color = 'var(--green)';
+      return;
+    }
+    spotifyStatus.style.color = '';
+    spotifyStatus.textContent = `${guessed.length} preliminary link${guessed.length === 1 ? '' : 's'} — listen, then keep or clear:`;
+    for (const s of guessed) {
+      const row = el('div', 'sl-source-row');
+      const label = el('span', 'sl-source-url');
+      label.textContent = s.title + (s.artist ? ` — ${s.artist}` : '');
+      row.appendChild(label);
+      const listen = el('a', 'sl-btn sl-btn-spotify sl-btn-xs', 'listen');
+      listen.href = getSpotifyOpenUrl(s.spotifyUri);
+      listen.target = '_blank';
+      listen.rel = 'noopener';
+      row.appendChild(listen);
+      row.appendChild(btn('keep ✓', 'sl-btn-ghost sl-btn-xs', async () => {
+        store.confirmSpotifyLink(s);
+        await store.putSong(s);
+        row.remove();
+        songsChanged();
+      }));
+      row.appendChild(btn('clear', 'sl-btn-danger sl-btn-xs', async () => {
+        store.markCleared(s, 'spotifyUri');
+        s.spotifyUri = '';
+        store.confirmSpotifyLink(s);
+        await store.putSong(s);
+        row.remove();
+        songsChanged();
+      }));
+      row.appendChild(btn('open', 'sl-btn-ghost sl-btn-xs', () => navigate(`#song/${s.id}`)));
+      unlinkedList.appendChild(row);
+    }
+  }));
+
+  spotifySection.appendChild(spotifyActions);
+  spotifySection.appendChild(spotifyStatus);
   spotifySection.appendChild(unlinkedList);
   wrap.appendChild(spotifySection);
 
@@ -1811,9 +1992,15 @@ async function renderInlineScratch(container, songId) {
 // on a same-titled cover/karaoke cut). Filter box for long playlists; "open"
 // previews the track, "use" links it. Track names come from Spotify — set
 // via textContent, never innerHTML.
-function renderSpotifyPicker(wrap, tracks, song) {
+//
+// `preliminary` marks what the picker writes as a GUESS (store.markSpotifyGuess)
+// instead of a confirmed link — that's the mode the global-search results use,
+// since nothing about a search result says this is the recording the band
+// plays. Playlist tracks stay confirmed: the performer picked them off their
+// own reference playlist.
+function renderSpotifyPicker(wrap, tracks, song, { heading = 'pick the right track from the playlist', preliminary = false } = {}) {
   wrap.innerHTML = '';
-  wrap.appendChild(el('div', 'sl-section-title', 'pick the right track from the playlist'));
+  wrap.appendChild(el('div', 'sl-section-title', heading));
   const filter = el('input', 'sl-search');
   filter.type = 'search';
   filter.placeholder = 'filter tracks...';
@@ -1842,7 +2029,11 @@ function renderSpotifyPicker(wrap, tracks, song) {
       name.textContent = t.title;
       info.appendChild(name);
       const meta = el('div', 'sl-chart-candidate-meta');
-      meta.textContent = `${t.artist}${score >= 0.5 ? ` · ${Math.round(score * 100)}% match` : ''}`;
+      const bits = [t.artist];
+      if (t.album && t.album !== t.title) bits.push(t.album);
+      if (t.year) bits.push(String(t.year));
+      if (score >= 0.5) bits.push(`${Math.round(score * 100)}% match`);
+      meta.textContent = bits.filter(Boolean).join(' · ');
       info.appendChild(meta);
       row.appendChild(info);
       const open = el('a', 'sl-btn sl-btn-ghost sl-btn-xs', 'open');
@@ -1850,12 +2041,27 @@ function renderSpotifyPicker(wrap, tracks, song) {
       open.target = '_blank';
       open.rel = 'noopener';
       row.appendChild(open);
-      row.appendChild(btn('use', 'sl-btn-primary sl-btn-xs', async () => {
-        song.spotifyUri = t.spotifyUrl;
+      row.appendChild(btn(preliminary ? 'use (guess)' : 'use', 'sl-btn-primary sl-btn-xs', async () => {
+        if (preliminary) store.markSpotifyGuess(song, t.spotifyUrl);
+        // Picked off the reference playlist by hand — the opposite of a guess.
+        else { song.spotifyUri = t.spotifyUrl; store.confirmSpotifyLink(song); }
         if (t.artist && !song.artist) song.artist = t.artist;
         await store.putSong(song);
         refresh();
       }));
+      // With a link already in place, a second playlist track is usually the
+      // other release/live cut — keep it as an extra listen link instead of
+      // making the user choose which one the song "is".
+      if (song.spotifyUri) {
+        const addBtn = btn('+ alt', 'sl-btn-ghost sl-btn-xs', async () => {
+          if (songHasLink(song, t.spotifyUrl)) { addBtn.textContent = 'already linked'; addBtn.disabled = true; return; }
+          song.altLinks = [...altLinksOf(song), makeAltLink(t.spotifyUrl, t.title)];
+          await store.putSong(song);
+          refresh();
+        });
+        addBtn.title = 'Keep this track as an extra listen link (alternate release, live version…)';
+        row.appendChild(addBtn);
+      }
       list.appendChild(row);
     }
     if (!shown) list.appendChild(el('div', 'sl-hint', 'no matching tracks'));
@@ -2051,6 +2257,220 @@ function buildAltActionsRow(song, alt, setlistId) {
   return row;
 }
 
+// ── Listen links: the primaries plus song.altLinks ──
+//
+// A song's primary link per service (spotifyUri / bandcampUrl / soundcloudUrl)
+// is what auto-link fills and what perform-adjacent machinery reads.
+// `altLinks` holds the other recordings worth having at hand — a live cut, the
+// single vs. the album take, someone else's version to study. The song page
+// shows them as one chip row over the player, so switching recording is a tap.
+function listenLinksOf(song) {
+  const out = [];
+  const primary = (service, url, label) => {
+    if (url) out.push({ id: service, kind: 'primary', service, url, label });
+  };
+  primary('spotify', song.spotifyUri, song.spotifyGuess ? 'spotify (guess)' : 'spotify');
+  primary('bandcamp', song.bandcampUrl, 'bandcamp');
+  primary('soundcloud', song.soundcloudUrl, 'soundcloud');
+  for (const l of altLinksOf(song)) {
+    const service = l.service || linkService(l.url);
+    out.push({
+      id: `alt:${l.id}`,
+      kind: 'alt',
+      service,
+      url: l.url,
+      label: l.label || LINK_SERVICE_LABELS[service] || 'link',
+      alt: l,
+    });
+  }
+  return out;
+}
+
+// Which listen link the song page is showing. sessionStorage like the chart
+// tabs — it survives the focus-sync refresh() but stays per-device.
+const linkTabStorageKey = (songId) => `voidstar.setlist.linkTab.${songId}`;
+
+function selectedListenLink(song, links) {
+  if (!links.length) return null;
+  let id = null;
+  try { id = sessionStorage.getItem(linkTabStorageKey(song.id)); } catch {}
+  // Default order is the primaries' order — Spotify, else Bandcamp, else
+  // SoundCloud, the same preference the single-embed song page always had.
+  return links.find(l => l.id === id) || links[0];
+}
+
+function setSelectedListenLink(songId, id) {
+  try {
+    if (id) sessionStorage.setItem(linkTabStorageKey(songId), id);
+    else sessionStorage.removeItem(linkTabStorageKey(songId));
+  } catch {}
+}
+
+// Labels can come from Spotify/Bandcamp data or a hand-typed label — always
+// textContent, never innerHTML.
+function buildListenLinkTabs(song, links, selected) {
+  const tabs = el('div', 'sl-link-tabs');
+  for (const l of links) {
+    const active = l.id === selected?.id;
+    const chip = btn('', 'sl-link-tab' + (active ? ' sl-link-tab-active' : ''), () => {
+      if (active) return;
+      setSelectedListenLink(song.id, l.id);
+      refresh();
+    });
+    chip.textContent = l.label;
+    chip.title = l.url;
+    tabs.appendChild(chip);
+  }
+  return tabs;
+}
+
+// Action strip for the selected ALTERNATE link (a primary's actions are the
+// action bar's "open in …" buttons and the edit form).
+function buildAltLinkActions(song, link) {
+  const alt = link.alt;
+  const row = el('div', 'sl-alt-chart-actions');
+  const open = el('a', 'sl-btn sl-btn-ghost sl-btn-xs', `open in ${LINK_SERVICE_LABELS[link.service] || 'browser'}`);
+  open.href = link.url;
+  open.target = '_blank';
+  open.rel = 'noopener';
+  row.appendChild(open);
+  row.appendChild(btn('rename', 'sl-btn-ghost sl-btn-xs', async () => {
+    const label = prompt('Label for this link:', alt.label || '');
+    if (label == null) return;
+    alt.label = label.trim().slice(0, 60);
+    song.altLinks = altLinksOf(song).map(l => (l.id === alt.id ? alt : l));
+    await store.putSong(song);
+    refresh();
+  }));
+  // Only the three services with a primary slot can be promoted; a YouTube
+  // link stays an alternate by definition.
+  const field = LINK_PRIMARY_FIELD[link.service];
+  if (field) {
+    row.appendChild(btn('make primary', 'sl-btn-ghost sl-btn-xs', async () => {
+      const label = LINK_SERVICE_LABELS[link.service];
+      if (!confirm(`Make this the song's main ${label} link? The current one is kept as an alternate.`)) return;
+      const previous = song[field];
+      song[field] = alt.url;
+      if (link.service === 'spotify') store.confirmSpotifyLink(song);
+      if (link.service === 'bandcamp') {
+        // The stored embed-player URL belongs to the old link.
+        song.bandcampEmbedUrl = alt.embedUrl || '';
+      }
+      // The old primary is demoted, never discarded — same rule as the charts.
+      const rest = altLinksOf(song).filter(l => l.id !== alt.id);
+      song.altLinks = previous
+        ? [...rest, { ...makeAltLink(previous, `previous ${label}`), service: link.service }]
+        : rest;
+      await store.putSong(song);
+      setSelectedListenLink(song.id, link.service);
+      refresh();
+    }));
+  }
+  row.appendChild(btn('remove', 'sl-btn-danger sl-btn-xs', async () => {
+    if (!confirm(`Remove this listen link${alt.label ? ` ("${alt.label}")` : ''}?`)) return;
+    song.altLinks = altLinksOf(song).filter(l => l.id !== alt.id);
+    await store.putSong(song);
+    setSelectedListenLink(song.id, null);
+    refresh();
+  }));
+  return row;
+}
+
+// Mount the player for whichever listen link is selected. Bandcamp needs an
+// EmbeddedPlayer URL that only exists in page markup — resolved lazily and
+// stored back (on the song for the primary, on the alt entry otherwise) so the
+// lookup runs once per link, not once per visit.
+function renderListenEmbed(container, song, link) {
+  if (link.service === 'spotify' && parseSpotifyUrl(link.url)) {
+    renderSpotifyEmbed(container, link.url, 152);
+    return;
+  }
+  if (link.service === 'bandcamp') {
+    if (link.kind === 'primary') {
+      renderBandcampEmbed(container, song, resolveBandcampEmbed, (s) => store.putSong(s));
+    } else {
+      const shim = { bandcampUrl: link.url, bandcampEmbedUrl: link.alt.embedUrl || '' };
+      renderBandcampEmbed(container, shim, resolveBandcampEmbed, async () => {
+        link.alt.embedUrl = shim.bandcampEmbedUrl;
+        song.altLinks = altLinksOf(song).map(l => (l.id === link.alt.id ? link.alt : l));
+        await store.putSong(song);
+      });
+    }
+    return;
+  }
+  if (link.service === 'soundcloud') {
+    renderSoundcloudEmbed(container, link.url);
+    return;
+  }
+  if (link.service === 'youtube') {
+    renderYoutubeEmbed(container, link.url);
+    return;
+  }
+  // Anything else (a plain URL) can't be embedded — offer the link itself.
+  container.innerHTML = '';
+  const a = document.createElement('a');
+  a.href = link.url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.textContent = `▶ ${link.label}`;
+  a.style.cssText = 'display:block;text-align:center;font-size:0.85rem;color:var(--text-dim);padding:0.5rem;text-decoration:none;';
+  container.appendChild(a);
+}
+
+// Add a listen link by hand: fills the service's empty primary slot when
+// there is one (that's what "the song's Spotify link" means), otherwise
+// appends an alternate.
+async function addListenLinkByHand(song) {
+  const raw = prompt('Paste a Spotify, Bandcamp, SoundCloud, or YouTube link for this song:');
+  if (raw == null) return false;
+  const url = raw.trim();
+  if (!url) return false;
+  if (!/^https?:\/\//i.test(url) && !/^spotify:track:/i.test(url)) {
+    alert('That doesn\'t look like a link.');
+    return false;
+  }
+  if (songHasLink(song, url)) {
+    alert('This song already carries that link.');
+    return false;
+  }
+  const service = linkService(url);
+  const field = LINK_PRIMARY_FIELD[service];
+  if (field && !song[field]) {
+    song[field] = url;
+    if (service === 'spotify') store.confirmSpotifyLink(song); // hand-pasted = confirmed
+    await store.putSong(song);
+    return true;
+  }
+  const label = (prompt('Label for this version (e.g. "live 1998", "album cut"):', '') || '').trim();
+  song.altLinks = [...altLinksOf(song), makeAltLink(url, label)];
+  await store.putSong(song);
+  return true;
+}
+
+// The "this link is a guess" notice: a preliminary Spotify link (accepted from
+// a global search in the library's quick-link tool) must never look like a
+// confirmed one. Listening is the check — the player is right below.
+function buildGuessNotice(song) {
+  const row = el('div', 'sl-guess-notice');
+  const label = el('span', 'sl-guess-notice-text',
+    '⚠ this Spotify link is a best guess — listen, then keep or clear it');
+  row.appendChild(label);
+  row.appendChild(btn('keep ✓', 'sl-btn-ghost sl-btn-xs', async () => {
+    store.confirmSpotifyLink(song);
+    await store.putSong(song);
+    refresh();
+  }));
+  row.appendChild(btn('clear', 'sl-btn-danger sl-btn-xs', async () => {
+    if (!confirm('Remove this preliminary Spotify link?')) return;
+    store.markCleared(song, 'spotifyUri');
+    song.spotifyUri = '';
+    store.confirmSpotifyLink(song);
+    await store.putSong(song);
+    refresh();
+  }));
+  return row;
+}
+
 export async function renderSongFocus(root, songId, setlistId) {
   const song = await store.getSong(songId);
   if (!song) { root.appendChild(emptyState('Song not found.')); return; }
@@ -2233,7 +2653,10 @@ export async function renderSongFocus(root, songId, setlistId) {
     song.artist = clearedByForm('artist', document.getElementById('sf-artist').value);
     song.keyChanges = clearedByForm('keyChanges', document.getElementById('sf-keychanges').value);
     song.steelSummary = clearedByForm('steelSummary', document.getElementById('sf-steelsummary').value.trim());
-    song.spotifyUri = clearedByForm('spotifyUri', document.getElementById('sf-spotify').value);
+    const nextSpotify = document.getElementById('sf-spotify').value;
+    // A hand-typed link is the user's own verdict — it's never a guess.
+    if ((nextSpotify || '').trim() !== (song.spotifyUri || '')) store.confirmSpotifyLink(song);
+    song.spotifyUri = clearedByForm('spotifyUri', nextSpotify);
     const nextBandcamp = document.getElementById('sf-bandcamp').value;
     if ((nextBandcamp || '').trim() !== (song.bandcampUrl || '')) {
       // The stored embed-player URL belongs to the OLD link — drop it (with
@@ -2619,6 +3042,42 @@ export async function renderSongFocus(root, songId, setlistId) {
     loadSpotifyPicker(scrapeBtn, 'scrape playlist', { forceScrape: true }));
   scrapeBtn.title = "Read the setlist's reference playlist from its public open.spotify.com page (no API) — works for public playlists your account doesn't own, e.g. a bandmate's";
   actionBar.appendChild(scrapeBtn);
+  // "best guess" — the library quick-link tool's pass, this song only: a
+  // global Spotify search whose results link as PRELIMINARY (never confirmed,
+  // since a search result is not evidence the band plays that recording).
+  // Offered while there's no link, and while the link is still a guess.
+  if (!song.spotifyUri || song.spotifyGuess) {
+    const guessBtn = btn('spotify best guess', 'sl-btn-ghost sl-btn-sm', async () => {
+      guessBtn.disabled = true;
+      guessBtn.textContent = 'searching…';
+      const { tracks, problems } = await searchSpotifyTracks(song.title, song.artist || '', { limit: 8 });
+      if (tracks.length) {
+        renderSpotifyPicker(spotifyPickerWrap, tracks, song, {
+          heading: 'spotify search — best guess first, linked as preliminary',
+          preliminary: true,
+        });
+        guessBtn.textContent = 'pick below';
+      } else {
+        spotifyPickerWrap.innerHTML = '';
+        const note = el('div', 'sl-hint');
+        note.textContent = problems[0] || 'Spotify found no track by that name';
+        spotifyPickerWrap.appendChild(note);
+        guessBtn.textContent = 'no results — see note';
+      }
+      setTimeout(() => {
+        guessBtn.textContent = 'spotify best guess';
+        guessBtn.disabled = false;
+      }, 2200);
+    });
+    guessBtn.title = 'Search Spotify for this song and link a result as a preliminary (guess) link';
+    actionBar.appendChild(guessBtn);
+  }
+  // Extra recordings — a live cut, the other release, a YouTube version.
+  const addLinkBtn = btn('+ listen link', 'sl-btn-ghost sl-btn-sm', async () => {
+    if (await addListenLinkByHand(song)) refresh();
+  });
+  addLinkBtn.title = 'Add another Spotify / Bandcamp / SoundCloud / YouTube link for this song (alternate release, live version…)';
+  actionBar.appendChild(addLinkBtn);
   if (!song.spotifyUri) {
     // No link yet — a raw Spotify search too (the quick-link tool's per-song
     // "search"), for when the reference playlists don't carry the song.
@@ -2668,33 +3127,32 @@ export async function renderSongFocus(root, songId, setlistId) {
   // No chart, but scratch ink saved: show the drawn page.
   else await renderInlineScratch(root, songId);
 
-  // Listening embed (Spotify, else Bandcamp, else SoundCloud) + timecode
-  // tracker
+  // Listening embed + timecode tracker. One player, but the song can carry
+  // several recordings: the primaries (Spotify, Bandcamp, SoundCloud) and
+  // every song.altLinks entry become chips over the player, and the selection
+  // rides sessionStorage. With a single link the chips stay hidden and this is
+  // exactly the old single-embed song page.
   let currentTimecode = 0;
   let timecodeInterval = null;
   let isPlaying = false;
   // Assigned by the synced-lyrics section below; called each timer tick so
   // the active lyric line follows the timecode.
   let onTimecodeTick = null;
-  const spotifyEmbeddable = !!(song.spotifyUri && parseSpotifyUrl(song.spotifyUri));
-  const hasTimecodeTimer = spotifyEmbeddable || !!song.bandcampUrl || !!song.soundcloudUrl;
+  const listenLinks = listenLinksOf(song);
+  const selectedLink = selectedListenLink(song, listenLinks);
+  const hasTimecodeTimer = !!selectedLink;
   // A running timer must not survive navigation (it would tick a detached
   // node forever — one leaked interval per song visited during practice).
   window.addEventListener('hashchange', () => {
     if (timecodeInterval) clearInterval(timecodeInterval);
   }, { once: true });
+  // A preliminary Spotify link says so, right above the player that settles it.
+  if (song.spotifyUri && song.spotifyGuess) root.appendChild(buildGuessNotice(song));
   if (hasTimecodeTimer) {
+    if (listenLinks.length > 1) root.appendChild(buildListenLinkTabs(song, listenLinks, selectedLink));
+    if (selectedLink.kind === 'alt') root.appendChild(buildAltLinkActions(song, selectedLink));
     const embedWrap = el('div', 'sl-spotify-embed');
-    if (spotifyEmbeddable) {
-      renderSpotifyEmbed(embedWrap, song.spotifyUri, 152);
-    } else if (song.bandcampUrl) {
-      // A hand-pasted link has no stored embed-player URL yet — resolve it
-      // through the worker in the background and save the answer so the
-      // lookup runs once per song, not per visit.
-      renderBandcampEmbed(embedWrap, song, resolveBandcampEmbed, (s) => store.putSong(s));
-    } else {
-      renderSoundcloudEmbed(embedWrap, song.soundcloudUrl);
-    }
+    renderListenEmbed(embedWrap, song, selectedLink);
     root.appendChild(embedWrap);
 
     const tcRow = el('div', 'sl-timecode-row');
