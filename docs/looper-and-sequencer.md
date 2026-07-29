@@ -80,6 +80,51 @@ concatenates (GC pressure on long takes — pre-grow a single buffer); `stopReco
 OUT boundary with `setTimeout` (fragile under tab-throttling — the worklet already has sample-
 accurate timing); `teardownCapture` rebuilds the whole strip on every capture open.
 
+### Strobe tuner (`looper.js`, fed by `looper-audio.js`'s 8192-sample pre-strip analyser)
+
+A Peterson-StroboStomp-style strobe: striped bands that **drift** when the note is off (right =
+sharp) and **freeze** when it's in tune. Everything precise is driven by **phase**, not by the
+pitch estimate — each frame demodulates the input against a reference oscillator at the target's
+exact frequency (I/Q heterodyne, allocation-free), anchored to the audio clock, so a δ-Hz error
+rotates the phase at exactly δ cycles/sec. Four modes: **mono** (detect whatever you play),
+**chord** / **strings** / **chroma** (the polytuner — one demodulator *lane* per declared target,
+so no polyphonic pitch detection is needed). Temperament-aware throughout: every target frequency
+folds in `temperOffset()`.
+
+Two design points, both aimed at high notes — the pedal steel's plain 1st/3rd strings and the top
+of its range (A5):
+
+- **Detection range (mono).** The autocorrelation search is bounded by a range preset —
+  `steel` (G#2–A5) · `gtr` (E2–E6) · `bass` (B0–G#4) · `wide` (everything). Bounding it is the
+  single biggest win up top: an unbounded search lets a ringing low string, or a sub-harmonic of
+  the note you plucked, win the correlation peak. It also lets `detectorGeometry()` drop the
+  decimation the wide search needs — at 24 kHz one lag step at A5 is ~63¢, so a high note can't
+  even be *identified* reliably, let alone read to ±3¢. Detection itself is NSDF (level- and
+  decay-independent, from prefix sums) + an octave guard + a fractional-lag refinement, then a
+  ~1.2 s note-hold so a decaying pluck doesn't flicker back to "play a note". Persists to
+  `voidstar.qualia.looper.tunerRange`; the picker shows in mono mode only.
+- **Constant capture width in cents (all modes).** `demodLen()` sizes each demod window to a fixed
+  number of *periods* rather than a fixed number of samples. A full 8192-sample window is ±157¢
+  wide at B2 but only ±23¢ at A5 — which is why the high strings dropped out of the polytuner the
+  moment they drifted, while the low ones held on. Now every target captures ±~84¢
+  (`CAPTURE_CENTS`). Because lanes then use *different* window lengths, magnitudes are normalised
+  to peak **amplitude** (`_dem.amp`) before any cross-lane comparison — the voiced gate, the band
+  opacity, and chord mode's auto-octave pick all depend on that.
+
+The per-lane cents readout comes from the strobe's own **drift rate** (Δphase/Δt), which is
+sub-cent precise but only unambiguous below π per frame. So each lane also carries a wrap-free
+coarse error (`coarseErrHz()` — an amplitude sweep across the capture window, refreshed on the
+140 ms readout tick, not per frame) and the drift is unwrapped toward it. Without that, a badly-out
+string reads as a small error of the *wrong sign* — a false green, the one failure a tuner can't
+have. Past `CAPTURE_CENTS` the lane shows `··` rather than a number it doesn't have.
+
+**Known limit:** mono locks onto the loudest *periodic* component, and two harmonically-related
+strings sounding together are genuinely periodic at the **low** one's period — so with the whole
+neck ringing, mono will name the low note (and no threshold tweak fixes that; even the high peak's
+location is skewed). That's what the polytuner modes are for: a narrowband demod at a declared
+target is immune to the other strings. `strings` + the `steel E9` preset is the mode for tuning a
+steel string by string.
+
 ---
 
 ## Sequencer — a cycle-locked Tone.js drum machine

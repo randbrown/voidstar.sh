@@ -85,6 +85,15 @@ export function createPose() {
 
   let smoothing = 0.5;
   let numPoses  = 3;
+  // Uniform scale applied to every landmark, about the FRAME centre (0.5, 0.5),
+  // on the way out of the pipeline. A close camera renders the body bigger than
+  // the frame — head, hands and feet land outside 0..1, so the skeleton/aura/
+  // sparks draw off-screen — and moving the camera mid-set isn't an option.
+  // Anchoring on the frame centre rather than the body's own centroid keeps the
+  // gesture predictable: <1 always pulls the whole figure toward the middle of
+  // the screen, >1 always pushes it out, and a half-cropped body (hips estimated
+  // below the bottom edge) can't drag the head off the top.
+  let poseScale = 1;
   // Confidence thresholds — baked into the landmarker at create time.
   let detectConf = 0.05, presenceConf = 0.05, trackConf = 0.05;
   // How long a vanished pose lingers (ms)
@@ -248,8 +257,32 @@ export function createPose() {
     }
   }
 
+  // Reused scaled-landmark buffers. `smoothed` can't be scaled in place — it's
+  // the running smoothing state, so the factor would compound every tick — but
+  // rebuildPeople runs on every detection, so the copies are written into
+  // persistent objects rather than reallocating 33 landmarks per person.
+  const scaledBuf = [];
+  function scaleLandmarks(list) {
+    if (poseScale === 1) return list;
+    for (let p = 0; p < list.length; p++) {
+      const src = list[p];
+      const dst = scaledBuf[p] || (scaledBuf[p] = []);
+      for (let i = 0; i < src.length; i++) {
+        const s = src[i];
+        const d = dst[i] || (dst[i] = { x: 0, y: 0, z: 0, visibility: 0 });
+        d.x = 0.5 + (s.x - 0.5) * poseScale;
+        d.y = 0.5 + (s.y - 0.5) * poseScale;
+        d.z = s.z * poseScale;          // z is hip-relative depth — no anchor, just scale
+        d.visibility = s.visibility;
+      }
+      if (dst.length !== src.length) dst.length = src.length;
+    }
+    if (scaledBuf.length !== list.length) scaledBuf.length = list.length;
+    return scaledBuf;
+  }
+
   function rebuildPeople(timestamp) {
-    frame.people = smoothed.map(shapePerson);
+    frame.people = scaleLandmarks(smoothed).map(shapePerson);
     frame.timestamp = timestamp;
   }
 
@@ -653,6 +686,12 @@ export function createPose() {
 
   function setSmoothing(v) { smoothing = Math.max(0, Math.min(1, v)); }
   function setLingerMs(v)  { lingerMs = Math.max(0, v | 0); }
+  /** Uniform pose scale about the frame centre. 1 = raw landmarks. Clamped
+   *  wider than the panel slider so code/pattern control can push further. */
+  function setScale(v) {
+    const s = Number(v);
+    poseScale = Math.max(0.1, Math.min(4, Number.isFinite(s) ? s : 1));
+  }
   /** Cap the inference rate. fps in [1..60]. Lower = less CPU/GPU duty (and a
    *  deliberate slow-tracking aesthetic). Floor is 1fps; at very low rates a
    *  pose can vanish between detections if lingerMs is shorter than the gap. */
@@ -676,11 +715,13 @@ export function createPose() {
     setThresholds,
     setSmoothing,
     setLingerMs,
+    setScale,
     setDetectFps,
     getNumPoses: () => numPoses,
     getThresholds: () => ({ detect: detectConf, presence: presenceConf, track: trackConf }),
     getSmoothing:  () => smoothing,
     getLingerMs:   () => lingerMs,
+    getScale:      () => poseScale,
     getDetectFps,
   };
 }

@@ -15,7 +15,7 @@ landmarks become named joints, then `pose.*` / `crowd.*` modulation channels.
 
 | File | Responsibility |
 |---|---|
-| `pose.js` | `createPose()` — owns the video element, the `getUserMedia` attempt-ladder, the detect loop, adaptive smoothing, linger, and joint reshaping (`shapePerson`). |
+| `pose.js` | `createPose()` — owns the video element, the `getUserMedia` attempt-ladder, the detect loop, adaptive smoothing, linger, output scale, and joint reshaping (`shapePerson`). |
 | `pose-worker.js` | Classic worker running `detectForVideo()` off-thread. |
 | `pose-features.js` | Shared normalization math + wire pack/unpack (8 floats) + skeleton pack/unpack/orient. Used by **both** the host engine and the participant client, so a participant's "wrist spread" means exactly what the performer's does. |
 | `vision-loader.js` | Memoizes a single shared `FilesetResolver` (prevents a known mobile hang when two Tasks-Vision consumers each initialize). |
@@ -28,6 +28,18 @@ runs inference; smoothing/linger/reshaping stay on the (cheap) main thread. One 
 time (`workerBusy`) with a 2 s watchdog, graceful fallback to synchronous main-thread inference if
 the worker fails, **CPU delegate first** (the GPU is busy with shaders + Hydra), detection throttled
 to ~15 fps (raw landmark noise updates faster than smoothing settles).
+
+**Pose scale (pose card → *scale*, `qualia.pose.scale()`).** A uniform scale applied to every
+landmark about the **frame centre**, on the way out of the pipeline — the fix for a camera that sits
+close enough that the body runs off the edges (head, hands and feet land outside 0..1, so the
+skeleton/aura/sparks draw off-screen) when moving the lens isn't an option mid-set. The frame centre
+is the anchor rather than the body's own centroid so the gesture stays predictable: <1 always pulls
+the figure toward the middle of the screen, >1 always pushes it out, and a half-cropped body (hips
+estimated below the bottom edge) can't drag the head off the top. It's applied in `rebuildPeople`
+into reused buffers — never in place on `smoothed`, which is the running smoothing state and would
+compound the factor every tick. Since it lands before `shapePerson`, everything downstream sees one
+consistent pose: fx, the `raw` array the overlays draw, the `pose.*` modulation channels, and the
+skeleton shipped to the audience mesh.
 
 > **Note:** `video.js` and `pose-features.js` implement the orientation transform twice (performer
 > canvas-pixel space vs participant normalized space). `pose-features.js` is the better-factored one
