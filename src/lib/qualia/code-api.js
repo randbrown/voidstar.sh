@@ -409,7 +409,9 @@ export function installCodeApi(deps) {
       rigMute:  gsBool(() => looper.getRig().muted, (on) => looper.setRigMuted(on)),
     },
     rig: {
-      /** Toggle a pedalboard stage: earth/metal/comp/delay/reverb/eq/geq/peq/cab/amp/hpf. */
+      /** Toggle a pedalboard stage: earth/metal/comp/delay/reverb/eq/geq/peq/
+       *  cab/amp/hpf, or a noise gate — gate (strip-wide), earthGate/metalGate
+       *  (per-pedal; each only runs while its drive is engaged). */
       toggle: (stage) => safe(() => looper.toggleStripStage(stage)),
       /** Set one stage param, e.g. param('delay','mix',0.4). */
       param:  (stage, name, v) => safe(() => looper.setStripParam(stage, name, +v)),

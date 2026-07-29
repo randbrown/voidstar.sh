@@ -91,9 +91,9 @@ const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the 
 // audio side lives in rig-strip.js; STRIP_DEFAULTS supplies initial values).
 // `group`/`cluster` control only UI placement (the audio graph order is fixed
 // in rig-strip.js): 'main' stages land in the zone section named by `cluster`
-// — drive (earth · metal · gate) · tone (amp · eq · cab) · space (delay ·
-// reverb) — and 'util' stages (geq, comp, hpf, peq, pan) go to the "utility"
-// section so they're out of the way until needed.
+// — drive (earth · earth gate · metal · metal gate · gate) · tone (amp · eq ·
+// cab) · space (delay · reverb) — and 'util' stages (geq, comp, hpf, peq, pan)
+// go to the "utility" section so they're out of the way until needed.
 const STRIP_SCHEMA = [
   // geq — GE-7-voiced 7-band graphic EQ (front of chain: shapes the raw
   // instrument before comp + drives).
@@ -113,6 +113,15 @@ const STRIP_SCHEMA = [
     { id: 'tone', label: 'tone', min: 0, max: 1, step: 0.01 },
     { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
   ] },
+  // Per-pedal noise gates — each drive is its own noise source with its own
+  // floor, so they get separate instances rather than one shared setting (see
+  // STRIP_DEFAULTS for the voicing rationale). Each sits immediately after its
+  // pedal in the audio chain and only runs while that pedal is engaged, so it
+  // renders right after it here too.
+  { id: 'earthGate', name: 'earth gate', group: 'main', cluster: 'drive', toggle: true, params: [
+    { id: 'thresh',  label: 'thr', min: 0, max: 1, step: 0.01 },
+    { id: 'release', label: 'rel', min: 0, max: 1, step: 0.01 },
+  ] },
   { id: 'metal',  name: 'metal',  group: 'main', cluster: 'drive', toggle: true,  params: [
     { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
     { id: 'low', label: 'low', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
@@ -121,15 +130,21 @@ const STRIP_SCHEMA = [
     { id: 'high', label: 'high', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
     { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
   ] },
+  { id: 'metalGate', name: 'metal gate', group: 'main', cluster: 'drive', toggle: true, params: [
+    { id: 'thresh',  label: 'thr', min: 0, max: 1, step: 0.01 },
+    { id: 'release', label: 'rel', min: 0, max: 1, step: 0.01 },
+  ] },
   { id: 'amp',    name: 'amp',    group: 'main', cluster: 'tone', toggle: true,  ampLoader: true, params: [{ id: 'gain', label: 'gain', min: 0, max: 4, step: 0.01 }, { id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'eq',     name: 'eq',     group: 'main', cluster: 'tone', toggle: true,  params: [{ id: 'low', label: 'lo', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }, { id: 'high', label: 'hi', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` }] },
   { id: 'cab',    name: 'cab',    group: 'main', cluster: 'tone', toggle: true,  loader: true, params: [{ id: 'mix', label: 'mix', min: 0, max: 1, step: 0.01 }, { id: 'level', label: 'lvl', min: 0, max: 2, step: 0.01 }] },
   { id: 'hpf',    name: 'hpf',    group: 'util', toggle: true,  params: [{ id: 'freq', label: 'freq', min: 20, max: 400, step: 1, fmt: v => `${v|0}Hz` }] },
-  // gate — noise gate for the drives' hiss: a VCA after the post-cab HPF,
-  // keyed by an envelope follower on the CLEAN strip input (post-distortion
-  // detection can't tell hiss from signal), so closing never chops the
-  // delay/reverb tails. Lives in the drive cluster on screen — it's the
-  // earth/metal companion — though its audio position is post-cab.
+  // gate — the strip-wide noise gate: a VCA after the post-cab HPF, catching
+  // every upstream hiss source at once (including the amp capture's idle
+  // noise, which the per-pedal gates sit in front of). Keyed by an envelope
+  // follower on the CLEAN strip input (post-distortion detection can't tell
+  // hiss from signal), so closing never chops the delay/reverb tails. Lives in
+  // the drive cluster on screen — it's the earth/metal companion — though its
+  // audio position is post-cab.
   { id: 'gate',   name: 'gate',   group: 'main', cluster: 'drive', toggle: true, params: [
     { id: 'thresh',  label: 'thr', min: 0, max: 1, step: 0.01 },
     { id: 'release', label: 'rel', min: 0, max: 1, step: 0.01 },

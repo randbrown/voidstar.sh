@@ -21,7 +21,8 @@ All paths are under `src/lib/qualia/`.
                                   ▼
                           all qualia fx (visuals)
 
- rig (native ctx):  in → GEQ(7-band) → comp → Earth → Metal → neural amp → EQ → cab IR
+ rig (native ctx):  in → GEQ(7-band) → comp → Earth → earth gate → Metal → metal gate
+                       → neural amp → EQ → cab IR
                        → HPF → noise gate → ping-pong delay → reverb → PEQ(8-band parametric)
                        → pan → rig master → limiter → out
  vocoder (own ctx): mic → vocoder bank ⨉ carrier → clarity chain → limiter → mute gate → out
@@ -103,7 +104,7 @@ hard-bypasses (rewired around, under a ~6 ms gain dip): a "transparent" `Dynamic
 still delays the signal by its ~6 ms lookahead, and this is the live monitoring path.
 
 ```
-in → GEQ(7-band graphic) → comp → Earth(drive) → Metal(drive)
+in → GEQ(7-band graphic) → comp → Earth(drive) → earth gate → Metal(drive) → metal gate
    → neural amp → EQ(lo/mid/hi) → cab(IR) → HPF → gate
    → ping-pong delay → reverb → PEQ(8-band parametric) → pan → output
 ```
@@ -115,16 +116,32 @@ in → GEQ(7-band graphic) → comp → Earth(drive) → Metal(drive)
   and share the dry signal's room. **Comp** sits up front as an instrument compressor (clarity /
   attack into the drives); output limiting stays at the rig master (`limiter.js`), never in the
   strip. The **HPF** is post-cab: it de-woofs the cab'd tone and keeps low mud out of the wash.
-- **Gate** = the noise gate for the drives' hiss (the vocoder's carrier-gate topology ported to
-  the rig): a VCA between the HPF and the time fx, driven directly on its gain `AudioParam` by a
-  sidechain envelope — rectify + LPF on the **clean strip input** (post-distortion detection can't
-  tell hiss from signal: after two cascaded clippers they sit at nearly the same level) — mapped
-  through a soft-knee smoothstep WaveShaper curve (an expander, not a chattery hard gate). Placed
-  post-cab it silences every upstream hiss source (comp, drives, amp-capture idle noise) while a
-  closing gate never chops the delay/reverb tails. All native biquads/gains: zero added latency,
-  toggles by curve swap (unity curve = bypass), no graph rewiring. `thresh` squares the knob for
-  fine low-end resolution; `release` sweeps the envelope LPF 30 → 6 Hz (one symmetric filter — the
-  slow end trades softened pick attack for chatter-free decays).
+- **Gates** — the rig runs **three independent noise gates** off **one shared sidechain** (the
+  vocoder's carrier-gate topology ported to the rig). Each gate is a VCA driven directly on its
+  gain `AudioParam` by a sidechain envelope — rectify + LPF on the **clean strip input** — mapped
+  through a soft-knee smoothstep WaveShaper curve (an expander, not a chattery hard gate).
+  Detection has to be **pre-drive** (post-distortion, hiss and signal sit at nearly the same level
+  after two cascaded clippers, so a local detector can't tell them apart), which is why all three
+  key off the clean input rather than their own position in the chain. The detector's key HPF +
+  rectifier are shared; each gate owns its envelope LPF and threshold curve, so their settings are
+  fully separate. All native biquads/gains: zero added latency, toggles by curve swap (unity curve
+  = bypass), no graph rewiring. `thresh` squares the knob for fine low-end resolution; `release`
+  sweeps the envelope LPF 30 → 6 Hz (one symmetric filter — the slow end trades softened pick
+  attack for chatter-free decays). The three:
+  - **`gate`** (strip gate) sits between the HPF and the time fx. Post-cab it catches every
+    upstream hiss source at once — including the amp capture's idle noise, which the pedal gates
+    sit in front of — while a closing gate never chops the delay/reverb tails.
+  - **`earthGate`** sits immediately after Earth, so Metal's pre-gain (up to +24 dB) never
+    re-amplifies Earth's noise floor. Defaults are gentle — low threshold, slow release — because
+    Earth is a low-gain JFET stage and the drive you play touch-dynamically.
+  - **`metalGate`** sits immediately after Metal, before the amp. Defaults are aggressive — high
+    threshold, fast release — because two cascaded clippers behind heavy pre-gain hiss far louder,
+    and a tight cutoff is what that voice wants anyway.
+
+  The per-pedal gates are **part of their pedal**: each is only live while its drive is engaged, so
+  arming one can't silently gate the clean signal passing through a bypassed stage. Nothing
+  downstream of them holds a tail (the time fx are post-cab), so a closing pedal gate can't chop
+  one either.
 - **Three EQs spread along the chain**, one job each: **geq** at the front, shaping the raw
   instrument before comp + drives (Boss GE-7-voiced graphic: 7 octave-spaced peaking bands
   100 Hz–6.4 kHz ±15 dB + level); **eq** between amp and cab, an FX-loop tone stack on the amp'd

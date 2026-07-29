@@ -3,8 +3,15 @@
 // Tone's wrapped context can't host the recorder worklet, and these nodes don't
 // need it). Fixed-order series chain, laid out like a physical pedalboard:
 //
-//   in → GEQ(7-band) → comp → earth → metal → amp → EQ(lo/mid/hi) → cab
-//      → HPF → gate → delay (p-pong) → reverb (conv.) → PEQ(8-band) → pan → out
+//   in → GEQ(7-band) → comp → earth → earth gate → metal → metal gate → amp
+//      → EQ(lo/mid/hi) → cab → HPF → gate → delay (p-pong) → reverb (conv.)
+//      → PEQ(8-band) → pan → out
+//
+// Three independent noise gates share one sidechain (see the gate section):
+// per-pedal gates immediately after Earth and after Metal, plus the strip gate
+// post-cab. Each drive is its own noise source with its own floor — Metal's
+// two cascaded clippers hiss far louder than Earth's single JFET stage — so
+// they need separate thresholds and release times, not one compromise setting.
 //
 // The three EQs are deliberately SPREAD along the chain, one job each:
 // - geq (GE-7-style graphic) sits at the FRONT, shaping the instrument before
@@ -96,7 +103,15 @@ export const STRIP_DEFAULTS = {   // listed in chain order
   geq:    { on: false, b100: 0, b200: 0, b400: 0, b800: 0, b1600: 0, b3200: 0, b6400: 0, level: 0 },
   comp:   { on: false, threshold: -18, ratio: 3, attack: 0.003, release: 0.25 },
   earth:  { on: false, drive: 0.35, tone: 0.6, level: 1.0 },
+  // Earth's own gate — low-gain JFET stage, so a low threshold and a slow
+  // release: it only has to catch a modest hiss floor, and Earth is the drive
+  // you play touch-dynamically (bloom + sustain must survive the gate).
+  earthGate: { on: false, thresh: 0.10, release: 0.50 },
   metal:  { on: false, drive: 0.35, low: 0, mid: 0, midFreq: 600, high: 0, level: 1.0 },
+  // Metal's own gate — two cascaded clippers behind up to +24 dB of pre-gain,
+  // so the noise floor is far higher: a higher threshold and a fast release,
+  // which is also what the genre wants (tight, chugging cutoff).
+  metalGate: { on: false, thresh: 0.28, release: 0.18 },
   amp:    { on: false, gain: 1, mix: 1, level: 1 },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
   cab:    { on: false, mix: 1, level: 1 },
@@ -161,7 +176,8 @@ const IDENTITY_CURVE = (() => {
 // WaveShaper whose transfer curve maps level → 0..1, and that signal drives
 // the gate VCA's gain AudioParam directly. Detection must be pre-drive: after
 // two cascaded clippers, hiss and signal sit at nearly the same level, so a
-// post-distortion detector can't tell them apart.
+// post-distortion detector can't tell them apart — which is exactly why all
+// three gates key off the same clean input rather than their own local signal.
 const GATE_RECT_CURVE = (() => {   // |x| — full-wave rectifier for the envelope
   const n = 1025, c = new Float32Array(n);
   for (let i = 0; i < n; i++) c[i] = Math.abs((i / (n - 1)) * 2 - 1);
@@ -185,6 +201,45 @@ function makeGateCurve(t, len = 4097) {
     else { const u = (x - lo) / (hi - lo); c[i] = u * u * (3 - 2 * u); } // smoothstep
   }
   return c;
+}
+
+// One noise-gate instance: an envelope chain (LPF → threshold curve →
+// smoother) driving a VCA's gain param. `keyRect` is the SHARED rectified
+// sidechain — the detector has to be pre-drive (see above), so every gate
+// listens to the same clean input and differs only in its own threshold and
+// release. The post-shaper smoother turns curve swaps (toggle / threshold
+// drags) into ~10 ms fades instead of steps. All native biquads/gains — zero
+// added latency on the signal path.
+function makeGate(ctx, keyRect) {
+  const vca = ctx.createGain(); vca.gain.value = 0;   // control signal supplies the gain
+  const lpf = ctx.createBiquadFilter();
+  lpf.type = 'lowpass'; lpf.frequency.value = 17; lpf.Q.value = 0.707;
+  const shaper = ctx.createWaveShaper(); shaper.curve = GATE_OPEN_CURVE;
+  const smooth = ctx.createBiquadFilter();
+  smooth.type = 'lowpass'; smooth.frequency.value = 30; smooth.Q.value = 0.707;
+  keyRect.connect(lpf);
+  lpf.connect(shaper);
+  shaper.connect(smooth);
+  smooth.connect(vca.gain);
+  // Curve cache — knob drags re-run apply per tick; only rebuild the 4097-float
+  // curve when the threshold actually changed. −1 means the open (bypass)
+  // curve is loaded.
+  let curveThresh = -1;
+  /** `d` is the stage state; `active` lets a per-pedal gate follow its pedal. */
+  function apply(d, active = d.on) {
+    // Release knob → envelope LPF corner, 30 Hz (snappy) down to 6 Hz (slow
+    // swells). One symmetric filter smooths attack and release alike — the
+    // slow end trades a softened pick attack for chatter-free decays.
+    lpf.frequency.setTargetAtTime(
+      30 * Math.pow(0.2, clamp(d.release, 0, 1)), ctx.currentTime, 0.02);
+    if (!active) {
+      if (curveThresh !== -1) { shaper.curve = GATE_OPEN_CURVE; curveThresh = -1; }
+      return;
+    }
+    const t = clamp(d.thresh, 0, 1);
+    if (t !== curveThresh) { shaper.curve = makeGateCurve(t); curveThresh = t; }
+  }
+  return { vca, apply, nodes: [vca, lpf, shaper, smooth] };
 }
 
 // Soft-clip (tanh) curve, normalised so the peak stays ~unity. `amount` 0..1.
@@ -251,21 +306,25 @@ export function createRigStrip(ctx, cfg) {
   const hpf = ctx.createBiquadFilter();
   hpf.type = 'highpass'; hpf.Q.value = 0.707;
 
-  // Noise gate — a VCA between the HPF and the time fx, so it silences every
-  // upstream hiss source (comp, earth, metal, amp-capture idle noise) but a
-  // closing gate never chops delay/reverb tails. Keyed from the clean strip
-  // input (see GATE_RECT_CURVE note); the post-shaper smoother turns curve
-  // swaps (toggle / threshold drags) into ~10 ms fades instead of steps.
-  // All native biquads/gains — zero added latency on the signal path.
-  const gateVca = ctx.createGain(); gateVca.gain.value = 0;   // control signal supplies the gain
+  // Noise gates — one shared sidechain detector feeding three independent
+  // gates. The detector keys off the CLEAN strip input: key HPF (drops
+  // rumble/hum that would false-open it) → full-wave rectifier. Each gate then
+  // owns its envelope LPF + threshold curve, so their settings are genuinely
+  // separate (see the makeGate note and the per-stage defaults).
   const gateKeyHpf = ctx.createBiquadFilter();
   gateKeyHpf.type = 'highpass'; gateKeyHpf.frequency.value = 90; gateKeyHpf.Q.value = 0.707;
   const gateRect = ctx.createWaveShaper(); gateRect.curve = GATE_RECT_CURVE;
-  const gateLpf = ctx.createBiquadFilter();
-  gateLpf.type = 'lowpass'; gateLpf.frequency.value = 17; gateLpf.Q.value = 0.707;
-  const gateShaper = ctx.createWaveShaper(); gateShaper.curve = GATE_OPEN_CURVE;
-  const gateSmooth = ctx.createBiquadFilter();
-  gateSmooth.type = 'lowpass'; gateSmooth.frequency.value = 30; gateSmooth.Q.value = 0.707;
+
+  // Strip gate — a VCA between the HPF and the time fx, so it silences every
+  // upstream hiss source (comp, earth, metal, amp-capture idle noise) but a
+  // closing gate never chops delay/reverb tails.
+  const stripGate = makeGate(ctx, gateRect);
+  // Per-pedal gates — a VCA immediately after each drive's output, killing
+  // that pedal's hiss at the source. Earth's also stops Metal re-amplifying
+  // Earth's noise floor by up to +24 dB. Nothing downstream of them holds a
+  // tail (the time fx are post-cab), so a closing pedal gate can't chop one.
+  const earthGate = makeGate(ctx, gateRect);
+  const metalGate = makeGate(ctx, gateRect);
 
   // Earth Drive — single waveshaper (asymmetric JFET curve) + tone LPF + level.
   // Oversampling is set per-state in applyEarth/applyMetal: '4x' only while the
@@ -402,8 +461,11 @@ export function createRigStrip(ctx, cfg) {
   earthPre.connect(earthShaper);
   earthShaper.connect(earthTone);
   earthTone.connect(earthPost);
-  // Metal stage: earthPost → metalPre → shaper1 → stage gain → shaper2 → 3-band EQ → metalPost
-  earthPost.connect(metalPre);
+  // Earth's gate VCA sits between the two drives, so Metal's pre-gain never
+  // sees Earth's hiss.
+  earthPost.connect(earthGate.vca);
+  // Metal stage: earth gate → metalPre → shaper1 → stage gain → shaper2 → 3-band EQ → metalPost
+  earthGate.vca.connect(metalPre);
   metalPre.connect(metalShaper1);
   metalShaper1.connect(metalStage);
   metalStage.connect(metalShaper2);
@@ -411,7 +473,9 @@ export function createRigStrip(ctx, cfg) {
   mLow.connect(mMid);
   mMid.connect(mHigh);
   mHigh.connect(metalPost);
-  metalPost.connect(ampIn);
+  // Metal's gate VCA closes out the drive block, before the amp.
+  metalPost.connect(metalGate.vca);
+  metalGate.vca.connect(ampIn);
   ampIn.connect(ampDry); ampDry.connect(ampSum);
   // Drive only feeds the wet (model) path — the dry blend stays unity so `mix`
   // crossfades cleanly and bypass is exactly the input.
@@ -423,21 +487,16 @@ export function createRigStrip(ctx, cfg) {
   eqHigh.connect(cabIn);
   cabIn.connect(cabDry); cabDry.connect(cabSum);
   cabIn.connect(cabConv); cabConv.connect(cabWet); cabWet.connect(cabSum);
-  // Post-cab HPF → noise gate VCA → time fx in series: delay insert, then
-  // reverb insert. Gate sidechain: clean input → key HPF (drops rumble/hum
-  // that would false-open it) → rectify → envelope LPF → threshold curve →
-  // smoother → the VCA's gain param. The sidechain is always connected; the
-  // stage toggles by curve swap (GATE_OPEN_CURVE pins the VCA at unity), so
-  // bypass never re-wires the graph.
+  // Post-cab HPF → strip gate VCA → time fx in series: delay insert, then
+  // reverb insert. The shared gate sidechain (clean input → key HPF → rectify)
+  // fans out to all three gates' envelope chains, wired in makeGate. It's
+  // always connected; a gate toggles by curve swap (GATE_OPEN_CURVE pins its
+  // VCA at unity), so bypass never re-wires the graph.
   cabSum.connect(hpf);
-  hpf.connect(gateVca);
-  gateVca.connect(delayIn);
+  hpf.connect(stripGate.vca);
+  stripGate.vca.connect(delayIn);
   input.connect(gateKeyHpf);
   gateKeyHpf.connect(gateRect);
-  gateRect.connect(gateLpf);
-  gateLpf.connect(gateShaper);
-  gateShaper.connect(gateSmooth);
-  gateSmooth.connect(gateVca.gain);
   delayIn.connect(delayDry); delayDry.connect(delaySum);
   delayIn.connect(delayL);
   delayL.connect(merger, 0, 0);
@@ -495,6 +554,7 @@ export function createRigStrip(ctx, cfg) {
   }
   function applyEarth() {
     const d = state.earth;
+    applyEarthGate();   // the pedal's gate is only live while the pedal is on
     setOversample(earthShaper, d.on ? '4x' : 'none');
     if (!d.on) {
       // curve = null is the spec's true bypass. IDENTITY_CURVE clamps its input
@@ -514,6 +574,7 @@ export function createRigStrip(ctx, cfg) {
   }
   function applyMetal() {
     const d = state.metal;
+    applyMetalGate();   // ditto — see applyEarth
     setOversample(metalShaper1, d.on ? '4x' : 'none');
     setOversample(metalShaper2, d.on ? '4x' : 'none');
     mLow.gain.value = 0; mMid.gain.value = 0; mHigh.gain.value = 0;
@@ -617,24 +678,13 @@ export function createRigStrip(ctx, cfg) {
       node.gain.setTargetAtTime(clamp(b.gain, -24, 24), t, 0.01);
     }
   }
-  // Curve cache — knob drags re-run apply per tick; only rebuild the 4097-float
-  // curve when the threshold actually changed. −1 means the open (bypass)
-  // curve is loaded.
-  let gateCurveThresh = -1;
-  function applyGate() {
-    const d = state.gate;
-    // Release knob → envelope LPF corner, 30 Hz (snappy) down to 6 Hz (slow
-    // swells). One symmetric filter smooths attack and release alike — the
-    // slow end trades a softened pick attack for chatter-free decays.
-    gateLpf.frequency.setTargetAtTime(
-      30 * Math.pow(0.2, clamp(d.release, 0, 1)), ctx.currentTime, 0.02);
-    if (!d.on) {
-      if (gateCurveThresh !== -1) { gateShaper.curve = GATE_OPEN_CURVE; gateCurveThresh = -1; }
-      return;
-    }
-    const t = clamp(d.thresh, 0, 1);
-    if (t !== gateCurveThresh) { gateShaper.curve = makeGateCurve(t); gateCurveThresh = t; }
-  }
+  function applyGate() { stripGate.apply(state.gate); }
+  // Per-pedal gates follow their pedal: a bypassed drive isn't in the circuit,
+  // so neither is its gate — otherwise arming one would silently gate the
+  // clean signal passing through the bypassed stage, which is a nasty surprise
+  // mid-set. applyEarth/applyMetal re-run these on every pedal toggle.
+  function applyEarthGate() { earthGate.apply(state.earthGate, state.earthGate.on && state.earth.on); }
+  function applyMetalGate() { metalGate.apply(state.metalGate, state.metalGate.on && state.metal.on); }
   function applyDelay() {
     const on = state.delay.on;
     const t = clamp(state.delay.time, 0.01, 2);
@@ -677,9 +727,12 @@ export function createRigStrip(ctx, cfg) {
   function applyPan() {
     panner.pan.setTargetAtTime(clamp(state.pan.pan, -1, 1), ctx.currentTime, 0.01);
   }
+  // applyEarth/applyMetal each re-run their own pedal gate.
   function applyAll() { applyGeq(); applyComp(); applyEarth(); applyMetal(); applyAmp(); applyEq(); applyCab(); applyHpf(); applyGate(); applyDelay(); applyReverb(); applyPeq(); applyPan(); }
 
-  const APPLY = { hpf: applyHpf, gate: applyGate, earth: applyEarth, metal: applyMetal, comp: applyComp, eq: applyEq, geq: applyGeq, peq: applyPeq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
+  const APPLY = { hpf: applyHpf, gate: applyGate, earth: applyEarth, metal: applyMetal,
+    earthGate: applyEarthGate, metalGate: applyMetalGate,
+    comp: applyComp, eq: applyEq, geq: applyGeq, peq: applyPeq, amp: applyAmp, cab: applyCab, delay: applyDelay, reverb: applyReverb, pan: applyPan };
 
   applyAll();
 
@@ -729,7 +782,8 @@ export function createRigStrip(ctx, cfg) {
                      ampIn, ampDrive, ampDry, ampWet, ampSum,
                      eqLow, eqMid, eqHigh,
                      cabIn, cabConv, cabDry, cabWet, cabSum, hpf,
-                     gateVca, gateKeyHpf, gateRect, gateLpf, gateShaper, gateSmooth,
+                     gateKeyHpf, gateRect,
+                     ...stripGate.nodes, ...earthGate.nodes, ...metalGate.nodes,
                      delayIn, delayDry, delayL, delayR, delayFb, merger,
                      delayWet, delaySum,
                      reverbIn, reverbDry, convolver, reverbWet, reverbSum,
