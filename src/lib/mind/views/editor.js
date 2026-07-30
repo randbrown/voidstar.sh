@@ -123,6 +123,37 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   metaRow.appendChild(folderSel);
   root.appendChild(metaRow);
 
+  // ── Daily-note claim ──
+  // A note carrying `meta.daily` IS the note the "today" button opens on that
+  // date. That was invisible, so a wrongly-dated import (a journal header of
+  // "7/30" whose year the importer had to guess) could keep hijacking today
+  // with nothing on screen to say why or how to stop it. Show the claim, and
+  // let one tap release it — the note keeps everything else.
+  if (note.meta?.daily) {
+    const claim = el('div', 'mn-daily-claim');
+    claim.appendChild(el('span', 'mn-daily-claim-label',
+      `&#128197; daily note for <b>${esc(note.meta.daily)}</b>`));
+    const release = btn('not this day', 'mn-btn-ghost', () => {
+      confirmBox(
+        `Release this note's claim on ${note.meta.daily}?\n\n`
+        + 'Nothing is deleted — the note just stops being the one the "today" '
+        + 'button opens on that date.',
+        async () => {
+          const meta = { ...note.meta };
+          delete meta.daily;
+          delete meta.dailyGuessedYear;
+          delete meta.dailyConfirmed;
+          note = { ...note, meta };
+          await save({ meta });
+          claim.remove();
+        },
+      );
+    });
+    release.title = 'stop this note from standing in for that calendar day';
+    claim.appendChild(release);
+    root.appendChild(claim);
+  }
+
   // ── Tags ──
   const tagRow = el('div', 'mn-tagrow');
   const drawTags = () => {

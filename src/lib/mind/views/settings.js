@@ -6,6 +6,7 @@ import { buildExportZip, buildNotesMarkdownDoc, downloadBlob, stamp } from '../e
 import { openImportDocModal } from './import-doc-modal.js';
 import { openImportEnexModal } from './import-enex-modal.js';
 import { navigate, refresh, getDockPos, setDockPos, DOCK_POSITIONS } from '../app.js';
+import { guessedDailyNotes, demoteDaily } from '../daily.js';
 import { el, esc, btn, topBar, confirmBox, timeAgo } from '../ui.js';
 import { initThemeControl } from '../../qualia/theme.js';
 
@@ -115,6 +116,32 @@ export async function renderSettings(root) {
       openConflictModal();
     }));
     dataCard.appendChild(cRow);
+  }
+
+  // Imported daily claims whose YEAR is an assumption (a journal header of
+  // "7/30" names no year). Each one hijacks the "today" button on its date, and
+  // a year-long import leaves a year's worth of them — answering the question
+  // one colliding day at a time is a slow way out.
+  const guessedDailies = guessedDailyNotes(notes);
+  if (guessedDailies.length) {
+    const gRow = el('div', 'mn-actions mn-daily-claims');
+    const n = guessedDailies.length;
+    gRow.appendChild(el('div', 'mn-note-meta',
+      `${n} imported note${n === 1 ? '' : 's'} stand${n === 1 ? 's' : ''} in for a calendar day whose year `
+      + `mind had to guess (${guessedDailies.slice(0, 3).map((x) => `${esc(x.title)} → ${esc(x.meta.daily)}`).join(', ')}`
+      + `${n > 3 ? `, +${n - 3} more` : ''}). Releasing them keeps every note — "today" just stops opening them.`));
+    gRow.appendChild(btn(`release imported daily claims (${n})`, '', () => {
+      confirmBox(
+        `Release ${n} imported daily claim${n === 1 ? '' : 's'}?\n\n`
+        + 'No note is deleted or changed otherwise. Notes you created with the '
+        + '"today" button, and any you have confirmed, are untouched.',
+        async () => {
+          for (const note of guessedDailies) await store.putNote(demoteDaily(note));
+          refresh();
+        },
+      );
+    }));
+    dataCard.appendChild(gRow);
   }
   root.appendChild(dataCard);
 

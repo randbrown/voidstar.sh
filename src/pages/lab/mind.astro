@@ -644,6 +644,24 @@ const buildStamp = readBuildStamp();
       50% { border-color: color-mix(in srgb, var(--pink) 90%, var(--border)); }
     }
 
+    /* ── Daily-note claim (editor) ── */
+    .mn-daily-claim {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      border: 1px solid color-mix(in srgb, var(--cyan) 28%, var(--border));
+      border-radius: var(--radius-lg, 10px);
+      padding: 0.35rem 0.6rem;
+      margin-bottom: 0.7rem;
+    }
+    .mn-daily-claim-label { flex: 1 1 auto; min-width: 0; }
+    .mn-daily-claim b { color: var(--cyan); font-weight: 600; }
+    .mn-daily-claims { flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+
     /* ── Tag row (editor) ── */
     .mn-tagrow { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; }
 

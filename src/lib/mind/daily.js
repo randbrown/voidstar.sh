@@ -23,17 +23,41 @@ export function dailyKey(d = new Date()) {
 // The app's own daily-note title, e.g. "2026-07-30 daily".
 export const dailyTitle = (key) => `${key} daily`;
 
-// True when this note's daily date came from an import that had to guess the
-// year. Explicit for notes imported since the fix (`meta.dailyGuessedYear`);
-// for older ones the fingerprint is an imported note whose title carries no
-// 4-digit year at all — i.e. a bare "7/30" header, the year-less shape. A note
-// the user has already vouched for (`dailyConfirmed`) is never suspect again.
+// True when we can't tell that this note's daily date names the right YEAR.
+//
+// The test is the note's own title: does it contain the year it claims? That
+// holds for everything the app writes ("2026-07-30 daily") and for any import
+// whose header spelled a year out ("7/30/2026", "2026-07-30"), and fails for
+// exactly the shape that caused the bug — a bare "7/30" header, where the year
+// is the importer's assumption and nothing else.
+//
+// It deliberately does NOT key on import provenance. The first version of this
+// check required `meta.importedAt`, which the importer only started stamping on
+// 2026-07-15 — every journal imported before that carried a daily claim with no
+// provenance at all, sailed through as trustworthy, and kept opening last
+// year's note. Asking the title is a property of the record itself, so it works
+// on data written by any version.
+//
+// Cost of a false positive: one question, once, on a note the user has renamed
+// away from its date — answered with "open it", which pins it
+// (`dailyConfirmed`) and never asks again.
 export function dailyYearIsGuess(note) {
   const meta = note?.meta || {};
-  if (!meta.daily) return false;
+  const key = meta.daily;
+  if (!key) return false;
   if (meta.dailyConfirmed) return false;
   if (meta.dailyGuessedYear) return true;
-  return !!meta.importedAt && !/\d{4}/.test(note.title || '');
+  return !String(note?.title || '').includes(String(key).slice(0, 4));
+}
+
+// Every daily claim this device can't vouch for, newest first — the corpus
+// behind "release imported daily claims" in Settings → data. A year-long
+// journal import can leave hundreds of these, and answering the question one
+// colliding day at a time is a slow way to clean that up.
+export function guessedDailyNotes(notes) {
+  return (notes || [])
+    .filter((n) => n && !n.deletedAt && dailyYearIsGuess(n))
+    .sort((a, b) => String(a.meta.daily).localeCompare(String(b.meta.daily)));
 }
 
 // Choose the note that IS the given day's daily note.

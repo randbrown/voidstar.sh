@@ -8,7 +8,8 @@
 // today's daily key. Now such a claim is flagged rather than trusted.
 
 import {
-  dailyKey, dailyTitle, dailyYearIsGuess, pickDailyNote, confirmDaily, demoteDaily,
+  dailyKey, dailyTitle, dailyYearIsGuess, guessedDailyNotes, pickDailyNote,
+  confirmDaily, demoteDaily,
 } from '../src/lib/mind/daily.js';
 
 let failed = 0;
@@ -31,21 +32,52 @@ section('(a) dailyKey / dailyTitle');
   check('title shape', dailyTitle(KEY) === '2026-07-30 daily');
 }
 
-section('(b) dailyYearIsGuess');
+section('(b) dailyYearIsGuess — the title must vouch for the year it claims');
 {
   check('app-created daily is trusted', !dailyYearIsGuess(note()));
   check('note with no daily key is not a candidate', !dailyYearIsGuess(note({ meta: {} })));
   check('flagged import is a guess',
     dailyYearIsGuess(note({ title: '7/30', meta: { daily: KEY, importedAt: 5, dailyGuessedYear: true } })));
-  check('legacy import titled "7/30" (no year anywhere) is a guess',
+  check('import titled "7/30" (no year anywhere) is a guess',
     dailyYearIsGuess(note({ title: '7/30', meta: { daily: KEY, importedAt: 5 } })));
   check('import whose header spelled the year is trusted',
     !dailyYearIsGuess(note({ title: '7/30/2026', meta: { daily: KEY, importedAt: 5 } })));
   check('confirmed once, trusted after',
     !dailyYearIsGuess(note({ title: '7/30', meta: { daily: KEY, importedAt: 5, dailyGuessedYear: true, dailyConfirmed: true } })));
+
+  // The regression that shipped in the first fix: the importer only started
+  // stamping `meta.importedAt` on 2026-07-15, so every journal imported before
+  // that had a daily claim with NO provenance — and the check, which keyed on
+  // provenance, waved it straight through. The title is asked instead.
+  check('pre-2026-07-15 import (daily claim, no importedAt) is still a guess',
+    dailyYearIsGuess(note({ title: '7/30', meta: { daily: KEY } })));
+  check('…and it does not stand in for today',
+    pickDailyNote([note({ id: 'legacy', title: '7/30', meta: { daily: KEY } })], KEY).guessed?.id === 'legacy');
+  check('a title naming a DIFFERENT year does not vouch for this claim',
+    dailyYearIsGuess(note({ title: '7/30 (from the 2025 notebook)', meta: { daily: KEY } })));
+  check('an ISO-titled import is trusted',
+    !dailyYearIsGuess(note({ title: '2026-07-30', meta: { daily: KEY } })));
+  check('a title mentioning the year anywhere vouches',
+    !dailyYearIsGuess(note({ title: 'trip planning 2026', meta: { daily: KEY } })));
+  check('missing title is a guess, not a crash', dailyYearIsGuess({ meta: { daily: KEY } }));
 }
 
-section('(c) pickDailyNote');
+section('(c) guessedDailyNotes — the bulk-release corpus');
+{
+  const all = [
+    note({ id: 'a', title: '7/30', meta: { daily: '2026-07-30' } }),
+    note({ id: 'b', title: '7/29', meta: { daily: '2026-07-29' } }),
+    note({ id: 'c' }),                                                    // app-created
+    note({ id: 'd', title: '7/28', meta: { daily: '2026-07-28', dailyConfirmed: true } }),
+    note({ id: 'e', title: '7/27', meta: { daily: '2026-07-27' }, deletedAt: 9 }),
+    note({ id: 'f', title: 'no claim at all', meta: {} }),
+  ];
+  const got = guessedDailyNotes(all).map((n) => n.id);
+  check('only unvouched, live claims', JSON.stringify(got) === JSON.stringify(['b', 'a']), JSON.stringify(got));
+  check('sorted by the day they claim', got[0] === 'b');
+}
+
+section('(d) pickDailyNote');
 {
   const guessed = note({ id: 'imported', title: '7/30', meta: { daily: KEY, importedAt: 5, dailyGuessedYear: true } });
   const real = note({ id: 'real' });
@@ -63,7 +95,7 @@ section('(c) pickDailyNote');
     pickDailyNote([note({ id: 'old', updatedAt: 1 }), note({ id: 'new', updatedAt: 2 })], KEY).note?.id === 'new');
 }
 
-section('(d) confirm / demote');
+section('(e) confirm / demote');
 {
   const guessed = note({ id: 'imported', title: '7/30', meta: { daily: KEY, importedAt: 5, dailyGuessedYear: true } });
 

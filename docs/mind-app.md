@@ -225,15 +225,24 @@ only when the mind app next runs on that device.
 - **Daily note** (`daily.js` pure core, tested by `scripts/check-mind-daily.mjs`):
   "today" button on home — one note per calendar day, found by
   `meta.daily = 'YYYY-MM-DD'`, created in the current folder. One
-  implementation, shared with the command palette. **Imported claims are not
-  trusted blindly**: a journal header like `7/30` carries no year, so an
-  imported 2025 entry could own *this* year's daily key and "today" would open
-  last year's note. `dailyYearIsGuess` flags such a claim — explicitly
-  (`meta.dailyGuessedYear`, stamped by import) or, for notes imported before
-  that stamp existed, by its fingerprint (an imported note with no 4-digit year
-  in its title). A flagged claim asks once — *open it* (pins it with
-  `meta.dailyConfirmed`) or *start a fresh note* (drops only the daily key from
-  the imported note, content untouched) — and never asks about that note again.
+  implementation, shared with the command palette. **A claim must vouch for its
+  year**: a journal header like `7/30` carries no year, so an imported 2025
+  entry could own *this* year's daily key and "today" would open last year's
+  note. `dailyYearIsGuess` asks the note's own **title** whether it contains the
+  year it claims — true for everything the app writes (`2026-07-30 daily`) and
+  for any import whose header spelled a year out, false for exactly the bare
+  `7/30` shape. (It deliberately does not key on import provenance: the first
+  version of this check required `meta.importedAt`, which the importer only
+  started stamping on 2026-07-15, so every journal imported before that still
+  hijacked "today". A property of the record beats a stamp some writers never
+  applied.) An unvouched claim asks once — *open it* (pins it with
+  `meta.dailyConfirmed`) or *start a fresh note* (drops only the daily key,
+  content untouched) — and never asks about that note again. Two more surfaces
+  make the state visible rather than mysterious: the **editor shows the claim**
+  (`📅 daily note for <date>`) with a one-tap *not this day* release on any note
+  that carries one, and **Settings → data** offers a bulk *release imported
+  daily claims (N)* (`guessedDailyNotes`) so a year-long journal import can be
+  cleaned up in one action instead of one colliding day at a time.
 - **Templates**: tag any note `#template`; "＋ from template" (chips row)
   copies its body/tags into a fresh note.
 - **Ongoing notes** (`ongoing.js` pure core + `ongoing-actions.js` +
