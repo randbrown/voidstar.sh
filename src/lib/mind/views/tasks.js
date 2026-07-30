@@ -4,9 +4,17 @@
 import * as store from '../store.js';
 import { setTaskDoneEverywhere, setTaskTextEverywhere } from '../tasks-sync.js';
 import { navigate, refresh } from '../app.js';
-import { parseCapture } from '../capture.js';
-import { armReminder, reminderSheet, reminderBadge, isReminderDue, snoozeTask } from '../reminders.js';
+import { taskAddRow } from './task-add.js';
+import {
+  taskAttachButton, taskThumbs, groupTaskAttachments, wirePasteOnRow, wireDropOnRow,
+} from './task-attach.js';
+import { reminderSheet, reminderBadge, isReminderDue, snoozeTask } from '../reminders.js';
 import { el, esc, btn, topBar, emptyState, textPrompt, confirmBox, timeAgo } from '../ui.js';
+
+// Set by a quick-add so the re-render puts the cursor back in the same box —
+// refresh() rebuilds the whole view, and typing a burst of tasks shouldn't need
+// a click between each one.
+let _refocusList = '';
 
 export async function renderTasks(root, focusListId = null) {
   const actions = [
@@ -32,20 +40,25 @@ export async function renderTasks(root, focusListId = null) {
     return;
   }
 
-  const tasks = await store.getAllTasks();
+  const [tasks, allAtts] = await Promise.all([store.getAllTasks(), store.getAllAttachments()]);
   const byList = new Map();
   for (const t of tasks) {
     if (!byList.has(t.listId)) byList.set(t.listId, []);
     byList.get(t.listId).push(t);
   }
+  const attsByTask = groupTaskAttachments(allAtts);
 
+  const refocus = _refocusList;
+  _refocusList = '';
   for (const tl of lists) {
     if (focusListId && tl.id !== focusListId) continue;
-    root.appendChild(await listCard(tl, byList.get(tl.id) || [], folders));
+    const { card, focusAdd } = await listCard(tl, byList.get(tl.id) || [], folders, attsByTask);
+    root.appendChild(card);
+    if (refocus === tl.id) focusAdd();
   }
 }
 
-async function listCard(tl, tasks, folders) {
+async function listCard(tl, tasks, folders, attsByTask) {
   const card = el('div', 'mn-card mn-tasklist-card');
 
   const head = el('div', 'mn-todo-head');
@@ -70,27 +83,14 @@ async function listCard(tl, tasks, folders) {
   active.sort((a, b) => (a.done !== b.done) ? (a.done ? 1 : -1) : a.order - b.order);
 
   const list = el('div', 'mn-todo-list');
-  for (const t of active) list.appendChild(taskRow(t));
+  for (const t of active) list.appendChild(await taskRow(t, attsByTask.get(t.id) || []));
   card.appendChild(list);
 
-  const addRow = el('div', 'mn-todo-add');
-  const input = el('input', 'mn-input');
-  input.type = 'text';
-  input.placeholder = 'add a task…';
-  input.addEventListener('keydown', async (e) => {
-    if (e.key !== 'Enter') return;
-    const raw = input.value.trim();
-    if (!raw) return;
-    const { text, remindAt } = parseCapture(raw);
-    const task = store.createTask(tl.id, text || raw, {
-      remindAt, remindStatus: remindAt ? 'scheduled' : '',
-    });
-    await store.putTaskRaw(task);
-    if (remindAt) await armReminder(task); // Enter is the permission gesture
-    refresh();
+  const add = taskAddRow({
+    ensureList: async () => tl,
+    onAdded: () => { _refocusList = tl.id; refresh(); },
   });
-  addRow.appendChild(input);
-  card.appendChild(addRow);
+  card.appendChild(add.el);
 
   // Archive drawer — tasks that rolled off the 24h window.
   const archived = tasks.filter(t => t.archivedAt);
@@ -112,10 +112,10 @@ async function listCard(tl, tasks, folders) {
     card.appendChild(drawer);
   }
 
-  return card;
+  return { card, focusAdd: add.focus };
 }
 
-function taskRow(task) {
+async function taskRow(task, atts = []) {
   const row = el('div', 'mn-todo-row');
   const cb = el('input');
   cb.type = 'checkbox';
@@ -155,6 +155,10 @@ function taskRow(task) {
     row.appendChild(snooze);
   }
 
+  row.appendChild(taskAttachButton(task, refresh));
+  wirePasteOnRow(row, task, refresh);
+  wireDropOnRow(row, task, refresh);
+
   const bell = btn(task.remindAt || task.remindPlace ? '&#128276;' : '&#128368;',
     'mn-btn-ghost mn-task-bell', () => reminderSheet(task, refresh));
   bell.title = 'set a reminder';
@@ -173,9 +177,13 @@ function taskRow(task) {
   }
 
   const del = btn('&times;', 'mn-btn-ghost mn-task-x', async () => {
-    await store.trashTask(task);
+    // Takes the task's screenshots with it — nothing else renders them.
+    await store.trashTaskAndAttachments(task);
     refresh();
   });
   row.appendChild(del);
+
+  const thumbs = await taskThumbs(task, atts, refresh);
+  if (thumbs) row.appendChild(thumbs);
   return row;
 }

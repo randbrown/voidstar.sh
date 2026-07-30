@@ -57,5 +57,34 @@ section('(b) parseCapture — verb strip + reminder extraction');
   check('empty input safe', parseCapture('', NOW).text === '' && parseCapture('', NOW).remindAt === 0);
 }
 
+// ── quoted text is literal ──
+// A line that TALKS ABOUT a day used to be read as scheduling one: the quoted
+// word was armed as a reminder and deleted from the task text.
+section('(c) parseCapture / parseWhen — quoted text is never a "when"');
+{
+  const literal = (raw) => {
+    const r = parseCapture(raw, NOW);
+    check(`kept verbatim: ${raw}`, r.text === raw && r.remindAt === 0,
+      `${JSON.stringify(r.text)} @${r.remindAt}`);
+  };
+  literal('"today" note pulls up last year\'s "7/30" note');
+  literal('"tomorrow 9am" is parsed as a reminder');
+  literal('the `next monday` shortcut needs a test');
+  literal('“tonight” renders wrong on iOS');
+
+  // Apostrophes are not quote delimiters — a real reminder after one still parses.
+  check('apostrophe does not open a quote',
+    parseCapture("finish Jay's mix tomorrow 9am", NOW).remindAt === at(2026, 7, 12, 9));
+  check('apostrophe line keeps its text',
+    parseCapture("finish Jay's mix tomorrow 9am", NOW).text === "finish Jay's mix");
+  // An unmatched quote is just punctuation, not a mask to end-of-line.
+  check('unmatched quote still parses the reminder',
+    parseCapture('fix the " glyph tomorrow 9am', NOW).remindAt === at(2026, 7, 12, 9));
+  // Quoted span masked, real "when" outside it still counts.
+  check('quoted noise + real when',
+    parseCapture('rename the "today" button tomorrow 9am', NOW).text === 'rename the "today" button'
+    && parseCapture('rename the "today" button tomorrow 9am', NOW).remindAt === at(2026, 7, 12, 9));
+}
+
 console.log(`\n${failed ? `FAILED (${failed})` : 'ALL PASSED'}`);
 process.exit(failed ? 1 : 0);

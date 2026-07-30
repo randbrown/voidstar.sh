@@ -27,8 +27,10 @@ export function looksLikeTimeSignature(n, d) {
   return TS_DENOMS.has(d) && n >= 1 && n <= 32;
 }
 
-// Find a date anywhere in the line. Returns {iso, index, length} or null.
-// A missing year assumes the current year; two-digit years assume 20xx.
+// Find a date anywhere in the line. Returns {iso, index, length, hasYear} or
+// null. A missing year assumes `nowYear` (and is flagged `hasYear: false`, so
+// callers that can do better — see import-doc.js `inferSectionYears` — know the
+// year is a guess); two-digit years assume 20xx.
 //
 // Numeric shapes accepted: 2026-06-14 (ISO), and M/D · M.D · M-D with an
 // optional /·.·- year (6/14, 6-14, 6/14/26, 6-14-2026, 6.14.26). `opts`:
@@ -40,7 +42,7 @@ export function extractDate(str, nowYear = new Date().getFullYear(), opts = {}) 
   let m = str.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
   if (m) {
     const iso = toIso(+m[1], +m[2], +m[3]);
-    if (iso) return { iso, index: m.index, length: m[0].length };
+    if (iso) return { iso, index: m.index, length: m[0].length, hasYear: true };
   }
   // Scan every numeric M/D(/Y) or M-D(-Y) token so a leading time signature
   // ("4/4 …") can be skipped without hiding a real date later in the line. The
@@ -53,12 +55,12 @@ export function extractDate(str, nowYear = new Date().getFullYear(), opts = {}) 
     if (rejectTimeSignatures && !hasYear && sep === '/' && looksLikeTimeSignature(+mo, +day)) continue;
     const y = yr ? (yr.length === 2 ? 2000 + +yr : +yr) : nowYear;
     const iso = toIso(y, +mo, +day);
-    if (iso) return { iso, index: nm.index, length: nm[0].length };
+    if (iso) return { iso, index: nm.index, length: nm[0].length, hasYear };
   }
   m = str.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b/i);
   if (m) {
     const iso = toIso(m[3] ? +m[3] : nowYear, MONTHS[m[1].slice(0, 3).toLowerCase()], +m[2]);
-    if (iso) return { iso, index: m.index, length: m[0].length };
+    if (iso) return { iso, index: m.index, length: m[0].length, hasYear: !!m[3] };
   }
   return null;
 }
@@ -80,6 +82,42 @@ export function extractDate(str, nowYear = new Date().getFullYear(), opts = {}) 
 // with no am/pm in 1–6 is read as pm ("remind me at 6" → 18:00).
 
 const WEEKDAYS3 = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
+// Quoted text is LITERAL — never a "when".
+//
+// A captured line often *talks about* a day rather than scheduling one:
+//   "today" note pulls up last year's "7/30" note
+// Reading the quoted words as a reminder armed a 9am alarm AND deleted them
+// from the task text (parseCapture strips the matched span), so the task read
+// `"" note pulls up last year's "" note`. Everything between paired double
+// quotes (straight or smart) or backticks is therefore blanked before the
+// matchers run — replaced space-for-space, so every index/length they report
+// still lines up with the ORIGINAL string and the caller's slice stays exact.
+// Apostrophes are deliberately not delimiters: "last year's" would open a span
+// that never closes and swallow the rest of the line.
+const QUOTE_PAIRS = [['"', '"'], ['“', '”'], ['`', '`']];
+
+export function maskQuoted(str) {
+  const s = String(str ?? '');
+  const closers = new Map(QUOTE_PAIRS);
+  const out = s.split('');
+  let i = 0;
+  while (i < out.length) {
+    const close = closers.get(s[i]);
+    if (close) {
+      const end = s.indexOf(close, i + 1);
+      // An unmatched opener is just punctuation — masking to end-of-line would
+      // silently kill a real "tomorrow 9am" after a stray quote.
+      if (end > i) {
+        for (let k = i + 1; k < end; k++) out[k] = ' ';
+        i = end + 1;
+        continue;
+      }
+    }
+    i++;
+  }
+  return out.join('');
+}
 
 function startOfDayMs(now) {
   const d = new Date(now);
@@ -149,13 +187,16 @@ function matchTime(str) {
 
 export function parseWhen(str, now = Date.now()) {
   if (!str) return null;
+  // Match against the quote-masked copy (same length, so indices map 1:1 back
+  // onto `str`) — a day/time named inside quotes is being quoted, not scheduled.
+  const src = maskQuoted(str);
 
   // A self-contained duration wins outright.
-  const dur = matchDuration(str, now);
+  const dur = matchDuration(src, now);
   if (dur) return { ts: dur.ts, index: dur.index, length: dur.length };
 
-  const day = matchDay(str, now);
-  const time = matchTime(str);
+  const day = matchDay(src, now);
+  const time = matchTime(src);
   if (!day && !time) return null;
 
   let spanStart = Infinity, spanEnd = -1;

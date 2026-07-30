@@ -223,7 +223,11 @@ export async function renderCapture(root, mode, target) {
           remindAt, remindStatus: remindAt ? 'scheduled' : '',
         });
         await store.putTaskRaw(task);
-        if (remindAt) await armReminder(task); // requests permission in this gesture
+        // Requests notification permission inside this gesture, but un-awaited:
+        // a prompt left unanswered must never strand the user on the capture
+        // screen with a task that's already saved (same trap the TODO quick-add
+        // fell into — see views/task-add.js).
+        if (remindAt) armReminder(task).catch(() => {});
         navigate(`#tasks/${tl.id}`);
         refresh();
       } else {
