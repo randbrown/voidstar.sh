@@ -224,6 +224,11 @@ Two unrelated pipelines:
 `qualem.js` encodes the **whole-experience snapshot** (all params/presets, sparse-diffed against
 schema defaults, gzip + base64url, device-fingerprinted) — the basis for shareable scene URLs.
 
+A qualem is the *whole* experience, so the panel's **new** and **random** buttons clear the
+performance state too (`clearPerformanceState` in `page-init.js`): loops, the freeze stack and —
+for **new** — the Strudel pattern and the sequencer grid. Loops and freeze pads were played to the
+*previous* patterns, so leaving them under a fresh roll is never what either button means.
+
 ---
 
 ## 8. Control surface

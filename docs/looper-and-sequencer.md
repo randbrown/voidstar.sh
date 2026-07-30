@@ -24,6 +24,25 @@ is reused, so record never strands an empty lane. The `rec → new` checkbox in 
 (persisted at `voidstar.qualia.looper.recordNewTrack`, default on; also part of the qualem config)
 turns this off for the old replace-the-armed-take behavior.
 
+**Free-run record arming** — two ways to decide the IN point when you can't also be at the
+keyboard for it (one hand on the computer, both on the steel). Chips live in the loop subhead
+(`dly` · `♪` · `trns`) so they stay put with the tracks folded away, persist under
+`voidstar.qualia.looper.recDelaySec` / `.recCountIn` / `.recTransient`, travel in the qualem, and
+are on the tether's loop tab. Both are **free-run only** and grey out while `sync strudel` is on —
+the cycle grid owns the IN point there, which is the whole point of syncing.
+- **`dly`** (off / 1s / 2s / 4s) — ● starts a countdown, then arms. `♪` adds a **count-in**: two
+  short pips spaced `delay / 2`, so the last gap *is* the "and…". They ride the rig master (see
+  audio-engine.md), which is downstream of the recorder's tap on the strip output, so a count-in
+  can never land in the take. Pressing ● (or ■, or pause) during the countdown cancels it; the
+  button reads `◌` while it runs.
+- **`trns`** — ● opens the buffer immediately and the loop's IN lands on your **first note**.
+  Detection runs on the 128-frame quanta the recorder already posts to the main thread (no extra
+  analyser, no audio-thread work): a floor that drops instantly to anything quieter and creeps up
+  at 2 %/quantum, a hit being a quantum peaking ≥4× that floor (never below ≈ −38 dBFS), ~50 ms of
+  warm-up so the capture settling can't fire it, and the onset pinned to the first sample over the
+  bar rather than the quantum edge. `stopRecording` then backs IN off by 4 ms so the attack isn't
+  shaved; what came before stays in the buffer as nudge pre-roll like any other take.
+
 **Module split (clean — preserve it):**
 
 | File | Responsibility |
@@ -74,6 +93,24 @@ capture if the signal fader is up.
 
 **Loaded via `?url&no-inline`** so Vite doesn't inline the worklet as a data URL that `addModule()`
 can't reliably load.
+
+### Panel chrome (the rig window itself)
+
+- **Sections.** `signal` · `strip` · `drive` · `tone` · `space` · `utility` · `loop`, all siblings
+  in one scroll column with sticky subheads. `strip` is a header tab over the four strip zones —
+  its chevron folds all of them at once (they're siblings, not children, so the fold rides
+  `#looper-panel.strip-collapsed` rather than the shared `.collapsed` rule) and it carries the
+  latency readout + `reset`. Every subhead has a `.rig-head-toggles` row: while that section is
+  collapsed, its stage on/off buttons render there in the zone's tint, so a folded-away pedal is
+  still one tap from the header. The `strip` header's row is the six primary pedals — the same set
+  the mini pedalboard exposes.
+- **Two remembered geometries.** The panel persists the full station under
+  `voidstar.qualia.panelPos.looper` and the mini pedalboard under `…panelPos.looper.mini`; drags
+  and resizes route to whichever mode is in view (`attachPanelResize` takes an id *thunk* for
+  this). Entering mini records where the full panel was and snaps the pedalboard hard into the
+  **bottom-right** corner — clear of the params card — unless a mini position was already
+  remembered; leaving it puts the full station back where it was. Inline width/height are cleared
+  across the switch, since a full-panel height on the pedalboard is never what's wanted.
 
 **Known sharp edges (backlog):** record keeps every 128-frame quantum as a separate array then
 concatenates (GC pressure on long takes — pre-grow a single buffer); `stopRecording` waits for the

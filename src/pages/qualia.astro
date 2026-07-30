@@ -2338,6 +2338,33 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       max-height: 470px; overflow-y: auto;
     }
     .rig-util-hint { color: var(--muted); font-size: 0.6rem; opacity: 0.6; letter-spacing: 0.04em; }
+
+    /* ── collapsed-section toggle row ──────────────────────────────────────
+       A folded section still has to be playable: each subhead carries the
+       on/off buttons of the stages it hides, shown only while collapsed (they
+       would duplicate the stage boxes otherwise). The loop bar's variant
+       (`-always`) stays visible either way — its record-arm modes belong next
+       to the ● button at all times. */
+    .rig-head-toggles { display: none; align-items: center; gap: 0.2rem; flex-wrap: wrap; }
+    .rig-subpanel.collapsed > .rig-subhead > .rig-head-toggles,
+    .rig-head-toggles.rig-head-toggles-always,
+    #looper-panel.strip-collapsed #rig-strip-toggles { display: inline-flex; }
+    .rig-head-chip {
+      padding: 0.02rem 0.32rem; font-size: 0.56rem; line-height: 1.5;
+      color: var(--muted); white-space: nowrap;
+    }
+    .rig-head-chip.active {
+      color: color-mix(in srgb, var(--zone, var(--cyan)) 80%, var(--text));
+      border-color: color-mix(in srgb, var(--zone, var(--cyan)) 70%, var(--border));
+      background: color-mix(in srgb, var(--zone, var(--cyan)) 12%, transparent);
+    }
+    /* The strip header folds the four zone sections away as a group (they're
+       siblings, not children, so this can't ride the shared .collapsed rule). */
+    #looper-panel.strip-collapsed #rig-drive,
+    #looper-panel.strip-collapsed #rig-tone,
+    #looper-panel.strip-collapsed #rig-space,
+    #looper-panel.strip-collapsed #rig-util { display: none !important; }
+
     .rig-stage {
       border: 1px solid var(--border); border-radius: 6px;
       background: rgba(0,0,0,0.20);
@@ -2370,6 +2397,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-ctl-val { color: var(--text); min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
     .rig-drive-model { flex: 1; min-width: 0; font-size: 0.62rem; background: rgba(0,0,0,0.3); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.05rem 0.2rem; }
     .rig-drive-params { display: contents; }
+
+    /* Nested stage — a pedal's own built-in section (earth/metal each carry
+       their noise gate). Rendered inside the parent box, hairline-separated,
+       so the gate reads as part of that pedal rather than a board of its own. */
+    .rig-substage {
+      margin: 0.3rem -0.4rem -0.3rem; padding: 0.22rem 0.4rem 0.28rem;
+      border: none; border-top: 1px solid var(--border);
+      border-radius: 0 0 5px 5px; background: rgba(0,0,0,0.16);
+    }
+    .rig-zone-body .rig-stage .rig-substage.on,
+    .rig-substage.on { border-color: var(--border); background: rgba(0,0,0,0.24); }
+    .rig-substage .rig-stage-head { margin-bottom: 0.15rem; }
+    .rig-substage .rig-stage-name { font-size: 0.6rem; opacity: 0.85; }
 
     /* Collapsed stage — hide controls, shrink box. */
     .rig-stage.collapsed .rig-ctl,
@@ -2443,7 +2483,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #looper-panel.mini #rig-sections { display: none !important; }
     #looper-panel.mini #rig-master-gain,
     #looper-panel.mini #btn-rig-master-mute { display: none; }
-    #looper-panel.mini { height: auto !important; min-height: 0 !important; width: auto; }
+    /* Mini sizes to its content by default — but an explicit drag-resize
+       (inline width/height, persisted under the panel's mini geometry key)
+       still wins, so `height` is deliberately not !important here. */
+    #looper-panel.mini { height: auto; min-height: 0 !important; width: auto; }
 
     #rig-mini { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.6rem; }
     .rig-mini-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
@@ -4081,17 +4124,35 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
   </section>
 
-  <!-- STRIP subpanels — the channel strip as four top-level collapsible
-       sections in signal-chain order: drive (earth · metal · gate) · tone
-       (amp · eq · cab) · space (delay · reverb) · utility (geq · comp · hpf ·
-       peq · pan + input mode + strip housekeeping). The signal bar's `strip`
-       button shows/hides all four together; each section's chevron (or name)
-       collapses just that section, persisted independently. -->
+  <!-- STRIP subpanels — the channel strip as a `strip` header tab over four
+       top-level collapsible sections in signal-chain order: drive (earth +
+       its gate · metal + its gate) · tone (amp · eq · cab) · space (delay ·
+       reverb) · utility (geq · comp · hpf · gate · peq · pan + input mode +
+       strip housekeeping). The signal bar's `strip` button shows/hides the
+       whole block; the strip header's chevron folds the four zones down to
+       its own toggle row; each zone's chevron (or name) collapses just that
+       zone, persisted independently.
+
+       Every section subhead carries a `.rig-head-toggles` span: while that
+       section is collapsed its stage on/off buttons render there, so a
+       folded-away pedal is still one tap from the header. -->
+  <section id="rig-strip" class="rig-subpanel" style="display:none">
+    <div class="rig-subhead">
+      <button class="ctrl-btn rig-collapse" id="btn-rig-strip-collapse" title="Collapse / expand the whole channel strip (drive · tone · space · utility)">▾</button>
+      <span class="sp-subtitle">strip</span>
+      <span class="rig-util-hint">drive · tone · space · utility</span>
+      <span class="rig-head-toggles" id="rig-strip-toggles"></span>
+      <span class="rig-head-spacer"></span>
+      <span class="sp-status" id="rig-latency" title="Estimated monitoring latency: browser output path + what enabled strip stages add (drive oversampling, comp lookahead). Input capture buffering isn't reported by the browser, so the true round trip is slightly higher."></span>
+      <button class="ctrl-btn" id="btn-rig-strip-reset" title="Reset all strip effects to off / unity defaults">reset</button>
+    </div>
+  </section>
   <section id="rig-drive" class="rig-subpanel" data-zone="drive" style="display:none">
     <div class="rig-subhead">
-      <button class="ctrl-btn rig-collapse" id="btn-rig-drive-collapse" title="Collapse / expand the drive pedals — earth (JFET soft clip) into metal (high-gain), with the noise gate that tames their hiss">▾</button>
+      <button class="ctrl-btn rig-collapse" id="btn-rig-drive-collapse" title="Collapse / expand the drive pedals — earth (JFET soft clip) into metal (high-gain), each with its own noise gate built in">▾</button>
       <span class="sp-subtitle">drive</span>
-      <span class="rig-util-hint">earth · metal · gate</span>
+      <span class="rig-util-hint">earth · metal</span>
+      <span class="rig-head-toggles" id="rig-drive-toggles"></span>
     </div>
     <div id="rig-drive-body" class="rig-zone-body"></div>
   </section>
@@ -4100,6 +4161,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn rig-collapse" id="btn-rig-tone-collapse" title="Collapse / expand tone shaping — neural amp → tone-stack EQ → cab IR">▾</button>
       <span class="sp-subtitle">tone</span>
       <span class="rig-util-hint">amp · eq · cab</span>
+      <span class="rig-head-toggles" id="rig-tone-toggles"></span>
     </div>
     <div id="rig-tone-body" class="rig-zone-body"></div>
   </section>
@@ -4108,17 +4170,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn rig-collapse" id="btn-rig-space-collapse" title="Collapse / expand the time effects — delay feeds reverb, so the echoes share the room">▾</button>
       <span class="sp-subtitle">space</span>
       <span class="rig-util-hint">delay · reverb</span>
+      <span class="rig-head-toggles" id="rig-space-toggles"></span>
     </div>
     <div id="rig-space-body" class="rig-zone-body"></div>
   </section>
   <section id="rig-util" class="rig-subpanel" style="display:none">
     <div class="rig-subhead">
-      <button class="ctrl-btn rig-collapse" id="btn-rig-strip-util" title="Collapse / expand the utility stages (geq · comp · HPF · peq · pan) + input mode">▸</button>
+      <button class="ctrl-btn rig-collapse" id="btn-rig-strip-util" title="Collapse / expand the utility stages (geq · comp · HPF · gate · peq · pan) + input mode">▸</button>
       <span class="sp-subtitle">utility</span>
-      <span class="rig-util-hint">geq · comp · hpf · peq · pan</span>
-      <span class="rig-head-spacer"></span>
-      <span class="sp-status" id="rig-latency" title="Estimated monitoring latency: browser output path + what enabled strip stages add (drive oversampling, comp lookahead). Input capture buffering isn't reported by the browser, so the true round trip is slightly higher."></span>
-      <button class="ctrl-btn" id="btn-rig-strip-reset" title="Reset all strip effects to off / unity defaults">reset</button>
+      <span class="rig-util-hint">geq · comp · hpf · gate · peq · pan</span>
+      <span class="rig-head-toggles" id="rig-util-toggles"></span>
     </div>
     <div id="rig-strip-util-body">
       <!-- Input channel mode — housekeeping, not a per-set control, so it
@@ -4141,6 +4202,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <span class="sp-subtitle">loop</span>
       <span class="sp-status" id="looper-status">click ● to record</span>
       <span class="rig-head-spacer"></span>
+      <!-- Record-arm modes (delay / first-transient) — built in looper.js.
+           Lives in the subhead so it stays reachable with the tracks folded. -->
+      <span class="rig-head-toggles rig-head-toggles-always" id="rig-loop-toggles"></span>
       <button class="ctrl-btn" id="btn-looper-record" title="Record">●</button>
       <button class="ctrl-btn" id="btn-looper-retro"  title="Grab the last N cycles you just played into the armed track (retro-loop). Needs the live buffer on.">grab</button>
       <button class="ctrl-btn" id="btn-looper-play"   title="Play loop">▶</button>

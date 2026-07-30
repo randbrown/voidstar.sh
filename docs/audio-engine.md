@@ -71,6 +71,15 @@ it clips the waveform on true overs (slight aliasing) instead of riding a gain e
 acceptable for clip insurance. (The vocoder currently reimplements the compressor variant with a
 −1.5 dB ceiling — a known consolidation item in the backlog.)
 
+The rig master is also the **pause brake**. Every audible rig path — the live instrument monitor,
+the loop bus, the freeze stack, the record count-in — sums at `rigMaster` before the limiter and
+`destination` (the capture's `sinkGain` is silent, it only exists to keep the worklet pulled), so
+`setRigPaused(on)` gating that one node is the whole rig obeying the page's Space/pause. It's held
+separately from `_rigMuted`, and `setRigLevel` ramps to `effRig()` rather than `_rigLevel`, so a
+fader move can't punch through the brake and the performer's own mute/level survive the pause
+untouched. `looper.setRigPaused()` also cancels a pending record count-in and stops a running take
+— nothing should keep capturing behind a paused transport. `page-init.js`'s `setPaused` calls it.
+
 The rig master fader runs past unity into **boost** (`RIG_LEVEL_MAX`, 0–2× ≈ +6 dB of makeup for
 playing along with hotter sources); boost is safe because it drives the soft limiter (gain into a
 brickwall = loudness maximizer), and `looper.js` **force-engages** the rig limiter whenever the
@@ -141,7 +150,10 @@ in → GEQ(7-band graphic) → comp → Earth(drive) → earth gate → Metal(dr
   The per-pedal gates are **part of their pedal**: each is only live while its drive is engaged, so
   arming one can't silently gate the clean signal passing through a bypassed stage. Nothing
   downstream of them holds a tail (the time fx are post-cab), so a closing pedal gate can't chop
-  one either.
+  one either. The UI says the same thing — `earthGate`/`metalGate` are `group: 'sub'` in
+  `looper.js`'s `STRIP_SCHEMA` and render as a hairline-separated section **inside** their pedal's
+  box rather than as boards beside it, while the strip-wide `gate` (set once for the rig's noise
+  floor, then left alone) sits in the **utility** drawer next to the HPF it follows.
 - **Three EQs spread along the chain**, one job each: **geq** at the front, shaping the raw
   instrument before comp + drives (Boss GE-7-voiced graphic: 7 octave-spaced peaking bands
   100 Hz–6.4 kHz ±15 dB + level); **eq** between amp and cab, an FX-loop tone stack on the amp'd

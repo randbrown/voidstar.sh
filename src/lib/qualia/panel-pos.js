@@ -68,7 +68,10 @@ const VP_PAD    = 4;    // keep this many px of the panel inside the viewport
 /**
  * Attach custom resize handles to a floating panel.
  *
- * @param {string} id       persistence id (same one used by savePanelPos)
+ * @param {string|(() => string)} id  persistence id (same one used by
+ *        savePanelPos). A function is resolved at save time, so a panel with
+ *        more than one remembered geometry (the rig's full vs mini views) can
+ *        route each resize to the right key.
  * @param {HTMLElement} panel
  * @param {{ onStart?: () => void }} [hooks]  onStart fires on the first
  *        pointerdown of every resize, BEFORE any geometry changes — callers
@@ -78,6 +81,7 @@ const VP_PAD    = 4;    // keep this many px of the panel inside the viewport
 export function attachPanelResize(id, panel, hooks = {}) {
   if (!panel || panel.__vsResize) return;
   panel.__vsResize = true;
+  const posId = () => (typeof id === 'function' ? id() : id);
 
   for (const dir of RESIZE_DIRS) {
     const h = document.createElement('div');
@@ -146,7 +150,7 @@ export function attachPanelResize(id, panel, hooks = {}) {
     const end = (e) => {
       if (!active || e.pointerId !== active.pid) return;
       active = null;
-      savePanelPos(id, panel);
+      savePanelPos(posId(), panel);
       try { h.releasePointerCapture(e.pointerId); } catch {}
     };
     h.addEventListener('pointerup', end);

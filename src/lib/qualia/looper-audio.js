@@ -108,6 +108,12 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // control over all rig output.
   let rigMaster = null, outputAnalyser = null, rigLimiter = null;
   let _rigMuted = false, _rigLevel = 1.0, _rigLimiterOn = true;
+  // Master-pause brake. Every audible rig path — the live signal monitor, the
+  // loop bus, the freeze stack, the record count-in — sums at rigMaster before
+  // the limiter and the speakers (`sinkGain` is a silent worklet pull), so one
+  // gate here is the whole rig obeying the page's pause. Held separately from
+  // `_rigMuted` so the performer's own mute state survives the pause.
+  let _rigPaused = false;
   // Channel strip (HPF/drive/comp/EQ/delay/reverb/pan) inserted between the raw
   // input and the volume fader. Rebuilt with each capture; looper.js owns the
   // persisted config and primes it via setStripConfig().
@@ -124,6 +130,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let snapIn = null;                // { cycleIn, inAbs, cps } when synced, else null
   let recN = 1;                     // grid (per-track "cycles") for this take
   let recCps = 0.5;                 // cps captured at record time (for unsynced lane math)
+  // Transient-start (free-run only): the buffer runs from the moment ● is hit,
+  // but the loop's IN point is the first note played. `_transient` holds the
+  // detector state while we're still listening; `transientFrame` is the onset.
+  let _transient = null;            // { floor, chunks, onFire } | null
+  let transientFrame = null;        // frame index of the detected onset (or null)
 
   // ── live record peaks (min/max per bin, grown as chunks arrive) ──
   let liveMin = null, liveMax = null;
@@ -243,6 +254,38 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     liveTotalFrames += chunk.length;
   }
 
+  // ── transient onset detection (free-run "start on the first note") ──
+  // Runs on the same 128-frame quanta the recorder already hands the main
+  // thread — no extra analyser, no audio-thread work. The floor tracks the
+  // room/hiss level (drops instantly to anything quieter, creeps up slowly),
+  // and a hit is a quantum peaking well clear of it. WARMUP_CHUNKS skips the
+  // first ~50 ms so the capture's own settling can't fire it.
+  const TRANSIENT_WARMUP_CHUNKS = 20;    // ~53 ms at 128 frames / 48 kHz
+  const TRANSIENT_ABS_FLOOR = 0.012;     // ≈ −38 dBFS — never fire on true silence
+  const TRANSIENT_RATIO = 4;             // × the tracked noise floor
+  function detectTransient(chunk, baseFrame) {
+    const t = _transient;
+    let peak = 0;
+    for (let i = 0; i < chunk.length; i++) { const a = Math.abs(chunk[i]); if (a > peak) peak = a; }
+    if (t.chunks++ < TRANSIENT_WARMUP_CHUNKS) {
+      t.floor = t.chunks === 1 ? peak : Math.min(t.floor, peak);
+      return;
+    }
+    const trigger = Math.max(TRANSIENT_ABS_FLOOR, t.floor * TRANSIENT_RATIO);
+    if (peak >= trigger) {
+      // Pin the onset to the first sample over the bar, not the quantum edge.
+      let at = chunk.length - 1;
+      for (let i = 0; i < chunk.length; i++) { if (Math.abs(chunk[i]) >= trigger) { at = i; break; } }
+      transientFrame = baseFrame + at;
+      const fire = t.onFire;
+      _transient = null;
+      if (fire) { try { fire(); } catch {} }
+      return;
+    }
+    // Track the floor: instant down, slow up (so a swell can't outrun it).
+    t.floor = peak < t.floor ? peak : t.floor + (peak - t.floor) * 0.02;
+  }
+
   // Accept one render quantum as an array of per-channel Float32Arrays. The
   // channel count is fixed from the first quantum of a take; live peaks come
   // from channel 0.
@@ -254,7 +297,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     }
     const n = Math.min(chans.length, recChannelCount);
     for (let c = 0; c < n; c++) recChans[c].push(chans[c]);
+    const base = recFrames;
     recFrames += chans[0].length;
+    if (_transient) detectTransient(chans[0], base);
     foldChunkIntoLive(chans[0]);
   }
 
@@ -485,7 +530,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     outputAnalyser.smoothingTimeConstant = 0.40;
     rigMaster.connect(outputAnalyser);
   }
-  function effRig() { return _rigMuted ? 0 : _rigLevel; }
+  function effRig() { return (_rigMuted || _rigPaused) ? 0 : _rigLevel; }
 
   // ── Freeze / infinite sustain ───────────────────────────────────────────────
   // The ambient pedal-steel drone move: grab the last moment of the PROCESSED
@@ -656,7 +701,15 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // looper.js owns the force-the-limiter-on-while-boosted rule.
   const clampRig = (v) => Math.max(0, Math.min(RIG_LEVEL_MAX, Number(v) || 0));
   function setRigMuted(on) { _rigMuted = !!on; nudgeResume(); if (rigMaster) ramp(rigMaster.gain, effRig()); }
-  function setRigLevel(v) { _rigLevel = clampRig(v); nudgeResume(); if (rigMaster && !_rigMuted) ramp(rigMaster.gain, _rigLevel); }
+  // effRig(), not _rigLevel: a fader move must not punch through the pause brake.
+  function setRigLevel(v) { _rigLevel = clampRig(v); nudgeResume(); if (rigMaster) ramp(rigMaster.gain, effRig()); }
+  function setRigPaused(on) {
+    const next = !!on;
+    if (next === _rigPaused) return;
+    _rigPaused = next;
+    if (rigMaster) ramp(rigMaster.gain, effRig());
+  }
+  function isRigPaused() { return _rigPaused; }
   function primeRig(level, muted) { _rigLevel = clampRig(level); _rigMuted = !!muted; if (rigMaster) ramp(rigMaster.gain, effRig()); }
   function setRigLimiter(on) { _rigLimiterOn = !!on; setSoftLimiterEngaged(rigLimiter, _rigLimiterOn); }
   function getRigLimiter() { return _rigLimiterOn; }
@@ -761,8 +814,36 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     // ScriptProcessor path is gated by the `recording` flag directly.
   }
 
+  // ── count-in ──
+  // Two short pips through the rig master (so they obey the rig level/mute and
+  // the pause brake, and never touch the recorder — which taps the strip
+  // output, upstream of here — so a count-in can't land in the take). Only used
+  // by the free-run delayed record: hands are on the steel, the click is the
+  // only cue that the IN point is coming.
+  function playCountIn({ pulses = 2, spacingSec = 0.5, level = 0.28 } = {}) {
+    if (!ctx) return;
+    ensureRigMaster();
+    const t0 = ctx.currentTime + 0.02;
+    for (let i = 0; i < pulses; i++) {
+      const at = t0 + i * spacingSec;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      // Last pip an octave up — "and… IN".
+      osc.frequency.setValueAtTime(i === pulses - 1 ? 1760 : 880, at);
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.linearRampToValueAtTime(level, at + 0.003);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.06);
+      osc.connect(g); g.connect(rigMaster);
+      osc.start(at); osc.stop(at + 0.09);
+      osc.onended = () => { try { osc.disconnect(); g.disconnect(); } catch {} };
+    }
+  }
+
   // ── record ──
-  async function startRecording({ grid = 1, syncOn = false, cps = 0.5, deviceId = '' } = {}) {
+  // `transientStart` (free-run only) captures from the moment of arming but
+  // parks the loop's IN point on the first note played — see detectTransient.
+  async function startRecording({ grid = 1, syncOn = false, cps = 0.5, deviceId = '', transientStart = false, onTransient = null } = {}) {
     if (recording) return { snapped: false };
     await ensureContext();
     await ensureCapture(deviceId);
@@ -773,6 +854,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     recCps = cps > 0 ? cps : 0.5;
     resetLivePeaks();
     snapIn = null;
+    _transient = null; transientFrame = null;
     if (syncOn) {
       const info = syncStrudel?.getStrudelCyclePos?.();
       if (info && info.cps > 0 && typeof info.pos === 'number') {
@@ -782,10 +864,15 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         recCps = info.cps;
       }
     }
+    // Transient start only makes sense free-run: with a grid snap the IN point
+    // is already decided by the cycle boundary.
+    if (transientStart && !snapIn) _transient = { floor: 1, chunks: 0, onFire: onTransient };
     recording = true;
     armRecorder(true);
-    return { snapped: !!snapIn };
+    return { snapped: !!snapIn, listening: !!_transient };
   }
+  // True while a transient-start take is armed but hasn't heard its first note.
+  function isAwaitingTransient() { return !!_transient; }
 
   // Resolves to a track { buffer, sampleRate, loopStartBase, regionFrames,
   // naturalSeconds, recordedCycles } or null. The stored buffer is the loop
@@ -832,13 +919,19 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
           inFrame  = Math.round((snapIn.inAbs - z) * sr);
           outFrame = Math.round((outAbs - z) * sr);
           recordedCycles = cycleOut - snapIn.cycleIn;
+        } else if (transientFrame != null) {
+          // Free-run + transient start: the loop begins at the first note, backed
+          // off a few ms so the attack itself isn't shaved off the front. What's
+          // before it stays in the buffer as pre-roll for the nudge.
+          inFrame = Math.max(0, transientFrame - Math.round(0.004 * sr));
+          outFrame = total; recordedCycles = null;
         } else {
           inFrame = 0; outFrame = total; recordedCycles = null;
         }
         inFrame = Math.max(0, Math.min(total, inFrame));
         outFrame = Math.max(inFrame, Math.min(total, outFrame));
         const regionFrames = outFrame - inFrame;
-        if (regionFrames < 16) { snapIn = null; resolve(null); return; }
+        if (regionFrames < 16) { snapIn = null; _transient = null; transientFrame = null; resolve(null); return; }
 
         // Slice with PAD on each side (clamped to what was captured).
         const padStart = Math.min(pad, inFrame);
@@ -851,6 +944,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
         const loopStartBase = padStart;   // sample idx of the musical IN within `buffer`
 
         snapIn = null;
+        _transient = null; transientFrame = null;
         resolve({
           buffer, sampleRate: sr,
           loopStartBase, regionFrames,
@@ -1421,10 +1515,12 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       else streamDeviceId = want;
     },
     getInputDeviceId: () => streamDeviceId,
-    startRecording, stopRecording,
+    startRecording, stopRecording, isAwaitingTransient,
+    playCountIn,
     startBuffer, stopBuffer, grabRetro,
     ensureCaptureOpen,
     setRigMuted, setRigLevel, primeRig, getRigMaster,
+    setRigPaused, isRigPaused,
     setRigLimiter, getRigLimiter, primeRigLimiter, getRigReductionDb,
     getLatencyInfo,
     setSignalLevel, setSignalMuted, getSignal, primeSignal,
