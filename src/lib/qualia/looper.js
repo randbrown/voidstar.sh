@@ -2626,7 +2626,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     fzRow.append(
       miniFreezeBtn,
       miniFreezePop,
-      mkBtn('↻', 'Re-grab (\\) — replace the TOP layer with a fresh grab (short crossover), without adding a layer', () => { freezeRegrab(); }),
+      mkBtn('↻', 'Re-freeze (\\) — replace the TOP layer with a fresh grab (short crossover), without adding a layer', () => { freezeRegrab(); }),
       mkBtn('✕', 'Clear (⌫) — release the whole stack (each layer fades over the release time)', () => { freezeClear(); }),
     );
     const fzCap = document.createElement('span'); fzCap.className = 'rig-mini-cap'; fzCap.textContent = 'freeze';
@@ -3737,7 +3737,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // ── Freeze / infinite-sustain STACK (Frippertronics) ──────────────────────
   // The `frz` pedal (button / `;`) GRABS the last moment of the processed
   // signal and LAYERS it onto a stack — tap again to layer another pad over
-  // the last. `pop` (`'`) removes the top layer with a release fade; re-grab
+  // the last. `pop` (`'`) removes the top layer with a release fade; re-frz
   // (`\`) replaces the top with a fresh grab; clear releases the whole stack.
   // The engine sums all pads through a constant-RMS bus + soft limiter so the
   // stack holds a steady loudness and never clips (looper-audio). Needs the
@@ -3761,7 +3761,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     try { await looperAudio.ensureCaptureOpen(); } catch {}
     await looperAudio.freezeRegrab();
     refreshFreezeBtn();
-    setStatus(`re-grabbed top · ${looperAudio.freezeDepth()} layer${looperAudio.freezeDepth() === 1 ? '' : 's'}`);
+    setStatus(`re-froze top · ${looperAudio.freezeDepth()} layer${looperAudio.freezeDepth() === 1 ? '' : 's'}`);
   }
   function freezeClear() {
     if (!looperAudio.isFrozen()) return;
@@ -3787,7 +3787,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (miniFreezePop) miniFreezePop.disabled = n === 0;
   }
 
-  // Freeze settings row (▾): level / grain / release (persisted) + pop / re-grab / clear.
+  // Freeze settings row (▾): level / grain / release (persisted) + pop / re-frz / clear.
   function saveFreezeCfg() {
     try { lsSet(FREEZE_KEY, JSON.stringify(looperAudio.getFreezeConfig())); } catch {}
   }
