@@ -8,7 +8,8 @@ import { parseDocIntoNotes, parseBatchIntoNotes, fingerprintNote, markDuplicates
 import { buildDocFromNotes } from '../src/lib/mind/export.js';
 import { extractDate } from '../src/lib/mind/dates.js';
 
-const YEAR = new Date().getFullYear();
+const YEAR = new Date().getFullYear();      // extractDate's own default, for its direct tests
+const DOC_YEAR = 2026;                      // NOW's year — what a year-less date in these docs resolves to
 const NOW = Date.parse('2026-08-01T00:00:00'); // fixed anchor for descent checks
 const GAP = 60_000;
 
@@ -74,7 +75,7 @@ section('(c) date-lines mode; prose date ignored');
   check('mode = dates', mode === 'dates', mode);
   check('3 sections (preamble + 2 dates)', sections.length === 3, String(sections.length));
   check('preamble flagged', stats.preamble === true);
-  check('6/14 → this year', sections[1].dateIso === `${YEAR}-06-14`, sections[1].dateIso);
+  check('6/14 → the document\u2019s year', sections[1].dateIso === `${DOC_YEAR}-06-14`, sections[1].dateIso);
   check('prose 6/14 did not split', sections[1].body.includes('milestone mentioned earlier'));
   check('6/13 section body', sections[2].body.trim() === 'Earlier note.');
 }
@@ -183,7 +184,7 @@ section('(i) blank-line-above split rule');
   const { sections } = parseDocIntoNotes(doc, { now: NOW, mode: 'dates' });
   check('2 sections (mid-run 6/13 did not split)', sections.length === 2, String(sections.length));
   check('6/13 stays in the first body', sections[0].body.includes('6/13') && sections[0].body.includes('still first entry body'));
-  check('6/12 split (blank line above)', sections[1].dateIso === `${YEAR}-06-12`, sections[1].dateIso);
+  check('6/12 split (blank line above)', sections[1].dateIso === `${DOC_YEAR}-06-12`, sections[1].dateIso);
 }
 
 // ── (j) musical time signatures never split / mint dates ──
@@ -202,7 +203,7 @@ section('(j) time-signature guard');
   const { sections } = parseDocIntoNotes(doc, { now: NOW, mode: 'dates' });
   check('only the real date splits', sections.length === 2, String(sections.length));
   check('preamble holds the time-signature lines', sections[0].body.includes('4/4') && sections[0].body.includes('6/8'));
-  check('6/14 recognized as the date', sections[1].dateIso === `${YEAR}-06-14`, sections[1].dateIso);
+  check('6/14 recognized as the date', sections[1].dateIso === `${DOC_YEAR}-06-14`, sections[1].dateIso);
   // extractDate opt: bare power-of-two slash rejected, dash / year-bearing kept.
   check('extractDate rejects 4/4 as time sig', extractDate('4/4', YEAR, { rejectTimeSignatures: true }) === null);
   check('extractDate keeps 6/14', extractDate('6/14', YEAR, { rejectTimeSignatures: true })?.iso === `${YEAR}-06-14`);
@@ -218,7 +219,7 @@ section('(k) dash date, no year');
   const { sections, mode } = parseDocIntoNotes(doc, { now: NOW, mode: 'dates' });
   check('mode = dates', mode === 'dates', mode);
   check('2 dashed-date sections', sections.length === 2, String(sections.length));
-  check('6-14 → this year', sections[0].dateIso === `${YEAR}-06-14`, sections[0].dateIso);
+  check('6-14 → the document\u2019s year', sections[0].dateIso === `${DOC_YEAR}-06-14`, sections[0].dateIso);
 }
 
 // ── (l) batch: each doc split per settings, concatenated, cross-doc daily dedupe ──
@@ -346,6 +347,77 @@ section('(p) batch sourceName + srcCreated/srcModified');
   // Missing metadata degrades to 0 (unknown), never NaN.
   const bare = parseBatchIntoNotes([{ name: 'X', text: 'y' }], { now: NOW });
   check('missing times → 0', bare.sections[0].srcModified === 0 && bare.sections[0].srcCreated === 0);
+}
+
+// ── (q) year inference for year-less dates ──
+// The "today" bug: a 2025 journal imported in 2026 filed every "7/30" header
+// under 2026, and a date-only header then claimed THIS year's daily key.
+section('(q) year-less dates resolve against the document, not the clock');
+{
+  // A stale Google Doc: last edited 2025-12-31, headers carry no year.
+  // (8/12, not 8/2 — a bare "N/D" with a power-of-two denominator is read as a
+  // time signature by the importer, never a date.)
+  const journal = ['## 12/30', 'new year eve eve', '', '## 8/12', 'summer', '', '## 7/30', 'the note in question'].join('\n');
+  const docTime = Date.parse('2025-12-31T10:00:00');
+  const { sections } = parseDocIntoNotes(journal, { now: NOW, docTime });
+  check('newest entry takes the file’s year', sections[0].dateIso === '2025-12-30', sections[0].dateIso);
+  check('later entries follow it', sections[1].dateIso === '2025-08-12', sections[1].dateIso);
+  check('7/30 is LAST year, not today', sections[2].dateIso === '2025-07-30', sections[2].dateIso);
+  check('year-less dates are flagged as guesses', sections.every((s) => s.dateYearGuessed));
+  check('and they are still daily notes', sections.every((s) => s.isDaily));
+
+  // Same doc, no file time known (pasted text): rule 1 alone still pulls a
+  // date that would land far in the future back a year.
+  const pasted = parseDocIntoNotes(journal, { now: NOW }).sections;
+  check('pasted: 12/30 rolls back (would be 5 months out)', pasted[0].dateIso === '2025-12-30', pasted[0].dateIso);
+  check('pasted: descending walk keeps 8/12 in 2025', pasted[1].dateIso === '2025-08-12', pasted[1].dateIso);
+
+  // A multi-year journal crossing New Year, newest first.
+  const crossing = ['## 1/3', 'jan', '', '## 12/28', 'dec', '', '## 12/20', 'earlier dec'].join('\n');
+  const x = parseDocIntoNotes(crossing, { now: NOW, docTime: Date.parse('2026-01-04T09:00:00') }).sections;
+  check('1/3 stays in the new year', x[0].dateIso === '2026-01-03', x[0].dateIso);
+  check('12/28 wraps back a year', x[1].dateIso === '2025-12-28', x[1].dateIso);
+  check('12/20 stays in the same year as 12/28', x[2].dateIso === '2025-12-20', x[2].dateIso);
+
+  // An explicit year is trusted as written AND re-anchors the walk.
+  const anchored = ['## 3/2/2024', 'explicit', '', '## 2/28', 'year-less, just before it'].join('\n');
+  const a = parseDocIntoNotes(anchored, { now: NOW }).sections;
+  check('explicit year kept', a[0].dateIso === '2024-03-02', a[0].dateIso);
+  check('explicit year not flagged as a guess', !a[0].dateYearGuessed);
+  check('following year-less date follows the anchor', a[1].dateIso === '2024-02-28', a[1].dateIso);
+
+  // Oldest-first documents walk the other way.
+  const asc = ['## 12/20', 'dec', '', '## 12/28', 'later dec', '', '## 1/3', 'jan'].join('\n');
+  const o = parseDocIntoNotes(asc, { now: NOW, order: 'oldest-first', docTime: Date.parse('2026-01-04T09:00:00') }).sections;
+  check('oldest-first: last entry is the newest year', o[2].dateIso === '2026-01-03', o[2].dateIso);
+  check('oldest-first: earlier entries wrap back', o[0].dateIso === '2025-12-20' && o[1].dateIso === '2025-12-28',
+    `${o[0].dateIso} / ${o[1].dateIso}`);
+
+  // A near-future planning date is not mistaken for last year.
+  const plan = ['## 8/20', 'plan ahead', '', '## 8/15', 'sooner'].join('\n');
+  const p = parseDocIntoNotes(plan, { now: NOW }).sections; // NOW = 2026-08-01
+  check('a few weeks ahead stays put', p[0].dateIso === '2026-08-20', p[0].dateIso);
+
+  // An unsorted document gets no wrap inference — each date is judged against
+  // the anchor alone (rule 1). Reading every wobble as a year boundary would
+  // scatter such a doc across years.
+  const messy = ['## 6/11', 'a', '', '## 9/21', 'b', '', '## 2/13', 'c', '', '## 11/25', 'd'].join('\n');
+  const m = parseDocIntoNotes(messy, { now: NOW }).sections; // NOW = 2026-08-01
+  check('unsorted: no chained wrap, dates near the anchor stay put',
+    m.slice(0, 3).every((s) => s.dateIso.startsWith('2026')), m.map((s) => s.dateIso).join(' '));
+  check('unsorted: only a date past the slack window rolls back',
+    m[3].dateIso === '2025-11-25', m[3].dateIso);
+
+  // Batch: each document anchors on its OWN modified time.
+  const b = parseBatchIntoNotes([
+    { name: 'old.md', text: '## 7/30\nold entry', modifiedMs: Date.parse('2024-08-01T00:00:00') },
+    { name: 'new.md', text: '## 7/30\nfresh entry', modifiedMs: Date.parse('2026-07-31T00:00:00') },
+  ], { now: NOW }).sections;
+  check('batch: 2024 doc → 2024', b[0].dateIso === '2024-07-30', b[0].dateIso);
+  check('batch: 2026 doc → 2026', b[1].dateIso === '2026-07-30', b[1].dateIso);
+  // Both stay daily notes precisely BECAUSE the years now differ — before
+  // inference they collided on one date and one got demoted.
+  check('batch: distinct years → both keep their daily key', b[0].isDaily && b[1].isDaily);
 }
 
 console.log(`\n${failed ? `FAILED (${failed})` : 'ALL PASSED'}`);

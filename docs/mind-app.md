@@ -15,6 +15,8 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 |---|---|---|
 | Store | `store.js` | Raw IndexedDB, forked from `setlist/store.js`. Stores: notes, folders, tasks, tasklists, attachments (metadata), blobs (local-only binaries), annotations, snapshots. Soft-delete tombstones everywhere (`deletedAt`, 30-day TTL) so deletions propagate through sync. `setOnWrite` hook drives search invalidation + debounced Drive push. |
 | Editor | `editor/{schema,markdown,nodeviews,setup}.js` | ProseMirror with a markdown-constrained schema. **The note body markdown string is canonical**; the editor is a surface. Custom nodes: `task_item` (interactive checkbox, stable id), `image` (`mn-attach://<id>` resolves from IDB). Round-trips via `prosemirror-markdown` + a doc-walk that lifts `- [ ] text <!--t:id-->` into task items. |
+| Task quick-add | `views/task-add.js` | The add row shared by the home TODO card and the tasks view. Enter is **never blocking**: it saves, clears, re-renders and refocuses immediately, and `armReminder` (which asks for notification permission) rides along un-awaited — an unanswered permission prompt used to leave Enter looking dead while each retry silently minted another task. A hint under the box previews what will be created (parsed reminder + the text left after a "when" phrase is lifted out), so the transformation is visible before you commit it. |
+| Task screenshots | `views/task-attach.js` | Images attached **directly to a TODO item**: paste into the add box or onto a row, drop a file, or the 📷 picker. A task-owned attachment is an ordinary attachment record with `taskId` set instead of `noteId` (exactly one of the two), so it inherits blob storage, the OCR queue (screenshot text is searchable under the task), Drive binary sync, tombstones — and the annotation canvas via `#task/<id>/annotate/<attId>`. Deleting a task — from the tasks view, or by removing its checkbox line from the source note — takes its screenshots with it (`trashTasksAndAttachments`, batched). |
 | Tasks-in-notes | `tasks-sync.js` | Note body is canonical for note-sourced tasks; records (id = the `<!--t:id-->` marker) are a materialized index reconciled on save. Checking from a list view rewrites the body line first (`setTaskDoneEverywhere`); editing its text does the same (`setTaskTextEverywhere`) — a record-only edit would revert on the note's next re-parse. `ensureTaskIds` re-stamps a copy/pasted checkbox (duplicate within the doc, or an id belonging to another note) so two lines never share one record. Completed tasks strike through for 24 h, then archive (`rollOffCompletedTasks`). |
 | Folders | in `store.js` + `views/home.js` | Surrogate-keyed hierarchy (`{id, name, parentId}`); notes/tasklists carry `folderId`. Soft filter: out-of-scope content renders dimmed ("elsewhere"), never hidden. Per-folder TODO lists are lazy with deterministic ids (`todo-<folderId>`) so devices converge. |
 | Search | `search.js` | In-memory index over title/body/OCR text/transcripts/tags + task text; token AND-match + kind/tag filters behind `query(q, filters)`. Rebuilt lazily after writes. |
@@ -220,8 +222,18 @@ only when the mind app next runs on that device.
   `share_target`; `app.js` turns `?title/text/url` into a new note on launch
   (Android "share to mind" once installed). Shared *files* are not handled
   (would need a SW POST handler).
-- **Daily note**: "today" button on home — one note per calendar day, found
-  by `meta.daily = 'YYYY-MM-DD'`, created in the current folder.
+- **Daily note** (`daily.js` pure core, tested by `scripts/check-mind-daily.mjs`):
+  "today" button on home — one note per calendar day, found by
+  `meta.daily = 'YYYY-MM-DD'`, created in the current folder. One
+  implementation, shared with the command palette. **Imported claims are not
+  trusted blindly**: a journal header like `7/30` carries no year, so an
+  imported 2025 entry could own *this* year's daily key and "today" would open
+  last year's note. `dailyYearIsGuess` flags such a claim — explicitly
+  (`meta.dailyGuessedYear`, stamped by import) or, for notes imported before
+  that stamp existed, by its fingerprint (an imported note with no 4-digit year
+  in its title). A flagged claim asks once — *open it* (pins it with
+  `meta.dailyConfirmed`) or *start a fresh note* (drops only the daily key from
+  the imported note, content untouched) — and never asks about that note again.
 - **Templates**: tag any note `#template`; "＋ from template" (chips row)
   copies its body/tags into a fresh note.
 - **Ongoing notes** (`ongoing.js` pure core + `ongoing-actions.js` +
@@ -280,7 +292,13 @@ only when the mind app next runs on that device.
   milk tomorrow 9am" / "in 2 hours" / "next monday" into `{ text, remindAt }`.
   Pure, `now`-injectable, covered by `scripts/check-mind-capture.mjs`
   (`npm run check`). Wired into both the voice capture and the typed task
-  quick-adds (home + tasks views).
+  quick-adds (home + tasks views). **Quoted text is literal** (`maskQuoted`):
+  a line that *talks about* a day — `"today" note pulls up last year's "7/30"
+  note` — is not scheduling one, and the parser strips what it matches, so
+  reading a quoted word as a "when" both armed a wrong alarm and deleted the
+  word from the task. Quoted spans (straight/smart double quotes, backticks)
+  are blanked space-for-space before matching, so indices still line up with
+  the original; apostrophes are not delimiters ("last year's").
 - **Hands-free voice capture**: `manifest-mind.webmanifest` `shortcuts` add
   "voice todo" / "voice note" launchers → hash routes `#capture/voice/task|note`
   (`views/capture.js`) that auto-start the existing Web Speech dictation
@@ -349,6 +367,20 @@ Beyond the existing whole-dataset JSON/zip (`store.exportAll`/`importAll`,
     date. Timestamps descend strictly in document order (dated sections anchored
     to their day at local noon, dateless ones stepping down 1 min), so a
     newest-at-top doc lands newest-first in the list.
+  - **Year inference for year-less dates** (`inferSectionYears`): `7/30` names no
+    year, and assuming the current one filed a 2025 journal under 2026 (whose
+    date-only headers then claimed 2026 daily keys — the "today opens last
+    year's note" bug). Two rules, both anchored on the document rather than the
+    clock: a year-less date may not land more than ~60 days past the **anchor**
+    (the source file's own `modifiedTime` when known — Drive picks and uploads
+    pass it — else the import time), and in a doc whose dates are actually
+    ordered, each entry is resolved against the **previous** one so walking
+    newest→oldest reads a jump forward in the calendar as a year boundary. An
+    unsorted doc gets the anchor rule only (per-pair guessing there would
+    scatter it across years); an explicit year is trusted as written and
+    re-anchors the walk. Sections carry `dateYearGuessed`, which becomes
+    `meta.dailyGuessedYear` on a committed daily note (see the daily-note rule
+    above).
   - A header that is **essentially just a date** becomes a **daily note**
     (`meta.daily`), deduped within the batch and against existing dailies
     (a collision demotes it to a plain dated note rather than shadowing "today").

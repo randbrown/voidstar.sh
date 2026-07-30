@@ -494,10 +494,13 @@ const buildStamp = readBuildStamp();
     .mn-todo-row {
       display: flex;
       align-items: center;
+      /* wraps so an attached screenshot gets its own line under the text */
+      flex-wrap: wrap;
       gap: 0.55rem;
       padding: 0.3rem 0;
       min-height: 2.2rem;
     }
+    .mn-todo-row:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
     .mn-todo-row input[type="checkbox"], .mn-taskhit input[type="checkbox"], .mn-task-check {
       width: 1.15rem;
       height: 1.15rem;
@@ -510,7 +513,54 @@ const buildStamp = readBuildStamp();
     .mn-task-x { font-size: 1rem; }
     .mn-task-notelink { font-size: 0.85rem; }
     .mn-todo-add { margin-top: 0.4rem; }
-    .mn-todo-add .mn-input { width: 100%; }
+    .mn-todo-addrow { display: flex; align-items: center; gap: 0.35rem; }
+    .mn-todo-add .mn-input { width: 100%; flex: 1 1 auto; min-width: 0; }
+    /* What the quick-add will actually create: the parsed reminder, the text
+       after a "when" phrase is lifted out, and any pasted screenshots. */
+    .mn-todo-addhint {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--cyan);
+      padding: 0.25rem 0.1rem 0;
+      min-height: 0;
+      overflow-wrap: anywhere;
+    }
+    .mn-todo-addhint[hidden] { display: none; }
+
+    /* ── Screenshots on a TODO item ── */
+    .mn-task-attach { font-size: 0.9rem; padding: 0.3rem 0.4rem; }
+    .mn-task-thumbs {
+      flex: 1 0 100%;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin: 0.15rem 0 0.25rem 1.7rem;
+    }
+    .mn-task-thumbcell { position: relative; display: inline-block; line-height: 0; }
+    .mn-task-thumb {
+      height: 3.4rem;
+      width: auto;
+      max-width: 7rem;
+      object-fit: cover;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      display: block;
+      cursor: pointer;
+      background: var(--surface);
+    }
+    .mn-task-thumb-missing .mn-task-thumb { min-width: 3.4rem; opacity: 0.45; }
+    /* Smaller than the editor's chip ×: these sit on a dense list row. Both
+       classes, so this wins over .mn-attach-x wherever it lands in the sheet. */
+    .mn-attach-x.mn-task-thumb-x {
+      top: -0.3rem;
+      right: -0.3rem;
+      width: 1.05rem;
+      height: 1.05rem;
+      font-size: 0.65rem;
+      opacity: 0.75;
+    }
+    .mn-task-thumbcell:hover .mn-task-thumb-x, .mn-task-thumb-x:focus-visible { opacity: 1; }
+    .mn-task-dropping { outline: 1px dashed var(--accent); outline-offset: 2px; border-radius: 4px; }
     .mn-todo-foot { margin-top: 0.3rem; display: flex; justify-content: flex-end; }
     .mn-taskhit { display: flex; align-items: center; gap: 0.55rem; cursor: pointer; }
     .mn-archive { margin-top: 0.5rem; }
@@ -783,6 +833,12 @@ const buildStamp = readBuildStamp();
     .mn-backlinks { margin-bottom: 1rem; }
     .mn-linklist { display: flex; flex-direction: column; gap: 0.15rem; max-height: 40dvh; overflow-y: auto; }
     .mn-linkrow { justify-content: flex-start; text-align: left; width: 100%; overflow-wrap: anywhere; white-space: normal; }
+
+    /* ── choiceBox: a modal question with labeled answers ── */
+    .mn-choice-msg { font-size: 0.85rem; line-height: 1.5; color: var(--text-muted); margin-bottom: 0.6rem; }
+    .mn-choice-row { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; padding: 0.55rem 0.6rem; }
+    .mn-choice-hint { display: block; font-size: 0.72rem; color: var(--text-dim); white-space: normal; }
+    .mn-choice-primary { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 
     /* ── Voice bar ── */
     .mn-voicebar {

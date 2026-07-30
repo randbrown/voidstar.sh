@@ -17,9 +17,12 @@ async function buildIndex() {
   const listFolder = new Map(tasklists.map(l => [l.id, l.folderId || '']));
 
   const attsByNote = new Map();
+  const attsByTask = new Map();
   for (const a of attachments) {
-    if (!attsByNote.has(a.noteId)) attsByNote.set(a.noteId, []);
-    attsByNote.get(a.noteId).push(a);
+    // An attachment belongs to a note or (a TODO screenshot) to a task.
+    const [map, key] = a.taskId ? [attsByTask, a.taskId] : [attsByNote, a.noteId];
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(a);
   }
 
   const entries = notes.map((n) => {
@@ -48,19 +51,24 @@ async function buildIndex() {
   });
 
   for (const t of tasks) {
+    // A screenshot on a TODO item is searchable by its recognized text, the
+    // same as one in a note.
+    const atts = attsByTask.get(t.id) || [];
+    const ocrText = atts.map(a => a.ocrText).filter(Boolean).join('\n');
     entries.push({
       type: 'task',
       id: t.id,
       task: t,
       folderId: listFolder.get(t.listId) || '',
       title: t.text,
+      ocrText,
       tags: [],
-      kinds: [],
-      hasAttachment: false,
+      kinds: [...new Set(atts.map(a => a.kind))],
+      hasAttachment: atts.length > 0,
       pinned: false,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
-      haystack: t.text.toLowerCase(),
+      haystack: [t.text, ocrText].join('\n').toLowerCase(),
     });
   }
   return entries;

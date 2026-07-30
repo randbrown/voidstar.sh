@@ -8,7 +8,7 @@
 // commitDocImport is the only function that writes to the store.
 
 import * as store from './store.js';
-import { extractDate } from './dates.js';
+import { extractDate, toIso } from './dates.js';
 
 // Document import treats a bare "4/4" as a musical time signature, not a date,
 // so a chord chart or setlist never mints spurious dated notes.
@@ -105,6 +105,78 @@ function stripDateSuffix(title, iso) {
   return cleaned || title;
 }
 
+// ── Year inference for year-less dates ────────────────────────────────────
+// A journal header is usually just "7/30". extractDate has to assume a year and
+// assumes the current one — so importing a 2025 Google Doc in 2026 filed every
+// entry under 2026, and a date-only header then claimed THIS year's daily key:
+// the "today" button opened last year's note. Nothing in the text says which
+// year it is, but the document itself does, twice over:
+//
+//   1. Its dates can't run far past the document — a year-less date landing
+//      more than FUTURE_SLACK_DAYS after the anchor (the source file's own
+//      last-edit time when we know it, else the import) belongs to the year
+//      before.
+//   2. A journal is sorted, so walking it newest→oldest the dates descend; a
+//      jump *forward* in the calendar is the new-year boundary. Each entry is
+//      therefore resolved against the previous one, not against "now".
+//
+// Rule 2 only applies when the document really is in date order (an unsorted
+// doc would read every wobble as a year boundary); rule 1 always does. Both
+// carry the same tolerance so a couple of months of forward planning, or a
+// slightly out-of-order pair of entries, is never mistaken for a year.
+// Explicitly year-bearing dates are trusted as written and re-anchor the walk.
+const FUTURE_SLACK_DAYS = 60;
+
+function isoDayOf(ms) {
+  const d = new Date(ms);
+  return toIso(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+function isoPlusDays(iso, days) {
+  const [y, mo, d] = iso.split('-').map(Number);
+  return isoDayOf(new Date(y, mo - 1, d + days).getTime());
+}
+
+// Mostly-descending (walking newest→oldest) means the doc is date-ordered and
+// rule 2 can be trusted. A doc whose dates jump around fails this and falls
+// back to rule 1 alone, where each date is clamped independently.
+function looksDateOrdered(walk) {
+  // Month-day only: the years here are still the parser's assumption, so
+  // comparing them would call a mixed explicit-2024 / assumed-2026 pair
+  // "ascending" when the entries themselves are in order. Each real year
+  // boundary does read as one step up — the 3:1 ratio leaves room for those.
+  const md = (s) => s.dateIso.slice(5);
+  let down = 0, up = 0;
+  for (let i = 1; i < walk.length; i++) {
+    if (md(walk[i]) <= md(walk[i - 1])) down++; else up++;
+  }
+  return down >= up * 3;
+}
+
+export function inferSectionYears(sections, { order = 'newest-first', anchorMs = Date.now() } = {}) {
+  // Walk order = newest → oldest. For a newest-first doc that's document order.
+  const walk = (order === 'oldest-first' ? [...sections].reverse() : sections)
+    .filter((s) => s.dateIso);
+  if (!walk.length) return sections;
+
+  const ordered = looksDateOrdered(walk);
+  const anchorIso = isoDayOf(anchorMs);
+  let prevIso = anchorIso;
+
+  for (const s of walk) {
+    if (s.dateHasYear) { prevIso = s.dateIso; continue; }
+    const ref = ordered ? prevIso : anchorIso;
+    const mmdd = s.dateIso.slice(4); // "-MM-DD"
+    // Start from the reference's year (not the parser's "current year") so an
+    // old document resolves near its own dates however far back it goes.
+    let y = +ref.slice(0, 4);
+    if (`${y}${mmdd}` > isoPlusDays(ref, FUTURE_SLACK_DAYS)) y -= 1;
+    s.dateIso = `${y}${mmdd}`;
+    prevIso = s.dateIso;
+  }
+  return sections;
+}
+
 /**
  * Split a document into a preview list of would-be notes. Pure & deterministic
  * given opts.now.
@@ -119,6 +191,8 @@ function stripDateSuffix(title, iso) {
  *   sourceName: string — the source file's name; when the whole document becomes
  *     one note (single mode / no boundaries found) it titles that note instead
  *     of the first body line, so a Drive import matches its filename
+ *   docTime: number — the source file's own last-edit time, when known; anchors
+ *     the year of year-less dates (a 2025 doc's "7/30" is 2025, not this year)
  *   now: number (default Date.now())
  * @returns {{sections:Array, mode:string, headingLevel:number|null, stats:object, warnings:string[]}}
  */
@@ -231,7 +305,6 @@ export function parseDocIntoNotes(text, opts = {}) {
   }
 
   // ── derive per-section fields ──
-  const seenDaily = new Set();
   const sections = raw.map((r) => {
     let bodyLines = r.bodyLines.slice();
     // Trim leading/trailing blank body lines.
@@ -252,6 +325,11 @@ export function parseDocIntoNotes(text, opts = {}) {
     const header = r.headerRaw;
     const d = header ? findDate(header) : null;
     let dateIso = metaOverride?.date || (d ? d.iso : '');
+    // Whether the SOURCE spelled out a year. A bare "7/30" did not, so its year
+    // is our guess — inferSectionYears (below) resolves it against the
+    // document's own timeline, and the guess is flagged onto the note so the
+    // daily-note lookup can tell a real "today" from an import's assumption.
+    const dateHasYear = metaOverride?.date ? true : !!d?.hasYear;
 
     // Title: full cleaned header, minus a trailing " — <iso>" written by export.
     // A whole-document note prefers the source filename (the user named the
@@ -269,16 +347,13 @@ export function parseDocIntoNotes(text, opts = {}) {
     } else if (markDailies && dateIso && header && d && remainderAfterDate(header, d) === '') {
       isDaily = true;
     }
-    // Batch-internal dedupe: only the first section per date claims the daily key.
-    if (isDaily) {
-      if (seenDaily.has(dateIso)) isDaily = false;
-      else seenDaily.add(dateIso);
-    }
 
     const tags = metaOverride?.tags || tagLine || [];
     return {
       title,
       dateIso,
+      dateHasYear,
+      dateYearGuessed: !!dateIso && !dateHasYear,
       isDaily,
       body: bodyLines.join('\n'),
       tags,
@@ -290,6 +365,16 @@ export function parseDocIntoNotes(text, opts = {}) {
       updatedAt: 0,
     };
   });
+
+  // ── years for year-less dates, THEN the intra-doc daily dedupe ──
+  // (dedupe compares resolved dates, so it has to run after inference).
+  inferSectionYears(sections, { order, anchorMs: opts.docTime || now });
+  const seenDaily = new Set();
+  for (const s of sections) {
+    if (!s.isDaily) continue;
+    if (seenDaily.has(s.dateIso)) s.isDaily = false;
+    else seenDaily.add(s.dateIso);
+  }
 
   // ── timestamps: strictly descending so the newest section sorts to the top ──
   // Process newest-first: for a newest-first doc that's document order, for an
@@ -339,11 +424,13 @@ export function parseBatchIntoNotes(docs, opts = {}) {
     // note spans the batch: modified = latest doc, created = earliest; a
     // one-doc batch keeps that doc's filename as the title.
     const merged = list.map((d) => String(d.text || '').trim()).join('\n\n');
+    const mtimeAll = list.reduce((m, d) => Math.max(m, Number(d.modifiedMs) || 0), 0);
     const p = parseDocIntoNotes(merged, {
       ...opts, mode: 'single', now,
       sourceName: list.length === 1 ? list[0].name : '',
+      docTime: mtimeAll,
     });
-    const mtime = list.reduce((m, d) => Math.max(m, Number(d.modifiedMs) || 0), 0);
+    const mtime = mtimeAll;
     const ctime = list.reduce((m, d) => {
       const c = Number(d.createdMs) || 0;
       return c && (!m || c < m) ? c : m;
@@ -365,7 +452,9 @@ export function parseBatchIntoNotes(docs, opts = {}) {
   const warnings = [];
   let cursor = now;
   for (const d of list) {
-    const p = parseDocIntoNotes(d.text, { ...opts, now: cursor, sourceName: d.name || '' });
+    const p = parseDocIntoNotes(d.text, {
+      ...opts, now: cursor, sourceName: d.name || '', docTime: Number(d.modifiedMs) || 0,
+    });
     for (const w of p.warnings) warnings.push(d.name ? `${d.name}: ${w}` : w);
     // Stamp the Drive file's real timestamps onto every section from this doc:
     // srcModified drives re-import "mind is newer" matching (and the note's
@@ -534,7 +623,16 @@ export async function commitDocImport(sections, opts = {}) {
       if (tt && !tags.includes(tt)) tags.push(tt);
     }
     if (extraTag && !tags.includes(extraTag)) tags.push(extraTag);
-    const meta = { ...(s.isDaily && s.dateIso ? { daily: s.dateIso } : {}), importedAt };
+    // `dailyGuessedYear` records that the source header carried no year, so the
+    // daily key's year is inference (see inferSectionYears). daily.js uses it to
+    // ask before letting such a note stand in for "today" — a 2025 entry headed
+    // "7/30" must never silently open as this year's daily note.
+    const meta = {
+      ...(s.isDaily && s.dateIso
+        ? { daily: s.dateIso, ...(s.dateYearGuessed ? { dailyGuessedYear: true } : {}) }
+        : {}),
+      importedAt,
+    };
 
     if (s.upsertId) {
       const existing = await store.getNote(s.upsertId);

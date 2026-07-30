@@ -10,11 +10,15 @@ import { query, allTags } from '../search.js';
 import { markdownToText } from '../editor/markdown.js';
 import { tokenize, markText, snippetHighlighted } from '../search-highlight.js';
 import { setTaskDoneEverywhere } from '../tasks-sync.js';
-import { parseCapture } from '../capture.js';
 import { isOngoing } from '../ongoing.js';
 import { listOngoingNotes } from '../ongoing-actions.js';
 import { openQuickAdd } from './quick-add.js';
-import { armReminder, reminderSheet, reminderBadge } from '../reminders.js';
+import { taskAddRow } from './task-add.js';
+import {
+  taskAttachButton, taskThumbs, groupTaskAttachments, wirePasteOnRow, wireDropOnRow,
+} from './task-attach.js';
+import { dailyKey, dailyTitle, pickDailyNote, confirmDaily, demoteDaily } from '../daily.js';
+import { reminderSheet, reminderBadge } from '../reminders.js';
 import {
   hasClientId, needsReconnect, onSyncState, initGdriveSync, setSyncClient,
   ensureDriveAccess, pullMergePushCycle,
@@ -22,7 +26,7 @@ import {
 import { pushPendingAttachments } from '../attachments-drive.js';
 import { startSketchNote } from '../sketch.js';
 import { navigate, refresh } from '../app.js';
-import { el, esc, btn, emptyState, timeAgo, textPrompt, confirmBox } from '../ui.js';
+import { el, esc, btn, emptyState, timeAgo, textPrompt, confirmBox, choiceBox } from '../ui.js';
 
 const SORT_KEY = 'voidstar.mind.sort';
 const TODO_OPEN_KEY = 'voidstar.mind.todoExpanded';
@@ -327,27 +331,64 @@ export async function renderHome(root) {
 
 // ── Daily note: one per calendar day, found by meta.daily, reused if it
 // exists (any folder), created in the current folder otherwise. ──
+//
+// The one wrinkle is imported notes: a journal header of "7/30" carries no
+// year, so an imported 2025 entry could claim today's daily key and the "today"
+// button would open last year's note. daily.js flags those (see
+// `dailyYearIsGuess`); rather than guess again, we ask once and remember the
+// answer — either the note is confirmed as this day's daily, or it just stops
+// claiming the day. Exported so the command palette opens the SAME note the
+// header button does.
 
-function todayKey() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+async function createDailyNote(key, folderId) {
+  const note = store.createNote({
+    folderId,
+    title: dailyTitle(key),
+    autoTitle: false,
+    meta: { daily: key },
+  });
+  await store.putNoteRaw(note);
+  return note;
 }
 
-async function openDailyNote(folderId) {
-  const key = todayKey();
+export async function openDailyNote(folderId = currentFolderId()) {
+  const key = dailyKey();
   const all = await store.getAllNotes();
-  let note = all.find(n => n.meta?.daily === key);
-  if (!note) {
-    note = store.createNote({
-      folderId,
-      title: `${key} daily`,
-      autoTitle: false,
-      meta: { daily: key },
+  const { note, guessed } = pickDailyNote(all, key);
+
+  if (note) { navigate(`#note/${note.id}`); return; }
+
+  if (guessed) {
+    choiceBox({
+      title: `today · ${key}`,
+      message: `An imported note claims today’s date, but its heading had no year —`
+        + ` mind had to guess which year “${esc(guessed.title)}” belongs to.`,
+      options: [
+        {
+          label: 'start a fresh note for today',
+          hint: 'the imported note keeps its content; it just stops claiming today',
+          primary: true,
+          onPick: async () => {
+            await store.putNote(demoteDaily(guessed));
+            const fresh = await createDailyNote(key, folderId);
+            navigate(`#note/${fresh.id}`);
+          },
+        },
+        {
+          label: `open “${guessed.title}”`,
+          hint: 'it really is today’s note — stop asking',
+          onPick: async () => {
+            await store.putNote(confirmDaily(guessed));
+            navigate(`#note/${guessed.id}`);
+          },
+        },
+      ],
     });
-    await store.putNoteRaw(note);
+    return;
   }
-  navigate(`#note/${note.id}`);
+
+  const fresh = await createDailyNote(key, folderId);
+  navigate(`#note/${fresh.id}`);
 }
 
 // ── New from template: any note tagged #template is a template; a copy
@@ -584,12 +625,13 @@ function taskHitRow(task, dimmed) {
 // folder's own lazily-created list, and other folders' open tasks dimmed
 // in a collapsed drawer. At root, scope is everything.
 
-async function renderTodoCard(wrap, folders, folderId, scope) {
+async function renderTodoCard(wrap, folders, folderId, scope, { focusAdd = false } = {}) {
   wrap.innerHTML = '';
-  const [lists, allTasks] = await Promise.all([
-    store.getAllTasklists(), store.getAllTasks(),
+  const [lists, allTasks, allAtts] = await Promise.all([
+    store.getAllTasklists(), store.getAllTasks(), store.getAllAttachments(),
   ]);
   const listById = new Map(lists.map(l => [l.id, l]));
+  const attsByTask = groupTaskAttachments(allAtts);
   const inScope = (l) => !scope || scope.has(l?.folderId || '');
 
   const active = allTasks.filter(t => !t.archivedAt);
@@ -603,6 +645,7 @@ async function renderTodoCard(wrap, folders, folderId, scope) {
 
   const expanded = localStorage.getItem(TODO_OPEN_KEY) === '1';
   const card = el('div', 'mn-card mn-todocard');
+  let add = null; // the quick-add row, focused after the card is in the DOM
 
   const folderName = folderId ? (folders.find(f => f.id === folderId)?.name || '') : '';
   const head = el('div', 'mn-todo-head');
@@ -617,34 +660,23 @@ async function renderTodoCard(wrap, folders, folderId, scope) {
   card.appendChild(head);
 
   if (expanded) {
-    const redraw = () => renderTodoCard(wrap, folders, folderId, scope);
+    // redraw({ focusAdd: true }) re-renders and puts the cursor back in the add
+    // box, so a burst of quick-adds doesn't need a click between each one.
+    const redraw = (opts) => renderTodoCard(wrap, folders, folderId, scope, opts);
     const list = el('div', 'mn-todo-list');
     for (const t of here) {
       const ownFolder = listById.get(t.listId)?.folderId || '';
       const label = ownFolder && ownFolder !== folderId ? store.folderPath(folders, ownFolder) : '';
-      list.appendChild(todoRow(t, redraw, label));
+      list.appendChild(await todoRow(t, redraw, label, false, attsByTask.get(t.id) || []));
     }
     card.appendChild(list);
 
-    const addRow = el('div', 'mn-todo-add');
-    const input = el('input', 'mn-input');
-    input.type = 'text';
-    input.placeholder = folderName ? `add a task in ${folderName}…` : 'add a task…';
-    input.addEventListener('keydown', async (e) => {
-      if (e.key !== 'Enter') return;
-      const raw = input.value.trim();
-      if (!raw) return;
-      const { text, remindAt } = parseCapture(raw);
-      const tl = await store.ensureFolderTasklist(folderId);
-      const task = store.createTask(tl.id, text || raw, {
-        remindAt, remindStatus: remindAt ? 'scheduled' : '',
-      });
-      await store.putTaskRaw(task);
-      if (remindAt) await armReminder(task); // Enter is the permission gesture
-      redraw();
+    add = taskAddRow({
+      placeholder: folderName ? `add a task in ${folderName}…` : 'add a task…',
+      ensureList: () => store.ensureFolderTasklist(folderId),
+      onAdded: () => redraw({ focusAdd: true }),
     });
-    addRow.appendChild(input);
-    card.appendChild(addRow);
+    card.appendChild(add.el);
 
     if (elsewhereOpen.length) {
       const drawer = el('details', 'mn-archive mn-elsewhere-tasks');
@@ -652,7 +684,9 @@ async function renderTodoCard(wrap, folders, folderId, scope) {
       elsewhereOpen.sort(order);
       for (const t of elsewhereOpen) {
         const ownFolder = listById.get(t.listId)?.folderId || '';
-        drawer.appendChild(todoRow(t, redraw, ownFolder ? store.folderPath(folders, ownFolder) : '', true));
+        drawer.appendChild(await todoRow(
+          t, redraw, ownFolder ? store.folderPath(folders, ownFolder) : '', true, attsByTask.get(t.id) || [],
+        ));
       }
       card.appendChild(drawer);
     }
@@ -663,9 +697,11 @@ async function renderTodoCard(wrap, folders, folderId, scope) {
   }
 
   wrap.appendChild(card);
+  // After the append — focus() on a detached element does nothing.
+  if (focusAdd) add?.focus();
 }
 
-function todoRow(task, redraw, folderLabel = '', dimmed = false) {
+async function todoRow(task, redraw, folderLabel = '', dimmed = false, atts = []) {
   const row = el('div', `mn-todo-row ${dimmed ? 'mn-dimcard' : ''}`);
   const cb = el('input');
   cb.type = 'checkbox';
@@ -679,6 +715,9 @@ function todoRow(task, redraw, folderLabel = '', dimmed = false) {
   if (folderLabel) row.appendChild(el('span', 'mn-minifolder', `&#128193; ${esc(folderLabel)}`));
   const badge = reminderBadge(task);
   if (badge) row.appendChild(badge);
+  row.appendChild(taskAttachButton(task, redraw));
+  wirePasteOnRow(row, task, redraw);
+  wireDropOnRow(row, task, redraw);
   const bell = btn(task.remindAt || task.remindPlace ? '&#128276;' : '&#128368;',
     'mn-btn-ghost mn-task-bell', (e) => { e.stopPropagation(); reminderSheet(task, redraw); });
   bell.title = 'set a reminder';
@@ -698,5 +737,8 @@ function todoRow(task, redraw, folderLabel = '', dimmed = false) {
     link.title = 'open in setlist';
     row.appendChild(link);
   }
+  // Screenshots live on their own line under the task text (the row wraps).
+  const thumbs = await taskThumbs(task, atts, redraw);
+  if (thumbs) row.appendChild(thumbs);
   return row;
 }

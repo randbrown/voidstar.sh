@@ -65,7 +65,8 @@ async function probeAudioDuration(blob) {
 }
 
 // Create an attachment (record + local blob) for a note. Returns the record.
-export async function addAttachmentFromBlob(noteId, blob, name = '') {
+// `extra` rides onto the record — task-owned attachments pass { taskId }.
+export async function addAttachmentFromBlob(noteId, blob, name = '', extra = {}) {
   const mimeType = blob.type || 'application/octet-stream';
   const kind = kindOf(mimeType);
   let dims = { width: 0, height: 0 };
@@ -84,11 +85,16 @@ export async function addAttachmentFromBlob(noteId, blob, name = '') {
   const fallbackName = `${store.fileStamp()}-${kind}${extFor(stored.type || mimeType)}`;
   const att = store.createAttachment(noteId, {
     kind, name: name || blob.name || fallbackName, mimeType: stored.type || mimeType, size: stored.size,
-  }, { width: dims.width, height: dims.height, durationSec: Math.round(durationSec) });
+  }, { width: dims.width, height: dims.height, durationSec: Math.round(durationSec), ...extra });
 
   await store.putBlob(att.id, stored);
   await store.putAttachmentRaw(att);
   return att;
+}
+
+// Same, owned by a TASK instead of a note (a screenshot on a TODO item).
+export function addTaskAttachmentFromBlob(taskId, blob, name = '') {
+  return addAttachmentFromBlob('', blob, name, { taskId });
 }
 
 // Object-URL cache. URLs live for the session; revokeObjectUrls() frees them

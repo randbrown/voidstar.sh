@@ -11,7 +11,12 @@ import { el, esc, btn } from '../ui.js';
 // palette must look identical on every device/theme.
 const PALETTE = ['#ff5e7e', '#4ea1ff', '#7cf2a5', '#ffc65e', '#ffffff', '#111111'];
 
-export async function renderAnnotate(root, noteId, attId, startPage = 0) {
+// `owner` lets a TASK's screenshot use this same canvas: { backHash, taskId }
+// replaces the note the view normally belongs to (back/done return there, and a
+// flattened copy lands on the same owner). Defaults keep the note behavior.
+export async function renderAnnotate(root, noteId, attId, startPage = 0, owner = {}) {
+  const backHash = owner.backHash || `#note/${noteId}`;
+  const flattenTo = owner.taskId ? { taskId: owner.taskId } : {};
   const att = await store.getAttachment(attId);
   if (!att || att.deletedAt) {
     root.appendChild(el('div', 'mn-error', 'attachment not found'));
@@ -45,7 +50,7 @@ export async function renderAnnotate(root, noteId, attId, startPage = 0) {
   }
 
   const bar = el('div', 'mn-topbar');
-  bar.appendChild(btn('&larr;', 'mn-btn-icon', () => navigate(`#note/${noteId}`)));
+  bar.appendChild(btn('&larr;', 'mn-btn-icon', () => navigate(backHash)));
   bar.appendChild(el('span', 'mn-topbar-title',
     esc(att.name || 'annotate') + (isPdf ? ` <span class="mn-dim">p${page + 1}/${pageCount}</span>` : '')));
   const actions = el('div', 'mn-actions');
@@ -57,7 +62,7 @@ export async function renderAnnotate(root, noteId, attId, startPage = 0) {
       ctl.destroy();
       root._mnCleanup = null;
       root.innerHTML = '';
-      await renderAnnotate(root, noteId, attId, p);
+      await renderAnnotate(root, noteId, attId, p, owner);
     };
     const prev = btn('&larr; pg', '', () => goPage(page - 1));
     const next = btn('pg &rarr;', '', () => goPage(page + 1));
@@ -79,7 +84,7 @@ export async function renderAnnotate(root, noteId, attId, startPage = 0) {
       const bmp = await createImageBitmap(base);
       const out = await renderAnnotatedImageBlob(bmp, ctl.getStrokes());
       bmp.close();
-      await addAttachmentFromBlob(noteId, out, `${store.fileStamp()}-annotated.png`);
+      await addAttachmentFromBlob(noteId, out, `${store.fileStamp()}-annotated.png`, flattenTo);
       flattenBtn.innerHTML = 'copied &#10003;';
       setTimeout(() => { flattenBtn.innerHTML = 'flatten &rarr; copy'; flattenBtn.disabled = false; }, 1500);
     } catch (e) {
@@ -88,7 +93,7 @@ export async function renderAnnotate(root, noteId, attId, startPage = 0) {
     }
   });
   actions.appendChild(flattenBtn);
-  actions.appendChild(btn('done', 'mn-btn-primary', () => navigate(`#note/${noteId}`)));
+  actions.appendChild(btn('done', 'mn-btn-primary', () => navigate(backHash)));
   bar.appendChild(actions);
   root.appendChild(bar);
 

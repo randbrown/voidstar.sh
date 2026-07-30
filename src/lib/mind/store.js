@@ -347,6 +347,22 @@ export const getTasksForNote = async (noteId) => live(await getByIndex(TASKS, 'b
 export const trashTask = (task) => put(TASKS, { ...task, deletedAt: Date.now(), updatedAt: Date.now() });
 export const purgeTask = (id) => del(TASKS, id);
 
+// Trash tasks along with anything attached to them (a task-owned screenshot has
+// no other home — nothing else can render or reach it). Tombstones, so the
+// 30-day restore window still applies. Batched: one attachment scan for the
+// whole set, since a note edit can drop many checkboxes at once.
+export async function trashTasksAndAttachments(tasks) {
+  const list = (Array.isArray(tasks) ? tasks : [tasks]).filter(Boolean);
+  if (!list.length) return;
+  const ids = new Set(list.map(t => t.id));
+  for (const a of await getAllAttachments()) {
+    if (a.taskId && ids.has(a.taskId)) await trashAttachment(a);
+  }
+  for (const t of list) await trashTask(t);
+}
+
+export const trashTaskAndAttachments = (task) => trashTasksAndAttachments([task]);
+
 export function setTaskDone(task, done) {
   return putTask({ ...task, done, completedAt: done ? Date.now() : 0, archivedAt: 0 });
 }
@@ -422,6 +438,11 @@ export function createAttachment(noteId, { kind, name, mimeType, size }, partial
   return {
     id: crypto.randomUUID(),
     noteId,
+    // An attachment belongs to a note OR to a task (a screenshot pasted onto a
+    // TODO item) — exactly one of these is set. Everything downstream (blob
+    // storage, OCR queue, Drive upload, tombstones) is owner-agnostic; only the
+    // rendering surfaces differ.
+    taskId: '',
     kind, // 'image' | 'audio' | 'pdf' | 'file'
     name: name || '',
     mimeType: mimeType || '',
@@ -454,6 +475,11 @@ export const getAttachment = (id) => getOne(ATTACHMENTS, id);
 export const getAllAttachmentsRaw = () => getAll(ATTACHMENTS);
 export const getAllAttachments = async () => live(await getAll(ATTACHMENTS));
 export const getAttachmentsForNote = async (noteId) => live(await getByIndex(ATTACHMENTS, 'by-note', noteId));
+// Task-owned attachments have no IDB index (they'd need a schema version bump
+// for a handful of records) — a filtered scan is plenty at this scale. Views
+// rendering many rows should call getAllAttachments() once and group instead.
+export const getAttachmentsForTask = async (taskId) =>
+  taskId ? (await getAllAttachments()).filter(a => a.taskId === taskId) : [];
 export const getPendingOcrAttachments = async () => live(await getByIndex(ATTACHMENTS, 'by-ocrStatus', 'pending'));
 export const trashAttachment = (att) => put(ATTACHMENTS, { ...att, deletedAt: Date.now(), updatedAt: Date.now() });
 export const purgeAttachment = (id) => del(ATTACHMENTS, id);

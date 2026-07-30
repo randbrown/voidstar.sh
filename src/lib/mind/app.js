@@ -143,7 +143,13 @@ async function route() {
         break;
       case 'tasks': await renderTasks(_root, id); break;
       // Notification / reminder deep-link: `#task/<id>` → its list, focused.
+      // `#task/<id>/annotate/<attId>` marks up a screenshot attached to that
+      // task — the note canvas, pointed back at the task instead of a note.
       case 'task': {
+        if (extra === 'annotate' && extra2) {
+          await renderAnnotate(_root, '', extra2, 0, { backHash: `#task/${id}`, taskId: id });
+          break;
+        }
         const t = id ? await store.getTask(id) : null;
         if (t && !t.deletedAt) await renderTasks(_root, t.listId);
         else await renderTasks(_root);

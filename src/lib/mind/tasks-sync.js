@@ -99,10 +99,10 @@ export async function syncNoteTasks(note) {
     }
   }
 
-  // Checkbox removed from the note → its record goes too.
-  for (const rec of existing) {
-    if (!byId.has(rec.id)) await store.trashTask(rec);
-  }
+  // Checkbox removed from the note → its record goes too, along with anything
+  // attached to it (a screenshot on the task would otherwise outlive every
+  // surface that can show it). Batched — a single edit can drop many lines.
+  await store.trashTasksAndAttachments(existing.filter(rec => !byId.has(rec.id)));
 }
 
 // Toggle a task wherever it lives. For note-sourced tasks the body is

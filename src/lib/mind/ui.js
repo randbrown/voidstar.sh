@@ -86,3 +86,39 @@ export function textPrompt({ title, value = '', placeholder = '', onOk }) {
 export function confirmBox(msg, onYes) {
   if (window.confirm(msg)) onYes();
 }
+
+// A modal with N labeled answers — the questions confirm() can't ask, where
+// "cancel" isn't one of the answers ("open the note you have" vs "start a new
+// one"). options: [{ label, hint, primary, onPick }]; Esc / backdrop cancels.
+export function choiceBox({ title, message = '', options = [], onCancel }) {
+  const overlay = el('div', 'mn-modal-overlay');
+  const box = el('div', 'mn-modal');
+  box.appendChild(el('div', 'mn-modal-title', esc(title)));
+  if (message) box.appendChild(el('div', 'mn-choice-msg', message));
+
+  const list = el('div', 'mn-linklist');
+  for (const o of options) {
+    const b = btn(
+      `${esc(o.label)}${o.hint ? `<span class="mn-choice-hint">${esc(o.hint)}</span>` : ''}`,
+      `mn-btn-ghost mn-linkrow mn-choice-row ${o.primary ? 'mn-choice-primary' : ''}`,
+      () => { close(); o.onPick?.(); },
+    );
+    list.appendChild(b);
+  }
+  box.appendChild(list);
+
+  const row = el('div', 'mn-modal-row');
+  row.appendChild(btn('cancel', '', () => { close(); onCancel?.(); }));
+  box.appendChild(row);
+
+  const onKey = (e) => { if (e.key === 'Escape') { close(); onCancel?.(); } };
+  function close() {
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+  }
+  document.addEventListener('keydown', onKey);
+  overlay.appendChild(box);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) { close(); onCancel?.(); } });
+  document.body.appendChild(overlay);
+  return overlay;
+}

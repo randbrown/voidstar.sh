@@ -252,7 +252,9 @@ export async function openImportDocModal() {
       return parseBatchIntoNotes(batchDocs, { ...currentOpts(), combine: combineCb.checked });
     }
     if (!paste.value.trim()) return null;
-    const p = parseDocIntoNotes(paste.value, { ...currentOpts(), sourceName: srcName });
+    // docTime: the source file's own last-edit time anchors the year of
+    // year-less dates ("7/30" in a 2025 doc is 2025, not this year).
+    const p = parseDocIntoNotes(paste.value, { ...currentOpts(), sourceName: srcName, docTime: srcModified });
     for (const s of p.sections) {
       if (srcModified) s.srcModified = srcModified;
       if (srcCreated) s.srcCreated = srcCreated;

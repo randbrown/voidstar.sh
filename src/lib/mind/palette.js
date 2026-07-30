@@ -8,27 +8,14 @@ import { navigate } from './app.js';
 import { startSketchNote } from './sketch.js';
 import { listOngoingNotes } from './ongoing-actions.js';
 import { openQuickAdd } from './views/quick-add.js';
+// One daily-note implementation for the whole app (this used to be a second,
+// drifting copy — and it opened whatever claimed today's key, imported
+// wrong-year notes included).
+import { openDailyNote } from './views/home.js';
 import * as store from './store.js';
 import { el, esc } from './ui.js';
 
 let _open = false;
-
-function todayKey() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-async function openDailyNote() {
-  const key = todayKey();
-  const all = await store.getAllNotes();
-  let note = all.find(n => n.meta?.daily === key);
-  if (!note) {
-    note = store.createNote({ title: `${key} daily`, autoTitle: false, meta: { daily: key } });
-    await store.putNoteRaw(note);
-  }
-  navigate(`#note/${note.id}`);
-}
 
 async function newNote() {
   const note = store.createNote({});
