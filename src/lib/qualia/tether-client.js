@@ -354,7 +354,7 @@ export async function initTetherClient(root) {
           padBtn('❄ frz', 'freeze', { lit: 'freeze', sub: 'grab + layer' }),
           padBtn('pop', 'freezePop', { sub: 'release top' })),
         grid(2,
-          padBtn('re-grab', 'freezeRegrab', { sub: 'replace top' }),
+          padBtn('re-frz', 'freezeRegrab', { sub: 'replace top' }),
           padBtn('clear', 'freezeClear', { cls: 'warn', sub: 'drop stack' })),
         // Grab sits with the freeze stack, not on the loop tab: both are the
         // "capture what just happened" reflex, and this is the tab already

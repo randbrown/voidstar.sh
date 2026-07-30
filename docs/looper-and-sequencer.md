@@ -76,7 +76,7 @@ The stretch path applies the same crossfade to its region copies.
 `padActions.freeze`): grabs the newest moment from the recorder ring (post-strip, so a pad carries
 the amp/cab/verb that were on), loops it with a 25 % equal-power seam, and **layers** it onto a
 stack — the Frippertronics move. Each `frz` tap **pushes another pad** over the last; `'` (button
-*pop*) removes the top with a release fade; `\` (button *re-grab*) replaces the top with a fresh
+*pop*) removes the top with a release fade; `\` (button *re-frz*) replaces the top with a fresh
 grab; *clear* releases the whole stack. The `frz` button shows the depth (`frz²`, `frz³`…).
 
 **Constant-loudness bus.** All pads sum through one gain node scaled `level / √N` — incoherent
@@ -87,7 +87,7 @@ on the freeze bus). Graph: `pad.source → pad.gain (fade) → freezeBus (level/
 rigMaster`.
 
 The **▾ settings row** holds *level* (live, whole stack), *grain* (loop length grabbed, 0.5–4 s;
-applies on the next grab), *release* (0.3–8 s, default 2 s), plus *pop* / *re-grab* / *clear*.
+applies on the next grab), *release* (0.3–8 s, default 2 s), plus *pop* / *re-frz* / *clear*.
 Settings persist (`voidstar.qualia.looper.freeze`). Needs the capture ring, so a grab opens
 capture if the signal fader is up.
 

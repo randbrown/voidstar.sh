@@ -53,7 +53,7 @@ That's a compile-and-flash (QMK toolchain), not a Launcher Import.
 |---|---|---|---|---|
 | **row 1** | → AUDIO layer | → VIDEO layer | strudel play/stop `⇧S` | zen `Z` |
 | **row 2** | tuner `0` | earth drive `1` | metal zone `2` | vox mute/live `⇧W` |
-| **row 3** | freeze grab `;` | pop `'` | re-grab `\` | clear `⌫` |
+| **row 3** | freeze grab `;` | pop `'` | re-frz `\` | clear `⌫` |
 | **row 4** | quale ◀ `⇧V` | quale ▶ `V` | phase ◀ `⇧I` | phase ▶ `I` |
 
 ### Layer 1 — AUDIO
@@ -61,7 +61,7 @@ That's a compile-and-flash (QMK toolchain), not a Launcher Import.
 |---|---|---|---|---|
 | **row 1** | → HOME (L0) | → VIDEO layer | strudel play/stop `⇧S` | zen `Z` |
 | **row 2** | tuner `0` | earth drive `1` | metal zone `2` | vox mute/live `⇧W` |
-| **row 3** | freeze grab `;` | pop `'` | re-grab `\` | clear `⌫` |
+| **row 3** | freeze grab `;` | pop `'` | re-frz `\` | clear `⌫` |
 | **row 4** | loop play/stop `4` | rec start `5` | rec stop `6` | grab (retro) `7` |
 
 ### Layer 2 — VIDEO
@@ -99,7 +99,7 @@ That's a compile-and-flash (QMK toolchain), not a Launcher Import.
 ## Notes
 
 - **Freeze** is on Layers 0 **and** 1 so the live grab (`;`) is always a tap away,
-  while pop / re-grab / clear ride the audio layer. `⌫` clears the whole stack.
+  while pop / re-frz / clear ride the audio layer. `⌫` clears the whole stack.
 - **`⇧S` / `⇧W`** act on the *transport / mute* (strudel play-stop, vox mute) —
   the un-shifted `S` / `W` still open those panels on a full keyboard.
 - **Volume** = the rig master fader — your pedal-steel signal + loops (the

@@ -7156,7 +7156,7 @@ export function initQualiaPage() {
       // Delay mix: [ / ]    Reverb mix: - / =    Rig master vol: , / .
       case ';': padActions.freeze(); break;                      // Freeze — grab / layer a pad
       case "'": padActions.freezePop(); break;                   // Freeze — pop the top layer
-      case '\\': padActions.freezeRegrab(); break;               // Freeze — re-grab the top layer
+      case '\\': padActions.freezeRegrab(); break;               // Freeze — re-freeze the top layer
       case 'backspace': padActions.freezeClear(); e.preventDefault(); break;   // Freeze — clear the whole stack
       case '[': looper.nudgeStripParam?.('delay', 'mix', -0.05); break;
       case ']': looper.nudgeStripParam?.('delay', 'mix', +0.05); break;
