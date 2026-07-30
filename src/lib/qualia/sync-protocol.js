@@ -50,8 +50,12 @@ export const CTL_ACTIONS = new Set([
   'tuner', 'earth', 'metal', 'delayToggle', 'reverbToggle',
   // freeze stack (Frippertronics)
   'freeze', 'freezePop', 'freezeRegrab', 'freezeClear',
-  // looper transport
-  'loopPlayStop', 'recStart', 'recStop', 'grab',
+  // looper transport. `recToggle` is the tether's single rec button (arm /
+  // cancel the count-in / stop); recStart + recStop stay for the DOIO pad and
+  // MIDI, where two idempotent keys beat one stateful one.
+  'loopPlayStop', 'recStart', 'recStop', 'recToggle', 'grab',
+  // free-run record arming (delay countdown · first-transient IN point)
+  'recDelayCycle', 'recTransient',
   // strudel + sequencer transport, tap-write history, pattern wipe
   'strudelPlayStop', 'seqPlayStop', 'seqUndo', 'seqRedo', 'seqClear',
   // vox + global transport

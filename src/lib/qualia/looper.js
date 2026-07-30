@@ -63,9 +63,13 @@ const ZONECOLLAPSE_KEYS = {
   tone:  `${NS}.toneCollapsed`,
   space: `${NS}.spaceCollapsed`,
 };
-const STRIPUTIL_KEY  = `${NS}.stripUtilOpen`; // utility section (geq/comp/hpf/peq/pan) expanded
+const STRIPFOLD_KEY  = `${NS}.stripFolded`; // `strip` header tab folded (all four zones hidden)
+const STRIPUTIL_KEY  = `${NS}.stripUtilOpen`; // utility section (geq/comp/hpf/gate/peq/pan) expanded
 const LOOPOPEN_KEY     = `${NS}.loopOpen`;      // loop section visible
 const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
+const RECDELAY_KEY   = `${NS}.recDelaySec`;  // free-run record: count-in delay before IN (0 = off)
+const RECCOUNTIN_KEY = `${NS}.recCountIn`;   // audible pulses during that delay
+const RECTRANSIENT_KEY = `${NS}.recTransient`; // free-run record: IN lands on the first transient
 const FREEZE_KEY     = `${NS}.freeze`;     // freeze pad settings {level,grainSec,releaseSec}
 const TUNER_KEY      = `${NS}.tuner`;      // tuner enabled
 const TUNERMUTE_KEY  = `${NS}.tunerMute`; // mute rig signal while tuner is on
@@ -90,10 +94,15 @@ const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the 
 // Channel strip UI schema — stages + params, listed in audio-chain order (the
 // audio side lives in rig-strip.js; STRIP_DEFAULTS supplies initial values).
 // `group`/`cluster` control only UI placement (the audio graph order is fixed
-// in rig-strip.js): 'main' stages land in the zone section named by `cluster`
-// — drive (earth · earth gate · metal · metal gate · gate) · tone (amp · eq ·
-// cab) · space (delay · reverb) — and 'util' stages (geq, comp, hpf, peq, pan)
-// go to the "utility" section so they're out of the way until needed.
+// in rig-strip.js):
+//   'main' → the zone section named by `cluster` — drive (earth · metal) ·
+//            tone (amp · eq · cab) · space (delay · reverb)
+//   'util' → the "utility" section (geq · comp · hpf · gate · peq · pan), out
+//            of the way until needed
+//   'sub'  → not a board of its own: rendered INSIDE the box named by
+//            `parent`. The per-pedal noise gates are part of their pedal (they
+//            only run while it's engaged), so that's where they live.
+// `chip` is the short label used in a collapsed section's header toggle row.
 const STRIP_SCHEMA = [
   // geq — GE-7-voiced 7-band graphic EQ (front of chain: shapes the raw
   // instrument before comp + drives).
@@ -108,7 +117,7 @@ const STRIP_SCHEMA = [
     { id: 'level', label: 'lvl',  min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
   ] },
   { id: 'comp',   name: 'comp',   group: 'util', toggle: true,  params: [{ id: 'threshold', label: 'thr', min: -60, max: 0, step: 1, fmt: v => `${v|0}dB` }, { id: 'ratio', label: 'rat', min: 1, max: 20, step: 0.5, fmt: v => `${(+v).toFixed(1)}:1` }, { id: 'attack', label: 'atk', min: 0, max: 0.1, step: 0.001, fmt: v => `${Math.round(v*1000)}ms` }, { id: 'release', label: 'rel', min: 0.01, max: 1, step: 0.01, fmt: v => `${Math.round(v*1000)}ms` }] },
-  { id: 'earth',  name: 'earth',  group: 'main', cluster: 'drive', toggle: true,  params: [
+  { id: 'earth',  name: 'earth',  group: 'main', cluster: 'drive', toggle: true, sub: ['earthGate'], params: [
     { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
     { id: 'tone', label: 'tone', min: 0, max: 1, step: 0.01 },
     { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
@@ -116,13 +125,13 @@ const STRIP_SCHEMA = [
   // Per-pedal noise gates — each drive is its own noise source with its own
   // floor, so they get separate instances rather than one shared setting (see
   // STRIP_DEFAULTS for the voicing rationale). Each sits immediately after its
-  // pedal in the audio chain and only runs while that pedal is engaged, so it
-  // renders right after it here too.
-  { id: 'earthGate', name: 'earth gate', group: 'main', cluster: 'drive', toggle: true, params: [
+  // pedal in the audio chain and only runs while that pedal is engaged — so on
+  // screen it's a section INSIDE that pedal's box, not a pedal beside it.
+  { id: 'earthGate', name: 'gate', chip: 'e·gate', group: 'sub', parent: 'earth', toggle: true, params: [
     { id: 'thresh',  label: 'thr', min: 0, max: 1, step: 0.01 },
     { id: 'release', label: 'rel', min: 0, max: 1, step: 0.01 },
   ] },
-  { id: 'metal',  name: 'metal',  group: 'main', cluster: 'drive', toggle: true,  params: [
+  { id: 'metal',  name: 'metal',  group: 'main', cluster: 'drive', toggle: true, sub: ['metalGate'], params: [
     { id: 'drive', label: 'gain', min: 0, max: 1, step: 0.01 },
     { id: 'low', label: 'low', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
     { id: 'mid', label: 'mid', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
@@ -130,7 +139,7 @@ const STRIP_SCHEMA = [
     { id: 'high', label: 'high', min: -15, max: 15, step: 0.5, fmt: v => `${(+v).toFixed(1)}` },
     { id: 'level', label: 'lvl', min: 0, max: 1, step: 0.01 },
   ] },
-  { id: 'metalGate', name: 'metal gate', group: 'main', cluster: 'drive', toggle: true, params: [
+  { id: 'metalGate', name: 'gate', chip: 'm·gate', group: 'sub', parent: 'metal', toggle: true, params: [
     { id: 'thresh',  label: 'thr', min: 0, max: 1, step: 0.01 },
     { id: 'release', label: 'rel', min: 0, max: 1, step: 0.01 },
   ] },
@@ -142,10 +151,11 @@ const STRIP_SCHEMA = [
   // every upstream hiss source at once (including the amp capture's idle
   // noise, which the per-pedal gates sit in front of). Keyed by an envelope
   // follower on the CLEAN strip input (post-distortion detection can't tell
-  // hiss from signal), so closing never chops the delay/reverb tails. Lives in
-  // the drive cluster on screen — it's the earth/metal companion — though its
-  // audio position is post-cab.
-  { id: 'gate',   name: 'gate',   group: 'main', cluster: 'drive', toggle: true, params: [
+  // hiss from signal), so closing never chops the delay/reverb tails. It's the
+  // whole-strip housekeeping gate — set once for the rig's noise floor and
+  // left alone — so it sits in the utility drawer next to the HPF it follows,
+  // while the drives keep their own per-pedal gates.
+  { id: 'gate',   name: 'gate',   group: 'util', toggle: true, params: [
     { id: 'thresh',  label: 'thr', min: 0, max: 1, step: 0.01 },
     { id: 'release', label: 'rel', min: 0, max: 1, step: 0.01 },
   ] },
@@ -308,12 +318,24 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnFreezeRegrab = document.getElementById('btn-freeze-regrab');
   const btnFreezeClear = document.getElementById('btn-freeze-clear');
   const rigSectionsEl = document.getElementById('rig-sections');
-  // The strip's four top-level sections (drive/tone/space zones + utility).
+  // The strip's `strip` header tab + its four sections (drive/tone/space zones
+  // + utility).
+  const stripHeadSection = document.getElementById('rig-strip');
+  const btnStripCollapse = document.getElementById('btn-rig-strip-collapse');
   const zoneSections = {
     drive: document.getElementById('rig-drive'),
     tone:  document.getElementById('rig-tone'),
     space: document.getElementById('rig-space'),
     util:  document.getElementById('rig-util'),
+  };
+  // Per-section header toggle rows — a collapsed section's stage on/off
+  // buttons live here (see buildHeadToggles).
+  const headToggleEls = {
+    strip: document.getElementById('rig-strip-toggles'),
+    drive: document.getElementById('rig-drive-toggles'),
+    tone:  document.getElementById('rig-tone-toggles'),
+    space: document.getElementById('rig-space-toggles'),
+    util:  document.getElementById('rig-util-toggles'),
   };
   const zoneBodies = {
     drive: document.getElementById('rig-drive-body'),
@@ -384,9 +406,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
       for (const z of Object.keys(ZONECOLLAPSE_KEYS)) o[z] = lsGet(ZONECOLLAPSE_KEYS[z], legacy) === '1';
       return o;
     })(),
+    stripFolded: lsGet(STRIPFOLD_KEY, '0') === '1',    // `strip` header tab folded (zones hidden)
     stripUtilOpen: lsGet(STRIPUTIL_KEY, '0') === '1',  // utility section (default tucked away)
     loopOpen: lsGet(LOOPOPEN_KEY, '1') !== '0',              // loop section visible
     loopCollapsed: lsGet(LOOPCOLLAPSE_KEY, '0') === '1',
+    // Free-run record arming (ignored while synced to Strudel — the cycle grid
+    // owns the IN point then). Hands are on the steel, not the keyboard.
+    recDelaySec: (() => { const v = parseFloat(lsGet(RECDELAY_KEY, '0')); return Number.isFinite(v) ? Math.max(0, Math.min(8, v)) : 0; })(),
+    recCountIn: lsGet(RECCOUNTIN_KEY, '1') !== '0',    // audible pulses through the delay
+    recTransient: lsGet(RECTRANSIENT_KEY, '0') === '1', // IN lands on the first transient
     tunerOn: lsGet(TUNER_KEY, '0') === '1',
     tunerMute: lsGet(TUNERMUTE_KEY, '1') !== '0',
     temperament: lsGet(TEMPER_KEY, 'et') === 'custom' ? 'custom' : 'et',
@@ -564,7 +592,48 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
 
   // ── transport ──────────────────────────────────────────────────────────
+  // Free-run record arming. Both hands are busy (computer keys + the steel),
+  // so ● can't also be "and… now": the IN point gets to be either a fixed
+  // countdown after the press, or the first note actually played. Neither
+  // applies while synced to Strudel — the cycle grid owns the IN point there.
+  const COUNT_IN_PULSES = 2;
+  let _armTimer = null;             // pending delayed-record timeout id
+  function isArming() { return _armTimer != null; }
+  function freeRunArming() {
+    if (syncOn()) return { delay: 0, transient: false };
+    return { delay: Math.max(0, model.recDelaySec || 0), transient: !!model.recTransient };
+  }
+  // A second ● (or a pause / audio stop) during the countdown aborts it.
+  function cancelArming(msg) {
+    if (_armTimer == null) return false;
+    clearTimeout(_armTimer); _armTimer = null;
+    if (msg) setStatus(msg);
+    refreshTransport();
+    refreshLooperBtn();
+    return true;
+  }
+
   async function startRecording() {
+    if (recording) return;
+    if (cancelArming('record cancelled')) return;
+    const { delay, transient } = freeRunArming();
+    if (delay > 0) {
+      // Pips lead the IN point: evenly spaced over the delay, the last one a
+      // beat before ● lands (so the final gap IS the "and…").
+      if (model.recCountIn) looperAudio.playCountIn({ pulses: COUNT_IN_PULSES, spacingSec: delay / COUNT_IN_PULSES });
+      _armTimer = setTimeout(() => {
+        _armTimer = null;
+        armRecording(transient);
+      }, delay * 1000);
+      setStatus(`recording in ${delay % 1 ? delay.toFixed(1) : delay}s…`);
+      refreshTransport();
+      refreshLooperBtn();
+      return;
+    }
+    return armRecording(transient);
+  }
+
+  async function armRecording(transient = false) {
     if (recording) return;
     let t = armedTrack();
     if (!t) return;
@@ -584,13 +653,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.stopVoice(t.id);   // record replaces the (possibly fresh) armed take
     setStatus('arming…');
     try {
-      const res = await looperAudio.startRecording({ grid: t.grid, syncOn: syncOn(), cps: currentCps(), deviceId: model.deviceId });
+      const res = await looperAudio.startRecording({
+        grid: t.grid, syncOn: syncOn(), cps: currentCps(), deviceId: model.deviceId,
+        transientStart: transient,
+        // Fires on the main thread the moment the first note crosses the bar.
+        onTransient: () => { setStatus('recording — loop starts here'); refreshTransport(); },
+      });
       recording = true;
       refreshTransport();
       refreshLooperBtn();
       renderers.get(t.id)?.start();
       try { picker?.populate?.(model.deviceId); } catch {}
-      setStatus(res?.snapped ? 'recording — locks to cycle' : (syncOn() ? 'recording (strudel idle — free)' : 'recording…'));
+      setStatus(res?.snapped ? 'recording — locks to cycle'
+        : res?.listening ? 'listening — loop starts on your first note'
+        : (syncOn() ? 'recording (strudel idle — free)' : 'recording…'));
     } catch (err) {
       console.warn('[qualia] looper record failed:', err);
       setStatus('mic error — check permissions');
@@ -600,6 +676,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
 
   async function stopRecording() {
+    if (cancelArming('record cancelled')) return;   // still counting in — abort instead
     if (!recording) return;
     const t = armedTrack();
     setStatus('finishing…');
@@ -1020,6 +1097,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
       sync:        !!model.syncStrudel,
       immediate:   !!model.immediate,
       recordNewTrack: !!model.recordNewTrack,
+      recDelaySec: model.recDelaySec,
+      recCountIn:  !!model.recCountIn,
+      recTransient: !!model.recTransient,
       offsetMs:    model.offsetMs,
       gridDefault: model.gridDefault,
       retroCycles: model.retroCycles,
@@ -1057,6 +1137,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
       model.recordNewTrack = cfg.recordNewTrack;
       lsSet(RECNEW_KEY, model.recordNewTrack ? '1' : '0');
     }
+    if (typeof cfg.recDelaySec === 'number')   setRecDelay(cfg.recDelaySec);
+    if (typeof cfg.recCountIn === 'boolean')   setRecCountIn(cfg.recCountIn);
+    if (typeof cfg.recTransient === 'boolean') setRecTransient(cfg.recTransient);
     if (typeof cfg.gridDefault === 'number') {
       model.gridDefault = Math.max(1, Math.min(16, cfg.gridDefault | 0));
       lsSet(GRID_KEY, model.gridDefault);
@@ -1518,6 +1601,118 @@ export function createLooper({ audio, syncStrudel } = {}) {
     autosizeRig(model.zoneCollapsed[zone] ? null : zoneSections[zone]);
   }
 
+  // The `strip` header tab — one chevron over all four zone sections. They're
+  // siblings in the scroll column (so every subhead can stick), not children,
+  // so the fold rides a panel-level class instead of the shared .collapsed rule.
+  function applyStripFold() {
+    panel?.classList.toggle('strip-collapsed', !!model.stripFolded);
+    if (btnStripCollapse) {
+      btnStripCollapse.textContent = model.stripFolded ? '▸' : '▾';
+      btnStripCollapse.classList.toggle('collapsed', !!model.stripFolded);
+    }
+  }
+  function toggleStripFold() {
+    model.stripFolded = !model.stripFolded;
+    lsSet(STRIPFOLD_KEY, model.stripFolded ? '1' : '0');
+    applyStripFold();
+    autosizeRig(model.stripFolded ? null : zoneSections.drive);
+  }
+
+  // ── collapsed-section header toggles ───────────────────────────────────────
+  // A folded section still has to be playable mid-set, so each subhead carries
+  // the on/off buttons of the stages it's hiding (CSS shows the row only while
+  // that section is collapsed). The `strip` header carries the six primary
+  // pedals — the same set the mini pedalboard exposes.
+  const HEAD_TOGGLE_STAGES = {
+    strip: ['earth', 'metal', 'amp', 'cab', 'delay', 'reverb'],
+    drive: ['earth', 'earthGate', 'metal', 'metalGate'],
+    tone:  ['amp', 'eq', 'cab'],
+    space: ['delay', 'reverb'],
+    util:  ['geq', 'comp', 'hpf', 'gate', 'peq'],
+  };
+  const headChips = new Map();   // stage id -> chip button[]
+  function buildHeadToggles() {
+    if (headChips.size) return;
+    for (const [key, ids] of Object.entries(HEAD_TOGGLE_STAGES)) {
+      const host = headToggleEls[key];
+      if (!host) continue;
+      host.innerHTML = '';
+      for (const id of ids) {
+        const stage = STRIP_SCHEMA.find(s => s.id === id);
+        if (!stage?.toggle) continue;
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'ctrl-btn rig-head-chip';
+        b.textContent = stage.chip || stage.name;
+        b.title = `Enable / bypass ${stage.name === 'gate' && stage.parent ? `${stage.parent} gate` : stage.name}`;
+        b.addEventListener('click', (e) => { e.stopPropagation(); stripToggle(id, !model.strip[id].on); });
+        host.append(b);
+        if (!headChips.has(id)) headChips.set(id, []);
+        headChips.get(id).push(b);
+      }
+    }
+  }
+  function refreshHeadToggles() {
+    for (const [id, btns] of headChips) {
+      const on = !!model.strip[id]?.on;
+      for (const b of btns) b.classList.toggle('active', on);
+    }
+  }
+
+  // ── loop bar: record-arm modes (delay · count-in · transient) ──────────────
+  // These live in the loop subhead rather than the props row so they stay put
+  // when the tracks are folded away — same reasoning as the collapsed-section
+  // toggles above, and they belong beside the ● they modify.
+  const REC_DELAY_STEPS = [0, 1, 2, 4];
+  let loopChipDelay = null, loopChipCount = null, loopChipTrans = null;
+  function buildLoopHeadToggles() {
+    const host = document.getElementById('rig-loop-toggles');
+    if (!host || host.children.length) return;
+    const chip = (title, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'ctrl-btn rig-head-chip'; b.title = title;
+      b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+      host.append(b);
+      return b;
+    };
+    loopChipDelay = chip('Delayed record — ● starts the take this many seconds later, so you can get both hands back on the instrument. Free-run only (synced to Strudel, the cycle grid owns the IN point). Click to cycle off / 1s / 2s / 4s.',
+      () => { const i = REC_DELAY_STEPS.indexOf(model.recDelaySec); setRecDelay(REC_DELAY_STEPS[(i < 0 ? 1 : i + 1) % REC_DELAY_STEPS.length]); });
+    loopChipCount = chip('Count-in — two short pips through the rig output while the delay runs, so you can hear the IN point coming.',
+      () => setRecCountIn(!model.recCountIn));
+    loopChipTrans = chip('Transient start — ● starts listening and the loop\'s IN point lands on your first note. Free-run only.',
+      () => setRecTransient(!model.recTransient));
+    refreshLoopHeadToggles();
+  }
+  function refreshLoopHeadToggles() {
+    if (!loopChipDelay) return;
+    const free = !syncOn();          // both modes are free-run only
+    const d = model.recDelaySec || 0;
+    loopChipDelay.textContent = d > 0 ? `dly ${d}s` : 'dly';
+    loopChipDelay.classList.toggle('active', free && d > 0);
+    loopChipDelay.disabled = !free;
+    loopChipCount.textContent = '♪';
+    loopChipCount.classList.toggle('active', free && d > 0 && model.recCountIn);
+    loopChipCount.disabled = !free || d <= 0;
+    loopChipTrans.textContent = 'trns';
+    loopChipTrans.classList.toggle('active', free && model.recTransient);
+    loopChipTrans.disabled = !free;
+  }
+  function setRecDelay(sec) {
+    const v = Math.max(0, Math.min(8, Number(sec) || 0));
+    model.recDelaySec = v;
+    lsSet(RECDELAY_KEY, String(v));
+    refreshLoopHeadToggles();
+  }
+  function setRecCountIn(on) {
+    model.recCountIn = !!on;
+    lsSet(RECCOUNTIN_KEY, model.recCountIn ? '1' : '0');
+    refreshLoopHeadToggles();
+  }
+  function setRecTransient(on) {
+    model.recTransient = !!on;
+    lsSet(RECTRANSIENT_KEY, model.recTransient ? '1' : '0');
+    refreshLoopHeadToggles();
+  }
+
   // ── channel strip UI ──────────────────────────────────────────────────────
   let _stripTimer = null;
   function persistStrip() {
@@ -1632,15 +1827,16 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const tg = box.querySelector('.rig-stage-toggle');
       if (tg) { tg.textContent = on ? 'on' : 'off'; tg.classList.toggle('active', on); }
     }
+    refreshHeadToggles();   // the collapsed-section header mirrors of the same toggles
     peqRepaint?.();   // the peq curve dims when its stage is bypassed
   }
   // Build one strip-stage box (head + toggle + param controls). `collapsible`
   // off (main row) gives every stage a fixed footprint so positions never shift
   // mid-performance — muscle memory over space-saving; the utility drawer keeps
   // per-stage collapse since it's the modular "tuck away" group.
-  function buildStripStage(stage, { collapsible = true } = {}) {
+  function buildStripStage(stage, { collapsible = true, nested = false } = {}) {
     const box = document.createElement('div');
-    box.className = 'rig-stage'; box.dataset.stage = stage.id;
+    box.className = 'rig-stage' + (nested ? ' rig-substage' : ''); box.dataset.stage = stage.id;
     const head = document.createElement('div'); head.className = 'rig-stage-head';
     const nameEl = document.createElement('span'); nameEl.className = 'rig-stage-name'; nameEl.textContent = stage.name;
 
@@ -1687,17 +1883,24 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (stage.loader) box.append(buildCabLoader());
     if (stage.ampLoader) box.append(buildAmpLoader());
     if (stage.peq) box.append(buildPeqEditor());
+    // Built-in sub-stages (the drives' own noise gates) render inside the box.
+    for (const subId of stage.sub || []) {
+      const sub = STRIP_SCHEMA.find(s => s.id === subId);
+      if (sub) box.append(buildStripStage(sub, { collapsible: false, nested: true }));
+    }
     return box;
   }
   function buildStripUI() {
     if (!zoneBodies.drive || zoneBodies.drive.children.length) return;
     // Main stages land in their zone's section body (drive / tone / space, in
     // schema = chain order); util stages go to the utility section after its
-    // static input-mode box.
+    // static input-mode box. 'sub' stages are built by their parent.
     for (const stage of STRIP_SCHEMA) {
+      if (stage.group === 'sub') continue;
       if (stage.group === 'util') stripUtilBody?.append(buildStripStage(stage, { collapsible: true }));
       else zoneBodies[stage.cluster]?.append(buildStripStage(stage, { collapsible: false }));
     }
+    buildHeadToggles();
     refreshStripStages();
   }
   // Utility section — same .collapsed mechanism as every other section (the
@@ -2473,8 +2676,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function refreshMiniTransport() {
     if (!miniPlayLed) return;
-    miniPlayLed.classList.toggle('recording', recording);
-    miniPlayLed.classList.toggle('playing', !recording && looperAudio.anyPlaying());
+    const arming = isArming();
+    miniPlayLed.classList.toggle('recording', recording || arming);
+    miniPlayLed.classList.toggle('playing', !recording && !arming && looperAudio.anyPlaying());
   }
   function refreshMiniTuner() {
     if (!miniTunerSq) return;
@@ -2494,9 +2698,16 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
 
   // Enter/leave mini mode: swap which view is visible, relocate the strobe tuner
-  // so it can show in either mode, size the window to content, persist.
-  function applyMiniMode(on) {
-    model.mini = !!on;
+  // so it can show in either mode, restore that mode's own window geometry,
+  // persist. `initial` = the restore on open(), where there's no outgoing mode
+  // whose position needs recording.
+  function applyMiniMode(on, { initial = false } = {}) {
+    const next = !!on;
+    // Record where the mode we're leaving was sitting before anything moves.
+    if (!initial && next !== model.mini && panel && panel.style.display !== 'none' && moved[posId()]) {
+      savePanelPos(posId(), panel);
+    }
+    model.mini = next;
     lsSet(MINI_KEY, model.mini ? '1' : '0');
     if (panel) panel.classList.toggle('mini', model.mini);
     // Subtle indicator: the glyph stays put; the cyan `active` highlight marks the
@@ -2522,8 +2733,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
       }
       if (temperEl) temperEl.style.display = model.tunerOn ? '' : 'none';
     }
+    // Position/size AFTER the view swap so a fresh mini snap measures the
+    // pedalboard, not the full station.
+    if (panel && panel.style.display !== 'none') applyModeGeometry();
     syncScopeLoop();
     reposition();
+    // Re-fit the full station to its sections — unless a remembered manual
+    // height came back with the geometry, which the performer chose on purpose.
+    if (!model.mini && !panel?.style.height) autosizeRig(null);
   }
   function toggleMini() { applyMiniMode(!model.mini); }
 
@@ -2615,7 +2832,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function refreshStripBtn() { if (btnStrip) btnStrip.classList.toggle('active', !!model.stripOpen); }
   function applyStripOpen() {
+    if (stripHeadSection) stripHeadSection.style.display = model.stripOpen ? '' : 'none';
     for (const sec of Object.values(zoneSections)) if (sec) sec.style.display = model.stripOpen ? '' : 'none';
+    applyStripFold();
   }
   function toggleStrip(on) {
     model.stripOpen = on == null ? !model.stripOpen : !!on;
@@ -2624,7 +2843,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     applyStripOpen();
     refreshStripBtn();
     refreshLatencyLoop();
-    autosizeRig(model.stripOpen ? zoneSections.drive : null);
+    autosizeRig(model.stripOpen ? (model.stripFolded ? stripHeadSection : zoneSections.drive) : null);
   }
 
   // ── loop section toggle (signal header button) ──────────────────────────────
@@ -3719,6 +3938,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
   }
   function refreshSyncStatus() {
+    refreshLoopHeadToggles();   // the delay / transient chips are free-run only
     if (!syncStatusEl) return;
     if (!model.syncStrudel) { syncStatusEl.textContent = ''; syncStatusEl.dataset.state = 'off'; return; }
     const ready = !!syncStrudel?.isReady?.();
@@ -3738,17 +3958,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function refreshTransport() {
     const any = hasAnyAudio();
     const playing = looperAudio.anyPlaying();
+    const arming = isArming();
     if (btnRecord) {
-      btnRecord.classList.toggle('recording', recording);
-      btnRecord.textContent = recording ? '■' : '●';
-      btnRecord.title = recording ? 'Stop recording'
+      btnRecord.classList.toggle('recording', recording || arming);
+      btnRecord.textContent = arming ? '◌' : (recording ? '■' : '●');
+      btnRecord.title = arming ? 'Counting in — click to cancel'
+        : recording ? 'Stop recording'
         : (model.recordNewTrack ? 'Record into a new track (armed takes are kept — see the rec → new prop)'
                                 : 'Record into the armed track (replaces its take)');
     }
     if (btnPlay) { btnPlay.classList.toggle('playing', playing); btnPlay.disabled = !any || recording; }
     if (btnStop) btnStop.disabled = !playing;
-    if (btnDelete) btnDelete.disabled = !any || recording;
-    if (btnRetro) btnRetro.disabled = recording || !(looperAudio.isRetroCapable() && looperAudio.isCapturing());
+    if (btnDelete) btnDelete.disabled = !any || recording || arming;
+    if (btnRetro) btnRetro.disabled = recording || arming || !(looperAudio.isRetroCapable() && looperAudio.isCapturing());
+    refreshLoopHeadToggles();
     refreshSyncBtnVisibility();
     refreshMiniTransport();
   }
@@ -3805,15 +4028,63 @@ export function createLooper({ audio, syncStrudel } = {}) {
     },
   });
 
-  // ── drag (mirror sequencer) ──────────────────────────────────────────────
-  let movedByUser = restorePanelPos('looper', panel);
+  // ── panel geometry (drag / resize / persistence) ─────────────────────────
+  // The rig remembers TWO geometries: the full station and the mini
+  // pedalboard. They're different shapes with different natural homes — the
+  // full panel hangs under the topbar, the pedalboard belongs tucked into the
+  // bottom-right corner, clear of the params card — so one shared position
+  // made every mode switch a re-drag. Each mode persists its own drags and
+  // resizes and comes back on reload; entering mini records where the full
+  // panel was, then snaps down to the corner.
+  const POS_FULL = 'looper', POS_MINI = 'looper.mini';
+  const posId = () => (model.mini ? POS_MINI : POS_FULL);
+  const MINI_MARGIN = 12;   // gap from the viewport corner when snapping mini
+  const moved = { [POS_FULL]: false, [POS_MINI]: false };
+  moved[POS_FULL] = restorePanelPos(POS_FULL, panel);
   function reposition() {
     if (!panel || panel.style.display === 'none') return;
     const tb = document.getElementById('topbar');
     if (!tb) return;
     const h = tb.getBoundingClientRect().height;
     panel.style.maxHeight = `calc(100vh - ${h + 24}px)`;
-    if (!movedByUser) panel.style.top = (h + 8) + 'px';
+    // Mini always carries an explicit position (snapped or remembered), so the
+    // topbar-follow only applies to an un-dragged full panel.
+    if (!moved[posId()] && !model.mini) panel.style.top = (h + 8) + 'px';
+  }
+  // Mini's default home: hard bottom-right. Measured after the view swap, so
+  // the pedalboard's natural size is already laid out.
+  function snapMiniBottomRight() {
+    if (!panel) return;
+    panel.style.transform = 'none';
+    const r = panel.getBoundingClientRect();
+    panel.style.left = `${Math.round(Math.max(4, window.innerWidth  - r.width  - MINI_MARGIN))}px`;
+    panel.style.top  = `${Math.round(Math.max(4, window.innerHeight - r.height - MINI_MARGIN))}px`;
+  }
+  // Put the panel where the mode we just entered left it. Inline width/height
+  // are cleared first: the two modes are different shapes, and a full-panel
+  // height dragged onto the pedalboard (or vice versa) is never what's wanted.
+  function applyModeGeometry() {
+    if (!panel) return;
+    panel.style.width = ''; panel.style.height = ''; panel.style.minHeight = '';
+    const id = posId();
+    const restored = restorePanelPos(id, panel);
+    moved[id] = restored;
+    if (restored) return;
+    if (model.mini) {
+      snapMiniBottomRight();
+      moved[POS_MINI] = true;
+      // Re-measure next frame — the pedalboard's final size can land a hair
+      // after the swap (wrapping row, freshly-mounted tuner) and a stale
+      // measurement would leave it hanging off the corner.
+      requestAnimationFrame(() => {
+        if (!model.mini) return;
+        snapMiniBottomRight();
+        savePanelPos(POS_MINI, panel);
+      });
+    } else {
+      // Never dragged in full mode — back to the CSS-centered default.
+      panel.style.left = ''; panel.style.top = ''; panel.style.transform = '';
+    }
   }
   window.addEventListener('resize', reposition);
   const topbarEl = document.getElementById('topbar');
@@ -3827,11 +4098,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
       if (e.target.closest('button, input, select, textarea')) return;
       if (e.button !== undefined && e.button !== 0) return;
       const r = panel.getBoundingClientRect();
-      if (!movedByUser) {
+      if (!moved[posId()]) {
         panel.style.transform = 'none';
         panel.style.left = r.left + 'px';
         panel.style.top  = r.top  + 'px';
-        movedByUser = true;
+        moved[posId()] = true;
       }
       dx = e.clientX - r.left; dy = e.clientY - r.top;
       pointerId = e.pointerId; dragging = true;
@@ -3851,7 +4122,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const end = () => {
       if (!dragging) return;
       dragging = false; header.classList.remove('dragging');
-      savePanelPos('looper', panel);
+      savePanelPos(posId(), panel);
       try { header.releasePointerCapture(pointerId); } catch {}
       pointerId = null;
     };
@@ -3860,15 +4131,16 @@ export function createLooper({ audio, syncStrudel } = {}) {
   })();
 
   // Any-corner/edge resize handles (mirror makeDraggablePanel): materialize a
-  // still-centered panel on resize-start so the anchored-edge math works.
+  // still-centered panel on resize-start so the anchored-edge math works. The
+  // id is a thunk so each resize saves under the geometry of the mode in view.
   if (panel) {
-    attachPanelResize('looper', panel, { onStart: () => {
-      if (movedByUser) return;
+    attachPanelResize(posId, panel, { onStart: () => {
+      if (moved[posId()]) return;
       const r = panel.getBoundingClientRect();
       panel.style.transform = 'none';
       panel.style.left = r.left + 'px';
       panel.style.top  = r.top + 'px';
-      movedByUser = true;
+      moved[posId()] = true;
     } });
   }
 
@@ -3876,9 +4148,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (panel && typeof ResizeObserver !== 'undefined') {
     let _rDebounce = 0;
     new ResizeObserver(() => {
-      if (!movedByUser && !panel.style.width) return;
+      if (!moved[posId()] && !panel.style.width) return;
       clearTimeout(_rDebounce);
-      _rDebounce = setTimeout(() => savePanelPos('looper', panel), 300);
+      _rDebounce = setTimeout(() => savePanelPos(posId(), panel), 300);
     }).observe(panel);
   }
 
@@ -3909,6 +4181,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     applyStripOpen();
     for (const z of Object.keys(ZONECOLLAPSE_KEYS)) applyZoneCollapse(z);
     applyStripUtil();
+    refreshHeadToggles();
     refreshLatencyLoop();
     if (model.tunerOn) {
       buildTunerUI();
@@ -3927,8 +4200,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshLooperBtn();
     refreshTransport();
     // Restore mini (pedalboard) mode last — it swaps which view is visible,
-    // relocates the strobe tuner, and re-runs syncScopeLoop to right-size the rAF.
-    applyMiniMode(model.mini);
+    // relocates the strobe tuner, restores that mode's window geometry, and
+    // re-runs syncScopeLoop to right-size the rAF.
+    applyMiniMode(model.mini, { initial: true });
     startBufRateTick();
   }
   function close() {
@@ -3951,6 +4225,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnChannels) btnChannels.addEventListener('click', () => { setChannels(model.channels === 'stereo' ? 'mono' : 'stereo'); });
   if (btnMini)   btnMini.addEventListener('click', () => { toggleMini(); });
   if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
+  if (btnStripCollapse) btnStripCollapse.addEventListener('click', () => { toggleStripFold(); });
   if (btnStripUtil) btnStripUtil.addEventListener('click', () => { toggleStripUtil(); });
   if (btnStripReset) btnStripReset.addEventListener('click', () => { resetStrip(); });
   if (btnLoop) btnLoop.addEventListener('click', () => { toggleLoop(); });
@@ -3963,6 +4238,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     sectionEl?.querySelector(':scope > .rig-subhead > .sp-subtitle')?.addEventListener('click', fn);
   };
   wireSubtitleToggle(rigSignalEl, toggleScopesCollapse);
+  wireSubtitleToggle(stripHeadSection, toggleStripFold);
   wireSubtitleToggle(zoneSections.drive, () => toggleZoneCollapse('drive'));
   wireSubtitleToggle(zoneSections.tone,  () => toggleZoneCollapse('tone'));
   wireSubtitleToggle(zoneSections.space, () => toggleZoneCollapse('space'));
@@ -4002,6 +4278,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // Initial paint even while hidden so first open() shows content immediately.
   renderSignal();           // build the rig signal controls up front
   buildScopeGain();         // scope display-gain magnifier
+  buildHeadToggles();       // collapsed-section header toggle rows
+  buildLoopHeadToggles();   // record-arm modes in the loop bar
   if (propsEl) renderProps();
   if (tracksEl) renderTracks();
   refreshMuteBtn();
@@ -4035,6 +4313,22 @@ export function createLooper({ audio, syncStrudel } = {}) {
     hasBeenOpened: () => _everOpened,
     isPlaying: () => looperAudio.anyPlaying(),
     isRecording: () => recording,
+    // Free-run record arming — the ● countdown and the first-note IN point.
+    // The tether's single rec button and its mode chips ride these.
+    isArming,
+    startRecording, stopRecording,
+    cancelArming: () => cancelArming('record cancelled'),
+    getRecordArm: () => ({ delaySec: model.recDelaySec, countIn: !!model.recCountIn, transient: !!model.recTransient, free: !syncOn() }),
+    setRecordArm({ delaySec, countIn, transient } = {}) {
+      if (delaySec !== undefined) setRecDelay(delaySec);
+      if (countIn !== undefined) setRecCountIn(countIn);
+      if (transient !== undefined) setRecTransient(transient);
+    },
+    cycleRecordDelay() {
+      const i = REC_DELAY_STEPS.indexOf(model.recDelaySec);
+      setRecDelay(REC_DELAY_STEPS[(i < 0 ? 1 : i + 1) % REC_DELAY_STEPS.length]);
+    },
+    toggleRecordTransient() { setRecTransient(!model.recTransient); },
     // Clean input pitch in Hz (−1 = none) for the audio.pitch* channels.
     getInputPitchHz: () => looperAudio.getInputPitchHz(),
     // Freeze / infinite-sustain STACK — for the panel buttons, hotkeys, MIDI.
@@ -4045,7 +4339,28 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // Pause gate for the freeze drone — page-init's pause brakes it with the
     // loops/transports, then restores it (stack intact) on resume.
     setFreezePaused: (on) => looperAudio.setFreezePaused(on),
+    // Master-pause brake for the WHOLE rig. Everything audible in the rig
+    // panel — the live instrument monitor, the loop bus, the freeze stack, the
+    // record count-in — sums at the rig master, so gating it there is one
+    // move that can't miss a path. A pending count-in and a running take stop
+    // too: nothing should keep capturing behind a paused transport. The
+    // performer's own mute/level and the freeze stack survive untouched, so
+    // unpausing brings the rig back exactly as it was.
+    setRigPaused(on) {
+      const paused = !!on;
+      if (paused) {
+        cancelArming('paused');
+        if (recording) stopRecording();
+      }
+      looperAudio.setRigPaused(paused);
+      looperAudio.setFreezePaused(paused);
+      refreshLooperBtn();
+    },
+    isRigPaused: () => looperAudio.isRigPaused(),
     play: playAll, stop,
+    // Wipe every recorded take (same code path as the 🗑 button). The qualem
+    // "new" reset calls this so a clean slate really is one.
+    clearLoops: clearAll,
     perFrame,
     getConfig, setConfig,
     collectAssets, installAssets,

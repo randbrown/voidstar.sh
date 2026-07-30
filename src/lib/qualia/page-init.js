@@ -2806,9 +2806,11 @@ export function initQualiaPage() {
       try { if (_pauseAudioState.strudel) strudel.stopPlayback?.(); } catch (e) { console.warn('[qualia] pause strudel stop failed:', e); }
       try { if (_pauseAudioState.seq)     sequencer.stop?.();       } catch (e) { console.warn('[qualia] pause seq stop failed:', e); }
       try { if (_pauseAudioState.looper)  looper.stop?.();          } catch (e) { console.warn('[qualia] pause looper stop failed:', e); }
-      // The freeze drone is an independent bus, not a loop voice — brake it too
-      // so pause silences the whole rig (it resumes in phase on unpause).
-      try { looper.setFreezePaused?.(true); } catch (e) { console.warn('[qualia] pause freeze failed:', e); }
+      // Everything else the rig makes — the live instrument monitor, the freeze
+      // stack, an in-flight take or count-in — is braked at the rig master, so
+      // pause silences the rig panel as a whole rather than just its loops.
+      // Mute/level state and the freeze stack survive, intact, for the resume.
+      try { looper.setRigPaused?.(true); } catch (e) { console.warn('[qualia] pause rig failed:', e); }
       try { if (vocoder?.isActive?.())    vocoder.setMuted?.(true); } catch (e) { console.warn('[qualia] pause vocoder mute failed:', e); }
     } else if (!on && _pauseAudioState) {
       const s = _pauseAudioState;
@@ -2821,7 +2823,7 @@ export function initQualiaPage() {
       try { if (s.strudel) strudel.play?.(); } catch (e) { console.warn('[qualia] resume strudel failed:', e); }
       try { if (s.seq)     sequencer.play?.(); } catch (e) { console.warn('[qualia] resume seq failed:', e); }
       try { if (s.looper)  looper.play?.(); } catch (e) { console.warn('[qualia] resume looper failed:', e); }
-      try { looper.setFreezePaused?.(false); } catch (e) { console.warn('[qualia] resume freeze failed:', e); }
+      try { looper.setRigPaused?.(false); } catch (e) { console.warn('[qualia] resume rig failed:', e); }
       try { vocoder?.setMuted?.(s.vocoderMuted); } catch (e) { console.warn('[qualia] resume vocoder unmute failed:', e); }
     }
     btnPause.classList.toggle('active', on);
@@ -6099,8 +6101,28 @@ export function initQualiaPage() {
     settings.save();
   }
 
+  /**
+   * Silence + wipe the performance engines. A qualem is the whole experience,
+   * so "new" has to mean new: the loops, the freeze stack, the pattern in the
+   * REPL and the sequencer grid are all state a fresh qualem shouldn't inherit
+   * from the last set. `patterns: false` keeps the two pattern engines
+   * (the random button replaces them itself).
+   */
+  function clearPerformanceState({ patterns = true } = {}) {
+    try { looper.cancelArming?.(); }  catch (e) { console.warn('[qualia] reset: looper arm:', e); }
+    try { looper.stop?.(); }          catch (e) { console.warn('[qualia] reset: looper stop:', e); }
+    try { looper.freezeClear?.(); }   catch (e) { console.warn('[qualia] reset: freeze clear:', e); }
+    try { looper.clearLoops?.(); }    catch (e) { console.warn('[qualia] reset: loop clear:', e); }
+    if (!patterns) return;
+    try { strudel.stopPlayback?.(); }        catch (e) { console.warn('[qualia] reset: strudel stop:', e); }
+    try { strudel.patterns?.newBlank?.(); }  catch (e) { console.warn('[qualia] reset: strudel blank:', e); }
+    try { sequencer.stop?.(); }              catch (e) { console.warn('[qualia] reset: seq stop:', e); }
+    try { sequencer.patterns?.newBlank?.(); } catch (e) { console.warn('[qualia] reset: seq blank:', e); }
+  }
+
   /** Reset live state to a clean default qualem — fresh-visitor look. */
   async function applyDefaultQualem() {
+    clearPerformanceState();
     // Wipe all per-fx params + modweights so each fx's setActive picks up
     // schema defaults on next activation.
     for (const mod of mesh.list()) {
@@ -6222,14 +6244,17 @@ export function initQualiaPage() {
     renderQualemList();
   });
   document.getElementById('btn-qualem-new')?.addEventListener('click', async () => {
-    if (!confirm('Reset live state to clean defaults? Saved qualems are kept.')) return;
+    if (!confirm('Reset live state to clean defaults? Loops, the freeze stack and both patterns are cleared. Saved qualems are kept.')) return;
     try { await applyDefaultQualem(); }
     catch (e) { console.error('[qualia] applyDefaultQualem failed:', e); }
   });
   // Random rolls only the audio patterns, on purpose: visuals stay put so the
   // user can A/B beats against a chosen quale. Mirrors the Strudel +
-  // sequencer "random" buttons but with both engines rolled at once.
+  // sequencer "random" buttons but with both engines rolled at once. Loops and
+  // the freeze stack go too — they were played to the OLD patterns, so leaving
+  // them under a fresh roll is never what the button means.
   document.getElementById('btn-qualem-random')?.addEventListener('click', () => {
+    clearPerformanceState({ patterns: false });
     try { strudel.patterns.random(); } catch (e) { console.warn('[qualia] strudel random:', e); }
     try { sequencer.patterns.random(); } catch (e) { console.warn('[qualia] sequencer random:', e); }
   });
@@ -6862,8 +6887,14 @@ export function initQualiaPage() {
     metal:        () => looper.toggleStripStage?.('metal'),
     rigPanel:     () => document.getElementById('btn-looper')?.click(),
     loopPlayStop: () => document.getElementById(looper.isPlaying?.() ? 'btn-looper-stop' : 'btn-looper-play')?.click(),
-    recStart:     () => { if (!looper.isRecording?.()) document.getElementById('btn-looper-record')?.click(); },
-    recStop:      () => { if (looper.isRecording?.())  document.getElementById('btn-looper-record')?.click(); },
+    // recStart / recStop are idempotent on purpose — the DOIO pad and MIDI map
+    // them to two fixed keys. recToggle is the one-button form the tether uses
+    // (arm → cancel a running count-in → stop), so the pad shows one state.
+    recStart:     () => { if (!looper.isRecording?.() && !looper.isArming?.()) document.getElementById('btn-looper-record')?.click(); },
+    recStop:      () => { if (looper.isRecording?.() || looper.isArming?.())  document.getElementById('btn-looper-record')?.click(); },
+    recToggle:    () => document.getElementById('btn-looper-record')?.click(),
+    recDelayCycle: () => looper.cycleRecordDelay?.(),
+    recTransient: () => looper.toggleRecordTransient?.(),
     grab:         () => document.getElementById('btn-looper-retro')?.click(),
     camSize:      () => { if (btnCamera.style.display !== 'none') btnCamera.click(); },
     camNext:      () => {
@@ -7428,6 +7459,10 @@ export function initQualiaPage() {
             seqPlaying: !!sequencer.isPlaying?.(),
             loopPlaying: !!looper.isPlaying?.(),
             recording: !!looper.isRecording?.(),
+            // Free-run record arming — the tether's rec button shows three
+            // states (idle / counting in / rolling) and lights its mode chips.
+            recArming: !!looper.isArming?.(),
+            recArm: looper.getRecordArm?.() || null,
             freezeDepth: looper.freezeDepth?.() ?? 0,
             // Rig strip + stage toggles — lights the tether's on/off pads.
             earthOn:    !!looper.isStripStageOn?.('earth'),

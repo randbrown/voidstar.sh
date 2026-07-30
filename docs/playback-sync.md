@@ -89,11 +89,16 @@ and MIDI notes (`page-init.js`) — three input paths, one behavior, no drift. I
 allowlisted (`CTL_ACTIONS`, `CTL_SLIDERS` + clamps in `sync-protocol.js`), rate-limited
 per peer, and never eval'd — same posture as entangle ingress.
 
-Tabs: **rig** (freeze stack, drives, strip toggles, rig/delay/reverb sliders — absolute,
-like MIDI CC; press-and-hold a slider's ↺ chip ~0.4 s to snap it back to default — the
-chip sits in the label row, off the track, so a reset can't graze the fader, and the
-fill sweep confirms the hold), **loop** (looper transport + grab, vox
-mute), **seq** (strudel/seq transport, tempo slider, **live drum pads** — tap to sound a
+Tabs: **rig** (freeze stack + **grab**, drives, strip toggles, rig/delay/reverb sliders —
+absolute, like MIDI CC; press-and-hold a slider's ↺ chip ~0.4 s to snap it back to
+default — the chip sits in the label row, off the track, so a reset can't graze the
+fader, and the fill sweep confirms the hold; grab lives here as well as on **loop**
+because freeze and grab are the same "keep what just happened" reflex and this is the
+tab already open when a phrase turns out to be worth keeping), **loop** (looper
+transport + grab, **one rec button with three states** — idle `⏺ rec` / counting in
+`◌ arming` / rolling `⏹ rec`, so there's nothing to pick mid-phrase; the free-run
+**record-start modes** ⏱ delay and ⇢ transient, which grey out with a note while the
+looper is synced to Strudel; vox mute), **seq** (strudel/seq transport, tempo slider, **live drum pads** — tap to sound a
 voice; arm *write* to also quantize the hit into the pattern at the nearest cell, via
 `sequencer.tapHit`; **undo / redo / clear** pads edit the pattern via
 `sequencer.tapUndo`/`tapRedo`/`clearPattern` — history entries are stamped with the
@@ -101,7 +106,8 @@ pattern id, so loading another pattern retires them safely, and a clear is itsel
 undoable entry), **quale** (quale/phase steps, **auto toggles** — auto-cycle, auto-phase,
 cam walk — the **set clock** τ readout + reset, camera, pause, blackout).
 
-Feedback: the leader broadcasts a 1 Hz `cstate` snapshot (transport lit-states, freeze
+Feedback: the leader broadcasts a 1 Hz `cstate` snapshot (transport lit-states, the
+record-arm state — `recArming` + `recArm {delaySec, countIn, transient, free}` — freeze
 depth, strip toggles — earth/metal/delay/reverb/tuner — pause, vox mute, blackout,
 active quale, pad voices, cps, tap-history depths, auto/walk toggle states, and the
 chron clock `tau`/`horizonMin` behind the τ readout) so the phone reflects reality;

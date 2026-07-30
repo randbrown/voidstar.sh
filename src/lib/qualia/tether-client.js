@@ -6,8 +6,9 @@
 // The pad mirrors the DOIO KB16 keymap's action surface (same action ids —
 // one shared dispatch map on the host, so keystrokes / MIDI / tether never
 // drift), organized into thumb-sized tabs:
-//   RIG   — freeze stack, drives, strip toggles, rig/delay/reverb sliders
-//   LOOP  — looper transport + grab, vox mute, pause
+//   RIG   — freeze stack + grab, drives, strip toggles, rig/delay/reverb sliders
+//   LOOP  — looper transport + grab, the one-button rec (idle / counting in /
+//           rolling), the free-run record-start modes, vox mute, pause
 //   SEQ   — strudel/sequencer transport, tempo, live drum pads (tap to play;
 //           arm ⏺ write to also quantize the hit into the pattern grid),
 //           undo/redo/clear over the pattern edits
@@ -204,7 +205,11 @@ export async function initTetherClient(root) {
   // ── Host state (drives lit buttons + drum pads) ───────────────────────────
   let state = {
     cps: null, strudelPlaying: false, seqPlaying: false, loopPlaying: false,
-    recording: false, freezeDepth: 0, quale: '', voices: [], grid: null,
+    recording: false, recArming: false,
+    // { delaySec, countIn, transient, free } — free-run record arming, mirrored
+    // from the rig so the mode chips read the host's truth.
+    recArm: null,
+    freezeDepth: 0, quale: '', voices: [], grid: null,
     tapUndoDepth: 0, tapRedoDepth: 0,
     walkOn: false, autoCycleOn: false, autoPhaseOn: false,
     earthOn: false, metalOn: false, delayOn: false, reverbOn: false,
@@ -351,6 +356,11 @@ export async function initTetherClient(root) {
         grid(2,
           padBtn('re-grab', 'freezeRegrab', { sub: 'replace top' }),
           padBtn('clear', 'freezeClear', { cls: 'warn', sub: 'drop stack' })),
+        // Grab sits with the freeze stack, not on the loop tab: both are the
+        // "capture what just happened" reflex, and this is the tab already
+        // open when a phrase turns out to be worth keeping.
+        grid(1,
+          padBtn('⧉ grab', 'grab', { sub: 'retro-loop the last cycles' })),
         el('h3', 'sp-h', 'drives & strip'),
         grid(3,
           padBtn('earth', 'earth', { sub: 'drive', lit: 'earth', flip: 'earthOn' }),
@@ -368,14 +378,38 @@ export async function initTetherClient(root) {
         el('div', 'sp-note', 'sliders send absolute values, like MIDI CC knobs — hold a ↺ to snap one back to default'),
       );
     } else if (tab === 'loop') {
+      // One rec button, three states (idle · counting in · rolling) — reading a
+      // single pad beats picking the right one of two mid-phrase. reflect()
+      // repaints it from the host's recording / recArming.
+      const recBtn = padBtn('⏺ rec', 'recToggle', { lit: 'rec', sub: 'arm / stop' });
+      // Optimistic mode flips (same idiom as padBtn's `flip`) so the chips
+      // react on tap; the host's cstate echo corrects any miss.
+      const delayBtn = padBtn('⏱ delay', 'recDelayCycle', { lit: 'recDelay', sub: 'off / 1s / 2s / 4s' });
+      delayBtn.addEventListener('click', () => {
+        if (!state.recArm) return;
+        const steps = [0, 1, 2, 4];
+        const i = steps.indexOf(state.recArm.delaySec);
+        state.recArm = { ...state.recArm, delaySec: steps[(i < 0 ? 1 : i + 1) % steps.length] };
+        reflect();
+      });
+      const transBtn = padBtn('⇢ transient', 'recTransient', { lit: 'recTransient', sub: 'start on first note' });
+      transBtn.addEventListener('click', () => {
+        if (!state.recArm) return;
+        state.recArm = { ...state.recArm, transient: !state.recArm.transient };
+        reflect();
+      });
+
       bodyEl.append(
         el('h3', 'sp-h', 'looper transport'),
         grid(2,
           padBtn('▶ ■ loop', 'loopPlayStop', { lit: 'loop', sub: 'play / stop' }),
           padBtn('⧉ grab', 'grab', { sub: 'retro-loop' })),
-        grid(2,
-          padBtn('⏺ rec', 'recStart', { lit: 'rec', sub: 'start' }),
-          padBtn('⏹ rec', 'recStop', { sub: 'stop' })),
+        grid(1, recBtn),
+        // Free-run record arming — the reason this exists is that both hands
+        // are on the steel when the loop should start.
+        el('h3', 'sp-h', 'record start'),
+        grid(2, delayBtn, transBtn),
+        el('div', 'sp-note sp-rec-note', ''),
         el('h3', 'sp-h', 'vox / transport'),
         grid(2,
           padBtn('vox', 'voxMute', { sub: 'mute / live', lit: 'vox', flip: 'voxMuted' }),
@@ -504,7 +538,9 @@ export async function initTetherClient(root) {
       const on = kind === 'strudel' ? state.strudelPlaying
         : kind === 'seq'       ? state.seqPlaying
         : kind === 'loop'      ? state.loopPlaying
-        : kind === 'rec'       ? state.recording
+        : kind === 'rec'       ? (state.recording || state.recArming)
+        : kind === 'recDelay'  ? !!(state.recArm?.free && state.recArm?.delaySec > 0)
+        : kind === 'recTransient' ? !!(state.recArm?.free && state.recArm?.transient)
         : kind === 'freeze'    ? state.freezeDepth > 0
         : kind === 'walk'      ? state.walkOn
         : kind === 'cycleAuto' ? state.autoCycleOn
@@ -519,13 +555,35 @@ export async function initTetherClient(root) {
         : kind === 'blackout'  ? state.blackoutOn
         : false;
       b.classList.toggle('lit', !!on);
+      // Pads with a sub-label keep it — only the main/sub spans change.
+      const main = b.querySelector('.sp-pad-main');
+      const sub  = b.querySelector('.sp-pad-sub');
+      const setLabel = (m, s) => {
+        if (main) main.textContent = m; else b.textContent = m;
+        if (sub && s != null) sub.textContent = s;
+      };
       if (kind === 'freeze') {
         const d = state.freezeDepth | 0;
-        const label = d > 1 ? `❄ frz${'²³⁴⁵⁶⁷⁸⁹'[Math.min(d, 9) - 2] || `×${d}`}` : '❄ frz';
-        // Pads with a sub-label keep it — only the main span changes.
-        const main = b.querySelector('.sp-pad-main');
-        if (main) main.textContent = label; else b.textContent = label;
+        setLabel(d > 1 ? `❄ frz${'²³⁴⁵⁶⁷⁸⁹'[Math.min(d, 9) - 2] || `×${d}`}` : '❄ frz');
+      } else if (kind === 'rec') {
+        // Three states in one pad — nothing to pick mid-phrase.
+        setLabel(state.recArming ? '◌ arming' : state.recording ? '⏹ rec' : '⏺ rec',
+                 state.recArming ? 'tap to cancel' : state.recording ? 'tap to stop' : 'arm / stop');
+      } else if (kind === 'recDelay') {
+        const d = state.recArm?.delaySec || 0;
+        setLabel(d > 0 ? `⏱ ${d}s` : '⏱ delay');
       }
+    }
+    // The two arming modes are free-run only; say so rather than letting the
+    // pads look broken while the looper is locked to the Strudel grid.
+    const recNote = bodyEl.querySelector('.sp-rec-note');
+    if (recNote) {
+      const arm = state.recArm;
+      recNote.textContent = !arm ? ''
+        : !arm.free ? 'synced to strudel — the cycle grid owns the loop start; turn sync off on the rig to use these'
+        : arm.delaySec > 0 ? `⏺ waits ${arm.delaySec}s${arm.countIn ? ' (with a count-in)' : ''} before the loop starts`
+        : arm.transient ? '⏺ listens, and the loop starts on your first note'
+        : '⏺ starts the loop immediately';
     }
     for (const b of bodyEl.querySelectorAll('[data-hist]')) {
       b.disabled = b.dataset.hist === 'undo' ? !(state.tapUndoDepth > 0) : !(state.tapRedoDepth > 0);
