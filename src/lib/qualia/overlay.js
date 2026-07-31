@@ -148,6 +148,24 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   parent.appendChild(canvas);
   const ctx = canvas.getContext('2d');
 
+  // Baked once: the red falloff behind the nightcall eyes. A steep curve —
+  // most of the energy inside the first fifth of the radius — so the eye
+  // reads as a hot point bleeding light, not a soft ball.
+  const eyeGlow = (() => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grad.addColorStop(0.00, 'rgba(255,236,228,1)');
+    grad.addColorStop(0.08, 'rgba(255,120,96,0.92)');
+    grad.addColorStop(0.22, 'rgba(236,26,40,0.42)');
+    grad.addColorStop(0.55, 'rgba(178,0,26,0.11)');
+    grad.addColorStop(1.00, 'rgba(140,0,20,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+    return c;
+  })();
+
   let dprCap = 1.5;
   function applyDpr() {
     const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
@@ -561,16 +579,21 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
         }
       }
 
-      // Nightcall eyes — homage to Vincent Belorgey (Kavinsky). Red radial
-      // glows at the MediaPipe eye centres (raw 2 / 5) with a single white
-      // specular dot each, after the album art. Drawn last so the glow rides
-      // on top of the face bones; sized from the inter-eye distance so it
-      // scales with distance from the camera.
+      // Nightcall eyes — homage to Vincent Belorgey (Kavinsky). Drawn last
+      // so the glow rides on top of the face bones; sized from the inter-eye
+      // distance so it scales with distance from the camera.
       if (opts.nightcall || nightcallTheme) drawNightcallEyes(lms, lmPos, audio, audioOn, field.time, pIdx);
     });
     ctx.restore();
   }
 
+  // The album art: two hot white-red points burning behind dark glasses,
+  // joined by the laser that runs out past the edge of the sleeve. The
+  // points sit a touch *below* the eye landmarks — dropping them onto the
+  // lens line rather than the socket is what sells the sunglasses.
+  //
+  // Everything scales off the inter-eye distance and rides the music:
+  // bands.total sets the standing brightness, beat.pulse punches it.
   function drawNightcallEyes(lms, lmPos, audio, audioOn, time, pIdx) {
     const eL = lms[2], eR = lms[5], nose = lms[0];
     const okL = !!eL && eL.visibility >= 0.35;
@@ -579,47 +602,84 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
 
     const pL = okL ? lmPos(eL) : null;
     const pR = okR ? lmPos(eR) : null;
-    // Glow radius from the inter-eye distance; eye→nose stands in when a
-    // profile view hides one eye.
-    let r;
+    // Scale from the inter-eye distance; eye→nose stands in when a profile
+    // view hides one eye. dx/dy carry the head tilt so the drop and the
+    // laser both roll with the face instead of staying screen-level.
+    let d, dx = 1, dy = 0;
     if (pL && pR) {
-      r = Math.hypot(pR[0] - pL[0], pR[1] - pL[1]) * 0.55;
+      dx = pR[0] - pL[0]; dy = pR[1] - pL[1];
+      d = Math.hypot(dx, dy) || 1;
+      dx /= d; dy /= d;
     } else if (nose && nose.visibility >= 0.35) {
       const p = pL || pR;
       const [nx, ny] = lmPos(nose);
-      r = Math.hypot(nx - p[0], ny - p[1]) * 0.8;
+      d = Math.hypot(nx - p[0], ny - p[1]) * 1.45;
     } else {
-      r = 18;
+      d = 32;
     }
-    r = Math.max(8, Math.min(r, 160));
+    d = Math.max(14, Math.min(d, 300));
+    // Perpendicular to the eye line. Which of the two normals points down
+    // the face depends on which eye lands left on screen, and lmToCanvas
+    // mirrors x — so pick the one with a positive screen-y and the drop is
+    // correct whether the preview is mirrored or not.
+    let px = -dy, py = dx;
+    if (py < 0) { px = -px; py = -py; }
+    const drop = d * 0.15;
 
-    // Breathe slowly when idle; flare on kicks when audio is live.
-    const breathe = 0.85 + 0.15 * Math.sin(time * 1.7 + pIdx * 2.1);
-    const flare = audioOn ? 1 + audio.beat.pulse * 1.1 + audio.bands.bass * 0.35 : breathe;
-    const R = r * flare;
-    const alpha = audioOn ? Math.min(1, 0.6 + audio.beat.pulse * 0.4) : 0.6 * breathe;
+    // Intensity. Live: a standing level from the mix that the kick punches
+    // through. Idle: a slow breath, so a dark room still has eyes in it.
+    const breathe = 0.72 + 0.28 * Math.sin(time * 1.7 + pIdx * 2.1);
+    const level = Math.min(1, audioOn
+      ? 0.22 + audio.bands.total * 0.35 + audio.bands.bass * 0.22 + audio.beat.pulse * 0.55
+      : 0.38 * breathe);
+    const punch = 0.85 + level * 0.6;
+    const R = d * 0.34 * punch;                 // glow reach
+    const core = Math.max(1, d * 0.034 * (0.85 + level * 0.55));
+    const alpha = Math.min(1, 0.42 + level * 0.62);
 
+    ctx.save();
     ctx.globalCompositeOperation = 'lighter';
+
+    // The laser — a flat streak along the eye line, brightest between the
+    // eyes and running out well past both. Only with both eyes in frame;
+    // in profile there's no line to hang it on.
+    if (pL && pR) {
+      const mx = (pL[0] + pR[0]) / 2 + px * drop;
+      const my = (pL[1] + pR[1]) / 2 + py * drop;
+      const len = d * (1.15 + level * 0.85);
+      const thick = Math.max(1.2, d * 0.060 * (0.7 + level * 0.6));
+      ctx.save();
+      ctx.translate(mx, my);
+      ctx.rotate(Math.atan2(dy, dx));
+      ctx.globalAlpha = Math.min(1, 0.22 + level * 0.45);
+      ctx.drawImage(eyeGlow, -len, -thick, len * 2, thick * 2);
+      // A hairline of pure light down the middle of the streak, kept well
+      // inside the bloom so it fades out instead of ending.
+      ctx.globalAlpha = Math.min(1, 0.14 + level * 0.36);
+      ctx.fillStyle = 'rgba(255,206,196,0.85)';
+      ctx.fillRect(-len * 0.55, -Math.max(0.4, thick * 0.08),
+                   len * 1.10, Math.max(0.8, thick * 0.16));
+      ctx.restore();
+    }
+
+    ctx.globalAlpha = alpha;
     for (const p of [pL, pR]) {
       if (!p) continue;
-      const [x, y] = p;
-      const g = ctx.createRadialGradient(x, y, 0, x, y, R);
-      g.addColorStop(0.0, `rgba(255,64,48,${alpha})`);
-      g.addColorStop(0.3, `rgba(224,16,32,${alpha * 0.75})`);
-      g.addColorStop(1.0, 'rgba(160,0,24,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.fill();
-      // Hot core + the album-art specular point.
-      ctx.fillStyle = `rgba(255,140,110,${alpha * 0.9})`;
-      ctx.beginPath(); ctx.arc(x, y, R * 0.18, 0, Math.PI * 2); ctx.fill();
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, alpha * 1.5)})`;
-      ctx.beginPath();
-      ctx.arc(x - R * 0.1, y - R * 0.1, Math.max(1.2, R * 0.07), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalCompositeOperation = 'lighter';
+      const x = p[0] + px * drop, y = p[1] + py * drop;
+      // Wide bleed, then a tight inner glow — two passes of the same sprite
+      // stack into a falloff far steeper than one gradient gives you.
+      ctx.drawImage(eyeGlow, x - R, y - R, R * 2, R * 2);
+      ctx.globalAlpha = Math.min(1, alpha * 0.85);
+      ctx.drawImage(eyeGlow, x - R * 0.40, y - R * 0.40, R * 0.80, R * 0.80);
+      // The point itself: red-hot rim, white-hot centre.
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = `rgba(255,86,64,${Math.min(1, alpha * 0.95)})`;
+      ctx.beginPath(); ctx.arc(x, y, core * 1.7, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = `rgba(255,240,232,${Math.min(1, 0.65 + level * 0.45)})`;
+      ctx.beginPath(); ctx.arc(x, y, core, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = alpha;
     }
-    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
   }
 
   // ── Ripples ───────────────────────────────────────────────────────────────
