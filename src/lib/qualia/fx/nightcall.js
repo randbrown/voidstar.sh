@@ -240,7 +240,7 @@ export default {
       // Cruise speed — the resolved speed param already carries audio.total.
       const spd = params.speed * (0.65 + audio.bands.bass * 0.4 + audio.bands.mids * 0.25);
       dist += dt * spd * 1.7;
-      wheelA -= dt * spd * 9;               // side view faces left → rolls CCW
+      wheelA += dt * spd * 9;               // side view faces right → rolls CW
 
       // Road curve — incommensurate sines of distance so the highway is
       // almost always bending gently one way or the other.
@@ -601,8 +601,10 @@ export default {
 
     // ── Testarossa mode (side view) ─────────────────────────────────────
     // A vector illustration of the car itself, drawn with paths in
-    // car-space: u along the length (0 = nose, facing LEFT, 1 = tail),
-    // v up from the ground, both as fractions of the car's length.
+    // car-space: u along the length (0 = nose, 1 = tail), v up from the
+    // ground, both as fractions of the car's length. Car-space runs
+    // nose-left; the whole drawing is mirrored at paint time so the car
+    // faces RIGHT on screen, matching the world sliding left past it.
     // Upper silhouette, nose → tail, dense enough that the lineTo chain
     // reads as curves at screen scale. Real-profile proportions: wheel
     // diameter ≈ 0.145 of the length, roof at ≈ 0.235, wedge nose.
@@ -651,9 +653,13 @@ export default {
       const pitch = -scratch.beatPulse * 0.008;
       const X = (u) => (u - 0.48) * L;
       const Y = (v) => -v * L;
+      // World x of a car-space u — car-space points left, the car faces
+      // right, so screen x mirrors about carX.
+      const wx = (u) => carX - X(u);
 
       ctx.save();
       ctx.translate(carX, groundY - bob);
+      ctx.scale(-1, 1);   // face right
       ctx.rotate(pitch);
 
       // Ground shadow (drawn unrotated enough at this pitch).
@@ -777,17 +783,17 @@ export default {
       ctx.restore();
 
       // Lights in world space (unrotated — the pitch is tiny).
-      const tailX = carX + X(1.0), tailY = groundY - bob - 0.095 * L;
-      const lampX = carX + X(0.083), lampY = groundY - bob - 0.138 * L;
+      const tailX = wx(1.0), tailY = groundY - bob - 0.095 * L;
+      const lampX = wx(0.083), lampY = groundY - bob - 0.138 * L;
 
       ctx.globalCompositeOperation = 'lighter';
-      // Headlight beam — a long cold cone toward the left edge.
+      // Headlight beam — a long cold cone toward the right edge.
       const beamA = (0.10 + scratch.beatPulse * 0.08 + 0.02 * Math.sin(t * 31)) * glow;
       ctx.fillStyle = `rgba(210,225,255,${Math.max(0, beamA)})`;
       ctx.beginPath();
       ctx.moveTo(lampX, lampY - 0.012 * L);
-      ctx.lineTo(-W * 0.02, lampY - 0.055 * L);
-      ctx.lineTo(-W * 0.02, lampY + 0.10 * L);
+      ctx.lineTo(W * 1.02, lampY - 0.055 * L);
+      ctx.lineTo(W * 1.02, lampY + 0.10 * L);
       ctx.lineTo(lampX, lampY + 0.016 * L);
       ctx.closePath();
       ctx.fill();
@@ -800,14 +806,15 @@ export default {
       ctx.drawImage(glowRed, tailX - 0.09 * L, tailY - 0.09 * L, 0.18 * L, 0.18 * L);
       const trailLen = L * (0.35 + scratch.bass * 0.55 + scratch.speed * 0.12);
       ctx.globalAlpha = tlA * 0.8;
-      ctx.drawImage(glowRed, tailX - 0.02 * L, tailY - 0.028 * L, trailLen, 0.056 * L);
+      // The trail drags out behind the tail — leftward now.
+      ctx.drawImage(glowRed, tailX + 0.02 * L - trailLen, tailY - 0.028 * L, trailLen, 0.056 * L);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
 
       // Wheels last, over the punched arches.
       const fy = groundY - bob - 0.066 * L;
-      drawWheel(carX + X(FRONT_WHEEL.u), fy, FRONT_WHEEL.r * L, L, fs);
-      drawWheel(carX + X(REAR_WHEEL.u), fy, REAR_WHEEL.r * L, L, fs);
+      drawWheel(wx(FRONT_WHEEL.u), fy, FRONT_WHEEL.r * L, L, fs);
+      drawWheel(wx(REAR_WHEEL.u), fy, REAR_WHEEL.r * L, L, fs);
     }
 
     function renderTestarossa() {
@@ -841,7 +848,7 @@ export default {
       drawLightning(horizonY, fs, t);
 
       // Scrolling city skyline — same spectrum bins, sliding by as we
-      // drive (the car faces left, so the world slides right).
+      // drive (the car faces right, so the world slides left).
       if (scratch.city) {
         const bw = W / (SKY_BINS - 8);
         const maxH = H * 0.16;
@@ -868,9 +875,10 @@ export default {
       ctx.fillRect(0, groundY - H * 0.006, W, H * 0.14);
       ctx.fillStyle = 'rgba(210,225,255,0.5)';
       ctx.fillRect(0, horizonY, W, Math.max(1, 1.6 * fs));
-      // Dashes slide right as the car drives left.
+      // Dashes slide left as the car drives right — same scroll as the
+      // streetlights, skyline and rain.
       const dashW = W * 0.07, gap = W * 0.115;
-      const dx = (dist * W * 0.22) % gap;
+      const dx = -((dist * W * 0.22) % gap);
       ctx.fillStyle = 'rgba(235,242,255,0.7)';
       for (let x = -gap + dx; x < W + gap; x += gap) {
         ctx.fillRect(x, groundY + H * 0.085, dashW, Math.max(1.5, 2.6 * fs));
@@ -888,7 +896,7 @@ export default {
         ctx.moveTo(x, groundY + H * 0.01);
         ctx.lineTo(x, poleTop);
         ctx.stroke();
-        // Arm reaching over the road (toward the left / direction of travel).
+        // Arm reaching out over the road.
         ctx.beginPath();
         ctx.moveTo(x, poleTop);
         ctx.quadraticCurveTo(x - W * 0.035, poleTop, x - W * 0.05, poleTop + H * 0.012);
@@ -910,11 +918,11 @@ export default {
       const carX = W * (0.46 + laneX * 0.05);
       drawTestarossa(carX, groundY, L, fs);
 
-      // Wet-road reflection — a soft red pool beneath the car.
+      // Wet-road reflection — a soft red pool beneath the tail, now left.
       const tlA = Math.min(1, (0.5 + scratch.bass * 0.5) * glow) * (0.35 + scratch.rainAmt * 0.5);
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = tlA * 0.5;
-      ctx.drawImage(glowRed, carX + L * 0.38, groundY - L * 0.02, L * 0.3, L * 0.10);
+      ctx.drawImage(glowRed, carX - L * 0.68, groundY - L * 0.02, L * 0.3, L * 0.10);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
     }
