@@ -48,8 +48,9 @@ Theme IDs — the single source of truth is `THEMES` in `theme.js`.
 `ThemeBoot.astro` now derives its valid-id list from `THEMES` automatically, so
 the only manual pairing left is **`theme.js` `THEMES` ↔ the matching
 `[data-theme]` block in `themes.css`** (CSS can't read the JS array). Current
-IDs: `voidstar`, `phosphor`, `amber`, `tape`, `abyssal`, `glacial`,
-`win95`, `glass`, `visioneer`, `gardens`.
+IDs: `voidstar`, `phosphor`, `amber`, `tape`, `abyssal`, `nightcall`,
+`glacial`, `win95`, `glass`, `visioneer`, `gardens`, `glissando`,
+`risograph`, `patchbay`, `ruliad`, `darkroom`, `lightroom`.
 
 ---
 

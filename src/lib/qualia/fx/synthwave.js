@@ -85,6 +85,17 @@ const PALETTES = {
     spectrum:  '190,95%,60%',
     grid:      '190,85%,55%',
   },
+  // Homage to Vincent Belorgey (Kavinsky) — the Nightcall/Outrun cover
+  // palette: blackish-blue storm sky, red glow, cold white-blue chrome.
+  nightcall: {
+    skyTop:    '225,60%,5%',
+    skyHorizon:'222,55%,14%',
+    sunTop:    '0,95%,55%',
+    sunBot:    '350,95%,42%',
+    mountain:  '220,30%,24%',
+    spectrum:  '355,95%,58%',
+    grid:      '210,45%,68%',
+  },
 };
 
 /** @type {import('../types.js').QFXModule} */
@@ -97,7 +108,7 @@ export default {
     { id: 'mode', label: 'mode', type: 'select',
       options: ['horizon', 'road', 'city', 'dreamscape'], default: 'horizon' },
     { id: 'palette', label: 'palette', type: 'select',
-      options: ['classic', 'miami', 'vapor', 'void'], default: 'classic' },
+      options: ['classic', 'miami', 'vapor', 'void', 'nightcall'], default: 'classic' },
     { id: 'gridDensity', label: 'grid density', type: 'range', min: 6, max: 32, step: 1, default: 16 },
     // Grid speed — base scrolls forward at the slider rate, audio.total
     // adds a surge. Modulator amount is non-zero (modulator math zeroes
@@ -155,6 +166,7 @@ export default {
     road:         { mode: 'road',       palette: 'classic' },
     'road-night': { mode: 'road',       palette: 'miami', stars: true },
     city:         { mode: 'city',       palette: 'miami' },
+    nightcall:    { mode: 'road',       palette: 'nightcall', stars: true },
     vapor:        { mode: 'dreamscape', palette: 'vapor', aesthetic: true },
     dreamy:       { mode: 'dreamscape', palette: 'vapor', gridSpeed: 0.2, aesthetic: true },
   },

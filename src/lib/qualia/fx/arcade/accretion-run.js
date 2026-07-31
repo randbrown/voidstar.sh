@@ -432,6 +432,13 @@ export default function create(eng) {
     }
     parts.draw(vctx);
 
+    // Crash tribute — Kavinsky lore: the driver crashed his Testarossa in
+    // 1986 and came back anyway. RIP Vincent Belorgey.
+    if (crash > 0) {
+      eng.text('RIP KAVINSKY', vw / 2, vh * 0.24, eng.C.red, 1, 'center', Math.min(1, crash * 1.6));
+      eng.text('LEGENDS NEVER DIE', vw / 2, vh * 0.24 + 8, eng.C.white, 1, 'center', Math.min(0.8, crash));
+    }
+
     // Top HUD strip (game stats, Outrun style). The quale shell adds the bottom
     // diagnostics strip. Idle prompt sits high so it clears both + the car.
     if (params.hud) {

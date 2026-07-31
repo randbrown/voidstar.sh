@@ -167,6 +167,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     sparks:   true,
     aura:     true,
     ripples:  true,
+    nightcall: false,
     ascii:    false,
     mosh:     false,
     edge:     false,
@@ -473,7 +474,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
 
   function drawPoseOverlay(field) {
-    if (!opts.skeleton && !opts.aura) return;
+    if (!opts.skeleton && !opts.aura && !opts.nightcall) return;
     const people = field.pose.people;
     if (!people.length) return;
     const W = canvas.width, H = canvas.height;
@@ -507,44 +508,102 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
         }
       }
 
-      if (!opts.skeleton) return;
-
-      ctx.globalCompositeOperation = 'source-over';
-
-      // Bones.
-      const thick = 1.6 + audio.bands.mids * 4 + audio.beat.pulse * 2;
-      ctx.lineWidth = thick; ctx.lineCap = 'round';
-      for (const [a, b] of SKELETON_CONNECTIONS) {
-        const lmA = lms[a], lmB = lms[b];
-        if (!lmA || !lmB || lmA.visibility < 0.35 || lmB.visibility < 0.35) continue;
-        const [ax, ay] = lmPos(lmA);
-        const [bx, by] = lmPos(lmB);
-        const grad = ctx.createLinearGradient(ax, ay, bx, by);
-        const shift = audioOn ? Math.floor(audio.bands.mids * 40 + audio.beat.pulse * 30) : 0;
-        grad.addColorStop(0, shiftHue(pal.boneA, shift));
-        grad.addColorStop(1, shiftHue(pal.boneB, shift));
-        ctx.strokeStyle = grad;
-        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-      }
-
-      // Joints.
-      const pulse = 1 + audio.bands.bass * 1.6 + audio.beat.pulse * 0.8;
-      for (let k = 0; k < LM_WEIGHT_ENTRIES.length; k++) {
-        const idx    = LM_WEIGHT_ENTRIES[k][0];
-        const weight = LM_WEIGHT_ENTRIES[k][1];
-        const lm     = lms[idx];
-        if (!lm || lm.visibility < 0.35) continue;
-        const [x, y] = lmPos(lm);
-        const r = (2 + weight * 2) * pulse;
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.beginPath(); ctx.arc(x, y, r + 5 * pulse, 0, Math.PI * 2);
-        ctx.fillStyle = pal.halo; ctx.fill();
+      if (opts.skeleton) {
         ctx.globalCompositeOperation = 'source-over';
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = pal.joint; ctx.fill();
+
+        // Bones.
+        const thick = 1.6 + audio.bands.mids * 4 + audio.beat.pulse * 2;
+        ctx.lineWidth = thick; ctx.lineCap = 'round';
+        for (const [a, b] of SKELETON_CONNECTIONS) {
+          const lmA = lms[a], lmB = lms[b];
+          if (!lmA || !lmB || lmA.visibility < 0.35 || lmB.visibility < 0.35) continue;
+          const [ax, ay] = lmPos(lmA);
+          const [bx, by] = lmPos(lmB);
+          const grad = ctx.createLinearGradient(ax, ay, bx, by);
+          const shift = audioOn ? Math.floor(audio.bands.mids * 40 + audio.beat.pulse * 30) : 0;
+          grad.addColorStop(0, shiftHue(pal.boneA, shift));
+          grad.addColorStop(1, shiftHue(pal.boneB, shift));
+          ctx.strokeStyle = grad;
+          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        }
+
+        // Joints.
+        const pulse = 1 + audio.bands.bass * 1.6 + audio.beat.pulse * 0.8;
+        for (let k = 0; k < LM_WEIGHT_ENTRIES.length; k++) {
+          const idx    = LM_WEIGHT_ENTRIES[k][0];
+          const weight = LM_WEIGHT_ENTRIES[k][1];
+          const lm     = lms[idx];
+          if (!lm || lm.visibility < 0.35) continue;
+          const [x, y] = lmPos(lm);
+          const r = (2 + weight * 2) * pulse;
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.beginPath(); ctx.arc(x, y, r + 5 * pulse, 0, Math.PI * 2);
+          ctx.fillStyle = pal.halo; ctx.fill();
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fillStyle = pal.joint; ctx.fill();
+        }
       }
+
+      // Nightcall eyes — homage to Vincent Belorgey (Kavinsky). Red radial
+      // glows at the MediaPipe eye centres (raw 2 / 5) with a single white
+      // specular dot each, after the album art. Drawn last so the glow rides
+      // on top of the face bones; sized from the inter-eye distance so it
+      // scales with distance from the camera.
+      if (opts.nightcall) drawNightcallEyes(lms, lmPos, audio, audioOn, field.time, pIdx);
     });
     ctx.restore();
+  }
+
+  function drawNightcallEyes(lms, lmPos, audio, audioOn, time, pIdx) {
+    const eL = lms[2], eR = lms[5], nose = lms[0];
+    const okL = !!eL && eL.visibility >= 0.35;
+    const okR = !!eR && eR.visibility >= 0.35;
+    if (!okL && !okR) return;
+
+    const pL = okL ? lmPos(eL) : null;
+    const pR = okR ? lmPos(eR) : null;
+    // Glow radius from the inter-eye distance; eye→nose stands in when a
+    // profile view hides one eye.
+    let r;
+    if (pL && pR) {
+      r = Math.hypot(pR[0] - pL[0], pR[1] - pL[1]) * 0.55;
+    } else if (nose && nose.visibility >= 0.35) {
+      const p = pL || pR;
+      const [nx, ny] = lmPos(nose);
+      r = Math.hypot(nx - p[0], ny - p[1]) * 0.8;
+    } else {
+      r = 18;
+    }
+    r = Math.max(8, Math.min(r, 160));
+
+    // Breathe slowly when idle; flare on kicks when audio is live.
+    const breathe = 0.85 + 0.15 * Math.sin(time * 1.7 + pIdx * 2.1);
+    const flare = audioOn ? 1 + audio.beat.pulse * 1.1 + audio.bands.bass * 0.35 : breathe;
+    const R = r * flare;
+    const alpha = audioOn ? Math.min(1, 0.6 + audio.beat.pulse * 0.4) : 0.6 * breathe;
+
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of [pL, pR]) {
+      if (!p) continue;
+      const [x, y] = p;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, R);
+      g.addColorStop(0.0, `rgba(255,64,48,${alpha})`);
+      g.addColorStop(0.3, `rgba(224,16,32,${alpha * 0.75})`);
+      g.addColorStop(1.0, 'rgba(160,0,24,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.fill();
+      // Hot core + the album-art specular point.
+      ctx.fillStyle = `rgba(255,140,110,${alpha * 0.9})`;
+      ctx.beginPath(); ctx.arc(x, y, R * 0.18, 0, Math.PI * 2); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, alpha * 1.5)})`;
+      ctx.beginPath();
+      ctx.arc(x - R * 0.1, y - R * 0.1, Math.max(1.2, R * 0.07), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+    }
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   // ── Ripples ───────────────────────────────────────────────────────────────

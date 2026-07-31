@@ -70,6 +70,7 @@ import detector       from './fx/detector.js';
 import ghostMachine   from './fx/ghost-machine.js';
 import ramblinVisioneer from './fx/ramblin-visioneer.js';
 import linerNotes     from './fx/liner-notes.js';
+import nightcall      from './fx/nightcall.js';
 import chaos          from './fx/chaos.js';
 import video          from './fx/video.js';
 import arcade         from './fx/arcade.js';
@@ -188,6 +189,7 @@ export function initQualiaPage() {
   mesh.register(ghostMachine);
   mesh.register(ramblinVisioneer);
   mesh.register(linerNotes);
+  mesh.register(nightcall);
   mesh.register(chaos);
   mesh.register(video);
   mesh.register(arcade);
@@ -219,6 +221,7 @@ export function initQualiaPage() {
   const btnSkel    = document.getElementById('btn-skeleton');
   const btnSparks  = document.getElementById('btn-sparks');
   const btnAura    = document.getElementById('btn-aura');
+  const btnNightcall = document.getElementById('btn-nightcall');
   const btnRipples = document.getElementById('btn-ripples');
   const btnAscii   = document.getElementById('btn-ascii');
   const btnMosh    = document.getElementById('btn-mosh');
@@ -446,6 +449,7 @@ export function initQualiaPage() {
     sparksOn:       overlay.getOption('sparks'),
     sparkStyle:     overlay.getSparkStyle(),
     auraOn:         overlay.getOption('aura'),
+    nightcallOn:    overlay.getOption('nightcall'),
     ripplesOn:      overlay.getOption('ripples'),
     glitchModes:    { ...glitchModes },
     moshConfig:     overlay.getMoshConfig(),
@@ -555,6 +559,7 @@ export function initQualiaPage() {
   if (typeof stored.sparksOn    === 'boolean') overlay.setOption('sparks',   stored.sparksOn);
   if (typeof stored.sparkStyle  === 'string')  overlay.setSparkStyle(stored.sparkStyle);
   if (typeof stored.auraOn      === 'boolean') overlay.setOption('aura',     stored.auraOn);
+  if (typeof stored.nightcallOn === 'boolean') overlay.setOption('nightcall', stored.nightcallOn);
   if (typeof stored.ripplesOn   === 'boolean') overlay.setOption('ripples',  stored.ripplesOn);
   // Glitch modes (per-button mode for ascii / mosh / edge). Migrate any
   // legacy stored.asciiMode / stored.moshOn / stored.edgeOn shape into the
@@ -2264,6 +2269,7 @@ export function initQualiaPage() {
   wireOverlayToggle(btnSkel,    'skeleton');
   wireOverlayToggle(btnSparks,  'sparks');
   wireOverlayToggle(btnAura,    'aura');
+  wireOverlayToggle(btnNightcall, 'nightcall');
   wireOverlayToggle(btnRipples, 'ripples');
 
   // Spark shape — dots (classic) or the inlay icons (Emmons atoms /
@@ -5751,6 +5757,7 @@ export function initQualiaPage() {
         sparks:     overlay.getOption('sparks'),
         sparkStyle: overlay.getSparkStyle(),
         aura:       overlay.getOption('aura'),
+        nightcall:  overlay.getOption('nightcall'),
         ripples:    overlay.getOption('ripples'),
         mosh:       overlay.getMoshConfig(),
         edge:       overlay.getEdgeConfig(),
@@ -5900,7 +5907,7 @@ export function initQualiaPage() {
 
     // 6. Overlay
     if (q.overlay) {
-      const overlayKeys = ['skeleton', 'sparks', 'aura', 'ripples'];
+      const overlayKeys = ['skeleton', 'sparks', 'aura', 'nightcall', 'ripples'];
       for (const k of overlayKeys) {
         if (typeof q.overlay[k] === 'boolean') overlay.setOption(k, q.overlay[k]);
       }
@@ -5921,6 +5928,7 @@ export function initQualiaPage() {
       btnSkel?.classList.toggle('active',    !!q.overlay.skeleton);
       btnSparks?.classList.toggle('active',  !!q.overlay.sparks);
       btnAura?.classList.toggle('active',    !!q.overlay.aura);
+      btnNightcall?.classList.toggle('active', !!q.overlay.nightcall);
       btnRipples?.classList.toggle('active', !!q.overlay.ripples);
     }
 
@@ -6137,7 +6145,7 @@ export function initQualiaPage() {
       activeFxId:    mesh.ids()[0],
       audio:   { mode: 'off', tunables: AUDIO_PRESETS.default },
       pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, scale: 1, numPoses: 1 },
-      overlay: { skeleton: true, sparks: true, sparkStyle: 'dots', aura: true, ripples: true },
+      overlay: { skeleton: true, sparks: true, sparkStyle: 'dots', aura: true, nightcall: false, ripples: true },
       glitch:  { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off' },
       camWalk: { on: false, config: { ...CAM_WALK_DEFAULTS } },
       auto:    { phaseSeconds: 0, phaseStyle: 'sequential', phaseBeatSync: false,

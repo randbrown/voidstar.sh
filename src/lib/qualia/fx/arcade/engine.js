@@ -119,7 +119,9 @@ export function createParticles(cap = 256) {
 // matches the corner colour and is connected to the border — so interior pixels
 // of that same colour (a white licence plate, headlights, highlights) are kept.
 // Returns a canvas (drawable/tintable like an Image). No-op headless.
-function keyOutBackground(img) {
+// Exported for fx that reuse the arcade sprites outside a cabinet
+// (nightcall borrows the outrun Ferrari).
+export function keyOutBackground(img) {
   if (typeof document === 'undefined') return img;
   const w = img.width | 0, h = img.height | 0;
   if (w < 2 || h < 2) return img;
