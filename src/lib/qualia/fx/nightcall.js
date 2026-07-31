@@ -44,6 +44,12 @@ import { lmToCanvas } from '../video.js';
 
 const TAU = Math.PI * 2;
 
+// Pacing. The whole speed scale runs at half its original rate, so param
+// 1.0 is the cruise you actually want and the 4.0 top end is a real ceiling
+// rather than a blur. Everything downstream of the resolved speed —
+// travelled distance, wheel spin, rain fall, the dash speedo — halves with
+// it, so the modes stay in step with each other and with the presets.
+const SPEED_SCALE = 0.5;
 const HORIZON = 0.44;            // outrun horizon as a fraction of H
 const NUM_STARS = 110;
 const NUM_RAIN = 150;
@@ -106,6 +112,8 @@ export default {
   params: [
     { id: 'mode', label: 'mode', type: 'select',
       options: ['outrun', 'testarossa', 'dash'], default: 'outrun' },
+    // 1.0 is the cruise; the scale is normalised so 4.0 is a hard top end
+    // you'd actually reach for rather than an unusable blur.
     { id: 'speed', label: 'speed', type: 'range', min: 0, max: 4, step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.total', mode: 'mul', amount: 0.35 },
@@ -445,7 +453,8 @@ export default {
                  : params.mode === 'dash' ? 'dash' : 'outrun';
 
       // Cruise speed — the resolved speed param already carries audio.total.
-      const spd = params.speed * (0.65 + audio.bands.bass * 0.4 + audio.bands.mids * 0.25);
+      const spd = params.speed * SPEED_SCALE
+                * (0.65 + audio.bands.bass * 0.4 + audio.bands.mids * 0.25);
       dist += dt * spd * 1.7;
       wheelA += dt * spd * 9;               // side view faces right → rolls CW
 
