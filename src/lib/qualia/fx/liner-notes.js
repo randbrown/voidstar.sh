@@ -1,7 +1,8 @@
-// Liner Notes — the set's info card, as a quale. Four "transmissions" the
+// Liner Notes — the set's info card, as a quale. Five "transmissions" the
 // performer can park on screen (or let auto-phase / auto-cycle rotate
 // through): what live coding is, the javascript qualia speaks, a scan-to-
-// entangle QR, and the voidstar.sh QR. Typewriter text over a drifting
+// entangle QR, the voidstar.sh QR, and a Kavinsky homage card. Typewriter
+// text over a drifting
 // starfield with CRT scanlines; the QR is the artistic voidstar render
 // (portal finders + void* chip) from qr.js.
 //
@@ -19,7 +20,7 @@
 import { scaleAudio } from '../field.js';
 import { getPinnedRoom, readRoomFromQuery, buildJoinUrl } from '../entangle-protocol.js';
 
-const PAGES = ['livecoding', 'javascript', 'entangle', 'signal'];
+const PAGES = ['livecoding', 'javascript', 'entangle', 'signal', 'nightcall'];
 
 const PALETTES = {
   voidblue: { text: '#e8ecf8', dim: '#8f97b8', accent: '#22d3ee', accent2: '#66f0ff', code: '#9be8ff' },
@@ -27,6 +28,8 @@ const PALETTES = {
   phosphor: { text: '#dcffe8', dim: '#7da58c', accent: '#6ee7a0', accent2: '#a7f3d0', code: '#86efac' },
   amber:    { text: '#fdf3df', dim: '#b3a17c', accent: '#fbbf24', accent2: '#fb923c', code: '#fcd34d' },
   mono:     { text: '#ffffff', dim: '#8c8c8c', accent: '#ffffff', accent2: '#d6d6d6', code: '#eaeaea' },
+  // Nightcall — red on blue-black, after the Kavinsky album art.
+  nightcall:{ text: '#f2f4fa', dim: '#8f9ab8', accent: '#ff2b33', accent2: '#ff5c47', code: '#9bb8ff' },
 };
 
 // Content rows: k=kind — 'body' | 'code' | 'lang' (name + desc) | 'gap'.
@@ -81,6 +84,21 @@ const CONTENT = {
     ],
     qr: true,
   },
+  nightcall: {
+    kicker: '⊛ transmission 05 · nightcall',
+    h1: 'long live kavinsky',
+    rows: [
+      { k: 'body', t: 'an homage to Vincent Belorgey — Kavinsky.' },
+      { k: 'body', t: '1975 – 2026 · merci pour tout' },
+      { k: 'gap' },
+      { k: 'body', t: 'one synth line, red eyes in the dark,' },
+      { k: 'body', t: 'a Testarossa at 3am — and a whole genre' },
+      { k: 'body', t: 'drove through the door he opened.' },
+      { k: 'gap' },
+      { k: 'code', t: 'quale("nightcall") // drive safe, legend' },
+    ],
+    qr: false,
+  },
 };
 
 const NUM_STARS = 140;
@@ -93,7 +111,7 @@ export default {
 
   params: [
     { id: 'page', label: 'page', type: 'select',
-      options: ['livecoding', 'javascript', 'entangle', 'signal'], default: 'livecoding' },
+      options: ['livecoding', 'javascript', 'entangle', 'signal', 'nightcall'], default: 'livecoding' },
     { id: 'qrTarget', label: 'qr target', type: 'select',
       options: ['auto', 'entangle', 'qualia', 'custom'], default: 'auto' },
     { id: 'customUrl', label: 'custom url', type: 'text',
@@ -106,7 +124,7 @@ export default {
     { id: 'qrSize', label: 'qr size', type: 'range',
       min: 0.30, max: 0.75, step: 0.01, default: 0.48 },
     { id: 'palette', label: 'palette', type: 'select',
-      options: ['voidblue', 'violet', 'phosphor', 'amber', 'mono'], default: 'voidblue' },
+      options: ['voidblue', 'violet', 'phosphor', 'amber', 'mono', 'nightcall'], default: 'voidblue' },
     { id: 'reactivity', label: 'reactivity', type: 'range',
       min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
@@ -119,6 +137,7 @@ export default {
       { page: 'javascript' },
       { page: 'entangle' },
       { page: 'signal' },
+      { page: 'nightcall' },
     ],
   },
 
@@ -127,6 +146,7 @@ export default {
     entangle_card: { page: 'entangle', qrTarget: 'entangle', qrSize: 0.58 },
     site_card:     { page: 'signal', qrTarget: 'qualia', qrSize: 0.58 },
     manifesto:     { page: 'livecoding', typeSpeed: 0.8, palette: 'phosphor' },
+    nightcall:     { page: 'nightcall', palette: 'nightcall', typeSpeed: 0.8 },
   },
 
   async create(canvas, { ctx }) {

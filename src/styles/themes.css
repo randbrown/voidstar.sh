@@ -280,6 +280,40 @@
   --code-filter:   sepia(1) hue-rotate(125deg) saturate(2.2);
 }
 
+/* ---- Nightcall (homage to Vincent Belorgey, aka Kavinsky) ----------------
+   The Nightcall / Outrun cover as a skin: blackish-blue storm night, red
+   glow accents, cold headlight white-blue. Red eyes in the dark.           */
+[data-theme="nightcall"] {
+  --void:        #05070f;
+  --void-2:      #0a0e1c;
+  --surface:     #0d1220;
+  --surface-2:   #131a2c;
+  --border:      #232c48;
+  --border-2:    #3c4a74;
+  --text:        #eef1fb;
+  --text-muted:  #8f9ab8;
+  --text-dim:    #566080;
+  --accent:      #ff2b33;
+  --accent-glow: rgba(255, 43, 51, 0.4);
+  --cyan:        #9bb8ff;
+  --cyan-glow:   rgba(155, 184, 255, 0.3);
+  --pink:        #ff5c47;
+  --pink-glow:   rgba(255, 92, 71, 0.3);
+  --green:       #d7deff;
+  --amber:       #ffb43a;
+  --radius:      8px;
+  --radius-lg:   12px;
+  --glow-strength: 1.3;
+  --panel-blur:  14px;
+  --viz-bg:        #05070f;
+  --viz-hue-base:  355;
+  --viz-hue-spread: 25;
+  --viz-sat:       85;
+  --viz-light:     58;
+  --viz-glow:      1.4;
+  --code-filter:   sepia(1) hue-rotate(-50deg) saturate(2.4);
+}
+
 /* ---- Glacial Drift (icy minimal — Nordic / ECM ambient) ------------------ */
 [data-theme="glacial"] {
   --void:        #0c1014;
@@ -1121,6 +1155,59 @@ body::before {
 [data-theme="abyssal"] .qp-card > .qp-head {
   border-bottom: 1px solid transparent !important;
   border-image: linear-gradient(90deg, transparent, var(--cyan), transparent) 1 !important;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Nightcall — tail-light chrome. Controls are dark night-glass with a red
+   glow that brightens when active (brake lights coming on); panels are
+   blue-black storm glass with a faint red bloom rising from the top.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="nightcall"] .btn,
+[data-theme="nightcall"] .ctrl-btn,
+[data-theme="nightcall"] .qp-toggle,
+[data-theme="nightcall"] .qp-preset,
+[data-theme="nightcall"] .qp-tab,
+[data-theme="nightcall"] .start-btn {
+  background: color-mix(in srgb, var(--accent) 6%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent) !important;
+  border-radius: 6px !important;
+  color: var(--cyan) !important;
+  backdrop-filter: blur(6px) !important;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 18%, transparent) !important;
+}
+[data-theme="nightcall"] .ctrl-btn:hover,
+[data-theme="nightcall"] .qp-toggle:hover,
+[data-theme="nightcall"] .qp-preset:hover,
+[data-theme="nightcall"] .qp-tab:hover,
+[data-theme="nightcall"] .ctrl-btn.active,
+[data-theme="nightcall"] .ctrl-btn.active-audio,
+[data-theme="nightcall"] .qp-toggle.active,
+[data-theme="nightcall"] .qp-preset.active,
+[data-theme="nightcall"] .qp-tab.active {
+  color: #ffd9d4 !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 14px var(--accent-glow), inset 0 0 8px color-mix(in srgb, var(--accent) 16%, transparent) !important;
+}
+[data-theme="nightcall"] .qp-card,
+[data-theme="nightcall"] #topbar,
+[data-theme="nightcall"] #audio-panel,
+[data-theme="nightcall"] .qp-tabs,
+[data-theme="nightcall"] .post-card,
+[data-theme="nightcall"] .video-card,
+[data-theme="nightcall"] #cycle-mgr {
+  background:
+    radial-gradient(120% 80% at 50% -20%,
+      color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%),
+    color-mix(in srgb, var(--void-2) 82%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--cyan) 18%, transparent) !important;
+  backdrop-filter: blur(16px) saturate(1.2) !important;
+  box-shadow:
+    inset 0 0 24px color-mix(in srgb, var(--accent) 7%, transparent),
+    0 0 22px rgba(2, 4, 12, 0.6) !important;
+}
+[data-theme="nightcall"] .qp-card > .qp-head {
+  border-bottom: 1px solid transparent !important;
+  border-image: linear-gradient(90deg, transparent, var(--accent), transparent) 1 !important;
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -2134,6 +2221,15 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
   box-shadow:
     0 0 8px color-mix(in srgb, var(--cyan) 22%, transparent),
     inset 0 0 6px color-mix(in srgb, var(--cyan) 10%, transparent) !important;
+}
+
+/* ── Nightcall — tail-light sliders on cold steel tracks ─────────────────── */
+[data-theme="nightcall"] {
+  --ctl-slider-track: color-mix(in srgb, var(--cyan) 18%, transparent);
+  --ctl-slider-fill: var(--accent);
+  --ctl-slider-thumb: var(--accent);
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: 0 0 10px var(--accent-glow), 0 0 4px var(--accent);
 }
 
 /* ── Glacial — thin measurement line / measurement tags ──────────────────── */
