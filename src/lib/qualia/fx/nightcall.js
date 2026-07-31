@@ -1676,8 +1676,8 @@ export default {
       // ── The wheel ─────────────────────────────────────────────────────
       // Hub below the frame: from the driver's seat you never see the bottom
       // of the rim, only the two horns coming up at you.
-      drawGullwing(W * 0.5 + scratch.steer * W * 0.005, H * 0.955,
-                   Math.min(W * 0.235, H * 0.375), fs, beat);
+      drawGullwing(W * 0.5 + scratch.steer * W * 0.005, H * 1.00,
+                   Math.min(W * 0.260, H * 0.420), fs, beat);
     }
 
     // Mean of a spectrum slice, 0..1. Falls back to a slow idle swell so the
@@ -1853,10 +1853,10 @@ export default {
       const face = () => {
         ctx.beginPath();
         ctx.moveTo(-0.92 * Rw, -0.02 * Rw);                 // left grip root
-        ctx.lineTo(-0.64 * Rw, -0.30 * Rw);                 // left shoulder
-        ctx.lineTo(-0.07 * Rw, -0.62 * Rw);                 // apex
-        ctx.lineTo(0.07 * Rw, -0.62 * Rw);
-        ctx.lineTo(0.64 * Rw, -0.30 * Rw);                  // right shoulder
+        ctx.lineTo(-0.62 * Rw, -0.24 * Rw);                 // left shoulder
+        ctx.lineTo(-0.08 * Rw, -0.42 * Rw);                 // apex
+        ctx.lineTo(0.08 * Rw, -0.42 * Rw);
+        ctx.lineTo(0.62 * Rw, -0.24 * Rw);                  // right shoulder
         ctx.lineTo(0.92 * Rw, -0.02 * Rw);                  // right grip root
         ctx.lineTo(0.92 * Rw, 0.30 * Rw);
         ctx.quadraticCurveTo(0.58 * Rw, 0.42 * Rw, 0, 0.42 * Rw);
@@ -1867,7 +1867,7 @@ export default {
       // The face, lit from the screen above so the top edges catch and the
       // bottom falls into the footwell.
       if (!yokeGrad || yokeGrad._r !== Rw) {
-        yokeGrad = ctx.createLinearGradient(0, -0.62 * Rw, 0, 0.42 * Rw);
+        yokeGrad = ctx.createLinearGradient(0, -0.42 * Rw, 0, 0.42 * Rw);
         yokeGrad.addColorStop(0, '#20263a');
         yokeGrad.addColorStop(0.45, '#141926');
         yokeGrad.addColorStop(1, '#080a11');
@@ -1886,8 +1886,8 @@ export default {
           const d = 0.09 + i * 0.11;
           ctx.beginPath();
           ctx.moveTo(s * (0.86 - d * 0.5) * Rw, (0.02 + d) * Rw);
-          ctx.lineTo(s * (0.60 - d * 0.4) * Rw, (-0.26 + d) * Rw);
-          ctx.lineTo(s * 0.10 * Rw, (-0.58 + d) * Rw);
+          ctx.lineTo(s * (0.58 - d * 0.4) * Rw, (-0.20 + d) * Rw);
+          ctx.lineTo(s * 0.11 * Rw, (-0.38 + d) * Rw);
           ctx.stroke();
         }
       }
@@ -1895,7 +1895,7 @@ export default {
       ctx.lineWidth = Math.max(1, Rw * 0.016);
       for (const s of [-1, 1]) {
         ctx.beginPath();
-        ctx.moveTo(s * 0.035 * Rw, -0.60 * Rw);
+        ctx.moveTo(s * 0.035 * Rw, -0.40 * Rw);
         ctx.lineTo(s * 0.035 * Rw, 0.36 * Rw);
         ctx.stroke();
       }
@@ -1905,10 +1905,10 @@ export default {
       ctx.lineWidth = Math.max(1, Rw * 0.017);
       ctx.beginPath();
       ctx.moveTo(-0.92 * Rw, -0.02 * Rw);
-      ctx.lineTo(-0.64 * Rw, -0.30 * Rw);
-      ctx.lineTo(-0.07 * Rw, -0.62 * Rw);
-      ctx.lineTo(0.07 * Rw, -0.62 * Rw);
-      ctx.lineTo(0.64 * Rw, -0.30 * Rw);
+      ctx.lineTo(-0.62 * Rw, -0.24 * Rw);
+      ctx.lineTo(-0.08 * Rw, -0.42 * Rw);
+      ctx.lineTo(0.08 * Rw, -0.42 * Rw);
+      ctx.lineTo(0.62 * Rw, -0.24 * Rw);
       ctx.lineTo(0.92 * Rw, -0.02 * Rw);
       ctx.stroke();
 
@@ -1926,12 +1926,12 @@ export default {
         ctx.fillStyle = '#161b28';
         ctx.beginPath();
         // Tops stand a little proud of the face, the way the real tubes do.
-        ctx.roundRect(gx - Rw * 0.105, -0.22 * Rw, Rw * 0.21, Rw * 0.84, Rw * 0.105);
+        ctx.roundRect(gx - Rw * 0.105, -0.16 * Rw, Rw * 0.21, Rw * 0.80, Rw * 0.105);
         ctx.fill();
         ctx.strokeStyle = 'rgba(150,190,255,0.20)';
         ctx.lineWidth = Math.max(1, Rw * 0.012);
         ctx.beginPath();
-        ctx.moveTo(gx - Rw * 0.075, -0.14 * Rw);
+        ctx.moveTo(gx - Rw * 0.075, -0.09 * Rw);
         ctx.lineTo(gx - Rw * 0.075, 0.52 * Rw);
         ctx.stroke();
         // Finger grooves down the inner face.
@@ -1947,7 +1947,7 @@ export default {
       }
 
       // The crest, set into the right of the face.
-      const ex = 0.44 * Rw, ey = -0.08 * Rw, er = Rw * 0.085;
+      const ex = 0.44 * Rw, ey = -0.17 * Rw, er = Rw * 0.080;
       ctx.fillStyle = '#0a0d14';
       ctx.beginPath(); ctx.arc(ex, ey, er * 1.22, 0, TAU); ctx.fill();
       ctx.fillStyle = `rgba(226,32,42,${0.7 + beat * 0.3})`;
