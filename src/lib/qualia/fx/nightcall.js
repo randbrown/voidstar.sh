@@ -11,8 +11,13 @@
 //                itself driving through the night — popped headlight beam,
 //                the signature side strakes, spinning five-hole rims, the
 //                full-width tail light dragging a red trail. 1986 forever.
+//   dash       — first person: the same road seen over a cockpit. Kavinsky
+//                shot almost no interiors, so the panel takes its cues from
+//                KITT instead — seven-segment readouts, banks of LED
+//                bargraphs, the voice modulator, the gullwing yoke — in the
+//                nightcall palette. Every instrument reads real rig data.
 //
-// Both modes share the storm sky: beat-driven branching lightning + sky
+// All three share the storm sky: beat-driven branching lightning + sky
 // flash, moon god-rays and a vertical light column standing on the horizon.
 // Red / white / blue-black only; the palette IS the tribute.
 //
@@ -26,6 +31,10 @@
 //
 // Pose map:
 //   head.x      -> lane sway (outrun) / car drift (testarossa)
+//   head.x rel  -> steering (dash). Measured against a slow baseline, never
+//                  absolute: a performer stuck off-centre, or one who can
+//                  barely move, still gets a centred wheel that answers
+//                  whatever movement they have.
 //
 // Idle (no audio): the car cruises, dashes scroll, ambient lightning on a
 // slow random timer. The night doesn't stop.
@@ -51,6 +60,13 @@ const NUM_WETS = 26;             // wet-asphalt specular streaks
 const MOON_SLITS = 7;            // outrun slit bands across the moon's foot
 // Maria, as fractions of the moon's radius: x, y, r. Placed by eye for
 // balance rather than astronomy — they only ever read as soft shading.
+// Seven-segment bit masks, bit 0 = top bar then clockwise, bit 6 = middle.
+const SEG_MASK = {
+  '0': 0b0111111, '1': 0b0000110, '2': 0b1011011, '3': 0b1001111, '4': 0b1100110,
+  '5': 0b1101101, '6': 0b1111101, '7': 0b0000111, '8': 0b1111111, '9': 0b1101111,
+  '-': 0b1000000, ' ': 0, 'A': 0b1110111, 'C': 0b0111001, 'E': 0b1111001,
+  'F': 0b1110001, 'H': 0b1110110, 'L': 0b0111000, 'P': 0b1110011, 'U': 0b0111110,
+};
 const CRATERS = [
   [-0.38, -0.30, 0.13], [0.27, -0.47, 0.085], [0.43, 0.09, 0.17],
   [-0.13, 0.31, 0.10], [0.04, -0.09, 0.06], [-0.52, 0.12, 0.07],
@@ -89,7 +105,7 @@ export default {
 
   params: [
     { id: 'mode', label: 'mode', type: 'select',
-      options: ['outrun', 'testarossa'], default: 'outrun' },
+      options: ['outrun', 'testarossa', 'dash'], default: 'outrun' },
     { id: 'speed', label: 'speed', type: 'range', min: 0, max: 4, step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.total', mode: 'mul', amount: 0.35 },
@@ -122,8 +138,10 @@ export default {
   autoPhase: {
     steps: [
       { mode: 'outrun',    storm: 0.25, rain: 0.25, speed: 1.4, moon: 1.0, rays: 0.6 },
+      { mode: 'dash',      storm: 0.8,  rain: 0.5,  speed: 1.0, moon: 1.1, rays: 0.8 },
       { mode: 'outrun',    storm: 1.0,  rain: 0.6,  speed: 1.0, moon: 1.3, rays: 1.0 },
       { mode: 'testarossa', storm: 1.0,  rain: 0.5,  speed: 1.0, moon: 1.0, rays: 0.8 },
+      { mode: 'dash',      storm: 1.8,  rain: 0.8,  speed: 1.3, moon: 1.2, rays: 1.1 },
       { mode: 'testarossa', storm: 1.8,  rain: 0.9,  glow: 1.4, moon: 1.3, rays: 1.2 },
     ],
   },
@@ -135,6 +153,11 @@ export default {
     storm:      { mode: 'outrun', storm: 1.8, rain: 0.9, glow: 1.3, rays: 1.1 },
     // The record sleeve: moon overrunning the frame, rays wide open.
     moonrise:   { mode: 'outrun', storm: 0.4, rain: 0.35, moon: 1.5, rays: 1.4, speed: 0.8 },
+    // Behind the wheel: instruments lit, storm running, road ahead.
+    dash:       { mode: 'dash', storm: 1.0, rain: 0.5, moon: 1.1, rays: 0.8,
+                  speed: 1.0, glow: 1.0, poseInfluence: 0.6 },
+    pursuit:    { mode: 'dash', storm: 1.9, rain: 0.85, speed: 1.6, glow: 1.4,
+                  moon: 1.2, rays: 1.2 },
     testarossa: { mode: 'testarossa', storm: 1.0, rain: 0.5 },
     legend:     { mode: 'testarossa', storm: 1.8, rain: 0.9, glow: 1.5, rays: 1.2 },
   },
@@ -263,12 +286,13 @@ export default {
     let moonHaze = null, moonHazeKey = -1;
     let beamGrad = null, wetGrad = null, fogGrad = null, fogGradTall = null;
     let asphaltGrad = null, rearGrad = null;
+    // The three that follow the horizon: outrun and dash look down the same
+    // road from different heights, so these are keyed on the geometry rather
+    // than baked against one fixed horizon. Only one mode renders per frame,
+    // so a single slot each never thrashes.
+    let skyKey = -1, asphaltKey = -1, fogKey = -1, beamKey = -1;
     function rebuildGradients() {
-      const hy = H * HORIZON;
-      skyGrad = ctx.createLinearGradient(0, 0, 0, hy);
-      skyGrad.addColorStop(0, SKY_TOP);
-      skyGrad.addColorStop(0.55, SKY_MID);
-      skyGrad.addColorStop(1, SKY_HORIZON);
+      skyKey = asphaltKey = fogKey = beamKey = -1;
       // Side-view sky reaches further down.
       skyGradTall = ctx.createLinearGradient(0, 0, 0, H * 0.70);
       skyGradTall.addColorStop(0, SKY_TOP);
@@ -278,38 +302,69 @@ export default {
                                           W / 2, H * 0.55, Math.max(W, H) * 0.78);
       vignette.addColorStop(0, 'rgba(0,0,0,0)');
       vignette.addColorStop(1, 'rgba(1,3,14,0.66)');
-      // The light column standing on the vanishing point — bright at the
-      // road, gone by the top of the sky.
-      beamGrad = ctx.createLinearGradient(0, hy, 0, 0);
-      beamGrad.addColorStop(0, 'rgba(170,205,255,0.30)');
-      beamGrad.addColorStop(0.3, 'rgba(110,160,255,0.09)');
-      beamGrad.addColorStop(1, 'rgba(70,120,255,0)');
       // Wet-road red smear under the car (rebuilt here so render allocates none).
       wetGrad = ctx.createLinearGradient(0, H * 0.935, 0, H);
       wetGrad.addColorStop(0, 'rgba(255,40,45,0.30)');
       wetGrad.addColorStop(1, 'rgba(255,40,45,0)');
-      // Ground fog banking up against the horizon — the thing that stops the
-      // skyline from looking like a sticker on the moon.
-      fogGrad = ctx.createLinearGradient(0, hy - H * 0.17, 0, hy + H * 0.02);
-      fogGrad.addColorStop(0, 'rgba(46,96,190,0)');
-      fogGrad.addColorStop(0.62, 'rgba(52,104,196,0.13)');
-      fogGrad.addColorStop(1, 'rgba(96,150,235,0.26)');
       fogGradTall = ctx.createLinearGradient(0, H * 0.70 - H * 0.17, 0, H * 0.70 + H * 0.02);
       fogGradTall.addColorStop(0, 'rgba(46,96,190,0)');
       fogGradTall.addColorStop(0.62, 'rgba(52,104,196,0.13)');
       fogGradTall.addColorStop(1, 'rgba(96,150,235,0.26)');
-      // Asphalt: near-black at the horizon, lifting to a wet blue sheen as
-      // it comes at the camera.
-      asphaltGrad = ctx.createLinearGradient(0, hy, 0, H);
-      asphaltGrad.addColorStop(0, '#050a18');
-      asphaltGrad.addColorStop(0.45, '#0a1324');
-      asphaltGrad.addColorStop(1, '#101d3a');
       // Both depend on car size — lazily rebuilt where they're used.
       paintGrad = null;
       rearGrad = null;
       moonKey = moonPoolKey = moonHazeKey = -1;
     }
     rebuildGradients();
+
+    function skyGradFor(hy) {
+      if (skyKey !== hy) {
+        skyGrad = ctx.createLinearGradient(0, 0, 0, hy);
+        skyGrad.addColorStop(0, SKY_TOP);
+        skyGrad.addColorStop(0.55, SKY_MID);
+        skyGrad.addColorStop(1, SKY_HORIZON);
+        skyKey = hy;
+      }
+      return skyGrad;
+    }
+    // Asphalt: near-black at the horizon, lifting to a wet blue sheen as it
+    // comes at the camera.
+    function asphaltFor(hy, bottom) {
+      const k = hy * 65536 + bottom;
+      if (asphaltKey !== k) {
+        asphaltGrad = ctx.createLinearGradient(0, hy, 0, bottom);
+        asphaltGrad.addColorStop(0, '#050a18');
+        asphaltGrad.addColorStop(0.45, '#0a1324');
+        asphaltGrad.addColorStop(1, '#101d3a');
+        asphaltKey = k;
+      }
+      return asphaltGrad;
+    }
+    // Ground fog banking up against the horizon — the thing that stops the
+    // skyline from looking like a sticker on the moon.
+    function fogFor(hy) {
+      if (fogKey !== hy) {
+        fogGrad = ctx.createLinearGradient(0, hy - H * 0.17, 0, hy + H * 0.02);
+        fogGrad.addColorStop(0, 'rgba(46,96,190,0)');
+        fogGrad.addColorStop(0.62, 'rgba(52,104,196,0.13)');
+        fogGrad.addColorStop(1, 'rgba(96,150,235,0.26)');
+        fogKey = hy;
+      }
+      return fogGrad;
+    }
+
+    // The light column standing on the vanishing point — bright at the road,
+    // gone by the top of the sky.
+    function beamFor(hy) {
+      if (beamKey !== hy) {
+        beamGrad = ctx.createLinearGradient(0, hy, 0, 0);
+        beamGrad.addColorStop(0, 'rgba(170,205,255,0.30)');
+        beamGrad.addColorStop(0.3, 'rgba(110,160,255,0.09)');
+        beamGrad.addColorStop(1, 'rgba(70,120,255,0)');
+        beamKey = hy;
+      }
+      return beamGrad;
+    }
 
     // Moon face + its reflection on the asphalt, keyed on radius.
     // Lit from below and behind: the crown stays a deep steel blue and the
@@ -360,6 +415,13 @@ export default {
     let afterglow = 0;       // slow electric-blue bloom the strike leaves behind
     let idleBoltAt = 4 + Math.random() * 6;   // ambient-strike clock (idle)
     let wheelA = 0;          // side-view wheel rotation (rad)
+    // Dash-mode steering. headBase is the slow-moving centre the wheel
+    // measures against; -1 means "not seeded yet".
+    let steer = 0, steerTarget = 0, idleSteer = Math.random() * TAU;
+    let headX = 0, headBase = -1;
+    // Instrument values, all EMA'd so the readouts settle like real gauges.
+    let mph = 0, rpm = 0, volts = 13.8, temp = 0.42, fuelBurn = 0.72;
+    let odo = 0;
 
     const scratch = {
       time: 0, dt: 0, speed: 1,
@@ -367,6 +429,8 @@ export default {
       audioOn: false, brake: 0,
       mode: 'outrun', storm: 1, glow: 1, rainAmt: 0.6, city: true,
       moon: 1, rays: 0.8,
+      mph: 0, rpm: 0, volts: 13.8, temp: 0.4, fuel: 0.7, odo: 0, steer: 0,
+      waveform: null, spectrum: null, clockH: 0, clockM: 0, clockS: 0,
     };
 
     function update(field) {
@@ -377,7 +441,8 @@ export default {
       // Anything that isn't the side view is the rear view — which also
       // silently carries the old 'highway' id forward for anyone whose
       // saved params or Strudel patterns still name it.
-      const mode = params.mode === 'testarossa' ? 'testarossa' : 'outrun';
+      const mode = params.mode === 'testarossa' ? 'testarossa'
+                 : params.mode === 'dash' ? 'dash' : 'outrun';
 
       // Cruise speed — the resolved speed param already carries audio.total.
       const spd = params.speed * (0.65 + audio.bands.bass * 0.4 + audio.bands.mids * 0.25);
@@ -392,6 +457,7 @@ export default {
       let laneTarget = Math.sin(wanderP) * 0.26 + Math.sin(wanderP * 0.41 + 0.9) * 0.11;
       const inf = params.poseInfluence || 0;
       const people = field.pose && field.pose.people;
+      let headSeen = false;
       if (inf > 0.001 && people && people.length) {
         const p = people[0];
         if (p && p.head && p.head.visibility > 0.3) {
@@ -400,10 +466,33 @@ export default {
           const [hx] = lmToCanvas(p.head.x, p.head.y, W, H);
           const poseLane = Math.max(-1, Math.min(1, (hx / W - 0.5) * 2.4));
           laneTarget = laneTarget * (1 - inf) + poseLane * inf;
+          headX = hx;
+          headSeen = true;
+          if (headBase < 0) headBase = hx;   // first sighting seeds the baseline
         }
       }
       laneX += (laneTarget - laneX) * Math.min(1, dt * 2.2);
       bank += ((laneTarget - laneX) * 2.5 - bank) * Math.min(1, dt * 6);
+
+      // Steering (dash mode). Deliberately *relative*: a slow baseline
+      // follows wherever the performer's head actually lives, and the wheel
+      // reads only the departure from it. Someone pinned to the left of
+      // frame, or who can barely move, still gets a wheel that sits centred
+      // and answers what movement they do have — where an absolute mapping
+      // would just hold full lock all night.
+      if (headSeen) {
+        headBase += (headX - headBase) * Math.min(1, dt * 0.22);
+        const rel = (headX - headBase) / (W * 0.055);
+        steerTarget = Math.max(-1, Math.min(1, rel));
+        // Keep the idle wander's phase advancing while tracked, so losing
+        // the pose hands over to it mid-stride instead of with a jump.
+        idleSteer += dt * 0.33;
+      } else {
+        // Nobody in frame — drift on the same slow wander the lane uses.
+        idleSteer += dt * 0.33;
+        steerTarget = Math.sin(idleSteer * 0.7) * 0.42 + Math.sin(idleSteer * 0.23 + 1.4) * 0.22;
+      }
+      steer += (steerTarget - steer) * Math.min(1, dt * 2.6);
 
       // Lightning. Live: every loud hit is a strike — the harder the hit the
       // brighter the bolt and the bigger the sky wash, and the loudest ones
@@ -486,6 +575,37 @@ export default {
       scratch.city = !!params.city;
       scratch.moon = Math.max(0, params.moon ?? 1);
       scratch.rays = Math.max(0, params.rays ?? 0.8);
+
+      // ── Instruments ───────────────────────────────────────────────────
+      // Everything on the dash is derived from what the rig already knows
+      // and then damped, so the needles and digits settle the way real
+      // gauges do instead of strobing on every frame.
+      const mphTarget = 42 + spd * 46 + audio.bands.total * 55 + audio.beat.pulse * 18;
+      mph += (mphTarget - mph) * Math.min(1, dt * 1.6);
+      const rpmTarget = 1800 + audio.bands.bass * 4200 + audio.bands.mids * 1800
+                      + audio.beat.pulse * 1200;
+      rpm += (rpmTarget - rpm) * Math.min(1, dt * 4.5);
+      volts += ((13.2 + audio.bands.highs * 1.6 + flash * 0.9) - volts) * Math.min(1, dt * 1.1);
+      temp += ((0.34 + audio.bands.bass * 0.5 + audio.rms * 0.2) - temp) * Math.min(1, dt * 0.35);
+      fuelBurn = Math.max(0.06, fuelBurn - dt * (0.0016 + audio.bands.total * 0.0025));
+      if (fuelBurn <= 0.07) fuelBurn = 0.98;      // the night doesn't stop
+      odo += dt * mph * 0.0031;
+
+      scratch.mph = mph;
+      scratch.rpm = rpm;
+      scratch.volts = volts;
+      scratch.temp = temp;
+      scratch.fuel = fuelBurn;
+      scratch.odo = odo;
+      scratch.steer = steer;
+      scratch.waveform = audio.waveform || null;
+      scratch.spectrum = audio.spectrum || null;
+      // Wall clock for the chron readout, sampled here so render stays a
+      // pure function of scratch.
+      const now = new Date();
+      scratch.clockH = now.getHours();
+      scratch.clockM = now.getMinutes();
+      scratch.clockS = now.getSeconds();
     }
 
     // Road-space helper — p in [0..1], 0 at the horizon, 1 at the bottom.
@@ -697,7 +817,7 @@ export default {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = Math.min(1, amt * punch * 0.8);
-      ctx.fillStyle = beamGrad;
+      ctx.fillStyle = beamFor(hy);
       // Slight flare toward the top — a column, not a stripe.
       ctx.beginPath();
       ctx.moveTo(cx - w, hy);
@@ -734,18 +854,22 @@ export default {
       ctx.restore();
     }
 
-    // ── Outrun mode (rear view) ─────────────────────────────────────────
-    function renderOutrun() {
+    // ── The road ahead ──────────────────────────────────────────────────
+    // Sky, moon, city, weather and the straight highway, drawn between the
+    // horizon `hy` and the ground line `bottom`. Outrun runs it to the foot
+    // of the frame; dash runs it to a line behind the cowl, which is what
+    // lets the same world sit inside a windscreen without redrawing it.
+    function drawRoadWorld(hy, bottom) {
+      const gh = bottom - hy;
       const t = scratch.time;
-      const hy = H * HORIZON;
       const fs = Math.min(W, H) / 1080;
       const glow = scratch.glow;
       const cx = W * 0.5;            // vanishing point — fixed, always
 
-      ctx.fillStyle = skyGrad;
+      ctx.fillStyle = skyGradFor(hy);
       ctx.fillRect(0, 0, W, hy);
       ctx.fillStyle = ROAD;
-      ctx.fillRect(0, hy, W, H - hy);
+      ctx.fillRect(0, hy, W, gh);
 
       drawStars(hy, fs, t);
       // Charged sky first, so the moon and the city sit inside the glow
@@ -802,7 +926,7 @@ export default {
       // Ground fog banked against the horizon — the moon's foot, the city's
       // base and the road all dissolve into the same blue air.
       ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = fogGrad;
+      ctx.fillStyle = fogFor(hy);
       ctx.fillRect(0, hy - H * 0.17, W, H * 0.19);
       ctx.globalCompositeOperation = 'source-over';
 
@@ -829,19 +953,19 @@ export default {
       // corners. No per-step polygon needed once the centreline is fixed.
       const halfNear = roadHalf(1);
       ctx.fillStyle = SHOULDER;
-      ctx.fillRect(0, hy, W, H - hy);
-      ctx.fillStyle = asphaltGrad;
+      ctx.fillRect(0, hy, W, gh);
+      ctx.fillStyle = asphaltFor(hy, bottom);
       ctx.beginPath();
       ctx.moveTo(cx - roadHalf(0), hy);
       ctx.lineTo(cx + roadHalf(0), hy);
-      ctx.lineTo(cx + halfNear, H);
-      ctx.lineTo(cx - halfNear, H);
+      ctx.lineTo(cx + halfNear, bottom);
+      ctx.lineTo(cx - halfNear, bottom);
       ctx.closePath();
       ctx.fill();
 
       // Moonlight smeared down the wet asphalt, straight at the camera —
       // the shot only works because the road never bends away from it.
-      const poolLen = H - hy;
+      const poolLen = gh;
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       ctx.translate(0, hy);
@@ -865,9 +989,9 @@ export default {
           let z = (wets[i * 3 + 1] + dist * spd * 0.30) % 1;
           if (z < 0) z += 1;
           const p = z * z;                        // same projection as the dashes
-          const y = hy + p * (H - hy);
+          const y = hy + p * (gh);
           const half = roadHalf(p);
-          const len = (H - hy) * 0.075 * (0.5 + Math.abs(off) * 0.7) * (0.3 + p);
+          const len = (gh) * 0.075 * (0.5 + Math.abs(off) * 0.7) * (0.3 + p);
           const w = Math.max(1, half * 0.012);
           ctx.fillStyle = `rgba(150,185,250,${0.03 + p * 0.10 * scratch.rainAmt})`;
           ctx.fillRect(cx + off * half - w * 0.5, y, w, len);
@@ -883,8 +1007,8 @@ export default {
         ctx.beginPath();
         ctx.moveTo(cx - roadHalf(0), hy);
         ctx.lineTo(cx + roadHalf(0), hy);
-        ctx.lineTo(cx + halfNear, H);
-        ctx.lineTo(cx - halfNear, H);
+        ctx.lineTo(cx + halfNear, bottom);
+        ctx.lineTo(cx - halfNear, bottom);
         ctx.closePath();
         ctx.fill();
         ctx.globalCompositeOperation = 'source-over';
@@ -903,7 +1027,7 @@ export default {
         if (p0 < 0.03) continue;
         const p1 = Math.min(1, p0 + 1 / RUMBLE);
         const pj0 = p0 * p0, pj1 = p1 * p1;
-        const y0 = hy + pj0 * (H - hy), y1 = hy + pj1 * (H - hy);
+        const y0 = hy + pj0 * (gh), y1 = hy + pj1 * (gh);
         const h0 = roadHalf(pj0), h1 = roadHalf(pj1);
         ctx.fillStyle = ((i + rumbleBase) & 1) ? 'rgba(214,226,250,0.62)' : 'rgba(206,24,40,0.82)';
         for (let side = -1; side <= 1; side += 2) {
@@ -922,7 +1046,7 @@ export default {
       for (let side = -1; side <= 1; side += 2) {
         ctx.beginPath();
         ctx.moveTo(cx + side * roadHalf(0) * 0.97, hy);
-        ctx.lineTo(cx + side * halfNear * 0.97, H);
+        ctx.lineTo(cx + side * halfNear * 0.97, bottom);
         ctx.stroke();
       }
 
@@ -936,8 +1060,8 @@ export default {
         const z = ((i / DASHES) - dashFrac + 1) % 1;
         const p = 1 - z;                          // z=0 near → p=1 bottom
         if (p < 0.06) continue;
-        const y0 = hy + p * p * (H - hy);
-        const y1 = hy + Math.min(1, (p + 0.035 * p)) ** 2 * (H - hy);
+        const y0 = hy + p * p * (gh);
+        const y1 = hy + Math.min(1, (p + 0.035 * p)) ** 2 * (gh);
         const pj0 = p * p, pj1 = Math.min(1, p + 0.035 * p) ** 2;
         const w0 = Math.max(1, roadHalf(pj0) * 0.048);
         const w1 = Math.max(1, roadHalf(pj1) * 0.048);
@@ -957,9 +1081,9 @@ export default {
         const p = 1 - z / (NUM_LIGHTS * LIGHT_SPACING);
         if (p < 0.02 || p > 0.99) continue;
         const pj = p * p;
-        const y = hy + pj * (H - hy);
+        const y = hy + pj * (gh);
         const scale = 0.2 + pj * 1.3;
-        const poleH = H * 0.16 * scale;
+        const poleH = gh * 0.286 * scale;
         const sparkle = 0.75 + scratch.highs * 0.5;
         for (let side = -1; side <= 1; side += 2) {
           const x = cx + side * roadHalf(pj) * 1.22;
@@ -998,7 +1122,7 @@ export default {
         const p = 1 - z / span;
         if (p < 0.03 || p > 0.99) continue;
         const pj = p * p;
-        const y = hy + pj * (H - hy);
+        const y = hy + pj * (gh);
         const s = Math.max(1, 3.4 * fs * (0.2 + pj * 1.4));
         ctx.fillStyle = `rgba(255,150,60,${0.25 + pj * 0.55})`;
         for (let side = -1; side <= 1; side += 2) {
@@ -1006,12 +1130,99 @@ export default {
         }
       }
 
-      // ── The car ───────────────────────────────────────────────────────
-      // Only thing in the frame that moves off centre: it sways in its lane
-      // with the pose, held to ±0.55 of the half-width so it never crosses
-      // an edge line.
-      const pcx = cx + laneX * roadHalf(0.94) * 0.55;
-      drawRearCar(pcx, H * 0.935, Math.min(W, H) * 0.34, fs, glow);
+    }
+
+    // ── Dash instruments ────────────────────────────────────────────────
+    // KITT's panels are all seven-segment displays and LED bargraphs, and
+    // the thing that makes them read as hardware rather than as text is the
+    // *unlit* elements: a real display shows you its dark segments. So both
+    // primitives draw the off state first at a fraction of the brightness,
+    // then the lit state over it.
+    function drawSeg(str, x, y, dw, dh, col, dim, glowA) {
+      const t = Math.max(1, dh * 0.13);          // segment thickness
+      const g = t * 0.42;                        // gap at the joints
+      const w = dw - t;
+      const hh = (dh - t) / 2;
+      for (let i = 0; i < str.length; i++) {
+        const mask = SEG_MASK[str[i]] ?? 0;
+        const ox = x + i * (dw + dh * 0.16);
+        for (let s = 0; s < 7; s++) {
+          const on = (mask >> s) & 1;
+          ctx.fillStyle = on ? col : dim;
+          // a,d,g horizontal; b,c,e,f vertical.
+          if (s === 0)      ctx.fillRect(ox + g, y, w - g * 2, t);
+          else if (s === 1) ctx.fillRect(ox + w, y + g, t, hh - g * 2);
+          else if (s === 2) ctx.fillRect(ox + w, y + hh + g, t, hh - g * 2);
+          else if (s === 3) ctx.fillRect(ox + g, y + hh * 2, w - g * 2, t);
+          else if (s === 4) ctx.fillRect(ox, y + hh + g, t, hh - g * 2);
+          else if (s === 5) ctx.fillRect(ox, y + g, t, hh - g * 2);
+          else              ctx.fillRect(ox + g, y + hh, w - g * 2, t);
+        }
+      }
+      // One soft bloom over the whole run rather than per segment.
+      if (glowA > 0.01) {
+        const runW = str.length * (dw + dh * 0.16);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = Math.min(1, glowA);
+        ctx.drawImage(glowRed, x - dh * 0.3, y - dh * 0.45, runW + dh * 0.6, dh * 1.9);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    }
+
+    // A stacked LED bargraph. `dir` +1 fills upward, -1 downward.
+    function drawBar(x, y, w, h, n, v, palette, lift, dir = 1) {
+      const cell = h / n;
+      const seg = cell * 0.68;
+      const lit = v * n;
+      for (let i = 0; i < n; i++) {
+        const f = i / (n - 1 || 1);
+        const yy = dir > 0 ? y + h - (i + 1) * cell : y + i * cell;
+        const on = i < lit;
+        const edge = (lit - i);                  // partial top segment
+        const a = on ? (edge < 1 ? 0.35 + edge * 0.65 : 1) : 0.13;
+        const c = palette(f);
+        ctx.fillStyle = on ? `rgba(${c},${Math.min(1, a * (0.75 + lift * 0.35))})`
+                           : `rgba(${c},0.10)`;
+        ctx.fillRect(x, yy, w, seg);
+      }
+    }
+
+    // Bargraph colour ramps — KITT's green→amber→red climb, and the two
+    // single-colour runs the nightcall palette wants.
+    const RAMP_KITT = (f) => (f < 0.45 ? '86,220,120' : f < 0.72 ? '255,190,60' : '255,58,52');
+    const RAMP_RED = () => '255,58,52';
+    const RAMP_COLD = (f) => (f < 0.7 ? '120,175,255' : '226,240,255');
+
+    function label(text, x, y, size, col, align = 'left') {
+      ctx.fillStyle = col;
+      ctx.textAlign = align;
+      ctx.textBaseline = 'middle';
+      ctx.font = `600 ${Math.max(5, size)}px ui-sans-serif, "Helvetica Neue", Arial, sans-serif`;
+      ctx.fillText(text, x, y);
+    }
+
+    // A recessed instrument bezel with an inner shadow.
+    function panel(x, y, w, h, r) {
+      ctx.fillStyle = '#05070d';
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,150,205,0.16)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, r); ctx.stroke();
+    }
+
+    const pad = (n, w) => String(Math.max(0, Math.round(n))).padStart(w, '0').slice(-w);
+
+    // ── Outrun mode (rear view) ─────────────────────────────────────────
+    function renderOutrun() {
+      const hy = H * HORIZON;
+      const fs = Math.min(W, H) / 1080;
+      drawRoadWorld(hy, H);
+      // The car is the only thing in the frame that moves off centre: it
+      // sways in its lane with the pose, held to ±0.55 of the half-width so
+      // it never crosses an edge line.
+      const pcx = W * 0.5 + laneX * roadHalf(0.94) * 0.55;
+      drawRearCar(pcx, H * 0.935, Math.min(W, H) * 0.34, fs, scratch.glow);
     }
 
     // ── The Testarossa from behind ──────────────────────────────────────
@@ -1258,6 +1469,478 @@ export default {
       ctx.fillRect(pcx - CW * 0.46, groundY, CW * 0.92, H - groundY);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // ── Dash mode (first person) ────────────────────────────────────────
+    // The road ahead through the screen, and below it a cockpit built on
+    // KITT's: seven-segment readouts, banks of LED bargraphs, the voice
+    // modulator, and the gullwing wheel. Everything on it is real rig data —
+    // spectrum, bands, beat, travelled distance, wall clock — so the panel
+    // is an instrument cluster for the music, not a decal of one.
+    function renderDash() {
+      const t = scratch.time;
+      const fs = Math.min(W, H) / 1080;
+      const cowl = H * 0.545;                 // top of the dash
+      const hy = H * 0.285;                   // horizon, high in the screen
+      const beat = scratch.beatPulse;
+      const lift = 0.55 + scratch.total * 0.5 + beat * 0.6;
+
+      // ── Through the windscreen ────────────────────────────────────────
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, cowl + 1);
+      ctx.clip();
+      // Ground line sits just below the cowl, so the road is at its widest
+      // where the bodywork cuts it off rather than tapering to nothing.
+      drawRoadWorld(hy, H * 0.60);
+      drawSkyFlash();
+      if (scratch.rainAmt > 0.01) drawRain(fs);
+      ctx.restore();
+
+      // Screen tint + the wiped arc across it — a rain-slick windscreen is
+      // never optically clean, and the smear is what sells the glass.
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.05 + scratch.rainAmt * 0.06;
+      ctx.drawImage(glowCold, -W * 0.1, -H * 0.15, W * 1.2, cowl * 1.2);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      // ── The cowl ──────────────────────────────────────────────────────
+      // A wide shallow arc, higher at the sides where the A-pillars come
+      // down, so the screen aperture reads as a screen.
+      ctx.fillStyle = '#05070e';
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      ctx.lineTo(0, cowl - H * 0.055);
+      ctx.quadraticCurveTo(W * 0.16, cowl - H * 0.012, W * 0.30, cowl);
+      ctx.lineTo(W * 0.70, cowl);
+      ctx.quadraticCurveTo(W * 0.84, cowl - H * 0.012, W, cowl - H * 0.055);
+      ctx.lineTo(W, H);
+      ctx.closePath();
+      ctx.fill();
+      // The lit edge along the top of the cowl — the one line that separates
+      // the car from the night.
+      ctx.strokeStyle = `rgba(150,190,255,${0.16 + beat * 0.14})`;
+      ctx.lineWidth = Math.max(1, 1.6 * fs);
+      ctx.beginPath();
+      ctx.moveTo(0, cowl - H * 0.055);
+      ctx.quadraticCurveTo(W * 0.16, cowl - H * 0.012, W * 0.30, cowl);
+      ctx.lineTo(W * 0.70, cowl);
+      ctx.quadraticCurveTo(W * 0.84, cowl - H * 0.012, W, cowl - H * 0.055);
+      ctx.stroke();
+
+      // A-pillars.
+      ctx.fillStyle = '#04060c';
+      for (let s = -1; s <= 1; s += 2) {
+        ctx.beginPath();
+        const xo = s < 0 ? 0 : W;
+        ctx.moveTo(xo, 0);
+        ctx.lineTo(xo - s * W * 0.055, 0);
+        ctx.lineTo(xo - s * W * 0.020, cowl - H * 0.05);
+        ctx.lineTo(xo, cowl);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // ── The binnacle ──────────────────────────────────────────────────
+      const bT = cowl + H * 0.016;
+      const bH = H * 0.175;
+      ctx.fillStyle = '#0a0d15';
+      ctx.beginPath();
+      ctx.moveTo(W * 0.085, bT);
+      ctx.lineTo(W * 0.915, bT);
+      ctx.lineTo(W * 0.955, bT + bH);
+      ctx.lineTo(W * 0.045, bT + bH);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(120,155,215,0.20)';
+      ctx.lineWidth = Math.max(1, 1.2 * fs);
+      ctx.stroke();
+
+      const pT = bT + bH * 0.11, pH = bH * 0.78;
+
+      // Panel 1 — spectrum columns, KITT's climbing ramp.
+      {
+        const x = W * 0.095, w = W * 0.145;
+        panel(x, pT, w, pH, 3);
+        const N = 7, colW = w / N;
+        for (let i = 0; i < N; i++) {
+          const v = specBand(i / N, (i + 1) / N);
+          drawBar(x + colW * i + colW * 0.22, pT + pH * 0.16, colW * 0.56, pH * 0.66,
+                  9, v, RAMP_KITT, lift);
+        }
+        label('SPECTRUM ANALYSIS', x + w / 2, pT + pH * 0.93, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'center');
+      }
+
+      // Panel 2 — speed and the chron.
+      {
+        const x = W * 0.252, w = W * 0.148;
+        panel(x, pT, w, pH, 3);
+        const dh = pH * 0.34, dw = dh * 0.60;
+        drawSeg(pad(scratch.mph, 3), x + w * 0.10, pT + pH * 0.13, dw, dh,
+                `rgba(255,64,52,${0.85 + beat * 0.15})`, 'rgba(90,14,18,0.55)',
+                0.16 + beat * 0.22);
+        label('MPH', x + w * 0.92, pT + pH * 0.30, bH * 0.085,
+              'rgba(255,120,110,0.75)', 'right');
+        // Wall clock — the chron, running below the speed.
+        const clock = pad(scratch.clockH, 2) + pad(scratch.clockM, 2) + pad(scratch.clockS, 2);
+        drawSeg(clock, x + w * 0.09, pT + pH * 0.60, dh * 0.30, dh * 0.52,
+                'rgba(255,176,58,0.9)', 'rgba(80,48,10,0.5)', 0.05);
+        label('CHRON', x + w * 0.92, pT + pH * 0.72, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'right');
+      }
+
+      // Panel 3 — the voice modulator. KITT's centrepiece, and the obvious
+      // home for the waveform.
+      {
+        const x = W * 0.412, w = W * 0.176;
+        panel(x, pT, w, pH, 3);
+        drawModulator(x + w * 0.5, pT + pH * 0.46, w * 0.40, pH * 0.30, lift, beat);
+        label('VOICE MODULATION', x + w / 2, pT + pH * 0.93, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'center');
+      }
+
+      // Panel 4 — engine block: rpm, volts, and the horizontal band meters.
+      {
+        const x = W * 0.600, w = W * 0.148;
+        panel(x, pT, w, pH, 3);
+        const dh = pH * 0.22, dw = dh * 0.60;
+        drawSeg(pad(scratch.rpm, 4), x + w * 0.08, pT + pH * 0.10, dw, dh,
+                'rgba(255,64,52,0.9)', 'rgba(90,14,18,0.5)', 0.10 + beat * 0.14);
+        label('RPM', x + w * 0.94, pT + pH * 0.21, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'right');
+        const rows = [['BASS', scratch.bass, RAMP_RED], ['MIDS', scratch.mids, RAMP_KITT],
+                      ['HIGH', scratch.highs, RAMP_COLD]];
+        for (let i = 0; i < rows.length; i++) {
+          const yy = pT + pH * (0.46 + i * 0.17);
+          label(rows[i][0], x + w * 0.06, yy + pH * 0.045, bH * 0.075,
+                'rgba(150,180,235,0.5)');
+          drawHBar(x + w * 0.36, yy, w * 0.56, pH * 0.09, 12, rows[i][1], rows[i][2], lift);
+        }
+      }
+
+      // Panel 5 — the scanner screen.
+      {
+        const x = W * 0.760, w = W * 0.145;
+        panel(x, pT, w, pH, 3);
+        drawScanner(x + w * 0.06, pT + pH * 0.08, w * 0.88, pH * 0.68, t, lift);
+        label('PURSUIT SCAN', x + w / 2, pT + pH * 0.90, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'center');
+      }
+
+      // ── Lower console ─────────────────────────────────────────────────
+      // Split to the wings. The yoke owns the middle of this band, and
+      // because its top is open the centre column stays readable straight
+      // through it — which is where the odometer and the plate go.
+      const cT = bT + bH * 1.10;
+      const podW = W * 0.170, podH = H * 0.112;
+      drawSwitchPod(W * 0.045, cT, podW, podH, t, beat, [
+        ['AIR', 0.55], ['OIL', 0.30], ['P1', 0.8], ['P2', 0.2],
+        ['S1', 0.65], ['S2', 0.45],
+      ]);
+      drawModePod(W * 0.785, cT, podW, podH, beat, t);
+
+      // Diagnostics under each pod, out where the yoke can't reach them.
+      {
+        const y = cT + podH + H * 0.026, h = H * 0.018, bw = podW * 0.62;
+        const items = [
+          [W * 0.045, 'FUEL', scratch.fuel, RAMP_KITT],
+          [W * 0.045, 'TEMP', scratch.temp, RAMP_KITT],
+          [W * 0.785, 'AMP', Math.min(1, (scratch.volts - 12) / 3), RAMP_COLD],
+          [W * 0.785, 'TRB', Math.min(1, scratch.rms * 1.4), RAMP_RED],
+        ];
+        for (let i = 0; i < items.length; i++) {
+          const yy = y + (i % 2) * h * 1.9;
+          label(items[i][1], items[i][0], yy + h * 0.5, H * 0.014, 'rgba(150,180,235,0.5)');
+          drawHBar(items[i][0] + podW * 0.34, yy, bw, h, 9, items[i][2], items[i][3], lift);
+        }
+      }
+
+      // Odometer and the plate, dead centre in the gap between the horns.
+      drawSeg(pad(scratch.odo, 6), W * 0.452, cT + H * 0.012, H * 0.014, H * 0.024,
+              'rgba(255,176,58,0.85)', 'rgba(80,48,10,0.45)', 0.05);
+      label('KNIGHT INDUSTRIES  ·  NIGHTCALL', W * 0.5, cT + H * 0.055, H * 0.015,
+            'rgba(120,155,215,0.34)', 'center');
+
+      // ── The wheel ─────────────────────────────────────────────────────
+      // Hub below the frame: from the driver's seat you never see the bottom
+      // of the rim, only the two horns coming up at you.
+      drawGullwing(W * 0.5 + scratch.steer * W * 0.005, H * 0.885,
+                   Math.min(W * 0.215, H * 0.345), fs, beat);
+    }
+
+    // Mean of a spectrum slice, 0..1. Falls back to a slow idle swell so the
+    // panel still breathes with no audio.
+    function specBand(a, b) {
+      const spec = scratch.spectrum;
+      if (!spec) {
+        return 0.18 + 0.16 * (0.5 + 0.5 * Math.sin(scratch.time * 1.3 + a * 9));
+      }
+      const n = spec.length * 0.72;
+      const f0 = Math.pow(n, a) | 0;
+      const f1 = Math.max(f0 + 1, Math.pow(n, b) | 0);
+      let sum = 0;
+      for (let f = f0; f < f1; f++) sum += spec[f];
+      return Math.min(1, (sum / (f1 - f0)) / 200);
+    }
+
+    function drawHBar(x, y, w, h, n, v, palette, lift) {
+      const cell = w / n, seg = cell * 0.7;
+      const litN = Math.max(0, Math.min(1, v)) * n;
+      for (let i = 0; i < n; i++) {
+        const on = i < litN;
+        const edge = litN - i;
+        const a = on ? (edge < 1 ? 0.35 + edge * 0.65 : 1) : 1;
+        const c = palette(i / (n - 1));
+        ctx.fillStyle = on ? `rgba(${c},${Math.min(1, a * (0.75 + lift * 0.3))})`
+                           : `rgba(${c},0.10)`;
+        ctx.fillRect(x + i * cell, y, seg, h);
+      }
+    }
+
+    // The voice modulator: KITT's oscilloscope oval. Real waveform when
+    // there's audio, a breathing sine when there isn't.
+    function drawModulator(cx, cy, rx, ry, lift, beat) {
+      ctx.save();
+      ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU); ctx.clip();
+      ctx.fillStyle = '#03050b';
+      ctx.fillRect(cx - rx, cy - ry, rx * 2, ry * 2);
+      // Graticule.
+      ctx.strokeStyle = 'rgba(90,130,200,0.16)';
+      ctx.lineWidth = 1;
+      for (let i = 1; i < 4; i++) {
+        const yy = cy - ry + (ry * 2) * i / 4;
+        ctx.beginPath(); ctx.moveTo(cx - rx, yy); ctx.lineTo(cx + rx, yy); ctx.stroke();
+      }
+      // Trace.
+      const wave = scratch.waveform;
+      const N = 72;
+      ctx.strokeStyle = `rgba(255,72,58,${0.75 + beat * 0.25})`;
+      ctx.lineWidth = Math.max(1.2, ry * 0.10);
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (let i = 0; i <= N; i++) {
+        const f = i / N;
+        let v;
+        if (wave && wave.length) {
+          v = (wave[(f * (wave.length - 1)) | 0] - 128) / 128;
+        } else {
+          v = Math.sin(f * 9 + scratch.time * 2.4) * 0.42
+            * (0.45 + 0.55 * Math.sin(scratch.time * 0.7))
+            + Math.sin(f * 23 - scratch.time * 1.7) * 0.14;
+        }
+        const px = cx - rx + f * rx * 2;
+        const py = cy - v * ry * 0.82;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.25 + beat * 0.3;
+      ctx.drawImage(glowRed, cx - rx, cy - ry * 1.6, rx * 2, ry * 3.2);
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      ctx.strokeStyle = `rgba(150,190,255,${0.30 + lift * 0.15})`;
+      ctx.lineWidth = Math.max(1, ry * 0.07);
+      ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU); ctx.stroke();
+    }
+
+    // The scanner screen: a sweeping radar over the road ahead, with the
+    // moon marked where it actually is.
+    function drawScanner(x, y, w, h, t, lift) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+      ctx.fillStyle = '#03060e';
+      ctx.fillRect(x, y, w, h);
+      const cx = x + w / 2, cy = y + h * 0.94, r = h * 0.92;
+      ctx.strokeStyle = 'rgba(96,150,240,0.35)';
+      ctx.lineWidth = 1;
+      for (let i = 1; i <= 3; i++) {
+        ctx.beginPath(); ctx.arc(cx, cy, r * i / 3, Math.PI, TAU); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - r); ctx.stroke();
+      // Sweep.
+      const a = -Math.PI + ((t * 0.55) % 1) * Math.PI;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(96,190,255,${0.14 + lift * 0.10})`;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, a - 0.30, a);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = 'rgba(150,225,255,0.85)';
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); ctx.stroke();
+      // Contacts: the road's vanishing point dead ahead, plus the moon.
+      ctx.fillStyle = 'rgba(255,64,52,0.9)';
+      ctx.fillRect(cx - 1.5, cy - r * 0.72, 3, 3);
+      ctx.fillStyle = 'rgba(226,240,255,0.8)';
+      ctx.fillRect(cx + r * 0.10 - 1.5, cy - r * 0.44, 3, 3);
+      ctx.restore();
+    }
+
+    // Labelled pushbuttons, KITT's lower-left block.
+    function drawSwitchPod(x, y, w, h, t, beat, items) {
+      ctx.fillStyle = '#080b12';
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, w * 0.04); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,155,215,0.18)';
+      ctx.lineWidth = 1; ctx.stroke();
+      const cols = 2, rows = Math.ceil(items.length / cols);
+      const bw = w * 0.40, bh = h / (rows + 0.6);
+      for (let i = 0; i < items.length; i++) {
+        const c = i % cols, r = (i / cols) | 0;
+        const bx = x + w * 0.055 + c * w * 0.48;
+        const by = y + h * 0.06 + r * bh;
+        // Each switch breathes on its own phase; a beat lifts them together.
+        const on = 0.30 + items[i][1] * 0.5
+                 + 0.18 * Math.sin(t * (1.1 + i * 0.37) + i) + beat * 0.35;
+        ctx.fillStyle = `rgba(255,${120 + i * 12},${40 + i * 6},${Math.min(0.95, on)})`;
+        ctx.beginPath(); ctx.roundRect(bx, by, bw, bh * 0.66, bh * 0.14); ctx.fill();
+        label(items[i][0], bx + bw / 2, by + bh * 0.34, bh * 0.34,
+              'rgba(12,8,4,0.85)', 'center');
+      }
+    }
+
+    // POWER / AUTO / NORMAL / PURSUIT. Pursuit is the one that answers the
+    // kick — the panel's own beat light.
+    function drawModePod(x, y, w, h, beat, t) {
+      ctx.fillStyle = '#080b12';
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, w * 0.04); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,155,215,0.18)';
+      ctx.lineWidth = 1; ctx.stroke();
+      const modes = [
+        ['POWER', '86,220,120', 0.75],
+        ['AUTO', '255,190,60', 0.55],
+        ['NORMAL', '120,175,255', 0.5],
+        ['PURSUIT', '255,58,52', 0.35 + beat * 0.65],
+      ];
+      const bh = h / (modes.length + 0.5);
+      for (let i = 0; i < modes.length; i++) {
+        const by = y + h * 0.05 + i * bh;
+        const a = Math.min(0.95, modes[i][2] + 0.10 * Math.sin(t * 1.7 + i));
+        ctx.fillStyle = `rgba(${modes[i][1]},${a})`;
+        ctx.beginPath();
+        ctx.roundRect(x + w * 0.08, by, w * 0.84, bh * 0.68, bh * 0.16);
+        ctx.fill();
+        label(modes[i][0], x + w * 0.5, by + bh * 0.35, bh * 0.36,
+              'rgba(10,8,6,0.85)', 'center');
+      }
+    }
+
+    // ── The gullwing wheel ──────────────────────────────────────────────
+    // KITT's yoke: not a circle. Two horns sweep up and out from a low hub,
+    // the rim dips in the middle between them, and the bottom closes in a
+    // shallow arc. Drawn in units of Rw about the hub so the whole thing
+    // rotates as one.
+    function drawGullwing(cx, cy, Rw, fs, beat) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(scratch.steer * 0.34);
+
+      // Open at the top. That's the whole read of the yoke: the rim runs up
+      // the sides into two raised horns and simply stops, leaving air
+      // between them where a round wheel would have rim. Close it across the
+      // top and you've drawn an oval with a dent in it.
+      const rim = () => {
+        ctx.beginPath();
+        ctx.moveTo(-1.10 * Rw, -0.40 * Rw);                 // left horn tip
+        ctx.quadraticCurveTo(-0.92 * Rw, -0.02 * Rw, -0.72 * Rw, 0.24 * Rw);
+        ctx.quadraticCurveTo(-0.46 * Rw, 0.62 * Rw, 0, 0.72 * Rw);     // bottom arc
+        ctx.quadraticCurveTo(0.46 * Rw, 0.62 * Rw, 0.72 * Rw, 0.24 * Rw);
+        ctx.quadraticCurveTo(0.92 * Rw, -0.02 * Rw, 1.10 * Rw, -0.40 * Rw);
+      };
+
+      // Rim: a fat dark stroke, then a cold highlight along its upper edge.
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#080a11';
+      ctx.lineWidth = Rw * 0.180;
+      rim(); ctx.stroke();
+      ctx.strokeStyle = '#161b28';
+      ctx.lineWidth = Rw * 0.125;
+      rim(); ctx.stroke();
+      // Moonlight down the leading edge of each horn.
+      ctx.strokeStyle = `rgba(150,190,255,${0.26 + beat * 0.12})`;
+      ctx.lineWidth = Math.max(1, Rw * 0.018);
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(s * 1.10 * Rw, -0.40 * Rw);
+        ctx.quadraticCurveTo(s * 0.92 * Rw, -0.02 * Rw, s * 0.72 * Rw, 0.24 * Rw);
+        ctx.stroke();
+      }
+      // Dash light spilling red onto the lower rim.
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.16 + beat * 0.12;
+      ctx.drawImage(glowRed, -Rw * 0.9, Rw * 0.36, Rw * 1.8, Rw * 0.6);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      // Spokes out to the horns, and one down to the bottom rim.
+      const hubY = 0.28 * Rw;
+      ctx.strokeStyle = '#12161f';
+      ctx.lineWidth = Rw * 0.115;
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(s * 0.12 * Rw, hubY);
+        ctx.quadraticCurveTo(s * 0.46 * Rw, hubY - 0.03 * Rw, s * 0.76 * Rw, 0.20 * Rw);
+        ctx.stroke();
+      }
+      ctx.lineWidth = Rw * 0.09;
+      ctx.beginPath();
+      ctx.moveTo(0, hubY + 0.10 * Rw); ctx.lineTo(0, 0.68 * Rw); ctx.stroke();
+
+      // Hub, with the crest.
+      ctx.fillStyle = '#0d1119';
+      ctx.beginPath();
+      ctx.roundRect(-Rw * 0.24, hubY - Rw * 0.16, Rw * 0.48, Rw * 0.32, Rw * 0.06);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(140,175,235,0.22)';
+      ctx.lineWidth = Math.max(1, fs);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(226,32,42,${0.65 + beat * 0.35})`;
+      ctx.beginPath();
+      ctx.ellipse(0, hubY, Rw * 0.115, Rw * 0.055, 0, 0, TAU);
+      ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.3 + beat * 0.4;
+      ctx.drawImage(glowRed, -Rw * 0.28, hubY - Rw * 0.17, Rw * 0.56, Rw * 0.34);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      // His hands at ten and two, coming out of the varsity sleeves.
+      for (const s of [-1, 1]) {
+        ctx.save();
+        ctx.translate(s * 0.94 * Rw, -0.08 * Rw);
+        ctx.rotate(s * 0.68);
+        // Sleeve, running off toward the shoulder.
+        ctx.fillStyle = '#1b2748';
+        ctx.beginPath();
+        ctx.roundRect(s * Rw * 0.045, -Rw * 0.050, s * Rw * 0.30, Rw * 0.100, Rw * 0.026);
+        ctx.fill();
+        ctx.strokeStyle = '#c8172a';
+        ctx.lineWidth = Math.max(1, Rw * 0.010);
+        for (let i = 0; i < 2; i++) {
+          const ex = s * Rw * (0.185 + i * 0.048);
+          ctx.beginPath();
+          ctx.moveTo(ex, -Rw * 0.046); ctx.lineTo(ex, Rw * 0.046); ctx.stroke();
+        }
+        // The hand itself, curled over the rim.
+        ctx.fillStyle = '#5d84c4';
+        ctx.beginPath();
+        ctx.roundRect(-Rw * 0.062, -Rw * 0.052, Rw * 0.125, Rw * 0.104, Rw * 0.040);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(16,26,52,0.75)';
+        ctx.lineWidth = Math.max(1, Rw * 0.008);
+        for (let i = 0; i < 3; i++) {
+          const fy = -Rw * 0.028 + i * Rw * 0.028;
+          ctx.beginPath();
+          ctx.moveTo(-Rw * 0.050, fy); ctx.lineTo(Rw * 0.040, fy); ctx.stroke();
+        }
+        ctx.restore();
+      }
+      ctx.restore();
     }
 
     // ── Testarossa mode (side view) ─────────────────────────────────────
@@ -1731,6 +2414,14 @@ export default {
     }
 
     function render() {
+      if (scratch.mode === 'dash') {
+        // Dash does its own flash and rain inside the windscreen clip —
+        // lightning lights the road ahead, not the instruments.
+        renderDash();
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0, 0, W, H);
+        return;
+      }
       if (scratch.mode === 'testarossa') renderTestarossa();
       else renderOutrun();
 
