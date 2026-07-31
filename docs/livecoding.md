@@ -46,13 +46,16 @@ camera/pose, entanglement, and the audio engines — plus Strudel-registered pat
 [`qualia-code-api.md`](qualia-code-api.md) (module: `code-api.js`, installed by `page-init.js`);
 the same docs are searchable in the panel's funcs tab and via `qualia.help()`.
 
-**Lanes vs. the auto modes.** `quale()` and auto-cycle drive the same knob, as do `qphase()` and
-auto-phase; running both hands one control to two masters and the visuals stutter between them. The
-pattern wins: the first landed `quale()` hap switches auto-cycle off, the first landed `qphase()`
-step switches auto-phase off (via the same setters the topbar buttons use, so the toggle face flips
-and the remembered dwell survives). The random-pattern roller closes the loop from the other side —
-with a timer running it emits that lane **commented out**, so a fresh roll never starts a fight.
-`qualia.autoYield(false)` opts out. Details in [`qualia-code-api.md`](qualia-code-api.md).
+**Lanes vs. the auto modes.** `quale()` and auto-cycle drive the same knob; `qphase()`, `qpreset()`
+and a colliding `qset()` write the same params auto-phase steps. Running both hands one control to
+two masters and the visuals stutter between them. The pattern wins: a lane **claims** the wheel on
+its first hap that would fight, and the matching timer stands down — via the same setters the topbar
+buttons use, so the toggle face flips, the button pulses once, and the remembered dwell survives.
+One claim per lane instance (rebuilt on every eval), and deliberately arming a timer voids an
+outstanding claim, so the last deliberate act wins. The random-pattern roller closes the loop from
+the other side — with a timer running it emits that lane **commented out**, so a fresh roll never
+starts a fight. The panel header chips the buffer's live lanes, since the lanes themselves are
+silent. `qualia.autoYield(false)` opts out. Details in [`qualia-code-api.md`](qualia-code-api.md).
 
 The original hook, `qualia.setParam(fxId, paramId, value)` → `core.setParam(...)`, is unchanged.
 Param ids are the fx's `params[].id` (also the localStorage keys), so they're a small stable

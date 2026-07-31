@@ -11,7 +11,7 @@
 
 import {
   loadCurrent, saveCurrent, loadList, addToList, updateInList,
-  removeFromList, clonePattern, randomPattern, parseMetadata,
+  removeFromList, clonePattern, randomPattern, parseMetadata, activeLanes,
   setMetadata, patternDisplayName, downloadPattern,
 } from './patterns.js';
 import { makeDraggablePanel } from './panel-pos.js';
@@ -337,6 +337,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const mount  = document.getElementById('strudel-mount');
   const status = document.getElementById('strudel-status');
   const errEl  = document.getElementById('strudel-error');
+  const laneEl = document.getElementById('strudel-lanes');
   const btnToggle = document.getElementById('btn-strudel');
   const btnClose  = document.getElementById('btn-strudel-close');
   const btnPlay    = document.getElementById('btn-strudel-play');
@@ -479,8 +480,39 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       // persistCurrent is invoked), but the de-dup in notifyTitleIfChanged
       // keeps it cheap when nothing changed.
       notifyTitleIfChanged(parseMetadata(code).title || '');
+      refreshLaneChip(code);
     }
     return code;
+  }
+
+  // ── Live-lane chip ────────────────────────────────────────────────────────
+  // The q* control lanes are silent by design, so a buffer that's quietly
+  // driving the visuals looks identical in the UI to one that isn't. The chip
+  // names the lanes the current buffer declares, which is what "why did my
+  // quale stop cycling?" actually needs answered mid-set — including the case
+  // where the answer is "the roller parked that lane because auto-cycle is on".
+  //
+  // Refreshed wherever the buffer is already being read (eval, stop, the ~8 s
+  // auto-save, mount/load), and de-duped so a steady buffer never touches the
+  // DOM. Nothing here runs per frame or per hap.
+  let _lastLaneKey = null;
+  function refreshLaneChip(code) {
+    if (!laneEl) return;
+    const lanes = activeLanes(code || '');
+    const key = lanes.join(' ');
+    if (key === _lastLaneKey) return;
+    _lastLaneKey = key;
+    if (!lanes.length) {
+      laneEl.style.display = 'none';
+      laneEl.textContent = '';
+      laneEl.removeAttribute('title');
+      return;
+    }
+    laneEl.style.display = '';
+    laneEl.textContent = `⇢ ${lanes.join(' · ')}`;
+    laneEl.title = `Qualia control lanes live in this buffer: ${lanes.join(', ')}. `
+      + 'They drive the visuals silently — a quale() or qphase() lane also '
+      + 'stands the matching auto mode down (qualia.autoYield(false) to keep both).';
   }
 
   // Eval error indicator. Strudel reports syntax/runtime eval failures only to
@@ -748,6 +780,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     // Surface the @title of whatever code we just mounted (initial random,
     // restored buffer, or a load). Sequencer mirrors this when sync is on.
     notifyTitleIfChanged(parseMetadata(code).title || '');
+    refreshLaneChip(code);
   }
   function loadCode(code) {
     // Allow '' through (a blank/new pattern is a legitimate buffer); only

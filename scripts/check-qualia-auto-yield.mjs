@@ -15,7 +15,7 @@
 // reachable from node — code-api.js pulls in strudel-reference.js, whose JSON
 // imports only resolve under Vite. It's exercised in the browser instead.
 
-import { randomPattern } from '../src/lib/qualia/patterns.js';
+import { randomPattern, activeLanes, LANE_NAMES } from '../src/lib/qualia/patterns.js';
 
 let failed = 0;
 function check(name, cond, detail = '') {
@@ -88,6 +88,50 @@ section('default arg = ungated');
   // must keep getting the full pattern.
   const bare = randomPattern();
   check('no args → both lanes live', live('quale', bare) && live('qphase', bare), bare);
+}
+
+section('activeLanes — what the panel chip reports');
+{
+  const lanes = (code) => activeLanes(code).join(',');
+
+  check('finds every lane name', lanes(
+    'stack(quale("a"), qset("h", x), qpreset("p"), qphase("1"), qglitch("mosh","on"), qcall(f,"1"), s("bd").qtrig(g))')
+    === LANE_NAMES.join(','));
+
+  check('a parked lane does not count',
+    lanes('stack(\n  // quale("<a b>").slow(16),  // parked — auto-cycle is on\n  qphase("1"),\n)') === 'qphase');
+  check('a block-commented lane does not count',
+    lanes('/* quale("a") */ qphase("1")') === 'qphase');
+  check('a lane name inside a string does not count',
+    lanes('s("quale") .note("qphase")') === '');
+  check('an escaped quote does not swallow the rest of the buffer',
+    lanes('s("a\\"b"), quale("c")') === 'quale');
+  check('template literals are stripped too',
+    lanes('s(`quale(`), qphase("1")') === 'qphase');
+
+  check('qualia.quale() is imperative, not a lane', lanes('qualia.quale("chaos")') === '');
+  check('a lookalike identifier does not count', lanes('myquale("a"), xqset("b", 1)') === '');
+  check('qtrig only counts when chained', lanes('qtrig(f, "1")') === '');
+  check('chained qtrig counts', lanes('s("bd*4").qtrig(() => qualia.phase())') === 'qtrig');
+  check('whitespace before the paren is fine', lanes('quale ("a")') === 'quale');
+  check('division is not read as a comment', lanes('n(a / b), quale("c")') === 'quale');
+
+  check('empty / junk input is safe',
+    lanes('') === '' && lanes(null) === '' && lanes(undefined) === '');
+}
+
+section('activeLanes agrees with what the roller emitted');
+for (const modes of COMBOS) {
+  const label = `cycle:${modes.cycle ? 'on ' : 'off'} phase:${modes.phase ? 'on ' : 'off'}`;
+  let bad = null;
+  for (let i = 0; i < ROLLS && !bad; i++) {
+    const code = randomPattern(modes);
+    const got = activeLanes(code);
+    if (got.includes('quale') === !!modes.cycle) bad = `quale: ${got}\n${code}`;
+    else if (got.includes('qphase') === !!modes.phase) bad = `qphase: ${got}\n${code}`;
+    else if (!got.some(l => ['qset', 'qglitch', 'qcall'].includes(l))) bad = `no nugget: ${got}\n${code}`;
+  }
+  check(`${label} → chip lists exactly the live lanes (${ROLLS} rolls)`, !bad, bad);
 }
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');

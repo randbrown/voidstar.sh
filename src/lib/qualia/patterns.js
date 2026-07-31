@@ -217,6 +217,70 @@ stack(
 ).room(0.5)`;
 }
 
+// ── Lane detection ───────────────────────────────────────────────────────
+// Which qualia control lanes does a buffer actually declare? The Strudel
+// panel shows this as a chip so "why did my quale stop cycling?" is
+// answerable at a glance three songs into a set — the lanes are silent by
+// design, so nothing else in the UI says they're there.
+//
+// Deliberately text-level rather than runtime-observed: a lane parked by the
+// random roller must not count, and a `.slow(32)` lane fires so rarely that
+// "did it trigger lately" would read as absent for a minute at a time. What
+// the buffer *declares* is the honest answer to the question being asked.
+export const LANE_NAMES = ['quale', 'qset', 'qpreset', 'qphase', 'qglitch', 'qcall', 'qtrig'];
+
+// Blank out comments and string/template bodies so a parked lane, a lane name
+// inside a doc comment, and `s("qcall")` all stop counting. Strings collapse to
+// a space (never to nothing) so they can't glue neighbouring tokens together.
+//
+// Regex literals are NOT tracked — an unescaped `//` inside one would read as a
+// line comment and blank the rest of the line. Strudel patterns don't use them;
+// plain division is fine either way, since a lone `/` is copied through.
+function stripNonCode(code) {
+  const n = code.length;
+  let out = '';
+  let i = 0;
+  while (i < n) {
+    const c = code[i], d = code[i + 1];
+    if (c === '/' && d === '/') { while (i < n && code[i] !== '\n') i++; continue; }
+    if (c === '/' && d === '*') {
+      i += 2;
+      while (i < n && !(code[i] === '*' && code[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      const quote = c;
+      i++;
+      while (i < n && code[i] !== quote) { i += code[i] === '\\' ? 2 : 1; }
+      i++;
+      out += ' ';
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * The lane functions a pattern buffer calls, in LANE_NAMES order.
+ *
+ * A bare call counts (`quale(...)`); a member call does not
+ * (`qualia.quale(...)` is an imperative one-shot, not a lane). `qtrig` is the
+ * exception — it's only ever chained, so `.qtrig(...)` is exactly what counts.
+ *
+ * @param {string} code
+ * @returns {string[]}
+ */
+export function activeLanes(code) {
+  const src = stripNonCode(String(code ?? ''));
+  return LANE_NAMES.filter((name) => {
+    if (name === 'qtrig') return /\.\s*qtrig\s*\(/.test(src);
+    return new RegExp(`(^|[^\\w$.])${name}\\s*\\(`).test(src);
+  });
+}
+
 // ── Download helper ──────────────────────────────────────────────────────
 export function downloadPattern(code, name) {
   const safe = (name || parseMetadata(code).title || 'pattern')

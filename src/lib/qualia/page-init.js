@@ -4212,6 +4212,16 @@ export function initQualiaPage() {
   let lastAutoTransitionMs = 0;
   const autoGuardActive = (now) => (now - lastAutoTransitionMs) < AUTO_TRANSITION_GUARD_MS;
 
+  // Arm counters, bumped by setPhasePeriod/setCyclePeriod whenever a timer is
+  // deliberately turned ON — the topbar toggle, the dwell picker, a hotkey, the
+  // code API, a qualem recall, the tether. A pattern lane holds a one-shot
+  // claim on the wheel (see the auto-yield note in code-api.js) and a bump
+  // voids it, so an explicit arm always outranks a lane that hasn't fired yet:
+  // recall a scene between a `.slow(32)` lane's haps and the recall stands.
+  // Turning a timer OFF never bumps, so the yield can't void its own claim.
+  let autoArmEpochCycle = 0;
+  let autoArmEpochPhase = 0;
+
   phaseStyleSelect.value = autoPhaseStyle;
 
   function getActivePhaseSteps() {
@@ -4397,6 +4407,7 @@ export function initQualiaPage() {
   function setPhasePeriod(seconds) {
     autoPhaseSeconds = seconds;
     if (seconds > 0) {
+      autoArmEpochPhase++;
       autoPhasePeriodSec = seconds;
       if (phaseSecsSelect) phaseSecsSelect.value = String(seconds);
     }
@@ -4633,6 +4644,7 @@ export function initQualiaPage() {
     if (autoCycleTickT) { clearInterval(autoCycleTickT); autoCycleTickT = null; }
     autoCycleSeconds = seconds;
     if (seconds > 0) {
+      autoArmEpochCycle++;
       autoCyclePeriodSec = seconds;
       if (cycleSecsSelect) cycleSecsSelect.value = String(seconds);
       autoCycleStartMs = performance.now();
@@ -6966,6 +6978,20 @@ export function initQualiaPage() {
       setCyclePeriod,
       getCyclePeriod: () => autoCycleSeconds,
       getCycleDwell: () => autoCyclePeriodSec,
+      /** Arm counter for 'cycle' | 'phase' — see autoArmEpoch* above. */
+      autoArmEpoch: (kind) => (kind === 'cycle' ? autoArmEpochCycle : autoArmEpochPhase),
+      // One-shot pulse on the auto toggle a pattern lane just stood down. The
+      // button losing its .active tint is the state, but a quiet change in a
+      // corner of the topbar is easy to miss at playing distance — this makes
+      // the hand-off legible without a modal or a toast getting in the way.
+      flashAuto: (kind) => {
+        const btn = kind === 'cycle' ? btnCycle : btnPhase;
+        if (!btn) return;
+        btn.classList.remove('yielded');
+        void btn.offsetWidth;   // reflow so a second yield restarts the animation
+        btn.classList.add('yielded');
+        setTimeout(() => btn.classList.remove('yielded'), 1300);
+      },
       setCycleStyle: (s) => {
         if (!AUTO_CYCLE_STYLES.includes(s)) return;
         autoCycleStyle = s;

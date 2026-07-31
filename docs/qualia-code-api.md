@@ -48,10 +48,10 @@ stack(
 
 | Function | Semantics |
 |---|---|
-| `quale(pat)` | Switch the active quale per event (fuzzy id/name). Honors transition style + cycle quantize. `"null"` selects the null quale (blank fx layer). Switches **auto-cycle off** on its first landed hap. |
-| `qset(paramId, pat)` | Set an **active-quale** param per event. Continuous signals need `.segment(n)`. |
-| `qpreset(pat)` | Apply factory/user presets by name per event. |
-| `qphase(pat)` | Step the quale's phase per event (value = direction ±1). Switches **auto-phase off** on its first landed hap. |
+| `quale(pat)` | Switch the active quale per event (fuzzy id/name). Honors transition style + cycle quantize. `"null"` selects the null quale (blank fx layer). Claims **auto-cycle**. |
+| `qset(paramId, pat)` | Set an **active-quale** param per event. Continuous signals need `.segment(n)`. Claims **auto-phase** on a colliding param. |
+| `qpreset(pat)` | Apply factory/user presets by name per event. Claims **auto-phase**. |
+| `qphase(pat)` | Step the quale's phase per event (value = direction ±1). Claims **auto-phase**. |
 | `qglitch(name, pat)` | Set a glitch post's mode per event (`ascii/mosh/edge/stitch/negative` × `off/on/blip/flip`). |
 | `qcall(fn, pat)` | Call `fn(value, hap)` per event — the generic escape hatch. |
 | `pat.qtrig(fn)` | **Chainable, keeps the audio**: fires `fn(value, hap)` on each event of the pattern it's chained to — `s("bd*4").qtrig(() => qualia.phase())`. |
@@ -60,33 +60,66 @@ A param that has audio/pose modulators declared keeps them: `qset` writes the
 *base* value and the modulation engine still resolves `base ⊕ modulators`
 per frame — so patterns and audio-reactivity compose instead of fighting.
 
-### Auto-yield — lanes beat the hands-off timers
+### Auto-yield — lanes claim the wheel
 
-`quale()` and **auto-cycle** drive the same knob; `qphase()` and **auto-phase**
-drive the other one. Run both and the control has two masters: the lane picks a
-quale, the dwell timer swaps it out seconds later, the lane snaps it back on
-its next hap — on stage that reads as the visuals stuttering.
+`quale()` and **auto-cycle** drive the same knob; `qphase()`, `qpreset()` and a
+colliding `qset()` all write the same params **auto-phase** steps. Run both and
+the control has two masters: the lane sets a look, the dwell timer moves it
+seconds later, the lane snaps it back on its next hap — on stage that reads as
+the visuals stuttering.
 
-The typed pattern wins. The first hap of a `quale()` lane that resolves to a
-real quale switches auto-cycle off; the first `qphase()` hap that actually
-steps switches auto-phase off. Both go through the same path as the topbar
-buttons, so the toggle face flips with it and the **remembered dwell survives**
-— one click, or `qualia.autoCycle(true)`, puts it back exactly as it was.
+The typed pattern wins. A lane **claims** the wheel and the matching timer
+stands down:
 
-Deliberately narrow: a typo'd quale name fizzles with a warning and costs you
-nothing, and a `qphase()` hap on a quale with no phases is a no-op that leaves
-the armed period waiting for the next supporting quale. Nothing else yields —
-`qset`/`qpreset`/`qglitch`/`qcall` leave both timers alone.
+| Lane | Claims | On |
+|---|---|---|
+| `quale(pat)` | auto-cycle | any hap that resolves to a real quale |
+| `qphase(pat)` | auto-phase | any hap that actually steps |
+| `qpreset(pat)` | auto-phase | any preset that applies (it writes the same params) |
+| `qset(id, pat)` | auto-phase | only a **collision** — `id` is a param the active quale's phase steps also write |
+
+`qglitch` and `qcall` never claim; nothing fights over them.
+
+**One claim per lane instance, and last deliberate act wins.** A lane object is
+built fresh by every editor eval, so re-evaluating hands the wheel back. The
+claim is spent even when the timer was already off — the lane asserting itself
+is the event, not the write — so anything you do afterwards *sticks* instead of
+being clawed back on the lane's next hap. And deliberately **arming** a timer
+(topbar toggle, dwell picker, hotkey, `autoCycle(true)`, a qualem recall) voids
+any outstanding claim, so an explicit arm outranks even a lane that hasn't
+fired yet: recall a scene between a `.slow(32)` lane's haps and the recall
+stands.
+
+Deliberately narrow at the edges: a typo'd quale name fizzles with a warning
+and costs you nothing, a `qphase()` hap on a quale with no phases is a no-op
+that leaves the armed period waiting for the next supporting quale, and
+`qset("reactivity", …)` — a param no phase step touches — leaves auto-phase
+alone.
+
+The yield goes through the same setters as the topbar buttons, so the toggle
+face flips, the button pulses once (easy to catch at playing distance), and the
+**remembered dwell survives** — one click, or `qualia.autoCycle(true)`, puts it
+back exactly as it was.
 
 ```js
 qualia.autoYield(false)   // opt out; let lanes and timers layer (persisted)
 qualia.autoCycle(true)    // resume auto-cycle at its remembered dwell
+qualia.phaseParams()      // params the active quale's phase steps write —
+                          // i.e. the qset ids that would collide
 ```
 
 The **random-pattern roller follows the same rule from the other end**: roll a
 new pattern with auto-cycle on and its `quale()` lane comes out commented, with
 a note saying why. Uncommenting it is then the explicit hand-off — the lane
 fires and auto-cycle yields.
+
+### Which lanes are live?
+
+Silent lanes leave no trace in the UI, which is a problem three songs into a
+set. The Strudel panel header shows a chip — `⇢ quale · qphase · qset` — naming
+the lanes the current buffer declares. It's read from the buffer text, so a
+parked lane correctly doesn't count, and a `.slow(32)` lane still shows up
+between haps.
 
 ## The `qualia` object
 
