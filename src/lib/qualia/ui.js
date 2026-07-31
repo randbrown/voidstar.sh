@@ -306,6 +306,11 @@ export function buildParamPanel({
       r.control.classList.toggle('active', !!v);
       r.control.textContent = v ? 'on' : 'off';
     } else if (r.spec.type === 'select') {
+      // A persisted value whose option has since been renamed away would
+      // leave the <select> blank until someone touched it. Fall back to the
+      // spec default and write it back so state and UI agree.
+      const opts = r.spec.options || [];
+      if (opts.length && !opts.includes(v)) v = state[id] = r.spec.default;
       r.control.value = String(v);
     } else if (r.spec.type === 'text') {
       r.control.value = (v == null) ? '' : String(v);

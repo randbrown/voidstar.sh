@@ -1,53 +1,91 @@
 // Nightcall — homage to Vincent Belorgey (Kavinsky). The premise of the
 // song as a quale, in two modes that auto-phase walks like chapters:
 //
-//   highway    — rear view: the red Testarossa (the outrun arcade sprite)
-//                cruising a rain-slick night highway toward a spectrum-driven
-//                city skyline, sodium streetlights strobing past.
+//   outrun     — rear view: a vector Testarossa running a dead-straight
+//                rain-slick night highway at an enormous low moon, city
+//                silhouetted on its face, sodium streetlights strobing
+//                past. Named for the cabinet. The road never bends — only
+//                the car sways in its lane, so the moon stays nailed to
+//                the vanishing point the way it does on the record covers.
 //   testarossa — side view: a procedural vector illustration of the legend
 //                itself driving through the night — popped headlight beam,
 //                the signature side strakes, spinning five-hole rims, the
 //                full-width tail light dragging a red trail. 1986 forever.
+//   dash       — first person: the same road seen over a cockpit. Kavinsky
+//                shot almost no interiors, so the panel takes its cues from
+//                KITT instead — seven-segment readouts, banks of LED
+//                bargraphs, the voice modulator, the gullwing yoke — in the
+//                nightcall palette. Every instrument reads real rig data.
 //
-// Both modes share the storm sky: beat-driven branching lightning + sky
-// flash. Red / white / blue-black only; the palette IS the tribute.
+// All three share the storm sky: beat-driven branching lightning + sky
+// flash, moon god-rays and a vertical light column standing on the horizon.
+// Red / white / blue-black only; the palette IS the tribute.
 //
 // Audio map:
-//   bass        -> tail-light bloom, road glow, cruise speed
-//   mids        -> dash scroll surge
-//   highs       -> star twinkle, rain shimmer, streetlight sparkle
-//   beat.pulse  -> lightning strikes + sky flash, brake flash, beam flare
+//   bass        -> tail-light bloom, road glow, cruise speed, moon bloom
+//   mids        -> dash scroll surge, ray fan spread
+//   highs       -> star twinkle, rain shimmer, streetlight sparkle, ray flicker
+//   beat.pulse  -> lightning strikes + sky flash, brake flash, beam flare,
+//                  light-column punch
 //   spectrum    -> city skyline silhouette
 //
 // Pose map:
-//   head.x      -> lane drift (highway) / car drift (testarossa)
+//   head.x      -> lane sway (outrun) / car drift (testarossa)
+//   head.x rel  -> steering (dash). Measured against a slow baseline, never
+//                  absolute: a performer stuck off-centre, or one who can
+//                  barely move, still gets a centred wheel that answers
+//                  whatever movement they have.
 //
 // Idle (no audio): the car cruises, dashes scroll, ambient lightning on a
 // slow random timer. The night doesn't stop.
 
 import { scaleAudio } from '../field.js';
 import { lmToCanvas } from '../video.js';
-import { keyOutBackground } from './arcade/engine.js';
 
-const CAR_URL = '/arcade/outrun_ferrari.png';
 const TAU = Math.PI * 2;
 
-const HORIZON = 0.44;            // highway horizon as a fraction of H
+// Pacing. The whole speed scale runs at half its original rate, so param
+// 1.0 is the cruise you actually want and the 4.0 top end is a real ceiling
+// rather than a blur. Everything downstream of the resolved speed —
+// travelled distance, wheel spin, rain fall, the dash speedo — halves with
+// it, so the modes stay in step with each other and with the presets.
+const SPEED_SCALE = 0.5;
+const HORIZON = 0.44;            // outrun horizon as a fraction of H
 const NUM_STARS = 110;
 const NUM_RAIN = 150;
 const SKY_BINS = 48;             // skyline spectrum bins
-const MAX_BOLTS = 3;
+const MAX_BOLTS = 6;
 const TRUNK_PTS = 16;            // points per lightning trunk
-const BRANCHES = 3;              // branches per bolt
+const BRANCHES = 4;              // branches per bolt
 const BRANCH_PTS = 7;            // points per branch
-const LIGHT_SPACING = 0.16;      // highway streetlight spacing (depth units)
+const LIGHT_SPACING = 0.16;      // outrun streetlight spacing (depth units)
 const NUM_LIGHTS = 7;            // visible poles per side
+const NUM_RAYS = 9;              // god-rays standing on the vanishing point
+const NUM_CLOUDS = 18;           // puffs in the storm bank
+const NUM_WETS = 26;             // wet-asphalt specular streaks
+const MOON_SLITS = 7;            // outrun slit bands across the moon's foot
+// Maria, as fractions of the moon's radius: x, y, r. Placed by eye for
+// balance rather than astronomy — they only ever read as soft shading.
+// Seven-segment bit masks, bit 0 = top bar then clockwise, bit 6 = middle.
+const SEG_MASK = {
+  '0': 0b0111111, '1': 0b0000110, '2': 0b1011011, '3': 0b1001111, '4': 0b1100110,
+  '5': 0b1101101, '6': 0b1111101, '7': 0b0000111, '8': 0b1111111, '9': 0b1101111,
+  '-': 0b1000000, ' ': 0, 'A': 0b1110111, 'C': 0b0111001, 'E': 0b1111001,
+  'F': 0b1110001, 'H': 0b1110110, 'L': 0b0111000, 'P': 0b1110011, 'U': 0b0111110,
+};
+const CRATERS = [
+  [-0.38, -0.30, 0.13], [0.27, -0.47, 0.085], [0.43, 0.09, 0.17],
+  [-0.13, 0.31, 0.10], [0.04, -0.09, 0.06], [-0.52, 0.12, 0.07],
+];
 
-// The colours of the cover: blue-black night, red glow, cold white.
-const SKY_TOP = '#04060f';
-const SKY_HORIZON = '#0d1526';
-const ROAD = '#0b101f';
-const SHOULDER = '#04050c';
+// The colours of the cover: blue-black night, red glow, cold white. The
+// blacks are never neutral — every one of them carries blue.
+const SKY_TOP = '#01030c';
+const SKY_MID = '#050b1f';
+const SKY_HORIZON = '#0b1a3e';
+const ROAD = '#070d1e';
+const SHOULDER = '#02040e';
+const CITY = '#040a1a';
 
 // Bake a soft radial glow once — drawImage per use beats a fresh
 // createRadialGradient every frame (the fx draws ~30 glows a frame).
@@ -65,17 +103,6 @@ function bakeGlow(inner, mid, size = 128) {
   return c;
 }
 
-function loadCar() {
-  const img = new Image();
-  img.decoding = 'async';
-  img.src = CAR_URL;
-  return new Promise(resolve => {
-    if (img.complete && img.naturalWidth) { resolve(keyOutBackground(img)); return; }
-    img.onload = () => resolve(keyOutBackground(img));
-    img.onerror = () => resolve(null);
-  });
-}
-
 /** @type {import('../types.js').QFXModule} */
 export default {
   id: 'nightcall',
@@ -84,7 +111,9 @@ export default {
 
   params: [
     { id: 'mode', label: 'mode', type: 'select',
-      options: ['highway', 'testarossa'], default: 'highway' },
+      options: ['outrun', 'testarossa', 'dash'], default: 'outrun' },
+    // 1.0 is the cruise; the scale is normalised so 4.0 is a hard top end
+    // you'd actually reach for rather than an unusable blur.
     { id: 'speed', label: 'speed', type: 'range', min: 0, max: 4, step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.total', mode: 'mul', amount: 0.35 },
@@ -97,38 +126,59 @@ export default {
       modulators: [
         { source: 'audio.bass', mode: 'add', amount: 0.40 },
       ] },
+    // Moon — how much of the sky the thing eats. At 1.0 it overruns the top
+    // of the frame and sinks behind the horizon: you only ever see a slice.
+    { id: 'moon', label: 'moon', type: 'range', min: 0, max: 1.6, step: 0.02, default: 1.0 },
+    // Rays — the god-ray fan off the moon plus the light column on the
+    // vanishing point. The whole scene's sense of depth lives here.
+    { id: 'rays', label: 'rays', type: 'range', min: 0, max: 1.5, step: 0.02, default: 0.8,
+      modulators: [
+        { source: 'audio.highs', mode: 'add', amount: 0.30 },
+      ] },
     { id: 'city', label: 'city', type: 'toggle', default: true },
     { id: 'rain', label: 'rain', type: 'range', min: 0, max: 1, step: 0.02, default: 0.6 },
     { id: 'poseInfluence', label: 'pose influence', type: 'range', min: 0, max: 1, step: 0.02, default: 0.5 },
     { id: 'reactivity', label: 'reactivity', type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
-  // Chapters: highway cruise → highway storm → the legend side-on →
+  // Chapters: outrun cruise → outrun storm → the legend side-on →
   // the legend in the full storm.
   autoPhase: {
     steps: [
-      { mode: 'highway',    storm: 0.25, rain: 0.25, speed: 1.4 },
-      { mode: 'highway',    storm: 1.0,  rain: 0.6,  speed: 1.0 },
-      { mode: 'testarossa', storm: 1.0,  rain: 0.5,  speed: 1.0 },
-      { mode: 'testarossa', storm: 1.8,  rain: 0.9,  glow: 1.4 },
+      { mode: 'outrun',    storm: 0.25, rain: 0.25, speed: 1.4, moon: 1.0, rays: 0.6 },
+      { mode: 'dash',      storm: 0.8,  rain: 0.5,  speed: 1.0, moon: 1.1, rays: 0.8 },
+      { mode: 'outrun',    storm: 1.0,  rain: 0.6,  speed: 1.0, moon: 1.3, rays: 1.0 },
+      { mode: 'testarossa', storm: 1.0,  rain: 0.5,  speed: 1.0, moon: 1.0, rays: 0.8 },
+      { mode: 'dash',      storm: 1.8,  rain: 0.8,  speed: 1.3, moon: 1.2, rays: 1.1 },
+      { mode: 'testarossa', storm: 1.8,  rain: 0.9,  glow: 1.4, moon: 1.3, rays: 1.2 },
     ],
   },
 
   presets: {
-    default:    { mode: 'highway', speed: 1.0, storm: 1.0, glow: 1.0, city: true,
-                  rain: 0.6, poseInfluence: 0.5, reactivity: 1.0 },
-    cruise:     { mode: 'highway', speed: 1.5, storm: 0.25, rain: 0.25 },
-    storm:      { mode: 'highway', storm: 1.8, rain: 0.9, glow: 1.3 },
+    default:    { mode: 'outrun', speed: 1.0, storm: 1.0, glow: 1.0, city: true,
+                  rain: 0.6, moon: 1.0, rays: 0.8, poseInfluence: 0.5, reactivity: 1.0 },
+    cruise:     { mode: 'outrun', speed: 1.5, storm: 0.25, rain: 0.25, rays: 0.6 },
+    storm:      { mode: 'outrun', storm: 1.8, rain: 0.9, glow: 1.3, rays: 1.1 },
+    // The record sleeve: moon overrunning the frame, rays wide open.
+    moonrise:   { mode: 'outrun', storm: 0.4, rain: 0.35, moon: 1.5, rays: 1.4, speed: 0.8 },
+    // Behind the wheel: instruments lit, storm running, road ahead.
+    dash:       { mode: 'dash', storm: 1.0, rain: 0.5, moon: 1.1, rays: 0.8,
+                  speed: 1.0, glow: 1.0, poseInfluence: 0.6 },
+    pursuit:    { mode: 'dash', storm: 1.9, rain: 0.85, speed: 1.6, glow: 1.4,
+                  moon: 1.2, rays: 1.2 },
     testarossa: { mode: 'testarossa', storm: 1.0, rain: 0.5 },
-    legend:     { mode: 'testarossa', storm: 1.8, rain: 0.9, glow: 1.5 },
+    legend:     { mode: 'testarossa', storm: 1.8, rain: 0.9, glow: 1.5, rays: 1.2 },
   },
 
   async create(canvas, { ctx }) {
     let W = canvas.width, H = canvas.height;
-    const car = await loadCar();
     const glowRed = bakeGlow('rgba(255,64,52,1)', 'rgba(214,16,32,0.55)');
     const glowAmber = bakeGlow('rgba(255,228,185,1)', 'rgba(255,195,125,0.40)');
     const glowCold = bakeGlow('rgba(215,228,255,1)', 'rgba(160,185,255,0.40)');
+    // Storm bank: a dark puff for the body, an electric one for the pass
+    // that lights it from inside when a bolt goes off.
+    const puffDark = bakeGlow('rgba(6,12,30,1)', 'rgba(8,16,40,0.62)');
+    const puffLit = bakeGlow('rgba(176,214,255,1)', 'rgba(74,140,255,0.42)');
 
     // ── Pre-allocated state ─────────────────────────────────────────────
     // Stars: x, y (fractions of sky), twinkle phase.
@@ -146,8 +196,49 @@ export default {
       rain[i * 4 + 2] = 0.35 + Math.random() * 0.65;
       rain[i * 4 + 3] = 0.8 + Math.random() * 0.5;
     }
-    // Skyline bins (EMA-smoothed spectrum heights, 0..1).
+    // Skyline bins (EMA-smoothed heights, 0..1) over a fixed base profile.
+    // The city is architecture first and a spectrum analyser second: the
+    // towers stand whether or not anything is playing, and the music only
+    // pushes them up. Without the base the skyline vanishes the moment the
+    // mix goes quiet, which is exactly when you most want the silhouette.
     const skyline = new Float32Array(SKY_BINS);
+    const cityBase = new Float32Array(SKY_BINS);
+    for (let i = 0; i < SKY_BINS; i++) {
+      const spike = (i % 11 === 4 || i % 17 === 9) ? 0.30 : 0;
+      cityBase[i] = 0.16 + Math.random() * 0.26 + spike
+                  + 0.10 * Math.sin(i * 0.8) + 0.06 * Math.sin(i * 2.3 + 1.1);
+    }
+    // Storm bank: x, y (fractions of the sky box), half-width, half-height,
+    // drift rate. Two tiers — a heavy deck sitting low against the horizon
+    // and thinner wrack up high — so the sky has a floor and a ceiling.
+    const clouds = new Float32Array(NUM_CLOUDS * 5);
+    for (let i = 0; i < NUM_CLOUDS; i++) {
+      const low = i < NUM_CLOUDS * 0.6;
+      clouds[i * 5]     = Math.random();
+      clouds[i * 5 + 1] = low ? 0.52 + Math.random() * 0.42 : 0.06 + Math.random() * 0.38;
+      clouds[i * 5 + 2] = (low ? 0.16 : 0.11) + Math.random() * 0.16;
+      clouds[i * 5 + 3] = (low ? 0.070 : 0.038) + Math.random() * 0.055;
+      clouds[i * 5 + 4] = (low ? 0.006 : 0.013) * (0.5 + Math.random());
+    }
+    // Wet specular highlights on the asphalt: lane offset, length/phase,
+    // scroll rate. Scattered off the centreline so they never grid up.
+    const wets = new Float32Array(NUM_WETS * 3);
+    for (let i = 0; i < NUM_WETS; i++) {
+      wets[i * 3]     = (Math.random() * 2 - 1) * 0.86;
+      wets[i * 3 + 1] = Math.random();
+      wets[i * 3 + 2] = 0.8 + Math.random() * 0.5;
+    }
+    // God-rays: base angle, angular half-width, drift rate, flicker phase.
+    // Fanned across the upper hemisphere off the moon's centre, deliberately
+    // uneven so the spread never reads as a clock face.
+    const rays = new Float32Array(NUM_RAYS * 4);
+    for (let i = 0; i < NUM_RAYS; i++) {
+      const spread = -Math.PI * 0.96 + (i + 0.5) * (Math.PI * 0.92 / NUM_RAYS);
+      rays[i * 4]     = spread + (Math.random() - 0.5) * 0.16;
+      rays[i * 4 + 1] = 0.012 + Math.random() * 0.030;
+      rays[i * 4 + 2] = (Math.random() - 0.5) * 0.045;
+      rays[i * 4 + 3] = Math.random() * TAU;
+    }
     // Lightning bolt pool — trunk + branch points in x/y fractions of the
     // sky box, filled at spawn, never re-allocated.
     const bolts = [];
@@ -195,39 +286,160 @@ export default {
     }
 
     // ── Cached gradients — rebuilt on resize only ───────────────────────
+    // The hot path allocates nothing: every gradient below is built here and
+    // reused, and the two that depend on a live param (moon face, moon
+    // reflection) are keyed on their radius and rebuilt only when it moves.
     let skyGrad = null, skyGradTall = null, vignette = null, paintGrad = null;
+    let moonGrad = null, moonKey = -1, moonPool = null, moonPoolKey = -1;
+    let moonHaze = null, moonHazeKey = -1;
+    let beamGrad = null, wetGrad = null, fogGrad = null, fogGradTall = null;
+    let asphaltGrad = null, rearGrad = null, yokeGrad = null;
+    // The three that follow the horizon: outrun and dash look down the same
+    // road from different heights, so these are keyed on the geometry rather
+    // than baked against one fixed horizon. Only one mode renders per frame,
+    // so a single slot each never thrashes.
+    let skyKey = -1, asphaltKey = -1, fogKey = -1, beamKey = -1;
     function rebuildGradients() {
-      const hy = H * HORIZON;
-      skyGrad = ctx.createLinearGradient(0, 0, 0, hy);
-      skyGrad.addColorStop(0, SKY_TOP);
-      skyGrad.addColorStop(1, SKY_HORIZON);
+      skyKey = asphaltKey = fogKey = beamKey = -1;
       // Side-view sky reaches further down.
       skyGradTall = ctx.createLinearGradient(0, 0, 0, H * 0.70);
       skyGradTall.addColorStop(0, SKY_TOP);
+      skyGradTall.addColorStop(0.55, SKY_MID);
       skyGradTall.addColorStop(1, SKY_HORIZON);
-      vignette = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.45,
-                                          W / 2, H * 0.55, Math.max(W, H) * 0.75);
+      vignette = ctx.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.42,
+                                          W / 2, H * 0.55, Math.max(W, H) * 0.78);
       vignette.addColorStop(0, 'rgba(0,0,0,0)');
-      vignette.addColorStop(1, 'rgba(2,3,8,0.55)');
-      paintGrad = null;   // depends on car length — lazily rebuilt in drawTestarossa
+      vignette.addColorStop(1, 'rgba(1,3,14,0.66)');
+      // Wet-road red smear under the car (rebuilt here so render allocates none).
+      wetGrad = ctx.createLinearGradient(0, H * 0.935, 0, H);
+      wetGrad.addColorStop(0, 'rgba(255,40,45,0.30)');
+      wetGrad.addColorStop(1, 'rgba(255,40,45,0)');
+      fogGradTall = ctx.createLinearGradient(0, H * 0.70 - H * 0.17, 0, H * 0.70 + H * 0.02);
+      fogGradTall.addColorStop(0, 'rgba(46,96,190,0)');
+      fogGradTall.addColorStop(0.62, 'rgba(52,104,196,0.13)');
+      fogGradTall.addColorStop(1, 'rgba(96,150,235,0.26)');
+      // Both depend on car size — lazily rebuilt where they're used.
+      paintGrad = null;
+      rearGrad = null;
+      yokeGrad = null;
+      moonKey = moonPoolKey = moonHazeKey = -1;
     }
     rebuildGradients();
 
+    function skyGradFor(hy) {
+      if (skyKey !== hy) {
+        skyGrad = ctx.createLinearGradient(0, 0, 0, hy);
+        skyGrad.addColorStop(0, SKY_TOP);
+        skyGrad.addColorStop(0.55, SKY_MID);
+        skyGrad.addColorStop(1, SKY_HORIZON);
+        skyKey = hy;
+      }
+      return skyGrad;
+    }
+    // Asphalt: near-black at the horizon, lifting to a wet blue sheen as it
+    // comes at the camera.
+    function asphaltFor(hy, bottom) {
+      const k = hy * 65536 + bottom;
+      if (asphaltKey !== k) {
+        asphaltGrad = ctx.createLinearGradient(0, hy, 0, bottom);
+        asphaltGrad.addColorStop(0, '#050a18');
+        asphaltGrad.addColorStop(0.45, '#0a1324');
+        asphaltGrad.addColorStop(1, '#101d3a');
+        asphaltKey = k;
+      }
+      return asphaltGrad;
+    }
+    // Ground fog banking up against the horizon — the thing that stops the
+    // skyline from looking like a sticker on the moon.
+    function fogFor(hy) {
+      if (fogKey !== hy) {
+        fogGrad = ctx.createLinearGradient(0, hy - H * 0.17, 0, hy + H * 0.02);
+        fogGrad.addColorStop(0, 'rgba(46,96,190,0)');
+        fogGrad.addColorStop(0.62, 'rgba(52,104,196,0.13)');
+        fogGrad.addColorStop(1, 'rgba(96,150,235,0.26)');
+        fogKey = hy;
+      }
+      return fogGrad;
+    }
+
+    // The light column standing on the vanishing point — bright at the road,
+    // gone by the top of the sky.
+    function beamFor(hy) {
+      if (beamKey !== hy) {
+        beamGrad = ctx.createLinearGradient(0, hy, 0, 0);
+        beamGrad.addColorStop(0, 'rgba(170,205,255,0.30)');
+        beamGrad.addColorStop(0.3, 'rgba(110,160,255,0.09)');
+        beamGrad.addColorStop(1, 'rgba(70,120,255,0)');
+        beamKey = hy;
+      }
+      return beamGrad;
+    }
+
+    // Moon face + its reflection on the asphalt, keyed on radius.
+    // Lit from below and behind: the crown stays a deep steel blue and the
+    // foot burns cold white, so the disc reads as an object hanging in the
+    // sky instead of a hole punched through it.
+    function moonFace(R) {
+      if (moonKey !== R) {
+        moonGrad = ctx.createLinearGradient(0, -R, 0, R);
+        moonGrad.addColorStop(0, '#111e42');
+        moonGrad.addColorStop(0.40, '#26406c');
+        moonGrad.addColorStop(0.58, '#3d5c8e');
+        moonGrad.addColorStop(0.74, '#7396cc');
+        moonGrad.addColorStop(0.89, '#bed4f4');
+        moonGrad.addColorStop(1, '#eef4ff');
+        moonKey = R;
+      }
+      return moonGrad;
+    }
+    // Atmosphere eating the moon's foot — same blue as the ground fog, so
+    // the disc dissolves into the horizon instead of being cut off by it.
+    function moonHazeGrad(R) {
+      if (moonHazeKey !== R) {
+        moonHaze = ctx.createLinearGradient(0, -R * 0.2, 0, R);
+        moonHaze.addColorStop(0, 'rgba(11,26,62,0)');
+        moonHaze.addColorStop(0.55, 'rgba(13,34,80,0.35)');
+        moonHaze.addColorStop(1, 'rgba(16,46,104,0.72)');
+        moonHazeKey = R;
+      }
+      return moonHaze;
+    }
+    function moonPoolGrad(len) {
+      if (moonPoolKey !== len) {
+        moonPool = ctx.createLinearGradient(0, 0, 0, len);
+        moonPool.addColorStop(0, 'rgba(196,220,255,0.20)');
+        moonPool.addColorStop(0.5, 'rgba(150,185,255,0.07)');
+        moonPool.addColorStop(1, 'rgba(120,160,255,0)');
+        moonPoolKey = len;
+      }
+      return moonPool;
+    }
+
     // ── Driving state ───────────────────────────────────────────────────
     let dist = 0;            // travelled distance — scrolls dashes + lights
-    let curve = 0;           // smoothed road curve (-1..1)
     let laneX = 0;           // smoothed lane position (-1..1)
     let bank = 0;            // visual bank for the car art
     let wanderP = Math.random() * TAU;
-    let flash = 0;           // sky flash envelope from strikes
+    let flash = 0;           // hard strike flash — fast, blue-white, blows the sky out
+    let afterglow = 0;       // slow electric-blue bloom the strike leaves behind
     let idleBoltAt = 4 + Math.random() * 6;   // ambient-strike clock (idle)
     let wheelA = 0;          // side-view wheel rotation (rad)
+    // Dash-mode steering. headBase is the slow-moving centre the wheel
+    // measures against; -1 means "not seeded yet".
+    let steer = 0, steerTarget = 0, idleSteer = Math.random() * TAU;
+    let headX = 0, headBase = -1;
+    // Instrument values, all EMA'd so the readouts settle like real gauges.
+    let mph = 0, rpm = 0, volts = 13.8, temp = 0.42, fuelBurn = 0.72;
+    let odo = 0;
 
     const scratch = {
       time: 0, dt: 0, speed: 1,
       bass: 0, mids: 0, highs: 0, total: 0, beatPulse: 0, rms: 0,
       audioOn: false, brake: 0,
-      mode: 'highway', storm: 1, glow: 1, rainAmt: 0.6, city: true,
+      mode: 'outrun', storm: 1, glow: 1, rainAmt: 0.6, city: true,
+      moon: 1, rays: 0.8,
+      mph: 0, rpm: 0, volts: 13.8, temp: 0.4, fuel: 0.7, odo: 0, steer: 0,
+      waveform: null, spectrum: null, clockH: 0, clockM: 0, clockS: 0,
     };
 
     function update(field) {
@@ -235,23 +447,27 @@ export default {
       const audio = scaleAudio(field.audio, params.reactivity);
       const dt = field.dt;
       const audioOn = !!audio.spectrum;
-      const mode = params.mode === 'testarossa' ? 'testarossa' : 'highway';
+      // Anything that isn't the side view is the rear view — which also
+      // silently carries the old 'highway' id forward for anyone whose
+      // saved params or Strudel patterns still name it.
+      const mode = params.mode === 'testarossa' ? 'testarossa'
+                 : params.mode === 'dash' ? 'dash' : 'outrun';
 
       // Cruise speed — the resolved speed param already carries audio.total.
-      const spd = params.speed * (0.65 + audio.bands.bass * 0.4 + audio.bands.mids * 0.25);
+      const spd = params.speed * SPEED_SCALE
+                * (0.65 + audio.bands.bass * 0.4 + audio.bands.mids * 0.25);
       dist += dt * spd * 1.7;
-      wheelA -= dt * spd * 9;               // side view faces left → rolls CCW
+      wheelA += dt * spd * 9;               // side view faces right → rolls CW
 
-      // Road curve — incommensurate sines of distance so the highway is
-      // almost always bending gently one way or the other.
-      const curveTarget = Math.sin(dist * 0.11) * 0.4 + Math.sin(dist * 0.043 + 1.7) * 0.25;
-      curve += (curveTarget - curve) * Math.min(1, dt * 0.9);
-
-      // Lane: pose head leads when someone's in frame, else a slow wander.
+      // The road runs dead straight at the moon — nothing here bends it.
+      // All the motion lives in the car: pose head leads the sway when
+      // someone's in frame, else a slow wander keeps it breathing. Held
+      // well inside the lane so the vanishing point never drifts.
       wanderP += dt * 0.25;
-      let laneTarget = Math.sin(wanderP) * 0.28 + Math.sin(wanderP * 0.41 + 0.9) * 0.12;
+      let laneTarget = Math.sin(wanderP) * 0.26 + Math.sin(wanderP * 0.41 + 0.9) * 0.11;
       const inf = params.poseInfluence || 0;
       const people = field.pose && field.pose.people;
+      let headSeen = false;
       if (inf > 0.001 && people && people.length) {
         const p = people[0];
         if (p && p.head && p.head.visibility > 0.3) {
@@ -260,28 +476,62 @@ export default {
           const [hx] = lmToCanvas(p.head.x, p.head.y, W, H);
           const poseLane = Math.max(-1, Math.min(1, (hx / W - 0.5) * 2.4));
           laneTarget = laneTarget * (1 - inf) + poseLane * inf;
+          headX = hx;
+          headSeen = true;
+          if (headBase < 0) headBase = hx;   // first sighting seeds the baseline
         }
       }
       laneX += (laneTarget - laneX) * Math.min(1, dt * 2.2);
       bank += ((laneTarget - laneX) * 2.5 - bank) * Math.min(1, dt * 6);
 
-      // Lightning. Live: strikes ride hard kicks, gated by storm. Idle: an
-      // ambient strike every few seconds keeps the night alive.
+      // Steering (dash mode). Deliberately *relative*: a slow baseline
+      // follows wherever the performer's head actually lives, and the wheel
+      // reads only the departure from it. Someone pinned to the left of
+      // frame, or who can barely move, still gets a wheel that sits centred
+      // and answers what movement they do have — where an absolute mapping
+      // would just hold full lock all night.
+      if (headSeen) {
+        headBase += (headX - headBase) * Math.min(1, dt * 0.22);
+        const rel = (headX - headBase) / (W * 0.055);
+        steerTarget = Math.max(-1, Math.min(1, rel));
+        // Keep the idle wander's phase advancing while tracked, so losing
+        // the pose hands over to it mid-stride instead of with a jump.
+        idleSteer += dt * 0.33;
+      } else {
+        // Nobody in frame — drift on the same slow wander the lane uses.
+        idleSteer += dt * 0.33;
+        steerTarget = Math.sin(idleSteer * 0.7) * 0.42 + Math.sin(idleSteer * 0.23 + 1.4) * 0.22;
+      }
+      steer += (steerTarget - steer) * Math.min(1, dt * 2.6);
+
+      // Lightning. Live: every loud hit is a strike — the harder the hit the
+      // brighter the bolt and the bigger the sky wash, and the loudest ones
+      // fork twice. Idle: an ambient strike every few seconds keeps the
+      // night alive.
       const storm = params.storm;
       if (storm > 0.01) {
         if (audioOn) {
-          if (audio.beat.active && audio.beat.pulse > 0.45 && Math.random() < 0.38 * storm) {
-            spawnBolt(audio.beat.pulse * storm);
-            flash = Math.max(flash, 0.5 + 0.4 * Math.min(1, storm));
+          // Loudness of this hit, not just its presence — a soft kick gets a
+          // distant flicker, a hard one takes the whole sky.
+          const hit = audio.beat.pulse * (0.6 + audio.bands.bass * 0.8);
+          if (audio.beat.active && audio.beat.pulse > 0.22 && Math.random() < (0.35 + hit * 0.75) * storm) {
+            spawnBolt(hit * storm);
+            if (hit > 0.75 && Math.random() < 0.5 * storm) spawnBolt(hit * storm * 0.8);
+            flash = Math.max(flash, Math.min(1.15, (0.35 + hit * 0.85) * Math.min(1.4, 0.6 + storm)));
+            afterglow = Math.max(afterglow, flash * 0.65);
           }
         } else if (field.time > idleBoltAt) {
-          idleBoltAt = field.time + (3 + Math.random() * 9) / Math.max(0.25, storm);
+          idleBoltAt = field.time + (2 + Math.random() * 5) / Math.max(0.25, storm);
           spawnBolt(0.6 * storm);
-          flash = Math.max(flash, 0.45);
+          flash = Math.max(flash, 0.5);
+          afterglow = Math.max(afterglow, 0.35);
         }
       }
       for (const b of bolts) if (b.life > 0) b.life = Math.max(0, b.life - dt * 3.4);
-      flash = Math.max(0, flash - dt * 2.8);
+      // Two envelopes: the strike itself snaps away, the charged blue sky it
+      // leaves behind takes a beat or two to bleed off.
+      flash = Math.max(0, flash - dt * 3.6);
+      afterglow = Math.max(0, afterglow - dt * 0.85);
 
       // Rain — streaks fall with a shear from the driving speed.
       const rainAmt = params.rain;
@@ -289,14 +539,15 @@ export default {
         for (let i = 0; i < NUM_RAIN; i++) {
           const z = rain[i * 4 + 2];
           rain[i * 4 + 1] += dt * rain[i * 4 + 3] * (1.4 + spd * 0.3) * z;
-          rain[i * 4]     -= dt * 0.06 * z * (1 + curve);
+          rain[i * 4]     -= dt * 0.06 * z;
           if (rain[i * 4 + 1] > 1) { rain[i * 4 + 1] -= 1; rain[i * 4] = Math.random(); }
           if (rain[i * 4] < 0) rain[i * 4] += 1;
         }
       }
 
-      // Skyline — log-binned spectrum, EMA so the city breathes rather
-      // than flickers. Idle: a slow sine ridge.
+      // Skyline — the base profile with log-binned spectrum stacked on top,
+      // EMA'd so the city breathes rather than flickers. Idle: a slow swell
+      // through the same towers.
       if (audioOn) {
         const spec = audio.spectrum;
         const n = spec.length;
@@ -305,12 +556,12 @@ export default {
           const f1 = Math.max(f0 + 1, Math.pow(n * 0.75, (i + 1) / SKY_BINS) | 0);
           let sum = 0;
           for (let f = f0; f < f1; f++) sum += spec[f];
-          const v = (sum / (f1 - f0)) / 255;
+          const v = cityBase[i] + ((sum / (f1 - f0)) / 255) * 0.60;
           skyline[i] += (v - skyline[i]) * 0.25;
         }
       } else {
         for (let i = 0; i < SKY_BINS; i++) {
-          const v = 0.22 + 0.16 * Math.sin(field.time * 0.5 + i * 0.55);
+          const v = cityBase[i] + 0.10 * (0.5 + 0.5 * Math.sin(field.time * 0.5 + i * 0.55));
           skyline[i] += (v - skyline[i]) * 0.06;
         }
       }
@@ -332,10 +583,43 @@ export default {
       scratch.glow = params.glow;
       scratch.rainAmt = rainAmt;
       scratch.city = !!params.city;
+      scratch.moon = Math.max(0, params.moon ?? 1);
+      scratch.rays = Math.max(0, params.rays ?? 0.8);
+
+      // ── Instruments ───────────────────────────────────────────────────
+      // Everything on the dash is derived from what the rig already knows
+      // and then damped, so the needles and digits settle the way real
+      // gauges do instead of strobing on every frame.
+      const mphTarget = 42 + spd * 46 + audio.bands.total * 55 + audio.beat.pulse * 18;
+      mph += (mphTarget - mph) * Math.min(1, dt * 1.6);
+      const rpmTarget = 1800 + audio.bands.bass * 4200 + audio.bands.mids * 1800
+                      + audio.beat.pulse * 1200;
+      rpm += (rpmTarget - rpm) * Math.min(1, dt * 4.5);
+      volts += ((13.2 + audio.bands.highs * 1.6 + flash * 0.9) - volts) * Math.min(1, dt * 1.1);
+      temp += ((0.34 + audio.bands.bass * 0.5 + audio.rms * 0.2) - temp) * Math.min(1, dt * 0.35);
+      fuelBurn = Math.max(0.06, fuelBurn - dt * (0.0016 + audio.bands.total * 0.0025));
+      if (fuelBurn <= 0.07) fuelBurn = 0.98;      // the night doesn't stop
+      odo += dt * mph * 0.0031;
+
+      scratch.mph = mph;
+      scratch.rpm = rpm;
+      scratch.volts = volts;
+      scratch.temp = temp;
+      scratch.fuel = fuelBurn;
+      scratch.odo = odo;
+      scratch.steer = steer;
+      scratch.waveform = audio.waveform || null;
+      scratch.spectrum = audio.spectrum || null;
+      // Wall clock for the chron readout, sampled here so render stays a
+      // pure function of scratch.
+      const now = new Date();
+      scratch.clockH = now.getHours();
+      scratch.clockM = now.getMinutes();
+      scratch.clockS = now.getSeconds();
     }
 
-    // Road-space helpers — p in [0..1], 0 at the horizon, 1 at the bottom.
-    function roadCx(p) { return W * 0.5 + curve * (1 - p) * (1 - p) * W * 0.55; }
+    // Road-space helper — p in [0..1], 0 at the horizon, 1 at the bottom.
+    // The centreline is fixed at W/2: this road does not bend.
     function roadHalf(p) { return W * 0.02 + p * p * W * 0.42; }
 
     // ── Shared sky: stars + lightning + flash, down to skyBottom px ─────
@@ -382,10 +666,32 @@ export default {
           }
         }
       }
-      if (flash > 0.01) {
-        ctx.fillStyle = `rgba(170,195,255,${flash * 0.16})`;
-        ctx.fillRect(0, 0, W, H);
-      }
+    }
+
+    // The strike lighting the world. Two passes, either side of the bolts:
+    // the afterglow charges the sky electric blue behind them, then the
+    // strike itself blows blue-white across the whole frame — sky, road,
+    // car, rain — the way it does on the sleeve art.
+    function drawSkyCharge(skyBottom) {
+      if (afterglow <= 0.01) return;
+      const a = Math.min(1, afterglow);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(38,104,214,${a * 0.30})`;
+      ctx.fillRect(0, 0, W, skyBottom);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    function drawSkyFlash() {
+      if (flash <= 0.01) return;
+      const a = Math.min(1, flash);
+      ctx.globalCompositeOperation = 'lighter';
+      // Cold blue-white over everything — this is what makes it a strike
+      // and not a filter.
+      ctx.fillStyle = `rgba(110,160,255,${a * 0.13})`;
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = `rgba(215,235,255,${a * a * 0.10})`;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'source-over';
     }
 
     function drawRain(fs) {
@@ -405,64 +711,303 @@ export default {
       ctx.stroke();
     }
 
-    // ── Highway mode (rear view) ────────────────────────────────────────
-    function renderHighway() {
+    // ── Storm bank ──────────────────────────────────────────────────────
+    // Dark puffs laid over the moon, then an additive pass in electric blue
+    // scaled by the strike envelopes — so the cloud doesn't just sit in
+    // front of the lightning, it lights up from the inside with it.
+    function drawClouds(skyBottom, t) {
+      const drift = t * 0.02;
+      const lit = Math.min(1.2, flash * 0.85 + afterglow * 0.5);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, 0, W, skyBottom); ctx.clip();
+      for (let pass = 0; pass < 2; pass++) {
+        if (pass === 1) {
+          if (lit < 0.02) break;
+          ctx.globalCompositeOperation = 'lighter';
+        }
+        for (let i = 0; i < NUM_CLOUDS; i++) {
+          const rx = clouds[i * 5 + 2] * W;
+          const ry = clouds[i * 5 + 3] * skyBottom;
+          // Wrap with a full sprite-width of margin so nothing pops in.
+          let x = (clouds[i * 5] + drift * clouds[i * 5 + 4] * 60) % 1;
+          if (x < 0) x += 1;
+          x = x * (W + rx * 4) - rx * 2;
+          const y = clouds[i * 5 + 1] * skyBottom;
+          if (pass === 0) {
+            ctx.globalAlpha = 0.55;
+            ctx.drawImage(puffDark, x - rx, y - ry, rx * 2, ry * 2);
+          } else {
+            // Lit slightly high and tight — the glow is inside the cloud.
+            ctx.globalAlpha = Math.min(1, lit * 0.30);
+            ctx.drawImage(puffLit, x - rx * 0.78, y - ry * 1.05, rx * 1.56, ry * 1.56);
+          }
+        }
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    // ── The moon ────────────────────────────────────────────────────────
+    // Deliberately too big for the frame: it runs off the top and sinks
+    // behind the horizon, so you only ever get a slice of it. Everything
+    // else in the shot is composed against that slice.
+    function drawMoon(cx, cy, R, clipBottom) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, 0, W, clipBottom); ctx.clip();
+
+      // Bloom behind the disc — bass swells it, a strike blows it out.
+      ctx.globalCompositeOperation = 'lighter';
+      // Kept to ~2.5R: a bloom this size is pure fill cost, and past that
+      // it's all below the alpha you can see anyway.
+      ctx.globalAlpha = Math.min(1, 0.34 + scratch.bass * 0.30 + flash * 0.45);
+      ctx.drawImage(glowCold, cx - R * 1.25, cy - R * 1.25, R * 2.5, R * 2.5);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      // Clip everything below to the disc so shading and slits never spill.
+      ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.clip();
+      ctx.fillStyle = moonFace(R);
+      ctx.fillRect(-R, -R, R * 2, R * 2);
+
+      // Maria — soft, low-contrast, no outlines. Two passes each (a wide
+      // wash and a tighter core) so they read as depth, not as circles.
+      for (let i = 0; i < CRATERS.length; i++) {
+        const c = CRATERS[i];
+        ctx.fillStyle = 'rgba(12,26,60,0.10)';
+        ctx.beginPath(); ctx.arc(c[0] * R, c[1] * R, c[2] * R * 1.25, 0, TAU); ctx.fill();
+        ctx.fillStyle = 'rgba(9,20,50,0.09)';
+        ctx.beginPath(); ctx.arc(c[0] * R - c[2] * R * 0.1, c[1] * R - c[2] * R * 0.1,
+                                 c[2] * R * 0.72, 0, TAU); ctx.fill();
+      }
+
+      // The outrun slits. Confined to the band just above the horizon and
+      // opening up as they descend, so the disc appears to dissolve into
+      // stripes exactly where it meets the world.
+      for (let i = 0; i < MOON_SLITS; i++) {
+        const f = i / (MOON_SLITS - 1);          // 0 mid-disc → 1 at the foot
+        const y = R * (0.30 + f * 0.44);
+        const h = R * (0.005 + f * f * 0.052);
+        const half = Math.sqrt(Math.max(0, R * R - y * y));
+        ctx.fillStyle = `rgba(6,16,44,${0.30 + f * 0.55})`;
+        ctx.fillRect(-half, y, half * 2, h);
+      }
+
+      // Atmosphere drowning the base.
+      ctx.fillStyle = moonHazeGrad(R);
+      ctx.fillRect(-R, -R * 0.2, R * 2, R * 1.2);
+      ctx.restore();
+
+      // Cold rim along the crown, and a hot one along the foot where the
+      // light is coming from. Outside the clip so they sit on the edge.
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.strokeStyle = 'rgba(150,180,240,0.35)';
+      ctx.lineWidth = Math.max(1, R * 0.005);
+      ctx.beginPath(); ctx.arc(0, 0, R * 0.997, Math.PI * 1.10, Math.PI * 1.90); ctx.stroke();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = `rgba(150,190,255,${0.16 + scratch.bass * 0.18})`;
+      ctx.lineWidth = Math.max(1, R * 0.020);
+      ctx.beginPath(); ctx.arc(0, 0, R * 0.99, Math.PI * 0.20, Math.PI * 0.80); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      ctx.restore();
+    }
+
+    // ── Light column + god-rays ─────────────────────────────────────────
+    // Both stand on the vanishing point, which is also where the road goes
+    // and where the moon sits. One anchor, everything pointing at it.
+    function drawLightColumn(cx, hy, fs) {
+      const amt = scratch.rays;
+      if (amt <= 0.01) return;
+      const punch = 0.5 + scratch.beatPulse * 0.7 + scratch.bass * 0.4;
+      const w = Math.max(2 * fs, W * 0.012 * (0.7 + punch * 0.6));
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, amt * punch * 0.8);
+      ctx.fillStyle = beamFor(hy);
+      // Slight flare toward the top — a column, not a stripe.
+      ctx.beginPath();
+      ctx.moveTo(cx - w, hy);
+      ctx.lineTo(cx + w, hy);
+      ctx.lineTo(cx + w * 2.6, 0);
+      ctx.lineTo(cx - w * 2.6, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawRays(cx, cy, hy, t) {
+      const amt = scratch.rays;
+      if (amt <= 0.01) return;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, 0, W, hy); ctx.clip();
+      ctx.globalCompositeOperation = 'lighter';
+      const len = Math.hypot(W, H) * 1.3;
+      const drive = 0.45 + scratch.total * 0.55 + scratch.beatPulse * 0.45 + flash * 0.9;
+      for (let i = 0; i < NUM_RAYS; i++) {
+        const a0 = rays[i * 4] + t * rays[i * 4 + 2];
+        const hw = rays[i * 4 + 1] * (1 + scratch.mids * 0.9);
+        const fl = 0.5 + 0.5 * Math.sin(t * 0.9 + rays[i * 4 + 3]);
+        const alpha = 0.045 * amt * drive * fl;
+        if (alpha < 0.002) continue;
+        ctx.fillStyle = `rgba(146,188,255,${alpha})`;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(a0 - hw) * len, cy + Math.sin(a0 - hw) * len);
+        ctx.lineTo(cx + Math.cos(a0 + hw) * len, cy + Math.sin(a0 + hw) * len);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // ── The road ahead ──────────────────────────────────────────────────
+    // Sky, moon, city, weather and the straight highway, drawn between the
+    // horizon `hy` and the ground line `bottom`. Outrun runs it to the foot
+    // of the frame; dash runs it to a line behind the cowl, which is what
+    // lets the same world sit inside a windscreen without redrawing it.
+    function drawRoadWorld(hy, bottom) {
+      const gh = bottom - hy;
       const t = scratch.time;
-      const hy = H * HORIZON;
       const fs = Math.min(W, H) / 1080;
       const glow = scratch.glow;
+      const cx = W * 0.5;            // vanishing point — fixed, always
 
-      ctx.fillStyle = skyGrad;
+      ctx.fillStyle = skyGradFor(hy);
       ctx.fillRect(0, 0, W, hy);
       ctx.fillStyle = ROAD;
-      ctx.fillRect(0, hy, W, H - hy);
+      ctx.fillRect(0, hy, W, gh);
 
       drawStars(hy, fs, t);
-      drawLightning(hy, fs, t);
+      // Charged sky first, so the moon and the city sit inside the glow
+      // rather than on top of a filter.
+      drawSkyCharge(hy);
 
-      // ── City skyline ──────────────────────────────────────────────────
+      // ── The moon ──────────────────────────────────────────────────────
+      // Hung so its lower half fills the frame: the crown runs off the top,
+      // the foot sinks behind the horizon, and the slits land right where
+      // the road meets it.
+      const moonR = Math.max(W, H) * 0.34 * scratch.moon;
+      const moonY = hy - moonR * 0.72;
+      if (scratch.moon > 0.01) drawMoon(cx, moonY, moonR, hy);
+
+      // ── City skyline — a hard silhouette bitten out of the moon ───────
       if (scratch.city) {
         const bw = W / SKY_BINS;
-        const maxH = hy * 0.30;
-        ctx.fillStyle = '#0a1020';
+        const maxH = hy * 0.55;
+        // Sodium haze first, so the towers stand in front of their own
+        // light instead of being smeared by it.
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.22 + scratch.mids * 0.18;
+        ctx.drawImage(glowAmber, W * 0.5 - hy * 1.0, hy - hy * 0.40, hy * 2.0, hy * 0.52);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = CITY;
         for (let i = 0; i < SKY_BINS; i++) {
           const bh = skyline[i] * maxH;
           ctx.fillRect(i * bw, hy - bh, bw + 0.5, bh);
         }
-        ctx.fillStyle = 'rgba(150,180,255,0.5)';
+        // Cold light catching every parapet.
+        ctx.fillStyle = 'rgba(160,195,255,0.65)';
         for (let i = 0; i < SKY_BINS; i++) {
           ctx.fillRect(i * bw, hy - skyline[i] * maxH, bw + 0.5, 1.5 * fs + 0.5);
         }
-        // Aircraft-warning beacons on every 7th tower — tiny red pulses.
+        // Masts on the tall ones, then the aircraft-warning beacons that
+        // sit on top of them — tiny red pulses along the whole skyline.
+        ctx.fillStyle = CITY;
+        for (let i = 3; i < SKY_BINS; i += 7) {
+          const top = hy - skyline[i] * maxH;
+          ctx.fillRect(i * bw + bw * 0.42, top - maxH * 0.16, Math.max(1, 1.6 * fs), maxH * 0.16);
+        }
         ctx.fillStyle = `rgba(255,43,51,${0.35 + 0.45 * (0.5 + 0.5 * Math.sin(t * 2.1))})`;
         for (let i = 3; i < SKY_BINS; i += 7) {
-          const y = hy - skyline[i] * maxH - 3 * fs;
-          ctx.fillRect(i * bw + bw * 0.4, y, Math.max(1.5, 2.5 * fs), Math.max(1.5, 2.5 * fs));
+          const y = hy - skyline[i] * maxH - maxH * 0.16 - 3 * fs;
+          ctx.fillRect(i * bw + bw * 0.32, y, Math.max(1.5, 3 * fs), Math.max(1.5, 3 * fs));
         }
       }
 
-      // Horizon haze — a thin cold band so road and sky knit together.
-      ctx.fillStyle = 'rgba(120,150,220,0.10)';
-      ctx.fillRect(0, hy - 2 * fs, W, 5 * fs);
+      // Storm bank over the moon and the city — drawn after both so the
+      // weather is genuinely between us and the backdrop.
+      drawClouds(hy, t);
+
+      // Ground fog banked against the horizon — the moon's foot, the city's
+      // base and the road all dissolve into the same blue air.
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = fogFor(hy);
+      ctx.fillRect(0, hy - H * 0.17, W, H * 0.19);
+      ctx.globalCompositeOperation = 'source-over';
+
+      // Rays and the column go over the moon and the city — light shafts
+      // raking across the whole backdrop, all standing on one point.
+      drawRays(cx, hy, hy, t);
+      drawLightColumn(cx, hy, fs);
+      drawLightning(hy, fs, t);
+
+      // The horizon laser — the line off the sleeve, laid along the edge of
+      // the world. Sits on the beat and bleeds red into the fog. Kept thin
+      // and mostly dark: it's an accent on a blue frame, not a light source.
+      const laser = 0.18 + scratch.beatPulse * 0.5 + scratch.bass * 0.28;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, laser * 0.5 * glow);
+      ctx.drawImage(glowRed, -W * 0.1, hy - H * 0.035, W * 1.2, H * 0.07);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = `rgba(255,120,110,${Math.min(1, 0.20 + laser * 0.45)})`;
+      ctx.fillRect(0, hy - Math.max(0.5, 0.6 * fs), W, Math.max(1, 1.2 * fs));
+      ctx.globalCompositeOperation = 'source-over';
 
       // ── Road ──────────────────────────────────────────────────────────
-      // Asphalt as one filled polygon; edges + dashes projected onto it.
-      const STEPS = 24;
+      // Straight: a plain trapezoid from the vanishing point to the bottom
+      // corners. No per-step polygon needed once the centreline is fixed.
+      const halfNear = roadHalf(1);
       ctx.fillStyle = SHOULDER;
-      ctx.fillRect(0, hy, W, H - hy);
-      ctx.fillStyle = ROAD;
+      ctx.fillRect(0, hy, W, gh);
+      ctx.fillStyle = asphaltFor(hy, bottom);
       ctx.beginPath();
-      for (let s = 0; s <= STEPS; s++) {
-        const p = s / STEPS, y = hy + p * (H - hy);
-        const x = roadCx(p) - roadHalf(p);
-        if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      for (let s = STEPS; s >= 0; s--) {
-        const p = s / STEPS, y = hy + p * (H - hy);
-        ctx.lineTo(roadCx(p) + roadHalf(p), y);
-      }
+      ctx.moveTo(cx - roadHalf(0), hy);
+      ctx.lineTo(cx + roadHalf(0), hy);
+      ctx.lineTo(cx + halfNear, bottom);
+      ctx.lineTo(cx - halfNear, bottom);
       ctx.closePath();
       ctx.fill();
+
+      // Moonlight smeared down the wet asphalt, straight at the camera —
+      // the shot only works because the road never bends away from it.
+      const poolLen = gh;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.translate(0, hy);
+      ctx.fillStyle = moonPoolGrad(poolLen);
+      ctx.globalAlpha = Math.min(1, (0.75 + scratch.rainAmt * 0.85) * (0.6 + scratch.moon * 0.4));
+      ctx.beginPath();
+      ctx.moveTo(cx - roadHalf(0) * 1.6, 0);
+      ctx.lineTo(cx + roadHalf(0) * 1.6, 0);
+      ctx.lineTo(cx + halfNear * 0.62, poolLen);
+      ctx.lineTo(cx - halfNear * 0.62, poolLen);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // Wet specular — thin broken highlights sliding at the camera. This is
+      // what makes the asphalt read as soaked rather than merely dark.
+      if (scratch.rainAmt > 0.05) {
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < NUM_WETS; i++) {
+          const off = wets[i * 3], spd = wets[i * 3 + 2];
+          let z = (wets[i * 3 + 1] + dist * spd * 0.30) % 1;
+          if (z < 0) z += 1;
+          const p = z * z;                        // same projection as the dashes
+          const y = hy + p * (gh);
+          const half = roadHalf(p);
+          const len = (gh) * 0.075 * (0.5 + Math.abs(off) * 0.7) * (0.3 + p);
+          const w = Math.max(1, half * 0.012);
+          ctx.fillStyle = `rgba(150,185,250,${0.03 + p * 0.10 * scratch.rainAmt})`;
+          ctx.fillRect(cx + off * half - w * 0.5, y, w, len);
+        }
+        ctx.globalCompositeOperation = 'source-over';
+      }
 
       // Road glow — bass warms the asphalt red from below.
       const roadGlow = (scratch.bass * 0.5 + scratch.beatPulse * 0.25) * glow;
@@ -470,35 +1015,53 @@ export default {
         ctx.globalCompositeOperation = 'lighter';
         ctx.fillStyle = `rgba(200,20,30,${roadGlow * 0.10})`;
         ctx.beginPath();
-        for (let s = 0; s <= STEPS; s++) {
-          const p = s / STEPS, y = hy + p * (H - hy);
-          const x = roadCx(p) - roadHalf(p);
-          if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        for (let s = STEPS; s >= 0; s--) {
-          const p = s / STEPS, y = hy + p * (H - hy);
-          ctx.lineTo(roadCx(p) + roadHalf(p), y);
-        }
+        ctx.moveTo(cx - roadHalf(0), hy);
+        ctx.lineTo(cx + roadHalf(0), hy);
+        ctx.lineTo(cx + halfNear, bottom);
+        ctx.lineTo(cx - halfNear, bottom);
         ctx.closePath();
         ctx.fill();
         ctx.globalCompositeOperation = 'source-over';
       }
 
-      // Edge lines — cold white, brighter near the camera.
-      for (let side = -1; side <= 1; side += 2) {
-        ctx.strokeStyle = 'rgba(210,225,255,0.55)';
-        ctx.lineWidth = Math.max(1, 2.2 * fs);
-        ctx.beginPath();
-        for (let s = 0; s <= STEPS; s++) {
-          const p = s / STEPS, y = hy + p * (H - hy);
-          const x = roadCx(p) + side * roadHalf(p) * 0.97;
-          if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      // ── Rumble strips ─────────────────────────────────────────────────
+      // Red and white kerb blocks marching up both shoulders. Straight off
+      // the arcade cabinet, and the only place in the frame where the red
+      // gets to run the full depth of the shot.
+      const RUMBLE = 14;
+      const rumbleFrac = (dist * 0.5) % (1 / RUMBLE);
+      const rumbleBase = Math.floor(dist * 0.5 * RUMBLE);
+      for (let i = 0; i < RUMBLE; i++) {
+        const z = ((i / RUMBLE) - rumbleFrac + 1) % 1;
+        const p0 = 1 - z;
+        if (p0 < 0.03) continue;
+        const p1 = Math.min(1, p0 + 1 / RUMBLE);
+        const pj0 = p0 * p0, pj1 = p1 * p1;
+        const y0 = hy + pj0 * (gh), y1 = hy + pj1 * (gh);
+        const h0 = roadHalf(pj0), h1 = roadHalf(pj1);
+        ctx.fillStyle = ((i + rumbleBase) & 1) ? 'rgba(214,226,250,0.62)' : 'rgba(206,24,40,0.82)';
+        for (let side = -1; side <= 1; side += 2) {
+          ctx.beginPath();
+          ctx.moveTo(cx + side * h0 * 0.98, y0);
+          ctx.lineTo(cx + side * h0 * 1.15, y0);
+          ctx.lineTo(cx + side * h1 * 1.15, y1);
+          ctx.lineTo(cx + side * h1 * 0.98, y1);
+          ctx.closePath();
+          ctx.fill();
         }
+      }
+      // Edge lines — cold white, straight to the vanishing point.
+      ctx.strokeStyle = 'rgba(210,225,255,0.55)';
+      ctx.lineWidth = Math.max(1, 2.2 * fs);
+      for (let side = -1; side <= 1; side += 2) {
+        ctx.beginPath();
+        ctx.moveTo(cx + side * roadHalf(0) * 0.97, hy);
+        ctx.lineTo(cx + side * halfNear * 0.97, bottom);
         ctx.stroke();
       }
 
       // Centre dashes — projected world-space stripes scrolling past.
-      ctx.fillStyle = 'rgba(235,242,255,0.8)';
+      ctx.fillStyle = 'rgba(238,245,255,0.92)';
       const DASHES = 9;
       const dashFrac = (dist * 0.5) % (1 / DASHES);
       for (let i = 0; i < DASHES; i++) {
@@ -507,15 +1070,16 @@ export default {
         const z = ((i / DASHES) - dashFrac + 1) % 1;
         const p = 1 - z;                          // z=0 near → p=1 bottom
         if (p < 0.06) continue;
-        const y0 = hy + p * p * (H - hy);
-        const y1 = hy + Math.min(1, (p + 0.035 * p)) ** 2 * (H - hy);
+        const y0 = hy + p * p * (gh);
+        const y1 = hy + Math.min(1, (p + 0.035 * p)) ** 2 * (gh);
         const pj0 = p * p, pj1 = Math.min(1, p + 0.035 * p) ** 2;
-        const w0 = Math.max(1, roadHalf(pj0) * 0.035);
+        const w0 = Math.max(1, roadHalf(pj0) * 0.048);
+        const w1 = Math.max(1, roadHalf(pj1) * 0.048);
         ctx.beginPath();
-        ctx.moveTo(roadCx(pj0) - w0, y0);
-        ctx.lineTo(roadCx(pj0) + w0, y0);
-        ctx.lineTo(roadCx(pj1) + Math.max(1, roadHalf(pj1) * 0.035), y1);
-        ctx.lineTo(roadCx(pj1) - Math.max(1, roadHalf(pj1) * 0.035), y1);
+        ctx.moveTo(cx - w0, y0);
+        ctx.lineTo(cx + w0, y0);
+        ctx.lineTo(cx + w1, y1);
+        ctx.lineTo(cx - w1, y1);
         ctx.closePath();
         ctx.fill();
       }
@@ -527,20 +1091,28 @@ export default {
         const p = 1 - z / (NUM_LIGHTS * LIGHT_SPACING);
         if (p < 0.02 || p > 0.99) continue;
         const pj = p * p;
-        const y = hy + pj * (H - hy);
+        const y = hy + pj * (gh);
         const scale = 0.2 + pj * 1.3;
-        const poleH = H * 0.16 * scale;
+        const poleH = gh * 0.286 * scale;
         const sparkle = 0.75 + scratch.highs * 0.5;
         for (let side = -1; side <= 1; side += 2) {
-          const x = roadCx(pj) + side * roadHalf(pj) * 1.22;
+          const x = cx + side * roadHalf(pj) * 1.22;
           ctx.strokeStyle = 'rgba(90,105,140,0.5)';
           ctx.lineWidth = Math.max(1, 2.5 * fs * scale);
           ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - poleH); ctx.stroke();
-          // Head + a tight sodium halo.
+          // Arm over the carriageway, then the head.
           const hxp = x - side * poleH * 0.16;
           const hyp = y - poleH;
           const hr = poleH * 0.22;
+          ctx.beginPath(); ctx.moveTo(x, hyp); ctx.lineTo(hxp, hyp); ctx.stroke();
           ctx.globalCompositeOperation = 'lighter';
+          // The pool the head throws onto the wet asphalt — flattened into
+          // the road plane, which reads as light where a cone reads as a
+          // grey wedge stuck to the screen.
+          ctx.globalAlpha = Math.min(1, 0.20 * sparkle * (0.45 + scratch.rainAmt * 0.9));
+          ctx.drawImage(glowAmber, hxp - poleH * 0.85, y - poleH * 0.20,
+                        poleH * 1.7, poleH * 0.40);
+          // The head itself.
           ctx.globalAlpha = Math.min(1, 0.55 * sparkle);
           ctx.drawImage(glowAmber, hxp - hr, hyp - hr, hr * 2, hr * 2);
           ctx.globalAlpha = 1;
@@ -551,75 +1123,941 @@ export default {
         }
       }
 
-      // ── The car ───────────────────────────────────────────────────────
-      const pcx = roadCx(0.94) + laneX * roadHalf(0.94) * 0.55;
-      const pyBottom = H * 0.90;
-      const carW = Math.min(W, H) * 0.30;
-      if (car) {
-        const carH = carW * (car.height / car.width);
-        const x = pcx - carW / 2 + bank * carW * 0.04;
-        const y = pyBottom - carH;
-        // Ground shadow, then the sprite, banked a few degrees into the turn.
-        ctx.fillStyle = 'rgba(0,0,0,0.4)';
-        ctx.beginPath();
-        ctx.ellipse(pcx, pyBottom - carH * 0.02, carW * 0.46, carH * 0.09, 0, 0, TAU);
-        ctx.fill();
-        ctx.save();
-        ctx.translate(x + carW / 2, y + carH);
-        ctx.rotate(bank * 0.05);
-        ctx.drawImage(car, -carW / 2, -carH, carW, carH);
-        ctx.restore();
-        // Tail lights — the heart of the shot. Bass bloom + brake flash.
-        const tlA = Math.min(1, (0.45 + scratch.bass * 0.55 + scratch.brake * 0.5) * glow);
-        const tlR = carW * (0.10 + scratch.brake * 0.05) * (0.7 + glow * 0.3);
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = tlA;
-        for (let s = -1; s <= 1; s += 2) {
-          const lx = pcx + s * carW * 0.30 + bank * carW * 0.04;
-          const ly = y + carH * 0.52;
-          ctx.drawImage(glowRed, lx - tlR * 2.4, ly - tlR * 2.4, tlR * 4.8, tlR * 4.8);
+      // ── Reflector posts — the little amber cat's-eyes on the shoulder ──
+      // Twice the density of the poles and dead cheap, they're what gives
+      // the middle distance its sense of speed.
+      for (let i = 0; i < NUM_LIGHTS * 2; i++) {
+        const span = NUM_LIGHTS * LIGHT_SPACING;
+        const z = (i * LIGHT_SPACING * 0.5 + (1 - (dist * 0.35) % (LIGHT_SPACING * 0.5))) % span;
+        const p = 1 - z / span;
+        if (p < 0.03 || p > 0.99) continue;
+        const pj = p * p;
+        const y = hy + pj * (gh);
+        const s = Math.max(1, 3.4 * fs * (0.2 + pj * 1.4));
+        ctx.fillStyle = `rgba(255,150,60,${0.25 + pj * 0.55})`;
+        for (let side = -1; side <= 1; side += 2) {
+          ctx.fillRect(cx + side * roadHalf(pj) * 1.06 - s / 2, y - s * 1.6, s, s);
         }
-        ctx.globalAlpha = 1;
-        // Red reflection smeared down the wet road beneath the car.
-        const rg = ctx.createLinearGradient(0, pyBottom, 0, Math.min(H, pyBottom + carH * 1.4));
-        rg.addColorStop(0, `rgba(255,40,45,${0.22 * tlA * (0.4 + scratch.rainAmt)})`);
-        rg.addColorStop(1, 'rgba(255,40,45,0)');
-        ctx.fillStyle = rg;
-        ctx.fillRect(pcx - carW * 0.42, pyBottom, carW * 0.84, carH * 1.4);
-        ctx.globalCompositeOperation = 'source-over';
-      } else {
-        // Sprite missing — a clean silhouette with the two red lights so
-        // the tribute still reads.
-        const carH = carW * 0.38;
-        ctx.fillStyle = '#12060a';
-        ctx.fillRect(pcx - carW / 2, pyBottom - carH, carW, carH);
-        ctx.fillStyle = `rgba(255,50,45,${0.6 + scratch.brake * 0.4})`;
-        ctx.fillRect(pcx - carW * 0.38, pyBottom - carH * 0.55, carW * 0.18, carH * 0.14);
-        ctx.fillRect(pcx + carW * 0.20, pyBottom - carH * 0.55, carW * 0.18, carH * 0.14);
       }
+
+    }
+
+    // ── Dash instruments ────────────────────────────────────────────────
+    // KITT's panels are all seven-segment displays and LED bargraphs, and
+    // the thing that makes them read as hardware rather than as text is the
+    // *unlit* elements: a real display shows you its dark segments. So both
+    // primitives draw the off state first at a fraction of the brightness,
+    // then the lit state over it.
+    function drawSeg(str, x, y, dw, dh, col, dim, glowA) {
+      const t = Math.max(1, dh * 0.13);          // segment thickness
+      const g = t * 0.42;                        // gap at the joints
+      const w = dw - t;
+      const hh = (dh - t) / 2;
+      for (let i = 0; i < str.length; i++) {
+        const mask = SEG_MASK[str[i]] ?? 0;
+        const ox = x + i * (dw + dh * 0.16);
+        for (let s = 0; s < 7; s++) {
+          const on = (mask >> s) & 1;
+          ctx.fillStyle = on ? col : dim;
+          // a,d,g horizontal; b,c,e,f vertical.
+          if (s === 0)      ctx.fillRect(ox + g, y, w - g * 2, t);
+          else if (s === 1) ctx.fillRect(ox + w, y + g, t, hh - g * 2);
+          else if (s === 2) ctx.fillRect(ox + w, y + hh + g, t, hh - g * 2);
+          else if (s === 3) ctx.fillRect(ox + g, y + hh * 2, w - g * 2, t);
+          else if (s === 4) ctx.fillRect(ox, y + hh + g, t, hh - g * 2);
+          else if (s === 5) ctx.fillRect(ox, y + g, t, hh - g * 2);
+          else              ctx.fillRect(ox + g, y + hh, w - g * 2, t);
+        }
+      }
+      // One soft bloom over the whole run rather than per segment.
+      if (glowA > 0.01) {
+        const runW = str.length * (dw + dh * 0.16);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = Math.min(1, glowA);
+        ctx.drawImage(glowRed, x - dh * 0.3, y - dh * 0.45, runW + dh * 0.6, dh * 1.9);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    }
+
+    // A stacked LED bargraph. `dir` +1 fills upward, -1 downward.
+    function drawBar(x, y, w, h, n, v, palette, lift, dir = 1) {
+      const cell = h / n;
+      const seg = cell * 0.68;
+      const lit = v * n;
+      for (let i = 0; i < n; i++) {
+        const f = i / (n - 1 || 1);
+        const yy = dir > 0 ? y + h - (i + 1) * cell : y + i * cell;
+        const on = i < lit;
+        const edge = (lit - i);                  // partial top segment
+        const a = on ? (edge < 1 ? 0.35 + edge * 0.65 : 1) : 0.13;
+        const c = palette(f);
+        ctx.fillStyle = on ? `rgba(${c},${Math.min(1, a * (0.75 + lift * 0.35))})`
+                           : `rgba(${c},0.10)`;
+        ctx.fillRect(x, yy, w, seg);
+      }
+    }
+
+    // Bargraph colour ramps — KITT's green→amber→red climb, and the two
+    // single-colour runs the nightcall palette wants.
+    const RAMP_KITT = (f) => (f < 0.45 ? '86,220,120' : f < 0.72 ? '255,190,60' : '255,58,52');
+    const RAMP_RED = () => '255,58,52';
+    const RAMP_COLD = (f) => (f < 0.7 ? '120,175,255' : '226,240,255');
+
+    function label(text, x, y, size, col, align = 'left') {
+      ctx.fillStyle = col;
+      ctx.textAlign = align;
+      ctx.textBaseline = 'middle';
+      ctx.font = `600 ${Math.max(5, size)}px ui-sans-serif, "Helvetica Neue", Arial, sans-serif`;
+      ctx.fillText(text, x, y);
+    }
+
+    // A recessed instrument bezel with an inner shadow.
+    function panel(x, y, w, h, r) {
+      ctx.fillStyle = '#05070d';
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,150,205,0.16)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, r); ctx.stroke();
+    }
+
+    const pad = (n, w) => String(Math.max(0, Math.round(n))).padStart(w, '0').slice(-w);
+
+    // ── Outrun mode (rear view) ─────────────────────────────────────────
+    function renderOutrun() {
+      const hy = H * HORIZON;
+      const fs = Math.min(W, H) / 1080;
+      drawRoadWorld(hy, H);
+      // The car is the only thing in the frame that moves off centre: it
+      // sways in its lane with the pose, held to ±0.55 of the half-width so
+      // it never crosses an edge line.
+      const pcx = W * 0.5 + laneX * roadHalf(0.94) * 0.55;
+      drawRearCar(pcx, H * 0.935, Math.min(W, H) * 0.34, fs, scratch.glow);
+    }
+
+    // ── The Testarossa from behind ──────────────────────────────────────
+    // Drawn as vectors to match the side view. The shape is the point: this
+    // car is a coke bottle from behind — the haunches swell out past the
+    // track, tuck back in at the valance, and the roof is barely two fifths
+    // of the width. Draw it as a box with a tapered top and it reads as a
+    // box. So the silhouette is all curves, the C-pillars turn away into
+    // darker paint, and the full-width grille sits between the haunches with
+    // the lights burning at its ends.
+    //
+    // Car-space: x as a fraction of the width either side of centre, y as a
+    // fraction of the height above the ground contact.
+    function drawRearCar(pcx, groundY, CW, fs, glow) {
+      const CH = CW * 0.52;
+      const X = (u) => pcx + u * CW + bank * CW * 0.035;
+      const Y = (v) => groundY - v * CH;
+      const tlA = Math.min(1, (0.45 + scratch.bass * 0.55 + scratch.brake * 0.5) * glow);
+
+      // Contact shadow.
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.beginPath();
+      ctx.ellipse(pcx, groundY, CW * 0.54, CH * 0.055, 0, 0, TAU);
+      ctx.fill();
+
+      // Rear tyres, tucked under the arches.
+      ctx.fillStyle = '#07090f';
+      for (let s = -1; s <= 1; s += 2) {
+        ctx.beginPath();
+        ctx.roundRect(X(s * 0.500 - (s > 0 ? 0.112 : 0)), Y(0.300), CW * 0.112, CH * 0.300,
+                      [CW * 0.022, CW * 0.022, CW * 0.012, CW * 0.012]);
+        ctx.fill();
+      }
+
+      // ── Body ─────────────────────────────────────────────────────────
+      if (!rearGrad || rearGrad._h !== CH) {
+        rearGrad = ctx.createLinearGradient(0, groundY - CH * 1.02, 0, groundY);
+        rearGrad.addColorStop(0, '#ff5a5f');
+        rearGrad.addColorStop(0.26, '#ef2b39');
+        rearGrad.addColorStop(0.58, '#c2151f');
+        rearGrad.addColorStop(0.82, '#8d0d18');
+        rearGrad.addColorStop(1, '#40050d');
+        rearGrad._h = CH;
+      }
+      const shell = () => {
+        ctx.beginPath();
+        ctx.moveTo(X(-0.452), Y(0.100));
+        ctx.quadraticCurveTo(X(-0.492), Y(0.235), X(-0.500), Y(0.420)); // haunch
+        ctx.quadraticCurveTo(X(-0.504), Y(0.560), X(-0.474), Y(0.655)); // shoulder
+        // The buttresses bulge outward on the way up — control points sit
+        // wide of the chord. Pull them inside it and the roofline pinches,
+        // which reads as a caved-in greenhouse.
+        ctx.quadraticCurveTo(X(-0.466), Y(0.722), X(-0.352), Y(0.790)); // deck corner
+        ctx.quadraticCurveTo(X(-0.302), Y(0.858), X(-0.214), Y(0.936)); // C-pillar
+        ctx.lineTo(X(-0.200), Y(1.000));
+        ctx.lineTo(X(0.200), Y(1.000));
+        ctx.lineTo(X(0.214), Y(0.936));
+        ctx.quadraticCurveTo(X(0.302), Y(0.858), X(0.352), Y(0.790));
+        ctx.quadraticCurveTo(X(0.466), Y(0.722), X(0.474), Y(0.655));
+        ctx.quadraticCurveTo(X(0.504), Y(0.560), X(0.500), Y(0.420));
+        ctx.quadraticCurveTo(X(0.492), Y(0.235), X(0.452), Y(0.100));
+        ctx.closePath();
+      };
+      ctx.fillStyle = rearGrad;
+      shell(); ctx.fill();
+
+      // The buttresses turn away from us, so they go a stop down.
+      ctx.fillStyle = 'rgba(96,8,18,0.55)';
+      for (let s = -1; s <= 1; s += 2) {
+        ctx.beginPath();
+        ctx.moveTo(X(s * 0.200), Y(1.000));
+        ctx.lineTo(X(s * 0.214), Y(0.936));
+        ctx.quadraticCurveTo(X(s * 0.302), Y(0.858), X(s * 0.352), Y(0.790));
+        ctx.lineTo(X(s * 0.312), Y(0.792));
+        ctx.quadraticCurveTo(X(s * 0.272), Y(0.868), X(s * 0.196), Y(0.972));
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Rear glass, sunk between the buttresses.
+      ctx.fillStyle = '#070c1c';
+      const glass = () => {
+        ctx.beginPath();
+        ctx.moveTo(X(-0.188), Y(0.986));
+        ctx.lineTo(X(0.188), Y(0.986));
+        ctx.quadraticCurveTo(X(0.262), Y(0.884), X(0.318), Y(0.802));
+        ctx.lineTo(X(-0.318), Y(0.802));
+        ctx.quadraticCurveTo(X(-0.262), Y(0.884), X(-0.188), Y(0.986));
+        ctx.closePath();
+      };
+      glass(); ctx.fill();
+
+      // Kavinsky through it. Left-hand drive, so from back here he's on the
+      // right. Spikes and shoulders only — more than that turns to mud.
+      ctx.save();
+      glass(); ctx.clip();
+      ctx.fillStyle = '#141d38';
+      ctx.beginPath();
+      ctx.ellipse(X(0.090), Y(0.800), CW * 0.098, CH * 0.075, 0, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(X(0.090), Y(0.862), CW * 0.045, CH * 0.058, 0, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(X(0.050), Y(0.872));
+      ctx.lineTo(X(0.060), Y(0.918));
+      ctx.lineTo(X(0.078), Y(0.892));
+      ctx.lineTo(X(0.094), Y(0.926));
+      ctx.lineTo(X(0.112), Y(0.894));
+      ctx.lineTo(X(0.128), Y(0.916));
+      ctx.lineTo(X(0.132), Y(0.870));
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, 0.28 + scratch.bass * 0.32);
+      ctx.drawImage(glowRed, X(0.010) - CW * 0.14, Y(0.862) - CH * 0.14,
+                    CW * 0.28, CH * 0.28);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.restore();
+
+      // Engine-cover grille on the deck, and the spoiler lip behind it.
+      ctx.fillStyle = '#0b0d13';
+      ctx.beginPath();
+      ctx.roundRect(X(-0.292), Y(0.792), CW * 0.584, CH * 0.086, CH * 0.012);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(150,180,235,0.16)';
+      ctx.lineWidth = Math.max(0.6, CH * 0.008);
+      for (let i = 0; i < 4; i++) {
+        const v = 0.782 - i * 0.020;
+        ctx.beginPath();
+        ctx.moveTo(X(-0.288), Y(v)); ctx.lineTo(X(0.288), Y(v)); ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(255,206,206,0.32)';
+      ctx.lineWidth = Math.max(1, 1.4 * fs);
+      ctx.beginPath();
+      ctx.moveTo(X(-0.436), Y(0.706));
+      ctx.quadraticCurveTo(X(0), Y(0.742), X(0.436), Y(0.706));
+      ctx.stroke();
+
+      // ── The tail band ────────────────────────────────────────────────
+      // Full-width black egg-crate, lights burning behind it at the ends,
+      // then the fins laid straight across the lot. Running them over the
+      // lamps is the signature — on the real car the lights are simply what
+      // you see through the grille.
+      const bandTop = 0.660, bandBot = 0.452;
+      const band = () => {
+        ctx.beginPath();
+        ctx.moveTo(X(-0.476), Y(bandTop));
+        ctx.lineTo(X(0.476), Y(bandTop));
+        ctx.lineTo(X(0.492), Y(bandBot));
+        ctx.lineTo(X(-0.492), Y(bandBot));
+        ctx.closePath();
+      };
+      ctx.fillStyle = '#08090f';
+      band(); ctx.fill();
+
+      ctx.save();
+      band(); ctx.clip();
+      ctx.globalCompositeOperation = 'lighter';
+      for (let s = -1; s <= 1; s += 2) {
+        const lx = X(s * 0.335);
+        const ly = Y((bandTop + bandBot) / 2);
+        ctx.globalAlpha = Math.min(1, tlA);
+        ctx.drawImage(glowRed, lx - CW * 0.24, ly - CH * 0.26, CW * 0.48, CH * 0.52);
+        ctx.globalAlpha = Math.min(1, tlA * 0.92);
+        ctx.fillStyle = '#ff2b32';
+        ctx.fillRect(lx - CW * 0.150, ly - CH * 0.082, CW * 0.30, CH * 0.164);
+      }
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.restore();
+
+      const FINS = 7;
+      for (let i = 0; i < FINS; i++) {
+        const v = bandBot + (i + 0.5) * (bandTop - bandBot) / FINS;
+        const hw = 0.476 + (bandTop - v) / (bandTop - bandBot) * 0.016;
+        ctx.fillStyle = '#0a0c12';
+        ctx.fillRect(X(-hw), Y(v), CW * hw * 2, Math.max(1.1, CH * 0.021));
+        ctx.fillStyle = 'rgba(150,180,235,0.20)';
+        ctx.fillRect(X(-hw), Y(v), CW * hw * 2, Math.max(0.6, CH * 0.006));
+      }
+      // Prancing-horse badge on the dark centre panel.
+      ctx.fillStyle = '#e8c020';
+      ctx.fillRect(X(-0.015), Y(0.588), CW * 0.030, CH * 0.062);
+      ctx.fillStyle = '#141008';
+      ctx.fillRect(X(-0.009), Y(0.579), CW * 0.018, CH * 0.038);
+
+      // ── Bumper and valance ───────────────────────────────────────────
+      // Body-colour bumper with the plate recessed into it, then the black
+      // lower valance with the diffuser and two pairs of pipes.
+      ctx.fillStyle = '#0d0f16';
+      ctx.beginPath();
+      ctx.moveTo(X(-0.470), Y(0.288));
+      ctx.lineTo(X(0.470), Y(0.288));
+      ctx.quadraticCurveTo(X(0.452), Y(0.150), X(0.404), Y(0.086));
+      ctx.lineTo(X(-0.404), Y(0.086));
+      ctx.quadraticCurveTo(X(-0.452), Y(0.150), X(-0.470), Y(0.288));
+      ctx.closePath();
+      ctx.fill();
+
+      // Plate, recessed into the body-colour bumper above it.
+      const plW = CW * 0.250, plH = CH * 0.108;
+      const plX = X(-0.125), plY = Y(0.418);
+      ctx.fillStyle = '#0a0c12';
+      ctx.beginPath();
+      ctx.roundRect(plX - CW * 0.014, plY - CH * 0.014, plW + CW * 0.028,
+                    plH + CH * 0.028, CW * 0.008);
+      ctx.fill();
+      ctx.fillStyle = '#e9eef8';
+      ctx.beginPath(); ctx.roundRect(plX, plY, plW, plH, CW * 0.006); ctx.fill();
+      ctx.fillStyle = '#131820';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `600 ${Math.max(4, plH * 0.70)}px ui-sans-serif, "Helvetica Neue", Arial, sans-serif`;
+      ctx.fillText('KVNSKY', plX + plW / 2, plY + plH * 0.56);
+
+      // Reversing lamps outboard of the plate.
+      for (let s = -1; s <= 1; s += 2) {
+        const rx = X(s * 0.290 - (s > 0 ? 0.062 : 0));
+        ctx.fillStyle = 'rgba(236,244,255,0.9)';
+        ctx.fillRect(rx, Y(0.398), CW * 0.062, CH * 0.050);
+        ctx.fillStyle = 'rgba(150,175,215,0.5)';
+        ctx.fillRect(rx, Y(0.398), CW * 0.062, Math.max(0.6, CH * 0.010));
+      }
+
+      // Quad pipes, in two pairs the way the real car wears them.
+      for (let s = -1; s <= 1; s += 2) {
+        for (let i = 0; i < 2; i++) {
+          const ex = X(s * (0.086 + i * 0.062));
+          ctx.fillStyle = '#242a35';
+          ctx.beginPath(); ctx.arc(ex, Y(0.176), CW * 0.028, 0, TAU); ctx.fill();
+          ctx.fillStyle = '#05070b';
+          ctx.beginPath(); ctx.arc(ex, Y(0.176), CW * 0.019, 0, TAU); ctx.fill();
+        }
+      }
+      // Diffuser fins, in the gap between the two pairs.
+      ctx.strokeStyle = 'rgba(120,150,205,0.16)';
+      ctx.lineWidth = Math.max(0.8, fs);
+      for (let i = -1; i <= 1; i++) {
+        const dx = X(i * 0.026);
+        ctx.beginPath();
+        ctx.moveTo(dx, Y(0.208)); ctx.lineTo(dx, Y(0.140)); ctx.stroke();
+      }
+
+      // ── Light on the shape ───────────────────────────────────────────
+      // Cold rim down the haunches and along the shoulder — the only light
+      // back here is the moon, and it's what makes the curves read as curves.
+      ctx.strokeStyle = 'rgba(198,220,255,0.34)';
+      ctx.lineWidth = Math.max(1, 1.5 * fs);
+      for (let s = -1; s <= 1; s += 2) {
+        ctx.beginPath();
+        ctx.moveTo(X(s * 0.452), Y(0.100));
+        ctx.quadraticCurveTo(X(s * 0.492), Y(0.235), X(s * 0.500), Y(0.420));
+        ctx.quadraticCurveTo(X(s * 0.504), Y(0.560), X(s * 0.474), Y(0.655));
+        ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(198,220,255,0.26)';
+      ctx.lineWidth = Math.max(1, 1.2 * fs);
+      ctx.beginPath();
+      ctx.moveTo(X(-0.318), Y(0.802));
+      ctx.quadraticCurveTo(X(-0.262), Y(0.884), X(-0.188), Y(0.986));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(X(0.318), Y(0.802));
+      ctx.quadraticCurveTo(X(0.262), Y(0.884), X(0.188), Y(0.986));
+      ctx.stroke();
+      // Specular running across the haunch tops.
+      ctx.strokeStyle = 'rgba(255,214,214,0.22)';
+      ctx.lineWidth = Math.max(1, 1.6 * fs);
+      ctx.beginPath();
+      ctx.moveTo(X(-0.470), Y(0.672));
+      ctx.quadraticCurveTo(X(0), Y(0.700), X(0.470), Y(0.672));
+      ctx.stroke();
+
+      // Door mirrors, out on the shoulders.
+      ctx.fillStyle = '#7c0e16';
+      for (let s = -1; s <= 1; s += 2) {
+        ctx.beginPath();
+        ctx.roundRect(X(s * 0.398 - (s > 0 ? 0.046 : 0)), Y(0.870), CW * 0.046,
+                      CH * 0.058, CW * 0.008);
+        ctx.fill();
+        ctx.fillRect(X(s * 0.382 - (s > 0 ? 0.010 : 0)), Y(0.812), CW * 0.010, CH * 0.040);
+      }
+
+      // ── Light ────────────────────────────────────────────────────────
+      const ly = Y((bandTop + bandBot) / 2);
+      const tlR = CW * (0.10 + scratch.brake * 0.05) * (0.7 + glow * 0.3);
+      ctx.globalCompositeOperation = 'lighter';
+      // Anamorphic streak across both lamps — the wide horizontal flare a
+      // long lens gives you, and the reason the covers read as photographs.
+      ctx.globalAlpha = tlA * 0.5;
+      const streak = CW * (0.95 + scratch.bass * 0.7 + scratch.brake * 0.5);
+      ctx.drawImage(glowRed, pcx - streak, ly - tlR * 0.8, streak * 2, tlR * 1.6);
+      ctx.globalAlpha = tlA * 0.85;
+      for (let s = -1; s <= 1; s += 2) {
+        ctx.drawImage(glowRed, X(s * 0.335) - tlR * 2.2, ly - tlR * 2.2, tlR * 4.4, tlR * 4.4);
+      }
+      // Red reflection smeared down the wet road beneath the car. wetGrad is
+      // baked in canvas space over exactly this band — no per-frame gradient.
+      ctx.globalAlpha = Math.min(1, tlA * (0.4 + scratch.rainAmt) * 0.85);
+      ctx.fillStyle = wetGrad;
+      ctx.fillRect(pcx - CW * 0.48, groundY, CW * 0.96, H - groundY);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // ── Dash mode (first person) ────────────────────────────────────────
+    // The road ahead through the screen, and below it a cockpit built on
+    // KITT's: seven-segment readouts, banks of LED bargraphs, the voice
+    // modulator, and the gullwing wheel. Everything on it is real rig data —
+    // spectrum, bands, beat, travelled distance, wall clock — so the panel
+    // is an instrument cluster for the music, not a decal of one.
+    function renderDash() {
+      const t = scratch.time;
+      const fs = Math.min(W, H) / 1080;
+      const cowl = H * 0.545;                 // top of the dash
+      const hy = H * 0.285;                   // horizon, high in the screen
+      const beat = scratch.beatPulse;
+      const lift = 0.55 + scratch.total * 0.5 + beat * 0.6;
+
+      // ── Through the windscreen ────────────────────────────────────────
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, cowl + 1);
+      ctx.clip();
+      // Ground line sits just below the cowl, so the road is at its widest
+      // where the bodywork cuts it off rather than tapering to nothing.
+      drawRoadWorld(hy, H * 0.60);
+      drawSkyFlash();
+      if (scratch.rainAmt > 0.01) drawRain(fs);
+      ctx.restore();
+
+      // Screen tint + the wiped arc across it — a rain-slick windscreen is
+      // never optically clean, and the smear is what sells the glass.
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.05 + scratch.rainAmt * 0.06;
+      ctx.drawImage(glowCold, -W * 0.1, -H * 0.15, W * 1.2, cowl * 1.2);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      // ── The cowl ──────────────────────────────────────────────────────
+      // A wide shallow arc, higher at the sides where the A-pillars come
+      // down, so the screen aperture reads as a screen.
+      ctx.fillStyle = '#05070e';
+      ctx.beginPath();
+      ctx.moveTo(0, H);
+      ctx.lineTo(0, cowl - H * 0.055);
+      ctx.quadraticCurveTo(W * 0.16, cowl - H * 0.012, W * 0.30, cowl);
+      ctx.lineTo(W * 0.70, cowl);
+      ctx.quadraticCurveTo(W * 0.84, cowl - H * 0.012, W, cowl - H * 0.055);
+      ctx.lineTo(W, H);
+      ctx.closePath();
+      ctx.fill();
+      // The lit edge along the top of the cowl — the one line that separates
+      // the car from the night.
+      ctx.strokeStyle = `rgba(150,190,255,${0.16 + beat * 0.14})`;
+      ctx.lineWidth = Math.max(1, 1.6 * fs);
+      ctx.beginPath();
+      ctx.moveTo(0, cowl - H * 0.055);
+      ctx.quadraticCurveTo(W * 0.16, cowl - H * 0.012, W * 0.30, cowl);
+      ctx.lineTo(W * 0.70, cowl);
+      ctx.quadraticCurveTo(W * 0.84, cowl - H * 0.012, W, cowl - H * 0.055);
+      ctx.stroke();
+
+      // A-pillars.
+      ctx.fillStyle = '#04060c';
+      for (let s = -1; s <= 1; s += 2) {
+        ctx.beginPath();
+        const xo = s < 0 ? 0 : W;
+        ctx.moveTo(xo, 0);
+        ctx.lineTo(xo - s * W * 0.055, 0);
+        ctx.lineTo(xo - s * W * 0.020, cowl - H * 0.05);
+        ctx.lineTo(xo, cowl);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // ── The binnacle ──────────────────────────────────────────────────
+      const bT = cowl + H * 0.016;
+      const bH = H * 0.175;
+      ctx.fillStyle = '#0a0d15';
+      ctx.beginPath();
+      ctx.moveTo(W * 0.085, bT);
+      ctx.lineTo(W * 0.915, bT);
+      ctx.lineTo(W * 0.955, bT + bH);
+      ctx.lineTo(W * 0.045, bT + bH);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(120,155,215,0.20)';
+      ctx.lineWidth = Math.max(1, 1.2 * fs);
+      ctx.stroke();
+
+      const pT = bT + bH * 0.11, pH = bH * 0.78;
+
+      // Panel 1 — spectrum columns, KITT's climbing ramp.
+      {
+        const x = W * 0.095, w = W * 0.145;
+        panel(x, pT, w, pH, 3);
+        const N = 7, colW = w / N;
+        for (let i = 0; i < N; i++) {
+          const v = specBand(i / N, (i + 1) / N);
+          drawBar(x + colW * i + colW * 0.22, pT + pH * 0.16, colW * 0.56, pH * 0.66,
+                  9, v, RAMP_KITT, lift);
+        }
+        label('SPECTRUM ANALYSIS', x + w / 2, pT + pH * 0.93, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'center');
+      }
+
+      // Panel 2 — speed and the chron.
+      {
+        const x = W * 0.252, w = W * 0.148;
+        panel(x, pT, w, pH, 3);
+        const dh = pH * 0.34, dw = dh * 0.60;
+        drawSeg(pad(scratch.mph, 3), x + w * 0.10, pT + pH * 0.13, dw, dh,
+                `rgba(255,64,52,${0.85 + beat * 0.15})`, 'rgba(90,14,18,0.55)',
+                0.16 + beat * 0.22);
+        label('MPH', x + w * 0.92, pT + pH * 0.30, bH * 0.085,
+              'rgba(255,120,110,0.75)', 'right');
+        // Wall clock — the chron, running below the speed.
+        const clock = pad(scratch.clockH, 2) + pad(scratch.clockM, 2) + pad(scratch.clockS, 2);
+        drawSeg(clock, x + w * 0.09, pT + pH * 0.60, dh * 0.30, dh * 0.52,
+                'rgba(255,176,58,0.9)', 'rgba(80,48,10,0.5)', 0.05);
+        label('CHRON', x + w * 0.92, pT + pH * 0.72, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'right');
+      }
+
+      // Panel 3 — the voice modulator. KITT's centrepiece, and the obvious
+      // home for the waveform.
+      {
+        const x = W * 0.412, w = W * 0.176;
+        panel(x, pT, w, pH, 3);
+        drawModulator(x + w * 0.5, pT + pH * 0.46, w * 0.40, pH * 0.30, lift, beat);
+        label('VOICE MODULATION', x + w / 2, pT + pH * 0.93, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'center');
+      }
+
+      // Panel 4 — engine block: rpm, volts, and the horizontal band meters.
+      {
+        const x = W * 0.600, w = W * 0.148;
+        panel(x, pT, w, pH, 3);
+        const dh = pH * 0.22, dw = dh * 0.60;
+        drawSeg(pad(scratch.rpm, 4), x + w * 0.08, pT + pH * 0.10, dw, dh,
+                'rgba(255,64,52,0.9)', 'rgba(90,14,18,0.5)', 0.10 + beat * 0.14);
+        label('RPM', x + w * 0.94, pT + pH * 0.21, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'right');
+        const rows = [['BASS', scratch.bass, RAMP_RED], ['MIDS', scratch.mids, RAMP_KITT],
+                      ['HIGH', scratch.highs, RAMP_COLD]];
+        for (let i = 0; i < rows.length; i++) {
+          const yy = pT + pH * (0.46 + i * 0.17);
+          label(rows[i][0], x + w * 0.06, yy + pH * 0.045, bH * 0.075,
+                'rgba(150,180,235,0.5)');
+          drawHBar(x + w * 0.36, yy, w * 0.56, pH * 0.09, 12, rows[i][1], rows[i][2], lift);
+        }
+      }
+
+      // Panel 5 — the scanner screen.
+      {
+        const x = W * 0.760, w = W * 0.145;
+        panel(x, pT, w, pH, 3);
+        drawScanner(x + w * 0.06, pT + pH * 0.08, w * 0.88, pH * 0.68, t, lift);
+        label('PURSUIT SCAN', x + w / 2, pT + pH * 0.90, bH * 0.075,
+              'rgba(150,180,235,0.5)', 'center');
+      }
+
+      // ── Lower console ─────────────────────────────────────────────────
+      // Split to the wings. The yoke owns the middle of this band, and
+      // because its top is open the centre column stays readable straight
+      // through it — which is where the odometer and the plate go.
+      const cT = bT + bH * 1.10;
+      const podW = W * 0.170, podH = H * 0.112;
+      drawSwitchPod(W * 0.045, cT, podW, podH, t, beat, [
+        ['AIR', 0.55], ['OIL', 0.30], ['P1', 0.8], ['P2', 0.2],
+        ['S1', 0.65], ['S2', 0.45],
+      ]);
+      drawModePod(W * 0.785, cT, podW, podH, beat, t);
+
+      // Diagnostics under each pod, out where the yoke can't reach them.
+      {
+        const y = cT + podH + H * 0.026, h = H * 0.018, bw = podW * 0.62;
+        const items = [
+          [W * 0.045, 'FUEL', scratch.fuel, RAMP_KITT],
+          [W * 0.045, 'TEMP', scratch.temp, RAMP_KITT],
+          [W * 0.785, 'AMP', Math.min(1, (scratch.volts - 12) / 3), RAMP_COLD],
+          [W * 0.785, 'TRB', Math.min(1, scratch.rms * 1.4), RAMP_RED],
+        ];
+        for (let i = 0; i < items.length; i++) {
+          const yy = y + (i % 2) * h * 1.9;
+          label(items[i][1], items[i][0], yy + h * 0.5, H * 0.014, 'rgba(150,180,235,0.5)');
+          drawHBar(items[i][0] + podW * 0.34, yy, bw, h, 9, items[i][2], items[i][3], lift);
+        }
+      }
+
+      // Odometer and the plate, dead centre in the gap between the horns.
+      drawSeg(pad(scratch.odo, 6), W * 0.452, cT + H * 0.012, H * 0.014, H * 0.024,
+              'rgba(255,176,58,0.85)', 'rgba(80,48,10,0.45)', 0.05);
+      // ── The wheel ─────────────────────────────────────────────────────
+      // Hub below the frame: from the driver's seat you never see the bottom
+      // of the rim, only the two horns coming up at you.
+      drawGullwing(W * 0.5 + scratch.steer * W * 0.005, H * 0.975,
+                   Math.min(W * 0.260, H * 0.420), fs, beat);
+    }
+
+    // Mean of a spectrum slice, 0..1. Falls back to a slow idle swell so the
+    // panel still breathes with no audio.
+    function specBand(a, b) {
+      const spec = scratch.spectrum;
+      if (!spec) {
+        return 0.18 + 0.16 * (0.5 + 0.5 * Math.sin(scratch.time * 1.3 + a * 9));
+      }
+      const n = spec.length * 0.72;
+      const f0 = Math.pow(n, a) | 0;
+      const f1 = Math.max(f0 + 1, Math.pow(n, b) | 0);
+      let sum = 0;
+      for (let f = f0; f < f1; f++) sum += spec[f];
+      return Math.min(1, (sum / (f1 - f0)) / 200);
+    }
+
+    function drawHBar(x, y, w, h, n, v, palette, lift) {
+      const cell = w / n, seg = cell * 0.7;
+      const litN = Math.max(0, Math.min(1, v)) * n;
+      for (let i = 0; i < n; i++) {
+        const on = i < litN;
+        const edge = litN - i;
+        const a = on ? (edge < 1 ? 0.35 + edge * 0.65 : 1) : 1;
+        const c = palette(i / (n - 1));
+        ctx.fillStyle = on ? `rgba(${c},${Math.min(1, a * (0.75 + lift * 0.3))})`
+                           : `rgba(${c},0.10)`;
+        ctx.fillRect(x + i * cell, y, seg, h);
+      }
+    }
+
+    // The voice modulator: KITT's oscilloscope oval. Real waveform when
+    // there's audio, a breathing sine when there isn't.
+    function drawModulator(cx, cy, rx, ry, lift, beat) {
+      ctx.save();
+      ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU); ctx.clip();
+      ctx.fillStyle = '#03050b';
+      ctx.fillRect(cx - rx, cy - ry, rx * 2, ry * 2);
+      // Graticule.
+      ctx.strokeStyle = 'rgba(90,130,200,0.16)';
+      ctx.lineWidth = 1;
+      for (let i = 1; i < 4; i++) {
+        const yy = cy - ry + (ry * 2) * i / 4;
+        ctx.beginPath(); ctx.moveTo(cx - rx, yy); ctx.lineTo(cx + rx, yy); ctx.stroke();
+      }
+      // Trace.
+      const wave = scratch.waveform;
+      const N = 72;
+      ctx.strokeStyle = `rgba(255,72,58,${0.75 + beat * 0.25})`;
+      ctx.lineWidth = Math.max(1.2, ry * 0.10);
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (let i = 0; i <= N; i++) {
+        const f = i / N;
+        let v;
+        if (wave && wave.length) {
+          v = (wave[(f * (wave.length - 1)) | 0] - 128) / 128;
+        } else {
+          v = Math.sin(f * 9 + scratch.time * 2.4) * 0.42
+            * (0.45 + 0.55 * Math.sin(scratch.time * 0.7))
+            + Math.sin(f * 23 - scratch.time * 1.7) * 0.14;
+        }
+        const px = cx - rx + f * rx * 2;
+        const py = cy - v * ry * 0.82;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.25 + beat * 0.3;
+      ctx.drawImage(glowRed, cx - rx, cy - ry * 1.6, rx * 2, ry * 3.2);
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      ctx.strokeStyle = `rgba(150,190,255,${0.30 + lift * 0.15})`;
+      ctx.lineWidth = Math.max(1, ry * 0.07);
+      ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU); ctx.stroke();
+    }
+
+    // The scanner screen: a sweeping radar over the road ahead, with the
+    // moon marked where it actually is.
+    function drawScanner(x, y, w, h, t, lift) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+      ctx.fillStyle = '#03060e';
+      ctx.fillRect(x, y, w, h);
+      const cx = x + w / 2, cy = y + h * 0.94, r = h * 0.92;
+      ctx.strokeStyle = 'rgba(96,150,240,0.35)';
+      ctx.lineWidth = 1;
+      for (let i = 1; i <= 3; i++) {
+        ctx.beginPath(); ctx.arc(cx, cy, r * i / 3, Math.PI, TAU); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - r); ctx.stroke();
+      // Sweep.
+      const a = -Math.PI + ((t * 0.55) % 1) * Math.PI;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(96,190,255,${0.14 + lift * 0.10})`;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, a - 0.30, a);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = 'rgba(150,225,255,0.85)';
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); ctx.stroke();
+      // Contacts: the road's vanishing point dead ahead, plus the moon.
+      ctx.fillStyle = 'rgba(255,64,52,0.9)';
+      ctx.fillRect(cx - 1.5, cy - r * 0.72, 3, 3);
+      ctx.fillStyle = 'rgba(226,240,255,0.8)';
+      ctx.fillRect(cx + r * 0.10 - 1.5, cy - r * 0.44, 3, 3);
+      ctx.restore();
+    }
+
+    // Labelled pushbuttons, KITT's lower-left block.
+    function drawSwitchPod(x, y, w, h, t, beat, items) {
+      ctx.fillStyle = '#080b12';
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, w * 0.04); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,155,215,0.18)';
+      ctx.lineWidth = 1; ctx.stroke();
+      const cols = 2, rows = Math.ceil(items.length / cols);
+      const bw = w * 0.40, bh = h / (rows + 0.6);
+      for (let i = 0; i < items.length; i++) {
+        const c = i % cols, r = (i / cols) | 0;
+        const bx = x + w * 0.055 + c * w * 0.48;
+        const by = y + h * 0.06 + r * bh;
+        // Each switch breathes on its own phase; a beat lifts them together.
+        const on = 0.30 + items[i][1] * 0.5
+                 + 0.18 * Math.sin(t * (1.1 + i * 0.37) + i) + beat * 0.35;
+        ctx.fillStyle = `rgba(255,${120 + i * 12},${40 + i * 6},${Math.min(0.95, on)})`;
+        ctx.beginPath(); ctx.roundRect(bx, by, bw, bh * 0.66, bh * 0.14); ctx.fill();
+        label(items[i][0], bx + bw / 2, by + bh * 0.34, bh * 0.34,
+              'rgba(12,8,4,0.85)', 'center');
+      }
+    }
+
+    // POWER / AUTO / NORMAL / PURSUIT. Pursuit is the one that answers the
+    // kick — the panel's own beat light.
+    function drawModePod(x, y, w, h, beat, t) {
+      ctx.fillStyle = '#080b12';
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, w * 0.04); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,155,215,0.18)';
+      ctx.lineWidth = 1; ctx.stroke();
+      const modes = [
+        ['POWER', '86,220,120', 0.75],
+        ['AUTO', '255,190,60', 0.55],
+        ['NORMAL', '120,175,255', 0.5],
+        ['PURSUIT', '255,58,52', 0.35 + beat * 0.65],
+      ];
+      const bh = h / (modes.length + 0.5);
+      for (let i = 0; i < modes.length; i++) {
+        const by = y + h * 0.05 + i * bh;
+        const a = Math.min(0.95, modes[i][2] + 0.10 * Math.sin(t * 1.7 + i));
+        ctx.fillStyle = `rgba(${modes[i][1]},${a})`;
+        ctx.beginPath();
+        ctx.roundRect(x + w * 0.08, by, w * 0.84, bh * 0.68, bh * 0.16);
+        ctx.fill();
+        label(modes[i][0], x + w * 0.5, by + bh * 0.35, bh * 0.36,
+              'rgba(10,8,6,0.85)', 'center');
+      }
+    }
+
+    // ── The gullwing wheel ──────────────────────────────────────────────
+    // KITT's yoke is not a rim at all — it's one moulded delta: a broad flat
+    // face peaking in the middle, sloping down to a grip at each end, with
+    // the Knight crest set into the right-hand side. There is no top arc and
+    // no spokes. Drawn in units of Rw about the centre of the face so the
+    // whole piece rotates as one.
+    function drawGullwing(cx, cy, Rw, fs, beat) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(scratch.steer * 0.34);
+
+      const face = () => {
+        ctx.beginPath();
+        ctx.moveTo(-0.92 * Rw, -0.02 * Rw);                 // left grip root
+        ctx.lineTo(-0.62 * Rw, -0.24 * Rw);                 // left shoulder
+        ctx.lineTo(-0.08 * Rw, -0.42 * Rw);                 // apex
+        ctx.lineTo(0.08 * Rw, -0.42 * Rw);
+        ctx.lineTo(0.62 * Rw, -0.24 * Rw);                  // right shoulder
+        ctx.lineTo(0.92 * Rw, -0.02 * Rw);                  // right grip root
+        ctx.lineTo(0.92 * Rw, 0.30 * Rw);
+        ctx.quadraticCurveTo(0.58 * Rw, 0.42 * Rw, 0, 0.42 * Rw);
+        ctx.quadraticCurveTo(-0.58 * Rw, 0.42 * Rw, -0.92 * Rw, 0.30 * Rw);
+        ctx.closePath();
+      };
+
+      // The face, lit from the screen above so the top edges catch and the
+      // bottom falls into the footwell.
+      if (!yokeGrad || yokeGrad._r !== Rw) {
+        yokeGrad = ctx.createLinearGradient(0, -0.42 * Rw, 0, 0.42 * Rw);
+        yokeGrad.addColorStop(0, '#20263a');
+        yokeGrad.addColorStop(0.45, '#141926');
+        yokeGrad.addColorStop(1, '#080a11');
+        yokeGrad._r = Rw;
+      }
+      ctx.fillStyle = yokeGrad;
+      face(); ctx.fill();
+
+      // Creases: a pair running parallel to each top edge, and the twin
+      // ribs down the centre of the apex.
+      ctx.strokeStyle = 'rgba(6,8,14,0.85)';
+      ctx.lineWidth = Math.max(1, Rw * 0.020);
+      ctx.lineJoin = 'round';
+      for (const s of [-1, 1]) {
+        for (let i = 0; i < 2; i++) {
+          const d = 0.09 + i * 0.11;
+          ctx.beginPath();
+          ctx.moveTo(s * (0.86 - d * 0.5) * Rw, (0.02 + d) * Rw);
+          ctx.lineTo(s * (0.58 - d * 0.4) * Rw, (-0.20 + d) * Rw);
+          ctx.lineTo(s * 0.11 * Rw, (-0.38 + d) * Rw);
+          ctx.stroke();
+        }
+      }
+      ctx.strokeStyle = 'rgba(8,11,18,0.9)';
+      ctx.lineWidth = Math.max(1, Rw * 0.016);
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(s * 0.035 * Rw, -0.40 * Rw);
+        ctx.lineTo(s * 0.035 * Rw, 0.36 * Rw);
+        ctx.stroke();
+      }
+
+      // Moonlight down the two top edges — the only hard highlight on it.
+      ctx.strokeStyle = `rgba(150,190,255,${0.26 + beat * 0.12})`;
+      ctx.lineWidth = Math.max(1, Rw * 0.017);
+      ctx.beginPath();
+      ctx.moveTo(-0.92 * Rw, -0.02 * Rw);
+      ctx.lineTo(-0.62 * Rw, -0.24 * Rw);
+      ctx.lineTo(-0.08 * Rw, -0.42 * Rw);
+      ctx.lineTo(0.08 * Rw, -0.42 * Rw);
+      ctx.lineTo(0.62 * Rw, -0.24 * Rw);
+      ctx.lineTo(0.92 * Rw, -0.02 * Rw);
+      ctx.stroke();
+
+      // Dash light spilling red across the lower face.
+      ctx.save();
+      face(); ctx.clip();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.13 + beat * 0.10;
+      ctx.drawImage(glowRed, -Rw * 0.95, Rw * 0.02, Rw * 1.9, Rw * 0.62);
+      ctx.restore();
+
+      // The grips: tubes at each end, turned toward the driver.
+      for (const s of [-1, 1]) {
+        const gx = s * 0.92 * Rw;
+        ctx.fillStyle = '#161b28';
+        ctx.beginPath();
+        // They stand well clear of the face — on the real piece the tubes
+        // rise to about the height of the centre peak. They sit far enough
+        // out that going tall costs the console nothing.
+        ctx.roundRect(gx - Rw * 0.098, -0.50 * Rw, Rw * 0.196, Rw * 1.14, Rw * 0.098);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(150,190,255,0.20)';
+        ctx.lineWidth = Math.max(1, Rw * 0.012);
+        ctx.beginPath();
+        ctx.moveTo(gx - Rw * 0.070, -0.42 * Rw);
+        ctx.lineTo(gx - Rw * 0.070, 0.50 * Rw);
+        ctx.stroke();
+        // Finger grooves down the inner face.
+        ctx.strokeStyle = 'rgba(6,8,14,0.7)';
+        ctx.lineWidth = Math.max(1, Rw * 0.010);
+        for (let i = 0; i < 4; i++) {
+          const gy = -0.30 * Rw + i * 0.13 * Rw;
+          ctx.beginPath();
+          ctx.moveTo(gx - Rw * 0.080, gy);
+          ctx.lineTo(gx + Rw * 0.080, gy);
+          ctx.stroke();
+        }
+      }
+
+      // The crest, set into the right of the face.
+      const ex = 0.44 * Rw, ey = -0.17 * Rw, er = Rw * 0.080;
+      ctx.fillStyle = '#0a0d14';
+      ctx.beginPath(); ctx.arc(ex, ey, er * 1.22, 0, TAU); ctx.fill();
+      ctx.fillStyle = `rgba(226,32,42,${0.7 + beat * 0.3})`;
+      ctx.beginPath(); ctx.arc(ex, ey, er, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#0a0d14';
+      ctx.beginPath();
+      ctx.moveTo(ex - er * 0.34, ey + er * 0.46);
+      ctx.lineTo(ex - er * 0.30, ey - er * 0.20);
+      ctx.lineTo(ex + er * 0.10, ey - er * 0.52);
+      ctx.lineTo(ex + er * 0.40, ey - er * 0.16);
+      ctx.lineTo(ex + er * 0.16, ey - er * 0.04);
+      ctx.lineTo(ex + er * 0.20, ey + er * 0.46);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.28 + beat * 0.35;
+      ctx.drawImage(glowRed, ex - er * 3, ey - er * 3, er * 6, er * 6);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      ctx.restore();
     }
 
     // ── Testarossa mode (side view) ─────────────────────────────────────
     // A vector illustration of the car itself, drawn with paths in
-    // car-space: u along the length (0 = nose, facing LEFT, 1 = tail),
-    // v up from the ground, both as fractions of the car's length.
+    // car-space: u along the length (0 = nose, 1 = tail), v up from the
+    // ground, both as fractions of the car's length. Car-space runs
+    // nose-left; the whole drawing is mirrored at paint time so the car
+    // faces RIGHT on screen, matching the world sliding left past it.
     // Upper silhouette, nose → tail, dense enough that the lineTo chain
     // reads as curves at screen scale. Real-profile proportions: wheel
-    // diameter ≈ 0.145 of the length, roof at ≈ 0.235, wedge nose.
+    // diameter ≈ 0.145 of the length, roof at ≈ 0.235, wedge nose. The rise
+    // off the nose has to clear the front tyre with bodywork to spare —
+    // level with it and the wheel reads as bursting through the fender.
     const CAR_BODY = [
-      [0.000, 0.068], [0.000, 0.098], [0.030, 0.110],
-      [0.082, 0.120],                       // hood over the front arch
-      [0.160, 0.130], [0.300, 0.148],       // hood rise to windshield base
-      [0.325, 0.155], [0.360, 0.185],       // windshield, raked in two steps
-      [0.405, 0.220], [0.440, 0.231],
+      [0.000, 0.068], [0.000, 0.098], [0.035, 0.116],
+      [0.100, 0.140],                       // hood climbing off the nose
+      [0.175, 0.160], [0.245, 0.172],       // fender crown over the front wheel
+      [0.305, 0.176],                       // cowl
+      [0.325, 0.178], [0.360, 0.198],       // windshield, raked in two steps
+      [0.405, 0.222], [0.440, 0.231],
       [0.530, 0.236], [0.600, 0.230],       // low roof
-      [0.650, 0.215], [0.720, 0.192],       // flying-buttress slope
-      [0.820, 0.166],
-      [0.985, 0.156], [1.000, 0.153],       // rear deck → kamm tail top
-      [1.000, 0.060], [0.980, 0.040],       // tail face → rear valance
+      [0.650, 0.219], [0.720, 0.200],       // flying-buttress slope
+      [0.820, 0.180],
+      [0.985, 0.173], [1.000, 0.171],       // rear deck → kamm tail top
+      [1.000, 0.062], [0.980, 0.040],       // tail face → rear valance
     ];
-    const FRONT_WHEEL = { u: 0.185, r: 0.066 };
-    const REAR_WHEEL = { u: 0.775, r: 0.066 };
+    // Overhangs off the real car: front ~0.24 of the length, rear ~0.19,
+    // wheelbase ~0.57. These were the wrong way round, which is what made
+    // the panel behind the rear wheel run long.
+    const FRONT_WHEEL = { u: 0.245, r: 0.066 };
+    const REAR_WHEEL = { u: 0.815, r: 0.066 };
 
     function drawWheel(cx, cy, R, L, fs) {
       // Tire.
@@ -643,6 +2081,66 @@ export default {
       ctx.beginPath(); ctx.arc(cx, cy, rimR * 0.16, 0, TAU); ctx.fill();
     }
 
+    // ── The driver ──────────────────────────────────────────────────────
+    // Kavinsky at the wheel, drawn in the same car-space as the body so he
+    // rides the pitch and the bob with it: spiked hair, the glasses, the
+    // varsity jacket with its sleeve stripes, one hand up on the rim. The
+    // lens glint is the only part of him that moves with the music.
+    //
+    // Car-space runs nose-left and the whole illustration is mirrored at
+    // paint time, so he's drawn facing left here and comes out facing the
+    // road. Everything sits inside the glasshouse (u 0.34–0.65).
+    // ── The driver ──────────────────────────────────────────────────────
+    // Kavinsky is behind glass, and the glass stays nearly opaque. At this
+    // scale a drawn head is a liability — every version of one either read as
+    // a cartoon or as a muzzle — so the window keeps him: a silhouette barely
+    // separated from the tint, and the two red lenses burning through it. You
+    // don't need his face when you've got his eyes.
+    function drawDriver(X, Y, L, fs) {
+      // Instrument glow washing the front of the cabin.
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, 0.16 + scratch.bass * 0.26);
+      ctx.drawImage(glowRed, X(0.440) - L * 0.042, Y(0.176) - L * 0.030,
+                    L * 0.084, L * 0.060);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
+      // Him, as a shape in the dark — head and shoulders, a shade off the
+      // tint and nothing more.
+      ctx.fillStyle = 'rgba(3,6,14,0.72)';
+      ctx.beginPath();
+      ctx.ellipse(X(0.548), Y(0.170), L * 0.048, L * 0.030, 0, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(X(0.534), Y(0.198), L * 0.024, L * 0.024, 0, 0, TAU);
+      ctx.fill();
+
+      // The eyes. Everything the character needs, and the only part of him
+      // that answers the music.
+      const glint = Math.min(1, 0.35 + scratch.beatPulse * 0.65 + scratch.bass * 0.3);
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 2; i++) {
+        const eu = 0.5215 + i * 0.0135;
+        ctx.globalAlpha = glint * (i ? 0.62 : 0.95);
+        ctx.drawImage(glowRed, X(eu) - L * 0.021, Y(0.1965) - L * 0.021,
+                      L * 0.042, L * 0.042);
+      }
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      for (let i = 0; i < 2; i++) {
+        const eu = 0.5215 + i * 0.0135;
+        const k = i ? 0.62 : 1;
+        ctx.fillStyle = `rgba(255,74,54,${Math.min(1, (0.62 + glint * 0.38) * k)})`;
+        ctx.beginPath();
+        ctx.arc(X(eu), Y(0.1965), Math.max(0.9, L * 0.0052 * k), 0, TAU);
+        ctx.fill();
+        ctx.fillStyle = `rgba(255,238,230,${Math.min(1, (0.5 + glint * 0.5) * k)})`;
+        ctx.beginPath();
+        ctx.arc(X(eu), Y(0.1965), Math.max(0.6, L * 0.0022 * k), 0, TAU);
+        ctx.fill();
+      }
+    }
+
     function drawTestarossa(carX, groundY, L, fs) {
       const glow = scratch.glow;
       const t = scratch.time;
@@ -651,9 +2149,13 @@ export default {
       const pitch = -scratch.beatPulse * 0.008;
       const X = (u) => (u - 0.48) * L;
       const Y = (v) => -v * L;
+      // World x of a car-space u — car-space points left, the car faces
+      // right, so screen x mirrors about carX.
+      const wx = (u) => carX - X(u);
 
       ctx.save();
       ctx.translate(carX, groundY - bob);
+      ctx.scale(-1, 1);   // face right
       ctx.rotate(pitch);
 
       // Ground shadow (drawn unrotated enough at this pitch).
@@ -678,7 +2180,9 @@ export default {
       ctx.fill();
 
       // Punch the wheel arches out of the body.
-      ctx.fillStyle = SKY_HORIZON;
+      // Arch shadow, not sky: with real bodywork above the tyre a sky-coloured
+      // punch would show as a bright crescent over the wheel.
+      ctx.fillStyle = '#05080f';
       for (const w of [FRONT_WHEEL, REAR_WHEEL]) {
         ctx.beginPath();
         ctx.arc(X(w.u), Y(0.066), w.r * 1.12 * L, 0, TAU);
@@ -688,23 +2192,26 @@ export default {
       ctx.fillStyle = '#4a0810';
       ctx.fillRect(X(0.290), Y(0.052), X(0.665) - X(0.290), 0.014 * L);
 
-      // Glasshouse — windshield + door glass in night blue.
-      ctx.fillStyle = '#0a0f22';
+      // Glasshouse — windshield + door glass, tinted almost to opaque.
+      ctx.fillStyle = '#070b18';
       ctx.beginPath();
-      ctx.moveTo(X(0.338), Y(0.152));
-      ctx.lineTo(X(0.418), Y(0.216));
+      ctx.moveTo(X(0.338), Y(0.174));
+      ctx.lineTo(X(0.418), Y(0.217));
       ctx.lineTo(X(0.445), Y(0.224));
       ctx.lineTo(X(0.540), Y(0.228));
       ctx.lineTo(X(0.612), Y(0.221));
       ctx.lineTo(X(0.648), Y(0.155));
       ctx.closePath();
       ctx.fill();
+      // The man himself, behind the glass.
+      drawDriver(X, Y, L, fs);
+
       // A-pillar sweep highlight on the glass.
       ctx.strokeStyle = 'rgba(190,210,255,0.35)';
       ctx.lineWidth = Math.max(1, 1.2 * fs);
       ctx.beginPath();
-      ctx.moveTo(X(0.350), Y(0.158));
-      ctx.lineTo(X(0.428), Y(0.216));
+      ctx.moveTo(X(0.352), Y(0.180));
+      ctx.lineTo(X(0.428), Y(0.217));
       ctx.stroke();
       // B-pillar split.
       ctx.strokeStyle = '#20060c';
@@ -714,28 +2221,30 @@ export default {
 
       // THE strakes — the side louvres raking into the rear intake.
       ctx.strokeStyle = '#55070f';
-      ctx.lineWidth = Math.max(1, L * 0.006);
-      for (let i = 0; i < 5; i++) {
-        const v = 0.055 + i * 0.015;
+      ctx.lineWidth = Math.max(1, L * 0.0058);
+      for (let i = 0; i < 6; i++) {
+        const v = 0.062 + i * 0.0136;
         ctx.beginPath();
-        ctx.moveTo(X(0.445 + i * 0.010), Y(v));
-        ctx.lineTo(X(0.700), Y(v + 0.004));
+        ctx.moveTo(X(0.390 + i * 0.008), Y(v));
+        ctx.lineTo(X(0.686), Y(v + 0.006));
         ctx.stroke();
       }
       // Door seams + handle.
+      // Shut lines bracket the strakes: the leading edge just ahead of the
+      // first fin, the trailing edge raking back off the last one.
       ctx.strokeStyle = 'rgba(40,4,10,0.8)';
       ctx.lineWidth = Math.max(1, fs);
-      ctx.beginPath(); ctx.moveTo(X(0.418), Y(0.150)); ctx.lineTo(X(0.408), Y(0.055)); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(X(0.664), Y(0.152)); ctx.lineTo(X(0.700), Y(0.060)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(0.372), Y(0.170)); ctx.lineTo(X(0.364), Y(0.054)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(0.660), Y(0.156)); ctx.lineTo(X(0.694), Y(0.062)); ctx.stroke();
       ctx.strokeStyle = 'rgba(255,220,220,0.4)';
-      ctx.beginPath(); ctx.moveTo(X(0.600), Y(0.146)); ctx.lineTo(X(0.638), Y(0.146)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(0.612), Y(0.150)); ctx.lineTo(X(0.646), Y(0.150)); ctx.stroke();
 
       // Beltline specular — the long white streak that sells the paint.
       ctx.strokeStyle = 'rgba(255,235,235,0.5)';
       ctx.lineWidth = Math.max(1, 1.6 * fs);
       ctx.beginPath();
-      ctx.moveTo(X(0.030), Y(0.116));
-      ctx.quadraticCurveTo(X(0.30), Y(0.152), X(0.42), Y(0.154));
+      ctx.moveTo(X(0.035), Y(0.120));
+      ctx.quadraticCurveTo(X(0.29), Y(0.170), X(0.42), Y(0.164));
       ctx.moveTo(X(0.66), Y(0.156));
       ctx.lineTo(X(0.982), Y(0.158));
       ctx.stroke();
@@ -743,30 +2252,35 @@ export default {
       ctx.strokeStyle = 'rgba(190,210,255,0.45)';
       ctx.lineWidth = Math.max(1, 1.4 * fs);
       ctx.beginPath();
-      ctx.moveTo(X(0.30), Y(0.148));
-      ctx.lineTo(X(0.405), Y(0.220));
+      ctx.moveTo(X(0.30), Y(0.170));
+      ctx.lineTo(X(0.405), Y(0.222));
       ctx.quadraticCurveTo(X(0.53), Y(0.243), X(0.65), Y(0.213));
       ctx.lineTo(X(0.82), Y(0.168));
       ctx.stroke();
 
-      // Side mirror.
+      // Side mirror, on its stalk at the foot of the A-pillar.
+      ctx.strokeStyle = '#5a0a12';
+      ctx.lineWidth = Math.max(1, L * 0.005);
+      ctx.beginPath(); ctx.moveTo(X(0.352), Y(0.174)); ctx.lineTo(X(0.346), Y(0.188)); ctx.stroke();
       ctx.fillStyle = '#8f1018';
-      ctx.fillRect(X(0.318), Y(0.190), L * 0.024, L * 0.018);
-      ctx.strokeStyle = '#30050b';
-      ctx.beginPath(); ctx.moveTo(X(0.326), Y(0.172)); ctx.lineTo(X(0.329), Y(0.154)); ctx.stroke();
+      ctx.beginPath();
+      ctx.roundRect(X(0.330), Y(0.206), L * 0.026, L * 0.018, L * 0.004);
+      ctx.fill();
 
       // Pop-up headlight, up for the night — pod + white lamp face.
       ctx.fillStyle = '#b0121f';
       ctx.beginPath();
-      ctx.moveTo(X(0.085), Y(0.118));
-      ctx.lineTo(X(0.090), Y(0.148));
-      ctx.lineTo(X(0.150), Y(0.143));
-      ctx.lineTo(X(0.152), Y(0.124));
+      // A raised pop-up hinges at its back, so the lens face stands tall at
+      // the front and the top slopes down into the hood behind it.
+      ctx.moveTo(X(0.082), Y(0.126));
+      ctx.lineTo(X(0.084), Y(0.160));
+      ctx.lineTo(X(0.148), Y(0.150));
+      ctx.lineTo(X(0.152), Y(0.140));
       ctx.closePath();
       ctx.fill();
       const beam = Math.min(1, 0.55 + scratch.beatPulse * 0.45) * glow;
       ctx.fillStyle = `rgba(235,242,255,${0.85 * Math.min(1, beam + 0.3)})`;
-      ctx.fillRect(X(0.086), Y(0.146), L * 0.011, L * 0.024);
+      ctx.fillRect(X(0.086), Y(0.157), L * 0.012, L * 0.026);
 
       // Front amber marker + tail-light strip.
       ctx.fillStyle = '#ffb43a';
@@ -777,20 +2291,24 @@ export default {
       ctx.restore();
 
       // Lights in world space (unrotated — the pitch is tiny).
-      const tailX = carX + X(1.0), tailY = groundY - bob - 0.095 * L;
-      const lampX = carX + X(0.083), lampY = groundY - bob - 0.138 * L;
+      const tailX = wx(1.0), tailY = groundY - bob - 0.095 * L;
+      const lampX = wx(0.083), lampY = groundY - bob - 0.144 * L;
 
       ctx.globalCompositeOperation = 'lighter';
-      // Headlight beam — a long cold cone toward the left edge.
-      const beamA = (0.10 + scratch.beatPulse * 0.08 + 0.02 * Math.sin(t * 31)) * glow;
-      ctx.fillStyle = `rgba(210,225,255,${Math.max(0, beamA)})`;
-      ctx.beginPath();
-      ctx.moveTo(lampX, lampY - 0.012 * L);
-      ctx.lineTo(-W * 0.02, lampY - 0.055 * L);
-      ctx.lineTo(-W * 0.02, lampY + 0.10 * L);
-      ctx.lineTo(lampX, lampY + 0.016 * L);
-      ctx.closePath();
-      ctx.fill();
+      // Headlight beam — a long cold cone toward the right edge. Two thin
+      // stacked passes instead of one slab, so it reads as lit air.
+      const beamA = (0.045 + scratch.beatPulse * 0.05 + 0.012 * Math.sin(t * 31)) * glow;
+      for (let pass = 0; pass < 2; pass++) {
+        const k = pass === 0 ? 1 : 0.42;
+        ctx.fillStyle = `rgba(198,220,255,${Math.max(0, beamA * (pass === 0 ? 1 : 1.4))})`;
+        ctx.beginPath();
+        ctx.moveTo(lampX, lampY - 0.010 * L);
+        ctx.lineTo(W * 1.02, lampY - 0.055 * L * k);
+        ctx.lineTo(W * 1.02, lampY + 0.10 * L * k);
+        ctx.lineTo(lampX, lampY + 0.014 * L);
+        ctx.closePath();
+        ctx.fill();
+      }
       ctx.globalAlpha = Math.min(1, 0.8 * glow);
       ctx.drawImage(glowCold, lampX - 0.05 * L, lampY - 0.05 * L, 0.1 * L, 0.1 * L);
 
@@ -800,14 +2318,15 @@ export default {
       ctx.drawImage(glowRed, tailX - 0.09 * L, tailY - 0.09 * L, 0.18 * L, 0.18 * L);
       const trailLen = L * (0.35 + scratch.bass * 0.55 + scratch.speed * 0.12);
       ctx.globalAlpha = tlA * 0.8;
-      ctx.drawImage(glowRed, tailX - 0.02 * L, tailY - 0.028 * L, trailLen, 0.056 * L);
+      // The trail drags out behind the tail — leftward now.
+      ctx.drawImage(glowRed, tailX + 0.02 * L - trailLen, tailY - 0.028 * L, trailLen, 0.056 * L);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
 
       // Wheels last, over the punched arches.
       const fy = groundY - bob - 0.066 * L;
-      drawWheel(carX + X(FRONT_WHEEL.u), fy, FRONT_WHEEL.r * L, L, fs);
-      drawWheel(carX + X(REAR_WHEEL.u), fy, REAR_WHEEL.r * L, L, fs);
+      drawWheel(wx(FRONT_WHEEL.u), fy, FRONT_WHEEL.r * L, L, fs);
+      drawWheel(wx(REAR_WHEEL.u), fy, REAR_WHEEL.r * L, L, fs);
     }
 
     function renderTestarossa() {
@@ -824,24 +2343,20 @@ export default {
       ctx.fillRect(0, horizonY, W, H - horizonY);
 
       drawStars(horizonY, fs, t);
+      drawSkyCharge(horizonY);
+      drawClouds(horizonY, t);
 
-      // Low moon — cold and huge behind the skyline.
-      const mx = W * 0.76, my = H * 0.22, mr = Math.min(W, H) * 0.065;
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = 0.55;
-      ctx.drawImage(glowCold, mx - mr * 3, my - mr * 3, mr * 6, mr * 6);
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = '#dfe8fa';
-      ctx.beginPath(); ctx.arc(mx, my, mr, 0, TAU); ctx.fill();
-      ctx.fillStyle = 'rgba(178,192,220,0.5)';
-      ctx.beginPath(); ctx.arc(mx - mr * 0.3, my - mr * 0.15, mr * 0.16, 0, TAU); ctx.fill();
-      ctx.beginPath(); ctx.arc(mx + mr * 0.25, my + mr * 0.3, mr * 0.11, 0, TAU); ctx.fill();
+      // The same moon as the outrun view, pushed off to the right so the
+      // car gets the centre — still far too big for the frame, still cropped.
+      const mr = Math.max(W, H) * 0.26 * scratch.moon;
+      if (scratch.moon > 0.01) drawMoon(W * 0.78, horizonY - mr * 0.62, mr, horizonY);
 
+      // Rays stand on the horizon under the moon and rake up across it.
+      drawRays(W * 0.78, horizonY, horizonY, t);
       drawLightning(horizonY, fs, t);
 
       // Scrolling city skyline — same spectrum bins, sliding by as we
-      // drive (the car faces left, so the world slides right).
+      // drive (the car faces right, so the world slides left).
       if (scratch.city) {
         const bw = W / (SKY_BINS - 8);
         const maxH = H * 0.16;
@@ -863,14 +2378,21 @@ export default {
         }
       }
 
+      // Ground fog against the horizon, same as the outrun view gets.
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = fogGradTall;
+      ctx.fillRect(0, horizonY - H * 0.17, W, H * 0.19);
+      ctx.globalCompositeOperation = 'source-over';
+
       // Road band — a lighter lane the car rides, kerb line, dashes.
       ctx.fillStyle = ROAD;
       ctx.fillRect(0, groundY - H * 0.006, W, H * 0.14);
       ctx.fillStyle = 'rgba(210,225,255,0.5)';
       ctx.fillRect(0, horizonY, W, Math.max(1, 1.6 * fs));
-      // Dashes slide right as the car drives left.
+      // Dashes slide left as the car drives right — same scroll as the
+      // streetlights, skyline and rain.
       const dashW = W * 0.07, gap = W * 0.115;
-      const dx = (dist * W * 0.22) % gap;
+      const dx = -((dist * W * 0.22) % gap);
       ctx.fillStyle = 'rgba(235,242,255,0.7)';
       for (let x = -gap + dx; x < W + gap; x += gap) {
         ctx.fillRect(x, groundY + H * 0.085, dashW, Math.max(1.5, 2.6 * fs));
@@ -888,7 +2410,7 @@ export default {
         ctx.moveTo(x, groundY + H * 0.01);
         ctx.lineTo(x, poleTop);
         ctx.stroke();
-        // Arm reaching over the road (toward the left / direction of travel).
+        // Arm reaching out over the road.
         ctx.beginPath();
         ctx.moveTo(x, poleTop);
         ctx.quadraticCurveTo(x - W * 0.035, poleTop, x - W * 0.05, poleTop + H * 0.012);
@@ -910,19 +2432,30 @@ export default {
       const carX = W * (0.46 + laneX * 0.05);
       drawTestarossa(carX, groundY, L, fs);
 
-      // Wet-road reflection — a soft red pool beneath the car.
+      // Wet-road reflection — a soft red pool beneath the tail, now left.
       const tlA = Math.min(1, (0.5 + scratch.bass * 0.5) * glow) * (0.35 + scratch.rainAmt * 0.5);
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = tlA * 0.5;
-      ctx.drawImage(glowRed, carX + L * 0.38, groundY - L * 0.02, L * 0.3, L * 0.10);
+      ctx.drawImage(glowRed, carX - L * 0.68, groundY - L * 0.02, L * 0.3, L * 0.10);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
     }
 
     function render() {
+      if (scratch.mode === 'dash') {
+        // Dash does its own flash and rain inside the windscreen clip —
+        // lightning lights the road ahead, not the instruments.
+        renderDash();
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0, 0, W, H);
+        return;
+      }
       if (scratch.mode === 'testarossa') renderTestarossa();
-      else renderHighway();
+      else renderOutrun();
 
+      // The strike lands on the finished frame — sky, road and car all lift
+      // together, then the rain falls through the lit air.
+      drawSkyFlash();
       drawRain(Math.min(W, H) / 1080);
 
       // Vignette — pull the edges down into the night.
