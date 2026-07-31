@@ -27,14 +27,19 @@ import {
 // The last entry pairs neutral white with the accent (works on every theme).
 let K = readKnobs();
 
-// Under the nightcall theme the skeleton goes blueish-black silhouette —
-// every person the same, a body in the dark — and the red album-art eyes
-// light every tracked face automatically. The theme carries the tribute;
-// the overlay's nightcall toggle stays independent for the other themes.
+// Under the nightcall theme the skeleton goes cold blue — every person the
+// same, a body lit by the same moon — and the red album-art eyes light every
+// tracked face automatically. The theme carries the tribute; the overlay's
+// nightcall toggle stays independent for the other themes.
+//
+// `boneGlow`, when a palette carries it, buys a wider additive pass under the
+// bones so the figure reads as lit rather than merely drawn. Only nightcall
+// declares it; every other palette skips the extra stroke entirely.
 const NIGHTCALL_PERSON_PALETTE = [{
-  boneA: 'rgba(26,34,60,0.85)', boneB: 'rgba(10,14,28,0.85)',
+  boneA: 'rgba(126,176,255,0.92)', boneB: 'rgba(44,78,158,0.92)',
   spark: [225, 355],
-  halo: 'rgba(60,80,140,0.14)', joint: 'rgba(38,48,82,0.95)',
+  halo: 'rgba(88,140,235,0.16)', joint: 'rgba(186,214,252,0.95)',
+  boneGlow: 'rgba(58,116,230,0.30)',
 }];
 let nightcallTheme = getTheme() === 'nightcall';
 
@@ -151,15 +156,21 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   // Baked once: the red falloff behind the nightcall eyes. A steep curve —
   // most of the energy inside the first fifth of the radius — so the eye
   // reads as a hot point bleeding light, not a soft ball.
+  //
+  // Deliberately red-dominant with only a sliver of white at the very
+  // centre. The flare arms are this same sprite stretched long and thin,
+  // and anything wider than a sliver smears into a white bar once it's
+  // scaled 40:1 — the red has to survive the stretch.
   const eyeGlow = (() => {
     const c = document.createElement('canvas');
     c.width = c.height = 128;
     const g = c.getContext('2d');
     const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-    grad.addColorStop(0.00, 'rgba(255,236,228,1)');
-    grad.addColorStop(0.08, 'rgba(255,120,96,0.92)');
-    grad.addColorStop(0.22, 'rgba(236,26,40,0.42)');
-    grad.addColorStop(0.55, 'rgba(178,0,26,0.11)');
+    grad.addColorStop(0.00, 'rgba(255,238,230,1)');
+    grad.addColorStop(0.04, 'rgba(255,150,120,0.95)');
+    grad.addColorStop(0.13, 'rgba(244,40,50,0.62)');
+    grad.addColorStop(0.34, 'rgba(206,6,30,0.24)');
+    grad.addColorStop(0.62, 'rgba(170,0,24,0.07)');
     grad.addColorStop(1.00, 'rgba(140,0,20,0)');
     g.fillStyle = grad;
     g.fillRect(0, 0, 128, 128);
@@ -545,8 +556,23 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       if (opts.skeleton) {
         ctx.globalCompositeOperation = 'source-over';
 
-        // Bones.
+        // Bones. Palettes that declare a boneGlow get a wide additive pass
+        // laid down first — the bones then sit inside their own light.
         const thick = 1.6 + audio.bands.mids * 4 + audio.beat.pulse * 2;
+        if (pal.boneGlow) {
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.strokeStyle = pal.boneGlow;
+          ctx.lineWidth = thick * 3.2 + 4;
+          ctx.lineCap = 'round';
+          for (const [a, b] of SKELETON_CONNECTIONS) {
+            const lmA = lms[a], lmB = lms[b];
+            if (!lmA || !lmB || lmA.visibility < 0.35 || lmB.visibility < 0.35) continue;
+            const [ax, ay] = lmPos(lmA);
+            const [bx, by] = lmPos(lmB);
+            ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+          }
+          ctx.globalCompositeOperation = 'source-over';
+        }
         ctx.lineWidth = thick; ctx.lineCap = 'round';
         for (const [a, b] of SKELETON_CONNECTIONS) {
           const lmA = lms[a], lmB = lms[b];
@@ -571,7 +597,11 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
           const [x, y] = lmPos(lm);
           const r = (2 + weight * 2) * pulse;
           ctx.globalCompositeOperation = 'lighter';
-          ctx.beginPath(); ctx.arc(x, y, r + 5 * pulse, 0, Math.PI * 2);
+          // Halo scaled by the joint's own weight. A flat +5 made the light
+          // face landmarks bloom as wide as the wrists, which buries
+          // anything drawn on the face — the nightcall eyes especially.
+          ctx.beginPath();
+          ctx.arc(x, y, r + 4 * pulse * (0.35 + weight * 0.65), 0, Math.PI * 2);
           ctx.fillStyle = pal.halo; ctx.fill();
           ctx.globalCompositeOperation = 'source-over';
           ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -587,10 +617,15 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     ctx.restore();
   }
 
-  // The album art: two hot white-red points burning behind dark glasses,
-  // joined by the laser that runs out past the edge of the sleeve. The
-  // points sit a touch *below* the eye landmarks — dropping them onto the
-  // lens line rather than the socket is what sells the sunglasses.
+  // The album art: two small white-hot points burning inside a red glow,
+  // each throwing an anamorphic cross — a long horizontal spike and a
+  // shorter vertical one — that opens up with the music. Quiet, they're
+  // just embers; loud, the spikes run out past the edge of the face and
+  // meet in the middle the way the sleeve laser does. Nothing is drawn
+  // between the eyes: the bar is what the two flares become.
+  //
+  // The points sit a touch *below* the eye landmarks — dropping them onto
+  // the lens line rather than the socket is what sells the sunglasses.
   //
   // Everything scales off the inter-eye distance and rides the music:
   // bands.total sets the standing brightness, beat.pulse punches it.
@@ -632,52 +667,64 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const level = Math.min(1, audioOn
       ? 0.22 + audio.bands.total * 0.35 + audio.bands.bass * 0.22 + audio.beat.pulse * 0.55
       : 0.38 * breathe);
-    const punch = 0.85 + level * 0.6;
-    const R = d * 0.34 * punch;                 // glow reach
-    const core = Math.max(1, d * 0.034 * (0.85 + level * 0.55));
+    const punch = 0.85 + level * 0.7;
+    const R = d * 0.30 * punch;                 // red glow reach
+    const core = Math.max(0.9, d * 0.022 * (0.8 + level * 0.7));
     const alpha = Math.min(1, 0.42 + level * 0.62);
+    // Flare arms. Near-nothing at rest, running past the face when it's
+    // loud — the horizontal one always outruns the vertical, which is what
+    // makes it read as an anamorphic streak rather than a sparkle.
+    const armH = d * (0.16 + level * level * 1.55);
+    const armV = d * (0.09 + level * level * 0.72);
+    const ang = Math.atan2(dy, dx);
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
 
-    // The laser — a flat streak along the eye line, brightest between the
-    // eyes and running out well past both. Only with both eyes in frame;
-    // in profile there's no line to hang it on.
-    if (pL && pR) {
-      const mx = (pL[0] + pR[0]) / 2 + px * drop;
-      const my = (pL[1] + pR[1]) / 2 + py * drop;
-      const len = d * (1.15 + level * 0.85);
-      const thick = Math.max(1.2, d * 0.060 * (0.7 + level * 0.6));
-      ctx.save();
-      ctx.translate(mx, my);
-      ctx.rotate(Math.atan2(dy, dx));
-      ctx.globalAlpha = Math.min(1, 0.22 + level * 0.45);
-      ctx.drawImage(eyeGlow, -len, -thick, len * 2, thick * 2);
-      // A hairline of pure light down the middle of the streak, kept well
-      // inside the bloom so it fades out instead of ending.
-      ctx.globalAlpha = Math.min(1, 0.14 + level * 0.36);
-      ctx.fillStyle = 'rgba(255,206,196,0.85)';
-      ctx.fillRect(-len * 0.55, -Math.max(0.4, thick * 0.08),
-                   len * 1.10, Math.max(0.8, thick * 0.16));
-      ctx.restore();
-    }
-
-    ctx.globalAlpha = alpha;
     for (const p of [pL, pR]) {
       if (!p) continue;
       const x = p[0] + px * drop, y = p[1] + py * drop;
+
       // Wide bleed, then a tight inner glow — two passes of the same sprite
       // stack into a falloff far steeper than one gradient gives you.
+      ctx.globalAlpha = alpha * 0.85;
       ctx.drawImage(eyeGlow, x - R, y - R, R * 2, R * 2);
-      ctx.globalAlpha = Math.min(1, alpha * 0.85);
-      ctx.drawImage(eyeGlow, x - R * 0.40, y - R * 0.40, R * 0.80, R * 0.80);
+      ctx.globalAlpha = alpha * 0.5;
+      ctx.drawImage(eyeGlow, x - R * 0.38, y - R * 0.38, R * 0.76, R * 0.76);
+
+      // The cross. Drawn in the eye-line frame so it rolls with the head.
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(ang);
+      const tH = Math.max(0.9, d * 0.030 * (0.6 + level * 0.7));
+      const tV = Math.max(0.8, d * 0.026 * (0.6 + level * 0.6));
+      ctx.globalAlpha = Math.min(1, 0.30 + level * 0.55);
+      ctx.drawImage(eyeGlow, -armH, -tH, armH * 2, tH * 2);
+      ctx.globalAlpha = Math.min(1, 0.22 + level * 0.45);
+      ctx.drawImage(eyeGlow, -tV, -armV, tV * 2, armV * 2);
+      // Hairlines down the centre of each arm, so the flare has an edge
+      // once it's big enough to need one.
+      if (level > 0.25) {
+        // Red, not white: on the sleeve the laser is a red line with a
+        // white star sitting on it, and a white hairline reads as a lens
+        // scratch instead.
+        const hair = Math.min(1, (level - 0.25) * 1.5);
+        ctx.fillStyle = 'rgba(255,132,110,0.9)';
+        ctx.globalAlpha = hair * 0.5;
+        ctx.fillRect(-armH * 0.62, -Math.max(0.35, tH * 0.11),
+                     armH * 1.24, Math.max(0.7, tH * 0.22));
+        ctx.globalAlpha = hair * 0.34;
+        ctx.fillRect(-Math.max(0.35, tV * 0.11), -armV * 0.58,
+                     Math.max(0.7, tV * 0.22), armV * 1.16);
+      }
+      ctx.restore();
+
       // The point itself: red-hot rim, white-hot centre.
       ctx.globalAlpha = 1;
-      ctx.fillStyle = `rgba(255,86,64,${Math.min(1, alpha * 0.95)})`;
-      ctx.beginPath(); ctx.arc(x, y, core * 1.7, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = `rgba(255,240,232,${Math.min(1, 0.65 + level * 0.45)})`;
+      ctx.fillStyle = `rgba(255,74,54,${Math.min(1, alpha * 0.95)})`;
+      ctx.beginPath(); ctx.arc(x, y, core * 2.1, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = `rgba(255,242,236,${Math.min(1, 0.68 + level * 0.42)})`;
       ctx.beginPath(); ctx.arc(x, y, core, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = alpha;
     }
     ctx.restore();
   }

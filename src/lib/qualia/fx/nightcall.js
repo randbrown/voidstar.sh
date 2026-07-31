@@ -1,10 +1,10 @@
 // Nightcall — homage to Vincent Belorgey (Kavinsky). The premise of the
 // song as a quale, in two modes that auto-phase walks like chapters:
 //
-//   highway    — rear view: the red Testarossa (the outrun arcade sprite)
-//                running a dead-straight rain-slick night highway at an
-//                enormous low moon, city silhouetted on its face, sodium
-//                streetlights strobing past. The road never bends — only
+//   outrun     — rear view: a vector Testarossa running a dead-straight
+//                rain-slick night highway at an enormous low moon, city
+//                silhouetted on its face, sodium streetlights strobing
+//                past. Named for the cabinet. The road never bends — only
 //                the car sways in its lane, so the moon stays nailed to
 //                the vanishing point the way it does on the record covers.
 //   testarossa — side view: a procedural vector illustration of the legend
@@ -25,7 +25,7 @@
 //   spectrum    -> city skyline silhouette
 //
 // Pose map:
-//   head.x      -> lane sway (highway) / car drift (testarossa)
+//   head.x      -> lane sway (outrun) / car drift (testarossa)
 //
 // Idle (no audio): the car cruises, dashes scroll, ambient lightning on a
 // slow random timer. The night doesn't stop.
@@ -35,7 +35,7 @@ import { lmToCanvas } from '../video.js';
 
 const TAU = Math.PI * 2;
 
-const HORIZON = 0.44;            // highway horizon as a fraction of H
+const HORIZON = 0.44;            // outrun horizon as a fraction of H
 const NUM_STARS = 110;
 const NUM_RAIN = 150;
 const SKY_BINS = 48;             // skyline spectrum bins
@@ -43,7 +43,7 @@ const MAX_BOLTS = 6;
 const TRUNK_PTS = 16;            // points per lightning trunk
 const BRANCHES = 4;              // branches per bolt
 const BRANCH_PTS = 7;            // points per branch
-const LIGHT_SPACING = 0.16;      // highway streetlight spacing (depth units)
+const LIGHT_SPACING = 0.16;      // outrun streetlight spacing (depth units)
 const NUM_LIGHTS = 7;            // visible poles per side
 const NUM_RAYS = 9;              // god-rays standing on the vanishing point
 const NUM_CLOUDS = 18;           // puffs in the storm bank
@@ -89,7 +89,7 @@ export default {
 
   params: [
     { id: 'mode', label: 'mode', type: 'select',
-      options: ['highway', 'testarossa'], default: 'highway' },
+      options: ['outrun', 'testarossa'], default: 'outrun' },
     { id: 'speed', label: 'speed', type: 'range', min: 0, max: 4, step: 0.05, default: 1.0,
       modulators: [
         { source: 'audio.total', mode: 'mul', amount: 0.35 },
@@ -117,24 +117,24 @@ export default {
     { id: 'reactivity', label: 'reactivity', type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
   ],
 
-  // Chapters: highway cruise → highway storm → the legend side-on →
+  // Chapters: outrun cruise → outrun storm → the legend side-on →
   // the legend in the full storm.
   autoPhase: {
     steps: [
-      { mode: 'highway',    storm: 0.25, rain: 0.25, speed: 1.4, moon: 1.0, rays: 0.6 },
-      { mode: 'highway',    storm: 1.0,  rain: 0.6,  speed: 1.0, moon: 1.3, rays: 1.0 },
+      { mode: 'outrun',    storm: 0.25, rain: 0.25, speed: 1.4, moon: 1.0, rays: 0.6 },
+      { mode: 'outrun',    storm: 1.0,  rain: 0.6,  speed: 1.0, moon: 1.3, rays: 1.0 },
       { mode: 'testarossa', storm: 1.0,  rain: 0.5,  speed: 1.0, moon: 1.0, rays: 0.8 },
       { mode: 'testarossa', storm: 1.8,  rain: 0.9,  glow: 1.4, moon: 1.3, rays: 1.2 },
     ],
   },
 
   presets: {
-    default:    { mode: 'highway', speed: 1.0, storm: 1.0, glow: 1.0, city: true,
+    default:    { mode: 'outrun', speed: 1.0, storm: 1.0, glow: 1.0, city: true,
                   rain: 0.6, moon: 1.0, rays: 0.8, poseInfluence: 0.5, reactivity: 1.0 },
-    cruise:     { mode: 'highway', speed: 1.5, storm: 0.25, rain: 0.25, rays: 0.6 },
-    storm:      { mode: 'highway', storm: 1.8, rain: 0.9, glow: 1.3, rays: 1.1 },
+    cruise:     { mode: 'outrun', speed: 1.5, storm: 0.25, rain: 0.25, rays: 0.6 },
+    storm:      { mode: 'outrun', storm: 1.8, rain: 0.9, glow: 1.3, rays: 1.1 },
     // The record sleeve: moon overrunning the frame, rays wide open.
-    moonrise:   { mode: 'highway', storm: 0.4, rain: 0.35, moon: 1.5, rays: 1.4, speed: 0.8 },
+    moonrise:   { mode: 'outrun', storm: 0.4, rain: 0.35, moon: 1.5, rays: 1.4, speed: 0.8 },
     testarossa: { mode: 'testarossa', storm: 1.0, rain: 0.5 },
     legend:     { mode: 'testarossa', storm: 1.8, rain: 0.9, glow: 1.5, rays: 1.2 },
   },
@@ -365,7 +365,7 @@ export default {
       time: 0, dt: 0, speed: 1,
       bass: 0, mids: 0, highs: 0, total: 0, beatPulse: 0, rms: 0,
       audioOn: false, brake: 0,
-      mode: 'highway', storm: 1, glow: 1, rainAmt: 0.6, city: true,
+      mode: 'outrun', storm: 1, glow: 1, rainAmt: 0.6, city: true,
       moon: 1, rays: 0.8,
     };
 
@@ -374,7 +374,10 @@ export default {
       const audio = scaleAudio(field.audio, params.reactivity);
       const dt = field.dt;
       const audioOn = !!audio.spectrum;
-      const mode = params.mode === 'testarossa' ? 'testarossa' : 'highway';
+      // Anything that isn't the side view is the rear view — which also
+      // silently carries the old 'highway' id forward for anyone whose
+      // saved params or Strudel patterns still name it.
+      const mode = params.mode === 'testarossa' ? 'testarossa' : 'outrun';
 
       // Cruise speed — the resolved speed param already carries audio.total.
       const spd = params.speed * (0.65 + audio.bands.bass * 0.4 + audio.bands.mids * 0.25);
@@ -486,7 +489,7 @@ export default {
     }
 
     // Road-space helper — p in [0..1], 0 at the horizon, 1 at the bottom.
-    // The centreline is fixed at W/2: this highway does not bend.
+    // The centreline is fixed at W/2: this road does not bend.
     function roadHalf(p) { return W * 0.02 + p * p * W * 0.42; }
 
     // ── Shared sky: stars + lightning + flash, down to skyBottom px ─────
@@ -731,8 +734,8 @@ export default {
       ctx.restore();
     }
 
-    // ── Highway mode (rear view) ────────────────────────────────────────
-    function renderHighway() {
+    // ── Outrun mode (rear view) ─────────────────────────────────────────
+    function renderOutrun() {
       const t = scratch.time;
       const hy = H * HORIZON;
       const fs = Math.min(W, H) / 1080;
@@ -1123,9 +1126,11 @@ export default {
       }
 
       // ── The tail band ────────────────────────────────────────────────
-      // Black panel spanning the full width, lights burning behind it, then
-      // the slats laid over the whole thing. That order is the signature.
-      const bandTop = 0.585, bandBot = 0.315;
+      // Black egg-crate panel spanning the full width, tail lights burning
+      // behind it, then the fins laid over the whole thing — lights and all.
+      // Running the fins straight across the lamps is the signature; on the
+      // real car the lights are simply what you see through the grille.
+      const bandTop = 0.600, bandBot = 0.330;
       ctx.fillStyle = '#08090f';
       ctx.fillRect(X(-0.50), Y(bandTop), CW, Y(bandBot) - Y(bandTop));
 
@@ -1134,45 +1139,80 @@ export default {
       ctx.rect(X(-0.50), Y(bandTop), CW, Y(bandBot) - Y(bandTop));
       ctx.clip();
       ctx.globalCompositeOperation = 'lighter';
+      // Lamps run from the outer edge nearly to the middle, leaving the
+      // dark centre section the badge sits over.
       for (let s = -1; s <= 1; s += 2) {
-        const lx = X(s * 0.325);
+        const lx = X(s * 0.315);
         const ly = Y((bandTop + bandBot) / 2);
         ctx.globalAlpha = Math.min(1, tlA);
-        ctx.drawImage(glowRed, lx - CW * 0.20, ly - CH * 0.26, CW * 0.40, CH * 0.52);
-        ctx.globalAlpha = Math.min(1, tlA * 0.9);
+        ctx.drawImage(glowRed, lx - CW * 0.24, ly - CH * 0.28, CW * 0.48, CH * 0.56);
+        ctx.globalAlpha = Math.min(1, tlA * 0.92);
         ctx.fillStyle = '#ff2b32';
-        ctx.fillRect(lx - CW * 0.145, ly - CH * 0.105, CW * 0.29, CH * 0.21);
+        ctx.fillRect(lx - CW * 0.175, ly - CH * 0.098, CW * 0.35, CH * 0.196);
       }
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
       ctx.restore();
 
-      // Slats — five fins straight across, lights and all.
-      ctx.fillStyle = '#0a0c12';
-      for (let i = 0; i < 5; i++) {
-        const v = bandBot + (i + 0.5) * (bandTop - bandBot) / 5;
-        ctx.fillRect(X(-0.50), Y(v), CW, Math.max(1.2, CH * 0.030));
+      // Fins — six thin ones straight across, tighter than the eye expects,
+      // which is what makes the panel read as a grille and not a stripe.
+      const FINS = 6;
+      for (let i = 0; i < FINS; i++) {
+        const v = bandBot + (i + 0.5) * (bandTop - bandBot) / FINS;
+        ctx.fillStyle = '#0a0c12';
+        ctx.fillRect(X(-0.50), Y(v), CW, Math.max(1.2, CH * 0.026));
+        // A cold edge on top of each, so they read as metal.
+        ctx.fillStyle = 'rgba(150,180,235,0.20)';
+        ctx.fillRect(X(-0.50), Y(v), CW, Math.max(0.6, CH * 0.007));
       }
-      // Fin highlights — a cold edge on top of each, so they read as metal.
-      ctx.fillStyle = 'rgba(150,180,235,0.18)';
-      for (let i = 0; i < 5; i++) {
-        const v = bandBot + (i + 0.5) * (bandTop - bandBot) / 5;
-        ctx.fillRect(X(-0.50), Y(v), CW, Math.max(0.6, CH * 0.008));
-      }
+      // Prancing-horse badge on the dark centre panel.
+      ctx.fillStyle = '#e8c020';
+      ctx.fillRect(X(-0.017), Y(0.505), CW * 0.034, CH * 0.075);
+      ctx.fillStyle = '#141008';
+      ctx.fillRect(X(-0.010), Y(0.494), CW * 0.020, CH * 0.045);
 
-      // Valance: plate, quad pipes, diffuser shadow.
+      // ── Valance ──────────────────────────────────────────────────────
+      // Black bumper section below the grille: plate dead centre, reversing
+      // lamps either side of it, quad pipes underneath.
       ctx.fillStyle = '#0d0f16';
-      ctx.fillRect(X(-0.50), Y(bandBot), CW, Y(0.10) - Y(bandBot));
-      ctx.fillStyle = '#dfe6f5';
-      ctx.fillRect(X(-0.105), Y(0.265), CW * 0.21, CH * 0.10);
-      ctx.fillStyle = '#0a0c14';
-      ctx.fillRect(X(-0.085), Y(0.252), CW * 0.17, CH * 0.055);
-      ctx.fillStyle = '#161a24';
-      for (let i = 0; i < 4; i++) {
-        ctx.beginPath();
-        ctx.arc(X(-0.075 + i * 0.05), Y(0.145), CW * 0.017, 0, TAU);
-        ctx.fill();
+      ctx.fillRect(X(-0.50), Y(bandBot), CW, Y(0.085) - Y(bandBot));
+      // Body-colour strip between grille and bumper.
+      ctx.fillStyle = 'rgba(150,14,26,0.9)';
+      ctx.fillRect(X(-0.50), Y(bandBot), CW, Math.max(1, CH * 0.022));
+
+      // Plate.
+      const plW = CW * 0.230, plH = CH * 0.115;
+      const plX = X(-0.115), plY = Y(0.285);
+      ctx.fillStyle = '#e9eef8';
+      ctx.beginPath(); ctx.roundRect(plX, plY, plW, plH, CW * 0.006); ctx.fill();
+      ctx.strokeStyle = 'rgba(40,50,70,0.7)';
+      ctx.lineWidth = Math.max(0.6, fs * 0.8);
+      ctx.beginPath(); ctx.roundRect(plX, plY, plW, plH, CW * 0.006); ctx.stroke();
+      ctx.fillStyle = '#131820';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `600 ${Math.max(4, plH * 0.72)}px ui-sans-serif, "Helvetica Neue", Arial, sans-serif`;
+      ctx.fillText('KVNSKY', plX + plW / 2, plY + plH * 0.55);
+
+      // Reversing lamps flanking the plate.
+      for (let s = -1; s <= 1; s += 2) {
+        const rx = X(s * 0.215 - (s > 0 ? 0.058 : 0));
+        ctx.fillStyle = 'rgba(236,244,255,0.92)';
+        ctx.fillRect(rx, Y(0.272), CW * 0.058, CH * 0.052);
+        ctx.fillStyle = 'rgba(150,175,215,0.5)';
+        ctx.fillRect(rx, Y(0.272), CW * 0.058, Math.max(0.6, CH * 0.010));
       }
+      // Quad pipes, clear of the plate.
+      for (let i = 0; i < 4; i++) {
+        const ex = X(-0.072 + i * 0.048);
+        ctx.fillStyle = '#242a35';
+        ctx.beginPath(); ctx.arc(ex, Y(0.122), CW * 0.018, 0, TAU); ctx.fill();
+        ctx.fillStyle = '#05070b';
+        ctx.beginPath(); ctx.arc(ex, Y(0.122), CW * 0.012, 0, TAU); ctx.fill();
+      }
+      // Diffuser shadow under the valance.
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(X(-0.44), Y(0.095), CW * 0.88, CH * 0.040);
 
       // Body highlights: rear-deck edge and the two shoulder lines. Cold
       // white, because the only light back here is the moon.
@@ -1181,9 +1221,10 @@ export default {
       ctx.beginPath();
       ctx.moveTo(X(-0.355), Y(0.828)); ctx.lineTo(X(0.355), Y(0.828));
       ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,200,200,0.22)';
+      // Deck lip along the top of the grille — the ridge the light catches.
+      ctx.strokeStyle = 'rgba(255,206,206,0.30)';
       ctx.beginPath();
-      ctx.moveTo(X(-0.50), Y(0.60)); ctx.lineTo(X(0.50), Y(0.60));
+      ctx.moveTo(X(-0.50), Y(bandTop)); ctx.lineTo(X(0.50), Y(bandTop));
       ctx.stroke();
 
       // Door mirrors, sitting on the C-pillar shoulders where the
@@ -1594,8 +1635,8 @@ export default {
       drawSkyCharge(horizonY);
       drawClouds(horizonY, t);
 
-      // The same moon as the highway, pushed off to the right so the car
-      // gets the centre — still far too big for the frame, still cropped.
+      // The same moon as the outrun view, pushed off to the right so the
+      // car gets the centre — still far too big for the frame, still cropped.
       const mr = Math.max(W, H) * 0.26 * scratch.moon;
       if (scratch.moon > 0.01) drawMoon(W * 0.78, horizonY - mr * 0.62, mr, horizonY);
 
@@ -1626,7 +1667,7 @@ export default {
         }
       }
 
-      // Ground fog against the horizon, same as the highway gets.
+      // Ground fog against the horizon, same as the outrun view gets.
       ctx.globalCompositeOperation = 'lighter';
       ctx.fillStyle = fogGradTall;
       ctx.fillRect(0, horizonY - H * 0.17, W, H * 0.19);
@@ -1691,7 +1732,7 @@ export default {
 
     function render() {
       if (scratch.mode === 'testarossa') renderTestarossa();
-      else renderHighway();
+      else renderOutrun();
 
       // The strike lands on the finished frame — sky, road and car all lift
       // together, then the rain falls through the lit air.
