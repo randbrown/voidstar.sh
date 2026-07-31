@@ -35,12 +35,27 @@
 # those to https costs nothing for anything the app itself loads (all already
 # https) and removes the whole failure class.
 #
-# This deliberately does NOT break the OBS remote's ws://127.0.0.1:4455. The
-# upgrade algorithm returns early for potentially-trustworthy URLs (loopback
-# counts) and for IP-literal hosts, so both the default OBS URL and a LAN-IP
-# override are left alone. Verified on Chromium 141 by pointing a page carrying
-# this header at a raw socket: a plaintext WebSocket handshake still arrives,
-# byte-identical to the no-CSP control.
+# This deliberately does NOT break the OBS remote's ws://127.0.0.1:4455: the
+# upgrade algorithm returns early for potentially-trustworthy URLs, and loopback
+# counts. Verified on Chromium 141 by pointing a page carrying this header at a
+# raw socket — a plaintext WebSocket handshake still arrives, byte-identical to
+# the no-CSP control.
+#
+# It DOES break a non-loopback OBS address, and an earlier version of this
+# comment claimed otherwise ("the upgrade algorithm returns early for IP-literal
+# hosts"). That carve-out is in the spec but is NOT what Chromium implements.
+# Measured on Chromium 141, same page, same header:
+#   with this CSP:  new WebSocket('ws://<lan-ip>:4444').url === 'wss://<lan-ip>:4444/'
+#   without it:     …                                    === 'ws://<lan-ip>:4444/'
+# OBS serves no TLS, so the upgraded handshake dies and the console blames a
+# `wss://` URL the user never typed.
+#
+# Dropping the directive would not buy a LAN OBS anything: a plaintext ws:// to
+# a non-loopback host is mixed content from an https page and is blocked before
+# a packet leaves (also measured — the raw listener saw zero bytes). So loopback
+# is the only workable OBS address from the deployed site either way, the
+# directive stays, and src/lib/qualia/obs.js (obsUrlProblem) says all of this in
+# the UI instead of letting it surface as a six-second timeout.
 /*
   X-Frame-Options: SAMEORIGIN
   Content-Security-Policy: frame-ancestors 'self'; upgrade-insecure-requests

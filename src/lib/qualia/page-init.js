@@ -36,7 +36,7 @@ import { initQRInterject } from './qr-interject.js';
 import { initSyncUI } from './sync-ui.js';
 import { createRecorder } from './recorder.js';
 import { createObsClient, loadObsConfig, saveObsConfig, displayPixelSize,
-         fitReport, aspectLabel } from './obs.js';
+         fitReport, aspectLabel, obsUrlProblem } from './obs.js';
 import { loadExcluded as loadCycleExcluded, saveExcluded as saveCycleExcluded, isInCycle } from './cycle-pool.js';
 import {
   loadExcludedFor as loadPhaseExcludedFor,
@@ -3396,7 +3396,43 @@ export function initQualiaPage() {
   const obsDlgDisc    = document.getElementById('obs-cfg-disconnect');
   const obsDlgStatus  = document.getElementById('obs-cfg-status');
   const obsDlgDot     = document.getElementById('obs-cfg-dot');
+  const obsDlgFix     = document.getElementById('obs-cfg-fix');
+  const obsDlgNote    = document.getElementById('obs-cfg-note');
   const btnRecObsSetup = document.getElementById('btn-rec-obs-setup');
+
+  // Address diagnosis, read from whatever is in the field right now (not from
+  // the saved config) so a bad address is answered before a connect is spent on
+  // it. See obsUrlProblem() in obs.js for the two browser rules being reported.
+  //
+  // `quiet` is the keystroke path: half-typed input is nearly always "broken"
+  // (`ws://1` on the way to `ws://127.0.0.1`), and raising a red block on every
+  // keystroke would be nagging rather than helping. So while typing we only
+  // ever CLEAR — the reward for fixing the address is immediate, and a new
+  // complaint waits for commit (blur/enter), open, or connect.
+  let obsUrlNoteMsg = '';   // deduped against the status line — see refreshObsDialog
+  function refreshObsUrlNote({ quiet = false } = {}) {
+    if (!obsDlgNote && !obsDlgFix) return null;
+    const raw = (obsDlgUrl?.value ?? obsCfg.url ?? '').trim();
+    const p = obsUrlProblem(raw);
+    const showing = obsDlgNote ? obsDlgNote.style.display !== 'none'
+                  : obsDlgFix.style.display !== 'none';
+    if (p && quiet && !showing) return p;   // don't interrupt mid-type
+    obsUrlNoteMsg = p?.message || '';
+    if (obsDlgNote) {
+      obsDlgNote.style.display = p ? '' : 'none';
+      obsDlgNote.dataset.tone = p && !p.blocking ? 'warn' : 'error';
+      if (p) obsDlgNote.textContent = `${p.message}. ${p.detail}`;
+    }
+    if (obsDlgFix) {
+      obsDlgFix.style.display = p?.fix ? '' : 'none';
+      if (p?.fix) {
+        obsDlgFix.textContent = p.fix.label;
+        obsDlgFix.dataset.url = p.fix.url;
+        obsDlgFix.title = `Set the address to ${p.fix.url}`;
+      }
+    }
+    return p;
+  }
 
   function refreshObsDialog(s) {
     if (!obsDlg) return;
@@ -3407,9 +3443,12 @@ export function initQualiaPage() {
                       : st.connecting ? 'connecting…' : (st.error || 'not connected');
     }
     if (obsDlgStatus) {
+      // The address note spells the same failure out at length right below, so
+      // don't print it twice in a dialog this small.
+      const err = st.error && st.error === obsUrlNoteMsg ? '' : st.error;
       obsDlgStatus.textContent = st.connecting ? 'connecting…'
         : st.connected ? (st.recording ? 'connected · recording' : 'connected')
-        : st.error || '';
+        : err || '';
     }
     // Repopulate the scene picker, preserving the stored choice even when it
     // isn't in the list yet (not connected, or the scene was renamed).
@@ -3546,6 +3585,10 @@ export function initQualiaPage() {
     refreshObsDialog();
     refreshObsCanvas();
     refreshObsRestartRow();
+    // A blocking address problem is answered here and the connect is skipped —
+    // there is nothing to learn from a socket the browser won't open, and the
+    // note already says what to press.
+    if (refreshObsUrlNote()?.blocking) { refreshObsDialog(); return; }
     // Connecting on open is what makes the scene picker useful, and it's the
     // cheapest place to surface "OBS isn't running" — long before showtime.
     if (!obsClient.isConnected()) {
@@ -3574,7 +3617,19 @@ export function initQualiaPage() {
   btnRecObsSetup?.addEventListener('click', () => { closeAllGroupsExcept(null); openObsDialog(); });
   obsDlgClose?.addEventListener('click', closeObsDialog);
   obsDlgBackdrop?.addEventListener('click', closeObsDialog);
-  obsDlgUrl?.addEventListener('change', persistObsCfg);
+  obsDlgUrl?.addEventListener('change', () => { persistObsCfg(); refreshObsUrlNote(); });
+  obsDlgUrl?.addEventListener('input', () => refreshObsUrlNote({ quiet: true }));
+  // One press to make the address one the browser will actually send. It
+  // connects straight after: the whole point is that the next thing the user
+  // sees is a scene list, not another error.
+  obsDlgFix?.addEventListener('click', () => {
+    const url = obsDlgFix.dataset.url;
+    if (!url || !obsDlgUrl) return;
+    obsDlgUrl.value = url;
+    persistObsCfg();
+    refreshObsUrlNote();
+    obsDlgConnect?.click();
+  });
   obsDlgPass?.addEventListener('change', persistObsCfg);
   obsDlgScene?.addEventListener('change', persistObsCfg);
   obsDlgRestart?.addEventListener('click', () => {
@@ -3621,6 +3676,7 @@ export function initQualiaPage() {
   });
   obsDlgConnect?.addEventListener('click', () => {
     persistObsCfg();
+    refreshObsUrlNote();
     obsClient.disconnect();
     obsClient.connect(obsCfg)
       .then(() => { obsClient.syncRecordState(); return obsClient.refreshScenes(); })
@@ -4045,7 +4101,9 @@ export function initQualiaPage() {
         if (captureMode === 'obs') {
           // Never alert() mid-set — a modal you have to dismiss is worse than
           // a failed take. The message already names the likely fix.
-          showRecToastError(err?.message || String(err));
+          const fix = err?.obsProblem?.fix;
+          showRecToastError((err?.message || String(err))
+            + (fix ? ` — open obs… and press “${fix.label}”` : ''));
           refreshRecordModeBtn();
           return;
         }

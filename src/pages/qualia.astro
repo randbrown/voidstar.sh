@@ -1499,6 +1499,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .obs-cfg-fit .warn { color: var(--accent); }
     .obs-cfg-fit .good { color: var(--green); }
     #obs-cfg-actions { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+    /* Address diagnosis. Reads as an error, not a hint — it is the difference
+       between "OBS is misconfigured" (it isn't) and "this address can never
+       connect from an https page" (it can't). */
+    .obs-cfg-note {
+      font-size: 0.66rem; line-height: 1.45; color: var(--pink);
+      border-left: 2px solid var(--pink); padding: 0.15rem 0 0.15rem 0.45rem;
+    }
+    .obs-cfg-note[data-tone="warn"] { color: var(--accent); border-left-color: var(--accent); }
+    .obs-cfg-note code { color: var(--cyan); font-family: inherit; }
     .obs-cfg-dot { font-size: 0.7rem; color: var(--muted); }
     .obs-cfg-dot[data-state="on"]      { color: var(--green); }
     .obs-cfg-dot[data-state="busy"]    { color: var(--accent); }
@@ -3729,10 +3738,20 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div id="obs-cfg-actions">
       <button class="ctrl-btn" id="obs-cfg-connect" title="Connect to OBS and load its scene list">connect</button>
       <button class="ctrl-btn" id="obs-cfg-disconnect" title="Drop the connection">disconnect</button>
+      <button class="ctrl-btn" id="obs-cfg-fix" style="display:none"
+              title="Rewrite the address to one the browser will actually send, keeping your port">use 127.0.0.1</button>
       <span class="qualem-share-status" id="obs-cfg-status"></span>
     </div>
+    <!-- Only rendered when the address itself is the problem: an https page
+         cannot send a plaintext ws:// anywhere but loopback, and the resulting
+         failure otherwise looks exactly like "OBS isn't running". -->
+    <div class="obs-cfg-note" id="obs-cfg-note" style="display:none"></div>
     <div class="qualem-share-hint">
-      OBS must be running with <b>Tools → WebSocket Server Settings → Enable WebSocket server</b>.
+      OBS must be running on <b>this machine</b> with <b>Tools → WebSocket Server Settings → Enable
+      WebSocket server</b>, and the address must be <code>127.0.0.1</code> on that panel's
+      <i>Server Port</i>. A LAN address can't work: this page is https, so the browser upgrades a
+      plaintext <code>ws://</code> to <code>wss://</code> (which OBS can't answer) or blocks it
+      outright — loopback is the only exemption.
       Build the scene once in OBS — <i>Display Capture</i> of the screen this app is fullscreened on is
       the most faithful (it catches native dropdowns and OS menus that window capture can miss);
       <i>Window Capture</i> of the installed PWA window works when you want the app without the rest
