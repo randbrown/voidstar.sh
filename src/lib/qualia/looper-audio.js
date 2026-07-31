@@ -357,7 +357,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     // at record time; the scope + tuner stay PRE-strip for a clean signal.
     strip = createRigStrip(ctx, _stripConfig);
     if (_cabBuffer) strip.setCabBuffer(_cabBuffer);
-    if (_ampModel) strip.setAmpModel(_ampModel);
+    if (_ampModel) strip.setAmpModel(_ampModel).catch((e) => console.warn('[qualia] amp reload failed:', e));
     inputNode.connect(strip.input);
 
     // Rig signal monitor: strip → sigGain (volume × mute) → speakers, plus a
@@ -1562,12 +1562,15 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     },
     clearCabIR: () => { _cabBuffer = null; strip?.setCabBuffer(null); },
     hasCabIR: () => !!_cabBuffer,
-    // Neural amp: a normalised LSTM model (from neural-amp-model.js) applied to
-    // the strip's worklet node; kept across capture reopens.
-    setAmpModel: (model) => { _ampModel = model || null; strip?.setAmpModel(_ampModel); },
-    clearAmp: () => { _ampModel = null; strip?.setAmpModel(null); },
+    // Neural amp: a normalised LSTM or WaveNet model (from neural-amp-model.js)
+    // applied to the strip's worklet node; kept across capture reopens. Async —
+    // a WaveNet capture waits on the WASM kernel — and rejects with a reason.
+    setAmpModel: (model) => { _ampModel = model || null; return strip ? strip.setAmpModel(_ampModel) : Promise.resolve(false); },
+    clearAmp: () => { _ampModel = null; return strip ? strip.setAmpModel(null).catch(() => false) : Promise.resolve(false); },
     hasAmp: () => !!_ampModel,
     isAmpCapable: () => typeof AudioWorkletNode !== 'undefined',
+    // Context rate, for flagging a capture trained at a different one.
+    getSampleRate: () => ctx?.sampleRate || 0,
     isBuffering: () => _bufferOn && !!srcNode,
     isRetroCapable: () => usingWorklet,
     // How much lookback is available right now, for the "grab" buffer readout.

@@ -2581,6 +2581,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       border: 1px solid var(--border); border-radius: 4px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
+    /* Result of the last load, INSIDE the loader row. The looper's own status
+       line lives in a different subpanel, so a rejected capture used to fail
+       where nobody was looking. Wraps — refusal reasons name what stopped them. */
+    .rig-lib-msg {
+      flex: 1 1 100%; min-width: 0;
+      font-size: 0.55rem; line-height: 1.25; color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .rig-lib-msg:empty { display: none; }
+    .rig-lib-msg.err { color: var(--pink); }
     #rig-temper .ctrl-btn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10); }
     .rig-temper-grid { display: flex; flex-wrap: wrap; gap: 0.25rem 0.4rem; }
     .rig-temper-cell { display: flex; align-items: center; gap: 0.2rem; font-size: 0.62rem; }
