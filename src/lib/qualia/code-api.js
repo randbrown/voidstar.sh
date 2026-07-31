@@ -38,6 +38,14 @@ import { AUDIO_PRESET_NAMES, loadFxUserPresets, saveFxUserPreset } from './prese
 import * as qualemStore from './qualem.js';
 import { getRotation, setRotation, getMirror, setMirror } from './video.js';
 import { QUALIA_FUNCTIONS } from './strudel-reference.js';
+import { getBool, setBool } from './prefs.js';
+
+// Do pattern lanes switch off the hands-off timer they'd otherwise fight?
+// Persisted, default on — see the auto-yield note down in the bindings. Cached
+// in a module local because every lane hap reads it: localStorage.getItem is
+// sync main-thread I/O and a `.segment(16)` lane would hit it 16×/cycle.
+const AUTO_YIELD_KEY = 'voidstar.qualia.autoYield';
+let _autoYield = getBool(AUTO_YIELD_KEY, true);
 
 /** No-throw wrapper for engine calls made from pattern callbacks. */
 function safe(fn, fallback = null) {
@@ -60,6 +68,19 @@ function gsBool(get, set) {
     set(!!on);
     return !!get();
   };
+}
+
+/**
+ * Resolve an auto-timer period argument. Numbers are seconds (0 = off);
+ * `false` is off; `true` resumes the remembered dwell — the same value the
+ * topbar toggle turns back on to — so undoing an auto-yield (or any
+ * `autoCycle(0)`) is one call and doesn't need the performer to remember what
+ * the dwell was.
+ */
+function autoSeconds(v, dwell) {
+  if (v === true)  return dwell();
+  if (v === false) return 0;
+  return Math.max(0, +v || 0);
 }
 
 /** Shallow-copy a config get/patch pair: fn() snapshots, fn(patch) merges. */
@@ -122,6 +143,10 @@ export function installCodeApi(deps) {
     if (!fxId) return false;
     return core.setParam(fxId, name, value);
   }
+
+  // Memo for api.phaseParams() — a dense `qset` lane asks on every hap, and the
+  // answer only changes when the active quale does.
+  let _phaseParams = { id: null, ids: [] };
 
   // ── The api object ────────────────────────────────────────────────────────
   const api = {
@@ -189,19 +214,39 @@ export function installCodeApi(deps) {
     },
 
     // — phase / cycle / transitions —
-    /** Step the active quale's phase (dir ±1). */
-    phase: (dir = 1) => page.phaseShift(dir >= 0 ? +1 : -1),
-    /** autoPhase() → {seconds, style}; autoPhase(10, 'random') sets both. */
+    /** Step the active quale's phase (dir ±1). True if a step landed — false
+     *  when the active quale declares no phases (or all of them are pooled
+     *  out), which is what the qphase lane's auto-yield keys off. */
+    phase: (dir = 1) => !!page.phaseShift(dir >= 0 ? +1 : -1),
+    /** autoPhase() → {seconds, style}; autoPhase(10, 'random') sets both.
+     *  0/false = off, true = resume the remembered dwell. */
     autoPhase: (seconds, style) => {
-      if (seconds !== undefined) page.setPhasePeriod(Math.max(0, +seconds || 0));
+      if (seconds !== undefined) page.setPhasePeriod(autoSeconds(seconds, page.getPhaseDwell));
       if (style !== undefined) page.setPhaseStyle(style);
       return { seconds: page.getPhasePeriod(), style: page.getPhaseStyle() };
     },
-    /** autoCycle() → {seconds, style}; autoCycle(30, 'random') sets both. */
+    /** autoCycle() → {seconds, style}; autoCycle(30, 'random') sets both.
+     *  0/false = off, true = resume the remembered dwell. */
     autoCycle: (seconds, style) => {
-      if (seconds !== undefined) page.setCyclePeriod(Math.max(0, +seconds || 0));
+      if (seconds !== undefined) page.setCyclePeriod(autoSeconds(seconds, page.getCycleDwell));
       if (style !== undefined) page.setCycleStyle(style);
       return { seconds: page.getCyclePeriod(), style: page.getCycleStyle() };
+    },
+    /** Do pattern lanes switch off the timer they'd fight? Default true;
+     *  `autoYield(false)` lets both run (the old behaviour). */
+    autoYield: gsBool(() => _autoYield, (on) => { _autoYield = on; setBool(AUTO_YIELD_KEY, on); }),
+    /** Param ids the active quale's auto-phase steps write — i.e. the params a
+     *  `qset` lane would end up fighting auto-phase over. Empty when the quale
+     *  declares no phases. Cached per quale; treat the array as read-only. */
+    phaseParams: () => {
+      const id = core.activeId() || '';
+      if (_phaseParams.id !== id) {
+        const steps = mesh.get(id)?.autoPhase?.steps;
+        const out = new Set();
+        if (Array.isArray(steps)) for (const s of steps) for (const k of Object.keys(s || {})) out.add(k);
+        _phaseParams = { id, ids: [...out] };
+      }
+      return _phaseParams.ids;
     },
     /** Scene-change bridge: transition() → {style, ms}; transition('wipe', 1200). */
     transition: (style, ms) => page.setTransition(style, ms),
@@ -463,7 +508,13 @@ export function installCodeApi(deps) {
   }
   g.qualia = existing;
 
-  installStrudelBindings(existing);
+  // Page-side hooks the bindings need but that don't belong on the public
+  // `qualia` object: the topbar pulse when a lane yields, and the arm counter
+  // that tells a lane whether its claim has been superseded.
+  installStrudelBindings(existing, {
+    flashAuto: (kind) => page.flashAuto?.(kind),
+    armEpoch:  (kind) => page.autoArmEpoch?.(kind) ?? 0,
+  });
   return existing;
 }
 
@@ -496,7 +547,7 @@ function atAudibleTime(args, fn) {
   else fn(hap);
 }
 
-function tryRegisterStrudelBindings(api) {
+function tryRegisterStrudelBindings(api, hooks) {
   const g = globalThis;
   if (typeof g.register !== 'function' || typeof g.reify !== 'function') return false;
 
@@ -527,23 +578,101 @@ function tryRegisterStrudelBindings(api) {
   const lane = (pat, apply) =>
     g.reify(pat).onTrigger((...args) => atAudibleTime(args, apply), true);
 
+  // ── Auto-yield: a lane claims the wheel ───────────────────────────────────
+  // A `quale()` lane and auto-cycle drive the same knob; `qphase()`,
+  // `qpreset()` and a colliding `qset()` all write the same params auto-phase
+  // steps. With both running, one control has two masters: the lane sets a
+  // look, the dwell timer moves it seconds later, the lane snaps it back on its
+  // next hap — on stage that reads as the visuals stuttering, and it's the one
+  // thing a performer can't debug mid-set. The typed pattern is the more
+  // specific intent, so a lane CLAIMS the wheel and the matching timer stands
+  // down.
+  //
+  // Last deliberate act wins, and a claim is how a lane takes its turn:
+  //
+  //   - One claim per lane INSTANCE. A lane object is built fresh by every
+  //     editor eval, so re-evaluating the pattern hands the wheel back.
+  //   - The claim is spent even when the timer was already off — the lane
+  //     asserting itself is the event, not the write. So anything explicit you
+  //     do afterwards STICKS instead of being clawed back on the next hap of a
+  //     lane that already had its say.
+  //   - Deliberately ARMING a timer (topbar toggle, dwell picker, hotkey,
+  //     `autoCycle(true)`, a qualem recall) bumps page.autoArmEpoch and voids
+  //     any outstanding claim, so an explicit arm outranks even a lane that
+  //     hasn't fired yet — recall a scene between a `.slow(32)` lane's haps and
+  //     the recall stands. The yield itself only ever writes 0, so it can't
+  //     void its own claim.
+  //
+  // Reversible by design: the yield goes through setCyclePeriod/setPhasePeriod,
+  // so the topbar toggle flips with it, the remembered dwell survives, and one
+  // click (or `qualia.autoCycle(true)`) puts it back. `qualia.autoYield(false)`
+  // opts out entirely for anyone who wants the two layered.
+  const knobFor = (kind) => (kind === 'cycle' ? api.autoCycle : api.autoPhase);
+  const armEpoch = (kind) => hooks?.armEpoch?.(kind) ?? 0;
+
+  /** A single lane instance's one-shot claim on `kind`'s wheel. */
+  const yieldClaim = (kind) => {
+    const born = armEpoch(kind);
+    let spent = false;
+    // Also lets a caller skip work it only needs in order to decide whether to
+    // claim — see the `qset` collision scan below.
+    const live = () => !spent && _autoYield && armEpoch(kind) === born;
+    const claim = () => {
+      if (!live()) return;
+      spent = true;
+      const knob = knobFor(kind);
+      if (!(knob().seconds > 0)) return;   // nothing to stand down
+      knob(0);
+      hooks?.flashAuto?.(kind);
+      const restore = kind === 'cycle' ? 'autoCycle' : 'autoPhase';
+      console.info(`[qualia] auto-${kind} off — a pattern lane took the wheel (qualia.${restore}(true) to restore, qualia.autoYield(false) to keep both)`);
+    };
+    claim.live = live;
+    return claim;
+  };
+
   // Switch the active quale per event: quale("<chladni fractal>").slow(8)
-  define('quale', (pat) =>
-    lane(pat, (hap) => api.quale(String(laneValue(hap)))));
+  // Claims only on a resolved id — a typo'd quale name fizzles with a warning
+  // and must not cost the performer their cycle settings.
+  define('quale', (pat) => {
+    const claim = yieldClaim('cycle');
+    return lane(pat, (hap) => { if (api.quale(String(laneValue(hap))) !== null) claim(); });
+  });
 
   // Drive an active-quale param from a pattern: qset("hue", sine.segment(16))
   // (continuous signals need .segment(n) to become discrete events).
-  define('qset', (name, pat) =>
-    lane(pat, (hap) => api.set(String(name), laneValue(hap))));
+  //
+  // Claims auto-phase only on a COLLISION — when the param is one the active
+  // quale's phase steps also write. `qset("palette", …)` under auto-phase is a
+  // real fight; `qset("reactivity", …)` isn't, and blanket-yielding on it would
+  // disarm the timer for no reason. The collision scan sits behind claim.live()
+  // so a dense `.segment(16)` lane doesn't pay for it once the claim is settled.
+  define('qset', (name, pat) => {
+    const claim = yieldClaim('phase');
+    const id = String(name);
+    return lane(pat, (hap) => {
+      if (!api.set(id, laneValue(hap))) return;
+      if (claim.live() && api.phaseParams().includes(id)) claim();
+    });
+  });
 
   // Apply factory/user presets by name per event: qpreset("<default punchy>")
-  define('qpreset', (pat) =>
-    lane(pat, (hap) => api.preset(String(laneValue(hap)))));
+  // A preset writes the whole param set — including the mode/palette keys
+  // auto-phase steps — so an applied preset claims the phase wheel too.
+  define('qpreset', (pat) => {
+    const claim = yieldClaim('phase');
+    return lane(pat, (hap) => { if (api.preset(String(laneValue(hap))) !== null) claim(); });
+  });
 
   // Step the active quale's phase per event; value is the direction (±1).
-  // qphase("1").slow(4) → a phase step every 4th cycle.
-  define('qphase', (pat) =>
-    lane(pat, (hap) => api.phase(Number(laneValue(hap)) || 1)));
+  // qphase("1").slow(4) → a phase step every 4th cycle. Claims only when a step
+  // actually landed: on a quale with no phases the timer's period is armed
+  // intent waiting for the next supporting quale, and a no-op lane hap has no
+  // business disarming it.
+  define('qphase', (pat) => {
+    const claim = yieldClaim('phase');
+    return lane(pat, (hap) => { if (api.phase(Number(laneValue(hap)) || 1)) claim(); });
+  });
 
   // Glitch mode rides a pattern: qglitch("mosh", "<off on off flip>")
   define('qglitch', (name, pat) =>
@@ -566,14 +695,14 @@ function tryRegisterStrudelBindings(api) {
   return true;
 }
 
-function installStrudelBindings(api) {
+function installStrudelBindings(api, hooks) {
   if (_strudelBindingsInstalled) return;
-  if (tryRegisterStrudelBindings(api)) { _strudelBindingsInstalled = true; return; }
+  if (tryRegisterStrudelBindings(api, hooks)) { _strudelBindingsInstalled = true; return; }
   if (_bindPollT) return;
   // Strudel lazy-loads on first panel open; poll until its globals appear.
   // Two typeof checks per tick — negligible even if the panel never opens.
   _bindPollT = setInterval(() => {
-    if (tryRegisterStrudelBindings(api)) {
+    if (tryRegisterStrudelBindings(api, hooks)) {
       _strudelBindingsInstalled = true;
       clearInterval(_bindPollT);
       _bindPollT = null;

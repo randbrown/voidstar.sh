@@ -11,7 +11,7 @@
 
 import {
   loadCurrent, saveCurrent, loadList, addToList, updateInList,
-  removeFromList, clonePattern, randomPattern, parseMetadata,
+  removeFromList, clonePattern, randomPattern, parseMetadata, activeLanes,
   setMetadata, patternDisplayName, downloadPattern,
 } from './patterns.js';
 import { makeDraggablePanel } from './panel-pos.js';
@@ -326,7 +326,7 @@ function saveAutocomplete(on) {
   try { localStorage.setItem(AUTOCOMPLETE_KEY, on ? '1' : '0'); } catch {}
 }
 
-export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange } = {}) {
+export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange, autoModes } = {}) {
   // Snapshot the previous-session panel state ONCE at init. open()/close()
   // mutate the flag for next time, but the answer to "should we restore the
   // last pattern?" is based on what the user did before this page load —
@@ -337,6 +337,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const mount  = document.getElementById('strudel-mount');
   const status = document.getElementById('strudel-status');
   const errEl  = document.getElementById('strudel-error');
+  const laneEl = document.getElementById('strudel-lanes');
   const btnToggle = document.getElementById('btn-strudel');
   const btnClose  = document.getElementById('btn-strudel-close');
   const btnPlay    = document.getElementById('btn-strudel-play');
@@ -479,8 +480,39 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       // persistCurrent is invoked), but the de-dup in notifyTitleIfChanged
       // keeps it cheap when nothing changed.
       notifyTitleIfChanged(parseMetadata(code).title || '');
+      refreshLaneChip(code);
     }
     return code;
+  }
+
+  // ── Live-lane chip ────────────────────────────────────────────────────────
+  // The q* control lanes are silent by design, so a buffer that's quietly
+  // driving the visuals looks identical in the UI to one that isn't. The chip
+  // names the lanes the current buffer declares, which is what "why did my
+  // quale stop cycling?" actually needs answered mid-set — including the case
+  // where the answer is "the roller parked that lane because auto-cycle is on".
+  //
+  // Refreshed wherever the buffer is already being read (eval, stop, the ~8 s
+  // auto-save, mount/load), and de-duped so a steady buffer never touches the
+  // DOM. Nothing here runs per frame or per hap.
+  let _lastLaneKey = null;
+  function refreshLaneChip(code) {
+    if (!laneEl) return;
+    const lanes = activeLanes(code || '');
+    const key = lanes.join(' ');
+    if (key === _lastLaneKey) return;
+    _lastLaneKey = key;
+    if (!lanes.length) {
+      laneEl.style.display = 'none';
+      laneEl.textContent = '';
+      laneEl.removeAttribute('title');
+      return;
+    }
+    laneEl.style.display = '';
+    laneEl.textContent = `⇢ ${lanes.join(' · ')}`;
+    laneEl.title = `Qualia control lanes live in this buffer: ${lanes.join(', ')}. `
+      + 'They drive the visuals silently — a quale() or qphase() lane also '
+      + 'stands the matching auto mode down (qualia.autoYield(false) to keep both).';
   }
 
   // Eval error indicator. Strudel reports syntax/runtime eval failures only to
@@ -713,7 +745,16 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       const stored = loadCurrent();
       if (stored && stored.trim()) return stored;
     }
-    return randomPattern();
+    return rollRandom();
+  }
+
+  // Every random roll goes through here so the generator always sees the
+  // current auto-cycle / auto-phase state and parks the lane that would fight
+  // it. `autoModes` is optional — without it the roll is the ungated pattern.
+  function rollRandom() {
+    let modes;
+    try { modes = autoModes?.(); } catch { modes = null; }
+    return randomPattern(modes || {});
   }
 
   function mountEditor() {
@@ -739,6 +780,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     // Surface the @title of whatever code we just mounted (initial random,
     // restored buffer, or a load). Sequencer mirrors this when sync is on.
     notifyTitleIfChanged(parseMetadata(code).title || '');
+    refreshLaneChip(code);
   }
   function loadCode(code) {
     // Allow '' through (a blank/new pattern is a legitimate buffer); only
@@ -1565,7 +1607,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     loadCode('');
   }
   function newRandomPattern() {
-    loadCode(randomPattern());
+    loadCode(rollRandom());
   }
 
   // Best-effort title read for cross-engine sync (sequencer mirrors this as

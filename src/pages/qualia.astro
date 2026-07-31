@@ -471,6 +471,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        auto-cycle/phase timer ticks down a digit or a label flips. Sized in
        `ch` (mono font) against the widest reachable string for each id. */
     #btn-cycle, #btn-phase    { min-width: 11ch; } /* toggle "cycle off" */
+    /* Auto-yield: a pattern lane just took this toggle's wheel (code-api.js).
+       The label + .active tint already carry the new state; this pulses it a
+       few times so the hand-off registers from playing distance. Pink because
+       "a pattern did this", matching .active-audio's meaning elsewhere. */
+    @keyframes auto-yield-pulse {
+      0%, 100% { border-color: var(--border); color: var(--muted); background: transparent; }
+      45%      { border-color: var(--pink);   color: var(--pink);
+                 background: rgba(255,122,230,0.18); }
+    }
+    #btn-cycle.yielded, #btn-phase.yielded { animation: auto-yield-pulse 0.42s ease-in-out 3; }
+    @media (prefers-reduced-motion: reduce) {
+      #btn-cycle.yielded, #btn-phase.yielded { animation: none; border-color: var(--pink); }
+    }
     #btn-cycle-beat,
     #btn-phase-beat           { min-width: 11ch; } /* "♪ cycle off" */
     #btn-audio                { min-width: 13ch; } /* "audio strudel" */
@@ -1204,6 +1217,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .sp-tag   { color: var(--accent); margin-left: 0.25rem; }
     .sp-status { color: var(--muted); margin-left: auto; font-size: 0.7rem; }
     .sp-status.live { color: var(--pink); }
+    /* Live qualia control lanes in the current buffer. The lanes are silent by
+       design, so without this nothing in the UI admits they exist — and three
+       songs into a set "why did my quale stop cycling?" needs an answer that
+       isn't "scroll the editor". Sits next to the title (it describes the
+       buffer, same as the title does) and takes NO auto margin: .sp-status owns
+       the single margin-left:auto that pushes the transport cluster right, and
+       a second auto margin would split the free space between them. */
+    .sp-lanes {
+      margin-left: 0.5rem; font-size: 0.65rem; letter-spacing: 0.03em;
+      color: var(--cyan); border: 1px solid var(--border); border-radius: 4px;
+      padding: 0.1rem 0.35rem; white-space: nowrap; flex: 0 0 auto;
+    }
     /* Eval error indicator — shows the last Strudel syntax/runtime error right
        after the panel title. Hidden until set; clears on the next clean eval.
        flex-shrinks with an ellipsis (full text in the title tooltip) so a long
@@ -1705,7 +1730,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       #video.visible.size-large { width: 46vw; max-width: 420px; }
       #strudel-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
       #sequencer-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 96vw; height: 60dvh; }
-      .sp-tag, .sp-status { display: none; }
+      /* Phone widths: the header already has to wrap to fit the transport run,
+         so the informational bits are the first to give up their space — the
+         lane chip joins the tag + status text in standing down. */
+      .sp-tag, .sp-status, .sp-lanes { display: none; }
       /* Panel headers: at phone widths the play/stop/live/gain run won't
          fit beside the name field on one line, so the trailing controls
          used to clip against the panel's overflow:hidden (the "live"
@@ -3958,6 +3986,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="strudel-header">
     <span class="sp-title">strudel</span>
     <span class="sp-err" id="strudel-error" style="display:none" title="" role="alert"></span>
+    <span class="sp-lanes" id="strudel-lanes" style="display:none" title=""></span>
     <span class="sp-status" id="strudel-status"></span>
     <button class="ctrl-btn" id="btn-strudel-play"    title="Evaluate / play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
