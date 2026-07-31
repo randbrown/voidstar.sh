@@ -293,7 +293,7 @@ export default {
     let moonGrad = null, moonKey = -1, moonPool = null, moonPoolKey = -1;
     let moonHaze = null, moonHazeKey = -1;
     let beamGrad = null, wetGrad = null, fogGrad = null, fogGradTall = null;
-    let asphaltGrad = null, rearGrad = null;
+    let asphaltGrad = null, rearGrad = null, yokeGrad = null;
     // The three that follow the horizon: outrun and dash look down the same
     // road from different heights, so these are keyed on the geometry rather
     // than baked against one fixed horizon. Only one mode renders per frame,
@@ -321,6 +321,7 @@ export default {
       // Both depend on car size — lazily rebuilt where they're used.
       paintGrad = null;
       rearGrad = null;
+      yokeGrad = null;
       moonKey = moonPoolKey = moonHazeKey = -1;
     }
     rebuildGradients();
@@ -1675,8 +1676,8 @@ export default {
       // ── The wheel ─────────────────────────────────────────────────────
       // Hub below the frame: from the driver's seat you never see the bottom
       // of the rim, only the two horns coming up at you.
-      drawGullwing(W * 0.5 + scratch.steer * W * 0.005, H * 0.885,
-                   Math.min(W * 0.215, H * 0.345), fs, beat);
+      drawGullwing(W * 0.5 + scratch.steer * W * 0.005, H * 0.955,
+                   Math.min(W * 0.235, H * 0.375), fs, beat);
     }
 
     // Mean of a spectrum slice, 0..1. Falls back to a slow idle swell so the
@@ -1839,116 +1840,134 @@ export default {
     }
 
     // ── The gullwing wheel ──────────────────────────────────────────────
-    // KITT's yoke: not a circle. Two horns sweep up and out from a low hub,
-    // the rim dips in the middle between them, and the bottom closes in a
-    // shallow arc. Drawn in units of Rw about the hub so the whole thing
-    // rotates as one.
+    // KITT's yoke is not a rim at all — it's one moulded delta: a broad flat
+    // face peaking in the middle, sloping down to a grip at each end, with
+    // the Knight crest set into the right-hand side. There is no top arc and
+    // no spokes. Drawn in units of Rw about the centre of the face so the
+    // whole piece rotates as one.
     function drawGullwing(cx, cy, Rw, fs, beat) {
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(scratch.steer * 0.34);
 
-      // Open at the top. That's the whole read of the yoke: the rim runs up
-      // the sides into two raised horns and simply stops, leaving air
-      // between them where a round wheel would have rim. Close it across the
-      // top and you've drawn an oval with a dent in it.
-      const rim = () => {
+      const face = () => {
         ctx.beginPath();
-        ctx.moveTo(-1.10 * Rw, -0.40 * Rw);                 // left horn tip
-        ctx.quadraticCurveTo(-0.92 * Rw, -0.02 * Rw, -0.72 * Rw, 0.24 * Rw);
-        ctx.quadraticCurveTo(-0.46 * Rw, 0.62 * Rw, 0, 0.72 * Rw);     // bottom arc
-        ctx.quadraticCurveTo(0.46 * Rw, 0.62 * Rw, 0.72 * Rw, 0.24 * Rw);
-        ctx.quadraticCurveTo(0.92 * Rw, -0.02 * Rw, 1.10 * Rw, -0.40 * Rw);
+        ctx.moveTo(-0.92 * Rw, -0.02 * Rw);                 // left grip root
+        ctx.lineTo(-0.64 * Rw, -0.30 * Rw);                 // left shoulder
+        ctx.lineTo(-0.07 * Rw, -0.62 * Rw);                 // apex
+        ctx.lineTo(0.07 * Rw, -0.62 * Rw);
+        ctx.lineTo(0.64 * Rw, -0.30 * Rw);                  // right shoulder
+        ctx.lineTo(0.92 * Rw, -0.02 * Rw);                  // right grip root
+        ctx.lineTo(0.92 * Rw, 0.30 * Rw);
+        ctx.quadraticCurveTo(0.58 * Rw, 0.42 * Rw, 0, 0.42 * Rw);
+        ctx.quadraticCurveTo(-0.58 * Rw, 0.42 * Rw, -0.92 * Rw, 0.30 * Rw);
+        ctx.closePath();
       };
 
-      // Rim: a fat dark stroke, then a cold highlight along its upper edge.
+      // The face, lit from the screen above so the top edges catch and the
+      // bottom falls into the footwell.
+      if (!yokeGrad || yokeGrad._r !== Rw) {
+        yokeGrad = ctx.createLinearGradient(0, -0.62 * Rw, 0, 0.42 * Rw);
+        yokeGrad.addColorStop(0, '#20263a');
+        yokeGrad.addColorStop(0.45, '#141926');
+        yokeGrad.addColorStop(1, '#080a11');
+        yokeGrad._r = Rw;
+      }
+      ctx.fillStyle = yokeGrad;
+      face(); ctx.fill();
+
+      // Creases: a pair running parallel to each top edge, and the twin
+      // ribs down the centre of the apex.
+      ctx.strokeStyle = 'rgba(6,8,14,0.85)';
+      ctx.lineWidth = Math.max(1, Rw * 0.020);
       ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      ctx.strokeStyle = '#080a11';
-      ctx.lineWidth = Rw * 0.180;
-      rim(); ctx.stroke();
-      ctx.strokeStyle = '#161b28';
-      ctx.lineWidth = Rw * 0.125;
-      rim(); ctx.stroke();
-      // Moonlight down the leading edge of each horn.
-      ctx.strokeStyle = `rgba(150,190,255,${0.26 + beat * 0.12})`;
-      ctx.lineWidth = Math.max(1, Rw * 0.018);
       for (const s of [-1, 1]) {
-        ctx.beginPath();
-        ctx.moveTo(s * 1.10 * Rw, -0.40 * Rw);
-        ctx.quadraticCurveTo(s * 0.92 * Rw, -0.02 * Rw, s * 0.72 * Rw, 0.24 * Rw);
-        ctx.stroke();
-      }
-      // Dash light spilling red onto the lower rim.
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = 0.16 + beat * 0.12;
-      ctx.drawImage(glowRed, -Rw * 0.9, Rw * 0.36, Rw * 1.8, Rw * 0.6);
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-
-      // Spokes out to the horns, and one down to the bottom rim.
-      const hubY = 0.28 * Rw;
-      ctx.strokeStyle = '#12161f';
-      ctx.lineWidth = Rw * 0.115;
-      for (const s of [-1, 1]) {
-        ctx.beginPath();
-        ctx.moveTo(s * 0.12 * Rw, hubY);
-        ctx.quadraticCurveTo(s * 0.46 * Rw, hubY - 0.03 * Rw, s * 0.76 * Rw, 0.20 * Rw);
-        ctx.stroke();
-      }
-      ctx.lineWidth = Rw * 0.09;
-      ctx.beginPath();
-      ctx.moveTo(0, hubY + 0.10 * Rw); ctx.lineTo(0, 0.68 * Rw); ctx.stroke();
-
-      // Hub, with the crest.
-      ctx.fillStyle = '#0d1119';
-      ctx.beginPath();
-      ctx.roundRect(-Rw * 0.24, hubY - Rw * 0.16, Rw * 0.48, Rw * 0.32, Rw * 0.06);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(140,175,235,0.22)';
-      ctx.lineWidth = Math.max(1, fs);
-      ctx.stroke();
-      ctx.fillStyle = `rgba(226,32,42,${0.65 + beat * 0.35})`;
-      ctx.beginPath();
-      ctx.ellipse(0, hubY, Rw * 0.115, Rw * 0.055, 0, 0, TAU);
-      ctx.fill();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = 0.3 + beat * 0.4;
-      ctx.drawImage(glowRed, -Rw * 0.28, hubY - Rw * 0.17, Rw * 0.56, Rw * 0.34);
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-
-      // His hands at ten and two, coming out of the varsity sleeves.
-      for (const s of [-1, 1]) {
-        ctx.save();
-        ctx.translate(s * 0.94 * Rw, -0.08 * Rw);
-        ctx.rotate(s * 0.68);
-        // Sleeve, running off toward the shoulder.
-        ctx.fillStyle = '#1b2748';
-        ctx.beginPath();
-        ctx.roundRect(s * Rw * 0.045, -Rw * 0.050, s * Rw * 0.30, Rw * 0.100, Rw * 0.026);
-        ctx.fill();
-        ctx.strokeStyle = '#c8172a';
-        ctx.lineWidth = Math.max(1, Rw * 0.010);
         for (let i = 0; i < 2; i++) {
-          const ex = s * Rw * (0.185 + i * 0.048);
+          const d = 0.09 + i * 0.11;
           ctx.beginPath();
-          ctx.moveTo(ex, -Rw * 0.046); ctx.lineTo(ex, Rw * 0.046); ctx.stroke();
+          ctx.moveTo(s * (0.86 - d * 0.5) * Rw, (0.02 + d) * Rw);
+          ctx.lineTo(s * (0.60 - d * 0.4) * Rw, (-0.26 + d) * Rw);
+          ctx.lineTo(s * 0.10 * Rw, (-0.58 + d) * Rw);
+          ctx.stroke();
         }
-        // The hand itself, curled over the rim.
-        ctx.fillStyle = '#5d84c4';
-        ctx.beginPath();
-        ctx.roundRect(-Rw * 0.062, -Rw * 0.052, Rw * 0.125, Rw * 0.104, Rw * 0.040);
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(16,26,52,0.75)';
-        ctx.lineWidth = Math.max(1, Rw * 0.008);
-        for (let i = 0; i < 3; i++) {
-          const fy = -Rw * 0.028 + i * Rw * 0.028;
-          ctx.beginPath();
-          ctx.moveTo(-Rw * 0.050, fy); ctx.lineTo(Rw * 0.040, fy); ctx.stroke();
-        }
-        ctx.restore();
       }
+      ctx.strokeStyle = 'rgba(8,11,18,0.9)';
+      ctx.lineWidth = Math.max(1, Rw * 0.016);
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(s * 0.035 * Rw, -0.60 * Rw);
+        ctx.lineTo(s * 0.035 * Rw, 0.36 * Rw);
+        ctx.stroke();
+      }
+
+      // Moonlight down the two top edges — the only hard highlight on it.
+      ctx.strokeStyle = `rgba(150,190,255,${0.26 + beat * 0.12})`;
+      ctx.lineWidth = Math.max(1, Rw * 0.017);
+      ctx.beginPath();
+      ctx.moveTo(-0.92 * Rw, -0.02 * Rw);
+      ctx.lineTo(-0.64 * Rw, -0.30 * Rw);
+      ctx.lineTo(-0.07 * Rw, -0.62 * Rw);
+      ctx.lineTo(0.07 * Rw, -0.62 * Rw);
+      ctx.lineTo(0.64 * Rw, -0.30 * Rw);
+      ctx.lineTo(0.92 * Rw, -0.02 * Rw);
+      ctx.stroke();
+
+      // Dash light spilling red across the lower face.
+      ctx.save();
+      face(); ctx.clip();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.13 + beat * 0.10;
+      ctx.drawImage(glowRed, -Rw * 0.95, Rw * 0.02, Rw * 1.9, Rw * 0.62);
+      ctx.restore();
+
+      // The grips: tubes at each end, turned toward the driver.
+      for (const s of [-1, 1]) {
+        const gx = s * 0.92 * Rw;
+        ctx.fillStyle = '#161b28';
+        ctx.beginPath();
+        // Tops stand a little proud of the face, the way the real tubes do.
+        ctx.roundRect(gx - Rw * 0.105, -0.22 * Rw, Rw * 0.21, Rw * 0.84, Rw * 0.105);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(150,190,255,0.20)';
+        ctx.lineWidth = Math.max(1, Rw * 0.012);
+        ctx.beginPath();
+        ctx.moveTo(gx - Rw * 0.075, -0.14 * Rw);
+        ctx.lineTo(gx - Rw * 0.075, 0.52 * Rw);
+        ctx.stroke();
+        // Finger grooves down the inner face.
+        ctx.strokeStyle = 'rgba(6,8,14,0.7)';
+        ctx.lineWidth = Math.max(1, Rw * 0.010);
+        for (let i = 0; i < 3; i++) {
+          const gy = 0.10 * Rw + i * 0.11 * Rw;
+          ctx.beginPath();
+          ctx.moveTo(gx - Rw * 0.085, gy);
+          ctx.lineTo(gx + Rw * 0.085, gy);
+          ctx.stroke();
+        }
+      }
+
+      // The crest, set into the right of the face.
+      const ex = 0.44 * Rw, ey = -0.08 * Rw, er = Rw * 0.085;
+      ctx.fillStyle = '#0a0d14';
+      ctx.beginPath(); ctx.arc(ex, ey, er * 1.22, 0, TAU); ctx.fill();
+      ctx.fillStyle = `rgba(226,32,42,${0.7 + beat * 0.3})`;
+      ctx.beginPath(); ctx.arc(ex, ey, er, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#0a0d14';
+      ctx.beginPath();
+      ctx.moveTo(ex - er * 0.34, ey + er * 0.46);
+      ctx.lineTo(ex - er * 0.30, ey - er * 0.20);
+      ctx.lineTo(ex + er * 0.10, ey - er * 0.52);
+      ctx.lineTo(ex + er * 0.40, ey - er * 0.16);
+      ctx.lineTo(ex + er * 0.16, ey - er * 0.04);
+      ctx.lineTo(ex + er * 0.20, ey + er * 0.46);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.28 + beat * 0.35;
+      ctx.drawImage(glowRed, ex - er * 3, ey - er * 3, er * 6, er * 6);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+
       ctx.restore();
     }
 
@@ -1960,13 +1979,16 @@ export default {
     // faces RIGHT on screen, matching the world sliding left past it.
     // Upper silhouette, nose → tail, dense enough that the lineTo chain
     // reads as curves at screen scale. Real-profile proportions: wheel
-    // diameter ≈ 0.145 of the length, roof at ≈ 0.235, wedge nose.
+    // diameter ≈ 0.145 of the length, roof at ≈ 0.235, wedge nose. The rise
+    // off the nose has to clear the front tyre with bodywork to spare —
+    // level with it and the wheel reads as bursting through the fender.
     const CAR_BODY = [
-      [0.000, 0.068], [0.000, 0.098], [0.030, 0.110],
-      [0.082, 0.120],                       // hood over the front arch
-      [0.160, 0.130], [0.300, 0.148],       // hood rise to windshield base
-      [0.325, 0.155], [0.360, 0.185],       // windshield, raked in two steps
-      [0.405, 0.220], [0.440, 0.231],
+      [0.000, 0.068], [0.000, 0.098], [0.030, 0.114],
+      [0.082, 0.136],                       // hood climbing off the nose
+      [0.160, 0.158], [0.230, 0.166],       // fender crown over the front wheel
+      [0.300, 0.172],                       // cowl
+      [0.325, 0.176], [0.360, 0.196],       // windshield, raked in two steps
+      [0.405, 0.222], [0.440, 0.231],
       [0.530, 0.236], [0.600, 0.230],       // low roof
       [0.650, 0.215], [0.720, 0.192],       // flying-buttress slope
       [0.820, 0.166],
@@ -2167,7 +2189,9 @@ export default {
       ctx.fill();
 
       // Punch the wheel arches out of the body.
-      ctx.fillStyle = SKY_HORIZON;
+      // Arch shadow, not sky: with real bodywork above the tyre a sky-coloured
+      // punch would show as a bright crescent over the wheel.
+      ctx.fillStyle = '#05080f';
       for (const w of [FRONT_WHEEL, REAR_WHEEL]) {
         ctx.beginPath();
         ctx.arc(X(w.u), Y(0.066), w.r * 1.12 * L, 0, TAU);
@@ -2180,8 +2204,8 @@ export default {
       // Glasshouse — windshield + door glass in night blue.
       ctx.fillStyle = '#0a0f22';
       ctx.beginPath();
-      ctx.moveTo(X(0.338), Y(0.152));
-      ctx.lineTo(X(0.418), Y(0.216));
+      ctx.moveTo(X(0.338), Y(0.174));
+      ctx.lineTo(X(0.418), Y(0.217));
       ctx.lineTo(X(0.445), Y(0.224));
       ctx.lineTo(X(0.540), Y(0.228));
       ctx.lineTo(X(0.612), Y(0.221));
@@ -2195,8 +2219,8 @@ export default {
       ctx.strokeStyle = 'rgba(190,210,255,0.35)';
       ctx.lineWidth = Math.max(1, 1.2 * fs);
       ctx.beginPath();
-      ctx.moveTo(X(0.350), Y(0.158));
-      ctx.lineTo(X(0.428), Y(0.216));
+      ctx.moveTo(X(0.352), Y(0.180));
+      ctx.lineTo(X(0.428), Y(0.217));
       ctx.stroke();
       // B-pillar split.
       ctx.strokeStyle = '#20060c';
@@ -2226,8 +2250,8 @@ export default {
       ctx.strokeStyle = 'rgba(255,235,235,0.5)';
       ctx.lineWidth = Math.max(1, 1.6 * fs);
       ctx.beginPath();
-      ctx.moveTo(X(0.030), Y(0.116));
-      ctx.quadraticCurveTo(X(0.30), Y(0.152), X(0.42), Y(0.154));
+      ctx.moveTo(X(0.035), Y(0.120));
+      ctx.quadraticCurveTo(X(0.29), Y(0.170), X(0.42), Y(0.164));
       ctx.moveTo(X(0.66), Y(0.156));
       ctx.lineTo(X(0.982), Y(0.158));
       ctx.stroke();
@@ -2235,8 +2259,8 @@ export default {
       ctx.strokeStyle = 'rgba(190,210,255,0.45)';
       ctx.lineWidth = Math.max(1, 1.4 * fs);
       ctx.beginPath();
-      ctx.moveTo(X(0.30), Y(0.148));
-      ctx.lineTo(X(0.405), Y(0.220));
+      ctx.moveTo(X(0.30), Y(0.170));
+      ctx.lineTo(X(0.405), Y(0.222));
       ctx.quadraticCurveTo(X(0.53), Y(0.243), X(0.65), Y(0.213));
       ctx.lineTo(X(0.82), Y(0.168));
       ctx.stroke();
@@ -2244,24 +2268,24 @@ export default {
       // Side mirror, on its stalk at the foot of the A-pillar.
       ctx.strokeStyle = '#5a0a12';
       ctx.lineWidth = Math.max(1, L * 0.005);
-      ctx.beginPath(); ctx.moveTo(X(0.352), Y(0.152)); ctx.lineTo(X(0.346), Y(0.166)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(0.352), Y(0.174)); ctx.lineTo(X(0.346), Y(0.188)); ctx.stroke();
       ctx.fillStyle = '#8f1018';
       ctx.beginPath();
-      ctx.roundRect(X(0.330), Y(0.184), L * 0.026, L * 0.018, L * 0.004);
+      ctx.roundRect(X(0.330), Y(0.206), L * 0.026, L * 0.018, L * 0.004);
       ctx.fill();
 
       // Pop-up headlight, up for the night — pod + white lamp face.
       ctx.fillStyle = '#b0121f';
       ctx.beginPath();
-      ctx.moveTo(X(0.085), Y(0.118));
-      ctx.lineTo(X(0.090), Y(0.148));
-      ctx.lineTo(X(0.150), Y(0.143));
-      ctx.lineTo(X(0.152), Y(0.124));
+      ctx.moveTo(X(0.085), Y(0.130));
+      ctx.lineTo(X(0.088), Y(0.160));
+      ctx.lineTo(X(0.150), Y(0.176));
+      ctx.lineTo(X(0.152), Y(0.148));
       ctx.closePath();
       ctx.fill();
       const beam = Math.min(1, 0.55 + scratch.beatPulse * 0.45) * glow;
       ctx.fillStyle = `rgba(235,242,255,${0.85 * Math.min(1, beam + 0.3)})`;
-      ctx.fillRect(X(0.086), Y(0.146), L * 0.011, L * 0.024);
+      ctx.fillRect(X(0.086), Y(0.158), L * 0.011, L * 0.024);
 
       // Front amber marker + tail-light strip.
       ctx.fillStyle = '#ffb43a';
@@ -2273,7 +2297,7 @@ export default {
 
       // Lights in world space (unrotated — the pitch is tiny).
       const tailX = wx(1.0), tailY = groundY - bob - 0.095 * L;
-      const lampX = wx(0.083), lampY = groundY - bob - 0.138 * L;
+      const lampX = wx(0.083), lampY = groundY - bob - 0.146 * L;
 
       ctx.globalCompositeOperation = 'lighter';
       // Headlight beam — a long cold cone toward the right edge. Two thin
