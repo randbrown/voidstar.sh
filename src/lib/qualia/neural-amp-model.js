@@ -18,6 +18,31 @@
 
 import { parseWaveNet, unwrapContainer } from './nam-wavenet.js';
 
+// ── capture normalisation ───────────────────────────────────────────────────
+// NAM captures carry a measured output loudness, and they vary by well over
+// 10 dB between models — enough that swapping one mid-set sends a real level
+// jump to the PA, and enough to change how hard the mixer limiter works and how
+// excitable the visuals are (the rig analyser is adopted into the mix).
+//
+// `normTrim` is the linear gain that would bring a capture to a common level.
+// It is only ever ADVISORY: the strip applies it when the amp stage's `norm`
+// toggle is on, and the loader shows the dB it represents. Nothing here changes
+// the model's own output.
+//
+// Caveats worth remembering: the loudness is measured at one operating point of
+// a NONLINEAR model, so matching there doesn't guarantee matching at your own
+// dynamics or with the drive knob up; and only NAM files declare it at all —
+// GuitarML/AIDA-X captures get a trim of 1 and say so.
+const NORM_TARGET_DB = -18;   // NAM's own normalisation target, so levels
+                              // translate between this rig and other NAM hosts
+const NORM_MAX_DB = 12;       // never trim further than this in either direction
+
+export function normTrimFor(loudnessDb) {
+  if (!Number.isFinite(loudnessDb)) return 1;
+  const db = Math.max(-NORM_MAX_DB, Math.min(NORM_MAX_DB, NORM_TARGET_DB - loudnessDb));
+  return Math.pow(10, db / 20);
+}
+
 function flatten(a, out) {
   if (Array.isArray(a)) { for (let i = 0; i < a.length; i++) flatten(a[i], out); }
   else out.push(a);
@@ -40,9 +65,17 @@ export function parseAmpModel(json) {
     if (arch === 'wavenet') {
       const parsed = parseWaveNet(model);
       if (parsed.ok && picked) parsed.container = picked;
+      if (parsed.ok) parsed.normTrim = normTrimFor(parsed.loudnessDb);
       return parsed;
     }
-    if (arch === 'lstm') return parseNamLstm(model);
+    if (arch === 'lstm') {
+      const parsed = parseNamLstm(model);
+      if (parsed.ok) {
+        parsed.loudnessDb = Number.isFinite(model?.metadata?.loudness) ? +model.metadata.loudness : null;
+        parsed.normTrim = normTrimFor(parsed.loudnessDb);
+      }
+      return parsed;
+    }
     return { ok: false, reason: `unsupported NAM architecture: ${archName || '?'}` };
   }
 

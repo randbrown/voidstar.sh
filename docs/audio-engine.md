@@ -228,9 +228,29 @@ one worklet node:
   structured-cloneable but an `AudioWorkletGlobalScope` is a separate agent cluster — Chrome
   *silently drops* the message. `nam-wasm.js` fetches the bytes (and compiles once to check
   `nam_abi()` against a stale service-worker copy); the worklet compiles them synchronously.
-- **Level and rate are reported, not corrected.** The loader line shows the capture's trained
-  sample rate when it differs from the context's, and its NAM `metadata.loudness` — captures vary
-  by many dB and the rig deliberately does not auto-trim (the amp's `lvl` knob is the performer's).
+### Capture level (`norm`)
+
+Captures are trained at wildly different output levels — well over 10 dB apart. That matters more
+here than in a plugin host, because the amp's output feeds four things that care about absolute
+level: the PA, the mixer's soft limiter, recorded loops (the recorder taps the strip *output*), and
+**visual reactivity** — `sigAnalyser` is adopted into the mix as the `rig` source, so a hot capture
+literally makes the fx more excitable.
+
+- The amp stage's **`norm` toggle** level-matches a capture to a common loudness
+  (`NORM_TARGET_DB`, matching NAM's own target so levels translate to other NAM hosts). The trim is
+  computed by `normTrimFor()` from the capture's declared `metadata.loudness`, clamped to ±12 dB.
+- **Off by default** — it's a real gain change and the performer owns level.
+- The trim rides with the **capture**, not the strip (`ampNormTrim`, set in `setAmpModel`), so
+  swapping captures level-matches on its own while `lvl` stays the performer's knob. It's a
+  separate multiplier because `lvl` alone can't do the job — it caps at 2× (+6 dB).
+- **Never invisible:** the loader line states the capture's loudness and, when `norm` is on, the
+  exact dB being applied. A capture that declares no loudness (GuitarML/AIDA-X, older NAM) gets a
+  trim of exactly 1 and says so rather than guessing.
+- Worth remembering: loudness is measured at ONE operating point of a nonlinear model, so matching
+  there doesn't guarantee a match at your own dynamics or with the drive knob up.
+
+Sample rate is reported but not corrected — the loader line flags a capture trained at a rate other
+than the context's, since that shifts its frequency response.
 - `scripts/check-nam-wavenet.mjs` (in `npm run check`) drives the real worklet + real `.wasm`
   against an independent reference forward pass across both schemas, gated layers, chained layer
   arrays and padded channel counts, and asserts the refusal paths.

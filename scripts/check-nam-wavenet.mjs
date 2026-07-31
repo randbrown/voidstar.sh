@@ -293,4 +293,24 @@ for (const [name, cfg, seed] of CASES) {
   else console.log('check-nam-wavenet: refuses a weight-count mismatch');
 }
 
+// ---------------------------------------------------------------------------
+// capture normalisation trim
+// ---------------------------------------------------------------------------
+{
+  const { normTrimFor } = await import('../src/lib/qualia/neural-amp-model.js');
+  const db = (t) => 20 * Math.log10(t);
+  // A capture quieter than the target gets boosted by exactly the difference.
+  if (Math.abs(db(normTrimFor(-21.3)) - 3.3) > 0.01) fail(`normTrim(-21.3) should be +3.3 dB, got ${db(normTrimFor(-21.3)).toFixed(2)}`);
+  // ...and a hot one gets cut.
+  if (Math.abs(db(normTrimFor(-12)) - -6) > 0.01) fail(`normTrim(-12) should be -6 dB, got ${db(normTrimFor(-12)).toFixed(2)}`);
+  // Clamped both ways, so a bogus loudness can't hand the PA a huge boost.
+  if (Math.abs(db(normTrimFor(-99)) - 12) > 0.01) fail('normTrim must clamp to +12 dB');
+  if (Math.abs(db(normTrimFor(+40)) - -12) > 0.01) fail('normTrim must clamp to -12 dB');
+  // No declared loudness (GuitarML / AIDA-X) → no trim at all, never a guess.
+  for (const v of [null, undefined, NaN, 'loud']) {
+    if (normTrimFor(v) !== 1) fail(`normTrim(${String(v)}) must be exactly 1`);
+  }
+  if (!process.exitCode) console.log('check-nam-wavenet: normalisation trim ok');
+}
+
 if (!process.exitCode) console.log('check-nam-wavenet: all good');

@@ -114,7 +114,11 @@ export const STRIP_DEFAULTS = {   // listed in chain order
   // so the noise floor is far higher: a higher threshold and a fast release,
   // which is also what the genre wants (tight, chugging cutoff).
   metalGate: { on: false, thresh: 0.28, release: 0.18 },
-  amp:    { on: false, gain: 1, mix: 1, level: 1 },
+  // `norm` level-matches captures using the loudness the capture declares (see
+  // neural-amp-model.js). Off by default: it's a real gain change, and the
+  // performer owns level. `level` alone can't do this job — it caps at 2x
+  // (+6 dB) and captures differ by more than that.
+  amp:    { on: false, gain: 1, mix: 1, level: 1, norm: false },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
   cab:    { on: false, mix: 1, level: 1 },
   hpf:    { on: false, freq: 80 },
@@ -408,6 +412,8 @@ export function createRigStrip(ctx, cfg) {
   const ampWet = ctx.createGain();
   const ampSum = ctx.createGain();
   let neural = null, ampLoaded = false;
+  let ampNormTrim = 1;                 // linear gain from the loaded capture's
+                                       // declared loudness; 1 when it declares none
   try {
     neural = new AudioWorkletNode(ctx, 'neural-amp', {
       numberOfInputs: 1, numberOfOutputs: 1,
@@ -703,9 +709,12 @@ export function createRigStrip(ctx, cfg) {
     const active = state.amp.on && ampLoaded && !!neural;
     if (neural) { try { neural.port.postMessage({ cmd: 'bypass', on: !active }); } catch {} }
     const mix = clamp(state.amp.mix, 0, 1);
+    // The normalisation trim rides with the CAPTURE, not the strip, so swapping
+    // captures level-matches on its own and `level` stays the performer's knob.
+    const norm = state.amp.norm ? ampNormTrim : 1;
     ampDrive.gain.value = clamp(state.amp.gain, 0, 4);   // input drive into the model
     ampDry.gain.value = active ? (1 - mix) : 1;
-    ampWet.gain.value = active ? mix * clamp(state.amp.level, 0, 2) : 0;
+    ampWet.gain.value = active ? mix * clamp(state.amp.level, 0, 2) * norm : 0;
   }
   // The processor reports the outcome of every load. Without this a backend that
   // refuses to initialise leaves the amp silently transparent — the failure mode
@@ -728,7 +737,8 @@ export function createRigStrip(ctx, cfg) {
     if (!neural) return false;
     const seq = ++ampLoadSeq;
     ampAck = null;
-    if (!model) { ampLoaded = false; try { neural.port.postMessage({ cmd: 'clear' }); } catch {} applyAmp(); return false; }
+    if (!model) { ampLoaded = false; ampNormTrim = 1; try { neural.port.postMessage({ cmd: 'clear' }); } catch {} applyAmp(); return false; }
+    ampNormTrim = Number.isFinite(model.normTrim) && model.normTrim > 0 ? model.normTrim : 1;
     let wasm = null;
     if (model.type === 'wavenet') {
       try {
