@@ -43,7 +43,7 @@ export const THEMES = [
   { id: 'amber',          label: 'amber ▒' },
   { id: 'tape',           label: 'tape ▤' },
   { id: 'abyssal',        label: 'abyssal ≈' },
-  { id: 'nightcall',      label: 'nightcall ⚡' },
+  { id: 'nightcall',      label: 'nightcall 🏎️' },
   { id: 'glacial',        label: 'glacial ❄' },
   { id: 'win95',          label: 'win95 ▣' },
   { id: 'glass',          label: 'glass ◆' },
