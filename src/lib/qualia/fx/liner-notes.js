@@ -86,7 +86,7 @@ const CONTENT = {
   },
   nightcall: {
     kicker: '⊛ transmission 05 · nightcall',
-    h1: 'legends never die',
+    h1: 'long live kavinsky',
     rows: [
       { k: 'body', t: 'an homage to Vincent Belorgey — Kavinsky.' },
       { k: 'body', t: '1975 – 2026 · merci pour tout' },
