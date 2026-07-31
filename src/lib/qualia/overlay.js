@@ -12,7 +12,7 @@
 // after the active fx's render() so the overlay lands on top.
 
 import { lmToCanvas } from './video.js';
-import { readKnobs, onThemeChange } from './theme.js';
+import { readKnobs, onThemeChange, getTheme } from './theme.js';
 import { createMoshPost } from './post-mosh.js';
 import { createStitchPost } from './post-stitch.js';
 import {
@@ -27,7 +27,19 @@ import {
 // The last entry pairs neutral white with the accent (works on every theme).
 let K = readKnobs();
 
+// Under the nightcall theme the skeleton goes blueish-black silhouette —
+// every person the same, a body in the dark — and the red album-art eyes
+// light every tracked face automatically. The theme carries the tribute;
+// the overlay's nightcall toggle stays independent for the other themes.
+const NIGHTCALL_PERSON_PALETTE = [{
+  boneA: 'rgba(26,34,60,0.85)', boneB: 'rgba(10,14,28,0.85)',
+  spark: [225, 355],
+  halo: 'rgba(60,80,140,0.14)', joint: 'rgba(38,48,82,0.95)',
+}];
+let nightcallTheme = getTheme() === 'nightcall';
+
 function buildPersonPalette() {
+  if (nightcallTheme) return NIGHTCALL_PERSON_PALETTE;
   const { ac } = K;
   const mk = (a, b) => ({
     boneA: a.rgba(0.75), boneB: b.rgba(0.75),
@@ -47,7 +59,11 @@ function buildPersonPalette() {
   ];
 }
 let PERSON_PALETTE = buildPersonPalette();
-onThemeChange(() => { K = readKnobs(); PERSON_PALETTE = buildPersonPalette(); });
+onThemeChange(() => {
+  K = readKnobs();
+  nightcallTheme = getTheme() === 'nightcall';
+  PERSON_PALETTE = buildPersonPalette();
+});
 
 const LM_WEIGHT = {
   0: 0.6, 1: 0.35, 3: 0.35, 4: 0.35, 6: 0.35,
@@ -474,7 +490,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
 
   function drawPoseOverlay(field) {
-    if (!opts.skeleton && !opts.aura && !opts.nightcall) return;
+    if (!opts.skeleton && !opts.aura && !opts.nightcall && !nightcallTheme) return;
     const people = field.pose.people;
     if (!people.length) return;
     const W = canvas.width, H = canvas.height;
@@ -550,7 +566,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       // specular dot each, after the album art. Drawn last so the glow rides
       // on top of the face bones; sized from the inter-eye distance so it
       // scales with distance from the camera.
-      if (opts.nightcall) drawNightcallEyes(lms, lmPos, audio, audioOn, field.time, pIdx);
+      if (opts.nightcall || nightcallTheme) drawNightcallEyes(lms, lmPos, audio, audioOn, field.time, pIdx);
     });
     ctx.restore();
   }
