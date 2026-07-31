@@ -2326,7 +2326,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     btn.type = 'button'; btn.className = 'ctrl-btn'; btn.textContent = cab ? 'load IR' : 'load amp';
     btn.title = cab
       ? 'Load a cabinet / reverb impulse response (WAV) from disk — it’s saved to the picker so you can switch back without re-uploading'
-      : 'Load a neural amp capture (GuitarML / AIDA-X / NAM-LSTM JSON) from disk — it’s saved to the picker so you can switch back without re-uploading';
+      : 'Load a neural amp capture (NAM .nam — WaveNet or LSTM — or GuitarML / AIDA-X JSON) from disk — it’s saved to the picker so you can switch back without re-uploading';
     btn.addEventListener('click', () => file.click());
     const sel = document.createElement('select');
     sel.className = 'rig-lib-select';
@@ -2339,11 +2339,54 @@ export function createLooper({ audio, syncStrudel } = {}) {
     del.addEventListener('click', () => (cab ? removeCab(sel.value) : removeAmp(sel.value)));
     if (!cab && !looperAudio.isAmpCapable?.()) { btn.disabled = true; btn.title = 'Neural amp needs AudioWorklet support'; }
     if (cab) cabSelEl = sel; else ampSelEl = sel;
+    // Level-match toggle — lives with the capture controls, not the tone knobs,
+    // because it's a property of which capture is loaded.
+    let norm = null;
+    if (!cab) {
+      norm = document.createElement('button');
+      norm.type = 'button'; norm.className = 'ctrl-btn'; norm.textContent = 'norm';
+      norm.title = 'Level-match this capture to a common loudness, so swapping captures '
+                 + 'doesn’t jump level. Uses the loudness the capture declares (NAM only) — '
+                 + 'the lvl knob stays yours. Off = the capture’s own level.';
+      norm.addEventListener('click', () => setAmpNorm(!model.strip.amp.norm));
+      ampNormBtn = norm;
+    }
+    // Per-loader result line. A capture that can't load has to say so HERE —
+    // the looper's status line is in another subpanel and is easy to miss.
+    const msg = document.createElement('span');
+    msg.className = 'rig-lib-msg';
+    if (cab) cabMsgEl = msg; else ampMsgEl = msg;
     // load + remove on the top line; the picker (sel) flex-wraps to a full-width
     // line beneath them, so it has room to show the saved file's full name.
-    row.append(file, btn, del, sel);
-    if (cab) renderCabLib(); else renderAmpLib();
+    row.append(file, btn, del);
+    if (norm) row.append(norm);
+    row.append(sel, msg);
+    if (cab) renderCabLib(); else { renderAmpLib(); syncAmpNorm(); }
     return row;
+  }
+  // Toggle capture level-matching. Straight to the model + audio rather than via
+  // stripSet, whose slider/knob mirroring is built for numeric params.
+  function setAmpNorm(on) {
+    model.strip.amp.norm = !!on;
+    looperAudio.setStripParam('amp', 'norm', !!on);
+    persistStrip();
+    syncAmpNorm();
+  }
+  function syncAmpNorm() {
+    if (!ampNormBtn) return;
+    const on = !!model.strip.amp.norm;
+    ampNormBtn.classList.toggle('active', on);
+    ampNormBtn.setAttribute('aria-pressed', String(on));
+    // Restate the loaded capture so the trim it's getting stays visible.
+    if (ampLoadedModel) setLoaderMsg('amp', ampSummary(ampLoadedName, ampLoadedModel), false);
+  }
+  // Report a load result next to the loader that produced it, and mirror
+  // failures to the console so they're greppable after the fact.
+  function setLoaderMsg(kind, text, isError) {
+    const el = kind === 'cab' ? cabMsgEl : ampMsgEl;
+    if (el) { el.textContent = text || ''; el.classList.toggle('err', !!isError); }
+    if (isError) console.warn(`[qualia] ${kind}: ${text}`);
+    if (text) setStatus(`${kind === 'cab' ? 'IR' : 'amp'}: ${text}`);
   }
   // Repaint a picker's options from its localStorage index, selecting the current.
   function renderLib(sel, libKey, curKey, emptyTxt) {
@@ -2364,7 +2407,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const selName = list.find((e) => e.id === sel.value)?.name;
     sel.title = selName || sel.dataset.help || '';
   }
-  let cabSelEl = null, ampSelEl = null;
+  let cabSelEl = null, ampSelEl = null, cabMsgEl = null, ampMsgEl = null, ampNormBtn = null;
+  // The capture currently in the strip, so toggling `norm` can restate its trim.
+  let ampLoadedModel = null, ampLoadedName = '';
   function buildCabLoader() { return buildLibLoader('cab'); }
   function buildAmpLoader() { return buildLibLoader('amp'); }
   function renderCabLib() { renderLib(cabSelEl, CABLIB_KEY, CABCUR_KEY, { have: 'no IR', empty: 'no saved IRs' }); }
@@ -2374,30 +2419,31 @@ export function createLooper({ audio, syncStrudel } = {}) {
     try {
       const bytes = await file.arrayBuffer();
       const ok = await looperAudio.setCabIRBytes(bytes);
-      if (!ok) { setStatus('IR decode failed'); return; }
+      if (!ok) { setLoaderMsg('cab', 'decode failed — expected a WAV impulse response', true); return; }
       const id = `cab:${file.name}`;
       model.cabName = file.name; lsSet(CABNAME_KEY, model.cabName); lsSet(CABCUR_KEY, id);
       if (loopStore.isAvailable()) loopStore.putMisc({ id, name: file.name, bytes }).catch(() => {});
       libAdd(CABLIB_KEY, id, file.name); renderCabLib();
-      setStatus(`cab IR: ${file.name}`);
-    } catch (e) { console.warn('[qualia] cab IR load failed:', e); setStatus('IR load failed'); }
+      setLoaderMsg('cab', file.name, false);
+    } catch (e) { setLoaderMsg('cab', `load failed — ${e?.message || e}`, true); }
   }
   // Switch to a saved IR (or unload when '' is chosen). Library entry stays.
   async function selectCab(id) {
     if (!id) {
       looperAudio.clearCabIR();
       model.cabName = ''; lsSet(CABNAME_KEY, ''); lsSet(CABCUR_KEY, ''); renderCabLib();
+      setLoaderMsg('cab', '', false);
       return;
     }
     if (!loopStore.isAvailable()) return;
     try {
       const rec = await loopStore.getMisc(id);
-      if (!rec || !rec.bytes) { setStatus('IR missing — removed'); removeCab(id); return; }
+      if (!rec || !rec.bytes) { setLoaderMsg('cab', 'missing — removed', true); removeCab(id); return; }
       const ok = await looperAudio.setCabIRBytes(rec.bytes);
-      if (!ok) { setStatus('IR decode failed'); return; }
+      if (!ok) { setLoaderMsg('cab', 'decode failed', true); return; }
       model.cabName = rec.name || ''; lsSet(CABNAME_KEY, model.cabName); lsSet(CABCUR_KEY, id); renderCabLib();
-      setStatus(`cab IR: ${model.cabName}`);
-    } catch (e) { console.warn('[qualia] cab IR select failed:', e); setStatus('IR load failed'); }
+      setLoaderMsg('cab', model.cabName, false);
+    } catch (e) { setLoaderMsg('cab', `load failed — ${e?.message || e}`, true); }
   }
   function removeCab(id) {
     if (!id) return;
@@ -2408,41 +2454,84 @@ export function createLooper({ audio, syncStrudel } = {}) {
     renderCabLib();
   }
 
+  // One-line description of what actually loaded, so it's obvious which backend
+  // ran and — for a NAM container — which submodel was picked.
+  function ampSummary(name, parsed) {
+    const bits = [name];
+    if (parsed.type === 'wavenet') {
+      const ch = parsed.arrays.map((a) => a.C).join('/');
+      const layers = parsed.arrays.reduce((n, a) => n + a.layers.length, 0);
+      bits.push(`NAM WaveNet ${ch}-ch · ${layers} layers`);
+      if (parsed.container) bits.push(`widest of ${parsed.container.of} submodels`);
+    } else {
+      bits.push(`${parsed.hidden}-cell LSTM`);
+      if (parsed.experimental) bits.push('experimental');
+    }
+    // Captures are trained at wildly different output levels. Say what this one
+    // is, and — when norm is on — exactly how much gain it's getting, so the
+    // trim is never something that happens invisibly.
+    if (parsed.loudnessDb != null) {
+      const db = 20 * Math.log10(parsed.normTrim || 1);
+      bits.push(model.strip.amp.norm
+        ? `${parsed.loudnessDb.toFixed(1)} dB capture · norm ${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`
+        : `${parsed.loudnessDb.toFixed(1)} dB capture`);
+    } else if (model.strip.amp.norm) {
+      bits.push('no declared loudness — not level-matched');
+    }
+    // NAM captures are trained at a fixed rate; a context running at another
+    // rate shifts the model's frequency response, so say so instead of hiding it.
+    const sr = looperAudio.getSampleRate?.();
+    if (parsed.sampleRate && sr && Math.abs(sr - parsed.sampleRate) > 1) {
+      bits.push(`⚠ trained at ${(parsed.sampleRate / 1000).toFixed(1)}k, running at ${(sr / 1000).toFixed(1)}k`);
+    }
+    return bits.join(' · ');
+  }
+
   async function loadAmpFile(file) {
     try {
       const text = await file.text();
-      let json; try { json = JSON.parse(text); } catch { setStatus('amp: not valid JSON'); return; }
+      let json; try { json = JSON.parse(text); } catch { setLoaderMsg('amp', 'not valid JSON', true); return; }
       const parsed = parseAmpModel(json);
-      if (!parsed.ok) { setStatus(`amp: ${parsed.reason}`); return; }
-      looperAudio.setAmpModel(parsed);
+      if (!parsed.ok) { setLoaderMsg('amp', parsed.reason, true); return; }
+      setLoaderMsg('amp', `loading ${file.name}…`, false);
+      // Rejects with a reportable reason (e.g. the WASM kernel didn't load).
+      await looperAudio.setAmpModel(parsed);
       const id = `amp:${file.name}`;
       model.ampName = file.name; lsSet(AMPNAME_KEY, model.ampName); lsSet(AMPCUR_KEY, id);
       if (loopStore.isAvailable()) loopStore.putMisc({ id, name: file.name, model: parsed }).catch(() => {});
       libAdd(AMPLIB_KEY, id, file.name); renderAmpLib();
-      setStatus(`amp: ${file.name}${parsed.experimental ? ' (experimental)' : ''} · ${parsed.hidden}-cell`);
-    } catch (e) { console.warn('[qualia] amp load failed:', e); setStatus('amp load failed'); }
+      ampLoadedModel = parsed; ampLoadedName = file.name;
+      setLoaderMsg('amp', ampSummary(file.name, parsed), false);
+    } catch (e) { setLoaderMsg('amp', `load failed — ${e?.message || e}`, true); }
   }
   async function selectAmp(id) {
     if (!id) {
       looperAudio.clearAmp();
       model.ampName = ''; lsSet(AMPNAME_KEY, ''); lsSet(AMPCUR_KEY, ''); renderAmpLib();
+      ampLoadedModel = null; ampLoadedName = '';
+      setLoaderMsg('amp', '', false);
       return;
     }
     if (!loopStore.isAvailable()) return;
     try {
       const rec = await loopStore.getMisc(id);
-      if (!rec || !rec.model) { setStatus('amp missing — removed'); removeAmp(id); return; }
-      looperAudio.setAmpModel(rec.model);
+      if (!rec || !rec.model) { setLoaderMsg('amp', 'missing — removed', true); removeAmp(id); return; }
+      await looperAudio.setAmpModel(rec.model);
       model.ampName = rec.name || ''; lsSet(AMPNAME_KEY, model.ampName); lsSet(AMPCUR_KEY, id); renderAmpLib();
-      setStatus(`amp: ${model.ampName}`);
-    } catch (e) { console.warn('[qualia] amp select failed:', e); setStatus('amp load failed'); }
+      ampLoadedModel = rec.model; ampLoadedName = model.ampName;
+      setLoaderMsg('amp', ampSummary(model.ampName, rec.model), false);
+    } catch (e) { setLoaderMsg('amp', `load failed — ${e?.message || e}`, true); }
   }
   function removeAmp(id) {
     if (!id) return;
     const wasCur = (lsGet(AMPCUR_KEY, '') || '') === id;
     libRemove(AMPLIB_KEY, id);
     if (loopStore.isAvailable()) loopStore.deleteMisc(id).catch(() => {});
-    if (wasCur) { looperAudio.clearAmp(); model.ampName = ''; lsSet(AMPNAME_KEY, ''); lsSet(AMPCUR_KEY, ''); }
+    if (wasCur) {
+      looperAudio.clearAmp(); model.ampName = ''; lsSet(AMPNAME_KEY, ''); lsSet(AMPCUR_KEY, '');
+      ampLoadedModel = null; ampLoadedName = '';
+      setLoaderMsg('amp', '', false);
+    }
     renderAmpLib();
   }
 

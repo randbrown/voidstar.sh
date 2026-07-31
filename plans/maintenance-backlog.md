@@ -71,10 +71,12 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
    sample-rate-mismatch warning), and enabling earth/metal/comp pops a transient "+~N ms" note.
    *Note:* the LSTM/WASM item below is a **throughput** lever, not a latency one — the LSTM is
    causal and adds no delay.
-1. **Neural amp LSTM worklet (`worklets/neural-amp.js`)** — hottest loop in the app (O(4·H²)
-   mul-adds + 4 `exp`/`tanh` per hidden unit per sample). tanh/sigmoid **lookup table** (or the
-   tanh-based sigmoid identity to share one call); a WASM/SIMD backend is the bigger lever; add
-   **denormal flushing** for silent-decay state.
+1. **Neural amp LSTM worklet (`worklets/neural-amp.js`)** — hottest *scalar* loop in the app
+   (O(4·H²) mul-adds + 4 `exp`/`tanh` per hidden unit per sample). tanh/sigmoid **lookup table**
+   (or the tanh-based sigmoid identity to share one call); add **denormal flushing** for
+   silent-decay state. *The WASM/SIMD lever is now built* — `wasm/nam-wavenet.c` runs the NAM
+   WaveNet backend at ~15% of a core where scalar JS needed ~100%; the LSTM path could move onto
+   the same kernel style if it ever needs the headroom.
 2. **Waveshaper curve churn on knob drags** — rig Earth/Metal and vocoder gate/de-ess rebuild
    1–2K-float arrays on every slider tick. Quantize/cache by amount, rebuild on epsilon change.
 3. ✅ **`pinkNoiseBuffer` generated 2× per vocoder build** — *done:* memoized per (ctx, seconds).

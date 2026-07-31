@@ -48,6 +48,8 @@
 // floor. The strip is rebuilt whenever the rig capture (re)opens; looper.js
 // owns the persisted config and re-applies it via setConfig().
 
+import { loadNamWasm } from './nam-wasm.js';
+
 // ── Graphic EQ (geq) — Boss GE-7 voicing ─────────────────────────────────
 // Seven octave-spaced peaking bands (100 Hz…6.4 kHz, ±15 dB) + an overall
 // level (±15 dB), matching the pedal's sliders. Fixed Q ≈ octave bandwidth so
@@ -112,7 +114,11 @@ export const STRIP_DEFAULTS = {   // listed in chain order
   // so the noise floor is far higher: a higher threshold and a fast release,
   // which is also what the genre wants (tight, chugging cutoff).
   metalGate: { on: false, thresh: 0.28, release: 0.18 },
-  amp:    { on: false, gain: 1, mix: 1, level: 1 },
+  // `norm` level-matches captures using the loudness the capture declares (see
+  // neural-amp-model.js). Off by default: it's a real gain change, and the
+  // performer owns level. `level` alone can't do this job — it caps at 2x
+  // (+6 dB) and captures differ by more than that.
+  amp:    { on: false, gain: 1, mix: 1, level: 1, norm: false },
   eq:     { on: false, low: 0, mid: 0, high: 0 },
   cab:    { on: false, mix: 1, level: 1 },
   hpf:    { on: false, freq: 80 },
@@ -406,6 +412,8 @@ export function createRigStrip(ctx, cfg) {
   const ampWet = ctx.createGain();
   const ampSum = ctx.createGain();
   let neural = null, ampLoaded = false;
+  let ampNormTrim = 1;                 // linear gain from the loaded capture's
+                                       // declared loudness; 1 when it declares none
   try {
     neural = new AudioWorkletNode(ctx, 'neural-amp', {
       numberOfInputs: 1, numberOfOutputs: 1,
@@ -701,16 +709,63 @@ export function createRigStrip(ctx, cfg) {
     const active = state.amp.on && ampLoaded && !!neural;
     if (neural) { try { neural.port.postMessage({ cmd: 'bypass', on: !active }); } catch {} }
     const mix = clamp(state.amp.mix, 0, 1);
+    // The normalisation trim rides with the CAPTURE, not the strip, so swapping
+    // captures level-matches on its own and `level` stays the performer's knob.
+    const norm = state.amp.norm ? ampNormTrim : 1;
     ampDrive.gain.value = clamp(state.amp.gain, 0, 4);   // input drive into the model
     ampDry.gain.value = active ? (1 - mix) : 1;
-    ampWet.gain.value = active ? mix * clamp(state.amp.level, 0, 2) : 0;
+    ampWet.gain.value = active ? mix * clamp(state.amp.level, 0, 2) * norm : 0;
   }
-  function setAmpModel(model) {
+  // The processor reports the outcome of every load. Without this a backend that
+  // refuses to initialise leaves the amp silently transparent — the failure mode
+  // that made unsupported captures look like they "loaded" and did nothing.
+  let ampAck = null;
+  if (neural) {
+    neural.port.onmessage = (e) => {
+      const d = e.data; if (!d || !ampAck) return;
+      const ack = ampAck;
+      if (d.error) { ampAck = null; ack.reject(new Error(d.error)); }
+      else if (d.loaded) { ampAck = null; ack.resolve(true); }
+    };
+  }
+
+  // Async because a WaveNet capture needs the WASM kernel, which is fetched on
+  // demand (worklets can't fetch). Rejects with a reportable reason rather than
+  // leaving the amp silently unloaded — the caller shows it.
+  let ampLoadSeq = 0;
+  async function setAmpModel(model) {
     if (!neural) return false;
-    if (!model) { ampLoaded = false; try { neural.port.postMessage({ cmd: 'clear' }); } catch {} applyAmp(); return false; }
-    try { neural.port.postMessage({ cmd: 'load', model }); ampLoaded = true; } catch { ampLoaded = false; }
+    const seq = ++ampLoadSeq;
+    ampAck = null;
+    if (!model) { ampLoaded = false; ampNormTrim = 1; try { neural.port.postMessage({ cmd: 'clear' }); } catch {} applyAmp(); return false; }
+    ampNormTrim = Number.isFinite(model.normTrim) && model.normTrim > 0 ? model.normTrim : 1;
+    let wasm = null;
+    if (model.type === 'wavenet') {
+      try {
+        wasm = await loadNamWasm();
+      } catch (err) {
+        if (seq === ampLoadSeq) { ampLoaded = false; applyAmp(); }
+        throw new Error(`WASM kernel unavailable (${err?.message || err})`);
+      }
+      if (seq !== ampLoadSeq) return false;      // a newer capture won the race
+    }
+    const acked = new Promise((resolve, reject) => { ampAck = { resolve, reject }; });
+    try { neural.port.postMessage({ cmd: 'load', model, wasm }); } catch (err) {
+      ampAck = null; ampLoaded = false; applyAmp();
+      throw new Error(`could not reach the amp processor (${err?.message || err})`);
+    }
+    ampLoaded = true;
     applyAmp();
-    return ampLoaded;
+    // A refusal from the processor is the whole point of the ack, so let it
+    // throw. A missing ack is not: it only arrives while the audio thread is
+    // running, and a suspended context shouldn't fail an otherwise fine load.
+    try {
+      await Promise.race([acked, new Promise((r) => setTimeout(r, 2000))]);
+    } catch (err) {
+      if (seq === ampLoadSeq) { ampLoaded = false; applyAmp(); }
+      throw err;
+    }
+    return seq === ampLoadSeq;
   }
   function applyCab() {
     // Transparent until an IR is loaded; bypass (or no IR) = full dry, no wet.

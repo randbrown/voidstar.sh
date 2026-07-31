@@ -190,18 +190,70 @@ in → GEQ(7-band graphic) → comp → Earth(drive) → earth gate → Metal(dr
 
 ## neural-amp-model.js + worklets/neural-amp.js — neural amp modeling
 
-Loads small **LSTM** "capture" files (GuitarML/Proteus, AIDA-X, NAM-LSTM) and runs realtime
-inference as the rig's amp. (NAM WaveNet captures are intentionally unsupported — they need a WASM
-core.)
+Loads neural "capture" files and runs realtime inference as the rig's amp. Two backends sit behind
+one worklet node:
 
-- `parseAmpModel(json)` (main thread) normalizes the three on-disk formats into flat
-  `Float32Array`s `{hidden, Wih, Whh, b, Wd, bd}` and posts them to the worklet. `rig-strip` sends
-  `{cmd:'load'|'clear'|'bypass'}`.
-- The worklet runs a single-layer LSTM + dense head **sample-by-sample, allocation-free**.
-- **This is the single hottest DSP loop in the app.** Per sample: O(4·H²) mul-adds + 4
-  `exp`/`tanh` per hidden unit. At H=40/48 kHz that's ~1.2 GFLOP/s of scalar JS on the audio
-  thread. Optimization candidates (backlog): tanh/sigmoid lookup table, WASM/SIMD backend, denormal
-  flushing for silent-decay state.
+| Backend | Formats | Where it runs |
+|---|---|---|
+| `lstm` | GuitarML/Proteus, AIDA-X, NAM `architecture:"LSTM"` | plain JS in the worklet |
+| `wavenet` | NAM `architecture:"WaveNet"` — **what virtually every shared `.nam` actually is** | WASM SIMD kernel |
+
+- `parseAmpModel(json)` (main thread) dispatches on architecture and normalizes to flat
+  `Float32Array`s — `{hidden, Wih, Whh, b, Wd, bd}` for LSTM, or the packed layer-array description
+  for WaveNet. `rig-strip` sends `{cmd:'load'|'clear'|'bypass'}` and **awaits the worklet's ack**,
+  so a backend that fails to initialise reports instead of leaving the amp silently transparent.
+- The LSTM path runs a single-layer LSTM + dense head sample-by-sample, allocation-free.
+
+### The WaveNet path
+
+- **Parsing/packing:** `nam-wavenet.js`. Handles both NAM config schemas — classic (≤0.6:
+  `kernel_size`, `activation:"Tanh"`, `head_size`) and extended (0.7+: `kernel_sizes[]`,
+  `bottleneck`, an explicit Conv1D `head`, per-layer activations) — plus 0.7's container
+  architectures. A `SlimmableContainer` holds several submodels valid up to increasing input
+  levels; they are separately parameterised (not nested slices), so switching mid-stream would step
+  the output. **We take the widest**, which is the only one valid across the whole input range —
+  affordable now that the kernel is fast.
+- **Refusals are by name.** FiLM blocks, grouped convs, per-layer gating, `secondary_activation`
+  and friends are rejected saying which one stopped the load. Silently ignoring a block would load
+  "fine" and sound wrong — the worst failure for a rig. The final guard is arithmetic: the weight
+  cursor must land exactly on `weights.length`.
+- **Kernel:** `wasm/nam-wavenet.c` → `public/wasm/nam-wavenet.wasm` (**committed** — the site
+  auto-deploys from a push with no CI, and Pages has no C toolchain). Rebuild with
+  `src/lib/qualia/wasm/build.sh` and commit the result. Every matrix is packed `[in][outPadded]`
+  with channels padded to a multiple of 4, so the inner loop splats a scalar input and accumulates
+  whole `v128` lanes — no horizontal reductions.
+- **Why WASM:** a typical NAM WaveNet is ~12k mul-adds per sample. Scalar JS costs ~100% of one
+  core at 48 kHz (measured, 2.1 GHz Xeon); the SIMD kernel does the same graph at ~15%.
+- **The bytes cross the port, not the module.** A compiled `WebAssembly.Module` is
+  structured-cloneable but an `AudioWorkletGlobalScope` is a separate agent cluster — Chrome
+  *silently drops* the message. `nam-wasm.js` fetches the bytes (and compiles once to check
+  `nam_abi()` against a stale service-worker copy); the worklet compiles them synchronously.
+### Capture level (`norm`)
+
+Captures are trained at wildly different output levels — well over 10 dB apart. That matters more
+here than in a plugin host, because the amp's output feeds four things that care about absolute
+level: the PA, the mixer's soft limiter, recorded loops (the recorder taps the strip *output*), and
+**visual reactivity** — `sigAnalyser` is adopted into the mix as the `rig` source, so a hot capture
+literally makes the fx more excitable.
+
+- The amp stage's **`norm` toggle** level-matches a capture to a common loudness
+  (`NORM_TARGET_DB`, matching NAM's own target so levels translate to other NAM hosts). The trim is
+  computed by `normTrimFor()` from the capture's declared `metadata.loudness`, clamped to ±12 dB.
+- **Off by default** — it's a real gain change and the performer owns level.
+- The trim rides with the **capture**, not the strip (`ampNormTrim`, set in `setAmpModel`), so
+  swapping captures level-matches on its own while `lvl` stays the performer's knob. It's a
+  separate multiplier because `lvl` alone can't do the job — it caps at 2× (+6 dB).
+- **Never invisible:** the loader line states the capture's loudness and, when `norm` is on, the
+  exact dB being applied. A capture that declares no loudness (GuitarML/AIDA-X, older NAM) gets a
+  trim of exactly 1 and says so rather than guessing.
+- Worth remembering: loudness is measured at ONE operating point of a nonlinear model, so matching
+  there doesn't guarantee a match at your own dynamics or with the drive knob up.
+
+Sample rate is reported but not corrected — the loader line flags a capture trained at a rate other
+than the context's, since that shifts its frequency response.
+- `scripts/check-nam-wavenet.mjs` (in `npm run check`) drives the real worklet + real `.wasm`
+  against an independent reference forward pass across both schemas, gated layers, chained layer
+  arrays and padded channel counts, and asserts the refusal paths.
 
 ---
 

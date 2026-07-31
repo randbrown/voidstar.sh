@@ -1,15 +1,47 @@
 // Neural amp model parser — normalises a loaded capture file into the flat
 // typed-array form the neural-amp worklet expects:
 //   { ok, type:'lstm', hidden, Wih, Whh, b, Wd, bd }   (single-layer LSTM, input 1)
+//   { ok, type:'wavenet', arrays, headScale, … }       (NAM WaveNet, WASM kernel)
 // or { ok:false, reason }.
 //
-// Supported now (realtime-feasible in pure JS):
+// Supported:
 //   - GuitarML / RTNeural state_dict JSON (Proteus, NeuralPi) — rec.* / lin.*
 //   - AIDA-X-style single-LSTM JSON (same state_dict shape)
 //   - NAM .nam with architecture "LSTM" (experimental — single layer, input 1)
-// Not supported here (needs a WASM backend):
-//   - NAM "WaveNet" (the standard NAM architecture)
-//   - conditioned (input_size > 1) or multi-layer models
+//   - NAM .nam with architecture "WaveNet" — the standard NAM architecture, and
+//     what virtually every shared `.nam` capture actually is. Runs on the WASM
+//     SIMD kernel (wasm/nam-wavenet.c); the parsing lives in nam-wavenet.js.
+//   - NAM 0.7 container architectures (SlimmableContainer) wrapping a WaveNet
+// Not supported:
+//   - conditioned (input_size > 1) or multi-layer LSTM models
+//   - NAM extras nobody ships yet: FiLM blocks, grouped convs, per-layer gating
+
+import { parseWaveNet, unwrapContainer } from './nam-wavenet.js';
+
+// ── capture normalisation ───────────────────────────────────────────────────
+// NAM captures carry a measured output loudness, and they vary by well over
+// 10 dB between models — enough that swapping one mid-set sends a real level
+// jump to the PA, and enough to change how hard the mixer limiter works and how
+// excitable the visuals are (the rig analyser is adopted into the mix).
+//
+// `normTrim` is the linear gain that would bring a capture to a common level.
+// It is only ever ADVISORY: the strip applies it when the amp stage's `norm`
+// toggle is on, and the loader shows the dB it represents. Nothing here changes
+// the model's own output.
+//
+// Caveats worth remembering: the loudness is measured at one operating point of
+// a NONLINEAR model, so matching there doesn't guarantee matching at your own
+// dynamics or with the drive knob up; and only NAM files declare it at all —
+// GuitarML/AIDA-X captures get a trim of 1 and say so.
+const NORM_TARGET_DB = -18;   // NAM's own normalisation target, so levels
+                              // translate between this rig and other NAM hosts
+const NORM_MAX_DB = 12;       // never trim further than this in either direction
+
+export function normTrimFor(loudnessDb) {
+  if (!Number.isFinite(loudnessDb)) return 1;
+  const db = Math.max(-NORM_MAX_DB, Math.min(NORM_MAX_DB, NORM_TARGET_DB - loudnessDb));
+  return Math.pow(10, db / 20);
+}
 
 function flatten(a, out) {
   if (Array.isArray(a)) { for (let i = 0; i < a.length; i++) flatten(a[i], out); }
@@ -25,12 +57,26 @@ function toF32(a) {
 export function parseAmpModel(json) {
   if (!json || typeof json !== 'object') return { ok: false, reason: 'not a JSON model' };
 
-  // NAM format (has architecture + flat weights).
+  // NAM format (has architecture + flat weights). NAM 0.7 wraps the real model
+  // in a container architecture, so unwrap before dispatching on the name.
   if (json.architecture || (json.weights && json.config)) {
-    const arch = String(json.architecture || '').toLowerCase();
-    if (arch === 'wavenet') return { ok: false, reason: 'NAM WaveNet needs the WASM core (not bundled yet) — load a GuitarML/AIDA-X LSTM capture instead' };
-    if (arch === 'lstm') return parseNamLstm(json);
-    return { ok: false, reason: `unsupported NAM architecture: ${json.architecture || '?'}` };
+    const { model, arch: archName, picked } = unwrapContainer(json);
+    const arch = archName.toLowerCase();
+    if (arch === 'wavenet') {
+      const parsed = parseWaveNet(model);
+      if (parsed.ok && picked) parsed.container = picked;
+      if (parsed.ok) parsed.normTrim = normTrimFor(parsed.loudnessDb);
+      return parsed;
+    }
+    if (arch === 'lstm') {
+      const parsed = parseNamLstm(model);
+      if (parsed.ok) {
+        parsed.loudnessDb = Number.isFinite(model?.metadata?.loudness) ? +model.metadata.loudness : null;
+        parsed.normTrim = normTrimFor(parsed.loudnessDb);
+      }
+      return parsed;
+    }
+    return { ok: false, reason: `unsupported NAM architecture: ${archName || '?'}` };
   }
 
   // GuitarML / RTNeural state_dict.

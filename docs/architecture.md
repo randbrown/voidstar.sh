@@ -186,9 +186,10 @@ Cross-context audio is bridged for two consumers:
   reuse buffers/Path2D/ImageData forever. (Current allocation hotspots are tracked in the backlog.)
 
 **Audio (stricter — this is non-negotiable)**
-- Worklet `process()` must be **allocation-free and lock-free**. The neural-amp LSTM is the hottest
-  loop in the app (O(4·H²) mul-adds + transcendentals per sample); treat any work there as
-  expensive and prefer lookup tables / WASM-SIMD over naive scalar JS.
+- Worklet `process()` must be **allocation-free and lock-free**. The neural amp is the hottest work
+  in the app; treat anything there as expensive and prefer lookup tables / WASM-SIMD over naive
+  scalar JS. The NAM WaveNet backend is the worked example — scalar JS cost ~100% of a core, the
+  SIMD kernel (`qualia/wasm/nam-wavenet.c`) does it in ~15% (see `docs/audio-engine.md`).
 - Never rebuild large buffers (waveshaper curves, IRs, noise) on the audio thread or on every
   knob tick — quantize/cache by value and rebuild only on meaningful change.
 - The reactivity tick is decoupled (§4) specifically to protect the Strudel cyclist's lookahead.
