@@ -2030,9 +2030,10 @@ export default {
     // paint time, so he's drawn facing left here and comes out facing the
     // road. Everything sits inside the glasshouse (u 0.34–0.65).
     function drawDriver(X, Y, L, fs) {
-      const SKIN = '#6a92d2';        // moonlit, the way the sleeve art has him
-      const JACKET = '#1b2748';
-      const HAIR = '#131d36';
+      const SKIN = '#5f86c9';        // moonlit, the way the sleeve art has him
+      const SKIN_LO = '#2a3f6b';     // jaw and neck, out of the light
+      const JACKET = '#141b30';
+      const HAIR = '#0f1626';
 
       // Instrument glow washing the front of the cabin — he's lit by his
       // own dashboard, which is what puts him in the car rather than on it.
@@ -2043,110 +2044,194 @@ export default {
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
 
-      // Seat back, then the torso against it, leaning into the wheel.
-      ctx.fillStyle = '#100a19';
+      // Seat back behind him.
+      ctx.fillStyle = '#0b0611';
       ctx.beginPath();
-      ctx.moveTo(X(0.578), Y(0.158));
-      ctx.lineTo(X(0.572), Y(0.204));
-      ctx.lineTo(X(0.559), Y(0.206));
-      ctx.lineTo(X(0.564), Y(0.158));
+      ctx.moveTo(X(0.596), Y(0.158));
+      ctx.lineTo(X(0.588), Y(0.206));
+      ctx.lineTo(X(0.570), Y(0.208));
+      ctx.lineTo(X(0.576), Y(0.158));
       ctx.closePath();
       ctx.fill();
 
+      // Torso: shoulder line dropping to the beltline, collar turned up.
       ctx.fillStyle = JACKET;
       ctx.beginPath();
-      ctx.moveTo(X(0.566), Y(0.158));
-      ctx.lineTo(X(0.560), Y(0.196));
-      ctx.lineTo(X(0.532), Y(0.188));       // shoulder
-      ctx.lineTo(X(0.516), Y(0.170));
-      ctx.lineTo(X(0.520), Y(0.158));
+      ctx.moveTo(X(0.5860), Y(0.1580));
+      ctx.lineTo(X(0.5810), Y(0.1890));
+      ctx.quadraticCurveTo(X(0.5640), Y(0.1955), X(0.5460), Y(0.1855)); // far shoulder
+      ctx.lineTo(X(0.5300), Y(0.1790));
+      ctx.lineTo(X(0.5180), Y(0.1800));                                 // near shoulder
+      ctx.lineTo(X(0.5130), Y(0.1580));
       ctx.closePath();
       ctx.fill();
 
-      // Arm out to the rim, with the varsity sleeve stripes on it.
+      // Arm out to the rim: upper arm, then the varsity cuff stripes, then
+      // the glove. One stroke each — at this scale anything more is mud.
       ctx.lineCap = 'round';
       ctx.strokeStyle = JACKET;
-      ctx.lineWidth = Math.max(1.5, L * 0.0125);
+      ctx.lineWidth = Math.max(1.5, L * 0.0135);
       ctx.beginPath();
-      ctx.moveTo(X(0.538), Y(0.186));
-      ctx.lineTo(X(0.482), Y(0.175));
+      ctx.moveTo(X(0.5250), Y(0.1815));
+      ctx.lineTo(X(0.4960), Y(0.1765));
       ctx.stroke();
       ctx.strokeStyle = '#c8172a';
-      ctx.lineWidth = Math.max(1, L * 0.0028);
-      for (let i = 0; i < 2; i++) {
+      ctx.lineWidth = Math.max(1, L * 0.0030);
+      for (let i = 0; i < 3; i++) {
+        const ex = X(0.5115 - i * 0.0085);
         ctx.beginPath();
-        ctx.moveTo(X(0.512 + i * 0.009), Y(0.1855));
-        ctx.lineTo(X(0.5115 + i * 0.009), Y(0.1765));
-        ctx.stroke();
+        ctx.moveTo(ex, Y(0.1830)); ctx.lineTo(ex, Y(0.1700)); ctx.stroke();
       }
-      ctx.strokeStyle = SKIN;
-      ctx.lineWidth = Math.max(1, L * 0.0062);
+      // Driving glove on the rim, knuckles catching the dash light.
+      ctx.fillStyle = '#0a0d15';
       ctx.beginPath();
-      ctx.moveTo(X(0.481), Y(0.1748));
-      ctx.lineTo(X(0.474), Y(0.1730));
-      ctx.stroke();
+      ctx.ellipse(X(0.487), Y(0.1745), L * 0.0130, L * 0.0092, -0.18, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(190,214,255,0.5)';
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        ctx.arc(X(0.4925 - i * 0.005), Y(0.1785), Math.max(0.5, L * 0.0016), 0, TAU);
+        ctx.fill();
+      }
       // The wheel rim his hand is on.
       ctx.strokeStyle = '#0a0d16';
       ctx.lineWidth = Math.max(1, L * 0.005);
       ctx.beginPath();
-      ctx.moveTo(X(0.466), Y(0.184));
-      ctx.lineTo(X(0.459), Y(0.162));
+      ctx.moveTo(X(0.478), Y(0.186));
+      ctx.lineTo(X(0.470), Y(0.163));
       ctx.stroke();
 
-      // Head — jaw forward, chin up.
+      // Neck.
+      ctx.fillStyle = SKIN_LO;
+      ctx.beginPath();
+      ctx.moveTo(X(0.5300), Y(0.1785));
+      ctx.lineTo(X(0.5408), Y(0.1785));
+      ctx.lineTo(X(0.5430), Y(0.1600));
+      ctx.lineTo(X(0.5285), Y(0.1600));
+      ctx.closePath();
+      ctx.fill();
+
+      // ── The head, in profile ──────────────────────────────────────────
+      // A circle reads as a cartoon at any size. What makes him a person is
+      // the silhouette: forehead, brow, the nose out front of the glasses,
+      // the notch under it, chin, and the jaw running back to the ear.
+      // He looks out at us rather than down the road. A strict profile is
+      // anatomically right and completely unreadable at thirty pixels — and
+      // it throws away the one detail everybody knows, which is both lenses
+      // burning at you. Turning the head is also just what a driver does.
       ctx.fillStyle = SKIN;
       ctx.beginPath();
-      ctx.ellipse(X(0.524), Y(0.200), L * 0.0180, L * 0.0210, -0.12, 0, TAU);
-      ctx.fill();
-      // Jaw shadow along the underside.
-      ctx.fillStyle = 'rgba(18,30,60,0.5)';
-      ctx.beginPath();
-      ctx.ellipse(X(0.528), Y(0.188), L * 0.0160, L * 0.0075, -0.12, 0, TAU);
-      ctx.fill();
-
-      // Hair — a swept mass off the brow, breaking into three spikes.
-      ctx.fillStyle = HAIR;
-      ctx.beginPath();
-      ctx.moveTo(X(0.510), Y(0.209));
-      ctx.lineTo(X(0.516), Y(0.223));
-      ctx.lineTo(X(0.526), Y(0.213));
-      ctx.lineTo(X(0.534), Y(0.225));
-      ctx.lineTo(X(0.541), Y(0.213));
-      ctx.lineTo(X(0.548), Y(0.221));
-      ctx.lineTo(X(0.551), Y(0.197));
-      ctx.lineTo(X(0.539), Y(0.192));
-      ctx.lineTo(X(0.518), Y(0.199));
+      ctx.moveTo(X(0.5350), Y(0.2120));                     // crown
+      ctx.quadraticCurveTo(X(0.5205), Y(0.2090), X(0.5190), Y(0.1955));
+      ctx.quadraticCurveTo(X(0.5180), Y(0.1855), X(0.5265), Y(0.1780)); // cheek
+      ctx.quadraticCurveTo(X(0.5350), Y(0.1728), X(0.5435), Y(0.1780)); // chin
+      ctx.quadraticCurveTo(X(0.5520), Y(0.1855), X(0.5510), Y(0.1955));
+      ctx.quadraticCurveTo(X(0.5495), Y(0.2090), X(0.5350), Y(0.2120));
       ctx.closePath();
       ctx.fill();
 
-      // The glasses, and the glint that rides the beat.
-      ctx.fillStyle = '#04060d';
+      // Lit from the dash, so the far side of the face falls away.
+      ctx.fillStyle = 'rgba(20,32,66,0.55)';
       ctx.beginPath();
-      ctx.moveTo(X(0.5035), Y(0.2085));
-      ctx.lineTo(X(0.5305), Y(0.2050));
-      ctx.lineTo(X(0.5310), Y(0.1975));
-      ctx.lineTo(X(0.5040), Y(0.2005));
+      ctx.moveTo(X(0.5420), Y(0.2105));
+      ctx.quadraticCurveTo(X(0.5495), Y(0.2090), X(0.5510), Y(0.1955));
+      ctx.quadraticCurveTo(X(0.5520), Y(0.1855), X(0.5435), Y(0.1780));
+      ctx.quadraticCurveTo(X(0.5410), Y(0.1900), X(0.5420), Y(0.2105));
       ctx.closePath();
       ctx.fill();
-      const glint = Math.min(1, 0.35 + scratch.beatPulse * 0.65 + scratch.bass * 0.3);
+
+      // Stubble along the jaw. Kept as a flat band — curve it up at the
+      // ends and the whole face reads as grinning.
+      ctx.fillStyle = 'rgba(16,26,56,0.40)';
+      ctx.beginPath();
+      ctx.moveTo(X(0.5255), Y(0.1800));
+      ctx.lineTo(X(0.5445), Y(0.1800));
+      ctx.quadraticCurveTo(X(0.5350), Y(0.1728), X(0.5255), Y(0.1800));
+      ctx.closePath();
+      ctx.fill();
+      // Nose and mouth — two marks, no more. Anything else turns to mud.
+      ctx.fillStyle = 'rgba(18,30,62,0.5)';
+      ctx.beginPath();
+      ctx.moveTo(X(0.5322), Y(0.1872));
+      ctx.lineTo(X(0.5378), Y(0.1872));
+      ctx.lineTo(X(0.5352), Y(0.1902));
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillRect(X(0.5322), Y(0.1822), L * 0.0058, Math.max(0.6, L * 0.0020));
+
+      // Dash light under the jaw.
       ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = glint * 0.85;
-      ctx.drawImage(glowRed, X(0.5090) - L * 0.019, Y(0.2035) - L * 0.019,
-                    L * 0.038, L * 0.038);
+      ctx.globalAlpha = Math.min(1, 0.16 + scratch.bass * 0.22);
+      ctx.drawImage(glowRed, X(0.5350) - L * 0.026, Y(0.1770) - L * 0.018,
+                    L * 0.052, L * 0.036);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = `rgba(255,232,224,${Math.min(1, 0.55 + glint * 0.45)})`;
+
+      // Hair: a heavy swept mass breaking into spikes, sideburns down past
+      // the temples.
+      ctx.fillStyle = HAIR;
       ctx.beginPath();
-      ctx.arc(X(0.5100), Y(0.2035), Math.max(0.9, L * 0.0032), 0, TAU);
+      ctx.moveTo(X(0.5168), Y(0.1955));
+      ctx.lineTo(X(0.5175), Y(0.2085));
+      ctx.lineTo(X(0.5205), Y(0.2215));                     // spike
+      ctx.lineTo(X(0.5265), Y(0.2120));
+      ctx.lineTo(X(0.5330), Y(0.2245));                     // spike
+      ctx.lineTo(X(0.5395), Y(0.2130));
+      ctx.lineTo(X(0.5465), Y(0.2235));                     // spike
+      ctx.lineTo(X(0.5520), Y(0.2110));
+      ctx.lineTo(X(0.5548), Y(0.2205));                     // spike
+      ctx.lineTo(X(0.5562), Y(0.2000));
+      ctx.lineTo(X(0.5528), Y(0.1950));                     // sideburn
+      ctx.quadraticCurveTo(X(0.5500), Y(0.2038), X(0.5350), Y(0.2055));
+      ctx.quadraticCurveTo(X(0.5212), Y(0.2052), X(0.5195), Y(0.1950));
+      ctx.closePath();
       ctx.fill();
 
-      // Cold rim down the back of his head and shoulder, from the rear glass.
-      ctx.strokeStyle = 'rgba(150,190,255,0.42)';
-      ctx.lineWidth = Math.max(1, 1.2 * fs);
+      // ── The glasses ───────────────────────────────────────────────────
+      // Frame first, then both lenses burning through it.
+      const glint = Math.min(1, 0.35 + scratch.beatPulse * 0.65 + scratch.bass * 0.3);
+      ctx.fillStyle = '#04060d';
       ctx.beginPath();
-      ctx.moveTo(X(0.551), Y(0.214));
-      ctx.lineTo(X(0.553), Y(0.194));
-      ctx.lineTo(X(0.566), Y(0.161));
+      ctx.moveTo(X(0.5175), Y(0.2022));
+      ctx.lineTo(X(0.5525), Y(0.2012));
+      ctx.lineTo(X(0.5522), Y(0.1906));
+      ctx.lineTo(X(0.5178), Y(0.1916));
+      ctx.closePath();
+      ctx.fill();
+      const lens = [[0.5194, 0.5320], [0.5382, 0.5508]];
+      for (let i = 0; i < 2; i++) {
+        const u0 = lens[i][0], u1 = lens[i][1];
+        ctx.fillStyle = `rgba(255,74,54,${Math.min(1, 0.72 + glint * 0.28)})`;
+        ctx.beginPath();
+        ctx.moveTo(X(u0), Y(0.2004));
+        ctx.lineTo(X(u1), Y(0.1999));
+        ctx.lineTo(X(u1), Y(0.1928));
+        ctx.lineTo(X(u0), Y(0.1933));
+        ctx.closePath();
+        ctx.fill();
+        const cu = (u0 + u1) / 2;
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = glint * 0.85;
+        ctx.drawImage(glowRed, X(cu) - L * 0.019, Y(0.1966) - L * 0.019,
+                      L * 0.038, L * 0.038);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = `rgba(255,238,230,${Math.min(1, 0.55 + glint * 0.45)})`;
+        ctx.beginPath();
+        ctx.arc(X(cu), Y(0.1966), Math.max(0.7, L * 0.0027), 0, TAU);
+        ctx.fill();
+      }
+
+      // Cold rim off the rear glass, down the back of his head and shoulder.
+      ctx.strokeStyle = 'rgba(150,190,255,0.45)';
+      ctx.lineWidth = Math.max(1, 1.1 * fs);
+      ctx.beginPath();
+      ctx.moveTo(X(0.5562), Y(0.2000));
+      ctx.lineTo(X(0.5528), Y(0.1950));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(X(0.5810), Y(0.1890));
+      ctx.lineTo(X(0.5860), Y(0.1600));
       ctx.stroke();
     }
 
