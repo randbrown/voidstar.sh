@@ -23,9 +23,27 @@
 # headers. NO COOP/COEP: nothing uses SharedArrayBuffer, and cross-origin
 # isolation would break those same CDN imports. The setlist/mind apps hold
 # Google Drive OAuth tokens in localStorage, so framing protection matters.
+#
+# upgrade-insecure-requests: the static build ships zero http:// subresources —
+# every CDN import, font, model and sample URL under src/ is https, and the only
+# http:// strings that survive into dist/ are XML namespace identifiers. But
+# /qualia is a live-coding instrument: the performer's own Strudel/Hydra code,
+# custom sample-manifest repos, and Drive-backed media pull in arbitrary URLs at
+# runtime, and setlist/mind render user-supplied image URLs. A single http://
+# image or sample is enough to drop the padlock to "Not Secure" mid-set, which
+# is exactly the kind of thing you cannot stop and debug on stage. Rewriting
+# those to https costs nothing for anything the app itself loads (all already
+# https) and removes the whole failure class.
+#
+# This deliberately does NOT break the OBS remote's ws://127.0.0.1:4455. The
+# upgrade algorithm returns early for potentially-trustworthy URLs (loopback
+# counts) and for IP-literal hosts, so both the default OBS URL and a LAN-IP
+# override are left alone. Verified on Chromium 141 by pointing a page carrying
+# this header at a raw socket: a plaintext WebSocket handshake still arrives,
+# byte-identical to the no-CSP control.
 /*
   X-Frame-Options: SAMEORIGIN
-  Content-Security-Policy: frame-ancestors 'self'
+  Content-Security-Policy: frame-ancestors 'self'; upgrade-insecure-requests
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(self), microphone=(self), geolocation=(self), midi=(self), interest-cohort=()
