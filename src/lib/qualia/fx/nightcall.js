@@ -1236,14 +1236,18 @@ export default {
     }
 
     // ── The Testarossa from behind ──────────────────────────────────────
-    // Drawn as vectors to match the side view, and because the rear of this
-    // car is the most graphic thing about it: full-width slats running clean
-    // across the tail, lights burning behind them.
+    // Drawn as vectors to match the side view. The shape is the point: this
+    // car is a coke bottle from behind — the haunches swell out past the
+    // track, tuck back in at the valance, and the roof is barely two fifths
+    // of the width. Draw it as a box with a tapered top and it reads as a
+    // box. So the silhouette is all curves, the C-pillars turn away into
+    // darker paint, and the full-width grille sits between the haunches with
+    // the lights burning at its ends.
     //
     // Car-space: x as a fraction of the width either side of centre, y as a
     // fraction of the height above the ground contact.
     function drawRearCar(pcx, groundY, CW, fs, glow) {
-      const CH = CW * 0.44;
+      const CH = CW * 0.52;
       const X = (u) => pcx + u * CW + bank * CW * 0.035;
       const Y = (v) => groundY - v * CH;
       const tlA = Math.min(1, (0.45 + scratch.bass * 0.55 + scratch.brake * 0.5) * glow);
@@ -1251,212 +1255,264 @@ export default {
       // Contact shadow.
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.beginPath();
-      ctx.ellipse(pcx, groundY, CW * 0.52, CH * 0.075, 0, 0, TAU);
+      ctx.ellipse(pcx, groundY, CW * 0.54, CH * 0.055, 0, 0, TAU);
       ctx.fill();
 
-      // Rear tyres — squat and wide, the Testarossa's whole stance.
+      // Rear tyres, tucked under the arches.
       ctx.fillStyle = '#07090f';
       for (let s = -1; s <= 1; s += 2) {
         ctx.beginPath();
-        ctx.roundRect(X(s * 0.50 - (s > 0 ? 0.115 : 0)), Y(0.34), CW * 0.115, CH * 0.34,
-                      [CW * 0.02, CW * 0.02, CW * 0.012, CW * 0.012]);
+        ctx.roundRect(X(s * 0.500 - (s > 0 ? 0.112 : 0)), Y(0.300), CW * 0.112, CH * 0.300,
+                      [CW * 0.022, CW * 0.022, CW * 0.012, CW * 0.012]);
         ctx.fill();
       }
 
-      // Body. Lower box + the tapering upper deck, one path so the
-      // silhouette stays clean.
+      // ── Body ─────────────────────────────────────────────────────────
       if (!rearGrad || rearGrad._h !== CH) {
         rearGrad = ctx.createLinearGradient(0, groundY - CH * 1.02, 0, groundY);
         rearGrad.addColorStop(0, '#ff5a5f');
-        rearGrad.addColorStop(0.30, '#e01a2b');
-        rearGrad.addColorStop(0.72, '#a00f1e');
-        rearGrad.addColorStop(1, '#4c060f');
+        rearGrad.addColorStop(0.26, '#ef2b39');
+        rearGrad.addColorStop(0.58, '#c2151f');
+        rearGrad.addColorStop(0.82, '#8d0d18');
+        rearGrad.addColorStop(1, '#40050d');
         rearGrad._h = CH;
       }
+      const shell = () => {
+        ctx.beginPath();
+        ctx.moveTo(X(-0.452), Y(0.100));
+        ctx.quadraticCurveTo(X(-0.492), Y(0.235), X(-0.500), Y(0.420)); // haunch
+        ctx.quadraticCurveTo(X(-0.504), Y(0.560), X(-0.474), Y(0.655)); // shoulder
+        ctx.quadraticCurveTo(X(-0.432), Y(0.716), X(-0.330), Y(0.776)); // deck corner
+        ctx.quadraticCurveTo(X(-0.252), Y(0.846), X(-0.214), Y(0.936)); // C-pillar
+        ctx.lineTo(X(-0.200), Y(1.000));
+        ctx.lineTo(X(0.200), Y(1.000));
+        ctx.lineTo(X(0.214), Y(0.936));
+        ctx.quadraticCurveTo(X(0.252), Y(0.846), X(0.330), Y(0.776));
+        ctx.quadraticCurveTo(X(0.432), Y(0.716), X(0.474), Y(0.655));
+        ctx.quadraticCurveTo(X(0.504), Y(0.560), X(0.500), Y(0.420));
+        ctx.quadraticCurveTo(X(0.492), Y(0.235), X(0.452), Y(0.100));
+        ctx.closePath();
+      };
       ctx.fillStyle = rearGrad;
-      ctx.beginPath();
-      ctx.moveTo(X(-0.470), Y(0.10));
-      ctx.lineTo(X(-0.500), Y(0.30));      // arch flare at its widest
-      ctx.lineTo(X(-0.492), Y(0.56));
-      ctx.lineTo(X(-0.400), Y(0.86));      // C-pillar rake
-      ctx.lineTo(X(-0.330), Y(0.99));
-      ctx.lineTo(X(0.330), Y(0.99));
-      ctx.lineTo(X(0.400), Y(0.86));
-      ctx.lineTo(X(0.492), Y(0.56));
-      ctx.lineTo(X(0.500), Y(0.30));
-      ctx.lineTo(X(0.470), Y(0.10));
-      ctx.closePath();
-      ctx.fill();
+      shell(); ctx.fill();
 
-      // Rear glass, sunk into the deck.
+      // The buttresses turn away from us, so they go a stop down.
+      ctx.fillStyle = 'rgba(96,8,18,0.55)';
+      for (let s = -1; s <= 1; s += 2) {
+        ctx.beginPath();
+        ctx.moveTo(X(s * 0.200), Y(1.000));
+        ctx.lineTo(X(s * 0.214), Y(0.936));
+        ctx.quadraticCurveTo(X(s * 0.252), Y(0.846), X(s * 0.330), Y(0.776));
+        ctx.lineTo(X(s * 0.300), Y(0.776));
+        ctx.quadraticCurveTo(X(s * 0.238), Y(0.860), X(s * 0.196), Y(0.972));
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Rear glass, sunk between the buttresses.
       ctx.fillStyle = '#070c1c';
-      ctx.beginPath();
-      ctx.moveTo(X(-0.315), Y(0.985));
-      ctx.lineTo(X(0.315), Y(0.985));
-      ctx.lineTo(X(0.355), Y(0.828));
-      ctx.lineTo(X(-0.355), Y(0.828));
-      ctx.closePath();
-      ctx.fill();
+      const glass = () => {
+        ctx.beginPath();
+        ctx.moveTo(X(-0.188), Y(0.986));
+        ctx.lineTo(X(0.188), Y(0.986));
+        ctx.quadraticCurveTo(X(0.236), Y(0.878), X(0.298), Y(0.800));
+        ctx.lineTo(X(-0.298), Y(0.800));
+        ctx.quadraticCurveTo(X(-0.236), Y(0.878), X(-0.188), Y(0.986));
+        ctx.closePath();
+      };
+      glass(); ctx.fill();
 
-      // Kavinsky, seen from behind through it. Left-hand drive, so from
-      // back here he sits on the right. Just the spikes and the shoulders —
-      // at this size anything more turns to mud.
+      // Kavinsky through it. Left-hand drive, so from back here he's on the
+      // right. Spikes and shoulders only — more than that turns to mud.
       ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(X(-0.315), Y(0.985));
-      ctx.lineTo(X(0.315), Y(0.985));
-      ctx.lineTo(X(0.355), Y(0.828));
-      ctx.lineTo(X(-0.355), Y(0.828));
-      ctx.closePath();
-      ctx.clip();
+      glass(); ctx.clip();
       ctx.fillStyle = '#141d38';
-      ctx.beginPath();                                  // shoulders
-      ctx.ellipse(X(0.145), Y(0.828), CW * 0.115, CH * 0.10, 0, 0, TAU);
+      ctx.beginPath();
+      ctx.ellipse(X(0.090), Y(0.800), CW * 0.098, CH * 0.075, 0, 0, TAU);
       ctx.fill();
-      ctx.beginPath();                                  // head
-      ctx.ellipse(X(0.145), Y(0.895), CW * 0.052, CH * 0.075, 0, 0, TAU);
+      ctx.beginPath();
+      ctx.ellipse(X(0.090), Y(0.862), CW * 0.045, CH * 0.058, 0, 0, TAU);
       ctx.fill();
-      ctx.beginPath();                                  // the spikes
-      ctx.moveTo(X(0.100), Y(0.905));
-      ctx.lineTo(X(0.112), Y(0.960));
-      ctx.lineTo(X(0.132), Y(0.928));
-      ctx.lineTo(X(0.150), Y(0.968));
-      ctx.lineTo(X(0.170), Y(0.930));
-      ctx.lineTo(X(0.188), Y(0.955));
-      ctx.lineTo(X(0.192), Y(0.900));
+      ctx.beginPath();
+      ctx.moveTo(X(0.050), Y(0.872));
+      ctx.lineTo(X(0.060), Y(0.918));
+      ctx.lineTo(X(0.078), Y(0.892));
+      ctx.lineTo(X(0.094), Y(0.926));
+      ctx.lineTo(X(0.112), Y(0.894));
+      ctx.lineTo(X(0.128), Y(0.916));
+      ctx.lineTo(X(0.132), Y(0.870));
       ctx.closePath();
       ctx.fill();
-      // Dash light catching the edge of him.
       ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = Math.min(1, 0.30 + scratch.bass * 0.35);
-      ctx.drawImage(glowRed, X(0.06) - CW * 0.16, Y(0.90) - CH * 0.16,
-                    CW * 0.32, CH * 0.32);
+      ctx.globalAlpha = Math.min(1, 0.28 + scratch.bass * 0.32);
+      ctx.drawImage(glowRed, X(0.010) - CW * 0.14, Y(0.862) - CH * 0.14,
+                    CW * 0.28, CH * 0.28);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
       ctx.restore();
 
-      // Engine-cover louvres above the tail — the other set of fins.
-      ctx.strokeStyle = 'rgba(38,4,10,0.75)';
-      ctx.lineWidth = Math.max(1, CH * 0.018);
+      // Engine-cover grille on the deck, and the spoiler lip behind it.
+      ctx.fillStyle = '#0b0d13';
+      ctx.beginPath();
+      ctx.roundRect(X(-0.292), Y(0.792), CW * 0.584, CH * 0.086, CH * 0.012);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(150,180,235,0.16)';
+      ctx.lineWidth = Math.max(0.6, CH * 0.008);
       for (let i = 0; i < 4; i++) {
-        const v = 0.80 - i * 0.045;
+        const v = 0.782 - i * 0.020;
         ctx.beginPath();
-        ctx.moveTo(X(-0.335 - i * 0.012), Y(v));
-        ctx.lineTo(X(0.335 + i * 0.012), Y(v));
-        ctx.stroke();
+        ctx.moveTo(X(-0.288), Y(v)); ctx.lineTo(X(0.288), Y(v)); ctx.stroke();
       }
+      ctx.strokeStyle = 'rgba(255,206,206,0.32)';
+      ctx.lineWidth = Math.max(1, 1.4 * fs);
+      ctx.beginPath();
+      ctx.moveTo(X(-0.436), Y(0.706));
+      ctx.quadraticCurveTo(X(0), Y(0.742), X(0.436), Y(0.706));
+      ctx.stroke();
 
       // ── The tail band ────────────────────────────────────────────────
-      // Black egg-crate panel spanning the full width, tail lights burning
-      // behind it, then the fins laid over the whole thing — lights and all.
-      // Running the fins straight across the lamps is the signature; on the
-      // real car the lights are simply what you see through the grille.
-      const bandTop = 0.600, bandBot = 0.330;
+      // Full-width black egg-crate, lights burning behind it at the ends,
+      // then the fins laid straight across the lot. Running them over the
+      // lamps is the signature — on the real car the lights are simply what
+      // you see through the grille.
+      const bandTop = 0.660, bandBot = 0.452;
+      const band = () => {
+        ctx.beginPath();
+        ctx.moveTo(X(-0.476), Y(bandTop));
+        ctx.lineTo(X(0.476), Y(bandTop));
+        ctx.lineTo(X(0.492), Y(bandBot));
+        ctx.lineTo(X(-0.492), Y(bandBot));
+        ctx.closePath();
+      };
       ctx.fillStyle = '#08090f';
-      ctx.fillRect(X(-0.50), Y(bandTop), CW, Y(bandBot) - Y(bandTop));
+      band(); ctx.fill();
 
       ctx.save();
-      ctx.beginPath();
-      ctx.rect(X(-0.50), Y(bandTop), CW, Y(bandBot) - Y(bandTop));
-      ctx.clip();
+      band(); ctx.clip();
       ctx.globalCompositeOperation = 'lighter';
-      // Lamps run from the outer edge nearly to the middle, leaving the
-      // dark centre section the badge sits over.
       for (let s = -1; s <= 1; s += 2) {
-        const lx = X(s * 0.315);
+        const lx = X(s * 0.335);
         const ly = Y((bandTop + bandBot) / 2);
         ctx.globalAlpha = Math.min(1, tlA);
-        ctx.drawImage(glowRed, lx - CW * 0.24, ly - CH * 0.28, CW * 0.48, CH * 0.56);
+        ctx.drawImage(glowRed, lx - CW * 0.24, ly - CH * 0.26, CW * 0.48, CH * 0.52);
         ctx.globalAlpha = Math.min(1, tlA * 0.92);
         ctx.fillStyle = '#ff2b32';
-        ctx.fillRect(lx - CW * 0.175, ly - CH * 0.098, CW * 0.35, CH * 0.196);
+        ctx.fillRect(lx - CW * 0.150, ly - CH * 0.082, CW * 0.30, CH * 0.164);
       }
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
       ctx.restore();
 
-      // Fins — six thin ones straight across, tighter than the eye expects,
-      // which is what makes the panel read as a grille and not a stripe.
-      const FINS = 6;
+      const FINS = 7;
       for (let i = 0; i < FINS; i++) {
         const v = bandBot + (i + 0.5) * (bandTop - bandBot) / FINS;
+        const hw = 0.476 + (bandTop - v) / (bandTop - bandBot) * 0.016;
         ctx.fillStyle = '#0a0c12';
-        ctx.fillRect(X(-0.50), Y(v), CW, Math.max(1.2, CH * 0.026));
-        // A cold edge on top of each, so they read as metal.
+        ctx.fillRect(X(-hw), Y(v), CW * hw * 2, Math.max(1.1, CH * 0.021));
         ctx.fillStyle = 'rgba(150,180,235,0.20)';
-        ctx.fillRect(X(-0.50), Y(v), CW, Math.max(0.6, CH * 0.007));
+        ctx.fillRect(X(-hw), Y(v), CW * hw * 2, Math.max(0.6, CH * 0.006));
       }
       // Prancing-horse badge on the dark centre panel.
       ctx.fillStyle = '#e8c020';
-      ctx.fillRect(X(-0.017), Y(0.505), CW * 0.034, CH * 0.075);
+      ctx.fillRect(X(-0.015), Y(0.588), CW * 0.030, CH * 0.062);
       ctx.fillStyle = '#141008';
-      ctx.fillRect(X(-0.010), Y(0.494), CW * 0.020, CH * 0.045);
+      ctx.fillRect(X(-0.009), Y(0.579), CW * 0.018, CH * 0.038);
 
-      // ── Valance ──────────────────────────────────────────────────────
-      // Black bumper section below the grille: plate dead centre, reversing
-      // lamps either side of it, quad pipes underneath.
+      // ── Bumper and valance ───────────────────────────────────────────
+      // Body-colour bumper with the plate recessed into it, then the black
+      // lower valance with the diffuser and two pairs of pipes.
       ctx.fillStyle = '#0d0f16';
-      ctx.fillRect(X(-0.50), Y(bandBot), CW, Y(0.085) - Y(bandBot));
-      // Body-colour strip between grille and bumper.
-      ctx.fillStyle = 'rgba(150,14,26,0.9)';
-      ctx.fillRect(X(-0.50), Y(bandBot), CW, Math.max(1, CH * 0.022));
+      ctx.beginPath();
+      ctx.moveTo(X(-0.470), Y(0.288));
+      ctx.lineTo(X(0.470), Y(0.288));
+      ctx.quadraticCurveTo(X(0.452), Y(0.150), X(0.404), Y(0.086));
+      ctx.lineTo(X(-0.404), Y(0.086));
+      ctx.quadraticCurveTo(X(-0.452), Y(0.150), X(-0.470), Y(0.288));
+      ctx.closePath();
+      ctx.fill();
 
-      // Plate.
-      const plW = CW * 0.230, plH = CH * 0.115;
-      const plX = X(-0.115), plY = Y(0.285);
+      // Plate, recessed into the body-colour bumper above it.
+      const plW = CW * 0.250, plH = CH * 0.108;
+      const plX = X(-0.125), plY = Y(0.418);
+      ctx.fillStyle = '#0a0c12';
+      ctx.beginPath();
+      ctx.roundRect(plX - CW * 0.014, plY - CH * 0.014, plW + CW * 0.028,
+                    plH + CH * 0.028, CW * 0.008);
+      ctx.fill();
       ctx.fillStyle = '#e9eef8';
       ctx.beginPath(); ctx.roundRect(plX, plY, plW, plH, CW * 0.006); ctx.fill();
-      ctx.strokeStyle = 'rgba(40,50,70,0.7)';
-      ctx.lineWidth = Math.max(0.6, fs * 0.8);
-      ctx.beginPath(); ctx.roundRect(plX, plY, plW, plH, CW * 0.006); ctx.stroke();
       ctx.fillStyle = '#131820';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = `600 ${Math.max(4, plH * 0.72)}px ui-sans-serif, "Helvetica Neue", Arial, sans-serif`;
-      ctx.fillText('KVNSKY', plX + plW / 2, plY + plH * 0.55);
+      ctx.font = `600 ${Math.max(4, plH * 0.70)}px ui-sans-serif, "Helvetica Neue", Arial, sans-serif`;
+      ctx.fillText('KVNSKY', plX + plW / 2, plY + plH * 0.56);
 
-      // Reversing lamps flanking the plate.
+      // Reversing lamps outboard of the plate.
       for (let s = -1; s <= 1; s += 2) {
-        const rx = X(s * 0.215 - (s > 0 ? 0.058 : 0));
-        ctx.fillStyle = 'rgba(236,244,255,0.92)';
-        ctx.fillRect(rx, Y(0.272), CW * 0.058, CH * 0.052);
+        const rx = X(s * 0.290 - (s > 0 ? 0.062 : 0));
+        ctx.fillStyle = 'rgba(236,244,255,0.9)';
+        ctx.fillRect(rx, Y(0.398), CW * 0.062, CH * 0.050);
         ctx.fillStyle = 'rgba(150,175,215,0.5)';
-        ctx.fillRect(rx, Y(0.272), CW * 0.058, Math.max(0.6, CH * 0.010));
+        ctx.fillRect(rx, Y(0.398), CW * 0.062, Math.max(0.6, CH * 0.010));
       }
-      // Quad pipes, clear of the plate.
-      for (let i = 0; i < 4; i++) {
-        const ex = X(-0.072 + i * 0.048);
-        ctx.fillStyle = '#242a35';
-        ctx.beginPath(); ctx.arc(ex, Y(0.122), CW * 0.018, 0, TAU); ctx.fill();
-        ctx.fillStyle = '#05070b';
-        ctx.beginPath(); ctx.arc(ex, Y(0.122), CW * 0.012, 0, TAU); ctx.fill();
+
+      // Quad pipes, in two pairs the way the real car wears them.
+      for (let s = -1; s <= 1; s += 2) {
+        for (let i = 0; i < 2; i++) {
+          const ex = X(s * (0.086 + i * 0.062));
+          ctx.fillStyle = '#242a35';
+          ctx.beginPath(); ctx.arc(ex, Y(0.176), CW * 0.028, 0, TAU); ctx.fill();
+          ctx.fillStyle = '#05070b';
+          ctx.beginPath(); ctx.arc(ex, Y(0.176), CW * 0.019, 0, TAU); ctx.fill();
+        }
       }
-      // Diffuser shadow under the valance.
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillRect(X(-0.44), Y(0.095), CW * 0.88, CH * 0.040);
+      // Diffuser fins, in the gap between the two pairs.
+      ctx.strokeStyle = 'rgba(120,150,205,0.16)';
+      ctx.lineWidth = Math.max(0.8, fs);
+      for (let i = -1; i <= 1; i++) {
+        const dx = X(i * 0.026);
+        ctx.beginPath();
+        ctx.moveTo(dx, Y(0.208)); ctx.lineTo(dx, Y(0.140)); ctx.stroke();
+      }
 
-      // Body highlights: rear-deck edge and the two shoulder lines. Cold
-      // white, because the only light back here is the moon.
-      ctx.strokeStyle = 'rgba(198,220,255,0.30)';
-      ctx.lineWidth = Math.max(1, 1.4 * fs);
+      // ── Light on the shape ───────────────────────────────────────────
+      // Cold rim down the haunches and along the shoulder — the only light
+      // back here is the moon, and it's what makes the curves read as curves.
+      ctx.strokeStyle = 'rgba(198,220,255,0.34)';
+      ctx.lineWidth = Math.max(1, 1.5 * fs);
+      for (let s = -1; s <= 1; s += 2) {
+        ctx.beginPath();
+        ctx.moveTo(X(s * 0.452), Y(0.100));
+        ctx.quadraticCurveTo(X(s * 0.492), Y(0.235), X(s * 0.500), Y(0.420));
+        ctx.quadraticCurveTo(X(s * 0.504), Y(0.560), X(s * 0.474), Y(0.655));
+        ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(198,220,255,0.26)';
+      ctx.lineWidth = Math.max(1, 1.2 * fs);
       ctx.beginPath();
-      ctx.moveTo(X(-0.355), Y(0.828)); ctx.lineTo(X(0.355), Y(0.828));
+      ctx.moveTo(X(-0.298), Y(0.800));
+      ctx.quadraticCurveTo(X(-0.236), Y(0.878), X(-0.188), Y(0.986));
       ctx.stroke();
-      // Deck lip along the top of the grille — the ridge the light catches.
-      ctx.strokeStyle = 'rgba(255,206,206,0.30)';
       ctx.beginPath();
-      ctx.moveTo(X(-0.50), Y(bandTop)); ctx.lineTo(X(0.50), Y(bandTop));
+      ctx.moveTo(X(0.298), Y(0.800));
+      ctx.quadraticCurveTo(X(0.236), Y(0.878), X(0.188), Y(0.986));
+      ctx.stroke();
+      // Specular running across the haunch tops.
+      ctx.strokeStyle = 'rgba(255,214,214,0.22)';
+      ctx.lineWidth = Math.max(1, 1.6 * fs);
+      ctx.beginPath();
+      ctx.moveTo(X(-0.470), Y(0.672));
+      ctx.quadraticCurveTo(X(0), Y(0.700), X(0.470), Y(0.672));
       ctx.stroke();
 
-      // Door mirrors, sitting on the C-pillar shoulders where the
-      // Testarossa wears them, just clear of the roofline.
+      // Door mirrors, out on the shoulders.
       ctx.fillStyle = '#7c0e16';
       for (let s = -1; s <= 1; s += 2) {
-        const u = s * 0.405 - (s > 0 ? 0.048 : 0);
         ctx.beginPath();
-        ctx.roundRect(X(u), Y(1.028), CW * 0.048, CH * 0.062, CW * 0.008);
+        ctx.roundRect(X(s * 0.398 - (s > 0 ? 0.046 : 0)), Y(0.870), CW * 0.046,
+                      CH * 0.058, CW * 0.008);
         ctx.fill();
-        ctx.fillRect(X(u + (s > 0 ? 0.018 : 0.020)), Y(0.966), CW * 0.011, CH * 0.040);
+        ctx.fillRect(X(s * 0.382 - (s > 0 ? 0.010 : 0)), Y(0.812), CW * 0.010, CH * 0.040);
       }
 
       // ── Light ────────────────────────────────────────────────────────
@@ -1470,13 +1526,13 @@ export default {
       ctx.drawImage(glowRed, pcx - streak, ly - tlR * 0.8, streak * 2, tlR * 1.6);
       ctx.globalAlpha = tlA * 0.85;
       for (let s = -1; s <= 1; s += 2) {
-        ctx.drawImage(glowRed, X(s * 0.325) - tlR * 2.2, ly - tlR * 2.2, tlR * 4.4, tlR * 4.4);
+        ctx.drawImage(glowRed, X(s * 0.335) - tlR * 2.2, ly - tlR * 2.2, tlR * 4.4, tlR * 4.4);
       }
       // Red reflection smeared down the wet road beneath the car. wetGrad is
       // baked in canvas space over exactly this band — no per-frame gradient.
       ctx.globalAlpha = Math.min(1, tlA * (0.4 + scratch.rainAmt) * 0.85);
       ctx.fillStyle = wetGrad;
-      ctx.fillRect(pcx - CW * 0.46, groundY, CW * 0.92, H - groundY);
+      ctx.fillRect(pcx - CW * 0.48, groundY, CW * 0.96, H - groundY);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
     }
@@ -1925,23 +1981,25 @@ export default {
         const gx = s * 0.92 * Rw;
         ctx.fillStyle = '#161b28';
         ctx.beginPath();
-        // Tops stand a little proud of the face, the way the real tubes do.
-        ctx.roundRect(gx - Rw * 0.105, -0.16 * Rw, Rw * 0.21, Rw * 0.80, Rw * 0.105);
+        // They stand well clear of the face — on the real piece the tubes
+        // rise to about the height of the centre peak. They sit far enough
+        // out that going tall costs the console nothing.
+        ctx.roundRect(gx - Rw * 0.098, -0.50 * Rw, Rw * 0.196, Rw * 1.14, Rw * 0.098);
         ctx.fill();
         ctx.strokeStyle = 'rgba(150,190,255,0.20)';
         ctx.lineWidth = Math.max(1, Rw * 0.012);
         ctx.beginPath();
-        ctx.moveTo(gx - Rw * 0.075, -0.09 * Rw);
-        ctx.lineTo(gx - Rw * 0.075, 0.52 * Rw);
+        ctx.moveTo(gx - Rw * 0.070, -0.42 * Rw);
+        ctx.lineTo(gx - Rw * 0.070, 0.50 * Rw);
         ctx.stroke();
         // Finger grooves down the inner face.
         ctx.strokeStyle = 'rgba(6,8,14,0.7)';
         ctx.lineWidth = Math.max(1, Rw * 0.010);
-        for (let i = 0; i < 3; i++) {
-          const gy = 0.10 * Rw + i * 0.11 * Rw;
+        for (let i = 0; i < 4; i++) {
+          const gy = -0.30 * Rw + i * 0.13 * Rw;
           ctx.beginPath();
-          ctx.moveTo(gx - Rw * 0.085, gy);
-          ctx.lineTo(gx + Rw * 0.085, gy);
+          ctx.moveTo(gx - Rw * 0.080, gy);
+          ctx.lineTo(gx + Rw * 0.080, gy);
           ctx.stroke();
         }
       }
@@ -1983,11 +2041,11 @@ export default {
     // off the nose has to clear the front tyre with bodywork to spare —
     // level with it and the wheel reads as bursting through the fender.
     const CAR_BODY = [
-      [0.000, 0.068], [0.000, 0.098], [0.030, 0.114],
-      [0.082, 0.136],                       // hood climbing off the nose
-      [0.160, 0.158], [0.230, 0.166],       // fender crown over the front wheel
-      [0.300, 0.172],                       // cowl
-      [0.325, 0.176], [0.360, 0.196],       // windshield, raked in two steps
+      [0.000, 0.068], [0.000, 0.098], [0.035, 0.116],
+      [0.100, 0.140],                       // hood climbing off the nose
+      [0.175, 0.160], [0.245, 0.172],       // fender crown over the front wheel
+      [0.305, 0.176],                       // cowl
+      [0.325, 0.178], [0.360, 0.198],       // windshield, raked in two steps
       [0.405, 0.222], [0.440, 0.231],
       [0.530, 0.236], [0.600, 0.230],       // low roof
       [0.650, 0.215], [0.720, 0.192],       // flying-buttress slope
@@ -1995,8 +2053,11 @@ export default {
       [0.985, 0.156], [1.000, 0.153],       // rear deck → kamm tail top
       [1.000, 0.060], [0.980, 0.040],       // tail face → rear valance
     ];
-    const FRONT_WHEEL = { u: 0.185, r: 0.066 };
-    const REAR_WHEEL = { u: 0.775, r: 0.066 };
+    // Overhangs off the real car: front ~0.24 of the length, rear ~0.19,
+    // wheelbase ~0.57. These were the wrong way round, which is what made
+    // the panel behind the rear wheel run long.
+    const FRONT_WHEEL = { u: 0.238, r: 0.066 };
+    const REAR_WHEEL = { u: 0.806, r: 0.066 };
 
     function drawWheel(cx, cy, R, L, fs) {
       // Tire.
@@ -2057,12 +2118,12 @@ export default {
       // Torso: shoulder line dropping to the beltline, collar turned up.
       ctx.fillStyle = JACKET;
       ctx.beginPath();
-      ctx.moveTo(X(0.5860), Y(0.1580));
-      ctx.lineTo(X(0.5810), Y(0.1890));
-      ctx.quadraticCurveTo(X(0.5640), Y(0.1955), X(0.5460), Y(0.1855)); // far shoulder
-      ctx.lineTo(X(0.5300), Y(0.1790));
-      ctx.lineTo(X(0.5180), Y(0.1800));                                 // near shoulder
-      ctx.lineTo(X(0.5130), Y(0.1580));
+      ctx.moveTo(X(0.5900), Y(0.1580));
+      ctx.lineTo(X(0.5850), Y(0.1880));
+      ctx.quadraticCurveTo(X(0.5700), Y(0.1955), X(0.5540), Y(0.1868)); // shoulder
+      ctx.lineTo(X(0.5340), Y(0.1792));
+      ctx.lineTo(X(0.5210), Y(0.1802));                                 // chest
+      ctx.lineTo(X(0.5160), Y(0.1580));
       ctx.closePath();
       ctx.fill();
 
@@ -2104,10 +2165,10 @@ export default {
       // Neck.
       ctx.fillStyle = SKIN_LO;
       ctx.beginPath();
-      ctx.moveTo(X(0.5300), Y(0.1785));
-      ctx.lineTo(X(0.5408), Y(0.1785));
-      ctx.lineTo(X(0.5430), Y(0.1600));
-      ctx.lineTo(X(0.5285), Y(0.1600));
+      ctx.moveTo(X(0.5300), Y(0.1762));
+      ctx.lineTo(X(0.5455), Y(0.1790));
+      ctx.lineTo(X(0.5480), Y(0.1600));
+      ctx.lineTo(X(0.5320), Y(0.1600));
       ctx.closePath();
       ctx.fill();
 
@@ -2115,123 +2176,127 @@ export default {
       // A circle reads as a cartoon at any size. What makes him a person is
       // the silhouette: forehead, brow, the nose out front of the glasses,
       // the notch under it, chin, and the jaw running back to the ear.
-      // He looks out at us rather than down the road. A strict profile is
-      // anatomically right and completely unreadable at thirty pixels — and
-      // it throws away the one detail everybody knows, which is both lenses
-      // burning at you. Turning the head is also just what a driver does.
+      // He watches the road, not us — so this is a near profile, turned just
+      // far enough that the far lens shows past the bridge. Two things decide
+      // whether a head this small reads at all: depth against height (a face
+      // is very nearly as tall as it is deep) and how much of it is lit,
+      // since below the eye line a real face narrows to the jaw with the back
+      // third given over to ear, hair and shadow. Let the light run the full
+      // depth and you get a muzzle.
       ctx.fillStyle = SKIN;
       ctx.beginPath();
-      ctx.moveTo(X(0.5350), Y(0.2120));                     // crown
-      ctx.quadraticCurveTo(X(0.5205), Y(0.2090), X(0.5190), Y(0.1955));
-      ctx.quadraticCurveTo(X(0.5180), Y(0.1855), X(0.5265), Y(0.1780)); // cheek
-      ctx.quadraticCurveTo(X(0.5350), Y(0.1728), X(0.5435), Y(0.1780)); // chin
-      ctx.quadraticCurveTo(X(0.5520), Y(0.1855), X(0.5510), Y(0.1955));
-      ctx.quadraticCurveTo(X(0.5495), Y(0.2090), X(0.5350), Y(0.2120));
+      ctx.moveTo(X(0.5340), Y(0.2130));                     // crown
+      ctx.quadraticCurveTo(X(0.5215), Y(0.2110), X(0.5165), Y(0.1990));
+      ctx.lineTo(X(0.5150), Y(0.1945));                     // brow into the bridge
+      ctx.lineTo(X(0.5060), Y(0.1880));                     // nose tip
+      ctx.lineTo(X(0.5145), Y(0.1845));                     // nostril, cut back
+      ctx.lineTo(X(0.5128), Y(0.1805));                     // upper lip
+      ctx.lineTo(X(0.5165), Y(0.1742));                     // chin, out again
+      ctx.quadraticCurveTo(X(0.5300), Y(0.1725), X(0.5450), Y(0.1800)); // jaw
+      ctx.quadraticCurveTo(X(0.5530), Y(0.1880), X(0.5540), Y(0.1990));
+      ctx.quadraticCurveTo(X(0.5545), Y(0.2075), X(0.5340), Y(0.2130));
       ctx.closePath();
       ctx.fill();
 
-      // Lit from the dash, so the far side of the face falls away.
-      ctx.fillStyle = 'rgba(20,32,66,0.55)';
+      // The back of the head falls out of the dash light.
+      ctx.fillStyle = 'rgba(20,32,66,0.60)';
       ctx.beginPath();
-      ctx.moveTo(X(0.5420), Y(0.2105));
-      ctx.quadraticCurveTo(X(0.5495), Y(0.2090), X(0.5510), Y(0.1955));
-      ctx.quadraticCurveTo(X(0.5520), Y(0.1855), X(0.5435), Y(0.1780));
-      ctx.quadraticCurveTo(X(0.5410), Y(0.1900), X(0.5420), Y(0.2105));
+      ctx.moveTo(X(0.5330), Y(0.2122));
+      ctx.lineTo(X(0.5330), Y(0.1745));
+      ctx.quadraticCurveTo(X(0.5390), Y(0.1748), X(0.5450), Y(0.1800));
+      ctx.quadraticCurveTo(X(0.5530), Y(0.1880), X(0.5540), Y(0.1990));
+      ctx.quadraticCurveTo(X(0.5545), Y(0.2075), X(0.5340), Y(0.2130));
       ctx.closePath();
       ctx.fill();
 
-      // Stubble along the jaw. Kept as a flat band — curve it up at the
-      // ends and the whole face reads as grinning.
-      ctx.fillStyle = 'rgba(16,26,56,0.40)';
+      // Stubble along the jaw. Kept as a flat band — curve it up at the ends
+      // and the whole face reads as grinning.
+      ctx.fillStyle = 'rgba(16,26,56,0.42)';
       ctx.beginPath();
-      ctx.moveTo(X(0.5255), Y(0.1800));
-      ctx.lineTo(X(0.5445), Y(0.1800));
-      ctx.quadraticCurveTo(X(0.5350), Y(0.1728), X(0.5255), Y(0.1800));
+      ctx.moveTo(X(0.5148), Y(0.1788));
+      ctx.lineTo(X(0.5165), Y(0.1742));
+      ctx.quadraticCurveTo(X(0.5300), Y(0.1725), X(0.5450), Y(0.1800));
+      ctx.lineTo(X(0.5400), Y(0.1812));
+      ctx.quadraticCurveTo(X(0.5280), Y(0.1762), X(0.5148), Y(0.1788));
       ctx.closePath();
       ctx.fill();
-      // Nose and mouth — two marks, no more. Anything else turns to mud.
-      ctx.fillStyle = 'rgba(18,30,62,0.5)';
-      ctx.beginPath();
-      ctx.moveTo(X(0.5322), Y(0.1872));
-      ctx.lineTo(X(0.5378), Y(0.1872));
-      ctx.lineTo(X(0.5352), Y(0.1902));
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillRect(X(0.5322), Y(0.1822), L * 0.0058, Math.max(0.6, L * 0.0020));
 
       // Dash light under the jaw.
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = Math.min(1, 0.16 + scratch.bass * 0.22);
-      ctx.drawImage(glowRed, X(0.5350) - L * 0.026, Y(0.1770) - L * 0.018,
+      ctx.drawImage(glowRed, X(0.5260) - L * 0.026, Y(0.1760) - L * 0.018,
                     L * 0.052, L * 0.036);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
 
-      // Hair: a heavy swept mass breaking into spikes, sideburns down past
-      // the temples.
+      // Hair: onto the brow, swept back into spikes, sideburn carried down
+      // in front of the ear so the back of the jaw sits inside it.
       ctx.fillStyle = HAIR;
       ctx.beginPath();
-      ctx.moveTo(X(0.5168), Y(0.1955));
-      ctx.lineTo(X(0.5175), Y(0.2085));
-      ctx.lineTo(X(0.5205), Y(0.2215));                     // spike
-      ctx.lineTo(X(0.5265), Y(0.2120));
-      ctx.lineTo(X(0.5330), Y(0.2245));                     // spike
-      ctx.lineTo(X(0.5395), Y(0.2130));
-      ctx.lineTo(X(0.5465), Y(0.2235));                     // spike
-      ctx.lineTo(X(0.5520), Y(0.2110));
-      ctx.lineTo(X(0.5548), Y(0.2205));                     // spike
-      ctx.lineTo(X(0.5562), Y(0.2000));
-      ctx.lineTo(X(0.5528), Y(0.1950));                     // sideburn
-      ctx.quadraticCurveTo(X(0.5500), Y(0.2038), X(0.5350), Y(0.2055));
-      ctx.quadraticCurveTo(X(0.5212), Y(0.2052), X(0.5195), Y(0.1950));
+      ctx.moveTo(X(0.5178), Y(0.2015));
+      ctx.lineTo(X(0.5218), Y(0.2160));                     // spike
+      ctx.lineTo(X(0.5285), Y(0.2095));
+      ctx.lineTo(X(0.5350), Y(0.2220));                     // spike
+      ctx.lineTo(X(0.5415), Y(0.2110));
+      ctx.lineTo(X(0.5485), Y(0.2205));                     // spike
+      ctx.lineTo(X(0.5540), Y(0.2085));
+      ctx.lineTo(X(0.5570), Y(0.2170));
+      ctx.lineTo(X(0.5595), Y(0.1975));
+      ctx.quadraticCurveTo(X(0.5560), Y(0.1845), X(0.5490), Y(0.1825));
+      ctx.lineTo(X(0.5452), Y(0.1905));                     // sideburn
+      ctx.quadraticCurveTo(X(0.5510), Y(0.1990), X(0.5395), Y(0.2035));
+      ctx.quadraticCurveTo(X(0.5265), Y(0.2062), X(0.5178), Y(0.2015));
       ctx.closePath();
       ctx.fill();
 
       // ── The glasses ───────────────────────────────────────────────────
-      // Frame first, then both lenses burning through it.
+      // Frame, then the near lens full-on and the far one as the sliver you
+      // catch past the bridge at this angle.
       const glint = Math.min(1, 0.35 + scratch.beatPulse * 0.65 + scratch.bass * 0.3);
       ctx.fillStyle = '#04060d';
       ctx.beginPath();
-      ctx.moveTo(X(0.5175), Y(0.2022));
-      ctx.lineTo(X(0.5525), Y(0.2012));
-      ctx.lineTo(X(0.5522), Y(0.1906));
-      ctx.lineTo(X(0.5178), Y(0.1916));
+      ctx.moveTo(X(0.5138), Y(0.2005));
+      ctx.lineTo(X(0.5400), Y(0.1978));
+      ctx.lineTo(X(0.5520), Y(0.1950));                     // temple
+      ctx.lineTo(X(0.5518), Y(0.1912));
+      ctx.lineTo(X(0.5395), Y(0.1922));
+      ctx.lineTo(X(0.5145), Y(0.1935));
       ctx.closePath();
       ctx.fill();
-      const lens = [[0.5194, 0.5320], [0.5382, 0.5508]];
+      const lens = [[0.5152, 0.5292, 1], [0.5322, 0.5388, 0.72]];
       for (let i = 0; i < 2; i++) {
-        const u0 = lens[i][0], u1 = lens[i][1];
-        ctx.fillStyle = `rgba(255,74,54,${Math.min(1, 0.72 + glint * 0.28)})`;
+        const u0 = lens[i][0], u1 = lens[i][1], k = lens[i][2];
+        ctx.fillStyle = `rgba(255,74,54,${Math.min(1, (0.70 + glint * 0.30) * k)})`;
         ctx.beginPath();
-        ctx.moveTo(X(u0), Y(0.2004));
-        ctx.lineTo(X(u1), Y(0.1999));
-        ctx.lineTo(X(u1), Y(0.1928));
-        ctx.lineTo(X(u0), Y(0.1933));
+        ctx.moveTo(X(u0), Y(0.1996));
+        ctx.lineTo(X(u1), Y(0.1980));
+        ctx.lineTo(X(u1), Y(0.1926));
+        ctx.lineTo(X(u0), Y(0.1940));
         ctx.closePath();
         ctx.fill();
         const cu = (u0 + u1) / 2;
         ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = glint * 0.85;
-        ctx.drawImage(glowRed, X(cu) - L * 0.019, Y(0.1966) - L * 0.019,
+        ctx.globalAlpha = glint * 0.85 * k;
+        ctx.drawImage(glowRed, X(cu) - L * 0.019, Y(0.1962) - L * 0.019,
                       L * 0.038, L * 0.038);
         ctx.globalAlpha = 1;
         ctx.globalCompositeOperation = 'source-over';
-        ctx.fillStyle = `rgba(255,238,230,${Math.min(1, 0.55 + glint * 0.45)})`;
-        ctx.beginPath();
-        ctx.arc(X(cu), Y(0.1966), Math.max(0.7, L * 0.0027), 0, TAU);
-        ctx.fill();
       }
+      ctx.fillStyle = `rgba(255,238,230,${Math.min(1, 0.55 + glint * 0.45)})`;
+      ctx.beginPath();
+      ctx.arc(X(0.5222), Y(0.1965), Math.max(0.7, L * 0.0027), 0, TAU);
+      ctx.fill();
 
       // Cold rim off the rear glass, down the back of his head and shoulder.
       ctx.strokeStyle = 'rgba(150,190,255,0.45)';
       ctx.lineWidth = Math.max(1, 1.1 * fs);
       ctx.beginPath();
-      ctx.moveTo(X(0.5562), Y(0.2000));
-      ctx.lineTo(X(0.5528), Y(0.1950));
+      ctx.moveTo(X(0.5595), Y(0.1975));
+      ctx.quadraticCurveTo(X(0.5560), Y(0.1845), X(0.5490), Y(0.1825));
       ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(X(0.5810), Y(0.1890));
-      ctx.lineTo(X(0.5860), Y(0.1600));
+      ctx.moveTo(X(0.5850), Y(0.1880));
+      ctx.lineTo(X(0.5900), Y(0.1600));
       ctx.stroke();
     }
 
@@ -2315,21 +2380,23 @@ export default {
 
       // THE strakes — the side louvres raking into the rear intake.
       ctx.strokeStyle = '#55070f';
-      ctx.lineWidth = Math.max(1, L * 0.006);
-      for (let i = 0; i < 5; i++) {
-        const v = 0.055 + i * 0.015;
+      ctx.lineWidth = Math.max(1, L * 0.0058);
+      for (let i = 0; i < 6; i++) {
+        const v = 0.062 + i * 0.0136;
         ctx.beginPath();
-        ctx.moveTo(X(0.445 + i * 0.010), Y(v));
-        ctx.lineTo(X(0.700), Y(v + 0.004));
+        ctx.moveTo(X(0.390 + i * 0.008), Y(v));
+        ctx.lineTo(X(0.686), Y(v + 0.006));
         ctx.stroke();
       }
       // Door seams + handle.
+      // Shut lines bracket the strakes: the leading edge just ahead of the
+      // first fin, the trailing edge raking back off the last one.
       ctx.strokeStyle = 'rgba(40,4,10,0.8)';
       ctx.lineWidth = Math.max(1, fs);
-      ctx.beginPath(); ctx.moveTo(X(0.418), Y(0.150)); ctx.lineTo(X(0.408), Y(0.055)); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(X(0.664), Y(0.152)); ctx.lineTo(X(0.700), Y(0.060)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(0.372), Y(0.170)); ctx.lineTo(X(0.364), Y(0.054)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(0.660), Y(0.156)); ctx.lineTo(X(0.694), Y(0.062)); ctx.stroke();
       ctx.strokeStyle = 'rgba(255,220,220,0.4)';
-      ctx.beginPath(); ctx.moveTo(X(0.600), Y(0.146)); ctx.lineTo(X(0.638), Y(0.146)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(0.612), Y(0.150)); ctx.lineTo(X(0.646), Y(0.150)); ctx.stroke();
 
       // Beltline specular — the long white streak that sells the paint.
       ctx.strokeStyle = 'rgba(255,235,235,0.5)';
@@ -2362,15 +2429,17 @@ export default {
       // Pop-up headlight, up for the night — pod + white lamp face.
       ctx.fillStyle = '#b0121f';
       ctx.beginPath();
-      ctx.moveTo(X(0.085), Y(0.130));
-      ctx.lineTo(X(0.088), Y(0.160));
-      ctx.lineTo(X(0.150), Y(0.176));
-      ctx.lineTo(X(0.152), Y(0.148));
+      // A raised pop-up hinges at its back, so the lens face stands tall at
+      // the front and the top slopes down into the hood behind it.
+      ctx.moveTo(X(0.082), Y(0.126));
+      ctx.lineTo(X(0.084), Y(0.160));
+      ctx.lineTo(X(0.148), Y(0.150));
+      ctx.lineTo(X(0.152), Y(0.140));
       ctx.closePath();
       ctx.fill();
       const beam = Math.min(1, 0.55 + scratch.beatPulse * 0.45) * glow;
       ctx.fillStyle = `rgba(235,242,255,${0.85 * Math.min(1, beam + 0.3)})`;
-      ctx.fillRect(X(0.086), Y(0.158), L * 0.011, L * 0.024);
+      ctx.fillRect(X(0.086), Y(0.157), L * 0.012, L * 0.026);
 
       // Front amber marker + tail-light strip.
       ctx.fillStyle = '#ffb43a';
@@ -2382,7 +2451,7 @@ export default {
 
       // Lights in world space (unrotated — the pitch is tiny).
       const tailX = wx(1.0), tailY = groundY - bob - 0.095 * L;
-      const lampX = wx(0.083), lampY = groundY - bob - 0.146 * L;
+      const lampX = wx(0.083), lampY = groundY - bob - 0.144 * L;
 
       ctx.globalCompositeOperation = 'lighter';
       // Headlight beam — a long cold cone toward the right edge. Two thin
