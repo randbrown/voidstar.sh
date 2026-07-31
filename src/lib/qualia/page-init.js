@@ -4324,14 +4324,16 @@ export function initQualiaPage() {
   // through the active quale's enabled phase steps, independent of the
   // auto-phase STYLE (random/palettes only make sense for the hands-off timer).
   // Shares autoPhaseStepCount so manual and auto stepping stay on the same
-  // position.
+  // position. Returns true when a step was accepted (it may still be deferred
+  // to a cycle boundary by the quantizer) and false when the active quale has
+  // nothing to step — the qphase lane's auto-yield reads that.
   function phaseShift(dir) {
     const steps = getActivePhaseSteps();
-    if (!steps || !steps.length) return;
+    if (!steps || !steps.length) return false;
     const fxId = core.activeId();
     const excluded = fxId ? loadPhaseExcludedFor(fxId) : new Set();
     const incl = phaseIncludedIndices(steps, excluded).map(i => steps[i]);
-    if (!incl.length) return;
+    if (!incl.length) return false;
     quantizedSceneChange(() => {
       lastAutoTransitionMs = performance.now();   // arm the auto-cycle cross-guard
       runSceneTransition();                        // freeze the old look before the step lands
@@ -4339,6 +4341,7 @@ export function initQualiaPage() {
       const idx = ((autoPhaseStepCount % incl.length) + incl.length) % incl.length;
       applyPhaseStep(incl[idx]);
     });
+    return true;
   }
 
   function tickPhase() {
@@ -4902,6 +4905,10 @@ export function initQualiaPage() {
     getField: () => core.field,
     setParam: (fxId, paramId, value) => core.setParam(fxId, paramId, value),
     scopeCanvas: document.getElementById('test-canvas'),
+    // Which hands-off timers are running, read fresh at every roll — the
+    // random-pattern generator parks the lane that would fight each one
+    // instead of shipping two masters for one knob (see patterns.js).
+    autoModes: () => ({ cycle: autoCycleSeconds > 0, phase: autoPhaseSeconds > 0 }),
     onPlayStateChange: (playing) => {
       // A leader's play/stop should reach followers within a beacon tick.
       try { _syncRef?.notifyTransport?.(); } catch {}
@@ -6945,6 +6952,9 @@ export function initQualiaPage() {
       phaseShift,
       setPhasePeriod,
       getPhasePeriod: () => autoPhaseSeconds,
+      // Remembered dwell (never 0) — what `autoPhase(true)` / the toggle
+      // resumes to after a lane's auto-yield switched the timer off.
+      getPhaseDwell: () => autoPhasePeriodSec,
       setPhaseStyle: (s) => {
         if (!AUTO_PHASE_STYLES.includes(s)) return;
         autoPhaseStyle = s;
@@ -6955,6 +6965,7 @@ export function initQualiaPage() {
       getPhaseStyle: () => autoPhaseStyle,
       setCyclePeriod,
       getCyclePeriod: () => autoCycleSeconds,
+      getCycleDwell: () => autoCyclePeriodSec,
       setCycleStyle: (s) => {
         if (!AUTO_CYCLE_STYLES.includes(s)) return;
         autoCycleStyle = s;

@@ -117,6 +117,16 @@ export function clonePattern(id) {
 // random from a pool of other `q*` examples. A nugget per roll — not the
 // whole API — so after a handful of loads the user has seen most of the
 // surface by example without any single pattern overwhelming them.
+//
+// The two scene lanes are gated on the hands-off timers: `quale()` and
+// auto-cycle drive the same knob, as do `qphase()` and auto-phase. Rolling a
+// live lane while its timer runs hands one control to two masters — the lane
+// picks a quale, the dwell timer swaps it out seconds later, the lane snaps it
+// back on its next hap — which reads on stage as the visuals stuttering. So a
+// lane whose timer is running is emitted PARKED (commented out) rather than
+// dropped: the example stays in front of the user, and uncommenting it takes
+// the wheel for real, because the lane switches the matching timer off on its
+// first hap (the auto-yield in code-api.js).
 const ROOTS  = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 const SCALES = ['minor', 'major', 'dorian', 'mixolydian', 'lydian',
                 'phrygian', 'harmonic minor', 'pentatonic'];
@@ -152,7 +162,16 @@ const API_NUGGETS = [
   () => `qcall(v => qualia.overlay("${pick(OVERLAYS)}", v > 0), "<1 0>").slow(4),  // overlay layer on/off`,
 ];
 
-export function randomPattern() {
+/**
+ * Roll a fresh random pattern.
+ *
+ * @param {{cycle?: boolean, phase?: boolean}} [autoModes]
+ *   Which hands-off timers are currently running, so the lane that would
+ *   fight each one is parked instead of live (see the note above). Defaults
+ *   to "neither" — a caller with no view of the page state gets the full
+ *   pattern, exactly as before.
+ */
+export function randomPattern(autoModes = {}) {
   const rootNote = pick(ROOTS);
   const scale    = pick(SCALES);
   // Tempo random across [0.5, 1.0] — chill range with a touch of headroom.
@@ -172,6 +191,20 @@ export function randomPattern() {
   // 4/8-cycle strobe starved the cyclist into "skip query: too late".
   const qualeCycles      = pick([16, 32]);
   const nugget = pick(API_NUGGETS)();
+
+  // Park (comment out) a lane whose auto timer is already running, swapping the
+  // "what it does" comment for "why it's off" so the line explains itself.
+  const park = (code, why) => `// ${code},  // parked — ${why} is on; uncomment to drive it from here`;
+  const qualeLane = `quale("<${quale1} ${quale2}>").slow(${qualeCycles})`;
+  const phaseLane = `qphase("1").slow(8)`;
+  const laneLines = [
+    autoModes.cycle ? park(qualeLane, 'auto-cycle')
+                    : `${qualeLane},  // swap quale every ${qualeCycles} cycles`,
+    autoModes.phase ? park(phaseLane, 'auto-phase')
+                    : `${phaseLane},  // step the quale's phase every 8th cycle`,
+    nugget,
+  ].join('\n  ');
+
   return `// @title qualem ${tag}
 // @by voidstar
 setcps(${cps})
@@ -180,9 +213,7 @@ stack(
   n("<0 4 ${bass3} ${bass4}>/4").scale('${rootNote}1 ${scale}').s("gm_synth_strings_2").lpf(800),
 
   // silent qualia lanes — visuals driven from the pattern (funcs tab: "qualia")
-  quale("<${quale1} ${quale2}>").slow(${qualeCycles}),  // swap quale every ${qualeCycles} cycles
-  qphase("1").slow(8),  // step the quale's phase every 8th cycle
-  ${nugget}
+  ${laneLines}
 ).room(0.5)`;
 }
 

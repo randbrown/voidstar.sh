@@ -48,10 +48,10 @@ stack(
 
 | Function | Semantics |
 |---|---|
-| `quale(pat)` | Switch the active quale per event (fuzzy id/name). Honors transition style + cycle quantize. `"null"` selects the null quale (blank fx layer). |
+| `quale(pat)` | Switch the active quale per event (fuzzy id/name). Honors transition style + cycle quantize. `"null"` selects the null quale (blank fx layer). Switches **auto-cycle off** on its first landed hap. |
 | `qset(paramId, pat)` | Set an **active-quale** param per event. Continuous signals need `.segment(n)`. |
 | `qpreset(pat)` | Apply factory/user presets by name per event. |
-| `qphase(pat)` | Step the quale's phase per event (value = direction ±1). |
+| `qphase(pat)` | Step the quale's phase per event (value = direction ±1). Switches **auto-phase off** on its first landed hap. |
 | `qglitch(name, pat)` | Set a glitch post's mode per event (`ascii/mosh/edge/stitch/negative` × `off/on/blip/flip`). |
 | `qcall(fn, pat)` | Call `fn(value, hap)` per event — the generic escape hatch. |
 | `pat.qtrig(fn)` | **Chainable, keeps the audio**: fires `fn(value, hap)` on each event of the pattern it's chained to — `s("bd*4").qtrig(() => qualia.phase())`. |
@@ -59,6 +59,34 @@ stack(
 A param that has audio/pose modulators declared keeps them: `qset` writes the
 *base* value and the modulation engine still resolves `base ⊕ modulators`
 per frame — so patterns and audio-reactivity compose instead of fighting.
+
+### Auto-yield — lanes beat the hands-off timers
+
+`quale()` and **auto-cycle** drive the same knob; `qphase()` and **auto-phase**
+drive the other one. Run both and the control has two masters: the lane picks a
+quale, the dwell timer swaps it out seconds later, the lane snaps it back on
+its next hap — on stage that reads as the visuals stuttering.
+
+The typed pattern wins. The first hap of a `quale()` lane that resolves to a
+real quale switches auto-cycle off; the first `qphase()` hap that actually
+steps switches auto-phase off. Both go through the same path as the topbar
+buttons, so the toggle face flips with it and the **remembered dwell survives**
+— one click, or `qualia.autoCycle(true)`, puts it back exactly as it was.
+
+Deliberately narrow: a typo'd quale name fizzles with a warning and costs you
+nothing, and a `qphase()` hap on a quale with no phases is a no-op that leaves
+the armed period waiting for the next supporting quale. Nothing else yields —
+`qset`/`qpreset`/`qglitch`/`qcall` leave both timers alone.
+
+```js
+qualia.autoYield(false)   // opt out; let lanes and timers layer (persisted)
+qualia.autoCycle(true)    // resume auto-cycle at its remembered dwell
+```
+
+The **random-pattern roller follows the same rule from the other end**: roll a
+new pattern with auto-cycle on and its `quale()` lane comes out commented, with
+a note saying why. Uncommenting it is then the explicit hand-off — the lane
+fires and auto-cycle yields.
 
 ## The `qualia` object
 
@@ -100,9 +128,11 @@ qualia.savePreset("live-set-1")    // snapshot current sliders as a user preset
 ### Phase / cycle / transitions
 
 ```js
-qualia.phase()                     // step phase (+1); qualia.phase(-1) back
+qualia.phase()                     // step phase (+1); qualia.phase(-1) back — true if it landed
 qualia.autoPhase(10, "random")     // seconds (0=off), style: sequential|palettes|random
 qualia.autoCycle(30, "random")     // quale auto-swap; sequential|random|progressive
+qualia.autoCycle(true)             // 0/false = off, true = resume the remembered dwell
+qualia.autoYield(false)            // stop lanes switching off the timer they'd fight
 qualia.transition("wipe", 1200)    // cut | dissolve | wipe, duration ms
 qualia.quantize("cycle")           // scene changes land on the Strudel downbeat
 ```

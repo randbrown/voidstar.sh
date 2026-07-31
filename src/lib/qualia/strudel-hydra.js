@@ -326,7 +326,7 @@ function saveAutocomplete(on) {
   try { localStorage.setItem(AUTOCOMPLETE_KEY, on ? '1' : '0'); } catch {}
 }
 
-export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange } = {}) {
+export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange, autoModes } = {}) {
   // Snapshot the previous-session panel state ONCE at init. open()/close()
   // mutate the flag for next time, but the answer to "should we restore the
   // last pattern?" is based on what the user did before this page load —
@@ -713,7 +713,16 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       const stored = loadCurrent();
       if (stored && stored.trim()) return stored;
     }
-    return randomPattern();
+    return rollRandom();
+  }
+
+  // Every random roll goes through here so the generator always sees the
+  // current auto-cycle / auto-phase state and parks the lane that would fight
+  // it. `autoModes` is optional — without it the roll is the ungated pattern.
+  function rollRandom() {
+    let modes;
+    try { modes = autoModes?.(); } catch { modes = null; }
+    return randomPattern(modes || {});
   }
 
   function mountEditor() {
@@ -1565,7 +1574,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     loadCode('');
   }
   function newRandomPattern() {
-    loadCode(randomPattern());
+    loadCode(rollRandom());
   }
 
   // Best-effort title read for cross-engine sync (sequencer mirrors this as
