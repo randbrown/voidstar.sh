@@ -19,6 +19,7 @@
 //   - obs-websocket 5.x listens on ws://127.0.0.1:4455 by default. An insecure
 //     ws:// to a loopback host is NOT mixed-content-blocked from an https page
 //     (loopback counts as potentially trustworthy), verified on Chromium 141.
+//     A NON-loopback host is a different story entirely — see obsUrlProblem().
 //   - Chrome 141+ ships the Local Network Access permission prompt for
 //     public-origin → loopback requests. WebSockets aren't covered by it yet
 //     but are on the roadmap, so a connect failure has to surface as a real,
@@ -106,6 +107,143 @@ export function loadObsConfig() {
 }
 export function saveObsConfig(cfg) {
   try { lsSet(`${NS}.config`, JSON.stringify(cfg)); } catch {}
+}
+
+// ── address sanity ────────────────────────────────────────────────────────
+//
+// The failure this exists for: OBS running fine, WebSocket server enabled,
+// auth off — and connecting from https://voidstar.sh to ws://192.168.x.x:4444
+// dies with nothing but a six-second timeout. The reason is never OBS. Two
+// independent browser rules kill a plaintext ws:// to a non-loopback host from
+// a secure page, and the app can fix neither:
+//
+//   1. Mixed content. A secure context refuses ws:// to any host that isn't
+//      "potentially trustworthy". Loopback is; a LAN IP is not. The socket is
+//      blocked before a packet leaves — verified on Chromium 141 against a raw
+//      listener that never saw a byte.
+//   2. upgrade-insecure-requests. voidstar.sh ships that CSP directive (see
+//      public/_headers for why it's worth keeping), and Chromium rewrites the
+//      ws:// to wss:// first, INCLUDING for IP-literal hosts — the spec's
+//      IP carve-out is not what Chromium implements. obs-websocket serves no
+//      TLS, so the handshake dies and the console reads
+//      `WebSocket connection to 'wss://192.168.68.58:4444/' failed`.
+//      Verified on Chromium 141: with the directive, `new WebSocket('ws://<lan
+//      ip>:4444').url` is `wss://<lan ip>:4444/`; without it, `ws://…`.
+//
+// Dropping the CSP would only trade rule 2 for rule 1, so the supported
+// address is a loopback one — OBS on the same machine as the browser, which is
+// also the only arrangement where "capture this window" means anything. A
+// remote OBS needs a wss:// reverse proxy in front of obs-websocket; that's a
+// real answer but not one we can drive from here.
+//
+// So: say all of that up front, before opening a socket that cannot work.
+
+// 127.0.0.0/8, the localhost names, and IPv6 loopback in both spellings the
+// URL parser produces. Matches the "potentially trustworthy" host test that
+// mixed content and the upgrade algorithm both key off.
+const LOOPBACK_RE =
+  /^(?:127(?:\.\d{1,3}){3}|localhost|[^.]+\.localhost|\[::1\]|\[::ffff:127(?:\.\d{1,3}){3}\])$/i;
+
+export function isLoopbackHost(host) {
+  return LOOPBACK_RE.test(String(host || '').trim());
+}
+
+/** A bare `host:port` parses as a URL whose *scheme* is the host, so scheme-less
+ *  input has to be normalised before anything else can judge it. */
+function withScheme(raw) {
+  const s = String(raw ?? '').trim();
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `ws://${s}`;
+}
+function parseObsUrl(raw) {
+  try {
+    const u = new URL(withScheme(raw));
+    return u.hostname ? u : null;
+  } catch { return null; }
+}
+
+/** The nearest address that can actually work from this page: plaintext ws://
+ *  (obs-websocket serves no TLS) to loopback (the only host a secure page may
+ *  reach in the clear), keeping whatever port was typed. */
+export function loopbackObsUrl(raw) {
+  const u = parseObsUrl(raw);
+  const port = u?.port || String(new URL(OBS_DEFAULTS.url).port || 4455);
+  return `ws://127.0.0.1:${port}`;
+}
+
+/**
+ * Why a configured address can't work, decided before any socket is opened.
+ *
+ * `blocking: true` means the browser will refuse or mangle this URL no matter
+ * what OBS is doing, so connect() rejects with it instead of timing out.
+ * `blocking: false` is a warning we won't act on — a wss:// address is wrong
+ * for stock OBS but right for someone running a TLS proxy, and that's their
+ * call to make.
+ *
+ * @param {string} raw
+ * @param {{secure?: boolean}} [opts] `secure` overrides the page's secure-context
+ *   flag; only tests pass it.
+ * @returns {null | {code, message, detail, blocking, fix?: {url, label}}}
+ */
+export function obsUrlProblem(raw, opts = {}) {
+  const secure = opts.secure !== undefined
+    ? !!opts.secure
+    : (typeof window !== 'undefined' ? !!window.isSecureContext : false);
+  const s = String(raw ?? '').trim();
+  const fixTo = (url) => ({ url, label: `use ${new URL(url).hostname}` });
+
+  if (!s) {
+    return { code: 'empty', blocking: true,
+             message: 'no OBS address set',
+             detail: `Default is ${OBS_DEFAULTS.url} — the port is OBS's Tools → WebSocket Server Settings → Server Port.`,
+             fix: fixTo(OBS_DEFAULTS.url) };
+  }
+  const u = parseObsUrl(s);
+  if (!u) {
+    return { code: 'bad-url', blocking: true,
+             message: `“${s}” isn't a WebSocket address`,
+             detail: `Expected ws://host:port — e.g. ${OBS_DEFAULTS.url}.`,
+             fix: fixTo(OBS_DEFAULTS.url) };
+  }
+
+  const loopback = isLoopbackHost(u.hostname);
+  const keepHost = loopback || !secure;   // a host worth preserving in a fix
+
+  // `new WebSocket('localhost:4455')` throws SyntaxError — the scheme isn't
+  // optional. parseObsUrl() supplies one so the REST of this function can read
+  // the intent, but the stored value still has to be corrected.
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
+    return { code: 'no-scheme', blocking: true,
+             message: `“${s}” is missing the ws:// scheme`,
+             detail: 'A WebSocket address needs one — the browser won\'t infer it.',
+             fix: fixTo(keepHost ? `ws://${u.host}` : loopbackObsUrl(s)) };
+  }
+
+  if (u.protocol !== 'ws:' && u.protocol !== 'wss:') {
+    return { code: 'bad-scheme', blocking: true,
+             message: `${u.protocol}// isn't a WebSocket scheme`,
+             detail: 'obs-websocket speaks ws:// — the same host and port, just the other scheme.',
+             fix: fixTo(keepHost ? `ws://${u.host}` : loopbackObsUrl(s)) };
+  }
+
+  // ws:// to a LAN/remote host from a secure page — the case in the header
+  // comment, and the one that costs a set if it's discovered at showtime.
+  if (u.protocol === 'ws:' && !loopback && secure) {
+    return { code: 'insecure-host', blocking: true,
+             message: `this page is https, so the browser won't send a plaintext ws:// to ${u.hostname}`,
+             detail: 'It upgrades the address to wss:// (which OBS can\'t answer — it serves no TLS) '
+                   + 'or blocks it as mixed content. Only loopback is exempt, so OBS has to be on '
+                   + 'this machine, addressed as 127.0.0.1. A remote OBS needs a wss:// reverse proxy.',
+             fix: fixTo(loopbackObsUrl(s)) };
+  }
+
+  // Not blocking: stock OBS serves no TLS, but a proxy in front of it does.
+  if (u.protocol === 'wss:') {
+    return { code: 'tls', blocking: false,
+             message: `wss:// only works if something is terminating TLS in front of OBS`,
+             detail: 'obs-websocket itself serves plaintext only.',
+             fix: fixTo(keepHost ? `ws://${u.host}` : loopbackObsUrl(s)) };
+  }
+  return null;
 }
 
 const enc = new TextEncoder();
@@ -335,6 +473,20 @@ export function createObsClient({ onState } = {}) {
     if (connected) return;
     if (connecting) return;
     const url = (cfg?.url || OBS_DEFAULTS.url).trim();
+
+    // Refuse an address the browser is going to refuse anyway, and say why.
+    // Without this the user gets `timed out connecting to OBS` after six
+    // seconds and goes hunting through OBS's settings, where nothing is wrong.
+    const problem = obsUrlProblem(url);
+    if (problem?.blocking) {
+      const err = new Error(problem.message);
+      err.obsProblem = problem;
+      lastError = problem.message;
+      connecting = false;
+      notify();
+      throw err;
+    }
+
     connecting = true; lastError = ''; closingOnPurpose = false;
     notify();
 
@@ -350,6 +502,17 @@ export function createObsClient({ onState } = {}) {
 
       try { ws = new WebSocket(url); }
       catch (e) { done(new Error(`could not open ${url}: ${e.message || e}`)); return; }
+
+      // Belt and braces for the precheck above: whatever the page's policy is
+      // now or later, `ws.url` is what the browser ACTUALLY resolved, so a
+      // silent scheme rewrite can be caught rather than deduced. Bailing here
+      // also skips the six-second timeout on a socket that can only fail.
+      if (url.startsWith('ws:') && /^wss:/i.test(ws.url || '')) {
+        try { ws.close(); } catch {}
+        done(new Error(`the browser upgraded ${url} to ${ws.url} — OBS serves no TLS. `
+                     + 'Use a loopback address (127.0.0.1) so the upgrade doesn\'t apply.'));
+        return;
+      }
 
       // A failed loopback connect looks identical to a blocked one from JS —
       // no status code, just `error`. Say what to check rather than guessing.

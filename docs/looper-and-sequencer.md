@@ -268,6 +268,27 @@ clean fx output is what you want.
   on Chromium 141 from a non-loopback https origin. Auth is obs-websocket's challenge/response
   (`base64(sha256(base64(sha256(pw+salt)) + challenge))`) via WebCrypto. Only the `Outputs` event
   category is subscribed, which is what carries `RecordStateChanged`.
+- ⚠️ **OBS has to be on the same machine as the browser** — the address must be loopback. A LAN
+  address (`ws://192.168.x.x:4444`) cannot work from `https://voidstar.sh`, for two independent
+  browser reasons, *neither of them OBS's fault and neither fixable from the app*:
+  1. **`upgrade-insecure-requests`.** The site ships that CSP directive (`public/_headers`), and
+     Chromium rewrites `ws://` → `wss://` **including for IP-literal hosts** — the spec's IP
+     carve-out is not what Chromium implements. Measured on Chromium 141: with the header,
+     `new WebSocket('ws://<lan-ip>:4444').url` is `wss://<lan-ip>:4444/`; without it, `ws://`.
+     obs-websocket serves no TLS, so the handshake dies and DevTools blames a `wss://` URL the
+     user never typed.
+  2. **Mixed content.** Even with the directive gone, a plaintext `ws://` to a non-loopback host
+     is blocked from a secure context before a packet leaves.
+  So `obsUrlProblem()` judges the address *before* opening a socket and `connect()` rejects a
+  blocking one immediately — otherwise this presents as a six-second `timed out connecting to OBS`
+  and sends you hunting through OBS's settings, where nothing is wrong. The `obs…` dialog renders
+  the diagnosis and a one-press **use 127.0.0.1** fix that keeps whatever port you typed (OBS's
+  Server Port is user-settable — 4455 is only the default). It also flags a missing scheme
+  (`new WebSocket('localhost:4455')` throws SyntaxError) and warns, without refusing, on `wss://`
+  (wrong for stock OBS, right for someone running a TLS proxy). As a backstop against any future
+  policy change the precheck can't model, `connect()` compares `ws.url` against the address it
+  asked for and bails on a silent scheme rewrite. Covered by `scripts/check-obs-url.mjs`.
+  A genuinely remote OBS needs a `wss://` reverse proxy in front of obs-websocket.
 - **What the rec button does:** connect if needed → optional `SetCurrentProgramScene` →
   restart the scene's captures (below) → `StartRecord`. **Nothing that *reconfigures* OBS runs at
   showtime** — see the canvas warning below for why that rule exists. The button label, timer and
