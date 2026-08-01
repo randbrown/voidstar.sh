@@ -3558,6 +3558,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="cycles">cycles ⟳</option>
         </select>
       </div>
+      <div class="qp-row" data-qp="chron-rec-reset" title="Rezero τ whenever a recording starts (in-page or OBS), so the τ readout and the rec button's timer show the same elapsed time for the take. Off = τ keeps measuring the whole set and a take is just an event inside it. Note a reset also re-arms the horizon nudges.">
+        <label>reset on rec</label>
+        <button class="qp-toggle active" id="chron-rec-reset">on</button>
+      </div>
       <div class="qp-section-tag">pulse · zen</div>
       <div class="qp-row" data-qp="chron-pulse-every" title="In zen mode, briefly fade in the elapsed count every N minutes — a soft pulsar nudge instead of a persistent clock. 0 = off.">
         <label>pulse every<span class="qp-val">5m</span></label>

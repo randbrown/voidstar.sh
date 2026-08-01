@@ -431,6 +431,16 @@ export function initQualiaPage() {
   });
   core.onFps(() => chron.tick());
 
+  // Rezero τ when a take starts (in-page recorder OR the OBS remote), anchored
+  // to that take's start stamp, so the session clock and the "rec ● mm:ss" pill
+  // are one number to read on stage instead of two unrelated clocks. Opt out on
+  // the chron card ("reset on rec") when τ should measure the whole SET and a
+  // take is just an event inside it — the horizon nudges re-arm on every reset.
+  function chronResetForTake(startedAt) {
+    if (!chron.getConfig().recReset) return;
+    chron.reset(startedAt);
+  }
+
   // ── Settings (top-level) ──────────────────────────────────────────────────
   // Whatever the page-state surface is, it gets serialized here so that a
   // page reload restores the user's exact session. Per-fx params are
@@ -2728,6 +2738,7 @@ export function initQualiaPage() {
   }
   wireChronToggle('chron-enabled',   c => c.enabled,          on => ({ enabled: on }));
   wireChronToggle('chron-hud-toggle', c => c.hud,             on => ({ hud: on }));
+  wireChronToggle('chron-rec-reset', c => c.recReset,         on => ({ recReset: on }));
   wireChronToggle('chron-redshift',  c => c.horizon.redshift, on => ({ horizon: { redshift: on } }));
   function wireChronSelect(selId, get, patchFor) {
     const sel = document.getElementById(selId);
@@ -3278,9 +3289,9 @@ export function initQualiaPage() {
       if (captureMode !== 'obs') return;
       if (s.recording && !obsRecStartedAt) {
         obsRecStartedAt = performance.now();
-        // Same deal as an in-page take: rezero τ so it matches the rec pill,
-        // which in this mode counts from OBS's own RecordStateChanged.
-        chron.reset(obsRecStartedAt);
+        // In this mode the pill counts from OBS's own RecordStateChanged, so
+        // that's what τ gets anchored to.
+        chronResetForTake(obsRecStartedAt);
       }
       if (!s.recording) obsRecStartedAt = 0;
       refreshObsRecUi(s);
@@ -3995,10 +4006,7 @@ export function initQualiaPage() {
       if (btnRecordMode) btnRecordMode.disabled = recording;
       if (recording) {
         showRecToastActive(backend, sink);
-        // Rezero τ on the take so the session clock and the "rec ● mm:ss"
-        // pill agree — one elapsed time to read on stage, not two. Anchored
-        // to the recorder's own start stamp so they tick the same second.
-        chron.reset(recorder?.getStartedAt?.());
+        chronResetForTake(recorder?.getStartedAt?.());
       }
       // When recording flips false, the toast either morphs to "ready"
       // (via onReadyToSave below) or stays hidden — we don't auto-hide
