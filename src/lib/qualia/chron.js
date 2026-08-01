@@ -18,8 +18,10 @@
 //
 // The stopwatch is wall-clock and starts on the first tick (i.e. with
 // core.start() — the session). It keeps counting through pause: it measures
-// the session, not the transport. reset() (the card's "reset τ" button)
-// rezeroes it.
+// the session, not the transport. reset() rezeroes it — fired by the card's
+// "reset τ" button, and by page-init when a recording starts (anchored to the
+// take's start stamp) so τ and the "rec ● mm:ss" pill read the same elapsed
+// time for the whole take.
 //
 // 'cycles' format ("τ ⟳128") integrates the LIVE cps each tick
 // (cycles += dt·cps) instead of multiplying the final cps by total elapsed
@@ -213,8 +215,12 @@ export function createChron({ hudEl, pulseEl, isZen = () => false, getCps = () =
     }
   }
 
-  function reset() {
-    const now = performance.now();
+  /** Rezero the stopwatch. `atMs` (a performance.now() stamp) lets a caller
+   *  anchor τ to an event that already happened — the recorder passes its own
+   *  start stamp so the τ readout and the "rec ● mm:ss" pill tick over on the
+   *  same second instead of drifting apart by the call gap. */
+  function reset(atMs) {
+    const now = Number.isFinite(atMs) ? atMs : performance.now();
     startMs = now; lastMs = now;
     cycles = 0; lastPulseIdx = 0; lastQRIdx = 0;
     warnFired = false; horizonFired = false;

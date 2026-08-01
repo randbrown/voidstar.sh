@@ -3276,7 +3276,12 @@ export function initQualiaPage() {
     onState: (s) => {
       refreshObsDialog(s);
       if (captureMode !== 'obs') return;
-      if (s.recording && !obsRecStartedAt) obsRecStartedAt = performance.now();
+      if (s.recording && !obsRecStartedAt) {
+        obsRecStartedAt = performance.now();
+        // Same deal as an in-page take: rezero τ so it matches the rec pill,
+        // which in this mode counts from OBS's own RecordStateChanged.
+        chron.reset(obsRecStartedAt);
+      }
       if (!s.recording) obsRecStartedAt = 0;
       refreshObsRecUi(s);
     },
@@ -3988,7 +3993,13 @@ export function initQualiaPage() {
       // mode mid-take (we'd have no clean way to swap capture backends
       // without restarting the MediaRecorder). It re-enables on stop.
       if (btnRecordMode) btnRecordMode.disabled = recording;
-      if (recording) showRecToastActive(backend, sink);
+      if (recording) {
+        showRecToastActive(backend, sink);
+        // Rezero τ on the take so the session clock and the "rec ● mm:ss"
+        // pill agree — one elapsed time to read on stage, not two. Anchored
+        // to the recorder's own start stamp so they tick the same second.
+        chron.reset(recorder?.getStartedAt?.());
+      }
       // When recording flips false, the toast either morphs to "ready"
       // (via onReadyToSave below) or stays hidden — we don't auto-hide
       // here so a pending-save indicator survives the state change.
@@ -4110,11 +4121,18 @@ export function initQualiaPage() {
         alert(`Screen recording failed: ${err?.message || err}`);
       }
     });
-    // Per-second tick updates the button label + compact pill timer so
-    // the user can see the recording is live + how long it's been
-    // running. Pill text stays just "mm:ss" — keeping it small enough
-    // to not obstruct anything when pinned bottom-center.
-    setInterval(() => {
+    // Take timer — the button label + the compact pill, so the user can see
+    // the recording is live and how long it's been running. Pill text stays
+    // just "mm:ss", small enough to not obstruct anything when pinned
+    // bottom-center.
+    //
+    // Rides core.onFps (~5Hz) — the SAME heartbeat chron.tick() runs on — so
+    // the pill and the τ readout floor one elapsed value on one pass and can
+    // never disagree. (On its own 1s interval, phased to page load rather
+    // than to the take, this clock read a second off τ for most of a take.)
+    // Idle cost is the isRecording() guard; repaints only on a changed
+    // second, so the topbar doesn't churn.
+    core.onFps(() => {
       // In obs mode the take belongs to OBS, so the clock runs from the
       // RecordStateChanged that told us it started.
       const obsOn = obsRecording();
@@ -4123,11 +4141,16 @@ export function initQualiaPage() {
       const sec = Math.floor((performance.now() - startedAt) / 1000);
       const mm = Math.floor(sec / 60).toString().padStart(2, '0');
       const ss = (sec % 60).toString().padStart(2, '0');
-      btnRecord.textContent = `rec ● ${mm}:${ss}`;
+      const text = `${mm}:${ss}`;
+      const label = `rec ● ${text}`;
+      // Diff against what's on screen (not a cached string) so onStateChange
+      // resetting the label to "rec" always repaints on the next take.
+      if (btnRecord.textContent === label) return;
+      btnRecord.textContent = label;
       if (recToastText && recToast?.classList.contains('rec-active')) {
-        recToastText.textContent = `${mm}:${ss}`;
+        recToastText.textContent = text;
       }
-    }, 1000);
+    });
   }
 
   // Save-dialog buttons. The tap inside this click handler IS the user

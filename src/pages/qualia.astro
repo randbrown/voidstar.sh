@@ -2524,6 +2524,24 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        (inline width/height, persisted under the panel's mini geometry key)
        still wins, so `height` is deliberately not !important here. */
     #looper-panel.mini { height: auto; min-height: 0 !important; width: auto; }
+    /* Mini is a pedalboard floating ON the visuals, not a window sitting over
+       them: no panel fill, blur, shadow, or header rule. The LEDs, knobs, and
+       buttons carry their own contrast; the halo below keeps the small labels
+       legible over a bright quale. Halo color is the theme's base background,
+       so light themes get a light halo instead of a muddy black one.
+       The full station keeps its glass panel. */
+    #looper-panel.mini {
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      text-shadow: 0 1px 2px var(--void), 0 0 5px var(--void);
+    }
+    #looper-panel.mini #looper-header {
+      background: transparent;
+      border-bottom-color: transparent;
+    }
 
     #rig-mini { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.6rem; }
     .rig-mini-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
