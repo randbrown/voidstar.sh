@@ -212,7 +212,7 @@ export async function initTetherClient(root) {
     freezeDepth: 0, quale: '', voices: [], grid: null,
     tapUndoDepth: 0, tapRedoDepth: 0,
     walkOn: false, autoCycleOn: false, autoPhaseOn: false,
-    earthOn: false, metalOn: false, delayOn: false, reverbOn: false,
+    earthOn: false, metalOn: false, delayOn: false, reverbOn: false, compOn: false,
     tunerOn: false, paused: false, voxMuted: false, blackoutOn: false,
     tau: null, horizonMin: 0,
   };
@@ -368,6 +368,11 @@ export async function initTetherClient(root) {
           padBtn('tuner', 'tuner', { sub: 'toggle', lit: 'tuner', flip: 'tunerOn' }),
           padBtn('delay', 'delayToggle', { sub: 'on / off', lit: 'delay', flip: 'delayOn' }),
           padBtn('reverb', 'reverbToggle', { sub: 'on / off', lit: 'reverb', flip: 'reverbOn' }),
+          padBtn('comp', 'compToggle', { sub: 'on / off', lit: 'comp', flip: 'compOn' })),
+        // Pause moved to its own full-width row when comp joined the strip
+        // grid — a mid-set "stop everything" deserves the biggest target
+        // anyway, not a third-of-a-row shared with effect toggles.
+        grid(1,
           padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio', lit: 'pause', flip: 'paused' })),
         el('h3', 'sp-h', 'levels'),
         // 0–2 matches the rig's real range (RIG_LEVEL_MAX): >1.0 is boost into
@@ -550,6 +555,7 @@ export async function initTetherClient(root) {
         : kind === 'tuner'     ? state.tunerOn
         : kind === 'delay'     ? state.delayOn
         : kind === 'reverb'    ? state.reverbOn
+        : kind === 'comp'      ? state.compOn
         : kind === 'pause'     ? state.paused
         : kind === 'vox'       ? state.voxMuted
         : kind === 'blackout'  ? state.blackoutOn

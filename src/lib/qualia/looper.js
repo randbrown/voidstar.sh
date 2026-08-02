@@ -1626,9 +1626,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // the on/off buttons of the stages it's hiding (CSS shows the row only while
   // that section is collapsed). The `strip` header carries the six primary
   // pedals — the same set the mini pedalboard exposes.
+  // The per-pedal gates are subcomponents of their drive (they render inside
+  // its box and only run while it's engaged) — they don't earn top-level pills.
   const HEAD_TOGGLE_STAGES = {
     strip: ['earth', 'metal', 'amp', 'cab', 'delay', 'reverb'],
-    drive: ['earth', 'earthGate', 'metal', 'metalGate'],
+    drive: ['earth', 'metal'],
     tone:  ['amp', 'eq', 'cab'],
     space: ['delay', 'reverb'],
     util:  ['geq', 'comp', 'hpf', 'gate', 'peq'],
@@ -2593,16 +2595,24 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // the refreshers below mirror every change into the mini knobs/LEDs). It's all
   // static DOM — knobs repaint only on change, never per frame — and it hides the
   // scopes/meters/waveforms, so mini is cheaper to run than the full panel.
+  // Knob pedals: the stages whose LEVEL gets ridden mid-set. Amp/cab/comp/gate
+  // are toggle-only on the board (MINI_PILL_COLS) — performance needs their
+  // on/off, not their knobs.
   const MINI_PEDALS = [
     { stage: 'earth',  param: 'drive', label: 'earth'  },
     { stage: 'metal',  param: 'drive', label: 'metal'  },
-    { stage: 'amp',    param: 'gain',  label: 'amp'    },
-    { stage: 'cab',    param: 'level', label: 'cab'    },
     { stage: 'delay',  param: 'mix',   label: 'delay'  },
     { stage: 'reverb', param: 'mix',   label: 'reverb' },
   ];
+  // Toggle-only pill columns, placed in chain order: amp·cab between the
+  // drives and the time effects, comp·gate (the utility pair) after them.
+  const MINI_PILL_COLS = [
+    { after: 'metal',  stages: ['amp', 'cab'] },
+    { after: 'reverb', stages: ['comp', 'gate'] },
+  ];
   const miniKnobs = new Map();   // `${stage}:${param}` -> { knob, valEl, min, max, fmt }
   const miniLeds  = new Map();   // stage ('master' | effect id) -> led element
+  const miniPills = new Map();   // stage -> pill button (toggle-only stages)
   let miniTunerSq = null, miniTunerMount = null, miniPlayLed = null, _miniBuilt = false;
   let miniTunerNote = null;                       // note text inside the square
   let miniTunerStrobeCv = null, miniTunerStrobe2d = null;   // the square's strobe band
@@ -2689,8 +2699,23 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const tuneCap = document.createElement('span'); tuneCap.className = 'rig-pedal-label'; tuneCap.textContent = 'tune';
     tune.append(miniTunerSq, tuneCap);
 
-    // One pedal per primary effect (param ranges come from STRIP_SCHEMA).
+    // One pedal per knob effect (param ranges come from STRIP_SCHEMA), with
+    // the toggle-only pill columns slotted in at their chain position.
     const effects = document.createElement('div'); effects.className = 'rig-mini-group';
+    const mkPillCol = (stages) => {
+      const col = document.createElement('div'); col.className = 'rig-pedal-pillcol';
+      for (const id of stages) {
+        const st = STRIP_SCHEMA.find(s => s.id === id);
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'ctrl-btn rig-mini-pill';
+        b.textContent = st?.name || id;
+        b.title = `Enable / bypass ${id === 'gate' ? 'the strip noise gate' : id === 'comp' ? 'the compressor' : st?.name || id}`;
+        b.addEventListener('click', () => stripToggle(id, !model.strip[id].on));
+        miniPills.set(id, b);
+        col.append(b);
+      }
+      return col;
+    };
     for (const p of MINI_PEDALS) {
       const spec = stripParamSpec(p.stage, p.param) || { min: 0, max: 1, step: 0.01 };
       effects.append(buildMiniPedal({
@@ -2702,6 +2727,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
         set: (v) => stripSet(p.stage, p.param, v),
         toggle: () => stripToggle(p.stage, !model.strip[p.stage].on),
       }));
+      const col = MINI_PILL_COLS.find(c => c.after === p.stage);
+      if (col) effects.append(mkPillCol(col.stages));
     }
 
     // Compact looper transport — record · play · stop + a playing/recording LED.
@@ -2712,6 +2739,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     trRow.append(
       miniPlayLed,
       mkBtn('●', 'Record (a fresh track by default — see the rec → new prop)', () => { recording ? stopRecording() : startRecording(); }),
+      mkBtn('⧉', 'Grab the last N cycles you just played into the armed track (retro-loop). Needs the live buffer on.', () => { doRetroGrab(); }),
       mkBtn('▶', 'Play loop', () => { playAll(); }),
       mkBtn('■', 'Stop', () => { stop(); }),
     );
@@ -2762,9 +2790,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function syncMiniLed(stage, on) {
     const led = miniLeds.get(stage);
-    if (!led) return;
-    led.classList.toggle('on', !!on);
-    led.parentElement?.classList.toggle('off', !on);
+    if (led) {
+      led.classList.toggle('on', !!on);
+      led.parentElement?.classList.toggle('off', !on);
+    }
+    // Toggle-only stages have a pill instead of an LED — same sync path, so
+    // every caller (stripToggle, refreshMini, reset) covers both kinds.
+    miniPills.get(stage)?.classList.toggle('active', !!on);
   }
   // Repaint every mini control from the model (after build / reset / mode-enter).
   function refreshMini() {
@@ -2774,6 +2806,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     for (const p of MINI_PEDALS) {
       syncMiniKnob(p.stage, p.param, model.strip[p.stage]?.[p.param] ?? 0);
       syncMiniLed(p.stage, !!model.strip[p.stage]?.on);
+    }
+    for (const c of MINI_PILL_COLS) {
+      for (const id of c.stages) syncMiniLed(id, !!model.strip[id]?.on);
     }
     refreshMiniTransport();
     refreshMiniTuner();

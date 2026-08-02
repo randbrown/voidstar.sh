@@ -2419,6 +2419,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-subpanel.collapsed > .rig-subhead > .rig-head-toggles,
     .rig-head-toggles.rig-head-toggles-always,
     #looper-panel.strip-collapsed #rig-strip-toggles { display: inline-flex; }
+    /* While a section is folded its stage pills render in the subhead — the
+       hint text would just repeat them as prose, so it yields to the pills. */
+    .rig-subpanel.collapsed > .rig-subhead > .rig-util-hint,
+    #looper-panel.strip-collapsed #rig-strip .rig-util-hint { display: none; }
     .rig-head-chip {
       padding: 0.02rem 0.32rem; font-size: 0.56rem; line-height: 1.5;
       color: var(--muted); white-space: nowrap;
@@ -2480,6 +2484,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-substage.on { border-color: var(--border); background: rgba(0,0,0,0.24); }
     .rig-substage .rig-stage-head { margin-bottom: 0.15rem; }
     .rig-substage .rig-stage-name { font-size: 0.6rem; opacity: 0.85; }
+    /* A drive's built-in gate only runs while its pedal is engaged — with the
+       pedal off the nested gate box reads as disabled. It stays clickable:
+       pre-arming a gate before kicking the drive in is legitimate. */
+    .rig-stage:not(.on) > .rig-substage { opacity: 0.4; }
 
     /* Collapsed stage — hide controls, shrink box. */
     .rig-stage.collapsed .rig-ctl,
@@ -2650,6 +2658,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .rig-pedal-val { font-size: 0.52rem; color: var(--text); font-variant-numeric: tabular-nums; }
     .rig-pedal-label { font-size: 0.56rem; color: var(--muted); letter-spacing: 0.03em; }
+
+    /* Toggle-only stages on the pedalboard (amp · cab / comp · gate): a slim
+       two-pill column where a knob would sit — performance needs their on/off,
+       not their levels (the full strip keeps the knobs). Centered against the
+       pedals' knob row height so the board reads as one line. */
+    .rig-pedal-pillcol {
+      display: flex; flex-direction: column; gap: 0.3rem;
+      align-items: stretch; justify-content: center;
+      min-height: 76px;
+    }
+    .rig-mini-pill { padding: 0.16rem 0.5rem; font-size: 0.62rem; line-height: 1; }
+    .rig-mini-pill.active { border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.08); }
 
     /* Tiny tap-to-expand strobe tuner. The square is a one-note tuner in its
        own right: primary note on top, a miniature strobe band below (stripes
