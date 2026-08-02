@@ -79,7 +79,18 @@
 //     controls — a page served over http:// has no service worker at all
 //     (secure-context only), and a 404 pinned in Cloudflare's edge cache under
 //     the `immutable, max-age=1y` header still needs a dashboard purge.
-const SW_VERSION = 'v15';
+// v16: app icons are identity, not assets. The per-app icon redesigns (#237,
+//     #239) shipped without touching this file, so every client stayed pinned
+//     to the v15 cache's OLD icon bytes — and stale-while-revalidate couldn't
+//     self-heal, because its revalidation `fetch(req)` reads the browser HTTP
+//     cache (icons carry a 1h edge default), which kept re-storing the stale
+//     bytes; even a fresh PWA reinstall re-read them. Three changes: `/icon-*`
+//     now rides the manifest's network-first branch (the v13 rationale applies
+//     verbatim — install/update checks must read the deployed identity);
+//     precache requests use `cache: 'reload'` so a new SW version can never
+//     re-precache stale HTTP-cache bytes; and the version bump purges v15 on
+//     every client's next load.
+const SW_VERSION = 'v16';
 const CACHE      = `voidstar-${SW_VERSION}`;
 
 // Things we want available immediately on first install — the app shell.
@@ -111,9 +122,12 @@ self.addEventListener('install', (event) => {
     // which is atomic — a single 404/redirect (e.g. a route path that a host
     // serves only with a trailing slash) would otherwise reject the whole
     // install and leave users with no SW at all. Per-item with catch means a
-    // stray miss just skips that one entry.
+    // stray miss just skips that one entry. `cache: 'reload'` bypasses the
+    // browser HTTP cache: a version bump exists to pick up CHANGED shell
+    // files, and plain cache.add() could re-precache the very stale bytes
+    // the bump is trying to flush (the v16 icon incident).
     caches.open(CACHE).then((cache) =>
-      Promise.all(PRECACHE.map((url) => cache.add(url).catch(() => {})))
+      Promise.all(PRECACHE.map((url) => cache.add(new Request(url, { cache: 'reload' })).catch(() => {})))
     )
   );
   // Don't sit in the "waiting" state — take over right after install so
@@ -174,16 +188,24 @@ self.addEventListener('fetch', (event) => {
   // default network behaviour (no caching here, no proxying).
   if (url.origin !== self.location.origin) return;
 
-  // HTML pages and web app manifests → network-first with cache fallback.
-  // Manifests must be fresh-first: the browser's PWA install/update checks
-  // read them, and a stale copy after a deploy changes the app's identity
-  // (icons/id) out from under the installed app — see the v13 note above.
+  // HTML pages, web app manifests, and app icons → network-first with cache
+  // fallback. Manifests and icons must be fresh-first: the browser's PWA
+  // install/update checks read them, and a stale copy after a deploy changes
+  // the app's identity (icons/id) out from under the installed app — see the
+  // v13 and v16 notes above. Icons are requested rarely (install checks,
+  // favicon), so fresh-first costs almost nothing.
   const accept = req.headers.get('accept') || '';
   const isHtml = req.mode === 'navigate' || accept.includes('text/html');
   const isManifest = url.pathname.endsWith('.webmanifest');
-  if (isHtml || isManifest) {
+  const isAppIcon = /^\/(icon-[\w.-]+\.png|favicon\.(svg|ico))$/.test(url.pathname);
+  if (isHtml || isManifest || isAppIcon) {
     event.respondWith(
-      fetch(req)
+      // Icons revalidate past the browser HTTP cache (conditional request →
+      // cheap 304 when unchanged): a warm 1h cache would otherwise keep
+      // answering this "network-first" fetch with the very bytes we're
+      // trying to replace. HTML/manifests keep the default (their edge
+      // cache is already short).
+      fetch(isAppIcon ? new Request(req, { cache: 'no-cache' }) : req)
         .then((res) => {
           // Only cache good responses — a transient 5xx/404 must not
           // poison the offline fallback for this route.

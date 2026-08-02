@@ -47,7 +47,7 @@ export const ST = {
 // un-listed ids are dropped at ingress.
 export const CTL_ACTIONS = new Set([
   // rig drives + strip toggles
-  'tuner', 'earth', 'metal', 'delayToggle', 'reverbToggle',
+  'tuner', 'earth', 'metal', 'delayToggle', 'reverbToggle', 'compToggle',
   // freeze stack (Frippertronics)
   'freeze', 'freezePop', 'freezeRegrab', 'freezeClear',
   // looper transport. `recToggle` is the tether's single rec button (arm /

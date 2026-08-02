@@ -81,5 +81,9 @@
 /favicon.svg
   Cache-Control: public, max-age=3600
 
+# App icons are PWA identity, same as the manifests that reference them —
+# keep them equally fresh so an icon redesign lands without a reinstall fight
+# (the old 1h window kept re-feeding stale bytes to the SW's revalidation and
+# to Chrome's install checks alike).
 /icon-*.png
-  Cache-Control: public, max-age=3600
+  Cache-Control: public, max-age=300
