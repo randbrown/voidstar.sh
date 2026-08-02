@@ -895,7 +895,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .panel-io.open .panel-io-toggle { opacity: 1; border-color: var(--cyan); color: var(--cyan); }
     .panel-io-actions {
       display: none; position: absolute; top: calc(100% + 5px); right: 0;
-      flex-direction: column; gap: 0.15rem; z-index: 6;
+      flex-direction: column; gap: 0.15rem;
+      /* Above the rig's sticky subheads (z-index 6): an equal z-index later in
+         the DOM paints over this menu, which is exactly what the full rig's
+         signal subhead did — the save/load actions opened underneath it. */
+      z-index: 30;
       background: rgba(10,10,26,0.97); border: 1px solid var(--border);
       border-radius: 6px; padding: 0.25rem;
       box-shadow: 0 8px 24px rgba(0,0,0,0.5);
@@ -1221,9 +1225,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        design, so without this nothing in the UI admits they exist — and three
        songs into a set "why did my quale stop cycling?" needs an answer that
        isn't "scroll the editor". Sits next to the title (it describes the
-       buffer, same as the title does) and takes NO auto margin: .sp-status owns
-       the single margin-left:auto that pushes the transport cluster right, and
-       a second auto margin would split the free space between them. */
+       buffer, same as the title does) and takes NO auto margin: the header's
+       .rig-head-spacer owns the single stretch that pushes the transport
+       cluster right (an auto margin here would split the free space). */
     .sp-lanes {
       margin-left: 0.5rem; font-size: 0.65rem; letter-spacing: 0.03em;
       color: var(--cyan); border: 1px solid var(--border); border-radius: 4px;
@@ -4084,6 +4088,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <span class="sp-title">strudel</span>
     <span class="sp-err" id="strudel-error" style="display:none" title="" role="alert"></span>
     <span class="sp-lanes" id="strudel-lanes" style="display:none" title=""></span>
+    <!-- The spacer owns the stretch that pins the transport…◌ × cluster right.
+         It used to ride .sp-status's margin-left:auto — but ghost mode hides
+         the status, which let the whole right cluster slump left. -->
+    <span class="rig-head-spacer"></span>
     <span class="sp-status" id="strudel-status"></span>
     <button class="ctrl-btn" id="btn-strudel-play"    title="Evaluate / play (Ctrl+Enter)">▶</button>
     <button class="ctrl-btn" id="btn-strudel-stop"    title="Stop (Ctrl+.)">■</button>
