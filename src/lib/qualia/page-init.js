@@ -6509,7 +6509,9 @@ export function initQualiaPage() {
     // section → { head element, insertBefore? }. qp-card heads insert before the
     // trailing chevron; panel headers append (or insert before the × close).
     const targets = [
-      { key: 'rig',       head: document.getElementById('looper-header'),       before: document.getElementById('btn-looper-close') },
+      // Panels with a ghost toggle keep the corner order [io] ◌ × — the chip
+      // inserts before ◌ so ghost stays glued to the close button.
+      { key: 'rig',       head: document.getElementById('looper-header'),       before: document.getElementById('btn-rig-ghost') || document.getElementById('btn-looper-close') },
       { key: 'fx',        head: document.querySelector('#fx-card .qp-head') },
       { key: 'audio',     head: document.querySelector('#audio-card .qp-head') },
       { key: 'pose',      head: document.querySelector('#pose-card .qp-head') },
@@ -6518,7 +6520,7 @@ export function initQualiaPage() {
       // `before` the close × so the chip sits just left of it and × stays flush
       // right, consistent across every panel.
       { key: 'sequencer', head: document.getElementById('sequencer-header'), before: document.getElementById('btn-sequencer-close') },
-      { key: 'strudel',   head: document.getElementById('strudel-header'),   before: document.getElementById('btn-strudel-close') },
+      { key: 'strudel',   head: document.getElementById('strudel-header'),   before: document.getElementById('btn-strudel-ghost') || document.getElementById('btn-strudel-close') },
       { key: 'vocoder',   head: document.getElementById('vocoder-header'),   before: document.getElementById('btn-vocoder-close') },
     ];
     for (const t of targets) {

@@ -2604,6 +2604,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const miniKnobs = new Map();   // `${stage}:${param}` -> { knob, valEl, min, max, fmt }
   const miniLeds  = new Map();   // stage ('master' | effect id) -> led element
   let miniTunerSq = null, miniTunerMount = null, miniPlayLed = null, _miniBuilt = false;
+  let miniTunerNote = null;                       // note text inside the square
+  let miniTunerStrobeCv = null, miniTunerStrobe2d = null;   // the square's strobe band
   let miniFreezeBtn = null, miniFreezePop = null;   // refreshFreezeBtn mirrors depth here
 
   function stripParamSpec(stage, param) {
@@ -2670,12 +2672,20 @@ export function createLooper({ audio, syncStrudel } = {}) {
     _miniBuilt = true;
     const row = document.createElement('div'); row.className = 'rig-mini-row';
 
-    // Tuner (left) — tap-to-expand strobe (the strobe node is relocated here).
+    // Tuner square — tap-to-expand strobe (the strobe node is relocated here).
+    // The square itself is a one-note tuner while the tuner runs: the primary
+    // note on top and a miniature strobe band below it (same drift convention
+    // as the big display — right = sharp, left = flat, frozen = in tune).
     const tune = document.createElement('div'); tune.className = 'rig-mini-tune';
     miniTunerSq = document.createElement('button');
-    miniTunerSq.type = 'button'; miniTunerSq.className = 'rig-mini-tune-sq'; miniTunerSq.textContent = '♪';
+    miniTunerSq.type = 'button'; miniTunerSq.className = 'rig-mini-tune-sq';
     miniTunerSq.title = 'Strobe tuner — tap to expand for a quick check';
     miniTunerSq.addEventListener('click', () => toggleTuner());
+    miniTunerNote = document.createElement('span');
+    miniTunerNote.className = 'rig-mini-tune-note'; miniTunerNote.textContent = '♪';
+    miniTunerStrobeCv = document.createElement('canvas');
+    miniTunerStrobeCv.className = 'rig-mini-tune-strobe';
+    miniTunerSq.append(miniTunerNote, miniTunerStrobeCv);
     const tuneCap = document.createElement('span'); tuneCap.className = 'rig-pedal-label'; tuneCap.textContent = 'tune';
     tune.append(miniTunerSq, tuneCap);
 
@@ -2734,8 +2744,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
       toggle: () => setRigMuted(!model.rigMuted),
     }));
 
-    // Order: tuner · effects+master · freeze · looper.
-    row.append(tune, makeSep(), effects, makeSep(), fz, makeSep(), tr);
+    // Order: effects+master · tuner · freeze · looper — the tuner square sits
+    // right after the rig volume so the knob block leads the board.
+    row.append(effects, makeSep(), tune, makeSep(), fz, makeSep(), tr);
 
     miniTunerMount = document.createElement('div'); miniTunerMount.id = 'rig-mini-tuner-mount';
     miniEl.append(row, miniTunerMount);
@@ -2781,7 +2792,39 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const near   = model.tunerOn && _strobe.near && !_strobe.inTune;
     miniTunerSq.classList.toggle('intune', inTune);
     miniTunerSq.classList.toggle('near', near);
-    miniTunerSq.textContent = (model.tunerOn && _strobe.voiced && _miniNote) ? _miniNote : '♪';
+    const showNote = model.tunerOn && _strobe.voiced && _miniNote;
+    if (miniTunerNote) miniTunerNote.textContent = showNote ? _miniNote : '♪';
+    // Idle square — park the strobe band dark (the draw loop may already be
+    // stopped, so a stale last frame would otherwise stick around).
+    if (!showNote) {
+      _miniPhase = null;
+      if (miniTunerStrobe2d && miniTunerStrobeCv) {
+        miniTunerStrobe2d.clearRect(0, 0, miniTunerStrobeCv.width, miniTunerStrobeCv.height);
+      }
+    }
+  }
+
+  // The square's strobe band — fed the PRIMARY note's demod phase each frame
+  // by drawStrobeMono/drawStrobePoly (null = unvoiced), so it agrees with the
+  // big display by construction: stripes drift right when sharp, left when
+  // flat, freeze when in tune. Runs on the same rAF as the big strobe.
+  function drawMiniStrobe() {
+    const cv = miniTunerStrobeCv;
+    if (!cv || !model.mini) return;
+    if (!miniTunerStrobe2d) miniTunerStrobe2d = cv.getContext('2d');
+    const g = miniTunerStrobe2d; if (!g) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const wantW = Math.max(1, Math.round((cv.clientWidth || 32) * dpr));
+    const wantH = Math.max(1, Math.round((cv.clientHeight || 7) * dpr));
+    if (cv.width !== wantW || cv.height !== wantH) { cv.width = wantW; cv.height = wantH; }
+    const W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+    if (_miniPhase == null) return;                 // unvoiced — band stays dark
+    const col = _strobe.inTune ? [52, 211, 153] : _strobe.near ? [251, 191, 36] : [167, 139, 250];
+    const period = Math.max(6 * dpr, H * 1.6);
+    const off = ((_miniPhase / (2 * Math.PI)) % 1 + 1) % 1 * period;
+    g.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},0.9)`;
+    for (let x = -period + off; x < W; x += period) g.fillRect(x, 0, period * 0.5, H);
   }
 
   // Run the scope rAF only when needed: full mode always (scopes); mini mode only
@@ -3075,7 +3118,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   let _lanesDirty = true;            // rebuild on mode / chord / strings / temperament change
   const _dem = { mag: 0, phase: 0 }; // demod scratch (allocation-free)
   let _miniKey = null;               // last mini aggregate (throttles mini DOM writes)
-  let _miniNote = '';                // mini square display: primary note + ↑/↓ direction
+  let _miniNote = '';                // mini square display: the primary note
+  let _miniPhase = null;             // primary note's demod phase (null = unvoiced) → mini strobe band
   let _polyDispLastMs = 0;           // throttle for the per-lane cents readout (mono cadence)
 
   function persistTunerChord() { try { lsSet(TUNERCHORD_KEY, JSON.stringify(model.tunerChord)); } catch {} }
@@ -3439,8 +3483,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   // Push the mini-tuner readout (throttled by change so poly's per-frame draw
   // doesn't thrash the DOM). `label` is the PRIMARY (loudest voiced) lane's
-  // note, already carrying its ↑ sharp / ↓ flat direction — so the square is
-  // a usable one-note tuner even in mini mode.
+  // note; sharp/flat direction is carried by the square's strobe band, not
+  // the text — so the square is a usable one-note tuner even in mini mode.
   function setMini(voiced, inTune, near, label) {
     const key = `${voiced ? 1 : 0}${inTune ? 1 : 0}${near ? 1 : 0}${label}`;
     if (key === _miniKey) return;
@@ -3509,8 +3553,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     _strobe.voiced  = true;
     _strobe.inTune  = inTune;
     _strobe.near    = near;
-    // Mini square: note + which way it's off (↑ sharp / ↓ flat, ET-style).
-    _miniNote = `${NOTE_NAMES[cls]}${octave}${inTune ? '' : (err > 0 ? '↑' : '↓')}`;
+    // Mini square: the note; which way it's off shows as the square's strobe
+    // band drift (fed per frame by drawStrobeMono).
+    _miniNote = `${NOTE_NAMES[cls]}${octave}`;
     refreshMiniTuner();
   }
   function updateTunerPoly(an) {
@@ -3560,10 +3605,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
     g.clearRect(0, 0, W, H);
     if (model.tunerMode === 'mono') drawStrobeMono(g, W, H, dpr);
     else drawStrobePoly(g, W, H, dpr);
+    drawMiniStrobe();   // the pedalboard square's band rides the same frame
   }
   function drawStrobeMono(g, W, H, dpr) {
     const an = looperAudio.getTunerAnalyser?.() || looperAudio.getCaptureAnalyser?.();
     if (!_strobe.voiced || !an || !(_strobe.fRef > 0) || typeof an.getFloatTimeDomainData !== 'function') {
+      _miniPhase = null;
       drawStrobeIdle(g, W, H, STROBE_BANDS);
       return;
     }
@@ -3589,6 +3636,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       mags[b] = _dem.amp; phs[b] = _dem.phase;
       if (mags[b] > maxMag) maxMag = mags[b];
     }
+    _miniPhase = phs[0];   // ×1 fundamental band drives the square's mini strobe
     for (let b = 0; b < STROBE_BANDS; b++) {
       const y = b * bandH;
       // Band opacity follows its share of energy so weak harmonics fade out
@@ -3612,6 +3660,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (_lanesDirty) rebuildLanes();
     const an = looperAudio.getTunerAnalyser?.() || looperAudio.getCaptureAnalyser?.();
     if (!_lanes.length || !an || typeof an.getFloatTimeDomainData !== 'function') {
+      _miniPhase = null;
       drawStrobeIdle(g, W, H, Math.max(1, _lanes.length || STROBE_BANDS));
       setMini(false, false, false, '');
       return;
@@ -3733,14 +3782,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
       }
     }
     // Mini square: the PRIMARY (loudest voiced) lane — its note, its accuracy
-    // color, and which way it's off. dispCents (the calm readout value) drives
-    // the arrow so it can't flicker at the in-tune boundary.
-    if (prim) {
-      const dir = prim.inTune ? '' : (prim.dispCents > 0 ? '↑' : '↓');
-      setMini(true, prim.inTune, prim.near && !prim.inTune, prim.label + dir);
-    } else {
-      setMini(false, false, false, '');
-    }
+    // color, and its live demod phase for the square's strobe band (which way
+    // it's off shows as stripe drift, same convention as the lanes).
+    _miniPhase = prim ? prim.phase : null;
+    if (prim) setMini(true, prim.inTune, prim.near && !prim.inTune, prim.label);
+    else setMini(false, false, false, '');
   }
   function drawStrobeIdle(g, W, H, rows) {
     const r = Math.max(1, rows | 0);
