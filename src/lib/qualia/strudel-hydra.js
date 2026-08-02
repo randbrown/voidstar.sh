@@ -312,6 +312,14 @@ function saveBlur(on) {
   try { localStorage.setItem(BLUR_KEY, on ? '1' : '0'); } catch {}
 }
 
+const GHOST_KEY = 'voidstar.qualia.strudel.ghost';
+function loadGhost() {
+  try { return localStorage.getItem(GHOST_KEY) === '1'; } catch { return false; }
+}
+function saveGhost(on) {
+  try { localStorage.setItem(GHOST_KEY, on ? '1' : '0'); } catch {}
+}
+
 const AUTOCOMPLETE_KEY = 'voidstar.qualia.strudel.autocomplete';
 // Default ON: function-name completion + hover docs are the whole point of
 // having them, and they cost nothing until you type or hover. A first visit
@@ -349,6 +357,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const btnLines   = document.getElementById('btn-strudel-lines');
   const btnAuto    = document.getElementById('btn-strudel-autocomplete');
   const btnBlur    = document.getElementById('btn-strudel-blur');
+  const btnGhost   = document.getElementById('btn-strudel-ghost');
 
   let editorEl = null;
   let mounted  = false;
@@ -732,6 +741,29 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   function setBlur(on) { _blur = !!on; saveBlur(_blur); applyBlur(); refreshBlurBtn(); return _blur; }
   applyBlur(); refreshBlurBtn();
   if (btnBlur) btnBlur.addEventListener('click', () => setBlur(!_blur));
+
+  // Ghost — the panel's lean performance layer (◌, separate from the global
+  // zen mode): CSS `.ghost` hides the tab bar + header extras and clears the
+  // frame/fill, leaving transport + code floating over the visuals. Forces
+  // the editor tab so a hidden tab bar can't strand the patterns/funcs/
+  // sounds pane on screen. (The init-time call runs before page-init wires
+  // the tab clicks — harmless: editor is the boot default anyway.)
+  let _ghost = loadGhost();
+  function refreshGhostBtn() {
+    if (!btnGhost) return;
+    btnGhost.classList.toggle('active', _ghost);
+    btnGhost.setAttribute('aria-pressed', _ghost ? 'true' : 'false');
+    btnGhost.title = _ghost
+      ? 'Ghosted — click to bring tabs + chrome back'
+      : 'Ghost the panel — hide tabs + extra chrome; just transport and the code floating over the visuals';
+  }
+  function applyGhost() {
+    if (panel) panel.classList.toggle('ghost', _ghost);
+    if (_ghost) document.querySelector('#strudel-tabs .sp-tab[data-tab="editor"]')?.click();
+  }
+  function setGhost(on) { _ghost = !!on; saveGhost(_ghost); applyGhost(); refreshGhostBtn(); return _ghost; }
+  applyGhost(); refreshGhostBtn();
+  if (btnGhost) btnGhost.addEventListener('click', () => setGhost(!_ghost));
 
   // Initial code: a freshly-rolled random pattern by default. If the panel
   // was open on the previous visit, the user was probably mid-edit — in
