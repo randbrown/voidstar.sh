@@ -765,6 +765,46 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   applyGhost(); refreshGhostBtn();
   if (btnGhost) btnGhost.addEventListener('click', () => setGhost(!_ghost));
 
+  // ── soft-keyboard avoidance (phone editing) ──────────────────────────────
+  // Android Chrome overlays the on-screen keyboard WITHOUT resizing the
+  // layout viewport: fixed panels keep their full height and the bottom of
+  // the editor — where the caret usually is — disappears under Gboard, so
+  // you type blind. The visualViewport API reports the truly-visible region;
+  // while the keyboard is up (a big height loss at 1:1 scale — never
+  // browser-chrome jitter, never a desktop) we clamp the panel so its bottom
+  // sits above the keyboard, and release the clamp the moment it closes.
+  // CodeMirror's own caret-tracking then keeps the cursor in the shrunken
+  // scroller. Inline max-height only — the panel's height/geometry prefs are
+  // untouched, and desktop never trips the threshold.
+  const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+  if (vv && panel) {
+    const OSK_MIN_PX = 90;   // height loss that reads as "keyboard", not chrome
+    // panel-pos also manages an inline max-height (viewport clamping), so the
+    // pre-keyboard value is saved on clamp and put back on release rather
+    // than blown away.
+    let oskClamped = false, oskPrevMax = '';
+    const release = () => {
+      if (!oskClamped) return;
+      panel.style.maxHeight = oskPrevMax;
+      oskClamped = false; oskPrevMax = '';
+    };
+    const syncOSK = () => {
+      if (panel.style.display === 'none') { release(); return; }
+      const zoomed = Math.abs((vv.scale || 1) - 1) > 0.02;   // pinch-zoom also shrinks vv
+      const lost = window.innerHeight - vv.height;
+      if (!zoomed && lost > OSK_MIN_PX) {
+        if (!oskClamped) { oskPrevMax = panel.style.maxHeight; oskClamped = true; }
+        const kbTop = vv.offsetTop + vv.height;   // keyboard's top edge in layout coords
+        const top = panel.getBoundingClientRect().top;
+        panel.style.maxHeight = `${Math.max(140, Math.round(kbTop - top - 8))}px`;
+      } else {
+        release();
+      }
+    };
+    vv.addEventListener('resize', syncOSK);
+    vv.addEventListener('scroll', syncOSK);
+  }
+
   // Initial code: a freshly-rolled random pattern by default. If the panel
   // was open on the previous visit, the user was probably mid-edit — in
   // that case restore the stored buffer instead so their work survives a
