@@ -431,6 +431,16 @@ export function initQualiaPage() {
   });
   core.onFps(() => chron.tick());
 
+  // Rezero τ when a take starts (in-page recorder OR the OBS remote), anchored
+  // to that take's start stamp, so the session clock and the "rec ● mm:ss" pill
+  // are one number to read on stage instead of two unrelated clocks. Opt out on
+  // the chron card ("reset on rec") when τ should measure the whole SET and a
+  // take is just an event inside it — the horizon nudges re-arm on every reset.
+  function chronResetForTake(startedAt) {
+    if (!chron.getConfig().recReset) return;
+    chron.reset(startedAt);
+  }
+
   // ── Settings (top-level) ──────────────────────────────────────────────────
   // Whatever the page-state surface is, it gets serialized here so that a
   // page reload restores the user's exact session. Per-fx params are
@@ -2728,6 +2738,7 @@ export function initQualiaPage() {
   }
   wireChronToggle('chron-enabled',   c => c.enabled,          on => ({ enabled: on }));
   wireChronToggle('chron-hud-toggle', c => c.hud,             on => ({ hud: on }));
+  wireChronToggle('chron-rec-reset', c => c.recReset,         on => ({ recReset: on }));
   wireChronToggle('chron-redshift',  c => c.horizon.redshift, on => ({ horizon: { redshift: on } }));
   function wireChronSelect(selId, get, patchFor) {
     const sel = document.getElementById(selId);
@@ -3276,7 +3287,12 @@ export function initQualiaPage() {
     onState: (s) => {
       refreshObsDialog(s);
       if (captureMode !== 'obs') return;
-      if (s.recording && !obsRecStartedAt) obsRecStartedAt = performance.now();
+      if (s.recording && !obsRecStartedAt) {
+        obsRecStartedAt = performance.now();
+        // In this mode the pill counts from OBS's own RecordStateChanged, so
+        // that's what τ gets anchored to.
+        chronResetForTake(obsRecStartedAt);
+      }
       if (!s.recording) obsRecStartedAt = 0;
       refreshObsRecUi(s);
     },
@@ -3988,7 +4004,10 @@ export function initQualiaPage() {
       // mode mid-take (we'd have no clean way to swap capture backends
       // without restarting the MediaRecorder). It re-enables on stop.
       if (btnRecordMode) btnRecordMode.disabled = recording;
-      if (recording) showRecToastActive(backend, sink);
+      if (recording) {
+        showRecToastActive(backend, sink);
+        chronResetForTake(recorder?.getStartedAt?.());
+      }
       // When recording flips false, the toast either morphs to "ready"
       // (via onReadyToSave below) or stays hidden — we don't auto-hide
       // here so a pending-save indicator survives the state change.
@@ -4110,11 +4129,18 @@ export function initQualiaPage() {
         alert(`Screen recording failed: ${err?.message || err}`);
       }
     });
-    // Per-second tick updates the button label + compact pill timer so
-    // the user can see the recording is live + how long it's been
-    // running. Pill text stays just "mm:ss" — keeping it small enough
-    // to not obstruct anything when pinned bottom-center.
-    setInterval(() => {
+    // Take timer — the button label + the compact pill, so the user can see
+    // the recording is live and how long it's been running. Pill text stays
+    // just "mm:ss", small enough to not obstruct anything when pinned
+    // bottom-center.
+    //
+    // Rides core.onFps (~5Hz) — the SAME heartbeat chron.tick() runs on — so
+    // the pill and the τ readout floor one elapsed value on one pass and can
+    // never disagree. (On its own 1s interval, phased to page load rather
+    // than to the take, this clock read a second off τ for most of a take.)
+    // Idle cost is the isRecording() guard; repaints only on a changed
+    // second, so the topbar doesn't churn.
+    core.onFps(() => {
       // In obs mode the take belongs to OBS, so the clock runs from the
       // RecordStateChanged that told us it started.
       const obsOn = obsRecording();
@@ -4123,11 +4149,16 @@ export function initQualiaPage() {
       const sec = Math.floor((performance.now() - startedAt) / 1000);
       const mm = Math.floor(sec / 60).toString().padStart(2, '0');
       const ss = (sec % 60).toString().padStart(2, '0');
-      btnRecord.textContent = `rec ● ${mm}:${ss}`;
+      const text = `${mm}:${ss}`;
+      const label = `rec ● ${text}`;
+      // Diff against what's on screen (not a cached string) so onStateChange
+      // resetting the label to "rec" always repaints on the next take.
+      if (btnRecord.textContent === label) return;
+      btnRecord.textContent = label;
       if (recToastText && recToast?.classList.contains('rec-active')) {
-        recToastText.textContent = `${mm}:${ss}`;
+        recToastText.textContent = text;
       }
-    }, 1000);
+    });
   }
 
   // Save-dialog buttons. The tap inside this click handler IS the user
@@ -6478,7 +6509,9 @@ export function initQualiaPage() {
     // section → { head element, insertBefore? }. qp-card heads insert before the
     // trailing chevron; panel headers append (or insert before the × close).
     const targets = [
-      { key: 'rig',       head: document.getElementById('looper-header'),       before: document.getElementById('btn-looper-close') },
+      // Panels with a ghost toggle keep the corner order [io] ◌ × — the chip
+      // inserts before ◌ so ghost stays glued to the close button.
+      { key: 'rig',       head: document.getElementById('looper-header'),       before: document.getElementById('btn-rig-ghost') || document.getElementById('btn-looper-close') },
       { key: 'fx',        head: document.querySelector('#fx-card .qp-head') },
       { key: 'audio',     head: document.querySelector('#audio-card .qp-head') },
       { key: 'pose',      head: document.querySelector('#pose-card .qp-head') },
@@ -6487,7 +6520,7 @@ export function initQualiaPage() {
       // `before` the close × so the chip sits just left of it and × stays flush
       // right, consistent across every panel.
       { key: 'sequencer', head: document.getElementById('sequencer-header'), before: document.getElementById('btn-sequencer-close') },
-      { key: 'strudel',   head: document.getElementById('strudel-header'),   before: document.getElementById('btn-strudel-close') },
+      { key: 'strudel',   head: document.getElementById('strudel-header'),   before: document.getElementById('btn-strudel-ghost') || document.getElementById('btn-strudel-close') },
       { key: 'vocoder',   head: document.getElementById('vocoder-header'),   before: document.getElementById('btn-vocoder-close') },
     ];
     for (const t of targets) {

@@ -1276,6 +1276,33 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     /* The font-size rail is narrower in the tab bar than a header gain slider. */
     .sp-opts .panel-font-slider { width: 60px; min-width: 48px; }
 
+    /* Ghost — the strudel panel's own lean layer (the ◌ header button;
+       separate from the global zen mode): the tab bar and header extras hide,
+       the frame/fill/shadow go transparent, and what's left is the title,
+       transport, and the code floating over the visuals. Wins over .blurred
+       while it's on (the frosted backdrop is chrome too). */
+    #strudel-panel.ghost {
+      background: transparent !important;
+      backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+      border-color: transparent;
+      box-shadow: none;
+    }
+    #strudel-panel.ghost #strudel-header {
+      background: transparent;
+      border-bottom-color: transparent;
+      backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+    #strudel-panel.ghost #strudel-tabs { display: none; }
+    /* Header extras — everything that isn't transport (▶ ■ live), the ghost
+       toggle itself, or close. The error chip STAYS: an eval failure is the
+       one distraction a performer must see. !important beats the inline
+       display the lanes chip toggles. */
+    #strudel-panel.ghost .sp-status,
+    #strudel-panel.ghost .sp-lanes,
+    #strudel-panel.ghost #strudel-header .panel-slider-wrap,
+    #strudel-panel.ghost #btn-strudel-newline,
+    #strudel-panel.ghost #btn-strudel-blur { display: none !important; }
+
     #strudel-patterns {
       flex: 1; min-height: 0; overflow: auto;
       padding: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem;
@@ -2524,6 +2551,44 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        (inline width/height, persisted under the panel's mini geometry key)
        still wins, so `height` is deliberately not !important here. */
     #looper-panel.mini { height: auto; min-height: 0 !important; width: auto; }
+    /* Mini rides the visuals as a clear window — the same default treatment as
+       the strudel panel: frame, header bar, and shadow stay (it still reads as
+       a panel), but the body fill + blur go, so the pedalboard sits directly
+       on the quale. The halo keeps the small labels legible over a bright
+       backdrop; its color is the theme's base background so light themes halo
+       light instead of muddy black. The full station keeps its glass. */
+    #looper-panel.mini {
+      background: transparent;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      text-shadow: 0 1px 2px var(--void), 0 0 5px var(--void);
+    }
+
+    /* Ghost — the rig's own lean layer (the ◌ header button; separate from the
+       global zen mode): EVERY scrap of panel chrome goes transparent — fill,
+       frame, shadow, header bar, sticky subhead glass — leaving the controls
+       floating free over the visuals. Rides on top of mini OR full, so either
+       view can play near-invisible. */
+    #looper-panel.ghost {
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      text-shadow: 0 1px 2px var(--void), 0 0 5px var(--void);
+    }
+    #looper-panel.ghost #looper-header {
+      background: transparent;
+      border-bottom-color: transparent;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    #looper-panel.ghost .rig-subhead {
+      background: transparent;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    #looper-panel.ghost .rig-subpanel + .rig-subpanel { border-top-color: transparent; }
 
     #rig-mini { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.6rem; }
     .rig-mini-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
@@ -2575,14 +2640,23 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .rig-pedal-val { font-size: 0.52rem; color: var(--text); font-variant-numeric: tabular-nums; }
     .rig-pedal-label { font-size: 0.56rem; color: var(--muted); letter-spacing: 0.03em; }
 
-    /* Tiny tap-to-expand strobe tuner. */
+    /* Tiny tap-to-expand strobe tuner. The square is a one-note tuner in its
+       own right: primary note on top, a miniature strobe band below (stripes
+       drift right = sharp, left = flat, freeze = in tune — same convention
+       as the big display, which feeds it). */
     .rig-mini-tune { display: flex; flex-direction: column; align-items: center; gap: 0.22rem; }
     .rig-mini-tune-sq {
       width: 44px; height: 44px; border-radius: 6px; padding: 0;
       border: 1px solid var(--border); background: rgba(0,0,0,0.3);
-      display: flex; align-items: center; justify-content: center;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 3px;
       font-size: 0.62rem; color: var(--muted); cursor: pointer; line-height: 1;
       font-variant-numeric: tabular-nums;
+    }
+    .rig-mini-tune-note { line-height: 1; }
+    .rig-mini-tune-strobe {
+      display: block; width: 34px; height: 7px;
+      border-radius: 2px; background: rgba(0,0,0,0.35);
     }
     .rig-mini-tune-sq.active { border-color: var(--cyan); color: var(--cyan); }
     .rig-mini-tune-sq.near   { border-color: #fbbf24; color: #fbbf24; }
@@ -2866,7 +2940,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <img class="brand-logo" src="/voidstar-mark.png" alt="voidstar" width="38" height="24" />
       </a>
       <span class="experiment-title">qualia</span>
-      <span class="experiment-tag">#livecoding station</span>
+      <span class="experiment-tag">#livecodingstation</span>
     </div>
     <div id="topbar-corner">
       <button class="ctrl-btn" id="btn-strudel" title="Strudel REPL (S)">strudel</button>
@@ -3540,6 +3614,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="cycles">cycles ⟳</option>
         </select>
       </div>
+      <div class="qp-row" data-qp="chron-rec-reset" title="Rezero τ whenever a recording starts (in-page or OBS), so the τ readout and the rec button's timer show the same elapsed time for the take. Off = τ keeps measuring the whole set and a take is just an event inside it. Note a reset also re-arms the horizon nudges.">
+        <label>reset on rec</label>
+        <button class="qp-toggle active" id="chron-rec-reset">on</button>
+      </div>
       <div class="qp-section-tag">pulse · zen</div>
       <div class="qp-row" data-qp="chron-pulse-every" title="In zen mode, briefly fade in the elapsed count every N minutes — a soft pulsar nudge instead of a persistent clock. 0 = off.">
         <label>pulse every<span class="qp-val">5m</span></label>
@@ -4016,6 +4094,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </span>
     <button class="ctrl-btn" id="btn-strudel-newline" title="Insert newline at cursor (Android touch keyboards drop the Enter event)">↵</button>
     <button class="ctrl-btn" id="btn-strudel-blur"    title="Toggle a frosted backdrop behind the editor (helps legibility over a busy visual)" aria-pressed="false">⬚</button>
+    <!-- ◌ sits immediately left of × in every panel (injectPanelIO inserts the
+         save/load chip before it, keeping the corner order [io] ◌ ×). -->
+    <button class="ctrl-btn" id="btn-strudel-ghost"   title="Ghost the panel — hide tabs + extra chrome; just transport and the code floating over the visuals" aria-pressed="false">◌</button>
     <button class="ctrl-btn" id="btn-strudel-close"   title="Close (S)">×</button>
   </div>
   <div id="strudel-tabs">
@@ -4113,6 +4194,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="2" step="0.01" value="1" title="Rig master output level (1.0 = unity; above 1.0 boosts into the limiter)" />
     <span class="rig-head-spacer"></span>
     <button class="ctrl-btn rig-mini-toggle active" id="btn-rig-mini" aria-pressed="true" title="Full rig view — click to condense to the pedalboard (⇧O)">▤</button>
+    <!-- ◌ sits immediately left of × in every panel (injectPanelIO inserts the
+         save/load chip before it, keeping the corner order [io] ◌ ×). -->
+    <button class="ctrl-btn rig-mini-toggle" id="btn-rig-ghost" aria-pressed="false" title="Ghost the panel — drop the chrome so the rig floats clear over the visuals">◌</button>
     <button class="ctrl-btn" id="btn-looper-close"  title="Close (O)">×</button>
   </div>
 

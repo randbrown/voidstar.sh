@@ -18,8 +18,13 @@
 //
 // The stopwatch is wall-clock and starts on the first tick (i.e. with
 // core.start() — the session). It keeps counting through pause: it measures
-// the session, not the transport. reset() (the card's "reset τ" button)
-// rezeroes it.
+// the session, not the transport. reset() rezeroes it — fired by the card's
+// "reset τ" button, and (while `recReset` is on, the default) by page-init
+// when a recording starts, anchored to the take's start stamp so τ and the
+// "rec ● mm:ss" pill read the same elapsed time for the whole take. Turn
+// `recReset` off when τ should measure the SET and a take is just an event
+// inside it. chron itself doesn't know about the recorder — it only carries
+// the flag so it persists with the rest of the chron settings.
 //
 // 'cycles' format ("τ ⟳128") integrates the LIVE cps each tick
 // (cycles += dt·cps) instead of multiplying the final cps by total elapsed
@@ -32,6 +37,7 @@ export const CHRON_DEFAULTS = {
   enabled: true,
   hud: true,                  // show the τ readout in the topbar
   format: 'mm:ss',            // 'mm' | 'mm:ss' | 'hh:mm:ss' | 'cycles'
+  recReset: true,             // rezero τ when a recording starts (see below)
   zen: {
     pulseEvery: 5,            // minutes between zen pulses (0 = off)
     pulseFormat: 'mm',        // format for the pulse text
@@ -213,8 +219,12 @@ export function createChron({ hudEl, pulseEl, isZen = () => false, getCps = () =
     }
   }
 
-  function reset() {
-    const now = performance.now();
+  /** Rezero the stopwatch. `atMs` (a performance.now() stamp) lets a caller
+   *  anchor τ to an event that already happened — the recorder passes its own
+   *  start stamp so the τ readout and the "rec ● mm:ss" pill tick over on the
+   *  same second instead of drifting apart by the call gap. */
+  function reset(atMs) {
+    const now = Number.isFinite(atMs) ? atMs : performance.now();
     startMs = now; lastMs = now;
     cycles = 0; lastPulseIdx = 0; lastQRIdx = 0;
     warnFired = false; horizonFired = false;
@@ -229,9 +239,10 @@ export function createChron({ hudEl, pulseEl, isZen = () => false, getCps = () =
   function setConfig(patch) {
     if (!patch || typeof patch !== 'object') return;
     const prevHorizonAt = cfg.horizon.at;
-    if (typeof patch.enabled === 'boolean') cfg.enabled = patch.enabled;
-    if (typeof patch.hud     === 'boolean') cfg.hud     = patch.hud;
-    if (FORMATS.includes(patch.format))     cfg.format  = patch.format;
+    if (typeof patch.enabled  === 'boolean') cfg.enabled  = patch.enabled;
+    if (typeof patch.hud      === 'boolean') cfg.hud      = patch.hud;
+    if (typeof patch.recReset === 'boolean') cfg.recReset = patch.recReset;
+    if (FORMATS.includes(patch.format))      cfg.format   = patch.format;
     if (patch.zen && typeof patch.zen === 'object') {
       const z = patch.zen;
       if (Number.isFinite(z.pulseEvery))    cfg.zen.pulseEvery    = Math.max(0, z.pulseEvery);
