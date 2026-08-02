@@ -7029,6 +7029,7 @@ export function initQualiaPage() {
     phaseNext:    () => phaseShift(+1),
     delayToggle:  () => looper.toggleStripStage?.('delay'),
     reverbToggle: () => looper.toggleStripStage?.('reverb'),
+    compToggle:   () => looper.toggleStripStage?.('comp'),
     freeze:       () => document.getElementById('btn-rig-freeze')?.click(),   // grab / layer
     freezePop:    () => looper.freezePop?.(),
     freezeRegrab: () => looper.freezeRegrab?.(),
@@ -7605,6 +7606,7 @@ export function initQualiaPage() {
             metalOn:    !!looper.isStripStageOn?.('metal'),
             delayOn:    !!looper.isStripStageOn?.('delay'),
             reverbOn:   !!looper.isStripStageOn?.('reverb'),
+            compOn:     !!looper.isStripStageOn?.('comp'),
             tunerOn:    !!looper.isTunerOn?.(),
             paused:     !!core.isPaused?.(),
             voxMuted:   !!vocoder.isMuted?.(),
