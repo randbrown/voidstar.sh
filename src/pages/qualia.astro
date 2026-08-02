@@ -1297,6 +1297,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       backdrop-filter: none; -webkit-backdrop-filter: none;
     }
     #strudel-panel.ghost #strudel-tabs { display: none; }
+    /* Ghost drops the title text too — same as the rig. */
+    #strudel-panel.ghost .sp-title { display: none; }
     /* Header extras — everything that isn't transport (▶ ■ live), the ghost
        toggle itself, or close. The error chip STAYS: an eval failure is the
        one distraction a performer must see. !important beats the inline
@@ -2555,16 +2557,17 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        (inline width/height, persisted under the panel's mini geometry key)
        still wins, so `height` is deliberately not !important here. */
     #looper-panel.mini { height: auto; min-height: 0 !important; width: auto; }
-    /* Mini rides the visuals as a clear window — the same default treatment as
-       the strudel panel: frame, header bar, and shadow stay (it still reads as
-       a panel), but the body fill + blur go, so the pedalboard sits directly
-       on the quale. The halo keeps the small labels legible over a bright
-       backdrop; its color is the theme's base background so light themes halo
-       light instead of muddy black. The full station keeps its glass. */
+    /* Mini rides the visuals as a lightly frosted window: frame, header bar,
+       and shadow stay (it still reads as a panel) over a thinner glass than
+       the full station — enough frost to settle a busy quale behind the
+       knobs without walling it off. Ghost (below, later in the file so it
+       wins when both classes are on) strips even this. The halo keeps the
+       small labels legible; its color is the theme's base background so
+       light themes halo light instead of muddy black. */
     #looper-panel.mini {
-      background: transparent;
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
+      background: rgba(10,10,26,0.40);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
       text-shadow: 0 1px 2px var(--void), 0 0 5px var(--void);
     }
 
@@ -2587,6 +2590,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
     }
+    /* Ghost drops the title text too — the floating controls speak for
+       themselves, and a label is one more thing over the visuals. */
+    #looper-panel.ghost #looper-header .sp-title,
+    #looper-panel.ghost #looper-header .sp-tag { display: none; }
     #looper-panel.ghost .rig-subhead {
       background: transparent;
       backdrop-filter: none;
