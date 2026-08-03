@@ -204,7 +204,7 @@ function remapHues(data, { green, purple, blend }) {
 // teal).
 const APPS = [
   { id: 'qualia', accent: '#8b5cf6', src: 'src/assets/art/app_icons/qualia_crystal_cutout.png',
-    orbit: { tilt: -14, stops: ['#22d3ee', '#818cf8', '#e879f9'],
+    orbit: { tilt: 30, stops: ['#22d3ee', '#818cf8', '#e879f9'],
              back: [{ a: 197, r: 0.015, col: '#22d3ee' }],
              front: [{ a: 118, r: 0.014, col: '#e879f9' }] } },
   { id: 'setlist', accent: '#f59e0b', svg: setlistArt },
