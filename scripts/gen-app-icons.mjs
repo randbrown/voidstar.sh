@@ -221,7 +221,7 @@ const APPS = [
              back: [{ a: 345, r: 0.014, col: '#f0abfc' }],
              front: [{ a: 65, r: 0.012, col: '#4ade80' }] } },
   { id: 'tether', accent: '#8b5cf6', src: 'src/assets/art/app_icons/tether_crystal_cutout.png',
-    orbit: { tilt: -22, stops: ['#8b5cf6', '#a78bfa', '#22d3ee'],
+    orbit: { tilt: 24, stops: ['#8b5cf6', '#a78bfa', '#22d3ee'],
              back: [{ a: 205, r: 0.015, col: '#a78bfa' }],
              front: [{ a: 60, r: 0.014, col: '#22d3ee' }] } },
 ];
