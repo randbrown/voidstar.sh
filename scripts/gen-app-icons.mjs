@@ -23,10 +23,13 @@
 //
 // Per-app accent + glyph, same family frame (void-dark ground, accent ring,
 // white spark tick at the ring's top-right):
-//   qualia  — violet knob arc + cyan core (the instrument)
+//   qualia  — the qualia eye: lids drawn as the two (void*) parens, a cyan
+//             knob-arc iris, the void* spark as pupil — perception + code +
+//             rig + star in one mark (the live coding station)
 //   setlist — amber chart lines + diamond bullet (the stage list)
-//   mind    — teal brain silhouette, glowing hub + spokes (the second brain)
-//   tether  — gold bolt over the violet knob (remote hand on the rig)
+//   mind    — low-poly neuron constellation in a brain outline, glowing hub,
+//             particles expanding toward the spark (the second brain)
+//   tether  — the app's own ⌁ glyph as a fat gold sideways bolt (the remote)
 //
 //   public/icon-<app>-192.png            — PWA icon (disc on transparent)
 //   public/icon-<app>-512.png            — PWA icon (disc on transparent)
@@ -67,13 +70,20 @@ function sparkPath(cx, cy, r) {
 // Each glyph draws into a 100×100 box (the caller scales/places it) and gets
 // the app's colors. Keep every stroke ≥4 units — that's the legibility floor.
 const GLYPHS = {
-  // Knob: thick violet gauge arc, cyan ring core, violet cap dot.
-  qualia({ accent, light }) {
+  // The qualia eye. Lids are the two parens of (void*) — top and bottom arcs
+  // with round caps and a small gap at each corner so they still read as
+  // ( ) — the iris is the rig's cyan knob arc (gap at the bottom), and the
+  // pupil is the void* spark itself: seeing sound, through code.
+  qualia({ accent }) {
     return `
-      <path d="${arcPath(50, 50, 37, 135, 405)}" fill="none" stroke="${accent}"
-            stroke-width="13" stroke-linecap="round"/>
-      <circle cx="50" cy="50" r="19" fill="none" stroke="#22d3ee" stroke-width="8"/>
-      <circle cx="50" cy="50" r="6.5" fill="${light}"/>`;
+      <path d="M 10 47 Q 50 3 90 47" fill="none" stroke="${accent}"
+            stroke-width="9" stroke-linecap="round"/>
+      <path d="M 10 53 Q 50 97 90 53" fill="none" stroke="${accent}"
+            stroke-width="9" stroke-linecap="round" opacity="0.8"/>
+      <circle cx="50" cy="50" r="18" fill="#22d3ee" opacity="0.18"/>
+      <path d="${arcPath(50, 50, 15, 135, 405)}" fill="none" stroke="#22d3ee"
+            stroke-width="7.5" stroke-linecap="round"/>
+      <path d="${sparkPath(50, 50, 8.5)}" fill="#f8fafc"/>`;
   },
   // Setlist: three fat rounded chart lines, diamond bullet on the opener.
   setlist({ accent, light }) {
@@ -88,56 +98,67 @@ const GLYPHS = {
       ${bar(13, 43, 62, 0.9)}
       ${bar(13, 67, 46, 0.78)}`;
   },
-  // Mind: a SOLID brain, side profile facing right — filled shapes survive
-  // 24px where the old poly-mesh constellation turned to mush. Cerebrum +
-  // stem + cerebellum as filled lobes with void-dark keylines between them,
-  // three dark gyri ridges, and two particles drifting off the crown toward
-  // the spark — the mind expanding into the void.
+  // Mind: the neuron constellation, rebuilt for icon scale. Same idea as the
+  // original poly-mesh brain — a node web whose PERIMETER traces a side
+  // profile (crown, forehead, temporal lobe, the cerebellum notch) with a
+  // glowing mind-map hub inside — but an order of magnitude bolder: ~a dozen
+  // nodes instead of dozens, 4-unit edges instead of hairlines, and a faint
+  // polygon fill so the small sizes keep some mass. Particles still stream
+  // off the crown toward the spark — the mind expanding into the void.
   mind({ accent, light }) {
-    const gyri = (d) =>
-      `<path d="${d}" fill="none" stroke="${BG}" stroke-width="4" stroke-linecap="round" opacity="0.85"/>`;
+    const P = [
+      [17, 45], [24, 27], [44, 15], [66, 17], [82, 30], [84, 47], // back → crown → front
+      [74, 61], [58, 67], [46, 60], [36, 69], [23, 61],           // temporal → notch → cerebellum
+    ];
+    const H = [49, 41]; // hub
+    const ring = P.map(p => p.join(',')).join(' ');
+    const spokes = [0, 1, 3, 5, 7, 8]
+      .map(i => `<line x1="${H[0]}" y1="${H[1]}" x2="${P[i][0]}" y2="${P[i][1]}"
+                       stroke="${accent}" stroke-width="4" stroke-linecap="round" opacity="0.7"/>`)
+      .join('');
+    const nodes = P
+      .map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="${i % 3 === 0 ? 5 : 4}"
+                                   fill="${i % 3 === 0 ? light : accent}"/>`)
+      .join('');
     return `
-      <defs><linearGradient id="gbrain" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="${lighten(accent, 0.35)}"/>
-        <stop offset="100%" stop-color="${accent}"/>
-      </linearGradient></defs>
-      <ellipse cx="33" cy="62" rx="12.5" ry="9.5" fill="url(#gbrain)" stroke="${BG}" stroke-width="3"/>
-      <path d="M 42 13
-        C 24 15, 12 28, 13 43
-        C 13.5 53, 20 60, 30 62.5
-        C 38 64.5, 46 64, 51 61
-        C 56 67, 67 69, 74 64
-        C 81 59, 84 51, 82 43
-        C 87 32, 81 20, 68 15
-        C 59 11.5, 50 12, 42 13 Z" fill="url(#gbrain)"/>
-      ${gyri('M 32 21 C 27 29, 34 36, 28 45')}
-      ${gyri('M 49 15 C 44 24, 51 32, 45 43')}
-      ${gyri('M 66 24 C 62 31, 68 37, 63 46')}
-      <circle cx="73" cy="21" r="10" fill="#22d3ee" opacity="0.4"/>
-      <circle cx="73" cy="21" r="5.5" fill="#eafffb"/>
-      <circle cx="81" cy="11" r="3.4" fill="${light}" opacity="0.9"/>
-      <circle cx="90" cy="3.5" r="2.5" fill="${light}" opacity="0.7"/>`;
+      <polygon points="${ring}" fill="${accent}" fill-opacity="0.15" stroke="${accent}"
+               stroke-width="4.5" stroke-linejoin="round"/>
+      ${spokes}${nodes}
+      <circle cx="${H[0]}" cy="${H[1]}" r="13" fill="#22d3ee" opacity="0.35"/>
+      <circle cx="${H[0]}" cy="${H[1]}" r="7" fill="#eafffb"/>
+      <circle cx="79" cy="11" r="3.4" fill="${light}" opacity="0.9"/>
+      <circle cx="89" cy="4" r="2.5" fill="${light}" opacity="0.7"/>`;
   },
-  // Tether: the qualia knob arc with a fat gold bolt striking through it —
-  // the remote hand on the rig. Bolt gets a void-dark keyline so it pops.
-  tether({ accent }) {
+  // Tether: the app's own brand glyph — ⌁ U+2301 ELECTRIC ARROW, the sideways
+  // bolt from "⌁ TETHER" / "⌁ sync" in the UI — as the sole focus on the
+  // family base. Drawn as a path (not <text>) so it renders identically on
+  // any build machine: two horizontal bars joined by a Z-diagonal, matching
+  // DejaVu's cut of the glyph, in gold with a soft glow.
+  tether() {
     return `
-      <path d="${arcPath(50, 51, 37, 135, 405)}" fill="none" stroke="${accent}"
-            stroke-width="12" stroke-linecap="round" opacity="0.95"/>
-      <defs><linearGradient id="gbolt" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#fde68a"/><stop offset="45%" stop-color="#fbbf24"/>
-        <stop offset="100%" stop-color="#f59e0b"/>
-      </linearGradient></defs>
-      <path d="M 58 4 L 28 57 L 46 57 L 40 96 L 74 41 L 53 41 Z" fill="url(#gbolt)"
-            stroke="${BG}" stroke-width="3.5" stroke-linejoin="round"/>`;
+      <defs>
+        <linearGradient id="gbolt" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#fde68a"/><stop offset="45%" stop-color="#fbbf24"/>
+          <stop offset="100%" stop-color="#f59e0b"/>
+        </linearGradient>
+        <radialGradient id="gboltglow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <ellipse cx="50" cy="50" rx="44" ry="26" fill="url(#gboltglow)"/>
+      <path d="M 16 28 L 70 28 L 49 57 L 95 57 L 84 72 L 22 72 L 43 43 L 5 43 Z"
+            fill="url(#gbolt)" stroke="${BG}" stroke-width="3" stroke-linejoin="round"/>`;
   },
 };
 
+// `scale` multiplies the frame's glyph box — the wide, flat glyphs (the eye,
+// the sideways bolt) can afford to overfill the square budget a little.
 const APPS = [
-  { id: 'qualia', accent: '#8b5cf6' },
+  { id: 'qualia', accent: '#8b5cf6', scale: 1.16 },
   { id: 'setlist', accent: '#f59e0b' },
-  { id: 'mind', accent: '#14b8a6' },
-  { id: 'tether', accent: '#8b5cf6' }, // violet ring like qualia; the bolt is the tell
+  { id: 'mind', accent: '#14b8a6', scale: 1.06 },
+  { id: 'tether', accent: '#8b5cf6', scale: 1.08 }, // violet ring like qualia; the bolt is the tell
 ];
 
 // Shared frame: accent wash + ring + glyph + spark. `disc:true` clips the
@@ -147,7 +168,7 @@ function iconSvg(size, app, { disc, ringR, ringW, glyphFrac, glyphCY, spark }) {
   const { accent } = app;
   const light = lighten(accent, 0.55);
   const c = size / 2;
-  const box = size * glyphFrac;
+  const box = size * glyphFrac * (app.scale || 1);
   const gx = (size - box) / 2;
   const gy = size * glyphCY - box / 2;
   const ground = disc
