@@ -69,8 +69,8 @@ meant to install as their **own** standalone desktop/home-screen app. Each ships
 manifest (`public/manifest-<app>.webmanifest`) with a unique `id`, a **narrow `scope`**
 (`/qualia`, `/lab/setlist`, `/lab/mind`, `/lab/tether`) so an install owns only its own routes,
 and its own color-coded icon set (`public/icon-<app>-*.png`, built by
-`scripts/gen-app-icons.mjs`: crystal-lotus star-eye qualia · amber chart-lines setlist · teal
-neuron-web mind · crystal-lotus bolt tether; qualia/tether are raster art from
+`scripts/gen-app-icons.mjs`: crystal-lotus star-eye qualia · amber chart-lines setlist ·
+neural-orb brain mind · crystal-lotus bolt tether; qualia/mind/tether are raster art from
 `src/assets/art/app_icons/`, the `any` icons are shaped glyphs on transparent, the maskable ones
 full-bleed). Tether
 (formerly "spooky" — `/lab/spooky` now redirects) installs `display: fullscreen` (it's a stage

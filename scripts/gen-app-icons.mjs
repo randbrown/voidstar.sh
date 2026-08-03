@@ -22,18 +22,18 @@
 // as white), with the glyph held inside the central safe zone (r = 40%).
 //
 // Two icon pipelines share the output contract:
-//   - setlist / mind: generated SVG glyphs in the family frame (void-dark
-//     ground, accent ring, white spark tick at the ring's top-right) —
-//     amber chart lines + diamond bullet (the stage list); teal low-poly
-//     neuron constellation with a glowing hub (the second brain).
-//   - qualia / tether: RASTER artwork — the crystal-lotus marks (petal burst
-//     around an orbital ellipse; star-eye core for qualia, bolt for tether),
-//     from src/assets/art/app_icons/*_cutout.png (art on transparency).
-//     The art is its own shaped glyph, so the "any" icons are just the
-//     trimmed cutout padded on transparent; the maskable variant recomposes
-//     it over the family's void-dark ground inside the safe zone (the
-//     handoff's own maskables sat on a navy tile and ran petal tips out
-//     near the mask edge).
+//   - setlist: generated SVG glyph in the family frame (void-dark ground,
+//     accent ring, white spark tick at the ring's top-right) — amber chart
+//     lines + diamond bullet (the stage list).
+//   - qualia / tether / mind: RASTER artwork from
+//     src/assets/art/app_icons/*_cutout.png (art on transparency) — the
+//     crystal-lotus marks (petal burst around an orbital ellipse; star-eye
+//     core for qualia, bolt for tether) and mind's neural orb (neon brain
+//     in a void sphere with orbit nodes). The art is its own shaped glyph,
+//     so the "any" icons are just the trimmed cutout padded on transparent;
+//     the maskable variant recomposes it over the family's void-dark ground
+//     inside the safe zone (the handoffs' own maskables sat on off-family
+//     tiles and ran art out near the mask edge).
 //
 //   public/icon-<app>-192.png            — PWA icon (disc on transparent)
 //   public/icon-<app>-512.png            — PWA icon (disc on transparent)
@@ -78,45 +78,16 @@ const GLYPHS = {
       ${bar(13, 43, 62, 0.9)}
       ${bar(13, 67, 46, 0.78)}`;
   },
-  // Mind: the neuron constellation, rebuilt for icon scale. Same idea as the
-  // original poly-mesh brain — a node web whose PERIMETER traces a side
-  // profile (crown, forehead, temporal lobe, the cerebellum notch) with a
-  // glowing mind-map hub inside — but an order of magnitude bolder: ~a dozen
-  // nodes instead of dozens, 4-unit edges instead of hairlines, and a faint
-  // polygon fill so the small sizes keep some mass. Particles still stream
-  // off the crown toward the spark — the mind expanding into the void.
-  mind({ accent, light }) {
-    const P = [
-      [17, 45], [24, 27], [44, 15], [66, 17], [82, 30], [84, 47], // back → crown → front
-      [74, 61], [58, 67], [46, 60], [36, 69], [23, 61],           // temporal → notch → cerebellum
-    ];
-    const H = [49, 41]; // hub
-    const ring = P.map(p => p.join(',')).join(' ');
-    const spokes = [0, 1, 3, 5, 7, 8]
-      .map(i => `<line x1="${H[0]}" y1="${H[1]}" x2="${P[i][0]}" y2="${P[i][1]}"
-                       stroke="${accent}" stroke-width="4" stroke-linecap="round" opacity="0.7"/>`)
-      .join('');
-    const nodes = P
-      .map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="${i % 3 === 0 ? 5 : 4}"
-                                   fill="${i % 3 === 0 ? light : accent}"/>`)
-      .join('');
-    return `
-      <polygon points="${ring}" fill="${accent}" fill-opacity="0.15" stroke="${accent}"
-               stroke-width="4.5" stroke-linejoin="round"/>
-      ${spokes}${nodes}
-      <circle cx="${H[0]}" cy="${H[1]}" r="13" fill="#22d3ee" opacity="0.35"/>
-      <circle cx="${H[0]}" cy="${H[1]}" r="7" fill="#eafffb"/>
-      <circle cx="79" cy="11" r="3.4" fill="${light}" opacity="0.9"/>
-      <circle cx="89" cy="4" r="2.5" fill="${light}" opacity="0.7"/>`;
-  },
 };
 
 // `scale` multiplies the frame's glyph box (SVG apps). `src` switches the
-// app to the raster crystal-art pipeline.
+// app to the raster art pipeline, where `accent` only tints the maskable
+// ground wash — so it matches the artwork's palette, not the app UI accent
+// (mind's art is indigo-neon even though the app runs teal).
 const APPS = [
   { id: 'qualia', accent: '#8b5cf6', src: 'src/assets/art/app_icons/qualia_crystal_cutout.png' },
   { id: 'setlist', accent: '#f59e0b' },
-  { id: 'mind', accent: '#14b8a6', scale: 1.06 },
+  { id: 'mind', accent: '#6366f1', src: 'src/assets/art/app_icons/mind_neural_orb_cutout.png' },
   { id: 'tether', accent: '#8b5cf6', src: 'src/assets/art/app_icons/tether_crystal_cutout.png' },
 ];
 
