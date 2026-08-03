@@ -214,9 +214,12 @@ const APPS = [
   // 263–269° blend so the orbit's indigo stretch doesn't paint a third color.
   { id: 'mind', accent: '#4ade80', src: 'src/assets/art/app_icons/mind_neural_orb_cutout.png',
     recolor: { green: { from: 205, to: 140, keep: 0.22, sat: 0.68, val: 1.06 }, purple: { from: 300, to: 308, keep: 0.28, sat: 0.92 }, blend: [263, 269] },
-    orbit: { tilt: 18, stops: ['#4ade80', '#a7f3d0', '#f0abfc'],
-             back: [{ a: 345, r: 0.016, col: '#f0abfc' }],
-             front: [{ a: 65, r: 0.014, col: '#4ade80' }] } },
+    // the sphere art nearly fills its trim box, so the orbit canvas grows
+    // further for clearance (the crystal arts are star-shaped and leave
+    // their own room)
+    orbit: { tilt: 18, grow: 1.34, stops: ['#4ade80', '#a7f3d0', '#f0abfc'],
+             back: [{ a: 345, r: 0.014, col: '#f0abfc' }],
+             front: [{ a: 65, r: 0.012, col: '#4ade80' }] } },
   { id: 'tether', accent: '#8b5cf6', src: 'src/assets/art/app_icons/tether_crystal_cutout.png',
     orbit: { tilt: -22, stops: ['#8b5cf6', '#a78bfa', '#22d3ee'],
              back: [{ a: 205, r: 0.015, col: '#a78bfa' }],
