@@ -87,7 +87,11 @@ const GLYPHS = {
 const APPS = [
   { id: 'qualia', accent: '#8b5cf6', src: 'src/assets/art/app_icons/qualia_crystal_cutout.png' },
   { id: 'setlist', accent: '#f59e0b' },
-  { id: 'mind', accent: '#6366f1', src: 'src/assets/art/app_icons/mind_neural_orb_cutout.png' },
+  // mind is recolored from the source's cyan→magenta into the brand's ghost
+  // green → neon purple: cyan-blue hues (~205°) pull to green (~130°),
+  // violet-magenta (~300°) to purple (~277°), blending across 238–272°.
+  { id: 'mind', accent: '#22c55e', src: 'src/assets/art/app_icons/mind_neural_orb_cutout.png',
+    recolor: { green: { from: 205, to: 133, keep: 0.22, sat: 0.82 }, purple: { from: 300, to: 285, keep: 0.3 }, blend: [263, 269] } },
   { id: 'tether', accent: '#8b5cf6', src: 'src/assets/art/app_icons/tether_crystal_cutout.png' },
 ];
 
@@ -133,15 +137,54 @@ async function png(size, app, opts) {
   return sharp(Buffer.from(iconSvg(size, app, opts))).png().toBuffer();
 }
 
+// Optional per-app hue remap for raster art, run on the pixels before
+// compositing. Two "poles" pull the source hue range toward target hues
+// (compressing the variation around each so shading depth survives), with a
+// smoothstep blend between them. Saturation/value pass through, so the
+// white-hot glow cores stay white. Angles are HSV degrees.
+function remapHues(data, { green, purple, blend }) {
+  const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 0) continue;
+    const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (d < 0.03) continue; // gray/white — nothing to shift
+    let h;
+    if (mx === r) h = 60 * (((g - b) / d) % 6);
+    else if (mx === g) h = 60 * ((b - r) / d + 2);
+    else h = 60 * ((r - g) / d + 4);
+    if (h < 0) h += 360;
+    const hg = green.to + (h - green.from) * green.keep;
+    const hp = purple.to + (h - purple.from) * purple.keep;
+    const t = smooth(blend[0], blend[1], h);
+    let nh = (hg * (1 - t) + hp * t + 360) % 360;
+    // HSV back to RGB — per-pole saturation trim keeps neon from going acid
+    const sf = (green.sat ?? 1) * (1 - t) + (purple.sat ?? 1) * t;
+    const s = (mx === 0 ? 0 : d / mx) * sf, v = mx;
+    const c = v * s, x = c * (1 - Math.abs(((nh / 60) % 2) - 1)), m = v - c;
+    const [r2, g2, b2] =
+      nh < 60 ? [c, x, 0] : nh < 120 ? [x, c, 0] : nh < 180 ? [0, c, x]
+      : nh < 240 ? [0, x, c] : nh < 300 ? [x, 0, c] : [c, 0, x];
+    data[i] = Math.round((r2 + m) * 255);
+    data[i + 1] = Math.round((g2 + m) * 255);
+    data[i + 2] = Math.round((b2 + m) * 255);
+  }
+}
+
 // Raster pipeline (crystal-art apps). "any": the trimmed cutout on
 // transparent, padded a touch so it sits at the same optical size as
 // neighboring OS icons. Maskable: the cutout held inside the r=40% safe
 // zone over the family's void-dark ground + accent wash, full-bleed opaque.
 async function rasterIcon(size, app, variant) {
   const inner = Math.round(size * (variant === 'any' ? 0.94 : 0.76));
-  const art = await sharp(app.src).trim({ threshold: 8 })
+  let art = await sharp(app.src).trim({ threshold: 8 })
     .resize(inner, inner, { fit: 'inside', background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .png().toBuffer();
+  if (app.recolor) {
+    const { data, info } = await sharp(art).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    remapHues(data, app.recolor);
+    art = await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer();
+  }
   const ground = variant === 'any'
     ? { create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }
     : Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
