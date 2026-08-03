@@ -121,6 +121,47 @@ function setlistArt() {
 </svg>`;
 }
 
+// Optional generated over/under orbit wrapped AROUND raster art — the same
+// depth trick setlist's art does natively: the full ellipse (+ back nodes)
+// is composited UNDER the art so the crystal/orb occludes it, then the
+// front (lower) arc + near nodes go OVER the top. Config: tilt (deg),
+// gradient stops, and nodes as {a: degrees on the ellipse, r: radius as a
+// fraction of the canvas, col}. Runs at the art's native resolution.
+async function composeOrbit(artBuf, cfg) {
+  const meta = await sharp(artBuf).metadata();
+  const W = Math.round(Math.max(meta.width, meta.height) * (cfg.grow ?? 1.16));
+  const c = W / 2, rx = W * 0.465, ry = rx * (cfg.squash ?? 0.36), sw = W * 0.013;
+  const stops = cfg.stops
+    .map((s, i) => `<stop offset="${Math.round((i * 100) / (cfg.stops.length - 1))}%" stop-color="${s}"/>`)
+    .join('');
+  const node = ({ a, r, col }) => {
+    const x = c + rx * Math.cos((a * Math.PI) / 180), y = c + ry * Math.sin((a * Math.PI) / 180);
+    const R = r * W;
+    return `<circle cx="${x}" cy="${y}" r="${R * 2.4}" fill="${col}" opacity="0.42" filter="url(#nb)"/>
+            <circle cx="${x}" cy="${y}" r="${R}" fill="${col}"/>
+            <circle cx="${x}" cy="${y}" r="${R * 0.52}" fill="#ffffff"/>`;
+  };
+  const svg = (inner) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${W}">
+    <defs>
+      <linearGradient id="og" x1="0" y1="1" x2="1" y2="0">${stops}</linearGradient>
+      <filter id="ob" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="${W * 0.009}"/></filter>
+      <filter id="nb" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="${W * 0.02}"/></filter>
+    </defs>
+    <g transform="rotate(${cfg.tilt} ${c} ${c})">${inner}</g>
+  </svg>`);
+  const ellipse = (w, extra) =>
+    `<ellipse cx="${c}" cy="${c}" rx="${rx}" ry="${ry}" fill="none" stroke="url(#og)" stroke-width="${w}" ${extra}/>`;
+  const arc = (w, extra) =>
+    `<path d="M ${c - rx} ${c} A ${rx} ${ry} 0 0 0 ${c + rx} ${c}" fill="none" stroke="url(#og)" stroke-width="${w}" ${extra}/>`;
+  const back = svg(`${ellipse(sw * 2, 'opacity="0.5" filter="url(#ob)"')}${ellipse(sw, '')}
+    ${(cfg.back || []).map(node).join('')}`);
+  const front = svg(`${arc(sw * 2, 'opacity="0.5" filter="url(#ob)"')}${arc(sw, '')}
+    ${(cfg.front || []).map(node).join('')}`);
+  return sharp({ create: { width: W, height: W, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+    .composite([{ input: back, top: 0, left: 0 }, { input: artBuf, gravity: 'center' }, { input: front, top: 0, left: 0 }])
+    .png().toBuffer();
+}
+
 // Optional per-app hue remap for raster art, run on the pixels before
 // compositing. Two "poles" pull the source hue range toward target hues
 // (compressing the variation around each so shading depth survives), with a
@@ -162,15 +203,24 @@ function remapHues(data, { green, purple, blend }) {
 // not the app UI accent (mind's art runs green/magenta though the app UI is
 // teal).
 const APPS = [
-  { id: 'qualia', accent: '#8b5cf6', src: 'src/assets/art/app_icons/qualia_crystal_cutout.png' },
+  { id: 'qualia', accent: '#8b5cf6', src: 'src/assets/art/app_icons/qualia_crystal_cutout.png',
+    orbit: { tilt: -14, stops: ['#22d3ee', '#818cf8', '#e879f9'],
+             back: [{ a: 197, r: 0.015, col: '#22d3ee' }],
+             front: [{ a: 118, r: 0.014, col: '#e879f9' }] } },
   { id: 'setlist', accent: '#f59e0b', svg: setlistArt },
   // mind is recolored from the source's cyan→magenta into the brand canon:
   // ghost green (CRT-phosphor — desaturated, value-lifted, ~140°) and
   // neural magenta (synapse pink-magenta, ~308°), split across a thin
   // 263–269° blend so the orbit's indigo stretch doesn't paint a third color.
   { id: 'mind', accent: '#4ade80', src: 'src/assets/art/app_icons/mind_neural_orb_cutout.png',
-    recolor: { green: { from: 205, to: 140, keep: 0.22, sat: 0.68, val: 1.06 }, purple: { from: 300, to: 308, keep: 0.28, sat: 0.92 }, blend: [263, 269] } },
-  { id: 'tether', accent: '#8b5cf6', src: 'src/assets/art/app_icons/tether_crystal_cutout.png' },
+    recolor: { green: { from: 205, to: 140, keep: 0.22, sat: 0.68, val: 1.06 }, purple: { from: 300, to: 308, keep: 0.28, sat: 0.92 }, blend: [263, 269] },
+    orbit: { tilt: 18, stops: ['#4ade80', '#a7f3d0', '#f0abfc'],
+             back: [{ a: 345, r: 0.016, col: '#f0abfc' }],
+             front: [{ a: 65, r: 0.014, col: '#4ade80' }] } },
+  { id: 'tether', accent: '#8b5cf6', src: 'src/assets/art/app_icons/tether_crystal_cutout.png',
+    orbit: { tilt: -22, stops: ['#8b5cf6', '#a78bfa', '#22d3ee'],
+             back: [{ a: 205, r: 0.015, col: '#a78bfa' }],
+             front: [{ a: 60, r: 0.014, col: '#22d3ee' }] } },
 ];
 
 // "any": the trimmed art on transparent, padded a touch so it sits at the
@@ -178,14 +228,16 @@ const APPS = [
 // the r=40% safe zone over the void-dark ground + accent wash, full-bleed.
 async function appIcon(size, app, variant) {
   const inner = Math.round(size * (variant === 'any' ? 0.94 : 0.76));
-  let art = await sharp(app.src ?? Buffer.from(app.svg())).trim({ threshold: 8 })
-    .resize(inner, inner, { fit: 'inside', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-    .png().toBuffer();
+  let art = await sharp(app.src ?? Buffer.from(app.svg())).trim({ threshold: 8 }).png().toBuffer();
   if (app.recolor) {
     const { data, info } = await sharp(art).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     remapHues(data, app.recolor);
     art = await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer();
   }
+  if (app.orbit) art = await composeOrbit(art, app.orbit);
+  art = await sharp(art).trim({ threshold: 8 })
+    .resize(inner, inner, { fit: 'inside', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png().toBuffer();
   if (variant === 'any') {
     return sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
       .composite([{ input: art, gravity: 'center' }]).png().toBuffer();
