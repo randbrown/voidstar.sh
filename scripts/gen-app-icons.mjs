@@ -21,15 +21,19 @@
 // crop them to a circle/squircle themselves — transparency would come back
 // as white), with the glyph held inside the central safe zone (r = 40%).
 //
-// Per-app accent + glyph, same family frame (void-dark ground, accent ring,
-// white spark tick at the ring's top-right):
-//   qualia  — the qualia eye: lids drawn as the two (void*) parens, a cyan
-//             knob-arc iris, the void* spark as pupil — perception + code +
-//             rig + star in one mark (the live coding station)
-//   setlist — amber chart lines + diamond bullet (the stage list)
-//   mind    — low-poly neuron constellation in a brain outline, glowing hub,
-//             particles expanding toward the spark (the second brain)
-//   tether  — the app's own ⌁ glyph as a fat gold sideways bolt (the remote)
+// Two icon pipelines share the output contract:
+//   - setlist / mind: generated SVG glyphs in the family frame (void-dark
+//     ground, accent ring, white spark tick at the ring's top-right) —
+//     amber chart lines + diamond bullet (the stage list); teal low-poly
+//     neuron constellation with a glowing hub (the second brain).
+//   - qualia / tether: RASTER artwork — the crystal-lotus marks (petal burst
+//     around an orbital ellipse; star-eye core for qualia, bolt for tether),
+//     from src/assets/art/app_icons/*_cutout.png (art on transparency).
+//     The art is its own shaped glyph, so the "any" icons are just the
+//     trimmed cutout padded on transparent; the maskable variant recomposes
+//     it over the family's void-dark ground inside the safe zone (the
+//     handoff's own maskables sat on a navy tile and ran petal tips out
+//     near the mask edge).
 //
 //   public/icon-<app>-192.png            — PWA icon (disc on transparent)
 //   public/icon-<app>-512.png            — PWA icon (disc on transparent)
@@ -49,15 +53,6 @@ function lighten(hex, amt) {
   return `#${((ch[0] << 16) | (ch[1] << 8) | ch[2]).toString(16).padStart(6, '0')}`;
 }
 
-// Open arc (gauge/knob) path — angles in degrees, y-down screen coords.
-function arcPath(cx, cy, r, a0, a1) {
-  const rad = d => (d * Math.PI) / 180;
-  const x0 = cx + r * Math.cos(rad(a0)), y0 = cy + r * Math.sin(rad(a0));
-  const x1 = cx + r * Math.cos(rad(a1)), y1 = cy + r * Math.sin(rad(a1));
-  const large = Math.abs(a1 - a0) > 180 ? 1 : 0;
-  return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
-}
-
 // Four-point star (the void* spark).
 function sparkPath(cx, cy, r) {
   const w = r * 0.22;
@@ -70,21 +65,6 @@ function sparkPath(cx, cy, r) {
 // Each glyph draws into a 100×100 box (the caller scales/places it) and gets
 // the app's colors. Keep every stroke ≥4 units — that's the legibility floor.
 const GLYPHS = {
-  // The qualia eye. Lids are the two parens of (void*) — top and bottom arcs
-  // with round caps and a small gap at each corner so they still read as
-  // ( ) — the iris is the rig's cyan knob arc (gap at the bottom), and the
-  // pupil is the void* spark itself: seeing sound, through code.
-  qualia({ accent }) {
-    return `
-      <path d="M 10 47 Q 50 3 90 47" fill="none" stroke="${accent}"
-            stroke-width="9" stroke-linecap="round"/>
-      <path d="M 10 53 Q 50 97 90 53" fill="none" stroke="${accent}"
-            stroke-width="9" stroke-linecap="round" opacity="0.8"/>
-      <circle cx="50" cy="50" r="18" fill="#22d3ee" opacity="0.18"/>
-      <path d="${arcPath(50, 50, 15, 135, 405)}" fill="none" stroke="#22d3ee"
-            stroke-width="7.5" stroke-linecap="round"/>
-      <path d="${sparkPath(50, 50, 8.5)}" fill="#f8fafc"/>`;
-  },
   // Setlist: three fat rounded chart lines, diamond bullet on the opener.
   setlist({ accent, light }) {
     const bar = (x, y, w, o) =>
@@ -129,36 +109,15 @@ const GLYPHS = {
       <circle cx="79" cy="11" r="3.4" fill="${light}" opacity="0.9"/>
       <circle cx="89" cy="4" r="2.5" fill="${light}" opacity="0.7"/>`;
   },
-  // Tether: the app's own brand glyph — ⌁ U+2301 ELECTRIC ARROW, the sideways
-  // bolt from "⌁ TETHER" / "⌁ sync" in the UI — as the sole focus on the
-  // family base. Drawn as a path (not <text>) so it renders identically on
-  // any build machine: two horizontal bars joined by a Z-diagonal, matching
-  // DejaVu's cut of the glyph, in gold with a soft glow.
-  tether() {
-    return `
-      <defs>
-        <linearGradient id="gbolt" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#fde68a"/><stop offset="45%" stop-color="#fbbf24"/>
-          <stop offset="100%" stop-color="#f59e0b"/>
-        </linearGradient>
-        <radialGradient id="gboltglow" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.4"/>
-          <stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/>
-        </radialGradient>
-      </defs>
-      <ellipse cx="50" cy="50" rx="44" ry="26" fill="url(#gboltglow)"/>
-      <path d="M 16 28 L 70 28 L 49 57 L 95 57 L 84 72 L 22 72 L 43 43 L 5 43 Z"
-            fill="url(#gbolt)" stroke="${BG}" stroke-width="3" stroke-linejoin="round"/>`;
-  },
 };
 
-// `scale` multiplies the frame's glyph box — the wide, flat glyphs (the eye,
-// the sideways bolt) can afford to overfill the square budget a little.
+// `scale` multiplies the frame's glyph box (SVG apps). `src` switches the
+// app to the raster crystal-art pipeline.
 const APPS = [
-  { id: 'qualia', accent: '#8b5cf6', scale: 1.16 },
+  { id: 'qualia', accent: '#8b5cf6', src: 'src/assets/art/app_icons/qualia_crystal_cutout.png' },
   { id: 'setlist', accent: '#f59e0b' },
   { id: 'mind', accent: '#14b8a6', scale: 1.06 },
-  { id: 'tether', accent: '#8b5cf6', scale: 1.08 }, // violet ring like qualia; the bolt is the tell
+  { id: 'tether', accent: '#8b5cf6', src: 'src/assets/art/app_icons/tether_crystal_cutout.png' },
 ];
 
 // Shared frame: accent wash + ring + glyph + spark. `disc:true` clips the
@@ -203,9 +162,38 @@ async function png(size, app, opts) {
   return sharp(Buffer.from(iconSvg(size, app, opts))).png().toBuffer();
 }
 
+// Raster pipeline (crystal-art apps). "any": the trimmed cutout on
+// transparent, padded a touch so it sits at the same optical size as
+// neighboring OS icons. Maskable: the cutout held inside the r=40% safe
+// zone over the family's void-dark ground + accent wash, full-bleed opaque.
+async function rasterIcon(size, app, variant) {
+  const inner = Math.round(size * (variant === 'any' ? 0.94 : 0.76));
+  const art = await sharp(app.src).trim({ threshold: 8 })
+    .resize(inner, inner, { fit: 'inside', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png().toBuffer();
+  const ground = variant === 'any'
+    ? { create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }
+    : Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
+        <defs><radialGradient id="wash" cx="50%" cy="42%" r="72%">
+          <stop offset="0%" stop-color="${app.accent}" stop-opacity="0.3"/>
+          <stop offset="60%" stop-color="${app.accent}" stop-opacity="0.09"/>
+          <stop offset="100%" stop-color="${app.accent}" stop-opacity="0"/>
+        </radialGradient></defs>
+        <rect width="${size}" height="${size}" fill="${BG}"/>
+        <rect width="${size}" height="${size}" fill="url(#wash)"/>
+      </svg>`);
+  return sharp(variant === 'any' ? ground : { create: { width: size, height: size, channels: 4, background: BG } })
+    .composite(variant === 'any'
+      ? [{ input: art, gravity: 'center' }]
+      : [{ input: ground, top: 0, left: 0 }, { input: art, gravity: 'center' }])
+    .png().toBuffer();
+}
+
 for (const app of APPS) {
-  await writeFile(`public/icon-${app.id}-192.png`, await png(192, app, ANY));
-  await writeFile(`public/icon-${app.id}-512.png`, await png(512, app, ANY));
-  await writeFile(`public/icon-${app.id}-maskable-512.png`, await png(512, app, MASK));
-  console.log(`wrote public/icon-${app.id}-{192,512,maskable-512}.png (${app.accent})`);
+  const make = (size, variant) =>
+    app.src ? rasterIcon(size, app, variant) : png(size, app, variant === 'any' ? ANY : MASK);
+  await writeFile(`public/icon-${app.id}-192.png`, await make(192, 'any'));
+  await writeFile(`public/icon-${app.id}-512.png`, await make(512, 'any'));
+  await writeFile(`public/icon-${app.id}-maskable-512.png`, await make(512, 'mask'));
+  console.log(`wrote public/icon-${app.id}-{192,512,maskable-512}.png (${app.accent}${app.src ? ' · raster' : ''})`);
 }
