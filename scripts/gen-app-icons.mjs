@@ -87,11 +87,12 @@ const GLYPHS = {
 const APPS = [
   { id: 'qualia', accent: '#8b5cf6', src: 'src/assets/art/app_icons/qualia_crystal_cutout.png' },
   { id: 'setlist', accent: '#f59e0b' },
-  // mind is recolored from the source's cyan→magenta into the brand's ghost
-  // green → neon purple: cyan-blue hues (~205°) pull to green (~130°),
-  // violet-magenta (~300°) to purple (~277°), blending across 238–272°.
-  { id: 'mind', accent: '#22c55e', src: 'src/assets/art/app_icons/mind_neural_orb_cutout.png',
-    recolor: { green: { from: 205, to: 133, keep: 0.22, sat: 0.82 }, purple: { from: 300, to: 285, keep: 0.3 }, blend: [263, 269] } },
+  // mind is recolored from the source's cyan→magenta into the brand canon:
+  // ghost green (CRT-phosphor — desaturated, value-lifted, ~140°) and
+  // neural magenta (synapse pink-magenta, ~308°), split across a thin
+  // 263–269° blend so the orbit's indigo stretch doesn't paint a third color.
+  { id: 'mind', accent: '#4ade80', src: 'src/assets/art/app_icons/mind_neural_orb_cutout.png',
+    recolor: { green: { from: 205, to: 140, keep: 0.22, sat: 0.68, val: 1.06 }, purple: { from: 300, to: 308, keep: 0.28, sat: 0.92 }, blend: [263, 269] } },
   { id: 'tether', accent: '#8b5cf6', src: 'src/assets/art/app_icons/tether_crystal_cutout.png' },
 ];
 
@@ -158,9 +159,11 @@ function remapHues(data, { green, purple, blend }) {
     const hp = purple.to + (h - purple.from) * purple.keep;
     const t = smooth(blend[0], blend[1], h);
     let nh = (hg * (1 - t) + hp * t + 360) % 360;
-    // HSV back to RGB — per-pole saturation trim keeps neon from going acid
+    // HSV back to RGB — per-pole saturation trim keeps neon from going acid,
+    // per-pole value lift lets a pole glow paler (the "ghost" quality)
     const sf = (green.sat ?? 1) * (1 - t) + (purple.sat ?? 1) * t;
-    const s = (mx === 0 ? 0 : d / mx) * sf, v = mx;
+    const vf = (green.val ?? 1) * (1 - t) + (purple.val ?? 1) * t;
+    const s = (mx === 0 ? 0 : d / mx) * sf, v = Math.min(1, mx * vf);
     const c = v * s, x = c * (1 - Math.abs(((nh / 60) % 2) - 1)), m = v - c;
     const [r2, g2, b2] =
       nh < 60 ? [c, x, 0] : nh < 120 ? [x, c, 0] : nh < 180 ? [0, c, x]
