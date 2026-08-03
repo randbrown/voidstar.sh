@@ -8,8 +8,8 @@
 //                               default /favicon.ico fetch
 //   public/voidstar-mark.png  — the emblem on TRANSPARENT bg (natural aspect),
 //                               for the translucent-glass topbar nav logo
-//   public/icon-192.png       — PWA / apple-touch icon (dark tile)
-//   public/icon-512.png       — PWA icon (dark tile)
+//   public/icon-192.png       — PWA icon (dark disc on transparent)
+//   public/icon-512.png       — PWA icon (dark disc on transparent)
 //   public/icon-maskable-512  — PWA maskable icon (emblem kept inside the
 //                               central safe zone; dark bg bleeds to the edge)
 //
@@ -32,6 +32,32 @@ async function darkTile(size, innerFrac = 0.86, bg = TILE_BG) {
     .png().toBuffer();
   return sharp({ create: { width: size, height: size, channels: 4, background: bg } })
     .composite([{ input: mark, gravity: 'center' }])
+    .png().toBuffer();
+}
+
+// Emblem on a void-dark DISC over a transparent canvas — the PWA "any" icon.
+// Desktop surfaces (Windows taskbar, macOS dock, tabs) render "any" icons
+// as-is, so a full-bleed square tile shows up as a literal dark square next
+// to shaped neighbors; a disc reads as a proper launcher glyph while keeping
+// the dark ground the white emblem needs on light taskbars. A faint violet
+// wash (the brand theme color) ties it to the app-icon family.
+async function darkDisc(size, innerFrac = 0.78) {
+  const inner = Math.round(size * innerFrac);
+  const disc = Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
+      <defs><radialGradient id="wash" cx="50%" cy="42%" r="72%">
+        <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.30"/>
+        <stop offset="60%" stop-color="#8b5cf6" stop-opacity="0.09"/>
+        <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+      </radialGradient></defs>
+      <circle cx="${size / 2}" cy="${size / 2}" r="${size * 0.47}" fill="${TILE_BG}"/>
+      <circle cx="${size / 2}" cy="${size / 2}" r="${size * 0.47}" fill="url(#wash)"/>
+    </svg>`);
+  const mark = await sharp(SRC).trim({ threshold: 6 })
+    .resize(inner, inner, { fit: 'inside', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png().toBuffer();
+  return sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+    .composite([{ input: disc }, { input: mark, gravity: 'center' }])
     .png().toBuffer();
 }
 
@@ -72,10 +98,11 @@ console.log('wrote public/favicon.ico');
 await writeFile('public/voidstar-mark.png', await transparentMark(256));
 console.log('wrote public/voidstar-mark.png');
 
-// PWA icons — regular icons match the favicon's dark-tile treatment; the
-// maskable variant keeps the emblem inside the central safe zone (~0.58) so
-// an OS mask (circle/squircle) never clips it, with the dark bg full-bleed.
-await writeFile('public/icon-192.png', await darkTile(192, 0.82));
-await writeFile('public/icon-512.png', await darkTile(512, 0.82));
+// PWA icons — the "any" icons are a disc on transparent (launcher-glyph
+// style, no square tile); the maskable variant keeps the emblem inside the
+// central safe zone (~0.58) so an OS mask (circle/squircle) never clips it,
+// with the dark bg full-bleed (maskable MUST be opaque edge to edge).
+await writeFile('public/icon-192.png', await darkDisc(192));
+await writeFile('public/icon-512.png', await darkDisc(512));
 await writeFile('public/icon-maskable-512.png', await darkTile(512, 0.58));
 console.log('wrote public/icon-192.png, public/icon-512.png, public/icon-maskable-512.png');
