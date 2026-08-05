@@ -3614,9 +3614,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>detector</label>
         <button class="qp-toggle" id="logo-detector">off</button>
       </div>
-      <div class="qp-row" data-qp="logo-scan-radius" title="Scan-circle diameter as a fraction of the stage's short side — only objects inside the circle are targeted. The circle travels with the drift">
+      <div class="qp-row" data-qp="logo-scan-radius" title="Scan-circle diameter as a fraction of the stage's short side — an object is targeted when its box OVERLAPS the circle (it doesn't need to be centred in it), so a small circle still catches whatever sits under the mark. The circle travels with the drift">
         <label>scan radius<span class="qp-val"></span></label>
-        <input type="range" min="0.2" max="1.2" step="0.02" value="0.7">
+        <input type="range" min="0.1" max="1.2" step="0.02" value="0.7">
       </div>
       <div class="qp-section-tag">branding</div>
       <div class="qp-row" data-qp="logo-caption" title="Secondary billing/title line tucked under the mark — e.g. 'with alison swafford'. Type \n or | to break lines (up to 3). Baked with its own glow; breathes with the music. Blank = none">

@@ -80,7 +80,11 @@ function ensureWorker() {
       console.warn('[qualia] object-detector worker failed — detector HUD idle:', err?.message || err);
       failWorker();
     });
-    worker.postMessage({ type: 'init', opts: { maxResults: 8, scoreThreshold: 0.35 } });
+    // maxResults above the HUD's 8 slots on purpose: region gating discards
+    // candidates outside the scan zone, so extra candidates raise the odds
+    // something near the mark survives. The lowish threshold lets the
+    // scanner speculate on abstract imagery — misreads are part of the fun.
+    worker.postMessage({ type: 'init', opts: { maxResults: 12, scoreThreshold: 0.22 } });
   } catch (err) {
     console.warn('[qualia] object-detector worker unavailable:', err);
     failWorker();

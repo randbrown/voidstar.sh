@@ -639,6 +639,15 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
       lock: 0, alpha: 0, seed: Math.random(), lastSeen: -1e9, claimed: -1,
     });
   }
+  // Speculative blips — the scanner reads as a robot probing its
+  // surroundings even when the detector finds nothing in the imagery:
+  // with no real target locked in the zone, short-lived low-confidence
+  // pseudo-readings blip in and out of the scan circle. Deliberately
+  // ambient — tiny drifting boxes, sci-fi labels, sub-0.5 scores — and
+  // they only ever claim slots real detections left free.
+  const BLIP_LABELS = ['anomaly', 'signal', 'echo', 'artifact', 'flux', 'trace', 'entity', 'residue'];
+  const blips = [];   // {x, y, hw, hh, vx, vy, label, score, age, ttl}
+
   // HUD stroke colors per palette — tuned to read as the mark's own light.
   const HUD_COLORS = {
     silver:   { main: [235, 240, 250], dim: [150, 165, 195] },
@@ -675,7 +684,8 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
     const h = Math.max(64, Math.round(w * stage.height / Math.max(1, stage.width)));
     if (!sceneComposite) {
       sceneComposite = document.createElement('canvas');
-      sceneCtx = sceneComposite.getContext('2d');
+      // Also read back for blip feature-seeking, not just drawn from.
+      sceneCtx = sceneComposite.getContext('2d', { willReadFrequently: true });
     }
     if (sceneComposite.width !== w || sceneComposite.height !== h) {
       sceneComposite.width = w; sceneComposite.height = h;
@@ -697,6 +707,64 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
     return drew ? sceneComposite : null;
   }
 
+  /** Spawn a speculative blip, preferentially locked onto the brightest
+   *  visual feature currently inside the scan circle — so the scanner
+   *  genuinely "finds" structure in whatever the quale is showing. Falls
+   *  back to a random point in the circle when the scene reads black. */
+  function spawnBlip(cx, cy, scanR, stage) {
+    let bx = 0, by = 0, found = false;
+    const comp = detectorSource();
+    if (comp) {
+      const sx = comp.width / Math.max(1, stage.width);
+      const sy = comp.height / Math.max(1, stage.height);
+      const x0 = Math.max(0, Math.floor((cx - scanR) * sx));
+      const y0 = Math.max(0, Math.floor((cy - scanR) * sy));
+      const x1 = Math.min(comp.width,  Math.ceil((cx + scanR) * sx));
+      const y1 = Math.min(comp.height, Math.ceil((cy + scanR) * sy));
+      const w = x1 - x0, h = y1 - y0;
+      if (w > 4 && h > 4) {
+        try {
+          const img = sceneCtx.getImageData(x0, y0, w, h).data;
+          // Coarse grid, brightest cell wins; jittered per cell so repeat
+          // spawns don't all pin to the same hotspot. A floor keeps pure
+          // black from "detecting" anything — that path goes random.
+          const GRID = 12;
+          let bestV = 90;
+          for (let gy = 0; gy < GRID; gy++) {
+            for (let gx = 0; gx < GRID; gx++) {
+              const pxc = Math.min(w - 1, Math.floor((gx + 0.5) / GRID * w));
+              const pyc = Math.min(h - 1, Math.floor((gy + 0.5) / GRID * h));
+              const wx = (x0 + pxc) / sx, wy = (y0 + pyc) / sy;
+              const dxc = wx - cx, dyc = wy - cy;
+              if (dxc * dxc + dyc * dyc > scanR * scanR * 0.9) continue;
+              const o = (pyc * w + pxc) * 4;
+              const v = Math.max(img[o], img[o + 1], img[o + 2]) * (0.8 + Math.random() * 0.4);
+              if (v > bestV) { bestV = v; bx = wx; by = wy; found = true; }
+            }
+          }
+        } catch { /* unreadable composite — fall through to random */ }
+      }
+    }
+    if (!found) {
+      const ang = Math.random() * Math.PI * 2;
+      const rr = scanR * (0.30 + 0.65 * Math.sqrt(Math.random()));
+      bx = cx + Math.cos(ang) * rr;
+      by = cy + Math.sin(ang) * rr;
+    }
+    const sz = 14 + Math.random() * 30;
+    blips.push({
+      x: bx, y: by,
+      hw: sz * (0.8 + Math.random() * 0.7),
+      hh: sz * (0.8 + Math.random() * 0.7),
+      vx: (Math.random() - 0.5) * 14,
+      vy: (Math.random() - 0.5) * 14,
+      label: BLIP_LABELS[(Math.random() * BLIP_LABELS.length) | 0],
+      score: 0.16 + Math.random() * 0.28,
+      age: 0,
+      ttl: 2.5 + Math.random() * 3.5,
+    });
+  }
+
   /** Acquire/release the shared detection pipeline to match the config. */
   function syncDetector() {
     const want = detectorWanted();
@@ -708,6 +776,7 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
       detectorHeld = false;
       releaseDetector(detectorSource);
       for (const s of detSlots) { s.active = false; s.alpha = 0; s.lock = 0; }
+      blips.length = 0;
     }
     if (hudCanvas) hudCanvas.style.display = want ? 'block' : 'none';
   }
@@ -734,24 +803,21 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
 
     const cx = cssRect.x + cssRect.w / 2;
     const cy = cssRect.y + cssRect.h / 2;
-    const scanR = Math.max(cssRect.w * 0.6,
-      cfg.scanRadius * Math.min(stage.width, stage.height) * 0.5);
     const minSide = Math.min(stage.width, stage.height);
+    // The slider maps directly to stage size — no mark-size floor, so a
+    // small radius stays genuinely small even under a large mark.
+    const scanR = Math.max(30, cfg.scanRadius * minSide * 0.5);
 
-    // ── Fold detections into slots (EMA + linger, never snap) ──
-    const dets = getDetections();
-    for (let d = 0; d < dets.length; d++) {
-      const det = dets[d];
-      const px = det.cx * stage.width;
-      const py = det.cy * stage.height;
-      const gx = px - cx, gy = py - cy;
-      if (gx * gx + gy * gy > scanR * scanR) continue;   // outside the scan circle
-      const hx = Math.max(12, Math.min(stage.width  * 0.45, det.hw * stage.width));
-      const hy = Math.max(12, Math.min(stage.height * 0.45, det.hh * stage.height));
+    // ── Fold targets into slots (EMA + linger, never snap) ──
+    // Shared by real detections and speculative blips; matches by label +
+    // proximity, claims a free slot otherwise, and `claimed === time`
+    // blocks two targets folding into one slot within a single pass.
+    const k = 1 - Math.exp(-dt * 9);
+    const foldTarget = (px, py, hx, hy, label, score) => {
       let best = -1, bestD = (minSide * 0.25) * (minSide * 0.25);
       for (let i = 0; i < MAX_DET; i++) {
         const s = detSlots[i];
-        if (!s.active || s.label !== det.label || s.claimed === time) continue;
+        if (!s.active || s.label !== label || s.claimed === time) continue;
         const mx = s.cx - px, my = s.cy - py;
         const md = mx * mx + my * my;
         if (md < bestD) { bestD = md; best = i; }
@@ -760,7 +826,7 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
         for (let i = 0; i < MAX_DET; i++) {
           if (!detSlots[i].active) { best = i; break; }
         }
-        if (best < 0) continue;
+        if (best < 0) return false;
         const s = detSlots[best];
         s.active = true;
         s.cx = px; s.cy = py; s.hx = hx; s.hy = hy;
@@ -768,16 +834,58 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
         s.seed = Math.random();
       }
       const s = detSlots[best];
-      const k = 1 - Math.exp(-dt * 9);
       s.cx += (px - s.cx) * k; s.cy += (py - s.cy) * k;
       s.hx += (hx - s.hx) * k; s.hy += (hy - s.hy) * k;
-      if (s.label !== det.label || Math.abs(det.score - s.score) > 0.05) {
-        s.score = det.score;
-        s.text = `${det.label} :: ${det.score.toFixed(2)}`;
+      if (s.label !== label || Math.abs(score - s.score) > 0.05) {
+        s.score = score;
+        s.text = `${label} :: ${score.toFixed(2)}`;
       }
-      s.label = det.label;
+      s.label = label;
       s.lastSeen = time;
       s.claimed = time;
+      return true;
+    };
+
+    // Real detections first — they own the slots.
+    let realCount = 0;
+    const dets = getDetections();
+    for (let d = 0; d < dets.length; d++) {
+      const det = dets[d];
+      // Degenerate whole-frame reads ("the entire scene is one object")
+      // crowd out real targets — drop anything covering >65% of the stage.
+      if (det.hw * det.hh * 4 > 0.65) continue;
+      const px = det.cx * stage.width;
+      const py = det.cy * stage.height;
+      const bw2 = det.hw * stage.width;
+      const bh2 = det.hh * stage.height;
+      // Region gate — any OVERLAP between the box and the scan circle
+      // counts. Centre-inside was too strict: an object sitting under the
+      // mark whose centroid lands elsewhere never registered.
+      const nx = Math.max(px - bw2, Math.min(cx, px + bw2));
+      const ny = Math.max(py - bh2, Math.min(cy, py + bh2));
+      const gx = nx - cx, gy = ny - cy;
+      if (gx * gx + gy * gy > scanR * scanR) continue;
+      const hx = Math.max(12, Math.min(stage.width  * 0.45, bw2));
+      const hy = Math.max(12, Math.min(stage.height * 0.45, bh2));
+      if (foldTarget(px, py, hx, hy, det.label, det.score)) realCount++;
+    }
+
+    // Speculative blips fill the silence so the scanner always has
+    // *something* on its plate, whatever the quale shows. Age, wander,
+    // wobble the reading, cull what expires or escapes the (moving) circle.
+    for (let i = blips.length - 1; i >= 0; i--) {
+      const b = blips[i];
+      b.age += dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.score = Math.max(0.12, Math.min(0.48, b.score + (Math.random() - 0.5) * dt * 0.25));
+      const gx = b.x - cx, gy = b.y - cy;
+      if (b.age > b.ttl || gx * gx + gy * gy > scanR * scanR) { blips.splice(i, 1); continue; }
+      foldTarget(b.x, b.y, b.hw, b.hh, b.label, b.score);
+    }
+    const wantBlips = Math.max(0, 2 - realCount);
+    if (blips.length < wantBlips && Math.random() < dt * 1.2) {
+      spawnBlip(cx, cy, scanR, stage);
     }
     for (let i = 0; i < MAX_DET; i++) {
       const s = detSlots[i];
@@ -837,14 +945,18 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
       const s = detSlots[i];
       if (s.alpha < 0.01) continue;
       const a = s.alpha;
-      const dx = s.cx - cx, dy = s.cy - cy;
+      // Beam — from just outside the mark to the target's NEAR surface
+      // (centre of the box clamped to the mark): a big object overlapping a
+      // small scan circle would otherwise pull the beam toward a far-away
+      // centroid. A slow flowing dash over a faint solid line reads as
+      // scanning light. Skipped when the mark sits inside the box.
+      const tx = Math.max(s.cx - s.hx, Math.min(cx, s.cx + s.hx));
+      const ty = Math.max(s.cy - s.hy, Math.min(cy, s.cy + s.hy));
+      const dx = tx - cx, dy = ty - cy;
       const len = Math.max(Math.hypot(dx, dy), 1e-3);
       const ux = dx / len, uy = dy / len;
-
-      // Beam — from just outside the mark to the target's near edge; a slow
-      // flowing dash over a faint solid line reads as scanning light.
       const r0 = Math.min(markR, len);
-      const r1 = Math.max(r0, len - Math.min(s.hx, s.hy) * 0.75);
+      const r1 = Math.max(r0, len - 4);
       if (r1 > r0 + 4) {
         ctx.lineWidth = 1;
         ctx.strokeStyle = hudRgba(pal.dim, 0.18 * a * beamA);
@@ -1430,7 +1542,7 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
     if ('detector' in patch) cfg.detector = !!patch.detector;
     if ('scanRadius' in patch) {
       const v = Number(patch.scanRadius);
-      cfg.scanRadius = Number.isFinite(v) ? Math.max(0.2, Math.min(1.2, v)) : LOGO_MARK_DEFAULTS.scanRadius;
+      cfg.scanRadius = Number.isFinite(v) ? Math.max(0.1, Math.min(1.2, v)) : LOGO_MARK_DEFAULTS.scanRadius;
     }
     syncDetector();
     if (enabled) layout();

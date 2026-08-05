@@ -26,7 +26,7 @@ const DETECT_MODEL  = 'https://storage.googleapis.com/mediapipe-models/object_de
 let ObjectDetectorCls = null;
 let fileset = null;
 let detector = null;
-let opts = { maxResults: 8, scoreThreshold: 0.35 };
+let opts = { maxResults: 12, scoreThreshold: 0.22 };
 
 async function ensureVision() {
   if (fileset) return;
