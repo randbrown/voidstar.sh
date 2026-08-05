@@ -12,6 +12,7 @@ import {
   loadEngine, terminateEngine, stageInput, execStep, probe,
   summarizeVideo, summarizeAudio, nearestKeyframe,
 } from './engine.js';
+import { estimateOffsetBySound } from './sound-align.js';
 
 // ── tiny DOM helper ─────────────────────────────────────────────────────
 function h(tag, attrs = {}, ...children) {
@@ -50,9 +51,12 @@ function fmtClock(epochMs) {
 const state = {
   video: null, // { file, url, dur, w, h, clock: {epochMs, source}|null, el }
   audio: null, // { file, url, dur, clock, el }
-  align: 'zero',        // 'zero' | 'meta' | 'manual'
+  align: 'zero',        // 'zero' | 'meta' | 'sound' | 'manual'
   manualOffset: 0,      // s (manual mode)
-  adjust: 0,            // s fine nudge on top of zero/meta
+  adjust: 0,            // s fine nudge on top of zero/meta/sound
+  sound: null,          // { offset, z, quality, refined, cappedS } from sound-align
+  soundBusy: false,
+  soundError: null,
   trimStart: false,
   trimEnd: false,
   pad: {
@@ -72,6 +76,9 @@ const state = {
 function effectiveOffset() {
   if (state.align === 'manual') return state.manualOffset;
   if (state.align === 'zero') return 0 + state.adjust;
+  if (state.align === 'sound') {
+    return state.sound ? state.sound.offset + state.adjust : null;
+  }
   if (state.video?.clock && state.audio?.clock) {
     return (state.audio.clock.epochMs - state.video.clock.epochMs) / 1000 + state.adjust;
   }
@@ -160,6 +167,8 @@ async function setFile(kind, file) {
   const entry = { file, url, dur: NaN, sniffDur: null, w: 0, h: 0, clock: null, el };
   state[kind] = entry;
   state.result = null;
+  state.sound = null; // any sound match belonged to the previous file pair
+  state.soundError = null;
   update();
 
   // The element is the fast path for duration; the byte-sniffer (below) is
@@ -216,6 +225,8 @@ function renderZone(kind) {
     if (state[kind]?.url) URL.revokeObjectURL(state[kind].url);
     state[kind] = null;
     state.result = null;
+    state.sound = null;
+    state.soundError = null;
     update();
   });
   zone.append(...lines, x);
@@ -258,9 +269,12 @@ function buildAlignment() {
     h('div', { class: 'sz-radios' },
       radio('zero', 'together at 0:00', 'both start at the same instant'),
       radio('meta', 'universal clock', 'align by each file’s capture time'),
+      radio('sound', 'matching sound', 'correlate transients with the video’s own audio'),
       radio('manual', 'manual', 'type the offset yourself'),
     ),
     ui.metaInfo = h('div', { class: 'sz-meta-info' }),
+    ui.soundStatus = h('div', { class: 'sz-sound-status', hidden: '' }),
+    ui.soundResult = h('div', { class: 'sz-sound-result' }),
     ui.manualRow = h('div', { class: 'sz-row', hidden: '' },
       h('span', { class: 'sz-lbl' }, 'audio starts at'),
       ui.manualInput, h('span', { class: 'sz-dim' }, 's on the video timeline (negative = audio first)'),
@@ -272,6 +286,64 @@ function buildAlignment() {
     ),
     ui.offsetReadout = h('div', { class: 'sz-offset-readout' }),
   );
+}
+
+// ── sound alignment (transient correlation) ─────────────────────────────
+function setSoundStatus(msg, frac) {
+  ui.soundStatus.hidden = false;
+  ui.soundStatus.textContent = frac != null ? `${msg} ${Math.round(frac * 100)}%` : msg;
+}
+
+/** Correlate the replacement audio against the video's own soundtrack. */
+async function analyzeSound() {
+  if (state.soundBusy || state.running || !state.video || !state.audio) return;
+  state.soundBusy = true;
+  state.sound = null;
+  state.soundError = null;
+  update();
+  try {
+    const ff = await loadEngine(setSoundStatus);
+    const vin = await stageInput(ff, state.video.file, 'sv');
+    const ain = await stageInput(ff, state.audio.file, 'sa');
+    try {
+      let vd = state.video.dur, ad = state.audio.dur;
+      if (!(vd > 0)) vd = summarizeVideo(await probe(ff, vin.path), vin.path, NaN).duration;
+      if (!(ad > 0)) ad = summarizeAudio(await probe(ff, ain.path), ain.path, NaN).duration;
+      if (!(vd > 0) || !(ad > 0)) throw new Error('could not determine stream durations');
+      state.sound = await estimateOffsetBySound(ff, vin.path, ain.path, {
+        videoDur: vd, audioDur: ad, onStatus: setSoundStatus,
+      });
+    } finally {
+      await vin.cleanup();
+      await ain.cleanup();
+    }
+  } catch (err) {
+    if (/RuntimeError|memory access|unreachable|table index/.test(String(err))) terminateEngine();
+    state.soundError = err.message?.split('\n')[0] || String(err);
+  }
+  state.soundBusy = false;
+  ui.soundStatus.hidden = true;
+  update();
+}
+
+function renderSoundResult() {
+  ui.soundResult.replaceChildren();
+  if (state.soundBusy) return; // the status line is talking
+  const again = (label) => {
+    const b = h('button', { class: 'sz-btn sz-btn-xs' }, label);
+    b.addEventListener('click', () => analyzeSound());
+    return b;
+  };
+  if (state.sound) {
+    const s = state.sound;
+    ui.soundResult.append(h('div', { class: `sz-sound-hit sz-q-${s.quality}` },
+      `♫ matched: audio starts ${s.offset >= 0 ? '+' : ''}${s.offset.toFixed(3)}s on the video timeline · correlation ${s.quality} (${s.z}σ)${s.refined ? '' : ' · coarse only'}`,
+      s.cappedS ? h('small', { class: 'sz-dim' }, ` · analyzed the first ${Math.round(s.cappedS / 60)} min`) : null,
+      ' ', again('re-analyze'),
+    ));
+  } else if (state.soundError) {
+    ui.soundResult.append(h('div', { class: 'sz-err' }, `♫ ${state.soundError} `, again('retry')));
+  }
 }
 
 // ── window / trims / pads ───────────────────────────────────────────────
@@ -385,7 +457,7 @@ function seekVideo(vid, t) {
 function buildOutputOpts() {
   ui.audioModeSel = h('select', { class: 'sz-select' },
     h('option', { value: 'auto' }, 'auto — copy when lossless-safe, else aac 320k'),
-    h('option', { value: 'transcode' }, 'always transcode (aac 320k / vorbis 256k)'),
+    h('option', { value: 'transcode' }, 'always transcode (aac 320k / vorbis q7)'),
     h('option', { value: 'copy' }, 'stream-copy when possible (incl. mp3-in-mp4)'),
   );
   ui.audioModeSel.addEventListener('change', () => { state.audioMode = ui.audioModeSel.value; update(); });
@@ -466,8 +538,17 @@ function update(o = {}) {
   // alignment
   ui[`align_${state.align}`].checked = true;
   const haveClocks = !!(state.video?.clock && state.audio?.clock);
+  const haveBoth = !!(state.video && state.audio);
   ui.align_meta.disabled = !haveClocks;
   ui.align_meta.closest('.sz-radio').classList.toggle('sz-disabled', !haveClocks);
+  ui.align_sound.disabled = !haveBoth;
+  ui.align_sound.closest('.sz-radio').classList.toggle('sz-disabled', !haveBoth);
+  if (state.align === 'sound' && !haveBoth) { state.align = 'zero'; ui.align_zero.checked = true; }
+  // selecting "matching sound" kicks the analysis off automatically
+  if (state.align === 'sound' && haveBoth && !state.sound && !state.soundBusy && !state.soundError) {
+    queueMicrotask(() => analyzeSound());
+  }
+  renderSoundResult();
   ui.metaInfo.replaceChildren();
   if (state.video || state.audio) {
     if (!haveClocks && state.align === 'meta') { state.align = 'zero'; ui.align_zero.checked = true; }
@@ -508,7 +589,7 @@ function update(o = {}) {
   renderPlanPreview(t);
 
   // render button
-  ui.renderBtn.disabled = !t || state.running;
+  ui.renderBtn.disabled = !t || state.running || state.soundBusy;
   ui.cancelBtn.hidden = !state.running;
   ui.renderBtn.textContent = state.running ? 'rendering…' : 'render';
 

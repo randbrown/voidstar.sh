@@ -318,6 +318,39 @@ export function summarizeAudio(info, path, fallbackDur) {
 }
 
 /**
+ * Decode a file's first audio stream to mono PCM for analysis.
+ * s16le keeps the wasm FS footprint half of f32; converted to Float32 here.
+ * @param {import('@ffmpeg/ffmpeg').FFmpeg} ff
+ * @param {string} path   staged input
+ * @param {{rate:number, ss?:number, t?:number}} o
+ * @returns {Promise<Float32Array>}
+ */
+export async function decodeAudioRaw(ff, path, { rate, ss, t }) {
+  const out = `dec-${Math.random().toString(36).slice(2, 8)}.raw`;
+  const args = [
+    ...(ss ? ['-ss', String(Math.round(ss * 1000) / 1000)] : []),
+    ...(t ? ['-t', String(Math.round(t * 1000) / 1000)] : []),
+    '-i', path,
+    '-map', '0:a:0', '-ac', '1', '-ar', String(rate),
+    '-f', 's16le', '-v', 'error', '-y', out,
+  ];
+  try {
+    await execStep(ff, args);
+  } catch (err) {
+    if (/matches no streams/.test(String(err))) {
+      throw new Error('this file has no audio track to match against');
+    }
+    throw err;
+  }
+  const raw = await ff.readFile(out);
+  await ff.deleteFile(out).catch(() => {});
+  const i16 = new Int16Array(raw.buffer, raw.byteOffset, Math.floor(raw.byteLength / 2));
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+  return f32;
+}
+
+/**
  * Find the keyframe nearest `target` (s) on the video stream, scanning a
  * ±window with ffprobe read_intervals. Returns the keyframe time or null.
  * Used to snap a start trim so the video can stay stream-copied.

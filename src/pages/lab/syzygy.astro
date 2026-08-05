@@ -16,7 +16,7 @@ import '../../styles/themes.css';
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <ThemeBoot />
   <title>syzygy | voidstar lab</title>
-  <meta name="description" content="Replace a video's audio with a better recording — aligned by zero, by wall clock, or by hand. Runs entirely in your browser." />
+  <meta name="description" content="Replace a video's audio with a better recording — aligned by zero, by wall clock, by matching sound, or by hand. Runs entirely in your browser." />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -87,6 +87,13 @@ import '../../styles/themes.css';
     .sz-meta-info { font-size: .75rem; color: var(--cyan); margin-top: .5rem; line-height: 1.5; }
     .sz-meta-info .sz-dim { color: var(--text-dim); }
     .sz-offset-readout { margin-top: .5rem; font-size: .8rem; color: var(--accent); min-height: 1.1rem; }
+    .sz-sound-status { margin-top: .5rem; font-size: .75rem; color: var(--amber); }
+    .sz-sound-result { margin-top: .3rem; }
+    .sz-sound-result:empty { display: none; }
+    .sz-sound-hit { font-size: .78rem; line-height: 1.6; }
+    .sz-q-strong { color: var(--green); }
+    .sz-q-ok { color: var(--cyan); }
+    .sz-q-weak { color: var(--amber); }
     .sz-adj-readout { font-size: .75rem; color: var(--text-muted); margin-left: .3rem; }
 
     .sz-btn { font: inherit; font-size: .82rem; padding: .45rem .8rem; border-radius: .5rem;
@@ -170,7 +177,7 @@ import '../../styles/themes.css';
         <span class="brand-tag"><b>voidstar</b> // lab</span>
       </a>
       <h1>SYZYGY</h1>
-      <p>re-marry better audio to a video — aligned at zero, by the universal clock, or by hand.<br />
+      <p>re-marry better audio to a video — aligned at zero, by the universal clock, by matching sound, or by hand.<br />
         the video stream is preserved untouched whenever possible. nothing leaves your browser.</p>
     </header>
     <div id="syzygy-root"></div>

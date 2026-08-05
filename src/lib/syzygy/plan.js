@@ -176,8 +176,11 @@ export function planAudio({ t, audio, audioDur, family, mode = 'auto', bitrateK 
   if (t.audioDelay > EPS) filters.push(`adelay=${Math.round(t.audioDelay * 1000)}:all=1`);
   filters.push('apad'); // -t on the output clamps the silence
 
+  // vorbis in QUALITY mode: managed-bitrate mode rejects rate/channel combos
+  // it dislikes (e.g. 256k mono fails encoder setup); -q:a 7 ≈ 224k stereo
+  // and scales safely with channels/rates.
   const codecArgs = family === 'vorbis'
-    ? ['-c:a', 'libvorbis', '-b:a', `${bitrateK || 256}k`]
+    ? ['-c:a', 'libvorbis', '-q:a', '7']
     : ['-c:a', 'aac', '-b:a', `${bitrateK || 320}k`];
   if (family === 'aac' && audio.sampleRate && !AAC_RATES.includes(audio.sampleRate)) {
     codecArgs.push('-ar', '48000');
@@ -302,7 +305,7 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
     ? ['-f', 'lavfi', '-t', fmtSec(t.duration), '-i', 'anullsrc=r=48000:cl=stereo']
     : ['-i', audio.path];
   const silentCodec = container.audioFamily === 'vorbis'
-    ? ['-c:a', 'libvorbis', '-b:a', '64k']
+    ? ['-c:a', 'libvorbis', '-q:a', '1']
     : ['-c:a', 'aac', '-b:a', '128k'];
   const audioCodecArgs = silent ? silentCodec : aud.codecArgs;
   const audioFilters = silent ? [] : aud.filters;

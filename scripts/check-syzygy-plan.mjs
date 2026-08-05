@@ -8,6 +8,7 @@ import {
 } from '../src/lib/syzygy/plan.js';
 import { sniffMediaInfo, sniffWav, sniffMp3 } from '../src/lib/syzygy/meta.js';
 import { parseProbeSections, summarizeVideo, streamRotation } from '../src/lib/syzygy/engine.js';
+import { correlatePcm, MIN_COARSE_Z, MIN_PEAK_RATIO } from '../src/lib/syzygy/correlate.js';
 
 let failures = 0;
 function check(name, cond) {
@@ -224,6 +225,66 @@ const A = (s) => [...s].map((c) => c.charCodeAt(0));
   check('absurd matroska fps sanitized', v.fps === '30/1');
   check('duration falls back to format', near(v.duration, 5.973));
   check('N/A fields dropped', !('duration' in info.streams[0]));
+}
+
+// ── transient correlation (the "matching sound" mode) ───────────────────
+// Two mono PCM tracks sharing a click train at a known offset, each with its
+// own independent noise bed — the shape of a camera mic vs a field recorder.
+{
+  const lcg = (seed) => () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  function makeTrack(rate, dur, clickTimes, noiseSeed, noiseAmp) {
+    const rnd = lcg(noiseSeed);
+    const pcm = new Float32Array(Math.round(rate * dur));
+    for (let i = 0; i < pcm.length; i++) pcm[i] = (rnd() * 2 - 1) * noiseAmp;
+    const burst = Math.round(rate * 0.03);
+    const crnd = lcg(1234);
+    for (const t of clickTimes) {
+      const at = Math.round(t * rate);
+      for (let j = 0; j < burst && at + j < pcm.length; j++) {
+        pcm[at + j] += (crnd() * 2 - 1) * 0.8 * (1 - j / burst);
+      }
+    }
+    return pcm;
+  }
+  const clicks = [0.9, 2.2, 4.8, 7.1, 9.4, 12.0, 15.3, 18.8, 22.6, 26.1];
+
+  // audio started 3.217s BEFORE the video → offset −3.217 (clicks land later in the audio)
+  {
+    const ref = makeTrack(2000, 30, clicks, 11, 0.05);
+    const sig = makeTrack(2000, 36, clicks.map((t) => t + 3.217), 77, 0.05);
+    const r = correlatePcm(ref, sig, 2000, { envRate: 50 });
+    check('coarse lag recovered (negative offset)', Math.abs(r.lagSec - -3.217) < 0.03, `got ${r.lagSec}`);
+    check('coarse match passes both gates', r.z >= MIN_COARSE_Z && r.ratio >= MIN_PEAK_RATIO, `z=${r.z} ratio=${r.ratio}`);
+  }
+  // audio started 5.5s AFTER the video → offset +5.5
+  {
+    const ref = makeTrack(2000, 30, clicks, 11, 0.05);
+    const sig = makeTrack(2000, 20, clicks.map((t) => t - 5.5).filter((t) => t > 0.1), 77, 0.05);
+    const r = correlatePcm(ref, sig, 2000, { envRate: 50 });
+    check('coarse lag recovered (positive offset)', Math.abs(r.lagSec - 5.5) < 0.03, `got ${r.lagSec}`);
+  }
+  // refine stage: high rate, small lag, restricted search
+  {
+    const fine = [0.5, 1.4, 2.9, 4.2, 5.8, 7.3, 8.8];
+    const ref = makeTrack(8000, 10, fine, 11, 0.05);
+    const sig = makeTrack(8000, 10, fine.map((t) => t + 0.113), 77, 0.05);
+    const r = correlatePcm(ref, sig, 8000, { envRate: 250, minLagSec: -2.5, maxLagSec: 2.5 });
+    check('refine lag within a few ms', Math.abs(r.lagSec - -0.113) < 0.008, `got ${r.lagSec}`);
+  }
+  // unrelated audio must not fake a match (the peak-ratio gate catches the
+  // chance coincidences that MAD-z alone over-trusts on sparse envelopes)
+  {
+    const ref = makeTrack(2000, 30, clicks, 11, 0.3);
+    const sig = makeTrack(2000, 30, [1.1, 3.7, 6.2, 9.9, 14.4, 19.1, 24.8], 77, 0.3);
+    const r = correlatePcm(ref, sig, 2000, { envRate: 50 });
+    check('unrelated tracks fail the combined gate',
+      !(r.z >= MIN_COARSE_Z && r.ratio >= MIN_PEAK_RATIO), `z=${r.z} ratio=${r.ratio}`);
+  }
+  // silence never divides by zero
+  {
+    const r = correlatePcm(new Float32Array(2000 * 5), new Float32Array(2000 * 5), 2000, { envRate: 50 });
+    check('silent tracks yield zero confidence', r.z === 0 || r.z < MIN_COARSE_Z);
+  }
 }
 
 if (failures) {

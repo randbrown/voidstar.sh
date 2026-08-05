@@ -16,6 +16,8 @@ pattern. It shares nothing with the qualia engine.
 | `src/lib/syzygy/app.js` | UI + orchestration (state, dropzones, timeline viz, render flow) |
 | `src/lib/syzygy/plan.js` | **pure** timeline math, strategy ladder, ffmpeg arg builders — node-testable |
 | `src/lib/syzygy/meta.js` | byte-level capture-datetime + duration sniffers (mp4 `mvhd`, WAV BWF `bext`, MP3 ID3) — node-testable |
+| `src/lib/syzygy/correlate.js` | **pure** transient-correlation DSP (onset envelopes, FFT cross-correlation, confidence gates) — node-testable |
+| `src/lib/syzygy/sound-align.js` | the two-stage "matching sound" estimator (coarse full-stream pass + high-rate refine window) |
 | `src/lib/syzygy/engine.js` | ffmpeg.wasm lifecycle: CDN core load, WORKERFS staging, exec/probe helpers, keyframe scan |
 | `scripts/check-syzygy-plan.mjs` | node smoke test for plan.js + meta.js (in `npm run check`) |
 
@@ -51,7 +53,19 @@ pattern. It shares nothing with the qualia engine.
    clocks drift, so the UI shows both timestamps with their sources and a
    ±10 ms/±100 ms/±1 s nudge. At render time the container `creation_time`
    from ffprobe backfills a video clock the sniffers missed.
-3. **manual** — type the offset (audio start on the video's timeline,
+3. **matching sound** — correlate the replacement recording against the
+   video's own audio track (the PluralEyes move). Both streams are decoded
+   by the engine to mono 2 kHz PCM (first 30 min max), turned into
+   onset-novelty envelopes (half-rectified log-energy difference — spikes on
+   transients, ignores steady tone), and FFT-cross-correlated for a coarse
+   offset at ~±20 ms; a ≤90 s window around the match is then re-decoded at
+   8 kHz and re-correlated (±2.5 s search) for few-ms precision. Two
+   confidence gates must pass — a robust MAD z-score AND a peak-to-second-peak
+   ratio (sparse click-like content can fool either alone) — otherwise the
+   mode reports no confident match rather than guessing. Selecting the mode
+   runs the analysis automatically (this is the one alignment mode that loads
+   the engine before render).
+4. **manual** — type the offset (audio start on the video's timeline,
    negative = audio began first).
 
 ## Output window
@@ -84,7 +98,7 @@ Two tricks keep trims lossless:
 
 Containers: mp4 (+`faststart`, hevc tagged `hvc1`) for everything except
 vp8/vp9 sources, which stay webm (vp8 can't live in mp4; vp9-in-mp4 breaks
-Safari). Audio: aac 320k / vorbis 256k transcode by default (the wasm core's libopus encoder crashes, so webm audio is vorbis); stream-copy when
+Safari). Audio: aac 320k / vorbis q7 transcode by default (webm audio is vorbis because the wasm core's libopus crashes, and vorbis runs in quality mode because its managed-bitrate mode rejects some rate/channel combos); stream-copy when
 it's container-native and needs no cutting or leading silence (mp3-in-mp4
 copy is offered behind an explicit option). Sub-stream niceties: the output
 `creation_time` is restamped to the source's epoch shifted by the window
@@ -105,5 +119,7 @@ start, so the result still lines up on an NLE timeline.
 `node scripts/check-syzygy-plan.mjs` (in `npm run check`) covers the
 timeline math, strategy ladder, arg builders, and metadata sniffers with
 synthetic files. The E2E flow (headless Chromium + a locally served core,
-vp8/wav fixtures) exercises direct-copy, keyframe-snap, and reencode paths
-end to end — see the session notes in the PR/commit that introduced the lab.
+vp8/wav fixtures, plus a click-track pair at a known offset for the
+sound-matching mode) exercises direct-copy, keyframe-snap, concat, reencode,
+and transient-alignment paths end to end — see the session notes in the
+PR/commits that introduced the lab.
