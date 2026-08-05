@@ -76,6 +76,17 @@ overhangs — per side, the adjacent (first/last) frame by default, or a frame
 picked from any video time, or an uploaded image (letterboxed to the raster).
 `trim start` / `trim end` instead cut each end to the overlap.
 
+**keep original audio** replaces that silence: video-only spans carry the
+video's own soundtrack, spliced around the replacement in one audio filter
+graph — per-segment atrim, a common rate/layout via aresample/aformat (the
+concat filter demands it), 20 ms seam fades so cuts never click, and zero
+timing shift (no acrossfade — overlapping fades would slide the replacement
+off sync). The graph only touches audio, so direct/concat strategies still
+stream-copy the video (the concat path re-adds the original file as an
+audio-only input, since its concat input is video-only). Filling forces the
+audio to be encoded (stream-copy can't splice); a video with no audio track
+degrades to silence with a note.
+
 ## The quality ladder (the point of the whole lab)
 
 `plan.js` picks the cheapest strategy that satisfies the timeline:

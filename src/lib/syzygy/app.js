@@ -7,9 +7,9 @@
 // the human informed.
 
 import { sniffMediaInfo } from './meta.js';
-import { computeTimeline, buildPlan, EPS, fmtSec } from './plan.js';
+import { computeTimeline, computeGaps, buildPlan, EPS, fmtSec } from './plan.js';
 import {
-  loadEngine, terminateEngine, stageInput, execStep, probe,
+  loadEngine, terminateEngine, stageInput, execStep, probe, pickAudioStream,
   summarizeVideo, summarizeAudio, nearestKeyframe,
 } from './engine.js';
 import { estimateOffsetBySound } from './sound-align.js';
@@ -59,6 +59,7 @@ const state = {
   soundError: null,
   trimStart: false,
   trimEnd: false,
+  keepVideoAudio: false, // fill video-only spans with the video's own audio
   pad: {
     lead: { mode: 'adjacent', time: 0, file: null },
     tail: { mode: 'adjacent', time: 0, file: null },
@@ -359,9 +360,10 @@ function buildWindowOpts() {
     h('div', { class: 'sz-checks' },
       checkbox('trimStart', 'trim start', 'start at the later of the two — drop the un-overlapped head'),
       checkbox('trimEnd', 'trim end', 'end at the earlier of the two — drop the un-overlapped tail'),
+      checkbox('keepVideoAudio', 'keep original audio', 'where the new audio doesn’t reach, keep the video’s own sound instead of silence'),
     ),
     h('p', { class: 'sz-note' },
-      'unchecked, the output keeps the longer side: silence under extra video, a still frame under extra audio.'),
+      'unchecked, the output keeps the longer side: silence under extra video (unless keeping original audio), a still frame under extra audio.'),
     ui.padPickers = h('div', { class: 'sz-pads' }),
   );
 }
@@ -627,6 +629,11 @@ function renderTimeline(t) {
   const oSegs = [seg('sz-tl-out', t.start, t.end, 'output window')];
   if (t.padLead > EPS) oSegs.push(seg('sz-tl-pad', t.start, t.start + t.padLead, 'still-frame pad'));
   if (t.padTail > EPS) oSegs.push(seg('sz-tl-pad', t.end - t.padTail, t.end, 'still-frame pad'));
+  const gaps = computeGaps(t);
+  if (state.keepVideoAudio) {
+    if (gaps.lead > EPS) oSegs.push(seg('sz-tl-fill', t.videoIn, t.videoIn + gaps.lead, 'video’s original audio'));
+    if (gaps.tail > EPS) oSegs.push(seg('sz-tl-fill', t.videoOut - gaps.tail, t.videoOut, 'video’s original audio'));
+  }
 
   ui.timeline.replaceChildren(
     row('video', vSegs),
@@ -639,6 +646,13 @@ function renderTimeline(t) {
   if (t.videoCutStart || t.videoCutEnd) bits.push('video trimmed');
   if (t.audioIn > EPS || t.audioOut < state.audio.dur - EPS) bits.push('audio trimmed');
   if (t.audioDelay > EPS) bits.push(`audio enters at ${fmtDur(t.audioDelay)}`);
+  if (gaps.lead > EPS || gaps.tail > EPS) {
+    const fills = [gaps.lead > EPS ? fmtDur(gaps.lead) : null, gaps.tail > EPS ? fmtDur(gaps.tail) : null]
+      .filter(Boolean).join(' + ');
+    bits.push(state.keepVideoAudio ? `original audio fills ${fills}` : `silence under ${fills} of video`);
+  } else if (state.keepVideoAudio) {
+    bits.push('no video-only span to fill at this alignment');
+  }
   ui.timelineSummary.textContent = bits.join(' · ');
 }
 
@@ -739,6 +753,8 @@ async function run() {
       videoMode: state.videoMode === 'reencode' ? 'reencode' : 'auto',
       startIsKeyframe,
       audioMode: state.audioMode,
+      keepVideoAudio: state.keepVideoAudio,
+      videoHasAudio: !!pickAudioStream(vProbe),
       crf: state.crf, preset: state.preset,
       ...padOpts,
     };

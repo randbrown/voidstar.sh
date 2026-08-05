@@ -4,7 +4,7 @@
 // arg builders, and the binary datetime sniffers. Run via `npm run check`.
 
 import {
-  computeTimeline, chooseStrategy, chooseContainer, planAudio, buildPlan, fmtSec, EPS,
+  computeTimeline, computeGaps, chooseStrategy, chooseContainer, planAudio, buildPlan, fmtSec, EPS,
 } from '../src/lib/syzygy/plan.js';
 import { sniffMediaInfo, sniffWav, sniffMp3 } from '../src/lib/syzygy/meta.js';
 import { parseProbeSections, summarizeVideo, streamRotation } from '../src/lib/syzygy/engine.js';
@@ -225,6 +225,66 @@ const A = (s) => [...s].map((c) => c.charCodeAt(0));
   check('absurd matroska fps sanitized', v.fps === '30/1');
   check('duration falls back to format', near(v.duration, 5.973));
   check('N/A fields dropped', !('duration' in info.streams[0]));
+}
+
+// ── video-only gaps + "keep original audio" ─────────────────────────────
+{
+  // audio sits inside a longer video → gaps on both edges
+  const t = computeTimeline({ videoDur: 60, audioDur: 30, offset: 10 });
+  const g = computeGaps(t);
+  check('gaps flank an audio island', near(g.lead, 10) && near(g.tail, 20));
+  // audio longer on both sides → pads, no gaps
+  const g2 = computeGaps(computeTimeline({ videoDur: 60, audioDur: 80, offset: -5 }));
+  check('pads mean no gaps', g2.lead === 0 && g2.tail === 0);
+  // audio entirely after the trimmed window → the whole video is a gap
+  const g3 = computeGaps(computeTimeline({ videoDur: 10, audioDur: 5, offset: 30, trimEnd: true }));
+  check('non-overlapping audio makes the video one big gap', near(g3.lead + g3.tail, 10));
+}
+{
+  // direct + fill: graph splices video-audio around the replacement
+  const t = computeTimeline({ videoDur: 60, audioDur: 30, offset: 10 });
+  const plan = buildPlan({ t, video: H264, audio: { ...MP3, channels: 2 }, audioDur: 30,
+    opts: { keepVideoAudio: true, videoHasAudio: true } });
+  const joined = plan.steps[0].args.join(' ');
+  check('fill stays direct (video still copied)', plan.strategy === 'direct' && joined.includes('-c:v copy'));
+  const fc = plan.steps[0].args[plan.steps[0].args.indexOf('-filter_complex') + 1];
+  check('fill trims the lead from the video track', fc.includes('[0:a:0]atrim=start=0:end=10'));
+  check('fill trims the tail from the video track', fc.includes('[0:a:0]atrim=start=40:end=60'));
+  check('fill places the replacement between', fc.includes('[1:a:0]atrim=start=0:end=30'));
+  check('fill concats three segments', fc.includes('concat=n=3:v=0:a=1'));
+  check('fill has seam fades', fc.includes('afade=t=in') && fc.includes('afade=t=out'));
+  check('fill maps the graph audio', joined.includes('-map [aout]'));
+  check('fill notes the spans', plan.notes.some((n) => n.includes("original audio")));
+}
+{
+  // fill + copy request: copy must give way to transcode
+  const t = computeTimeline({ videoDur: 60, audioDur: 30, offset: 10 });
+  const plan = buildPlan({ t, video: H264, audio: { path: 'a.m4a', codec: 'aac', channels: 2 }, audioDur: 30,
+    opts: { keepVideoAudio: true, videoHasAudio: true, audioMode: 'copy' } });
+  check('fill overrides audio copy', !plan.audioCopied
+    && plan.steps[0].args.join(' ').includes('-c:a aac'));
+}
+{
+  // fill requested but the video has no audio → silence, with a note
+  const t = computeTimeline({ videoDur: 60, audioDur: 30, offset: 10 });
+  const plan = buildPlan({ t, video: H264, audio: MP3, audioDur: 30,
+    opts: { keepVideoAudio: true, videoHasAudio: false } });
+  check('no video audio → graceful silence note', plan.notes.some((n) => n.includes('no audio track')));
+  check('no video audio → no filter_complex', !plan.steps[0].args.includes('-filter_complex'));
+}
+{
+  // concat strategy + fill: original video rides along as an extra input
+  const t = computeTimeline({ videoDur: 60, audioDur: 80, offset: 10 });
+  const g = computeGaps(t);
+  check('tail pad + lead gap coexist', near(g.lead, 10) && g.tail === 0 && near(t.padTail, 30));
+  const plan = buildPlan({ t, video: H264, audio: { ...MP3, channels: 2 }, audioDur: 80,
+    opts: { keepVideoAudio: true, videoHasAudio: true } });
+  check('still concat with fill', plan.strategy === 'concat');
+  const final = plan.steps[plan.steps.length - 1];
+  const vIn = final.args.filter((a) => a === 'v.mp4').length;
+  check('video file added as the audio source input', vIn === 1);
+  const fc = final.args[final.args.indexOf('-filter_complex') + 1];
+  check('concat-fill pulls video audio from input 2', fc.includes('[2:a:0]atrim=start=0:end=10'));
 }
 
 // ── transient correlation (the "matching sound" mode) ───────────────────

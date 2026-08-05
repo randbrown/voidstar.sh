@@ -87,6 +87,24 @@ export function computeTimeline({ videoDur, audioDur, offset, trimStart = false,
 }
 
 /**
+ * Video-only spans of the output window — where the video runs but the
+ * replacement audio doesn't reach. These are the spans the "keep original
+ * audio" option fills from the video's own soundtrack (silence otherwise).
+ * Mutually exclusive with pads per edge: a pad means the AUDIO is the longer
+ * side there.
+ * @param {ReturnType<typeof computeTimeline>} t
+ * @returns {{lead:number, tail:number}} span lengths (s); lead is at output
+ *   start (video-time [videoIn, videoIn+lead]), tail ends at videoOut.
+ */
+export function computeGaps(t) {
+  const lead = t.padLead <= EPS ? Math.min(t.audioDelay, t.videoUsed) : 0;
+  const audioEndOut = t.audioDelay + t.audioUsed;
+  const videoEndOut = t.padLead + t.videoUsed;
+  const tail = videoEndOut - Math.max(audioEndOut, t.padLead + lead);
+  return { lead: lead > EPS ? lead : 0, tail: tail > EPS ? tail : 0 };
+}
+
+/**
  * @typedef {object} VideoInfo   (from ffprobe, see engine.js)
  * @property {string} path       staged input path in the wasm FS
  * @property {string} codec      codec_name (h264, hevc, vp9, …)
@@ -250,6 +268,56 @@ function padConform(video, pixFmt, fps) {
 }
 
 /**
+ * Filter-graph lines that assemble the output audio from up to three
+ * sources — the video's own track over the gaps, the replacement in the
+ * middle, generated silence for any hole neither covers — with 20 ms seam
+ * fades (click-proof, zero timing shift) and a common rate/layout so the
+ * concat filter accepts the splice. Ends by labeling [aout].
+ * `vidOffset` compensates an input `-ss` on the video (which rebases its
+ * audio timestamps to 0 at the seek point).
+ */
+function audioGraphLines({ t, gaps, vIdx, rIdx, vidOffset = 0, rate, layout }) {
+  const F = 0.02;
+  const conv = `aresample=${rate},aformat=sample_fmts=fltp:channel_layouts=${layout}`;
+  const segs = [];
+  let cursor = 0;
+  if (gaps.lead > EPS) {
+    segs.push({ src: 'vid', from: t.videoIn, to: t.videoIn + gaps.lead });
+    cursor = gaps.lead;
+  }
+  if (t.audioUsed > EPS) {
+    if (t.audioDelay - cursor > EPS) { segs.push({ src: 'sil', d: t.audioDelay - cursor }); cursor = t.audioDelay; }
+    segs.push({ src: 'repl', from: t.audioIn, to: t.audioOut });
+    cursor += t.audioUsed;
+  }
+  if (gaps.tail > EPS) {
+    const tailStartOut = t.padLead + t.videoUsed - gaps.tail;
+    if (tailStartOut - cursor > EPS) { segs.push({ src: 'sil', d: tailStartOut - cursor }); cursor = tailStartOut; }
+    segs.push({ src: 'vid', from: t.videoOut - gaps.tail, to: t.videoOut });
+  }
+  const lines = [];
+  const refs = [];
+  segs.forEach((s, i) => {
+    const ref = `[fa${i}]`;
+    if (s.src === 'sil') {
+      lines.push(`anullsrc=r=${rate}:cl=${layout}:d=${fmtSec(s.d)},aformat=sample_fmts=fltp${ref}`);
+    } else {
+      const off = s.src === 'vid' ? vidOffset : 0;
+      const inp = s.src === 'vid' ? `[${vIdx}:a:0]` : `[${rIdx}:a:0]`;
+      const d = s.to - s.from;
+      const fades = [];
+      if (i > 0) fades.push(`afade=t=in:st=0:d=${F}`);
+      if (i < segs.length - 1 && d > F * 3) fades.push(`afade=t=out:st=${fmtSec(d - F)}:d=${F}`);
+      lines.push(`${inp}atrim=start=${fmtSec(s.from - off)}:end=${fmtSec(s.to - off)},asetpts=PTS-STARTPTS,${conv}`
+        + (fades.length ? ',' + fades.join(',') : '') + ref);
+    }
+    refs.push(ref);
+  });
+  lines.push(`${refs.join('')}concat=n=${refs.length}:v=0:a=1,apad[aout]`);
+  return lines;
+}
+
+/**
  * @typedef {{kind:'exec', label:string, args:string[], fallbackArgs?:string[], long?:boolean}
  *         | {kind:'write', label:string, path:string, text:string}} PlanStep
  * @typedef {{strategy:string, container:{ext:string,audioFamily:string}, output:string,
@@ -270,6 +338,8 @@ function padConform(video, pixFmt, fps) {
  * @param {boolean} [o.opts.startIsKeyframe]
  * @param {'auto'|'transcode'|'copy'} [o.opts.audioMode]
  * @param {number} [o.opts.audioBitrateK]
+ * @param {boolean} [o.opts.keepVideoAudio]  fill video-only spans with the video's own audio
+ * @param {boolean} [o.opts.videoHasAudio]   probe says the video has an audio track
  * @param {number} [o.opts.crf]
  * @param {string} [o.opts.preset]
  * @param {?string} [o.opts.padLeadImage]  staged path of a user pad image
@@ -290,26 +360,53 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
   const padLead = t.padLead >= frameDur / 2 ? t.padLead : 0;
   const padTail = t.padTail >= frameDur / 2 ? t.padTail : 0;
 
-  const aud = planAudio({
+  let aud = planAudio({
     t, audio, audioDur,
     family: container.audioFamily,
     mode: opts.audioMode || 'auto',
     bitrateK: opts.audioBitrateK,
   });
-  if (aud.copied) notes.push(`audio stream-copied (${audio.codec})`);
+
+  // "keep original audio": fill video-only spans from the video's own track.
+  // Splicing two sources means the audio must be encoded — copy is off the
+  // table for that run — and the video needs an audio track at all.
+  const gaps = computeGaps(t);
+  const gapsExist = gaps.lead > EPS || gaps.tail > EPS;
+  const fill = !!opts.keepVideoAudio && gapsExist && t.videoUsed > EPS && opts.videoHasAudio !== false;
+  if (opts.keepVideoAudio && gapsExist && opts.videoHasAudio === false) {
+    notes.push('video has no audio track — uncovered spans stay silent');
+  }
+  if (fill) {
+    if (aud.copied) notes.push('audio stream-copy is unavailable while keeping original audio — transcoding');
+    aud = planAudio({
+      t, audio, audioDur,
+      family: container.audioFamily, mode: 'transcode', bitrateK: opts.audioBitrateK,
+    });
+    const spans = [gaps.lead > EPS ? `${fmtSec(gaps.lead)}s at the start` : null,
+      gaps.tail > EPS ? `${fmtSec(gaps.tail)}s at the end` : null].filter(Boolean);
+    notes.push(`video-only spans keep the video's original audio (${spans.join(' + ')})`);
+  } else if (aud.copied) {
+    notes.push(`audio stream-copied (${audio.codec})`);
+  }
+  const fillRate = container.audioFamily === 'aac'
+    ? (audio.sampleRate && AAC_RATES.includes(audio.sampleRate) ? audio.sampleRate : 48000)
+    : (audio.sampleRate && audio.sampleRate <= 48000 ? audio.sampleRate : 48000);
+  const fillLayout = audio.channels === 1 ? 'mono' : 'stereo';
 
   // Audio input + mapping, shared by every strategy. When no audio overlaps
-  // the window, feed digital silence instead of the file.
+  // the window, feed digital silence instead of the file (or, with fill on,
+  // nothing — the graph pulls everything from the video's own track).
   const silent = t.audioUsed <= EPS;
   const audioInput = silent
-    ? ['-f', 'lavfi', '-t', fmtSec(t.duration), '-i', 'anullsrc=r=48000:cl=stereo']
+    ? (fill ? [] : ['-f', 'lavfi', '-t', fmtSec(t.duration), '-i', 'anullsrc=r=48000:cl=stereo'])
     : ['-i', audio.path];
   const silentCodec = container.audioFamily === 'vorbis'
     ? ['-c:a', 'libvorbis', '-q:a', '1']
     : ['-c:a', 'aac', '-b:a', '128k'];
-  const audioCodecArgs = silent ? silentCodec : aud.codecArgs;
-  const audioFilters = silent ? [] : aud.filters;
-  if (silent) notes.push('no audio overlaps the output window — silent track');
+  const audioCodecArgs = silent && !fill ? silentCodec : aud.codecArgs;
+  const audioFilters = silent || fill ? [] : aud.filters;
+  if (silent && !fill) notes.push('no audio overlaps the output window — silent track');
+  if (silent && fill) notes.push('replacement audio misses the window — output carries the video’s original audio');
 
   const muxArgs = container.ext === 'mp4' ? ['-movflags', '+faststart'] : [];
   const meta = metadataArgs(video, t);
@@ -351,13 +448,21 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
   // ── strategy: direct ─────────────────────────────────────────────────
   if (strategy === 'direct') {
     const seek = t.videoIn > EPS ? ['-ss', fmtSec(t.videoIn)] : [];
+    // The graph only touches audio streams, so `-c:v copy` still applies.
+    const audioArgs = fill
+      ? ['-filter_complex', audioGraphLines({
+          t, gaps, vIdx: 0, rIdx: silent ? -1 : 1,
+          vidOffset: t.videoIn > EPS ? t.videoIn : 0,
+          rate: fillRate, layout: fillLayout,
+        }).join(';'), '-map', '0:v:0', '-map', '[aout]']
+      : ['-map', '0:v:0', '-map', '1:a:0',
+        ...(audioFilters.length ? ['-af', audioFilters.join(',')] : [])];
     const args = [
       ...seek, '-i', video.path,
       ...audioInput,
-      '-map', '0:v:0', '-map', '1:a:0',
+      ...audioArgs,
       '-c:v', 'copy',
       ...(container.ext === 'mp4' && video.codec === 'hevc' ? ['-tag:v', 'hvc1'] : []),
-      ...(audioFilters.length ? ['-af', audioFilters.join(',')] : []),
       ...audioCodecArgs,
       '-t', fmtSec(t.duration),
       ...muxArgs, ...meta, '-y', output,
@@ -409,14 +514,24 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
     if (padTail > 0) listLines.push("file 'pad-tail.mp4'");
     steps.push({ kind: 'write', label: 'write concat list', path: 'concat.txt', text: listLines.join('\n') + '\n' });
 
+    // With fill, the concat input carries no audio (mid.mp4 is video-only),
+    // so the original video file rides along as an extra audio-only input.
+    const fillInputs = fill ? ['-i', video.path] : [];
+    const audioArgs = fill
+      ? ['-filter_complex', audioGraphLines({
+          t, gaps, vIdx: silent ? 1 : 2, rIdx: silent ? -1 : 1, vidOffset: 0,
+          rate: fillRate, layout: fillLayout,
+        }).join(';'), '-map', '0:v:0', '-map', '[aout]']
+      : ['-map', '0:v:0', '-map', '1:a:0',
+        ...(audioFilters.length ? ['-af', audioFilters.join(',')] : [])];
     steps.push({
       kind: 'exec', label: 'concatenate + mux with new audio',
       args: [
         '-f', 'concat', '-safe', '0', '-i', 'concat.txt',
         ...audioInput,
-        '-map', '0:v:0', '-map', '1:a:0',
+        ...fillInputs,
+        ...audioArgs,
         '-c:v', 'copy',
-        ...(audioFilters.length ? ['-af', audioFilters.join(',')] : []),
         ...audioCodecArgs,
         '-t', fmtSec(t.duration),
         ...muxArgs, ...meta, '-y', output,
@@ -477,10 +592,19 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
     segRefs.push(ref);
   }
   chains.push(`${segRefs.join('')}concat=n=${segRefs.length}:v=1:a=0[vout]`);
-  if (!silent && audioFilters.length) {
+  let audioMap;
+  if (fill) {
+    chains.push(...audioGraphLines({
+      t, gaps, vIdx: vidIdx, rIdx: silent ? -1 : aIdx, vidOffset: 0,
+      rate: fillRate, layout: fillLayout,
+    }));
+    audioMap = '[aout]';
+  } else if (!silent && audioFilters.length) {
     chains.push(`[${aIdx}:a]${audioFilters.join(',')}[aout]`);
+    audioMap = '[aout]';
+  } else {
+    audioMap = `${aIdx}:a:0`;
   }
-  const audioMap = !silent && audioFilters.length ? '[aout]' : `${aIdx}:a:0`;
 
   steps.push({
     kind: 'exec', label: 'render (full re-encode)',

@@ -129,7 +129,7 @@ export async function execStep(ff, args, hooks = {}) {
 }
 
 /** Fields we want as numbers (the default writer emits everything as text). */
-const NUMERIC_FIELDS = new Set(['width', 'height', 'level', 'sample_rate', 'index', 'rotation']);
+const NUMERIC_FIELDS = new Set(['width', 'height', 'level', 'sample_rate', 'channels', 'index', 'rotation']);
 
 /**
  * Run ffprobe and collect its stdout. The wasm core's ffprobe ignores
@@ -313,6 +313,7 @@ export function summarizeAudio(info, path, fallbackDur) {
     path,
     codec: s.codec_name,
     sampleRate: Number(s.sample_rate) || undefined,
+    channels: Number(s.channels) || undefined,
     duration: Number(s.duration || info.format?.duration || fallbackDur) || fallbackDur,
   };
 }
