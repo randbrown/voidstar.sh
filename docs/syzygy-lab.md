@@ -115,6 +115,45 @@ The whole session survives a closed tab/browser, restored on the next load:
 Every persistence call is failure-tolerant: private mode, quota pressure, or
 a missing IndexedDB degrade to "no persistence", never to a broken page.
 
+## Segmented re-encode (resumable renders)
+
+Long re-encodes (>150 s of output) render as **~60 s full-quality,
+video-only chunks**, each checkpointed to IndexedDB the moment it finishes,
+then stitched by stream copy with **one full-length audio pass** at the end
+(per-segment audio would glitch at every seam — AAC priming samples; one
+pass is cheap and gapless). Consequences:
+
+- A reload, crash, or cancel loses at most the chunk in flight; the next
+  render with the same files + video-affecting settings (hashed into a job
+  key — audio-only options deliberately excluded) resumes from checkpoint:
+  "resumed 12/34 segments". Cancel is therefore a de-facto pause button.
+- Each chunk seeks the input (`-ss` fast keyframe seek + accurate decode-
+  and-discard) instead of decoding from zero — without this, per-segment
+  decode would be quadratic in video length. The same seek now also speeds
+  up one-shot re-encodes with far-in start trims.
+- Segments are staged for the stitch via WORKERFS (no MEMFS copies), and
+  MEMFS is drained after every chunk, so peak memory stays roughly one
+  chunk + the final output instead of 2× the whole render.
+- Cost: one extra keyframe per chunk boundary. Negligible at 60 s spacing.
+- Test override: `localStorage['syzygy-seg'] = '{"len":2,"min":4}'`.
+
+Expensive **calculations are cached** against the file identity
+(name+size+mtime, LRU 8 files, localStorage): stream summaries from
+ffprobe, the has-audio flag, and keyframe-scan results. A re-render or a
+restored session skips re-probing; the sound-match offset was already
+cached per file pair.
+
+## Memory hardening (phones)
+
+A real-world Android failure (`RangeError: Array buffer allocation
+failed`) drove several guards: `+faststart` is skipped when inputs total
+>300 MB (its finalize rewrites the whole file — a second full copy in
+memory; moov-at-end plays fine everywhere), the wasm-side output copy is
+freed before the download Blob is built, the MEMFS staging fallback
+refuses >300 MB files with a clear message instead of OOMing, and an OOM
+is reported as "this device ran out of memory for the output size" with an
+engine reset rather than a raw RangeError.
+
 ## Sync check (draft test render)
 
 The **sync check** button next to render answers "is my offset right?"

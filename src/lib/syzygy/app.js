@@ -17,7 +17,9 @@ import {
   applySettings, loadSettings, saveSettings, saveFile, loadFile, clearFile,
   saveSound, loadSound, saveResult, loadResult, saveRunStatus, loadRunStatus,
   fileKeyOf, pairKey, clearAll,
+  cachedProbe, saveProbe, jobKeyOf, saveJob, loadJob, saveSegment, loadSegment, clearJob,
 } from './persist.js';
+import { segmentWindows, buildAssemblePlan, SEGMENT_LEN, SEGMENT_MIN_TOTAL } from './plan.js';
 
 // ── tiny DOM helper ─────────────────────────────────────────────────────
 function h(tag, attrs = {}, ...children) {
@@ -452,6 +454,50 @@ function buildAlignment() {
   );
 }
 
+// ── cached probing ──────────────────────────────────────────────────────
+// Stream summaries and keyframe scans are pure functions of the file bytes,
+// so they're cached against the file identity (name+size+mtime) and skipped
+// on every later render/analysis of the same file.
+
+async function probedVideo(ff, path, file, fallbackDur) {
+  const key = fileKeyOf(file);
+  const hit = cachedProbe(key)?.video;
+  if (hit) {
+    pushLog('[syzygy] video stream info from cache');
+    return { summary: { ...hit, path }, hasAudio: hit.hasAudio !== false };
+  }
+  const info = await probe(ff, path);
+  const summary = summarizeVideo(info, path, fallbackDur);
+  const hasAudio = !!pickAudioStream(info);
+  try { saveProbe(key, { video: { ...summary, path: undefined, hasAudio } }); } catch { /* cache only */ }
+  return { summary, hasAudio };
+}
+
+async function probedAudio(ff, path, file, fallbackDur) {
+  const key = fileKeyOf(file);
+  const hit = cachedProbe(key)?.audio;
+  if (hit) {
+    pushLog('[syzygy] audio stream info from cache');
+    return { ...hit, path };
+  }
+  const summary = summarizeAudio(await probe(ff, path), path, fallbackDur);
+  try { saveProbe(key, { audio: { ...summary, path: undefined } }); } catch { /* cache only */ }
+  return summary;
+}
+
+async function cachedKeyframe(ff, path, file, target) {
+  const key = fileKeyOf(file);
+  const tKey = fmtSec(target);
+  const hit = cachedProbe(key)?.kf;
+  if (hit && tKey in hit) {
+    pushLog('[syzygy] keyframe position from cache');
+    return hit[tKey];
+  }
+  const kf = await nearestKeyframe(ff, path, target);
+  try { saveProbe(key, { kf: { [tKey]: kf } }); } catch { /* cache only */ }
+  return kf;
+}
+
 // ── sound alignment (transient correlation) ─────────────────────────────
 function setSoundStatus(msg, frac) {
   ui.soundStatus.hidden = false;
@@ -471,8 +517,8 @@ async function analyzeSound() {
     const ain = await stageInput(ff, state.audio.file, 'sa');
     try {
       let vd = state.video.dur, ad = state.audio.dur;
-      if (!(vd > 0)) vd = summarizeVideo(await probe(ff, vin.path), vin.path, NaN).duration;
-      if (!(ad > 0)) ad = summarizeAudio(await probe(ff, ain.path), ain.path, NaN).duration;
+      if (!(vd > 0)) vd = (await probedVideo(ff, vin.path, state.video.file, NaN)).summary.duration;
+      if (!(ad > 0)) ad = (await probedAudio(ff, ain.path, state.audio.file, NaN)).duration;
       if (!(vd > 0) || !(ad > 0)) throw new Error('could not determine stream durations');
       state.sound = await estimateOffsetBySound(ff, vin.path, ain.path, {
         videoDur: vd, audioDur: ad, onStatus: setSoundStatus,
@@ -933,13 +979,11 @@ async function run(mode = 'full') {
     const ain = await stageInput(ff, state.audio.file, 'ain');
     cleanups.push(ain.cleanup);
 
-    // probe (authoritative durations/codec data)
+    // probe (authoritative durations/codec data; cached per file identity)
     setStatus('probing streams…');
-    const vProbe = await probe(ff, vin.path);
-    const video = summarizeVideo(vProbe, vin.path, state.video.dur);
+    const { summary: video, hasAudio: videoHasAudio } = await probedVideo(ff, vin.path, state.video.file, state.video.dur);
     if (!state.video.clock && video.epochMs) state.video.clock = { epochMs: video.epochMs, source: 'container creation_time' };
-    const aProbe = await probe(ff, ain.path);
-    const audio = summarizeAudio(aProbe, ain.path, state.audio.dur);
+    const audio = await probedAudio(ff, ain.path, state.audio.file, state.audio.dur);
     const videoDur = video.duration, audioDur = audio.duration;
     if (!(videoDur > 0) || !(audioDur > 0)) throw new Error('could not determine stream durations');
 
@@ -956,7 +1000,7 @@ async function run(mode = 'full') {
     let startIsKeyframe = false;
     if (!isTest && t.videoCutStart && state.videoMode !== 'reencode') {
       setStatus('finding the nearest keyframe…');
-      const kf = await nearestKeyframe(ff, vin.path, t.videoIn);
+      const kf = await cachedKeyframe(ff, vin.path, state.video.file, t.videoIn);
       if (kf !== null) {
         if (Math.abs(kf - t.videoIn) > EPS) {
           pushLog(`[syzygy] start trim snapped ${fmtSec(t.videoIn)}s → keyframe ${fmtSec(kf)}s (audio follows, sync kept)`);
@@ -991,8 +1035,11 @@ async function run(mode = 'full') {
       startIsKeyframe,
       audioMode: state.audioMode,
       keepVideoAudio: state.keepVideoAudio,
-      videoHasAudio: !!pickAudioStream(vProbe),
+      videoHasAudio,
       crf: state.crf, preset: state.preset,
+      // faststart's finalize doubles the output in memory — skip it for big
+      // jobs so phones survive; moov-at-end still plays everywhere.
+      noFaststart: (state.video.file.size + state.audio.file.size) > 300 * 1024 * 1024,
       ...padOpts,
     };
     const base = state.video.file.name.replace(/\.[^.]+$/, '');
@@ -1057,16 +1104,29 @@ async function run(mode = 'full') {
     let plan = buildPlan({ t, video, audio, audioDur, opts });
     plan.notes.forEach((n) => pushLog(`[syzygy] ${n}`));
 
-    let outBlob = await executePlan(ff, plan, tempFiles);
+    // Long re-encodes run segmented: ~60s full-quality video-only chunks,
+    // each checkpointed to IndexedDB as it finishes, stitched (stream copy)
+    // with one full-length audio pass at the end. A reload or cancel loses
+    // at most the chunk in flight; the next render resumes from checkpoint.
+    const segCfg = (() => {
+      try { return JSON.parse(localStorage.getItem('syzygy-seg')) || {}; } catch { return {}; }
+    })();
+    const segLen = Number(segCfg.len) > 0 ? Number(segCfg.len) : SEGMENT_LEN;
+    const segMin = Number(segCfg.min) > 0 ? Number(segCfg.min) : SEGMENT_MIN_TOTAL;
 
-    // verify the concat fast path; fall back to a full re-encode on anomaly
-    if (plan.verify && outBlob) {
-      setStatus('verifying…');
-      const check = await probe(ff, plan.output).catch(() => null);
-      const gotDur = Number(check?.format?.duration || 0);
-      const tol = Math.max(0.75, plan.verify.duration * 0.03);
-      if (!(Math.abs(gotDur - plan.verify.duration) <= tol)) {
-        pushLog(`[syzygy] concat verify failed (${gotDur.toFixed(2)}s vs ${plan.verify.duration.toFixed(2)}s expected) — re-encoding instead`);
+    let outBlob;
+    if (plan.strategy === 'reencode' && t.duration >= segMin) {
+      const seg = await runSegmented(ff, { t, video, audio, audioDur, videoDur, opts, segLen, tempFiles });
+      plan = seg.plan;
+      outBlob = seg.outBlob;
+    } else {
+      try {
+        outBlob = await executePlan(ff, plan, tempFiles);
+      } catch (err) {
+        // the concat fast path is verified in executePlan; on anomaly, fall
+        // back to a full re-encode rather than hand over a broken file
+        if (!err?.verifyFailed) throw err;
+        pushLog(`[syzygy] concat verify failed (${err.message}) — re-encoding instead`);
         await cleanupTemp(ff, tempFiles);
         plan = buildPlan({ t, video, audio, audioDur, opts: { ...opts, videoMode: 'reencode' } });
         outBlob = await executePlan(ff, plan, tempFiles);
@@ -1089,11 +1149,17 @@ async function run(mode = 'full') {
   } catch (err) {
     // A wasm RuntimeError means the engine instance is corrupted — throw it
     // away so the next render boots a fresh core instead of failing forever.
-    const wasmDead = /RuntimeError|memory access|unreachable|table index/.test(String(err));
+    const oom = /Array buffer allocation failed|allocation failed|Out of memory/i.test(String(err));
+    const wasmDead = oom || /RuntimeError|memory access|unreachable|table index/.test(String(err));
     if (wasmDead) terminateEngine();
     try { saveRunStatus(null); } catch { /* storage blocked */ }
     if (state.cancelled) {
-      setStatus('cancelled', 'err');
+      setStatus('cancelled — any finished segments are kept for resume', 'err');
+    } else if (oom) {
+      console.error('[syzygy]', err);
+      pushLog(String(err.message || err));
+      setStatus('failed: this device ran out of memory for the output size — a render needs roughly 2× the output free. try a desktop browser, trims, or a shorter window (engine reset)', 'err');
+      document.querySelector('.sz-log')?.setAttribute('open', '');
     } else {
       console.error('[syzygy]', err);
       setStatus(`failed: ${err.message?.split('\n')[0] || err}${wasmDead ? ' (engine reset — try again)' : ''}`, 'err');
@@ -1109,6 +1175,103 @@ async function run(mode = 'full') {
     }
     state.running = false;
     update();
+  }
+}
+
+/**
+ * Checkpointable re-encode: render the window as video-only segments (the
+ * final pixels, full quality), persisting each to IndexedDB keyed by a hash
+ * of the files + video-affecting settings. On entry, any segments already
+ * checkpointed under the same key are reused. Segments are staged for the
+ * final stitch via WORKERFS (no MEMFS copies), and the stitch runs the same
+ * audio decisions as a one-shot plan.
+ */
+async function runSegmented(ff, { t, video, audio, audioDur, videoDur, opts, segLen, tempFiles }) {
+  const wins = segmentWindows(t, segLen);
+  const n = wins.length;
+  const key = jobKeyOf({
+    v: fileKeyOf(state.video.file),
+    a: fileKeyOf(state.audio.file),
+    start: fmtSec(t.start), end: fmtSec(t.end),
+    crf: opts.crf ?? 17, preset: opts.preset || 'veryfast',
+    pads: ['lead', 'tail'].map((side) => {
+      const p = state.pad[side];
+      return { mode: p.mode, time: p.time, img: p.file ? fileKeyOf(p.file) : null };
+    }),
+    segLen, n,
+  });
+
+  let job = null;
+  try { job = await loadJob(); } catch { /* no checkpoints */ }
+  if (!job || job.key !== key || job.total !== n) {
+    if (job) await clearJob(job).catch(() => {});
+    job = { key, total: n, createdAt: Date.now() };
+    try { await saveJob(job); } catch { /* render on without checkpoints */ }
+  }
+
+  pushLog(`[syzygy] segmented render: ${n} × ~${fmtSec(t.duration / n)}s chunks (cancel/reload keeps finished chunks)`);
+  const segBlobs = [];
+  let resumed = 0;
+  for (let i = 0; i < n; i++) {
+    if (state.cancelled) throw new Error('cancelled');
+    const saved = await loadSegment(key, i).catch(() => null);
+    if (saved) {
+      segBlobs.push(saved);
+      resumed++;
+      continue;
+    }
+    setStatus(`segment ${i + 1}/${n}…`);
+    const tSeg = computeTimeline({
+      videoDur, audioDur, offset: effectiveOffset(),
+      startOverride: wins[i][0], endOverride: wins[i][1],
+    });
+    const segPlan = buildPlan({
+      t: tSeg, video, audio, audioDur,
+      opts: { ...opts, videoMode: 'reencode', videoOnly: true },
+    });
+    const blob = await executePlan(ff, segPlan, tempFiles);
+    segBlobs.push(blob);
+    try { await saveSegment(key, i, blob); } catch {
+      pushLog(`[syzygy] could not checkpoint segment ${i + 1} (storage full?) — rendering on`);
+    }
+    await cleanupTemp(ff, tempFiles); // keep MEMFS lean: one segment at a time
+    // deterministic test hook: die right after checkpointing segment N, so
+    // the resume path is verifiable without racing real encode timings
+    const dieAfter = (() => {
+      try { return Number(localStorage.getItem('syzygy-abort-after-seg')); } catch { return NaN; }
+    })();
+    if (dieAfter === i) throw new Error(`[test] aborted after checkpointing segment ${i + 1}`);
+  }
+  if (resumed > 0) pushLog(`[syzygy] resumed ${resumed}/${n} segments from checkpoint`);
+
+  // stage segments via WORKERFS (lazy blob reads, no MEMFS copies) + stitch
+  setStatus('stitching segments…');
+  const segFiles = segBlobs.map((b, i) => new File([b], `seg-${i}.mp4`, { type: 'video/mp4' }));
+  let listPrefix = '/segs/';
+  try {
+    await ff.createDir('/segs');
+    await ff.mount('WORKERFS', { files: segFiles }, '/segs');
+  } catch {
+    listPrefix = ''; // MEMFS fallback
+    for (const f of segFiles) {
+      await ff.writeFile(f.name, new Uint8Array(await f.arrayBuffer()));
+      tempFiles.add(f.name);
+    }
+  }
+  const list = segFiles.map((f) => `file '${listPrefix}${f.name}'`).join('\n') + '\n';
+  await ff.writeFile('segcat.txt', list);
+  tempFiles.add('segcat.txt');
+
+  const plan = buildAssemblePlan({ t, video, audio, audioDur, opts, listPath: 'segcat.txt' });
+  plan.notes.forEach((x) => pushLog(`[syzygy] ${x}`));
+  try {
+    // executePlan verifies the stitched duration (plan.verify) before
+    // handing back the blob; checkpoints are only dropped on success
+    const outBlob = await executePlan(ff, plan, tempFiles);
+    await clearJob({ key, total: n }).catch(() => {});
+    return { plan, outBlob };
+  } finally {
+    if (listPrefix) { try { await ff.unmount('/segs'); await ff.deleteDir('/segs'); } catch { /* gone */ } }
   }
 }
 
@@ -1147,8 +1310,21 @@ async function executePlan(ff, plan, tempFiles) {
     const out = step.args[step.args.length - 1];
     if (out && !out.startsWith('-')) tempFiles.add(out);
   }
+  // verify while the output still exists (the read below deletes it)
+  if (plan.verify) {
+    const check = await probe(ff, plan.output).catch(() => null);
+    const gotDur = Number(check?.format?.duration || 0);
+    const tol = Math.max(0.75, plan.verify.duration * 0.03);
+    if (!(Math.abs(gotDur - plan.verify.duration) <= tol)) {
+      const err = new Error(`output duration ${gotDur.toFixed(2)}s ≠ expected ${plan.verify.duration.toFixed(2)}s`);
+      err.verifyFailed = true;
+      throw err;
+    }
+  }
   const data = await ff.readFile(plan.output);
-  tempFiles.add(plan.output);
+  // free the wasm-side copy BEFORE the Blob copy — halves the peak footprint
+  tempFiles.delete(plan.output);
+  await ff.deleteFile(plan.output).catch(() => {});
   return new Blob([data], { type: plan.container.ext === 'webm' ? 'video/webm' : 'video/mp4' });
 }
 

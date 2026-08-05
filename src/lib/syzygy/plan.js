@@ -328,41 +328,12 @@ function audioGraphLines({ t, gaps, vIdx, rIdx, vidOffset = 0, rate, layout }) {
  */
 
 /**
- * Build the full step list for a run.
- *
- * @param {object} o
- * @param {ReturnType<typeof computeTimeline>} o.t
- * @param {VideoInfo} o.video
- * @param {AudioInfo} o.audio
- * @param {number} o.audioDur
- * @param {object} o.opts
- * @param {'auto'|'reencode'} [o.opts.videoMode]
- * @param {boolean} [o.opts.startIsKeyframe]
- * @param {'auto'|'transcode'|'copy'} [o.opts.audioMode]
- * @param {number} [o.opts.audioBitrateK]
- * @param {boolean} [o.opts.keepVideoAudio]  fill video-only spans with the video's own audio
- * @param {boolean} [o.opts.videoHasAudio]   probe says the video has an audio track
- * @param {number} [o.opts.crf]
- * @param {string} [o.opts.preset]
- * @param {?string} [o.opts.padLeadImage]  staged path of a user pad image
- * @param {?string} [o.opts.padTailImage]
- * @param {?number} [o.opts.padLeadTime]   pick the lead pad frame from this video time
- * @param {?number} [o.opts.padTailTime]
- * @param {number} [o.opts.previewHeight]  draft mode: downscale the re-encode to this height
- * @returns {Plan}
+ * The audio decisions every strategy shares: replacement codec/filters,
+ * copy legality, silence handling, and the keep-original-audio fill.
+ * Mutates `notes`. Extracted so the segmented-render assemble pass makes
+ * exactly the same choices as a one-shot plan.
  */
-export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
-  const strategy = chooseStrategy(t, video, opts);
-  const container = chooseContainer(strategy, video);
-  const output = `out.${container.ext}`;
-  const notes = [];
-  const steps = [];
-
-  // Pads shorter than half a frame are noise — drop them.
-  const frameDur = 1 / fpsNumber(video.fps);
-  const padLead = t.padLead >= frameDur / 2 ? t.padLead : 0;
-  const padTail = t.padTail >= frameDur / 2 ? t.padTail : 0;
-
+export function planOutputAudio({ t, audio, audioDur, container, opts = {}, notes = [] }) {
   let aud = planAudio({
     t, audio, audioDur,
     family: container.audioFamily,
@@ -410,8 +381,74 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
   const audioFilters = silent || fill ? [] : aud.filters;
   if (silent && !fill) notes.push('no audio overlaps the output window — silent track');
   if (silent && fill) notes.push('replacement audio misses the window — output carries the video’s original audio');
+  return { aud, gaps, fill, silent, audioInput, audioCodecArgs, audioFilters, fillRate, fillLayout };
+}
 
-  const muxArgs = container.ext === 'mp4' ? ['-movflags', '+faststart'] : [];
+/** Segmented (checkpointable) re-encode geometry. */
+export const SEGMENT_LEN = 60;        // s per chunk
+export const SEGMENT_MIN_TOTAL = 150; // don't bother segmenting below this
+
+/**
+ * Split the output window into near-equal chunks (absolute timeline coords).
+ * Equal division avoids a sliver of a final segment.
+ * @returns {Array<[number, number]>}
+ */
+export function segmentWindows(t, segLen = SEGMENT_LEN) {
+  const n = Math.max(1, Math.ceil(t.duration / segLen));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = t.start + (t.duration * i) / n;
+    const b = i === n - 1 ? t.end : t.start + (t.duration * (i + 1)) / n;
+    out.push([a, b]);
+  }
+  return out;
+}
+
+/**
+ * Build the full step list for a run.
+ *
+ * @param {object} o
+ * @param {ReturnType<typeof computeTimeline>} o.t
+ * @param {VideoInfo} o.video
+ * @param {AudioInfo} o.audio
+ * @param {number} o.audioDur
+ * @param {object} o.opts
+ * @param {'auto'|'reencode'} [o.opts.videoMode]
+ * @param {boolean} [o.opts.startIsKeyframe]
+ * @param {'auto'|'transcode'|'copy'} [o.opts.audioMode]
+ * @param {number} [o.opts.audioBitrateK]
+ * @param {boolean} [o.opts.keepVideoAudio]  fill video-only spans with the video's own audio
+ * @param {boolean} [o.opts.videoHasAudio]   probe says the video has an audio track
+ * @param {number} [o.opts.crf]
+ * @param {string} [o.opts.preset]
+ * @param {?string} [o.opts.padLeadImage]  staged path of a user pad image
+ * @param {?string} [o.opts.padTailImage]
+ * @param {?number} [o.opts.padLeadTime]   pick the lead pad frame from this video time
+ * @param {?number} [o.opts.padTailTime]
+ * @param {number} [o.opts.previewHeight]  draft mode: downscale the re-encode to this height
+ * @returns {Plan}
+ */
+export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
+  const strategy = chooseStrategy(t, video, opts);
+  const container = chooseContainer(strategy, video);
+  const output = `out.${container.ext}`;
+  const notes = [];
+  const steps = [];
+
+  // Pads shorter than half a frame are noise — drop them.
+  const frameDur = 1 / fpsNumber(video.fps);
+  const padLead = t.padLead >= frameDur / 2 ? t.padLead : 0;
+  const padTail = t.padTail >= frameDur / 2 ? t.padTail : 0;
+
+  const {
+    aud, gaps, fill, silent, audioInput, audioCodecArgs, audioFilters, fillRate, fillLayout,
+  } = planOutputAudio({ t, audio, audioDur, container, opts, notes });
+
+  // +faststart rewrites the finished file (a second full copy in the wasm
+  // FS during finalize) — worth it for web-streamable small outputs, an OOM
+  // risk for big ones on memory-tight devices, so the app can veto it.
+  const muxArgs = container.ext === 'mp4' && !opts.noFaststart ? ['-movflags', '+faststart'] : [];
+  if (container.ext === 'mp4' && opts.noFaststart) notes.push('faststart skipped for a large output (halves peak memory)');
   const meta = metadataArgs(video, t);
 
   // ── still frames for pads ────────────────────────────────────────────
@@ -566,8 +603,14 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
     inputs.push('-loop', '1', '-framerate', video.fps, '-t', fmtSec(padLead), '-i', leadImg.path);
     segLabels.push({ idx: idx++, kind: 'pad' });
   }
+  // Far-in trims seek the input (fast keyframe seek + accurate decode-and-
+  // discard to the exact target) instead of decoding from zero and letting
+  // the trim filter drop it all — essential for segmented renders, where a
+  // decode-from-zero per segment would be quadratic in the video length.
+  const seekV = t.videoIn > 5 ? t.videoIn : 0;
   let vidIdx = -1;
   if (t.videoUsed > EPS) {
+    if (seekV) inputs.push('-ss', fmtSec(seekV));
     inputs.push('-i', video.path);
     vidIdx = idx;
     segLabels.push({ idx: idx++, kind: 'video' });
@@ -588,7 +631,7 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
       chains.push(`[${seg.idx}:v]${padConform(dispVideo, 'yuv420p', video.fps)}${ref}`);
     } else {
       chains.push(
-        `[${seg.idx}:v]trim=start=${fmtSec(t.videoIn)}:end=${fmtSec(t.videoOut)},`
+        `[${seg.idx}:v]trim=start=${fmtSec(t.videoIn - seekV)}:end=${fmtSec(t.videoOut - seekV)},`
         + `setpts=PTS-STARTPTS,${rotFilter}fps=${video.fps},setsar=${sarValue(video.sar)},format=yuv420p${ref}`,
       );
     }
@@ -600,9 +643,11 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
   chains.push(`${segRefs.join('')}concat=n=${segRefs.length}:v=1:a=0${pvh ? '[voutc]' : '[vout]'}`);
   if (pvh) chains.push(`[voutc]scale=-2:${pvh}[vout]`);
   let audioMap;
-  if (fill) {
+  if (opts.videoOnly) {
+    audioMap = null; // -an segment for a checkpointable render
+  } else if (fill) {
     chains.push(...audioGraphLines({
-      t, gaps, vIdx: vidIdx, rIdx: silent ? -1 : aIdx, vidOffset: 0,
+      t, gaps, vIdx: vidIdx, rIdx: silent ? -1 : aIdx, vidOffset: seekV,
       rate: fillRate, layout: fillLayout,
     }));
     audioMap = '[aout]';
@@ -614,15 +659,15 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
   }
 
   steps.push({
-    kind: 'exec', label: 'render (full re-encode)',
+    kind: 'exec', label: opts.videoOnly ? 'render segment' : 'render (full re-encode)',
     args: [
-      ...inputs, ...audioInput,
+      ...inputs, ...(opts.videoOnly ? [] : audioInput),
       '-filter_complex', chains.join(';'),
-      '-map', '[vout]', '-map', audioMap,
+      '-map', '[vout]', ...(audioMap ? ['-map', audioMap] : ['-an']),
       '-c:v', 'libx264', '-preset', opts.preset || 'veryfast', '-crf', String(opts.crf ?? 17),
       '-pix_fmt', 'yuv420p',
       ...colorArgs(video),
-      ...audioCodecArgs,
+      ...(audioMap ? audioCodecArgs : []),
       '-t', fmtSec(t.duration),
       ...muxArgs, ...meta, '-y', output,
     ],
@@ -630,4 +675,54 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
   });
   notes.push(`full re-encode (x264 crf ${opts.crf ?? 17} ${opts.preset || 'veryfast'}) — slow in-browser but visually faithful`);
   return { strategy, container, output, steps, audioCopied: aud.copied, notes };
+}
+
+/**
+ * Final pass of a segmented render: the checkpointed video segments arrive
+ * as a concat list (stream-copied — they already carry the final pixels)
+ * while the audio is done in ONE full-length pass here. Per-segment audio
+ * would glitch at every seam (AAC priming samples); a single pass is cheap
+ * and gapless. Audio decisions are planOutputAudio, identical to a one-shot
+ * plan — including the keep-original-audio fill (the source video rides
+ * along as an audio-only input) and copy when it's legal.
+ *
+ * @param {object} o  same shape as buildPlan, plus o.listPath
+ * @returns {Plan}
+ */
+export function buildAssemblePlan({ t, video, audio, audioDur, opts = {}, listPath = 'segcat.txt' }) {
+  const container = { ext: 'mp4', audioFamily: 'aac' }; // segments are x264
+  const output = `out.${container.ext}`;
+  const notes = [];
+  const {
+    aud, gaps, fill, silent, audioInput, audioCodecArgs, audioFilters, fillRate, fillLayout,
+  } = planOutputAudio({ t, audio, audioDur, container, opts, notes });
+
+  const fillInputs = fill ? ['-i', video.path] : [];
+  const audioArgs = fill
+    ? ['-filter_complex', audioGraphLines({
+        t, gaps, vIdx: silent ? 1 : 2, rIdx: silent ? -1 : 1, vidOffset: 0,
+        rate: fillRate, layout: fillLayout,
+      }).join(';'), '-map', '0:v:0', '-map', '[aout]']
+    : ['-map', '0:v:0', '-map', '1:a:0',
+      ...(audioFilters.length ? ['-af', audioFilters.join(',')] : [])];
+  const steps = [{
+    kind: 'exec', label: 'stitch segments + mux audio',
+    args: [
+      '-f', 'concat', '-safe', '0', '-i', listPath,
+      ...audioInput,
+      ...fillInputs,
+      ...audioArgs,
+      '-c:v', 'copy',
+      ...audioCodecArgs,
+      '-t', fmtSec(t.duration),
+      ...(opts.noFaststart ? [] : ['-movflags', '+faststart']),
+      ...(video.epochMs ? ['-metadata', `creation_time=${new Date(video.epochMs + Math.round(t.start * 1000)).toISOString()}`] : []),
+      '-y', output,
+    ],
+    long: true,
+  }];
+  return {
+    strategy: 'reencode', container, output, steps, audioCopied: aud.copied, notes,
+    verify: { path: output, duration: t.duration },
+  };
 }

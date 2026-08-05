@@ -85,6 +85,9 @@ export function terminateEngine() {
 export async function stageInput(ff, file, tag) {
   const dir = `/${tag}`;
   try {
+    // a failed earlier run may have left the dir mounted — clear it first
+    try { await ff.unmount(dir); } catch { /* wasn't mounted */ }
+    try { await ff.deleteDir(dir); } catch { /* didn't exist */ }
     await ff.createDir(dir);
     await ff.mount('WORKERFS', { files: [file] }, dir);
     return {
@@ -94,6 +97,11 @@ export async function stageInput(ff, file, tag) {
       },
     };
   } catch {
+    // MEMFS fallback copies the whole file into memory — refuse for files
+    // that would OOM the tab (phones especially) rather than crash opaquely.
+    if (file.size > 300 * 1024 * 1024) {
+      throw new Error(`couldn't map ${file.name} for streaming, and at ${Math.round(file.size / 1e6)} MB it's too large to copy into memory on this device`);
+    }
     const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
     const path = `${tag}.${ext}`;
     await ff.writeFile(path, new Uint8Array(await file.arrayBuffer()));

@@ -9,7 +9,8 @@ import {
 import { sniffMediaInfo, sniffWav, sniffMp3 } from '../src/lib/syzygy/meta.js';
 import { parseProbeSections, summarizeVideo, streamRotation } from '../src/lib/syzygy/engine.js';
 import { correlatePcm, MIN_COARSE_Z, MIN_PEAK_RATIO } from '../src/lib/syzygy/correlate.js';
-import { serializeSettings, applySettings, fileKeyOf, pairKey } from '../src/lib/syzygy/persist.js';
+import { serializeSettings, applySettings, fileKeyOf, pairKey, jobKeyOf } from '../src/lib/syzygy/persist.js';
+import { segmentWindows, buildAssemblePlan } from '../src/lib/syzygy/plan.js';
 
 let failures = 0;
 function check(name, cond) {
@@ -140,7 +141,8 @@ const MP3 = { path: 'a.mp3', codec: 'mp3', sampleRate: 44100 };
   const exec = plan.steps.find((s) => s.label.includes('re-encode'));
   const joined = exec.args.join(' ');
   check('reencode uses x264 with requested quality', joined.includes('libx264') && joined.includes('-crf 18') && joined.includes('-preset fast'));
-  check('reencode trims the video segment', joined.includes('trim=start=10:end=60'));
+  check('reencode seeks the input for a far-in trim', joined.includes('-ss 10')
+    && joined.includes('trim=start=0:end=50'));
   check('reencode concats video + tail pad', joined.includes('concat=n=2:v=1:a=0'));
   check('reencode window duration', joined.includes('-t 80'));
 }
@@ -367,6 +369,47 @@ const A = (s) => [...s].map((c) => c.charCodeAt(0));
     const r = correlatePcm(new Float32Array(2000 * 5), new Float32Array(2000 * 5), 2000, { envRate: 50 });
     check('silent tracks yield zero confidence', r.z === 0 || r.z < MIN_COARSE_Z);
   }
+}
+
+// ── segmented (checkpointable) re-encode ────────────────────────────────
+{
+  const t = computeTimeline({ videoDur: 400, audioDur: 400, offset: 0 });
+  const wins = segmentWindows(t, 60);
+  check('segments cover the window seamlessly', wins.length === 7
+    && near(wins[0][0], t.start) && near(wins[wins.length - 1][1], t.end)
+    && wins.every((w, i) => i === 0 || near(w[0], wins[i - 1][1])));
+  const lens = wins.map(([a, b]) => b - a);
+  check('segments are near-equal (no sliver tail)',
+    Math.max(...lens) - Math.min(...lens) < 0.001);
+  check('short windows make one segment', segmentWindows(computeTimeline({ videoDur: 50, audioDur: 50, offset: 0 }), 60).length === 1);
+
+  // a mid-timeline segment: video-only, seeked input, no audio anywhere
+  const tSeg = computeTimeline({ videoDur: 400, audioDur: 400, offset: 0, startOverride: wins[3][0], endOverride: wins[3][1] });
+  const segPlan = buildPlan({ t: tSeg, video: H264, audio: MP3, audioDur: 400,
+    opts: { videoMode: 'reencode', videoOnly: true, crf: 17 } });
+  const segJoined = segPlan.steps[segPlan.steps.length - 1].args.join(' ');
+  check('segment renders video-only', segJoined.includes('-an') && !segJoined.includes('a.mp3')
+    && !segJoined.includes('aac'));
+  check('segment seeks instead of decoding from zero', segJoined.includes(`-ss ${fmtSec(wins[3][0])}`));
+
+  // the stitch pass: concat copy + one full-length audio pass
+  const asm = buildAssemblePlan({ t, video: H264, audio: MP3, audioDur: 400, opts: {} });
+  const aj = asm.steps[0].args.join(' ');
+  check('assemble stream-copies the stitched video', aj.includes('-f concat') && aj.includes('-c:v copy'));
+  check('assemble encodes audio once, full length', aj.includes('-c:a aac') && aj.includes('-t 400'));
+  check('assemble carries a verify target', asm.verify && near(asm.verify.duration, 400));
+  const asmFill = buildAssemblePlan({
+    t: computeTimeline({ videoDur: 400, audioDur: 200, offset: 100 }),
+    video: H264, audio: { ...MP3, channels: 2 }, audioDur: 200,
+    opts: { keepVideoAudio: true, videoHasAudio: true },
+  });
+  check('assemble honors keep-original-audio', asmFill.steps[0].args.join(' ').includes('[2:a:0]atrim='));
+}
+{
+  const base = { v: { name: 'a', size: 1, lastModified: 2 }, start: '0', end: '400', crf: 17, preset: 'veryfast', segLen: 60, n: 7 };
+  check('job key is stable', jobKeyOf(base) === jobKeyOf(JSON.parse(JSON.stringify(base))));
+  check('job key tracks settings', jobKeyOf(base) !== jobKeyOf({ ...base, crf: 18 })
+    && jobKeyOf(base) !== jobKeyOf({ ...base, end: '399' }));
 }
 
 // ── session persistence (pure serialize/apply parts) ────────────────────

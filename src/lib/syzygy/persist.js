@@ -194,15 +194,84 @@ export async function clearResult() {
   await Promise.all([kvDel('result:meta'), kvDel('result:blob')]).catch(() => {});
 }
 
-/** Forget everything — settings, files, results, status. */
+// ── probe cache (skip re-probing / keyframe-scanning known files) ───────
+
+const LS_PROBES = 'syzygy-probes-v1';
+const PROBE_CACHE_MAX = 8;
+
+const probeKeyStr = (k) => `${k.name}|${k.size}|${k.lastModified}`;
+
+/** Cached stream summaries / keyframe scans for a file identity, or null. */
+export function cachedProbe(fileKey) {
+  const map = lsGet(LS_PROBES);
+  return map?.[probeKeyStr(fileKey)] || null;
+}
+
+/**
+ * Merge probe data for a file into the cache (LRU-capped). `data` may hold
+ * `video`/`audio` stream summaries (path stripped by the caller) and/or a
+ * `kf` map of trim-target → nearest-keyframe results.
+ */
+export function saveProbe(fileKey, data) {
+  const map = lsGet(LS_PROBES) || {};
+  const key = probeKeyStr(fileKey);
+  const prev = map[key] || {};
+  delete map[key]; // re-insert at the end = most recently used
+  map[key] = { ...prev, ...data, kf: { ...(prev.kf || {}), ...(data.kf || {}) } };
+  const keys = Object.keys(map);
+  while (keys.length > PROBE_CACHE_MAX) delete map[keys.shift()];
+  lsSet(LS_PROBES, map);
+}
+
+// ── segmented-render checkpoints ────────────────────────────────────────
+
+/**
+ * Stable identity for a segmented render job: same files + same video-
+ * affecting parameters → same key → finished segments are reusable.
+ * Audio-only options (audioMode, keepVideoAudio) are deliberately excluded —
+ * they only shape the final stitch pass. Pure djb2-style hash, node-tested.
+ */
+export function jobKeyOf(parts) {
+  const s = JSON.stringify(parts);
+  let h1 = 5381, h2 = 52711;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = (h1 * 33) ^ c;
+    h2 = (h2 * 31) ^ c;
+  }
+  return (h1 >>> 0).toString(36) + '-' + (h2 >>> 0).toString(36);
+}
+
+export async function saveJob(meta) { await kvPut('job:meta', meta); }
+export async function loadJob() { return kvGet('job:meta').catch(() => null); }
+
+export async function saveSegment(jobKey, index, blob) {
+  await kvPut(`seg:${jobKey}:${index}`, blob);
+}
+export async function loadSegment(jobKey, index) {
+  return kvGet(`seg:${jobKey}:${index}`).catch(() => null);
+}
+
+/** Drop a job and every segment it may have written. */
+export async function clearJob(meta) {
+  const m = meta || await loadJob();
+  if (m?.key && m?.total) {
+    await Promise.all(Array.from({ length: m.total }, (_, i) => kvDel(`seg:${m.key}:${i}`))).catch(() => {});
+  }
+  await kvDel('job:meta').catch(() => {});
+}
+
+/** Forget everything — settings, files, results, checkpoints, caches. */
 export async function clearAll() {
   try {
     localStorage.removeItem(LS_SETTINGS);
     localStorage.removeItem(LS_SOUND);
     localStorage.removeItem(LS_STATUS);
+    localStorage.removeItem(LS_PROBES);
   } catch { /* blocked */ }
   await Promise.all([
     ...['video', 'audio', 'padLead', 'padTail'].map((s) => clearFile(s)),
     clearResult(),
+    clearJob(),
   ]).catch(() => {});
 }
