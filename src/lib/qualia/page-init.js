@@ -395,6 +395,14 @@ export function initQualiaPage() {
   // the same gated visual cadence; it no-ops (zero cost) while disabled.
   const logoMark = createLogoMark({
     getStageRect: () => getStageRect(),
+    // Detector-mode frame source: the live scene stack, bottom-up, matching
+    // the DOM compositing (fx + glitch post screen-blend over Hydra) — the
+    // mark scans whatever the visuals are showing, not the camera.
+    getSceneLayers: () => [
+      document.getElementById('hydra-canvas'),
+      core.getCanvas(),
+      overlay.isPostActive?.() ? overlay.postCanvas : null,
+    ],
     onConfigChange: () => { settings.save(); logoCardSyncFns.forEach(fn => fn()); },
   });
   core.onFrame((field) => logoMark.frame(field));
@@ -2594,8 +2602,28 @@ export function initQualiaPage() {
       settings.save();
     });
   }
+  function wireLogoToggle(id, key) {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    const paint = () => {
+      const on = logoMark.getConfig()[key] === true;
+      btn.classList.toggle('active', on);
+      btn.textContent = on ? 'on' : 'off';
+    };
+    paint();
+    logoCardSyncFns.push(paint);
+    btn.addEventListener('click', () => {
+      logoMark.setConfig({ [key]: logoMark.getConfig()[key] !== true });
+      paint();
+      settings.save();
+    });
+  }
   wireLogoSelect('logo-position', 'position');
   wireLogoSelect('logo-palette',  'palette');
+  wireLogoToggle('logo-drift',    'drift');
+  wireLogoToggle('logo-detector', 'detector');
+  wireLogoSlider('logo-drift-speed', 'driftSpeed', (v) => v.toFixed(3));
+  wireLogoSlider('logo-scan-radius', 'scanRadius');
   wireLogoSlider('logo-size',        'size',       (v) => `${Math.round(v)}px`);
   wireLogoSlider('logo-center-size', 'centerSize', (v) => `${Math.round(v)}px`);
   wireLogoSlider('logo-opacity',     'opacity');
@@ -3109,6 +3137,13 @@ export function initQualiaPage() {
       if (walked) beginWalk();
       drawLayerFitted(overlay.canvas, layout.fxRect);
       if (walked) endWalk();
+    }
+    // Detector-HUD overlay (the logo-mark scanner) — screen-pinned above
+    // the pose overlay, under the mark itself, matching the live z-order.
+    // Transparent canvas → plain source-over draw.
+    {
+      const hud = logoMark.getHudCanvas?.();
+      if (hud && hud.width > 0) drawLayerFitted(hud, layout.fxRect);
     }
     // Logo mark — topmost scene layer, mirrored with the same 'screen'
     // composite its CSS blend uses so recordings match the live view. Its

@@ -1,11 +1,14 @@
 // Shared object-detection pipeline — real MediaPipe ObjectDetector
-// (EfficientDet-Lite0) running in a worker (detector-worker.js), pumped from
-// the SAME camera <video> element the pose pipeline owns (via getVideoEl —
-// this module never opens the camera itself). Consumers acquire/release a
-// refcount; while held, `getDetections()` returns the latest normalized
-// detections:
+// (EfficientDet-Lite0) running in a worker (detector-worker.js). By default
+// frames are pumped from the SAME camera <video> element the pose pipeline
+// owns (via getVideoEl — this module never opens the camera itself), but a
+// consumer can pass its own frame-source provider to acquireDetector() —
+// e.g. the logo-mark scanner feeds a small composite of the live scene
+// canvases so the detector "sees" whatever the visuals are showing rather
+// than the camera. Consumers acquire/release a refcount; while held,
+// `getDetections()` returns the latest normalized detections:
 //
-//   [{ cx, cy, hw, hh, label, score }]   // all coords in [0,1] camera frame
+//   [{ cx, cy, hw, hh, label, score }]   // all coords in [0,1] source frame
 //
 // Design notes:
 //   • Best-effort, like pose: if the CDN/model is unreachable (offline gig)
@@ -31,6 +34,12 @@ let workerSentAt = 0;
 
 let refs = 0;
 let timer = null;
+
+// Custom frame-source providers, in acquire order — the most recent one
+// wins; with none registered the pump falls back to the camera element.
+// A provider is a fn returning a drawable (canvas/video/bitmap) or null
+// when it has no frame ready.
+let sources = [];
 
 let detections = [];
 let lastResultMs = 0;
@@ -86,26 +95,39 @@ function tick() {
     if (now - workerSentAt > 3000) workerBusy = false;   // watchdog
     else return;
   }
-  const video = getVideoEl();
-  if (!video || video.readyState < 2 || video.paused || video.ended) return;
+  let src = null;
+  if (sources.length) {
+    try { src = sources[sources.length - 1](); } catch { src = null; }
+  } else {
+    const video = getVideoEl();
+    if (video && video.readyState >= 2 && !video.paused && !video.ended) src = video;
+  }
+  if (!src) return;
   workerBusy = true;
   workerSentAt = now;
-  createImageBitmap(video).then((bitmap) => {
+  createImageBitmap(src).then((bitmap) => {
     if (!worker || !refs) { try { bitmap.close?.(); } catch {} workerBusy = false; return; }
     worker.postMessage({ type: 'detect', bitmap, t: now }, [bitmap]);
   }).catch(() => { workerBusy = false; });
 }
 
-/** Start (or join) the detection pipeline. Pair with releaseDetector(). */
-export function acquireDetector() {
+/** Start (or join) the detection pipeline. Pair with releaseDetector(),
+ *  passing the SAME getSource fn (if any) to both. With no getSource the
+ *  pump reads the shared camera element. */
+export function acquireDetector(getSource) {
   refs++;
+  if (typeof getSource === 'function') sources.push(getSource);
   ensureWorker();
   if (!timer) timer = setInterval(tick, DETECT_INTERVAL_MS);
 }
 
 /** Release one hold. The pump stops at zero holds; the worker stays warm. */
-export function releaseDetector() {
+export function releaseDetector(getSource) {
   refs = Math.max(0, refs - 1);
+  if (typeof getSource === 'function') {
+    const i = sources.lastIndexOf(getSource);
+    if (i >= 0) sources.splice(i, 1);
+  }
   if (refs === 0) {
     if (timer) { clearInterval(timer); timer = null; }
     detections = [];

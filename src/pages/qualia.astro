@@ -3600,6 +3600,24 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>hide on logo fx</label>
         <button class="qp-toggle active" id="logo-hide-on-quale">on</button>
       </div>
+      <div class="qp-section-tag">motion</div>
+      <div class="qp-row" data-qp="logo-drift" title="DVD-screensaver wander — the mark slowly bounces around the stage edges. Drag it to re-seed the wander point; turning drift off returns it to its anchor">
+        <label>dvd drift</label>
+        <button class="qp-toggle active" id="logo-drift">on</button>
+      </div>
+      <div class="qp-row" data-qp="logo-drift-speed" title="Wander speed in stage-widths per second — 0.02 crosses the stage in ~50s. Keep it slow; it should read as ambient, not busy">
+        <label>drift speed<span class="qp-val"></span></label>
+        <input type="range" min="0.005" max="0.08" step="0.005" value="0.02">
+      </div>
+      <div class="qp-section-tag">detector</div>
+      <div class="qp-row" data-qp="logo-detector" title="Intelligence-scanner HUD — a REAL object detector (EfficientDet, in a worker) scans the visuals behind the mark. Detected objects inside the scan circle get light beams from the mark, lock-on brackets and labels. First enable downloads the model (~4 MB); offline it idles as a radar ring">
+        <label>detector</label>
+        <button class="qp-toggle" id="logo-detector">off</button>
+      </div>
+      <div class="qp-row" data-qp="logo-scan-radius" title="Scan-circle diameter as a fraction of the stage's short side — only objects inside the circle are targeted. The circle travels with the drift">
+        <label>scan radius<span class="qp-val"></span></label>
+        <input type="range" min="0.2" max="1.2" step="0.02" value="0.7">
+      </div>
       <div class="qp-section-tag">branding</div>
       <div class="qp-row" data-qp="logo-caption" title="Secondary billing/title line tucked under the mark — e.g. 'with alison swafford'. Type \n or | to break lines (up to 3). Baked with its own glow; breathes with the music. Blank = none">
         <label>caption</label>
