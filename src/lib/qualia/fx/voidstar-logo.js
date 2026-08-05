@@ -17,13 +17,27 @@
 //     independently. Sizes (electron core, halo, trail) use the static
 //     param uVoidRadius so they don't visibly scale with the breath.
 //
-// Pose drives camera parallax only; the object never moves in scene-space.
+// Pose drives camera parallax only. The object itself can wander via the
+// optional "dvd drift" mode — a slow constant-velocity bounce off the
+// screen edges (the classic DVD-screensaver walk) against a screen-anchored
+// starfield. Off by default in maths only: drift eases back to centre when
+// toggled, so it never snaps.
+//
+// Detector mode (optional, camera required): a REAL object detector
+// (MediaPipe EfficientDet in a worker — see ../object-detector.js) feeds a
+// scanner HUD drawn in-shader: a bounding scan circle around the void,
+// light beams from the aperture rim to each detected object, corner
+// brackets that tighten as lock-on completes, and baked-text labels.
+// Detection is region-gated — only objects inside the scan circle (in
+// screen space, travelling with the drift) are targeted.
 
 import {
   compileProgram, makeFullscreenTri, FULLSCREEN_VERT,
   makeUniformGetter, uploadAudioUniforms, bakeTextTex,
 } from '../webgl.js';
 import { scaleAudio } from '../field.js';
+import { lmToCanvas } from '../video.js';
+import { acquireDetector, releaseDetector, getDetections } from '../object-detector.js';
 
 const NUM_RINGS = 3;
 
@@ -44,6 +58,13 @@ uniform vec2  uPoseShift;
 uniform float uParallax;
 uniform int   uPalette;
 uniform float uShowLogo;          // 0 = hide void* glyph, 1 = show
+uniform vec2  uCenter;            // dvd-drift offset of the whole object (p-space)
+
+// ── Detector HUD ──
+uniform float uScanRadius;        // scan-zone radius (p-space); 0 = HUD off
+uniform vec4  uDetRect[8];        // xy = target centre (p-space), zw = half extents
+uniform vec4  uDetInfo[8];        // x = alpha (fade in/out), y = lock 0→1, z = seed
+uniform sampler2D uLabelTex;      // baked label text, 8 rows (one per det slot)
 
 // "void" baked left of centre + an empty cell where * was.
 uniform sampler2D uLogoTex;
@@ -205,10 +226,15 @@ void main() {
   p.x *= aspect;
   p -= uPoseShift * uParallax * 0.10;
 
+  // pBg stays screen-anchored (cosmic backdrop + vignette); p becomes
+  // object-local so the dvd drift moves the void against a static sky.
+  vec2 pBg = p;
+  p -= uCenter;
+
   Pal pal = getPalette(uPalette);
 
   float twinkleAmp = 0.6 + uHighs.y * 1.4 + uBands.z * 0.3;
-  vec3  col = cosmic(p, pal.dust, twinkleAmp);
+  vec3  col = cosmic(pBg, pal.dust, twinkleAmp);
 
   float r     = length(p);
   float angle = atan(p.y, p.x);
@@ -461,8 +487,77 @@ void main() {
 
   col += colFront;
 
+  // ── Detector HUD — futuristic intelligence-scanner overlay ────────────
+  // All geometry lives in the same object-local p-space as the void, so
+  // the whole HUD travels with the dvd drift. Amplitudes stay low: this is
+  // an ambient instrument — the HUD should read as calm telemetry.
+  if (uScanRadius > 0.001) {
+    // Scan-zone perimeter: thin bright circle + wide soft halo + 15° ticks.
+    float ringD = abs(r - uScanRadius);
+    float ring  = exp(-pow(ringD / 0.005, 2.0)) * 0.20
+                + exp(-pow(ringD / 0.035, 2.0)) * 0.045;
+    float tickM = smoothstep(0.965, 0.995, cos(angle * 24.0))
+                * exp(-pow(ringD / 0.016, 2.0));
+    // Slow radar sweep arm with a trailing wake, confined to the zone.
+    float dSweep = mod(angle - uTime * 0.45, 2.0 * PI);
+    float sweep  = exp(-dSweep * 3.0)
+                 * smoothstep(uScanRadius * 1.02, uScanRadius * 0.35, r)
+                 * smoothstep(vR * 1.02, vR * 1.55, r);
+    col += pal.orbit * (ring + tickM * 0.12 + sweep * 0.06) * (0.8 + uBands.z * 0.4);
+
+    for (int i = 0; i < 8; i++) {
+      vec4  rect = uDetRect[i];
+      vec4  info = uDetInfo[i];
+      float aA   = info.x;
+      if (aA < 0.01) continue;
+      vec2  tc   = rect.xy - uCenter;    // target centre, object-local
+      vec2  hb   = rect.zw;
+      float lock = info.y;
+
+      // Scanner beam — from the void's rim to the target's near edge, with
+      // a slow energy flow along it. Steadier + brighter once locked.
+      float lenT  = max(length(tc), 1e-3);
+      vec2  dirT  = tc / lenT;
+      float along = clamp(dot(p, dirT), 0.0, lenT);
+      float dPerp = length(p - dirT * along);
+      float tEnd  = max(lenT - min(hb.x, hb.y) * 0.75, vR);
+      float beamW = 0.0028 + 0.0022 * lock;
+      float beam  = exp(-pow(dPerp / beamW, 2.0))
+                  * smoothstep(vR * 0.92, vR * 1.22, along)
+                  * (1.0 - smoothstep(tEnd - 0.015, tEnd + 0.015, along));
+      float flow  = 0.60 + 0.40 * sin(along * 30.0 - uTime * (3.5 + lock * 2.0) + info.z * 6.28);
+      col += pal.orbit * beam * flow * aA * (0.40 + lock * 0.30 + uBands.y * 0.18);
+
+      // Corner brackets — start wide while acquiring, tighten as lock-on
+      // completes. Only the corners are stroked, HUD-reticle style.
+      vec2  q   = abs(p - tc);
+      vec2  hbb = hb * (1.0 + (1.0 - lock) * 0.30);
+      float bwd = 0.0028;
+      float onX = step(abs(q.x - hbb.x), bwd) * step(q.y, hbb.y + bwd);
+      float onY = step(abs(q.y - hbb.y), bwd) * step(q.x, hbb.x + bwd);
+      vec2  cl  = hbb * 0.40;
+      float corner  = max(step(hbb.x - cl.x, q.x), step(hbb.y - cl.y, q.y));
+      float bracket = max(onX, onY) * corner;
+      col += pal.voidEdge * bracket * aA * (0.35 + lock * 0.45);
+
+      // Lock diamond at the target centre — breathes gently.
+      float dd      = q.x + q.y;
+      float dRad    = (0.011 + 0.003 * sin(uTime * 2.2 + info.z * 6.28)) * (0.4 + lock * 0.6);
+      float diamond = exp(-pow((dd - dRad) / 0.0035, 2.0));
+      col += pal.electron * diamond * aA * (0.35 + lock * 0.45);
+
+      // Label — baked text row i, floated above the rect's top-left.
+      vec2 lp    = (p - tc) - vec2(-hbb.x, hbb.y + 0.014);
+      vec2 lSize = vec2(0.34, 0.046);
+      if (lp.x >= 0.0 && lp.x <= lSize.x && lp.y >= 0.0 && lp.y <= lSize.y) {
+        vec2 luv = vec2(lp.x / lSize.x, (float(i) + (1.0 - lp.y / lSize.y)) / 8.0);
+        col += pal.logo * texture(uLabelTex, luv).r * aA * (0.55 + lock * 0.35);
+      }
+    }
+  }
+
   // ── Vignette + tone ───────────────────────────────────────────────────
-  float v = smoothstep(1.7, 0.4, length(p));
+  float v = smoothstep(1.7, 0.4, length(pBg));
   col *= v;
   col = pow(col, vec3(0.92));
 
@@ -504,6 +599,10 @@ export default {
     { id: 'parallax',        label: 'parallax',         type: 'range', min: 0.00, max: 1.50, step: 0.01, default: 0.76 },
     { id: 'palette',         label: 'palette',          type: 'select', options: ['silver', 'voidblue', 'platinum', 'inferno'], default: 'platinum' },
     { id: 'showLogo',        label: 'show void*',       type: 'toggle', default: true },
+    { id: 'drift',           label: 'dvd drift',        type: 'toggle', default: true },
+    { id: 'driftSpeed',      label: 'drift speed',      type: 'range', min: 0.00, max: 0.15, step: 0.005, default: 0.045 },
+    { id: 'detector',        label: 'detector',         type: 'toggle', default: false },
+    { id: 'scanRadius',      label: 'scan radius',      type: 'range', min: 0.30, max: 1.60, step: 0.02, default: 0.85 },
     { id: 'reactivity',      label: 'reactivity',       type: 'range', min: 0.00, max: 2.00, step: 0.05, default: 1.0 },
   ],
 
@@ -521,7 +620,8 @@ export default {
   },
 
   presets: {
-    default:         { voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16, flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76, palette: 'platinum', showLogo: true, reactivity: 1.0 },
+    default:         { voidRadius: 0.26, energyThickness: 0.34, swirlIntensity: 0.16, flowSpeed: 0.23, orbitAmount: 1.01, logoDepth: 0.00, parallax: 0.76, palette: 'platinum', showLogo: true, drift: true, driftSpeed: 0.045, detector: false, scanRadius: 0.85, reactivity: 1.0 },
+    scanner:         { voidRadius: 0.24, energyThickness: 0.20, swirlIntensity: 0.30, flowSpeed: 0.30, orbitAmount: 0.80, logoDepth: 0.40, parallax: 0.40, palette: 'voidblue', drift: true, driftSpeed: 0.035, detector: true, scanRadius: 0.95 },
     atomic_mystic:   { voidRadius: 0.24, energyThickness: 0.14, swirlIntensity: 1.10, flowSpeed: 1.00, orbitAmount: 1.50, logoDepth: 0.80, parallax: 0.50, palette: 'platinum' },
     platonic:        { voidRadius: 0.28, energyThickness: 0.10, swirlIntensity: 0.55, flowSpeed: 0.45, orbitAmount: 0.65, logoDepth: 0.65, parallax: 0.35, palette: 'silver' },
     ruliad:          { voidRadius: 0.22, energyThickness: 0.18, swirlIntensity: 1.35, flowSpeed: 1.20, orbitAmount: 1.35, logoDepth: 0.90, parallax: 0.60, palette: 'voidblue' },
@@ -541,6 +641,70 @@ export default {
     const starTex = bakeTextTex(gl, '*',     256, 256, 240, true);   // centre the * ink so it spins in place
 
     let W = canvas.width, H = canvas.height;
+
+    // ── Detector-HUD label atlas — 8 rows, one per target slot. Rows are
+    // re-baked (canvas → texSubImage2D) only when a slot's text meaningfully
+    // changes (label swap, or score moved > 0.05), throttled to 4 Hz/slot.
+    const MAX_DET = 8;
+    const LABEL_W = 512, LABEL_ROW_H = 48;
+    const labelTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, labelTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, LABEL_W, LABEL_ROW_H * MAX_DET, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    const rowCanvas = document.createElement('canvas');
+    rowCanvas.width = LABEL_W; rowCanvas.height = LABEL_ROW_H;
+    const rowCtx = rowCanvas.getContext('2d');
+    function bakeLabelRow(i, text) {
+      rowCtx.fillStyle = '#000';
+      rowCtx.fillRect(0, 0, LABEL_W, LABEL_ROW_H);
+      rowCtx.fillStyle = '#fff';
+      rowCtx.font = '600 30px "JetBrains Mono", "Cascadia Code", "Fira Code", "Source Code Pro", "Ubuntu Mono", "Menlo", "Consolas", monospace';
+      rowCtx.textAlign = 'left';
+      rowCtx.textBaseline = 'middle';
+      rowCtx.fillText(text, 6, LABEL_ROW_H / 2 + 2);
+      gl.bindTexture(gl.TEXTURE_2D, labelTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, i * LABEL_ROW_H, gl.RGBA, gl.UNSIGNED_BYTE, rowCanvas);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    }
+
+    // Target slots. Slot index i ↔ label-atlas row i, so slots are never
+    // compacted — inactive slots just upload alpha 0. EMA-smoothed centres/
+    // extents + a linger fade so a missed detection never snaps a target off
+    // (same "never snap" rule as pose).
+    const slots = [];
+    for (let i = 0; i < MAX_DET; i++) {
+      slots.push({
+        active: false, label: '', score: 0,
+        cx: 0, cy: 0, hx: 0.1, hy: 0.1,
+        lock: 0, alpha: 0, seed: Math.random(),
+        lastSeen: -1e9, claimed: -1,
+        bakedLabel: '', bakedScore: -1, lastBakeT: -1e9,
+      });
+    }
+    const detRectArr = new Float32Array(MAX_DET * 4);
+    const detInfoArr = new Float32Array(MAX_DET * 4);
+    let detectorHeld = false;
+
+    // ── DVD-drift state — position + unit heading, integrated in update().
+    let dvdX = 0, dvdY = 0, dvdVX = 0.62, dvdVY = 0.78, dvdInit = false;
+    function bounceJitter() {
+      // Tiny random heading tweak per bounce so the walk never settles into
+      // a repeating loop — but keep it comfortably diagonal (a heading
+      // near-parallel to an edge reads as stuck, not wandering).
+      const j = (Math.random() * 2 - 1) * 0.07;
+      const c = Math.cos(j), s = Math.sin(j);
+      const vx = dvdVX * c - dvdVY * s;
+      dvdVY = dvdVX * s + dvdVY * c;
+      dvdVX = vx;
+      if (Math.abs(dvdVX) < 0.30) dvdVX = (dvdVX < 0 ? -1 : 1) * 0.30;
+      if (Math.abs(dvdVY) < 0.30) dvdVY = (dvdVY < 0 ? -1 : 1) * 0.30;
+      const n = Math.hypot(dvdVX, dvdVY);
+      dvdVX /= n; dvdVY /= n;
+    }
 
     const ringBases = [
       { u0: [1, 0, 0], v0: [0, 1, 0], radiusMult: 1.85, electronSpeed: 1.00 },
@@ -584,7 +748,91 @@ export default {
       palette: PALETTES.indexOf('platinum'),
       showLogo: 1.0,
       starCenterX: 0.0, starHalfPX: 0.0, starHalfPY: 0.0,
+      centerX: 0.0, centerY: 0.0,
+      scanRadius: 0.0,
     };
+
+    // Fold the latest detections into the slot tracker and refresh the
+    // uniform arrays. Runs every frame (cheap — ≤8 targets); the actual
+    // inference arrives asynchronously at ~7 fps from the worker.
+    function updateDetector(dt, time, aspect, scanR) {
+      const dets = (detectorHeld && scanR > 0) ? getDetections() : null;
+      if (dets) {
+        for (let d = 0; d < dets.length; d++) {
+          const det = dets[d];
+          // Camera-frame → screen p-space, honoring the user's rotation +
+          // mirror (same convention as pose landmarks). Extents go through
+          // a corner point so a 90° rotation swaps width/height correctly.
+          const [sx, sy] = lmToCanvas(det.cx, det.cy, 1, 1);
+          const cx = (sx - 0.5) * 2 * aspect;
+          const cy = (0.5 - sy) * 2;
+          // Region gate — only objects inside the scan circle (which
+          // travels with the dvd drift) get targeted.
+          const gx = cx - dvdX, gy = cy - dvdY;
+          if (gx * gx + gy * gy > scanR * scanR) continue;
+          const [ex, ey] = lmToCanvas(det.cx + det.hw, det.cy + det.hh, 1, 1);
+          const hx = Math.min(0.9, Math.max(0.03, Math.abs(ex - sx) * 2 * aspect));
+          const hy = Math.min(0.9, Math.max(0.03, Math.abs(ey - sy) * 2));
+          // Match to the nearest live slot with the same label, else claim
+          // a free one. `claimed === time` blocks two detections from
+          // folding into one slot within a single pass.
+          let best = -1, bestD = 0.45 * 0.45;
+          for (let i = 0; i < MAX_DET; i++) {
+            const s = slots[i];
+            if (!s.active || s.label !== det.label || s.claimed === time) continue;
+            const mx = s.cx - cx, my = s.cy - cy;
+            const md = mx * mx + my * my;
+            if (md < bestD) { bestD = md; best = i; }
+          }
+          if (best < 0) {
+            for (let i = 0; i < MAX_DET; i++) {
+              if (!slots[i].active) { best = i; break; }
+            }
+            if (best < 0) continue;    // all 8 slots busy — drop
+            const s = slots[best];
+            s.active = true;
+            s.cx = cx; s.cy = cy; s.hx = hx; s.hy = hy;
+            s.lock = 0; s.alpha = 0;
+            s.seed = Math.random();
+          }
+          const s = slots[best];
+          const k = 1 - Math.exp(-dt * 9);
+          s.cx += (cx - s.cx) * k; s.cy += (cy - s.cy) * k;
+          s.hx += (hx - s.hx) * k; s.hy += (hy - s.hy) * k;
+          s.label = det.label;
+          s.score = det.score;
+          s.lastSeen = time;
+          s.claimed = time;
+        }
+      }
+      for (let i = 0; i < MAX_DET; i++) {
+        const s = slots[i];
+        if (s.active) {
+          if (time - s.lastSeen < 0.6) {
+            s.alpha = Math.min(1, s.alpha + dt / 0.30);   // fade in fast
+            s.lock  = Math.min(1, s.lock  + dt / 0.70);   // lock-on ramp
+          } else {
+            s.alpha -= dt / 0.55;                         // linger fade
+            if (s.alpha <= 0) { s.alpha = 0; s.lock = 0; s.active = false; }
+          }
+          if (s.active && time - s.lastBakeT > 0.25 &&
+              (s.label !== s.bakedLabel || Math.abs(s.score - s.bakedScore) > 0.05)) {
+            bakeLabelRow(i, `${s.label} :: ${s.score.toFixed(2)}`);
+            s.bakedLabel = s.label;
+            s.bakedScore = s.score;
+            s.lastBakeT = time;
+          }
+        }
+        detRectArr[i * 4]     = s.cx;
+        detRectArr[i * 4 + 1] = s.cy;
+        detRectArr[i * 4 + 2] = s.hx;
+        detRectArr[i * 4 + 3] = s.hy;
+        detInfoArr[i * 4]     = scanR > 0 ? s.alpha : 0;
+        detInfoArr[i * 4 + 1] = s.lock;
+        detInfoArr[i * 4 + 2] = s.seed;
+        detInfoArr[i * 4 + 3] = 0;
+      }
+    }
 
     function update(field) {
       const { dt, time, pose, params } = field;
@@ -600,6 +848,53 @@ export default {
       scratch.parallax        = params.parallax;
       scratch.palette         = Math.max(0, PALETTES.indexOf(params.palette));
       scratch.showLogo        = params.showLogo === false ? 0.0 : 1.0;
+
+      // ── DVD drift — slow constant-velocity wander, bouncing off the
+      // screen edges like the old DVD screensaver. Speeds are p-units/sec
+      // (screen height = 2 units), so the default 0.045 crosses the screen
+      // in ~45 s — ambient, never spazzy. Toggling off eases back to
+      // centre instead of snapping.
+      const aspect = H > 0 ? W / H : 1.78;
+      if (params.drift && params.driftSpeed > 0) {
+        if (!dvdInit) {
+          dvdInit = true;
+          const a = 0.4 + Math.random() * 0.75;     // diagonal-ish heading
+          dvdVX = Math.cos(a) * (Math.random() < 0.5 ? -1 : 1);
+          dvdVY = Math.sin(a) * (Math.random() < 0.5 ? -1 : 1);
+        }
+        // Bounce bounds keep the sphere + inner rings on screen; the
+        // outermost ring may kiss the edge, which reads as intentional.
+        const margin = Math.min(0.9, params.voidRadius * 2.3);
+        const boundX = Math.max(0, aspect - margin);
+        const boundY = Math.max(0, 1 - margin);
+        dvdX += dvdVX * params.driftSpeed * dt;
+        dvdY += dvdVY * params.driftSpeed * dt;
+        if (dvdX >  boundX) { dvdX =  boundX; dvdVX = -Math.abs(dvdVX); bounceJitter(); }
+        if (dvdX < -boundX) { dvdX = -boundX; dvdVX =  Math.abs(dvdVX); bounceJitter(); }
+        if (dvdY >  boundY) { dvdY =  boundY; dvdVY = -Math.abs(dvdVY); bounceJitter(); }
+        if (dvdY < -boundY) { dvdY = -boundY; dvdVY =  Math.abs(dvdVY); bounceJitter(); }
+      } else if (dvdX !== 0 || dvdY !== 0) {
+        const kBack = Math.min(1, dt * 1.8);
+        dvdX -= dvdX * kBack;
+        dvdY -= dvdY * kBack;
+        if (Math.abs(dvdX) < 1e-4 && Math.abs(dvdY) < 1e-4) { dvdX = 0; dvdY = 0; }
+      }
+      scratch.centerX = dvdX;
+      scratch.centerY = dvdY;
+
+      // ── Detector mode — hold/release the shared detection pipeline on
+      // the toggle, then fold the latest detections into the slot tracker.
+      const detOn = !!params.detector;
+      if (detOn && !detectorHeld) {
+        detectorHeld = true;
+        acquireDetector();
+      } else if (!detOn && detectorHeld) {
+        detectorHeld = false;
+        releaseDetector();
+        for (const s of slots) { s.active = false; s.alpha = 0; s.lock = 0; }
+      }
+      scratch.scanRadius = detOn ? params.scanRadius : 0;
+      updateDetector(dt, time, aspect, scratch.scanRadius);
 
       // Compute static * sprite geometry from the param uVoidRadius — it
       // does NOT track the audio breathing so the * stays anchored. The *
@@ -720,6 +1015,12 @@ export default {
       gl.uniform2f(U('uPoseShift'),        poseShiftX, poseShiftY);
       gl.uniform1i(U('uPalette'),          scratch.palette);
       gl.uniform1f(U('uShowLogo'),         scratch.showLogo);
+      gl.uniform2f(U('uCenter'),           scratch.centerX, scratch.centerY);
+
+      // Detector HUD uniforms.
+      gl.uniform1f(U('uScanRadius'),    scratch.scanRadius);
+      gl.uniform4fv(U('uDetRect[0]'),   detRectArr);
+      gl.uniform4fv(U('uDetInfo[0]'),   detInfoArr);
 
       gl.uniform3fv(U('uRingU[0]'),     ringU);
       gl.uniform3fv(U('uRingV[0]'),     ringV);
@@ -739,6 +1040,9 @@ export default {
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, starTex);
       gl.uniform1i(U('uStarTex'), 1);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, labelTex);
+      gl.uniform1i(U('uLabelTex'), 2);
 
       if (audioRef) uploadAudioUniforms(gl, U, audioRef);
 
@@ -751,10 +1055,12 @@ export default {
       update,
       render,
       dispose() {
+        if (detectorHeld) { detectorHeld = false; releaseDetector(); }
         gl.deleteProgram(prog);
         gl.deleteVertexArray(vao);
         gl.deleteTexture(logoTex);
         gl.deleteTexture(starTex);
+        gl.deleteTexture(labelTex);
       },
     };
   },
