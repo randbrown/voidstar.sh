@@ -227,6 +227,27 @@ const A = (s) => [...s].map((c) => c.charCodeAt(0));
   check('N/A fields dropped', !('duration' in info.streams[0]));
 }
 
+// ── test windows (endOverride + draft downscale) ────────────────────────
+{
+  // a sub-window override behaves like a fully-specified timeline
+  const t = computeTimeline({ videoDur: 300, audioDur: 300, offset: 0, startOverride: 120, endOverride: 126 });
+  check('window override sets the span', near(t.start, 120) && near(t.duration, 6));
+  check('window override cuts video + audio alike',
+    near(t.videoIn, 120) && near(t.videoOut, 126) && near(t.audioIn, 120) && near(t.audioOut, 126));
+  // window reaching past the video picks up the tail pad, faithfully
+  const t2 = computeTimeline({ videoDur: 300, audioDur: 320, offset: 0, startOverride: 297, endOverride: 305 });
+  check('test window includes real pads', near(t2.padTail, 5) && near(t2.videoUsed, 3));
+  // draft mode: forced reencode + downscale after the concat
+  const plan = buildPlan({ t, video: H264, audio: MP3, audioDur: 300,
+    opts: { videoMode: 'reencode', crf: 23, preset: 'ultrafast', previewHeight: 480 } });
+  const joined = plan.steps[plan.steps.length - 1].args.join(' ');
+  check('draft render downscales once', joined.includes('scale=-2:480'));
+  check('draft render is fast/small', joined.includes('-preset ultrafast') && joined.includes('-crf 23'));
+  const small = buildPlan({ t, video: { ...H264, width: 640, height: 360 }, audio: MP3, audioDur: 300,
+    opts: { videoMode: 'reencode', previewHeight: 480 } });
+  check('no upscale for small sources', !small.steps[small.steps.length - 1].args.join(' ').includes('scale=-2'));
+}
+
 // ── video-only gaps + "keep original audio" ─────────────────────────────
 {
   // audio sits inside a longer video → gaps on both edges

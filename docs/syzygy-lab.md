@@ -87,6 +87,20 @@ audio-only input, since its concat input is video-only). Filling forces the
 audio to be encoded (stream-copy can't splice); a video with no audio track
 degrades to silence with a note.
 
+## Sync check (draft test render)
+
+The **sync check** button next to render answers "is my offset right?"
+without paying for a full render: it re-encodes short slices as a fast
+low-res draft (ultrafast, crf 23, downscaled to ≤480p after the concat) and
+plays them in the result panel. Auto mode samples the **start, middle, and
+end of the audio↔video overlap** stitched into one clip — a single test
+point can't expose clock drift, but sync that slips across the three slices
+can; a short overlap collapses to a single slice, and typing a start time
+renders one slice there. Each slice is a normal plan over a sub-window of
+the timeline (`computeTimeline` start/end overrides), so pads, trims, and
+the keep-original-audio fill all appear faithfully. The draft never touches
+the full render's quality settings.
+
 ## The quality ladder (the point of the whole lab)
 
 `plan.js` picks the cheapest strategy that satisfies the timeline:

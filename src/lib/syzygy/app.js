@@ -68,6 +68,8 @@ const state = {
   videoMode: 'auto',    // 'auto' (lossless, keyframe-snap trims) | 'reencode'
   crf: 17,
   preset: 'veryfast',
+  testStart: null,      // s into the output; null = auto (start·mid·end sampler)
+  testLen: 4,           // s per test slice
   running: false,
   cancelled: false,
   result: null,         // { url, name, size, notes, strategy }
@@ -496,21 +498,68 @@ function buildOutputOpts() {
 // ── render section ──────────────────────────────────────────────────────
 function buildRender() {
   ui.renderBtn = h('button', { class: 'sz-btn sz-btn-primary sz-render' }, 'render');
-  ui.renderBtn.addEventListener('click', () => run());
+  ui.renderBtn.addEventListener('click', () => run('full'));
+  ui.testBtn = h('button', { class: 'sz-btn', 'data-sz': 'test' }, 'sync check');
+  ui.testBtn.addEventListener('click', () => run('test'));
   ui.cancelBtn = h('button', { class: 'sz-btn', hidden: '' }, 'cancel');
   ui.cancelBtn.addEventListener('click', () => {
     state.cancelled = true;
     terminateEngine();
   });
+  ui.testStartInput = h('input', {
+    class: 'sz-num sz-num-s', type: 'number', min: '0', step: '0.1',
+    placeholder: 'auto', 'data-sz': 'test-start',
+  });
+  ui.testStartInput.addEventListener('input', () => {
+    const v = ui.testStartInput.value.trim();
+    state.testStart = v === '' ? null : Math.max(0, Number(v) || 0);
+  });
+  ui.testLenInput = h('input', {
+    class: 'sz-num sz-num-s', type: 'number', min: '1', max: '30', step: '1',
+    value: String(state.testLen), 'data-sz': 'test-len',
+  });
+  ui.testLenInput.addEventListener('input', () => {
+    state.testLen = Math.min(30, Math.max(1, Number(ui.testLenInput.value) || 4));
+  });
   ui.status = h('div', { class: 'sz-status' });
   ui.progressWrap = h('div', { class: 'sz-progress', hidden: '' }, ui.progressBar = h('div', { class: 'sz-progress-bar' }));
   ui.logPre = h('pre', {});
   return h('section', { class: 'sz-sect' },
-    h('div', { class: 'sz-row' }, ui.renderBtn, ui.cancelBtn),
+    h('div', { class: 'sz-row' },
+      ui.renderBtn, ui.testBtn,
+      h('span', { class: 'sz-dim' }, 'at'), ui.testStartInput,
+      h('span', { class: 'sz-dim' }, 's ·'), ui.testLenInput,
+      h('span', { class: 'sz-dim' }, 's/slice'),
+      ui.cancelBtn),
+    h('p', { class: 'sz-note' },
+      'sync check renders a fast low-res draft: slices from the start, middle, and end of the overlap stitched together — drift shows up as sync that drifts across the clip. type a start time for a single slice instead.'),
     ui.status,
     ui.progressWrap,
     h('details', { class: 'sz-log' }, h('summary', {}, 'engine log'), ui.logPre),
   );
+}
+
+/**
+ * Test windows [T, len] in output time. Auto mode samples the start, middle,
+ * and end of the audio↔video overlap (drift is invisible at a single point);
+ * a short overlap collapses to one slice; a typed start makes one slice there.
+ */
+function testWindows(t, L, startAt) {
+  if (startAt != null) {
+    const T = Math.min(Math.max(0, startAt), Math.max(0, t.duration - 1));
+    return [[T, Math.min(L, t.duration - T)]];
+  }
+  const ovS = Math.max(t.audioDelay, t.padLead);
+  const ovE = Math.min(t.audioDelay + t.audioUsed, t.padLead + t.videoUsed);
+  const s = ovE > ovS ? Math.max(0, ovS) : 0;
+  const e = ovE > ovS ? Math.min(t.duration, ovE) : t.duration;
+  const dur = e - s;
+  if (dur <= L * 2.5) return [[s, Math.min(dur, L * 2.5)]];
+  return [
+    [s, L],
+    [s + dur / 2 - L / 2, L],
+    [e - L, L],
+  ];
 }
 
 function setStatus(msg, kind = '') {
@@ -592,6 +641,7 @@ function update(o = {}) {
 
   // render button
   ui.renderBtn.disabled = !t || state.running || state.soundBusy;
+  ui.testBtn.disabled = ui.renderBtn.disabled;
   ui.cancelBtn.hidden = !state.running;
   ui.renderBtn.textContent = state.running ? 'rendering…' : 'render';
 
@@ -674,8 +724,9 @@ function renderPlanPreview(t) {
 }
 
 // ── the run ─────────────────────────────────────────────────────────────
-async function run() {
+async function run(mode = 'full') {
   if (state.running) return;
+  const isTest = mode === 'test';
   state.running = true;
   state.cancelled = false;
   state.result = null;
@@ -716,8 +767,9 @@ async function run() {
     });
 
     // lossless start trim: snap to a keyframe and let the audio follow
+    // (skipped for tests — they re-encode their slices anyway)
     let startIsKeyframe = false;
-    if (t.videoCutStart && state.videoMode !== 'reencode') {
+    if (!isTest && t.videoCutStart && state.videoMode !== 'reencode') {
       setStatus('finding the nearest keyframe…');
       const kf = await nearestKeyframe(ff, vin.path, t.videoIn);
       if (kf !== null) {
@@ -758,6 +810,62 @@ async function run() {
       crf: state.crf, preset: state.preset,
       ...padOpts,
     };
+    const base = state.video.file.name.replace(/\.[^.]+$/, '');
+
+    if (isTest) {
+      // draft sampler: re-encode each slice fast+small, stitch by stream copy
+      const windows = testWindows(t, state.testLen, state.testStart);
+      const testOpts = {
+        ...opts, videoMode: 'reencode', startIsKeyframe: false,
+        crf: 23, preset: 'ultrafast', previewHeight: 480,
+      };
+      const desc = windows.length > 1
+        ? 'start · middle · end of the overlap'
+        : `output ${fmtDur(windows[0][0])} → ${fmtDur(windows[0][0] + windows[0][1])}`;
+      pushLog(`[syzygy] sync check: ${desc}`);
+      const sliceFiles = [];
+      let testPlan = null;
+      for (let i = 0; i < windows.length; i++) {
+        const [T, L] = windows[i];
+        setStatus(`test slice ${i + 1}/${windows.length}…`);
+        const tSlice = computeTimeline({
+          videoDur, audioDur, offset: off,
+          startOverride: t.start + T, endOverride: t.start + T + L,
+        });
+        testPlan = buildPlan({ t: tSlice, video, audio, audioDur, opts: testOpts });
+        const sliceBlob = await executePlan(ff, testPlan, tempFiles);
+        const name = `tslice-${i}.mp4`;
+        await ff.writeFile(name, new Uint8Array(await sliceBlob.arrayBuffer()));
+        tempFiles.add(name);
+        sliceFiles.push(name);
+      }
+      let outBlob;
+      if (sliceFiles.length === 1) {
+        outBlob = new Blob([await ff.readFile(sliceFiles[0])], { type: 'video/mp4' });
+      } else {
+        await ff.writeFile('tconcat.txt', sliceFiles.map((f) => `file '${f}'`).join('\n') + '\n');
+        tempFiles.add('tconcat.txt');
+        setStatus('stitching slices…');
+        await execStep(ff, ['-f', 'concat', '-safe', '0', '-i', 'tconcat.txt',
+          '-c', 'copy', '-movflags', '+faststart', '-y', 'test.mp4'], { onLog: pushLog });
+        tempFiles.add('test.mp4');
+        outBlob = new Blob([await ff.readFile('test.mp4')], { type: 'video/mp4' });
+      }
+      state.result = {
+        url: URL.createObjectURL(outBlob),
+        name: `${base}.syzygy-test.mp4`,
+        size: outBlob.size,
+        mime: 'video/mp4',
+        strategy: testPlan.strategy,
+        notes: testPlan.notes,
+        isTest: true,
+        testDesc: desc,
+      };
+      setStatus('sync check done — the full render is unaffected', 'ok');
+      setProgress(null);
+      return;
+    }
+
     let plan = buildPlan({ t, video, audio, audioDur, opts });
     plan.notes.forEach((n) => pushLog(`[syzygy] ${n}`));
 
@@ -777,7 +885,6 @@ async function run() {
       }
     }
 
-    const base = state.video.file.name.replace(/\.[^.]+$/, '');
     state.result = {
       url: URL.createObjectURL(outBlob),
       name: `${base}.syzygy.${plan.container.ext}`,
@@ -863,10 +970,12 @@ async function cleanupTemp(ff, tempFiles) {
 function renderResult() {
   const r = state.result;
   ui.resultBox.replaceChildren(
+    ...(r.isTest ? [h('div', { class: 'sz-test-badge' },
+      `⧗ draft sync check — ${r.testDesc} · ≤480p ultrafast · listen for sync drifting between slices. the full render keeps full quality.`)] : []),
     h('video', { class: 'sz-preview', controls: '', src: r.url }),
     h('div', { class: 'sz-row' },
       h('a', { class: 'sz-btn sz-btn-primary', href: r.url, download: r.name }, `download ${r.name}`),
-      h('span', { class: 'sz-dim' }, `${fmtBytes(r.size)} · ${r.strategy === 'direct' ? 'video untouched' : r.strategy === 'concat' ? 'video untouched + encoded stills' : 're-encoded'}`),
+      h('span', { class: 'sz-dim' }, `${fmtBytes(r.size)} · ${r.isTest ? 'draft test clip' : r.strategy === 'direct' ? 'video untouched' : r.strategy === 'concat' ? 'video untouched + encoded stills' : 're-encoded'}`),
     ),
   );
 }

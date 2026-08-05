@@ -47,7 +47,8 @@ export function fmtSec(n) {
  * @param {number} o.offset     audio start relative to video start (s)
  * @param {boolean} [o.trimStart]  true → output starts at the LATER start
  * @param {boolean} [o.trimEnd]    true → output ends at the EARLIER end
- * @param {number} [o.startOverride]  replace the computed start (keyframe snap)
+ * @param {number} [o.startOverride]  replace the computed start (keyframe snap / test window)
+ * @param {number} [o.endOverride]    replace the computed end (test window)
  * @returns {{
  *   start:number, end:number, duration:number,
  *   padLead:number, padTail:number,
@@ -56,13 +57,14 @@ export function fmtSec(n) {
  *   audioIn:number, audioOut:number, audioUsed:number, audioDelay:number,
  * }}
  */
-export function computeTimeline({ videoDur, audioDur, offset, trimStart = false, trimEnd = false, startOverride }) {
+export function computeTimeline({ videoDur, audioDur, offset, trimStart = false, trimEnd = false, startOverride, endOverride }) {
   if (!(videoDur > 0) || !(audioDur > 0)) throw new Error('need positive durations');
   const aStart = offset;
   const aEnd = offset + audioDur;
   let start = trimStart ? Math.max(0, aStart) : Math.min(0, aStart);
   if (startOverride !== undefined) start = startOverride;
-  const end = trimEnd ? Math.min(videoDur, aEnd) : Math.max(videoDur, aEnd);
+  let end = trimEnd ? Math.min(videoDur, aEnd) : Math.max(videoDur, aEnd);
+  if (endOverride !== undefined) end = endOverride;
   if (!(end - start > EPS)) throw new Error('empty output: trims/offset leave no overlap');
 
   const duration = end - start;
@@ -346,6 +348,7 @@ function audioGraphLines({ t, gaps, vIdx, rIdx, vidOffset = 0, rate, layout }) {
  * @param {?string} [o.opts.padTailImage]
  * @param {?number} [o.opts.padLeadTime]   pick the lead pad frame from this video time
  * @param {?number} [o.opts.padTailTime]
+ * @param {number} [o.opts.previewHeight]  draft mode: downscale the re-encode to this height
  * @returns {Plan}
  */
 export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
@@ -591,7 +594,11 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
     }
     segRefs.push(ref);
   }
-  chains.push(`${segRefs.join('')}concat=n=${segRefs.length}:v=1:a=0[vout]`);
+  // Draft/test renders downscale once, after the concat (pads and video
+  // alike), so the whole preview costs a fraction of the full-res encode.
+  const pvh = opts.previewHeight && disp.height > opts.previewHeight ? opts.previewHeight : 0;
+  chains.push(`${segRefs.join('')}concat=n=${segRefs.length}:v=1:a=0${pvh ? '[voutc]' : '[vout]'}`);
+  if (pvh) chains.push(`[voutc]scale=-2:${pvh}[vout]`);
   let audioMap;
   if (fill) {
     chains.push(...audioGraphLines({
