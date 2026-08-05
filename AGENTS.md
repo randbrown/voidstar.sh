@@ -45,6 +45,11 @@ the qualia engine — see [`docs/setlist-app.md`](docs/setlist-app.md) before to
 image OCR, stylus annotation, Google Drive sync). Serverless like setlist; it forks setlist's
 store/Drive patterns rather than sharing code — see [`docs/mind-app.md`](docs/mind-app.md).
 
+`/lab/syzygy` is a third **active standalone app**: an audio ⇄ video alignment tool (replace a
+video's audio with a better recording — aligned at zero, by capture-clock metadata, or by hand)
+built on ffmpeg.wasm, everything client-side. It shares nothing with the qualia engine — see
+[`docs/syzygy-lab.md`](docs/syzygy-lab.md).
+
 ## Read first — canonical sources of truth
 
 Don't restate these; read the relevant one for your task. This file is the map and the
@@ -65,6 +70,7 @@ non-negotiables; the technical detail lives in the docs below.
 | Qualia Google Drive sync — login, the `voidstar_qualia` folder tree, per-component subfolders, the qualem-card + video-quale UI | [`docs/qualia-drive-sync.md`](docs/qualia-drive-sync.md) |
 | The setlist app (`/lab/setlist`) — data model, backup vs auto-link, chart-fallback ladder, annotations, its worker | [`docs/setlist-app.md`](docs/setlist-app.md) |
 | The mind app (`/lab/mind`) — notes store, editor, tasks-in-notes, folders, capture, Drive sync | [`docs/mind-app.md`](docs/mind-app.md) |
+| The syzygy lab (`/lab/syzygy`) — audio ⇄ video alignment, quality ladder, metadata clocks | [`docs/syzygy-lab.md`](docs/syzygy-lab.md) |
 | Arcade games / playable visualizers | [`plans/arcade-quale-plan.md`](plans/arcade-quale-plan.md) (+ `src/lib/qualia/fx/arcade/`) |
 | Site theming / CSS themes — the token system, wiring, build checklist | [`docs/THEMES.md`](docs/THEMES.md) |
 | **Designing** a custom theme (the design/UX brief + per-agent template) | [`docs/theming-guide.md`](docs/theming-guide.md) |
