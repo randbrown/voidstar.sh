@@ -769,13 +769,21 @@ export default {
           const [ex, ey] = lmToCanvas(det.cx + det.hw, det.cy + det.hh, 1, 1);
           const hx = Math.min(0.9, Math.max(0.03, Math.abs(ex - sx) * 2 * aspect));
           const hy = Math.min(0.9, Math.max(0.03, Math.abs(ey - sy) * 2));
-          // Region gate — an object is targeted when its box OVERLAPS the
-          // scan circle (which travels with the dvd drift). Centre-inside
-          // was too strict for objects bigger than the circle.
-          const nx = Math.max(cx - hx, Math.min(dvdX, cx + hx));
-          const ny = Math.max(cy - hy, Math.min(dvdY, cy + hy));
-          const gx = nx - dvdX, gy = ny - dvdY;
-          if (gx * gx + gy * gy > scanR * scanR) continue;
+          // Region gate — the box must sit MOSTLY inside the scan circle
+          // (which travels with the dvd drift): ≥ ~45% of its area,
+          // estimated on a 5×5 point grid. A huge box grazing the rim
+          // doesn't qualify; a small object half-in does.
+          const r2 = scanR * scanR;
+          let inside = 0;
+          for (let gy = 0; gy < 5; gy++) {
+            const syp = cy + ((gy + 0.5) / 5 - 0.5) * 2 * hy;
+            for (let gx = 0; gx < 5; gx++) {
+              const sxp = cx + ((gx + 0.5) / 5 - 0.5) * 2 * hx;
+              const ddx = sxp - dvdX, ddy = syp - dvdY;
+              if (ddx * ddx + ddy * ddy <= r2) inside++;
+            }
+          }
+          if (inside < 11) continue;   // < ~44% of the box in the zone
           // Match to the nearest live slot with the same label, else claim
           // a free one. `claimed === time` blocks two detections from
           // folding into one slot within a single pass.

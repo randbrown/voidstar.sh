@@ -849,22 +849,29 @@ export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, p
     // Real detections first — they own the slots.
     let realCount = 0;
     const dets = getDetections();
+    const r2 = scanR * scanR;
     for (let d = 0; d < dets.length; d++) {
       const det = dets[d];
-      // Degenerate whole-frame reads ("the entire scene is one object")
-      // crowd out real targets — drop anything covering >65% of the stage.
-      if (det.hw * det.hh * 4 > 0.65) continue;
       const px = det.cx * stage.width;
       const py = det.cy * stage.height;
       const bw2 = det.hw * stage.width;
       const bh2 = det.hh * stage.height;
-      // Region gate — any OVERLAP between the box and the scan circle
-      // counts. Centre-inside was too strict: an object sitting under the
-      // mark whose centroid lands elsewhere never registered.
-      const nx = Math.max(px - bw2, Math.min(cx, px + bw2));
-      const ny = Math.max(py - bh2, Math.min(cy, py + bh2));
-      const gx = nx - cx, gy = ny - cy;
-      if (gx * gx + gy * gy > scanR * scanR) continue;
+      // Region gate — the box must sit MOSTLY inside the scan circle:
+      // ≥ ~45% of its area, estimated on a 5×5 point grid. Plain overlap
+      // let a huge box grazing the rim get targeted; centre-inside missed
+      // big objects sitting under the mark. Coverage handles both, and
+      // means a whole-frame box only qualifies when the circle itself is
+      // comparably huge — which is then the honest answer.
+      let inside = 0;
+      for (let gy = 0; gy < 5; gy++) {
+        const syp = py + ((gy + 0.5) / 5 - 0.5) * 2 * bh2;
+        for (let gx = 0; gx < 5; gx++) {
+          const sxp = px + ((gx + 0.5) / 5 - 0.5) * 2 * bw2;
+          const ddx = sxp - cx, ddy = syp - cy;
+          if (ddx * ddx + ddy * ddy <= r2) inside++;
+        }
+      }
+      if (inside < 11) continue;   // < ~44% of the box in the zone
       const hx = Math.max(12, Math.min(stage.width  * 0.45, bw2));
       const hy = Math.max(12, Math.min(stage.height * 0.45, bh2));
       if (foldTarget(px, py, hx, hy, det.label, det.score)) realCount++;
