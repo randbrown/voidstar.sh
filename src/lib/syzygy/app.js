@@ -20,6 +20,7 @@ import {
   cachedProbe, saveProbe, jobKeyOf, saveJob, loadJob, saveSegment, loadSegment, clearJob,
 } from './persist.js';
 import { segmentWindows, buildAssemblePlan, SEGMENT_LEN, SEGMENT_MIN_TOTAL } from './plan.js';
+import { planToScript } from './export-cmd.js';
 
 // ── tiny DOM helper ─────────────────────────────────────────────────────
 function h(tag, attrs = {}, ...children) {
@@ -745,19 +746,115 @@ function buildRender() {
   ui.status = h('div', { class: 'sz-status' });
   ui.progressWrap = h('div', { class: 'sz-progress', hidden: '' }, ui.progressBar = h('div', { class: 'sz-progress-bar' }));
   ui.logPre = h('pre', {});
+  ui.exportBtn = h('button', { class: 'sz-btn', 'data-sz': 'export', title: 'generate a native ffmpeg script for this exact job — for very long files, your desktop is much faster than the in-browser engine' }, 'ffmpeg script');
+  ui.exportBtn.addEventListener('click', () => exportScript());
+  ui.exportWrap = h('div', { class: 'sz-export', hidden: '' });
   return h('section', { class: 'sz-sect' },
     h('div', { class: 'sz-row' },
       ui.renderBtn, ui.testBtn,
       h('span', { class: 'sz-dim' }, 'at'), ui.testStartInput,
       h('span', { class: 'sz-dim' }, 's ·'), ui.testLenInput,
       h('span', { class: 'sz-dim' }, 's/slice'),
+      ui.exportBtn,
       ui.cancelBtn),
     h('p', { class: 'sz-note' },
       'sync check renders a fast low-res draft: slices from the start, middle, and end of the overlap stitched together — drift shows up as sync that drifts across the clip. type a start time for a single slice instead.'),
     ui.status,
     ui.progressWrap,
     h('details', { class: 'sz-log' }, h('summary', {}, 'engine log'), ui.logPre),
+    ui.exportWrap,
   );
+}
+
+/**
+ * Generate a native ffmpeg script for the exact configured job — the
+ * browser does the alignment thinking, a desktop does the heavy lifting.
+ * Uses cached stream info when available; probes (engine load) otherwise.
+ */
+async function exportScript() {
+  if (state.running || state.soundBusy || !state.video || !state.audio) return;
+  const off = effectiveOffset();
+  if (off === null) { setStatus('set an alignment first (run the sound match or pick an offset)', 'err'); return; }
+  const cleanups = [];
+  try {
+    // stream info: cache-first (srcAudio presence marks a fresh-format entry)
+    let vSum = cachedProbe(fileKeyOf(state.video.file))?.video;
+    let aSum = cachedProbe(fileKeyOf(state.audio.file))?.audio;
+    if (!vSum || !('srcAudio' in vSum) || !aSum) {
+      const ff = await loadEngine((m, f) => { setStatus(m); setProgress(f ?? null); });
+      setProgress(null);
+      setStatus('probing streams for the script…');
+      const vin = await stageInput(ff, state.video.file, 'xv');
+      cleanups.push(vin.cleanup);
+      const ain = await stageInput(ff, state.audio.file, 'xa');
+      cleanups.push(ain.cleanup);
+      vSum = { ...(await probedVideo(ff, vin.path, state.video.file, state.video.dur)).summary };
+      aSum = { ...(await probedAudio(ff, ain.path, state.audio.file, state.audio.dur)) };
+    }
+    const video = { ...vSum, path: state.video.file.name };
+    const audio = { ...aSum, path: state.audio.file.name };
+    const videoDur = video.duration, audioDur = audio.duration;
+    if (!(videoDur > 0) || !(audioDur > 0)) throw new Error('could not determine stream durations');
+
+    const t = computeTimeline({
+      videoDur, audioDur, offset: off,
+      trimStart: state.trimStart, trimEnd: state.trimEnd,
+    });
+    const padOpts = {};
+    for (const side of ['lead', 'tail']) {
+      const p = state.pad[side];
+      const key = side === 'lead' ? 'Lead' : 'Tail';
+      if (p.mode === 'image' && p.file) padOpts[`pad${key}Image`] = p.file.name;
+      else if (p.mode === 'time') padOpts[`pad${key}Time`] = p.time || 0;
+    }
+    const plan = buildPlan({
+      t, video, audio, audioDur,
+      opts: {
+        videoMode: state.videoMode === 'reencode' ? 'reencode' : 'auto',
+        startIsKeyframe: false,
+        audioMode: state.audioMode,
+        keepVideoAudio: state.keepVideoAudio,
+        videoHasAudio: !!video.srcAudio,
+        crf: state.crf, preset: state.preset,
+        ...padOpts,
+      },
+    });
+    const base = state.video.file.name.replace(/\.[^.]+$/, '');
+    const outName = `${base}.syzygy.${plan.container.ext}`;
+    const header = [];
+    if (t.videoCutStart && state.videoMode !== 'reencode') {
+      header.push('note: the in-browser keyframe snap is not applied here — this script re-encodes for the exact start trim');
+    }
+    header.push('run this in the folder containing the source files');
+    const script = planToScript(plan, { outName, header });
+
+    ui.exportWrap.hidden = false;
+    ui.exportWrap.replaceChildren(
+      h('div', { class: 'sz-note' },
+        `native ffmpeg script — ${plan.strategy}${plan.concatDirect ? ' (direct concat)' : ''} · run on a desktop for gig-length files (10–100× faster than the in-browser engine)`),
+      h('pre', {}, script),
+      h('div', { class: 'sz-row' },
+        (() => {
+          const b = h('button', { class: 'sz-btn sz-btn-xs' }, 'copy');
+          b.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(script); b.textContent = 'copied ✓'; setTimeout(() => { b.textContent = 'copy'; }, 1500); } catch { /* clipboard blocked */ }
+          });
+          return b;
+        })(),
+        h('a', {
+          class: 'sz-btn sz-btn-xs',
+          href: URL.createObjectURL(new Blob([script], { type: 'text/x-shellscript' })),
+          download: `${base}.syzygy.sh`,
+        }, 'download .sh'),
+      ),
+    );
+    setStatus('ffmpeg script ready below', 'ok');
+  } catch (err) {
+    console.error('[syzygy]', err);
+    setStatus(`script export failed: ${err.message?.split('\n')[0] || err}`, 'err');
+  } finally {
+    for (const c of cleanups) await c();
+  }
 }
 
 /**
@@ -866,6 +963,7 @@ function update(o = {}) {
   // render button
   ui.renderBtn.disabled = !t || state.running || state.soundBusy;
   ui.testBtn.disabled = ui.renderBtn.disabled;
+  ui.exportBtn.disabled = ui.renderBtn.disabled;
   ui.cancelBtn.hidden = !state.running;
   ui.renderBtn.textContent = state.running ? 'rendering…' : 'render';
 
@@ -1116,22 +1214,52 @@ async function run(mode = 'full') {
     const segLen = Number(segCfg.len) > 0 ? Number(segCfg.len) : SEGMENT_LEN;
     const segMin = Number(segCfg.min) > 0 ? Number(segCfg.min) : SEGMENT_MIN_TOTAL;
 
+    // Fallback ladder: direct-concat (source referenced as-is) → mid-remux
+    // concat → re-encode (segmented when long). Never hand over a broken
+    // file, never restart further up the ladder than needed.
+    const runReencode = async () => {
+      if (t.duration >= segMin) {
+        const seg = await runSegmented(ff, { t, video, audio, audioDur, videoDur, opts, segLen, tempFiles });
+        plan = seg.plan;
+        return seg.outBlob;
+      }
+      plan = buildPlan({ t, video, audio, audioDur, opts: { ...opts, videoMode: 'reencode' } });
+      plan.notes.forEach((n) => pushLog(`[syzygy] ${n}`));
+      return executePlan(ff, plan, tempFiles);
+    };
+    const fatal = (err) => state.cancelled
+      || /RuntimeError|memory access|allocation failed|Out of memory|unreachable/i.test(String(err));
+
     let outBlob;
-    if (plan.strategy === 'reencode' && t.duration >= segMin) {
-      const seg = await runSegmented(ff, { t, video, audio, audioDur, videoDur, opts, segLen, tempFiles });
-      plan = seg.plan;
-      outBlob = seg.outBlob;
+    if (plan.strategy === 'reencode') {
+      outBlob = await runReencode();
     } else {
       try {
         outBlob = await executePlan(ff, plan, tempFiles);
       } catch (err) {
-        // the concat fast path is verified in executePlan; on anomaly, fall
-        // back to a full re-encode rather than hand over a broken file
-        if (!err?.verifyFailed) throw err;
-        pushLog(`[syzygy] concat verify failed (${err.message}) — re-encoding instead`);
-        await cleanupTemp(ff, tempFiles);
-        plan = buildPlan({ t, video, audio, audioDur, opts: { ...opts, videoMode: 'reencode' } });
-        outBlob = await executePlan(ff, plan, tempFiles);
+        if (fatal(err)) throw err;
+        if (plan.concatDirect) {
+          // any direct-concat failure (bad stream match, verify miss) retries
+          // one rung down with the video-only remux before re-encoding
+          pushLog(`[syzygy] direct concat failed (${String(err.message || err).split('\n')[0]}) — retrying with a video-only remux`);
+          await cleanupTemp(ff, tempFiles);
+          plan = buildPlan({ t, video, audio, audioDur, opts: { ...opts, forceMidConcat: true } });
+          plan.notes.forEach((n) => pushLog(`[syzygy] ${n}`));
+          try {
+            outBlob = await executePlan(ff, plan, tempFiles);
+          } catch (err2) {
+            if (fatal(err2) || !err2?.verifyFailed) throw err2;
+            pushLog(`[syzygy] concat verify failed (${err2.message}) — re-encoding instead`);
+            await cleanupTemp(ff, tempFiles);
+            outBlob = await runReencode();
+          }
+        } else if (err?.verifyFailed) {
+          pushLog(`[syzygy] concat verify failed (${err.message}) — re-encoding instead`);
+          await cleanupTemp(ff, tempFiles);
+          outBlob = await runReencode();
+        } else {
+          throw err;
+        }
       }
     }
 
@@ -1351,7 +1479,7 @@ function renderResult() {
       `⧗ draft sync check — ${r.testDesc} · ≤480p ultrafast · listen for sync drifting between slices. the full render keeps full quality.`)] : []),
     h('video', { class: 'sz-preview', controls: '', src: r.url }),
     h('div', { class: 'sz-row' },
-      h('a', { class: 'sz-btn sz-btn-primary', href: r.url, download: r.name }, `download ${r.name}`),
+      h('a', { class: 'sz-btn sz-btn-primary', href: r.url, download: r.name, 'data-sz': 'result-dl' }, `download ${r.name}`),
       h('span', { class: 'sz-dim' }, `${fmtBytes(r.size)} · ${r.isTest ? 'draft test clip' : r.strategy === 'direct' ? 'video untouched' : r.strategy === 'concat' ? 'video untouched + encoded stills' : 're-encoded'}`),
     ),
   );

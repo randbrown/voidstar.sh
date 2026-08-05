@@ -277,8 +277,14 @@ function padConform(video, pixFmt, fps) {
  * concat filter accepts the splice. Ends by labeling [aout].
  * `vidOffset` compensates an input `-ss` on the video (which rebases its
  * audio timestamps to 0 at the seek point).
+ *
+ * The TAIL fill segment reads from `tailIdx` (default: vIdx) — callers give
+ * it a dedicated input seeked to `tailOffset`, because atrim on an unseeked
+ * input decodes-and-discards everything before the tail: for a tail fill at
+ * the end of a 35-minute file that was a full extra pass over the video.
  */
-function audioGraphLines({ t, gaps, vIdx, rIdx, vidOffset = 0, rate, layout }) {
+function audioGraphLines({ t, gaps, vIdx, rIdx, vidOffset = 0, rate, layout, tailIdx, tailOffset }) {
+  if (tailIdx === undefined) { tailIdx = vIdx; tailOffset = vidOffset; }
   const F = 0.02;
   const conv = `aresample=${rate},aformat=sample_fmts=fltp:channel_layouts=${layout}`;
   const segs = [];
@@ -295,7 +301,7 @@ function audioGraphLines({ t, gaps, vIdx, rIdx, vidOffset = 0, rate, layout }) {
   if (gaps.tail > EPS) {
     const tailStartOut = t.padLead + t.videoUsed - gaps.tail;
     if (tailStartOut - cursor > EPS) { segs.push({ src: 'sil', d: tailStartOut - cursor }); cursor = tailStartOut; }
-    segs.push({ src: 'vid', from: t.videoOut - gaps.tail, to: t.videoOut });
+    segs.push({ src: 'tail', from: t.videoOut - gaps.tail, to: t.videoOut });
   }
   const lines = [];
   const refs = [];
@@ -304,8 +310,8 @@ function audioGraphLines({ t, gaps, vIdx, rIdx, vidOffset = 0, rate, layout }) {
     if (s.src === 'sil') {
       lines.push(`anullsrc=r=${rate}:cl=${layout}:d=${fmtSec(s.d)},aformat=sample_fmts=fltp${ref}`);
     } else {
-      const off = s.src === 'vid' ? vidOffset : 0;
-      const inp = s.src === 'vid' ? `[${vIdx}:a:0]` : `[${rIdx}:a:0]`;
+      const off = s.src === 'vid' ? vidOffset : s.src === 'tail' ? tailOffset : 0;
+      const inp = s.src === 'repl' ? `[${rIdx}:a:0]` : `[${s.src === 'tail' ? tailIdx : vIdx}:a:0]`;
       const d = s.to - s.from;
       const fades = [];
       if (i > 0) fades.push(`afade=t=in:st=0:d=${F}`);
@@ -485,6 +491,12 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
   const leadImg = padImageSteps('lead', padLead > 0);
   const tailImg = padImageSteps('tail', padTail > 0);
 
+  // A tail fill far into a long file must not decode-and-discard its way
+  // there: give the tail segment its own input, seeked right to its start.
+  const tailSrc = t.videoOut - gaps.tail;
+  const needTailInput = fill && gaps.tail > EPS;
+  const tailInput = needTailInput ? ['-ss', fmtSec(Math.max(0, tailSrc)), '-i', video.path] : [];
+
   // ── strategy: direct ─────────────────────────────────────────────────
   if (strategy === 'direct') {
     const seek = t.videoIn > EPS ? ['-ss', fmtSec(t.videoIn)] : [];
@@ -494,12 +506,14 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
           t, gaps, vIdx: 0, rIdx: silent ? -1 : 1,
           vidOffset: t.videoIn > EPS ? t.videoIn : 0,
           rate: fillRate, layout: fillLayout,
+          ...(needTailInput ? { tailIdx: silent ? 1 : 2, tailOffset: tailSrc } : {}),
         }).join(';'), '-map', '0:v:0', '-map', '[aout]']
       : ['-map', '0:v:0', '-map', '1:a:0',
         ...(audioFilters.length ? ['-af', audioFilters.join(',')] : [])];
     const args = [
       ...seek, '-i', video.path,
       ...audioInput,
+      ...tailInput,
       ...audioArgs,
       '-c:v', 'copy',
       ...(container.ext === 'mp4' && video.codec === 'hevc' ? ['-tag:v', 'hvc1'] : []),
@@ -520,18 +534,43 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
     const padPix = video.pixFmt === 'yuvj420p' ? 'yuv420p' : video.pixFmt;
     const col = colorArgs(video);
 
+    // DIRECT concat: when the source is exactly [video@0, audio@1] and we can
+    // synthesize a matching silent track for the pads, the concat list can
+    // reference the ORIGINAL file — no video-only remux, which for a
+    // gig-length recording means one less multi-GB copy through the wasm FS.
+    // (The concat audio is simply never mapped; the replacement takes over.)
+    const SILENT_ENCODERS = {
+      aac: ['-c:a', 'aac', '-b:a', '128k'],
+      mp3: ['-c:a', 'libmp3lame', '-b:a', '128k'],
+      vorbis: ['-c:a', 'libvorbis', '-q:a', '1'],
+      pcm_s16le: ['-c:a', 'pcm_s16le'],
+      pcm_s24le: ['-c:a', 'pcm_s24le'],
+      pcm_f32le: ['-c:a', 'pcm_f32le'],
+    };
+    const CHANNEL_LAYOUTS = { 1: 'mono', 2: 'stereo' };
+    const sa = video.srcAudio;
+    const concatDirect = !opts.forceMidConcat
+      && !!sa && sa.layoutOk
+      && !!SILENT_ENCODERS[sa.codec] && !!CHANNEL_LAYOUTS[sa.channels]
+      && !(t.videoIn > EPS);
+
     function padEncode(side, img, dur) {
+      const silentPad = concatDirect
+        ? ['-f', 'lavfi', '-t', fmtSec(dur), '-i', `anullsrc=r=${sa.sampleRate}:cl=${CHANNEL_LAYOUTS[sa.channels]}`]
+        : [];
       steps.push({
         kind: 'exec', label: `encode ${side} pad (${fmtSec(dur)}s still)`,
         args: [
           '-loop', '1', '-framerate', video.fps, '-t', fmtSec(dur), '-i', img,
+          ...silentPad,
           '-vf', padConform(video, padPix, video.fps),
           '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-tune', 'stillimage',
           ...(profile ? ['-profile:v', profile] : []),
           ...(video.level && video.level > 0 ? ['-level', String(video.level / 10)] : []),
           ...col,
           '-video_track_timescale', ts,
-          '-an', '-y', `pad-${side}.mp4`,
+          ...(concatDirect ? [...SILENT_ENCODERS[sa.codec], '-shortest'] : ['-an']),
+          '-y', `pad-${side}.mp4`,
         ],
         long: true,
       });
@@ -539,28 +578,39 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
     if (padLead > 0) padEncode('lead', leadImg.path, padLead);
     if (padTail > 0) padEncode('tail', tailImg.path, padTail);
 
-    // Strip the source down to its video stream so every concat entry has an
-    // identical stream layout. Pure remux — no quality change.
-    const seek = t.videoIn > EPS ? ['-ss', fmtSec(t.videoIn)] : [];
-    steps.push({
-      kind: 'exec', label: 'stage video stream (lossless remux)',
-      args: [...seek, '-i', video.path, '-map', '0:v:0', '-c', 'copy',
-        '-video_track_timescale', ts, '-y', 'mid.mp4'],
-    });
+    let midEntry;
+    if (concatDirect) {
+      midEntry = video.path;
+      notes.push('concat references the source directly (no full-file remux)');
+    } else {
+      // Strip the source down to its video stream so every concat entry has
+      // an identical stream layout. Pure remux — no quality change.
+      const seek = t.videoIn > EPS ? ['-ss', fmtSec(t.videoIn)] : [];
+      steps.push({
+        kind: 'exec', label: 'stage video stream (lossless remux)',
+        args: [...seek, '-i', video.path, '-map', '0:v:0', '-c', 'copy',
+          '-video_track_timescale', ts, '-y', 'mid.mp4'],
+      });
+      midEntry = 'mid.mp4';
+    }
 
+    // ffconcat single-quote escaping for real-world filenames
+    const listEntry = (f) => `file '${f.replace(/'/g, `'\\''`)}'`;
     const listLines = [];
-    if (padLead > 0) listLines.push("file 'pad-lead.mp4'");
-    listLines.push("file 'mid.mp4'");
-    if (padTail > 0) listLines.push("file 'pad-tail.mp4'");
+    if (padLead > 0) listLines.push(listEntry('pad-lead.mp4'));
+    listLines.push(listEntry(midEntry));
+    if (padTail > 0) listLines.push(listEntry('pad-tail.mp4'));
     steps.push({ kind: 'write', label: 'write concat list', path: 'concat.txt', text: listLines.join('\n') + '\n' });
 
-    // With fill, the concat input carries no audio (mid.mp4 is video-only),
-    // so the original video file rides along as an extra audio-only input.
+    // With fill, the original video also rides along as an audio-only input
+    // (lead fill from its start; tail fill from a dedicated seeked input).
     const fillInputs = fill ? ['-i', video.path] : [];
+    const vIdxC = silent ? 1 : 2;
     const audioArgs = fill
       ? ['-filter_complex', audioGraphLines({
-          t, gaps, vIdx: silent ? 1 : 2, rIdx: silent ? -1 : 1, vidOffset: 0,
+          t, gaps, vIdx: vIdxC, rIdx: silent ? -1 : 1, vidOffset: 0,
           rate: fillRate, layout: fillLayout,
+          ...(needTailInput ? { tailIdx: vIdxC + 1, tailOffset: tailSrc } : {}),
         }).join(';'), '-map', '0:v:0', '-map', '[aout]']
       : ['-map', '0:v:0', '-map', '1:a:0',
         ...(audioFilters.length ? ['-af', audioFilters.join(',')] : [])];
@@ -570,6 +620,7 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
         '-f', 'concat', '-safe', '0', '-i', 'concat.txt',
         ...audioInput,
         ...fillInputs,
+        ...tailInput,
         ...audioArgs,
         '-c:v', 'copy',
         ...audioCodecArgs,
@@ -580,7 +631,7 @@ export function buildPlan({ t, video, audio, audioDur, opts = {} }) {
     });
     notes.push('video stream-copied; only the still pads are encoded');
     return {
-      strategy, container, output, steps, audioCopied: aud.copied, notes,
+      strategy, container, output, steps, audioCopied: aud.copied, notes, concatDirect,
       verify: { path: output, duration: t.duration },
     };
   }
@@ -698,10 +749,15 @@ export function buildAssemblePlan({ t, video, audio, audioDur, opts = {}, listPa
   } = planOutputAudio({ t, audio, audioDur, container, opts, notes });
 
   const fillInputs = fill ? ['-i', video.path] : [];
+  const tailSrcA = t.videoOut - gaps.tail;
+  const needTailA = fill && gaps.tail > EPS;
+  const tailInputA = needTailA ? ['-ss', fmtSec(Math.max(0, tailSrcA)), '-i', video.path] : [];
+  const vIdxA = silent ? 1 : 2;
   const audioArgs = fill
     ? ['-filter_complex', audioGraphLines({
-        t, gaps, vIdx: silent ? 1 : 2, rIdx: silent ? -1 : 1, vidOffset: 0,
+        t, gaps, vIdx: vIdxA, rIdx: silent ? -1 : 1, vidOffset: 0,
         rate: fillRate, layout: fillLayout,
+        ...(needTailA ? { tailIdx: vIdxA + 1, tailOffset: tailSrcA } : {}),
       }).join(';'), '-map', '0:v:0', '-map', '[aout]']
     : ['-map', '0:v:0', '-map', '1:a:0',
       ...(audioFilters.length ? ['-af', audioFilters.join(',')] : [])];
@@ -711,6 +767,7 @@ export function buildAssemblePlan({ t, video, audio, audioDur, opts = {}, listPa
       '-f', 'concat', '-safe', '0', '-i', listPath,
       ...audioInput,
       ...fillInputs,
+      ...tailInputA,
       ...audioArgs,
       '-c:v', 'copy',
       ...audioCodecArgs,

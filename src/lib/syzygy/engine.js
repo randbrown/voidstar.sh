@@ -314,6 +314,21 @@ export function summarizeVideo(info, path, fallbackDur) {
     },
     epochMs: Number.isNaN(epochMs) ? undefined : epochMs,
     duration: Number(s.duration || info.format?.duration || fallbackDur) || fallbackDur,
+    // Source-audio shape, for the direct-concat fast path: pads can carry a
+    // matching silent track so the ORIGINAL file joins the concat list
+    // as-is (no multi-GB video-only remux). Only safe when the file is
+    // exactly [video@0, audio@1] — extra data/timecode tracks (common on
+    // phones) or reordered streams break concat stream matching.
+    srcAudio: (() => {
+      const a = pickAudioStream(info);
+      if (!a) return null;
+      return {
+        codec: a.codec_name,
+        sampleRate: Number(a.sample_rate) || 48000,
+        channels: Number(a.channels) || 2,
+        layoutOk: (info.streams || []).length === 2 && s.index === 0 && a.index === 1,
+      };
+    })(),
   };
 }
 

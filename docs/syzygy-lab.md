@@ -147,6 +147,34 @@ a swapped pair sharing one file, or a re-dropped >512 MB video all recall
 it instantly ("decoded video audio recalled from cache"). The sound-match
 offset itself was already cached per file pair.
 
+## Gig-scale I/O (multi-GB sources)
+
+A 2.7 GB real-world recording exposed the concat path's I/O amplification;
+three changes cut it down:
+
+- **Direct concat**: when the source is exactly `[video@0, audio@1]` and a
+  matching silent track can be synthesized for the pads (aac/mp3/vorbis/pcm,
+  mono/stereo), the concat list references the ORIGINAL file — no video-only
+  remux, which previously byte-copied the whole source into the wasm FS.
+  Gated conservatively (extra data/timecode tracks, reordered streams,
+  start cuts, or exotic audio fall back to the remux path), and failures
+  ladder down: direct concat → mid remux → re-encode.
+- **Tail-fill input seek**: keep-original-audio's tail segment reads from a
+  dedicated input seeked to its start (`-ss` before `-i`) instead of
+  decoding-and-discarding the whole file to reach the last minute.
+- **ffmpeg script export**: the "ffmpeg script" button emits a runnable bash
+  script (export-cmd.js) reproducing the exact configured job — same
+  planner, real filenames, shell-quoted, heredoc concat lists, intermediate
+  cleanup — for running natively on a desktop, which is 10–100× faster than
+  the wasm engine for gig-length material. Stream info comes from the probe
+  cache when warm (no engine load needed). The in-browser keyframe snap
+  isn't applied to scripts; an exact start trim re-encodes there (noted in
+  the script header).
+
+Honest remaining ceiling: the in-browser output itself must fit in memory
+(~2× briefly at readback), so multi-GB outputs remain desktop territory —
+that's what the script export is for.
+
 ## Memory hardening (phones)
 
 A real-world Android failure (`RangeError: Array buffer allocation
