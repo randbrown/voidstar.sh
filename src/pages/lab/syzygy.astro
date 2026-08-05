@@ -25,6 +25,10 @@ import '../../styles/themes.css';
       so Astro's scoped styles would never match it (see entangle.astro). */}
   <style is:global>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    /* author display rules (e.g. .sz-row{display:flex}) override the UA's
+       [hidden]{display:none} — spotted live on Android: the manual-offset
+       row showed through in sound mode. Make hidden unconditional. */
+    [hidden] { display: none !important; }
     html, body { min-height: 100dvh; color: var(--text); background:
       radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent) 14%, var(--void)) 0%, var(--void) 60%); }
     body { font-family: var(--font-mono); padding:

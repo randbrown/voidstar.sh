@@ -138,10 +138,14 @@ pass is cheap and gapless). Consequences:
 - Test override: `localStorage['syzygy-seg'] = '{"len":2,"min":4}'`.
 
 Expensive **calculations are cached** against the file identity
-(name+size+mtime, LRU 8 files, localStorage): stream summaries from
-ffprobe, the has-audio flag, and keyframe-scan results. A re-render or a
-restored session skips re-probing; the sound-match offset was already
-cached per file pair.
+(name+size+mtime): stream summaries from ffprobe, the has-audio flag, and
+keyframe-scan results (localStorage, LRU 8 files) — plus the **decoded
+analysis audio** for both soundtracks (IndexedDB, Int16-packed which
+round-trips the s16 decode losslessly, LRU 6 entries, ≤16 MB each). The
+decode is the dominant cost of sound matching on long files; a re-analysis,
+a swapped pair sharing one file, or a re-dropped >512 MB video all recall
+it instantly ("decoded video audio recalled from cache"). The sound-match
+offset itself was already cached per file pair.
 
 ## Memory hardening (phones)
 

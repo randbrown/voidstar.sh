@@ -522,6 +522,8 @@ async function analyzeSound() {
       if (!(vd > 0) || !(ad > 0)) throw new Error('could not determine stream durations');
       state.sound = await estimateOffsetBySound(ff, vin.path, ain.path, {
         videoDur: vd, audioDur: ad, onStatus: setSoundStatus,
+        onLog: (m) => pushLog(`[syzygy] ${m}`),
+        videoKey: fileKeyOf(state.video.file), audioKey: fileKeyOf(state.audio.file),
       });
       try { saveSound(state.sound, pairKey(fileKeyOf(state.video.file), fileKeyOf(state.audio.file))); } catch { /* storage blocked */ }
     } finally {

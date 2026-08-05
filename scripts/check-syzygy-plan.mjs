@@ -9,7 +9,7 @@ import {
 import { sniffMediaInfo, sniffWav, sniffMp3 } from '../src/lib/syzygy/meta.js';
 import { parseProbeSections, summarizeVideo, streamRotation } from '../src/lib/syzygy/engine.js';
 import { correlatePcm, MIN_COARSE_Z, MIN_PEAK_RATIO } from '../src/lib/syzygy/correlate.js';
-import { serializeSettings, applySettings, fileKeyOf, pairKey, jobKeyOf } from '../src/lib/syzygy/persist.js';
+import { serializeSettings, applySettings, fileKeyOf, pairKey, jobKeyOf, pcmKeyOf, f32ToI16, i16ToF32 } from '../src/lib/syzygy/persist.js';
 import { segmentWindows, buildAssemblePlan } from '../src/lib/syzygy/plan.js';
 
 let failures = 0;
@@ -410,6 +410,22 @@ const A = (s) => [...s].map((c) => c.charCodeAt(0));
   check('job key is stable', jobKeyOf(base) === jobKeyOf(JSON.parse(JSON.stringify(base))));
   check('job key tracks settings', jobKeyOf(base) !== jobKeyOf({ ...base, crf: 18 })
     && jobKeyOf(base) !== jobKeyOf({ ...base, end: '399' }));
+}
+
+// ── decoded-audio cache packing ─────────────────────────────────────────
+{
+  // the decode was s16 (÷32768), so pack→unpack must be bit-exact
+  const src = new Float32Array([0, 1 / 32768, -1 / 32768, 12345 / 32768, -32768 / 32768, 32767 / 32768]);
+  const round = i16ToF32(f32ToI16(src));
+  check('pcm pack/unpack is lossless for s16-derived floats',
+    round.length === src.length && round.every((v, i) => v === src[i]));
+  const clip = f32ToI16(new Float32Array([1.5, -1.5]));
+  check('pcm pack clamps out-of-range', clip[0] === 32767 && clip[1] === -32768);
+  const k = { name: 'v.mp4', size: 9, lastModified: 3 };
+  check('pcm keys separate params and files',
+    pcmKeyOf(k, { rate: 2000, t: 60 }) !== pcmKeyOf(k, { rate: 8000, t: 60 })
+    && pcmKeyOf(k, { rate: 2000, t: 60 }) !== pcmKeyOf({ ...k, size: 10 }, { rate: 2000, t: 60 })
+    && pcmKeyOf(k, { rate: 2000, t: 60 }) === pcmKeyOf({ ...k }, { rate: 2000, t: 60 }));
 }
 
 // ── session persistence (pure serialize/apply parts) ────────────────────

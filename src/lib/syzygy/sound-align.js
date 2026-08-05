@@ -11,6 +11,7 @@
 
 import { decodeAudioRaw } from './engine.js';
 import { correlatePcm, confidenceLabel, MIN_COARSE_Z, MIN_PEAK_RATIO } from './correlate.js';
+import { pcmKeyOf, savePcm, loadPcm } from './persist.js';
 
 /** Only the first N seconds of each stream are analyzed (decode cost cap). */
 export const ANALYZE_CAP_S = 1800;
@@ -26,18 +27,36 @@ const REFINE_SEARCH_S = 2.5;
  * @param {import('@ffmpeg/ffmpeg').FFmpeg} ff
  * @param {string} videoPath  staged video input
  * @param {string} audioPath  staged replacement-audio input
- * @param {{videoDur:number, audioDur:number, onStatus?:(msg:string)=>void}} o
+ * @param {{videoDur:number, audioDur:number, onStatus?:(msg:string)=>void,
+ *          onLog?:(msg:string)=>void, videoKey?:object, audioKey?:object}} o
+ *   videoKey/audioKey: file identities ({name,size,lastModified}) enabling
+ *   the decoded-audio cache — the coarse decode is the dominant cost for
+ *   long files, and it's a pure function of the bytes.
  * @returns {Promise<{offset:number, z:number, quality:string, refined:boolean, cappedS:?number}>}
  */
-export async function estimateOffsetBySound(ff, videoPath, audioPath, { videoDur, audioDur, onStatus }) {
+export async function estimateOffsetBySound(ff, videoPath, audioPath, { videoDur, audioDur, onStatus, onLog, videoKey, audioKey }) {
   const vDur = Math.min(videoDur, ANALYZE_CAP_S);
   const aDur = Math.min(audioDur, ANALYZE_CAP_S);
   const capped = videoDur > ANALYZE_CAP_S || audioDur > ANALYZE_CAP_S;
 
+  async function decodeCached(path, params, fileKey, what) {
+    if (fileKey) {
+      const key = pcmKeyOf(fileKey, params);
+      const hit = await loadPcm(key).catch(() => null);
+      if (hit) {
+        onLog?.(`decoded ${what} recalled from cache`);
+        return hit;
+      }
+    }
+    const pcm = await decodeAudioRaw(ff, path, params);
+    if (fileKey) savePcm(pcmKeyOf(fileKey, params), pcm).catch(() => { /* cache only */ });
+    return pcm;
+  }
+
   onStatus?.('decoding the video’s own audio…');
-  const vPcm = await decodeAudioRaw(ff, videoPath, { rate: COARSE_RATE, t: vDur });
+  const vPcm = await decodeCached(videoPath, { rate: COARSE_RATE, t: vDur }, videoKey, 'video audio');
   onStatus?.('decoding the replacement audio…');
-  const aPcm = await decodeAudioRaw(ff, audioPath, { rate: COARSE_RATE, t: aDur });
+  const aPcm = await decodeCached(audioPath, { rate: COARSE_RATE, t: aDur }, audioKey, 'replacement audio');
 
   onStatus?.('correlating transients…');
   const coarse = correlatePcm(vPcm, aPcm, COARSE_RATE, { envRate: COARSE_ENV });

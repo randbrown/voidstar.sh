@@ -223,6 +223,63 @@ export function saveProbe(fileKey, data) {
   lsSet(LS_PROBES, map);
 }
 
+// ── decoded-audio cache (analysis PCM for both soundtracks) ─────────────
+// Sound alignment decodes each soundtrack to low-rate mono PCM — minutes of
+// engine time for long files. The decoded audio is a pure function of the
+// file bytes + decode params, so it's cached in IndexedDB (packed to Int16,
+// which round-trips losslessly — the decode itself was s16) keyed by file
+// identity, and recalled instantly on any later analysis.
+
+const PCM_INDEX = 'pcm:index';
+const PCM_CACHE_MAX = 6;
+/** Entries above this are not worth the storage (≈30 min @ 2 kHz s16 ×2). */
+export const PCM_MAX_BYTES = 16 * 1024 * 1024;
+
+export function pcmKeyOf(fileKey, { rate, ss = 0, t = 0 }) {
+  return `pcm:${probeKeyStr(fileKey)}:${rate}:${Math.round(ss * 1000)}:${Math.round(t * 1000)}`;
+}
+
+/** Float32 [-1,1] → Int16, exact inverse of the s16 decode's /32768. */
+export function f32ToI16(f32) {
+  const i16 = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    i16[i] = Math.max(-32768, Math.min(32767, Math.round(f32[i] * 32768)));
+  }
+  return i16;
+}
+
+export function i16ToF32(i16) {
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+  return f32;
+}
+
+export async function savePcm(key, f32) {
+  if (f32.length * 2 > PCM_MAX_BYTES) return;
+  await kvPut(key, new Blob([f32ToI16(f32).buffer]));
+  const idx = ((await kvGet(PCM_INDEX).catch(() => null)) || []).filter((k) => k !== key);
+  idx.push(key);
+  while (idx.length > PCM_CACHE_MAX) await kvDel(idx.shift()).catch(() => {});
+  await kvPut(PCM_INDEX, idx);
+}
+
+/** @returns {Promise<?Float32Array>} */
+export async function loadPcm(key) {
+  const blob = await kvGet(key).catch(() => null);
+  if (!blob) return null;
+  try {
+    return i16ToF32(new Int16Array(await blob.arrayBuffer()));
+  } catch {
+    return null;
+  }
+}
+
+async function clearPcm() {
+  const idx = (await kvGet(PCM_INDEX).catch(() => null)) || [];
+  await Promise.all(idx.map((k) => kvDel(k))).catch(() => {});
+  await kvDel(PCM_INDEX).catch(() => {});
+}
+
 // ── segmented-render checkpoints ────────────────────────────────────────
 
 /**
@@ -273,5 +330,6 @@ export async function clearAll() {
     ...['video', 'audio', 'padLead', 'padTail'].map((s) => clearFile(s)),
     clearResult(),
     clearJob(),
+    clearPcm(),
   ]).catch(() => {});
 }
