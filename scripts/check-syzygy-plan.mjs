@@ -11,6 +11,7 @@ import { parseProbeSections, summarizeVideo, streamRotation } from '../src/lib/s
 import { correlatePcm, MIN_COARSE_Z, MIN_PEAK_RATIO } from '../src/lib/syzygy/correlate.js';
 import { serializeSettings, applySettings, fileKeyOf, pairKey, jobKeyOf, pcmKeyOf, f32ToI16, i16ToF32 } from '../src/lib/syzygy/persist.js';
 import { segmentWindows, buildAssemblePlan } from '../src/lib/syzygy/plan.js';
+import { shellQuote, planToScript } from '../src/lib/syzygy/export-cmd.js';
 
 let failures = 0;
 function check(name, cond) {
@@ -230,6 +231,32 @@ const A = (s) => [...s].map((c) => c.charCodeAt(0));
   check('N/A fields dropped', !('duration' in info.streams[0]));
 }
 
+// ── direct concat (no full-file remux) ──────────────────────────────────
+{
+  const H264A = { ...H264, srcAudio: { codec: 'aac', sampleRate: 48000, channels: 2, layoutOk: true } };
+  const t = computeTimeline({ videoDur: 60, audioDur: 70, offset: 0 }); // tail pad
+  const plan = buildPlan({ t, video: H264A, audio: MP3, audioDur: 70, opts: {} });
+  check('direct-concat engages for clean [v,a] sources', plan.concatDirect === true);
+  check('direct-concat skips the video-only remux', !plan.steps.some((x) => x.label.includes('lossless remux')));
+  const list = plan.steps.find((x) => x.kind === 'write');
+  check('direct-concat list references the source itself', list.text.includes("file 'v.mp4'"));
+  const pad = plan.steps.find((x) => x.label.startsWith('encode tail pad'));
+  const pj = pad.args.join(' ');
+  check('direct-concat pads carry matching silent audio',
+    pj.includes('anullsrc=r=48000:cl=stereo') && pj.includes('-c:a aac') && pj.includes('-shortest'));
+  check('direct-concat still maps only concat video', plan.steps[plan.steps.length - 1].args.join(' ').includes('-map 0:v:0'));
+
+  const mid = buildPlan({ t, video: H264A, audio: MP3, audioDur: 70, opts: { forceMidConcat: true } });
+  check('forceMidConcat restores the remux path', !mid.concatDirect
+    && mid.steps.some((x) => x.label.includes('lossless remux')));
+  const extraTracks = buildPlan({ t, video: { ...H264A, srcAudio: { ...H264A.srcAudio, layoutOk: false } }, audio: MP3, audioDur: 70, opts: {} });
+  check('extra/reordered tracks fall back to the remux path', !extraTracks.concatDirect);
+  const opus = buildPlan({ t, video: { ...H264A, srcAudio: { ...H264A.srcAudio, codec: 'opus' } }, audio: MP3, audioDur: 70, opts: {} });
+  check('unencodable silent codec falls back to the remux path', !opus.concatDirect);
+  const noAud = buildPlan({ t, video: { ...H264A, srcAudio: null }, audio: MP3, audioDur: 70, opts: {} });
+  check('audioless video falls back to the remux path', !noAud.concatDirect);
+}
+
 // ── test windows (endOverride + draft downscale) ────────────────────────
 {
   // a sub-window override behaves like a fully-specified timeline
@@ -273,7 +300,10 @@ const A = (s) => [...s].map((c) => c.charCodeAt(0));
   check('fill stays direct (video still copied)', plan.strategy === 'direct' && joined.includes('-c:v copy'));
   const fc = plan.steps[0].args[plan.steps[0].args.indexOf('-filter_complex') + 1];
   check('fill trims the lead from the video track', fc.includes('[0:a:0]atrim=start=0:end=10'));
-  check('fill trims the tail from the video track', fc.includes('[0:a:0]atrim=start=40:end=60'));
+  // the tail reads from a DEDICATED input seeked to its start (no
+  // decode-and-discard of the whole file), so its atrim is relative
+  check('fill tail uses the seeked extra input', fc.includes('[2:a:0]atrim=start=0:end=20'));
+  check('fill tail input is seeked', plan.steps[0].args.join(' ').includes('-ss 40 -i v.mp4'));
   check('fill places the replacement between', fc.includes('[1:a:0]atrim=start=0:end=30'));
   check('fill concats three segments', fc.includes('concat=n=3:v=0:a=1'));
   check('fill has seam fades', fc.includes('afade=t=in') && fc.includes('afade=t=out'));
@@ -426,6 +456,28 @@ const A = (s) => [...s].map((c) => c.charCodeAt(0));
     pcmKeyOf(k, { rate: 2000, t: 60 }) !== pcmKeyOf(k, { rate: 8000, t: 60 })
     && pcmKeyOf(k, { rate: 2000, t: 60 }) !== pcmKeyOf({ ...k, size: 10 }, { rate: 2000, t: 60 })
     && pcmKeyOf(k, { rate: 2000, t: 60 }) === pcmKeyOf({ ...k }, { rate: 2000, t: 60 }));
+}
+
+// ── ffmpeg script export ────────────────────────────────────────────────
+{
+  check('plain args pass unquoted', shellQuote('-c:v') === '-c:v' && shellQuote('out.mp4') === 'out.mp4');
+  check('spaces and quotes get shell-safe quoting',
+    shellQuote('my gig.mp4') === "'my gig.mp4'"
+    && shellQuote("it's.mp4") === "'it'\\''s.mp4'");
+  const t = computeTimeline({ videoDur: 60, audioDur: 70, offset: 0 });
+  const plan = buildPlan({
+    t,
+    video: { ...H264, path: 'my gig video.mp4', srcAudio: { codec: 'aac', sampleRate: 48000, channels: 2, layoutOk: true } },
+    audio: { ...MP3, path: 'board mix.mp3' },
+    audioDur: 70, opts: {},
+  });
+  const script = planToScript(plan, { outName: 'my gig video.syzygy.mp4', header: ['test header'] });
+  check('script is bash with strict mode', script.startsWith('#!/usr/bin/env bash') && script.includes('set -euo pipefail'));
+  check('script quotes the real filenames', script.includes("'my gig video.mp4'") && script.includes("'board mix.mp3'"));
+  check('script renames the final output', script.includes("'my gig video.syzygy.mp4'") && !/ffmpeg[^\n]* out\.mp4/.test(script));
+  check('write steps become heredocs', script.includes("cat > concat.txt <<'SYZYGY_EOF'"));
+  check('script cleans intermediates', /rm -f .*pad-tail\.mp4/.test(script) && /rm -f .*concat\.txt/.test(script));
+  check('script carries strategy + notes as comments', script.includes('# strategy: concat (direct concat)') && script.includes('# test header'));
 }
 
 // ── session persistence (pure serialize/apply parts) ────────────────────
