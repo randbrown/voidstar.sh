@@ -13,6 +13,11 @@ import {
   summarizeVideo, summarizeAudio, nearestKeyframe,
 } from './engine.js';
 import { estimateOffsetBySound } from './sound-align.js';
+import {
+  applySettings, loadSettings, saveSettings, saveFile, loadFile, clearFile,
+  saveSound, loadSound, saveResult, loadResult, saveRunStatus, loadRunStatus,
+  fileKeyOf, pairKey, clearAll,
+} from './persist.js';
 
 // ── tiny DOM helper ─────────────────────────────────────────────────────
 function h(tag, attrs = {}, ...children) {
@@ -41,6 +46,14 @@ function fmtDur(s) {
   return `${sign}${m}:${sec}`;
 }
 
+function fmtAgo(epochMs) {
+  const m = Math.round((Date.now() - epochMs) / 60000);
+  if (m < 2) return 'just now';
+  if (m < 90) return `${m} min ago`;
+  const hrs = Math.round(m / 60);
+  return hrs < 36 ? `${hrs} h ago` : `${Math.round(hrs / 24)} days ago`;
+}
+
 function fmtClock(epochMs) {
   const d = new Date(epochMs);
   const p = (n, w = 2) => String(n).padStart(w, '0');
@@ -57,6 +70,8 @@ const state = {
   sound: null,          // { offset, z, quality, refined, cappedS } from sound-align
   soundBusy: false,
   soundError: null,
+  soundAutoOk: false,   // auto-analysis only after a user gesture this page-load
+  remembered: { video: null, audio: null }, // persisted files awaiting restore
   trimStart: false,
   trimEnd: false,
   keepVideoAudio: false, // fill video-only spans with the video's own audio
@@ -108,6 +123,7 @@ const ui = {};
 
 /** @param {HTMLElement} root */
 export function initSyzygy(root) {
+  try { applySettings(state, loadSettings()); } catch { /* fresh defaults */ }
   root.append(
     buildSources(),
     buildAlignment(),
@@ -124,13 +140,97 @@ export function initSyzygy(root) {
       ui.resultBox = h('div', {}),
     ),
   );
+  syncControls();
+  update();
+  restoreSession();
+}
+
+/** Push restored settings into the (write-only-by-default) form controls. */
+function syncControls() {
+  ui.trimStartBox.checked = state.trimStart;
+  ui.trimEndBox.checked = state.trimEnd;
+  ui.keepVideoAudioBox.checked = state.keepVideoAudio;
+  ui.audioModeSel.value = state.audioMode;
+  ui.videoModeSel.value = state.videoMode;
+  ui.crfInput.value = String(state.crf);
+  ui.presetSel.value = state.preset;
+  ui.manualInput.value = String(state.manualOffset);
+  ui.testStartInput.value = state.testStart == null ? '' : String(state.testStart);
+  ui.testLenInput.value = String(state.testLen);
+}
+
+/** Best-effort restore of files, sound match, and the last result. */
+async function restoreSession() {
+  for (const kind of ['video', 'audio']) {
+    try {
+      const saved = await loadFile(kind);
+      if (!saved) continue;
+      if (saved.file) { await setFile(kind, saved.file, { skipPersist: true }); continue; }
+      if (saved.handle) {
+        let perm = 'prompt';
+        try { perm = await saved.handle.queryPermission({ mode: 'read' }); } catch { /* older impl */ }
+        if (perm === 'granted') {
+          try {
+            const f = await saved.handle.getFile();
+            await setFile(kind, f, { handle: saved.handle, skipPersist: true });
+            continue;
+          } catch { /* moved/deleted — fall through to the chip */ }
+        }
+      }
+      state.remembered[kind] = saved;
+      update();
+    } catch { /* no restore for this slot */ }
+  }
+  // pad images (mode was downgraded at load if the image was missing)
+  try {
+    const raw = loadSettings();
+    for (const side of ['lead', 'tail']) {
+      const saved = await loadFile(side === 'lead' ? 'padLead' : 'padTail');
+      if (saved?.file && raw?.pad?.[side]?.mode === 'image') {
+        state.pad[side].file = saved.file;
+        state.pad[side].mode = 'image';
+      }
+    }
+  } catch { /* pads are cosmetic */ }
+  // sound match, only if it belongs to exactly this file pair
+  try {
+    const s = loadSound();
+    if (s?.sound && state.video && state.audio
+        && s.key === pairKey(fileKeyOf(state.video.file), fileKeyOf(state.audio.file))) {
+      state.sound = s.sound;
+    }
+  } catch { /* re-analyze instead */ }
+  // last finished render
+  try {
+    const r = await loadResult();
+    if (r?.blob && !state.result) {
+      state.result = {
+        url: URL.createObjectURL(r.blob),
+        name: r.meta.name, size: r.blob.size, mime: r.meta.mime,
+        strategy: r.meta.strategy, notes: r.meta.notes || [],
+        isTest: r.meta.isTest, testDesc: r.meta.testDesc,
+        restoredAt: r.meta.doneAt,
+      };
+    }
+  } catch { /* nothing to offer */ }
+  try {
+    if (loadRunStatus() === 'running') {
+      setStatus('last session closed mid-render — files & settings are restored; press render to run it again', 'err');
+      saveRunStatus(null);
+    }
+  } catch { /* cosmetic */ }
   update();
 }
 
 // ── sources ─────────────────────────────────────────────────────────────
 function buildSources() {
+  const forget = h('button', { class: 'sz-btn sz-btn-xs sz-forget', title: 'clear remembered files, settings, and results' }, 'forget session');
+  forget.addEventListener('click', async () => {
+    await clearAll().catch(() => {});
+    location.reload();
+  });
   return h('section', { class: 'sz-sect' },
-    h('h3', {}, 'sources'),
+    h('div', { class: 'sz-sect-head' }, h('h3', {}, 'sources'), forget),
     h('div', { class: 'sz-sources' },
       buildDrop('video'),
       buildDrop('audio'),
@@ -144,22 +244,50 @@ function buildDrop(kind) {
     : 'audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus';
   const input = h('input', { type: 'file', accept, hidden: '' });
   input.addEventListener('change', () => { if (input.files[0]) setFile(kind, input.files[0]); input.value = ''; });
+  // Prefer the FS Access picker when present: its handle lets a >cap file be
+  // re-opened next session without storing a copy. Falls back to the input.
+  async function pick() {
+    if (window.showOpenFilePicker) {
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          multiple: false,
+          types: [kind === 'video'
+            ? { description: 'video', accept: { 'video/*': ['.mp4', '.mov', '.m4v', '.webm', '.mkv'] } }
+            : { description: 'audio', accept: { 'audio/*': ['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus'] } }],
+        });
+        setFile(kind, await handle.getFile(), { handle });
+        return;
+      } catch (err) {
+        if (err?.name === 'AbortError') return; // user cancelled
+      }
+    }
+    input.click();
+  }
   const zone = h('div', { class: 'sz-drop', tabindex: '0', role: 'button',
     'aria-label': `choose ${kind} file` });
-  zone.addEventListener('click', () => input.click());
-  zone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+  zone.addEventListener('click', () => pick());
+  zone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
   zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('sz-dropping'); });
   zone.addEventListener('dragleave', () => zone.classList.remove('sz-dropping'));
   zone.addEventListener('drop', (e) => {
     e.preventDefault(); zone.classList.remove('sz-dropping');
+    const item = e.dataTransfer?.items?.[0];
     const f = e.dataTransfer?.files?.[0];
-    if (f) setFile(kind, f);
+    if (!f) return;
+    if (item?.getAsFileSystemHandle) {
+      // must be called synchronously inside the event; resolves later
+      item.getAsFileSystemHandle()
+        .then((hd) => setFile(kind, f, { handle: hd?.kind === 'file' ? hd : null }))
+        .catch(() => setFile(kind, f));
+    } else {
+      setFile(kind, f);
+    }
   });
   ui[`${kind}Zone`] = zone;
   return h('div', { class: 'sz-drop-wrap' }, zone, input);
 }
 
-async function setFile(kind, file) {
+async function setFile(kind, file, o = {}) {
   const prev = state[kind];
   if (prev?.url) URL.revokeObjectURL(prev.url);
   const url = URL.createObjectURL(file);
@@ -172,6 +300,11 @@ async function setFile(kind, file) {
   state.result = null;
   state.sound = null; // any sound match belonged to the previous file pair
   state.soundError = null;
+  state.remembered[kind] = null;
+  if (!o.skipPersist) {
+    saveFile(kind, file, o.handle || null).catch(() => {});
+    try { saveSound(null); } catch { /* storage blocked */ }
+  }
   update();
 
   // The element is the fast path for duration; the byte-sniffer (below) is
@@ -205,6 +338,28 @@ function renderZone(kind) {
   const s = state[kind];
   zone.replaceChildren();
   if (!s) {
+    const rem = state.remembered[kind];
+    if (rem) {
+      zone.append(
+        h('div', { class: 'sz-drop-icon' }, '↻'),
+        h('div', { class: 'sz-drop-label' }, `last time: ${rem.key.name}`),
+        h('div', { class: 'sz-drop-hint' }, fmtBytes(rem.key.size)),
+      );
+      if (rem.handle) {
+        const btn = h('button', { class: 'sz-btn sz-btn-xs' }, 'restore');
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            const perm = await rem.handle.requestPermission({ mode: 'read' });
+            if (perm === 'granted') setFile(kind, await rem.handle.getFile(), { handle: rem.handle, skipPersist: true });
+          } catch { /* moved/denied — drop it again */ }
+        });
+        zone.append(h('div', { class: 'sz-row', style: 'justify-content:center' }, btn));
+      } else {
+        zone.append(h('div', { class: 'sz-drop-hint' }, 'drop it again to continue'));
+      }
+      return;
+    }
     zone.append(
       h('div', { class: 'sz-drop-icon' }, kind === 'video' ? '▣' : '∿'),
       h('div', { class: 'sz-drop-label' }, `drop ${kind} here`),
@@ -230,6 +385,8 @@ function renderZone(kind) {
     state.result = null;
     state.sound = null;
     state.soundError = null;
+    clearFile(kind).catch(() => {});
+    try { saveSound(null); } catch { /* storage blocked */ }
     update();
   });
   zone.append(...lines, x);
@@ -239,7 +396,11 @@ function renderZone(kind) {
 function buildAlignment() {
   const radio = (value, label, descr) => {
     const r = h('input', { type: 'radio', name: 'sz-align', value });
-    r.addEventListener('change', () => { state.align = value; update(); });
+    r.addEventListener('change', () => {
+      state.align = value;
+      if (value === 'sound') state.soundAutoOk = true; // user gesture — auto-analysis allowed
+      update();
+    });
     ui[`align_${value}`] = r;
     return h('label', { class: 'sz-radio' }, r, h('span', {}, label), h('small', {}, descr));
   };
@@ -316,6 +477,7 @@ async function analyzeSound() {
       state.sound = await estimateOffsetBySound(ff, vin.path, ain.path, {
         videoDur: vd, audioDur: ad, onStatus: setSoundStatus,
       });
+      try { saveSound(state.sound, pairKey(fileKeyOf(state.video.file), fileKeyOf(state.audio.file))); } catch { /* storage blocked */ }
     } finally {
       await vin.cleanup();
       await ain.cleanup();
@@ -337,6 +499,12 @@ function renderSoundResult() {
     b.addEventListener('click', () => analyzeSound());
     return b;
   };
+  if (!state.sound && !state.soundError && state.align === 'sound' && state.video && state.audio && !state.soundAutoOk) {
+    const b = h('button', { class: 'sz-btn sz-btn-xs' }, 'analyze');
+    b.addEventListener('click', () => { state.soundAutoOk = true; analyzeSound(); });
+    ui.soundResult.append(h('div', { class: 'sz-sound-hit sz-q-weak' }, '♫ restored session — run the sound match ', b));
+    return;
+  }
   if (state.sound) {
     const s = state.sound;
     ui.soundResult.append(h('div', { class: `sz-sound-hit sz-q-${s.quality}` },
@@ -394,7 +562,12 @@ function renderPadPicker(side, padDur) {
   }
   if (p.mode === 'image') {
     const fi = h('input', { type: 'file', accept: 'image/*', hidden: '' });
-    fi.addEventListener('change', () => { if (fi.files[0]) { p.file = fi.files[0]; update(); } });
+    fi.addEventListener('change', () => {
+      if (!fi.files[0]) return;
+      p.file = fi.files[0];
+      saveFile(side === 'lead' ? 'padLead' : 'padTail', p.file, null).catch(() => {});
+      update();
+    });
     const pick = h('button', { class: 'sz-btn' }, p.file ? p.file.name : 'choose image…');
     pick.addEventListener('click', () => fi.click());
     kids.push(h('div', { class: 'sz-row' }, pick, fi));
@@ -595,8 +768,11 @@ function update(o = {}) {
   ui.align_sound.disabled = !haveBoth;
   ui.align_sound.closest('.sz-radio').classList.toggle('sz-disabled', !haveBoth);
   if (state.align === 'sound' && !haveBoth) { state.align = 'zero'; ui.align_zero.checked = true; }
-  // selecting "matching sound" kicks the analysis off automatically
-  if (state.align === 'sound' && haveBoth && !state.sound && !state.soundBusy && !state.soundError) {
+  // selecting "matching sound" kicks the analysis off automatically — but
+  // only after a user gesture this page-load, so a restored session doesn't
+  // silently start a 31MB engine download.
+  if (state.align === 'sound' && haveBoth && state.soundAutoOk
+      && !state.sound && !state.soundBusy && !state.soundError) {
     queueMicrotask(() => analyzeSound());
   }
   renderSoundResult();
@@ -648,6 +824,14 @@ function update(o = {}) {
   // result
   ui.resultSection.hidden = !state.result;
   if (state.result) renderResult();
+
+  scheduleSettingsSave();
+}
+
+let settingsSaveTimer = 0;
+function scheduleSettingsSave() {
+  clearTimeout(settingsSaveTimer);
+  settingsSaveTimer = setTimeout(() => { try { saveSettings(state); } catch { /* blocked */ } }, 400);
 }
 
 function renderTimeline(t) {
@@ -732,6 +916,7 @@ async function run(mode = 'full') {
   state.result = null;
   logLines = [];
   ui.logPre.textContent = '';
+  try { saveRunStatus('running'); } catch { /* storage blocked */ }
   update();
 
   const cleanups = [];
@@ -861,6 +1046,9 @@ async function run(mode = 'full') {
         isTest: true,
         testDesc: desc,
       };
+      try { saveRunStatus({ doneAt: Date.now() }); } catch { /* storage blocked */ }
+      saveResult({ name: state.result.name, mime: state.result.mime, strategy: state.result.strategy,
+        notes: state.result.notes, isTest: true, testDesc: desc }, outBlob).catch(() => {});
       setStatus('sync check done — the full render is unaffected', 'ok');
       setProgress(null);
       return;
@@ -893,6 +1081,9 @@ async function run(mode = 'full') {
       strategy: plan.strategy,
       notes: plan.notes,
     };
+    try { saveRunStatus({ doneAt: Date.now() }); } catch { /* storage blocked */ }
+    saveResult({ name: state.result.name, mime: state.result.mime, strategy: state.result.strategy,
+      notes: state.result.notes, isTest: false }, outBlob).catch(() => {});
     setStatus('done', 'ok');
     setProgress(null);
   } catch (err) {
@@ -900,6 +1091,7 @@ async function run(mode = 'full') {
     // away so the next render boots a fresh core instead of failing forever.
     const wasmDead = /RuntimeError|memory access|unreachable|table index/.test(String(err));
     if (wasmDead) terminateEngine();
+    try { saveRunStatus(null); } catch { /* storage blocked */ }
     if (state.cancelled) {
       setStatus('cancelled', 'err');
     } else {
@@ -970,6 +1162,8 @@ async function cleanupTemp(ff, tempFiles) {
 function renderResult() {
   const r = state.result;
   ui.resultBox.replaceChildren(
+    ...(r.restoredAt ? [h('div', { class: 'sz-note' },
+      `↻ restored from your last session (${fmtAgo(r.restoredAt)})`)] : []),
     ...(r.isTest ? [h('div', { class: 'sz-test-badge' },
       `⧗ draft sync check — ${r.testDesc} · ≤480p ultrafast · listen for sync drifting between slices. the full render keeps full quality.`)] : []),
     h('video', { class: 'sz-preview', controls: '', src: r.url }),

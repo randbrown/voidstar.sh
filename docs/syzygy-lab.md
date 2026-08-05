@@ -19,6 +19,7 @@ pattern. It shares nothing with the qualia engine.
 | `src/lib/syzygy/correlate.js` | **pure** transient-correlation DSP (onset envelopes, FFT cross-correlation, confidence gates) — node-testable |
 | `src/lib/syzygy/sound-align.js` | the two-stage "matching sound" estimator (coarse full-stream pass + high-rate refine window) |
 | `src/lib/syzygy/engine.js` | ffmpeg.wasm lifecycle: CDN core load, WORKERFS staging, exec/probe helpers, keyframe scan |
+| `src/lib/syzygy/persist.js` | session persistence: settings/sound-match/status in localStorage, files + results in IndexedDB (blobs ≤512 MB, FS-Access handles above) |
 | `scripts/check-syzygy-plan.mjs` | node smoke test for plan.js + meta.js (in `npm run check`) |
 
 ## The engine
@@ -86,6 +87,33 @@ stream-copy the video (the concat path re-adds the original file as an
 audio-only input, since its concat input is video-only). Filling forces the
 audio to be encoded (stream-copy can't splice); a video with no audio track
 degrades to silence with a note.
+
+## Session persistence
+
+The whole session survives a closed tab/browser, restored on the next load:
+
+- **Settings** (alignment mode, offsets, trims, keep-original-audio, pad
+  choices, fidelity, sync-check prefs) live in localStorage, saved debounced
+  on every change and validated on the way back in (enums whitelisted,
+  numbers clamped — hostile storage can't wedge the app).
+- **Files**: identity always; the bytes as IndexedDB blobs up to 512 MB per
+  file (silent restore, any browser); above that a File System Access
+  handle where the browser can mint one (picker + drag-drop capture them in
+  Chromium) — restore is then one permission click, or automatic when the
+  permission persisted. Failing all that, the dropzone shows "last time:
+  name (size) — drop it again". Pad images persist as blobs too.
+- **Results**: the last finished render (≤512 MB) is stored and re-offered
+  with a "restored from your last session" badge. A `running` marker set at
+  render start and cleared on completion detects a browser closed
+  mid-render: the reload says so and invites a re-render (wasm state isn't
+  resumable). The sound match is remembered keyed to the exact file pair
+  (name+size+mtime of both) so a restored session skips re-analysis; a
+  restored session never auto-starts the 31 MB engine download — sound
+  analysis waits for a click.
+- **forget session** (sources header) wipes all of it.
+
+Every persistence call is failure-tolerant: private mode, quota pressure, or
+a missing IndexedDB degrade to "no persistence", never to a broken page.
 
 ## Sync check (draft test render)
 

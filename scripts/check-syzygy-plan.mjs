@@ -9,6 +9,7 @@ import {
 import { sniffMediaInfo, sniffWav, sniffMp3 } from '../src/lib/syzygy/meta.js';
 import { parseProbeSections, summarizeVideo, streamRotation } from '../src/lib/syzygy/engine.js';
 import { correlatePcm, MIN_COARSE_Z, MIN_PEAK_RATIO } from '../src/lib/syzygy/correlate.js';
+import { serializeSettings, applySettings, fileKeyOf, pairKey } from '../src/lib/syzygy/persist.js';
 
 let failures = 0;
 function check(name, cond) {
@@ -366,6 +367,44 @@ const A = (s) => [...s].map((c) => c.charCodeAt(0));
     const r = correlatePcm(new Float32Array(2000 * 5), new Float32Array(2000 * 5), 2000, { envRate: 50 });
     check('silent tracks yield zero confidence', r.z === 0 || r.z < MIN_COARSE_Z);
   }
+}
+
+// ── session persistence (pure serialize/apply parts) ────────────────────
+{
+  const mkState = () => ({
+    align: 'sound', manualOffset: -1.35, adjust: 0.02, trimStart: true, trimEnd: false,
+    keepVideoAudio: true, audioMode: 'copy', videoMode: 'reencode', crf: 20, preset: 'fast',
+    testStart: 12, testLen: 8,
+    pad: { lead: { mode: 'time', time: 3.5, file: null }, tail: { mode: 'image', time: 0, file: null } },
+  });
+  const src = mkState();
+  const saved = JSON.parse(JSON.stringify(serializeSettings(src)));
+  const dst = { pad: { lead: {}, tail: {} } };
+  check('settings survive a JSON round-trip', applySettings(dst, saved) === true
+    && dst.align === 'sound' && dst.manualOffset === -1.35 && dst.trimStart && dst.keepVideoAudio
+    && dst.audioMode === 'copy' && dst.crf === 20 && dst.preset === 'fast'
+    && dst.testStart === 12 && dst.pad.lead.mode === 'time' && near(dst.pad.lead.time, 3.5));
+  check('persisted image pad without its file degrades to adjacent', dst.pad.tail.mode === 'adjacent');
+  const hostile = { v: 1, align: 'evil', audioMode: 'x', videoMode: 'x', preset: 'x',
+    crf: 9999, manualOffset: 'NaN?', testLen: -5, pad: { lead: { mode: 'x' } } };
+  const d2 = { pad: { lead: {}, tail: {} } };
+  applySettings(d2, hostile);
+  check('hostile stored values are clamped to safe defaults',
+    d2.align === 'zero' && d2.audioMode === 'auto' && d2.videoMode === 'auto'
+    && d2.preset === 'veryfast' && d2.crf === 35 && d2.manualOffset === 0
+    && d2.testLen === 1 && d2.pad.lead.mode === 'adjacent');
+  check('wrong version is rejected', applySettings(d2, { v: 99 }) === false
+    && applySettings(d2, null) === false);
+  const f1 = { name: 'a.mp4', size: 10, lastModified: 111 };
+  const f2 = { name: 'b.wav', size: 20, lastModified: 222 };
+  check('pair key is order-sensitive and identity-complete',
+    pairKey(f1, f2) !== pairKey(f2, f1)
+    && pairKey(f1, f2) === pairKey({ ...f1 }, { ...f2 })
+    && pairKey(f1, f2) !== pairKey({ ...f1, size: 11 }, f2));
+  check('fileKeyOf extracts identity', (() => {
+    const k = fileKeyOf({ name: 'x', size: 5, lastModified: 9, extra: true });
+    return k.name === 'x' && k.size === 5 && k.lastModified === 9 && !('extra' in k);
+  })());
 }
 
 if (failures) {

@@ -48,8 +48,11 @@ import '../../styles/themes.css';
 
     .sz-sect { background: var(--surface-glass); border: 1px solid var(--border);
       border-radius: .7rem; padding: .9rem 1rem; margin-bottom: 1rem; }
-    .sz-sect > h3 { font-size: .74rem; text-transform: uppercase; letter-spacing: .1em;
-      color: var(--text-muted); margin-bottom: .7rem; font-weight: 600; }
+    .sz-sect > h3, .sz-sect-head > h3 { font-size: .74rem; text-transform: uppercase;
+      letter-spacing: .1em; color: var(--text-muted); margin-bottom: .7rem; font-weight: 600; }
+    .sz-sect-head { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; }
+    .sz-forget { color: var(--text-dim); border-color: transparent; background: transparent; }
+    .sz-forget:hover { color: var(--pink); border-color: var(--border); }
     .sz-row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
     .sz-lbl { font-size: .78rem; color: var(--text-muted); }
     .sz-dim { color: var(--text-dim); font-size: .75rem; }
