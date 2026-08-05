@@ -1238,11 +1238,16 @@ async function runSegmented(ff, { t, video, audio, audioDur, videoDur, opts, seg
     }
     await cleanupTemp(ff, tempFiles); // keep MEMFS lean: one segment at a time
     // deterministic test hook: die right after checkpointing segment N, so
-    // the resume path is verifiable without racing real encode timings
-    const dieAfter = (() => {
-      try { return Number(localStorage.getItem('syzygy-abort-after-seg')); } catch { return NaN; }
+    // the resume path is verifiable without racing real encode timings.
+    // The absent-key check must be explicit: getItem() returns null and
+    // Number(null) === 0, which silently aborted EVERY fresh segmented
+    // render after its first chunk (hit live on production).
+    const dieRaw = (() => {
+      try { return localStorage.getItem('syzygy-abort-after-seg'); } catch { return null; }
     })();
-    if (dieAfter === i) throw new Error(`[test] aborted after checkpointing segment ${i + 1}`);
+    if (dieRaw !== null && Number(dieRaw) === i) {
+      throw new Error(`[test] aborted after checkpointing segment ${i + 1}`);
+    }
   }
   if (resumed > 0) pushLog(`[syzygy] resumed ${resumed}/${n} segments from checkpoint`);
 

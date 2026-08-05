@@ -42,8 +42,11 @@ export async function loadEngine(onStatus) {
       if (o) bases = [o, ...CORE_BASES];
     } catch { /* storage may be blocked */ }
 
+    // Two rounds over the CDN list: a 31 MB fetch dying mid-stream on a
+    // flaky connection ("failed to complete download") deserves a second
+    // shot at the same hosts before giving up.
     let lastErr = null;
-    for (const base of bases) {
+    for (const base of [...bases, ...bases]) {
       try {
         onStatus?.(`fetching ffmpeg core (~31 MB, one-time)…`, 0);
         const coreURL = await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript');
@@ -57,9 +60,10 @@ export async function loadEngine(onStatus) {
         return ff;
       } catch (err) {
         lastErr = err;
+        onStatus?.('core download failed — retrying…');
       }
     }
-    throw new Error(`could not load the ffmpeg core from any CDN — ${lastErr?.message || lastErr}`);
+    throw new Error(`could not load the ffmpeg core (network dropped mid-download from every CDN — check the connection and try again) — ${lastErr?.message || lastErr}`);
   })();
   try {
     return await loadPromise;
