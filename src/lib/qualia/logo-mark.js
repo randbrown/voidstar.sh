@@ -30,6 +30,21 @@
 // own size, the (smaller) mark pans less than the full-viewport layers — a
 // deliberate foreground-parallax read rather than a bug.
 //
+// DVD drift: an optional motion mode where the mark wanders the stage at a
+// slow constant velocity and bounces off the edges — the classic DVD
+// screensaver walk. Dragging while drifting re-seeds the wander point; the
+// anchor position is untouched, so toggling drift off returns the mark home.
+//
+// Detector mode: a REAL object detector (MediaPipe EfficientDet in a worker
+// — ../object-detector.js) scans a small composite of the live scene layers
+// (Hydra + fx + glitch post, screen-blended like the DOM stack) — i.e. the
+// mark scans whatever the visuals behind it are showing, not the camera. A
+// full-stage transparent Canvas2D HUD just under the mark draws the scan
+// circle around the mark, light beams to each detected object, lock-on
+// corner brackets, and labels. Region-gated: only objects inside the scan
+// circle (which travels with the drift) are targeted. Best-effort like
+// pose: no model / offline CDN degrades to the idle radar ring.
+//
 // Branding: the void* glyph on the curved face can be replaced by a custom
 // logo (URL or uploaded image, re-inked white so any art gets the same
 // extruded-light treatment), and an optional caption tucked just under the
@@ -43,6 +58,7 @@ import {
   makeUniformGetter, uploadAudioUniforms, bakeTextTex,
 } from './webgl.js';
 import { scaleAudio } from './field.js';
+import { acquireDetector, releaseDetector, getDetections } from './object-detector.js';
 
 /** Baseline tunables — the logo card's defaults. */
 export const LOGO_MARK_DEFAULTS = {
@@ -61,6 +77,10 @@ export const LOGO_MARK_DEFAULTS = {
   hideOnLogoQuale: true, // auto-hide while the voidstar_logo quale is active
   image: '',           // custom logo (URL or data: URL) replacing the void* glyph
   caption: '',         // billing/title line under the mark ('' = none)
+  drift: true,         // DVD-screensaver wander (bounces off stage edges)
+  driftSpeed: 0.02,    // wander speed, stage-widths per second (~50s to cross)
+  detector: false,     // scanner HUD — object detection on the scene behind
+  scanRadius: 0.7,     // scan-circle diameter as a fraction of the stage short side
 };
 
 const PALETTES   = ['silver', 'voidblue', 'platinum', 'inferno'];
@@ -517,9 +537,13 @@ const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
  *   split/fullscreen changes re-anchor without extra plumbing.
  * @param {() => void} [opts.onConfigChange]
  *   Fired after a drag commits a new custom position (page persists settings).
+ * @param {() => (HTMLCanvasElement|null)[]} [opts.getSceneLayers]
+ *   The live scene canvases (bottom-up, e.g. [hydra, fx, glitchPost]) the
+ *   detector scans. First layer draws opaque, the rest screen-blend — the
+ *   same compositing the DOM stack uses. Detector mode idles without it.
  * @param {HTMLElement} [opts.parent]
  */
-export function createLogoMark({ getStageRect, onConfigChange, parent = document.body } = {}) {
+export function createLogoMark({ getStageRect, onConfigChange, getSceneLayers, parent = document.body } = {}) {
   const cfg = { ...LOGO_MARK_DEFAULTS };
   let enabled = false;
 
@@ -579,6 +603,418 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
   let lastPosKey = '';
   let cssRect = { x: 0, y: 0, w: 0, h: 0 };   // CSS px, stage-relative
   let dragging = false;
+
+  // ── DVD-drift state — mark centre in stage-fraction coords + unit heading.
+  let driftX = 0.5, driftY = 0.5, driftVX = 0.62, driftVY = 0.78;
+  let driftInit = false;
+  function driftJitter() {
+    // Tiny random heading tweak per bounce so the walk never settles into a
+    // repeating loop; kept comfortably diagonal (near-parallel to an edge
+    // reads as stuck, not wandering).
+    const j = (Math.random() * 2 - 1) * 0.07;
+    const c = Math.cos(j), s = Math.sin(j);
+    const vx = driftVX * c - driftVY * s;
+    driftVY = driftVX * s + driftVY * c;
+    driftVX = vx;
+    if (Math.abs(driftVX) < 0.30) driftVX = (driftVX < 0 ? -1 : 1) * 0.30;
+    if (Math.abs(driftVY) < 0.30) driftVY = (driftVY < 0 ? -1 : 1) * 0.30;
+    const n = Math.hypot(driftVX, driftVY);
+    driftVX /= n; driftVY /= n;
+  }
+
+  // ── Detector / scanner-HUD state ──────────────────────────────────────────
+  // The HUD is a full-stage transparent Canvas2D layer just UNDER the mark
+  // (z:6 vs the mark's 7) — the mark canvas stays tiny; beams and brackets
+  // need the whole stage. Built lazily on first detector enable.
+  const MAX_DET = 8;
+  let hudCanvas = null, hudCtx = null, hudBuilt = false;
+  let detectorHeld = false;
+  let sweepAng = 0;
+  let sceneComposite = null, sceneCtx = null;   // small offscreen the detector eats
+  const detSlots = [];
+  for (let i = 0; i < MAX_DET; i++) {
+    detSlots.push({
+      active: false, label: '', score: 0, text: '',
+      cx: 0, cy: 0, hx: 20, hy: 20,           // stage CSS px
+      lock: 0, alpha: 0, seed: Math.random(), lastSeen: -1e9, claimed: -1,
+    });
+  }
+  // Speculative blips — the scanner reads as a robot probing its
+  // surroundings even when the detector finds nothing in the imagery:
+  // with no real target locked in the zone, short-lived low-confidence
+  // pseudo-readings blip in and out of the scan circle. Deliberately
+  // ambient — tiny drifting boxes, sci-fi labels, sub-0.5 scores — and
+  // they only ever claim slots real detections left free.
+  const BLIP_LABELS = ['anomaly', 'signal', 'echo', 'artifact', 'flux', 'trace', 'entity', 'residue'];
+  const blips = [];   // {x, y, hw, hh, vx, vy, label, score, age, ttl}
+
+  // HUD stroke colors per palette — tuned to read as the mark's own light.
+  const HUD_COLORS = {
+    silver:   { main: [235, 240, 250], dim: [150, 165, 195] },
+    voidblue: { main: [140, 220, 255], dim: [60, 130, 200] },
+    platinum: { main: [232, 230, 246], dim: [140, 150, 190] },
+    inferno:  { main: [255, 175, 90],  dim: [190, 90, 40] },
+  };
+
+  function driftActive() { return cfg.drift && cfg.driftSpeed > 0; }
+
+  function detectorWanted() { return enabled && !suppressed && built && cfg.detector; }
+
+  function buildHud() {
+    if (hudBuilt) return;
+    hudCanvas = document.createElement('canvas');
+    hudCanvas.id = 'qualia-logo-scan';
+    // Above the pose overlays (z:3) and the Strudel scope (z:5), below the
+    // mark itself (z:7). Transparent + pointer-transparent — pure telemetry.
+    hudCanvas.style.cssText = 'position:fixed;z-index:6;pointer-events:none;display:none;';
+    parent.appendChild(hudCanvas);
+    hudCtx = hudCanvas.getContext('2d');
+    hudBuilt = true;
+  }
+
+  // Frame source for the object detector: the live scene layers composited
+  // into a small offscreen (the detector's input is ~320px anyway). First
+  // layer opaque over black, later layers screen-blended — matching the DOM
+  // stack — so the detector sees what the audience sees behind the mark.
+  function detectorSource() {
+    const layers = getSceneLayers?.();
+    if (!layers || !layers.length) return null;
+    const stage = lastStage.width > 0 ? lastStage : (getStageRect?.() || { width: 16, height: 9 });
+    const w = 448;
+    const h = Math.max(64, Math.round(w * stage.height / Math.max(1, stage.width)));
+    if (!sceneComposite) {
+      sceneComposite = document.createElement('canvas');
+      // Also read back for blip feature-seeking, not just drawn from.
+      sceneCtx = sceneComposite.getContext('2d', { willReadFrequently: true });
+    }
+    if (sceneComposite.width !== w || sceneComposite.height !== h) {
+      sceneComposite.width = w; sceneComposite.height = h;
+    }
+    sceneCtx.globalCompositeOperation = 'source-over';
+    sceneCtx.fillStyle = '#000';
+    sceneCtx.fillRect(0, 0, w, h);
+    let drew = false;
+    for (let i = 0; i < layers.length; i++) {
+      const c = layers[i];
+      if (!c || !(c.width > 0)) continue;
+      try {
+        sceneCtx.globalCompositeOperation = drew ? 'screen' : 'source-over';
+        sceneCtx.drawImage(c, 0, 0, w, h);
+        drew = true;
+      } catch { /* tainted/zero-sized layer — skip */ }
+    }
+    sceneCtx.globalCompositeOperation = 'source-over';
+    return drew ? sceneComposite : null;
+  }
+
+  /** Spawn a speculative blip, preferentially locked onto the brightest
+   *  visual feature currently inside the scan circle — so the scanner
+   *  genuinely "finds" structure in whatever the quale is showing. Falls
+   *  back to a random point in the circle when the scene reads black. */
+  function spawnBlip(cx, cy, scanR, stage) {
+    let bx = 0, by = 0, found = false;
+    const comp = detectorSource();
+    if (comp) {
+      const sx = comp.width / Math.max(1, stage.width);
+      const sy = comp.height / Math.max(1, stage.height);
+      const x0 = Math.max(0, Math.floor((cx - scanR) * sx));
+      const y0 = Math.max(0, Math.floor((cy - scanR) * sy));
+      const x1 = Math.min(comp.width,  Math.ceil((cx + scanR) * sx));
+      const y1 = Math.min(comp.height, Math.ceil((cy + scanR) * sy));
+      const w = x1 - x0, h = y1 - y0;
+      if (w > 4 && h > 4) {
+        try {
+          const img = sceneCtx.getImageData(x0, y0, w, h).data;
+          // Coarse grid, brightest cell wins; jittered per cell so repeat
+          // spawns don't all pin to the same hotspot. A floor keeps pure
+          // black from "detecting" anything — that path goes random.
+          const GRID = 12;
+          let bestV = 90;
+          for (let gy = 0; gy < GRID; gy++) {
+            for (let gx = 0; gx < GRID; gx++) {
+              const pxc = Math.min(w - 1, Math.floor((gx + 0.5) / GRID * w));
+              const pyc = Math.min(h - 1, Math.floor((gy + 0.5) / GRID * h));
+              const wx = (x0 + pxc) / sx, wy = (y0 + pyc) / sy;
+              const dxc = wx - cx, dyc = wy - cy;
+              if (dxc * dxc + dyc * dyc > scanR * scanR * 0.9) continue;
+              const o = (pyc * w + pxc) * 4;
+              const v = Math.max(img[o], img[o + 1], img[o + 2]) * (0.8 + Math.random() * 0.4);
+              if (v > bestV) { bestV = v; bx = wx; by = wy; found = true; }
+            }
+          }
+        } catch { /* unreadable composite — fall through to random */ }
+      }
+    }
+    if (!found) {
+      const ang = Math.random() * Math.PI * 2;
+      const rr = scanR * (0.30 + 0.65 * Math.sqrt(Math.random()));
+      bx = cx + Math.cos(ang) * rr;
+      by = cy + Math.sin(ang) * rr;
+    }
+    const sz = 14 + Math.random() * 30;
+    blips.push({
+      x: bx, y: by,
+      hw: sz * (0.8 + Math.random() * 0.7),
+      hh: sz * (0.8 + Math.random() * 0.7),
+      vx: (Math.random() - 0.5) * 14,
+      vy: (Math.random() - 0.5) * 14,
+      label: BLIP_LABELS[(Math.random() * BLIP_LABELS.length) | 0],
+      score: 0.16 + Math.random() * 0.28,
+      age: 0,
+      ttl: 2.5 + Math.random() * 3.5,
+    });
+  }
+
+  /** Acquire/release the shared detection pipeline to match the config. */
+  function syncDetector() {
+    const want = detectorWanted();
+    if (want && !detectorHeld) {
+      buildHud();
+      detectorHeld = true;
+      acquireDetector(detectorSource);
+    } else if (!want && detectorHeld) {
+      detectorHeld = false;
+      releaseDetector(detectorSource);
+      for (const s of detSlots) { s.active = false; s.alpha = 0; s.lock = 0; }
+      blips.length = 0;
+    }
+    if (hudCanvas) hudCanvas.style.display = want ? 'block' : 'none';
+  }
+
+  const hudRgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+  /** Fold fresh detections into the slot tracker + paint the scanner HUD.
+   *  Coordinates are stage-relative CSS px throughout (the HUD canvas sits
+   *  exactly over the stage rect). Detections arrive normalized on the
+   *  scene composite, which spans the stage — a straight scale maps them. */
+  function renderHud(audio, dt, time) {
+    const stage = lastStage.width > 0 ? lastStage
+      : (getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight });
+    hudCanvas.style.left   = `${stage.left}px`;
+    hudCanvas.style.top    = `${stage.top}px`;
+    hudCanvas.style.width  = `${stage.width}px`;
+    hudCanvas.style.height = `${stage.height}px`;
+    const dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
+    const bw = Math.max(1, Math.round(stage.width * dpr));
+    const bh = Math.max(1, Math.round(stage.height * dpr));
+    if (hudCanvas.width !== bw || hudCanvas.height !== bh) {
+      hudCanvas.width = bw; hudCanvas.height = bh;
+    }
+
+    const cx = cssRect.x + cssRect.w / 2;
+    const cy = cssRect.y + cssRect.h / 2;
+    const minSide = Math.min(stage.width, stage.height);
+    // The slider maps directly to stage size — no mark-size floor, so a
+    // small radius stays genuinely small even under a large mark.
+    const scanR = Math.max(30, cfg.scanRadius * minSide * 0.5);
+
+    // ── Fold targets into slots (EMA + linger, never snap) ──
+    // Shared by real detections and speculative blips; matches by label +
+    // proximity, claims a free slot otherwise, and `claimed === time`
+    // blocks two targets folding into one slot within a single pass.
+    const k = 1 - Math.exp(-dt * 9);
+    const foldTarget = (px, py, hx, hy, label, score) => {
+      let best = -1, bestD = (minSide * 0.25) * (minSide * 0.25);
+      for (let i = 0; i < MAX_DET; i++) {
+        const s = detSlots[i];
+        if (!s.active || s.label !== label || s.claimed === time) continue;
+        const mx = s.cx - px, my = s.cy - py;
+        const md = mx * mx + my * my;
+        if (md < bestD) { bestD = md; best = i; }
+      }
+      if (best < 0) {
+        for (let i = 0; i < MAX_DET; i++) {
+          if (!detSlots[i].active) { best = i; break; }
+        }
+        if (best < 0) return false;
+        const s = detSlots[best];
+        s.active = true;
+        s.cx = px; s.cy = py; s.hx = hx; s.hy = hy;
+        s.lock = 0; s.alpha = 0; s.score = -1; s.text = '';
+        s.seed = Math.random();
+      }
+      const s = detSlots[best];
+      s.cx += (px - s.cx) * k; s.cy += (py - s.cy) * k;
+      s.hx += (hx - s.hx) * k; s.hy += (hy - s.hy) * k;
+      if (s.label !== label || Math.abs(score - s.score) > 0.05) {
+        s.score = score;
+        s.text = `${label} :: ${score.toFixed(2)}`;
+      }
+      s.label = label;
+      s.lastSeen = time;
+      s.claimed = time;
+      return true;
+    };
+
+    // Real detections first — they own the slots.
+    let realCount = 0;
+    const dets = getDetections();
+    const r2 = scanR * scanR;
+    for (let d = 0; d < dets.length; d++) {
+      const det = dets[d];
+      const px = det.cx * stage.width;
+      const py = det.cy * stage.height;
+      const bw2 = det.hw * stage.width;
+      const bh2 = det.hh * stage.height;
+      // Region gate — the box must sit MOSTLY inside the scan circle:
+      // ≥ ~45% of its area, estimated on a 5×5 point grid. Plain overlap
+      // let a huge box grazing the rim get targeted; centre-inside missed
+      // big objects sitting under the mark. Coverage handles both, and
+      // means a whole-frame box only qualifies when the circle itself is
+      // comparably huge — which is then the honest answer.
+      let inside = 0;
+      for (let gy = 0; gy < 5; gy++) {
+        const syp = py + ((gy + 0.5) / 5 - 0.5) * 2 * bh2;
+        for (let gx = 0; gx < 5; gx++) {
+          const sxp = px + ((gx + 0.5) / 5 - 0.5) * 2 * bw2;
+          const ddx = sxp - cx, ddy = syp - cy;
+          if (ddx * ddx + ddy * ddy <= r2) inside++;
+        }
+      }
+      if (inside < 11) continue;   // < ~44% of the box in the zone
+      const hx = Math.max(12, Math.min(stage.width  * 0.45, bw2));
+      const hy = Math.max(12, Math.min(stage.height * 0.45, bh2));
+      if (foldTarget(px, py, hx, hy, det.label, det.score)) realCount++;
+    }
+
+    // Speculative blips fill the silence so the scanner always has
+    // *something* on its plate, whatever the quale shows. Age, wander,
+    // wobble the reading, cull what expires or escapes the (moving) circle.
+    for (let i = blips.length - 1; i >= 0; i--) {
+      const b = blips[i];
+      b.age += dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.score = Math.max(0.12, Math.min(0.48, b.score + (Math.random() - 0.5) * dt * 0.25));
+      const gx = b.x - cx, gy = b.y - cy;
+      if (b.age > b.ttl || gx * gx + gy * gy > scanR * scanR) { blips.splice(i, 1); continue; }
+      foldTarget(b.x, b.y, b.hw, b.hh, b.label, b.score);
+    }
+    const wantBlips = Math.max(0, 2 - realCount);
+    if (blips.length < wantBlips && Math.random() < dt * 1.2) {
+      spawnBlip(cx, cy, scanR, stage);
+    }
+    for (let i = 0; i < MAX_DET; i++) {
+      const s = detSlots[i];
+      if (!s.active) continue;
+      if (time - s.lastSeen < 0.6) {
+        s.alpha = Math.min(1, s.alpha + dt / 0.30);
+        s.lock  = Math.min(1, s.lock  + dt / 0.70);
+      } else {
+        s.alpha -= dt / 0.55;
+        if (s.alpha <= 0) { s.alpha = 0; s.lock = 0; s.active = false; }
+      }
+    }
+
+    // ── Paint ──
+    const ctx = hudCtx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, stage.width, stage.height);
+    const pal = HUD_COLORS[cfg.palette] || HUD_COLORS.platinum;
+    const op  = Math.min(1, cfg.opacity + 0.15);
+    const TAU = Math.PI * 2;
+
+    sweepAng += dt * 0.45;
+    if (sweepAng > TAU * 64) sweepAng -= TAU * 64;
+
+    // Scan circle — thin line + soft halo, brightening a touch with highs.
+    const ringA = op * (0.8 + audio.bands.highs * 0.4);
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = hudRgba(pal.dim, 0.40 * ringA);
+    ctx.beginPath(); ctx.arc(cx, cy, scanR, 0, TAU); ctx.stroke();
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = hudRgba(pal.dim, 0.08 * ringA);
+    ctx.beginPath(); ctx.arc(cx, cy, scanR, 0, TAU); ctx.stroke();
+    // 15° ticks.
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = hudRgba(pal.main, 0.35 * ringA);
+    ctx.beginPath();
+    for (let i = 0; i < 24; i++) {
+      const a = i * (TAU / 24);
+      const ca = Math.cos(a), sa = Math.sin(a);
+      ctx.moveTo(cx + ca * (scanR - 4), cy + sa * (scanR - 4));
+      ctx.lineTo(cx + ca * (scanR + 4), cy + sa * (scanR + 4));
+    }
+    ctx.stroke();
+    // Sweep — a comet running the perimeter, with a trailing wake.
+    for (let i = 0; i < 3; i++) {
+      ctx.lineWidth = 2.2 - i * 0.6;
+      ctx.strokeStyle = hudRgba(pal.main, (0.30 - i * 0.09) * ringA);
+      ctx.beginPath();
+      ctx.arc(cx, cy, scanR - 1, sweepAng - 0.20 * (i + 1), sweepAng - 0.20 * i);
+      ctx.stroke();
+    }
+
+    // Targets.
+    const beamA = op * (0.8 + audio.bands.mids * 0.5);
+    const markR = cssRect.w * 0.5 * 0.92;
+    for (let i = 0; i < MAX_DET; i++) {
+      const s = detSlots[i];
+      if (s.alpha < 0.01) continue;
+      const a = s.alpha;
+      // Beam — from just outside the mark to the target's NEAR surface
+      // (centre of the box clamped to the mark): a big object overlapping a
+      // small scan circle would otherwise pull the beam toward a far-away
+      // centroid. A slow flowing dash over a faint solid line reads as
+      // scanning light. Skipped when the mark sits inside the box.
+      const tx = Math.max(s.cx - s.hx, Math.min(cx, s.cx + s.hx));
+      const ty = Math.max(s.cy - s.hy, Math.min(cy, s.cy + s.hy));
+      const dx = tx - cx, dy = ty - cy;
+      const len = Math.max(Math.hypot(dx, dy), 1e-3);
+      const ux = dx / len, uy = dy / len;
+      const r0 = Math.min(markR, len);
+      const r1 = Math.max(r0, len - 4);
+      if (r1 > r0 + 4) {
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = hudRgba(pal.dim, 0.18 * a * beamA);
+        ctx.beginPath();
+        ctx.moveTo(cx + ux * r0, cy + uy * r0);
+        ctx.lineTo(cx + ux * r1, cy + uy * r1);
+        ctx.stroke();
+        ctx.lineWidth = 1 + s.lock * 0.8;
+        ctx.strokeStyle = hudRgba(pal.main, (0.30 + 0.35 * s.lock) * a * beamA);
+        ctx.setLineDash([7, 9]);
+        ctx.lineDashOffset = -(time * 60 + s.seed * 16);
+        ctx.beginPath();
+        ctx.moveTo(cx + ux * r0, cy + uy * r0);
+        ctx.lineTo(cx + ux * r1, cy + uy * r1);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Corner brackets — wide while acquiring, tightening with the lock.
+      const ex = s.hx * (1 + (1 - s.lock) * 0.30);
+      const ey = s.hy * (1 + (1 - s.lock) * 0.30);
+      const clx = ex * 0.45, cly = ey * 0.45;
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = hudRgba(pal.main, (0.40 + 0.45 * s.lock) * a * op);
+      ctx.beginPath();
+      ctx.moveTo(s.cx - ex, s.cy - ey + cly); ctx.lineTo(s.cx - ex, s.cy - ey); ctx.lineTo(s.cx - ex + clx, s.cy - ey);
+      ctx.moveTo(s.cx + ex - clx, s.cy - ey); ctx.lineTo(s.cx + ex, s.cy - ey); ctx.lineTo(s.cx + ex, s.cy - ey + cly);
+      ctx.moveTo(s.cx + ex, s.cy + ey - cly); ctx.lineTo(s.cx + ex, s.cy + ey); ctx.lineTo(s.cx + ex - clx, s.cy + ey);
+      ctx.moveTo(s.cx - ex + clx, s.cy + ey); ctx.lineTo(s.cx - ex, s.cy + ey); ctx.lineTo(s.cx - ex, s.cy + ey - cly);
+      ctx.stroke();
+
+      // Lock diamond at the target centre — breathes gently.
+      const dr = (4 + 1.6 * Math.sin(time * 2.2 + s.seed * 6.28)) * (0.5 + s.lock * 0.5);
+      ctx.strokeStyle = hudRgba(pal.main, (0.35 + 0.45 * s.lock) * a * op);
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(s.cx, s.cy - dr); ctx.lineTo(s.cx + dr, s.cy);
+      ctx.lineTo(s.cx, s.cy + dr); ctx.lineTo(s.cx - dr, s.cy);
+      ctx.closePath();
+      ctx.stroke();
+
+      // Label — lowercase telemetry above the top-left corner.
+      if (s.text) {
+        ctx.font = '600 12px ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillStyle = hudRgba(pal.main, (0.55 + 0.35 * s.lock) * a * op);
+        ctx.fillText(s.text, s.cx - ex, s.cy - ey - 5);
+      }
+    }
+  }
 
   function build() {
     if (built || buildFailed) return built;
@@ -779,7 +1215,10 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
   function layout(force = false) {
     if (!canvas) return;
     const stage = getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-    const posKey = `${cfg.position}|${cfg.x.toFixed(4)}|${cfg.y.toFixed(4)}|${cfg.size}|${cfg.centerSize}`;
+    const drifting = driftActive() && driftInit;
+    const posKey = drifting
+      ? `drift|${driftX.toFixed(4)}|${driftY.toFixed(4)}|${cfg.size}|${cfg.centerSize}`
+      : `${cfg.position}|${cfg.x.toFixed(4)}|${cfg.y.toFixed(4)}|${cfg.size}|${cfg.centerSize}`;
     if (!force &&
         stage.left === lastStage.left && stage.top === lastStage.top &&
         stage.width === lastStage.width && stage.height === lastStage.height &&
@@ -789,7 +1228,10 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
 
     const s = markSize();
     let x, y;   // stage-relative CSS px of the top-left corner
-    switch (cfg.position) {
+    if (drifting) {
+      x = driftX * stage.width - s / 2;
+      y = driftY * stage.height - s / 2;
+    } else switch (cfg.position) {
       case 'tl':     x = MARGIN; y = MARGIN; break;
       case 'tr':     x = stage.width - s - MARGIN; y = MARGIN; break;
       case 'bl':     x = MARGIN; y = stage.height - s - MARGIN; break;
@@ -837,9 +1279,16 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
       if (!moved && dx * dx + dy * dy < DRAG_SLOP * DRAG_SLOP) return;
       moved = true;
       const stage = getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-      cfg.position = 'custom';
-      cfg.x = clamp01((startCX + dx) / Math.max(1, stage.width));
-      cfg.y = clamp01((startCY + dy) / Math.max(1, stage.height));
+      if (driftActive()) {
+        // While drifting a drag just re-seeds the wander point — the anchor
+        // position is untouched, so toggling drift off returns the mark home.
+        driftX = clamp01((startCX + dx) / Math.max(1, stage.width));
+        driftY = clamp01((startCY + dy) / Math.max(1, stage.height));
+      } else {
+        cfg.position = 'custom';
+        cfg.x = clamp01((startCX + dx) / Math.max(1, stage.width));
+        cfg.y = clamp01((startCY + dy) / Math.max(1, stage.height));
+      }
       layout();
     });
     const end = (ev) => {
@@ -896,13 +1345,44 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     // Deferred bakes — config may change while disabled or before build.
     if (imageDirty)   { imageDirty = false;   loadCustomImage(cfg.image); }
     if (captionDirty) { captionDirty = false; bakeCaption(); }
-    layout();   // cheap compare; catches split/fullscreen/resize changes
-    if (canvas.width <= 0) return;
 
     const dt   = Math.min(field?.dt ?? 0.016, 0.05);
     const time = field?.time ?? 0;
     const audio = scaleAudio(field.audio, cfg.reactivity);
     const flowSpeed = FLOW_BASE * Math.max(0, cfg.flow);
+
+    // ── DVD drift — advance the wander before layout so this frame paints
+    // at the new spot. Speed is stage-widths/sec on BOTH axes (constant
+    // pixel velocity, like the original screensaver), bouncing with the
+    // mark's own half-size as the margin. Paused mid-drag.
+    if (driftActive() && !dragging) {
+      const stage = getStageRect?.() || { width: window.innerWidth, height: window.innerHeight };
+      if (!driftInit) {
+        driftInit = true;
+        // Seed from wherever the mark currently sits + a diagonal heading.
+        driftX = clamp01((cssRect.x + cssRect.w / 2) / Math.max(1, stage.width));
+        driftY = clamp01((cssRect.y + cssRect.h / 2) / Math.max(1, stage.height));
+        const a = 0.4 + Math.random() * 0.75;
+        driftVX = Math.cos(a) * (Math.random() < 0.5 ? -1 : 1);
+        driftVY = Math.sin(a) * (Math.random() < 0.5 ? -1 : 1);
+      }
+      const sw = Math.max(1, stage.width), sh = Math.max(1, stage.height);
+      const s = markSize();
+      const minX = Math.min(0.5, (s / 2 + 2) / sw), maxX = Math.max(0.5, 1 - minX);
+      const minY = Math.min(0.5, (s / 2 + 2) / sh), maxY = Math.max(0.5, 1 - minY);
+      const pxStep = cfg.driftSpeed * sw * dt;
+      driftX += driftVX * pxStep / sw;
+      driftY += driftVY * pxStep / sh;
+      if (driftX > maxX) { driftX = maxX; driftVX = -Math.abs(driftVX); driftJitter(); }
+      if (driftX < minX) { driftX = minX; driftVX =  Math.abs(driftVX); driftJitter(); }
+      if (driftY > maxY) { driftY = maxY; driftVY = -Math.abs(driftVY); driftJitter(); }
+      if (driftY < minY) { driftY = minY; driftVY =  Math.abs(driftVY); driftJitter(); }
+    }
+
+    layout();   // cheap compare; catches split/fullscreen/resize + drift moves
+    syncDetector();
+    if (detectorHeld) renderHud(audio, dt, time);
+    if (canvas.width <= 0) return;
 
     // Ring rotations + electron advance — beat boosts electron speed.
     const beatBoost = 1.0 + audio.beat.pulse * 4.0 + audio.bands.bass * 0.6;
@@ -1021,6 +1501,7 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     enabled = on;
     syncDisplay();
     if (enabled) layout(true);
+    syncDetector();
   }
 
   /** Page-driven hide (e.g. while the fullscreen voidstar_logo quale is
@@ -1030,6 +1511,7 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     if (v === suppressed) return;
     suppressed = v;
     syncDisplay();
+    syncDetector();
   }
 
   function setConfig(patch) {
@@ -1055,6 +1537,21 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
       cfg.caption = patch.caption;
       captionDirty = true;
     }
+    if ('drift' in patch) {
+      cfg.drift = !!patch.drift;
+      // Off → re-seed from the anchor next time drift comes back on.
+      if (!cfg.drift) driftInit = false;
+    }
+    if ('driftSpeed' in patch) {
+      const v = Number(patch.driftSpeed);
+      cfg.driftSpeed = Number.isFinite(v) ? Math.max(0, Math.min(0.08, v)) : LOGO_MARK_DEFAULTS.driftSpeed;
+    }
+    if ('detector' in patch) cfg.detector = !!patch.detector;
+    if ('scanRadius' in patch) {
+      const v = Number(patch.scanRadius);
+      cfg.scanRadius = Number.isFinite(v) ? Math.max(0.1, Math.min(1.2, v)) : LOGO_MARK_DEFAULTS.scanRadius;
+    }
+    syncDetector();
     if (enabled) layout();
   }
 
@@ -1067,8 +1564,12 @@ export function createLogoMark({ getStageRect, onConfigChange, parent = document
     getConfig: () => ({ ...cfg }),
     /** The mark canvas (null until first enable) — for cam-walk layering. */
     getCanvas: () => canvas,
-    /** True when the mark should ride the cam walk (large centered mode). */
-    walksWithCam: () => enabled && !suppressed && cfg.position === 'center' && cfg.walk !== false,
+    /** The scanner-HUD canvas while detector mode is live (else null) — for
+     *  the recorder composite. Screen-pinned; normal alpha compositing. */
+    getHudCanvas: () => (detectorHeld && hudCanvas && enabled && !suppressed ? hudCanvas : null),
+    /** True when the mark should ride the cam walk (large centered mode).
+     *  A drifting mark never walks — the two motions fight each other. */
+    walksWithCam: () => enabled && !suppressed && cfg.position === 'center' && cfg.walk !== false && !driftActive(),
     /** Stage-relative CSS-px rect, for the recorder composite. */
     getStageRelRect: () => (enabled && built && !suppressed ? { ...cssRect } : null),
   };
