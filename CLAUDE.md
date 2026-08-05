@@ -17,6 +17,7 @@ Quick map of the canonical docs:
 - Qualia Google Drive sync (login, `voidstar_qualia` folder, per-component subfolders) → [`docs/qualia-drive-sync.md`](docs/qualia-drive-sync.md)
 - Setlist app: data model, Drive backup/restore, chart-fallback tiers → [`docs/setlist-app.md`](docs/setlist-app.md)
 - Mind app (notes/second-brain): store, editor, tasks-in-notes, Drive sync → [`docs/mind-app.md`](docs/mind-app.md)
+- Syzygy lab (`/lab/syzygy`, audio ⇄ video alignment via ffmpeg.wasm) → [`docs/syzygy-lab.md`](docs/syzygy-lab.md)
 - DOIO controller keymap (keystrokes + MIDI) → [`docs/doio-kb16-qualia-keymap.md`](docs/doio-kb16-qualia-keymap.md)
 - Keeping the rig going lid-shut / screen-off → [`docs/headless-and-screen-off.md`](docs/headless-and-screen-off.md)
 - Arcade design → [`plans/arcade-quale-plan.md`](plans/arcade-quale-plan.md)

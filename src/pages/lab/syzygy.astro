@@ -1,0 +1,186 @@
+---
+// syzygy — audio ⇄ video alignment lab.
+//
+// Standalone page (no BaseLayout), following the entangle.astro pattern.
+// Re-marry better audio to a video: everything runs client-side. The page
+// itself is instant; ffmpeg.wasm (~31MB core, CDN) only loads on render.
+import { Image } from 'astro:assets';
+import logo from '../../assets/art/logos_alpha/voidstar_logo_cosmos_atom_0.png';
+import ThemeBoot from '../../components/ThemeBoot.astro';
+import '../../styles/themes.css';
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <ThemeBoot />
+  <title>syzygy | voidstar lab</title>
+  <meta name="description" content="Replace a video's audio with a better recording — aligned by zero, by wall clock, or by hand. Runs entirely in your browser." />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" />
+  {/* is:global is load-bearing: the whole UI is built dynamically by app.js,
+      so Astro's scoped styles would never match it (see entangle.astro). */}
+  <style is:global>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { min-height: 100dvh; color: var(--text); background:
+      radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent) 14%, var(--void)) 0%, var(--void) 60%); }
+    body { font-family: var(--font-mono); padding:
+      max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+      max(3rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+      max-width: 46rem; margin: 0 auto; }
+
+    header { text-align: center; margin: 1.2rem 0 1.4rem; }
+    header h1 { font-size: 1.5rem; letter-spacing: .18em; font-weight: 600;
+      background: linear-gradient(90deg, var(--cyan), var(--accent), var(--pink));
+      -webkit-background-clip: text; background-clip: text; color: transparent; }
+    header p { color: var(--muted); font-size: .82rem; margin-top: .4rem; line-height: 1.5; }
+    .brand { display: inline-flex; align-items: center; gap: .55rem; text-decoration: none;
+      color: var(--muted); margin-bottom: .8rem; padding: .25rem .6rem; border-radius: .55rem;
+      border: 1px solid transparent; transition: .15s; }
+    .brand:hover, .brand:focus-visible { color: var(--text); border-color: var(--border);
+      background: var(--surface-glass); outline: none; }
+    .brand-logo { width: 2.2rem; height: 2.2rem; display: block;
+      filter: drop-shadow(0 0 .5rem var(--accent)); }
+    .brand-tag { font-size: .9rem; } .brand-tag b { color: var(--text); font-weight: 600; }
+
+    .sz-sect { background: var(--surface-glass); border: 1px solid var(--border);
+      border-radius: .7rem; padding: .9rem 1rem; margin-bottom: 1rem; }
+    .sz-sect > h3 { font-size: .74rem; text-transform: uppercase; letter-spacing: .1em;
+      color: var(--text-muted); margin-bottom: .7rem; font-weight: 600; }
+    .sz-row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
+    .sz-lbl { font-size: .78rem; color: var(--text-muted); }
+    .sz-dim { color: var(--text-dim); font-size: .75rem; }
+    .sz-note { color: var(--text-muted); font-size: .78rem; line-height: 1.55; margin-top: .55rem; }
+    .sz-err { color: var(--pink); font-size: .82rem; padding: .4rem 0; }
+
+    /* ── dropzones ── */
+    .sz-sources { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
+    @media (max-width: 540px) { .sz-sources { grid-template-columns: 1fr; } }
+    .sz-drop { position: relative; min-height: 7.5rem; border: 1px dashed var(--border-2);
+      border-radius: .6rem; padding: .8rem .9rem; cursor: pointer; transition: .15s;
+      display: flex; flex-direction: column; justify-content: center; gap: .3rem; }
+    .sz-drop:hover, .sz-drop:focus-visible, .sz-dropping { border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 7%, transparent); outline: none; }
+    .sz-drop.sz-has-file { border-style: solid; border-color: var(--border-2); }
+    .sz-drop-icon { font-size: 1.4rem; color: var(--accent); text-align: center; }
+    .sz-drop-label { text-align: center; font-size: .85rem; }
+    .sz-drop-hint { text-align: center; font-size: .7rem; color: var(--text-dim); }
+    .sz-file-name { font-size: .82rem; font-weight: 600; overflow-wrap: anywhere; padding-right: 1.4rem; }
+    .sz-file-meta { font-size: .72rem; color: var(--text-muted); }
+    .sz-file-clock { font-size: .72rem; color: var(--green); }
+    .sz-file-clock.sz-dim { color: var(--text-dim); }
+    .sz-x { position: absolute; top: .4rem; right: .4rem; width: 1.5rem; height: 1.5rem;
+      border-radius: 999px; border: 1px solid var(--border); background: var(--surface);
+      color: var(--text-muted); cursor: pointer; font: inherit; line-height: 1; }
+    .sz-x:hover { color: var(--pink); border-color: var(--pink); }
+
+    /* ── controls ── */
+    .sz-radios, .sz-checks { display: flex; flex-direction: column; gap: .45rem; }
+    .sz-radio, .sz-check { display: grid; grid-template-columns: auto auto 1fr; align-items: baseline;
+      gap: .5rem; cursor: pointer; font-size: .85rem; }
+    .sz-radio small, .sz-check small { color: var(--text-dim); font-size: .72rem; }
+    .sz-radio.sz-disabled { opacity: .45; }
+    .sz-radio input, .sz-check input { accent-color: var(--accent); cursor: pointer; }
+    .sz-meta-info { font-size: .75rem; color: var(--cyan); margin-top: .5rem; line-height: 1.5; }
+    .sz-meta-info .sz-dim { color: var(--text-dim); }
+    .sz-offset-readout { margin-top: .5rem; font-size: .8rem; color: var(--accent); min-height: 1.1rem; }
+    .sz-adj-readout { font-size: .75rem; color: var(--text-muted); margin-left: .3rem; }
+
+    .sz-btn { font: inherit; font-size: .82rem; padding: .45rem .8rem; border-radius: .5rem;
+      border: 1px solid var(--border); background: var(--surface); color: var(--text);
+      cursor: pointer; transition: .12s; }
+    .sz-btn:hover { border-color: var(--border-2); background: var(--surface-2); }
+    .sz-btn-primary { border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+      background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
+    .sz-btn-primary:hover { background: color-mix(in srgb, var(--accent) 28%, var(--surface)); }
+    .sz-btn-xs { padding: .25rem .5rem; font-size: .72rem; }
+    .sz-btn:disabled { opacity: .4; cursor: default; pointer-events: none; }
+    .sz-num { font: inherit; font-size: .85rem; width: 6.5rem; padding: .4rem .5rem;
+      border-radius: .45rem; border: 1px solid var(--border); background: var(--void-2);
+      color: var(--text); }
+    .sz-num:focus { outline: none; border-color: var(--accent); }
+    .sz-select { font: inherit; font-size: .8rem; padding: .4rem .5rem; border-radius: .45rem;
+      border: 1px solid var(--border); background: var(--void-2); color: var(--text); max-width: 100%; }
+    .sz-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
+    @media (max-width: 600px) { .sz-grid2 { grid-template-columns: 1fr; } }
+    .sz-field { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+    .sz-advanced { margin-top: .7rem; }
+    .sz-advanced summary { font-size: .75rem; color: var(--text-dim); cursor: pointer; }
+    .sz-plan { margin-top: .3rem; }
+    .sz-plan .sz-note { color: var(--cyan); }
+
+    /* ── pads ── */
+    .sz-pads { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; margin-top: .7rem; }
+    @media (max-width: 540px) { .sz-pads { grid-template-columns: 1fr; } }
+    .sz-pads:empty { display: none; }
+    .sz-pad { border: 1px solid var(--border); border-radius: .55rem; padding: .6rem .7rem;
+      display: flex; flex-direction: column; gap: .45rem; }
+    .sz-pad-head { display: flex; justify-content: space-between; align-items: baseline; }
+    .sz-pad-dur { font-size: .7rem; color: var(--amber); }
+    .sz-pad-thumb { width: 100%; max-width: 12rem; aspect-ratio: 16/9; height: auto;
+      border: 1px solid var(--border); border-radius: .4rem; background: #000; }
+
+    /* ── timeline ── */
+    .sz-timeline { display: flex; flex-direction: column; gap: .45rem; }
+    .sz-tl-row { display: grid; grid-template-columns: 3.2rem 1fr; align-items: center; gap: .5rem; }
+    .sz-tl-label { font-size: .7rem; color: var(--text-dim); text-align: right; }
+    .sz-tl-track { position: relative; height: 1.05rem; background: var(--void-2);
+      border: 1px solid var(--border); border-radius: .3rem; overflow: hidden; }
+    .sz-tl-seg { position: absolute; top: 0; bottom: 0; border-radius: .2rem; }
+    .sz-tl-video { background: color-mix(in srgb, var(--cyan) 65%, transparent); }
+    .sz-tl-audio { background: color-mix(in srgb, var(--pink) 60%, transparent); }
+    .sz-tl-out   { background: color-mix(in srgb, var(--accent) 40%, transparent);
+      box-shadow: inset 0 0 0 1px var(--accent); }
+    .sz-tl-off { opacity: .22; }
+    .sz-tl-pad { background: repeating-linear-gradient(-45deg,
+      color-mix(in srgb, var(--amber) 65%, transparent) 0 4px, transparent 4px 8px); }
+    .sz-tl-summary { margin-top: .5rem; font-size: .75rem; color: var(--text-muted); }
+
+    /* ── render / progress / log ── */
+    .sz-render { font-size: .95rem; padding: .6rem 1.6rem; letter-spacing: .08em; }
+    .sz-status { margin-top: .55rem; font-size: .8rem; color: var(--text-muted); min-height: 1.1rem; }
+    .sz-status[data-kind="ok"] { color: var(--green); }
+    .sz-status[data-kind="err"] { color: var(--pink); }
+    .sz-progress { margin-top: .5rem; height: .45rem; border-radius: 999px;
+      background: var(--void-2); border: 1px solid var(--border); overflow: hidden; }
+    .sz-progress-bar { height: 100%; width: 0; border-radius: 999px;
+      background: linear-gradient(90deg, var(--cyan), var(--accent)); transition: width .25s; }
+    .sz-log { margin-top: .6rem; }
+    .sz-log summary { font-size: .72rem; color: var(--text-dim); cursor: pointer; }
+    .sz-log pre { margin-top: .4rem; max-height: 14rem; overflow: auto; font-size: .68rem;
+      line-height: 1.45; color: var(--text-muted); background: var(--void-2);
+      border: 1px solid var(--border); border-radius: .45rem; padding: .5rem .6rem;
+      white-space: pre-wrap; word-break: break-word; }
+
+    /* ── result ── */
+    .sz-preview { width: 100%; max-height: 60dvh; border-radius: .55rem;
+      border: 1px solid var(--border-2); background: #000; display: block; }
+
+    footer { text-align: center; color: var(--muted); font-size: .72rem; margin-top: 1.6rem; opacity: .7; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <a class="brand" href="/lab" title="back to the lab">
+        <Image src={logo} alt="voidstar" width={96} height={96} class="brand-logo" />
+        <span class="brand-tag"><b>voidstar</b> // lab</span>
+      </a>
+      <h1>SYZYGY</h1>
+      <p>re-marry better audio to a video — aligned at zero, by the universal clock, or by hand.<br />
+        the video stream is preserved untouched whenever possible. nothing leaves your browser.</p>
+    </header>
+    <div id="syzygy-root"></div>
+    <footer>voidstar.sh — your files never leave this page.<br />
+      the ffmpeg engine (~31 MB) loads from CDN on first render.</footer>
+  </main>
+
+  <script>
+    import { initSyzygy } from '../../lib/syzygy/app.js';
+    initSyzygy(document.getElementById('syzygy-root'));
+  </script>
+</body>
+</html>

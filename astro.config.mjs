@@ -20,6 +20,18 @@ export default defineConfig({
     mdx(),
     sitemap(),
   ],
+  vite: {
+    // The ffmpeg.wasm wrapper spawns its worker via
+    // `new Worker(new URL('./worker.js', import.meta.url))`. Vite's build
+    // handles that fine, but dev-server dependency pre-bundling (esbuild)
+    // would inline the module and break the relative worker URL — exclude
+    // the packages so dev serves them as native ESM (the upstream-documented
+    // Vite recipe). The heavy ffmpeg core itself is not bundled at all; the
+    // syzygy lab lazy-loads it from CDN at render time.
+    optimizeDeps: {
+      exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
+    },
+  },
   markdown: {
     shikiConfig: {
       theme: 'vesper',
