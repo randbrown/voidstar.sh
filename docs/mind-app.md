@@ -295,6 +295,15 @@ only when the mind app next runs on that device.
   snapshot; the active search rides along so every stop keeps its match
   highlights). No wrap at the ends — the button just disables. A note opened
   from outside the list (palette, backlink, task link) shows no nav.
+- **Open note in its own window**: ⧉ in the editor top bar pops the current
+  note out into a separate half-screen window docked right (named per note, so
+  re-tapping refocuses/refreshes the existing window instead of stacking
+  copies), and Ctrl/Cmd-click on a `#note/…` link in a note body opens the
+  linked note in a new tab — both for cross-referencing two notes side by
+  side. The pending autosave is flushed before the new window loads so it
+  reads the freshest body; editing in two windows at once is already safe
+  (shared IndexedDB + editor rebase-on-save — a genuine same-note fork is
+  preserved as a conflict copy, never silently lost).
 - **Grouped TODO card**: the pinned home panel groups its tasks by task list
   under a subtle bar (list name, plus folder path for a subfolder's list)
   whenever more than one list has tasks in scope; the current folder's own

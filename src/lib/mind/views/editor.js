@@ -575,6 +575,31 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   linkBtn.title = 'link to another note (or type [[ in the note)';
   actions.insertBefore(linkBtn, pinBtn);
 
+  // ⧉ pop-out: open this note in its own window (half the screen, docked
+  // right) so two notes can be cross-referenced side by side. The handle is
+  // grabbed synchronously — a popup opened after an await falls outside the
+  // click gesture and gets blocked — then pointed at the note once the
+  // pending autosave lands, so the new window reads the freshest body from
+  // IndexedDB. Named per note, so re-tapping ⧉ refreshes and refocuses the
+  // existing window instead of stacking copies. Editing in both windows is
+  // already safe: they share IDB and every save() rebases on the live record.
+  const popBtn = btn('&#10697;', 'mn-btn-icon', () => {
+    const sw = screen.availWidth || 1280;
+    const sh = screen.availHeight || 800;
+    const w = Math.max(380, Math.floor(sw / 2));
+    const win = window.open('', `mind-note-${note.id}`,
+      `popup=yes,width=${w},height=${sh},left=${sw - w},top=0`);
+    if (!win) { alert('The browser blocked the window — allow popups for this site.'); return; }
+    flushPending().finally(() => {
+      try {
+        win.location = `${location.pathname}#note/${note.id}`;
+        win.focus();
+      } catch {}
+    });
+  });
+  popBtn.title = 'open in a new window (view two notes side by side)';
+  actions.insertBefore(popBtn, pinBtn);
+
   // Merge-into picker: choose the note this one's content gets filed into.
   // Empty query lists ongoing (#ongoing) notes — the usual targets — and
   // falls back to recent notes; typing searches everything. The pending
