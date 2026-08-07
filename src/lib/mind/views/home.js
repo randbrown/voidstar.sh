@@ -27,7 +27,7 @@ import {
 import { pushPendingAttachments } from '../attachments-drive.js';
 import { startSketchNote } from '../sketch.js';
 import { navigate, refresh } from '../app.js';
-import { el, esc, btn, emptyState, timeAgo, textPrompt, confirmBox, choiceBox } from '../ui.js';
+import { el, esc, btn, emptyState, timeAgo, textPrompt, confirmBox, choiceBox, openNoteWindow } from '../ui.js';
 
 const SORT_KEY = 'voidstar.mind.sort';
 const TODO_OPEN_KEY = 'voidstar.mind.todoExpanded';
@@ -592,6 +592,11 @@ function noteCard(entry, folders, dimmed, selCtx = null) {
   }
   row.appendChild(el('span', 'mn-card-title', markText(n.title, tokens)));
   row.appendChild(el('span', 'mn-card-time', timeAgo(n.updatedAt)));
+  // ⧉ pop-out straight from the list — cross-reference a second note without
+  // leaving the one that's open in another window.
+  const pop = btn('&#10697;', 'mn-card-pop', (e) => { e.stopPropagation(); openNoteWindow(n.id); });
+  pop.title = 'open in a new window';
+  row.appendChild(pop);
   card.appendChild(row);
 
   const body = markdownToText(n.body);
@@ -624,6 +629,11 @@ function taskHitRow(task, dimmed) {
   });
   row.appendChild(cb);
   row.appendChild(el('span', `mn-task-text ${task.done ? 'mn-struck' : ''}`, markText(task.text, tokens)));
+  if (task.sourceNoteId) {
+    const pop = btn('&#10697;', 'mn-card-pop', (e) => { e.stopPropagation(); openNoteWindow(task.sourceNoteId); });
+    pop.title = 'open source note in a new window';
+    row.appendChild(pop);
+  }
   row.addEventListener('click', () => {
     navigate(task.sourceNoteId ? noteHash(task.sourceNoteId) : `#tasks/${task.listId}`);
   });

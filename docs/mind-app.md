@@ -295,12 +295,14 @@ only when the mind app next runs on that device.
   snapshot; the active search rides along so every stop keeps its match
   highlights). No wrap at the ends — the button just disables. A note opened
   from outside the list (palette, backlink, task link) shows no nav.
-- **Open note in its own window**: ⧉ in the editor top bar pops the current
-  note out into a separate half-screen window docked right (named per note, so
+- **Open note in its own window** (`ui.js` `openNoteWindow`): ⧉ pops a note
+  out into a separate half-screen window docked right (named per note, so
   re-tapping refocuses/refreshes the existing window instead of stacking
-  copies), and Ctrl/Cmd-click on a `#note/…` link in a note body opens the
-  linked note in a new tab — both for cross-referencing two notes side by
-  side. The pending autosave is flushed before the new window loads so it
+  copies) — on the editor top bar, on every home note card (main list,
+  search results, "elsewhere"), and on a search task hit with a source note.
+  Ctrl/Cmd-click on a `#note/…` link in a note body opens the linked note in
+  a new tab. All of it for cross-referencing two notes side by side. The
+  editor flushes its pending autosave before the new window loads so it
   reads the freshest body; editing in two windows at once is already safe
   (shared IndexedDB + editor rebase-on-save — a genuine same-note fork is
   preserved as a conflict copy, never silently lost).

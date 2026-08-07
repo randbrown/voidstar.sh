@@ -466,6 +466,23 @@ const buildStamp = readBuildStamp();
       background: color-mix(in srgb, var(--amber) 22%, transparent);
       border-color: var(--amber);
     }
+    /* ⧉ pop-out on note cards / task hits — quiet until hovered, and sized so
+       the title row's baseline layout doesn't grow. */
+    .mn-card-pop {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      line-height: 1;
+      color: var(--text-dim);
+      background: transparent;
+      border-color: transparent;
+      border-radius: var(--radius-sm, 6px);
+      padding: 0.15rem 0.35rem;
+      min-height: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      align-self: center;
+    }
+    .mn-card-pop:hover { color: var(--accent); border-color: var(--border-2); }
     .mn-section-label {
       font-family: var(--font-mono);
       font-size: 0.72rem;
