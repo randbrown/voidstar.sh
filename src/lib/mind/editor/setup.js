@@ -275,7 +275,16 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, onWikiLi
         .find(m => m.type === schema.marks.link);
       if (!link) return false;
       const href = link.attrs.href || '';
-      if (href.startsWith('#note/')) { location.hash = href; return true; }
+      if (href.startsWith('#note/')) {
+        // Ctrl/Cmd-click a note link → new tab (cross-reference the linked
+        // note beside this one); plain click navigates in place.
+        if (event.ctrlKey || event.metaKey) {
+          window.open(location.pathname + href, '_blank', 'noopener');
+          return true;
+        }
+        location.hash = href;
+        return true;
+      }
       // Whitelist the protocols we open: a pasted-HTML link mark can carry a
       // javascript:/data: href in-session (markdown-it drops it on the next
       // reload, but it must not be clickable before then).
