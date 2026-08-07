@@ -39,6 +39,30 @@ export function emptyState(msg) {
   return el('div', 'mn-empty', msg);
 }
 
+// ⧉ pop-out: open a note in its own half-screen window (docked right) so two
+// notes can be cross-referenced side by side. The handle is grabbed
+// synchronously — a popup opened after an await falls outside the click
+// gesture and gets blocked — then pointed at the note once `flush` (e.g. the
+// editor's pending autosave) lands, so the new window reads the freshest body
+// from IndexedDB. Named per note, so re-tapping ⧉ refreshes and refocuses the
+// existing window instead of stacking copies. Editing the same note in two
+// windows is already safe: they share IDB and every save() rebases on the
+// live record.
+export function openNoteWindow(noteId, flush) {
+  const sw = screen.availWidth || 1280;
+  const sh = screen.availHeight || 800;
+  const w = Math.max(380, Math.floor(sw / 2));
+  const win = window.open('', `mind-note-${noteId}`,
+    `popup=yes,width=${w},height=${sh},left=${sw - w},top=0`);
+  if (!win) { alert('The browser blocked the window — allow popups for this site.'); return; }
+  Promise.resolve(flush ? flush() : null).catch(() => {}).then(() => {
+    try {
+      win.location = `${location.pathname}#note/${noteId}`;
+      win.focus();
+    } catch {}
+  });
+}
+
 // "3m ago" / "2h ago" / "Jul 8" — compact recency for the note list.
 export function timeAgo(ts) {
   if (!ts) return '';
