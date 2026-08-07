@@ -208,6 +208,8 @@ const buildStamp = readBuildStamp();
     }
     .mn-title-clickable { cursor: pointer; border-bottom: 1px dashed var(--border-2); }
     .mn-title-clickable:hover { color: var(--accent); }
+    /* ‹ › prev/next through the list the note was opened from */
+    .mn-note-nav { font-size: 1.2rem; line-height: 1; padding: 0.5rem 0.55rem; }
     .mn-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 
     /* ── Buttons ── */
@@ -491,6 +493,23 @@ const buildStamp = readBuildStamp();
     .mn-todo-count { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-dim); }
     .mn-todo-chevron { color: var(--text-dim); margin-left: auto; }
     .mn-todo-list { margin-top: 0.6rem; }
+    /* Group bar: one panel, many lists — a thin labeled rule marks where each
+       task list's block starts (shown only when more than one list has tasks). */
+    .mn-todo-group {
+      display: flex;
+      align-items: baseline;
+      gap: 0.45rem;
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      border-bottom: 1px solid color-mix(in srgb, var(--amber) 18%, var(--border));
+      margin: 0.65rem 0 0.2rem;
+      padding-bottom: 0.2rem;
+    }
+    .mn-todo-group:first-child { margin-top: 0; }
+    .mn-todo-group .mn-minifolder { text-transform: none; letter-spacing: normal; }
     .mn-todo-row {
       display: flex;
       align-items: center;

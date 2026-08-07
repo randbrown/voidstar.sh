@@ -235,7 +235,11 @@ only when the mind app next runs on that device.
   version of this check required `meta.importedAt`, which the importer only
   started stamping on 2026-07-15, so every journal imported before that still
   hijacked "today". A property of the record beats a stamp some writers never
-  applied.) An unvouched claim asks once — *open it* (pins it with
+  applied.) An unvouched claim whose note was last edited **before the claimed
+  day even began** is disproved by its own record (`dailyClaimRefuted` — e.g. an
+  "8/7" entry last touched Aug 2025 stamped with this year's key): "today"
+  releases the claim silently and creates a fresh note, no question asked. Any
+  other unvouched claim asks once — *open it* (pins it with
   `meta.dailyConfirmed`) or *start a fresh note* (drops only the daily key,
   content untouched) — and never asks about that note again. Two more surfaces
   make the state visible rather than mysterious: the **editor shows the claim**
@@ -285,6 +289,16 @@ only when the mind app next runs on that device.
 - **Quick-snooze**: a one-tap "😴 10m" appears on a task row whose reminder is
   due/overdue (`snoozeTask` re-arms `snoozedUntil`/`remindAt`, clears the
   local fired mark, rides sync).
+- **Note ‹ › navigation**: the editor top bar walks the list the note was
+  opened from — home's last-rendered order, so folder scope, search results,
+  and the chosen sort all carry over (`note-nav.js`, a per-tab sessionStorage
+  snapshot; the active search rides along so every stop keeps its match
+  highlights). No wrap at the ends — the button just disables. A note opened
+  from outside the list (palette, backlink, task link) shows no nav.
+- **Grouped TODO card**: the pinned home panel groups its tasks by task list
+  under a subtle bar (list name, plus folder path for a subfolder's list)
+  whenever more than one list has tasks in scope; the current folder's own
+  list leads. One list → no bars, same flat card as before.
 
 ## Reminders & hands-free capture (Phase A — client-only)
 

@@ -18,6 +18,7 @@ import {
   taskAttachButton, taskThumbs, groupTaskAttachments, wirePasteOnRow, wireDropOnRow,
 } from './task-attach.js';
 import { dailyKey, dailyTitle, pickDailyNote, confirmDaily, demoteDaily } from '../daily.js';
+import { setNoteNav } from '../note-nav.js';
 import { reminderSheet, reminderBadge } from '../reminders.js';
 import {
   hasClientId, needsReconnect, onSyncState, initGdriveSync, setSyncClient,
@@ -296,6 +297,10 @@ export async function renderHome(root) {
     _lastHere = here.map(e => e.note.id);
     if (_selectMode) renderSelBar(); // "all here" reflects the current list
 
+    // Snapshot the displayed order (in-scope, then dimmed "elsewhere") for the
+    // editor's ‹ › prev/next — whatever this list shows is what they walk.
+    setNoteNav([...here, ...elsewhere].map(e => e.note.id), _q);
+
     listWrap.innerHTML = '';
 
     if (taskHits.length) {
@@ -354,7 +359,13 @@ async function createDailyNote(key, folderId) {
 export async function openDailyNote(folderId = currentFolderId()) {
   const key = dailyKey();
   const all = await store.getAllNotes();
-  const { note, guessed } = pickDailyNote(all, key);
+  const { note, guessed, refuted } = pickDailyNote(all, key);
+
+  // A refuted claim is disproved by the record itself — the note was last
+  // edited before today even began (e.g. an "8/7" journal entry from LAST
+  // year that got stamped with this year's key). Release it silently; the
+  // question the dialog would ask has only one possible answer.
+  for (const n of refuted || []) await store.putNote(demoteDaily(n));
 
   if (note) { navigate(`#note/${note.id}`); return; }
 
@@ -664,10 +675,39 @@ async function renderTodoCard(wrap, folders, folderId, scope, { focusAdd = false
     // box, so a burst of quick-adds doesn't need a click between each one.
     const redraw = (opts) => renderTodoCard(wrap, folders, folderId, scope, opts);
     const list = el('div', 'mn-todo-list');
+
+    // One panel, grouped by task list — each list's tasks sit under a subtle
+    // group bar so ownership stays readable without splitting the card.
+    // `here` is already sorted (open first, then task order), so grouping off
+    // it keeps that order within each group. The current folder's own list
+    // leads; the rest follow the tasks-view order (default first, then age).
+    // A single group needs no bar — nothing to disambiguate.
+    const groups = new Map();
     for (const t of here) {
-      const ownFolder = listById.get(t.listId)?.folderId || '';
-      const label = ownFolder && ownFolder !== folderId ? store.folderPath(folders, ownFolder) : '';
-      list.appendChild(await todoRow(t, redraw, label, false, attsByTask.get(t.id) || []));
+      if (!groups.has(t.listId)) groups.set(t.listId, []);
+      groups.get(t.listId).push(t);
+    }
+    const ownListId = folderId ? `todo-${folderId}` : store.DEFAULT_TASKLIST_ID;
+    const groupIds = [...groups.keys()].sort((a, b) => {
+      if (a === ownListId || b === ownListId) return a === ownListId ? -1 : 1;
+      const la = listById.get(a); const lb = listById.get(b);
+      return ((lb?.isDefault ? 1 : 0) - (la?.isDefault ? 1 : 0))
+        || ((la?.order || 0) - (lb?.order || 0));
+    });
+    const showBars = groupIds.length > 1;
+    for (const gid of groupIds) {
+      const tl = listById.get(gid);
+      const ownFolder = tl?.folderId || '';
+      const path = ownFolder && ownFolder !== folderId ? store.folderPath(folders, ownFolder) : '';
+      if (showBars) {
+        list.appendChild(el('div', 'mn-todo-group',
+          `${esc(tl?.name || 'tasks')}${path ? ` <span class="mn-minifolder">&#128193; ${esc(path)}</span>` : ''}`));
+      }
+      for (const t of groups.get(gid)) {
+        // The group bar already names the list's folder; per-row labels only
+        // when there is no bar to carry it.
+        list.appendChild(await todoRow(t, redraw, showBars ? '' : path, false, attsByTask.get(t.id) || []));
+      }
     }
     card.appendChild(list);
 
