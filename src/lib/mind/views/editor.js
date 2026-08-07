@@ -18,6 +18,7 @@ import { applySink } from '../audio-out.js';
 import { processPendingOcr } from '../ocr.js';
 import { wirePicker } from '../../qualia/devices.js';
 import { navigate, refresh } from '../app.js';
+import { getNoteNav } from '../note-nav.js';
 import { listNoteVersions, isConnected as driveConnected } from '../gdrive-sync.js';
 import { el, esc, btn, topBar, textPrompt, confirmBox, timeAgo } from '../ui.js';
 
@@ -88,6 +89,27 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
 
   const bar = el('div', 'mn-topbar');
   bar.appendChild(btn('&larr;', 'mn-btn-icon', () => navigate('#home')));
+
+  // ‹ › — walk the list this note was opened from (home's last-rendered order,
+  // so folder scope, search results, and the chosen sort all carry over; the
+  // ?q= ride-along keeps match highlighting at every stop). No wrap at the
+  // ends — the button just disables. A note that isn't in that snapshot
+  // (palette jump, backlink, task link) shows no nav at all.
+  const nav = getNoteNav();
+  const navIds = nav?.ids || [];
+  const navIdx = navIds.indexOf(note.id);
+  if (navIdx !== -1 && navIds.length > 1) {
+    const navHash = (id) => `#note/${id}${nav.q ? `?q=${encodeURIComponent(nav.q)}` : ''}`;
+    const prevNote = btn('&#8249;', 'mn-btn-icon mn-note-nav', () => navigate(navHash(navIds[navIdx - 1])));
+    const nextNote = btn('&#8250;', 'mn-btn-icon mn-note-nav', () => navigate(navHash(navIds[navIdx + 1])));
+    prevNote.disabled = navIdx === 0;
+    nextNote.disabled = navIdx === navIds.length - 1;
+    prevNote.title = `previous note in the list (${navIdx + 1} of ${navIds.length})`;
+    nextNote.title = `next note in the list (${navIdx + 1} of ${navIds.length})`;
+    bar.appendChild(prevNote);
+    bar.appendChild(nextNote);
+  }
+
   bar.appendChild(titleSpan);
   const actions = el('div', 'mn-actions');
   actions.appendChild(pinBtn);

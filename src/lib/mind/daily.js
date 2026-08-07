@@ -11,8 +11,10 @@
 // before that fix took the import's year outright. Either way a 2025 entry can
 // end up claiming this year's daily key, which is exactly how the "today"
 // button opened last year's note. So: a note whose daily year we GUESSED never
-// silently stands in for today — the caller asks first, once, and the answer
-// sticks (`dailyConfirmed`, or the daily key is dropped).
+// silently stands in for today — when the note's own last-edit time disproves
+// the claim outright it is released without a question (`dailyClaimRefuted`),
+// and otherwise the caller asks first, once, and the answer sticks
+// (`dailyConfirmed`, or the daily key is dropped).
 
 // 'YYYY-MM-DD' in LOCAL time (the calendar day the user is living in).
 export function dailyKey(d = new Date()) {
@@ -50,6 +52,32 @@ export function dailyYearIsGuess(note) {
   return !String(note?.title || '').includes(String(key).slice(0, 4));
 }
 
+// Start of the claimed calendar day in LOCAL time (the key is a local day).
+function dayStartMs(key) {
+  const [y, m, d] = String(key).split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1).getTime();
+}
+
+// A guessed claim the record itself disproves: the note was last edited BEFORE
+// the claimed day even began, so nothing in it can be about that day. This is
+// the "8/7" case — a journal imported from a doc last touched Aug 2025 whose
+// year-less header got stamped with this year's daily key. The wrong year used
+// to cost the user a question; the note's own updatedAt already answers it.
+//
+// updatedAt is the one timestamp that's always real wall-clock time (an edit,
+// an import, a Drive file's modifiedTime) — createdAt is deliberately ignored
+// because import anchors it to the parsed section date, i.e. to the very year
+// guess under suspicion. Only GUESSED claims are ever refuted this way; a
+// vouched or confirmed note is trusted outright. (Callers only ever ask about
+// today's key — a claim on a future day would trivially "refute", but the app
+// never mints one.)
+export function dailyClaimRefuted(note) {
+  const key = note?.meta?.daily;
+  if (!key || !dailyYearIsGuess(note)) return false;
+  const edited = note.updatedAt || 0;
+  return edited > 0 && edited < dayStartMs(key);
+}
+
 // Every daily claim this device can't vouch for, newest first — the corpus
 // behind "release imported daily claims" in Settings → data. A year-long
 // journal import can leave hundreds of these, and answering the question one
@@ -61,9 +89,14 @@ export function guessedDailyNotes(notes) {
 }
 
 // Choose the note that IS the given day's daily note.
-//   → { note }     — trustworthy match, open it
-//   → { guessed }  — only an import-with-a-guessed-year claims this day; ask
-//   → {}           — nothing claims it, create one
+//   → { note }        — trustworthy match, open it
+//   → { guessed }     — an import-with-a-guessed-year plausibly claims it; ask
+//   → { refuted: [] } — claims disproved by their own timestamps (edited before
+//                       the day began); the caller releases them silently and
+//                       treats the day as unclaimed
+//   → {}              — nothing claims it, create one
+// `guessed` and `refuted` can coexist; `note` wins outright (no writes needed —
+// the trustworthy match is found first on every future pick too).
 // Newest-updated wins within each group so two devices land on the same note.
 export function pickDailyNote(notes, key) {
   const byNewest = (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0);
@@ -72,8 +105,12 @@ export function pickDailyNote(notes, key) {
     .sort(byNewest);
   const note = claims.find((n) => !dailyYearIsGuess(n));
   if (note) return { note };
-  const guessed = claims[0];
-  return guessed ? { guessed } : {};
+  const refuted = claims.filter((n) => dailyClaimRefuted(n));
+  const guessed = claims.find((n) => !refuted.includes(n));
+  const out = {};
+  if (guessed) out.guessed = guessed;
+  if (refuted.length) out.refuted = refuted;
+  return out;
 }
 
 // The two answers to that question, as record patches (pure — the caller
