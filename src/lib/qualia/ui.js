@@ -363,7 +363,7 @@ export function buildParamPanel({
  * outside the panel changes them (none currently, but symmetrical with the
  * fx panel).
  */
-export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onMonitor, onInputMute }) {
+export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onMonitor, onInputMute, onMicGain }) {
   // Preset buttons
   const presetRow = root.querySelector('[data-qp="audio-presets"]');
   if (presetRow) {
@@ -417,11 +417,26 @@ export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onM
     if (!muteBtn) return;
     muteBtn.classList.toggle('muted', _inputMuted);
     muteBtn.textContent = _inputMuted ? 'muted' : 'mute';
-    muteBtn.title = _inputMuted ? 'Unmute live input' : 'Mute live input (speakers + recording)';
+    muteBtn.title = _inputMuted
+      ? 'Unmute mic output'
+      : 'Mute mic output (speakers + recording) — reactivity keeps reading the mic';
   }
   if (muteBtn) {
     muteBtn.addEventListener('click', () => onInputMute?.(!_inputMuted));
     paintMute();
+  }
+  // Mic PRE gain — scales the mic into reactivity + monitor + recording;
+  // independent of the output fader/mute above.
+  const micGainRow = root.querySelector('[data-qp="audio-mic-gain"]');
+  const micGainInput = micGainRow?.querySelector('input[type=range]');
+  const micGainVal = micGainRow?.querySelector('.qp-val');
+  const fmtMicGain = (v) => `${v.toFixed(2)}×`;
+  if (micGainInput && micGainVal) {
+    micGainInput.addEventListener('input', () => {
+      const v = parseFloat(micGainInput.value);
+      micGainVal.textContent = fmtMicGain(v);
+      onMicGain?.(v);
+    });
   }
   // Back-compat: level-only sync.
   function setMonitor(level) {
@@ -429,10 +444,15 @@ export function buildAudioPanel({ root, presets, onTunablesChange, onPreset, onM
     monitorInput.value = String(level);
     monitorVal.textContent = fmtMonitor(level);
   }
-  // Full channel sync (level + mute) from the shared audio.js input channel.
+  // Full channel sync (level + mute + pre gain) from the shared audio.js input
+  // channel.
   function setInput(snap) {
     if (snap && typeof snap.level === 'number') setMonitor(snap.level);
     if (snap && typeof snap.muted === 'boolean') { _inputMuted = snap.muted; paintMute(); }
+    if (snap && typeof snap.gain === 'number' && micGainInput && micGainVal) {
+      micGainInput.value = String(snap.gain);
+      micGainVal.textContent = fmtMicGain(snap.gain);
+    }
   }
 
   function clampToInput(input, v) {

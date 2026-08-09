@@ -58,8 +58,9 @@ the cycle grid owns the IN point there, which is the whole point of syncing.
 thread → on stop, sliced to the grid-snapped region with 0.5 s headroom → `AudioBuffer`. The
 recorder taps the strip **output** (post-StereoPanner), so takes — and retro grabs from the ring —
 are **always stereo**, carrying the strip's ping-pong delay / pan / stereo reverb; the rig
-mono/stereo toggle is an *input*-routing mode only (mono = sum a single-input instrument to
-centre). Playback:
+channel toggle is an *input*-routing mode only (mono = sum a single-input instrument to centre,
+stereo = pass L/R, ch 1/ch 2 = take one input of a stereo interface so e.g. the rig uses input 1
+while the vox mic takes input 2 of the same 2-in device). Playback:
 per-track channel (gain + optional stretch node) + transient voice (looping `BufferSource` for
 varispeed, or stretch node for fit + preserve-pitch) → loop master → rig master → limiter →
 destination, with the analyser adopted into `audio.js` as `'looper'`. Sync uses only **relative**

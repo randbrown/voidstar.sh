@@ -68,6 +68,9 @@ const DEFAULT_CONFIG = {
   compress:    0.45,    // master compression macro (0..1)
   deess:       0.30,    // master de-esser depth (0..1) — tames loud sibilance
   micId:       '',      // '' = follow main mic; else a pinned input deviceId
+  micChannel:  'mix',   // 'mix' (all channels as captured) | 'left' | 'right' — one input
+                        // of a stereo interface, so e.g. vox takes input 2 while the rig
+                        // takes input 1 of the same 2-in device
   feedMix:     false,   // route vocoded output into audio-reactive modulation
   vocoderEnabled: true, // vocoder effect on/off (the mic + harmonizer stay live when off)
 };
@@ -76,6 +79,12 @@ const MIC_CONSTRAINTS = {
   echoCancellation: false,
   noiseSuppression: false,
   autoGainControl:  false,
+  // Capture stereo when the interface offers it — without this Chrome
+  // negotiates a mono track and there is no second channel for the
+  // left/right micChannel split to select. `ideal` so mono mics don't fail;
+  // it also matches the rig/audio-panel captures, so two subsystems opening
+  // the same interface agree on the device configuration.
+  channelCount: { ideal: 2 },
   // Advisory hint — ask the browser for the smallest input buffer it can
   // give. Helps live monitoring + pitch-tracking latency where supported.
   latency: 0,
@@ -275,6 +284,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   const elDeessVal     = document.getElementById('voc-deess-val');
   const elPreset       = document.getElementById('voc-preset');
   const elMic     = document.getElementById('voc-mic');
+  const elMicChan = document.getElementById('voc-mic-chan');
   const btnFeed   = document.getElementById('btn-vocoder-feed');
   const btnVocFx  = document.getElementById('btn-voc-fx');
   const elVocSection = document.getElementById('voc-section');
@@ -288,6 +298,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
 
   // Graph nodes — reset on every (re)build.
   let micSource    = null;
+  let micSplitter  = null;     // only when micChannel picks one interface channel
   let inputGate    = null;
   let outBus       = null;
   let outputGain   = null;
@@ -359,6 +370,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (elPresence)  elPresence.value  = String(cfg.presence);
     if (elCompress)  elCompress.value  = String(cfg.compress);
     if (elDeess)     elDeess.value     = String(cfg.deess);
+    if (elMicChan)   elMicChan.value   = cfg.micChannel;
     paintRanges();
     refreshVocFxBtn();
   }
@@ -640,10 +652,20 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     feedAnalyser.smoothingTimeConstant = 0.40;
     muteGate.connect(feedAnalyser);
 
-    // Mic input.
+    // Mic input. `inputGate` is the single fan-out point for everything the
+    // mic feeds (filterbank, sibilance, dry, gate sidechain, pitch tracker),
+    // so channel selection is one insert: 'left'/'right' take a single
+    // channel of a stereo interface (rig on input 1, vox on input 2 of the
+    // same 2-in device); 'mix' passes the capture as-is.
     inputGate = c.createGain(); inputGate.gain.value = 1;
     micSource = c.createMediaStreamSource(stream);
-    micSource.connect(inputGate);
+    if (cfg.micChannel === 'left' || cfg.micChannel === 'right') {
+      micSplitter = c.createChannelSplitter(2);
+      micSource.connect(micSplitter);
+      micSplitter.connect(inputGate, cfg.micChannel === 'left' ? 0 : 1);
+    } else {
+      micSource.connect(inputGate);
+    }
 
     // Input conditioning for the modulator — a high-pass drops rumble and
     // handling noise, a compressor evens out the voice's dynamics so the
@@ -835,6 +857,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
       gateChain = null;
     }
     if (micSource) { disc(micSource); micSource = null; }
+    if (micSplitter) { disc(micSplitter); micSplitter = null; }
     if (inputGate) { disc(inputGate); inputGate = null; }
     if (voiceHPF)  { disc(voiceHPF);  voiceHPF  = null; }
     if (voiceComp) { disc(voiceComp); voiceComp = null; }
@@ -1139,6 +1162,17 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (active) { stop(); await start(); }
   }
 
+  // Input channel — 'mix' (as captured) or one channel of a stereo interface.
+  // A graph-side splitter, so switching only needs the in-place rebuild (the
+  // stream is preserved; no permission prompt / capture restart).
+  function setMicChannel(v) {
+    const next = (v === 'left' || v === 'right') ? v : 'mix';
+    if (cfg.micChannel === next) return;
+    cfg.micChannel = next;
+    persistSoon();
+    if (active) rebuildGraph();
+  }
+
   // Toggle whether the vocoded output feeds audio-reactive modulation. The
   // actual adopt/release is page-init's job — notifyFeed pokes it.
   function setFeedMix(on) {
@@ -1323,6 +1357,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     if (typeof partial.deess       === 'number') setDeess(partial.deess);
     if (typeof partial.vocoderEnabled === 'boolean') setVocoderEnabled(partial.vocoderEnabled);
     if (typeof partial.micId       === 'string') applyMicId(partial.micId);
+    if (typeof partial.micChannel  === 'string') setMicChannel(partial.micChannel);
     if (typeof partial.feedMix     === 'boolean') setFeedMix(partial.feedMix);
     if (typeof partial.limiter     === 'boolean') setLimiter(partial.limiter);
     if (partial.harmonizer && harmonizer?.setConfig) harmonizer.setConfig(partial.harmonizer);
@@ -1335,6 +1370,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
   // ── Wire UI controls ───────────────────────────────────────────────────
   syncPropsFromCfg();
   if (elCarrier) elCarrier.addEventListener('change', () => setCarrierType(elCarrier.value));
+  if (elMicChan) elMicChan.addEventListener('change', () => setMicChannel(elMicChan.value));
   if (elPitch)   elPitch.addEventListener('change',   () => setPitch(elPitch.value));
   if (elBands)   elBands.addEventListener('change',   () => setBandCount(elBands.value));
   if (elSib)     elSib.addEventListener('input',      () => setSibilance(elSib.value));

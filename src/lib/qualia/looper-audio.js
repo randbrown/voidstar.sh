@@ -80,7 +80,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   let srcNode = null, recNode = null, sinkGain = null, captureAnalyser = null, tunerAnalyser = null;
   let inputNode = null, monoSplitter = null;
   let _inputSampleRate = 0;         // capture track rate (0 = unknown) — see clock-match check
-  let _channels = 'mono';           // 'mono' (sum to centre) | 'stereo' (pass L/R)
+  let _channels = 'mono';           // 'mono' (sum L+R) | 'stereo' (pass L/R) | 'left' | 'right' (one interface channel)
   let usingWorklet = false;
 
   // ── retroactive ring buffer ──
@@ -106,6 +106,18 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // Both the signal path (sigGain) and the loop bus (loopMaster) route through
   // rigMaster before hitting ctx.destination, giving a single mute + level
   // control over all rig output.
+  //
+  // RIG_MAKEUP: fixed +6 dB of makeup applied under the master fader. An
+  // instrument-level capture (pedal steel through an interface at a sane
+  // preamp setting) reads far below the near-full-scale sample playback of
+  // the sequencer/Strudel — in practice the rig fader lived pinned at max
+  // while the other channels sat halfway. The makeup re-centres the fader:
+  // 1.0 now means "roughly as loud as the other subsystems at 1.0". Applied
+  // at rigMaster so the live signal, loops, and freeze pads all scale
+  // together, and the strip's drive/amp stages (which assume a reference
+  // input level) are untouched. Safe because rigMaster feeds the soft
+  // limiter — extra gain into a brickwall is loudness, not clipping the DAC.
+  const RIG_MAKEUP = 2;
   let rigMaster = null, outputAnalyser = null, rigLimiter = null;
   let _rigMuted = false, _rigLevel = 1.0, _rigLimiterOn = true;
   // Master-pause brake. Every audible rig path — the live signal monitor, the
@@ -338,6 +350,10 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     //            ping-pong delay / stereo reverb (the panner up-mixes mono to
     //            both channels).
     //   stereo → pass both channels straight through.
+    //   left / right ("ch 1" / "ch 2") → take just one channel of a stereo
+    //            interface, centred like mono. This is how a 2-input interface
+    //            splits between subsystems: rig on ch 1, vox mic on ch 2 —
+    //            without it the rig sums the vocal into the pedal chain.
     // Either way this is an INPUT mode only — recording always taps the
     // strip's stereo output (see recTap below).
     if (_channels === 'stereo') {
@@ -345,10 +361,17 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
       srcNode.connect(inputNode);
     } else {
       monoSplitter = ctx.createChannelSplitter(2);
-      inputNode = ctx.createGain();   // both split channels summed into one input
+      inputNode = ctx.createGain();
       srcNode.connect(monoSplitter);
-      monoSplitter.connect(inputNode, 0);
-      monoSplitter.connect(inputNode, 1);
+      if (_channels === 'left') {
+        monoSplitter.connect(inputNode, 0);
+      } else if (_channels === 'right') {
+        monoSplitter.connect(inputNode, 1);
+      } else {
+        // mono — both split channels summed into one input
+        monoSplitter.connect(inputNode, 0);
+        monoSplitter.connect(inputNode, 1);
+      }
     }
 
     // Channel strip inserted between the input and the volume fader, so the
@@ -530,7 +553,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     outputAnalyser.smoothingTimeConstant = 0.40;
     rigMaster.connect(outputAnalyser);
   }
-  function effRig() { return (_rigMuted || _rigPaused) ? 0 : _rigLevel; }
+  function effRig() { return (_rigMuted || _rigPaused) ? 0 : _rigLevel * RIG_MAKEUP; }
 
   // ── Freeze / infinite sustain ───────────────────────────────────────────────
   // The ambient pedal-steel drone move: grab the last moment of the PROCESSED
@@ -783,10 +806,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
   function getSignal() { return { level: _sigLevel, muted: _sigMuted, live: isLive() }; }
   function getChannels() { return _channels; }
-  // Switch mono/stereo input. Reopens the capture (cheap; loops keep playing) so
-  // the input routing rebuilds — unless mid-record, where it applies next open.
+  // Switch the input channel mode (mono / stereo / left / right). Reopens the
+  // capture (cheap; loops keep playing) so the input routing rebuilds — unless
+  // mid-record, where it applies next open.
   async function setChannels(mode) {
-    const next = mode === 'stereo' ? 'stereo' : 'mono';
+    const next = ['stereo', 'left', 'right'].includes(mode) ? mode : 'mono';
     if (next === _channels) return;
     _channels = next;
     if (srcNode && !recording) { try { await openCapture(streamDeviceId); } catch (e) { console.warn('[qualia] channel mode switch failed:', e); } }
@@ -823,6 +847,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   function playCountIn({ pulses = 2, spacingSec = 0.5, level = 0.28 } = {}) {
     if (!ctx) return;
     ensureRigMaster();
+    // The pips ride rigMaster, which now carries RIG_MAKEUP — divide it back
+    // out so the click stays at its tuned loudness relative to the fader.
+    level = level / RIG_MAKEUP;
     const t0 = ctx.currentTime + 0.02;
     for (let i = 0; i < pulses; i++) {
       const at = t0 + i * spacingSec;
