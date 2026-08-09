@@ -1845,6 +1845,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       color: var(--pink); border-color: var(--pink);
       background: rgba(244, 114, 182, 0.10);
     }
+    /* Rig signal-path chip — amber warning naming the gate that's silencing
+       the live signal; click opens it. Hidden while signal flows. */
+    .rig-sig-state {
+      padding: 0.1rem 0.5rem; font-size: 0.66rem; line-height: 1;
+      color: var(--amber, #fbbf24); border-color: var(--amber, #fbbf24);
+      background: rgba(251, 191, 36, 0.10);
+      white-space: nowrap;
+    }
     /* ── Mixer panel ──────────────────────────────────────────────────────
        Compact channel-strip mixer: per-track level fader, mute, limiter
        toggle, live peak meter + clip LED. Chrome mirrors the seq/vox panels. */
@@ -3292,8 +3300,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <div class="qp-body">
       <div class="qp-presets" data-qp="audio-presets"></div>
-      <div class="qp-row" data-qp="audio-monitor" title="Audio-panel mic level — the casual 'whatever's on the mic' input (its own device), monitored through the output and into the recording at this level, post-fader. Used by the 'mic' and 'all' audio modes. Separate from the rig signal (controlled in the rig panel). OFF by default: turning it up can feed back on speakers (fine on headphones / an interface).">
-        <label>input<span class="qp-val">off</span></label>
+      <div class="qp-row" data-qp="audio-mic-gain" title="Mic PRE gain — scales the mic into the visual reactivity ('mic'/'all' audio modes), the monitor, and the recording. Works even with the output below muted/at 0, so a room mic can drive the visuals silently.">
+        <label>mic gain<span class="qp-val">1.00×</span></label>
+        <input type="range" min="0" max="2" step="0.01" value="1">
+      </div>
+      <div class="qp-row" data-qp="audio-monitor" title="Mic OUTPUT level — how loud the mic lands on the speakers and in the recording. Does NOT affect reactivity (that follows 'mic gain' above), so 0/muted still drives the visuals. Separate from the rig signal (controlled in the rig panel). OFF by default: turning it up can feed back on speakers (fine on headphones / an interface).">
+        <label>output<span class="qp-val">off</span></label>
         <input type="range" min="0" max="1" step="0.01" value="0">
         <button type="button" class="ctrl-btn seq-mini-mute" data-qp="audio-input-mute">mute</button>
       </div>
@@ -4245,6 +4257,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <span class="sp-tag">// live station</span>
     <button class="ctrl-btn panel-mute-btn" id="btn-rig-master-mute" title="Mute all rig output (signal + loops)">live</button>
     <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="2" step="0.01" value="1" title="Rig master output level (1.0 = unity; above 1.0 boosts into the limiter)" />
+    <!-- Signal-path chip — names the first closed gate silencing the live
+         signal (sig 0 / sig muted / tuner / rig muted / paused / no input);
+         one click opens that gate. Hidden while signal flows. -->
+    <button class="ctrl-btn rig-sig-state" id="rig-sig-state" style="display:none"></button>
     <span class="rig-head-spacer"></span>
     <button class="ctrl-btn rig-mini-toggle active" id="btn-rig-mini" aria-pressed="true" title="Full rig view — click to condense to the pedalboard (⇧O)">▤</button>
     <!-- ◌ sits immediately left of × in every panel (injectPanelIO inserts the
@@ -4275,7 +4291,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-rig-strip" title="Channel strip — EQ, comp, drives, amp, cab, delay → reverb, pan on the rig signal">strip</button>
       <button class="ctrl-btn" id="btn-rig-tuner" title="Strobe tuner — Peterson-style strobe reading the raw rig input (pre-distortion); bands freeze when in tune">tune</button>
       <button class="ctrl-btn" id="btn-rig-freeze" title="Freeze (;) — grab the last moment of the processed signal as an endless pad, LAYERING a new pad each tap (Frippertronics stack). Pop a layer with ' · re-freeze top with \\ · clear the stack with ⌫ · settings under the ▾. Layers auto-level (constant-RMS bus + limiter).">frz</button>
-      <button class="ctrl-btn rig-collapse" id="btn-rig-freeze-cfg" title="Freeze settings + stack controls — level, grain, release, pop / re-frz / clear">▾</button>
+      <button class="ctrl-btn rig-collapse" id="btn-rig-freeze-cfg" title="Freeze settings + stack controls — level, grain, release, pop / re-frz / clear">▸</button>
       <button class="ctrl-btn" id="btn-rig-loop" title="Looper — record, layer, and loop your signal">loop</button>
       <span id="rig-scope-gain-wrap" class="rig-scope-gain-wrap"></span>
       <span class="sp-status" id="rig-signal-status"></span>
@@ -4387,7 +4403,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <div class="rig-stage-head rig-stage-head-fixed"><span class="rig-stage-name">input</span></div>
         <div class="rig-ctl">
           <span class="rig-ctl-label">chan</span>
-          <button class="ctrl-btn" id="btn-rig-channels" title="Input: mono (sum to centre, then full stereo treatment) or stereo (pass L/R)">mono</button>
+          <button class="ctrl-btn" id="btn-rig-channels" title="Input channels: mono (sum to centre, then full stereo treatment) · stereo (pass L/R) · ch 1 / ch 2 (one input of a stereo interface — e.g. rig on input 1 while the vox mic takes input 2)">mono</button>
         </div>
       </div>
     </div>
@@ -4442,6 +4458,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <label class="seq-prop" title="Microphone — shared by every vox effect. 'same as main mic' follows the topbar mic selector; pick a device to give vox its own dedicated input.">
         <span class="seq-prop-label">mic</span>
         <select id="voc-mic" class="ctrl-btn"><option value="">same as main mic</option></select>
+      </label>
+      <label class="seq-prop" title="Input channel — 'mix' uses the capture as-is; 'ch 1'/'ch 2' take one input of a stereo interface, so e.g. vox can use input 2 while the rig takes input 1 of the same 2-in device.">
+        <span class="seq-prop-label">chan</span>
+        <select id="voc-mic-chan" class="ctrl-btn">
+          <option value="mix">mix</option>
+          <option value="left">ch 1</option>
+          <option value="right">ch 2</option>
+        </select>
       </label>
       <label class="seq-prop voc-range" title="Noise gate — mutes the vocoder and harmonizer when the mic drops below this level. Shared by both; also breaks acoustic feedback at silence. 0 = gate off.">
         <span class="seq-prop-label">gate</span>

@@ -736,14 +736,17 @@ export function initQualiaPage() {
       audioPanel.setActivePreset(name);
       settings.save();
     },
-    // Live input channel (volume + mute) — shared with the looper's input
-    // controls; lands on speakers + the screen recording, drives the visualizer.
+    // Live input channel — pre gain feeds reactivity + monitor + recording;
+    // the output fader/mute gate only what's heard/recorded.
     onMonitor: (level) => audio.setInputLevel(level),
     onInputMute: (muted) => audio.setInputMuted(muted),
+    onMicGain: (v) => audio.setInputGain(v),
   });
   // Keep the audio-panel input controls in sync when the channel is changed
-  // elsewhere (the looper's input controls write the same shared channel).
+  // elsewhere (the mixer's mic strip writes the same shared channel), and
+  // paint the persisted values on load.
   audio.onInputChange?.((m) => audioPanel.setInput(m));
+  audioPanel.setInput(audio.getInput());
   // (Double-click-to-reset for every range slider is already handled by the
   // delegated handler below; the looper's dynamic sliders now carry a default
   // value attribute so they participate too.)

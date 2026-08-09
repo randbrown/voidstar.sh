@@ -46,6 +46,12 @@ strip and the recordable-mix bus the recorder taps.
   `stop()`, `adoptAnalyser(ctx, analyser, id)`, `releaseAdopted(id)`, `tick(dt)`. Metering is the
   single source of truth for the mixer and the topbar CLIP light (`getLevels`, `onClipChange`).
   `setSourceFilter(allowed)` gates both analysis and the recordable mix.
+- **Mic pre/post split:** the mic strip is `mic → preGain ('mic gain') → analyser` with the
+  output fader/mute (`monitorGain`) and limiter hanging *after* the analyser tap. Reactivity and
+  the mixer's mic meter follow the pre gain but ignore the output fader — so a room mic can drive
+  the visuals (`'mic'`/`'all'` modes) while muted from the speakers/recording, the
+  multi-performer stage case. The recordable-mix tap mirrors `pre × output fader × mute`, so the
+  saved file still matches what's heard. All three persist (`inputGain`/`inputLevel`/`inputMuted`).
 - **Smooth vs sharp:** `bands.bass` is EMA-smoothed (slow pump); `beat.active`/`beat.pulse` are
   sharp (percussive). Beat detection is fast/slow-EMA spectral flux per band with dominance gates
   and flux-collapse-on-fire to kill double-triggers. Use the sharp signals for anything that should
@@ -80,8 +86,13 @@ fader move can't punch through the brake and the performer's own mute/level surv
 untouched. `looper.setRigPaused()` also cancels a pending record count-in and stops a running take
 — nothing should keep capturing behind a paused transport. `page-init.js`'s `setPaused` calls it.
 
-The rig master fader runs past unity into **boost** (`RIG_LEVEL_MAX`, 0–2× ≈ +6 dB of makeup for
-playing along with hotter sources); boost is safe because it drives the soft limiter (gain into a
+The rig master carries a fixed **`RIG_MAKEUP` ×2 (+6 dB)** under the fader: an instrument-level
+capture reads far below the near-full-scale sample playback of the sequencer/Strudel, so without
+it the rig fader lived pinned at max while the other channels sat halfway. Applied at `rigMaster`
+(inside `effRig()`), so the live signal, loops, and freeze pads scale together and the strip's
+drive/amp stages (which assume a reference input level) are untouched; the count-in pips divide it
+back out. On top of that the fader itself runs past unity into **boost** (`RIG_LEVEL_MAX`, 0–2×);
+boost is safe because it drives the soft limiter (gain into a
 brickwall = loudness maximizer), and `looper.js` **force-engages** the rig limiter whenever the
 level sits above 1.0 (`setRigLimiter` refuses to disengage while boosted). Because the soft
 clipper is memoryless, its gain reduction is exact math on the pre-limiter peak:
@@ -268,7 +279,9 @@ vocal textures.
 A channel vocoder (mic modulator, internal oscillator/noise carrier) tuned for intelligibility,
 plus host for the harmonizer's two engines. Owns its own private `AudioContext`. Master clarity
 chain: `outBus → lowcut → mud → presence → de-esser → comp → outputGain → limiter → muteGate →
-destination`. A clever pattern throughout: **sidechains drive `AudioParam`s directly** (the
+destination`. The mic capture asks for stereo (`channelCount: {ideal: 2}`) and the panel's `chan`
+select (`micChannel`: mix / ch 1 / ch 2) can take a single input of a stereo interface — pairs
+with the rig's ch 1/ch 2 input mode so a 2-in device splits rig ↔ vox. A clever pattern throughout: **sidechains drive `AudioParam`s directly** (the
 de-esser sidechain feeds `deEsser.gain`; the noise-gate sidechain feeds the carrier VCAs) rather
 than gating audio. Pitch tracking is a rAF `autoCorrelate` loop. `createVocoder(...)` exposes
 lifecycle, a mixer surface, `getConfig/setConfig` (folds in harmonizer), and a `feedAnalyser`

@@ -52,7 +52,12 @@ const SCOPEGAIN_KEY  = `${NS}.scopeGain`;  // scope DISPLAY gain (visual only, n
 const RIG_MUTE_KEY   = `${NS}.rigMuted`;  // rig master mute (signal + loops)
 const RIG_LEVEL_KEY  = `${NS}.rigLevel`;  // rig master output level
 const RIG_LIMITER_KEY = `${NS}.rigLimiter`; // rig master brickwall limiter (signal + loops)
-const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo'
+const CHANNELS_KEY   = `${NS}.channels`;   // input: 'mono' | 'stereo' | 'left' | 'right'
+// Input channel modes, in click-cycle order. 'left'/'right' take one channel
+// of a stereo interface (labelled ch 1 / ch 2) so a 2-input device can split
+// between subsystems — rig on input 1, vox mic on input 2.
+const CHANNEL_MODES = ['mono', 'stereo', 'left', 'right'];
+const CHANNEL_LABELS = { mono: 'mono', stereo: 'stereo', left: 'ch 1', right: 'ch 2' };
 const STRIP_KEY      = `${NS}.strip`;      // channel strip config (JSON)
 const MINI_KEY       = `${NS}.mini`;       // rig panel mini (pedalboard) mode
 const GHOST_KEY      = `${NS}.ghost`;      // rig panel ghost (chrome-free) layer
@@ -67,6 +72,7 @@ const ZONECOLLAPSE_KEYS = {
 const STRIPFOLD_KEY  = `${NS}.stripFolded`; // `strip` header tab folded (all four zones hidden)
 const STRIPUTIL_KEY  = `${NS}.stripUtilOpen`; // utility section (geq/comp/hpf/gate/peq/pan) expanded
 const LOOPOPEN_KEY     = `${NS}.loopOpen`;      // loop section visible
+const FREEZECFG_KEY    = `${NS}.freezeCfgOpen`; // freeze settings drawer visible
 const LOOPCOLLAPSE_KEY = `${NS}.loopCollapsed`; // looper tracks collapsed
 const RECDELAY_KEY   = `${NS}.recDelaySec`;  // free-run record: count-in delay before IN (0 = off)
 const RECCOUNTIN_KEY = `${NS}.recCountIn`;   // audible pulses during that delay
@@ -302,6 +308,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const inputSelect = document.getElementById('looper-input');
   const signalCtrls = document.getElementById('rig-input-controls');
   const signalStat  = document.getElementById('rig-signal-status');
+  const sigStateBtn = document.getElementById('rig-sig-state');
   const btnChannels = document.getElementById('btn-rig-channels');
   const scopeCanvas = document.getElementById('rig-scope');
   const scopeOutCanvas = document.getElementById('rig-scope-out');
@@ -396,7 +403,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     signalMuted: lsGet(SIGMUTE_KEY, '0') === '1',      // rig signal mute
     scopesOpen: lsGet(SCOPESOPEN_KEY, '0') === '1',    // in/out scopes visible (default collapsed to save room)
     scopeGain: (() => { const v = parseFloat(lsGet(SCOPEGAIN_KEY, '1.8')); return Number.isFinite(v) ? Math.max(0.5, Math.min(6, v)) : 1.8; })(),  // visual-only display gain (scopes are short now)
-    channels: lsGet(CHANNELS_KEY, 'mono') === 'stereo' ? 'stereo' : 'mono',
+    channels: (() => { const v = lsGet(CHANNELS_KEY, 'mono'); return CHANNEL_MODES.includes(v) ? v : 'mono'; })(),
     strip: loadStripConfig(),                          // channel strip config
     mini: lsGet(MINI_KEY, '0') === '1',                // pedalboard (mini) mode
     ghost: lsGet(GHOST_KEY, '0') === '1',              // chrome-free ghost layer
@@ -413,6 +420,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     stripUtilOpen: lsGet(STRIPUTIL_KEY, '0') === '1',  // utility section (default tucked away)
     loopOpen: lsGet(LOOPOPEN_KEY, '1') !== '0',              // loop section visible
     loopCollapsed: lsGet(LOOPCOLLAPSE_KEY, '0') === '1',
+    freezeCfgOpen: lsGet(FREEZECFG_KEY, '0') === '1',        // freeze settings drawer
     // Free-run record arming (ignored while synced to Strudel — the cycle grid
     // owns the IN point then). Hands are on the steel, not the keyboard.
     recDelaySec: (() => { const v = parseFloat(lsGet(RECDELAY_KEY, '0')); return Number.isFinite(v) ? Math.max(0, Math.min(8, v)) : 0; })(),
@@ -489,7 +497,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     return model.cps;
   }
-  function setStatus(t) { if (status) status.textContent = t; }
+  function setStatus(t) {
+    if (status) status.textContent = t;
+    // The status line lives in the loop subhead — invisible in mini mode or
+    // with the loop section hidden, which used to swallow loader errors and
+    // freeze/grab feedback. Mirror those messages to the panel toast so they
+    // always land somewhere visible while the panel is open.
+    if (t && panel && panel.style.display !== 'none' && (model.mini || !model.loopOpen)) showRigToast(t);
+  }
 
   // The renderer view for one track (its loop region, grid, length, playhead).
   function viewForTrack(track) {
@@ -1053,6 +1068,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function setInputVol(v) {
     model.signalLevel = clamp01(v);
     lsSet(SIGLEVEL_KEY, model.signalLevel);
+    // Keep the on-screen fader in sync when the write comes from outside it
+    // (the signal-path chip's one-click fix).
+    if (inputVolSl && inputVolSl.value !== String(model.signalLevel)) inputVolSl.value = String(model.signalLevel);
     looperAudio.setSignalLevel(model.signalLevel, model.deviceId).then(refreshLooperBtn).catch(() => {});
   }
   function setInputMuted(on) {
@@ -1063,11 +1081,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
   }
   function refreshChannelsBtn() {
     if (!btnChannels) return;
-    btnChannels.textContent = model.channels;
-    btnChannels.classList.toggle('active', model.channels === 'stereo');
+    btnChannels.textContent = CHANNEL_LABELS[model.channels] || model.channels;
+    btnChannels.classList.toggle('active', model.channels !== 'mono');
   }
   function setChannels(mode) {
-    model.channels = mode === 'stereo' ? 'stereo' : 'mono';
+    model.channels = CHANNEL_MODES.includes(mode) ? mode : 'mono';
     lsSet(CHANNELS_KEY, model.channels);
     looperAudio.setChannels(model.channels);   // reopens capture if live
     refreshChannelsBtn();
@@ -1163,7 +1181,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     if (typeof cfg.refPitch === 'number') setRefPitch(cfg.refPitch);
     if (typeof cfg.scopeGain === 'number') { setScopeGain(cfg.scopeGain); if (scopeGainSl) scopeGainSl.value = String(model.scopeGain); }
-    if (cfg.channels === 'mono' || cfg.channels === 'stereo') setChannels(cfg.channels);
+    if (CHANNEL_MODES.includes(cfg.channels)) setChannels(cfg.channels);
     // Re-select the cab IR / amp by id if it's present in the local library
     // (bytes already installed by the bundle importer, or already on this
     // machine). Fire-and-forget; a missing id just leaves the current tone.
@@ -1590,8 +1608,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     autosizeRig(model.scopesOpen ? rigSignalEl : null);
   }
   // A feature toggle inside a collapsed signal body (tune, frz ▾) would
-  // otherwise appear to do nothing — expand the section so it shows.
-  function expandSignalSection() { if (!model.scopesOpen) toggleScopesCollapse(); }
+  // otherwise appear to do nothing — expand the section so it shows. No-op in
+  // mini mode: the sections are hidden there, so expanding would only flip
+  // (and persist) what the FULL view looks like on the next switch.
+  function expandSignalSection() { if (!model.mini && !model.scopesOpen) toggleScopesCollapse(); }
 
   // Strip zone sections (drive / tone / space) — each collapses independently.
   function applyZoneCollapse(zone) {
@@ -1755,6 +1775,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshStripStages();
     syncMiniLed(stage, !!on);
     persistStrip();
+    // A toggle whose stage box isn't on screen (strip hidden, zone collapsed —
+    // e.g. driven from a MIDI pad or hotkey) would otherwise change the sound
+    // with zero visual feedback. Mini mode is covered by its pedal LEDs.
+    if (panel && panel.style.display !== 'none' && !model.mini) {
+      const box = panel.querySelector(`.rig-stage[data-stage="${stage}"]`);
+      if (!box || !box.offsetParent) showRigToast(`${stage} ${on ? 'on' : 'off'}`, 1500);
+    }
     if (on) showLatencyNote(stage);
     updateLatencyReadout();
   }
@@ -1771,21 +1798,29 @@ export function createLooper({ audio, syncStrudel } = {}) {
   };
   let _latToastEl = null, _latToastTimer = null;
   const _latDefaultTitle = latencyEl ? latencyEl.title : null;
+  // Generic transient toast inside the rig panel — the one feedback surface
+  // that's visible whatever sections are hidden/collapsed (latency notes,
+  // status mirrored out of a hidden loop subhead, pedal toggles whose stage
+  // box isn't on screen).
+  function showRigToast(text, holdMs = 4000) {
+    if (!text || !panel) return;
+    if (!_latToastEl) {
+      _latToastEl = document.createElement('div');
+      _latToastEl.className = 'rig-latency-toast';
+      panel.append(_latToastEl);
+    }
+    _latToastEl.textContent = text;
+    _latToastEl.classList.add('show');
+    if (_latToastTimer) clearTimeout(_latToastTimer);
+    _latToastTimer = setTimeout(() => { _latToastTimer = null; _latToastEl.classList.remove('show'); }, holdMs);
+  }
   function showLatencyNote(stage) {
     const reason = LATENCY_NOTE_REASON[stage];
     if (!reason || !panel) return;
     const sr = looperAudio.getLatencyInfo?.()?.sampleRate || 48000;
     const ms = Math.round(stageLatencySeconds(stage, sr) * 1000);
     if (!ms) return;
-    if (!_latToastEl) {
-      _latToastEl = document.createElement('div');
-      _latToastEl.className = 'rig-latency-toast';
-      panel.append(_latToastEl);
-    }
-    _latToastEl.textContent = `${stage} adds ~${ms} ms latency (${reason}) — bypassing removes it`;
-    _latToastEl.classList.add('show');
-    if (_latToastTimer) clearTimeout(_latToastTimer);
-    _latToastTimer = setTimeout(() => { _latToastTimer = null; _latToastEl.classList.remove('show'); }, 4000);
+    showRigToast(`${stage} adds ~${ms} ms latency (${reason}) — bypassing removes it`);
   }
   function updateLatencyReadout() {
     if (!latencyEl) return;
@@ -2579,7 +2614,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
     } catch (e) { console.warn('[qualia] cab IR restore failed:', e); }
   }
   function resetStrip() {
+    const prev = model.strip;
     model.strip = loadDefaultStrip();
+    // A sound reset shouldn't also discard the performer's drawer layout —
+    // carry each stage's collapsed flag over from the old config.
+    for (const [id, cfg] of Object.entries(model.strip)) {
+      if (prev?.[id]?.collapsed) cfg.collapsed = true;
+    }
     looperAudio.setStripConfig(model.strip);
     lsSet(STRIP_KEY, JSON.stringify(model.strip));
     rebuildStrip();
@@ -4026,13 +4067,26 @@ export function createLooper({ audio, syncStrudel } = {}) {
     btnFreezePop?.addEventListener('click', () => { freezePop(); });
     btnFreezeRegrab?.addEventListener('click', () => { freezeRegrab(); });
     btnFreezeClear?.addEventListener('click', () => { freezeClear(); });
-    btnFreezeCfg?.addEventListener('click', () => {
-      const open = freezeCfgEl.style.display === 'none';
-      freezeCfgEl.style.display = open ? '' : 'none';
-      btnFreezeCfg.textContent = open ? '▴' : '▾';
-      if (open) expandSignalSection();   // collapsed signal body would hide it
-    });
+    btnFreezeCfg?.addEventListener('click', toggleFreezeCfg);
+    applyFreezeCfgOpen();
     refreshFreezeBtn();
+  }
+  // Freeze settings drawer — same ▸/▾ chevron + persisted state as every other
+  // collapsible (it used to read its own style.display as state, with a ▴/▾
+  // glyph pair no other toggle used, and forgot itself on reload).
+  function applyFreezeCfgOpen() {
+    if (freezeCfgEl) freezeCfgEl.style.display = model.freezeCfgOpen ? '' : 'none';
+    if (btnFreezeCfg) {
+      btnFreezeCfg.textContent = model.freezeCfgOpen ? '▾' : '▸';
+      btnFreezeCfg.classList.toggle('collapsed', !model.freezeCfgOpen);
+    }
+  }
+  function toggleFreezeCfg() {
+    model.freezeCfgOpen = !model.freezeCfgOpen;
+    lsSet(FREEZECFG_KEY, model.freezeCfgOpen ? '1' : '0');
+    applyFreezeCfgOpen();
+    if (model.freezeCfgOpen) expandSignalSection();   // collapsed signal body would hide it
+    autosizeRig(model.freezeCfgOpen ? freezeCfgEl : null);
   }
   initFreezeCfgUI();
 
@@ -4153,12 +4207,55 @@ export function createLooper({ audio, syncStrudel } = {}) {
     syncStatusEl.dataset.state = ready ? 'connected' : 'waiting';
   }
   function refreshInputMuteBtn() {
-    if (!inputMuteBtn) return;
-    const tunerMuting = model.tunerOn && model.tunerMute && !model.signalMuted;
-    const muted = !!model.signalMuted || tunerMuting;
-    inputMuteBtn.classList.toggle('muted', muted);
-    inputMuteBtn.textContent = tunerMuting ? 'tuner' : (model.signalMuted ? 'muted' : 'mute');
-    inputMuteBtn.title = tunerMuting ? 'Muted by tuner (auto)' : (model.signalMuted ? 'Unmute rig signal' : 'Mute rig signal (out of monitor + mix)');
+    if (inputMuteBtn) {
+      const tunerMuting = model.tunerOn && model.tunerMute && !model.signalMuted;
+      const muted = !!model.signalMuted || tunerMuting;
+      inputMuteBtn.classList.toggle('muted', muted);
+      inputMuteBtn.textContent = tunerMuting ? 'tuner' : (model.signalMuted ? 'muted' : 'mute');
+      inputMuteBtn.title = tunerMuting ? 'Muted by tuner (auto)' : (model.signalMuted ? 'Unmute rig signal' : 'Mute rig signal (out of monitor + mix)');
+    }
+    refreshSigState();
+  }
+
+  // ── signal-path state chip ─────────────────────────────────────────────────
+  // The live signal crosses several independent gates before the speakers —
+  // the signal fader, the signal mute, the tuner auto-mute, the master mute,
+  // the pause brake, and the capture itself. Each exists for a reason, but
+  // "why is my rig silent?" historically meant fumbling through panels to find
+  // the one that's closed. The header chip names the FIRST closed gate
+  // (checked source → output) and one click opens it; if another gate is
+  // behind it the chip re-labels and another click opens that one. Hidden
+  // while signal flows. Loops/freeze aren't considered — this is about the
+  // live instrument path.
+  function signalBlocker() {
+    if (!(model.signalLevel > 0)) return { label: 'sig 0',
+      title: `Signal level is 0 (input capture closed) — click to raise it to ${INPUT_DEFAULT}`,
+      fix: () => setInputVol(INPUT_DEFAULT) };
+    if (model.signalMuted) return { label: 'sig muted',
+      title: 'Rig signal is muted — click to unmute',
+      fix: () => setInputMuted(false) };
+    if (model.tunerOn && model.tunerMute) return { label: 'tuner',
+      title: 'The tuner is auto-muting the signal — click to close the tuner (or set its mute to "thru")',
+      fix: () => toggleTuner(false) };
+    if (model.rigMuted) return { label: 'rig muted',
+      title: 'The rig master is muted — click to unmute',
+      fix: () => setRigMuted(false) };
+    if (!(model.rigLevel > 0)) return { label: 'rig 0',
+      title: 'The rig master level is 0 — click to reset it to 1.0',
+      fix: () => setRigLevel(1) };
+    if (looperAudio.isRigPaused?.()) return { label: 'paused',
+      title: 'Everything is paused — press Space (or the topbar pause button) to resume',
+      fix: null };
+    if (!looperAudio.getSignal().live) return { label: 'no input',
+      title: 'The input capture is not running — click to (re)open it',
+      fix: () => { looperAudio.ensureCaptureOpen(model.deviceId).then(refreshSigState).catch(() => {}); } };
+    return null;
+  }
+  function refreshSigState() {
+    if (!sigStateBtn) return;
+    const b = signalBlocker();
+    sigStateBtn.style.display = b ? '' : 'none';
+    if (b) { sigStateBtn.textContent = b.label; sigStateBtn.title = b.title; }
   }
 
   // ── button paint ─────────────────────────────────────────────────────────
@@ -4218,6 +4315,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const open = panel?.style.display !== 'none';
     if (open) btnToggle.classList.add('active');
     btnToggle.textContent = outputting ? 'rig ●' : 'rig';
+    refreshSigState();
   }
 
   // ── device picker ────────────────────────────────────────────────────────
@@ -4430,7 +4528,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
   if (btnRecord) btnRecord.addEventListener('click', () => { recording ? stopRecording() : startRecording(); });
   if (btnRetro)  btnRetro.addEventListener('click', () => { doRetroGrab(); });
   if (bufferBtn) bufferBtn.addEventListener('click', () => { setBuffer(!model.bufferOn); });
-  if (btnChannels) btnChannels.addEventListener('click', () => { setChannels(model.channels === 'stereo' ? 'mono' : 'stereo'); });
+  if (btnChannels) btnChannels.addEventListener('click', () => {
+    const i = CHANNEL_MODES.indexOf(model.channels);
+    setChannels(CHANNEL_MODES[(i + 1) % CHANNEL_MODES.length]);
+  });
   if (btnMini)   btnMini.addEventListener('click', () => { toggleMini(); });
   if (btnGhost)  btnGhost.addEventListener('click', () => { toggleGhost(); });
   if (btnStrip)  btnStrip.addEventListener('click', () => { toggleStrip(); });
@@ -4478,6 +4579,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // once the context is genuinely rendering. Without this the topbar would
   // freeze on whatever it painted at boot.
   looperAudio.onLiveChange?.(() => { refreshLooperBtn(); refreshInputMuteBtn(); });
+  // Signal-path chip: each click opens the currently-named gate (the refresh
+  // then names the next closed one, if any).
+  if (sigStateBtn) sigStateBtn.addEventListener('click', () => { signalBlocker()?.fix?.(); refreshSigState(); });
   syncStrudel?.onReadyChange?.(() => refreshSyncStatus());
 
   // Seed with one empty armed track (Phase 5 restores persisted tracks here).

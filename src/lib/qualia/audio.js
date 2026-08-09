@@ -103,28 +103,30 @@ export function createAudio() {
   function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
   // Live input channel: the mic/instrument input as a first-class mixer
-  // channel with VOLUME + MUTE. The fader (gated by mute) drives BOTH the
-  // speaker monitor (`monitorGain`) AND the input's level in the screen
-  // recording (its per-source gain on the recordable-mix bus), so the saved
-  // file matches what you hear. The visualizer/band analyser is wired POST-fader
-  // (see start()), so the mic's reactivity AND its share of the merged mix
-  // waveform/spectrum follow this fader + mute — muting drops it from the
-  // visuals and the recording, like a channel strip's mix send. A separate
-  // pre-fader analyser feeds the rig scope so the raw input stays monitorable.
-  // OFF by default (level 0) — raising it on
-  // speakers can feed back, so it's a deliberate move. Session-only (not
-  // persisted across reloads — the live rig wants its input level/mute to come
-  // back (raising it on speakers can still feed back; that's on the user). One
-  // shared value drives every UI that exposes it (audio panel + looper "input").
+  // channel with a PRE gain and a POST (output) fader + mute.
+  //   mic → preGain (mic gain) → analyser (reactivity + merged mix buffers)
+  //                            → monitorGain (output fader × mute) → limiter → speakers
+  // The PRE gain (`inputGain`) scales everything the mic feeds — reactivity,
+  // the speaker monitor, and the recording — so a quiet room mic can be driven
+  // into the visuals. The POST fader/mute (`inputLevel`/`inputMuted`) gate the
+  // OUTPUT only (speaker monitor + the mic's per-source gain on the
+  // recordable-mix bus): muting drops the mic from what you hear and what's
+  // recorded, but reactivity keeps reading it. That's the multi-performer
+  // stage case — the room mic drives the visuals in 'all' mode while only the
+  // performer's own rig/strudel reach the PA. All three values persist. OFF by
+  // default (output level 0) — raising it on speakers can feed back, so it's a
+  // deliberate move. One shared channel drives every UI that exposes it
+  // (audio panel + mixer 'mic' strip).
   let inputLevel = (() => { const v = parseFloat(lsGet(`${NS}.inputLevel`, '0')); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0; })();
   let inputMuted = lsGet(`${NS}.inputMuted`, '0') === '1';
+  let inputGain  = (() => { const v = parseFloat(lsGet(`${NS}.inputGain`, '1')); return Number.isFinite(v) ? Math.max(0, Math.min(2, v)) : 1; })();
   // Brickwall limiter on the mic monitor — on by default. Persisted so the
   // protection survives reloads independent of whether the mixer ever opens.
   let inputLimiterOn = lsGet(`${NS}.inputLimiter`, '1') === '1';
   const inputListeners = new Set();
   function onInputChange(fn) { inputListeners.add(fn); return () => inputListeners.delete(fn); }
   function notifyInput() {
-    const snap = { level: inputLevel, muted: inputMuted, limiter: inputLimiterOn, available: sources.has('mic') };
+    const snap = { level: inputLevel, muted: inputMuted, gain: inputGain, limiter: inputLimiterOn, available: sources.has('mic') };
     inputListeners.forEach(fn => { try { fn(snap); } catch {} });
   }
   // Effective audible/recorded level — the fader gated by mute.
@@ -142,14 +144,21 @@ export function createAudio() {
     const m = sources.get('mic');
     if (m?.monitorGain) rampGain(m.monitorGain.gain, m.ctx, effInput());
   }
-  // Recording: ramp the mic's per-source mix gain to the effective level so
-  // the recording carries the input at the fader setting. The tap itself stays
-  // on the raw getUserMedia stream (Android-safe); only this gain follows.
+  // Pre gain: ramp the mic's preGain — feeds the analyser (reactivity), the
+  // monitor, and (mirrored below) the recording.
+  function applyPreGain() {
+    const m = sources.get('mic');
+    if (m?.preGain) rampGain(m.preGain.gain, m.ctx, inputGain);
+  }
+  // Recording: ramp the mic's per-source mix gain so the recording carries the
+  // input at pre gain × output fader (gated by mute). The tap itself stays on
+  // the raw getUserMedia stream (Android-safe) — it bypasses the mic-ctx graph,
+  // so BOTH gains are re-applied here to keep the file matching the monitor.
   function applyInputToMix() {
     const tap = recMixTaps.get('mic');
-    if (tap?.gain && recMixCtx) rampGain(tap.gain.gain, recMixCtx, effInput());
+    if (tap?.gain && recMixCtx) rampGain(tap.gain.gain, recMixCtx, effInput() * inputGain);
   }
-  function applyInput() { applyMonitor(); applyInputToMix(); }
+  function applyInput() { applyPreGain(); applyMonitor(); applyInputToMix(); }
   function setInputLevel(v) {
     inputLevel = Math.max(0, Math.min(1, Number(v) || 0));
     lsSet(`${NS}.inputLevel`, inputLevel);
@@ -166,6 +175,12 @@ export function createAudio() {
     applyInput();
     notifyInput();
   }
+  function setInputGain(v) {
+    inputGain = Math.max(0, Math.min(2, Number(v) || 0));
+    lsSet(`${NS}.inputGain`, inputGain);
+    applyInput();
+    notifyInput();
+  }
   function applyInputLimiter() {
     const m = sources.get('mic');
     if (m?.inputLimiter) setLimiterEngaged(m.inputLimiter, inputLimiterOn);
@@ -177,7 +192,7 @@ export function createAudio() {
     notifyInput();
   }
   function getInputLimiter() { return inputLimiterOn; }
-  function getInput() { return { level: inputLevel, muted: inputMuted, limiter: inputLimiterOn, available: sources.has('mic') }; }
+  function getInput() { return { level: inputLevel, muted: inputMuted, gain: inputGain, limiter: inputLimiterOn, available: sources.has('mic') }; }
   // Back-compat aliases for the prior "mic monitor" API (level-only).
   const setMonitorLevel = setInputLevel;
   const getMonitor = () => ({ level: inputLevel, available: sources.has('mic') });
@@ -293,6 +308,7 @@ export function createAudio() {
     const src = sources.get(id);
     if (!src) return;
     detachFromRecordableMix(id);
+    try { src.preGain?.disconnect(); } catch {}
     try { src.monitorGain?.disconnect(); } catch {}
     if (src.stream) { try { src.stream.getTracks().forEach(t => t.stop()); } catch {} }
     if (src.ownsCtx && src.ctx) { try { await src.ctx.close(); } catch {} }
@@ -389,8 +405,9 @@ export function createAudio() {
         console.warn(`[audio] recordable-mix: could not tap source ${id}:`, err);
       }
     }
-    // The mic's mix gain follows the input fader/mute (every other source
-    // stays at unity). Apply it now so a tap built mid-session is at level.
+    // The mic's mix gain follows pre gain × output fader/mute (every other
+    // source stays at unity). Apply it now so a tap built mid-session is at
+    // level.
     applyInputToMix();
   }
 
@@ -457,29 +474,33 @@ export function createAudio() {
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.40;
     const micSource = ctx.createMediaStreamSource(stream);
+    // Pre gain — drives the mic into everything downstream (reactivity
+    // analyser, speaker monitor, and — mirrored in applyInputToMix — the
+    // recording).
+    const preGain = ctx.createGain();
+    preGain.gain.value = inputGain;
+    micSource.connect(preGain);
     const monitorGain = ctx.createGain();
     monitorGain.gain.value = effInput();
     monitorGain.__qualiaBypassMute = true;   // never silenced by the Strudel mute gate
-    micSource.connect(monitorGain);
+    preGain.connect(monitorGain);
     // Brickwall limiter between the fader and the speakers so a hot input
-    // transient can't clip the device output. The analyser below taps
-    // monitorGain (PRE-limiter), so the meter shows the true level even while
-    // the limiter is catching it. Toggle/bypass from the mixer.
+    // transient can't clip the device output. Toggle/bypass from the mixer.
     const inputLimiter = makeLimiter(ctx, inputLimiterOn);
     monitorGain.connect(inputLimiter);
     inputLimiter.connect(ctx.destination);   // speaker monitor (post-limiter)
-    // Bands + the merged mix waveform/spectrum tap POST the fader, so the mic's
-    // contribution to reactivity AND the recording follows its volume + mute —
-    // muting the rig drops it from the visuals and the mix, like a channel
-    // strip's mix send. (The recordable-mix tap is already post-fader.)
-    monitorGain.connect(analyser);
-    // A separate PRE-fader analyser feeds the rig scope only — a monitor that
-    // still shows the raw input even when the signal is muted out of the mix.
+    // Bands + the merged mix waveform/spectrum tap POST the pre gain but PRE
+    // the output fader/mute — so reactivity (and the mixer's mic meter) follow
+    // 'mic gain' but keep reading a mic whose OUTPUT is faded down or muted.
+    // That's what lets a room mic drive the visuals without being heard.
+    preGain.connect(analyser);
+    // A separate raw-input analyser feeds the rig scope only — a monitor that
+    // still shows the untouched capture whatever the gains are doing.
     const scopeAnalyser = ctx.createAnalyser();
     scopeAnalyser.fftSize = 1024;
     scopeAnalyser.smoothingTimeConstant = 0.40;
     micSource.connect(scopeAnalyser);
-    const src = { ctx, analyser, ownsCtx: true, stream, micSource, monitorGain, inputLimiter, scopeAnalyser };
+    const src = { ctx, analyser, ownsCtx: true, stream, micSource, preGain, monitorGain, inputLimiter, scopeAnalyser };
     configureSource(src);
     sources.set('mic', src);
 
@@ -806,6 +827,7 @@ export function createAudio() {
     setSourceFilter,
     setInputLevel,
     setInputMuted,
+    setInputGain,
     setInputLimiter,
     getInputLimiter,
     getInput,
@@ -827,10 +849,11 @@ export function createAudio() {
     resumeRecordableMix,
     getAnalyser: () => firstSource()?.analyser ?? null,
     getCtx:      () => firstSource()?.ctx ?? null,
-    // The live input's PRE-fader analyser (scopeAnalyser), so the rig scope can
-    // monitor the raw signal even when it's muted out of the mix. Null when the
-    // input isn't being captured. (The source's main `analyser` is post-fader —
-    // it drives reactivity + the recording, which follow volume + mute.)
+    // The live input's raw-capture analyser (scopeAnalyser), so the rig scope
+    // can monitor the untouched signal whatever the gains are doing. Null when
+    // the input isn't being captured. (The source's main `analyser` sits post
+    // pre-gain / pre output-fader — it drives reactivity even while the mic's
+    // output is muted.)
     getInputAnalyser: () => sources.get('mic')?.scopeAnalyser ?? null,
   };
 }
