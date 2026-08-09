@@ -104,7 +104,12 @@ function rgbToHsl(r, g, b) {
   return [h, s, l];
 }
 
-export function createOverlay({ getMainCanvas, getStageRect, parent = document.body } = {}) {
+export function createOverlay({
+  getMainCanvas,
+  getStageRect,
+  getOverlayProfile,
+  parent = document.body,
+} = {}) {
   // Overlay canvas — sits above the fx canvas and tracks the same on-screen
   // box (the "stage"). Normally that's the full viewport; in split-screen
   // mode the page hands us a half-viewport rect via getStageRect so the
@@ -173,6 +178,10 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     stitch:   false,
     negative: false,
   };
+  // The active quale may request a low-stimulation shared-overlay profile.
+  // Updated once in tick() and reused by render() so the hot path performs
+  // only one registry lookup per frame.
+  let overlayProfile = 'default';
   // ASCII / data-mosh / edge-detect / stitch / negative each fully repaint the
   // overlay before sparks + skeleton land on top, so they're mutually
   // exclusive — enabling one disables the others automatically.
@@ -381,7 +390,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   const emitAccum = new Map();
 
   function emitFromJoints(field) {
-    if (!opts.sparks) return;
+    if (!opts.sparks || overlayProfile === 'ambient') return;
     const audio = field.audio;
     const W = canvas.width, H = canvas.height;
     const audioOn = !!audio.spectrum;
@@ -479,6 +488,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     const W = canvas.width, H = canvas.height;
     const audio = field.audio;
     const audioOn = !!audio.spectrum;
+    const ambient = overlayProfile === 'ambient';
     const lmPos = lm => lmToCanvas(lm.x, lm.y, W, H);
 
     ctx.save();
@@ -486,7 +496,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       const pal  = PERSON_PALETTE[pIdx % PERSON_PALETTE.length];
       const lms  = person.raw;
 
-      // Aura — soft halo around centroid, scaled by bass.
+      // Aura — soft halo around centroid. Ambient quales keep its radius
+      // fixed and let only the opacity breathe with smoothed total energy.
       if (opts.aura && audioOn) {
         let cx = 0, cy = 0, n = 0;
         for (let k = 0; k < LM_WEIGHT_INDICES.length; k++) {
@@ -497,9 +508,13 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
         }
         if (n > 0) {
           cx /= n; cy /= n;
-          const r = 80 + audio.bands.total * 220 + audio.beat.pulse * 80;
+          const r = ambient
+            ? Math.min(W, H) * 0.115
+            : 80 + audio.bands.total * 220 + audio.beat.pulse * 80;
           const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-          const baseAlpha = 0.12 + audio.bands.bass * 0.35 + audio.beat.pulse * 0.18;
+          const baseAlpha = ambient
+            ? 0.10 + audio.bands.total * 0.12
+            : 0.12 + audio.bands.bass * 0.35 + audio.beat.pulse * 0.18;
           g.addColorStop(0, pal.halo.replace(/[\d.]+\)$/, `${baseAlpha})`));
           g.addColorStop(1, pal.halo.replace(/[\d.]+\)$/, '0)'));
           ctx.globalCompositeOperation = 'lighter';
@@ -512,7 +527,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       ctx.globalCompositeOperation = 'source-over';
 
       // Bones.
-      const thick = 1.6 + audio.bands.mids * 4 + audio.beat.pulse * 2;
+      const thick = ambient ? 2.0 : 1.6 + audio.bands.mids * 4 + audio.beat.pulse * 2;
       ctx.lineWidth = thick; ctx.lineCap = 'round';
       for (const [a, b] of SKELETON_CONNECTIONS) {
         const lmA = lms[a], lmB = lms[b];
@@ -520,7 +535,9 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
         const [ax, ay] = lmPos(lmA);
         const [bx, by] = lmPos(lmB);
         const grad = ctx.createLinearGradient(ax, ay, bx, by);
-        const shift = audioOn ? Math.floor(audio.bands.mids * 40 + audio.beat.pulse * 30) : 0;
+        const shift = audioOn
+          ? Math.floor(audio.bands.mids * (ambient ? 26 : 40) + (ambient ? 0 : audio.beat.pulse * 30))
+          : 0;
         grad.addColorStop(0, shiftHue(pal.boneA, shift));
         grad.addColorStop(1, shiftHue(pal.boneB, shift));
         ctx.strokeStyle = grad;
@@ -528,7 +545,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       }
 
       // Joints.
-      const pulse = 1 + audio.bands.bass * 1.6 + audio.beat.pulse * 0.8;
+      const pulse = ambient ? 1 : 1 + audio.bands.bass * 1.6 + audio.beat.pulse * 0.8;
       for (let k = 0; k < LM_WEIGHT_ENTRIES.length; k++) {
         const idx    = LM_WEIGHT_ENTRIES[k][0];
         const weight = LM_WEIGHT_ENTRIES[k][1];
@@ -834,7 +851,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   function tick(dt, field) {
-    fireRippleOnBeat(field);
+    overlayProfile = getOverlayProfile?.() || 'default';
+    if (overlayProfile !== 'ambient') fireRippleOnBeat(field);
     tickRipples(dt);
     emitFromJoints(field);
     updateSparks(dt);

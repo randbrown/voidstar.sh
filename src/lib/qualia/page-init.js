@@ -71,6 +71,7 @@ import gear           from './fx/gear.js';
 import fire           from './fx/fire.js';
 import wake           from './fx/wake.js';
 import iconism        from './fx/iconism.js';
+import noMansLand     from './fx/no-mans-land.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -186,6 +187,7 @@ export function initQualiaPage() {
   mesh.register(fire);
   mesh.register(wake);
   mesh.register(iconism);
+  mesh.register(noMansLand);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
@@ -335,6 +337,7 @@ export function initQualiaPage() {
   const overlay = createOverlay({
     getMainCanvas: () => core.getCanvas(),
     getStageRect:  () => getStageRect(),
+    getOverlayProfile: () => mesh.get(core.activeId())?.overlayProfile || 'default',
   });
   core.onFrame((field) => {
     overlay.tick(field.dt, field);

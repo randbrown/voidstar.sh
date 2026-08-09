@@ -171,6 +171,10 @@
  *           of the global DPR cap (default 1.5). Heavy fragment shaders
  *           (e.g. raymarchers) can declare 1.0 to halve fragment work on
  *           high-DPI screens. Lower wins.
+ * @property {'ambient'} [overlayProfile]
+ *           Optional shared-overlay motion profile. `ambient` keeps pose
+ *           skeleton geometry fixed, retains slow audio colour, and suppresses
+ *           beat-fired sparks/ripples for long-form, low-stimulation quales.
  * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any, paramsContainer?:HTMLElement, applyPreset?:(name:string) => boolean }) => Promise<QFXInstance>|QFXInstance} create
  *           `paramsContainer` is the same DOM node the auto-generated param
  *           panel renders into. Quales with extra UI (file pickers, playlist

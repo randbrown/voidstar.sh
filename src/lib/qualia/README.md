@@ -63,6 +63,10 @@ That's it. UI controls are generated from `params`. Persistence is automatic. Th
 - **`autoPhase: { steps: [...] }`** — declares the topbar `phase` button's behaviour (one partial
   param dict applied per interval). Omit it and the button reads "phase n/a".
 - **`maxDpr`** — per-quale DPR cap on top of the global 1.5× (heavy raymarchers declare `1.0`).
+- **`overlayProfile: 'ambient'`** — keeps shared pose skeleton geometry fixed,
+  preserves slow audio-driven hue/alpha, and suppresses beat-fired sparks and
+  ripples. Use for low-stimulation, long-form installations where the default
+  stage overlay would be too percussive.
 - **`crowd.*` modulation channels** — when entanglement is open, `field.crowd` (audience input) is
   exposed as modulator sources (`crowd.energy`, `crowd.rise`, …) exactly like `audio.*`/`pose.*`.
   All-zero when no one is connected. See `modulation.js`.
