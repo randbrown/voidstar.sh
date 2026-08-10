@@ -41,10 +41,13 @@ Strudel patterns drive the visuals.
 ## The live-code → fx bridge
 
 `globalThis.qualia` is the full code-side control surface — quales, params/presets, glitches,
-camera/pose, entanglement, and the audio engines — plus Strudel-registered pattern functions
-(`quale`, `qset`, `qpreset`, `qphase`, `qglitch`, `qcall`, `.qtrig`). The complete reference is
-[`qualia-code-api.md`](qualia-code-api.md) (module: `code-api.js`, installed by `page-init.js`);
-the same docs are searchable in the panel's funcs tab and via `qualia.help()`.
+camera/pose, entanglement, set-level fades (`fadeOut`/`fadeIn`), and the audio engines — plus
+Strudel-registered pattern functions
+(`quale`, `qset`, `qpreset`, `qphase`, `qglitch`, `qtext`, `qcall`, `.qtrig`). Scalar `qualia.*` knobs are
+also **patternable**: handed a pattern (in the editor, any double-quoted string) they return a
+silent control lane — `qualia.cam.walk("<0 1>/4")` inside `stack(...)` rides the pattern. The
+complete reference is [`qualia-code-api.md`](qualia-code-api.md) (module: `code-api.js`, installed
+by `page-init.js`); the same docs are searchable in the panel's funcs tab and via `qualia.help()`.
 
 **Lanes vs. the auto modes.** `quale()` and auto-cycle drive the same knob; `qphase()`, `qpreset()`
 and a colliding `qset()` write the same params auto-phase steps. Running both hands one control to
@@ -93,13 +96,11 @@ The current CPS is surfaced to the timer HUD (`chron.js`) and the sequencer.
 - **No disposal path at all** — the connect-patch, the manifest-fetch patch, document/window
   listeners, two ResizeObservers, the ~8 s auto-save interval, the tap-poll interval, and the audio
   nodes all leak for the page lifetime. Module-global mutable state would clash if instantiated twice.
-- **`perFrame` is misnamed/miswired:** `strudel.perFrame` (the Hydra `a.fft` refresh) is wired on
-  `core.onFps` (~5 Hz), so `a.fft`-driven Hydra visuals update at ~5 fps despite the name. Either
-  rename it or rewire to `onFrame`/`onTick`.
 - The `setParam` bridge is an **unvalidated** pass-through (acceptable for a trusted local performer;
   note it if the surface ever becomes remotely reachable).
 
 **Performance lever:** the editor's "perf mode" (disable per-frame pattern highlighting + eval
-flash) is the single biggest main-thread saving during a set — default it on in performance
-contexts. The viz framerate is already lowered via `setAuxFps` while editors are open (see
-architecture §4).
+flash) is the single biggest main-thread saving during a set — the ⚡ button in the panel's tab
+bar toggles it (persisted; also `qualia.setStrudelEditorPerf(true)`). The viz framerate is
+already lowered via `setAuxFps` while editors are open (see architecture §4), and the engines'
+`perFrame` hooks (`a.fft` refresh, sequencer playhead) ride the ~60 Hz reactivity tick.

@@ -296,6 +296,44 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       filter: var(--code-filter, none);
     }
 
+    /* API echo ("training mode", echo.js) — the virtual console strip that
+       prints the qualia.* equivalent of each UI action. Bottom-center, above
+       the fade scrim (it's chrome, not stage), under the panels. Anchored
+       above the bottom tab bar via the live --tabs-h var (same convention as
+       the video preview / rec toast) so the HUD never covers it. Hidden in
+       zen with the rest of the chrome (.zen). */
+    #api-echo {
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: calc(max(0.6rem, env(safe-area-inset-bottom)) + var(--tabs-h, 0px) + 0.4rem);
+      z-index: 16; display: flex; flex-direction: column; align-items: center;
+      gap: 2px; pointer-events: none; max-width: 92vw;
+      transition: opacity 1.2s ease;
+    }
+    #api-echo.idle { opacity: 0.35; }
+    #api-echo.zen { display: none !important; }
+    .api-echo-line {
+      pointer-events: auto; cursor: pointer;
+      font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.5;
+      color: var(--cyan); background: rgba(0, 0, 0, 0.55);
+      border: 1px solid transparent; border-radius: 4px; padding: 0 0.5rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      max-width: 92vw;
+    }
+    .api-echo-line:not(:last-child) { opacity: 0.45; font-size: 0.66rem; }
+    .api-echo-line:hover { border-color: var(--border); }
+    .api-echo-line.copied { color: var(--pink); }
+
+    /* Set-level fade scrim (fade.js) — qualia.fadeOut() ramps its opacity on
+       a CSS transition (compositor-only, no per-frame JS). Covers the whole
+       visual stage including the split camera + Strudel scope, but sits
+       UNDER the panels/topbar (z 16+) so the performer's controls stay
+       visible through a fade-to-black. Recordings get the same fade drawn
+       into the composite canvas (page-init mirrors fader.visualLevel()). */
+    #stage-fade {
+      position: fixed; inset: 0; z-index: 15; background: #000;
+      opacity: 0; pointer-events: none; will-change: opacity;
+    }
+
     #video {
       position: fixed; bottom: 1.25rem; right: 1.25rem;
       width: 200px; height: auto; display: none;
@@ -2963,6 +3001,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
      CSS slot so the inner canvas inherits position/blend/z-index. -->
 <div id="qualia-host"></div>
 <canvas id="test-canvas"></canvas>
+<!-- Set-level fade scrim — fade.js drives opacity; see the CSS note above. -->
+<div id="stage-fade" aria-hidden="true"></div>
+<!-- API echo (training mode) — echo.js fills this with qualia.* lines. -->
+<div id="api-echo" style="display:none" aria-live="polite"></div>
 <video id="video" autoplay playsinline muted></video>
 <!-- Split-screen splitter handle. Hidden until a split mode is active
      (body.split-v / body.split-h); drag logic + snap-assist in page-init.js. -->
@@ -3277,6 +3319,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="viz-fps" title="Cap the visualizer frame rate. 'max' = uncapped. Lower frees the main thread (helps Strudel timing + UI on Windows) and doubles as a slow-motion / strobe aesthetic down to 1fps. Audio reactivity is unaffected.">
         <label>render cap<span class="qp-val">max</span></label>
         <input type="range" min="1" max="61" step="1" value="61">
+      </div>
+      <div class="qp-row diag-row" title="Training mode: every UI action prints its qualia.* API equivalent in a console strip at the bottom of the stage — learn the quale / param / preset ids by using the controls. Click a printed line to copy it. Also: qualia.echo(true).">
+        <span class="diag-label">api echo</span>
+        <button class="qp-toggle" id="btn-api-echo" aria-pressed="false">off</button>
       </div>
       <div class="qp-section-tag">advanced</div>
       <div class="qp-row diag-row">
@@ -4176,6 +4222,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       </span>
       <button class="sp-opt" id="btn-strudel-autocomplete" title="Toggle autocomplete + hover docs (Strudel's built-in intellisense)" aria-pressed="true">⌨</button>
       <button class="sp-opt" id="btn-strudel-lines" title="Toggle line numbers" aria-pressed="false">#</button>
+      <button class="sp-opt" id="btn-strudel-perf" title="Perf mode — turn off the per-beat in-code highlight + eval flash, the editor's main main-thread cost while playing. Helps on weaker machines (Windows laptops); playback and editing are unchanged." aria-pressed="false">⚡</button>
     </div>
   </div>
   <div id="strudel-mount"></div>

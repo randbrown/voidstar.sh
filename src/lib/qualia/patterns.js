@@ -227,7 +227,7 @@ stack(
 // random roller must not count, and a `.slow(32)` lane fires so rarely that
 // "did it trigger lately" would read as absent for a minute at a time. What
 // the buffer *declares* is the honest answer to the question being asked.
-export const LANE_NAMES = ['quale', 'qset', 'qpreset', 'qphase', 'qglitch', 'qcall', 'qtrig'];
+export const LANE_NAMES = ['quale', 'qset', 'qpreset', 'qphase', 'qglitch', 'qtext', 'qcall', 'qtrig'];
 
 // Blank out comments and string/template bodies so a parked lane, a lane name
 // inside a doc comment, and `s("qcall")` all stop counting. Strings collapse to

@@ -205,9 +205,17 @@ function injectStrudelTransparency(ed) {
     root.appendChild(style);
     root._strudelTransparentInjected = true;
   };
+  // CodeMirror OWNS everything under .cm-editor and re-syncs DOM it doesn't
+  // recognize: writing inline styles onto its nodes makes it rebuild them,
+  // which re-fires any observer watching the subtree — a self-sustaining
+  // churn loop that on slower machines snowballed into multi-second style
+  // sweeps (the "'setInterval' handler took 17s" lockup). The transparent
+  // look INSIDE the editor comes entirely from the injected stylesheet, so
+  // CM internals never need inline fixes — skip them everywhere, always.
+  const inCM = (el) =>
+    !!(el && el.nodeType === 1 && el.closest && el.closest('.cm-editor'));
   const stripInline = (el) => {
-    if (!el || !el.style) return;
-    if (el.parentElement && el.parentElement.classList && el.parentElement.classList.contains('cm-line')) return;
+    if (!el || !el.style || inCM(el)) return;
     const attr = el.getAttribute && el.getAttribute('style');
     if (attr && attr.includes('var(--background)')) {
       const fixed = attr.replace(
@@ -220,24 +228,54 @@ function injectStrudelTransparency(ed) {
     el.style.setProperty('background-color', 'transparent', 'important');
     el.style.setProperty('background-image', 'none',        'important');
   };
+  // Strip one subtree, descending into any nested shadow roots so they get
+  // the transparent override style too.
+  const walk = (root) => {
+    if (!root) return;
+    const all = root.querySelectorAll('*');
+    for (const el of all) {
+      stripInline(el);
+      if (el.shadowRoot) { inject(el.shadowRoot); walk(el.shadowRoot); }
+    }
+  };
   const sweep = () => {
     inject(ed.shadowRoot);
     stripInline(ed);
-    const walk = (root) => {
-      if (!root) return;
-      const all = root.querySelectorAll('*');
-      for (const el of all) {
-        stripInline(el);
-        if (el.shadowRoot) { inject(el.shadowRoot); walk(el.shadowRoot); }
-      }
-    };
     walk(ed);
     if (ed.shadowRoot) walk(ed.shadowRoot);
   };
   sweep();
-  const obs = new MutationObserver(sweep);
+  // Re-assert on churn, INCREMENTALLY, and never inside CodeMirror (see the
+  // inCM note above): touch only what each record names — new nodes get the
+  // strip+walk, style edits get re-stripped. A hard record budget disconnects
+  // the observer outright if something ever churns pathologically, so a
+  // mutation storm can burn at most the budget, never the main thread.
+  let recordBudget = 400;
+  const obs = new MutationObserver((records) => {
+    for (const r of records) {
+      if (--recordBudget < 0) { obs.disconnect(); return; }
+      if (inCM(r.target)) continue;                  // CM re-syncs its own DOM
+      if (r.type === 'attributes') { stripInline(r.target); continue; }
+      for (const node of r.addedNodes) {
+        if (node.nodeType !== 1 || inCM(node)) continue;
+        stripInline(node);
+        if (node.shadowRoot) { inject(node.shadowRoot); walk(node.shadowRoot); }
+        walk(node);
+      }
+    }
+  });
   obs.observe(ed, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
-  setTimeout(() => obs.disconnect(), 10000);
+  // Belt-and-braces for what records can't see (a shadow root attaching
+  // during custom-element upgrade emits no record, and observers don't
+  // pierce it): a few ONE-SHOT re-sweeps. One-shots can't compound — unlike
+  // an interval, a starved event loop just runs each once, late.
+  const t1 = setTimeout(sweep, 1000);
+  const t3 = setTimeout(sweep, 3000);
+  const t8 = setTimeout(sweep, 8000);
+  setTimeout(() => {
+    obs.disconnect();
+    clearTimeout(t1); clearTimeout(t3); clearTimeout(t8);
+  }, 10000);
 }
 
 /**
@@ -320,6 +358,19 @@ function saveGhost(on) {
   try { localStorage.setItem(GHOST_KEY, on ? '1' : '0'); } catch {}
 }
 
+// Editor perf mode — disables the per-event pattern highlighting + eval
+// flash, the single biggest main-thread cost while the panel is open and
+// playing (see setEditorPerf). Persisted so a machine that needs it (weaker
+// GPUs / Windows laptops) keeps it across reloads. Default off: the moving
+// highlight is part of the instrument's look and most machines afford it.
+const PERF_KEY = 'voidstar.qualia.strudel.perfMode';
+function loadPerfMode() {
+  try { return localStorage.getItem(PERF_KEY) === '1'; } catch { return false; }
+}
+function savePerfMode(on) {
+  try { localStorage.setItem(PERF_KEY, on ? '1' : '0'); } catch {}
+}
+
 const AUTOCOMPLETE_KEY = 'voidstar.qualia.strudel.autocomplete';
 // Default ON: function-name completion + hover docs are the whole point of
 // having them, and they cost nothing until you type or hover. A first visit
@@ -334,7 +385,7 @@ function saveAutocomplete(on) {
   try { localStorage.setItem(AUTOCOMPLETE_KEY, on ? '1' : '0'); } catch {}
 }
 
-export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange, autoModes } = {}) {
+export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onPlayStateChange, autoModes, onEcho } = {}) {
   // Snapshot the previous-session panel state ONCE at init. open()/close()
   // mutate the flag for next time, but the answer to "should we restore the
   // last pattern?" is based on what the user did before this page load —
@@ -356,6 +407,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const btnNewline = document.getElementById('btn-strudel-newline');
   const btnLines   = document.getElementById('btn-strudel-lines');
   const btnAuto    = document.getElementById('btn-strudel-autocomplete');
+  const btnPerf    = document.getElementById('btn-strudel-perf');
   const btnBlur    = document.getElementById('btn-strudel-blur');
   const btnGhost   = document.getElementById('btn-strudel-ghost');
 
@@ -620,8 +672,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   // for every event, which is heavy on dense patterns (e.g. hh*15). Perf mode
   // disables them via the editor's own settings API; editing/playback are
   // unchanged, you just lose the moving in-code highlight + flash. Default off
-  // (keep highlighting). A/B from the console: qualia.setStrudelEditorPerf(true).
-  let _editorPerfMode = false;
+  // (keep highlighting); persisted, toggled by the ⚡ button in the tab bar or
+  // qualia.setStrudelEditorPerf(true) from the console.
+  let _editorPerfMode = loadPerfMode();
   let _lineNumbers = loadLineNumbers();   // opt-in; default off (CDN default)
   let _autocomplete = loadAutocomplete(); // built-in intellisense; default on
   let _fontSize    = loadFontSize();      // editor font px; slider + dblclick-reset
@@ -659,9 +712,16 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       return false;
     }
   }
+  function refreshPerfBtn() {
+    if (!btnPerf) return;
+    btnPerf.classList.toggle('active', _editorPerfMode);
+    btnPerf.setAttribute('aria-pressed', _editorPerfMode ? 'true' : 'false');
+  }
   function setEditorPerf(on) {
     _editorPerfMode = !!on;
+    savePerfMode(_editorPerfMode);
     const ok = applyEditorSettings();
+    refreshPerfBtn();
     console.log(
       `[qualia] strudel editor perf mode ${_editorPerfMode ? 'ON (highlight off)' : 'OFF (highlight on)'}` +
       (ok ? '' : ' — editor not ready or settings API unavailable')
@@ -669,6 +729,10 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     return _editorPerfMode;
   }
   function getEditorPerf() { return _editorPerfMode; }
+  if (btnPerf) {
+    refreshPerfBtn();
+    btnPerf.addEventListener('click', () => setEditorPerf(!_editorPerfMode));
+  }
 
   // Line numbers — optional, persisted, applied via the same editor settings
   // call (so it survives editor re-mounts on load/new/random). The "#" toggle
@@ -1340,12 +1404,16 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   let _strudelMuted = false;
   let _strudelVolume = loadVolume();
   let _strudelLimiterOn = loadLimiter();
+  // Set-level fade multiplier (fade.js) — NOT persisted, so a reload always
+  // comes back at full level and the stored volume/mute survive a fade.
+  let _fadeScale = 1;
+  const effGate = () => (_strudelMuted ? 0 : _strudelVolume) * _fadeScale;
   let muteGate = null;
   let strudelLimiter = null;
   function ensureMuteGate(ctx) {
     if (muteGate && muteGate.context === ctx) return muteGate;
     muteGate = ctx.createGain();
-    muteGate.gain.value = _strudelMuted ? 0 : _strudelVolume;
+    muteGate.gain.value = effGate();
     // Self-bypass — muteGate's own connect to ctx.destination must not
     // recurse through the patch.
     muteGate.__qualiaBypassMute = true;
@@ -1377,7 +1445,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   }
   function applyMuteGate() {
     if (!muteGate) return;
-    const target = _strudelMuted ? 0 : _strudelVolume;
+    const target = effGate();
     try {
       const t = muteGate.context.currentTime;
       muteGate.gain.cancelScheduledValues(t);
@@ -1385,6 +1453,19 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     } catch {
       try { muteGate.gain.value = target; } catch {}
     }
+  }
+  /** Set-level fade (fade.js): ramp the gate to volume×scale over `seconds`
+   *  natively — no main-thread work while the fade runs. The scale sticks
+   *  (folded into effGate) until the next fadeTo. */
+  function fadeTo(scale, seconds = 0) {
+    _fadeScale = Math.max(0, Math.min(1, Number(scale) || 0));
+    if (!muteGate) return;   // applies when the gate materialises (first tap)
+    try {
+      const t = muteGate.context.currentTime;
+      muteGate.gain.cancelScheduledValues(t);
+      muteGate.gain.setValueAtTime(muteGate.gain.value, t);
+      muteGate.gain.linearRampToValueAtTime(effGate(), t + Math.max(0.04, Number(seconds) || 0));
+    } catch { applyMuteGate(); }
   }
   function setMuted(on) {
     _strudelMuted = !!on;
@@ -1407,7 +1488,10 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       ? 'Unmute Strudel audio'
       : 'Mute Strudel audio (transport keeps running so sync stays locked)';
   }
-  if (btnMute) btnMute.addEventListener('click', () => setMuted(!_strudelMuted));
+  if (btnMute) btnMute.addEventListener('click', () => {
+    setMuted(!_strudelMuted);
+    onEcho?.(`qualia.strudel.mute(${_strudelMuted})`);
+  });
 
   // Output level — multiplies the muteGate while un-muted. Doesn't
   // change Strudel's gain() in code; stacks with it. Persisted so the
@@ -1423,7 +1507,10 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   }
   if (elGain) {
     elGain.value = String(_strudelVolume);
-    elGain.addEventListener('input', () => setVolume(elGain.value));
+    elGain.addEventListener('input', () => {
+      setVolume(elGain.value);
+      onEcho?.(`qualia.strudel.volume(${_strudelVolume})`, 'strudel:vol');
+    });
   }
   if (elFont) {
     elFont.value = String(_fontSize);
@@ -1586,6 +1673,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   });
   if (btnClose) btnClose.addEventListener('click', close);
   if (btnPlay) btnPlay.addEventListener('click', () => {
+    onEcho?.('qualia.strudel.play()');
     if (!play()) {
       let tries = 0;
       const t = setInterval(() => {
@@ -1593,7 +1681,10 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       }, 150);
     }
   });
-  if (btnStop) btnStop.addEventListener('click', stop);
+  if (btnStop) btnStop.addEventListener('click', () => {
+    onEcho?.('qualia.strudel.stop()');
+    stop();
+  });
 
   // Insert text at the editor cursor. Path 1 is the CodeMirror 6 transaction
   // API — works for any text, so it backs both the newline button and the
@@ -1820,6 +1911,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     setLimiter,
     getLimiter,
     onChange,
+    /** Set-level fade multiplier (fade.js) — native ramp, not persisted. */
+    fadeTo,
     /** Inner StrudelMirror handle — null until the editor mounts. */
     getEditor,
     /** Inner scheduler (`StrudelMirror.repl.scheduler`) — null until

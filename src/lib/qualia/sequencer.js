@@ -623,9 +623,12 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     notifyMix();
   }
   function getLimiter() { return _seqLimiterOn; }
+  // Set-level fade multiplier (fade.js) — NOT persisted, so a reload always
+  // comes back at full level and the stored volume/mute survive a fade.
+  let _fadeScale = 1;
   function applyMuteToKit() {
     if (!kit?.output?.gain) return;
-    const target = _muted ? 0 : _volume * SEQ_REF_TRIM;
+    const target = (_muted ? 0 : _volume * SEQ_REF_TRIM) * _fadeScale;
     try {
       const t = Tone.now();
       kit.output.gain.cancelScheduledValues(t);
@@ -633,6 +636,19 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     } catch {
       try { kit.output.gain.value = target; } catch {}
     }
+  }
+  /** Set-level fade (fade.js): native long ramp to volume×scale. The scale
+   *  sticks (applyMuteToKit folds it in) so a kit swap mid-fade lands faded. */
+  function fadeTo(scale, seconds = 0) {
+    _fadeScale = Math.max(0, Math.min(1, Number(scale) || 0));
+    if (!kit?.output?.gain) return;
+    const target = (_muted ? 0 : _volume * SEQ_REF_TRIM) * _fadeScale;
+    try {
+      const t = Tone.now();
+      kit.output.gain.cancelScheduledValues(t);
+      kit.output.gain.setValueAtTime(kit.output.gain.value, t);
+      kit.output.gain.linearRampToValueAtTime(target, t + Math.max(0.04, Number(seconds) || 0));
+    } catch { applyMuteToKit(); }
   }
   function setMuted(on) {
     _muted = !!on;
@@ -1864,6 +1880,8 @@ export function createSequencer({ audio, syncStrudel } = {}) {
     setLimiter,
     getLimiter,
     onChange,
+    /** Set-level fade multiplier (fade.js) — native ramp, not persisted. */
+    fadeTo,
     // Kit selection — a kit is a genre × source pairing.
     getGenres: () => GENRES_META.map(({ id, label, desc }) => ({ id, label, desc })),
     getSources: () => [

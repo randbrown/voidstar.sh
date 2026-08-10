@@ -183,6 +183,9 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
 
   /** Listeners notified on FPS update so the page can paint a HUD. */
   const fpsListeners = new Set();
+  /** Listeners notified when the USER edits a param via the panel (never on
+   *  code-driven setParam) — feeds the api-echo training console. */
+  const userParamListeners = new Set();
   /** Listeners notified after each canvas (re)creation. */
   const canvasListeners = new Set();
   /** Listeners notified every frame AFTER fx render — used by the overlay
@@ -377,6 +380,9 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
         baseParams[id] = value;
         field.params[id] = value;
         saveFxParamsDebounced(mod.id, activePanel.values());
+        // UI-origin only: code writes go through setParam → panel.setValue,
+        // which does NOT fire this. The api-echo (training mode) rides it.
+        userParamListeners.forEach(fn => { try { fn(id, value); } catch {} });
       },
     });
     baseParams = activePanel.values();
@@ -695,6 +701,7 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
   }
   function getReactSmoothing() { return reactSmoothAmt; }
   function onFps(fn)    { fpsListeners.add(fn); return () => fpsListeners.delete(fn); }
+  function onUserParam(fn) { userParamListeners.add(fn); return () => userParamListeners.delete(fn); }
   function onFrame(fn)  { frameListeners.add(fn); return () => frameListeners.delete(fn); }
   function onTick(fn)   { tickListeners.add(fn);  return () => tickListeners.delete(fn); }
   function onCanvas(fn) {
@@ -741,6 +748,8 @@ export function createCore({ host, mesh, audio, pose, paramsContainer, onFxChang
     onFrame,
     onTick,
     onCanvas,
+    /** UI-origin param edits only (panel sliders/selects) — api-echo feed. */
+    onUserParam,
     /** Drive one loop iteration from an external (visible) window while this
      *  one is occluded — see frameBody. Safe to call at any rate; the internal
      *  gates dedupe. */

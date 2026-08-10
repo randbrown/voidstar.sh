@@ -4,8 +4,9 @@
 performance workstation that fuses live coding, a pedal-steel/guitar rig, live looping, a
 sequencer, vocal processing, realtime audio analysis, pose tracking, audience participation, and
 shader/canvas visuals into one realtime instrument ("qualia"). It's an Astro site, statically
-hosted on Cloudflare Pages (auto-deploy on push to `main`, no CI), with one companion Cloudflare
-Worker for the audience-mesh signaling.
+hosted on Cloudflare Pages (auto-deploy on push to `main` — ungated, so a GitHub Actions CI
+workflow runs `npm run check` + `npm run build` on every push/PR to catch regressions first),
+with one companion Cloudflare Worker for the audience-mesh signaling.
 
 The primary use case is **solo pedal-steel + live-coded ambient music with audio-reactive
 visuals.** Every design decision serves a live performer on stage, alone, who cannot stop to debug.

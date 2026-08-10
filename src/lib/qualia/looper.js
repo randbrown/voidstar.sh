@@ -4679,6 +4679,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     collectAssets, installAssets,
     // ── Mixer surface — rig master (= rig signal + loops) ──────────────────
     setRigLevel, setRigMuted, setRigLimiter,
+    /** Set-level fade multiplier (fade.js) — native ramp, not persisted. */
+    fadeTo: (scale, seconds) => looperAudio.fadeTo(scale, seconds),
     nudgeRigLevel(delta) { setRigLevel((model.rigLevel ?? 1) + delta); },
     getRig: () => ({ level: model.rigLevel, muted: model.rigMuted, limiter: model.rigLimiter }),
     // Live limiter gain reduction (dB) — feeds the mixer's rig GR meter.
