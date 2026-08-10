@@ -53,8 +53,41 @@ stack(
 | `qpreset(pat)` | Apply factory/user presets by name per event. Claims **auto-phase**. |
 | `qphase(pat)` | Step the quale's phase per event (value = direction ±1). Claims **auto-phase**. |
 | `qglitch(name, pat)` | Set a glitch post's mode per event (`ascii/mosh/edge/stitch/negative` × `off/on/blip/flip`). |
+| `qtext(pat)` | Write the **Glyph** quale's text per event (the text video-synth — pair with `quale("glyph")`). Underscores render as spaces: `qtext("<VOID one_more_time>")`. |
 | `qcall(fn, pat)` | Call `fn(value, hap)` per event — the generic escape hatch. |
 | `pat.qtrig(fn)` | **Chainable, keeps the audio**: fires `fn(value, hap)` on each event of the pattern it's chained to — `s("bd*4").qtrig(() => qualia.phase())`. |
+
+### Patterned knobs — `qualia.cam.walk("<0 1>/4")`
+
+Every **scalar knob** on the `qualia` object (the one-function get/set knobs
+taking a boolean, number, or name — `cam.walk`, `blackout`, `zen`, `theme`,
+`overlay(key, …)`, `cam.zoom`, `pose.scale`, `strudel.volume`, …) also
+accepts a **pattern**. In the editor, double-quoted strings are mini-notation
+(stock Strudel transpilation — single quotes stay plain strings), so handing
+one to a knob passes a Pattern, and the knob returns a **silent control
+lane** that drives itself per event instead of writing once:
+
+```js
+stack(
+  s("bd*4"),
+  qualia.cam.walk("<0 1>/4"),                        // walk 4 cycles on, 4 off
+  qualia.overlay('sparks', "<1 0>").slow(4),
+  qualia.pose.scale(sine.range(.5, 1).segment(8)),   // signals work too
+)
+```
+
+The lane is a real Pattern (`.slow()`, `.euclid()`, `.sometimesBy()`, … all
+chain), fires at the audible time like every `q*` lane, and only runs while
+the evaluated pattern queries it — **as a bare top-level statement it is
+inert**. So imperative writes keep using plain values or single quotes
+(`qualia.theme('phosphor')`), and pattern arguments belong inside
+`stack(...)`. Booleans are lenient: `1/0`, `on/off`, `true/false` all read
+as expected. Knob lanes never claim the auto-cycle/auto-phase timers (none
+of these knobs are ones the timers write) and don't show in the lanes chip.
+Config-object knobs (`walkConfig`, `mosh`, …) and action calls
+(`nextQuale()`, `looper.grab()`, …) stay imperative — drive those per event
+via `qcall`. From the console (no transpiler) pass a real pattern
+(`mini("<0 1>")` once the REPL is up) or use `qcall`.
 
 A param that has audio/pose modulators declared keeps them: `qset` writes the
 *base* value and the modulation engine still resolves `base ⊕ modulators`
@@ -183,7 +216,20 @@ qualia.zen(true)                   // hide UI chrome
 qualia.pause(true)                 // brake visuals + transports
 qualia.fullscreen(true)
 qualia.theme("phosphor")           // qualia.themes() lists; cycleTheme(±1)
+qualia.echo(true)                  // training mode: UI actions echo their API call
+
+qualia.fadeOut(20)                 // slow close: ALL audio buses + stage → black over 20 s
+qualia.fadeIn(30)                  // slow open back to full (recordings fade too)
+qualia.fade(0.3, 5)                // duck everything to 30%
+qualia.fadeLevel()                 // current audio fade 0..1
 ```
+
+`fadeOut`/`fadeIn` ramp every audio engine natively in its own context (no
+main-thread work during the fade) and ride a fade-to-black scrim over the
+stage — pass `{audio: false}` or `{visuals: false}` to fade only one side.
+The fade *multiplies* the mixer levels (faders don't move), never persists
+(a reload comes back at full level), and a manual fader/mute touch mid-fade
+re-applies that channel at the fade's target level.
 
 ### Live signal reads (for conditionals)
 
@@ -279,6 +325,14 @@ toggles, `mixer.*`) all still exist unchanged.
   under the `qualia*` categories — search "qualia", "glitch", "cam", etc.
 - **console**: `qualia.help()` prints the whole reference; `qualia.help("seq")`
   filters.
+- **api echo (training mode)**: `qualia.echo(true)` (or the diagnostics-card
+  toggle) prints each UI action's `qualia.*` equivalent in a console strip at
+  the bottom of the stage — move a slider and read off its param id, switch a
+  quale and see `qualia.quale('no_mans_land')`. Click a line to copy it.
+- **hover ids**: every param label and fx-dropdown option shows its
+  programmatic id (and the call that drives it) in its hover tooltip;
+  `qualia.quales()`, `qualia.params()`, `qualia.preset()` and
+  `qualia.phaseParams()` list the same ids from code.
 - **autocomplete**: Strudel's built-in editor intellisense is generated from
   its bundled doc.json and is not extensible from outside the CDN bundle, so
   the `q*` functions don't appear in the popup completions. The funcs tab and
@@ -293,14 +347,27 @@ toggles, `mixer.*`) all still exist unchanged.
 - **Trusted-performer surface.** Like `setParam` before it, values are clamped
   by the receiving engines but not validated here; nothing is reachable
   remotely.
-- **`qualia.*` calls are imperative, not patterns.** Dropping
-  `qualia.nextQuale()` straight into `stack(...)` runs it once at eval time
-  and hands its *return value* (an id string, or null) to `stack` — the null
-  kills the whole pattern's query loop, and `.slow()` on it throws. To fire
-  an API call rhythmically, wrap it in a lane:
-  `qcall(() => qualia.nextQuale(), "1").slow(16)`. Only the seven registered
-  functions (`quale`/`qset`/`qpreset`/`qphase`/`qglitch`/`qcall`/`qtrig`)
-  belong in `stack(...)`.
+- **Run-once calls are top-level statements, not stack entries.** The buffer
+  is JavaScript: statements before the final pattern expression run once per
+  eval, so the canonical "run once" is simply
+
+  ```js
+  qualia.zen(true)          // runs once, at eval time
+  setcps(0.5)
+  stack(s("bd*4"), ...)
+  ```
+
+  Re-evaluating re-runs them, which is harmless for idempotent setters like
+  `zen(true)`. Dropping the same call *inside* `stack(...)` doesn't loop it —
+  it still fires exactly once, at eval time — but its *return value* lands in
+  the stack as a junk lane: a `null` return kills the whole pattern's query
+  loop, and `.slow()` on it throws. So keep imperative calls out of
+  `stack(...)`; to re-assert one rhythmically, wrap it in a lane:
+  `qcall(() => qualia.nextQuale(), "1").slow(16)`.
+- **What belongs in `stack(...)`:** the registered lane functions
+  (`quale`/`qset`/`qpreset`/`qphase`/`qglitch`/`qtext`/`qcall`/`qtrig`) and
+  any scalar knob handed a pattern (the patterned-knobs section above) —
+  those return real silent lanes.
 - **Controls chained on the enclosing stack are fine.** `stack(...).room(.5)`
   unions every hap value into a control object, tucking a lane's plain value
   under the `value` key — lanes unwrap that before applying, so

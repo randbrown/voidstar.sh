@@ -581,7 +581,7 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     // muteGate is tagged so the strudel mute-patch (if it ever shares this
     // ctx) leaves it alone — the vocoder owns its own mute via `muted`.
     outBus     = c.createGain(); outBus.gain.value = 1;
-    outputGain = c.createGain(); outputGain.gain.value = cfg.output;
+    outputGain = c.createGain(); outputGain.gain.value = cfg.output * _fadeScale;
     muteGate   = c.createGain(); muteGate.gain.value = muted ? 0 : 1;
     muteGate.__qualiaBypassMute = true;
 
@@ -1231,14 +1231,28 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
       try { rawGain.gain.linearRampToValueAtTime(cfg.rawVoice, ctx.currentTime + 0.05); } catch {}
     }
   }
+  // Set-level fade multiplier (fade.js) — NOT persisted; multiplies cfg.output
+  // wherever it reaches the node so the stored level survives a fade.
+  let _fadeScale = 1;
   function setOutput(v) {
     cfg.output = Math.max(0, Math.min(2, +v || 0));
     persistSoon();
     paintRanges();
     if (outputGain && ctx) {
-      try { outputGain.gain.linearRampToValueAtTime(cfg.output, ctx.currentTime + 0.05); } catch {}
+      try { outputGain.gain.linearRampToValueAtTime(cfg.output * _fadeScale, ctx.currentTime + 0.05); } catch {}
     }
     notifyMix();
+  }
+  /** Set-level fade (fade.js): native long ramp on the vox output gain. */
+  function fadeTo(scale, seconds = 0) {
+    _fadeScale = Math.max(0, Math.min(1, Number(scale) || 0));
+    if (!outputGain || !ctx) return;   // applies on next start()
+    try {
+      const t = ctx.currentTime;
+      outputGain.gain.cancelScheduledValues(t);
+      outputGain.gain.setValueAtTime(outputGain.gain.value, t);
+      outputGain.gain.linearRampToValueAtTime(cfg.output * _fadeScale, t + Math.max(0.04, Number(seconds) || 0));
+    } catch {}
   }
   // Master brickwall limiter (postLimiter) bypass — "off" makes it transparent
   // (ratio 1) rather than rerouting the graph, so toggling never clicks. The
@@ -1500,6 +1514,8 @@ export function createVocoder({ getDeviceId, onFeedChange, harmonizer } = {}) {
     setDevice,
     // Mixer surface — output level (0..2), limiter toggle, change subscription.
     setOutput, getOutput: () => cfg.output,
+    /** Set-level fade multiplier (fade.js) — native ramp, not persisted. */
+    fadeTo,
     setLimiter, getLimiter,
     onChange,
     // Snapshot/restore for the qualem state-saving system. getConfig returns

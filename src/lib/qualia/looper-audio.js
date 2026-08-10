@@ -553,7 +553,23 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     outputAnalyser.smoothingTimeConstant = 0.40;
     rigMaster.connect(outputAnalyser);
   }
-  function effRig() { return (_rigMuted || _rigPaused) ? 0 : _rigLevel * RIG_MAKEUP; }
+  // Set-level fade multiplier (fade.js) — NOT persisted; folded into effRig()
+  // so the stored rig level/mute survive a fade and a reload comes back full.
+  let _fadeScale = 1;
+  function effRig() { return (_rigMuted || _rigPaused) ? 0 : _rigLevel * RIG_MAKEUP * _fadeScale; }
+
+  /** Set-level fade (fade.js): native long ramp on rigMaster — covers the
+   *  live rig signal, the loops, and the freeze pads in one node. */
+  function fadeTo(scale, seconds = 0) {
+    _fadeScale = Math.max(0, Math.min(1, Number(scale) || 0));
+    if (!rigMaster) return;
+    try {
+      const t = ctx.currentTime;
+      rigMaster.gain.cancelScheduledValues(t);
+      rigMaster.gain.setValueAtTime(rigMaster.gain.value, t);
+      rigMaster.gain.linearRampToValueAtTime(effRig(), t + Math.max(0.04, Number(seconds) || 0));
+    } catch { ramp(rigMaster.gain, effRig()); }
+  }
 
   // ── Freeze / infinite sustain ───────────────────────────────────────────────
   // The ambient pedal-steel drone move: grab the last moment of the PROCESSED
@@ -1547,6 +1563,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     startBuffer, stopBuffer, grabRetro,
     ensureCaptureOpen,
     setRigMuted, setRigLevel, primeRig, getRigMaster,
+    /** Set-level fade multiplier (fade.js) — native ramp, not persisted. */
+    fadeTo,
     setRigPaused, isRigPaused,
     setRigLimiter, getRigLimiter, primeRigLimiter, getRigReductionDb,
     getLatencyInfo,

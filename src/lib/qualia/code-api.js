@@ -14,7 +14,7 @@
 //      already calls `qualia.setParam(...)`.
 //
 //   2. Strudel-side pattern functions (`quale`, `qset`, `qpreset`,
-//      `qphase`, `qglitch`, `qcall`, `qtrig`) — registered through
+//      `qphase`, `qglitch`, `qtext`, `qcall`, `qtrig`) — registered through
 //      Strudel's own `register()` once the @strudel/repl bundle's
 //      evalScope globals appear, so they're first-class Pattern citizens:
 //      they mini-notate, chain, and respect `.slow()/.fast()/.euclid()`
@@ -26,6 +26,9 @@
 // Getter/setter convention: one function per knob — call with no args to
 // read, with a value to write (the applied value is returned either way).
 // That keeps live-code terse: `qualia.cam.walk(true)`, `qualia.zen()`.
+// Scalar knobs are additionally PATTERNABLE: handed a Strudel Pattern
+// instead of a value they return a silent control lane — see the patterned-
+// knobs block below the helpers.
 //
 // Everything here is a trusted-performer surface (same posture as
 // setParam): values are clamped by the receiving engines, not validated
@@ -52,19 +55,58 @@ function safe(fn, fallback = null) {
   try { return fn(); } catch (e) { console.warn('[qualia] code api:', e); return fallback; }
 }
 
-/** get/set combinator: fn() reads, fn(v) writes-then-reads. */
+// ── Patterned knobs ───────────────────────────────────────────────────────
+// Inside the Strudel editor, double-quoted strings mini-notate into Pattern
+// objects before the call even happens (stock Strudel transpilation — single
+// quotes stay plain strings). So `qualia.cam.walk("<0 1>/4")` reaches the
+// knob as a Pattern, and every scalar knob built on gs/gsBool detects that
+// and, instead of writing once, returns a SILENT CONTROL LANE that drives
+// the knob per event at its audible time — stack it next to the audio
+// exactly like quale()/qset(). Signals work too:
+// `qualia.pose.scale(sine.range(.5, 1).segment(8))`.
+//
+// A knob lane never claims an auto timer (none of these knobs are ones
+// auto-cycle/auto-phase write), and like every lane it only fires while the
+// evaluated pattern queries it — as a bare top-level statement it's inert.
+// Imperative calls (booleans, numbers, single-quoted strings) are unchanged.
+
+/** Duck-typed Pattern check — instanceof is fragile against the CDN bundle. */
+function isPattern(v) {
+  return !!v && typeof v === 'object'
+    && typeof v.onTrigger === 'function' && typeof v.queryArc === 'function';
+}
+
+/** Mini-notation-friendly boolean: numbers > 0 are on; the words
+ *  off/false/0 (and empty) are off, anything else stringy is on. */
+function patBool(v) {
+  if (typeof v === 'number') return v > 0;
+  if (typeof v === 'string') return !(v === '' || v === '0' || v === 'off' || v === 'false');
+  return !!v;
+}
+
+/** Silent control lane calling `apply(value)` per event at audible time. */
+function knobLane(pat, apply) {
+  return pat.onTrigger(
+    (...args) => atAudibleTime(args, (hap) => safe(() => apply(laneValue(hap)))),
+    true);
+}
+
+/** get/set combinator: fn() reads, fn(v) writes-then-reads, fn(pattern)
+ *  returns a lane writing per event. */
 function gs(get, set) {
   return (v) => {
     if (v === undefined) return get();
+    if (isPattern(v)) return knobLane(v, set);
     set(v);
     return get();
   };
 }
 
-/** Boolean get/set: accepts any truthy/falsy write. */
+/** Boolean get/set: accepts any truthy/falsy write, or a pattern of them. */
 function gsBool(get, set) {
   return (on) => {
     if (on === undefined) return !!get();
+    if (isPattern(on)) return knobLane(on, (v) => set(patBool(v)));
     set(!!on);
     return !!get();
   };
@@ -101,7 +143,7 @@ function gsConfig(get, patch) {
 export function installCodeApi(deps) {
   const {
     core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer,
-    pose, overlay, camWalk, logoMark, page,
+    pose, overlay, camWalk, logoMark, fader, echoCtl, page,
   } = deps;
 
   // ── Quale resolution ──────────────────────────────────────────────────────
@@ -255,9 +297,11 @@ export function installCodeApi(deps) {
       mode === undefined ? undefined : (mode === true ? 'cycle' : mode === false ? 'off' : mode)),
 
     // — top-level effects —
-    /** overlay('skeleton') reads; overlay('sparks', false) writes. */
+    /** overlay('skeleton') reads; overlay('sparks', false) writes;
+     *  overlay('sparks', "<0 1>") returns a lane toggling per event. */
     overlay: (key, on) => {
       if (on === undefined) return overlay.getOption(key);
+      if (isPattern(on)) return knobLane(on, (v) => overlay.setOption(key, patBool(v)));
       overlay.setOption(key, !!on);
       return overlay.getOption(key);
     },
@@ -274,9 +318,26 @@ export function installCodeApi(deps) {
     logo:       gsBool(() => logoMark.isEnabled(), (on) => page.setLogoOn(on)),
     logoConfig: gsConfig(() => logoMark.getConfig(), (c) => logoMark.setConfig(c)),
 
+    // — set-level fades (the slow open / close of a set) —
+    /** Fade the whole instrument: every audio bus ramps natively in its own
+     *  context AND the stage fades to black (mirrored into recordings).
+     *  fadeOut(20) → 20 s to silence + black; fadeIn(20) back to full.
+     *  opts {audio:false} / {visuals:false} fade only one side. Mixer levels
+     *  are untouched (the fade multiplies them) and nothing persists — a
+     *  reload always comes back at full level. */
+    fadeOut: (seconds, opts) => safe(() => fader.fadeOut(seconds, opts)),
+    fadeIn:  (seconds, opts) => safe(() => fader.fadeIn(seconds, opts)),
+    /** fade(level, seconds) — fade to any level 0..1 (e.g. duck to 0.3). */
+    fade:    (level, seconds, opts) => safe(() => fader.fade(level, seconds, opts)),
+    /** Current audio-fade level 0..1 (1 = full; interpolates mid-fade). */
+    fadeLevel: () => safe(() => fader.level(), 1),
+
     // — stage state —
     blackout:   gsBool(() => core.isRenderSuspended(), (on) => page.setBlackout(on)),
     zen:        gsBool(() => core.isZen(),    (on) => page.setZen(on)),
+    /** Training mode: UI actions echo their qualia.* call in a console strip
+     *  at the bottom of the stage (click a line to copy). Persisted. */
+    echo:       gsBool(() => !!echoCtl?.isEnabled(), (on) => echoCtl?.setEnabled(on)),
     pause:      gsBool(() => core.isPaused(), (on) => page.setPaused(on)),
     fullscreen: gsBool(
       () => !!(document.fullscreenElement || document.webkitFullscreenElement),
@@ -332,6 +393,7 @@ export function installCodeApi(deps) {
       flip: () => safe(() => pose.flipFacing()),
       /** Hardware camera zoom where supported; zoom() reads caps' value. */
       zoom: (v) => {
+        if (isPattern(v)) return knobLane(v, (x) => pose.setZoom(+x));
         if (v !== undefined) safe(() => pose.setZoom(+v));
         return pose.getZoomCaps()?.value ?? null;
       },
@@ -547,6 +609,16 @@ function atAudibleTime(args, fn) {
   else fn(hap);
 }
 
+// A control chained onto an enclosing stack — stack(...).room(.5) — unions
+// every hap value into a control object, tucking a lane's plain value under
+// the `value` key ({value: 'chaos', room: .5}). Unwrap it so lanes see what
+// the user actually wrote; the raw hap stays available to qcall/qtrig fns.
+// Shared by the registered lane functions below and the patterned knobs above.
+const laneValue = (hap) => {
+  const v = hap?.value;
+  return (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+};
+
 function tryRegisterStrudelBindings(api, hooks) {
   const g = globalThis;
   if (typeof g.register !== 'function' || typeof g.reify !== 'function') return false;
@@ -562,15 +634,6 @@ function tryRegisterStrudelBindings(api, hooks) {
     const f = g.register(name, fn);
     f.__qualiaBinding = true;
     g[name] = f;
-  };
-
-  // A control chained onto an enclosing stack — stack(...).room(.5) — unions
-  // every hap value into a control object, tucking a lane's plain value under
-  // the `value` key ({value: 'chaos', room: .5}). Unwrap it so lanes see what
-  // the user actually wrote; the raw hap stays available to qcall/qtrig fns.
-  const laneValue = (hap) => {
-    const v = hap?.value;
-    return (v && typeof v === 'object' && 'value' in v) ? v.value : v;
   };
 
   // A silent control lane: fires `apply` per hap at its audible time and
@@ -678,6 +741,15 @@ function tryRegisterStrudelBindings(api, hooks) {
   define('qglitch', (name, pat) =>
     lane(pat, (hap) => api.glitch(String(name), String(laneValue(hap)))));
 
+  // Text to the Glyph quale (the text video-synth):
+  // qtext("<VOID STAR one_more_time>"). Underscores render as spaces, so
+  // phrases survive mini-notation tokenization. Addressed to glyph explicitly
+  // (unlike qset's active-quale target) so it can never scribble a `text`
+  // param onto some other quale — while a different quale is active it's a
+  // deliberate no-op, and the next hap after quale("glyph") lands takes hold.
+  define('qtext', (pat) =>
+    lane(pat, (hap) => api.setParam?.('glyph', 'text', String(laneValue(hap)))));
+
   // Generic escape hatch: qcall(v => qualia.blackout(v > 0), "0 1")
   define('qcall', (fn, pat) =>
     lane(pat, (hap) => { try { fn(laneValue(hap), hap); } catch (e) { console.warn('[qualia] qcall:', e); } }));
@@ -691,7 +763,7 @@ function tryRegisterStrudelBindings(api, hooks) {
       }),
       false));
 
-  console.log('[qualia] strudel bindings registered: quale, qset, qpreset, qphase, qglitch, qcall, qtrig');
+  console.log('[qualia] strudel bindings registered: quale, qset, qpreset, qphase, qglitch, qtext, qcall, qtrig');
   return true;
 }
 

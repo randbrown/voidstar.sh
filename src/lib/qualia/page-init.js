@@ -24,6 +24,8 @@ import { parseMetadata as parseStrudelMeta, setMetadata as setStrudelMeta } from
 import { buildAudioPanel } from './ui.js';
 import { createStrudelHydra } from './strudel-hydra.js';
 import { installCodeApi } from './code-api.js';
+import { createFader } from './fade.js';
+import { createEcho, fmtVal } from './echo.js';
 import { filterFunctions, groupByCategory, STRUDEL_FUNCTIONS } from './strudel-reference.js';
 import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
@@ -70,6 +72,7 @@ import detector       from './fx/detector.js';
 import ghostMachine   from './fx/ghost-machine.js';
 import ramblinVisioneer from './fx/ramblin-visioneer.js';
 import linerNotes     from './fx/liner-notes.js';
+import glyph          from './fx/glyph.js';
 import nightcall      from './fx/nightcall.js';
 import chaos          from './fx/chaos.js';
 import video          from './fx/video.js';
@@ -191,6 +194,7 @@ export function initQualiaPage() {
   mesh.register(ghostMachine);
   mesh.register(ramblinVisioneer);
   mesh.register(linerNotes);
+  mesh.register(glyph);
   mesh.register(nightcall);
   mesh.register(chaos);
   mesh.register(video);
@@ -675,6 +679,7 @@ export function initQualiaPage() {
   }
   fxSelect.addEventListener('change', () => {
     const nextId = fxSelect.value;
+    echo.log(`qualia.quale('${nextId}')`);
     quantizedSceneChange(() => {
       runSceneTransition();
       core.setActive(nextId).catch(err => console.error('[qualia] setActive failed:', err));
@@ -698,6 +703,8 @@ export function initQualiaPage() {
       const base = mod?.name || opt.value;
       const fps = _fxFps[opt.value];
       opt.textContent = fps ? `${fps < 30 ? '⚠ ' : ''}${base} · ${Math.round(fps)}` : base;
+      // Programmatic-name discoverability: hover shows the id + the call.
+      opt.title = `id: ${opt.value} — qualia.quale('${opt.value}') / quale("${opt.value}")`;
     }
   }
   // Re-label right before the dropdown opens so the numbers are current.
@@ -2340,7 +2347,10 @@ export function initQualiaPage() {
   }
   function cycleGlitchMode(glitch) {
     const i = GLITCH_MODES.indexOf(glitchModes[glitch]);
-    setGlitchMode(glitch, GLITCH_MODES[(i + 1) % GLITCH_MODES.length]);
+    const mode = GLITCH_MODES[(i + 1) % GLITCH_MODES.length];
+    setGlitchMode(glitch, mode);
+    // Button/hotkey/pad cycles are all user gestures — teach the call.
+    echo.log(`qualia.glitch('${glitch}', '${mode}')`);
   }
   btnAscii.addEventListener('click', () => cycleGlitchMode('ascii'));
   btnMosh.addEventListener('click',  () => cycleGlitchMode('mosh'));
@@ -2483,7 +2493,11 @@ export function initQualiaPage() {
     syncWalkCard();
     settings.save();
   }
-  btnWalk?.addEventListener('click', () => setCamWalkOn(!camWalkOn));
+  btnWalk?.addEventListener('click', () => {
+    const next = !camWalkOn;
+    setCamWalkOn(next);
+    echo.log(`qualia.cam.walk(${next})`);
+  });
   refreshWalkBtn();
   syncWalkCard();
 
@@ -2882,7 +2896,10 @@ export function initQualiaPage() {
     btnPause.textContent = on ? 'paused' : 'pause';
     settings.save();
   }
-  btnPause.addEventListener('click', () => setPaused(!core.isPaused()));
+  btnPause.addEventListener('click', () => {
+    setPaused(!core.isPaused());
+    echo.log(`qualia.pause(${core.isPaused()})`);
+  });
 
   function setZen(on) {
     core.setZen(on);
@@ -2895,9 +2912,14 @@ export function initQualiaPage() {
     // on #panel-tabs handles the transition.
     const tabs = document.getElementById('panel-tabs');
     if (tabs) tabs.classList.toggle('zen', on);
+    // The api-echo strip is chrome too — hide it with the rest.
+    document.getElementById('api-echo')?.classList.toggle('zen', on);
     settings.save();
   }
-  btnZen.addEventListener('click', () => setZen(!core.isZen()));
+  btnZen.addEventListener('click', () => {
+    setZen(!core.isZen());
+    echo.log(`qualia.zen(${core.isZen()})`);
+  });
   zenHandle.addEventListener('click', () => setZen(false));
 
   // Blackout — a stage "screen off": black the viewport and suspend the fx
@@ -2919,7 +2941,10 @@ export function initQualiaPage() {
       if (hint) { hint.style.animation = 'none'; void hint.offsetWidth; hint.style.animation = ''; }
     }
   }
-  btnBlackout?.addEventListener('click', () => setBlackout(!core.isRenderSuspended()));
+  btnBlackout?.addEventListener('click', () => {
+    setBlackout(!core.isRenderSuspended());
+    echo.log(`qualia.blackout(${core.isRenderSuspended()})`);
+  });
   // Tap the black overlay to wake the screen back up.
   blackoutOverlay?.addEventListener('click', () => setBlackout(false));
 
@@ -3179,6 +3204,16 @@ export function initQualiaPage() {
     }
     // Camera panel (split mode only).
     if (layout.camRect) drawCameraIntoRect(layout.camRect);
+    // Set-level fade (fade.js): the live view fades via the #stage-fade DOM
+    // scrim, which a canvas composite can't see — mirror the same level here
+    // over the WHOLE frame (camera half included) so recordings fade too.
+    const fadeA = fader.visualLevel();
+    if (fadeA > 0.001) {
+      recordCompositeCtx.globalAlpha = Math.min(1, fadeA);
+      recordCompositeCtx.fillStyle = '#000';
+      recordCompositeCtx.fillRect(0, 0, W, H);
+      recordCompositeCtx.globalAlpha = 1;
+    }
   }
   // The composite loop now has TWO consumers — the recorder and the output
   // window — so it's reference-counted: the per-frame drawImage cost only
@@ -4271,7 +4306,10 @@ export function initQualiaPage() {
   try { window.postMessage({ source: 'qualia-page', type: 'capture-ext-ping' }, window.location.origin); } catch {}
 
   // ── Reset fx params ───────────────────────────────────────────────────────
-  fxResetBtn.addEventListener('click', () => core.applyFxPreset('default'));
+  fxResetBtn.addEventListener('click', () => {
+    core.applyFxPreset('default');
+    echo.log("qualia.preset('default')");
+  });
 
   // ── Auto-phase + Auto-cycle ───────────────────────────────────────────────
   // Two independent automation tracks, each an on/off TOGGLE plus its own
@@ -5052,6 +5090,8 @@ export function initQualiaPage() {
     // random-pattern generator parks the lane that would fight each one
     // instead of shipping two masters for one knob (see patterns.js).
     autoModes: () => ({ cycle: autoCycleSeconds > 0, phase: autoPhaseSeconds > 0 }),
+    // api-echo (training mode): transport/volume gestures teach their calls.
+    onEcho: (expr, key) => echo.log(expr, key),
     onPlayStateChange: (playing) => {
       // A leader's play/stop should reach followers within a beacon tick.
       try { _syncRef?.notifyTransport?.(); } catch {}
@@ -5310,7 +5350,38 @@ export function initQualiaPage() {
   // One panel gathering every track's level / mute / limiter, with live peak
   // meters + clip LEDs fed by audio.getLevels(). Created last so all the
   // source modules (strudel, sequencer, looper, vocoder, mic) are in scope.
-  const mixer = createMixer({ audio, strudel, sequencer, looper, vocoder });
+  const mixer = createMixer({
+    audio, strudel, sequencer, looper, vocoder,
+    // api-echo (training mode): fader/mute/limiter gestures teach their calls.
+    onEcho: (expr, key) => echo.log(expr, key),
+  });
+
+  // ── Set-level fade (fade.js) ─────────────────────────────────────────────
+  // qualia.fadeOut(sec)/fadeIn(sec): every audio engine ramps natively in its
+  // own context, the #stage-fade scrim rides a CSS transition, and the
+  // recorder composite mirrors fader.visualLevel() so recordings fade too.
+  const fader = createFader({ audio, strudel, sequencer, looper, vocoder });
+
+  // ── API echo (training mode) ─────────────────────────────────────────────
+  // The virtual console strip that prints each UI action's qualia.* code
+  // equivalent (echo.js). UI-origin hooks are sprinkled where the USER acts
+  // (button/select/slider listeners), so pattern lanes and auto modes don't
+  // spam it; the param feed rides core.onUserParam, which code-driven
+  // setParam never fires. Default off — toggled by the diag card row or
+  // qualia.echo(true).
+  const echo = createEcho();
+  core.onUserParam((id, value) =>
+    echo.log(`qualia.set('${id}', ${fmtVal(value)})`, `set:${id}`));
+  const btnApiEcho = document.getElementById('btn-api-echo');
+  function refreshEchoBtn() {
+    if (!btnApiEcho) return;
+    btnApiEcho.textContent = echo.isEnabled() ? 'on' : 'off';
+    btnApiEcho.classList.toggle('active', echo.isEnabled());
+    btnApiEcho.setAttribute('aria-pressed', String(echo.isEnabled()));
+  }
+  function setEchoEnabled(on) { echo.setEnabled(on); refreshEchoBtn(); return echo.isEnabled(); }
+  refreshEchoBtn();
+  btnApiEcho?.addEventListener('click', () => setEchoEnabled(!echo.isEnabled()));
 
   // Topbar CLIP indicator — lights whenever ANY track hits full scale, even
   // with the mixer panel closed (event-driven off audio.onClipChange, so no
@@ -7034,6 +7105,7 @@ export function initQualiaPage() {
   function qualeStep(dir) {
     const ids = mesh.ids();
     if (!ids.length) return;
+    echo.log(dir < 0 ? 'qualia.prevQuale()' : 'qualia.nextQuale()');
     const i = ids.indexOf(core.activeId() || ids[0]);
     const j = dir < 0 ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
     quantizedSceneChange(() => {
@@ -7091,7 +7163,8 @@ export function initQualiaPage() {
   // code-driven changes keep the chrome in sync and persist identically.
   installCodeApi({
     core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer,
-    pose, overlay, camWalk, logoMark,
+    pose, overlay, camWalk, logoMark, fader,
+    echoCtl: { isEnabled: () => echo.isEnabled(), setEnabled: setEchoEnabled },
     page: {
       applySceneChange: (fn) => quantizedSceneChange(() => { runSceneTransition(); fn(); }),
       qualeStep,
@@ -7519,6 +7592,19 @@ export function initQualiaPage() {
     }
   });
 
+  // The engines' perFrame hooks ride the reactivity tick (~60 Hz, not gated
+  // by the viz cap), NOT the ~5 Hz onFps heartbeat they used to share with
+  // the HUD: strudel.perFrame refreshes globalThis.a.fft (Hydra patterns read
+  // it — at 5 Hz "audio-reactive" Hydra visibly stair-stepped), and
+  // sequencer.perFrame drains the playhead step from the audio thread (at
+  // 5 Hz it skipped cells at faster tempos). Each is a few scalar copies /
+  // an int compare per tick — no allocation, nothing when idle.
+  core.onTick(() => {
+    strudel.perFrame();
+    sequencer.perFrame();
+    looper.perFrame();
+  });
+
   core.onFps((fps, field) => {
     fpsEl.textContent = `${String(fps).padStart(2, '0')} fps`;
     if (audio.isEnabled()) {
@@ -7527,10 +7613,6 @@ export function initQualiaPage() {
     } else {
       lvlEl.textContent = 'audio off';
     }
-    strudel.perFrame();
-    sequencer.perFrame();
-    looper.perFrame();
-
     if (diagCard && !diagCard.classList.contains('collapsed')) {
       const a = field.audio;
       const cutoff = performance.now() - 5000;

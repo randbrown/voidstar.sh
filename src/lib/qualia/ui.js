@@ -149,6 +149,9 @@ export function buildParamPanel({
       ? [modDot, document.createTextNode(spec.label), valSpan]
       : [document.createTextNode(spec.label), valSpan];
     const label = el('label', {}, labelKids);
+    // Programmatic-name discoverability: hovering any param label shows its
+    // id and the code that drives it (same id qset()/qualia.set() take).
+    label.title = `id: ${spec.id} — qualia.set('${spec.id}', …) / qset("${spec.id}", …)`;
 
     let control;
     if (spec.type === 'range') {

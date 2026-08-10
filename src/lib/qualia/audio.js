@@ -129,15 +129,29 @@ export function createAudio() {
     const snap = { level: inputLevel, muted: inputMuted, gain: inputGain, limiter: inputLimiterOn, available: sources.has('mic') };
     inputListeners.forEach(fn => { try { fn(snap); } catch {} });
   }
+  // Set-level fade multiplier (fade.js) — NOT persisted; folded into
+  // effInput() so the monitor and the recording tap both ride a fade while
+  // the analyser path (reactivity) deliberately keeps reading the mic —
+  // visuals stay reactive through a fade-out.
+  let _fadeScale = 1;
   // Effective audible/recorded level — the fader gated by mute.
-  function effInput() { return inputMuted ? 0 : inputLevel; }
-  function rampGain(param, ctxRef, target) {
+  function effInput() { return (inputMuted ? 0 : inputLevel) * _fadeScale; }
+  function rampGain(param, ctxRef, target, seconds = 0.03) {
     if (!param || !ctxRef) return;
     const t = ctxRef.currentTime;
     try {
       param.cancelScheduledValues(t);
-      param.linearRampToValueAtTime(target, t + 0.03);
+      param.setValueAtTime(param.value, t);
+      param.linearRampToValueAtTime(target, t + Math.max(0.03, seconds));
     } catch { try { param.value = target; } catch {} }
+  }
+  /** Set-level fade (fade.js): native long ramps on the monitor + rec tap. */
+  function fadeTo(scale, seconds = 0) {
+    _fadeScale = Math.max(0, Math.min(1, Number(scale) || 0));
+    const m = sources.get('mic');
+    if (m?.monitorGain) rampGain(m.monitorGain.gain, m.ctx, effInput(), seconds);
+    const tap = recMixTaps.get('mic');
+    if (tap?.gain && recMixCtx) rampGain(tap.gain.gain, recMixCtx, effInput() * inputGain, seconds);
   }
   // Speakers: ramp the mic's monitorGain to the effective level.
   function applyMonitor() {
@@ -832,6 +846,8 @@ export function createAudio() {
     getInputLimiter,
     getInput,
     onInputChange,
+    /** Set-level fade multiplier (fade.js) — native ramp, not persisted. */
+    fadeTo,
     // Clip / level metering (single source of truth for the mixer + topbar).
     getLevels,
     onClipChange,

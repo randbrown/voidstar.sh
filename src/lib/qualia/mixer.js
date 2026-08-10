@@ -30,7 +30,7 @@ function meterColor(p) {
   return 'var(--cyan)';
 }
 
-export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {}) {
+export function createMixer({ audio, strudel, sequencer, looper, vocoder, onEcho } = {}) {
   const panel     = document.getElementById('mixer-panel');
   const body      = document.getElementById('mixer-body');
   const btnToggle = document.getElementById('btn-mixer');
@@ -146,7 +146,11 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
     fader.className = 'mx-fader';
     fader.min = '0'; fader.max = String(ch.max); fader.step = '0.01';
     fader.setAttribute('aria-label', `${ch.label} level`);
-    fader.addEventListener('input', () => ch.setLevel(+fader.value));
+    fader.addEventListener('input', () => {
+      ch.setLevel(+fader.value);
+      // api-echo (training mode) — teach the channel id + call per gesture.
+      onEcho?.(`qualia.mixer.setLevel('${ch.id}', ${(+fader.value).toFixed(2)})`, `mx:${ch.id}`);
+    });
     if (ch.max > 1) {
       // Tint the over-unity span of the track so boost reads at a glance.
       fader.classList.add('boost');
@@ -155,13 +159,21 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder } = {})
 
     const mute = document.createElement('button');
     mute.className = 'ctrl-btn panel-mute-btn mx-mute';
-    mute.addEventListener('click', () => ch.setMuted(!ch.getMuted()));
+    mute.addEventListener('click', () => {
+      const next = !ch.getMuted();
+      ch.setMuted(next);
+      onEcho?.(`qualia.mixer.setMuted('${ch.id}', ${next})`);
+    });
 
     const lim = document.createElement('button');
     lim.className = 'ctrl-btn mx-lim';
     lim.textContent = 'lim';
     lim.title = 'Brickwall limiter — clip insurance on this track. On by default.';
-    lim.addEventListener('click', () => ch.setLimiter(!ch.getLimiter()));
+    lim.addEventListener('click', () => {
+      const next = !ch.getLimiter();
+      ch.setLimiter(next);
+      onEcho?.(`qualia.mixer.setLimiter('${ch.id}', ${next})`);
+    });
 
     const clip = document.createElement('span');
     clip.className = 'mx-clip';

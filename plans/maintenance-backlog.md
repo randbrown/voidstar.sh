@@ -91,9 +91,13 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
 8. **`chladni.js evalField` returns 3-tuple arrays per particle** (~6,000 allocs/frame) + a
    `createImageData` every frame in field mode — return via out-params, reuse the ImageData.
 9. **Strudel editor "perf mode" default-on** in performance contexts (disable per-frame pattern
-   highlighting) — the biggest single main-thread lever during a set.
-10. **Fix/clarify `strudel.perFrame` wired to `core.onFps` (~5 Hz)** — Hydra `a.fft` visuals update
-    at ~5 fps despite the name. Rename or rewire.
+   highlighting) — the biggest single main-thread lever during a set. *Partial (2026-08):* perf
+   mode is now persisted and one click away (⚡ in the panel tab bar) instead of console-only;
+   the default flip is still open.
+10. ✅ **Fix/clarify `strudel.perFrame` wired to `core.onFps` (~5 Hz)** — *done:* the
+    strudel/sequencer/looper `perFrame` hooks now ride `core.onTick` (the ~60 Hz reactivity
+    cadence, not gated by the viz cap), so Hydra `a.fft` updates at full rate and the sequencer
+    playhead no longer skips cells at faster tempos. The HUD/chron/diag stay on `onFps`.
 11. **`mp4-timecode.addTimecodeTrack` full second copy** of a multi-GB file via `concat` — pass
     subarray views to `new Blob([...])`. (Auto-save already skips this pass.)
 12. **`recMixCtx` (recordable-mix AudioContext) is never closed** — persistent extra audio graph
