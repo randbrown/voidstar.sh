@@ -53,7 +53,7 @@ stack(
 | `qpreset(pat)` | Apply factory/user presets by name per event. Claims **auto-phase**. |
 | `qphase(pat)` | Step the quale's phase per event (value = direction ±1). Claims **auto-phase**. |
 | `qglitch(name, pat)` | Set a glitch post's mode per event (`ascii/mosh/edge/stitch/negative` × `off/on/blip/flip`). |
-| `qtext(pat)` | Write the **Glyph** quale's text per event (the text video-synth — pair with `quale("glyph")`). Underscores render as spaces: `qtext("<VOID one_more_time>")`. |
+| `qtext(pat)` | Write the **Text** quale's text per event (the text video-synth — pair with `quale("text")`). Underscores render as spaces: `qtext("<VOID one_more_time>")`. |
 | `qcall(fn, pat)` | Call `fn(value, hap)` per event — the generic escape hatch. |
 | `pat.qtrig(fn)` | **Chainable, keeps the audio**: fires `fn(value, hap)` on each event of the pattern it's chained to — `s("bd*4").qtrig(() => qualia.phase())`. |
 
