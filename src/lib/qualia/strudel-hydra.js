@@ -205,9 +205,17 @@ function injectStrudelTransparency(ed) {
     root.appendChild(style);
     root._strudelTransparentInjected = true;
   };
+  // CodeMirror OWNS everything under .cm-editor and re-syncs DOM it doesn't
+  // recognize: writing inline styles onto its nodes makes it rebuild them,
+  // which re-fires any observer watching the subtree — a self-sustaining
+  // churn loop that on slower machines snowballed into multi-second style
+  // sweeps (the "'setInterval' handler took 17s" lockup). The transparent
+  // look INSIDE the editor comes entirely from the injected stylesheet, so
+  // CM internals never need inline fixes — skip them everywhere, always.
+  const inCM = (el) =>
+    !!(el && el.nodeType === 1 && el.closest && el.closest('.cm-editor'));
   const stripInline = (el) => {
-    if (!el || !el.style) return;
-    if (el.parentElement && el.parentElement.classList && el.parentElement.classList.contains('cm-line')) return;
+    if (!el || !el.style || inCM(el)) return;
     const attr = el.getAttribute && el.getAttribute('style');
     if (attr && attr.includes('var(--background)')) {
       const fixed = attr.replace(
@@ -237,19 +245,19 @@ function injectStrudelTransparency(ed) {
     if (ed.shadowRoot) walk(ed.shadowRoot);
   };
   sweep();
-  // Re-assert on churn, INCREMENTALLY: the old observer re-ran the full sweep
-  // on every mutation batch, and CodeMirror mutates constantly right after
-  // mount (parse/layout/decoration passes) — on slower main threads (Windows
-  // laptops especially) those O(whole-subtree) sweeps stacked into a visible
-  // hitch for the entire 10 s window. Touch only what each record names: new
-  // nodes get the strip+walk, style edits get re-stripped. stripInline
-  // re-writing a value it already wrote is a CSSOM no-op, so this settles
-  // instead of feeding back through the observer.
+  // Re-assert on churn, INCREMENTALLY, and never inside CodeMirror (see the
+  // inCM note above): touch only what each record names — new nodes get the
+  // strip+walk, style edits get re-stripped. A hard record budget disconnects
+  // the observer outright if something ever churns pathologically, so a
+  // mutation storm can burn at most the budget, never the main thread.
+  let recordBudget = 400;
   const obs = new MutationObserver((records) => {
     for (const r of records) {
+      if (--recordBudget < 0) { obs.disconnect(); return; }
+      if (inCM(r.target)) continue;                  // CM re-syncs its own DOM
       if (r.type === 'attributes') { stripInline(r.target); continue; }
       for (const node of r.addedNodes) {
-        if (node.nodeType !== 1) continue;
+        if (node.nodeType !== 1 || inCM(node)) continue;
         stripInline(node);
         if (node.shadowRoot) { inject(node.shadowRoot); walk(node.shadowRoot); }
         walk(node);
@@ -257,13 +265,17 @@ function injectStrudelTransparency(ed) {
     }
   });
   obs.observe(ed, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
-  // Belt-and-braces for what records can't see: a shadow root attaching
-  // during custom-element upgrade emits no mutation record (and observers
-  // don't pierce it) — the old full sweep caught that only by riding on
-  // unrelated mutations. A capped low-rate re-sweep keeps the coverage at
-  // bounded cost (≤20 sweeps vs. one per mutation batch).
-  const resweepT = setInterval(sweep, 500);
-  setTimeout(() => { obs.disconnect(); clearInterval(resweepT); }, 10000);
+  // Belt-and-braces for what records can't see (a shadow root attaching
+  // during custom-element upgrade emits no record, and observers don't
+  // pierce it): a few ONE-SHOT re-sweeps. One-shots can't compound — unlike
+  // an interval, a starved event loop just runs each once, late.
+  const t1 = setTimeout(sweep, 1000);
+  const t3 = setTimeout(sweep, 3000);
+  const t8 = setTimeout(sweep, 8000);
+  setTimeout(() => {
+    obs.disconnect();
+    clearTimeout(t1); clearTimeout(t3); clearTimeout(t8);
+  }, 10000);
 }
 
 /**
