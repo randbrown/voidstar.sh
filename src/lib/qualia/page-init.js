@@ -2290,6 +2290,9 @@ export function initQualiaPage() {
       overlay.setOption(key, v);
       btn.classList.toggle('active', v);
       settings.save();
+      // api-echo (training mode): the layer names are the least guessable ids
+      // in the surface ('ripples', not 'layers') — teach the real call.
+      echo.log(`qualia.overlay('${key}', ${v})`);
     });
   }
   // Mosh / edge card lookups must happen before the overlay-toggle wiring
