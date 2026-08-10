@@ -95,7 +95,7 @@ section('activeLanes — what the panel chip reports');
   const lanes = (code) => activeLanes(code).join(',');
 
   check('finds every lane name', lanes(
-    'stack(quale("a"), qset("h", x), qpreset("p"), qphase("1"), qglitch("mosh","on"), qcall(f,"1"), s("bd").qtrig(g))')
+    'stack(quale("a"), qset("h", x), qpreset("p"), qphase("1"), qglitch("mosh","on"), qtext("t"), qcall(f,"1"), s("bd").qtrig(g))')
     === LANE_NAMES.join(','));
 
   check('a parked lane does not count',

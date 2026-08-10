@@ -34,7 +34,7 @@ entanglement, Ramblin' Visioneer) for product/brand surfaces.
 |---|---|---|
 | Site framework | **Astro 6** (static output, no SSR adapter) | `astro.config.mjs`, `site: https://voidstar.sh`, mdx + sitemap |
 | Language | **Vanilla JS + JSDoc types** | No TypeScript build, no VDOM/React. JSDoc typedefs in `src/lib/qualia/types.js` give editor IntelliSense without a TS toolchain. |
-| Hosting | **Cloudflare Pages** | `wrangler.toml`; auto-deploy on push to `main`, no CI. Output `dist/`, Node 22. |
+| Hosting | **Cloudflare Pages** | `wrangler.toml`; auto-deploy on push to `main` (ungated — `.github/workflows/ci.yml` runs `npm run check` + build on every push/PR as the regression gate). Output `dist/`, Node 22. |
 | Audience signaling | **Cloudflare Worker + Durable Object** | `workers/entangle-signal/` — deployed separately. SQLite-backed DO, WebSocket Hibernation API. |
 | Large media | **Cloudflare R2** | `voidstar-media` bucket for the Video quale's source clips (CORS in `infra/r2/`). Not where recordings go. |
 | Audio | **Web Audio API** (native) + **Tone.js 15** (sequencer only) | Multi-context by design — see §5. |
