@@ -1,4 +1,4 @@
-// Glyph — text video synthesis. One string treated as a light source: it
+// Text — text video synthesis. One string treated as a light source: it
 // breathes with the beat, sways or spins, and feeds back on itself through a
 // zoom/twist trail buffer — the classic video-synth feedback tunnel, with a
 // word in the middle instead of an oscillator.
@@ -32,8 +32,8 @@ const PALETTES = {
 
 /** @type {import('../types.js').QFXModule} */
 export default {
-  id: 'glyph',
-  name: 'Glyph',
+  id: 'text',
+  name: 'Text',
   contextType: 'canvas2d',
   maxDpr: 1.25,
 

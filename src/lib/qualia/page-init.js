@@ -72,7 +72,7 @@ import detector       from './fx/detector.js';
 import ghostMachine   from './fx/ghost-machine.js';
 import ramblinVisioneer from './fx/ramblin-visioneer.js';
 import linerNotes     from './fx/liner-notes.js';
-import glyph          from './fx/glyph.js';
+import textQuale      from './fx/text.js';
 import nightcall      from './fx/nightcall.js';
 import chaos          from './fx/chaos.js';
 import video          from './fx/video.js';
@@ -194,7 +194,7 @@ export function initQualiaPage() {
   mesh.register(ghostMachine);
   mesh.register(ramblinVisioneer);
   mesh.register(linerNotes);
-  mesh.register(glyph);
+  mesh.register(textQuale);
   mesh.register(nightcall);
   mesh.register(chaos);
   mesh.register(video);

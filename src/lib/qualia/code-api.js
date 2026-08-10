@@ -741,14 +741,15 @@ function tryRegisterStrudelBindings(api, hooks) {
   define('qglitch', (name, pat) =>
     lane(pat, (hap) => api.glitch(String(name), String(laneValue(hap)))));
 
-  // Text to the Glyph quale (the text video-synth):
+  // Text to the Text quale (the text video-synth):
   // qtext("<VOID STAR one_more_time>"). Underscores render as spaces, so
-  // phrases survive mini-notation tokenization. Addressed to glyph explicitly
-  // (unlike qset's active-quale target) so it can never scribble a `text`
-  // param onto some other quale — while a different quale is active it's a
-  // deliberate no-op, and the next hap after quale("glyph") lands takes hold.
+  // phrases survive mini-notation tokenization. Addressed to the text quale
+  // explicitly (unlike qset's active-quale target) so it can never scribble a
+  // `text` param onto some other quale — while a different quale is active
+  // it's a deliberate no-op, and the next hap after quale("text") lands
+  // takes hold.
   define('qtext', (pat) =>
-    lane(pat, (hap) => api.setParam?.('glyph', 'text', String(laneValue(hap)))));
+    lane(pat, (hap) => api.setParam?.('text', 'text', String(laneValue(hap)))));
 
   // Generic escape hatch: qcall(v => qualia.blackout(v > 0), "0 1")
   define('qcall', (fn, pat) =>
