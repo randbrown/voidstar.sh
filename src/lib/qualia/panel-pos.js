@@ -73,10 +73,14 @@ const VP_PAD    = 4;    // keep this many px of the panel inside the viewport
  *        more than one remembered geometry (the rig's full vs mini views) can
  *        route each resize to the right key.
  * @param {HTMLElement} panel
- * @param {{ onStart?: () => void }} [hooks]  onStart fires on the first
- *        pointerdown of every resize, BEFORE any geometry changes — callers
- *        use it to materialize a still-centered panel (transform → left/top)
- *        and flip their movedByUser flag, exactly like drag-start does.
+ * @param {{ onStart?: () => void, locked?: () => boolean }} [hooks]
+ *        onStart fires on the first pointerdown of every resize, BEFORE any
+ *        geometry changes — callers use it to materialize a still-centered
+ *        panel (transform → left/top) and flip their movedByUser flag,
+ *        exactly like drag-start does. locked() (checked per pointerdown)
+ *        suspends resizing while true — a panel in a geometry mode of its
+ *        own (the strudel fullscreen editor) must not let a stray grab
+ *        rewrite the inline geometry it will return to.
  */
 export function attachPanelResize(id, panel, hooks = {}) {
   if (!panel || panel.__vsResize) return;
@@ -103,6 +107,7 @@ export function attachPanelResize(id, panel, hooks = {}) {
     let active = null;   // { pid, x0, y0, rect, minW, minH }
     h.addEventListener('pointerdown', (e) => {
       if (e.button !== undefined && e.button !== 0) return;
+      if (hooks.locked?.()) return;
       hooks.onStart?.();
       // Belt & braces: if the panel is still centered via transform (no
       // caller hook materialized it), pin it now so left/top anchors are real.
@@ -170,9 +175,11 @@ export function attachPanelResize(id, panel, hooks = {}) {
  *
  * @param {string} id      persistence id, and `${id}-header` for the grip
  * @param {HTMLElement} panel
+ * @param {{ locked?: () => boolean }} [hooks]  locked() suspends drag AND
+ *        resize while true (see attachPanelResize) — geometry-mode panels.
  * @returns {() => void}   reposition
  */
-export function makeDraggablePanel(id, panel) {
+export function makeDraggablePanel(id, panel, hooks = {}) {
   let movedByUser = restorePanelPos(id, panel);
 
   function reposition() {
@@ -199,6 +206,7 @@ export function makeDraggablePanel(id, panel) {
     header.addEventListener('pointerdown', (e) => {
       if (e.target.closest('button, input, select, textarea')) return;
       if (e.button !== undefined && e.button !== 0) return;
+      if (hooks.locked?.()) return;
       const r = panel.getBoundingClientRect();
       if (!movedByUser) {
         panel.style.transform = 'none';
@@ -241,7 +249,7 @@ export function makeDraggablePanel(id, panel) {
   // anchored-edge math works, and mark it user-moved so reposition() stops
   // re-centering it.
   if (panel) {
-    attachPanelResize(id, panel, { onStart: () => {
+    attachPanelResize(id, panel, { locked: hooks.locked, onStart: () => {
       if (movedByUser) return;
       const r = panel.getBoundingClientRect();
       panel.style.transform = 'none';

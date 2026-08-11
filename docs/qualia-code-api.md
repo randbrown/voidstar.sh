@@ -57,6 +57,36 @@ stack(
 | `qcall(fn, pat)` | Call `fn(value, hap)` per event — the generic escape hatch. |
 | `pat.qtrig(fn)` | **Chainable, keeps the audio**: fires `fn(value, hap)` on each event of the pattern it's chained to — `s("bd*4").qtrig(() => qualia.phase())`. |
 
+### Microtonal tuning helpers — 31-TET and beyond
+
+Unlike the silent `q*` lanes, these are **sounding transforms**: they rewrite
+pattern values into a raw `freq` control, which superdough honors end-to-end
+on synths *and* samples — any tuning, no engine changes. (Upstream Strudel is
+growing an `@strudel/edo` package; until the pinned bundle ships it, these
+cover the ground, and if a future bundle brings its own `edo` the bundle's
+wins automatically.) Math lives in
+[`src/lib/qualia/microtonal.js`](../src/lib/qualia/microtonal.js), checked by
+`scripts/check-qualia-edo.mjs`.
+
+```js
+setcps(0.5)
+stack(
+  s("bd*4"),
+  n("0 8 18 26 31").edo(31).s("sawtooth").decay(.2).gain(.7),   // 31-TET degrees
+  ji("a3", "1 5:4 3:2 15:8 2").s("sine").room(.4),              // just intonation
+)
+```
+
+| Function | Semantics |
+|---|---|
+| `pat.edo(spec)` | Values are **N-EDO step degrees** → frequency. Spec: divisions + optional root — `31`, `"31:a3"`, `"19:440"` (root defaults to **c4**). Degrees may be negative, exceed N (octaves fold), or be fractional for free bends. |
+| `pat.edoscale(spec)` | Values index a **degree subset** of an EDO — a mode carved out of the tuning — wrapping by octave: `n("0 1 2 4 6 7").edoscale("31:c4:0 5 10 13 18 23 28")`. Index 7 of a 7-note subset is the root an octave up; negatives wrap down. |
+| `ji(root, pat)` | **Just intonation**: values are frequency ratios against a root (note name or Hz) → `freq`. (Named `ji` because stock Strudel already owns `ratio()`, a plain value→number converter.) Inside mini strings write ratios with a **colon** — `"1 5:4 3:2 2"` — because `/` is the slow operator there; plain JS numbers and `"5/4"` strings work too. |
+| `pat.cents(offset)` | Detune **already-pitched** values by cents (the offset itself patterns: `.cents("<0 -14 14>")`). A `freq` scales by 2^(c/1200); a numeric `note`/`n` shifts by c/100 (fractional note numbers play true); note names convert first. Chain it *after* the pitch is resolved. |
+
+House rule holds: a bad spec or an unpitched value warns once in the console
+and passes through unchanged — a live set never throws out of a pattern.
+
 ### Patterned knobs — `qualia.cam.walk("<0 1>/4")`
 
 Every **scalar knob** on the `qualia` object (the one-function get/set knobs

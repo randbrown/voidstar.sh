@@ -22,6 +22,15 @@ The live-coding surface is **~95% Strudel, ~5% Hydra**:
 app analyser, exposes the live-code → fx bridge, and provides transport / mixer / cyclist-probe /
 pattern persistence. `strudel-reference.js` is just a curated dataset for the functions help tab.
 
+**Panel modes.** Two orthogonal per-panel toggles, both persisted: **ghost** (◌, chrome-strip —
+tabs and header extras hide, the frame goes transparent, the code floats over the visuals) and the
+**fullscreen editor** (⛶ or `⇧X`; `Esc` or `⇧X` exits). Fullscreen pins the panel to the viewport
+edges — geometry only, chrome stays — and its **pad** slider insets every edge (persisted, 0–64 px)
+for screen-protector cutoffs; CSS `max()`es the pad against `env(safe-area-inset-*)` so notches
+still win. Drag/resize suspend while fullscreen and the pre-fullscreen geometry returns on exit.
+Ghost + fullscreen compose: bare code over full-bleed visuals; add `X` (browser fullscreen) and
+`Z` (zen) for total immersion.
+
 ---
 
 ## The audio tap
@@ -48,6 +57,13 @@ also **patternable**: handed a pattern (in the editor, any double-quoted string)
 silent control lane — `qualia.cam.walk("<0 1>/4")` inside `stack(...)` rides the pattern. The
 complete reference is [`qualia-code-api.md`](qualia-code-api.md) (module: `code-api.js`, installed
 by `page-init.js`); the same docs are searchable in the panel's funcs tab and via `qualia.help()`.
+
+**Microtonal tuning helpers** ride the same registration: `.edo(31)` maps degree patterns of any
+N-EDO to raw frequency, `.edoscale("31:c4:0 5 10 13 18 23 28")` plays modes carved from a tuning,
+`ji("a3", "1 5:4 3:2 2")` is just intonation (colon ratios — `/` means slow in mini), and
+`.cents("<0 -14 14>")` detunes already-pitched values. All emit the `freq` control, which superdough
+honors on synths and samples alike. Reference: [`qualia-code-api.md`](qualia-code-api.md), math in
+`microtonal.js`.
 
 **Lanes vs. the auto modes.** `quale()` and auto-cycle drive the same knob; `qphase()`, `qpreset()`
 and a colliding `qset()` write the same params auto-phase steps. Running both hands one control to

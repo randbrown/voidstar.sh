@@ -19,6 +19,7 @@ export const CATEGORY_ORDER = [
   'transforms',
   'randomness',
   'pitch',
+  'qualia tuning',
   'effects',
   'envelope',
   'samples',

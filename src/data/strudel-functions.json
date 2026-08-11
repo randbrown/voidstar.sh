@@ -67,6 +67,7 @@
   { "name": "chord", "category": "pitch", "signature": "chord(pattern)", "doc": "Build chords from symbols (use with .voicing/.arp).", "example": "chord(\"<C^7 Am7>\").voicing()", "insert": "chord(\"<C Am F G>\")" },
   { "name": "voicing", "category": "pitch", "signature": ".voicing()", "doc": "Turn chord symbols into actual voiced notes.", "example": "chord(\"<C Am>\").voicing()", "insert": ".voicing()" },
   { "name": "arp", "category": "pitch", "signature": ".arp(mode)", "doc": "Arpeggiate chord notes in a given order.", "example": "chord(\"<C Am>\").arp(\"up down\")", "insert": ".arp(\"up\")" },
+  { "name": "freq", "category": "pitch", "signature": "freq(hz)", "doc": "Play raw frequencies in Hz — synths and samples alike. The escape hatch past 12-TET entirely (the qualia tuning helpers emit it).", "example": "freq(\"220 275 330 440\").s(\"sine\")", "insert": "freq(\"220 330 440\")" },
 
   { "name": "gain", "category": "effects", "signature": ".gain(n)", "doc": "Set loudness (0..1+). Patternable.", "example": "s(\"hh*8\").gain(\"[.25 1]*2\")", "insert": ".gain(.8)" },
   { "name": "pan", "category": "effects", "signature": ".pan(n)", "doc": "Stereo position from 0 (left) to 1 (right).", "example": "s(\"bd sd\").pan(sine)", "insert": ".pan(.5)" },
