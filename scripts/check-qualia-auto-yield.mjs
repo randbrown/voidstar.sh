@@ -77,7 +77,7 @@ section('teaching payload survives parking');
   const both = randomPattern({ cycle: true, phase: true });
   check('header comment kept', /silent qualia lanes/.test(both), both);
   check('one live API nugget remains',
-    /^\s*(qset|qglitch|qcall)\(/m.test(both), both);
+    /^\s*(qset\(|qglitch\(|qualia\.)/m.test(both), both);
   check('parked lines say why they are off',
     (both.match(/parked — auto-(cycle|phase) is on/g) || []).length === 2, both);
 }
@@ -118,6 +118,22 @@ section('activeLanes — what the panel chip reports');
 
   check('empty / junk input is safe',
     lanes('') === '' && lanes(null) === '' && lanes(undefined) === '');
+
+  // Patterned knobs — a scalar qualia.* knob fed a double-quoted (pattern)
+  // argument is a lane and shows as the collective 'qualia.*' entry; plain
+  // values and single-quoted (imperative) strings stay off the chip.
+  check('a patterned qualia knob counts as a lane',
+    lanes('stack(s("bd"), qualia.cam.walk("<0 1>").slow(8))') === 'qualia.*');
+  check('a two-arg patterned knob counts',
+    lanes("qualia.overlay('sparks', \"<1 0>\").slow(4)") === 'qualia.*');
+  check('an imperative qualia call with plain values is not a lane',
+    lanes('qualia.zen(true)\nqualia.perf.fps(30)') === '');
+  check('an imperative qualia call with single quotes is not a lane',
+    lanes("qualia.theme('phosphor')") === '');
+  check('imperative-only API heads are not knob lanes even double-quoted',
+    lanes('qualia.set("thickness", 0.7)\nqualia.glitch("mosh", "flip")') === '');
+  check('a qualia call inside a qcall closure does not count',
+    lanes('qcall(v => qualia.cam.walk(v > 0), "<0 1>")') === 'qcall');
 }
 
 section('activeLanes agrees with what the roller emitted');
@@ -129,7 +145,7 @@ for (const modes of COMBOS) {
     const got = activeLanes(code);
     if (got.includes('quale') === !!modes.cycle) bad = `quale: ${got}\n${code}`;
     else if (got.includes('qphase') === !!modes.phase) bad = `qphase: ${got}\n${code}`;
-    else if (!got.some(l => ['qset', 'qglitch', 'qcall'].includes(l))) bad = `no nugget: ${got}\n${code}`;
+    else if (!got.some(l => ['qset', 'qglitch', 'qcall', 'qualia.*'].includes(l))) bad = `no nugget: ${got}\n${code}`;
   }
   check(`${label} → chip lists exactly the live lanes (${ROLLS} rolls)`, !bad, bad);
 }

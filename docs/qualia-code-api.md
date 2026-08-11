@@ -42,7 +42,8 @@ stack(
   qpreset("<default punchy>").slow(16),
   qphase("1").slow(4),                             // phase step every 4th cycle
   qglitch("mosh", "<off off on flip>").slow(2),
-  qcall(v => qualia.cam.walk(v > 0), "<0 1>").slow(8), // anything, per event
+  qualia.cam.walk("<0 1>").slow(8),                // patterned knob — walk on/off
+  qcall(() => qualia.looper.grab(), "<~ ~ ~ 1>").slow(4), // actions, per event
 )
 ```
 
@@ -83,7 +84,9 @@ inert**. So imperative writes keep using plain values or single quotes
 (`qualia.theme('phosphor')`), and pattern arguments belong inside
 `stack(...)`. Booleans are lenient: `1/0`, `on/off`, `true/false` all read
 as expected. Knob lanes never claim the auto-cycle/auto-phase timers (none
-of these knobs are ones the timers write) and don't show in the lanes chip.
+of these knobs are ones the timers write); the panel's lanes chip lists them
+collectively as `qualia.*` (signal-fed knobs with no quoted arg are beyond
+its text-level scan and stay unlisted).
 Config-object knobs (`walkConfig`, `mosh`, …) and action calls
 (`nextQuale()`, `looper.grab()`, …) stay imperative — drive those per event
 via `qcall`. From the console (no transpiler) pass a real pattern
@@ -150,7 +153,10 @@ fires and auto-cycle yields.
 
 Silent lanes leave no trace in the UI, which is a problem three songs into a
 set. The Strudel panel header shows a chip — `⇢ quale · qphase · qset` — naming
-the lanes the current buffer declares. It's read from the buffer text, so a
+the lanes the current buffer declares. Patterned knobs count too, listed
+collectively as `qualia.*` (a scalar-knob `qualia.…(` call with a
+double-quoted argument; imperative-only calls like `qualia.quale(…)` /
+`qualia.set(…)` are excluded). It's read from the buffer text, so a
 parked lane correctly doesn't count, and a `.slow(32)` lane still shows up
 between haps.
 
