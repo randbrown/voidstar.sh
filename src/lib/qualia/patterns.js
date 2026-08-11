@@ -114,9 +114,10 @@ export function clonePattern(id) {
 // Every generated pattern also carries a small dose of the qualia code API
 // (docs/qualia-code-api.md): a `quale()` lane swapping between two random
 // quales, a `qphase()` lane stepping the phase, plus one nugget drawn at
-// random from a pool of other `q*` examples. A nugget per roll — not the
-// whole API — so after a handful of loads the user has seen most of the
-// surface by example without any single pattern overwhelming them.
+// random from a pool of other examples (`q*` lanes and patterned `qualia.*`
+// knobs). A nugget per roll — not the whole API — so after a handful of
+// loads the user has seen most of the surface by example without any single
+// pattern overwhelming them.
 //
 // The two scene lanes are gated on the hands-off timers: `quale()` and
 // auto-cycle drive the same knob, as do `qphase()` and auto-phase. Rolling a
@@ -155,11 +156,14 @@ function pickN(arr, n) {
 // One-liner API examples ("nuggets") — each roll includes one of them.
 // Everything here is safe against any active quale: `reactivity` exists on
 // nearly every quale, glitch posts / overlays / camera walk are top-level.
+// The knob examples use the patterned-knob form (a scalar qualia.* knob handed
+// a double-quoted pattern returns a silent lane — docs/qualia-code-api.md),
+// which supersedes the old qcall(v => …) wrapping for on/off rides.
 const API_NUGGETS = [
   () => `qset("reactivity", sine.range(0.5, 2).segment(8)),  // ride a param from a signal`,
   () => `qglitch("${pick(GLITCH_POSTS)}", "<off off off ${pick(['on', 'blip', 'flip'])}>"),  // glitch post, one cycle in four`,
-  () => `qcall(v => qualia.cam.walk(v > 0), "<0 1>").slow(8),  // camera-walk drift on/off`,
-  () => `qcall(v => qualia.overlay("${pick(OVERLAYS)}", v > 0), "<1 0>").slow(4),  // overlay layer on/off`,
+  () => `qualia.cam.walk("<0 1>").slow(8),  // patterned knob — camera-walk drift on/off`,
+  () => `qualia.overlay('${pick(OVERLAYS)}', "<1 0>").slow(4),  // patterned knob — overlay layer on/off`,
 ];
 
 /**
@@ -230,8 +234,12 @@ stack(
 export const LANE_NAMES = ['quale', 'qset', 'qpreset', 'qphase', 'qglitch', 'qtext', 'qcall', 'qtrig'];
 
 // Blank out comments and string/template bodies so a parked lane, a lane name
-// inside a doc comment, and `s("qcall")` all stop counting. Strings collapse to
-// a space (never to nothing) so they can't glue neighbouring tokens together.
+// inside a doc comment, and `s("qcall")` all stop counting. A DOUBLE-quoted
+// string collapses to a lone `"` — in the editor a double-quoted argument IS a
+// pattern (mini-notation transpile), and the patterned-knob detection below
+// keys off that marker. Single-quoted/template strings collapse to a space.
+// Either way the replacement is never empty, so a stripped string can't glue
+// neighbouring tokens together.
 //
 // Regex literals are NOT tracked — an unescaped `//` inside one would read as a
 // line comment and blank the rest of the line. Strudel patterns don't use them;
@@ -254,7 +262,7 @@ function stripNonCode(code) {
       i++;
       while (i < n && code[i] !== quote) { i += code[i] === '\\' ? 2 : 1; }
       i++;
-      out += ' ';
+      out += quote === '"' ? '"' : ' ';
       continue;
     }
     out += c;
@@ -264,21 +272,53 @@ function stripNonCode(code) {
 }
 
 /**
- * The lane functions a pattern buffer calls, in LANE_NAMES order.
+ * The lane functions a pattern buffer calls, in LANE_NAMES order — plus the
+ * pseudo-entry `qualia.*` when the buffer feeds a pattern to a scalar knob.
  *
  * A bare call counts (`quale(...)`); a member call does not
  * (`qualia.quale(...)` is an imperative one-shot, not a lane). `qtrig` is the
  * exception — it's only ever chained, so `.qtrig(...)` is exactly what counts.
  *
+ * Patterned knobs — `qualia.cam.walk("<0 1>")` — are lanes too: in the editor
+ * a double-quoted argument transpiles to a mini-notation Pattern, so a
+ * `qualia.…(` whose argument list carries a double-quoted string is a knob
+ * lane (stripNonCode leaves a `"` marker per double-quoted string). Reported
+ * as one collective `qualia.*` chip entry. Imperative-only API functions that
+ * take strings — `qualia.quale("…")`, `qualia.set("…", v)`, presets, glitch,
+ * qualem, audio/entangle — are NOT patternable knobs (a Pattern arg there is
+ * a broken call, not a lane), so their heads are excluded. Signal-fed knobs
+ * with no quoted arg — `qualia.pose.scale(sine.segment(8))` — are beyond a
+ * text-level scan and stay unlisted; single-quoted / plain-value calls are
+ * imperative and correctly don't count.
+ *
  * @param {string} code
  * @returns {string[]}
  */
+// First path segment after `qualia.` for the API's imperative-only (non-knob)
+// string-taking functions — keep in sync with code-api.js's custom entries.
+const IMPERATIVE_QUALIA_HEADS = new Set([
+  'quale', 'nullQuale', 'nextQuale', 'prevQuale', 'randomQuale',
+  'set', 'get', 'setParam', 'getField', 'params',
+  'preset', 'savePreset', 'phase', 'autoPhase', 'autoCycle', 'phaseParams',
+  'glitch', 'mosh', 'edge', 'stitch', 'logoConfig',
+  'transition', 'quantize', 'channel', 'channels', 'bands', 'crowd',
+  'qualem', 'audio', 'entangle', 'fade', 'fadeOut', 'fadeIn', 'fadeLevel',
+  'help', 'themes',
+]);
+const KNOB_LANE_RE = /(^|[^\w$])qualia\s*\.\s*([\w$]+)(?:\s*\.\s*[\w$]+)*\s*\([^()]*"/g;
+
 export function activeLanes(code) {
   const src = stripNonCode(String(code ?? ''));
-  return LANE_NAMES.filter((name) => {
+  const out = LANE_NAMES.filter((name) => {
     if (name === 'qtrig') return /\.\s*qtrig\s*\(/.test(src);
     return new RegExp(`(^|[^\\w$.])${name}\\s*\\(`).test(src);
   });
+  KNOB_LANE_RE.lastIndex = 0;
+  let m;
+  while ((m = KNOB_LANE_RE.exec(src))) {
+    if (!IMPERATIVE_QUALIA_HEADS.has(m[2])) { out.push('qualia.*'); break; }
+  }
+  return out;
 }
 
 // ── Download helper ──────────────────────────────────────────────────────
