@@ -205,8 +205,8 @@ export function initQualiaPage() {
   mesh.register(wake);
   mesh.register(iconism);
   mesh.register(conway);
-  mesh.register(noMansLand);
   mesh.register(friston);
+  mesh.register(noMansLand);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
   const topbarEl   = document.getElementById('topbar');
