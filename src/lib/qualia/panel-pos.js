@@ -65,6 +65,19 @@ const CORNER_PX = 14;   // corner handle size (square)
 const EDGE_PX   = 6;    // edge strip thickness
 const VP_PAD    = 4;    // keep this many px of the panel inside the viewport
 
+// The topbar HUD (z 20) renders above every floating panel (18/19), so a
+// panel whose header slides under it becomes ungrabbable — classically when
+// a narrower viewport wraps the topbar taller AFTER a position was saved.
+// Panel tops therefore clamp to the topbar's LIVE height (drag, north
+// resize, and reposition below) — except in zen, where the HUD is hidden
+// and the whole viewport is fair game.
+function topClearance() {
+  const tb = document.getElementById('topbar');
+  if (!tb || tb.classList.contains('zen')) return VP_PAD;
+  const h = tb.getBoundingClientRect().height;
+  return h > 0 ? h + VP_PAD : VP_PAD;
+}
+
 /**
  * Attach custom resize handles to a floating panel.
  *
@@ -146,7 +159,7 @@ export function attachPanelResize(id, panel, hooks = {}) {
         const hgt = Math.min(Math.max(minH, rect.height + dy), window.innerHeight - rect.top - VP_PAD);
         panel.style.height = hgt + 'px';
       } else if (dir.includes('n')) {
-        const hgt = Math.min(Math.max(minH, rect.height - dy), rect.bottom - VP_PAD);
+        const hgt = Math.min(Math.max(minH, rect.height - dy), rect.bottom - topClearance());
         panel.style.height = hgt + 'px';
         // Anchor the BOTTOM edge (same rationale as the left-edge case).
         panel.style.top = (rect.bottom - panel.getBoundingClientRect().height) + 'px';
@@ -188,7 +201,20 @@ export function makeDraggablePanel(id, panel, hooks = {}) {
     if (!tb) return;
     const h = tb.getBoundingClientRect().height;
     panel.style.maxHeight = `calc(100vh - ${h + 24}px)`;
-    if (!movedByUser) panel.style.top = (h + 8) + 'px';
+    if (!movedByUser) {
+      panel.style.top = (h + 8) + 'px';
+    } else if (!hooks.locked?.()) {
+      // A remembered position can sit under a topbar that has since wrapped
+      // taller (narrower viewport) — nudge the header back into reach. View-
+      // level guard only: the stored position is not rewritten. Skipped while
+      // locked (fullscreen owns the geometry and must not disturb the inline
+      // values it restores to).
+      const top = parseFloat(panel.style.top);
+      const min = topClearance();
+      if (Number.isFinite(top) && top < min && !tb.classList.contains('zen')) {
+        panel.style.top = min + 'px';
+      }
+    }
   }
   window.addEventListener('resize', reposition);
   // The topbar uses flex-wrap, so its rendered height changes when buttons wrap
@@ -225,10 +251,11 @@ export function makeDraggablePanel(id, panel, hooks = {}) {
     header.addEventListener('pointermove', (e) => {
       if (!dragging || e.pointerId !== pointerId) return;
       const r = panel.getBoundingClientRect();
+      const minY = topClearance();
       const maxX = window.innerWidth  - r.width  - VP_PAD;
       const maxY = window.innerHeight - 32;
       const x = Math.min(Math.max(VP_PAD, e.clientX - dx), Math.max(VP_PAD, maxX));
-      const y = Math.min(Math.max(VP_PAD, e.clientY - dy), Math.max(VP_PAD, maxY));
+      const y = Math.min(Math.max(minY, e.clientY - dy), Math.max(minY, maxY));
       panel.style.left = x + 'px';
       panel.style.top  = y + 'px';
     });

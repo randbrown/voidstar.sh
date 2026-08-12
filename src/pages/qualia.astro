@@ -1354,12 +1354,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        fullscreen must beat them WITHOUT touching them, so removing the class
        restores the exact prior geometry. --strudel-fs-pad is the user
        "screen protector" inset (the pad slider, persisted), max()ed against
-       the safe-area insets so notches still win at pad 0. */
+       the safe-area insets so notches still win at pad 0.
+       The top/bottom edges also clear the LIVE HUD bands (--topbar-h tracks
+       the wrapped topbar height, --tabs-h the mobile tab bar) so fullscreen
+       never buries the menu — zen (Z) hides the HUD and hands the fullscreen
+       editor the true edge-to-edge canvas (the :has() override below). */
     #strudel-panel.fs {
       left:   max(var(--strudel-fs-pad, 0px), env(safe-area-inset-left))   !important;
-      top:    max(var(--strudel-fs-pad, 0px), env(safe-area-inset-top))    !important;
+      top:    max(var(--strudel-fs-pad, 0px), env(safe-area-inset-top), var(--topbar-h, 0px)) !important;
       right:  max(var(--strudel-fs-pad, 0px), env(safe-area-inset-right))  !important;
-      bottom: max(var(--strudel-fs-pad, 0px), env(safe-area-inset-bottom)) !important;
+      bottom: max(var(--strudel-fs-pad, 0px), env(safe-area-inset-bottom), var(--tabs-h, 0px)) !important;
       width: auto !important; height: auto !important;
       max-width: none !important; max-height: none !important;
       min-width: 0; min-height: 0;
@@ -1372,6 +1376,13 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
          !important like the geometry: click-to-front writes an INLINE
          z-index (19) on the touched panel. */
       z-index: 24 !important;
+    }
+    /* Zen reclaims the whole canvas: the topbar hides by transform (its
+       layout height — and so --topbar-h — never changes), so key off the
+       .zen class instead. ⇧X + Z = total immersion. */
+    body:has(#topbar.zen) #strudel-panel.fs {
+      top:    max(var(--strudel-fs-pad, 0px), env(safe-area-inset-top))    !important;
+      bottom: max(var(--strudel-fs-pad, 0px), env(safe-area-inset-bottom)) !important;
     }
     /* Fullscreen owns the geometry — drop the resize grips (panel-pos.js
        also refuses their pointerdown; this removes the affordance). */
