@@ -15,6 +15,7 @@ import {
   setMetadata, patternDisplayName, downloadPattern,
 } from './patterns.js';
 import { makeDraggablePanel } from './panel-pos.js';
+import { getBool, setBool, getNum, setRaw } from './prefs.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
 import {
   resolveManifest, toStrudelSampleMap, COLLECTIONS, collectionPacks, getActiveCollectionId,
@@ -358,6 +359,13 @@ function saveGhost(on) {
   try { localStorage.setItem(GHOST_KEY, on ? '1' : '0'); } catch {}
 }
 
+// Fullscreen editor mode (⛶ / ⇧X, Esc exits) — the panel takes the whole
+// viewport minus a user-set pad for screen-protector cutoffs. Read/written
+// via the prefs helpers at the use site; see the quartet next to ghost's.
+const FS_KEY = 'voidstar.qualia.strudel.fs';
+const FS_INSET_KEY = 'voidstar.qualia.strudel.fsInset';
+const FS_INSET_MIN = 0, FS_INSET_MAX = 64;
+
 // Editor perf mode — disables the per-event pattern highlighting + eval
 // flash, the single biggest main-thread cost while the panel is open and
 // playing (see setEditorPerf). Persisted so a machine that needs it (weaker
@@ -410,6 +418,8 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   const btnPerf    = document.getElementById('btn-strudel-perf');
   const btnBlur    = document.getElementById('btn-strudel-blur');
   const btnGhost   = document.getElementById('btn-strudel-ghost');
+  const btnFs      = document.getElementById('btn-strudel-fs');
+  const elFsInset  = document.getElementById('strudel-fs-inset');
 
   let editorEl = null;
   let mounted  = false;
@@ -828,6 +838,55 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   function setGhost(on) { _ghost = !!on; saveGhost(_ghost); applyGhost(); refreshGhostBtn(); return _ghost; }
   applyGhost(); refreshGhostBtn();
   if (btnGhost) btnGhost.addEventListener('click', () => setGhost(!_ghost));
+
+  // Fullscreen editor (⛶ / ⇧X, Esc exits) — the GEOMETRY mode, orthogonal
+  // to ghost's chrome-strip (the two compose: ghost+fs = bare code over
+  // full-bleed visuals). CSS `.fs` pins the panel to the viewport edges with
+  // !important, beating the inline left/top/width/height that drag/resize
+  // write — exit is just removing the class, so the exact pre-fullscreen
+  // geometry (and its persisted panelPos record) survives untouched. Drag +
+  // resize are suspended while on (the `locked` hook at makeDraggablePanel).
+  // The pad slider insets all four edges for screen-protector cutoffs;
+  // CSS max()es it against env(safe-area-inset-*) so notches still win.
+  let _fs = getBool(FS_KEY, false);
+  let _fsInset = getNum(FS_INSET_KEY, 0, FS_INSET_MIN, FS_INSET_MAX);
+  function refreshFsBtn() {
+    if (!btnFs) return;
+    btnFs.classList.toggle('active', _fs);
+    btnFs.setAttribute('aria-pressed', _fs ? 'true' : 'false');
+    btnFs.title = _fs
+      ? 'Exit fullscreen editor (Esc or ⇧X)'
+      : 'Fullscreen editor — fill the screen; the pad slider insets the edges for screen-protector cutoffs (⇧X)';
+  }
+  function applyFsInset() {
+    try { document.documentElement.style.setProperty('--strudel-fs-pad', _fsInset + 'px'); } catch {}
+    if (elFsInset && Number(elFsInset.value) !== _fsInset) elFsInset.value = String(_fsInset);
+  }
+  function setFsInset(px) {
+    const n = Math.round(Number(px));
+    _fsInset = Number.isFinite(n) ? Math.max(FS_INSET_MIN, Math.min(FS_INSET_MAX, n)) : 0;
+    setRaw(FS_INSET_KEY, String(_fsInset));
+    applyFsInset();
+    return _fsInset;
+  }
+  function applyFs() { if (panel) panel.classList.toggle('fs', _fs); }
+  function setFs(on) { _fs = !!on; setBool(FS_KEY, _fs); applyFs(); refreshFsBtn(); return _fs; }
+  function getFs() { return _fs; }
+  applyFs(); applyFsInset(); refreshFsBtn();
+  if (btnFs) btnFs.addEventListener('click', () => setFs(!_fs));
+  if (elFsInset) {
+    elFsInset.addEventListener('input', () => setFsInset(elFsInset.value));
+    elFsInset.addEventListener('dblclick', () => setFsInset(0));
+  }
+  // Esc must exit while the caret is in the editor — the global hotkey
+  // handler bails on panel focus, so listen on the panel itself. Bubble
+  // phase: if CodeMirror consumed the Esc (closing autocomplete/tooltips
+  // marks it defaultPrevented), that press was theirs.
+  if (panel) panel.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !_fs || e.defaultPrevented) return;
+    setFs(false);
+    e.stopPropagation();
+  });
 
   // ── soft-keyboard avoidance (phone editing) ──────────────────────────────
   // Android Chrome overlays the on-screen keyboard WITHOUT resizing the
@@ -1611,7 +1670,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   }
 
   // ── Drag / reposition / persist (shared helper) ────────────────────────
-  const reposition = makeDraggablePanel('strudel', panel);
+  // locked: fullscreen owns the geometry — a grab must not rewrite the
+  // inline left/top/width/height the panel returns to on exit.
+  const reposition = makeDraggablePanel('strudel', panel, { locked: () => _fs });
 
   // Sticky in-session "this panel has been revealed at least once" flag.
   // Cross-panel sync (transport/CPS/title) waits until BOTH the strudel
@@ -1949,6 +2010,13 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
     /** Built-in Strudel intellisense (autocomplete + hover docs) toggle. */
     setAutocomplete,
     getAutocomplete,
+    /** Fullscreen editor mode (⛶ / ⇧X; Esc exits). Exported — unlike ghost —
+     *  because the page-level hotkey and quick menu drive it. */
+    setFullscreenEditor: setFs,
+    getFullscreenEditor: getFs,
+    /** Fullscreen pad (px, 0–64) — insets every edge for screen cutoffs. */
+    setFullscreenInset: setFsInset,
+    getFullscreenInset: () => _fsInset,
     /** Insert text at the editor cursor — used by the funcs/sounds panels. */
     insertAtCursor,
     /** Snapshot of currently-registered Strudel sounds for the browser tab. */

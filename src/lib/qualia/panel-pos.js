@@ -65,6 +65,19 @@ const CORNER_PX = 14;   // corner handle size (square)
 const EDGE_PX   = 6;    // edge strip thickness
 const VP_PAD    = 4;    // keep this many px of the panel inside the viewport
 
+// The topbar HUD (z 20) renders above every floating panel (18/19), so a
+// panel whose header slides under it becomes ungrabbable — classically when
+// a narrower viewport wraps the topbar taller AFTER a position was saved.
+// Panel tops therefore clamp to the topbar's LIVE height (drag, north
+// resize, and reposition below) — except in zen, where the HUD is hidden
+// and the whole viewport is fair game.
+function topClearance() {
+  const tb = document.getElementById('topbar');
+  if (!tb || tb.classList.contains('zen')) return VP_PAD;
+  const h = tb.getBoundingClientRect().height;
+  return h > 0 ? h + VP_PAD : VP_PAD;
+}
+
 /**
  * Attach custom resize handles to a floating panel.
  *
@@ -73,10 +86,14 @@ const VP_PAD    = 4;    // keep this many px of the panel inside the viewport
  *        more than one remembered geometry (the rig's full vs mini views) can
  *        route each resize to the right key.
  * @param {HTMLElement} panel
- * @param {{ onStart?: () => void }} [hooks]  onStart fires on the first
- *        pointerdown of every resize, BEFORE any geometry changes — callers
- *        use it to materialize a still-centered panel (transform → left/top)
- *        and flip their movedByUser flag, exactly like drag-start does.
+ * @param {{ onStart?: () => void, locked?: () => boolean }} [hooks]
+ *        onStart fires on the first pointerdown of every resize, BEFORE any
+ *        geometry changes — callers use it to materialize a still-centered
+ *        panel (transform → left/top) and flip their movedByUser flag,
+ *        exactly like drag-start does. locked() (checked per pointerdown)
+ *        suspends resizing while true — a panel in a geometry mode of its
+ *        own (the strudel fullscreen editor) must not let a stray grab
+ *        rewrite the inline geometry it will return to.
  */
 export function attachPanelResize(id, panel, hooks = {}) {
   if (!panel || panel.__vsResize) return;
@@ -103,6 +120,7 @@ export function attachPanelResize(id, panel, hooks = {}) {
     let active = null;   // { pid, x0, y0, rect, minW, minH }
     h.addEventListener('pointerdown', (e) => {
       if (e.button !== undefined && e.button !== 0) return;
+      if (hooks.locked?.()) return;
       hooks.onStart?.();
       // Belt & braces: if the panel is still centered via transform (no
       // caller hook materialized it), pin it now so left/top anchors are real.
@@ -141,7 +159,7 @@ export function attachPanelResize(id, panel, hooks = {}) {
         const hgt = Math.min(Math.max(minH, rect.height + dy), window.innerHeight - rect.top - VP_PAD);
         panel.style.height = hgt + 'px';
       } else if (dir.includes('n')) {
-        const hgt = Math.min(Math.max(minH, rect.height - dy), rect.bottom - VP_PAD);
+        const hgt = Math.min(Math.max(minH, rect.height - dy), rect.bottom - topClearance());
         panel.style.height = hgt + 'px';
         // Anchor the BOTTOM edge (same rationale as the left-edge case).
         panel.style.top = (rect.bottom - panel.getBoundingClientRect().height) + 'px';
@@ -170,9 +188,11 @@ export function attachPanelResize(id, panel, hooks = {}) {
  *
  * @param {string} id      persistence id, and `${id}-header` for the grip
  * @param {HTMLElement} panel
+ * @param {{ locked?: () => boolean }} [hooks]  locked() suspends drag AND
+ *        resize while true (see attachPanelResize) — geometry-mode panels.
  * @returns {() => void}   reposition
  */
-export function makeDraggablePanel(id, panel) {
+export function makeDraggablePanel(id, panel, hooks = {}) {
   let movedByUser = restorePanelPos(id, panel);
 
   function reposition() {
@@ -181,7 +201,20 @@ export function makeDraggablePanel(id, panel) {
     if (!tb) return;
     const h = tb.getBoundingClientRect().height;
     panel.style.maxHeight = `calc(100vh - ${h + 24}px)`;
-    if (!movedByUser) panel.style.top = (h + 8) + 'px';
+    if (!movedByUser) {
+      panel.style.top = (h + 8) + 'px';
+    } else if (!hooks.locked?.()) {
+      // A remembered position can sit under a topbar that has since wrapped
+      // taller (narrower viewport) — nudge the header back into reach. View-
+      // level guard only: the stored position is not rewritten. Skipped while
+      // locked (fullscreen owns the geometry and must not disturb the inline
+      // values it restores to).
+      const top = parseFloat(panel.style.top);
+      const min = topClearance();
+      if (Number.isFinite(top) && top < min && !tb.classList.contains('zen')) {
+        panel.style.top = min + 'px';
+      }
+    }
   }
   window.addEventListener('resize', reposition);
   // The topbar uses flex-wrap, so its rendered height changes when buttons wrap
@@ -199,6 +232,7 @@ export function makeDraggablePanel(id, panel) {
     header.addEventListener('pointerdown', (e) => {
       if (e.target.closest('button, input, select, textarea')) return;
       if (e.button !== undefined && e.button !== 0) return;
+      if (hooks.locked?.()) return;
       const r = panel.getBoundingClientRect();
       if (!movedByUser) {
         panel.style.transform = 'none';
@@ -217,10 +251,11 @@ export function makeDraggablePanel(id, panel) {
     header.addEventListener('pointermove', (e) => {
       if (!dragging || e.pointerId !== pointerId) return;
       const r = panel.getBoundingClientRect();
+      const minY = topClearance();
       const maxX = window.innerWidth  - r.width  - VP_PAD;
       const maxY = window.innerHeight - 32;
       const x = Math.min(Math.max(VP_PAD, e.clientX - dx), Math.max(VP_PAD, maxX));
-      const y = Math.min(Math.max(VP_PAD, e.clientY - dy), Math.max(VP_PAD, maxY));
+      const y = Math.min(Math.max(minY, e.clientY - dy), Math.max(minY, maxY));
       panel.style.left = x + 'px';
       panel.style.top  = y + 'px';
     });
@@ -241,7 +276,7 @@ export function makeDraggablePanel(id, panel) {
   // anchored-edge math works, and mark it user-moved so reposition() stops
   // re-centering it.
   if (panel) {
-    attachPanelResize(id, panel, { onStart: () => {
+    attachPanelResize(id, panel, { locked: hooks.locked, onStart: () => {
       if (movedByUser) return;
       const r = panel.getBoundingClientRect();
       panel.style.transform = 'none';

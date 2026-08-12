@@ -42,6 +42,10 @@ import * as qualemStore from './qualem.js';
 import { getRotation, setRotation, getMirror, setMirror } from './video.js';
 import { QUALIA_FUNCTIONS } from './strudel-reference.js';
 import { getBool, setBool } from './prefs.js';
+import {
+  parseRoot, parseEdoSpec, parseRatio, parseTuneSpec,
+  edoFreq, centsFactor, scaleDegree, jiRetune, noteNameToMidi,
+} from './microtonal.js';
 
 // Do pattern lanes switch off the hands-off timer they'd otherwise fight?
 // Persisted, default on — see the auto-yield note down in the bindings. Cached
@@ -776,7 +780,226 @@ function tryRegisterStrudelBindings(api, hooks) {
       }),
       false));
 
-  console.log('[qualia] strudel bindings registered: quale, qset, qpreset, qphase, qglitch, qtext, qcall, qtrig');
+  // ── Microtonal tuning helpers ─────────────────────────────────────────────
+  // Unlike the lanes above these are SOUNDING transforms: they rewrite hap
+  // values into a `freq` control, which superdough honors end-to-end on
+  // synths and samples — no rig changes, arbitrary tunings. The math lives
+  // in microtonal.js (node-testable; see scripts/check-qualia-edo.mjs).
+  // Upstream Strudel is growing an `@strudel/edo` package; when the pinned
+  // bundle ships one, define()'s no-clobber guard hands `edo` back to it.
+  //
+  // House rule holds here too: a bad spec or junk value warns once and
+  // passes through — a live set must never throw out of a pattern callback.
+  const _tuningWarned = new Set();
+  const tuningWarn = (key, msg) => {
+    if (_tuningWarned.has(key)) return;
+    _tuningWarned.add(key);
+    console.warn(`[qualia] ${msg}`);
+  };
+
+  // Prefer the bundle's own note-name parser when evalScope exposes one —
+  // ours is the no-bundle fallback and agrees on standard names.
+  const bundleNoteToMidi = typeof g.noteToMidi === 'function' ? g.noteToMidi : undefined;
+
+  // Note-name → midi, null on junk — shared by cents + jitune.
+  const toMidiSafe = (name) => {
+    try {
+      const m = bundleNoteToMidi ? bundleNoteToMidi(name) : noteNameToMidi(name);
+      return Number.isFinite(m) ? m : null;
+    } catch { return null; }
+  };
+
+  // The editor transpiles EVERY double-quoted string through mini-notation,
+  // and mini SPLITS colon tokens — "c3:super" arrives as ['c3','super'],
+  // "31:a3" as [31,'a3']. Without this rejoin the tuning helpers would see
+  // garbage, warn once, and silently fall back to 12-TET — the worst kind
+  // of microtonal bug: everything plays, nothing is in tune. Specs with
+  // SPACES (custom tables, edoscale degree lists) can't survive mini
+  // tokenization at all and must be single-quoted plain JS strings instead
+  // (documented in qualia-code-api.md).
+  const specString = (spec) => (Array.isArray(spec) ? spec.map(String).join(':') : spec);
+
+  // Hap value → {freq} via `resolve(degree)`. Three incoming shapes: a plain
+  // number/numeric string (from "0 8 18"), a control object from n()/note()
+  // (spread it so chained .s()/.gain() keep merging; n/note are consumed —
+  // left in place superdough would re-pitch or re-index off them), or junk
+  // (pass through + one-time warn).
+  const toFreqValue = (v, resolve, warnKey) => {
+    const isObj = v && typeof v === 'object';
+    const raw = isObj ? (v.n ?? v.note ?? v.value) : v;
+    const num = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
+    if (!Number.isFinite(num)) {
+      tuningWarn(`${warnKey}:${String(raw)}`, `${warnKey}: non-numeric degree ${JSON.stringify(raw ?? v)} — value passed through`);
+      return v;
+    }
+    const freq = resolve(num);
+    if (!isObj) return { freq };
+    const out = { ...v };
+    delete out.n; delete out.note; delete out.value;
+    out.freq = freq;
+    return out;
+  };
+
+  // Values are N-EDO step degrees → freq: n("0 8 18 26 31").edo(31)
+  // Spec packs divisions + optional root: 31 | "31:a3" | "19:440"
+  // (root defaults to c4; degrees may be negative, ≥ N, or fractional).
+  define('edo', (spec, pat) => {
+    spec = specString(spec);
+    const parsed = parseEdoSpec(spec, bundleNoteToMidi);
+    if (!parsed) {
+      tuningWarn(`edo:${spec}`, `edo("${spec}"): bad spec (want N | "N:root") — pattern unchanged`);
+      return g.reify(pat);
+    }
+    const { n, rootHz } = parsed;
+    return g.reify(pat).withValue((v) =>
+      toFreqValue(v, (deg) => edoFreq(rootHz, n, deg), 'edo'));
+  });
+
+  // Values index a degree SUBSET of an EDO, wrapping by octave — a mode
+  // carved out of the tuning: n("0 1 2 4 6").edoscale("31:c4:0 5 10 13 18 23 28")
+  // Index 7 of a 7-note subset = subset[0] an octave up; negatives wrap down.
+  define('edoscale', (spec, pat) => {
+    spec = specString(spec);
+    const parsed = parseEdoSpec(spec, bundleNoteToMidi);
+    if (!parsed || !parsed.degrees) {
+      tuningWarn(`edoscale:${spec}`, `edoscale("${spec}"): bad spec (want "N:root:d0 d1 …") — pattern unchanged`);
+      return g.reify(pat);
+    }
+    const { n, rootHz, degrees } = parsed;
+    return g.reify(pat).withValue((v) =>
+      toFreqValue(v, (i) => edoFreq(rootHz, n, scaleDegree(degrees, n, i)), 'edoscale'));
+  });
+
+  // Values are just-intonation ratios against a root → freq:
+  // ji("a3", "1 5:4 3:2 2"). COLON form inside mini strings — `/` is the
+  // slow operator there ("5/4" = pure(5) over 4 cycles); plain-JS strings
+  // and numbers can use whatever parseRatio takes ("5/4", 1.25, "5:4").
+  // Named `ji`, not `ratio` — the 1.3.0 bundle already owns a `ratio()`
+  // (value → number conversion, no root/freq semantics) and define() would
+  // rightly refuse to shadow it.
+  define('ji', (root, pat) => {
+    root = specString(root);
+    const rootHz = parseRoot(root, bundleNoteToMidi);
+    if (rootHz === null) {
+      tuningWarn(`ji:${root}`, `ji("${root}"): bad root (want note name or Hz) — pattern unchanged`);
+      return g.reify(pat);
+    }
+    return g.reify(pat).withValue((v) => {
+      let base = null;
+      let r;
+      if (Array.isArray(v)) {
+        // Mini's colon token: "3:2" parses to [3, 2] in the 1.3.0 bundle.
+        r = parseRatio(v);
+      } else if (v && typeof v === 'object') {
+        base = { ...v };
+        // Fallback shape against bundle drift: an {s, n} pair (the same
+        // channel s("bd:3") rides) — numeric s/n reads as num:den. A real
+        // sound name in s stays untouched by the Number guard below.
+        if (base.s !== undefined && base.n !== undefined && Number.isFinite(Number(base.s))) {
+          r = parseRatio(base);
+          delete base.s; delete base.n;
+        } else {
+          r = parseRatio(base.value ?? base.n ?? base.note);
+          delete base.value; delete base.n; delete base.note;
+        }
+      } else {
+        r = parseRatio(v);
+      }
+      if (!Number.isFinite(r)) {
+        tuningWarn(`ji-val:${String(v)}`, `ji: unreadable ratio ${JSON.stringify(v)} — value passed through`);
+        return v;
+      }
+      const freq = rootHz * r;
+      return base ? { ...base, freq } : { freq };
+    });
+  });
+
+  // Cent offsets on ALREADY-PITCHED values — chain it after the pitch is
+  // resolved: note("c3 e3 g3").cents("<0 -14 14>"). A {freq} scales by
+  // 2^(c/1200); a numeric note/n shifts by c/100 (superdough takes
+  // fractional note numbers); a note NAME is converted to midi first; a
+  // bare number is treated as note-ish (+c/100).
+  define('cents', (offset, pat) => {
+    const c = Number(offset);
+    if (!Number.isFinite(c)) {
+      tuningWarn(`cents:${offset}`, `cents(${JSON.stringify(offset)}): non-numeric offset — pattern unchanged`);
+      return g.reify(pat);
+    }
+    const factor = centsFactor(c);
+    return g.reify(pat).withValue((v) => {
+      if (v && typeof v === 'object') {
+        const out = { ...v };
+        // freq("440") stores the value as a STRING — coerce before scaling.
+        const f = out.freq !== undefined ? Number(out.freq) : NaN;
+        if (Number.isFinite(f)) { out.freq = f * factor; return out; }
+        const key = out.note !== undefined ? 'note' : (out.n !== undefined ? 'n' : null);
+        if (key) {
+          const cur = out[key];
+          const midi = typeof cur === 'number' ? cur : toMidiSafe(String(cur));
+          if (midi !== null) { out[key] = midi + c / 100; return out; }
+        }
+        tuningWarn('cents:unpitched', 'cents: value has no freq/note/n to detune — passed through');
+        return v;
+      }
+      const num = Number(v);
+      if (Number.isFinite(num)) return num + c / 100;
+      const midi = toMidiSafe(String(v));
+      if (midi !== null) return midi + c / 100;
+      tuningWarn(`cents-val:${String(v)}`, `cents: unpitched value ${JSON.stringify(v)} — passed through`);
+      return v;
+    });
+  });
+
+  // Retune ALREADY-PITCHED values to just intonation — the chord()/voicing()
+  // companion: chord("<C^7 Dm7 G7>").voicing().jitune("c3").s("piano").
+  // Each note's pitch class snaps to a 12-entry ratio table over the root
+  // (only the root's pitch CLASS matters — its octave falls out of the
+  // math). Spec: "c3" = 5-limit table, "c3:7" = septimal tritone + harmonic
+  // seventh, "c3:1 16:15 9:8 …" = custom 12-ratio table. Fixed-root JI:
+  // chords ring pure against the root; some internal fifths carry the
+  // syntonic comma — that's the physics, not a bug. A prior .cents() detune
+  // survives (fractional midi re-applies on top of the snapped ratio).
+  // Bypass tokens: values pass through untouched — plain 12-TET equal
+  // temperament. Because register() patterns the spec arg, the tuning
+  // itself can ride a pattern: .jitune("<c3 a3 off>") retunes to C, then
+  // A, then back to equal temper per cycle. (Use "off", not "~" — a mini
+  // rest means NO spec event, which silences the join for that cycle
+  // instead of bypassing.)
+  const JITUNE_OFF = new Set(['off', 'et', 'equal', '-', 'none']);
+  define('jitune', (spec, pat) => {
+    spec = specString(spec);
+    if (typeof spec === 'string' && JITUNE_OFF.has(spec.trim().toLowerCase())) return g.reify(pat);
+    const parsed = parseTuneSpec(spec, bundleNoteToMidi);
+    if (!parsed) {
+      tuningWarn(`jitune:${spec}`, `jitune("${spec}"): bad spec (want "root", "root:7" or "root:<12 ratios>") — pattern unchanged`);
+      return g.reify(pat);
+    }
+    const { rootHz, rootMidi, ratios } = parsed;
+    const retune = (midi) => jiRetune(rootHz, rootMidi, ratios, midi);
+    return g.reify(pat).withValue((v) => {
+      if (v && typeof v === 'object') {
+        const out = { ...v };
+        const raw = out.note ?? out.n ?? out.value;
+        const midi = typeof raw === 'number' ? raw : toMidiSafe(String(raw));
+        if (midi === null || !Number.isFinite(midi)) {
+          tuningWarn('jitune:unpitched', 'jitune: value has no note/n to retune — passed through');
+          return v;
+        }
+        delete out.note; delete out.n; delete out.value;
+        out.freq = retune(midi);
+        return out;
+      }
+      const num = Number(v);
+      const midi = (v !== '' && v !== null && Number.isFinite(num)) ? num : toMidiSafe(String(v));
+      if (midi === null || !Number.isFinite(midi)) {
+        tuningWarn(`jitune-val:${String(v)}`, `jitune: unpitched value ${JSON.stringify(v)} — passed through`);
+        return v;
+      }
+      return { freq: retune(midi) };
+    });
+  });
+
+  console.log('[qualia] strudel bindings registered: quale, qset, qpreset, qphase, qglitch, qtext, qcall, qtrig, edo, edoscale, ji, cents, jitune');
   return true;
 }
 

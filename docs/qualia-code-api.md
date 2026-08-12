@@ -58,6 +58,50 @@ stack(
 | `qcall(fn, pat)` | Call `fn(value, hap)` per event — the generic escape hatch. |
 | `pat.qtrig(fn)` | **Chainable, keeps the audio**: fires `fn(value, hap)` on each event of the pattern it's chained to — `s("bd*4").qtrig(() => qualia.phase())`. |
 
+### Microtonal tuning helpers — 31-TET and beyond
+
+Unlike the silent `q*` lanes, these are **sounding transforms**: they rewrite
+pattern values into a raw `freq` control, which superdough honors end-to-end
+on synths *and* samples — any tuning, no engine changes. (Upstream Strudel is
+growing an `@strudel/edo` package; until the pinned bundle ships it, these
+cover the ground, and if a future bundle brings its own `edo` the bundle's
+wins automatically.) Math lives in
+[`src/lib/qualia/microtonal.js`](../src/lib/qualia/microtonal.js), checked by
+`scripts/check-qualia-edo.mjs`.
+
+```js
+setcps(0.5)
+stack(
+  s("bd*4"),
+  n("0 8 18 26 31").edo(31).s("sawtooth").decay(.2).gain(.7),   // 31-TET degrees
+  ji("a3", "1 5:4 3:2 15:8 2").s("sine").room(.4),              // just intonation
+)
+```
+
+| Function | Semantics |
+|---|---|
+| `pat.edo(spec)` | Values are **N-EDO step degrees** → frequency. Spec: divisions + optional root — `31`, `"31:a3"`, `"19:440"` (root defaults to **c4**). Degrees may be negative, exceed N (octaves fold), or be fractional for free bends. |
+| `pat.edoscale(spec)` | Values index a **degree subset** of an EDO — a mode carved out of the tuning — wrapping by octave: `n("0 1 2 4 6 7").edoscale('31:c4:0 5 10 13 18 23 28')`. Index 7 of a 7-note subset is the root an octave up; negatives wrap down. |
+| `ji(root, pat)` | **Just intonation**: values are frequency ratios against a root (note name or Hz) → `freq`. (Named `ji` because stock Strudel already owns `ratio()`, a plain value→number converter.) Inside mini strings write ratios with a **colon** — `"1 5:4 3:2 2"` — because `/` is the slow operator there; plain JS numbers and `"5/4"` strings work too. |
+| `pat.cents(offset)` | Detune **already-pitched** values by cents (the offset itself patterns: `.cents("<0 -14 14>")`). A `freq` scales by 2^(c/1200); a numeric `note`/`n` shifts by c/100 (fractional note numbers play true); note names convert first. Chain it *after* the pitch is resolved. |
+| `pat.jitune(spec)` | Retune **already-pitched** values to just intonation — the `chord()`/`voicing()` companion: `chord("<C^7 Dm7 G7>").voicing().jitune("c3").s("piano")`. Each note's pitch class snaps to a 12-ratio table over the root (only the root's pitch *class* matters). Tables: `"c3"` = classic 5-limit (♭7 = 9:5) · `"c3:7"` = septimal (7:5 tritone, 7:4 harmonic seventh) · `"c3:neutral"` (`11`) = **neutral thirds + sevenths** (11:9 ≈ 347¢, 11:6 ≈ 1049¢ — major and minor collapse into the in-between maqam color, so ordinary chord symbols play neutral chords) · `"c3:super"` (`supermajor`) = wide septimal majors (9:7 third, 8:7 second, 27:14 seventh) · `"c3:sub"` (`subminor`) = dark septimal minors (7:6 third, 14:9 sixth, 7:4 seventh) · `"c3:meantone"` (`quarter-comma`, `qc`) = quarter-comma meantone, E♭–G♯ chain of 5^(1/4) fifths → pure 5:4 major thirds · `"c3:pythagorean"` (`pyth`, `3`) = 3-limit stacked pure fifths, wide bright 81:64 thirds — meantone's mirror image · `"c3:harmonic"` (`harm`, `overtone`) = every slot an overtone of the root (17:16, 19:16, 21:16, 11:8, 13:8, 7:4 — chords ring like one string) · `"c3:well"` (`werckmeister`, `wm3`) = Werckmeister III, the canonical Bach-era circulating well-temperament (a family — Kirnberger/Vallotti/Young stay reachable as custom tables) · `"c3:<12 ratios>"` = custom table · `"off"` (or `et`/`equal`/`-`/`none`) = bypass back to plain 12-TET equal temperament. The spec itself patterns — `.jitune("<c3 c3:neutral off>")` changes tuning per cycle, then back to equal temper (use `off`, not `~`: a mini rest silences that cycle instead of bypassing). A prior `.cents()` detune survives the snap. Fixed-root tables: chords ring pure against the root, and some internal fifths carry the comma — that's the physics, not a bug. |
+
+Interval vocabulary for `ji()` (and custom `jitune` tables): neutral third
+`11:9`, neutral seventh `11:6`, supermajor third `9:7`, supermajor second
+`8:7`, subminor third `7:6`, subminor seventh `7:4`, septimal tritone `7:5` —
+e.g. a neutral triad is `ji("c3", "[1,11:9,3:2]")`.
+
+**Quoting rule for specs.** The editor mini-notates every double-quoted
+string, and mini splits colon tokens (`"c3:super"` arrives as
+`['c3','super']`) — the helpers rejoin those, so colon-only specs like
+`"31:a3"`, `"c3:7"`, `"c3:meantone"` are safe in double quotes. Specs
+containing **spaces** (custom ratio tables, `edoscale` degree lists) cannot
+survive mini tokenization — write those as plain single-quoted JS strings:
+`.edoscale('31:c4:0 5 10 13 18 23 28')`.
+
+House rule holds: a bad spec or an unpitched value warns once in the console
+and passes through unchanged — a live set never throws out of a pattern.
+
 ### Patterned knobs — `qualia.cam.walk("<0 1>/4")`
 
 Every **scalar knob** on the `qualia` object (the one-function get/set knobs

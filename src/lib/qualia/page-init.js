@@ -2205,6 +2205,12 @@ export function initQualiaPage() {
       case 'blackout':   document.getElementById('btn-blackout')?.click(); break;
       case 'record':     document.getElementById('btn-record')?.click(); break;
       case 'strudel':    document.getElementById('btn-strudel')?.click(); break;
+      case 'strudel-fs':
+        // Fullscreen editor (the phone-reachable ⇧X): open the panel first
+        // if it's hidden, then flip the mode.
+        if (!strudel.isOpen()) document.getElementById('btn-strudel')?.click();
+        strudel.setFullscreenEditor?.(!strudel.getFullscreenEditor?.());
+        break;
       case 'fx-prev':    stepFx(-1); break;
       case 'fx-next':    stepFx(1); break;
       case 'camera':
@@ -7402,7 +7408,16 @@ export function initQualiaPage() {
         break;
       }
       case 'z': setZen(!core.isZen()); break;
-      case 'x': btnFullscreen.click(); break;
+      case 'x':
+        // ⇧X = fullscreen editor (opens the panel if hidden; Esc or ⇧X
+        // exits — with the caret in the editor the panel's own Esc handler
+        // covers it, since this handler never sees focused-editor keys).
+        // X alone = browser fullscreen.
+        if (e.shiftKey) {
+          if (!strudel.isOpen()) document.getElementById('btn-strudel').click();
+          strudel.setFullscreenEditor?.(!strudel.getFullscreenEditor?.());
+        } else btnFullscreen.click();
+        break;
       case 'h': padActions.blackout(); break;   // blackout — screen off, audio keeps playing
       case ' ': padActions.pause(); e.preventDefault(); break;
 
