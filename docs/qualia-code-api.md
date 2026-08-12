@@ -272,6 +272,7 @@ qualia.fadeOut(20)                 // slow close: ALL audio buses + stage → bl
 qualia.fadeIn(30)                  // slow open back to full (recordings fade too)
 qualia.fade(0.3, 5)                // duck everything to 30%
 qualia.fadeLevel()                 // current audio fade 0..1
+qualia.unfade()                    // instant reset: full level + scrim cleared
 ```
 
 `fadeOut`/`fadeIn` ramp every audio engine natively in its own context (no

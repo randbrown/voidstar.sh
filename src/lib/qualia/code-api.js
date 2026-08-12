@@ -335,6 +335,10 @@ export function installCodeApi(deps) {
     fade:    (level, seconds, opts) => safe(() => fader.fade(level, seconds, opts)),
     /** Current audio-fade level 0..1 (1 = full; interpolates mid-fade). */
     fadeLevel: () => safe(() => fader.level(), 1),
+    /** Instantly restore full level + clear the scrim — undo any fade
+     *  (alias for fade(1, 0); the engines clamp the ramp to ~40 ms so
+     *  it's click-free). */
+    unfade:  () => safe(() => fader.fade(1, 0)),
 
     // — stage state —
     blackout:   gsBool(() => core.isRenderSuspended(), (on) => page.setBlackout(on)),
