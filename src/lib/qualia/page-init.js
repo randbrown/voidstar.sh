@@ -83,6 +83,7 @@ import wake           from './fx/wake.js';
 import iconism        from './fx/iconism.js';
 import conway         from './fx/conway.js';
 import noMansLand     from './fx/no-mans-land.js';
+import friston        from './fx/friston.js';
 
 // Auto-phase: walks modes/presets WITHIN the active qfx (one quale's
 // internal phases — palettes, modes, etc.). The qfx declares the steps via
@@ -204,6 +205,7 @@ export function initQualiaPage() {
   mesh.register(wake);
   mesh.register(iconism);
   mesh.register(conway);
+  mesh.register(friston);
   mesh.register(noMansLand);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────
