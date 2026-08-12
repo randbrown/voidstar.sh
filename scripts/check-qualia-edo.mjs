@@ -10,8 +10,9 @@
 
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_ROOT_HZ, midiToHz, noteNameToMidi, parseRoot,
+  DEFAULT_ROOT_HZ, midiToHz, hzToMidi, noteNameToMidi, parseRoot,
   edoFreq, centsFactor, parseEdoSpec, parseRatio, scaleDegree,
+  TUNE_TABLES, parseTuneSpec, jiRetune,
 } from '../src/lib/qualia/microtonal.js';
 
 let failed = 0;
@@ -94,12 +95,77 @@ section('scaleDegree — subset indexing with octave wrap');
   check('index -7 = root an octave down', scaleDegree(degs, 31, -7) === -31);
 }
 
+section('tuning tables');
+for (const [name, t] of Object.entries(TUNE_TABLES)) {
+  check(`${name} table: 12 entries inside the octave, never descending`,
+    t.length === 12 && t[0] === 1 && t[11] < 2
+    && t.every((r, i) => r >= 1 && r < 2 && (i === 0 || r >= t[i - 1])));
+}
+check('7-limit swaps in 7:5 and 7:4', TUNE_TABLES[7][6] === 7 / 5 && TUNE_TABLES[7][10] === 7 / 4);
+check('neutral collapses both thirds → 11:9 and both sevenths → 11:6',
+  TUNE_TABLES.neutral[3] === 11 / 9 && TUNE_TABLES.neutral[4] === 11 / 9
+  && TUNE_TABLES.neutral[10] === 11 / 6 && TUNE_TABLES.neutral[11] === 11 / 6);
+check('supermajor: 9:7 third, 8:7 second, 27:14 seventh',
+  TUNE_TABLES.super[4] === 9 / 7 && TUNE_TABLES.super[2] === 8 / 7 && TUNE_TABLES.super[11] === 27 / 14);
+check('subminor: 7:6 third, 14:9 sixth, 7:4 seventh',
+  TUNE_TABLES.sub[3] === 7 / 6 && TUNE_TABLES.sub[8] === 14 / 9 && TUNE_TABLES.sub[10] === 7 / 4);
+check('quarter-comma meantone: four fifths = pure 5:4 major third',
+  Math.abs(TUNE_TABLES.meantone[4] - 5 / 4) < 1e-12);
+check('meantone fifth ≈ 696.58¢',
+  Math.abs(1200 * Math.log2(TUNE_TABLES.meantone[7]) - 696.578) < 0.01);
+check('hzToMidi inverts midiToHz', Math.abs(hzToMidi(midiToHz(57)) - 57) < 1e-9);
+
+section('parseTuneSpec');
+{
+  const t5 = parseTuneSpec('c3');
+  check('"c3" → 5-limit, root c3', t5 && t5.rootMidi === 48 && t5.ratios === TUNE_TABLES[5]
+    && Math.abs(t5.rootHz - midiToHz(48)) < 1e-6);
+  const t7 = parseTuneSpec('c3:7');
+  check('"c3:7" → 7-limit', t7 && t7.ratios === TUNE_TABLES[7]);
+  check('named tables + aliases resolve',
+    parseTuneSpec('c3:neutral')?.ratios === TUNE_TABLES.neutral
+    && parseTuneSpec('c3:11')?.ratios === TUNE_TABLES.neutral
+    && parseTuneSpec('c3:supermajor')?.ratios === TUNE_TABLES.super
+    && parseTuneSpec('c3:sub')?.ratios === TUNE_TABLES.sub
+    && parseTuneSpec('c3:MEANTONE')?.ratios === TUNE_TABLES.meantone
+    && parseTuneSpec('c3:quarter-comma')?.ratios === TUNE_TABLES.meantone
+    && parseTuneSpec('c3:qc')?.ratios === TUNE_TABLES.meantone);
+  const hz = parseTuneSpec(440);
+  check('bare Hz root → midi anchor 69', hz && hz.rootMidi === 69);
+  const custom = parseTuneSpec('c3:1 16:15 9:8 6:5 5:4 4:3 7:5 3:2 8:5 5:3 7:4 15:8');
+  check('custom 12-ratio table parses', custom && custom.ratios.length === 12 && custom.ratios[6] === 7 / 5);
+  check('junk → null',
+    parseTuneSpec('h9') === null && parseTuneSpec('c3:9:8') === null
+    && parseTuneSpec('c3:1 2 3') === null && parseTuneSpec('c3:constructor') === null);
+}
+
+section('jiRetune — pitch-class snap with octave + cents survival');
+{
+  const { rootHz, rootMidi, ratios } = parseTuneSpec('c3');
+  const r = (midi) => jiRetune(rootHz, rootMidi, ratios, midi);
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  check('root maps to itself', near(r(48), rootHz));
+  check('E over c → exactly 5:4', near(r(52), rootHz * 5 / 4));
+  check('A over c → exactly 5:3', near(r(57), rootHz * 5 / 3));
+  check('octave above → 2×', near(r(60), rootHz * 2));
+  check('E an octave up → 2 × 5:4', near(r(64), rootHz * 2 * 5 / 4));
+  check('below the root wraps (B2 → 15:8 down an octave)', near(r(47), rootHz * (15 / 8) / 2));
+  check('root octave is irrelevant (c5 anchor ≡ c3 anchor)', (() => {
+    const hi = parseTuneSpec('c5');
+    return near(jiRetune(hi.rootHz, hi.rootMidi, hi.ratios, 52), r(52));
+  })());
+  check('fractional midi keeps its cents on top of the snap',
+    near(r(52.25), rootHz * (5 / 4) * 2 ** (0.25 / 12)));
+  const s7 = parseTuneSpec('c3:7');
+  check('7-limit b7: bb3 → 7:4', near(jiRetune(s7.rootHz, s7.rootMidi, s7.ratios, 58), s7.rootHz * 7 / 4));
+}
+
 section('registration ↔ reference honesty (source-text scan)');
 {
   const codeApi = readFileSync(new URL('../src/lib/qualia/code-api.js', import.meta.url), 'utf8');
   const funcsJson = readFileSync(new URL('../src/data/qualia-functions.json', import.meta.url), 'utf8');
   const reference = JSON.parse(funcsJson);
-  for (const name of ['edo', 'edoscale', 'ji', 'cents']) {
+  for (const name of ['edo', 'edoscale', 'ji', 'cents', 'jitune']) {
     check(`${name} is registered in code-api.js`,
       new RegExp(`define\\('${name}'`).test(codeApi));
     check(`${name} has a funcs-tab entry`,

@@ -42,7 +42,10 @@ import * as qualemStore from './qualem.js';
 import { getRotation, setRotation, getMirror, setMirror } from './video.js';
 import { QUALIA_FUNCTIONS } from './strudel-reference.js';
 import { getBool, setBool } from './prefs.js';
-import { parseRoot, parseEdoSpec, parseRatio, edoFreq, centsFactor, scaleDegree, noteNameToMidi } from './microtonal.js';
+import {
+  parseRoot, parseEdoSpec, parseRatio, parseTuneSpec,
+  edoFreq, centsFactor, scaleDegree, jiRetune, noteNameToMidi,
+} from './microtonal.js';
 
 // Do pattern lanes switch off the hands-off timer they'd otherwise fight?
 // Persisted, default on — see the auto-yield note down in the bindings. Cached
@@ -786,6 +789,14 @@ function tryRegisterStrudelBindings(api, hooks) {
   // ours is the no-bundle fallback and agrees on standard names.
   const bundleNoteToMidi = typeof g.noteToMidi === 'function' ? g.noteToMidi : undefined;
 
+  // Note-name → midi, null on junk — shared by cents + jitune.
+  const toMidiSafe = (name) => {
+    try {
+      const m = bundleNoteToMidi ? bundleNoteToMidi(name) : noteNameToMidi(name);
+      return Number.isFinite(m) ? m : null;
+    } catch { return null; }
+  };
+
   // Hap value → {freq} via `resolve(degree)`. Three incoming shapes: a plain
   // number/numeric string (from "0 8 18"), a control object from n()/note()
   // (spread it so chained .s()/.gain() keep merging; n/note are consumed —
@@ -890,12 +901,6 @@ function tryRegisterStrudelBindings(api, hooks) {
       return g.reify(pat);
     }
     const factor = centsFactor(c);
-    const toMidi = (name) => {
-      try {
-        const m = bundleNoteToMidi ? bundleNoteToMidi(name) : noteNameToMidi(name);
-        return Number.isFinite(m) ? m : null;
-      } catch { return null; }
-    };
     return g.reify(pat).withValue((v) => {
       if (v && typeof v === 'object') {
         const out = { ...v };
@@ -905,7 +910,7 @@ function tryRegisterStrudelBindings(api, hooks) {
         const key = out.note !== undefined ? 'note' : (out.n !== undefined ? 'n' : null);
         if (key) {
           const cur = out[key];
-          const midi = typeof cur === 'number' ? cur : toMidi(String(cur));
+          const midi = typeof cur === 'number' ? cur : toMidiSafe(String(cur));
           if (midi !== null) { out[key] = midi + c / 100; return out; }
         }
         tuningWarn('cents:unpitched', 'cents: value has no freq/note/n to detune — passed through');
@@ -913,14 +918,61 @@ function tryRegisterStrudelBindings(api, hooks) {
       }
       const num = Number(v);
       if (Number.isFinite(num)) return num + c / 100;
-      const midi = toMidi(String(v));
+      const midi = toMidiSafe(String(v));
       if (midi !== null) return midi + c / 100;
       tuningWarn(`cents-val:${String(v)}`, `cents: unpitched value ${JSON.stringify(v)} — passed through`);
       return v;
     });
   });
 
-  console.log('[qualia] strudel bindings registered: quale, qset, qpreset, qphase, qglitch, qtext, qcall, qtrig, edo, edoscale, ji, cents');
+  // Retune ALREADY-PITCHED values to just intonation — the chord()/voicing()
+  // companion: chord("<C^7 Dm7 G7>").voicing().jitune("c3").s("piano").
+  // Each note's pitch class snaps to a 12-entry ratio table over the root
+  // (only the root's pitch CLASS matters — its octave falls out of the
+  // math). Spec: "c3" = 5-limit table, "c3:7" = septimal tritone + harmonic
+  // seventh, "c3:1 16:15 9:8 …" = custom 12-ratio table. Fixed-root JI:
+  // chords ring pure against the root; some internal fifths carry the
+  // syntonic comma — that's the physics, not a bug. A prior .cents() detune
+  // survives (fractional midi re-applies on top of the snapped ratio).
+  // Bypass tokens: values pass through untouched — plain 12-TET. Because
+  // register() patterns the spec arg, the tuning itself can ride a pattern:
+  // .jitune("<c3 a3 off>") retunes to C, then A, then back to equal temper
+  // per cycle. (Use "off", not "~" — a mini rest means NO spec event, which
+  // silences the join for that cycle instead of bypassing.)
+  const JITUNE_OFF = new Set(['off', 'et', '-', 'none']);
+  define('jitune', (spec, pat) => {
+    if (typeof spec === 'string' && JITUNE_OFF.has(spec.trim().toLowerCase())) return g.reify(pat);
+    const parsed = parseTuneSpec(spec, bundleNoteToMidi);
+    if (!parsed) {
+      tuningWarn(`jitune:${spec}`, `jitune("${spec}"): bad spec (want "root", "root:7" or "root:<12 ratios>") — pattern unchanged`);
+      return g.reify(pat);
+    }
+    const { rootHz, rootMidi, ratios } = parsed;
+    const retune = (midi) => jiRetune(rootHz, rootMidi, ratios, midi);
+    return g.reify(pat).withValue((v) => {
+      if (v && typeof v === 'object') {
+        const out = { ...v };
+        const raw = out.note ?? out.n ?? out.value;
+        const midi = typeof raw === 'number' ? raw : toMidiSafe(String(raw));
+        if (midi === null || !Number.isFinite(midi)) {
+          tuningWarn('jitune:unpitched', 'jitune: value has no note/n to retune — passed through');
+          return v;
+        }
+        delete out.note; delete out.n; delete out.value;
+        out.freq = retune(midi);
+        return out;
+      }
+      const num = Number(v);
+      const midi = (v !== '' && v !== null && Number.isFinite(num)) ? num : toMidiSafe(String(v));
+      if (midi === null || !Number.isFinite(midi)) {
+        tuningWarn(`jitune-val:${String(v)}`, `jitune: unpitched value ${JSON.stringify(v)} — passed through`);
+        return v;
+      }
+      return { freq: retune(midi) };
+    });
+  });
+
+  console.log('[qualia] strudel bindings registered: quale, qset, qpreset, qphase, qglitch, qtext, qcall, qtrig, edo, edoscale, ji, cents, jitune');
   return true;
 }
 

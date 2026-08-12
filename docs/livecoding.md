@@ -60,8 +60,12 @@ by `page-init.js`); the same docs are searchable in the panel's funcs tab and vi
 
 **Microtonal tuning helpers** ride the same registration: `.edo(31)` maps degree patterns of any
 N-EDO to raw frequency, `.edoscale("31:c4:0 5 10 13 18 23 28")` plays modes carved from a tuning,
-`ji("a3", "1 5:4 3:2 2")` is just intonation (colon ratios — `/` means slow in mini), and
-`.cents("<0 -14 14>")` detunes already-pitched values. All emit the `freq` control, which superdough
+`ji("a3", "1 5:4 3:2 2")` is just intonation (colon ratios — `/` means slow in mini),
+`.cents("<0 -14 14>")` detunes already-pitched values, and `.jitune("c3")` retunes
+chord-symbol/`voicing()`/`note()` output to a tuning table (5-limit default; named tables `:7`
+septimal, `:neutral` 11:9/11:6 thirds+sevenths, `:super`/`:sub` septimal majors/minors,
+`:meantone` quarter-comma; `"off"` bypasses back to 12-TET, and the spec itself patterns).
+All emit the `freq` control, which superdough
 honors on synths and samples alike. Reference: [`qualia-code-api.md`](qualia-code-api.md), math in
 `microtonal.js`.
 

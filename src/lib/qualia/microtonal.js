@@ -154,3 +154,108 @@ export function scaleDegree(degrees, n, index) {
   const octave = Math.floor(i / len);
   return degrees[wrap] + octave * n;
 }
+
+// ── jitune: retune 12-TET pitches to a tuning table ────────────────────────
+// One factor per pitch class above the root — ratios for the JI tables,
+// irrational factors for the tempered ones. Named tables:
+//   5        classic 5-limit (default; b7 = 9:5, close to piano intonation)
+//   7        septimal: 7:5 tritone, 7:4 harmonic seventh (~31¢ flat of ET)
+//   neutral  both thirds → 11:9 (~347¢) and both sevenths → 11:6 (~1049¢) —
+//            major/minor collapses into the in-between maqam-ish color,
+//            so ordinary chord symbols come out as neutral chords ('11')
+//   super    supermajor: 9:7 third (~435¢), 8:7 second, 12:7 sixth,
+//            27:14 seventh — the wide septimal majors ('supermajor')
+//   sub      subminor: 7:6 third (~267¢), 15:14 second, 14:9 sixth,
+//            7:4 seventh — the dark septimal minors ('subminor')
+//   meantone quarter-comma meantone, Eb–G# chain: every fifth is 5^(1/4)
+//            (~696.6¢) so major thirds land on a pure 5:4 — the 16th-17th
+//            century keyboard sound ('quarter-comma', 'qc')
+
+// Quarter-comma meantone: fifths flattened so four of them stack to exactly
+// 5:1 (a pure major third two octaves up). Built from the chain of fifths
+// Eb..G#, each entry normalized into [1, 2).
+const MEANTONE_FIFTH = 5 ** 0.25;
+const MEANTONE = (() => {
+  const t = new Array(12);
+  for (let k = -3; k <= 8; k++) {
+    const pc = (((k * 7) % 12) + 12) % 12;
+    const v = MEANTONE_FIFTH ** k;
+    t[pc] = v / 2 ** Math.floor(Math.log2(v));
+  }
+  return t;
+})();
+
+export const TUNE_TABLES = {
+  5: [1, 16 / 15, 9 / 8, 6 / 5, 5 / 4, 4 / 3, 45 / 32, 3 / 2, 8 / 5, 5 / 3, 9 / 5, 15 / 8],
+  7: [1, 16 / 15, 9 / 8, 6 / 5, 5 / 4, 4 / 3, 7 / 5, 3 / 2, 8 / 5, 5 / 3, 7 / 4, 15 / 8],
+  neutral: [1, 16 / 15, 9 / 8, 11 / 9, 11 / 9, 4 / 3, 45 / 32, 3 / 2, 8 / 5, 5 / 3, 11 / 6, 11 / 6],
+  super: [1, 16 / 15, 8 / 7, 6 / 5, 9 / 7, 4 / 3, 45 / 32, 3 / 2, 8 / 5, 12 / 7, 9 / 5, 27 / 14],
+  sub: [1, 15 / 14, 9 / 8, 7 / 6, 5 / 4, 4 / 3, 7 / 5, 3 / 2, 14 / 9, 5 / 3, 7 / 4, 15 / 8],
+  meantone: MEANTONE,
+};
+
+const TABLE_ALIASES = {
+  '11': 'neutral',
+  supermajor: 'super',
+  subminor: 'sub',
+  'quarter-comma': 'meantone',
+  quartercomma: 'meantone',
+  qc: 'meantone',
+};
+
+/** Hz → (fractional) MIDI note number. */
+export function hzToMidi(hz) {
+  return 69 + 12 * Math.log2(hz / 440);
+}
+
+/**
+ * jitune spec → { rootHz, rootMidi, ratios } or null.
+ *   "c3"                 → root + the 5-limit table
+ *   "c3:<table>"         → a named table: 7, neutral (11), super
+ *                          (supermajor), sub (subminor), meantone
+ *                          (quarter-comma, qc)
+ *   "c3:1 16:15 9:8 …"   → a custom 12-ratio table (parseRatio per token,
+ *                          so colon and slash forms both work)
+ * Roots take anything parseRoot does (note name or Hz); only the root's
+ * pitch CLASS matters to the result — the octave falls out of the math.
+ */
+export function parseTuneSpec(spec, noteToMidi) {
+  let rootPart, tail;
+  if (typeof spec === 'number') { rootPart = spec; tail = ''; }
+  else {
+    const s = String(spec ?? '').trim();
+    const i = s.indexOf(':');
+    rootPart = i === -1 ? s : s.slice(0, i);
+    tail = i === -1 ? '' : s.slice(i + 1).trim();
+  }
+  const rootHz = parseRoot(rootPart === '' ? undefined : rootPart, noteToMidi);
+  if (rootHz === null) return null;
+  const rootMidi = Math.round(hzToMidi(rootHz));
+  let ratios = TUNE_TABLES[5];
+  if (tail !== '') {
+    const key = tail.toLowerCase();
+    const named = Object.prototype.hasOwnProperty.call(TABLE_ALIASES, key) ? TABLE_ALIASES[key] : key;
+    if (Object.prototype.hasOwnProperty.call(TUNE_TABLES, named)) {
+      ratios = TUNE_TABLES[named];
+    } else {
+      const parts = tail.split(/\s+/).map(parseRatio);
+      if (parts.length !== 12 || parts.some((r) => !Number.isFinite(r))) return null;
+      ratios = parts;
+    }
+  }
+  return { rootHz, rootMidi, ratios };
+}
+
+/**
+ * Retune one (possibly fractional) MIDI pitch to the JI table: the nearest
+ * semitone picks the pitch class + octave, and any fractional remainder
+ * (e.g. a prior .cents() detune) is re-applied on top so the two compose.
+ */
+export function jiRetune(rootHz, rootMidi, ratios, midi) {
+  const s = midi - rootMidi;
+  const si = Math.round(s);
+  const frac = s - si;
+  const pc = ((si % 12) + 12) % 12;
+  const oct = Math.floor(si / 12);
+  return rootHz * 2 ** oct * ratios[pc] * 2 ** (frac / 12);
+}
