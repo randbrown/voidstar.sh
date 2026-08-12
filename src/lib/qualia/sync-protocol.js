@@ -22,6 +22,8 @@
 //   • Every ctl payload is validated against the action/slider allowlists
 //     below and clamped before it reaches the engine. Nothing is eval'd.
 
+import { RIG_LEVEL_MAX } from './limiter.js';
+
 export const SYNC_APP_ID = 'voidstar-sync-v1';
 export const CONTROLLER_PATH = '/lab/tether';   // phone remote page route (né /lab/spooky)
 
@@ -70,7 +72,9 @@ export const CTL_ACTIONS = new Set([
 // id → {min, max} clamp range. The host maps ids onto the owning module
 // (looper strip, rig master, tempo) in its applySlider dispatch.
 export const CTL_SLIDERS = {
-  'rig.level':  { min: 0,    max: 1.5 },
+  // Full fader range including boost (>1 drives the rig limiter, which the
+  // host force-engages while boosted) — the tether slider spans the same.
+  'rig.level':  { min: 0,    max: RIG_LEVEL_MAX },
   'delay.mix':  { min: 0,    max: 1 },
   'reverb.mix': { min: 0,    max: 1 },
   'seq.volume': { min: 0,    max: 1.5 },
