@@ -25,9 +25,9 @@ pattern persistence. `strudel-reference.js` is just a curated dataset for the fu
 **Panel modes.** Two orthogonal per-panel toggles, both persisted: **ghost** (◌, chrome-strip —
 tabs and header extras hide, the frame goes transparent, the code floats over the visuals) and the
 **fullscreen editor** (⛶ or `⇧X`; `Esc` or `⇧X` exits). Fullscreen pins the panel to the viewport
-edges — geometry only, chrome stays — while clearing the **live HUD bands** (`--topbar-h` tracks the
-wrapped topbar height, `--tabs-h` the mobile tab bar) so the menu stays reachable; **zen (`Z`) hides
-the HUD and hands fullscreen the true edge-to-edge canvas**. The **pad** slider insets every edge
+edges — geometry only, chrome stays — while clearing the **live topbar band** (`--topbar-h` tracks
+the wrapped height) so the transport menu stays reachable; the bottom runs to the screen edge, and
+**zen (`Z`) hides the HUD and hands fullscreen the true edge-to-edge canvas**. The **pad** slider insets every edge
 (persisted, 0–64 px) for screen-protector cutoffs; CSS `max()`es the pad against
 `env(safe-area-inset-*)` so notches still win. Drag/resize suspend while fullscreen and the
 pre-fullscreen geometry returns on exit. Ghost + fullscreen compose: bare code over full-bleed
