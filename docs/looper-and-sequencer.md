@@ -97,6 +97,16 @@ can't reliably load.
 
 ### Panel chrome (the rig window itself)
 
+- **Signal transport (header ▶/■)** — the vox play/stop idiom applied to the live-instrument
+  path. The signal only reaches the monitor + mix after an explicit ▶, which also opens the input
+  capture (`looperAudio.playSignal`); ■ silences it (`effSignal()` gates on the transport like it
+  gates on mute) and releases the input device after the mute ramp, unless the lookback buffer or
+  a running take still needs the capture. **Deliberately session-local** — like vox, a fresh page
+  load starts stopped; nothing auto-opens the mic at boot anymore. The header mute stays the cheap
+  mid-set gate (capture kept hot, click-free ramp); stop is the "really off" switch (no OS mic
+  indicator). Loops, freeze, record, and the retro buffer have their own capture opens and keep
+  working with the transport stopped. The signal-path chip names `stopped` first, and its
+  one-click fix presses ▶ (raising a zeroed fader to the default on the way).
 - **Sections.** `signal` · `strip` · `drive` · `tone` · `space` · `utility` · `loop`, all siblings
   in one scroll column with sticky subheads. `strip` is a header tab over the four strip zones —
   its chevron folds all of them at once (they're siblings, not children, so the fold rides

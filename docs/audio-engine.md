@@ -329,6 +329,13 @@ allocates a `Float32Array` every call and is called per-frame — hoist the scra
 well-parameterized. The `getUserMedia` fallback ladder + `MIC_CONSTRAINTS` are currently duplicated
 in `audio.js` and `vocoder.js` — a candidate to move here (backlog).
 
+Camera **rotation + mirror persist per deviceId** (`video.js`, key
+`voidstar.qualia.camTransforms`): they're physical properties of a camera, so switching between
+e.g. the FaceTime cam and a sideways-clamped USB cam restores each one's own transform.
+`page-init` calls `setActiveCamera(deviceId)` whenever a camera goes live; the `setRotation`/
+`setMirror` setters then persist under that id. A first-seen camera keeps the current transform
+(seeded as its entry), except a front/back facing flip still derives mirror from the lens.
+
 ---
 
 ## Conventions when working in audio code

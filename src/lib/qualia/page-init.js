@@ -48,7 +48,7 @@ import {
   includedStepIndices as phaseIncludedIndices,
   stepLabel as phaseStepLabel,
 } from './phase-pool.js';
-import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror } from './video.js';
+import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror, setActiveCamera } from './video.js';
 import nullQuale       from './fx/null.js';
 import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
@@ -1403,7 +1403,9 @@ export function initQualiaPage() {
     getCurrentId: () => null,
     onChoose: async (id) => {
       pose.stopCamera();
-      return await pose.startCamera({ deviceId: id, video: videoEl });
+      const chosen = await pose.startCamera({ deviceId: id, video: videoEl });
+      activateCameraTransform(chosen);
+      return chosen;
     },
   });
 
@@ -1463,6 +1465,20 @@ export function initQualiaPage() {
     if (getMirror() !== front) setMirror(front);
     btnCamMirror.classList.toggle('active', getMirror());
   }
+  // A camera just became live: restore its remembered rotation/mirror (per
+  // deviceId — a sideways-clamped USB cam stays sideways, the FaceTime cam
+  // keeps its selfie mirror) and sync the buttons + split box to whatever
+  // transform is now in effect. A camera seen for the first time keeps the
+  // current transform, except that a facing flip still derives mirror from
+  // the lens (front → mirrored, rear → not).
+  function activateCameraTransform(deviceId, { deriveMirrorIfNew = false } = {}) {
+    const restored = setActiveCamera(deviceId);
+    if (!restored && deriveMirrorIfNew) applyMirrorForFacing();
+    btnCamRotate.textContent = `rot ${getRotation()}°`;
+    btnCamRotate.classList.toggle('active', getRotation() !== 0);
+    btnCamMirror.classList.toggle('active', getMirror());
+    syncSplitCameraBox();
+  }
   // Flip front/back. Drops the persisted deviceId on purpose — the OS
   // picks whichever lens matches the requested side.
   async function flipCameraFacing() {
@@ -1472,8 +1488,9 @@ export function initQualiaPage() {
       if (id) storeDeviceId('cam', id);
       camPicker.populate(id);
       refreshCameraCard();
-      // Auto-mirror to match the lens we just switched to (front → on, rear → off).
-      applyMirrorForFacing();
+      // Restore this lens's remembered transform; a first-seen lens derives
+      // mirror from facing (front → on, rear → off).
+      activateCameraTransform(id, { deriveMirrorIfNew: true });
       // Reapply persisted zoom to the new track (it has its own capabilities).
       // refreshCameraCard already clamps + re-applies; nothing else needed.
       settings.save();
@@ -1504,6 +1521,7 @@ export function initQualiaPage() {
       try {
         const id = await pose.startCamera({ deviceId: getStoredDeviceId('cam'), video: videoEl });
         if (id) storeDeviceId('cam', id);
+        activateCameraTransform(id);
         posesSelect.style.display = '';
         camPicker.populate(id);
       } catch (err) {

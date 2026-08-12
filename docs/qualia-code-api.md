@@ -254,6 +254,8 @@ qualia.cam.walk(true)              // camera-walk drift on/off
 qualia.cam.walkConfig({ zoom: .8, punch: .6 })
 qualia.cam.source("camera")        // webcam feed on ("off" stops it)
 qualia.cam.rotate(90); qualia.cam.mirror(true); qualia.cam.flip()
+                                   // rotate/mirror persist PER CAMERA (deviceId) —
+                                   // switching cameras restores each one's own
 qualia.cam.zoom(2)                 // hardware zoom where supported
 
 qualia.pose.smoothing(0.7)
@@ -300,6 +302,10 @@ qualia.looper.play(); qualia.looper.record(); qualia.looper.grab()
 qualia.looper.freeze(); qualia.looper.freezePop(); qualia.looper.freezeClear()
 qualia.looper.rigLevel(.8); qualia.looper.rigMute(false)
 
+qualia.rig.play(); qualia.rig.stop(); qualia.rig.playing()
+                                   // signal transport (header ▶/■) — play opens
+                                   // the input capture + sends the live signal
+                                   // to the mix; stop releases the device
 qualia.rig.toggle("delay")         // flip a pedalboard stage
 qualia.rig.param("reverb", "mix", .5)
 

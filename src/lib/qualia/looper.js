@@ -365,6 +365,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnLoopCollapse = document.getElementById('btn-rig-loop-collapse');
   const tunerEl     = document.getElementById('rig-tuner');
   const temperEl    = document.getElementById('rig-temper');
+  const btnRigPlay  = document.getElementById('btn-rig-play');
+  const btnRigStop  = document.getElementById('btn-rig-stop');
   const btnRigMute  = document.getElementById('btn-rig-master-mute');
   const rigMasterGain = document.getElementById('rig-master-gain');
   const rigSignalEl = document.getElementById('rig-signal');
@@ -1078,6 +1080,34 @@ export function createLooper({ audio, syncStrudel } = {}) {
     lsSet(SIGMUTE_KEY, model.signalMuted ? '1' : '0');
     looperAudio.setSignalMuted(model.signalMuted);
     refreshInputMuteBtn();
+  }
+  // Signal transport (header ▶/■, the vox play/stop idiom): the live signal
+  // only reaches the monitor + mix after an explicit ▶ (which also opens the
+  // input capture — a user gesture, so getUserMedia is allowed), and ■
+  // silences it and releases the input device. Mute stays the cheap mid-set
+  // gate; the transport is the "really off" switch. Session-local on purpose:
+  // like vox, a fresh page load starts stopped until the performer plays.
+  function playSignal() {
+    // ▶ with the fader parked at 0 would open a silent capture — apply the
+    // same one-click fix as the signal chip so play means audible.
+    if (!(model.signalLevel > 0)) setInputVol(INPUT_DEFAULT);
+    looperAudio.playSignal(model.deviceId)
+      .catch((e) => console.warn('[qualia] rig signal play failed:', e))
+      .finally(() => { refreshRigTransport(); refreshLooperBtn(); });
+    refreshRigTransport();
+  }
+  function stopSignal() {
+    looperAudio.stopSignal();
+    refreshRigTransport();
+    refreshLooperBtn();
+  }
+  function refreshRigTransport() {
+    if (!btnRigPlay) return;
+    const on = looperAudio.isSignalOn();
+    btnRigPlay.classList.toggle('playing', on);
+    btnRigPlay.title = on
+      ? 'Live signal is on'
+      : 'Start the live signal — open the input capture and send it to the monitor + mix';
   }
   function refreshChannelsBtn() {
     if (!btnChannels) return;
@@ -4228,6 +4258,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // while signal flows. Loops/freeze aren't considered — this is about the
   // live instrument path.
   function signalBlocker() {
+    if (!looperAudio.isSignalOn()) return { label: 'stopped',
+      title: 'The signal transport is stopped — click to press ▶ and start the live signal',
+      fix: () => playSignal() };
     if (!(model.signalLevel > 0)) return { label: 'sig 0',
       title: `Signal level is 0 (input capture closed) — click to raise it to ${INPUT_DEFAULT}`,
       fix: () => setInputVol(INPUT_DEFAULT) };
@@ -4309,7 +4342,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!btnToggle) return;
     btnToggle.classList.remove('active', 'active-audio');
     const sig = looperAudio.getSignal();
-    const sigOut = sig.live && !sig.muted && sig.level > 0;
+    const sigOut = sig.on && sig.live && !sig.muted && sig.level > 0;
     const loopsOut = looperAudio.anyPlaying() && !_muted;
     const outputting = !model.rigMuted && model.rigLevel > 0 && (sigOut || loopsOut);
     const open = panel?.style.display !== 'none';
@@ -4473,9 +4506,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (inputVolSl) inputVolSl.value = String(model.signalLevel);
     refreshInputMuteBtn();
     // open() is a user gesture, so a getUserMedia prompt is allowed here.
-    // Resume the rig signal monitor if it was left up, and the lookback buffer
-    // if it was left on — so a remembered rig comes back without a manual nudge.
-    if (model.signalLevel > 0 && !looperAudio.getSignal().live) {
+    // Re-open the capture only if the transport was played this session and
+    // the capture died underneath it (device lost); a fresh page starts
+    // stopped — the header ▶ is the explicit way in. The lookback buffer
+    // still resumes on its own (it's pre-fader and silent).
+    if (looperAudio.isSignalOn() && !looperAudio.getSignal().live) {
       looperAudio.ensureCaptureOpen(model.deviceId).then(refreshLooperBtn).catch(() => {});
     }
     if (model.bufferOn && !looperAudio.isBuffering()) setBuffer(true);
@@ -4565,6 +4600,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     elGain.value = String(model.master);
     elGain.addEventListener('input', () => setMaster(elGain.value));
   }
+  if (btnRigPlay) { btnRigPlay.addEventListener('click', () => { playSignal(); }); refreshRigTransport(); }
+  if (btnRigStop) btnRigStop.addEventListener('click', () => { stopSignal(); });
   if (btnRigMute) { btnRigMute.addEventListener('click', () => setRigMuted(!model.rigMuted)); refreshRigMuteBtn(); }
   if (rigMasterGain) {
     rigMasterGain.value = String(model.rigLevel);
@@ -4671,6 +4708,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     },
     isRigPaused: () => looperAudio.isRigPaused(),
     play: playAll, stop,
+    // Signal transport (rig header ▶/■) — the live-instrument path, distinct
+    // from the loop transport above. For hotkeys / MIDI / the code API.
+    playSignal, stopSignal,
+    isSignalOn: () => looperAudio.isSignalOn(),
     // Wipe every recorded take (same code path as the 🗑 button). The qualem
     // "new" reset calls this so a clean slate really is one.
     clearLoops: clearAll,
