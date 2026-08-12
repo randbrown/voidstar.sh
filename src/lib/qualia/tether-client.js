@@ -205,7 +205,7 @@ export async function initTetherClient(root) {
   // ── Host state (drives lit buttons + drum pads) ───────────────────────────
   let state = {
     cps: null, strudelPlaying: false, seqPlaying: false, loopPlaying: false,
-    recording: false, recArming: false,
+    recording: false, recArming: false, sigOn: false,
     // { delaySec, countIn, transient, free } — free-run record arming, mirrored
     // from the rig so the mode chips read the host's truth.
     recArm: null,
@@ -369,10 +369,12 @@ export async function initTetherClient(root) {
           padBtn('delay', 'delayToggle', { sub: 'on / off', lit: 'delay', flip: 'delayOn' }),
           padBtn('reverb', 'reverbToggle', { sub: 'on / off', lit: 'reverb', flip: 'reverbOn' }),
           padBtn('comp', 'compToggle', { sub: 'on / off', lit: 'comp', flip: 'compOn' })),
-        // Pause moved to its own full-width row when comp joined the strip
-        // grid — a mid-set "stop everything" deserves the biggest target
-        // anyway, not a third-of-a-row shared with effect toggles.
-        grid(1,
+        // The signal transport is session-local on the rig — a page reload
+        // starts stopped — so the phone gets the same stateful ▶/■ pad,
+        // sharing the row with pause (start the live input / stop everything:
+        // the two "is anything sounding?" switches side by side).
+        grid(2,
+          padBtn('▶ signal', 'sigPlayStop', { lit: 'sig', flip: 'sigOn', sub: 'live input' }),
           padBtn('⏸ pause', 'pause', { cls: 'warn', sub: 'all audio', lit: 'pause', flip: 'paused' })),
         el('h3', 'sp-h', 'levels'),
         // 0–2 matches the rig's real range (RIG_LEVEL_MAX): >1.0 is boost into
@@ -380,6 +382,9 @@ export async function initTetherClient(root) {
         sliderRow('rig master', 'rig.level', 0, 2, 0.01, 1),
         sliderRow('delay mix', 'delay.mix', 0, 1, 0.01, 0.3),
         sliderRow('reverb mix', 'reverb.mix', 0, 1, 0.01, 0.3),
+        // Drive gains — reset targets match STRIP_DEFAULTS (drive: 0.35).
+        sliderRow('earth gain', 'earth.gain', 0, 1, 0.01, 0.35),
+        sliderRow('metal gain', 'metal.gain', 0, 1, 0.01, 0.35),
         el('div', 'sp-note', 'sliders send absolute values, like MIDI CC knobs — hold a ↺ to snap one back to default'),
       );
     } else if (tab === 'loop') {
@@ -544,6 +549,7 @@ export async function initTetherClient(root) {
         : kind === 'seq'       ? state.seqPlaying
         : kind === 'loop'      ? state.loopPlaying
         : kind === 'rec'       ? (state.recording || state.recArming)
+        : kind === 'sig'       ? state.sigOn
         : kind === 'recDelay'  ? !!(state.recArm?.free && state.recArm?.delaySec > 0)
         : kind === 'recTransient' ? !!(state.recArm?.free && state.recArm?.transient)
         : kind === 'freeze'    ? state.freezeDepth > 0
@@ -578,6 +584,10 @@ export async function initTetherClient(root) {
       } else if (kind === 'recDelay') {
         const d = state.recArm?.delaySec || 0;
         setLabel(d > 0 ? `⏱ ${d}s` : '⏱ delay');
+      } else if (kind === 'sig') {
+        // Vox-idiom state button: the face shows what a tap DOES next.
+        setLabel(state.sigOn ? '■ signal' : '▶ signal',
+                 state.sigOn ? 'live — tap to stop' : 'live input');
       }
     }
     // The two arming modes are free-run only; say so rather than letting the
