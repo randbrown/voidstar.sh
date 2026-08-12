@@ -2779,6 +2779,17 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .rig-lib-msg:empty { display: none; }
     .rig-lib-msg.err { color: var(--pink); }
+    /* Tone presets — the select rides the tone-zone subhead (don't let it
+       swallow the row like the 100%-basis library pickers do), the drawer
+       lists presets with the shared .sp-pat-row idiom. */
+    .rig-tone-select { flex: 0 1 9rem; }
+    #rig-tone-presets {
+      display: flex; flex-direction: column; gap: 0.3rem;
+      padding: 0.4rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    #rig-tone-presets .sp-pat-name { font-size: 0.68rem; }
+    #rig-tone-presets .sp-pat-by { font-size: 0.58rem; }
     #rig-temper .ctrl-btn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(34,211,238,0.10); }
     .rig-temper-grid { display: flex; flex-wrap: wrap; gap: 0.25rem 0.4rem; }
     .rig-temper-cell { display: flex; align-items: center; gap: 0.2rem; font-size: 0.62rem; }
@@ -4075,9 +4086,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>pinch</kbd></span><span class="ctrl-lbl">camera zoom (canvas or on the preview)</span></div>
     </div>
     <div class="ctrls-grid">
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>tap cam</kbd></span><span class="ctrl-lbl">cycle preview size (small · large · full · hidden)</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>2-tap cam</kbd></span><span class="ctrl-lbl">flip front / back — front auto-mirrors</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>hold cam</kbd></span><span class="ctrl-lbl">choose camera · drag to reposition</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>2-tap cam</kbd></span><span class="ctrl-lbl">cycle preview size (small · large · full · hidden)</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>hold cam</kbd></span><span class="ctrl-lbl">flip front / back · next camera — drag to reposition</span></div>
     </div>
 
     <div class="ctrls-sec">rig · looper <span class="ctrls-tag">keys</span></div>

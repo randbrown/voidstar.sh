@@ -107,6 +107,13 @@ can't reliably load.
   indicator). Loops, freeze, record, and the retro buffer have their own capture opens and keep
   working with the transport stopped. The signal-path chip names `stopped` first, and its
   one-click fix presses ▶ (raising a zeroed fader to the default on the way).
+- **Tone presets (tone-zone subhead)** — the amp + eq + cab trio saved as one recallable "tone":
+  a select applies one (and resets to the placeholder, the vox-preset idiom), `+` snapshots the
+  current trio, and the `▸` drawer manages the list (inline rename, export/import as
+  `.tone.json`, delete) using the shared `.sp-pat-row` idiom. Store in `tone-presets.js`. Tone
+  state is also remembered **per amp** and re-applied on amp select, seeded on first select from
+  the capture's NAM `gear_type` — see `docs/audio-engine.md` § "Capture gear type & the tone
+  layer".
 - **Sections.** `signal` · `strip` · `drive` · `tone` · `space` · `utility` · `loop`, all siblings
   in one scroll column with sticky subheads. `strip` is a header tab over the four strip zones —
   its chevron folds all of them at once (they're siblings, not children, so the fold rides

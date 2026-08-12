@@ -528,6 +528,12 @@ export function installCodeApi(deps) {
       toggle: (stage) => safe(() => looper.toggleStripStage(stage)),
       /** Set one stage param, e.g. param('delay','mix',0.4). */
       param:  (stage, name, v) => safe(() => looper.setStripParam(stage, name, +v)),
+      /** Tone presets — the amp+eq+cab trio saved in the rig's tone zone.
+       *  tone('name') applies one; saveTone() snapshots the current trio;
+       *  tones() lists names. */
+      tone:     (name) => !!safe(() => looper.applyTone(name), false),
+      saveTone: (name) => safe(() => looper.saveTone(name), ''),
+      tones:    () => safe(() => looper.listTones(), []),
     },
 
     // — vox (vocoder / harmonizer) —

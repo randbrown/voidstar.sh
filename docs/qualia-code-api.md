@@ -308,6 +308,8 @@ qualia.rig.play(); qualia.rig.stop(); qualia.rig.playing()
                                    // to the mix; stop releases the device
 qualia.rig.toggle("delay")         // flip a pedalboard stage
 qualia.rig.param("reverb", "mix", .5)
+qualia.rig.tone("glassy steel")    // apply a saved tone preset (amp+eq+cab)
+qualia.rig.saveTone("glassy steel"); qualia.rig.tones()
 
 qualia.vox.start(); qualia.vox.mute(true); qualia.vox.output(1.2)
 qualia.vox.harmony(true)           // harmonizer on/off
