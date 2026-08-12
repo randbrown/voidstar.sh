@@ -1132,6 +1132,17 @@ export function initQualiaPage() {
   // only touch the .value PROPERTY, so this stays the original default). We
   // re-dispatch a bubbling `input` so each slider's existing listener does the
   // real work (state, label, field.params, persistence) through the normal path.
+  // The element under a dblclick can vanish mid-gesture — the camera preview
+  // cycling full → hidden goes pointer-events:none on the second tap's
+  // pointerup, BEFORE the browser dispatches the dblclick — so a fresh
+  // hit-test at dblclick time lies (elementFromPoint sails through to the
+  // canvas and zen toggles alongside the cam cycle). Remember where the
+  // initiating press landed and let the zen branch below consult that too.
+  let pressBeganInUiZone = false;
+  document.addEventListener('pointerdown', (ev) => {
+    pressBeganInUiZone = pointInUiZone(ev.clientX, ev.clientY);
+  }, true);
+
   document.addEventListener('dblclick', (ev) => {
     const t = ev.target;
     if (!t || typeof t.closest !== 'function') return;
@@ -1156,8 +1167,10 @@ export function initQualiaPage() {
     // gesture; both give a one-move way in and out of the chrome-free view.
     // Ignore double-clicks that land on any HUD surface or interactive control
     // so it can't fire while the user is working a panel. (pointInUiZone is a
-    // hoisted function declaration further down.)
-    if (pointInUiZone(ev.clientX, ev.clientY)) return;
+    // hoisted function declaration further down.) Also bail when the press
+    // BEGAN on a UI surface even if that surface is gone by now — see the
+    // pointerdown listener above.
+    if (pressBeganInUiZone || pointInUiZone(ev.clientX, ev.clientY)) return;
     if (t.closest('button, a, select, input, textarea, label, .ctrl-btn, .qp-toggle, [role="button"], [role="menu"], [role="dialog"]')) return;
     setZen(!core.isZen());
   });
@@ -2274,6 +2287,15 @@ export function initQualiaPage() {
   // text fields, and modal context menus are left to the native menu.
   document.addEventListener('contextmenu', (ev) => {
     if (ev.target.closest?.('#quick-menu')) { ev.preventDefault(); return; }
+    // Camera preview: the native <video> menu (Loop / Save video frame / PiP)
+    // is never what we want on stage — and in size-full or split mode the
+    // preview covers most of the viewport, so without this every right-click
+    // landed on the browser menu. Quick menu instead, at every size.
+    if (ev.target.closest?.('#video')) {
+      ev.preventDefault();
+      openQuickMenu(ev.clientX, ev.clientY);
+      return;
+    }
     if (pointInUiZone(ev.clientX, ev.clientY)) return;
     if (ev.target.closest?.('button, a, select, input, textarea, label, .ctrl-btn, .qp-toggle, [contenteditable], [role="dialog"], [role="menu"]')) return;
     ev.preventDefault();

@@ -303,7 +303,7 @@ const IMPERATIVE_QUALIA_HEADS = new Set([
   'glitch', 'mosh', 'edge', 'stitch', 'logoConfig',
   'transition', 'quantize', 'channel', 'channels', 'bands', 'crowd',
   'qualem', 'audio', 'entangle', 'fade', 'fadeOut', 'fadeIn', 'fadeLevel',
-  'help', 'themes',
+  'unfade', 'help', 'themes',
 ]);
 const KNOB_LANE_RE = /(^|[^\w$])qualia\s*\.\s*([\w$]+)(?:\s*\.\s*[\w$]+)*\s*\([^()]*"/g;
 
