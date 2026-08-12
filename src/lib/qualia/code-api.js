@@ -797,6 +797,16 @@ function tryRegisterStrudelBindings(api, hooks) {
     } catch { return null; }
   };
 
+  // The editor transpiles EVERY double-quoted string through mini-notation,
+  // and mini SPLITS colon tokens — "c3:super" arrives as ['c3','super'],
+  // "31:a3" as [31,'a3']. Without this rejoin the tuning helpers would see
+  // garbage, warn once, and silently fall back to 12-TET — the worst kind
+  // of microtonal bug: everything plays, nothing is in tune. Specs with
+  // SPACES (custom tables, edoscale degree lists) can't survive mini
+  // tokenization at all and must be single-quoted plain JS strings instead
+  // (documented in qualia-code-api.md).
+  const specString = (spec) => (Array.isArray(spec) ? spec.map(String).join(':') : spec);
+
   // Hap value → {freq} via `resolve(degree)`. Three incoming shapes: a plain
   // number/numeric string (from "0 8 18"), a control object from n()/note()
   // (spread it so chained .s()/.gain() keep merging; n/note are consumed —
@@ -822,6 +832,7 @@ function tryRegisterStrudelBindings(api, hooks) {
   // Spec packs divisions + optional root: 31 | "31:a3" | "19:440"
   // (root defaults to c4; degrees may be negative, ≥ N, or fractional).
   define('edo', (spec, pat) => {
+    spec = specString(spec);
     const parsed = parseEdoSpec(spec, bundleNoteToMidi);
     if (!parsed) {
       tuningWarn(`edo:${spec}`, `edo("${spec}"): bad spec (want N | "N:root") — pattern unchanged`);
@@ -836,6 +847,7 @@ function tryRegisterStrudelBindings(api, hooks) {
   // carved out of the tuning: n("0 1 2 4 6").edoscale("31:c4:0 5 10 13 18 23 28")
   // Index 7 of a 7-note subset = subset[0] an octave up; negatives wrap down.
   define('edoscale', (spec, pat) => {
+    spec = specString(spec);
     const parsed = parseEdoSpec(spec, bundleNoteToMidi);
     if (!parsed || !parsed.degrees) {
       tuningWarn(`edoscale:${spec}`, `edoscale("${spec}"): bad spec (want "N:root:d0 d1 …") — pattern unchanged`);
@@ -854,6 +866,7 @@ function tryRegisterStrudelBindings(api, hooks) {
   // (value → number conversion, no root/freq semantics) and define() would
   // rightly refuse to shadow it.
   define('ji', (root, pat) => {
+    root = specString(root);
     const rootHz = parseRoot(root, bundleNoteToMidi);
     if (rootHz === null) {
       tuningWarn(`ji:${root}`, `ji("${root}"): bad root (want note name or Hz) — pattern unchanged`);
@@ -941,6 +954,7 @@ function tryRegisterStrudelBindings(api, hooks) {
   // silences the join for that cycle instead of bypassing.)
   const JITUNE_OFF = new Set(['off', 'et', '-', 'none']);
   define('jitune', (spec, pat) => {
+    spec = specString(spec);
     if (typeof spec === 'string' && JITUNE_OFF.has(spec.trim().toLowerCase())) return g.reify(pat);
     const parsed = parseTuneSpec(spec, bundleNoteToMidi);
     if (!parsed) {
