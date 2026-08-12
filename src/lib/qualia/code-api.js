@@ -947,12 +947,13 @@ function tryRegisterStrudelBindings(api, hooks) {
   // chords ring pure against the root; some internal fifths carry the
   // syntonic comma — that's the physics, not a bug. A prior .cents() detune
   // survives (fractional midi re-applies on top of the snapped ratio).
-  // Bypass tokens: values pass through untouched — plain 12-TET. Because
-  // register() patterns the spec arg, the tuning itself can ride a pattern:
-  // .jitune("<c3 a3 off>") retunes to C, then A, then back to equal temper
-  // per cycle. (Use "off", not "~" — a mini rest means NO spec event, which
-  // silences the join for that cycle instead of bypassing.)
-  const JITUNE_OFF = new Set(['off', 'et', '-', 'none']);
+  // Bypass tokens: values pass through untouched — plain 12-TET equal
+  // temperament. Because register() patterns the spec arg, the tuning
+  // itself can ride a pattern: .jitune("<c3 a3 off>") retunes to C, then
+  // A, then back to equal temper per cycle. (Use "off", not "~" — a mini
+  // rest means NO spec event, which silences the join for that cycle
+  // instead of bypassing.)
+  const JITUNE_OFF = new Set(['off', 'et', 'equal', '-', 'none']);
   define('jitune', (spec, pat) => {
     spec = specString(spec);
     if (typeof spec === 'string' && JITUNE_OFF.has(spec.trim().toLowerCase())) return g.reify(pat);
