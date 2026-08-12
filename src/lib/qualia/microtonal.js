@@ -170,6 +170,18 @@ export function scaleDegree(degrees, n, index) {
 //   meantone quarter-comma meantone, Eb–G# chain: every fifth is 5^(1/4)
 //            (~696.6¢) so major thirds land on a pure 5:4 — the 16th-17th
 //            century keyboard sound ('quarter-comma', 'qc')
+//   pythagorean  3-limit, nothing but stacked pure 3:2 fifths — wide bright
+//            81:64 thirds, the medieval/pre-meantone sound; the mirror
+//            image of meantone's trade ('pyth', '3')
+//   harmonic every slot drawn from overtones of the root (17:16, 19:16,
+//            21:16, 11:8 tritone, 13:8, 7:4) — chords ring like one
+//            resonating string ('harm', 'overtone')
+//   well     Werckmeister III, THE canonical Bach-era circulating well-
+//            temperament — every key playable, each with its own color.
+//            "Well temperament" is a family (Kirnberger, Vallotti, Young,
+//            …); this shorthand deliberately means Werckmeister III, the
+//            one people mean by default — others via custom tables
+//            ('werckmeister', 'wm3')
 
 // Quarter-comma meantone: fifths flattened so four of them stack to exactly
 // 5:1 (a pure major third two octaves up). Built from the chain of fifths
@@ -185,6 +197,11 @@ const MEANTONE = (() => {
   return t;
 })();
 
+// Werckmeister III, by its published cent values — a well-temperament is
+// irrational (tempered fifths), so cents are the natural source form.
+const WELL_CENTS = [0, 90, 192, 294, 390, 498, 588, 696, 792, 888, 996, 1092];
+const WELL = WELL_CENTS.map((c) => 2 ** (c / 1200));
+
 export const TUNE_TABLES = {
   5: [1, 16 / 15, 9 / 8, 6 / 5, 5 / 4, 4 / 3, 45 / 32, 3 / 2, 8 / 5, 5 / 3, 9 / 5, 15 / 8],
   7: [1, 16 / 15, 9 / 8, 6 / 5, 5 / 4, 4 / 3, 7 / 5, 3 / 2, 8 / 5, 5 / 3, 7 / 4, 15 / 8],
@@ -192,6 +209,9 @@ export const TUNE_TABLES = {
   super: [1, 16 / 15, 8 / 7, 6 / 5, 9 / 7, 4 / 3, 45 / 32, 3 / 2, 8 / 5, 12 / 7, 9 / 5, 27 / 14],
   sub: [1, 15 / 14, 9 / 8, 7 / 6, 5 / 4, 4 / 3, 7 / 5, 3 / 2, 14 / 9, 5 / 3, 7 / 4, 15 / 8],
   meantone: MEANTONE,
+  pythagorean: [1, 256 / 243, 9 / 8, 32 / 27, 81 / 64, 4 / 3, 729 / 512, 3 / 2, 128 / 81, 27 / 16, 16 / 9, 243 / 128],
+  harmonic: [1, 17 / 16, 9 / 8, 19 / 16, 5 / 4, 21 / 16, 11 / 8, 3 / 2, 13 / 8, 27 / 16, 7 / 4, 15 / 8],
+  well: WELL,
 };
 
 const TABLE_ALIASES = {
@@ -201,6 +221,12 @@ const TABLE_ALIASES = {
   'quarter-comma': 'meantone',
   quartercomma: 'meantone',
   qc: 'meantone',
+  pyth: 'pythagorean',
+  '3': 'pythagorean',
+  harm: 'harmonic',
+  overtone: 'harmonic',
+  werckmeister: 'well',
+  wm3: 'well',
 };
 
 /** Hz → (fractional) MIDI note number. */

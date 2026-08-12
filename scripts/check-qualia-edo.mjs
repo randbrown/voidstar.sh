@@ -113,6 +113,18 @@ check('quarter-comma meantone: four fifths = pure 5:4 major third',
   Math.abs(TUNE_TABLES.meantone[4] - 5 / 4) < 1e-12);
 check('meantone fifth ≈ 696.58¢',
   Math.abs(1200 * Math.log2(TUNE_TABLES.meantone[7]) - 696.578) < 0.01);
+check('pythagorean: pure 3:2 fifth, wide 81:64 third, 729:512 tritone',
+  TUNE_TABLES.pythagorean[7] === 3 / 2 && TUNE_TABLES.pythagorean[4] === 81 / 64
+  && TUNE_TABLES.pythagorean[6] === 729 / 512);
+check('harmonic: overtone slots 17:16, 19:16, 21:16, 11:8, 13:8, 7:4',
+  TUNE_TABLES.harmonic[1] === 17 / 16 && TUNE_TABLES.harmonic[3] === 19 / 16
+  && TUNE_TABLES.harmonic[5] === 21 / 16 && TUNE_TABLES.harmonic[6] === 11 / 8
+  && TUNE_TABLES.harmonic[8] === 13 / 8 && TUNE_TABLES.harmonic[10] === 7 / 4);
+check('well (Werckmeister III): 90¢ ♭2, pure 4:3 fourth, 696¢ fifth, 390¢ third',
+  Math.abs(1200 * Math.log2(TUNE_TABLES.well[1]) - 90) < 1e-9
+  && Math.abs(TUNE_TABLES.well[5] - 2 ** (498 / 1200)) < 1e-12
+  && Math.abs(1200 * Math.log2(TUNE_TABLES.well[7]) - 696) < 1e-9
+  && Math.abs(1200 * Math.log2(TUNE_TABLES.well[4]) - 390) < 1e-9);
 check('hzToMidi inverts midiToHz', Math.abs(hzToMidi(midiToHz(57)) - 57) < 1e-9);
 
 section('parseTuneSpec');
@@ -129,7 +141,16 @@ section('parseTuneSpec');
     && parseTuneSpec('c3:sub')?.ratios === TUNE_TABLES.sub
     && parseTuneSpec('c3:MEANTONE')?.ratios === TUNE_TABLES.meantone
     && parseTuneSpec('c3:quarter-comma')?.ratios === TUNE_TABLES.meantone
-    && parseTuneSpec('c3:qc')?.ratios === TUNE_TABLES.meantone);
+    && parseTuneSpec('c3:qc')?.ratios === TUNE_TABLES.meantone
+    && parseTuneSpec('c3:pythagorean')?.ratios === TUNE_TABLES.pythagorean
+    && parseTuneSpec('c3:pyth')?.ratios === TUNE_TABLES.pythagorean
+    && parseTuneSpec('c3:3')?.ratios === TUNE_TABLES.pythagorean
+    && parseTuneSpec('c3:harmonic')?.ratios === TUNE_TABLES.harmonic
+    && parseTuneSpec('c3:harm')?.ratios === TUNE_TABLES.harmonic
+    && parseTuneSpec('c3:overtone')?.ratios === TUNE_TABLES.harmonic
+    && parseTuneSpec('c3:well')?.ratios === TUNE_TABLES.well
+    && parseTuneSpec('c3:werckmeister')?.ratios === TUNE_TABLES.well
+    && parseTuneSpec('c3:wm3')?.ratios === TUNE_TABLES.well);
   const hz = parseTuneSpec(440);
   check('bare Hz root → midi anchor 69', hz && hz.rootMidi === 69);
   const custom = parseTuneSpec('c3:1 16:15 9:8 6:5 5:4 4:3 7:5 3:2 8:5 5:3 7:4 15:8');

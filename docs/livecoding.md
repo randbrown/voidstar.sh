@@ -68,7 +68,7 @@ N-EDO to raw frequency, `.edoscale("31:c4:0 5 10 13 18 23 28")` plays modes carv
 `.cents("<0 -14 14>")` detunes already-pitched values, and `.jitune("c3")` retunes
 chord-symbol/`voicing()`/`note()` output to a tuning table (5-limit default; named tables `:7`
 septimal, `:neutral` 11:9/11:6 thirds+sevenths, `:super`/`:sub` septimal majors/minors,
-`:meantone` quarter-comma; `"off"` bypasses back to 12-TET, and the spec itself patterns).
+`:meantone` quarter-comma, `:pythagorean` pure fifths, `:harmonic` overtone slots, `:well` Werckmeister III; `"off"` bypasses back to 12-TET, and the spec itself patterns).
 All emit the `freq` control, which superdough
 honors on synths and samples alike. Reference: [`qualia-code-api.md`](qualia-code-api.md), math in
 `microtonal.js`.
