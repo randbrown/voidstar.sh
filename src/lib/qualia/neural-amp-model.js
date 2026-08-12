@@ -43,6 +43,25 @@ export function normTrimFor(loudnessDb) {
   return Math.pow(10, db / 20);
 }
 
+// ── capture gear type ───────────────────────────────────────────────────────
+// NAM metadata can declare WHAT was captured (`gear_type`: amp · pedal ·
+// pedal_amp · amp_cab · amp_pedal_cab · preamp · studio). The rig uses it to
+// default the downstream cab/eq stages when a capture is first selected — an
+// "amp_cab" capture already has the cabinet baked in, so stacking the cab IR
+// on top double-filters the tone. Advisory and optional: it's free text the
+// capture's author picked, and GuitarML/AIDA-X files don't carry it at all.
+function gearTypeOf(model) {
+  const g = model?.metadata?.gear_type;
+  return typeof g === 'string' && g.trim() ? g.trim().toLowerCase() : null;
+}
+
+/** True when the capture's declared gear type means the cabinet (and usually
+ *  the whole downstream chain) is baked into the model — "amp_cab",
+ *  "amp_pedal_cab", "studio". Null/unknown gear types return false. */
+export function isFullRigGearType(gearType) {
+  return !!gearType && (gearType.includes('cab') || gearType === 'studio');
+}
+
 function flatten(a, out) {
   if (Array.isArray(a)) { for (let i = 0; i < a.length; i++) flatten(a[i], out); }
   else out.push(a);
@@ -65,7 +84,10 @@ export function parseAmpModel(json) {
     if (arch === 'wavenet') {
       const parsed = parseWaveNet(model);
       if (parsed.ok && picked) parsed.container = picked;
-      if (parsed.ok) parsed.normTrim = normTrimFor(parsed.loudnessDb);
+      if (parsed.ok) {
+        parsed.normTrim = normTrimFor(parsed.loudnessDb);
+        parsed.gearType = gearTypeOf(model);
+      }
       return parsed;
     }
     if (arch === 'lstm') {
@@ -73,6 +95,7 @@ export function parseAmpModel(json) {
       if (parsed.ok) {
         parsed.loudnessDb = Number.isFinite(model?.metadata?.loudness) ? +model.metadata.loudness : null;
         parsed.normTrim = normTrimFor(parsed.loudnessDb);
+        parsed.gearType = gearTypeOf(model);
       }
       return parsed;
     }

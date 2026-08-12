@@ -516,12 +516,24 @@ export function installCodeApi(deps) {
       rigMute:  gsBool(() => looper.getRig().muted, (on) => looper.setRigMuted(on)),
     },
     rig: {
+      /** Signal transport (the rig header's ▶/■, same idiom as vox.start/stop):
+       *  play opens the input capture and sends the live signal to the mix;
+       *  stop silences it and releases the input device. */
+      play:    () => safe(() => looper.playSignal()),
+      stop:    () => safe(() => looper.stopSignal()),
+      playing: () => !!safe(() => looper.isSignalOn(), false),
       /** Toggle a pedalboard stage: earth/metal/comp/delay/reverb/eq/geq/peq/
        *  cab/amp/hpf, or a noise gate — gate (strip-wide), earthGate/metalGate
        *  (per-pedal; each only runs while its drive is engaged). */
       toggle: (stage) => safe(() => looper.toggleStripStage(stage)),
       /** Set one stage param, e.g. param('delay','mix',0.4). */
       param:  (stage, name, v) => safe(() => looper.setStripParam(stage, name, +v)),
+      /** Tone presets — the amp+eq+cab trio saved in the rig's tone zone.
+       *  tone('name') applies one; saveTone() snapshots the current trio;
+       *  tones() lists names. */
+      tone:     (name) => !!safe(() => looper.applyTone(name), false),
+      saveTone: (name) => safe(() => looper.saveTone(name), ''),
+      tones:    () => safe(() => looper.listTones(), []),
     },
 
     // — vox (vocoder / harmonizer) —

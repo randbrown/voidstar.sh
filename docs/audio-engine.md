@@ -262,6 +262,27 @@ literally makes the fx more excitable.
 
 Sample rate is reported but not corrected — the loader line flags a capture trained at a rate other
 than the context's, since that shifts its frequency response.
+
+### Capture gear type & the tone layer
+
+NAM metadata can declare **what** was captured (`gear_type`: amp · pedal · pedal_amp · amp_cab ·
+amp_pedal_cab · preamp · studio). The parser carries it through as `parsed.gearType`
+(`isFullRigGearType()` in `neural-amp-model.js` names the "cab is baked in" set: `amp_cab`,
+`amp_pedal_cab`, `studio`), and the rig's **tone layer** (`looper.js`) uses it the first time a
+capture is selected: a full-rig capture bypasses the cab + eq stages (stacking a cab IR on a
+baked-in cab double-filters), an amp/pedal capture engages the cab, and files with no metadata
+(GuitarML/AIDA-X, older NAM) change nothing. The applied default shows in the loader line and the
+status toast — never invisible, same rule as `norm`.
+
+That default only fires **once per capture**, because every tone tweak (amp/eq/cab on/off, params,
+`norm`, cab IR choice) is remembered **per amp** (`voidstar.qualia.looper.ampTones`, keyed by amp
+library id) — re-selecting a capture restores exactly the eq/cab/knobs last used with it, so the
+gear-type guess is just the seed and the performer's override sticks. On top of that sit **named
+tone presets** (`tone-presets.js` + the tone zone's subhead select/`+`/drawer): the whole
+amp + eq + cab trio — stage state plus amp/cab library *pointers* — saved, renamed, exported and
+imported as `.tone.json` (pointers only; the heavy bytes travel in `.qualem.zip` bundles, and a
+missing pointer leaves the current capture, the qualem policy). `qualia.rig.tone/saveTone/tones`
+expose them to the code API.
 - `scripts/check-nam-wavenet.mjs` (in `npm run check`) drives the real worklet + real `.wasm`
   against an independent reference forward pass across both schemas, gated layers, chained layer
   arrays and padded channel counts, and asserts the refusal paths.
@@ -328,6 +349,13 @@ allocates a `Float32Array` every call and is called per-frame — hoist the scra
 `<select>` wiring (persistence, synthetic "same as main mic" leading option, etc.). Clean and
 well-parameterized. The `getUserMedia` fallback ladder + `MIC_CONSTRAINTS` are currently duplicated
 in `audio.js` and `vocoder.js` — a candidate to move here (backlog).
+
+Camera **rotation + mirror persist per deviceId** (`video.js`, key
+`voidstar.qualia.camTransforms`): they're physical properties of a camera, so switching between
+e.g. the FaceTime cam and a sideways-clamped USB cam restores each one's own transform.
+`page-init` calls `setActiveCamera(deviceId)` whenever a camera goes live; the `setRotation`/
+`setMirror` setters then persist under that id. A first-seen camera keeps the current transform
+(seeded as its entry), except a front/back facing flip still derives mirror from the lens.
 
 ---
 

@@ -48,7 +48,7 @@ import {
   includedStepIndices as phaseIncludedIndices,
   stepLabel as phaseStepLabel,
 } from './phase-pool.js';
-import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror } from './video.js';
+import { bindVideoElement, getRotation, setRotation, cycleRotation, getMirror, setMirror, toggleMirror, setActiveCamera } from './video.js';
 import nullQuale       from './fx/null.js';
 import chladni         from './fx/chladni.js';
 import singularityLens from './fx/singularity-lens.js';
@@ -1403,7 +1403,9 @@ export function initQualiaPage() {
     getCurrentId: () => null,
     onChoose: async (id) => {
       pose.stopCamera();
-      return await pose.startCamera({ deviceId: id, video: videoEl });
+      const chosen = await pose.startCamera({ deviceId: id, video: videoEl });
+      activateCameraTransform(chosen);
+      return chosen;
     },
   });
 
@@ -1463,6 +1465,20 @@ export function initQualiaPage() {
     if (getMirror() !== front) setMirror(front);
     btnCamMirror.classList.toggle('active', getMirror());
   }
+  // A camera just became live: restore its remembered rotation/mirror (per
+  // deviceId — a sideways-clamped USB cam stays sideways, the FaceTime cam
+  // keeps its selfie mirror) and sync the buttons + split box to whatever
+  // transform is now in effect. A camera seen for the first time keeps the
+  // current transform, except that a facing flip still derives mirror from
+  // the lens (front → mirrored, rear → not).
+  function activateCameraTransform(deviceId, { deriveMirrorIfNew = false } = {}) {
+    const restored = setActiveCamera(deviceId);
+    if (!restored && deriveMirrorIfNew) applyMirrorForFacing();
+    btnCamRotate.textContent = `rot ${getRotation()}°`;
+    btnCamRotate.classList.toggle('active', getRotation() !== 0);
+    btnCamMirror.classList.toggle('active', getMirror());
+    syncSplitCameraBox();
+  }
   // Flip front/back. Drops the persisted deviceId on purpose — the OS
   // picks whichever lens matches the requested side.
   async function flipCameraFacing() {
@@ -1472,8 +1488,9 @@ export function initQualiaPage() {
       if (id) storeDeviceId('cam', id);
       camPicker.populate(id);
       refreshCameraCard();
-      // Auto-mirror to match the lens we just switched to (front → on, rear → off).
-      applyMirrorForFacing();
+      // Restore this lens's remembered transform; a first-seen lens derives
+      // mirror from facing (front → on, rear → off).
+      activateCameraTransform(id, { deriveMirrorIfNew: true });
       // Reapply persisted zoom to the new track (it has its own capabilities).
       // refreshCameraCard already clamps + re-applies; nothing else needed.
       settings.save();
@@ -1504,6 +1521,7 @@ export function initQualiaPage() {
       try {
         const id = await pose.startCamera({ deviceId: getStoredDeviceId('cam'), video: videoEl });
         if (id) storeDeviceId('cam', id);
+        activateCameraTransform(id);
         posesSelect.style.display = '';
         camPicker.populate(id);
       } catch (err) {
@@ -1736,21 +1754,27 @@ export function initQualiaPage() {
   // ── Video-preview touch gestures ─────────────────────────────────────────
   // The preview rectangle is a busy little control surface. To keep the
   // chrome out of the way, we layer gestures onto the same element:
-  //   - tap          → cycle cam size
-  //   - double-tap   → flip front/back camera
-  //   - long-press   → open the camera picker (cam-select)
+  //   - single tap   → NOTHING, deliberately. In size-full the preview IS
+  //                    the background, so stray clicks used to cycle the
+  //                    camera away mid-set. Every action is an explicit
+  //                    gesture now; the topbar cam button + C key remain.
+  //   - double-tap   → cycle cam size (the video-player fullscreen idiom —
+  //                    hard to hit by accident, and rapid taps keep firing
+  //                    so walking all four sizes stays quick)
+  //   - long-press   → flip front/back / next camera (per-device transforms
+  //                    make this safe to hit mid-set)
   //   - drag         → reposition (persisted)
-  // Ordering matters: we don't fire the single-tap action until the
-  // double-tap window closes, so a quick second tap upgrades cleanly.
+  // The camera picker lost its long-press shortcut in the reshuffle — it
+  // stays in the topbar camera popover, and repeated long-presses walk the
+  // devices anyway.
   // PointerEvents handle mouse + touch + pen uniformly, but only on
   // browsers ≥ 2018. On any environment without them the user still has
   // every action via the topbar buttons and the cam-card's flip button.
   const TAP_TIMEOUT_MS  = 280;   // window for second tap to upgrade to dbl-tap
   const TAP_MAX_MOVE_PX = 10;    // jitter floor before we call it a drag
-  const LONG_PRESS_MS   = 550;   // press-and-hold opens cam picker
+  const LONG_PRESS_MS   = 550;   // press-and-hold flips front/back camera
   const LONG_PRESS_MOVE = 8;     // movement before the long-press is cancelled
   let lastTapTime = 0;
-  let pendingTapT = null;
   let pressStartT = 0;
   let pressStartX = 0, pressStartY = 0;
   let didDrag = false;
@@ -1821,7 +1845,7 @@ export function initQualiaPage() {
     // pinch on iOS Safari / non-zoomable USB cams).
     if (videoPointers.size === 2) {
       if (longPressT)  { clearTimeout(longPressT);  longPressT  = null; }
-      if (pendingTapT) { clearTimeout(pendingTapT); pendingTapT = null; }
+      lastTapTime = 0;            // a pinch shouldn't complete a double-tap
       videoEl.classList.remove('dragging');
       didDrag = false;
       pressStartT = 0;            // disarm the single-finger tap classifier
@@ -1845,23 +1869,16 @@ export function initQualiaPage() {
     didDrag = false;
     didLongPress = false;
     dragStartOffset = { dx: videoOffset.dx, dy: videoOffset.dy };
-    // In size-full the pip covers the whole viewport. Tapping should still
-    // cycle out of full (the user wants to escape) but drag + long-press
-    // are disabled — repositioning a fullscreen element is meaningless and
-    // a long-press would block the natural tap-to-escape gesture.
-    if (videoEl.classList.contains('size-full')) return;
+    // Long-press flips front/back (or steps to the next camera). Armed in
+    // size-full too — with single-tap inert there's no tap-to-escape for it
+    // to block, and holding the fullscreen feed to switch cameras is the
+    // natural stage move (drag stays meaningless in full; applyVideoOffset
+    // no-ops there).
     longPressT = setTimeout(() => {
-      // Long-press: open cam picker if multiple cameras are available;
-      // otherwise fall through to a haptic "nothing here" cue.
       if (didDrag) return;
       didLongPress = true;
       hapticPulse(20);
-      if (camSelect && camSelect.style.display !== 'none') {
-        try { camSelect.focus(); camSelect.click?.(); } catch {}
-        // showPicker() is the only programmatic way to drop a native <select>
-        // popup on most browsers. Optional chain — Safari/iOS lacks it.
-        camSelect.showPicker?.();
-      }
+      flipCameraFacing();
     }, LONG_PRESS_MS);
   }
 
@@ -1888,6 +1905,7 @@ export function initQualiaPage() {
     const dy = ev.clientY - pressStartY;
     if (!didDrag && Math.hypot(dx, dy) > TAP_MAX_MOVE_PX) {
       didDrag = true;
+      lastTapTime = 0;   // a drag shouldn't complete a double-tap
       videoEl.classList.add('dragging');
       if (longPressT) { clearTimeout(longPressT); longPressT = null; }
     }
@@ -1925,20 +1943,16 @@ export function initQualiaPage() {
     }
     if (didLongPress) return;
     if (elapsed > LONG_PRESS_MS) return;
-    // Tap path. Defer the size-cycle in case the user is mid-double-tap.
+    // Tap path. A single tap is inert (see the gesture map above); a second
+    // tap inside the window cycles the size, and every FURTHER tap in
+    // cadence fires too, so tap-tap-tap-tap walks small → large → full →
+    // hidden without pausing between pairs.
     const now = performance.now();
     const isDoubleTap = (now - lastTapTime) < TAP_TIMEOUT_MS;
     lastTapTime = now;
     if (isDoubleTap) {
-      if (pendingTapT) { clearTimeout(pendingTapT); pendingTapT = null; }
       hapticPulse(15);
-      flipCameraFacing();
-    } else {
-      pendingTapT = setTimeout(() => {
-        pendingTapT = null;
-        hapticPulse(8);
-        btnCamera.click();
-      }, TAP_TIMEOUT_MS);
+      btnCamera.click();
     }
   }
 

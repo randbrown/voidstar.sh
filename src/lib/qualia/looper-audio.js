@@ -101,6 +101,11 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // raw input stays monitorable even when the signal is muted out of the mix.
   let sigGain = null, sigAnalyser = null;
   let _sigLevel = 0, _sigMuted = false, _rigAdopted = false;
+  // Signal transport (the rig header's ▶/■, mirroring the vox panel): the live
+  // instrument only reaches the mix after an explicit play, and stop both
+  // silences it and releases the capture. Deliberately NOT persisted — like
+  // vox, a fresh page starts stopped until the performer presses ▶.
+  let _sigOn = false;
 
   // ── rig master output ──
   // Both the signal path (sigGain) and the loop bus (loopMaster) route through
@@ -792,8 +797,8 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
 
   // ── rig signal level / mute (channel-strip volume + mute) ──────────────────
-  function effSignal() { return _sigMuted ? 0 : _sigLevel; }
-  function wantCapture() { return _bufferOn || recording || _sigLevel > 0; }
+  function effSignal() { return (_sigMuted || !_sigOn) ? 0 : _sigLevel; }
+  function wantCapture() { return _bufferOn || recording || (_sigOn && _sigLevel > 0); }
   // Open capture if anything needs it; close it when nothing does.
   async function ensureCaptureOpen(deviceId) {
     await ensureContext();
@@ -810,7 +815,7 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   }
   async function setSignalLevel(v, deviceId) {
     _sigLevel = clamp01(v);
-    if (_sigLevel > 0 && !srcNode) { try { await ensureCaptureOpen(deviceId); } catch (e) { console.warn('[qualia] rig signal capture failed:', e); } }
+    if (_sigOn && _sigLevel > 0 && !srcNode) { try { await ensureCaptureOpen(deviceId); } catch (e) { console.warn('[qualia] rig signal capture failed:', e); } }
     else nudgeResume();   // capture already built — the fader move is our activation
     if (sigGain) ramp(sigGain.gain, effSignal());
     maybeCloseCapture();
@@ -820,7 +825,32 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     nudgeResume();
     if (sigGain) ramp(sigGain.gain, effSignal());
   }
-  function getSignal() { return { level: _sigLevel, muted: _sigMuted, live: isLive() }; }
+  // Signal transport. Play opens the capture (must be called from a user
+  // gesture the first time — getUserMedia) and un-gates the monitor/mix path;
+  // stop gates it back to silence and releases the input device unless the
+  // lookback buffer or a running take still needs the capture. Mute stays the
+  // cheap mid-set gate (capture kept hot, zero-cost resume); stop is the
+  // vox-style "really off" — no OS mic indicator, nothing in the mix.
+  async function playSignal(deviceId) {
+    _sigOn = true;
+    if (!srcNode) {
+      try { await ensureCaptureOpen(deviceId); }
+      catch (e) { _sigOn = false; notifyLive(); throw e; }
+    } else {
+      nudgeResume();
+    }
+    if (sigGain) ramp(sigGain.gain, effSignal());
+    notifyLive();
+  }
+  function stopSignal() {
+    _sigOn = false;
+    if (sigGain) ramp(sigGain.gain, effSignal());
+    // Let the mute ramp land before the graph teardown so stop doesn't click.
+    setTimeout(() => maybeCloseCapture(), 80);
+    notifyLive();
+  }
+  function isSignalOn() { return _sigOn; }
+  function getSignal() { return { level: _sigLevel, muted: _sigMuted, on: _sigOn, live: isLive() }; }
   function getChannels() { return _channels; }
   // Switch the input channel mode (mono / stereo / left / right). Reopens the
   // capture (cheap; loops keep playing) so the input routing rebuilds — unless
@@ -1569,6 +1599,9 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     setRigLimiter, getRigLimiter, primeRigLimiter, getRigReductionDb,
     getLatencyInfo,
     setSignalLevel, setSignalMuted, getSignal, primeSignal,
+    // Signal transport (rig header ▶/■): play opens capture + un-gates the
+    // live path; stop silences it and releases the device. Session-local.
+    playSignal, stopSignal, isSignalOn,
     // Fires whenever the rig's live-ness changes — capture open/teardown, the
     // context resuming after the first user gesture, or the input device
     // dropping out. The panel/topbar subscribe so they stop reporting a rig

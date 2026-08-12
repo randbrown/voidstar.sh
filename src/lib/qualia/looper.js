@@ -27,7 +27,9 @@
 
 import { createLooperAudio } from './looper-audio.js';
 import { STRIP_DEFAULTS, stageLatencySeconds, PEQ_BAND_COUNT, PEQ_TYPES, defaultPeqBands, sanitizePeqBands } from './rig-strip.js';
-import { parseAmpModel } from './neural-amp-model.js';
+import { parseAmpModel, isFullRigGearType } from './neural-amp-model.js';
+import { loadTones, getToneById, getToneByName, addTone, updateTone, removeTone,
+         downloadTone, importToneFile } from './tone-presets.js';
 import { createLooperRenderer } from './looper-render.js';
 import * as loopStore from './looper-store.js';
 import { wirePicker, getStoredDeviceId } from './devices.js';
@@ -96,6 +98,9 @@ const AMP_MODEL_ID   = 'ampModel';         // legacy single-model misc key (migr
 const AMPLIB_KEY     = `${NS}.ampLib`;      // saved amp model library index: [{ id, name }]
 const AMPCUR_KEY     = `${NS}.ampCur`;      // misc id of the currently-loaded amp model
 const LIB_MAX        = 24;                  // cap on saved files per library
+const AMPTONE_KEY    = `${NS}.ampTones`;    // per-amp remembered tone slice: { ampId: {strip:{amp,eq,cab}, cabFile} }
+// The tone cluster — the stages a "tone" couples (see the tone layer below).
+const TONE_STAGES    = ['amp', 'eq', 'cab'];
 const INPUT_DEFAULT  = 0.7;                // double-click-reset target for the input fader
 
 // Channel strip UI schema — stages + params, listed in audio-chain order (the
@@ -365,6 +370,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
   const btnLoopCollapse = document.getElementById('btn-rig-loop-collapse');
   const tunerEl     = document.getElementById('rig-tuner');
   const temperEl    = document.getElementById('rig-temper');
+  const btnRigPlay  = document.getElementById('btn-rig-play');
+  const btnRigStop  = document.getElementById('btn-rig-stop');
   const btnRigMute  = document.getElementById('btn-rig-master-mute');
   const rigMasterGain = document.getElementById('rig-master-gain');
   const rigSignalEl = document.getElementById('rig-signal');
@@ -1079,6 +1086,34 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setSignalMuted(model.signalMuted);
     refreshInputMuteBtn();
   }
+  // Signal transport (header ▶/■, the vox play/stop idiom): the live signal
+  // only reaches the monitor + mix after an explicit ▶ (which also opens the
+  // input capture — a user gesture, so getUserMedia is allowed), and ■
+  // silences it and releases the input device. Mute stays the cheap mid-set
+  // gate; the transport is the "really off" switch. Session-local on purpose:
+  // like vox, a fresh page load starts stopped until the performer plays.
+  function playSignal() {
+    // ▶ with the fader parked at 0 would open a silent capture — apply the
+    // same one-click fix as the signal chip so play means audible.
+    if (!(model.signalLevel > 0)) setInputVol(INPUT_DEFAULT);
+    looperAudio.playSignal(model.deviceId)
+      .catch((e) => console.warn('[qualia] rig signal play failed:', e))
+      .finally(() => { refreshRigTransport(); refreshLooperBtn(); });
+    refreshRigTransport();
+  }
+  function stopSignal() {
+    looperAudio.stopSignal();
+    refreshRigTransport();
+    refreshLooperBtn();
+  }
+  function refreshRigTransport() {
+    if (!btnRigPlay) return;
+    const on = looperAudio.isSignalOn();
+    btnRigPlay.classList.toggle('playing', on);
+    btnRigPlay.title = on
+      ? 'Live signal is on'
+      : 'Start the live signal — open the input capture and send it to the monitor + mix';
+  }
   function refreshChannelsBtn() {
     if (!btnChannels) return;
     btnChannels.textContent = CHANNEL_LABELS[model.channels] || model.channels;
@@ -1192,7 +1227,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
     if (cfg.ampFile && typeof cfg.ampFile === 'object') {
       const id = cfg.ampFile.id || '';
-      if (id && id !== (lsGet(AMPCUR_KEY, '') || '')) selectAmp(id).catch?.(() => {});
+      // keepTone: the qualem just installed its own strip config — the amp's
+      // per-amp tone memory must not overwrite it. The qualem's state becomes
+      // the amp's remembered tone instead.
+      if (id && id !== (lsGet(AMPCUR_KEY, '') || '')) selectAmp(id, { keepTone: true }).then(() => rememberAmpTone()).catch?.(() => {});
       else if (!id && (lsGet(AMPCUR_KEY, '') || '')) selectAmp('');
     }
     // Repaint the props row so the panel mirrors the applied settings
@@ -1750,6 +1788,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     syncStripCtl(stage, param, v);   // full-mode slider (no-ops if strip UI unbuilt)
     syncMiniKnob(stage, param, v);   // mini knob — independent of the full strip UI
     persistStrip();
+    if (TONE_STAGES.includes(stage)) rememberAmpTone();
   }
   // Mirror a model value back onto its on-screen slider + readout. Called by
   // stripSet so knob/MIDI nudges (which go straight to the model) visibly move the
@@ -1775,6 +1814,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     refreshStripStages();
     syncMiniLed(stage, !!on);
     persistStrip();
+    if (TONE_STAGES.includes(stage)) rememberAmpTone();
     // A toggle whose stage box isn't on screen (strip hidden, zone collapsed —
     // e.g. driven from a MIDI pad or hotkey) would otherwise change the sound
     // with zero visual feedback. Mini mode is covered by its pedal LEDs.
@@ -1940,6 +1980,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       if (stage.group === 'util') stripUtilBody?.append(buildStripStage(stage, { collapsible: true }));
       else zoneBodies[stage.cluster]?.append(buildStripStage(stage, { collapsible: false }));
     }
+    buildToneUI();   // tone-zone subhead preset controls (built once; survives rebuilds)
     buildHeadToggles();
     refreshStripStages();
   }
@@ -2411,6 +2452,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setStripParam('amp', 'norm', !!on);
     persistStrip();
     syncAmpNorm();
+    rememberAmpTone();
   }
   function syncAmpNorm() {
     if (!ampNormBtn) return;
@@ -2465,6 +2507,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       if (loopStore.isAvailable()) loopStore.putMisc({ id, name: file.name, bytes }).catch(() => {});
       libAdd(CABLIB_KEY, id, file.name); renderCabLib();
       setLoaderMsg('cab', file.name, false);
+      rememberAmpTone();   // the cab choice rides the selected amp's tone
     } catch (e) { setLoaderMsg('cab', `load failed — ${e?.message || e}`, true); }
   }
   // Switch to a saved IR (or unload when '' is chosen). Library entry stays.
@@ -2473,6 +2516,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       looperAudio.clearCabIR();
       model.cabName = ''; lsSet(CABNAME_KEY, ''); lsSet(CABCUR_KEY, ''); renderCabLib();
       setLoaderMsg('cab', '', false);
+      rememberAmpTone();   // the cab choice rides the selected amp's tone
       return;
     }
     if (!loopStore.isAvailable()) return;
@@ -2483,6 +2527,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       if (!ok) { setLoaderMsg('cab', 'decode failed', true); return; }
       model.cabName = rec.name || ''; lsSet(CABNAME_KEY, model.cabName); lsSet(CABCUR_KEY, id); renderCabLib();
       setLoaderMsg('cab', model.cabName, false);
+      rememberAmpTone();   // the cab choice rides the selected amp's tone
     } catch (e) { setLoaderMsg('cab', `load failed — ${e?.message || e}`, true); }
   }
   function removeCab(id) {
@@ -2506,6 +2551,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
     } else {
       bits.push(`${parsed.hidden}-cell LSTM`);
       if (parsed.experimental) bits.push('experimental');
+    }
+    // What was captured, when the file declares it — it's what drives the
+    // first-select cab/eq defaulting, so it should never be invisible.
+    if (parsed.gearType) {
+      bits.push(isFullRigGearType(parsed.gearType) ? `${parsed.gearType} (full rig)` : parsed.gearType);
     }
     // Captures are trained at wildly different output levels. Say what this one
     // is, and — when norm is on — exactly how much gain it's getting, so the
@@ -2542,9 +2592,12 @@ export function createLooper({ audio, syncStrudel } = {}) {
       libAdd(AMPLIB_KEY, id, file.name); renderAmpLib();
       ampLoadedModel = parsed; ampLoadedName = file.name;
       setLoaderMsg('amp', ampSummary(file.name, parsed), false);
+      applyAmpTone(id, parsed);
     } catch (e) { setLoaderMsg('amp', `load failed — ${e?.message || e}`, true); }
   }
-  async function selectAmp(id) {
+  // keepTone: skip the per-amp tone restore/defaulting — used by the tone
+  // preset apply, which is about to install its own amp/eq/cab state.
+  async function selectAmp(id, { keepTone = false } = {}) {
     if (!id) {
       looperAudio.clearAmp();
       model.ampName = ''; lsSet(AMPNAME_KEY, ''); lsSet(AMPCUR_KEY, ''); renderAmpLib();
@@ -2560,6 +2613,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       model.ampName = rec.name || ''; lsSet(AMPNAME_KEY, model.ampName); lsSet(AMPCUR_KEY, id); renderAmpLib();
       ampLoadedModel = rec.model; ampLoadedName = model.ampName;
       setLoaderMsg('amp', ampSummary(model.ampName, rec.model), false);
+      if (!keepTone) applyAmpTone(id, rec.model);
     } catch (e) { setLoaderMsg('amp', `load failed — ${e?.message || e}`, true); }
   }
   function removeAmp(id) {
@@ -2567,6 +2621,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const wasCur = (lsGet(AMPCUR_KEY, '') || '') === id;
     libRemove(AMPLIB_KEY, id);
     if (loopStore.isAvailable()) loopStore.deleteMisc(id).catch(() => {});
+    // Drop the amp's remembered tone with it.
+    const tones = lsGetObj(AMPTONE_KEY);
+    if (tones[id]) { delete tones[id]; try { localStorage.setItem(AMPTONE_KEY, JSON.stringify(tones)); } catch {} }
     if (wasCur) {
       looperAudio.clearAmp(); model.ampName = ''; lsSet(AMPNAME_KEY, ''); lsSet(AMPCUR_KEY, '');
       ampLoadedModel = null; ampLoadedName = '';
@@ -2626,6 +2683,274 @@ export function createLooper({ audio, syncStrudel } = {}) {
     rebuildStrip();
     refreshMini();
     setStatus('strip reset');
+  }
+
+  // ── The tone layer — amp + eq + cab as one coupled "tone" ─────────────────
+  // The three tone-cluster stages travel together in practice: a full-rig
+  // capture wants the cab (and usually the eq) bypassed because the chain is
+  // baked into the model, an amp-only capture wants the cab IR on. Two
+  // mechanisms carry that coupling:
+  //   1. Per-amp memory (AMPTONE_KEY): every tone tweak is remembered under
+  //      the currently-selected amp, so re-selecting a capture brings back
+  //      exactly the eq/cab/knobs you last used with it. A capture selected
+  //      for the FIRST time gets a default from its NAM `gear_type` metadata
+  //      (full-rig → cab + eq bypassed; amp/pedal → cab engaged; files with
+  //      no metadata change nothing) and then seeds its memory.
+  //   2. Named tone presets (tone-presets.js): explicit save/recall of the
+  //      whole trio — stage state + amp/cab library pointers — with rename,
+  //      export and import in the tone zone's drawer.
+  function lsGetObj(k) {
+    try {
+      const v = localStorage.getItem(k);
+      const o = v ? JSON.parse(v) : {};
+      return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+    } catch { return {}; }
+  }
+  function toneSnapshot() {
+    const strip = {};
+    for (const s of TONE_STAGES) {
+      const { collapsed, ...rest } = model.strip[s] || {};
+      strip[s] = { ...rest };
+    }
+    return {
+      strip,
+      ampFile: { id: lsGet(AMPCUR_KEY, '') || '', name: model.ampName || '' },
+      cabFile: { id: lsGet(CABCUR_KEY, '') || '', name: model.cabName || '' },
+    };
+  }
+  function toneStagesEqual(t) {
+    for (const s of TONE_STAGES) {
+      const src = t?.strip?.[s];
+      if (!src) continue;
+      for (const [k, v] of Object.entries(src)) {
+        if (k === 'collapsed') continue;
+        if (model.strip[s]?.[k] !== v) return false;
+      }
+    }
+    return true;
+  }
+  // Apply a tone slice's STAGE state (on/off + params; file pointers are the
+  // caller's job). Mirrors resetStrip's bulk-apply path; skips the rebuild
+  // when nothing differs so a no-op select doesn't thrash the panel DOM.
+  function applyToneStages(t) {
+    if (!t || !t.strip || toneStagesEqual(t)) return;
+    for (const s of TONE_STAGES) {
+      const src = t.strip[s];
+      if (!src || typeof src !== 'object') continue;
+      for (const [k, v] of Object.entries(src)) {
+        if (k === 'collapsed') continue;
+        if (typeof v === 'number' || typeof v === 'boolean') model.strip[s][k] = v;
+      }
+    }
+    looperAudio.setStripConfig(model.strip);
+    lsSet(STRIP_KEY, JSON.stringify(model.strip));
+    rebuildStrip();
+    refreshMini();
+    syncAmpNorm();
+  }
+  // Re-select a cab pointer from a tone slice. A pointer missing from the
+  // library leaves the current cab (the qualem policy for absent assets).
+  function reselectCabFile(cf) {
+    if (!cf || typeof cf !== 'object') return;
+    const want = cf.id || '';
+    const cur = lsGet(CABCUR_KEY, '') || '';
+    if (want === cur) return;
+    if (!want) { selectCab(''); return; }
+    if (lsGetJSON(CABLIB_KEY).some((e) => e.id === want)) selectCab(want);
+  }
+  // Remember the current tone under the selected amp. Debounced like
+  // persistStrip so knob drags don't rewrite the map per tick; the amp id is
+  // captured at schedule time so a quick amp switch can't file the old tone
+  // under the new amp.
+  let _toneMemT = 0;
+  function rememberAmpTone() {
+    const cur = lsGet(AMPCUR_KEY, '') || '';
+    if (!cur) return;
+    clearTimeout(_toneMemT);
+    _toneMemT = setTimeout(() => {
+      const map = lsGetObj(AMPTONE_KEY);
+      const t = toneSnapshot();
+      delete t.ampFile;   // keyed by amp id — the pointer is the key
+      map[cur] = t;
+      try { localStorage.setItem(AMPTONE_KEY, JSON.stringify(map)); } catch {}
+    }, 200);
+  }
+  // An amp was just selected: restore its remembered tone, or — first
+  // selection — default the downstream stages from the capture's declared
+  // gear type and seed the memory.
+  function applyAmpTone(id, parsed) {
+    const t = lsGetObj(AMPTONE_KEY)[id];
+    if (t) {
+      applyToneStages(t);
+      reselectCabFile(t.cabFile);
+      return;
+    }
+    const gt = parsed?.gearType || null;
+    if (isFullRigGearType(gt)) {
+      if (model.strip.cab.on) stripToggle('cab', false);
+      if (model.strip.eq.on)  stripToggle('eq', false);
+      setStatus(`full-rig capture (${gt}) — cab + eq bypassed`);
+    } else if (gt) {
+      if (!model.strip.cab.on) stripToggle('cab', true);
+      setStatus(`amp capture (${gt}) — cab engaged`);
+    }
+    rememberAmpTone();
+  }
+
+  // ── Named tone presets — select + save in the tone subhead, drawer list ───
+  let toneSelEl = null, toneDrawerEl = null, toneDrawerBtn = null, toneImportInput = null;
+  async function applyTonePreset(entry) {
+    if (!entry) return;
+    // Amp first — with keepTone so its per-amp memory doesn't fight the
+    // preset — then stages, then the cab pointer. The preset then becomes
+    // the amp's remembered tone, so plain amp switches come back to it.
+    const ampId = entry.ampFile?.id || '';
+    const curAmp = lsGet(AMPCUR_KEY, '') || '';
+    if (ampId && ampId !== curAmp && lsGetJSON(AMPLIB_KEY).some((e) => e.id === ampId)) {
+      await selectAmp(ampId, { keepTone: true });
+    }
+    applyToneStages(entry);
+    reselectCabFile(entry.cabFile);
+    rememberAmpTone();
+    setStatus(`tone: ${entry.name}`);
+  }
+  function saveTonePreset(name) {
+    const base = name
+      || (model.ampName ? model.ampName.replace(/\.(nam|json|aidax)$/i, '') : 'tone');
+    const entry = addTone(base, toneSnapshot());
+    renderToneList();
+    setStatus(`tone saved: ${entry.name}`);
+    // Reveal the drawer so the fresh entry (and its rename field) is in view.
+    if (toneDrawerEl && toneDrawerEl.style.display === 'none') toggleToneDrawer(true);
+    return entry;
+  }
+  function toggleToneDrawer(on) {
+    if (!toneDrawerEl || !toneDrawerBtn) return;
+    const show = on != null ? !!on : toneDrawerEl.style.display === 'none';
+    toneDrawerEl.style.display = show ? '' : 'none';
+    toneDrawerBtn.textContent = show ? '▾' : '▸';
+    if (show) renderToneList();
+  }
+  function toneSummaryLine(entry) {
+    const bits = [];
+    bits.push(entry.ampFile?.name ? entry.ampFile.name : 'no amp');
+    bits.push(`eq ${entry.strip?.eq?.on ? 'on' : 'off'}`);
+    bits.push(entry.strip?.cab?.on ? `cab ${entry.cabFile?.name || 'on'}` : 'cab off');
+    return bits.join(' · ');
+  }
+  function renderToneSelect() {
+    if (!toneSelEl) return;
+    const list = loadTones();
+    toneSelEl.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = ''; none.textContent = list.length ? 'tone…' : 'no tones';
+    toneSelEl.append(none);
+    for (const e of list) {
+      const o = document.createElement('option');
+      o.value = e.id; o.textContent = e.name;
+      toneSelEl.append(o);
+    }
+    toneSelEl.value = '';
+  }
+  function renderToneList() {
+    renderToneSelect();
+    if (!toneDrawerEl) return;
+    toneDrawerEl.innerHTML = '';
+    const list = loadTones();
+    const mkBtn = (label, title, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'ctrl-btn'; b.textContent = label; b.title = title;
+      b.addEventListener('click', fn);
+      return b;
+    };
+    if (!list.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sp-pat-empty';
+      empty.textContent = 'no tone presets — “+” saves the current amp / eq / cab as one';
+      toneDrawerEl.append(empty);
+    }
+    for (const entry of list) {
+      const row = document.createElement('div');
+      row.className = 'sp-pat-row';
+      const meta = document.createElement('div');
+      meta.className = 'sp-pat-meta';
+      const nameIn = document.createElement('input');
+      nameIn.className = 'sp-pat-name';
+      nameIn.value = entry.name;
+      nameIn.title = 'Rename this tone preset';
+      nameIn.addEventListener('change', () => {
+        const name = nameIn.value.trim();
+        if (name && name !== entry.name) { updateTone(entry.id, { name }); renderToneList(); }
+        else nameIn.value = entry.name;
+      });
+      const by = document.createElement('div');
+      by.className = 'sp-pat-by';
+      by.textContent = toneSummaryLine(entry);
+      meta.append(nameIn, by);
+      const actions = document.createElement('div');
+      actions.className = 'sp-pat-actions';
+      actions.append(
+        mkBtn('load', 'Apply this tone (amp + eq + cab)', () => { applyTonePreset(entry); }),
+        mkBtn('⤓', 'Export this tone as a .tone.json file (settings + amp/IR pointers — the audio files themselves travel in a .qualem.zip)', () => downloadTone(entry)),
+        mkBtn('✕', 'Delete this tone preset', () => {
+          if (!confirm(`Delete tone "${entry.name}"?`)) return;
+          removeTone(entry.id); renderToneList();
+        }),
+      );
+      row.append(meta, actions);
+      toneDrawerEl.append(row);
+    }
+    const foot = document.createElement('div');
+    foot.className = 'sp-pat-toolbar';
+    // The hidden file input rides the footer so the innerHTML wipe above
+    // can't orphan it between renders.
+    if (toneImportInput) foot.append(toneImportInput);
+    foot.append(mkBtn('⤒ import', 'Import .tone.json preset files', () => toneImportInput?.click()));
+    toneDrawerEl.append(foot);
+  }
+  // Build the tone-zone subhead controls + drawer once — the subhead survives
+  // rebuildStrip() (only zone BODIES are wiped), so no re-acquisition dance.
+  function buildToneUI() {
+    const head = zoneSections.tone?.querySelector(':scope > .rig-subhead');
+    if (!head || toneSelEl) return;
+    toneSelEl = document.createElement('select');
+    toneSelEl.id = 'rig-tone-preset';
+    toneSelEl.className = 'rig-lib-select rig-tone-select';
+    toneSelEl.title = 'Tone presets — amp + eq + cab recalled as one; manage them under ▸';
+    toneSelEl.addEventListener('change', () => {
+      const entry = getToneById(toneSelEl.value);
+      // Reset to the placeholder after applying (the vox-preset idiom) so the
+      // same tone can be re-applied after manual tweaks.
+      toneSelEl.value = '';
+      if (entry) applyTonePreset(entry);
+    });
+    const save = document.createElement('button');
+    save.type = 'button'; save.id = 'rig-tone-save'; save.className = 'ctrl-btn'; save.textContent = '+';
+    save.title = 'Save the current amp / eq / cab (on/off + settings + which capture/IR) as a tone preset';
+    save.addEventListener('click', () => { saveTonePreset(); });
+    toneDrawerBtn = document.createElement('button');
+    toneDrawerBtn.type = 'button'; toneDrawerBtn.id = 'rig-tone-manage';
+    toneDrawerBtn.className = 'ctrl-btn rig-collapse'; toneDrawerBtn.textContent = '▸';
+    toneDrawerBtn.title = 'Tone presets — rename, export, import, delete';
+    toneDrawerBtn.addEventListener('click', () => toggleToneDrawer());
+    head.append(toneSelEl, save, toneDrawerBtn);
+    toneImportInput = document.createElement('input');
+    toneImportInput.type = 'file'; toneImportInput.accept = '.json,application/json';
+    toneImportInput.multiple = true; toneImportInput.style.display = 'none';
+    toneImportInput.addEventListener('change', async () => {
+      const files = [...(toneImportInput.files || [])];
+      toneImportInput.value = '';
+      for (const f of files) {
+        try { await importToneFile(f); }
+        catch (e) { setStatus(`tone import failed: ${e?.message || e}`); }
+      }
+      if (files.length) { renderToneList(); setStatus('tone presets imported'); }
+    });
+    toneDrawerEl = document.createElement('div');
+    toneDrawerEl.id = 'rig-tone-presets';
+    toneDrawerEl.style.display = 'none';
+    zoneSections.tone.insertBefore(toneDrawerEl, zoneBodies.tone);
+    renderToneSelect();
   }
 
   // ── Mini mode — pedalboard toolbar ──────────────────────────────────────────
@@ -4228,6 +4553,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // while signal flows. Loops/freeze aren't considered — this is about the
   // live instrument path.
   function signalBlocker() {
+    if (!looperAudio.isSignalOn()) return { label: 'stopped',
+      title: 'The signal transport is stopped — click to press ▶ and start the live signal',
+      fix: () => playSignal() };
     if (!(model.signalLevel > 0)) return { label: 'sig 0',
       title: `Signal level is 0 (input capture closed) — click to raise it to ${INPUT_DEFAULT}`,
       fix: () => setInputVol(INPUT_DEFAULT) };
@@ -4309,7 +4637,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!btnToggle) return;
     btnToggle.classList.remove('active', 'active-audio');
     const sig = looperAudio.getSignal();
-    const sigOut = sig.live && !sig.muted && sig.level > 0;
+    const sigOut = sig.on && sig.live && !sig.muted && sig.level > 0;
     const loopsOut = looperAudio.anyPlaying() && !_muted;
     const outputting = !model.rigMuted && model.rigLevel > 0 && (sigOut || loopsOut);
     const open = panel?.style.display !== 'none';
@@ -4473,9 +4801,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (inputVolSl) inputVolSl.value = String(model.signalLevel);
     refreshInputMuteBtn();
     // open() is a user gesture, so a getUserMedia prompt is allowed here.
-    // Resume the rig signal monitor if it was left up, and the lookback buffer
-    // if it was left on — so a remembered rig comes back without a manual nudge.
-    if (model.signalLevel > 0 && !looperAudio.getSignal().live) {
+    // Re-open the capture only if the transport was played this session and
+    // the capture died underneath it (device lost); a fresh page starts
+    // stopped — the header ▶ is the explicit way in. The lookback buffer
+    // still resumes on its own (it's pre-fader and silent).
+    if (looperAudio.isSignalOn() && !looperAudio.getSignal().live) {
       looperAudio.ensureCaptureOpen(model.deviceId).then(refreshLooperBtn).catch(() => {});
     }
     if (model.bufferOn && !looperAudio.isBuffering()) setBuffer(true);
@@ -4565,6 +4895,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     elGain.value = String(model.master);
     elGain.addEventListener('input', () => setMaster(elGain.value));
   }
+  if (btnRigPlay) { btnRigPlay.addEventListener('click', () => { playSignal(); }); refreshRigTransport(); }
+  if (btnRigStop) btnRigStop.addEventListener('click', () => { stopSignal(); });
   if (btnRigMute) { btnRigMute.addEventListener('click', () => setRigMuted(!model.rigMuted)); refreshRigMuteBtn(); }
   if (rigMasterGain) {
     rigMasterGain.value = String(model.rigLevel);
@@ -4671,6 +5003,18 @@ export function createLooper({ audio, syncStrudel } = {}) {
     },
     isRigPaused: () => looperAudio.isRigPaused(),
     play: playAll, stop,
+    // Signal transport (rig header ▶/■) — the live-instrument path, distinct
+    // from the loop transport above. For hotkeys / MIDI / the code API.
+    playSignal, stopSignal,
+    isSignalOn: () => looperAudio.isSignalOn(),
+    // Tone presets (amp + eq + cab as one) — for the code API / MIDI.
+    applyTone: (nameOrId) => {
+      const e = getToneByName(nameOrId) || getToneById(nameOrId);
+      if (e) applyTonePreset(e);
+      return !!e;
+    },
+    saveTone: (name) => saveTonePreset(name)?.name || '',
+    listTones: () => loadTones().map((e) => e.name),
     // Wipe every recorded take (same code path as the 🗑 button). The qualem
     // "new" reset calls this so a clean slate really is one.
     clearLoops: clearAll,

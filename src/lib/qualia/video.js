@@ -11,6 +11,48 @@
 let cameraRotation = 0;   // 0 | 90 | 180 | 270
 let mirrorMode    = true; // selfie-style by default
 
+// ── Per-camera persistence ───────────────────────────────────────────────
+// Rotation + mirror are physical properties of a camera (a USB cam clamped
+// sideways stays sideways; a FaceTime cam wants selfie mirror), so they're
+// remembered per deviceId rather than as one global pair. The page tells us
+// which camera is live via setActiveCamera(); the setters below then persist
+// under that id, and re-activating a known camera restores its transform.
+const TRANSFORMS_KEY = 'voidstar.qualia.camTransforms';
+let activeCamId = null;
+
+function loadTransforms() {
+  try { return JSON.parse(localStorage.getItem(TRANSFORMS_KEY)) || {}; }
+  catch { return {}; }
+}
+function persistTransform() {
+  if (!activeCamId) return;
+  try {
+    const map = loadTransforms();
+    map[activeCamId] = { rotation: cameraRotation, mirror: mirrorMode };
+    localStorage.setItem(TRANSFORMS_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+/**
+ * Mark `deviceId` as the live camera. If it has a stored transform, apply it
+ * and return true; otherwise seed its entry from the current transform (so
+ * the very first switch away and back still round-trips) and return false —
+ * the caller can then apply its own default (e.g. mirror-by-facing).
+ */
+export function setActiveCamera(deviceId) {
+  activeCamId = deviceId || null;
+  if (!activeCamId) return false;
+  const entry = loadTransforms()[activeCamId];
+  if (entry && typeof entry === 'object') {
+    cameraRotation = [0, 90, 180, 270].includes(entry.rotation) ? entry.rotation : 0;
+    mirrorMode = !!entry.mirror;
+    applyTransform();
+    return true;
+  }
+  persistTransform();
+  return false;
+}
+
 let _videoEl = null;
 
 export function bindVideoElement(videoEl) {
@@ -29,6 +71,7 @@ export function setRotation(deg) {
   const d = ((deg % 360) + 360) % 360;
   cameraRotation = [0, 90, 180, 270].includes(d) ? d : 0;
   applyTransform();
+  persistTransform();
 }
 export function cycleRotation() {
   setRotation(cameraRotation + 90);
@@ -36,7 +79,7 @@ export function cycleRotation() {
 }
 
 export function getMirror() { return mirrorMode; }
-export function setMirror(v) { mirrorMode = !!v; applyTransform(); }
+export function setMirror(v) { mirrorMode = !!v; applyTransform(); persistTransform(); }
 export function toggleMirror() { setMirror(!mirrorMode); return mirrorMode; }
 
 function applyTransform() {
