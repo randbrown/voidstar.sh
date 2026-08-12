@@ -48,6 +48,9 @@ export const ST = {
 // Every id here must exist in the actions map handed to createSync; unknown or
 // un-listed ids are dropped at ingress.
 export const CTL_ACTIONS = new Set([
+  // rig signal transport (the header ▶/■ — session-local on the host, so the
+  // phone needs a way to start the live input after a rig reload)
+  'sigPlayStop',
   // rig drives + strip toggles
   'tuner', 'earth', 'metal', 'delayToggle', 'reverbToggle', 'compToggle',
   // freeze stack (Frippertronics)
@@ -77,6 +80,9 @@ export const CTL_SLIDERS = {
   'rig.level':  { min: 0,    max: RIG_LEVEL_MAX },
   'delay.mix':  { min: 0,    max: 1 },
   'reverb.mix': { min: 0,    max: 1 },
+  // Drive pedal gains (strip param id `drive` on the host — see applySlider).
+  'earth.gain': { min: 0,    max: 1 },
+  'metal.gain': { min: 0,    max: 1 },
   'seq.volume': { min: 0,    max: 1.5 },
   'cps':        { min: 0.05, max: 4 },
 };

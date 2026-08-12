@@ -7739,6 +7739,9 @@ export function initQualiaPage() {
           seqUndo: () => { try { sequencer.tapUndo?.(); } catch {} },
           seqRedo: () => { try { sequencer.tapRedo?.(); } catch {} },
           seqClear: () => { try { sequencer.clearPattern?.(); } catch {} },
+          // Rig signal transport (header ▶/■) — one stateful pad on the
+          // remote, so it toggles; the phone's cstate `sigOn` shows the truth.
+          sigPlayStop: () => { looper.isSignalOn?.() ? looper.stopSignal?.() : looper.playSignal?.(); },
           // Stage automation toggles + the set clock, for the tether remote.
           walk: () => btnWalk?.click(),
           cycleAuto: toggleCycleAuto,
@@ -7750,6 +7753,10 @@ export function initQualiaPage() {
             case 'rig.level':  looper.setRigLevel?.(v); break;
             case 'delay.mix':  looper.setStripParam?.('delay', 'mix', v); break;
             case 'reverb.mix': looper.setStripParam?.('reverb', 'mix', v); break;
+            // Drive gains — wire id `.gain` matches the pedals' knob label;
+            // the strip param id is `drive`.
+            case 'earth.gain': looper.setStripParam?.('earth', 'drive', v); break;
+            case 'metal.gain': looper.setStripParam?.('metal', 'drive', v); break;
             case 'seq.volume': sequencer.setVolume?.(v); break;
             case 'cps':
               // Global tempo: Strudel first (the clock), sequencer mirrored
@@ -7775,6 +7782,9 @@ export function initQualiaPage() {
             strudelPlaying: !!strudel.isPlaying?.(),
             seqPlaying: !!sequencer.isPlaying?.(),
             loopPlaying: !!looper.isPlaying?.(),
+            // Signal transport (session-local on the host — a rig reload
+            // starts stopped, which is exactly when the phone needs to see it).
+            sigOn: !!looper.isSignalOn?.(),
             recording: !!looper.isRecording?.(),
             // Free-run record arming — the tether's rec button shows three
             // states (idle / counting in / rolling) and lights its mode chips.
