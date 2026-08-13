@@ -38,6 +38,11 @@
 //   pose.wristMidY          → hands raised lifts the signal: beam, grid and
 //                             stars swell together (plus crowd.rise when the
 //                             audience is entangled)
+//   star links              → head + wrists of every person cast rays into
+//                             the sky and claim their nearest anchor stars
+//                             with faint survey lines, angular-distance
+//                             faded so links crossfade instead of popping
+//                             (quale 1's constellation logic, gone 3D)
 //
 // Modeled elements (each built by its own design function below):
 //   buildTerrain      — dune valley + mesa buttes, vertex-colored rock/sand
@@ -63,10 +68,11 @@ import {
   CanvasTexture, Color, Vector2, Vector3, Vector4, Matrix4, Quaternion,
   Euler, FogExp2, HemisphereLight, DirectionalLight, PointLight,
   AdditiveBlending, DoubleSide, BackSide, RepeatWrapping,
-  LinearSRGBColorSpace,
+  LinearSRGBColorSpace, DynamicDrawUsage,
 } from 'three';
 import { disposeObject3D } from '../three-host.js';
 import { scaleAudio } from '../field.js';
+import { lmToCanvas } from '../video.js';
 
 // ── World constants ────────────────────────────────────────────────────
 const TERRAIN_SIZE = 380;
@@ -1038,6 +1044,97 @@ function buildStars(uniforms) {
   return points;
 }
 
+// ── Design: pose constellation — anchor stars + survey lines ───────────
+// A catalog of unit directions on the upper dome. Head + wrists claim the
+// nearest anchors along their camera rays; the claimed star glints and a
+// thin survey line runs from it to a point just ahead of the performer.
+const N_ANCHOR = 40;
+const MAX_LINK = 20;
+const JOINT_DIST = 55;      // world units ahead of camera for the hand end
+const ANCHOR_R = 470;
+const ANCHORS = [];
+for (let i = 0; i < N_ANCHOR; i++) {
+  ANCHORS.push({
+    az: hash2(i * 1.7 + 0.3, 5.1) * Math.PI * 2,
+    el: 0.16 + hash2(i * 2.3 + 1.1, 9.7) * 1.0,
+    ph: hash2(i * 3.1, 2.2) * 6.28,
+  });
+}
+
+const CONST_LN_VERT = /* glsl */`
+  attribute float aT;
+  attribute float aAlpha;
+  varying float vT; varying float vA;
+  void main() {
+    vT = aT; vA = aAlpha;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const CONST_LN_FRAG = /* glsl */`
+  precision highp float;
+  uniform vec3 uColor;
+  varying float vT; varying float vA;
+  void main() {
+    float endGlow = exp(-vT * 7.0) * 0.9 + exp(-(1.0 - vT) * 9.0) * 0.35 + 0.25;
+    float a = vA * endGlow;
+    gl_FragColor = vec4(uColor * a, a);
+  }
+`;
+const CONST_PT_VERT = /* glsl */`
+  attribute float aGlow;
+  varying float vA;
+  void main() {
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = (2.5 + aGlow * 7.0) * (1300.0 / max(1.0, -mv.z));
+    vA = 0.10 + aGlow * 0.9;
+  }
+`;
+const CONST_PT_FRAG = /* glsl */`
+  precision highp float;
+  uniform vec3 uColor;
+  varying float vA;
+  void main() {
+    vec2 q = gl_PointCoord - 0.5;
+    float r2 = dot(q, q);
+    if (r2 > 0.25) discard;
+    float fall = exp(-r2 * 16.0);
+    gl_FragColor = vec4(uColor * fall * vA, fall * vA);
+  }
+`;
+function buildConstellation(lineUniforms, pointUniforms) {
+  const linePos = new Float32Array(MAX_LINK * 2 * 3);
+  const lineT = new Float32Array(MAX_LINK * 2);
+  const lineA = new Float32Array(MAX_LINK * 2);
+  for (let i = 0; i < MAX_LINK; i++) { lineT[i * 2] = 0; lineT[i * 2 + 1] = 1; }
+  const lineGeo = new BufferGeometry();
+  const posAttr = new BufferAttribute(linePos, 3); posAttr.setUsage(DynamicDrawUsage);
+  const aAttr = new BufferAttribute(lineA, 1); aAttr.setUsage(DynamicDrawUsage);
+  lineGeo.setAttribute('position', posAttr);
+  lineGeo.setAttribute('aT', new BufferAttribute(lineT, 1));
+  lineGeo.setAttribute('aAlpha', aAttr);
+  lineGeo.setDrawRange(0, 0);
+  const lines = new LineSegments(lineGeo, new ShaderMaterial({
+    uniforms: lineUniforms, vertexShader: CONST_LN_VERT, fragmentShader: CONST_LN_FRAG,
+    transparent: true, depthWrite: false, blending: AdditiveBlending,
+  }));
+  lines.frustumCulled = false;
+
+  const ptPos = new Float32Array(N_ANCHOR * 3);
+  const ptGlow = new Float32Array(N_ANCHOR);
+  const ptGeo = new BufferGeometry();
+  const ptPosAttr = new BufferAttribute(ptPos, 3); ptPosAttr.setUsage(DynamicDrawUsage);
+  const ptGlowAttr = new BufferAttribute(ptGlow, 1); ptGlowAttr.setUsage(DynamicDrawUsage);
+  ptGeo.setAttribute('position', ptPosAttr);
+  ptGeo.setAttribute('aGlow', ptGlowAttr);
+  const points = new Points(ptGeo, new ShaderMaterial({
+    uniforms: pointUniforms, vertexShader: CONST_PT_VERT, fragmentShader: CONST_PT_FRAG,
+    transparent: true, depthWrite: false, blending: AdditiveBlending,
+  }));
+  points.frustumCulled = false;
+  return { lines, lineGeo, linePos, lineA, posAttr, aAttr, points, ptPos, ptGlow, ptPosAttr, ptGlowAttr };
+}
+
 // ── Design: the poster's scattered sky letters ─────────────────────────
 const TITLE_LAYOUT = [
   ['N', -74, 152], ['O', -40, 136],
@@ -1076,8 +1173,11 @@ function buildTitleStars() {
 
 /** @type {import('../types.js').QFXModule} */
 export default {
+  // id keeps the _2 suffix so persisted params and any patterns written
+  // against it keep working; quale 1 is retired and the display name is
+  // simply No Man's Land. quale('no mans land') fuzzy-matches here.
   id: 'no_mans_land_2',
-  name: 'No Man’s Land 2',
+  name: 'No Man’s Land',
   contextType: 'three',
   // Full 3D scene with several standard-lit meshes + four additive shader
   // layers: cap DPR like quale 1 so a long projection set holds frame rate.
@@ -1102,6 +1202,7 @@ export default {
       modulators: [ { source: 'audio.bass', mode: 'mul', amount: 0.40 } ] },
     { id: 'starLevel',  label: 'stars',       type: 'range', min: 0, max: 1.5, step: 0.05, default: 0.8,
       modulators: [ { source: 'audio.highs', mode: 'mul', amount: 0.35 } ] },
+    { id: 'starLinks',  label: 'star links',  type: 'range', min: 0, max: 4,   step: 1,    default: 2 },
     { id: 'twinkle',    label: 'twinkle',     type: 'range', min: 0, max: 2,   step: 0.05, default: 1.0 },
     { id: 'titleStars', label: 'title stars', type: 'toggle', default: true },
     { id: 'reactivity',     label: 'reactivity', type: 'range', min: 0, max: 2, step: 0.05, default: 1.0 },
@@ -1112,23 +1213,23 @@ export default {
   // the liminal crossing → bloodmoon procession → ascension → benediction.
   autoPhase: {
     steps: [
-      { camera: 'moonwatch',  palette: 'kma',       signal: 0.12, totemLight: 0.80, moonGlow: 0.65, starLevel: 0.55, twinkle: 0.8, travel: 0.35, river: 0.55, beacons: 0.70, titleStars: true },
-      { camera: 'monuments',  palette: 'kma',       signal: 0.30, totemLight: 1.20, moonGlow: 0.80, starLevel: 0.70, twinkle: 1.0, travel: 0.40, river: 0.70, beacons: 1.00, titleStars: false },
-      { camera: 'threshold',  palette: 'verdigris', signal: 0.95, totemLight: 0.70, moonGlow: 0.90, starLevel: 0.90, twinkle: 1.1, travel: 0.50, river: 1.00, beacons: 0.85, titleStars: false },
-      { camera: 'procession', palette: 'bloodmoon', signal: 0.60, totemLight: 0.90, moonGlow: 1.25, starLevel: 0.80, twinkle: 1.0, travel: 0.55, river: 1.10, beacons: 1.25, titleStars: false },
-      { camera: 'ascension',  palette: 'kma',       signal: 1.15, totemLight: 0.60, moonGlow: 1.00, starLevel: 1.25, twinkle: 1.3, travel: 0.50, river: 0.70, beacons: 1.00, titleStars: false },
-      { camera: 'moonwatch',  palette: 'hymnal',    signal: 0.45, totemLight: 1.00, moonGlow: 0.90, starLevel: 0.90, twinkle: 0.9, travel: 0.30, river: 0.85, beacons: 0.90, titleStars: true },
+      { camera: 'moonwatch',  palette: 'kma',       signal: 0.12, totemLight: 0.80, moonGlow: 0.65, starLevel: 0.55, starLinks: 1, twinkle: 0.8, travel: 0.35, river: 0.55, beacons: 0.70, titleStars: true },
+      { camera: 'monuments',  palette: 'kma',       signal: 0.30, totemLight: 1.20, moonGlow: 0.80, starLevel: 0.70, starLinks: 2, twinkle: 1.0, travel: 0.40, river: 0.70, beacons: 1.00, titleStars: false },
+      { camera: 'threshold',  palette: 'verdigris', signal: 0.95, totemLight: 0.70, moonGlow: 0.90, starLevel: 0.90, starLinks: 2, twinkle: 1.1, travel: 0.50, river: 1.00, beacons: 0.85, titleStars: false },
+      { camera: 'procession', palette: 'bloodmoon', signal: 0.60, totemLight: 0.90, moonGlow: 1.25, starLevel: 0.80, starLinks: 2, twinkle: 1.0, travel: 0.55, river: 1.10, beacons: 1.25, titleStars: false },
+      { camera: 'ascension',  palette: 'kma',       signal: 1.15, totemLight: 0.60, moonGlow: 1.00, starLevel: 1.25, starLinks: 3, twinkle: 1.3, travel: 0.50, river: 0.70, beacons: 1.00, titleStars: false },
+      { camera: 'moonwatch',  palette: 'hymnal',    signal: 0.45, totemLight: 1.00, moonGlow: 0.90, starLevel: 0.90, starLinks: 2, twinkle: 0.9, travel: 0.30, river: 0.85, beacons: 0.90, titleStars: true },
     ],
   },
 
   presets: {
-    default:     { camera: 'moonwatch',  palette: 'kma',       travel: 0.45, moonGlow: 0.8,  totemLight: 0.9, signal: 0.6,  river: 0.8,  beacons: 0.9,  starLevel: 0.8,  twinkle: 1.0, titleStars: true,  reactivity: 1.0, poseReactivity: 1.0 },
-    revival:     { camera: 'moonwatch',  palette: 'kma',       travel: 0.35, moonGlow: 0.65, totemLight: 0.8, signal: 0.12, river: 0.55, beacons: 0.7,  starLevel: 0.55, twinkle: 0.8, titleStars: true },
-    testament:   { camera: 'monuments',  palette: 'kma',       travel: 0.4,  moonGlow: 0.8,  totemLight: 1.2, signal: 0.3,  river: 0.7,  beacons: 1.0,  starLevel: 0.7,  twinkle: 1.0, titleStars: false },
-    liminal:     { camera: 'threshold',  palette: 'verdigris', travel: 0.5,  moonGlow: 0.9,  totemLight: 0.7, signal: 0.95, river: 1.0,  beacons: 0.85, starLevel: 0.9,  twinkle: 1.1, titleStars: false },
-    procession:  { camera: 'procession', palette: 'bloodmoon', travel: 0.55, moonGlow: 1.25, totemLight: 0.9, signal: 0.6,  river: 1.1,  beacons: 1.25, starLevel: 0.8,  twinkle: 1.0, titleStars: false },
-    ascension:   { camera: 'ascension',  palette: 'kma',       travel: 0.5,  moonGlow: 1.0,  totemLight: 0.6, signal: 1.15, river: 0.7,  beacons: 1.0,  starLevel: 1.25, twinkle: 1.3, titleStars: false },
-    benediction: { camera: 'moonwatch',  palette: 'hymnal',    travel: 0.3,  moonGlow: 0.9,  totemLight: 1.0, signal: 0.45, river: 0.85, beacons: 0.9,  starLevel: 0.9,  twinkle: 0.9, titleStars: true },
+    default:     { camera: 'moonwatch',  palette: 'kma',       travel: 0.45, moonGlow: 0.8,  totemLight: 0.9, signal: 0.6,  river: 0.8,  beacons: 0.9,  starLevel: 0.8,  starLinks: 2, twinkle: 1.0, titleStars: true,  reactivity: 1.0, poseReactivity: 1.0 },
+    revival:     { camera: 'moonwatch',  palette: 'kma',       travel: 0.35, moonGlow: 0.65, totemLight: 0.8, signal: 0.12, river: 0.55, beacons: 0.7,  starLevel: 0.55, starLinks: 1, twinkle: 0.8, titleStars: true },
+    testament:   { camera: 'monuments',  palette: 'kma',       travel: 0.4,  moonGlow: 0.8,  totemLight: 1.2, signal: 0.3,  river: 0.7,  beacons: 1.0,  starLevel: 0.7,  starLinks: 2, twinkle: 1.0, titleStars: false },
+    liminal:     { camera: 'threshold',  palette: 'verdigris', travel: 0.5,  moonGlow: 0.9,  totemLight: 0.7, signal: 0.95, river: 1.0,  beacons: 0.85, starLevel: 0.9,  starLinks: 2, twinkle: 1.1, titleStars: false },
+    procession:  { camera: 'procession', palette: 'bloodmoon', travel: 0.55, moonGlow: 1.25, totemLight: 0.9, signal: 0.6,  river: 1.1,  beacons: 1.25, starLevel: 0.8,  starLinks: 2, twinkle: 1.0, titleStars: false },
+    ascension:   { camera: 'ascension',  palette: 'kma',       travel: 0.5,  moonGlow: 1.0,  totemLight: 0.6, signal: 1.15, river: 0.7,  beacons: 1.0,  starLevel: 1.25, starLinks: 3, twinkle: 1.3, titleStars: false },
+    benediction: { camera: 'moonwatch',  palette: 'hymnal',    travel: 0.3,  moonGlow: 0.9,  totemLight: 1.0, signal: 0.45, river: 0.85, beacons: 0.9,  starLevel: 0.9,  starLinks: 2, twinkle: 0.9, titleStars: true },
   },
 
   create(canvas, { renderer }) {
@@ -1255,6 +1356,13 @@ export default {
     const title = buildTitleStars();
     scene.add(title.group);
 
+    const constLnUniforms = { uColor: { value: cur.starCool } };
+    const constPtUniforms = { uColor: { value: cur.starCool } };
+    const constellation = buildConstellation(constLnUniforms, constPtUniforms);
+    scene.add(constellation.lines);
+    scene.add(constellation.points);
+    let W = canvas.width || 1, H = canvas.height || 1;
+
     // ── State ──────────────────────────────────────────────────────────
     const camPosS = new Vector3(-6, 3.2, 30);
     const camLookS = new Vector3(20, 40, -140);
@@ -1262,6 +1370,15 @@ export default {
     const emisCur = new Color(0, 0, 0);
     heart.capMat.emissive = emisCur;
     cross.capMat.emissive = emisCur;
+
+    // per-person presence smoothing + per-anchor glow smoothing, so links
+    // and glints breathe in/out instead of popping on tracking dropouts
+    const MAXP = 4;
+    const pPresence = new Float32Array(MAXP);
+    const anchorGlow = new Float32Array(N_ANCHOR);
+    const anchorDir = new Float32Array(N_ANCHOR * 3);
+    const anchorClaimed = new Uint8Array(N_ANCHOR);
+    const _ray = new Vector3(), _tmp = new Vector3();
 
     let pathT = 40;                    // start mid-walk so moonwatch opens composed
     let midsS = 0, glintEnv = 0, scanAmp = 0, satGlint = 0;
@@ -1454,6 +1571,80 @@ export default {
 
       // the beam billboards toward the camera (yaw only)
       beam.rotation.y = Math.atan2(camPosS.x - beam.position.x, camPosS.z - beam.position.z);
+      camera.updateMatrixWorld();
+
+      // ── Pose constellation: joints claim their nearest anchor stars ──
+      const people = field.pose.people;
+      for (let i = 0; i < MAXP; i++) {
+        const present = people[i] && (people[i].head?.visibility ?? 0) > 0.3 ? 1 : 0;
+        pPresence[i] += (present - pPresence[i]) * Math.min(1, dt * 1.5);
+      }
+      const linksPer = Math.round(params.starLinks);
+      let ln = 0;
+      anchorClaimed.fill(0);
+      // anchors drift slowly on the dome; positions + camera-relative
+      // directions refresh every frame into preallocated arrays
+      for (let aI = 0; aI < N_ANCHOR; aI++) {
+        const an = ANCHORS[aI];
+        const az = an.az + 0.05 * Math.sin(time * 0.013 + an.ph);
+        const el = an.el + 0.03 * Math.sin(time * 0.017 + an.ph * 1.7);
+        const ce = Math.cos(el);
+        const x = Math.cos(az) * ce * ANCHOR_R;
+        const y = Math.sin(el) * ANCHOR_R;
+        const z = Math.sin(az) * ce * ANCHOR_R;
+        constellation.ptPos[aI * 3] = x;
+        constellation.ptPos[aI * 3 + 1] = y;
+        constellation.ptPos[aI * 3 + 2] = z;
+        _tmp.set(x, y, z).sub(camera.position).normalize();
+        anchorDir[aI * 3] = _tmp.x; anchorDir[aI * 3 + 1] = _tmp.y; anchorDir[aI * 3 + 2] = _tmp.z;
+      }
+      if (linksPer > 0 && people.length > 0) {
+        for (let pi = 0; pi < people.length && pi < MAXP && ln < MAX_LINK; pi++) {
+          const person = people[pi];
+          if (pPresence[pi] < 0.02) continue;
+          for (let ji = 0; ji < 3 && ln < MAX_LINK; ji++) {
+            const lm = ji === 0 ? person.head : (ji === 1 ? person.wrists?.l : person.wrists?.r);
+            if (!lm || lm.visibility < 0.35) continue;
+            const [px, py] = lmToCanvas(lm.x, lm.y, W, H);
+            _ray.set((px / W) * 2 - 1, -((py / H) * 2 - 1), 0.5)
+              .unproject(camera).sub(camera.position).normalize();
+            for (let n = 0; n < linksPer && ln < MAX_LINK; n++) {
+              let best = -1, bestDot = -2;
+              for (let aI = 0; aI < N_ANCHOR; aI++) {
+                if (anchorClaimed[aI]) continue;
+                const d = _ray.x * anchorDir[aI * 3] + _ray.y * anchorDir[aI * 3 + 1] + _ray.z * anchorDir[aI * 3 + 2];
+                if (d > bestDot) { bestDot = d; best = aI; }
+              }
+              if (best < 0) break;
+              // angular fade — a star drifts out of reach before it unlinks
+              const a = clamp01(1.15 - (1 - bestDot) * 9.0) * pPresence[pi] * clamp01(lm.visibility);
+              if (a < 0.02) break;   // farther candidates are dimmer still
+              anchorClaimed[best] = 1;
+              const lp = constellation.linePos;
+              lp[ln * 6]     = constellation.ptPos[best * 3];
+              lp[ln * 6 + 1] = constellation.ptPos[best * 3 + 1];
+              lp[ln * 6 + 2] = constellation.ptPos[best * 3 + 2];
+              lp[ln * 6 + 3] = camera.position.x + _ray.x * JOINT_DIST;
+              lp[ln * 6 + 4] = camera.position.y + _ray.y * JOINT_DIST;
+              lp[ln * 6 + 5] = camera.position.z + _ray.z * JOINT_DIST;
+              constellation.lineA[ln * 2] = a * 0.85;
+              constellation.lineA[ln * 2 + 1] = a * 0.85;
+              anchorGlow[best] = Math.max(anchorGlow[best], a);
+              ln++;
+            }
+          }
+        }
+      }
+      for (let aI = 0; aI < N_ANCHOR; aI++) {
+        const target = anchorClaimed[aI] ? anchorGlow[aI] : 0;
+        anchorGlow[aI] += (target - anchorGlow[aI]) * Math.min(1, dt * (anchorClaimed[aI] ? 8 : 2.5));
+        constellation.ptGlow[aI] = anchorGlow[aI];
+      }
+      constellation.lineGeo.setDrawRange(0, ln * 2);
+      constellation.posAttr.needsUpdate = true;
+      constellation.aAttr.needsUpdate = true;
+      constellation.ptPosAttr.needsUpdate = true;
+      constellation.ptGlowAttr.needsUpdate = true;
     }
 
     function render() {
@@ -1463,6 +1654,7 @@ export default {
     }
 
     function resize(w, h /*, dpr */) {
+      W = Math.max(1, w); H = Math.max(1, h);
       camera.aspect = w / Math.max(1, h);
       camera.updateProjectionMatrix();
       renderer.setSize(w, h, false);
