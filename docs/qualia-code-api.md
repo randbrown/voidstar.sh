@@ -312,13 +312,16 @@ qualia.pose.fps(15)                // inference throttle
 qualia.pose.people()               // currently tracked count
 
 qualia.horns.enabled(true)         // metal horns 🤘 detection (hands ride the pose worker)
-qualia.horns.config({ sound: 'voidstar', logoMs: 3000 })
+qualia.horns.config({ sound: 'voidstar', logoMs: 3000, eyesMs: 3000 })
                                    // reaction: one-shot sound name ('' = silent — load it
                                    // first, e.g. await samples('shabda/speech:voidstar'))
-                                   // + void* logo flash length (0 = none)
+                                   // + void* logo / nightcall red-eyes flash lengths
+                                   // (0 = skip that flash; eyes flash even with the
+                                   // nightcall toggle off, and never disturb it)
 qualia.horns.active()              // horns held right now? (pattern conditionals)
 qualia.horns.count()               // fires this session; each fire also dispatches
                                    // a `qualia:horns` window event
+qualia.horns.fire()                // trigger the reaction manually (soundcheck / pad key)
 ```
 
 ### Entanglement (audience)
