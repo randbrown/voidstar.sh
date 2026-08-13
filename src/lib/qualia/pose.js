@@ -12,9 +12,17 @@
 import { emptyPoseFrame } from './field.js';
 import { loadVision } from './vision-loader.js';
 
-// Model version pinned ('1', not 'latest') so an upstream reissue can't change
-// pose behavior between soundcheck and the set. Mirrors pose-worker.js.
-const POSE_MODEL  = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+// Model versions pinned ('1', not 'latest') so an upstream reissue can't
+// change pose behavior between soundcheck and the set. Mirrors pose-worker.js
+// (keep the two maps in sync). lite = fastest; full is markedly more robust in
+// low light / low contrast for ~2-3× the inference cost (still off the main
+// thread); heavy is the most accurate and much slower — pair it with a lower
+// detect fps.
+const POSE_MODELS = {
+  lite:  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+  full:  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
+  heavy: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task',
+};
 
 // MediaPipe landmark indices we care about. The full list is in MP docs;
 // these are the ones the named PoseFrame exposes.
@@ -94,8 +102,18 @@ export function createPose() {
   // the screen, >1 always pushes it out, and a half-cropped body (hips estimated
   // below the bottom edge) can't drag the head off the top.
   let poseScale = 1;
+  // Model quality — baked into the landmarker at create time, like numPoses.
+  let modelQuality = 'lite';
   // Confidence thresholds — baked into the landmarker at create time.
   let detectConf = 0.05, presenceConf = 0.05, trackConf = 0.05;
+  // Low-light boost — brightens the frames the DETECTOR sees (the on-screen
+  // preview and camera quale read the raw <video> and stay untouched).
+  // amount 0..1 maps to a fixed gain; auto measures mean frame luma and picks
+  // the gain itself. Applied in the worker (see pose-worker.js) or, on the
+  // main-thread fallback, via boostFrame() below.
+  let lowLightAmount = 0;
+  let lowLightAuto   = false;
+  let lowLightGain   = 1;   // last gain actually applied (worker-reported)
   // How long a vanished pose lingers (ms)
   let lingerMs = 800;
   let lastDetectMs = 0;
@@ -158,7 +176,12 @@ export function createPose() {
     return useWorker;
   }
   function workerConfig() {
-    return { numPoses, detectConf, presenceConf, trackConf };
+    return { numPoses, detectConf, presenceConf, trackConf, model: modelQuality };
+  }
+  function pushLowLight() {
+    if (worker && useWorker) {
+      worker.postMessage({ type: 'lowlight', amount: lowLightAmount, auto: lowLightAuto });
+    }
   }
   function hasLandmarker() { return useWorker ? workerReady : !!landmarker; }
   // ── Hands (opt-in, worker-only) ──────────────────────────────────────────
@@ -202,6 +225,7 @@ export function createPose() {
     }
     if (msg.type === 'result') {
       workerBusy = false;
+      if (typeof msg.gain === 'number') lowLightGain = msg.gain;
       // Drop stale results whose source no longer matches (camera stopped or
       // switched to canvas mid-flight) so a ghost pose can't reappear.
       if (!detectSource || detectSource !== msg.source) return;
@@ -255,13 +279,15 @@ export function createPose() {
       });
       // A fresh worker starts with hands off — restore the wanted state.
       if (handsWanted) worker?.postMessage({ type: 'hands', on: true });
+      // Same for the low-light boost state.
+      if (lowLightAmount > 0 || lowLightAuto) pushLowLight();
       return;
     }
     // Main-thread fallback.
     if (!vision) await ensureVision();
     if (landmarker) { try { landmarker.close(); } catch {} landmarker = null; }
     landmarker = await PoseLandmarkerCls.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'GPU' },
+      baseOptions: { modelAssetPath: POSE_MODELS[modelQuality], delegate: 'GPU' },
       runningMode: 'VIDEO',
       numPoses,
       minPoseDetectionConfidence: detectConf,
@@ -525,6 +551,61 @@ export function createPose() {
     }
   }
 
+  // ── Hardware camera controls beyond zoom ─────────────────────────────────
+  // getZoomCaps/setZoom generalized: read what the active track can actually
+  // do (exposure, iso, torch, …) and apply values via constraints. Only
+  // capabilities the track reports come back, so the UI renders rows
+  // conditionally — iOS Safari reports none of these, Android Chrome and most
+  // desktop UVC webcams report several. The dark-stage payoff is exposure:
+  // fixing the image at the sensor beats any software boost.
+  const CAM_CAP_NAMES = [
+    'exposureMode', 'exposureCompensation', 'exposureTime', 'iso',
+    'brightness', 'contrast', 'colorTemperature', 'torch',
+  ];
+  function getCamCaps() {
+    if (!activeTrack) return null;
+    const caps = activeTrack.getCapabilities?.();
+    if (!caps) return null;
+    const cur = activeTrack.getSettings?.() || {};
+    const out = {};
+    for (const name of CAM_CAP_NAMES) {
+      const c = caps[name];
+      if (c == null) continue;
+      if (Array.isArray(c)) {
+        // Enumerated modes ('continuous'/'manual'), or [false,true] — some
+        // UAs report torch as a boolean array rather than a plain boolean.
+        if (typeof c[0] === 'string' && c.length > 1) {
+          out[name] = { options: c.slice(), value: cur[name] ?? c[0] };
+        } else if (c.includes(true)) {
+          out[name] = { toggle: true, value: !!cur[name] };
+        }
+      } else if (typeof c === 'object') {
+        if (typeof c.min === 'number' && typeof c.max === 'number' && c.max > c.min) {
+          out[name] = {
+            min: c.min, max: c.max,
+            step: (typeof c.step === 'number' && c.step > 0)
+              ? c.step : (c.max - c.min) / 100,
+            value: typeof cur[name] === 'number' ? cur[name] : c.min,
+          };
+        }
+      } else if (c === true) {   // torch per spec: boolean capability
+        out[name] = { toggle: true, value: !!cur[name] };
+      }
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  /** Apply one hardware control by capability name. Best-effort — false when
+   *  no track is open or the browser rejects the constraint. */
+  async function setCamConstraint(name, value) {
+    if (!activeTrack || !CAM_CAP_NAMES.includes(name)) return false;
+    try {
+      await activeTrack.applyConstraints({ advanced: [{ [name]: value }] });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function stopCamera() {
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     if (videoEl) {
@@ -669,6 +750,79 @@ export function createPose() {
     }).catch(() => { workerBusy = false; });
   }
 
+  // ── Low-light boost (main-thread fallback path) ──────────────────────────
+  // KEEP IN SYNC with the identical math in pose-worker.js — the worker is a
+  // deliberately import-free classic worker, so these ~40 lines are mirrored
+  // there rather than shared (don't add a third copy). Normally the boost
+  // runs in the worker; this copy only serves the fallback path.
+  let boostCanvas = null, boostCtx = null;   // full-res filtered frame copy
+  let lumaCanvas = null,  lumaCtx = null;    // 32×18 probe for auto gain
+  let autoGain = 1, lumaTick = 0;
+  const LL_TARGET_LUMA = 110;  // mean 8-bit luma auto aims for (~0.43)
+  const LL_MAX_GAIN    = 3.5;
+  const LL_LUMA_EVERY  = 15;   // probe cadence in detect ticks (~1 Hz @ 15fps)
+
+  function lowLightActive() { return lowLightAuto || lowLightAmount > 0; }
+
+  function currentBoostGain(source) {
+    if (!lowLightAuto) return 1 + lowLightAmount * 1.5;
+    if (--lumaTick <= 0) {
+      lumaTick = LL_LUMA_EVERY;
+      try {
+        if (!lumaCanvas) {
+          lumaCanvas = document.createElement('canvas');
+          lumaCanvas.width = 32; lumaCanvas.height = 18;
+          lumaCtx = lumaCanvas.getContext('2d', { willReadFrequently: true });
+        }
+        lumaCtx.drawImage(source, 0, 0, 32, 18);
+        const d = lumaCtx.getImageData(0, 0, 32, 18).data;
+        let sum = 0;
+        for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+        const mean = sum / (d.length * 0.75);
+        const want = Math.max(1, Math.min(LL_MAX_GAIN, LL_TARGET_LUMA / Math.max(mean, 8)));
+        autoGain += (want - autoGain) * 0.25;   // settle over ~4s, no pumping
+      } catch { /* zero-sized frame — keep the last gain */ }
+    }
+    return autoGain;
+  }
+
+  function boostFrame(source, w, h) {
+    const gain = currentBoostGain(source);
+    lowLightGain = Math.round(gain * 100) / 100;
+    if (gain < 1.05) return source;   // not worth a copy
+    try {
+      if (!boostCanvas) {
+        boostCanvas = document.createElement('canvas');
+        boostCtx = boostCanvas.getContext('2d');
+      }
+      if (boostCanvas.width !== w || boostCanvas.height !== h) {
+        boostCanvas.width = w; boostCanvas.height = h;
+      }
+      if (typeof boostCtx.filter === 'string') {
+        // Chrome/Firefox: GPU-accelerated canvas filter. Mild contrast rides
+        // along so the lifted image doesn't wash flat.
+        boostCtx.filter = `brightness(${gain}) contrast(${1 + (gain - 1) * 0.25})`;
+        boostCtx.drawImage(source, 0, 0, w, h);
+        boostCtx.filter = 'none';
+      } else {
+        // Safari never shipped ctx.filter: approximate with a screen-blend of
+        // the frame over itself — screen(a,a) = 2a − a², a gamma-ish midtone
+        // lift, with the blend alpha standing in for gain.
+        boostCtx.globalCompositeOperation = 'source-over';
+        boostCtx.globalAlpha = 1;
+        boostCtx.drawImage(source, 0, 0, w, h);
+        boostCtx.globalCompositeOperation = 'screen';
+        boostCtx.globalAlpha = Math.min(1, (gain - 1) / 1.5);
+        boostCtx.drawImage(source, 0, 0, w, h);
+        boostCtx.globalCompositeOperation = 'source-over';
+        boostCtx.globalAlpha = 1;
+      }
+      return boostCanvas;
+    } catch {
+      return source;
+    }
+  }
+
   // Main-thread fallback: synchronous detectForVideo (blocks until the
   // forward pass finishes — the path we move OFF the main thread above).
   function detectMainThread() {
@@ -676,7 +830,15 @@ export function createPose() {
     if (!source) return;
     const t = performance.now();
     try {
-      const result = landmarker.detectForVideo(source, t);
+      let det = source;
+      if (lowLightActive()) {
+        const w = source.videoWidth || source.width || 0;
+        const h = source.videoHeight || source.height || 0;
+        if (w && h) det = boostFrame(source, w, h);
+      } else {
+        lowLightGain = 1;
+      }
+      const result = landmarker.detectForVideo(det, t);
       const fresh = result.landmarks ?? [];
       applyPoseResult(fresh, t); // linger for both sources — see the worker path
     } catch { /* swallow timestamp regressions */ }
@@ -721,6 +883,28 @@ export function createPose() {
     if (track    != null && track    !== trackConf)    { trackConf    = track;    dirty = true; }
     if (dirty && hasLandmarker()) await buildLandmarker();
   }
+  /** Swap the landmarker model: 'lite' | 'full' | 'heavy'. Rebuild like
+   *  numPoses/thresholds; a rebuild mid-set costs one model fetch + init. */
+  async function setModelQuality(q) {
+    if (!POSE_MODELS[q] || q === modelQuality) return modelQuality;
+    modelQuality = q;
+    if (hasLandmarker()) await buildLandmarker();
+    return modelQuality;
+  }
+  /** Low-light boost config, partial patch: {amount 0..1, auto bool}. */
+  function setLowLight(cfg = {}) {
+    if (cfg.amount != null) {
+      const a = Number(cfg.amount);
+      lowLightAmount = Math.max(0, Math.min(1, Number.isFinite(a) ? a : 0));
+    }
+    if (cfg.auto != null) lowLightAuto = !!cfg.auto;
+    if (!lowLightAuto && lowLightAmount === 0) lowLightGain = 1;
+    pushLowLight();
+    return getLowLight();
+  }
+  function getLowLight() { return { amount: lowLightAmount, auto: lowLightAuto }; }
+  /** Gain the boost is actually applying right now (1 = passthrough). */
+  function getLowLightGain() { return lowLightGain; }
 
   function setSmoothing(v) { smoothing = Math.max(0, Math.min(1, v)); }
   function setLingerMs(v)  { lingerMs = Math.max(0, v | 0); }
@@ -747,22 +931,29 @@ export function createPose() {
     getFacingMode: () => facingMode,
     getZoomCaps,
     setZoom,
+    getCamCaps,
+    setCamConstraint,
     startCanvasDetection,
     stopCanvasDetection,
     setNumPoses,
     setThresholds,
+    setModelQuality,
     setSmoothing,
     setLingerMs,
     setScale,
     setDetectFps,
+    setLowLight,
     setHandsEnabled,
     isHandsEnabled: () => handsWanted,
     onHands,
     getNumPoses: () => numPoses,
     getThresholds: () => ({ detect: detectConf, presence: presenceConf, track: trackConf }),
+    getModelQuality: () => modelQuality,
     getSmoothing:  () => smoothing,
     getLingerMs:   () => lingerMs,
     getScale:      () => poseScale,
     getDetectFps,
+    getLowLight,
+    getLowLightGain,
   };
 }

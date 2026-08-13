@@ -14,7 +14,8 @@
 //   → { type:'init'|'config', opts }      build/rebuild the landmarker
 //   ← { type:'ready' }                     landmarker is live
 //   → { type:'detect', bitmap, t, source } run inference on a transferred bmp
-//   ← { type:'result', landmarks, t, source[, hands] }
+//   ← { type:'result', landmarks, t, source[, hands][, gain] }
+//   → { type:'lowlight', amount, auto }    configure the pre-inference boost
 //   → { type:'hands', on }                 build/close the hand landmarker
 //   ← { type:'hands-ready', on }           hand landmarker state settled
 //   ← { type:'hands-error', error }        hand model failed (pose unaffected)
@@ -31,7 +32,14 @@
 const VISION_VERSION = '0.10.35';
 const VISION_BUNDLE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/vision_bundle.mjs`;
 const VISION_WASM   = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`;
-const POSE_MODEL    = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+// Model versions pinned ('1', not 'latest') — keep this map in sync with
+// POSE_MODELS in pose.js. lite = fastest; full is markedly more robust in low
+// light for ~2-3× the cost; heavy is the most accurate and much slower.
+const POSE_MODELS   = {
+  lite:  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+  full:  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
+  heavy: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task',
+};
 // Pinned like POSE_MODEL — a live set must not change gesture behavior
 // because the CDN reissued the model.
 const HAND_MODEL    = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
@@ -45,7 +53,87 @@ let handLandmarker = null;
 let handsWanted = false;
 let handsFailed = false;
 let handTick = 0;
-let opts = { numPoses: 3, detectConf: 0.05, presenceConf: 0.05, trackConf: 0.05 };
+let opts = { numPoses: 3, detectConf: 0.05, presenceConf: 0.05, trackConf: 0.05, model: 'lite' };
+
+// ── Low-light boost ──────────────────────────────────────────────────────────
+// Brightens the frames the DETECTOR sees before inference — the on-screen
+// preview reads the raw <video> and stays untouched. Manual: amount 0..1 maps
+// to a fixed gain. Auto: a 32×18 luma probe (~1 Hz) picks the gain, EMA-
+// smoothed so stage lighting changes settle over a few seconds instead of
+// pumping the skeleton. KEEP THE MATH IN SYNC with the fallback copy in
+// pose.js (this file is a deliberately import-free classic worker, so the
+// logic is mirrored rather than shared — don't add a third copy).
+let lowLight = { amount: 0, auto: false };
+let boostCanvas = null, boostCtx = null;   // full-res filtered frame copy
+let lumaCanvas = null,  lumaCtx = null;    // 32×18 probe for auto gain
+let autoGain = 1, lumaTick = 0;
+const LL_TARGET_LUMA = 110;  // mean 8-bit luma auto aims for (~0.43)
+const LL_MAX_GAIN    = 3.5;
+const LL_LUMA_EVERY  = 15;   // probe cadence in detect ticks (~1 Hz @ 15fps)
+
+function lowLightActive() { return lowLight.auto || lowLight.amount > 0; }
+
+function currentBoostGain(bitmap) {
+  if (!lowLight.auto) return 1 + lowLight.amount * 1.5;
+  if (--lumaTick <= 0) {
+    lumaTick = LL_LUMA_EVERY;
+    try {
+      if (!lumaCanvas) {
+        lumaCanvas = new OffscreenCanvas(32, 18);
+        lumaCtx = lumaCanvas.getContext('2d', { willReadFrequently: true });
+      }
+      lumaCtx.drawImage(bitmap, 0, 0, 32, 18);
+      const d = lumaCtx.getImageData(0, 0, 32, 18).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+      const mean = sum / (d.length * 0.75);
+      const want = Math.max(1, Math.min(LL_MAX_GAIN, LL_TARGET_LUMA / Math.max(mean, 8)));
+      autoGain += (want - autoGain) * 0.25;   // settle over ~4s, no pumping
+    } catch { /* keep the last gain */ }
+  }
+  return autoGain;
+}
+
+// Returns {src, gain}. When boosting, src is a NEW ImageBitmap the caller
+// must close (transferToImageBitmap, so the detector definitely accepts it);
+// otherwise src is the original bitmap.
+function boostFrame(bitmap) {
+  const gain = currentBoostGain(bitmap);
+  const rounded = Math.round(gain * 100) / 100;
+  if (gain < 1.05) return { src: bitmap, gain: rounded };  // not worth a copy
+  try {
+    const w = bitmap.width, h = bitmap.height;
+    if (!boostCanvas) {
+      boostCanvas = new OffscreenCanvas(w, h);
+      boostCtx = boostCanvas.getContext('2d');
+    }
+    if (boostCanvas.width !== w || boostCanvas.height !== h) {
+      boostCanvas.width = w; boostCanvas.height = h;
+    }
+    if (typeof boostCtx.filter === 'string') {
+      // Chrome/Firefox: GPU-accelerated canvas filter. Mild contrast rides
+      // along so the lifted image doesn't wash flat.
+      boostCtx.filter = `brightness(${gain}) contrast(${1 + (gain - 1) * 0.25})`;
+      boostCtx.drawImage(bitmap, 0, 0, w, h);
+      boostCtx.filter = 'none';
+    } else {
+      // No ctx.filter (Safari): approximate with a screen-blend of the frame
+      // over itself — screen(a,a) = 2a − a², a gamma-ish midtone lift, with
+      // the blend alpha standing in for gain.
+      boostCtx.globalCompositeOperation = 'source-over';
+      boostCtx.globalAlpha = 1;
+      boostCtx.drawImage(bitmap, 0, 0, w, h);
+      boostCtx.globalCompositeOperation = 'screen';
+      boostCtx.globalAlpha = Math.min(1, (gain - 1) / 1.5);
+      boostCtx.drawImage(bitmap, 0, 0, w, h);
+      boostCtx.globalCompositeOperation = 'source-over';
+      boostCtx.globalAlpha = 1;
+    }
+    return { src: boostCanvas.transferToImageBitmap(), gain: rounded };
+  } catch {
+    return { src: bitmap, gain: rounded };
+  }
+}
 
 async function ensureVision() {
   if (fileset) return;
@@ -94,13 +182,14 @@ async function buildLandmarker() {
   // the worker's CPU keeps the GPU free for visuals and the forward pass on an
   // otherwise-idle core, off the main thread. GPU delegate is the fallback if
   // the WASM SIMD/CPU path is unavailable.
+  const modelUrl = POSE_MODELS[opts.model] || POSE_MODELS.lite;
   try {
     landmarker = await PoseLandmarkerCls.createFromOptions(fileset, {
-      ...common, baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'CPU' },
+      ...common, baseOptions: { modelAssetPath: modelUrl, delegate: 'CPU' },
     });
   } catch (e) {
     landmarker = await PoseLandmarkerCls.createFromOptions(fileset, {
-      ...common, baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'GPU' },
+      ...common, baseOptions: { modelAssetPath: modelUrl, delegate: 'GPU' },
     });
   }
 }
@@ -129,12 +218,24 @@ self.onmessage = async (e) => {
       }
       return;
     }
+    if (msg.type === 'lowlight') {
+      lowLight = { amount: +msg.amount || 0, auto: !!msg.auto };
+      if (!lowLight.auto) autoGain = 1;   // fresh ramp next time auto turns on
+      lumaTick = 0;                       // re-probe immediately
+      return;
+    }
     if (msg.type === 'detect') {
       const { bitmap, t, source } = msg;
+      // Low-light boost first, so pose AND hands both see the lifted frame.
+      let det = bitmap, gain;
+      if (lowLightActive()) {
+        const b = boostFrame(bitmap);
+        det = b.src; gain = b.gain;
+      }
       let landmarks = [];
       if (landmarker) {
         try {
-          const res = landmarker.detectForVideo(bitmap, t);
+          const res = landmarker.detectForVideo(det, t);
           landmarks = res?.landmarks ?? [];
         } catch { /* timestamp regression / transient — drop this frame */ }
       }
@@ -144,12 +245,14 @@ self.onmessage = async (e) => {
       if (handLandmarker && ++handTick >= HANDS_EVERY_N) {
         handTick = 0;
         try {
-          const res = handLandmarker.detectForVideo(bitmap, t);
+          const res = handLandmarker.detectForVideo(det, t);
           hands = { landmarks: res?.landmarks ?? [], handedness: res?.handedness ?? [] };
         } catch { /* transient — skip this tick */ }
       }
       try { bitmap.close?.(); } catch {}
+      if (det !== bitmap) { try { det.close?.(); } catch {} }
       const out = { type: 'result', landmarks, t, source };
+      if (gain !== undefined) out.gain = gain;
       if (hands) out.hands = hands;
       self.postMessage(out);
       return;
