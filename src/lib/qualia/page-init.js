@@ -7,6 +7,7 @@ import { createCore }    from './core.js';
 import { initEntangleUI } from './entangle-ui.js';
 import { createAudio }   from './audio.js';
 import { createPose }    from './pose.js';
+import { createHornsDetector } from './horns.js';
 import { createOverlay } from './overlay.js';
 import { createCamWalk, CAM_WALK_DEFAULTS } from './cam-walk.js';
 import { createLogoMark, LOGO_MARK_DEFAULTS } from './logo-mark.js';
@@ -232,6 +233,7 @@ export function initQualiaPage() {
   const btnSparks  = document.getElementById('btn-sparks');
   const btnAura    = document.getElementById('btn-aura');
   const btnNightcall = document.getElementById('btn-nightcall');
+  const btnHorns   = document.getElementById('btn-horns');
   const btnRipples = document.getElementById('btn-ripples');
   const btnAscii   = document.getElementById('btn-ascii');
   const btnMosh    = document.getElementById('btn-mosh');
@@ -271,6 +273,16 @@ export function initQualiaPage() {
   const audio = createAudio();
   const pose  = createPose();
   bindVideoElement(videoEl);
+
+  // Metal horns 🤘 state — declared up here (before the settings store
+  // closes over it); restore + wiring live further down with the other
+  // pose-menu toggles. `sound` names a registered Strudel sound to one-shot
+  // on detection ('' = silent); `logoMs` is the void* logo flash length
+  // (0 = no flash).
+  const HORNS_DEFAULTS = { sound: 'voidstar', logoMs: 3000 };
+  let hornsOn = false;
+  const hornsConfig = { ...HORNS_DEFAULTS };
+  const hornsDetector = createHornsDetector();
 
   let camSizeIdx = 0;
   // ── Split-screen state ────────────────────────────────────────────────────
@@ -479,6 +491,8 @@ export function initQualiaPage() {
     auraOn:         overlay.getOption('aura'),
     nightcallOn:    overlay.getOption('nightcall'),
     ripplesOn:      overlay.getOption('ripples'),
+    hornsOn,
+    hornsConfig:    { ...hornsConfig },
     glitchModes:    { ...glitchModes },
     moshConfig:     overlay.getMoshConfig(),
     edgeConfig:     overlay.getEdgeConfig(),
@@ -589,6 +603,10 @@ export function initQualiaPage() {
   if (typeof stored.auraOn      === 'boolean') overlay.setOption('aura',     stored.auraOn);
   if (typeof stored.nightcallOn === 'boolean') overlay.setOption('nightcall', stored.nightcallOn);
   if (typeof stored.ripplesOn   === 'boolean') overlay.setOption('ripples',  stored.ripplesOn);
+  // Horns 🤘 — config first, then the toggle (wired further down with the
+  // rest of the pose menu; enabling here just arms pose.setHandsEnabled).
+  if (stored.hornsConfig && typeof stored.hornsConfig === 'object') Object.assign(hornsConfig, stored.hornsConfig);
+  hornsOn = stored.hornsOn === true;
   // Glitch modes (per-button mode for ascii / mosh / edge). Migrate any
   // legacy stored.asciiMode / stored.moshOn / stored.edgeOn shape into the
   // unified glitchModes object so users coming from an earlier build keep
@@ -2639,6 +2657,57 @@ export function initQualiaPage() {
   btnLogo?.addEventListener('click', () => setLogoOn(!logoOn));
   refreshLogoBtn();
   syncLogoCard();
+
+  // ── Metal horns 🤘 — hand-gesture detection + reaction ───────────────────
+  // Opt-in (pose menu / qualia.horns): while on, the pose worker ALSO runs
+  // MediaPipe's HandLandmarker on the same captured frame (see
+  // pose-worker.js — zero extra main-thread cost, second CPU inference in
+  // the worker at half the pose cadence), and a held 🤘 fires the reaction:
+  // a transient void* logo flash, an optional one-shot sample, and a
+  // `qualia:horns` window event for anything else to ride. Off = the hand
+  // model is never even fetched. Detection needs the camera on, like every
+  // other pose feature.
+  let hornsLogoTimer = 0;
+  let hornsSoundHinted = false;
+  function hornsFire() {
+    // Logo flash — straight through logoMark rather than setLogoOn so the
+    // transient never touches persisted settings or the topbar button, and
+    // can't fight a performer who already has the logo up.
+    const ms = Math.max(0, +hornsConfig.logoMs || 0);
+    if (ms > 0 && !logoOn) {
+      logoMark.setEnabled(true);
+      clearTimeout(hornsLogoTimer);
+      hornsLogoTimer = setTimeout(() => { if (!logoOn) logoMark.setEnabled(false); }, ms);
+    }
+    // Sample one-shot through superdough (same path as the sounds-panel
+    // preview button). An unregistered name is a single console hint, never
+    // an error — the default 'voidstar' lights up once the performer loads
+    // it, e.g. await samples('shabda/speech:voidstar') in the pattern.
+    const name = String(hornsConfig.sound || '').trim();
+    if (name) {
+      if (strudel.listSounds().some((s) => s.name === name)) {
+        strudel.previewSound(name, 'sample');
+      } else if (!hornsSoundHinted) {
+        hornsSoundHinted = true;
+        console.info(`[qualia] horns 🤘: sound "${name}" isn't registered — load it (e.g. await samples('shabda/speech:${name}')) or point qualia.horns.config({sound:…}) at any registered sound`);
+      }
+    }
+    try { window.dispatchEvent(new CustomEvent('qualia:horns', { detail: { count: hornsDetector.count() } })); } catch {}
+  }
+  pose.onHands((hands, t) => {
+    if (!hornsOn) return;
+    if (hornsDetector.update(hands, t).fired) hornsFire();
+  });
+  function refreshHornsBtn() { btnHorns?.classList.toggle('active', hornsOn); }
+  function setHornsOn(on) {
+    hornsOn = !!on;
+    pose.setHandsEnabled(hornsOn);
+    refreshHornsBtn();
+    settings.save();
+  }
+  btnHorns?.addEventListener('click', () => setHornsOn(!hornsOn));
+  if (hornsOn) pose.setHandsEnabled(true); // restored from settings
+  refreshHornsBtn();
 
   function wireLogoSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
     const row = document.querySelector(`[data-qp="${qpId}"]`);
@@ -7287,6 +7356,16 @@ export function initQualiaPage() {
       setFullscreen,
       setCamWalkOn,
       setLogoOn,
+      // Metal horns 🤘 — detection toggle + reaction config (see the horns
+      // block above; same paths as the pose-menu button).
+      setHornsOn,
+      getHornsOn: () => hornsOn,
+      getHornsConfig: () => ({ ...hornsConfig }),
+      patchHornsConfig: (c) => {
+        if (c && typeof c === 'object') { Object.assign(hornsConfig, c); settings.save(); }
+      },
+      getHornsCount: () => hornsDetector.count(),
+      isHornsActive: () => hornsDetector.active(),
       setAudioMode: (m) => setAudioMode(m).catch(err => console.warn('[qualia] code api setAudioMode:', err)),
       getAudioMode: () => audioMode,
       setAudioTunables: (t) => {

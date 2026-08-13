@@ -26,7 +26,9 @@ export function emptyAudioFrame() {
 
 /** @returns {import('./types.js').PoseFrame} */
 export function emptyPoseFrame() {
-  return { people: [], timestamp: 0 };
+  // hands: latest raw HandLandmarker result ({t, landmarks, handedness}) or
+  // null — only populated while gesture detection (horns 🤘) is enabled.
+  return { people: [], timestamp: 0, hands: null };
 }
 
 // Aggregated audience input (Entanglement). The host reduces every connected

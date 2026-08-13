@@ -54,6 +54,9 @@
  * @typedef {Object} PoseFrame
  * @property {Person[]} people
  * @property {number}   timestamp   performance.now() at detection.
+ * @property {{t:number, landmarks:Array, handedness:Array}|null} [hands]
+ *           Latest raw HandLandmarker result — only while gesture detection
+ *           (horns 🤘) is enabled, else null.
  */
 
 /**
