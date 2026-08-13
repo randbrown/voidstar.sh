@@ -341,8 +341,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       /* z-index 17 keeps the live preview above #panel-tabs (16) and
          #panel-stack (15) — without this the preview renders behind the
          mobile tab bar and the user sees a "camera not working" black
-         strip in the bottom-right. Preview modes (small/large) are
-         fully opaque; only size-full fades down (it's a backdrop). */
+         strip in the bottom-right. Small/large only: size-full and the
+         split panels drop to z14 (below the HUD chrome) — full-viewport
+         camera layers must never block the lower menu. */
       opacity: 1; z-index: 17;
       /* Black backing: a <video> with no decoded frame paints TRANSPARENT,
          so a stalled camera used to degrade to an invisible ghost border
@@ -373,6 +374,13 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       width: 100vw; height: 100dvh;
       opacity: 0.22; border-radius: 0; border: none;
       object-fit: contain; background: black;
+      /* Backdrop rule, same as the split panels (z14 above): as a full-
+         viewport layer the camera must sit UNDER the card stack (15) and
+         tab bar (16) — at the preview's z17 it swallowed every click on
+         the lower HUD menu. Still above the fx canvas (2) / overlay (5),
+         and its double-tap / long-press gestures land anywhere the HUD
+         chrome isn't. */
+      z-index: 14;
     }
     /* Split-screen camera panel — fills the half opposite the fx stage.
        Higher specificity (body class + #video + .visible) than the size-*
