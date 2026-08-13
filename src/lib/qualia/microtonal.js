@@ -229,6 +229,39 @@ const TABLE_ALIASES = {
   wm3: 'well',
 };
 
+/** Table name/alias → ratio array, or null. hasOwnProperty guards keep
+ *  "constructor"-style specs from walking the prototype chain. */
+function resolveTable(key) {
+  if (key === undefined || key === null) return null;
+  const k = String(key).trim().toLowerCase();
+  if (k === '') return null;
+  const name = Object.prototype.hasOwnProperty.call(TABLE_ALIASES, k) ? TABLE_ALIASES[k] : k;
+  return Object.prototype.hasOwnProperty.call(TUNE_TABLES, name) ? TUNE_TABLES[name] : null;
+}
+
+// Chord-symbol root: letter + greedy accidental (same policy as Strudel's own
+// rootNotes()), then a quality tail restricted to characters that occur in
+// real chord symbols (m7, ^7, maj7, dim, aug, sus4, m7b5, 69, alt, °, ø, Δ).
+// The charset check is what keeps junk like "dorian" or "xyz" falling
+// through to null instead of being read as a D/x chord. A slash bass
+// ("C/E", "C6/9") is cut off before the check — the root is what matters.
+const CHORD_ROOT_RE = /^([a-g])(#|b)?([0-9adgijlmnostu#b^+\-°øΔ()]*)$/i;
+
+/**
+ * Chord symbol → root MIDI note (octave 3), or null. "Em7" → 52, "Bb^7" →
+ * 58, "F#m7b5" → 54. Only the pitch class is meaningful to jitune — the
+ * octave-3 anchor just matches the docs' c3 idiom.
+ */
+export function chordRootMidi(symbol) {
+  if (typeof symbol !== 'string') return null;
+  const m = CHORD_ROOT_RE.exec(symbol.trim().split('/')[0]);
+  if (!m) return null;
+  let semis = SEMITONE[m[1].toLowerCase()];
+  if (m[2] === '#') semis += 1;
+  else if (m[2] === 'b') semis -= 1;
+  return 48 + semis;
+}
+
 /** Hz → (fractional) MIDI note number. */
 export function hzToMidi(hz) {
   return 69 + 12 * Math.log2(hz / 440);
@@ -240,8 +273,17 @@ export function hzToMidi(hz) {
  *   "c3:<table>"         → a named table: 7, neutral (11), super
  *                          (supermajor), sub (subminor), meantone
  *                          (quarter-comma, qc)
+ *   "meantone", "7", …   → a bare table name: the root defaults to C —
+ *                          same result as "c3:meantone" (only the pitch
+ *                          class matters). Bare numeric table keys (5, 7,
+ *                          3, 11) read as tables, not sub-audio Hz roots.
+ *   "Em7", "Bb^7:harm"   → a chord-symbol root: the symbol's root pitch
+ *                          class anchors the table, so the tuning root can
+ *                          ride the chord pattern itself:
+ *                          chord(chordz).voicing().jitune(chordz)
  *   "c3:1 16:15 9:8 …"   → a custom 12-ratio table (parseRatio per token,
- *                          so colon and slash forms both work)
+ *                          so colon and slash forms both work; custom
+ *                          tables always need an explicit root)
  * Roots take anything parseRoot does (note name or Hz); only the root's
  * pitch CLASS matters to the result — the octave falls out of the math.
  */
@@ -254,15 +296,27 @@ export function parseTuneSpec(spec, noteToMidi) {
     rootPart = i === -1 ? s : s.slice(0, i);
     tail = i === -1 ? '' : s.slice(i + 1).trim();
   }
-  const rootHz = parseRoot(rootPart === '' ? undefined : rootPart, noteToMidi);
-  if (rootHz === null) return null;
-  const rootMidi = Math.round(hzToMidi(rootHz));
+  // Bare table name — "meantone" ≡ "c3:meantone". Checked before the root
+  // parse so "7"/"5"/"3"/"11" mean tables, not infrasound Hz roots (a 7 Hz
+  // root was never a usable spec, so nothing real is lost).
+  if (tail === '') {
+    const bare = resolveTable(rootPart);
+    if (bare) return { rootHz: DEFAULT_ROOT_HZ, rootMidi: Math.round(hzToMidi(DEFAULT_ROOT_HZ)), ratios: bare };
+  }
+  let rootHz = parseRoot(rootPart === '' ? undefined : rootPart, noteToMidi);
+  let rootMidi;
+  if (rootHz === null) {
+    rootMidi = chordRootMidi(typeof rootPart === 'string' ? rootPart : '');
+    if (rootMidi === null) return null;
+    rootHz = midiToHz(rootMidi);
+  } else {
+    rootMidi = Math.round(hzToMidi(rootHz));
+  }
   let ratios = TUNE_TABLES[5];
   if (tail !== '') {
-    const key = tail.toLowerCase();
-    const named = Object.prototype.hasOwnProperty.call(TABLE_ALIASES, key) ? TABLE_ALIASES[key] : key;
-    if (Object.prototype.hasOwnProperty.call(TUNE_TABLES, named)) {
-      ratios = TUNE_TABLES[named];
+    const named = resolveTable(tail);
+    if (named) {
+      ratios = named;
     } else {
       const parts = tail.split(/\s+/).map(parseRatio);
       if (parts.length !== 12 || parts.some((r) => !Number.isFinite(r))) return null;

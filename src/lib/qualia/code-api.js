@@ -420,6 +420,24 @@ export function installCodeApi(deps) {
       people: () => core.field.pose.people.length,
     },
 
+    // — metal horns 🤘 (hand-gesture detection + reaction) —
+    horns: {
+      /** Detection on/off. While on, the pose worker also runs MediaPipe
+       *  hand tracking (camera must be on); a held 🤘 flashes the void*
+       *  logo, one-shots the configured sound, and fires a `qualia:horns`
+       *  window event. */
+      enabled: gsBool(() => page.getHornsOn?.(), (on) => page.setHornsOn?.(on)),
+      /** Reaction config: {sound, logoMs}. `sound` names any registered
+       *  Strudel sound ('' = silent; default 'voidstar' — load it with
+       *  await samples('shabda/speech:voidstar')); `logoMs` is the logo
+       *  flash length (0 = no flash). horns.config() reads; ({...}) merges. */
+      config: gsConfig(() => page.getHornsConfig?.() || {}, (c) => page.patchHornsConfig?.(c)),
+      /** Times the horns fired this session. */
+      count: () => page.getHornsCount?.() ?? 0,
+      /** Inside a held horns gesture right now? (for pattern conditionals) */
+      active: () => !!page.isHornsActive?.(),
+    },
+
     // — audience entanglement (null-safe before boot / with no room open) —
     entangle: {
       open:   () => safe(() => page.getEntangle()?.open()),
@@ -959,7 +977,8 @@ function tryRegisterStrudelBindings(api, hooks) {
   // Each note's pitch class snaps to a 12-entry ratio table over the root
   // (only the root's pitch CLASS matters — its octave falls out of the
   // math). Spec: "c3" = 5-limit table, "c3:7" = septimal tritone + harmonic
-  // seventh, "c3:1 16:15 9:8 …" = custom 12-ratio table. Fixed-root JI:
+  // seventh, "meantone" = bare table name (root defaults to C),
+  // "c3:1 16:15 9:8 …" = custom 12-ratio table. Fixed-root JI:
   // chords ring pure against the root; some internal fifths carry the
   // syntonic comma — that's the physics, not a bug. A prior .cents() detune
   // survives (fractional midi re-applies on top of the snapped ratio).
@@ -969,39 +988,111 @@ function tryRegisterStrudelBindings(api, hooks) {
   // A, then back to equal temper per cycle. (Use "off", not "~" — a mini
   // rest means NO spec event, which silences the join for that cycle
   // instead of bypassing.)
+  //
+  // Chord-tracking root — .jitune("chord") / .jitune("chord:meantone"):
+  // the root follows the chord each note came from (the symbol is stashed
+  // through voicing() under `qchord` — see the wrapper below), so every
+  // chord rings pure against its OWN root instead of one fixed drone root.
+  // Adaptive JI's trade: chord-to-chord root motion is 12-TET while the
+  // inside of each chord is pure. A chord-symbol spec works too —
+  // .jitune(chordz) retunes to each chord's root as the pattern plays
+  // (5-limit; per-symbol tables via "Em7:harm" strings).
   const JITUNE_OFF = new Set(['off', 'et', 'equal', '-', 'none']);
+  // Retune one hap value against a resolved tuning; `rootOf` picks the
+  // root per value (fixed for normal specs, per-chord for "chord:…").
+  const jituneValue = (v, rootOf, ratios) => {
+    if (v && typeof v === 'object') {
+      const out = { ...v };
+      const raw = out.note ?? out.n ?? out.value;
+      const midi = typeof raw === 'number' ? raw : toMidiSafe(String(raw));
+      if (midi === null || !Number.isFinite(midi)) {
+        tuningWarn('jitune:unpitched', 'jitune: value has no note/n to retune — passed through');
+        return v;
+      }
+      const root = rootOf(v);
+      if (!root) return v;
+      delete out.note; delete out.n; delete out.value; delete out.qchord;
+      out.freq = jiRetune(root.rootHz, root.rootMidi, ratios, midi);
+      return out;
+    }
+    const num = Number(v);
+    const midi = (v !== '' && v !== null && Number.isFinite(num)) ? num : toMidiSafe(String(v));
+    if (midi === null || !Number.isFinite(midi)) {
+      tuningWarn(`jitune-val:${String(v)}`, `jitune: unpitched value ${JSON.stringify(v)} — passed through`);
+      return v;
+    }
+    const root = rootOf(null);
+    if (!root) return v;
+    return { freq: jiRetune(root.rootHz, root.rootMidi, ratios, midi) };
+  };
   define('jitune', (spec, pat) => {
     spec = specString(spec);
     if (typeof spec === 'string' && JITUNE_OFF.has(spec.trim().toLowerCase())) return g.reify(pat);
+    // "chord" / "chord:<table>" — per-note root from the stashed symbol.
+    const chordMode = typeof spec === 'string' && /^chord(:|$)/i.test(spec.trim());
+    if (chordMode) {
+      const tail = spec.trim().slice('chord'.length).replace(/^:/, '').trim();
+      const base = parseTuneSpec(tail === '' ? 'c' : `c:${tail}`, bundleNoteToMidi);
+      if (!base) {
+        tuningWarn(`jitune:${spec}`, `jitune("${spec}"): bad table (want "chord", "chord:meantone" or "chord:<12 ratios>") — pattern unchanged`);
+        return g.reify(pat);
+      }
+      const rootCache = new Map();
+      const rootOf = (v) => {
+        const sym = v ? v.qchord : undefined;
+        if (typeof sym !== 'string' || sym === '') {
+          tuningWarn('jitune:no-chord', 'jitune("chord:…"): value carries no chord — build the pattern from chord().voicing() — passed through');
+          return null;
+        }
+        let root = rootCache.get(sym);
+        if (root === undefined) {
+          const p = parseTuneSpec(sym, bundleNoteToMidi);
+          root = p ? { rootHz: p.rootHz, rootMidi: p.rootMidi } : null;
+          if (!root) tuningWarn(`jitune:chord:${sym}`, `jitune("chord:…"): unparseable chord "${sym}" — passed through`);
+          rootCache.set(sym, root);
+        }
+        return root;
+      };
+      return g.reify(pat).withValue((v) => jituneValue(v, rootOf, base.ratios));
+    }
     const parsed = parseTuneSpec(spec, bundleNoteToMidi);
     if (!parsed) {
-      tuningWarn(`jitune:${spec}`, `jitune("${spec}"): bad spec (want "root", "root:7" or "root:<12 ratios>") — pattern unchanged`);
+      tuningWarn(`jitune:${spec}`, `jitune("${spec}"): bad spec (want "root", "root:7", "meantone", "chord:…" or "root:<12 ratios>") — pattern unchanged`);
       return g.reify(pat);
     }
-    const { rootHz, rootMidi, ratios } = parsed;
-    const retune = (midi) => jiRetune(rootHz, rootMidi, ratios, midi);
-    return g.reify(pat).withValue((v) => {
-      if (v && typeof v === 'object') {
-        const out = { ...v };
-        const raw = out.note ?? out.n ?? out.value;
-        const midi = typeof raw === 'number' ? raw : toMidiSafe(String(raw));
-        if (midi === null || !Number.isFinite(midi)) {
-          tuningWarn('jitune:unpitched', 'jitune: value has no note/n to retune — passed through');
-          return v;
-        }
-        delete out.note; delete out.n; delete out.value;
-        out.freq = retune(midi);
-        return out;
-      }
-      const num = Number(v);
-      const midi = (v !== '' && v !== null && Number.isFinite(num)) ? num : toMidiSafe(String(v));
-      if (midi === null || !Number.isFinite(midi)) {
-        tuningWarn(`jitune-val:${String(v)}`, `jitune: unpitched value ${JSON.stringify(v)} — passed through`);
-        return v;
-      }
-      return { freq: retune(midi) };
-    });
+    const fixed = { rootHz: parsed.rootHz, rootMidi: parsed.rootMidi };
+    return g.reify(pat).withValue((v) => jituneValue(v, () => fixed, parsed.ratios));
   });
+
+  // The pinned bundle's voicing() destructures `chord` OUT of the value
+  // before emitting notes (verified against the @strudel/repl 1.3.0 dist),
+  // so by jitune time a note no longer knows which chord voiced it. Wrap
+  // the Pattern method to stash the symbol under `qchord`, which rides the
+  // ...rest spread onto every emitted note (superdough ignores unknown
+  // keys) and is consumed by jitune above. No-op for values without a
+  // chord; guarded so a bundle-shape change can never take voicing() down
+  // mid-set. (The standalone `voicing(pat)` global bypasses the wrapper —
+  // every documented use is the .voicing() method form.)
+  try {
+    const proto = g.Pattern?.prototype;
+    if (proto && typeof proto.voicing === 'function' && !proto.voicing.__qualiaChordStash) {
+      const origVoicing = proto.voicing;
+      const wrapped = function (...args) {
+        const stashed = this.withValue((v) => {
+          if (typeof v === 'string') return { chord: v, qchord: v };
+          if (v && typeof v === 'object' && v.chord != null && v.qchord === undefined) {
+            return { ...v, qchord: v.chord };
+          }
+          return v;
+        });
+        return origVoicing.apply(stashed, args);
+      };
+      wrapped.__qualiaChordStash = true;
+      proto.voicing = wrapped;
+    }
+  } catch (e) {
+    console.warn('[qualia] voicing chord-stash wrapper skipped:', e);
+  }
 
   console.log('[qualia] strudel bindings registered: quale, qset, qpreset, qphase, qglitch, qtext, qcall, qtrig, edo, edoscale, ji, cents, jitune');
   return true;
