@@ -84,7 +84,6 @@ import fire           from './fx/fire.js';
 import wake           from './fx/wake.js';
 import iconism        from './fx/iconism.js';
 import conway         from './fx/conway.js';
-import noMansLand     from './fx/no-mans-land.js';
 import noMansLand2    from './fx/no-mans-land-2.js';
 import friston        from './fx/friston.js';
 
@@ -209,7 +208,6 @@ export function initQualiaPage() {
   mesh.register(iconism);
   mesh.register(conway);
   mesh.register(friston);
-  mesh.register(noMansLand);
   mesh.register(noMansLand2);
 
   // ── Topbar refs ───────────────────────────────────────────────────────────

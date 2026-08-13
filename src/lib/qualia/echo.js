@@ -1,7 +1,7 @@
 // API echo ("training mode") — a virtual console strip at the bottom of the
 // stage that prints the `qualia.*` expression equivalent to each UI action
 // as the performer makes it: move a slider → `qualia.set('thickness', 0.72)`,
-// switch the quale → `qualia.quale('no_mans_land')`, toggle the walk →
+// switch the quale → `qualia.quale('no_mans_land_2')`, toggle the walk →
 // `qualia.cam.walk(true)`.
 //
 // Why: every UI control already routes through the same setters as the code

@@ -17,16 +17,20 @@
 // geometry; the camera always glides.
 //
 // Audio map (color/light only):
-//   audio.bass       → totem warmth + moon emissive breath   (declarative on
-//                      `totemLight` / `moonGlow`; inline breathing on both)
+//   audio.bass       → totem warmth + beacon columns + moon emissive
+//                      breath (declarative on `totemLight` / `beacons` /
+//                      `moonGlow`; inline breathing on top)
 //   audio.mids       → data-grid shimmer + glyph sway        (declarative on
 //                      `signal`; inline smoothed uniform)
 //   audio.highs      → star glints                           (declarative on
 //                      `starLevel`; inline glint envelope on the sparkle set)
-//   audio.rms        → signal-beam luminance                 (inline)
-//   audio.beat       → a pulse of light traveling up the beam + a scan wave
-//                      down the grid + satellite glints (rate-limited, with
-//                      autonomous fallbacks so silence still breathes)
+//   audio.rms        → river + signal-beam luminance         (declarative on
+//                      `river`; inline on the beam)
+//   audio.beat       → one synchronized emission across the valley: a pulse
+//                      up (or down) every beacon column and the beam, a wave
+//                      down the river toward the moon, a scan across the
+//                      grid, satellite glints (rate-limited, with autonomous
+//                      fallbacks so silence still breathes)
 //
 // Pose map:
 //   pose.head.x / headPitch → camera look drift (heavily smoothed — the
@@ -41,6 +45,10 @@
 //   buildCrossTotem   — roadside cross, "GET RIGHT" / "WITH GOD" + bulb holes
 //   buildMoon         — cratered, bump-mapped, slowly rotating blood moon
 //   buildStars        — twinkle + slow phase-in/out + audio glint starfield
+//   buildRiver        — the river of light, carved into the valley floor
+//   buildBeacons      — riverbank monoliths whose light columns transmit
+//                       skyward at low signal and invert into antennas
+//                       drawing energy DOWN as the tech signal rises
 //   buildGrid         — the terrain's wireframe data-ghost (east side)
 //   buildGlyphField   — rising monospace glyphs (the virtual space of ideas)
 //   buildBeam         — the transmission column between the monuments
@@ -113,6 +121,12 @@ const BUTTES = [
   { x:   42, z: -178, r: 26, h: 36 },
   { x:  176, z: -162, r: 46, h: 44 },
 ];
+// River centerline — single-valued in z so the terrain carve, the ribbon
+// mesh and the floodplain tint all agree. It slips between the monuments
+// and runs off toward the moon's horizon.
+function riverX(z) {
+  return -0.5 + 9 * Math.sin(z * 0.021) + 4 * Math.sin(z * 0.043 + 2.0);
+}
 function terrainHeight(x, z) {
   let h = fbm2(x * 0.011 + 7.3, z * 0.011 - 2.1, 4) * 5.2
         + fbm2(x * 0.05 + 1.7, z * 0.05 + 9.4, 2) * 0.9
@@ -120,6 +134,9 @@ function terrainHeight(x, z) {
   // flat gathering ground around the monuments
   const d0 = Math.hypot(x, z + 2);
   h *= 0.18 + 0.82 * sstep(16, 60, d0);
+  // the river carves a shallow bed
+  const dRiv = x - riverX(z);
+  h -= 0.6 * Math.exp(-(dRiv * dRiv) / (3.5 * 3.5));
   // mesas: steep noise-wobbled walls, near-flat caps
   for (let i = 0; i < BUTTES.length; i++) {
     const b = BUTTES[i];
@@ -155,7 +172,7 @@ const PALETTE_DEFS = {
     fog: 0x0d3038, hemiSky: 0x2e8f9c, hemiGround: 0x6e4526, hemiInt: 0.95,
     sun: 0xffb474, sunInt: 2.9, moonlx: 0x9fc8d8,
     moonTint: 0xd96a30, moonEmis: 0xb84a18,
-    grid: 0x38e4ff, glyphA: 0x9ff4ff, glyphB: 0xffb45a, beam: 0x86f0ff,
+    grid: 0x38e4ff, glyphA: 0x9ff4ff, glyphB: 0xffb45a, beam: 0x86f0ff, river: 0x4fe8ff,
     letter: 0x5eeaff, totemWarm: 0xffb168, starCool: 0xd4f2ff, starWarm: 0xffd9a6,
   }),
   bloodmoon: pal({
@@ -163,7 +180,7 @@ const PALETTE_DEFS = {
     fog: 0x2a0f14, hemiSky: 0x7a3a2a, hemiGround: 0x40201a, hemiInt: 0.85,
     sun: 0xff6a35, sunInt: 2.4, moonlx: 0xd89078,
     moonTint: 0xff3818, moonEmis: 0xd42408,
-    grid: 0xffa040, glyphA: 0xffc890, glyphB: 0xff6a3a, beam: 0xffb070,
+    grid: 0xffa040, glyphA: 0xffc890, glyphB: 0xff6a3a, beam: 0xffb070, river: 0xffa050,
     letter: 0xffc060, totemWarm: 0xff9048, starCool: 0xffd8c0, starWarm: 0xffa060,
   }),
   verdigris: pal({
@@ -171,7 +188,7 @@ const PALETTE_DEFS = {
     fog: 0x0c2e28, hemiSky: 0x2f9c86, hemiGround: 0x4a5a30, hemiInt: 0.95,
     sun: 0xe8d070, sunInt: 2.0, moonlx: 0xa8d8c8,
     moonTint: 0xd8b070, moonEmis: 0xa07830,
-    grid: 0x50ffd8, glyphA: 0xb0ffe8, glyphB: 0xffe080, beam: 0x90ffdf,
+    grid: 0x50ffd8, glyphA: 0xb0ffe8, glyphB: 0xffe080, beam: 0x90ffdf, river: 0x50ffd8,
     letter: 0x60ffd0, totemWarm: 0xffd080, starCool: 0xd0fff0, starWarm: 0xffe8b0,
   }),
   hymnal: pal({
@@ -179,7 +196,7 @@ const PALETTE_DEFS = {
     fog: 0x201a38, hemiSky: 0x6a5a9c, hemiGround: 0x5a4030, hemiInt: 0.95,
     sun: 0xffb070, sunInt: 2.4, moonlx: 0xc8bce0,
     moonTint: 0xe8c898, moonEmis: 0xb09050,
-    grid: 0xc0a8ff, glyphA: 0xe0d0ff, glyphB: 0xffcf90, beam: 0xd8c8ff,
+    grid: 0xc0a8ff, glyphA: 0xe0d0ff, glyphB: 0xffcf90, beam: 0xd8c8ff, river: 0xc8b8ff,
     letter: 0xcdb8ff, totemWarm: 0xffc078, starCool: 0xe8e0ff, starWarm: 0xffe0b8,
   }),
   static: pal({
@@ -187,13 +204,13 @@ const PALETTE_DEFS = {
     fog: 0x1a2026, hemiSky: 0x8a98a4, hemiGround: 0x4a4a46, hemiInt: 0.9,
     sun: 0xe8e0d0, sunInt: 2.2, moonlx: 0xd8dce0,
     moonTint: 0xd8d4c8, moonEmis: 0x909088,
-    grid: 0xd0f0ff, glyphA: 0xe8f8ff, glyphB: 0xc0c8d0, beam: 0xe0f4ff,
+    grid: 0xd0f0ff, glyphA: 0xe8f8ff, glyphB: 0xc0c8d0, beam: 0xe0f4ff, river: 0xd8f4ff,
     letter: 0xcfeaff, totemWarm: 0xf0e0c8, starCool: 0xffffff, starWarm: 0xe8e0d0,
   }),
 };
 const COLOR_SLOTS = ['horizon', 'zenith', 'dusk', 'fog', 'hemiSky', 'hemiGround',
   'sun', 'moonlx', 'moonTint', 'moonEmis', 'grid', 'glyphA', 'glyphB', 'beam',
-  'letter', 'totemWarm', 'starCool', 'starWarm'];
+  'river', 'letter', 'totemWarm', 'starCool', 'starWarm'];
 
 // ── Shaders ────────────────────────────────────────────────────────────
 const SKY_VERT = /* glsl */`
@@ -333,6 +350,81 @@ const BEAM_FRAG = /* glsl */`
         uPulses.y * exp(-pow((vUv.y - uPulses.x) * 9.0, 2.0)) * (1.0 - uPulses.x * 0.5)
       + uPulses.w * exp(-pow((vUv.y - uPulses.z) * 9.0, 2.0)) * (1.0 - uPulses.z * 0.5);
     float a = lat * (uBeam * vert * 0.5 + pulses * 0.85) * flick;
+    gl_FragColor = vec4(uColor * a, a);
+  }
+`;
+
+const RIVER_VERT = /* glsl */`
+  attribute float aAlong;
+  attribute float aAcross;
+  uniform vec3 uCam;
+  varying float vAlong; varying float vAcross; varying float vDist;
+  void main() {
+    vAlong = aAlong; vAcross = aAcross;
+    vDist = distance(position, uCam);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const RIVER_FRAG = /* glsl */`
+  precision highp float;
+  varying float vAlong; varying float vAcross; varying float vDist;
+  uniform float uTime; uniform float uRiver; uniform vec4 uWaves; uniform vec3 uColor;
+  void main() {
+    float edge = exp(-pow(vAcross * 1.9, 2.0));
+    float s1 = sin(vAlong * 210.0 - uTime * 1.15);
+    float s2 = sin(vAlong * 83.0 + uTime * 0.65 + vAcross * 2.7);
+    float shimmer = 0.5 + 0.5 * s1 * s2;
+    float w =
+        uWaves.y * exp(-pow((vAlong - uWaves.x) * 20.0, 2.0)) * (1.0 - uWaves.x * 0.5)
+      + uWaves.w * exp(-pow((vAlong - uWaves.z) * 20.0, 2.0)) * (1.0 - uWaves.z * 0.5);
+    float dfade = exp(-vDist * 0.004);
+    float a = uRiver * edge * dfade * (0.30 + 0.36 * shimmer + w * 0.85);
+    gl_FragColor = vec4(uColor * a, a);
+  }
+`;
+
+// Beacon light columns: one geometry of camera-facing quads, billboarded
+// per-quad in the vertex shader (yaw only) so the whole procession is a
+// single draw call.
+const BCOL_VERT = /* glsl */`
+  attribute vec3 aCenter;
+  attribute vec2 aCorner;   // x: across in {-1,1} · y: along in {0,1}
+  attribute float aSeed;
+  attribute vec2 aDim;      // width, height
+  uniform vec3 uCam;
+  varying float vX; varying float vY; varying float vSeed; varying float vDist;
+  void main() {
+    vec2 d = aCenter.xz - uCam.xz;
+    vec2 right = vec2(-d.y, d.x) / max(length(d), 1e-3);
+    vec3 wp = vec3(aCenter.x + right.x * aCorner.x * aDim.x * 0.5,
+                   aCenter.y + aCorner.y * aDim.y,
+                   aCenter.z + right.y * aCorner.x * aDim.x * 0.5);
+    vX = aCorner.x; vY = aCorner.y; vSeed = aSeed;
+    vDist = distance(wp, uCam);
+    gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
+  }
+`;
+const BCOL_FRAG = /* glsl */`
+  precision highp float;
+  varying float vX; varying float vY; varying float vSeed; varying float vDist;
+  uniform float uTime; uniform float uBeacon; uniform float uFlow;
+  uniform vec4 uPulses; uniform vec3 uColor;
+  void main() {
+    float lat = exp(-pow(vX * 2.4, 2.0));
+    float vert = (1.0 - vY * 0.85) * smoothstep(0.0, 0.05, vY);
+    float flick = 0.8 + 0.2 * sin(uTime * (0.9 + fract(vSeed * 0.13) * 0.7) + vSeed * 7.0);
+    // uFlow +1 → transmission climbs skyward; −1 → the antenna draws energy
+    // down; near 0 (the threshold) both directions whisper at half strength.
+    float wUp = clamp(uFlow, 0.0, 1.0) + (1.0 - abs(uFlow)) * 0.5;
+    float wDn = clamp(-uFlow, 0.0, 1.0) + (1.0 - abs(uFlow)) * 0.5;
+    float y2 = vY + (fract(vSeed * 0.31) - 0.5) * 0.22;   // slight per-beacon desync
+    float e0 = uPulses.y * (1.0 - uPulses.x * 0.4);
+    float e1 = uPulses.w * (1.0 - uPulses.z * 0.4);
+    float pl =
+        wUp * (e0 * exp(-pow((y2 - uPulses.x) * 6.5, 2.0)) + e1 * exp(-pow((y2 - uPulses.z) * 6.5, 2.0)))
+      + wDn * (e0 * exp(-pow((y2 - (1.0 - uPulses.x)) * 6.5, 2.0)) + e1 * exp(-pow((y2 - (1.0 - uPulses.z)) * 6.5, 2.0)));
+    float dfade = exp(-vDist * 0.004);
+    float a = (uBeacon * (0.22 + 0.10 * flick) * vert + pl * 0.75 * vert) * lat * dfade;
     gl_FragColor = vec4(uColor * a, a);
   }
 `;
@@ -635,6 +727,10 @@ function buildOrbits() {
     const ring = new LineLoop(makeCircle(r), mat);
     ring.rotation.set(incl[i][0], incl[i][1], 0);
     group.add(ring);
+    // a close echo ring doubles the apparent stroke weight
+    const echo = new LineLoop(makeCircle(r * 1.012), mat);
+    echo.rotation.copy(ring.rotation);
+    group.add(echo);
     const satMat = new SpriteMaterial({
       map: dotTex, blending: AdditiveBlending, depthWrite: false,
       transparent: true, opacity: 0.5, fog: false,
@@ -676,10 +772,12 @@ function buildTerrain() {
     const rockAmt = sstep(2.5, 14, h);
     const cragAmt = sstep(0.55, 1.4, slope) * 0.85;
     const mott = 0.85 + 0.3 * fbm2(pos.getX(i) * 0.13 + 3.1, pos.getZ(i) * 0.13 - 6.2, 2);
+    const dRiv = Math.abs(pos.getX(i) - riverX(pos.getZ(i)));
+    const flood = Math.exp(-(dRiv * dRiv) / 25);           // darker wet floodplain
     for (let c = 0; c < 3; c++) {
       let v = lerp(sand[c], rock[c], rockAmt);
       v = lerp(v, crag[c], cragAmt);
-      colors[i * 3 + c] = v * mott;
+      colors[i * 3 + c] = v * mott * (1 - flood * 0.32);
     }
   }
   geo.computeVertexNormals();
@@ -786,6 +884,122 @@ function buildGlyphField(uniforms) {
   return points;
 }
 
+// ── Design: the river of light ─────────────────────────────────────────
+// A luminous ribbon following riverX() down its carved bed, south → north
+// so beat-waves run downstream toward the moon's horizon.
+const RIVER_SEGS = 150;
+function buildRiver(uniforms) {
+  // three verts per cross-section — edge / raised spine / edge — so the
+  // luminous centerline peeks over the carved banks at grazing angles
+  const n = RIVER_SEGS * 3;
+  const posArr = new Float32Array(n * 3);
+  const alongArr = new Float32Array(n);
+  const acrossArr = new Float32Array(n);
+  const idx = new Uint16Array((RIVER_SEGS - 1) * 12);
+  for (let j = 0; j < RIVER_SEGS; j++) {
+    const t = j / (RIVER_SEGS - 1);
+    const z = 165 - t * 360;
+    const cx = riverX(z);
+    const y = terrainHeight(cx, z) + 0.14;
+    const w = 3.0 + 1.4 * vnoise2(z * 0.05, 7.7);
+    const a = j * 3;
+    posArr[a * 3]     = cx - w; posArr[a * 3 + 1] = y;        posArr[a * 3 + 2] = z;
+    posArr[a * 3 + 3] = cx;     posArr[a * 3 + 4] = y + 0.75; posArr[a * 3 + 5] = z;
+    posArr[a * 3 + 6] = cx + w; posArr[a * 3 + 7] = y;        posArr[a * 3 + 8] = z;
+    alongArr[a] = t; alongArr[a + 1] = t; alongArr[a + 2] = t;
+    acrossArr[a] = -1; acrossArr[a + 1] = 0; acrossArr[a + 2] = 1;
+    if (j < RIVER_SEGS - 1) {
+      const q = j * 12;
+      idx[q]     = a;     idx[q + 1]  = a + 1; idx[q + 2]  = a + 3;
+      idx[q + 3] = a + 1; idx[q + 4]  = a + 4; idx[q + 5]  = a + 3;
+      idx[q + 6] = a + 1; idx[q + 7]  = a + 2; idx[q + 8]  = a + 4;
+      idx[q + 9] = a + 2; idx[q + 10] = a + 5; idx[q + 11] = a + 4;
+    }
+  }
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new BufferAttribute(posArr, 3));
+  geo.setAttribute('aAlong',  new BufferAttribute(alongArr, 1));
+  geo.setAttribute('aAcross', new BufferAttribute(acrossArr, 1));
+  geo.setIndex(new BufferAttribute(idx, 1));
+  const mat = new ShaderMaterial({
+    uniforms, vertexShader: RIVER_VERT, fragmentShader: RIVER_FRAG,
+    transparent: true, depthWrite: false, blending: AdditiveBlending, side: DoubleSide,
+  });
+  const mesh = new Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  return mesh;
+}
+
+// ── Design: the beacon procession ──────────────────────────────────────
+// Concrete monoliths stationed down the riverbanks, alternating sides,
+// keeping clear of the monument gathering ground. Bodies are one
+// InstancedMesh; their light columns are one billboard-quad sheet.
+const BEACON_Z = [172, 132, 92, 52, -46, -86, -126, -166];
+function buildBeacons(sideTex, colUniforms) {
+  const group = new Group();
+  const count = BEACON_Z.length;
+  const bodyGeo = new BoxGeometry(0.85, 1, 0.55);
+  const bodyMat = new MeshStandardMaterial({ map: sideTex, roughness: 0.95, metalness: 0.02 });
+  const bodies = new InstancedMesh(bodyGeo, bodyMat, count);
+  const m4 = new Matrix4(), q = new Quaternion(), e = new Euler(), v = new Vector3(), sc = new Vector3();
+
+  const centers = [];
+  for (let i = 0; i < count; i++) {
+    const z = BEACON_Z[i];
+    const side = i % 2 ? 1 : -1;
+    const hk = hash2(i * 3.1, 4.4);
+    const x = riverX(z) + side * (8.5 + hk * 4);
+    const hgt = 5.5 + hk * 3.5;
+    const ground = terrainHeight(x, z);
+    e.set(0, hk * 3.1, (hk - 0.5) * 0.10);
+    q.setFromEuler(e);
+    v.set(x, ground + hgt * 0.5 - 0.2, z);
+    sc.set(1, hgt, 1);
+    m4.compose(v, q, sc);
+    bodies.setMatrixAt(i, m4);
+    centers.push({ x, z, top: ground + hgt - 0.25, seed: hk * 100 });
+  }
+  bodies.instanceMatrix.needsUpdate = true;
+  group.add(bodies);
+
+  // the columns — 4 verts / 6 indices per beacon, billboarded in-shader
+  const vn = count * 4;
+  const cArr = new Float32Array(vn * 3);
+  const cornerArr = new Float32Array(vn * 2);
+  const seedArr = new Float32Array(vn);
+  const dimArr = new Float32Array(vn * 2);
+  const cIdx = new Uint16Array(count * 6);
+  const CORNERS = [[-1, 0], [1, 0], [-1, 1], [1, 1]];
+  for (let i = 0; i < count; i++) {
+    const c = centers[i];
+    for (let k = 0; k < 4; k++) {
+      const vi = i * 4 + k;
+      cArr[vi * 3] = c.x; cArr[vi * 3 + 1] = c.top; cArr[vi * 3 + 2] = c.z;
+      cornerArr[vi * 2] = CORNERS[k][0]; cornerArr[vi * 2 + 1] = CORNERS[k][1];
+      seedArr[vi] = c.seed;
+      dimArr[vi * 2] = 2.4; dimArr[vi * 2 + 1] = 80;
+    }
+    const b = i * 4, qi = i * 6;
+    cIdx[qi] = b; cIdx[qi + 1] = b + 1; cIdx[qi + 2] = b + 2;
+    cIdx[qi + 3] = b + 1; cIdx[qi + 4] = b + 3; cIdx[qi + 5] = b + 2;
+  }
+  const colGeo = new BufferGeometry();
+  colGeo.setAttribute('position', new BufferAttribute(cArr, 3));   // aliased as aCenter
+  colGeo.setAttribute('aCenter',  new BufferAttribute(cArr, 3));
+  colGeo.setAttribute('aCorner',  new BufferAttribute(cornerArr, 2));
+  colGeo.setAttribute('aSeed',    new BufferAttribute(seedArr, 1));
+  colGeo.setAttribute('aDim',     new BufferAttribute(dimArr, 2));
+  colGeo.setIndex(new BufferAttribute(cIdx, 1));
+  const colMat = new ShaderMaterial({
+    uniforms: colUniforms, vertexShader: BCOL_VERT, fragmentShader: BCOL_FRAG,
+    transparent: true, depthWrite: false, blending: AdditiveBlending, side: DoubleSide,
+  });
+  const cols = new Mesh(colGeo, colMat);
+  cols.frustumCulled = false;
+  group.add(cols);
+  return { group, bodies };
+}
+
 // ── Design: starfield ──────────────────────────────────────────────────
 function buildStars(uniforms) {
   const posArr = new Float32Array(N_STARS * 3);
@@ -882,6 +1096,10 @@ export default {
         { source: 'audio.mids',   mode: 'mul', amount: 0.30 },
         { source: 'crowd.energy', mode: 'mul', amount: 0.30 },
       ] },
+    { id: 'river',      label: 'river',       type: 'range', min: 0, max: 1.5, step: 0.05, default: 0.8,
+      modulators: [ { source: 'audio.rms', mode: 'mul', amount: 0.50 } ] },
+    { id: 'beacons',    label: 'beacons',     type: 'range', min: 0, max: 1.5, step: 0.05, default: 0.9,
+      modulators: [ { source: 'audio.bass', mode: 'mul', amount: 0.40 } ] },
     { id: 'starLevel',  label: 'stars',       type: 'range', min: 0, max: 1.5, step: 0.05, default: 0.8,
       modulators: [ { source: 'audio.highs', mode: 'mul', amount: 0.35 } ] },
     { id: 'twinkle',    label: 'twinkle',     type: 'range', min: 0, max: 2,   step: 0.05, default: 1.0 },
@@ -894,23 +1112,23 @@ export default {
   // the liminal crossing → bloodmoon procession → ascension → benediction.
   autoPhase: {
     steps: [
-      { camera: 'moonwatch',  palette: 'kma',       signal: 0.12, totemLight: 0.80, moonGlow: 0.65, starLevel: 0.55, twinkle: 0.8, travel: 0.35, titleStars: true },
-      { camera: 'monuments',  palette: 'kma',       signal: 0.30, totemLight: 1.20, moonGlow: 0.80, starLevel: 0.70, twinkle: 1.0, travel: 0.40, titleStars: false },
-      { camera: 'threshold',  palette: 'verdigris', signal: 0.95, totemLight: 0.70, moonGlow: 0.90, starLevel: 0.90, twinkle: 1.1, travel: 0.50, titleStars: false },
-      { camera: 'procession', palette: 'bloodmoon', signal: 0.60, totemLight: 0.90, moonGlow: 1.25, starLevel: 0.80, twinkle: 1.0, travel: 0.55, titleStars: false },
-      { camera: 'ascension',  palette: 'kma',       signal: 1.15, totemLight: 0.60, moonGlow: 1.00, starLevel: 1.25, twinkle: 1.3, travel: 0.50, titleStars: false },
-      { camera: 'moonwatch',  palette: 'hymnal',    signal: 0.45, totemLight: 1.00, moonGlow: 0.90, starLevel: 0.90, twinkle: 0.9, travel: 0.30, titleStars: true },
+      { camera: 'moonwatch',  palette: 'kma',       signal: 0.12, totemLight: 0.80, moonGlow: 0.65, starLevel: 0.55, twinkle: 0.8, travel: 0.35, river: 0.55, beacons: 0.70, titleStars: true },
+      { camera: 'monuments',  palette: 'kma',       signal: 0.30, totemLight: 1.20, moonGlow: 0.80, starLevel: 0.70, twinkle: 1.0, travel: 0.40, river: 0.70, beacons: 1.00, titleStars: false },
+      { camera: 'threshold',  palette: 'verdigris', signal: 0.95, totemLight: 0.70, moonGlow: 0.90, starLevel: 0.90, twinkle: 1.1, travel: 0.50, river: 1.00, beacons: 0.85, titleStars: false },
+      { camera: 'procession', palette: 'bloodmoon', signal: 0.60, totemLight: 0.90, moonGlow: 1.25, starLevel: 0.80, twinkle: 1.0, travel: 0.55, river: 1.10, beacons: 1.25, titleStars: false },
+      { camera: 'ascension',  palette: 'kma',       signal: 1.15, totemLight: 0.60, moonGlow: 1.00, starLevel: 1.25, twinkle: 1.3, travel: 0.50, river: 0.70, beacons: 1.00, titleStars: false },
+      { camera: 'moonwatch',  palette: 'hymnal',    signal: 0.45, totemLight: 1.00, moonGlow: 0.90, starLevel: 0.90, twinkle: 0.9, travel: 0.30, river: 0.85, beacons: 0.90, titleStars: true },
     ],
   },
 
   presets: {
-    default:     { camera: 'moonwatch',  palette: 'kma',       travel: 0.45, moonGlow: 0.8,  totemLight: 0.9, signal: 0.6,  starLevel: 0.8,  twinkle: 1.0, titleStars: true,  reactivity: 1.0, poseReactivity: 1.0 },
-    revival:     { camera: 'moonwatch',  palette: 'kma',       travel: 0.35, moonGlow: 0.65, totemLight: 0.8, signal: 0.12, starLevel: 0.55, twinkle: 0.8, titleStars: true },
-    testament:   { camera: 'monuments',  palette: 'kma',       travel: 0.4,  moonGlow: 0.8,  totemLight: 1.2, signal: 0.3,  starLevel: 0.7,  twinkle: 1.0, titleStars: false },
-    liminal:     { camera: 'threshold',  palette: 'verdigris', travel: 0.5,  moonGlow: 0.9,  totemLight: 0.7, signal: 0.95, starLevel: 0.9,  twinkle: 1.1, titleStars: false },
-    procession:  { camera: 'procession', palette: 'bloodmoon', travel: 0.55, moonGlow: 1.25, totemLight: 0.9, signal: 0.6,  starLevel: 0.8,  twinkle: 1.0, titleStars: false },
-    ascension:   { camera: 'ascension',  palette: 'kma',       travel: 0.5,  moonGlow: 1.0,  totemLight: 0.6, signal: 1.15, starLevel: 1.25, twinkle: 1.3, titleStars: false },
-    benediction: { camera: 'moonwatch',  palette: 'hymnal',    travel: 0.3,  moonGlow: 0.9,  totemLight: 1.0, signal: 0.45, starLevel: 0.9,  twinkle: 0.9, titleStars: true },
+    default:     { camera: 'moonwatch',  palette: 'kma',       travel: 0.45, moonGlow: 0.8,  totemLight: 0.9, signal: 0.6,  river: 0.8,  beacons: 0.9,  starLevel: 0.8,  twinkle: 1.0, titleStars: true,  reactivity: 1.0, poseReactivity: 1.0 },
+    revival:     { camera: 'moonwatch',  palette: 'kma',       travel: 0.35, moonGlow: 0.65, totemLight: 0.8, signal: 0.12, river: 0.55, beacons: 0.7,  starLevel: 0.55, twinkle: 0.8, titleStars: true },
+    testament:   { camera: 'monuments',  palette: 'kma',       travel: 0.4,  moonGlow: 0.8,  totemLight: 1.2, signal: 0.3,  river: 0.7,  beacons: 1.0,  starLevel: 0.7,  twinkle: 1.0, titleStars: false },
+    liminal:     { camera: 'threshold',  palette: 'verdigris', travel: 0.5,  moonGlow: 0.9,  totemLight: 0.7, signal: 0.95, river: 1.0,  beacons: 0.85, starLevel: 0.9,  twinkle: 1.1, titleStars: false },
+    procession:  { camera: 'procession', palette: 'bloodmoon', travel: 0.55, moonGlow: 1.25, totemLight: 0.9, signal: 0.6,  river: 1.1,  beacons: 1.25, starLevel: 0.8,  twinkle: 1.0, titleStars: false },
+    ascension:   { camera: 'ascension',  palette: 'kma',       travel: 0.5,  moonGlow: 1.0,  totemLight: 0.6, signal: 1.15, river: 0.7,  beacons: 1.0,  starLevel: 1.25, twinkle: 1.3, titleStars: false },
+    benediction: { camera: 'moonwatch',  palette: 'hymnal',    travel: 0.3,  moonGlow: 0.9,  totemLight: 1.0, signal: 0.45, river: 0.85, beacons: 0.9,  starLevel: 0.9,  twinkle: 0.9, titleStars: true },
   },
 
   create(canvas, { renderer }) {
@@ -995,6 +1213,25 @@ export default {
     };
     scene.add(buildGrid(gridUniforms));
 
+    // one emission state feeds the beam AND every beacon column, so a beat
+    // reads as a single transmission across the whole valley
+    const pulseVec = new Vector4(1, 0, 1, 0);
+
+    const riverUniforms = {
+      uTime: { value: 0 }, uRiver: { value: 0.8 },
+      uWaves: { value: new Vector4(1, 0, 1, 0) }, uColor: { value: cur.river },
+      uCam: { value: camera.position },
+    };
+    scene.add(buildRiver(riverUniforms));
+
+    const colUniforms = {
+      uTime: { value: 0 }, uBeacon: { value: 0.9 }, uFlow: { value: 1 },
+      uPulses: { value: pulseVec }, uColor: { value: cur.beam },
+      uCam: { value: camera.position },
+    };
+    const beacons = buildBeacons(sideTex, colUniforms);
+    scene.add(beacons.group);
+
     const atlasTex = buildGlyphAtlas();
     const glyphUniforms = {
       uTime: { value: 0 }, uSignal: { value: 0 }, uMids: { value: 0 },
@@ -1005,7 +1242,7 @@ export default {
 
     const beamUniforms = {
       uTime: { value: 0 }, uBeam: { value: 0 },
-      uPulses: { value: new Vector4(1, 0, 1, 0) }, uColor: { value: cur.beam },
+      uPulses: { value: pulseVec }, uColor: { value: cur.beam },
     };
     const beam = new Mesh(
       new PlaneGeometry(7, 140),
@@ -1031,10 +1268,13 @@ export default {
     let liftS = 0, yawS = 0, pitchS = 0, titleAmt = 0;
     let lastBeatPulse = 0, lastEmitAt = -20;
     const pulses = [ { progress: 1, amp: 0 }, { progress: 1, amp: 0 } ];
+    const rWaves = [ { progress: 1, amp: 0 }, { progress: 1, amp: 0 } ];
 
     function emitSignal(time, amp) {
       const w = pulses[0].amp <= 0.001 || pulses[0].progress > pulses[1].progress ? pulses[0] : pulses[1];
       w.progress = 0; w.amp = amp;
+      const rw = rWaves[0].amp <= 0.001 || rWaves[0].progress > rWaves[1].progress ? rWaves[0] : rWaves[1];
+      rw.progress = 0; rw.amp = amp;
       scanAmp = Math.min(1.2, scanAmp + amp);
       satGlint = 1;
       lastEmitAt = time;
@@ -1046,7 +1286,7 @@ export default {
       if (mode === 0) {            // procession — the long ellipse walk
         const th = t * 0.05;
         const x = 2 + Math.cos(th) * 30, z = -4 + Math.sin(th) * 18;
-        pos.set(x, terrainHeight(x, z) + 2.6 + Math.sin(t * 0.11) * 0.5, z);
+        pos.set(x, terrainHeight(x, z) + 3.4 + Math.sin(t * 0.11) * 0.5, z);
         const m = 0.5 + 0.5 * Math.sin(th + 1.2);
         look.set(lerp(0, 30, m), lerp(5, 70, m), lerp(-2, -180, m));
       } else if (mode === 1) {     // monuments — tight slow orbit of the pair
@@ -1056,8 +1296,8 @@ export default {
         look.set(-0.5 + Math.sin(t * 0.05) * 2, 4.6, -0.5);
       } else if (mode === 2) {     // moonwatch — totems in frame, moon high
         const x = -6 + Math.sin(t * 0.021) * 4, z = 30 + Math.cos(t * 0.017) * 3;
-        pos.set(x, terrainHeight(x, z) + 2.2 + Math.sin(t * 0.09) * 0.3, z);
-        look.set(24 + Math.sin(t * 0.013) * 6, 36, -150);
+        pos.set(x, terrainHeight(x, z) + 4.2 + Math.sin(t * 0.09) * 0.3, z);
+        look.set(24 + Math.sin(t * 0.013) * 6, 30, -150);
       } else if (mode === 3) {     // threshold — pan across the digitization front
         const x = 26 + Math.sin(t * 0.023) * 6, z = -20 + Math.cos(t * 0.019) * 26;
         pos.set(x, terrainHeight(x, z) + 3.6, z);
@@ -1116,8 +1356,14 @@ export default {
           p.progress += dt / 5.0;
           if (p.progress >= 1) { p.amp = 0; p.progress = 1; }
         }
+        const rw = rWaves[i];
+        if (rw.amp > 0.001) {
+          rw.progress += dt / 6.5;
+          if (rw.progress >= 1) { rw.amp = 0; rw.progress = 1; }
+        }
       }
-      beamUniforms.uPulses.value.set(pulses[0].progress, pulses[0].amp, pulses[1].progress, pulses[1].amp);
+      pulseVec.set(pulses[0].progress, pulses[0].amp, pulses[1].progress, pulses[1].amp);
+      riverUniforms.uWaves.value.set(rWaves[0].progress, rWaves[0].amp, rWaves[1].progress, rWaves[1].amp);
 
       // ── The moon: slow crater rotation + emissive breath ─────────────
       moon.moon.rotation.y += dt * 0.012;
@@ -1129,15 +1375,15 @@ export default {
       moonlight.intensity = 0.4 + params.moonGlow * 0.7;
 
       // orbital rings + satellites phase in with the signal
-      const ringA = clamp01(signalLive * 0.5 - 0.02);
+      const ringA = 0.22 + clamp01(signalLive * 0.55) * 0.45;
       for (let i = 0; i < orbits.rings.length; i++) {
         const r = orbits.rings[i];
         r.mat.color = cur.grid;
-        r.mat.opacity = ringA * (0.16 + 0.10 * Math.sin(time * 0.1 + i * 2.4)) + satGlint * 0.08;
+        r.mat.opacity = ringA * (0.30 + 0.12 * Math.sin(time * 0.1 + i * 2.4)) + satGlint * 0.10;
         r.th += dt * r.sp;
         r.sat.position.set(Math.cos(r.th) * r.r, Math.sin(r.th) * r.r, 0);
         r.satMat.color = cur.grid;
-        r.satMat.opacity = ringA * (0.5 + glintEnv * 0.5) + satGlint * 0.35;
+        r.satMat.opacity = Math.min(1, ringA * (0.55 + glintEnv * 0.5) + satGlint * 0.35);
         const ss = 2.2 + satGlint * 2.2;
         r.sat.scale.set(ss, ss, 1);
       }
@@ -1149,6 +1395,15 @@ export default {
       heart.capMat.emissiveIntensity = letterInt;
       cross.capMat.emissiveIntensity = letterInt;
       totemGlow.intensity = params.totemLight * (26 + bass * 22);
+
+      // ── River + beacon procession ────────────────────────────────────
+      riverUniforms.uTime.value = time;
+      riverUniforms.uRiver.value = params.river;
+      colUniforms.uTime.value = time;
+      colUniforms.uBeacon.value = params.beacons * (0.85 + bass * 0.30);
+      // low signal → testimony climbs skyward; high signal → the beacons
+      // become antennas drawing energy down out of the sky
+      colUniforms.uFlow.value = 1 - 2 * sigMix;
 
       // ── Sky layers ───────────────────────────────────────────────────
       starUniforms.uTime.value = time;
@@ -1221,6 +1476,7 @@ export default {
       orbits.dotTex.dispose();
       for (const t of title.textures) t.dispose();
       rocks.dispose();
+      beacons.bodies.dispose();
       disposeObject3D(scene);
     }
 
