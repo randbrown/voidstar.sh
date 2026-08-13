@@ -70,6 +70,14 @@ The pose card also shows a live **confidence** readout (per-person mean landmark
 same number `shapePerson` computes) so exposure/boost changes at soundcheck are measurable instead
 of eyeballed.
 
+**Resets.** Sliders reset individually on double-click (the app-wide idiom — back to the markup
+default; exposure compensation resets to 0 EV via `data-reset`). Each card also has a *defaults*
+button: the pose card's (`qualia.pose.reset()`) returns every pose setting to factory — smoothing,
+rate, thresholds, linger, scale, model lite, dark stage off; the camera card's
+(`qualia.cam.reset()`) resets the light pipeline only — boost off, hardware overrides cleared,
+exposure handed back to `continuous`, torch off — leaving zoom/facing/rotation (framing choices
+with their own reset paths) alone.
+
 **Metal horns 🤘 (pose menu → *horns*, `qualia.horns`).** Opt-in hand-gesture detection: while on,
 the pose worker *also* runs MediaPipe's `HandLandmarker` (pinned model, CPU-first like pose) on the
 **same transferred bitmap**, every 2nd pose tick (~7.5 fps at the default 15 fps pose rate) — zero

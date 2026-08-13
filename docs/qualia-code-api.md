@@ -308,6 +308,9 @@ qualia.cam.adjust({ exposureCompensation: 2 })
                                    // apply by capability name; persisted (except torch)
                                    // and re-applied on the next camera open — the
                                    // dark-stage lever: fix light at the sensor first
+qualia.cam.reset()                 // light pipeline back to defaults: boost off, hw
+                                   // overrides cleared, exposure continuous, torch off
+                                   // (zoom/facing/rotation untouched)
 
 qualia.pose.smoothing(0.7)
 qualia.pose.poses(2)               // tracked people 1..6
@@ -325,6 +328,9 @@ qualia.pose.darkStage(true)        // one-switch low-light preset: longer linger
                                    // smoothing, slower rate, auto boost; off restores
 qualia.pose.people()               // currently tracked count
 qualia.pose.confidence()           // per-person mean landmark visibility 0..1
+qualia.pose.reset()                // every pose setting back to its default —
+                                   // smoothing/rate/thresholds/linger/scale, model
+                                   // lite, dark stage off
 
 qualia.horns.enabled(true)         // metal horns 🤘 detection (hands ride the pose worker)
 qualia.horns.config({ sound: 'voidstar', logoMs: 3000, eyesMs: 3000 })

@@ -1006,6 +1006,33 @@ export function initQualiaPage() {
   // so only the button needs painting — no re-apply.
   paintDarkStage();
 
+  // ── Pose defaults reset — every pose-card control back to factory ────────
+  // Dark stage drops first (it would otherwise "restore" its stored previous
+  // values over the defaults applied below). Sliders reset through the same
+  // path as a double-click: back to the markup `value=` default, re-
+  // dispatching `input` so each row's own listener does the real work
+  // (engine, label, persistence) — no second copy of the default values.
+  function resetPoseDefaults() {
+    setDarkStage(false);
+    poseCard?.querySelectorAll('.qp-row input[type="range"]').forEach((input) => {
+      const reset = input.dataset.reset ?? input.defaultValue;
+      if (reset == null || reset === '') return;
+      // Always dispatch, even when the slider already reads the default —
+      // code-API setters (qualia.pose.thresholds etc.) move the engine
+      // without repainting these sliders, so the DOM is not proof the
+      // engine is at the default. The listeners are idempotent.
+      input.value = String(reset);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    pose.setModelQuality('lite');
+    if (poseModelSelect) poseModelSelect.value = 'lite';
+    settings.save();
+  }
+  document.getElementById('btn-pose-defaults')?.addEventListener('click', () => {
+    echo.log('qualia.pose.reset()');
+    resetPoseDefaults();
+  });
+
   // ── Live confidence + boost-gain readouts ────────────────────────────────
   // person.confidence (mean landmark visibility) was always computed but
   // never shown; it's the number that makes lighting/exposure tuning at
@@ -1748,6 +1775,14 @@ export function initQualiaPage() {
         input.max = String(cap.max);
         input.step = String(cap.step);
         input.value = String(cap.value);
+        // Exposure compensation has a true neutral (0 EV) — let the global
+        // double-click-to-reset handler land there. The other hardware
+        // sliders have no meaningful numeric default (their "default" is
+        // continuous auto mode — the card's reset button), so they carry
+        // none and the delegated handler skips them.
+        if (name === 'exposureCompensation' && cap.min <= 0 && cap.max >= 0) {
+          input.dataset.reset = '0';
+        }
         val.textContent = camHwValText(name, cap.value);
         input.addEventListener('input', () => {
           const v = parseFloat(input.value);
@@ -1781,6 +1816,27 @@ export function initQualiaPage() {
       await pose.setCamConstraint(name, value);
     }
   }
+
+  // ── Camera light defaults reset — software boost off, hardware back to
+  // the camera's own automatics. Deliberately narrow: zoom, facing, rotation
+  // and mirror are framing choices with their own reset paths (double-click
+  // / per-device restore), not part of the light pipeline.
+  async function resetCamDefaults() {
+    pose.setLowLight({ amount: 0, auto: false });
+    paintLowLight();
+    for (const k of Object.keys(lastCamAdjust)) delete lastCamAdjust[k];
+    const caps = pose.getCamCaps();
+    if (caps?.exposureMode?.options?.includes('continuous')) {
+      await pose.setCamConstraint('exposureMode', 'continuous');
+    }
+    if (caps?.torch) await pose.setCamConstraint('torch', false);
+    buildCamHwRows();
+    settings.save();
+  }
+  document.getElementById('btn-cam-defaults')?.addEventListener('click', () => {
+    echo.log('qualia.cam.reset()');
+    resetCamDefaults();
+  });
   // Snap mirror to the active lens: front (selfie / 'user') cameras read most
   // naturally mirrored — you move left, the preview moves left — while a rear
   // ('environment') camera must NOT be mirrored or any text/scene comes out
@@ -7770,6 +7826,8 @@ export function initQualiaPage() {
       },
       setDarkStage,
       getDarkStage: () => darkStageOn,
+      resetPoseDefaults,
+      resetCamDefaults,
       applyCamAdjust: async (patch) => {
         if (patch && typeof patch === 'object') {
           for (const [name, v] of Object.entries(patch)) await applyCamHw(name, v);

@@ -3463,8 +3463,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <input type="range" min="0" max="1" step="0.01" value="0.5">
       </div>
       <div class="qp-row" data-qp="pose-fps" title="Pose detection rate. Independent of the visualizer frame rate — run the viz high while pose tracks slow (less CPU, or a deliberate stutter aesthetic).">
-        <label>rate<span class="qp-val">30fps</span></label>
-        <input type="range" min="1" max="60" step="1" value="30">
+        <label>rate<span class="qp-val">15fps</span></label>
+        <input type="range" min="1" max="60" step="1" value="15">
       </div>
       <div class="qp-row" data-qp="pose-detect">
         <label>detect<span class="qp-val"></span></label>
@@ -3501,6 +3501,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="pose-conf" title="Live tracking confidence — mean landmark visibility per tracked person. Watch it at soundcheck to see what lighting / exposure / boost changes actually buy.">
         <label>confidence<span class="qp-val" id="pose-conf-val">—</span></label>
         <span></span>
+      </div>
+      <div class="qp-row" data-qp="pose-defaults" title="Reset every pose setting to its default — smoothing, rate, thresholds, linger, scale, model (lite), dark stage off. Individual sliders also reset on double-click.">
+        <label>defaults</label>
+        <button class="qp-toggle" id="btn-pose-defaults">reset</button>
       </div>
     </div>
   </div>
@@ -3539,6 +3543,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
            built at runtime from the active track's reported capabilities and
            absent entirely on cameras that expose none (e.g. iOS Safari). -->
       <div id="cam-hw-rows"></div>
+      <div class="qp-row" data-qp="cam-defaults" title="Reset the light pipeline — low-light boost off, hardware overrides cleared, exposure handed back to the camera (continuous), torch off. Zoom / facing / rotation are untouched (double-click the zoom slider to reset it).">
+        <label>defaults</label>
+        <button class="qp-toggle" id="btn-cam-defaults">reset</button>
+      </div>
     </div>
   </div>
 

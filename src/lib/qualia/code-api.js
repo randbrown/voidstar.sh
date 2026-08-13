@@ -414,6 +414,10 @@ export function installCodeApi(deps) {
        *  qualia.cam.adjust({ exposureCompensation: 2 }). Persisted (except
        *  torch) and re-applied on the next camera open. Resolves to caps. */
       adjust: (patch) => safe(() => page.applyCamAdjust?.(patch)),
+      /** Reset the light pipeline: low-light boost off, hardware overrides
+       *  cleared, exposure back to continuous, torch off. Zoom / facing /
+       *  rotation are untouched. */
+      reset: () => safe(() => page.resetCamDefaults?.()),
     },
 
     // — pose pipeline —
@@ -440,6 +444,9 @@ export function installCodeApi(deps) {
       people: () => core.field.pose.people.length,
       /** Per-person tracking confidence (mean landmark visibility, 0..1). */
       confidence: () => core.field.pose.people.map(p => p.confidence),
+      /** Reset every pose setting to its default — smoothing, rate,
+       *  thresholds, linger, scale, model (lite), dark stage off. */
+      reset: () => safe(() => page.resetPoseDefaults?.()),
     },
 
     // — metal horns 🤘 (hand-gesture detection + reaction) —
