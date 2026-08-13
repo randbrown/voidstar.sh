@@ -15,8 +15,8 @@ landmarks become named joints, then `pose.*` / `crowd.*` modulation channels.
 
 | File | Responsibility |
 |---|---|
-| `pose.js` | `createPose()` — owns the video element, the `getUserMedia` attempt-ladder, the detect loop, adaptive smoothing, linger, output scale, and joint reshaping (`shapePerson`). |
-| `pose-worker.js` | Classic worker running `detectForVideo()` off-thread. Also hosts the **opt-in hand landmarker** (horns detection, below). |
+| `pose.js` | `createPose()` — owns the video element, the `getUserMedia` attempt-ladder, the detect loop, adaptive smoothing, linger, output scale, joint reshaping (`shapePerson`), model quality (lite/full/heavy), hardware camera controls (`getCamCaps`/`setCamConstraint`), and the low-light boost config. |
+| `pose-worker.js` | Classic worker running `detectForVideo()` off-thread. Applies the **low-light boost** to the transferred bitmap before inference. Also hosts the **opt-in hand landmarker** (horns detection, below). |
 | `horns.js` | Metal horns 🤘 — pure geometric classifier over MediaPipe hand landmarks + hold/re-arm debounce (node-testable: `scripts/check-qualia-horns.mjs`). |
 | `pose-features.js` | Shared normalization math + wire pack/unpack (8 floats) + skeleton pack/unpack/orient. Used by **both** the host engine and the participant client, so a participant's "wrist spread" means exactly what the performer's does. |
 | `vision-loader.js` | Memoizes a single shared `FilesetResolver` (prevents a known mobile hang when two Tasks-Vision consumers each initialize). |
@@ -41,6 +41,34 @@ into reused buffers — never in place on `smoothed`, which is the running smoot
 compound the factor every tick. Since it lands before `shapePerson`, everything downstream sees one
 consistent pose: fx, the `raw` array the overlays draw, the `pose.*` modulation channels, and the
 skeleton shipped to the audience mesh.
+
+**Low light (dark stages).** Four layers, cheapest first — all live in the pose/camera cards and
+`qualia.pose.*` / `qualia.cam.*`:
+
+- **Hardware exposure** (camera card, rows built per-track from `getCapabilities()`;
+  `qualia.cam.caps()` / `.adjust({...})`). Exposure mode/compensation/shutter/iso/brightness/
+  contrast/color temperature/torch, whatever the track reports (iOS Safari: none — the rows simply
+  don't render). Dragging shutter or iso auto-switches exposure to `manual`; exp-comp switches back
+  to `continuous`. Persisted (except torch) and re-applied on the next camera open. Fixing light at
+  the sensor beats everything below.
+- **Low-light boost** (camera card → *low light* / *auto boost*, `qualia.pose.lowLight`). Brightens
+  the frames **the detector sees** — the preview and camera quale read the raw `<video>` and stay
+  untouched. Runs in the pose worker on the already-transferred bitmap (canvas-filter
+  brightness+contrast; a screen-blend fallback where `ctx.filter` doesn't exist); hands see the same
+  lifted frame. Auto mode meters mean luma via a 32×18 probe ~1×/s and EMA-settles the gain (≤3.5×)
+  so lighting changes don't pump the skeleton; the applied gain is readable
+  (`qualia.pose.lowLightGain()`, shown live in the card).
+- **Model quality** (pose card → *model*, `qualia.pose.model`). `lite` (default) / `full` / `heavy`,
+  URLs pinned like everything else. `full` is markedly more robust in low light for ~2–3× the
+  inference cost — still off the main thread, so on a capable machine it's the honest fix; `heavy`
+  wants a lower detect rate. Rebuilds the landmarker in place, linger holds through the swap.
+- **Dark stage** (pose card toggle, `qualia.pose.darkStage`). One switch: linger 1600 ms, smoothing
+  0.7, detect 12 fps, auto boost on. Previous values are stored (and persisted) so *off* returns
+  exactly where you were. Thresholds are left alone — they already default to 0.05, the floor.
+
+The pose card also shows a live **confidence** readout (per-person mean landmark visibility, the
+same number `shapePerson` computes) so exposure/boost changes at soundcheck are measurable instead
+of eyeballed.
 
 **Metal horns 🤘 (pose menu → *horns*, `qualia.horns`).** Opt-in hand-gesture detection: while on,
 the pose worker *also* runs MediaPipe's `HandLandmarker` (pinned model, CPU-first like pose) on the

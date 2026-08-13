@@ -405,6 +405,15 @@ export function installCodeApi(deps) {
         if (v !== undefined) safe(() => pose.setZoom(+v));
         return pose.getZoomCaps()?.value ?? null;
       },
+      /** Hardware capabilities of the active camera track (exposureMode,
+       *  exposureCompensation, exposureTime, iso, brightness, contrast,
+       *  colorTemperature, torch) — null when no camera is open or the
+       *  track reports none (e.g. iOS Safari). */
+      caps: () => pose.getCamCaps(),
+      /** Apply hardware controls by capability name — the dark-stage lever:
+       *  qualia.cam.adjust({ exposureCompensation: 2 }). Persisted (except
+       *  torch) and re-applied on the next camera open. Resolves to caps. */
+      adjust: (patch) => safe(() => page.applyCamAdjust?.(patch)),
     },
 
     // — pose pipeline —
@@ -416,8 +425,21 @@ export function installCodeApi(deps) {
       /** Skeleton size about the screen centre — 1 = raw landmarks. */
       scale:      gs(() => pose.getScale(),      (v) => page.setPoseScale(+v)),
       fps:        gs(() => pose.getDetectFps(),  (v) => pose.setDetectFps(+v)),
+      /** Landmarker model: 'lite' (fast) | 'full' (low-light robust) |
+       *  'heavy' (accurate, slow). Rebuilds the landmarker on change. */
+      model:      gs(() => pose.getModelQuality(), (q) => page.setPoseModel?.(q)),
+      /** Software boost for the frames the DETECTOR sees (preview stays
+       *  raw): {amount 0..1, auto}. lowLight({auto:true}) meters the room. */
+      lowLight:   gsConfig(() => pose.getLowLight(), (c) => page.setLowLight?.(c)),
+      /** Gain the low-light boost is applying right now (1 = passthrough). */
+      lowLightGain: () => pose.getLowLightGain(),
+      /** Dark stage — one switch: longer linger, heavier smoothing, slower
+       *  detect rate, auto low-light boost. Off restores previous values. */
+      darkStage:  gsBool(() => !!page.getDarkStage?.(), (on) => page.setDarkStage?.(on)),
       /** Number of people currently tracked. */
       people: () => core.field.pose.people.length,
+      /** Per-person tracking confidence (mean landmark visibility, 0..1). */
+      confidence: () => core.field.pose.people.map(p => p.confidence),
     },
 
     // — metal horns 🤘 (hand-gesture detection + reaction) —

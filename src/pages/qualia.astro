@@ -3486,6 +3486,22 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>scale<span class="qp-val">1.00×</span></label>
         <input type="range" min="0.25" max="3" step="0.05" value="1">
       </div>
+      <div class="qp-row" data-qp="pose-model" title="Landmarker model. lite = fastest; full is noticeably more robust on dark / low-contrast stages (~2-3× inference cost, still off the main thread); heavy is the most accurate and much slower — pair it with a lower rate.">
+        <label>model</label>
+        <select class="qp-select" id="pose-model-select">
+          <option value="lite" selected>lite · fast</option>
+          <option value="full">full · robust</option>
+          <option value="heavy">heavy · slow</option>
+        </select>
+      </div>
+      <div class="qp-row" data-qp="pose-dark" title="Dark stage — one switch that hardens tracking for low light: longer linger, heavier smoothing, slower detect rate, auto low-light boost. Turning it off restores your previous values.">
+        <label>dark stage</label>
+        <button class="qp-toggle" id="btn-dark-stage">off</button>
+      </div>
+      <div class="qp-row" data-qp="pose-conf" title="Live tracking confidence — mean landmark visibility per tracked person. Watch it at soundcheck to see what lighting / exposure / boost changes actually buy.">
+        <label>confidence<span class="qp-val" id="pose-conf-val">—</span></label>
+        <span></span>
+      </div>
     </div>
   </div>
 
@@ -3511,6 +3527,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label style="color:var(--muted); font-size:0.65rem;">zoom unavailable on this camera</label>
         <span></span>
       </div>
+      <div class="qp-row" data-qp="cam-lowlight" title="Software low-light boost for the pose detector only — brightens the frames the model sees; the preview and camera quale stay untouched. Works on any camera. Prefer the hardware exposure rows below when the camera offers them.">
+        <label>low light<span class="qp-val">off</span></label>
+        <input type="range" min="0" max="1" step="0.05" value="0">
+      </div>
+      <div class="qp-row" data-qp="cam-lowlight-auto" title="Auto low-light: measures frame brightness (~1×/s) and picks the boost itself, up to 3.5×. The readout shows the gain currently applied.">
+        <label>auto boost<span class="qp-val" id="cam-lowlight-gain"></span></label>
+        <button class="qp-toggle" id="btn-lowlight-auto">off</button>
+      </div>
+      <!-- Hardware controls (exposure / shutter / iso / torch …). Rows are
+           built at runtime from the active track's reported capabilities and
+           absent entirely on cameras that expose none (e.g. iOS Safari). -->
+      <div id="cam-hw-rows"></div>
     </div>
   </div>
 

@@ -325,6 +325,19 @@ export function initQualiaPage() {
   // Camera zoom (hardware track-level zoom, gated by capability detection).
   // Persisted across reloads; reapplied after each camera open/flip.
   let lastZoomValue = 1.0;
+  // Hardware camera adjustments beyond zoom (exposure / shutter / iso / …),
+  // by capability name. Persisted and re-applied after each camera open/flip
+  // — a dark venue's exposure setup survives a reload. Torch is deliberately
+  // NOT persisted (a lamp lighting itself on page load is a surprise, not a
+  // restore). Declared up here: the settings snapshot closes over it and can
+  // run during early restore.
+  const lastCamAdjust = {};
+  // Dark-stage mode — one switch that hardens tracking for low light (longer
+  // linger, heavier smoothing, slower detect rate, auto low-light boost).
+  // darkStagePrev holds the values to restore on toggle-off; both persist so
+  // a reload mid-set keeps the mode AND the way back out of it.
+  let darkStageOn = false;
+  let darkStagePrev = null;
   // Custom drag offset for the video preview (px from default bottom-right
   // anchor — positive values move it up/left). Persisted so a placement
   // chosen on the user's main rig sticks across sessions.
@@ -525,6 +538,11 @@ export function initQualiaPage() {
     poseLingerMs:   pose.getLingerMs(),
     poseScale:      pose.getScale(),
     poseFps:        pose.getDetectFps(),
+    poseModel:      pose.getModelQuality(),
+    lowLight:       pose.getLowLight(),
+    darkStage:      darkStageOn,
+    darkStagePrev,
+    camAdjust:      { ...lastCamAdjust },
     vizFps:         core.getMaxFps(),
     audioCollapsed: audioCard.classList.contains('collapsed'),
     poseCollapsed:  poseCard?.classList.contains('collapsed') ?? true,
@@ -688,6 +706,17 @@ export function initQualiaPage() {
     pose.setSmoothing(poseSmoothingValue);
   }
   if (stored.poseThresh) pose.setThresholds(stored.poseThresh);
+  // Model quality — restored before the camera starts, so the first
+  // buildLandmarker already loads the chosen model (no rebuild needed).
+  if (typeof stored.poseModel === 'string') pose.setModelQuality(stored.poseModel);
+  if (stored.lowLight && typeof stored.lowLight === 'object') pose.setLowLight(stored.lowLight);
+  darkStageOn = stored.darkStage === true;
+  if (stored.darkStagePrev && typeof stored.darkStagePrev === 'object') {
+    darkStagePrev = stored.darkStagePrev;
+  }
+  if (stored.camAdjust && typeof stored.camAdjust === 'object') {
+    Object.assign(lastCamAdjust, stored.camAdjust);
+  }
 
   // Global reactive de-jitter (audio + pose modulation low-pass; see core.js).
   let reactSmoothingValue = (typeof stored.reactSmoothing === 'number') ? stored.reactSmoothing : 0.3;
@@ -895,6 +924,110 @@ export function initQualiaPage() {
       settings.save();
     });
   }
+
+  // ── Pose model quality (lite / full / heavy) ─────────────────────────────
+  // Restored above, before the camera starts, so the first landmarker build
+  // already loads the chosen model. Changing it mid-set rebuilds the
+  // landmarker — one model fetch + init; linger holds the pose through the
+  // gap.
+  const poseModelSelect = document.getElementById('pose-model-select');
+  if (poseModelSelect) {
+    poseModelSelect.value = pose.getModelQuality();
+    poseModelSelect.addEventListener('change', async () => {
+      echo.log(`qualia.pose.model('${poseModelSelect.value}')`);
+      await pose.setModelQuality(poseModelSelect.value);
+      poseModelSelect.value = pose.getModelQuality();   // snap back if rejected
+      settings.save();
+    });
+  }
+
+  // Repaint the pose-card sliders + low-light rows from the pose engine's
+  // current values — used by dark-stage (which changes several at once) and
+  // the code-API setters, so UI and engine can't drift.
+  function syncPoseTuningUI() {
+    const paint = (sel, v, text) => {
+      const row = document.querySelector(`[data-qp="${sel}"]`);
+      const input = row?.querySelector('input[type=range]');
+      const val   = row?.querySelector('.qp-val');
+      if (input) input.value = String(v);
+      if (val) val.textContent = text;
+    };
+    poseSmoothingValue = pose.getSmoothing();
+    paint('pose-smooth', poseSmoothingValue, `${Math.round(poseSmoothingValue * 100)}%`);
+    paint('pose-linger', pose.getLingerMs(), `${pose.getLingerMs()}ms`);
+    paint('pose-fps',    pose.getDetectFps(), `${pose.getDetectFps()}fps`);
+    paintLowLight();
+  }
+
+  // ── Dark stage — one-switch low-light hardening ──────────────────────────
+  // Longer linger + heavier smoothing mask the dropouts a dark stage causes;
+  // a slower detect rate gives smoothing a calmer stream to settle; auto
+  // low-light boost lifts what the detector sees. Thresholds are left alone —
+  // they already default to 0.05, effectively the floor. Previous values are
+  // stored (and persisted) so off = exactly where you were.
+  const DARK_STAGE_PRESET = { lingerMs: 1600, smoothing: 0.7, fps: 12 };
+  const btnDarkStage = document.getElementById('btn-dark-stage');
+  function paintDarkStage() {
+    btnDarkStage?.classList.toggle('active', darkStageOn);
+    if (btnDarkStage) btnDarkStage.textContent = darkStageOn ? 'on' : 'off';
+  }
+  function setDarkStage(on) {
+    on = !!on;
+    if (on === darkStageOn) return;
+    darkStageOn = on;
+    if (on) {
+      darkStagePrev = {
+        lingerMs:  pose.getLingerMs(),
+        smoothing: pose.getSmoothing(),
+        fps:       pose.getDetectFps(),
+        lowLight:  pose.getLowLight(),
+      };
+      pose.setLingerMs(DARK_STAGE_PRESET.lingerMs);
+      pose.setSmoothing(DARK_STAGE_PRESET.smoothing);
+      pose.setDetectFps(DARK_STAGE_PRESET.fps);
+      pose.setLowLight({ auto: true });
+    } else {
+      const p = darkStagePrev || {};
+      pose.setLingerMs(typeof p.lingerMs === 'number' ? p.lingerMs : 800);
+      pose.setSmoothing(typeof p.smoothing === 'number' ? p.smoothing : 0.5);
+      pose.setDetectFps(typeof p.fps === 'number' ? p.fps : 15);
+      pose.setLowLight(p.lowLight || { auto: false });
+      darkStagePrev = null;
+    }
+    syncPoseTuningUI();
+    paintDarkStage();
+    settings.save();
+  }
+  btnDarkStage?.addEventListener('click', () => {
+    echo.log(`qualia.pose.darkStage(${!darkStageOn})`);
+    setDarkStage(!darkStageOn);
+  });
+  // Restored state: the individual knob values persisted alongside the flag,
+  // so only the button needs painting — no re-apply.
+  paintDarkStage();
+
+  // ── Live confidence + boost-gain readouts ────────────────────────────────
+  // person.confidence (mean landmark visibility) was always computed but
+  // never shown; it's the number that makes lighting/exposure tuning at
+  // soundcheck empirical. A slow interval gated on the cards being open —
+  // this is a diagnostics readout, not a render-loop consumer.
+  const poseConfVal  = document.getElementById('pose-conf-val');
+  const camLLGainVal = document.getElementById('cam-lowlight-gain');
+  setInterval(() => {
+    if (poseConfVal && poseCard && poseCard.style.display !== 'none'
+        && !poseCard.classList.contains('collapsed')) {
+      const people = core.field.pose.people;
+      poseConfVal.textContent = people.length
+        ? people.map(p => `${Math.round((p.confidence || 0) * 100)}%`).join(' · ')
+        : '—';
+    }
+    if (camLLGainVal && cameraCard && cameraCard.style.display !== 'none'
+        && !cameraCard.classList.contains('collapsed')) {
+      const ll = pose.getLowLight();
+      camLLGainVal.textContent = (ll.auto || ll.amount > 0)
+        ? `${pose.getLowLightGain().toFixed(2)}×` : '';
+    }
+  }, 300);
 
   // ── Viz render FPS cap (diag card). Slider 61 = uncapped ("max"); 1..60
   // caps the visual frame rate. Frees the main thread (Strudel timing + UI on
@@ -1482,6 +1615,7 @@ export function initQualiaPage() {
         if (camZoomNoneRow) camZoomNoneRow.style.display = '';
       }
     }
+    buildCamHwRows();
   }
   // Slider → track zoom. We update the value label optimistically; the
   // track's own clamping is enforced by setZoom.
@@ -1492,6 +1626,161 @@ export function initQualiaPage() {
     await pose.setZoom(v);
     settings.save();
   });
+
+  // ── Low-light boost controls (software — works on any camera) ────────────
+  const camLLRow   = document.querySelector('[data-qp="cam-lowlight"]');
+  const camLLInput = camLLRow?.querySelector('input[type=range]');
+  const camLLVal   = camLLRow?.querySelector('.qp-val');
+  const camLLAutoBtn = document.getElementById('btn-lowlight-auto');
+  function paintLowLight() {
+    const ll = pose.getLowLight();
+    if (camLLInput) camLLInput.value = String(ll.amount);
+    if (camLLVal) {
+      camLLVal.textContent = ll.auto ? 'auto'
+        : (ll.amount > 0 ? `${Math.round(ll.amount * 100)}%` : 'off');
+    }
+    camLLAutoBtn?.classList.toggle('active', ll.auto);
+    if (camLLAutoBtn) camLLAutoBtn.textContent = ll.auto ? 'on' : 'off';
+  }
+  camLLInput?.addEventListener('input', () => {
+    pose.setLowLight({ amount: parseFloat(camLLInput.value) });
+    paintLowLight();
+    settings.save();
+  });
+  camLLAutoBtn?.addEventListener('click', () => {
+    const on = !pose.getLowLight().auto;
+    echo.log(`qualia.pose.lowLight({ auto: ${on} })`);
+    pose.setLowLight({ auto: on });
+    paintLowLight();
+    settings.save();
+  });
+  paintLowLight();
+
+  // ── Hardware camera rows (exposure / shutter / iso / torch …) ────────────
+  // Built from the active track's reported capabilities on every card
+  // refresh; a camera that exposes nothing gets no rows at all (iOS Safari
+  // reports none of these — the card stays calm). Values persist (except
+  // torch) and re-apply on the next open/flip, so a dark venue's exposure
+  // setup survives a reload.
+  const camHwRoot = document.getElementById('cam-hw-rows');
+  const CAM_HW_LABELS = {
+    exposureMode: 'exposure', exposureCompensation: 'exp comp',
+    exposureTime: 'shutter', iso: 'iso', brightness: 'brightness',
+    contrast: 'contrast', colorTemperature: 'color temp', torch: 'torch',
+  };
+  const CAM_HW_TITLES = {
+    exposureMode: 'continuous = the camera decides; manual unlocks shutter/iso below. On dark stages try exp comp first (continuous), or shutter + iso (manual).',
+    exposureCompensation: 'Exposure bias (EV) in continuous mode — the single biggest dark-stage lever when the camera supports it.',
+    exposureTime: 'Shutter time. Longer = brighter but more motion blur. Dragging it switches exposure to manual.',
+    iso: 'Sensor gain. Higher = brighter and noisier. Dragging it switches exposure to manual.',
+    torch: 'Camera lamp (phones). Deliberately not persisted across reloads.',
+  };
+  function camHwValText(name, v) {
+    if (name === 'exposureTime') return `${(v / 10).toFixed(1)}ms`;   // spec unit: 100 µs
+    if (name === 'colorTemperature') return `${Math.round(v)}K`;
+    if (name === 'exposureCompensation') return `${v > 0 ? '+' : ''}${(+v).toFixed(1)}`;
+    return String(Math.round(v * 100) / 100);
+  }
+  async function applyCamHw(name, value, { fromRestore = false } = {}) {
+    // Numeric exposure controls only bite in the matching exposureMode —
+    // nudge the mode over first so the slider does what it looks like it
+    // does instead of silently doing nothing.
+    const caps = pose.getCamCaps() || {};
+    const modes = caps.exposureMode?.options || [];
+    if ((name === 'exposureTime' || name === 'iso') && modes.includes('manual')
+        && caps.exposureMode?.value !== 'manual') {
+      await pose.setCamConstraint('exposureMode', 'manual');
+      lastCamAdjust.exposureMode = 'manual';
+    }
+    if (name === 'exposureCompensation' && modes.includes('continuous')
+        && caps.exposureMode?.value === 'manual') {
+      await pose.setCamConstraint('exposureMode', 'continuous');
+      lastCamAdjust.exposureMode = 'continuous';
+    }
+    const ok = await pose.setCamConstraint(name, value);
+    if (ok && name !== 'torch') lastCamAdjust[name] = value;
+    if (!fromRestore) settings.save();
+    return ok;
+  }
+  function buildCamHwRows() {
+    if (!camHwRoot) return;
+    camHwRoot.textContent = '';
+    const caps = pose.getCamCaps();
+    if (!caps) return;
+    for (const [name, cap] of Object.entries(caps)) {
+      const row = document.createElement('div');
+      row.className = 'qp-row';
+      if (CAM_HW_TITLES[name]) row.title = CAM_HW_TITLES[name];
+      const label = document.createElement('label');
+      label.textContent = CAM_HW_LABELS[name] || name;
+      const val = document.createElement('span');
+      val.className = 'qp-val';
+      label.appendChild(val);
+      row.appendChild(label);
+      if (cap.options) {
+        const sel = document.createElement('select');
+        sel.className = 'qp-select';
+        for (const o of cap.options) {
+          const opt = document.createElement('option');
+          opt.value = o; opt.textContent = o;
+          sel.appendChild(opt);
+        }
+        sel.value = cap.value;
+        sel.addEventListener('change', () => { applyCamHw(name, sel.value); });
+        row.appendChild(sel);
+      } else if (cap.toggle) {
+        const btn = document.createElement('button');
+        btn.className = 'qp-toggle';
+        const paintBtn = (on) => {
+          btn.classList.toggle('active', on);
+          btn.textContent = on ? 'on' : 'off';
+        };
+        paintBtn(!!cap.value);
+        btn.addEventListener('click', async () => {
+          const on = !btn.classList.contains('active');
+          if (await applyCamHw(name, on)) paintBtn(on);
+        });
+        row.appendChild(btn);
+      } else {
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = String(cap.min);
+        input.max = String(cap.max);
+        input.step = String(cap.step);
+        input.value = String(cap.value);
+        val.textContent = camHwValText(name, cap.value);
+        input.addEventListener('input', () => {
+          const v = parseFloat(input.value);
+          val.textContent = camHwValText(name, v);
+          applyCamHw(name, v);
+        });
+        row.appendChild(input);
+      }
+      camHwRoot.appendChild(row);
+    }
+  }
+  // Re-apply persisted hardware adjustments to a freshly-opened track (new
+  // capabilities each open/flip; values clamped to them). exposureMode goes
+  // first so dependent numeric values land in the mode they need. Direct
+  // constraint calls — no applyCamHw — so a restore never saves settings or
+  // re-derives modes.
+  async function restoreCamAdjust() {
+    const caps = pose.getCamCaps();
+    if (!caps) return;
+    const entries = Object.entries(lastCamAdjust)
+      .sort(([a]) => (a === 'exposureMode' ? -1 : 1));
+    for (const [name, v] of entries) {
+      const cap = caps[name];
+      if (!cap) continue;
+      let value = v;
+      if (cap.options) {
+        if (!cap.options.includes(v)) continue;
+      } else if (typeof cap.min === 'number') {
+        value = Math.max(cap.min, Math.min(cap.max, +v));
+      }
+      await pose.setCamConstraint(name, value);
+    }
+  }
   // Snap mirror to the active lens: front (selfie / 'user') cameras read most
   // naturally mirrored — you move left, the preview moves left — while a rear
   // ('environment') camera must NOT be mirrored or any text/scene comes out
@@ -1531,6 +1820,10 @@ export function initQualiaPage() {
       activateCameraTransform(id, { deriveMirrorIfNew: true });
       // Reapply persisted zoom to the new track (it has its own capabilities).
       // refreshCameraCard already clamps + re-applies; nothing else needed.
+      // Hardware exposure/iso/… follow the same pattern, plus a late refresh
+      // for capabilities that populate a beat after the track opens.
+      restoreCamAdjust();
+      setTimeout(refreshCameraCard, 1200);
       settings.save();
     } catch (err) {
       alert(`Could not flip camera: ${err.message || err}`);
@@ -1562,6 +1855,11 @@ export function initQualiaPage() {
         activateCameraTransform(id);
         posesSelect.style.display = '';
         camPicker.populate(id);
+        // Hardware exposure/iso/… restore. Capabilities sometimes populate a
+        // beat after the track opens — refresh the card again once they're
+        // in so the rows appear without a flip/reopen.
+        restoreCamAdjust();
+        setTimeout(refreshCameraCard, 1200);
       } catch (err) {
         // Surface to console too — alerts on Android sometimes get
         // dismissed by the OS before the user reads them; the console
@@ -7457,6 +7755,27 @@ export function initQualiaPage() {
         pose.setScale(v);
         paintPoseScale();
         settings.save();
+      },
+      setPoseModel: async (q) => {
+        await pose.setModelQuality(q);
+        if (poseModelSelect) poseModelSelect.value = pose.getModelQuality();
+        settings.save();
+        return pose.getModelQuality();
+      },
+      setLowLight: (cfg) => {
+        pose.setLowLight(cfg);
+        paintLowLight();
+        settings.save();
+        return pose.getLowLight();
+      },
+      setDarkStage,
+      getDarkStage: () => darkStageOn,
+      applyCamAdjust: async (patch) => {
+        if (patch && typeof patch === 'object') {
+          for (const [name, v] of Object.entries(patch)) await applyCamHw(name, v);
+          buildCamHwRows();
+        }
+        return pose.getCamCaps();
       },
       setPoseSource: (v) => {
         if (!poseSelect || poseSelect.value === v) return;

@@ -302,6 +302,12 @@ qualia.cam.rotate(90); qualia.cam.mirror(true); qualia.cam.flip()
                                    // rotate/mirror persist PER CAMERA (deviceId) —
                                    // switching cameras restores each one's own
 qualia.cam.zoom(2)                 // hardware zoom where supported
+qualia.cam.caps()                  // hardware controls the track reports (exposure,
+                                   // shutter, iso, torch, …) — null when none
+qualia.cam.adjust({ exposureCompensation: 2 })
+                                   // apply by capability name; persisted (except torch)
+                                   // and re-applied on the next camera open — the
+                                   // dark-stage lever: fix light at the sensor first
 
 qualia.pose.smoothing(0.7)
 qualia.pose.poses(2)               // tracked people 1..6
@@ -309,7 +315,16 @@ qualia.pose.thresholds({ detect: 0.1 })
 qualia.pose.linger(1200)           // ms a vanished pose lingers
 qualia.pose.scale(0.7)             // skeleton size about the screen centre (1 = raw)
 qualia.pose.fps(15)                // inference throttle
+qualia.pose.model('full')          // 'lite' fast · 'full' low-light robust · 'heavy' slow
+qualia.pose.lowLight({ auto: true })
+                                   // software boost on the frames the DETECTOR sees
+                                   // (preview stays raw): {amount 0..1, auto}; auto
+                                   // meters the room ~1×/s (≤3.5×)
+qualia.pose.lowLightGain()         // gain the boost is applying right now (1 = off)
+qualia.pose.darkStage(true)        // one-switch low-light preset: longer linger, heavier
+                                   // smoothing, slower rate, auto boost; off restores
 qualia.pose.people()               // currently tracked count
+qualia.pose.confidence()           // per-person mean landmark visibility 0..1
 
 qualia.horns.enabled(true)         // metal horns 🤘 detection (hands ride the pose worker)
 qualia.horns.config({ sound: 'voidstar', logoMs: 3000, eyesMs: 3000 })
