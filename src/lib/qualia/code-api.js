@@ -424,18 +424,22 @@ export function installCodeApi(deps) {
     horns: {
       /** Detection on/off. While on, the pose worker also runs MediaPipe
        *  hand tracking (camera must be on); a held 🤘 flashes the void*
-       *  logo, one-shots the configured sound, and fires a `qualia:horns`
-       *  window event. */
+       *  logo + nightcall eyes, one-shots the configured sound, and fires
+       *  a `qualia:horns` window event. */
       enabled: gsBool(() => page.getHornsOn?.(), (on) => page.setHornsOn?.(on)),
-      /** Reaction config: {sound, logoMs}. `sound` names any registered
-       *  Strudel sound ('' = silent; default 'voidstar' — load it with
-       *  await samples('shabda/speech:voidstar')); `logoMs` is the logo
-       *  flash length (0 = no flash). horns.config() reads; ({...}) merges. */
+      /** Reaction config: {sound, logoMs, eyesMs}. `sound` names any
+       *  registered Strudel sound ('' = silent; default 'voidstar' — load
+       *  it with await samples('shabda/speech:voidstar')); `logoMs` /
+       *  `eyesMs` are the void* logo and nightcall red-eyes flash lengths
+       *  (0 = skip that flash). horns.config() reads; ({...}) merges. */
       config: gsConfig(() => page.getHornsConfig?.() || {}, (c) => page.patchHornsConfig?.(c)),
       /** Times the horns fired this session. */
       count: () => page.getHornsCount?.() ?? 0,
       /** Inside a held horns gesture right now? (for pattern conditionals) */
       active: () => !!page.isHornsActive?.(),
+      /** Trigger the reaction manually — soundcheck the flash/sample
+       *  without throwing horns (or bind it to a pad key). */
+      fire: () => { safe(() => page.fireHorns?.()); },
     },
 
     // — audience entanglement (null-safe before boot / with no room open) —

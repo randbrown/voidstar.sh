@@ -279,10 +279,15 @@ export function initQualiaPage() {
   // pose-menu toggles. `sound` names a registered Strudel sound to one-shot
   // on detection ('' = silent); `logoMs` is the void* logo flash length
   // (0 = no flash).
-  const HORNS_DEFAULTS = { sound: 'voidstar', logoMs: 3000 };
+  const HORNS_DEFAULTS = { sound: 'voidstar', logoMs: 3000, eyesMs: 3000 };
   let hornsOn = false;
   const hornsConfig = { ...HORNS_DEFAULTS };
   const hornsDetector = createHornsDetector();
+  // Nightcall-flash bookkeeping — declared up here because the settings
+  // snapshot (which closes over it via nightcallUserOn) can run during
+  // early restore, long before the horns wiring below.
+  let hornsEyesTimer = 0;
+  let hornsEyesOwned = false;
 
   let camSizeIdx = 0;
   // ── Split-screen state ────────────────────────────────────────────────────
@@ -489,7 +494,7 @@ export function initQualiaPage() {
     sparksOn:       overlay.getOption('sparks'),
     sparkStyle:     overlay.getSparkStyle(),
     auraOn:         overlay.getOption('aura'),
-    nightcallOn:    overlay.getOption('nightcall'),
+    nightcallOn:    nightcallUserOn(),
     ripplesOn:      overlay.getOption('ripples'),
     hornsOn,
     hornsConfig:    { ...hornsConfig },
@@ -2663,12 +2668,31 @@ export function initQualiaPage() {
   // MediaPipe's HandLandmarker on the same captured frame (see
   // pose-worker.js — zero extra main-thread cost, second CPU inference in
   // the worker at half the pose cadence), and a held 🤘 fires the reaction:
-  // a transient void* logo flash, an optional one-shot sample, and a
-  // `qualia:horns` window event for anything else to ride. Off = the hand
-  // model is never even fetched. Detection needs the camera on, like every
-  // other pose feature.
+  // a transient void* logo flash, a nightcall red-eyes flash on the
+  // skeleton, an optional one-shot sample, and a `qualia:horns` window
+  // event for anything else to ride. Off = the hand model is never even
+  // fetched. Detection needs the camera on, like every other pose feature.
   let hornsLogoTimer = 0;
   let hornsSoundHinted = false;
+  // Nightcall flash. Unlike the logo (whose user intent lives in the
+  // separate `logoOn` variable), nightcall's user intent IS the overlay
+  // option — so the flash tracks ownership: `hornsEyesOwned` means WE
+  // turned the eyes on, and anything that reads the option for persistence
+  // (settings snapshot, qualem capture) reports the underlying user state
+  // via nightcallUserOn() so a mid-flash save can't freeze the transient
+  // into stored state. (The owned/timer lets live with the other horns
+  // state near the top of init — the snapshot closure needs them alive
+  // during early restore.)
+  function nightcallUserOn() {
+    return hornsEyesOwned ? false : overlay.getOption('nightcall');
+  }
+  // A manual nightcall toggle mid-flash takes the wheel: drop ownership so
+  // the pending timeout can't claw back whatever the user just chose.
+  // (Runs after wireOverlayToggle's own click handler — order is fine
+  // either way, ownership just stops applying.)
+  btnNightcall?.addEventListener('click', () => {
+    if (hornsEyesOwned) { hornsEyesOwned = false; clearTimeout(hornsEyesTimer); }
+  });
   function hornsFire() {
     // Logo flash — straight through logoMark rather than setLogoOn so the
     // transient never touches persisted settings or the topbar button, and
@@ -2678,6 +2702,21 @@ export function initQualiaPage() {
       logoMark.setEnabled(true);
       clearTimeout(hornsLogoTimer);
       hornsLogoTimer = setTimeout(() => { if (!logoOn) logoMark.setEnabled(false); }, ms);
+    }
+    // Nightcall red eyes on the tracked skeleton for the same beat —
+    // even with the pose-menu toggle off. Skipped when the performer
+    // already runs nightcall (nothing to flash); the button state is left
+    // alone, transient like the logo.
+    const eyesMs = Math.max(0, +hornsConfig.eyesMs || 0);
+    if (eyesMs > 0 && !nightcallUserOn()) {
+      overlay.setOption('nightcall', true);
+      hornsEyesOwned = true;
+      clearTimeout(hornsEyesTimer);
+      hornsEyesTimer = setTimeout(() => {
+        if (!hornsEyesOwned) return;
+        hornsEyesOwned = false;
+        overlay.setOption('nightcall', false);
+      }, eyesMs);
     }
     // Sample one-shot through superdough (same path as the sounds-panel
     // preview button). An unregistered name is a single console hint, never
@@ -6094,7 +6133,7 @@ export function initQualiaPage() {
         sparks:     overlay.getOption('sparks'),
         sparkStyle: overlay.getSparkStyle(),
         aura:       overlay.getOption('aura'),
-        nightcall:  overlay.getOption('nightcall'),
+        nightcall:  nightcallUserOn(),   // flash-aware — never freeze a horns transient
         ripples:    overlay.getOption('ripples'),
         mosh:       overlay.getMoshConfig(),
         edge:       overlay.getEdgeConfig(),
@@ -6774,8 +6813,30 @@ export function initQualiaPage() {
   // kept just under the topbar (20) so nothing covers the chrome.
   const FLOAT_PANELS = ['strudel-panel', 'sequencer-panel', 'vocoder-panel', 'mixer-panel', 'looper-panel'];
   const FLOAT_SEL = FLOAT_PANELS.map((id) => '#' + id).join(',');
+  // The bottom HUD (tab bar + popped-out cards) is part of the same focus
+  // band: at its CSS defaults (stack 15, tabs 16) a floating editor dragged
+  // low sat on the cards for good — a stitch card half-buried under strudel
+  // with no way to reach it short of moving the editor. Touching the stack
+  // or tab bar floats both to the top of the band; touching an editor drops
+  // them back to defaults (which keep the video preview at 17 above the tab
+  // bar — the mobile-critical order — whenever the HUD isn't focused).
+  const hudStackEl = document.getElementById('panel-stack');
+  const hudTabsEl  = document.getElementById('panel-tabs');
+  function dropHudFocus() {
+    if (hudStackEl) hudStackEl.style.zIndex = '';
+    if (hudTabsEl)  hudTabsEl.style.zIndex  = '';
+  }
+  function bringHudToFront() {
+    if (hudStackEl) hudStackEl.style.zIndex = '19';
+    if (hudTabsEl)  hudTabsEl.style.zIndex  = '19';
+    for (const id of FLOAT_PANELS) {
+      const el = document.getElementById(id);
+      if (el) el.style.zIndex = '';
+    }
+  }
   function bringPanelToFront(panel) {
     if (!panel) return;
+    dropHudFocus();
     for (const id of FLOAT_PANELS) {
       const el = document.getElementById(id);
       if (el) el.style.zIndex = (el === panel) ? '19' : '';   // '' → CSS default (18)
@@ -6784,7 +6845,8 @@ export function initQualiaPage() {
   // Capture phase so it lands before each panel's own drag handler.
   document.addEventListener('pointerdown', (e) => {
     const panel = e.target?.closest?.(FLOAT_SEL);
-    if (panel) bringPanelToFront(panel);
+    if (panel) { bringPanelToFront(panel); return; }
+    if (e.target?.closest?.('#panel-stack, #panel-tabs')) bringHudToFront();
   }, true);
   // Opening a panel from its topbar button also raises it (covers "close, reopen
   // → on top" without needing a click inside). rAF runs after the toggle handler.
@@ -7366,6 +7428,7 @@ export function initQualiaPage() {
       },
       getHornsCount: () => hornsDetector.count(),
       isHornsActive: () => hornsDetector.active(),
+      fireHorns: () => hornsFire(),
       setAudioMode: (m) => setAudioMode(m).catch(err => console.warn('[qualia] code api setAudioMode:', err)),
       getAudioMode: () => audioMode,
       setAudioTunables: (t) => {

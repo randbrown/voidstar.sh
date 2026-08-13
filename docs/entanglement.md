@@ -50,7 +50,9 @@ extra capture cost on the main thread, one extra CPU inference in the worker. A 
 both count; scale/mirror/rotation-invariant) is debounced by a hold → fire → re-arm state machine:
 the gesture must be *held* ~250 ms to fire, then released before it can fire again. On fire:
 a transient void* logo flash (via `logoMark` directly, so it never fights the performer's own logo
-toggle or persisted settings), an optional one-shot sample through superdough
+toggle or persisted settings), a nightcall red-eyes flash on the tracked skeleton (`eyesMs`,
+ownership-tracked so it works with the nightcall toggle off, snapshots/qualems never freeze the
+transient, and a manual toggle mid-flash wins), an optional one-shot sample through superdough
 (`qualia.horns.config({sound})` — default `'voidstar'`, which lights up once e.g.
 `await samples('shabda/speech:voidstar')` has registered it; unregistered names hint once and stay
 silent), and a `qualia:horns` window event (+ `qualia.horns.active()` / `.count()` for patterns).
