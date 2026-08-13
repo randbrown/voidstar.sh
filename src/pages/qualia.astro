@@ -3502,6 +3502,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>confidence<span class="qp-val" id="pose-conf-val">—</span></label>
         <span></span>
       </div>
+      <div class="qp-row" data-qp="pose-redetect" title="Drop every tracked pose and re-run person detection. Once every pose slot is full the tracker stops looking for new people, so a false lock (an amp, a jacket on a chair) can shut a real body out of the frame. Auto-fires when a full slot holds rock-bottom confidence for a few seconds; this button is the manual override.">
+        <label>re-detect</label>
+        <button class="qp-toggle" id="btn-pose-redetect">now</button>
+      </div>
       <div class="qp-row" data-qp="pose-defaults" title="Reset every pose setting to its default — smoothing, rate, thresholds, linger, scale, model (lite), dark stage off. Individual sliders also reset on double-click.">
         <label>defaults</label>
         <button class="qp-toggle" id="btn-pose-defaults">reset</button>

@@ -541,6 +541,7 @@ export function initQualiaPage() {
     poseScale:      pose.getScale(),
     poseFps:        pose.getDetectFps(),
     poseModel:      pose.getModelQuality(),
+    poseRedetect:   pose.getAutoRedetect(),
     lowLight:       pose.getLowLight(),
     darkStage:      darkStageOn,
     darkStagePrev,
@@ -725,6 +726,9 @@ export function initQualiaPage() {
   core.setReactSmoothing(reactSmoothingValue);
 
   if (typeof stored.numPoses === 'number') pose.setNumPoses(stored.numPoses);
+  if (stored.poseRedetect && typeof stored.poseRedetect === 'object') {
+    pose.setAutoRedetect(stored.poseRedetect);
+  }
 
   // ── Populate fx selector ──────────────────────────────────────────────────
   for (const mod of mesh.list()) {
@@ -1033,6 +1037,15 @@ export function initQualiaPage() {
   document.getElementById('btn-pose-defaults')?.addEventListener('click', () => {
     echo.log('qualia.pose.reset()');
     resetPoseDefaults();
+  });
+
+  // ── Re-detect — drop every tracked pose and look for people again ────────
+  // The escape hatch for a wedged tracker (see pose.js redetect()): once
+  // every pose slot is full the detector never re-runs, so a false lock on
+  // gear can shut the real performer out until this forces a fresh pass.
+  document.getElementById('btn-pose-redetect')?.addEventListener('click', () => {
+    echo.log('qualia.pose.redetect()');
+    pose.redetect();
   });
 
   // ── Live confidence + boost-gain readouts ────────────────────────────────
@@ -6895,7 +6908,11 @@ export function initQualiaPage() {
       sparse:        true,
       activeFxId:    mesh.ids()[0],
       audio:   { mode: 'off', tunables: AUDIO_PRESETS.default },
-      pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, scale: 1, numPoses: 1 },
+      // numPoses 3 = the engine's boot default (pose.js) and the pose-menu
+      // markup default. This used to say 1, so a "reset to defaults" silently
+      // dropped the rig to single-pose — and with one slot wedged on a false
+      // lock (see pose.js redetect()), the real performer was never tracked.
+      pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, scale: 1, numPoses: 3 },
       overlay: { skeleton: true, sparks: true, sparkStyle: 'dots', aura: true, nightcall: false, ripples: true },
       glitch:  { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off' },
       camWalk: { on: false, config: { ...CAM_WALK_DEFAULTS } },

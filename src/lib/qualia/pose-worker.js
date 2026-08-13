@@ -167,7 +167,6 @@ async function syncHandLandmarker() {
 
 async function buildLandmarker() {
   await ensureVision();
-  if (landmarker) { try { landmarker.close(); } catch {} landmarker = null; }
   const common = {
     runningMode: 'VIDEO',
     numPoses: opts.numPoses,
@@ -183,15 +182,23 @@ async function buildLandmarker() {
   // otherwise-idle core, off the main thread. GPU delegate is the fallback if
   // the WASM SIMD/CPU path is unavailable.
   const modelUrl = POSE_MODELS[opts.model] || POSE_MODELS.lite;
+  // Build the replacement BEFORE closing the old landmarker. Rebuilds happen
+  // mid-set (model swap, threshold change, forced re-detect) and can fail —
+  // e.g. the model URL unreachable at an offline gig. Close-then-create would
+  // leave no landmarker at all and cascade into the main-thread fallback;
+  // create-first means a failed rebuild keeps the previous landmarker running.
+  let next;
   try {
-    landmarker = await PoseLandmarkerCls.createFromOptions(fileset, {
+    next = await PoseLandmarkerCls.createFromOptions(fileset, {
       ...common, baseOptions: { modelAssetPath: modelUrl, delegate: 'CPU' },
     });
   } catch (e) {
-    landmarker = await PoseLandmarkerCls.createFromOptions(fileset, {
+    next = await PoseLandmarkerCls.createFromOptions(fileset, {
       ...common, baseOptions: { modelAssetPath: modelUrl, delegate: 'GPU' },
     });
   }
+  if (landmarker) { try { landmarker.close(); } catch {} }
+  landmarker = next;
 }
 
 self.onmessage = async (e) => {
@@ -200,7 +207,18 @@ self.onmessage = async (e) => {
   try {
     if (msg.type === 'init' || msg.type === 'config') {
       if (msg.opts) opts = { ...opts, ...msg.opts };
-      await buildLandmarker();
+      try {
+        await buildLandmarker();
+      } catch (err) {
+        // Rebuild failed but the previous landmarker survived (create-first
+        // above) — stay operational on the old config instead of reporting
+        // 'error', which would make main drop to the main-thread fallback.
+        if (landmarker) {
+          self.postMessage({ type: 'ready', stale: true, error: String(err?.message || err) });
+          return;
+        }
+        throw err;   // no landmarker at all — real failure, outer catch reports it
+      }
       self.postMessage({ type: 'ready' });
       return;
     }

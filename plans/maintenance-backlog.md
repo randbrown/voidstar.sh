@@ -124,6 +124,12 @@ Companion reading: [`../docs/architecture.md`](../docs/architecture.md) (perf bu
 5. ✅ **`entangle.js`** — *done:* `modes.skeleton` now initialized to `false` explicitly.
 6. **`looper-audio.js stopRecording`** uses `setTimeout` to wait for the OUT boundary — fragile
    under tab-throttling; the worklet has sample-accurate timing it could use.
+6b. **Pose smoothing pairs people by array index** (`pose.js smoothLandmarks`) — MediaPipe's
+   multi-pose output order isn't guaranteed stable, so with 2+ people an order swap feeds person
+   A's smoothing state person B's coordinates (one-frame skeleton lurch), and any count change
+   (2→1→2 flicker) resets ALL smoothing state, not just the person that vanished. Match fresh
+   detections to smoothing state by nearest centroid instead of index; keep per-person state on
+   count changes.
 7. **Port mind's Drive token-lifecycle fixes to setlist + qualia (P2).** The mind sync automation
    pass (2026-07) established ground truth: GIS `requestAccessToken({prompt:'none'})` is **always a
    popup** (no iframe path in the token client), so a gestureless "silent renew" is popup-blocked in

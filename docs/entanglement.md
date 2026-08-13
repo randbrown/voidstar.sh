@@ -70,6 +70,24 @@ The pose card also shows a live **confidence** readout (per-person mean landmark
 same number `shapePerson` computes) so exposure/boost changes at soundcheck are measurable instead
 of eyeballed.
 
+**Stuck tracking / ghost locks (pose card → *re-detect*, `qualia.pose.redetect()` /
+`.autoRedetect`).** MediaPipe's VIDEO-mode graph only runs its person **detector** while it tracks
+fewer than *poses* slots — otherwise it just follows last frame's ROIs, and with the thresholds
+floored (0.05) a track essentially never drops. Net effect: a false lock (an amp head, a jacket on
+a chair) pins a slot forever, and once **every** slot is full the detector never looks again — a
+real body walks into frame and is simply ignored. `redetect()` forces the graph to let go:
+tracking state lives inside the landmarker, so it rebuilds it in place (create-first/fail-safe —
+a rebuild that fails offline keeps the old landmarker) and the detector re-runs on the next frame
+while smoothing + linger carry the overlay through the swap. A watchdog
+(`qualia.pose.autoRedetect`, default `{on: true, conf: 0.2, holdMs: 4000, coolMs: 12000}`,
+persisted) fires it automatically when every slot is occupied and a track's confidence sits under
+`conf` for `holdMs` — ghost locks hug the floor for minutes, real bodies rarely do. While slots
+are *not* full the detector already re-runs every frame (so the watchdog stays quiet, and a solo
+dark-stage set with *poses* at 3 can never lose the performer to a spurious rebuild). Practical
+corollary: keep *poses* at least one **above** the number of bodies you expect — a spare slot
+keeps the detector running continuously, so late entrants are acquired immediately without any
+re-detect at all.
+
 **Resets.** Sliders reset individually on double-click (the app-wide idiom — back to the markup
 default; exposure compensation resets to 0 EV via `data-reset`). Each card also has a *defaults*
 button: the pose card's (`qualia.pose.reset()`) returns every pose setting to factory — smoothing,

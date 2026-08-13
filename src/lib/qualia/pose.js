@@ -212,7 +212,13 @@ export function createPose() {
   function onWorkerMessage(e) {
     const msg = e.data;
     if (!msg) return;
-    if (msg.type === 'ready') { workerReady = true; return; }
+    if (msg.type === 'ready') {
+      workerReady = true;
+      // stale = the rebuild failed but the previous landmarker survived
+      // (offline gig, CDN hiccup) — pose keeps running on the old config.
+      if (msg.stale) console.warn('[qualia] pose: landmarker rebuild failed — previous config kept:', msg.error);
+      return;
+    }
     if (msg.type === 'hands-ready') return;
     if (msg.type === 'hands-error') {
       console.warn('[qualia] hand landmarker failed — pose continues without gestures:', msg.error);
@@ -283,10 +289,11 @@ export function createPose() {
       if (lowLightAmount > 0 || lowLightAuto) pushLowLight();
       return;
     }
-    // Main-thread fallback.
+    // Main-thread fallback. Create-first for the same reason as the worker
+    // path: a failed rebuild mid-set (offline gig) keeps the old landmarker
+    // running instead of leaving pose dead.
     if (!vision) await ensureVision();
-    if (landmarker) { try { landmarker.close(); } catch {} landmarker = null; }
-    landmarker = await PoseLandmarkerCls.createFromOptions(vision, {
+    const next = await PoseLandmarkerCls.createFromOptions(vision, {
       baseOptions: { modelAssetPath: POSE_MODELS[modelQuality], delegate: 'GPU' },
       runningMode: 'VIDEO',
       numPoses,
@@ -294,6 +301,8 @@ export function createPose() {
       minPosePresenceConfidence:  presenceConf,
       minTrackingConfidence:      trackConf,
     });
+    if (landmarker) { try { landmarker.close(); } catch {} }
+    landmarker = next;
   }
 
   function smoothLandmarks(fresh) {
@@ -350,6 +359,80 @@ export function createPose() {
     frame.timestamp = timestamp;
   }
 
+  // ── Re-detection (stuck-tracking recovery) ───────────────────────────────
+  // MediaPipe's VIDEO-mode graph SKIPS its person detector while it already
+  // tracks numPoses poses — re-detection only happens when a track drops
+  // below the tracking threshold. With the thresholds floored for dark-stage
+  // linger (0.05), a track essentially never drops, so a false lock (an amp
+  // head, a jacket on a chair) pins a slot forever. Once every slot is full
+  // the detector never runs again and a real body walking into frame is
+  // simply ignored. redetect() forces the graph to let go: tracking state
+  // lives inside the landmarker, so rebuilding it in place (fail-safe —
+  // see buildLandmarker) makes the detector re-run on the next frame while
+  // smoothing + linger carry the overlay through the swap.
+  //
+  // The watchdog fires it automatically when every slot is occupied AND at
+  // least one track's confidence (mean landmark visibility — the number the
+  // pose card shows) sits under `conf` for `holdMs`. Ghost locks hug the
+  // floor for minutes; real bodies rarely do. While slots are NOT full the
+  // detector already re-runs every frame, so the watchdog stays quiet —
+  // which also means a solo dark-stage set with poses at 3 can never lose
+  // the performer to a spurious rebuild.
+  let autoRedetect = { on: true, conf: 0.2, holdMs: 4000, coolMs: 12000 };
+  let ghostSinceMs = 0;
+  let lastRedetectMs = -1e9;
+  let redetecting = false;
+
+  /** Drop every tracked pose and re-run person detection. Resolves true when
+   *  the landmarker rebuilt; false when it wasn't possible (no landmarker,
+   *  rebuild already in flight, or the rebuild failed and the old tracking
+   *  was kept). */
+  async function redetect() {
+    if (redetecting || !hasLandmarker()) return false;
+    redetecting = true;
+    lastRedetectMs = performance.now();
+    ghostSinceMs = 0;
+    try {
+      await buildLandmarker();
+      return true;
+    } catch (err) {
+      console.warn('[qualia] pose re-detect failed — keeping current tracking:', err);
+      return false;
+    } finally {
+      redetecting = false;
+    }
+  }
+
+  function checkGhostLock(t) {
+    if (!autoRedetect.on || redetecting) return;
+    const people = frame.people;
+    if (people.length < numPoses) { ghostSinceMs = 0; return; }
+    let ghost = false;
+    for (const p of people) {
+      if (p.confidence < autoRedetect.conf) { ghost = true; break; }
+    }
+    if (!ghost) { ghostSinceMs = 0; return; }
+    if (!ghostSinceMs) { ghostSinceMs = t; return; }
+    if (t - ghostSinceMs < autoRedetect.holdMs) return;
+    if (t - lastRedetectMs < autoRedetect.coolMs) return;
+    console.warn('[qualia] pose: every slot full with a rock-bottom-confidence track — forcing re-detection');
+    redetect();
+  }
+
+  /** Watchdog config, partial patch: {on, conf 0..1, holdMs, coolMs}. */
+  function setAutoRedetect(cfg = {}) {
+    if (cfg.on != null) autoRedetect.on = !!cfg.on;
+    if (cfg.conf != null) {
+      const c = Number(cfg.conf);
+      if (Number.isFinite(c)) autoRedetect.conf = Math.max(0, Math.min(1, c));
+    }
+    if (cfg.holdMs != null && Number.isFinite(+cfg.holdMs)) autoRedetect.holdMs = Math.max(500,  +cfg.holdMs);
+    if (cfg.coolMs != null && Number.isFinite(+cfg.coolMs)) autoRedetect.coolMs = Math.max(2000, +cfg.coolMs);
+    if (!autoRedetect.on) ghostSinceMs = 0;
+    return getAutoRedetect();
+  }
+  function getAutoRedetect() { return { ...autoRedetect }; }
+
   // Fold a detection result (from the worker or the main-thread landmarker)
   // into the smoothed pose, with a linger grace so a single dropped/empty
   // frame never snaps pose-driven fx off. Shared by both detect paths.
@@ -358,6 +441,7 @@ export function createPose() {
       smoothLandmarks(fresh);
       lastDetectMs = t;
       rebuildPeople(t);
+      checkGhostLock(t);
     } else if (lingerMs > 0 && t - lastDetectMs > lingerMs) {
       smoothed = [];
       frame.people = [];
@@ -938,6 +1022,9 @@ export function createPose() {
     setNumPoses,
     setThresholds,
     setModelQuality,
+    redetect,
+    setAutoRedetect,
+    getAutoRedetect,
     setSmoothing,
     setLingerMs,
     setScale,

@@ -444,6 +444,16 @@ export function installCodeApi(deps) {
       people: () => core.field.pose.people.length,
       /** Per-person tracking confidence (mean landmark visibility, 0..1). */
       confidence: () => core.field.pose.people.map(p => p.confidence),
+      /** Drop every tracked pose and re-run person detection. The tracker
+       *  skips its person detector while all `poses` slots are full, so a
+       *  false lock (gear, a jacket) can shut a real body out of the frame
+       *  — this forces the graph to look again. Async; resolves true when
+       *  the landmarker rebuilt. */
+      redetect: () => safe(() => pose.redetect()),
+      /** Stuck-tracking watchdog: {on, conf, holdMs, coolMs}. When every
+       *  pose slot is occupied and a track's confidence stays under `conf`
+       *  for `holdMs`, a re-detect fires (at most one per `coolMs`). */
+      autoRedetect: gsConfig(() => pose.getAutoRedetect(), (c) => pose.setAutoRedetect(c)),
       /** Reset every pose setting to its default — smoothing, rate,
        *  thresholds, linger, scale, model (lite), dark stage off. */
       reset: () => safe(() => page.resetPoseDefaults?.()),
