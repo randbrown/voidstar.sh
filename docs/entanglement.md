@@ -51,8 +51,10 @@ both count; scale/mirror/rotation-invariant) is debounced by a hold → fire →
 the gesture must be *held* ~250 ms to fire, then released before it can fire again. On fire:
 a transient void* logo flash (via `logoMark` directly, so it never fights the performer's own logo
 toggle or persisted settings), a nightcall red-eyes flash on the tracked skeleton (`eyesMs`,
-ownership-tracked so it works with the nightcall toggle off, snapshots/qualems never freeze the
-transient, and a manual toggle mid-flash wins), an optional one-shot sample through superdough
+ownership-tracked at the `overlay.setOption` choke point so it works with the nightcall toggle off,
+snapshots/qualems never freeze the transient, and ANY other nightcall write mid-flash — button, API,
+pattern lane, qualem recall — takes the wheel back; skipped under the nightcall THEME, whose eyes
+are always on by design), an optional one-shot sample through superdough
 (`qualia.horns.config({sound})` — default `'voidstar'`, which lights up once e.g.
 `await samples('shabda/speech:voidstar')` has registered it; unregistered names hint once and stay
 silent), and a `qualia:horns` window event (+ `qualia.horns.active()` / `.count()` for patterns).

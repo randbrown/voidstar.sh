@@ -35,6 +35,7 @@ import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { createChron } from './chron.js';
+import { getTheme } from './theme.js';
 import { initQRInterject } from './qr-interject.js';
 import { initSyncUI } from './sync-ui.js';
 import { createRecorder } from './recorder.js';
@@ -288,6 +289,7 @@ export function initQualiaPage() {
   // early restore, long before the horns wiring below.
   let hornsEyesTimer = 0;
   let hornsEyesOwned = false;
+  let hornsEyesWriting = false; // reentry gate for the setOption ownership wrap
 
   let camSizeIdx = 0;
   // ── Split-screen state ────────────────────────────────────────────────────
@@ -2683,16 +2685,32 @@ export function initQualiaPage() {
   // into stored state. (The owned/timer lets live with the other horns
   // state near the top of init — the snapshot closure needs them alive
   // during early restore.)
+  //
+  // Ownership is made airtight at the engine choke point: EVERY nightcall
+  // write that isn't the flash's own — the pose-menu button, a
+  // qualia.overlay() call, a pattern lane, a qualem recall — passes through
+  // the setOption wrap below, which hands the wheel back (drops ownership
+  // and the pending timer) BEFORE the write lands. So `owned` guarantees
+  // "the only writer since the flash began was the flash itself": the
+  // timeout can neither strand the eyes on nor claw back a state the
+  // performer (or a recalled scene) chose mid-flash.
   function nightcallUserOn() {
     return hornsEyesOwned ? false : overlay.getOption('nightcall');
   }
-  // A manual nightcall toggle mid-flash takes the wheel: drop ownership so
-  // the pending timeout can't claw back whatever the user just chose.
-  // (Runs after wireOverlayToggle's own click handler — order is fine
-  // either way, ownership just stops applying.)
-  btnNightcall?.addEventListener('click', () => {
-    if (hornsEyesOwned) { hornsEyesOwned = false; clearTimeout(hornsEyesTimer); }
-  });
+  {
+    const rawSetOption = overlay.setOption;
+    overlay.setOption = (key, on) => {
+      if (key === 'nightcall' && !hornsEyesWriting) {
+        hornsEyesOwned = false;
+        clearTimeout(hornsEyesTimer);
+      }
+      return rawSetOption(key, on);
+    };
+  }
+  function hornsSetEyes(on) {
+    hornsEyesWriting = true;
+    try { overlay.setOption('nightcall', on); } finally { hornsEyesWriting = false; }
+  }
   function hornsFire() {
     // Logo flash — straight through logoMark rather than setLogoOn so the
     // transient never touches persisted settings or the topbar button, and
@@ -2706,16 +2724,19 @@ export function initQualiaPage() {
     // Nightcall red eyes on the tracked skeleton for the same beat —
     // even with the pose-menu toggle off. Skipped when the performer
     // already runs nightcall (nothing to flash); the button state is left
-    // alone, transient like the logo.
+    // alone, transient like the logo. ALSO skipped under the nightcall
+    // THEME: overlay.js draws the eyes for the theme regardless of the
+    // toggle ("the theme carries the tribute"), so a flash there is
+    // invisible — and its later switch-off reads as the flash "sticking".
     const eyesMs = Math.max(0, +hornsConfig.eyesMs || 0);
-    if (eyesMs > 0 && !nightcallUserOn()) {
-      overlay.setOption('nightcall', true);
+    if (eyesMs > 0 && getTheme() !== 'nightcall' && !nightcallUserOn()) {
+      hornsSetEyes(true);
       hornsEyesOwned = true;
       clearTimeout(hornsEyesTimer);
       hornsEyesTimer = setTimeout(() => {
         if (!hornsEyesOwned) return;
         hornsEyesOwned = false;
-        overlay.setOption('nightcall', false);
+        hornsSetEyes(false);
       }, eyesMs);
     }
     // Sample one-shot through superdough (same path as the sounds-panel
