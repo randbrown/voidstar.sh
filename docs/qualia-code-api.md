@@ -420,7 +420,7 @@ toggles, `mixer.*`) all still exist unchanged.
 - **api echo (training mode)**: `qualia.echo(true)` (or the diagnostics-card
   toggle) prints each UI action's `qualia.*` equivalent in a console strip at
   the bottom of the stage — move a slider and read off its param id, switch a
-  quale and see `qualia.quale('no_mans_land')`. Click a line to copy it.
+  quale and see `qualia.quale('no_mans_land_2')`. Click a line to copy it.
 - **hover ids**: every param label and fx-dropdown option shows its
   programmatic id (and the call that drives it) in its hover tooltip;
   `qualia.quales()`, `qualia.params()`, `qualia.preset()` and
