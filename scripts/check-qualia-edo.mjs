@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import {
   DEFAULT_ROOT_HZ, midiToHz, hzToMidi, noteNameToMidi, parseRoot,
   edoFreq, centsFactor, parseEdoSpec, parseRatio, scaleDegree,
-  TUNE_TABLES, parseTuneSpec, jiRetune,
+  TUNE_TABLES, parseTuneSpec, jiRetune, chordRootMidi,
 } from '../src/lib/qualia/microtonal.js';
 
 let failed = 0;
@@ -158,6 +158,54 @@ section('parseTuneSpec');
   check('junk → null',
     parseTuneSpec('h9') === null && parseTuneSpec('c3:9:8') === null
     && parseTuneSpec('c3:1 2 3') === null && parseTuneSpec('c3:constructor') === null);
+}
+
+section('parseTuneSpec — bare table names default the root to C');
+{
+  const bare = parseTuneSpec('meantone');
+  check('"meantone" → meantone table, root pitch class C',
+    bare && bare.ratios === TUNE_TABLES.meantone && bare.rootMidi % 12 === 0);
+  check('bare aliases resolve too',
+    parseTuneSpec('qc')?.ratios === TUNE_TABLES.meantone
+    && parseTuneSpec('harmonic')?.ratios === TUNE_TABLES.harmonic
+    && parseTuneSpec('pyth')?.ratios === TUNE_TABLES.pythagorean
+    && parseTuneSpec('WELL')?.ratios === TUNE_TABLES.well
+    && parseTuneSpec('neutral')?.ratios === TUNE_TABLES.neutral);
+  check('bare numeric table keys read as tables, not Hz roots',
+    parseTuneSpec('7')?.ratios === TUNE_TABLES[7]
+    && parseTuneSpec(7)?.ratios === TUNE_TABLES[7]
+    && parseTuneSpec('11')?.ratios === TUNE_TABLES.neutral);
+  check('audible Hz roots still parse as roots', parseTuneSpec(440)?.rootMidi === 69);
+  check('"meantone" retunes exactly like "c3:meantone"', (() => {
+    const a = parseTuneSpec('meantone'), b = parseTuneSpec('c3:meantone');
+    return Math.abs(jiRetune(a.rootHz, a.rootMidi, a.ratios, 52)
+                  - jiRetune(b.rootHz, b.rootMidi, b.ratios, 52)) < 1e-9;
+  })());
+}
+
+section('parseTuneSpec — chord-symbol roots');
+{
+  check('chordRootMidi lifts the root pitch class (octave 3)',
+    chordRootMidi('Em7') === 52 && chordRootMidi('C^7') === 48
+    && chordRootMidi('Bb^7') === 58 && chordRootMidi('F#m7b5') === 54
+    && chordRootMidi('Dm7') === 50 && chordRootMidi('Caug') === 48
+    && chordRootMidi('Gsus4') === 55 && chordRootMidi('C/E') === 48);
+  check('junk is not a chord', chordRootMidi('dorian') === null
+    && chordRootMidi('xyz') === null && chordRootMidi('h9') === null
+    && chordRootMidi('') === null && chordRootMidi(52) === null);
+  const em = parseTuneSpec('Em7');
+  check('"Em7" → 5-limit over E', em && em.rootMidi % 12 === 4 && em.ratios === TUNE_TABLES[5]);
+  check('"Em7" retunes exactly like an e root', (() => {
+    const e3 = parseTuneSpec('e3');
+    return Math.abs(jiRetune(em.rootHz, em.rootMidi, em.ratios, 56)
+                  - jiRetune(e3.rootHz, e3.rootMidi, e3.ratios, 56)) < 1e-9;
+  })());
+  check('chord root + named table compose ("Am7:harm")',
+    parseTuneSpec('Am7:harm')?.ratios === TUNE_TABLES.harmonic
+    && parseTuneSpec('Am7:harm')?.rootMidi % 12 === 9);
+  check('junk specs still → null',
+    parseTuneSpec('dorian') === null && parseTuneSpec('h9') === null
+    && parseTuneSpec('xyz') === null);
 }
 
 section('jiRetune — pitch-class snap with octave + cents survival');

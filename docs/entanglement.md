@@ -16,7 +16,8 @@ landmarks become named joints, then `pose.*` / `crowd.*` modulation channels.
 | File | Responsibility |
 |---|---|
 | `pose.js` | `createPose()` — owns the video element, the `getUserMedia` attempt-ladder, the detect loop, adaptive smoothing, linger, output scale, and joint reshaping (`shapePerson`). |
-| `pose-worker.js` | Classic worker running `detectForVideo()` off-thread. |
+| `pose-worker.js` | Classic worker running `detectForVideo()` off-thread. Also hosts the **opt-in hand landmarker** (horns detection, below). |
+| `horns.js` | Metal horns 🤘 — pure geometric classifier over MediaPipe hand landmarks + hold/re-arm debounce (node-testable: `scripts/check-qualia-horns.mjs`). |
 | `pose-features.js` | Shared normalization math + wire pack/unpack (8 floats) + skeleton pack/unpack/orient. Used by **both** the host engine and the participant client, so a participant's "wrist spread" means exactly what the performer's does. |
 | `vision-loader.js` | Memoizes a single shared `FilesetResolver` (prevents a known mobile hang when two Tasks-Vision consumers each initialize). |
 | `video.js` | The performer's local camera rotation + mirror; `lmToCanvas` maps a normalized landmark to on-screen canvas pixels matching the mirrored/rotated `<video>` preview. |
@@ -40,6 +41,22 @@ into reused buffers — never in place on `smoothed`, which is the running smoot
 compound the factor every tick. Since it lands before `shapePerson`, everything downstream sees one
 consistent pose: fx, the `raw` array the overlays draw, the `pose.*` modulation channels, and the
 skeleton shipped to the audience mesh.
+
+**Metal horns 🤘 (pose menu → *horns*, `qualia.horns`).** Opt-in hand-gesture detection: while on,
+the pose worker *also* runs MediaPipe's `HandLandmarker` (pinned model, CPU-first like pose) on the
+**same transferred bitmap**, every 2nd pose tick (~7.5 fps at the default 15 fps pose rate) — zero
+extra capture cost on the main thread, one extra CPU inference in the worker. A geometric check in
+`horns.js` (index + pinky extended, middle + ring curled; thumb deliberately ignored so 🤘 and 🤟
+both count; scale/mirror/rotation-invariant) is debounced by a hold → fire → re-arm state machine:
+the gesture must be *held* ~250 ms to fire, then released before it can fire again. On fire:
+a transient void* logo flash (via `logoMark` directly, so it never fights the performer's own logo
+toggle or persisted settings), an optional one-shot sample through superdough
+(`qualia.horns.config({sound})` — default `'voidstar'`, which lights up once e.g.
+`await samples('shabda/speech:voidstar')` has registered it; unregistered names hint once and stay
+silent), and a `qualia:horns` window event (+ `qualia.horns.active()` / `.count()` for patterns).
+Off = the hand model is never fetched. Worker-only by design: the main-thread fallback path skips
+hands rather than adding a second synchronous inference to the thread the worker exists to protect.
+Hands are **not** shipped to the entanglement mesh — performer-side only.
 
 > **Note:** `video.js` and `pose-features.js` implement the orientation transform twice (performer
 > canvas-pixel space vs participant normalized space). `pose-features.js` is the better-factored one

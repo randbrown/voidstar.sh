@@ -161,10 +161,40 @@ export function createPose() {
     return { numPoses, detectConf, presenceConf, trackConf };
   }
   function hasLandmarker() { return useWorker ? workerReady : !!landmarker; }
+  // ── Hands (opt-in, worker-only) ──────────────────────────────────────────
+  // Hand landmarks for the horns 🤘 gesture detector. Deliberately NOT
+  // offered on the main-thread fallback path: a second synchronous
+  // inference on the main thread is exactly the block the worker exists to
+  // avoid, and a missing party trick beats a starved cyclist.
+  let handsWanted = false;
+  let _handsWarned = false;
+  const handsCbs = [];
+  function setHandsEnabled(on) {
+    handsWanted = !!on;
+    if (worker && useWorker) {
+      worker.postMessage({ type: 'hands', on: handsWanted });
+    } else if (handsWanted && _workerFailed && !_handsWarned) {
+      // Enabling before the camera starts is the normal flow — the worker
+      // doesn't exist yet and buildLandmarker restores the hands state when
+      // it does. Only a FAILED worker (main-thread fallback) is worth a warn.
+      _handsWarned = true;
+      console.warn('[qualia] hands: needs the pose worker (main-thread fallback active) — gesture detection unavailable');
+    }
+    if (!handsWanted) frame.hands = null;
+    return handsWanted;
+  }
+  /** cb(handLandmarkArrays, timestampMs) per hand-detection result. */
+  function onHands(cb) { if (typeof cb === 'function') handsCbs.push(cb); }
+
   function onWorkerMessage(e) {
     const msg = e.data;
     if (!msg) return;
     if (msg.type === 'ready') { workerReady = true; return; }
+    if (msg.type === 'hands-ready') return;
+    if (msg.type === 'hands-error') {
+      console.warn('[qualia] hand landmarker failed — pose continues without gestures:', msg.error);
+      return;
+    }
     if (msg.type === 'error') {
       console.warn('[qualia] pose worker reported error — falling back:', msg.error);
       disableWorker();
@@ -175,6 +205,12 @@ export function createPose() {
       // Drop stale results whose source no longer matches (camera stopped or
       // switched to canvas mid-flight) so a ghost pose can't reappear.
       if (!detectSource || detectSource !== msg.source) return;
+      if (msg.hands && handsWanted) {
+        frame.hands = { t: msg.t, landmarks: msg.hands.landmarks, handedness: msg.hands.handedness };
+        for (const cb of handsCbs) {
+          try { cb(msg.hands.landmarks, msg.t); } catch (err) { console.warn('[qualia] hands callback:', err); }
+        }
+      }
       const t = msg.t;
       const fresh = msg.landmarks ?? [];
       // Linger for BOTH sources: a single empty detection (a hand over the
@@ -217,6 +253,8 @@ export function createPose() {
         worker.addEventListener('message', onReady);
         worker.postMessage({ type: 'init', opts: workerConfig() });
       });
+      // A fresh worker starts with hands off — restore the wanted state.
+      if (handsWanted) worker?.postMessage({ type: 'hands', on: true });
       return;
     }
     // Main-thread fallback.
@@ -717,6 +755,9 @@ export function createPose() {
     setLingerMs,
     setScale,
     setDetectFps,
+    setHandsEnabled,
+    isHandsEnabled: () => handsWanted,
+    onHands,
     getNumPoses: () => numPoses,
     getThresholds: () => ({ detect: detectConf, presence: presenceConf, track: trackConf }),
     getSmoothing:  () => smoothing,
