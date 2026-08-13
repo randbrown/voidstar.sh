@@ -283,7 +283,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   // palette/words are strings, everything else numeric.
   const stitchConfig = {
     cellSize: 22,          // cell size, device px
-    palette:  'tatreez',   // 'tatreez' | 'theme' | 'mono'
+    palette:  'theme',     // 'theme' | 'tatreez' | 'mono' — follow the active theme by default
     stitch:   0.35,        // cross-stitch "×" texture amount
     focus:    0.6,         // pose-bbox cell subdivision amount
     wordRate: 0.8,         // word-pill spawn rate scaler (0 = off)
