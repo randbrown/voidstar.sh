@@ -1,12 +1,14 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { Image } from 'astro:assets';
+import NullDef from '../components/NullDef.astro';
 import aboutLogo from '../assets/art/logos_alpha/voidstar_logo_0.png';
 
 const socials = [
-  { href: 'https://youtube.com/@voidstar0_0',  label: 'YouTube',   handle: '@voidstar0_0', desc: 'art videos & live sets'  },
-  { href: 'https://instagram.com/voidstar0',   label: 'Instagram', handle: '@voidstar0',   desc: 'behind the scenes'       },
-  { href: 'https://github.com/randbrown',      label: 'GitHub',    handle: '@randbrown',   desc: 'open source projects'    },
+  { href: 'https://randbrown.com/',            label: 'Website',   handle: 'randbrown.com', desc: 'the personal site'      },
+  { href: 'https://youtube.com/@voidstar0_0',  label: 'YouTube',   handle: '@voidstar0_0',  desc: 'art videos & live sets' },
+  { href: 'https://instagram.com/voidstar0',   label: 'Instagram', handle: '@voidstar0',    desc: 'behind the scenes'      },
+  { href: 'https://github.com/randbrown',      label: 'GitHub',    handle: '@randbrown',    desc: 'open source projects'   },
 ];
 
 const skills = [
@@ -35,23 +37,29 @@ const skills = [
       <div class="about-grid">
         <section class="bio-section">
           <p>
-            I make generative art, ambient music, and interactive experiments — then write about
-            how they work. The work lives at the intersection of creative coding, computer vision,
-            and live performance.
+            I make ambient music and audio-reactive visuals — pedal steel run through live code —
+            and then build the browser tools that make a set happen. Creative coding, a little
+            computer vision, and playing out live.
+          </p>
+
+          <NullDef caption={false} class="bio-null" />
+
+          <p>
+            The name is a C joke. <code>void*</code> is a pointer to untyped memory —
+            potential without form. That's where the work starts: raw data (a camera feed, a mic
+            signal, a math field) shaped into something worth watching.
           </p>
           <p>
-            The name comes from C's <code>void*</code> — a pointer to untyped memory. Potential
-            without form. That's where most of my work starts: raw data (a camera feed, a
-            microphone signal, a mathematical field) shaped into something worth watching.
-          </p>
-          <p>
-            Most of the tools I build are open source. If something in the
-            <a href="/lab">lab</a> catches your eye, the source is usually one click away on
+            Almost everything is open source. If something in the <a href="/lab">lab</a> catches
+            your eye, the source is a click away on
             <a href="https://github.com/randbrown" target="_blank" rel="noopener">GitHub</a>.
+            Sets go up on <a href="https://youtube.com/@voidstar0_0" target="_blank" rel="noopener">YouTube</a>;
+            process shots on <a href="https://instagram.com/voidstar0" target="_blank" rel="noopener">Instagram</a>.
           </p>
           <p>
-            I post art videos on <a href="https://youtube.com/@voidstar0_0" target="_blank" rel="noopener">YouTube</a>
-            and process shots on <a href="https://instagram.com/voidstar0" target="_blank" rel="noopener">Instagram</a>.
+            voidstar is one hat — the day-job code, other projects, and how to reach me live at
+            <a href="https://randbrown.com/" target="_blank" rel="noopener">randbrown.com</a>.
+            Booking a set, building a playlist, or want to collaborate? That's the door.
           </p>
         </section>
 
@@ -129,6 +137,7 @@ const skills = [
 }
 .bio-section a { color: var(--accent); }
 .bio-section a:hover { color: var(--cyan); }
+.bio-null { margin: 0.25rem 0 1.5rem; max-width: 100%; }
 .bio-section code {
   background: var(--surface-2);
   border: 1px solid var(--border);

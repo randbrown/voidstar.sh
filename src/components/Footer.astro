@@ -2,9 +2,10 @@
 const year = new Date().getFullYear();
 
 const socials = [
-  { href: 'https://instagram.com/voidstar0',   label: 'Instagram', handle: '@voidstar0'   },
-  { href: 'https://youtube.com/@voidstar0_0',  label: 'YouTube',   handle: '@voidstar0_0' },
-  { href: 'https://github.com/randbrown',      label: 'GitHub',    handle: '@randbrown'   },
+  { href: 'https://randbrown.com/',            label: 'Website',   handle: 'randbrown.com' },
+  { href: 'https://instagram.com/voidstar0',   label: 'Instagram', handle: '@voidstar0'    },
+  { href: 'https://youtube.com/@voidstar0_0',  label: 'YouTube',   handle: '@voidstar0_0'  },
+  { href: 'https://github.com/randbrown',      label: 'GitHub',    handle: '@randbrown'    },
 ];
 ---
 <footer class="site-footer">
@@ -12,6 +13,7 @@ const socials = [
     <div class="footer-left">
       <span class="footer-logo"><span class="star">✦</span> voidstar</span>
       <p class="footer-tagline">art · code · void</p>
+      <code class="footer-null" title="#define NULL ((void *)0)">((void *)0)</code>
     </div>
 
     <nav class="footer-nav" aria-label="Footer navigation">
@@ -70,6 +72,15 @@ const socials = [
   margin-top: 0.35rem;
   letter-spacing: 0.15em;
 }
+.footer-null {
+  display: inline-block;
+  margin-top: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+.footer-null:hover { color: var(--green); opacity: 1; }
 .footer-nav {
   display: flex;
   flex-direction: column;

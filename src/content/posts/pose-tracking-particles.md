@@ -1,76 +1,73 @@
 ---
-title: "Skeleton as Attractor: Real-Time Pose Particles in the Browser"
-description: "Using MediaPipe Pose to turn body landmarks into live attractor fields that shape a particle system — no server, no install, just a camera and a canvas."
+title: "your skeleton is the physics engine"
+description: "33 MediaPipe landmarks, a 1/dist² attractor field, and 10k particles that chase your elbows — all in the browser, no install."
 pubDate: 2026-04-10
-tags: ["pose-tracking", "particles", "mediapipe", "canvas2d", "camera"]
+updatedDate: 2026-08-18
+tags: ["pose-tracking", "particles", "mediapipe", "web-audio", "creative-coding"]
 ---
 
-The idea is simple: your skeleton becomes the physics engine.
+Your skeleton is a pretty good physics engine, and you already own one. MediaPipe Pose hands you 33 body landmarks — each a normalized `{x, y, z, visibility}` — at ~30fps, right in the browser. Point a particle field at them and every dot on screen starts chasing your elbows.
 
-MediaPipe Pose gives you 33 body landmarks — nose, shoulders, elbows, wrists, hips, knees, ankles — each as a normalized `{x, y, z, visibility}` vector at ~30fps in the browser. Feed those coordinates into an attractor field and suddenly every particle in your system is reacting to your body in real time.
+## the whole trick
 
-## The setup
+Load `@mediapipe/pose`, feed it a `<video>` per frame, read `poseLandmarks`. That's the entire pose pipeline.
 
 ```js
-import { Pose } from '@mediapipe/pose';
+import { Pose } from "@mediapipe/pose";
 
 const pose = new Pose({
-  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`,
 });
-
 pose.setOptions({
   modelComplexity: 1,
   smoothLandmarks: true,
   minDetectionConfidence: 0.5,
   minTrackingConfidence: 0.5,
 });
+pose.onResults(r => (landmarks = r.poseLandmarks)); // 33 points
 
-pose.onResults(onPoseResults);
+// in your render loop:
+await pose.send({ image: video });
 ```
 
-You pipe a `<video>` element into `pose.send()` on each animation frame. The results callback gives you `results.poseLandmarks` — an array of 33 points you can use however you want.
+`smoothLandmarks` is doing a lot of quiet work here — without it the joints jitter and your particles look nervous.
 
-## Landmark → attractor
+Running `pose.send` in the render loop is fine for a demo. For a real set you'd move inference into a worker so a slow forward pass never stutters the visuals — that's exactly what [qualia](/qualia) does — but that's an optimization, not step one.
 
-I map each landmark to a force field centered at its canvas position. Every particle within a radius `R` gets a velocity nudge toward (or away from) that point, scaled by `1/distance²`:
+## landmarks → attractors
+
+Every visible landmark becomes a little gravity well. For each particle, sum the pull from each joint with a `1/dist²` falloff and nudge its velocity. Skip anything under 0.5 visibility so an offscreen limb doesn't yank the whole field.
 
 ```js
-function applyLandmarkForces(landmarks, px, py, vx, vy, N) {
-  for (const lm of landmarks) {
-    if (lm.visibility < 0.5) continue; // skip occluded joints
-
-    const lx = lm.x * canvas.width;
-    const ly = lm.y * canvas.height;
-
-    for (let i = 0; i < N; i++) {
-      const dx = lx - px[i];
-      const dy = ly - py[i];
-      const distSq = dx * dx + dy * dy;
-      if (distSq > R * R || distSq < 1) continue;
-
-      const force = STRENGTH / distSq;
-      vx[i] += dx * force;
-      vy[i] += dy * force;
-    }
+for (const lm of landmarks) {
+  if (lm.visibility < 0.5) continue;
+  const ax = lm.x * width, ay = lm.y * height;
+  for (let i = 0; i < N; i++) {
+    const dx = ax - px[i], dy = ay - py[i];
+    const d2 = dx*dx + dy*dy + 1e-3;   // +epsilon, no divide-by-zero
+    const f = strength / d2;
+    vx[i] += dx * f;
+    vy[i] += dy * f;
   }
 }
 ```
 
-Using typed arrays (`Float32Array`) keeps this fast enough to run 10k particles alongside the pose model at a stable 30fps on a mid-range laptop.
+Keep positions and velocities in flat `Float32Array`s, not objects (the [particle-systems post](/posts/particle-systems-from-scratch) has the why). On a mid laptop the model plus 10k particles stays comfortably real-time.
 
-## Making it interesting
+## make it weird
 
-A plain gravity attractor is boring after 30 seconds. A few variations that work well:
+The naive version is a blob that follows you. A few cheap upgrades earn their keep:
 
-**Repeller joints** — wrists push particles away while shoulders pull them in. The body becomes a lens.
+- **Repellers.** Flip the sign per joint — wrists push, shoulders pull. Waving your arms now carves negative space instead of just gathering dots.
+- **Velocity color.** Map speed to hue. Fast particles go hot, settled ones cool. Free motion-heatmap.
+- **Trails.** Don't clear the canvas — paint a translucent black rect each frame and blend additively. Instant motion smear, zero history to track.
+- **Let the music in.** Run the mic through an `AnalyserNode`, grab the FFT, pipe the low-band energy into `strength`. Bass hits, the field breathes.
 
-**Velocity-coded color** — map particle speed to hue. Slow particles near the body glow violet; fast ones ejected outward shift to cyan.
+That last one is where it stops being a tech demo. Pose gives you space, audio gives you time, and the particles live in the middle.
 
-**Additive blending** — `ctx.globalCompositeOperation = 'lighter'` makes dense clusters near joints bloom into bright focal points. Combined with a slow fade (semi-transparent fill instead of `clearRect`) you get motion trails that trace the body's path through space.
-
-**Audio modulation** — feed a microphone FFT into the attractor strength so the field pulses to beat.
-
-The lab demo wires all of these together. It asks for camera (and optionally microphone) access, loads the MediaPipe WASM model, and runs everything in a single `requestAnimationFrame` loop — no backend required.
-
-→ [Open the Pose Particles demo in the Lab](/lab)
-→ [Source on GitHub](https://github.com/randbrown)
+→ play with it live: [/lab/pose-particles](/lab/pose-particles)
+→ where it grew up — the instrument: [/qualia](/qualia)
+→ audio-reactive cousin: [/lab/cymatics](/lab/cymatics)
+→ MediaPipe Pose docs: [ai.google.dev/edge/mediapipe](https://ai.google.dev/edge/mediapipe)
+→ the AnalyserNode / FFT bits: [Web Audio API on MDN](https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API)
+→ source: [github.com/randbrown](https://github.com/randbrown)

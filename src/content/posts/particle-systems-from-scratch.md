@@ -1,101 +1,86 @@
 ---
-title: "10,000 Particles, No Libraries: Building Fast Particle Systems in Canvas2D"
-description: "Typed arrays, additive blending, and curl noise — everything you need to run a high-performance particle system in the browser without a game engine."
+title: "particle systems from scratch (no library)"
+description: "Skip the library — a fast Canvas2D particle system fits in a screen of code, and then you can feed it pose, audio, or your mouse."
 pubDate: 2026-03-05
-tags: ["particles", "canvas2d", "javascript", "performance", "generative"]
+updatedDate: 2026-08-18
+tags: ["canvas", "particles", "javascript", "graphics", "performance"]
 ---
 
-The temptation with particle systems is to reach for a library. Don't. When you understand what's underneath, you can do things no library anticipated — like feeding landmark coordinates from a pose model directly into your force field, or modulating curl noise frequency from a live FFT.
+The temptation is to `npm install` a particle library. Don't. The whole thing fits on one screen, and once you own the loop you can pipe pose landmarks, a live FFT, or your mouse straight into the force field.
 
-## Data layout: why typed arrays matter
+## typed arrays or bust
 
-The single biggest performance win is memory layout. An array of `{ x, y, vx, vy, age }` objects is cache-unfriendly — the CPU has to chase pointers across the heap for every particle. Typed arrays pack tight:
+An array of `{x, y, vx, vy}` objects is cache poison — the fields you touch every frame are scattered all over the heap. Flip it: one flat `Float32Array` per attribute. 10k particles across six arrays is ~240KB sitting contiguous in memory, which the CPU loves.
 
 ```js
-const N = 10_000;
-const px   = new Float32Array(N); // x positions
-const py   = new Float32Array(N); // y positions
-const vx   = new Float32Array(N); // x velocity
-const vy   = new Float32Array(N); // y velocity
-const age  = new Float32Array(N); // current age (seconds)
-const life = new Float32Array(N); // max lifetime (seconds)
+const N = 10000;
+const px  = new Float32Array(N);
+const py  = new Float32Array(N);
+const vx  = new Float32Array(N);
+const vy  = new Float32Array(N);
+const age = new Float32Array(N);
+const life = new Float32Array(N);
 ```
 
-Six arrays, 240KB total, all contiguous in memory. The CPU loves it.
+## the loop is boring on purpose
 
-## The update loop
+Damping, a little gravity, respawn when a particle ages out, and a force field. That's the whole simulation.
 
 ```js
-const DAMPING = 0.98;
-const GRAVITY = 0.04;
-
-function update(dt) {
+function step() {
   for (let i = 0; i < N; i++) {
-    age[i] += dt;
-
-    // respawn dead particles
-    if (age[i] >= life[i]) {
-      respawn(i);
-      continue;
-    }
-
-    // apply forces
-    const [fx, fy] = curl(px[i], py[i], t);
-    vx[i] = (vx[i] + fx) * DAMPING;
-    vy[i] = (vy[i] + fy + GRAVITY) * DAMPING;
-
+    const [fx, fy] = curl(px[i] * 0.005, py[i] * 0.005);
+    vx[i] = vx[i] * 0.98 + fx;
+    vy[i] = vy[i] * 0.98 + fy + 0.04; // gravity
     px[i] += vx[i];
     py[i] += vy[i];
+    if ((age[i] += 1) >= life[i]) respawn(i);
   }
 }
 ```
 
-`curl()` returns a divergence-free vector field — particles flow smoothly without clumping. The formula uses finite differences on a Perlin or simplex noise field:
+`curl()` is the fun part. It's a divergence-free field, so particles swirl and flow instead of piling up in a corner. You get it by finite-differencing a noise function and rotating the gradient 90°.
 
 ```js
 const EPS = 0.01;
-function curl(x, y, t) {
-  const n1 = noise(x, y + EPS, t);
-  const n2 = noise(x, y - EPS, t);
-  const n3 = noise(x + EPS, y, t);
-  const n4 = noise(x - EPS, y, t);
-  return [(n1 - n2) / (2 * EPS), -(n3 - n4) / (2 * EPS)];
+function curl(x, y) {
+  const dx = noise(x, y + EPS) - noise(x, y - EPS);
+  const dy = noise(x + EPS, y) - noise(x - EPS, y);
+  return [dx / (2 * EPS), -dy / (2 * EPS)];
 }
 ```
 
-## Rendering tricks
+Bring your own `noise()` — any Perlin/simplex will do.
 
-**Additive blending** is the single biggest visual upgrade. Set `ctx.globalCompositeOperation = 'lighter'` before drawing and particles accumulate light like they're emitting it. Dense clusters glow; sparse regions stay dark. It looks like plasma.
+## two rendering tricks that do all the work
 
-**Motion trails without `clearRect`.** Instead of clearing the canvas each frame, draw a semi-transparent black rectangle over it:
+You don't need shaders to make this look expensive. Two cheap moves:
 
-```js
-ctx.fillStyle = 'rgba(5, 5, 13, 0.18)';
-ctx.fillRect(0, 0, W, H);
-```
-
-Older particle positions fade naturally. The decay rate controls how long the trails persist — lower alpha means longer trails.
-
-**Batch by color.** State changes (setting `fillStyle`) are expensive in Canvas2D. Sort particles into color buckets and batch all draws of the same color together:
+- **Additive blending.** Set `globalCompositeOperation = 'lighter'` so overlapping particles bloom into plasma.
+- **Motion trails.** Don't `clearRect`. Paint a semi-transparent black rect over the whole frame — old positions fade instead of blinking out.
 
 ```js
-ctx.fillStyle = `hsl(${hue}, 80%, 60%)`;
-for (let i of bucket) {
-  ctx.fillRect(px[i] - r, py[i] - r, 2*r, 2*r);
-}
+ctx.globalCompositeOperation = 'lighter';
+// each frame, instead of clearRect:
+ctx.fillStyle = 'rgba(0,0,0,0.1)';
+ctx.fillRect(0, 0, w, h);
 ```
 
-## What to attach forces to
+One gotcha: changing `fillStyle` is genuinely expensive. If your particles are colored, bucket them by color and draw each bucket in a single pass. Don't set the style 10,000 times a frame.
 
-The physics are a platform. What you attach to the force field is where it gets interesting:
+## what you actually plug in
 
-- **Curl noise alone** — organic, fluid-like, hypnotic on a loop
-- **Mouse/touch position** — an attractor under the cursor, repeller on right-click
-- **MediaPipe landmarks** — your skeleton becomes the force field (see [Pose Particles post](/posts/pose-tracking-particles))
-- **FFT frequency bands** — bass pumps the vortex radius, hi-hats scatter particles outward
-- **Other particles** — n-body gravity at small N (64 "planets") driving 10k "dust" particles
+The loop doesn't care where the force comes from. That's the payoff of not using a library — swap `curl()` for whatever you've got:
 
-The lab demo lets you combine all of these live. Toggle pose tracking on and the skeleton joints become attractors; unmute the mic and the curl noise frequency starts responding to your voice.
+- a mouse/touch attractor
+- MediaPipe pose landmarks, so the skeleton *is* the field and a dancer shoves the particles around in real time
+- FFT bands off a live audio source, so the bass drives the swirl
+- other particles, if you want to pay for n-body
 
-→ [Open the Particle demo in the Lab](/lab)
-→ [Source on GitHub](https://github.com/randbrown)
+Same 240KB, same boring loop. Point it at a body or a waveform and it turns into an instrument.
+
+→ Play with it live: [/lab/pose-particles](/lab/pose-particles)
+→ Feeding pose into the field, in depth: [/posts/pose-tracking-particles](/posts/pose-tracking-particles)
+→ The tracking half (skeleton landmarks): [MediaPipe](https://ai.google.dev/edge/mediapipe)
+→ Or drive it with audio instead: [/qualia](/qualia)
+→ Source: [github.com/randbrown](https://github.com/randbrown)
