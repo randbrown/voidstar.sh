@@ -343,6 +343,26 @@ allocates a `Float32Array` every call and is called per-frame — hoist the scra
 
 ---
 
+## modem.js — dial-up modem tone simulator
+
+A performance sound-generator (not part of the reactivity engine) that emulates an analog
+voiceband modem: dial tone, DTMF dialing, the 2100 Hz answer tone (ANSam), the V.8 handshake
+warble, the V.34 line-probe chord, and the V.32 (9600 bps) data carrier — plus **honest 300-baud
+FSK** that transmits real bytes as audible, decodable bleeps. A textbook instance of the two audio
+conventions below: it owns a **private `AudioContext`** (like the vocoder, so it never entangles
+Strudel's mute-patch), hangs a `makeLimiter` brickwall before its destination, tags the output
+`__qualiaBypassMute`, and tees an analyser off its bus. `page-init` adopts that analyser as the
+`'modem'` source **only while it's audible** (an `onFeedChange` callback fires at the start and end
+of every sound), so the chirps drive the visuals and record like every other source.
+
+Nothing runs on the audio thread — each `command`/`data`/`connect`/`whistle` call builds a timeline
+of oscillator + bandpassed-noise nodes scheduled against `ctx.currentTime` (calls queue after one
+another so sequences don't overlap), and state changes fire a `qualia:modem` window event. All the
+tone tables and the full API live in [`qualia-code-api.md`](../docs/qualia-code-api.md#modem-simulator-dial-up-tone-generator);
+`page-init` gates it in the `'mix'`/`'all'` source filters and cuts it on pause.
+
+---
+
 ## devices.js — mic/camera selection
 
 `getStoredDeviceId(kind)`, `storeDeviceId(kind, id)`, and `wirePicker({...})` for hot-swap

@@ -393,6 +393,64 @@ qualia.vox.start(); qualia.vox.mute(true); qualia.vox.output(1.2)
 qualia.vox.harmony(true)           // harmonizer on/off
 ```
 
+### Modem simulator (dial-up tone generator)
+
+A performance sound-generator that emulates an analog voiceband modem —
+the dial tone, the DTMF dialing, the answering modem's 2100 Hz answer tone,
+the V.8 handshake warble, the V.34 line-probe chord, and the V.32 (9600 bps)
+data carrier. It can also transmit **real bytes as audible 300-baud FSK** —
+the bleeps you hear literally *are* the string, framed as async serial and
+genuinely decodable — and simulate the far-end modem panned opposite the near
+end. Module: [`modem.js`](../src/lib/qualia/modem.js); it owns a private
+`AudioContext` like the vocoder, hangs a limiter before its destination, and is
+adopted as the `'modem'` audio source whenever it's sounding, so the chirps
+**drive the visuals and land in recordings** for free.
+
+```js
+qualia.modem.connect({ number: "18005551234", farEnd: true })
+                                   // the full cinematic handshake into the carrier.
+                                   // opts: {number, farEnd, probe, busy, rings, dwell}
+qualia.modem.command("ATDT5551234")// what an AT command sounds like: dial tone +
+                                   // DTMF (non-dial commands → a short FSK chirp)
+qualia.modem.data("<voidstar qualia>")           // HONEST 300-baud FSK — the bleeps are the bytes
+qualia.modem.data("payload", { mode: "carrier" })// aesthetic V.32 hiss instead
+qualia.modem.hangup()              // drop the carrier back to dial tone
+qualia.modem.dtmf("1234,5678")     // DTMF a digit string (',' = Hayes pause)
+qualia.modem.whistle("answer")     // play it as an instrument: a Hz number, a
+                                   // [chord], a DTMF digit/'#', 'mark'/'space'
+                                   // (V.21 FSK), or 'answer' (2100 Hz)
+qualia.modem.tone([697, 1209], .3) // raw multi-tone primitive
+qualia.modem.state()               // 'idle'|'dialing'|'handshake'|'connected'
+qualia.modem.stop()                // silence everything now
+```
+
+Calls are **one-shots fired at eval time** (top-level statements, like
+`qualia.zen(true)` — see the run-once note below), and each queues after the
+last so sequences don't overlap chaotically. State changes fire a
+`qualia:modem` window event (`{detail:{state}}`), the horns pattern — a quale
+can flash on `"connected"`. There's also a **sounding Strudel lane** for
+rhythmic data bursts:
+
+```js
+stack(
+  s("bd*4"),
+  modem("<voidstar qualia>").slow(2),               // one word transmitted per 2 cycles
+  qcall(() => qualia.modem.connect(), "<~ ~ ~ 1>").slow(8), // a handshake now and then
+)
+```
+
+`modem()` transmits each hap's value as FSK; the modem synthesises in its own
+context, so the lane is silent-in-superdough and stacks like the `q*` lanes.
+The dial/handshake one-shots stay imperative (drive them with `qcall`).
+
+**Tone reference** (all real standards): DTMF rows 697/770/852/941 Hz ×
+columns 1209/1336/1477/1633 Hz · US dial tone 350+440 · ringback 440+480 ·
+busy 480+620 · answer tone (ANSam) 2100 Hz (15 Hz AM, phase-reversed) · V.21
+FSK originate 980/1180, answer 1650/1850 · Bell 103 originate 1270/1070 · V.32
+carrier 1800 Hz at 2400 baud. A future step could bridge real US Robotics
+hardware over the Web Serial API (Chromium-only, client-side) — kept separate
+from this audio simulator.
+
 ### Snapshots & perf
 
 ```js

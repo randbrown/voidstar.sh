@@ -146,7 +146,7 @@ function gsConfig(get, patch) {
  */
 export function installCodeApi(deps) {
   const {
-    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer,
+    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer, modem,
     pose, overlay, camWalk, logoMark, fader, echoCtl, page,
   } = deps;
 
@@ -606,6 +606,39 @@ export function installCodeApi(deps) {
       harmony: gsBool(() => harmonizer.isEnabled(), (on) => harmonizer.setEnabled(on)),
     },
 
+    // — modem simulator (dial-up tone generator) —
+    // A performance sound-generator: dial tone, DTMF, the 2100 Hz answer tone,
+    // the V.8 handshake warble, V.34 line-probe chord, and the V.32 (9600 bps)
+    // data carrier — plus honest 300-baud FSK that transmits real bytes as
+    // audible bleeps you could decode. All one-shots, fired at eval time
+    // (drive them rhythmically with qcall or the `modem()` lane). Null-safe
+    // before the modem's private context has spun up.
+    modem: {
+      /** Emit what an AT command would sound like on the line: `ATDT<digits>`
+       *  → dial tone then DTMF; any other command → a short FSK "typing" chirp. */
+      command: (str) => safe(() => modem?.command(str)),
+      /** Transmit `str` as sound. mode 'fsk' (default, HONEST — the bleeps are
+       *  the bytes) or 'carrier' (aesthetic V.32 hiss). Also {baud, channel,
+       *  pan}. */
+      data: (str, o) => safe(() => modem?.data(str, o || {})),
+      /** The full cinematic handshake into the carrier. Options: {number,
+       *  farEnd, probe, busy, rings, dwell}. */
+      connect: (o) => safe(() => modem?.connect(o || {})),
+      /** Drop the carrier back to dial tone. */
+      hangup: () => safe(() => modem?.hangup()),
+      /** Play the modem as an instrument: a Hz number, a [chord], a DTMF
+       *  digit/'#', 'mark'/'space' (V.21 FSK), or 'answer' (2100 Hz). */
+      whistle: (spec, durSec) => safe(() => modem?.whistle(spec, durSec)),
+      /** Raw tone primitive — one Hz or an array (a chord), for durSec. */
+      tone: (freqs, durSec, o) => safe(() => modem?.tone(freqs, durSec, o || {})),
+      /** DTMF-dial a digit string (',' = Hayes pause). */
+      dtmf: (digits) => safe(() => modem?.dtmf(digits)),
+      /** Current line state: 'idle'|'dialing'|'handshake'|'connected'. */
+      state: () => safe(() => modem?.state(), 'idle'),
+      /** Silence everything immediately. */
+      stop: () => safe(() => modem?.stop()),
+    },
+
     // — perf levers (grouped; the flat legacy names stay too) —
     perf: {
       fps:         gs(() => core.getMaxFps(), (v) => core.setMaxFps(v)),
@@ -834,6 +867,14 @@ function tryRegisterStrudelBindings(api, hooks) {
         try { fn(laneValue(hap), hap); } catch (e) { console.warn('[qualia] qtrig:', e); }
       }),
       false));
+
+  // Transmit each hap's value through the modem as audible data (honest FSK by
+  // default): modem("<voidstar qualia>").slow(2) chirps one word per cycle. The
+  // modem makes its own sound in its private context, so this is a dominant
+  // (silent-in-superdough) lane — stack it next to your pattern like quale().
+  // For the dial/handshake one-shots use qcall(() => qualia.modem.connect(), …).
+  define('modem', (pat) =>
+    lane(pat, (hap) => api.modem.data(String(laneValue(hap)))));
 
   // ── Microtonal tuning helpers ─────────────────────────────────────────────
   // Unlike the lanes above these are SOUNDING transforms: they rewrite hap
