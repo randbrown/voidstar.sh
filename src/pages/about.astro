@@ -1,8 +1,7 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { Image } from 'astro:assets';
-import NullDef from '../components/NullDef.astro';
-import aboutLogo from '../assets/art/logos_alpha/voidstar_logo_0.png';
+import nullDefinition from '../assets/art/void_null_definition.png';
 
 const socials = [
   { href: 'https://randbrown.com/',            label: 'Website',   handle: 'randbrown.com', desc: 'the personal site'      },
@@ -15,7 +14,7 @@ const skills = [
   { cat: 'creative',    items: ['generative visuals', 'particle systems', 'music composition', 'live performance'] },
   { cat: 'web',         items: ['JavaScript/TypeScript', 'Canvas 2D', 'WebGL / GLSL', 'Web Audio API', 'Astro', 'Svelte'] },
   { cat: 'cv / ml',     items: ['MediaPipe', 'TensorFlow.js', 'pose estimation', 'real-time inference'] },
-  { cat: 'tools',       items: ['git', 'Cloudflare', 'Linux', 'Blender', 'Ableton Live'] },
+  { cat: 'tools',       items: ['git', 'Cloudflare', 'Linux', 'ffmpeg', 'Reaper'] },
 ];
 ---
 <BaseLayout title="About" description="About voidstar — generative artist and programmer.">
@@ -26,12 +25,16 @@ const skills = [
         <h1 class="about-title">
           Making things that shouldn't exist.
         </h1>
-        <Image
-          src={aboutLogo}
-          alt="voidstar"
-          width={280}
-          class="about-emblem"
-        />
+        <figure class="about-portrait">
+          <Image
+            src={nullDefinition}
+            alt="C source code with the line #define NULL ((void *)0), void * highlighted in green"
+            widths={[480, 800, 1200]}
+            sizes="(max-width: 720px) 100vw, 680px"
+            class="portrait-img"
+          />
+          <figcaption>the name, in situ — <code>#define NULL ((void *)0)</code></figcaption>
+        </figure>
       </header>
 
       <div class="about-grid">
@@ -41,8 +44,6 @@ const skills = [
             and then build the browser tools that make a set happen. Creative coding, a little
             computer vision, and playing out live.
           </p>
-
-          <NullDef caption={false} class="bio-null" />
 
           <p>
             The name is a C joke. <code>void*</code> is a pointer to untyped memory —
@@ -113,10 +114,25 @@ const skills = [
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
-.about-emblem {
-  opacity: 0.55;
-  filter: drop-shadow(0 0 20px var(--accent-glow));
+.about-portrait {
+  margin-top: 1.75rem;
+  max-width: 680px;
 }
+.portrait-img {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 44px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--accent-glow);
+}
+.about-portrait figcaption {
+  margin-top: 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+}
+.about-portrait figcaption code { color: var(--green); }
 
 .about-grid {
   display: grid;
@@ -137,7 +153,6 @@ const skills = [
 }
 .bio-section a { color: var(--accent); }
 .bio-section a:hover { color: var(--cyan); }
-.bio-null { margin: 0.25rem 0 1.5rem; max-width: 100%; }
 .bio-section code {
   background: var(--surface-2);
   border: 1px solid var(--border);
