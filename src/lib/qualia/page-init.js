@@ -31,6 +31,7 @@ import { filterFunctions, groupByCategory, STRUDEL_FUNCTIONS } from './strudel-r
 import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
+import { createModem } from './modem.js';
 import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
@@ -1500,8 +1501,8 @@ export function initQualiaPage() {
     switch (audioMode) {
       case 'off': audio.setSourceFilter([]);                                                            break;
       case 'mic': audio.setSourceFilter(['mic']);                                                       break;
-      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper']);         break;
-      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper']);  break;
+      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem']);         break;
+      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem']);  break;
     }
   }
 
@@ -3408,6 +3409,9 @@ export function initQualiaPage() {
       // Mute/level state and the freeze stack survive, intact, for the resume.
       try { looper.setRigPaused?.(true); } catch (e) { console.warn('[qualia] pause rig failed:', e); }
       try { if (vocoder?.isActive?.())    vocoder.setMuted?.(true); } catch (e) { console.warn('[qualia] pause vocoder mute failed:', e); }
+      // The modem fires one-shot tone sequences — there's no transport to
+      // resume, so pause just gates new sound and cuts anything mid-flight.
+      try { modem.setPaused?.(true); } catch (e) { console.warn('[qualia] pause modem failed:', e); }
     } else if (!on && _pauseAudioState) {
       const s = _pauseAudioState;
       _pauseAudioState = null;
@@ -3421,6 +3425,7 @@ export function initQualiaPage() {
       try { if (s.looper)  looper.play?.(); } catch (e) { console.warn('[qualia] resume looper failed:', e); }
       try { looper.setRigPaused?.(false); } catch (e) { console.warn('[qualia] resume rig failed:', e); }
       try { vocoder?.setMuted?.(s.vocoderMuted); } catch (e) { console.warn('[qualia] resume vocoder unmute failed:', e); }
+      try { modem.setPaused?.(false); } catch (e) { console.warn('[qualia] resume modem failed:', e); }
     }
     btnPause.classList.toggle('active', on);
     btnPause.textContent = on ? 'paused' : 'pause';
@@ -5876,6 +5881,14 @@ export function initQualiaPage() {
   });
   _vocoderRef = vocoder;
 
+  // ── Modem simulator (dial-up tone generator) ─────────────────────────────
+  // A performance sound-generator (modem.js): dial tone / DTMF / answer tone /
+  // V.8 warble / V.32 carrier, and honest 300-baud FSK of real bytes. Owns its
+  // own AudioContext like the vocoder; page-init adopts its analyser as the
+  // 'modem' source whenever it's audible, so the chirps drive the visuals and
+  // land in recordings. onFeedChange fires at the start/end of every sound.
+  const modem = createModem({ onFeedChange: () => syncModemFeed() });
+
   // ── Mixer + clip metering ────────────────────────────────────────────────
   // One panel gathering every track's level / mute / limiter, with live peak
   // meters + clip LEDs fed by audio.getLevels(). Created last so all the
@@ -5952,6 +5965,21 @@ export function initQualiaPage() {
       }
     } catch (e) {
       console.warn('[qualia] vocoder feed sync failed:', e);
+    }
+  }
+
+  // Adopt/release the modem's output analyser as the 'modem' audio source —
+  // present only while the modem is actually sounding (modem.js calls this at
+  // the start and end of every command/data/connect). Gated, like every source,
+  // by the current audio mode's filter.
+  function syncModemFeed() {
+    try {
+      const an   = modem.getFeedAnalyser?.();
+      const mctx = modem.getContext?.();
+      if (modem.isActive?.() && an && mctx) audio.adoptAnalyser(mctx, an, 'modem');
+      else audio.releaseAdopted('modem');
+    } catch (e) {
+      console.warn('[qualia] modem feed sync failed:', e);
     }
   }
 
@@ -7715,7 +7743,7 @@ export function initQualiaPage() {
   // paths as the UI controls (select handlers, preset buttons, sliders) so
   // code-driven changes keep the chrome in sync and persist identically.
   installCodeApi({
-    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer,
+    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer, modem,
     pose, overlay, camWalk, logoMark, fader,
     echoCtl: { isEnabled: () => echo.isEnabled(), setEnabled: setEchoEnabled },
     page: {
