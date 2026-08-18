@@ -17,7 +17,7 @@
 // back to the site URL (open ⊛ entangle and "save this code" to advertise
 // joins from here).
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 import { getPinnedRoom, readRoomFromQuery, buildJoinUrl } from '../entangle-protocol.js';
 
 const PAGES = ['livecoding', 'javascript', 'entangle', 'signal', 'nightcall'];
@@ -206,7 +206,7 @@ export default {
       qr.failed = false;
       import('../qr.js')
         .then(m => m.artisticQRCanvas(resolvedUrl, px / 2, {
-          dark: pal.text, light: '#010104', accent: pal.accent,
+          dark: pal.text, light: VOID, accent: pal.accent,
         }))
         .then(c => { if (qr.pending === key) { qr.canvas = c; qr.url = resolvedUrl; qr.pending = null; } })
         .catch(() => { if (qr.pending === key) { qr.failed = true; qr.pending = null; } });
@@ -259,7 +259,7 @@ export default {
       const t = scratch.time;
       const m = Math.min(W, H);
 
-      ctx.fillStyle = '#010104';
+      ctx.fillStyle = VOID;
       ctx.fillRect(0, 0, W, H);
 
       // ── Starfield ────────────────────────────────────────────────────────

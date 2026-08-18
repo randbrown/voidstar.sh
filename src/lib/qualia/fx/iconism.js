@@ -35,7 +35,7 @@
 // hot path is ~40 blits + electron dots. The motion grid is ≤ 80×N cells
 // sampled every other frame. Hot path allocates nothing.
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 import { getVideoEl, getRotation, applyPreviewTransform, lmToCanvas } from '../video.js';
 import {
   EMMONS_COLORS, SHOBUD_RED, SHOBUD_INK, SUITS, SPR, SHAPE_R,
@@ -445,7 +445,7 @@ export default {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = '#010104';
+      ctx.fillStyle = VOID;
       ctx.fillRect(0, 0, W, H);
 
       const video = getVideoEl();

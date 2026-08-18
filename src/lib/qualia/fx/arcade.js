@@ -27,7 +27,7 @@
 // follow-up; it slots into input.js as a new 'players' surface without games
 // changing. See plans/arcade-quale-plan.md.
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 import { createEngine } from './arcade/engine.js';
 import { createInput } from './arcade/input.js';
 import accretionRun from './arcade/accretion-run.js';
@@ -194,7 +194,7 @@ export default {
 
     function render() {
       if (!activeGame || !scratch.params) {
-        ctx.fillStyle = '#010104';
+        ctx.fillStyle = VOID;
         ctx.fillRect(0, 0, W, H);
         return;
       }

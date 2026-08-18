@@ -14,7 +14,7 @@
 //     stay unchanged; the helper pre-multiplies magnitudes and gates the
 //     transient `active` flags so the slider works uniformly across fx.
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 
 /** @type {import('../types.js').QFXModule} */
 export default {
@@ -41,7 +41,7 @@ export default {
         // ...read audio.bands.bass, audio.beat.pulse, etc. — already scaled.
       },
       render() {
-        ctx.fillStyle = '#010104';
+        ctx.fillStyle = VOID;
         ctx.fillRect(0, 0, W, H);
       },
       dispose() { /* nothing to free */ },

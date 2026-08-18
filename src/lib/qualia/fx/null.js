@@ -28,7 +28,7 @@ export default {
         // Truly empty: clear to transparent. Under the canvas's screen blend
         // that reveals Hydra (z:1) untouched; with Hydra dark it shows the page
         // void (--void) exactly — so "Null" is the theme's own black, not a
-        // hardcoded fill. (Was a #05050d fill back when that was the page bg.)
+        // hardcoded fill. (Historically this filled the old page-bg color.)
         ctx.clearRect(0, 0, W, H);
       },
       dispose() {},

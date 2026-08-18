@@ -13,7 +13,7 @@
 //   wristSpread -> wider field of view (via zoom modulator)
 //   shoulderRoll -> route curl (via drift modulator)
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 import { lmToCanvas } from '../video.js';
 
 const MAX_MARKS = 180;
@@ -21,7 +21,7 @@ const TAU = Math.PI * 2;
 
 const PALETTES = {
   dawn: {
-    bg: '#010104',
+    bg: VOID,
     ink: 'rgba(218,238,255,',
     warm: [255, 178, 105],
     cool: [87, 204, 255],

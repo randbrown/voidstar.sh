@@ -38,8 +38,9 @@ import '../../styles/themes.css';
   <style is:global>
     /* Hydra runs UNDER the viz so the cymatics patterns + pose skeleton
        overlay appear on top. The viz canvas uses mix-blend-mode: screen so
-       its near-black fill (#05050d) becomes effectively transparent against
-       Hydra, while bright particles / aura / sparks still show. */
+       its near-black fill (the theme --viz-bg, #010104 on voidstar) becomes
+       effectively transparent against Hydra, while bright particles / aura /
+       sparks still show. */
     #hydra-canvas {
       position: fixed; inset: 0; width: 100%; height: 100%; display: block;
       z-index: 1; pointer-events: none;
@@ -58,8 +59,8 @@ import '../../styles/themes.css';
     }
     /* Viz sits above Hydra (z:1) and uses screen blend so the dark fill
        reveals Hydra underneath while bright pixels still show. Without
-       Hydra, the canvas blends against the body's near-black bg — which
-       is also #05050d — so the look is unchanged. */
+       Hydra, the canvas blends against the body's near-black bg — which is
+       also the theme --void (#010104 on voidstar) — so the look is unchanged. */
     #canvas { z-index: 2; mix-blend-mode: screen; }
     /* Strudel's getDrawContext() looks for #test-canvas — used by .scope(),
        .pianoroll(), and other draw outputs. Sits above the viz, below the

@@ -18,7 +18,7 @@
 //   bands.bass  → trail width / glow boost
 //   bands.highs → phantom churn (faster ID turnover on hi-hats)
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 import { lmToCanvas, getVideoEl, getRotation, applyPreviewTransform } from '../video.js';
 
 // Joints used as box anchors. The "torso" box is special-cased from
@@ -286,7 +286,7 @@ export default {
       // Camera passthrough, dimmed by bgFade. At bgFade=1 we draw pure
       // black (matches the itsdemotapes look). Same maths as camera.js
       // but stripped of tints/vignette/etc.
-      ctx.fillStyle = '#010104';
+      ctx.fillStyle = VOID;
       ctx.fillRect(0, 0, W, H);
       if (scratch.bgFade >= 0.999) return;
 

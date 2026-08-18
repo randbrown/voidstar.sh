@@ -10,6 +10,8 @@
 // paddle blends player lean with its own tracking AI by intent.autonomy, so it
 // covers itself when you're busy performing and follows tightly when you lean.
 
+import { VOID } from '../../field.js';
+
 export default function create(eng) {
   let bx = 0, by = 0, vx = 0, vy = 0;     // mote position + velocity (virtual px/s)
   let topX = 0, botX = 0;                  // paddle CENTRES (x)
@@ -158,7 +160,7 @@ export default function create(eng) {
     eng.disc(hx, cy, hr * (1.7 + bassV * 0.25), eng.C.gold, 0.06 + bassV * 0.06);
     // Radial spectrum around the black hole.
     if (audio) eng.spectrumRadial(audio.spectrum, hx, cy, hr * 1.2, hr * 2.5, 24, eng.C.amber, 0.14);
-    eng.disc(hx, cy, hr, '#010104', 1);
+    eng.disc(hx, cy, hr, VOID, 1);
     vctx.strokeStyle = eng.C.gold; vctx.lineWidth = 1; vctx.globalAlpha = 0.5 + beatP * 0.2;
     vctx.beginPath(); vctx.ellipse(hx, cy, hr * (1.2 + beatP * 0.3), hr * (0.45 + beatP * 0.1), 0, 0, Math.PI * 2); vctx.stroke();
     vctx.globalAlpha = 1;

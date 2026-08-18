@@ -53,7 +53,7 @@
 // to-frame joint velocity, folded into an energy + sway signal) stirs the
 // neon, meters, tuner and motes. See the `pose drive` param.
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 
 const MAX_LEDS     = 420;
 const MAX_KNOBS    = 132;
@@ -1227,7 +1227,7 @@ export default {
       const [pr, pg, pb] = pal.plate;
       const [rr, rgc, rb] = pal.rail;
 
-      g.fillStyle = '#010104';
+      g.fillStyle = VOID;
       g.fillRect(0, 0, W, H);
 
       // Hero devices paint their bodies first; the generic element bases
@@ -1719,7 +1719,7 @@ export default {
       const bounce = scratch.bounce;
       ctx.drawImage(staticLayer, 0, bounce);
       if (bounce) {
-        ctx.fillStyle = '#010104';
+        ctx.fillStyle = VOID;
         ctx.fillRect(0, H + bounce - 1, W, -bounce + 2);
       }
       ctx.save();
