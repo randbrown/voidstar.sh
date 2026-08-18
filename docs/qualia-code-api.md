@@ -443,6 +443,13 @@ stack(
 context, so the lane is silent-in-superdough and stacks like the `q*` lanes.
 The dial/handshake one-shots stay imperative (drive them with `qcall`).
 
+**The `modem()` argument is mini-notated** (double-quoted strings are, in the
+editor) — so it only carries plain word tokens: spaces split into separate
+haps and `/`, `//`, `<`, `>` are mini operators that will throw a parse error.
+For an **arbitrary payload** (punctuation, slashes, whole sentences) send it
+through `qcall` with a **single-quoted** JS string, which stays literal:
+`qcall(() => qualia.modem.data('carrier lost // reconnecting'), "1").slow(4)`.
+
 **Tone reference** (all real standards): DTMF rows 697/770/852/941 Hz ×
 columns 1209/1336/1477/1633 Hz · US dial tone 350+440 · ringback 440+480 ·
 busy 480+620 · answer tone (ANSam) 2100 Hz (15 Hz AM, phase-reversed) · V.21
