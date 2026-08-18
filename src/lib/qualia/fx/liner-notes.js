@@ -206,7 +206,7 @@ export default {
       qr.failed = false;
       import('../qr.js')
         .then(m => m.artisticQRCanvas(resolvedUrl, px / 2, {
-          dark: pal.text, light: '#05050d', accent: pal.accent,
+          dark: pal.text, light: '#010104', accent: pal.accent,
         }))
         .then(c => { if (qr.pending === key) { qr.canvas = c; qr.url = resolvedUrl; qr.pending = null; } })
         .catch(() => { if (qr.pending === key) { qr.failed = true; qr.pending = null; } });
@@ -259,7 +259,7 @@ export default {
       const t = scratch.time;
       const m = Math.min(W, H);
 
-      ctx.fillStyle = '#05050d';
+      ctx.fillStyle = '#010104';
       ctx.fillRect(0, 0, W, H);
 
       // ── Starfield ────────────────────────────────────────────────────────

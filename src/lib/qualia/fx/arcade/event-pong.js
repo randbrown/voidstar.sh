@@ -158,7 +158,7 @@ export default function create(eng) {
     eng.disc(hx, cy, hr * (1.7 + bassV * 0.25), eng.C.gold, 0.06 + bassV * 0.06);
     // Radial spectrum around the black hole.
     if (audio) eng.spectrumRadial(audio.spectrum, hx, cy, hr * 1.2, hr * 2.5, 24, eng.C.amber, 0.14);
-    eng.disc(hx, cy, hr, '#05050d', 1);
+    eng.disc(hx, cy, hr, '#010104', 1);
     vctx.strokeStyle = eng.C.gold; vctx.lineWidth = 1; vctx.globalAlpha = 0.5 + beatP * 0.2;
     vctx.beginPath(); vctx.ellipse(hx, cy, hr * (1.2 + beatP * 0.3), hr * (0.45 + beatP * 0.1), 0, 0, Math.PI * 2); vctx.stroke();
     vctx.globalAlpha = 1;

@@ -1227,7 +1227,7 @@ export default {
       const [pr, pg, pb] = pal.plate;
       const [rr, rgc, rb] = pal.rail;
 
-      g.fillStyle = '#05050d';
+      g.fillStyle = '#010104';
       g.fillRect(0, 0, W, H);
 
       // Hero devices paint their bodies first; the generic element bases
@@ -1719,7 +1719,7 @@ export default {
       const bounce = scratch.bounce;
       ctx.drawImage(staticLayer, 0, bounce);
       if (bounce) {
-        ctx.fillStyle = '#05050d';
+        ctx.fillStyle = '#010104';
         ctx.fillRect(0, H + bounce - 1, W, -bounce + 2);
       }
       ctx.save();

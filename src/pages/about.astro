@@ -1,7 +1,7 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { Image } from 'astro:assets';
-import nullDefinition from '../assets/art/void_null_definition.png';
+import nullDefinition from '../assets/art/voidstar_null_definition.png';
 
 const socials = [
   { href: 'https://randbrown.com/',            label: 'Website',   handle: 'randbrown.com', desc: 'the personal site'      },
@@ -29,8 +29,8 @@ const skills = [
           <Image
             src={nullDefinition}
             alt="C source code with the line #define NULL ((void *)0), void * highlighted in green"
-            widths={[480, 800, 1200]}
-            sizes="(max-width: 720px) 100vw, 680px"
+            widths={[360, 520, 747]}
+            sizes="(max-width: 560px) 100vw, 500px"
             class="portrait-img"
           />
           <figcaption>the name, in situ — <code>#define NULL ((void *)0)</code></figcaption>
@@ -116,7 +116,7 @@ const skills = [
 }
 .about-portrait {
   margin-top: 1.75rem;
-  max-width: 680px;
+  max-width: 500px;
 }
 .portrait-img {
   width: 100%;

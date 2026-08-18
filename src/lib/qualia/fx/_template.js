@@ -41,7 +41,7 @@ export default {
         // ...read audio.bands.bass, audio.beat.pulse, etc. — already scaled.
       },
       render() {
-        ctx.fillStyle = '#05050d';
+        ctx.fillStyle = '#010104';
         ctx.fillRect(0, 0, W, H);
       },
       dispose() { /* nothing to free */ },

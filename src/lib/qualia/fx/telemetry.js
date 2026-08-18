@@ -326,7 +326,7 @@ export default {
         ctx.textBaseline = 'middle';
         const txt = `· ${label} ·`;
         const tw = ctx.measureText(txt).width;
-        ctx.fillStyle = '#05050d';
+        ctx.fillStyle = '#010104';
         ctx.fillRect(x + 8 - 2, y - 7, tw + 4, 14);
         ctx.fillStyle = accent;
         ctx.fillText(txt, x + 8, y);
@@ -944,7 +944,7 @@ export default {
           const tag = `P${p}  conf ${person.confidence.toFixed(2)}`;
           ctx.font = FONT(10);
           const tw = ctx.measureText(tag).width;
-          ctx.fillStyle = '#05050d';
+          ctx.fillStyle = '#010104';
           ctx.fillRect(xmin, ymin - 14, tw + 12, 14);
           ctx.fillStyle = pAccent;
           ctx.fillText(tag, xmin + 6, ymin - 7);

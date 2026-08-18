@@ -795,7 +795,7 @@ export default {
       const audio = scratch.audio;
       const params = scratch.params;
       if (!audio || !params) {
-        ctx.fillStyle = '#05050d';
+        ctx.fillStyle = '#010104';
         ctx.fillRect(0, 0, W, H);
         return;
       }

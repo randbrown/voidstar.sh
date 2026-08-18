@@ -99,7 +99,7 @@ float fbm(vec2 p) {
 // Palette: hue h is the frequency position a mark was deposited at
 // (0 = deep/bass … 1 = highs). Aged marks get pulled toward the palette's
 // sediment tint by the composite. All three run dark — the page bg is
-// #05050d and the canvas screen-blends over Hydra.
+// #010104 and the canvas screen-blends over Hydra.
 const PALETTE = /* glsl */`
 vec3 wakePal(int idx, float h) {
   h = clamp(h, 0.0, 1.0);
@@ -313,7 +313,7 @@ void main() {
   col = mix(col, wakeSediment(uPalette), aged * 0.55);   // old marks silt over
   col *= lum;
 
-  // Still-water floor near #05050d + slow caustic shimmer (idle-alive).
+  // Still-water floor near #010104 + slow caustic shimmer (idle-alive).
   float asp = uRes.x / uRes.y;
   float wn  = fbm(vUv * vec2(asp, 1.0) * 3.0 + vec2(uTime * 0.021, -uTime * 0.017));
   float wn2 = noise(vUv * vec2(asp, 1.0) * 9.0 - vec2(uTime * 0.033, uTime * 0.024));
@@ -708,7 +708,7 @@ export default {
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, W, H);
-      gl.clearColor(0.02, 0.02, 0.051, 1);       // #05050d
+      gl.clearColor(0.004, 0.004, 0.016, 1);     // #010104
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.useProgram(pComposite.prog);
       const U = pComposite.U;

@@ -21,7 +21,7 @@ const TAU = Math.PI * 2;
 
 const PALETTES = {
   dawn: {
-    bg: '#05050d',
+    bg: '#010104',
     ink: 'rgba(218,238,255,',
     warm: [255, 178, 105],
     cool: [87, 204, 255],

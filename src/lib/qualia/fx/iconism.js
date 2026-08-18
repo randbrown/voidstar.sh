@@ -445,7 +445,7 @@ export default {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = '#05050d';
+      ctx.fillStyle = '#010104';
       ctx.fillRect(0, 0, W, H);
 
       const video = getVideoEl();

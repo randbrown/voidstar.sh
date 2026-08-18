@@ -183,7 +183,7 @@ export async function initEntangleClient(root) {
     if (camCanvas.height !== H) camCanvas.height = H;
     const ctx = camCtx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = cssVar('--void') || '#05050d';
+    ctx.fillStyle = cssVar('--void') || '#010104';
     ctx.fillRect(0, 0, W, H);
     const vw = video?.videoWidth || 0, vh = video?.videoHeight || 0;
     if (!vw || !vh) return;

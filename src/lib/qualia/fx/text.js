@@ -150,7 +150,7 @@ export default {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
       ctx.shadowBlur = 0;
-      ctx.fillStyle = '#05050d';
+      ctx.fillStyle = '#010104';
       ctx.fillRect(0, 0, W, H);
       if (s.feedback > 0.005) {
         // dt-scaled so the tunnel/twist rates are wall-clock-true at any fps.

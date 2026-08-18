@@ -342,7 +342,7 @@ Canvas2D fx with only typed arrays can leave `dispose()` empty — GC handles it
 
 ## Layering (z-index)
 
-Your fx canvas sits at z:2. Hydra is at z:1 underneath; overlay is at z:3 above; the Strudel scope is at z:5; video preview at z:10; topbar at z:20. The viz canvas's CSS uses `mix-blend-mode: screen` so its dark fills become effectively transparent over Hydra. Keep your background near `#05050d` (the page bg color) so the blend reads cleanly.
+Your fx canvas sits at z:2. Hydra is at z:1 underneath; overlay is at z:3 above; the Strudel scope is at z:5; video preview at z:10; topbar at z:20. The viz canvas's CSS uses `mix-blend-mode: screen` so its dark fills become effectively transparent over Hydra. Keep your background near `#010104` (the page bg color) so the blend reads cleanly.
 
 ---
 
@@ -419,7 +419,7 @@ Before declaring an fx done:
 - **Reading `field` in `render()`** — split into update/render and stash into scratch.
 - **Allocating in the hot path** — pre-allocate in `create()`, reuse forever.
 - **Assuming `audio.spectrum` exists** — it's `null` when audio is off.
-- **Drawing a fully opaque background that's not near `#05050d`** — fights the screen blend with Hydra.
+- **Drawing a fully opaque background that's not near `#010104`** — fights the screen blend with Hydra.
 - **Magic 33-element pose indices in fx** — use the named joints (`person.head`, `person.wrists.l`). The `raw` array is for fx that genuinely need a non-named landmark (use `LM_WEIGHT` constants in [`overlay.js`](./overlay.js) for indices).
 - **Forgetting `dispose()` on WebGL fx** — leaks GPU memory across fx swaps.
 - **Reinventing skeleton/sparks/ripples/ASCII** — those are overlay layers; just enable the appropriate toggles.

@@ -286,7 +286,7 @@ export default {
       // Camera passthrough, dimmed by bgFade. At bgFade=1 we draw pure
       // black (matches the itsdemotapes look). Same maths as camera.js
       // but stripped of tints/vignette/etc.
-      ctx.fillStyle = '#05050d';
+      ctx.fillStyle = '#010104';
       ctx.fillRect(0, 0, W, H);
       if (scratch.bgFade >= 0.999) return;
 

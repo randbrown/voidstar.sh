@@ -194,7 +194,7 @@ export default {
 
     function render() {
       if (!activeGame || !scratch.params) {
-        ctx.fillStyle = '#05050d';
+        ctx.fillStyle = '#010104';
         ctx.fillRect(0, 0, W, H);
         return;
       }

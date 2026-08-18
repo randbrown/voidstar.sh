@@ -449,7 +449,7 @@ export default {
     function render() {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = '#05050d';
+      ctx.fillStyle = '#010104';
       ctx.fillRect(0, 0, W, H);
       if (!C || !R) return;
       styleCache.clear();

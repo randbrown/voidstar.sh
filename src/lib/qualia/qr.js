@@ -24,7 +24,7 @@ export async function renderQR(canvas, text, size = 320) {
   // Pull the active theme's colors so the QR matches whatever skin is live.
   const cs = getComputedStyle(document.documentElement);
   const dark  = cs.getPropertyValue('--text').trim()    || '#e9e6ff';
-  const light = cs.getPropertyValue('--viz-bg').trim()   || '#05050d';
+  const light = cs.getPropertyValue('--viz-bg').trim()   || '#010104';
   await QR.toCanvas(canvas, text, {
     width: size,
     margin: 2,
@@ -115,7 +115,7 @@ const inFinder = (x, y, n) =>
 export async function renderArtisticQR(canvas, text, size = 320, opts = {}) {
   const cs = getComputedStyle(document.documentElement);
   const dark   = opts.dark   || cs.getPropertyValue('--text').trim()   || '#e9e6ff';
-  const light  = opts.light  || cs.getPropertyValue('--viz-bg').trim() || '#05050d';
+  const light  = opts.light  || cs.getPropertyValue('--viz-bg').trim() || '#010104';
   const accent = opts.accent || cs.getPropertyValue('--accent').trim() || '#8b5cf6';
   const logo   = opts.logo !== false;
   const logoText = opts.logoText || 'void*';

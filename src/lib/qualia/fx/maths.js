@@ -242,7 +242,7 @@ vec3 calcNormal(vec3 p, float eps) {
 }
 
 // Deep-void background: vertical gradient + two starfield layers + a faint
-// palette-tinted nebula. Stays near #05050d for the Hydra screen blend.
+// palette-tinted nebula. Stays near #010104 for the Hydra screen blend.
 vec3 background(vec3 rd) {
   vec3 col = mix(vec3(0.010, 0.012, 0.026), vec3(0.022, 0.026, 0.052),
                  clamp(rd.y * 0.5 + 0.5, 0.0, 1.0));

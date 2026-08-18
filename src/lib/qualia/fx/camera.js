@@ -205,7 +205,7 @@ export default {
 
       const ready = video && video.videoWidth > 0 && video.videoHeight > 0;
       if (!ready) {
-        ctx.fillStyle = '#05050d';
+        ctx.fillStyle = '#010104';
         ctx.fillRect(0, 0, W, H);
         ctx.fillStyle = 'rgba(180,200,220,0.5)';
         ctx.font = '600 18px ui-sans-serif, system-ui, sans-serif';
@@ -228,7 +228,7 @@ export default {
       // freezes (always ≥ 7% fresh).
       const fb = scratch.feedback;
       const newWeight = fb > 0.001 ? 1 - Math.min(fb, 0.93) : 1;
-      ctx.fillStyle = '#05050d';
+      ctx.fillStyle = '#010104';
       ctx.fillRect(0, 0, W, H);
       if (fb > 0.001) {
         // Retained history, optionally zoom/rotated for the tunnel feel.
