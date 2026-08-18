@@ -21,7 +21,7 @@
 // With nobody in frame the view slow-orbits on its own so the angular
 // motion never fully stops.
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 
 const AGE_CAP             = 48;    // generations before a cell counts as "ancient"
 const MAX_STEPS_PER_FRAME = 4;     // sim steps per rAF cap (high rate + hitch guard)
@@ -449,7 +449,7 @@ export default {
     function render() {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = '#05050d';
+      ctx.fillStyle = VOID;
       ctx.fillRect(0, 0, W, H);
       if (!C || !R) return;
       styleCache.clear();

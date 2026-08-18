@@ -5,11 +5,14 @@ interface Props {
   description?: string;
   date?: string;
   tags?: string[];
+  start?: number;     // Start the inline embed / watch link at this many seconds
 }
 
-const { id, title, description, date, tags = [] } = Astro.props;
+const { id, title, description, date, tags = [], start } = Astro.props;
 const thumb = `https://img.youtube.com/vi/${id}/maxresdefault.jpg`;
 const thumbFallback = `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+const embedSrc = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0${start ? `&start=${start}` : ''}`;
+const watchHref = `https://www.youtube.com/watch?v=${id}${start ? `&t=${start}` : ''}`;
 ---
 
 <div class="video-card" data-video-id={id}>
@@ -26,7 +29,7 @@ const thumbFallback = `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
         <path d="M8 5v14l11-7z"/>
       </svg>
     </button>
-    <div class="yt-embed" data-src={`https://www.youtube.com/embed/${id}?autoplay=1&rel=0`} hidden></div>
+    <div class="yt-embed" data-src={embedSrc} hidden></div>
   </div>
 
   <div class="video-info">
@@ -39,7 +42,7 @@ const thumbFallback = `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
       </div>
     )}
     <a
-      href={`https://www.youtube.com/watch?v=${id}`}
+      href={watchHref}
       target="_blank"
       rel="noopener noreferrer"
       class="yt-link"

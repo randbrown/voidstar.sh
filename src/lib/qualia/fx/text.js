@@ -19,7 +19,7 @@
 // string are re-computed only when text/size/viewport change. maxDpr 1.25
 // keeps the two fullscreen blits cheap on hi-DPI.
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 
 const PALETTES = {
   voidblue: { text: '#e8ecf8', accent: '#22d3ee' },
@@ -150,7 +150,7 @@ export default {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
       ctx.shadowBlur = 0;
-      ctx.fillStyle = '#05050d';
+      ctx.fillStyle = VOID;
       ctx.fillRect(0, 0, W, H);
       if (s.feedback > 0.005) {
         // dt-scaled so the tunnel/twist rates are wall-clock-true at any fps.

@@ -42,7 +42,7 @@ const CSS = `
 #entangle-modal button.ent-primary{background:var(--accent,#8b5cf6);border-color:var(--accent,#8b5cf6);color:#0b0b18;font-weight:600}
 #entangle-modal button.ent-danger{border-color:var(--pink,#f472b6);color:var(--pink,#f472b6);background:#1a0f1c}
 #entangle-modal .ent-close{padding:.1rem .5rem;line-height:1}
-#entangle-qr{display:block;margin:.4rem auto;border-radius:.5rem;background:var(--void,#05050d);max-width:100%}
+#entangle-qr{display:block;margin:.4rem auto;border-radius:.5rem;background:var(--void,#010104);max-width:100%}
 #entangle-url{width:100%;box-sizing:border-box;background:#0c0a18;color:var(--cyan,#22d3ee);
   border:1px solid #2c2750;border-radius:.4rem;padding:.45rem;font:inherit;resize:none;height:3.2rem}
 .ent-row{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin:.5rem 0}
@@ -116,7 +116,7 @@ function openPrintCard(url, qrDataUrl, perf) {
 <title>Entangle with ${name}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  :root{--void:#05050d;--accent:#8b5cf6;--cyan:#22d3ee;--pink:#f472b6;--text:#e9e6ff;--muted:#9b96c4}
+  :root{--void:#010104;--accent:#8b5cf6;--cyan:#22d3ee;--pink:#f472b6;--text:#e9e6ff;--muted:#9b96c4}
   html,body{height:100%}
   body{background:radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--accent) 26%, var(--void)) 0%, var(--void) 62%);
     color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;

@@ -88,7 +88,7 @@ export function setTheme(id) {
   // Keep the PWA/browser chrome color in sync with the void.
   try {
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', cssVar('--void') || '#05050d');
+    if (meta) meta.setAttribute('content', cssVar('--void') || '#010104');
   } catch (_) {}
   window.dispatchEvent(new CustomEvent('voidstar:themechange', { detail: { theme } }));
   return theme;
@@ -180,7 +180,7 @@ export function readKnobs() {
   const light     = num('--viz-light', 55);
   const glow      = num('--viz-glow', 1);
   const mono      = num('--viz-mono', 0);
-  const bg        = cssVar('--viz-bg') || '#05050d';
+  const bg        = cssVar('--viz-bg') || '#010104';
 
   const hue = (t) => mono ? hueBase : hueBase + (Number.isFinite(t) ? t : 0) * hueSpread;
   const color = (t, opts = {}) => {

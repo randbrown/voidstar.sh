@@ -1,19 +1,20 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { Image } from 'astro:assets';
-import aboutLogo from '../assets/art/logos_alpha/voidstar_logo_0.png';
+import nullDefinition from '../assets/art/voidstar_null_definition.png';
 
 const socials = [
-  { href: 'https://youtube.com/@voidstar0_0',  label: 'YouTube',   handle: '@voidstar0_0', desc: 'art videos & live sets'  },
-  { href: 'https://instagram.com/voidstar0',   label: 'Instagram', handle: '@voidstar0',   desc: 'behind the scenes'       },
-  { href: 'https://github.com/randbrown',      label: 'GitHub',    handle: '@randbrown',   desc: 'open source projects'    },
+  { href: 'https://randbrown.com/',            label: 'Website',   handle: 'randbrown.com', desc: 'the personal site'      },
+  { href: 'https://youtube.com/@voidstar0_0',  label: 'YouTube',   handle: '@voidstar0_0',  desc: 'art videos & live sets' },
+  { href: 'https://instagram.com/voidstar0',   label: 'Instagram', handle: '@voidstar0',    desc: 'behind the scenes'      },
+  { href: 'https://github.com/randbrown',      label: 'GitHub',    handle: '@randbrown',    desc: 'open source projects'   },
 ];
 
 const skills = [
   { cat: 'creative',    items: ['generative visuals', 'particle systems', 'music composition', 'live performance'] },
   { cat: 'web',         items: ['JavaScript/TypeScript', 'Canvas 2D', 'WebGL / GLSL', 'Web Audio API', 'Astro', 'Svelte'] },
   { cat: 'cv / ml',     items: ['MediaPipe', 'TensorFlow.js', 'pose estimation', 'real-time inference'] },
-  { cat: 'tools',       items: ['git', 'Cloudflare', 'Linux', 'Blender', 'Ableton Live'] },
+  { cat: 'tools',       items: ['git', 'Cloudflare', 'Linux', 'ffmpeg', 'Reaper'] },
 ];
 ---
 <BaseLayout title="About" description="About voidstar — generative artist and programmer.">
@@ -24,34 +25,42 @@ const skills = [
         <h1 class="about-title">
           Making things that shouldn't exist.
         </h1>
-        <Image
-          src={aboutLogo}
-          alt="voidstar"
-          width={280}
-          class="about-emblem"
-        />
+        <figure class="about-portrait">
+          <Image
+            src={nullDefinition}
+            alt="C source code with the line #define NULL ((void *)0), void * highlighted in green"
+            widths={[360, 520, 747]}
+            sizes="(max-width: 560px) 100vw, 500px"
+            class="portrait-img"
+          />
+          <figcaption>the name, in situ — <code>#define NULL ((void *)0)</code></figcaption>
+        </figure>
       </header>
 
       <div class="about-grid">
         <section class="bio-section">
           <p>
-            I make generative art, ambient music, and interactive experiments — then write about
-            how they work. The work lives at the intersection of creative coding, computer vision,
-            and live performance.
+            I make ambient music and audio-reactive visuals — pedal steel run through live code —
+            and then build the browser tools that make a set happen. Creative coding, a little
+            computer vision, and playing out live.
+          </p>
+
+          <p>
+            The name is a C joke. <code>void*</code> is a pointer to untyped memory —
+            potential without form. That's where the work starts: raw data (a camera feed, a mic
+            signal, a math field) shaped into something worth watching.
           </p>
           <p>
-            The name comes from C's <code>void*</code> — a pointer to untyped memory. Potential
-            without form. That's where most of my work starts: raw data (a camera feed, a
-            microphone signal, a mathematical field) shaped into something worth watching.
-          </p>
-          <p>
-            Most of the tools I build are open source. If something in the
-            <a href="/lab">lab</a> catches your eye, the source is usually one click away on
+            Almost everything is open source. If something in the <a href="/lab">lab</a> catches
+            your eye, the source is a click away on
             <a href="https://github.com/randbrown" target="_blank" rel="noopener">GitHub</a>.
+            Sets go up on <a href="https://youtube.com/@voidstar0_0" target="_blank" rel="noopener">YouTube</a>;
+            process shots on <a href="https://instagram.com/voidstar0" target="_blank" rel="noopener">Instagram</a>.
           </p>
           <p>
-            I post art videos on <a href="https://youtube.com/@voidstar0_0" target="_blank" rel="noopener">YouTube</a>
-            and process shots on <a href="https://instagram.com/voidstar0" target="_blank" rel="noopener">Instagram</a>.
+            voidstar is one hat — the day-job code, other projects, and how to reach me live at
+            <a href="https://randbrown.com/" target="_blank" rel="noopener">randbrown.com</a>.
+            Booking a set, building a playlist, or want to collaborate? That's the door.
           </p>
         </section>
 
@@ -105,10 +114,25 @@ const skills = [
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
-.about-emblem {
-  opacity: 0.55;
-  filter: drop-shadow(0 0 20px var(--accent-glow));
+.about-portrait {
+  margin-top: 1.75rem;
+  max-width: 500px;
 }
+.portrait-img {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 44px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--accent-glow);
+}
+.about-portrait figcaption {
+  margin-top: 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+}
+.about-portrait figcaption code { color: var(--green); }
 
 .about-grid {
   display: grid;

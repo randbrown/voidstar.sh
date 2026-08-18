@@ -1,111 +1,108 @@
 ---
-title: "Your First Fragment Shader: Real-Time GPU Art in the Browser"
-description: "WebGL lets you run code on thousands of GPU cores simultaneously. Here's how to get from a blank canvas to a live, animated GLSL shader — no three.js required."
+title: "your first fragment shader, no three.js"
+description: "Canvas2D gives you one CPU core; a fragment shader gives you the whole GPU. The raw WebGL is ~40 lines — here's the whole thing, no build step."
 pubDate: 2026-02-14
-tags: ["webgl", "glsl", "shaders", "generative", "gpu"]
+updatedDate: 2026-08-18
+tags: ["webgl", "glsl", "shaders", "graphics", "livecoding"]
 ---
 
-Canvas2D runs on one CPU core. WebGL runs on thousands of GPU cores simultaneously.
+Canvas2D gives you one CPU core. A fragment shader gives you the whole GPU running the same tiny program on every pixel at once. For 10k particles Canvas2D is fine; for ray-marched fog or per-pixel math at 60fps, you want the GPU. And you don't need three.js to get there — the raw WebGL for a full-screen shader is about 40 lines.
 
-For particle systems with 10k particles, Canvas2D is fine. For ray-marched volumetric fog, fluid simulations, or anything that needs per-pixel math at 60fps, you need WebGL — specifically, a fragment shader.
+## the whole thing is one quad and one shader
 
-## The minimal WebGL setup
-
-A fragment shader is a program that runs once per pixel, in parallel, across the entire canvas. It receives the pixel's coordinates and outputs a color. That's it.
-
-The boilerplate to get a full-screen shader running:
+The trick: cover the screen with two triangles, then let the fragment shader color every pixel. It runs once per pixel, in parallel, and all it has to do is output a `vec4`. Here's the entire no-library version.
 
 ```js
-const canvas = document.querySelector('canvas');
-const gl = canvas.getContext('webgl2');
+const gl = document.querySelector('canvas').getContext('webgl2');
 
-// Vertex shader: just fills the screen with two triangles
 const vert = `#version 300 es
-in vec2 a_pos;
-void main() { gl_Position = vec4(a_pos, 0, 1); }`;
+in vec2 p;
+void main() { gl_Position = vec4(p, 0.0, 1.0); }`;
 
-// Fragment shader: your art goes here
 const frag = `#version 300 es
 precision highp float;
-uniform vec2 u_res;   // canvas resolution
-uniform float u_time; // seconds since start
+uniform vec2 u_res;
+uniform float u_time;
 out vec4 color;
-
 void main() {
-  vec2 uv = gl_FragCoord.xy / u_res;
-  color = vec4(uv, 0.5 + 0.5 * sin(u_time), 1.0);
+  vec2 uv = gl_FragCoord.xy / u_res;      // 0..1 across the screen
+  float d = length(uv - 0.5);             // distance from center
+  float glow = smoothstep(0.4, 0.0, d);   // soft disc
+  color = vec4(vec3(glow * (0.5 + 0.5 * sin(u_time))), 1.0);
 }`;
 
-function compile(type, src) {
+const compile = (type, src) => {
   const s = gl.createShader(type);
-  gl.shaderSource(s, src);
-  gl.compileShader(s);
+  gl.shaderSource(s, src); gl.compileShader(s);
   return s;
-}
+};
 
 const prog = gl.createProgram();
 gl.attachShader(prog, compile(gl.VERTEX_SHADER, vert));
 gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, frag));
-gl.linkProgram(prog);
-gl.useProgram(prog);
+gl.linkProgram(prog); gl.useProgram(prog);
 
-// Full-screen quad (two triangles)
-const buf = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+// two triangles = one full-screen quad
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER,
+  new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+const p = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(p);
+gl.vertexAttribPointer(p, 2, gl.FLOAT, false, 0, 0);
 
-const loc = gl.getAttribLocation(prog, 'a_pos');
-gl.enableVertexAttribArray(loc);
-gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-
-const uRes  = gl.getUniformLocation(prog, 'u_res');
+const uRes = gl.getUniformLocation(prog, 'u_res');
 const uTime = gl.getUniformLocation(prog, 'u_time');
 
-function frame(t) {
-  gl.uniform2f(uRes, canvas.width, canvas.height);
-  gl.uniform1f(uTime, t / 1000);
+(function loop(t) {
+  gl.uniform2f(uRes, gl.canvas.width, gl.canvas.height);
+  gl.uniform1f(uTime, t * 0.001);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  requestAnimationFrame(frame);
-}
-requestAnimationFrame(frame);
+  requestAnimationFrame(loop);
+})(0);
 ```
 
-That's it. The `frag` string is where all your art lives.
+That's a pulsing glow. Everything interesting after this happens inside `main()` — you never touch the plumbing again.
 
-## GLSL functions worth knowing
+## glsl functions worth stealing
 
-**`fract(x)`** — the fractional part. `fract(uv * 10.0)` tiles your UV space into a 10×10 grid. Useful for patterns.
+You don't need a math degree, just a handful of functions. These four do most of the heavy lifting on the projector.
 
-**`smoothstep(edge0, edge1, x)`** — smooth interpolation between 0 and 1. Use it instead of `step()` to avoid aliased hard edges.
+```glsl
+vec2 uv = gl_FragCoord.xy / u_res;
+uv = fract(uv * 4.0);                    // tile: repeat into a 4x4 grid
+float r = length(uv - 0.5);              // radial fields, rings, blobs
+float a = atan(uv.y - 0.5, uv.x - 0.5);  // polar angle -> spirals, spokes
+float edge = smoothstep(0.3, 0.31, r);   // clean anti-aliased edges, not step()
+```
 
-**`length(v)`** — Euclidean distance. `length(uv - 0.5)` is the distance from the center — foundation of radial effects.
+Add `sin`/`cos` of `u_time` anywhere to make it breathe. `fract` for tiling, `smoothstep` instead of `step` so nothing aliases, `length` for anything round, `atan(y,x)` when you want to think in circles. That's the whole starter kit.
 
-**`atan(y, x)`** — angle from the origin. Combined with `length()` you have polar coordinates, which unlock spiral and wave patterns.
+## feed it the camera
 
-**`sin()` / `cos()` with time** — animate anything. `sin(uv.x * 20.0 + u_time * 2.0)` makes a scrolling sine wave.
-
-## Bringing in camera data
-
-A WebGL texture can be sourced directly from a `<video>` element — including a live camera feed:
+A WebGL texture can be sourced straight from a `<video>` element — including a live camera. Push a new frame each tick, sample it in the shader, done.
 
 ```js
 const tex = gl.createTexture();
 gl.bindTexture(gl.TEXTURE_2D, tex);
-
-function updateCameraTexture(video) {
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
-}
+// video frames aren't power-of-two: clamp + linear, no mipmaps, or it samples black
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+// per frame, after the video is playing:
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
 ```
 
-Upload the camera frame once per animation tick, then sample it in the fragment shader with `texture(u_camera, uv)`. From there you can:
+```glsl
+uniform sampler2D u_cam;
+vec3 cam = texture(u_cam, uv).rgb;   // now you're doing per-pixel video
+```
 
-- Edge-detect the camera feed (`Sobel kernel` in the shader)
-- Displacement-map the camera through a noise field
-- Use camera luminance as a threshold for revealing/hiding a generative layer underneath
-- Feed it into a reaction-diffusion simulation as initial conditions
+From there it's a playground: Sobel edge-detect, displace the UVs through noise, threshold on luminance so only the bright bits show through, or dump the camera's motion into a reaction-diffusion sim. That last one — camera into a feedback sim — is where a shader stops being a picture and starts being a system.
 
-The fluid simulation in the lab does a version of this: camera motion drives dye injection into the fluid, so your movements leave colored wake trails.
+No install, no build step, no three.js. Just a quad and a string of GLSL.
 
-→ [Open the WebGL Shader demo in the Lab](/lab)
-→ [Source on GitHub](https://github.com/randbrown)
+→ see it live in the instrument: [/qualia](/qualia)
+→ audio-reactive visuals in the lab: [/lab/cymatics](/lab/cymatics)
+→ if you want the same thing but even lazier, [Hydra](https://hydra.video) hides all of the above
+→ camera pipelines and pose data: [MediaPipe](https://ai.google.dev/edge/mediapipe)
+→ source & more experiments: [github.com/randbrown](https://github.com/randbrown)

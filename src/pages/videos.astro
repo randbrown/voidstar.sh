@@ -12,10 +12,10 @@ const videos = await enrichWithOEmbed(rawVideos);
     <div class="container">
       <header class="page-header">
         <div class="page-label">// videos</div>
-        <h1 class="page-title">Art &amp; Music</h1>
+        <h1 class="page-title">Sets &amp; Visuals</h1>
         <p class="page-desc">
-          Generative visuals, pose-driven particle systems, and original music.
-          Click any thumbnail to play inline, or open on YouTube for the full experience.
+          Live sets, ambient pieces, and audio-reactive visuals. Tap a thumbnail to play
+          inline, or open it on YouTube for the whole thing.
         </p>
       </header>
 
@@ -27,6 +27,7 @@ const videos = await enrichWithOEmbed(rawVideos);
             description={v.description}
             date={v.date}
             tags={v.tags}
+            start={v.start}
           />
         ))}
       </div>
@@ -34,7 +35,7 @@ const videos = await enrichWithOEmbed(rawVideos);
       <div class="yt-cta">
         <p>See everything on YouTube →</p>
         <a
-          href="https://youtube.com/@voidstar"
+          href="https://youtube.com/@voidstar0_0"
           target="_blank"
           rel="noopener noreferrer"
           class="btn btn-outline"

@@ -10,10 +10,13 @@ export interface Video {
   date?: string;         // ISO date — oEmbed doesn't expose this
   tags?: string[];
   featured?: boolean;
+  start?: number;        // Start the inline embed at this many seconds (YT ?start=)
 }
 
 export const videos: Video[] = [
-  { id: 'pT8RKd9t640', featured: true },
+  { id: 'EeD-36oJScs', featured: true, start: 1003 },
+  { id: 'wwWb_X9mDAY' },
+  { id: 'pT8RKd9t640' },
   { id: 'dJGqTtVfE1g' },
   { id: '0-Xok46-Ss8' },
   { id: 'BtlHRhC7rDc' },

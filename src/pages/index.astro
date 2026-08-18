@@ -3,6 +3,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import StarField from '../components/StarField.astro';
 import PostCard from '../components/PostCard.astro';
 import VideoCard from '../components/VideoCard.astro';
+import NullDef from '../components/NullDef.astro';
 import { Image } from 'astro:assets';
 import logoMain from '../assets/art/logos_alpha/voidstar_logo_0.png';
 import emblomCosmos from '../assets/art/logos_alpha/voidstar_emblem_cosmos_0.png';
@@ -13,17 +14,17 @@ const allPosts = await getCollection('posts', ({ data }) => !data.draft);
 const recentPosts = allPosts
   .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
   .slice(0, 3);
+const latestPost = recentPosts[0];
 
 const videos = await enrichWithOEmbed(rawVideos);
 const featuredVideo = videos.find(v => v.featured) ?? videos[0];
 ---
-<BaseLayout title="voidstar" description="voidstar — art, code, and the space between. Generative visuals, pose tracking, music, and interactive experiments.">
+<BaseLayout title="voidstar" description="voidstar — live-coded ambient music and audio-reactive visuals, built to run in a browser. Pedal steel, generative fields, and a live instrument you can open right now.">
 
   <!-- Hero -->
   <section class="hero">
-    <StarField count={150} />
+    <StarField count={120} />
 
-    <!-- decorative emblem -->
     <div class="hero-emblem" aria-hidden="true">
       <Image src={emblomCosmos} alt="" width={520} class="emblem-img" />
     </div>
@@ -31,23 +32,26 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
     <div class="hero-content container">
       <div class="hero-eyebrow">
         <span class="eyebrow-dot"></span>
-        <span>art · code · void</span>
+        <span>ambient · live code · pedal steel</span>
       </div>
 
       <Image
         src={logoMain}
         alt="voidstar"
-        height={160}
+        height={150}
         class="hero-logo"
       />
 
+      <NullDef />
+
       <p class="hero-desc">
-        Generative visuals, pose-driven particle systems, ambient music,
-        and experiments that live where code meets art.
+        Live-coded ambient music and audio-reactive visuals — pedal steel through
+        code, running in a browser. The whole instrument opens in a tab.
       </p>
+
       <div class="hero-actions">
-        <a href="/qualia" class="btn btn-primary">open qualia →</a>
-        <a href="/videos" class="btn btn-outline">watch videos</a>
+        <a href="/videos" class="btn btn-primary">watch a set →</a>
+        <a href="/qualia" class="btn btn-outline">open qualia</a>
       </div>
 
       <div class="hero-socials">
@@ -56,85 +60,104 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
         <a href="https://github.com/randbrown"     target="_blank" rel="noopener" class="social-pill">GitHub</a>
       </div>
     </div>
-
-    <div class="hero-scroll-hint" aria-hidden="true">
-      <span>scroll</span>
-      <span class="scroll-arrow">↓</span>
-    </div>
   </section>
 
-  <!-- Featured Video -->
-  {featuredVideo && (
-    <section class="section-sm">
-      <div class="container">
-        <h2 class="section-heading">
-          <span class="heading-accent">▶</span> featured
-        </h2>
-        <div class="featured-video-wrap">
-          <VideoCard
-            id={featuredVideo.id}
-            title={featuredVideo.title ?? ''}
-            description={featuredVideo.description}
-            date={featuredVideo.date}
-            tags={featuredVideo.tags}
-          />
-        </div>
-        <a href="/videos" class="section-link">all videos →</a>
-      </div>
-    </section>
-  )}
-
-  <div class="container"><div class="divider"></div></div>
-
-  <!-- Recent Posts -->
-  <section class="section-sm">
+  <!-- Latest — most recent video, writing, and the instrument, all on one screen -->
+  <section class="section-sm latest">
     <div class="container">
-      <h2 class="section-heading">
-        <span class="heading-accent">//</span> recent posts
-      </h2>
-      <div class="grid-3">
-        {recentPosts.map(post => <PostCard post={post} />)}
+      <h2 class="section-heading"><span class="heading-accent">//</span> latest</h2>
+
+      <div class="latest-grid">
+        <div class="latest-video">
+          {featuredVideo && (
+            <VideoCard
+              id={featuredVideo.id}
+              title={featuredVideo.title ?? ''}
+              description={featuredVideo.description}
+              date={featuredVideo.date}
+              tags={featuredVideo.tags}
+              start={featuredVideo.start}
+            />
+          )}
+          <a href="/videos" class="section-link">all videos →</a>
+        </div>
+
+        <div class="latest-side">
+          {latestPost && (
+            <div class="side-block">
+              <span class="side-label">newest post</span>
+              <PostCard post={latestPost} />
+              <a href="/posts" class="section-link">all writing →</a>
+            </div>
+          )}
+
+          <a href="/qualia" class="lab-cta">
+            <span class="side-label">the instrument</span>
+            <span class="lab-cta-title"><span class="lab-cta-mark">◈</span> qualia</span>
+            <span class="lab-cta-desc">
+              Strudel + Hydra, a guitar rig, looper, sequencer, pose tracking and
+              20+ reactive visualizers — one page, no install.
+            </span>
+            <span class="lab-cta-go">enter the lab →</span>
+          </a>
+        </div>
       </div>
-      <a href="/posts" class="section-link">all posts →</a>
     </div>
   </section>
 
-  <div class="container"><div class="divider"></div></div>
-
-  <!-- Lab teaser -->
+  <!-- Lab -->
   <section class="section-sm lab-teaser">
     <div class="container">
-      <h2 class="section-heading">
-        <span class="heading-accent">⬡</span> lab
-      </h2>
+      <h2 class="section-heading"><span class="heading-accent">⬡</span> lab</h2>
       <p class="lab-desc">
-        Interactive experiments that run directly in your browser —
-        particle systems, WebGL shaders, pose tracking, generative audio.
-        No install required.
+        Small browser experiments and full-blown apps — all client-side, no install.
       </p>
       <div class="lab-links">
+        <a href="/qualia" class="lab-link"><span class="lab-link-accent">◈</span> Qualia</a>
+        <a href="/lab/tether" class="lab-link"><span class="lab-link-accent">⌁</span> Tether</a>
         <a href="/lab/mind" class="lab-link"><span class="lab-link-accent">◦</span> Mind</a>
         <a href="/lab/setlist" class="lab-link"><span class="lab-link-accent">♫</span> Setlist</a>
-        <a href="/qualia" class="lab-link"><span class="lab-link-accent">◈</span> Qualia</a>
         <a href="/lab/cymatics" class="lab-link"><span class="lab-link-accent">∿</span> Cymatics</a>
-        <a href="/lab/spectrum-pose" class="lab-link"><span class="lab-link-accent">▮</span> Spectrum Pose</a>
         <a href="/lab/pose-particles" class="lab-link"><span class="lab-link-accent">⊹</span> Pose Particles</a>
       </div>
       <a href="/lab" class="section-link">all experiments →</a>
     </div>
   </section>
 
+  <!-- The person -->
+  <section class="section-sm person">
+    <div class="container">
+      <div class="person-inner">
+        <div class="person-copy">
+          <h2 class="section-heading"><span class="heading-accent">$</span> whoami</h2>
+          <p>
+            voidstar is <a href="https://randbrown.com/" target="_blank" rel="noopener">Randy Brown</a> —
+            a software engineer and pedal-steel player from Knoxville making ambient,
+            improvised music with code. The steel bends; the code listens; the visuals
+            answer. When it's not a live set, it's the tools that make one.
+          </p>
+          <p class="person-booking">
+            Booking, playlists, or just want to say hi? Find me at
+            <a href="https://randbrown.com/" target="_blank" rel="noopener">randbrown.com</a>
+            or on <a href="https://instagram.com/voidstar0" target="_blank" rel="noopener">Instagram</a>.
+          </p>
+        </div>
+        <a href="https://randbrown.com/" target="_blank" rel="noopener" class="person-link">randbrown.com ↗</a>
+      </div>
+    </div>
+  </section>
+
 </BaseLayout>
 
 <style>
-/* Hero */
+/* Hero — tightened: no forced tall viewport, less dead space */
 .hero {
   position: relative;
-  min-height: 92dvh;
   display: flex;
   align-items: center;
   overflow: hidden;
-  background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(139,92,246,0.12) 0%, transparent 70%);
+  padding: 3.5rem 0 2.5rem;
+  background: radial-gradient(ellipse 80% 55% at 50% 0%, rgba(56,216,255,0.10) 0%, transparent 70%);
 }
 .hero-emblem {
   position: absolute;
@@ -142,16 +165,14 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
-  opacity: 0.18;
+  opacity: 0.16;
   filter: blur(1px);
 }
-.emblem-img { width: 520px; max-width: 55vw; height: auto; }
+.emblem-img { width: 480px; max-width: 52vw; height: auto; }
 
 .hero-content {
   position: relative;
   z-index: 2;
-  padding-top: 4rem;
-  padding-bottom: 6rem;
   max-width: 680px;
 }
 .hero-eyebrow {
@@ -162,7 +183,7 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
   font-size: 0.8rem;
   color: var(--text-muted);
   letter-spacing: 0.12em;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
 }
 .eyebrow-dot {
   width: 6px; height: 6px;
@@ -172,29 +193,25 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
   animation: pulse-glow 2s ease-in-out infinite;
 }
 .hero-logo {
-  height: clamp(110px, 18vw, 180px);
+  height: clamp(96px, 15vw, 150px);
   width: auto;
-  margin-bottom: 1.75rem;
+  margin-bottom: 1.25rem;
   filter: drop-shadow(0 0 30px var(--accent-glow));
 }
 .hero-desc {
-  font-size: clamp(1rem, 2vw, 1.2rem);
+  font-size: clamp(1rem, 2vw, 1.15rem);
   color: var(--text-muted);
   line-height: 1.7;
-  max-width: 55ch;
-  margin-bottom: 2rem;
+  max-width: 52ch;
+  margin: 1.5rem 0 1.75rem;
 }
 .hero-actions {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
-  margin-bottom: 2.5rem;
+  margin-bottom: 1.75rem;
 }
-.hero-socials {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
+.hero-socials { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .social-pill {
   font-family: var(--font-mono);
   font-size: 0.8rem;
@@ -206,23 +223,7 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
 }
 .social-pill:hover { color: var(--accent); border-color: var(--accent); }
 
-.hero-scroll-hint {
-  position: absolute;
-  bottom: 2.5rem;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.25rem;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  letter-spacing: 0.1em;
-}
-.scroll-arrow { animation: fade-up 1.5s ease-in-out infinite alternate; }
-
-/* Sections */
+/* Section headings */
 .section-heading {
   font-size: 0.8rem;
   font-family: var(--font-mono);
@@ -237,28 +238,79 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
 .heading-accent { color: var(--accent); }
 .section-link {
   display: inline-block;
-  margin-top: 1.5rem;
+  margin-top: 1rem;
   font-family: var(--font-mono);
   font-size: 0.85rem;
   color: var(--text-muted);
 }
 .section-link:hover { color: var(--accent); }
 
-.featured-video-wrap { max-width: 700px; }
+/* Latest — video + newest post + instrument, tight */
+.latest-grid {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 1.75rem;
+  align-items: start;
+}
+@media (max-width: 820px) {
+  .latest-grid { grid-template-columns: 1fr; }
+}
+.latest-side { display: flex; flex-direction: column; gap: 1.5rem; }
+.side-block { display: flex; flex-direction: column; }
+.side-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.6rem;
+}
 
-.lab-teaser { padding-bottom: 6rem; }
+.lab-cta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 1.4rem;
+  background: var(--surface);
+  border: 1px solid rgba(56,216,255,0.28);
+  border-radius: var(--radius-lg);
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+.lab-cta:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.35), 0 0 0 1px var(--accent-glow);
+}
+.lab-cta-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.lab-cta-mark { color: var(--accent); }
+.lab-cta-desc { font-size: 0.9rem; color: var(--text-muted); line-height: 1.6; }
+.lab-cta-go {
+  margin-top: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--accent);
+}
+
+/* Lab teaser */
 .lab-desc {
-  font-size: 1.05rem;
+  font-size: 1.02rem;
   color: var(--text-muted);
   max-width: 60ch;
   line-height: 1.7;
-  margin-bottom: 1.25rem;
+  margin-bottom: 1.1rem;
 }
 .lab-links {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.75rem;
 }
 .lab-link {
   font-family: var(--font-mono);
@@ -274,4 +326,34 @@ const featuredVideo = videos.find(v => v.featured) ?? videos[0];
 }
 .lab-link:hover { color: var(--accent); border-color: var(--accent); }
 .lab-link-accent { color: var(--accent); font-size: 1rem; }
+
+/* The person */
+.person-inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+.person-copy { max-width: 62ch; }
+.person-copy p {
+  color: var(--text-muted);
+  line-height: 1.75;
+  font-size: 1.02rem;
+  margin-bottom: 0.9rem;
+}
+.person-copy a { color: var(--accent); }
+.person-copy a:hover { color: var(--cyan); }
+.person-booking { font-size: 0.92rem !important; color: var(--text-dim) !important; }
+.person-link {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+.person-link:hover { color: var(--accent); border-color: var(--accent); }
 </style>

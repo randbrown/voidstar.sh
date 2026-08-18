@@ -28,7 +28,7 @@
 // gravity, wrist-spread blasts blocks outward, shoulder-span (lean-in) melts
 // faster — all scaled by the `poseReactivity` master.
 
-import { scaleAudio } from '../field.js';
+import { scaleAudio, VOID } from '../field.js';
 import { createMeltEngine } from './code-meltdown.js';
 
 // ── Source code ingestion ──────────────────────────────────────────────────
@@ -795,7 +795,7 @@ export default {
       const audio = scratch.audio;
       const params = scratch.params;
       if (!audio || !params) {
-        ctx.fillStyle = '#05050d';
+        ctx.fillStyle = VOID;
         ctx.fillRect(0, 0, W, H);
         return;
       }

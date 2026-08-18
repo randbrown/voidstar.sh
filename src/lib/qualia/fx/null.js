@@ -25,10 +25,11 @@ export default {
       resize(w, h /*, dpr */) { W = w; H = h; },
       update() {},
       render() {
-        // #05050d matches the page bg — effectively transparent under the
-        // canvas's screen blend, so Hydra shows through untouched.
-        ctx.fillStyle = '#05050d';
-        ctx.fillRect(0, 0, W, H);
+        // Truly empty: clear to transparent. Under the canvas's screen blend
+        // that reveals Hydra (z:1) untouched; with Hydra dark it shows the page
+        // void (--void) exactly — so "Null" is the theme's own black, not a
+        // hardcoded fill. (Historically this filled the old page-bg color.)
+        ctx.clearRect(0, 0, W, H);
       },
       dispose() {},
     };

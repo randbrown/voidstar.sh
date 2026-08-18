@@ -1,3 +1,5 @@
+import { VOID } from '../../field.js';
+
 // Arcade engine — the shared harness every game in the `arcade` quale runs on.
 //
 // One idea drives the whole thing: games render into a small fixed-resolution
@@ -21,7 +23,7 @@
 // accretion, ghost green, plasma orange, white. Games pull from here so the
 // four cabinets read as one machine.
 export const C = {
-  void:    '#05050d',
+  void:    VOID,
   void2:   '#0a0f2a',
   cyan:    '#00d4ff',
   ice:     '#66f0ff',
@@ -397,8 +399,8 @@ export function createEngine(mainCtx) {
     textOutline(str, x, y, color, s = 1, align = 'left') {
       const w = textWidth(String(str).toUpperCase(), s);
       const px = align === 'center' ? Math.round(x - w / 2) : align === 'right' ? Math.round(x - w) : Math.round(x);
-      this.text(str, px - s, y, '#05050d', s); this.text(str, px + s, y, '#05050d', s);
-      this.text(str, px, y - s, '#05050d', s); this.text(str, px, y + s, '#05050d', s);
+      this.text(str, px - s, y, VOID, s); this.text(str, px + s, y, VOID, s);
+      this.text(str, px, y - s, VOID, s); this.text(str, px, y + s, VOID, s);
       this.text(str, px, y, color, s);
       return px + w;
     },

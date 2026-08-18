@@ -2,6 +2,16 @@
 // Plugins must read state through this, never via globals; that's what makes
 // the fx swappable and live-codeable.
 
+// The fx "void" — the near-black floor a canvas2d fx clears to. The fx canvas
+// screen-blends over Hydra (mix-blend-mode:screen), so this near-black fill
+// reads as effectively transparent while giving trails something to fade into.
+// Single source of truth: import this instead of hardcoding the hex, so the
+// void can be retuned in one place. Kept equal to the voidstar theme's --void
+// (enforced by scripts/check-qualia-void.mjs). It is deliberately theme-INVARIANT
+// (the stage stays true-black on every theme); the Null quale is even emptier —
+// it clearRects to fully transparent rather than filling this.
+export const VOID = '#010104';
+
 /** @returns {import('./types.js').AudioFrame} */
 export function emptyAudioFrame() {
   return {

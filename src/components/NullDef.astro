@@ -1,0 +1,73 @@
+---
+// The origin of the name, as code: C's null pointer.
+//   #define NULL ((void *)0)
+// voidstar == void* == a pointer to nothing, which is also potential without
+// form. Rendered as syntax-lit monospace (the green `void *` chip echoes the
+// original name-idea screenshot) so it stays crisp + theme-aware everywhere.
+interface Props {
+  caption?: boolean;   // show the "a pointer to nothing…" line
+  size?: 'sm' | 'md';  // md = hero scale, sm = inline/footer scale
+  class?: string;
+}
+const { caption = true, size = 'md', class: className = '' } = Astro.props;
+---
+<div class:list={['null-def', `is-${size}`, className]}>
+  <code class="null-code" title="#define NULL ((void *)0)">
+    <span class="t-pp">#define</span> <span class="t-macro">NULL</span> <span
+      class="t-punc">((</span><span class="t-void">void&nbsp;*</span><span
+      class="t-punc">)</span><span class="t-num">0</span><span class="t-punc">)</span>
+  </code>
+  {caption && (
+    <p class="null-cap">a pointer to nothing — which is also potential without form.</p>
+  )}
+</div>
+
+<style>
+.null-def { display: inline-flex; flex-direction: column; gap: 0.55rem; }
+.null-code {
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  white-space: nowrap;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.is-md .null-code { font-size: clamp(0.95rem, 2.4vw, 1.35rem); }
+.is-sm .null-code { font-size: 0.85rem; padding: 0.35rem 0.6rem; }
+
+.t-pp    { color: var(--pink); }
+.t-macro { color: var(--accent); font-weight: 500; }
+.t-punc  { color: var(--amber); }
+.t-num   { color: var(--amber); }
+.t-void  {
+  color: var(--void);
+  background: var(--green);
+  padding: 0.05em 0.35em;
+  border-radius: 3px;
+  font-weight: 600;
+  box-shadow: 0 0 calc(10px * var(--glow-strength, 1)) color-mix(in srgb, var(--green) 45%, transparent);
+}
+/* Light / oddball themes: bright-green fill + dark text loses contrast, so flip
+   the chip to green text on a faint tint (still reads as the highlighted void*). */
+:global([data-theme="risograph"]) .t-void,
+:global([data-theme="lightroom"]) .t-void,
+:global([data-theme="win95"]) .t-void {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  box-shadow: none;
+}
+
+.null-cap {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+  max-width: 46ch;
+}
+.is-sm .null-cap { font-size: 0.68rem; }
+</style>

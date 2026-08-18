@@ -1,0 +1,77 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import StarField from '../components/StarField.astro';
+import NullDef from '../components/NullDef.astro';
+---
+<BaseLayout title="404 — null pointer" description="You dereferenced a pointer to nothing." noIndex={true}>
+  <section class="nf">
+    <StarField count={90} />
+    <div class="container nf-inner">
+      <div class="nf-code">segfault</div>
+      <h1 class="nf-title">you followed a pointer to nothing.</h1>
+      <p class="nf-desc">
+        That page is <code>NULL</code> — untyped, formless, not here. Fitting, given the name.
+        Let's aim you at something that exists.
+      </p>
+
+      <NullDef caption={false} />
+
+      <div class="nf-actions">
+        <a href="/" class="btn btn-primary">back to void →</a>
+        <a href="/qualia" class="btn btn-outline">open qualia</a>
+        <a href="/posts" class="btn btn-outline">field notes</a>
+        <a href="/videos" class="btn btn-outline">watch a set</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+.nf {
+  position: relative;
+  overflow: hidden;
+  min-height: 72vh;
+  display: flex;
+  align-items: center;
+  background: radial-gradient(ellipse 70% 55% at 50% 0%, rgba(56,216,255,0.10) 0%, transparent 70%);
+}
+.nf-inner { position: relative; z-index: 2; max-width: 620px; padding: 4rem 1.5rem; }
+.nf-code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: var(--pink);
+  margin-bottom: 1rem;
+}
+.nf-title {
+  font-size: clamp(1.6rem, 4vw, 2.6rem);
+  line-height: 1.15;
+  margin-bottom: 1rem;
+  background: linear-gradient(135deg, var(--text) 45%, var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.nf-desc {
+  color: var(--text-muted);
+  line-height: 1.7;
+  font-size: 1.05rem;
+  margin-bottom: 1.75rem;
+  max-width: 52ch;
+}
+.nf-desc code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+  color: var(--green);
+}
+.nf-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 1.75rem;
+}
+</style>
