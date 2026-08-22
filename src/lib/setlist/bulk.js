@@ -14,6 +14,8 @@ import { parseSpotifyUrl } from './spotify.js';
 import { isSpotifyConnected } from './spotify-auth.js';
 import { fetchLyrics } from './lyrics.js';
 import { cacheChartForSong, getOfflineChart } from './chart-cache.js';
+import { searchYoutube, isConfidentYoutube, scoreYoutubeMatch, songHasYoutube } from './youtube.js';
+import { applyYoutubeToSong } from './youtube-import.js';
 
 // Fill-empty apply of a {field: value} update object onto a song, skipping
 // internal `_`-prefixed fields. Returns how many fields were filled.
@@ -348,6 +350,68 @@ export async function bestGuessSpotifyLinks(onProgress) {
     onProgress?.({ done: i + 1, total: targets.length, updated, title: song.title });
   }
   return { total: targets.length, updated, failures };
+}
+
+// Find each song on YouTube and attach the top video + its thumbnail — the
+// "find on YouTube" song-page button, library-wide. Only songs with no YouTube
+// link yet are searched; a result is accepted (added as a listen-link
+// alternate, thumbnail filled into photoUrl fill-empty) only when it clears the
+// title bar with no artist disagreement — a search always returns SOMETHING, so
+// an unguarded pass would attach a stranger's video to every unfindable
+// original. Everything weaker is listed with what the best guess WAS.
+export async function findYoutubeForAllSongs(onProgress) {
+  if (!getSources().workerUrl) return { aborted: 'no worker URL configured in Settings — YouTube search needs it' };
+  const targets = (await store.getAllSongs()).filter((s) => !songHasYoutube(s));
+  let updated = 0;
+  let photoed = 0;
+  const failures = [];
+  const SAME_FAILURE_LIMIT = 3;
+  let lastReason = null;
+  let sameReasonRun = 0;
+  for (let i = 0; i < targets.length; i++) {
+    const song = targets[i];
+    let reason = null;
+    try {
+      const { results, problems } = await searchYoutube(song.title, song.artist || '', { limit: 5 });
+      const best = results.find((r) => isConfidentYoutube(song, r)) || null;
+      if (!best) {
+        const top = results[0];
+        if (!top) {
+          reason = problems[0] || 'YouTube returned no results';
+        } else {
+          const s = scoreYoutubeMatch(song, top);
+          reason = s.conflict
+            ? `top hit "${top.title}" — different artist, so it wasn't linked`
+            : `top hit "${top.title}" (${Math.round(s.title * 100)}% title match, under the bar)`;
+        }
+      } else {
+        const r = applyYoutubeToSong(song, best);
+        if (r.linked || r.photoed) {
+          await store.putSong(song);
+          updated++;
+          if (r.photoed) photoed++;
+        }
+      }
+    } catch (e) {
+      reason = e.message || 'search failed';
+    }
+    if (reason) {
+      failures.push({ song, reason });
+      sameReasonRun = reason === lastReason ? sameReasonRun + 1 : 1;
+      lastReason = reason;
+      if (sameReasonRun >= SAME_FAILURE_LIMIT && /failed|needs|Settings|worker/i.test(reason)) {
+        return {
+          aborted: `stopped — ${sameReasonRun} songs in a row failed the same way: ${reason}`,
+          total: targets.length, updated, photoed, failures,
+        };
+      }
+    } else {
+      lastReason = null;
+      sameReasonRun = 0;
+    }
+    onProgress?.({ done: i + 1, total: targets.length, updated, title: song.title });
+  }
+  return { total: targets.length, updated, photoed, failures };
 }
 
 // The health dimensions — one predicate per "is this filled in?" question,

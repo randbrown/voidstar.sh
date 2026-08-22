@@ -149,6 +149,38 @@ export function renderSoundcloudEmbed(container, trackUrl) {
 // URL link renders immediately so the song page never blocks on it, and a
 // resolved embed swaps in when (and if) it lands. `onResolved` lets the
 // caller persist the found embed URL onto the song so the lookup runs once.
+// ── Song photo (the performer's visual recall cue) ──
+//
+// song.photoUrl is either a remote https URL (a YouTube thumbnail from import /
+// "find on YouTube", or a pasted image link — like artworkUrl) OR a compact
+// data: URL from a hand-uploaded photo. Uploads are downscaled here so the
+// embedded image is small enough to ride the Drive backup and render offline
+// on stage; remote thumbnails stay URLs (cheap, browser-cached).
+
+export const PHOTO_MAX_DIM = 480;
+
+// Downscale a chosen image File to a small JPEG data URL. Rejects if the file
+// isn't a decodable image.
+export async function fileToPhotoDataUrl(file, maxDim = PHOTO_MAX_DIM) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+// Only https and data:image URLs are safe to drop into an <img src> (a Drive
+// backup could carry anything; never render javascript:/http: photos).
+export function isDisplayablePhoto(url) {
+  return typeof url === 'string' && (/^https:\/\//i.test(url) || /^data:image\//i.test(url));
+}
+
 export function renderBandcampEmbed(container, song, resolveEmbed, onResolved) {
   const pageUrl = song.bandcampUrl;
   if (!isBandcampUrl(pageUrl)) return;
