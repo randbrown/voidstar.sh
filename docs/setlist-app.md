@@ -252,11 +252,18 @@ record while keeping the set + songs).
   YouTube set back to its source (only the Spotify "Scrape Playlist" action
   reorders, and it's keyed to `setlist.spotifyUrl`, never these).
 - **Parsing** (`youtube-parse.js`, node-tested by
-  `scripts/check-youtube-parse.mjs`): noise tags are stripped (`(Official
-  Video)`, `[4K]`, `(Lyrics)`…), an "Artist - Title" form splits left=artist,
-  and the two authoritative channel shapes — `<Artist> - Topic` and
-  `<Artist>VEVO` — name the artist exactly (the song title is then de-affixed
-  of that artist). A plain uploader channel asserts no artist.
+  `scripts/check-youtube-parse.mjs` incl. real cases from these gigs): noise
+  tags are stripped (`(Official Video)`, `[4K]`, `(Lyrics)`…), and a dashed
+  title is split into artist/title. The **channel name orients the split** —
+  a real feed carries both "Artist - Title" and "Title - Artist", so the side
+  that matches the channel is the artist (e.g. "Is It Just Me - Oliver Sayani"
+  on the *Oliver Sayani* channel → title "Is It Just Me"); a trailing
+  "…(F)- Channel" the strict spacing rule misses is stripped too, keeping a
+  key hint like `(F)` in the title. The two authoritative channel shapes —
+  `<Artist> - Topic` and `<Artist>VEVO` — name the artist outright. A bare
+  title on a plain channel keeps the artist empty (it might be a cover
+  uploader) — fill-empty, so "set artist on all songs" or a hand edit finishes
+  it.
 - YouTube stays an **alternate-only** listen link (no primary slot, no
   auto-link matching) — after import, run auto-link / library tools to fill in
   Spotify, charts, keys, and lyrics the normal way.
@@ -1194,11 +1201,17 @@ Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `GET /media/bandcamp?url=` / `GET /media/soundcloud?url=` (track lists
 scraped from Bandcamp/SoundCloud pages for auto-link —
 `{tracks:[{title, artist, url, embedUrl}], truncated}`),
-`GET /media/youtube/playlist?url=` (videos scraped from a public YouTube
-playlist page's `ytInitialData` — `{title, tracks:[{title, url, videoId,
-thumbnail, durationSec, channel}], total, truncated}` — for the setlist
-YouTube import) and `GET /media/youtube/search?q=&limit=` (top video results,
-same shape, for "find on YouTube"),
+`GET /media/youtube/playlist?url=` (videos for a public YouTube playlist —
+`{title, tracks:[{title, url, videoId, thumbnail, durationSec, channel}],
+total, truncated, source}` — for the setlist YouTube import) and
+`GET /media/youtube/search?q=&limit=` (top video results, same shape, for
+"find on YouTube"). Both read via **InnerTube** (the web player's own JSON
+API on `youtubei.googleapis.com`, with the public WEB client key) and fall
+back to an HTML `ytInitialData` scrape — InnerTube is primary because the
+HTML pages hand a datacenter IP (a Worker) a consent/bot interstitial with no
+video data, and YouTube has migrated playlist rows to `lockupViewModel`; the
+extractor reads both `playlistVideoRenderer`/`videoRenderer` and
+`lockupViewModel`,
 `GET /drive/folder/:id`,
 `GET /drive/folder/:id/recursive`, `GET /drive/file/:id/meta`,
 `GET /drive/file/:id/text`, `GET /drive/file/:id/image`,

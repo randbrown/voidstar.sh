@@ -77,6 +77,20 @@ export function channelArtist(channel) {
   return '';
 }
 
+// The channel's plain display name, stripped of boilerplate suffixes — a strong
+// artist HINT (not proof) used to orient an "Artist - Title" / "Title - Artist"
+// split. Unlike channelArtist this is any channel, so it's only ever used to
+// pick which side of a dash the artist is on, never as the artist outright.
+function plainChannelName(channel) {
+  return (channel || '')
+    .replace(/\s*-\s*Topic$/i, '')
+    .replace(/VEVO$/, '')
+    .replace(/\s*-\s*Official Artist Channel$/i, '')
+    .replace(/\s*(?:Official|Music|TV|Records)$/i, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim();
+}
+
 export function parseYouTubeTitle(rawTitle, channel = '') {
   const raw = (rawTitle || '').trim();
   const chan = (channel || '').trim();
@@ -98,15 +112,35 @@ export function parseYouTubeTitle(rawTitle, channel = '') {
     return { title: cleaned, artist: authoritativeArtist };
   }
 
-  // "Artist - Title" (dash flanked by spaces, like parseDriveFilename). Without
-  // an authoritative channel signal there's no reliable way to know the order,
-  // and left=artist is the overwhelming convention for music uploads.
+  // A dash-flanked split (like parseDriveFilename — the spaces keep hyphenated
+  // titles like "T-R-O-U-B-L-E" intact). Which side is the artist? The channel
+  // name decides when it clearly matches one side (real uploads are both
+  // "Artist - Title" AND "Title - Artist"); otherwise left=artist, the
+  // convention. `chanName` is a plain channel used only for orientation.
+  const chanName = plainChannelName(chan);
   const parts = cleaned.split(/\s+[-–—]\s+/);
   if (parts.length >= 2) {
-    return { title: tidy(parts.slice(1).join(' - ')), artist: tidy(parts[0]) };
+    const left = tidy(parts[0]);
+    const right = tidy(parts.slice(1).join(' - '));
+    if (chanName) {
+      const rl = matchScore(chanName, right);
+      const ll = matchScore(chanName, left);
+      if (rl >= 0.8 && rl >= ll) return { title: left, artist: right }; // "Title - Artist"
+      if (ll >= 0.8) return { title: right, artist: left };             // "Artist - Title"
+    }
+    return { title: right, artist: left };
   }
 
-  // No dash — a bare song name. No artist unless the channel asserted one.
+  // A trailing "…- Channel" / "…(F)- Channel" the strict split missed (no space
+  // before the dash) — strip it when the tail IS the channel name.
+  if (chanName) {
+    const esc = chanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = cleaned.match(new RegExp(`^(.+?)\\s*[-–—]\\s*${esc}\\s*$`, 'i'));
+    if (m && tidy(m[1])) return { title: tidy(m[1]), artist: chanName };
+  }
+
+  // No dash — a bare song name. No artist unless the channel asserted one
+  // (a plain channel might be a random uploader/cover, so it stays out).
   return { title: cleaned, artist: authoritativeArtist };
 }
 

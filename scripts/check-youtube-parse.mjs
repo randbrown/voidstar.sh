@@ -76,6 +76,26 @@ eq('title - artist swap via channel match',
   parseYouTubeTitle('Crazy - Willie Nelson', 'Willie Nelson - Topic'),
   { title: 'Crazy', artist: 'Willie Nelson' });
 
+// ── Real cases from the user's playlists (plain channel = artist hint) ──
+eq('cover "Artist - Title (Official Audio)" on the artist channel',
+  parseYouTubeTitle('Townes Van Zandt - Dollar Bill Blues (Official Audio)', 'Townes Van Zandt'),
+  { title: 'Dollar Bill Blues', artist: 'Townes Van Zandt' });
+eq('original "Title - Artist" where channel matches the RIGHT side',
+  parseYouTubeTitle('Is It Just Me - Oliver Sayani', 'Oliver Sayani'),
+  { title: 'Is It Just Me', artist: 'Oliver Sayani' });
+eq('trailing "(Key)- Channel" with no space before the dash',
+  parseYouTubeTitle('Bossert Farm (F)- Oliver Sayani', 'Oliver Sayani'),
+  { title: 'Bossert Farm (F)', artist: 'Oliver Sayani' });
+eq('trailing " - Channel" (spaced) with the key kept in the title',
+  parseYouTubeTitle('Through the rain (D) - Oliver Sayani', 'Oliver Sayani'),
+  { title: 'Through the rain (D)', artist: 'Oliver Sayani' });
+eq('bare title on a plain channel keeps artist empty (could be an uploader)',
+  parseYouTubeTitle('9 Kinds of Blue', 'Oliver Sayani'),
+  { title: '9 Kinds of Blue', artist: '' });
+eq('dash split with an all-caps channel matching the left side',
+  parseYouTubeTitle('Blind Feline - Rollin (lyrics)', 'BLIND FELINE'),
+  { title: 'Rollin', artist: 'Blind Feline' });
+
 // ── scoring ──
 const wagon = { title: 'Wagon Wheel', artist: 'Old Crow Medicine Show' };
 const wagonHit = { title: 'Old Crow Medicine Show - Wagon Wheel (Official Video)', channel: 'Old Crow Medicine Show - Topic' };
