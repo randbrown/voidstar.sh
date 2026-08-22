@@ -20,6 +20,14 @@
 //   GET /media/soundcloud?url=...   → track list from a SoundCloud profile or
 //                                     /sets/ playlist (page hydration JSON +
 //                                     api-v2 with the site's own client_id)
+//   GET /media/youtube/playlist?url=... → video list scraped from a public
+//                                     YouTube playlist page (ytInitialData) —
+//                                     {title, tracks:[{title, url, videoId,
+//                                     thumbnail, durationSec, channel}], total,
+//                                     truncated}; for the setlist YouTube import
+//   GET /media/youtube/search?q=&limit= → top video results for a song
+//                                     ({results:[…]}, same shape) — the
+//                                     "find on YouTube" library tool
 //   GET /drive/folder/:id           → folder file list (direct children only)
 //   GET /drive/folder/:id/recursive → folder file list, walking subfolders too
 //                                     (for community/shared chart-repo folders)
@@ -671,6 +679,176 @@ async function handleMediaSoundcloud(request, env) {
   }
 
   throw httpError(404, 'no tracks found at that SoundCloud URL — use a profile or /sets/… playlist link');
+}
+
+// ── YouTube ──
+//
+// YouTube has no keyless open API, but every page ships its state as a big
+// `ytInitialData = {…}` JSON assignment inside a <script>. We brace-match the
+// balanced object out of the HTML and deep-scan it for the renderer objects we
+// want (`playlistVideoRenderer` for a playlist, `videoRenderer` for a search) —
+// the same defensive posture as the Spotify scrape: never trust one fixed path,
+// since YouTube reshuffles its page internals without notice. Thumbnails come
+// from the stable i.ytimg.com URL derived from the video id, so no parsing.
+
+// Balanced-object slice starting at s[from] === '{', respecting string escapes.
+function sliceBalancedJson(s, from) {
+  let depth = 0, inStr = false, esc = false;
+  for (let i = from; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === '{') depth++;
+    else if (c === '}') { if (--depth === 0) return s.slice(from, i + 1); }
+  }
+  return null;
+}
+
+// The first parseable `ytInitialData` (or `var ytInitialData = ` /
+// `window["ytInitialData"] = `) assignment on the page.
+function extractYtInitialData(html) {
+  const re = /ytInitialData["\]\s]*=\s*/g;
+  let m;
+  while ((m = re.exec(html))) {
+    const start = m.index + m[0].length;
+    if (html[start] !== '{') continue;
+    const json = sliceBalancedJson(html, start);
+    if (json) { try { return JSON.parse(json); } catch {} }
+  }
+  return null;
+}
+
+// YouTube text nodes come as {simpleText} or {runs:[{text}]}.
+function ytText(node) {
+  if (!node || typeof node !== 'object') return '';
+  if (typeof node.simpleText === 'string') return node.simpleText;
+  if (Array.isArray(node.runs)) return node.runs.map((r) => r?.text || '').join('');
+  return '';
+}
+
+// "3:45" / "1:02:03" → seconds; anything unparseable → 0.
+function parseClock(s) {
+  if (!s) return 0;
+  const parts = String(s).trim().split(':').map((p) => Number(p));
+  if (!parts.length || parts.some((p) => Number.isNaN(p))) return 0;
+  return parts.reduce((acc, p) => acc * 60 + p, 0);
+}
+
+// Collect every value stored under `key` anywhere in the tree.
+function deepCollect(node, key, out, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 30) return;
+  if (Array.isArray(node)) {
+    for (const el of node) deepCollect(el, key, out, depth + 1);
+    return;
+  }
+  for (const [k, v] of Object.entries(node)) {
+    if (k === key && v && typeof v === 'object') out.push(v);
+    deepCollect(v, key, out, depth + 1);
+  }
+}
+
+const YT_THUMB = (id) => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+const YT_WATCH = (id) => `https://www.youtube.com/watch?v=${id}`;
+const YT_MAX_ITEMS = 200;
+
+// A playlist id out of a full URL (?list=…) or a bare id.
+function youtubePlaylistIdFromUrl(raw) {
+  try {
+    const list = new URL(raw).searchParams.get('list');
+    if (list && /^[A-Za-z0-9_-]+$/.test(list)) return list;
+  } catch {}
+  return /^[A-Za-z0-9_-]{10,}$/.test(raw) ? raw : null;
+}
+
+// GET /media/youtube/playlist?url=<playlist url | id>
+// → {title, tracks:[{title, url, videoId, thumbnail, durationSec, channel}], total, truncated}
+// title/artist splitting is deliberately left to the client (parseYouTubeTitle,
+// which also weighs the channel), so the response carries the RAW video title.
+async function handleYoutubePlaylist(request, env) {
+  const reqUrl = new URL(request.url);
+  const raw = (reqUrl.searchParams.get('url') || '').trim();
+  const id = youtubePlaylistIdFromUrl(raw);
+  if (!id) throw httpError(400, 'url must be a youtube playlist link (…/playlist?list=… or a watch link with &list=…)');
+
+  const html = await fetchHtml(`https://www.youtube.com/playlist?list=${id}&hl=en&gl=US`);
+  if (!html) throw httpError(502, 'could not fetch the YouTube playlist page');
+  const data = extractYtInitialData(html);
+  if (!data) throw httpError(404, 'could not read the playlist — check it is public and the link is a playlist');
+
+  const renderers = [];
+  deepCollect(data, 'playlistVideoRenderer', renderers);
+  const seen = new Set();
+  const tracks = [];
+  for (const r of renderers) {
+    const videoId = r.videoId;
+    const title = ytText(r.title);
+    if (!videoId || !title || seen.has(videoId)) continue;
+    seen.add(videoId);
+    tracks.push({
+      title,
+      url: YT_WATCH(videoId),
+      videoId,
+      thumbnail: YT_THUMB(videoId),
+      durationSec: Number(r.lengthSeconds) || parseClock(ytText(r.lengthText)),
+      channel: ytText(r.shortBylineText) || ytText(r.ownerText) || '',
+    });
+    if (tracks.length >= YT_MAX_ITEMS) break;
+  }
+  if (!tracks.length) throw httpError(404, 'no videos found in that playlist — check it is public and not empty');
+
+  // Playlist name from a couple of known spots, else the <title>.
+  const headers = [];
+  deepCollect(data, 'playlistHeaderRenderer', headers);
+  const titleTag = (html.match(/<title>([^<]*)<\/title>/i)?.[1] || '').replace(/\s*-\s*YouTube\s*$/i, '').trim();
+  const title = ytText(headers[0]?.title) || data?.metadata?.playlistMetadataRenderer?.title || titleTag || 'YouTube playlist';
+
+  // A continuation token means the page rendered only its first slab (~100).
+  const continuations = [];
+  deepCollect(data, 'continuationItemRenderer', continuations);
+  const total = parseInt(String(ytText(headers[0]?.numVideosText)).replace(/[^\d]/g, ''), 10) || tracks.length;
+  const truncated = tracks.length >= YT_MAX_ITEMS || continuations.length > 0 || total > tracks.length;
+
+  return corsResponse(JSON.stringify({ title, tracks, total, truncated }),
+    200, request, env, { 'Cache-Control': 'public, max-age=1800' });
+}
+
+// GET /media/youtube/search?q=&limit=
+// → {results:[{title, url, videoId, thumbnail, durationSec, channel}]}
+async function handleYoutubeSearch(request, env) {
+  const reqUrl = new URL(request.url);
+  const q = (reqUrl.searchParams.get('q') || '').trim();
+  if (!q) throw httpError(400, 'q (search query) is required');
+  const limit = Math.min(Math.max(parseInt(reqUrl.searchParams.get('limit') || '5', 10) || 5, 1), 20);
+
+  const html = await fetchHtml(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&hl=en&gl=US`);
+  if (!html) throw httpError(502, 'could not fetch YouTube search results');
+  const data = extractYtInitialData(html);
+  if (!data) throw httpError(404, 'could not read YouTube search results (their page layout may have changed)');
+
+  const renderers = [];
+  deepCollect(data, 'videoRenderer', renderers);
+  const seen = new Set();
+  const results = [];
+  for (const r of renderers) {
+    const videoId = r.videoId;
+    const title = ytText(r.title);
+    if (!videoId || !title || seen.has(videoId)) continue;
+    seen.add(videoId);
+    results.push({
+      title,
+      url: YT_WATCH(videoId),
+      videoId,
+      thumbnail: YT_THUMB(videoId),
+      durationSec: parseClock(ytText(r.lengthText)),
+      channel: ytText(r.ownerText) || ytText(r.longBylineText) || '',
+    });
+    if (results.length >= limit) break;
+  }
+  return corsResponse(JSON.stringify({ results }),
+    200, request, env, { 'Cache-Control': 'public, max-age=1800' });
 }
 
 async function handleDriveFolder(folderId, request, env) {
@@ -2536,6 +2714,14 @@ export default {
 
       if (url.pathname === '/media/soundcloud') {
         return await handleMediaSoundcloud(request, env);
+      }
+
+      if (url.pathname === '/media/youtube/playlist') {
+        return await handleYoutubePlaylist(request, env);
+      }
+
+      if (url.pathname === '/media/youtube/search') {
+        return await handleYoutubeSearch(request, env);
       }
 
       const driveRecursiveMatch = url.pathname.match(/^\/drive\/folder\/([a-zA-Z0-9_-]+)\/recursive$/);

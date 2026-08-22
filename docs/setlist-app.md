@@ -23,9 +23,9 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use. `altLinks` (`[{id, url, label, service, embedUrl?, addedAt}]`, lazy) is the same idea for **listening links** — the other recordings of the song (live cut, alternate release, a YouTube version); the three primary link fields stay what auto-link fills and what everything else reads (see the multiple-links section). `spotifyGuess` / `spotifyGuessAt` (lazy) flag a **preliminary** Spotify link accepted from a global search rather than matched from a playlist — see the best-guess section |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, photoUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `artworkUrl` is dim/small album art, whereas `photoUrl` is the performer's **visual recall cue** — shown large on the song page and small on the **stage** (perform mode). `photoUrl` holds a remote https URL (a YouTube thumbnail from import / "find on YouTube", or a pasted link) or a compact downscaled data URL from a hand-uploaded photo — see the song-photo section. `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use. `altLinks` (`[{id, url, label, service, embedUrl?, addedAt}]`, lazy) is the same idea for **listening links** — the other recordings of the song (live cut, alternate release, a YouTube version); the three primary link fields stay what auto-link fills and what everything else reads (see the multiple-links section). `spotifyGuess` / `spotifyGuessAt` (lazy) flag a **preliminary** Spotify link accepted from a global search rather than matched from a playlist — see the best-guess section |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
-| `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist) |
+| `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, playlists, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist). `playlists` (`[{id, service, url, title, setName, addedAt}]`, lazy, fill-protected) records **imported** reference playlists — currently the YouTube import (see that section), one per appended set; it's provenance only, nothing re-syncs a set back to its playlist |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
 | `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise). Same key scheme as `annotations`: bare `songId` = primary, `` `${songId}::${altId}` `` = alternate |
 | `snapshots` | `ts` | `{ts, label, data}` — rolling safety snapshots of the whole dataset (last 10), taken before a restore/sync/import so it can be undone |
@@ -209,6 +209,72 @@ the backup merge propagates the deletion instead of resurrecting the summary
 from another device). The bulk missing-only pass passes neither flag and
 keeps the cache's cost savings.
 
+### Song photo — the visual recall cue
+
+`song.photoUrl` is a picture of the song for the performer to glance at —
+distinct from `artworkUrl` (dim album art, metadata only). The premise: a
+still, poster, or video thumbnail jogs recall alongside the key, notes, and
+chart, so unlike every other metadata field the photo **shows in perform
+mode** — a small floated image (`.sl-perform-photo`) next to the title, sized
+not to compete with the chart. On the song page it renders larger
+(`.sl-focus-photo`) with a control row (`buildPhotoBlock` in `views.js`):
+
+- **Set by link** — a pasted https image URL (stored as-is, like `artworkUrl`).
+- **Upload** — a chosen file is downscaled client-side to a compact JPEG **data
+  URL** (`fileToPhotoDataUrl` in `media.js`, ≤ 480px) so it's small enough to
+  ride the Drive backup and render offline on stage. Only `https:`/`data:image`
+  URLs are ever put in an `<img src>` (`isDisplayablePhoto`) — a backup could
+  carry anything.
+- **Remove** writes a `clearedFields` tombstone (like every explicit delete) so
+  the fill-empty merge doesn't resurrect it.
+
+`photoUrl` is auto-filled (fill-empty) from the YouTube thumbnail by the
+playlist import and "find on YouTube" (below), and is in `SONG_FILL_FIELDS`.
+Editing it by hand goes through the photo controls, not the edit-details form
+(a data-URL photo would be an unreadable megablob in a text field).
+
+### YouTube playlist import — a set from a playlist
+
+A gig's reference material often lives in YouTube playlists (two, for the
+motivating gig). The setlist-edit page's **Playlists** section imports one:
+paste a playlist link, and `importYoutubePlaylist` (`youtube-import.js`)
+scrapes it (worker `GET /media/youtube/playlist`), then for each video parses
+a title/artist (`parseYouTubeTitle`), **reuses an exact-titled library song or
+creates one**, attaches the video as a YouTube listen-link alternate and its
+thumbnail as `photoUrl` (both fill-empty, via `applyYoutubeToSong`), and
+**appends one new set** named after the playlist. Import a second playlist and
+you get a second set — that's "multiple playlists per gig." The playlist is
+recorded on `setlist.playlists` (provenance only; the ✕ button forgets the
+record while keeping the set + songs).
+
+- **Reordering is the performer's.** The new set is a normal set — drag-reorder
+  it, move/remove songs, let it diverge from the playlist. Nothing re-syncs a
+  YouTube set back to its source (only the Spotify "Scrape Playlist" action
+  reorders, and it's keyed to `setlist.spotifyUrl`, never these).
+- **Parsing** (`youtube-parse.js`, node-tested by
+  `scripts/check-youtube-parse.mjs`): noise tags are stripped (`(Official
+  Video)`, `[4K]`, `(Lyrics)`…), an "Artist - Title" form splits left=artist,
+  and the two authoritative channel shapes — `<Artist> - Topic` and
+  `<Artist>VEVO` — name the artist exactly (the song title is then de-affixed
+  of that artist). A plain uploader channel asserts no artist.
+- YouTube stays an **alternate-only** listen link (no primary slot, no
+  auto-link matching) — after import, run auto-link / library tools to fill in
+  Spotify, charts, keys, and lyrics the normal way.
+
+### Find on YouTube — attach a video + thumbnail to an existing song
+
+The counterpart for songs already in the library: search YouTube and attach
+the best video (as a listen-link alternate) plus its thumbnail (as the photo).
+The song page's **"find on YouTube"** button searches (`searchYoutube` →
+worker `GET /media/youtube/search`) and shows a picker (`renderYoutubePicker`,
+thumbnails + title-match %) — every row's "add" attaches the video + fills the
+photo. The library-wide **"find songs on youtube"** pass
+(`findYoutubeForAllSongs` in `bulk.js`) does the same for every song with no
+YouTube link yet, but auto-attaches **only a confident match** (title clears
+`YT_MIN_TITLE_SCORE` with no artist disagreement — `scoreYoutubeMatch`) since a
+search always returns *something*; weaker hits are listed with what the top
+result was. Both fill-empty and never overwrite a photo you've set.
+
 ### Library tools — whole-library administrative passes
 
 Library page → **"library tools"** (a collapsed panel, `buildLibraryTools` in
@@ -251,6 +317,10 @@ open the song:
   elsewhere (see the Spotify-links section for the exact rules; this is the
   one pass that may *overwrite* a filled field, which is its whole point —
   it confirms before running). Per-song counterpart: **"relink spotify"**.
+- **find songs on youtube** — searches YouTube for every song with no YouTube
+  link yet and attaches the best-matching video + its thumbnail (the song
+  photo), confident matches only (see the find-on-YouTube section). Per-song
+  counterpart: the song page's **"find on YouTube"**.
 - **best-guess all unlinked** (in the spotify quick-link section) — links
   every song without a Spotify link to the top hit of a real Spotify search,
   as a **preliminary** link (see the best-guess section for the acceptance
@@ -1124,6 +1194,11 @@ Routes: `GET /spotify/playlist/:id`, `GET /spotify/search`,
 `GET /media/bandcamp?url=` / `GET /media/soundcloud?url=` (track lists
 scraped from Bandcamp/SoundCloud pages for auto-link —
 `{tracks:[{title, artist, url, embedUrl}], truncated}`),
+`GET /media/youtube/playlist?url=` (videos scraped from a public YouTube
+playlist page's `ytInitialData` — `{title, tracks:[{title, url, videoId,
+thumbnail, durationSec, channel}], total, truncated}` — for the setlist
+YouTube import) and `GET /media/youtube/search?q=&limit=` (top video results,
+same shape, for "find on YouTube"),
 `GET /drive/folder/:id`,
 `GET /drive/folder/:id/recursive`, `GET /drive/file/:id/meta`,
 `GET /drive/file/:id/text`, `GET /drive/file/:id/image`,

@@ -6,8 +6,10 @@ import { parseTextList, isSpotifyUrl } from './import.js';
 import { renderSpotifyEmbed, getSpotifyOpenUrl, fetchOEmbed, parseSpotifyUrl } from './spotify.js';
 import { createDictation, isSupported as voiceSupported } from './voice.js';
 import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBatchChartUrls, searchChartForSong, linkChartCandidate, fetchAiChart, fetchWebChartData, fetchSongMeta, fetchSteelSummary, getReferencePlaylistTracks, resolveBandcampEmbed, searchSpotifyTracks, scoreSpotifyGuess } from './sync.js';
-import { renderBandcampEmbed, renderSoundcloudEmbed, renderYoutubeEmbed, altLinksOf, makeAltLink, linkService, songHasLink, LINK_SERVICE_LABELS, LINK_PRIMARY_FIELD } from './media.js';
-import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, bestGuessSpotifyLinks, libraryHealth, songHealth } from './bulk.js';
+import { renderBandcampEmbed, renderSoundcloudEmbed, renderYoutubeEmbed, altLinksOf, makeAltLink, linkService, songHasLink, LINK_SERVICE_LABELS, LINK_PRIMARY_FIELD, fileToPhotoDataUrl, isDisplayablePhoto } from './media.js';
+import { searchYoutube, scoreYoutubeMatch, songHasYoutube, isYoutubePlaylistUrl } from './youtube.js';
+import { importYoutubePlaylist, applyYoutubeToSong } from './youtube-import.js';
+import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, bestGuessSpotifyLinks, findYoutubeForAllSongs, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
 import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js';
@@ -747,6 +749,15 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
       : `${res.total} link${res.total === 1 ? '' : 's'} checked · ${res.ok} match the playlist · ${res.updated} re-linked${res.failures.length ? ` · ${res.failures.length} need a manual pick:` : ''}`),
   ));
 
+  helperActions.appendChild(helperButton(
+    'find songs on youtube',
+    'Search YouTube for every song with no YouTube link yet and attach the best-matching video + its thumbnail as the song photo — the song page\'s "find on YouTube", library-wide (fill-empty; only confident matches are attached)',
+    (onProgress) => findYoutubeForAllSongs(onProgress),
+    (res) => (res.total === 0
+      ? 'Every song already has a YouTube link ✓'
+      : `${res.total} searched · ${res.updated} linked${res.photoed ? ` (${res.photoed} photo${res.photoed === 1 ? '' : 's'})` : ''}${res.failures.length ? ` · ${res.failures.length} no confident match:` : ''}`),
+  ));
+
   helpersSection.appendChild(helperActions);
   helpersSection.appendChild(helperStatus);
   helpersSection.appendChild(helperResults);
@@ -1383,6 +1394,93 @@ export async function renderSetlistEdit(root, setlistId) {
   scrapeSection.appendChild(scrapeHint);
   root.appendChild(scrapeSection);
 
+  // Playlists — import a YouTube playlist as a new set. A gig with two
+  // playlists imports each in turn: every import APPENDS a set named after the
+  // playlist (run twice → two sets), matches videos to library songs by title
+  // (reusing or creating), and attaches each video + its thumbnail (the song
+  // photo). The imported playlists are recorded here so the gig's sources are
+  // visible at a glance.
+  const plSection = el('div', 'sl-section');
+  plSection.innerHTML = '<div class="sl-section-title">Playlists</div>';
+  const plList = el('div', 'sl-playlist-list');
+  const renderPlaylists = () => {
+    plList.innerHTML = '';
+    const pls = Array.isArray(sl.playlists) ? sl.playlists : [];
+    if (!pls.length) {
+      plList.appendChild(el('div', 'sl-hint', 'No imported playlists yet. Paste a YouTube playlist link below to create a set from it — import a second one for a two-playlist gig.'));
+      return;
+    }
+    for (const p of pls) {
+      const row = el('div', 'sl-playlist-row');
+      const infoCol = el('div', 'sl-playlist-info');
+      const nm = el('div', 'sl-playlist-name');
+      nm.textContent = p.title || p.setName || 'playlist';
+      infoCol.appendChild(nm);
+      const sub = el('div', 'sl-playlist-sub');
+      sub.textContent = `${LINK_SERVICE_LABELS[p.service] || p.service} · set "${p.setName || ''}"`;
+      infoCol.appendChild(sub);
+      row.appendChild(infoCol);
+      const openBtn = btn('open', 'sl-btn-ghost sl-btn-sm', () => window.open(p.url, '_blank'));
+      row.appendChild(openBtn);
+      const rmBtn = btn('&times;', 'sl-btn-icon sl-btn-danger', async () => {
+        if (!confirm('Forget this playlist reference? The imported set and its songs stay — this only removes the record of where they came from.')) return;
+        sl.playlists = (sl.playlists || []).filter((x) => x.id !== p.id);
+        await store.putSetlist(sl);
+        renderPlaylists();
+      });
+      row.appendChild(rmBtn);
+      plList.appendChild(row);
+    }
+  };
+  renderPlaylists();
+  plSection.appendChild(plList);
+  const plStatus = el('div', 'sl-hint');
+  const plInput = el('input', 'sl-input');
+  plInput.placeholder = 'https://youtube.com/playlist?list=...';
+  plInput.type = 'url';
+  const plImportBtn = btn('import youtube playlist → new set', 'sl-btn-primary', async () => {
+    const link = plInput.value.trim();
+    if (!isYoutubePlaylistUrl(link)) {
+      plStatus.style.color = 'var(--pink)';
+      plStatus.textContent = 'Paste a YouTube playlist link (…/playlist?list=…).';
+      return;
+    }
+    if (!getSources().workerUrl) {
+      plStatus.style.color = 'var(--pink)';
+      plStatus.textContent = 'Importing needs the sync worker — set the worker URL in Settings.';
+      return;
+    }
+    plImportBtn.disabled = true;
+    plStatus.style.color = '';
+    plStatus.textContent = 'reading playlist…';
+    try {
+      pushUndo();
+      const rep = await importYoutubePlaylist(sl, link, ({ done, total, title }) => {
+        plStatus.textContent = `importing ${done}/${total} — ${title}`;
+      });
+      plStatus.style.color = 'var(--green)';
+      const bits = [`added set "${rep.setName}" — ${rep.added} song(s)${rep.created ? `, ${rep.created} new to the library` : ''}`];
+      if (rep.photoed) bits.push(`${rep.photoed} photo(s)`);
+      if (rep.truncated) bits.push('long playlist — some videos may be missing');
+      plStatus.textContent = `✓ ${bits.join(' · ')}`;
+      plInput.value = '';
+      setTimeout(() => refresh(), 1200);
+    } catch (e) {
+      console.error('[setlist] youtube import failed:', e);
+      plStatus.style.color = 'var(--pink)';
+      plStatus.textContent = `import failed: ${e.message}`;
+    } finally {
+      plImportBtn.disabled = false;
+    }
+  });
+  const plAdd = el('div', 'sl-playlist-add');
+  plAdd.appendChild(plInput);
+  plAdd.appendChild(plImportBtn);
+  plSection.appendChild(plAdd);
+  plSection.appendChild(plStatus);
+  plSection.appendChild(el('div', 'sl-hint', 'Auto-creates songs from the playlist\'s videos (title + artist parsed from each video), attaches the YouTube link and thumbnail to every song, and appends a new set. The new set is yours to reorder and edit freely — this is just a record of where it came from, nothing re-syncs it back to the playlist. Then run auto-link / library tools to fill in Spotify, charts, keys, and lyrics.'));
+  root.appendChild(plSection);
+
   // Vocalist legend
   const vocSection = el('div', 'sl-section');
   vocSection.innerHTML = '<div class="sl-section-title">Vocalist Legend</div>';
@@ -1998,6 +2096,122 @@ async function renderInlineScratch(container, songId) {
 // since nothing about a search result says this is the recording the band
 // plays. Playlist tracks stay confirmed: the performer picked them off their
 // own reference playlist.
+// ── Song photo (visual recall cue) ──
+// Shown large on the song page and small on the stage (perform mode). Filled
+// automatically from YouTube thumbnails (import / "find on YouTube"), or by
+// hand here: a pasted https image link, or an uploaded photo downscaled to a
+// compact data URL that rides the Drive backup and renders offline.
+
+async function setPhotoFromUrl(song) {
+  const raw = prompt('Paste an https image URL for this song\'s photo (a still, poster, or thumbnail):', /^https:\/\//.test(song.photoUrl || '') ? song.photoUrl : '');
+  if (raw == null) return false;
+  const url = raw.trim();
+  if (!url) return false;
+  if (!/^https:\/\//i.test(url)) { alert('Use an https:// image URL, or the upload button for a local photo.'); return false; }
+  song.photoUrl = url;
+  await store.putSong(song);
+  return true;
+}
+
+function setPhotoFromFile(song) {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) { resolve(false); return; }
+      try {
+        song.photoUrl = await fileToPhotoDataUrl(file);
+        await store.putSong(song);
+        resolve(true);
+      } catch (e) {
+        alert(`Couldn't read that image: ${e.message}`);
+        resolve(false);
+      }
+    }, { once: true });
+    input.click();
+  });
+}
+
+async function removePhoto(song) {
+  if (!confirm('Remove this song\'s photo?')) return false;
+  // Tombstone so the fill-empty backup merge doesn't resurrect it.
+  store.markCleared(song, 'photoUrl');
+  song.photoUrl = '';
+  await store.putSong(song);
+  return true;
+}
+
+function buildPhotoBlock(song) {
+  const wrap = el('div', 'sl-photo-block');
+  const has = isDisplayablePhoto(song.photoUrl);
+  if (has) {
+    const img = document.createElement('img');
+    img.className = 'sl-focus-photo';
+    img.src = song.photoUrl;
+    img.alt = '';
+    img.loading = 'lazy';
+    wrap.appendChild(img);
+  }
+  const controls = el('div', 'sl-photo-controls');
+  controls.appendChild(btn(has ? 'change link' : '+ photo link', 'sl-btn-ghost sl-btn-xs',
+    async () => { if (await setPhotoFromUrl(song)) refresh(); }));
+  controls.appendChild(btn('↑ upload', 'sl-btn-ghost sl-btn-xs',
+    async () => { if (await setPhotoFromFile(song)) refresh(); }));
+  if (has) controls.appendChild(btn('remove', 'sl-btn-ghost sl-btn-xs',
+    async () => { if (await removePhoto(song)) refresh(); }));
+  wrap.appendChild(controls);
+  return wrap;
+}
+
+// YouTube results picker (the "find on YouTube" flow). Each row attaches the
+// video as a listen-link alternate and, fill-empty, its thumbnail as the song
+// photo. Titles/channels come from YouTube — untrusted, so textContent only.
+function renderYoutubePicker(wrap, results, song) {
+  wrap.innerHTML = '';
+  wrap.appendChild(el('div', 'sl-section-title', 'youtube — pick the video (adds a listen link + photo)'));
+  const list = el('div', 'sl-chart-candidates');
+  wrap.appendChild(list);
+  for (const r of results) {
+    const s = scoreYoutubeMatch(song, r);
+    const row = el('div', 'sl-chart-candidate');
+    if (r.thumbnail) {
+      const thumb = document.createElement('img');
+      thumb.className = 'sl-picker-thumb';
+      thumb.src = r.thumbnail;
+      thumb.alt = '';
+      thumb.loading = 'lazy';
+      row.appendChild(thumb);
+    }
+    const info = el('div', 'sl-chart-candidate-info');
+    const name = el('div', 'sl-chart-candidate-name');
+    name.textContent = r.title;
+    info.appendChild(name);
+    const meta = el('div', 'sl-chart-candidate-meta');
+    meta.textContent = [
+      r.channel,
+      r.durationSec ? formatTimecode(r.durationSec) : '',
+      s.title >= 0.4 ? `${Math.round(s.title * 100)}% match` : '',
+    ].filter(Boolean).join(' · ');
+    info.appendChild(meta);
+    row.appendChild(info);
+    const open = el('a', 'sl-btn sl-btn-ghost sl-btn-xs', 'open');
+    open.href = r.url;
+    open.target = '_blank';
+    open.rel = 'noopener';
+    row.appendChild(open);
+    row.appendChild(btn(songHasYoutube(song) ? 'add' : 'add', 'sl-btn-primary sl-btn-xs', async () => {
+      if (songHasLink(song, r.url)) { alert('That video is already linked.'); return; }
+      applyYoutubeToSong(song, r);
+      await store.putSong(song);
+      refresh();
+    }));
+    list.appendChild(row);
+  }
+  if (!results.length) list.appendChild(el('div', 'sl-hint', 'no videos found'));
+}
+
 function renderSpotifyPicker(wrap, tracks, song, { heading = 'pick the right track from the playlist', preliminary = false } = {}) {
   wrap.innerHTML = '';
   wrap.appendChild(el('div', 'sl-section-title', heading));
@@ -2583,6 +2797,11 @@ export async function renderSongFocus(root, songId, setlistId) {
   }
   root.appendChild(info);
 
+  // Photo — the performer's visual recall cue (a still/poster/thumbnail),
+  // shown here and small on the stage. Auto-filled from YouTube; changeable by
+  // hand (link or upload).
+  root.appendChild(buildPhotoBlock(song));
+
   // Saves that don't re-render the page (status chips, the edit form's
   // autosave) move the stamp in place so it never shows a stale time right
   // after an edit.
@@ -3003,6 +3222,7 @@ export async function renderSongFocus(root, songId, setlistId) {
   // Relink (or first-link) the Spotify track from the reference playlist —
   // the antidote to auto-matching landing on a same-titled cover.
   const spotifyPickerWrap = el('div', 'sl-spotify-picker');
+  const youtubePickerWrap = el('div', 'sl-yt-picker');
   const loadSpotifyPicker = async (button, label, opts) => {
     button.disabled = true;
     button.textContent = 'loading playlist...';
@@ -3078,6 +3298,27 @@ export async function renderSongFocus(root, songId, setlistId) {
   });
   addLinkBtn.title = 'Add another Spotify / Bandcamp / SoundCloud / YouTube link for this song (alternate release, live version…)';
   actionBar.appendChild(addLinkBtn);
+  // "find on YouTube" — search YouTube for this song and attach a video +
+  // thumbnail (the song photo). The picker below lets you choose the right one.
+  const findYtLabel = () => (songHasYoutube(song) ? 'find another on youtube' : 'find on youtube');
+  const findYtBtn = btn(findYtLabel(), 'sl-btn-ghost sl-btn-sm', async () => {
+    findYtBtn.disabled = true;
+    findYtBtn.textContent = 'searching youtube…';
+    const { results, problems } = await searchYoutube(song.title, song.artist || '', { limit: 6 });
+    if (results.length) {
+      renderYoutubePicker(youtubePickerWrap, results, song);
+      findYtBtn.textContent = 'pick below';
+    } else {
+      youtubePickerWrap.innerHTML = '';
+      const note = el('div', 'sl-hint');
+      note.textContent = problems[0] || 'YouTube returned no results';
+      youtubePickerWrap.appendChild(note);
+      findYtBtn.textContent = 'no results — see note';
+    }
+    setTimeout(() => { findYtBtn.textContent = findYtLabel(); findYtBtn.disabled = false; }, 2200);
+  });
+  findYtBtn.title = 'Search YouTube for this song and attach a video + its thumbnail as the song photo';
+  actionBar.appendChild(findYtBtn);
   if (!song.spotifyUri) {
     // No link yet — a raw Spotify search too (the quick-link tool's per-song
     // "search"), for when the reference playlists don't carry the song.
@@ -3112,6 +3353,7 @@ export async function renderSongFocus(root, songId, setlistId) {
   root.appendChild(checkupHint);
   if (chartCandidatesWrap) root.appendChild(chartCandidatesWrap);
   root.appendChild(spotifyPickerWrap);
+  root.appendChild(youtubePickerWrap);
 
   // Inline chart with annotations — the old read-only chart page, folded in.
   // With alternates linked, a chip row switches which chart (and which
@@ -4245,6 +4487,7 @@ export async function renderPerformMode(root, setlistId, startSongId) {
 
     const { song, notes, vocalist } = entry;
     zoomLayer.innerHTML = `
+      ${song.photoUrl && isDisplayablePhoto(song.photoUrl) ? `<img class="sl-perform-photo" src="${esc(song.photoUrl)}" alt="" loading="lazy">` : ''}
       <h1 class="sl-perform-title">${esc(song.title)}</h1>
       ${song.artist ? `<div class="sl-perform-artist">${esc(song.artist)}</div>` : ''}
       <div class="sl-perform-badges">

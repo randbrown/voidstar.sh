@@ -540,6 +540,50 @@ const buildStamp = readBuildStamp();
       line-height: 1.2;
       margin-bottom: 0.2rem;
     }
+    /* Song photo — the performer's visual recall cue. Bigger than the album
+       art (which is dim/metadata); this is meant to be looked at. */
+    .sl-photo-block { margin: 0.4rem 0 0.6rem; }
+    .sl-focus-photo {
+      display: block;
+      width: 100%;
+      max-width: 340px;
+      max-height: 230px;
+      object-fit: cover;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+    .sl-photo-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-top: 0.35rem;
+    }
+    /* Thumbnail on a YouTube picker row. */
+    .sl-picker-thumb {
+      width: 92px;
+      height: 52px;
+      flex: 0 0 auto;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .sl-yt-picker:not(:empty) { margin-top: 0.75rem; }
+    /* Imported reference playlists on the setlist edit page. */
+    .sl-playlist-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.6rem; }
+    .sl-playlist-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.45rem 0.6rem;
+      background: var(--surface, rgba(255,255,255,0.03));
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .sl-playlist-info { flex: 1 1 auto; min-width: 0; }
+    .sl-playlist-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sl-playlist-sub { font-size: 0.78rem; color: var(--text-dim); }
+    .sl-playlist-add { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.4rem 0; }
+    .sl-playlist-add .sl-input { flex: 1 1 220px; }
     .sl-focus-artist {
       font-size: 1rem;
       color: var(--text-muted);
@@ -902,6 +946,17 @@ const buildStamp = readBuildStamp();
       font-size: 1.1rem;
       color: var(--sl-stage-muted);
       margin-bottom: 0.75rem;
+    }
+    /* Song photo on stage — a small visual cue, floated out of the way of the
+       title/key so it never competes with the chart. */
+    .sl-perform-photo {
+      float: right;
+      width: clamp(96px, 22vw, 180px);
+      max-height: 135px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid var(--sl-stage-border, rgba(255,255,255,0.15));
+      margin: 0 0 0.5rem 0.75rem;
     }
     .sl-perform-badges {
       display: flex;

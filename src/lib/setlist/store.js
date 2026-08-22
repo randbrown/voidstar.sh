@@ -244,7 +244,9 @@ export function createSong(title, artist = '') {
     genre: '',
     year: 0,
     durationSec: 0,
-    artworkUrl: '',
+    artworkUrl: '', // album art (iTunes) — dim/small, not shown on stage
+    photoUrl: '',   // performer's visual cue (YouTube thumbnail or an uploaded
+                    // photo) — shown large on the song page AND in perform mode
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -324,6 +326,11 @@ export function createSetlist(name) {
     gigDate: '',
     venue: '',
     spotifyUrl: '',
+    // Imported reference playlists (currently YouTube — Spotify/Bandcamp/
+    // SoundCloud keep their single primary URL fields above). Each import
+    // appends one set and records the source here so it can be re-imported.
+    // [{id, service, url, title, setName, addedAt}] — lazy, fill-protected.
+    playlists: [],
     vocalistLegend: {},
     songOverrides: {},
     createdAt: Date.now(),
@@ -446,9 +453,9 @@ export const SONG_FILL_FIELDS = [
   'artist', 'key', 'bpm', 'capo', 'keyChanges', 'steelEntry', 'steelSummary',
   'spotifyUri', 'bandcampUrl', 'bandcampEmbedUrl', 'soundcloudUrl', 'altLinks',
   'chartUrl', 'altCharts', 'lyrics', 'syncedLyrics',
-  'genre', 'year', 'durationSec', 'artworkUrl',
+  'genre', 'year', 'durationSec', 'artworkUrl', 'photoUrl',
 ];
-export const SETLIST_FILL_FIELDS = ['gigDate', 'venue', 'spotifyUrl', 'bandcampUrl', 'soundcloudUrl'];
+export const SETLIST_FILL_FIELDS = ['gigDate', 'venue', 'spotifyUrl', 'bandcampUrl', 'soundcloudUrl', 'playlists'];
 
 function isEmptyValue(v) {
   return v == null || v === '' || v === 0 || (Array.isArray(v) && v.length === 0);
