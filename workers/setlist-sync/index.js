@@ -20,11 +20,12 @@
 //   GET /media/soundcloud?url=...   → track list from a SoundCloud profile or
 //                                     /sets/ playlist (page hydration JSON +
 //                                     api-v2 with the site's own client_id)
-//   GET /media/youtube/playlist?url=... → video list scraped from a public
-//                                     YouTube playlist page (ytInitialData) —
-//                                     {title, tracks:[{title, url, videoId,
-//                                     thumbnail, durationSec, channel}], total,
-//                                     truncated}; for the setlist YouTube import
+//   GET /media/youtube/playlist?url=... → video list for a public YouTube
+//                                     playlist via InnerTube (the web player's
+//                                     JSON API; HTML-scrape fallback) — {title,
+//                                     tracks:[{title, url, videoId, thumbnail,
+//                                     durationSec, channel}], total, truncated,
+//                                     source}; for the setlist YouTube import
 //   GET /media/youtube/search?q=&limit= → top video results for a song
 //                                     ({results:[…]}, same shape) — the
 //                                     "find on YouTube" library tool
@@ -683,13 +684,24 @@ async function handleMediaSoundcloud(request, env) {
 
 // ── YouTube ──
 //
-// YouTube has no keyless open API, but every page ships its state as a big
-// `ytInitialData = {…}` JSON assignment inside a <script>. We brace-match the
-// balanced object out of the HTML and deep-scan it for the renderer objects we
-// want (`playlistVideoRenderer` for a playlist, `videoRenderer` for a search) —
-// the same defensive posture as the Spotify scrape: never trust one fixed path,
-// since YouTube reshuffles its page internals without notice. Thumbnails come
-// from the stable i.ytimg.com URL derived from the video id, so no parsing.
+// YouTube has no keyless open API. Two ways in, in order of reliability:
+//
+//  1. InnerTube — the internal JSON API the web player itself calls
+//     (youtubei/v1/browse for a playlist, /search for a query) with the public
+//     WEB client key. This is what yt-dlp / Invidious use: it returns clean
+//     structured JSON, paginates via continuation tokens, and — crucially —
+//     does NOT serve the cookie-consent / bot interstitial that the HTML pages
+//     hand to datacenter IPs (a Cloudflare Worker is one), which is what made
+//     the first cut of this route come back "no videos found".
+//  2. HTML scrape (fallback) — the `ytInitialData = {…}` blob brace-matched out
+//     of the public page, now sent WITH a consent cookie and read through the
+//     same renderer extractor.
+//
+// Either way we deep-scan for the renderer objects (`playlistVideoRenderer` /
+// `videoRenderer`, plus the newer `lockupViewModel`) rather than trusting one
+// fixed path, the same defensive posture as the Spotify scrape. Video title +
+// channel come back RAW — the client (parseYouTubeTitle) splits title/artist.
+// Thumbnails are the stable i.ytimg.com URL derived from the video id.
 
 // Balanced-object slice starting at s[from] === '{', respecting string escapes.
 function sliceBalancedJson(s, from) {
@@ -763,55 +775,200 @@ function youtubePlaylistIdFromUrl(raw) {
   return /^[A-Za-z0-9_-]{10,}$/.test(raw) ? raw : null;
 }
 
+// One video out of a classic renderer (playlistVideoRenderer / videoRenderer /
+// gridVideoRenderer …), or null when it isn't a real video row.
+function videoFromRenderer(r) {
+  if (!r || typeof r !== 'object') return null;
+  const videoId = r.videoId;
+  if (!videoId || typeof videoId !== 'string') return null;
+  const title = ytText(r.title) || r.title?.accessibility?.accessibilityData?.label || '';
+  if (!title) return null;
+  return {
+    videoId,
+    title,
+    durationSec: Number(r.lengthSeconds) || parseClock(ytText(r.lengthText)),
+    channel: ytText(r.shortBylineText) || ytText(r.ownerText) || ytText(r.longBylineText) || '',
+  };
+}
+
+// One video out of the newer lockupViewModel component (YouTube is migrating
+// rows to these). Channel is the first non-metric metadata part.
+function videoFromLockup(lvm) {
+  if (!lvm || typeof lvm !== 'object') return null;
+  const videoId = lvm.contentId;
+  if (!videoId || typeof videoId !== 'string') return null;
+  if (lvm.contentType && lvm.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO') return null;
+  const meta = lvm.metadata?.lockupMetadataViewModel;
+  const title = meta?.title?.content || '';
+  if (!title) return null;
+  let channel = '';
+  const rows = meta?.metadata?.contentMetadataViewModel?.metadataRows || [];
+  for (const row of rows) {
+    for (const part of (row.metadataParts || [])) {
+      const t = part?.text?.content;
+      if (t && !/\bviews?\b|\bwatch(ing)?\b|\bago\b/i.test(t)) { channel = t; break; }
+    }
+    if (channel) break;
+  }
+  return { videoId, title, durationSec: 0, channel };
+}
+
+// Deep-scan `data` for videos under `keys` in priority order, first key that
+// yields anything wins (so a playlist's real rows aren't diluted by sidebar
+// recommendations). Returns ready track objects, deduped, capped at `max`.
+function collectVideos(data, keys, max = YT_MAX_ITEMS) {
+  const out = [];
+  const seen = new Set();
+  for (const key of keys) {
+    const nodes = [];
+    deepCollect(data, key, nodes);
+    for (const n of nodes) {
+      if (out.length >= max) return out;
+      const v = key === 'lockupViewModel' ? videoFromLockup(n) : videoFromRenderer(n);
+      if (!v || seen.has(v.videoId)) continue;
+      seen.add(v.videoId);
+      out.push({
+        title: v.title,
+        url: YT_WATCH(v.videoId),
+        videoId: v.videoId,
+        thumbnail: YT_THUMB(v.videoId),
+        durationSec: v.durationSec || 0,
+        channel: v.channel || '',
+      });
+    }
+    if (out.length) return out;
+  }
+  return out;
+}
+
+// The playlist's display name, from whichever header shape the response uses.
+function extractPlaylistTitle(data) {
+  const headers = [];
+  deepCollect(data, 'playlistHeaderRenderer', headers);
+  if (headers[0] && ytText(headers[0].title)) return ytText(headers[0].title);
+  const meta = data?.metadata?.playlistMetadataRenderer?.title;
+  if (meta) return meta;
+  const pageHeaders = [];
+  deepCollect(data, 'pageHeaderRenderer', pageHeaders);
+  if (pageHeaders[0]?.pageTitle) return pageHeaders[0].pageTitle;
+  return data?.microformat?.microformatDataRenderer?.title || '';
+}
+
+// The continuation token that fetches the next slab, or null when there is none.
+function continuationToken(data) {
+  const conts = [];
+  deepCollect(data, 'continuationItemRenderer', conts);
+  return conts.map((c) => c?.continuationEndpoint?.continuationCommand?.token).find(Boolean) || null;
+}
+
+// InnerTube — the web player's own JSON API. The WEB client key below is a
+// long-stable public identifier YouTube ships in every page (the same one
+// yt-dlp uses); no account, no secret. Returns parsed JSON or null.
+const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+const INNERTUBE_CLIENT_VERSION = '2.20240814.00.00';
+
+async function innertube(endpoint, body) {
+  try {
+    // youtubei.googleapis.com is the API-designated host (vs www.youtube.com):
+    // it answers JSON to datacenter IPs without the bot/consent gate the HTML
+    // pages throw, which is the whole reason InnerTube is the primary path.
+    const res = await fetch(`https://youtubei.googleapis.com/youtubei/v1/${endpoint}?key=${INNERTUBE_KEY}&prettyPrint=false`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': BROWSER_UA,
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://www.youtube.com',
+        'Referer': 'https://www.youtube.com/',
+        'X-Youtube-Client-Name': '1',
+        'X-Youtube-Client-Version': INNERTUBE_CLIENT_VERSION,
+      },
+      body: JSON.stringify({
+        context: { client: { clientName: 'WEB', clientVersion: INNERTUBE_CLIENT_VERSION, hl: 'en', gl: 'US' } },
+        ...body,
+      }),
+      signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+// The HTML pages hand datacenter IPs a cookie-consent interstitial with no
+// video data; a CONSENT/SOCS cookie skips it. (InnerTube is tried first and
+// needs none — this is only the fallback path.)
+async function fetchYoutubeHtml(url) {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': BROWSER_UA,
+        'Accept': 'text/html',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cookie': 'SOCS=CAI; CONSENT=YES+cb.20210328-17-p0.en+FX+100',
+      },
+      signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
 // GET /media/youtube/playlist?url=<playlist url | id>
-// → {title, tracks:[{title, url, videoId, thumbnail, durationSec, channel}], total, truncated}
-// title/artist splitting is deliberately left to the client (parseYouTubeTitle,
-// which also weighs the channel), so the response carries the RAW video title.
+// → {title, tracks:[{title, url, videoId, thumbnail, durationSec, channel}], total, truncated, source}
 async function handleYoutubePlaylist(request, env) {
   const reqUrl = new URL(request.url);
   const raw = (reqUrl.searchParams.get('url') || '').trim();
   const id = youtubePlaylistIdFromUrl(raw);
   if (!id) throw httpError(400, 'url must be a youtube playlist link (…/playlist?list=… or a watch link with &list=…)');
 
-  const html = await fetchHtml(`https://www.youtube.com/playlist?list=${id}&hl=en&gl=US`);
-  if (!html) throw httpError(502, 'could not fetch the YouTube playlist page');
-  const data = extractYtInitialData(html);
-  if (!data) throw httpError(404, 'could not read the playlist — check it is public and the link is a playlist');
+  let title = '';
+  let tracks = [];
+  let truncated = false;
+  let source = 'innertube';
 
-  const renderers = [];
-  deepCollect(data, 'playlistVideoRenderer', renderers);
-  const seen = new Set();
-  const tracks = [];
-  for (const r of renderers) {
-    const videoId = r.videoId;
-    const title = ytText(r.title);
-    if (!videoId || !title || seen.has(videoId)) continue;
-    seen.add(videoId);
-    tracks.push({
-      title,
-      url: YT_WATCH(videoId),
-      videoId,
-      thumbnail: YT_THUMB(videoId),
-      durationSec: Number(r.lengthSeconds) || parseClock(ytText(r.lengthText)),
-      channel: ytText(r.shortBylineText) || ytText(r.ownerText) || '',
-    });
-    if (tracks.length >= YT_MAX_ITEMS) break;
+  // 1) InnerTube browse (VL<id> is the "view playlist" browse id) + continuations.
+  const first = await innertube('browse', { browseId: `VL${id}` });
+  if (first) {
+    title = extractPlaylistTitle(first);
+    tracks = collectVideos(first, ['playlistVideoRenderer', 'lockupViewModel'], YT_MAX_ITEMS);
+    let data = first;
+    for (let page = 0; page < 8 && tracks.length < YT_MAX_ITEMS; page++) {
+      const token = continuationToken(data);
+      if (!token) break;
+      data = await innertube('browse', { continuation: token });
+      if (!data) { truncated = true; break; }
+      const have = new Set(tracks.map((t) => t.videoId));
+      const more = collectVideos(data, ['playlistVideoRenderer', 'lockupViewModel'], YT_MAX_ITEMS)
+        .filter((m) => !have.has(m.videoId));
+      if (!more.length) break; // continuation had nothing new — the list is complete
+      tracks.push(...more);
+    }
+    // Only a real cap counts as truncated. A leftover continuation token that
+    // yields no new videos (a related-content shelf) must NOT flag truncation.
+    if (tracks.length >= YT_MAX_ITEMS) truncated = true;
   }
+
+  // 2) Fallback: scrape the public HTML page (consent cookie sent).
+  if (!tracks.length) {
+    source = 'html';
+    const html = await fetchYoutubeHtml(`https://www.youtube.com/playlist?list=${id}&hl=en&gl=US`);
+    if (!html) throw httpError(502, 'could not reach YouTube for that playlist (it may be blocking the request)');
+    const data = extractYtInitialData(html);
+    if (!data) throw httpError(404, 'could not read the playlist — it may be private, or YouTube served a consent/bot page');
+    if (!title) {
+      const titleTag = (html.match(/<title>([^<]*)<\/title>/i)?.[1] || '').replace(/\s*-\s*YouTube\s*$/i, '').trim();
+      title = extractPlaylistTitle(data) || titleTag;
+    }
+    tracks = collectVideos(data, ['playlistVideoRenderer', 'lockupViewModel'], YT_MAX_ITEMS);
+    truncated = tracks.length >= YT_MAX_ITEMS || !!continuationToken(data);
+  }
+
   if (!tracks.length) throw httpError(404, 'no videos found in that playlist — check it is public and not empty');
-
-  // Playlist name from a couple of known spots, else the <title>.
-  const headers = [];
-  deepCollect(data, 'playlistHeaderRenderer', headers);
-  const titleTag = (html.match(/<title>([^<]*)<\/title>/i)?.[1] || '').replace(/\s*-\s*YouTube\s*$/i, '').trim();
-  const title = ytText(headers[0]?.title) || data?.metadata?.playlistMetadataRenderer?.title || titleTag || 'YouTube playlist';
-
-  // A continuation token means the page rendered only its first slab (~100).
-  const continuations = [];
-  deepCollect(data, 'continuationItemRenderer', continuations);
-  const total = parseInt(String(ytText(headers[0]?.numVideosText)).replace(/[^\d]/g, ''), 10) || tracks.length;
-  const truncated = tracks.length >= YT_MAX_ITEMS || continuations.length > 0 || total > tracks.length;
-
-  return corsResponse(JSON.stringify({ title, tracks, total, truncated }),
+  return corsResponse(JSON.stringify({ title: title || 'YouTube playlist', tracks, total: tracks.length, truncated, source }),
     200, request, env, { 'Cache-Control': 'public, max-age=1800' });
 }
 
@@ -823,33 +980,27 @@ async function handleYoutubeSearch(request, env) {
   if (!q) throw httpError(400, 'q (search query) is required');
   const limit = Math.min(Math.max(parseInt(reqUrl.searchParams.get('limit') || '5', 10) || 5, 1), 20);
 
-  const html = await fetchHtml(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&hl=en&gl=US`);
-  if (!html) throw httpError(502, 'could not fetch YouTube search results');
-  const data = extractYtInitialData(html);
-  if (!data) throw httpError(404, 'could not read YouTube search results (their page layout may have changed)');
+  // params 'EgIQAQ%3D%3D' filters the search to videos only (stable protobuf).
+  let results = [];
+  const data = await innertube('search', { query: q, params: 'EgIQAQ%3D%3D' });
+  if (data) results = collectVideos(data, ['videoRenderer', 'lockupViewModel'], limit);
 
-  const renderers = [];
-  deepCollect(data, 'videoRenderer', renderers);
-  const seen = new Set();
-  const results = [];
-  for (const r of renderers) {
-    const videoId = r.videoId;
-    const title = ytText(r.title);
-    if (!videoId || !title || seen.has(videoId)) continue;
-    seen.add(videoId);
-    results.push({
-      title,
-      url: YT_WATCH(videoId),
-      videoId,
-      thumbnail: YT_THUMB(videoId),
-      durationSec: parseClock(ytText(r.lengthText)),
-      channel: ytText(r.ownerText) || ytText(r.longBylineText) || '',
-    });
-    if (results.length >= limit) break;
+  if (!results.length) {
+    const html = await fetchYoutubeHtml(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&hl=en&gl=US`);
+    if (html) {
+      const d = extractYtInitialData(html);
+      if (d) results = collectVideos(d, ['videoRenderer', 'lockupViewModel'], limit);
+    }
   }
   return corsResponse(JSON.stringify({ results }),
     200, request, env, { 'Cache-Control': 'public, max-age=1800' });
 }
+
+// Test surface for scripts/check-youtube-worker.mjs (fixture-based, no network).
+export const __ytInternals = {
+  videoFromRenderer, videoFromLockup, collectVideos, extractPlaylistTitle,
+  continuationToken, extractYtInitialData, youtubePlaylistIdFromUrl, parseClock, ytText,
+};
 
 async function handleDriveFolder(folderId, request, env) {
   const apiKey = env.GOOGLE_API_KEY;
