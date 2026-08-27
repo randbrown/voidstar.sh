@@ -32,6 +32,8 @@ import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
 import { createModem } from './modem.js';
+import { createAudioFilePlayer } from './audio-file.js';
+import { createStemRecorder } from './stem-recorder.js';
 import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
@@ -500,6 +502,10 @@ export function initQualiaPage() {
     fxId:           core.activeId(),
     audioTunables:  audio.getTunables(),
     audioMode,
+    filePlayerLevel: filePlayer.getLevel(),
+    filePlayerLoop:  filePlayer.getLoop(),
+    recWithPlay,
+    recRigStem,
     paused:         core.isPaused(),
     zen:            core.isZen(),
     poseSource:     poseSelect.value,
@@ -824,6 +830,135 @@ export function initQualiaPage() {
     audioPanel.setTunables(AUDIO_PRESETS.default);
     audioPanel.setActivePreset('default');
   }
+
+  // ── Audio-file player ──────────────────────────────────────────────────────
+  // Play an existing track (mp3/wav/…) through the qualia signal: it drives the
+  // visual reactivity, monitors out to the speakers/PA, and lands in the
+  // recordable mix — gated (like every source) by the audio mode's filter, so
+  // it's present in 'mix'/'all'. Adopted as the 'file' source only while it's
+  // actually sounding. Play the rig over the top in 'all' mode.
+  const fpRoot     = audioCard.querySelector('[data-qp="audio-file"]');
+  const fpInput    = fpRoot?.querySelector('[data-qp="file-input"]');
+  const fpOpen     = fpRoot?.querySelector('[data-qp="file-open"]');
+  const fpName     = fpRoot?.querySelector('[data-qp="file-name"]');
+  const fpPlay     = fpRoot?.querySelector('[data-qp="file-play"]');
+  const fpStop     = fpRoot?.querySelector('[data-qp="file-stop"]');
+  const fpLoop     = fpRoot?.querySelector('[data-qp="file-loop"]');
+  const fpSeek     = fpRoot?.querySelector('[data-qp="file-seek"] input[type=range]');
+  const fpTime     = fpRoot?.querySelector('[data-qp="file-time"]');
+  const fpLevelRow = fpRoot?.querySelector('[data-qp="file-level"]');
+  const fpLevel    = fpLevelRow?.querySelector('input[type=range]');
+  const fpLevelVal = fpLevelRow?.querySelector('.qp-val');
+  let _fpScrubbing = false;
+  const fmtClock = (s) => {
+    s = Math.max(0, Math.floor(s || 0));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+
+  // Adopt/release the player's output analyser as the 'file' audio source —
+  // present only while the track is actually playing (audio-file.js calls this
+  // on every play / pause / stop / natural end).
+  function syncFilePlayerFeed() {
+    try {
+      const an   = filePlayer.getFeedAnalyser?.();
+      const fctx = filePlayer.getContext?.();
+      if (filePlayer.isActive?.() && an && fctx) audio.adoptAnalyser(fctx, an, 'file');
+      else audio.releaseAdopted('file');
+    } catch (e) {
+      console.warn('[qualia] file player feed sync failed:', e);
+    }
+  }
+
+  function paintFilePlayer(st) {
+    const s = st || filePlayer.getState();
+    if (fpName) {
+      fpName.textContent = s.name || 'no file';
+      fpName.classList.toggle('loaded', !!s.ready);
+      fpName.title = s.name || 'No file loaded';
+    }
+    if (fpPlay) {
+      fpPlay.disabled = !s.ready;
+      fpPlay.textContent = s.playing ? 'pause' : 'play';
+      fpPlay.classList.toggle('active', s.playing);
+    }
+    if (fpStop) fpStop.disabled = !s.ready;
+    if (fpLoop) fpLoop.classList.toggle('active', s.loop);
+    if (fpSeek) {
+      fpSeek.disabled = !s.ready;
+      if (!_fpScrubbing) {
+        fpSeek.max = String(s.duration || 1);
+        fpSeek.value = String(s.position || 0);
+      }
+    }
+    if (fpTime) fpTime.textContent = `${fmtClock(s.position)} / ${fmtClock(s.duration)}`;
+  }
+
+  const filePlayer = createAudioFilePlayer({
+    onFeedChange: () => syncFilePlayerFeed(),
+    onState:      (s) => paintFilePlayer(s),
+  });
+
+  async function loadPlayerFile(file) {
+    if (!file) return;
+    if (fpName) { fpName.textContent = 'loading…'; fpName.classList.remove('loaded'); }
+    const ok = await filePlayer.load(file);
+    if (!ok && fpName) { fpName.textContent = 'load failed'; fpName.title = 'Could not decode that file'; }
+    paintFilePlayer();
+  }
+
+  fpOpen?.addEventListener('click', () => fpInput?.click());
+  fpInput?.addEventListener('change', () => {
+    const f = fpInput.files && fpInput.files[0];
+    if (f) loadPlayerFile(f);
+    fpInput.value = '';   // let the same file be re-picked later
+  });
+  // Drag-and-drop an audio file onto the player box.
+  if (fpRoot) {
+    fpRoot.addEventListener('dragover', (e) => { e.preventDefault(); fpRoot.classList.add('drag'); });
+    fpRoot.addEventListener('dragleave', () => fpRoot.classList.remove('drag'));
+    fpRoot.addEventListener('drop', (e) => {
+      e.preventDefault();
+      fpRoot.classList.remove('drag');
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f && /^audio\//.test(f.type || '')) loadPlayerFile(f);
+    });
+  }
+
+  // Play/pause is orchestrated by onFilePlayClicked (defined with the
+  // session-recording block below) so a "rec with play" take can start the
+  // recorder BEFORE playback — capturing the track from its very first sample.
+  fpPlay?.addEventListener('click', () => { void onFilePlayClicked(); });
+  fpStop?.addEventListener('click', () => filePlayer.stop());
+  fpLoop?.addEventListener('click', () => { filePlayer.setLoop(!filePlayer.getLoop()); settings.save(); });
+
+  if (fpSeek) {
+    fpSeek.addEventListener('input', () => {
+      _fpScrubbing = true;
+      if (fpTime) fpTime.textContent = `${fmtClock(parseFloat(fpSeek.value))} / ${fmtClock(filePlayer.getDuration())}`;
+    });
+    fpSeek.addEventListener('change', () => { filePlayer.seek(parseFloat(fpSeek.value)); _fpScrubbing = false; });
+    fpSeek.addEventListener('pointerup', () => { _fpScrubbing = false; });
+  }
+
+  if (fpLevel && fpLevelVal) {
+    fpLevel.addEventListener('input', () => {
+      const v = parseFloat(fpLevel.value);
+      fpLevelVal.textContent = `${Math.round(v * 100)}%`;
+      filePlayer.setLevel(v);
+      settings.save();
+    });
+  }
+
+  // Restore persisted level + loop, then paint the initial (empty) state.
+  if (typeof stored.filePlayerLevel === 'number') {
+    filePlayer.setLevel(stored.filePlayerLevel);
+    if (fpLevel && fpLevelVal) {
+      fpLevel.value = String(stored.filePlayerLevel);
+      fpLevelVal.textContent = `${Math.round(stored.filePlayerLevel * 100)}%`;
+    }
+  }
+  if (stored.filePlayerLoop) filePlayer.setLoop(true);
+  paintFilePlayer();
 
   // ── Pose smoothing slider (lives in audio card under sliders) ────────────
   const smoothInput = document.querySelector('[data-qp="pose-smooth"] input[type=range]');
@@ -1501,8 +1636,8 @@ export function initQualiaPage() {
     switch (audioMode) {
       case 'off': audio.setSourceFilter([]);                                                            break;
       case 'mic': audio.setSourceFilter(['mic']);                                                       break;
-      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem']);         break;
-      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem']);  break;
+      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file']);         break;
+      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file']);  break;
     }
   }
 
@@ -3412,6 +3547,9 @@ export function initQualiaPage() {
       // The modem fires one-shot tone sequences — there's no transport to
       // resume, so pause just gates new sound and cuts anything mid-flight.
       try { modem.setPaused?.(true); } catch (e) { console.warn('[qualia] pause modem failed:', e); }
+      // The file player HAS a transport — setPaused remembers whether it was
+      // playing and resumes it on unpause, so the track rides the page pause.
+      try { filePlayer.setPaused?.(true); } catch (e) { console.warn('[qualia] pause file player failed:', e); }
     } else if (!on && _pauseAudioState) {
       const s = _pauseAudioState;
       _pauseAudioState = null;
@@ -3426,6 +3564,7 @@ export function initQualiaPage() {
       try { looper.setRigPaused?.(false); } catch (e) { console.warn('[qualia] resume rig failed:', e); }
       try { vocoder?.setMuted?.(s.vocoderMuted); } catch (e) { console.warn('[qualia] resume vocoder unmute failed:', e); }
       try { modem.setPaused?.(false); } catch (e) { console.warn('[qualia] resume modem failed:', e); }
+      try { filePlayer.setPaused?.(false); } catch (e) { console.warn('[qualia] resume file player failed:', e); }
     }
     btnPause.classList.toggle('active', on);
     btnPause.textContent = on ? 'paused' : 'pause';
@@ -4670,6 +4809,115 @@ export function initQualiaPage() {
       }
     },
   });
+
+  // ── Session recording (file player) ────────────────────────────────────────
+  // Two file-player toggles turn a playback into a hands-off capture:
+  //   • "rec with play" — the screen recorder runs for exactly the length of
+  //     the track. It starts BEFORE the first sample (below), pauses when the
+  //     track pauses, and stops on the track's end — so the clip needs no
+  //     start/end trimming. Forced to auto-save so no save-picker interrupts.
+  //   • "+ rig stem" — alongside the full-mix video, a second audio-only
+  //     recorder captures the rig ALONE (audio.getStemStream('rig') = exactly
+  //     the rig's contribution to the mix), for a DAW stem that lines up with
+  //     the video. Both recorders share one start/pause/stop timeline.
+  const fpRecPlay = audioCard.querySelector('[data-qp="file-recplay"]');
+  const fpRigStem = audioCard.querySelector('[data-qp="file-rigstem"]');
+  let recWithPlay = stored.recWithPlay === true;
+  let recRigStem  = stored.recRigStem === true && recWithPlay;
+  let _syncTake   = false;   // a playback-synced take is in progress
+
+  const stemRecorder = createStemRecorder({
+    getStream: () => audio.getStemStream?.('rig'),
+    onSave:  ({ filename }) => showRecToastError(`rig stem saved · ${filename}`, 6000),
+    onError: (e) => showRecToastError(`rig stem: ${e?.message || e}`),
+  });
+
+  function paintSessionRec() {
+    if (fpRecPlay) {
+      fpRecPlay.classList.toggle('active', recWithPlay || _syncTake);
+      fpRecPlay.setAttribute('aria-pressed', recWithPlay ? 'true' : 'false');
+      fpRecPlay.textContent = _syncTake ? 'recording…' : 'rec with play';
+    }
+    if (fpRigStem) {
+      fpRigStem.classList.toggle('active', recRigStem);
+      fpRigStem.setAttribute('aria-pressed', recRigStem ? 'true' : 'false');
+      fpRigStem.disabled = !recWithPlay || _syncTake;
+    }
+  }
+
+  async function beginSyncTake() {
+    if (recorder.isRecording()) return;   // never hijack a manual take
+    _syncTake = true;
+    paintSessionRec();
+    // Force auto-save (viewport) — the save-picker's async gesture would race
+    // playback start and, on macOS, drop out of fullscreen mid-take.
+    recOverride = { mode: 'viewport', autoSave: true };
+    try {
+      await recorder.start();
+    } catch (err) {
+      console.warn('[qualia] session record start failed:', err);
+      showRecToastError(`recording failed to start — ${err?.message || err}`);
+      _syncTake = false;
+      recOverride = null;
+      paintSessionRec();
+      return;
+    }
+    recOverride = null;
+    if (recRigStem) {
+      const base = `qualia-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+      const ok = stemRecorder.start(base);
+      if (!ok) showRecToastError('rig stem: no rig signal — open the rig capture, then record');
+    }
+  }
+
+  function endSyncTake() {
+    if (!_syncTake) return;
+    _syncTake = false;
+    try { recorder.stop(); } catch {}
+    try { stemRecorder.stop(); } catch {}
+    paintSessionRec();
+  }
+  function pauseSyncTake()  { if (_syncTake) { recorder.pause?.();  stemRecorder.pause();  } }
+  function resumeSyncTake() { if (_syncTake) { recorder.resume?.(); stemRecorder.resume(); } }
+
+  // The file player's play/pause button routes here (registered up in the
+  // file-player block) so a take can arm the recorder before the first sample.
+  async function onFilePlayClicked() {
+    if (filePlayer.isPlaying()) { filePlayer.pause(); return; }
+    if (!filePlayer.isReady()) return;
+    // Bump the audio mode so the file (and rig) actually drive visuals +
+    // recording: 'off' → 'mix' (engines only), 'mic' → 'all' (keep the mic).
+    try {
+      if (audioMode === 'off') await setAudioMode('mix');
+      else if (audioMode === 'mic') await setAudioMode('all');
+    } catch { /* play anyway */ }
+    // Start the take BEFORE playback so the recording catches the first sample.
+    if (recWithPlay && !_syncTake && !recorder.isRecording()) await beginSyncTake();
+    filePlayer.play();
+  }
+
+  // Transport edges drive the pause/resume/stop side of a take. (The START is
+  // handled in onFilePlayClicked, before playback, so nothing is missed.)
+  filePlayer.onTransport?.((phase) => {
+    if (phase === 'pause') pauseSyncTake();
+    else if (phase === 'play') resumeSyncTake();
+    else if (phase === 'ended' || phase === 'stop') endSyncTake();
+  });
+
+  fpRecPlay?.addEventListener('click', () => {
+    if (_syncTake) return;                  // can't re-arm mid-take
+    recWithPlay = !recWithPlay;
+    if (!recWithPlay) recRigStem = false;   // stem only means anything with a take
+    settings.save();
+    paintSessionRec();
+  });
+  fpRigStem?.addEventListener('click', () => {
+    if (_syncTake || !recWithPlay) return;
+    recRigStem = !recRigStem;
+    settings.save();
+    paintSessionRec();
+  });
+  paintSessionRec();
 
   if (btnRecord) {
     // Don't preemptively disable on isSupported() — Disabled buttons
@@ -7743,7 +7991,7 @@ export function initQualiaPage() {
   // paths as the UI controls (select handlers, preset buttons, sliders) so
   // code-driven changes keep the chrome in sync and persist identically.
   installCodeApi({
-    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer, modem,
+    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer, modem, filePlayer,
     pose, overlay, camWalk, logoMark, fader,
     echoCtl: { isEnabled: () => echo.isEnabled(), setEnabled: setEchoEnabled },
     page: {

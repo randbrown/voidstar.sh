@@ -146,7 +146,7 @@ function gsConfig(get, patch) {
  */
 export function installCodeApi(deps) {
   const {
-    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer, modem,
+    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer, modem, filePlayer,
     pose, overlay, camWalk, logoMark, fader, echoCtl, page,
   } = deps;
 
@@ -637,6 +637,40 @@ export function installCodeApi(deps) {
       state: () => safe(() => modem?.state(), 'idle'),
       /** Silence everything immediately. */
       stop: () => safe(() => modem?.stop()),
+    },
+
+    // — audio-file player —
+    // Play an existing track (mp3/wav/m4a/ogg/flac) through the qualia signal:
+    // it drives the visual reactivity, monitors to the speakers, and lands in
+    // the recordable mix (present in the 'mix'/'all' audio modes). The UI file
+    // picker loads local files; from code, load() also takes a URL (must be
+    // CORS-reachable). Play your rig over the top in 'all' mode.
+    player: {
+      /** Load a track. `input` is a URL string, a File/Blob, or an ArrayBuffer.
+       *  Returns a Promise<boolean>. Replaces (and stops) any current track. */
+      load: (input, name) => Promise.resolve(safe(() => filePlayer?.load(input, name), false)),
+      /** Start / restart playback from the current position. */
+      play: () => safe(() => filePlayer?.play()),
+      /** Pause, banking the position for the next play(). */
+      pause: () => safe(() => filePlayer?.pause()),
+      /** Toggle play/pause. */
+      toggle: () => safe(() => filePlayer?.toggle()),
+      /** Stop and rewind to the start (drops out of the mix). */
+      stop: () => safe(() => filePlayer?.stop()),
+      /** Seek to `sec` seconds. */
+      seek: (sec) => safe(() => filePlayer?.seek(sec)),
+      /** Loop the track — get()/set(bool). */
+      loop: gsBool(() => filePlayer?.getLoop() ?? false, (on) => filePlayer?.setLoop(on)),
+      /** Playback level into speakers + recording (0..~1.5) — get()/set(v). */
+      level: gs(() => filePlayer?.getLevel() ?? 1, (v) => filePlayer?.setLevel(+v)),
+      /** Current head position, seconds. */
+      position: () => safe(() => filePlayer?.getPosition(), 0),
+      /** Track length, seconds. */
+      duration: () => safe(() => filePlayer?.getDuration(), 0),
+      /** True while the track is playing. */
+      playing: () => !!safe(() => filePlayer?.isPlaying(), false),
+      /** Full snapshot: {ready, playing, loop, level, name, duration, position}. */
+      state: () => safe(() => filePlayer?.getState(), null),
     },
 
     // — perf levers (grouped; the flat legacy names stay too) —

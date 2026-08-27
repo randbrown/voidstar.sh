@@ -923,6 +923,30 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     @media (pointer: coarse) {
       .qp-row input[type=range] { height: 28px; width: 160px; }
     }
+
+    /* Audio-file source — a small transport tucked under the audio presets. */
+    .qp-fileplayer {
+      display: flex; flex-direction: column; gap: 0.4rem;
+      padding: 0.45rem 0.5rem; border: 1px solid var(--border);
+      border-radius: 6px; background: color-mix(in srgb, var(--void) 25%, transparent);
+    }
+    .qp-fileplayer.drag { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+    .qp-file-pick { display: flex; align-items: center; gap: 0.5rem; }
+    .qp-file-name {
+      flex: 1; min-width: 0; color: var(--muted); font-size: 0.68rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .qp-file-name.loaded { color: var(--text); }
+    .qp-file-transport { display: flex; align-items: center; gap: 0.4rem; }
+    .qp-file-transport .ctrl-btn { flex: 1; }
+    .qp-file-session { display: flex; align-items: center; gap: 0.4rem; }
+    .qp-file-session .ctrl-btn { flex: 1; }
+    .qp-file-session .ctrl-btn[disabled] { opacity: 0.35; }
+    .qp-file-session .ctrl-btn[data-qp="file-recplay"].active { border-color: var(--pink); color: var(--pink); background: rgba(255,122,230,0.08); }
+    .qp-file-transport .ctrl-btn[data-qp="file-loop"] { flex: 0 0 auto; }
+    .qp-fileplayer .qp-row input[type=range] { width: 100%; }
+    .qp-fileplayer .qp-row[data-qp="file-seek"] { grid-template-columns: 1fr; gap: 0.2rem; }
+    .qp-fileplayer .qp-row[data-qp="file-seek"] label { justify-content: space-between; }
     .qp-toggle {
       background: none; border: 1px solid var(--border); border-radius: 4px;
       color: var(--muted); font-family: var(--font-mono); font-size: 0.68rem;
@@ -3419,6 +3443,35 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <div class="qp-body">
       <div class="qp-presets" data-qp="audio-presets"></div>
+      <!-- Audio-file source — play an mp3/wav/… through the qualia signal: it
+           drives the visual reactivity, monitors out to the speakers/PA, and
+           lands in the screen recording. Needs the audio mode to include the
+           file source; pressing play auto-bumps 'off' → 'mix'. Play your rig
+           over the top in 'all' mode. -->
+      <div class="qp-fileplayer" data-qp="audio-file">
+        <div class="qp-file-pick">
+          <button type="button" class="ctrl-btn" data-qp="file-open" title="Load an audio file (mp3, wav, m4a, ogg, flac…) to play through qualia">load file…</button>
+          <span class="qp-file-name" data-qp="file-name" title="No file loaded">no file</span>
+          <input type="file" accept="audio/*" data-qp="file-input" hidden>
+        </div>
+        <div class="qp-file-transport">
+          <button type="button" class="ctrl-btn" data-qp="file-play" disabled>play</button>
+          <button type="button" class="ctrl-btn" data-qp="file-stop" disabled title="Stop and rewind to the start">stop</button>
+          <button type="button" class="ctrl-btn" data-qp="file-loop" title="Loop the track">loop</button>
+        </div>
+        <div class="qp-row" data-qp="file-seek" title="Scrub the track">
+          <label>position<span class="qp-val" data-qp="file-time">0:00 / 0:00</span></label>
+          <input type="range" min="0" max="1" step="0.001" value="0" disabled aria-label="Seek">
+        </div>
+        <div class="qp-row" data-qp="file-level" title="File playback level into the speakers + recording (a brickwall limiter guards against clipping).">
+          <label>file level<span class="qp-val">100%</span></label>
+          <input type="range" min="0" max="1.5" step="0.01" value="1">
+        </div>
+        <div class="qp-file-session">
+          <button type="button" class="ctrl-btn" data-qp="file-recplay" aria-pressed="false" title="Record the screen for exactly the length of the track — starts when you press play, stops when it ends (pausing pauses the recording too). Auto-saved, no trimming.">rec with play</button>
+          <button type="button" class="ctrl-btn" data-qp="file-rigstem" aria-pressed="false" title="Also capture a separate rig-only audio stem during the recording, so you get the full-mix video AND an isolated rig track. Open the rig capture first.">+ rig stem</button>
+        </div>
+      </div>
       <div class="qp-row" data-qp="audio-mic-gain" title="Mic PRE gain — scales the mic into the visual reactivity ('mic'/'all' audio modes), the monitor, and the recording. Works even with the output below muted/at 0, so a room mic can drive the visuals silently.">
         <label>mic gain<span class="qp-val">1.00×</span></label>
         <input type="range" min="0" max="2" step="0.01" value="1">
