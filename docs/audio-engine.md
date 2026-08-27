@@ -361,7 +361,12 @@ makes the track drive the visuals and land in recordings for free. The feed is
 adopted **only while it's actually sounding** (`onFeedChange` fires on every
 play/pause/stop/natural-end), gated like every source by the current audio
 mode's filter (`'file'` is a member of `'mix'` and `'all'`). Pressing play in the
-audio-card UI auto-bumps `audioMode: 'off' → 'mix'` so it's turn-key.
+UI auto-bumps `audioMode: 'off' → 'mix'` (or `'mic' → 'all'`) so it's turn-key.
+
+The player's UI (picker + drag-drop, transport, scrubber, level, and the two
+session toggles below) lives in its own draggable **deck panel** (`#deck-panel`,
+toggled by the `deck` topbar button) — a floating window like strudel/vox/mixer,
+wired through `makeDraggablePanel('deck', …)`, not in the lower audio HUD card.
 
 A `BufferSourceNode` is single-shot, so pause/seek are modelled by holding the
 buffer and tracking a play offset (`start(0, offset)`, `startTime = now −
@@ -373,20 +378,30 @@ edges (`onTransport('play'|'pause'|'stop'|'ended')`) that page-init uses to driv
 a **playback-synced recording**. Exposed to the code API as `qualia.player.*`
 (see [`qualia-code-api.md`](../docs/qualia-code-api.md)).
 
-**Session recording (the two file-player toggles).** *rec with play* runs the
+**Session recording (the two deck-panel toggles).** *rec with play* runs the
 screen recorder for exactly the length of the track — page-init starts it in
 `onFilePlayClicked` **before** `filePlayer.play()` so the clip catches the first
 sample, `pauseSyncTake`/`resumeSyncTake` mirror the transport onto the recorder
 (`recorder.pause()`/`resume()`, which freeze the muxed timeline), and the track's
 `ended` edge stops it — no start/end trimming. The take is forced to auto-save so
-no save-picker races the start. *+ rig stem* adds a second, audio-only
-`MediaRecorder` (`stem-recorder.js`) fed by `audio.getStemStream('rig')` — a
-`MediaStreamDestination` in the rig's own ctx tapped straight off the rig
-analyser, i.e. **exactly the rig's contribution to the full mix**, so the stem
-lines up sample-for-sample with the rig you hear in the video. You get the
-full-mix video AND an isolated rig track from one pass. `getStemStream(id)` is
-deliberately *not* gated by the source filter (the rig still plays into the mix
-while you tap its stem); it's cleaned up when the source is removed or re-adopts.
+no save-picker races the start, and `beginSyncTake` honors the recorder's own
+one-button modifiers (**auto-⛶** → fullscreen, **auto-zen** → hide the HUD) the
+same way `autoRecord` does, so a synced take frames itself like a manual auto-take.
+
+*+ rig stem* captures the rig ALONE alongside the full-mix video, for a DAW stem
+that lines up with the video. It's grabbed as raw Float32 PCM **off the audio
+thread** by the tiny `pcm-tap` AudioWorklet, attached to the rig's passthrough
+analyser in the rig's own ctx via `audio.getStemNode('rig')` — **exactly the
+rig's contribution to the full mix** (same signal `getStemStream` taps). At stop,
+`stem-recorder.js` writes it as a lossless 32-bit-float **WAV** (`wav.js`, no
+network, works offline) or — when the deck panel's format selector is set to
+**MP3** — transcodes that WAV through `ffmpeg.wasm` (`mp3-encode.js`, lazy ~31 MB
+CDN core, `libmp3lame @ 320k`), falling back to the WAV (with a toast) if the
+encoder can't load. `MediaRecorder` can't emit WAV/MP3, which is why the stem
+takes the PCM path rather than the video's muxed encoder. Both `getStemNode` and
+`getStemStream` are deliberately *not* gated by the source filter (the rig still
+plays into the mix while you tap its stem). Open the rig capture first, or the
+stem reports "no rig signal".
 
 ## modem.js — dial-up modem tone simulator
 
