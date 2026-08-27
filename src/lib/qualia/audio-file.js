@@ -33,6 +33,14 @@ export function createAudioFilePlayer(opts = {}) {
   const onFeedChange = typeof opts.onFeedChange === 'function' ? opts.onFeedChange : () => {};
   const onState      = typeof opts.onState === 'function' ? opts.onState : () => {};
 
+  // Transport subscribers — fired with a phase string on every real transport
+  // edge ('play' | 'pause' | 'stop' | 'ended'). page-init drives the
+  // playback-synced recorder off these (start before play, stop on end).
+  const transportSubs = new Set();
+  function fireTransport(phase) {
+    for (const fn of transportSubs) { try { fn(phase); } catch { /* subscriber teardown */ } }
+  }
+
   let ctx = null, bus = null, limiter = null, analyser = null;
   let buffer = null;          // decoded AudioBuffer (null until a file loads)
   let name = '';              // display name of the loaded file
@@ -113,6 +121,7 @@ export function createAudioFilePlayer(opts = {}) {
       src = null;
       onFeedChange();
       emitState();
+      fireTransport('ended');
     };
     const at = Math.min(Math.max(0, offset), buffer.duration);
     startTime = ctx.currentTime - at;
@@ -180,6 +189,7 @@ export function createAudioFilePlayer(opts = {}) {
       startTicker();
       onFeedChange();                              // page-init adopts while we sound
       emitState();
+      fireTransport('play');
     },
 
     /** Pause, banking the current position for the next play(). */
@@ -191,6 +201,7 @@ export function createAudioFilePlayer(opts = {}) {
       stopTicker();
       onFeedChange();                              // release the adopted analyser
       emitState();
+      fireTransport('pause');
     },
 
     toggle: () => { if (playing) api.pause(); else api.play(); },
@@ -213,7 +224,12 @@ export function createAudioFilePlayer(opts = {}) {
       stopTicker();
       if (was) onFeedChange();
       emitState();
+      fireTransport('stop');
     },
+
+    /** Subscribe to transport edges ('play'|'pause'|'stop'|'ended'). Returns an
+     *  unsubscribe fn. */
+    onTransport: (fn) => { transportSubs.add(fn); return () => transportSubs.delete(fn); },
 
     setLoop: (on) => {
       loop = !!on;

@@ -888,10 +888,29 @@ export function createRecorder(opts = {}) {
     await start();
   }
 
+  // Pause/resume the encoder without ending the take. Used to keep a
+  // playback-synced recording exactly the length of the audio when the
+  // performer pauses mid-track: MediaRecorder freezes both the video and
+  // audio timelines, so the muxed duration stays equal to the un-paused
+  // time. Transparent to the sink/teardown path (no onstop/onerror fires).
+  function pause() {
+    if (recorder && recorder.state === 'recording') {
+      try { recorder.pause(); } catch (err) { console.warn('[recorder] pause failed:', err); }
+    }
+  }
+  function resume() {
+    if (recorder && recorder.state === 'paused') {
+      try { recorder.resume(); } catch (err) { console.warn('[recorder] resume failed:', err); }
+    }
+  }
+
   return {
     start,
     stop,
     toggle,
+    pause,
+    resume,
+    isPaused: () => recorder?.state === 'paused',
     isRecording: () => !!recorder,
     getStartedAt: () => startedAt,
     getBackend: () => backend,

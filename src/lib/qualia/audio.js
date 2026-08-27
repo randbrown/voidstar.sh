@@ -322,6 +322,7 @@ export function createAudio() {
     const src = sources.get(id);
     if (!src) return;
     detachFromRecordableMix(id);
+    releaseStem(id);
     try { src.preGain?.disconnect(); } catch {}
     try { src.monitorGain?.disconnect(); } catch {}
     if (src.stream) { try { src.stream.getTracks().forEach(t => t.stop()); } catch {} }
@@ -449,6 +450,44 @@ export function createAudio() {
     return recMixDest?.stream ?? null;
   }
 
+  // ── Per-source stem stream ─────────────────────────────────────────────
+  // A single source's audio as its OWN MediaStream, for recording a stem
+  // (e.g. the rig) separately from the full recordable mix. Unlike the mix
+  // bus this needs no cross-context bridge: the destination lives in the
+  // source's own ctx, fed directly from its (passthrough) analyser. So the
+  // stem is exactly that source's contribution to the mix — the same signal
+  // the recordable mix taps for it. Deliberately NOT gated by sourceFilter:
+  // you can pull a rig stem while the rig also plays into the full mix.
+  const stemTaps = new Map();   // sourceId -> { dest, analyser, ctx }
+
+  function getStemStream(sourceId) {
+    const src = sources.get(sourceId);
+    if (!src || !src.ctx || !src.analyser) return null;
+    // Reuse a live tap if the source's analyser hasn't been swapped under us
+    // (the rig re-adopts a fresh analyser each time its capture reopens).
+    const existing = stemTaps.get(sourceId);
+    if (existing && existing.analyser === src.analyser && existing.ctx === src.ctx) {
+      return existing.dest.stream;
+    }
+    if (existing) releaseStem(sourceId);
+    try {
+      const dest = src.ctx.createMediaStreamDestination();
+      src.analyser.connect(dest);
+      stemTaps.set(sourceId, { dest, analyser: src.analyser, ctx: src.ctx });
+      return dest.stream;
+    } catch (err) {
+      console.warn(`[audio] stem tap failed for ${sourceId}:`, err);
+      return null;
+    }
+  }
+
+  function releaseStem(sourceId) {
+    const t = stemTaps.get(sourceId);
+    if (!t) return;
+    try { t.analyser.disconnect(t.dest); } catch {}
+    stemTaps.delete(sourceId);
+  }
+
   // Resume the recordable-mix context (and the mic context, if any) — awaited
   // at record start so the first audio actually reaches the encoder. A
   // suspended mix ctx was a likely cause of intermittently-silent recordings.
@@ -546,6 +585,7 @@ export function createAudio() {
     // Replace any prior source under this id without touching the others.
     if (sources.has(sourceId)) {
       detachFromRecordableMix(sourceId);
+      releaseStem(sourceId);
       sources.delete(sourceId);
     }
     const src = { ctx: externalCtx, analyser: externalAnalyser, ownsCtx: false };
@@ -561,6 +601,7 @@ export function createAudio() {
   function releaseAdopted(sourceId = 'strudel') {
     if (!sources.has(sourceId)) return;
     detachFromRecordableMix(sourceId);
+    releaseStem(sourceId);
     sources.delete(sourceId);
     refreshFrameBuffers();
     if (sources.size === 0) resetState();
@@ -862,6 +903,8 @@ export function createAudio() {
     getCurrentMicId: () => micId,
     getMicStream:    () => sources.get('mic')?.stream ?? null,
     getRecordableStream,
+    getStemStream,
+    releaseStem,
     resumeRecordableMix,
     getAnalyser: () => firstSource()?.analyser ?? null,
     getCtx:      () => firstSource()?.ctx ?? null,

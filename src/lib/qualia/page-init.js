@@ -33,6 +33,7 @@ import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
 import { createModem } from './modem.js';
 import { createAudioFilePlayer } from './audio-file.js';
+import { createStemRecorder } from './stem-recorder.js';
 import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
@@ -503,6 +504,8 @@ export function initQualiaPage() {
     audioMode,
     filePlayerLevel: filePlayer.getLevel(),
     filePlayerLoop:  filePlayer.getLoop(),
+    recWithPlay,
+    recRigStem,
     paused:         core.isPaused(),
     zen:            core.isZen(),
     poseSource:     poseSelect.value,
@@ -921,19 +924,10 @@ export function initQualiaPage() {
     });
   }
 
-  fpPlay?.addEventListener('click', async () => {
-    if (filePlayer.isPlaying()) { filePlayer.pause(); return; }
-    // A file only drives the visuals / lands in the recording when the audio
-    // mode includes the 'file' source ('mix' or 'all'). If we're in a mode that
-    // excludes it, bump up so pressing play is turn-key: 'off' → 'mix' (engines
-    // only), 'mic' → 'all' (keep the mic, add the engines). Audible either way
-    // via the player's own destination.
-    try {
-      if (audioMode === 'off') await setAudioMode('mix');
-      else if (audioMode === 'mic') await setAudioMode('all');
-    } catch { /* fall through and play anyway */ }
-    filePlayer.play();
-  });
+  // Play/pause is orchestrated by onFilePlayClicked (defined with the
+  // session-recording block below) so a "rec with play" take can start the
+  // recorder BEFORE playback — capturing the track from its very first sample.
+  fpPlay?.addEventListener('click', () => { void onFilePlayClicked(); });
   fpStop?.addEventListener('click', () => filePlayer.stop());
   fpLoop?.addEventListener('click', () => { filePlayer.setLoop(!filePlayer.getLoop()); settings.save(); });
 
@@ -4815,6 +4809,115 @@ export function initQualiaPage() {
       }
     },
   });
+
+  // ── Session recording (file player) ────────────────────────────────────────
+  // Two file-player toggles turn a playback into a hands-off capture:
+  //   • "rec with play" — the screen recorder runs for exactly the length of
+  //     the track. It starts BEFORE the first sample (below), pauses when the
+  //     track pauses, and stops on the track's end — so the clip needs no
+  //     start/end trimming. Forced to auto-save so no save-picker interrupts.
+  //   • "+ rig stem" — alongside the full-mix video, a second audio-only
+  //     recorder captures the rig ALONE (audio.getStemStream('rig') = exactly
+  //     the rig's contribution to the mix), for a DAW stem that lines up with
+  //     the video. Both recorders share one start/pause/stop timeline.
+  const fpRecPlay = audioCard.querySelector('[data-qp="file-recplay"]');
+  const fpRigStem = audioCard.querySelector('[data-qp="file-rigstem"]');
+  let recWithPlay = stored.recWithPlay === true;
+  let recRigStem  = stored.recRigStem === true && recWithPlay;
+  let _syncTake   = false;   // a playback-synced take is in progress
+
+  const stemRecorder = createStemRecorder({
+    getStream: () => audio.getStemStream?.('rig'),
+    onSave:  ({ filename }) => showRecToastError(`rig stem saved · ${filename}`, 6000),
+    onError: (e) => showRecToastError(`rig stem: ${e?.message || e}`),
+  });
+
+  function paintSessionRec() {
+    if (fpRecPlay) {
+      fpRecPlay.classList.toggle('active', recWithPlay || _syncTake);
+      fpRecPlay.setAttribute('aria-pressed', recWithPlay ? 'true' : 'false');
+      fpRecPlay.textContent = _syncTake ? 'recording…' : 'rec with play';
+    }
+    if (fpRigStem) {
+      fpRigStem.classList.toggle('active', recRigStem);
+      fpRigStem.setAttribute('aria-pressed', recRigStem ? 'true' : 'false');
+      fpRigStem.disabled = !recWithPlay || _syncTake;
+    }
+  }
+
+  async function beginSyncTake() {
+    if (recorder.isRecording()) return;   // never hijack a manual take
+    _syncTake = true;
+    paintSessionRec();
+    // Force auto-save (viewport) — the save-picker's async gesture would race
+    // playback start and, on macOS, drop out of fullscreen mid-take.
+    recOverride = { mode: 'viewport', autoSave: true };
+    try {
+      await recorder.start();
+    } catch (err) {
+      console.warn('[qualia] session record start failed:', err);
+      showRecToastError(`recording failed to start — ${err?.message || err}`);
+      _syncTake = false;
+      recOverride = null;
+      paintSessionRec();
+      return;
+    }
+    recOverride = null;
+    if (recRigStem) {
+      const base = `qualia-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+      const ok = stemRecorder.start(base);
+      if (!ok) showRecToastError('rig stem: no rig signal — open the rig capture, then record');
+    }
+  }
+
+  function endSyncTake() {
+    if (!_syncTake) return;
+    _syncTake = false;
+    try { recorder.stop(); } catch {}
+    try { stemRecorder.stop(); } catch {}
+    paintSessionRec();
+  }
+  function pauseSyncTake()  { if (_syncTake) { recorder.pause?.();  stemRecorder.pause();  } }
+  function resumeSyncTake() { if (_syncTake) { recorder.resume?.(); stemRecorder.resume(); } }
+
+  // The file player's play/pause button routes here (registered up in the
+  // file-player block) so a take can arm the recorder before the first sample.
+  async function onFilePlayClicked() {
+    if (filePlayer.isPlaying()) { filePlayer.pause(); return; }
+    if (!filePlayer.isReady()) return;
+    // Bump the audio mode so the file (and rig) actually drive visuals +
+    // recording: 'off' → 'mix' (engines only), 'mic' → 'all' (keep the mic).
+    try {
+      if (audioMode === 'off') await setAudioMode('mix');
+      else if (audioMode === 'mic') await setAudioMode('all');
+    } catch { /* play anyway */ }
+    // Start the take BEFORE playback so the recording catches the first sample.
+    if (recWithPlay && !_syncTake && !recorder.isRecording()) await beginSyncTake();
+    filePlayer.play();
+  }
+
+  // Transport edges drive the pause/resume/stop side of a take. (The START is
+  // handled in onFilePlayClicked, before playback, so nothing is missed.)
+  filePlayer.onTransport?.((phase) => {
+    if (phase === 'pause') pauseSyncTake();
+    else if (phase === 'play') resumeSyncTake();
+    else if (phase === 'ended' || phase === 'stop') endSyncTake();
+  });
+
+  fpRecPlay?.addEventListener('click', () => {
+    if (_syncTake) return;                  // can't re-arm mid-take
+    recWithPlay = !recWithPlay;
+    if (!recWithPlay) recRigStem = false;   // stem only means anything with a take
+    settings.save();
+    paintSessionRec();
+  });
+  fpRigStem?.addEventListener('click', () => {
+    if (_syncTake || !recWithPlay) return;
+    recRigStem = !recRigStem;
+    settings.save();
+    paintSessionRec();
+  });
+  paintSessionRec();
 
   if (btnRecord) {
     // Don't preemptively disable on isSupported() — Disabled buttons
