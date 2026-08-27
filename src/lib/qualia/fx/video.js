@@ -360,6 +360,26 @@ function shortName(src) {
   }
 }
 
+/** Human-readable reason from an HTMLMediaElement error, tuned for the case
+ *  that actually bites here: a phone clip in a codec THIS browser can't decode.
+ *  A phone hardware-decodes its own HEVC/H.265 recordings, but desktop Chrome
+ *  (Windows especially) often can't — and the failure is otherwise invisible
+ *  (no console output, the element just never reaches readyState 2). */
+function describeMediaError(video) {
+  const err = video && video.error;
+  const code = err && err.code;
+  // MEDIA_ERR_SRC_NOT_SUPPORTED (4) / MEDIA_ERR_DECODE (3) — nearly always a
+  // codec this browser lacks; HEVC from a phone is the usual culprit.
+  if (code === 4 || code === 3) {
+    return "this browser can't decode this clip — it's most likely HEVC/H.265 "
+      + "(phones record it and play it in hardware; desktop Chrome often can't). "
+      + 'Use “→ h264” on this row to convert it in-browser.';
+  }
+  if (code === 2) return 'network error while loading this clip';
+  if (code === 1) return 'loading was aborted';
+  return (err && err.message) || 'this clip failed to load';
+}
+
 /** @type {import('../types.js').QFXModule} */
 export default {
   id: 'video',
@@ -798,6 +818,9 @@ export default {
       '<strong>assets.mixkit.co</strong> is reliable (see the seeded defaults). ' +
       'Other hosts vary — test a URL by adding it; rows that block CORS get a ' +
       '<em>no-cors</em> badge and still play via DOM fallback (no glitch FX). ' +
+      'A clip that won’t play here (usually <strong>HEVC/H.265</strong> from a phone) ' +
+      'shows an <em>err</em>/<em>stalled</em> badge — hit <strong>→ h264</strong> on the ' +
+      'row to transcode it in-browser (first convert fetches a ~31 MB converter, once). ' +
       'YouTube is not supported. Uploads are session-only — URLs + camera persist. ' +
       'The camera source glitches the live feed (turn the camera on via the ' +
       'topbar pose-source).';
@@ -951,6 +974,15 @@ export default {
           errEl.style.cssText = 'font-size: 0.55rem; color: var(--pink); padding: 0 0.3rem; border: 1px solid rgba(236,72,153,0.4); border-radius: 3px;';
           row.appendChild(errEl);
         }
+        // Silent-stall (no 'error' event, but no frames either) — softer amber
+        // badge than a hard err, but the same likely cause (unsupported codec).
+        if (entry.stalled && !entry.error) {
+          const st = document.createElement('span');
+          st.textContent = 'stalled';
+          st.title = entry.stalledMsg || 'No frames after several seconds — the codec may be unsupported here. Try “→ h264”.';
+          st.style.cssText = 'font-size: 0.55rem; color: var(--amber, #f5a623); padding: 0 0.3rem; border: 1px solid rgba(245,166,35,0.4); border-radius: 3px;';
+          row.appendChild(st);
+        }
 
         const rmBtn = document.createElement('button');
         rmBtn.type = 'button';
@@ -961,6 +993,31 @@ export default {
         rmBtn.addEventListener('click', () => removeAt(idx));
 
         row.append(playBtn, name);
+
+        // In-browser transcode to H.264 — offered on uploaded clips (only those
+        // carry recoverable File bytes). Highlighted when the clip failed or
+        // stalled, since a codec this browser can't decode (usually HEVC from a
+        // phone) is the most common reason a file goes silent here.
+        if (entry.kind === 'file') {
+          if (entry.converting) {
+            const busy = document.createElement('span');
+            busy.textContent = entry.convertLabel || 'converting…';
+            busy.title = 'Transcoding to H.264 in your browser — this can take a while for long or high-res clips.';
+            busy.style.cssText = 'font-size: 0.55rem; color: var(--muted); padding: 0 0.3rem; white-space: nowrap;';
+            row.appendChild(busy);
+          } else if (!entry.converted) {
+            const conv = document.createElement('button');
+            conv.type = 'button';
+            conv.className = 'qp-toggle';
+            conv.textContent = '→ h264';
+            conv.title = "Convert this clip to H.264 in your browser — fixes clips that won't play here (e.g. HEVC from a phone). First use fetches a ~31 MB converter.";
+            conv.style.padding = '0 0.4rem';
+            if (entry.error || entry.stalled) conv.style.cssText += 'color: var(--amber, #f5a623); border-color: rgba(245,166,35,0.5);';
+            conv.addEventListener('click', () => convertEntry(idx));
+            row.appendChild(conv);
+          }
+        }
+
         row.appendChild(rmBtn);
         listEl.appendChild(row);
       });
@@ -994,6 +1051,106 @@ export default {
       }
       renderList();
     }
+    // Serialize transcodes — the ffmpeg.wasm engine is a single shared
+    // instance (see syzygy/engine.js); two exec()s at once would collide.
+    let convertBusy = false;
+
+    /** Transcode an uploaded clip to browser-safe H.264/AAC mp4 using the same
+     *  ffmpeg.wasm engine the Syzygy lab uses, then swap the playlist entry over
+     *  to the converted blob. The heavy ~31 MB core is fetched lazily on first
+     *  use (dynamic import of engine.js), so users who never convert pay nothing.
+     *  @param {number} idx playlist index of a `kind:'file'` entry */
+    async function convertEntry(idx) {
+      const entry = playlist[idx];
+      if (!entry || entry.kind !== 'file' || entry.converting) return;
+      if (convertBusy) {
+        entry.error = 'another clip is converting — try again once it finishes';
+        renderList();
+        return;
+      }
+      // Recover the File bytes: held in-session on the entry, or via its blob URL.
+      let file = entry.file instanceof Blob ? entry.file : null;
+      if (!file && typeof entry.src === 'string' && entry.src.startsWith('blob:')) {
+        try { file = await (await fetch(entry.src)).blob(); } catch {}
+      }
+      if (!file) { entry.error = 'no file data to convert (re-upload the clip)'; renderList(); return; }
+
+      convertBusy = true;
+      entry.converting = true;
+      entry.convertLabel = 'loading engine…';
+      entry.error = undefined; entry.stalled = false; entry.stalledMsg = undefined;
+      renderList();
+
+      let staged = null;
+      try {
+        const { loadEngine, stageInput, execStep } = await import('../../syzygy/engine.js');
+        const ff = await loadEngine((msg, frac) => {
+          entry.convertLabel = frac > 0 ? `engine ${Math.round(frac * 100)}%` : (msg || 'loading engine…');
+          renderList();
+        });
+        const inFile = file instanceof File
+          ? file
+          : new File([file], entry.name || 'clip.mp4', { type: file.type || 'video/mp4' });
+        entry.convertLabel = 'converting 0%';
+        entry.convertPct = 0;
+        renderList();
+        staged = await stageInput(ff, inFile, 'vidconv');
+        const outName = 'vidconv-out.mp4';
+        // libx264 8-bit yuv420p is the universally decodable target; -map 0:a:0?
+        // keeps the first audio stream if the clip has one (phone recordings
+        // usually do). HDR HEVC is flattened to SDR here (no wasm tonemap), but
+        // it plays, and any rotation metadata is auto-applied on re-encode.
+        await execStep(ff, [
+          '-i', staged.path,
+          '-map', '0:v:0', '-map', '0:a:0?',
+          '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+          '-c:a', 'aac', '-b:a', '160k',
+          '-movflags', '+faststart',
+          '-v', 'error', '-y', outName,
+        ], {
+          onProgress: (p) => {
+            const pct = Math.max(0, Math.min(100, Math.round((p.progress || 0) * 100)));
+            if (pct !== entry.convertPct) {
+              entry.convertPct = pct;
+              entry.convertLabel = `converting ${pct}%`;
+              renderList();
+            }
+          },
+        });
+        const data = await ff.readFile(outName);
+        try { await ff.deleteFile(outName); } catch {}
+        const blob = new Blob([data], { type: 'video/mp4' });
+        if (!blob.size) throw new Error('converter produced an empty file');
+
+        const baseName = (entry.name || 'clip').replace(/\.[^.]+$/, '');
+        const newName = `${baseName} · h264.mp4`;
+        const newFile = new File([blob], newName, { type: 'video/mp4' });
+        const oldSrc = entry.src;
+        entry.file = newFile;
+        entry.src = URL.createObjectURL(newFile);
+        entry.name = newName;
+        entry.converted = true;
+        entry.converting = false;
+        entry.convertLabel = undefined;
+        entry.convertPct = 0;
+        entry.error = undefined; entry.stalled = false; entry.stalledMsg = undefined;
+        entry.loadStartedAt = 0;
+        // If this clip is on-screen, reload it from the converted source.
+        if (idx === cursor) { pendingResume = 0; loadCurrent(); }
+        if (oldSrc && oldSrc.startsWith('blob:')) { try { URL.revokeObjectURL(oldSrc); } catch {} }
+        renderList();
+      } catch (err) {
+        entry.converting = false;
+        entry.convertLabel = undefined;
+        entry.error = 'conversion failed: ' + (err?.message || String(err));
+        console.warn('[qualia] video qfx: conversion failed:', err);
+        renderList();
+      } finally {
+        try { await staged?.cleanup?.(); } catch {}
+        convertBusy = false;
+      }
+    }
+
     // Snapshot the active clip's playback position onto its entry so it can
     // resume later. Skips the camera (we don't own its clock) and a fresh 0.
     function rememberPosition() {
@@ -1021,6 +1178,9 @@ export default {
       hideFallback();
       entry.tainted = false;
       entry.error = undefined;
+      entry.stalled = false;
+      entry.stalledMsg = undefined;
+      entry.loadStartedAt = 0;
       pendingResume = 0;
       // Camera source: don't touch src/loop/rate/volume — we don't own the
       // element. Pause our own clip elements so they're not decoding in the
@@ -1042,6 +1202,9 @@ export default {
       // Arm the resume seek (consumed by the loadedmetadata handler once the
       // new src reports its duration). 0/undefined = start from the top.
       pendingResume = Number.isFinite(entry.resumeAt) ? entry.resumeAt : 0;
+      // Arm the silent-stall watchdog (see update()): a file that produces no
+      // frame within a few seconds is almost certainly an undecodable codec.
+      entry.loadStartedAt = performance.now();
       try {
         activeVid.src = entry.src;
         activeVid.play().catch((err) => {
@@ -1121,6 +1284,25 @@ export default {
       advanceNext();
     }
     activeVid.addEventListener('ended', onEnded);
+
+    // Surface decode/codec failures instead of idling on a black screen. A
+    // <video> that can't decode its source fires 'error' and sets .error, but
+    // never logs to the console and never reaches readyState 2 — so without
+    // this the quale shows only the dark backdrop with no clue why. We stamp
+    // the active entry so its source row shows an 'err' badge (+ convert CTA).
+    function handleVidError(ev) {
+      if (usingCamera || ev.target !== activeVid) return;
+      const entry = playlist[cursor];
+      if (!entry || entry.kind === 'camera') return;
+      entry.loadStartedAt = 0;
+      entry.stalled = false;
+      entry.stalledMsg = undefined;
+      entry.error = describeMediaError(ev.target);
+      console.warn('[qualia] video qfx: source failed to load —', entry.name, '·', entry.error);
+      renderList();
+    }
+    vidA.addEventListener('error', handleVidError);
+    vidB.addEventListener('error', handleVidError);
 
     renderList();
     if (playlist.length > 0) {
@@ -1266,6 +1448,31 @@ export default {
         needsTextureUpdate = true;
       } else {
         needsTextureUpdate = false;
+      }
+
+      // Silent-stall watchdog for uploaded clips. Some browsers fire 'error'
+      // for an undecodable codec (handled above); others just idle forever at
+      // readyState 0 with nothing in the console. A local blob that produces no
+      // frame within a few seconds is almost always a codec this browser can't
+      // decode (HEVC from a phone is the classic case), so flag it and prompt a
+      // convert rather than leaving the screen blank. (Scoped to files — a URL
+      // legitimately buffers slowly; a local blob does not.)
+      if (!usingCamera && entry && entry.kind === 'file') {
+        if (scratch.ready) {
+          if (entry.loadStartedAt || entry.stalled) {
+            entry.loadStartedAt = 0;
+            entry.stalled = false;
+            entry.stalledMsg = undefined;
+          }
+        } else if (!entry.error && !entry.converting && !entry.stalled
+                   && entry.loadStartedAt && (performance.now() - entry.loadStartedAt) > 6000) {
+          entry.stalled = true;
+          entry.stalledMsg = "no frames after 6s — this clip may be in a codec this browser can't "
+            + 'decode (phone clips are often HEVC/H.265). Try “→ h264” to convert it.';
+          console.warn('[qualia] video qfx: clip produced no frames in 6s —', entry.name,
+            '· likely an unsupported codec (HEVC?); offering convert.');
+          renderList();
+        }
       }
 
       // Camera live/off badge — re-render the source list only on transition.
