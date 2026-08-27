@@ -364,9 +364,9 @@ mode's filter (`'file'` is a member of `'mix'` and `'all'`). Pressing play in th
 UI auto-bumps `audioMode: 'off' → 'mix'` (or `'mic' → 'all'`) so it's turn-key.
 
 The player's UI (picker + drag-drop, transport, scrubber, level, and the two
-session toggles below) lives in its own draggable **tape panel** (`#tape-panel`,
-toggled by the `tape` topbar button) — a floating window like strudel/vox/mixer,
-wired through `makeDraggablePanel('tape', …)`, not in the lower audio HUD card.
+session toggles below) lives in its own draggable **deck panel** (`#deck-panel`,
+toggled by the `deck` topbar button) — a floating window like strudel/vox/mixer,
+wired through `makeDraggablePanel('deck', …)`, not in the lower audio HUD card.
 
 A `BufferSourceNode` is single-shot, so pause/seek are modelled by holding the
 buffer and tracking a play offset (`start(0, offset)`, `startTime = now −
@@ -378,7 +378,7 @@ edges (`onTransport('play'|'pause'|'stop'|'ended')`) that page-init uses to driv
 a **playback-synced recording**. Exposed to the code API as `qualia.player.*`
 (see [`qualia-code-api.md`](../docs/qualia-code-api.md)).
 
-**Session recording (the two tape-panel toggles).** *rec with play* runs the
+**Session recording (the two deck-panel toggles).** *rec with play* runs the
 screen recorder for exactly the length of the track — page-init starts it in
 `onFilePlayClicked` **before** `filePlayer.play()` so the clip catches the first
 sample, `pauseSyncTake`/`resumeSyncTake` mirror the transport onto the recorder
@@ -394,7 +394,7 @@ thread** by the tiny `pcm-tap` AudioWorklet, attached to the rig's passthrough
 analyser in the rig's own ctx via `audio.getStemNode('rig')` — **exactly the
 rig's contribution to the full mix** (same signal `getStemStream` taps). At stop,
 `stem-recorder.js` writes it as a lossless 32-bit-float **WAV** (`wav.js`, no
-network, works offline) or — when the tape panel's format selector is set to
+network, works offline) or — when the deck panel's format selector is set to
 **MP3** — transcodes that WAV through `ffmpeg.wasm` (`mp3-encode.js`, lazy ~31 MB
 CDN core, `libmp3lame @ 320k`), falling back to the WAV (with a toast) if the
 encoder can't load. `MediaRecorder` can't emit WAV/MP3, which is why the stem

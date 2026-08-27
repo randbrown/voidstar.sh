@@ -258,7 +258,7 @@ export function initQualiaPage() {
   const startBtn   = document.getElementById('start-btn');
   const startSilentBtn = document.getElementById('start-silent-btn');
   const audioCard  = document.getElementById('audio-card');
-  const tapePanel  = document.getElementById('tape-panel');
+  const deckPanel  = document.getElementById('deck-panel');
   const videoEl    = document.getElementById('video');
   const fxResetBtn = document.getElementById('btn-fx-reset');
   const host       = document.getElementById('qualia-host');
@@ -506,7 +506,7 @@ export function initQualiaPage() {
     audioMode,
     filePlayerLevel: filePlayer.getLevel(),
     filePlayerLoop:  filePlayer.getLoop(),
-    tapeOpen:       tapePanel ? tapePanel.style.display !== 'none' : false,
+    deckOpen:       deckPanel ? deckPanel.style.display !== 'none' : false,
     recWithPlay,
     recRigStem,
     stemFormat,
@@ -841,7 +841,7 @@ export function initQualiaPage() {
   // recordable mix — gated (like every source) by the audio mode's filter, so
   // it's present in 'mix'/'all'. Adopted as the 'file' source only while it's
   // actually sounding. Play the rig over the top in 'all' mode.
-  const fpRoot     = tapePanel?.querySelector('[data-qp="audio-file"]');
+  const fpRoot     = deckPanel?.querySelector('[data-qp="audio-file"]');
   const fpInput    = fpRoot?.querySelector('[data-qp="file-input"]');
   const fpOpen     = fpRoot?.querySelector('[data-qp="file-open"]');
   const fpName     = fpRoot?.querySelector('[data-qp="file-name"]');
@@ -964,26 +964,26 @@ export function initQualiaPage() {
   if (stored.filePlayerLoop) filePlayer.setLoop(true);
   paintFilePlayer();
 
-  // ── Tape panel: drag / open / close / persist ──────────────────────────────
+  // ── Deck panel: drag / open / close / persist ──────────────────────────────
   // The audio-file source lives in its own draggable window (like strudel/vox),
   // pulled out of the audio HUD card. makeDraggablePanel handles drag + resize +
   // viewport clamping + position persistence; open-state rides the settings snap.
-  const repositionTape = tapePanel ? makeDraggablePanel('tape', tapePanel) : () => {};
-  const btnTape      = document.getElementById('btn-tape');
-  const btnTapeClose = document.getElementById('btn-tape-close');
-  function setTapeOpen(open, persist = true) {
-    if (!tapePanel) return;
-    tapePanel.style.display = open ? '' : 'none';
-    if (open) repositionTape();
-    if (btnTape) btnTape.classList.toggle('active', open);
+  const repositionDeck = deckPanel ? makeDraggablePanel('deck', deckPanel) : () => {};
+  const btnDeck      = document.getElementById('btn-deck');
+  const btnDeckClose = document.getElementById('btn-deck-close');
+  function setDeckOpen(open, persist = true) {
+    if (!deckPanel) return;
+    deckPanel.style.display = open ? '' : 'none';
+    if (open) repositionDeck();
+    if (btnDeck) btnDeck.classList.toggle('active', open);
     if (persist) settings.save();
   }
-  btnTape?.addEventListener('click', () => setTapeOpen(tapePanel?.style.display === 'none', true));
-  btnTapeClose?.addEventListener('click', () => setTapeOpen(false, true));
+  btnDeck?.addEventListener('click', () => setDeckOpen(deckPanel?.style.display === 'none', true));
+  btnDeckClose?.addEventListener('click', () => setDeckOpen(false, true));
   // Initial restore paints the DOM but must NOT settings.save() yet — later
   // session state (recWithPlay, …) isn't declared at this point.
-  if (stored.tapeOpen) setTapeOpen(true, false);
-  else if (btnTape) btnTape.classList.toggle('active', false);
+  if (stored.deckOpen) setDeckOpen(true, false);
+  else if (btnDeck) btnDeck.classList.toggle('active', false);
 
   // ── Pose smoothing slider (lives in audio card under sliders) ────────────
   const smoothInput = document.querySelector('[data-qp="pose-smooth"] input[type=range]');
@@ -4847,10 +4847,10 @@ export function initQualiaPage() {
   //     as lossless PCM off the audio thread and written as WAV (offline) or MP3
   //     (via ffmpeg.wasm) per the format selector. Both recorders share one
   //     start/pause/stop timeline.
-  const fpRecPlay = tapePanel?.querySelector('[data-qp="file-recplay"]');
-  const fpRigStem = tapePanel?.querySelector('[data-qp="file-rigstem"]');
-  const fpStemFmt = tapePanel?.querySelector('[data-qp="stem-format"]');
-  const tapeStatus = document.getElementById('tape-status');
+  const fpRecPlay = deckPanel?.querySelector('[data-qp="file-recplay"]');
+  const fpRigStem = deckPanel?.querySelector('[data-qp="file-rigstem"]');
+  const fpStemFmt = deckPanel?.querySelector('[data-qp="stem-format"]');
+  const deckStatus = document.getElementById('deck-status');
   let recWithPlay = stored.recWithPlay === true;
   let recRigStem  = stored.recRigStem === true && recWithPlay;
   let stemFormat  = stored.stemFormat === 'mp3' ? 'mp3' : 'wav';
@@ -4859,14 +4859,14 @@ export function initQualiaPage() {
   const stemRecorder = createStemRecorder({
     getStemNode: () => audio.getStemNode?.('rig'),
     getFormat:   () => stemFormat,
-    onStatus: (msg) => { if (tapeStatus) tapeStatus.textContent = msg; },
+    onStatus: (msg) => { if (deckStatus) deckStatus.textContent = msg; },
     onSave:  ({ filename, wavFallback }) => {
-      if (tapeStatus) tapeStatus.textContent = '';
+      if (deckStatus) deckStatus.textContent = '';
       showRecToastError(wavFallback
         ? `rig stem: MP3 encoder unavailable (offline?) — saved WAV · ${filename}`
         : `rig stem saved · ${filename}`, wavFallback ? 8000 : 6000);
     },
-    onError: (e) => { if (tapeStatus) tapeStatus.textContent = ''; showRecToastError(`rig stem: ${e?.message || e}`); },
+    onError: (e) => { if (deckStatus) deckStatus.textContent = ''; showRecToastError(`rig stem: ${e?.message || e}`); },
   });
 
   function paintSessionRec() {
@@ -7531,7 +7531,7 @@ export function initQualiaPage() {
   // feel "stuck". Raise whichever panel you touch (or open) to the top of the
   // band (19) and drop the rest back to the CSS default — classic window focus,
   // kept just under the topbar (20) so nothing covers the chrome.
-  const FLOAT_PANELS = ['strudel-panel', 'sequencer-panel', 'vocoder-panel', 'mixer-panel', 'looper-panel', 'tape-panel'];
+  const FLOAT_PANELS = ['strudel-panel', 'sequencer-panel', 'vocoder-panel', 'mixer-panel', 'looper-panel', 'deck-panel'];
   const FLOAT_SEL = FLOAT_PANELS.map((id) => '#' + id).join(',');
   // The bottom HUD (tab bar + popped-out cards) is part of the same focus
   // band: at its CSS defaults (stack 15, tabs 16) a floating editor dragged
@@ -7573,7 +7573,7 @@ export function initQualiaPage() {
   const PANEL_TOGGLE_BTNS = {
     'btn-strudel': 'strudel-panel', 'btn-sequencer': 'sequencer-panel',
     'btn-vocoder': 'vocoder-panel', 'btn-mixer': 'mixer-panel', 'btn-looper': 'looper-panel',
-    'btn-tape': 'tape-panel',
+    'btn-deck': 'deck-panel',
   };
   for (const [btnId, panelId] of Object.entries(PANEL_TOGGLE_BTNS)) {
     document.getElementById(btnId)?.addEventListener('click', () => {

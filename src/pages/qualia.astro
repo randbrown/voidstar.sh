@@ -1901,7 +1901,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
          transport cluster stays whole and only spills to a second line
          when there's genuinely no room. The × close is not part of this
          flow — it's pinned to the corner (see the panel-close rule). */
-      #sequencer-header, #strudel-header, #vocoder-header, #looper-header, #tape-header {
+      #sequencer-header, #strudel-header, #vocoder-header, #looper-header, #deck-header {
         flex-wrap: wrap; gap: 0.4rem; padding: 0.4rem 0.6rem;
       }
       .seq-name-input { flex: 1 1 5ch; min-width: 4ch; max-width: none; }
@@ -2964,10 +2964,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       .looper-track-head { min-width: 0; }
     }
 
-    /* Tape panel — the audio-file source, pulled out of the audio HUD card into
+    /* Deck panel — the audio-file source, pulled out of the audio HUD card into
        its own draggable window (same shape as #vocoder-panel). Compact: the body
        is just the file transport. */
-    #tape-panel {
+    #deck-panel {
       position: fixed; left: 50%; top: 4.5rem;
       transform: translateX(-50%);
       z-index: 18;
@@ -2983,7 +2983,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       backdrop-filter: blur(8px);
       /* resized via panel-pos.js corner/edge handles (any corner), not CSS resize */
     }
-    #tape-header {
+    #deck-header {
       display: flex; align-items: center; gap: 0.6rem;
       padding: 0.45rem 0.75rem;
       background: var(--surface-glass);
@@ -2992,18 +2992,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       cursor: grab; user-select: none;
       touch-action: none;
     }
-    #tape-header.dragging { cursor: grabbing; }
-    #tape-header .ctrl-btn { cursor: pointer; }
-    #tape-header .sp-status { margin-left: auto; }
-    #btn-tape-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
-    #tape-body {
+    #deck-header.dragging { cursor: grabbing; }
+    #deck-header .ctrl-btn { cursor: pointer; }
+    #deck-header .sp-status { margin-left: auto; }
+    #btn-deck-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    #deck-body {
       flex: 1; min-height: 0; overflow: auto;
       padding: 0.6rem 0.7rem;
       display: flex; flex-direction: column; gap: 0.5rem;
     }
     /* Inside the panel the file player fills the body (no extra card chrome —
        the panel already provides it). */
-    #tape-body .qp-fileplayer { border: none; background: none; padding: 0; }
+    #deck-body .qp-fileplayer { border: none; background: none; padding: 0; }
     .qp-file-stemfmt {
       display: flex; align-items: center; gap: 0.5rem;
       font-size: 0.7rem; color: var(--muted);
@@ -3012,7 +3012,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .qp-file-stemfmt.dim { opacity: 0.5; }
     .qp-file-stemfmt select { flex: 1; min-width: 0; }
     @media (max-width: 700px) {
-      #tape-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 94vw; }
+      #deck-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 94vw; }
     }
 
     /* Vocoder panel — same draggable-window shape as #strudel-panel /
@@ -3171,7 +3171,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
       <button class="ctrl-btn" id="btn-looper" title="Rig — live signal + looper (O)">rig</button>
       <button class="ctrl-btn" id="btn-mixer" title="Mixer — levels, mutes, limiters &amp; clip meters">mix</button>
-      <button class="ctrl-btn" id="btn-tape" title="Tape — play an audio file (mp3/wav/…) through the qualia signal; playback-synced screen recording + rig stem">tape</button>
+      <button class="ctrl-btn" id="btn-deck" title="Deck — play an audio file (mp3/wav/…) through the qualia signal; playback-synced screen recording + rig stem">deck</button>
       <div class="qg-group qg-capture" data-group="capture">
         <button class="ctrl-btn" id="btn-output" title="Output window — a chrome-free popup mirroring the clean fx + overlay composite (no HUD), for a projector or OBS capture; the main window keeps its panels. Tap again to close.">⧉</button>
         <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
@@ -3496,7 +3496,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div class="qp-body">
       <div class="qp-presets" data-qp="audio-presets"></div>
       <!-- The audio-file source (play a track through the qualia signal) lives in
-           its own draggable "tape" panel now — see #tape-panel below. -->
+           its own draggable "deck" panel now — see #deck-panel below. -->
       <div class="qp-row" data-qp="audio-mic-gain" title="Mic PRE gain — scales the mic into the visual reactivity ('mic'/'all' audio modes), the monitor, and the recording. Works even with the output below muted/at 0, so a room mic can drive the visuals silently.">
         <label>mic gain<span class="qp-val">1.00×</span></label>
         <input type="range" min="0" max="2" step="0.01" value="1">
@@ -4684,19 +4684,19 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   </div><!-- /#rig-sections -->
 </div>
 
-<!-- Tape panel — play an audio file (mp3/wav/…) through the qualia signal: it
+<!-- Deck panel — play an audio file (mp3/wav/…) through the qualia signal: it
      drives the visual reactivity, monitors out to the speakers/PA, and lands in
      the screen recording. Draggable window, sibling of #vocoder-panel. Pressing
      play from a mode that excludes the file source auto-bumps 'off' → 'mix' (or
      'mic' → 'all'); play the rig over the top in 'all'. The two session toggles
      turn a playback into a hands-off, exactly-track-length capture. -->
-<div id="tape-panel" style="display:none">
-  <div id="tape-header">
-    <span class="sp-title">tape <span class="sp-tag">// audio file</span></span>
-    <span class="sp-status" id="tape-status"></span>
-    <button class="ctrl-btn" id="btn-tape-close" title="Close">×</button>
+<div id="deck-panel" style="display:none">
+  <div id="deck-header">
+    <span class="sp-title">deck <span class="sp-tag">// audio file</span></span>
+    <span class="sp-status" id="deck-status"></span>
+    <button class="ctrl-btn" id="btn-deck-close" title="Close">×</button>
   </div>
-  <div id="tape-body">
+  <div id="deck-body">
     <div class="qp-fileplayer" data-qp="audio-file">
       <div class="qp-file-pick">
         <button type="button" class="ctrl-btn" data-qp="file-open" title="Load an audio file (mp3, wav, m4a, ogg, flac…) to play through qualia">load file…</button>
