@@ -32,6 +32,7 @@ import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
 import { createModem } from './modem.js';
+import { createAudioFilePlayer } from './audio-file.js';
 import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
@@ -500,6 +501,8 @@ export function initQualiaPage() {
     fxId:           core.activeId(),
     audioTunables:  audio.getTunables(),
     audioMode,
+    filePlayerLevel: filePlayer.getLevel(),
+    filePlayerLoop:  filePlayer.getLoop(),
     paused:         core.isPaused(),
     zen:            core.isZen(),
     poseSource:     poseSelect.value,
@@ -824,6 +827,144 @@ export function initQualiaPage() {
     audioPanel.setTunables(AUDIO_PRESETS.default);
     audioPanel.setActivePreset('default');
   }
+
+  // ── Audio-file player ──────────────────────────────────────────────────────
+  // Play an existing track (mp3/wav/…) through the qualia signal: it drives the
+  // visual reactivity, monitors out to the speakers/PA, and lands in the
+  // recordable mix — gated (like every source) by the audio mode's filter, so
+  // it's present in 'mix'/'all'. Adopted as the 'file' source only while it's
+  // actually sounding. Play the rig over the top in 'all' mode.
+  const fpRoot     = audioCard.querySelector('[data-qp="audio-file"]');
+  const fpInput    = fpRoot?.querySelector('[data-qp="file-input"]');
+  const fpOpen     = fpRoot?.querySelector('[data-qp="file-open"]');
+  const fpName     = fpRoot?.querySelector('[data-qp="file-name"]');
+  const fpPlay     = fpRoot?.querySelector('[data-qp="file-play"]');
+  const fpStop     = fpRoot?.querySelector('[data-qp="file-stop"]');
+  const fpLoop     = fpRoot?.querySelector('[data-qp="file-loop"]');
+  const fpSeek     = fpRoot?.querySelector('[data-qp="file-seek"] input[type=range]');
+  const fpTime     = fpRoot?.querySelector('[data-qp="file-time"]');
+  const fpLevelRow = fpRoot?.querySelector('[data-qp="file-level"]');
+  const fpLevel    = fpLevelRow?.querySelector('input[type=range]');
+  const fpLevelVal = fpLevelRow?.querySelector('.qp-val');
+  let _fpScrubbing = false;
+  const fmtClock = (s) => {
+    s = Math.max(0, Math.floor(s || 0));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+
+  // Adopt/release the player's output analyser as the 'file' audio source —
+  // present only while the track is actually playing (audio-file.js calls this
+  // on every play / pause / stop / natural end).
+  function syncFilePlayerFeed() {
+    try {
+      const an   = filePlayer.getFeedAnalyser?.();
+      const fctx = filePlayer.getContext?.();
+      if (filePlayer.isActive?.() && an && fctx) audio.adoptAnalyser(fctx, an, 'file');
+      else audio.releaseAdopted('file');
+    } catch (e) {
+      console.warn('[qualia] file player feed sync failed:', e);
+    }
+  }
+
+  function paintFilePlayer(st) {
+    const s = st || filePlayer.getState();
+    if (fpName) {
+      fpName.textContent = s.name || 'no file';
+      fpName.classList.toggle('loaded', !!s.ready);
+      fpName.title = s.name || 'No file loaded';
+    }
+    if (fpPlay) {
+      fpPlay.disabled = !s.ready;
+      fpPlay.textContent = s.playing ? 'pause' : 'play';
+      fpPlay.classList.toggle('active', s.playing);
+    }
+    if (fpStop) fpStop.disabled = !s.ready;
+    if (fpLoop) fpLoop.classList.toggle('active', s.loop);
+    if (fpSeek) {
+      fpSeek.disabled = !s.ready;
+      if (!_fpScrubbing) {
+        fpSeek.max = String(s.duration || 1);
+        fpSeek.value = String(s.position || 0);
+      }
+    }
+    if (fpTime) fpTime.textContent = `${fmtClock(s.position)} / ${fmtClock(s.duration)}`;
+  }
+
+  const filePlayer = createAudioFilePlayer({
+    onFeedChange: () => syncFilePlayerFeed(),
+    onState:      (s) => paintFilePlayer(s),
+  });
+
+  async function loadPlayerFile(file) {
+    if (!file) return;
+    if (fpName) { fpName.textContent = 'loading…'; fpName.classList.remove('loaded'); }
+    const ok = await filePlayer.load(file);
+    if (!ok && fpName) { fpName.textContent = 'load failed'; fpName.title = 'Could not decode that file'; }
+    paintFilePlayer();
+  }
+
+  fpOpen?.addEventListener('click', () => fpInput?.click());
+  fpInput?.addEventListener('change', () => {
+    const f = fpInput.files && fpInput.files[0];
+    if (f) loadPlayerFile(f);
+    fpInput.value = '';   // let the same file be re-picked later
+  });
+  // Drag-and-drop an audio file onto the player box.
+  if (fpRoot) {
+    fpRoot.addEventListener('dragover', (e) => { e.preventDefault(); fpRoot.classList.add('drag'); });
+    fpRoot.addEventListener('dragleave', () => fpRoot.classList.remove('drag'));
+    fpRoot.addEventListener('drop', (e) => {
+      e.preventDefault();
+      fpRoot.classList.remove('drag');
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f && /^audio\//.test(f.type || '')) loadPlayerFile(f);
+    });
+  }
+
+  fpPlay?.addEventListener('click', async () => {
+    if (filePlayer.isPlaying()) { filePlayer.pause(); return; }
+    // A file only drives the visuals / lands in the recording when the audio
+    // mode includes the 'file' source ('mix' or 'all'). If we're in a mode that
+    // excludes it, bump up so pressing play is turn-key: 'off' → 'mix' (engines
+    // only), 'mic' → 'all' (keep the mic, add the engines). Audible either way
+    // via the player's own destination.
+    try {
+      if (audioMode === 'off') await setAudioMode('mix');
+      else if (audioMode === 'mic') await setAudioMode('all');
+    } catch { /* fall through and play anyway */ }
+    filePlayer.play();
+  });
+  fpStop?.addEventListener('click', () => filePlayer.stop());
+  fpLoop?.addEventListener('click', () => { filePlayer.setLoop(!filePlayer.getLoop()); settings.save(); });
+
+  if (fpSeek) {
+    fpSeek.addEventListener('input', () => {
+      _fpScrubbing = true;
+      if (fpTime) fpTime.textContent = `${fmtClock(parseFloat(fpSeek.value))} / ${fmtClock(filePlayer.getDuration())}`;
+    });
+    fpSeek.addEventListener('change', () => { filePlayer.seek(parseFloat(fpSeek.value)); _fpScrubbing = false; });
+    fpSeek.addEventListener('pointerup', () => { _fpScrubbing = false; });
+  }
+
+  if (fpLevel && fpLevelVal) {
+    fpLevel.addEventListener('input', () => {
+      const v = parseFloat(fpLevel.value);
+      fpLevelVal.textContent = `${Math.round(v * 100)}%`;
+      filePlayer.setLevel(v);
+      settings.save();
+    });
+  }
+
+  // Restore persisted level + loop, then paint the initial (empty) state.
+  if (typeof stored.filePlayerLevel === 'number') {
+    filePlayer.setLevel(stored.filePlayerLevel);
+    if (fpLevel && fpLevelVal) {
+      fpLevel.value = String(stored.filePlayerLevel);
+      fpLevelVal.textContent = `${Math.round(stored.filePlayerLevel * 100)}%`;
+    }
+  }
+  if (stored.filePlayerLoop) filePlayer.setLoop(true);
+  paintFilePlayer();
 
   // ── Pose smoothing slider (lives in audio card under sliders) ────────────
   const smoothInput = document.querySelector('[data-qp="pose-smooth"] input[type=range]');
@@ -1501,8 +1642,8 @@ export function initQualiaPage() {
     switch (audioMode) {
       case 'off': audio.setSourceFilter([]);                                                            break;
       case 'mic': audio.setSourceFilter(['mic']);                                                       break;
-      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem']);         break;
-      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem']);  break;
+      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file']);         break;
+      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file']);  break;
     }
   }
 
@@ -3412,6 +3553,9 @@ export function initQualiaPage() {
       // The modem fires one-shot tone sequences — there's no transport to
       // resume, so pause just gates new sound and cuts anything mid-flight.
       try { modem.setPaused?.(true); } catch (e) { console.warn('[qualia] pause modem failed:', e); }
+      // The file player HAS a transport — setPaused remembers whether it was
+      // playing and resumes it on unpause, so the track rides the page pause.
+      try { filePlayer.setPaused?.(true); } catch (e) { console.warn('[qualia] pause file player failed:', e); }
     } else if (!on && _pauseAudioState) {
       const s = _pauseAudioState;
       _pauseAudioState = null;
@@ -3426,6 +3570,7 @@ export function initQualiaPage() {
       try { looper.setRigPaused?.(false); } catch (e) { console.warn('[qualia] resume rig failed:', e); }
       try { vocoder?.setMuted?.(s.vocoderMuted); } catch (e) { console.warn('[qualia] resume vocoder unmute failed:', e); }
       try { modem.setPaused?.(false); } catch (e) { console.warn('[qualia] resume modem failed:', e); }
+      try { filePlayer.setPaused?.(false); } catch (e) { console.warn('[qualia] resume file player failed:', e); }
     }
     btnPause.classList.toggle('active', on);
     btnPause.textContent = on ? 'paused' : 'pause';
@@ -7743,7 +7888,7 @@ export function initQualiaPage() {
   // paths as the UI controls (select handlers, preset buttons, sliders) so
   // code-driven changes keep the chrome in sync and persist identically.
   installCodeApi({
-    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer, modem,
+    core, mesh, strudel, audio, sequencer, looper, vocoder, harmonizer, modem, filePlayer,
     pose, overlay, camWalk, logoMark, fader,
     echoCtl: { isEnabled: () => echo.isEnabled(), setEnabled: setEchoEnabled },
     page: {

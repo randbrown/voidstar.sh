@@ -363,6 +363,19 @@ qualia.audio.preset("metal")       // default|ambient|acoustic|edm|metal
 qualia.audio.tunables({ ema: .4 }) // {gain, ema, thresh, cooldown}
 qualia.audio.levels(); qualia.audio.clipping()
 
+// Audio-file player — run an existing track through the qualia signal (drives
+// reactivity + monitors to the speakers + lands in the recordable mix; present
+// in the 'mix'/'all' audio modes). The audio-card UI has a file picker + a
+// scrubber; from code you can also load a (CORS-reachable) URL. Play the rig
+// over the top in 'all' mode.
+await qualia.player.load("https://media.voidstar.sh/set/track.mp3")
+qualia.player.play(); qualia.player.pause(); qualia.player.toggle(); qualia.player.stop()
+qualia.player.seek(90)             // jump to 1:30
+qualia.player.loop(true)           // get()/set() — loop the track
+qualia.player.level(0.8)           // get()/set() — playback level (0..~1.5)
+qualia.player.position(); qualia.player.duration(); qualia.player.playing()
+qualia.player.state()              // {ready, playing, loop, level, name, duration, position}
+
 qualia.mixer.setLevel("strudel", .7)   // 'mic'|'rig'|'strudel'|'seq'|'vox'
 qualia.mixer.setMuted("seq", true); qualia.mixer.setLimiter("vox", true)
 

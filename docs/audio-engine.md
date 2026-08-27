@@ -21,6 +21,8 @@ All paths are under `src/lib/qualia/`.
                                   ▼
                           all qualia fx (visuals)
 
+ file player (own ctx): buffer → source → level → limiter → destination
+                                         └─► analyser ──► adopted as 'file'
  rig (native ctx):  in → GEQ(7-band) → comp → Earth → earth gate → Metal → metal gate
                        → neural amp → EQ → cab IR
                        → HPF → noise gate → ping-pong delay → reverb → PEQ(8-band parametric)
@@ -342,6 +344,32 @@ allocates a `Float32Array` every call and is called per-frame — hoist the scra
 (backlog).
 
 ---
+
+## audio-file.js — play an existing track through the signal
+
+`createAudioFilePlayer({ onFeedChange, onState })` decodes an audio file
+(mp3/wav/m4a/ogg/flac — a `File`/`Blob`, `ArrayBuffer`, or CORS-reachable URL)
+into an `AudioBuffer` and plays it back with a real transport
+(`play`/`pause`/`seek`/`setLoop`/`setLevel`). It's the "run a finished track
+through qualia" path — a projected set built around a recording, with the rig
+played live over the top. Textbook instance of the two audio conventions: a
+**private `AudioContext`** (so it reaches the speakers without entangling the
+analysis path or Strudel's mute-patch), a `makeLimiter` **brickwall before
+destination**, the output tagged `__qualiaBypassMute`, and an analyser teed off
+the bus so `page-init` can `audio.adoptAnalyser(ctx, analyser, 'file')` — which
+makes the track drive the visuals and land in recordings for free. The feed is
+adopted **only while it's actually sounding** (`onFeedChange` fires on every
+play/pause/stop/natural-end), gated like every source by the current audio
+mode's filter (`'file'` is a member of `'mix'` and `'all'`). Pressing play in the
+audio-card UI auto-bumps `audioMode: 'off' → 'mix'` so it's turn-key.
+
+A `BufferSourceNode` is single-shot, so pause/seek are modelled by holding the
+buffer and tracking a play offset (`start(0, offset)`, `startTime = now −
+offset`); nothing runs on the audio thread and a ~10 Hz timer only ticks while
+playing, purely to push the scrubber position to the UI. `setPaused(on)` is the
+page pause gate — it remembers whether the track was playing and resumes it on
+unpause, so the transport rides the page's Space/pause. Exposed to the code API
+as `qualia.player.*` (see [`qualia-code-api.md`](../docs/qualia-code-api.md)).
 
 ## modem.js — dial-up modem tone simulator
 
