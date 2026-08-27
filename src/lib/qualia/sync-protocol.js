@@ -65,6 +65,8 @@ export const CTL_ACTIONS = new Set([
   'strudelPlayStop', 'seqPlayStop', 'seqUndo', 'seqRedo', 'seqClear',
   // vox + global transport
   'voxMute', 'pause', 'blackout',
+  // deck (audio-file backing track): play/pause · stop · arm rec-with-play · mute
+  'deckPlayStop', 'deckStop', 'deckRecArm', 'deckMute',
   // quale / phase navigation + camera
   'qualePrev', 'qualeNext', 'phasePrev', 'phaseNext', 'camNext',
   // stage automation toggles + set clock
@@ -84,6 +86,7 @@ export const CTL_SLIDERS = {
   'earth.gain': { min: 0,    max: 1 },
   'metal.gain': { min: 0,    max: 1 },
   'seq.volume': { min: 0,    max: 1.5 },
+  'deck.level': { min: 0,    max: 1.5 },
   'cps':        { min: 0.05, max: 4 },
 };
 

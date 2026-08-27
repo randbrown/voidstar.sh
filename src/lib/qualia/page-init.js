@@ -33,6 +33,7 @@ import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
 import { createModem } from './modem.js';
 import { createAudioFilePlayer } from './audio-file.js';
+import { traceWave, idleTrace, computePeaks } from './scope-draw.js';
 import { createStemRecorder } from './stem-recorder.js';
 import { makeDraggablePanel } from './panel-pos.js';
 import { createMixer } from './mixer.js';
@@ -506,6 +507,7 @@ export function initQualiaPage() {
     audioMode,
     filePlayerLevel: filePlayer.getLevel(),
     filePlayerLoop:  filePlayer.getLoop(),
+    filePlayerMuted: filePlayer.getMuted(),
     deckOpen:       deckPanel ? deckPanel.style.display !== 'none' : false,
     recWithPlay,
     recRigStem,
@@ -845,10 +847,15 @@ export function initQualiaPage() {
   const fpInput    = fpRoot?.querySelector('[data-qp="file-input"]');
   const fpOpen     = fpRoot?.querySelector('[data-qp="file-open"]');
   const fpName     = fpRoot?.querySelector('[data-qp="file-name"]');
-  const fpPlay     = fpRoot?.querySelector('[data-qp="file-play"]');
-  const fpStop     = fpRoot?.querySelector('[data-qp="file-stop"]');
+  // Transport + mute live in the deck HEADER now (parity with rig/strudel/vox),
+  // so they're addressed by id rather than scoped to the file-player body.
+  const fpPlay     = document.getElementById('btn-deck-play');
+  const fpStop     = document.getElementById('btn-deck-stop');
+  const fpMute     = document.getElementById('btn-deck-mute');
   const fpLoop     = fpRoot?.querySelector('[data-qp="file-loop"]');
-  const fpSeek     = fpRoot?.querySelector('[data-qp="file-seek"] input[type=range]');
+  const fpWaveWrap = fpRoot?.querySelector('[data-qp="file-wave-wrap"]');
+  const fpWave     = fpRoot?.querySelector('canvas[data-qp="file-wave"]');
+  const fpScope    = fpRoot?.querySelector('canvas[data-qp="file-scope"]');
   const fpTime     = fpRoot?.querySelector('[data-qp="file-time"]');
   const fpLevelRow = fpRoot?.querySelector('[data-qp="file-level"]');
   const fpLevel    = fpLevelRow?.querySelector('input[type=range]');
@@ -882,19 +889,27 @@ export function initQualiaPage() {
     }
     if (fpPlay) {
       fpPlay.disabled = !s.ready;
-      fpPlay.textContent = s.playing ? 'pause' : 'play';
+      fpPlay.textContent = s.playing ? '⏸' : '▶';
       fpPlay.classList.toggle('active', s.playing);
     }
     if (fpStop) fpStop.disabled = !s.ready;
-    if (fpLoop) fpLoop.classList.toggle('active', s.loop);
-    if (fpSeek) {
-      fpSeek.disabled = !s.ready;
-      if (!_fpScrubbing) {
-        fpSeek.max = String(s.duration || 1);
-        fpSeek.value = String(s.position || 0);
-      }
+    if (fpMute) {
+      fpMute.textContent = s.muted ? 'mute' : 'live';
+      fpMute.classList.toggle('muted', s.muted);
     }
-    if (fpTime) fpTime.textContent = `${fmtClock(s.position)} / ${fmtClock(s.duration)}`;
+    if (fpLoop) fpLoop.classList.toggle('active', s.loop);
+    // Mirror the level here too, so a move from the mixer's deck channel shows
+    // on the panel's own slider (setting .value to the same string is a no-op
+    // for the 'input' event, so this never feeds back on the user's own drag).
+    if (fpLevel && fpLevelVal && typeof s.level === 'number') {
+      const lv = String(s.level);
+      if (fpLevel.value !== lv) fpLevel.value = lv;
+      fpLevelVal.textContent = `${Math.round(s.level * 100)}%`;
+    }
+    if (fpWaveWrap) fpWaveWrap.classList.toggle('loaded', !!s.ready);
+    // The playhead + waveform are drawn by the deck rAF loop (drawDeckWave);
+    // here we only keep the clock in sync (leave it alone mid-scrub).
+    if (fpTime && !_fpScrubbing) fpTime.textContent = `${fmtClock(s.position)} / ${fmtClock(s.duration)}`;
   }
 
   const filePlayer = createAudioFilePlayer({
@@ -934,26 +949,170 @@ export function initQualiaPage() {
   fpPlay?.addEventListener('click', () => { void onFilePlayClicked(); });
   fpStop?.addEventListener('click', () => filePlayer.stop());
   fpLoop?.addEventListener('click', () => { filePlayer.setLoop(!filePlayer.getLoop()); settings.save(); });
+  fpMute?.addEventListener('click', () => { filePlayer.setMuted(!filePlayer.getMuted()); settings.save(); });
 
-  if (fpSeek) {
-    fpSeek.addEventListener('input', () => {
+  // ── Deck waveform (scrubber) + realtime scope ──────────────────────────────
+  // The overall waveform doubles as the scrubber — click/drag maps x → time and
+  // seeks on release (a single seek, so dragging never restarts the source
+  // repeatedly). A live playhead + a small output scope draw from ONE rAF loop
+  // gated on the deck panel being open (idle-cheap when paused, fully stopped
+  // when the panel is closed). Peaks are computed once per track and cached.
+  let _scrubTime = -1;                    // target time while dragging (−1 = not dragging)
+  let wavePeaks = null, waveBuf = null;   // cached min/max peaks + the buffer they're for
+  let waveOff = null, waveOffKey = '';    // offscreen static-waveform bitmap + its (size,buffer) key
+  let scopeBuf = null;                    // reused byte buffer for the scope trace
+  let deckRAF = 0, deckSkip = false;
+
+  const deckDpr = () => Math.min(2, window.devicePixelRatio || 1);
+  // Size a canvas's backing store to its layout box (DPR-aware); true if changed.
+  function fitDeckCanvas(cv) {
+    if (!cv) return false;
+    const r = cv.getBoundingClientRect();
+    const w = Math.max(1, Math.round(r.width * deckDpr()));
+    const h = Math.max(1, Math.round(r.height * deckDpr()));
+    if (cv.width === w && cv.height === h) return false;
+    cv.width = w; cv.height = h;
+    return true;
+  }
+
+  // Render the static waveform to an offscreen bitmap, rebuilt only when the
+  // track or the canvas size changes (peaks are re-walked only on a new track).
+  function ensureWaveOffscreen() {
+    const buf = filePlayer.getBuffer?.();
+    if (!buf) { wavePeaks = waveBuf = waveOff = null; waveOffKey = ''; return null; }
+    if (buf !== waveBuf) { wavePeaks = computePeaks(buf, 2048); waveBuf = buf; }
+    const W = fpWave.width, H = fpWave.height;
+    const key = `${W}x${H}:${wavePeaks ? wavePeaks.min.length : 0}:${buf.length}`;
+    if (waveOff && waveOffKey === key) return waveOff;
+    if (!waveOff) waveOff = document.createElement('canvas');
+    waveOff.width = W; waveOff.height = H;
+    const g = waveOff.getContext('2d');
+    const mid = H / 2;
+    g.clearRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(255,255,255,0.06)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(0, mid + 0.5); g.lineTo(W, mid + 0.5); g.stroke();
+    if (wavePeaks) {
+      const bins = wavePeaks.min.length, amp = mid * 0.94;
+      g.strokeStyle = 'rgba(34,211,238,0.5)'; g.lineWidth = 1; g.beginPath();
+      for (let x = 0; x < W; x++) {
+        const b0 = Math.floor(x / W * bins);
+        const b1 = Math.max(b0 + 1, Math.floor((x + 1) / W * bins));
+        let lo = 1, hi = -1;
+        for (let b = b0; b < b1 && b < bins; b++) {
+          if (wavePeaks.min[b] < lo) lo = wavePeaks.min[b];
+          if (wavePeaks.max[b] > hi) hi = wavePeaks.max[b];
+        }
+        if (hi < lo) { lo = 0; hi = 0; }
+        g.moveTo(x + 0.5, mid - hi * amp);
+        g.lineTo(x + 0.5, mid - lo * amp);
+      }
+      g.stroke();
+    }
+    waveOffKey = key;
+    return waveOff;
+  }
+
+  function drawDeckWave() {
+    if (!fpWave) return;
+    fitDeckCanvas(fpWave);
+    const g = fpWave.getContext('2d');
+    const W = fpWave.width, H = fpWave.height;
+    g.clearRect(0, 0, W, H);
+    const off = ensureWaveOffscreen();
+    if (!off) return;                       // no track loaded — empty label shows through
+    g.drawImage(off, 0, 0);
+    const dur = filePlayer.getDuration?.() || 0;
+    if (dur > 0) {
+      const t = _scrubTime >= 0 ? _scrubTime : (filePlayer.getPosition?.() || 0);
+      const x = Math.max(0, Math.min(1, t / dur)) * W;
+      g.fillStyle = 'rgba(34,211,238,0.10)';          // played-region tint
+      g.fillRect(0, 0, x, H);
+      g.strokeStyle = _scrubTime >= 0 ? 'rgba(244,114,182,0.95)' : 'rgba(34,211,238,0.95)';
+      g.lineWidth = Math.max(1, Math.round(deckDpr()));
+      g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, H); g.stroke();
+    }
+  }
+
+  function drawDeckScope() {
+    if (!fpScope) return;
+    fitDeckCanvas(fpScope);
+    const g = fpScope.getContext('2d');
+    const W = fpScope.width, H = fpScope.height, mid = H / 2;
+    g.clearRect(0, 0, W, H);
+    g.lineWidth = 1; g.strokeStyle = 'rgba(255,255,255,0.06)';
+    g.beginPath(); g.moveTo(0, mid); g.lineTo(W, mid); g.stroke();
+    const an = filePlayer.isActive?.() ? filePlayer.getFeedAnalyser?.() : null;
+    if (an) {
+      const n = an.fftSize;
+      if (!scopeBuf || scopeBuf.length !== n) scopeBuf = new Uint8Array(n);
+      an.getByteTimeDomainData(scopeBuf);
+      const peak = traceWave(g, scopeBuf, n, W, mid, 1);   // true-scale (file plays near full-scale)
+      g.lineWidth = Math.max(1, Math.round(deckDpr()));
+      g.strokeStyle = peak > 0.985 ? 'rgba(244,114,182,0.95)' : 'rgba(34,211,238,0.9)';
+      g.stroke();
+    } else {
+      idleTrace(g, W, mid);                  // faint sine when the track is silent
+    }
+  }
+
+  function deckDrawLoop() {
+    // Self-stop when the panel is closed; setDeckOpen restarts it on open.
+    if (!deckPanel || deckPanel.style.display === 'none') { deckRAF = 0; return; }
+    deckRAF = requestAnimationFrame(deckDrawLoop);
+    deckSkip = !deckSkip;
+    if (deckSkip) return;                    // halve frames → ~30 fps on a 60 Hz display
+    drawDeckWave();
+    drawDeckScope();
+  }
+  function startDeckDraw() { if (!deckRAF) deckDrawLoop(); }
+  function stopDeckDraw()  { if (deckRAF) cancelAnimationFrame(deckRAF); deckRAF = 0; }
+
+  if (fpWaveWrap && fpWave) {
+    const waveTimeAt = (clientX) => {
+      const r = fpWave.getBoundingClientRect();
+      const frac = r.width > 0 ? (clientX - r.left) / r.width : 0;
+      return Math.max(0, Math.min(1, frac)) * (filePlayer.getDuration?.() || 0);
+    };
+    const showScrub = () => { if (fpTime) fpTime.textContent = `${fmtClock(_scrubTime)} / ${fmtClock(filePlayer.getDuration())}`; };
+    let wavePid = null;
+    fpWaveWrap.addEventListener('pointerdown', (e) => {
+      if (!filePlayer.isReady?.()) return;
+      wavePid = e.pointerId;
       _fpScrubbing = true;
-      if (fpTime) fpTime.textContent = `${fmtClock(parseFloat(fpSeek.value))} / ${fmtClock(filePlayer.getDuration())}`;
+      _scrubTime = waveTimeAt(e.clientX);
+      showScrub();
+      try { fpWaveWrap.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault();
     });
-    fpSeek.addEventListener('change', () => { filePlayer.seek(parseFloat(fpSeek.value)); _fpScrubbing = false; });
-    fpSeek.addEventListener('pointerup', () => { _fpScrubbing = false; });
+    fpWaveWrap.addEventListener('pointermove', (e) => {
+      if (wavePid === null || e.pointerId !== wavePid) return;
+      _scrubTime = waveTimeAt(e.clientX);
+      showScrub();
+    });
+    const waveCommit = (e) => {
+      if (wavePid === null || e.pointerId !== wavePid) return;
+      const t = _scrubTime;
+      _scrubTime = -1; _fpScrubbing = false; wavePid = null;
+      try { fpWaveWrap.releasePointerCapture(e.pointerId); } catch {}
+      if (t >= 0) filePlayer.seek(t);
+    };
+    fpWaveWrap.addEventListener('pointerup', waveCommit);
+    fpWaveWrap.addEventListener('pointercancel', waveCommit);
   }
 
   if (fpLevel && fpLevelVal) {
-    fpLevel.addEventListener('input', () => {
-      const v = parseFloat(fpLevel.value);
+    const applyDeckLevel = (v) => {
+      fpLevel.value = String(v);
       fpLevelVal.textContent = `${Math.round(v * 100)}%`;
       filePlayer.setLevel(v);
       settings.save();
-    });
+    };
+    fpLevel.addEventListener('input', () => applyDeckLevel(parseFloat(fpLevel.value)));
+    // Double-click to reset to unity (100%) — same convention as the rig sliders.
+    fpLevel.addEventListener('dblclick', () => applyDeckLevel(1));
   }
 
-  // Restore persisted level + loop, then paint the initial (empty) state.
+  // Restore persisted level + loop + mute, then paint the initial (empty) state.
   if (typeof stored.filePlayerLevel === 'number') {
     filePlayer.setLevel(stored.filePlayerLevel);
     if (fpLevel && fpLevelVal) {
@@ -962,6 +1121,7 @@ export function initQualiaPage() {
     }
   }
   if (stored.filePlayerLoop) filePlayer.setLoop(true);
+  if (stored.filePlayerMuted) filePlayer.setMuted(true);
   paintFilePlayer();
 
   // ── Deck panel: drag / open / close / persist ──────────────────────────────
@@ -974,7 +1134,8 @@ export function initQualiaPage() {
   function setDeckOpen(open, persist = true) {
     if (!deckPanel) return;
     deckPanel.style.display = open ? '' : 'none';
-    if (open) repositionDeck();
+    if (open) { repositionDeck(); startDeckDraw(); }   // waveform + scope rAF only while open
+    else stopDeckDraw();
     if (btnDeck) btnDeck.classList.toggle('active', open);
     if (persist) settings.save();
   }
@@ -6211,7 +6372,7 @@ export function initQualiaPage() {
   // meters + clip LEDs fed by audio.getLevels(). Created last so all the
   // source modules (strudel, sequencer, looper, vocoder, mic) are in scope.
   const mixer = createMixer({
-    audio, strudel, sequencer, looper, vocoder,
+    audio, strudel, sequencer, looper, vocoder, filePlayer,
     // api-echo (training mode): fader/mute/limiter gestures teach their calls.
     onEcho: (expr, key) => echo.log(expr, key),
   });
@@ -8628,6 +8789,13 @@ export function initQualiaPage() {
           // Rig signal transport (header ▶/■) — one stateful pad on the
           // remote, so it toggles; the phone's cstate `sigOn` shows the truth.
           sigPlayStop: () => { looper.isSignalOn?.() ? looper.stopSignal?.() : looper.playSignal?.(); },
+          // Deck (audio-file backing track) — the same handlers the panel uses,
+          // so a tether tap behaves exactly like the panel button (play routes
+          // through onFilePlayClicked so a rec-with-play take still arms first).
+          deckPlayStop: () => { void onFilePlayClicked(); },
+          deckStop:     () => filePlayer.stop?.(),
+          deckRecArm:   () => fpRecPlay?.click(),   // arm/disarm rec-with-play (persists + paints)
+          deckMute:     () => fpMute?.click(),      // toggle mute (persists + paints + syncs mixer)
           // Stage automation toggles + the set clock, for the tether remote.
           walk: () => btnWalk?.click(),
           cycleAuto: toggleCycleAuto,
@@ -8644,6 +8812,7 @@ export function initQualiaPage() {
             case 'earth.gain': looper.setStripParam?.('earth', 'drive', v); break;
             case 'metal.gain': looper.setStripParam?.('metal', 'drive', v); break;
             case 'seq.volume': sequencer.setVolume?.(v); break;
+            case 'deck.level': filePlayer.setLevel?.(v); break;
             case 'cps':
               // Global tempo: Strudel first (the clock), sequencer mirrored
               // directly (fromStrudel skips its debounce-echo back).
@@ -8687,6 +8856,11 @@ export function initQualiaPage() {
             paused:     !!core.isPaused?.(),
             voxMuted:   !!vocoder.isMuted?.(),
             blackoutOn: !!core.isRenderSuspended?.(),
+            // Deck (audio-file) — lights the tether's play / rec-arm / mute pads.
+            deckReady:   !!filePlayer.isReady?.(),
+            deckPlaying: !!filePlayer.isPlaying?.(),
+            deckMuted:   !!filePlayer.getMuted?.(),
+            deckRecArmed: recWithPlay,
             quale: qualeName,
             voices: sequencer.getVoices?.() || [],
             grid: model ? { beats: model.beats, steps: model.steps, cycles: model.cycles } : null,

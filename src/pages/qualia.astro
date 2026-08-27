@@ -937,16 +937,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .qp-file-name.loaded { color: var(--text); }
-    .qp-file-transport { display: flex; align-items: center; gap: 0.4rem; }
-    .qp-file-transport .ctrl-btn { flex: 1; }
+    /* Loop sits in the pick row (right of the name); play/stop/mute moved to
+       the deck header for rig/strudel/vox parity. */
+    .qp-file-pick .ctrl-btn[data-qp="file-loop"] { flex: 0 0 auto; }
     .qp-file-session { display: flex; align-items: center; gap: 0.4rem; }
     .qp-file-session .ctrl-btn { flex: 1; }
     .qp-file-session .ctrl-btn[disabled] { opacity: 0.35; }
     .qp-file-session .ctrl-btn[data-qp="file-recplay"].active { border-color: var(--pink); color: var(--pink); background: rgba(255,122,230,0.08); }
-    .qp-file-transport .ctrl-btn[data-qp="file-loop"] { flex: 0 0 auto; }
     .qp-fileplayer .qp-row input[type=range] { width: 100%; }
-    .qp-fileplayer .qp-row[data-qp="file-seek"] { grid-template-columns: 1fr; gap: 0.2rem; }
-    .qp-fileplayer .qp-row[data-qp="file-seek"] label { justify-content: space-between; }
     .qp-toggle {
       background: none; border: 1px solid var(--border); border-radius: 4px;
       color: var(--muted); font-family: var(--font-mono); font-size: 0.68rem;
@@ -3011,6 +3009,37 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     .qp-file-stemfmt.dim { opacity: 0.5; }
     .qp-file-stemfmt select { flex: 1; min-width: 0; }
+    /* Overall waveform (doubling as the scrubber) + the small realtime scope.
+       The canvases are sized in JS (DPR-aware); CSS owns only the box. */
+    .qp-file-wave {
+      position: relative;
+      width: 100%; height: 68px;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: rgba(4,6,20,0.5);
+      overflow: hidden; cursor: pointer;
+      touch-action: none;
+    }
+    .qp-file-wave canvas { display: block; width: 100%; height: 100%; }
+    .qp-file-wave-empty {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; color: var(--muted); pointer-events: none;
+      letter-spacing: 0.03em;
+    }
+    .qp-file-wave.loaded { cursor: ew-resize; }
+    .qp-file-wave.loaded .qp-file-wave-empty { display: none; }
+    .qp-file-clock {
+      display: flex; justify-content: flex-end;
+      font-size: 0.68rem; color: var(--muted);
+      margin-top: -0.25rem;
+    }
+    .qp-file-scope {
+      width: 100%; height: 40px;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: rgba(4,6,20,0.5);
+      overflow: hidden;
+    }
+    .qp-file-scope canvas { display: block; width: 100%; height: 100%; }
     @media (max-width: 700px) {
       #deck-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 94vw; }
     }
@@ -4694,6 +4723,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="deck-header">
     <span class="sp-title">deck <span class="sp-tag">// audio file</span></span>
     <span class="sp-status" id="deck-status"></span>
+    <button class="ctrl-btn" id="btn-deck-play" disabled title="Play / pause (P)">▶</button>
+    <button class="ctrl-btn" id="btn-deck-stop" disabled title="Stop and rewind to the start">■</button>
+    <button class="ctrl-btn panel-mute-btn" id="btn-deck-mute" title="Mute the track (pulls it from speakers, recording + visuals; level is kept)">live</button>
     <button class="ctrl-btn" id="btn-deck-close" title="Close">×</button>
   </div>
   <div id="deck-body">
@@ -4701,20 +4733,24 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-file-pick">
         <button type="button" class="ctrl-btn" data-qp="file-open" title="Load an audio file (mp3, wav, m4a, ogg, flac…) to play through qualia">load file…</button>
         <span class="qp-file-name" data-qp="file-name" title="No file loaded">no file</span>
+        <button type="button" class="ctrl-btn" data-qp="file-loop" title="Loop the track">loop</button>
         <input type="file" accept="audio/*" data-qp="file-input" hidden>
       </div>
-      <div class="qp-file-transport">
-        <button type="button" class="ctrl-btn" data-qp="file-play" disabled>play</button>
-        <button type="button" class="ctrl-btn" data-qp="file-stop" disabled title="Stop and rewind to the start">stop</button>
-        <button type="button" class="ctrl-btn" data-qp="file-loop" title="Loop the track">loop</button>
+      <!-- Level up top, like the rig/strudel/vox strips. Double-click the slider
+           to reset to 100%. -->
+      <div class="qp-row" data-qp="file-level" title="File playback level into the speakers + recording (a brickwall limiter guards against clipping). Double-click to reset to 100%.">
+        <label>level<span class="qp-val">100%</span></label>
+        <input type="range" min="0" max="1.5" step="0.01" value="1" aria-label="Deck level">
       </div>
-      <div class="qp-row" data-qp="file-seek" title="Scrub the track">
-        <label>position<span class="qp-val" data-qp="file-time">0:00 / 0:00</span></label>
-        <input type="range" min="0" max="1" step="0.001" value="0" disabled aria-label="Seek">
+      <!-- Overall waveform doubling as the scrubber (click / drag to seek) with
+           a live playhead, plus a small realtime scope of the track's output. -->
+      <div class="qp-file-wave" data-qp="file-wave-wrap" title="Waveform — click or drag to scrub the track">
+        <canvas data-qp="file-wave" aria-label="Track waveform — click or drag to seek"></canvas>
+        <span class="qp-file-wave-empty" data-qp="file-wave-empty">no file loaded</span>
       </div>
-      <div class="qp-row" data-qp="file-level" title="File playback level into the speakers + recording (a brickwall limiter guards against clipping).">
-        <label>file level<span class="qp-val">100%</span></label>
-        <input type="range" min="0" max="1.5" step="0.01" value="1">
+      <div class="qp-file-clock"><span class="qp-val" data-qp="file-time">0:00 / 0:00</span></div>
+      <div class="qp-file-scope" data-qp="file-scope-wrap" title="Realtime scope — the track's live output as it feeds the mix">
+        <canvas data-qp="file-scope" aria-label="Realtime output scope"></canvas>
       </div>
       <div class="qp-file-session">
         <button type="button" class="ctrl-btn" data-qp="file-recplay" aria-pressed="false" title="Record the screen for exactly the length of the track — starts when you press play, stops when it ends (pausing pauses the recording too). Auto-saved, no trimming. Honors the recorder's auto-⛶ / auto-zen settings.">rec with play</button>

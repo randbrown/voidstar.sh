@@ -215,6 +215,8 @@ export async function initTetherClient(root) {
     earthOn: false, metalOn: false, delayOn: false, reverbOn: false, compOn: false,
     tunerOn: false, paused: false, voxMuted: false, blackoutOn: false,
     tau: null, horizonMin: 0,
+    // deck (audio-file backing track)
+    deckReady: false, deckPlaying: false, deckMuted: false, deckRecArmed: false,
   };
   transport.on(ST.CSTATE, (s) => {
     if (!s || typeof s !== 'object') return;
@@ -259,6 +261,7 @@ export async function initTetherClient(root) {
     { id: 'rig',   label: '⚡ rig' },
     { id: 'loop',  label: '◉ loop' },
     { id: 'seq',   label: '▦ seq' },
+    { id: 'deck',  label: '▷ deck' },
     { id: 'quale', label: '✦ quale' },
   ];
 
@@ -506,6 +509,22 @@ export async function initTetherClient(root) {
           ? 'taps sound AND land on the nearest grid cell while the sequencer plays'
           : 'taps just sound — arm ⏺ write to record them into the pattern'),
       );
+    } else if (tab === 'deck') {
+      // Backing-track deck: play / stop, arm rec-with-play, level + mute. The
+      // rec pad mirrors the rig panel's "rec with play" arm — arm it, then ▶
+      // play, and the host captures a screen take exactly the track's length.
+      bodyEl.append(
+        el('h3', 'sp-h', 'backing track'),
+        grid(2,
+          padBtn('▶ play', 'deckPlayStop', { lit: 'deckPlaying', flip: 'deckPlaying', sub: 'play / pause' }),
+          padBtn('■ stop', 'deckStop', { sub: 'stop + rewind' })),
+        grid(2,
+          padBtn('⏺ rec', 'deckRecArm', { lit: 'deckRec', flip: 'deckRecArmed', cls: 'warn', sub: 'arm rec-with-play' }),
+          padBtn('mute', 'deckMute', { lit: 'deckMuted', flip: 'deckMuted', sub: 'mute / live' })),
+        el('h3', 'sp-h', 'level'),
+        sliderRow('deck level', 'deck.level', 0, 1.5, 0.01, 1, (v) => `${Math.round(v * 100)}%`),
+        el('div', 'sp-note sp-deck-note', ''),
+      );
     } else if (tab === 'quale') {
       // τ — the set clock. Snapshot-fed (1 Hz), close enough for pacing a set.
       const tauRow = el('div', 'sp-cps');
@@ -565,6 +584,9 @@ export async function initTetherClient(root) {
         : kind === 'pause'     ? state.paused
         : kind === 'vox'       ? state.voxMuted
         : kind === 'blackout'  ? state.blackoutOn
+        : kind === 'deckPlaying' ? state.deckPlaying
+        : kind === 'deckRec'     ? state.deckRecArmed
+        : kind === 'deckMuted'   ? state.deckMuted
         : false;
       b.classList.toggle('lit', !!on);
       // Pads with a sub-label keep it — only the main/sub spans change.
@@ -588,6 +610,9 @@ export async function initTetherClient(root) {
         // Vox-idiom state button: the face shows what a tap DOES next.
         setLabel(state.sigOn ? '■ signal' : '▶ signal',
                  state.sigOn ? 'live — tap to stop' : 'live input');
+      } else if (kind === 'deckPlaying') {
+        setLabel(state.deckPlaying ? '⏸ pause' : '▶ play',
+                 state.deckPlaying ? 'playing — tap to pause' : 'play / pause');
       }
     }
     // The two arming modes are free-run only; say so rather than letting the
@@ -603,6 +628,14 @@ export async function initTetherClient(root) {
     }
     for (const b of bodyEl.querySelectorAll('[data-hist]')) {
       b.disabled = b.dataset.hist === 'undo' ? !(state.tapUndoDepth > 0) : !(state.tapRedoDepth > 0);
+    }
+    const deckNote = bodyEl.querySelector('.sp-deck-note');
+    if (deckNote) {
+      deckNote.textContent = !state.deckReady
+        ? 'no track loaded — load one on the rig’s deck panel'
+        : state.deckRecArmed
+          ? '⏺ armed — ▶ play captures a screen take the length of the track'
+          : 'arm ⏺ rec, then ▶ play, to record a take the length of the track';
     }
     const tauEl = bodyEl.querySelector('.sp-tau');
     if (tauEl) {
