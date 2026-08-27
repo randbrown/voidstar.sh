@@ -56,7 +56,7 @@ const PLAYLIST_KEY = 'voidstar.qualia.fx.video.playlist';
 // migrateDefaults). Bump this when you add an entry below that should reach
 // people who've already used the lab.
 const PLAYLIST_MIGRATION_KEY = 'voidstar.qualia.fx.video.playlist.migration';
-const PLAYLIST_MIGRATION = 1;
+const PLAYLIST_MIGRATION = 2;
 
 // First-ever-load seed. Applied verbatim when the localStorage key is *absent*
 // (never written); returning visitors instead get these merged in once via the
@@ -73,6 +73,12 @@ const PLAYLIST_MIGRATION = 1;
 const DEFAULT_URLS = [
   { src: '/videos/waterfall-portrait.mp4', name: 'waterfall · portrait' },
   { src: '/videos/waterfall-cascade.mp4',  name: 'waterfall · cascade' },
+  { src: '/videos/fish1.mp4',              name: 'fish · shoal' },
+  { src: '/videos/fish2.mp4',              name: 'fish · drift' },
+  { src: '/videos/palm-portrait.mp4',      name: 'palm · portrait' },
+  { src: '/videos/palm-landscape.mp4',     name: 'palm · landscape' },
+  { src: '/videos/trees-portrait.mp4',     name: 'trees · portrait' },
+  { src: '/videos/trees-landscape.mp4',    name: 'trees · landscape' },
   { src: 'https://assets.mixkit.co/videos/106/106-720.mp4',   name: 'mixkit · 106' },
   { src: 'https://assets.mixkit.co/videos/17978/17978-720.mp4', name: 'mixkit · 17978' },
   { src: 'https://assets.mixkit.co/videos/45404/45404-720.mp4', name: 'mixkit · 45404' },

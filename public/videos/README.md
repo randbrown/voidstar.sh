@@ -4,6 +4,15 @@ Committed defaults (wired into `DEFAULT_URLS` in `src/lib/qualia/fx/video.js`):
 
 - `waterfall-portrait.mp4` — 720×1280, H.264, **no audio**, 30 fps, ~7.0 MiB
 - `waterfall-cascade.mp4` — 960×720, H.264, **no audio**, 30 fps, ~5.9 MiB
+- `fish1.mp4` — 1280×720, H.264, **no audio**, 30 fps, ~14.5 MiB
+- `fish2.mp4` — 1280×720, H.264, **no audio**, 30 fps, ~20.6 MiB
+- `palm-portrait.mp4` — 720×960, H.264, **no audio**, 30 fps, ~6.4 MiB
+- `palm-landscape.mp4` — 960×720, H.264, **no audio**, 30 fps, ~5.6 MiB
+- `trees-portrait.mp4` — 720×960, H.264, **no audio**, 30 fps, ~15.9 MiB
+- `trees-landscape.mp4` — 960×720, H.264, **no audio**, 30 fps, ~16.1 MiB
+
+All of the above were re-encoded from larger originals with the single-pass
+recipe below (`-crf 26 -preset slow -an`), downscaled so the short side is 720.
 
 > **Mux decorative clips without an audio track.** A `<video>` that carries an
 > audio track engages the browser's shared audio output the moment it plays —
