@@ -488,6 +488,18 @@ export function createAudio() {
     stemTaps.delete(sourceId);
   }
 
+  // The raw node + ctx for a source, so a caller can attach its own tap (e.g. a
+  // PCM-capture AudioWorklet for a lossless WAV stem) directly to the source's
+  // passthrough analyser — the same signal getStemStream taps, in the source's
+  // own ctx. Like getStemStream, NOT gated by sourceFilter: the source keeps
+  // playing into the full mix while its stem is tapped. Returns null if the
+  // source isn't live (e.g. the rig capture isn't open).
+  function getStemNode(sourceId) {
+    const src = sources.get(sourceId);
+    if (!src || !src.ctx || !src.analyser) return null;
+    return { ctx: src.ctx, node: src.analyser };
+  }
+
   // Resume the recordable-mix context (and the mic context, if any) — awaited
   // at record start so the first audio actually reaches the encoder. A
   // suspended mix ctx was a likely cause of intermittently-silent recordings.
@@ -904,6 +916,7 @@ export function createAudio() {
     getMicStream:    () => sources.get('mic')?.stream ?? null,
     getRecordableStream,
     getStemStream,
+    getStemNode,
     releaseStem,
     resumeRecordableMix,
     getAnalyser: () => firstSource()?.analyser ?? null,

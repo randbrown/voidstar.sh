@@ -34,6 +34,7 @@ import { createVocoder } from './vocoder.js';
 import { createModem } from './modem.js';
 import { createAudioFilePlayer } from './audio-file.js';
 import { createStemRecorder } from './stem-recorder.js';
+import { makeDraggablePanel } from './panel-pos.js';
 import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
@@ -257,6 +258,7 @@ export function initQualiaPage() {
   const startBtn   = document.getElementById('start-btn');
   const startSilentBtn = document.getElementById('start-silent-btn');
   const audioCard  = document.getElementById('audio-card');
+  const tapePanel  = document.getElementById('tape-panel');
   const videoEl    = document.getElementById('video');
   const fxResetBtn = document.getElementById('btn-fx-reset');
   const host       = document.getElementById('qualia-host');
@@ -504,8 +506,10 @@ export function initQualiaPage() {
     audioMode,
     filePlayerLevel: filePlayer.getLevel(),
     filePlayerLoop:  filePlayer.getLoop(),
+    tapeOpen:       tapePanel ? tapePanel.style.display !== 'none' : false,
     recWithPlay,
     recRigStem,
+    stemFormat,
     paused:         core.isPaused(),
     zen:            core.isZen(),
     poseSource:     poseSelect.value,
@@ -837,7 +841,7 @@ export function initQualiaPage() {
   // recordable mix — gated (like every source) by the audio mode's filter, so
   // it's present in 'mix'/'all'. Adopted as the 'file' source only while it's
   // actually sounding. Play the rig over the top in 'all' mode.
-  const fpRoot     = audioCard.querySelector('[data-qp="audio-file"]');
+  const fpRoot     = tapePanel?.querySelector('[data-qp="audio-file"]');
   const fpInput    = fpRoot?.querySelector('[data-qp="file-input"]');
   const fpOpen     = fpRoot?.querySelector('[data-qp="file-open"]');
   const fpName     = fpRoot?.querySelector('[data-qp="file-name"]');
@@ -959,6 +963,27 @@ export function initQualiaPage() {
   }
   if (stored.filePlayerLoop) filePlayer.setLoop(true);
   paintFilePlayer();
+
+  // ── Tape panel: drag / open / close / persist ──────────────────────────────
+  // The audio-file source lives in its own draggable window (like strudel/vox),
+  // pulled out of the audio HUD card. makeDraggablePanel handles drag + resize +
+  // viewport clamping + position persistence; open-state rides the settings snap.
+  const repositionTape = tapePanel ? makeDraggablePanel('tape', tapePanel) : () => {};
+  const btnTape      = document.getElementById('btn-tape');
+  const btnTapeClose = document.getElementById('btn-tape-close');
+  function setTapeOpen(open, persist = true) {
+    if (!tapePanel) return;
+    tapePanel.style.display = open ? '' : 'none';
+    if (open) repositionTape();
+    if (btnTape) btnTape.classList.toggle('active', open);
+    if (persist) settings.save();
+  }
+  btnTape?.addEventListener('click', () => setTapeOpen(tapePanel?.style.display === 'none', true));
+  btnTapeClose?.addEventListener('click', () => setTapeOpen(false, true));
+  // Initial restore paints the DOM but must NOT settings.save() yet — later
+  // session state (recWithPlay, …) isn't declared at this point.
+  if (stored.tapeOpen) setTapeOpen(true, false);
+  else if (btnTape) btnTape.classList.toggle('active', false);
 
   // ── Pose smoothing slider (lives in audio card under sliders) ────────────
   const smoothInput = document.querySelector('[data-qp="pose-smooth"] input[type=range]');
@@ -4816,20 +4841,32 @@ export function initQualiaPage() {
   //     the track. It starts BEFORE the first sample (below), pauses when the
   //     track pauses, and stops on the track's end — so the clip needs no
   //     start/end trimming. Forced to auto-save so no save-picker interrupts.
-  //   • "+ rig stem" — alongside the full-mix video, a second audio-only
-  //     recorder captures the rig ALONE (audio.getStemStream('rig') = exactly
-  //     the rig's contribution to the mix), for a DAW stem that lines up with
-  //     the video. Both recorders share one start/pause/stop timeline.
-  const fpRecPlay = audioCard.querySelector('[data-qp="file-recplay"]');
-  const fpRigStem = audioCard.querySelector('[data-qp="file-rigstem"]');
+  //   • "+ rig stem" — alongside the full-mix video, a second recorder captures
+  //     the rig ALONE (audio.getStemNode('rig') = exactly the rig's contribution
+  //     to the mix), for a DAW stem that lines up with the video. It's captured
+  //     as lossless PCM off the audio thread and written as WAV (offline) or MP3
+  //     (via ffmpeg.wasm) per the format selector. Both recorders share one
+  //     start/pause/stop timeline.
+  const fpRecPlay = tapePanel?.querySelector('[data-qp="file-recplay"]');
+  const fpRigStem = tapePanel?.querySelector('[data-qp="file-rigstem"]');
+  const fpStemFmt = tapePanel?.querySelector('[data-qp="stem-format"]');
+  const tapeStatus = document.getElementById('tape-status');
   let recWithPlay = stored.recWithPlay === true;
   let recRigStem  = stored.recRigStem === true && recWithPlay;
+  let stemFormat  = stored.stemFormat === 'mp3' ? 'mp3' : 'wav';
   let _syncTake   = false;   // a playback-synced take is in progress
 
   const stemRecorder = createStemRecorder({
-    getStream: () => audio.getStemStream?.('rig'),
-    onSave:  ({ filename }) => showRecToastError(`rig stem saved · ${filename}`, 6000),
-    onError: (e) => showRecToastError(`rig stem: ${e?.message || e}`),
+    getStemNode: () => audio.getStemNode?.('rig'),
+    getFormat:   () => stemFormat,
+    onStatus: (msg) => { if (tapeStatus) tapeStatus.textContent = msg; },
+    onSave:  ({ filename, wavFallback }) => {
+      if (tapeStatus) tapeStatus.textContent = '';
+      showRecToastError(wavFallback
+        ? `rig stem: MP3 encoder unavailable (offline?) — saved WAV · ${filename}`
+        : `rig stem saved · ${filename}`, wavFallback ? 8000 : 6000);
+    },
+    onError: (e) => { if (tapeStatus) tapeStatus.textContent = ''; showRecToastError(`rig stem: ${e?.message || e}`); },
   });
 
   function paintSessionRec() {
@@ -4843,12 +4880,39 @@ export function initQualiaPage() {
       fpRigStem.setAttribute('aria-pressed', recRigStem ? 'true' : 'false');
       fpRigStem.disabled = !recWithPlay || _syncTake;
     }
+    if (fpStemFmt) {
+      fpStemFmt.value = stemFormat;
+      // The format only matters when a stem is being captured; dim it otherwise.
+      fpStemFmt.disabled = _syncTake;
+      fpStemFmt.closest('.qp-file-stemfmt')?.classList.toggle('dim', !recRigStem);
+    }
+  }
+  if (fpStemFmt) {
+    fpStemFmt.addEventListener('change', () => {
+      stemFormat = fpStemFmt.value === 'mp3' ? 'mp3' : 'wav';
+      settings.save();
+      paintSessionRec();
+    });
   }
 
   async function beginSyncTake() {
     if (recorder.isRecording()) return;   // never hijack a manual take
     _syncTake = true;
     paintSessionRec();
+    // Honor the recorder's one-button modifiers, same as autoRecord(): auto-⛶
+    // enters fullscreen (awaiting the transition + resize so the composite locks
+    // at full-screen resolution) and auto-zen hides the in-page HUD — so a
+    // playback-synced take frames itself exactly like a manual auto-take. The
+    // forced auto-save below covers the gesture the fullscreen wait would spend.
+    closeAllGroupsExcept(null);
+    if (autoFullscreenRec && !isFullscreen()) {
+      setFullscreen(true);
+      await awaitEvent(document, 'fullscreenchange', 800);
+      await awaitEvent(window, 'resize', 800);
+      try { core.refreshSize?.(); } catch {}
+      await nextFrame();
+    }
+    if (autoZenRec && !core.isZen()) setZen(true);
     // Force auto-save (viewport) — the save-picker's async gesture would race
     // playback start and, on macOS, drop out of fullscreen mid-take.
     recOverride = { mode: 'viewport', autoSave: true };
@@ -4864,9 +4928,14 @@ export function initQualiaPage() {
     }
     recOverride = null;
     if (recRigStem) {
-      const base = `qualia-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
-      const ok = stemRecorder.start(base);
-      if (!ok) showRecToastError('rig stem: no rig signal — open the rig capture, then record');
+      // Friendly pre-check for the common miss (rig not open); any other start
+      // failure surfaces through the recorder's onError.
+      if (!audio.getStemNode?.('rig')) {
+        showRecToastError('rig stem: no rig signal — open the rig capture, then record');
+      } else {
+        const base = `qualia-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+        await stemRecorder.start(base);
+      }
     }
   }
 
@@ -7462,7 +7531,7 @@ export function initQualiaPage() {
   // feel "stuck". Raise whichever panel you touch (or open) to the top of the
   // band (19) and drop the rest back to the CSS default — classic window focus,
   // kept just under the topbar (20) so nothing covers the chrome.
-  const FLOAT_PANELS = ['strudel-panel', 'sequencer-panel', 'vocoder-panel', 'mixer-panel', 'looper-panel'];
+  const FLOAT_PANELS = ['strudel-panel', 'sequencer-panel', 'vocoder-panel', 'mixer-panel', 'looper-panel', 'tape-panel'];
   const FLOAT_SEL = FLOAT_PANELS.map((id) => '#' + id).join(',');
   // The bottom HUD (tab bar + popped-out cards) is part of the same focus
   // band: at its CSS defaults (stack 15, tabs 16) a floating editor dragged
@@ -7504,6 +7573,7 @@ export function initQualiaPage() {
   const PANEL_TOGGLE_BTNS = {
     'btn-strudel': 'strudel-panel', 'btn-sequencer': 'sequencer-panel',
     'btn-vocoder': 'vocoder-panel', 'btn-mixer': 'mixer-panel', 'btn-looper': 'looper-panel',
+    'btn-tape': 'tape-panel',
   };
   for (const [btnId, panelId] of Object.entries(PANEL_TOGGLE_BTNS)) {
     document.getElementById(btnId)?.addEventListener('click', () => {

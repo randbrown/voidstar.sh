@@ -1901,7 +1901,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
          transport cluster stays whole and only spills to a second line
          when there's genuinely no room. The × close is not part of this
          flow — it's pinned to the corner (see the panel-close rule). */
-      #sequencer-header, #strudel-header, #vocoder-header, #looper-header {
+      #sequencer-header, #strudel-header, #vocoder-header, #looper-header, #tape-header {
         flex-wrap: wrap; gap: 0.4rem; padding: 0.4rem 0.6rem;
       }
       .seq-name-input { flex: 1 1 5ch; min-width: 4ch; max-width: none; }
@@ -2964,6 +2964,57 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       .looper-track-head { min-width: 0; }
     }
 
+    /* Tape panel — the audio-file source, pulled out of the audio HUD card into
+       its own draggable window (same shape as #vocoder-panel). Compact: the body
+       is just the file transport. */
+    #tape-panel {
+      position: fixed; left: 50%; top: 4.5rem;
+      transform: translateX(-50%);
+      z-index: 18;
+      width: min(94vw, 380px);
+      height: auto;
+      min-width: 260px;
+      max-width: 100vw;  max-height: calc(100dvh - 6rem);
+      background: rgba(10,10,26,0.55);
+      border: 1px solid var(--border); border-radius: 10px;
+      font-family: var(--font-mono); color: var(--text);
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+      backdrop-filter: blur(8px);
+      /* resized via panel-pos.js corner/edge handles (any corner), not CSS resize */
+    }
+    #tape-header {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.45rem 0.75rem;
+      background: var(--surface-glass);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+      cursor: grab; user-select: none;
+      touch-action: none;
+    }
+    #tape-header.dragging { cursor: grabbing; }
+    #tape-header .ctrl-btn { cursor: pointer; }
+    #tape-header .sp-status { margin-left: auto; }
+    #btn-tape-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
+    #tape-body {
+      flex: 1; min-height: 0; overflow: auto;
+      padding: 0.6rem 0.7rem;
+      display: flex; flex-direction: column; gap: 0.5rem;
+    }
+    /* Inside the panel the file player fills the body (no extra card chrome —
+       the panel already provides it). */
+    #tape-body .qp-fileplayer { border: none; background: none; padding: 0; }
+    .qp-file-stemfmt {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.7rem; color: var(--muted);
+      transition: opacity 0.15s;
+    }
+    .qp-file-stemfmt.dim { opacity: 0.5; }
+    .qp-file-stemfmt select { flex: 1; min-width: 0; }
+    @media (max-width: 700px) {
+      #tape-panel { top: calc(var(--topbar-h, 5.5rem) + 0.5rem); width: 94vw; }
+    }
+
     /* Vocoder panel — same draggable-window shape as #strudel-panel /
        #sequencer-panel. Smaller default footprint than the sequencer because
        the body is just a column of property rows, no grid matrix. */
@@ -3120,6 +3171,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <button class="ctrl-btn" id="btn-vocoder" title="Vox — vocal fx (W)">vox</button>
       <button class="ctrl-btn" id="btn-looper" title="Rig — live signal + looper (O)">rig</button>
       <button class="ctrl-btn" id="btn-mixer" title="Mixer — levels, mutes, limiters &amp; clip meters">mix</button>
+      <button class="ctrl-btn" id="btn-tape" title="Tape — play an audio file (mp3/wav/…) through the qualia signal; playback-synced screen recording + rig stem">tape</button>
       <div class="qg-group qg-capture" data-group="capture">
         <button class="ctrl-btn" id="btn-output" title="Output window — a chrome-free popup mirroring the clean fx + overlay composite (no HUD), for a projector or OBS capture; the main window keeps its panels. Tap again to close.">⧉</button>
         <button class="ctrl-btn" id="btn-record" title="Record (Shift+R)">rec</button>
@@ -3443,35 +3495,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     </div>
     <div class="qp-body">
       <div class="qp-presets" data-qp="audio-presets"></div>
-      <!-- Audio-file source — play an mp3/wav/… through the qualia signal: it
-           drives the visual reactivity, monitors out to the speakers/PA, and
-           lands in the screen recording. Needs the audio mode to include the
-           file source; pressing play auto-bumps 'off' → 'mix'. Play your rig
-           over the top in 'all' mode. -->
-      <div class="qp-fileplayer" data-qp="audio-file">
-        <div class="qp-file-pick">
-          <button type="button" class="ctrl-btn" data-qp="file-open" title="Load an audio file (mp3, wav, m4a, ogg, flac…) to play through qualia">load file…</button>
-          <span class="qp-file-name" data-qp="file-name" title="No file loaded">no file</span>
-          <input type="file" accept="audio/*" data-qp="file-input" hidden>
-        </div>
-        <div class="qp-file-transport">
-          <button type="button" class="ctrl-btn" data-qp="file-play" disabled>play</button>
-          <button type="button" class="ctrl-btn" data-qp="file-stop" disabled title="Stop and rewind to the start">stop</button>
-          <button type="button" class="ctrl-btn" data-qp="file-loop" title="Loop the track">loop</button>
-        </div>
-        <div class="qp-row" data-qp="file-seek" title="Scrub the track">
-          <label>position<span class="qp-val" data-qp="file-time">0:00 / 0:00</span></label>
-          <input type="range" min="0" max="1" step="0.001" value="0" disabled aria-label="Seek">
-        </div>
-        <div class="qp-row" data-qp="file-level" title="File playback level into the speakers + recording (a brickwall limiter guards against clipping).">
-          <label>file level<span class="qp-val">100%</span></label>
-          <input type="range" min="0" max="1.5" step="0.01" value="1">
-        </div>
-        <div class="qp-file-session">
-          <button type="button" class="ctrl-btn" data-qp="file-recplay" aria-pressed="false" title="Record the screen for exactly the length of the track — starts when you press play, stops when it ends (pausing pauses the recording too). Auto-saved, no trimming.">rec with play</button>
-          <button type="button" class="ctrl-btn" data-qp="file-rigstem" aria-pressed="false" title="Also capture a separate rig-only audio stem during the recording, so you get the full-mix video AND an isolated rig track. Open the rig capture first.">+ rig stem</button>
-        </div>
-      </div>
+      <!-- The audio-file source (play a track through the qualia signal) lives in
+           its own draggable "tape" panel now — see #tape-panel below. -->
       <div class="qp-row" data-qp="audio-mic-gain" title="Mic PRE gain — scales the mic into the visual reactivity ('mic'/'all' audio modes), the monitor, and the recording. Works even with the output below muted/at 0, so a room mic can drive the visuals silently.">
         <label>mic gain<span class="qp-val">1.00×</span></label>
         <input type="range" min="0" max="2" step="0.01" value="1">
@@ -4657,6 +4682,53 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   </section>
 
   </div><!-- /#rig-sections -->
+</div>
+
+<!-- Tape panel — play an audio file (mp3/wav/…) through the qualia signal: it
+     drives the visual reactivity, monitors out to the speakers/PA, and lands in
+     the screen recording. Draggable window, sibling of #vocoder-panel. Pressing
+     play from a mode that excludes the file source auto-bumps 'off' → 'mix' (or
+     'mic' → 'all'); play the rig over the top in 'all'. The two session toggles
+     turn a playback into a hands-off, exactly-track-length capture. -->
+<div id="tape-panel" style="display:none">
+  <div id="tape-header">
+    <span class="sp-title">tape <span class="sp-tag">// audio file</span></span>
+    <span class="sp-status" id="tape-status"></span>
+    <button class="ctrl-btn" id="btn-tape-close" title="Close">×</button>
+  </div>
+  <div id="tape-body">
+    <div class="qp-fileplayer" data-qp="audio-file">
+      <div class="qp-file-pick">
+        <button type="button" class="ctrl-btn" data-qp="file-open" title="Load an audio file (mp3, wav, m4a, ogg, flac…) to play through qualia">load file…</button>
+        <span class="qp-file-name" data-qp="file-name" title="No file loaded">no file</span>
+        <input type="file" accept="audio/*" data-qp="file-input" hidden>
+      </div>
+      <div class="qp-file-transport">
+        <button type="button" class="ctrl-btn" data-qp="file-play" disabled>play</button>
+        <button type="button" class="ctrl-btn" data-qp="file-stop" disabled title="Stop and rewind to the start">stop</button>
+        <button type="button" class="ctrl-btn" data-qp="file-loop" title="Loop the track">loop</button>
+      </div>
+      <div class="qp-row" data-qp="file-seek" title="Scrub the track">
+        <label>position<span class="qp-val" data-qp="file-time">0:00 / 0:00</span></label>
+        <input type="range" min="0" max="1" step="0.001" value="0" disabled aria-label="Seek">
+      </div>
+      <div class="qp-row" data-qp="file-level" title="File playback level into the speakers + recording (a brickwall limiter guards against clipping).">
+        <label>file level<span class="qp-val">100%</span></label>
+        <input type="range" min="0" max="1.5" step="0.01" value="1">
+      </div>
+      <div class="qp-file-session">
+        <button type="button" class="ctrl-btn" data-qp="file-recplay" aria-pressed="false" title="Record the screen for exactly the length of the track — starts when you press play, stops when it ends (pausing pauses the recording too). Auto-saved, no trimming. Honors the recorder's auto-⛶ / auto-zen settings.">rec with play</button>
+        <button type="button" class="ctrl-btn" data-qp="file-rigstem" aria-pressed="false" title="Also capture a separate rig-only audio stem during the recording, so you get the full-mix video AND an isolated rig track. Open the rig capture first.">+ rig stem</button>
+      </div>
+      <label class="qp-file-stemfmt" data-qp="file-stemfmt" title="Rig-stem file format — WAV is lossless and works offline; MP3 is far smaller but needs the one-time ffmpeg encoder download (online).">
+        <span>stem format</span>
+        <select class="ctrl-btn" data-qp="stem-format">
+          <option value="wav">WAV · lossless</option>
+          <option value="mp3">MP3 · 320k</option>
+        </select>
+      </label>
+    </div>
+  </div>
 </div>
 
 <!-- Vocoder panel — mic-driven channel vocoder for live narration. Sibling

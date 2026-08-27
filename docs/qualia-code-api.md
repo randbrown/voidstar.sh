@@ -365,8 +365,8 @@ qualia.audio.levels(); qualia.audio.clipping()
 
 // Audio-file player — run an existing track through the qualia signal (drives
 // reactivity + monitors to the speakers + lands in the recordable mix; present
-// in the 'mix'/'all' audio modes). The audio-card UI has a file picker + a
-// scrubber; from code you can also load a (CORS-reachable) URL. Play the rig
+// in the 'mix'/'all' audio modes). The draggable "tape" panel has a file picker
+// + a scrubber; from code you can also load a (CORS-reachable) URL. Play the rig
 // over the top in 'all' mode.
 await qualia.player.load("https://media.voidstar.sh/set/track.mp3")
 qualia.player.play(); qualia.player.pause(); qualia.player.toggle(); qualia.player.stop()
