@@ -30,7 +30,7 @@ function meterColor(p) {
   return 'var(--cyan)';
 }
 
-export function createMixer({ audio, strudel, sequencer, looper, vocoder, onEcho } = {}) {
+export function createMixer({ audio, strudel, sequencer, looper, vocoder, filePlayer, onEcho } = {}) {
   const panel     = document.getElementById('mixer-panel');
   const body      = document.getElementById('mixer-body');
   const btnToggle = document.getElementById('btn-mixer');
@@ -108,6 +108,17 @@ export function createMixer({ audio, strudel, sequencer, looper, vocoder, onEcho
       setMuted:   (on) => vocoder.setMuted(on),
       setLimiter: (on) => vocoder.setLimiter(on),
       subscribe:  (cb) => vocoder.onChange(cb),
+    },
+    {
+      id: 'file', label: 'deck', max: 1.5, meters: ['file'],
+      title: 'Deck — audio-file playback bus (0–1.5×; >1.0 boosts a quiet track)',
+      getLevel:   () => filePlayer?.getLevel() ?? 1,
+      getMuted:   () => filePlayer?.getMuted?.() ?? false,
+      getLimiter: () => filePlayer?.getLimiter?.() ?? true,
+      setLevel:   (v) => filePlayer?.setLevel(v),
+      setMuted:   (on) => filePlayer?.setMuted?.(on),
+      setLimiter: (on) => filePlayer?.setLimiter?.(on),
+      subscribe:  (cb) => filePlayer?.onMix?.(cb),
     },
   ];
 

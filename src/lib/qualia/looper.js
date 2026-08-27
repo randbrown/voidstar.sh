@@ -31,6 +31,7 @@ import { parseAmpModel, isFullRigGearType } from './neural-amp-model.js';
 import { loadTones, getToneById, getToneByName, addTone, updateTone, removeTone,
          downloadTone, importToneFile } from './tone-presets.js';
 import { createLooperRenderer } from './looper-render.js';
+import { traceWave, idleTrace } from './scope-draw.js';
 import * as loopStore from './looper-store.js';
 import { wirePicker, getStoredDeviceId } from './devices.js';
 import { savePanelPos, restorePanelPos, attachPanelResize } from './panel-pos.js';
@@ -1486,33 +1487,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // The vertical scale folds in model.scopeGain — a VISUAL-only magnifier so the
   // (now short) scopes stay legible — and clamps the trace inside the canvas so a
   // boosted wave smears against the rails instead of drawing off-screen.
-  function traceWave(g, buf, n, W, mid) {
-    let peak = 0;
-    const k = mid * 0.92 * (model.scopeGain || 1);
-    const H = mid * 2;
-    g.beginPath();
-    for (let i = 0; i < n; i++) {
-      const v = (buf[i] - 128) / 128;
-      const a = v < 0 ? -v : v; if (a > peak) peak = a;
-      const x = (i / (n - 1)) * W;
-      let y = mid - v * k;
-      if (y < 0) y = 0; else if (y > H) y = H;
-      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-    }
-    return peak;
-  }
-  // Faint idle sine so a scope still looks alive when its source is silent.
-  function idleTrace(g, W, mid) {
-    const t = performance.now() / 1000;
-    g.beginPath();
-    for (let i = 0; i <= 96; i++) {
-      const x = (i / 96) * W;
-      const y = mid - Math.sin(i * 0.18 + t * 1.1) * mid * 0.12;
-      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-    }
-    g.strokeStyle = 'rgba(148,163,184,0.26)';
-    g.stroke();
-  }
+  // Scope tracing (traceWave/idleTrace) lives in scope-draw.js, shared with the
+  // deck panel's realtime scope. The rig passes model.scopeGain as the visual
+  // magnifier (its IN/OUT scopes run short); the deck draws true-scale.
   function setSignalStatus(peak, clip) {
     if (!signalStat) return;
     if (peak == null) { signalStat.textContent = 'input off'; signalStat.style.color = ''; return; }
@@ -1538,7 +1515,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const n = an.fftSize;
       if (!scopeBuf || scopeBuf.length !== n) scopeBuf = new Uint8Array(n);
       an.getByteTimeDomainData(scopeBuf);
-      const peak = traceWave(g, scopeBuf, n, W, mid);
+      const peak = traceWave(g, scopeBuf, n, W, mid, model.scopeGain || 1);
       const clip = peak > 0.985;
       g.lineWidth = Math.max(1, Math.round(window.devicePixelRatio || 1));
       g.strokeStyle = clip ? 'rgba(244,114,182,0.95)' : 'rgba(34,211,238,0.9)';
@@ -1567,7 +1544,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const n = an.fftSize;
       if (!scopeOutBuf || scopeOutBuf.length !== n) scopeOutBuf = new Uint8Array(n);
       an.getByteTimeDomainData(scopeOutBuf);
-      const peak = traceWave(g, scopeOutBuf, n, W, mid);
+      const peak = traceWave(g, scopeOutBuf, n, W, mid, model.scopeGain || 1);
       g.lineWidth = Math.max(1, Math.round(window.devicePixelRatio || 1));
       g.strokeStyle = peak > 0.985 ? 'rgba(244,114,182,0.95)' : 'rgba(167,139,250,0.92)';
       g.stroke();

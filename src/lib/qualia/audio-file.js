@@ -27,7 +27,7 @@
 // source and bank the offset. Nothing runs on the audio thread; a light ~10 Hz
 // timer only ticks while playing, purely to push the scrubber position to the UI.
 
-import { makeLimiter } from './limiter.js';
+import { makeLimiter, setLimiterEngaged } from './limiter.js';
 
 export function createAudioFilePlayer(opts = {}) {
   const onFeedChange = typeof opts.onFeedChange === 'function' ? opts.onFeedChange : () => {};
@@ -41,11 +41,21 @@ export function createAudioFilePlayer(opts = {}) {
     for (const fn of transportSubs) { try { fn(phase); } catch { /* subscriber teardown */ } }
   }
 
+  // Mix subscribers — fired on any level / mute / limiter change so the mixer
+  // channel (and any other surface) mirrors a control moved elsewhere. Kept
+  // separate from onState so it's cheap and mixer-focused.
+  const mixSubs = new Set();
+  function fireMix() {
+    for (const fn of mixSubs) { try { fn(); } catch { /* subscriber teardown */ } }
+  }
+
   let ctx = null, bus = null, limiter = null, analyser = null;
   let buffer = null;          // decoded AudioBuffer (null until a file loads)
   let name = '';              // display name of the loaded file
   let src = null;             // live AudioBufferSourceNode while playing
-  let level = 1.0;            // output level (0..~1.5), rides `bus.gain`
+  let level = 1.0;            // output level (0..2), rides `bus.gain`
+  let muted = false;          // mixer-style mute — gates the bus to 0, keeps `level`
+  let limiterOn = true;       // brickwall limiter engaged (on by default, house rule)
   let loop = false;
   let playing = false;
   let offset = 0;             // seconds into the buffer where the next play starts
@@ -61,8 +71,8 @@ export function createAudioFilePlayer(opts = {}) {
     const AC = window.AudioContext || window.webkitAudioContext;
     ctx = new AC();
     bus = ctx.createGain();
-    bus.gain.value = level;
-    limiter = makeLimiter(ctx, true);        // brickwall before destination
+    bus.gain.value = muted ? 0 : level;
+    limiter = makeLimiter(ctx, limiterOn);   // brickwall before destination
     analyser = ctx.createAnalyser();
     analyser.fftSize = 2048;
     bus.connect(limiter);
@@ -74,6 +84,12 @@ export function createAudioFilePlayer(opts = {}) {
 
   function emitState() {
     try { onState(getState()); } catch { /* UI teardown */ }
+  }
+
+  // Push the effective bus gain (0 while muted, `level` otherwise). Ramped, so
+  // mute/level moves never click.
+  function applyBusGain() {
+    if (bus && ctx) bus.gain.setTargetAtTime(muted ? 0 : level, ctx.currentTime, 0.01);
   }
 
   // Current playback head, clamped to the buffer.
@@ -132,6 +148,10 @@ export function createAudioFilePlayer(opts = {}) {
   const api = {
     getContext:      () => ctx,
     getFeedAnalyser: () => analyser,
+    /** The decoded AudioBuffer (null until a file loads) — for the deck's
+     *  overall-waveform display. Identity changes on each load(), so callers
+     *  cache peaks against the returned reference. */
+    getBuffer:       () => buffer,
     isReady:         () => !!buffer,
     isPlaying:       () => playing,
     /** Adopt gate: present in the analysis + record mix only while sounding. */
@@ -239,9 +259,34 @@ export function createAudioFilePlayer(opts = {}) {
 
     setLevel: (v) => {
       level = Math.min(2, Math.max(0, +v || 0));
-      if (bus) bus.gain.setTargetAtTime(level, ctx.currentTime, 0.01);
+      applyBusGain();
       emitState();
+      fireMix();
     },
+
+    getMuted: () => muted,
+    /** Mixer-style mute — gates the output (speakers + recording + reactivity)
+     *  to silence while remembering `level`. Ramped, so no click. */
+    setMuted: (on) => {
+      muted = !!on;
+      applyBusGain();
+      emitState();
+      fireMix();
+    },
+    toggleMuted: () => { api.setMuted(!muted); },
+
+    getLimiter: () => limiterOn,
+    /** Toggle the brickwall limiter (clip insurance). On by default. */
+    setLimiter: (on) => {
+      limiterOn = !!on;
+      if (limiter) setLimiterEngaged(limiter, limiterOn);
+      emitState();
+      fireMix();
+    },
+
+    /** Subscribe to level / mute / limiter changes (mixer surface). Returns an
+     *  unsubscribe fn. */
+    onMix: (fn) => { mixSubs.add(fn); return () => mixSubs.delete(fn); },
 
     /** Full snapshot for the UI / code API. */
     getState: getState,
@@ -274,6 +319,8 @@ export function createAudioFilePlayer(opts = {}) {
       playing,
       loop,
       level,
+      muted,
+      limiter:  limiterOn,
       name,
       duration: buffer ? buffer.duration : 0,
       position: position(),
