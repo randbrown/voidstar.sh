@@ -4753,8 +4753,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <canvas data-qp="file-scope" aria-label="Realtime output scope"></canvas>
       </div>
       <div class="qp-file-session">
-        <button type="button" class="ctrl-btn" data-qp="file-recplay" aria-pressed="false" title="Record the screen for exactly the length of the track — starts when you press play, stops when it ends (pausing pauses the recording too). Auto-saved, no trimming. Honors the recorder's auto-⛶ / auto-zen settings.">rec with play</button>
+        <button type="button" class="ctrl-btn" data-qp="file-recplay" aria-pressed="false" title="Record for exactly the length of the track — starts when you press play, stops when it ends (pausing pauses the recording too). Uses whichever capture mode is selected (qfx / full tab / OBS); in OBS mode playback waits until OBS confirms it's rolling. Auto-saved, no trimming. Honors the recorder's auto-⛶ / auto-zen settings.">rec with play</button>
         <button type="button" class="ctrl-btn" data-qp="file-rigstem" aria-pressed="false" title="Also capture a separate rig-only audio stem during the recording, so you get the full-mix video AND an isolated rig track. Open the rig capture first.">+ rig stem</button>
+      </div>
+      <div class="qp-file-session">
+        <button type="button" class="ctrl-btn" data-qp="file-syncstrudel" aria-pressed="false" title="Sync with Strudel — pressing deck ▶ also evaluates and rolls the Strudel pattern, so the backing track and the live-coded groove start on one button (and stopping the deck stops Strudel). Opens the Strudel panel if it's closed.">sync strudel</button>
       </div>
       <label class="qp-file-stemfmt" data-qp="file-stemfmt" title="Rig-stem file format — WAV is lossless and works offline; MP3 is far smaller but needs the one-time ffmpeg encoder download (online).">
         <span>stem format</span>

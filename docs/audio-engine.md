@@ -378,15 +378,33 @@ edges (`onTransport('play'|'pause'|'stop'|'ended')`) that page-init uses to driv
 a **playback-synced recording**. Exposed to the code API as `qualia.player.*`
 (see [`qualia-code-api.md`](../docs/qualia-code-api.md)).
 
-**Session recording (the two deck-panel toggles).** *rec with play* runs the
-screen recorder for exactly the length of the track — page-init starts it in
-`onFilePlayClicked` **before** `filePlayer.play()` so the clip catches the first
-sample, `pauseSyncTake`/`resumeSyncTake` mirror the transport onto the recorder
-(`recorder.pause()`/`resume()`, which freeze the muxed timeline), and the track's
-`ended` edge stops it — no start/end trimming. The take is forced to auto-save so
-no save-picker races the start, and `beginSyncTake` honors the recorder's own
-one-button modifiers (**auto-⛶** → fullscreen, **auto-zen** → hide the HUD) the
-same way `autoRecord` does, so a synced take frames itself like a manual auto-take.
+**Session recording (the deck-panel toggles).** *rec with play* records for
+exactly the length of the track — page-init starts it in `onFilePlayClicked`
+**before** `filePlayer.play()` so the clip catches the first sample, and the
+track's `ended` edge stops it — no start/end trimming. `beginSyncTake` honors
+**the capture mode selected on the rec button** rather than always forcing qfx:
+`viewport` composites the qfx canvas, `tab` captures the full tab, and `obs`
+drives OBS Studio over its WebSocket. In the in-page modes (`viewport`/`tab`)
+`pauseSyncTake`/`resumeSyncTake` mirror the transport onto the recorder
+(`recorder.pause()`/`resume()`, which freeze the muxed timeline) and the take is
+forced to auto-save so no save-picker races the start. In `obs` mode the take
+belongs to OBS: `beginSyncTake` calls `obsStartRecording()` **and waits for OBS
+to confirm it's rolling** (the restart-capture settle + `StartRecord` round-trip,
+via `waitForObsRecording`) before playback begins — so nothing plays into a
+not-yet-recording OBS, and if OBS never confirms the play is held. An OBS take
+keeps rolling through a track pause (the stem stays aligned by not pausing
+either) and the `ended`/`stop` edge stops OBS. The one-button modifiers apply per
+what each mode can use (mirroring `refreshRecordModeBtn`): **auto-⛶** →
+fullscreen for `viewport` and `obs` (tab's async share-picker can't compose with
+the fullscreen gesture); **auto-zen** → hide the HUD for `viewport` only (never
+OBS, where the HUD is the point of recording, nor tab).
+
+*sync strudel* co-starts the Strudel REPL with the deck: pressing deck ▶ evaluates
+and rolls the Strudel pattern too (`startSyncStrudel`, opening the panel first if
+it's closed), so the backing track and the live-coded groove start on one button.
+Strudel loops rather than running a linear transport, so a deck *pause* leaves it
+playing and only a deck stop/`ended` stops it (`stopSyncStrudel`) — and only when
+this deck press is what started it, never a Strudel the user rolled by hand.
 
 *+ rig stem* captures the rig ALONE alongside the full-mix video, for a DAW stem
 that lines up with the video. It's grabbed as raw Float32 PCM **off the audio

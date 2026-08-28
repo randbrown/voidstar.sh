@@ -512,6 +512,7 @@ export function initQualiaPage() {
     recWithPlay,
     recRigStem,
     stemFormat,
+    deckSyncStrudel: syncStrudelWithDeck,
     paused:         core.isPaused(),
     zen:            core.isZen(),
     poseSource:     poseSelect.value,
@@ -5011,11 +5012,16 @@ export function initQualiaPage() {
   const fpRecPlay = deckPanel?.querySelector('[data-qp="file-recplay"]');
   const fpRigStem = deckPanel?.querySelector('[data-qp="file-rigstem"]');
   const fpStemFmt = deckPanel?.querySelector('[data-qp="stem-format"]');
+  const fpSyncStrudel = deckPanel?.querySelector('[data-qp="file-syncstrudel"]');
   const deckStatus = document.getElementById('deck-status');
   let recWithPlay = stored.recWithPlay === true;
   let recRigStem  = stored.recRigStem === true && recWithPlay;
   let stemFormat  = stored.stemFormat === 'mp3' ? 'mp3' : 'wav';
+  // "sync strudel": pressing deck ▶ also rolls Strudel (and deck stop stops it).
+  let syncStrudelWithDeck = stored.deckSyncStrudel === true;
+  let _syncStrudelStarted = false;   // deck ▶ started Strudel (so only it stops it)
   let _syncTake   = false;   // a playback-synced take is in progress
+  let _syncTakeObs = false;  // …and that take belongs to OBS (vs the in-page recorder)
 
   const stemRecorder = createStemRecorder({
     getStemNode: () => audio.getStemNode?.('rig'),
@@ -5047,6 +5053,10 @@ export function initQualiaPage() {
       fpStemFmt.disabled = _syncTake;
       fpStemFmt.closest('.qp-file-stemfmt')?.classList.toggle('dim', !recRigStem);
     }
+    if (fpSyncStrudel) {
+      fpSyncStrudel.classList.toggle('active', syncStrudelWithDeck);
+      fpSyncStrudel.setAttribute('aria-pressed', syncStrudelWithDeck ? 'true' : 'false');
+    }
   }
   if (fpStemFmt) {
     fpStemFmt.addEventListener('change', () => {
@@ -5056,59 +5066,148 @@ export function initQualiaPage() {
     });
   }
 
+  // Kick off the rig-stem side-capture (independent PCM off the audio thread,
+  // not part of any video backend — so it rides along in every capture mode).
+  async function startRigStem() {
+    // Friendly pre-check for the common miss (rig not open); any other start
+    // failure surfaces through the stem recorder's onError.
+    if (!audio.getStemNode?.('rig')) {
+      showRecToastError('rig stem: no rig signal — open the rig capture, then record');
+      return;
+    }
+    const base = `qualia-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+    await stemRecorder.start(base);
+  }
+
+  // StartRecord's request-response only means OBS accepted the command; the
+  // output goes active a beat later (RecordStateChanged). Wait for that flag so
+  // audio playback doesn't start ahead of the actual recording.
+  async function waitForObsRecording(timeoutMs = 4000) {
+    const t0 = performance.now();
+    while (!obsClient.isRecording() && performance.now() - t0 < timeoutMs) {
+      await new Promise(r => setTimeout(r, 60));
+    }
+    return obsClient.isRecording();
+  }
+
+  // Arm a playback-synced take. Returns true if playback should proceed, false
+  // if it must be held back (an OBS take that never confirmed it started —
+  // "rec with play" is armed precisely so the set isn't performed un-recorded).
+  //
+  // The take now honors the SELECTED capture mode instead of always forcing qfx:
+  //   • obs      → drive OBS over its WebSocket and WAIT until it confirms it's
+  //                rolling before returning, so the restart-capture settle +
+  //                StartRecord round-trip finish before the first sample plays.
+  //   • tab      → full-tab capture (the share-picker appears, as in manual tab
+  //                takes — that's inherent to the mode the user picked).
+  //   • viewport → the qfx composite, as before.
   async function beginSyncTake() {
-    if (recorder.isRecording()) return;   // never hijack a manual take
+    if (recorder.isRecording()) return true;                        // manual in-page take already rolling
+    if (captureMode === 'obs' && obsClient.isRecording()) return true; // manual OBS take already rolling
     _syncTake = true;
+    _syncTakeObs = captureMode === 'obs';
     paintSessionRec();
-    // Honor the recorder's one-button modifiers, same as autoRecord(): auto-⛶
-    // enters fullscreen (awaiting the transition + resize so the composite locks
-    // at full-screen resolution) and auto-zen hides the in-page HUD — so a
-    // playback-synced take frames itself exactly like a manual auto-take. The
-    // forced auto-save below covers the gesture the fullscreen wait would spend.
+    // One-button modifiers, matched to what each mode can actually use (see
+    // refreshRecordModeBtn): auto-⛶ frames every mode except tab (whose async
+    // share-picker can't compose with the fullscreen gesture); auto-zen hides
+    // the in-page HUD, which only makes sense for a qfx take — never OBS (the
+    // HUD is the reason to record through OBS) and never tab.
     closeAllGroupsExcept(null);
-    if (autoFullscreenRec && !isFullscreen()) {
+    if (autoFullscreenRec && captureMode !== 'tab' && !isFullscreen()) {
       setFullscreen(true);
       await awaitEvent(document, 'fullscreenchange', 800);
       await awaitEvent(window, 'resize', 800);
       try { core.refreshSize?.(); } catch {}
       await nextFrame();
     }
-    if (autoZenRec && !core.isZen()) setZen(true);
-    // Force auto-save (viewport) — the save-picker's async gesture would race
-    // playback start and, on macOS, drop out of fullscreen mid-take.
-    recOverride = { mode: 'viewport', autoSave: true };
+    if (autoZenRec && captureMode === 'viewport' && !core.isZen()) setZen(true);
+
+    if (captureMode === 'obs') {
+      // OBS owns the video take. Start it and hold playback until it confirms —
+      // this is the "get confirmation before starting audio" the delay demands.
+      try {
+        await obsStartRecording();
+      } catch (err) {
+        console.warn('[qualia] session record (obs) start failed:', err);
+        const fix = err?.obsProblem?.fix;
+        showRecToastError((err?.message || String(err))
+          + (fix ? ` — open obs… and press “${fix.label}”` : ''));
+        _syncTake = false; _syncTakeObs = false;
+        paintSessionRec();
+        return false;
+      }
+      if (!(await waitForObsRecording())) {
+        showRecToastError('OBS didn’t confirm it started recording — playback held');
+        _syncTake = false; _syncTakeObs = false;
+        paintSessionRec();
+        return false;
+      }
+      if (recRigStem) await startRigStem();
+      return true;
+    }
+
+    // In-page recorder (qfx composite or full tab). Force auto-save so no
+    // save-picker races playback start (on macOS it drops out of fullscreen
+    // mid-take); tab mode always streams to OPFS and ignores the flag.
+    recOverride = { mode: captureMode === 'tab' ? 'tab' : 'viewport', autoSave: true };
     try {
       await recorder.start();
     } catch (err) {
       console.warn('[qualia] session record start failed:', err);
-      showRecToastError(`recording failed to start — ${err?.message || err}`);
-      _syncTake = false;
+      // A dismissed tab share-picker is a deliberate cancel, not a failure.
+      if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') {
+        showRecToastError(`recording failed to start — ${err?.message || err}`);
+      }
+      _syncTake = false; _syncTakeObs = false;
       recOverride = null;
       paintSessionRec();
-      return;
+      return true;   // play anyway — matches the pre-existing in-page behavior
     }
     recOverride = null;
-    if (recRigStem) {
-      // Friendly pre-check for the common miss (rig not open); any other start
-      // failure surfaces through the recorder's onError.
-      if (!audio.getStemNode?.('rig')) {
-        showRecToastError('rig stem: no rig signal — open the rig capture, then record');
-      } else {
-        const base = `qualia-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
-        await stemRecorder.start(base);
-      }
-    }
+    if (recRigStem) await startRigStem();
+    return true;
   }
 
   function endSyncTake() {
     if (!_syncTake) return;
     _syncTake = false;
-    try { recorder.stop(); } catch {}
+    if (_syncTakeObs) { _syncTakeObs = false; void obsStopRecording(); }
+    else { try { recorder.stop(); } catch {} }
     try { stemRecorder.stop(); } catch {}
     paintSessionRec();
   }
-  function pauseSyncTake()  { if (_syncTake) { recorder.pause?.();  stemRecorder.pause();  } }
-  function resumeSyncTake() { if (_syncTake) { recorder.resume?.(); stemRecorder.resume(); } }
+  // An OBS take keeps rolling through a track pause (OBS has no clean pause here,
+  // and the stem stays aligned with it by not pausing either); only the in-page
+  // recorder trims itself to the track.
+  function pauseSyncTake()  { if (_syncTake && !_syncTakeObs) { recorder.pause?.();  stemRecorder.pause();  } }
+  function resumeSyncTake() { if (_syncTake && !_syncTakeObs) { recorder.resume?.(); stemRecorder.resume(); } }
+
+  // ── "sync strudel": co-start Strudel with the deck ────────────────────────
+  // Pressing deck ▶ evaluates the Strudel pattern too, so the backing track and
+  // the live-coded groove start on one button. Strudel plays a loop (no linear
+  // transport), so a deck PAUSE leaves it running and only a deck stop/end stops
+  // it — and only if this deck press is what started it (never a Strudel the
+  // user rolled by hand).
+  async function startSyncStrudel() {
+    if (strudel.isPlaying?.()) return;   // already rolling — leave it be
+    try {
+      // The editor has to be mounted for play() to evaluate anything; open the
+      // panel if it's closed and give it a beat to mount before rolling.
+      if (!strudel.isOpen?.()) await strudel.open?.();
+      const t0 = performance.now();
+      while (!strudel.getEditor?.() && performance.now() - t0 < 2500) {
+        await new Promise(r => setTimeout(r, 60));
+      }
+      if (strudel.play?.()) _syncStrudelStarted = true;
+      else showRecToastError('sync strudel: the Strudel pattern isn’t ready yet');
+    } catch (e) { console.warn('[qualia] deck sync strudel play failed:', e); }
+  }
+  function stopSyncStrudel() {
+    if (!_syncStrudelStarted) return;
+    _syncStrudelStarted = false;
+    try { if (strudel.isPlaying?.()) strudel.stop?.(); }
+    catch (e) { console.warn('[qualia] deck sync strudel stop failed:', e); }
+  }
 
   // The file player's play/pause button routes here (registered up in the
   // file-player block) so a take can arm the recorder before the first sample.
@@ -5121,17 +5220,28 @@ export function initQualiaPage() {
       if (audioMode === 'off') await setAudioMode('mix');
       else if (audioMode === 'mic') await setAudioMode('all');
     } catch { /* play anyway */ }
-    // Start the take BEFORE playback so the recording catches the first sample.
-    if (recWithPlay && !_syncTake && !recorder.isRecording()) await beginSyncTake();
+    // Arm the take BEFORE playback so the recording catches the first sample —
+    // and, in OBS mode, so playback waits for OBS to confirm it's rolling (the
+    // restart-capture settle + StartRecord round-trip can run to a second or
+    // more). If arming leaves nothing recording in a mode where that's the whole
+    // point (OBS), don't play into a dead take.
+    if (recWithPlay && !_syncTake && !recorder.isRecording() && !obsRecording()) {
+      const armed = await beginSyncTake();
+      if (!armed) return;
+    }
+    // Roll Strudel alongside the deck (after the take is armed, so its first
+    // sound lands inside the recording).
+    if (syncStrudelWithDeck) await startSyncStrudel();
     filePlayer.play();
   }
 
-  // Transport edges drive the pause/resume/stop side of a take. (The START is
-  // handled in onFilePlayClicked, before playback, so nothing is missed.)
+  // Transport edges drive the pause/resume/stop side of a take, and the stop
+  // side of the Strudel co-start. (Both STARTs happen in onFilePlayClicked,
+  // before playback, so nothing is missed.)
   filePlayer.onTransport?.((phase) => {
     if (phase === 'pause') pauseSyncTake();
     else if (phase === 'play') resumeSyncTake();
-    else if (phase === 'ended' || phase === 'stop') endSyncTake();
+    else if (phase === 'ended' || phase === 'stop') { endSyncTake(); stopSyncStrudel(); }
   });
 
   fpRecPlay?.addEventListener('click', () => {
@@ -5144,6 +5254,11 @@ export function initQualiaPage() {
   fpRigStem?.addEventListener('click', () => {
     if (_syncTake || !recWithPlay) return;
     recRigStem = !recRigStem;
+    settings.save();
+    paintSessionRec();
+  });
+  fpSyncStrudel?.addEventListener('click', () => {
+    syncStrudelWithDeck = !syncStrudelWithDeck;
     settings.save();
     paintSessionRec();
   });

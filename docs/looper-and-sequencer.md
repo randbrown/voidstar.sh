@@ -350,6 +350,11 @@ clean fx output is what you want.
 - **Modifiers:** `auto-⛶` applies (a fullscreen window makes a clean display capture, and hides no
   panels). `auto-zen` and `auto-save` read **n/a** and are ignored — zen hides the HUD, which is the
   reason to use this mode at all, and OBS owns its own output file.
+- **The deck's *rec with play* honors this mode too.** When `captureMode` is `obs`, `beginSyncTake`
+  drives OBS instead of the in-page recorder and **waits for OBS to confirm it's rolling**
+  (`waitForObsRecording`, after the restart-capture settle + `StartRecord`) before the deck starts
+  playing — the OBS delay would otherwise clip the top of the take. See the deck section in
+  [`audio-engine.md`](audio-engine.md).
 - **Scene setup lives in OBS**, deliberately: *Display Capture* of the screen the app is
   fullscreened on is the most faithful (it catches native `<select>` dropdowns and OS menus that
   window capture can miss); *Window Capture* of the installed PWA window when you want the app
