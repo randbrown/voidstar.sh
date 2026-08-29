@@ -144,10 +144,19 @@ float sdSegment(vec2 p, vec2 a, vec2 b) {
 // Portal-content sample: portal-uv → the canvas-px point whose camera sample
 // fills that spot. 'frame' squeezes the whole displayed frame into the pane;
 // 'lens' looks straight through it, slightly magnified about the pane centre.
+// Lens mode maps uv through the quad's FORWARD bilinear patch (the inverse
+// of invBilinear) rather than using the fragment position, so offset and
+// cell-quantized taps (Sobel, ascii/crush cells, chroma fringe) sample the
+// world correctly in both modes; px is kept for signature stability only.
 // (cen, not "centroid" — that's a reserved word in GLSL ES 3.00.)
 vec3 content(vec2 uv, vec2 px, vec2 cen) {
-  vec2 p = (uSample == 0) ? uv * uResolution
-                          : cen + (px - cen) / max(uZoom, 0.05);
+  vec2 p;
+  if (uSample == 0) {
+    p = uv * uResolution;
+  } else {
+    vec2 q = mix(mix(uC0, uC1, uv.x), mix(uC3, uC2, uv.x), uv.y);
+    p = cen + (q - cen) / max(uZoom, 0.05);
+  }
   return cam(p);
 }
 
@@ -560,9 +569,12 @@ export default {
       idleCorners(tgt, time, scratch.bass);
       if (gotL) { setCorner(tgt, 0, liX, liY); setCorner(tgt, 3, ltX, ltY); }
       if (gotR) { setCorner(tgt, 1, riX, riY); setCorner(tgt, 2, rtX, rtY); }
-      // lmToCanvas mirrors: the performer's left hand lands on screen-right.
-      // If the tracked top edge ends up right-to-left, swap sides so u grows
-      // left→right and the pane isn't permanently bowtied by the mirror.
+      // With the default selfie mirror, lmToCanvas puts the performer's
+      // left hand on screen-LEFT (mirror behavior), so tracked corners are
+      // already ordered left→right. With mirror off the sides land reversed;
+      // swap them so u still grows left→right and the pane isn't permanently
+      // inside-out. Deliberate vertical crossings (index below thumb) still
+      // fold into the bowtie either way.
       if (gotL && gotR && tgt[0] > tgt[2]) {
         for (let i = 0; i < 4; i++) {
           const a = i, b = i === 0 ? 1 : i === 1 ? 0 : i === 2 ? 3 : 2;
