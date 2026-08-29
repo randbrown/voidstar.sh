@@ -2732,6 +2732,53 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     #looper-panel.ghost .rig-subpanel + .rig-subpanel { border-top-color: transparent; }
 
+    /* Ghost, generalized — the same lean chrome-free layer as strudel/rig, but
+       for the remaining floating panels (deck · seq · vox · mixer), each with
+       its own ◌ header toggle. Plus a GLOBAL "clear glass" toggle
+       (body.clear-glass, the topbar ◌ next to zen) that ghosts EVERY panel at
+       once — the phone win, since a stack of opaque panels otherwise buries the
+       stage. Chrome (fill · frame · shadow · blur) and the header bar go
+       transparent; the controls float over the visuals. Strudel/rig keep their
+       own ·.ghost· blocks above; clear-glass re-covers them here so one toggle
+       is uniform. */
+    #deck-panel.ghost, #sequencer-panel.ghost, #vocoder-panel.ghost, #mixer-panel.ghost,
+    body.clear-glass #strudel-panel, body.clear-glass #sequencer-panel,
+    body.clear-glass #vocoder-panel, body.clear-glass #mixer-panel,
+    body.clear-glass #looper-panel, body.clear-glass #deck-panel {
+      background: transparent !important;
+      backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+      border-color: transparent !important;
+      box-shadow: none !important;
+      text-shadow: 0 1px 2px var(--void), 0 0 5px var(--void);
+    }
+    #deck-panel.ghost #deck-header, #sequencer-panel.ghost #sequencer-header,
+    #vocoder-panel.ghost #vocoder-header, #mixer-panel.ghost #mixer-header,
+    body.clear-glass #strudel-header, body.clear-glass #sequencer-header,
+    body.clear-glass #vocoder-header, body.clear-glass #mixer-header,
+    body.clear-glass #looper-header, body.clear-glass #deck-header {
+      background: transparent !important;
+      border-bottom-color: transparent !important;
+      backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+    }
+    /* Ghost drops the title/tag/status — the floating controls speak for
+       themselves, and a label is one more thing over the visuals. The error
+       chip and transport stay. (!important beats the lanes chip's inline show.) */
+    #deck-panel.ghost .sp-title, #deck-panel.ghost .sp-tag, #deck-panel.ghost .sp-status,
+    #sequencer-panel.ghost .sp-title, #sequencer-panel.ghost .sp-status,
+    #vocoder-panel.ghost .sp-title, #vocoder-panel.ghost .sp-tag, #vocoder-panel.ghost .sp-status,
+    #mixer-panel.ghost .sp-title, #mixer-panel.ghost .sp-tag,
+    body.clear-glass .sp-title, body.clear-glass .sp-tag,
+    body.clear-glass #strudel-status, body.clear-glass #sequencer-status,
+    body.clear-glass #vocoder-status, body.clear-glass #deck-status {
+      display: none !important;
+    }
+    /* Global clear-glass also strips the heavier per-panel chrome the strudel
+       and rig ◌ hide, so the global toggle looks as lean as a per-panel ghost. */
+    body.clear-glass #strudel-tabs { display: none; }
+    body.clear-glass .rig-subhead {
+      background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+
     #rig-mini { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.6rem; }
     .rig-mini-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
     .rig-mini-group { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
@@ -2992,7 +3039,6 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     }
     #deck-header.dragging { cursor: grabbing; }
     #deck-header .ctrl-btn { cursor: pointer; }
-    #deck-header .sp-status { margin-left: auto; }
     #btn-deck-close { padding: 0.1rem 0.55rem; font-size: 0.95rem; line-height: 1; }
     #deck-body {
       flex: 1; min-height: 0; overflow: auto;
@@ -3087,11 +3133,11 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        column so wrapped rows never slide underneath it. (Must sit after every
        #*-header rule: their `padding:` shorthands would win otherwise.) */
     #strudel-header, #sequencer-header, #mixer-header, #looper-header,
-    #vocoder-header {
+    #vocoder-header, #deck-header {
       position: relative; padding-right: 2.75rem;
     }
     #btn-strudel-close, #btn-sequencer-close, #btn-mixer-close,
-    #btn-looper-close, #btn-vocoder-close {
+    #btn-looper-close, #btn-vocoder-close, #btn-deck-close {
       position: absolute; top: 0.4rem; right: 0.6rem;
     }
     #vocoder-body {
@@ -3227,6 +3273,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         </div>
       </div>
       <div id="topbar-corner-pinned">
+        <button class="ctrl-btn btn-icon" id="btn-clear-glass" title="Clear glass — ghost every open panel at once: near-zero chrome so the panels stop covering the stage (a phone win). Tap again to restore." aria-label="Clear glass" aria-pressed="false">◌</button>
         <button class="ctrl-btn btn-icon" id="btn-blackout" title="Blackout — screen off, audio keeps playing (H). Tap the dark screen to wake." aria-label="Blackout" aria-pressed="false">☾</button>
         <button class="ctrl-btn btn-icon" id="btn-fullscreen" title="Fullscreen (X)" aria-label="Fullscreen">⛶</button>
         <button class="ctrl-btn" id="btn-zen" title="Zen mode (Z)">zen</button>
@@ -3503,6 +3550,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="qp-toggle" id="btn-api-echo" aria-pressed="false">off</button>
       </div>
       <div class="qp-section-tag">advanced</div>
+      <div class="qp-row diag-row" title="Lost a panel? Moving between displays can strand a dragged panel off-screen. This snaps every floating panel — strudel, seq, vox, rig, mixer, deck — back to its default position and size (settings are untouched).">
+        <span class="diag-label">lost panels?</span>
+        <button class="qp-toggle" id="btn-reset-panels" title="Reset all panel positions + sizes to their defaults">reset layout</button>
+      </div>
       <div class="qp-row diag-row">
         <span class="diag-label">stuck state?</span>
         <button class="qp-toggle" id="btn-reset-all" title="Clear all qualia settings + service-worker caches and reload">reset all</button>
@@ -4395,6 +4446,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 <div id="mixer-panel" style="display:none">
   <div id="mixer-header">
     <span class="sp-title">mix <span class="sp-tag">// levels · limiters · clip</span></span>
+    <span class="rig-head-spacer"></span>
+    <!-- ◌ sits immediately left of × in every panel. -->
+    <button class="ctrl-btn" id="btn-mixer-ghost" aria-pressed="false" title="Ghost the panel — drop the chrome so the mixer floats clear over the visuals">◌</button>
     <button class="ctrl-btn" id="btn-mixer-close" title="Close">×</button>
   </div>
   <!-- Channel strips (mic · rig · strudel · seq · vox) are built by mixer.js. -->
@@ -4484,6 +4538,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn panel-mute-btn" id="btn-sequencer-mute" title="Mute sequencer audio (transport keeps running so sync stays locked)">live</button>
     <input type="range" class="panel-gain-slider" id="sequencer-gain" min="0" max="1.5" step="0.01" value="0.9" title="Output level (0–1.5×; 1.0 = nominal loudness-matched to the other buses, above 1.0 boosts a weak pattern). Rides the sequencer mix without editing per-pad gain. The kit-bus limiter catches clipping." />
     <button class="ctrl-btn" id="btn-sequencer-sync" title="Realign sequencer to Strudel cycle boundary now" style="display:none">⟲</button>
+    <span class="rig-head-spacer"></span>
+    <!-- ◌ sits immediately left of × in every panel (io chip inserts before it). -->
+    <button class="ctrl-btn" id="btn-sequencer-ghost" aria-pressed="false" title="Ghost the panel — drop the chrome so the sequencer floats clear over the visuals">◌</button>
     <button class="ctrl-btn" id="btn-sequencer-close" title="Close (Q)">×</button>
   </div>
   <!-- grid + settings are independent show/hide toggles (not exclusive
@@ -4722,10 +4779,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 <div id="deck-panel" style="display:none">
   <div id="deck-header">
     <span class="sp-title">deck <span class="sp-tag">// audio file</span></span>
+    <!-- Spacer pins the transport…◌ × cluster right, matching strudel/rig (it
+         replaces the old status margin-left:auto, which ghost mode would hide). -->
+    <span class="rig-head-spacer"></span>
     <span class="sp-status" id="deck-status"></span>
     <button class="ctrl-btn" id="btn-deck-play" disabled title="Play / pause (P)">▶</button>
     <button class="ctrl-btn" id="btn-deck-stop" disabled title="Stop and rewind to the start">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-deck-mute" title="Mute the track (pulls it from speakers, recording + visuals; level is kept)">live</button>
+    <!-- ◌ sits immediately left of × in every panel. -->
+    <button class="ctrl-btn" id="btn-deck-ghost" aria-pressed="false" title="Ghost the panel — drop the chrome so the deck floats clear over the visuals">◌</button>
     <button class="ctrl-btn" id="btn-deck-close" title="Close">×</button>
   </div>
   <div id="deck-body">
@@ -4779,6 +4841,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <button class="ctrl-btn" id="btn-vocoder-play"  title="Open the mic">▶</button>
     <button class="ctrl-btn" id="btn-vocoder-stop"  title="Close the mic">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-vocoder-mute" title="Mute output (mic stays open)">live</button>
+    <span class="rig-head-spacer"></span>
+    <!-- ◌ sits immediately left of × in every panel (io chip inserts before it). -->
+    <button class="ctrl-btn" id="btn-vocoder-ghost" aria-pressed="false" title="Ghost the panel — drop the chrome so vox floats clear over the visuals">◌</button>
     <button class="ctrl-btn" id="btn-vocoder-close" title="Close (W)">×</button>
   </div>
   <div id="vocoder-body">

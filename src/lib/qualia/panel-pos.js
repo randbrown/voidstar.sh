@@ -49,6 +49,51 @@ export function clearPanelPos(id) {
   removeRaw(`${NS}.${id}`);
 }
 
+// ── global "reset layout" ────────────────────────────────────────────────────
+// Panels dragged onto a second display are easy to lose when that display goes
+// away (the saved position points off-screen and the header can end up out of
+// reach). resetAllPanelPositions() is the recovery hatch: it forgets every
+// remembered geometry and snaps live panels back to their CSS-default box.
+//
+// Each panel that owns in-memory geometry state (makeDraggablePanel here, plus
+// the rig's own drag block in looper.js) registers a reset callback so its
+// `movedByUser`-style flag and inline styles clear too — a localStorage wipe
+// alone wouldn't undo an already-applied inline position.
+const _resetHooks = new Set();
+
+/** Register a callback run by resetAllPanelPositions(). Returns an unregister
+ *  fn. The callback should clear the panel's inline geometry + any in-memory
+ *  "moved" state so it returns to its default home. */
+export function onPanelReset(fn) {
+  _resetHooks.add(fn);
+  return () => _resetHooks.delete(fn);
+}
+
+/** Wipe a panel's inline geometry so its CSS-default box (position/size/centre)
+ *  takes over again. */
+export function clearPanelInlineGeometry(panel) {
+  if (!panel) return;
+  for (const p of ['left', 'top', 'right', 'bottom', 'width', 'height', 'minHeight', 'maxHeight', 'transform']) {
+    panel.style[p] = '';
+  }
+  panel.style.zIndex = '';
+}
+
+/** Forget every persisted panel position/size and snap live panels home. */
+export function resetAllPanelPositions() {
+  // Remove all panelPos.* keys — covers ids whose panel isn't currently live
+  // (rig full/mini, the QR interject popup) as well as the open ones.
+  try {
+    const doomed = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(`${NS}.`)) doomed.push(k);
+    }
+    for (const k of doomed) localStorage.removeItem(k);
+  } catch { /* storage unavailable */ }
+  for (const fn of _resetHooks) { try { fn(); } catch { /* one bad hook shouldn't stop the rest */ } }
+}
+
 // ── any-corner / any-edge resize ────────────────────────────────────────────
 // Panels used to rely on CSS `resize: both`, which only gives the browser's
 // bottom-right grip — awkward when that corner sits off the bottom of the
@@ -296,6 +341,13 @@ export function makeDraggablePanel(id, panel, hooks = {}) {
       _rDebounce = setTimeout(() => savePanelPos(id, panel), 300);
     }).observe(panel);
   }
+
+  // "Reset layout": forget this panel's remembered spot and re-centre it.
+  onPanelReset(() => {
+    movedByUser = false;
+    clearPanelInlineGeometry(panel);
+    reposition();
+  });
 
   return reposition;
 }

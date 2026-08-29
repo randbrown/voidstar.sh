@@ -34,7 +34,7 @@ import { createLooperRenderer } from './looper-render.js';
 import { traceWave, idleTrace } from './scope-draw.js';
 import * as loopStore from './looper-store.js';
 import { wirePicker, getStoredDeviceId } from './devices.js';
-import { savePanelPos, restorePanelPos, attachPanelResize } from './panel-pos.js';
+import { savePanelPos, restorePanelPos, attachPanelResize, onPanelReset, clearPanelInlineGeometry } from './panel-pos.js';
 import { getRaw as lsGet, setRaw as lsSet, clamp01 } from './prefs.js';
 import { RIG_LEVEL_MAX } from './limiter.js';
 
@@ -4763,6 +4763,15 @@ export function createLooper({ audio, syncStrudel } = {}) {
       _rDebounce = setTimeout(() => savePanelPos(posId(), panel), 300);
     }).observe(panel);
   }
+
+  // "Reset layout" (diagnostics): forget both remembered geometries and snap the
+  // rig back to its default home for the mode in view — mini to the bottom-right
+  // corner, full centred under the topbar.
+  onPanelReset(() => {
+    moved[POS_FULL] = false; moved[POS_MINI] = false;
+    clearPanelInlineGeometry(panel);
+    if (model.mini) applyModeGeometry(); else reposition();
+  });
 
   // ── open / close ─────────────────────────────────────────────────────────
   function open() {
