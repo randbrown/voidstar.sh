@@ -2779,6 +2779,22 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none;
     }
 
+    /* …and it reaches the HUD itself: the top control bar and the bottom card
+       stack (fx · audio · pose · camera · diag) + mobile tab bar drop their
+       glass slab, so only the control chips float over the stage. The chips
+       keep their own outline/fill; a text-shadow (inherited) keeps the readouts
+       legible over a busy visual. On-demand popovers (the topbar group menus)
+       are left alone so dropdowns stay readable. */
+    body.clear-glass #topbar,
+    body.clear-glass .qp-card,
+    body.clear-glass .qp-tabs {
+      background: transparent !important;
+      backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+      border-color: transparent !important;
+      box-shadow: none !important;
+      text-shadow: 0 1px 2px var(--void), 0 0 5px var(--void);
+    }
+
     #rig-mini { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.55rem 0.6rem; }
     .rig-mini-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
     .rig-mini-group { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.45rem 0.55rem; }
