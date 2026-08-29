@@ -69,6 +69,7 @@ import vintageAnalog   from './fx/vintage-analog.js';
 import synthwave       from './fx/synthwave.js';
 import telemetry       from './fx/telemetry.js';
 import camera          from './fx/camera.js';
+import nullPortal      from './fx/null-portal.js';
 import darkSpace       from './fx/dark-space.js';
 import code            from './fx/code.js';
 import anomaly         from './fx/anomaly.js';
@@ -192,6 +193,7 @@ export function initQualiaPage() {
   mesh.register(synthwave);
   mesh.register(telemetry);
   mesh.register(camera);
+  mesh.register(nullPortal);
   mesh.register(darkSpace);
   mesh.register(code);
   mesh.register(anomaly);
