@@ -37,7 +37,8 @@ export function emptyAudioFrame() {
 /** @returns {import('./types.js').PoseFrame} */
 export function emptyPoseFrame() {
   // hands: latest raw HandLandmarker result ({t, landmarks, handedness}) or
-  // null — only populated while gesture detection (horns 🤘) is enabled.
+  // null — only populated while the hand model is armed: gesture detection
+  // (horns 🤘) is on, or the active quale declares `wantsHands`.
   return { people: [], timestamp: 0, hands: null };
 }
 

@@ -22,12 +22,16 @@
 // what's behind it. `background` is the rest of the screen: the dimmed live
 // feed, or void (near-black → effectively transparent over Hydra).
 //
-// Tracking: person 0's pose landmarks 19-22 (index/thumb tips, ~15 fps,
-// already adaptively smoothed + lingered by pose.js) drive the corners
-// through a dt-based low-pass. While gesture detection (horns 🤘, pose menu)
-// is enabled, the 21-point HandLandmarker result in field.pose.hands refines
-// the same corners with true fingertip positions. Corners are mapped with
-// lmToCanvas so they ride exactly where the preview/skeleton shows the hands.
+// Tracking: `wantsHands: true` below makes the page keep the 21-point
+// HandLandmarker armed while this quale is active (same model the horns 🤘
+// toggle uses), so field.pose.hands carries REAL fingertip positions —
+// that's what makes the pane react to individual fingers. The pose model's
+// own hand points (raw 19-22) are rigid body-model estimates that only
+// follow the wrist, so they serve as the fallback tier (~15 fps,
+// pre-smoothed) when the hand model has no fresh result — hands run every
+// 2nd pose tick (~7.5 fps) and are worker-only/best-effort (main-thread
+// pose fallback or a failed CDN fetch → pose tips carry on). Corners map
+// through lmToCanvas so they ride where the preview/skeleton shows them.
 // No hands → the portal eases into a slow idle drift; camera off → it prints
 // a palette test card so the quale stays alive (README idle rule).
 //
@@ -383,6 +387,7 @@ export default {
   name: 'Null Portal',
   contextType: 'webgl2',
   maxDpr: 1.0,   // camera texture + per-pixel quad solve — same cap as Video
+  wantsHands: true,   // page arms the 21-pt HandLandmarker while active
 
   params: [
     { id: 'look',       label: 'look',       type: 'select', options: LOOKS, default: 'hologram' },

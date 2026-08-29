@@ -371,6 +371,10 @@ export function initQualiaPage() {
     paramsContainer: fxParamsEl,
     onFxChange: (id) => {
       fxSelect.value = id;
+      // Arm/release the 21-point hand model for quales that read
+      // field.pose.hands (see refreshHandsEnabled by the horns wiring).
+      activeFxIdForHands = id;
+      refreshHandsEnabled();
       // Re-sync the phase timer for the new quale. autoPhaseSeconds (the
       // user's intended period) is preserved across switches — if the new
       // quale lacks phase support the timer just pauses; the next quale
@@ -3437,15 +3441,25 @@ export function initQualiaPage() {
     if (!hornsOn) return;
     if (hornsDetector.update(hands, t).fired) hornsFire();
   });
+  // Hand-model arming — the single choke point ORing its two consumers:
+  // the horns 🤘 toggle and any active quale declaring `wantsHands` (e.g.
+  // null_portal, which steers its corners with real fingertips). The worker
+  // remembers the wanted state across camera restarts; switching away from
+  // a wantsHands quale releases the model unless horns still holds it.
+  let activeFxIdForHands = null;
+  function refreshHandsEnabled() {
+    const mod = activeFxIdForHands ? mesh.get(activeFxIdForHands) : null;
+    pose.setHandsEnabled(hornsOn || !!(mod && mod.wantsHands));
+  }
   function refreshHornsBtn() { btnHorns?.classList.toggle('active', hornsOn); }
   function setHornsOn(on) {
     hornsOn = !!on;
-    pose.setHandsEnabled(hornsOn);
+    refreshHandsEnabled();
     refreshHornsBtn();
     settings.save();
   }
   btnHorns?.addEventListener('click', () => setHornsOn(!hornsOn));
-  if (hornsOn) pose.setHandsEnabled(true); // restored from settings
+  refreshHandsEnabled(); // hornsOn restored from settings above
   refreshHornsBtn();
 
   function wireLogoSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
