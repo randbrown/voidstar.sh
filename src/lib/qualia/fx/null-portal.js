@@ -540,14 +540,24 @@ export default {
       const ltdx = lttx - ltbx, ltdy = ltty - ltby;
       const ridx = ritx - ribx, ridy = rity - riby;
       const rtdx = rttx - rtbx, rtdy = rtty - rtby;
-      // Apex per hand; web midpoint when the rays are near-parallel.
-      let ax, ay, bx, by;
-      if (lineIntersect(libx, liby, lidx, lidy, ltbx, ltby, ltdx, ltdy)) {
+      // Apex per hand; the web midpoint when the rays are near-parallel.
+      // The det threshold alone can't catch a RELAXED hand (thumb almost
+      // parallel to index): the intersection exists but lands thousands of
+      // px offscreen, so clamp any apex that flies further than a fraction
+      // of the screen from the physical web — an apex is a hand feature and
+      // can never legitimately be far from the hand.
+      const apexFar = Math.hypot(W, H) * 0.25;
+      const lwx = (libx + ltbx) / 2, lwy = (liby + ltby) / 2;
+      const rwx = (ribx + rtbx) / 2, rwy = (riby + rtby) / 2;
+      let ax = lwx, ay = lwy, bx = rwx, by = rwy;
+      if (lineIntersect(libx, liby, lidx, lidy, ltbx, ltby, ltdx, ltdy) &&
+          Math.hypot(isect[0] - lwx, isect[1] - lwy) < apexFar) {
         ax = isect[0]; ay = isect[1];
-      } else { ax = (libx + ltbx) / 2; ay = (liby + ltby) / 2; }
-      if (lineIntersect(ribx, riby, ridx, ridy, rtbx, rtby, rtdx, rtdy)) {
+      }
+      if (lineIntersect(ribx, riby, ridx, ridy, rtbx, rtby, rtdx, rtdy) &&
+          Math.hypot(isect[0] - rwx, isect[1] - rwy) < apexFar) {
         bx = isect[0]; by = isect[1];
-      } else { bx = (ribx + rtbx) / 2; by = (riby + rtby) / 2; }
+      }
       // Cross-hand corners: L-index ray × R-thumb ray, and vice versa.
       const far = Math.hypot(W, H) * 1.6;
       const mx = (ax + bx) / 2, my = (ay + by) / 2;

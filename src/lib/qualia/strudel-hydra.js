@@ -10,7 +10,7 @@
 //     `osc().scale(()=>a.fft[0])` patterns from cymatics still work.
 
 import {
-  loadCurrent, saveCurrent, loadList, addToList, upsertByName, updateInList,
+  loadCurrent, saveCurrent, loadList, upsertByName, updateInList,
   removeFromList, clonePattern, randomPattern, parseMetadata, activeLanes,
   setMetadata, patternDisplayName, downloadPattern,
 } from './patterns.js';
