@@ -35,12 +35,13 @@ import { createModem } from './modem.js';
 import { createAudioFilePlayer } from './audio-file.js';
 import { traceWave, idleTrace, computePeaks } from './scope-draw.js';
 import { createStemRecorder } from './stem-recorder.js';
-import { makeDraggablePanel } from './panel-pos.js';
+import { makeDraggablePanel, resetAllPanelPositions } from './panel-pos.js';
+import { getBool, setBool } from './prefs.js';
 import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { createChron } from './chron.js';
-import { getTheme } from './theme.js';
+import { getTheme, readKnobs, onThemeChange } from './theme.js';
 import { initQRInterject } from './qr-interject.js';
 import { initSyncUI } from './sync-ui.js';
 import { createRecorder } from './recorder.js';
@@ -964,6 +965,14 @@ export function initQualiaPage() {
   let scopeBuf = null;                    // reused byte buffer for the scope trace
   let deckRAF = 0, deckSkip = false;
 
+  // Deck waveform/scope colours follow the active theme's accents (cyan for the
+  // wave + playhead, pink while scrubbing / near clip) instead of hardcoded
+  // hues — the deck now recolors with the theme like the pose/spectrum canvases.
+  // Cached; re-read on theme change, and the static-waveform bitmap is dropped
+  // so it repaints in-family. On voidstar these resolve to the original values.
+  let DECK_K = readKnobs();
+  onThemeChange(() => { DECK_K = readKnobs(); waveOff = null; waveOffKey = ''; });
+
   const deckDpr = () => Math.min(2, window.devicePixelRatio || 1);
   // Size a canvas's backing store to its layout box (DPR-aware); true if changed.
   function fitDeckCanvas(cv) {
@@ -994,7 +1003,7 @@ export function initQualiaPage() {
     g.beginPath(); g.moveTo(0, mid + 0.5); g.lineTo(W, mid + 0.5); g.stroke();
     if (wavePeaks) {
       const bins = wavePeaks.min.length, amp = mid * 0.94;
-      g.strokeStyle = 'rgba(34,211,238,0.5)'; g.lineWidth = 1; g.beginPath();
+      g.strokeStyle = DECK_K.ac.cyan.rgba(0.5); g.lineWidth = 1; g.beginPath();
       for (let x = 0; x < W; x++) {
         const b0 = Math.floor(x / W * bins);
         const b1 = Math.max(b0 + 1, Math.floor((x + 1) / W * bins));
@@ -1026,9 +1035,9 @@ export function initQualiaPage() {
     if (dur > 0) {
       const t = _scrubTime >= 0 ? _scrubTime : (filePlayer.getPosition?.() || 0);
       const x = Math.max(0, Math.min(1, t / dur)) * W;
-      g.fillStyle = 'rgba(34,211,238,0.10)';          // played-region tint
+      g.fillStyle = DECK_K.ac.cyan.rgba(0.10);        // played-region tint
       g.fillRect(0, 0, x, H);
-      g.strokeStyle = _scrubTime >= 0 ? 'rgba(244,114,182,0.95)' : 'rgba(34,211,238,0.95)';
+      g.strokeStyle = _scrubTime >= 0 ? DECK_K.ac.pink.rgba(0.95) : DECK_K.ac.cyan.rgba(0.95);
       g.lineWidth = Math.max(1, Math.round(deckDpr()));
       g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, H); g.stroke();
     }
@@ -1049,7 +1058,7 @@ export function initQualiaPage() {
       an.getByteTimeDomainData(scopeBuf);
       const peak = traceWave(g, scopeBuf, n, W, mid, 1);   // true-scale (file plays near full-scale)
       g.lineWidth = Math.max(1, Math.round(deckDpr()));
-      g.strokeStyle = peak > 0.985 ? 'rgba(244,114,182,0.95)' : 'rgba(34,211,238,0.9)';
+      g.strokeStyle = peak > 0.985 ? DECK_K.ac.pink.rgba(0.95) : DECK_K.ac.cyan.rgba(0.9);
       g.stroke();
     } else {
       idleTrace(g, W, mid);                  // faint sine when the track is silent
@@ -1459,6 +1468,15 @@ export function initQualiaPage() {
       }
       settings.save();
     });
+  });
+
+  // ── Reset panel layout (recover a lost/off-screen panel) ─────────────────
+  // Moving between displays can strand a dragged panel off-screen; this snaps
+  // every floating panel back to its default position + size. Settings are
+  // untouched — geometry only. stopPropagation so the diag card stays open.
+  document.getElementById('btn-reset-panels')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    resetAllPanelPositions();
   });
 
   // ── Reset-all (escape hatch for stuck state) ─────────────────────────────
@@ -7783,9 +7801,9 @@ export function initQualiaPage() {
       { key: 'camWalk',   head: document.querySelector('#walk-card .qp-head') },
       // `before` the close × so the chip sits just left of it and × stays flush
       // right, consistent across every panel.
-      { key: 'sequencer', head: document.getElementById('sequencer-header'), before: document.getElementById('btn-sequencer-close') },
+      { key: 'sequencer', head: document.getElementById('sequencer-header'), before: document.getElementById('btn-sequencer-ghost') || document.getElementById('btn-sequencer-close') },
       { key: 'strudel',   head: document.getElementById('strudel-header'),   before: document.getElementById('btn-strudel-ghost') || document.getElementById('btn-strudel-close') },
-      { key: 'vocoder',   head: document.getElementById('vocoder-header'),   before: document.getElementById('btn-vocoder-close') },
+      { key: 'vocoder',   head: document.getElementById('vocoder-header'),   before: document.getElementById('btn-vocoder-ghost') || document.getElementById('btn-vocoder-close') },
     ];
     for (const t of targets) {
       if (!t.head || t.head.querySelector('.panel-io')) continue;
@@ -7801,6 +7819,54 @@ export function initQualiaPage() {
       if (!io.contains(e.target)) io.classList.remove('open');
     }
   }, true);
+
+  // ── Per-panel ghost (◌) + global clear-glass ──────────────────────────────
+  // Each floating panel's ◌ toggles a chrome-free ".ghost" layer so it floats
+  // clear over the visuals. Strudel + rig wire their own (in their modules);
+  // this covers the panels wired here — deck · seq · vox · mixer. Persisted.
+  function wirePanelGhost(panelId, btnId, key) {
+    const panel = document.getElementById(panelId);
+    const btn = document.getElementById(btnId);
+    if (!panel || !btn) return;
+    const apply = (on) => {
+      panel.classList.toggle('ghost', on);
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.title = on
+        ? 'Ghosted — click to bring the panel chrome back'
+        : 'Ghost the panel — drop the chrome so it floats clear over the visuals';
+    };
+    let on = getBool(key, false);
+    apply(on);
+    btn.addEventListener('click', () => { on = !on; setBool(key, on); apply(on); });
+  }
+  wirePanelGhost('deck-panel',      'btn-deck-ghost',      'voidstar.qualia.deck.ghost');
+  wirePanelGhost('sequencer-panel', 'btn-sequencer-ghost', 'voidstar.qualia.sequencer.ghost');
+  wirePanelGhost('vocoder-panel',   'btn-vocoder-ghost',   'voidstar.qualia.vocoder.ghost');
+  wirePanelGhost('mixer-panel',     'btn-mixer-ghost',     'voidstar.qualia.mixer.ghost');
+
+  // Global "clear glass" (the topbar ◌ by zen): body.clear-glass ghosts EVERY
+  // panel at once — near-zero chrome so a phone stops losing the stage under a
+  // stack of opaque panels. Independent of and layered over the per-panel ◌
+  // (toggling it off restores each panel's own ghost state). Persisted.
+  {
+    const CLEAR_GLASS_KEY = 'voidstar.qualia.clearGlass';
+    const btnClear = document.getElementById('btn-clear-glass');
+    const applyClearGlass = (on) => {
+      document.body.classList.toggle('clear-glass', on);
+      if (btnClear) {
+        btnClear.classList.toggle('active', on);
+        btnClear.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+    };
+    let clearGlass = getBool(CLEAR_GLASS_KEY, false);
+    applyClearGlass(clearGlass);
+    btnClear?.addEventListener('click', () => {
+      clearGlass = !clearGlass;
+      setBool(CLEAR_GLASS_KEY, clearGlass);
+      applyClearGlass(clearGlass);
+    });
+  }
 
   // ── Click-to-front for the floating panels ─────────────────────────────────
   // The panels all share z-index:18, so overlap ties break by DOM order and

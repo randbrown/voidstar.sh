@@ -1078,12 +1078,24 @@ body::before {
     inset 0 1px 0 rgba(255, 255, 255, 0.18),
     0 2px 3px rgba(0, 0, 0, 0.4) !important;
 }
+/* Selected = a warm-lit, pressed-in key. Was just a dark inset + accent label,
+   which read as barely-changed on a dark stage; now the key takes a warm
+   accent wash, a brighter label, and a soft accent glow so "engaged" pops —
+   while keeping the physical pressed feel (inset + nudge down). Also covers
+   .ctrl-btn.active, which otherwise fell through to the base cyan tint. */
 [data-theme="tape"] .ctrl-btn:active,
+[data-theme="tape"] .ctrl-btn.active,
 [data-theme="tape"] .qp-toggle.active,
 [data-theme="tape"] .qp-preset.active,
 [data-theme="tape"] .qp-tab.active {
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.45) !important;
-  color: var(--accent) !important;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 30%, var(--surface-2)),
+    color-mix(in srgb, var(--accent) 15%, var(--surface-2))) !important;
+  color: color-mix(in srgb, var(--accent) 20%, #fff) !important;
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border-2)) !important;
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.4),
+    0 0 8px color-mix(in srgb, var(--accent) 32%, transparent) !important;
   transform: translateY(1px);
 }
 [data-theme="tape"] .qp-card,
@@ -1318,21 +1330,24 @@ body::before {
 [data-theme="glass"] .qp-tab.active:hover,
 [data-theme="glass"] .ctrl-btn.active-audio,
 [data-theme="glass"] .ctrl-btn.active-audio:hover {
+  /* Lit, not blazing: the pane still jumps in lightness and keeps the dark
+     label (both unmistakable across a room), but the top-left sunburst is a
+     soft glimmer now and the outer halo is pulled way in — the old version
+     bloomed a bright ring that pulled the eye off the visuals mid-set. */
   background:
-    radial-gradient(135% 110% at 26% -18%,
-      rgba(255, 251, 235, 0.95),
-      rgba(255, 235, 188, 0.45) 30%,
-      transparent 62%),
+    radial-gradient(130% 105% at 26% -15%,
+      rgba(255, 248, 224, 0.5),
+      rgba(255, 234, 190, 0.22) 32%,
+      transparent 60%),
     linear-gradient(145deg,
-      color-mix(in srgb, var(--pink) 58%, #fff 14%),
-      color-mix(in srgb, var(--amber) 52%, #fff 10%)) !important;
+      color-mix(in srgb, var(--pink) 60%, #fff 6%),
+      color-mix(in srgb, var(--amber) 54%, #fff 4%)) !important;
   color: #2a0a18 !important;
   font-weight: 600;
   border-color: color-mix(in srgb, var(--amber) 55%, #000) !important;
   box-shadow:
-    inset 0 0 14px rgba(255, 244, 210, 0.7),
-    0 0 18px var(--pink-glow),
-    0 0 30px color-mix(in srgb, var(--amber) 60%, transparent) !important;
+    inset 0 0 9px rgba(255, 244, 210, 0.35),
+    0 0 8px var(--pink-glow) !important;
 }
 [data-theme="glass"] .qp-card,
 [data-theme="glass"] #topbar,
