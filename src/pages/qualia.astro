@@ -3311,6 +3311,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <!-- Nightcall eyes — red album-art eye glow on every tracked face.
              Homage to Vincent Belorgey (Kavinsky). -->
         <button class="ctrl-btn"        id="btn-nightcall" title="Nightcall eyes — red glow on tracked faces (homage to Kavinsky)">nightcall</button>
+        <!-- Finger skeletons — 21-point hand tracking drawn on the overlay,
+             riding on top of whatever quale is live (same layer as the body
+             skeleton). Arms the hand model in the pose worker while on. -->
+        <button class="ctrl-btn"        id="btn-hands" title="Finger skeletons — 21-point hand tracking drawn on the pose overlay. Runs the hand model in the pose worker while on (shared with horns); needs the camera.">fingers</button>
         <!-- Metal horns 🤘 — opt-in hand-gesture detection (MediaPipe hands
              riding in the pose worker). A held 🤘 flashes the void* logo,
              one-shots the configured sample and fires a `qualia:horns`
