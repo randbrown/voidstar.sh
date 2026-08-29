@@ -21,6 +21,11 @@
 // the pane (the reel look); 'lens' makes the pane a see-through magnifier of
 // what's behind it. `background` is the rest of the screen: the dimmed live
 // feed, or void (near-black → effectively transparent over Hydra).
+// `grip` picks the hand geometry: 'edges' = fingertips are the corners (the
+// reel gesture, pane bounded by finger spread); 'corners' = each hand's
+// thumb+index V is a picture-frame corner and the pane spans the two apexes
+// with its edges running along the finger rays — open panes far beyond
+// finger length; 'auto' flips between them on hand orientation.
 //
 // Tracking: `wantsHands: true` below makes the page keep the 21-point
 // HandLandmarker armed while this quale is active (same model the horns 🤘
@@ -50,7 +55,9 @@ import { getVideoEl, getRotation, getMirror, lmToCanvas } from '../video.js';
 // these four aren't named joints, but .raw carries the full 33-point array).
 const LM_L_INDEX = 19, LM_R_INDEX = 20, LM_L_THUMB = 21, LM_R_THUMB = 22;
 // HandLandmarker per-hand indices (wrist 0 … thumb tip 4 … index tip 8).
+// The MCP (base) joints anchor the finger RAYS the corner-frame grip needs.
 const HAND_WRIST = 0, HAND_THUMB_TIP = 4, HAND_INDEX_TIP = 8;
+const HAND_THUMB_MCP = 2, HAND_INDEX_MCP = 5;
 // Hand results older than this are stale (hands run ~7.5 fps) — fall back to
 // the pose-model fingertips rather than pinning corners to a dead frame.
 const HANDS_FRESH_MS = 450;
@@ -392,6 +399,14 @@ export default {
   params: [
     { id: 'look',       label: 'look',       type: 'select', options: LOOKS, default: 'hologram' },
     { id: 'sample',     label: 'sample',     type: 'select', options: ['frame', 'lens'], default: 'frame' },
+    // Hand grip → pane geometry. 'edges': fingertips ARE the four corners
+    // (index+thumb per hand — the reel gesture). 'corners': each hand's
+    // thumb+index V is a picture-frame CORNER; the pane spans the two apexes
+    // with edges running along the finger rays, so it opens far beyond
+    // finger length. 'auto' flips on hand orientation (opposed V's =
+    // corners). Corner grip needs the 21-pt hand model (armed while this
+    // quale is active); without it the pane stays in edge grip.
+    { id: 'grip',       label: 'grip',       type: 'select', options: ['auto', 'edges', 'corners'], default: 'auto' },
     { id: 'background', label: 'background', type: 'select', options: ['camera', 'void'], default: 'camera' },
     { id: 'palette',    label: 'palette',    type: 'select', options: PALETTE_NAMES, default: 'riso' },
     // Halftone cell / ascii cell / crush block size, px. Bass makes the
@@ -419,7 +434,7 @@ export default {
   },
 
   presets: {
-    default:   { look: 'hologram', sample: 'frame', background: 'camera', palette: 'riso',     dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
+    default:   { look: 'hologram', sample: 'frame', background: 'camera', palette: 'riso',     grip: 'auto', dots: 7,  glow: 0.8,  flicker: 0.35, reactivity: 1.0 },
     blueprint: { look: 'edges',    sample: 'frame', background: 'void',   palette: 'voidglow', dots: 6,  glow: 1.0,  flicker: 0.20 },
     terminal:  { look: 'ascii',    sample: 'frame', background: 'void',   palette: 'phosphor', dots: 9,  glow: 0.6,  flicker: 0.45 },
     heatpane:  { look: 'thermal',  sample: 'lens',  background: 'camera', palette: 'gold',     dots: 7,  glow: 0.7,  flicker: 0.25 },
@@ -454,7 +469,10 @@ export default {
     // the hot path never allocates.
     const cur = new Float32Array(8);
     const tgt = new Float32Array(8);
+    const cyc = new Float32Array(8);   // corner-frame cycle scratch
+    const isect = [0, 0];
     let seeded = false;
+    let cornersHeld = false;   // grip hysteresis state (auto mode)
     // Smoothed per-side tracking presence (0..1): L drives TL/BL, R TR/BR.
     let presL = 0, presR = 0;
     const camMat = new Float32Array(9);
@@ -491,6 +509,75 @@ export default {
       arr[6] = cx - ux + vx; arr[7] = cy - uy + vy;   // BL
     }
 
+    // Intersect line P+t·d with line Q+s·e into isect. False when parallel.
+    function lineIntersect(px_, py_, dx, dy, qx, qy, ex, ey) {
+      const det = dx * ey - dy * ex;
+      if (Math.abs(det) < 1e-6) return false;
+      const t = ((qx - px_) * ey - (qy - py_) * ex) / det;
+      isect[0] = px_ + t * dx; isect[1] = py_ + t * dy;
+      return true;
+    }
+
+    // Corner-frame grip: each hand's thumb+index V is a picture-frame
+    // corner. Apex = index ray × thumb ray per hand; the other two pane
+    // corners are the CROSS-hand ray intersections, so the edges run along
+    // the fingers and the pane spans the apex diagonal — far beyond finger
+    // length. Near-parallel rays or intersections flying off fall back to
+    // the axis-aligned rectangle on the apex diagonal. All in screen px
+    // (post-lmToCanvas) so the frame is what the audience actually sees.
+    function cornerFrameTargets(liX, liY, ltX, ltY, libX, libY, ltbX, ltbY,
+                                riX, riY, rtX, rtY, ribX, ribY, rtbX, rtbY) {
+      const [litx, lity] = lmToCanvas(liX, liY, W, H);
+      const [libx, liby] = lmToCanvas(libX, libY, W, H);
+      const [lttx, ltty] = lmToCanvas(ltX, ltY, W, H);
+      const [ltbx, ltby] = lmToCanvas(ltbX, ltbY, W, H);
+      const [ritx, rity] = lmToCanvas(riX, riY, W, H);
+      const [ribx, riby] = lmToCanvas(ribX, ribY, W, H);
+      const [rttx, rtty] = lmToCanvas(rtX, rtY, W, H);
+      const [rtbx, rtby] = lmToCanvas(rtbX, rtbY, W, H);
+      // Finger ray directions, base (MCP) → tip.
+      const lidx = litx - libx, lidy = lity - liby;
+      const ltdx = lttx - ltbx, ltdy = ltty - ltby;
+      const ridx = ritx - ribx, ridy = rity - riby;
+      const rtdx = rttx - rtbx, rtdy = rtty - rtby;
+      // Apex per hand; web midpoint when the rays are near-parallel.
+      let ax, ay, bx, by;
+      if (lineIntersect(libx, liby, lidx, lidy, ltbx, ltby, ltdx, ltdy)) {
+        ax = isect[0]; ay = isect[1];
+      } else { ax = (libx + ltbx) / 2; ay = (liby + ltby) / 2; }
+      if (lineIntersect(ribx, riby, ridx, ridy, rtbx, rtby, rtdx, rtdy)) {
+        bx = isect[0]; by = isect[1];
+      } else { bx = (ribx + rtbx) / 2; by = (riby + rtby) / 2; }
+      // Cross-hand corners: L-index ray × R-thumb ray, and vice versa.
+      const far = Math.hypot(W, H) * 1.6;
+      const mx = (ax + bx) / 2, my = (ay + by) / 2;
+      let p1x, p1y, p2x, p2y;
+      if (lineIntersect(ax, ay, lidx, lidy, bx, by, rtdx, rtdy) &&
+          Math.hypot(isect[0] - mx, isect[1] - my) < far) {
+        p1x = isect[0]; p1y = isect[1];
+      } else { p1x = ax; p1y = by; }
+      if (lineIntersect(ax, ay, ltdx, ltdy, bx, by, ridx, ridy) &&
+          Math.hypot(isect[0] - mx, isect[1] - my) < far) {
+        p2x = isect[0]; p2y = isect[1];
+      } else { p2x = bx; p2y = ay; }
+      // Cycle A → P1 → B → P2 (neighbors share an edge line). Rotate the
+      // cycle so the top-left-most corner leads and the top edge runs
+      // left→right — 'frame' content stays upright whichever hand owns
+      // which corner, and either hand can be either corner.
+      cyc[0] = ax;  cyc[1] = ay;  cyc[2] = p1x; cyc[3] = p1y;
+      cyc[4] = bx;  cyc[5] = by;  cyc[6] = p2x; cyc[7] = p2y;
+      let i0 = 0, bestS = Infinity;
+      for (let i = 0; i < 4; i++) {
+        const ss = cyc[i * 2] + cyc[i * 2 + 1];
+        if (ss < bestS) { bestS = ss; i0 = i; }
+      }
+      const fwd = cyc[((i0 + 1) & 3) * 2] >= cyc[((i0 + 3) & 3) * 2];
+      for (let i = 0; i < 4; i++) {
+        const src = fwd ? (i0 + i) & 3 : (i0 - i + 4) & 3;
+        tgt[i * 2] = cyc[src * 2]; tgt[i * 2 + 1] = cyc[src * 2 + 1];
+      }
+    }
+
     function update(field) {
       const { dt, time, pose, params } = field;
       const audio = scaleAudio(field.audio, params.reactivity);
@@ -513,8 +600,13 @@ export default {
       const person = pose.people[0];
       const raw = person && person.raw;
       let gotL = false, gotR = false;
-      let liX = 0, liY = 0, ltX = 0, ltY = 0;   // left index / thumb (cam-frame)
+      let handsL = false, handsR = false;       // side came from the hand model
+      let liX = 0, liY = 0, ltX = 0, ltY = 0;   // left index / thumb tips (cam-frame)
       let riX = 0, riY = 0, rtX = 0, rtY = 0;
+      // Finger BASE joints (MCPs) — only the hand model provides these; they
+      // anchor the rays the corner-frame grip needs.
+      let libX = 0, libY = 0, ltbX = 0, ltbY = 0;
+      let ribX = 0, ribY = 0, rtbX = 0, rtbY = 0;
       if (raw && raw.length >= 33) {
         const li = raw[LM_L_INDEX], lt = raw[LM_L_THUMB];
         const ri = raw[LM_R_INDEX], rt = raw[LM_R_THUMB];
@@ -540,10 +632,15 @@ export default {
           performance.now() - (hands.t || 0) < HANDS_FRESH_MS) {
         const wl = person && person.wrists && person.wrists.l;
         const wr = person && person.wrists && person.wrists.r;
+        // Hands are RAW camera coords while people[] (the fallback tier and
+        // the wrist matcher below) are pose-scaled about the frame centre —
+        // apply the same transform so both tiers land in one space.
+        const ps = pose.poseScale || 1;
+        const sc = (v) => 0.5 + (v - 0.5) * ps;
         for (let i = 0; i < hands.landmarks.length && i < 2; i++) {
           const lm = hands.landmarks[i];
           if (!lm || lm.length < 21) continue;
-          const wx = lm[HAND_WRIST].x, wy = lm[HAND_WRIST].y;
+          const wx = sc(lm[HAND_WRIST].x), wy = sc(lm[HAND_WRIST].y);
           let isLeft;
           if (wl && wr && (wl.visibility ?? 0) > 0.2 && (wr.visibility ?? 0) > 0.2) {
             const dl = (wx - wl.x) ** 2 + (wy - wl.y) ** 2;
@@ -553,13 +650,17 @@ export default {
             isLeft = wx >= 0.5;   // camera-frame is mirrored on screen
           }
           if (isLeft) {
-            gotL = true;
-            liX = lm[HAND_INDEX_TIP].x; liY = lm[HAND_INDEX_TIP].y;
-            ltX = lm[HAND_THUMB_TIP].x; ltY = lm[HAND_THUMB_TIP].y;
+            gotL = true; handsL = true;
+            liX = sc(lm[HAND_INDEX_TIP].x); liY = sc(lm[HAND_INDEX_TIP].y);
+            ltX = sc(lm[HAND_THUMB_TIP].x); ltY = sc(lm[HAND_THUMB_TIP].y);
+            libX = sc(lm[HAND_INDEX_MCP].x); libY = sc(lm[HAND_INDEX_MCP].y);
+            ltbX = sc(lm[HAND_THUMB_MCP].x); ltbY = sc(lm[HAND_THUMB_MCP].y);
           } else {
-            gotR = true;
-            riX = lm[HAND_INDEX_TIP].x; riY = lm[HAND_INDEX_TIP].y;
-            rtX = lm[HAND_THUMB_TIP].x; rtY = lm[HAND_THUMB_TIP].y;
+            gotR = true; handsR = true;
+            riX = sc(lm[HAND_INDEX_TIP].x); riY = sc(lm[HAND_INDEX_TIP].y);
+            rtX = sc(lm[HAND_THUMB_TIP].x); rtY = sc(lm[HAND_THUMB_TIP].y);
+            ribX = sc(lm[HAND_INDEX_MCP].x); ribY = sc(lm[HAND_INDEX_MCP].y);
+            rtbX = sc(lm[HAND_THUMB_MCP].x); rtbY = sc(lm[HAND_THUMB_MCP].y);
           }
         }
       }
@@ -569,9 +670,33 @@ export default {
       presL += ((gotL ? 1 : 0) - presL) * kp;
       presR += ((gotR ? 1 : 0) - presR) * kp;
 
+      // ── Grip: edge pinch vs corner frame ────────────────────────────────
+      // Opposed thumb→index orientations (two V's pointed at each other)
+      // read as picture-frame corners; matching orientations are the edge
+      // pinch. Auto flips with hysteresis so a half-rotated hand doesn't
+      // flap between grips mid-move. Corner grip needs finger rays, i.e.
+      // both sides from the hand model.
+      const haveRays = handsL && handsR;
+      if (params.grip === 'edges') cornersHeld = false;
+      else if (params.grip === 'corners') cornersHeld = true;
+      else if (haveRays) {
+        const vlx = liX - ltX, vly = liY - ltY;
+        const vrx = riX - rtX, vry = riY - rtY;
+        const nl = Math.hypot(vlx, vly), nr = Math.hypot(vrx, vry);
+        if (nl > 1e-4 && nr > 1e-4) {
+          const d = (vlx * vrx + vly * vry) / (nl * nr);
+          if (d < -0.35) cornersHeld = true;
+          else if (d > -0.05) cornersHeld = false;
+        }
+      }
+
       // Targets: tracked corners where we have them, idle drift where not.
       // (idle fills tgt first; tracked sides overwrite their two corners.)
       idleCorners(tgt, time, scratch.bass);
+      if (cornersHeld && haveRays) {
+        cornerFrameTargets(liX, liY, ltX, ltY, libX, libY, ltbX, ltbY,
+                           riX, riY, rtX, rtY, ribX, ribY, rtbX, rtbY);
+      } else {
       if (gotL) { setCorner(tgt, 0, liX, liY); setCorner(tgt, 3, ltX, ltY); }
       if (gotR) { setCorner(tgt, 1, riX, riY); setCorner(tgt, 2, rtX, rtY); }
       // With the default selfie mirror, lmToCanvas puts the performer's
@@ -589,6 +714,7 @@ export default {
             tgt[b * 2] = ax; tgt[b * 2 + 1] = ay;
           }
         }
+      }
       }
 
       // Smooth toward targets — quick enough to ride a hand sweep, slow

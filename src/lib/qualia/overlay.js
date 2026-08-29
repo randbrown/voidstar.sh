@@ -558,7 +558,16 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     // Ingest a NEW result once (the same frame.hands repeats across renders).
     const hands = field.pose.hands;
     if (hands && Array.isArray(hands.landmarks) && hands.t !== lastHandsT) {
+      // The low-pass advances once per RESULT (~7.5 fps), not per render
+      // frame, so its dt is the result gap — using the render dt here would
+      // make the trail length scale with monitor refresh (the exact
+      // frame-rate dependence core.js warns about).
+      const rdt = lastHandsT < 0 ? 0.13 : Math.min((hands.t - lastHandsT) / 1000, 0.3);
       lastHandsT = hands.t;
+      // Hands are RAW camera coords; the body skeleton is pose-scaled about
+      // the frame centre. Apply the same transform so fingers stay welded to
+      // the wrists when the pose-scale slider is off 1.
+      const ps = field.pose.poseScale || 1;
       let firstSlot = -1;
       for (let i = 0; i < hands.landmarks.length && i < 2; i++) {
         const lm = hands.landmarks[i];
@@ -573,10 +582,10 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
         // Long-stale slot re-seeds outright so a hand re-entering the frame
         // doesn't sail in from its months-old position.
         const seed = now - s.lastSeen > 800;
-        const k = seed ? 1 : 1 - Math.exp(-dt * 12);
+        const k = seed ? 1 : 1 - Math.exp(-rdt * 12);
         for (let j = 0; j < 21; j++) {
-          s.x[j] += (lm[j].x - s.x[j]) * k;
-          s.y[j] += (lm[j].y - s.y[j]) * k;
+          s.x[j] += (0.5 + (lm[j].x - 0.5) * ps - s.x[j]) * k;
+          s.y[j] += (0.5 + (lm[j].y - 0.5) * ps - s.y[j]) * k;
         }
         s.lastSeen = now;
       }
@@ -599,7 +608,9 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       let best = Infinity;
       for (let p = 0; p < people.length; p++) {
         const w = people[p].wrists;
-        for (const side of [w?.l, w?.r]) {
+        if (!w) continue;
+        for (let sideIdx = 0; sideIdx < 2; sideIdx++) {
+          const side = sideIdx === 0 ? w.l : w.r;
           if (!side) continue;
           const d = (side.x - s.x[0]) ** 2 + (side.y - s.y[0]) ** 2;
           if (d < best) { best = d; pal = PERSON_PALETTE[p % PERSON_PALETTE.length]; }

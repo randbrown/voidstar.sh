@@ -6789,7 +6789,10 @@ export function initQualiaPage() {
     // Pick a name without prompting — the row exposes inline rename, so a
     // blocking dialog just gets in the way of save-fast workflows.
     // Prefer the @title metadata when present; otherwise stamp with the
-    // local time so the entry is at least uniquely identifiable.
+    // local time so the entry is at least uniquely identifiable. Re-saving
+    // under an existing name OVERWRITES that entry (upsertByName) — repeat
+    // saves of a titled pattern update it in place; duplicates come from
+    // the clone button.
     const meta = strudel.patterns.meta(code);
     const name = meta.title
               || `pattern ${new Date().toLocaleString('sv-SE').replace(' ', ' ')}`;
@@ -7335,7 +7338,10 @@ export function initQualiaPage() {
       btnSparks?.classList.toggle('active',  !!q.overlay.sparks);
       btnAura?.classList.toggle('active',    !!q.overlay.aura);
       btnNightcall?.classList.toggle('active', !!q.overlay.nightcall);
-      btnHands?.classList.toggle('active',   !!q.overlay.hands);
+      // Read back the OPTION, not the qualem key: qualems saved before the
+      // fingers layer existed carry no `hands` key and leave the option
+      // untouched — painting from the missing key would desync the button.
+      btnHands?.classList.toggle('active',   overlay.getOption('hands'));
       btnRipples?.classList.toggle('active', !!q.overlay.ripples);
     }
 

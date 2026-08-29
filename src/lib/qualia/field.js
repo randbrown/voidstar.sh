@@ -38,8 +38,12 @@ export function emptyAudioFrame() {
 export function emptyPoseFrame() {
   // hands: latest raw HandLandmarker result ({t, landmarks, handedness}) or
   // null — only populated while the hand model is armed: gesture detection
-  // (horns 🤘) is on, or the active quale declares `wantsHands`.
-  return { people: [], timestamp: 0, hands: null };
+  // (horns 🤘) is on, the active quale declares `wantsHands`, or the
+  // fingers overlay is on. Hands are RAW camera-frame coords — unlike
+  // people[] they skip the pose-scale transform, so consumers registering
+  // hands against the body must apply `poseScale` themselves
+  // (0.5 + (v - 0.5) * poseScale, matching pose.js scaleLandmarks).
+  return { people: [], timestamp: 0, hands: null, poseScale: 1 };
 }
 
 // Aggregated audience input (Entanglement). The host reduces every connected
