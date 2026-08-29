@@ -180,6 +180,14 @@
  *           (dropdown, quale(), next/prev) still reaches it. Default true.
  *           The `null` quale uses this so a blank screen never lands by
  *           surprise mid-set.
+ * @property {boolean} [wantsHands]
+ *           Set true if the quale reads the 21-point HandLandmarker result
+ *           (`field.pose.hands`). While such a quale is active the page
+ *           keeps the hand model armed exactly as the horns 🤘 toggle does
+ *           (OR of the two — switching away releases it unless horns is
+ *           on). Worker-only, best-effort: on the main-thread pose fallback
+ *           or a failed model fetch, `field.pose.hands` simply stays null,
+ *           so the quale must degrade (e.g. to pose fingertips 19-22).
  * @property {(canvas:HTMLCanvasElement, opts:{ gl?:WebGL2RenderingContext, ctx?:CanvasRenderingContext2D, renderer?:any, paramsContainer?:HTMLElement, applyPreset?:(name:string) => boolean }) => Promise<QFXInstance>|QFXInstance} create
  *           `paramsContainer` is the same DOM node the auto-generated param
  *           panel renders into. Quales with extra UI (file pickers, playlist

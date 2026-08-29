@@ -10,7 +10,7 @@
 //     `osc().scale(()=>a.fft[0])` patterns from cymatics still work.
 
 import {
-  loadCurrent, saveCurrent, loadList, addToList, updateInList,
+  loadCurrent, saveCurrent, loadList, upsertByName, updateInList,
   removeFromList, clonePattern, randomPattern, parseMetadata, activeLanes,
   setMetadata, patternDisplayName, downloadPattern,
 } from './patterns.js';
@@ -1812,7 +1812,9 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   function saveCurrentToList(name) {
     const code = readEditorCode();
     if (!code) return null;
-    return addToList(code, name);
+    // Same-name save overwrites the existing entry (see upsertByName) —
+    // duplicates are the clone button's job, not repeat saves.
+    return upsertByName(code, name);
   }
   function updatePattern(id, partial) { return updateInList(id, partial); }
   function removePattern(id)          { removeFromList(id); }

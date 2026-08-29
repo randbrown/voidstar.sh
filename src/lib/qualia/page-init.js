@@ -70,6 +70,7 @@ import vintageAnalog   from './fx/vintage-analog.js';
 import synthwave       from './fx/synthwave.js';
 import telemetry       from './fx/telemetry.js';
 import camera          from './fx/camera.js';
+import nullPortal      from './fx/null-portal.js';
 import darkSpace       from './fx/dark-space.js';
 import code            from './fx/code.js';
 import anomaly         from './fx/anomaly.js';
@@ -193,6 +194,7 @@ export function initQualiaPage() {
   mesh.register(synthwave);
   mesh.register(telemetry);
   mesh.register(camera);
+  mesh.register(nullPortal);
   mesh.register(darkSpace);
   mesh.register(code);
   mesh.register(anomaly);
@@ -240,6 +242,7 @@ export function initQualiaPage() {
   const btnSparks  = document.getElementById('btn-sparks');
   const btnAura    = document.getElementById('btn-aura');
   const btnNightcall = document.getElementById('btn-nightcall');
+  const btnHands   = document.getElementById('btn-hands');
   const btnHorns   = document.getElementById('btn-horns');
   const btnRipples = document.getElementById('btn-ripples');
   const btnAscii   = document.getElementById('btn-ascii');
@@ -370,6 +373,10 @@ export function initQualiaPage() {
     paramsContainer: fxParamsEl,
     onFxChange: (id) => {
       fxSelect.value = id;
+      // Arm/release the 21-point hand model for quales that read
+      // field.pose.hands (see refreshHandsEnabled by the horns wiring).
+      activeFxIdForHands = id;
+      refreshHandsEnabled();
       // Re-sync the phase timer for the new quale. autoPhaseSeconds (the
       // user's intended period) is preserved across switches — if the new
       // quale lacks phase support the timer just pauses; the next quale
@@ -524,6 +531,7 @@ export function initQualiaPage() {
     sparksOn:       overlay.getOption('sparks'),
     sparkStyle:     overlay.getSparkStyle(),
     auraOn:         overlay.getOption('aura'),
+    handsOn:        overlay.getOption('hands'),
     nightcallOn:    nightcallUserOn(),
     ripplesOn:      overlay.getOption('ripples'),
     hornsOn,
@@ -641,6 +649,7 @@ export function initQualiaPage() {
   if (typeof stored.sparksOn    === 'boolean') overlay.setOption('sparks',   stored.sparksOn);
   if (typeof stored.sparkStyle  === 'string')  overlay.setSparkStyle(stored.sparkStyle);
   if (typeof stored.auraOn      === 'boolean') overlay.setOption('aura',     stored.auraOn);
+  if (typeof stored.handsOn     === 'boolean') overlay.setOption('hands',    stored.handsOn);
   if (typeof stored.nightcallOn === 'boolean') overlay.setOption('nightcall', stored.nightcallOn);
   if (typeof stored.ripplesOn   === 'boolean') overlay.setOption('ripples',  stored.ripplesOn);
   // Horns 🤘 — config first, then the toggle (wired further down with the
@@ -3069,6 +3078,7 @@ export function initQualiaPage() {
   wireOverlayToggle(btnSparks,  'sparks');
   wireOverlayToggle(btnAura,    'aura');
   wireOverlayToggle(btnNightcall, 'nightcall');
+  wireOverlayToggle(btnHands,   'hands');
   wireOverlayToggle(btnRipples, 'ripples');
 
   // Spark shape — dots (classic) or the inlay icons (Emmons atoms /
@@ -3406,6 +3416,18 @@ export function initQualiaPage() {
     hornsEyesWriting = true;
     try { overlay.setOption('nightcall', on); } finally { hornsEyesWriting = false; }
   }
+  // The fingers overlay is a hand-model consumer like horns: every write to
+  // the 'hands' option — button, qualia.overlay(), pattern lane, qualem
+  // recall — re-evaluates the arming OR at the same choke point. (Wrapped
+  // here, after the nightcall ownership wrap, so both observers compose.)
+  {
+    const rawSetOption = overlay.setOption;
+    overlay.setOption = (key, on) => {
+      const r = rawSetOption(key, on);
+      if (key === 'hands') refreshHandsEnabled();
+      return r;
+    };
+  }
   function hornsFire() {
     // Logo flash — straight through logoMark rather than setLogoOn so the
     // transient never touches persisted settings or the topbar button, and
@@ -3453,15 +3475,26 @@ export function initQualiaPage() {
     if (!hornsOn) return;
     if (hornsDetector.update(hands, t).fired) hornsFire();
   });
+  // Hand-model arming — the single choke point ORing its two consumers:
+  // the horns 🤘 toggle and any active quale declaring `wantsHands` (e.g.
+  // null_portal, which steers its corners with real fingertips). The worker
+  // remembers the wanted state across camera restarts; switching away from
+  // a wantsHands quale releases the model unless horns still holds it.
+  let activeFxIdForHands = null;
+  function refreshHandsEnabled() {
+    const mod = activeFxIdForHands ? mesh.get(activeFxIdForHands) : null;
+    pose.setHandsEnabled(hornsOn || !!(mod && mod.wantsHands)
+      || !!overlay.getOption('hands'));
+  }
   function refreshHornsBtn() { btnHorns?.classList.toggle('active', hornsOn); }
   function setHornsOn(on) {
     hornsOn = !!on;
-    pose.setHandsEnabled(hornsOn);
+    refreshHandsEnabled();
     refreshHornsBtn();
     settings.save();
   }
   btnHorns?.addEventListener('click', () => setHornsOn(!hornsOn));
-  if (hornsOn) pose.setHandsEnabled(true); // restored from settings
+  refreshHandsEnabled(); // hornsOn restored from settings above
   refreshHornsBtn();
 
   function wireLogoSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
@@ -6774,7 +6807,10 @@ export function initQualiaPage() {
     // Pick a name without prompting — the row exposes inline rename, so a
     // blocking dialog just gets in the way of save-fast workflows.
     // Prefer the @title metadata when present; otherwise stamp with the
-    // local time so the entry is at least uniquely identifiable.
+    // local time so the entry is at least uniquely identifiable. Re-saving
+    // under an existing name OVERWRITES that entry (upsertByName) — repeat
+    // saves of a titled pattern update it in place; duplicates come from
+    // the clone button.
     const meta = strudel.patterns.meta(code);
     const name = meta.title
               || `pattern ${new Date().toLocaleString('sv-SE').replace(' ', ' ')}`;
@@ -7147,6 +7183,7 @@ export function initQualiaPage() {
         sparks:     overlay.getOption('sparks'),
         sparkStyle: overlay.getSparkStyle(),
         aura:       overlay.getOption('aura'),
+        hands:      overlay.getOption('hands'),
         nightcall:  nightcallUserOn(),   // flash-aware — never freeze a horns transient
         ripples:    overlay.getOption('ripples'),
         mosh:       overlay.getMoshConfig(),
@@ -7297,7 +7334,7 @@ export function initQualiaPage() {
 
     // 6. Overlay
     if (q.overlay) {
-      const overlayKeys = ['skeleton', 'sparks', 'aura', 'nightcall', 'ripples'];
+      const overlayKeys = ['skeleton', 'sparks', 'aura', 'hands', 'nightcall', 'ripples'];
       for (const k of overlayKeys) {
         if (typeof q.overlay[k] === 'boolean') overlay.setOption(k, q.overlay[k]);
       }
@@ -7319,6 +7356,10 @@ export function initQualiaPage() {
       btnSparks?.classList.toggle('active',  !!q.overlay.sparks);
       btnAura?.classList.toggle('active',    !!q.overlay.aura);
       btnNightcall?.classList.toggle('active', !!q.overlay.nightcall);
+      // Read back the OPTION, not the qualem key: qualems saved before the
+      // fingers layer existed carry no `hands` key and leave the option
+      // untouched — painting from the missing key would desync the button.
+      btnHands?.classList.toggle('active',   overlay.getOption('hands'));
       btnRipples?.classList.toggle('active', !!q.overlay.ripples);
     }
 
@@ -7535,7 +7576,7 @@ export function initQualiaPage() {
       activeFxId:    mesh.ids()[0],
       audio:   { mode: 'off', tunables: AUDIO_PRESETS.default },
       pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, scale: 1, numPoses: 1 },
-      overlay: { skeleton: true, sparks: true, sparkStyle: 'dots', aura: true, nightcall: false, ripples: true },
+      overlay: { skeleton: true, sparks: true, sparkStyle: 'dots', aura: true, hands: false, nightcall: false, ripples: true },
       glitch:  { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off' },
       camWalk: { on: false, config: { ...CAM_WALK_DEFAULTS } },
       auto:    { phaseSeconds: 0, phaseStyle: 'sequential', phaseBeatSync: false,

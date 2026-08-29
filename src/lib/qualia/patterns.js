@@ -77,6 +77,27 @@ export function addToList(code, name) {
   saveList(list);
   return entry;
 }
+// Save-current semantics: ONE library entry per name. Saving a pattern whose
+// resolved name matches an existing entry overwrites that entry's code in
+// place (same id, createdAt and list position; updatedAt bumps) instead of
+// stacking a duplicate — deliberate duplicates go through clonePattern,
+// which suffixes "(copy)" and always adds. Unnamed saves resolve to a
+// unique timestamp name upstream, so they always land in the add path.
+export function upsertByName(code, name) {
+  const meta = parseMetadata(code);
+  const resolved = String(name || meta.title || '').trim();
+  if (resolved) {
+    const list = loadList();
+    const i = list.findIndex(p => patternDisplayName(p).trim() === resolved);
+    if (i >= 0) {
+      const next = { ...list[i], code, updatedAt: Date.now() };
+      list[i] = next;
+      saveList(list);
+      return next;
+    }
+  }
+  return addToList(code, name);
+}
 export function updateInList(id, partial) {
   const list = loadList();
   const i = list.findIndex(p => p.id === id);

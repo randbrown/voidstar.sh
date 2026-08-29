@@ -98,6 +98,16 @@ Off = the hand model is never fetched. Worker-only by design: the main-thread fa
 hands rather than adding a second synchronous inference to the thread the worker exists to protect.
 Hands are **not** shipped to the entanglement mesh — performer-side only.
 
+The horns toggle is not the model's only consumer: a quale that declares `wantsHands: true` (e.g.
+`null_portal`, which steers its pane corners with real fingertips) keeps the same `HandLandmarker`
+armed while it is active, and so does the **fingers** overlay toggle (pose menu →
+*fingers*, `qualia.overlay('hands', …)`) — 21-point finger skeletons drawn on the pose overlay in
+the body-skeleton style, riding on top of whatever quale is live. The page ORs all three consumers
+at one choke point, so switching quales never disarms a horns performer and toggling horns off
+never blinds an active hands quale or the fingers layer. Results land in `field.pose.hands` either
+way. The fingers layer smooths the raw ~7.5 fps hand results itself (pose.js smooths only body
+landmarks) and ghosts out on dropout instead of snapping.
+
 > **Note:** `video.js` and `pose-features.js` implement the orientation transform twice (performer
 > canvas-pixel space vs participant normalized space). `pose-features.js` is the better-factored one
 > (single `orientPoint` shared between wire and preview). Don't add a third.

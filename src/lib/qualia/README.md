@@ -70,6 +70,11 @@ That's it. UI controls are generated from `params`. Persistence is automatic. Th
 - **`crowd.*` modulation channels** — when entanglement is open, `field.crowd` (audience input) is
   exposed as modulator sources (`crowd.energy`, `crowd.rise`, …) exactly like `audio.*`/`pose.*`.
   All-zero when no one is connected. See `modulation.js`.
+- **`wantsHands: true`** — the page keeps the 21-point MediaPipe HandLandmarker armed while this
+  quale is active (shared with the horns 🤘 toggle), populating `field.pose.hands` with
+  `{t, landmarks, handedness}` at ~half the pose rate. Best-effort and worker-only: on the
+  main-thread pose fallback or a failed model fetch it stays `null`, so always keep a fallback
+  (e.g. the pose model's own rough hand points, `raw[19..22]`). Reference: `fx/null-portal.js`.
 
 ---
 

@@ -93,6 +93,19 @@ const SKELETON_CONNECTIONS = [
   [27, 29], [27, 31], [29, 31], [28, 30], [28, 32], [30, 32],
 ];
 
+// 21-point HandLandmarker topology for the `hands` (finger-skeleton) option:
+// wrist 0, then thumb/index/middle/ring/pinky chains MCP→PIP→DIP→TIP, plus
+// the palm arc across the knuckles.
+const HAND_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],           // thumb
+  [0, 5], [5, 6], [6, 7], [7, 8],           // index
+  [9, 10], [10, 11], [11, 12],              // middle
+  [13, 14], [14, 15], [15, 16],             // ring
+  [0, 17], [17, 18], [18, 19], [19, 20],    // pinky
+  [5, 9], [9, 13], [13, 17],                // palm arc
+];
+const HAND_TIPS = [4, 8, 12, 16, 20];
+
 // Cheap hue-shift on rgba() strings — used to colour-modulate bones with mids.
 const _hueCache = new Map();
 function shiftHue(rgbaStr, shift) {
@@ -212,6 +225,10 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     sparks:   true,
     aura:     true,
     ripples:  true,
+    // Finger skeletons from the 21-point HandLandmarker. Off by default:
+    // unlike the other layers this one costs a model — page-init arms the
+    // hand landmarker (shared with horns 🤘 / wantsHands quales) while on.
+    hands:    false,
     nightcall: false,
     ascii:    false,
     mosh:     false,
@@ -516,6 +533,121 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
         }
       }
     }
+  }
+
+  // ── Finger skeletons (the `hands` option) ─────────────────────────────────
+  // Draws each 21-point HandLandmarker hand in the body-skeleton style.
+  // Hand results arrive at ~half the pose rate and RAW (pose.js smooths only
+  // the body landmarks), so each hand slot carries its own low-pass in
+  // normalized camera space plus an alpha envelope: fade in on fresh data,
+  // ghost out on dropout — never snap on a missed detection (house rule).
+  // Slots are keyed on the handedness label so a two-hand result can't swap
+  // smoothing histories between frames. All state pre-allocated; the render
+  // path allocates nothing beyond lmToCanvas's return pairs (house-accepted).
+  const handSmooth = [0, 1].map(() => ({
+    x: new Float32Array(21), y: new Float32Array(21),
+    alpha: 0, lastSeen: -1e9,
+  }));
+  let lastHandsT = -1;
+
+  function drawHandsOverlay(field) {
+    if (!opts.hands) return;
+    const now = performance.now();
+    const dt = Math.min(field.dt || 0.016, 0.05);
+
+    // Ingest a NEW result once (the same frame.hands repeats across renders).
+    const hands = field.pose.hands;
+    if (hands && Array.isArray(hands.landmarks) && hands.t !== lastHandsT) {
+      // The low-pass advances once per RESULT (~7.5 fps), not per render
+      // frame, so its dt is the result gap — using the render dt here would
+      // make the trail length scale with monitor refresh (the exact
+      // frame-rate dependence core.js warns about).
+      const rdt = lastHandsT < 0 ? 0.13 : Math.min((hands.t - lastHandsT) / 1000, 0.3);
+      lastHandsT = hands.t;
+      // Hands are RAW camera coords; the body skeleton is pose-scaled about
+      // the frame centre. Apply the same transform so fingers stay welded to
+      // the wrists when the pose-scale slider is off 1.
+      const ps = field.pose.poseScale || 1;
+      let firstSlot = -1;
+      for (let i = 0; i < hands.landmarks.length && i < 2; i++) {
+        const lm = hands.landmarks[i];
+        if (!lm || lm.length < 21) continue;
+        const cat = hands.handedness?.[i]?.[0];
+        const label = cat && (cat.categoryName || cat.displayName);
+        let slot = label === 'Left' ? 0 : label === 'Right' ? 1
+                 : (lm[0].x < 0.5 ? 0 : 1);
+        if (slot === firstSlot) slot = 1 - slot;   // duplicate label → other slot
+        if (firstSlot < 0) firstSlot = slot;
+        const s = handSmooth[slot];
+        // Long-stale slot re-seeds outright so a hand re-entering the frame
+        // doesn't sail in from its months-old position.
+        const seed = now - s.lastSeen > 800;
+        const k = seed ? 1 : 1 - Math.exp(-rdt * 12);
+        for (let j = 0; j < 21; j++) {
+          s.x[j] += (0.5 + (lm[j].x - 0.5) * ps - s.x[j]) * k;
+          s.y[j] += (0.5 + (lm[j].y - 0.5) * ps - s.y[j]) * k;
+        }
+        s.lastSeen = now;
+      }
+    }
+
+    const W = canvas.width, H = canvas.height;
+    const audio = field.audio;
+    const people = field.pose.people;
+    ctx.save();
+    for (let h = 0; h < 2; h++) {
+      const s = handSmooth[h];
+      // Alpha envelope: quick rise on fresh data, slower ghost-out.
+      const target = now - s.lastSeen < 500 ? 1 : 0;
+      s.alpha += (target - s.alpha) * (1 - Math.exp(-dt * (target > s.alpha ? 8 : 4)));
+      if (s.alpha < 0.03) continue;
+
+      // Palette: follow the nearest tracked person (by wrist distance in
+      // camera space) so a two-performer stage keeps hands in-family.
+      let pal = PERSON_PALETTE[0];
+      let best = Infinity;
+      for (let p = 0; p < people.length; p++) {
+        const w = people[p].wrists;
+        if (!w) continue;
+        for (let sideIdx = 0; sideIdx < 2; sideIdx++) {
+          const side = sideIdx === 0 ? w.l : w.r;
+          if (!side) continue;
+          const d = (side.x - s.x[0]) ** 2 + (side.y - s.y[0]) ** 2;
+          if (d < best) { best = d; pal = PERSON_PALETTE[p % PERSON_PALETTE.length]; }
+        }
+      }
+
+      ctx.globalAlpha = s.alpha;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.lineCap = 'round';
+      // Bones — thinner than the body skeleton; same audio breathing.
+      ctx.lineWidth = 1.1 + audio.bands.mids * 1.8 + audio.beat.pulse * 1.0;
+      ctx.strokeStyle = pal.boneA;
+      ctx.beginPath();
+      for (const [a, b] of HAND_CONNECTIONS) {
+        const [ax, ay] = lmToCanvas(s.x[a], s.y[a], W, H);
+        const [bx, by] = lmToCanvas(s.x[b], s.y[b], W, H);
+        ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
+      }
+      ctx.stroke();
+      // Knuckle dots + glowing fingertips.
+      const pulse = 1 + audio.bands.bass * 1.2 + audio.beat.pulse * 0.6;
+      ctx.fillStyle = pal.joint;
+      for (let j = 0; j < 21; j++) {
+        const [x, y] = lmToCanvas(s.x[j], s.y[j], W, H);
+        ctx.beginPath(); ctx.arc(x, y, 1.2, 0, Math.PI * 2); ctx.fill();
+      }
+      for (const t of HAND_TIPS) {
+        const [x, y] = lmToCanvas(s.x[t], s.y[t], W, H);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.beginPath(); ctx.arc(x, y, 4.5 * pulse, 0, Math.PI * 2);
+        ctx.fillStyle = pal.halo; ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.beginPath(); ctx.arc(x, y, 2.0 * pulse, 0, Math.PI * 2);
+        ctx.fillStyle = pal.joint; ctx.fill();
+      }
+    }
+    ctx.restore();
   }
 
   function drawPoseOverlay(field) {
@@ -1043,6 +1175,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
 
     ctx.clearRect(0, 0, W, H);
     drawPoseOverlay(field);
+    drawHandsOverlay(field);
     drawSparks();
     drawRipples();
   }

@@ -913,6 +913,10 @@ export function createPose() {
   function setScale(v) {
     const s = Number(v);
     poseScale = Math.max(0.1, Math.min(4, Number.isFinite(s) ? s : 1));
+    // Published on the frame so consumers of the RAW hands result (which
+    // deliberately skips scaleLandmarks) can register against the scaled
+    // body landmarks — see the fingers overlay + null_portal.
+    frame.poseScale = poseScale;
   }
   /** Cap the inference rate. fps in [1..60]. Lower = less CPU/GPU duty (and a
    *  deliberate slow-tracking aesthetic). Floor is 1fps; at very low rates a
