@@ -90,6 +90,7 @@ const TUNERMODE_KEY  = `${NS}.tunerMode`;  // 'mono' | 'chord' | 'strings'
 const TUNERCHORD_KEY = `${NS}.tunerChord`; // polytuner chord: {root:pc, quality}
 const TUNERSTRINGS_KEY = `${NS}.tunerStrings`; // polytuner string set id
 const TUNERRANGE_KEY = `${NS}.tunerRange`; // mono detection range: 'steel'|'gtr'|'bass'|'wide'
+const TUNERPRESETS_KEY = `${NS}.tunerPresets`; // saved tuner setups: [{id,name,temperament,cents,refPitch}]
 const CABNAME_KEY    = `${NS}.cabName`;     // loaded cab IR filename (display)
 const CAB_IR_ID      = 'cabIR';            // legacy single-IR misc key (migrated → library)
 const CABLIB_KEY     = `${NS}.cabLib`;      // saved cab IR library index: [{ id, name }]
@@ -201,6 +202,32 @@ function loadCustomCents() {
     if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) for (let i = 0; i < 12; i++) out[i] = Math.max(-50, Math.min(50, Math.round(+a[i] || 0))); }
   } catch {}
   return out;
+}
+// Saved tuner setups (temperament + custom cents + ref pitch) — the tuning of
+// the INSTRUMENT in your hands, so they live outside the qualem system (see
+// getConfig) and persist as their own named-preset library.
+function sanitizeTunerPreset(p) {
+  if (!p || typeof p !== 'object' || typeof p.name !== 'string' || !p.name.trim()) return null;
+  const cents = new Array(12).fill(0);
+  if (Array.isArray(p.cents)) for (let i = 0; i < 12; i++) cents[i] = Math.max(-50, Math.min(50, Math.round(+p.cents[i] || 0)));
+  const ref = parseFloat(p.refPitch);
+  return {
+    id: typeof p.id === 'string' && p.id ? p.id : nextTrackId(),
+    name: p.name.trim(),
+    temperament: p.temperament === 'custom' ? 'custom' : 'et',
+    cents,
+    refPitch: Number.isFinite(ref) ? Math.max(400, Math.min(480, Math.round(ref * 10) / 10)) : 440,
+  };
+}
+function loadTunerPresets() {
+  try {
+    const raw = localStorage.getItem(TUNERPRESETS_KEY);
+    if (raw) {
+      const a = JSON.parse(raw);
+      if (Array.isArray(a)) return a.map(sanitizeTunerPreset).filter(Boolean);
+    }
+  } catch {}
+  return [];
 }
 // Polytuner chord selection (chord mode) — persisted root pitch-class + quality.
 function loadTunerChord() {
@@ -1145,9 +1172,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // The looper's device-independent, shareable settings: master out, sync,
   // "start now", nudge, default grid, and free-run cps. Deliberately excludes
   // the recorded loops (PCM is large + session-local — it lives in IndexedDB
-  // across reloads and never belongs in a URL/QR-sized qualem) and the input
-  // deviceId (machine-specific; restored via its own picker). Mirrors the
-  // vocoder/harmonizer getConfig/setConfig the qualem system already consumes.
+  // across reloads and never belongs in a URL/QR-sized qualem), the input
+  // deviceId (machine-specific; restored via its own picker), and the tuner
+  // setup (temperament / custom cent offsets / ref pitch): that's how the
+  // INSTRUMENT is tuned, not part of the performance patch, so it has its own
+  // preset library (TUNERPRESETS_KEY) and no qualem operation may touch it.
+  // Mirrors the vocoder/harmonizer getConfig/setConfig the qualem system
+  // already consumes.
   function getConfig() {
     return {
       master:      model.master,
@@ -1162,9 +1193,6 @@ export function createLooper({ audio, syncStrudel } = {}) {
       retroCycles: model.retroCycles,
       cps:         model.cps,
       strip:       JSON.parse(JSON.stringify(model.strip)),
-      temperament: model.temperament,
-      customCents: model.customCents.slice(),
-      refPitch:    model.refPitch,
       channels:    model.channels,
       scopeGain:   model.scopeGain,
       // Which cab IR / amp capture is loaded (pointer by id + display name). The
@@ -1209,13 +1237,11 @@ export function createLooper({ audio, syncStrudel } = {}) {
       lsSet(STRIP_KEY, JSON.stringify(model.strip));
       rebuildStrip();
     }
-    if (cfg.temperament === 'et' || cfg.temperament === 'custom') setTemperament(cfg.temperament);
-    if (Array.isArray(cfg.customCents)) {
-      for (let i = 0; i < 12; i++) model.customCents[i] = Math.max(-50, Math.min(50, Math.round(+cfg.customCents[i] || 0)));
-      persistCustomCents();
-      syncTemperCells();
-    }
-    if (typeof cfg.refPitch === 'number') setRefPitch(cfg.refPitch);
+    // cfg.temperament / cfg.customCents / cfg.refPitch (present in qualems
+    // saved before the tuner setup moved to its own presets) are deliberately
+    // IGNORED: recalling a qualem — or "new" / "random" — must never overwrite
+    // how the instrument itself is tuned. Save/load tuner setups via the
+    // temperament editor's preset row instead.
     if (typeof cfg.scopeGain === 'number') { setScopeGain(cfg.scopeGain); if (scopeGainSl) scopeGainSl.value = String(model.scopeGain); }
     if (CHANNEL_MODES.includes(cfg.channels)) setChannels(cfg.channels);
     // Re-select the cab IR / amp by id if it's present in the local library
@@ -4177,10 +4203,61 @@ export function createLooper({ audio, syncStrudel } = {}) {
     }
   }
 
-  // ── temperament editor (ET / custom + per-note cent spinners) ──────────────
-  let temperToggleBtn = null, temperGridEl = null;
+  // ── temperament editor (ET / custom + per-note cent spinners + presets) ────
+  let temperToggleBtn = null, temperGridEl = null, temperRefIn = null;
+  let temperPresetSel = null, temperPresetDel = null;
   const temperCells = new Array(12).fill(null);
   function persistCustomCents() { lsSet(CUSTOMCENTS_KEY, JSON.stringify(model.customCents)); }
+  // Tuner setup presets — named snapshots of temperament + cents + ref pitch.
+  // Kept OUT of qualems on purpose (see getConfig): swapping the whole
+  // experience never re-tunes the instrument; these are the only way the
+  // tuner setup moves.
+  function persistTunerPresets(list) { lsSet(TUNERPRESETS_KEY, JSON.stringify(list)); }
+  function refreshTunerPresetSel(selectedId) {
+    if (!temperPresetSel) return;
+    const list = loadTunerPresets();
+    temperPresetSel.innerHTML = '';
+    const ph = document.createElement('option');
+    ph.value = ''; ph.textContent = list.length ? 'presets…' : 'no presets yet';
+    temperPresetSel.append(ph);
+    for (const p of list) {
+      const o = document.createElement('option');
+      o.value = p.id; o.textContent = p.name;
+      temperPresetSel.append(o);
+    }
+    temperPresetSel.value = selectedId && list.some((p) => p.id === selectedId) ? selectedId : '';
+    if (temperPresetDel) temperPresetDel.style.display = temperPresetSel.value ? '' : 'none';
+  }
+  function applyTunerPreset(p) {
+    for (let i = 0; i < 12; i++) model.customCents[i] = Math.max(-50, Math.min(50, Math.round(+p.cents[i] || 0)));
+    persistCustomCents();
+    syncTemperCells();
+    setRefPitch(p.refPitch);
+    if (temperRefIn) temperRefIn.value = model.refPitch.toFixed(1);
+    setTemperament(p.temperament);   // marks lanes dirty + refreshes the editor chrome
+  }
+  function saveTunerPreset() {
+    const list = loadTunerPresets();
+    const cur = list.find((p) => p.id === temperPresetSel?.value);
+    const name = (window.prompt('Tuner preset name', cur?.name || '') || '').trim();
+    if (!name) return;
+    const preset = sanitizeTunerPreset({
+      name, temperament: model.temperament, cents: model.customCents.slice(), refPitch: model.refPitch,
+    });
+    // Same name overwrites (keeping its id/slot) — mirrors the strudel
+    // patterns list, so re-saving "E9 sweet" never piles up duplicates.
+    const i = list.findIndex((p) => p.name === preset.name);
+    if (i >= 0) { preset.id = list[i].id; list[i] = preset; } else { list.push(preset); }
+    persistTunerPresets(list);
+    refreshTunerPresetSel(preset.id);
+  }
+  function deleteTunerPreset() {
+    const list = loadTunerPresets();
+    const cur = list.find((p) => p.id === temperPresetSel?.value);
+    if (!cur || !confirm(`Delete tuner preset "${cur.name}"?`)) return;
+    persistTunerPresets(list.filter((p) => p.id !== cur.id));
+    refreshTunerPresetSel('');
+  }
   function setTemperament(t) {
     model.temperament = t === 'custom' ? 'custom' : 'et';
     lsSet(TEMPER_KEY, model.temperament);
@@ -4217,9 +4294,30 @@ export function createLooper({ audio, syncStrudel } = {}) {
     temperToggleBtn.type = 'button'; temperToggleBtn.className = 'ctrl-btn';
     temperToggleBtn.addEventListener('click', () => setTemperament(model.temperament === 'custom' ? 'et' : 'custom'));
     // Reference pitch (A, Hz) — one-decimal spinner.
-    const refIn = numInput(model.refPitch.toFixed(1), 400, 480, 0.1);
-    refIn.addEventListener('change', () => { setRefPitch(parseFloat(refIn.value)); refIn.value = model.refPitch.toFixed(1); });
-    head.append(lab, temperToggleBtn, mk('ref Hz', stepper(refIn, 'change'), 'Reference pitch for A (Hz) — equal-temperament anchor for the tuner.'));
+    temperRefIn = numInput(model.refPitch.toFixed(1), 400, 480, 0.1);
+    temperRefIn.addEventListener('change', () => { setRefPitch(parseFloat(temperRefIn.value)); temperRefIn.value = model.refPitch.toFixed(1); });
+    head.append(lab, temperToggleBtn, mk('ref Hz', stepper(temperRefIn, 'change'), 'Reference pitch for A (Hz) — equal-temperament anchor for the tuner.'));
+
+    // Preset row — save / recall named tuner setups. Picking one loads it.
+    const presetRow = document.createElement('div'); presetRow.className = 'rig-temper-presets';
+    temperPresetSel = document.createElement('select'); temperPresetSel.className = 'rig-tuner-sel';
+    temperPresetSel.title = 'Saved tuner setups (temperament + per-note offsets + ref pitch) — pick one to load it';
+    temperPresetSel.addEventListener('change', () => {
+      const p = loadTunerPresets().find((x) => x.id === temperPresetSel.value);
+      if (p) applyTunerPreset(p);
+      if (temperPresetDel) temperPresetDel.style.display = temperPresetSel.value ? '' : 'none';
+    });
+    const presetSave = document.createElement('button');
+    presetSave.type = 'button'; presetSave.className = 'ctrl-btn';
+    presetSave.textContent = 'save';
+    presetSave.title = 'Save the current tuner setup (temperament + per-note offsets + ref pitch) as a named preset — same name overwrites';
+    presetSave.addEventListener('click', saveTunerPreset);
+    temperPresetDel = document.createElement('button');
+    temperPresetDel.type = 'button'; temperPresetDel.className = 'ctrl-btn';
+    temperPresetDel.textContent = '🗑';
+    temperPresetDel.title = 'Delete the selected tuner preset';
+    temperPresetDel.addEventListener('click', deleteTunerPreset);
+    presetRow.append(mkLabel('presets'), temperPresetSel, presetSave, temperPresetDel);
 
     temperGridEl = document.createElement('div'); temperGridEl.className = 'rig-temper-grid';
     for (let i = 0; i < 12; i++) {
@@ -4232,7 +4330,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
       cell.append(nl, stepper(inp, 'change'));
       temperGridEl.append(cell);
     }
-    temperEl.append(head, temperGridEl);
+    temperEl.append(head, presetRow, temperGridEl);
+    refreshTunerPresetSel('');
     refreshTemperUI();
   }
   function syncTemperCells() {
