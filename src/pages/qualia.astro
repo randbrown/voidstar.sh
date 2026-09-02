@@ -4610,7 +4610,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
          input device. The mute button stays the cheap mid-set gate (capture
          kept hot). Loops/freeze have their own transports and keep playing. -->
     <button class="ctrl-btn" id="btn-rig-play" title="Start the live signal — open the input capture and send it to the monitor + mix">▶</button>
-    <button class="ctrl-btn" id="btn-rig-stop" title="Stop the live signal — silence it and release the input device (loops keep playing)">■</button>
+    <button class="ctrl-btn" id="btn-rig-stop" title="Stop the whole rig — silence the live signal (input released), stop all loops, and release the freeze stack">■</button>
     <button class="ctrl-btn panel-mute-btn" id="btn-rig-master-mute" title="Mute all rig output (signal + loops)">live</button>
     <input type="range" class="panel-gain-slider" id="rig-master-gain" min="0" max="2" step="0.01" value="1" title="Rig master output level (1.0 = unity; above 1.0 boosts into the limiter)" />
     <!-- Signal-path chip — names the first closed gate silencing the live

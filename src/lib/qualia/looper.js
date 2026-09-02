@@ -1114,12 +1114,13 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.setSignalMuted(model.signalMuted);
     refreshInputMuteBtn();
   }
-  // Signal transport (header ▶/■, the vox play/stop idiom): the live signal
+  // Signal transport (header ▶, the vox play/stop idiom): the live signal
   // only reaches the monitor + mix after an explicit ▶ (which also opens the
-  // input capture — a user gesture, so getUserMedia is allowed), and ■
-  // silences it and releases the input device. Mute stays the cheap mid-set
-  // gate; the transport is the "really off" switch. Session-local on purpose:
-  // like vox, a fresh page load starts stopped until the performer plays.
+  // input capture — a user gesture, so getUserMedia is allowed); stopSignal
+  // silences it and releases the input device. The header ■ is stopRig below —
+  // the whole-rig stop. Mute stays the cheap mid-set gate; the transport is
+  // the "really off" switch. Session-local on purpose: like vox, a fresh page
+  // load starts stopped until the performer plays.
   function playSignal() {
     // ▶ with the fader parked at 0 would open a silent capture — apply the
     // same one-click fix as the signal chip so play means audible.
@@ -1133,6 +1134,24 @@ export function createLooper({ audio, syncStrudel } = {}) {
     looperAudio.stopSignal();
     refreshRigTransport();
     refreshLooperBtn();
+  }
+  // ■ (rig header) — the WHOLE-rig stop. A stopped rig that keeps looping and
+  // droning isn't stopped, so beyond the live signal this also cancels a
+  // pending count-in, stops every loop voice (they re-lock from the boundary
+  // on next ▶), and releases the freeze stack with its fade. A running take is
+  // closed too; commitTake auto-plays the finished loop, so that late voice is
+  // stopped once the take lands. Mute stays the non-destructive silencer —
+  // stop actually stops. Hotkeys / code API / tether keep the signal-only
+  // stopSignal above.
+  async function stopRig() {
+    cancelArming('stopped');
+    stopSignal();
+    stop();
+    freezeClear();
+    if (recording) {
+      try { await stopRecording(); } catch {}
+      stop();
+    }
   }
   function refreshRigTransport() {
     if (!btnRigPlay) return;
@@ -4981,7 +5000,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     elGain.addEventListener('input', () => setMaster(elGain.value));
   }
   if (btnRigPlay) { btnRigPlay.addEventListener('click', () => { playSignal(); }); refreshRigTransport(); }
-  if (btnRigStop) btnRigStop.addEventListener('click', () => { stopSignal(); });
+  if (btnRigStop) btnRigStop.addEventListener('click', () => { stopRig(); });
   if (btnRigMute) { btnRigMute.addEventListener('click', () => setRigMuted(!model.rigMuted)); refreshRigMuteBtn(); }
   if (rigMasterGain) {
     rigMasterGain.value = String(model.rigLevel);
@@ -5088,9 +5107,10 @@ export function createLooper({ audio, syncStrudel } = {}) {
     },
     isRigPaused: () => looperAudio.isRigPaused(),
     play: playAll, stop,
-    // Signal transport (rig header ▶/■) — the live-instrument path, distinct
-    // from the loop transport above. For hotkeys / MIDI / the code API.
-    playSignal, stopSignal,
+    // Signal transport — the live-instrument path, distinct from the loop
+    // transport above. For hotkeys / MIDI / the code API. stopRig is the rig
+    // header's ■: signal + loops + freeze stack + a running take, all stopped.
+    playSignal, stopSignal, stopRig,
     isSignalOn: () => looperAudio.isSignalOn(),
     // Tone presets (amp + eq + cab as one) — for the code API / MIDI.
     applyTone: (nameOrId) => {
