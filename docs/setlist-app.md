@@ -25,7 +25,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 |---|---|---|
 | `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, photoUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `artworkUrl` is dim/small album art, whereas `photoUrl` is the performer's **visual recall cue** — shown large on the song page and small on the **stage** (perform mode). `photoUrl` holds a remote https URL (a YouTube thumbnail from import / "find on YouTube", or a pasted link) or a compact downscaled data URL from a hand-uploaded photo — see the song-photo section. `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use. `altLinks` (`[{id, url, label, service, embedUrl?, addedAt}]`, lazy) is the same idea for **listening links** — the other recordings of the song (live cut, alternate release, a YouTube version); the three primary link fields stay what auto-link fills and what everything else reads (see the multiple-links section). `spotifyGuess` / `spotifyGuessAt` (lazy) flag a **preliminary** Spotify link accepted from a global search rather than matched from a playlist — see the best-guess section |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
-| `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, playlists, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist). `playlists` (`[{id, service, url, title, setName, addedAt}]`, lazy, fill-protected) records **imported** reference playlists — currently the YouTube import (see that section), one per appended set; it's provenance only, nothing re-syncs a set back to its playlist |
+| `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, playlists, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist). `playlists` (`[{id, service, url, title, setName, addedAt}]`, lazy, fill-protected) records **imported** reference playlists — currently the YouTube import (see that section), one per appended set; it's provenance only, nothing re-syncs a set back to its playlist. One entry may instead carry `kind:'export'` (+ `playlistId`): the setlist's own **exported** Spotify playlist (see the build-Spotify-playlist section) — recorded so a re-build updates that playlist instead of creating another |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
 | `charts` | `songId` | `{songId, blob, sourceUrl, mimeType, size, fetchedAt}` — cached chart for offline perform mode (plain text for Google-Doc charts, image bytes otherwise). Same key scheme as `annotations`: bare `songId` = primary, `` `${songId}::${altId}` `` = alternate |
 | `snapshots` | `ts` | `{ts, label, data}` — rolling safety snapshots of the whole dataset (last 10), taken before a restore/sync/import so it can be undone |
@@ -57,7 +57,7 @@ config). Tokens and per-device display prefs never ride it:
 | `voidstar.setlist.gdrive.backupsFolderId` / `.chartsFolderId` | localStorage | ✗ | cached Drive folder ids ("voidstar backups" / "voidstar charts") |
 | `voidstar.setlist.chartAppearance.detail` / `.perform` | localStorage | ✗ | per-mode chart look, `'dark'` \| `'light'` (see the chart-appearance section); legacy `voidstar.setlist.invertChartDetail` / `.invertChart` migrate `1`→dark, `0`→light |
 | `voidstar.setlist.chartEnhance` | localStorage | ✗ | "✦ enhance" auto-levels for cached image charts, `'1'` (default, on) \| `'0'` (see the chart-appearance section) |
-| `voidstar.setlist.spotify.token` | localStorage | ✗ | Spotify user login (PKCE): `{accessToken, refreshToken, expiresAt}` (see the Spotify-links section) |
+| `voidstar.setlist.spotify.token` | localStorage | ✗ | Spotify user login (PKCE): `{accessToken, refreshToken, expiresAt, scope}` — `scope` is what the session was actually granted at consent time, so features needing a scope added later (playlist building) can detect an old session and ask for a reconnect instead of 403ing (see the Spotify-links section) |
 | `voidstar.setlist.spotify.pkce` | sessionStorage | ✗ | PKCE verifier + return hash, alive only during the login redirect round-trip |
 | `voidstar.setlist.noteDraft.<songId>` | sessionStorage | ✗ | uncommitted note-composer draft (survives focus-driven `refresh()` and app-switching; cleared on save) |
 | `voidstar.setlist.chartTab.<songId>` | sessionStorage | ✗ | which chart the song page shows: an `altCharts` entry id, absent = the primary (survives focus-driven `refresh()`; per-device on purpose) |
@@ -425,6 +425,55 @@ then applies:
 The apply pushes the edit page's **↶ undo** stack first (sets membership and
 order restore; created songs stay in the library, same as import undo), and
 every failure path lands its real reason in the section's status line.
+
+## Build Spotify playlist ← setlist (`spotify-export.js`)
+
+The write-side mirror of Scrape Playlist: the setlist-edit page's **"build
+spotify playlist from setlist"** button turns the setlist's linked songs into
+a real **private playlist on the connected Spotify account**, in set order.
+The pure half — which songs go in, in what order, what's reported as left
+out — is `spotify-export-core.js` (`collectSetlistTrackUris`, node-tested by
+`scripts/check-setlist-spotify-export.mjs` via `npm run check`); the HTTP
+half is `spotify-export.js`. No worker involved: creating a playlist has to
+run as the user anyway (PKCE token), and Spotify's token + API endpoints are
+CORS-open.
+
+- **What goes in.** One `spotify:track:` URI per linked song, walking the
+  sets in performance order (`spotifyUri` always lives on the base song —
+  per-setlist overrides never touch it, so no `mergedSong` needed). Songs
+  with no usable track link are **listed in the confirm and left out** (a
+  playlist-shaped link doesn't count); duplicate tracks — a reprised song, or
+  two songs linked to the same recording — collapse to the first occurrence;
+  preliminary best-guess links are included but counted in the confirm.
+  Nothing is created until the confirm is accepted.
+- **Re-running updates, not litters.** The created playlist is recorded on
+  `setlist.playlists` as `{service:'spotify', kind:'export', playlistId, …}`,
+  and the next build **replaces that playlist's contents** to match the
+  setlist (first write batch is a `PUT`, so removals and re-orders
+  propagate; name/description follow the setlist, best-effort). A recorded
+  playlist the user deleted on Spotify (404) is quietly rebuilt as a fresh
+  one. The Playlists section lists the export ("built from this setlist");
+  its ✕ forgets the record — the playlist stays on Spotify, the next build
+  just creates a new one.
+- **Scopes.** Building needs `playlist-modify-private`/`-public`, added to
+  `SCOPES` in `spotify-auth.js`. Scopes are fixed at consent time, so the
+  saved token record now carries the granted `scope` string and
+  `hasSpotifyScope()` detects a session connected before the feature existed
+  — the button then offers the reconnect (one `beginSpotifyLogin()`
+  round-trip re-consents with the full list) instead of letting the API 403
+  with "Insufficient client scope".
+- **Contents-endpoint probing.** Writes go to `/playlists/{id}/items` first
+  (matching the read path the Feb 2026 migration left) and fall back to the
+  legacy `/tracks` on a 404/405 — extended-quota apps kept the old shape,
+  same both-shapes tolerance as the readers. Any other status (403, 429) is
+  a real answer the other path can't fix. The working suffix is remembered
+  for the session; a 404 on **both** paths means the playlist itself is gone
+  (→ rebuild).
+- **After a create**, when the setlist has no reference `spotifyUrl` yet, the
+  app offers to set the new playlist as it — the user **owns** the exported
+  playlist, so the API's owner-only rule is satisfied and relink / "verify
+  spotify links" / Scrape Playlist all work against it with zero extra setup.
+  Fill-empty in spirit: an existing reference URL is never touched.
 
 ## Backup/Restore vs. Sync — these are different features
 
