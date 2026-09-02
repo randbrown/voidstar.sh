@@ -575,11 +575,13 @@ export function installCodeApi(deps) {
       rigMute:  gsBool(() => looper.getRig().muted, (on) => looper.setRigMuted(on)),
     },
     rig: {
-      /** Signal transport (the rig header's ▶/■, same idiom as vox.start/stop):
-       *  play opens the input capture and sends the live signal to the mix;
-       *  stop silences it and releases the input device. */
+      /** Signal transport (same idiom as vox.start/stop): play opens the input
+       *  capture and sends the live signal to the mix; stop silences it and
+       *  releases the input device — signal only. The rig header's ■ is
+       *  stopAll: signal + loops + freeze stack, everything the rig sounds. */
       play:    () => safe(() => looper.playSignal()),
       stop:    () => safe(() => looper.stopSignal()),
+      stopAll: () => safe(() => looper.stopRig()),
       playing: () => !!safe(() => looper.isSignalOn(), false),
       /** Toggle a pedalboard stage: earth/metal/comp/delay/reverb/eq/geq/peq/
        *  cab/amp/hpf, or a noise gate — gate (strip-wide), earthGate/metalGate

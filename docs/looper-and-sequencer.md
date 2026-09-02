@@ -146,6 +146,15 @@ rotates the phase at exactly δ cycles/sec. Four modes: **mono** (detect whateve
 so no polyphonic pitch detection is needed). Temperament-aware throughout: every target frequency
 folds in `temperOffset()`.
 
+**Temperament editor + presets.** The editor below the tuner (full mode only) holds the tuner
+setup: ET ⇄ custom toggle, the 12 per-note cent offsets (±50¢, C..B — sweetened tunings), and the
+reference pitch for A. A preset row saves/recalls the whole setup as named presets (same name
+overwrites; persisted at `voidstar.qualia.looper.tunerPresets`). The tuner setup is how the
+*instrument* is tuned, not part of the performance patch, so it is deliberately **excluded from
+qualems**: new/random/recalled qualems (and rig-section loads) never touch it — old qualems that
+still carry `temperament`/`customCents`/`refPitch` have those keys ignored on load. Presets are
+the only way the setup moves.
+
 Two design points, both aimed at high notes — the pedal steel's plain 1st/3rd strings and the top
 of its range (A5):
 

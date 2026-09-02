@@ -394,9 +394,12 @@ qualia.looper.freeze(); qualia.looper.freezePop(); qualia.looper.freezeClear()
 qualia.looper.rigLevel(.8); qualia.looper.rigMute(false)
 
 qualia.rig.play(); qualia.rig.stop(); qualia.rig.playing()
-                                   // signal transport (header ▶/■) — play opens
+                                   // signal transport (header ▶) — play opens
                                    // the input capture + sends the live signal
                                    // to the mix; stop releases the device
+qualia.rig.stopAll()               // the header ■ — whole-rig stop: signal +
+                                   // all loops + the freeze stack (+ closes a
+                                   // running take)
 qualia.rig.toggle("delay")         // flip a pedalboard stage
 qualia.rig.param("reverb", "mix", .5)
 qualia.rig.tone("glassy steel")    // apply a saved tone preset (amp+eq+cab)
