@@ -35,24 +35,54 @@ async function spotifyCall(token, method, path, body) {
 // The Feb 2026 migration renamed the playlist-contents path /tracks → /items
 // for reads, and which name writes answer to varies by app quota mode (the
 // same reason sync.js parses both `item` and `track`). Probe /items first to
-// match the read path, fall back to /tracks when Spotify doesn't serve the
-// path (404/405 — anything else, e.g. a 403 or 429, is a real answer that
-// the other path can't fix), and remember what worked.
+// match the read path, fall back to /tracks when Spotify refuses the path,
+// and remember what worked. A retired path answers a BARE 403 Forbidden for
+// development-mode apps (observed in the field on playlist creation, and
+// documented for the old contents reads) — so 403 falls back too, alongside
+// 404/405; anything else (401, 429) is a real answer the other path can't
+// fix. When both paths refuse, the canonical /items answer is the one
+// reported (a scope 403 there says "Insufficient client scope" outright).
 let _writeSuffix = null;
 async function writeContents(token, playlistId, method, body) {
   const candidates = _writeSuffix ? [_writeSuffix] : ['items', 'tracks'];
-  let lastErr = null;
+  let firstErr = null;
   for (const suffix of candidates) {
     try {
       const out = await spotifyCall(token, method, `/playlists/${playlistId}/${suffix}`, body);
       _writeSuffix = suffix;
       return out;
     } catch (e) {
-      lastErr = e;
-      if (e.status !== 404 && e.status !== 405) throw e;
+      firstErr = firstErr || e;
+      if (e.status !== 403 && e.status !== 404 && e.status !== 405) throw e;
     }
   }
-  throw lastErr; // 404 on both paths — the playlist itself is gone
+  throw firstErr; // both paths refused — a 404 here means the playlist is gone
+}
+
+// Playlist creation moved in the same migration: the classic documented
+// path, POST /users/{id}/playlists, answers a bare 403 Forbidden for
+// development-mode apps no matter the token's scopes (the retired-path
+// signature — this is exactly the bug the first release of this feature
+// shipped with), while POST /me/playlists works. Probe /me/playlists first
+// and keep the classic path as the fallback for app modes that retained it;
+// when both refuse, report the canonical attempt plus a reconnect hint so a
+// genuine scope problem stays diagnosable from the status line.
+async function createPlaylist(token, body) {
+  let first = null;
+  try {
+    return await spotifyCall(token, 'POST', '/me/playlists', body);
+  } catch (e) {
+    if (e.status !== 403 && e.status !== 404 && e.status !== 405) throw e;
+    first = e;
+  }
+  try {
+    const me = await spotifyCall(token, 'GET', '/me');
+    return await spotifyCall(token, 'POST', `/users/${encodeURIComponent(me.id)}/playlists`, body);
+  } catch (e2) {
+    const err = new Error(`${first.message} — the legacy create path also failed (${e2.status || e2.message}). If this persists, disconnect and reconnect Spotify in Settings so the session re-consents to the playlist-modify scopes.`);
+    err.status = first.status;
+    throw err;
+  }
 }
 
 // Create a private playlist from the setlist's linked songs, or make the
@@ -109,10 +139,7 @@ export async function exportSetlistToSpotify(setlist, songs, { existingPlaylistI
 
   if (!playlistId) {
     onProgress?.('creating the playlist…');
-    const me = await spotifyCall(token, 'GET', '/me');
-    const pl = await spotifyCall(token, 'POST', `/users/${encodeURIComponent(me.id)}/playlists`, {
-      name, description, public: false,
-    });
+    const pl = await createPlaylist(token, { name, description, public: false });
     playlistId = pl.id;
     created = true;
     url = pl?.external_urls?.spotify || `https://open.spotify.com/playlist/${playlistId}`;
