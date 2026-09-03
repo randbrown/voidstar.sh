@@ -462,13 +462,20 @@ CORS-open.
   — the button then offers the reconnect (one `beginSpotifyLogin()`
   round-trip re-consents with the full list) instead of letting the API 403
   with "Insufficient client scope".
-- **Contents-endpoint probing.** Writes go to `/playlists/{id}/items` first
-  (matching the read path the Feb 2026 migration left) and fall back to the
-  legacy `/tracks` on a 404/405 — extended-quota apps kept the old shape,
-  same both-shapes tolerance as the readers. Any other status (403, 429) is
-  a real answer the other path can't fix. The working suffix is remembered
-  for the session; a 404 on **both** paths means the playlist itself is gone
-  (→ rebuild).
+- **Endpoint probing.** The Feb 2026 migration moved the write paths for
+  development-mode apps too, and a retired path answers a **bare
+  `403 Forbidden`** no matter the token's scopes (the same signature as the
+  old contents reads; a real scope problem says "Insufficient client scope"
+  outright). Creation probes `POST /me/playlists` first and falls back to
+  the classic `POST /users/{id}/playlists` — the classic path 403ing for
+  dev-mode apps is a bug the feature's first release shipped with, observed
+  in the field. Contents writes go to `/playlists/{id}/items` first
+  (matching the read path) and fall back to legacy `/tracks`; both probes
+  fall back on 403/404/405, anything else (401, 429) is a real answer the
+  other path can't fix, and when both paths refuse, the canonical attempt's
+  answer is reported (plus a reconnect hint on creation). The working
+  contents suffix is remembered for the session; a 404 on **both** paths
+  means the playlist itself is gone (→ rebuild).
 - **After a create**, when the setlist has no reference `spotifyUrl` yet, the
   app offers to set the new playlist as it — the user **owns** the exported
   playlist, so the API's owner-only rule is satisfied and relink / "verify
