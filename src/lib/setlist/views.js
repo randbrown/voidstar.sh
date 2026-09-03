@@ -9,6 +9,8 @@ import { getSources, setSources, syncSetlist, syncAll, spotifySearchUrl, parseBa
 import { renderBandcampEmbed, renderSoundcloudEmbed, renderYoutubeEmbed, altLinksOf, makeAltLink, linkService, songHasLink, LINK_SERVICE_LABELS, LINK_PRIMARY_FIELD, fileToPhotoDataUrl, isDisplayablePhoto } from './media.js';
 import { searchYoutube, scoreYoutubeMatch, songHasYoutube, isYoutubePlaylistUrl } from './youtube.js';
 import { importYoutubePlaylist, applyYoutubeToSong } from './youtube-import.js';
+import { exportSetlistToSpotify } from './spotify-export.js';
+import { collectSetlistTrackUris } from './spotify-export-core.js';
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, bestGuessSpotifyLinks, findYoutubeForAllSongs, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
@@ -1394,6 +1396,113 @@ export async function renderSetlistEdit(root, setlistId) {
   scrapeSection.appendChild(scrapeHint);
   root.appendChild(scrapeSection);
 
+  // Build Spotify playlist — the write-side mirror of Scrape Playlist: turn
+  // this setlist's linked songs into a real (private) playlist on the
+  // connected Spotify account, in set order. The playlist is recorded on
+  // setlist.playlists (kind:'export') so re-running UPDATES that same
+  // playlist to match the setlist (first write replaces the contents;
+  // a playlist the user deleted on Spotify is quietly rebuilt). Songs
+  // without a Spotify track link are listed in the confirm and left out.
+  const spSection = el('div', 'sl-section');
+  spSection.innerHTML = '<div class="sl-section-title">Build Spotify Playlist</div>';
+  const spStatus = el('div', 'sl-hint');
+  const spBuildBtn = btn('build spotify playlist from setlist', 'sl-btn-ghost', async () => {
+    await save(); // pick up just-edited name/date before naming the playlist
+    spBuildBtn.disabled = true;
+    spStatus.textContent = 'collecting songs…';
+    try {
+      const ids = [...new Set(sl.sets.flatMap((s) => s.songIds))];
+      const songs = (await Promise.all(ids.map((id) => store.getSong(id)))).filter(Boolean);
+      const { uris, skipped, duplicates, guessCount } = collectSetlistTrackUris(sl, songs);
+      if (!uris.length) {
+        spStatus.textContent = 'No song on this setlist has a Spotify track link yet — run auto-link, or the library tools\' spotify quick-link.';
+        return;
+      }
+      const existing = (sl.playlists || []).find((p) => p.service === 'spotify' && p.kind === 'export');
+      const listSome = (titles) =>
+        titles.slice(0, 8).join(', ') + (titles.length > 8 ? `, +${titles.length - 8} more` : '');
+      const lines = [`• ${uris.length} track(s), in set order`];
+      if (skipped.length) lines.push(`• left out (no Spotify link): ${listSome(skipped.map((s) => s.title || '(untitled)'))}`);
+      if (duplicates) lines.push(`• ${duplicates} repeat(s) collapsed — each track is listed once`);
+      if (guessCount) lines.push(`• ${guessCount} track(s) are preliminary best-guess links`);
+      const head = existing
+        ? `Update the exported playlist "${existing.title || 'setlist'}" to match this setlist?`
+        : 'Create a private Spotify playlist from this setlist?';
+      if (!confirm(`${head}\n\n${lines.join('\n')}`)) {
+        spStatus.textContent = 'cancelled — nothing created';
+        return;
+      }
+
+      const res = await exportSetlistToSpotify(sl, songs, {
+        existingPlaylistId: existing?.playlistId || '',
+        onProgress: (msg) => { spStatus.textContent = msg; },
+      });
+
+      // Record the playlist so the next build updates it instead of
+      // creating another.
+      if (existing) {
+        existing.url = res.url;
+        existing.playlistId = res.playlistId;
+        existing.title = res.name;
+      } else {
+        sl.playlists = [...(Array.isArray(sl.playlists) ? sl.playlists : []), {
+          id: crypto.randomUUID(),
+          service: 'spotify',
+          kind: 'export',
+          url: res.url,
+          playlistId: res.playlistId,
+          title: res.name,
+          setName: '',
+          addedAt: Date.now(),
+        }];
+      }
+      await store.putSetlist(sl);
+      renderPlaylists();
+      paintUpdated(Date.now());
+
+      spStatus.textContent = `✓ ${res.created ? 'created' : 'updated'} "${res.name}" — ${res.trackCount} track(s)${skipped.length ? ` · ${skipped.length} left out` : ''} · `;
+      const openLink = el('a', '', 'open in spotify');
+      openLink.href = res.url;
+      openLink.target = '_blank';
+      openLink.rel = 'noopener';
+      spStatus.appendChild(openLink);
+
+      // The exported playlist is one the user owns, so the API can read it —
+      // as the reference URL it makes relink / verify / scrape work with no
+      // extra setup. Offer only when no reference is set (never clobber one).
+      if (!(sl.spotifyUrl || '').trim() &&
+          confirm('Also set it as this setlist\'s Spotify Playlist URL? Auto-link, relink, and "verify spotify links" would then read this playlist as the reference.')) {
+        sl.spotifyUrl = res.url;
+        document.getElementById('sl-spotify').value = res.url;
+        await store.putSetlist(sl);
+      }
+    } catch (e) {
+      console.error('[setlist] spotify playlist build failed:', e);
+      if (e.needsReauth) {
+        spStatus.textContent = e.message;
+        if (confirm(`${e.message}\n\nReconnect now? You'll come right back to this page.`)) {
+          try { await beginSpotifyLogin(); } catch (e2) { spStatus.textContent = e2.message; }
+        }
+        return;
+      }
+      if (e.needsConnect) {
+        spStatus.textContent = e.message;
+        if (confirm(`${e.message}\n\nOpen Settings?`)) navigate('#settings');
+        return;
+      }
+      spStatus.textContent = `build failed: ${e.message}`;
+    } finally {
+      spBuildBtn.disabled = false;
+    }
+  });
+  spBuildBtn.title = 'Create (or update) a private playlist on your connected Spotify account from this setlist\'s linked songs, in set order.';
+  spSection.appendChild(spBuildBtn);
+  spSection.appendChild(spStatus);
+  const spHint = el('div', 'sl-hint');
+  spHint.textContent = 'Builds a private playlist on your Spotify account from the songs\' Spotify links, in set order. Re-running updates the same playlist to match the setlist; songs without a link are listed and left out. Needs the Spotify connection in Settings — a session connected before this feature existed needs one reconnect to grant playlist writing.';
+  spSection.appendChild(spHint);
+  root.appendChild(spSection);
+
   // Playlists — import a YouTube playlist as a new set. A gig with two
   // playlists imports each in turn: every import APPENDS a set named after the
   // playlist (run twice → two sets), matches videos to library songs by title
@@ -1417,13 +1526,18 @@ export async function renderSetlistEdit(root, setlistId) {
       nm.textContent = p.title || p.setName || 'playlist';
       infoCol.appendChild(nm);
       const sub = el('div', 'sl-playlist-sub');
-      sub.textContent = `${LINK_SERVICE_LABELS[p.service] || p.service} · set "${p.setName || ''}"`;
+      sub.textContent = p.kind === 'export'
+        ? `${LINK_SERVICE_LABELS[p.service] || p.service} · built from this setlist`
+        : `${LINK_SERVICE_LABELS[p.service] || p.service} · set "${p.setName || ''}"`;
       infoCol.appendChild(sub);
       row.appendChild(infoCol);
       const openBtn = btn('open', 'sl-btn-ghost sl-btn-sm', () => window.open(p.url, '_blank'));
       row.appendChild(openBtn);
       const rmBtn = btn('&times;', 'sl-btn-icon sl-btn-danger', async () => {
-        if (!confirm('Forget this playlist reference? The imported set and its songs stay — this only removes the record of where they came from.')) return;
+        const forgetMsg = p.kind === 'export'
+          ? 'Forget this exported playlist? It stays on your Spotify — but the next "build spotify playlist" will create a new one instead of updating it.'
+          : 'Forget this playlist reference? The imported set and its songs stay — this only removes the record of where they came from.';
+        if (!confirm(forgetMsg)) return;
         sl.playlists = (sl.playlists || []).filter((x) => x.id !== p.id);
         await store.putSetlist(sl);
         renderPlaylists();
@@ -3876,6 +3990,9 @@ export async function renderSettings(root) {
       else's PUBLIC playlist (e.g. a bandmate's), the app falls back to
       scraping the playlist's public open.spotify.com page — no account
       needed; the song page also has an explicit "scrape playlist" button.
+      The connection also powers "build spotify playlist" on the setlist
+      edit page (a session connected before that existed needs one
+      reconnect to grant playlist writing).
       Uses the
       same client id as the worker; no secret is involved. One-time setup: in
       the Spotify developer dashboard (developer.spotify.com → your app →

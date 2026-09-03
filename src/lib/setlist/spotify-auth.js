@@ -27,7 +27,11 @@ const PKCE_KEY = 'voidstar.setlist.spotify.pkce';
 
 const AUTH_URL = 'https://accounts.spotify.com/authorize';
 const TOKEN_URL = 'https://accounts.spotify.com/api/token';
-const SCOPES = 'playlist-read-private playlist-read-collaborative';
+// Read scopes for the reference-playlist machinery, modify scopes for
+// building a playlist from a setlist (spotify-export.js). Both modify
+// variants: the export creates private playlists, but the user may flip one
+// public in Spotify and a later re-export still needs to write it.
+const SCOPES = 'playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public';
 
 export function getSpotifyClientId() {
   return localStorage.getItem(CLIENT_ID_KEY) || '';
@@ -66,14 +70,24 @@ function readToken() {
   } catch { return null; }
 }
 
-function saveToken(data, prevRefreshToken) {
+function saveToken(data, prev) {
   localStorage.setItem(TOKEN_KEY, JSON.stringify({
     accessToken: data.access_token,
     // Spotify rotates refresh tokens on use but omits the field when it
-    // doesn't — keep the old one in that case.
-    refreshToken: data.refresh_token || prevRefreshToken || '',
+    // doesn't — keep the old one in that case. Same for the granted scopes.
+    refreshToken: data.refresh_token || prev?.refreshToken || '',
+    scope: data.scope || prev?.scope || '',
     expiresAt: Date.now() + (data.expires_in || 3600) * 1000 - 60_000,
   }));
+}
+
+// Whether the SAVED session was granted a scope. Scopes are fixed at consent
+// time, so a session connected before a scope was added to SCOPES doesn't
+// have it (a pre-scope-tracking record reads as "none") — callers use this
+// to ask for a disconnect/reconnect instead of letting the API 403 with
+// "Insufficient client scope".
+export function hasSpotifyScope(scope) {
+  return (readToken()?.scope || '').split(/\s+/).includes(scope);
 }
 
 function base64url(bytes) {
@@ -225,7 +239,7 @@ export async function getSpotifyUserToken() {
           disconnectSpotify();
           return null;
         }
-        saveToken(data, t.refreshToken);
+        saveToken(data, t);
         return data.access_token;
       } catch (e) {
         // Transient network failure — keep the record so a later call retries.
