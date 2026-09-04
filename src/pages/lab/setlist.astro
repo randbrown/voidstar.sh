@@ -202,6 +202,27 @@ const buildStamp = readBuildStamp();
       margin-bottom: 1rem;
       font-family: var(--font-mono);
     }
+    /* Reference/imported playlist links on the setlist view. */
+    .sl-setlist-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin: -0.5rem 0 1rem;
+    }
+    .sl-setlist-link {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--cyan);
+      text-decoration: none;
+      border: 1px solid color-mix(in srgb, var(--cyan) 35%, transparent);
+      border-radius: 999px;
+      padding: 0.18rem 0.6rem;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sl-setlist-link:hover { background: color-mix(in srgb, var(--cyan) 15%, transparent); }
 
     /* ── Sync / connectivity pill (dashboard) ── */
     .sl-sync-pill {
@@ -334,18 +355,56 @@ const buildStamp = readBuildStamp();
       font-family: var(--font-mono);
       font-size: 0.65rem;
       font-weight: 700;
-      width: 1.4rem;
+      min-width: 1.4rem;
       height: 1.4rem;
+      padding: 0 0.3rem;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border-radius: 50%;
+      border-radius: 999px;
       flex-shrink: 0;
+      background: color-mix(in srgb, var(--text-muted) 22%, transparent);
+      color: var(--text-muted);
     }
-    .sl-vocalist[data-v="C"] { background: color-mix(in srgb, var(--cyan) 25%, transparent); color: var(--cyan); }
-    .sl-vocalist[data-v="S"] { background: color-mix(in srgb, var(--green) 25%, transparent); color: var(--green); }
-    .sl-vocalist[data-v="H"] { background: color-mix(in srgb, var(--pink) 25%, transparent); color: var(--pink); }
-    .sl-vocalist[data-v="D"] { background: color-mix(in srgb, var(--amber) 25%, transparent); color: var(--amber); }
+    /* Prefix-matched so compound two-singer codes ("SM", "S&SM") take the
+       lead singer's color. */
+    .sl-vocalist[data-v^="C"] { background: color-mix(in srgb, var(--cyan) 25%, transparent); color: var(--cyan); }
+    .sl-vocalist[data-v^="S"] { background: color-mix(in srgb, var(--green) 25%, transparent); color: var(--green); }
+    .sl-vocalist[data-v^="H"] { background: color-mix(in srgb, var(--pink) 25%, transparent); color: var(--pink); }
+    .sl-vocalist[data-v^="D"] { background: color-mix(in srgb, var(--amber) 25%, transparent); color: var(--amber); }
+    /* Segue marker — a transitioned-between pair of songs (no break; the end
+       of one bleeds into the next). Stage-critical like the key-change badge,
+       but cyan so the two cues read differently at a glance. */
+    .sl-segue-badge {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+      background: color-mix(in srgb, var(--cyan) 22%, transparent);
+      color: var(--cyan);
+      border: 1px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+      padding: 0.12rem 0.5rem;
+      border-radius: 999px;
+      white-space: nowrap;
+      max-width: 16rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sl-segue-badge.sl-segue-in { opacity: 0.75; }
+    /* Connector between two setlist cards a segue joins. */
+    .sl-segue-connector {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: var(--cyan);
+      text-align: center;
+      margin: -0.35rem 0;
+      position: relative;
+      z-index: 1;
+      pointer-events: none;
+    }
+    /* Segue toggle on setlist-edit rows. */
+    .sl-segue-toggle { color: var(--text-muted); font-weight: 700; }
+    .sl-segue-toggle.sl-on { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 18%, transparent); border-radius: 4px; }
 
     .sl-note-preview {
       font-size: 0.78rem;
@@ -975,6 +1034,11 @@ const buildStamp = readBuildStamp();
     .sl-perform-badges .sl-keychange-badge {
       font-size: 1rem;
       padding: 0.25rem 0.75rem;
+    }
+    .sl-perform-badges .sl-segue-badge {
+      font-size: 0.95rem;
+      padding: 0.25rem 0.75rem;
+      max-width: 22rem;
     }
     .sl-perform-steel {
       font-family: var(--font-mono);

@@ -116,9 +116,46 @@ let _lastFocusPull = 0;
 let _focusPullInflight = false;
 const FOCUS_PULL_MIN_MS = 30_000;
 
+// ── Interaction-aware refresh after a background pull ──
+// Classic Android flow: reopen the backgrounded app, tap a button — and the
+// refocus pull finishes right then and refresh() rebuilds the DOM under the
+// tap, so the tap looks ignored ("the page reloaded and I had to click it
+// again"). The pull's data is already in IndexedDB by the time we get here;
+// the re-render is purely cosmetic and any navigation shows fresh data
+// anyway — so when the user has interacted in the last couple of seconds,
+// DEFER the re-render until they've gone quiet instead of yanking the view.
+const INTERACTION_QUIET_MS = 2_500;
+let _lastInteraction = 0;
+let _pendingRefreshTimer = null;
+
+function watchInteraction() {
+  const mark = () => { _lastInteraction = Date.now(); };
+  document.addEventListener('pointerdown', mark, { capture: true, passive: true });
+  document.addEventListener('keydown', mark, { capture: true, passive: true });
+  // A navigation re-renders with the pulled data by itself — drop any
+  // deferred refresh instead of double-rendering into the new view.
+  window.addEventListener('hashchange', () => {
+    if (_pendingRefreshTimer) { clearTimeout(_pendingRefreshTimer); _pendingRefreshTimer = null; }
+  });
+}
+
+function refreshWhenQuiet() {
+  if (_pendingRefreshTimer) return; // one deferred refresh is plenty
+  const sinceTap = Date.now() - _lastInteraction;
+  if (sinceTap >= INTERACTION_QUIET_MS && !uiBusyEditing()) {
+    refresh();
+    return;
+  }
+  _pendingRefreshTimer = setTimeout(() => {
+    _pendingRefreshTimer = null;
+    refreshWhenQuiet();
+  }, Math.max(500, INTERACTION_QUIET_MS - sinceTap));
+}
+
 function watchFocusSync() {
   if (_focusWatched || typeof window === 'undefined') return;
   _focusWatched = true;
+  watchInteraction();
 
   const onReturn = async () => {
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
@@ -145,11 +182,12 @@ function watchFocusSync() {
       );
       // Re-render so pulled changes show — but never yank the view out from
       // under someone mid-edit (would lose an unsaved input/textarea or the
-      // annotation editor's undrawn-to-disk ink).
+      // annotation editor's undrawn-to-disk ink) or mid-tap (the rebuild
+      // would eat the tap — refreshWhenQuiet waits out recent interaction).
       // `changed` (not just "remote existed") so a no-op pull doesn't rebuild
       // the view for nothing on every refocus.
       if (changed) {
-        if (!uiBusyEditing()) refresh();
+        refreshWhenQuiet();
         // Chips pulled from Drive may have moved — fold them into mind tasks
         // now instead of waiting for the next refocus sweep.
         import('./mind-todo.js').then((m) => m.reconcileAndNotify()).catch(() => {});

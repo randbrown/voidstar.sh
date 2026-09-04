@@ -115,6 +115,65 @@ export function findBestMatchWithArtist(songTitle, songArtist, candidates, thres
 }
 
 /**
+ * Find the library song a pasted/imported title refers to — forgiving on
+ * purpose, because titles arrive via text message: "Heads carolina" means the
+ * library's "Heads Carolina, Tails California", and stray punctuation must
+ * not mint a duplicate song. Escalates through: exact title → normalized
+ * (punctuation/articles/parens-insensitive) → word-boundary partial title →
+ * fuzzy score. A clear artist disagreement blocks reuse at every rung past
+ * exact (a wrong merge is worse than a duplicate), and an ambiguous partial
+ * (two candidates it can't split) returns null for the same reason.
+ *
+ * @param {string} title - pasted title
+ * @param {string} artist - pasted artist ('' = unknown)
+ * @param {Array<{title: string, artist?: string}>} songs - library songs
+ * @returns {{song: object, how: 'exact'|'normalized'|'partial'|'fuzzy'} | null}
+ */
+export function findLibrarySongMatch(title, artist, songs, { threshold = 0.8 } = {}) {
+  const lower = (title || '').toLowerCase().trim();
+  if (!lower) return null;
+  let song = songs.find((s) => (s.title || '').toLowerCase().trim() === lower);
+  if (song) return { song, how: 'exact' };
+
+  const artistOk = (s) => {
+    if (!artist || !s.artist) return true;
+    return matchScore(artist, s.artist) >= 0.4;
+  };
+
+  const n = normalize(title);
+  if (!n) return null;
+  song = songs.find((s) => normalize(s.title) === n && artistOk(s));
+  if (song) return { song, how: 'normalized' };
+
+  // Word-boundary partial: one title is a leading chunk of the other
+  // ("heads carolina" ⊂ "heads carolina tails california"). The shorter side
+  // must be ≥ 2 words and ≥ 6 chars — a one-word prefix ("Breathe" vs
+  // "Breathe In Breathe Out") is a different song, not a shorthand.
+  const prefixHits = [];
+  for (const s of songs) {
+    const t = normalize(s.title);
+    if (!t || t === n) continue;
+    const [shorter, longer] = n.length <= t.length ? [n, t] : [t, n];
+    if (shorter.length < 6 || !shorter.includes(' ')) continue;
+    if (!longer.startsWith(shorter) || longer[shorter.length] !== ' ') continue;
+    if (!artistOk(s)) continue;
+    prefixHits.push(s);
+  }
+  if (prefixHits.length) {
+    prefixHits.sort((a, b) => matchScore(title, b.title) - matchScore(title, a.title));
+    if (prefixHits.length === 1 ||
+        matchScore(title, prefixHits[0].title) - matchScore(title, prefixHits[1].title) > 0.05) {
+      return { song: prefixHits[0], how: 'partial' };
+    }
+    return null; // ambiguous — let the import create a song rather than guess
+  }
+
+  const best = findBestMatchWithArtist(title, artist || '', songs, threshold);
+  if (best) return { song: best.match, how: 'fuzzy' };
+  return null;
+}
+
+/**
  * Parse a Google Drive filename into title and artist.
  * Handles formats like: "06. Two Dozen Roses - Shenandoah" or "Song Title - Artist.pdf"
  */
