@@ -13,7 +13,7 @@ import { exportSetlistToSpotify } from './spotify-export.js';
 import { collectSetlistTrackUris } from './spotify-export-core.js';
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, bestGuessSpotifyLinks, findYoutubeForAllSongs, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
-import { findBestMatch as fuzzyMatch, matchScore } from './match.js';
+import { findBestMatch as fuzzyMatch, matchScore, findLibrarySongMatch } from './match.js';
 import { diffPlaylistAgainstSets, applyPlaylistToSets } from './playlist-diff.js';
 import { initGdriveBackup, isGdriveBackupEnabled, needsReconnect, isSyncing, setBackupClient, onBackupState, pullMergePushCycle, formatLastBackup, formatRelativeTime, createChartDoc, createChartImageFile, ensureDriveAccess, trashChartDoc, archiveChartDoc, hasClientId, getClientIdOverride, setClientId, usingAppClientId, gatherDiagnostics } from './gdrive-backup.js';
 import { buildChartText, buildAiChartText, buildTemplateChartText } from './chart-build.js';
@@ -214,10 +214,32 @@ function keyChangeBadge(keyChanges) {
   return `<span class="sl-keychange-badge">⚠ ${esc(keyChanges)}</span>`;
 }
 
+// Resolve a vocalist code to name(s). Single letters read the legend
+// directly; a compound code ("SM", "S&SM") without its own legend entry is
+// split into single letters so "SM" resolves to "Sarrenna + Mike" from the
+// S and M entries — two-singer codes work without a separate legend row.
+function vocalistName(code, legend) {
+  if (!code) return '';
+  if (legend?.[code]) return legend[code];
+  const letters = [...new Set(
+    code.split(/[&+/,]/).map((p) => p.trim()).filter(Boolean)
+      .flatMap((p) => (p.length > 1 && !legend?.[p] ? p.split('') : [p]))
+  )];
+  if (letters.length <= 1) return code;
+  return letters.map((l) => legend?.[l] || l).join(' + ');
+}
+
 function vocalistDot(code, legend) {
   if (!code) return '';
-  const name = legend?.[code] || code;
+  const name = vocalistName(code, legend);
   return `<span class="sl-vocalist" data-v="${esc(code)}" title="${esc(name)}">${esc(code)}</span>`;
+}
+
+// Segue marker — the end of this song bleeds straight into the next one (no
+// break). Stage-critical like the key-change badge: blowing a segue means
+// stopping when the band doesn't.
+function segueBadge(label = '» segue') {
+  return `<span class="sl-segue-badge" title="No break — this song transitions straight into the next">${esc(label)}</span>`;
 }
 
 // Last default-artist used by setlist import / bulk assign — remembered so
@@ -1101,6 +1123,41 @@ export async function renderSetlistView(root, setlistId) {
     root.appendChild(el('div', 'sl-setlist-meta', metaParts.join(' &middot; ')));
   }
 
+  // Reference/imported playlist links, right on the setlist — open the gig's
+  // Spotify/YouTube/Bandcamp/SoundCloud source material without a trip to the
+  // edit page. Reference URLs first, then the recorded playlists (YouTube
+  // imports, the exported Spotify playlist), de-duplicated by URL (the export
+  // often doubles as the reference).
+  const setlistLinks = [];
+  const pushLink = (url, label) => {
+    const u = (url || '').trim();
+    if (!/^https?:\/\//i.test(u)) return;
+    if (setlistLinks.some((l) => l.url === u)) return;
+    setlistLinks.push({ url: u, label });
+  };
+  pushLink(sl.spotifyUrl, 'spotify playlist');
+  pushLink(sl.bandcampUrl, 'bandcamp');
+  pushLink(sl.soundcloudUrl, 'soundcloud');
+  for (const p of (Array.isArray(sl.playlists) ? sl.playlists : [])) {
+    const service = LINK_SERVICE_LABELS[p.service] || p.service || 'playlist';
+    pushLink(p.url, p.kind === 'export'
+      ? `${service} (built from setlist)`
+      : (p.title ? `${service}: ${p.title}` : `${service} playlist`));
+  }
+  if (setlistLinks.length) {
+    const linkRow = el('div', 'sl-setlist-links');
+    for (const l of setlistLinks) {
+      const a = el('a', 'sl-setlist-link');
+      a.href = l.url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = `▶ ${l.label}`;
+      a.title = l.url;
+      linkRow.appendChild(a);
+    }
+    root.appendChild(linkRow);
+  }
+
   // Offline readiness — cache every chart so perform mode works with no signal
   // at a gig. Only shown when the setlist actually has charts to cache.
   const offlineBar = el('div', 'sl-offline-bar');
@@ -1180,12 +1237,18 @@ export async function renderSetlistView(root, setlistId) {
           ${keyBadge(merged.key, merged._origKey)}
           ${keyChangeBadge(merged.keyChanges)}
           ${vocalistDot(vocalist, sl.vocalistLegend)}
+          ${ov?.segueNext ? segueBadge('»') : ''}
         </div>
         ${merged.steelEntry ? `<div class="sl-steel-tag">steel: ${esc(merged.steelEntry)}</div>` : ''}
         ${lastNote ? `<div class="sl-note-preview">${esc(lastNote.length > 60 ? lastNote.slice(0, 60) + '...' : lastNote)}</div>` : ''}
       `;
       card.addEventListener('click', () => navigate(`#song/${song.id}/${setlistId}`));
       root.appendChild(card);
+      // Transitioned-between songs get a visible connector — the end of this
+      // one bleeds into the next, so the "gap" between the cards is a lie.
+      if (ov?.segueNext && i < set.songIds.length - 1) {
+        root.appendChild(el('div', 'sl-segue-connector', '» segue — no break »'));
+      }
     }
   }
 }
@@ -1663,30 +1726,68 @@ export async function renderSetlistEdit(root, setlistId) {
     const parsed = parseTextList(text, { defaultArtist });
     if (!parsed.sets.length) { alert('No songs found.'); return; }
     const replaceMode = replaceCheck.checked;
+    // Replacing the sets replaces the transition map too — only the paste's
+    // ">" markers should survive, not ones from a previous import.
+    if (replaceMode && sl.songOverrides) {
+      for (const ov of Object.values(sl.songOverrides)) delete ov.segueNext;
+    }
 
     let artistCount = 0;
+    let keyCount = 0;
+    let segueCount = 0;
+    const fuzzyMatched = [];
     const resolvedSets = [];
 
     // Resolve every pasted song to a library song (creating as needed) and
-    // apply vocalist overrides — identical in both modes.
+    // apply vocalist/key/segue overrides — identical in both modes. Matching
+    // is deliberately forgiving (findLibrarySongMatch): "Heads carolina" must
+    // reuse the library's "Heads Carolina, Tails California", not mint a
+    // duplicate; non-exact reuses are listed in the report so a wrong match
+    // is visible immediately.
+    const librarySongs = await store.getAllSongs();
+    const overrideFor = (songId) => {
+      if (!sl.songOverrides) sl.songOverrides = {};
+      if (!sl.songOverrides[songId]) sl.songOverrides[songId] = {};
+      return sl.songOverrides[songId];
+    };
     for (const pSet of parsed.sets) {
       const songIds = [];
       for (const ps of pSet.songs) {
-        let song = await store.findSongByTitle(ps.title);
+        const found = findLibrarySongMatch(ps.title, ps.artist, librarySongs);
+        let song = found?.song || null;
         if (!song) {
           song = store.createSong(ps.title, ps.artist);
           await store.putSong(song);
+          librarySongs.push(song);
           if (ps.artist) artistCount++;
-        } else if (ps.artist && !song.artist) {
-          song.artist = ps.artist;
-          await store.putSong(song);
-          artistCount++;
+        } else {
+          if (found.how !== 'exact' && found.how !== 'normalized') {
+            fuzzyMatched.push(`"${ps.title}" → ${song.title}`);
+          }
+          if (ps.artist && !song.artist) {
+            song.artist = ps.artist;
+            await store.putSong(song);
+            artistCount++;
+          }
         }
         songIds.push(song.id);
-        if (ps.vocalist) {
-          if (!sl.songOverrides) sl.songOverrides = {};
-          if (!sl.songOverrides[song.id]) sl.songOverrides[song.id] = {};
-          sl.songOverrides[song.id].vocalist = ps.vocalist;
+        if (ps.vocalist) overrideFor(song.id).vocalist = ps.vocalist;
+        if (ps.key) {
+          // Fill-empty on the base song; a different pasted key becomes a
+          // per-setlist override (the setlist's key for this gig).
+          if (!song.key) {
+            song.key = ps.key;
+            await store.putSong(song);
+            keyCount++;
+          } else if (song.key.toLowerCase() !== ps.key.toLowerCase() &&
+                     overrideFor(song.id).key !== ps.key) {
+            overrideFor(song.id).key = ps.key;
+            keyCount++;
+          }
+        }
+        if (ps.segueNext) {
+          overrideFor(song.id).segueNext = true;
+          segueCount++;
         }
       }
       resolvedSets.push({ name: pSet.name, songIds });
@@ -1718,6 +1819,12 @@ export async function renderSetlistEdit(root, setlistId) {
     }
     const metaNotes = [];
     const m = parsed.meta || {};
+    if (!(sl.name || '').trim() && m.name) {
+      sl.name = m.name;
+      metaNotes.push(`name "${m.name}"`);
+    } else if (m.name && m.name !== sl.name && m.name !== sl.venue) {
+      metaNotes.push(`header says "${m.name}" (kept your setlist name)`);
+    }
     if (!sl.venue && (m.venue || m.name)) {
       sl.venue = m.venue || m.name;
       metaNotes.push(`venue "${sl.venue}"`);
@@ -1732,7 +1839,10 @@ export async function renderSetlistEdit(root, setlistId) {
       ? `Imported ${addedCount} songs across ${sl.sets.length} set(s) (replaced the previous sets).`
       : `Added ${addedCount} song(s).`;
     if (alreadyCount) msg += `\n${alreadyCount} already on the setlist were left where they are.`;
+    if (fuzzyMatched.length) msg += `\nMatched to existing songs: ${fuzzyMatched.join('; ')}.`;
     if (artistCount) msg += `\nArtist filled on ${artistCount} song(s).`;
+    if (keyCount) msg += `\nKey applied on ${keyCount} song(s).`;
+    if (segueCount) msg += `\n${segueCount} segue transition(s) (">") marked.`;
     if (metaNotes.length) msg += `\nFrom the header line: ${metaNotes.join(', ')}.`;
     alert(msg);
     navigate(`#setlist/${sl.id}`);
@@ -1777,6 +1887,22 @@ export async function renderSetlistEdit(root, setlistId) {
       const row = el('div', 'sl-edit-row');
       row.dataset.songId = song.id;
       row.innerHTML = `<span class="sl-drag-handle" title="Drag to reorder">⠿</span><span class="sl-song-num">${i + 1}</span><span>${esc(song.title)}</span>`;
+      // Segue toggle — "this song bleeds straight into the next one". Stored
+      // as a per-setlist override (like the vocalist code): transitions are a
+      // property of this gig's running order, not of the song itself.
+      const segOn = !!sl.songOverrides?.[song.id]?.segueNext;
+      const segBtn = btn('»', 'sl-btn-icon sl-segue-toggle' + (segOn ? ' sl-on' : ''), async (e) => {
+        e.stopPropagation();
+        if (!sl.songOverrides) sl.songOverrides = {};
+        if (!sl.songOverrides[song.id]) sl.songOverrides[song.id] = {};
+        sl.songOverrides[song.id].segueNext = !sl.songOverrides[song.id].segueNext;
+        await store.putSetlist(sl);
+        refresh();
+      });
+      segBtn.title = segOn
+        ? 'Segue ON — this song transitions straight into the next (tap to clear)'
+        : 'Mark a segue — this song transitions straight into the next, no break';
+      row.appendChild(segBtn);
       const songLink = btn('▸', 'sl-btn-icon sl-edit-song-link', (e) => {
         e.stopPropagation();
         navigate(`#song/${song.id}/${sl.id}`);
@@ -2810,6 +2936,25 @@ export async function renderSongFocus(root, songId, setlistId) {
     if (setlist) merged = store.mergedSong(song, setlist);
   }
 
+  // Segue context from the setlist's running order: does this song bleed
+  // into the next one, and/or does the previous one bleed into this?
+  let segueNextTitle = '';
+  let seguePrevTitle = '';
+  if (setlist) {
+    const flatIds = setlist.sets.flatMap((s) => s.songIds);
+    const pos = flatIds.indexOf(songId);
+    if (pos >= 0) {
+      if (setlist.songOverrides?.[songId]?.segueNext && pos < flatIds.length - 1) {
+        const nx = await store.getSong(flatIds[pos + 1]);
+        segueNextTitle = nx?.title || 'next song';
+      }
+      if (pos > 0 && setlist.songOverrides?.[flatIds[pos - 1]]?.segueNext) {
+        const pv = await store.getSong(flatIds[pos - 1]);
+        seguePrevTitle = pv?.title || 'previous song';
+      }
+    }
+  }
+
   setLastSongId(songId);
   const backHash = setlistId ? `#setlist/${setlistId}` : '#library';
   const bar = topBar(merged.title, backHash);
@@ -2831,6 +2976,8 @@ export async function renderSongFocus(root, songId, setlistId) {
     <div class="sl-focus-badges">
       ${merged.key ? keyBadge(merged.key, merged._origKey) : '<span class="sl-key-badge sl-key-empty">no key</span>'}
       ${keyChangeBadge(merged.keyChanges)}
+      ${seguePrevTitle ? `<span class="sl-segue-badge sl-segue-in" title="No break — the previous song transitions straight into this one">${esc(seguePrevTitle)} »</span>` : ''}
+      ${segueNextTitle ? `<span class="sl-segue-badge" title="No break — this song transitions straight into the next">» ${esc(segueNextTitle)}</span>` : ''}
       ${merged.steelEntry ? `<span class="sl-steel-tag">steel: ${esc(merged.steelEntry)}</span>` : ''}
       ${song.durationSec ? `<span class="sl-badge sl-badge-dim">${formatTimecode(song.durationSec)}</span>` : ''}
       ${song.genre ? `<span class="sl-badge sl-badge-dim">${esc(song.genre)}</span>` : ''}
@@ -4440,7 +4587,23 @@ export async function renderPerformMode(root, setlistId, startSongId) {
       const merged = store.mergedSong(song, sl);
       const notes = await store.getNotesForSong(songId);
       const vocalist = sl.songOverrides?.[songId]?.vocalist || '';
-      entries.push({ type: 'song', song: merged, notes, vocalist, songId });
+      const segueNext = !!sl.songOverrides?.[songId]?.segueNext;
+      entries.push({ type: 'song', song: merged, notes, vocalist, songId, segueNext });
+    }
+  }
+
+  // Segue wiring — a transitioned-between pair gets the cue on BOTH screens:
+  // the outgoing song shows what it bleeds into (don't stop!), the incoming
+  // one shows what it arrived from.
+  {
+    let prev = null;
+    for (const e of entries) {
+      if (e.type !== 'song') continue;
+      if (prev && prev.segueNext) {
+        prev.segueNextTitle = e.song.title;
+        e.seguePrevTitle = prev.song.title;
+      }
+      prev = e;
     }
   }
 
@@ -4611,6 +4774,8 @@ export async function renderPerformMode(root, setlistId, startSongId) {
         ${song.key ? keyBadge(song.key, song._origKey) : ''}
         ${keyChangeBadge(song.keyChanges)}
         ${vocalist ? vocalistDot(vocalist, sl.vocalistLegend) : ''}
+        ${entry.seguePrevTitle ? `<span class="sl-segue-badge sl-segue-in" title="No break — the previous song bleeds straight into this one">${esc(entry.seguePrevTitle)} »</span>` : ''}
+        ${entry.segueNextTitle ? `<span class="sl-segue-badge" title="No break — keep playing straight into the next song">» segue: ${esc(entry.segueNextTitle)}</span>` : ''}
       </div>
       ${song.steelEntry ? `<div class="sl-perform-steel">steel: ${esc(song.steelEntry)}</div>` : ''}
       ${song.steelSummary ? `<div class="sl-perform-steel-summary">${esc(song.steelSummary)}</div>` : ''}

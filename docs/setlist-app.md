@@ -117,10 +117,27 @@ like add/remove song, reorder-undo, or a per-song scrape/search), call
 `refresh()` (`app.js`) instead — it re-runs `route()` directly. Only use
 `navigate()` when actually going to a *different* hash.
 
-Per-setlist overrides live in `setlist.songOverrides[songId]` (key/steel
-entry only — title, artist, key changes, chartUrl, and spotifyUri always live
-on the base song). `store.mergedSong(song, setlist)` applies overrides for
-display.
+Per-setlist overrides live in `setlist.songOverrides[songId]` (key, steel
+entry, the vocalist code, and `segueNext` — title, artist, key changes,
+chartUrl, and spotifyUri always live on the base song).
+`store.mergedSong(song, setlist)` applies overrides for display.
+
+`segueNext: true` marks a **segue**: this song bleeds straight into the next
+one in the running order, no break (the `>` markers in a pasted setlist — see
+the import section). It's an override, not a song field, because a transition
+is a property of one gig's running order. Shown as a cyan `»` badge + a
+connector between the two cards on the setlist view, as badges on the song
+page (both directions: "» into <next>" on the outgoing song, "<prev> »" on
+the incoming one), and the same two-sided cues in perform mode; toggled by
+hand via the `»` button on setlist-edit rows. The marker travels with the
+song through reorders (it always points at whatever now follows it).
+
+The setlist view also surfaces the gig's **playlist links** as a tappable
+chip row under the meta line — the three reference URLs
+(`spotifyUrl`/`bandcampUrl`/`soundcloudUrl`) plus every `setlist.playlists`
+entry (YouTube imports, the exported Spotify playlist), de-duplicated by URL
+(the export often doubles as the reference), each opening in a new tab — so
+the gig's source material is reachable without a trip to the edit page.
 
 ### Key: parsed from the chart, and the key-change callout
 
@@ -356,10 +373,15 @@ rule-based** — no model call, works offline, deterministic:
   ("nightjar @ the odditorium"). Two weaker corroborations also promote a
   signal-less first line: a blank line setting it off from the songs, or a
   date-dominant second line (`Moose Lodge` ⏎ `June 14`). A first line with
-  none of that is just a song, so a bare song list loses nothing. Parsed
-  metadata **fills empty setlist fields only** (venue ← header name when no
-  separate venue was found, gigDate) and the import alert reports what was
-  applied.
+  none of that is just a song, so a bare song list loses nothing — and a line
+  carrying song-only shapes (a `>` segue marker or a trailing vocalist/key
+  code) is never read as a header. Dashed headers parse into parts:
+  `Catoosa Fest - 9/5/2026 - Boot Scootin Boogie Nights` yields the date, the
+  venue-ish segment as the venue, and the full line (minus date) as the
+  setlist name. Parsed metadata **fills empty setlist fields only** (name,
+  venue ← header name when no separate venue was found, gigDate) and the
+  import alert reports what was applied — including a header name it kept
+  aside because the setlist was already named.
 - **Track numbers** are stripped only when the paste is *mostly* a numbered
   list (≥ 60% of lines, min 2) — per-line stripping used to eat the 9 off an
   unnumbered "9 To 5".
@@ -371,8 +393,36 @@ rule-based** — no model call, works offline, deterministic:
   `voidstar.setlist.importArtist`): applied to every song with no explicit
   artist that isn't marked as a cover — pasting an originals set means typing
   the band name once. Existing library songs get it fill-empty only.
-- The trailing single capital letter is still the **vocalist code**
-  (per-setlist override), parsed before artist extraction.
+- **Vocalist codes** (per-setlist override), parsed before artist
+  extraction: the trailing capital-letter token, bare (`don't rock the
+  jukebox  S`) or after a spaced dash (`Chattahoochee - M`). Two-singer
+  codes work — `SM`, `S&SM` (groups of 1–2 capitals, optionally &/+//-joined;
+  never 3+ letters in a row, so "Party In The USA" keeps its last word) —
+  and display resolves a compound code through the single-letter legend
+  entries ("SM" → "Sarrenna + Mike") unless the legend names the compound
+  itself. The dot is colored by the lead (first) letter.
+- **Keys** ride the same trailing-code slot: `Two dozen roses - M - G` reads
+  vocalist M + key G, `Fishin in the Dark - M - C#` key C#. A lone trailing
+  capital stays a vocalist (the long-standing convention); a token is only a
+  key when it's key-shaped and the vocalist slot is taken, or when it can't
+  be a code at all (`C#`, `Bbm`). Applied fill-empty to the base song's key;
+  a *different* pasted key becomes the per-setlist key override.
+- **Segues**: a trailing `>` on one line and/or a leading `>` on the next
+  (`Sold - SM>` ⏎ `>Queen of my double wide trailer`) mark the pair as
+  transitioned-between — normalized onto the first song as the
+  `songOverrides[id].segueNext` override (see the data-model section for how
+  it renders). "Replace current sets" clears old segue marks first, so only
+  the paste's `>` survive a re-import in that mode.
+- **Library reuse is forgiving** (`findLibrarySongMatch` in `match.js`,
+  node-tested by `scripts/check-setlist-import.mjs`): a pasted title reuses
+  an existing library song through exact → normalized (punctuation, articles,
+  parens) → word-boundary partial (`Heads carolina` → "Heads Carolina, Tails
+  California"; the shorter side needs ≥ 2 words, so "Breathe" never claims
+  "Breathe In Breathe Out") → fuzzy score, instead of exact-only matching
+  minting a duplicate song. A clear artist disagreement blocks reuse past
+  the exact rung, an ambiguous partial refuses to guess (a duplicate beats a
+  wrong merge), and every non-obvious reuse is listed in the import report
+  ("Matched to existing songs: …") so a wrong match is visible immediately.
 - **Additive by default.** Importing adds the paste's songs to the existing
   sets (paste's Nth set → setlist's Nth set, extra sets appended; a song
   already anywhere on the setlist stays where it is and is counted in the
@@ -1174,6 +1224,18 @@ not classes). Constraints to preserve:
   skipped while `uiBusyEditing()` (`app.js`) is true — mid-typing, or the
   annotation editor in draw mode (its canvas carries `data-drawing`),
   whose unsaved strokes live only in that canvas.
+- **A background pull's re-render must not eat a tap.** Returning to the
+  backgrounded app and tapping something used to race the refocus pull:
+  the pull finished right then, `refresh()` rebuilt the DOM under the
+  finger, and the tap looked ignored ("the page reloaded, I had to click
+  again"). The pull's data is already in IndexedDB by then — the re-render
+  is purely cosmetic, and any navigation shows fresh data anyway — so
+  `refreshWhenQuiet()` (`app.js`) defers it until the user has gone quiet
+  for a couple of seconds (pointerdown/keydown tracked app-wide,
+  capture-phase, passive) and drops it entirely if a navigation re-renders
+  first. Chrome discarding the tab outright (a true cold reload after a
+  long background) is outside the app's control; hash routing + the
+  sessionStorage drafts are what make that reload cheap.
 - **Swipe-to-navigate lives only in perform mode.** The song page had it
   and lost it — dragging a text selection in the notes field reads as a
   swipe. Song-page navigation is the prev/next buttons only.

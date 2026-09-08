@@ -6,12 +6,27 @@
 //   2  crazy (Patsy Cline cover)
 //   3  don't rock the jukebox   S
 //
+// …and the dashier variant a bandmate texts:
+//   Catoosa Fest - 9/5/2026 - Boot Scootin Boogie Nights
+//   Chattahoochee - M
+//   Sold - SM>              ← SM = two singers; trailing ">" = segue into…
+//   >Queen of my double wide trailer - M   ← …this song (leading ">")
+//   Two dozen roses - M - G ← trailing key after the vocalist code
+//
 // All parsing is deliberately local + rule-based (no model call). Header
 // detection is a small signal stack — see the comment on parseTextList.
 
 const SET_HEADER_RE = /^set\s*(\d+)\s*:?\s*$/i;
 const LINE_RE = /^\s*(\d+)\s*[.)\t\s]+\s*(.+)$/;
-const TRAILING_VOCALIST_RE = /\s+([A-Z])\s*$/;
+// Bare trailing vocalist code, no dash ("don't rock the jukebox  S").
+// 1–2 capitals (optionally &/+//-joined: "S&M") — never 3+, so a title
+// ending in an all-caps word ("Party In The USA") keeps its last word.
+const TRAILING_VOCALIST_RE = /\s+([A-Z](?:\s*[&+/]\s*[A-Z]{1,2})+|[A-Z]{1,2})\s*$/;
+// A dash-separated trailing code segment can be a vocalist code…
+const VOC_CODE_RE = /^[A-Z]{1,2}(?:\s*[&+/]\s*[A-Z]{1,2})*$/;
+// …or a key ("G", "C#", "Bbm", "F#m"). A bare capital letter matches both;
+// assignment order decides (first code = vocalist, later key-shaped = key).
+const KEY_TOKEN_RE = /^[A-G][#♯b♭]?m?$/;
 
 function titleCase(str) {
   return str.replace(/\w\S*/g, (w) =>
@@ -77,7 +92,10 @@ function parseHeaderLine(line) {
     out.strong = true;
     rest = (rest.slice(0, d.index) + rest.slice(d.index + d.length)).trim();
   }
-  // Strip separator debris the date removal may have exposed.
+  // Strip separator debris the date removal may have exposed — doubled-up
+  // separators mid-line ("Catoosa Fest -  - Boot Scootin Boogie Nights"
+  // after the 9/5/2026 came out), then anything left at the edges.
+  rest = rest.replace(/\s*[-–—|·,:]\s*[-–—|·,:]\s*/g, ' - ');
   rest = rest.replace(/^[\s\-–—,|·:]+|[\s\-–—,|·:]+$/g, '').trim();
 
   const atSplit = rest.match(/^(.*\S)\s*(?:@|\bat\b)\s+(\S.*)$/i);
@@ -90,14 +108,61 @@ function parseHeaderLine(line) {
   } else if (VENUE_WORDS.test(rest)) {
     out.strong = true;
     out.name = rest;
-    out.venue = /\b(setlist|set\s?list|gig|show)\b/i.test(rest)
-      ? rest.replace(/\b(setlist|set\s?list|gig|show)\b/gi, '').replace(/^[\s\-–—,|·:]+|[\s\-–—,|·:]+$/g, '').trim()
-      : rest;
+    // A dash-segmented header ("Catoosa Fest - Boot Scootin Boogie Nights")
+    // has the venue-ish segment as the venue; the full line stays the name.
+    const segs = rest.split(/\s+[-–—]\s+|\s*[|·]\s*/).map((s) => s.trim()).filter(Boolean);
+    const venueSeg = segs.length > 1 ? segs.find((s) => VENUE_WORDS.test(s)) : null;
+    if (venueSeg) {
+      out.venue = venueSeg;
+    } else {
+      out.venue = /\b(setlist|set\s?list|gig|show)\b/i.test(rest)
+        ? rest.replace(/\b(setlist|set\s?list|gig|show)\b/gi, '').replace(/^[\s\-–—,|·:]+|[\s\-–—,|·:]+$/g, '').trim()
+        : rest;
+    }
     if (atSplit) out.venue = atSplit[2].trim();
   } else {
     out.name = rest;
   }
   return out;
+}
+
+// ── Trailing vocalist / key codes ──
+
+// Pull trailing performance codes off a song line: dash-separated vocalist
+// code and/or key ("Two dozen roses - M - G", "Fishin in the Dark - M - C#",
+// "From this moment on - S&SM"), else the bare trailing code with no dash
+// ("don't rock the jukebox  S", "Sold SM"). Collected segments assign
+// left-to-right: the first vocalist-shaped one is the vocalist, a later
+// key-shaped one is the key — so "M - G" reads vocalist M, key G, while a
+// lone "- G" stays a vocalist (the long-standing single-letter convention).
+function extractTrailingCodes(text) {
+  let title = text;
+  let vocalist = '';
+  let key = '';
+
+  const segs = [];
+  for (;;) {
+    // Only the final dash segment can match (the capture can't span a dash),
+    // so this peels codes off the end one at a time.
+    const m = title.match(/\s+[-–—]\s+([^-–—]+?)\s*$/);
+    if (!m) break;
+    const seg = m[1].trim();
+    if (!VOC_CODE_RE.test(seg) && !KEY_TOKEN_RE.test(seg)) break;
+    segs.unshift(seg);
+    title = title.slice(0, m.index).trim();
+  }
+  for (const seg of segs) {
+    if (!vocalist && VOC_CODE_RE.test(seg)) { vocalist = seg.replace(/\s+/g, ''); continue; }
+    if (!key && KEY_TOKEN_RE.test(seg)) { key = seg; }
+  }
+  if (!vocalist && !segs.length) {
+    const m = title.match(TRAILING_VOCALIST_RE);
+    if (m) {
+      vocalist = m[1].replace(/\s+/g, '');
+      title = title.slice(0, -m[0].length).trim();
+    }
+  }
+  return { title, vocalist, key };
 }
 
 // ── Per-song artist / cover extraction ──
@@ -162,7 +227,13 @@ function extractArtist(text) {
  * promote a signal-less first line: it is set off from the songs by a blank
  * line, or the very next line is date-dominant ("Moose Lodge"\n"June 14").
  * A first line with none of that is just a song — paste a bare song list and
- * nothing is swallowed.
+ * nothing is swallowed. A line carrying song-only shapes (a leading/trailing
+ * ">" segue marker or a trailing vocalist/key code) is never a header, so a
+ * headerless paste whose first song mentions a bar stays a song.
+ *
+ * Segues: a trailing ">" on a line and/or a leading ">" on the next line
+ * mark the two songs as transitioned-between (the first bleeds into the
+ * second, no break) — normalized onto the FIRST song as segueNext.
  *
  * @param {string} text - raw pasted text
  * @param {{defaultArtist?: string}} [opts] - defaultArtist is applied to
@@ -170,7 +241,7 @@ function extractArtist(text) {
  *   pasting an originals set: type your band name once).
  * @returns {{
  *   meta: {name: string, venue: string, gigDate: string},
- *   sets: Array<{name: string, songs: Array<{title: string, vocalist: string, artist: string, cover: boolean}>}>
+ *   sets: Array<{name: string, songs: Array<{title: string, vocalist: string, artist: string, cover: boolean, key: string, segueNext: boolean}>}>
  * }}
  */
 export function parseTextList(text, opts = {}) {
@@ -182,7 +253,9 @@ export function parseTextList(text, opts = {}) {
   let start = 0;
   let headerCount = 0;
   const trimmed = rawLines.map((l) => l.trim());
-  const looksLikeSongLine = (l) => SET_HEADER_RE.test(l) || LINE_RE.test(l);
+  const looksLikeSongLine = (l) =>
+    SET_HEADER_RE.test(l) || LINE_RE.test(l) || /^>|>$/.test(l) ||
+    !!extractTrailingCodes(l).vocalist || !!extractTrailingCodes(l).key;
   for (let i = 0; i < rawLines.length && headerCount < 2; i++) {
     const line = trimmed[i];
     if (!line) { start = i + 1; continue; }
@@ -216,38 +289,52 @@ export function parseTextList(text, opts = {}) {
 
   const sets = [];
   let currentSet = { name: 'Set 1', songs: [] };
+  // Fold the two segue notations onto one flag: a trailing ">" on song A
+  // and/or a leading ">" on song B both mean A bleeds into B — either alone
+  // is enough, and the marker lives on A as segueNext.
+  const finalizeSet = (set) => {
+    for (let i = 0; i < set.songs.length; i++) {
+      const s = set.songs[i];
+      if (i < set.songs.length - 1 && set.songs[i + 1]._segueFromPrev) s.segueNext = true;
+      delete s._segueFromPrev;
+    }
+    return set;
+  };
 
   for (const raw of body) {
-    const line = raw.trim();
+    let line = raw.trim();
     if (!line) continue;
 
     const setMatch = line.match(SET_HEADER_RE);
     if (setMatch) {
-      if (currentSet.songs.length > 0) sets.push(currentSet);
+      if (currentSet.songs.length > 0) sets.push(finalizeSet(currentSet));
       currentSet = { name: `Set ${setMatch[1]}`, songs: [] };
       continue;
     }
+
+    // Segue markers come off first — the trailing ">" sits after the codes
+    // ("Sold - SM>"), the leading one before the number/title.
+    let segueFromPrev = false;
+    let segueNext = false;
+    if (/^>+/.test(line)) { segueFromPrev = true; line = line.replace(/^>+\s*/, ''); }
+    if (/>+$/.test(line)) { segueNext = true; line = line.replace(/\s*>+$/, ''); }
 
     const lineMatch = stripNumbers ? line.match(LINE_RE) : null;
     const songText = lineMatch ? lineMatch[2].trim() : line;
     if (!songText) continue;
 
-    let title = songText;
-    let vocalist = '';
-    const vocMatch = title.match(TRAILING_VOCALIST_RE);
-    if (vocMatch) {
-      vocalist = vocMatch[1];
-      title = title.slice(0, -vocMatch[0].length).trim();
-    }
-
-    const ex = extractArtist(title);
-    title = titleCase(ex.title);
+    const codes = extractTrailingCodes(songText);
+    const ex = extractArtist(codes.title);
+    const title = titleCase(ex.title);
     let artist = ex.artist;
     if (!artist && !ex.cover && defaultArtist) artist = defaultArtist;
-    currentSet.songs.push({ title, vocalist, artist, cover: ex.cover });
+    currentSet.songs.push({
+      title, vocalist: codes.vocalist, artist, cover: ex.cover,
+      key: codes.key, segueNext, _segueFromPrev: segueFromPrev,
+    });
   }
 
-  if (currentSet.songs.length > 0) sets.push(currentSet);
+  if (currentSet.songs.length > 0) sets.push(finalizeSet(currentSet));
   return { meta, sets };
 }
 
