@@ -101,6 +101,16 @@ const KICK_COOLDOWN_MS  = 1500; // tighter than page-init's 10s — this is per-
 // (cf. gargantua-void / dark-space, which use dt*2.5).
 const POSE_SMOOTH_RATE = 3.5;
 
+// Per-source resume guard. A clip whose remembered position sits within this
+// many seconds of its end restarts from the top instead of resuming — a tail
+// resume re-fires 'ended' (and therefore advance) almost immediately after
+// play starts. Without the guard the 'ended'-advance path is self-poisoning:
+// rememberPosition() runs at 'ended' time, when currentTime === duration, so
+// after one full pass through the playlist EVERY clip resumes on its tail and
+// the playlist degenerates into flipping sources every second or two (worse
+// at high playbackRate — 0.25s of media is ~0.1s wall at 2.5×).
+const END_RESUME_GUARD_S = 1.5;
+
 const FRAG = /* glsl */`#version 300 es
 precision highp float;
 in  vec2 vUv;
@@ -604,9 +614,10 @@ export default {
       const d = vidA.duration;
       let t = pendingResume;
       pendingResume = 0;
-      // Clamp just shy of the end so a near-end resume doesn't instantly trip
-      // the loop/advance the moment it starts.
-      if (Number.isFinite(d) && d > 0) t = Math.min(t, Math.max(0, d - 0.25));
+      // A resume point in the end-guard window restarts from the top instead —
+      // clamping "just shy of the end" (the old behavior) still trips 'ended',
+      // and therefore advance, a fraction of a second after play starts.
+      if (Number.isFinite(d) && d > 0 && t >= d - END_RESUME_GUARD_S) return;
       try { vidA.currentTime = t; } catch {}
     });
 
@@ -1164,6 +1175,17 @@ export default {
       const entry = playlist[cursor];
       if (!entry || entry.kind === 'camera') return;
       const t = activeVid.currentTime;
+      const d = activeVid.duration;
+      // A clip we leave at (or near) its end restarts from the top next time.
+      // This is the 'ended'-advance path — at 'ended' currentTime === duration,
+      // and remembering that tail position would resume the clip straight into
+      // another 'ended' → advance, cascading into rapid-fire source flipping
+      // once every clip has been played through once (END_RESUME_GUARD_S).
+      if (activeVid.ended ||
+          (Number.isFinite(d) && d > 0 && t >= d - END_RESUME_GUARD_S)) {
+        entry.resumeAt = 0;
+        return;
+      }
       if (Number.isFinite(t) && t > 0) entry.resumeAt = t;
     }
     function setCursor(idx) {
