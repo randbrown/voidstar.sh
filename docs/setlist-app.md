@@ -60,6 +60,7 @@ config). Tokens and per-device display prefs never ride it:
 | `voidstar.setlist.spotify.token` | localStorage | ✗ | Spotify user login (PKCE): `{accessToken, refreshToken, expiresAt, scope}` — `scope` is what the session was actually granted at consent time, so features needing a scope added later (playlist building) can detect an old session and ask for a reconnect instead of 403ing (see the Spotify-links section) |
 | `voidstar.setlist.spotify.pkce` | sessionStorage | ✗ | PKCE verifier + return hash, alive only during the login redirect round-trip |
 | `voidstar.setlist.noteDraft.<songId>` | sessionStorage | ✗ | uncommitted note-composer draft (survives focus-driven `refresh()` and app-switching; cleared on save) |
+| `voidstar.setlist.importDraft.<setlistId>` | sessionStorage | ✗ | uncommitted “Import Songs” paste on the setlist-edit page (survives the focus-driven `refresh()`; cleared on import) |
 | `voidstar.setlist.chartTab.<songId>` | sessionStorage | ✗ | which chart the song page shows: an `altCharts` entry id, absent = the primary (survives focus-driven `refresh()`; per-device on purpose) |
 | `voidstar.setlist.linkTab.<songId>` | sessionStorage | ✗ | which listening link the song page plays: `spotify`/`bandcamp`/`soundcloud` for a primary, `alt:<id>` for an `altLinks` entry; absent = the first available (same per-device rationale as `chartTab`) |
 
@@ -392,7 +393,21 @@ rule-based** — no model call, works offline, deterministic:
 - **Default artist** (input above the textarea, remembered in
   `voidstar.setlist.importArtist`): applied to every song with no explicit
   artist that isn't marked as a cover — pasting an originals set means typing
-  the band name once. Existing library songs get it fill-empty only.
+  the band name once. Existing library songs get it fill-empty only. The box
+  is persisted **as it is typed, emptying included**: this view re-renders on
+  its own (add/remove a song, segue toggle, the focus-sync Drive pull), and it
+  used to restore the last-used name over a box the user had just cleared —
+  so the next paste got the band name stamped on every song. An empty box is a
+  real answer, never “never set”. The pasted text itself is drafted per setlist
+  in `voidstar.setlist.importDraft.<setlistId>` (sessionStorage) so the same
+  re-render can't eat it either.
+- **Bulk artist tools** (buttons under the textarea): *set artist on all
+  songs…* fills the songs on this setlist that have none; *clear artist on all
+  songs…* empties the field on all of them (confirm lists the artists it would
+  drop) and writes a `clearedFields` tombstone per song, so the fill-empty
+  backup merge can't restore it from another device. Clearing is the only undo
+  for an import run with the wrong default artist — every other artist write in
+  the app is fill-empty, so re-importing with an empty box can't take one off.
 - **Vocalist codes** (per-setlist override), parsed before artist
   extraction: the trailing capital-letter token, bare (`don't rock the
   jukebox  S`) or after a spaced dash (`Chattahoochee - M`). Two-singer

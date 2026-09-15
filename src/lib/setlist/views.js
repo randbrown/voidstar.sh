@@ -1698,15 +1698,33 @@ export async function renderSetlistEdit(root, setlistId) {
   const importSection = el('div', 'sl-section');
   importSection.innerHTML = '<div class="sl-section-title">Import Songs</div>';
   const artistLabel = el('label', 'sl-label',
-    'Default artist <span class="sl-dim">(applied to songs with no artist named — covers stay unattributed)</span>');
+    'Default artist <span class="sl-dim">(applied to songs with no artist named — covers stay unattributed; leave it empty for none)</span>');
   const artistInput = el('input', 'sl-input');
   artistInput.placeholder = 'e.g. your band name — optional';
   artistInput.value = localStorage.getItem(IMPORT_ARTIST_KEY) || '';
+  // Remember the box as it is TYPED — emptying it included. This view
+  // re-renders on its own (add/remove a song, segue toggle, the focus-sync
+  // Drive pull), and a re-render restoring the last-used name over a box the
+  // user had just cleared is how a band name kept landing on every song of
+  // the next paste. An empty box is a real answer, not "never set".
+  artistInput.addEventListener('input', () => {
+    const v = artistInput.value.trim();
+    if (v) localStorage.setItem(IMPORT_ARTIST_KEY, v);
+    else localStorage.removeItem(IMPORT_ARTIST_KEY);
+  });
   artistLabel.appendChild(artistInput);
   importSection.appendChild(artistLabel);
   const textarea = el('textarea', 'sl-textarea');
   textarea.placeholder = 'Paste setlist text here...\n\nThe Grey Eagle 6/14\nSet 1:\n1  Song Title  C\n2  Crazy (Patsy Cline cover)\n3  Another Song  S';
   textarea.rows = 8;
+  // Same re-render hazard as the artist box: a paste sitting here when the
+  // focus-sync refresh lands would vanish. Draft per setlist in
+  // sessionStorage, like the note composer's.
+  const draftKey = `voidstar.setlist.importDraft.${sl.id}`;
+  try { textarea.value = sessionStorage.getItem(draftKey) || ''; } catch {}
+  textarea.addEventListener('input', () => {
+    try { sessionStorage.setItem(draftKey, textarea.value); } catch {}
+  });
   importSection.appendChild(textarea);
   // Additive by default: importing a paste adds what's new instead of wiping
   // the sets — the checkbox opts into the old replace-everything behavior.
@@ -1720,9 +1738,8 @@ export async function renderSetlistEdit(root, setlistId) {
   importSection.appendChild(btn('import', 'sl-btn-primary', async () => {
     const text = textarea.value.trim();
     if (!text) return;
+    // Whatever the box says right now — it is already persisted on input.
     const defaultArtist = artistInput.value.trim();
-    if (defaultArtist) localStorage.setItem(IMPORT_ARTIST_KEY, defaultArtist);
-    else localStorage.removeItem(IMPORT_ARTIST_KEY);
     const parsed = parseTextList(text, { defaultArtist });
     if (!parsed.sets.length) { alert('No songs found.'); return; }
     const replaceMode = replaceCheck.checked;
@@ -1835,6 +1852,7 @@ export async function renderSetlistEdit(root, setlistId) {
     }
     await store.putSetlist(sl);
     textarea.value = '';
+    try { sessionStorage.removeItem(draftKey); } catch {}
     let msg = replaceMode
       ? `Imported ${addedCount} songs across ${sl.sets.length} set(s) (replaced the previous sets).`
       : `Added ${addedCount} song(s).`;
@@ -1848,7 +1866,7 @@ export async function renderSetlistEdit(root, setlistId) {
     navigate(`#setlist/${sl.id}`);
   }));
   importSection.appendChild(btn('set artist on all songs…', 'sl-btn-ghost sl-btn-sm', async () => {
-    const suggested = artistInput.value.trim() || localStorage.getItem(IMPORT_ARTIST_KEY) || '';
+    const suggested = artistInput.value.trim();
     const name = prompt('Artist for every song in this setlist (only fills songs with no artist):', suggested);
     if (!name || !name.trim()) return;
     const artist = name.trim();
@@ -1869,6 +1887,34 @@ export async function renderSetlistEdit(root, setlistId) {
       }
     }
     alert(`Artist "${artist}" set on ${setCount} song(s); ${skipped} already had one and were left alone.`);
+    refresh();
+  }));
+  // The undo for the button above (and for an import run with the wrong
+  // default artist): re-importing with an empty box can't take an artist back
+  // off, because every fill is fill-empty.
+  importSection.appendChild(btn('clear artist on all songs…', 'sl-btn-ghost sl-btn-sm', async () => {
+    const seen = new Set();
+    const songs = [];
+    for (const set of sl.sets) {
+      for (const id of set.songIds) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const song = await store.getSong(id);
+        if (song?.artist) songs.push(song);
+      }
+    }
+    if (!songs.length) { alert('No song on this setlist has an artist.'); return; }
+    const names = [...new Set(songs.map((s) => s.artist))];
+    const preview = names.slice(0, 4).join(', ') + (names.length > 4 ? `, +${names.length - 4} more` : '');
+    if (!confirm(`Clear the artist on ${songs.length} song(s) of this setlist (${preview})?\n\nOnly the artist field is emptied — keys, links, charts and notes stay.`)) return;
+    for (const song of songs) {
+      // An explicit delete, so the fill-empty backup merge doesn't restore it
+      // from another device's older copy on the next cycle.
+      store.markCleared(song, 'artist');
+      song.artist = '';
+      await store.putSong(song);
+    }
+    alert(`Artist cleared on ${songs.length} song(s).`);
     refresh();
   }));
   root.appendChild(importSection);
