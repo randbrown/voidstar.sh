@@ -16,6 +16,9 @@ state library.
   alias for the song page.
 - Views are built with small DOM-builder helpers (`el()`/`btn()`) in
   `src/lib/setlist/views.js` — no JSX/templates.
+- Every page's top bar carries a back arrow; the dashboard, the **setlist**
+  view and the **setlist edit** page also carry `library` / `settings`
+  shortcuts (`appendNavShortcuts`), so neither is a trip back through home.
 
 ## Data model
 
@@ -434,10 +437,25 @@ rule-based** — no model call, works offline, deterministic:
   parens) → word-boundary partial (`Heads carolina` → "Heads Carolina, Tails
   California"; the shorter side needs ≥ 2 words, so "Breathe" never claims
   "Breathe In Breathe Out") → fuzzy score, instead of exact-only matching
-  minting a duplicate song. A clear artist disagreement blocks reuse past
-  the exact rung, an ambiguous partial refuses to guess (a duplicate beats a
-  wrong merge), and every non-obvious reuse is listed in the import report
-  ("Matched to existing songs: …") so a wrong match is visible immediately.
+  minting a duplicate song. The rungs are **strictly ordered**: a library song
+  whose title matches the paste always wins, however well a guess scores.
+  - The **exact** rung compares a `titleKey` — case-folded, zero-width junk
+    stripped, whitespace runs collapsed — so a cosmetic difference can't
+    push an identical title down into guessing.
+  - **Normalization** folds curly *and* straight quotes, so a setlist pasted
+    from Messages (`Boot Scootin’ Boogie`) still lands on the library's
+    `Boot Scootin Boogie` as a normalized match rather than a fuzzy one.
+  - The **fuzzy** rung runs on edit distance only — `matchScore`'s substring
+    shortcut (any containment scores 0.9) is switched off there
+    (`{containment: false}`). It used to let a *shorter* library title swallow
+    a longer pasted one: `Goodbye Earl` landed on a library `Goodbye`, so no
+    "Goodbye Earl" was ever created. Real shorthand is the partial rung's job,
+    where the word-boundary rules can tell it from a different song.
+
+  A clear artist disagreement blocks reuse past the exact rung, an ambiguous
+  partial refuses to guess (a duplicate beats a wrong merge), and every
+  non-obvious reuse is listed in the import report ("Matched to existing
+  songs: …") so a wrong match is visible immediately.
 - **Additive by default.** Importing adds the paste's songs to the existing
   sets (paste's Nth set → setlist's Nth set, extra sets appended; a song
   already anywhere on the setlist stays where it is and is counted in the
