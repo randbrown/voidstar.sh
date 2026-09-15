@@ -114,6 +114,15 @@ function topBar(title, backHash) {
   return bar;
 }
 
+// "library" / "settings" shortcuts for the pages inside a setlist. The
+// dashboard has always carried them; from a setlist (or its edit page) both
+// were two taps away through ← home, which on a phone mid-rehearsal is two
+// taps too many. Small on purpose — navigation, not an action.
+function appendNavShortcuts(actions) {
+  actions.appendChild(btn('library', 'sl-btn-ghost sl-btn-sm', () => navigate('#library')));
+  actions.appendChild(btn('settings', 'sl-btn-ghost sl-btn-sm', () => navigate('#settings')));
+}
+
 function emptyState(msg) {
   return el('div', 'sl-empty', msg);
 }
@@ -1112,6 +1121,7 @@ export async function renderSetlistView(root, setlistId) {
     const data = await store.exportSetlist(sl.id);
     if (data) downloadJson(data, `setlist-${sl.name.replace(/\s+/g, '-').toLowerCase()}.json`);
   }));
+  appendNavShortcuts(actions);
   bar.appendChild(actions);
   root.appendChild(bar);
 
@@ -1297,6 +1307,7 @@ export async function renderSetlistEdit(root, setlistId) {
   editActions.appendChild(reorderBtn);
   editActions.appendChild(undoBtn);
   if (isGdriveBackupEnabled() || needsReconnect()) editActions.appendChild(syncNowButton());
+  appendNavShortcuts(editActions);
   bar.appendChild(editActions);
   root.classList.remove('sl-reorder-on');
 

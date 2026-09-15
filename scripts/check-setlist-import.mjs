@@ -133,6 +133,44 @@ check('an ambiguous partial refuses to guess',
   findLibrarySongMatch('Sweet Home', '',
     [...LIB, { title: 'Sweet Home Chicago', artist: 'Robert Johnson' }]) === null);
 
+// ── exact wins over every guess; a shorter library title never swallows a
+// longer pasted one (the "Goodbye Earl" → "Goodbye" regression) ──
+
+const EARL_LIB = [
+  { title: 'Goodbye', artist: '' },
+  { title: 'Goodbye Earl', artist: 'Dixie Chicks' },
+];
+check('an exact title beats a same-prefix library song',
+  findLibrarySongMatch('Goodbye Earl', '', EARL_LIB)?.song.title === 'Goodbye Earl');
+check('…and is reported as exact, not a guess',
+  findLibrarySongMatch('Goodbye Earl', '', EARL_LIB)?.how === 'exact');
+check('exact wins whichever order the library comes in',
+  findLibrarySongMatch('Goodbye Earl', '', [...EARL_LIB].reverse())?.song.title === 'Goodbye Earl');
+check('a shorter library title cannot swallow a longer paste',
+  findLibrarySongMatch('Goodbye Earl', '', [{ title: 'Goodbye', artist: '' }]) === null);
+check('…nor the other way round',
+  findLibrarySongMatch('Goodbye', '', [{ title: 'Goodbye Earl', artist: '' }]) === null);
+check('the exact rung shrugs off case, double spaces and zero-width junk',
+  findLibrarySongMatch('goodbye  \u200bEARL', '', EARL_LIB)?.how === 'exact');
+// Same junk on the LIBRARY side — a stored title carrying an invisible
+// character or a stray double space used to miss the exact rung and land in a
+// near-tie between the right song and a short one that merely contains it.
+check('a library title with invisible junk still matches exactly',
+  findLibrarySongMatch('Goodbye Earl', '',
+    [{ title: 'Goodbye ', artist: '' }, { title: 'Goodbye\u200b  Earl', artist: '' }])?.song.title
+    === 'Goodbye\u200b  Earl');
+
+// ── curly punctuation from a phone paste stays on the exact/normalized rungs ──
+
+const CURLY_LIB = [
+  { title: 'Boot Scootin Boogie', artist: 'Brooks & Dunn' },
+  { title: "I'm Gonna Miss Her", artist: 'Brad Paisley' },
+];
+check('a curly apostrophe still normalizes onto the plain title',
+  findLibrarySongMatch('Boot Scootin\u2019 Boogie', '', CURLY_LIB)?.how === 'normalized');
+check('curly vs straight apostrophe is not a fuzzy guess',
+  findLibrarySongMatch('I\u2019m Gonna Miss Her', '', CURLY_LIB)?.how === 'normalized');
+
 if (failures) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);
