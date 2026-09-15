@@ -147,23 +147,52 @@ the gig's source material is reachable without a trip to the edit page.
 
 A song with a linked text chart should never sit at "no key":
 `chart-key.js` (`extractKeyFromChartText`) reads the key out of a chart
-header ("Key: A", "Key of G", or the key alone in the top corner), and an
-empty `song.key` is auto-filled wherever that text is already in hand — on
-the song page render (`maybeFillKeyFromChart`, which also patches the "no
-key" badge in place) and when a text chart is offline-cached
+header, and an empty `song.key` is auto-filled wherever that text is already
+in hand — on the song page render (`maybeFillFromChartHeader`, which also
+patches the "no key" badge in place) and when a text chart is offline-cached
 (`cacheChartForSong`, so bulk "download all charts" populates keys
-library-wide). The worker's `extractFromText` keeps matching patterns for
-the song page's "read chart" button (formerly "scrape"). Scanned/image
-charts have no text to parse — for those, "read chart" falls through to the
+library-wide). Both also fill an empty `song.bpm` from the same header
+(`extractTempoFromChartText`).
+
+The header shapes it reads, most explicit first:
+
+| Shape | Example |
+|---|---|
+| labeled | `Key: A` · `Key of G` · `KEY - Bbm` |
+| **key + time signature** (the top-corner shorthand) | `D\|4/4` · `D 4/4` · `Bb-3/4` · `Gm \| 6/8` |
+| the key alone on its own line | `C#m` |
+| tempo | `♩ = 126` · `q=126` · `Tempo: 96` · `132 bpm` |
+
+The corner shorthand is how a hand-written chart states the key most of the
+time, and it matches none of the other patterns — charts carrying it sat at
+"no key" no matter how often "read chart" ran. Deliberately narrow so a wrong
+key can't get in: the time signature's denominator must be a real note value,
+so a date (`9/5/2026`) or a bar count next to a letter mints nothing.
+
+`normalizeKeyName` is the same logic for a single value that is supposed to
+*be* a key — what the vision model reports for a scanned chart. It answers
+with what the page literally says (`D|4/4`, `Key of D`, `D major`), so the
+worker normalizes rather than demanding a bare key, and "N/A"-style
+non-answers stay empty.
+
+The worker's `extractFromText` / `normalizeKeyName` keep their own copy of
+these patterns for the song page's "read chart" button (formerly "scrape");
+`scripts/check-chart-key.mjs` runs **both** implementations against one shared
+table so they can't drift apart.
+
+Scanned/image charts have no text to parse — for those, "read chart" falls through to the
 worker's **vision route** (`POST /ai/chart-read`): the chart image
 (offline-cached, or fetched on demand via `cacheChartForSong` when no
 cache pass has run yet) is downscaled client-side (`readChartImage` in
 `sync.js`, white-filled before JPEG re-encode so transparent PNGs don't
 go black-on-black) and a vision model transcribes what's actually written
 on the page — key, BPM, capo, modulation notes — with a read-only prompt
-(no invention), confidence-gated and normalized server-side like the
-drafting route. Reading is transcription, not drafting, so it defaults to
-the cheap model tier (`ANTHROPIC_READ_MODEL`, default Haiku). Because the
+(no invention) that names where charts actually put the key and tempo (the
+top-left corner, the quarter-note glyph), confidence-gated and normalized
+server-side like the drafting route. The gate treats a *missing* confidence
+as "the model didn't say", not as illegible — scoring it 0 used to throw away
+complete, correct reads whenever the model skipped the field.
+Reading is transcription, not drafting, so it defaults to the cheap model tier (`ANTHROPIC_READ_MODEL`, default Haiku). Because the
 button is an explicit user action, failures are loud: when nothing was
 pulled *and* something went wrong (no worker URL, no AI key on the worker,
 chart fetch/decode error, low vision confidence), the button alerts the

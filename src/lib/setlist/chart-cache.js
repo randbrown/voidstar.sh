@@ -9,7 +9,7 @@
 
 import * as store from './store.js';
 import { getSources, workerHeaders } from './sync.js';
-import { extractKeyFromChartText } from './chart-key.js';
+import { extractKeyFromChartText, extractTempoFromChartText } from './chart-key.js';
 
 // The token header, but ONLY when the fetch target is our own worker — a chart
 // URL can also be a direct third-party file (Dropbox/Drive link), and we must
@@ -122,14 +122,23 @@ export async function cacheChartForSong(song, workerUrl) {
   if (!song?.chartUrl) return { songId: song?.id, ok: false, reason: 'no chart' };
   const r = await cacheChartByUrl(song.id, song.chartUrl, workerUrl);
   if (!r.ok) return { songId: song.id, ok: false, reason: r.reason };
-  // A text chart's header usually states the key — fill an empty song.key
-  // while the bytes are in hand. This also runs during bulk "download all
-  // charts", so keys populate library-wide in one pass. Primary-only: the
-  // URL-keyed path above deliberately skips this.
-  if (!song.key && r.blob.type.startsWith('text/plain')) {
+  // A text chart's header usually states the key (and the tempo) — fill the
+  // empty ones while the bytes are in hand. This also runs during bulk
+  // "download all charts", so keys populate library-wide in one pass.
+  // Primary-only: the URL-keyed path above deliberately skips this.
+  if ((!song.key || !song.bpm) && r.blob.type.startsWith('text/plain')) {
     try {
-      const key = extractKeyFromChartText(await r.blob.text());
-      if (key) { song.key = key; await store.putSong(song); }
+      const text = await r.blob.text();
+      let filled = false;
+      if (!song.key) {
+        const key = extractKeyFromChartText(text);
+        if (key) { song.key = key; filled = true; }
+      }
+      if (!song.bpm) {
+        const bpm = extractTempoFromChartText(text);
+        if (bpm) { song.bpm = bpm; filled = true; }
+      }
+      if (filled) await store.putSong(song);
     } catch {}
   }
   return { songId: song.id, ok: true, size: r.size };
