@@ -19,6 +19,8 @@ import {
   normalizeKeyName as workerNormalizeKeyName,
   normalizeChartRead,
   readConfidence,
+  validChartReadImages,
+  buildChartReadPrompt,
 } from '../workers/setlist-sync/index.js';
 
 let failures = 0;
@@ -52,6 +54,14 @@ const HEADERS = [
   { name: '"Key of G"', text: 'Key of G\n', key: 'G', bpm: 0 },
   { name: '"KEY - Bbm"', text: 'KEY - Bbm\n', key: 'Bbm', bpm: 0 },
   { name: 'bare key on its own line', text: 'Neon Moon\nC#m\n', key: 'C#m', bpm: 0 },
+  // A labeled key in the OTHER top corner, with the artist under it — the
+  // shape the vision route kept missing on scans.
+  {
+    name: 'labeled key in the far corner of the title line',
+    text: 'DIXIELAND DELIGHT                    KEY: G   4/4\n                                     Alabama\n\n|I| 1 5 6- 4 |\n',
+    key: 'G',
+    bpm: 0,
+  },
   { name: 'tempo label', text: 'Key: C\nTempo: 96\n', key: 'C', bpm: 96 },
   { name: 'tempo as a bpm suffix', text: 'Key: C\n132 bpm\n', key: 'C', bpm: 132 },
   { name: 'tempo as a typed quarter note', text: 'Key: C\nq = 120\n', key: 'C', bpm: 120 },
@@ -115,6 +125,48 @@ check('a labeled answer is no longer truncated into nothing',
 check('a bare key still works', normalizeChartRead({ found: true, key: 'Bb' })?.key === 'Bb');
 check('"not written" stays empty', normalizeChartRead({ found: true, key: 'N/A' }) === null);
 check('found:false is nothing', normalizeChartRead({ found: false, key: 'D' }) === null);
+
+// ── headerText fallback: what the model transcribed, parsed like chart text ──
+// A model that won't commit to "the key" will still copy the corner out
+// verbatim — that transcription is a second chance at the same answer.
+console.log('\nheaderText fallback');
+check('a corner key the model would not interpret is still found',
+  normalizeChartRead({
+    found: true, key: '', bpm: 0,
+    headerText: 'DIXIELAND DELIGHT\nKEY: G   4/4\nAlabama',
+  })?.key === 'G');
+check('the corner shorthand works through it too',
+  normalizeChartRead({ found: true, key: '', headerText: "D|4/4\nIt's Five O'Clock Somewhere" })?.key === 'D');
+check('tempo comes out of the transcription as well',
+  normalizeChartRead({ found: true, key: '', bpm: 0, headerText: 'Key: A\n♩ = 112' })?.bpm === 112);
+check('a key the model DID report still wins',
+  normalizeChartRead({ found: true, key: 'D', headerText: 'Key: G' })?.key === 'D');
+check('a transcription with no key adds nothing',
+  normalizeChartRead({ found: true, key: '', headerText: 'DIXIELAND DELIGHT\nAlabama' }) === null);
+
+// ── request shapes for the vision route ──
+console.log('\nchart-read request images');
+const jpeg = (n) => ({ data: 'x'.repeat(n), mimeType: 'image/jpeg' });
+check('page + corner crops all ride along',
+  validChartReadImages({ images: [jpeg(10), jpeg(10), jpeg(10)] }).length === 3);
+check('the older single-image shape still works',
+  validChartReadImages({ image: 'xxxx', mimeType: 'image/png' }).length === 1);
+check('a non-image mime type is refused',
+  validChartReadImages({ image: 'xxxx', mimeType: 'application/pdf' }).length === 0);
+check('an empty body is refused', validChartReadImages({}).length === 0);
+check('too many images are capped', validChartReadImages({ images: [jpeg(4), jpeg(4), jpeg(4), jpeg(4)] }).length === 3);
+check('the page survives when the extras would blow the size cap',
+  validChartReadImages({ images: [jpeg(3_000_000), jpeg(3_000_000)] }).length === 1);
+
+// ── the prompt has to ask for what the parsing above relies on ──
+console.log('\nread prompt');
+const prompt = buildChartReadPrompt('Dixieland Delight', 'Alabama', 2);
+check('it asks for the header transcription', prompt.includes('headerText'));
+check('it looks in BOTH top corners, not just the left',
+  /left or right/i.test(prompt) && !/TOP-LEFT corner/.test(prompt));
+check('it explains the extra images', /zoomed crops/i.test(prompt));
+check('a single image gets no multi-image instructions',
+  !/zoomed crops/i.test(buildChartReadPrompt('x', 'y', 1)));
 
 console.log('\nconfidence gate');
 check('a stated confidence is kept', readConfidence({ confidence: 0.5 }) === 0.5);

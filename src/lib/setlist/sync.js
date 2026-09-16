@@ -678,12 +678,32 @@ export async function fetchSongMeta(song) {
 // client-side first — vision models cap request sizes, and the chart header
 // doesn't need w2000 pixels.
 const CHART_READ_MAX_DIM = 1600;
+// …except the part that matters most. Key/tempo/capo live in a TOP CORNER,
+// written small, and a landscape page squeezed down to 1600px takes that
+// corner with it — the model reads "no key" off writing that is perfectly
+// clear on paper. So the page travels with crops of its two top corners,
+// each kept at the original scan's own resolution (never upscaled — that
+// adds no detail), which is up to 2× what survives in the whole-page image.
+const CHART_CORNER_BAND = 0.32;     // top third — where every chart puts its key
+const CHART_CORNER_OVERLAP = 0.55;  // each half reaches past the middle, so a
+                                    // centered marking is whole in both
+const CHART_CORNER_MIN_GAIN = 1.25; // skip a crop that isn't meaningfully sharper
 
-async function blobToScaledJpegBase64(blob, maxDim = CHART_READ_MAX_DIM) {
-  const bitmap = await createImageBitmap(blob);
-  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
-  const w = Math.max(1, Math.round(bitmap.width * scale));
-  const h = Math.max(1, Math.round(bitmap.height * scale));
+// Draw a region of `bitmap` (fractions of its size) into a JPEG that fits
+// maxDim. Returns null when the region wouldn't come out meaningfully sharper
+// than it already is in the full-page image (`minGain`).
+function bitmapRegionToJpeg(bitmap, { left = 0, top = 0, right = 1, bottom = 1, maxDim, minGain = 0 } = {}) {
+  const sx = Math.round(bitmap.width * left);
+  const sy = Math.round(bitmap.height * top);
+  const sw = Math.max(1, Math.round(bitmap.width * (right - left)));
+  const sh = Math.max(1, Math.round(bitmap.height * (bottom - top)));
+  const scale = Math.min(1, maxDim / Math.max(sw, sh));
+  if (minGain) {
+    const pageScale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+    if (scale < pageScale * minGain) return null;
+  }
+  const w = Math.max(1, Math.round(sw * scale));
+  const h = Math.max(1, Math.round(sh * scale));
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
@@ -692,10 +712,26 @@ async function blobToScaledJpegBase64(blob, maxDim = CHART_READ_MAX_DIM) {
   // transparent-background PNG scan into black-on-black. Paint paper first.
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, w, h);
-  ctx.drawImage(bitmap, 0, 0, w, h);
-  bitmap.close?.();
+  ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, w, h);
   const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
   return { data: dataUrl.slice(dataUrl.indexOf(',') + 1), mimeType: 'image/jpeg' };
+}
+
+// The page, plus its two top corners when cropping them actually recovers
+// detail the whole-page downscale threw away. A scan already small enough to
+// send whole gets no crops — they would be the same pixels twice.
+async function chartReadImages(blob, maxDim = CHART_READ_MAX_DIM) {
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const opts = { bottom: CHART_CORNER_BAND, maxDim, minGain: CHART_CORNER_MIN_GAIN };
+    return [
+      bitmapRegionToJpeg(bitmap, { maxDim }),
+      bitmapRegionToJpeg(bitmap, { ...opts, right: CHART_CORNER_OVERLAP }),
+      bitmapRegionToJpeg(bitmap, { ...opts, left: 1 - CHART_CORNER_OVERLAP }),
+    ].filter(Boolean);
+  } finally {
+    bitmap.close?.();
+  }
 }
 
 // Returns {ok:true, data:{key?, bpm?, capo?, keyChanges?, artist?}} with only
@@ -704,9 +740,9 @@ async function blobToScaledJpegBase64(blob, maxDim = CHART_READ_MAX_DIM) {
 export async function readChartImage(song, blob) {
   const sources = getSources();
   if (!sources.workerUrl) return { ok: false, reason: 'no worker configured' };
-  let payload;
+  let images;
   try {
-    payload = await blobToScaledJpegBase64(blob);
+    images = await chartReadImages(blob);
   } catch (e) {
     return { ok: false, reason: `image decode failed: ${e.message}` };
   }
@@ -715,8 +751,12 @@ export async function readChartImage(song, blob) {
       method: 'POST',
       headers: workerHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
-        image: payload.data,
-        mimeType: payload.mimeType,
+        // `image`/`mimeType` are the single-image shape a worker deployed
+        // before the corner crops still understands; `images` carries the
+        // page + corner crops for one that does.
+        image: images[0].data,
+        mimeType: images[0].mimeType,
+        images,
         title: song.title || '',
         artist: song.artist || '',
       }),

@@ -58,7 +58,11 @@
 //                                     of "create chart doc" when a key is set
 //   POST /ai/chart-read             → vision model reads key/bpm/capo/key-
 //                                     change notes off a scanned chart image
-//                                     (body: {image: base64, mimeType, title,
+//                                     (body: {images: [{data: base64,
+//                                     mimeType}] — the page plus zoomed crops
+//                                     of its top corners, where the key is
+//                                     written small; {image, mimeType} is the
+//                                     older single-image shape — title,
 //                                     artist})
 //   GET /ai/steel-summary?title=&artist=
 //                                   → a few concise sentences on the steel
@@ -2652,17 +2656,43 @@ async function handleAiSteelSummary(request, env) {
 const AI_READ_TIMEOUT_MS = 60000;
 const AI_READ_MAX_BASE64 = 4_000_000; // ~3 MB of image, within model limits
 const AI_READ_MIME_RE = /^image\/(jpeg|png|webp|gif)$/;
+const AI_READ_MAX_IMAGES = 3;         // the page + its header band, with room to spare
 
-function buildChartReadPrompt(title, artist) {
+// The images to read, from either request shape: `images: [{data, mimeType}]`
+// (page + zoomed header band) or the older single `image` + `mimeType`.
+// Anything malformed, oversized or not an image drops out; [] means the
+// request is unusable.
+export function validChartReadImages(body) {
+  const raw = Array.isArray(body?.images) && body.images.length
+    ? body.images
+    : [{ data: body?.image, mimeType: body?.mimeType }];
+  const images = [];
+  let total = 0;
+  for (const img of raw.slice(0, AI_READ_MAX_IMAGES)) {
+    const data = typeof img?.data === 'string' ? img.data : '';
+    const mimeType = typeof img?.mimeType === 'string' ? img.mimeType : 'image/jpeg';
+    if (!data || !AI_READ_MIME_RE.test(mimeType)) continue;
+    total += data.length;
+    if (total > AI_READ_MAX_BASE64) break; // keep what fits, drop the rest
+    images.push({ data, mimeType });
+  }
+  return images;
+}
+
+export function buildChartReadPrompt(title, artist, imageCount = 1) {
   const song = title ? ` It should be${artist ? ` "${title}" by ${artist}` : ` "${title}"`}.` : '';
-  return `This image is a musician's chord chart or Nashville Number chart — often a scan or photo of a hand-written page.${song}
+  const images = imageCount > 1
+    ? `You get ${imageCount} images of the SAME chart: the whole page first, then zoomed crops of its top corners — small writing that the full page blurs is legible there. They are one chart, not several.`
+    : 'You get one image of the chart.';
+  return `This image is a musician's chord chart or Nashville Number chart — often a scan or photo of a hand-written page.${song} ${images}
 
 Read ONLY what is actually written on the page — do not fill in facts from outside knowledge.
 
-Where to look, because charts are terse:
-- The KEY is usually a lone letter in the TOP-LEFT corner, very often paired with the time signature: "D | 4/4", "D 4/4", "Bb-3/4", "G 6/8" all mean the key is D, D, Bb, G. Report the key letter only (with any flat/sharp, and "m" if it is minor) — never the time signature.
+Where to look, because charts are terse and the important marks are small:
+- The KEY is written in a TOP CORNER — left or right, whichever the writer used. Check BOTH corners before answering "not written".
+- It appears either labeled ("Key: G", "KEY - Bb", "Key of D") or as a lone letter paired with the time signature ("D | 4/4", "D 4/4", "Bb-3/4", "G 6/8" mean the key is D, D, Bb, G). Report the key letter only — with any flat/sharp, and "m" if it is minor — never the time signature.
 - The TEMPO is usually a quarter-note glyph and a number: "♩ = 126" means 126 bpm. Metronome marks written as "q=126" mean the same.
-- A key or tempo written in the corner counts as written on the page — report it.
+- A key or tempo written in a corner counts as written on the page — report it.
 
 Return ONLY a JSON object, no prose. Include every field, and always include confidence:
 {
@@ -2672,11 +2702,12 @@ Return ONLY a JSON object, no prose. Include every field, and always include con
   "capo": number,        // 0 if not written
   "keyChanges": string,  // any modulation note written on the chart ("mod up to A, last chorus"), "" if none
   "artist": string,      // "" if not written
+  "headerText": string,  // EVERY marking around the title and in both top corners, transcribed verbatim, newline-separated ("Key: G", "4/4", "♩=126", "Alabama"). Transcribe even what you could not interpret.
   "confidence": number   // 0-1: how legible the page was
 }`;
 }
 
-async function chartReadClaude(env, prompt, image, mimeType) {
+async function chartReadClaude(env, prompt, images) {
   const model = env.ANTHROPIC_READ_MODEL || 'claude-haiku-4-5-20251001';
   const anthropic = new Anthropic({
     apiKey: env.ANTHROPIC_API_KEY,
@@ -2685,11 +2716,14 @@ async function chartReadClaude(env, prompt, image, mimeType) {
   });
   const response = await anthropic.messages.create({
     model,
-    max_tokens: 500,
+    max_tokens: 800,
     messages: [{
       role: 'user',
       content: [
-        { type: 'image', source: { type: 'base64', media_type: mimeType, data: image } },
+        ...images.map(img => ({
+          type: 'image',
+          source: { type: 'base64', media_type: img.mimeType, data: img.data },
+        })),
         { type: 'text', text: prompt },
       ],
     }],
@@ -2698,7 +2732,7 @@ async function chartReadClaude(env, prompt, image, mimeType) {
   return { provider: 'claude', model, raw: extractJsonBlock(text) };
 }
 
-async function chartReadOpenAI(env, prompt, image, mimeType) {
+async function chartReadOpenAI(env, prompt, images) {
   const model = env.OPENAI_MODEL || 'gpt-5-mini';
   const res = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
@@ -2711,7 +2745,10 @@ async function chartReadOpenAI(env, prompt, image, mimeType) {
       input: [{
         role: 'user',
         content: [
-          { type: 'input_image', image_url: `data:${mimeType};base64,${image}` },
+          ...images.map(img => ({
+            type: 'input_image',
+            image_url: `data:${img.mimeType};base64,${img.data}`,
+          })),
           { type: 'input_text', text: prompt },
         ],
       }],
@@ -2738,7 +2775,7 @@ async function chartReadOpenAI(env, prompt, image, mimeType) {
   return { provider: 'openai', model, raw: extractJsonBlock(text) };
 }
 
-async function chartReadGemini(env, prompt, image, mimeType) {
+async function chartReadGemini(env, prompt, images) {
   const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
@@ -2749,7 +2786,7 @@ async function chartReadGemini(env, prompt, image, mimeType) {
         contents: [{
           role: 'user',
           parts: [
-            { inline_data: { mime_type: mimeType, data: image } },
+            ...images.map(img => ({ inline_data: { mime_type: img.mimeType, data: img.data } })),
             { text: prompt },
           ],
         }],
@@ -2776,11 +2813,17 @@ export function normalizeChartRead(raw) {
   // Models answer with what the page says — "D|4/4", "Key of D", "D major" —
   // so normalize rather than demand a bare key. (Truncating to 6 chars BEFORE
   // parsing, as this used to, turned "Key of D" into "Key of" and dropped it.)
-  const key = normalizeKeyName(clean(raw.key, 32));
+  // Transcribing beats interpreting: a model that won't commit to "the key"
+  // will still copy out "Key: G" from the corner, so the header transcription
+  // is parsed with the same rules as a text chart's header whenever the
+  // dedicated field came back empty.
+  const headerText = clean(raw.headerText, 400);
+  const fromHeader = headerText ? extractFromText(headerText) : {};
+  const key = normalizeKeyName(clean(raw.key, 32)) || fromHeader.inferredKey || '';
   if (key) fields.key = key;
-  const bpm = Math.round(Number(raw.bpm)) || 0;
+  const bpm = Math.round(Number(raw.bpm)) || fromHeader.inferredBpm || 0;
   if (bpm >= 30 && bpm <= 300) fields.bpm = bpm;
-  const capo = Math.round(Number(raw.capo)) || 0;
+  const capo = Math.round(Number(raw.capo)) || fromHeader.inferredCapo || 0;
   if (capo >= 1 && capo <= 11) fields.capo = capo;
   const keyChanges = clean(raw.keyChanges, 120);
   if (keyChanges) fields.keyChanges = keyChanges;
@@ -2811,24 +2854,26 @@ async function handleAiChartRead(request, env) {
   }
 
   const body = await request.json().catch(() => null);
-  const image = body?.image || '';
-  const mimeType = body?.mimeType || 'image/jpeg';
-  if (!image || image.length > AI_READ_MAX_BASE64 || !AI_READ_MIME_RE.test(mimeType)) {
+  // `images` is the page plus zoomed crops of its top corners (where the key
+  // is written, small); `image` alone is the older single-image shape.
+  const images = validChartReadImages(body);
+  if (!images.length) {
     return corsResponse(JSON.stringify({
-      error: 'POST {image: base64 jpeg/png/webp ≤ ~3MB, mimeType, title?, artist?}',
+      error: `POST {images: [{data: base64 jpeg/png/webp, mimeType}] (or image + mimeType), ≤ ${AI_READ_MAX_IMAGES} images, ~3MB total, title?, artist?}`,
     }), 400, request, env);
   }
 
   const prompt = buildChartReadPrompt(
     String(body.title || '').slice(0, 200),
     String(body.artist || '').slice(0, 200),
+    images.length,
   );
 
   const reasons = [];
   for (const [name, provider] of providers) {
     let result;
     try {
-      result = await provider(env, prompt, image, mimeType);
+      result = await provider(env, prompt, images);
     } catch (e) {
       reasons.push(aiFailureReason(name, e));
       continue;
@@ -2836,7 +2881,10 @@ async function handleAiChartRead(request, env) {
     const fields = normalizeChartRead(result.raw);
     const confidence = readConfidence(result.raw);
     if (!fields || confidence < AI_MIN_CONFIDENCE) {
-      reasons.push(`${result.provider}: ${fields ? `confidence too low (${confidence})` : 'could not read the chart'}`);
+      const saw = typeof result.raw?.headerText === 'string' && result.raw.headerText.trim()
+        ? ` (read from the page: ${result.raw.headerText.trim().replace(/\s+/g, ' ').slice(0, 120)})`
+        : '';
+      reasons.push(`${result.provider}: ${fields ? `confidence too low (${confidence})` : 'could not read the chart'}${saw}`);
       continue;
     }
     return corsResponse(JSON.stringify({

@@ -187,9 +187,31 @@ cache pass has run yet) is downscaled client-side (`readChartImage` in
 `sync.js`, white-filled before JPEG re-encode so transparent PNGs don't
 go black-on-black) and a vision model transcribes what's actually written
 on the page — key, BPM, capo, modulation notes — with a read-only prompt
-(no invention) that names where charts actually put the key and tempo (the
-top-left corner, the quarter-note glyph), confidence-gated and normalized
-server-side like the drafting route. The gate treats a *missing* confidence
+(no invention) that names where charts actually put the key and tempo (a top
+corner, either side; the quarter-note glyph), confidence-gated and normalized
+server-side like the drafting route.
+
+Three things make that read land on a *scan*, where the key is a few
+millimetres of pencil in a corner:
+
+- **The corners travel at full resolution.** `chartReadImages` sends the whole
+  page (≤ 1600 px) *plus* crops of its two top corners — the top ~third,
+  split into overlapping left and right halves — each kept at the scan's own
+  resolution rather than the page's downscale. A landscape chart squeezed into
+  1600 px takes its corner writing down with it; the crops keep up to 2× the
+  detail. A scan small enough to send whole gets no crops (they'd be the same
+  pixels twice), and the request caps at 3 images / ~3 MB.
+- **Transcription is a second chance at interpretation.** The prompt asks for a
+  `headerText` field — every marking around the title and in both corners,
+  copied out verbatim, *including what the model couldn't interpret*. When the
+  dedicated `key`/`bpm`/`capo` fields come back empty, `normalizeChartRead`
+  runs that transcription through `extractFromText`, the same parser a text
+  chart's header gets. A model that won't commit to "the key" will still copy
+  out "Key: G".
+- **A failed read says what it saw.** When nothing usable comes back, the
+  reason carries the transcription snippet, so the alert reads "could not read
+  the chart (read from the page: DIXIELAND DELIGHT Alabama)" instead of a
+  shrug. The gate treats a *missing* confidence
 as "the model didn't say", not as illegible — scoring it 0 used to throw away
 complete, correct reads whenever the model skipped the field.
 Reading is transcription, not drafting, so it defaults to the cheap model tier (`ANTHROPIC_READ_MODEL`, default Haiku). Because the
@@ -1400,7 +1422,8 @@ extractor reads both `playlistVideoRenderer`/`videoRenderer` and
 `GET /meta/song?title=&artist=&spotifyId=` (BPM/key/time + iTunes
 artist/genre/year/artwork/duration),
 `GET /ai/chart?title=&artist=&key=[&retry=1]`,
-`POST /ai/chart-read` (vision read of a scanned chart image;
+`POST /ai/chart-read` (vision read of a scanned chart image — body
+`{images: [{data, mimeType}], title, artist}`, the page plus top-corner crops;
 `ANTHROPIC_READ_MODEL` overrides the default Haiku),
 `GET /ai/steel-summary?title=&artist=[&retry=1]` (concise steel-direction
 summary, same provider chain and guards as `/ai/chart`; `retry=1` on both
