@@ -19,6 +19,7 @@ import {
 } from '../workers/setlist-sync/index.js';
 import {
   isAccountLevelAiFailure,
+  isRetryableAiFailure,
   aiFailureStopper,
   SAME_FAILURE_LIMIT,
 } from '../src/lib/setlist/ai-failure.js';
@@ -93,6 +94,35 @@ for (const reason of [
   check(`NOT account-level: ${String(reason).slice(0, 44) || '(empty)'}`,
     !isAccountLevelAiFailure(reason));
 }
+
+console.log('\nrate limits are not account problems');
+// A free-tier 429 announces itself in the language of a drained account —
+// "You exceeded your current quota, please check your plan and billing
+// details" trips the credit/quota/billing patterns — but it is usually a
+// per-MINUTE limit that clears in seconds. Aborting on it throws away a
+// provider that would have worked a moment later.
+const GEMINI_429 = 'gemini: API 429: { "error": { "code": 429, "message": "You exceeded your current quota, please check your plan and billing details.';
+check('a bare Gemini 429 is retryable', isRetryableAiFailure(GEMINI_429));
+check('a bare Gemini 429 is NOT treated as terminal', !isAccountLevelAiFailure(GEMINI_429));
+check('a transient 503 is retryable', isRetryableAiFailure('gemini: API 503: model overloaded'));
+check('a drained balance is not retryable', !isRetryableAiFailure(REPORTED));
+
+// The reason string covers the WHOLE chain, and the chain only needs one
+// provider. This is the exact string the reported pass produced: Claude
+// terminally out of credits, Gemini merely rate-limited, OpenAI unset — so
+// Gemini is still a live path and the pass must not abort on song 1.
+const MIXED_CHAIN = 'claude: Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. (API 400) · gemini: API 429: { "error": { "code": 429, "message": "You exceeded your current quota, please check your plan and billing details. · openai: not configured (OPENAI_API_KEY)';
+check('a chain with one rate-limited provider left is not terminal',
+  !isAccountLevelAiFailure(MIXED_CHAIN));
+const mixed = aiFailureStopper();
+check('...so it does not abort on the first song',
+  mixed.fail(MIXED_CHAIN) === null);
+check(`...but still stops after ${SAME_FAILURE_LIMIT} in a row`,
+  typeof [...Array(SAME_FAILURE_LIMIT - 1)].reduce((acc) => acc ?? mixed.fail(MIXED_CHAIN), null) === 'string');
+
+// A chain where EVERY configured provider is terminally out stays terminal.
+const ALL_TERMINAL = 'claude: Your credit balance is too low (API 400) · gemini: API 403 permission_error · openai: not configured (OPENAI_API_KEY)';
+check('a chain with no live path left is terminal', isAccountLevelAiFailure(ALL_TERMINAL));
 
 console.log('\nbulk-pass stop condition');
 // One drained account should cost ONE failed call, not 82.

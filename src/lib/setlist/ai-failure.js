@@ -21,7 +21,7 @@
 // Matched on the provider's sentence, because the HTTP status doesn't
 // distinguish them: an exhausted Anthropic balance is a plain 400, the same
 // status a malformed request gets.
-const ACCOUNT_LEVEL_PATTERNS = [
+const TERMINAL_PATTERNS = [
   /credit balance is too low/i,
   /insufficient[_ ](?:credits?|quota|funds|balance)/i,
   /billing|payment required|past due/i,
@@ -30,10 +30,33 @@ const ACCOUNT_LEVEL_PATTERNS = [
   /quota exceeded|exceeded your current quota|usage limit|spend limit/i,
 ];
 
+// ...and the ones that look account-shaped but AREN'T terminal. A 429 is the
+// big one: on a free tier it is usually a per-MINUTE rate limit that clears in
+// seconds, and its message ("You exceeded your current quota, please check
+// your plan and billing details") reads exactly like a drained account — it
+// trips three of the patterns above. Aborting a library pass on it throws away
+// a provider that would have worked a moment later.
+const RETRYABLE_PATTERNS = [
+  /\b429\b|rate[_ ]?limit|resource[_ ]?exhausted|too many requests/i,
+  /\b5\d\d\b|overloaded|unavailable|timed? ?out|timeout/i,
+];
+
+export function isRetryableAiFailure(reason) {
+  const text = String(reason || '');
+  return !!text && RETRYABLE_PATTERNS.some(re => re.test(text));
+}
+
+// A failure about the ACCOUNT that no later song can change.
+//
+// The reason string covers the WHOLE failover chain ("claude: … · gemini: …"),
+// and the chain only needs ONE provider to work — so a reason is terminal only
+// when nothing in it is worth retrying. A drained Claude balance alongside a
+// rate-limited Gemini is NOT terminal: Gemini is still a live path.
 export function isAccountLevelAiFailure(reason) {
   const text = String(reason || '');
   if (!text) return false;
-  return ACCOUNT_LEVEL_PATTERNS.some(re => re.test(text));
+  if (isRetryableAiFailure(text)) return false;
+  return TERMINAL_PATTERNS.some(re => re.test(text));
 }
 
 // How many identical, non-account failures in a row mean "this isn't about

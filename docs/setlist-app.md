@@ -1418,11 +1418,16 @@ Four things keep the bill down, in rough order of how much they save:
    now passes the level the job needs; a `retry=1` (the user saying the cheap
    pass got it wrong) is the only thing that buys more.
 3. **Stopping.** Both bulk passes share `aiFailureStopper`
-   (`src/lib/setlist/ai-failure.js`): an *account-level* reason (credit
-   balance, bad key, quota) aborts on the **first** hit, since no later song
-   can change it; any other reason repeated 3x in a row also aborts. Only the
-   AI rung counts — three PDFs in a row are three ordinary songs, not a
-   config problem.
+   (`src/lib/setlist/ai-failure.js`): a *terminal* reason (credit balance, bad
+   key) aborts on the **first** hit, since no later song can change it; any
+   other reason repeated 3x in a row also aborts. Only the AI rung counts —
+   three PDFs in a row are three ordinary songs, not a config problem.
+   The reason string covers the **whole failover chain**, and the chain only
+   needs one live provider, so a reason is terminal only when nothing in it is
+   worth retrying. A **429 is not terminal**: on a free tier it is usually a
+   per-minute limit that clears in seconds, even though its message ("You
+   exceeded your current quota, please check your plan and billing details")
+   reads exactly like a drained account.
 4. **Images.** `/ai/chart-read` sends the page plus up to two top-corner
    crops, each capped at `CHART_READ_MAX_DIM` = 1568px, which is exactly the
    long edge the standard vision tier downscales to before counting visual
