@@ -677,7 +677,11 @@ export async function fetchSongMeta(song) {
 // the page (key, bpm, capo, modulation notes). The blob is downscaled
 // client-side first — vision models cap request sizes, and the chart header
 // doesn't need w2000 pixels.
-const CHART_READ_MAX_DIM = 1600;
+// The standard-resolution vision tier (every model before 4.7, which is where
+// the read model deliberately stays — see AI_DEFAULT_READ_MODEL) downscales
+// anything longer than 1568px on its long edge before counting visual tokens.
+// Sending more is bytes uploaded and a second resample for zero extra detail.
+const CHART_READ_MAX_DIM = 1568;
 // …except the part that matters most. Key/tempo/capo live in a TOP CORNER,
 // written small, and a landscape page squeezed down to 1600px takes that
 // corner with it — the model reads "no key" off writing that is perfectly
