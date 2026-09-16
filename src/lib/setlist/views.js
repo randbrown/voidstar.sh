@@ -665,8 +665,13 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
   function renderHelperFailures(failures) {
     for (const f of failures) {
       const row = el('div', 'sl-source-row');
-      const label = el('span', 'sl-source-url');
+      // NOT sl-source-url: that one-lines and ellipsises, which is right for a
+      // URL and wrong for this. A failure reason lists every provider that was
+      // tried ("claude: … · gemini: …"), and truncating it hides the half that
+      // answers "why didn't it fail over?".
+      const label = el('span', 'sl-fail-reason');
       label.textContent = `${f.song.title} — ${f.reason}`;
+      label.title = f.reason;
       row.appendChild(label);
       row.appendChild(btn('open', 'sl-btn-ghost sl-btn-sm', () => navigate(`#song/${f.song.id}`)));
       helperResults.appendChild(row);

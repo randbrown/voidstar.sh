@@ -97,6 +97,12 @@
 //   OPENAI_API_KEY         — OpenAI (+ OPENAI_MODEL, default gpt-5-mini;
 //                            Responses API with the web_search tool)
 //   GEMINI_API_KEY         — Gemini (+ GEMINI_MODEL, default gemini-2.5-flash)
+//                            HEADS UP: Google lists gemini-2.5-flash for
+//                            retirement no earlier than 2026-10-16. Its named
+//                            successor (Gemini 3.6 Flash) is ~5x the price
+//                            ($1.50/$7.50 vs $0.30/$2.50 per Mtok), so when it
+//                            goes, re-price this fallback rather than swapping
+//                            it in blind.
 
 import Anthropic from '@anthropic-ai/sdk';
 

@@ -1175,6 +1175,18 @@ const buildStamp = readBuildStamp();
       font-size: 0.78rem;
       color: var(--text-muted);
     }
+    /* A bulk-pass failure reason, unlike a URL, is a sentence per provider
+       tried — it has to wrap, or the failover story is invisible. */
+    .sl-fail-reason {
+      flex: 1;
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      line-height: 1.35;
+      color: var(--text-muted);
+    }
     code {
       font-family: var(--font-mono);
       font-size: 0.8em;
