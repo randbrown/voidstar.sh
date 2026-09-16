@@ -21,7 +21,7 @@ import { initAnnotationCanvas, loadAnnotation, renderReadonlyAnnotations, render
 import { cacheSetlistCharts, cacheAllCharts, cacheChartForSong, cacheChartByUrl, getSetlistOfflineStatus, getAllChartsOfflineStatus, getOfflineChart, fetchChartText, CHART_CACHED_EVENT } from './chart-cache.js';
 import { chartEnhanceEnabled, setChartEnhanceEnabled, enhanceChartBlob } from './chart-enhance.js';
 import { getSpotifyClientId, setSpotifyClientId, spotifyRedirectUri, isSpotifyConnected, beginSpotifyLogin, disconnectSpotify, spotifyLoginError, checkSpotifyConnection } from './spotify-auth.js';
-import { extractKeyFromChartText } from './chart-key.js';
+import { extractKeyFromChartText, extractTempoFromChartText } from './chart-key.js';
 import { initThemeControl } from '../qualia/theme.js';
 
 function formatTimecode(seconds) {
@@ -2290,15 +2290,17 @@ function mountRemoteChartInto(stage, song, chart = null) {
 // usually right in the chart header, so a song with a linked doc chart should
 // never sit at "no key". Saves once, then patches the already-rendered "no
 // key" badge in place rather than re-rendering mid-view.
-async function maybeFillKeyFromChart(song, text) {
-  if (song.key || !text) return;
-  const key = extractKeyFromChartText(text);
-  if (!key) return;
+async function maybeFillFromChartHeader(song, text) {
+  if (!text || (song.key && song.bpm)) return;
+  const key = song.key || extractKeyFromChartText(text);
+  const bpm = song.bpm || extractTempoFromChartText(text);
+  if (key === song.key && bpm === song.bpm) return;
   song.key = key;
+  song.bpm = bpm;
   await store.putSong(song);
   const empty = document.querySelector('.sl-focus-badges .sl-key-empty');
-  if (empty) empty.outerHTML = keyBadge(key);
-  console.log('[setlist] key parsed from chart header:', key);
+  if (key && empty) empty.outerHTML = keyBadge(key);
+  console.log('[setlist] parsed from chart header:', { key, bpm });
 }
 
 // Inline chart display for the song page — the same aspect-locked stage
@@ -2319,7 +2321,7 @@ async function renderInlineChart(container, song, chart) {
   const cached = await getOfflineChart(chart.key, chart.url);
   if (cached?.kind === 'text') {
     stage.appendChild(mountTextChart(stage, cached.text));
-    if (chart.isPrimary) maybeFillKeyFromChart(song, cached.text);
+    if (chart.isPrimary) maybeFillFromChartHeader(song, cached.text);
   } else if (cached) {
     const url = await chartDisplayUrl(cached);
     const img = document.createElement('img');
@@ -2339,7 +2341,7 @@ async function renderInlineChart(container, song, chart) {
     const liveText = await fetchChartText(chart.url, getSources().workerUrl);
     if (liveText) {
       stage.appendChild(mountTextChart(stage, liveText));
-      if (chart.isPrimary) maybeFillKeyFromChart(song, liveText);
+      if (chart.isPrimary) maybeFillFromChartHeader(song, liveText);
       else cacheChartByUrl(chart.key, chart.url, getSources().workerUrl).catch(() => {});
     } else {
       mountRemoteChartInto(stage, song, chart);

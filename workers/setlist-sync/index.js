@@ -1276,33 +1276,77 @@ function extractChartMeta(filename, description) {
   return meta;
 }
 
+// ── Chart header parsing ──
+// The client keeps its own copy of these in src/lib/setlist/chart-key.js (it
+// parses doc text it already holds, without a round-trip here). The two are
+// checked against one shared table by scripts/check-chart-key.mjs — keep them
+// in step.
+
+// "Key: A" / "Key of G" / "Key - Bb" / "KEY G".
+const KEY_LABELED_RE = /\bkey\s*(?:of\b)?\s*[:=\-–—]?\s*([A-G][b♭#♯]?)\s*(m\b|min\b|minor\b|maj\b|major\b)?(?![a-z])/i;
+// The top-corner shorthand: the key, then the time signature — "D|4/4",
+// "D 4/4", "Bb - 3/4", "Gm | 6/8". How a hand-written chart usually states it,
+// and the shape that used to fall through every pattern here. The denominator
+// is restricted to real note values so a date or bar count can't mint a key.
+const KEY_WITH_TIME_RE = /(?:^|[\s([|])([A-G][b♭#♯]?)\s*(m|min|minor|maj|major)?\s*[|/\\\-–—:,]?\s*(?:1[0-6]|[1-9])\s*\/\s*(?:1|2|4|8|16)(?![\d/])/m;
+// A header line that IS the key and nothing else.
+const KEY_BARE_LINE_RE = /^\s*([A-G][b♭#♯]?)\s*(m|min|minor|maj|major)?\s*$/im;
+// A single value that is supposed to BE a key (a vision model's answer).
+const KEY_VALUE_RE = /\b([A-G][b♭#♯]?)\s*(m(?:in(?:or)?)?|maj(?:or)?)?(?![a-z])/i;
+const NO_KEY_VALUE_RE = /^(?:n\/?a|none|no key|not written|not specified|unknown|unclear|[-–—?])$/i;
+
+// Tempo as a chart writes it: the quarter-note glyph ("♩ = 126"), its typed
+// stand-in ("q=126"), or a spelled-out label.
+const TEMPO_PATTERNS = [
+  /[♩♪\u{1D15F}\u{1D160}]\s*[=≈]\s*(\d{2,3})(?!\d)/u,
+  /\bq\s*[=≈]\s*(\d{2,3})(?!\d)/i,
+  /\b(?:tempo|bpm)\s*[:=]?\s*(\d{2,3})(?!\d)/i,
+  /\b(\d{2,3})\s*bpm\b/i,
+];
+
+function keyFromMatch(m) {
+  if (!m) return '';
+  const root = m[1][0].toUpperCase() + (m[1][1] ? (/[#♯]/.test(m[1][1]) ? '#' : 'b') : '');
+  const minor = /^m(?:in(?:or)?)?$/i.test((m[2] || '').trim());
+  return root + (minor ? 'm' : '');
+}
+
+// Normalize a value that is supposed to BE a key ("D|4/4", "Key of D",
+// "D major") into "D" / "Bbm" / ''. Forgiving on purpose: a vision model
+// reports what the page literally says, and throwing that away is how a chart
+// with the key written right on it ends up at "no key".
+export function normalizeKeyName(value) {
+  const v = String(value ?? '').trim();
+  if (!v || NO_KEY_VALUE_RE.test(v)) return ''; // "N/A" would yield its own A
+  return keyFromMatch(v.match(KEY_LABELED_RE)) || keyFromMatch(v.match(KEY_VALUE_RE));
+}
+
+function tempoFromHeader(header) {
+  for (const re of TEMPO_PATTERNS) {
+    const m = header.match(re);
+    if (!m) continue;
+    const bpm = parseInt(m[1], 10);
+    if (bpm >= 30 && bpm <= 300) return bpm;
+  }
+  return 0;
+}
+
 // Extract musical info from exported text content of a Google Doc
-function extractFromText(text) {
+export function extractFromText(text) {
   const meta = {};
-  const lines = text.split('\n').slice(0, 30);
+  const lines = (text || '').split('\n').slice(0, 30);
   const header = lines.join('\n');
 
-  // Key in the header — "Key: A", "Key of G", "Key - Bb", or the key alone
-  // on its own line (the top corner of a Nashville chart). Normalized to
-  // root + optional "m". Keep in step with the client's chart-key.js.
-  const keyPatterns = [
-    /\bkey\s*(?:of\b)?\s*[:=\-–—]?\s*([A-G][b#]?)\s*(m\b|min\b|minor\b|maj\b|major\b)?(?![a-z])/i,
-    /^\s*([A-G][b#]?)\s*(m|min|minor|maj|major)?\s*$/im,
-  ];
-  for (const re of keyPatterns) {
-    const m = header.match(re);
-    if (m) {
-      const root = m[1].charAt(0).toUpperCase() + (m[1][1] || '');
-      const minor = /^m(?:in(?:or)?)?$/i.test((m[2] || '').trim());
-      meta.inferredKey = root + (minor ? 'm' : '');
-      break;
-    }
+  // Key in the header, most explicit shape first: a labeled key, then the
+  // corner "D|4/4" shorthand, then the key alone on its own line.
+  for (const re of [KEY_LABELED_RE, KEY_WITH_TIME_RE, KEY_BARE_LINE_RE]) {
+    const key = keyFromMatch(header.match(re));
+    if (key) { meta.inferredKey = key; break; }
   }
 
   // BPM
-  const bpmMatch = header.match(/(?:tempo|bpm)\s*[:=]?\s*(\d{2,3})/i) ||
-                    header.match(/(\d{2,3})\s*bpm/i);
-  if (bpmMatch) meta.inferredBpm = parseInt(bpmMatch[1]);
+  const bpm = tempoFromHeader(header);
+  if (bpm) meta.inferredBpm = bpm;
 
   // Capo
   const capoMatch = header.match(/capo\s*[:=]?\s*(\d{1,2})/i);
@@ -2263,7 +2307,9 @@ function normalizeAiChart(raw) {
   return {
     title: clean(raw.title, 120),
     artist: clean(raw.artist, 120),
-    key: parseKeyName(clean(raw.key, 6))?.name || '',
+    // Same forgiving parse as the vision read: a model that answers "Key of D"
+    // or "D major" must not have its key truncated into nothing.
+    key: normalizeKeyName(clean(raw.key, 32)),
     bpm: bpm >= 30 && bpm <= 300 ? bpm : 0,
     time,
     capo: Math.min(11, Math.max(0, Math.round(Number(raw.capo)) || 0)),
@@ -2611,7 +2657,14 @@ function buildChartReadPrompt(title, artist) {
   const song = title ? ` It should be${artist ? ` "${title}" by ${artist}` : ` "${title}"`}.` : '';
   return `This image is a musician's chord chart or Nashville Number chart — often a scan or photo of a hand-written page.${song}
 
-Read ONLY what is actually written on the page — do not fill in facts from outside knowledge. Return ONLY a JSON object, no prose:
+Read ONLY what is actually written on the page — do not fill in facts from outside knowledge.
+
+Where to look, because charts are terse:
+- The KEY is usually a lone letter in the TOP-LEFT corner, very often paired with the time signature: "D | 4/4", "D 4/4", "Bb-3/4", "G 6/8" all mean the key is D, D, Bb, G. Report the key letter only (with any flat/sharp, and "m" if it is minor) — never the time signature.
+- The TEMPO is usually a quarter-note glyph and a number: "♩ = 126" means 126 bpm. Metronome marks written as "q=126" mean the same.
+- A key or tempo written in the corner counts as written on the page — report it.
+
+Return ONLY a JSON object, no prose. Include every field, and always include confidence:
 {
   "found": boolean,      // false if this isn't a readable chart
   "key": string,         // the key written on the chart ("A", "Bb", "F#m"), "" if not written
@@ -2716,11 +2769,14 @@ async function chartReadGemini(env, prompt, image, mimeType) {
 
 // Only fields the model actually read, validated song-field-shaped so the
 // client can fill-empty apply them directly. null = nothing usable.
-function normalizeChartRead(raw) {
+export function normalizeChartRead(raw) {
   if (!raw || typeof raw !== 'object' || raw.found === false) return null;
   const clean = (s, max) => (typeof s === 'string' ? s.trim().slice(0, max) : '');
   const fields = {};
-  const key = parseKeyName(clean(raw.key, 6))?.name || '';
+  // Models answer with what the page says — "D|4/4", "Key of D", "D major" —
+  // so normalize rather than demand a bare key. (Truncating to 6 chars BEFORE
+  // parsing, as this used to, turned "Key of D" into "Key of" and dropped it.)
+  const key = normalizeKeyName(clean(raw.key, 32));
   if (key) fields.key = key;
   const bpm = Math.round(Number(raw.bpm)) || 0;
   if (bpm >= 30 && bpm <= 300) fields.bpm = bpm;
@@ -2731,6 +2787,15 @@ function normalizeChartRead(raw) {
   const artist = clean(raw.artist, 120);
   if (artist) fields.artist = artist;
   return Object.keys(fields).length ? fields : null;
+}
+
+// How legible the model said the page was. A missing or non-numeric answer
+// means "it didn't say", NOT "illegible" — treating it as 0 (what `Number(x)
+// || 0` does) threw away complete, correct reads whenever the model skipped
+// the field.
+export function readConfidence(raw) {
+  const n = Number(raw?.confidence);
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 1;
 }
 
 async function handleAiChartRead(request, env) {
@@ -2769,7 +2834,7 @@ async function handleAiChartRead(request, env) {
       continue;
     }
     const fields = normalizeChartRead(result.raw);
-    const confidence = Math.min(1, Math.max(0, Number(result.raw?.confidence) || 0));
+    const confidence = readConfidence(result.raw);
     if (!fields || confidence < AI_MIN_CONFIDENCE) {
       reasons.push(`${result.provider}: ${fields ? `confidence too low (${confidence})` : 'could not read the chart'}`);
       continue;
