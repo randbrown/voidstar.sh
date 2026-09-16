@@ -83,9 +83,17 @@
 // of them fail, the response's `reason` lists each provider's actual failure
 // AND which providers were skipped for having no key, so "why didn't it fail
 // over?" is answerable from the client.
-//   ANTHROPIC_API_KEY      — Claude (+ ANTHROPIC_MODEL, default claude-opus-4-8;
-//                            /ai/chart-read uses ANTHROPIC_READ_MODEL, default
-//                            claude-haiku-4-5 — transcription, not drafting)
+//   ANTHROPIC_API_KEY      — Claude. Model per route, cheapest tier that does
+//                            the job (see the AI_DEFAULT_* constants):
+//                              ANTHROPIC_MODEL         /ai/chart drafting,
+//                                                      default claude-sonnet-5
+//                              ANTHROPIC_SUMMARY_MODEL /ai/steel-summary,
+//                                                      default claude-sonnet-5
+//                              ANTHROPIC_READ_MODEL    /ai/chart-read,
+//                                                      default claude-haiku-4-5
+//                            Any of them may be set to a Haiku-tier model to
+//                            halve the bill again — the request shape adapts
+//                            (claudeModelProfile), it does not 400.
 //   OPENAI_API_KEY         — OpenAI (+ OPENAI_MODEL, default gpt-5-mini;
 //                            Responses API with the web_search tool)
 //   GEMINI_API_KEY         — Gemini (+ GEMINI_MODEL, default gemini-2.5-flash)
@@ -2229,6 +2237,24 @@ async function deezerBpm(title, artist) {
 const AI_TIMEOUT_MS = 90000;
 const AI_MIN_CONFIDENCE = 0.3;
 
+// Default Claude models, picked for cost per useful answer rather than for the
+// top of the lineup. Sonnet 5 ($2/$10 per Mtok) replaced Opus 4.8 ($5/$25) as
+// the grounded default: 60% cheaper per token for work that is "search a few
+// sources and fill a small JSON object", which is not what Opus tier is for.
+// A library-wide pass over ~80 songs is the use case that drains an account,
+// and both grounded routes run once per song.
+export const AI_DEFAULT_MODEL = 'claude-sonnet-5';
+// A steel summary is ~80 words of prose off a couple of searches — the
+// cheapest tier that can still judge "is there steel on this record" is the
+// right one. Overridable on its own so it can drop to claude-haiku-4-5
+// (another 2x cheaper) without dragging chart drafting down with it.
+export const AI_DEFAULT_SUMMARY_MODEL = 'claude-sonnet-5';
+// Reading a scan is transcription, so this stays on the cheapest tier. The
+// bare alias, not the dated snapshot: same model, and it doesn't rot.
+// Deliberately NOT a 4.7+ model — those bill images at the high-resolution
+// tier (up to 4784 visual tokens vs 1568), so "newer" here costs ~3x per page.
+export const AI_DEFAULT_READ_MODEL = 'claude-haiku-4-5';
+
 function buildAiChartPrompt(title, artist, keyHint) {
   const song = artist ? `"${title}" by ${artist}` : `"${title}"`;
   const hint = keyHint ? ` The band plays it in ${keyHint} — note that Nashville numbers are key-independent, so chart the recording's form and report the recording's actual key.` : '';
@@ -2343,8 +2369,57 @@ function aiFailureReason(providerName, e) {
 // one prompt in, {provider, model, raw, sources, reason?} out, where `raw` is
 // the lenient-extracted JSON object (null when unusable). Callers apply their
 // own normalization/validation on `raw`.
-async function aiGroundedClaude(env, prompt, { maxTokens = 8000, maxSearches = 4 } = {}) {
-  const model = env.ANTHROPIC_MODEL || 'claude-opus-4-8';
+// What request shape a given Claude model actually accepts. The whole point
+// of ANTHROPIC_MODEL / ANTHROPIC_SUMMARY_MODEL is that these routes can be
+// re-pointed at a cheaper model when an account is bleeding credits — but the
+// tiers do NOT take the same request, so a naive swap 400s on every call:
+//   - Haiku-tier can't do programmatic tool calling, and web_search_20260209+
+//     defaults to being called from inside code execution (that's the
+//     "dynamic filtering" that makes it cheaper on the tiers that have it).
+//     Haiku needs the basic tool, which is called directly.
+//   - Haiku-tier rejects adaptive thinking (it's a budget_tokens model) and
+//     rejects output_config.effort outright.
+// Deriving all of that from the model id means ANTHROPIC_MODEL=claude-haiku-4-5
+// just works instead of failing 82 songs in a row.
+export function claudeModelProfile(model) {
+  const budgetTier = /haiku/i.test(String(model || ''));
+  return {
+    // Dynamic filtering (20260209+) runs the search inside code execution and
+    // filters results before they reach the context — materially fewer input
+    // tokens on a search-heavy call, which is most of what these routes do.
+    searchTool: budgetTier ? 'web_search_20250305' : 'web_search_20260209',
+    adaptiveThinking: !budgetTier,
+    supportsEffort: !budgetTier,
+  };
+}
+
+// Search results arrive at the top level on a direct call, but nested inside
+// the code-execution blocks when dynamic filtering is on — so the footer's
+// source URLs have to be dug out of both shapes or they silently come back
+// empty on exactly the tier we default to.
+function collectSearchSources(content, sources = []) {
+  for (const block of content || []) {
+    if (sources.length >= 3) break;
+    if (Array.isArray(block?.content)) {
+      if (block.type === 'web_search_tool_result') {
+        for (const r of block.content) {
+          if (r?.url && !sources.includes(r.url)) sources.push(r.url);
+          if (sources.length >= 3) break;
+        }
+      } else {
+        collectSearchSources(block.content, sources);
+      }
+    }
+  }
+  return sources;
+}
+
+// `effort` is the biggest cost lever on a thinking model and it defaults to
+// 'high' when unset — which is how a pile of ~80-word answers ended up billing
+// like deep research. Callers pass the level the job actually needs.
+async function aiGroundedClaude(env, prompt, { maxTokens = 8000, maxSearches = 4, model: modelOverride, effort = 'medium' } = {}) {
+  const model = modelOverride || env.ANTHROPIC_MODEL || AI_DEFAULT_MODEL;
+  const profile = claudeModelProfile(model);
   const anthropic = new Anthropic({
     apiKey: env.ANTHROPIC_API_KEY,
     maxRetries: 1,
@@ -2354,9 +2429,10 @@ async function aiGroundedClaude(env, prompt, { maxTokens = 8000, maxSearches = 4
   const params = {
     model,
     max_tokens: maxTokens,
-    thinking: { type: 'adaptive' },
-    tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: maxSearches }],
+    tools: [{ type: profile.searchTool, name: 'web_search', max_uses: maxSearches }],
   };
+  if (profile.adaptiveThinking) params.thinking = { type: 'adaptive' };
+  if (profile.supportsEffort) params.output_config = { effort };
   let messages = [{ role: 'user', content: prompt }];
   let response = await anthropic.messages.create({ ...params, messages });
   // Server-side search runs in a server loop that can pause; resume by
@@ -2370,15 +2446,7 @@ async function aiGroundedClaude(env, prompt, { maxTokens = 8000, maxSearches = 4
   }
 
   const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-  const sources = [];
-  for (const block of response.content) {
-    if (block.type !== 'web_search_tool_result' || !Array.isArray(block.content)) continue;
-    for (const r of block.content) {
-      if (r?.url && !sources.includes(r.url)) sources.push(r.url);
-      if (sources.length >= 3) break;
-    }
-  }
-  return { provider: 'claude', model, raw: extractJsonBlock(text), sources };
+  return { provider: 'claude', model, raw: extractJsonBlock(text), sources: collectSearchSources(response.content) };
 }
 
 async function aiGroundedGemini(env, prompt, { maxTokens = 8192 } = {}) {
@@ -2514,7 +2582,12 @@ async function handleAiChart(request, env) {
   for (const [name, provider] of providers) {
     let result;
     try {
-      result = await provider(env, prompt, retry ? { maxSearches: 8 } : {});
+      // Charting needs real reasoning over the sources, so it keeps the
+      // middle effort level; a retry is the user saying the cheap pass got it
+      // wrong, so that one buys more search and more thinking.
+      result = await provider(env, prompt, retry
+        ? { maxSearches: 8, effort: 'high' }
+        : { effort: 'medium' });
     } catch (e) {
       reasons.push(aiFailureReason(name, e));
       continue;
@@ -2603,6 +2676,9 @@ async function handleAiSteelSummary(request, env) {
 
   let prompt = buildSteelSummaryPrompt(title, artist);
   if (retry) prompt += RETRY_PROMPT_NOTE;
+  // Claude-only knob; the OpenAI/Gemini providers ignore it and keep their own
+  // (already cheap) defaults.
+  const summaryModel = env.ANTHROPIC_SUMMARY_MODEL || env.ANTHROPIC_MODEL || AI_DEFAULT_SUMMARY_MODEL;
 
   const reasons = [];
   for (const [name, provider] of providers) {
@@ -2612,8 +2688,8 @@ async function handleAiSteelSummary(request, env) {
       // (Not too small: thinking/thought tokens count against the cap on both
       // providers, and a grounded call spends real reasoning before the JSON.)
       result = await provider(env, prompt, retry
-        ? { maxTokens: 6000, maxSearches: 6 }
-        : { maxTokens: 4000, maxSearches: 3 });
+        ? { maxTokens: 6000, maxSearches: 6, model: summaryModel, effort: 'medium' }
+        : { maxTokens: 4000, maxSearches: 3, model: summaryModel, effort: 'low' });
     } catch (e) {
       reasons.push(aiFailureReason(name, e));
       continue;
@@ -2708,7 +2784,7 @@ Return ONLY a JSON object, no prose. Include every field, and always include con
 }
 
 async function chartReadClaude(env, prompt, images) {
-  const model = env.ANTHROPIC_READ_MODEL || 'claude-haiku-4-5-20251001';
+  const model = env.ANTHROPIC_READ_MODEL || AI_DEFAULT_READ_MODEL;
   const anthropic = new Anthropic({
     apiKey: env.ANTHROPIC_API_KEY,
     maxRetries: 1,

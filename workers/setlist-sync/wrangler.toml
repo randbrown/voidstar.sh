@@ -21,10 +21,26 @@
 # Optional — /ai/chart LLM chart drafting + /ai/chart-read scan reading
 # (first configured provider wins):
 #   ANTHROPIC_API_KEY      Claude, with web-search grounding
-#   ANTHROPIC_MODEL        plain var; default claude-opus-4-8 (chart drafting)
-#   ANTHROPIC_READ_MODEL   plain var; default claude-haiku-4-5-20251001
-#                          (/ai/chart-read — reading a scan is transcription,
-#                          the cheap tier is plenty)
+#
+#   Model per route — each is a plain var, and each defaults to the cheapest
+#   tier that does the job. A library-wide pass runs these once per song, so
+#   the default matters far more than the ceiling does:
+#   ANTHROPIC_MODEL          /ai/chart drafting; default claude-sonnet-5
+#                            ($2/$10 per Mtok, vs $5/$25 on the Opus tier it
+#                            used to default to)
+#   ANTHROPIC_SUMMARY_MODEL  /ai/steel-summary; default claude-sonnet-5.
+#                            Separate knob because a steel summary is ~80
+#                            words — set it to claude-haiku-4-5 ($1/$5) to
+#                            halve it again.
+#   ANTHROPIC_READ_MODEL     /ai/chart-read; default claude-haiku-4-5.
+#                            Reading a scan is transcription, so the cheapest
+#                            tier is plenty. Do NOT "upgrade" this to a 4.7+
+#                            model: those bill images at the high-resolution
+#                            visual-token tier (up to 4784 tokens a page vs
+#                            1568), i.e. ~3x the cost for the same read.
+#
+#   Any of the three accepts a Haiku-tier id and the request shape adapts to
+#   it (claudeModelProfile) rather than 400-ing on every call.
 #   GEMINI_API_KEY         Gemini, with Google Search grounding (free tier at
 #                          aistudio.google.com/apikey)
 #   GEMINI_MODEL           plain var; default gemini-2.5-flash

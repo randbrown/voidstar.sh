@@ -16,6 +16,7 @@ import { fetchLyrics } from './lyrics.js';
 import { cacheChartForSong, getOfflineChart } from './chart-cache.js';
 import { searchYoutube, isConfidentYoutube, scoreYoutubeMatch, songHasYoutube } from './youtube.js';
 import { applyYoutubeToSong } from './youtube-import.js';
+import { aiFailureStopper } from './ai-failure.js';
 
 // Fill-empty apply of a {field: value} update object onto a song, skipping
 // internal `_`-prefixed fields. Returns how many fields were filled.
@@ -40,6 +41,12 @@ function applyEmptyFields(song, updates) {
 // data" reads as a dead button.
 export async function readChartFields(song, onStage) {
   const problems = [];
+  // The AI rung's outcome, kept apart from `problems` because only this rung
+  // cost an API call — a bulk caller stops the pass on repeated AI failures,
+  // but must NOT stop on three PDFs in a row (that's three ordinary songs).
+  // Both stay null when the rung never ran, which is not an outcome to count.
+  let aiReason = null;
+  let aiOk = null;
   if (!getSources().workerUrl) {
     problems.push('no worker URL configured in Settings — both the doc scrape and the AI read need it');
   }
@@ -65,13 +72,19 @@ export async function readChartFields(song, onStage) {
       } else {
         onStage?.('ai');
         const read = await readChartImage(song, cached.blob);
-        if (read.ok) applied += applyEmptyFields(song, read.data);
+        if (read.ok) {
+          aiOk = true;
+          applied += applyEmptyFields(song, read.data);
+        }
         else if (read.reason === 'no-ai-key') problems.push('no AI key configured on the worker — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY to read scanned charts');
-        else problems.push(`AI read failed: ${read.reason}`);
+        else {
+          aiReason = read.reason;
+          problems.push(`AI read failed: ${read.reason}`);
+        }
       }
     }
   }
-  return { applied, problems };
+  return { applied, problems, aiReason, aiOk };
 }
 
 // ── Bulk passes ──
@@ -88,10 +101,16 @@ export async function scanAllCharts(onProgress) {
   const songs = (await store.getAllSongs()).filter(s => s.chartUrl);
   let updated = 0;
   const failures = [];
+  // The AI vision rung is a paid call per song. When it starts failing for a
+  // reason that has nothing to do with the song — a drained credit balance, a
+  // bad key — every remaining song is a guaranteed repeat, so stop and say it
+  // once instead of printing the same error 14 times.
+  const stopper = aiFailureStopper();
   for (let i = 0; i < songs.length; i++) {
     const song = songs[i];
+    let stop = null;
     try {
-      const { applied, problems } = await readChartFields(song);
+      const { applied, problems, aiReason, aiOk } = await readChartFields(song);
       if (applied) {
         await store.putSong(song);
         updated++;
@@ -100,10 +119,15 @@ export async function scanAllCharts(onProgress) {
         // fully-filled song with a PDF chart isn't a problem to fix.
         failures.push({ song, reason: problems[problems.length - 1] });
       }
+      // Songs whose vision rung never ran are skipped entirely — "3 in a row"
+      // means 3 consecutive AI calls, not 3 consecutive songs.
+      if (aiReason) stop = stopper.fail(aiReason);
+      else if (aiOk) stopper.ok();
     } catch (e) {
       failures.push({ song, reason: e.message || 'scan failed' });
     }
     onProgress?.({ done: i + 1, total: songs.length, updated, title: song.title });
+    if (stop) return { aborted: stop, total: songs.length, updated, failures };
   }
   return { total: songs.length, updated, failures };
 }
@@ -170,10 +194,9 @@ export async function summarizeSteelForAllSongs(onProgress) {
   // Some config problems only show up as a per-song error (an exhausted API
   // credit balance is a 400 on every call, not a 'no-ai-key'). When the same
   // reason repeats back-to-back it isn't about the songs — stop burning
-  // 15-30 s per remaining song and surface the reason once.
-  const SAME_FAILURE_LIMIT = 3;
-  let lastReason = null;
-  let sameReasonRun = 0;
+  // 15-30 s per remaining song and surface the reason once. An account-level
+  // reason stops on the first hit; see ai-failure.js.
+  const stopper = aiFailureStopper();
   for (let i = 0; i < targets.length; i++) {
     const song = targets[i];
     const r = await fetchSteelSummary(song);
@@ -181,22 +204,15 @@ export async function summarizeSteelForAllSongs(onProgress) {
       song.steelSummary = r.data.summary;
       await store.putSong(song);
       updated++;
-      lastReason = null;
-      sameReasonRun = 0;
+      stopper.ok();
     } else if (r.reason === 'no-ai-key') {
       return { aborted: 'no AI key configured on the worker — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY', total: targets.length, updated, failures };
     } else if (r.reason === 'worker-outdated') {
       return { aborted: 'worker outdated — redeploy workers/setlist-sync to get /ai/steel-summary', total: targets.length, updated, failures };
     } else {
       failures.push({ song, reason: r.reason });
-      sameReasonRun = r.reason === lastReason ? sameReasonRun + 1 : 1;
-      lastReason = r.reason;
-      if (sameReasonRun >= SAME_FAILURE_LIMIT) {
-        return {
-          aborted: `stopped — ${sameReasonRun} songs in a row failed the same way: ${r.reason}`,
-          total: targets.length, updated, failures,
-        };
-      }
+      const stop = stopper.fail(r.reason);
+      if (stop) return { aborted: stop, total: targets.length, updated, failures };
     }
     onProgress?.({ done: i + 1, total: targets.length, updated, title: song.title });
   }

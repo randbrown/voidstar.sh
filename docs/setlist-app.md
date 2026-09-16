@@ -378,7 +378,11 @@ open the song:
   from text-chart headers → AI vision read of a scanned image) extracted from
   the song-page button so both run identical logic. The expensive vision rung
   only fires for songs still missing a key, so re-running the pass on an
-  already-filled library is cheap. Per-song counterpart: **"read chart"**.
+  already-filled library is cheap. When that rung starts failing for a reason
+  that isn't about the song — a drained credit balance, a bad key — the pass
+  aborts with one message rather than paying for the same error once per
+  remaining song (shared `aiFailureStopper`; see the AI cost section).
+  Per-song counterpart: **"read chart"**.
 - **fetch info & lyrics** — "fetch info" library-wide: `/meta/song` metadata
   plus LRCLIB lyrics for every song missing any of it. Lyrics come straight
   from the browser, so this pass works even with no worker configured.
@@ -388,9 +392,10 @@ open the song:
   the song page). Confirms with a song count before starting; a config
   problem (`no-ai-key`, outdated worker) aborts the pass with one message
   instead of failing N times — and so does any error that repeats on 3
-  consecutive songs (an exhausted API credit balance surfaces as a 400 on
-  every call, not as `no-ai-key`). Per-song counterpart: **"steel summary
-  (AI)"** / "redo steel summary".
+  consecutive songs, or an *account-level* one on its very first hit (an
+  exhausted API credit balance surfaces as a 400 on every call, not as
+  `no-ai-key`, and no later song can change it). Per-song counterpart:
+  **"steel summary (AI)"** / "redo steel summary".
 - **verify spotify links** — checks every linked song's Spotify track
   against its setlists' reference playlists and repairs the ones pointing
   elsewhere (see the Spotify-links section for the exact rules; this is the
@@ -978,7 +983,7 @@ four tiers, in order:
      leader would: key, tempo, time, feel, song form, **bar-accurate**
      sections, split bars, and playing notes. Providers form a failover
      chain — Claude (`ANTHROPIC_API_KEY`, `web_search` server tool, default
-     model `claude-opus-4-8`), then OpenAI (`OPENAI_API_KEY`, Responses API
+     model `claude-sonnet-5`), then OpenAI (`OPENAI_API_KEY`, Responses API
      `web_search` tool, default `gpt-5-mini`), then Gemini
      (`GEMINI_API_KEY`, Google Search grounding, default `gemini-2.5-flash`,
      free tier at aistudio.google.com/apikey) — whichever are configured. A
@@ -1374,10 +1379,72 @@ Env vars (`wrangler secret put`): `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`,
 `BRAVE_SEARCH_API_KEY` — without either, web search falls back to a keyless
 DuckDuckGo HTML scrape. Optional, for the `/ai/*` routes: any of
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (+
-`ANTHROPIC_MODEL`/`OPENAI_MODEL`/`GEMINI_MODEL` overrides) — they form the
+`ANTHROPIC_MODEL`/`ANTHROPIC_SUMMARY_MODEL`/`ANTHROPIC_READ_MODEL`/
+`OPENAI_MODEL`/`GEMINI_MODEL` overrides) — they form the
 Claude → OpenAI → Gemini failover chain, so setting more than one keeps AI
-features alive when one account hits its usage limit.
+features alive when one account hits its usage limit. **Setting a second key
+is the cheapest insurance there is**: a drained Anthropic balance is a 400 on
+every call, and with no other provider configured that dead-ends the feature
+instead of falling through (Gemini has a genuinely free AI Studio tier). See
+the AI cost section for what each route costs and which model it defaults to.
 Also `ALLOWED_ORIGIN` (plain var in `wrangler.toml`).
+
+### AI cost — which model each route uses, and why
+
+The failure mode this section exists to prevent: a library-wide pass is
+**one paid call per song**, so a default that is merely "the best model" bills
+like deep research ~80 times in a row. The reported symptom was a health check
+whose results were 14 identical rows of *"AI read failed: claude: Your credit
+balance is too low"* — the account was drained, and the pass kept paying to
+be told so.
+
+Each route defaults to the cheapest tier that does its job (constants
+`AI_DEFAULT_MODEL` / `AI_DEFAULT_SUMMARY_MODEL` / `AI_DEFAULT_READ_MODEL`,
+each overridable by the matching env var):
+
+| Route | Job | Default | Rate ($/Mtok in/out) | Effort |
+|---|---|---|---|---|
+| `/ai/chart` | draft a bar-accurate chart from searched sources | `claude-sonnet-5` | 2 / 10 | `medium` (`high` on `retry=1`) |
+| `/ai/steel-summary` | ~80 words on what the steel does | `claude-sonnet-5` | 2 / 10 | `low` (`medium` on `retry=1`) |
+| `/ai/chart-read` | transcribe what's written on a scan | `claude-haiku-4-5` | 1 / 5 | n/a |
+
+Four things keep the bill down, in rough order of how much they save:
+
+1. **Tier.** The grounded routes used to default to `claude-opus-4-8`
+   ($5/$25) — 2.5x Sonnet 5 per token for work that is "search a few sources,
+   fill a small JSON object". Don't move them back up.
+2. **Effort.** `output_config.effort` defaults to `high` when unset, which is
+   how a pile of 80-word answers ended up billing like research. Each call
+   now passes the level the job needs; a `retry=1` (the user saying the cheap
+   pass got it wrong) is the only thing that buys more.
+3. **Stopping.** Both bulk passes share `aiFailureStopper`
+   (`src/lib/setlist/ai-failure.js`): an *account-level* reason (credit
+   balance, bad key, quota) aborts on the **first** hit, since no later song
+   can change it; any other reason repeated 3x in a row also aborts. Only the
+   AI rung counts — three PDFs in a row are three ordinary songs, not a
+   config problem.
+4. **Images.** `/ai/chart-read` sends the page plus up to two top-corner
+   crops, each capped at `CHART_READ_MAX_DIM` = 1568px, which is exactly the
+   long edge the standard vision tier downscales to before counting visual
+   tokens (`ceil(w/28) x ceil(h/28)`, max 1568 per image). **This is why the
+   read model must not be "upgraded" to a 4.7+ model** — those bill images at
+   the high-resolution tier (up to 4784 tokens a page), roughly 3x the cost
+   for a transcription job the cheap tier already does.
+
+**Going cheaper still.** Any of the three env vars accepts a Haiku-tier id.
+The request shape adapts automatically (`claudeModelProfile`) rather than
+400-ing: Haiku-tier can't do programmatic tool calling, so it gets the
+directly-callable `web_search_20250305` instead of the dynamic-filtering
+`web_search_20260209`, and it is sent no `thinking` block and no
+`output_config.effort` (it rejects both). `ANTHROPIC_SUMMARY_MODEL=claude-haiku-4-5`
+is the safest such cut — a steel summary is short prose, not structured
+chart work. Note that web search itself is billed per search ($10/1000)
+on top of tokens, so `max_uses` (3-4 here, 6-8 on a retry) is a cost knob too.
+
+Prompt caching is deliberately **not** used on `/ai/chart-read`: Haiku 4.5's
+minimum cacheable prefix is 4096 tokens and the instruction block is well
+under that, so a `cache_control` marker there would silently never hit.
+
 
 The worker imports `@anthropic-ai/sdk`, so run `npm ci` at the repo root
 before `wrangler deploy` (wrangler bundles it from `node_modules`).
@@ -1424,7 +1491,8 @@ artist/genre/year/artwork/duration),
 `GET /ai/chart?title=&artist=&key=[&retry=1]`,
 `POST /ai/chart-read` (vision read of a scanned chart image — body
 `{images: [{data, mimeType}], title, artist}`, the page plus top-corner crops;
-`ANTHROPIC_READ_MODEL` overrides the default Haiku),
+`ANTHROPIC_READ_MODEL` overrides the default Haiku — see the AI cost section
+before "upgrading" it),
 `GET /ai/steel-summary?title=&artist=[&retry=1]` (concise steel-direction
 summary, same provider chain and guards as `/ai/chart`; `retry=1` on both
 `/ai/*` GET routes = "previous answer was wrong, research harder, don't
