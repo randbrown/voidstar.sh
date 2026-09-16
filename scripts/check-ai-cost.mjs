@@ -23,6 +23,12 @@ import {
   aiFailureStopper,
   SAME_FAILURE_LIMIT,
 } from '../src/lib/setlist/ai-failure.js';
+import {
+  aiPacer,
+  PACE_STEP_MS,
+  PACE_MAX_MS,
+  MAX_RETRIES,
+} from '../src/lib/setlist/ai-pacing.js';
 
 let failures = 0;
 function check(name, cond, detail = '') {
@@ -168,6 +174,122 @@ const drainedLate = aiFailureStopper();
 drainedLate.ok();
 check('a prior success does not excuse an account-level failure',
   typeof drainedLate.fail(REPORTED) === 'string');
+
+console.log('\nadaptive pacing');
+// Every pacer here uses a fake sleep, so the suite exercises the whole
+// schedule without waiting a second.
+function fakePacer(opts = {}) {
+  const waits = [];
+  const pacer = aiPacer({ ...opts, sleep: async (ms) => { waits.push(ms); } });
+  return { pacer, waits };
+}
+const RATE_LIMITED = 'gemini: API 429: You exceeded your current quota';
+
+// A healthy account must pay nothing for pacing.
+{
+  const { pacer, waits } = fakePacer();
+  let calls = 0;
+  const r = await pacer.run(async () => { calls++; return { ok: true }; }, x => (x.ok ? null : 'boom'));
+  check('a successful call is never delayed', waits.length === 0);
+  check('...and is made exactly once', calls === 1);
+  check('...and its result comes straight back', r.ok === true);
+  check('...leaving the throttle at zero', pacer.throttleMs === 0);
+}
+
+// The reported case: rate limited, then it clears.
+{
+  const { pacer, waits } = fakePacer();
+  let calls = 0;
+  const r = await pacer.run(
+    async () => (++calls === 1 ? { ok: false, reason: RATE_LIMITED } : { ok: true }),
+    x => (x.ok ? null : x.reason),
+  );
+  check('a rate-limited call is retried', calls === 2);
+  check('...after a wait at the free-tier cadence', waits.length === 1 && waits[0] === PACE_STEP_MS,
+    JSON.stringify(waits));
+  check('...and the retry\'s success is what comes back', r.ok === true);
+  check('...with the throttle eased off, not reset', pacer.throttleMs > 0 && pacer.throttleMs < PACE_STEP_MS,
+    String(pacer.throttleMs));
+}
+
+// Persistent rate limiting: bounded retries, doubling waits, then report.
+{
+  const { pacer, waits } = fakePacer();
+  let calls = 0;
+  const r = await pacer.run(
+    async () => { calls++; return { ok: false, reason: RATE_LIMITED }; },
+    x => (x.ok ? null : x.reason),
+  );
+  check(`a hopeless rate limit stops after ${MAX_RETRIES} retries`, calls === MAX_RETRIES + 1,
+    `made ${calls} calls`);
+  check('...with each wait double the last',
+    waits.every((ms, i) => i === 0 ? ms === PACE_STEP_MS : ms === waits[i - 1] * 2),
+    JSON.stringify(waits));
+  check('...and reports the provider\'s own reason, not an invented one',
+    r.reason === RATE_LIMITED);
+}
+
+// A non-retryable failure must not burn retries or slow the pass down.
+{
+  const { pacer, waits } = fakePacer();
+  let calls = 0;
+  const r = await pacer.run(
+    async () => { calls++; return { ok: false, reason: 'claude: could not read the chart' }; },
+    x => (x.ok ? null : x.reason),
+  );
+  check('a per-song failure is not retried', calls === 1);
+  check('...and costs no wait', waits.length === 0);
+  check('...and is reported as-is', r.ok === false);
+  check('...leaving the throttle at zero', pacer.throttleMs === 0);
+}
+
+// The throttle carries across songs — that's the whole point, the songs behind
+// a rate limit inherit the slower cadence instead of re-tripping it.
+{
+  const { pacer, waits } = fakePacer();
+  await pacer.run(async () => ({ ok: false, reason: RATE_LIMITED }), x => (x.ok ? null : x.reason));
+  const afterFirstSong = pacer.throttleMs;
+  check('a rate limit leaves the pass paced for the next song', afterFirstSong > 0);
+  waits.length = 0;
+  await pacer.run(async () => ({ ok: true }), () => null);
+  check('...so the next song waits before its first attempt',
+    waits.length === 1 && waits[0] === afterFirstSong, JSON.stringify(waits));
+}
+
+// Sustained success returns to full speed rather than crawling forever.
+{
+  const { pacer } = fakePacer();
+  await pacer.run(async () => ({ ok: false, reason: RATE_LIMITED }), x => (x.ok ? null : x.reason));
+  let songs = 0;
+  while (pacer.throttleMs > 0 && songs < 50) {
+    await pacer.run(async () => ({ ok: true }), () => null);
+    songs++;
+  }
+  check('a run of successes winds the throttle back to zero', pacer.throttleMs === 0);
+  check('...within a handful of songs, not dozens', songs <= 12, `took ${songs}`);
+}
+
+// The throttle is capped, so a wedged provider fails visibly instead of
+// spacing calls out to eternity.
+{
+  const { pacer, waits } = fakePacer({ maxRetries: 20 });
+  await pacer.run(async () => ({ ok: false, reason: RATE_LIMITED }), x => (x.ok ? null : x.reason));
+  check('the wait never exceeds the cap', Math.max(...waits) <= PACE_MAX_MS,
+    `max wait ${Math.max(...waits)}`);
+}
+
+// Stop must actually stop — no further retries once the signal aborts.
+{
+  const controller = new AbortController();
+  const { pacer } = fakePacer({ signal: controller.signal });
+  controller.abort();
+  let calls = 0;
+  await pacer.run(
+    async () => { calls++; return { ok: false, reason: RATE_LIMITED }; },
+    x => (x.ok ? null : x.reason),
+  );
+  check('an aborted pass does not retry', calls === 1);
+}
 
 if (failures) {
   console.error(`\n${failures} check(s) failed`);

@@ -1408,7 +1408,7 @@ each overridable by the matching env var):
 | `/ai/steel-summary` | ~80 words on what the steel does | `claude-sonnet-5` | 2 / 10 | `low` (`medium` on `retry=1`) |
 | `/ai/chart-read` | transcribe what's written on a scan | `claude-haiku-4-5` | 1 / 5 | n/a |
 
-Four things keep the bill down, in rough order of how much they save:
+Five things keep the bill down, in rough order of how much they save:
 
 1. **Tier.** The grounded routes used to default to `claude-opus-4-8`
    ($5/$25) — 2.5x Sonnet 5 per token for work that is "search a few sources,
@@ -1428,7 +1428,24 @@ Four things keep the bill down, in rough order of how much they save:
    per-minute limit that clears in seconds, even though its message ("You
    exceeded your current quota, please check your plan and billing details")
    reads exactly like a drained account.
-4. **Images.** `/ai/chart-read` sends the page plus up to two top-corner
+4. **Pacing.** A free tier that allows ~10 requests a minute cannot survive
+   ~80 back-to-back calls — it 429s within seconds and the rest of the pass
+   gets nothing. `aiPacer` (`src/lib/setlist/ai-pacing.js`) makes the two AI
+   passes **adaptive**: full speed until a provider pushes back, then space
+   calls at `PACE_STEP_MS` (6.5 s, just over 10/min), doubling on each further
+   rate limit up to `PACE_MAX_MS`, and easing back to zero as calls start
+   succeeding. Backoff and pacing are the same mechanism — a retry is the next
+   attempt after the throttle tightened, so the songs *behind* a rate-limited
+   one inherit the slower cadence instead of re-tripping the limit. A song gets
+   `MAX_RETRIES` (3) extra attempts before its failure is reported; a
+   non-retryable failure is never retried and costs no wait. A healthy account
+   pays nothing: the throttle stays at zero and is never waited on.
+   Because a paced pass can run for minutes, the library-tools buttons grow a
+   **stop** button while running — passes check the abort signal between songs
+   and the pacer's sleep settles the moment it fires, rather than sitting out
+   the rest of a 26-second backoff. The progress line says why it slowed down
+   ("pacing in 7s — provider rate limit").
+5. **Images.** `/ai/chart-read` sends the page plus up to two top-corner
    crops, each capped at `CHART_READ_MAX_DIM` = 1568px, which is exactly the
    long edge the standard vision tier downscales to before counting visual
    tokens (`ceil(w/28) x ceil(h/28)`, max 1568 per image). **This is why the

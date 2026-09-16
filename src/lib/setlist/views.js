@@ -684,10 +684,21 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
       b.disabled = true;
       helperResults.innerHTML = '';
       helperStatus.style.color = '';
+      // A rate-limited pass paces itself and can run for many minutes, so it
+      // has to be stoppable — the pass checks the signal between songs and the
+      // pacer's sleep settles the moment it aborts, rather than sitting out
+      // the rest of a backoff.
+      const controller = new AbortController();
+      const stopBtn = btn('stop', 'sl-btn-ghost sl-btn-sm', () => {
+        controller.abort();
+        stopBtn.disabled = true;
+        stopBtn.textContent = 'stopping…';
+      });
+      helperActions.appendChild(stopBtn);
       try {
-        const res = await run(({ done, total, updated, title: t }) => {
-          helperStatus.textContent = `${done}/${total} — ${t}${updated ? ` · ${updated} updated` : ''}`;
-        });
+        const res = await run(({ done, total, updated, title: t, note }) => {
+          helperStatus.textContent = `${done}/${total} — ${t}${updated ? ` · ${updated} updated` : ''}${note ? ` · ${note}` : ''}`;
+        }, { signal: controller.signal });
         if (res.aborted) {
           helperStatus.textContent = `${label}: ${res.aborted}`;
           helperStatus.style.color = 'var(--pink)';
@@ -702,6 +713,7 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
         helperStatus.textContent = `${label} failed: ${e.message}`;
         helperStatus.style.color = 'var(--pink)';
       }
+      stopBtn.remove();
       helperRunning = false;
       b.disabled = false;
     });
@@ -746,7 +758,7 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
   helperActions.appendChild(helperButton(
     're-scan all charts',
     'Pull key / BPM / key-change info out of every linked chart — scrapes doc text, AI-reads scanned images for songs still missing a key (the song page\'s "read chart", library-wide)',
-    (onProgress) => scanAllCharts(onProgress),
+    (onProgress, opts) => scanAllCharts(onProgress, opts),
     (res) => `Scanned ${res.total} chart${res.total === 1 ? '' : 's'} · ${res.updated} song${res.updated === 1 ? '' : 's'} updated${res.failures.length ? ` · ${res.failures.length} still missing a key:` : ''}`,
   ));
 
@@ -760,13 +772,13 @@ function buildLibraryTools(root, { onSongsChanged } = {}) {
   helperActions.appendChild(helperButton(
     'AI steel summaries',
     'Draft a steel-direction summary for every song that doesn\'t have one yet — a web-search-grounded AI pass, roughly 15-30 seconds per song',
-    async (onProgress) => {
+    async (onProgress, opts) => {
       const missing = (await store.getAllSongs()).filter(s => !s.steelSummary).length;
       if (!missing) return { total: 0, updated: 0, failures: [] };
       if (!confirm(`Draft AI steel summaries for ${missing} song${missing === 1 ? '' : 's'} without one? Takes roughly 15-30 seconds per song — leave the tab open.`)) {
         return { aborted: 'cancelled' };
       }
-      return summarizeSteelForAllSongs(onProgress);
+      return summarizeSteelForAllSongs(onProgress, opts);
     },
     (res) => (res.total === 0
       ? 'Every song already has a steel summary ✓'

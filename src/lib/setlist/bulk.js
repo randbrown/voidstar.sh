@@ -17,6 +17,7 @@ import { cacheChartForSong, getOfflineChart } from './chart-cache.js';
 import { searchYoutube, isConfidentYoutube, scoreYoutubeMatch, songHasYoutube } from './youtube.js';
 import { applyYoutubeToSong } from './youtube-import.js';
 import { aiFailureStopper } from './ai-failure.js';
+import { aiPacer } from './ai-pacing.js';
 
 // Fill-empty apply of a {field: value} update object onto a song, skipping
 // internal `_`-prefixed fields. Returns how many fields were filled.
@@ -96,7 +97,7 @@ export async function readChartFields(song, onStage) {
 // the song page's "read chart", library-wide. The expensive AI vision rung
 // only runs for songs still missing a key, so re-running this is cheap for
 // an already-filled library.
-export async function scanAllCharts(onProgress) {
+export async function scanAllCharts(onProgress, { signal } = {}) {
   if (!getSources().workerUrl) return { aborted: 'no worker URL configured in Settings' };
   const songs = (await store.getAllSongs()).filter(s => s.chartUrl);
   let updated = 0;
@@ -106,11 +107,22 @@ export async function scanAllCharts(onProgress) {
   // bad key — every remaining song is a guaranteed repeat, so stop and say it
   // once instead of printing the same error 14 times.
   const stopper = aiFailureStopper();
+  let note = '';
+  const pacer = aiPacer({
+    signal,
+    onWait: ({ ms, retry }) => {
+      note = `${retry ? 'retrying' : 'pacing'} in ${Math.round(ms / 1000)}s — provider rate limit`;
+    },
+  });
   for (let i = 0; i < songs.length; i++) {
+    if (signal?.aborted) return { aborted: 'stopped', total: songs.length, updated, failures };
     const song = songs[i];
     let stop = null;
     try {
-      const { applied, problems, aiReason, aiOk } = await readChartFields(song);
+      // Retry only the AI rung's outcome: the cheap rungs above it are
+      // idempotent, so re-running the ladder costs a cache hit, not a call.
+      const { applied, problems, aiReason, aiOk } =
+        await pacer.run(() => readChartFields(song), r => r.aiReason);
       if (applied) {
         await store.putSong(song);
         updated++;
@@ -122,11 +134,11 @@ export async function scanAllCharts(onProgress) {
       // Songs whose vision rung never ran are skipped entirely — "3 in a row"
       // means 3 consecutive AI calls, not 3 consecutive songs.
       if (aiReason) stop = stopper.fail(aiReason);
-      else if (aiOk) stopper.ok();
+      else if (aiOk) { stopper.ok(); note = ''; }
     } catch (e) {
       failures.push({ song, reason: e.message || 'scan failed' });
     }
-    onProgress?.({ done: i + 1, total: songs.length, updated, title: song.title });
+    onProgress?.({ done: i + 1, total: songs.length, updated, title: song.title, note });
     if (stop) return { aborted: stop, total: songs.length, updated, failures };
   }
   return { total: songs.length, updated, failures };
@@ -186,7 +198,7 @@ export async function fetchInfoForAllSongs(onProgress) {
 // ones are generated — regenerating a single song stays on its song page.
 // A worker/AI-config problem aborts the whole pass instead of failing N
 // times with the same reason.
-export async function summarizeSteelForAllSongs(onProgress) {
+export async function summarizeSteelForAllSongs(onProgress, { signal } = {}) {
   if (!getSources().workerUrl) return { aborted: 'no worker URL configured in Settings' };
   const targets = (await store.getAllSongs()).filter(s => !s.steelSummary);
   let updated = 0;
@@ -197,14 +209,23 @@ export async function summarizeSteelForAllSongs(onProgress) {
   // 15-30 s per remaining song and surface the reason once. An account-level
   // reason stops on the first hit; see ai-failure.js.
   const stopper = aiFailureStopper();
+  let note = '';
+  const pacer = aiPacer({
+    signal,
+    onWait: ({ ms, retry }) => {
+      note = `${retry ? 'retrying' : 'pacing'} in ${Math.round(ms / 1000)}s — provider rate limit`;
+    },
+  });
   for (let i = 0; i < targets.length; i++) {
+    if (signal?.aborted) return { aborted: 'stopped', total: targets.length, updated, failures };
     const song = targets[i];
-    const r = await fetchSteelSummary(song);
+    const r = await pacer.run(() => fetchSteelSummary(song), x => (x.ok ? null : x.reason));
     if (r.ok) {
       song.steelSummary = r.data.summary;
       await store.putSong(song);
       updated++;
       stopper.ok();
+      note = '';
     } else if (r.reason === 'no-ai-key') {
       return { aborted: 'no AI key configured on the worker — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY', total: targets.length, updated, failures };
     } else if (r.reason === 'worker-outdated') {
@@ -363,7 +384,7 @@ export async function bestGuessSpotifyLinks(onProgress) {
       lastReason = null;
       sameReasonRun = 0;
     }
-    onProgress?.({ done: i + 1, total: targets.length, updated, title: song.title });
+    onProgress?.({ done: i + 1, total: targets.length, updated, title: song.title, note });
   }
   return { total: targets.length, updated, failures };
 }
