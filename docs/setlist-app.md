@@ -26,7 +26,7 @@ IndexedDB database `voidstar.setlist` (see `src/lib/setlist/store.js`), version 
 
 | Store | Key | Shape |
 |---|---|---|
-| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, photoUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm`/`capo` stay in the model (chart-doc headers and "read chart" still read/write them) but have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `artworkUrl` is dim/small album art, whereas `photoUrl` is the performer's **visual recall cue** — shown large on the song page and small on the **stage** (perform mode). `photoUrl` holds a remote https URL (a YouTube thumbnail from import / "find on YouTube", or a pasted link) or a compact downscaled data URL from a hand-uploaded photo — see the song-photo section. `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use. `altLinks` (`[{id, url, label, service, embedUrl?, addedAt}]`, lazy) is the same idea for **listening links** — the other recordings of the song (live cut, alternate release, a YouTube version); the three primary link fields stay what auto-link fills and what everything else reads (see the multiple-links section). `spotifyGuess` / `spotifyGuessAt` (lazy) flag a **preliminary** Spotify link accepted from a global search rather than matched from a playlist — see the best-guess section |
+| `songs` | `id` | `{id, title, artist, key, bpm, capo, keyChanges, steelEntry, steelSummary, spotifyUri, bandcampUrl, bandcampEmbedUrl, soundcloudUrl, chartUrl, altCharts, lyrics, syncedLyrics, genre, year, durationSec, artworkUrl, photoUrl, statuses, clearedFields, createdAt, updatedAt}` — `statuses` is an array of practice-status keys (`todo`/`needsWork`/`ok`/`goodToGo`/`steelLead`), toggled on the song page and badged on setlist/library rows. `bpm` stays in the model (chart-doc headers and "read chart" read/write it) and `capo` only as something **"read chart" finds written on someone else's chart** — generated charts never state a capo and nothing else fills the field. Both have **no edit UI** — the song form is key + key changes only. `syncedLyrics` is LRC text; `genre`/`year`/`durationSec`/`artworkUrl` come from "fetch info" (iTunes via the worker); `artworkUrl` is dim/small album art, whereas `photoUrl` is the performer's **visual recall cue** — shown large on the song page and small on the **stage** (perform mode). `photoUrl` holds a remote https URL (a YouTube thumbnail from import / "find on YouTube", or a pasted link) or a compact downscaled data URL from a hand-uploaded photo — see the song-photo section. `steelSummary` is the AI-drafted (hand-editable) steel direction — see the steel-summary section. `clearedFields` (`{field: timestamp}`, usually absent) tombstones **explicit deletes** (the summary block's delete button, emptying a field in the edit form) so the fill-empty backup merge doesn't resurrect them — see the merge section. `altCharts` (`[{id, url, label, addedAt}]`, lazy — usually absent) is the song's **alternate charts** (see the multiple-charts section): `chartUrl` stays the primary that perform mode / key-fill / health checks use. `altLinks` (`[{id, url, label, service, embedUrl?, addedAt}]`, lazy) is the same idea for **listening links** — the other recordings of the song (live cut, alternate release, a YouTube version); the three primary link fields stay what auto-link fills and what everything else reads (see the multiple-links section). `spotifyGuess` / `spotifyGuessAt` (lazy) flag a **preliminary** Spotify link accepted from a global search rather than matched from a playlist — see the best-guess section |
 | `notes` | `id` | `{id, songId, text, source, createdAt, updatedAt}` |
 | `setlists` | `id` | `{id, name, sets:[{name, songIds[]}], gigDate, venue, spotifyUrl, bandcampUrl, soundcloudUrl, playlists, vocalistLegend, songOverrides, createdAt, updatedAt}` — the three media URLs are the setlist's *reference sources* for auto-link (Spotify playlist; Bandcamp band page, `/music`, or album link; SoundCloud profile or `/sets/` playlist). `playlists` (`[{id, service, url, title, setName, addedAt}]`, lazy, fill-protected) records **imported** reference playlists — currently the YouTube import (see that section), one per appended set; it's provenance only, nothing re-syncs a set back to its playlist. One entry may instead carry `kind:'export'` (+ `playlistId`): the setlist's own **exported** Spotify playlist (see the build-Spotify-playlist section) — recorded so a re-build updates that playlist instead of creating another |
 | `annotations` | `songId` | `{songId, strokes[], aspect, updatedAt}` — hand-drawn chart markup (pen/highlighter/text/arrow). The key is the bare `songId` for the **primary** chart's layer, or the composite `` `${songId}::${altId}` `` (`store.altChartKey`) for an alternate chart's — every chart has its own layer, no schema migration needed since the keyPath is a plain string |
@@ -1008,20 +1008,22 @@ four tiers, in order:
      `VERSE 2`). No single blocked or redesigned site kills the feature.
      Chords are converted to Nashville numbers (key from the source's
      tonality, else inferred from the chords; `keyInferred: true` flags the
-     guess). Unlike the AI tier this can't know bar counts — one number line
-     per source chord line.
+     guess) — **de-capoed first** (see below). Unlike the AI tier this can't
+     know bar counts — one number line per source chord line.
    - `GET /meta/song` derives BPM / key / time signature from music APIs:
      Spotify audio-features when the song has a linked track (only works for
      client-credential apps created before the Nov 2024 deprecation — a 403
      is skipped quietly), keyless Deezer as the BPM fallback.
-   `chart-build.js` then formats a chart in the working NNS-chart layout —
-   key/time/BPM/feel header, title + artist, a number→chord legend, sections
-   (AI tier: one number per bar, four bars per line, via
-   `buildAiChartText`; scrape tier: one line of numbers per source line with
-   chord names in parens beneath, via `buildChartText`), repeated sections
-   referenced by name. Derived BPM/time fill header gaps; a derived key
-   never overrides the chart source's key (the numbers were computed
-   against it) — a mismatch becomes a "check which is right" note.
+   `chart-build.js` then formats a chart in the working NNS-chart layout,
+   modelled on the hand charts these replace — title + artist, the key and
+   time signature as the **corner shorthand** (`Bb  4/4`) with the tempo
+   under it (`♩= 126`) and the feel line, then the sections (AI tier: one
+   number per bar, four bars per line, via `buildAiChartText`; scrape tier:
+   one line of numbers per source line, via `buildChartText`), repeated
+   sections referenced by name. Derived BPM/time fill header gaps; a derived
+   key never overrides the chart source's key (the numbers were computed
+   against it) — a mismatch becomes a "check which is right" note. See the
+   chart-format rules below for what deliberately is **not** on the page.
    `createChartDoc()` in `gdrive-backup.js` uploads it as `text/plain`
    converted into a Google Doc inside the dedicated "voidstar charts" Drive
    folder (created once, reused after), using the same OAuth token as
@@ -1035,8 +1037,9 @@ four tiers, in order:
    structured fill-in template — still carrying any derived key/BPM/time —
    rather than a blank page. It's a Doc (not a Drawing) so
    the worker's existing plain-text scraping (`handleDriveFileMeta`) works
-   on it unmodified — the generated header (`Key:`/`Time:`/`BPM:`/`Capo:`)
-   intentionally matches what `extractFromText` parses; for freeform
+   on it unmodified — the generated header (the `Bb  4/4` corner shorthand
+   plus `♩= 126`) intentionally matches what `extractFromText` parses, and
+   `check-chart-nns.mjs` round-trips a generated chart back through it; for freeform
    hand-drawn charts, the in-app annotation canvas already draws on top of
    any linked document. The song page's "rebuild doc" button re-runs this
    same ladder for a song that already has a chart (with `retry=1`, so the
@@ -1085,6 +1088,73 @@ silently — a bot-blocked keyless search engine surfaces as `providerDown`
 deploy missing the `/web/*` routes shows "worker outdated", and
 `/web/chart-data` responses list the URLs `tried`. The client logs details
 to the console with a `[setlist]` prefix.
+
+### Chart format: no capo, numbers only
+
+Two rules govern what a generated chart doc says, both of them things a
+hand chart already does and the generator used to get wrong.
+
+**No capo, ever.** A capo position is a guitarist's fingering choice, not
+chart data, so nothing prints one — and, more importantly, nothing numbers
+*capo shapes*. A chord sheet with a capo is written in shapes, not in what
+the guitar sounds: Ultimate Guitar carries "Choosin' Texas" (key Db) as C
+shapes with a capo at fret 1. Numbering those shapes against the song's real
+key put the whole chart a semitone flat — the opening 2- chord printed as
+`b2-` — which is the one way a number chart can actively lie.
+
+So the shapes are transposed up by the capo first and the numbers come off
+what the guitar actually **sounds** (`soundingChart` in the worker). Which
+frame the source's key is already in needs no guessing: a *stated* tonality
+is the recording's key, so only the chords move; an *inferred* one was read
+off the written shapes, so it is a capo low and moves with them. Either way
+the key and the numbers end up agreeing. The response carries
+`decapoed: true`; `soundingNumbers` in `chart-build.js` is the client's own
+fallback, applied to the numbers alone, so a site deploy fixes charts even
+against a worker deploy that predates this. `scripts/check-chart-nns.mjs`
+runs **both** against one shared table so they can't drift apart, and
+round-trips the generated header back through both chart-key parsers — a
+header only one side can read is a chart that loses its key on the other
+path. A capo'd source is noted once in the doc footer as provenance
+(*"source sheet is written with a capo at fret 1"*), never as a position to
+play.
+
+**Numbers only — except where a chord needs the eye.** No number→chord
+legend at the top, and no chord names echoed under the numbers; a number
+chart that keeps translating itself back into chords is the habit the format
+exists to break. The exception is the chords a number doesn't make obvious:
+`oddChordLine` names, on one line under the section, every chord outside the
+key's six workhorse degrees — a borrowed chord, a secondary dominant (a
+major `2` where the diatonic chord is `2-`), or a modulated section, where
+every bar lands there and the spelling is the point. A diatonic section gets
+nothing. Spelling follows the *degree's* accidental rather than the key's
+(the b7 of C is Bb, never A#).
+
+`chordLegend` stays exported — it is the definition of "the obvious six"
+that `oddChordLine` measures against — but it no longer prints on the page.
+
+### Batch delete — clearing a botched import
+
+The library's top bar carries a **select** toggle: rows grow checkboxes,
+tapping one selects it instead of opening it, and a bar above the list offers
+`all` (the *filtered* rows, so searching the wrong artist first is the
+workflow), `none`, and a counted `delete N`. A botched import can mint dozens
+of near-duplicate songs with the wrong artist, and clearing those one song
+page at a time is the kind of chore that leaves a library dirty instead.
+
+Both the batch and the song page's own delete button run
+`deleteSongsCascade` (`views.js`), so the two can't diverge. The cascade
+takes everything a song owns: its notes, cached chart blobs, annotation
+layers (the primary chart **and** every alternate, which live under composite
+`` `${songId}::${altId}` `` keys), its slot in every setlist, and the mind
+task the todo chip mirrors — then tombstones the song itself, so the delete
+propagates through the Drive merge and the song stays restorable from
+Settings → trash for 180 days.
+
+Pruning the setlists is part of the cascade because a stale id is not
+harmless: the rows skip a missing song, but the set's song **count** keeps
+counting ghosts — exactly the state a bad import leaves behind. The setlists
+are walked once for the whole batch, not once per song, and the song's
+`songOverrides` entry goes with it.
 
 ## Multiple charts per song — primary + alternates
 

@@ -594,7 +594,7 @@ export async function fetchWebChartData(song) {
 // A full Nashville-number chart drafted by an LLM with web-search grounding
 // (worker /ai/chart) — the strongest "create chart doc" tier when the worker
 // has an AI key configured. Returns {ok:true, data} with data carrying
-// {key, bpm, time, capo, feel, confidence, sections:[{name, comment,
+// {key, bpm, time, feel, confidence, sections:[{name, comment,
 // bars:[]}], notes, provider, model, sources}; or {ok:false, reason} —
 // 'no-ai-key' means skip silently to the scrape tier.
 // opts.retry: the user judged a previous result wrong (or is explicitly

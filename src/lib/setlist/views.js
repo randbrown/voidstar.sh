@@ -539,6 +539,48 @@ export async function renderDashboard(root) {
 
 // ── Song Library ──
 
+// Delete songs, and everything hanging off them.
+//
+// A song owns notes, cached chart blobs, annotation layers (its primary chart
+// AND every alternate, which live under composite `${songId}::${altId}` keys),
+// a slot in any setlist that carries it, and the mind task the todo chip
+// mirrors. The song record itself is tombstoned rather than dropped, so the
+// delete propagates through the Drive merge and the song stays restorable from
+// trash for 180 days.
+//
+// Pruning the setlists is part of the cascade because a stale id is not
+// harmless: the rows skip a missing song, but the set's song COUNT keeps
+// counting ghosts — which is exactly the state a botched import leaves behind,
+// and exactly what batch delete exists to clean up. The setlists are walked
+// once for the whole batch, not once per song.
+async function deleteSongsCascade(songIds, onProgress) {
+  const ids = [...new Set(songIds)];
+  if (!ids.length) return;
+  const doomed = new Set(ids);
+
+  for (const sl of await store.getAllSetlists()) {
+    let changed = false;
+    for (const set of sl.sets || []) {
+      const kept = set.songIds.filter(id => !doomed.has(id));
+      if (kept.length !== set.songIds.length) { set.songIds = kept; changed = true; }
+    }
+    for (const id of ids) {
+      if (sl.songOverrides?.[id]) { delete sl.songOverrides[id]; changed = true; }
+    }
+    if (changed) await store.putSetlist(sl);
+  }
+
+  let done = 0;
+  for (const id of ids) {
+    for (const n of await store.getNotesForSong(id)) await store.deleteNote(n.id);
+    await store.deleteChartBlobsForSong(id).catch(() => {});
+    await store.deleteAnnotationsForSong(id).catch(() => {});
+    await store.deleteSong(id);
+    import('./mind-todo.js').then((m) => m.onSongDeleted(id)).catch((e) => console.warn('[todo-bridge]', e));
+    onProgress?.(++done, ids.length);
+  }
+}
+
 export async function renderLibrary(root) {
   const bar = topBar('song library', '#home');
   const addBtn = btn('+ add song', 'sl-btn-primary', async () => {
@@ -549,6 +591,15 @@ export async function renderLibrary(root) {
     navigate(`#song/${song.id}`);
   });
   bar.appendChild(addBtn);
+  // Multi-select mode. A botched import can mint dozens of near-duplicate
+  // songs (right titles, wrong artist), and clearing those one song page at a
+  // time is the kind of chore that leaves a library dirty instead. Toggling
+  // turns the rows into checkboxes; tapping a row selects it rather than
+  // opening it.
+  const selected = new Set();
+  let selectMode = false;
+  const selectBtn = btn('select', 'sl-btn-ghost sl-btn-sm sl-lib-select-toggle', () => setSelectMode(!selectMode));
+  bar.appendChild(selectBtn);
   root.appendChild(bar);
 
   const search = el('input', 'sl-search');
@@ -585,9 +636,72 @@ export async function renderLibrary(root) {
   toolsPanel.classList.add('sl-hidden');
   root.appendChild(toolsPanel);
 
+  const selectBar = el('div', 'sl-lib-select-bar sl-hidden');
+  const selectCount = el('span', 'sl-lib-select-count');
+  selectBar.appendChild(selectCount);
+  selectBar.appendChild(btn('all', 'sl-btn-ghost sl-btn-sm', () => {
+    for (const song of visible) selected.add(song.id);
+    renderList(search.value);
+  }));
+  selectBar.appendChild(btn('none', 'sl-btn-ghost sl-btn-sm', () => {
+    selected.clear();
+    renderList(search.value);
+  }));
+  const deleteBtn = btn('delete', 'sl-btn-danger sl-btn-sm', () => deleteSelected());
+  selectBar.appendChild(deleteBtn);
+  root.appendChild(selectBar);
+
   const listEl = el('div', 'sl-song-list');
   root.appendChild(listEl);
 
+  function setSelectMode(on) {
+    selectMode = on;
+    if (!on) selected.clear();
+    selectBtn.textContent = on ? 'done' : 'select';
+    selectBtn.classList.toggle('sl-on', on);
+    selectBar.classList.toggle('sl-hidden', !on);
+    renderList(search.value);
+  }
+
+  function paintSelectBar() {
+    const n = selected.size;
+    // "all" acts on what's on screen, so say what that is — selecting inside a
+    // search for the botched artist is the whole workflow.
+    selectCount.textContent = n
+      ? `${n} selected`
+      : `tap songs to select · all = ${visible.length} shown`;
+    deleteBtn.textContent = n ? `delete ${n}` : 'delete';
+    deleteBtn.disabled = !n;
+    deleteBtn.style.opacity = n ? '' : '0.4';
+  }
+
+  async function deleteSelected() {
+    const ids = [...selected];
+    if (!ids.length) return;
+    const titles = ids
+      .map(id => allSongs.find(s => s.id === id))
+      .filter(Boolean)
+      .map(s => (s.artist ? `${s.title} — ${s.artist}` : s.title))
+      .sort();
+    const shown = titles.slice(0, 10).join('\n');
+    const more = titles.length > 10 ? `\n…and ${titles.length - 10} more` : '';
+    const ok = confirm(
+      `Delete ${ids.length} song${ids.length === 1 ? '' : 's'}, their notes, and their chart markup?\n\n`
+      + `${shown}${more}\n\n`
+      + 'They also come out of any setlist that carries them, and land in trash '
+      + '(Settings → trash) where they can be restored.'
+    );
+    if (!ok) return;
+    deleteBtn.disabled = true;
+    await deleteSongsCascade(ids, (done, total) => {
+      deleteBtn.textContent = `deleting ${done}/${total}...`;
+    });
+    setSelectMode(false);
+    await reloadSongs();
+    showToast(`deleted ${ids.length} song${ids.length === 1 ? '' : 's'} — restore from Settings → trash`);
+  }
+
+  let visible = [];
   let allSongs = await store.getAllSongs();
   allSongs.sort((a, b) => a.title.localeCompare(b.title));
 
@@ -608,20 +722,29 @@ export async function renderLibrary(root) {
     if (statusFilter.size) {
       filtered = filtered.filter(s => [...statusFilter].every(k => (s.statuses || []).includes(k)));
     }
+    visible = filtered;
+    paintSelectBar();
     listEl.innerHTML = '';
     if (!filtered.length) {
       listEl.appendChild(emptyState(lower ? 'No matches.' : 'No songs yet.'));
       return;
     }
     for (const s of filtered) {
-      const row = el('div', 'sl-lib-row');
+      const on = selected.has(s.id);
+      const row = el('div', `sl-lib-row${selectMode && on ? ' sl-selected' : ''}`);
       row.innerHTML = `
+        ${selectMode ? `<span class="sl-lib-check">${on ? '☑' : '☐'}</span>` : ''}
         <span class="sl-lib-title">${esc(s.title)}</span>
         ${s.artist ? `<span class="sl-lib-artist">${esc(s.artist)}</span>` : ''}
         ${statusBadges(s)}
         ${s.key ? `<span class="sl-key-badge sl-key-sm">${esc(s.key)}</span>` : ''}
       `;
-      row.addEventListener('click', () => navigate(`#song/${s.id}`));
+      row.addEventListener('click', () => {
+        if (!selectMode) { navigate(`#song/${s.id}`); return; }
+        if (selected.has(s.id)) selected.delete(s.id);
+        else selected.add(s.id);
+        renderList(search.value);
+      });
       listEl.appendChild(row);
     }
   }
@@ -2119,7 +2242,6 @@ async function researchAndCreateChartDoc(song, setStatus, { retry = false } = {}
     text = buildAiChartText(song, ai.data, extra);
     applied.key = ai.data.key;
     applied.bpm = ai.data.bpm;
-    applied.capo = ai.data.capo;
     applied.artist = ai.data.artist;
   } else {
     if (ai.reason !== 'no-ai-key') console.warn('[setlist] AI chart unavailable:', ai.reason);
@@ -2128,7 +2250,6 @@ async function researchAndCreateChartDoc(song, setStatus, { retry = false } = {}
       setStatus('drafting number chart...');
       text = buildChartText(song, chart.data, extra);
       applied.key = chart.data.key;
-      applied.capo = chart.data.capo;
       applied.artist = chart.data.artist;
     } else {
       console.warn('[setlist] chart data unavailable:', chart.reason);
@@ -2141,7 +2262,6 @@ async function researchAndCreateChartDoc(song, setStatus, { retry = false } = {}
   song.chartUrl = webViewLink;
   if (!song.key) song.key = applied.key || meta?.key || '';
   if (!song.bpm) song.bpm = applied.bpm || meta?.bpm || 0;
-  if (!song.capo && applied.capo) song.capo = applied.capo;
   if (!song.artist && applied.artist) song.artist = applied.artist;
   await store.putSong(song);
   return webViewLink;
@@ -3987,16 +4107,11 @@ export async function renderSongFocus(root, songId, setlistId) {
   if (!setlistId) {
     const danger = el('div', 'sl-section sl-danger-zone');
     danger.appendChild(btn('delete song', 'sl-btn-danger sl-btn-sm', async () => {
-      if (!confirm(`Delete "${song.title}" and all its notes?`)) return;
-      const songNotes = await store.getNotesForSong(songId);
-      for (const n of songNotes) await store.deleteNote(n.id);
-      // Every cached blob and annotation layer — primary AND alternates
-      // (composite `${songId}::` keys). Annotations used to be skipped here
-      // entirely, orphaning a record in IDB and in every Drive backup.
-      await store.deleteChartBlobsForSong(songId).catch(() => {});
-      await store.deleteAnnotationsForSong(songId).catch(() => {});
-      await store.deleteSong(songId);
-      import('./mind-todo.js').then((m) => m.onSongDeleted(songId)).catch((e) => console.warn('[todo-bridge]', e));
+      const warn = `Delete "${song.title}", its notes, and its chart markup?\n\n`
+        + 'It also comes out of any setlist that carries it, and lands in trash '
+        + '(Settings → trash) where it can be restored.';
+      if (!confirm(warn)) return;
+      await deleteSongsCascade([songId]);
       navigate('#library');
     }));
     root.appendChild(danger);
