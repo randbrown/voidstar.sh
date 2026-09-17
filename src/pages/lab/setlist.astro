@@ -570,6 +570,24 @@ const buildStamp = readBuildStamp();
     .sl-lib-row:hover { background: var(--surface); }
     .sl-lib-title { font-weight: 500; flex: 1; }
     .sl-lib-artist { font-size: 0.82rem; color: var(--text-muted); }
+    /* Multi-select (batch delete) — the checkbox column only exists while
+       select mode is on, so the everyday list keeps its full width. */
+    .sl-lib-check { flex: none; width: 1.1rem; text-align: center; color: var(--text-muted); }
+    .sl-lib-row.sl-selected { background: color-mix(in srgb, var(--cyan) 14%, transparent); }
+    .sl-lib-row.sl-selected .sl-lib-check { color: var(--cyan); }
+    .sl-lib-select-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin: 0.25rem 0 0.5rem;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--surface) 55%, transparent);
+    }
+    .sl-lib-select-count { flex: 1; min-width: 8rem; font-size: 0.82rem; color: var(--text-muted); }
+    .sl-lib-select-toggle.sl-on { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 45%, transparent); }
     /* Library tools — collapsed panel of whole-library passes */
     .sl-lib-tools-toggle { margin: 0.25rem 0 0.5rem; }
     .sl-lib-tools {

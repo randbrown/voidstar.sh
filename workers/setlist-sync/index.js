@@ -1915,6 +1915,39 @@ function parseKeyName(key) {
   return { tonicPc: NOTE_PC[root], minor: !!m[2], name: root + (m[2] ? 'm' : '') };
 }
 
+// How to SPELL a transposed chord. A chart in a flat key writes Eb, not D#;
+// picking the table off the key keeps the de-capo below from minting chord
+// names no one would write by hand.
+const NAMES_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const NAMES_FLAT = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+const FLAT_MAJORS = new Set(['F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb']);
+
+function keyNames(key) {
+  if (!key) return NAMES_SHARP;
+  const root = key.name.replace(/m$/, '');
+  return (root.includes('b') || FLAT_MAJORS.has(root)) ? NAMES_FLAT : NAMES_SHARP;
+}
+
+function transposeKeyName(keyName, semitones) {
+  const k = parseKeyName(keyName);
+  if (!k) return keyName || '';
+  if (!semitones) return k.name;
+  return KEY_NAMES[(k.tonicPc + semitones + 1200) % 12] + (k.minor ? 'm' : '');
+}
+
+function transposeChordSymbol(sym, semitones, names) {
+  const c = parseChordSymbol(sym);
+  if (!c || c.nc || !semitones) return sym;
+  const pc = NOTE_PC[c.root];
+  if (pc == null) return sym;
+  let out = names[(pc + semitones + 1200) % 12] + c.quality;
+  if (c.bass) {
+    const bassPc = NOTE_PC[c.bass];
+    out += '/' + (bassPc == null ? c.bass : names[(bassPc + semitones + 1200) % 12]);
+  }
+  return out;
+}
+
 // "m7" → "-7", "dim" → "°", "maj7"/"sus4"/"add9"… pass through untouched.
 function nashvilleQuality(quality) {
   let q = (quality || '').trim();
@@ -1984,6 +2017,50 @@ function inferKey(sections) {
     return `${KEY_NAMES[relMinorPc]}m`;
   }
   return KEY_NAMES[bestTonic];
+}
+
+// Chord sheet → the numbers, in the song's REAL key.
+//
+// A chord sheet is written for the fingers, so a sheet with a capo is in capo
+// SHAPES: C shapes at fret 1 for a song in Db. Numbering those shapes against
+// the song's real key comes out a semitone flat (a plain 2- chart reads
+// "b2-"), which is the one way a number chart can actively lie — and the capo
+// position itself is a guitarist's fingering choice, not chart data. So
+// transpose the shapes up by the capo and number what the guitar actually
+// SOUNDS.
+//
+// Which frame the source's key is already in needs no guessing: a STATED
+// tonality is the recording's key (sounding), so only the chords move; an
+// INFERRED one was read off the written shapes, so it's a capo low and moves
+// with them. Either way the returned key and numbers agree, and `decapoed`
+// tells the client this already happened (it carries its own fallback for
+// older worker deploys — see soundingNumbers in chart-build.js).
+export function soundingChart({ sections, tonality, capo }) {
+  const frets = Math.min(11, Math.max(0, Math.round(Number(capo) || 0)));
+  const stated = parseKeyName(tonality);
+  const key = stated ? stated.name : transposeKeyName(inferKey(sections), frets);
+  const parsedKey = parseKeyName(key);
+  const names = keyNames(parsedKey);
+  const shifted = frets
+    ? sections.map(s => ({
+      name: s.name,
+      chordLines: s.chordLines.map(line => line.map(c => transposeChordSymbol(c, frets, names))),
+    }))
+    : sections;
+
+  return {
+    key,
+    keyInferred: !stated,
+    capo: frets,
+    decapoed: true,
+    sections: shifted.map(s => ({
+      name: s.name,
+      lines: s.chordLines.map(line => line.map(chord => ({
+        chord,
+        nns: chordToNashville(chord, parsedKey),
+      }))),
+    })),
+  };
 }
 
 // One attempt at reading a UG tab page into chart material. Trusted format,
@@ -2084,15 +2161,7 @@ async function handleWebChartData(request, env) {
     return corsResponse(JSON.stringify({ found: false, reason, tried, searchError }), 200, request, env);
   }
 
-  const key = parseKeyName(result.tonality)?.name || inferKey(result.sections);
-  const parsedKey = parseKeyName(key);
-  const nnsSections = result.sections.map(s => ({
-    name: s.name,
-    lines: s.chordLines.map(line => line.map(chord => ({
-      chord,
-      nns: chordToNashville(chord, parsedKey),
-    }))),
-  }));
+  const chart = soundingChart(result);
 
   return corsResponse(JSON.stringify({
     found: true,
@@ -2101,10 +2170,7 @@ async function handleWebChartData(request, env) {
     tried,
     title: result.songName || title,
     artist: result.artistName || artist,
-    key,
-    keyInferred: !parseKeyName(result.tonality),
-    capo: result.capo || 0,
-    sections: nnsSections,
+    ...chart,
   }), 200, request, env, {
     'Cache-Control': 'public, max-age=86400',
   });
@@ -2273,7 +2339,6 @@ Return ONLY a JSON object — no markdown fences, no prose before or after — w
   "key": string,         // the recording's key, e.g. "A", "Bb", "F#m"
   "bpm": number,         // 0 if unknown
   "time": string,        // "4/4", "3/4", "6/8", ...
-  "capo": number,        // suggested guitar capo, 0 if none
   "feel": string,        // short groove note, e.g. "trad country two-step", "half-time verses", "" if none
   "sections": [          // in performance order; list a section again each time it comes back
     {
@@ -2287,6 +2352,7 @@ Return ONLY a JSON object — no markdown fences, no prose before or after — w
 
 Number-chart conventions:
 - Numbers are relative to the key's major scale: in A, A=1 D=4 E=5 F#m=6- G=b7.
+- Number the key the RECORDING sounds in. Never number capo shapes, and never mention a capo — a capo is a fingering choice, and numbering shapes against the real key puts the whole chart a fret off.
 - Minor is "-" ("6-"), accidentals from the major scale are "b"/"#" ("b7", "#4").
 - Extra chord quality goes in parentheses: "5(7)", "4(maj7)", "2-(7)". Slash bass: "1/3". No chord: "NC".
 - One array entry per bar. A split bar (two chords sharing one bar) is one entry with a space: "1 4".
@@ -2342,7 +2408,6 @@ function normalizeAiChart(raw) {
     key: normalizeKeyName(clean(raw.key, 32)),
     bpm: bpm >= 30 && bpm <= 300 ? bpm : 0,
     time,
-    capo: Math.min(11, Math.max(0, Math.round(Number(raw.capo)) || 0)),
     feel: clean(raw.feel, 80),
     confidence: Math.min(1, Math.max(0, confidence)),
     sections,
