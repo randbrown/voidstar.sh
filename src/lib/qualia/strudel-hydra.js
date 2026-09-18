@@ -15,6 +15,7 @@ import {
   setMetadata, patternDisplayName, downloadPattern,
 } from './patterns.js';
 import { makeDraggablePanel } from './panel-pos.js';
+import { cssVar, onThemeChange } from './theme.js';
 import { getBool, setBool, getNum, setRaw } from './prefs.js';
 import { makeLimiter, setLimiterEngaged } from './limiter.js';
 import {
@@ -133,6 +134,25 @@ async function registerSharedSamples() {
     }
   }
   _sharedSamplesRegistered = true;
+}
+
+// Which of Strudel's own CodeMirror themes the live-code editor should wear.
+//
+// The site theme's `--code-filter` retints the editor wholesale (a CSS filter
+// over the shadow-DOM CodeMirror), which is the only lever for an arbitrary
+// palette. But Strudel ships ~40 named CodeMirror themes of its own, and a site
+// theme built from one of them (e.g. `studio` ↔ `vscodeDark`) can just ask for
+// it by name and get the real syntax colors instead of a filtered approximation.
+// `--code-theme` in themes.css is that name; `:root` declares `strudelTheme`
+// (Strudel's default) so every other theme is a no-op, and an unknown name
+// falls back to strudelTheme inside Strudel rather than breaking the editor.
+//
+// NOTE: this becomes the authoritative theme for the embedded editor — it wins
+// over whatever Strudel persisted in its own settings store. That's the point:
+// the editor follows the app.
+function strudelCodeTheme() {
+  try { return cssVar('--code-theme') || 'strudelTheme'; }
+  catch { return 'strudelTheme'; }
 }
 
 function injectLateStrudelOverride() {
@@ -705,7 +725,7 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       delete base.fontFamily;
       ed.updateSettings({
         ...base,
-        theme: base.theme || 'strudelTheme',
+        theme: strudelCodeTheme(),
         isPatternHighlightingEnabled: !_editorPerfMode,
         isFlashEnabled: !_editorPerfMode,
         isLineNumbersDisplayed: _lineNumbers,
@@ -722,6 +742,11 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
       return false;
     }
   }
+  // Follow the site theme live: `--code-theme` (and the `--code-filter` retint
+  // around it) change with `data-theme`, so re-push the editor settings on a
+  // theme switch. No-op until the editor mounts, and one call per switch — not
+  // a hot path.
+  onThemeChange(() => { applyEditorSettings(); });
   function refreshPerfBtn() {
     if (!btnPerf) return;
     btnPerf.classList.toggle('active', _editorPerfMode);

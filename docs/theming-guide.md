@@ -196,6 +196,14 @@ Use `sepia()`+`hue-rotate()` to duotone the code into your family, or `none` to
 leave it. A theme where the HUD is warm tape but the live code is still stock-blue
 reads as unfinished — pull the editor into the family.
 
+There is a second, exact route: `--code-theme` names one of Strudel's own ~40
+built-in CodeMirror themes, and the REPL wears it natively. Use it only if your
+palette genuinely *is* one of them (`studio` is built from VS dark, so it asks
+for `vscodeDark` and sets `--code-filter: none`); otherwise the filter is the
+right tool, because forcing your theme through someone else's syntax palette is
+how you end up with a theme that has no point of view. Mechanics, the name list,
+and the gotchas are in [`THEMES.md`](THEMES.md).
+
 ---
 
 ## 5. Giving a theme a distinct UI *perspective*

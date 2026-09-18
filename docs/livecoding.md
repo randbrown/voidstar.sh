@@ -123,6 +123,20 @@ The current CPS is surfaced to the timer HUD (`chron.js`) and the sequencer.
 - The `setParam` bridge is an **unvalidated** pass-through (acceptable for a trusted local performer;
   note it if the surface ever becomes remotely reachable).
 
+**Editor theming:** the REPL's syntax colours follow the site theme by two routes, both driven
+from `themes.css`. `--code-filter` is a CSS filter over the editor (retints any palette
+approximately; the default for most themes). `--code-theme` names one of Strudel's own ~40
+CodeMirror themes and is pushed through `StrudelMirror.updateSettings({ theme })` by
+`applyEditorSettings()` — the exact route, for a site theme built from a real editor theme
+(`studio` ↔ `vscodeDark`). `:root` declares `strudelTheme`, so a theme that doesn't override it is
+unaffected, and a name Strudel doesn't know falls back to `strudelTheme` on its side with a console
+warning. Both re-apply on `voidstar:themechange` (and on every editor re-mount). Two things to
+know: this token is authoritative — it overrides whatever Strudel persisted in its own settings
+store — and `activateTheme()` inside Strudel also writes the chosen theme's colours to `:root` as
+`--background`/`--caret`/… and toggles a global `dark` class, so pick a **dark** theme. The
+editor's own background stays transparent regardless (the shadow-DOM transparency layer wins), so
+the REPL keeps floating over the visuals. See [`THEMES.md`](THEMES.md) for the token.
+
 **Performance lever:** the editor's "perf mode" (disable per-frame pattern highlighting + eval
 flash) is the single biggest main-thread saving during a set — the ⚡ button in the panel's tab
 bar toggles it (persisted; also `qualia.setStrudelEditorPerf(true)`). The viz framerate is

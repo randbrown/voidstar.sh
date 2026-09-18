@@ -55,6 +55,7 @@ export const THEMES = [
   { id: 'ruliad',         label: 'ruliad ⋔' },
   { id: 'darkroom',       label: 'darkroom ⊹' },
   { id: 'lightroom',      label: 'lightroom ⊡' },
+  { id: 'studio',         label: 'studio ⌗' },
 ];
 
 // Renamed theme ids → their current id. Keeps a saved preference (and any old
