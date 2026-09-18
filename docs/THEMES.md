@@ -43,6 +43,7 @@ exactly, so "voidstar" is a visual no-op.
 | Main workstation `src/pages/qualia.astro` + lab pages `src/pages/lab/{cymatics,spectrum-pose,pose-particles,entangle}.astro` | Import `themes.css` + `ThemeBoot`; have an in-HUD theme `<select id="theme-select">` and a `Y` / `shift+Y` cycle shortcut; canvas draw code reads `readKnobs()`. (`src/pages/lab/qualia.astro` is just a redirect to `/qualia`.) |
 | `src/lib/qualia/overlay.js` | Shared pose skeleton/sparks/ripple/ASCII overlay (used by qualia). Palette derived from theme accents. |
 | `src/lib/qualia/entangle-ui.js`, `qr.js` | Crowd skeleton hues + QR colors, theme-aware. |
+| `src/lib/qualia/strudel-hydra.js` | Reads `--code-theme` and pushes it into the embedded Strudel REPL's settings, re-applying on theme change (see the token reference). |
 
 Theme IDs — the single source of truth is `THEMES` in `theme.js`.
 `ThemeBoot.astro` now derives its valid-id list from `THEMES` automatically, so
@@ -50,7 +51,7 @@ the only manual pairing left is **`theme.js` `THEMES` ↔ the matching
 `[data-theme]` block in `themes.css`** (CSS can't read the JS array). Current
 IDs: `voidstar`, `phosphor`, `amber`, `tape`, `abyssal`, `nightcall`,
 `glacial`, `win95`, `glass`, `visioneer`, `gardens`, `glissando`,
-`risograph`, `patchbay`, `ruliad`, `darkroom`, `lightroom`.
+`risograph`, `patchbay`, `ruliad`, `darkroom`, `lightroom`, `studio`.
 
 ---
 
@@ -82,7 +83,10 @@ All tokens live in `:root` in `themes.css` with their Voidstar defaults.
 
 ### Surfaces & text
 ```
---void, --void-2          page / secondary background
+--void, --void-2          page / secondary background. --void is also THE STAGE
+                          (the fx canvas screen-blends over it and the HUD text
+                          halo is built from it) — keep it near-black, see the
+                          gotcha below.
 --surface, --surface-2    opaque card surfaces (site)
 --surface-glass,          translucent HUD panels (labs). Auto-derived from
 --surface-glass-2           --void via color-mix, so themes get frosted panels
@@ -127,7 +131,39 @@ Mono, VT323). Add a font there if a theme needs it.
                           theme family (the editor's colors live in shadow DOM,
                           so a filter is the reliable lever). e.g.
                           sepia()+hue-rotate() duotone; `none` = untouched.
+--code-theme              The name of one of Strudel's OWN ~40 CodeMirror
+                          themes for the embedded REPL — the *exact* route
+                          where --code-filter is the approximate one. Read by
+                          strudel-hydra.js and pushed through the editor's
+                          settings API on every theme change. `:root` declares
+                          `strudelTheme` (Strudel's default), so a theme that
+                          doesn't override it is unaffected; unknown names fall
+                          back to strudelTheme on Strudel's side.
 ```
+
+**On `--code-theme` vs `--code-filter`.** Reach for `--code-theme` only when your palette
+*is* a real editor theme that Strudel already ships (`studio` ↔ `vscodeDark`); then set
+`--code-filter: none` so you're not retinting colors that are already right. Everything
+else stays on the filter. Three things to know before you use it:
+
+- **Pick a dark theme.** Strudel's `activateTheme()` also writes the chosen theme's colors
+  to `:root` (`--background`, `--caret`, …) and toggles a global `dark` class.
+- **It is authoritative** — it overrides whatever Strudel persisted in its own settings
+  store. That's the intent: the editor follows the app.
+- **The editor background stays transparent** either way (the shadow-DOM transparency layer
+  in `strudel-hydra.js` wins), so only the *syntax* colors change and the REPL keeps
+  floating over the visuals.
+
+The names live in `@strudel/codemirror`'s `themes` map at the pinned `STRUDEL_VERSION`
+(1.3.0): `strudelTheme`, `algoboy`, `archBtw`, `androidstudio`, `atomone`, `aura`, `bbedit`,
+`blackscreen`, `bluescreen`, `bluescreenlight`, `CutiePi`, `darcula`, `dracula`,
+`duotoneDark`, `eclipse`, `fruitDaw`, `githubDark`, `githubLight`, `greenText`,
+`gruvboxDark`, `gruvboxLight`, `sonicPink`, `materialDark`, `materialLight`, `monokai`,
+`noctisLilac`, `nord`, `redText`, `solarizedDark`, `solarizedLight`, `sublime`, `teletext`,
+`tokyoNight`, `tokyoNightDay`, `tokyoNightStorm`, `vscodeDark`, `vscodeLight`,
+`whitescreen`, `xcodeLight`. Re-check this list when you bump `STRUDEL_VERSION` — nothing
+enforces it, but a wrong name degrades to `strudelTheme` plus a console warning rather than
+breaking the editor.
 
 ### Advanced chrome tokens (generated controls)
 A second tier of tokens for the **generated** qualia controls (the sliders /
@@ -238,6 +274,29 @@ text dark (for the dominant gray panels), and **scope the on-teal text light**
 `.prose`). Any future light theme on a dark page background needs the same
 split. Check WCAG contrast for small text on the page background.
 
+### Gotcha worth knowing: `--void` is the stage, and it must be near-black
+Every shipped theme sets `--void` to a near-black (`#010104`, `#02080a`,
+`#080809`, …) and that is **not** just taste — two things on the stage depend on
+it being dark:
+- The fx canvas composites with **`mix-blend-mode: screen`** over the body
+  (`html, body { background: var(--void) }`). Screen can never render *darker*
+  than what's underneath, so `--void` is a hard floor on every visual. A
+  `#1e1e1e` page background means nothing the fx draw is ever darker than
+  `#1e1e1e` — the whole field reads hazy/gray (measured: the darkest stage
+  pixel was `#222128` instead of `#08051b`).
+- The HUD's on-stage text halo is `text-shadow: 0 1px 2px var(--void), 0 0 5px
+  var(--void)`. A light `--void` makes that halo gray and labels lose their
+  contrast over bright fx.
+
+So if your theme's identity wants a lighter "page" colour (studio's editor
+gray, say), keep `--void` near-black and give the chrome a **theme-scoped**
+variable for it instead — studio declares `--studio-editor: #1e1e1e` inside its
+own block and points the fields / active document tab / mod-pill chips at that.
+Set `--viz-bg` to match `--void` too: it's the canvas clear / trail-fade colour
+(and the ASCII overlay's fill), so a light value grays the fx from the other
+side. Light themes that genuinely want a light stage handle it differently —
+see lightroom, which inverts the canvas and multiplies it onto the light page.
+
 ### Other gotchas
 - **Labs are standalone** (no `BaseLayout`): a new lab must import `themes.css`
   + `ThemeBoot` itself, and add `data-theme` early. Don't rely on the layout.
@@ -308,8 +367,9 @@ hide state: hover/focus/active end-states still apply, they just don't animate.
 | **glass** | Randyland2 leaded jewel glass | ruby/cobalt/amethyst/emerald/amber accents on near-black "lead", sharp 2px radius, hue 300/spread 160 (full jewel sweep), bloom up |
 | **visioneer** | Ramblin' Visioneer — cosmic Sasquatch on the night road | Sasquatch-eye blue `--accent`, evil-eye turquoise, campfire amber, twilight indigo void, light film grain, hue 215/spread 140 |
 | **gardens** | Cindy Lynn's Gardens — stained-glass botany / chemistry | iris-violet `--accent` on moss/soil green-black, lily pink + daylily gold, rounded organic radii, verdant hue 100/spread 60 |
+| **studio** | the IDE as an instrument — daylight desk sessions, screen-shares | Visual Studio 2026 dark: flat neutral-gray tool windows over a near-black stage, `--glow-strength:0` + `--panel-blur:0` (no material at all), the five accents ARE the syntax palette (keyword blue lead), and `--code-theme: vscodeDark` so the REPL matches natively. The editor gray lives in a scoped `--studio-editor`, never in `--void` — see the stage gotcha above |
 
-The last three are the **Randyland family** — palettes drawn from
+**glass**, **visioneer** and **gardens** are the **Randyland family** — palettes drawn from
 [`docs/agent-reference.md`](./agent-reference.md) (stained glass §2/§5,
 Ramblin' Visioneer §3/§4, Cindy Lynn's Gardens §5). Each now has its own skin
 layer + control identity (not token-only): glass is a leaded grid with

@@ -85,6 +85,17 @@
      crushing syntax differentiation. */
   --code-filter:   sepia(0.2) hue-rotate(180deg) saturate(1.4) brightness(1.06);
 
+  /* The name of one of Strudel's OWN CodeMirror themes for the embedded REPL
+     (strudel-hydra.js reads this token and pushes it through the editor's
+     settings API on every theme change). `--code-filter` approximates any
+     palette by retinting; this is the exact route, for a theme that was built
+     from a real editor theme (studio ↔ vscodeDark). `strudelTheme` is Strudel's
+     default, so every theme that doesn't override this is unaffected. Names
+     that Strudel doesn't know fall back to strudelTheme on its side.
+     Pick a DARK one: a light editor theme also flips Strudel's global `dark`
+     class. Available names live in @strudel/codemirror's `themes` map. */
+  --code-theme:    strudelTheme;
+
   /* ---- Advanced chrome tokens ---------------------------------------------
      A second tier of design tokens for the *generated* utility controls
      (qualia's JS-built sliders / selects / inputs / mod pills / meters) and
@@ -740,6 +751,86 @@
   --viz-light:     55;
   --viz-glow:      0.4;              /* low — no bloom on the light table */
   --code-filter:   saturate(1.15) contrast(1.05) brightness(1.02);
+}
+
+/* ---- Studio (the IDE as an instrument — Visual Studio 2026 dark) ---------- *
+   The rig rendered as a modern code editor: flat neutral-gray tool windows
+   docked around a #1e1e1e editor surface, zero bevel, zero bloom, zero blur.
+   Where every other theme has a *material* (glass, tape, film, bevel), this one
+   has none on purpose — it's software, drawn by a compositor, and its whole
+   colour language is the editor's own syntax palette: keyword blue leads,
+   type teal / control-flow mauve / comment green / string terracotta fill out
+   the set. Every value below is sampled from a real VS 2026 dark window, and
+   the live-code editor wears Strudel's `vscodeDark` natively (--code-theme)
+   rather than a retint, so the REPL and the chrome are the same palette.
+   Its niche: a daylight desk session — writing patterns, building a set,
+   screen-sharing — where the instrument should read as a tool, not a stage. */
+[data-theme="studio"] {
+  /* --void is the STAGE, and it must be near-black — it is not the editor
+     gray. Two things under it are unforgiving: the fx canvas composites with
+     `mix-blend-mode: screen`, which can never render darker than the body
+     background (so a #1e1e1e page would be a hard gray floor on every visual),
+     and the HUD's on-stage text halo is `text-shadow: … var(--void)`, which
+     needs to be genuinely dark to keep labels legible over bright fx. The
+     editor's own #1e1e1e is a *chrome* colour — it lives in --studio-editor
+     below and paints fields, the active document tab and the mod-pill chips. */
+  --void:        #0a0a0a;            /* the stage — near-black */
+  --void-2:      #141414;            /* status bar — the deepest chrome */
+  --studio-editor: #1e1e1e;          /* the editor surface, as chrome only */
+  --surface:     #282828;            /* tool window (solution explorer/output) */
+  --surface-2:   #333333;            /* toolbar / raised control */
+  --border:      #3f3f3f;            /* hairline, solid — no glow, no bevel */
+  --border-2:    #5a5a5a;
+  --text:        #f1f1f1;            /* output-window white */
+  --text-muted:  #a1a1a1;            /* inline git-blame gray */
+  --text-dim:    #909090;            /* the editor's dimmed/gutter gray (#838383),
+                                        nudged up so even the third text tier
+                                        clears AA on the tool-window gray —
+                                        the dim tier is the one place the token
+                                        system routinely goes low-contrast, and
+                                        on a light-ish dark theme it can't */
+  /* Tool windows are opaque slabs in a real IDE; keep a few % of translucency
+     so the fx still breathe under the HUD (the "never hide the music" rule),
+     and derive them from --surface, not --void, so panels sit *above* the
+     editor surface exactly as VS docks them. Inputs go the other way — sunk
+     back down to the editor's own #1e1e1e, like a VS text field. */
+  --surface-glass:   color-mix(in srgb, var(--surface) 93%, transparent);
+  --surface-glass-2: color-mix(in srgb, var(--studio-editor) 94%, transparent);
+  --hud-border:      var(--border);
+  /* The five accents ARE the syntax palette — desaturated, cool-led, and well
+     separated in hue (207° → 168° → 294° → 92° → 19°) so pose skeletons and
+     spectrum bands stay legible without ever going neon. */
+  --accent:      #569cd6;            /* keyword blue — the lead, and the one
+                                        colour anyone pictures when they picture
+                                        this editor */
+  --accent-glow: rgba(86, 156, 214, 0.22);
+  --cyan:        #4ec9b0;            /* type / class teal */
+  --cyan-glow:   rgba(78, 201, 176, 0.20);
+  --pink:        #d8a0df;            /* control-flow keyword mauve */
+  --pink-glow:   rgba(216, 160, 223, 0.20);
+  --green:       #6a9955;            /* comment green */
+  --amber:       #ce9178;            /* string terracotta */
+  /* Segoe UI + Cascadia Mono if present, graceful system fallbacks otherwise —
+     no webfont, so this theme costs nothing to load. */
+  --font-sans:   'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+  --font-ui:     'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+  --font-mono:   'Cascadia Mono', 'Cascadia Code', Consolas, 'JetBrains Mono', ui-monospace, monospace;
+  --radius:      4px;                /* VS 2026's soft-but-square corners */
+  --radius-lg:   6px;
+  --glow-strength: 0;                /* an IDE emits no light */
+  --panel-blur:  0;                  /* opaque docks — and the cheapest theme
+                                        in the set to composite */
+  --viz-bg:        #0a0a0a;          /* matches --void: the canvas clear /
+                                        trail-fade (and the ASCII overlay's
+                                        fill) must not gray the fx either */
+  --viz-hue-base:  168;              /* type teal … */
+  --viz-hue-spread: 130;             /* … through keyword blue into control mauve */
+  --viz-sat:       46;               /* restrained: syntax colours, not neon */
+  --viz-light:     66;               /* bright, the way editor text is */
+  --viz-glow:      0.3;              /* flat — the signature of the metaphor */
+  --code-filter:   none;             /* nothing to retint: the REPL wears the
+                                        matching editor theme natively ↓ */
+  --code-theme:    vscodeDark;       /* Strudel's own VS-dark CodeMirror theme */
 }
 
 /* ============================================================================
@@ -2006,6 +2097,105 @@ body::before {
   mix-blend-mode: multiply !important;
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+   Studio — the IDE, drawn by a compositor. Every other skin here has a
+   material (leaded glass, tape, film edge, plastic bevel); this one has
+   none, on purpose: flat fills, 1px hairlines, no gradient, no shadow, no
+   blur, no bloom. State is carried by exactly one thing — a keyword-blue
+   edge — the way an IDE carries it. Buttons are toolbar buttons; panels are
+   docked tool windows under a flat title strip; the mobile panel bar becomes
+   a document tab strip whose active tab drops to the editor surface under a
+   2px accent rule. The restraint is the identity: nothing here is lit.
+   ──────────────────────────────────────────────────────────────────────── */
+[data-theme="studio"] .btn,
+[data-theme="studio"] .ctrl-btn,
+[data-theme="studio"] .qp-toggle,
+[data-theme="studio"] .qp-preset,
+[data-theme="studio"] .start-btn {
+  background: var(--surface-2) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  color: var(--text) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+[data-theme="studio"] .btn:hover,
+[data-theme="studio"] .ctrl-btn:hover,
+[data-theme="studio"] .qp-toggle:hover,
+[data-theme="studio"] .qp-preset:hover,
+[data-theme="studio"] .start-btn:hover {
+  background: #3f3f3f !important;
+  border-color: var(--border-2) !important;
+  color: var(--text) !important;
+  box-shadow: none !important;
+}
+/* Checked toolbar button: a flat keyword-blue wash inside a solid blue edge.
+   No glow — nothing in this theme glows. */
+[data-theme="studio"] .ctrl-btn.active,
+[data-theme="studio"] .ctrl-btn.active-audio,
+[data-theme="studio"] .qp-toggle.active,
+[data-theme="studio"] .qp-preset.active {
+  background: color-mix(in srgb, var(--accent) 26%, var(--surface-2)) !important;
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
+  box-shadow: none !important;
+}
+/* Docked tool windows: flat slab, one hairline, no frosting. The !important
+   also beats the per-page mobile alpha override on .qp-card, which would
+   otherwise punch a hole in a dock. */
+[data-theme="studio"] .qp-card,
+[data-theme="studio"] #topbar,
+[data-theme="studio"] #audio-panel,
+[data-theme="studio"] .qp-tabs,
+[data-theme="studio"] .post-card,
+[data-theme="studio"] .video-card,
+[data-theme="studio"] #cycle-mgr {
+  background: var(--surface-glass) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+/* Tool-window title strip — flat, one step lighter than the dock. No ornament
+   glyph: in this theme the absence of one IS the metaphor. */
+[data-theme="studio"] .qp-card > .qp-head {
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  padding: 0.22rem 0.45rem !important;
+  font-weight: 600;
+}
+[data-theme="studio"] .qp-card > .qp-head .qp-title { color: var(--text) !important; }
+/* Document tabs — square-topped on the dock gray; the active tab drops to the
+   editor surface under a keyword-blue rule ("you are here", IDE-style). */
+[data-theme="studio"] .qp-tab {
+  background: var(--surface) !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--radius) var(--radius) 0 0 !important;
+  color: var(--text-muted) !important;
+  box-shadow: none !important;
+}
+[data-theme="studio"] .qp-tab:hover {
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+}
+[data-theme="studio"] .qp-tab.active {
+  background: var(--studio-editor) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+  box-shadow: inset 0 2px 0 var(--accent) !important;   /* a rule, not a glow */
+}
+/* Site header → the menu bar: the darkest chrome in the window, one hairline,
+   nothing floating. */
+[data-theme="studio"] .site-header {
+  background: var(--void-2) !important;
+  border-bottom: 1px solid var(--border) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
 /* ============================================================================
    GENERATED CONTROLS — the JS-built qualia utility controls.
    ----------------------------------------------------------------------------
@@ -2586,6 +2776,51 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
   color: var(--text) !important;
 }
 [data-theme="lightroom"] .qp-mod-name { color: var(--text) !important; }
+
+/* ── Studio — a scrollbar-thin flat rail with a square IDE grip / flat
+   tool-window chips. The track is the editor's own scrollbar trough, the fill
+   is keyword blue, and the thumb is a small square slab — a scrollbar grip or
+   a splitter handle, not a bead: nothing round, nothing lit. Focus is a hard
+   two-tone rectangle (the VS focus rect), not a soft halo. Pills are flat
+   chips so the per-channel border still carries the modulator's source. */
+[data-theme="studio"] {
+  --ctl-panel-bg:      var(--surface-glass);
+  --ctl-panel-border:  var(--border);
+  --ctl-panel-shadow:  none;
+  --ctl-btn-bg:        var(--surface-2);
+  --ctl-btn-border:    var(--border);
+  --ctl-btn-shadow:    none;
+  --ctl-btn-active-bg: color-mix(in srgb, var(--accent) 26%, var(--surface-2));
+  --ctl-input-bg:      var(--studio-editor);  /* a VS text field sits at the
+                                                 editor's own surface colour */
+  --ctl-input-border:  var(--border);
+  --ctl-input-shadow:  none;
+  --ctl-slider-track:  #3f3f3f;
+  --ctl-slider-track-h: 4px;
+  --ctl-slider-track-radius: 2px;
+  --ctl-slider-track-shadow: none;
+  --ctl-slider-fill:   var(--accent);
+  --ctl-slider-thumb:  var(--accent);
+  --ctl-slider-thumb-w: 10px;
+  --ctl-slider-thumb-h: 16px;
+  --ctl-slider-thumb-radius: 2px;
+  --ctl-slider-thumb-border: 0;
+  --ctl-slider-thumb-shadow: none;
+  --ctl-meter-bg:      #3f3f3f;
+  --ctl-meter-fill:    var(--accent);
+  --ctl-focus-ring:    0 0 0 1px var(--studio-editor), 0 0 0 2px var(--accent);
+  --ctl-scrollbar-track: var(--studio-editor);
+  --ctl-scrollbar-thumb: #4e4e4e;
+}
+/* Pills sink to the editor surface rather than sitting at button gray: the
+   per-channel source colours baked into the page (audio cyan / pose pink /
+   crowd violet) are fixed rgba values, and they need the darker backdrop to
+   clear contrast on this theme's lighter panels. */
+[data-theme="studio"] .qp-mod-pill {
+  border-radius: var(--radius) !important;
+  background: var(--studio-editor) !important;
+  box-shadow: none !important;
+}
 
 /* ============================================================================
    Reduced motion — honour prefers-reduced-motion.
