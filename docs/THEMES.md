@@ -83,7 +83,10 @@ All tokens live in `:root` in `themes.css` with their Voidstar defaults.
 
 ### Surfaces & text
 ```
---void, --void-2          page / secondary background
+--void, --void-2          page / secondary background. --void is also THE STAGE
+                          (the fx canvas screen-blends over it and the HUD text
+                          halo is built from it) — keep it near-black, see the
+                          gotcha below.
 --surface, --surface-2    opaque card surfaces (site)
 --surface-glass,          translucent HUD panels (labs). Auto-derived from
 --surface-glass-2           --void via color-mix, so themes get frosted panels
@@ -271,6 +274,29 @@ text dark (for the dominant gray panels), and **scope the on-teal text light**
 `.prose`). Any future light theme on a dark page background needs the same
 split. Check WCAG contrast for small text on the page background.
 
+### Gotcha worth knowing: `--void` is the stage, and it must be near-black
+Every shipped theme sets `--void` to a near-black (`#010104`, `#02080a`,
+`#080809`, …) and that is **not** just taste — two things on the stage depend on
+it being dark:
+- The fx canvas composites with **`mix-blend-mode: screen`** over the body
+  (`html, body { background: var(--void) }`). Screen can never render *darker*
+  than what's underneath, so `--void` is a hard floor on every visual. A
+  `#1e1e1e` page background means nothing the fx draw is ever darker than
+  `#1e1e1e` — the whole field reads hazy/gray (measured: the darkest stage
+  pixel was `#222128` instead of `#08051b`).
+- The HUD's on-stage text halo is `text-shadow: 0 1px 2px var(--void), 0 0 5px
+  var(--void)`. A light `--void` makes that halo gray and labels lose their
+  contrast over bright fx.
+
+So if your theme's identity wants a lighter "page" colour (studio's editor
+gray, say), keep `--void` near-black and give the chrome a **theme-scoped**
+variable for it instead — studio declares `--studio-editor: #1e1e1e` inside its
+own block and points the fields / active document tab / mod-pill chips at that.
+Set `--viz-bg` to match `--void` too: it's the canvas clear / trail-fade colour
+(and the ASCII overlay's fill), so a light value grays the fx from the other
+side. Light themes that genuinely want a light stage handle it differently —
+see lightroom, which inverts the canvas and multiplies it onto the light page.
+
 ### Other gotchas
 - **Labs are standalone** (no `BaseLayout`): a new lab must import `themes.css`
   + `ThemeBoot` itself, and add `data-theme` early. Don't rely on the layout.
@@ -341,7 +367,7 @@ hide state: hover/focus/active end-states still apply, they just don't animate.
 | **glass** | Randyland2 leaded jewel glass | ruby/cobalt/amethyst/emerald/amber accents on near-black "lead", sharp 2px radius, hue 300/spread 160 (full jewel sweep), bloom up |
 | **visioneer** | Ramblin' Visioneer — cosmic Sasquatch on the night road | Sasquatch-eye blue `--accent`, evil-eye turquoise, campfire amber, twilight indigo void, light film grain, hue 215/spread 140 |
 | **gardens** | Cindy Lynn's Gardens — stained-glass botany / chemistry | iris-violet `--accent` on moss/soil green-black, lily pink + daylily gold, rounded organic radii, verdant hue 100/spread 60 |
-| **studio** | the IDE as an instrument — daylight desk sessions, screen-shares | Visual Studio 2026 dark: flat neutral-gray tool windows on a `#1e1e1e` editor-surface stage, `--glow-strength:0` + `--panel-blur:0` (no material at all), the five accents ARE the syntax palette (keyword blue lead), and `--code-theme: vscodeDark` so the REPL matches natively |
+| **studio** | the IDE as an instrument — daylight desk sessions, screen-shares | Visual Studio 2026 dark: flat neutral-gray tool windows over a near-black stage, `--glow-strength:0` + `--panel-blur:0` (no material at all), the five accents ARE the syntax palette (keyword blue lead), and `--code-theme: vscodeDark` so the REPL matches natively. The editor gray lives in a scoped `--studio-editor`, never in `--void` — see the stage gotcha above |
 
 **glass**, **visioneer** and **gardens** are the **Randyland family** — palettes drawn from
 [`docs/agent-reference.md`](./agent-reference.md) (stained glass §2/§5,

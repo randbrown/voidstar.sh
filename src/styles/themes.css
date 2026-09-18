@@ -766,8 +766,17 @@
    Its niche: a daylight desk session — writing patterns, building a set,
    screen-sharing — where the instrument should read as a tool, not a stage. */
 [data-theme="studio"] {
-  --void:        #1e1e1e;            /* editor surface — the stage */
+  /* --void is the STAGE, and it must be near-black — it is not the editor
+     gray. Two things under it are unforgiving: the fx canvas composites with
+     `mix-blend-mode: screen`, which can never render darker than the body
+     background (so a #1e1e1e page would be a hard gray floor on every visual),
+     and the HUD's on-stage text halo is `text-shadow: … var(--void)`, which
+     needs to be genuinely dark to keep labels legible over bright fx. The
+     editor's own #1e1e1e is a *chrome* colour — it lives in --studio-editor
+     below and paints fields, the active document tab and the mod-pill chips. */
+  --void:        #0a0a0a;            /* the stage — near-black */
   --void-2:      #141414;            /* status bar — the deepest chrome */
+  --studio-editor: #1e1e1e;          /* the editor surface, as chrome only */
   --surface:     #282828;            /* tool window (solution explorer/output) */
   --surface-2:   #333333;            /* toolbar / raised control */
   --border:      #3f3f3f;            /* hairline, solid — no glow, no bevel */
@@ -786,7 +795,7 @@
      editor surface exactly as VS docks them. Inputs go the other way — sunk
      back down to the editor's own #1e1e1e, like a VS text field. */
   --surface-glass:   color-mix(in srgb, var(--surface) 93%, transparent);
-  --surface-glass-2: color-mix(in srgb, var(--void) 94%, transparent);
+  --surface-glass-2: color-mix(in srgb, var(--studio-editor) 94%, transparent);
   --hud-border:      var(--border);
   /* The five accents ARE the syntax palette — desaturated, cool-led, and well
      separated in hue (207° → 168° → 294° → 92° → 19°) so pose skeletons and
@@ -811,8 +820,9 @@
   --glow-strength: 0;                /* an IDE emits no light */
   --panel-blur:  0;                  /* opaque docks — and the cheapest theme
                                         in the set to composite */
-  --viz-bg:        #1e1e1e;          /* the canvas IS the editor surface —
-                                        a neutral gray stage, not a void */
+  --viz-bg:        #0a0a0a;          /* matches --void: the canvas clear /
+                                        trail-fade (and the ASCII overlay's
+                                        fill) must not gray the fx either */
   --viz-hue-base:  168;              /* type teal … */
   --viz-hue-spread: 130;             /* … through keyword blue into control mauve */
   --viz-sat:       46;               /* restrained: syntax colours, not neon */
@@ -2172,7 +2182,7 @@ body::before {
   color: var(--text) !important;
 }
 [data-theme="studio"] .qp-tab.active {
-  background: var(--void) !important;
+  background: var(--studio-editor) !important;
   color: var(--text) !important;
   border-color: var(--border) !important;
   box-shadow: inset 0 2px 0 var(--accent) !important;   /* a rule, not a glow */
@@ -2781,8 +2791,8 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
   --ctl-btn-border:    var(--border);
   --ctl-btn-shadow:    none;
   --ctl-btn-active-bg: color-mix(in srgb, var(--accent) 26%, var(--surface-2));
-  --ctl-input-bg:      var(--void);          /* a VS text field sits at the
-                                                editor's own surface colour */
+  --ctl-input-bg:      var(--studio-editor);  /* a VS text field sits at the
+                                                 editor's own surface colour */
   --ctl-input-border:  var(--border);
   --ctl-input-shadow:  none;
   --ctl-slider-track:  #3f3f3f;
@@ -2798,8 +2808,8 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
   --ctl-slider-thumb-shadow: none;
   --ctl-meter-bg:      #3f3f3f;
   --ctl-meter-fill:    var(--accent);
-  --ctl-focus-ring:    0 0 0 1px var(--void), 0 0 0 2px var(--accent);
-  --ctl-scrollbar-track: var(--void);
+  --ctl-focus-ring:    0 0 0 1px var(--studio-editor), 0 0 0 2px var(--accent);
+  --ctl-scrollbar-track: var(--studio-editor);
   --ctl-scrollbar-thumb: #4e4e4e;
 }
 /* Pills sink to the editor surface rather than sitting at button gray: the
@@ -2808,7 +2818,7 @@ input[type="range"]:focus-visible::-moz-range-thumb     { box-shadow: var(--ctl-
    clear contrast on this theme's lighter panels. */
 [data-theme="studio"] .qp-mod-pill {
   border-radius: var(--radius) !important;
-  background: var(--void) !important;
+  background: var(--studio-editor) !important;
   box-shadow: none !important;
 }
 
