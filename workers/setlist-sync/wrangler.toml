@@ -20,7 +20,11 @@
 #
 # Optional — /ai/chart LLM chart drafting + /ai/chart-read scan reading
 # (first configured provider wins):
-#   ANTHROPIC_API_KEY      Claude, with web-search grounding
+#   ANTHROPIC_API_KEY      Claude, with web-search grounding. NOTE this is a
+#                          Console (console.anthropic.com → Billing) prepaid
+#                          balance, spent from the first request — a Claude
+#                          Pro/Max subscription does not fund it. Same split on
+#                          OpenAI: ChatGPT Plus/Pro is not Platform credit.
 #
 #   Model per route — each is a plain var, and each defaults to the cheapest
 #   tier that does the job. A library-wide pass runs these once per song, so
@@ -42,8 +46,34 @@
 #   Any of the three accepts a Haiku-tier id and the request shape adapts to
 #   it (claudeModelProfile) rather than 400-ing on every call.
 #   GEMINI_API_KEY         Gemini, with Google Search grounding (free tier at
-#                          aistudio.google.com/apikey)
-#   GEMINI_MODEL           plain var; default gemini-2.5-flash
+#                          aistudio.google.com/apikey). This is the cheapest
+#                          seat in the chain by a wide margin: grounding on the
+#                          Gemini 3 family is free for the first 5000 prompts a
+#                          month, then $14/1000 — against $10/1000 web searches
+#                          on BOTH Anthropic and OpenAI, billed from the first
+#                          one. If AI features keep dying on an empty balance,
+#                          set this key before topping anything up.
+#   GEMINI_MODEL           plain var; default gemini-3.5-flash. Do NOT drop this
+#                          back to a 2.5 id: that family is on the old
+#                          $35/1000 grounding tier (the worst rate of the three
+#                          providers) and, with thinking left to its default,
+#                          was reliably blowing the request timeout.
+#   AI_PROVIDER_ORDER      plain var; default "claude,openai,gemini" — quality
+#                          first. Set "gemini,claude,openai" to spend the free
+#                          grounding allowance before either paid account.
+#
+# Optional — the shared AI answer cache. Without a binding the worker still
+# caches (caches.default, then an in-isolate map), but caches.default is
+# per-colo and is a NO-OP on a *.workers.dev subdomain — so on workers.dev the
+# only durable tier is the KV one. Bind it and every device, every bandmate and
+# every reinstall reuses one paid answer for 7 days:
+#
+#   npx wrangler kv namespace create AI_CACHE
+#   # then paste the returned id into the [[kv_namespaces]] block below
+#
+# [[kv_namespaces]]
+# binding = "AI_CACHE"
+# id = "<id from the command above>"
 #
 # The worker imports @anthropic-ai/sdk, so run `npm ci` at the repo root
 # before deploying (wrangler bundles it from node_modules).

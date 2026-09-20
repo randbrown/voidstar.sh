@@ -1478,8 +1478,31 @@ each overridable by the matching env var):
 | `/ai/steel-summary` | ~80 words on what the steel does | `claude-sonnet-5` | 2 / 10 | `low` (`medium` on `retry=1`) |
 | `/ai/chart-read` | transcribe what's written on a scan | `claude-haiku-4-5` | 1 / 5 | n/a |
 
-Four things keep the bill down, in rough order of how much they save:
+**The bill is mostly search, not tokens.** Both paid providers bill web search
+per call *on top of* tokens — $10/1000 searches on Anthropic and on OpenAI —
+and the retrieved page content is then billed as input tokens too. A steel
+summary at `max_uses: 2` spends ~$0.02 in search fees before a single token
+is priced, which is an order of magnitude more than the ~$0.002 that dropping
+that route from Sonnet to Haiku saves. Tier tuning is real but it is the small
+half of the bill; **`max_uses` and the cache are the big half.**
 
+Things that keep the bill down, in rough order of how much they save:
+
+0. **The shared cache** (`aiCacheKey` / `aiCacheGet` / `aiCachePut`). The
+   `/ai/*` routes have always *sent* `Cache-Control: public, max-age=604800`,
+   and until the cache layer landed that header cached nothing shared: a
+   Response built inside a Worker is not stored in Cloudflare's CDN cache, and
+   on a `*.workers.dev` subdomain the Cache API is a no-op besides. All it ever
+   bought was each browser's own HTTP cache, so a phone, a second laptop, a
+   bandmate and a cleared site-data each re-paid for a song the account had
+   already bought — and a case difference in the title paid twice on one
+   device (the key now normalizes case and whitespace). Three tiers, best
+   available wins: **KV** (`AI_CACHE` binding — global, durable, the only tier
+   that works on workers.dev), then `caches.default` (per-colo, free), then an
+   in-isolate `Map` (which is exactly the shape of a back-to-back library
+   pass). Only `found: true` payloads are stored; caching a failure would turn
+   one drained-credit minute into a week of "AI could not chart this song". A
+   `retry=1` or a `t=` buster bypasses **and** overwrites.
 1. **Tier.** The grounded routes used to default to `claude-opus-4-8`
    ($5/$25) — 2.5x Sonnet 5 per token for work that is "search a few sources,
    fill a small JSON object". Don't move them back up.
@@ -1487,13 +1510,29 @@ Four things keep the bill down, in rough order of how much they save:
    how a pile of 80-word answers ended up billing like research. Each call
    now passes the level the job needs; a `retry=1` (the user saying the cheap
    pass got it wrong) is the only thing that buys more.
-3. **Stopping.** Both bulk passes share `aiFailureStopper`
+3. **Search budget across a pause.** Server-side search runs in a loop that
+   can `pause_turn`; the worker resumes it by echoing the assistant turn back.
+   `max_uses` is a **per-request** cap, so resending the same tool block hands
+   the model a fresh full allowance on every hop — a 2-search summary could
+   quietly become an 8-search one. `aiGroundedClaude` carries the spent count
+   forward (`countSearches`) and sets `cache_control` on each hop so the
+   accumulated search results are re-read at ~0.1x instead of re-billed in
+   full. Sources are collected per hop too: reading only the final response
+   left the footer empty on exactly the multi-hop calls that searched hardest.
+4. **Provider cooldown.** A provider that says "your balance is too low" will
+   say it for every song. `isAccountLevelAiFailure` (shared with the client)
+   puts that provider on a 15-minute cooldown in the same cache, so the next
+   click skips it instead of paying a round trip to be told again — and, more
+   to the point, reaches a provider that still works without first spending
+   two dead providers' timeouts. An explicit redo clears the cooldown, so a
+   topped-up account is picked up at once.
+5. **Stopping.** Both bulk passes share `aiFailureStopper`
    (`src/lib/setlist/ai-failure.js`): an *account-level* reason (credit
    balance, bad key, quota) aborts on the **first** hit, since no later song
    can change it; any other reason repeated 3x in a row also aborts. Only the
    AI rung counts — three PDFs in a row are three ordinary songs, not a
    config problem.
-4. **Images.** `/ai/chart-read` sends the page plus up to two top-corner
+6. **Images.** `/ai/chart-read` sends the page plus up to two top-corner
    crops, each capped at `CHART_READ_MAX_DIM` = 1568px, which is exactly the
    long edge the standard vision tier downscales to before counting visual
    tokens (`ceil(w/28) x ceil(h/28)`, max 1568 per image). **This is why the
@@ -1510,6 +1549,38 @@ directly-callable `web_search_20250305` instead of the dynamic-filtering
 is the safest such cut — a steel summary is short prose, not structured
 chart work. Note that web search itself is billed per search ($10/1000)
 on top of tokens, so `max_uses` (3-4 here, 6-8 on a retry) is a cost knob too.
+
+**Which provider, and where the free lunch is.** The chain is
+`AI_PROVIDER_ORDER` (default `claude,openai,gemini` — quality first). Gemini is
+the only seat in it that can be free: grounding on the **Gemini 3** family is
+5,000 prompts/month free, then $14/1000, against $10/1000 from the first
+search on both paid providers. `AI_DEFAULT_GEMINI_MODEL` is therefore
+`gemini-3.5-flash` — **do not drop it back to a 2.5 id**, which is on the old
+$35/1000 grounding tier (the worst rate of the three) in the one slot whose
+job is to cost nothing. `geminiModelProfile` picks the right thinking knob for
+the generation (`thinkingLevel` on 3.x, `thinkingBudget` on 2.5; sending 3.x
+both is an error). Sending *neither* — which is what shipped — is why a
+grounded 2.5-flash call reliably blew its timeout, and Gemini now has a
+tighter budget of its own (`AI_GEMINI_TIMEOUT_MS`) since on two drained paid
+accounts it is all that stands between the click and an answer. An account
+that keeps running dry should set `AI_PROVIDER_ORDER=gemini,claude,openai`.
+
+**Where the money actually went.** Every grounded call logs what it spent —
+`[ai] steel-summary claude/claude-sonnet-5 reqs=1 searches=2 in=… cachedIn=…
+out=…` — so `npx wrangler tail` is a per-call cost trail instead of a guess
+from the Console's daily total. The same `usage` object rides the JSON
+response, and `X-AI-Cache: hit|miss` (CORS-exposed) says whether a call was
+paid at all.
+
+**API credit is not a subscription.** The failure in the report —
+*"Your credit balance is too low"* on Claude and *"You have no credits
+remaining"* on OpenAI — is billing, not code. A Claude Pro/Max plan and a
+ChatGPT Plus/Pro plan fund the **consumer apps**; an API key spends a separate
+prepaid balance (console.anthropic.com → Billing, platform.openai.com →
+Billing) from the very first request. Both support auto-reload; without it the
+features die silently the moment the balance hits zero. The client now says
+this in the failure alert (`ACCOUNT_LEVEL_ADVICE`) rather than showing three
+providers' raw billing sentences.
 
 Prompt caching is deliberately **not** used on `/ai/chart-read`: Haiku 4.5's
 minimum cacheable prefix is 4096 tokens and the instruction block is well

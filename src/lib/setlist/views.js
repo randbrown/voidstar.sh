@@ -11,6 +11,7 @@ import { searchYoutube, scoreYoutubeMatch, songHasYoutube, isYoutubePlaylistUrl 
 import { importYoutubePlaylist, applyYoutubeToSong } from './youtube-import.js';
 import { exportSetlistToSpotify } from './spotify-export.js';
 import { collectSetlistTrackUris } from './spotify-export-core.js';
+import { isAccountLevelAiFailure, ACCOUNT_LEVEL_ADVICE } from './ai-failure.js';
 import { readChartFields, scanAllCharts, fetchInfoForAllSongs, summarizeSteelForAllSongs, verifySpotifyLinks, bestGuessSpotifyLinks, findYoutubeForAllSongs, libraryHealth, songHealth } from './bulk.js';
 import { fetchLyrics, parseSyncedLyrics } from './lyrics.js';
 import { findBestMatch as fuzzyMatch, matchScore, findLibrarySongMatch } from './match.js';
@@ -3195,7 +3196,11 @@ export async function renderSongFocus(root, songId, setlistId) {
         'no worker configured': 'no worker URL configured in Settings',
       };
       b.textContent = 'failed';
-      alert(`steel summary failed: ${reasons[r.reason] || r.reason}`);
+      // A raw chain of three providers' billing sentences reads as a broken
+      // app. It is a fixable account problem, so say which fix.
+      const detail = reasons[r.reason] || r.reason;
+      const advice = isAccountLevelAiFailure(r.reason) ? `\n\n${ACCOUNT_LEVEL_ADVICE}` : '';
+      alert(`steel summary failed: ${detail}${advice}`);
       setTimeout(() => { b.textContent = prevLabel; b.disabled = false; }, 2000);
     }
   };

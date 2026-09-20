@@ -99,10 +99,15 @@
 //   GEMINI_API_KEY         — Gemini (+ GEMINI_MODEL, default gemini-2.5-flash)
 
 import Anthropic from '@anthropic-ai/sdk';
+// Shared with the client's bulk passes so "is this the account or the song?"
+// is answered the same way in both places (src/lib/setlist/ai-failure.js).
+import { isAccountLevelAiFailure } from '../../src/lib/setlist/ai-failure.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Token',
+  // So a browser (or a curl -i) can tell a stored answer from a paid one.
+  'Access-Control-Expose-Headers': 'X-AI-Cache',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -2291,6 +2296,131 @@ async function deezerBpm(title, artist) {
   return null;
 }
 
+// ══ AI response cache + provider cooldown ═══════════════════════════════════
+// Why this exists: the /ai/* routes have always replied with
+// `Cache-Control: public, max-age=604800`, and that header never cached
+// anything SHARED. A Response built inside a Worker is not stored in
+// Cloudflare's CDN cache, and on a `*.workers.dev` subdomain the Cache API is
+// a no-op besides. All the header ever bought was each browser's own HTTP
+// cache — so a second laptop, a phone, a bandmate, a cleared site-data or a
+// fresh browser profile each re-paid for a song this account had already
+// bought, and a case difference in the title ("Blue Eyes Crying in the Rain"
+// vs "blue eyes…") paid twice on one device.
+//
+// That is a bigger lever than the model tier. A grounded call bills $10 per
+// 1000 web searches (Anthropic and OpenAI alike) PLUS the retrieved page
+// content as input tokens, so re-answering one steel summary costs more than
+// dropping the whole route from Sonnet to Haiku saves.
+//
+// Three tiers, best available wins:
+//   1. KV — bind `AI_CACHE`. Global, durable, survives redeploys and colos.
+//      This is the tier that actually ends the problem; see wrangler.toml.
+//   2. `caches.default` — per-colo, free, no config. Silently does nothing on
+//      a workers.dev subdomain, which is its own reason to run the worker on
+//      a real route.
+//   3. An in-isolate Map — lives only as long as one warm isolate, but that is
+//      exactly the shape of a back-to-back library pass.
+const AI_CACHE_TTL_S = 7 * 24 * 60 * 60; // 7 days, matching the header we send
+const AI_CACHE_MEM_MAX = 200;
+const AI_CACHE_MEM = new Map();
+
+// A provider that answers "your balance is empty" will answer that for every
+// song. Remember it briefly so the next click skips it instead of paying a
+// round trip to be told again — and, more to the point, so the chain reaches
+// a provider that still works without first spending two providers' timeouts
+// on ones that can't.
+const AI_COOLDOWN_S = 900; // 15 minutes
+
+// Cache keys ignore everything that isn't the question: the `t=` buster, the
+// auth token, and case/whitespace in the title.
+export function aiCacheKey(route, parts) {
+  const norm = v => String(v ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return `ai:${route}:${parts.map(norm).join('|')}`;
+}
+
+function aiCacheRequest(key) {
+  return new Request(`https://ai-cache.voidstar.sh/${encodeURIComponent(key)}`);
+}
+
+function aiCacheMemPut(key, value, ttlS) {
+  if (AI_CACHE_MEM.size >= AI_CACHE_MEM_MAX) {
+    // Cheapest possible eviction: Map keeps insertion order, so drop the oldest.
+    for (const k of AI_CACHE_MEM.keys()) { AI_CACHE_MEM.delete(k); break; }
+  }
+  AI_CACHE_MEM.set(key, { value, expiresAt: Date.now() + ttlS * 1000 });
+}
+
+async function aiCacheGet(env, key) {
+  const mem = AI_CACHE_MEM.get(key);
+  if (mem) {
+    if (Date.now() < mem.expiresAt) return mem.value;
+    AI_CACHE_MEM.delete(key);
+  }
+  if (env.AI_CACHE) {
+    try {
+      const v = await env.AI_CACHE.get(key, 'json');
+      if (v) { aiCacheMemPut(key, v, AI_CACHE_TTL_S); return v; }
+    } catch {}
+  }
+  try {
+    const res = await caches.default.match(aiCacheRequest(key));
+    if (res) {
+      const v = await res.json();
+      aiCacheMemPut(key, v, AI_CACHE_TTL_S);
+      return v;
+    }
+  } catch {}
+  return null;
+}
+
+// Writes go to every tier that exists. `ctx.waitUntil` keeps them off the
+// response's critical path — a cache write must never slow down the answer
+// the musician is waiting on.
+function aiCachePut(env, ctx, key, value, ttlS = AI_CACHE_TTL_S) {
+  aiCacheMemPut(key, value, ttlS);
+  const writes = [];
+  if (env.AI_CACHE) {
+    writes.push(env.AI_CACHE.put(key, JSON.stringify(value), { expirationTtl: ttlS }).catch(() => {}));
+  }
+  writes.push(caches.default.put(aiCacheRequest(key), new Response(JSON.stringify(value), {
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${ttlS}` },
+  })).catch(() => {}));
+  const done = Promise.all(writes);
+  ctx?.waitUntil?.(done);
+  return done;
+}
+
+async function aiCooldownActive(env, name) {
+  const v = await aiCacheGet(env, `ai:cooldown:${name}`);
+  return v && Date.now() < v.until ? v : null;
+}
+
+function aiCooldownSet(env, ctx, name, reason) {
+  return aiCachePut(env, ctx, `ai:cooldown:${name}`,
+    { reason, until: Date.now() + AI_COOLDOWN_S * 1000 }, AI_COOLDOWN_S);
+}
+
+// An explicit retry/refresh is the user saying "try again now" — it clears the
+// cooldown so a topped-up account is picked up immediately instead of after
+// 15 minutes.
+function aiCooldownClear(env, ctx, name) {
+  return aiCachePut(env, ctx, `ai:cooldown:${name}`, { reason: '', until: 0 }, 60);
+}
+
+function aiCachedResponse(payload, request, env) {
+  return corsResponse(JSON.stringify({ ...payload, cached: true }), 200, request, env, {
+    'Cache-Control': `public, max-age=${AI_CACHE_TTL_S}`,
+    'X-AI-Cache': 'hit',
+  });
+}
+
+function aiFreshResponse(payload, request, env, { noStore = false } = {}) {
+  return corsResponse(JSON.stringify({ ...payload, cached: false }), 200, request, env, {
+    'Cache-Control': noStore ? 'no-store' : `public, max-age=${AI_CACHE_TTL_S}`,
+    'X-AI-Cache': 'miss',
+  });
+}
+
 // ══ AI chart drafting ═══════════════════════════════════════════════════════
 // GET /ai/chart — have an LLM with web-search grounding write the actual
 // Nashville-number chart (form, bars, key, tempo, feel), the way a session
@@ -2301,6 +2431,12 @@ async function deezerBpm(title, artist) {
 // grounding); the prompt, JSON contract, and validation are shared.
 
 const AI_TIMEOUT_MS = 90000;
+// Gemini gets a tighter budget of its own. It sits last in the default chain,
+// so on a drained Anthropic + OpenAI it is the only thing between the click
+// and an answer — and a grounded 2.5-flash call with thinking left on its
+// default was reliably eating the whole 90 s and aborting, which is how a
+// three-provider chain managed to return nothing after a minute and a half.
+const AI_GEMINI_TIMEOUT_MS = 45000;
 const AI_MIN_CONFIDENCE = 0.3;
 
 // Default Claude models, picked for cost per useful answer rather than for the
@@ -2320,6 +2456,13 @@ export const AI_DEFAULT_SUMMARY_MODEL = 'claude-sonnet-5';
 // Deliberately NOT a 4.7+ model — those bill images at the high-resolution
 // tier (up to 4784 visual tokens vs 1568), so "newer" here costs ~3x per page.
 export const AI_DEFAULT_READ_MODEL = 'claude-haiku-4-5';
+// Gemini is the chain's free-tier backstop, and which generation it points at
+// decides whether it is free at all. Grounding on the Gemini 3 family bills
+// 5000 prompts/month free, then $14/1000; the 2.5 family this used to default
+// to is on the old $35/1000 tier with a far smaller free allowance — the worst
+// grounding rate of the three providers, sitting in the slot whose whole job
+// is to cost nothing. Override with GEMINI_MODEL if a key can't see it.
+export const AI_DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 
 function buildAiChartPrompt(title, artist, keyHint) {
   const song = artist ? `"${title}" by ${artist}` : `"${title}"`;
@@ -2479,6 +2622,17 @@ function collectSearchSources(content, sources = []) {
   return sources;
 }
 
+// How many web searches a response actually spent. Same two shapes as the
+// source collection: top level on a direct call, nested inside the code-
+// execution blocks when dynamic filtering is on.
+function countSearches(content, seen = { n: 0 }) {
+  for (const block of content || []) {
+    if (block?.type === 'web_search_tool_result') seen.n++;
+    else if (Array.isArray(block?.content)) countSearches(block.content, seen);
+  }
+  return seen.n;
+}
+
 // `effort` is the biggest cost lever on a thinking model and it defaults to
 // 'high' when unset — which is how a pile of ~80-word answers ended up billing
 // like deep research. Callers pass the level the job actually needs.
@@ -2491,31 +2645,82 @@ async function aiGroundedClaude(env, prompt, { maxTokens = 8000, maxSearches = 4
     timeout: AI_TIMEOUT_MS,
   });
 
-  const params = {
+  const usage = { requests: 0, searches: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+  const sources = [];
+  const base = {
     model,
     max_tokens: maxTokens,
-    tools: [{ type: profile.searchTool, name: 'web_search', max_uses: maxSearches }],
+    // A pause_turn continuation resends the whole turn — accumulated search
+    // results included — and those results re-bill as fresh input tokens on
+    // every hop. Writing the prefix to cache makes the next hop read it at
+    // ~0.1x instead. On the first hop the prefix is below the minimum
+    // cacheable size, so this costs nothing there.
+    cache_control: { type: 'ephemeral' },
   };
-  if (profile.adaptiveThinking) params.thinking = { type: 'adaptive' };
-  if (profile.supportsEffort) params.output_config = { effort };
+  if (profile.adaptiveThinking) base.thinking = { type: 'adaptive' };
+  if (profile.supportsEffort) base.output_config = { effort };
+
+  // `max_uses` is a PER-REQUEST cap, so resending the same tool block on each
+  // continuation hands the model a fresh full allowance every hop — which is
+  // how a 3-search summary quietly becomes a 12-search one at $10/1000. Carry
+  // the spent searches forward instead.
+  const params = () => ({
+    ...base,
+    tools: [{
+      type: profile.searchTool,
+      name: 'web_search',
+      max_uses: Math.max(1, maxSearches - usage.searches),
+    }],
+  });
+  const track = (r) => {
+    usage.requests++;
+    usage.searches += countSearches(r.content);
+    usage.inputTokens += r.usage?.input_tokens || 0;
+    usage.cachedInputTokens += r.usage?.cache_read_input_tokens || 0;
+    usage.outputTokens += r.usage?.output_tokens || 0;
+    // Sources have to be gathered per hop: searches that ran before a pause
+    // aren't in the final response's content, so reading only that one left
+    // the footer empty on exactly the multi-hop calls that searched hardest.
+    collectSearchSources(r.content, sources);
+  };
+
   let messages = [{ role: 'user', content: prompt }];
-  let response = await anthropic.messages.create({ ...params, messages });
+  let response = await anthropic.messages.create({ ...params(), messages });
+  track(response);
   // Server-side search runs in a server loop that can pause; resume by
   // echoing the assistant turn back (no extra user message).
   for (let i = 0; i < 3 && response.stop_reason === 'pause_turn'; i++) {
     messages = [...messages, { role: 'assistant', content: response.content }];
-    response = await anthropic.messages.create({ ...params, messages });
+    response = await anthropic.messages.create({ ...params(), messages });
+    track(response);
   }
   if (response.stop_reason === 'refusal') {
-    return { provider: 'claude', model, raw: null, reason: 'model declined the request' };
+    return { provider: 'claude', model, raw: null, usage, reason: 'model declined the request' };
   }
 
   const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-  return { provider: 'claude', model, raw: extractJsonBlock(text), sources: collectSearchSources(response.content) };
+  return { provider: 'claude', model, raw: extractJsonBlock(text), usage, sources };
+}
+
+// Which thinking knob a given Gemini id accepts. Same idea as
+// claudeModelProfile: GEMINI_MODEL is meant to be re-pointable, and the two
+// generations do NOT take the same request — 3.x wants `thinkingLevel`, 2.5
+// only understands `thinkingBudget`, and sending both to a 3.x model is an
+// error. Neither was being sent at all, which is the direct cause of the
+// "operation was aborted due to timeout" in the reported failure: a grounded
+// 2.5-flash call thinks as much as it likes by default, and with search on
+// top of that it does not finish inside a page-load's patience.
+export function geminiModelProfile(model) {
+  const gen3 = /gemini-(?:[3-9]|\d\d)/i.test(String(model || ''));
+  return {
+    gen3,
+    thinkingConfig: gen3 ? { thinkingLevel: 'low' } : { thinkingBudget: 512 },
+  };
 }
 
 async function aiGroundedGemini(env, prompt, { maxTokens = 8192 } = {}) {
-  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = env.GEMINI_MODEL || AI_DEFAULT_GEMINI_MODEL;
+  const profile = geminiModelProfile(model);
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
     {
@@ -2524,14 +2729,24 @@ async function aiGroundedGemini(env, prompt, { maxTokens = 8192 } = {}) {
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         tools: [{ google_search: {} }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens },
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: maxTokens,
+          thinkingConfig: profile.thinkingConfig,
+        },
       }),
-      signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+      signal: AbortSignal.timeout(AI_GEMINI_TIMEOUT_MS),
     },
   );
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`API ${res.status}: ${body.slice(0, 200)}`);
+    // Surface Google's own sentence the way the other two providers do, so a
+    // quota/key problem reads as one instead of as a wall of JSON.
+    let apiMessage = '';
+    try { apiMessage = JSON.parse(body)?.error?.message || ''; } catch {}
+    const e = new Error(apiMessage || `API ${res.status}: ${body.slice(0, 200)}`);
+    e.status = res.status;
+    throw e;
   }
   const data = await res.json();
   const candidate = data.candidates?.[0];
@@ -2541,7 +2756,22 @@ async function aiGroundedGemini(env, prompt, { maxTokens = 8192 } = {}) {
     if (chunk?.web?.uri && !sources.includes(chunk.web.uri)) sources.push(chunk.web.uri);
     if (sources.length >= 3) break;
   }
-  return { provider: 'gemini', model, raw: extractJsonBlock(text), sources };
+  const usage = {
+    requests: 1,
+    // Gemini bills grounding per search QUERY, not per prompt, and one prompt
+    // can fan out into several — so this is the number that matters.
+    searches: candidate?.groundingMetadata?.webSearchQueries?.length || 0,
+    inputTokens: data.usageMetadata?.promptTokenCount || 0,
+    cachedInputTokens: data.usageMetadata?.cachedContentTokenCount || 0,
+    outputTokens: data.usageMetadata?.candidatesTokenCount || 0,
+  };
+  // Thinking tokens count against maxOutputTokens here, so a thinking-heavy
+  // run can spend the whole budget and return empty text. Say that, rather
+  // than reporting it as "couldn't verify the song".
+  if (!text && candidate?.finishReason && candidate.finishReason !== 'STOP') {
+    return { provider: 'gemini', model, raw: null, usage, sources, reason: `stopped early (${candidate.finishReason})` };
+  }
+  return { provider: 'gemini', model, raw: extractJsonBlock(text), usage, sources };
 }
 
 // OpenAI via the Responses API with the built-in web_search tool. Reasoning
@@ -2588,27 +2818,107 @@ async function aiGroundedOpenAI(env, prompt, { maxTokens = 8000 } = {}) {
       }
     }
   }
-  return { provider: 'openai', model, raw: extractJsonBlock(text), sources };
+  const usage = {
+    requests: 1,
+    searches: (data.output || []).filter(i => i?.type === 'web_search_call').length,
+    inputTokens: data.usage?.input_tokens || 0,
+    cachedInputTokens: data.usage?.input_tokens_details?.cached_tokens || 0,
+    outputTokens: data.usage?.output_tokens || 0,
+  };
+  return { provider: 'openai', model, raw: extractJsonBlock(text), usage, sources };
 }
 
 // The failover chain shared by the /ai/* routes: every provider with a key,
 // in order — plus the names of the ones skipped for having no key, so a
 // total failure can say "openai: not configured" instead of leaving the user
 // wondering why nothing failed over.
-function groundedProviders(env, impls) {
-  const all = [
-    ['claude', 'ANTHROPIC_API_KEY'],
-    ['openai', 'OPENAI_API_KEY'],
-    ['gemini', 'GEMINI_API_KEY'],
-  ];
+const PROVIDER_KEY_VARS = {
+  claude: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+};
+
+async function groundedProviders(env, impls, { fresh = false, ctx } = {}) {
+  // AI_PROVIDER_ORDER re-points the chain without a code change. The default
+  // stays quality-first (Claude → OpenAI → Gemini), but an account that keeps
+  // running dry is better served by "gemini,claude,openai": Gemini 3 grounding
+  // is free for the first 5000 prompts a month, which is more than a working
+  // band's library will ever need.
+  const order = String(env.AI_PROVIDER_ORDER || 'claude,openai,gemini')
+    .split(',').map(s => s.trim().toLowerCase()).filter(n => PROVIDER_KEY_VARS[n]);
+  const names = order.length ? order : Object.keys(PROVIDER_KEY_VARS);
+
   const providers = [];
   const skipped = [];
-  for (const [name, keyVar] of all) {
+  let configured = 0;
+  for (const name of names) {
     if (!impls[name]) continue;
-    if (env[keyVar]) providers.push([name, impls[name]]);
-    else skipped.push(`${name}: not configured (${keyVar})`);
+    const keyVar = PROVIDER_KEY_VARS[name];
+    if (!env[keyVar]) { skipped.push(`${name}: not configured (${keyVar})`); continue; }
+    configured++;
+    if (fresh) {
+      // An explicit redo means "try again now" — don't make a topped-up
+      // account wait out a cooldown set before it was topped up.
+      await aiCooldownClear(env, ctx, name);
+    } else {
+      const cd = await aiCooldownActive(env, name);
+      if (cd) {
+        const mins = Math.max(1, Math.ceil((cd.until - Date.now()) / 60000));
+        skipped.push(`${name}: skipped for ${mins} more min — ${cd.reason}`);
+        continue;
+      }
+    }
+    providers.push([name, impls[name]]);
   }
-  return { providers, skipped };
+  return { providers, skipped, configured };
+}
+
+// The provider loop shared by /ai/chart and /ai/steel-summary: walk the chain,
+// keep a drained provider out of the way of the next call, log what each call
+// actually spent, and hand back a plain payload object the caller can cache.
+async function runGroundedChain(env, ctx, { route, prompt, opts, normalize, fresh = false }) {
+  const { providers, skipped, configured } = await groundedProviders(env, {
+    claude: aiGroundedClaude, openai: aiGroundedOpenAI, gemini: aiGroundedGemini,
+  }, { fresh, ctx });
+  if (!configured) return { found: false, aiConfigured: false, reason: NO_AI_KEY_REASON };
+
+  const reasons = [];
+  for (const [name, provider] of providers) {
+    let result;
+    try {
+      result = await provider(env, prompt, opts);
+    } catch (e) {
+      const reason = aiFailureReason(name, e);
+      reasons.push(reason);
+      // Credits, key, quota, plan — nothing about the next song changes any of
+      // these, so stop asking this provider for a while. Without this, every
+      // click on a drained account pays a round trip to each dead provider
+      // before reaching the live one, and a bulk pass does it per song.
+      if (isAccountLevelAiFailure(reason)) await aiCooldownSet(env, ctx, name, reason);
+      continue;
+    }
+    // `wrangler tail` turns this into an actual per-call cost trail — the
+    // thing that was missing when the answer to "why am I out of credits?"
+    // had to be guessed from the Console's daily total.
+    const u = result.usage;
+    if (u) {
+      console.log(`[ai] ${route} ${name}/${result.model} reqs=${u.requests} searches=${u.searches} ` +
+        `in=${u.inputTokens} cachedIn=${u.cachedInputTokens || 0} out=${u.outputTokens}`);
+    }
+    const norm = normalize(result);
+    if (norm.ok) {
+      return {
+        found: true,
+        provider: result.provider,
+        model: result.model,
+        sources: result.sources || [],
+        usage: result.usage || null,
+        ...norm.value,
+      };
+    }
+    reasons.push(`${result.provider}: ${norm.reason}`);
+  }
+  return { found: false, reason: [...reasons, ...skipped].join(' \u00b7 ') || 'AI could not answer' };
 }
 
 const NO_AI_KEY_REASON = 'no AI key configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY on the worker';
@@ -2619,7 +2929,7 @@ const RETRY_PROMPT_NOTE = `
 
 IMPORTANT: a previous AI attempt at this was reviewed by the musician and marked INACCURATE. Do not repeat a plausible first take — search more thoroughly (live/officially released versions, isolated reviews, songbook/tab sources), cross-check at least two independent sources, and prefer "found": false over guessing.`;
 
-async function handleAiChart(request, env) {
+async function handleAiChart(request, env, ctx) {
   const url = new URL(request.url);
   const title = (url.searchParams.get('title') || '').trim();
   const artist = (url.searchParams.get('artist') || '').trim();
@@ -2627,61 +2937,45 @@ async function handleAiChart(request, env) {
   // retry=1: the user marked a previous chart wrong (or is explicitly
   // rebuilding) — research harder and never let this response be cached.
   const retry = url.searchParams.get('retry') === '1';
+  // The client adds `t=<now>` to bust its browser cache on a deliberate redo.
+  // Now that the cache is real and shared, that buster has to be honoured
+  // here too — otherwise "regenerate" would replay a stored answer forever.
+  const fresh = retry || url.searchParams.has('t');
   if (!title) return corsResponse(JSON.stringify({ error: 'missing title param' }), 400, request, env);
 
-  const { providers, skipped } = groundedProviders(env, {
-    claude: aiGroundedClaude, openai: aiGroundedOpenAI, gemini: aiGroundedGemini,
-  });
-  if (!providers.length) {
-    return corsResponse(JSON.stringify({
-      found: false,
-      aiConfigured: false,
-      reason: NO_AI_KEY_REASON,
-    }), 200, request, env);
+  // Cache on the question, not the URL: the key hint steers the prompt, so it
+  // belongs in the key, while `t` and the auth header must not.
+  const cacheKey = aiCacheKey('chart', [title, artist, keyHint]);
+  if (!fresh) {
+    const hit = await aiCacheGet(env, cacheKey);
+    if (hit) return aiCachedResponse(hit, request, env);
   }
 
   let prompt = buildAiChartPrompt(title, artist, keyHint);
   if (retry) prompt += RETRY_PROMPT_NOTE;
 
-  const reasons = [];
-  for (const [name, provider] of providers) {
-    let result;
-    try {
-      // Charting needs real reasoning over the sources, so it keeps the
-      // middle effort level; a retry is the user saying the cheap pass got it
-      // wrong, so that one buys more search and more thinking.
-      result = await provider(env, prompt, retry
-        ? { maxSearches: 8, effort: 'high' }
-        : { effort: 'medium' });
-    } catch (e) {
-      reasons.push(aiFailureReason(name, e));
-      continue;
-    }
-    const chart = normalizeAiChart(result.raw);
-    if (!chart) {
-      reasons.push(`${result.provider}: ${result.reason || 'could not reliably chart this song'}`);
-      continue;
-    }
-    if (chart.confidence < AI_MIN_CONFIDENCE) {
-      reasons.push(`${result.provider}: confidence too low (${chart.confidence})`);
-      continue;
-    }
-    return corsResponse(JSON.stringify({
-      found: true,
-      source: 'ai',
-      provider: result.provider,
-      model: result.model,
-      sources: result.sources || [],
-      ...chart,
-    }), 200, request, env, {
-      'Cache-Control': retry ? 'no-store' : 'public, max-age=604800',
-    });
-  }
+  const payload = await runGroundedChain(env, ctx, {
+    route: 'chart',
+    prompt,
+    fresh,
+    // Charting needs real reasoning over the sources, so it keeps the middle
+    // effort level; a retry is the user saying the cheap pass got it wrong,
+    // so that one buys more search and more thinking.
+    opts: retry ? { maxSearches: 8, effort: 'high' } : { effort: 'medium' },
+    normalize: (result) => {
+      const chart = normalizeAiChart(result.raw);
+      if (!chart) return { ok: false, reason: result.reason || 'could not reliably chart this song' };
+      if (chart.confidence < AI_MIN_CONFIDENCE) {
+        return { ok: false, reason: `confidence too low (${chart.confidence})` };
+      }
+      return { ok: true, value: { source: 'ai', ...chart } };
+    },
+  });
 
-  return corsResponse(JSON.stringify({
-    found: false,
-    reason: [...reasons, ...skipped].join(' · ') || 'AI could not reliably chart this song',
-  }), 200, request, env);
+  // Only a real answer is worth storing. Caching a failure would turn one
+  // drained-credit minute into a week of "AI could not chart this song".
+  if (payload.found) aiCachePut(env, ctx, cacheKey, payload);
+  return aiFreshResponse(payload, request, env, { noStore: !payload.found || fresh });
 }
 
 // ══ AI steel summary ═════════════════════════════════════════════════════════
@@ -2719,24 +3013,22 @@ function normalizeSteelSummary(raw) {
   return { summary, confidence: Math.min(1, Math.max(0, confidence)) };
 }
 
-async function handleAiSteelSummary(request, env) {
+async function handleAiSteelSummary(request, env, ctx) {
   const url = new URL(request.url);
   const title = (url.searchParams.get('title') || '').trim();
   const artist = (url.searchParams.get('artist') || '').trim();
   // retry=1: the user marked the previous summary wrong — research harder
   // (more searches, bigger reasoning budget) and never cache the result.
   const retry = url.searchParams.get('retry') === '1';
+  // `t=` alone is the client's "regenerate" (fresh, same prompt); retry adds
+  // "and the last answer was wrong". Both must bypass the stored answer.
+  const fresh = retry || url.searchParams.has('t');
   if (!title) return corsResponse(JSON.stringify({ error: 'missing title param' }), 400, request, env);
 
-  const { providers, skipped } = groundedProviders(env, {
-    claude: aiGroundedClaude, openai: aiGroundedOpenAI, gemini: aiGroundedGemini,
-  });
-  if (!providers.length) {
-    return corsResponse(JSON.stringify({
-      found: false,
-      aiConfigured: false,
-      reason: NO_AI_KEY_REASON,
-    }), 200, request, env);
+  const cacheKey = aiCacheKey('steel-summary', [title, artist]);
+  if (!fresh) {
+    const hit = await aiCacheGet(env, cacheKey);
+    if (hit) return aiCachedResponse(hit, request, env);
   }
 
   let prompt = buildSteelSummaryPrompt(title, artist);
@@ -2745,45 +3037,30 @@ async function handleAiSteelSummary(request, env) {
   // (already cheap) defaults.
   const summaryModel = env.ANTHROPIC_SUMMARY_MODEL || env.ANTHROPIC_MODEL || AI_DEFAULT_SUMMARY_MODEL;
 
-  const reasons = [];
-  for (const [name, provider] of providers) {
-    let result;
-    try {
-      // Far smaller output than a chart — cap tokens and searches accordingly.
-      // (Not too small: thinking/thought tokens count against the cap on both
-      // providers, and a grounded call spends real reasoning before the JSON.)
-      result = await provider(env, prompt, retry
-        ? { maxTokens: 6000, maxSearches: 6, model: summaryModel, effort: 'medium' }
-        : { maxTokens: 4000, maxSearches: 3, model: summaryModel, effort: 'low' });
-    } catch (e) {
-      reasons.push(aiFailureReason(name, e));
-      continue;
-    }
-    const norm = normalizeSteelSummary(result.raw);
-    if (!norm) {
-      reasons.push(`${result.provider}: ${result.reason || 'could not verify this song'}`);
-      continue;
-    }
-    if (norm.confidence < AI_MIN_CONFIDENCE) {
-      reasons.push(`${result.provider}: confidence too low (${norm.confidence})`);
-      continue;
-    }
-    return corsResponse(JSON.stringify({
-      found: true,
-      provider: result.provider,
-      model: result.model,
-      sources: result.sources || [],
-      summary: norm.summary,
-      confidence: norm.confidence,
-    }), 200, request, env, {
-      'Cache-Control': retry ? 'no-store' : 'public, max-age=604800',
-    });
-  }
+  const payload = await runGroundedChain(env, ctx, {
+    route: 'steel-summary',
+    prompt,
+    fresh,
+    // Far smaller output than a chart — cap tokens and searches accordingly.
+    // (Not too small: thinking tokens count against the cap on every provider,
+    // and a grounded call spends real reasoning before the JSON.) Searches are
+    // the expensive half at $10/1000, and two good sources settle "is there
+    // steel on this record" — a third rarely changed the answer.
+    opts: retry
+      ? { maxTokens: 6000, maxSearches: 5, model: summaryModel, effort: 'medium' }
+      : { maxTokens: 4000, maxSearches: 2, model: summaryModel, effort: 'low' },
+    normalize: (result) => {
+      const norm = normalizeSteelSummary(result.raw);
+      if (!norm) return { ok: false, reason: result.reason || 'could not verify this song' };
+      if (norm.confidence < AI_MIN_CONFIDENCE) {
+        return { ok: false, reason: `confidence too low (${norm.confidence})` };
+      }
+      return { ok: true, value: norm };
+    },
+  });
 
-  return corsResponse(JSON.stringify({
-    found: false,
-    reason: [...reasons, ...skipped].join(' · ') || 'AI could not verify this song',
-  }), 200, request, env);
+  if (payload.found) aiCachePut(env, ctx, cacheKey, payload);
+  return aiFreshResponse(payload, request, env, { noStore: !payload.found || fresh });
 }
 
 // ══ AI chart reading (vision) ════════════════════════════════════════════════
@@ -2982,15 +3259,24 @@ export function readConfidence(raw) {
   return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 1;
 }
 
-async function handleAiChartRead(request, env) {
-  const { providers, skipped } = groundedProviders(env, {
+async function handleAiChartRead(request, env, ctx) {
+  const { providers, skipped, configured } = await groundedProviders(env, {
     claude: chartReadClaude, openai: chartReadOpenAI, gemini: chartReadGemini,
-  });
-  if (!providers.length) {
+  }, { ctx });
+  // "No key at all" and "every key is cooling off after a billing failure"
+  // are different problems with different fixes, and the client turns the
+  // first into a pass-aborting 'no-ai-key'. Don't conflate them.
+  if (!configured) {
     return corsResponse(JSON.stringify({
       found: false,
       aiConfigured: false,
       reason: NO_AI_KEY_REASON,
+    }), 200, request, env);
+  }
+  if (!providers.length) {
+    return corsResponse(JSON.stringify({
+      found: false,
+      reason: skipped.join(' \u00b7 '),
     }), 200, request, env);
   }
 
@@ -3016,7 +3302,12 @@ async function handleAiChartRead(request, env) {
     try {
       result = await provider(env, prompt, images);
     } catch (e) {
-      reasons.push(aiFailureReason(name, e));
+      const reason = aiFailureReason(name, e);
+      reasons.push(reason);
+      // This route is the one the original bug report came from: 14 identical
+      // rows of "credit balance is too low", one paid round trip each. The
+      // cooldown makes the second of those free.
+      if (isAccountLevelAiFailure(reason)) await aiCooldownSet(env, ctx, name, reason);
       continue;
     }
     const fields = normalizeChartRead(result.raw);
@@ -3044,7 +3335,7 @@ async function handleAiChartRead(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
@@ -3084,15 +3375,15 @@ export default {
       }
 
       if (url.pathname === '/ai/chart') {
-        return await handleAiChart(request, env);
+        return await handleAiChart(request, env, ctx);
       }
 
       if (url.pathname === '/ai/chart-read' && request.method === 'POST') {
-        return await handleAiChartRead(request, env);
+        return await handleAiChartRead(request, env, ctx);
       }
 
       if (url.pathname === '/ai/steel-summary') {
-        return await handleAiSteelSummary(request, env);
+        return await handleAiSteelSummary(request, env, ctx);
       }
 
       if (url.pathname === '/spotify/search-batch' && request.method === 'POST') {

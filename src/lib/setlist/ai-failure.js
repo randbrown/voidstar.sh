@@ -30,6 +30,18 @@ const ACCOUNT_LEVEL_PATTERNS = [
   /quota exceeded|exceeded your current quota|usage limit|spend limit/i,
 ];
 
+// What to actually DO about an account-level failure. The provider sentences
+// say "your balance is too low"; they do not say the thing that trips people
+// up, which is that a Claude Pro/Max or ChatGPT Plus/Pro subscription funds
+// the consumer apps and NOT an API key — Console/Platform billing is a
+// separate prepaid balance, spent from the first request. Someone with both
+// subscriptions can be paying $400 a month and still have a $0 API balance.
+export const ACCOUNT_LEVEL_ADVICE =
+  'These are API keys, not app subscriptions: a Claude Pro/Max or ChatGPT Plus/Pro plan does not fund one. '
+  + 'Top up (and switch on auto-reload) at console.anthropic.com → Billing or platform.openai.com → Billing, '
+  + 'or set GEMINI_API_KEY on the worker — Gemini 3 grounding is free for the first 5,000 prompts a month, '
+  + 'which is more than a library-wide pass needs.';
+
 export function isAccountLevelAiFailure(reason) {
   const text = String(reason || '');
   if (!text) return false;

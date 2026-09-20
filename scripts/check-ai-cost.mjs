@@ -13,9 +13,12 @@
 
 import {
   claudeModelProfile,
+  geminiModelProfile,
+  aiCacheKey,
   AI_DEFAULT_MODEL,
   AI_DEFAULT_SUMMARY_MODEL,
   AI_DEFAULT_READ_MODEL,
+  AI_DEFAULT_GEMINI_MODEL,
 } from '../workers/setlist-sync/index.js';
 import {
   isAccountLevelAiFailure,
@@ -68,6 +71,44 @@ check('a hand-set Opus model still gets the modern shape',
   opus.searchTool === 'web_search_20260209' && opus.adaptiveThinking && opus.supportsEffort);
 check('an empty/undefined model does not crash the profile',
   claudeModelProfile(undefined).searchTool === 'web_search_20260209');
+
+console.log('\ngemini tier + request shape');
+// Gemini is the chain's free backstop, and which generation it points at
+// decides whether it is free: 3.x grounding is 5000 prompts/month free then
+// $14/1000; the 2.5 family is on the old $35/1000 tier — the worst grounding
+// rate of the three providers, in the slot whose job is to cost nothing.
+check('gemini defaults to a 3.x-or-later model',
+  /gemini-(?:[3-9]|\d\d)/i.test(AI_DEFAULT_GEMINI_MODEL), AI_DEFAULT_GEMINI_MODEL);
+// The two generations do NOT take the same thinking knob, and sending 3.x
+// both is an error. Sending NEITHER — which is what shipped — let a grounded
+// 2.5-flash call think until it blew the timeout.
+check('gemini 3.x gets thinkingLevel, not thinkingBudget',
+  geminiModelProfile('gemini-3.5-flash').thinkingConfig.thinkingLevel === 'low'
+  && geminiModelProfile('gemini-3.5-flash').thinkingConfig.thinkingBudget === undefined);
+check('gemini 2.5 gets thinkingBudget, not thinkingLevel',
+  typeof geminiModelProfile('gemini-2.5-flash').thinkingConfig.thinkingBudget === 'number'
+  && geminiModelProfile('gemini-2.5-flash').thinkingConfig.thinkingLevel === undefined);
+check('an empty/undefined gemini model does not crash the profile',
+  typeof geminiModelProfile(undefined).thinkingConfig === 'object');
+
+console.log('\nshared cache keys');
+// The cache this replaces was each browser's own HTTP cache, keyed on the
+// exact URL — so two spellings of one title were two paid answers, and a
+// phone paid again for what the laptop already bought.
+check('case and whitespace do not fork the cache',
+  aiCacheKey('steel-summary', ['Blue Eyes Crying in the Rain', 'Willie Nelson'])
+  === aiCacheKey('steel-summary', ['  blue eyes   crying IN the rain ', 'willie nelson']));
+check('different songs do not collide',
+  aiCacheKey('steel-summary', ['A Song', 'X'])
+  !== aiCacheKey('steel-summary', ['A Song', 'Y']));
+check('routes do not share a namespace',
+  aiCacheKey('chart', ['S', 'A']) !== aiCacheKey('steel-summary', ['S', 'A']));
+check('a missing artist is stable, not undefined-stringified',
+  aiCacheKey('chart', ['S', undefined]) === aiCacheKey('chart', ['S', '']));
+// The key hint steers the chart prompt, so it has to be part of the key —
+// otherwise asking for the same song in a different key replays the old one.
+check('the chart key hint is part of the key',
+  aiCacheKey('chart', ['S', 'A', 'G']) !== aiCacheKey('chart', ['S', 'A', 'Bb']));
 
 console.log('\naccount-level failure detection');
 // The exact string from the reported screenshot.
