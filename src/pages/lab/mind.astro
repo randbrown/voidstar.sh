@@ -699,17 +699,153 @@ const buildStamp = readBuildStamp();
     .mn-daily-claims { flex-direction: column; align-items: flex-start; gap: 0.4rem; }
 
     /* ── Tag row (editor) ── */
-    .mn-tagrow { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; }
+    .mn-tagrow { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; align-items: center; }
+    /* "common" label separating this note's tags from the one-click suggestions */
+    .mn-tagrow-sep {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-left: 0.35rem;
+      padding-right: 0.1rem;
+    }
+    /* Suggestions read as offers, not as tags the note already carries. */
+    .mn-tag-suggest { border-style: dashed; color: var(--text-dim); }
+    .mn-tag-suggest:hover {
+      border-style: solid;
+      border-color: color-mix(in srgb, var(--cyan) 45%, var(--border));
+      color: var(--cyan);
+    }
 
-    /* ── Editor action bar (undo / redo / discard) ── */
+    /* ── Horizon ── */
+    .mn-horizonrow { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.7rem; }
+    .mn-horizon-plant { border-style: dashed; }
+    .mn-horizon-chip {
+      background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+      border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+      color: var(--text);
+    }
+    .mn-horizon-chip-ripe {
+      border-color: color-mix(in srgb, var(--amber) 60%, var(--border));
+      color: var(--amber);
+    }
+    .mn-horizon-chip-ripe b { color: var(--amber); font-weight: 600; }
+    .mn-minihorizon { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); }
+    .mn-minihorizon-ripe { color: var(--amber); }
+
+    /* Editor banner — same shape as the daily-note claim. */
+    .mn-horizon-claim {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      flex: 1 1 auto;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+      border-radius: var(--radius-lg, 10px);
+      padding: 0.35rem 0.6rem;
+    }
+    .mn-horizon-claim-label { flex: 1 1 auto; min-width: 0; }
+    .mn-horizon-claim b { color: var(--cyan); font-weight: 600; }
+    .mn-horizon-ripe { border-color: color-mix(in srgb, var(--amber) 55%, var(--border)); }
+    .mn-horizon-ripe .mn-horizon-claim-label b { color: var(--amber); }
+    .mn-horizon-done { opacity: 0.7; }
+
+    /* The horizon page */
+    .mn-horizon-lead {
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: var(--text-muted);
+      margin: 0.2rem 0 1rem;
+      max-width: 46rem;
+    }
+    .mn-horizon-band { margin-bottom: 1.4rem; }
+    .mn-horizon-bandhead {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.3rem;
+      margin-bottom: 0.6rem;
+    }
+    .mn-horizon-bandtitle {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--cyan);
+    }
+    .mn-horizon-bandhint { font-size: 0.74rem; color: var(--text-dim); }
+    .mn-horizon-year {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      letter-spacing: 0.1em;
+      margin: 0.7rem 0 0.35rem;
+    }
+    .mn-horizon-row {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg, 10px);
+      padding: 0.6rem 0.7rem;
+      margin-bottom: 0.5rem;
+      background: var(--surface);
+    }
+    .mn-horizon-head { display: flex; align-items: center; gap: 0.45rem; }
+    .mn-horizon-glyph {
+      font-family: var(--font-mono);
+      color: var(--accent);
+      flex: 0 0 auto;
+    }
+    .mn-horizon-title {
+      /* .mn-btn is a centering inline-flex — a title reads as a heading, so
+         pull it back to the left edge next to its kind glyph. */
+      justify-content: flex-start;
+      text-align: left;
+      padding: 0.1rem 0;
+      font-size: 0.95rem;
+      color: var(--text);
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mn-horizon-title:hover { color: var(--cyan); background: transparent; }
+    .mn-horizon-snippet {
+      font-size: 0.8rem;
+      line-height: 1.45;
+      color: var(--text-muted);
+      margin: 0.25rem 0 0.35rem;
+    }
+    .mn-horizon-meta {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-dim);
+    }
+    .mn-horizon-when { color: var(--cyan); }
+    .mn-horizon-acts { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.5rem; }
+    .mn-horizon-chiprow { margin-bottom: 0.4rem; }
+
+    /* ── Editor action bar (undo / redo / stamp / discard) ── */
     .mn-editor-toolbar {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 0.35rem;
       margin-bottom: 0.4rem;
     }
     .mn-editor-toolbar-spacer { flex: 1 1 auto; }
     .mn-ed-histbtn { font-size: 1.05rem; line-height: 1; }
+    .mn-ed-stamp { color: var(--text-muted); white-space: nowrap; }
+    .mn-ed-stamp:hover { color: var(--cyan); }
+    .mn-ed-stampfmt { font-size: 0.75rem; line-height: 1; padding-left: 0.3rem; padding-right: 0.3rem; }
     .mn-btn:disabled, .mn-btn[disabled] {
       opacity: 0.35;
       cursor: default;

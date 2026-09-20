@@ -244,7 +244,7 @@ function fileCapturePlugin(onFiles) {
 }
 
 // Create an editor bound to `mount`. Returns { view, getMarkdown, insertImage,
-// insertText, destroy }. `onChange` fires on every doc change (caller
+// insertText, insertRun, caretContext, destroy }. `onChange` fires on every doc change (caller
 // debounces the actual save); `onFiles(files, view)` receives pasted/dropped
 // files so the view layer can create attachments and insert image nodes.
 export function createEditor(mount, { markdown = '', onChange, onFiles, onWikiLink, placeholder = 'write…' } = {}) {
@@ -327,6 +327,36 @@ export function createEditor(mount, { markdown = '', onChange, onFiles, onWikiLi
     insertText(text) {
       const tr = view.state.tr.insertText(text).scrollIntoView();
       view.dispatch(tr);
+    },
+    // Text either side of the caret within its own text block — lets a caller
+    // (the datetime stamp) shape what it inserts by whether the cursor sits
+    // mid-sentence or on a line of its own.
+    caretContext() {
+      const { $from } = view.state.selection;
+      const parent = $from.parent;
+      if (!parent || !parent.isTextblock) return { before: '', after: '' };
+      return {
+        before: parent.textBetween(0, $from.parentOffset, ' ', ' '),
+        after: parent.textBetween($from.parentOffset, parent.content.size, ' ', ' '),
+      };
+    },
+    // Insert `lead` + `text` + `trail` as one undoable step, with `text`
+    // optionally carrying the strong mark. A caller can't get bold by typing
+    // "**…**" — the markdown serializer escapes literal asterisks in a text
+    // node — so the mark has to be applied here. The stored mark is cleared
+    // afterwards so the next keystroke isn't bold too.
+    insertRun({ lead = '', text = '', bold = false, trail = '' }) {
+      const full = `${lead}${text}${trail}`;
+      if (!full) return;
+      const { from, to } = view.state.selection;
+      let tr = view.state.tr.insertText(full, from, to);
+      if (bold && text) {
+        const start = from + lead.length;
+        tr = tr.addMark(start, start + text.length, schema.marks.strong.create());
+        tr = tr.removeStoredMark(schema.marks.strong);
+      }
+      view.dispatch(tr.scrollIntoView());
+      view.focus();
     },
     insertLink(label, href) {
       const node = schema.text(label, [schema.marks.link.create({ href })]);
