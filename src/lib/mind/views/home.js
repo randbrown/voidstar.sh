@@ -26,6 +26,8 @@ import {
 } from '../gdrive-sync.js';
 import { pushPendingAttachments } from '../attachments-drive.js';
 import { startSketchNote } from '../sketch.js';
+import { countHorizon } from './horizon.js';
+import { horizonOf, isRipe, horizonLabel } from '../horizon.js';
 import { navigate, refresh } from '../app.js';
 import { el, esc, btn, emptyState, timeAgo, textPrompt, confirmBox, choiceBox, openNoteWindow } from '../ui.js';
 
@@ -129,12 +131,27 @@ export async function renderHome(root) {
   // One-tap capture into each ongoing note (#ongoing tag) — most recently
   // touched first, capped so a long list can't crowd out the filter chips.
   const ongoing = (await listOngoingNotes()).slice(0, 6);
+  // Horizon: how many planted notes have come due. This chip IS the surfacing
+  // mechanism — a horizon never notifies, so if nothing said "2 ripe" here you
+  // would only find them by going to look.
+  const horizon = await countHorizon();
   let tagsOpen = localStorage.getItem(TAGS_OPEN_KEY) === '1';
   const drawChips = () => {
     chips.innerHTML = '';
     for (const n of ongoing) {
       const c = btn(`&#65291; ${esc(n.title)}`, 'mn-chip mn-ongoing-chip', () => openQuickAdd(n.id));
       c.title = `add to "${n.title}" (ongoing note)`;
+      chips.appendChild(c);
+    }
+    if (horizon.open || horizon.settled) {
+      const c = btn(
+        `&#128301; horizon${horizon.ripe ? ` <b>${horizon.ripe}</b>` : ''}`,
+        `mn-chip mn-horizon-chip ${horizon.ripe ? 'mn-horizon-chip-ripe' : ''}`,
+        () => navigate('#horizon'),
+      );
+      c.title = horizon.ripe
+        ? `${horizon.ripe} note${horizon.ripe === 1 ? '' : 's'} you asked to be handed back are ready`
+        : `${horizon.open} note${horizon.open === 1 ? '' : 's'} planted for later`;
       chips.appendChild(c);
     }
     if (tags.includes('template')) {
@@ -611,6 +628,13 @@ function noteCard(entry, folders, dimmed, selCtx = null) {
   if (entry.kinds.includes('audio')) metaBits.push('&#127908;');
   if (entry.kinds.includes('pdf')) metaBits.push('&#128196;');
   for (const t of n.tags || []) metaBits.push(`<span class="mn-minitag">#${esc(t)}</span>`);
+  // A planted note wears its horizon in the list too — otherwise the only
+  // place you'd learn a note is on the arc is by opening it.
+  const h = horizonOf(n);
+  if (h) {
+    metaBits.push(`<span class="mn-minihorizon ${isRipe(h) ? 'mn-minihorizon-ripe' : ''}">`
+      + `&#128301; ${esc(h.settledAt ? 'settled' : horizonLabel(h))}</span>`);
+  }
   if (metaBits.length) card.appendChild(el('div', 'mn-card-meta', metaBits.join(' ')));
 
   return card;

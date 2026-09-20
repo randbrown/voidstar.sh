@@ -18,6 +18,9 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
 | Task quick-add | `views/task-add.js` | The add row shared by the home TODO card and the tasks view. Enter is **never blocking**: it saves, clears, re-renders and refocuses immediately, and `armReminder` (which asks for notification permission) rides along un-awaited — an unanswered permission prompt used to leave Enter looking dead while each retry silently minted another task. A hint under the box previews what will be created (parsed reminder + the text left after a "when" phrase is lifted out), so the transformation is visible before you commit it. |
 | Task screenshots | `views/task-attach.js` | Images attached **directly to a TODO item**: paste into the add box or onto a row, drop a file, or the 📷 picker. A task-owned attachment is an ordinary attachment record with `taskId` set instead of `noteId` (exactly one of the two), so it inherits blob storage, the OCR queue (screenshot text is searchable under the task), Drive binary sync, tombstones — and the annotation canvas via `#task/<id>/annotate/<attId>`. Deleting a task — from the tasks view, or by removing its checkbox line from the source note — takes its screenshots with it (`trashTasksAndAttachments`, batched). |
 | Tasks-in-notes | `tasks-sync.js` | Note body is canonical for note-sourced tasks; records (id = the `<!--t:id-->` marker) are a materialized index reconciled on save. Checking from a list view rewrites the body line first (`setTaskDoneEverywhere`); editing its text does the same (`setTaskTextEverywhere`) — a record-only edit would revert on the note's next re-parse. `ensureTaskIds` re-stamps a copy/pasted checkbox (duplicate within the doc, or an id belonging to another note) so two lines never share one record. Completed tasks strike through for 24 h, then archive (`rollOffCompletedTasks`). |
+| Horizon | `horizon.js`, `views/horizon.js` | The long arc: a note planted as a **question / prediction / idea** with a date it should be handed back — months or years out. Pure core (`horizon.js`, tested by `scripts/check-mind-horizon.mjs`) + all the DOM in `views/horizon.js` (the `#horizon` page, the setter sheet, the editor banner). Stored in `note.meta.horizon`, so it rides sync with no new store/shard/schema surface. See **Horizon** below. |
+| Tags | `tags.js` + `views/editor.js` | `normalizeTag` is the single definition of what a tag string becomes (`#Big Idea ` → `big-idea`); `rankTags` scores the tags you actually use (count, with a use in the last 45 days counting double) so the editor can offer them as **one-click chips** instead of making you type. Tested by `scripts/check-mind-tags.mjs`. |
+| Datetime stamp | `stamp.js` + `views/editor.js` | The editor toolbar's **⏱ stamp** button drops "now" into the body as text, in one of four hand-rolled (never locale-derived — two devices sharing a note must read the same string) formats; `▾` picks the format and it sticks per device (`voidstar.mind.stampFormat`). The shape follows the caret: bold heading on a line of its own, inline timestamp mid-sentence. The bold is reported as a flag, not baked in as `**…**` — literal asterisks in a text node serialize back out escaped. Tested by `scripts/check-mind-stamp.mjs`. |
 | Folders | in `store.js` + `views/home.js` | Surrogate-keyed hierarchy (`{id, name, parentId}`); notes/tasklists carry `folderId`. Soft filter: out-of-scope content renders dimmed ("elsewhere"), never hidden. Per-folder TODO lists are lazy with deterministic ids (`todo-<folderId>`) so devices converge. |
 | Search | `search.js` | In-memory index over title/body/OCR text/transcripts/tags + task text; token AND-match + kind/tag filters behind `query(q, filters)`. Rebuilt lazily after writes. |
 | Voice | `voice.js`, `voice-capture.js`, `audio-out.js` | Web Speech dictation (continuous, restart loop, final dedupe) + MediaRecorder on the same mic; keep-audio / insert-transcript toggles; record-only fallback on contention. An **inline mic picker** (`qualia/devices.js` `wirePicker`) sits on **every** voice-recorder surface — the in-note voice bar (`editor.js`) and the hands-free capture view (`capture.js`) — so the input is chosen in place, never via settings; it persists to `voidstar.mind.micId`, refreshes device labels once permission is granted, shows only when >1 mic exists (the capture view; the voice bar always shows), and **switching mid-recording restarts on the new device** (the editor commits the in-progress segment first so nothing is lost). Speaker via `setSinkId` (hidden on Safari). |
@@ -174,7 +177,8 @@ Source: `src/lib/mind/` · page: `src/pages/lab/mind.astro` · manifest:
   (`20260708-143207-…`). Rename prefills the first body line (`autoTitle` flag).
 - Note links are ordinary markdown links to `#note/<id>` (id-based —
   rename-proof). Backlinks are computed by scan (`backlinksTo`).
-- localStorage namespace `voidstar.mind.*`.
+- localStorage namespace `voidstar.mind.*` (per-device habits, never synced —
+  e.g. `stampFormat`, `horizonSettledOpen`, `dockPos`, `folder`, `sort`).
 
 ## External tasks (setlist todo bridge)
 
@@ -354,6 +358,42 @@ only when the mind app next runs on that device.
   **location** triggers are impossible on web (need an OS automation — Phase C).
   iOS needs an installed PWA (16.4+) for notifications; the app degrades
   gracefully where `Notification` is unavailable (reminder still stored/synced).
+
+## Horizon (the long arc)
+
+The counterpart to a task reminder. A **task** asks "do this"; a **horizon**
+asks "was I right?" — you plant a question, a prediction or an idea today and
+say roughly when you want it handed back: three months, two years, someday.
+Nothing is due, nothing nags, and nothing fires a notification.
+
+- **Storage**: `note.meta.horizon = { at, kind, plantedAt, settledAt }` (`at: 0`
+  = *someday*, `kind` ∈ `question|prediction|idea`). `meta` is already a
+  **`NOTE_FILL_FIELDS`** member, so a stale device can never blank a horizon in
+  a merge, and the whole feature rides Drive sync with **no new store, shard or
+  schema surface** — the same trick `meta.daily` and `meta.ongoing` use.
+  Removing a horizon that was the *only* thing in `meta` leaves an empty object,
+  which is a blank fill-field — so `clearHorizonMeta` reports `empty` and the
+  caller pairs it with `store.markCleared(note, 'meta')`, or the merge refills
+  it from an older copy and the note un-clears itself (same trap as `folderId`
+  and the last tag).
+- **Deliberately not a tag.** Membership *could* have been `#horizon`, matching
+  `#template` / `#ongoing`. It isn't, for two reasons: the date is the whole
+  point and a tag can't sort an arc, and membership living in two places drifts
+  (remove the tag, keep the date, and the two disagree). A plain `#tag` remains
+  the right tool for "file this with the others"; a horizon is for "hand this
+  back to me later."
+- **Surfacing is the feature.** A horizon never notifies, so if nothing said so
+  you'd only find a ripe note by going to look. Three places do: the **home
+  filter chip** (`🔭 horizon`, amber with a count once something is ripe), a
+  **badge on the note row** in the list, and the **banner** at the top of the
+  note itself.
+- **The `#horizon` page** reads as one arc — **ripe** (date arrived, oldest
+  first: the thing you've sat on longest reads first), **growing** (still ahead,
+  split by calendar year), **someday** (undated), and a collapsed **settled**
+  record of what you thought and when. Each row offers *settle* / *+1 year* /
+  *edit* / *remove*; a `+1 year` on something already overdue measures from
+  today, not from the stale date.
+- Also reachable from the command palette (`Ctrl/Cmd-K` → "Horizon").
 
 ## Import / export
 

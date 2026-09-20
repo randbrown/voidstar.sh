@@ -29,6 +29,12 @@ const COMMANDS = [
   { icon: '✏️', label: 'New sketch', keywords: 'new sketch draw drawing doodle canvas whiteboard', run: () => startSketchNote() },
   { icon: '📅', label: "Today's daily note", keywords: 'today daily journal', run: openDailyNote },
   { icon: '✅', label: 'Tasks', keywords: 'tasks todo', run: () => navigate('#tasks') },
+  {
+    icon: '🔭',
+    label: 'Horizon',
+    keywords: 'horizon revisit later someday future prediction question idea arc remind',
+    run: () => navigate('#horizon'),
+  },
   { icon: '🎙', label: 'Voice capture', keywords: 'voice capture dictate record', run: () => navigate('#capture/voice/note') },
   { icon: '⚙️', label: 'Settings', keywords: 'settings preferences drive sync', run: () => navigate('#settings') },
   { icon: '🗑', label: 'Trash', keywords: 'trash deleted', run: () => navigate('#trash') },

@@ -17,6 +17,7 @@ import { renderTasks } from './views/tasks.js';
 import { renderTrash } from './views/trash.js';
 import { renderSettings } from './views/settings.js';
 import { renderCapture } from './views/capture.js';
+import { renderHorizon } from './views/horizon.js';
 import { initReminderScheduler } from './reminders.js';
 import { wireCommandPalette } from './palette.js';
 
@@ -81,7 +82,8 @@ function renderDock() {
 
 function updateDockActive(view) {
   if (!_dock) return;
-  const active = view === 'trash' ? 'settings' : view === 'note' ? 'home' : view;
+  const active = view === 'trash' ? 'settings'
+    : (view === 'note' || view === 'horizon') ? 'home' : view;
   _dock.querySelectorAll('.mn-dock-btn').forEach(b => {
     b.classList.toggle('mn-dock-on', b.dataset.dock === active);
   });
@@ -172,6 +174,8 @@ async function route() {
         await renderCapture(_root, id, extra);
         break;
       }
+      // The long arc: questions / predictions / ideas planted for later.
+      case 'horizon': await renderHorizon(_root); break;
       case 'trash': await renderTrash(_root); break;
       case 'settings': await renderSettings(_root); break;
       default: await renderHome(_root);

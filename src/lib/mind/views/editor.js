@@ -12,6 +12,9 @@ import { pushPendingAttachments } from '../attachments-drive.js';
 import { mountAnnotationOverlay } from '../annotation.js';
 import { pickSketchPaper, createSketchAttachment } from '../sketch.js';
 import { query } from '../search.js';
+import { normalizeTag, rankTags } from '../tags.js';
+import { STAMP_FORMATS, DEFAULT_STAMP_FORMAT, formatStamp, stampInsertion } from '../stamp.js';
+import { horizonSheet, horizonBanner } from './horizon.js';
 import { listOngoingNotes, fileNoteInto } from '../ongoing-actions.js';
 import { isSupported as speechSupported } from '../voice.js';
 import { applySink } from '../audio-out.js';
@@ -20,10 +23,13 @@ import { wirePicker } from '../../qualia/devices.js';
 import { navigate, refresh } from '../app.js';
 import { getNoteNav } from '../note-nav.js';
 import { listNoteVersions, isConnected as driveConnected } from '../gdrive-sync.js';
-import { el, esc, btn, topBar, textPrompt, confirmBox, timeAgo, openNoteWindow } from '../ui.js';
+import { el, esc, btn, topBar, textPrompt, confirmBox, choiceBox, timeAgo, openNoteWindow } from '../ui.js';
 
 const KEEP_AUDIO_KEY = 'voidstar.mind.voice.keepAudio';
 const KEEP_TEXT_KEY = 'voidstar.mind.voice.keepTranscript';
+// Which datetime-stamp format the toolbar's stamp button drops. Per device,
+// never synced — it's a typing habit, not note content.
+const STAMP_FORMAT_KEY = 'voidstar.mind.stampFormat';
 
 const AUTOSAVE_MS = 800;
 
@@ -176,8 +182,64 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
     root.appendChild(claim);
   }
 
+  // ── Horizon ──
+  // A note can be planted on the horizon: a question, prediction or idea you
+  // want handed back months or years out. Unplanted, it's one dim chip;
+  // planted, the banner says what it is, when it comes back, and offers the
+  // one-tap settle / push-out. Writes go through save() so they rebase on a
+  // record another device may have advanced (see save() below).
+  const horizonRow = el('div', 'mn-horizonrow');
+
+  // The sheet writes straight to the store, so land any pending autosave
+  // first and adopt the record it wrote — otherwise this session's snapshot
+  // goes stale and save() would mint a pointless conflict copy.
+  async function openHorizonSheet() {
+    await flushPending();
+    const fresh = await store.getNote(note.id);
+    if (fresh && !fresh.deletedAt) { note = fresh; lastKnownUpdatedAt = fresh.updatedAt; }
+    horizonSheet(note, async () => {
+      const after = await store.getNote(note.id);
+      if (after && !after.deletedAt) { note = after; lastKnownUpdatedAt = after.updatedAt; }
+      drawHorizon();
+    });
+  }
+
+  const drawHorizon = () => {
+    horizonRow.innerHTML = '';
+    const banner = horizonBanner(note, {
+      // settle / push-out / reopen ride the editor's own save(), which rebases
+      // on the live record and carries the current body along.
+      onChange: async (meta) => {
+        note = { ...note, meta };
+        await save({ meta });
+        drawHorizon();
+      },
+      onEdit: openHorizonSheet,
+    });
+    if (banner) { horizonRow.appendChild(banner); return; }
+    const plant = btn('&#128301; horizon&hellip;', 'mn-chip mn-horizon-plant', openHorizonSheet);
+    plant.title = 'hand this note back to yourself months or years from now';
+    horizonRow.appendChild(plant);
+  };
+  drawHorizon();
+  root.appendChild(horizonRow);
+
   // ── Tags ──
+  // The one-click "common" chips are the tags you actually use (frequency,
+  // weighted toward the last few weeks — see tags.js), minus the ones already
+  // on this note. Typing a tag is the slow path on a phone; this is the fast
+  // one, and it keeps spellings from forking (#gear vs #Gear vs #gear-notes).
+  const allNotesForTags = await store.getAllNotes();
   const tagRow = el('div', 'mn-tagrow');
+
+  const addTag = async (raw) => {
+    const tag = normalizeTag(raw);
+    if (!tag || (note.tags || []).includes(tag)) return;
+    note = { ...note, tags: [...(note.tags || []), tag] };
+    await save({ tags: note.tags });
+    drawTags();
+  };
+
   const drawTags = () => {
     tagRow.innerHTML = '';
     for (const t of note.tags || []) {
@@ -195,18 +257,19 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
       tagRow.appendChild(chip);
     }
     const add = btn('+ tag', 'mn-chip', () => {
-      textPrompt({
-        title: 'add tag', placeholder: 'tag',
-        onOk: async (v) => {
-          const tag = v.replace(/^#/, '').toLowerCase().replace(/\s+/g, '-');
-          if (!tag || note.tags.includes(tag)) return;
-          note = { ...note, tags: [...note.tags, tag] };
-          await save({ tags: note.tags });
-          drawTags();
-        },
-      });
+      textPrompt({ title: 'add tag', placeholder: 'tag', onOk: (v) => addTag(v) });
     });
     tagRow.appendChild(add);
+
+    const common = rankTags(allNotesForTags, { exclude: note.tags || [] });
+    if (common.length) {
+      tagRow.appendChild(el('span', 'mn-tagrow-sep', 'common'));
+      for (const t of common) {
+        const c = btn(`#${esc(t)}`, 'mn-chip mn-tag-suggest', () => addTag(t));
+        c.title = `tag this note #${t}`;
+        tagRow.appendChild(c);
+      }
+    }
   };
   drawTags();
   root.appendChild(tagRow);
@@ -343,6 +406,46 @@ export async function renderEditor(root, noteId, { highlight = '' } = {}) {
   redoBtn.title = 'redo (Ctrl+Shift+Z)';
   edToolbar.appendChild(undoBtn);
   edToolbar.appendChild(redoBtn);
+
+  // ── Datetime stamp ──
+  // Drop "now" into the body as text — a log line, an "as of …", the head of a
+  // journal entry. The shape follows the caret (bold heading on a line of its
+  // own, inline timestamp mid-sentence; see stamp.js), and ▾ picks the format,
+  // which then sticks as this device's default.
+  const stampKey = () => {
+    const k = localStorage.getItem(STAMP_FORMAT_KEY);
+    return STAMP_FORMATS.some(f => f.key === k) ? k : DEFAULT_STAMP_FORMAT;
+  };
+  const insertStamp = (key) => {
+    editor.insertRun(stampInsertion(Date.now(), key, editor.caretContext()));
+  };
+  const stampBtn = btn('&#128336; stamp', 'mn-btn-ghost mn-ed-stamp', () => insertStamp(stampKey()));
+  const syncStampTitle = () => {
+    stampBtn.title = `insert the date & time — ${formatStamp(Date.now(), stampKey())}`;
+  };
+  syncStampTitle();
+  const stampFmtBtn = btn('&#9662;', 'mn-btn-icon mn-ed-stampfmt', () => {
+    const now = Date.now();
+    const current = stampKey();
+    choiceBox({
+      title: 'datetime stamp',
+      message: 'Pick a format — it is inserted now and becomes this device’s default.',
+      options: STAMP_FORMATS.map(f => ({
+        label: formatStamp(now, f.key),
+        hint: f.key === current ? `${f.label} · current` : f.label,
+        primary: f.key === current,
+        onPick: () => {
+          localStorage.setItem(STAMP_FORMAT_KEY, f.key);
+          syncStampTitle();
+          insertStamp(f.key);
+        },
+      })),
+    });
+  });
+  stampFmtBtn.title = 'choose the stamp format';
+  edToolbar.appendChild(stampBtn);
+  edToolbar.appendChild(stampFmtBtn);
+
   edToolbar.appendChild(el('span', 'mn-editor-toolbar-spacer'));
   // Capture-then-file: append this note's content to another note (ongoing
   // notes offered first), move its attachments/tasks along, trash this note.
