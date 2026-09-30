@@ -15,12 +15,34 @@
 // Nostr/WebRTC ./entangle-transport.js — same interface).
 import { createTransport } from './entangle-transport-cf.js';
 import { T, APP_ID, readRoomFromHash } from './entangle-protocol.js';
-import { poseFeatures, packFeatures, packSkeleton, unpackSkeleton, orientSkeleton, orientMatrix, SKELETON_BONES } from './pose-features.js';
+import { poseFeatures, upperBodyConfidence, packFeatures, packSkeleton, unpackSkeleton, orientSkeleton, orientMatrix, SKELETON_BONES } from './pose-features.js';
 
 const POSE_INTERVAL_MS = 66;     // ~15Hz upstream
 const PARAM_DEBOUNCE_MS = 40;
 const PREFS_KEY = 'voidstar.entangle.cam';
 const CAM_H_MIN = 20, CAM_H_MAX = 70;   // preview height, vh
+
+// Selfie tuning. Audience phones are held at arm's length in the front camera,
+// usually in a dark room — the opposite of the performer's framed, lit stage
+// camera — so the phone runs its own pose defaults. Chosen by measurement, not
+// guesswork (see docs/entanglement.md → "Participant (selfie) tuning"):
+const SELFIE = {
+  faceAnchor: true,     // BlazeFace gates the body + keeps the head tracked (the big win)
+  model: 'full',        // more correct joints than lite on dim close-ups
+  numPoses: 1,          // the phone's owner; no background people / ghost picks
+  pad: 0.1,             // a small letterbox helps a face-filled frame; more hurts in the dark
+  fps: 15,
+  smoothing: 0.6,
+  lingerMs: 1200,       // ride out short dropouts in the dark
+  width: 1280,          // plenty for a 256² model; cheaper capture
+  frameRate: 24,        // lets auto-exposure use longer shutters in low light
+};
+// The software low-light boost is deliberately OFF here: on dark selfies it
+// cost accuracy (a linear lift amplifies sensor noise and clips highlights
+// without adding information). Thresholds stay at pose.js's 0.05 — raising
+// them lost real tracks without removing the garbage; the face anchor does that.
+// If `full` can't keep up on this phone, step down to `lite` once.
+const SLOW_INFER_MS = 140, SLOW_CHECK_MS = 4000;
 
 export async function initEntangleClient(root) {
   const roomId = readRoomFromHash();
@@ -119,7 +141,7 @@ export async function initEntangleClient(root) {
   // the camera; camCanvas is the single visible surface — it composites the
   // camera image AND the pose overlay through the SAME orientation transform,
   // so what the participant sees is exactly what the performer receives.
-  let camWrap = null, camCanvas = null, camCtx = null;
+  let camWrap = null, camCanvas = null, camCtx = null, trackEl = null;
 
   async function startPose() {
     if (poseOn) return;
@@ -129,22 +151,49 @@ export async function initEntangleClient(root) {
     try {
       const { createPose } = await import('./pose.js');     // lazy: only when needed
       pose = createPose();
-      pose.setDetectFps(20);
+      // All set before startCamera → baked into the first landmarker build.
+      await pose.setNumPoses(SELFIE.numPoses);
+      await pose.setModelQuality(SELFIE.model);
+      pose.setFaceAnchor(SELFIE.faceAnchor);
+      pose.setInputPad(SELFIE.pad);
+      pose.setDetectFps(SELFIE.fps);
+      pose.setSmoothing(SELFIE.smoothing);
+      pose.setLingerMs(SELFIE.lingerMs);
       video = document.createElement('video');
       video.playsInline = true; video.muted = true;
       video.className = 'ent-cam-video';                     // sits behind camCanvas (decode source)
       if (camWrap) camWrap.insertBefore(video, camWrap.firstChild);
-      await pose.startCamera({ video, facing: 'user' });
+      await pose.startCamera({ video, facing: 'user', width: SELFIE.width, frameRate: SELFIE.frameRate, zoomOut: true });
       setStatus('Entangled — move and the field responds.', 'ok');
+      // Timed from the first measured detection, not camera start — the model
+      // download on venue wifi can take longer than the check window.
+      let measuredAt = 0, slowChecked = false;
       const loop = () => {
         poseRAF = requestAnimationFrame(loop);
-        const person = pose.frame.people?.[0] || null;
+        const p = pose;
+        if (!p) return;
+        const person = p.frame.people?.[0] || null;
         const raw = person ? packSkeleton(person) : null;
+        // Selfies never show hips, so score the upper body; a face-only track
+        // (body rejected by the anchor) still steers crowd x/y/sway/energy.
+        const conf = person ? Math.max(upperBodyConfidence(person), 0.5 * (person.head?.visibility || 0)) : 0;
         drawCamera(person, raw);                             // every frame → smooth preview
         const now = performance.now();
+        if (!slowChecked && !measuredAt && p.getInferMs() > 0) measuredAt = now;
+        if (!slowChecked && measuredAt && now - measuredAt > SLOW_CHECK_MS) {
+          slowChecked = true;
+          const ms = p.getInferMs();
+          if (ms > SLOW_INFER_MS && p.getModelQuality() !== 'lite') {
+            console.info(`[entangle] pose inference ${ms}ms — stepping down to the lite model`);
+            p.setModelQuality('lite').catch(() => {});
+          }
+        }
         if (now - lastSent < POSE_INTERVAL_MS) return;       // throttle the upstream
         lastSent = now;
-        try { transport.send(T.POSE, packFeatures(poseFeatures(person))); } catch {}
+        showTracking(person, conf);
+        const f = poseFeatures(person);
+        f.confidence = conf;
+        try { transport.send(T.POSE, packFeatures(f)); } catch {}
         // Skeleton: ship already-oriented, but ONLY when the host has the
         // overlay on (keeps the default upstream tiny).
         if (manifest.modes?.skeleton && raw) {
@@ -166,6 +215,24 @@ export async function initEntangleClient(root) {
     pose = null; video = null;
     if (camWrap) { camWrap.style.display = 'none'; const v = camWrap.querySelector('video'); if (v) v.remove(); }
     if (camCanvas && camCtx) { camCtx.setTransform(1, 0, 0, 1, 0, 0); camCtx.clearRect(0, 0, camCanvas.width, camCanvas.height); }
+  }
+
+  // Live framing hint under the preview — tells a participant WHY the field
+  // isn't responding (too close, too dark) instead of leaving them guessing.
+  function showTracking(person, conf) {
+    if (!trackEl) return;
+    let msg, kind;
+    const sL = person?.shoulders?.l, sR = person?.shoulders?.r;
+    const shouldersIn = sL && sR && sL.visibility > 0.4 && sR.visibility > 0.4
+      && sL.y < 1 && sR.y < 1 && sL.x > 0 && sL.x < 1 && sR.x > 0 && sR.x < 1;
+    const headOnly = person && !(sL?.visibility > 0.3) && !(sR?.visibility > 0.3);
+    if (!person)            { msg = 'searching… hold the phone at arm’s length, face + shoulders in view'; kind = 'muted'; }
+    else if (headOnly)      { msg = 'face ✓ — hold the phone further away (or find a little light) to add your body'; kind = 'ok'; }
+    else if (conf < 0.35)   { msg = 'weak track — find a little light or move back a bit'; kind = 'muted'; }
+    else if (!shouldersIn)  { msg = 'tracking ✓ — hold the phone a bit further away so your shoulders show'; kind = 'ok'; }
+    else                    { msg = 'tracking ✓'; kind = 'ok'; }
+    if (trackEl.textContent !== msg) trackEl.textContent = msg;
+    trackEl.dataset.kind = kind;
   }
 
   const cssVar = (name) => { try { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); } catch { return ''; } };
@@ -242,7 +309,7 @@ export async function initEntangleClient(root) {
     controlsEl.innerHTML = '';
     paramInputs.clear();
     phaseProgEl = null;
-    camWrap = camCanvas = camCtx = null;
+    camWrap = camCanvas = camCtx = trackEl = null;
 
     if (m.modes.pose) {
       const sect = section('Your body → the field');
@@ -252,6 +319,7 @@ export async function initEntangleClient(root) {
         btn.textContent = poseOn ? 'stop' : 'tap to entangle your pose';
         btn.classList.toggle('on', poseOn);
         if (camWrap) camWrap.style.display = poseOn ? '' : 'none';
+        if (trackEl) trackEl.style.display = poseOn ? '' : 'none';
       };
       btn.addEventListener('click', () => { if (poseOn) stopPose(); else startPose(); reflect(); });
 
@@ -274,7 +342,11 @@ export async function initEntangleClient(root) {
       // already-running video into the fresh wrapper instead of resetting.
       if (poseOn && video) { camWrap.insertBefore(video, camWrap.firstChild); try { video.play?.().catch(() => {}); } catch {} }
 
-      sect.append(btn, note, camWrap, buildCamControls());
+      trackEl = el('div', 'ent-posenote ent-track');
+      trackEl.dataset.kind = 'muted';
+      trackEl.style.display = poseOn ? '' : 'none';
+
+      sect.append(btn, note, camWrap, trackEl, buildCamControls());
       controlsEl.appendChild(sect);
       reflect();
     }

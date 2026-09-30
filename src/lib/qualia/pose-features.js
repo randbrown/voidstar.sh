@@ -73,6 +73,18 @@ export function poseWristMidY(p) {
 export function poseConfidence(p) {
   return p?.confidence ?? 0;
 }
+/**
+ * Mean visibility over the upper body only (head, shoulders, elbows, wrists).
+ * The participant's confidence: a selfie never shows hips, so the whole-body
+ * mean in shapePerson would read every phone as a weak track.
+ */
+export function upperBodyConfidence(p) {
+  if (!p) return 0;
+  const ks = [p.head, p.shoulders?.l, p.shoulders?.r, p.elbows?.l, p.elbows?.r, p.wrists?.l, p.wrists?.r];
+  let sum = 0;
+  for (const k of ks) sum += k?.visibility || 0;
+  return sum / ks.length;
+}
 
 /**
  * The compact feature vector a participant ships over the wire. Order is
@@ -109,7 +121,8 @@ export function unpackFeatures(arr) {
 // 8 aggregate features above, this is the raw joint geometry — sent ONLY while a
 // host has the skeleton overlay on (manifest gates it), so the default path
 // stays tiny. 9 joints × (x, y) in normalized [0,1] camera space; a joint below
-// the visibility floor (or absent) is encoded as (-1, -1) = "don't draw".
+// the visibility floor, outside the camera frame (a selfie's guessed-at hips /
+// off-edge elbows), or absent is encoded as (-1, -1) = "don't draw".
 export const SKELETON_JOINTS = ['head', 'shL', 'shR', 'elL', 'elR', 'wrL', 'wrR', 'hipL', 'hipR'];
 // Bone connections (index pairs into SKELETON_JOINTS) the renderer draws.
 export const SKELETON_BONES = [
@@ -120,9 +133,13 @@ export const SKELETON_BONES = [
   [7, 8],          // hips
 ];
 const SKEL_VIS = 0.30;
+const SKEL_EDGE = 0.03;   // tolerance past the frame edge before a joint is dropped
 function jointXY(j) {
   if (!j || (j.visibility != null && j.visibility < SKEL_VIS)) return [-1, -1];
-  return [+(j.x).toFixed(3), +(j.y).toFixed(3)];
+  if (j.x < -SKEL_EDGE || j.x > 1 + SKEL_EDGE || j.y < -SKEL_EDGE || j.y > 1 + SKEL_EDGE) return [-1, -1];
+  // Clamp the in-tolerance sliver: negatives are the "don't draw" sentinel.
+  const x = j.x < 0 ? 0 : j.x > 1 ? 1 : j.x, y = j.y < 0 ? 0 : j.y > 1 ? 1 : j.y;
+  return [+x.toFixed(3), +y.toFixed(3)];
 }
 /** Pack a Person → flat [hx,hy, shLx,shLy, …] of 18 numbers. */
 export function packSkeleton(p) {
