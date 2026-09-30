@@ -43,7 +43,10 @@ export function emptyPoseFrame() {
   // people[] they skip the pose-scale transform, so consumers registering
   // hands against the body must apply `poseScale` themselves
   // (0.5 + (v - 0.5) * poseScale, matching pose.js scaleLandmarks).
-  return { people: [], timestamp: 0, hands: null, poseScale: 1 };
+  // face: largest BlazeFace detection ({x,y,w,h,score,kp}) or null — only
+  // populated while the face anchor is armed (entangle phones; pose.js
+  // setFaceAnchor). Raw camera-frame coords, like hands.
+  return { people: [], timestamp: 0, hands: null, face: null, poseScale: 1 };
 }
 
 // Aggregated audience input (Entanglement). The host reduces every connected

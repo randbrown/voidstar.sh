@@ -110,10 +110,18 @@ export function createPose() {
   // preview and camera quale read the raw <video> and stay untouched).
   // amount 0..1 maps to a fixed gain; auto measures mean frame luma and picks
   // the gain itself. Applied in the worker (see pose-worker.js) or, on the
-  // main-thread fallback, via boostFrame() below.
+  // main-thread fallback, via prepFrame() below.
   let lowLightAmount = 0;
   let lowLightAuto   = false;
   let lowLightGain   = 1;   // last gain actually applied (worker-reported)
+  // Selfie letterbox — fraction of the frame added as a black border on EACH
+  // side before inference, so a close-up face leaves the model room to place
+  // shoulders/elbows (see pose-worker.js prepFrame). Landmarks come back in
+  // original-frame coords. 0 = untouched (performer default).
+  let inputPad = 0;
+  // EMA of worker round-trip per detection (ms) — lets a caller notice that a
+  // heavier model is too slow for this device and step down.
+  let inferMs = 0;
   // How long a vanished pose lingers (ms)
   let lingerMs = 800;
   let lastDetectMs = 0;
@@ -183,29 +191,163 @@ export function createPose() {
       worker.postMessage({ type: 'lowlight', amount: lowLightAmount, auto: lowLightAuto });
     }
   }
+  function pushInputPad() {
+    if (worker && useWorker) worker.postMessage({ type: 'input', pad: inputPad });
+  }
   function hasLandmarker() { return useWorker ? workerReady : !!landmarker; }
-  // ── Hands (opt-in, worker-only) ──────────────────────────────────────────
-  // Hand landmarks for the horns 🤘 gesture detector. Deliberately NOT
-  // offered on the main-thread fallback path: a second synchronous
-  // inference on the main thread is exactly the block the worker exists to
-  // avoid, and a missing party trick beats a starved cyclist.
+  // ── Hands (opt-in, own worker) ───────────────────────────────────────────
+  // Hand landmarks for horns 🤘, `wantsHands` quales (null_portal) and the
+  // fingers overlay. They run in hand-worker.js — NOT the pose worker — every
+  // detect tick, with pose-guided wrist crops for far/dark hands (see that
+  // file). Each tick hands get their own bitmap of the RAW frame (the pose
+  // low-light boost wrecks hand detection) plus the latest body wrists and
+  // elbows. Never on the main thread: a synchronous hand inference there is
+  // exactly the block the workers exist to avoid.
   let handsWanted = false;
-  let _handsWarned = false;
   const handsCbs = [];
+  let handWorker = null, handReady = false, handBusy = false, handSentAt = 0;
+  let _handFailed = false;
+  function ensureHandWorker() {
+    if (handWorker || _handFailed) return !!handWorker;
+    try {
+      handWorker = new Worker(new URL('./hand-worker.js', import.meta.url));
+      handReady = false; handBusy = false;
+      handWorker.addEventListener('message', onHandMessage);
+      handWorker.addEventListener('error', (err) => {
+        console.warn('[qualia] hand worker error — gestures unavailable:', err?.message || err);
+        _handFailed = true; dropHandWorker();
+      });
+      handWorker.postMessage({ type: 'init' });
+    } catch (err) {
+      console.warn('[qualia] hand worker unavailable — gestures unavailable:', err);
+      _handFailed = true; handWorker = null;
+    }
+    return !!handWorker;
+  }
+  function dropHandWorker() {
+    try { handWorker?.terminate(); } catch {}
+    handWorker = null; handReady = false; handBusy = false;
+  }
+  function onHandMessage(e) {
+    const msg = e.data;
+    if (!msg) return;
+    if (msg.type === 'ready') { handReady = true; return; }
+    if (msg.type === 'error') {
+      console.warn('[qualia] hand landmarker failed — pose continues without gestures:', msg.error);
+      _handFailed = true; dropHandWorker();
+      return;
+    }
+    if (msg.type !== 'result') return;
+    handBusy = false;
+    if (!handsWanted || !detectSource) return;   // stopped mid-flight — no ghost hands
+    frame.hands = { t: msg.t, landmarks: msg.landmarks, handedness: msg.handedness };
+    for (const cb of handsCbs) {
+      try { cb(msg.landmarks, msg.t); } catch (err) { console.warn('[qualia] hands callback:', err); }
+    }
+  }
+  // Latest body wrists/elbows for the worker's crops, L then R — from the
+  // last RAW detection (camera coords, pre pose-scale, pre smoothing: the
+  // smoothed pose lags a moving wrist, which misses a small far hand). One
+  // tick stale is fine — the crop has margin.
+  let lastRawBody = null;
+  function armsForHands() {
+    const lms = lastRawBody;
+    if (!lms || lms.length < 17) return null;
+    const arm = (w, el) => {
+      const a = lms[w], b = lms[el];
+      return (a && b) ? { wx: a.x, wy: a.y, ex: b.x, ey: b.y, vis: Math.min(a.visibility ?? 0, b.visibility ?? 0) } : null;
+    };
+    return [arm(15, 13), arm(16, 14)];
+  }
+  function detectHands() {
+    if (!handsWanted || !ensureHandWorker() || !handReady) return;
+    if (handBusy) {
+      if (performance.now() - handSentAt > 2000) handBusy = false;   // watchdog
+      else return;
+    }
+    const source = currentDetectSource();
+    if (!source) return;
+    const t = performance.now();
+    handBusy = true; handSentAt = t;
+    const arms = armsForHands();
+    createImageBitmap(source).then((bitmap) => {
+      if (!handWorker) { try { bitmap.close?.(); } catch {} handBusy = false; return; }
+      handWorker.postMessage({ type: 'detect', bitmap, t, arms }, [bitmap]);
+    }).catch(() => { handBusy = false; });
+  }
   function setHandsEnabled(on) {
     handsWanted = !!on;
-    if (worker && useWorker) {
-      worker.postMessage({ type: 'hands', on: handsWanted });
-    } else if (handsWanted && _workerFailed && !_handsWarned) {
-      // Enabling before the camera starts is the normal flow — the worker
-      // doesn't exist yet and buildLandmarker restores the hands state when
-      // it does. Only a FAILED worker (main-thread fallback) is worth a warn.
-      _handsWarned = true;
-      console.warn('[qualia] hands: needs the pose worker (main-thread fallback active) — gesture detection unavailable');
-    }
-    if (!handsWanted) frame.hands = null;
+    if (handsWanted) _handFailed = false;   // fresh retry budget per enable
+    else { dropHandWorker(); frame.hands = null; }
     return handsWanted;
   }
+  // ── Face anchor (opt-in, worker-only) ────────────────────────────────────
+  // Selfie mode for the entangle phones. BlazePose anchors on the hips, which
+  // a front-camera selfie never shows — in a dim, face-filled frame it returns
+  // a confident but nonsense body (skeletons on the chin, sideways T's). With
+  // the anchor on, the worker also runs BlazeFace (built for exactly this
+  // framing) and anchorToFace() keeps a body only when it agrees with the
+  // face; otherwise the person degrades to head-only, driven by the face.
+  // Worker-only like hands: the fallback path just runs unanchored.
+  let faceWanted = false;
+  let faceBroken = false;   // detector failed to build → run unanchored
+  function setFaceAnchor(on) {
+    faceWanted = !!on;
+    if (faceWanted) faceBroken = false;
+    if (worker && useWorker) worker.postMessage({ type: 'face', on: faceWanted });
+    if (!faceWanted) frame.face = null;
+    return faceWanted;
+  }
+
+  // Does this body agree with the face? Nose near the face, a shoulder line
+  // roughly parallel to the eye line (same direction, so not mirrored or
+  // sideways), shoulders on the chin side of the face, and a shoulder span in
+  // a human ratio to the face width. Garbage skeletons fail at least one.
+  function bodyFitsFace(lms, face) {
+    const n = lms[0], sL = lms[11], sR = lms[12];
+    if (!n || !sL || !sR) return false;
+    const fw = Math.max(face.w, 1e-3);
+    const cx = face.x + face.w / 2, cy = face.y + face.h / 2;
+    if (Math.hypot(n.x - cx, n.y - cy) / fw > 0.8) return false;
+    const rEye = face.kp?.[0], lEye = face.kp?.[1];
+    // Eye vector (image-space, subject's right eye → left eye) and "down".
+    let ex = 1, ey = 0;
+    if (rEye && lEye) {
+      const dx = lEye[0] - rEye[0], dy = lEye[1] - rEye[1], m = Math.hypot(dx, dy);
+      if (m > 1e-4) { ex = dx / m; ey = dy / m; }
+    }
+    const sx = sL.x - sR.x, sy = sL.y - sR.y, span = Math.hypot(sx, sy);
+    const ratio = span / fw;
+    if (ratio < 1.2 || ratio > 5) return false;
+    if ((sx * ex + sy * ey) / span < 0.7) return false;          // within ~45° of the eye line
+    const mx = (sL.x + sR.x) / 2 - cx, my = (sL.y + sR.y) / 2 - cy;
+    if (mx * -ey + my * ex < face.h * 0.5) return false;          // below the chin, along "down"
+    return true;
+  }
+  // Head-only stand-in when no body fits: the face's nose tip drives the head
+  // joint; every other joint keeps its last smoothed position at visibility 0
+  // (so a body that comes back doesn't slide in from the frame centre).
+  function headOnly(face) {
+    const prev = smoothed[0];
+    const out = new Array(33);
+    for (let i = 0; i < 33; i++) {
+      const p = prev?.[i];
+      out[i] = { x: p ? p.x : 0.5, y: p ? p.y : 0.5, z: 0, visibility: 0 };
+    }
+    const nose = face.kp?.[2];
+    out[0] = {
+      x: nose ? nose[0] : face.x + face.w / 2,
+      y: nose ? nose[1] : face.y + face.h / 2,
+      z: 0, visibility: face.score,
+    };
+    return out;
+  }
+  function anchorToFace(list, face) {
+    if (!face) return [];          // no face in a selfie → nothing trustworthy; linger covers blinks
+    for (const lms of list) if (bodyFitsFace(lms, face)) return [lms];
+    return [headOnly(face)];
+  }
+
   /** cb(handLandmarkArrays, timestampMs) per hand-detection result. */
   function onHands(cb) { if (typeof cb === 'function') handsCbs.push(cb); }
 
@@ -213,9 +355,10 @@ export function createPose() {
     const msg = e.data;
     if (!msg) return;
     if (msg.type === 'ready') { workerReady = true; return; }
-    if (msg.type === 'hands-ready') return;
-    if (msg.type === 'hands-error') {
-      console.warn('[qualia] hand landmarker failed — pose continues without gestures:', msg.error);
+    if (msg.type === 'face-ready') return;
+    if (msg.type === 'face-error') {
+      faceBroken = true;
+      console.warn('[qualia] face detector failed — pose continues unanchored:', msg.error);
       return;
     }
     if (msg.type === 'error') {
@@ -225,18 +368,24 @@ export function createPose() {
     }
     if (msg.type === 'result') {
       workerBusy = false;
+      const rt = performance.now() - msg.t;
+      if (rt > 0 && rt < 5000) inferMs = inferMs ? inferMs + (rt - inferMs) * 0.2 : rt;
       if (typeof msg.gain === 'number') lowLightGain = msg.gain;
       // Drop stale results whose source no longer matches (camera stopped or
       // switched to canvas mid-flight) so a ghost pose can't reappear.
       if (!detectSource || detectSource !== msg.source) return;
-      if (msg.hands && handsWanted) {
-        frame.hands = { t: msg.t, landmarks: msg.hands.landmarks, handedness: msg.hands.handedness };
-        for (const cb of handsCbs) {
-          try { cb(msg.hands.landmarks, msg.t); } catch (err) { console.warn('[qualia] hands callback:', err); }
+      const t = msg.t;
+      let fresh = msg.landmarks ?? [];
+      if (faceWanted && !faceBroken) {
+        if ('face' in msg) {
+          frame.face = msg.face;
+          fresh = anchorToFace(fresh, msg.face);
+        } else {
+          // Detector still loading (or a transient miss): an unanchored body
+          // is exactly the garbage we're guarding against — hold (linger).
+          fresh = [];
         }
       }
-      const t = msg.t;
-      const fresh = msg.landmarks ?? [];
       // Linger for BOTH sources: a single empty detection (a hand over the
       // lens, occlusion behind the steel) must not snap the skeleton/aura off
       // — hold the last pose until lingerMs elapses. The camera branch used to
@@ -277,10 +426,10 @@ export function createPose() {
         worker.addEventListener('message', onReady);
         worker.postMessage({ type: 'init', opts: workerConfig() });
       });
-      // A fresh worker starts with hands off — restore the wanted state.
-      if (handsWanted) worker?.postMessage({ type: 'hands', on: true });
-      // Same for the low-light boost state.
+      // A fresh worker starts with defaults — restore the low-light boost state.
       if (lowLightAmount > 0 || lowLightAuto) pushLowLight();
+      if (inputPad > 0) pushInputPad();
+      if (faceWanted) worker?.postMessage({ type: 'face', on: true });
       return;
     }
     // Main-thread fallback.
@@ -354,6 +503,7 @@ export function createPose() {
   // into the smoothed pose, with a linger grace so a single dropped/empty
   // frame never snaps pose-driven fx off. Shared by both detect paths.
   function applyPoseResult(fresh, t) {
+    lastRawBody = fresh[0] || null;
     if (fresh.length > 0) {
       smoothLandmarks(fresh);
       lastDetectMs = t;
@@ -366,7 +516,7 @@ export function createPose() {
     // Within the linger window on an empty frame: hold the last pose.
   }
 
-  async function startCamera({ deviceId, video, facing } = {}) {
+  async function startCamera({ deviceId, video, facing, width = 1920, frameRate, zoomOut = false } = {}) {
     // Pose inference is best-effort: if the landmarker can't build (e.g. the
     // MediaPipe CDN is unreachable at an offline gig), the camera preview
     // must still open — the detect loop just idles until a landmarker
@@ -385,17 +535,20 @@ export function createPose() {
     // Try the requested constraint first, then fall back to looser ones if the
     // browser reports NotReadableError (camera busy / driver hiccup) or
     // OverconstrainedError (front cam can't satisfy the ideal resolution).
+    // frameRate (optional) caps the sensor rate — in the dark that lets auto
+    // exposure run longer shutter times instead of cranking gain/noise.
+    const rate = frameRate ? { frameRate: { ideal: frameRate } } : {};
     let attempts;
     if (facing) {
       attempts = [
-        { width: { ideal: 1920 }, facingMode: { ideal: facing } },
+        { width: { ideal: width }, facingMode: { ideal: facing }, ...rate },
         { facingMode: { ideal: facing } },
         true,
       ];
     } else if (deviceId) {
       attempts = [{ deviceId: { exact: deviceId } }, { facingMode: wantFacing }, true];
     } else {
-      attempts = [{ width: { ideal: 1920 }, facingMode: wantFacing }, { facingMode: wantFacing }, true];
+      attempts = [{ width: { ideal: width }, facingMode: wantFacing, ...rate }, { facingMode: wantFacing }, true];
     }
     let lastErr = null;
     stream = null;
@@ -472,6 +625,12 @@ export function createPose() {
       facingMode = settings.facingMode;
     } else if (facing) {
       facingMode = facing;
+    }
+    // Widest field of view the lens offers (e.g. a front camera that opens
+    // cropped-in) — more shoulders/arms in a selfie. Best-effort.
+    if (zoomOut) {
+      const z = getZoomCaps();
+      if (z && z.min < z.value) await setZoom(z.min);
     }
     return activeDeviceId;
   }
@@ -755,7 +914,7 @@ export function createPose() {
   // deliberately import-free classic worker, so these ~40 lines are mirrored
   // there rather than shared (don't add a third copy). Normally the boost
   // runs in the worker; this copy only serves the fallback path.
-  let boostCanvas = null, boostCtx = null;   // full-res filtered frame copy
+  let boostCanvas = null, boostCtx = null;   // padded / lifted frame copy
   let lumaCanvas = null,  lumaCtx = null;    // 32×18 probe for auto gain
   let autoGain = 1, lumaTick = 0;
   const LL_TARGET_LUMA = 110;  // mean 8-bit luma auto aims for (~0.43)
@@ -786,41 +945,65 @@ export function createPose() {
     return autoGain;
   }
 
-  function boostFrame(source, w, h) {
-    const gain = currentBoostGain(source);
+  // Pad + lift into one copy — mirrors prepFrame in pose-worker.js (same
+  // geometry, so the landmark map-back is identical on both paths).
+  const PREP_MAX_SIDE = 960;
+  function prepFrame(source, w, h) {
+    const boosting = lowLightActive();
+    const gain = boosting ? currentBoostGain(source) : 1;
     lowLightGain = Math.round(gain * 100) / 100;
-    if (gain < 1.05) return source;   // not worth a copy
+    const lift = gain >= 1.05;                     // below that: not worth a copy
+    if (!lift && inputPad <= 0) return { src: source, map: null };
     try {
+      const pw = w * (1 + 2 * inputPad), ph = h * (1 + 2 * inputPad);
+      const s = inputPad > 0 ? Math.min(1, PREP_MAX_SIDE / Math.max(pw, ph)) : 1;
+      const cw = Math.max(1, Math.round(pw * s)), ch = Math.max(1, Math.round(ph * s));
+      const dw = Math.max(1, Math.round(w * s)),  dh = Math.max(1, Math.round(h * s));
+      const dx = Math.round((cw - dw) / 2),       dy = Math.round((ch - dh) / 2);
       if (!boostCanvas) {
         boostCanvas = document.createElement('canvas');
         boostCtx = boostCanvas.getContext('2d');
       }
-      if (boostCanvas.width !== w || boostCanvas.height !== h) {
-        boostCanvas.width = w; boostCanvas.height = h;
+      if (boostCanvas.width !== cw || boostCanvas.height !== ch) {
+        boostCanvas.width = cw; boostCanvas.height = ch;
       }
-      if (typeof boostCtx.filter === 'string') {
+      const ctx = boostCtx;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      if (inputPad > 0) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch); }
+      if (!lift) {
+        ctx.drawImage(source, dx, dy, dw, dh);
+      } else if (typeof ctx.filter === 'string') {
         // Chrome/Firefox: GPU-accelerated canvas filter. Mild contrast rides
         // along so the lifted image doesn't wash flat.
-        boostCtx.filter = `brightness(${gain}) contrast(${1 + (gain - 1) * 0.25})`;
-        boostCtx.drawImage(source, 0, 0, w, h);
-        boostCtx.filter = 'none';
+        ctx.filter = `brightness(${gain}) contrast(${1 + (gain - 1) * 0.25})`;
+        ctx.drawImage(source, dx, dy, dw, dh);
+        ctx.filter = 'none';
       } else {
         // Safari never shipped ctx.filter: approximate with a screen-blend of
         // the frame over itself — screen(a,a) = 2a − a², a gamma-ish midtone
         // lift, with the blend alpha standing in for gain.
-        boostCtx.globalCompositeOperation = 'source-over';
-        boostCtx.globalAlpha = 1;
-        boostCtx.drawImage(source, 0, 0, w, h);
-        boostCtx.globalCompositeOperation = 'screen';
-        boostCtx.globalAlpha = Math.min(1, (gain - 1) / 1.5);
-        boostCtx.drawImage(source, 0, 0, w, h);
-        boostCtx.globalCompositeOperation = 'source-over';
-        boostCtx.globalAlpha = 1;
+        ctx.drawImage(source, dx, dy, dw, dh);
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = Math.min(1, (gain - 1) / 1.5);
+        ctx.drawImage(source, dx, dy, dw, dh);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
       }
-      return boostCanvas;
+      const map = inputPad > 0 ? { sx: cw / dw, ox: -dx / dw, sy: ch / dh, oy: -dy / dh } : null;
+      return { src: boostCanvas, map };
     } catch {
-      return source;
+      return { src: source, map: null };
     }
+  }
+  function unpadLandmarks(list, map) {
+    if (!map) return list;
+    return list.map(lms => lms.map(lm => ({
+      ...lm,
+      x: lm.x * map.sx + map.ox,
+      y: lm.y * map.sy + map.oy,
+      z: typeof lm.z === 'number' ? lm.z * map.sx : lm.z,
+    })));
   }
 
   // Main-thread fallback: synchronous detectForVideo (blocks until the
@@ -830,16 +1013,13 @@ export function createPose() {
     if (!source) return;
     const t = performance.now();
     try {
-      let det = source;
-      if (lowLightActive()) {
-        const w = source.videoWidth || source.width || 0;
-        const h = source.videoHeight || source.height || 0;
-        if (w && h) det = boostFrame(source, w, h);
-      } else {
-        lowLightGain = 1;
-      }
+      let det = source, map = null;
+      const w = source.videoWidth || source.width || 0;
+      const h = source.videoHeight || source.height || 0;
+      if (w && h && (lowLightActive() || inputPad > 0)) ({ src: det, map } = prepFrame(source, w, h));
+      if (!lowLightActive()) lowLightGain = 1;
       const result = landmarker.detectForVideo(det, t);
-      const fresh = result.landmarks ?? [];
+      const fresh = unpadLandmarks(result.landmarks ?? [], map);
       applyPoseResult(fresh, t); // linger for both sources — see the worker path
     } catch { /* swallow timestamp regressions */ }
   }
@@ -865,6 +1045,7 @@ export function createPose() {
       const tickT = performance.now();
       if (tickT - lastDetectTickMs < detectIntervalMs) return;
       lastDetectTickMs = tickT;
+      detectHands();
       if (useWorker) detectViaWorker();
       else           detectMainThread();
     })();
@@ -905,6 +1086,14 @@ export function createPose() {
   function getLowLight() { return { amount: lowLightAmount, auto: lowLightAuto }; }
   /** Gain the boost is actually applying right now (1 = passthrough). */
   function getLowLightGain() { return lowLightGain; }
+
+  /** Selfie letterbox pad, fraction of the frame per side (0..0.5). */
+  function setInputPad(v) {
+    const p = Number(v);
+    inputPad = Math.max(0, Math.min(0.5, Number.isFinite(p) ? p : 0));
+    pushInputPad();
+    return inputPad;
+  }
 
   function setSmoothing(v) { smoothing = Math.max(0, Math.min(1, v)); }
   function setLingerMs(v)  { lingerMs = Math.max(0, v | 0); }
@@ -947,6 +1136,11 @@ export function createPose() {
     setScale,
     setDetectFps,
     setLowLight,
+    setInputPad,
+    setFaceAnchor,
+    isFaceAnchored: () => faceWanted,
+    getInputPad:   () => inputPad,
+    getInferMs:    () => Math.round(inferMs),
     setHandsEnabled,
     isHandsEnabled: () => handsWanted,
     onHands,

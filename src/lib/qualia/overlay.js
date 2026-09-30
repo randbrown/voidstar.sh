@@ -558,7 +558,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     // Ingest a NEW result once (the same frame.hands repeats across renders).
     const hands = field.pose.hands;
     if (hands && Array.isArray(hands.landmarks) && hands.t !== lastHandsT) {
-      // The low-pass advances once per RESULT (~7.5 fps), not per render
+      // The low-pass advances once per RESULT (up to ~15 fps), not per render
       // frame, so its dt is the result gap — using the render dt here would
       // make the trail length scale with monitor refresh (the exact
       // frame-rate dependence core.js warns about).

@@ -332,7 +332,7 @@ qualia.pose.reset()                // every pose setting back to its default —
                                    // smoothing/rate/thresholds/linger/scale, model
                                    // lite, dark stage off
 
-qualia.horns.enabled(true)         // metal horns 🤘 detection (hands ride the pose worker)
+qualia.horns.enabled(true)         // metal horns 🤘 detection (hands run in their own worker)
 qualia.horns.config({ sound: 'voidstar', logoMs: 3000, eyesMs: 3000 })
                                    // reaction: one-shot sound name ('' = silent — load it
                                    // first, e.g. await samples('shabda/speech:voidstar'))

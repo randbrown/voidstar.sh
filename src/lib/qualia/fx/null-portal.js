@@ -33,9 +33,10 @@
 // that's what makes the pane react to individual fingers. The pose model's
 // own hand points (raw 19-22) are rigid body-model estimates that only
 // follow the wrist, so they serve as the fallback tier (~15 fps,
-// pre-smoothed) when the hand model has no fresh result — hands run every
-// 2nd pose tick (~7.5 fps) and are worker-only/best-effort (main-thread
-// pose fallback or a failed CDN fetch → pose tips carry on). Corners map
+// pre-smoothed) when the hand model has no fresh result — hands run in
+// their own worker every pose tick (up to ~15 fps), with pose-guided wrist
+// crops for far/dark hands (hand-worker.js), best-effort (a failed CDN
+// fetch → pose tips carry on). Corners map
 // through lmToCanvas so they ride where the preview/skeleton shows them.
 // No hands → the portal eases into a slow idle drift; camera off → it prints
 // a palette test card so the quale stays alive (README idle rule).
@@ -58,7 +59,8 @@ const LM_L_INDEX = 19, LM_R_INDEX = 20, LM_L_THUMB = 21, LM_R_THUMB = 22;
 // The MCP (base) joints anchor the finger RAYS the corner-frame grip needs.
 const HAND_WRIST = 0, HAND_THUMB_TIP = 4, HAND_INDEX_TIP = 8;
 const HAND_THUMB_MCP = 2, HAND_INDEX_MCP = 5;
-// Hand results older than this are stale (hands run ~7.5 fps) — fall back to
+// Hand results older than this are stale (hands run up to ~15 fps, slower
+// when the hand worker is busy with crops) — fall back to
 // the pose-model fingertips rather than pinning corners to a dead frame.
 const HANDS_FRESH_MS = 450;
 

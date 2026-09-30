@@ -16,7 +16,8 @@ landmarks become named joints, then `pose.*` / `crowd.*` modulation channels.
 | File | Responsibility |
 |---|---|
 | `pose.js` | `createPose()` — owns the video element, the `getUserMedia` attempt-ladder, the detect loop, adaptive smoothing, linger, output scale, joint reshaping (`shapePerson`), model quality (lite/full/heavy), hardware camera controls (`getCamCaps`/`setCamConstraint`), and the low-light boost config. |
-| `pose-worker.js` | Classic worker running `detectForVideo()` off-thread. Applies the **low-light boost** to the transferred bitmap before inference. Also hosts the **opt-in hand landmarker** (horns detection, below). |
+| `pose-worker.js` | Classic worker running `detectForVideo()` off-thread. Preps the transferred bitmap before inference (**low-light boost**, optional **selfie letterbox pad**, one draw) and maps landmarks back to original-frame coords. Also hosts the **opt-in face anchor** (BlazeFace; entangle phones, below). |
+| `hand-worker.js` | Classic worker running the **hand landmarker** for every hands consumer (horns, `wantsHands` quales, fingers overlay): a whole-frame tracker plus **pose-guided wrist crops** for far/dark hands, on the RAW frame (no low-light boost). See *Hands in the dark* below. |
 | `horns.js` | Metal horns 🤘 — pure geometric classifier over MediaPipe hand landmarks + hold/re-arm debounce (node-testable: `scripts/check-qualia-horns.mjs`). |
 | `pose-features.js` | Shared normalization math + wire pack/unpack (8 floats) + skeleton pack/unpack/orient. Used by **both** the host engine and the participant client, so a participant's "wrist spread" means exactly what the performer's does. |
 | `vision-loader.js` | Memoizes a single shared `FilesetResolver` (prevents a known mobile hang when two Tasks-Vision consumers each initialize). |
@@ -79,9 +80,9 @@ exposure handed back to `continuous`, torch off — leaving zoom/facing/rotation
 with their own reset paths) alone.
 
 **Metal horns 🤘 (pose menu → *horns*, `qualia.horns`).** Opt-in hand-gesture detection: while on,
-the pose worker *also* runs MediaPipe's `HandLandmarker` (pinned model, CPU-first like pose) on the
-**same transferred bitmap**, every 2nd pose tick (~7.5 fps at the default 15 fps pose rate) — zero
-extra capture cost on the main thread, one extra CPU inference in the worker. A geometric check in
+`hand-worker.js` runs MediaPipe's `HandLandmarker` (pinned model, CPU-first like pose) on its own
+bitmap of the frame, every pose tick (up to ~15 fps) — one extra `createImageBitmap` on the main
+thread, the inference on another core so the pose rate is untouched. A geometric check in
 `horns.js` (index + pinky extended, middle + ring curled; thumb deliberately ignored so 🤘 and 🤟
 both count; scale/mirror/rotation-invariant) is debounced by a hold → fire → re-arm state machine:
 the gesture must be *held* ~250 ms to fire, then released before it can fire again. On fire:
@@ -94,8 +95,8 @@ are always on by design), an optional one-shot sample through superdough
 (`qualia.horns.config({sound})` — default `'voidstar'`, which lights up once e.g.
 `await samples('shabda/speech:voidstar')` has registered it; unregistered names hint once and stay
 silent), and a `qualia:horns` window event (+ `qualia.horns.active()` / `.count()` for patterns).
-Off = the hand model is never fetched. Worker-only by design: the main-thread fallback path skips
-hands rather than adding a second synchronous inference to the thread the worker exists to protect.
+Off = the hand model is never fetched (and the hand worker is terminated). Worker-only by design:
+hands never run on the main thread, even when pose itself has fallen back there.
 Hands are **not** shipped to the entanglement mesh — performer-side only.
 
 The horns toggle is not the model's only consumer: a quale that declares `wantsHands: true` (e.g.
@@ -105,8 +106,70 @@ armed while it is active, and so does the **fingers** overlay toggle (pose menu 
 the body-skeleton style, riding on top of whatever quale is live. The page ORs all three consumers
 at one choke point, so switching quales never disarms a horns performer and toggling horns off
 never blinds an active hands quale or the fingers layer. Results land in `field.pose.hands` either
-way. The fingers layer smooths the raw ~7.5 fps hand results itself (pose.js smooths only body
+way. The fingers layer smooths the raw hand results itself (pose.js smooths only body
 landmarks) and ghosts out on dropout instead of snapping.
+
+**Hands in the dark (`hand-worker.js`).** Hands used to ride the pose worker every 2nd tick, on the
+low-light-boosted frame, at MediaPipe's default 0.5 confidence. That failed in exactly the null_portal
+situation — a performer at stage distance in low light — for three measurable reasons, each fixed:
+
+- **Distance.** The palm detector sees the whole frame squeezed to 192², so a far hand is a few
+  pixels. The body model finds wrists far more reliably, so for each side the whole-frame tracker
+  isn't already holding, the worker crops a square around that wrist (2.4 forearm lengths, pushed
+  0.4 forearms past the wrist, from the latest *raw* — unsmoothed — pose, which doesn't lag a
+  moving wrist) and runs a per-side landmarker on the 256² upscale (MediaPipe Holistic's
+  hand-ROI-from-pose idea). The whole-frame tracker still runs for close-up hands and whenever a
+  side isn't crop-tracked.
+- **The low-light boost.** A linear brightness lift amplifies sensor noise and flattens the finger
+  edges the palm detector keys on — with the boost on, dark hands went to ~0%. Hands now always get
+  the **raw** frame; the boost still applies to the body model.
+- **Cadence + threshold.** Every tick instead of every other (a stale result on a moving hand is a
+  wrong corner), in its own worker so the 1–3 inferences per tick never slow pose; confidence 0.3
+  instead of 0.5 (more dark close-ups kept, no extra false hands in testing).
+
+Measured through the real pipeline on moving test scenes (close-up hands and a full-body performer,
+lit and darkened with sensor noise), scoring the 5 joints null_portal uses: **old 34% of hands
+correct (21% with the boost on) → new 60–67% (63% with boost on)**. Far performer: 0% → ~55% lit,
+0% → ~25% dark. Dark close-ups: 42% → 70–84%. Near-black frames still fail — no model recovers a
+hand the sensor didn't capture; that's a lighting problem (see the camera card's hardware exposure,
+or put a little light on the hands).
+
+### Participant (selfie) tuning
+
+Audience phones are the opposite case from the performer's camera: front lens, held at arm's length
+(face fills the frame, hips never visible), usually in a dark room. BlazePose anchors its detector on
+the hips, so on those frames it returns a **confident but nonsense body** (a sideways "T" on the
+chin, a tiny skeleton on the tie) — raising thresholds doesn't help, the garbage scores high.
+`entangle-client.js` therefore runs its own defaults (`SELFIE` there), chosen by measurement:
+
+- **Face anchor** (`pose.setFaceAnchor(true)`, worker-only). The worker also runs BlazeFace
+  short-range — built for front-camera selfies, ~230 KB, a few ms — on the same prepped bitmap, and
+  `frame.face` holds the largest face. `anchorToFace` in `pose.js` keeps a body only if it agrees
+  with the face: nose near the face centre, shoulder line within ~45° of the eye line (same
+  direction), shoulders on the chin side, span 1.2–5 face widths. Otherwise the person degrades to
+  **head-only** (nose from the face keypoint, other joints invisible), so `headX/headY` — and the
+  crowd x/y/sway/energy they drive — keep working even when the body can't be found. No face → no
+  person (linger covers blinks); while the detector is still loading, unanchored bodies are held
+  back rather than shown. A face-detector build failure falls back to unanchored pose.
+- **Model `full`, 1 pose.** One pose = the phone's owner, no background ghosts. If `full` averages
+  >140 ms per detection after 4 s, the client steps down to `lite` once.
+- **Letterbox pad 0.1** (`pose.setInputPad`). A thin black border gives a face-filled frame room for
+  the torso; landmarks are mapped back, so nothing downstream knows. Larger pads (0.25) *hurt* in
+  the dark — the person shrinks in the 256² model input.
+- **Software low-light boost OFF.** On dark selfies the linear lift cost accuracy (it amplifies
+  sensor noise and clips highlights without adding information). Instead the camera asks for
+  `frameRate: 24` (lets auto-exposure run longer shutters), `width: 1280`, and the widest zoom.
+- Thresholds stay at the 0.05 floor; linger 1200 ms, smoothing 0.6, 15 fps.
+- The phone sends **upper-body confidence** (head, shoulders, elbows, wrists — never hips), floored
+  at half the face score for a head-only track, so the host's 0.15 gate counts selfie phones.
+- Skeleton packing drops joints outside the camera frame (guessed-at hips, off-edge elbows).
+- A live hint under the preview says why tracking is weak (searching / face-only / weak / shoulders
+  out of frame).
+
+Measured on a ground-truth set (a portrait cropped chest/close/tight × lit/dim/dark/very-dark, joints
+scored against the heavy model on the uncropped lit image): old phone defaults (lite, 3 poses, no
+anchor) **28/52 correct, 25 wrong joints drawn**; shipped defaults **36/52 correct, 16 wrong**, and
+the head stays tracked in the very-dark frames where the old path found nothing or garbage.
 
 > **Note:** `video.js` and `pose-features.js` implement the orientation transform twice (performer
 > canvas-pixel space vs participant normalized space). `pose-features.js` is the better-factored one
