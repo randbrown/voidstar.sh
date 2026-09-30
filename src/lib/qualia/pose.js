@@ -195,26 +195,90 @@ export function createPose() {
     if (worker && useWorker) worker.postMessage({ type: 'input', pad: inputPad });
   }
   function hasLandmarker() { return useWorker ? workerReady : !!landmarker; }
-  // ── Hands (opt-in, worker-only) ──────────────────────────────────────────
-  // Hand landmarks for the horns 🤘 gesture detector. Deliberately NOT
-  // offered on the main-thread fallback path: a second synchronous
-  // inference on the main thread is exactly the block the worker exists to
-  // avoid, and a missing party trick beats a starved cyclist.
+  // ── Hands (opt-in, own worker) ───────────────────────────────────────────
+  // Hand landmarks for horns 🤘, `wantsHands` quales (null_portal) and the
+  // fingers overlay. They run in hand-worker.js — NOT the pose worker — every
+  // detect tick, with pose-guided wrist crops for far/dark hands (see that
+  // file). Each tick hands get their own bitmap of the RAW frame (the pose
+  // low-light boost wrecks hand detection) plus the latest body wrists and
+  // elbows. Never on the main thread: a synchronous hand inference there is
+  // exactly the block the workers exist to avoid.
   let handsWanted = false;
-  let _handsWarned = false;
   const handsCbs = [];
+  let handWorker = null, handReady = false, handBusy = false, handSentAt = 0;
+  let _handFailed = false;
+  function ensureHandWorker() {
+    if (handWorker || _handFailed) return !!handWorker;
+    try {
+      handWorker = new Worker(new URL('./hand-worker.js', import.meta.url));
+      handReady = false; handBusy = false;
+      handWorker.addEventListener('message', onHandMessage);
+      handWorker.addEventListener('error', (err) => {
+        console.warn('[qualia] hand worker error — gestures unavailable:', err?.message || err);
+        _handFailed = true; dropHandWorker();
+      });
+      handWorker.postMessage({ type: 'init' });
+    } catch (err) {
+      console.warn('[qualia] hand worker unavailable — gestures unavailable:', err);
+      _handFailed = true; handWorker = null;
+    }
+    return !!handWorker;
+  }
+  function dropHandWorker() {
+    try { handWorker?.terminate(); } catch {}
+    handWorker = null; handReady = false; handBusy = false;
+  }
+  function onHandMessage(e) {
+    const msg = e.data;
+    if (!msg) return;
+    if (msg.type === 'ready') { handReady = true; return; }
+    if (msg.type === 'error') {
+      console.warn('[qualia] hand landmarker failed — pose continues without gestures:', msg.error);
+      _handFailed = true; dropHandWorker();
+      return;
+    }
+    if (msg.type !== 'result') return;
+    handBusy = false;
+    if (!handsWanted || !detectSource) return;   // stopped mid-flight — no ghost hands
+    frame.hands = { t: msg.t, landmarks: msg.landmarks, handedness: msg.handedness };
+    for (const cb of handsCbs) {
+      try { cb(msg.landmarks, msg.t); } catch (err) { console.warn('[qualia] hands callback:', err); }
+    }
+  }
+  // Latest body wrists/elbows for the worker's crops, L then R — from the
+  // last RAW detection (camera coords, pre pose-scale, pre smoothing: the
+  // smoothed pose lags a moving wrist, which misses a small far hand). One
+  // tick stale is fine — the crop has margin.
+  let lastRawBody = null;
+  function armsForHands() {
+    const lms = lastRawBody;
+    if (!lms || lms.length < 17) return null;
+    const arm = (w, el) => {
+      const a = lms[w], b = lms[el];
+      return (a && b) ? { wx: a.x, wy: a.y, ex: b.x, ey: b.y, vis: Math.min(a.visibility ?? 0, b.visibility ?? 0) } : null;
+    };
+    return [arm(15, 13), arm(16, 14)];
+  }
+  function detectHands() {
+    if (!handsWanted || !ensureHandWorker() || !handReady) return;
+    if (handBusy) {
+      if (performance.now() - handSentAt > 2000) handBusy = false;   // watchdog
+      else return;
+    }
+    const source = currentDetectSource();
+    if (!source) return;
+    const t = performance.now();
+    handBusy = true; handSentAt = t;
+    const arms = armsForHands();
+    createImageBitmap(source).then((bitmap) => {
+      if (!handWorker) { try { bitmap.close?.(); } catch {} handBusy = false; return; }
+      handWorker.postMessage({ type: 'detect', bitmap, t, arms }, [bitmap]);
+    }).catch(() => { handBusy = false; });
+  }
   function setHandsEnabled(on) {
     handsWanted = !!on;
-    if (worker && useWorker) {
-      worker.postMessage({ type: 'hands', on: handsWanted });
-    } else if (handsWanted && _workerFailed && !_handsWarned) {
-      // Enabling before the camera starts is the normal flow — the worker
-      // doesn't exist yet and buildLandmarker restores the hands state when
-      // it does. Only a FAILED worker (main-thread fallback) is worth a warn.
-      _handsWarned = true;
-      console.warn('[qualia] hands: needs the pose worker (main-thread fallback active) — gesture detection unavailable');
-    }
-    if (!handsWanted) frame.hands = null;
+    if (handsWanted) _handFailed = false;   // fresh retry budget per enable
+    else { dropHandWorker(); frame.hands = null; }
     return handsWanted;
   }
   // ── Face anchor (opt-in, worker-only) ────────────────────────────────────
@@ -291,14 +355,10 @@ export function createPose() {
     const msg = e.data;
     if (!msg) return;
     if (msg.type === 'ready') { workerReady = true; return; }
-    if (msg.type === 'hands-ready' || msg.type === 'face-ready') return;
+    if (msg.type === 'face-ready') return;
     if (msg.type === 'face-error') {
       faceBroken = true;
       console.warn('[qualia] face detector failed — pose continues unanchored:', msg.error);
-      return;
-    }
-    if (msg.type === 'hands-error') {
-      console.warn('[qualia] hand landmarker failed — pose continues without gestures:', msg.error);
       return;
     }
     if (msg.type === 'error') {
@@ -314,12 +374,6 @@ export function createPose() {
       // Drop stale results whose source no longer matches (camera stopped or
       // switched to canvas mid-flight) so a ghost pose can't reappear.
       if (!detectSource || detectSource !== msg.source) return;
-      if (msg.hands && handsWanted) {
-        frame.hands = { t: msg.t, landmarks: msg.hands.landmarks, handedness: msg.hands.handedness };
-        for (const cb of handsCbs) {
-          try { cb(msg.hands.landmarks, msg.t); } catch (err) { console.warn('[qualia] hands callback:', err); }
-        }
-      }
       const t = msg.t;
       let fresh = msg.landmarks ?? [];
       if (faceWanted && !faceBroken) {
@@ -372,9 +426,7 @@ export function createPose() {
         worker.addEventListener('message', onReady);
         worker.postMessage({ type: 'init', opts: workerConfig() });
       });
-      // A fresh worker starts with hands off — restore the wanted state.
-      if (handsWanted) worker?.postMessage({ type: 'hands', on: true });
-      // Same for the low-light boost state.
+      // A fresh worker starts with defaults — restore the low-light boost state.
       if (lowLightAmount > 0 || lowLightAuto) pushLowLight();
       if (inputPad > 0) pushInputPad();
       if (faceWanted) worker?.postMessage({ type: 'face', on: true });
@@ -451,6 +503,7 @@ export function createPose() {
   // into the smoothed pose, with a linger grace so a single dropped/empty
   // frame never snaps pose-driven fx off. Shared by both detect paths.
   function applyPoseResult(fresh, t) {
+    lastRawBody = fresh[0] || null;
     if (fresh.length > 0) {
       smoothLandmarks(fresh);
       lastDetectMs = t;
@@ -992,6 +1045,7 @@ export function createPose() {
       const tickT = performance.now();
       if (tickT - lastDetectTickMs < detectIntervalMs) return;
       lastDetectTickMs = tickT;
+      detectHands();
       if (useWorker) detectViaWorker();
       else           detectMainThread();
     })();
