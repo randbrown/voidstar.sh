@@ -146,6 +146,12 @@ rotates the phase at exactly δ cycles/sec. Four modes: **mono** (detect whateve
 so no polyphonic pitch detection is needed). Temperament-aware throughout: every target frequency
 folds in `temperOffset()`.
 
+**Strings mode — key + drop.** The string-set picker (guitar / open E / bass / steel E9) is joined
+by a **key** picker (E, E♭, D, D♭, C, B — shifts the whole set down) and a **drop** toggle (lowest
+string down a whole step: drop D in E standard, drop D♭ in E♭…). Key applies to guitar / open E /
+bass, drop to guitar / bass; steel E9 is a fixed copedent and ignores both. Persisted at
+`voidstar.qualia.looper.tunerKey` / `.tunerDrop` (instrument setup, never in qualems).
+
 **Temperament editor + presets.** The editor below the tuner (full mode only) holds the tuner
 setup: ET ⇄ custom toggle, the 12 per-note cent offsets (±50¢, C..B — sweetened tunings), and the
 reference pitch for A. A preset row saves/recalls the whole setup as named presets (same name

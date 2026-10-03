@@ -89,6 +89,8 @@ const REFPITCH_KEY   = `${NS}.refPitch`;   // tuner reference A (Hz)
 const TUNERMODE_KEY  = `${NS}.tunerMode`;  // 'mono' | 'chord' | 'strings'
 const TUNERCHORD_KEY = `${NS}.tunerChord`; // polytuner chord: {root:pc, quality}
 const TUNERSTRINGS_KEY = `${NS}.tunerStrings`; // polytuner string set id
+const TUNERKEY_KEY   = `${NS}.tunerKey`;   // strings mode: whole-set transpose (semitones, 0 = E std, -1 = Eb, -2 = D…)
+const TUNERDROP_KEY  = `${NS}.tunerDrop`;  // strings mode: drop the lowest string a whole step (drop D)
 const TUNERRANGE_KEY = `${NS}.tunerRange`; // mono detection range: 'steel'|'gtr'|'bass'|'wide'
 const TUNERPRESETS_KEY = `${NS}.tunerPresets`; // saved tuner setups: [{id,name,temperament,cents,refPitch}]
 const CABNAME_KEY    = `${NS}.cabName`;     // loaded cab IR filename (display)
@@ -469,6 +471,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     tunerMode: (() => { const m = lsGet(TUNERMODE_KEY, 'mono'); return (m === 'chord' || m === 'strings' || m === 'chromatic') ? m : 'mono'; })(),
     tunerChord: loadTunerChord(),           // { root: pitch-class, quality }
     tunerStrings: lsGet(TUNERSTRINGS_KEY, 'guitar') || 'guitar',
+    tunerKey: Math.max(-5, Math.min(0, parseInt(lsGet(TUNERKEY_KEY, '0'), 10) || 0)),
+    tunerDrop: lsGet(TUNERDROP_KEY, '0') === '1',
     tunerRange: lsGet(TUNERRANGE_KEY, 'steel') || 'steel',   // mono detection window
     cabName: lsGet(CABNAME_KEY, '') || '',
     ampName: lsGet(AMPNAME_KEY, '') || '',
@@ -3528,12 +3532,29 @@ export function createLooper({ audio, syncStrudel } = {}) {
   // sit low, like pitch. Steel E9 instead runs strings 10→1 — E9 isn't
   // pitch-monotonic, so the chart keeps PHYSICAL string order with string 1
   // on top, exactly like a steel chart; it's the pedal-steel home neck.
+  // `key: true` sets follow the key picker (whole set down N semitones — Eb, D,
+  // C#…); `drop: true` sets also offer drop tuning (lowest string −2, applied
+  // after the key shift: drop D in E std, drop C# in Eb). Steel E9 is a fixed
+  // copedent, so it ignores both.
   const STRING_PRESETS = {
-    guitar:  { label: 'guitar',   midi: [40, 45, 50, 55, 59, 64] },                  // E2 A2 D3 G3 B3 E4
-    openE:   { label: 'open E',   midi: [40, 47, 52, 56, 59, 64] },                  // E2 B2 E3 G#3 B3 E4
-    bass:    { label: 'bass',     midi: [28, 33, 38, 43] },                          // E1 A1 D2 G2
+    guitar:  { label: 'guitar',   midi: [40, 45, 50, 55, 59, 64], key: true, drop: true },  // E2 A2 D3 G3 B3 E4
+    openE:   { label: 'open E',   midi: [40, 47, 52, 56, 59, 64], key: true },              // E2 B2 E3 G#3 B3 E4
+    bass:    { label: 'bass',     midi: [28, 33, 38, 43], key: true, drop: true },          // E1 A1 D2 G2
     steelE9: { label: 'steel E9', midi: [47, 50, 52, 54, 56, 59, 64, 68, 63, 66] },  // strings 10→1: B2 D3 E3 F#3 G#3 B3 E4 G#4 D#4 F#4
   };
+  // Strings-mode key picker: semitone shift of the whole set (from E).
+  const STRING_KEYS = [
+    { off:  0, label: 'E' },  { off: -1, label: 'E♭' }, { off: -2, label: 'D' },
+    { off: -3, label: 'D♭' }, { off: -4, label: 'C' },  { off: -5, label: 'B' },
+  ];
+  // The active string set's MIDI notes after the key shift + drop option.
+  function stringSetMidi() {
+    const preset = STRING_PRESETS[model.tunerStrings] || STRING_PRESETS.guitar;
+    const off = preset.key ? model.tunerKey : 0;
+    const midi = preset.midi.map(m => m + off);
+    if (preset.drop && model.tunerDrop) midi[0] -= 2;   // lowest string is first (sets run low→high)
+    return midi;
+  }
   const CHORD_OCTS = [2, 3, 4, 5];   // octaves scanned to auto-pick each chord tone's register
   const MAX_LANES  = 12;             // upper bound (steel E9 = 10)
   const TUNER_LANE_PX = 26;          // lane height (CSS px) in poly modes
@@ -3609,8 +3630,34 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const strSel = document.createElement('select'); strSel.className = 'rig-tuner-sel'; strSel.title = 'String set / tuning';
     for (const [k, v] of Object.entries(STRING_PRESETS)) { const o = document.createElement('option'); o.value = k; o.textContent = v.label; strSel.appendChild(o); }
     strSel.value = STRING_PRESETS[model.tunerStrings] ? model.tunerStrings : 'guitar';
-    strSel.addEventListener('change', () => { model.tunerStrings = strSel.value; lsSet(TUNERSTRINGS_KEY, model.tunerStrings); resizeStrobeForLanes(); });
-    tunerStringCtl.append(strSel);
+    // Key (whole-set transpose) + drop toggle — shown only for sets that take them.
+    const keySel = document.createElement('select'); keySel.className = 'rig-tuner-sel';
+    keySel.title = 'Tuning key — shift the whole set down (E standard, E♭, D, D♭, C, B)';
+    for (const k of STRING_KEYS) { const o = document.createElement('option'); o.value = String(k.off); o.textContent = k.label; keySel.appendChild(o); }
+    keySel.value = String(model.tunerKey);
+    keySel.addEventListener('change', () => {
+      model.tunerKey = Math.max(-5, Math.min(0, parseInt(keySel.value, 10) || 0));
+      lsSet(TUNERKEY_KEY, String(model.tunerKey));
+      resizeStrobeForLanes();
+    });
+    const dropBtn = document.createElement('button');
+    dropBtn.type = 'button'; dropBtn.className = 'ctrl-btn rig-tuner-drop'; dropBtn.textContent = 'drop';
+    dropBtn.title = 'Drop tuning — lowest string down a whole step (drop D in E standard, drop D♭ in E♭…)';
+    const refreshStringOpts = () => {
+      const preset = STRING_PRESETS[model.tunerStrings] || STRING_PRESETS.guitar;
+      keySel.style.display  = preset.key  ? '' : 'none';
+      dropBtn.style.display = preset.drop ? '' : 'none';
+      dropBtn.classList.toggle('active', !!model.tunerDrop);
+    };
+    dropBtn.addEventListener('click', () => {
+      model.tunerDrop = !model.tunerDrop;
+      lsSet(TUNERDROP_KEY, model.tunerDrop ? '1' : '0');
+      refreshStringOpts();
+      resizeStrobeForLanes();
+    });
+    strSel.addEventListener('change', () => { model.tunerStrings = strSel.value; lsSet(TUNERSTRINGS_KEY, model.tunerStrings); refreshStringOpts(); resizeStrobeForLanes(); });
+    refreshStringOpts();
+    tunerStringCtl.append(strSel, keySel, dropBtn);
     // Mono detection range — the narrower the window, the harder it is for a
     // ringing low string to steal the peak from the thin high one you plucked.
     tunerRangeCtl = document.createElement('div'); tunerRangeCtl.className = 'rig-tuner-target';
@@ -3669,8 +3716,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function rebuildLanes() {
     _lanes.length = 0;
     if (model.tunerMode === 'strings') {
-      const preset = STRING_PRESETS[model.tunerStrings] || STRING_PRESETS.guitar;
-      for (const midi of preset.midi) _lanes.push(makeLane(midi, null));
+      for (const midi of stringSetMidi()) _lanes.push(makeLane(midi, null));
     } else if (model.tunerMode === 'chromatic') {
       // All 12 pitch classes, each auto-tracking whichever octave is sounding —
       // so any string / pedal / knee-lever stop registers on its note's lane,
