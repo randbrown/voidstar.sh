@@ -25,17 +25,23 @@
 // Coordinates everywhere are the overlay canvas's device pixels; `reach`
 // (leg length) carries the DPR + size scale, nothing else does.
 
-export const CRAWLER_FOLLOW = ['auto', 'pointer', 'pose', 'wander'];
+export const CRAWLER_FOLLOW = ['auto', 'pointer', 'pose', 'logo', 'wander'];
 export const CRAWLER_PALETTES = ['theme', 'reel', 'mono'];
+export const CRAWLER_COUNTS = ['1', '2', '3', '4', 'pose'];   // 'pose' = one per tracked person
+export const CRAWLER_BODIES = ['frame', 'lens', 'hole'];
+export const CRAWLER_MAX = 4;
 
 export const CRAWLER_DEFAULTS = {
-  follow:     'auto',   // auto = pointer if it moved recently → pose → wander
+  follow:     'auto',   // auto = pointer if it moved recently → pose → logo → wander
+  count:      '1',      // '1'..'4' crawlers, or 'pose' = one per tracked person
   legs:       8,        // 6 or 8
   size:       1.25,     // body scale (reach = 72 px × size × dpr)
   speed:      1.0,      // body top speed scaler
   stride:     0.42,     // step threshold, fraction of reach
   anchor:     0.85,     // 0..1 — how hard feet snap onto image features
   boxes:      0.8,      // highlight-box opacity around gripped features (0 = off)
+  reblit:     0.7,      // re-print the gripped patch enlarged / tilted / skewed / inverted (0 = off)
+  body:       'frame',  // frame = outline · lens = inverted window onto the scene · hole = punch through the active post
   silk:       true,     // dragline from the spinneret to the last strong grip
   reactivity: 1.0,      // audio response (beat scuttle, bass crouch, highs jitter)
   palette:    'theme',  // theme | reel (Rybin's blue/pink/amber) | mono
@@ -230,6 +236,8 @@ export function createCrawlerSim() {
       t: 1, dur: 0.15, swing: false,
       planted: 0,          // seconds since the foot landed (flash ring + box fade-in)
       anchored: false,     // landed on an image feature (vs bare floor)
+      grip: false,         // latched onto the external grip rect (the logo mark)
+      variant: 0,          // re-blit treatment picked at plant (0 zoom · 1 tilt · 2 skew · 3 negative)
       box: { x: 0, y: 0, w: 0, h: 0, on: false },
       kx: 0, ky: 0,        // knee cache (filled by solveLegs for the renderer)
       hx: 0, hy: 0,        // hip cache
@@ -337,7 +345,26 @@ export function createCrawlerSim() {
     let dx = px - hx, dy = py - hy, d = Math.hypot(dx, dy);
     if (d > r * 0.8) { px = hx + dx / d * r * 0.8; py = hy + dy / d * r * 0.8; }
     let lx = px, ly = py;
-    if (grid && strength > 0.01 && grid.seek(px, py, r * 0.38 * strength + 2, seekOut)) {
+    f.grip = false;
+    const gr = inp.gripRect;
+    // External grip rect (the logo mark): a foot landing within half a reach
+    // of its perimeter latches onto the nearest perimeter point and boxes the
+    // whole mark — the creature climbs the logo rather than walking past it.
+    if (gr && gr.w > 0 && gr.h > 0) {
+      const cx = clamp(px, gr.x, gr.x + gr.w), cy = clamp(py, gr.y, gr.y + gr.h);
+      let nx = cx, ny = cy;
+      if (cx === px && cy === py) {
+        // Inside the rect: project to the nearest edge.
+        const dl = px - gr.x, drt = gr.x + gr.w - px, dt = py - gr.y, db = gr.y + gr.h - py;
+        const m = Math.min(dl, drt, dt, db);
+        if (m === dl) nx = gr.x; else if (m === drt) nx = gr.x + gr.w; else if (m === dt) ny = gr.y; else ny = gr.y + gr.h;
+      }
+      if (Math.hypot(nx - px, ny - py) < r * 0.55) {
+        lx = nx; ly = ny; f.anchored = true; f.grip = true;
+        if (inp.boxes > 0.01) { f.box.x = gr.x; f.box.y = gr.y; f.box.w = gr.w; f.box.h = gr.h; f.box.on = true; }
+      }
+    }
+    if (!f.grip && grid && strength > 0.01 && grid.seek(px, py, r * 0.38 * strength + 2, seekOut)) {
       lx = px + (seekOut.x - px) * strength;
       ly = py + (seekOut.y - py) * strength;
       f.anchored = true;
@@ -352,8 +379,9 @@ export function createCrawlerSim() {
     if (d > maxR) {
       lx = hx + dx / d * maxR; ly = hy + dy / d * maxR;
       // Pulled off the feature by the reach clamp — it's bare floor now.
-      f.anchored = false; f.box.on = false;
+      f.anchored = false; f.box.on = false; f.grip = false;
     }
+    if (f.anchored) f.variant = (inp.rnd() * 4) | 0;
     f.fromX = f.x; f.fromY = f.y; f.toX = lx; f.toY = ly;
     f.t = 0; f.swing = true;
     // Faster walking (and beats) → quicker steps.
@@ -370,6 +398,7 @@ export function createCrawlerSim() {
    *   stride,               step threshold as a fraction of reach
    *   anchor, boxes, silk,  feature snapping / box opacity / dragline on
    *   grid,                 feature grid or null
+   *   gripRect,             {x,y,w,h} device px an external thing to latch onto (logo mark), or null
    *   beatPulse, beatActive, bass, highs,   audio (already reactivity-scaled)
    *   rnd,                  () => [0,1)
    * }
@@ -513,17 +542,65 @@ export function themeCrawlerStyle(K) {
 function withAlpha(tpl, a) { return tpl.replace('A', a.toFixed(3)); }
 
 /**
- * Draw the crawler. `t` is a monotonic time for the idle shimmer; `boxes` is
- * the box opacity (0 skips the pass); `glow` adds a soft additive halo on the
- * body + joints.
+ * Draw one crawler.
+ *   boxes   highlight-box opacity (0 skips the pass)
+ *   glow    soft additive halo gain on the body
+ *   t       monotonic time for the idle tremor
+ *   dpr     device pixel ratio (hairline widths)
+ *   scene   { src, sx, sy } — a canvas showing what the creature walks on,
+ *           with device-px → src-px scale factors; null disables re-blits
+ *           and the lens body
+ *   reblit  0..1 — re-print each gripped patch (enlarged / tilted / skewed /
+ *           inverted per foot) at this opacity
+ *   body    'frame' | 'lens' | 'hole' — 'hole' is punched by the host (it
+ *           needs the post canvas); here it draws like 'frame'
  */
-export function drawCrawler(ctx, sim, style, { boxes = 0.8, glow = 1, t = 0, dpr = 1 } = {}) {
+export function drawCrawler(ctx, sim, style, {
+  boxes = 0.8, glow = 1, t = 0, dpr = 1, scene = null, reblit = 0, body = 'frame',
+} = {}) {
   const s = sim.state;
   if (s.legCount === 0) return;
   const r = s.reach;
   const lw = Math.max(1, r * 0.022);
   ctx.save();
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  // Re-blits — the gripped patch re-printed as a glowing ghost: zoomed,
+  // tilted, skewed or inverted (variant picked at plant). The reel's
+  // enlarged/skewed/recoloured words, in pixel space. Drawn first so the
+  // legs + boxes land on top.
+  if (reblit > 0.01 && scene && scene.src) {
+    const src = scene.src, sx = scene.sx, sy = scene.sy;
+    const maxSide = r * 2.6;
+    ctx.globalCompositeOperation = 'lighter';
+    for (let n = 0; n < s.legCount; n++) {
+      const f = s.feet[n];
+      if (f.swing || !f.box.on || !f.anchored || f.grip) continue;
+      const b = f.box;
+      if (b.w > maxSide || b.h > maxSide || b.w < 2 || b.h < 2) continue;
+      const fadeIn = clamp(f.planted * 5, 0, 1);
+      const a = reblit * fadeIn * (0.35 + 0.65 * Math.exp(-f.planted * 0.9));
+      if (a < 0.01) continue;
+      const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+      const wob = Math.sin(t * 3 + n) * 0.03;
+      ctx.save();
+      ctx.translate(cx, cy);
+      switch (f.variant) {
+        case 0: ctx.scale(1.45 + wob, 1.45 + wob); break;                        // zoom
+        case 1: ctx.rotate((n & 1 ? 1 : -1) * (0.16 + wob)); ctx.scale(1.2, 1.2); break;   // tilt
+        case 2: ctx.transform(1.15, 0, (n & 1 ? 0.45 : -0.45), 1.15, 0, 0); break;         // skew
+        default: ctx.scale(1.25, 1.25); ctx.filter = 'invert(1) hue-rotate(180deg)'; break; // negative
+      }
+      ctx.globalAlpha = a;
+      try {
+        ctx.drawImage(src, b.x * sx, b.y * sy, b.w * sx, b.h * sy, -b.w / 2, -b.h / 2, b.w, b.h);
+      } catch { /* tainted / zero-size source — skip the ghost */ }
+      ctx.filter = 'none';
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
 
   // Anchor boxes — the "element" each foot grips. Fade in on plant, drift to
   // a thin outline once settled; alternate colour per leg index so a cluster
@@ -596,6 +673,32 @@ export function drawCrawler(ctx, sim, style, { boxes = 0.8, glow = 1, t = 0, dpr
   const bodyLen = r * 0.55 * (1 - s.crouch * 0.12) * (1 + s.bob * 0.12);
   const bodyW = r * 0.16 * (1 + s.crouch * 0.35) * (1 + s.bob * 0.12);
   ctx.translate(s.x, s.y); ctx.rotate(s.a);
+  // Lens body — the pane is a see-through negative of the scene under it
+  // (invert flips lightness, hue-rotate 180 brings the hues back, like the
+  // negative post), so the creature carries a little null-portal around.
+  // Bigger than the frame so there's something to see through.
+  if (body === 'lens' && scene && scene.src) {
+    const pl = bodyLen * 1.5, pw = bodyW * 3.2;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(-pl / 2, -pw / 2, pl, pw); ctx.clip();
+    // Un-rotate to draw the scene in place, then the clip keeps the pane.
+    ctx.rotate(-s.a); ctx.translate(-s.x, -s.y);
+    // Source window = pane's axis-aligned bounds (a little margin for the rotation).
+    const half = Math.hypot(pl, pw) / 2 + 2;
+    const x0 = Math.max(0, s.x - half), y0 = Math.max(0, s.y - half);
+    const x1 = s.x + half, y1 = s.y + half;
+    ctx.filter = 'invert(1) hue-rotate(180deg)';
+    try {
+      ctx.drawImage(scene.src, x0 * scene.sx, y0 * scene.sy, (x1 - x0) * scene.sx, (y1 - y0) * scene.sy, x0, y0, x1 - x0, y1 - y0);
+    } catch { /* tainted source */ }
+    ctx.filter = 'none';
+    ctx.restore();
+    ctx.strokeStyle = style.body;
+    ctx.lineWidth = Math.max(1, dpr);
+    ctx.globalAlpha = 0.7;
+    ctx.strokeRect(-pl / 2, -pw / 2, pl, pw);
+    ctx.globalAlpha = 1;
+  }
   if (glow > 0.01) {
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = 0.18 * glow + s.bob * 0.25;
@@ -610,4 +713,20 @@ export function drawCrawler(ctx, sim, style, { boxes = 0.8, glow = 1, t = 0, dpr
   ctx.fillStyle = style.core;
   ctx.beginPath(); ctx.arc(-bodyLen * 0.1, 0, Math.max(1.5, r * 0.035) * (1 + s.bob * 0.6), 0, Math.PI * 2); ctx.fill();
   ctx.restore();
+}
+
+/**
+ * The 'hole' body: punch the creature's pane out of a full-frame post so the
+ * raw scene shows through — the inverse of 'lens' (everything but the body
+ * is the treated image). Host calls this on the POST canvas context.
+ */
+export function punchCrawlerHole(postCtx, sim) {
+  const s = sim.state;
+  if (s.legCount === 0) return;
+  const r = s.reach;
+  const pl = r * 0.55 * 1.5, pw = r * 0.16 * 3.2;
+  postCtx.save();
+  postCtx.translate(s.x, s.y); postCtx.rotate(s.a);
+  postCtx.clearRect(-pl / 2, -pw / 2, pl, pw);
+  postCtx.restore();
 }

@@ -6,7 +6,8 @@
 // browser. Everything here runs in synthetic device-pixel space.
 
 import {
-  solveTwoBone, createFeatureGrid, createCrawlerSim, CRAWLER_DEFAULTS,
+  solveTwoBone, createFeatureGrid, createCrawlerSim, punchCrawlerHole, CRAWLER_DEFAULTS,
+  CRAWLER_COUNTS, CRAWLER_BODIES, CRAWLER_FOLLOW,
 } from '../src/lib/qualia/crawler.js';
 
 let failed = 0;
@@ -248,6 +249,52 @@ section('audio response');
   const x = st.x;
   sim.step(0, makeInput()); sim.step(-1, makeInput()); sim.step(NaN, makeInput());
   check('non-positive dt is ignored', st.x === x);
+}
+
+// Logo latch: a grip rect pulls landings onto its perimeter.
+section('grip rect (logo latch)');
+{
+  const sim = createCrawlerSim();
+  sim.setLegs(8); sim.placeAt(200, 450);
+  const st = sim.state;
+  const gripRect = { x: 700, y: 350, w: 200, h: 200 };
+  // Walk to the rect centre: feet near it must latch onto an edge, never land inside.
+  const inp = makeInput({ tx: 800, ty: 450, anchor: 0, boxes: 1, gripRect });
+  let gripped = 0, inside = 0, variants = new Set();
+  run(sim, inp, 6, 1 / 60, () => {
+    for (let k = 0; k < 8; k++) {
+      const f = st.feet[k];
+      if (f.swing) continue;
+      if (f.grip) {
+        gripped++;
+        variants.add(f.variant);
+        const onEdge = near(f.x, 700, 1e-6) || near(f.x, 900, 1e-6) || near(f.y, 350, 1e-6) || near(f.y, 550, 1e-6);
+        if (!onEdge) inside++;
+        if (!f.box.on || f.box.w !== 200) inside++;
+      }
+    }
+  });
+  check('feet latched onto the rect', gripped > 50, `${gripped}`);
+  check('latched feet sit on the perimeter and box the mark', inside === 0, `${inside} off`);
+  check('variants assigned on anchored landings', variants.size >= 1 && [...variants].every(v => v >= 0 && v < 4));
+  // Far from the rect nothing latches.
+  const far = createCrawlerSim();
+  far.setLegs(8); far.placeAt(200, 450);
+  run(far, makeInput({ tx: 250, ty: 450, anchor: 0, boxes: 1, gripRect }), 3);
+  check('no latch out of reach', far.state.feet.slice(0, 8).every(f => !f.grip));
+}
+
+section('enums + hole punch');
+{
+  check('counts enum', CRAWLER_COUNTS.join() === '1,2,3,4,pose');
+  check('bodies enum', CRAWLER_BODIES.join() === 'frame,lens,hole');
+  check('follow enum has logo', CRAWLER_FOLLOW.includes('logo'));
+  // punchCrawlerHole only needs save/translate/rotate/clearRect/restore.
+  const calls = [];
+  const fakeCtx = new Proxy({}, { get: (_, k) => (...a) => { calls.push(String(k)); return undefined; } });
+  const sim = createCrawlerSim(); sim.setLegs(8); sim.placeAt(100, 100);
+  punchCrawlerHole(fakeCtx, sim);
+  check('hole punch clears a rotated pane', calls.includes('clearRect') && calls.includes('rotate') && calls[0] === 'save' && calls[calls.length - 1] === 'restore', calls.join());
 }
 
 // Rescale keeps relative placement.

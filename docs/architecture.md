@@ -141,8 +141,12 @@ chasing the pointer, the most visible wrist, or wandering. Feet don't land on th
 overlay keeps a ≤128-cell-wide luma + gradient *feature grid* of the composited scene (Hydra ⊕ fx
 canvas, or the active post canvas), refreshed every fourth frame, and each step seeks the strongest
 edge within reach and boxes the bright blob it grips — the pixel-space answer to Rybin's DOM
-`elementFromPoint` trick. Audio: beat pulse quickens steps + bounces the body, bass crouches it,
-highs make the legs tremble. Everything is lazily built on first enable and allocation-free per
+`elementFromPoint` trick — and re-prints the gripped patch as a glowing ghost (zoomed / tilted /
+skewed / inverted per foot, `reblit`). Up to four creatures (`count`, or `'pose'` for one per
+tracked person, each chasing its own person); with the logo mark up they climb it, feet latching
+onto its perimeter (`follow: 'logo'`, also the auto fallback). The body is an outline, a see-through
+negative pane of the scene (`lens`), or a hole punched through the active glitch post (`hole`).
+Audio: beat pulse quickens steps + bounces the body, bass crouches it, highs make the legs tremble. Everything is lazily built on first enable and allocation-free per
 frame; the sim is DOM-free and covered by `scripts/check-qualia-crawler.mjs`. Toggled in the
 topbar layers ▾ group (hotkey ⇧B), tuned in the crawler card, persisted in settings + qualems,
 `qualia.overlay('crawler', on)` / `qualia.crawler({…})` from code.

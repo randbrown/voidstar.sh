@@ -3398,7 +3398,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qg-popover" role="menu">
         <button class="ctrl-btn active" id="btn-ripples" title="Beat ripples (B)">ripples</button>
         <button class="ctrl-btn"        id="btn-cursor"  title="Cursor trail (cycle modes)">cursor off</button>
-        <button class="ctrl-btn"        id="btn-crawler" title="Crawler — a procedural spider that walks over the active quale, chasing the pointer / your wrist and gripping bright edges (⇧B)">crawler</button>
+        <button class="ctrl-btn"        id="btn-crawler" title="Crawler — a procedural spider that walks over the active quale, chasing the pointer / your wrist and gripping bright edges — or climbing the logo mark (⇧B)">crawler</button>
       </div>
     </div>
 
@@ -3854,7 +3854,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="auto" selected>auto</option>
           <option value="pointer">pointer</option>
           <option value="pose">pose</option>
+          <option value="logo">logo</option>
           <option value="wander">wander</option>
+        </select>
+      </div>
+      <div class="qp-row" data-qp="crawler-count" title="How many crawlers — a number, or 'pose' for one per tracked person (each chases its own person; with a pointer, #1 chases it and the rest wander)">
+        <label>count</label>
+        <select class="qp-select" id="crawler-count">
+          <option value="1" selected>1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="pose">pose</option>
         </select>
       </div>
       <div class="qp-row" data-qp="crawler-legs" title="Eight legs walk an alternating tetrapod; six walk a tripod">
@@ -3883,6 +3894,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="crawler-boxes" title="Opacity of the highlight box drawn around whatever each foot grips (0 = off)">
         <label>boxes<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.8">
+      </div>
+      <div class="qp-row" data-qp="crawler-reblit" title="Re-print each gripped patch as a glowing ghost — zoomed, tilted, skewed or inverted per foot (the reel's enlarged / skewed words). 0 = off">
+        <label>reblit<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.02" value="0.7">
+      </div>
+      <div class="qp-row" data-qp="crawler-body" title="frame: outline body · lens: the body is a see-through negative of the scene under it (a pocket null portal) · hole: with a glitch post on, the body punches through it to the raw scene (everything else stays treated)">
+        <label>body</label>
+        <select class="qp-select" id="crawler-body">
+          <option value="frame" selected>frame</option>
+          <option value="lens">lens</option>
+          <option value="hole">hole</option>
+        </select>
       </div>
       <div class="qp-row" data-qp="crawler-silk" title="Dragline — a thread from the spinneret back to the last strong grip">
         <label>silk</label>

@@ -90,16 +90,35 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
 - `scripts/check-qualia-crawler.mjs` — 47 node checks (IK, grid, gait invariants, anchoring,
   audio response, rescale); wired into `npm run check`.
 
-## 5. Known limits / next steps
+## 5. Round two (same day)
+
+- **Packs + per-person:** `count` 1–4 or `'pose'` (one creature per tracked person, min 1). In
+  pointer/auto modes creature 0 chases the pointer and the rest wander; in pose/auto creature *i*
+  chases person *i*'s most visible wrist. Sims are independent instances; spawn points are spread.
+- **Re-blits:** gripped patches are re-printed from the scene canvas (fx canvas, or the post
+  canvas when a glitch is up) with a per-foot treatment chosen at plant — zoom, tilt, skew, or
+  negative (`filter: invert(1) hue-rotate(180deg)`) — additive, fading with plant age. The pixel
+  version of the reel's enlarged/skewed/recoloured words.
+- **Body modes:** `frame` (outline), `lens` (the pane is a see-through negative of the scene
+  under it — the null-portal idea carried around), `hole` (with a full-frame post active the
+  pane is *cleared* from the post canvas so the raw scene shows through; without a post it falls
+  back to lens). `hole` is the "everything but the body is the target" reading.
+- **Logo latch:** `follow: 'logo'` (and the auto fallback after pointer + pose) steers the pack
+  around the logo mark's rect, fanned by index; any foot landing within half a reach of the
+  rect's perimeter snaps to it and boxes the whole mark, so the creature climbs the mark as it
+  drifts. The page hands the overlay `logoMark.getStageRelRect()` via `setCrawlerSources`.
+
+## 6. Known limits / next steps
 
 - Feature sampling costs one small WebGL→2D readback every 4th frame. Fine on a GPU; under
   software GL it shows as a p90 spike. `anchor = 0` skips sampling entirely (degradation path).
 - The grid samples the *raw* fx buffer; with the cam walk on and the pose overlay pinned (the
   walk's `pose` scope off) the feet grip slightly offset features — the same caveat the pinned
   posts already carry.
-- Single creature. A `count` param (2–3 crawlers with their own wander targets, or one per
-  tracked person) is the obvious follow-up; the sim is already instanceable.
-- Highlight vocabulary is one box style. The reel also enlarges / skews / recolours the gripped
-  element; a pixel-space version could re-blit the gripped blob from the sampled canvas with a
-  scale/skew transform. Cheap to add once the box feels right on stage.
+- Re-blits and the lens body sample the fx canvas (not Hydra) when no post is active; over a
+  Hydra-only scene they show nothing. Compositing Hydra into the scene source is a follow-up.
+- The logo is gripped as a rectangle; the mark itself is round. Gripping its silhouette would
+  need the mark canvas sampled into the feature grid (it is screen-blended above the overlay).
+- A `body: 'logo'` mode (the creature *carries* the void* glyph as its body) is the other way
+  to marry the two layers; the mark's sprite bake would need exporting from logo-mark.js.
 - Crowd input: `field.crowd.x/y` as a fifth `follow` source would let the audience steer it.

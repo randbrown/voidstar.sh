@@ -16,8 +16,9 @@ import { readKnobs, onThemeChange, getTheme } from './theme.js';
 import { createMoshPost } from './post-mosh.js';
 import { createStitchPost } from './post-stitch.js';
 import {
-  createCrawlerSim, createFeatureGrid, drawCrawler, themeCrawlerStyle,
-  CRAWLER_STYLES, CRAWLER_DEFAULTS, CRAWLER_FOLLOW, CRAWLER_PALETTES, clamp,
+  createCrawlerSim, createFeatureGrid, drawCrawler, punchCrawlerHole, themeCrawlerStyle,
+  CRAWLER_STYLES, CRAWLER_DEFAULTS, CRAWLER_FOLLOW, CRAWLER_PALETTES, CRAWLER_COUNTS,
+  CRAWLER_BODIES, CRAWLER_MAX, clamp,
 } from './crawler.js';
 import {
   EMMONS_COLORS, SHOBUD_RED, SHOBUD_INK, SUITS, SPR, SHAPE_R,
@@ -350,6 +351,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       if (!(k in crawlerConfig)) continue;
       if (k === 'follow')       { if (CRAWLER_FOLLOW.includes(v)) crawlerConfig.follow = v; }
       else if (k === 'palette') { if (CRAWLER_PALETTES.includes(v)) crawlerConfig.palette = v; }
+      else if (k === 'count')   { const c = String(v); if (CRAWLER_COUNTS.includes(c)) crawlerConfig.count = c; }
+      else if (k === 'body')    { if (CRAWLER_BODIES.includes(v)) crawlerConfig.body = v; }
       else if (k === 'legs')    { if (v === 6 || v === 8) crawlerConfig.legs = v; }
       else if (k === 'silk')    { crawlerConfig.silk = !!v; }
       else if (typeof v === 'number' && Number.isFinite(v)) crawlerConfig[k] = v;
@@ -1172,18 +1175,30 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   // ── Crawler layer ─────────────────────────────────────────────────────────
-  // Lazily built on first enable (no sim, grid or listeners until then). The
-  // sim runs in THIS canvas's device-pixel space; the feature grid is a
-  // ≤128-cell-wide luma/gradient sketch of the composited stage (Hydra under
-  // the fx canvas, or the active post canvas when a glitch is replacing the
-  // view), refreshed every fourth frame — a 128×72 getImageData is a small
-  // fraction of the edge post's per-frame 1280-wide readback. (On software
-  // GL the WebGL→2D drawImage still forces a readback stall; on a real GPU
-  // it is ~1 ms.)
-  let crawlerSim = null, crawlerGrid = null;
+  // Lazily built on first enable (no sims, grid or listeners until then). Up
+  // to CRAWLER_MAX creatures; each sim runs in THIS canvas's device-pixel
+  // space. The feature grid is a ≤128-cell-wide luma/gradient sketch of the
+  // composited stage (Hydra under the fx canvas, or the active post canvas
+  // when a glitch is replacing the view), refreshed every fourth frame — a
+  // 128×72 getImageData is a small fraction of the edge post's per-frame
+  // 1280-wide readback. (On software GL the WebGL→2D drawImage still forces
+  // a readback stall; on a real GPU it is ~1 ms.)
+  //
+  // Targets per creature i:
+  //   pointer → i = 0 chases the pointer, the rest wander
+  //   pose    → i chases person i's most visible wrist (else head)
+  //   logo    → all climb the logo mark (page hands us its rect via
+  //             setCrawlerSources); feet latch onto its perimeter
+  //   wander  → roam
+  //   auto    → pointer (i = 0, moved in the last 3 s) → person i → logo
+  //             (when the mark is up) → wander
+  // count 'pose' = one creature per tracked person (min 1).
+  const crawlerSims = [];
+  let crawlerGrid = null;
   let crawlerSrc = null, crawlerSrcCtx = null;
   let crawlerFrame = 0, crawlerW = 0, crawlerH = 0;
   let crawlerStyleName = '', crawlerStyle = null, crawlerThemeToken = 0;
+  let crawlerActive = 0;
   const CRAWLER_GRID_COLS = 128;
   const CRAWLER_SAMPLE_EVERY = 4;   // frames between feature-grid refreshes (~15 Hz at 60)
   const CRAWLER_HYDRA_ID = 'hydra-canvas';
@@ -1207,25 +1222,43 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     document[m]('pointerout', onCrawlerPointerOut);
     window[m]('blur', onCrawlerBlur);
   }
-  // Pose target — the most visible wrist of person 0 (else the head), EMA
-  // smoothed, held for 1.5 s after a dropout so the creature never snaps.
-  const poseTgt = { x: 0, y: 0, seen: -1e9, has: false };
+  // External sources the page wires after its own layers exist: the logo
+  // mark's stage-relative CSS rect (null when the mark is down).
+  let getLogoRect = null;
+  function setCrawlerSources({ getLogoRect: fn } = {}) {
+    if (typeof fn === 'function') getLogoRect = fn;
+  }
+  const logoRectPx = { x: 0, y: 0, w: 0, h: 0 };
+  let logoUp = false;
+
+  // Per-creature pose target — EMA smoothed, held 1.5 s after a dropout so
+  // the chase never snaps.
+  const poseTgts = [];
+  for (let i = 0; i < CRAWLER_MAX; i++) poseTgts.push({ x: 0, y: 0, seen: -1e9, has: false });
   const crawlerRnd = () => Math.random();
   const crawlerInput = {
     W: 0, H: 0, tx: 0, ty: 0, hasTarget: false, reach: 72, speed: 1, stride: 0.42,
-    anchor: 0.85, boxes: 0.8, silk: true, grid: null,
+    anchor: 0.85, boxes: 0.8, silk: true, grid: null, gripRect: null,
     beatPulse: 0, beatActive: false, bass: 0, highs: 0, rnd: crawlerRnd,
   };
+  const crawlerScene = { src: null, sx: 1, sy: 1 };
   let crawlerScratchT = 0, crawlerScratchGlow = 1;
 
   function ensureCrawler() {
-    if (crawlerSim) return;
-    crawlerSim = createCrawlerSim();
-    crawlerGrid = createFeatureGrid(CRAWLER_GRID_COLS, 90);
+    if (crawlerGrid) return;
+    crawlerGrid = createFeatureGrid(CRAWLER_GRID_COLS, 72);
     crawlerSrc = document.createElement('canvas');
     crawlerSrcCtx = crawlerSrc.getContext('2d', { willReadFrequently: true });
-    crawlerSim.placeAt(canvas.width * 0.5, canvas.height * 0.6);
     crawlerW = canvas.width; crawlerH = canvas.height;
+  }
+  function ensureSims(n) {
+    while (crawlerSims.length < n) {
+      const sim = createCrawlerSim();
+      const i = crawlerSims.length;
+      // Spread spawn points so a pack doesn't hatch from one pixel.
+      sim.placeAt(canvas.width * (0.3 + 0.4 * ((i * 0.618) % 1)), canvas.height * (0.4 + 0.3 * ((i * 0.382) % 1)));
+      crawlerSims.push(sim);
+    }
   }
 
   function sampleCrawlerGrid() {
@@ -1242,8 +1275,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     g.fillStyle = '#000';
     g.fillRect(0, 0, cols, rows);
     try {
-      const postActive = opts.ascii || opts.mosh || opts.edge || opts.stitch || opts.negative;
-      if (postActive) {
+      if (isPostActive()) {
         g.drawImage(postCanvas, 0, 0, cols, rows);
       } else {
         const hydra = document.getElementById(CRAWLER_HYDRA_ID);
@@ -1264,17 +1296,32 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     }
     g.globalCompositeOperation = 'source-over';
   }
+  function isPostActive() { return opts.ascii || opts.mosh || opts.edge || opts.stitch || opts.negative; }
 
-  function crawlerTarget(field, now) {
-    const cfg = crawlerConfig;
+  /** The canvas the creatures stand on, for re-blits + the lens body. */
+  function syncCrawlerScene() {
     const W = canvas.width, H = canvas.height;
+    if (isPostActive()) { crawlerScene.src = postCanvas; crawlerScene.sx = 1; crawlerScene.sy = 1; return; }
+    const main = getMainCanvas?.();
+    if (main && main.width > 0 && main.height > 0) {
+      crawlerScene.src = main; crawlerScene.sx = main.width / W; crawlerScene.sy = main.height / H;
+    } else crawlerScene.src = null;
+  }
+
+  function syncLogoRect() {
+    const rr = getLogoRect?.();
+    logoUp = !!(rr && rr.w > 0 && rr.h > 0);
+    if (!logoUp) return;
     const r = getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-    // Pointer: live if it moved in the last 3 s and sits over the stage.
-    const px = (ptr.x - r.left) / Math.max(1, r.width) * W;
-    const py = (ptr.y - r.top) / Math.max(1, r.height) * H;
-    const ptrLive = ptr.inside && (now - ptr.t) < 3000 && px >= 0 && py >= 0 && px <= W && py <= H;
-    // Pose: best wrist, else head.
-    const person = field.pose?.people?.[0];
+    const k = canvas.width / Math.max(1, r.width);
+    logoRectPx.x = rr.x * k; logoRectPx.y = rr.y * k; logoRectPx.w = rr.w * k; logoRectPx.h = rr.h * k;
+  }
+
+  /** Update pose target i from person i; returns true while live. */
+  function updatePoseTarget(i, field, now) {
+    const tgt = poseTgts[i];
+    const person = field.pose?.people?.[i];
+    const W = canvas.width, H = canvas.height;
     if (person) {
       const l = person.wrists?.l, rr = person.wrists?.r, hd = person.head;
       let lm = null, best = 0.35;
@@ -1283,21 +1330,40 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       if (!lm && hd && hd.visibility > 0.35) lm = hd;
       if (lm) {
         const [x, y] = lmToCanvas(lm.x, lm.y, W, H);
-        if (!poseTgt.has) { poseTgt.x = x; poseTgt.y = y; }
+        if (!tgt.has) { tgt.x = x; tgt.y = y; }
         const k = 1 - Math.exp(-(field.dt || 0.016) * 9);
-        poseTgt.x += (x - poseTgt.x) * k; poseTgt.y += (y - poseTgt.y) * k;
-        poseTgt.seen = now; poseTgt.has = true;
+        tgt.x += (x - tgt.x) * k; tgt.y += (y - tgt.y) * k;
+        tgt.seen = now; tgt.has = true;
       }
     }
-    const poseLive = poseTgt.has && (now - poseTgt.seen) < 1500;
-    if (!poseLive) poseTgt.has = false;
+    const live = tgt.has && (now - tgt.seen) < 1500;
+    if (!live) tgt.has = false;
+    return live;
+  }
 
+  function crawlerTarget(i, n, field, now) {
+    const cfg = crawlerConfig;
+    const W = canvas.width, H = canvas.height;
+    const r = getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    const px = (ptr.x - r.left) / Math.max(1, r.width) * W;
+    const py = (ptr.y - r.top) / Math.max(1, r.height) * H;
+    const ptrLive = i === 0 && ptr.inside && (now - ptr.t) < 3000 && px >= 0 && py >= 0 && px <= W && py <= H;
+    const poseLive = updatePoseTarget(i, field, now);
     const mode = cfg.follow;
     const usePtr  = ptrLive  && (mode === 'pointer' || mode === 'auto');
-    const usePose = poseLive && (mode === 'pose' || (mode === 'auto' && !usePtr));
+    const usePose = !usePtr && poseLive && (mode === 'pose' || mode === 'auto');
+    const useLogo = !usePtr && !usePose && logoUp && (mode === 'logo' || mode === 'auto');
+    crawlerInput.gripRect = logoUp ? logoRectPx : null;
     if (usePtr)       { crawlerInput.tx = px; crawlerInput.ty = py; crawlerInput.hasTarget = true; }
-    else if (usePose) { crawlerInput.tx = poseTgt.x; crawlerInput.ty = poseTgt.y; crawlerInput.hasTarget = true; }
-    else              { crawlerInput.hasTarget = false; }
+    else if (usePose) { crawlerInput.tx = poseTgts[i].x; crawlerInput.ty = poseTgts[i].y; crawlerInput.hasTarget = true; }
+    else if (useLogo) {
+      // Fan the pack around the mark so they don't pile onto one point.
+      const ang = (i / Math.max(1, n)) * Math.PI * 2 + crawlerScratchT * 0.15;
+      crawlerInput.tx = logoRectPx.x + logoRectPx.w / 2 + Math.cos(ang) * logoRectPx.w * 0.42;
+      crawlerInput.ty = logoRectPx.y + logoRectPx.h / 2 + Math.sin(ang) * logoRectPx.h * 0.42;
+      crawlerInput.hasTarget = true;
+    }
+    else crawlerInput.hasTarget = false;
   }
 
   function tickCrawler(dt, field) {
@@ -1306,14 +1372,20 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     crawlerListen(true);
     const W = canvas.width, H = canvas.height;
     if (W !== crawlerW || H !== crawlerH) {
-      if (crawlerW > 0 && crawlerH > 0) crawlerSim.rescale(W / crawlerW, H / crawlerH);
+      if (crawlerW > 0 && crawlerH > 0) for (const sim of crawlerSims) sim.rescale(W / crawlerW, H / crawlerH);
       crawlerW = W; crawlerH = H;
     }
-    if ((crawlerFrame++ % CRAWLER_SAMPLE_EVERY) === 0 && crawlerConfig.anchor > 0.01) sampleCrawlerGrid();
-
     const cfg = crawlerConfig;
+    if ((crawlerFrame++ % CRAWLER_SAMPLE_EVERY) === 0 && cfg.anchor > 0.01) sampleCrawlerGrid();
+    syncLogoRect();
+    syncCrawlerScene();
+
     const now = performance.now();
-    crawlerTarget(field, now);
+    crawlerScratchT = field.time || 0;
+    const people = field.pose?.people?.length || 0;
+    const n = cfg.count === 'pose' ? clamp(people, 1, CRAWLER_MAX) : clamp(parseInt(cfg.count, 10) || 1, 1, CRAWLER_MAX);
+    ensureSims(n);
+    crawlerActive = n;
 
     const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
     const audio = field.audio, audioOn = !!audio?.spectrum;
@@ -1330,24 +1402,37 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     crawlerInput.beatActive = audioOn && !!audio.beat.active && react > 0;
     crawlerInput.bass  = audioOn ? clamp(audio.bands.bass * react, 0, 1) : 0;
     crawlerInput.highs = audioOn ? clamp(audio.bands.highs * react, 0, 1) : 0;
-    crawlerSim.setLegs(cfg.legs);
-    crawlerSim.step(dt, crawlerInput);
-
-    crawlerScratchT = field.time || 0;
+    for (let i = 0; i < n; i++) {
+      const sim = crawlerSims[i];
+      crawlerTarget(i, n, field, now);
+      sim.setLegs(cfg.legs);
+      sim.step(dt, crawlerInput);
+    }
     crawlerScratchGlow = 0.6 + (audioOn ? audio.bands.total * 0.8 : 0.2 + 0.2 * Math.sin(crawlerScratchT * 0.7));
   }
 
   function drawCrawlerLayer() {
-    if (!opts.crawler || !crawlerSim) return;
-    const name = crawlerConfig.palette;
+    if (!opts.crawler || !crawlerActive) return;
+    const cfg = crawlerConfig;
+    const name = cfg.palette;
     if (name !== crawlerStyleName || (name === 'theme' && crawlerThemeToken !== K)) {
       crawlerStyleName = name; crawlerThemeToken = K;
       crawlerStyle = name === 'theme' ? themeCrawlerStyle(K) : (CRAWLER_STYLES[name] || CRAWLER_STYLES.reel);
     }
     const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
-    drawCrawler(ctx, crawlerSim, crawlerStyle, {
-      boxes: clamp(crawlerConfig.boxes, 0, 1), glow: crawlerScratchGlow, t: crawlerScratchT, dpr,
-    });
+    // 'hole' punches the pane out of the active full-frame post (the scene
+    // shows through); without a post it reads as the lens instead.
+    const postUp = isPostActive();
+    const body = cfg.body === 'hole' ? (postUp ? 'hole' : 'lens') : cfg.body;
+    const opt = {
+      boxes: clamp(cfg.boxes, 0, 1), glow: crawlerScratchGlow, t: crawlerScratchT, dpr,
+      scene: crawlerScene.src ? crawlerScene : null, reblit: clamp(cfg.reblit, 0, 1), body,
+    };
+    for (let i = 0; i < crawlerActive; i++) {
+      const sim = crawlerSims[i];
+      if (body === 'hole') punchCrawlerHole(postCtx, sim);
+      drawCrawler(ctx, sim, crawlerStyle, opt);
+    }
   }
 
   function tick(dt, field) {
@@ -1417,6 +1502,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     getStitchConfig,
     setCrawlerConfig,
     getCrawlerConfig,
+    setCrawlerSources,
     setDprCap(v) { dprCap = Math.max(0.5, v); applyDpr(); },
     // Re-read the stage rect and re-size — called by the page when the
     // split-screen layout changes (the window 'resize' listener handles the

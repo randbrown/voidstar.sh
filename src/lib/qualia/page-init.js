@@ -463,6 +463,10 @@ export function initQualiaPage() {
     ],
     onConfigChange: () => { settings.save(); logoCardSyncFns.forEach(fn => fn()); },
   });
+  // The crawler layer climbs the logo mark (follow 'logo' / auto fallback):
+  // feed it the mark's stage-relative rect, null while the mark is down.
+  overlay.setCrawlerSources({ getLogoRect: () => logoMark.getStageRelRect() });
+
   core.onFrame((field) => logoMark.frame(field));
   /** Repaint fns for the logo card rows — populated by the card wiring far
    *  below; also fired when a drag commits a custom position. */
@@ -3147,12 +3151,15 @@ export function initQualiaPage() {
     });
   }
   wireCrawlerSelect('crawler-follow',  'follow');
+  wireCrawlerSelect('crawler-count',   'count');
   wireCrawlerSelect('crawler-legs',    'legs', (v) => parseInt(v, 10));
+  wireCrawlerSelect('crawler-body',    'body');
   wireCrawlerSlider('crawler-size',    'size');
   wireCrawlerSlider('crawler-speed',   'speed');
   wireCrawlerSlider('crawler-stride',  'stride');
   wireCrawlerSlider('crawler-anchor',  'anchor');
   wireCrawlerSlider('crawler-boxes',   'boxes');
+  wireCrawlerSlider('crawler-reblit',  'reblit');
   wireCrawlerToggle('crawler-silk',    'silk');
   wireCrawlerSlider('crawler-reactivity', 'reactivity');
   wireCrawlerSelect('crawler-palette', 'palette');
