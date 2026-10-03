@@ -134,6 +134,19 @@ falls back to a Canvas2D smear without WebGL2. Stitch is a palette-quantized til
 theme / mono palettes) with a cross-stitch texture, pose-bbox cell subdivision, and beat-spawned
 word pills from a user-editable list.
 
+**Crawler layer** (`crawler.js`, composited by `overlay.js` on the pose canvas, so it stacks with any
+glitch and lands in recordings for free): a procedural spider — eight (or six) two-bone IK legs on
+an alternating-tetrapod gait, home-position stepping — that walks over whatever the stage shows,
+chasing the pointer, the most visible wrist, or wandering. Feet don't land on the ideal spot: the
+overlay keeps a ≤128-cell-wide luma + gradient *feature grid* of the composited scene (Hydra ⊕ fx
+canvas, or the active post canvas), refreshed every fourth frame, and each step seeks the strongest
+edge within reach and boxes the bright blob it grips — the pixel-space answer to Rybin's DOM
+`elementFromPoint` trick. Audio: beat pulse quickens steps + bounces the body, bass crouches it,
+highs make the legs tremble. Everything is lazily built on first enable and allocation-free per
+frame; the sim is DOM-free and covered by `scripts/check-qualia-crawler.mjs`. Toggled in the
+topbar layers ▾ group (hotkey ⇧B), tuned in the crawler card, persisted in settings + qualems,
+`qualia.overlay('crawler', on)` / `qualia.crawler({…})` from code.
+
 **Cam walk** (`cam-walk.js`) is a top-level virtual-camera drift over the whole scene stack (Hydra +
 fx canvas + transition freeze-frame + overlay — never the camera panel or UI): random pan (up to
 ±60% of the stage), exponential zoom (up to 20×), and unbounded rotation (a spin velocity, so the

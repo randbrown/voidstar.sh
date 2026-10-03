@@ -537,6 +537,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-cam-rotate           { min-width: 8ch;  } /* "rot 270°" */
     #btn-cam-split            { min-width: 9ch;  } /* "cam below" */
     #btn-cursor               { min-width: 15ch; } /* "cursor combined" */
+    #btn-crawler              { min-width: 8ch;  } /* "crawler" */
     #btn-pause                { min-width: 6ch;  } /* "paused" */
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
@@ -3397,6 +3398,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qg-popover" role="menu">
         <button class="ctrl-btn active" id="btn-ripples" title="Beat ripples (B)">ripples</button>
         <button class="ctrl-btn"        id="btn-cursor"  title="Cursor trail (cycle modes)">cursor off</button>
+        <button class="ctrl-btn"        id="btn-crawler" title="Crawler — a procedural spider that walks over the active quale, chasing the pointer / your wrist and gripping bright edges (⇧B)">crawler</button>
       </div>
     </div>
 
@@ -3831,6 +3833,72 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="edge-glow">
         <label>glow<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.45">
+      </div>
+    </div>
+  </div>
+
+  <!-- Crawler card — tunables for the procedural spider layer (crawler.js,
+       composited by overlay.js). Shown while the layer is on, like the
+       mosh/edge cards. -->
+  <div id="crawler-card" class="qp-card collapsed" style="display:none">
+    <div class="qp-head" data-toggle="crawler-card">
+      <span class="qp-title">crawler</span>
+      <span class="qp-spacer"></span>
+      <button class="qp-toggle" id="btn-crawler-reset" title="Reset crawler tunables to defaults">reset</button>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-row" data-qp="crawler-follow" title="What it chases — auto: the pointer while it moves, else the most visible wrist (or head), else it wanders the stage on its own">
+        <label>follow</label>
+        <select class="qp-select" id="crawler-follow">
+          <option value="auto" selected>auto</option>
+          <option value="pointer">pointer</option>
+          <option value="pose">pose</option>
+          <option value="wander">wander</option>
+        </select>
+      </div>
+      <div class="qp-row" data-qp="crawler-legs" title="Eight legs walk an alternating tetrapod; six walk a tripod">
+        <label>legs</label>
+        <select class="qp-select" id="crawler-legs">
+          <option value="8" selected>8</option>
+          <option value="6">6</option>
+        </select>
+      </div>
+      <div class="qp-row" data-qp="crawler-size" title="Body scale — leg reach is 72px × size">
+        <label>size<span class="qp-val"></span></label>
+        <input type="range" min="0.3" max="3" step="0.05" value="1.25">
+      </div>
+      <div class="qp-row" data-qp="crawler-speed" title="Top speed scaler — it eases toward the target and slows on arrival">
+        <label>speed<span class="qp-val"></span></label>
+        <input type="range" min="0.1" max="3" step="0.05" value="1">
+      </div>
+      <div class="qp-row" data-qp="crawler-stride" title="How far a foot falls behind its rest spot before it steps (fraction of reach) — low = fussy scuttle, high = long lunges">
+        <label>stride<span class="qp-val"></span></label>
+        <input type="range" min="0.15" max="0.9" step="0.01" value="0.42">
+      </div>
+      <div class="qp-row" data-qp="crawler-anchor" title="How hard feet snap onto bright edges of the scene underneath (0 = walk on bare floor, skips the pixel sampling)">
+        <label>anchor<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.02" value="0.85">
+      </div>
+      <div class="qp-row" data-qp="crawler-boxes" title="Opacity of the highlight box drawn around whatever each foot grips (0 = off)">
+        <label>boxes<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.02" value="0.8">
+      </div>
+      <div class="qp-row" data-qp="crawler-silk" title="Dragline — a thread from the spinneret back to the last strong grip">
+        <label>silk</label>
+        <button class="qp-toggle active" id="crawler-silk">on</button>
+      </div>
+      <div class="qp-row" data-qp="crawler-reactivity" title="Audio response: beats quicken steps + bounce the body, bass crouches it, highs make the legs tremble. 0 = deaf">
+        <label>reactivity<span class="qp-val"></span></label>
+        <input type="range" min="0" max="2" step="0.05" value="1">
+      </div>
+      <div class="qp-row" data-qp="crawler-palette" title="theme: the active theme's accents · reel: Rybin's ultramarine legs / pink body / amber silk · mono: white">
+        <label>palette</label>
+        <select class="qp-select" id="crawler-palette">
+          <option value="theme" selected>theme</option>
+          <option value="reel">reel</option>
+          <option value="mono">mono</option>
+        </select>
       </div>
     </div>
   </div>
@@ -4298,6 +4366,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
   <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
   <button class="qp-tab" data-card="stitch-card" role="tab">stitch</button>
+  <button class="qp-tab" data-card="crawler-card" role="tab">crawler</button>
   <button class="qp-tab" data-card="walk-card"   role="tab">walk</button>
   <button class="qp-tab" data-card="logo-card"   role="tab">logo</button>
   <button class="qp-tab" data-card="chron-card"  role="tab">chron</button>

@@ -40,6 +40,7 @@ import { getBool, setBool } from './prefs.js';
 import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
+import { CRAWLER_DEFAULTS } from './crawler.js';
 import { createChron } from './chron.js';
 import { getTheme, readKnobs, onThemeChange } from './theme.js';
 import { initQRInterject } from './qr-interject.js';
@@ -245,6 +246,7 @@ export function initQualiaPage() {
   const btnHands   = document.getElementById('btn-hands');
   const btnHorns   = document.getElementById('btn-horns');
   const btnRipples = document.getElementById('btn-ripples');
+  const btnCrawler = document.getElementById('btn-crawler');
   const btnAscii   = document.getElementById('btn-ascii');
   const btnMosh    = document.getElementById('btn-mosh');
   const btnEdge    = document.getElementById('btn-edge');
@@ -534,6 +536,8 @@ export function initQualiaPage() {
     handsOn:        overlay.getOption('hands'),
     nightcallOn:    nightcallUserOn(),
     ripplesOn:      overlay.getOption('ripples'),
+    crawlerOn:      overlay.getOption('crawler'),
+    crawlerConfig:  overlay.getCrawlerConfig(),
     hornsOn,
     hornsConfig:    { ...hornsConfig },
     glitchModes:    { ...glitchModes },
@@ -575,6 +579,7 @@ export function initQualiaPage() {
     paramsCollapsed: document.getElementById('fx-card')?.classList.contains('collapsed') ?? false,
     moshCollapsed:  document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
     edgeCollapsed:  document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
+    crawlerCollapsed: document.getElementById('crawler-card')?.classList.contains('collapsed') ?? true,
     stitchCollapsed: document.getElementById('stitch-card')?.classList.contains('collapsed') ?? true,
     walkCollapsed:  document.getElementById('walk-card')?.classList.contains('collapsed') ?? true,
     logoCollapsed:  document.getElementById('logo-card')?.classList.contains('collapsed') ?? true,
@@ -652,6 +657,8 @@ export function initQualiaPage() {
   if (typeof stored.handsOn     === 'boolean') overlay.setOption('hands',    stored.handsOn);
   if (typeof stored.nightcallOn === 'boolean') overlay.setOption('nightcall', stored.nightcallOn);
   if (typeof stored.ripplesOn   === 'boolean') overlay.setOption('ripples',  stored.ripplesOn);
+  if (stored.crawlerConfig && typeof stored.crawlerConfig === 'object') overlay.setCrawlerConfig(stored.crawlerConfig);
+  if (typeof stored.crawlerOn   === 'boolean') overlay.setOption('crawler',  stored.crawlerOn);
   // Horns 🤘 — config first, then the toggle (wired further down with the
   // rest of the pose menu; enabling here just arms pose.setHandsEnabled).
   if (stored.hornsConfig && typeof stored.hornsConfig === 'object') Object.assign(hornsConfig, stored.hornsConfig);
@@ -3080,6 +3087,85 @@ export function initQualiaPage() {
   wireOverlayToggle(btnNightcall, 'nightcall');
   wireOverlayToggle(btnHands,   'hands');
   wireOverlayToggle(btnRipples, 'ripples');
+  wireOverlayToggle(btnCrawler, 'crawler');
+
+  // ── Crawler card — tunables for the procedural spider layer ─────────────
+  // Same show-while-on + slider/select/toggle pattern as the logo card; the
+  // overlay reads crawlerConfig each frame so writes land on the next paint.
+  const crawlerCard = document.getElementById('crawler-card');
+  const crawlerCardSyncFns = [];
+  function syncCrawlerCard() {
+    if (crawlerCard) crawlerCard.style.display = overlay.getOption('crawler') ? '' : 'none';
+    for (const fn of crawlerCardSyncFns) fn();
+  }
+  btnCrawler?.addEventListener('click', syncCrawlerCard);
+  function wireCrawlerSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
+    const row = document.querySelector(`[data-qp="${qpId}"]`);
+    if (!row) return;
+    const input = row.querySelector('input[type=range]');
+    const val   = row.querySelector('.qp-val');
+    const paint = () => {
+      const v = overlay.getCrawlerConfig()[key];
+      input.value = String(v);
+      val.textContent = fmt(v);
+    };
+    paint();
+    crawlerCardSyncFns.push(paint);
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      overlay.setCrawlerConfig({ [key]: v });
+      val.textContent = fmt(v);
+      settings.save();
+    });
+  }
+  function wireCrawlerSelect(selId, key, parse = (v) => v) {
+    const sel = document.getElementById(selId);
+    if (!sel) return;
+    const paint = () => { sel.value = String(overlay.getCrawlerConfig()[key]); };
+    paint();
+    crawlerCardSyncFns.push(paint);
+    sel.addEventListener('change', () => {
+      overlay.setCrawlerConfig({ [key]: parse(sel.value) });
+      paint();   // snap back if the overlay rejected it
+      settings.save();
+    });
+  }
+  function wireCrawlerToggle(id, key) {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    const paint = () => {
+      const on = overlay.getCrawlerConfig()[key] === true;
+      btn.classList.toggle('active', on);
+      btn.textContent = on ? 'on' : 'off';
+    };
+    paint();
+    crawlerCardSyncFns.push(paint);
+    btn.addEventListener('click', () => {
+      overlay.setCrawlerConfig({ [key]: overlay.getCrawlerConfig()[key] !== true });
+      paint();
+      settings.save();
+    });
+  }
+  wireCrawlerSelect('crawler-follow',  'follow');
+  wireCrawlerSelect('crawler-legs',    'legs', (v) => parseInt(v, 10));
+  wireCrawlerSlider('crawler-size',    'size');
+  wireCrawlerSlider('crawler-speed',   'speed');
+  wireCrawlerSlider('crawler-stride',  'stride');
+  wireCrawlerSlider('crawler-anchor',  'anchor');
+  wireCrawlerSlider('crawler-boxes',   'boxes');
+  wireCrawlerToggle('crawler-silk',    'silk');
+  wireCrawlerSlider('crawler-reactivity', 'reactivity');
+  wireCrawlerSelect('crawler-palette', 'palette');
+  document.getElementById('btn-crawler-reset')?.addEventListener('click', (e) => {
+    e.stopPropagation();   // don't collapse the card
+    overlay.setCrawlerConfig({ ...CRAWLER_DEFAULTS });
+    syncCrawlerCard();
+    settings.save();
+  });
+  if (crawlerCard && typeof stored.crawlerCollapsed === 'boolean') {
+    crawlerCard.classList.toggle('collapsed', stored.crawlerCollapsed);
+  }
+  syncCrawlerCard();
 
   // Spark shape — dots (classic) or the inlay icons (Emmons atoms /
   // Sho-Bud suits from icon-sprites.js) riding above the active quale.
@@ -3425,6 +3511,20 @@ export function initQualiaPage() {
     overlay.setOption = (key, on) => {
       const r = rawSetOption(key, on);
       if (key === 'hands') refreshHandsEnabled();
+      return r;
+    };
+  }
+  // The crawler card shows while the layer is on, whatever flipped it —
+  // button, qualia.overlay('crawler'), a pattern lane, a qualem recall — so
+  // observe the same choke point and repaint button + card.
+  {
+    const rawSetOption = overlay.setOption;
+    overlay.setOption = (key, on) => {
+      const r = rawSetOption(key, on);
+      if (key === 'crawler') {
+        btnCrawler?.classList.toggle('active', overlay.getOption('crawler'));
+        syncCrawlerCard();
+      }
       return r;
     };
   }
@@ -7186,6 +7286,8 @@ export function initQualiaPage() {
         hands:      overlay.getOption('hands'),
         nightcall:  nightcallUserOn(),   // flash-aware — never freeze a horns transient
         ripples:    overlay.getOption('ripples'),
+        crawler:    overlay.getOption('crawler'),
+        crawlerConfig: overlay.getCrawlerConfig(),
         mosh:       overlay.getMoshConfig(),
         edge:       overlay.getEdgeConfig(),
         stitch:     overlay.getStitchConfig(),
@@ -7334,7 +7436,7 @@ export function initQualiaPage() {
 
     // 6. Overlay
     if (q.overlay) {
-      const overlayKeys = ['skeleton', 'sparks', 'aura', 'hands', 'nightcall', 'ripples'];
+      const overlayKeys = ['skeleton', 'sparks', 'aura', 'hands', 'nightcall', 'ripples', 'crawler'];
       for (const k of overlayKeys) {
         if (typeof q.overlay[k] === 'boolean') overlay.setOption(k, q.overlay[k]);
       }
@@ -7344,6 +7446,7 @@ export function initQualiaPage() {
       }
       if (q.overlay.mosh) overlay.setMoshConfig(q.overlay.mosh);
       if (q.overlay.edge) overlay.setEdgeConfig(q.overlay.edge);
+      if (q.overlay.crawlerConfig) overlay.setCrawlerConfig(q.overlay.crawlerConfig);
       if (q.overlay.stitch) {
         overlay.setStitchConfig(q.overlay.stitch);
         // Re-sync the two non-slider stitch controls in place.
@@ -7361,6 +7464,9 @@ export function initQualiaPage() {
       // untouched — painting from the missing key would desync the button.
       btnHands?.classList.toggle('active',   overlay.getOption('hands'));
       btnRipples?.classList.toggle('active', !!q.overlay.ripples);
+      // Option read-back (older qualems carry no crawler key) + card sync.
+      btnCrawler?.classList.toggle('active', overlay.getOption('crawler'));
+      syncCrawlerCard();
     }
 
     // 7. Glitch modes
@@ -8681,7 +8787,7 @@ export function initQualiaPage() {
       case 'j': btnSkel.click(); break;
       case 'f': btnSparks.click(); break;
       case 'g': btnAura.click(); break;
-      case 'b': btnRipples.click(); break;
+      case 'b': if (e.shiftKey) btnCrawler?.click(); else btnRipples.click(); break;   // ripples / ⇧ crawler
       case 't': btnAscii.click(); break;
       case 'k': btnMosh.click(); break;
       case 'e': btnEdge.click(); break;

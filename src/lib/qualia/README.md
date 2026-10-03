@@ -10,7 +10,7 @@ This guide is for writing a new visualizer ("fx") for the qualia harness in this
 | **QualiaCore** | The host. Owns the canvas, render loop, fx instance, and DPR. Source: [`core.js`](./core.js). |
 | **QualiaField** | The per-frame data object passed to `update(field)`. Audio + pose + params + dt + time. The *only* state an fx may read. |
 | **QualiaMesh** | The fx registry. Source: [`registry.js`](./registry.js). |
-| **Overlay** | The cross-fx Canvas2D layer that composites skeleton, sparks, aura, ripples, and ASCII post on top of the active fx. fx authors don't render any of those. Source: [`overlay.js`](./overlay.js). |
+| **Overlay** | The cross-fx Canvas2D layer that composites skeleton, sparks, aura, ripples, the crawler, and the glitch posts on top of the active fx. fx authors don't render any of those. Source: [`overlay.js`](./overlay.js). |
 
 Don't call them "shaders" (a fragment shader is an *implementation detail* of fx that happen to use WebGL2). Don't call them "plugins" (too generic). The codebase says **fx**.
 
@@ -237,6 +237,7 @@ The overlay composites these on top of every fx. Don't render them in your fx:
 - **Sparks** (beat-driven, joint-emitted particles)
 - **Aura** (centroid halo, bass-driven)
 - **Ripples** (beat-driven concentric rings)
+- **Crawler** (the procedural spider that walks over the active quale — `crawler.js`)
 - **ASCII post-process**
 
 If you want pose-driven *content* in your fx (e.g., singularity_lens uses head as the lensing centre), read `field.pose.people` directly — the overlay's rendering is independent of any fx using pose data internally.
