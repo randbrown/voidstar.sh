@@ -126,11 +126,13 @@ Mono, VT323). Add a font there if a theme needs it.
 --glow-strength           multiplier gating CSS bloom (0 = flat). Used in
                           calc() on .btn / .glow-* shadows.
 --panel-blur              backdrop-filter amount for HUD panels
---code-filter             CSS filter applied to the embedded Strudel editor +
-                          scope canvases to retint syntax colors into the
-                          theme family (the editor's colors live in shadow DOM,
-                          so a filter is the reliable lever). e.g.
+--code-filter             CSS filter applied to the embedded Strudel editor's
+                          TEXT layers (.cm-line, gutter, selection, tooltips)
+                          to retint syntax colors into the theme family. e.g.
                           sepia()+hue-rotate() duotone; `none` = untouched.
+                          NOT applied to Strudel's visuals: inline widgets
+                          (_pianoroll/_punchcard/_scope…) and #test-canvas
+                          (.pianoroll()/.scope()) keep the pattern's colors.
 --code-theme              The name of one of Strudel's OWN ~40 CodeMirror
                           themes for the embedded REPL — the *exact* route
                           where --code-filter is the approximate one. Read by

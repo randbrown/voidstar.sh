@@ -190,8 +190,11 @@ canvas will be purple no matter what the buttons look like.
 
 ### The code filter
 
-`--code-filter` is a CSS filter over the embedded Strudel editor + scope canvases
-(their syntax colors live in shadow DOM, so a filter is the only reliable lever).
+`--code-filter` is a CSS filter over the embedded Strudel editor's text (its
+syntax colors live inside CodeMirror's theme, so a filter is the only reliable
+lever). It deliberately skips Strudel's visuals (inline `_pianoroll`/`_punchcard`/
+`_scope` widgets and the `.pianoroll()`/`.scope()` canvas), which keep the colors
+the pattern asked for.
 Use `sepia()`+`hue-rotate()` to duotone the code into your family, or `none` to
 leave it. A theme where the HUD is warm tape but the live code is still stock-blue
 reads as unfinished — pull the editor into the family.

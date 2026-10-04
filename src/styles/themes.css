@@ -76,9 +76,11 @@
   --viz-glow:      0.9;               /* canvas bloom / shadowBlur multiplier */
   --viz-mono:      0;                 /* 1 = render monochrome (phosphor) */
 
-  /* Retint filter for embedded code editors / widgets (the Strudel REPL's
-     syntax colors live inside its shadow-DOM CodeMirror theme, so a CSS
-     filter is the reliable way to pull them into the theme's family).
+  /* Retint filter for the embedded code editor's TEXT (the Strudel REPL's
+     syntax colors live inside its CodeMirror theme, so a CSS filter is the
+     reliable way to pull them into the theme's family). Applied to the
+     editor's text layers only — Strudel's pianoroll / scope / punchcard
+     visuals keep their own colors (see #strudel-mount in qualia.astro).
      sepia() collapses hues to a warm monochrome, hue-rotate() steers it,
      and luminance differences keep syntax highlighting readable. The baseline
      pulls the editor slightly toward cool spectral cyan / pale violet without

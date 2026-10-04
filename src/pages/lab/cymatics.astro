@@ -65,9 +65,8 @@ import '../../styles/themes.css';
     /* Strudel's getDrawContext() looks for #test-canvas — used by .scope(),
        .pianoroll(), and other draw outputs. Sits above the viz, below the
        topbar (z:20) and strudel panel (z:18). */
-    #test-canvas  { z-index: 5; pointer-events: none; background: transparent;
-                    /* Strudel scope/pianoroll widgets follow the theme retint. */
-                    filter: var(--code-filter, none); }
+    /* No --code-filter: Strudel's draw output keeps the pattern's colors. */
+    #test-canvas  { z-index: 5; pointer-events: none; background: transparent; }
 
     /* `transform` is set imperatively by updateVideoTransform() so mirror
        (scaleX(-1)) and rotation can compose. Don't hardcode it here. */
@@ -282,7 +281,10 @@ import '../../styles/themes.css';
     #strudel-mount {
       flex: 1; min-height: 0; overflow: auto;
       background: transparent;
-      /* Retint the embedded editor's shadow-DOM syntax colors per theme. */
+    }
+    /* Retint syntax colors on the text layers only, so inline widget
+       canvases (block widgets beside .cm-line) keep their own colors. */
+    #strudel-mount :is(.cm-line, .cm-gutters, .cm-selectionLayer, .cm-cursorLayer, .cm-tooltip) {
       filter: var(--code-filter, none);
     }
     /* Light-DOM CSS overrides — work if the editor renders into the regular
