@@ -99,6 +99,59 @@ eval, so re-evaluate after resizing. The canvas pixel ratio is capped at 2,
 because full-width widget canvases add up on a 3× display. Preset names work
 in double quotes too, even though the editor turns those into mini-notation.
 
+### Theme colours — `palette`
+
+The active theme's colours as `'#rrggbb'` strings, ready for `.color()`. Hex is
+the one CSS colour form mini-notation keeps as a single word (`#` is a step
+character; `rgb(…)` would split into a sequence). Values are read on each eval:
+switch theme, re-evaluate, and the pattern recolours. Bare global and
+`qualia.palette`. Implementation:
+[`src/lib/qualia/code-palette.js`](../src/lib/qualia/code-palette.js).
+
+```js
+stack(
+  s("bd*4").color(palette.accent)._scope(viz()),
+  note("c3 eb3 g3").s("sawtooth").color(palette.cycle())._pianoroll(viz('tall')),
+  s("hh*8").color(palette.arc(.8))._punchcard(viz.thin()),
+)
+solid(...palette.rgb('pink')).out()      // Hydra: [r, g, b] in 0..1
+```
+
+| Member | Gives |
+|---|---|
+| `palette.accent` · `cyan` · `pink` · `green` · `amber` | the theme's accent set |
+| `palette.text` · `muted` · `dim` · `bg` · `surface` · `border` | neutrals (`bg` is the visualizer clear colour) |
+| `palette.cycle()` | `'<#a #b #c #d #e>'`: the five accents, one per cycle |
+| `palette.cycle(6)` / `cycle(['pink', 'amber'])` | six stops along the theme's hue arc / those colours |
+| `palette.arc(t)` · `palette.arcs(n)` | one point (t 0..1) / n stops on the hue arc the quales paint with |
+| `palette.rgb(name)` | `[r, g, b]` 0..1, for Hydra |
+| `palette.get(x)` · `palette.names()` | resolve a name, `'--token'` or CSS colour / list the names |
+
+### Sample banks — `kit`
+
+Bank names for the bundled collections ([`samples.md`](samples.md)), so you
+don't have to remember the prefixes. Bare global and `qualia.kit`.
+Implementation: [`src/lib/qualia/code-kit.js`](../src/lib/qualia/code-kit.js).
+
+```js
+stack(
+  s("bd*2 [~ sd] rim hh*4").bank(kit.sig.metal),   // 'sigmetal'
+  s("bd ~ sd ~").bank(kit.ab('lofi')),             // '<siglofi v0lofi r0lofi>'
+  s("hh*8").bank(kit.tour()).gain(.5),             // every genre, one per cycle
+)
+```
+
+| Member | Gives |
+|---|---|
+| `kit.sig.<genre>` · `kit.v0.<genre>` · `kit.r0.<genre>` | that collection's bank (`r0` streams, so it needs network) |
+| `kit.ab(genre)` / `ab(genre, false)` | one genre across collections per cycle / without the network one |
+| `kit.tour()` / `tour('sig')` | every genre in turn: active collection / pinned |
+| `kit.bank(genre, bank?)` | the name, with a warning on a typo |
+| `kit.voices` · `genres` · `collections` · `active()` | the ten voice names (`bd sd rim hh oh lt mt ht rd cr`), genres, collections, the active collection id |
+
+Plain `.bank("metal")` still plays whichever collection the sequencer has
+active.
+
 ### Microtonal tuning helpers — 31-TET and beyond
 
 Unlike the silent `q*` lanes, these are **sounding transforms**: they rewrite

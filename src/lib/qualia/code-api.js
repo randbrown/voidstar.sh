@@ -35,7 +35,7 @@
 // here, and failures degrade to console warnings — a live set must never
 // throw out of a pattern callback.
 
-import { THEMES, getTheme, setTheme, cycleTheme } from './theme.js';
+import { THEMES, getTheme, setTheme, cycleTheme, readKnobs } from './theme.js';
 import { CHANNEL_IDS } from './modulation.js';
 import { AUDIO_PRESET_NAMES, loadFxUserPresets, saveFxUserPreset } from './presets.js';
 import * as qualemStore from './qualem.js';
@@ -43,6 +43,9 @@ import { getRotation, setRotation, getMirror, setMirror } from './video.js';
 import { QUALIA_FUNCTIONS, filterFunctions, groupByCategory } from './strudel-reference.js';
 import { getBool, setBool } from './prefs.js';
 import { makeViz } from './viz-opts.js';
+import { makePalette } from './code-palette.js';
+import { makeKit } from './code-kit.js';
+import { COLLECTIONS, GENRES, getActiveCollectionId } from './samples-manifest.js';
 import {
   parseRoot, parseEdoSpec, parseRatio, parseTuneSpec,
   edoFreq, centsFactor, scaleDegree, jiRetune, noteNameToMidi,
@@ -130,6 +133,23 @@ function autoSeconds(v, dwell) {
   return Math.max(0, +v || 0);
 }
 
+// A theme token's COMPUTED colour. Tokens can be color-mix()/var() chains, so
+// let the browser resolve them on a hidden probe instead of reading the raw
+// custom-property text.
+let _colorProbe = null;
+function computedColor(token) {
+  try {
+    if (!_colorProbe) {
+      _colorProbe = document.createElement('span');
+      _colorProbe.style.display = 'none';
+      document.documentElement.appendChild(_colorProbe);
+    }
+    _colorProbe.style.color = '';
+    _colorProbe.style.color = `var(${token})`;
+    return getComputedStyle(_colorProbe).color;
+  } catch { return ''; }
+}
+
 /** Shallow-copy a config get/patch pair: fn() snapshots, fn(patch) merges. */
 function gsConfig(get, patch) {
   return (cfg) => {
@@ -206,6 +226,14 @@ export function installCodeApi(deps) {
       height: globalThis.innerHeight || 0,
       dpr: globalThis.devicePixelRatio || 1,
     })),
+    /** Theme colours as '#rrggbb' (read on each eval): palette.accent/cyan/
+     *  pink/green/amber/text/muted/dim/bg/…, palette.cycle() → '<#a #b …>',
+     *  palette.arc(t) along the theme's hue arc, palette.rgb(name) → 0..1
+     *  for Hydra. Also a bare global `palette`. */
+    palette: makePalette({ color: computedColor, knobs: readKnobs }),
+    /** Sample bank names: kit.sig.metal → 'sigmetal', kit.ab('metal'),
+     *  kit.tour(), kit.voices / genres / collections. Also a bare global `kit`. */
+    kit: makeKit({ collections: COLLECTIONS, genres: GENRES, active: getActiveCollectionId }),
 
     // — quales —
     /** List registered quales as [{id, name}] in dropdown order. */
@@ -720,9 +748,13 @@ export function installCodeApi(deps) {
     if (!(k in existing)) existing[k] = v;
   }
   g.qualia = existing;
-  // `viz` as a bare global too: `._scope(viz())` reads better in a pattern
-  // than `._scope(qualia.viz())`. Never clobbers a global someone else owns.
-  if (g.viz === undefined) g.viz = existing.viz;
+  // viz / palette / kit as bare globals too: `._scope(viz())` reads better in
+  // a pattern than `._scope(qualia.viz())`. Never clobbers a global someone
+  // else owns.
+  for (const k of ['viz', 'palette', 'kit']) {
+    if (g[k] === undefined) g[k] = existing[k];
+    else if (g[k] !== existing[k]) console.warn(`[qualia] global "${k}" already defined — use qualia.${k}`);
+  }
 
   // Page-side hooks the bindings need but that don't belong on the public
   // `qualia` object: the topbar pulse when a lane yields, and the arm counter
