@@ -322,7 +322,7 @@ section('enums + renderer smoke');
   for (const body of ['frame', 'lens', 'void']) {
     const calls = [];
     const fakeCtx = new Proxy({}, {
-      get: (_, k) => (k === 'canvas' ? {} : (...a) => { calls.push(String(k)); return undefined; }),
+      get: (_, k) => (k === 'canvas' ? {} : (...a) => { calls.push(String(k)); return /^create.*Gradient$/.test(String(k)) ? { addColorStop() {} } : undefined; }),
       set: () => true,
     });
     let threw = null;
