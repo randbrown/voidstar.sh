@@ -62,6 +62,138 @@ stack(
 | `qcall(fn, pat)` | Call `fn(value, hap)` per event — the generic escape hatch. |
 | `pat.qtrig(fn)` | **Chainable, keeps the audio**: fires `fn(value, hap)` on each event of the pattern it's chained to — `s("bd*4").qtrig(() => qualia.phase())`. |
 
+### Widget sizing — `viz`
+
+Strudel's inline widgets (`_scope`, `_pianoroll`, `_punchcard`, `_spectrum`,
+`_spiral`, `_pitchwheel`) default to a 500×60 strip or a 200–275px square.
+`viz()` returns an options object sized to where the widgets live instead: the
+full width of the Strudel editor panel (minus its gutter and padding, so the
+canvas never overflows into a horizontal scrollbar), 1/7 of the window height.
+With no editor mounted it falls back to the window width. It's a bare global and also `qualia.viz`.
+Implementation: [`src/lib/qualia/viz-opts.js`](../src/lib/qualia/viz-opts.js),
+checked by `scripts/check-qualia-viz.mjs`.
+
+```js
+stack(
+  s("bd*4, ~ hh").color("cyan")._scope(viz()),            // panel width, 1/7 high
+  note("c3 eb3 g3").s("sawtooth")._pianoroll(viz('tall')), // 1/4 high
+  s("~ sd")._scope(viz.thin({ thickness: 2, smear: .6 })), // 1/14 high, phosphor trail
+)
+```
+
+| Call | Height |
+|---|---|
+| `viz()` / `viz('band')` | 1/7 of the window (default) |
+| `viz('thin')` · `'tall'` · `'third'` · `'half'` · `'full'` | 1/14 · 1/4 · 1/3 · 1/2 · all of it |
+| `viz(.2)` | a fraction of the window height (≤ 1) |
+| `viz(120)` | pixels (> 1) |
+| `viz('tall', {…})` / `viz({ height, … })` | merge extra widget options |
+| `viz.tall()`, `viz.thin({…})`, … | shortcut per preset |
+
+`width` in the object resolves the same way against the panel width
+(`{ width: .5 }` is half the panel). Everything else passes through to the widget:
+`thickness`, `scale`, `pos`, `smear` (0–1 trail) and `trigger` for `_scope`;
+`cycles`, `playhead`, `fold`, `labels`, `vertical`, `autorange` and the like for
+`_pianoroll` / `_punchcard`. Line colour comes from the pattern
+(`.color("cyan")`), not the options: `_scope` and `_spectrum` overwrite a
+`color` option with the hap's colour on every frame. Sizes are read on each
+eval, so re-evaluate after resizing. The canvas pixel ratio is capped at 2,
+because full-width widget canvases add up on a 3× display. Preset names work
+in double quotes too, even though the editor turns those into mini-notation.
+
+### Theme colours — `palette`
+
+The active theme's colours as `'#rrggbb'` strings, ready for `.color()`. Hex is
+the one CSS colour form mini-notation keeps as a single word (`#` is a step
+character; `rgb(…)` would split into a sequence). Values are read on each eval:
+switch theme, re-evaluate, and the pattern recolours. Bare global and
+`qualia.palette`. Implementation:
+[`src/lib/qualia/code-palette.js`](../src/lib/qualia/code-palette.js).
+
+```js
+stack(
+  s("bd*4").color(palette.accent)._scope(viz()),
+  note("c3 eb3 g3").s("sawtooth").color(palette.cycle())._pianoroll(viz('tall')),
+  s("hh*8").color(palette.arc(.8))._punchcard(viz.thin()),
+)
+solid(...palette.rgb('pink')).out()      // Hydra: [r, g, b] in 0..1
+```
+
+| Member | Gives |
+|---|---|
+| `palette.accent` · `cyan` · `pink` · `green` · `amber` | the theme's accent set |
+| `palette.text` · `muted` · `dim` · `bg` · `surface` · `border` | neutrals (`bg` is the visualizer clear colour) |
+| `palette.cycle()` | `'<#a #b #c #d #e>'`: the five accents, one per cycle |
+| `palette.cycle(6)` / `cycle(['pink', 'amber'])` | six stops along the theme's hue arc / those colours |
+| `palette.arc(t)` · `palette.arcs(n)` | one point (t 0..1) / n stops on the hue arc the quales paint with |
+| `palette.rgb(name)` | `[r, g, b]` 0..1, for Hydra |
+| `palette.get(x)` · `palette.names()` | resolve a name, `'--token'` or CSS colour / list the names |
+
+### Sample banks — `kit`
+
+Bank names for the bundled collections ([`samples.md`](samples.md)), so you
+don't have to remember the prefixes. Bare global and `qualia.kit`.
+Implementation: [`src/lib/qualia/code-kit.js`](../src/lib/qualia/code-kit.js).
+
+```js
+stack(
+  s("bd*2 [~ sd] rim hh*4").bank(kit.sig.metal),   // 'sigmetal'
+  s("bd ~ sd ~").bank(kit.ab('lofi')),             // '<siglofi v0lofi r0lofi>'
+  s("hh*8").bank(kit.tour()).gain(.5),             // every genre, one per cycle
+)
+```
+
+| Member | Gives |
+|---|---|
+| `kit.sig.<genre>` · `kit.v0.<genre>` · `kit.r0.<genre>` | that collection's bank (`r0` streams, so it needs network) |
+| `kit.ab(genre)` / `ab(genre, false)` | one genre across collections per cycle / without the network one |
+| `kit.tour()` / `tour('sig')` | every genre in turn: active collection / pinned |
+| `kit.bank(genre, bank?)` | the name, with a warning on a typo |
+| `kit.ls()` / `ls(genre \| prefix \| 'active')` | the cheatsheet below as a console table (returns the rows) |
+| `kit.voices` · `genres` · `collections` · `active()` | the ten voice names (`bd sd rim hh oh lt mt ht rd cr`), genres, collections, the active collection id |
+
+Plain `.bank("metal")` still plays whichever collection the sequencer has
+active. `kit.ls()` prints the table below in the browser console (and returns
+it as rows); `kit.ls('metal')` / `kit.ls('r0')` / `kit.ls('active')` filter it.
+
+#### Bank name cheatsheet
+
+A bank name is **`<collection><genre>`**, glued with no separator, or the bare
+genre for whichever collection is active. That shape is deliberate: Strudel's
+`.bank("x")` rewrites `s("bd")` to `x_bd`, so `_` is the bank/sound joiner
+and stays out of bank names (its `aliasBank()` also splits at the first `_`).
+Lookups are case-insensitive, so `sigMetal` and `SIGMETAL` both work if
+camel case reads better to you. Avoid `:` (mini-notation's sample index).
+
+| Collection | Prefix | What it is |
+|---|---|---|
+| active | *(none)* | `metal`, `lofi`, …: whichever collection the sequencer is set to (signature by default) |
+| signature | `sig` | Characterful on-brand synthetic one-shots. Offline. |
+| voidstar_0 | `v0` | The original synthetic packs, a neutral baseline. Offline. |
+| real_0 | `r0` | Real drum-machine recordings, streamed. **Needs network.** |
+
+| Genre | Sound | `sig…` | `v0…` | `r0…` (machine) |
+|---|---|---|---|---|
+| `voidstar` | Clean, punchy 808/909, the original default | `sigvoidstar` | `v0voidstar` | `r0voidstar` (TR-909) |
+| `lofi` | Warm, filtered boom-bap / chillhop | `siglofi` | `v0lofi` | `r0lofi` (MPC60) |
+| `tape` | Saturated cassette: mellow, rolled-off, dusty | `sigtape` | `v0tape` | `r0tape` (CompuRhythm 1000) |
+| `dub` | Heavy dubstep: deep sub kick, huge snare, wide space | `sigdub` | `v0dub` | `r0dub` (TR-808) |
+| `jazz` | Clean modern jazz: soft, brushed, ride-forward | `sigjazz` | `v0jazz` | `r0jazz` (R-8) |
+| `metal` | Tight metal: clicky kick, cracking snare | `sigmetal` | `v0metal` | `r0metal` (DMX) |
+| `death` | Death metal: ultra-tight kick, pingy snare | `sigdeath` | `v0death` | `r0death` (XR10) |
+| `hiphop` | Dusty Dilla-style boom-bap | `sighiphop` | `v0hiphop` | `r0hiphop` (SP-12) |
+
+Every bank has the same ten voices: `bd sd rim hh oh lt mt ht rd cr`. The
+genre descriptions live in `GENRE_DESCS` (`samples-manifest.js`); the real_0
+machines in `scripts/gen-real-manifests.mjs`.
+
+```js
+// one genre, every collection, a collection per cycle
+s("bd*2 [~ sd] rim hh*4").bank("<metal v0metal sigmetal r0metal>")
+// same thing without typing the names
+s("bd*2 [~ sd] rim hh*4").bank(kit.ab('metal'))
+```
+
 ### Microtonal tuning helpers — 31-TET and beyond
 
 Unlike the silent `q*` lanes, these are **sounding transforms**: they rewrite
@@ -344,8 +476,8 @@ qualia.pose.reset()                // every pose setting back to its default —
 
 qualia.horns.enabled(true)         // metal horns 🤘 detection (hands run in their own worker)
 qualia.horns.config({ sound: 'voidstar', logoMs: 3000, eyesMs: 3000 })
-                                   // reaction: one-shot sound name ('' = silent — load it
-                                   // first, e.g. await samples('shabda/speech:voidstar'))
+                                   // reaction: one-shot sound name ('' = silent; the
+                                   // default 'voidstar' is bundled — others load first)
                                    // + void* logo / nightcall red-eyes flash lengths
                                    // (0 = skip that flash; eyes flash even with the
                                    // nightcall toggle off, and never disturb it)

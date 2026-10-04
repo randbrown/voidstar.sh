@@ -35,13 +35,17 @@
 // here, and failures degrade to console warnings — a live set must never
 // throw out of a pattern callback.
 
-import { THEMES, getTheme, setTheme, cycleTheme } from './theme.js';
+import { THEMES, getTheme, setTheme, cycleTheme, readKnobs } from './theme.js';
 import { CHANNEL_IDS } from './modulation.js';
 import { AUDIO_PRESET_NAMES, loadFxUserPresets, saveFxUserPreset } from './presets.js';
 import * as qualemStore from './qualem.js';
 import { getRotation, setRotation, getMirror, setMirror } from './video.js';
 import { QUALIA_FUNCTIONS, filterFunctions, groupByCategory } from './strudel-reference.js';
 import { getBool, setBool } from './prefs.js';
+import { makeViz } from './viz-opts.js';
+import { makePalette } from './code-palette.js';
+import { makeKit } from './code-kit.js';
+import { COLLECTIONS, GENRES, GENRE_DESCS, getActiveCollectionId } from './samples-manifest.js';
 import {
   parseRoot, parseEdoSpec, parseRatio, parseTuneSpec,
   edoFreq, centsFactor, scaleDegree, jiRetune, noteNameToMidi,
@@ -129,6 +133,47 @@ function autoSeconds(v, dwell) {
   return Math.max(0, +v || 0);
 }
 
+// A theme token's COMPUTED colour. Tokens can be color-mix()/var() chains, so
+// let the browser resolve them on a hidden probe instead of reading the raw
+// custom-property text.
+let _colorProbe = null;
+function computedColor(token) {
+  try {
+    if (!_colorProbe) {
+      _colorProbe = document.createElement('span');
+      _colorProbe.style.display = 'none';
+      document.documentElement.appendChild(_colorProbe);
+    }
+    _colorProbe.style.color = '';
+    _colorProbe.style.color = `var(${token})`;
+    return getComputedStyle(_colorProbe).color;
+  } catch { return ''; }
+}
+
+// Width available to Strudel's inline widgets: they mount as block widgets in
+// the editor's .cm-content, so it's the visible scroller minus the gutter and
+// the content padding — not the window. Lines don't wrap, so .cm-content can
+// be wider than what's on screen; measure the scroller instead. Falls back to
+// the window when no editor is mounted (or it's hidden).
+function editorPanelWidth() {
+  try {
+    for (const ed of document.querySelectorAll('strudel-editor')) {
+      const root = ed.shadowRoot || ed;
+      const scroller = root.querySelector('.cm-scroller');
+      if (!scroller || !scroller.clientWidth) continue;
+      const gutters = root.querySelector('.cm-gutters');
+      const content = root.querySelector('.cm-content');
+      let w = scroller.clientWidth - (gutters?.offsetWidth || 0);
+      if (content) {
+        const cs = getComputedStyle(content);
+        w -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      }
+      if (w > 0) return Math.floor(w);
+    }
+  } catch {}
+  return globalThis.innerWidth || 0;
+}
+
 /** Shallow-copy a config get/patch pair: fn() snapshots, fn(patch) merges. */
 function gsConfig(get, patch) {
   return (cfg) => {
@@ -196,6 +241,25 @@ export function installCodeApi(deps) {
 
   // ── The api object ────────────────────────────────────────────────────────
   const api = {
+    // — Strudel widget sizing —
+    /** Options for _scope/_pianoroll/_punchcard/_spectrum/…: the Strudel
+     *  editor panel's width, 1/7 of the window height. viz('tall') / viz(.25) / viz(120) pick the
+     *  height; viz({…}) merges extra widget options. Also a bare global `viz`. */
+    viz: makeViz(() => ({
+      width: editorPanelWidth(),
+      height: globalThis.innerHeight || 0,
+      dpr: globalThis.devicePixelRatio || 1,
+    })),
+    /** Theme colours as '#rrggbb' (read on each eval): palette.accent/cyan/
+     *  pink/green/amber/text/muted/dim/bg/…, palette.cycle() → '<#a #b …>',
+     *  palette.arc(t) along the theme's hue arc, palette.rgb(name) → 0..1
+     *  for Hydra. Also a bare global `palette`. */
+    palette: makePalette({ color: computedColor, knobs: readKnobs }),
+    /** Sample bank names: kit.sig.metal → 'sigmetal', kit.ab('metal'),
+     *  kit.tour(), kit.ls() cheatsheet, kit.voices / genres / collections.
+     *  Also a bare global `kit`. */
+    kit: makeKit({ collections: COLLECTIONS, genres: GENRES, active: getActiveCollectionId, genreDescs: GENRE_DESCS }),
+
     // — quales —
     /** List registered quales as [{id, name}] in dropdown order. */
     quales: () => mesh.list().map(m => ({ id: m.id, name: m.name })),
@@ -460,8 +524,8 @@ export function installCodeApi(deps) {
        *  a `qualia:horns` window event. */
       enabled: gsBool(() => page.getHornsOn?.(), (on) => page.setHornsOn?.(on)),
       /** Reaction config: {sound, logoMs, eyesMs}. `sound` names any
-       *  registered Strudel sound ('' = silent; default 'voidstar' — load
-       *  it with await samples('shabda/speech:voidstar')); `logoMs` /
+       *  registered Strudel sound ('' = silent; default 'voidstar' — a
+       *  bundled shabda render, registered at Strudel boot); `logoMs` /
        *  `eyesMs` are the void* logo and nightcall red-eyes flash lengths
        *  (0 = skip that flash). horns.config() reads; ({...}) merges. */
       config: gsConfig(() => page.getHornsConfig?.() || {}, (c) => page.patchHornsConfig?.(c)),
@@ -709,6 +773,13 @@ export function installCodeApi(deps) {
     if (!(k in existing)) existing[k] = v;
   }
   g.qualia = existing;
+  // viz / palette / kit as bare globals too: `._scope(viz())` reads better in
+  // a pattern than `._scope(qualia.viz())`. Never clobbers a global someone
+  // else owns.
+  for (const k of ['viz', 'palette', 'kit']) {
+    if (g[k] === undefined) g[k] = existing[k];
+    else if (g[k] !== existing[k]) console.warn(`[qualia] global "${k}" already defined — use qualia.${k}`);
+  }
 
   // Page-side hooks the bindings need but that don't belong on the public
   // `qualia` object: the topbar pulse when a lane yields, and the arm counter

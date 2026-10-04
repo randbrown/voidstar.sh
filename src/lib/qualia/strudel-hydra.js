@@ -133,7 +133,24 @@ async function registerSharedSamples() {
       }
     }
   }
+  await registerSpeechSamples();
   _sharedSamplesRegistered = true;
+}
+
+// Bundled speech one-shots: shabda TTS renders captured into the repo by
+// scripts/fetch-shabda-speech.mjs (data: URLs, so they play offline). Registered
+// under their plain names, so `voidstar`, the default horns 🤘 sound, works with
+// no samples('shabda/speech:voidstar') line. A later samples() call for the same
+// word in a pattern still wins (it registers after this). An empty or missing
+// manifest just registers nothing.
+const SPEECH_MANIFEST_URL = '/samples/speech/strudel.json';
+async function registerSpeechSamples() {
+  try {
+    const resolved = await resolveManifest(SPEECH_MANIFEST_URL);
+    if (Object.keys(resolved.names).length) await globalThis.samples(toStrudelSampleMap(resolved));
+  } catch (e) {
+    console.info('[qualia] no bundled speech samples:', e?.message || e);
+  }
 }
 
 // Which of Strudel's own CodeMirror themes the live-code editor should wear.
@@ -1926,22 +1943,32 @@ export function createStrudelHydra({ audio, getField, setParam, scopeCanvas, onP
   // same bulk-global path that gives us getAudioContext(). The map fills in
   // asynchronously as prebake loads the default banks over the network, so
   // the panel re-reads on open and via a refresh button. Returns a sorted
-  // [{ name, type, count }]; empty array until the registry exists.
+  // [{ name, type, count, aliasOf? }]; empty array until the registry exists.
+  // aliasBank() registers `tr909_bd` as the very same entry object as
+  // `rolandtr909_bd`, so a repeat of an already-seen entry is an alias of the
+  // first name it appeared under (originals register first).
   function listSounds() {
     try {
       const sm = globalThis.soundMap;
       const dict = (sm && typeof sm.get === 'function') ? sm.get() : null;
       if (!dict) return [];
       const out = [];
+      const firstName = new Map();
       for (const name of Object.keys(dict)) {
-        const data = dict[name]?.data || {};
+        const entry = dict[name];
+        const data = entry?.data || {};
         let type = data.type || '';
         if (!type) type = /^gm_/.test(name) ? 'soundfont' : 'other';
         const s = data.samples;
         let count = 0;
         if (Array.isArray(s)) count = s.length;
         else if (s && typeof s === 'object') count = Object.keys(s).length;
-        out.push({ name, type, count });
+        const item = { name, type, count };
+        if (entry && typeof entry === 'object') {
+          if (firstName.has(entry)) item.aliasOf = firstName.get(entry);
+          else firstName.set(entry, name);
+        }
+        out.push(item);
       }
       out.sort((a, b) => a.name.localeCompare(b.name));
       return out;

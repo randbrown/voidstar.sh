@@ -10,6 +10,7 @@ public/samples/
   signature/<genre>/strudel.json    # default — data: URLs, manifest is the source of truth
   voidstar_0/<genre>/{*.wav, strudel.json}   # original baseline — loose WAVs + relative _base
   real_0/<genre>/strudel.json       # real recordings, referenced by remote URL (streamed)
+  speech/strudel.json               # shabda TTS words (e.g. voidstar), data: URLs, plain names
 ```
 
 `<genre>` is one of: voidstar, lofi, tape, dub, jazz, metal, death, hiphop.
@@ -33,6 +34,13 @@ projects; consult their repos for the samples' own terms. Because nothing binary
 is committed, `real_0` needs network when played and is the one collection that
 isn't fully offline. `scripts/gen-real-manifests.mjs` holds the genre→machine map
 and regenerates these manifests.
+
+The **`speech`** pack is not a collection: it holds single spoken words captured
+from [shabda](https://shabda.ndre.gr) (the service behind Strudel's
+`samples('shabda/speech:…')`, which renders them with a text-to-speech engine) by
+`scripts/fetch-shabda-speech.mjs`. They're embedded so the default metal-horns 🤘
+sound `voidstar` plays offline. They register under their plain names
+(`s("voidstar")`), not a bank.
 
 ## Format
 
@@ -60,4 +68,6 @@ npm run gen:samples         # signature   (add `-- --wavs` for loose audition WA
 npm run gen:samples:v0      # voidstar_0
 npm run gen:samples:all     # both synthetic collections (offline, deterministic)
 npm run gen:samples:real    # real_0      (re-resolves remote URLs; needs network)
+npm run gen:samples:speech  # speech      (captures shabda's `voidstar`; needs network)
+npm run gen:samples:speech -- void star   # …or any words (kept alongside existing ones)
 ```

@@ -1525,6 +1525,34 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     .sp-ref-copy:hover { border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.10); }
     .sp-ref-copy:active { transform: scale(0.92); }
     .sp-ref-copy.copied { border-color: var(--green, #7ee787); color: var(--green, #7ee787); }
+    /* Sounds tab: view chips (banks / samples / synths …) and the dense
+       name(count) tokens that bank voices and plain samples render as. */
+    .sp-snd-views { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+    .sp-snd-view {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--muted); font-family: var(--font-mono); font-size: 0.66rem;
+      padding: 0.15rem 0.5rem; cursor: pointer; transition: all 0.12s;
+    }
+    .sp-snd-view:hover { border-color: var(--cyan); color: var(--cyan); }
+    .sp-snd-view.active { border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.10); }
+    .sp-snd-tokens { display: flex; flex-wrap: wrap; gap: 0.15rem 0.35rem; padding: 0.1rem 0; }
+    .sp-snd-tok {
+      background: none; border: 1px solid transparent; border-radius: 3px;
+      color: var(--text); font-family: var(--font-mono); font-size: 0.72rem;
+      padding: 0.05rem 0.2rem; cursor: pointer; transition: all 0.12s;
+    }
+    .sp-snd-tok:hover { border-color: var(--cyan); color: var(--cyan); background: rgba(34,211,238,0.08); }
+    .sp-snd-tok.copied { border-color: var(--green, #7ee787); color: var(--green, #7ee787); }
+    .sp-snd-count { color: var(--muted); font-size: 0.62rem; margin-left: 0.05rem; }
+    .sp-snd-line { align-items: center; flex-wrap: nowrap; }
+    .sp-snd-line .sp-snd-tokens { flex: 1 1 auto; min-width: 0; }
+    .sp-snd-bankname { flex: 0 0 9.5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sp-snd-tag { flex: 0 0 14em; padding-bottom: 2px; }
+    .sp-snd-about { white-space: normal; }
+    @media (max-width: 640px) {
+      .sp-snd-line { flex-wrap: wrap; }
+      .sp-snd-bankname, .sp-snd-tag { flex-basis: auto; }
+    }
 
     /* Qualem panel reuses .sp-pat-* row styling. The body just needs flex
        column + small gap so the toolbar sits cleanly above the list.
@@ -4483,7 +4511,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 
     <div class="ctrls-sec">rig · looper <span class="ctrls-tag">keys</span></div>
     <div class="ctrls-grid">
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>0</kbd><kbd>1</kbd><kbd>2</kbd></span><span class="ctrl-lbl">tuner / earth / metal</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>0</kbd><kbd>1</kbd><kbd>2</kbd></span><span class="ctrl-lbl">tuner (opens rig) / earth / metal</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>O</kbd></span><span class="ctrl-lbl">rig panel show/hide · <kbd>⇧O</kbd> mini / full</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>4</kbd></span><span class="ctrl-lbl">loop play / stop</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>5</kbd><kbd>6</kbd></span><span class="ctrl-lbl">record start / stop</span></div>
@@ -4658,6 +4686,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <input type="text" id="sound-search" class="sp-ref-search" placeholder="search sounds…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
       <button class="ctrl-btn" id="btn-sound-refresh" title="Re-read the sound list (samples keep loading in the background)">↻</button>
     </div>
+    <div id="sound-views" class="sp-snd-views"></div>
     <div id="sound-list" class="sp-ref-list"></div>
   </div>
 </div>
