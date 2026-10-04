@@ -797,7 +797,7 @@ export function drawCrawler(ctx, sim, style, {
 // Cost: VOID_RINGS small drawImage calls of an orb-sized source window.
 const VOID = '#010104';
 const VOID_RINGS = 7;
-const VOID_CORE = 0.34;     // singularity radius, × orb
+const VOID_CORE = 0.18;     // singularity radius, × orb — small; the fade does the work
 function drawVoidBody(ctx, sim, style, scene, t, dpr, glow) {
   const s = sim.state, r = s.reach;
   const axes = sim.orbAxes([0, 0]);
@@ -837,8 +837,9 @@ function drawVoidBody(ctx, sim, style, scene, t, dpr, glow) {
     // the outline so the rim stays continuous with the stage.
     const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
     g.addColorStop(0, 'rgba(1,1,4,1)');
-    g.addColorStop(VOID_CORE * 1.15, 'rgba(1,1,4,1)');
-    g.addColorStop(VOID_CORE * 1.15 + (1 - VOID_CORE * 1.15) * 0.45, 'rgba(1,1,4,0.55)');
+    g.addColorStop(VOID_CORE * 1.1, 'rgba(1,1,4,1)');
+    g.addColorStop(0.45, 'rgba(1,1,4,0.72)');
+    g.addColorStop(0.75, 'rgba(1,1,4,0.3)');
     g.addColorStop(1, 'rgba(1,1,4,0)');
     ctx.save();
     ctx.scale(ax, ay);
