@@ -99,10 +99,16 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
   canvas when a glitch is up) with a per-foot treatment chosen at plant — zoom, tilt, skew, or
   negative (`filter: invert(1) hue-rotate(180deg)`) — additive, fading with plant age. The pixel
   version of the reel's enlarged/skewed/recoloured words.
-- **Body modes:** `frame` (outline), `lens` (the pane is a see-through negative of the scene
-  under it — the null-portal idea carried around), `hole` (with a full-frame post active the
-  pane is *cleared* from the post canvas so the raw scene shows through; without a post it falls
-  back to lens). `hole` is the "everything but the body is the target" reading.
+- **Body modes:** `frame` (outline), `lens` (the pane is a see-through negative of the *raw*
+  fx scene — the null-portal idea carried around), `hole` (the inverse: the overlay paints a
+  full-frame negative onto the post canvas, or reuses an active glitch post, and *clears* the
+  pane out of it so only the body shows the raw scene). First cut had the lens sampling the post
+  canvas and the hole falling back to lens without a post, which made the two indistinguishable
+  — negative∘negative is identity. Fixed by giving the hole its own field and the lens the raw
+  scene.
+- **Leg counts 4–8:** layouts are generated per count (pairs spread front→rear, widest in the
+  middle); an odd count adds one unpaired trailing leg on the right with its knee bent inward,
+  in the gait group opposite the rear pair — a lopsided scuttle.
 - **Logo latch:** `follow: 'logo'` (and the auto fallback after pointer + pose) steers the pack
   around the logo mark's rect, fanned by index; any foot landing within half a reach of the
   rect's perimeter snaps to it and boxes the whole mark, so the creature climbs the mark as it

@@ -34,7 +34,7 @@ export const CRAWLER_MAX = 4;
 export const CRAWLER_DEFAULTS = {
   follow:     'auto',   // auto = pointer if it moved recently → pose → logo → wander
   count:      '1',      // '1'..'4' crawlers, or 'pose' = one per tracked person
-  legs:       8,        // 6 or 8
+  legs:       8,        // 4..8 — odd counts add a trailing unpaired leg
   size:       1.25,     // body scale (reach = 72 px × size × dpr)
   speed:      1.0,      // body top speed scaler
   stride:     0.42,     // step threshold, fraction of reach
@@ -201,19 +201,27 @@ export function createFeatureGrid(cols = 160, rows = 90) {
 // ── Leg layouts ─────────────────────────────────────────────────────────────
 // Where each foot rests relative to the body (fractions of reach): f forward,
 // l lateral. hip = where the leg joins the body (fraction of body length).
-const LAYOUT_8 = [
-  { f:  0.95, l: 0.60, hip:  0.42 },
-  { f:  0.38, l: 1.00, hip:  0.16 },
-  { f: -0.22, l: 1.00, hip: -0.08 },
-  { f: -0.78, l: 0.62, hip: -0.30 },
-];
-const LAYOUT_6 = [
-  { f:  0.85, l: 0.72, hip:  0.36 },
-  { f:  0.00, l: 1.00, hip:  0.00 },
-  { f: -0.80, l: 0.72, hip: -0.34 },
-];
-
+// Built per leg count: `pairs` mirrored legs spread from front (f 0.95) to
+// rear (f −0.78), widest in the middle; an odd count adds one unpaired
+// trailing leg at the rear, slightly to one side, knee bent the other way —
+// the lopsided, injured-looking scuttle an odd number buys.
 const MAX_LEGS = 8;
+const MIN_LEGS = 4;
+const ODD_LEG = { f: -1.05, l: 0.22, hip: -0.42 };
+const _layoutCache = new Map();
+export function buildLegLayout(n) {
+  n = clamp(Math.round(n) || 8, MIN_LEGS, MAX_LEGS);
+  if (_layoutCache.has(n)) return _layoutCache.get(n);
+  const pairs = n >> 1;
+  const L = [];
+  for (let i = 0; i < pairs; i++) {
+    const t = pairs === 1 ? 0.5 : i / (pairs - 1);
+    L.push({ f: 0.95 - 1.73 * t, l: 0.62 + 0.38 * Math.sin(Math.PI * t), hip: 0.42 - 0.72 * t });
+  }
+  const out = { n, pairs, legs: L, odd: n & 1 ? ODD_LEG : null };
+  _layoutCache.set(n, out);
+  return out;
+}
 
 // ── Sim ─────────────────────────────────────────────────────────────────────
 export function createCrawlerSim() {
@@ -246,30 +254,41 @@ export function createCrawlerSim() {
   const seekOut = { x: 0, y: 0, score: 0, ix: 0, iy: 0 };
   const kneeOut = [0, 0];
 
-  function layout() { return s.legCount === 6 ? LAYOUT_6 : LAYOUT_8; }
+  let layoutN = buildLegLayout(8);
+  function legSpec(f) { return f.i < 0 ? layoutN.odd : layoutN.legs[f.i]; }
 
   function setLegs(n) {
-    n = n === 6 ? 6 : 8;
+    n = clamp(Math.round(n) || 8, MIN_LEGS, MAX_LEGS);
     if (n === s.legCount) return;
     s.legCount = n;
-    const L = layout();
+    layoutN = buildLegLayout(n);
+    const L = layoutN.legs;
     let k = 0;
     for (let side = -1; side <= 1; side += 2) {
       for (let i = 0; i < L.length; i++, k++) {
         const f = s.feet[k];
         f.side = side; f.i = i; f.bend = side;
-        // Alternating tetrapod (8) / tripod (6): neighbours on one side and
-        // the mirror leg across belong to opposite groups.
+        // Alternating tetrapod / tripod: neighbours on one side and the
+        // mirror leg across belong to opposite groups.
         f.group = (i + (side > 0 ? 1 : 0)) % 2;
         f.hipF = L[i].hip;
         f.swing = false; f.t = 1; f.box.on = false; f.anchored = false;
       }
     }
+    if (layoutN.odd) {
+      // The trailing odd leg: i = -1 marks it, right side, knee bent inward,
+      // in whichever gait group the rear pair isn't.
+      const f = s.feet[k];
+      f.side = 1; f.i = -1; f.bend = -1;
+      f.group = (L.length - 1 + 1) % 2 === 0 ? 1 : 0;
+      f.hipF = layoutN.odd.hip;
+      f.swing = false; f.t = 1; f.box.on = false; f.anchored = false;
+    }
     plantAll();
   }
 
   function idealFoot(f, out) {
-    const r = s.reach, L = layout()[f.i];
+    const r = s.reach, L = legSpec(f);
     const cx = Math.cos(s.a), sy = Math.sin(s.a);
     const fw = L.f * r, lat = f.side * L.l * r * (1 - s.crouch * 0.15);
     out[0] = s.x + cx * fw - sy * lat;
@@ -550,14 +569,16 @@ function withAlpha(tpl, a) { return tpl.replace('A', a.toFixed(3)); }
  *   scene   { src, sx, sy } — a canvas showing what the creature walks on,
  *           with device-px → src-px scale factors; null disables re-blits
  *           and the lens body
+ *   rawScene the untreated fx canvas for the lens body (defaults to scene)
  *   reblit  0..1 — re-print each gripped patch (enlarged / tilted / skewed /
  *           inverted per foot) at this opacity
  *   body    'frame' | 'lens' | 'hole' — 'hole' is punched by the host (it
  *           needs the post canvas); here it draws like 'frame'
  */
 export function drawCrawler(ctx, sim, style, {
-  boxes = 0.8, glow = 1, t = 0, dpr = 1, scene = null, reblit = 0, body = 'frame',
+  boxes = 0.8, glow = 1, t = 0, dpr = 1, scene = null, rawScene = null, reblit = 0, body = 'frame',
 } = {}) {
+  const lensSrc = rawScene || scene;
   const s = sim.state;
   if (s.legCount === 0) return;
   const r = s.reach;
@@ -677,7 +698,7 @@ export function drawCrawler(ctx, sim, style, {
   // (invert flips lightness, hue-rotate 180 brings the hues back, like the
   // negative post), so the creature carries a little null-portal around.
   // Bigger than the frame so there's something to see through.
-  if (body === 'lens' && scene && scene.src) {
+  if (body === 'lens' && lensSrc && lensSrc.src) {
     const pl = bodyLen * 1.5, pw = bodyW * 3.2;
     ctx.save();
     ctx.beginPath(); ctx.rect(-pl / 2, -pw / 2, pl, pw); ctx.clip();
@@ -689,7 +710,7 @@ export function drawCrawler(ctx, sim, style, {
     const x1 = s.x + half, y1 = s.y + half;
     ctx.filter = 'invert(1) hue-rotate(180deg)';
     try {
-      ctx.drawImage(scene.src, x0 * scene.sx, y0 * scene.sy, (x1 - x0) * scene.sx, (y1 - y0) * scene.sy, x0, y0, x1 - x0, y1 - y0);
+      ctx.drawImage(lensSrc.src, x0 * lensSrc.sx, y0 * lensSrc.sy, (x1 - x0) * lensSrc.sx, (y1 - y0) * lensSrc.sy, x0, y0, x1 - x0, y1 - y0);
     } catch { /* tainted source */ }
     ctx.filter = 'none';
     ctx.restore();

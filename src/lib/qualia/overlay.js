@@ -353,7 +353,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       else if (k === 'palette') { if (CRAWLER_PALETTES.includes(v)) crawlerConfig.palette = v; }
       else if (k === 'count')   { const c = String(v); if (CRAWLER_COUNTS.includes(c)) crawlerConfig.count = c; }
       else if (k === 'body')    { if (CRAWLER_BODIES.includes(v)) crawlerConfig.body = v; }
-      else if (k === 'legs')    { if (v === 6 || v === 8) crawlerConfig.legs = v; }
+      else if (k === 'legs')    { const n = Math.round(+v); if (n >= 4 && n <= 8) crawlerConfig.legs = n; }
       else if (k === 'silk')    { crawlerConfig.silk = !!v; }
       else if (typeof v === 'number' && Number.isFinite(v)) crawlerConfig[k] = v;
     }
@@ -1297,15 +1297,24 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     g.globalCompositeOperation = 'source-over';
   }
   function isPostActive() { return opts.ascii || opts.mosh || opts.edge || opts.stitch || opts.negative; }
+  /** The crawler's 'hole' body owns the post canvas when no glitch does. */
+  function crawlerHoleActive() { return !!opts.crawler && crawlerConfig.body === 'hole'; }
+  /** Post canvas showing — a glitch post, or the hole's own negative. */
+  function postCanvasLive() { return isPostActive() || crawlerHoleActive(); }
 
-  /** The canvas the creatures stand on, for re-blits + the lens body. */
+  /** Scene sources: re-blits re-print what's on screen (the post canvas
+   *  when a glitch is up, else the fx canvas); the lens body always looks at
+   *  the RAW fx canvas, so over a negative post the lens pane (negative of
+   *  raw) blends with the field while the hole pane (raw) cuts through it. */
+  const crawlerRawScene = { src: null, sx: 1, sy: 1 };
   function syncCrawlerScene() {
     const W = canvas.width, H = canvas.height;
-    if (isPostActive()) { crawlerScene.src = postCanvas; crawlerScene.sx = 1; crawlerScene.sy = 1; return; }
     const main = getMainCanvas?.();
     if (main && main.width > 0 && main.height > 0) {
-      crawlerScene.src = main; crawlerScene.sx = main.width / W; crawlerScene.sy = main.height / H;
-    } else crawlerScene.src = null;
+      crawlerRawScene.src = main; crawlerRawScene.sx = main.width / W; crawlerRawScene.sy = main.height / H;
+    } else crawlerRawScene.src = null;
+    if (isPostActive()) { crawlerScene.src = postCanvas; crawlerScene.sx = 1; crawlerScene.sy = 1; return; }
+    crawlerScene.src = crawlerRawScene.src; crawlerScene.sx = crawlerRawScene.sx; crawlerScene.sy = crawlerRawScene.sy;
   }
 
   function syncLogoRect() {
@@ -1420,13 +1429,14 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       crawlerStyle = name === 'theme' ? themeCrawlerStyle(K) : (CRAWLER_STYLES[name] || CRAWLER_STYLES.reel);
     }
     const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
-    // 'hole' punches the pane out of the active full-frame post (the scene
-    // shows through); without a post it reads as the lens instead.
-    const postUp = isPostActive();
-    const body = cfg.body === 'hole' ? (postUp ? 'hole' : 'lens') : cfg.body;
+    // 'hole' punches the pane out of the post canvas — a glitch post, or the
+    // full-frame negative render() lays down for the hole when no glitch is
+    // up — so everything BUT the body is the treated image.
+    const body = cfg.body;
     const opt = {
       boxes: clamp(cfg.boxes, 0, 1), glow: crawlerScratchGlow, t: crawlerScratchT, dpr,
-      scene: crawlerScene.src ? crawlerScene : null, reblit: clamp(cfg.reblit, 0, 1), body,
+      scene: crawlerScene.src ? crawlerScene : null, rawScene: crawlerRawScene.src ? crawlerRawScene : null,
+      reblit: clamp(cfg.reblit, 0, 1), body,
     };
     for (let i = 0; i < crawlerActive; i++) {
       const sim = crawlerSims[i];
@@ -1451,7 +1461,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     // canvas so skeleton + sparks still land on top. The post canvas is
     // display:none while no post is active — the extra compositor layer is
     // free in the common case.
-    const postActive = opts.mosh || opts.ascii || opts.edge || opts.stitch || opts.negative;
+    const postActive = postCanvasLive();
     if (postActive !== postShown) {
       postCanvas.style.display = postActive ? 'block' : 'none';
       postShown = postActive;
@@ -1461,6 +1471,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     else if (opts.edge)     renderEdge(field);
     else if (opts.stitch)   renderStitch(field);
     else if (opts.negative) renderNegative();
+    else if (crawlerHoleActive()) renderNegative();   // the hole's own field; drawCrawlerLayer punches it
 
     ctx.clearRect(0, 0, W, H);
     drawPoseOverlay(field);
@@ -1486,8 +1497,9 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   return {
     canvas,
     postCanvas,
-    /** True while an ascii/mosh/edge/stitch/negative pass is rendering (post canvas shown). */
-    isPostActive: () => opts.ascii || opts.mosh || opts.edge || opts.stitch || opts.negative,
+    /** True while the post canvas is showing — an ascii/mosh/edge/stitch/
+     *  negative pass, or the crawler's 'hole' body painting its own negative. */
+    isPostActive: postCanvasLive,
     tick,
     render,
     setOption,

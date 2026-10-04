@@ -259,7 +259,7 @@ qualia.quantize("cycle")           // scene changes land on the Strudel downbeat
 qualia.overlay("skeleton", true)   // skeleton | sparks | aura | ripples | crawler
 qualia.sparkStyle("emmons")        // dots | emmons | shobud
 qualia.crawler({ follow: "pose" }) // the spider layer's tunables: follow auto|pointer|pose|logo|wander,
-                                   // count 1..4|'pose' (one per person), legs 6|8, size, speed, stride,
+                                   // count 1..4|'pose' (one per person), legs 4..8, size, speed, stride,
                                    // anchor, boxes, reblit, body frame|lens|hole, silk, reactivity,
                                    // palette theme|reel|mono — overlay('crawler', on) toggles
 qualia.glitch("mosh", "flip")      // modes: off | on | blip | flip

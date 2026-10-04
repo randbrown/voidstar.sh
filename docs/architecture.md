@@ -136,7 +136,7 @@ word pills from a user-editable list.
 
 **Crawler layer** (`crawler.js`, composited by `overlay.js` on the pose canvas, so it stacks with any
 glitch and lands in recordings for free): a procedural spider — eight (or six) two-bone IK legs on
-an alternating-tetrapod gait, home-position stepping — that walks over whatever the stage shows,
+an alternating-tetrapod gait (4–8 legs), home-position stepping — that walks over whatever the stage shows,
 chasing the pointer, the most visible wrist, or wandering. Feet don't land on the ideal spot: the
 overlay keeps a ≤128-cell-wide luma + gradient *feature grid* of the composited scene (Hydra ⊕ fx
 canvas, or the active post canvas), refreshed every fourth frame, and each step seeks the strongest
@@ -144,8 +144,10 @@ edge within reach and boxes the bright blob it grips — the pixel-space answer 
 `elementFromPoint` trick — and re-prints the gripped patch as a glowing ghost (zoomed / tilted /
 skewed / inverted per foot, `reblit`). Up to four creatures (`count`, or `'pose'` for one per
 tracked person, each chasing its own person); with the logo mark up they climb it, feet latching
-onto its perimeter (`follow: 'logo'`, also the auto fallback). The body is an outline, a see-through
-negative pane of the scene (`lens`), or a hole punched through the active glitch post (`hole`).
+onto its perimeter (`follow: 'logo'`, also the auto fallback). Legs run 4–8; odd counts add one
+unpaired trailing leg. The body is an outline, a see-through negative pane of the raw scene (`lens`),
+or the inverse (`hole`): the overlay paints a full-frame negative on the post canvas (or uses the
+active glitch post) and clears the body pane out of it, so everything but the body is treated.
 Audio: beat pulse quickens steps + bounces the body, bass crouches it, highs make the legs tremble. Everything is lazily built on first enable and allocation-free per
 frame; the sim is DOM-free and covered by `scripts/check-qualia-crawler.mjs`. Toggled in the
 topbar layers ▾ group (hotkey ⇧B), tuned in the crawler card, persisted in settings + qualems,

@@ -3868,11 +3868,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="pose">pose</option>
         </select>
       </div>
-      <div class="qp-row" data-qp="crawler-legs" title="Eight legs walk an alternating tetrapod; six walk a tripod">
+      <div class="qp-row" data-qp="crawler-legs" title="4–8. Even counts walk a clean alternating gait; odd counts add one unpaired trailing leg for a lopsided scuttle">
         <label>legs</label>
         <select class="qp-select" id="crawler-legs">
           <option value="8" selected>8</option>
+          <option value="7">7</option>
           <option value="6">6</option>
+          <option value="5">5</option>
+          <option value="4">4</option>
         </select>
       </div>
       <div class="qp-row" data-qp="crawler-size" title="Body scale — leg reach is 72px × size">
@@ -3899,7 +3902,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>reblit<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.7">
       </div>
-      <div class="qp-row" data-qp="crawler-body" title="frame: outline body · lens: the body is a see-through negative of the scene under it (a pocket null portal) · hole: with a glitch post on, the body punches through it to the raw scene (everything else stays treated)">
+      <div class="qp-row" data-qp="crawler-body" title="frame: outline body · lens: the body is a see-through negative of the scene under it (a pocket null portal) · hole: the inverse — the whole stage goes negative and only the body shows the raw scene (with a glitch post on, it punches through that post instead)">
         <label>body</label>
         <select class="qp-select" id="crawler-body">
           <option value="frame" selected>frame</option>

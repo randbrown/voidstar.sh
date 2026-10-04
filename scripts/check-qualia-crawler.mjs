@@ -170,8 +170,34 @@ function run(sim, inp, seconds, dt = 1 / 60, onFrame = null) {
   sim.setLegs(6);
   check('6-leg layout', st.legCount === 6 && st.feet.slice(0, 6).every(f => !f.swing));
   check('6-leg tripod groups 3/3', st.feet.slice(0, 6).filter(f => f.group === 0).length === 3);
-  sim.setLegs(7);
-  check('bad leg count falls back to 8', st.legCount === 8);
+  sim.setLegs(9);
+  check('leg count clamps high → 8', st.legCount === 8);
+  sim.setLegs(2);
+  check('leg count clamps low → 4', st.legCount === 4);
+  sim.setLegs('7');
+  check('string leg count parses', st.legCount === 7);
+}
+
+// Odd leg counts: pairs + one trailing unpaired leg; the walk still holds.
+section('odd leg counts (5 / 7)');
+for (const n of [5, 7]) {
+  const sim = createCrawlerSim();
+  sim.setLegs(n); sim.placeAt(200, 450);
+  const st = sim.state;
+  const legs = st.feet.slice(0, n);
+  const odd = legs.filter(f => f.i < 0);
+  check(`${n} legs: exactly one unpaired leg`, odd.length === 1 && legs.filter(f => f.side < 0).length === (n >> 1));
+  check(`${n} legs: odd leg trails behind the body`, (() => { const o = [0, 0]; sim.idealFoot(odd[0], o); return o[1] > st.y + 20; })());   // fresh sims face up (−π/2), so behind is +y
+  const g0 = legs.filter(f => f.group === 0).length;
+  check(`${n} legs: gait groups split ${Math.floor(n / 2)}/${Math.ceil(n / 2)}`, Math.abs(g0 - (n - g0)) === 1, `${g0}/${n - g0}`);
+  let nan = false, maxSwing = 0;
+  run(sim, makeInput({ tx: 1300, ty: 500 }), 6, 1 / 60, () => {
+    let sw = 0;
+    for (let k = 0; k < n; k++) { const f = st.feet[k]; if (!Number.isFinite(f.x) || !Number.isFinite(f.kx)) nan = true; if (f.swing) sw++; }
+    if (sw > maxSwing) maxSwing = sw;
+  });
+  check(`${n} legs: walks without NaN`, !nan && Math.hypot(st.x - 1300, st.y - 500) < 72 * 0.5);
+  check(`${n} legs: a stance always remains`, maxSwing < n, `${maxSwing}`);
 }
 
 // Anchoring: with a grid carrying one bright feature, feet landing nearby
