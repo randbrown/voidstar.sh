@@ -832,10 +832,13 @@ function drawVoidBody(ctx, sim, style, scene, t, dpr, glow) {
       } catch { /* tainted source */ }
       ctx.restore();
     }
-    // Darken toward the core so the rings read as falling in, not tiling.
+    // Fade the rings to black toward the centre: fully void by the core
+    // radius (so the singularity has no hard edge), easing out to clear at
+    // the outline so the rim stays continuous with the stage.
     const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
-    g.addColorStop(0, 'rgba(1,1,4,0.85)');
-    g.addColorStop(VOID_CORE * 1.4, 'rgba(1,1,4,0.45)');
+    g.addColorStop(0, 'rgba(1,1,4,1)');
+    g.addColorStop(VOID_CORE * 1.15, 'rgba(1,1,4,1)');
+    g.addColorStop(VOID_CORE * 1.15 + (1 - VOID_CORE * 1.15) * 0.45, 'rgba(1,1,4,0.55)');
     g.addColorStop(1, 'rgba(1,1,4,0)');
     ctx.save();
     ctx.scale(ax, ay);
