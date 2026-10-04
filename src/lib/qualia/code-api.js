@@ -318,6 +318,9 @@ export function installCodeApi(deps) {
     },
     mosh:   gsConfig(() => overlay.getMoshConfig(),   (c) => overlay.setMoshConfig(c)),
     edge:   gsConfig(() => overlay.getEdgeConfig(),   (c) => overlay.setEdgeConfig(c)),
+    /** crawler() reads the spider layer's tunables; crawler({follow, size, …}) patches
+     *  them. On/off is overlay('crawler', on) like the other layers. */
+    crawler: gsConfig(() => overlay.getCrawlerConfig(), (c) => overlay.setCrawlerConfig(c)),
     stitch: gsConfig(() => overlay.getStitchConfig(), (c) => overlay.setStitchConfig(c)),
     logo:       gsBool(() => logoMark.isEnabled(), (on) => page.setLogoOn(on)),
     logoConfig: gsConfig(() => logoMark.getConfig(), (c) => logoMark.setConfig(c)),

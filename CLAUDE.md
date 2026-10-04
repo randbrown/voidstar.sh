@@ -21,5 +21,6 @@ Quick map of the canonical docs:
 - DOIO controller keymap (keystrokes + MIDI) → [`docs/doio-kb16-qualia-keymap.md`](docs/doio-kb16-qualia-keymap.md)
 - Keeping the rig going lid-shut / screen-off → [`docs/headless-and-screen-off.md`](docs/headless-and-screen-off.md)
 - Arcade design → [`plans/arcade-quale-plan.md`](plans/arcade-quale-plan.md)
+- Crawler layer (the @rybinfx-inspired spider over any quale): research + design log → [`plans/crawler-layer-plan.md`](plans/crawler-layer-plan.md)
 - Theming: wiring/tokens → [`docs/THEMES.md`](docs/THEMES.md) · designing a theme (UX brief) → [`docs/theming-guide.md`](docs/theming-guide.md)
 - Refactor / perf / tech-debt backlog → [`plans/maintenance-backlog.md`](plans/maintenance-backlog.md)
