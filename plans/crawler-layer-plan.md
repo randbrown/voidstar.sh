@@ -111,10 +111,13 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
   gravitational lens. First cut put the lensing rim *outside* a black disc; on stage that read as
   a big black circle with a halo, so the rings moved inside: within the body ellipse, seven
   annular slices of the raw scene are re-drawn through an even-odd clip, continuous with the
-  stage at the rim (scale 1, no twist) and pulled (to 2.4×) + twisted (to 0.9 rad, slowly
-  breathing) harder toward a small true-black singularity (0.34 of the body) with a photon ring
-  in the core colour that flares on beats; a radial darkening sells the fall-in. Seven small
-  `drawImage` calls per creature; no readback. Stored `body: 'hole'` migrates to `void`.
+  stage at the outline (scale 1, no twist) and pulled (to 2.4×) + twisted (to 0.9 rad, slowly
+  breathing) harder toward a small true-black singularity with a photon ring in the core colour
+  that flares on beats; a radial darkening sells the fall-in. Third pass tied the lens to the
+  body's *definition*: everything is clipped to the body cell (frame length × a width that puts
+  the hips exactly on its long edges), the outline is stroked on top with a dot per hip, so the
+  legs visibly meet the body and the distortion lives inside it. Seven small `drawImage` calls
+  per creature; no readback. Stored `body: 'hole'` migrates to `void`.
 - **Leg counts 4–8:** layouts are generated per count (pairs spread front→rear, widest in the
   middle); an odd count adds one unpaired trailing leg on the right with its knee bent inward,
   in the gait group opposite the rear pair — a lopsided scuttle.

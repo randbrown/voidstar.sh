@@ -742,31 +742,43 @@ export function drawCrawler(ctx, sim, style, {
 }
 
 // ── Void body ───────────────────────────────────────────────────────────────
-// An ellipse along the heading that LENSES the scene inside it: the raw scene
-// is re-drawn in VOID_RINGS concentric annular slices from the rim (scale 1,
-// no twist — continuous with the stage outside) inward, each pulled toward
-// the centre and twisted harder than the last (light bending in, frame
-// dragging), down to a small true-black singularity at the core with a thin
-// photon ring on its edge. Nothing outside the ellipse is touched.
+// The body CELL — the slim rectangle along the heading whose long edges the
+// hips sit on — becomes a gravitational lens: inside the outline the raw
+// scene is re-drawn in VOID_RINGS concentric elliptical slices, continuous
+// with the stage at the outline (scale 1, no twist) and pulled + twisted
+// harder toward a small true-black singularity at the centre with a photon
+// ring. Everything is clipped to the cell; the outline is stroked on top with
+// a dot at each hip so you can see where the legs meet the body. Nothing
+// outside the cell is touched.
 // Radii are ellipse scales in BODY space (ctx is already translated +
 // rotated to the body); the scene is blitted un-rotated through the clip.
-// Cost: VOID_RINGS small drawImage calls of a (2·body)² source window.
+// Cost: VOID_RINGS small drawImage calls of a cell-sized source window.
 const VOID = '#010104';
 const VOID_RINGS = 7;
-const VOID_CORE = 0.34;     // singularity radius, × body ellipse
+const VOID_CORE = 0.38;     // singularity radius, × ring ellipse
+const HIP_LAT = 0.14;       // hip lateral offset, × reach (must match hipOf)
 function drawVoidBody(ctx, s, style, scene, bodyLen, bodyW, t, dpr, glow) {
-  const ax = bodyLen * 0.95 * (1 + s.bob * 0.15), ay = bodyW * 2.6 * (1 + s.bob * 0.15);
-  const half = Math.max(ax, ay) * 1.15 + 2;         // source window half-size (device px)
+  const r = s.reach;
+  // The cell: as long as the frame body, wide enough that the hips (±HIP_LAT
+  // × reach) sit exactly on its long edges. bodyW carries the crouch/bob
+  // scale, so reuse its ratio against the nominal 0.16 reach.
+  const vw = bodyLen;
+  const vh = 2 * HIP_LAT * r * (bodyW / (r * 0.16));
+  // Ring ellipse large enough to cover the cell's corners (√2 · 0.5 ≈ 0.71).
+  const ax = vw * 0.72, ay = vh * 0.72;
+  const half = Math.hypot(vw, vh) * 0.55 * 2.4 + 2;   // source window (device px), covers the 2.4× pull
+  ctx.save();
+  ctx.beginPath(); ctx.rect(-vw / 2, -vh / 2, vw, vh); ctx.clip();
   if (scene && scene.src) {
     const x0 = Math.max(0, s.x - half), y0 = Math.max(0, s.y - half);
     const x1 = s.x + half, y1 = s.y + half;
     const dir = s.a < 0 ? 1 : -1;
     for (let k = 0; k < VOID_RINGS; k++) {
-      // Ring k spans [ri, ro] (× ellipse) from the rim inward to the core.
+      // Ring k spans [ri, ro] (× ellipse) from the outline inward to the core.
       const u0 = k / VOID_RINGS, u1 = (k + 1) / VOID_RINGS;
       const ro = 1 - (1 - VOID_CORE) * u0;
       const ri = 1 - (1 - VOID_CORE) * u1;
-      const bend = u1 ** 1.5;                        // 0 at the rim → 1 at the core
+      const bend = u1 ** 1.5;                        // 0 at the outline → 1 at the core
       const scale = 1 + 1.4 * bend;                  // pull the scene inward
       const twist = dir * 0.9 * bend * (1 + 0.25 * Math.sin(t * 0.6));
       ctx.save();
@@ -798,17 +810,24 @@ function drawVoidBody(ctx, s, style, scene, bodyLen, bodyW, t, dpr, glow) {
   // The singularity.
   ctx.fillStyle = VOID;
   ctx.beginPath(); ctx.ellipse(0, 0, ax * VOID_CORE, ay * VOID_CORE, 0, 0, Math.PI * 2); ctx.fill();
-  // Photon ring on the core — hot, in the core colour, flaring on beats —
-  // and a hairline at the rim so the lens has an edge.
+  // Photon ring on the core — hot, in the core colour, flaring on beats.
   ctx.globalCompositeOperation = 'lighter';
   ctx.strokeStyle = style.core;
   ctx.lineWidth = Math.max(1, dpr) * (1 + s.bob);
   ctx.globalAlpha = 0.45 * glow + s.bob * 0.5;
   ctx.beginPath(); ctx.ellipse(0, 0, ax * VOID_CORE * 1.08, ay * VOID_CORE * 1.1, 0, 0, Math.PI * 2); ctx.stroke();
-  ctx.strokeStyle = style.joint;
-  ctx.lineWidth = Math.max(0.75, dpr * 0.75);
-  ctx.globalAlpha = 0.22 * glow;
-  ctx.beginPath(); ctx.ellipse(0, 0, ax, ay, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();   // cell clip
+  // The outline — the body cell the legs hang off — with a dot at each hip.
+  const lw = Math.max(1, r * 0.022);
+  ctx.strokeStyle = style.body;
+  ctx.lineWidth = Math.max(1, lw * 1.1);
+  ctx.strokeRect(-vw / 2, -vh / 2, vw, vh);
+  ctx.fillStyle = style.body;
+  const hr = Math.max(1.2, r * 0.028);
+  for (let n = 0; n < s.legCount; n++) {
+    const f = s.feet[n];
+    ctx.beginPath(); ctx.arc(f.hipF * r * 0.55, f.side * vh / 2, hr, 0, Math.PI * 2); ctx.fill();
+  }
 }
