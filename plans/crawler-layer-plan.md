@@ -123,6 +123,24 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
 - **Void is the default body** (was `frame`) — it's the one that reads as voidstar on stage.
   The frame / lens core dot moved from just behind centre to the *front* of the cell
   (`+0.35 × bodyLen`), so the dot is the head and tells you which way the creature faces.
+- **Frame / lens trimmed to the cell:** the frame and lens bodies lost their soft additive halo
+  ellipse (it read as an outer circle around the body), and the lens pane shrank from a
+  1.5 × 3.2 window around the cell — which covered the hips and leg joints — to the cell itself,
+  with no outline: the body *is* the lens. Only the front core dot is drawn over it.
+- **Silk became a web line (was a dragline):** the old silk re-pinned, on a 35% coin flip per
+  strong grip, a straight thread from the spinneret *back* to where a foot had landed — no audio
+  link, and it read as a trail rather than intent. Now it's thrown *forward*, Spider-Man style:
+  on each bass beat (`audio.beat.active`, 0.45 s cooldown; every ~2.5 s when audio is off or
+  reactivity is 0), if the chase target is more than a reach away, the head shoots a line up to
+  6 reach toward it, snapping the far end to the nearest landmark around that point (the logo
+  perimeter if it's within 1.5 reach, else the grid's strongest edge within 1.2 reach, else the
+  bare point; a snap that ends up behind the body is dropped). The tip races out over 0.12 s,
+  lands with a flash ring, and gives the body one velocity kick (1.6 reach/s) toward the anchor;
+  the line lets go when the body arrives or after 2.6 s.
+- **Box size control:** boxes were capped at a fixed 23 × 7 grid cells — up to ~345 × 105 px on a
+  1920-wide canvas, ~4 reach wide, and on bright scenes most boxes hit the cap. New `boxSize`
+  (0.05..1, default 0.35) caps width at `boxSize × 4 × reach` and height at 0.3 × that, so boxes
+  scale with the creature instead of the canvas; `boxes` stays the opacity.
 - **Step quantize:** the gait steps *on the hats*. `quantize` picks a transient train (highs =
   hat/cymbal detector, default; mids = snare; beat = kick; off). Each tick goes to ONE gait
   group — alternating, the way the free gait's tetrapod does — and any foot of that group that

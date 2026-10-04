@@ -3909,11 +3909,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>boxes<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.8">
       </div>
+      <div class="qp-row" data-qp="crawler-box-size" title="Largest a highlight box may grow around a gripped feature, scaled to the creature's size (1 = four legs wide)">
+        <label>box size<span class="qp-val"></span></label>
+        <input type="range" min="0.05" max="1" step="0.01" value="0.35">
+      </div>
       <div class="qp-row" data-qp="crawler-reblit" title="Re-print each gripped patch as a glowing ghost — zoomed, tilted, skewed or inverted per foot (the reel's enlarged / skewed words). 0 = off">
         <label>reblit<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.7">
       </div>
-      <div class="qp-row" data-qp="crawler-silk" title="Dragline — a thread from the spinneret back to the last strong grip">
+      <div class="qp-row" data-qp="crawler-silk" title="Web line — on each bass beat it shoots a line toward a landmark near where it is heading and gets tugged along it (every few seconds with audio off)">
         <label>silk</label>
         <button class="qp-toggle active" id="crawler-silk">on</button>
       </div>

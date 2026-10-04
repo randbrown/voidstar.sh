@@ -43,9 +43,10 @@ export const CRAWLER_DEFAULTS = {
   stride:     0.42,     // step threshold, fraction of reach
   anchor:     0.85,     // 0..1 — how hard feet snap onto image features
   boxes:      0.8,      // highlight-box opacity around gripped features (0 = off)
+  boxSize:    0.35,     // 0.05..1 — cap on a highlight box's width, ×4 reach (height ≤ 0.3 × width)
   reblit:     0.7,      // re-print the gripped patch enlarged / tilted / skewed / inverted (0 = off)
   body:       'void',   // void = scene lensed into a black core · frame = outline · lens = inverted window onto the scene
-  silk:       true,     // dragline from the spinneret to the last strong grip
+  silk:       true,     // web line shot on the bass beat toward a landmark near where it's heading
   reactivity: 1.0,      // audio response (beat scuttle, bass crouch, highs jitter)
   quantize:   'highs',  // step on: highs (hats) | mids (snare) | beat (kick) | off — feet lift on the hit
   palette:    'theme',  // theme | reel (Rybin's blue/pink/amber) | mono
@@ -218,6 +219,9 @@ const QUANT_LAPSE = 1.5;
 const LOCK_OFF = 0.18;
 // A lifting foot lands this many seconds of body travel ahead of its rest.
 const STEP_LEAD = 0.22;
+// Web line: throw time (s), max length (× reach), lifetime (s), min gap
+// between shots (s), and the one-off velocity kick on landing (× reach / s).
+const SILK_THROW = 0.12, SILK_MAX = 6, SILK_LIFE = 2.6, SILK_COOLDOWN = 0.45, SILK_TUG = 1.6;
 // Void-orb semi-axes, × reach (nominal; crouch/bob scale them live).
 export const ORB_AX = 0.52;
 export const ORB_AY = 0.42;
@@ -254,7 +258,9 @@ export function createCrawlerSim() {
     jitter: 0,        // highs → leg tremor amplitude (px)
     bob: 0,           // beat-triggered body bounce envelope
     roamX: 0, roamY: 0, roamWait: 0, hasRoam: false,
-    silk: { x: 0, y: 0, alive: false, age: 0 },
+    // Web line: shot from the head toward the chase target on a bass beat;
+    // `shot` 0→1 is the throw, then it tugs the body toward the anchor.
+    silk: { x: 0, y: 0, alive: false, age: 0, shot: 1, tugged: false, cd: 0, idle: 0 },
     feet: [],
   };
   for (let i = 0; i < MAX_LEGS; i++) {
@@ -403,8 +409,7 @@ export function createCrawlerSim() {
 
   /**
    * Start a step toward (px,py). With a grid, the landing is pulled toward the
-   * best edge within reach×0.5×anchor; a strong grip also boxes the blob
-   * under it and (sometimes) re-pins the dragline.
+   * best edge within reach×0.5×anchor; a grip also boxes the blob under it.
    */
   function lift(f, px, py, inp) {
     const grid = inp.grid;
@@ -442,9 +447,13 @@ export function createCrawlerSim() {
       lx = px + (seekOut.x - px) * strength;
       ly = py + (seekOut.y - py) * strength;
       f.anchored = true;
-      if (inp.boxes > 0.01 && grid.blob(seekOut.ix, seekOut.iy, f.box)) f.box.on = true;
-      if (inp.silk && seekOut.score > 0.35 && (!s.silk.alive || s.silk.age > 1.2) && inp.rnd() < 0.35) {
-        s.silk.x = lx; s.silk.y = ly; s.silk.alive = true; s.silk.age = 0;
+      if (inp.boxes > 0.01) {
+        // Box cap from boxSize, in reach units so it scales with the creature
+        // (not the canvas): width ≤ boxSize × 4 reach, height ≤ 0.3 × that.
+        const wPx = clamp(inp.boxSize ?? CRAWLER_DEFAULTS.boxSize, 0.05, 1) * 4 * r;
+        const maxW = Math.max(1, Math.round(wPx / grid.cell));
+        const maxH = Math.max(1, Math.round(wPx * 0.3 / grid.cell));
+        if (grid.blob(seekOut.ix, seekOut.iy, f.box, 0.22, maxW, maxH)) f.box.on = true;
       }
     }
     // Never ask for more than the leg can reach from its hip.
@@ -464,6 +473,24 @@ export function createCrawlerSim() {
     if (s.locked) f.dur = Math.min(f.dur, Math.max(0.07, s.tickPeriod * 0.7));
   }
 
+  /** Throw the web line from the body toward (tx,ty), d = distance to it. */
+  function shootSilk(tx, ty, d, inp) {
+    const r = s.reach, silk = s.silk;
+    const L = Math.min(d, r * SILK_MAX);
+    let ax = s.x + (tx - s.x) / d * L, ay = s.y + (ty - s.y) / d * L;
+    const gr = inp.gripRect, grid = inp.grid;
+    let hit = false;
+    if (gr && gr.w > 0 && gr.h > 0) {
+      const cx = clamp(ax, gr.x, gr.x + gr.w), cy = clamp(ay, gr.y, gr.y + gr.h);
+      if (Math.hypot(cx - ax, cy - ay) < r * 1.5) { ax = cx; ay = cy; hit = true; }
+    }
+    if (!hit && grid && grid.hasData && grid.seek(ax, ay, r * 1.2, seekOut)) { ax = seekOut.x; ay = seekOut.y; }
+    // A landmark that snapped back behind the body isn't "where it's going".
+    if ((ax - s.x) * (tx - s.x) + (ay - s.y) * (ty - s.y) <= 0 || Math.hypot(ax - s.x, ay - s.y) < r * 0.8) return;
+    silk.x = ax; silk.y = ay; silk.alive = true; silk.age = 0; silk.shot = 0; silk.tugged = false;
+    silk.cd = SILK_COOLDOWN; silk.idle = 0;
+  }
+
   /**
    * Advance by dt seconds.
    * inp = {
@@ -472,10 +499,12 @@ export function createCrawlerSim() {
    *   reach,                leg length in device px
    *   speed,                top-speed scaler
    *   stride,               step threshold as a fraction of reach
-   *   anchor, boxes, silk,  feature snapping / box opacity / dragline on
+   *   anchor, boxes, silk,  feature snapping / box opacity / web line on
+   *   boxSize,              0.05..1 box cap (× 4 reach wide)
    *   grid,                 feature grid or null
    *   gripRect,             {x,y,w,h} device px an external thing to latch onto (logo mark), or null
    *   beatPulse, beatActive, bass, highs,   audio (already reactivity-scaled)
+   *   audioOn,              audio is live — false fires the web line on a timer instead
    *   quantize, tick,       step on a transient train: feet wait for `tick` (true on
    *                         the frame the chosen detector fired) before lifting;
    *                         falls back to the free gait when ticks stop arriving
@@ -594,10 +623,29 @@ export function createCrawlerSim() {
       }
     }
 
-    // 4. Silk ages; drop it once it's well behind or too far.
-    if (s.silk.alive) {
-      s.silk.age += dt;
-      if (Math.hypot(s.silk.x - s.x, s.silk.y - s.y) > r * 7 || s.silk.age > 14) s.silk.alive = false;
+    // 4. Silk — a web line thrown TOWARD where it's going (Spider-Man, not a
+    // dragline). Fires on the bass beat (or every ~2.5 s with audio off) when
+    // the target is more than a reach away; aims up to SILK_MAX reach along
+    // the way, then snaps to the strongest landmark near that point (logo
+    // perimeter, else a bright edge from the grid, else the bare point).
+    // When the throw lands it tugs the body toward the anchor once; the line
+    // stays taut until the body gets there or SILK_LIFE runs out.
+    const silk = s.silk;
+    silk.cd -= dt;
+    silk.idle += dt;
+    if (inp.silk && d > r * 1.2 && silk.cd <= 0
+        && (inp.beatActive || (!inp.audioOn && silk.idle > 2.5))) {
+      shootSilk(tx, ty, d, inp);
+    }
+    if (silk.alive) {
+      silk.age += dt;
+      if (silk.shot < 1) silk.shot = Math.min(1, silk.shot + dt / SILK_THROW);
+      const sdx = silk.x - s.x, sdy = silk.y - s.y, sd = Math.hypot(sdx, sdy);
+      if (silk.shot >= 1 && !silk.tugged) {
+        silk.tugged = true;
+        if (sd > 0) { s.vx += sdx / sd * r * SILK_TUG; s.vy += sdy / sd * r * SILK_TUG; }
+      }
+      if (!inp.silk || silk.age > SILK_LIFE || (silk.shot >= 1 && sd < r * 0.45) || sd > r * (SILK_MAX + 2)) silk.alive = false;
     }
 
     solveLegs();
@@ -660,7 +708,7 @@ function withAlpha(tpl, a) { return tpl.replace('A', a.toFixed(3)); }
 /**
  * Draw one crawler.
  *   boxes   highlight-box opacity (0 skips the pass)
- *   glow    soft additive halo gain on the body
+ *   glow    soft additive halo gain on the void body (frame / lens draw no halo)
  *   t       monotonic time for the idle tremor
  *   dpr     device pixel ratio (hairline widths)
  *   scene   { src, sx, sy } — a canvas showing what the creature walks on,
@@ -740,16 +788,31 @@ export function drawCrawler(ctx, sim, style, {
     }
   }
 
-  // Dragline — spinneret (rear of body) to the last strong grip.
+  // Web line — from the head out to the anchor ahead. While thrown the tip
+  // races out (ease-out); once it lands a flash ring marks the anchor, then
+  // the line fades over the back half of its life.
   if (s.silk.alive) {
-    const bx = s.x - Math.cos(s.a) * r * 0.3, by = s.y - Math.sin(s.a) * r * 0.3;
+    const sk = s.silk;
+    const hx = s.x + Math.cos(s.a) * r * 0.22, hy = s.y + Math.sin(s.a) * r * 0.22;
+    const e = 1 - Math.pow(1 - sk.shot, 3);
+    const ex = hx + (sk.x - hx) * e, ey = hy + (sk.y - hy) * e;
+    const life = sk.age / SILK_LIFE;
     ctx.strokeStyle = style.silk;
-    ctx.lineWidth = Math.max(0.75, lw * 0.6);
-    ctx.globalAlpha = clamp(1 - s.silk.age / 14, 0, 1) * 0.9;
-    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(s.silk.x, s.silk.y); ctx.stroke();
+    ctx.lineWidth = Math.max(0.75, lw * (sk.shot < 1 ? 0.9 : 0.6));
+    ctx.globalAlpha = clamp(2 - life * 2, 0, 1) * 0.95;
+    ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(ex, ey); ctx.stroke();
+    if (sk.shot >= 1) {
+      // tiny anchor tick + a landing flash
+      ctx.strokeRect(sk.x - r * 0.04, sk.y - r * 0.04, r * 0.08, r * 0.08);
+      const land = (sk.age - SILK_THROW) / 0.3;
+      if (land >= 0 && land < 1) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = withAlpha(style.flash, (1 - land) * 0.8);
+        ctx.lineWidth = Math.max(1, dpr);
+        ctx.beginPath(); ctx.arc(sk.x, sk.y, r * (0.05 + land * 0.25), 0, Math.PI * 2); ctx.stroke();
+      }
+    }
     ctx.globalAlpha = 1;
-    // tiny anchor tick at the far end
-    ctx.strokeRect(s.silk.x - r * 0.04, s.silk.y - r * 0.04, r * 0.08, r * 0.08);
   }
 
   // Legs — hip → knee → foot. Swinging legs draw a touch brighter + lifted
@@ -792,18 +855,18 @@ export function drawCrawler(ctx, sim, style, {
   const bodyLen = r * 0.55 * (1 - s.crouch * 0.12) * (1 + s.bob * 0.12);
   const bodyW = r * 0.16 * (1 + s.crouch * 0.35) * (1 + s.bob * 0.12);
   ctx.translate(s.x, s.y); ctx.rotate(s.a);
-  // Lens body — the pane is a see-through negative of the scene under it
-  // (invert flips lightness, hue-rotate 180 brings the hues back, like the
-  // negative post), so the creature carries a little null-portal around.
-  // Bigger than the frame so there's something to see through.
+  // Lens body — the body cell itself is a see-through negative of the scene
+  // under it (invert flips lightness, hue-rotate 180 brings the hues back,
+  // like the negative post), so the creature carries a little null-portal
+  // around. Clipped to the exact cell the hips sit on — no outline, no wider
+  // pane — so the leg joints stay visible.
   if (body === 'lens' && lensSrc && lensSrc.src) {
-    const pl = bodyLen * 1.5, pw = bodyW * 3.2;
     ctx.save();
-    ctx.beginPath(); ctx.rect(-pl / 2, -pw / 2, pl, pw); ctx.clip();
-    // Un-rotate to draw the scene in place, then the clip keeps the pane.
+    ctx.beginPath(); ctx.rect(-bodyLen / 2, -bodyW / 2, bodyLen, bodyW); ctx.clip();
+    // Un-rotate to draw the scene in place, then the clip keeps the cell.
     ctx.rotate(-s.a); ctx.translate(-s.x, -s.y);
-    // Source window = pane's axis-aligned bounds (a little margin for the rotation).
-    const half = Math.hypot(pl, pw) / 2 + 2;
+    // Source window = cell's axis-aligned bounds (a little margin for the rotation).
+    const half = Math.hypot(bodyLen, bodyW) / 2 + 2;
     const x0 = Math.max(0, s.x - half), y0 = Math.max(0, s.y - half);
     const x1 = s.x + half, y1 = s.y + half;
     ctx.filter = 'invert(1) hue-rotate(180deg)';
@@ -812,28 +875,19 @@ export function drawCrawler(ctx, sim, style, {
     } catch { /* tainted source */ }
     ctx.filter = 'none';
     ctx.restore();
-    ctx.strokeStyle = style.body;
-    ctx.lineWidth = Math.max(1, dpr);
-    ctx.globalAlpha = 0.7;
-    ctx.strokeRect(-pl / 2, -pw / 2, pl, pw);
-    ctx.globalAlpha = 1;
   }
   if (body === 'void') {
     drawVoidBody(ctx, sim, style, lensSrc, t, dpr, glow);
     ctx.restore();
     return;
   }
-  if (glow > 0.01) {
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = 0.18 * glow + s.bob * 0.25;
-    ctx.fillStyle = style.body;
-    ctx.beginPath(); ctx.ellipse(0, 0, bodyLen * 0.9, bodyW * 2.2, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
+  // Frame (and lens without a scene to show) — outline the cell. No halo
+  // ellipse around frame / lens: the cell alone is the body.
+  if (body !== 'lens' || !(lensSrc && lensSrc.src)) {
+    ctx.strokeStyle = style.body;
+    ctx.lineWidth = Math.max(1, lw * 1.1);
+    ctx.strokeRect(-bodyLen / 2, -bodyW / 2, bodyLen, bodyW);
   }
-  ctx.strokeStyle = style.body;
-  ctx.lineWidth = Math.max(1, lw * 1.1);
-  ctx.strokeRect(-bodyLen / 2, -bodyW / 2, bodyLen, bodyW);
   ctx.fillStyle = style.core;
   ctx.beginPath(); ctx.arc(bodyLen * 0.35, 0, Math.max(1.5, r * 0.035) * (1 + s.bob * 0.6), 0, Math.PI * 2); ctx.fill();
   ctx.restore();

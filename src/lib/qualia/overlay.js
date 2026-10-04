@@ -1239,7 +1239,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   const crawlerRnd = () => Math.random();
   const crawlerInput = {
     W: 0, H: 0, tx: 0, ty: 0, hasTarget: false, reach: 72, speed: 1, stride: 0.42,
-    anchor: 0.85, boxes: 0.8, silk: true, grid: null, gripRect: null,
+    anchor: 0.85, boxes: 0.8, boxSize: 0.35, silk: true, audioOn: false, grid: null, gripRect: null,
     beatPulse: 0, beatActive: false, bass: 0, highs: 0, quantize: false, tick: false, rnd: crawlerRnd,
   };
   const crawlerScene = { src: null, sx: 1, sy: 1 };
@@ -1402,7 +1402,9 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     crawlerInput.stride = cfg.stride;
     crawlerInput.anchor = clamp(cfg.anchor, 0, 1);
     crawlerInput.boxes = clamp(cfg.boxes, 0, 1);
+    crawlerInput.boxSize = clamp(cfg.boxSize, 0.05, 1);
     crawlerInput.silk = !!cfg.silk;
+    crawlerInput.audioOn = audioOn && react > 0;
     crawlerInput.grid = cfg.anchor > 0.01 ? crawlerGrid : null;
     crawlerInput.beatPulse  = audioOn ? clamp(audio.beat.pulse * react, 0, 1) : 0;
     crawlerInput.beatActive = audioOn && !!audio.beat.active && react > 0;

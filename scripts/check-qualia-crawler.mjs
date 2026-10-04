@@ -392,6 +392,74 @@ section('orb hips (void body)');
   check('cell hips back on the slim rect', near(Math.abs(hp[1]), 72 * 0.14));
 }
 
+section('silk (web line toward the target)');
+{
+  // No audio: fires on the idle timer, lands ahead (toward the target), tugs, then lets go.
+  const sim = createCrawlerSim();
+  sim.setLegs(8); sim.placeAt(200, 450);
+  const st = sim.state;
+  const inp = makeInput({ tx: 1400, ty: 450, silk: true, audioOn: false });
+  run(sim, inp, 2.0);
+  check('no shot before the idle timer', !st.silk.alive);
+  let shotAt = null, tugged = false;
+  run(sim, inp, 1.0, 1 / 60, () => {
+    if (st.silk.alive && !shotAt) shotAt = { x: st.x, y: st.y, ax: st.silk.x, ay: st.silk.y };
+    if (st.silk.tugged) tugged = true;
+  });
+  check('fires on the idle timer with audio off', !!shotAt);
+  if (shotAt) {
+    check('anchor is ahead, toward the target', shotAt.ax > shotAt.x + 72 * 0.8, `${shotAt.ax.toFixed(0)} vs body ${shotAt.x.toFixed(0)}`);
+    check('anchor within max length', Math.hypot(shotAt.ax - shotAt.x, shotAt.ay - shotAt.y) <= 72 * 6 + 1);
+  }
+  check('throw lands and tugs', tugged);
+  // Audio on, no beat: never fires.
+  const quiet = createCrawlerSim();
+  quiet.setLegs(8); quiet.placeAt(200, 450);
+  run(quiet, makeInput({ tx: 1400, ty: 450, silk: true, audioOn: true }), 4);
+  check('audio on, no beat → no shot', !quiet.state.silk.alive && quiet.state.silk.idle > 3.5);
+  // Beat: fires that frame.
+  quiet.step(1 / 60, makeInput({ tx: 1400, ty: 450, silk: true, audioOn: true, beatActive: true, beatPulse: 1 }));
+  check('bass beat fires the line', quiet.state.silk.alive && quiet.state.silk.shot < 1);
+  // Target close by: no shot even on a beat.
+  const close = createCrawlerSim();
+  close.setLegs(8); close.placeAt(800, 450);
+  run(close, makeInput({ tx: 820, ty: 450 }), 1);
+  close.step(1 / 60, makeInput({ tx: 820, ty: 450, silk: true, audioOn: true, beatActive: true }));
+  check('target within a reach → no shot', !close.state.silk.alive);
+  // Silk off: never fires.
+  const off = createCrawlerSim();
+  off.setLegs(8); off.placeAt(200, 450);
+  run(off, makeInput({ tx: 1400, ty: 450, silk: false, beatActive: true }), 2);
+  check('silk off → no shot', !off.state.silk.alive);
+}
+
+section('boxSize caps the highlight box');
+{
+  const cols = 160, rows = 90;
+  const grid = createFeatureGrid(cols, rows);
+  grid.cell = 10;
+  // Full-width bright bands (6 rows on, 4 off): edges everywhere, and the
+  // flood fill always runs into the width cap.
+  const data = new Uint8ClampedArray(cols * rows * 4);
+  for (let y = 0; y < rows; y++) if (y % 10 < 6) for (let x = 0; x < cols; x++) {
+    const j = (y * cols + x) * 4; data[j] = data[j + 1] = data[j + 2] = 230; data[j + 3] = 255;
+  }
+  grid.ingest(data);
+  const widest = (boxSize) => {
+    const sim = createCrawlerSim();
+    sim.setLegs(8); sim.placeAt(200, 450);
+    let w = 0, h = 0;
+    run(sim, makeInput({ tx: 1300, ty: 450, anchor: 1, boxes: 1, boxSize, grid }), 3, 1 / 60, () => {
+      for (const f of sim.state.feet) if (f.box.on) { w = Math.max(w, f.box.w); h = Math.max(h, f.box.h); }
+    });
+    return { w, h };
+  };
+  const small = widest(0.2), big = widest(1);
+  check('small boxSize keeps boxes ≤ 0.2 × 4 reach (+1 cell)', small.w > 0 && small.w <= 0.2 * 4 * 72 + 20, `${small.w}×${small.h}`);
+  check('boxes stay wider than tall', small.h <= small.w);
+  check('larger boxSize → larger boxes', big.w > small.w * 2, `${big.w} vs ${small.w}`);
+}
+
 section('enums + renderer smoke');
 {
   check('counts enum', CRAWLER_COUNTS.join() === '1,2,3,4,pose');

@@ -3159,6 +3159,7 @@ export function initQualiaPage() {
   wireCrawlerSlider('crawler-stride',  'stride');
   wireCrawlerSlider('crawler-anchor',  'anchor');
   wireCrawlerSlider('crawler-boxes',   'boxes');
+  wireCrawlerSlider('crawler-box-size', 'boxSize');
   wireCrawlerSlider('crawler-reblit',  'reblit');
   wireCrawlerToggle('crawler-silk',    'silk');
   wireCrawlerSlider('crawler-reactivity', 'reactivity');
