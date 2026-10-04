@@ -3,7 +3,7 @@
 
 import { parseCssColor, rgbToHex, hslToRgb, makePalette, PALETTE_TOKENS } from '../src/lib/qualia/code-palette.js';
 import { makeKit, KIT_VOICES } from '../src/lib/qualia/code-kit.js';
-import { COLLECTIONS, GENRES } from '../src/lib/qualia/samples-manifest.js';
+import { COLLECTIONS, GENRES, GENRE_DESCS } from '../src/lib/qualia/samples-manifest.js';
 
 let failed = 0;
 function check(name, cond, detail = '') {
@@ -67,6 +67,18 @@ check('bank(unknown) → ""', kit.bank('polka') === '');
 console.warn = warn;
 check('voices', eq(kit.voices, KIT_VOICES) && kit.voices.length === 10);
 check('active()', kit.active() === 'signature');
+const tbl = console.table; console.table = () => {};
+const kd = makeKit({ collections: COLLECTIONS, genres: GENRES, active: () => 'signature', genreDescs: GENRE_DESCS });
+check('every genre has a description', GENRES.every((g) => GENRE_DESCS[g]));
+check('ls() = plain + every collection × genre', kd.ls().length === GENRES.length * (COLLECTIONS.length + 1));
+check('ls() rows name real banks', kd.ls().every((r) => r.bank === r.genre || COLLECTIONS.some((c) => r.bank === c.bank + r.genre)));
+check('ls(genre)', kd.ls('metal').length === COLLECTIONS.length + 1 && kd.ls('metal').every((r) => r.genre === 'metal'));
+check('ls(bank token) = ls(collection id)', kd.ls('r0').length === GENRES.length && kd.ls('real_0').length === GENRES.length);
+check('ls(active)', kd.ls('active').every((r) => r.bank === r.genre) && kd.ls('active').length === GENRES.length);
+check('ls() flags the network collection', kd.ls('r0').every((r) => r.about.includes('needs network')));
+console.warn = () => {};
+check('ls(unknown) → []', kd.ls('polka').length === 0);
+console.warn = warn; console.table = tbl;
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

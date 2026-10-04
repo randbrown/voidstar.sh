@@ -24,6 +24,18 @@
 
 // The genres every bundled collection ships. Stable order = picker/stepper order.
 export const GENRES = ['voidstar', 'lofi', 'tape', 'dub', 'jazz', 'metal', 'death', 'hiphop'];
+// One line per genre: the voicing every collection's pack aims for. Shown in
+// the sequencer's genre picker and by kit.ls() in the Strudel REPL.
+export const GENRE_DESCS = {
+  voidstar: 'Clean, punchy 808/909 — the original voidstar default.',
+  lofi:     'Warm, filtered boom-bap / chillhop.',
+  tape:     'Saturated cassette character — mellow, rolled-off, dusty.',
+  dub:      'Heavy dubstep — deep sub kick, huge snare, wide space (San Holo / Com Truise).',
+  jazz:     'Clean modern-jazz kit — soft, brushed, ride-forward.',
+  metal:    'Tight, aggressive metal — clicky kick, cracking snare (Pantera / Metallica / Gojira).',
+  death:    'Extreme death metal — ultra-tight kick, pingy snare (Suffocation / Devourment).',
+  hiphop:   'Dusty Dilla-style boom-bap.',
+};
 
 // ── Collections ─────────────────────────────────────────────────────────────
 // A *collection* is a full bundled bank: one pack per genre, all swapped at once.

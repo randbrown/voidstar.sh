@@ -149,10 +149,50 @@ stack(
 | `kit.ab(genre)` / `ab(genre, false)` | one genre across collections per cycle / without the network one |
 | `kit.tour()` / `tour('sig')` | every genre in turn: active collection / pinned |
 | `kit.bank(genre, bank?)` | the name, with a warning on a typo |
+| `kit.ls()` / `ls(genre \| prefix \| 'active')` | the cheatsheet below as a console table (returns the rows) |
 | `kit.voices` · `genres` · `collections` · `active()` | the ten voice names (`bd sd rim hh oh lt mt ht rd cr`), genres, collections, the active collection id |
 
 Plain `.bank("metal")` still plays whichever collection the sequencer has
-active.
+active. `kit.ls()` prints the table below in the browser console (and returns
+it as rows); `kit.ls('metal')` / `kit.ls('r0')` / `kit.ls('active')` filter it.
+
+#### Bank name cheatsheet
+
+A bank name is **`<collection><genre>`**, glued with no separator, or the bare
+genre for whichever collection is active. That shape is deliberate: Strudel's
+`.bank("x")` rewrites `s("bd")` to `x_bd`, so `_` is the bank/sound joiner
+and stays out of bank names (its `aliasBank()` also splits at the first `_`).
+Lookups are case-insensitive, so `sigMetal` and `SIGMETAL` both work if
+camel case reads better to you. Avoid `:` (mini-notation's sample index).
+
+| Collection | Prefix | What it is |
+|---|---|---|
+| active | *(none)* | `metal`, `lofi`, …: whichever collection the sequencer is set to (signature by default) |
+| signature | `sig` | Characterful on-brand synthetic one-shots. Offline. |
+| voidstar_0 | `v0` | The original synthetic packs, a neutral baseline. Offline. |
+| real_0 | `r0` | Real drum-machine recordings, streamed. **Needs network.** |
+
+| Genre | Sound | `sig…` | `v0…` | `r0…` (machine) |
+|---|---|---|---|---|
+| `voidstar` | Clean, punchy 808/909, the original default | `sigvoidstar` | `v0voidstar` | `r0voidstar` (TR-909) |
+| `lofi` | Warm, filtered boom-bap / chillhop | `siglofi` | `v0lofi` | `r0lofi` (MPC60) |
+| `tape` | Saturated cassette: mellow, rolled-off, dusty | `sigtape` | `v0tape` | `r0tape` (CompuRhythm 1000) |
+| `dub` | Heavy dubstep: deep sub kick, huge snare, wide space | `sigdub` | `v0dub` | `r0dub` (TR-808) |
+| `jazz` | Clean modern jazz: soft, brushed, ride-forward | `sigjazz` | `v0jazz` | `r0jazz` (R-8) |
+| `metal` | Tight metal: clicky kick, cracking snare | `sigmetal` | `v0metal` | `r0metal` (DMX) |
+| `death` | Death metal: ultra-tight kick, pingy snare | `sigdeath` | `v0death` | `r0death` (XR10) |
+| `hiphop` | Dusty Dilla-style boom-bap | `sighiphop` | `v0hiphop` | `r0hiphop` (SP-12) |
+
+Every bank has the same ten voices: `bd sd rim hh oh lt mt ht rd cr`. The
+genre descriptions live in `GENRE_DESCS` (`samples-manifest.js`); the real_0
+machines in `scripts/gen-real-manifests.mjs`.
+
+```js
+// one genre, every collection, a collection per cycle
+s("bd*2 [~ sd] rim hh*4").bank("<metal v0metal sigmetal r0metal>")
+// same thing without typing the names
+s("bd*2 [~ sd] rim hh*4").bank(kit.ab('metal'))
+```
 
 ### Microtonal tuning helpers — 31-TET and beyond
 

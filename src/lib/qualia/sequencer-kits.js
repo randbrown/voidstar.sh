@@ -15,7 +15,7 @@
 import {
   createKit, createLofiKit, createSynthKit, createSampleKit,
 } from './sequencer-voices.js';
-import { getActiveCollectionId, COLLECTIONS, getCollection, packUrl } from './samples-manifest.js';
+import { getActiveCollectionId, COLLECTIONS, getCollection, packUrl, GENRE_DESCS } from './samples-manifest.js';
 
 // Map the sequencer's voice ids onto the sample names used by Strudel's default
 // drum-machine banks (bd/sd/hh/oh/…) — every bundled pack uses these names, so a
@@ -161,14 +161,14 @@ const SYNTH_SPECS = {
 // ── Genre families ─────────────────────────────────────────────────────────
 // voidstar + lofi keep their hand-written synth kits; the rest use createSynthKit.
 const FAMILIES = [
-  { id: 'voidstar', label: 'voidstar', desc: 'Clean, punchy 808/909 — the original voidstar default.', synth: () => createKit() },
-  { id: 'lofi',     label: 'lofi',     desc: 'Warm, filtered boom-bap / chillhop.',                       synth: () => createLofiKit() },
-  { id: 'tape',     label: 'tape',     desc: 'Saturated cassette character — mellow, rolled-off, dusty.',  synth: () => createSynthKit(SYNTH_SPECS.tape) },
-  { id: 'dub',      label: 'dub',      desc: 'Heavy dubstep — deep sub kick, huge snare, wide space (San Holo / Com Truise).', synth: () => createSynthKit(SYNTH_SPECS.dub) },
-  { id: 'jazz',     label: 'jazz',     desc: 'Clean modern-jazz kit — soft, brushed, ride-forward.',        synth: () => createSynthKit(SYNTH_SPECS.jazz) },
-  { id: 'metal',    label: 'metal',    desc: 'Tight, aggressive metal — clicky kick, cracking snare (Pantera / Metallica / Gojira).', synth: () => createSynthKit(SYNTH_SPECS.metal) },
-  { id: 'death',    label: 'death',    desc: 'Extreme death metal — ultra-tight kick, pingy snare (Suffocation / Devourment).', synth: () => createSynthKit(SYNTH_SPECS.death) },
-  { id: 'hiphop',   label: 'hiphop',   desc: 'Dusty Dilla-style boom-bap.',                                 synth: () => createSynthKit(SYNTH_SPECS.hiphop) },
+  { id: 'voidstar', label: 'voidstar', desc: GENRE_DESCS.voidstar, synth: () => createKit() },
+  { id: 'lofi',     label: 'lofi',     desc: GENRE_DESCS.lofi,     synth: () => createLofiKit() },
+  { id: 'tape',     label: 'tape',     desc: GENRE_DESCS.tape,     synth: () => createSynthKit(SYNTH_SPECS.tape) },
+  { id: 'dub',      label: 'dub',      desc: GENRE_DESCS.dub,      synth: () => createSynthKit(SYNTH_SPECS.dub) },
+  { id: 'jazz',     label: 'jazz',     desc: GENRE_DESCS.jazz,     synth: () => createSynthKit(SYNTH_SPECS.jazz) },
+  { id: 'metal',    label: 'metal',    desc: GENRE_DESCS.metal,    synth: () => createSynthKit(SYNTH_SPECS.metal) },
+  { id: 'death',    label: 'death',    desc: GENRE_DESCS.death,    synth: () => createSynthKit(SYNTH_SPECS.death) },
+  { id: 'hiphop',   label: 'hiphop',   desc: GENRE_DESCS.hiphop,   synth: () => createSynthKit(SYNTH_SPECS.hiphop) },
 ];
 
 // ── Kits as a (genre × source) grid ─────────────────────────────────────────
