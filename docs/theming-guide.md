@@ -192,15 +192,18 @@ canvas will be purple no matter what the buttons look like.
 
 `--code-filter` is a CSS filter over the embedded Strudel editor + scope canvases
 (their syntax colors live in shadow DOM, so a filter is the only reliable lever).
-Use `sepia()`+`hue-rotate()` to duotone the code into your family, or `none` to
-leave it. A theme where the HUD is warm tape but the live code is still stock-blue
-reads as unfinished — pull the editor into the family.
+Keep it to **tone**: `saturate()` / `contrast()` / `brightness()` to sit the code
+on your stage, or `none`. Don't `hue-rotate()`, `sepia()` or `grayscale()` it:
+that swaps or collapses Strudel's syntax palette (a 180° rotate turns purple
+keywords green and green strings purple, which reads as the colors being
+inverted), so the code looks different from strudel.cc and from theme to theme.
+The editor is a shared instrument; its syntax colors stay put across themes.
 
 There is a second, exact route: `--code-theme` names one of Strudel's own ~40
 built-in CodeMirror themes, and the REPL wears it natively. Use it only if your
 palette genuinely *is* one of them (`studio` is built from VS dark, so it asks
-for `vscodeDark` and sets `--code-filter: none`); otherwise the filter is the
-right tool, because forcing your theme through someone else's syntax palette is
+for `vscodeDark` and sets `--code-filter: none`); otherwise leave the native
+palette alone, because forcing your theme through someone else's syntax palette is
 how you end up with a theme that has no point of view. Mechanics, the name list,
 and the gotchas are in [`THEMES.md`](THEMES.md).
 
@@ -271,7 +274,7 @@ agents, give each one a filled copy of the brief below. The constraints keep the
 3. **Own your lever.** No two agents ship the same signature. Coordinate on the
    one-sentence signatures up front so you don't get two CRT themes.
 4. **Finish the canvas, not just the chrome.** Set the `--viz-*` knobs and the
-   `--code-filter`. A tokens-only "buttons are teal now" submission is not done.
+   `--code-filter` (tone only). A tokens-only "buttons are teal now" submission is not done.
 5. **Self-verify before handing back** (§7). Include which themes you compared
    against so a reviewer can trust it's diverse, not a near-duplicate.
 
@@ -294,7 +297,7 @@ agents, give each one a filled copy of the brief below. The constraints keep the
 **Canvas knobs intent**
 - hue-base / spread / sat / light: <the arc the particles+spectrum sweep>
 - --viz-glow: <how much it radiates>  ·  --viz-mono: <0 or 1>
-- --code-filter: <how the Strudel editor is pulled into the family>
+- --code-filter: <tone tweak for the Strudel editor (no hue shifts)>
 
 **UI perspective**
 - control identity (slider rail + mod pill material): <the hand-feel>

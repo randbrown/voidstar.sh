@@ -124,8 +124,9 @@ The current CPS is surfaced to the timer HUD (`chron.js`) and the sequencer.
   note it if the surface ever becomes remotely reachable).
 
 **Editor theming:** the REPL's syntax colours follow the site theme by two routes, both driven
-from `themes.css`. `--code-filter` is a CSS filter over the editor (retints any palette
-approximately; the default for most themes). `--code-theme` names one of Strudel's own ~40
+from `themes.css`. `--code-filter` is a CSS filter over the editor, tone only
+(saturate/contrast/brightness, never hue-rotate/sepia/grayscale, which swap or collapse the syntax
+palette and read as inverted colors), so every theme keeps Strudel's native syntax hues. `--code-theme` names one of Strudel's own ~40
 CodeMirror themes and is pushed through `StrudelMirror.updateSettings({ theme })` by
 `applyEditorSettings()` — the exact route, for a site theme built from a real editor theme
 (`studio` ↔ `vscodeDark`). `:root` declares `strudelTheme`, so a theme that doesn't override it is
