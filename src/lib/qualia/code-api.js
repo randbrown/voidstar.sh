@@ -42,6 +42,7 @@ import * as qualemStore from './qualem.js';
 import { getRotation, setRotation, getMirror, setMirror } from './video.js';
 import { QUALIA_FUNCTIONS, filterFunctions, groupByCategory } from './strudel-reference.js';
 import { getBool, setBool } from './prefs.js';
+import { makeViz } from './viz-opts.js';
 import {
   parseRoot, parseEdoSpec, parseRatio, parseTuneSpec,
   edoFreq, centsFactor, scaleDegree, jiRetune, noteNameToMidi,
@@ -196,6 +197,16 @@ export function installCodeApi(deps) {
 
   // ── The api object ────────────────────────────────────────────────────────
   const api = {
+    // — Strudel widget sizing —
+    /** Options for _scope/_pianoroll/_punchcard/_spectrum/…: full window
+     *  width, 1/7 of its height. viz('tall') / viz(.25) / viz(120) pick the
+     *  height; viz({…}) merges extra widget options. Also a bare global `viz`. */
+    viz: makeViz(() => ({
+      width: globalThis.innerWidth || 0,
+      height: globalThis.innerHeight || 0,
+      dpr: globalThis.devicePixelRatio || 1,
+    })),
+
     // — quales —
     /** List registered quales as [{id, name}] in dropdown order. */
     quales: () => mesh.list().map(m => ({ id: m.id, name: m.name })),
@@ -460,8 +471,8 @@ export function installCodeApi(deps) {
        *  a `qualia:horns` window event. */
       enabled: gsBool(() => page.getHornsOn?.(), (on) => page.setHornsOn?.(on)),
       /** Reaction config: {sound, logoMs, eyesMs}. `sound` names any
-       *  registered Strudel sound ('' = silent; default 'voidstar' — load
-       *  it with await samples('shabda/speech:voidstar')); `logoMs` /
+       *  registered Strudel sound ('' = silent; default 'voidstar' — a
+       *  bundled shabda render, registered at Strudel boot); `logoMs` /
        *  `eyesMs` are the void* logo and nightcall red-eyes flash lengths
        *  (0 = skip that flash). horns.config() reads; ({...}) merges. */
       config: gsConfig(() => page.getHornsConfig?.() || {}, (c) => page.patchHornsConfig?.(c)),
@@ -709,6 +720,9 @@ export function installCodeApi(deps) {
     if (!(k in existing)) existing[k] = v;
   }
   g.qualia = existing;
+  // `viz` as a bare global too: `._scope(viz())` reads better in a pattern
+  // than `._scope(qualia.viz())`. Never clobbers a global someone else owns.
+  if (g.viz === undefined) g.viz = existing.viz;
 
   // Page-side hooks the bindings need but that don't belong on the public
   // `qualia` object: the topbar pulse when a lane yields, and the arm counter

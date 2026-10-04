@@ -62,6 +62,43 @@ stack(
 | `qcall(fn, pat)` | Call `fn(value, hap)` per event — the generic escape hatch. |
 | `pat.qtrig(fn)` | **Chainable, keeps the audio**: fires `fn(value, hap)` on each event of the pattern it's chained to — `s("bd*4").qtrig(() => qualia.phase())`. |
 
+### Widget sizing — `viz`
+
+Strudel's inline widgets (`_scope`, `_pianoroll`, `_punchcard`, `_spectrum`,
+`_spiral`, `_pitchwheel`) default to a 500×60 strip or a 200–275px square.
+`viz()` returns an options object sized to the window instead: full width,
+1/7 of the height. It's a bare global and also `qualia.viz`.
+Implementation: [`src/lib/qualia/viz-opts.js`](../src/lib/qualia/viz-opts.js),
+checked by `scripts/check-qualia-viz.mjs`.
+
+```js
+stack(
+  s("bd*4, ~ hh").color("cyan")._scope(viz()),            // full width, 1/7 high
+  note("c3 eb3 g3").s("sawtooth")._pianoroll(viz('tall')), // 1/4 high
+  s("~ sd")._scope(viz.thin({ thickness: 2, smear: .6 })), // 1/14 high, phosphor trail
+)
+```
+
+| Call | Height |
+|---|---|
+| `viz()` / `viz('band')` | 1/7 of the window (default) |
+| `viz('thin')` · `'tall'` · `'third'` · `'half'` · `'full'` | 1/14 · 1/4 · 1/3 · 1/2 · all of it |
+| `viz(.2)` | a fraction of the window height (≤ 1) |
+| `viz(120)` | pixels (> 1) |
+| `viz('tall', {…})` / `viz({ height, … })` | merge extra widget options |
+| `viz.tall()`, `viz.thin({…})`, … | shortcut per preset |
+
+`width` in the object resolves the same way against the window width
+(`{ width: .5 }` is half). Everything else passes through to the widget:
+`thickness`, `scale`, `pos`, `smear` (0–1 trail) and `trigger` for `_scope`;
+`cycles`, `playhead`, `fold`, `labels`, `vertical`, `autorange` and the like for
+`_pianoroll` / `_punchcard`. Line colour comes from the pattern
+(`.color("cyan")`), not the options: `_scope` and `_spectrum` overwrite a
+`color` option with the hap's colour on every frame. Sizes are read on each
+eval, so re-evaluate after resizing. The canvas pixel ratio is capped at 2,
+because full-width widget canvases add up on a 3× display. Preset names work
+in double quotes too, even though the editor turns those into mini-notation.
+
 ### Microtonal tuning helpers — 31-TET and beyond
 
 Unlike the silent `q*` lanes, these are **sounding transforms**: they rewrite
@@ -344,8 +381,8 @@ qualia.pose.reset()                // every pose setting back to its default —
 
 qualia.horns.enabled(true)         // metal horns 🤘 detection (hands run in their own worker)
 qualia.horns.config({ sound: 'voidstar', logoMs: 3000, eyesMs: 3000 })
-                                   // reaction: one-shot sound name ('' = silent — load it
-                                   // first, e.g. await samples('shabda/speech:voidstar'))
+                                   // reaction: one-shot sound name ('' = silent; the
+                                   // default 'voidstar' is bundled — others load first)
                                    // + void* logo / nightcall red-eyes flash lengths
                                    // (0 = skip that flash; eyes flash even with the
                                    // nightcall toggle off, and never disturb it)

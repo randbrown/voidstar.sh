@@ -5193,6 +5193,18 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // lights its earth/metal/delay/reverb/tuner pads from these.
     isStripStageOn: (stageId) => !!model.strip[stageId]?.on,
     isTunerOn: () => !!model.tunerOn,
+    // Tuner hotkey / pad / MIDI: brings the tuner up even with the rig hidden.
+    // Rig hidden → open it (in whatever full/mini view it was left in) with the
+    // tuner ON, never toggling it off unseen; rig visible → plain toggle.
+    showTuner() {
+      if (!panel) return;
+      if (panel.style.display === 'none') {
+        open();
+        if (!model.tunerOn) toggleTuner(true);
+      } else {
+        toggleTuner();
+      }
+    },
     setStripParam(stageId, paramId, value) {
       if (!model.strip[stageId]) return;
       stripSet(stageId, paramId, value);

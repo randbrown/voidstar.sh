@@ -64,6 +64,10 @@ That's a compile-and-flash (QMK toolchain), not a Launcher Import.
 | **row 3** | freeze grab `;` | pop `'` | re-frz `\` | clear `⌫` |
 | **row 4** | loop play/stop `4` | rec start `5` | rec stop `6` | grab (retro) `7` |
 
+The tuner key (`0`, MIDI note 60, the tether's tuner pad) works with the rig
+hidden: it opens the rig with the tuner on. With the rig already showing it
+toggles the tuner on and off.
+
 ### Layer 2 — VIDEO
 | | col 1 | col 2 | col 3 | col 4 |
 |---|---|---|---|---|

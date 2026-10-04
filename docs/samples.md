@@ -221,6 +221,17 @@ for every genre, add a `{ id, label, bank, desc }` entry to `COLLECTIONS` (the
 `bank` token must be unique), and it shows up in the sequencer's collection
 dropdown and as `.bank("<bank><genre>")` in Strudel automatically.
 
+### Bundled speech words (`public/samples/speech/`)
+
+Separate from the collections: single spoken words captured from shabda (what
+`samples('shabda/speech:voidstar')` fetches) and embedded as data: URLs by
+`npm run gen:samples:speech` (`scripts/fetch-shabda-speech.mjs`; pass words to
+add more, `--lang en-US --gender m` to change the voice). `strudel-hydra.js`
+(`registerSpeechSamples`) registers them under their **plain names** right
+after the collections, so `s("voidstar")` and the horns 🤘 default sound work
+offline with no `samples()` line. A pattern's own `samples('shabda/speech:…')`
+for the same word registers later and wins.
+
 ---
 
 ## One-click GitHub pack loader

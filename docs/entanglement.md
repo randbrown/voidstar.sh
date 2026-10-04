@@ -92,9 +92,9 @@ ownership-tracked at the `overlay.setOption` choke point so it works with the ni
 snapshots/qualems never freeze the transient, and ANY other nightcall write mid-flash — button, API,
 pattern lane, qualem recall — takes the wheel back; skipped under the nightcall THEME, whose eyes
 are always on by design), an optional one-shot sample through superdough
-(`qualia.horns.config({sound})` — default `'voidstar'`, which lights up once e.g.
-`await samples('shabda/speech:voidstar')` has registered it; unregistered names hint once and stay
-silent), and a `qualia:horns` window event (+ `qualia.horns.active()` / `.count()` for patterns).
+(`qualia.horns.config({sound})` — default `'voidstar'`, a shabda speech render bundled in
+`public/samples/speech/` and registered when Strudel boots, so it plays offline with no `samples()`
+line; any other name must be registered first; unregistered names hint once and stay silent), and a `qualia:horns` window event (+ `qualia.horns.active()` / `.count()` for patterns).
 Off = the hand model is never fetched (and the hand worker is terminated). Worker-only by design:
 hands never run on the main thread, even when pose itself has fallen back there.
 Hands are **not** shipped to the entanglement mesh — performer-side only.

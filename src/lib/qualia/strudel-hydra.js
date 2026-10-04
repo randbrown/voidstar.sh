@@ -133,7 +133,24 @@ async function registerSharedSamples() {
       }
     }
   }
+  await registerSpeechSamples();
   _sharedSamplesRegistered = true;
+}
+
+// Bundled speech one-shots: shabda TTS renders captured into the repo by
+// scripts/fetch-shabda-speech.mjs (data: URLs, so they play offline). Registered
+// under their plain names, so `voidstar`, the default horns 🤘 sound, works with
+// no samples('shabda/speech:voidstar') line. A later samples() call for the same
+// word in a pattern still wins (it registers after this). An empty or missing
+// manifest just registers nothing.
+const SPEECH_MANIFEST_URL = '/samples/speech/strudel.json';
+async function registerSpeechSamples() {
+  try {
+    const resolved = await resolveManifest(SPEECH_MANIFEST_URL);
+    if (Object.keys(resolved.names).length) await globalThis.samples(toStrudelSampleMap(resolved));
+  } catch (e) {
+    console.info('[qualia] no bundled speech samples:', e?.message || e);
+  }
 }
 
 // Which of Strudel's own CodeMirror themes the live-code editor should wear.

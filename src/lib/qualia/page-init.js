@@ -3567,15 +3567,15 @@ export function initQualiaPage() {
     }
     // Sample one-shot through superdough (same path as the sounds-panel
     // preview button). An unregistered name is a single console hint, never
-    // an error — the default 'voidstar' lights up once the performer loads
-    // it, e.g. await samples('shabda/speech:voidstar') in the pattern.
+    // an error. The default 'voidstar' ships bundled (public/samples/speech,
+    // registered at Strudel boot), so it plays offline with no samples() line.
     const name = String(hornsConfig.sound || '').trim();
     if (name) {
       if (strudel.listSounds().some((s) => s.name === name)) {
         strudel.previewSound(name, 'sample');
       } else if (!hornsSoundHinted) {
         hornsSoundHinted = true;
-        console.info(`[qualia] horns 🤘: sound "${name}" isn't registered — load it (e.g. await samples('shabda/speech:${name}')) or point qualia.horns.config({sound:…}) at any registered sound`);
+        console.info(`[qualia] horns 🤘: sound "${name}" isn't registered (yet — the bundled samples register once the Strudel panel has booted) — load it (e.g. await samples('shabda/speech:${name}'), or bundle it with scripts/fetch-shabda-speech.mjs) or point qualia.horns.config({sound:…}) at any registered sound`);
       }
     }
     try { window.dispatchEvent(new CustomEvent('qualia:horns', { detail: { count: hornsDetector.count() } })); } catch {}
@@ -8511,7 +8511,7 @@ export function initQualiaPage() {
     });
   }
   const padActions = {
-    tuner:        () => document.getElementById('btn-rig-tuner')?.click(),
+    tuner:        () => looper.showTuner?.(),   // opens the rig first if it's hidden
     earth:        () => looper.toggleStripStage?.('earth'),
     metal:        () => looper.toggleStripStage?.('metal'),
     rigPanel:     () => document.getElementById('btn-looper')?.click(),
@@ -8835,7 +8835,7 @@ export function initQualiaPage() {
         if (recBtn) recBtn.click();
         break;
       }
-      case '0': padActions.tuner(); break;                        // Toggle tuner
+      case '0': padActions.tuner(); break;                        // Tuner (opens the rig if hidden)
       // ── DOIO macro-pad: looper transport, knob-push toggles, cam, phase ───
       case '4': padActions.loopPlayStop(); break;                // Loop play / stop
       case '5': padActions.recStart(); break;                    // Start recording (idempotent)
