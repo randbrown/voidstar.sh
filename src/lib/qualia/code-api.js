@@ -40,7 +40,7 @@ import { CHANNEL_IDS } from './modulation.js';
 import { AUDIO_PRESET_NAMES, loadFxUserPresets, saveFxUserPreset } from './presets.js';
 import * as qualemStore from './qualem.js';
 import { getRotation, setRotation, getMirror, setMirror } from './video.js';
-import { QUALIA_FUNCTIONS } from './strudel-reference.js';
+import { QUALIA_FUNCTIONS, filterFunctions, groupByCategory } from './strudel-reference.js';
 import { getBool, setBool } from './prefs.js';
 import {
   parseRoot, parseEdoSpec, parseRatio, parseTuneSpec,
@@ -688,15 +688,12 @@ export function installCodeApi(deps) {
 
     /** Searchable console help for this API (same data as the funcs tab). */
     help: (query) => {
-      const q = String(query ?? '').trim().toLowerCase();
-      const hits = QUALIA_FUNCTIONS.filter(f => !q
-        || f.name.toLowerCase().includes(q)
-        || (f.doc || '').toLowerCase().includes(q)
-        || (f.category || '').toLowerCase().includes(q));
+      const hits = groupByCategory(filterFunctions(query, QUALIA_FUNCTIONS)).flatMap(([, fs]) => fs);
       let cat = null;
       for (const f of hits) {
         if (f.category !== cat) { cat = f.category; console.log(`\n— ${cat} —`); }
         console.log(`${f.name}${f.signature ? '  ' + f.signature : ''}\n    ${f.doc}`);
+        if (f.example) console.log(f.example.replace(/^/gm, '      '));
       }
       if (!hits.length) console.log(`[qualia] no help entries match "${query}"`);
       return `${hits.length} entries`;
