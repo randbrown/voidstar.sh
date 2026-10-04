@@ -28,6 +28,8 @@ import { installCodeApi } from './code-api.js';
 import { createFader } from './fade.js';
 import { createEcho, fmtVal } from './echo.js';
 import { filterFunctions, groupByCategory, STRUDEL_FUNCTIONS } from './strudel-reference.js';
+import { groupSounds, filterGroups, SOUND_VIEWS } from './sound-groups.js';
+import { COLLECTIONS, GENRES, GENRE_DESCS, getActiveCollectionId } from './samples-manifest.js';
 import { createSequencer } from './sequencer.js';
 import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
@@ -7063,54 +7065,148 @@ export function initQualiaPage() {
   funcSearch?.addEventListener('input', renderFuncList);
 
   // ── Strudel sounds browser ("sounds" tab) ─────────────────────────────────
-  // Lists the sounds/samples Strudel currently has registered (read live from
-  // superdough's soundMap), grouped by type. The registry fills in as sample
-  // banks load over the network, so the list re-reads on tab-open and via the
-  // ↻ button. Rows are inert; the ▶ button auditions and the copy button copies
-  // the bare sound name (the row itself never inserts — that flipped tabs).
-  const SOUND_TYPE_LABELS = { sample: 'samples', synth: 'synths', soundfont: 'soundfonts', other: 'other' };
-  const SOUND_TYPE_ORDER  = ['sample', 'synth', 'soundfont', 'other'];
-  // Build one sound row: a ▶ preview button that auditions the sound and a copy
-  // button for the bare name. Both stopPropagation; the row has no click action.
-  function buildSoundRow(s) {
-    const row = document.createElement('div');
-    row.className = 'sp-ref-row';
-    row.title = `copy  ${s.name}`;
-    const headRow = document.createElement('div');
-    headRow.className = 'sp-ref-head';
+  // Lists the sounds Strudel currently has registered (read live from
+  // superdough's soundMap), split the way strudel.cc's panel does: drum banks
+  // (one row per bank, voices as chips) apart from plain samples, synths and
+  // soundfonts (dense name(count) tokens). sound-groups.js does the sorting.
+  // The registry fills in as banks load over the network, so the list re-reads
+  // on tab-open and via ↻. Clicking a voice chip / token auditions it; copy
+  // buttons (and double-click on a token) copy, never insert — that flipped tabs.
+  const SOUND_VIEW_KEY = 'voidstar.qualia.sounds.view';
+  let soundView = 'banks';
+  try { const v = localStorage.getItem(SOUND_VIEW_KEY); if (SOUND_VIEWS.includes(v)) soundView = v; } catch {}
+  const soundViewsEl = document.getElementById('sound-views');
 
+  // Our bundled banks: plain <genre> (active collection) + <prefix><genre>.
+  function customBankInfo() {
+    const active = getActiveCollectionId();
+    const m = new Map();
+    for (const g of GENRES) {
+      const about = GENRE_DESCS[g] || '';
+      m.set(g, { genre: g, collection: `active · ${active}`, about, order: GENRES.indexOf(g) * 10 });
+      COLLECTIONS.forEach((c, i) => m.set(c.bank + g, {
+        genre: g, collection: c.remote ? `${c.id} · network` : c.id, about,
+        order: GENRES.indexOf(g) * 10 + i + 1,
+      }));
+    }
+    return m;
+  }
+
+  function copyButton(text, title, onCopy) {
+    const btn = document.createElement('button');
+    btn.className = 'sp-ref-copy';
+    btn.textContent = 'copy';
+    btn.title = `Copy  ${title ?? text}`;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); copyToClipboard(text, btn); onCopy?.(); });
+    return btn;
+  }
+
+  // One bank line: ▶ (first voice) · name · aka / collection · voice chips ·
+  // copy .bank("…"). Drum machines get a row each; our banks sit as lines
+  // inside one card per genre (buildGenreCard).
+  function buildBankLine(b, label) {
+    const head = document.createElement('div');
+    head.className = 'sp-ref-head sp-snd-line';
     const preview = document.createElement('button');
     preview.className = 'sp-ref-preview';
     preview.textContent = '▶';
-    preview.title = 'Preview this sound';
-    preview.addEventListener('click', (e) => {
-      e.stopPropagation();
-      strudel.previewSound(s.name, s.type);
-    });
-    headRow.appendChild(preview);
-
+    preview.title = `Preview ${b.voices[0].name}`;
+    preview.addEventListener('click', (e) => { e.stopPropagation(); strudel.previewSound(b.voices[0].name, 'sample'); });
+    head.appendChild(preview);
+    const name = document.createElement('span');
+    name.className = 'sp-ref-name sp-snd-bankname';
+    name.textContent = b.name;
+    head.appendChild(name);
+    const tag = label ?? (b.aka.length ? `aka ${b.aka.join(', ')}` : '');
+    if (tag) {
+      const t = document.createElement('span');
+      t.className = 'sp-ref-sig sp-snd-tag';
+      t.textContent = tag;
+      head.appendChild(t);
+    }
+    const voices = document.createElement('span');
+    voices.className = 'sp-snd-tokens';
+    for (const v of b.voices) voices.appendChild(buildSoundToken({ name: v.name, type: 'sample', count: v.count }, v.voice));
+    head.appendChild(voices);
+    head.appendChild(copyButton(`.bank("${b.name}")`));
+    return head;
+  }
+  function buildBankRow(b) {
+    const row = document.createElement('div');
+    row.className = 'sp-ref-row';
+    row.appendChild(buildBankLine(b));
+    return row;
+  }
+  // One genre of our bundled banks: the genre's sound, then a line per
+  // collection (bare name = active collection first).
+  function buildGenreCard(genre, banks) {
+    const row = document.createElement('div');
+    row.className = 'sp-ref-row';
+    const head = document.createElement('div');
+    head.className = 'sp-ref-head';
     const name = document.createElement('span');
     name.className = 'sp-ref-name';
-    name.textContent = s.name;
-    headRow.appendChild(name);
-    if (s.count > 1) {
-      const meta = document.createElement('span');
-      meta.className = 'sp-ref-meta';
-      meta.textContent = `${s.count} variants`;
-      headRow.appendChild(meta);
-    }
-    const copyBtn = document.createElement('button');
-    copyBtn.className = 'sp-ref-copy';
-    copyBtn.textContent = 'copy';
-    copyBtn.title = `Copy  ${s.name}`;
-    copyBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      copyToClipboard(s.name, copyBtn);
-      pushRecent(RECENT_SOUNDS_KEY, s.name);
-    });
-    headRow.appendChild(copyBtn);
-    row.appendChild(headRow);
+    name.textContent = genre;
+    head.appendChild(name);
+    const doc = document.createElement('span');
+    doc.className = 'sp-ref-sig sp-snd-about';
+    doc.textContent = GENRE_DESCS[genre] || '';
+    head.appendChild(doc);
+    row.appendChild(head);
+    for (const b of banks) row.appendChild(buildBankLine(b, b.info.collection));
     return row;
+  }
+
+  // A dense name(count) token: click auditions, double-click copies the name.
+  function buildSoundToken(s, label = s.name) {
+    const tok = document.createElement('button');
+    tok.className = 'sp-snd-tok';
+    tok.textContent = label;
+    if (s.count > 1) {
+      const n = document.createElement('span');
+      n.className = 'sp-snd-count';
+      n.textContent = `(${s.count})`;
+      tok.appendChild(n);
+    }
+    tok.title = `${s.name} — click to hear, double-click to copy`;
+    tok.addEventListener('click', (e) => { e.stopPropagation(); strudel.previewSound(s.name, s.type); });
+    tok.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      copyToClipboard(s.name);
+      pushRecent(RECENT_SOUNDS_KEY, s.name);
+      tok.classList.add('copied');
+      setTimeout(() => tok.classList.remove('copied'), 900);
+    });
+    return tok;
+  }
+  function appendTokens(items) {
+    const wrap = document.createElement('div');
+    wrap.className = 'sp-snd-tokens';
+    for (const s of items) wrap.appendChild(buildSoundToken(s));
+    soundListEl.appendChild(wrap);
+  }
+  function appendHead(text) {
+    const head = document.createElement('div');
+    head.className = 'sp-ref-cat';
+    head.textContent = text;
+    soundListEl.appendChild(head);
+  }
+
+  function renderSoundViews(counts) {
+    if (!soundViewsEl) return;
+    soundViewsEl.innerHTML = '';
+    for (const v of SOUND_VIEWS) {
+      if (v !== soundView && !counts[v]) continue;   // hide empty views (e.g. "other")
+      const chip = document.createElement('button');
+      chip.className = 'sp-snd-view' + (v === soundView ? ' active' : '');
+      chip.textContent = `${v} ${counts[v]}`;
+      chip.addEventListener('click', () => {
+        soundView = v;
+        try { localStorage.setItem(SOUND_VIEW_KEY, v); } catch {}
+        renderSoundList();
+      });
+      soundViewsEl.appendChild(chip);
+    }
   }
 
   function renderSoundList() {
@@ -7118,6 +7214,7 @@ export function initQualiaPage() {
     soundListEl.innerHTML = '';
     const all = strudel.listSounds();
     if (!all.length) {
+      renderSoundViews({});
       const empty = document.createElement('div');
       empty.className = 'sp-ref-empty';
       empty.textContent = 'sounds still loading — press ▶ once, then ↻ to refresh';
@@ -7125,47 +7222,47 @@ export function initQualiaPage() {
       return;
     }
     const q = (soundSearch?.value || '').trim().toLowerCase();
+    const custom = customBankInfo();
+    const groups = filterGroups(groupSounds(all, custom), q);
+    const counts = Object.fromEntries(SOUND_VIEWS.map((v) => [v, groups[v].length]));
+    renderSoundViews(counts);
 
-    if (!q) {
-      const byName = new Map(all.map(s => [s.name, s]));
-      const recent = loadRecent(RECENT_SOUNDS_KEY)
-        .map(n => byName.get(n)).filter(Boolean).slice(0, RECENT_MAX);
-      if (recent.length) {
-        const head = document.createElement('div');
-        head.className = 'sp-ref-cat';
-        head.textContent = '★ recently used';
-        soundListEl.appendChild(head);
-        for (const s of recent) soundListEl.appendChild(buildSoundRow(s));
+    if (soundView === 'banks') {
+      const ours = groups.banks.filter((b) => b.info).sort((a, b) => a.info.order - b.info.order);
+      const theirs = groups.banks.filter((b) => !b.info);
+      if (ours.length) {
+        appendHead(`voidstar banks (${ours.length}) · <collection><genre>, bare genre = active collection`);
+        const byGenre = new Map();
+        for (const b of ours) {
+          if (!byGenre.has(b.info.genre)) byGenre.set(b.info.genre, []);
+          byGenre.get(b.info.genre).push(b);
+        }
+        for (const [genre, banks] of byGenre) soundListEl.appendChild(buildGenreCard(genre, banks));
+      }
+      if (theirs.length) {
+        appendHead(`drum machines (${theirs.length})`);
+        for (const b of theirs) soundListEl.appendChild(buildBankRow(b));
+      }
+    } else {
+      const items = groups[soundView] || [];
+      if (!q && soundView === 'samples') {
+        const byName = new Map(items.map((s) => [s.name, s]));
+        const recent = loadRecent(RECENT_SOUNDS_KEY).map((n) => byName.get(n)).filter(Boolean).slice(0, RECENT_MAX);
+        if (recent.length) { appendHead('★ recently used'); appendTokens(recent); }
+      }
+      if (items.length) {
+        appendHead(`${soundView} (${items.length}) · click to hear, double-click to copy`);
+        appendTokens(items);
       }
     }
-
-    const sounds = q
-      ? all.filter(s => s.name.toLowerCase().includes(q) || s.type.includes(q))
-      : all;
-    if (!sounds.length) {
+    if (!soundListEl.children.length) {
       const empty = document.createElement('div');
       empty.className = 'sp-ref-empty';
-      empty.textContent = 'no matching sounds';
+      const elsewhere = SOUND_VIEWS.filter((v) => v !== soundView && counts[v]);
+      empty.textContent = elsewhere.length
+        ? `no matching ${soundView} — try ${elsewhere.map((v) => `${v} (${counts[v]})`).join(', ')}`
+        : 'no matching sounds';
       soundListEl.appendChild(empty);
-      return;
-    }
-    const byType = new Map();
-    for (const s of sounds) {
-      const t = s.type || 'other';
-      if (!byType.has(t)) byType.set(t, []);
-      byType.get(t).push(s);
-    }
-    const types = [
-      ...SOUND_TYPE_ORDER.filter(t => byType.has(t)),
-      ...[...byType.keys()].filter(t => !SOUND_TYPE_ORDER.includes(t)).sort(),
-    ];
-    for (const t of types) {
-      const items = byType.get(t);
-      const head = document.createElement('div');
-      head.className = 'sp-ref-cat';
-      head.textContent = `${SOUND_TYPE_LABELS[t] || t} (${items.length})`;
-      soundListEl.appendChild(head);
-      for (const s of items) soundListEl.appendChild(buildSoundRow(s));
     }
   }
   soundSearch?.addEventListener('input', renderSoundList);
