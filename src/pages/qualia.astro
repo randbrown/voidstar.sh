@@ -292,8 +292,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #test-canvas {
       position: fixed; inset: 0; width: 100%; height: 100%; display: block;
       z-index: 5; pointer-events: none; background: transparent;
-      /* Strudel scope/pianoroll widgets follow the theme's code retint. */
-      filter: var(--code-filter, none);
+      /* No --code-filter here: Strudel's draw output (.pianoroll(), .scope(),
+         .punchcard()…) keeps the colors the pattern asked for. */
     }
 
     /* API echo ("training mode", echo.js) — the virtual console strip that
@@ -1771,7 +1771,15 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #strudel-mount {
       flex: 1; min-height: 0; overflow: auto;
       background: transparent;
-      /* Retint the embedded editor's shadow-DOM syntax colors per theme. */
+    }
+    /* Retint the editor's syntax colors per theme — on the TEXT layers only.
+       Not on the mount: a filter on an ancestor can't be undone by a child,
+       and the inline widgets (_pianoroll / _punchcard / _scope / _spiral …)
+       are CodeMirror block widgets that sit beside .cm-line inside
+       .cm-content, so they'd get hue-rotated too. Filtering the lines (plus
+       gutter, selection/cursor and tooltips) themes the code and leaves the
+       widget canvases in the colors the pattern asked for. */
+    #strudel-mount :is(.cm-line, .cm-gutters, .cm-selectionLayer, .cm-cursorLayer, .cm-tooltip) {
       filter: var(--code-filter, none);
     }
     #strudel-mount strudel-editor {

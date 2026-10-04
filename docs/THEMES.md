@@ -126,12 +126,13 @@ Mono, VT323). Add a font there if a theme needs it.
 --glow-strength           multiplier gating CSS bloom (0 = flat). Used in
                           calc() on .btn / .glow-* shadows.
 --panel-blur              backdrop-filter amount for HUD panels
---code-filter             CSS filter applied to the embedded Strudel editor +
-                          scope canvases. TONE ONLY (saturate / contrast /
-                          brightness); `none` = untouched. Never hue-rotate(),
-                          sepia() or grayscale(): they swap or collapse the
-                          syntax palette (hue-rotate(180deg) reads as the
-                          colors being inverted).
+--code-filter             CSS filter applied to the embedded Strudel editor's
+                          TEXT layers (.cm-line, gutter, selection, tooltips)
+                          to retint syntax colors into the theme family. e.g.
+                          sepia()+hue-rotate() duotone; `none` = untouched.
+                          NOT applied to Strudel's visuals: inline widgets
+                          (_pianoroll/_punchcard/_scope…) and #test-canvas
+                          (.pianoroll()/.scope()) keep the pattern's colors.
 --code-theme              The name of one of Strudel's OWN ~40 CodeMirror
                           themes for the embedded REPL — the *exact* route
                           where --code-filter is the approximate one. Read by
@@ -145,7 +146,7 @@ Mono, VT323). Add a font there if a theme needs it.
 **On `--code-theme` vs `--code-filter`.** Reach for `--code-theme` only when your palette
 *is* a real editor theme that Strudel already ships (`studio` ↔ `vscodeDark`); then set
 `--code-filter: none` so you're not retinting colors that are already right. Everything
-else keeps Strudel's native syntax hues with at most a tone tweak on the filter. Three things to know before you use it:
+else stays on the filter. Three things to know before you use it:
 
 - **Pick a dark theme.** Strudel's `activateTheme()` also writes the chosen theme's colors
   to `:root` (`--background`, `--caret`, …) and toggles a global `dark` class.

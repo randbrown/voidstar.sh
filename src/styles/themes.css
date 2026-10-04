@@ -76,15 +76,16 @@
   --viz-glow:      0.9;               /* canvas bloom / shadowBlur multiplier */
   --viz-mono:      0;                 /* 1 = render monochrome (phosphor) */
 
-  /* Filter over embedded code editors / widgets (the Strudel REPL + its
-     scope/pianoroll canvases; their colors live in shadow DOM, so a CSS
-     filter is the only lever). Tone ONLY: saturate / contrast / brightness.
-     No hue-rotate(), sepia() or grayscale() — those swap or collapse Strudel's
-     syntax palette (hue-rotate(180deg) turned purple keywords green and green
-     strings purple), so the code stopped reading like Strudel under some themes
-     and not others. Every theme keeps the native syntax hues; a theme that
-     wants a different editor palette asks for a real one via --code-theme. */
-  --code-filter:   saturate(1.2) brightness(1.06);
+  /* Retint filter for the embedded code editor's TEXT (the Strudel REPL's
+     syntax colors live inside its CodeMirror theme, so a CSS filter is the
+     reliable way to pull them into the theme's family). Applied to the
+     editor's text layers only — Strudel's pianoroll / scope / punchcard
+     visuals keep their own colors (see #strudel-mount in qualia.astro).
+     sepia() collapses hues to a warm monochrome, hue-rotate() steers it,
+     and luminance differences keep syntax highlighting readable. The baseline
+     pulls the editor slightly toward cool spectral cyan / pale violet without
+     crushing syntax differentiation. */
+  --code-filter:   sepia(0.2) hue-rotate(180deg) saturate(1.4) brightness(1.06);
 
   /* The name of one of Strudel's OWN CodeMirror themes for the embedded REPL
      (strudel-hydra.js reads this token and pushes it through the editor's
@@ -188,7 +189,7 @@
   --viz-light:     58;
   --viz-glow:      0.5;
   --viz-mono:      1;
-  --code-filter:   saturate(1.2);
+  --code-filter:   sepia(1) hue-rotate(85deg) saturate(3);
 }
 
 /* Amber phosphor variant — same CRT, warm tube. */
@@ -224,7 +225,7 @@
   --viz-light:     58;
   --viz-glow:      0.5;
   --viz-mono:      1;
-  --code-filter:   saturate(1.2) brightness(1.05);
+  --code-filter:   sepia(1) saturate(3) brightness(1.05);
 }
 
 /* ---- Tape Saturation (warm analog — lo-fi tape ambient) ------------------ */
@@ -257,7 +258,7 @@
   --viz-sat:       60;
   --viz-light:     52;
   --viz-glow:      0.7;
-  --code-filter:   saturate(1.2);
+  --code-filter:   sepia(0.85) hue-rotate(-12deg) saturate(1.3);
 }
 
 /* ---- Abyssal Bioluminescence (deep-sea glow — dark ambient / drone) ------ */
@@ -289,7 +290,7 @@
   --viz-sat:       80;
   --viz-light:     58;
   --viz-glow:      1.4;
-  --code-filter:   saturate(1.2);
+  --code-filter:   sepia(1) hue-rotate(125deg) saturate(2.2);
 }
 
 /* ---- Nightcall (homage to Vincent Belorgey, aka Kavinsky) ----------------
@@ -323,7 +324,7 @@
   --viz-sat:       85;
   --viz-light:     58;
   --viz-glow:      1.4;
-  --code-filter:   saturate(1.2);
+  --code-filter:   sepia(1) hue-rotate(-50deg) saturate(2.4);
 }
 
 /* ---- Glacial Drift (icy minimal — Nordic / ECM ambient) ------------------ */
@@ -355,7 +356,7 @@
   --viz-sat:       35;
   --viz-light:     70;
   --viz-glow:      0.5;
-  --code-filter:   saturate(0.8) brightness(1.08);
+  --code-filter:   sepia(0.9) hue-rotate(165deg) saturate(0.8) brightness(1.08);
 }
 
 /* ---- Retro Windows 95 / 3.1 (net-art / vaporwave) ------------------------ *
@@ -397,7 +398,7 @@
   --viz-sat:       90;
   --viz-light:     55;
   --viz-glow:      0.2;
-  --code-filter:   brightness(1.1) contrast(1.1);
+  --code-filter:   grayscale(1) brightness(1.1) contrast(1.1);
 }
 
 /* ---- Glass (Cindy Lynn's leaded jewel glass — Randyland2) ----------------- *
@@ -432,7 +433,7 @@
   --viz-sat:       82;
   --viz-light:     56;
   --viz-glow:      1.2;
-  --code-filter:   saturate(1.2);
+  --code-filter:   sepia(1) hue-rotate(-55deg) saturate(2.4);
 }
 
 /* ---- Ramblin' Visioneer (a handmade cosmic field instrument / road case) --- *
@@ -471,7 +472,7 @@
   --viz-sat:       66;               /* moderate */
   --viz-light:     56;               /* slightly warm */
   --viz-glow:      1.0;              /* moderate, localized */
-  --code-filter:   saturate(1.2) brightness(1.06);
+  --code-filter:   sepia(0.3) hue-rotate(180deg) saturate(1.5) brightness(1.06);
 }
 
 /* ---- Gardens (Cindy Lynn's Gardens — a nocturnal stained-glass greenhouse) - *
@@ -508,7 +509,7 @@
   --viz-sat:       66;
   --viz-light:     54;               /* controlled — growth stays glassy, not candy */
   --viz-glow:      0.95;
-  --code-filter:   saturate(1.2);
+  --code-filter:   sepia(0.85) hue-rotate(100deg) saturate(1.6);
 }
 
 /* ---- Glissando (a pedal steel as a control surface — harmonic / sustained) - *
@@ -547,7 +548,7 @@
   --viz-sat:       50;
   --viz-light:     55;
   --viz-glow:      0.7;
-  --code-filter:   saturate(1.15) brightness(1.04);
+  --code-filter:   sepia(0.7) hue-rotate(172deg) saturate(1.15) brightness(1.04);
 }
 
 /* ---- Risograph (spot-ink print — daytime editorial / zine) ---------------- *
@@ -596,7 +597,7 @@
   --viz-sat:       82;
   --viz-light:     56;               /* bright spot-inks pop on the dark canvas */
   --viz-glow:      0.2;
-  --code-filter:   saturate(1.2) contrast(1.02);
+  --code-filter:   sepia(0.5) hue-rotate(300deg) saturate(1.2) contrast(1.02);
 }
 
 /* ---- Patchbay (a ritualized modular patch panel — routing made visible) --- *
@@ -670,7 +671,7 @@
   --viz-sat:       60;               /* moderate */
   --viz-light:     56;
   --viz-glow:      0.6;              /* restrained */
-  --code-filter:   saturate(1.2) brightness(1.03);
+  --code-filter:   saturate(1.2) hue-rotate(8deg) brightness(1.03);
 }
 
 /* ---- Darkroom (an optical bench for exposing / transforming live images) -- *
