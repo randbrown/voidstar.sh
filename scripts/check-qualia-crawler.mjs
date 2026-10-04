@@ -310,6 +310,31 @@ section('grip rect (logo latch)');
   check('no latch out of reach', far.state.feet.slice(0, 8).every(f => !f.grip));
 }
 
+section('orb hips (void body)');
+{
+  const sim = createCrawlerSim(); sim.setLegs(8); sim.placeAt(500, 500);
+  const st = sim.state;
+  sim.setHipMode('orb');
+  const ax = sim.orbAxes([0, 0]);
+  let off = 0;
+  const hp = [0, 0];
+  for (let k = 0; k < 8; k++) {
+    sim.hipLocal(st.feet[k], hp);
+    const e = (hp[0] / ax[0]) ** 2 + (hp[1] / ax[1]) ** 2;   // 1 on the ellipse
+    if (Math.abs(e - 1) > 1e-6) off++;
+  }
+  check('orb hips sit on the ellipse perimeter', off === 0, `${off} off`);
+  check('front legs hip forward, rear legs hip back', (() => { sim.hipLocal(st.feet[0], hp); const fx = hp[0]; sim.hipLocal(st.feet[3], hp); return fx > 0 && hp[0] < 0; })());
+  run(sim, makeInput({ tx: 1200, ty: 500 }), 5);
+  const hip = [0, 0];
+  let over = 0;
+  for (let k = 0; k < 8; k++) { const f = st.feet[k]; sim.hipOf(f, hip); if (Math.hypot(f.x - hip[0], f.y - hip[1]) > 72 * 1.2 + 1e-6) over++; }
+  check('orb walk keeps feet within reach of their hips', over === 0 && Math.hypot(st.x - 1200, st.y - 500) < 36, `${over} over`);
+  sim.setHipMode('cell');
+  sim.hipLocal(st.feet[0], hp);
+  check('cell hips back on the slim rect', near(Math.abs(hp[1]), 72 * 0.14));
+}
+
 section('enums + renderer smoke');
 {
   check('counts enum', CRAWLER_COUNTS.join() === '1,2,3,4,pose');

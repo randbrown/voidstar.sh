@@ -114,9 +114,11 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
   stage at the outline (scale 1, no twist) and pulled (to 2.4×) + twisted (to 0.9 rad, slowly
   breathing) harder toward a small true-black singularity with a photon ring in the core colour
   that flares on beats; a radial darkening sells the fall-in. Third pass tied the lens to the
-  body's *definition*: everything is clipped to the body cell (frame length × a width that puts
-  the hips exactly on its long edges), the outline is stroked on top with a dot per hip, so the
-  legs visibly meet the body and the distortion lives inside it. Seven small `drawImage` calls
+  body's *definition*: the void body is an orb (≈0.52 × 0.42 reach) and the sim moves the hips
+  onto its perimeter (`setHipMode('orb')`, each hip at the angle of its leg's rest direction),
+  everything is clipped to the orb and the outline is stroked on top with a dot per hip — so the
+  legs visibly meet the body and the distortion lives inside it. (A slim-rectangle variant was
+  tried in between; the orb read better on stage.) Seven small `drawImage` calls
   per creature; no readback. Stored `body: 'hole'` migrates to `void`.
 - **Leg counts 4–8:** layouts are generated per count (pairs spread front→rear, widest in the
   middle); an odd count adds one unpaired trailing leg on the right with its knee bent inward,

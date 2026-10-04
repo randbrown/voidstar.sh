@@ -207,6 +207,9 @@ export function createFeatureGrid(cols = 160, rows = 90) {
 // the lopsided, injured-looking scuttle an odd number buys.
 const MAX_LEGS = 8;
 const MIN_LEGS = 4;
+// Void-orb semi-axes, × reach (nominal; crouch/bob scale them live).
+export const ORB_AX = 0.52;
+export const ORB_AY = 0.42;
 const ODD_LEG = { f: -1.05, l: 0.22, hip: -0.42 };
 const _layoutCache = new Map();
 export function buildLegLayout(n) {
@@ -297,12 +300,39 @@ export function createCrawlerSim() {
   }
   const idealOut = [0, 0];
 
+  // Hip placement. 'cell': the slim rectangle along the heading (frame /
+  // lens bodies) — hips on its long edges. 'orb': the void ellipse — hips on
+  // its perimeter, each at the angle of its leg's rest direction, so the
+  // outline is exactly where the legs meet the body.
+  let hipMode = 'cell';
+  function setHipMode(m) { hipMode = m === 'orb' ? 'orb' : 'cell'; }
+  /** Void-orb semi-axes (body space) — crouch/bob-scaled like the renderer. */
+  function orbAxes(out) {
+    out[0] = s.reach * ORB_AX * (1 - s.crouch * 0.12) * (1 + s.bob * 0.15);
+    out[1] = s.reach * ORB_AY * (1 + s.crouch * 0.35) * (1 + s.bob * 0.15);
+    return out;
+  }
+  const axesOut = [0, 0];
+  /** Hip in BODY space (x along the heading, y lateral). */
+  function hipLocal(f, out) {
+    if (hipMode === 'orb') {
+      const L = legSpec(f);
+      const th = Math.atan2(f.side * L.l, L.f);
+      orbAxes(axesOut);
+      out[0] = Math.cos(th) * axesOut[0];
+      out[1] = Math.sin(th) * axesOut[1];
+    } else {
+      out[0] = f.hipF * s.reach * 0.55;
+      out[1] = f.side * s.reach * 0.14;
+    }
+    return out;
+  }
+  const hipLocalOut = [0, 0];
   function hipOf(f, out) {
-    const bodyLen = s.reach * 0.55, bodyW = s.reach * 0.14;
+    hipLocal(f, hipLocalOut);
     const cx = Math.cos(s.a), sy = Math.sin(s.a);
-    const fw = f.hipF * bodyLen, lat = f.side * bodyW;
-    out[0] = s.x + cx * fw - sy * lat;
-    out[1] = s.y + sy * fw + cx * lat;
+    out[0] = s.x + cx * hipLocalOut[0] - sy * hipLocalOut[1];
+    out[1] = s.y + sy * hipLocalOut[0] + cx * hipLocalOut[1];
     return out;
   }
 
@@ -522,7 +552,9 @@ export function createCrawlerSim() {
 
   return {
     state: s,
-    setLegs, placeAt, rescale, step, solveLegs, plantAll,
+    setLegs, setHipMode, placeAt, rescale, step, solveLegs, plantAll,
+    hipLocal: (f, out) => hipLocal(f, out),
+    orbAxes: (out) => orbAxes(out),
     idealFoot: (f, out) => idealFoot(f, out),
     hipOf: (f, out) => hipOf(f, out),
   };
@@ -721,7 +753,7 @@ export function drawCrawler(ctx, sim, style, {
     ctx.globalAlpha = 1;
   }
   if (body === 'void') {
-    drawVoidBody(ctx, s, style, lensSrc, bodyLen, bodyW, t, dpr, glow);
+    drawVoidBody(ctx, sim, style, lensSrc, t, dpr, glow);
     ctx.restore();
     return;
   }
@@ -742,39 +774,33 @@ export function drawCrawler(ctx, sim, style, {
 }
 
 // ── Void body ───────────────────────────────────────────────────────────────
-// The body CELL — the slim rectangle along the heading whose long edges the
-// hips sit on — becomes a gravitational lens: inside the outline the raw
-// scene is re-drawn in VOID_RINGS concentric elliptical slices, continuous
-// with the stage at the outline (scale 1, no twist) and pulled + twisted
-// harder toward a small true-black singularity at the centre with a photon
-// ring. Everything is clipped to the cell; the outline is stroked on top with
-// a dot at each hip so you can see where the legs meet the body. Nothing
-// outside the cell is touched.
+// The body is an ORB — an ellipse along the heading whose perimeter the hips
+// sit on (the sim's 'orb' hip mode) — turned into a gravitational lens:
+// inside the outline the raw scene is re-drawn in VOID_RINGS concentric
+// elliptical slices, continuous with the stage at the outline (scale 1, no
+// twist) and pulled + twisted harder toward a small true-black singularity
+// at the centre with a photon ring. Everything is clipped to the orb; the
+// outline is stroked on top with a dot at each hip so you can see where the
+// legs meet the body. Nothing outside the orb is touched.
 // Radii are ellipse scales in BODY space (ctx is already translated +
 // rotated to the body); the scene is blitted un-rotated through the clip.
-// Cost: VOID_RINGS small drawImage calls of a cell-sized source window.
+// Cost: VOID_RINGS small drawImage calls of an orb-sized source window.
 const VOID = '#010104';
 const VOID_RINGS = 7;
-const VOID_CORE = 0.38;     // singularity radius, × ring ellipse
-const HIP_LAT = 0.14;       // hip lateral offset, × reach (must match hipOf)
-function drawVoidBody(ctx, s, style, scene, bodyLen, bodyW, t, dpr, glow) {
-  const r = s.reach;
-  // The cell: as long as the frame body, wide enough that the hips (±HIP_LAT
-  // × reach) sit exactly on its long edges. bodyW carries the crouch/bob
-  // scale, so reuse its ratio against the nominal 0.16 reach.
-  const vw = bodyLen;
-  const vh = 2 * HIP_LAT * r * (bodyW / (r * 0.16));
-  // Ring ellipse large enough to cover the cell's corners (√2 · 0.5 ≈ 0.71).
-  const ax = vw * 0.72, ay = vh * 0.72;
-  const half = Math.hypot(vw, vh) * 0.55 * 2.4 + 2;   // source window (device px), covers the 2.4× pull
+const VOID_CORE = 0.34;     // singularity radius, × orb
+function drawVoidBody(ctx, sim, style, scene, t, dpr, glow) {
+  const s = sim.state, r = s.reach;
+  const axes = sim.orbAxes([0, 0]);
+  const ax = axes[0], ay = axes[1];
+  const half = Math.max(ax, ay) * 2.4 + 2;   // source window (device px), covers the 2.4× pull
   ctx.save();
-  ctx.beginPath(); ctx.rect(-vw / 2, -vh / 2, vw, vh); ctx.clip();
+  ctx.beginPath(); ctx.ellipse(0, 0, ax, ay, 0, 0, Math.PI * 2); ctx.clip();
   if (scene && scene.src) {
     const x0 = Math.max(0, s.x - half), y0 = Math.max(0, s.y - half);
     const x1 = s.x + half, y1 = s.y + half;
     const dir = s.a < 0 ? 1 : -1;
     for (let k = 0; k < VOID_RINGS; k++) {
-      // Ring k spans [ri, ro] (× ellipse) from the outline inward to the core.
+      // Ring k spans [ri, ro] (× orb) from the outline inward to the core.
       const u0 = k / VOID_RINGS, u1 = (k + 1) / VOID_RINGS;
       const ro = 1 - (1 - VOID_CORE) * u0;
       const ri = 1 - (1 - VOID_CORE) * u1;
@@ -818,16 +844,17 @@ function drawVoidBody(ctx, s, style, scene, bodyLen, bodyW, t, dpr, glow) {
   ctx.beginPath(); ctx.ellipse(0, 0, ax * VOID_CORE * 1.08, ay * VOID_CORE * 1.1, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
-  ctx.restore();   // cell clip
-  // The outline — the body cell the legs hang off — with a dot at each hip.
+  ctx.restore();   // orb clip
+  // The outline — the orb the legs hang off — with a dot at each hip.
   const lw = Math.max(1, r * 0.022);
   ctx.strokeStyle = style.body;
   ctx.lineWidth = Math.max(1, lw * 1.1);
-  ctx.strokeRect(-vw / 2, -vh / 2, vw, vh);
+  ctx.beginPath(); ctx.ellipse(0, 0, ax, ay, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.fillStyle = style.body;
   const hr = Math.max(1.2, r * 0.028);
+  const hp = [0, 0];
   for (let n = 0; n < s.legCount; n++) {
-    const f = s.feet[n];
-    ctx.beginPath(); ctx.arc(f.hipF * r * 0.55, f.side * vh / 2, hr, 0, Math.PI * 2); ctx.fill();
+    sim.hipLocal(s.feet[n], hp);
+    ctx.beginPath(); ctx.arc(hp[0], hp[1], hr, 0, Math.PI * 2); ctx.fill();
   }
 }

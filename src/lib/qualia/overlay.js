@@ -1411,6 +1411,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       const sim = crawlerSims[i];
       crawlerTarget(i, n, field, now);
       sim.setLegs(cfg.legs);
+      sim.setHipMode(cfg.body === 'void' ? 'orb' : 'cell');
       sim.step(dt, crawlerInput);
     }
     crawlerScratchGlow = 0.6 + (audioOn ? audio.bands.total * 0.8 : 0.2 + 0.2 * Math.sin(crawlerScratchT * 0.7));
