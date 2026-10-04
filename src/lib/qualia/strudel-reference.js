@@ -42,18 +42,26 @@ export const QUALIA_FUNCTIONS = qualiaFunctions;
 export const STRUDEL_FUNCTIONS = [...functions, ...qualiaFunctions];
 
 /**
- * Loose substring match across name / doc / signature / category.
- * Returns the entries in source order (the renderer regroups by category).
+ * Loose substring match across name / doc / signature / category / example.
+ * Name hits come first (the renderer regroups by category but keeps this
+ * order inside each group), so searching `randomQuale` leads with its own
+ * entry rather than the ones that merely use it in an example.
  */
-export function filterFunctions(query) {
+export function filterFunctions(query, list = STRUDEL_FUNCTIONS) {
   const q = (query || '').trim().toLowerCase();
-  if (!q) return STRUDEL_FUNCTIONS;
-  return STRUDEL_FUNCTIONS.filter((f) =>
-    f.name.toLowerCase().includes(q) ||
-    (f.doc && f.doc.toLowerCase().includes(q)) ||
-    (f.signature && f.signature.toLowerCase().includes(q)) ||
-    (f.category && f.category.toLowerCase().includes(q)),
-  );
+  if (!q) return list;
+  const named = [];
+  const mentioned = [];
+  for (const f of list) {
+    if (f.name.toLowerCase().includes(q)) named.push(f);
+    else if (
+      (f.doc && f.doc.toLowerCase().includes(q)) ||
+      (f.signature && f.signature.toLowerCase().includes(q)) ||
+      (f.category && f.category.toLowerCase().includes(q)) ||
+      (f.example && f.example.toLowerCase().includes(q))
+    ) mentioned.push(f);
+  }
+  return [...named, ...mentioned];
 }
 
 /**

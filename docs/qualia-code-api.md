@@ -15,6 +15,10 @@ Implementation: [`src/lib/qualia/code-api.js`](../src/lib/qualia/code-api.js)
 (installed by `page-init.js` with handles to every engine). The dataset behind
 the funcs tab + `help()` is
 [`src/data/qualia-functions.json`](../src/data/qualia-functions.json).
+`node scripts/check-qualia-funcs.mjs` (part of `npm run check`) fails when a
+registered pattern function lacks its own entry + example, or a top-level
+`qualia.*` member never appears in any example — add the entry when you add
+the function.
 
 ---
 
