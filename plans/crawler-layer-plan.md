@@ -120,6 +120,9 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
   legs visibly meet the body and the distortion lives inside it. (A slim-rectangle variant was
   tried in between; the orb read better on stage.) Seven small `drawImage` calls
   per creature; no readback. Stored `body: 'hole'` migrates to `void`.
+- **Void is the default body** (was `frame`) — it's the one that reads as voidstar on stage.
+  The frame / lens core dot moved from just behind centre to the *front* of the cell
+  (`+0.35 × bodyLen`), so the dot is the head and tells you which way the creature faces.
 - **Leg counts 4–8:** layouts are generated per count (pairs spread front→rear, widest in the
   middle); an odd count adds one unpaired leg trailing straight back (hip on the cell's rear
   end), the pairs compressed forward so nothing overlaps it, in the gait group opposite the rear

@@ -348,6 +348,7 @@ section('enums + renderer smoke');
 {
   check('counts enum', CRAWLER_COUNTS.join() === '1,2,3,4,pose');
   check('bodies enum', CRAWLER_BODIES.join() === 'frame,lens,void');
+  check('default body is void', CRAWLER_DEFAULTS.body === 'void');
   check('follow enum has logo', CRAWLER_FOLLOW.includes('logo'));
   // Renderer smoke: every body mode runs against a recording fake ctx with a
   // fake scene, balances save/restore, and the void body clips + fills.

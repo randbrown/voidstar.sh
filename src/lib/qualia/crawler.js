@@ -41,7 +41,7 @@ export const CRAWLER_DEFAULTS = {
   anchor:     0.85,     // 0..1 — how hard feet snap onto image features
   boxes:      0.8,      // highlight-box opacity around gripped features (0 = off)
   reblit:     0.7,      // re-print the gripped patch enlarged / tilted / skewed / inverted (0 = off)
-  body:       'frame',  // frame = outline · lens = inverted window onto the scene · void = scene lensed into a black core
+  body:       'void',   // void = scene lensed into a black core · frame = outline · lens = inverted window onto the scene
   silk:       true,     // dragline from the spinneret to the last strong grip
   reactivity: 1.0,      // audio response (beat scuttle, bass crouch, highs jitter)
   palette:    'theme',  // theme | reel (Rybin's blue/pink/amber) | mono
@@ -732,7 +732,8 @@ export function drawCrawler(ctx, sim, style, {
   }
 
   // Body — a slim rectangle along the heading (the reel's pink cell), with a
-  // warm core dot. Crouch widens + shortens it a touch, bob scales it.
+  // warm core dot at the FRONT (the head end — it reads as which way the
+  // creature is facing). Crouch widens + shortens it a touch, bob scales it.
   const bodyLen = r * 0.55 * (1 - s.crouch * 0.12) * (1 + s.bob * 0.12);
   const bodyW = r * 0.16 * (1 + s.crouch * 0.35) * (1 + s.bob * 0.12);
   ctx.translate(s.x, s.y); ctx.rotate(s.a);
@@ -779,7 +780,7 @@ export function drawCrawler(ctx, sim, style, {
   ctx.lineWidth = Math.max(1, lw * 1.1);
   ctx.strokeRect(-bodyLen / 2, -bodyW / 2, bodyLen, bodyW);
   ctx.fillStyle = style.core;
-  ctx.beginPath(); ctx.arc(-bodyLen * 0.1, 0, Math.max(1.5, r * 0.035) * (1 + s.bob * 0.6), 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(bodyLen * 0.35, 0, Math.max(1.5, r * 0.035) * (1 + s.bob * 0.6), 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
 
