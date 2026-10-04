@@ -29,6 +29,9 @@ export const CRAWLER_FOLLOW = ['auto', 'pointer', 'pose', 'logo', 'wander'];
 export const CRAWLER_PALETTES = ['theme', 'reel', 'mono'];
 export const CRAWLER_COUNTS = ['1', '2', '3', '4', 'pose'];   // 'pose' = one per tracked person
 export const CRAWLER_BODIES = ['frame', 'lens', 'void'];
+// Step quantize — which transient detector the feet wait for: highs (hats /
+// cymbals), mids (snare), beat (kick), or off (free-running gait).
+export const CRAWLER_QUANTIZE = ['off', 'highs', 'mids', 'beat'];
 export const CRAWLER_MAX = 4;
 
 export const CRAWLER_DEFAULTS = {
@@ -44,6 +47,7 @@ export const CRAWLER_DEFAULTS = {
   body:       'void',   // void = scene lensed into a black core · frame = outline · lens = inverted window onto the scene
   silk:       true,     // dragline from the spinneret to the last strong grip
   reactivity: 1.0,      // audio response (beat scuttle, bass crouch, highs jitter)
+  quantize:   'highs',  // step on: highs (hats) | mids (snare) | beat (kick) | off — feet lift on the hit
   palette:    'theme',  // theme | reel (Rybin's blue/pink/amber) | mono
 };
 
@@ -207,6 +211,13 @@ export function createFeatureGrid(cols = 160, rows = 90) {
 // the lopsided, injured-looking scuttle an odd number buys.
 const MAX_LEGS = 8;
 const MIN_LEGS = 4;
+// Quantize: seconds without a tick before the gait free-runs again.
+const QUANT_LAPSE = 1.5;
+// Locked, a foot this far off its rest (× reach) steps on its group's tick —
+// the hits decide the stride, not the stride slider (which rules the free gait).
+const LOCK_OFF = 0.18;
+// A lifting foot lands this many seconds of body travel ahead of its rest.
+const STEP_LEAD = 0.22;
 // Void-orb semi-axes, × reach (nominal; crouch/bob scale them live).
 export const ORB_AX = 0.52;
 export const ORB_AY = 0.42;
@@ -236,6 +247,10 @@ export function createCrawlerSim() {
     reach: 72,
     legCount: 0,
     crouch: 0,        // 0..1 bass/beat body dip (scales body + shortens stance)
+    tickAge: 1e9,     // seconds since the last quantize tick (1e9 = never)
+    tickPeriod: 0.5,  // EMA of the interval between ticks (the hat pace)
+    locked: false,    // true while quantized AND ticks are still arriving
+    tickGroup: 0,     // gait group that took the last tick (they alternate)
     jitter: 0,        // highs → leg tremor amplitude (px)
     bob: 0,           // beat-triggered body bounce envelope
     roamX: 0, roamY: 0, roamWait: 0, hasRoam: false,
@@ -443,8 +458,10 @@ export function createCrawlerSim() {
     if (f.anchored) f.variant = (inp.rnd() * 4) | 0;
     f.fromX = f.x; f.fromY = f.y; f.toX = lx; f.toY = ly;
     f.t = 0; f.swing = true;
-    // Faster walking (and beats) → quicker steps.
+    // Faster walking (and beats) → quicker steps. Locked to a tick train,
+    // the swing also has to land before the next tick lands.
     f.dur = Math.max(0.07, 0.17 - s.speed / (r * 36)) * (1 - inp.beatPulse * 0.35);
+    if (s.locked) f.dur = Math.min(f.dur, Math.max(0.07, s.tickPeriod * 0.7));
   }
 
   /**
@@ -459,6 +476,9 @@ export function createCrawlerSim() {
    *   grid,                 feature grid or null
    *   gripRect,             {x,y,w,h} device px an external thing to latch onto (logo mark), or null
    *   beatPulse, beatActive, bass, highs,   audio (already reactivity-scaled)
+   *   quantize, tick,       step on a transient train: feet wait for `tick` (true on
+   *                         the frame the chosen detector fired) before lifting;
+   *                         falls back to the free gait when ticks stop arriving
    *   rnd,                  () => [0,1)
    * }
    */
@@ -475,6 +495,15 @@ export function createCrawlerSim() {
     s.jitter += (inp.highs * s.reach * 0.06 - s.jitter) * kA;
     if (inp.beatActive) s.bob = 1;
     s.bob *= Math.exp(-dt * 9);
+    // Quantize clock. A tick stamps the period (EMA of the gap) and resets
+    // the age; with no ticks for QUANT_LAPSE s (a hat-less passage, audio
+    // off) the gate opens and the gait free-runs until the hits come back.
+    s.tickAge += dt;
+    if (inp.quantize && inp.tick) {
+      if (s.tickAge < QUANT_LAPSE) s.tickPeriod += (clamp(s.tickAge, 0.06, QUANT_LAPSE) - s.tickPeriod) * 0.4;
+      s.tickAge = 0;
+    }
+    s.locked = !!inp.quantize && s.tickAge < QUANT_LAPSE;
 
     // 1. Target.
     let tx, ty;
@@ -494,7 +523,12 @@ export function createCrawlerSim() {
     // 2. Steer: ease toward a capped speed, slow on arrival, beat surges.
     const dx = tx - s.x, dy = ty - s.y;
     const d = Math.hypot(dx, dy);
-    const maxV = s.reach * (1.9 + 0.9 * inp.speed) * inp.speed * (1 + inp.beatPulse * 0.6);
+    let maxV = s.reach * (1.9 + 0.9 * inp.speed) * inp.speed * (1 + inp.beatPulse * 0.6);
+    // Locked to a tick train the hits set the pace: the groups alternate
+    // ticks, so a foot stands for two ticks (less its landing lead) and the
+    // body is capped so it lags ≈0.4 reach in that time — well short of the
+    // urgent break-through. Fast hats = a scuttle, a slow kick = a stalk.
+    if (s.locked) maxV = Math.min(maxV, s.reach * 0.4 / Math.max(0.1, 2 * s.tickPeriod - STEP_LEAD));
     const want = d > s.reach * 0.12 ? Math.min(maxV, d * 2.4) : 0;
     const k = 1 - Math.exp(-dt * 4.5);
     s.vx += ((d ? dx / d : 0) * want - s.vx) * k;
@@ -506,6 +540,24 @@ export function createCrawlerSim() {
     // 3. Legs.
     const r = s.reach;
     const stepDist = r * clamp(inp.stride, 0.15, 0.9);
+    // Locked + tick: hand the tick to ONE gait group — the one that didn't
+    // take the last tick, if any of its feet is off its rest (else the other,
+    // else nobody) — so the groups alternate hits instead of the first group
+    // in leg order monopolising every tick and starving the other into
+    // urgent off-beat steps.
+    let tickGroup = -1;
+    if (s.locked && inp.tick) {
+      const pref = s.tickGroup ^ 1;
+      let wantPref = false, wantOther = false;
+      for (let n = 0; n < s.legCount; n++) {
+        const f = s.feet[n];
+        if (f.swing) continue;
+        idealFoot(f, idealOut);
+        if (Math.hypot(f.x - idealOut[0], f.y - idealOut[1]) > r * LOCK_OFF) { if (f.group === pref) wantPref = true; else wantOther = true; }
+      }
+      tickGroup = wantPref ? pref : wantOther ? pref ^ 1 : -1;
+      if (tickGroup >= 0) s.tickGroup = tickGroup;
+    }
     let sw0 = 0, sw1 = 0;
     for (let n = 0; n < s.legCount; n++) { const f = s.feet[n]; if (f.swing) { if (f.group) sw1++; else sw0++; } }
     for (let n = 0; n < s.legCount; n++) {
@@ -525,16 +577,19 @@ export function createCrawlerSim() {
       // Hopelessly far (teleport, big resize): snap.
       if (off > r * 3) { f.x = ix; f.y = iy; f.box.on = false; f.anchored = false; continue; }
       // Standing still: shuffle a foot back under the body now and then; the
-      // beat makes the whole creature fidget.
+      // beat makes the whole creature fidget. (Free gait only — locked, a
+      // foot off its rest simply steps on its group's tick, idle or not.)
       const idle = s.speed < r * 0.08;
-      const settle = idle && off > r * 0.16 && inp.rnd() < dt * (2.0 + inp.beatPulse * 14);
-      // Urgent (overstretched) legs may break gait order, but never more
-      // than half the legs leave the ground at once — the body always has a
-      // stance to stand on, however hard it was yanked.
+      const settle = !s.locked && idle && off > r * 0.16 && inp.rnd() < dt * (2.0 + inp.beatPulse * 14);
+      const wants = s.locked ? off > r * LOCK_OFF : (off > stepDist || settle);
+      const go = !s.locked || f.group === tickGroup;   // may this leg lift this frame?
+      // Urgent (overstretched) legs may break gait order — and the quantize
+      // gate — but never more than half the legs leave the ground at once:
+      // the body always has a stance to stand on, however hard it was yanked.
       const urgent = off > r * 0.75 && (sw0 + sw1) < (s.legCount >> 1);
       const otherGroupDown = (f.group ? sw0 : sw1) === 0;
-      if (urgent || ((off > stepDist || settle) && otherGroupDown)) {
-        lift(f, ix + s.vx * 0.22, iy + s.vy * 0.22, inp);
+      if (urgent || (go && wants && otherGroupDown)) {
+        lift(f, ix + s.vx * STEP_LEAD, iy + s.vy * STEP_LEAD, inp);
         if (f.group) sw1++; else sw0++;
       }
     }

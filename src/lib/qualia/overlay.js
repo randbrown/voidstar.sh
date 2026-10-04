@@ -18,7 +18,7 @@ import { createStitchPost } from './post-stitch.js';
 import {
   createCrawlerSim, createFeatureGrid, drawCrawler, themeCrawlerStyle,
   CRAWLER_STYLES, CRAWLER_DEFAULTS, CRAWLER_FOLLOW, CRAWLER_PALETTES, CRAWLER_COUNTS,
-  CRAWLER_BODIES, CRAWLER_MAX, clamp,
+  CRAWLER_BODIES, CRAWLER_QUANTIZE, CRAWLER_MAX, clamp,
 } from './crawler.js';
 import {
   EMMONS_COLORS, SHOBUD_RED, SHOBUD_INK, SUITS, SPR, SHAPE_R,
@@ -353,6 +353,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       else if (k === 'palette') { if (CRAWLER_PALETTES.includes(v)) crawlerConfig.palette = v; }
       else if (k === 'count')   { const c = String(v); if (CRAWLER_COUNTS.includes(c)) crawlerConfig.count = c; }
       else if (k === 'body')    { const b = v === 'hole' ? 'void' : v; if (CRAWLER_BODIES.includes(b)) crawlerConfig.body = b; }   // 'hole' (retired) → void
+      else if (k === 'quantize') { const q = v === false || v == null ? 'off' : v; if (CRAWLER_QUANTIZE.includes(q)) crawlerConfig.quantize = q; }
       else if (k === 'legs')    { const n = Math.round(+v); if (n >= 4 && n <= 8) crawlerConfig.legs = n; }
       else if (k === 'silk')    { crawlerConfig.silk = !!v; }
       else if (typeof v === 'number' && Number.isFinite(v)) crawlerConfig[k] = v;
@@ -1239,7 +1240,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   const crawlerInput = {
     W: 0, H: 0, tx: 0, ty: 0, hasTarget: false, reach: 72, speed: 1, stride: 0.42,
     anchor: 0.85, boxes: 0.8, silk: true, grid: null, gripRect: null,
-    beatPulse: 0, beatActive: false, bass: 0, highs: 0, rnd: crawlerRnd,
+    beatPulse: 0, beatActive: false, bass: 0, highs: 0, quantize: false, tick: false, rnd: crawlerRnd,
   };
   const crawlerScene = { src: null, sx: 1, sy: 1 };
   let crawlerScratchT = 0, crawlerScratchGlow = 1;
@@ -1407,6 +1408,12 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     crawlerInput.beatActive = audioOn && !!audio.beat.active && react > 0;
     crawlerInput.bass  = audioOn ? clamp(audio.bands.bass * react, 0, 1) : 0;
     crawlerInput.highs = audioOn ? clamp(audio.bands.highs * react, 0, 1) : 0;
+    // Step quantize — the chosen transient detector's `active` is the tick
+    // (true only on the frame it fired). Deaf (reactivity 0) = free gait.
+    const det = !audioOn || react <= 0 ? null
+      : cfg.quantize === 'highs' ? audio.highs : cfg.quantize === 'mids' ? audio.mids : cfg.quantize === 'beat' ? audio.beat : null;
+    crawlerInput.quantize = !!det;
+    crawlerInput.tick = !!(det && det.active);
     for (let i = 0; i < n; i++) {
       const sim = crawlerSims[i];
       crawlerTarget(i, n, field, now);

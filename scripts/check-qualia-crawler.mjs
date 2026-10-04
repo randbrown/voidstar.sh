@@ -7,7 +7,7 @@
 
 import {
   solveTwoBone, createFeatureGrid, createCrawlerSim, drawCrawler, CRAWLER_STYLES, CRAWLER_DEFAULTS,
-  CRAWLER_COUNTS, CRAWLER_BODIES, CRAWLER_FOLLOW,
+  CRAWLER_COUNTS, CRAWLER_BODIES, CRAWLER_FOLLOW, CRAWLER_QUANTIZE,
 } from '../src/lib/qualia/crawler.js';
 
 let failed = 0;
@@ -99,7 +99,7 @@ function makeInput(over = {}) {
     W: 1600, H: 900, tx: 800, ty: 450, hasTarget: true,
     reach: 72, speed: 1, stride: CRAWLER_DEFAULTS.stride,
     anchor: 0, boxes: 0, silk: false, grid: null,
-    beatPulse: 0, beatActive: false, bass: 0, highs: 0, rnd: mulberry32(7),
+    beatPulse: 0, beatActive: false, bass: 0, highs: 0, quantize: false, tick: false, rnd: mulberry32(7),
     ...over,
   };
 }
@@ -277,6 +277,54 @@ section('audio response');
   check('non-positive dt is ignored', st.x === x);
 }
 
+// Step quantize: locked to a tick train, legs lift only on tick frames.
+section('step quantize (hats)');
+{
+  const sim = createCrawlerSim();
+  sim.setLegs(8); sim.placeAt(200, 450);
+  const st = sim.state;
+  const inp = makeInput({ tx: 1300, ty: 450, quantize: true });
+  const EVERY = 15;   // a tick every 15 frames = 0.25 s
+  const prev = new Array(8).fill(false);
+  let onTick = 0, offTick = 0, longSwing = false, alternates = true, lastGroup = -1;
+  for (let i = 0; i < 360; i++) {
+    inp.tick = (i % EVERY) === 0;
+    sim.step(1 / 60, inp);
+    if (i < 60) { for (let k = 0; k < 8; k++) prev[k] = st.feet[k].swing; continue; }   // skip the initial about-turn
+    let g = -1;
+    for (let k = 0; k < 8; k++) {
+      const f = st.feet[k];
+      if (f.swing && !prev[k]) {
+        if (inp.tick) { onTick++; g = f.group; } else offTick++;
+        if (f.dur > 0.25 * 0.7 + 1e-9) longSwing = true;
+      }
+      prev[k] = f.swing;
+    }
+    if (g >= 0) { if (g === lastGroup) alternates = false; lastGroup = g; }
+  }
+  check('locked while ticks arrive', st.locked === true);
+  check('tick period tracked (~0.25 s)', Math.abs(st.tickPeriod - 0.25) < 0.03, `${st.tickPeriod}`);
+  check('legs step', onTick > 0, `${onTick}`);
+  check('steps land on tick frames (urgent legs excepted)', offTick <= onTick * 0.1, `on=${onTick} off=${offTick}`);
+  check('gait groups alternate ticks', alternates);
+  check('swings fit inside a tick', !longSwing);
+  check('body walks at the gait\'s pace (capped, still travelling)', st.x > 600 && st.x < 1250, `${st.x.toFixed(1)}`);
+  // Ticks stop (ambient passage): the gate opens and the gait free-runs.
+  inp.tick = false; inp.tx = 200;
+  let freeSteps = 0;
+  for (let i = 0; i < 180; i++) {
+    sim.step(1 / 60, inp);
+    if (i >= 95) for (let k = 0; k < 8; k++) { const f = st.feet[k]; if (f.swing && !prev[k]) freeSteps++; prev[k] = f.swing; }
+    else for (let k = 0; k < 8; k++) prev[k] = st.feet[k].swing;
+  }
+  check('unlocks after 1.5 s without a tick', st.locked === false);
+  check('free gait resumes', freeSteps > 0, `${freeSteps}`);
+  // quantize off: ticks are ignored, the plain gait runs.
+  const sim2 = createCrawlerSim(); sim2.setLegs(8); sim2.placeAt(200, 450);
+  run(sim2, makeInput({ tx: 1300, ty: 450, quantize: false, tick: true }), 2);
+  check('quantize off never locks', sim2.state.locked === false);
+}
+
 // Logo latch: a grip rect pulls landings onto its perimeter.
 section('grip rect (logo latch)');
 {
@@ -349,6 +397,7 @@ section('enums + renderer smoke');
   check('counts enum', CRAWLER_COUNTS.join() === '1,2,3,4,pose');
   check('bodies enum', CRAWLER_BODIES.join() === 'frame,lens,void');
   check('default body is void', CRAWLER_DEFAULTS.body === 'void');
+  check('quantize enum', CRAWLER_QUANTIZE.join() === 'off,highs,mids,beat' && CRAWLER_QUANTIZE.includes(CRAWLER_DEFAULTS.quantize));
   check('follow enum has logo', CRAWLER_FOLLOW.includes('logo'));
   // Renderer smoke: every body mode runs against a recording fake ctx with a
   // fake scene, balances save/restore, and the void body clips + fills.

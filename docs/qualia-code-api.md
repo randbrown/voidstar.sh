@@ -261,6 +261,7 @@ qualia.sparkStyle("emmons")        // dots | emmons | shobud
 qualia.crawler({ follow: "pose" }) // the spider layer's tunables: follow auto|pointer|pose|logo|wander,
                                    // count 1..4|'pose' (one per person), legs 4..8, size, speed, stride,
                                    // anchor, boxes, reblit, body frame|lens|void, silk, reactivity,
+                                   // quantize highs|mids|beat|off (feet step on hats / snare / kick),
                                    // palette theme|reel|mono — overlay('crawler', on) toggles
 qualia.glitch("mosh", "flip")      // modes: off | on | blip | flip
 qualia.mosh({ intensity: .8 })     // tunables; also qualia.edge / qualia.stitch
