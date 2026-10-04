@@ -28,7 +28,7 @@
 export const CRAWLER_FOLLOW = ['auto', 'pointer', 'pose', 'logo', 'wander'];
 export const CRAWLER_PALETTES = ['theme', 'reel', 'mono'];
 export const CRAWLER_COUNTS = ['1', '2', '3', '4', 'pose'];   // 'pose' = one per tracked person
-export const CRAWLER_BODIES = ['frame', 'lens', 'hole'];
+export const CRAWLER_BODIES = ['frame', 'lens', 'void'];
 export const CRAWLER_MAX = 4;
 
 export const CRAWLER_DEFAULTS = {
@@ -41,7 +41,7 @@ export const CRAWLER_DEFAULTS = {
   anchor:     0.85,     // 0..1 — how hard feet snap onto image features
   boxes:      0.8,      // highlight-box opacity around gripped features (0 = off)
   reblit:     0.7,      // re-print the gripped patch enlarged / tilted / skewed / inverted (0 = off)
-  body:       'frame',  // frame = outline · lens = inverted window onto the scene · hole = punch through the active post
+  body:       'frame',  // frame = outline · lens = inverted window onto the scene · void = black body, lensed rim
   silk:       true,     // dragline from the spinneret to the last strong grip
   reactivity: 1.0,      // audio response (beat scuttle, bass crouch, highs jitter)
   palette:    'theme',  // theme | reel (Rybin's blue/pink/amber) | mono
@@ -572,8 +572,8 @@ function withAlpha(tpl, a) { return tpl.replace('A', a.toFixed(3)); }
  *   rawScene the untreated fx canvas for the lens body (defaults to scene)
  *   reblit  0..1 — re-print each gripped patch (enlarged / tilted / skewed /
  *           inverted per foot) at this opacity
- *   body    'frame' | 'lens' | 'hole' — 'hole' is punched by the host (it
- *           needs the post canvas); here it draws like 'frame'
+ *   body    'frame' | 'lens' | 'void' — void is a true black body with a
+ *           gravitational-lensing rim pulled from rawScene
  */
 export function drawCrawler(ctx, sim, style, {
   boxes = 0.8, glow = 1, t = 0, dpr = 1, scene = null, rawScene = null, reblit = 0, body = 'frame',
@@ -720,6 +720,11 @@ export function drawCrawler(ctx, sim, style, {
     ctx.strokeRect(-pl / 2, -pw / 2, pl, pw);
     ctx.globalAlpha = 1;
   }
+  if (body === 'void') {
+    drawVoidBody(ctx, s, style, lensSrc, bodyLen, bodyW, t, dpr, glow);
+    ctx.restore();
+    return;
+  }
   if (glow > 0.01) {
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = 0.18 * glow + s.bob * 0.25;
@@ -736,18 +741,63 @@ export function drawCrawler(ctx, sim, style, {
   ctx.restore();
 }
 
-/**
- * The 'hole' body: punch the creature's pane out of a full-frame post so the
- * raw scene shows through — the inverse of 'lens' (everything but the body
- * is the treated image). Host calls this on the POST canvas context.
- */
-export function punchCrawlerHole(postCtx, sim) {
-  const s = sim.state;
-  if (s.legCount === 0) return;
-  const r = s.reach;
-  const pl = r * 0.55 * 1.5, pw = r * 0.16 * 3.2;
-  postCtx.save();
-  postCtx.translate(s.x, s.y); postCtx.rotate(s.a);
-  postCtx.clearRect(-pl / 2, -pw / 2, pl, pw);
-  postCtx.restore();
+// ── Void body ───────────────────────────────────────────────────────────────
+// A true-black ellipse along the heading, ringed by gravitational lensing:
+// the raw scene around the body is re-drawn in VOID_RINGS concentric annular
+// slices, each scaled toward the hole a little more than the last (light
+// bending in — the scene stretches and piles up at the horizon) and twisted
+// a little more (frame dragging), then a faint photon ring sits on the edge.
+// Scales are radii of ellipses in BODY space (ctx is already translated +
+// rotated to the body), the scene itself is drawn un-rotated through the clip.
+// Cost: VOID_RINGS small drawImage calls of a (2·rim)² source window.
+const VOID = '#010104';
+const VOID_RINGS = 6;
+function drawVoidBody(ctx, s, style, scene, bodyLen, bodyW, t, dpr, glow) {
+  // Horizon ellipse (semi-axes) + lensing rim reach.
+  const ax = bodyLen * 0.95 * (1 + s.bob * 0.15), ay = bodyW * 2.6 * (1 + s.bob * 0.15);
+  const rim = 1.9;                                  // outer ring radius, × horizon
+  const half = Math.max(ax, ay) * rim * 1.15 + 2;   // source window half-size (device px)
+  if (scene && scene.src) {
+    const x0 = Math.max(0, s.x - half), y0 = Math.max(0, s.y - half);
+    const x1 = s.x + half, y1 = s.y + half;
+    for (let k = 0; k < VOID_RINGS; k++) {
+      // Ring k spans [ri, ro] (× horizon); inner rings bend harder.
+      const u0 = k / VOID_RINGS, u1 = (k + 1) / VOID_RINGS;
+      const ro = 1 + (rim - 1) * (1 - u0) ** 1.6;
+      const ri = 1 + (rim - 1) * (1 - u1) ** 1.6;
+      const bend = (1 - u0) ** 2;                    // 1 at the horizon → 0 at the rim
+      const scale = 1 + 0.55 * bend;                 // pull the scene inward
+      const twist = (0.28 * bend) * (Math.sin(t * 0.6) * 0.3 + 1) * (s.a < 0 ? 1 : -1);
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(0, 0, ax * ro, ay * ro, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, ax * ri, ay * ri, 0, 0, Math.PI * 2);
+      ctx.clip('evenodd');
+      // Body-space warp, then back to the stage frame for the blit.
+      ctx.rotate(twist);
+      ctx.scale(scale, scale);
+      ctx.rotate(-s.a);
+      ctx.translate(-s.x, -s.y);
+      ctx.globalAlpha = 0.55 + 0.45 * bend;
+      try {
+        ctx.drawImage(scene.src, x0 * scene.sx, y0 * scene.sy, (x1 - x0) * scene.sx, (y1 - y0) * scene.sy, x0, y0, x1 - x0, y1 - y0);
+      } catch { /* tainted source */ }
+      ctx.restore();
+    }
+  }
+  // The void itself.
+  ctx.fillStyle = VOID;
+  ctx.beginPath(); ctx.ellipse(0, 0, ax, ay, 0, 0, Math.PI * 2); ctx.fill();
+  // Photon ring — a thin hot rim, brighter on beats, in the core colour.
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = style.core;
+  ctx.lineWidth = Math.max(1, dpr) * (1 + s.bob);
+  ctx.globalAlpha = 0.35 * glow + s.bob * 0.5;
+  ctx.beginPath(); ctx.ellipse(0, 0, ax * 1.04, ay * 1.06, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = style.joint;
+  ctx.lineWidth = Math.max(0.75, dpr * 0.75);
+  ctx.globalAlpha = 0.18 * glow;
+  ctx.beginPath(); ctx.ellipse(0, 0, ax * 1.18, ay * 1.24, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
 }

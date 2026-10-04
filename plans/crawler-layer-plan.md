@@ -106,6 +106,13 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
   canvas and the hole falling back to lens without a post, which made the two indistinguishable
   — negative∘negative is identity. Fixed by giving the hole its own field and the lens the raw
   scene.
+- **Void body (hole retired):** `hole` (the full-stage negative with the body as the clear
+  window) was dropped after a session with it — not a performance tool. Replaced by `void`: a
+  true-black ellipse along the heading with a gravitational-lensing rim. Six concentric annular
+  slices of the raw scene are re-drawn through an even-odd ellipse clip, each scaled toward the
+  horizon (up to 1.55×) and twisted (up to 0.28 rad, slowly breathing) a little more than the
+  last, then a thin photon ring in the core colour sits on the edge and flares on beats. Six
+  small `drawImage` calls per creature; no readback. Stored `body: 'hole'` migrates to `void`.
 - **Leg counts 4–8:** layouts are generated per count (pairs spread front→rear, widest in the
   middle); an odd count adds one unpaired trailing leg on the right with its knee bent inward,
   in the gait group opposite the rear pair — a lopsided scuttle.

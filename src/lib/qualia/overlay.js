@@ -16,7 +16,7 @@ import { readKnobs, onThemeChange, getTheme } from './theme.js';
 import { createMoshPost } from './post-mosh.js';
 import { createStitchPost } from './post-stitch.js';
 import {
-  createCrawlerSim, createFeatureGrid, drawCrawler, punchCrawlerHole, themeCrawlerStyle,
+  createCrawlerSim, createFeatureGrid, drawCrawler, themeCrawlerStyle,
   CRAWLER_STYLES, CRAWLER_DEFAULTS, CRAWLER_FOLLOW, CRAWLER_PALETTES, CRAWLER_COUNTS,
   CRAWLER_BODIES, CRAWLER_MAX, clamp,
 } from './crawler.js';
@@ -352,7 +352,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       if (k === 'follow')       { if (CRAWLER_FOLLOW.includes(v)) crawlerConfig.follow = v; }
       else if (k === 'palette') { if (CRAWLER_PALETTES.includes(v)) crawlerConfig.palette = v; }
       else if (k === 'count')   { const c = String(v); if (CRAWLER_COUNTS.includes(c)) crawlerConfig.count = c; }
-      else if (k === 'body')    { if (CRAWLER_BODIES.includes(v)) crawlerConfig.body = v; }
+      else if (k === 'body')    { const b = v === 'hole' ? 'void' : v; if (CRAWLER_BODIES.includes(b)) crawlerConfig.body = b; }   // 'hole' (retired) → void
       else if (k === 'legs')    { const n = Math.round(+v); if (n >= 4 && n <= 8) crawlerConfig.legs = n; }
       else if (k === 'silk')    { crawlerConfig.silk = !!v; }
       else if (typeof v === 'number' && Number.isFinite(v)) crawlerConfig[k] = v;
@@ -1297,15 +1297,11 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     g.globalCompositeOperation = 'source-over';
   }
   function isPostActive() { return opts.ascii || opts.mosh || opts.edge || opts.stitch || opts.negative; }
-  /** The crawler's 'hole' body owns the post canvas when no glitch does. */
-  function crawlerHoleActive() { return !!opts.crawler && crawlerConfig.body === 'hole'; }
-  /** Post canvas showing — a glitch post, or the hole's own negative. */
-  function postCanvasLive() { return isPostActive() || crawlerHoleActive(); }
 
   /** Scene sources: re-blits re-print what's on screen (the post canvas
-   *  when a glitch is up, else the fx canvas); the lens body always looks at
-   *  the RAW fx canvas, so over a negative post the lens pane (negative of
-   *  raw) blends with the field while the hole pane (raw) cuts through it. */
+   *  when a glitch is up, else the fx canvas); the lens + void bodies always
+   *  look at the RAW fx canvas (a negative pane / a lensed rim of the scene
+   *  itself, whatever glitch is dressing the rest of the stage). */
   const crawlerRawScene = { src: null, sx: 1, sy: 1 };
   function syncCrawlerScene() {
     const W = canvas.width, H = canvas.height;
@@ -1429,9 +1425,6 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       crawlerStyle = name === 'theme' ? themeCrawlerStyle(K) : (CRAWLER_STYLES[name] || CRAWLER_STYLES.reel);
     }
     const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
-    // 'hole' punches the pane out of the post canvas — a glitch post, or the
-    // full-frame negative render() lays down for the hole when no glitch is
-    // up — so everything BUT the body is the treated image.
     const body = cfg.body;
     const opt = {
       boxes: clamp(cfg.boxes, 0, 1), glow: crawlerScratchGlow, t: crawlerScratchT, dpr,
@@ -1440,7 +1433,6 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     };
     for (let i = 0; i < crawlerActive; i++) {
       const sim = crawlerSims[i];
-      if (body === 'hole') punchCrawlerHole(postCtx, sim);
       drawCrawler(ctx, sim, crawlerStyle, opt);
     }
   }
@@ -1461,7 +1453,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     // canvas so skeleton + sparks still land on top. The post canvas is
     // display:none while no post is active — the extra compositor layer is
     // free in the common case.
-    const postActive = postCanvasLive();
+    const postActive = isPostActive();
     if (postActive !== postShown) {
       postCanvas.style.display = postActive ? 'block' : 'none';
       postShown = postActive;
@@ -1471,7 +1463,6 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     else if (opts.edge)     renderEdge(field);
     else if (opts.stitch)   renderStitch(field);
     else if (opts.negative) renderNegative();
-    else if (crawlerHoleActive()) renderNegative();   // the hole's own field; drawCrawlerLayer punches it
 
     ctx.clearRect(0, 0, W, H);
     drawPoseOverlay(field);
@@ -1497,9 +1488,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   return {
     canvas,
     postCanvas,
-    /** True while the post canvas is showing — an ascii/mosh/edge/stitch/
-     *  negative pass, or the crawler's 'hole' body painting its own negative. */
-    isPostActive: postCanvasLive,
+    /** True while an ascii/mosh/edge/stitch/negative pass is rendering (post canvas shown). */
+    isPostActive,
     tick,
     render,
     setOption,

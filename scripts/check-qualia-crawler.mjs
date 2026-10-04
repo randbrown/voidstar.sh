@@ -6,7 +6,7 @@
 // browser. Everything here runs in synthetic device-pixel space.
 
 import {
-  solveTwoBone, createFeatureGrid, createCrawlerSim, punchCrawlerHole, CRAWLER_DEFAULTS,
+  solveTwoBone, createFeatureGrid, createCrawlerSim, drawCrawler, CRAWLER_STYLES, CRAWLER_DEFAULTS,
   CRAWLER_COUNTS, CRAWLER_BODIES, CRAWLER_FOLLOW,
 } from '../src/lib/qualia/crawler.js';
 
@@ -310,17 +310,29 @@ section('grip rect (logo latch)');
   check('no latch out of reach', far.state.feet.slice(0, 8).every(f => !f.grip));
 }
 
-section('enums + hole punch');
+section('enums + renderer smoke');
 {
   check('counts enum', CRAWLER_COUNTS.join() === '1,2,3,4,pose');
-  check('bodies enum', CRAWLER_BODIES.join() === 'frame,lens,hole');
+  check('bodies enum', CRAWLER_BODIES.join() === 'frame,lens,void');
   check('follow enum has logo', CRAWLER_FOLLOW.includes('logo'));
-  // punchCrawlerHole only needs save/translate/rotate/clearRect/restore.
-  const calls = [];
-  const fakeCtx = new Proxy({}, { get: (_, k) => (...a) => { calls.push(String(k)); return undefined; } });
-  const sim = createCrawlerSim(); sim.setLegs(8); sim.placeAt(100, 100);
-  punchCrawlerHole(fakeCtx, sim);
-  check('hole punch clears a rotated pane', calls.includes('clearRect') && calls.includes('rotate') && calls[0] === 'save' && calls[calls.length - 1] === 'restore', calls.join());
+  // Renderer smoke: every body mode runs against a recording fake ctx with a
+  // fake scene, balances save/restore, and the void body clips + fills.
+  const sim = createCrawlerSim(); sim.setLegs(7); sim.placeAt(300, 300);
+  run(sim, makeInput({ tx: 600, ty: 300, anchor: 1, boxes: 1, grid: (() => { const g = createFeatureGrid(40, 20); g.cell = 10; const d = new Uint8ClampedArray(40 * 20 * 4); for (let i = 0; i < d.length; i += 4) { d[i] = d[i + 1] = d[i + 2] = ((i >> 2) % 7 === 0) ? 255 : 0; d[i + 3] = 255; } g.ingest(d); return g; })() }), 2);
+  for (const body of ['frame', 'lens', 'void']) {
+    const calls = [];
+    const fakeCtx = new Proxy({}, {
+      get: (_, k) => (k === 'canvas' ? {} : (...a) => { calls.push(String(k)); return undefined; }),
+      set: () => true,
+    });
+    let threw = null;
+    try { drawCrawler(fakeCtx, sim, CRAWLER_STYLES.reel, { body, scene: { src: {}, sx: 1, sy: 1 }, rawScene: { src: {}, sx: 1, sy: 1 }, reblit: 0.8, boxes: 0.8 }); } catch (e) { threw = e; }
+    const saves = calls.filter(c => c === 'save').length, restores = calls.filter(c => c === 'restore').length;
+    check(`${body} body renders without throwing`, !threw, String(threw));
+    check(`${body} body balances save/restore`, saves === restores, `${saves}/${restores}`);
+    if (body === 'void') check('void body clips rings + fills the horizon', calls.includes('clip') && calls.includes('ellipse') && calls.includes('fill') && calls.includes('drawImage'));
+    if (body === 'lens') check('lens body draws the scene through a clip', calls.includes('clip') && calls.includes('drawImage'));
+  }
 }
 
 // Rescale keeps relative placement.

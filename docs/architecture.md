@@ -146,8 +146,8 @@ skewed / inverted per foot, `reblit`). Up to four creatures (`count`, or `'pose'
 tracked person, each chasing its own person); with the logo mark up they climb it, feet latching
 onto its perimeter (`follow: 'logo'`, also the auto fallback). Legs run 4–8; odd counts add one
 unpaired trailing leg. The body is an outline, a see-through negative pane of the raw scene (`lens`),
-or the inverse (`hole`): the overlay paints a full-frame negative on the post canvas (or uses the
-active glitch post) and clears the body pane out of it, so everything but the body is treated.
+or a true-black ellipse with a gravitational-lensing rim (`void`: six annular slices of the raw
+scene scaled toward the horizon and twisted, under a thin photon ring).
 Audio: beat pulse quickens steps + bounces the body, bass crouches it, highs make the legs tremble. Everything is lazily built on first enable and allocation-free per
 frame; the sim is DOM-free and covered by `scripts/check-qualia-crawler.mjs`. Toggled in the
 topbar layers ▾ group (hotkey ⇧B), tuned in the crawler card, persisted in settings + qualems,
