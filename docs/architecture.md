@@ -145,10 +145,10 @@ edge within reach and boxes the bright blob it grips — the pixel-space answer 
 skewed / inverted per foot, `reblit`). Up to four creatures (`count`, or `'pose'` for one per
 tracked person, each chasing its own person); with the logo mark up they climb it, feet latching
 onto its perimeter (`follow: 'logo'`, also the auto fallback). Legs run 4–8; odd counts add one
-unpaired trailing leg. The body is an outline, a see-through negative pane of the raw scene (`lens`),
+unpaired leg trailing straight back. The body is an outline, a see-through negative pane of the raw scene (`lens`),
 or a gravitational lens (`void`: the body becomes an orb whose perimeter the hips move onto; inside
 it seven annular slices of the raw scene are pulled and twisted harder toward a small true-black
-singularity with a photon ring; the outline is stroked on top with a dot at each hip, and nothing
+singularity; the legs sit evenly around the orb; the outline is stroked on top with a dot at each hip, and nothing
 outside it is touched).
 Audio: beat pulse quickens steps + bounces the body, bass crouches it, highs make the legs tremble. Everything is lazily built on first enable and allocation-free per
 frame; the sim is DOM-free and covered by `scripts/check-qualia-crawler.mjs`. Toggled in the

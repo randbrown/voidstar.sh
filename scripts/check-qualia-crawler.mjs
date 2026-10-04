@@ -324,6 +324,15 @@ section('orb hips (void body)');
     if (Math.abs(e - 1) > 1e-6) off++;
   }
   check('orb hips sit on the ellipse perimeter', off === 0, `${off} off`);
+  // Even spacing: sorted hip angles are 2π/n apart (also for odd counts).
+  for (const n of [8, 7, 5]) {
+    const sm = createCrawlerSim(); sm.setLegs(n); sm.setHipMode('orb');
+    const angs = sm.state.feet.slice(0, n).map(f => ((f.ang % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)).sort((a, b) => a - b);
+    let maxGapErr = 0;
+    for (let k = 0; k < n; k++) { const gap = (angs[(k + 1) % n] - angs[k] + Math.PI * 2) % (Math.PI * 2); maxGapErr = Math.max(maxGapErr, Math.abs(gap - Math.PI * 2 / n)); }
+    check(`${n} legs evenly spaced around the orb`, maxGapErr < 1e-9, `${maxGapErr}`);
+    if (n & 1) check(`${n} legs: odd leg points straight back`, sm.state.feet.slice(0, n).some(f => f.i < 0 && near(f.ang, Math.PI)));
+  }
   check('front legs hip forward, rear legs hip back', (() => { sim.hipLocal(st.feet[0], hp); const fx = hp[0]; sim.hipLocal(st.feet[3], hp); return fx > 0 && hp[0] < 0; })());
   run(sim, makeInput({ tx: 1200, ty: 500 }), 5);
   const hip = [0, 0];

@@ -3858,6 +3858,14 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
           <option value="wander">wander</option>
         </select>
       </div>
+      <div class="qp-row" data-qp="crawler-body" title="frame: outline body · lens: the body is a see-through negative of the scene under it (a pocket null portal) · void: the body becomes an orb the legs hang off; inside it the scene spirals down into a small black singularity">
+        <label>body</label>
+        <select class="qp-select" id="crawler-body">
+          <option value="frame" selected>frame</option>
+          <option value="lens">lens</option>
+          <option value="void">void</option>
+        </select>
+      </div>
       <div class="qp-row" data-qp="crawler-count" title="How many crawlers — a number, or 'pose' for one per tracked person (each chases its own person; with a pointer, #1 chases it and the rest wander)">
         <label>count</label>
         <select class="qp-select" id="crawler-count">
@@ -3901,14 +3909,6 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="crawler-reblit" title="Re-print each gripped patch as a glowing ghost — zoomed, tilted, skewed or inverted per foot (the reel's enlarged / skewed words). 0 = off">
         <label>reblit<span class="qp-val"></span></label>
         <input type="range" min="0" max="1" step="0.02" value="0.7">
-      </div>
-      <div class="qp-row" data-qp="crawler-body" title="frame: outline body · lens: the body is a see-through negative of the scene under it (a pocket null portal) · void: the body becomes an orb the legs hang off; inside it the scene spirals down into a small black singularity">
-        <label>body</label>
-        <select class="qp-select" id="crawler-body">
-          <option value="frame" selected>frame</option>
-          <option value="lens">lens</option>
-          <option value="void">void</option>
-        </select>
       </div>
       <div class="qp-row" data-qp="crawler-silk" title="Dragline — a thread from the spinneret back to the last strong grip">
         <label>silk</label>

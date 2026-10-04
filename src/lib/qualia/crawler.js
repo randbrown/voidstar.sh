@@ -210,16 +210,18 @@ const MIN_LEGS = 4;
 // Void-orb semi-axes, × reach (nominal; crouch/bob scale them live).
 export const ORB_AX = 0.52;
 export const ORB_AY = 0.42;
-const ODD_LEG = { f: -1.05, l: 0.22, hip: -0.42 };
+const ODD_LEG = { f: -1.1, l: 0.0, hip: -0.5 };   // straight back, hip on the cell's rear end
 const _layoutCache = new Map();
 export function buildLegLayout(n) {
   n = clamp(Math.round(n) || 8, MIN_LEGS, MAX_LEGS);
   if (_layoutCache.has(n)) return _layoutCache.get(n);
   const pairs = n >> 1;
   const L = [];
+  // Odd counts keep the pairs forward of the trailing leg so nothing overlaps it.
+  const rearF = n & 1 ? -0.55 : -0.78, rearHip = n & 1 ? -0.2 : -0.3;
   for (let i = 0; i < pairs; i++) {
     const t = pairs === 1 ? 0.5 : i / (pairs - 1);
-    L.push({ f: 0.95 - 1.73 * t, l: 0.62 + 0.38 * Math.sin(Math.PI * t), hip: 0.42 - 0.72 * t });
+    L.push({ f: 0.95 + (rearF - 0.95) * t, l: 0.62 + 0.38 * Math.sin(Math.PI * t), hip: 0.42 + (rearHip - 0.42) * t });
   }
   const out = { n, pairs, legs: L, odd: n & 1 ? ODD_LEG : null };
   _layoutCache.set(n, out);
@@ -243,6 +245,7 @@ export function createCrawlerSim() {
   for (let i = 0; i < MAX_LEGS; i++) {
     s.feet.push({
       side: 1, i: 0, group: 0, bend: 1, hipF: 0,
+      ang: 0,              // orb mode: this leg's angle around the body (evenly spaced)
       x: 0, y: 0, fromX: 0, fromY: 0, toX: 0, toY: 0,
       t: 1, dur: 0.15, swing: false,
       planted: 0,          // seconds since the foot landed (flash ring + box fade-in)
@@ -275,6 +278,7 @@ export function createCrawlerSim() {
         // mirror leg across belong to opposite groups.
         f.group = (i + (side > 0 ? 1 : 0)) % 2;
         f.hipF = L[i].hip;
+        f.ang = side * (i + 0.5) * (Math.PI * 2 / n);
         f.swing = false; f.t = 1; f.box.on = false; f.anchored = false;
       }
     }
@@ -285,6 +289,7 @@ export function createCrawlerSim() {
       f.side = 1; f.i = -1; f.bend = -1;
       f.group = (L.length - 1 + 1) % 2 === 0 ? 1 : 0;
       f.hipF = layoutN.odd.hip;
+      f.ang = Math.PI;
       f.swing = false; f.t = 1; f.box.on = false; f.anchored = false;
     }
     plantAll();
@@ -293,7 +298,14 @@ export function createCrawlerSim() {
   function idealFoot(f, out) {
     const r = s.reach, L = legSpec(f);
     const cx = Math.cos(s.a), sy = Math.sin(s.a);
-    const fw = L.f * r, lat = f.side * L.l * r * (1 - s.crouch * 0.15);
+    let fw, lat;
+    if (hipMode === 'orb') {
+      // Evenly spaced around the orb, a reach out from the centre.
+      const rr = r * 1.0 * (1 - s.crouch * 0.1);
+      fw = Math.cos(f.ang) * rr; lat = Math.sin(f.ang) * rr;
+    } else {
+      fw = L.f * r; lat = f.side * L.l * r * (1 - s.crouch * 0.15);
+    }
     out[0] = s.x + cx * fw - sy * lat;
     out[1] = s.y + sy * fw + cx * lat;
     return out;
@@ -316,14 +328,12 @@ export function createCrawlerSim() {
   /** Hip in BODY space (x along the heading, y lateral). */
   function hipLocal(f, out) {
     if (hipMode === 'orb') {
-      const L = legSpec(f);
-      const th = Math.atan2(f.side * L.l, L.f);
       orbAxes(axesOut);
-      out[0] = Math.cos(th) * axesOut[0];
-      out[1] = Math.sin(th) * axesOut[1];
+      out[0] = Math.cos(f.ang) * axesOut[0];
+      out[1] = Math.sin(f.ang) * axesOut[1];
     } else {
       out[0] = f.hipF * s.reach * 0.55;
-      out[1] = f.side * s.reach * 0.14;
+      out[1] = f.i < 0 ? 0 : f.side * s.reach * 0.14;   // odd leg: centre of the rear end
     }
     return out;
   }
@@ -779,7 +789,7 @@ export function drawCrawler(ctx, sim, style, {
 // inside the outline the raw scene is re-drawn in VOID_RINGS concentric
 // elliptical slices, continuous with the stage at the outline (scale 1, no
 // twist) and pulled + twisted harder toward a small true-black singularity
-// at the centre with a photon ring. Everything is clipped to the orb; the
+// at the centre. Everything is clipped to the orb; the
 // outline is stroked on top with a dot at each hip so you can see where the
 // legs meet the body. Nothing outside the orb is touched.
 // Radii are ellipse scales in BODY space (ctx is already translated +
@@ -836,14 +846,6 @@ function drawVoidBody(ctx, sim, style, scene, t, dpr, glow) {
   // The singularity.
   ctx.fillStyle = VOID;
   ctx.beginPath(); ctx.ellipse(0, 0, ax * VOID_CORE, ay * VOID_CORE, 0, 0, Math.PI * 2); ctx.fill();
-  // Photon ring on the core — hot, in the core colour, flaring on beats.
-  ctx.globalCompositeOperation = 'lighter';
-  ctx.strokeStyle = style.core;
-  ctx.lineWidth = Math.max(1, dpr) * (1 + s.bob);
-  ctx.globalAlpha = 0.45 * glow + s.bob * 0.5;
-  ctx.beginPath(); ctx.ellipse(0, 0, ax * VOID_CORE * 1.08, ay * VOID_CORE * 1.1, 0, 0, Math.PI * 2); ctx.stroke();
-  ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = 'source-over';
   ctx.restore();   // orb clip
   // The outline — the orb the legs hang off — with a dot at each hip.
   const lw = Math.max(1, r * 0.022);

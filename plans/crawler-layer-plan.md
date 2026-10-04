@@ -121,8 +121,11 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
   tried in between; the orb read better on stage.) Seven small `drawImage` calls
   per creature; no readback. Stored `body: 'hole'` migrates to `void`.
 - **Leg counts 4–8:** layouts are generated per count (pairs spread front→rear, widest in the
-  middle); an odd count adds one unpaired trailing leg on the right with its knee bent inward,
-  in the gait group opposite the rear pair — a lopsided scuttle.
+  middle); an odd count adds one unpaired leg trailing straight back (hip on the cell's rear
+  end), the pairs compressed forward so nothing overlaps it, in the gait group opposite the rear
+  pair — a lopsided scuttle. In the orb body every leg is evenly spaced around the ellipse
+  (half-step offset so pairs mirror; the odd leg lands at π), hips and rest feet alike. The
+  core's photon ring was dropped after a look on stage — the black singularity reads cleaner bare.
 - **Logo latch:** `follow: 'logo'` (and the auto fallback after pointer + pose) steers the pack
   around the logo mark's rect, fanned by index; any foot landing within half a reach of the
   rect's perimeter snaps to it and boxes the whole mark, so the creature climbs the mark as it
