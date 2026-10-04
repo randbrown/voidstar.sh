@@ -3,18 +3,19 @@
 // The `_scope` / `_pianoroll` / `_punchcard` / `_spectrum` / `_spiral` /
 // `_pitchwheel` widgets take an options object whose width/height set the
 // canvas (Strudel's defaults: 500×60, or a 200–275px square). `viz()` returns
-// one sized to the window, so
+// one sized to the editor panel the widgets sit in (code-api.js measures it;
+// height is still window-relative), so
 //
-//   s("bd*4")._scope(viz())              // full width, 1/7 of the window high
+//   s("bd*4")._scope(viz())              // panel width, 1/7 of the window high
 //   n("0 2 4")._pianoroll(viz('tall'))   // 1/4 high
 //   s("saw")._scope(viz(.1, { thickness: 2, smear: .6 }))
 //
 // Height: a preset name (HEIGHTS; single or double quotes both work), a
 // fraction of the window height (0 < n ≤ 1), or pixels (n > 1). Width
-// resolves the same way against the window width, so
-// viz({ width: .5 }) is half the window. Anything else in the object is passed
+// resolves the same way against the panel width, so
+// viz({ width: .5 }) is half the panel. Anything else in the object is passed
 // through to the widget. Sizes are read when you call viz(), i.e. on each eval:
-// re-evaluate after resizing the window.
+// re-evaluate after resizing the window or the panel.
 //
 // Pure (no window access at import) so scripts/check-qualia-viz.mjs can run it
 // in node.
@@ -61,7 +62,8 @@ function unpattern(v) {
  * Build a widget options object.
  * @param {Array} args  what viz() was called with: ([height], [overrides]) or
  *                      ([overrides]).
- * @param {{width:number, height:number, dpr?:number}} win  window metrics.
+ * @param {{width:number, height:number, dpr?:number}} win  panel width,
+ *                      window height, devicePixelRatio.
  */
 export function vizOptions(args, win) {
   let [height, overrides] = args.map(unpattern);

@@ -66,14 +66,16 @@ stack(
 
 Strudel's inline widgets (`_scope`, `_pianoroll`, `_punchcard`, `_spectrum`,
 `_spiral`, `_pitchwheel`) default to a 500×60 strip or a 200–275px square.
-`viz()` returns an options object sized to the window instead: full width,
-1/7 of the height. It's a bare global and also `qualia.viz`.
+`viz()` returns an options object sized to where the widgets live instead: the
+full width of the Strudel editor panel (minus its gutter and padding, so the
+canvas never overflows into a horizontal scrollbar), 1/7 of the window height.
+With no editor mounted it falls back to the window width. It's a bare global and also `qualia.viz`.
 Implementation: [`src/lib/qualia/viz-opts.js`](../src/lib/qualia/viz-opts.js),
 checked by `scripts/check-qualia-viz.mjs`.
 
 ```js
 stack(
-  s("bd*4, ~ hh").color("cyan")._scope(viz()),            // full width, 1/7 high
+  s("bd*4, ~ hh").color("cyan")._scope(viz()),            // panel width, 1/7 high
   note("c3 eb3 g3").s("sawtooth")._pianoroll(viz('tall')), // 1/4 high
   s("~ sd")._scope(viz.thin({ thickness: 2, smear: .6 })), // 1/14 high, phosphor trail
 )
@@ -88,8 +90,8 @@ stack(
 | `viz('tall', {…})` / `viz({ height, … })` | merge extra widget options |
 | `viz.tall()`, `viz.thin({…})`, … | shortcut per preset |
 
-`width` in the object resolves the same way against the window width
-(`{ width: .5 }` is half). Everything else passes through to the widget:
+`width` in the object resolves the same way against the panel width
+(`{ width: .5 }` is half the panel). Everything else passes through to the widget:
 `thickness`, `scale`, `pos`, `smear` (0–1 trail) and `trigger` for `_scope`;
 `cycles`, `playhead`, `fold`, `labels`, `vertical`, `autorange` and the like for
 `_pianoroll` / `_punchcard`. Line colour comes from the pattern

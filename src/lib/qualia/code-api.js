@@ -150,6 +150,30 @@ function computedColor(token) {
   } catch { return ''; }
 }
 
+// Width available to Strudel's inline widgets: they mount as block widgets in
+// the editor's .cm-content, so it's the visible scroller minus the gutter and
+// the content padding — not the window. Lines don't wrap, so .cm-content can
+// be wider than what's on screen; measure the scroller instead. Falls back to
+// the window when no editor is mounted (or it's hidden).
+function editorPanelWidth() {
+  try {
+    for (const ed of document.querySelectorAll('strudel-editor')) {
+      const root = ed.shadowRoot || ed;
+      const scroller = root.querySelector('.cm-scroller');
+      if (!scroller || !scroller.clientWidth) continue;
+      const gutters = root.querySelector('.cm-gutters');
+      const content = root.querySelector('.cm-content');
+      let w = scroller.clientWidth - (gutters?.offsetWidth || 0);
+      if (content) {
+        const cs = getComputedStyle(content);
+        w -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      }
+      if (w > 0) return Math.floor(w);
+    }
+  } catch {}
+  return globalThis.innerWidth || 0;
+}
+
 /** Shallow-copy a config get/patch pair: fn() snapshots, fn(patch) merges. */
 function gsConfig(get, patch) {
   return (cfg) => {
@@ -218,11 +242,11 @@ export function installCodeApi(deps) {
   // ── The api object ────────────────────────────────────────────────────────
   const api = {
     // — Strudel widget sizing —
-    /** Options for _scope/_pianoroll/_punchcard/_spectrum/…: full window
-     *  width, 1/7 of its height. viz('tall') / viz(.25) / viz(120) pick the
+    /** Options for _scope/_pianoroll/_punchcard/_spectrum/…: the Strudel
+     *  editor panel's width, 1/7 of the window height. viz('tall') / viz(.25) / viz(120) pick the
      *  height; viz({…}) merges extra widget options. Also a bare global `viz`. */
     viz: makeViz(() => ({
-      width: globalThis.innerWidth || 0,
+      width: editorPanelWidth(),
       height: globalThis.innerHeight || 0,
       dpr: globalThis.devicePixelRatio || 1,
     })),
