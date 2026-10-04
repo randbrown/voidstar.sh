@@ -150,7 +150,11 @@ or a gravitational lens (`void`: the body becomes an orb whose perimeter the hip
 it seven annular slices of the raw scene are pulled and twisted harder toward a small true-black
 singularity; the legs sit evenly around the orb; the outline is stroked on top with a dot at each hip, and nothing
 outside it is touched).
-Audio: beat pulse quickens steps + bounces the body, bass crouches it, highs make the legs tremble. Everything is lazily built on first enable and allocation-free per
+Audio: beat pulse quickens steps + bounces the body, bass crouches it, highs make the legs tremble;
+the gait is *quantized* to a transient train (`quantize`: highs = hats by default, mids = snare,
+beat = kick, or off) — a leg that wants to step waits for the next hit, swings short enough to
+land before the one after, the body's top speed is capped so the hits set its pace, and the gait
+free-runs again after 1.5 s without a hit (overstretched legs always step). Everything is lazily built on first enable and allocation-free per
 frame; the sim is DOM-free and covered by `scripts/check-qualia-crawler.mjs`. Toggled in the
 topbar layers ▾ group (hotkey ⇧B), tuned in the crawler card, persisted in settings + qualems,
 `qualia.overlay('crawler', on)` / `qualia.crawler({…})` from code.

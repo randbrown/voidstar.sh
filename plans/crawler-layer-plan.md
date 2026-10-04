@@ -120,6 +120,24 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
   legs visibly meet the body and the distortion lives inside it. (A slim-rectangle variant was
   tried in between; the orb read better on stage.) Seven small `drawImage` calls
   per creature; no readback. Stored `body: 'hole'` migrates to `void`.
+- **Void is the default body** (was `frame`) — it's the one that reads as voidstar on stage.
+  The frame / lens core dot moved from just behind centre to the *front* of the cell
+  (`+0.35 × bodyLen`), so the dot is the head and tells you which way the creature faces.
+- **Step quantize:** the gait steps *on the hats*. `quantize` picks a transient train (highs =
+  hat/cymbal detector, default; mids = snare; beat = kick; off). Each tick goes to ONE gait
+  group — alternating, the way the free gait's tetrapod does — and any foot of that group that
+  is ≥0.18 reach off its rest lifts on it (the hits decide the stride; the stride slider rules
+  the free gait only). The swing is capped to 0.7 × the EMA'd tick period so it lands before
+  the next hit, and overstretched legs still break through. Two bugs on the way: without the
+  alternation the first group in leg order took every tick and starved the other into urgent
+  off-beat steps; and at the free top speed every leg went urgent anyway, so locked, the
+  body's top speed is capped to 0.6 reach / (2 × period − landing lead) — a foot stands for
+  two ticks, and lags short of the urgent threshold in that time. The hits set the pace: fast
+  hats ≈ three-quarters of free speed, a slow kick a deliberate stalk. 1.5 s without a tick (ambient passage, audio off,
+  reactivity 0) and the gate opens — free gait until the hits return. Why highs: hats are the
+  subdivision layer, so the creature scuttles at the groove's pace rather than lumbering on the
+  kick; note the hat detector's cooldown (0.45 × the beat cooldown, ≈225 ms stock) caps the
+  tick train near 4 Hz, so fast 16ths quantize to every other hat.
 - **Leg counts 4–8:** layouts are generated per count (pairs spread front→rear, widest in the
   middle); an odd count adds one unpaired leg trailing straight back (hip on the cell's rear
   end), the pairs compressed forward so nothing overlaps it, in the gait group opposite the rear

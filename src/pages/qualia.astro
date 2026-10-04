@@ -3399,12 +3399,16 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn active" id="btn-ripples" title="Beat ripples (B)">ripples</button>
         <button class="ctrl-btn"        id="btn-cursor"  title="Cursor trail (cycle modes)">cursor off</button>
         <button class="ctrl-btn"        id="btn-crawler" title="Crawler — a procedural spider that walks over the active quale, chasing the pointer / your wrist and gripping bright edges — or climbing the logo mark (⇧B)">crawler</button>
+        <!-- Logo mark — a layer, not a post pass: it's a live-animated
+             watermark drawn ABOVE the scene stack (and the crawler can climb
+             it), so it lives next to the other overlays. -->
+        <button class="ctrl-btn"        id="btn-logo"    title="void* logo mark — small live-animated watermark above the whole scene stack. Corner-anchored, drag to place; 'center' mode makes a large emblem that can ride the cam walk">logo</button>
       </div>
     </div>
 
     <div class="qg-group" data-group="post">
       <button type="button" class="ctrl-btn qg-trigger" data-group-trigger="post"
-              title="Post-process glitches (T/K/E)" aria-haspopup="true" aria-expanded="false">post<span class="qg-caret">▾</span></button>
+              title="Post-process glitches + cam walk (T/K/E/U)" aria-haspopup="true" aria-expanded="false">post<span class="qg-caret">▾</span></button>
       <div class="qg-popover" role="menu">
         <button class="ctrl-btn" id="btn-ascii" title="ASCII post (T) — off / on / blip / flip">ascii</button>
         <button class="ctrl-btn" id="btn-mosh"  title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
@@ -3412,7 +3416,6 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn" id="btn-stitch" title="Stitch post (Y) — quantized tile mosaic + word pills — off / on / blip / flip">stitch</button>
         <button class="ctrl-btn" id="btn-negative" title="Negative post (⇧N) — lightbox negative: the whole scene inverted to dark marks on a soft light field — off / on / blip / flip">negative</button>
         <button class="ctrl-btn" id="btn-walk"  title="Cam walk (U) — slow pan / zoom / rotate camera drift over the scene, re-aims on hard beats">walk</button>
-        <button class="ctrl-btn" id="btn-logo"  title="void* logo mark — small live-animated watermark above the whole scene stack. Corner-anchored, drag to place; 'center' mode makes a large emblem that can ride the cam walk">logo</button>
       </div>
     </div>
 
@@ -3861,9 +3864,9 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="crawler-body" title="frame: outline body · lens: the body is a see-through negative of the scene under it (a pocket null portal) · void: the body becomes an orb the legs hang off; inside it the scene spirals down into a small black singularity">
         <label>body</label>
         <select class="qp-select" id="crawler-body">
-          <option value="frame" selected>frame</option>
+          <option value="frame">frame</option>
           <option value="lens">lens</option>
-          <option value="void">void</option>
+          <option value="void" selected>void</option>
         </select>
       </div>
       <div class="qp-row" data-qp="crawler-count" title="How many crawlers — a number, or 'pose' for one per tracked person (each chases its own person; with a pointer, #1 chases it and the rest wander)">
@@ -3914,9 +3917,18 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <label>silk</label>
         <button class="qp-toggle active" id="crawler-silk">on</button>
       </div>
-      <div class="qp-row" data-qp="crawler-reactivity" title="Audio response: beats quicken steps + bounce the body, bass crouches it, highs make the legs tremble. 0 = deaf">
+      <div class="qp-row" data-qp="crawler-reactivity" title="Audio response: beats quicken steps + bounce the body, bass crouches it, highs make the legs tremble. 0 = deaf (and un-quantizes the gait)">
         <label>reactivity<span class="qp-val"></span></label>
         <input type="range" min="0" max="2" step="0.05" value="1">
+      </div>
+      <div class="qp-row" data-qp="crawler-quantize" title="Step on the hit — feet wait for the chosen transient before lifting, so the gait walks in time: hats (highs transients, the fastest layer) · snare (mids) · kick (the bass beat) · off = free-running gait. Overstretched legs still step; when the hits stop (ambient passage, audio off) it free-runs until they return">
+        <label>step on</label>
+        <select class="qp-select" id="crawler-quantize">
+          <option value="highs" selected>hats</option>
+          <option value="mids">snare</option>
+          <option value="beat">kick</option>
+          <option value="off">off</option>
+        </select>
       </div>
       <div class="qp-row" data-qp="crawler-palette" title="theme: the active theme's accents · reel: Rybin's ultramarine legs / pink body / amber silk · mono: white">
         <label>palette</label>

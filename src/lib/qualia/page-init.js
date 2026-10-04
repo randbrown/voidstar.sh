@@ -3162,6 +3162,7 @@ export function initQualiaPage() {
   wireCrawlerSlider('crawler-reblit',  'reblit');
   wireCrawlerToggle('crawler-silk',    'silk');
   wireCrawlerSlider('crawler-reactivity', 'reactivity');
+  wireCrawlerSelect('crawler-quantize', 'quantize');
   wireCrawlerSelect('crawler-palette', 'palette');
   document.getElementById('btn-crawler-reset')?.addEventListener('click', (e) => {
     e.stopPropagation();   // don't collapse the card
