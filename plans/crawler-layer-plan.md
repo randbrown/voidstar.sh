@@ -123,6 +123,10 @@ the neighbour steps"); Merxon22, *Recreating Rain World's 2D procedural animatio
 - **Void is the default body** (was `frame`) — it's the one that reads as voidstar on stage.
   The frame / lens core dot moved from just behind centre to the *front* of the cell
   (`+0.35 × bodyLen`), so the dot is the head and tells you which way the creature faces.
+- **Frame / lens trimmed to the cell:** the frame and lens bodies lost their soft additive halo
+  ellipse (it read as an outer circle around the body), and the lens pane shrank from a
+  1.5 × 3.2 window around the cell — which covered the hips and leg joints — to the cell itself,
+  with no outline: the body *is* the lens. Only the front core dot is drawn over it.
 - **Step quantize:** the gait steps *on the hats*. `quantize` picks a transient train (highs =
   hat/cymbal detector, default; mids = snare; beat = kick; off). Each tick goes to ONE gait
   group — alternating, the way the free gait's tetrapod does — and any foot of that group that

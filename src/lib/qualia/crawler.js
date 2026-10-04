@@ -660,7 +660,7 @@ function withAlpha(tpl, a) { return tpl.replace('A', a.toFixed(3)); }
 /**
  * Draw one crawler.
  *   boxes   highlight-box opacity (0 skips the pass)
- *   glow    soft additive halo gain on the body
+ *   glow    soft additive halo gain on the void body (frame / lens draw no halo)
  *   t       monotonic time for the idle tremor
  *   dpr     device pixel ratio (hairline widths)
  *   scene   { src, sx, sy } — a canvas showing what the creature walks on,
@@ -792,18 +792,18 @@ export function drawCrawler(ctx, sim, style, {
   const bodyLen = r * 0.55 * (1 - s.crouch * 0.12) * (1 + s.bob * 0.12);
   const bodyW = r * 0.16 * (1 + s.crouch * 0.35) * (1 + s.bob * 0.12);
   ctx.translate(s.x, s.y); ctx.rotate(s.a);
-  // Lens body — the pane is a see-through negative of the scene under it
-  // (invert flips lightness, hue-rotate 180 brings the hues back, like the
-  // negative post), so the creature carries a little null-portal around.
-  // Bigger than the frame so there's something to see through.
+  // Lens body — the body cell itself is a see-through negative of the scene
+  // under it (invert flips lightness, hue-rotate 180 brings the hues back,
+  // like the negative post), so the creature carries a little null-portal
+  // around. Clipped to the exact cell the hips sit on — no outline, no wider
+  // pane — so the leg joints stay visible.
   if (body === 'lens' && lensSrc && lensSrc.src) {
-    const pl = bodyLen * 1.5, pw = bodyW * 3.2;
     ctx.save();
-    ctx.beginPath(); ctx.rect(-pl / 2, -pw / 2, pl, pw); ctx.clip();
-    // Un-rotate to draw the scene in place, then the clip keeps the pane.
+    ctx.beginPath(); ctx.rect(-bodyLen / 2, -bodyW / 2, bodyLen, bodyW); ctx.clip();
+    // Un-rotate to draw the scene in place, then the clip keeps the cell.
     ctx.rotate(-s.a); ctx.translate(-s.x, -s.y);
-    // Source window = pane's axis-aligned bounds (a little margin for the rotation).
-    const half = Math.hypot(pl, pw) / 2 + 2;
+    // Source window = cell's axis-aligned bounds (a little margin for the rotation).
+    const half = Math.hypot(bodyLen, bodyW) / 2 + 2;
     const x0 = Math.max(0, s.x - half), y0 = Math.max(0, s.y - half);
     const x1 = s.x + half, y1 = s.y + half;
     ctx.filter = 'invert(1) hue-rotate(180deg)';
@@ -812,28 +812,19 @@ export function drawCrawler(ctx, sim, style, {
     } catch { /* tainted source */ }
     ctx.filter = 'none';
     ctx.restore();
-    ctx.strokeStyle = style.body;
-    ctx.lineWidth = Math.max(1, dpr);
-    ctx.globalAlpha = 0.7;
-    ctx.strokeRect(-pl / 2, -pw / 2, pl, pw);
-    ctx.globalAlpha = 1;
   }
   if (body === 'void') {
     drawVoidBody(ctx, sim, style, lensSrc, t, dpr, glow);
     ctx.restore();
     return;
   }
-  if (glow > 0.01) {
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = 0.18 * glow + s.bob * 0.25;
-    ctx.fillStyle = style.body;
-    ctx.beginPath(); ctx.ellipse(0, 0, bodyLen * 0.9, bodyW * 2.2, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
+  // Frame (and lens without a scene to show) — outline the cell. No halo
+  // ellipse around frame / lens: the cell alone is the body.
+  if (body !== 'lens' || !(lensSrc && lensSrc.src)) {
+    ctx.strokeStyle = style.body;
+    ctx.lineWidth = Math.max(1, lw * 1.1);
+    ctx.strokeRect(-bodyLen / 2, -bodyW / 2, bodyLen, bodyW);
   }
-  ctx.strokeStyle = style.body;
-  ctx.lineWidth = Math.max(1, lw * 1.1);
-  ctx.strokeRect(-bodyLen / 2, -bodyW / 2, bodyLen, bodyW);
   ctx.fillStyle = style.core;
   ctx.beginPath(); ctx.arc(bodyLen * 0.35, 0, Math.max(1.5, r * 0.035) * (1 + s.bob * 0.6), 0, Math.PI * 2); ctx.fill();
   ctx.restore();
