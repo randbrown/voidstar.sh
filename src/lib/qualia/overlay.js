@@ -15,6 +15,7 @@ import { lmToCanvas } from './video.js';
 import { readKnobs, onThemeChange, getTheme } from './theme.js';
 import { createMoshPost } from './post-mosh.js';
 import { createStitchPost } from './post-stitch.js';
+import { createVoxelPost } from './post-voxel.js';
 import {
   createCrawlerSim, createFeatureGrid, drawCrawler, themeCrawlerStyle,
   CRAWLER_STYLES, CRAWLER_DEFAULTS, CRAWLER_FOLLOW, CRAWLER_PALETTES, CRAWLER_COUNTS,
@@ -245,6 +246,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     mosh:     false,
     edge:     false,
     stitch:   false,
+    voxel:    false,
     negative: false,
     // Crawler — the procedural spider that walks over the active quale,
     // following the pointer / a wrist, gripping image features. Not a post
@@ -252,10 +254,10 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     // glitch. Tunables in crawlerConfig below; sim + renderer in crawler.js.
     crawler:  false,
   };
-  // ASCII / data-mosh / edge-detect / stitch / negative each fully repaint the
+  // ASCII / data-mosh / edge-detect / stitch / voxel / negative each fully repaint the
   // overlay before sparks + skeleton land on top, so they're mutually
   // exclusive — enabling one disables the others automatically.
-  const POST_KEYS = ['ascii', 'mosh', 'edge', 'stitch', 'negative'];
+  const POST_KEYS = ['ascii', 'mosh', 'edge', 'stitch', 'voxel', 'negative'];
   function setOption(key, val) {
     if (!(key in opts)) return;
     opts[key] = !!val;
@@ -330,6 +332,28 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     }
   }
   function getStitchConfig() { return { ...stitchConfig }; }
+
+  // Voxel tunables — the frame extruded into lit 3D cubes under a drifting
+  // camera (post-voxel.js). All numeric.
+  const voxelConfig = {
+    cellSize: 16,     // cube footprint, device px (grows past the cube cap)
+    depth:    1.0,    // tower height scale — brightness → height
+    cutoff:   0.08,   // luminance below which a cell is void (no cube)
+    gap:      0.10,   // gap between cubes, fraction of a cell
+    smooth:   0.55,   // 0..0.95 — how much each frame eases (kills video shimmer)
+    tilt:     0.25,   // base camera pitch: 0 face-on … 1 grazing fly-over
+    orbit:    0.50,   // camera swing / wander amount (0 = locked)
+    speed:    0.60,   // camera drift speed
+    zoom:     1.15,   // push-in (1 = image plane fills the frame face-on)
+    react:    0.80,   // audio → tower height + beat dolly kicks
+    fog:      0.40,   // depth fog into the void
+  };
+  function setVoxelConfig(partial) {
+    for (const [k, v] of Object.entries(partial || {})) {
+      if (k in voxelConfig && typeof v === 'number' && Number.isFinite(v)) voxelConfig[k] = v;
+    }
+  }
+  function getVoxelConfig() { return { ...voxelConfig }; }
 
   // Edge-detect post-process tunables. The look is white edges on black —
   // a Sobel filter on the active fx canvas's luminance. `intensity` scales
@@ -1049,6 +1073,16 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     stitchPost.render(postCtx, main, canvas.width, canvas.height, field, stitchConfig);
   }
 
+  // ── Voxel post-process ───────────────────────────────────────────────────
+  // Instanced 3D cube field under a drifting camera (see post-voxel.js).
+  let voxelPost = null;
+  function renderVoxel(field) {
+    const main = getMainCanvas?.();
+    if (!main) return;
+    if (!voxelPost) voxelPost = createVoxelPost();
+    voxelPost.render(postCtx, main, canvas.width, canvas.height, field, voxelConfig);
+  }
+
   // ── Edge-detect post-process ─────────────────────────────────────────────
   // Sobel on the active fx canvas's luminance. Sampled into a downsampled
   // working buffer (cap at ~1280 wide) so the per-pixel JS loop stays cheap
@@ -1315,7 +1349,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     }
     g.globalCompositeOperation = 'source-over';
   }
-  function isPostActive() { return opts.ascii || opts.mosh || opts.edge || opts.stitch || opts.negative; }
+  function isPostActive() { return opts.ascii || opts.mosh || opts.edge || opts.stitch || opts.voxel || opts.negative; }
 
   /** Scene sources: re-blits re-print what's on screen (the post canvas
    *  when a glitch is up, else the fx canvas); the lens + void bodies always
@@ -1490,6 +1524,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     else if (opts.ascii)    renderAscii();
     else if (opts.edge)     renderEdge(field);
     else if (opts.stitch)   renderStitch(field);
+    else if (opts.voxel)    renderVoxel(field);
     else if (opts.negative) renderNegative();
 
     ctx.clearRect(0, 0, W, H);
@@ -1505,6 +1540,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     postCanvas.remove();
     moshPost?.dispose();   moshPost = null;
     stitchPost?.dispose(); stitchPost = null;
+    voxelPost?.dispose();  voxelPost = null;
     crawlerListen(false);
     window.removeEventListener('resize', applyDpr);
     window.removeEventListener('orientationchange', applyDpr);
@@ -1516,7 +1552,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   return {
     canvas,
     postCanvas,
-    /** True while an ascii/mosh/edge/stitch/negative pass is rendering (post canvas shown). */
+    /** True while an ascii/mosh/edge/stitch/voxel/negative pass is rendering (post canvas shown). */
     isPostActive,
     tick,
     render,
@@ -1530,6 +1566,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
     getEdgeConfig,
     setStitchConfig,
     getStitchConfig,
+    setVoxelConfig,
+    getVoxelConfig,
     setCrawlerConfig,
     getCrawlerConfig,
     setCrawlerSources,

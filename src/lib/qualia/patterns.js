@@ -160,7 +160,7 @@ const QUALE_IDS = ['chladni', 'fractal', 'galaxy', 'singularity_lens',
                    'atomic_orbital', 'dark_space', 'anomaly', 'chaos',
                    'fire', 'wake', 'spectrum', 'maths', 'telemetry',
                    'detector', 'ghost_machine', 'gear'];
-const GLITCH_POSTS = ['ascii', 'mosh', 'edge', 'stitch', 'negative'];
+const GLITCH_POSTS = ['ascii', 'mosh', 'edge', 'stitch', 'voxel', 'negative'];
 // Overlays that don't need a tracked pose (skeleton would render nothing).
 const OVERLAYS = ['sparks', 'aura', 'ripples'];
 
@@ -321,7 +321,7 @@ const IMPERATIVE_QUALIA_HEADS = new Set([
   'quale', 'nullQuale', 'nextQuale', 'prevQuale', 'randomQuale',
   'set', 'get', 'setParam', 'getField', 'params',
   'preset', 'savePreset', 'phase', 'autoPhase', 'autoCycle', 'phaseParams',
-  'glitch', 'mosh', 'edge', 'stitch', 'logoConfig',
+  'glitch', 'mosh', 'edge', 'stitch', 'voxel', 'logoConfig',
   'transition', 'quantize', 'channel', 'channels', 'bands', 'crowd',
   'qualem', 'audio', 'entangle', 'fade', 'fadeOut', 'fadeIn', 'fadeLevel',
   'unfade', 'help', 'themes',

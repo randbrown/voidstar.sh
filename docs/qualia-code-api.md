@@ -57,7 +57,7 @@ stack(
 | `qset(paramId, pat)` | Set an **active-quale** param per event. Continuous signals need `.segment(n)`. Claims **auto-phase** on a colliding param. |
 | `qpreset(pat)` | Apply factory/user presets by name per event. Claims **auto-phase**. |
 | `qphase(pat)` | Step the quale's phase per event (value = direction ±1). Claims **auto-phase**. |
-| `qglitch(name, pat)` | Set a glitch post's mode per event (`ascii/mosh/edge/stitch/negative` × `off/on/blip/flip`). |
+| `qglitch(name, pat)` | Set a glitch post's mode per event (`ascii/mosh/edge/stitch/voxel/negative` × `off/on/blip/flip`). |
 | `qtext(pat)` | Write the **Text** quale's text per event (the text video-synth — pair with `quale("text")`). Underscores render as spaces: `qtext("<VOID one_more_time>")`. |
 | `qcall(fn, pat)` | Call `fn(value, hap)` per event — the generic escape hatch. |
 | `pat.qtrig(fn)` | **Chainable, keeps the audio**: fires `fn(value, hap)` on each event of the pattern it's chained to — `s("bd*4").qtrig(() => qualia.phase())`. |
@@ -401,7 +401,9 @@ qualia.crawler({ follow: "pose" }) // the spider layer's tunables: follow auto|p
                                    // quantize highs|mids|beat|off (feet step on hats / snare / kick),
                                    // palette theme|reel|mono — overlay('crawler', on) toggles
 qualia.glitch("mosh", "flip")      // modes: off | on | blip | flip
-qualia.mosh({ intensity: .8 })     // tunables; also qualia.edge / qualia.stitch
+qualia.mosh({ intensity: .8 })     // tunables; also qualia.edge / qualia.stitch / qualia.voxel
+qualia.voxel({ depth: 2, tilt: .6 }) // voxel: cellSize, depth, cutoff, gap, smooth, tilt, orbit,
+                                   // speed, zoom, react, fog
 qualia.logo(true); qualia.logoConfig({ caption: "voidstar" })
 qualia.blackout(true)              // screen dark, audio keeps running
 qualia.zen(true)                   // hide UI chrome
