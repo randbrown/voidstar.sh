@@ -163,11 +163,17 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   parent.appendChild(postCanvas);
   const postCtx = postCanvas.getContext('2d');
 
+  // Pose canvas (skeleton, sparks, crawler…) sits ABOVE Strudel's draw
+  // canvas (#test-canvas, z5: .pianoroll() / .scope() / .punchcard()) so the
+  // crawler walks over the pattern's visuals instead of under them. Same
+  // z-index as #test-canvas; appended to <body> at runtime, so DOM order puts
+  // it on top. The post canvas stays at z3 — a full-frame glitch must not
+  // blank out Strudel's output.
   const canvas = document.createElement('canvas');
   canvas.id = 'qualia-overlay';
   canvas.style.cssText =
     'position:fixed;left:0;top:0;width:100vw;height:100vh;display:block;' +
-    'pointer-events:none;z-index:3;';
+    'pointer-events:none;z-index:5;';
   parent.appendChild(canvas);
   const ctx = canvas.getContext('2d');
 
@@ -1203,6 +1209,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   const CRAWLER_GRID_COLS = 128;
   const CRAWLER_SAMPLE_EVERY = 4;   // frames between feature-grid refreshes (~15 Hz at 60)
   const CRAWLER_HYDRA_ID = 'hydra-canvas';
+  const CRAWLER_STRUDEL_ID = 'test-canvas';   // Strudel .pianoroll()/.scope() draw canvas
   // Pointer — passive, window-level (the overlay canvases are
   // pointer-events:none). CSS px; converted to canvas px per frame via the
   // stage rect so split-screen + DPR changes stay registered.
@@ -1290,6 +1297,17 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
         }
         const main = getMainCanvas?.();
         if (main && main.width > 0) g.drawImage(main, 0, 0, cols, rows);
+      }
+      // Strudel's draw canvas (pianoroll / scope / punchcard) composites
+      // over the scene, so feet grip notes and scope traces too. Spans the
+      // viewport like Hydra → crop to the stage rect. Transparent where
+      // nothing is drawn, so screen over the scene is a no-op there.
+      const strudel = document.getElementById(CRAWLER_STRUDEL_ID);
+      if (strudel && strudel.width > 0 && strudel.height > 0) {
+        const r = getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+        const sx = strudel.width / Math.max(1, window.innerWidth), sy = strudel.height / Math.max(1, window.innerHeight);
+        g.globalCompositeOperation = 'screen';
+        g.drawImage(strudel, r.left * sx, r.top * sy, r.width * sx, r.height * sy, 0, 0, cols, rows);
       }
       crawlerGrid.ingest(g.getImageData(0, 0, cols, rows).data);
     } catch {
