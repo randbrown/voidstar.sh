@@ -139,7 +139,9 @@ glitch and lands in recordings for free): a procedural spider — eight (or six)
 an alternating-tetrapod gait (4–8 legs), home-position stepping — that walks over whatever the stage shows,
 chasing the pointer, the most visible wrist, or wandering. Feet don't land on the ideal spot: the
 overlay keeps a ≤128-cell-wide luma + gradient *feature grid* of the composited scene (Hydra ⊕ fx
-canvas, or the active post canvas), refreshed every fourth frame, and each step seeks the strongest
+canvas, or the active post canvas, with Strudel's `.pianoroll()` / `.scope()` draw canvas screened on
+top — the pose canvas sits above `#test-canvas`, so the crawler walks over the pattern's visuals and
+its feet grip notes and scope traces), refreshed every fourth frame, and each step seeks the strongest
 edge within reach and boxes the bright blob it grips — the pixel-space answer to Rybin's DOM
 `elementFromPoint` trick — and re-prints the gripped patch as a glowing ghost (zoomed / tilted /
 skewed / inverted per foot, `reblit`). Up to four creatures (`count`, or `'pose'` for one per

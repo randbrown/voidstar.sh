@@ -321,7 +321,8 @@ function injectStrudelTransparency(ed) {
  *
  * Hydra runs UNDER the viz canvas; the viz uses `mix-blend-mode: screen`
  * so its near-black fill becomes effectively transparent over Hydra. The
- * Strudel scope/pianoroll uses #test-canvas which sits above the viz.
+ * Strudel scope/pianoroll uses #test-canvas which sits above the viz (and
+ * under the overlay pose canvas, so the crawler walks over it).
  */
 // Strudel panel open/close state — persisted across page loads so the
 // editor reopens to its last-visible state. Doubles as the sentinel for
