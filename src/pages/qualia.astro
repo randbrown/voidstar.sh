@@ -542,6 +542,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     #btn-ascii                { min-width: 10ch; } /* "ascii blip" */
     #btn-mosh, #btn-edge      { min-width: 9ch;  } /* "mosh blip" */
     #btn-stitch               { min-width: 11ch; } /* "stitch blip" */
+    #btn-voxel                { min-width: 10ch; } /* "voxel blip" */
     #btn-negative             { min-width: 13ch; } /* "negative blip" */
     #btn-walk                 { min-width: 9ch;  } /* "walk off" */
     #btn-logo                 { min-width: 9ch;  } /* "logo off" */
@@ -3345,7 +3346,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        button IDs are preserved verbatim so every keyboard shortcut and
        page-init.js handler keeps working without changes. -->
   <div id="topbar-right">
-    <select id="theme-select" class="ctrl-btn" title="Theme (Y)"></select>
+    <select id="theme-select" class="ctrl-btn" title="Theme (⇧T)"></select>
     <select id="fx-select" class="ctrl-btn" title="Active fx (V)"></select>
     <span id="fps">-- fps</span>
     <span id="lvl">b-- m-- h--</span>
@@ -3450,6 +3451,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button class="ctrl-btn" id="btn-mosh"  title="Data-mosh post (K) — off / on / blip / flip">mosh</button>
         <button class="ctrl-btn" id="btn-edge"  title="Edge-detect post (E) — off / on / blip / flip">edge</button>
         <button class="ctrl-btn" id="btn-stitch" title="Stitch post (Y) — quantized tile mosaic + word pills — off / on / blip / flip">stitch</button>
+        <button class="ctrl-btn" id="btn-voxel" title="Voxel post (⇧E) — the scene extruded into lit 3D cubes (height = brightness) under a drifting camera — off / on / blip / flip">voxel</button>
         <button class="ctrl-btn" id="btn-negative" title="Negative post (⇧N) — lightbox negative: the whole scene inverted to dark marks on a soft light field — off / on / blip / flip">negative</button>
         <button class="ctrl-btn" id="btn-walk"  title="Cam walk (U) — slow pan / zoom / rotate camera drift over the scene, re-aims on hard beats">walk</button>
       </div>
@@ -3570,6 +3572,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <span><kbd>K</kbd> mosh</span>
   <span><kbd>E</kbd> edge</span>
   <span><kbd>Y</kbd> stitch</span>
+  <span><kbd>⇧E</kbd> voxel</span>
+  <span><kbd>⇧T</kbd> theme</span>
   <span><kbd>⇧N</kbd> negative</span>
   <span><kbd>B</kbd> ripples</span>
   <span><kbd>J</kbd> skeleton</span>
@@ -3846,6 +3850,61 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="stitch-words" title="Comma-separated words for the pill scatter">
         <label>words</label>
         <input type="text" id="stitch-words" spellcheck="false">
+      </div>
+    </div>
+  </div>
+
+  <div id="voxel-card" class="qp-card collapsed" style="display:none">
+    <div class="qp-head" data-toggle="voxel-card">
+      <span class="qp-title">voxel</span>
+      <span class="qp-spacer"></span>
+      <button class="qp-toggle" id="btn-voxel-reset" title="Reset voxel tunables to defaults">reset</button>
+      <span>▾</span>
+    </div>
+    <div class="qp-body">
+      <div class="qp-row" data-qp="voxel-cell" title="Cube footprint in device px — bigger = chunkier blocks + fewer cubes">
+        <label>cube size<span class="qp-val"></span></label>
+        <input type="range" min="4" max="48" step="1" value="16">
+      </div>
+      <div class="qp-row" data-qp="voxel-depth" title="Tower height scale — brighter cells stand taller">
+        <label>depth<span class="qp-val"></span></label>
+        <input type="range" min="0" max="3" step="0.05" value="1">
+      </div>
+      <div class="qp-row" data-qp="voxel-cutoff" title="Cells darker than this drop out entirely and read as void">
+        <label>void cutoff<span class="qp-val"></span></label>
+        <input type="range" min="0" max="0.6" step="0.01" value="0.08">
+      </div>
+      <div class="qp-row" data-qp="voxel-gap" title="Gap between cubes, as a fraction of a cell">
+        <label>gap<span class="qp-val"></span></label>
+        <input type="range" min="0" max="0.5" step="0.01" value="0.1">
+      </div>
+      <div class="qp-row" data-qp="voxel-smooth" title="How much each frame eases toward the live image — kills video shimmer (0 = raw)">
+        <label>smooth<span class="qp-val"></span></label>
+        <input type="range" min="0" max="0.95" step="0.05" value="0.55">
+      </div>
+      <div class="qp-row" data-qp="voxel-tilt" title="Base camera pitch — 0 face-on, 1 a grazing fly-over">
+        <label>tilt<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0.25">
+      </div>
+      <div class="qp-row" data-qp="voxel-orbit" title="Camera swing + wander (0 = locked)">
+        <label>orbit<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.01" value="0.5">
+      </div>
+      <div class="qp-row" data-qp="voxel-speed" title="Camera drift speed">
+        <label>speed<span class="qp-val"></span></label>
+        <input type="range" min="0" max="3" step="0.05" value="0.6">
+      </div>
+      <div class="qp-row" data-qp="voxel-zoom" title="Camera push-in (1 = the image fills the frame face-on)">
+        <label>zoom<span class="qp-val"></span></label>
+        <input type="range" min="0.5" max="3" step="0.05" value="1.15">
+      </div>
+      <div class="qp-row" data-qp="voxel-react" title="Audio drive — bass lifts the towers, beats kick the camera in">
+        <label>react<span class="qp-val"></span></label>
+        <input type="range" min="0" max="2" step="0.05" value="0.8">
+      </div>
+      <div class="qp-row" data-qp="voxel-fog" title="Depth fog into the void">
+        <label>fog<span class="qp-val"></span></label>
+        <input type="range" min="0" max="1" step="0.05" value="0.4">
       </div>
     </div>
   </div>
@@ -4444,6 +4503,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <button class="qp-tab" data-card="mosh-card"   role="tab">mosh</button>
   <button class="qp-tab" data-card="edge-card"   role="tab">edge</button>
   <button class="qp-tab" data-card="stitch-card" role="tab">stitch</button>
+  <button class="qp-tab" data-card="voxel-card"  role="tab">voxel</button>
   <button class="qp-tab" data-card="crawler-card" role="tab">crawler</button>
   <button class="qp-tab" data-card="walk-card"   role="tab">walk</button>
   <button class="qp-tab" data-card="logo-card"   role="tab">logo</button>
@@ -4491,7 +4551,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>V</kbd><kbd>⇧V</kbd></span><span class="ctrl-lbl">fx next / prev</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>L</kbd><kbd>N</kbd></span><span class="ctrl-lbl">phase / cycle period</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>I</kbd><kbd>⇧I</kbd></span><span class="ctrl-lbl">phase step next / prev</span></div>
-      <div class="ctrl-row"><span class="ctrl-keys"><kbd>T</kbd><kbd>K</kbd><kbd>E</kbd><kbd>Y</kbd></span><span class="ctrl-lbl">ascii / mosh / edge / stitch</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>T</kbd><kbd>K</kbd><kbd>E</kbd><kbd>Y</kbd><kbd>⇧E</kbd></span><span class="ctrl-lbl">ascii / mosh / edge / stitch / voxel</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧T</kbd></span><span class="ctrl-lbl">next theme</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>B</kbd></span><span class="ctrl-lbl">ripples</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>J</kbd><kbd>F</kbd><kbd>G</kbd></span><span class="ctrl-lbl">skeleton / sparks / aura</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>P</kbd></span><span class="ctrl-lbl">pose source</span></div>
@@ -5223,16 +5284,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 // can resolve the ESM import graph correctly. (Inline scripts in .astro
 // files are emitted verbatim and would 404 on the relative paths.)
 import { initQualiaPage } from '../lib/qualia/page-init.js';
-import { initThemeControl, cycleTheme } from '../lib/qualia/theme.js';
+import { initThemeControl } from '../lib/qualia/theme.js';
 initQualiaPage();
 initThemeControl(document.getElementById('theme-select'));
-// Theme cycle shortcut (Y / shift+Y), ignoring text inputs.
-document.addEventListener('keydown', (e) => {
-  if (e.code !== 'KeyY') return;
-  const t = e.target;
-  if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
-  cycleTheme(e.shiftKey ? -1 : 1);
-});
+// Theme cycle shortcut (⇧T) lives in page-init's hotkey switch with the rest.
 </script>
 
 </body>

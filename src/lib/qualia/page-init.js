@@ -43,8 +43,9 @@ import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { CRAWLER_DEFAULTS } from './crawler.js';
+import { VOXEL_DEFAULTS } from './post-voxel.js';
 import { createChron } from './chron.js';
-import { getTheme, readKnobs, onThemeChange } from './theme.js';
+import { getTheme, readKnobs, onThemeChange, cycleTheme } from './theme.js';
 import { initQRInterject } from './qr-interject.js';
 import { initSyncUI } from './sync-ui.js';
 import { createRecorder } from './recorder.js';
@@ -159,7 +160,7 @@ const TRANSITION_MS_OPTS = [300, 600, 1200, 1800, 2500];    // ms
 // load — see the audioMode restore block below.
 const AUDIO_MODES   = ['off', 'mic', 'mix', 'all'];
 const GLITCH_MODES  = ['off', 'on', 'blip', 'flip'];
-const GLITCH_KEYS   = ['ascii', 'mosh', 'edge', 'stitch', 'negative'];
+const GLITCH_KEYS   = ['ascii', 'mosh', 'edge', 'stitch', 'voxel', 'negative'];
 const BLIP_DURATION_MS = 280;
 // Hard-kick detector — tuned for "occasional flare on sub hits", not every
 // kick or snare. Multiple gates must all pass for a fire:
@@ -253,6 +254,7 @@ export function initQualiaPage() {
   const btnMosh    = document.getElementById('btn-mosh');
   const btnEdge    = document.getElementById('btn-edge');
   const btnStitch  = document.getElementById('btn-stitch');
+  const btnVoxel   = document.getElementById('btn-voxel');
   const btnNegative = document.getElementById('btn-negative');
   const btnWalk    = document.getElementById('btn-walk');
   const btnLogo    = document.getElementById('btn-logo');
@@ -550,6 +552,7 @@ export function initQualiaPage() {
     moshConfig:     overlay.getMoshConfig(),
     edgeConfig:     overlay.getEdgeConfig(),
     stitchConfig:   overlay.getStitchConfig(),
+    voxelConfig:    overlay.getVoxelConfig(),
     camWalkOn,
     camWalkConfig:  camWalk.getConfig(),
     logoOn,
@@ -587,6 +590,7 @@ export function initQualiaPage() {
     edgeCollapsed:  document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
     crawlerCollapsed: document.getElementById('crawler-card')?.classList.contains('collapsed') ?? true,
     stitchCollapsed: document.getElementById('stitch-card')?.classList.contains('collapsed') ?? true,
+    voxelCollapsed: document.getElementById('voxel-card')?.classList.contains('collapsed') ?? true,
     walkCollapsed:  document.getElementById('walk-card')?.classList.contains('collapsed') ?? true,
     logoCollapsed:  document.getElementById('logo-card')?.classList.contains('collapsed') ?? true,
     cameraCollapsed: cameraCard?.classList.contains('collapsed') ?? true,
@@ -673,7 +677,7 @@ export function initQualiaPage() {
   // legacy stored.asciiMode / stored.moshOn / stored.edgeOn shape into the
   // unified glitchModes object so users coming from an earlier build keep
   // their toggles.
-  const glitchModes = { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off', negative: 'off' };
+  const glitchModes = { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off', voxel: 'off', negative: 'off' };
   if (stored.glitchModes && typeof stored.glitchModes === 'object') {
     for (const g of GLITCH_KEYS) {
       const m = stored.glitchModes[g];
@@ -694,7 +698,7 @@ export function initQualiaPage() {
   // iteration order ends up rendering — fine, since only one renders anyway.
   for (const g of GLITCH_KEYS) overlay.setOption(g, glitchModes[g] === 'on');
   // Per-glitch blip auto-clear timestamps (epoch ms; 0 = inactive).
-  const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0, stitch: 0, negative: 0 };
+  const blipExpiresAt = { ascii: 0, mosh: 0, edge: 0, stitch: 0, voxel: 0, negative: 0 };
 
   // Cam walk — restore tunables + on/off from settings. setEnabled(true)
   // starts the drift immediately; the walk itself only advances once
@@ -732,11 +736,12 @@ export function initQualiaPage() {
   } else {
     audioMode = 'off';
   }
-  // Mosh / edge / stitch config restore (overlay options themselves are
+  // Mosh / edge / stitch / voxel config restore (overlay options themselves are
   // derived from glitchModes above).
   if (stored.moshConfig) overlay.setMoshConfig(stored.moshConfig);
   if (stored.edgeConfig) overlay.setEdgeConfig(stored.edgeConfig);
   if (stored.stitchConfig) overlay.setStitchConfig(stored.stitchConfig);
+  if (stored.voxelConfig) overlay.setVoxelConfig(stored.voxelConfig);
 
   // ── Pose smoothing + thresholds restore ──────────────────────────────────
   let poseSmoothingValue = 0.5;
@@ -1642,7 +1647,8 @@ export function initQualiaPage() {
       post:   () => glitchModes.ascii  !== 'off'
                  || glitchModes.mosh   !== 'off'
                  || glitchModes.edge   !== 'off'
-                 || glitchModes.stitch !== 'off',
+                 || glitchModes.stitch !== 'off'
+                 || glitchModes.voxel  !== 'off',
       // Auto group now owns auto-phase too; either an auto-cycle or an
       // auto-phase being scheduled lights the dot.
       auto:   () => autoCycleSeconds > 0 || autoPhaseSeconds > 0,
@@ -3086,6 +3092,7 @@ export function initQualiaPage() {
   const moshCard = document.getElementById('mosh-card');
   const edgeCard = document.getElementById('edge-card');
   const stitchCard = document.getElementById('stitch-card');
+  const voxelCard  = document.getElementById('voxel-card');
 
   wireOverlayToggle(btnSkel,    'skeleton');
   wireOverlayToggle(btnSparks,  'sparks');
@@ -3196,7 +3203,7 @@ export function initQualiaPage() {
   // styles — whatever mode is set here stays put while phases/palettes
   // rotate. Buttons cycle modes on click; the active class is bound to the
   // MODE so a glitch in 'on' always reads as active.
-  const btnByGlitch = { ascii: btnAscii, mosh: btnMosh, edge: btnEdge, stitch: btnStitch, negative: btnNegative };
+  const btnByGlitch = { ascii: btnAscii, mosh: btnMosh, edge: btnEdge, stitch: btnStitch, voxel: btnVoxel, negative: btnNegative };
   function refreshGlitchBtn(glitch) {
     const btn = btnByGlitch[glitch];
     if (!btn) return;
@@ -3230,6 +3237,7 @@ export function initQualiaPage() {
   btnMosh.addEventListener('click',  () => cycleGlitchMode('mosh'));
   btnEdge.addEventListener('click',  () => cycleGlitchMode('edge'));
   btnStitch?.addEventListener('click', () => cycleGlitchMode('stitch'));
+  btnVoxel?.addEventListener('click',  () => cycleGlitchMode('voxel'));
   btnNegative?.addEventListener('click', () => cycleGlitchMode('negative'));
 
   // Sync each glitch button + its associated tunable card with current
@@ -3240,6 +3248,7 @@ export function initQualiaPage() {
     if (moshCard) moshCard.style.display = glitchModes.mosh !== 'off' ? '' : 'none';
     if (edgeCard) edgeCard.style.display = glitchModes.edge !== 'off' ? '' : 'none';
     if (stitchCard) stitchCard.style.display = glitchModes.stitch !== 'off' ? '' : 'none';
+    if (voxelCard)  voxelCard.style.display  = glitchModes.voxel  !== 'off' ? '' : 'none';
   }
 
   // Roster of glitches included in auto-phase rotation. Computed live from
@@ -3344,6 +3353,49 @@ export function initQualiaPage() {
   }
   if (stitchCard && typeof stored.stitchCollapsed === 'boolean') {
     stitchCard.classList.toggle('collapsed', stored.stitchCollapsed);
+  }
+
+  // Voxel wiring — same slider pattern. Each row keeps a resync fn so a
+  // qualem recall repaints the sliders from the recalled config.
+  const voxelSliderSyncs = [];
+  function wireVoxelSlider(qpId, key, fmt = (v) => v.toFixed(2)) {
+    const row = document.querySelector(`[data-qp="${qpId}"]`);
+    if (!row) return;
+    const input = row.querySelector('input[type=range]');
+    const val   = row.querySelector('.qp-val');
+    const sync = () => {
+      const v = overlay.getVoxelConfig()[key];
+      input.value = String(v);
+      val.textContent = fmt(v);
+    };
+    sync();
+    voxelSliderSyncs.push(sync);
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      overlay.setVoxelConfig({ [key]: v });
+      val.textContent = fmt(v);
+      settings.save();
+    });
+  }
+  wireVoxelSlider('voxel-cell',   'cellSize', (v) => `${Math.round(v)}px`);
+  wireVoxelSlider('voxel-depth',  'depth');
+  wireVoxelSlider('voxel-cutoff', 'cutoff');
+  wireVoxelSlider('voxel-gap',    'gap');
+  wireVoxelSlider('voxel-smooth', 'smooth');
+  wireVoxelSlider('voxel-tilt',   'tilt');
+  wireVoxelSlider('voxel-orbit',  'orbit');
+  wireVoxelSlider('voxel-speed',  'speed');
+  wireVoxelSlider('voxel-zoom',   'zoom');
+  wireVoxelSlider('voxel-react',  'react');
+  wireVoxelSlider('voxel-fog',    'fog');
+  document.getElementById('btn-voxel-reset')?.addEventListener('click', (e) => {
+    e.stopPropagation();   // don't collapse the card
+    overlay.setVoxelConfig({ ...VOXEL_DEFAULTS });
+    for (const sync of voxelSliderSyncs) sync();
+    settings.save();
+  });
+  if (voxelCard && typeof stored.voxelCollapsed === 'boolean') {
+    voxelCard.classList.toggle('collapsed', stored.voxelCollapsed);
   }
   syncPostBtns();
 
@@ -7397,6 +7449,7 @@ export function initQualiaPage() {
         mosh:       overlay.getMoshConfig(),
         edge:       overlay.getEdgeConfig(),
         stitch:     overlay.getStitchConfig(),
+        voxel:      overlay.getVoxelConfig(),
       },
       glitch: { ...glitchModes },
       camWalk: { on: camWalkOn, config: camWalk.getConfig() },
@@ -7425,6 +7478,7 @@ export function initQualiaPage() {
         mosh:   document.getElementById('mosh-card')?.classList.contains('collapsed') ?? true,
         edge:   document.getElementById('edge-card')?.classList.contains('collapsed') ?? true,
         stitch: document.getElementById('stitch-card')?.classList.contains('collapsed') ?? true,
+        voxel:  document.getElementById('voxel-card')?.classList.contains('collapsed') ?? true,
         walk:   document.getElementById('walk-card')?.classList.contains('collapsed') ?? true,
         logo:   document.getElementById('logo-card')?.classList.contains('collapsed') ?? true,
         camera: cameraCard?.classList.contains('collapsed') ?? true,
@@ -7559,6 +7613,10 @@ export function initQualiaPage() {
         if (stitchPaletteBtn) stitchPaletteBtn.textContent = overlay.getStitchConfig().palette;
         if (stitchWordsInput) stitchWordsInput.value = overlay.getStitchConfig().words;
       }
+      if (q.overlay.voxel) {
+        overlay.setVoxelConfig(q.overlay.voxel);
+        for (const sync of voxelSliderSyncs) sync();
+      }
       // Repaint button active classes since wireOverlayToggle's listener
       // wasn't the source of these state changes.
       btnSkel?.classList.toggle('active',    !!q.overlay.skeleton);
@@ -7665,7 +7723,7 @@ export function initQualiaPage() {
       const cardMap = {
         audio: 'audio-card', pose: 'pose-card', diag: 'diag-card',
         params: 'fx-card', mosh: 'mosh-card', edge: 'edge-card',
-        stitch: 'stitch-card',
+        stitch: 'stitch-card', voxel: 'voxel-card',
         walk: 'walk-card', logo: 'logo-card', camera: 'camera-card',
         qualem: 'qualem-card', chron: 'chron-card',
       };
@@ -7789,7 +7847,7 @@ export function initQualiaPage() {
       audio:   { mode: 'off', tunables: AUDIO_PRESETS.default },
       pose:    { source: 'off', smoothing: 0.5, lingerMs: 800, scale: 1, numPoses: 1 },
       overlay: { skeleton: true, sparks: true, sparkStyle: 'dots', aura: true, hands: false, nightcall: false, ripples: true },
-      glitch:  { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off' },
+      glitch:  { ascii: 'off', mosh: 'off', edge: 'off', stitch: 'off', voxel: 'off' },
       camWalk: { on: false, config: { ...CAM_WALK_DEFAULTS } },
       auto:    { phaseSeconds: 0, phaseStyle: 'sequential', phaseBeatSync: false,
                  cycleSeconds: 0, cycleStyle: 'sequential', cycleSetMin: 45, cycleBeatSync: false },
@@ -8894,9 +8952,9 @@ export function initQualiaPage() {
       case 'f': btnSparks.click(); break;
       case 'g': btnAura.click(); break;
       case 'b': if (e.shiftKey) btnCrawler?.click(); else btnRipples.click(); break;   // ripples / ⇧ crawler
-      case 't': btnAscii.click(); break;
+      case 't': if (e.shiftKey) cycleTheme(1); else btnAscii.click(); break;   // ascii / ⇧ next theme
       case 'k': btnMosh.click(); break;
-      case 'e': btnEdge.click(); break;
+      case 'e': if (e.shiftKey) btnVoxel?.click(); else btnEdge.click(); break;   // edge / ⇧ voxel
       case 'y': btnStitch?.click(); break;
       case 'u': btnWalk?.click(); break;   // cam walk on/off
       // Phase/cycle are on/off toggles (the dwell keeps its own picker), so

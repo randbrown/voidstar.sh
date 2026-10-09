@@ -386,6 +386,7 @@ export function installCodeApi(deps) {
      *  them. On/off is overlay('crawler', on) like the other layers. */
     crawler: gsConfig(() => overlay.getCrawlerConfig(), (c) => overlay.setCrawlerConfig(c)),
     stitch: gsConfig(() => overlay.getStitchConfig(), (c) => overlay.setStitchConfig(c)),
+    voxel:  gsConfig(() => overlay.getVoxelConfig(),  (c) => overlay.setVoxelConfig(c)),
     logo:       gsBool(() => logoMark.isEnabled(), (on) => page.setLogoOn(on)),
     logoConfig: gsConfig(() => logoMark.getConfig(), (c) => logoMark.setConfig(c)),
 
