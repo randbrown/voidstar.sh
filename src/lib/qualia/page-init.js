@@ -998,7 +998,7 @@ export function initQualiaPage() {
       acBtn.classList.toggle('active', on);
       acBtn.setAttribute('aria-pressed', String(on));
     }
-    if (acLabel) {
+    if (acLabel && appCapture.isSupported()) {
       acLabel.textContent = on ? appCapture.getLabel() : 'off';
       acLabel.classList.toggle('loaded', on);
     }
@@ -1006,6 +1006,8 @@ export function initQualiaPage() {
   if (acBtn && !appCapture.isSupported()) {
     acBtn.disabled = true;
     acBtn.title = 'App audio capture needs desktop Chrome / Edge.';
+    // Tooltips don't show on touch, so say it in the label too.
+    if (acLabel) acLabel.textContent = 'desktop chrome / edge only';
   }
   acBtn?.addEventListener('click', async () => {
     if (appCapture.isActive()) { await appCapture.stop(); return; }
