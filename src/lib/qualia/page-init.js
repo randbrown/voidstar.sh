@@ -35,6 +35,7 @@ import { createLooper } from './looper.js';
 import { createVocoder } from './vocoder.js';
 import { createModem } from './modem.js';
 import { createAudioFilePlayer } from './audio-file.js';
+import { createAppCapture } from './app-capture.js';
 import { traceWave, idleTrace, computePeaks } from './scope-draw.js';
 import { createStemRecorder } from './stem-recorder.js';
 import { makeDraggablePanel, resetAllPanelPositions } from './panel-pos.js';
@@ -980,6 +981,48 @@ export function initQualiaPage() {
   fpLoop?.addEventListener('click', () => { filePlayer.setLoop(!filePlayer.getLoop()); settings.save(); });
   fpMute?.addEventListener('click', () => { filePlayer.setMuted(!filePlayer.getMuted()); settings.save(); });
 
+  // ── App audio capture ──────────────────────────────────────────────────────
+  // Another app's audio (Spotify, a YouTube tab, …) as the 'app' source, via the
+  // browser's share picker — see app-capture.js for what each browser/OS allows.
+  // Reactivity + recording only (the app is already audible), gated like 'file'.
+  const acBtn   = fpRoot?.querySelector('[data-qp="app-capture"]');
+  const acLabel = fpRoot?.querySelector('[data-qp="app-capture-label"]');
+  const appCapture = createAppCapture({ onChange: () => syncAppCapture() });
+  function syncAppCapture() {
+    const an = appCapture.getFeedAnalyser(), actx = appCapture.getContext();
+    if (appCapture.isActive() && an && actx) audio.adoptAnalyser(actx, an, 'app');
+    else audio.releaseAdopted('app');
+    const on = appCapture.isActive();
+    if (acBtn) {
+      acBtn.textContent = on ? 'stop app audio' : 'capture app audio…';
+      acBtn.classList.toggle('active', on);
+      acBtn.setAttribute('aria-pressed', String(on));
+    }
+    if (acLabel && appCapture.isSupported()) {
+      acLabel.textContent = on ? appCapture.getLabel() : 'off';
+      acLabel.classList.toggle('loaded', on);
+    }
+  }
+  if (acBtn && !appCapture.isSupported()) {
+    acBtn.disabled = true;
+    acBtn.title = 'App audio capture needs desktop Chrome / Edge.';
+    // Tooltips don't show on touch, so say it in the label too.
+    if (acLabel) acLabel.textContent = 'desktop chrome / edge only';
+  }
+  acBtn?.addEventListener('click', async () => {
+    if (appCapture.isActive()) { await appCapture.stop(); return; }
+    try {
+      await appCapture.start();
+      // Same bump as deck play: 'off' → 'mix', 'mic' → 'all', so it's heard by the visuals.
+      if (audioMode === 'off') await setAudioMode('mix');
+      else if (audioMode === 'mic') await setAudioMode('all');
+    } catch (err) {
+      // Dismissing the picker is a NotAllowedError — not worth an alert.
+      if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') alert(err?.message || String(err));
+    }
+  });
+  syncAppCapture();
+
   // ── Deck waveform (scrubber) + realtime scope ──────────────────────────────
   // The overall waveform doubles as the scrubber — click/drag maps x → time and
   // seeks on release (a single seek, so dragging never restarts the source
@@ -1869,8 +1912,8 @@ export function initQualiaPage() {
     switch (audioMode) {
       case 'off': audio.setSourceFilter([]);                                                            break;
       case 'mic': audio.setSourceFilter(['mic']);                                                       break;
-      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file']);         break;
-      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file']);  break;
+      case 'mix': audio.setSourceFilter(['rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file', 'app']);         break;
+      case 'all': audio.setSourceFilter(['mic', 'rig', 'strudel', 'sequencer', 'vocoder', 'looper', 'modem', 'file', 'app']);  break;
     }
   }
 

@@ -5032,6 +5032,12 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
         <button type="button" class="ctrl-btn" data-qp="file-loop" title="Loop the track">loop</button>
         <input type="file" accept="audio/*" data-qp="file-input" hidden>
       </div>
+      <!-- App audio: Spotify / a YouTube tab / any app as a reactivity source via
+           the browser's share picker (desktop Chromium; see app-capture.js). -->
+      <div class="qp-file-pick">
+        <button type="button" class="ctrl-btn" data-qp="app-capture" aria-pressed="false" title="Drive the visuals from another app's audio (Spotify, a YouTube tab…). Pick a tab — or Entire screen on Windows / ChromeOS for desktop apps — and turn on Share audio. Feeds the visuals + recording in mix / all; the app stays audible on its own.">capture app audio…</button>
+        <span class="qp-file-name" data-qp="app-capture-label" title="Captured app audio source">off</span>
+      </div>
       <!-- Level up top, like the rig/strudel/vox strips. Double-click the slider
            to reset to 100%. -->
       <div class="qp-row" data-qp="file-level" title="File playback level into the speakers + recording (a brickwall limiter guards against clipping). Double-click to reset to 100%.">
