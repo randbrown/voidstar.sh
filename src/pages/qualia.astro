@@ -3346,7 +3346,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
        button IDs are preserved verbatim so every keyboard shortcut and
        page-init.js handler keeps working without changes. -->
   <div id="topbar-right">
-    <select id="theme-select" class="ctrl-btn" title="Theme (Y)"></select>
+    <select id="theme-select" class="ctrl-btn" title="Theme (⇧T)"></select>
     <select id="fx-select" class="ctrl-btn" title="Active fx (V)"></select>
     <span id="fps">-- fps</span>
     <span id="lvl">b-- m-- h--</span>
@@ -3573,6 +3573,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <span><kbd>E</kbd> edge</span>
   <span><kbd>Y</kbd> stitch</span>
   <span><kbd>⇧E</kbd> voxel</span>
+  <span><kbd>⇧T</kbd> theme</span>
   <span><kbd>⇧N</kbd> negative</span>
   <span><kbd>B</kbd> ripples</span>
   <span><kbd>J</kbd> skeleton</span>
@@ -3857,6 +3858,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div class="qp-head" data-toggle="voxel-card">
       <span class="qp-title">voxel</span>
       <span class="qp-spacer"></span>
+      <button class="qp-toggle" id="btn-voxel-reset" title="Reset voxel tunables to defaults">reset</button>
       <span>▾</span>
     </div>
     <div class="qp-body">
@@ -4550,6 +4552,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>L</kbd><kbd>N</kbd></span><span class="ctrl-lbl">phase / cycle period</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>I</kbd><kbd>⇧I</kbd></span><span class="ctrl-lbl">phase step next / prev</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>T</kbd><kbd>K</kbd><kbd>E</kbd><kbd>Y</kbd><kbd>⇧E</kbd></span><span class="ctrl-lbl">ascii / mosh / edge / stitch / voxel</span></div>
+      <div class="ctrl-row"><span class="ctrl-keys"><kbd>⇧T</kbd></span><span class="ctrl-lbl">next theme</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>B</kbd></span><span class="ctrl-lbl">ripples</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>J</kbd><kbd>F</kbd><kbd>G</kbd></span><span class="ctrl-lbl">skeleton / sparks / aura</span></div>
       <div class="ctrl-row"><span class="ctrl-keys"><kbd>P</kbd></span><span class="ctrl-lbl">pose source</span></div>
@@ -5281,16 +5284,10 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
 // can resolve the ESM import graph correctly. (Inline scripts in .astro
 // files are emitted verbatim and would 404 on the relative paths.)
 import { initQualiaPage } from '../lib/qualia/page-init.js';
-import { initThemeControl, cycleTheme } from '../lib/qualia/theme.js';
+import { initThemeControl } from '../lib/qualia/theme.js';
 initQualiaPage();
 initThemeControl(document.getElementById('theme-select'));
-// Theme cycle shortcut (Y / shift+Y), ignoring text inputs.
-document.addEventListener('keydown', (e) => {
-  if (e.code !== 'KeyY') return;
-  const t = e.target;
-  if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
-  cycleTheme(e.shiftKey ? -1 : 1);
-});
+// Theme cycle shortcut (⇧T) lives in page-init's hotkey switch with the rest.
 </script>
 
 </body>

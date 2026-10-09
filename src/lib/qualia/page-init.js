@@ -43,8 +43,9 @@ import { createMixer } from './mixer.js';
 import { createHarmonizer } from './harmonizer.js';
 import { createCursorFx } from './cursor-fx.js';
 import { CRAWLER_DEFAULTS } from './crawler.js';
+import { VOXEL_DEFAULTS } from './post-voxel.js';
 import { createChron } from './chron.js';
-import { getTheme, readKnobs, onThemeChange } from './theme.js';
+import { getTheme, readKnobs, onThemeChange, cycleTheme } from './theme.js';
 import { initQRInterject } from './qr-interject.js';
 import { initSyncUI } from './sync-ui.js';
 import { createRecorder } from './recorder.js';
@@ -3387,6 +3388,12 @@ export function initQualiaPage() {
   wireVoxelSlider('voxel-zoom',   'zoom');
   wireVoxelSlider('voxel-react',  'react');
   wireVoxelSlider('voxel-fog',    'fog');
+  document.getElementById('btn-voxel-reset')?.addEventListener('click', (e) => {
+    e.stopPropagation();   // don't collapse the card
+    overlay.setVoxelConfig({ ...VOXEL_DEFAULTS });
+    for (const sync of voxelSliderSyncs) sync();
+    settings.save();
+  });
   if (voxelCard && typeof stored.voxelCollapsed === 'boolean') {
     voxelCard.classList.toggle('collapsed', stored.voxelCollapsed);
   }
@@ -8945,7 +8952,7 @@ export function initQualiaPage() {
       case 'f': btnSparks.click(); break;
       case 'g': btnAura.click(); break;
       case 'b': if (e.shiftKey) btnCrawler?.click(); else btnRipples.click(); break;   // ripples / ⇧ crawler
-      case 't': btnAscii.click(); break;
+      case 't': if (e.shiftKey) cycleTheme(1); else btnAscii.click(); break;   // ascii / ⇧ next theme
       case 'k': btnMosh.click(); break;
       case 'e': if (e.shiftKey) btnVoxel?.click(); else btnEdge.click(); break;   // edge / ⇧ voxel
       case 'y': btnStitch?.click(); break;

@@ -15,7 +15,7 @@ import { lmToCanvas } from './video.js';
 import { readKnobs, onThemeChange, getTheme } from './theme.js';
 import { createMoshPost } from './post-mosh.js';
 import { createStitchPost } from './post-stitch.js';
-import { createVoxelPost } from './post-voxel.js';
+import { createVoxelPost, VOXEL_DEFAULTS } from './post-voxel.js';
 import {
   createCrawlerSim, createFeatureGrid, drawCrawler, themeCrawlerStyle,
   CRAWLER_STYLES, CRAWLER_DEFAULTS, CRAWLER_FOLLOW, CRAWLER_PALETTES, CRAWLER_COUNTS,
@@ -334,20 +334,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   function getStitchConfig() { return { ...stitchConfig }; }
 
   // Voxel tunables — the frame extruded into lit 3D cubes under a drifting
-  // camera (post-voxel.js). All numeric.
-  const voxelConfig = {
-    cellSize: 16,     // cube footprint, device px (grows past the cube cap)
-    depth:    1.0,    // tower height scale — brightness → height
-    cutoff:   0.08,   // luminance below which a cell is void (no cube)
-    gap:      0.10,   // gap between cubes, fraction of a cell
-    smooth:   0.55,   // 0..0.95 — how much each frame eases (kills video shimmer)
-    tilt:     0.25,   // base camera pitch: 0 face-on … 1 grazing fly-over
-    orbit:    0.50,   // camera swing / wander amount (0 = locked)
-    speed:    0.60,   // camera drift speed
-    zoom:     1.15,   // push-in (1 = image plane fills the frame face-on)
-    react:    0.80,   // audio → tower height + beat dolly kicks
-    fog:      0.40,   // depth fog into the void
-  };
+  // camera (see post-voxel.js VOXEL_DEFAULTS for what each does). All numeric.
+  const voxelConfig = { ...VOXEL_DEFAULTS };
   function setVoxelConfig(partial) {
     for (const [k, v] of Object.entries(partial || {})) {
       if (k in voxelConfig && typeof v === 'number' && Number.isFinite(v)) voxelConfig[k] = v;

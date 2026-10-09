@@ -176,6 +176,21 @@ function mul(out, a, b) {
 
 const FOVY = 40 * Math.PI / 180;
 
+// Tunables (overlay.js holds the live copy; the voxel card's reset restores these).
+export const VOXEL_DEFAULTS = Object.freeze({
+  cellSize: 16,     // cube footprint, device px (grows past the cube cap)
+  depth:    1.0,    // tower height scale — brightness → height
+  cutoff:   0.08,   // luminance below which a cell is void (no cube)
+  gap:      0.10,   // gap between cubes, fraction of a cell
+  smooth:   0.55,   // 0..0.95 — how much each frame eases (kills video shimmer)
+  tilt:     0.25,   // base camera pitch: 0 face-on … 1 grazing fly-over
+  orbit:    0.50,   // camera swing / wander amount (0 = locked)
+  speed:    0.60,   // camera drift speed
+  zoom:     1.15,   // push-in (1 = image plane fills the frame face-on)
+  react:    0.80,   // audio → tower height + beat dolly kicks
+  fog:      0.40,   // depth fog into the void
+});
+
 export function createVoxelPost() {
   const glCanvas = document.createElement('canvas');
   const gl = glCanvas.getContext('webgl2', {
