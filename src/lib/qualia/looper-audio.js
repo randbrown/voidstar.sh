@@ -37,7 +37,7 @@ import { createStretchNode } from './looper-stretch.js';
 import { createRigStrip } from './rig-strip.js';
 import { makeSoftLimiter, setSoftLimiterEngaged, softLimiterReductionDb, RIG_LEVEL_MAX } from './limiter.js';
 import { autoCorrelate } from './pitch.js';
-import { planLock, lockErrorSec, retroOutCycle } from './looper-lock.js';
+import { planLock, lockErrorSec, retroOutCycle, countAudibleBlocks } from './looper-lock.js';
 import { registerContext, resumeContext } from './audio-unlock.js';
 
 // Reused analysis window for the input-pitch reader (allocation-free hot path).
@@ -1066,12 +1066,15 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
   // the Strudel grid. Resolves to the same track shape as stopRecording (buffer
   // padded both sides, loopStartBase, regionFrames, naturalSeconds,
   // recordedCycles) or null when the ring can't cover a single grid unit.
-  async function grabRetro({ grid = 1, syncOn = false, cps = 0.5, cycles = 4 } = {}) {
+  async function grabRetro({ grid = 1, syncOn = false, cps = 0.5, cycles = 4, auto = false } = {}) {
     if (!usingWorklet || !recNode) return null;     // ring lives in the worklet
     await ensureContext();
     if (!srcNode) return null;                       // capture must be open
     const N = grid > 0 ? grid : 1;
-    let L = Math.max(N, Math.round((cycles > 0 ? cycles : N) / N) * N);
+    // auto: grab as many whole `cycles`-blocks as hold sound (see below), up
+    // to what the ring holds — so start from the ring's worth, trimmed later.
+    const block = Math.max(N, Math.round((cycles > 0 ? cycles : N) / N) * N);
+    let L = auto ? Infinity : block;
 
     // Anchor the Strudel grid to a looper-ctx reference time read right now.
     const tRef = ctx.currentTime;
@@ -1124,7 +1127,18 @@ export function createLooperAudio({ audio, syncStrudel } = {}) {
     // loop is an integer number of cycles and phase-locked to the grid.
     const maxL = Math.floor(outFrame / fpc / N) * N;
     if (maxL < N) return null;                        // ring too short for one unit
-    const effL = Math.max(N, Math.min(L, maxL));
+    let effL = Math.max(N, Math.min(L, maxL));
+    if (auto) {
+      // Back from OUT one block at a time, keeping blocks while they're
+      // audible; always at least one block (you pressed grab). A ring shorter
+      // than one block keeps the grid-unit length the ring allows.
+      const chans = resp.chans.map(c => (c instanceof Float32Array ? c : new Float32Array(c)));
+      const maxBlocks = Math.floor(effL / block);
+      if (maxBlocks >= 1) {
+        const n = countAudibleBlocks(chans, outFrame, block * fpc, maxBlocks, sr);
+        effL = Math.max(1, n) * block;
+      }
+    }
     let inFrame = Math.round(outFrame - effL * fpc);
     inFrame = Math.max(0, Math.min(outFrame, inFrame));
     const regionFrames = outFrame - inFrame;

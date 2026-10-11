@@ -71,3 +71,23 @@ ok(retroOutCycle(8.3, 4) === 8, 'grab pressed just after the downbeat');
 ok(retroOutCycle(9.2, 1) === 9, 'grid 1 nearest boundary');
 
 console.log(`check-qualia-looper-lock: ${n} assertions passed`);
+
+// Auto-length grab: count consecutive audible blocks back from OUT.
+{
+  const { countAudibleBlocks } = await import('../src/lib/qualia/looper-lock.js');
+  const sr = 1000, block = 500;                    // 0.5 s blocks @ 1 kHz
+  const a = new Float32Array(3000);                 // 6 blocks
+  const fill = (from, to, amp) => { for (let i = from; i < to; i++) a[i] = amp * Math.sin(i); };
+  fill(1000, 3000, 0.3);                            // last 4 blocks played, first 2 silent
+  fill(0, 1000, 0.002);                             // hiss well under −40 dBFS
+  assert.equal(countAudibleBlocks([a], 3000, block, 6, sr), 4, 'stops at the first silent block');
+  assert.equal(countAudibleBlocks([a], 3000, block, 2, sr), 2, 'capped by maxBlocks (ring)');
+  fill(2000, 2500, 0);                              // a fully silent block in the middle
+  assert.equal(countAudibleBlocks([a], 3000, block, 6, sr), 1, 'a silent block ends the run');
+  const s = new Float32Array(3000);
+  assert.equal(countAudibleBlocks([s], 3000, block, 6, sr), 0, 'silence → 0 (caller keeps one block)');
+  // A block with just one short note still counts.
+  s[2900] = 0; for (let i = 2800; i < 2860; i++) s[i] = 0.2;
+  assert.equal(countAudibleBlocks([s, s], 3000, block, 6, sr), 1, 'a brief note keeps its block');
+  console.log('check-qualia-looper-lock: auto-length grab ok');
+}

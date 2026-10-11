@@ -89,6 +89,13 @@ previous phrase, then waits `PAD_SEC` more so a grab has the same post-roll head
 take — without it a positive nudge couldn't slide a grab, so grabs sat early by the whole nudge.
 Synced with Strudel stopped, a grab is free-length at the panel cps, and the status says so.
 
+**Grab length = audible blocks.** `retro cyc` (default 8) is a *block size*, not a fixed count:
+grab walks back from OUT one block at a time and keeps every consecutive block that has sound in
+it (any 50 ms window over ≈ −40 dBFS RMS, `countAudibleBlocks`), stopping at the first silent block
+or the 40 s ring — always at least one block. New tracks (and still-blank ones) take their `snap`
+from `retro cyc`, so a grab is a whole number of snap units and record IN/OUT land on block
+downbeats too.
+
 **Loop-seam crossfade.** Grid-snapped IN/OUT land mid-waveform, so a raw wrap is an amplitude step
 (a click every pass). `playVoice` bakes an 8 ms equal-power crossfade at the region tail into the
 audio immediately *before* the loop start (real recorded continuity from the take's pre-roll; a

@@ -67,3 +67,30 @@ export function retroOutCycle(pos, grid = 1) {
   const N = grid > 0 ? grid : 1;
   return Math.round(pos / N) * N;
 }
+
+// Auto-length grab: walking back from OUT one block (= retro cyc) at a time,
+// how many consecutive blocks hold audible signal? Stops at the first block
+// that's silent throughout, so a grab takes "everything you just played"
+// in whole blocks rather than a fixed count. A block counts as audible when
+// any 50 ms window's RMS (all channels) clears `thresh` (≈ −40 dBFS) —
+// a quiet tail or an amp's hiss stays under it. Returns 0..maxBlocks.
+export const AUDIBLE_RMS = 0.01;
+export function countAudibleBlocks(chans, outFrame, blockFrames, maxBlocks, sampleRate, thresh = AUDIBLE_RMS) {
+  const win = Math.max(1, Math.round(0.05 * sampleRate));
+  const t2 = thresh * thresh;
+  let n = 0;
+  for (let k = 1; k <= maxBlocks; k++) {
+    const end = Math.round(outFrame - (k - 1) * blockFrames);
+    const start = Math.max(0, Math.round(outFrame - k * blockFrames));
+    if (end - start < win) break;
+    let audible = false;
+    for (let w = start; w + win <= end && !audible; w += win) {
+      let sum = 0;
+      for (const d of chans) for (let i = w; i < w + win; i++) sum += d[i] * d[i];
+      if (sum / (win * chans.length) > t2) audible = true;
+    }
+    if (!audible) break;
+    n = k;
+  }
+  return n;
+}

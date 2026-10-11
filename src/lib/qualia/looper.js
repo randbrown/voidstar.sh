@@ -431,7 +431,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     cps: 0.5,                       // used when sync is off / Strudel idle
     offsetMs: (() => { const v = parseInt(lsGet(OFFSET_KEY, '0'), 10); return Number.isFinite(v) ? Math.max(-200, Math.min(500, v)) : 0; })(),
     master:   num01(lsGet(MASTER_KEY, '0.9'), 0.9),   // overall looper output
-    retroCycles: (() => { const v = parseInt(lsGet(RETRO_KEY, '4'), 10); return Number.isFinite(v) ? Math.max(1, Math.min(64, v)) : 4; })(),
+    retroCycles: (() => { const v = parseInt(lsGet(RETRO_KEY, '8'), 10); return Number.isFinite(v) ? Math.max(1, Math.min(64, v)) : 8; })(),
     bufferOn: lsGet(BUFFER_KEY, '0') === '1',          // live lookback running
     rigMuted: lsGet(RIG_MUTE_KEY, '0') === '1',         // rig master mute
     rigLevel: numRig(lsGet(RIG_LEVEL_KEY, '1'), 1.0),  // rig master output level (0..RIG_LEVEL_MAX)
@@ -515,7 +515,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       naturalSeconds: 0, recordedCycles: null,
       anchorCycle: null,                            // Strudel cycle the take's head was played on (phrase lock)
       contentFrames: 0,                             // region minus trailing silence (for "tile")
-      grid: prev ? prev.grid : model.gridDefault,   // record-snap + lane width
+      grid: model.retroCycles,                      // record-snap + lane width — starts at retro cyc (one block)
       length: null,                                 // cycles the take occupies
       fitMode: prev ? prev.fitMode : 'once',        // once | tile | fit (how the take fills the bar)
       volume: 0.5,                                  // Ditto-centre default
@@ -627,7 +627,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
         naturalSeconds: r.naturalSeconds || (buffer.length / sr),
         recordedCycles: r.recordedCycles ?? null,
         anchorCycle: Number.isFinite(r.anchorCycle) ? r.anchorCycle : null,
-        grid: Math.max(1, Math.min(16, r.grid || model.gridDefault)),
+        grid: Math.max(1, Math.min(64, r.grid || model.gridDefault)),
         length: r.length || r.recordedCycles || model.gridDefault,
         // Migrate pre-fitMode loops: a take deliberately stretched (length ≠ its
         // recorded cycles) keeps stretching ("fit"); everything else defaults to
@@ -785,14 +785,14 @@ export function createLooper({ audio, syncStrudel } = {}) {
     if (!looperAudio.isCapturing()) { setStatus('turn the buffer on first'); return; }
     // Grab off the armed take's grid (or the default if nothing's armed yet).
     const armed = armedTrack();
-    const grid = armed ? armed.grid : model.gridDefault;
+    const grid = model.retroCycles;   // grab works in retro-cyc blocks; the new track snaps to one block
     // Synced but Strudel stopped: there's no grid to cut on, so the grab is
     // free-length at the panel cps — say so rather than silently guessing.
     setStatus(syncOn() && !strudelLive() ? `grabbing (strudel stopped — free @ ${model.cps} cps)…` : 'grabbing…');
     let res = null;
     _grabbing = true;
     try {
-      res = await looperAudio.grabRetro({ grid, syncOn: syncOn(), cps: currentCps(), cycles: model.retroCycles });
+      res = await looperAudio.grabRetro({ grid, syncOn: syncOn(), cps: currentCps(), cycles: model.retroCycles, auto: true });
     } catch (e) { console.warn('[qualia] retro grab failed:', e); }
     finally { _grabbing = false; }
     if (!res) { setStatus('buffer too short — play a few more bars'); refreshTransport(); return; }
@@ -803,6 +803,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     let t;
     if (armed && !armed.buffer) {
       t = armed;
+      t.grid = grid;
       looperAudio.stopVoice(t.id);
     } else {
       t = makeTrack(); t.grid = grid;
@@ -838,6 +839,9 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const n = Math.max(1, Math.min(64, parseInt(v, 10) || 1));
     model.retroCycles = n;
     lsSet(RETRO_KEY, n);
+    // Still-blank tracks follow it (they snap to one retro block); recorded
+    // tracks keep the snap they were made with.
+    for (const t of model.tracks) if (!t.buffer && t.grid !== n) { t.grid = n; renderers.get(t.id)?.invalidate(); refreshTrackRow(t); }
   }
 
   // Play (or re-lock) one track's voice.
@@ -904,7 +908,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
   function setTrackGrid(id, v) {
     const t = getTrack(id);
     if (!t) return;
-    const g = Math.max(1, Math.min(16, parseInt(v, 10) || 1));
+    const g = Math.max(1, Math.min(64, parseInt(v, 10) || 1));
     if (g === t.grid) return;
     t.grid = g;
     model.gridDefault = g; lsSet(GRID_KEY, g);   // next new track inherits it
@@ -1355,7 +1359,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     // row 2 — cycles (grid) · length + stretch
     const r2 = document.createElement('div');
     r2.className = 'looper-track-row';
-    const gridIn = numInput(track.grid, 1, 16, 1);
+    const gridIn = numInput(track.grid, 1, 64, 1);
     gridIn.addEventListener('change', () => { setTrackGrid(track.id, gridIn.value); gridIn.value = String(track.grid); });
     const lengthIn = numInput(track.buffer ? fmtLen(track.length) : '—', 0.5, 64, 1, true);
     lengthIn.disabled = !track.buffer;
@@ -1474,7 +1478,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
     propsEl.append(
       mk('cps', stepper(cpsIn, 'input'), 'Cycles per second when sync is off (Strudel\'s clock drives it when synced).'),
       mk('nudge ms', stepper(nudgeIn, 'change'), 'Slide all loops into the pocket. + pulls a late take earlier to compensate record latency.'),
-      mk('retro cyc', stepper(retroIn, 'change'), 'How many cycles the “grab” button captures from the live buffer (snapped to the armed track\'s grid).'),
+      mk('retro cyc', stepper(retroIn, 'change'), 'Block size for “grab”, in cycles: grab takes every consecutive audible block of this size back from the last downbeat (as much as the 40 s buffer holds). New tracks snap to this too.'),
       syncWrap,
       immWrap,
       recNewWrap,
@@ -4641,7 +4645,7 @@ export function createLooper({ audio, syncStrudel } = {}) {
       const haveCyc = info.seconds * cps;
       const enough = info.seconds >= needSec * 0.98;
       btnRetro.classList.toggle('insufficient', !enough);
-      btnRetro.title = `${enough ? 'Grab' : 'Buffer still filling — grab'} the last ${model.retroCycles} cyc (~${needSec.toFixed(1)}s). `
+      btnRetro.title = `${enough ? 'Grab' : 'Buffer still filling — grab'} what you just played, in ${model.retroCycles}-cyc blocks (~${needSec.toFixed(1)}s each). `
         + `Buffered ${info.seconds.toFixed(0)}s ≈ ${haveCyc.toFixed(1)} cyc.`;
     }
   }
