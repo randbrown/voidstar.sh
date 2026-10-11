@@ -13,9 +13,9 @@
 // recognise (see strudel-hydra.js injectStrudelTransparency), so all of the
 // highlighting happens on the overlay's canvases instead.
 //
-// Returns null while the editor is hidden. While it's FOCUSED (typing) it
-// returns the editor rect + stacking (so the creature still draws above the
-// code) but no words: nothing to grip or read along while you type.
+// Disengaged (scan returns null) while the editor is hidden, or while
+// anything in the Strudel panel has focus (typing, or a header control you
+// just touched): the creature drops back under the code and lets go.
 
 export const CODE_MAX_HOLDS = 512;
 const SCAN_MS = 200;
@@ -32,16 +32,15 @@ const WORD = /[\p{L}\p{N}_#~]+/gu;
  *   clip: {left, top, right, bottom} client px (the visible editor area),
  *   fontPx, fontFamily, version (bumps on every rescan),
  *   z: the editor panel's z-index (the overlay matches it to draw above),
- *   editing: true while the editor has focus (n is 0 then),
  * }
  */
 export function createCodeFootholds({ getMount, isOpen = () => true } = {}) {
   const holds = {
     n: 0, rect: new Float32Array(CODE_MAX_HOLDS * 4), text: new Array(CODE_MAX_HOLDS).fill(''),
     clip: { left: 0, top: 0, right: 0, bottom: 0 }, fontPx: 14, fontFamily: 'monospace', version: 0,
-    z: 18, editing: false,
+    z: 18,
   };
-  let lastScan = -1e9, lastResult = null, lastEditing = false;
+  let lastScan = -1e9, lastResult = null;
   const range = typeof document !== 'undefined' ? document.createRange() : null;
 
   function editorParts() {
@@ -59,14 +58,15 @@ export function createCodeFootholds({ getMount, isOpen = () => true } = {}) {
     return { mount, scroller, content };
   }
 
-  /** True while the caret is in the editor (typing). Buttons in the panel
-   *  header (▶, ■, sliders) sit outside the mount, so they don't count. */
+  /** True while the Strudel panel has focus: the caret in the editor, or a
+   *  header control (▶, a slider) you just used. Clicking anywhere off the
+   *  panel blurs it and the creature climbs back on. */
   function editing(p) {
     const ae = document.activeElement;
-    return !!ae && p.mount.contains(ae);
+    return !!ae && (p.mount.closest('#strudel-panel') || p.mount).contains(ae);
   }
 
-  function scanNow(p, words) {
+  function scanNow(p) {
     const mr = p.mount.getBoundingClientRect();
     const sr = p.scroller.getBoundingClientRect();
     const left = Math.max(mr.left, sr.left), top = Math.max(mr.top, sr.top);
@@ -80,11 +80,10 @@ export function createCodeFootholds({ getMount, isOpen = () => true } = {}) {
     // The panels' click-to-front raises the focused one 18 → 19; follow it.
     const panel = p.mount.closest('#strudel-panel') || p.mount;
     holds.z = parseInt(getComputedStyle(panel).zIndex, 10) || 18;
-    holds.editing = !words;
     let n = 0;
     const R = holds.rect;
     const lines = p.content.querySelectorAll('.cm-line');
-    for (let li = 0; words && li < lines.length && n < CODE_MAX_HOLDS; li++) {
+    for (let li = 0; li < lines.length && n < CODE_MAX_HOLDS; li++) {
       const line = lines[li];
       const lr = line.getBoundingClientRect();
       if (lr.bottom < top) continue;
@@ -110,18 +109,17 @@ export function createCodeFootholds({ getMount, isOpen = () => true } = {}) {
     }
     holds.n = n;
     holds.version++;
-    return holds;
+    return n > 0 ? holds : null;
   }
 
   function scan(now = performance.now()) {
     if (!range) return null;
     const p = editorParts();
-    if (!p) { lastResult = null; lastScan = -1e9; return null; }
-    const ed = editing(p);
-    // Focus flips take effect at once (feet let go the moment you click in).
-    if (ed !== lastEditing || now - lastScan >= SCAN_MS) {
-      lastScan = now; lastEditing = ed;
-      try { lastResult = scanNow(p, !ed); } catch { lastResult = null; }
+    // Focus takes effect at once: the frame you click in, it drops under.
+    if (!p || editing(p)) { lastResult = null; lastScan = -1e9; return null; }
+    if (now - lastScan >= SCAN_MS) {
+      lastScan = now;
+      try { lastResult = scanNow(p); } catch { lastResult = null; }
     }
     return lastResult;
   }

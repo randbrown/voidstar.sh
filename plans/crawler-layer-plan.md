@@ -192,8 +192,8 @@ DOM text, so this is the reel's trick done literally rather than through the fea
   `<strudel-editor>` in the mount, not inside it. And the top canvas sat at a fixed z18, but the
   panels' click-to-front raises the touched panel to 19, so after clicking the editor the
   creature was under the code again. The scan now reports the panel's z and the top canvas
-  matches it; while focused the scan still reports the editor rect (no words), so the creature
-  stays above the code while you type and only lets go of the words.
+  matches it. (Briefly it stayed above while typing too; on stage that got in the way, so focus
+  anywhere in the Strudel panel now drops it back under the code until you click off the panel.)
 - Cost: the scan is a few hundred Range rects at 5 Hz, only while engaged; per frame it's a
   version check, plus a second clipped draw only for creatures straddling the editor edge.
 

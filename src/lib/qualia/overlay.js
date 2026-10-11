@@ -1294,9 +1294,8 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   const codeHolds = { n: 0, rect: new Float32Array(CODE_HOLDS_MAX * 4), text: new Array(CODE_HOLDS_MAX).fill('') };
   const codeClip = { x0: 0, y0: 0, x1: 0, y1: 0 };
   const codeText = { fontPx: 14, family: 'monospace' };
-  // codeTop: the editor is up → split-draw above it. codeUp: it also has words
-  // to grip (not focused).
-  let codeUp = false, codeTop = false, codeSrcRef = null, codeSrcVersion = -1;
+  // codeUp: the editor is up and unfocused → grip its words, split-draw above it.
+  let codeUp = false, codeSrcRef = null, codeSrcVersion = -1;
   const codeStage = [0, 0, 0, 0, 0, 0];   // stage rect + canvas size at the last conversion
   // Per-creature reading target: an index into codeHolds, re-picked on
   // arrival (after a short dwell) — mostly the next few words, sometimes a jump.
@@ -1339,11 +1338,10 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
    *  to device px when they or the stage changed. */
   function syncCodeHolds() {
     const src = crawlerConfig.code && getCodeHolds ? getCodeHolds() : null;
-    if (!src) { codeUp = false; codeTop = false; codeHolds.n = 0; codeSrcRef = null; return; }
+    if (!src || !src.n) { codeUp = false; codeHolds.n = 0; codeSrcRef = null; return; }
     const r = getStageRect?.() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
     const W = canvas.width, H = canvas.height;
-    codeTop = true;
-    codeUp = src.n > 0;
+    codeUp = true;
     setCrawlerTopZ(src.z || 18);
     const cs = codeStage;
     if (src === codeSrcRef && src.version === codeSrcVersion && cs[0] === r.left && cs[1] === r.top
@@ -1527,7 +1525,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
 
   function tickCrawler(dt, field) {
-    if (!opts.crawler) { crawlerListen(false); codeUp = false; codeTop = false; showCrawlerTop(false); return; }
+    if (!opts.crawler) { crawlerListen(false); codeUp = false; showCrawlerTop(false); return; }
     ensureCrawler();
     crawlerListen(true);
     const W = canvas.width, H = canvas.height;
@@ -1583,7 +1581,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
   }
 
   function drawCrawlerLayer() {
-    showCrawlerTop(opts.crawler && codeTop && crawlerActive > 0);
+    showCrawlerTop(opts.crawler && codeUp && crawlerActive > 0);
     if (!opts.crawler || !crawlerActive) return;
     const cfg = crawlerConfig;
     const name = cfg.palette;
@@ -1598,7 +1596,7 @@ export function createOverlay({ getMainCanvas, getStageRect, parent = document.b
       scene: crawlerScene.src ? crawlerScene : null, rawScene: crawlerRawScene.src ? crawlerRawScene : null,
       reblit: clamp(cfg.reblit, 0, 1), body, text: codeUp ? codeText : null,
     };
-    if (!codeTop) {
+    if (!codeUp) {
       for (let i = 0; i < crawlerActive; i++) drawCrawler(ctx, crawlerSims[i], crawlerStyle, opt);
       return;
     }

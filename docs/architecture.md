@@ -174,9 +174,9 @@ knocked out). `follow: 'code'` (and the auto fallback after pointer + pose) read
 mostly a few words forward, sometimes a jump. The editor panel (z18) is above the pose canvas, so
 the part of a creature inside the editor's rect is drawn on `#qualia-crawler-top` (pointer-events
 none, after the panels in DOM order, its z-index matched to the panel's: 18, or 19 once
-click-to-front raises it) and the pose canvas draws the rest under complementary clips. Focusing
-the editor lets go of the words at once (nothing to grip or read while typing), but the creature
-keeps drawing above the code. Only the pose-canvas half is recorded (the editor text isn't either), and the top
+click-to-front raises it) and the pose canvas draws the rest under complementary clips. While
+anything in the Strudel panel has focus (typing, or a header control) the holds drop and the top
+canvas hides at once: the creature is back under the code until you click off the panel. Only the pose-canvas half is recorded (the editor text isn't either), and the top
 canvas doesn't ride the cam walk (the editor doesn't).
 
 **Cam walk** (`cam-walk.js`) is a top-level virtual-camera drift over the whole scene stack (Hydra +
