@@ -9040,31 +9040,81 @@ export function initQualiaPage() {
   // CC1/CC2/CC7 (absolute 0–1). Unlike the keystroke path, MIDI reaches a
   // backgrounded/occluded window and doesn't wake a sleeping display — so a
   // MIDI-flashed pad drives the full rig with the screen off. Chromium only.
-  if (navigator.requestMIDIAccess) {
-    navigator.requestMIDIAccess().then((midi) => {
-      function onMIDIMessage(e) {
-        const [status, d1, d2] = e.data;
-        const type = status & 0xf0;
-        // Note-On (buttons) — fire the mapped pad action on press. A Note-On
-        // with velocity 0 is the conventional Note-Off, so ignore it; Note-Off
-        // (0x80) is ignored too (buttons act on press, like the keystrokes).
-        if (type === 0x90 && d2 > 0) {
-          padActions[MIDI_NOTE_ACTIONS[d1]]?.();
-          return;
-        }
-        if (type !== 0xb0) return;                     // otherwise, CC only
-        const cc = d1, norm = d2 / 127;
-        switch (cc) {
-          case 1:  looper.setStripParam?.('delay', 'mix', norm);  break;  // CC1 — delay mix
-          case 2:  looper.setStripParam?.('reverb', 'mix', norm); break;  // CC2 — reverb mix
-          case 7:  looper.setRigLevel?.(norm);                    break;  // CC7 (volume) — rig master
-        }
-      }
-      for (const input of midi.inputs.values()) input.onmidimessage = onMIDIMessage;
+  //
+  // Lazy: requestMIDIAccess() pops a permission prompt, so it only runs once
+  // MIDI is switched on (controls panel → "midi" toggle, persisted). If the
+  // browser already granted MIDI to this origin, we connect silently on load
+  // since that path can't prompt.
+  const MIDI_KEY = 'voidstar.qualia.midi';
+  const btnMidi = document.getElementById('btn-midi');
+  let midiAccess = null;
+  let midiRequest = null;
+  let midiOn = false;
+  function setMidiButton(on, note) {
+    midiOn = on;
+    if (!btnMidi) return;
+    btnMidi.classList.toggle('active', on);
+    btnMidi.setAttribute('aria-pressed', String(on));
+    btnMidi.textContent = note || (on ? 'midi on' : 'midi off');
+  }
+  function onMIDIMessage(e) {
+    const [status, d1, d2] = e.data;
+    const type = status & 0xf0;
+    // Note-On (buttons) — fire the mapped pad action on press. A Note-On
+    // with velocity 0 is the conventional Note-Off, so ignore it; Note-Off
+    // (0x80) is ignored too (buttons act on press, like the keystrokes).
+    if (type === 0x90 && d2 > 0) {
+      padActions[MIDI_NOTE_ACTIONS[d1]]?.();
+      return;
+    }
+    if (type !== 0xb0) return;                     // otherwise, CC only
+    const cc = d1, norm = d2 / 127;
+    switch (cc) {
+      case 1:  looper.setStripParam?.('delay', 'mix', norm);  break;  // CC1 — delay mix
+      case 2:  looper.setStripParam?.('reverb', 'mix', norm); break;  // CC2 — reverb mix
+      case 7:  looper.setRigLevel?.(norm);                    break;  // CC7 (volume) — rig master
+    }
+  }
+  function bindMidiInputs(handler) {
+    if (!midiAccess) return;
+    for (const input of midiAccess.inputs.values()) input.onmidimessage = handler;
+  }
+  function enableMidi() {
+    if (!navigator.requestMIDIAccess) { setMidiButton(false, 'midi n/a'); return; }
+    if (midiAccess) { bindMidiInputs(onMIDIMessage); setMidiButton(true); return; }
+    if (midiRequest) return;
+    midiRequest = navigator.requestMIDIAccess().then((midi) => {
+      midiAccess = midi;
+      bindMidiInputs(onMIDIMessage);
       midi.onstatechange = () => {
-        for (const input of midi.inputs.values()) input.onmidimessage = onMIDIMessage;
+        if (midiOn) bindMidiInputs(onMIDIMessage);
       };
-    }).catch(() => {});
+      setMidiButton(true);
+    }).catch(() => {
+      try { localStorage.removeItem(MIDI_KEY); } catch {}
+      setMidiButton(false, 'midi blocked');
+    }).finally(() => { midiRequest = null; });
+  }
+  function disableMidi() {
+    bindMidiInputs(null);
+    setMidiButton(false);
+  }
+  btnMidi?.addEventListener('click', () => {
+    const on = btnMidi.getAttribute('aria-pressed') !== 'true';
+    try { localStorage.setItem(MIDI_KEY, on ? '1' : '0'); } catch {}
+    if (on) enableMidi(); else disableMidi();
+  });
+  if (!navigator.requestMIDIAccess) setMidiButton(false, 'midi n/a');
+  else {
+    let pref = null;
+    try { pref = localStorage.getItem(MIDI_KEY); } catch {}
+    if (pref === '1') enableMidi();
+    else if (pref === null) {
+      // Never toggled: auto-connect only when the grant already exists (no prompt).
+      navigator.permissions?.query({ name: 'midi' })
+        .then((st) => { if (st.state === 'granted') enableMidi(); })
+        .catch(() => {});
+    }
   }
 
   // ── FPS / level HUD + diagnostics panel ───────────────────────────────────

@@ -4552,6 +4552,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
   <div id="controls-head">
     <span id="controls-title" class="controls-title">controls</span>
     <span class="controls-spacer"></span>
+    <!-- MIDI is lazy: access (and its permission prompt) is only requested once switched on. -->
+    <button class="ctrl-btn" id="btn-midi" aria-pressed="false" title="Listen for MIDI controllers (asks for MIDI access the first time; remembered)">midi off</button>
     <button class="ctrl-btn" id="controls-close" title="Close (Esc)">×</button>
   </div>
   <div id="controls-body">
@@ -4679,7 +4681,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       Mapped for a DOIO / macro-pad that sends these keystrokes — knob turns
       nudge ±0.05 per detent, pushes toggle. A MIDI controller can instead drive
       <b>CC1</b> delay · <b>CC2</b> reverb · <b>CC7</b> volume (absolute 0–1, any
-      channel; Chromium only). Keys pause only while you're typing in a code
+      channel; Chromium only) once <b>midi</b> is switched on above. Keys pause only while you're typing in a code
       editor or text field — the rig panel's sliders stay live to the knobs.
     </div>
   </div>

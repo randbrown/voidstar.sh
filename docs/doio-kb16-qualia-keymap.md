@@ -140,6 +140,11 @@ For lid-shut / screen-off gigs, reflash the pad to send **MIDI** instead: Note-O
 messages reach a backgrounded or occluded tab, and (unlike HID keystrokes) don't
 wake a sleeping macOS display. qualia listens on **any channel** (Chromium only).
 
+MIDI is **off by default** so qualia doesn't ask for MIDI permission on first
+open. Switch it on with the **midi** button in the controls panel (`?`); the
+choice is remembered, and the browser's MIDI prompt appears only that first time.
+If the origin already has MIDI permission, qualia connects on load without asking.
+
 MIDI mode maps the **PERFORM-layer** action set (`MIDI_NOTE_ACTIONS` in
 `page-init.js`); the freeze stack, `⇧S`/`⇧W` transport, and the per-layer video
 banks are keystroke-only for now.
