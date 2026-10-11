@@ -3864,7 +3864,7 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
     <div class="qp-body">
       <div class="qp-row" data-qp="voxel-cell" title="Cube footprint in device px — bigger = chunkier blocks + fewer cubes">
         <label>cube size<span class="qp-val"></span></label>
-        <input type="range" min="4" max="48" step="1" value="16">
+        <input type="range" min="4" max="48" step="1" value="10">
       </div>
       <div class="qp-row" data-qp="voxel-depth" title="Tower height scale — brighter cells stand taller">
         <label>depth<span class="qp-val"></span></label>
@@ -3977,8 +3977,8 @@ const buildStampShort = `${buildStamp.commit} · built ${buildStamp.builtAt.slic
       <div class="qp-row" data-qp="crawler-legs" title="4–8. Even counts walk a clean alternating gait; odd counts add one unpaired trailing leg for a lopsided scuttle">
         <label>legs</label>
         <select class="qp-select" id="crawler-legs">
-          <option value="8" selected>8</option>
-          <option value="7">7</option>
+          <option value="8">8</option>
+          <option value="7" selected>7</option>
           <option value="6">6</option>
           <option value="5">5</option>
           <option value="4">4</option>

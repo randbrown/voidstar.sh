@@ -414,6 +414,7 @@ export function initQualiaPage() {
     overlay.tick(field.dt, field);
     overlay.render(field);
   });
+  core.onTick((field) => overlay.reactTick(field));
 
   // Cam walk — top-level camera drift (pan / zoom / rotate) over the whole
   // scene stack: Hydra + fx canvas + transition freeze-frame + overlay walk

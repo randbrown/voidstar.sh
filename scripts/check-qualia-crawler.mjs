@@ -325,6 +325,35 @@ section('step quantize (hats)');
   check('quantize off never locks', sim2.state.locked === false);
 }
 
+// Sparse trains (kick, snare) with the silk on and a target that jumps around
+// (pointer / pose): the silk tug and about-turns used to overstretch the legs
+// so most steps were urgent off-beat ones — the gait read as hats whatever
+// the setting. Locked, travel + turn are hard-capped so the hits lead.
+section('step quantize (kick / snare, silk on, jumping target)');
+for (const [name, every, phase] of [['kick', 30, 0], ['snare', 60, 30]]) {
+  const sim = createCrawlerSim();
+  sim.setLegs(7); sim.placeAt(200, 450);
+  const st = sim.state;
+  const rnd = mulberry32(3);
+  const inp = makeInput({ tx: 1300, ty: 450, quantize: true, silk: true, audioOn: true, rnd });
+  const prev = new Array(7).fill(false);
+  let onTick = 0, offTick = 0, side = 0;
+  for (let i = 0; i < 60 * 30; i++) {
+    inp.tick = (i % every) === phase;
+    inp.beatActive = (i % 30) === 0;
+    inp.beatPulse = Math.max(0, 1 - (i % 30) / 10);
+    if (i % 240 === 0) { side ^= 1; inp.tx = side ? 1300 : 300; inp.ty = 200 + rnd() * 500; }
+    sim.step(1 / 60, inp);
+    for (let k = 0; k < 7; k++) {
+      const f = st.feet[k];
+      if (i >= 60 && f.swing && !prev[k]) { if (inp.tick) onTick++; else offTick++; }
+      prev[k] = f.swing;
+    }
+  }
+  check(`${name}: locked throughout`, st.locked === true);
+  check(`${name}: steps land on the hits`, offTick <= onTick * 0.15, `on=${onTick} off=${offTick}`);
+}
+
 // Logo latch: a grip rect pulls landings onto its perimeter.
 section('grip rect (logo latch)');
 {

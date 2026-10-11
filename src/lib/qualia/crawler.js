@@ -37,7 +37,7 @@ export const CRAWLER_MAX = 4;
 export const CRAWLER_DEFAULTS = {
   follow:     'auto',   // auto = pointer if it moved recently → pose → logo → wander
   count:      '1',      // '1'..'4' crawlers, or 'pose' = one per tracked person
-  legs:       8,        // 4..8 — odd counts add a trailing unpaired leg
+  legs:       7,        // 4..8 — odd counts add a trailing unpaired leg
   size:       1.25,     // body scale (reach = 72 px × size × dpr)
   speed:      1.0,      // body top speed scaler
   stride:     0.42,     // step threshold, fraction of reach
@@ -217,6 +217,8 @@ const QUANT_LAPSE = 1.5;
 // Locked, a foot this far off its rest (× reach) steps on its group's tick —
 // the hits decide the stride, not the stride slider (which rules the free gait).
 const LOCK_OFF = 0.18;
+// Locked turn-rate cap, × (travel cap / reach) rad/s.
+const TURN_BUDGET = 0.6;
 // A lifting foot lands this many seconds of body travel ahead of its rest.
 const STEP_LEAD = 0.22;
 // Web line: throw time (s), max length (× reach), lifetime (s), min gap
@@ -562,9 +564,23 @@ export function createCrawlerSim() {
     const k = 1 - Math.exp(-dt * 4.5);
     s.vx += ((d ? dx / d : 0) * want - s.vx) * k;
     s.vy += ((d ? dy / d : 0) * want - s.vy) * k;
+    // Locked, the cap is hard: the ease above lets a silk tug or a fast
+    // pre-lock velocity overshoot it for a few hundred ms, which drags the
+    // feet past the urgent threshold and they patter off-beat between hits.
+    if (s.locked) {
+      const v = Math.hypot(s.vx, s.vy);
+      if (v > maxV) { s.vx *= maxV / v; s.vy *= maxV / v; }
+    }
     s.x += s.vx * dt; s.y += s.vy * dt;
     s.speed = Math.hypot(s.vx, s.vy);
-    if (s.speed > s.reach * 0.1) s.a += angleDelta(s.a, Math.atan2(s.vy, s.vx)) * (1 - Math.exp(-dt * 6));
+    if (s.speed > s.reach * 0.1) {
+      let da = angleDelta(s.a, Math.atan2(s.vy, s.vx)) * (1 - Math.exp(-dt * 6));
+      // Turning swings every rest spot around the body (≈ reach × angle at the
+      // feet), so locked it shares the travel budget — else an about-turn
+      // overstretches the outer legs and they step off the hits.
+      if (s.locked) { const maxDa = maxV / s.reach * TURN_BUDGET * dt; da = clamp(da, -maxDa, maxDa); }
+      s.a += da;
+    }
 
     // 3. Legs.
     const r = s.reach;
