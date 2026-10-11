@@ -172,10 +172,11 @@ grips them like the logo rect: a foot landing within half a reach of a word stan
 boxes exactly that word, and the reblit pass re-prints the word's text (zoomed / tilted / skewed /
 knocked out). `follow: 'code'` (and the auto fallback after pointer + pose) reads along the code,
 mostly a few words forward, sometimes a jump. The editor panel (z18) is above the pose canvas, so
-the part of a creature inside the editor's rect is drawn on `#qualia-crawler-top` (z18, after the
-panel in DOM order, pointer-events none) and the pose canvas draws the rest under complementary
-clips. Focusing the editor drops the holds and hides the top canvas at once: typing never has a
-spider over it. Only the pose-canvas half is recorded (the editor text isn't either), and the top
+the part of a creature inside the editor's rect is drawn on `#qualia-crawler-top` (pointer-events
+none, after the panels in DOM order, its z-index matched to the panel's: 18, or 19 once
+click-to-front raises it) and the pose canvas draws the rest under complementary clips. Focusing
+the editor lets go of the words at once (nothing to grip or read while typing), but the creature
+keeps drawing above the code. Only the pose-canvas half is recorded (the editor text isn't either), and the top
 canvas doesn't ride the cam walk (the editor doesn't).
 
 **Cam walk** (`cam-walk.js`) is a top-level virtual-camera drift over the whole scene stack (Hydra +
