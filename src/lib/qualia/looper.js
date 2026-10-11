@@ -1373,8 +1373,8 @@ export function createLooper({ audio, syncStrudel } = {}) {
     const half = miniBtn('÷2', () => { if (track.buffer) setTrackLength(track.id, track.length / 2); }, 'Halve length (varispeed)');
     const dbl  = miniBtn('×2', () => { if (track.buffer) setTrackLength(track.id, track.length * 2); }, 'Double length (varispeed)');
     const stretchGrp = document.createElement('span'); stretchGrp.className = 'seq-num-wrap'; stretchGrp.append(half, dbl);
-    r2.append(mk('cycles', stepper(gridIn, 'change'), 'Strudel cycles per bar — record-snap grid + waveform lane width for this track.'),
-              mk('length', lengthStep, 'How many cycles the loop occupies (a multiple of cycles).'),
+    r2.append(mk('snap', stepper(gridIn, 'change'), 'Snap grid, in Strudel cycles — record IN/OUT and grab land on multiples of this, and it sets the waveform lane width. Not the loop length (that\'s “length”).'),
+              mk('length', lengthStep, 'How many Strudel cycles the loop spans (a multiple of snap). Set by how long you recorded, or by retro cyc for a grab.'),
               mk('stretch', stretchGrp, 'Halve / double the length. Varispeed — pitch shifts with speed.'));
 
     // row 3 — volume · preserve-pitch

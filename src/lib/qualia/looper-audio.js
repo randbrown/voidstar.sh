@@ -15,7 +15,7 @@
 // Length: IN snaps to the next grid downbeat (preserves the prep bar);
 // OUT rounds to the NEAREST grid boundary so a slow Stop is discarded.
 // The trimmed loop is always an integer number of grid units (the per-track
-// "cycles" control).
+// "snap" control).
 //
 // Alignment: the captured downbeat lands later than the IN boundary by the
 // round-trip latency (output + input + acoustic + reaction). We bake a PAD of

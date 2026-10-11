@@ -13,7 +13,7 @@ All paths under `src/lib/qualia/`.
 A Reaper-style multi-track looper built into the rig panel. Captures the instrument and **snaps each
 take to the Strudel cycle grid**: the IN point locks to the next grid downbeat, OUT rounds to the
 nearest boundary, so every loop is an integer number of cycles and plays back phase-locked. Supports
-multiple tracks (one "armed"), per-track grid/length/volume/mute/fit/stretch, a retroactive **grab**
+multiple tracks (one "armed"), per-track snap (grid, labelled `snap` — the IN/OUT grid, not the loop length) / length / volume / mute / fit / stretch, a retroactive **grab**
 (pull the last N cycles from an always-on ~40 s lookback ring without having armed record), the full
 guitar channel strip, a tuner, and a rig master with limiter. Loops persist to IndexedDB and
 round-trip through `.qualem.zip`.
