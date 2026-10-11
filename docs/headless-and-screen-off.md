@@ -152,7 +152,7 @@ the **MIDI knobs** once it's dark.
 - [ ] Mac kept awake: Battery "prevent sleep when display off" **or** `caffeinate -i`
 - [ ] Display off via `Ctrl`+`Shift`+`Power` / `pmset displaysleepnow` (not lid-close)
 - [ ] `H` blackout for a dark canvas without touching the OS
-- [ ] Pad on **MIDI** if the window won't stay focused / you want no display-wake
+- [ ] Pad on **MIDI** if the window won't stay focused / you want no display-wake (and **midi** switched on in qualia's controls panel)
 - [ ] Lid-shut only in **clamshell** (ext display / dummy plug / BetterDisplay)
 
 See also: [`architecture.md`](./architecture.md) §4–5 (why audio is decoupled from
